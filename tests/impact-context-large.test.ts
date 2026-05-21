@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import type { ModuleIndex, ProjectIndex } from "../src/indexer.js";
+import type { ModuleIndex, ProjectIndex } from "../src/indexer/types.js";
 
 type MockSymbolNode = {
   id: string;
@@ -54,7 +54,7 @@ const buildMockGraph = (size = 500): MockSymbolGraph => {
 
 let cachedMockGraph: MockSymbolGraph | undefined;
 
-vi.mock("../src/graphs.js", () => {
+vi.mock("../src/graphs/symbol-graph-detailed.js", () => {
   const graph = buildMockGraph(600);
   cachedMockGraph = graph;
   return {

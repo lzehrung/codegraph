@@ -5,11 +5,8 @@ import {
   type JsSyntaxTree,
 } from "../jsFallback.js";
 import { prepareSourceInput } from "../languages/filePrep.js";
-import {
-  loadNearestTsconfigFor,
-  loadWorkspaceConfig,
-  resolveImportSpecifier,
-} from "../util.js";
+import { loadNearestTsconfigFor, resolveImportSpecifier } from "../util/resolution.js";
+import { loadWorkspaceConfig } from "../util/workspace.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
 import { type FallbackImportExtractionEvent, type FallbackImportExtractionReason } from "../graphs/specifiers.js";
 import type { GraphBuildOptions } from "../graphs/types.js";

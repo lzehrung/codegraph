@@ -6,7 +6,7 @@ import type { ModuleIndex, SymbolDef } from "../indexer/types.js";
 import { SymbolKind } from "../indexer/types.js";
 import type { Edge, Range } from "../types.js";
 import { normalizePath } from "../util/paths.js";
-import { mapLimit } from "../util/resolution.js";
+import { mapLimit } from "../util/concurrency.js";
 import { extractSqlFactsFromSource, sqlObjectBaseName } from "./extractFacts.js";
 import type { SqlFactKind, SqlStatementFact } from "./types.js";
 

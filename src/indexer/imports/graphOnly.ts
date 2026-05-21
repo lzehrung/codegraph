@@ -5,7 +5,8 @@ import {
 } from "../../documentLinks.js";
 import type { GraphBuildOptions } from "../../graphs/types.js";
 import type { LogLevel } from "../../logging.js";
-import { getGraphOnlyResolutionExtensions, loadNearestTsconfigFor, loadWorkspaceConfig, resolveSpecifier } from "../../util.js";
+import { getGraphOnlyResolutionExtensions, loadNearestTsconfigFor, resolveSpecifier } from "../../util/resolution.js";
+import { loadWorkspaceConfig } from "../../util/workspace.js";
 import type { ImportBinding } from "../types.js";
 
 export type GraphOnlyImportExtractionContext = {
@@ -53,7 +54,8 @@ export async function collectGraphOnlyImports(context: GraphOnlyImportExtraction
     }
 
     const from = entry.raw ?? entry.spec;
-    const normalizedResolved = typeof resolved === "string" ? resolved.replace(/\\/g, "/") : { ...resolved, external: from };
+    const normalizedResolved =
+      typeof resolved === "string" ? resolved.replace(/\\/g, "/") : { ...resolved, external: from };
     bindings.push({
       kind: "star",
       from,

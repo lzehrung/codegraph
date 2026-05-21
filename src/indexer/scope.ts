@@ -1,5 +1,5 @@
 import { parseWithJsLanguage } from "../jsFallback.js";
-import { sliceText, toRange } from "../util.js";
+import { sliceText, toRange } from "../util/ast.js";
 import { getNativeSyntaxTreeExecution, type NativeRuntimeMode } from "../native/treeSitterNative.js";
 import { ProjectedSyntaxTree } from "../native/projectedTree.js";
 import { declarationKindToBindingKind } from "./declarations.js";

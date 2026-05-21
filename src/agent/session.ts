@@ -1,14 +1,16 @@
-import { buildProjectIndexFromFiles } from "../indexer.js";
+import { buildProjectIndexFromFiles } from "../indexer/build-index.js";
 import type { ProjectIndex } from "../indexer/types.js";
-import { buildSymbolGraphDetailed } from "../graphs.js";
-import type { SymbolGraph } from "../graphs.js";
+import { buildSymbolGraphDetailed } from "../graphs/symbol-graph-detailed.js";
+import { type SymbolGraph } from "../graphs/symbol-graph.js";
 import type { Graph } from "../types.js";
-import { listProjectFiles, type ProjectFileDiscoveryOptions } from "../util.js";
+import { listProjectFiles, type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions } from "../config.js";
+import { createAgentFileLookup } from "./normalize.js";
 
 export type AgentProjectSnapshot = {
   root: string;
   files: string[];
+  fileLookup?: ReadonlyMap<string, string>;
   index: ProjectIndex;
   fileGraph: Graph;
   symbolGraph: SymbolGraph;
@@ -49,6 +51,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
       return {
         root: options.root,
         files,
+        fileLookup: createAgentFileLookup(files),
         index,
         fileGraph,
         symbolGraph,

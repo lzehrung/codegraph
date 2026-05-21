@@ -1,5 +1,5 @@
 import type { FileId } from "../types.js";
-import type { ProjectIndex } from "../indexer.js";
+import { type ProjectIndex } from "../indexer/types.js";
 import { IMPACT_SCHEMA_VERSION } from "./types.js";
 import type {
   ChangedSymbol,
@@ -253,10 +253,7 @@ function buildCompactSurfaceArea(
   };
 }
 
-function buildCompactClusters(
-  clusters: ImpactCluster[],
-  fileId: (file: FileId) => number,
-): CompactImpactCluster[] {
+function buildCompactClusters(clusters: ImpactCluster[], fileId: (file: FileId) => number): CompactImpactCluster[] {
   return clusters.map((cluster) => ({
     id: cluster.id,
     files: cluster.files.map((file) => fileId(file)),

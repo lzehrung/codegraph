@@ -1,7 +1,7 @@
 import type { JsSyntaxTree } from "../../jsFallback.js";
 import { capturesByName, capturesNamed, rangeFromNativeCapture } from "../../native/queryResults.js";
 import type { NativeCapture, NativeMatch } from "../../native/treeSitterNative.js";
-import { sliceText, unquote } from "../../util.js";
+import { sliceText, unquote } from "../../util/ast.js";
 import { parseGoImportAlias } from "../shared.js";
 import type { ImportBinding } from "../types.js";
 import type { ImportResolver, ResolvedImportTarget } from "./context.js";
@@ -71,17 +71,11 @@ async function pushTreeObjectPatternBindings(
   if (!from) return;
   for (const pattern of patterns) {
     const patternRange = rangeFromNativeCapture(pattern);
-    const patternNode = tree.rootNode.descendantForIndex(
-      patternRange.start.index ?? 0,
-      patternRange.end.index ?? 0,
-    );
+    const patternNode = tree.rootNode.descendantForIndex(patternRange.start.index ?? 0, patternRange.end.index ?? 0);
     if (patternNode.type !== "object_pattern") continue;
 
     for (const child of patternNode.namedChildren) {
-      if (
-        child.type === "shorthand_property_identifier" ||
-        child.type === "shorthand_property_identifier_pattern"
-      ) {
+      if (child.type === "shorthand_property_identifier" || child.type === "shorthand_property_identifier_pattern") {
         const name = sliceText(child, context.source);
         const resolved = await context.resolveFrom(from);
         context.pushBinding({

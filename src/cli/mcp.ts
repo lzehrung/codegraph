@@ -1,5 +1,6 @@
 import { serveCodegraphMcp } from "../mcp/server.js";
 import { MCP_HELP_TEXT } from "./help.js";
+import { parseOptionalBoundedIntegerOption } from "./options.js";
 
 export type McpServeCommandContext = {
   positionals: string[];
@@ -9,15 +10,6 @@ export type McpServeCommandContext = {
   writeStderrLine: (message: string) => void;
   exit: (code: number) => never;
 };
-
-function parsePortOption(rawValue: string | undefined): number | undefined {
-  if (rawValue === undefined) return undefined;
-  const parsedValue = Number(rawValue);
-  if (!Number.isInteger(parsedValue) || parsedValue < 0 || parsedValue > 65535) {
-    throw new Error(`Invalid --port value "${rawValue}". Expected an integer from 0 to 65535.`);
-  }
-  return parsedValue;
-}
 
 export async function handleMcpServeCommand(context: McpServeCommandContext): Promise<void> {
   const mcpCommand = context.positionals[0];
@@ -29,7 +21,7 @@ export async function handleMcpServeCommand(context: McpServeCommandContext): Pr
   const artifactPath = context.getOpt("--artifact");
   let port: number | undefined;
   try {
-    port = parsePortOption(context.getOpt("--port"));
+    port = parseOptionalBoundedIntegerOption(context.getOpt("--port"), "--port", 0, 65535);
   } catch (error) {
     context.writeStderrLine(error instanceof Error ? error.message : String(error));
     context.exit(2);

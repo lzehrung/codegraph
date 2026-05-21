@@ -1,4 +1,6 @@
-import { buildProjectIndex, listSymbols, symbolId, goToDefinition, findReferences } from "./indexer.js";
+import { buildProjectIndex } from "./indexer/build-index.js";
+import { listSymbols, symbolId } from "./indexer/symbols.js";
+import { goToDefinition, findReferences } from "./indexer/navigation.js";
 import type {
   ImportBinding,
   ProjectIndex,
@@ -10,15 +12,13 @@ import type {
 import { analyzeImpactFromDiff } from "./impact/index.js";
 import type { CompactImpactReport, ImpactOptions, ImpactReport } from "./impact/types.js";
 import type { Edge, Range } from "./types.js";
-import { collectGraph, getDependencies, getReverseDependencies, getHotspots } from "./graphs.js";
+import { collectGraph } from "./graph-builder.js";
+import { getDependencies, getReverseDependencies } from "./graphs/queries.js";
+import { getHotspots } from "./graphs/hotspots.js";
 import type { NativeRuntimeMode } from "./native/treeSitterNative.js";
-import {
-  fileExists,
-  isFilePathWithinRoot,
-  listProjectFiles,
-  normalizePath,
-  resolveFilePathFromRoot,
-} from "./util.js";
+import { fileExists } from "./util/workspace.js";
+import { isFilePathWithinRoot, normalizePath, resolveFilePathFromRoot } from "./util/paths.js";
+import { listProjectFiles } from "./util/projectFiles.js";
 import { boundAgentList, defaultAgentLimit, normalizeAgentLimit } from "./agent/bounds.js";
 import { normalizeAgentOutputPath } from "./agent/normalize.js";
 

@@ -1,7 +1,7 @@
 import type { FileId } from "../types.js";
-import type { ProjectIndex } from "../indexer.js";
-import { buildSymbolGraphDetailed } from "../graphs.js";
-import type { SymbolEdge } from "../graphs.js";
+import { type ProjectIndex } from "../indexer/types.js";
+import { buildSymbolGraphDetailed } from "../graphs/symbol-graph-detailed.js";
+import { type SymbolEdge } from "../graphs/symbol-graph.js";
 import { buildGraphAdjacency, getForwardNeighbors, getReverseNeighbors } from "../graphs/adjacency.js";
 import { createGraphFileResolver } from "./path.js";
 import { compileTestPatterns, createIndexTestFileMatcher } from "./testPatterns.js";

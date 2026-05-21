@@ -1,10 +1,7 @@
 import path from "node:path";
 import type { GraphBuildOptions } from "../../graphs/types.js";
-import {
-  normalizePath,
-  normalizeResolutionHints,
-  type ProjectFileDiscoveryOptions,
-} from "../../util.js";
+import { normalizePath, normalizeResolutionHints } from "../../util/paths.js";
+import { type ProjectFileDiscoveryOptions } from "../../util/projectFiles.js";
 import type { BuildOptions } from "../types.js";
 
 export type ManifestBuildOptions = {
@@ -36,12 +33,8 @@ function normalizeManifestBuildOptions(opts?: ManifestBuildOptions): ManifestBui
 function normalizeDiscoveryOptions(discovery?: ProjectFileDiscoveryOptions): ManifestBuildOptions["discovery"] {
   if (!discovery) return undefined;
   const normalizeGlob = (glob: string) => glob.trim().replace(/\\/g, "/");
-  const includeGlobs = Array.from(
-    new Set((discovery.includeGlobs ?? []).map(normalizeGlob).filter(Boolean)),
-  ).sort();
-  const ignoreGlobs = Array.from(
-    new Set((discovery.ignoreGlobs ?? []).map(normalizeGlob).filter(Boolean)),
-  ).sort();
+  const includeGlobs = Array.from(new Set((discovery.includeGlobs ?? []).map(normalizeGlob).filter(Boolean))).sort();
+  const ignoreGlobs = Array.from(new Set((discovery.ignoreGlobs ?? []).map(normalizeGlob).filter(Boolean))).sort();
   const globRoot = discovery.globRoot ? normalizePath(path.resolve(discovery.globRoot)) : undefined;
   const gitignoreRoot = discovery.gitignoreRoot ? normalizePath(path.resolve(discovery.gitignoreRoot)) : undefined;
   const useGitignore = discovery.useGitignore ?? true;

@@ -1,4 +1,4 @@
-import type { ProjectIndex } from "../indexer.js";
+import { type ProjectIndex } from "../indexer/types.js";
 import type { ImpactReport, CompactImpactReport, ImpactOptions } from "./types.js";
 import { collectImpactAnalysis } from "./collect.js";
 import { buildImpactReport } from "./report.js";

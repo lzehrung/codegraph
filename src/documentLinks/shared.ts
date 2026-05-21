@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { ModuleSpecifier } from "../util.js";
+import { type ModuleSpecifier } from "../util/specifiers.js";
 
 const DOCUMENT_RELATIVE_EXTENSIONS = new Set([
   ".md",

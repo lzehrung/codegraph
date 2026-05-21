@@ -1,4 +1,4 @@
-import { extractJsTsSpecifiers, type ModuleSpecifier } from "../util.js";
+import { extractJsTsSpecifiers, type ModuleSpecifier } from "../util/specifiers.js";
 import { extractHtmlAttributeSpecifiers, extractHtmlInlineScriptSpecifiers } from "./html.js";
 import { dedupeModuleSpecifiers, markResolutionKind, normalizeLinkSpecifier } from "./shared.js";
 

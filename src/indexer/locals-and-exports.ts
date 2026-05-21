@@ -11,7 +11,8 @@ import {
   type NativeQueryResults,
   type NativeRuntimeMode,
 } from "../native/treeSitterNative.js";
-import { maskJsLikeCommentsAndStrings, sliceText, toRange, unquote } from "../util.js";
+import { maskJsLikeCommentsAndStrings } from "../util/comments.js";
+import { sliceText, toRange, unquote } from "../util/ast.js";
 import { bindingKindToSymbolKind } from "./declarations.js";
 import { buildScopeIndexFromSource } from "./scope.js";
 import { QUERY_DRIVEN_LOCALS_LANGUAGES } from "./shared.js";

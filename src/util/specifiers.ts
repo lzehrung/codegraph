@@ -109,12 +109,12 @@ export function extractJsTsSpecifiers(source: string): ModuleSpecifier[] {
     };
 
     const combined =
-      /^\s*import\s+[^\n;]*?\s+from\s+["']([^"']+)["']|^\s*import\s+["']([^"']+)["']|\bexport\s+[^\n;]*?\s+from\s+["']([^"']+)["']|\b(?:const|let|var)\s*\{[^}]*\}\s*=\s*require\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\brequire\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\bimport\(\s*["']([^"']+)["']\s*\)/gm;
+      /^\s*import\s+[^\n;]*?\s+from\s+["']([^"']+)["']|^\s*import\s+["']([^"']+)["']|\bexport\s+[^\n;]*?\s+from\s+["']([^"']+)["']|\b(?:const|let|var)\s*\{[^}]*\}\s*=\s*require\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\brequire\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\bimport\(\s*["']([^"']+)["']\s*\)|^\s*import\s+[A-Za-z_$][\w$]*\s*=\s*require\(\s*["']([^"']+)["']\s*\)|^\s*declare\s+module\s+["']([^"']+)["']/gm;
 
     for (const m of src.matchAll(combined)) {
       const start = m.index ?? 0;
       if (stringMask?.[start]) continue;
-      const spec = m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5] ?? m[6];
+      const spec = m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5] ?? m[6] ?? m[7] ?? m[8];
       if (!spec) continue;
       const text = m[0] ?? "";
       let typeOnly = false;
@@ -122,6 +122,8 @@ export function extractJsTsSpecifiers(source: string): ModuleSpecifier[] {
         typeOnly = /\bimport\s+type\b/.test(text);
       } else if (m[3] !== undefined) {
         typeOnly = /\bexport\s+type\b/.test(text);
+      } else if (m[8] !== undefined) {
+        typeOnly = true;
       }
       push(spec, typeOnly);
     }

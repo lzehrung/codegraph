@@ -289,6 +289,23 @@ nativeDescribe("compact imports execution", () => {
     expect(execution.fallbackReason).toBe("unavailable");
   });
 
+  it("does not treat arbitrary JavaScript string arguments as imports", () => {
+    const support = supportById("js")!;
+    const source = [
+      'const element = requireElement("graph-container");',
+      'const result = spawnSync("npm", ["run", "build"]);',
+      'import realImport from "real-package";',
+      'const required = require("required-package");',
+    ].join("\n");
+
+    const execution = getCompactImportsExecution(source, support);
+    const specs = collectModuleSpecifiersFromSource(support, undefined, source, {
+      compactNativeImports: execution.results,
+    });
+
+    expect(specs.map((entry) => entry.spec)).toEqual(["real-package", "required-package"]);
+  });
+
   it("falls back to regex extraction for Python when compact native imports are empty", () => {
     const support = supportById("python")!;
     const specs = collectModuleSpecifiersFromSource(support, undefined, "import os\nfrom pkg import value\n", {

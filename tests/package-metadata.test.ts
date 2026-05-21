@@ -274,6 +274,20 @@ describe("package metadata", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("keeps implementation modules from importing through broad internal barrels", () => {
+    const broadBarrelImportPattern =
+      /\bimport\s+(?:type\s+)?(?:[^;]*?\s+from\s+)?["'](?:\.\/|(?:\.\.\/)+)(?:util|graphs|indexer)\.js["']|import\(["'](?:\.\/|(?:\.\.\/)+)(?:util|graphs|indexer)\.js["']\)/;
+    const facadeFiles = new Set(["src/index.ts", "src/graphs.ts", "src/indexer.ts"]);
+    const offenders = listFilesRecursive("src", ".ts").filter((relativePath) => {
+      if (facadeFiles.has(relativePath)) {
+        return false;
+      }
+      return broadBarrelImportPattern.test(readText(relativePath));
+    });
+
+    expect(offenders).toEqual([]);
+  });
+
   it("keeps the graph public module as a lightweight facade", () => {
     const graphFacade = readText("src/graphs.ts");
 
@@ -311,16 +325,18 @@ describe("package metadata", () => {
     expect(scripts["test:coverage"]).toBe("node ./scripts/coverage.mjs js");
     expect(scripts["test:coverage:native"]).toBe("node ./scripts/coverage.mjs native");
     expect(scripts["test:coverage:all"]).toBe("node ./scripts/coverage.mjs all");
-    expect(scripts["coverage:setup:native"]).toBe("rustup component add llvm-tools-preview && cargo install cargo-llvm-cov --locked");
+    expect(scripts["coverage:setup:native"]).toBe(
+      "rustup component add llvm-tools-preview && cargo install cargo-llvm-cov --locked",
+    );
     expect(scripts["native:check-artifacts"]).toBe("node ./scripts/check-native-artifacts.mjs");
     expect(scripts["native:stage-local"]).toBe("node ./scripts/stage-native-package.mjs");
     expect(devDependencies["@vitest/coverage-v8"]).toBeDefined();
-    expect(vitestConfig).toContain("provider: \"v8\"");
-    expect(vitestConfig).toContain("include: [\"src/**/*.{ts,tsx}\"]");
-    expect(vitestConfig).toContain("\"src/indexer/import-types.ts\"");
-    expect(vitestConfig).not.toContain("\"src/impact/types.ts\"");
-    expect(vitestConfig).toContain("reporter: [\"text\", \"html\", \"lcov\"]");
-    expect(vitestConfig).toContain("reportsDirectory: \"./coverage/js\"");
+    expect(vitestConfig).toContain('provider: "v8"');
+    expect(vitestConfig).toContain('include: ["src/**/*.{ts,tsx}"]');
+    expect(vitestConfig).toContain('"src/indexer/import-types.ts"');
+    expect(vitestConfig).not.toContain('"src/impact/types.ts"');
+    expect(vitestConfig).toContain('reporter: ["text", "html", "lcov"]');
+    expect(vitestConfig).toContain('reportsDirectory: "./coverage/js"');
     expect(coverageScript).toContain("cargo llvm-cov");
     expect(coverageScript).toContain("coverage/native");
     expect(coverageScript).toContain("./native/html/index.html");
@@ -453,6 +469,23 @@ describe("package metadata", () => {
     }
   });
 
+  it("keeps the public API boundary documented around the root package export", () => {
+    const rootPackage = readJson("package.json");
+    const rootExports = rootPackage.exports;
+    expect(rootExports).toBeDefined();
+    expect(Object.keys(rootExports as Record<string, unknown>).sort()).toEqual(["."]);
+
+    const libraryApi = readText("docs/library-api.md");
+    expect(libraryApi).toContain("## Public API Boundary");
+    expect(libraryApi).toContain("Public-stable APIs");
+    expect(libraryApi).toContain("Public-legacy APIs");
+    expect(libraryApi).toContain("Internal-only modules");
+    expect(libraryApi).toContain("@lzehrung/codegraph/dist/...");
+
+    const readme = readText("README.md");
+    expect(readme).toContain("./docs/library-api.md#public-api-boundary");
+  });
+
   it("scopes streaming summary mode to the streaming API type", () => {
     const impactTypes = readText("src/impact/types.ts");
     const streamingSource = readText("src/impact/streaming.ts");
@@ -575,7 +608,7 @@ void onImpactItemStreaming;
     expect(workflow).toContain('test -e "/lib/${host_triplet}/libgcc_s.so.1"');
     expect(workflow).toContain("LIBRARY_PATH=/usr/lib/${host_triplet}:/lib/${host_triplet}:${LIBRARY_PATH:-}");
     expect(workflow).toContain("RUSTFLAGS=-C link-arg=-L/usr/lib/${host_triplet}");
-    expect(workflow).toContain("bumpVersion(nativePackage.version, \"${{ inputs.release_type }}\")");
+    expect(workflow).toContain('bumpVersion(nativePackage.version, "${{ inputs.release_type }}")');
     expect(workflow).toContain("needs.plan-native-release.outputs.version");
     expect(workflow).toContain('hasTagForPackageVersion("@lzehrung/codegraph-native", version, tagNames)');
     expect(installIndex).toBeGreaterThan(-1);

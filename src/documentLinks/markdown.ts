@@ -1,5 +1,5 @@
 import path from "node:path";
-import { extractJsTsSpecifiers, type ModuleSpecifier } from "../util.js";
+import { extractJsTsSpecifiers, type ModuleSpecifier } from "../util/specifiers.js";
 import { extractHtmlAttributeSpecifiers } from "./html.js";
 import {
   dedupeModuleSpecifiers,

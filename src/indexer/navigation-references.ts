@@ -1,7 +1,7 @@
 import type { LanguageSupport } from "../languages.js";
 import type { JsLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
-import { sliceText, toRange } from "../util.js";
+import { sliceText, toRange } from "../util/ast.js";
 import { ensureParsedContext } from "./parse-context.js";
 import { sameDef } from "./reference-context.js";
 import { readPhpNamespaceFromRange } from "./navigation-php.js";

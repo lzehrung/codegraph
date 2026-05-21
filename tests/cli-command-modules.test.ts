@@ -544,6 +544,36 @@ describe("CLI command modules", () => {
     expect(stderrLines).toContain("  --text            Force text chunking mode");
   });
 
+  test("rejects invalid chunk token bounds", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-chunk-invalid-bounds-"));
+    const filePath = path.join(tempDir, "sample.ts");
+    await fsp.writeFile(filePath, "export const value = 1;\n", "utf8");
+    const stderrLines: string[] = [];
+
+    try {
+      await expect(
+        handleChunkCommand(
+          createChunkContext({
+            positionals: ["sample.ts"],
+            cwd: () => tempDir,
+            getOpt: (name) => {
+              if (name === "--min-tokens") return "100";
+              if (name === "--max-tokens") return "50";
+              return undefined;
+            },
+            writeStderrLine: (message) => stderrLines.push(message),
+          }),
+        ),
+      ).rejects.toThrow("chunk exit 1");
+
+      expect(stderrLines).toEqual([
+        'Chunking failed: Invalid --max-tokens value "50". Expected a value greater than or equal to --min-tokens.',
+      ]);
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   test("forces text chunking with inferred data-file language ids", async () => {
     const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-chunk-text-"));
     const filePath = path.join(tempDir, "sample.json");

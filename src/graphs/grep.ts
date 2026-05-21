@@ -1,9 +1,9 @@
 import fsp from "node:fs/promises";
-import path from "node:path";
 import { prepareSourceInput } from "../languages/filePrep.js";
 import { logWithLevel } from "../logging.js";
 import { getUnifiedQueryExecution } from "../native/treeSitterNative.js";
-import { listProjectFiles, type ProjectFileDiscoveryOptions } from "../util.js";
+import { toProjectDisplayPath } from "../util/paths.js";
+import { listProjectFiles, type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 
 export type AstGrepHit = {
   file: string;
@@ -44,7 +44,7 @@ export async function astGrep(
       for (const match of matches) {
         for (const capture of match.captures) {
           hits.push({
-            file: path.relative(projectRoot, file).replace(/\\/g, "/"),
+            file: toProjectDisplayPath(projectRoot, file),
             capture: capture.name,
             line: capture.start.row + 1,
             column: capture.start.column + 1,
@@ -95,7 +95,7 @@ export async function textGrep(
       continue;
     }
 
-    const relativeFile = path.relative(projectRoot, file).replace(/\\/g, "/");
+    const relativeFile = toProjectDisplayPath(projectRoot, file);
     const lines = source.split(/\r?\n/);
     for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
       if (hits.length >= maxHits) break;

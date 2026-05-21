@@ -1,6 +1,6 @@
 import type { FileId } from "../types.js";
 import path from "node:path";
-import type { ProjectIndex } from "../indexer.js";
+import { type ProjectIndex } from "../indexer/types.js";
 import type {
   FileChange,
   ChangedSymbol,
@@ -17,8 +17,10 @@ import type {
   ImpactCycle,
   ImpactDiagnostics,
 } from "./types.js";
-import { buildSymbolGraphDetailed, findDetailedCycles } from "../graphs.js";
-import { discoverProjectFiles, normalizePath, resolveFilePathFromRoot } from "../util.js";
+import { buildSymbolGraphDetailed } from "../graphs/symbol-graph-detailed.js";
+import { findDetailedCycles } from "../graphs/queries.js";
+import { discoverProjectFiles } from "../util/projectFiles.js";
+import { normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
 import { newFileRangeForHunk } from "./hunks.js";
 import { createGraphFileResolver, normalizeImpactFileChange, toImpactReportFilePath } from "./path.js";
 import { buildCompactImpactReport } from "./reportCompact.js";

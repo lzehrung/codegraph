@@ -1,7 +1,7 @@
 import type { Diff, DiffProviderOptions } from "../types.js";
 import { spawn } from "node:child_process";
 import { parseUnifiedDiff, parseUnifiedDiffStreaming } from "../parse.js";
-import { gitDiffArgs } from "../../util.js";
+import { gitDiffArgs } from "../../util/git.js";
 
 export interface DiffProvider {
   getDiff(opts: DiffProviderOptions): Promise<Diff>;

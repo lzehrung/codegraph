@@ -3,11 +3,9 @@ import { type JsLanguage } from "./jsFallback.js";
 import { prepareSourceInput } from "./languages/filePrep.js";
 import { type LanguageSupport } from "./languages.js";
 import type { Edge } from "./types.js";
-import {
-  loadNearestTsconfigFor,
-  type WorkspaceConfig,
-  extractJsTsDynamicSpecifiers,
-} from "./util.js";
+import { loadNearestTsconfigFor } from "./util/resolution.js";
+import { type WorkspaceConfig } from "./util/workspace.js";
+import { extractJsTsDynamicSpecifiers } from "./util/specifiers.js";
 import { logWithLevel, type LogLevel } from "./logging.js";
 import {
   graphOnlyLanguageSupportsImportAliases,

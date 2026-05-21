@@ -1,6 +1,6 @@
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
-import { sliceText } from "../util.js";
+import { sliceText } from "../util/ast.js";
 
 function readPhpNamespaceName(namespaceNode: SyntaxNodeLike, source: string): string | null {
   const namespaceName =

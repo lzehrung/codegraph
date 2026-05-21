@@ -1,4 +1,4 @@
-import type { SymbolGraph, SymbolNode } from "../graphs.js";
+import { type SymbolGraph, type SymbolNode } from "../graphs/symbol-graph.js";
 import type { Graph } from "../types.js";
 import type { SqliteDatabase } from "../sqlite-driver.js";
 import type { SqliteGraphOptions, SqliteGraphUpdateOptions } from "./types.js";

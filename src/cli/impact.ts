@@ -1,4 +1,4 @@
-import { buildProjectIndex } from "../indexer.js";
+import { buildProjectIndex } from "../indexer/build-index.js";
 import type { BuildOptions } from "../indexer/types.js";
 import {
   analyzeImpactFromDiff,
@@ -8,11 +8,18 @@ import {
   type ImpactOptions,
   type ImpactReport,
 } from "../impact/index.js";
-import { graphToMermaidSymbolsWithFiles, type GraphBuildOptions, type SymbolGraph, type SymbolNodeKind } from "../graphs.js";
+import { graphToMermaidSymbolsWithFiles } from "../graphs/symbol-render.js";
+import { type GraphBuildOptions } from "../graphs/types.js";
+import { type SymbolGraph, type SymbolNodeKind } from "../graphs/symbol-graph.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import type { Graph } from "../types.js";
-import type { ProjectFileDiscoveryOptions } from "../util.js";
-import { parseCacheModeOption } from "./options.js";
+import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
+import {
+  parseCacheModeOption,
+  parseOptionalNonNegativeIntegerOption,
+  parseOptionalPositiveIntegerOption,
+  parsePositiveIntegerOption,
+} from "./options.js";
 
 type ImpactOptionsBuilder = Partial<ImpactOptions> & {
   base?: string;
@@ -241,10 +248,7 @@ function buildDiffProviderOptions(context: ImpactCommandContext): ImpactOptionsB
   return { provider };
 }
 
-async function hydrateDiffProviderOptions(
-  context: ImpactCommandContext,
-  options: ImpactOptionsBuilder,
-): Promise<void> {
+async function hydrateDiffProviderOptions(context: ImpactCommandContext, options: ImpactOptionsBuilder): Promise<void> {
   if (options.provider === "git") {
     const base = context.getOpt("--base");
     const head = context.getOpt("--head");
@@ -267,10 +271,7 @@ async function hydrateDiffProviderOptions(
         "Impact provider 'github' requires --repo owner/name and --pr <number>. Example: codegraph impact --provider github --repo acme/app --pr 42",
       );
     }
-    options.pr = Number(pr);
-    if (!Number.isFinite(options.pr) || options.pr <= 0) {
-      throw new Error("Impact provider 'github' expects --pr as a positive integer.");
-    }
+    options.pr = parsePositiveIntegerOption(pr, "--pr", 1);
     options.repo = repo;
     return;
   }
@@ -280,8 +281,8 @@ async function hydrateDiffProviderOptions(
 
 function applyAnalysisOptions(context: ImpactCommandContext, options: ImpactOptionsBuilder): void {
   const threadsRaw = context.getOpt("--threads");
-  const threads = threadsRaw ? Number(threadsRaw) : 0;
-  if (threadsRaw) options.threads = threads;
+  const threads = parseOptionalNonNegativeIntegerOption(threadsRaw, "--threads");
+  if (threads !== undefined) options.threads = threads;
 
   const cache = parseCacheModeOption(context.getOpt("--cache"));
   if (cache !== undefined) options.cache = cache;
@@ -290,10 +291,12 @@ function applyAnalysisOptions(context: ImpactCommandContext, options: ImpactOpti
   if (context.hasFlag("--compact") || context.hasFlag("--compact-json")) options.compact = true;
 
   const maxRefs = context.getOpt("--max-refs");
-  if (maxRefs) options.maxRefs = Number(maxRefs);
+  const parsedMaxRefs = parseOptionalNonNegativeIntegerOption(maxRefs, "--max-refs");
+  if (parsedMaxRefs !== undefined) options.maxRefs = parsedMaxRefs;
 
   const depth = context.getOpt("--depth");
-  if (depth) options.depth = Number(depth);
+  const parsedDepth = parseOptionalNonNegativeIntegerOption(depth, "--depth");
+  if (parsedDepth !== undefined) options.depth = parsedDepth;
 
   const scope = context.getOpt("--scope");
   if (scope === "all" || scope === "imported") options.scope = scope;
@@ -302,10 +305,12 @@ function applyAnalysisOptions(context: ImpactCommandContext, options: ImpactOpti
   if (refContext) options.refContext = refContext as "line" | "block";
 
   const refContextLines = context.getOpt("--ref-context-lines");
-  if (refContextLines) options.refContextLines = Number(refContextLines);
+  const parsedRefContextLines = parseOptionalNonNegativeIntegerOption(refContextLines, "--ref-context-lines");
+  if (parsedRefContextLines !== undefined) options.refContextLines = parsedRefContextLines;
 
   const refBlockMaxLines = context.getOpt("--ref-block-max-lines");
-  if (refBlockMaxLines) options.refBlockMaxLines = Number(refBlockMaxLines);
+  const parsedRefBlockMaxLines = parseOptionalPositiveIntegerOption(refBlockMaxLines, "--ref-block-max-lines");
+  if (parsedRefBlockMaxLines !== undefined) options.refBlockMaxLines = parsedRefBlockMaxLines;
 
   if (context.discoveryOptions.ignoreGlobs?.length) {
     options.ignoreGlobs = context.discoveryOptions.ignoreGlobs;
@@ -336,7 +341,8 @@ function applyAnalysisOptions(context: ImpactCommandContext, options: ImpactOpti
 }
 
 function buildIndexOptions(context: ImpactCommandContext, options: ImpactOptionsBuilder): BuildOptions {
-  const cacheMode = options.cache === "off" || options.cache === "memory" || options.cache === "disk" ? options.cache : undefined;
+  const cacheMode =
+    options.cache === "off" || options.cache === "memory" || options.cache === "disk" ? options.cache : undefined;
   const indexOpts: BuildOptions = {
     threads: options.threads ?? 0,
     discovery: context.discoveryOptions,

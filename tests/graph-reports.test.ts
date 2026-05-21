@@ -2,8 +2,9 @@ import { afterEach, describe, it, expect } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { getUnresolvedImports, getHotspots, getApiSurface, SymbolKind } from "../src/index.js";
+import { collectGraph, getUnresolvedImports, getHotspots, getApiSurface, SymbolKind } from "../src/index.js";
 import { getExternalClassifierCacheStats, resetExternalClassifierCaches } from "../src/graphs/external-classifier.js";
+import { resolveRustImportPath } from "../src/util/resolution.js";
 
 describe("graph reports", () => {
   const tempRoots: string[] = [];
@@ -60,6 +61,25 @@ describe("graph reports", () => {
     const unresolved = getUnresolvedImports(graphWithBuiltins);
 
     expect(unresolved.map((entry) => entry.name)).toEqual(["react"]);
+  });
+
+  it("excludes graph-only document links from unresolved imports by default", () => {
+    const root = makeTempRoot("cg-unresolved-doc-links-");
+    const sourceFile = path.join(root, "src", "main.ts");
+    const docsFile = path.join(root, "notes.md");
+    const graphWithDocumentLinks = {
+      nodes: new Set([sourceFile, docsFile]),
+      edges: [
+        { from: sourceFile, to: { type: "external" as const, name: "./missing-source" }, raw: "./missing-source" },
+        { from: docsFile, to: { type: "external" as const, name: "./missing-doc.md" }, raw: "./missing-doc.md" },
+      ],
+    };
+
+    expect(getUnresolvedImports(graphWithDocumentLinks).map((entry) => entry.name)).toEqual(["./missing-source"]);
+    expect(getUnresolvedImports(graphWithDocumentLinks, { includeGraphOnly: true }).map((entry) => entry.name)).toEqual([
+      "./missing-source",
+      "./missing-doc.md",
+    ]);
   });
 
   it("does not count declared JS package dependencies as unresolved imports", () => {
@@ -525,6 +545,65 @@ describe("graph reports", () => {
     const unresolved = getUnresolvedImports(graphWithStdlib, { projectRoot });
 
     expect(unresolved.map((entry) => entry.name)).toEqual(["missing_module"]);
+  });
+
+  it("does not count resolved Rust crate-relative modules as unresolved imports", async () => {
+    const projectRoot = makeTempRoot("cg-unresolved-rust-crate-");
+    const sourceRoot = path.join(projectRoot, "src");
+    fs.mkdirSync(sourceRoot, { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, "Cargo.toml"), '[package]\nname = "sample"\nversion = "0.1.0"\n', "utf8");
+    fs.writeFileSync(
+      path.join(sourceRoot, "lib.rs"),
+      'mod languages;\nmod query;\n#[cfg(test)]\nmod tests;\nuse crate::languages::language_for_id;\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(sourceRoot, "languages.rs"), "pub fn language_for_id() {}\n", "utf8");
+    fs.writeFileSync(path.join(sourceRoot, "query.rs"), "pub fn execute_query_cached() {}\n", "utf8");
+    fs.writeFileSync(
+      path.join(sourceRoot, "tests.rs"),
+      "use super::{language_for_id};\nuse crate::query::{execute_query_cached};\n",
+      "utf8",
+    );
+
+    const files = ["lib.rs", "languages.rs", "query.rs", "tests.rs"].map((file) => path.join(sourceRoot, file));
+    const graph = await collectGraph(projectRoot, files);
+
+    expect(getUnresolvedImports(graph, { projectRoot })).toEqual([]);
+    expect(
+      graph.edges.some(
+        (edge) => edge.from.endsWith("tests.rs") && edge.to.type === "file" && edge.to.path.endsWith("query.rs"),
+      ),
+    ).toBeTruthy();
+  });
+
+  it("resolves Rust super imports from mod.rs files against the parent module directory", async () => {
+    const projectRoot = makeTempRoot("cg-rust-super-mod-");
+    const sourceRoot = path.join(projectRoot, "src");
+    const nestedRoot = path.join(sourceRoot, "a");
+    fs.mkdirSync(nestedRoot, { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, "Cargo.toml"), '[package]\nname = "sample"\nversion = "0.1.0"\n', "utf8");
+    fs.writeFileSync(path.join(sourceRoot, "lib.rs"), "mod a;\nmod b;\n", "utf8");
+    fs.writeFileSync(path.join(sourceRoot, "b.rs"), "pub fn root_b() {}\n", "utf8");
+    fs.writeFileSync(path.join(nestedRoot, "mod.rs"), "mod b;\nuse super::b;\n", "utf8");
+    fs.writeFileSync(path.join(nestedRoot, "b.rs"), "pub fn nested_b() {}\n", "utf8");
+
+    const nestedModule = path.join(nestedRoot, "mod.rs");
+    const resolvedSuperModule = await resolveRustImportPath(projectRoot, nestedModule, "super::b");
+    const resolvedSelfModule = await resolveRustImportPath(projectRoot, nestedModule, "self::b");
+    const files = ["lib.rs", "b.rs", "a/mod.rs", "a/b.rs"].map((file) => path.join(sourceRoot, file));
+    const graph = await collectGraph(projectRoot, files);
+
+    expect(resolvedSuperModule?.replace(/\\/g, "/")).toMatch(/\/src\/b\.rs$/);
+    expect(resolvedSelfModule?.replace(/\\/g, "/")).toMatch(/\/src\/a\/b\.rs$/);
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from.endsWith("a/mod.rs") &&
+          edge.raw === "super::b" &&
+          edge.to.type === "file" &&
+          edge.to.path.endsWith("src/b.rs"),
+      ),
+    ).toBeTruthy();
   });
 
   it("should get hotspots", () => {

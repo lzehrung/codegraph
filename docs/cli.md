@@ -8,6 +8,8 @@ If the CLI is not installed yet, use the install paths in [docs/installation.md]
 
 Bare `codegraph graph` writes `codegraph.json` and `codegraph.err` in the current directory. Use `--stdout`, `--output <path>`, or an explicit format flag such as `--json` when scripting.
 
+Numeric options such as `--limit`, `--threads`, `--depth`, `--max-refs`, and token bounds must be integers in their documented ranges; invalid numeric values fail instead of being silently clamped or ignored.
+
 ## Runtime selection
 
 The CLI defaults to `--native auto`, which uses the native Tree-sitter path when a compatible native artifact is available and falls back automatically otherwise.
@@ -29,7 +31,19 @@ Commands that scan a project read `codegraph.config.json` from `--root` when it 
 }
 ```
 
-`discovery.includeGlobs` and `discovery.ignoreGlobs` are project-root-relative, even when a command scans child include roots. `discovery.ignoreGlobs` is useful for large fixture, generated, or vendored folders that should not be indexed for search, unresolved-import checks, graphing, impact, or review. CLI `--include-glob` and `--ignore-glob` values are added for a single run; with child include roots, CLI globs stay relative to each scanned root. `--no-gitignore` overrides `useGitignore`.
+- `discovery.includeGlobs` and `discovery.ignoreGlobs` are project-root-relative, even when a command scans child include roots.
+- `discovery.ignoreGlobs` is for large fixture, generated, or vendored folders that should not be indexed.
+- CLI `--include-glob` and `--ignore-glob` values are one-off additions and stay relative to each scanned root.
+- `inspect` follow-up commands preserve the selected `--root` and include roots.
+- `--no-gitignore` overrides `useGitignore`.
+
+## Scan Scope
+
+`--root` selects the project boundary for config lookup, package/workspace manifest lookup, path confinement, output path normalization, and cache/manifest storage. Positional path arguments after the command are include roots inside that project. For example, `codegraph inspect --root . ./src ./packages/app` keeps `.` as the project root while limiting the reported scan to `src` and `packages/app`.
+
+Config globs and one-off CLI globs apply at different layers. `codegraph.config.json` globs are durable and project-root-relative. CLI `--include-glob` and `--ignore-glob` values are additive for a single command and are evaluated relative to each active scan root. `--no-gitignore` disables `.gitignore` filtering for that command only; it does not change config.
+
+Cache and manifest reuse is rooted at `--root`. Reusing a project root lets commands share compatible index and graph entries when the file signatures, config, graph options, and relevant build options still match. Changing `--root`, changing discovery config, or changing graph options creates a different reuse boundary. Child include-root scans can reuse project-root cache entries, but command summaries and follow-up commands stay scoped to the selected include roots.
 
 ## Core commands
 
@@ -250,7 +264,7 @@ Impact JSON responses include `schemaVersion` plus `format: "full" | "compact"` 
 
 SQL review context is emitted only as `sqlContext.entries[]` in structured review JSON. Entries carry a `reason` such as `changed_sql_file` or `changed_sql_literal`, the matched `objectName`, and the original SQL statement fact. They are review hints, not source dependency edges.
 
-`inspect` and `unresolved` exclude known runtime and package externals from unresolved-import counts so diagnostics stay focused on project resolution gaps. This includes Node builtins such as `node:path` and `fs`, supported-language standard library imports, URL imports, and dependencies declared in nearby manifests such as `package.json`, `requirements.txt`, `requirements.in`, `pyproject.toml`, `setup.cfg`, `Pipfile`, `composer.json`, `Cargo.toml`, `go.mod`, `build.zig.zon`, `Gemfile`, `*.gemspec`, `pom.xml`, `build.gradle`, `build.gradle.kts`, `*.csproj`, `*.fsproj`, `*.vbproj`, `vcpkg.json`, and `Package.swift`.
+`inspect` and `unresolved` exclude graph-only document/template link edges plus known runtime and package externals from unresolved-import counts so diagnostics stay focused on source import resolution gaps. Runtime and package filtering includes Node builtins such as `node:path` and `fs`, supported-language standard library imports, URL imports, and dependencies declared in nearby manifests such as `package.json`, `requirements.txt`, `requirements.in`, `pyproject.toml`, `setup.cfg`, `Pipfile`, `composer.json`, `Cargo.toml`, `go.mod`, `build.zig.zon`, `Gemfile`, `*.gemspec`, `pom.xml`, `build.gradle`, `build.gradle.kts`, `*.csproj`, `*.fsproj`, `*.vbproj`, `vcpkg.json`, and `Package.swift`.
 
 ### Doctor and skill commands
 

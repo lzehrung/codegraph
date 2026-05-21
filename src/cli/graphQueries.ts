@@ -1,11 +1,6 @@
-import path from "node:path";
-
-import {
-  buildProjectIndex as defaultBuildProjectIndex,
-  getApiSurface,
-  type BuildOptions,
-  type ProjectIndex,
-} from "../indexer.js";
+import { buildProjectIndex as defaultBuildProjectIndex } from "../indexer/build-index.js";
+import { getApiSurface } from "../indexer/symbols.js";
+import { type BuildOptions, type ProjectIndex } from "../indexer/types.js";
 import type { GraphAdjacencyIndex } from "../graphs/adjacency.js";
 import {
   findDetailedCycles,
@@ -14,10 +9,11 @@ import {
   getShortestPath,
   getUnresolvedImports,
   sortDetailedCycles,
-  type GraphBuildOptions,
-} from "../graphs.js";
+} from "../graphs/queries.js";
+import { type GraphBuildOptions } from "../graphs/types.js";
 import type { Graph } from "../types.js";
-import { assertFilePathWithinRoot } from "../util.js";
+import { assertFilePathWithinRoot, toProjectDisplayPath } from "../util/paths.js";
+import { parseOptionalNonNegativeIntegerOption } from "./options.js";
 
 export type GraphQueryCommand = "deps" | "rdeps" | "path" | "cycles" | "unresolved" | "apisurface";
 
@@ -77,7 +73,11 @@ function writeCliProjectFileError(
 
 async function loadGraph(context: GraphQueryCommandContext): Promise<LoadedGraph> {
   if (context.collectGraph) {
-    const graph = await context.collectGraph(context.projectRootFs, await context.listProjectFilesForScan(), context.graphOptions);
+    const graph = await context.collectGraph(
+      context.projectRootFs,
+      await context.listProjectFilesForScan(),
+      context.graphOptions,
+    );
     return { graph };
   }
   const buildProjectIndex = context.buildProjectIndex ?? defaultBuildProjectIndex;
@@ -95,8 +95,10 @@ async function handleDepsCommand(context: GraphQueryCommandContext): Promise<voi
     context.exit(2);
   }
   const depthRaw = context.getOpt("--depth");
-  const depth = depthRaw !== undefined ? Number(depthRaw) : undefined;
-  if (depth !== undefined && (!Number.isInteger(depth) || depth < 0)) {
+  let depth: number | undefined;
+  try {
+    depth = parseOptionalNonNegativeIntegerOption(depthRaw, "--depth");
+  } catch {
     context.writeStderrLine(`Invalid --depth value "${depthRaw}". Expected a non-negative integer.`);
     context.exit(2);
   }
@@ -126,7 +128,7 @@ async function handleDepsCommand(context: GraphQueryCommandContext): Promise<voi
 
   context.writeStdoutLine(`${context.command === "deps" ? "Dependencies" : "Reverse dependencies"} for ${fileArg}:`);
   for (const result of results) {
-    const rel = path.relative(context.projectRootFs, result.file);
+    const rel = toProjectDisplayPath(context.projectRootFs, result.file);
     context.writeStdoutLine(`${"  ".repeat(result.depth)} ${rel} (depth ${result.depth})`);
   }
 }
@@ -158,7 +160,7 @@ async function handlePathCommand(context: GraphQueryCommandContext): Promise<voi
     context.writeJSONLine(pathResult);
   } else if (pathResult) {
     context.writeStdoutLine(`Path from ${fromArg} to ${toArg}:`);
-    context.writeStdoutLine(pathResult.map((entry) => path.relative(context.projectRootFs, entry)).join(" -> "));
+    context.writeStdoutLine(pathResult.map((entry) => toProjectDisplayPath(context.projectRootFs, entry)).join(" -> "));
   } else {
     context.writeStdoutLine(`No path found from ${fromArg} to ${toArg}`);
   }
@@ -190,12 +192,14 @@ async function handleCyclesCommand(context: GraphQueryCommandContext): Promise<v
   for (let i = 0; i < cycleDetails.length; i++) {
     const cycle = cycleDetails[i]!;
     context.writeStdoutLine(`Cycle ${i + 1} (priority=${cycle.priorityScore}):`);
-    context.writeStdoutLine(`  ${cycle.files.map((entry) => path.relative(context.projectRootFs, entry)).join(" -> ")} -> ...`);
+    context.writeStdoutLine(
+      `  ${cycle.files.map((entry) => toProjectDisplayPath(context.projectRootFs, entry)).join(" -> ")} -> ...`,
+    );
     if (cycle.entryEdges.length) {
       context.writeStdoutLine("  Incoming edges:");
       for (const edge of cycle.entryEdges) {
         context.writeStdoutLine(
-          `    ${path.relative(context.projectRootFs, edge.from)} -> ${path.relative(context.projectRootFs, edge.to)} (import ${edge.raw})`,
+          `    ${toProjectDisplayPath(context.projectRootFs, edge.from)} -> ${toProjectDisplayPath(context.projectRootFs, edge.to)} (import ${edge.raw})`,
         );
       }
     }
@@ -203,7 +207,7 @@ async function handleCyclesCommand(context: GraphQueryCommandContext): Promise<v
       context.writeStdoutLine("  Internal cycle edges:");
       for (const edge of cycle.internalEdges) {
         context.writeStdoutLine(
-          `    ${path.relative(context.projectRootFs, edge.from)} -> ${path.relative(context.projectRootFs, edge.to)} (import ${edge.raw})`,
+          `    ${toProjectDisplayPath(context.projectRootFs, edge.from)} -> ${toProjectDisplayPath(context.projectRootFs, edge.to)} (import ${edge.raw})`,
         );
       }
     }
@@ -231,7 +235,7 @@ async function handleUnresolvedCommand(context: GraphQueryCommandContext): Promi
     context.writeStdoutLine(`- ${item.name} (imported by ${item.importers.length} files)`);
     if (context.hasFlag("--verbose")) {
       for (const imp of item.importers) {
-        context.writeStdoutLine(`    ${path.relative(context.projectRootFs, imp.file)} (as "${imp.raw}")`);
+        context.writeStdoutLine(`    ${toProjectDisplayPath(context.projectRootFs, imp.file)} (as "${imp.raw}")`);
       }
     }
   }
@@ -250,7 +254,7 @@ async function handleApiSurfaceCommand(context: GraphQueryCommandContext): Promi
 
   context.writeStdoutLine(`API Surface for ${context.projectRootAbs}:`);
   for (const item of apiSurface) {
-    context.writeStdoutLine(`  ${path.relative(context.projectRootFs, item.file)}:`);
+    context.writeStdoutLine(`  ${toProjectDisplayPath(context.projectRootFs, item.file)}:`);
     for (const exp of item.exports) {
       context.writeStdoutLine(`    - ${exp.exportedAs} (${exp.kind})`);
     }

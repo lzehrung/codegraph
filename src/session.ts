@@ -4,8 +4,15 @@
  */
 
 import path from "node:path";
-import type { ProjectIndex, BuildOptions, GoToResult, Reference, SymbolDef } from "./indexer.js";
-import { buildProjectIndex, buildProjectIndexIncremental, findReferences, goToDefinition } from "./indexer.js";
+import {
+  type ProjectIndex,
+  type BuildOptions,
+  type GoToResult,
+  type Reference,
+  type SymbolDef,
+} from "./indexer/types.js";
+import { buildProjectIndex, buildProjectIndexIncremental } from "./indexer/build-index.js";
+import { findReferences, goToDefinition } from "./indexer/navigation.js";
 import {
   analyzeImpactFromDiff,
   type ImpactOptions,
@@ -15,7 +22,7 @@ import {
 } from "./impact/index.js";
 import { analyzeImpactStreaming, type ImpactStreamChunk } from "./impact/streaming.js";
 import { getSessionPreset, mergePreset, type PresetName } from "./presets.js";
-import { assertFilePathWithinRoot } from "./util.js";
+import { assertFilePathWithinRoot } from "./util/paths.js";
 
 export type SessionOptions = {
   /** Project root directory */

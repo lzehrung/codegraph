@@ -1,9 +1,10 @@
 import fsp from "node:fs/promises";
-import { buildGraphDelta, type IncrementalBuildOptions } from "../indexer.js";
-import type { GraphBuildOptions } from "../graphs.js";
+import { buildGraphDelta } from "../indexer/build-index.js";
+import { type IncrementalBuildOptions } from "../indexer/types.js";
+import { type GraphBuildOptions } from "../graphs/types.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
-import { normalizePath, resolveFilePathFromRoot } from "../util.js";
-import { parseCacheModeOption } from "./options.js";
+import { normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
+import { parseCacheModeOption, parseNonNegativeIntegerOption } from "./options.js";
 
 export type GraphDeltaCommandContext = {
   projectRootFs: string;
@@ -21,7 +22,7 @@ export type GraphDeltaCommandContext = {
 };
 
 export async function handleGraphDeltaCommand(context: GraphDeltaCommandContext): Promise<void> {
-  const threads = Number(context.getOpt("--threads") ?? 0);
+  const threads = parseNonNegativeIntegerOption(context.getOpt("--threads"), "--threads", 0);
   const cache = parseCacheModeOption(context.getOpt("--cache"));
   const cacheStrict = context.hasFlag("--cache-strict");
   const cacheVerify = context.hasFlag("--cache-verify");

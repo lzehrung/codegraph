@@ -5,7 +5,9 @@ import path from "node:path";
 import fsp from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { buildProjectIndex, buildProjectIndexFromFiles, buildReviewReport } from "../src/index.js";
-import * as indexer from "../src/indexer.js";
+import * as indexerBuild from "../src/indexer/build-index.js";
+import * as indexerNavigation from "../src/indexer/navigation.js";
+import type { IncrementalBuildOptions, SymbolDef } from "../src/indexer/types.js";
 import * as impactMap from "../src/impact/map.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
@@ -1264,14 +1266,14 @@ describe("Review report", () => {
 
     await buildProjectIndex(root);
 
-    type RefResult = Awaited<ReturnType<typeof indexer.findReferences>>;
+    type RefResult = Awaited<ReturnType<typeof indexerNavigation.findReferences>>;
     const deferreds: Array<{
       promise: Promise<RefResult>;
       resolve: (value: RefResult) => void;
-      def: indexer.SymbolDef | null;
+      def: SymbolDef | null;
     }> = [];
 
-    const createDeferred = (def: indexer.SymbolDef | null) => {
+    const createDeferred = (def: SymbolDef | null) => {
       let resolve: (value: RefResult) => void = () => {};
       const promise = new Promise<RefResult>((res) => {
         resolve = res;
@@ -1281,7 +1283,7 @@ describe("Review report", () => {
       return entry;
     };
 
-    const findSpy = vi.spyOn(indexer, "findReferences").mockImplementation((idx, req) => {
+    const findSpy = vi.spyOn(indexerNavigation, "findReferences").mockImplementation((idx, req) => {
       const def = "def" in req ? req.def : null;
       const entry = createDeferred(def ?? null);
       return entry.promise;
@@ -1335,12 +1337,12 @@ describe("Review report", () => {
 
     await buildProjectIndex(root);
 
-    type RefResult = Awaited<ReturnType<typeof indexer.findReferences>>;
+    type RefResult = Awaited<ReturnType<typeof indexerNavigation.findReferences>>;
     const deferreds: Array<{ resolve: (value: RefResult) => void }> = [];
     let inFlight = 0;
     let maxInFlight = 0;
 
-    const findSpy = vi.spyOn(indexer, "findReferences").mockImplementation(() => {
+    const findSpy = vi.spyOn(indexerNavigation, "findReferences").mockImplementation(() => {
       inFlight += 1;
       maxInFlight = Math.max(maxInFlight, inFlight);
       let resolveFn: (value: RefResult) => void = () => {};
@@ -1401,17 +1403,19 @@ describe("Review report", () => {
 
     await buildProjectIndex(root);
 
-    const originalBuildProjectIndexIncremental = indexer.buildProjectIndexIncremental;
-    const originalFindReferences = indexer.findReferences;
-    const capturedIndexOpts: Array<indexer.IncrementalBuildOptions | undefined> = [];
+    const originalBuildProjectIndexIncremental = indexerBuild.buildProjectIndexIncremental;
+    const originalFindReferences = indexerNavigation.findReferences;
+    const capturedIndexOpts: Array<IncrementalBuildOptions | undefined> = [];
     const capturedReferenceLimits: number[] = [];
 
-    const buildSpy = vi.spyOn(indexer, "buildProjectIndexIncremental").mockImplementation(async (projectRoot, opts) => {
-      capturedIndexOpts.push(opts);
-      return await originalBuildProjectIndexIncremental(projectRoot, opts);
-    });
+    const buildSpy = vi
+      .spyOn(indexerBuild, "buildProjectIndexIncremental")
+      .mockImplementation(async (projectRoot, opts) => {
+        capturedIndexOpts.push(opts);
+        return await originalBuildProjectIndexIncremental(projectRoot, opts);
+      });
 
-    const findSpy = vi.spyOn(indexer, "findReferences").mockImplementation(async (idx, req, opts) => {
+    const findSpy = vi.spyOn(indexerNavigation, "findReferences").mockImplementation(async (idx, req, opts) => {
       if (opts?.maxReferences !== undefined) {
         capturedReferenceLimits.push(opts.maxReferences);
       }
@@ -1466,7 +1470,7 @@ describe("Review report", () => {
 
     await buildProjectIndex(root);
 
-    const buildSpy = vi.spyOn(indexer, "buildProjectIndexIncremental");
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
     try {
       const minimal = await buildReviewReport(root, {
         files: [featureFile],
@@ -1555,7 +1559,7 @@ describe("Indexing helper", () => {
     const fullMainModule = fullIndex.byFile.get(normalizedMainPath);
     expect(fullMainModule).toBeDefined();
 
-    const incrementalIndex = await indexer.buildProjectIndexIncremental(root, {
+    const incrementalIndex = await indexerBuild.buildProjectIndexIncremental(root, {
       cache: "disk",
       files: [mainPath],
     });
