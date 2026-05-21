@@ -3,7 +3,13 @@ import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
 import { buildProjectIndex, clearImportResolutionCaches, collectGraph, goToDefinition } from "../src/index.js";
-import { loadNearestTsconfigFor, loadWorkspaceConfig, resolveSpecifier, resolveWorkspacePackage } from "../src/util.js";
+import {
+  loadNearestTsconfigFor,
+  loadWorkspaceConfig,
+  resolvePythonModule,
+  resolveSpecifier,
+  resolveWorkspacePackage,
+} from "../src/util.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -222,6 +228,21 @@ describe("Import Resolution", () => {
 
     await expect(resolveSpecifier(fromFile, "/target", rootA)).resolves.toBe(targetA);
     await expect(resolveSpecifier(fromFile, "/target", rootB)).resolves.toBe(targetB);
+  });
+
+  it("keys Python module resolution by project root", async () => {
+    const rootA = await mkTmpDir("dg-resolve-python-cache-root-a-");
+    const rootB = await mkTmpDir("dg-resolve-python-cache-root-b-");
+    const fromFile = path.join(await mkTmpDir("dg-resolve-python-cache-from-"), "main.py");
+    const targetA = path.join(rootA, "target.py");
+    const targetB = path.join(rootB, "target.py");
+
+    clearImportResolutionCaches();
+    await fsp.writeFile(targetA, "VALUE = 'a'\n", "utf8");
+    await fsp.writeFile(targetB, "VALUE = 'b'\n", "utf8");
+
+    await expect(resolvePythonModule(rootA, fromFile, "target", 0)).resolves.toBe(targetA.replace(/\\/g, "/"));
+    await expect(resolvePythonModule(rootB, fromFile, "target", 0)).resolves.toBe(targetB.replace(/\\/g, "/"));
   });
 
   it("does not resolve tsconfig path aliases to directories without entry files", async () => {

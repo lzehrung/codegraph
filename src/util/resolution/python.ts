@@ -8,6 +8,12 @@ type FileId = string;
 
 const resolvePythonModuleCache = new Map<string, FileId | { external: string }>();
 
+function pythonResolutionCacheKey(projectRoot: string, fromFile: string, moduleName: string | null, importDotCount: number): string {
+  const normalizedRoot = normalizePath(path.resolve(projectRoot));
+  const normalizedFromFile = normalizePath(path.resolve(fromFile));
+  return `${normalizedRoot}::${normalizedFromFile}::${".".repeat(importDotCount)}${moduleName ?? ""}`;
+}
+
 async function findPythonPackageAnchor(startDir: string): Promise<string> {
   let dir = startDir;
   let topWithInit = startDir;
@@ -31,7 +37,7 @@ export async function resolvePythonModule(
   moduleName: string | null,
   importDotCount: number,
 ): Promise<FileId | { external: string }> {
-  const cacheKey = `${fromFile}::${".".repeat(importDotCount)}${moduleName ?? ""}`;
+  const cacheKey = pythonResolutionCacheKey(projectRoot, fromFile, moduleName, importDotCount);
   const cached = resolvePythonModuleCache.get(cacheKey);
   if (cached) return cached;
   const fromDir = path.dirname(fromFile);
