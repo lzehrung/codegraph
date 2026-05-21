@@ -618,7 +618,14 @@ describe("Find References", () => {
           definitionLine: 5,
           definitionColumn: 7,
           referenceFile: path.join(samplePath, "composer-excluded-psr4-consumer.php").replace(/\\/g, "/"),
-          referenceLine: 5,
+          referenceLine: 6,
+        },
+        {
+          definitionFile: path.join(samplePath, "classmap", "Excluded", "psr_helper.php").replace(/\\/g, "/"),
+          definitionLine: 5,
+          definitionColumn: 10,
+          referenceFile: path.join(samplePath, "composer-excluded-psr4-consumer.php").replace(/\\/g, "/"),
+          referenceLine: 7,
         },
         {
           definitionFile: path.join(samplePath, "autoload", "global_helper.php").replace(/\\/g, "/"),

@@ -613,9 +613,17 @@ describe("Go to Definition", () => {
       await testGoToDefinition(
         index,
         path.join(samplePath, "composer-excluded-psr4-consumer.php").replace(/\\/g, "/"),
-        5,
+        6,
         6,
         path.join(samplePath, "classmap", "Excluded", "PsrMapped.php").replace(/\\/g, "/"),
+        5,
+      );
+      await testGoToDefinition(
+        index,
+        path.join(samplePath, "composer-excluded-psr4-consumer.php").replace(/\\/g, "/"),
+        7,
+        3,
+        path.join(samplePath, "classmap", "Excluded", "psr_helper.php").replace(/\\/g, "/"),
         5,
       );
       await testGoToDefinition(

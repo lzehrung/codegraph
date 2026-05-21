@@ -79,6 +79,18 @@ async function resolveImportSpecifierEdge(
   entry: ModuleSpecifier,
   context: ModuleSpecifierResolutionContext,
 ): Promise<EdgeTo> {
+  if (context.support.id === "rust" && entry.raw && entry.raw !== entry.spec) {
+    const rawResolved = await resolveImportSpecifier(context.projectRoot, context.file, entry.raw, context.support.id, {
+      ...(context.matchPath ? { matchPath: context.matchPath } : {}),
+      ...(context.workspaceConfig ? { workspaceConfig: context.workspaceConfig } : {}),
+      resolveNodeModules: !!context.resolveNodeModules,
+      ...(context.resolutionHints ? { resolutionHints: context.resolutionHints } : {}),
+    });
+    if (typeof rawResolved === "string") {
+      return edgeToResolvedFile(rawResolved);
+    }
+  }
+
   const res = await resolveImportSpecifier(context.projectRoot, context.file, entry.spec, context.support.id, {
     ...(context.matchPath ? { matchPath: context.matchPath } : {}),
     ...(context.workspaceConfig ? { workspaceConfig: context.workspaceConfig } : {}),

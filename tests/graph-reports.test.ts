@@ -590,9 +590,20 @@ describe("graph reports", () => {
     const nestedModule = path.join(nestedRoot, "mod.rs");
     const resolvedSuperModule = await resolveRustImportPath(projectRoot, nestedModule, "super::b");
     const resolvedSelfModule = await resolveRustImportPath(projectRoot, nestedModule, "self::b");
+    const files = ["lib.rs", "b.rs", "a/mod.rs", "a/b.rs"].map((file) => path.join(sourceRoot, file));
+    const graph = await collectGraph(projectRoot, files);
 
     expect(resolvedSuperModule?.replace(/\\/g, "/")).toMatch(/\/src\/b\.rs$/);
     expect(resolvedSelfModule?.replace(/\\/g, "/")).toMatch(/\/src\/a\/b\.rs$/);
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from.endsWith("a/mod.rs") &&
+          edge.raw === "super::b" &&
+          edge.to.type === "file" &&
+          edge.to.path.endsWith("src/b.rs"),
+      ),
+    ).toBeTruthy();
   });
 
   it("should get hotspots", () => {

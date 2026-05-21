@@ -20,6 +20,7 @@ const phpComposerAutoloadFileCache = new Map<string, Promise<Set<string>>>();
 type PhpComposerAutoloadRoot = {
   path: string;
   applyClassmapExcludes: boolean;
+  namespacePrefixes: string[];
 };
 
 async function findFirstExistingResolutionCandidate(
@@ -213,13 +214,25 @@ export async function getPhpComposerAutoloadFiles(
   const pending = (async () => {
     const candidates = new Set<string>();
     const roots: PhpComposerAutoloadRoot[] = [];
-    const seenRoots = new Set<string>();
-    const addRoot = (rootPath: string, applyClassmapExcludes: boolean): void => {
+    const addRoot = (rootPath: string, applyClassmapExcludes: boolean, namespacePrefix?: string): void => {
       const resolvedRoot = path.resolve(rootPath);
-      const cacheKey = `${resolvedRoot}\0${applyClassmapExcludes ? "classmap" : "autoload"}`;
-      if (seenRoots.has(cacheKey)) return;
-      seenRoots.add(cacheKey);
-      roots.push({ path: resolvedRoot, applyClassmapExcludes });
+      const existingRoot = roots.find(
+        (root) => root.path === resolvedRoot && root.applyClassmapExcludes === applyClassmapExcludes,
+      );
+      const normalizedPrefix = normalizePhpNamespacePrefix(namespacePrefix);
+      if (existingRoot) {
+        if (normalizedPrefix === undefined) {
+          existingRoot.namespacePrefixes = [""];
+        } else if (!existingRoot.namespacePrefixes.includes("") && !existingRoot.namespacePrefixes.includes(normalizedPrefix)) {
+          existingRoot.namespacePrefixes.push(normalizedPrefix);
+        }
+        return;
+      }
+      roots.push({
+        path: resolvedRoot,
+        applyClassmapExcludes,
+        namespacePrefixes: normalizedPrefix === undefined ? [""] : [normalizedPrefix],
+      });
     };
 
     for (const root of composerConfig.classmap) {
@@ -228,11 +241,15 @@ export async function getPhpComposerAutoloadFiles(
     for (const root of composerConfig.files) {
       addRoot(root, false);
     }
-    for (const root of Array.from(composerConfig.psr4.values()).flat()) {
-      addRoot(root, true);
+    for (const [prefix, dirs] of composerConfig.psr4) {
+      for (const root of dirs) {
+        addRoot(root, false, prefix);
+      }
     }
-    for (const root of Array.from(composerConfig.psr0.values()).flat()) {
-      addRoot(root, true);
+    for (const [prefix, dirs] of composerConfig.psr0) {
+      for (const root of dirs) {
+        addRoot(root, false, prefix);
+      }
     }
 
     for (const root of roots) {
@@ -241,6 +258,9 @@ export async function getPhpComposerAutoloadFiles(
         if (stat.isDirectory()) {
           const files = await listProjectFiles(root.path, ["**/*.php"]);
           for (const filePath of files) {
+            if (!(await phpFileMatchesNamespacePrefixes(filePath, root.namespacePrefixes))) {
+              continue;
+            }
             if (root.applyClassmapExcludes && isPhpComposerClassmapExcluded(filePath, composerConfig)) {
               continue;
             }
@@ -249,6 +269,7 @@ export async function getPhpComposerAutoloadFiles(
           continue;
         }
         if (stat.isFile() && root.path.toLowerCase().endsWith(".php")) {
+          if (!(await phpFileMatchesNamespacePrefixes(root.path, root.namespacePrefixes))) continue;
           if (root.applyClassmapExcludes && isPhpComposerClassmapExcluded(root.path, composerConfig)) continue;
           candidates.add(path.resolve(root.path));
         }
@@ -262,6 +283,29 @@ export async function getPhpComposerAutoloadFiles(
 
   phpComposerAutoloadFileCache.set(composerPath, pending);
   return await pending;
+}
+
+function normalizePhpNamespacePrefix(prefix: string | undefined): string | undefined {
+  if (prefix === undefined) return undefined;
+  return prefix.replace(/^\\+|\\+$/g, "");
+}
+
+async function phpFileMatchesNamespacePrefixes(filePath: string, namespacePrefixes: readonly string[]): Promise<boolean> {
+  if (!namespacePrefixes.length || namespacePrefixes.includes("")) {
+    return true;
+  }
+  let source: string;
+  try {
+    source = await fsp.readFile(filePath, "utf8");
+  } catch {
+    return false;
+  }
+  const namespaceMatch = source.match(/\bnamespace\s+([^;{]+)/);
+  const namespaceName = namespaceMatch?.[1]?.trim().replace(/^\\+|\\+$/g, "");
+  if (namespaceName === undefined) {
+    return false;
+  }
+  return namespacePrefixes.some((prefix) => namespaceName === prefix || namespaceName.startsWith(`${prefix}\\`));
 }
 
 export function isPhpComposerClassmapExcluded(filePath: string, composerConfig: PhpComposerConfig): boolean {

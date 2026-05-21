@@ -11,6 +11,7 @@ import {
   parseKotlinImportStatement,
   parsePhpImportStatement,
   parseRustImportStatement,
+  type ParsedRustImportStatement,
 } from "../languages/importStatementParsers.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
@@ -60,6 +61,17 @@ const HTML_LIKE_LANGUAGE_IDS = new Set(["html", "vue", "svelte"]);
 function isHtmlLikeLanguage(languageId: string, filePath?: string): boolean {
   if (HTML_LIKE_LANGUAGE_IDS.has(languageId)) return true;
   return !!filePath && filePath.toLowerCase().endsWith(".astro");
+}
+
+function rustSpecifierFromParsedImport(parsed: ParsedRustImportStatement): ModuleSpecifier {
+  if (parsed.kind !== "member") {
+    return { spec: parsed.from, typeOnly: false };
+  }
+  const root = parsed.from.split("::", 1)[0] ?? "";
+  if (root === "crate" || root === "self" || root === "super") {
+    return { spec: parsed.from, raw: `${parsed.from}::${parsed.imported}`, typeOnly: false };
+  }
+  return { spec: parsed.from, typeOnly: false };
 }
 
 function extractPhpQualifiedSpecifiersFromTree(source: string, tree: SyntaxTreeLike): ModuleSpecifier[] {
@@ -321,7 +333,7 @@ export function collectModuleSpecifiersFromSource(
         if (support.id === "rust") {
           const parsed = parseRustImportStatement(stmtText);
           if (parsed) {
-            out.push({ spec: parsed.from, typeOnly: false });
+            out.push(rustSpecifierFromParsedImport(parsed));
             continue;
           }
         }
@@ -408,7 +420,7 @@ export function collectModuleSpecifiersFromSource(
       if (support.id === "rust") {
         const parsed = parseRustImportStatement(stmtText);
         if (parsed) {
-          out.push({ spec: parsed.from, typeOnly: false });
+          out.push(rustSpecifierFromParsedImport(parsed));
           continue;
         }
       }
