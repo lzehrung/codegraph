@@ -100,6 +100,8 @@ type LanguageForFileResult = {
   textOnly: boolean;
 };
 
+type ConsideredSignaturesByUnit = Map<string, Set<string>>;
+
 const DEFAULT_MIN_TOKENS = 40;
 const DEFAULT_MAX_TOKENS = 800;
 const DEFAULT_LIMIT = 50;
@@ -297,6 +299,22 @@ function jaccard(left: Set<string>, right: Set<string>): number {
 
 function normalizeConfidence(value: DuplicateConfidence | undefined): DuplicateConfidence {
   return value ?? "medium";
+}
+
+function normalizePositiveIntegerOption(value: number | undefined, optionName: string, fallback: number): number {
+  const resolved = value ?? fallback;
+  if (!Number.isInteger(resolved) || resolved < 1) {
+    throw new Error(`Invalid ${optionName} value "${String(resolved)}". Expected a positive integer.`);
+  }
+  return resolved;
+}
+
+function normalizeNonNegativeIntegerOption(value: number | undefined, optionName: string, fallback: number): number {
+  const resolved = value ?? fallback;
+  if (!Number.isInteger(resolved) || resolved < 0) {
+    throw new Error(`Invalid ${optionName} value "${String(resolved)}". Expected a non-negative integer.`);
+  }
+  return resolved;
 }
 
 function confidenceForScore(score: number): DuplicateConfidence {
@@ -522,6 +540,40 @@ function addBucketsToPairs(
   return oversizedBuckets;
 }
 
+function addConsideredSignature(
+  consideredSignaturesByUnit: ConsideredSignaturesByUnit,
+  unit: DuplicateInternalUnit,
+  signature: string,
+): void {
+  const signatures = consideredSignaturesByUnit.get(unit.id);
+  if (signatures) {
+    signatures.add(signature);
+    return;
+  }
+  consideredSignaturesByUnit.set(unit.id, new Set([signature]));
+}
+
+function addSignatureBucketsToPairs(
+  buckets: Map<string, DuplicateInternalUnit[]>,
+  pairs: Map<string, PairEvidence>,
+  consideredSignaturesByUnit: ConsideredSignaturesByUnit,
+  maxBucketSize: number,
+): number {
+  let oversizedBuckets = 0;
+  for (const [signature, bucket] of buckets) {
+    if (bucket.length < 2) continue;
+    if (bucket.length > maxBucketSize) {
+      oversizedBuckets++;
+      continue;
+    }
+    for (const unit of bucket) {
+      addConsideredSignature(consideredSignaturesByUnit, unit, signature);
+    }
+    addBucketPairs(bucket, pairs, "signature");
+  }
+  return oversizedBuckets;
+}
+
 /** Combines exact, normalized, fingerprint, size, and complexity signals. */
 function scorePair(evidence: PairEvidence, metrics: DuplicateMetrics): { score: number; reasons: string[] } {
   let score = 0;
@@ -670,12 +722,13 @@ function buildCandidatePairs(
   }
 
   const pairs = new Map<string, PairEvidence>();
+  const consideredSignaturesByUnit: ConsideredSignaturesByUnit = new Map();
   let oversizedBuckets = 0;
   oversizedBuckets += addBucketsToPairs(rawHashBuckets, pairs, "rawHash", maxBucketSize);
   oversizedBuckets += addBucketsToPairs(normalizedHashBuckets, pairs, "normalizedHash", maxBucketSize);
-  oversizedBuckets += addBucketsToPairs(signatureBuckets, pairs, "signature", maxBucketSize);
+  oversizedBuckets += addSignatureBucketsToPairs(signatureBuckets, pairs, consideredSignaturesByUnit, maxBucketSize);
   for (const [key, evidence] of pairs) {
-    if (hasEnoughSharedFingerprints(evidence)) {
+    if (hasEnoughSharedFingerprints(evidence, consideredSignaturesByUnit)) {
       evidence.signature = true;
       continue;
     }
@@ -687,10 +740,16 @@ function buildCandidatePairs(
 }
 
 /** Requires enough shared fingerprints to avoid incidental syntax matches. */
-function hasEnoughSharedFingerprints(evidence: PairEvidence): boolean {
+function hasEnoughSharedFingerprints(
+  evidence: PairEvidence,
+  consideredSignaturesByUnit: ConsideredSignaturesByUnit,
+): boolean {
   if (!evidence.signatureMatches) return false;
-  const smallerSignatureCount = Math.min(evidence.left.signatures.size, evidence.right.signatures.size);
-  const minimumShared = Math.max(2, Math.ceil(smallerSignatureCount * 0.25));
+  const leftConsideredSignatures = consideredSignaturesByUnit.get(evidence.left.id)?.size ?? 0;
+  const rightConsideredSignatures = consideredSignaturesByUnit.get(evidence.right.id)?.size ?? 0;
+  const smallerConsideredSignatureCount = Math.min(leftConsideredSignatures, rightConsideredSignatures);
+  if (!smallerConsideredSignatureCount) return false;
+  const minimumShared = Math.max(2, Math.ceil(smallerConsideredSignatureCount * 0.25));
   return evidence.signatureMatches >= minimumShared;
 }
 
@@ -728,15 +787,19 @@ export async function findDuplicates(
   options: DuplicateDetectionOptions = {},
 ): Promise<DuplicateDetectionResult> {
   const projectRoot = options.projectRoot ?? index.projectRoot;
-  const minTokens = options.minTokens ?? DEFAULT_MIN_TOKENS;
-  const maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
-  const maxBucketSize = options.maxBucketSize ?? DEFAULT_MAX_BUCKET_SIZE;
-  const shingleSize = options.shingleSize ?? DEFAULT_SHINGLE_SIZE;
-  const windowSize = options.windowSize ?? DEFAULT_WINDOW_SIZE;
+  const minTokens = normalizePositiveIntegerOption(options.minTokens, "minTokens", DEFAULT_MIN_TOKENS);
+  const maxTokens = normalizePositiveIntegerOption(options.maxTokens, "maxTokens", DEFAULT_MAX_TOKENS);
+  const maxBucketSize = normalizePositiveIntegerOption(
+    options.maxBucketSize,
+    "maxBucketSize",
+    DEFAULT_MAX_BUCKET_SIZE,
+  );
+  const shingleSize = normalizePositiveIntegerOption(options.shingleSize, "shingleSize", DEFAULT_SHINGLE_SIZE);
+  const windowSize = normalizePositiveIntegerOption(options.windowSize, "windowSize", DEFAULT_WINDOW_SIZE);
   const includeSmall = options.includeSmall ?? false;
   const crossFileOnly = options.crossFileOnly ?? !(options.includeSameFile ?? false);
   const minConfidence = normalizeConfidence(options.minConfidence);
-  const limit = options.limit ?? DEFAULT_LIMIT;
+  const limit = normalizeNonNegativeIntegerOption(options.limit, "limit", DEFAULT_LIMIT);
 
   if (maxTokens < minTokens) {
     throw new Error(`Invalid maxTokens value "${maxTokens}". Expected a value greater than or equal to minTokens.`);

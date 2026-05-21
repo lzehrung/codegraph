@@ -227,6 +227,23 @@ export function sharedName(input: string): string {
     );
   });
 
+  test("rejects invalid numeric options", async () => {
+    const root = await makeTempProject();
+
+    await writeProjectFile(root, "src/a.ts", `export function a() { return 1; }\n`);
+
+    const index = await buildProjectIndex(root);
+    await expect(findDuplicates(index, { limit: -1 })).rejects.toThrow(
+      'Invalid limit value "-1". Expected a non-negative integer.',
+    );
+    await expect(findDuplicates(index, { minTokens: 0 })).rejects.toThrow(
+      'Invalid minTokens value "0". Expected a positive integer.',
+    );
+    await expect(findDuplicates(index, { shingleSize: Number.NaN })).rejects.toThrow(
+      'Invalid shingleSize value "NaN". Expected a positive integer.',
+    );
+  });
+
   test("keeps cross-language exact text in separate candidate buckets", async () => {
     const root = await makeTempProject();
     const source = `
@@ -368,6 +385,44 @@ export function summarizeOrders(rows: Array<{ amount: number; tax: number }>) {
     expect(result.stderr).toBe("");
     expect(parsed.suggestions).toHaveLength(1);
     expect(parsed.suggestions?.[0]?.score).toBeGreaterThan(90);
+  });
+
+  test("counts only considered fingerprints when oversized buckets are skipped", async () => {
+    const root = await makeTempProject();
+    const punctuationBlock = (characters: string, lines: number): string =>
+      Array.from({ length: lines }, (_, line) => {
+        let value = "";
+        for (let offset = 0; offset < 5; offset++) {
+          value += characters[(line * 7 + offset * 3) % characters.length];
+        }
+        return value;
+      }).join("\n");
+    const commonOversizedBlock = punctuationBlock("(){}[]<>+-*/%=!?:;,.|&^~", 40);
+    const sharedEligibleBlock = punctuationBlock("@#$\\_", 8);
+    const leftUniqueBlock = punctuationBlock("(){}[]<>+-*/%=!?:;,.|&^~", 80);
+    const rightUniqueBlock = punctuationBlock("~~~~^^^^||||&&&&!!!!????::::;;;;,,,,....", 80);
+    const thirdUniqueBlock = punctuationBlock("<<<<>>>>====++++----****////%%%%", 10);
+
+    await writeProjectFile(root, "src/index.ts", "export const marker = 1;\n");
+    await writeProjectFile(root, "src/a.txt", `${commonOversizedBlock}\n${sharedEligibleBlock}\n${leftUniqueBlock}\n+`);
+    await writeProjectFile(root, "src/b.txt", `${commonOversizedBlock}\n${sharedEligibleBlock}\n${rightUniqueBlock}\n-`);
+    await writeProjectFile(root, "src/c.txt", `${commonOversizedBlock}\n${thirdUniqueBlock}\n#`);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, {
+      projectRoot: root,
+      files: ["src/a.txt", "src/b.txt", "src/c.txt"],
+      includeSmall: true,
+      maxBucketSize: 2,
+      minConfidence: "low",
+    });
+
+    expect(result.omittedCounts.oversizedBuckets).toBeGreaterThan(0);
+    expect(
+      result.suggestions.some(
+        (suggestion) => suggestion.left.file === "src/a.txt" && suggestion.right.file === "src/b.txt",
+      ),
+    ).toBeTruthy();
   });
 
   test("skips oversized candidate buckets", async () => {
