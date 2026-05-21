@@ -90,6 +90,7 @@ type PairEvidence = {
   rawHash: boolean;
   normalizedHash: boolean;
   signature: boolean;
+  signatureMatches: number;
 };
 
 const DEFAULT_MIN_TOKENS = 40;
@@ -416,7 +417,12 @@ function addBucketPairs(
       const key = pairKey(left, right);
       const existing = pairs.get(key);
       if (existing) {
-        existing[evidenceKind] = true;
+        if (evidenceKind === "signature") {
+          existing.signatureMatches++;
+          existing.signature = existing.signatureMatches >= 2;
+        } else {
+          existing[evidenceKind] = true;
+        }
         continue;
       }
       pairs.set(key, {
@@ -424,7 +430,8 @@ function addBucketPairs(
         right,
         rawHash: evidenceKind === "rawHash",
         normalizedHash: evidenceKind === "normalizedHash",
-        signature: evidenceKind === "signature",
+        signature: false,
+        signatureMatches: evidenceKind === "signature" ? 1 : 0,
       });
     }
   }
@@ -589,7 +596,23 @@ function buildCandidatePairs(
   oversizedBuckets += addBucketsToPairs(rawHashBuckets, pairs, "rawHash", maxBucketSize);
   oversizedBuckets += addBucketsToPairs(normalizedHashBuckets, pairs, "normalizedHash", maxBucketSize);
   oversizedBuckets += addBucketsToPairs(signatureBuckets, pairs, "signature", maxBucketSize);
+  for (const [key, evidence] of pairs) {
+    if (hasEnoughSharedFingerprints(evidence)) {
+      evidence.signature = true;
+      continue;
+    }
+    if (!evidence.rawHash && !evidence.normalizedHash) {
+      pairs.delete(key);
+    }
+  }
   return { pairs, oversizedBuckets };
+}
+
+function hasEnoughSharedFingerprints(evidence: PairEvidence): boolean {
+  if (!evidence.signatureMatches) return false;
+  const smallerSignatureCount = Math.min(evidence.left.signatures.size, evidence.right.signatures.size);
+  const minimumShared = Math.max(2, Math.ceil(smallerSignatureCount * 0.25));
+  return evidence.signatureMatches >= minimumShared;
 }
 
 function suggestionForPair(evidence: PairEvidence): DuplicateSuggestion {
