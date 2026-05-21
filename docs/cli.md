@@ -170,6 +170,8 @@ codegraph grep --pattern 'eval\(' --ignore-case
 
 - It combines indexed symbols, semantic chunks, and text chunks.
 - It reports project-relative paths, confidence, clone type, metrics, and omission counts.
+- A single positional directory becomes the project root unless `--root` is set.
+- Use `--root . ./src` for scoped scans with repository-relative paths.
 - Use `--include-small` for tiny helpers.
 - Use `--include-same-file` for non-overlapping clones inside one file.
 

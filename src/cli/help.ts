@@ -201,6 +201,10 @@ export const DUPLICATES_HELP_TEXT = `codegraph duplicates - Detect duplicate and
 
 Usage: codegraph duplicates [path ...] [--root <path>] [--min-confidence high|medium|low] [--limit <n>] [--include-same-file] [--include-small]
 
+Path behavior:
+  A single positional directory becomes the project root when --root is omitted.
+  Use --root . ./src to scan a subtree while keeping repository-relative paths.
+
 Options:
   --min-confidence  Minimum confidence to report. Defaults to medium.
   --limit           Maximum suggestions to return. Defaults to 50.

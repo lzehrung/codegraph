@@ -320,6 +320,21 @@ export function sharedClone(rows) {
     expect(result.suggestions[0]?.left.file).toBe("src/a.ts");
   });
 
+  test("rejects duplicate file filters outside the project root", async () => {
+    const root = await makeTempProject();
+    const outsideFile = path.join(path.dirname(root), "outside.ts").replace(/\\/g, "/");
+
+    await writeProjectFile(root, "src/a.ts", `export function a() { return 1; }\n`);
+
+    const index = await buildProjectIndex(root);
+    await expect(
+      findDuplicates(index, {
+        projectRoot: root,
+        files: [outsideFile],
+      }),
+    ).rejects.toThrow("Duplicate input file is outside project root");
+  });
+
   test("includes same-file non-overlapping clones only when requested", async () => {
     const root = await makeTempProject();
     const source = `

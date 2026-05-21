@@ -6,7 +6,7 @@ import { chunkFile, type Chunk } from "./chunking/chunkFile.js";
 import { chunkTextFile } from "./chunking/chunkTextFile.js";
 import { supportForFile } from "./languages.js";
 import { SymbolKind, type ProjectIndex, type SymbolDef } from "./indexer/types.js";
-import { normalizePath, toProjectDisplayPath } from "./util/paths.js";
+import { assertFilePathWithinRoot, normalizePath, toProjectDisplayPath } from "./util/paths.js";
 
 export type DuplicateConfidence = "high" | "medium" | "low";
 export type DuplicateCloneType = "exact" | "renamed" | "near" | "weak";
@@ -348,8 +348,8 @@ function displayPath(projectRoot: string | undefined, filePath: string): string 
 }
 
 function normalizeDetectionFile(filePath: string, projectRoot: string | undefined): string {
-  if (path.isAbsolute(filePath) || !projectRoot) return normalizePath(filePath);
-  return normalizePath(path.resolve(projectRoot, filePath));
+  if (!projectRoot) return normalizePath(filePath);
+  return assertFilePathWithinRoot(projectRoot, filePath, "Duplicate input file");
 }
 
 function internalUnitId(unit: DuplicateUnitDraft, absoluteFile: string): string {
