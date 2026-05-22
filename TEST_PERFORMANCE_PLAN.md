@@ -69,11 +69,12 @@ Goal: review every test or test file with cases over 2 seconds. Optimize product
   - Verify with `tests/references.test.ts`, `tests/goto.test.ts`, `tests/impact.test.ts`, and `tests/review.test.ts`.
   - Added a weakly cached candidate-file selector that preserves re-export and wildcard import resolution.
 
-- [ ] Reuse indexes in `goto` and `references` tests.
+- [x] Reuse indexes in `goto` and `references` tests.
   - Many cases rebuild identical fixture indexes.
   - Group cases by fixture root and build shared indexes in `beforeAll`.
   - Keep mutation-heavy temp-project cases isolated.
   - This is test-harness cleanup, but it will make product-code profiling easier.
+  - Added sample-only cached test indexes while keeping temp-project indexes fresh.
 
 - [x] Reduce `impact-cli` process startup overhead.
   - Most cases spawn `node tsx src/cli.ts`.
