@@ -52,7 +52,10 @@ function isSamplePath(samplePath: string): boolean {
 function cachedSampleIndex(key: string, build: () => Promise<ProjectIndex>): Promise<ProjectIndex> {
   const cached = sampleIndexCache.get(key);
   if (cached) return cached;
-  const promise = build();
+  const promise = build().catch((error: unknown) => {
+    sampleIndexCache.delete(key);
+    throw error;
+  });
   sampleIndexCache.set(key, promise);
   return promise;
 }

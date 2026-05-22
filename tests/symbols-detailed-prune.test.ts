@@ -66,6 +66,8 @@ describe("Symbols-detailed pruning flags", () => {
       const aFile = path.join(root, "a.ts");
       const bFile = path.join(root, "b.ts");
       const cFile = path.join(root, "c.ts");
+      const aGraphFile = aFile.replace(/\\/g, "/");
+      const cGraphFile = cFile.replace(/\\/g, "/");
 
       await createFile(aFile, 'import { b } from "./b";\nexport function a() { return b(); }\n');
       await createFile(bFile, "export function b() { return 1; }\n");
@@ -73,10 +75,10 @@ describe("Symbols-detailed pruning flags", () => {
 
       const index = await buildProjectIndex(root, { keepParsed: true });
       const { buildSymbolGraphDetailed } = await import("../src/graphs.js");
-      const graph = await buildSymbolGraphDetailed(index, { files: new Set([aFile]) });
+      const graph = await buildSymbolGraphDetailed(index, { files: new Set([aGraphFile]) });
 
-      expect(Array.from(graph.nodes.values()).some((node) => node.file === cFile)).toBe(false);
-      expect(graph.edges.some((edge) => edge.from.startsWith(`${cFile}::`))).toBe(false);
+      expect(Array.from(graph.nodes.values()).some((node) => node.file === cGraphFile)).toBe(false);
+      expect(graph.edges.some((edge) => edge.from.startsWith(`${cGraphFile}::`))).toBe(false);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

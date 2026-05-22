@@ -703,7 +703,7 @@ async function buildIndexFromFileListShared(
       modules,
       parsedMap,
       bloomFilterCache,
-      ...(projectFiles ? { projectFiles } : {}),
+      ...(projectFiles !== undefined ? { projectFiles } : {}),
     });
   } finally {
     await teardownWorkerPool(workerSetup, report);
