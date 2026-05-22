@@ -199,7 +199,7 @@ Defaults:
 
 export const DUPLICATES_HELP_TEXT = `codegraph duplicates - Detect duplicate and near-duplicate code units
 
-Usage: codegraph duplicates [path ...] [--root <path>] [--min-confidence high|medium|low] [--limit <n>] [--include-same-file] [--include-small]
+Usage: codegraph duplicates [path ...] [--root <path>] [--min-confidence high|medium|low] [--limit <n>] [--include-same-file] [--include-small] [--raw-pairs]
 
 Path behavior:
   A single positional directory becomes the project root when --root is omitted.
@@ -207,15 +207,17 @@ Path behavior:
 
 Options:
   --min-confidence  Minimum confidence to report. Defaults to medium.
-  --limit           Maximum suggestions to return. Defaults to 50.
+  --limit           Maximum duplicate groups to return. Defaults to 50.
   --include-same-file Report non-overlapping clones in the same file.
   --include-small   Include units below the default token floor.
+  --raw-pairs       Include low-level scored unit pairs as suggestions.
   --min-tokens      Minimum unit tokens. Defaults to 40.
   --max-tokens      Maximum fallback chunk tokens. Defaults to 800.
   --max-bucket-size Skip candidate buckets larger than this value. Defaults to 200.
 
 Output:
-  Always emits JSON with scored suggestions, confidence, clone type, metrics, omission counts, and pair stats.
+  Always emits JSON with grouped duplicate findings, confidence, clone type, metrics, omission counts, and pair stats.
+  Use --raw-pairs to include the underlying scored unit-pair suggestions.
 `;
 
 export function helpTextForCommand(command: string, positionals: readonly string[]): string | undefined {

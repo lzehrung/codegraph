@@ -9,6 +9,7 @@ import {
   sqlObjectBaseName,
   sqlParenDepthAt,
 } from "./lex.js";
+import { sqlObjectLookupKeys } from "./lookup.js";
 import type { SqlFactKind, SqlFileRole, SqlStatementFact } from "./types.js";
 
 export { maskSqlStringsAndComments, normalizeSqlObjectName, sqlObjectBaseName } from "./lex.js";
@@ -362,12 +363,6 @@ function findMatchingParen(text: string, openIndex: number): number {
   return -1;
 }
 
-function cteNameKeys(name: string): string[] {
-  const normalized = name.toLowerCase();
-  const baseName = sqlObjectBaseName(name).toLowerCase();
-  return normalized === baseName ? [normalized] : [normalized, baseName];
-}
-
 function collectCteReads(text: string): { names: Set<string>; facts: SqlFactDraft[] } {
   const names = new Set<string>();
   const facts: SqlFactDraft[] = [];
@@ -380,7 +375,7 @@ function collectCteReads(text: string): { names: Set<string>; facts: SqlFactDraf
     if (sqlParenDepthAt(text, match.index ?? 0) > 0) continue;
     const name = normalizeSqlObjectName(match[1]);
     if (!name) continue;
-    for (const key of cteNameKeys(name)) names.add(key);
+    for (const key of sqlObjectLookupKeys(name)) names.add(key);
     const bodyStart = (match.index ?? 0) + match[0].length;
     const bodyEnd = findMatchingParen(text, bodyStart - 1);
     if (bodyEnd < 0) continue;
@@ -433,7 +428,7 @@ function extractCreateTableConstraintFacts(text: string, tableName: string | nul
 
 function extractReadFacts(text: string): SqlFactDraft[] {
   const cteReads = collectCteReads(text);
-  const isCteName = (name: string): boolean => cteNameKeys(name).some((key) => cteReads.names.has(key));
+  const isCteName = (name: string): boolean => sqlObjectLookupKeys(name).some((key) => cteReads.names.has(key));
   const fromObjects = collectCommaSeparatedObjectsAfterKeywords(text, ["from", "using"]).filter(
     (name) => !isCteName(name),
   );

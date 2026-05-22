@@ -150,6 +150,7 @@ codegraph chunk config.yaml --language yaml --min-tokens 100 --max-tokens 300
 # Detect duplicate and near-duplicate code units
 codegraph duplicates ./src --min-confidence medium --limit 20
 codegraph duplicates --root . ./src ./packages/app --include-same-file
+codegraph duplicates ./src --raw-pairs
 codegraph duplicates --help
 
 # Go to definition
@@ -166,14 +167,16 @@ codegraph grep --query '(function_declaration name: (identifier) @name)'
 codegraph grep --pattern 'eval\(' --ignore-case
 ```
 
-`duplicates` always reports scored exact, renamed, near, and weak clone candidates as JSON.
+`duplicates` always reports grouped exact, renamed, near, and weak clone candidates as JSON.
 
 - It combines indexed symbols, semantic chunks, and text chunks.
-- It reports project-relative paths, confidence, clone type, metrics, omission counts, and pair stats.
+- It reports project-relative paths, confidence, clone type, metrics, variant counts, omission counts, and pair stats.
+- Groups collapse overlapping symbol/chunk variants so one underlying clone appears as one finding.
 - A single positional directory becomes the project root unless `--root` is set.
 - Use `--root . ./src` for scoped scans with repository-relative paths.
 - Use `--include-small` for tiny helpers.
 - Use `--include-same-file` for non-overlapping clones inside one file.
+- Use `--raw-pairs` when debugging the low-level pair evidence behind each group.
 
 `search`, `explain`, `artifact`, and `mcp` each support command-specific `--help` output so agents do not have to infer their options from the top-level help. `search` is deterministic and vectorless. It returns ranked results with project-relative stable handles, rank reasons, evidence, graph neighbors, follow-up commands, result counts, per-packet limits, and omission counts. `explain` resolves file paths, symbol names, SQL object names, and search handles, including file/chunk/graph handles, into bounded packets with symbols, dependencies, reverse dependencies, references, snippets, SQL object relation facts, changed-context review tasks/candidate tests, explicit limits, omission counts, and follow-ups. Generated follow-up and suggested-question commands POSIX-shell-quote dynamic arguments when needed. SQL object names resolve by exact name first; unqualified basenames resolve only when unique, so handles or schema-qualified names are preferred. Reference and snippet omission counts are lower bounds after the bounded navigation scan reaches its cap. `artifact build` writes `codegraph.sqlite`, self-describing project-relative `graph.json`, `CODEGRAPH_REPORT.md`, `questions.json`, and `manifest.json` by default; suggested questions use unique IDs backed by stable handles when a handle is available. Use artifact flags to select a subset. `--force` permits non-empty output directories, removes recognizable stale Codegraph artifacts, preserves unrelated operator files, and refuses unrecognized reserved-name collisions. Artifact contents exclude their own output directory and linked outside-root files. `mcp serve` exposes `search`, `get_file`, `get_symbol`, `goto`, `refs`, `deps`, `rdeps`, `path`, `impact`, `review`, `query_sqlite`, and `artifact_build` over stdio by default or Streamable HTTP with `--port <number>`. HTTP serves `/mcp`, binds to `127.0.0.1` unless `--host <host>` is passed, validates the Host header, allows loopback Host headers for wildcard binds, and rejects oversized request bodies. MCP file and artifact paths are confined to `--root` after realpath resolution; tools are read-only by default, `query_sqlite` is row- and byte-bounded and rejects synthetic payload functions, and `--allow-build` enables artifact output only. `chunk` uses semantic Tree-sitter chunking for registered source and stylesheet languages, Vue and Svelte block-aware chunking for single-file components, and text chunking for JSON, YAML, and unsupported extensions. Use `--text` to force text chunking.
 

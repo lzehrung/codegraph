@@ -1,9 +1,8 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { stringifyUnknown } from "../ast.js";
-import { listResolutionCandidates } from "../resolutionCandidates.js";
 import { mapLimitSemaphore } from "../concurrency.js";
-import { fileExists } from "../workspace.js";
+import { findFirstExistingResolutionCandidate } from "./findFirstExisting.js";
 import {
   clearPhpComposerResolutionCaches,
   findPhpComposerPath,
@@ -22,18 +21,6 @@ import {
 } from "./projectSymbols.js";
 
 type FileId = string;
-
-async function findFirstExistingResolutionCandidate(
-  base: string,
-  resolutionExtensions?: readonly string[],
-): Promise<string | null> {
-  for (const candidate of listResolutionCandidates(base, resolutionExtensions)) {
-    if (await fileExists(candidate)) {
-      return path.resolve(candidate);
-    }
-  }
-  return null;
-}
 
 async function resolvePhpPathLikeSpecifier(
   projectRoot: string,

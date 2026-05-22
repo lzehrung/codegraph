@@ -1,98 +1,18 @@
-import type { LanguageDefinition, SyntaxNodeLike } from "../types.js";
+import type { LanguageDefinition } from "../types.js";
 import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
+import {
+  cFamilyContainerTypes,
+  cFunctionNameQuery,
+  findAncestor,
+  isFunctionDeclarator,
+  isInAncestorDeclarator,
+  isInField,
+  isInParameterList,
+} from "./cFamily.js";
 
-const FUNCTION_NAME_QUERY = `
-  declarator: [
-    (function_declarator declarator: (identifier) @chunk.name)
-    (function_declarator declarator: (field_identifier) @chunk.name)
-    (function_declarator declarator: (pointer_declarator declarator: (identifier) @chunk.name))
-    (function_declarator declarator: (pointer_declarator declarator: (field_identifier) @chunk.name))
-    (pointer_declarator declarator: (function_declarator declarator: (identifier) @chunk.name))
-    (pointer_declarator declarator: (function_declarator declarator: (field_identifier) @chunk.name))
-    (function_declarator declarator: (parenthesized_declarator (pointer_declarator declarator: (identifier) @chunk.name)))
-    (function_declarator declarator: (parenthesized_declarator (pointer_declarator declarator: (field_identifier) @chunk.name)))
-  ]
-`;
-
-const GRAPH_FUNCTION_NAME_QUERY = `
-  declarator: [
-    (function_declarator declarator: (identifier) @name)
-    (function_declarator declarator: (field_identifier) @name)
-    (function_declarator declarator: (pointer_declarator declarator: (identifier) @name))
-    (function_declarator declarator: (pointer_declarator declarator: (field_identifier) @name))
-    (pointer_declarator declarator: (function_declarator declarator: (identifier) @name))
-    (pointer_declarator declarator: (function_declarator declarator: (field_identifier) @name))
-    (function_declarator declarator: (parenthesized_declarator (pointer_declarator declarator: (identifier) @name)))
-    (function_declarator declarator: (parenthesized_declarator (pointer_declarator declarator: (field_identifier) @name)))
-  ]
-`;
-
-const isWithin = (node: SyntaxNodeLike, ancestor: SyntaxNodeLike | null): boolean => {
-  let current: SyntaxNodeLike | null = node;
-  while (current) {
-    if (ancestor && current.id === ancestor.id) return true;
-    current = current.parent;
-  }
-  return false;
-};
-
-const isInField = (node: SyntaxNodeLike, parent: SyntaxNodeLike, field: string): boolean =>
-  isWithin(node, parent.childForFieldName(field));
-
-const findAncestor = (node: SyntaxNodeLike, types: Set<string>): SyntaxNodeLike | null => {
-  let current: SyntaxNodeLike | null = node.parent;
-  while (current) {
-    if (types.has(current.type)) return current;
-    current = current.parent;
-  }
-  return null;
-};
-
-const containerTypes = new Set([
-  "function_definition",
-  "declaration",
-  "parameter_declaration",
-  "field_declaration",
-  "type_definition",
-  "init_declarator",
-]);
-
-const paramListTypes = new Set(["parameter_declaration", "parameter_list"]);
-
-const isInParameterList = (node: SyntaxNodeLike): boolean => !!findAncestor(node, paramListTypes);
-
-const resolveDeclaratorRoot = (ancestor: SyntaxNodeLike): SyntaxNodeLike | null => {
-  let declaratorNode = ancestor.childForFieldName("declarator");
-  if (!declaratorNode) return null;
-  if (declaratorNode.type === "init_declarator") {
-    const inner = declaratorNode.childForFieldName("declarator");
-    if (inner) declaratorNode = inner;
-  }
-  if (declaratorNode.type === "function_declarator") {
-    const inner = declaratorNode.childForFieldName("declarator");
-    if (inner) declaratorNode = inner;
-  }
-  return declaratorNode;
-};
-
-const isInAncestorDeclarator = (node: SyntaxNodeLike, ancestorTypes: Set<string>): boolean => {
-  const ancestor = findAncestor(node, ancestorTypes);
-  if (!ancestor) return false;
-  const declaratorNode = resolveDeclaratorRoot(ancestor);
-  if (!declaratorNode) return false;
-  return isWithin(node, declaratorNode);
-};
-
-const isFunctionDeclarator = (node: SyntaxNodeLike): boolean => {
-  let current: SyntaxNodeLike | null = node.parent;
-  while (current) {
-    if (current.type === "function_declarator") return true;
-    if (containerTypes.has(current.type)) return false;
-    current = current.parent;
-  }
-  return false;
-};
+const FUNCTION_NAME_QUERY = cFunctionNameQuery("chunk.name", true);
+const GRAPH_FUNCTION_NAME_QUERY = cFunctionNameQuery("name", true);
 
 export const CPP_DEF: LanguageDefinition = {
   id: "cpp",
@@ -206,7 +126,7 @@ export const CPP_DEF: LanguageDefinition = {
       (parent.type === "type_definition" && isInField(node, parent, "declarator"))
     )
       return "type";
-    const container = findAncestor(node, containerTypes);
+    const container = findAncestor(node, cFamilyContainerTypes);
     if (container?.type === "function_definition") return "function";
     if (container?.type === "declaration" && isFunctionDeclarator(node)) return "function";
     return "variable";

@@ -1,13 +1,10 @@
 import { buildProjectIndex } from "../indexer/build-index.js";
 import { findReferences, goToDefinition } from "../indexer/navigation.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
-import { assertFilePathWithinRoot, toProjectDisplayPath } from "../util/paths.js";
+import { toProjectDisplayPath } from "../util/paths.js";
 import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { parsePositiveIntegerOption } from "./options.js";
-
-type CliProjectFileInput =
-  | { status: "ok"; file: string }
-  | { status: "error"; reason: "outside_project_root"; error: string };
+import { resolveCliProjectFile, writeCliProjectFileError } from "./projectFile.js";
 
 export type NavigationCommandContext = {
   projectRootFs: string;
@@ -23,33 +20,6 @@ export type NavigationCommandContext = {
   writeStderrLine: (message: string) => void;
   exit: (code: number) => never;
 };
-
-function resolveCliProjectFile(projectRoot: string, fileArg: string, label: string): CliProjectFileInput {
-  try {
-    return {
-      status: "ok",
-      file: assertFilePathWithinRoot(projectRoot, fileArg, label),
-    };
-  } catch (error) {
-    return {
-      status: "error",
-      reason: "outside_project_root",
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
-}
-
-function writeCliProjectFileError(
-  context: Pick<NavigationCommandContext, "writeJSONLine" | "writeStdoutLine">,
-  result: Extract<CliProjectFileInput, { status: "error" }>,
-  output: "json" | "text" = "json",
-): void {
-  if (output === "json") {
-    context.writeJSONLine(result);
-    return;
-  }
-  context.writeStdoutLine(`error: ${result.reason}: ${result.error}`);
-}
 
 function indexOptions(context: NavigationCommandContext) {
   return {

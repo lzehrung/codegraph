@@ -6,32 +6,30 @@ import path from "node:path";
 import fg from "fast-glob";
 import { listResolutionCandidates } from "./resolutionCandidates.js";
 
-export async function fileExists(p: string): Promise<boolean> {
-  const cached = fileExistsCache.get(p);
+async function pathMatchesCachedStat(
+  cache: Map<string, boolean>,
+  pathName: string,
+  matches: (stat: Awaited<ReturnType<typeof fsp.stat>>) => boolean,
+): Promise<boolean> {
+  const cached = cache.get(pathName);
   if (cached !== undefined) return cached;
   try {
-    const stat = await fsp.stat(p);
-    const exists = stat.isFile();
-    fileExistsCache.set(p, exists);
+    const stat = await fsp.stat(pathName);
+    const exists = matches(stat);
+    cache.set(pathName, exists);
     return exists;
   } catch {
-    fileExistsCache.set(p, false);
+    cache.set(pathName, false);
     return false;
   }
 }
 
+export async function fileExists(p: string): Promise<boolean> {
+  return await pathMatchesCachedStat(fileExistsCache, p, (stat) => stat.isFile());
+}
+
 export async function directoryExists(p: string): Promise<boolean> {
-  const cached = directoryExistsCache.get(p);
-  if (cached !== undefined) return cached;
-  try {
-    const stat = await fsp.stat(p);
-    const exists = stat.isDirectory();
-    directoryExistsCache.set(p, exists);
-    return exists;
-  } catch {
-    directoryExistsCache.set(p, false);
-    return false;
-  }
+  return await pathMatchesCachedStat(directoryExistsCache, p, (stat) => stat.isDirectory());
 }
 
 async function findWorkspaceRoot(startDir: string): Promise<string | null> {

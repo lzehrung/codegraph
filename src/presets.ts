@@ -10,6 +10,7 @@
 
 import { type BuildOptions } from "./indexer/types.js";
 import type { ImpactOptions } from "./impact/types.js";
+import { isPlainRecord } from "./util/guards.js";
 
 export type PresetName = "code-review" | "ci-fast" | "development" | "production";
 
@@ -210,7 +211,7 @@ export function mergePreset<T extends Record<string, unknown>>(preset: T, custom
     if (customValue === undefined) continue;
 
     // Deep merge for nested objects
-    if (isPlainObject(customValue) && isPlainObject(presetValue)) {
+    if (isPlainRecord(customValue) && isPlainRecord(presetValue)) {
       merged[key] = { ...presetValue, ...customValue };
     } else {
       merged[key] = customValue;
@@ -218,8 +219,4 @@ export function mergePreset<T extends Record<string, unknown>>(preset: T, custom
   }
 
   return merged as T;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

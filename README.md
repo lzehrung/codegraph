@@ -194,7 +194,7 @@ The supported package import surface is the root export, `@lzehrung/codegraph`. 
 ## Common workflows
 
 - Repo triage: run `codegraph inspect ./src --limit 20`, then follow with `codegraph hotspots ./src --limit 20` or `codegraph unresolved` to focus the next pass.
-- Duplicate cleanup: run `codegraph duplicates ./src --min-confidence medium` before refactors to find shared extraction candidates.
+- Duplicate cleanup: run `codegraph duplicates ./src --min-confidence medium` before refactors to find grouped extraction candidates.
 - Symbol navigation: use `codegraph goto <file> <line> <column>` and `codegraph refs --file <file> --line <line> --col <column> --pretty` when a question is about definitions or semantic usages rather than matching strings.
 - PR review: run `codegraph impact --base origin/main --head HEAD --pretty` for a ranked map, `codegraph review --base origin/main --head HEAD --summary` for a compact reviewer handoff with actionable candidate tests, or redirect plain `review` output when a downstream tool needs the full JSON bundle.
 - Worktree review: run `codegraph impact --base HEAD --head WORKTREE --pretty` for current staged and unstaged tracked-file changes, then `codegraph review --base HEAD --head WORKTREE --summary` for a compact handoff. Use `--head STAGED` to compare `HEAD` against the current index.

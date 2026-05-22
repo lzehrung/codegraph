@@ -2,8 +2,8 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { normalizePath } from "../paths.js";
 import { listProjectFiles } from "../projectFiles.js";
-import { listResolutionCandidates } from "../resolutionCandidates.js";
 import { fileExists } from "../workspace.js";
+import { findFirstExistingResolutionCandidate } from "./findFirstExisting.js";
 import { findNearestFile } from "./files.js";
 
 export type PhpComposerConfig = {
@@ -23,18 +23,6 @@ type PhpComposerAutoloadRoot = {
   applyClassmapExcludes: boolean;
   namespacePrefixes: string[];
 };
-
-async function findFirstExistingResolutionCandidate(
-  base: string,
-  resolutionExtensions?: readonly string[],
-): Promise<string | null> {
-  for (const candidate of listResolutionCandidates(base, resolutionExtensions)) {
-    if (await fileExists(candidate)) {
-      return path.resolve(candidate);
-    }
-  }
-  return null;
-}
 
 function readComposerNamespaceDirs(value: unknown, composerDir: string): Map<string, string[]> {
   const result = new Map<string, string[]>();

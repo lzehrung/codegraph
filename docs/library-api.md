@@ -218,7 +218,8 @@ The integration examples demonstrate semantic chunking with type-based filtering
 `findDuplicates()` scans a built `ProjectIndex` for exact, renamed, near, and weak clone candidates.
 
 - It uses indexed symbols, semantic chunks, and text chunks.
-- Results include confidence, score, clone type, metrics, omission counts, and pair stats.
+- Results include grouped findings, confidence, score, clone type, metrics, omission counts, and pair stats.
+- Raw unit-pair suggestions are available when `includeRawPairs` is enabled.
 - Paths are project-relative when the index has a project root.
 
 ```ts
@@ -231,7 +232,7 @@ const duplicates = await findDuplicates(index, {
   limit: 20,
 });
 
-console.log(duplicates.suggestions);
+console.log(duplicates.groups);
 ```
 
 Useful options:
@@ -239,6 +240,7 @@ Useful options:
 - `minConfidence`: `high`, `medium`, or `low`; default `medium`.
 - `includeSameFile`: report non-overlapping clones in the same file.
 - `includeSmall`: include units below the default token floor.
+- `includeRawPairs`: include low-level symbol/chunk pair evidence as `suggestions`.
 - `minTokens` and `maxTokens`: tune unit and fallback chunk bounds.
 
 Tests:

@@ -12,14 +12,11 @@ import {
 } from "../graphs/queries.js";
 import { type GraphBuildOptions } from "../graphs/types.js";
 import type { Graph } from "../types.js";
-import { assertFilePathWithinRoot, toProjectDisplayPath } from "../util/paths.js";
+import { toProjectDisplayPath } from "../util/paths.js";
 import { parseOptionalNonNegativeIntegerOption } from "./options.js";
+import { resolveCliProjectFile, writeCliProjectFileError } from "./projectFile.js";
 
 export type GraphQueryCommand = "deps" | "rdeps" | "path" | "cycles" | "unresolved" | "apisurface";
-
-type CliProjectFileInput =
-  | { status: "ok"; file: string }
-  | { status: "error"; reason: "outside_project_root"; error: string };
 
 export type GraphQueryCommandContext = {
   command: GraphQueryCommand;
@@ -43,33 +40,6 @@ type LoadedGraph = {
   graph: Graph;
   adjacency?: GraphAdjacencyIndex;
 };
-
-function resolveCliProjectFile(projectRoot: string, fileArg: string, label: string): CliProjectFileInput {
-  try {
-    return {
-      status: "ok",
-      file: assertFilePathWithinRoot(projectRoot, fileArg, label),
-    };
-  } catch (error) {
-    return {
-      status: "error",
-      reason: "outside_project_root",
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
-}
-
-function writeCliProjectFileError(
-  context: Pick<GraphQueryCommandContext, "writeJSONLine" | "writeStdoutLine">,
-  result: Extract<CliProjectFileInput, { status: "error" }>,
-  output: "json" | "text" = "json",
-): void {
-  if (output === "json") {
-    context.writeJSONLine(result);
-    return;
-  }
-  context.writeStdoutLine(`error: ${result.reason}: ${result.error}`);
-}
 
 async function loadGraph(context: GraphQueryCommandContext): Promise<LoadedGraph> {
   if (context.collectGraph) {

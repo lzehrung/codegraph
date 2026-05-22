@@ -77,14 +77,72 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     const index = await buildProjectIndex(root);
     const result = await findDuplicates(index, { minConfidence: "high", limit: 5 });
 
-    expect(result.suggestions.length).toBeGreaterThan(0);
-    expect(result.suggestions[0]?.cloneType).toBe("exact");
-    expect(result.suggestions[0]?.confidence).toBe("high");
-    expect(result.suggestions[0]?.left.file).toBe("src/a.ts");
-    expect(result.suggestions[0]?.right.file).toBe("src/b.ts");
+    expect(result.groups.length).toBeGreaterThan(0);
+    expect(result.groups[0]?.cloneType).toBe("exact");
+    expect(result.groups[0]?.confidence).toBe("high");
+    expect(result.groups[0]?.primaryLeft.file).toBe("src/a.ts");
+    expect(result.groups[0]?.primaryRight.file).toBe("src/b.ts");
   });
 
-  test("returns bounded suggestions with omission counts", async () => {
+  test("groups overlapping symbol and chunk variants into one finding", async () => {
+    const root = await makeTempProject();
+    const duplicateSource = `
+export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }>) {
+  const totals: number[] = [];
+  const labels: string[] = [];
+  for (const row of rows) {
+    const subtotal = row.amount + row.tax;
+    const rounded = Math.round(subtotal * 100) / 100;
+    const label = rounded > 100 ? "large" : "small";
+    labels.push(label);
+    totals.push(rounded);
+  }
+  const encoded = totals.map((value, index) => labels[index] + ":" + value.toFixed(2));
+  return encoded.filter((value) => value.includes(":")).join(",");
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", duplicateSource);
+    await writeProjectFile(root, "src/b.ts", duplicateSource);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, { includeRawPairs: true, minConfidence: "high", limit: 5 });
+
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0]?.variantCount).toBeGreaterThan(1);
+    expect(result.groups[0]?.primaryLeft.kind).toBe("symbol");
+    expect(result.groups[0]?.primaryRight.kind).toBe("symbol");
+    expect(result.suggestions?.length).toBeGreaterThan(result.groups.length);
+  });
+
+  test("omits raw unit pairs unless requested", async () => {
+    const root = await makeTempProject();
+    const source = `
+export function summarizePayments(rows: Array<{ amount: number; fee: number }>) {
+  const output: string[] = [];
+  for (const row of rows) {
+    const subtotal = row.amount + row.fee;
+    const rounded = Math.round(subtotal * 100) / 100;
+    const label = rounded > 100 ? "large" : "small";
+    output.push(label + ":" + rounded.toFixed(2));
+  }
+  return output.filter((value) => value.includes(":")).join(",");
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", source);
+    await writeProjectFile(root, "src/b.ts", source);
+
+    const index = await buildProjectIndex(root);
+    const defaultResult = await findDuplicates(index, { minConfidence: "high", limit: 5 });
+    const rawResult = await findDuplicates(index, { includeRawPairs: true, minConfidence: "high", limit: 5 });
+
+    expect(defaultResult.groups.length).toBeGreaterThan(0);
+    expect(defaultResult.suggestions).toBeUndefined();
+    expect(rawResult.suggestions?.length).toBeGreaterThan(0);
+  });
+
+  test("returns bounded groups with omission counts", async () => {
     const root = await makeTempProject();
     const source = `
 export function summarizePayments(rows: Array<{ amount: number; fee: number }>) {
@@ -106,7 +164,7 @@ export function summarizePayments(rows: Array<{ amount: number; fee: number }>) 
     const index = await buildProjectIndex(root);
     const result = await findDuplicates(index, { minConfidence: "high", limit: 1 });
 
-    expect(result.suggestions).toHaveLength(1);
+    expect(result.groups).toHaveLength(1);
     expect(result.omittedCounts.suggestions).toBeGreaterThan(0);
     expect(result.stats.candidatePairs).toBeGreaterThan(0);
     expect(result.stats.comparedPairs).toBeGreaterThan(0);
@@ -156,8 +214,8 @@ export function scoreAccounts(accounts: Array<{ enabled: boolean; credits: numbe
 
     const index = await buildProjectIndex(root);
     const result = await findDuplicates(index, { minConfidence: "medium", limit: 5 });
-    const match = result.suggestions.find(
-      (suggestion) => suggestion.left.file === "src/accounts.ts" || suggestion.right.file === "src/accounts.ts",
+    const match = result.groups.find(
+      (group) => group.primaryLeft.file === "src/accounts.ts" || group.primaryRight.file === "src/accounts.ts",
     );
 
     expect(match).toBeDefined();
@@ -199,7 +257,7 @@ export function sharedName(input: string): string {
       minConfidence: "high",
     });
 
-    expect(result.suggestions).toHaveLength(0);
+    expect(result.groups).toHaveLength(0);
   });
 
   test("filters small helpers unless explicitly included", async () => {
@@ -213,9 +271,9 @@ export function sharedName(input: string): string {
     const defaultResult = await findDuplicates(index, { minConfidence: "low" });
     const includedResult = await findDuplicates(index, { includeSmall: true, minConfidence: "high" });
 
-    expect(defaultResult.suggestions).toHaveLength(0);
+    expect(defaultResult.groups).toHaveLength(0);
     expect(defaultResult.omittedCounts.belowThresholdUnits).toBeGreaterThan(0);
-    expect(includedResult.suggestions.length).toBeGreaterThan(0);
+    expect(includedResult.groups.length).toBeGreaterThan(0);
   });
 
   test("rejects invalid token bounds", async () => {
@@ -267,7 +325,7 @@ export function sharedClone(rows) {
     const index = await buildProjectIndex(root);
     const result = await findDuplicates(index, { includeSmall: true, minConfidence: "high" });
 
-    expect(result.suggestions).toHaveLength(0);
+    expect(result.groups).toHaveLength(0);
   });
 
   test("duplicates CLI detects duplicate JSON text files", async () => {
@@ -292,15 +350,15 @@ export function sharedClone(rows) {
       root,
     );
     const parsed = JSON.parse(result.stdout) as {
-      suggestions?: Array<{ left?: { file?: string; tokenCount?: number }; right?: { file?: string } }>;
+      groups?: Array<{ primaryLeft?: { file?: string; tokenCount?: number }; primaryRight?: { file?: string } }>;
     };
 
     expect(result.exitCode).toBeUndefined();
     expect(result.stderr).toBe("");
-    expect(parsed.suggestions).toHaveLength(1);
-    expect(parsed.suggestions?.[0]?.left?.file).toBe("configs/a.json");
-    expect(parsed.suggestions?.[0]?.right?.file).toBe("configs/b.json");
-    expect(parsed.suggestions?.[0]?.left?.tokenCount).toBeGreaterThan(40);
+    expect(parsed.groups).toHaveLength(1);
+    expect(parsed.groups?.[0]?.primaryLeft?.file).toBe("configs/a.json");
+    expect(parsed.groups?.[0]?.primaryRight?.file).toBe("configs/b.json");
+    expect(parsed.groups?.[0]?.primaryLeft?.tokenCount).toBeGreaterThan(40);
   });
 
   test("accepts project-relative file filters", async () => {
@@ -318,8 +376,8 @@ export function sharedClone(rows) {
       minConfidence: "high",
     });
 
-    expect(result.suggestions.length).toBeGreaterThan(0);
-    expect(result.suggestions[0]?.left.file).toBe("src/a.ts");
+    expect(result.groups.length).toBeGreaterThan(0);
+    expect(result.groups[0]?.primaryLeft.file).toBe("src/a.ts");
   });
 
   test("rejects duplicate file filters outside the project root", async () => {
@@ -371,13 +429,13 @@ export function secondClone(rows: number[]) {
       minConfidence: "medium",
     });
 
-    expect(defaultResult.suggestions).toHaveLength(0);
-    expect(sameFileResult.suggestions.length).toBeGreaterThan(0);
-    expect(sameFileResult.suggestions[0]?.left.file).toBe("src/local.ts");
-    expect(sameFileResult.suggestions[0]?.right.file).toBe("src/local.ts");
+    expect(defaultResult.groups).toHaveLength(0);
+    expect(sameFileResult.groups.length).toBeGreaterThan(0);
+    expect(sameFileResult.groups[0]?.primaryLeft.file).toBe("src/local.ts");
+    expect(sameFileResult.groups[0]?.primaryRight.file).toBe("src/local.ts");
   });
 
-  test("duplicates CLI emits bounded JSON suggestions", async () => {
+  test("duplicates CLI emits bounded JSON groups", async () => {
     const root = await makeTempProject();
     const source = `
 export function summarizeOrders(rows: Array<{ amount: number; tax: number }>) {
@@ -396,12 +454,44 @@ export function summarizeOrders(rows: Array<{ amount: number; tax: number }>) {
     await writeProjectFile(root, "src/orders-b.ts", source);
 
     const result = await captureCli(["duplicates", "src", "--min-confidence", "high", "--limit", "1"], root);
-    const parsed = JSON.parse(result.stdout) as { suggestions?: Array<{ score?: number }> };
+    const parsed = JSON.parse(result.stdout) as { groups?: Array<{ score?: number }> };
 
     expect(result.exitCode).toBeUndefined();
     expect(result.stderr).toBe("");
-    expect(parsed.suggestions).toHaveLength(1);
-    expect(parsed.suggestions?.[0]?.score).toBeGreaterThan(90);
+    expect(parsed.groups).toHaveLength(1);
+    expect(parsed.groups?.[0]?.score).toBeGreaterThan(90);
+  });
+
+  test("duplicates CLI includes raw suggestions only with --raw-pairs", async () => {
+    const root = await makeTempProject();
+    const source = `
+export function summarizeOrders(rows: Array<{ amount: number; tax: number }>) {
+  const output: string[] = [];
+  for (const row of rows) {
+    const subtotal = row.amount + row.tax;
+    const rounded = Math.round(subtotal * 100) / 100;
+    const label = rounded > 100 ? "large" : "small";
+    output.push(label + ":" + rounded.toFixed(2));
+  }
+  return output.filter((value) => value.includes(":")).join(",");
+}
+`;
+
+    await writeProjectFile(root, "src/orders-a.ts", source);
+    await writeProjectFile(root, "src/orders-b.ts", source);
+
+    const defaultResult = await captureCli(["duplicates", "src", "--min-confidence", "high", "--limit", "5"], root);
+    const rawResult = await captureCli(
+      ["duplicates", "src", "--min-confidence", "high", "--limit", "5", "--raw-pairs"],
+      root,
+    );
+    const defaultParsed = JSON.parse(defaultResult.stdout) as { suggestions?: unknown[] };
+    const rawParsed = JSON.parse(rawResult.stdout) as { suggestions?: unknown[] };
+
+    expect(defaultResult.exitCode).toBeUndefined();
+    expect(rawResult.exitCode).toBeUndefined();
+    expect(defaultParsed.suggestions).toBeUndefined();
+    expect(rawParsed.suggestions?.length).toBeGreaterThan(0);
   });
 
   test("duplicates CLI accepts a zero suggestion limit", async () => {
@@ -421,14 +511,14 @@ export function sameRows(rows: number[]) {
 
     const result = await captureCli(["duplicates", "--root", ".", "src", "--limit", "0", "--include-small"], root);
     const parsed = JSON.parse(result.stdout) as {
-      suggestions?: unknown[];
+      groups?: unknown[];
       omittedCounts?: { suggestions?: number; candidatePairs?: number };
       stats?: { candidatePairs?: number };
     };
 
     expect(result.exitCode).toBeUndefined();
     expect(result.stderr).toBe("");
-    expect(parsed.suggestions).toHaveLength(0);
+    expect(parsed.groups).toHaveLength(0);
     expect(parsed.omittedCounts?.suggestions).toBeGreaterThan(0);
     expect(parsed.omittedCounts?.candidatePairs).toBeUndefined();
     expect(parsed.stats?.candidatePairs).toBeGreaterThan(0);
@@ -466,8 +556,8 @@ export function sameRows(rows: number[]) {
 
     expect(result.omittedCounts.oversizedBuckets).toBeGreaterThan(0);
     expect(
-      result.suggestions.some(
-        (suggestion) => suggestion.left.file === "src/a.txt" && suggestion.right.file === "src/b.txt",
+      result.groups.some(
+        (group) => group.primaryLeft.file === "src/a.txt" && group.primaryRight.file === "src/b.txt",
       ),
     ).toBeTruthy();
   });
@@ -498,7 +588,7 @@ export function sharedOversizedClone(rows) {
       minConfidence: "high",
     });
 
-    expect(result.suggestions).toHaveLength(0);
+    expect(result.groups).toHaveLength(0);
     expect(result.omittedCounts.oversizedBuckets).toBeGreaterThan(0);
   });
 });

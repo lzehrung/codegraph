@@ -3,41 +3,15 @@ import type { CandidateTestFile } from "../impact/context.js";
 import { type ProjectIndex } from "../indexer/types.js";
 import { collectSqlReviewContext, type SqlReviewContext } from "../sql/review.js";
 import type { Edge, FileId } from "../types.js";
+import { compareEdges, edgeKey, toRelativeEdge } from "../util/graphEdges.js";
 import { normalizePath } from "../util/paths.js";
 import { type ProjectFileInfo } from "../util/projectFiles.js";
 import type { ReviewDiagnostics, ReviewOptions, ReviewReport } from "../review.js";
-import {
-  collectDeletedImporterEdges,
-  collectDeletedSnapshotEdges,
-  edgeKey,
-  toRelativeEdge,
-  type DeletedFileSnapshot,
-} from "./deleted.js";
+import { collectDeletedImporterEdges, collectDeletedSnapshotEdges, type DeletedFileSnapshot } from "./deleted.js";
 import { buildReviewTasks, computeRiskSummary, hasDiagnostics } from "./risk.js";
 import type { ReviewFileSummary } from "./summaries.js";
 
 export const REVIEW_SCHEMA_VERSION = 2;
-
-function comparePaths(left: string, right: string): number {
-  return left.localeCompare(right);
-}
-
-function compareEdges(left: Edge, right: Edge): number {
-  const fromCompare = comparePaths(left.from, right.from);
-  if (fromCompare !== 0) return fromCompare;
-  if (left.to.type !== right.to.type) {
-    return left.to.type === "file" ? -1 : 1;
-  }
-  const leftTarget = left.to.type === "file" ? left.to.path : left.to.name;
-  const rightTarget = right.to.type === "file" ? right.to.path : right.to.name;
-  const toCompare = comparePaths(leftTarget, rightTarget);
-  if (toCompare !== 0) return toCompare;
-  const rawCompare = left.raw.localeCompare(right.raw);
-  if (rawCompare !== 0) return rawCompare;
-  const leftTypeOnly = left.typeOnly ? 1 : 0;
-  const rightTypeOnly = right.typeOnly ? 1 : 0;
-  return leftTypeOnly - rightTypeOnly;
-}
 
 export async function collectReviewGraphDelta(input: {
   projectRoot: string;
