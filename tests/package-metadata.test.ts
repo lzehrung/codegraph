@@ -314,6 +314,15 @@ describe("package metadata", () => {
     expect(scripts.prepare).toBe("node ./scripts/prepare-package.mjs");
   });
 
+  it("keeps npm test on the fast suite and benchmark coverage opt-in", () => {
+    const rootPackage = readJson("package.json");
+    const scripts = readStringRecord(rootPackage.scripts);
+
+    expect(scripts.test).toBe("npm run test:fast");
+    expect(scripts["test:fast"]).toContain("--exclude tests/bench-harness.test.ts");
+    expect(scripts["test:bench"]).toContain("tests/bench-harness.test.ts");
+  });
+
   it("exposes opt-in JavaScript and native HTML coverage reporting", () => {
     const rootPackage = readJson("package.json");
     const scripts = readStringRecord(rootPackage.scripts);
