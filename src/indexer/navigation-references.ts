@@ -6,7 +6,9 @@ import { ensureParsedContext } from "./parse-context.js";
 import { sameDef } from "./reference-context.js";
 import { readPhpNamespaceFromRange } from "./navigation-php.js";
 import { buildScopeIndexFromSource, type ScopeIndex } from "./scope.js";
+import { resolveExport, resolveImported } from "./navigation-resolve.js";
 import type { ModuleIndex, ProjectIndex, SymbolDef } from "./types.js";
+import type { ImportBinding } from "./import-types.js";
 
 export function getCachedScope(
   index: ProjectIndex,
@@ -147,4 +149,75 @@ export function hasExpandedNamedImport(moduleIndex: ModuleIndex, targetFile: str
       candidate.imported === symbolName &&
       candidate.resolved === targetFile,
   );
+}
+
+const referenceCandidateCache = new WeakMap<ProjectIndex, Map<string, string[]>>();
+
+function referenceCandidateCacheKey(def: SymbolDef, exportedNames: readonly string[]): string {
+  const sortedNames = [...exportedNames].sort();
+  return `${def.file}::${def.range.start.index ?? 0}::${sortedNames.join("\0")}`;
+}
+
+function importCanReferenceDefinition(
+  index: ProjectIndex,
+  imp: ImportBinding,
+  def: SymbolDef,
+  exportedNames: readonly string[],
+): boolean {
+  const targetFile = typeof imp.resolved === "string" ? imp.resolved : undefined;
+  if (!targetFile) return false;
+
+  const resolvesToDefinition = (exportedName: string): boolean => {
+    const hit = resolveExport(index, targetFile, exportedName);
+    return hit?.kind === "resolved" ? sameDef(hit.def, def) : targetFile === def.file;
+  };
+
+  if (imp.kind === "named") {
+    return resolvesToDefinition(imp.imported);
+  }
+  if (imp.kind === "default") {
+    return resolvesToDefinition("default");
+  }
+  if (imp.kind === "star") {
+    return exportedNames.some((exportedName) => {
+      const result = resolveImported(index, imp, exportedName);
+      return !!result && !("namespace" in result) && sameDef(result, def);
+    });
+  }
+  return exportedNames.some((exportedName) => resolvesToDefinition(exportedName));
+}
+
+export function getCachedReferenceCandidateFiles(
+  index: ProjectIndex,
+  def: SymbolDef,
+  exportedNames: readonly string[],
+  hasGlobalNameReferences: boolean,
+): string[] {
+  if (hasGlobalNameReferences) {
+    return Array.from(index.byFile.keys())
+      .filter((candidateFile) => candidateFile !== def.file)
+      .sort((left, right) => left.localeCompare(right));
+  }
+
+  let cache = referenceCandidateCache.get(index);
+  if (!cache) {
+    cache = new Map();
+    referenceCandidateCache.set(index, cache);
+  }
+
+  const key = referenceCandidateCacheKey(def, exportedNames);
+  const cached = cache.get(key);
+  if (cached) return cached;
+
+  const candidates = new Set<string>();
+  for (const [fileId, moduleIndex] of index.byFile) {
+    if (fileId === def.file) continue;
+    if (moduleIndex.imports.some((imp) => importCanReferenceDefinition(index, imp, def, exportedNames))) {
+      candidates.add(fileId);
+    }
+  }
+
+  const sorted = Array.from(candidates).sort((left, right) => left.localeCompare(right));
+  cache.set(key, sorted);
+  return sorted;
 }

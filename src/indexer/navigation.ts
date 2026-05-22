@@ -18,6 +18,7 @@ import {
   buildPhpQualifiedNames,
   collectVerifiedNamedNodeReferences,
   getCachedScope,
+  getCachedReferenceCandidateFiles,
   getCandidateReferenceNames,
   hasExpandedNamedImport,
 } from "./navigation-references.js";
@@ -255,9 +256,8 @@ export async function findReferences(
   const exportedNameSet = new Set(exportedNames);
   const phpQualifiedNames = await buildPhpQualifiedNames(index, definitionFile, def);
 
-  let candidateFiles = Array.from(index.byFile.keys()).filter((candidateFile) => candidateFile !== definitionFile);
-  candidateFiles.sort((left, right) => left.localeCompare(right));
-  if (index.bloomFilters && exportedNames.length) {
+  let candidateFiles = getCachedReferenceCandidateFiles(index, def, exportedNames, !!phpQualifiedNames.length);
+  if (index.bloomFilters && phpQualifiedNames.length) {
     candidateFiles = candidateFiles.filter((candidateFile) => {
       const module = index.byFile.get(candidateFile);
       if (!module) return true;
@@ -266,7 +266,7 @@ export async function findReferences(
 
       const aliases = getCandidateReferenceNames(module, definitionFile, exportedNameSet);
       if (!aliases.length) {
-        return exportedNames.some((exportedName) => filter.mightContain(exportedName));
+        return [...exportedNames, ...phpQualifiedNames].some((candidateName) => filter.mightContain(candidateName));
       }
       return aliases.some((alias) => filter.mightContain(alias));
     });

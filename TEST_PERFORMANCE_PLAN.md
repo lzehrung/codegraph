@@ -62,11 +62,12 @@ Goal: review every test or test file with cases over 2 seconds. Optimize product
   - Verify with `tests/symbol-graph.test.ts`, `tests/symbols-detailed-prune.test.ts`, and `tests/impact-cli.test.ts`.
   - Added a `buildSymbolGraph()` file filter and a regression that detailed graph scoping excludes unrelated base import edges.
 
-- [ ] Add reverse import/export lookup indexes for navigation.
+- [x] Add reverse import/export lookup indexes for navigation.
   - `findReferences()` still scans candidate modules per call.
   - Build or lazily cache reverse lookup structures keyed by target file and exported name.
   - Use these lookups to narrow candidate files before parsing scopes.
   - Verify with `tests/references.test.ts`, `tests/goto.test.ts`, `tests/impact.test.ts`, and `tests/review.test.ts`.
+  - Added a weakly cached candidate-file selector that preserves re-export and wildcard import resolution.
 
 - [ ] Reuse indexes in `goto` and `references` tests.
   - Many cases rebuild identical fixture indexes.
