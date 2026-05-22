@@ -13,6 +13,7 @@ import {
   getCwd,
   maybeWriteNativeBackendStatus,
   parseCliArgs,
+  readCliStdin,
   runWithCliRuntime,
   setCliStderrFilePath,
   writeCommandReport,
@@ -573,14 +574,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
           }
         : undefined,
       progressHandler,
-      readStdin: async () =>
-        await new Promise<string>((resolve) => {
-          let data = "";
-          process.stdin.on("data", (chunk) => {
-            data += chunk.toString();
-          });
-          process.stdin.on("end", () => resolve(data));
-        }),
+      readStdin: readCliStdin,
       writeJSONLine,
       writeStdoutLine,
       writeStderrLine,

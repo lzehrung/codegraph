@@ -55,11 +55,12 @@ Goal: review every test or test file with cases over 2 seconds. Optimize product
   - Verify with `tests/project-file-discovery.test.ts`, `tests/index.test.ts`, and impact/report tests.
   - Added a finalize regression so provided project-file metadata is reused without rediscovery.
 
-- [ ] Scope `buildSymbolGraph()` inside `buildSymbolGraphDetailed()`.
+- [x] Scope `buildSymbolGraph()` inside `buildSymbolGraphDetailed()`.
   - `buildSymbolGraphDetailed(index, { files })` still builds the base symbol graph for the full index.
   - Add a scoped base graph path or optional file filter to `buildSymbolGraph()`.
   - Impact report calls detailed graph with `files: relevantFiles`, so this should reduce impact CLI and review work.
   - Verify with `tests/symbol-graph.test.ts`, `tests/symbols-detailed-prune.test.ts`, and `tests/impact-cli.test.ts`.
+  - Added a `buildSymbolGraph()` file filter and a regression that detailed graph scoping excludes unrelated base import edges.
 
 - [ ] Add reverse import/export lookup indexes for navigation.
   - `findReferences()` still scans candidate modules per call.
@@ -73,17 +74,19 @@ Goal: review every test or test file with cases over 2 seconds. Optimize product
   - Keep mutation-heavy temp-project cases isolated.
   - This is test-harness cleanup, but it will make product-code profiling easier.
 
-- [ ] Reduce `impact-cli` process startup overhead.
+- [x] Reduce `impact-cli` process startup overhead.
   - Most cases spawn `node tsx src/cli.ts`.
   - Use in-process `runCli()` for cases that do not need real process semantics.
   - Keep one subprocess smoke test for CLI entrypoint behavior.
   - Verify that stdin, cwd, env, and exit-code behavior remain covered.
+  - Added injectable CLI stdin and converted impact CLI cases to `runCli()`, leaving one subprocess smoke.
 
-- [ ] Split skill install matrix coverage.
+- [x] Split skill install matrix coverage.
   - `skill install supports all agent defaults` loops through six agents and can take about 54s.
   - Move target resolution into exported or testable helpers where possible.
   - Unit-test the matrix in-process and keep one end-to-end install test.
   - Verify with `tests/cli-regressions.test.ts` skill install and doctor cases.
+  - Exported default target resolution, moved the six-agent matrix in-process, and kept subprocess smoke coverage.
 
 - [ ] Reduce `native-fallback-reporting` module reload cost.
   - The slow ast-grep case uses `vi.resetModules()` and imports the public barrel.

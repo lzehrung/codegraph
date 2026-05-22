@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { getCodegraphPackageRoot, normalizePathForDisplay, pathExists } from "./packageInfo.js";
 
-type SkillInstallAgent = "agents" | "claude" | "codex" | "cursor" | "gemini" | "opencode";
+export type SkillInstallAgent = "agents" | "claude" | "codex" | "cursor" | "gemini" | "opencode";
 
 type SkillDoctorReport = {
   packageRoot: string;
@@ -25,12 +25,11 @@ function getBundledSkillDir(packageRoot: string): string | null {
   return pathExists(path.join(candidate, "SKILL.md")) ? candidate : null;
 }
 
-function getDefaultSkillTargetDir(): string {
-  return getSkillTargetDirForAgent("codex");
-}
-
-function getSkillTargetDirForAgent(agent: SkillInstallAgent): string {
-  const homeDir = os.homedir();
+export function getSkillTargetDirForAgent(
+  agent: SkillInstallAgent,
+  homeDir = os.homedir(),
+  env: Record<string, string | undefined> = process.env,
+): string {
   if (agent === "agents") {
     return path.join(homeDir, ".agents", "skills", "codegraph");
   }
@@ -46,7 +45,7 @@ function getSkillTargetDirForAgent(agent: SkillInstallAgent): string {
   if (agent === "opencode") {
     return path.join(homeDir, ".config", "opencode", "skills", "codegraph");
   }
-  const codexHome = process.env.CODEX_HOME?.trim();
+  const codexHome = env.CODEX_HOME?.trim();
   if (codexHome) {
     return path.join(codexHome, "skills", "codegraph");
   }

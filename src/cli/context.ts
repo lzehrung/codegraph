@@ -68,6 +68,7 @@ export type CliRuntime = {
   stderr: (chunk: string) => void;
   exit: (code: number) => never;
   cwd: () => string;
+  readStdin: () => Promise<string>;
 };
 
 type CliContext = {
@@ -81,6 +82,14 @@ function createDefaultCliRuntime(): CliRuntime {
     stderr: (chunk) => process.stderr.write(chunk),
     exit: (code) => process.exit(code),
     cwd: () => process.cwd(),
+    readStdin: async () =>
+      await new Promise<string>((resolve) => {
+        let data = "";
+        process.stdin.on("data", (chunk) => {
+          data += chunk.toString();
+        });
+        process.stdin.on("end", () => resolve(data));
+      }),
   };
 }
 
@@ -108,6 +117,10 @@ export async function runWithCliRuntime<T>(runtime: Partial<CliRuntime>, callbac
 
 export function getCwd(): string {
   return getCliContext().runtime.cwd();
+}
+
+export async function readCliStdin(): Promise<string> {
+  return await getCliContext().runtime.readStdin();
 }
 
 export function exitCli(code: number): never {
