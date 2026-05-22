@@ -3,7 +3,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { supportForFile, type LanguageSupport } from "../languages.js";
 import { loadWorkspaceConfig, resolveWorkspacePackage } from "../util/workspace.js";
-import { listProjectFiles } from "../util/projectFiles.js";
+import { discoverProjectFiles, listProjectFiles, type ProjectFileInfo } from "../util/projectFiles.js";
 import { getGitHead, isGitRepo, getGitBlobHashes, listChangedFiles } from "../util/git.js";
 import { clearImportResolutionCaches, resolveSpecifier } from "../util/resolution.js";
 import { assertFilePathWithinRoot, normalizePath } from "../util/paths.js";
@@ -375,6 +375,7 @@ type BuildIndexHelperOptions = {
   manifestMode?: ManifestMode;
   warnNoFilesMessage?: string;
   ignoreExistingManifest?: boolean;
+  projectFiles?: ProjectFileInfo[] | Promise<ProjectFileInfo[]>;
 };
 
 type IndexBuildRunState = {
@@ -456,6 +457,7 @@ async function buildIndexFromFileListShared(
   const manifestMode: ManifestMode = helperOpts?.manifestMode ?? "off";
   const useManifest = manifestMode !== "off";
   const shouldWriteManifest = manifestMode === "read-write";
+  const projectFiles = helperOpts?.projectFiles;
   initManifestReport(report, useManifest, false);
   const normalizedFiles = Array.from(new Set(normalizeIndexedFileInputs(projectRoot, rawFiles ?? [], "Index file")));
   if (!normalizedFiles.length && helperOpts?.warnNoFilesMessage) {
@@ -701,6 +703,7 @@ async function buildIndexFromFileListShared(
       modules,
       parsedMap,
       bloomFilterCache,
+      ...(projectFiles ? { projectFiles } : {}),
     });
   } finally {
     await teardownWorkerPool(workerSetup, report);
@@ -713,14 +716,20 @@ async function buildProjectIndexWithManifestOptions(
   helperOpts?: Pick<BuildIndexHelperOptions, "ignoreExistingManifest">,
 ): Promise<ProjectIndex> {
   try {
-    const files = await listProjectFiles(projectRoot, undefined, {
-      ...opts?.discovery,
-      ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
-    });
+    const [files, projectFiles] = await Promise.all([
+      listProjectFiles(projectRoot, undefined, {
+        ...opts?.discovery,
+        ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+      }),
+      discoverProjectFiles(projectRoot, {
+        ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+      }),
+    ]);
     return buildIndexFromFileListShared(projectRoot, files, opts, {
       manifestMode: "read-write",
       warnNoFilesMessage: `Warning: No files found in project root: ${projectRoot}`,
       ...(helperOpts?.ignoreExistingManifest ? { ignoreExistingManifest: true } : {}),
+      projectFiles,
     });
   } finally {
     if ((opts?.cache ?? "off") === "disk") {
