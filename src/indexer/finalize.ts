@@ -1,6 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { buildGraphAdjacency } from "../graphs/adjacency.js";
-import { discoverProjectFiles } from "../util/projectFiles.js";
+import { discoverProjectFiles, type ProjectFileInfo } from "../util/projectFiles.js";
 import type { FileId, Graph } from "../types.js";
 import type { BloomFilterCache } from "../util/bloomFilter.js";
 import type { ParsedFileContext } from "./parse-context.js";
@@ -17,11 +17,13 @@ export async function finalizeProjectIndex(args: {
   modules: Map<FileId, ModuleIndex>;
   parsedMap: Map<string, ParsedFileContext>;
   bloomFilterCache: BloomFilterCache | undefined;
+  projectFiles?: ProjectFileInfo[] | Promise<ProjectFileInfo[]>;
 }): Promise<ProjectIndex> {
   if (args.timings) args.timings.totalMs = Math.round(performance.now() - args.totalStart);
-  const projectFiles = await discoverProjectFiles(args.projectRoot, {
-    ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
-  });
+  const projectFiles = await (args.projectFiles ??
+    discoverProjectFiles(args.projectRoot, {
+      ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
+    }));
   const parsed = retainedParsedCache(args.parsedMap, args.opts);
   return {
     graph: args.graph,

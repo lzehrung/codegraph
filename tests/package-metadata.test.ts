@@ -358,6 +358,17 @@ describe("package metadata", () => {
     expect(result.stdout).toContain("Skipping prepare build during global install");
   });
 
+  it("prints slow-test reporter help when help is the leading argument", () => {
+    const result = spawnSync(process.execPath, ["./scripts/report-slow-tests.mjs", "--help"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Usage: node ./scripts/report-slow-tests.mjs");
+    expect(result.stderr).toBe("");
+  });
+
   it("does not keep removed plugin-only workspace dependencies in the root package", () => {
     const rootPackage = readJson("package.json");
     const dependencies = readStringRecord(rootPackage.dependencies);

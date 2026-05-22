@@ -3,6 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
 import * as indexer from "../src/indexer.js";
+import { getCachedReferenceCandidateFiles } from "../src/indexer/navigation-references.js";
 import {
   createTestIndex,
   createTestIndexFromFiles,
@@ -20,6 +21,35 @@ function expectReferenceAt(result: Awaited<ReturnType<typeof testFindReferences>
 }
 
 describe("Find References", () => {
+  it("narrows candidate files to importers that can resolve the definition", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-reference-candidates-"));
+    try {
+      const aFile = path.join(root, "a.ts").replace(/\\/g, "/");
+      const bFile = path.join(root, "b.ts").replace(/\\/g, "/");
+      const cFile = path.join(root, "c.ts").replace(/\\/g, "/");
+      const dFile = path.join(root, "d.ts").replace(/\\/g, "/");
+      const otherFile = path.join(root, "other.ts").replace(/\\/g, "/");
+
+      await fsp.writeFile(aFile, "export function target() { return 1; }\n", "utf8");
+      await fsp.writeFile(bFile, 'export { target } from "./a";\n', "utf8");
+      await fsp.writeFile(cFile, 'import { target } from "./b";\ntarget();\n', "utf8");
+      await fsp.writeFile(dFile, 'import { other } from "./other";\nother();\n', "utf8");
+      await fsp.writeFile(otherFile, "export function other() { return 2; }\n", "utf8");
+
+      const index = await createTestIndexFromFiles(root, [aFile, bFile, cFile, dFile, otherFile]);
+      const def = index.byFile.get(aFile)?.locals.find((local) => local.localName === "target");
+      if (!def) throw new Error("Expected target definition");
+
+      const candidates = getCachedReferenceCandidateFiles(index, def, ["target"], false);
+
+      expect(candidates).toContain(cFile);
+      expect(candidates).not.toContain(dFile);
+      expect(candidates).not.toContain(otherFile);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   describe("SQL", () => {
     it("finds SQL object references across SQL files", async () => {
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "sql", "graph");

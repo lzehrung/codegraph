@@ -36,7 +36,7 @@ export async function buildSymbolGraphDetailed(
   index: ProjectIndex,
   opts?: BuildDetailedSymbolGraphOptions,
 ): Promise<SymbolGraph> {
-  const base = await buildSymbolGraph(index);
+  const base = await buildSymbolGraph(index, opts?.files ? { files: opts.files } : undefined);
   const nodes = new Map(base.nodes);
   const edges = base.edges.slice();
   let skippedSyntaxTreeFiles = 0;
