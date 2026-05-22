@@ -3,28 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildCodegraphArtifact, buildCodegraphArtifactWithSession } from "../src/agent/artifact.js";
-import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
-
-function countingSession(session: AgentSession): { session: AgentSession; loads: () => number } {
-  let cached: Promise<AgentProjectSnapshot> | undefined;
-  let loadCount = 0;
-  return {
-    session: {
-      loadProject: async () => {
-        if (!cached) {
-          loadCount += 1;
-          cached = session.loadProject();
-        }
-        return await cached;
-      },
-      invalidate: () => {
-        cached = undefined;
-        session.invalidate();
-      },
-    },
-    loads: () => loadCount,
-  };
-}
+import { createAgentSession } from "../src/agent/session.js";
+import { countingSession } from "./helpers/agent.js";
+import { isSymlinkUnavailable } from "./helpers/filesystem.js";
 
 describe("artifact build", () => {
   it("writes sqlite, graph JSON, optional report, questions, and manifest from real project logic", async () => {
@@ -252,11 +233,3 @@ describe("artifact build", () => {
     expect(graph.graph.files.some((file) => file.includes("linked") || file.includes("secret.ts"))).toBe(false);
   });
 });
-
-function isSymlinkUnavailable(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    "code" in error &&
-    (error.code === "EPERM" || error.code === "EACCES" || error.code === "ENOTSUP")
-  );
-}

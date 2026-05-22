@@ -2,9 +2,9 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
-import { spawnSync } from "node:child_process";
 import { buildProjectIndex, buildGraphDelta } from "../src/index.js";
 import type { IndexManifest } from "../src/indexer/build-cache.js";
+import { runGit } from "./helpers/git.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -23,19 +23,6 @@ function hasFileEdge(
 
 function manifestPathFor(root: string): string {
   return path.join(root, ".codegraph-cache", "index-v1", "manifest.json");
-}
-
-function runGit(root: string, args: string[]): string {
-  const result = spawnSync("git", args, {
-    cwd: root,
-    env: process.env,
-    encoding: "utf8",
-  });
-  if (result.error) throw result.error;
-  if (result.status !== 0) {
-    throw new Error(`git ${args.join(" ")} failed (${result.status}): ${result.stderr}`);
-  }
-  return result.stdout.trim();
 }
 
 describe("Graph delta export", () => {

@@ -4,7 +4,6 @@ import os from "node:os";
 import fsp from "node:fs/promises";
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { spawnSync } from "node:child_process";
 import { buildProjectIndex, buildProjectIndexIncremental, type BuildReport } from "../src/index.js";
 import * as indexer from "../src/indexer.js";
 import { MANIFEST_VERSION, summarizeBuildOptions, writeManifest, type IndexManifest } from "../src/indexer/build-cache.js";
@@ -20,6 +19,7 @@ import {
 } from "../src/util.js";
 import * as util from "../src/util.js";
 import * as filePrep from "../src/languages/filePrep.js";
+import { runGit } from "./helpers/git.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -63,19 +63,6 @@ function createManifest(root: string): IndexManifest {
     updatedAt: Date.now(),
     files: {},
   };
-}
-
-function runGit(root: string, args: string[]): string {
-  const result = spawnSync("git", args, {
-    cwd: root,
-    env: process.env,
-    encoding: "utf8",
-  });
-  if (result.error) throw result.error;
-  if (result.status !== 0) {
-    throw new Error(`git ${args.join(" ")} failed (${result.status}): ${result.stderr}`);
-  }
-  return result.stdout.trim();
 }
 
 describe("Cache invalidation and strict hashing", () => {
