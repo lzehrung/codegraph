@@ -83,12 +83,32 @@ function createDefaultCliRuntime(): CliRuntime {
     exit: (code) => process.exit(code),
     cwd: () => process.cwd(),
     readStdin: async () =>
-      await new Promise<string>((resolve) => {
+      await new Promise<string>((resolve, reject) => {
         let data = "";
-        process.stdin.on("data", (chunk) => {
+
+        function cleanup() {
+          process.stdin.off("data", onData);
+          process.stdin.off("end", onEnd);
+          process.stdin.off("error", onError);
+        }
+
+        function onData(chunk: Buffer | string) {
           data += chunk.toString();
-        });
-        process.stdin.on("end", () => resolve(data));
+        }
+
+        function onEnd() {
+          cleanup();
+          resolve(data);
+        }
+
+        function onError(error: Error) {
+          cleanup();
+          reject(error);
+        }
+
+        process.stdin.on("data", onData);
+        process.stdin.once("end", onEnd);
+        process.stdin.once("error", onError);
       }),
   };
 }

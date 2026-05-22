@@ -10,7 +10,7 @@ import { resolveFilePathFromRoot } from "../src/util.js";
 const sampleRoot = path.resolve("tests/samples/typescript");
 
 describe("CodeReviewSession", () => {
-  let sharedReadySession: CodeReviewSession;
+  let sharedReadySession: CodeReviewSession | undefined;
 
   beforeAll(async () => {
     sharedReadySession = await createCodeReviewSession({
@@ -20,7 +20,7 @@ describe("CodeReviewSession", () => {
   });
 
   afterAll(() => {
-    sharedReadySession.dispose();
+    sharedReadySession?.dispose();
   });
 
   function readySession(): CodeReviewSession {
