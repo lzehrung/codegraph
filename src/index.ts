@@ -325,6 +325,7 @@ export {
   type DuplicateDetectionOptions,
   type DuplicateDetectionResult,
   type DuplicateDetectionStats,
+  type DuplicateGroup,
   type DuplicateMetrics,
   type DuplicateSuggestion,
   type DuplicateUnitKind,
