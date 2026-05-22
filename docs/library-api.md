@@ -219,7 +219,8 @@ The integration examples demonstrate semantic chunking with type-based filtering
 
 - It uses indexed symbols, semantic chunks, and text chunks.
 - Results include grouped findings, confidence, score, clone type, metrics, omission counts, and pair stats.
-- Raw unit-pair suggestions are available when `includeRawPairs` is enabled.
+- Group `variants` are bounded by default and expose hidden evidence through `rawPairCount` and `omittedVariantCount`.
+- Raw unit-pair suggestions and full group variants are available when `includeRawPairs` is enabled.
 - Paths are project-relative when the index has a project root.
 
 ```ts

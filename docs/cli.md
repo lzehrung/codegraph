@@ -172,6 +172,7 @@ codegraph grep --pattern 'eval\(' --ignore-case
 - It combines indexed symbols, semantic chunks, and text chunks.
 - It reports project-relative paths, confidence, clone type, metrics, variant counts, omission counts, and pair stats.
 - Groups collapse overlapping symbol/chunk variants so one underlying clone appears as one finding.
+- Group `variants` are bounded by default; use `rawPairCount` and `omittedVariantCount` to see hidden evidence counts.
 - A single positional directory becomes the project root unless `--root` is set.
 - Use `--root . ./src` for scoped scans with repository-relative paths.
 - Use `--include-small` for tiny helpers.

@@ -136,10 +136,17 @@ export function summarizePayments(rows: Array<{ amount: number; fee: number }>) 
     const index = await buildProjectIndex(root);
     const defaultResult = await findDuplicates(index, { minConfidence: "high", limit: 5 });
     const rawResult = await findDuplicates(index, { includeRawPairs: true, minConfidence: "high", limit: 5 });
+    const defaultGroup = defaultResult.groups[0];
+    const rawGroup = rawResult.groups[0];
 
     expect(defaultResult.groups.length).toBeGreaterThan(0);
     expect(defaultResult.suggestions).toBeUndefined();
+    expect(defaultResult.omittedCounts.rawSuggestions).toBeGreaterThan(0);
+    expect(defaultGroup?.rawPairCount).toBeGreaterThanOrEqual(defaultGroup?.variantCount ?? 0);
+    expect(defaultGroup?.omittedVariantCount).toBe((defaultGroup?.rawPairCount ?? 0) - (defaultGroup?.variantCount ?? 0));
     expect(rawResult.suggestions?.length).toBeGreaterThan(0);
+    expect(rawGroup?.rawPairCount).toBe(rawGroup?.variantCount);
+    expect(rawGroup?.omittedVariantCount).toBe(0);
   });
 
   test("returns bounded groups with omission counts", async () => {
@@ -165,6 +172,7 @@ export function summarizePayments(rows: Array<{ amount: number; fee: number }>) 
     const result = await findDuplicates(index, { minConfidence: "high", limit: 1 });
 
     expect(result.groups).toHaveLength(1);
+    expect(result.omittedCounts.groups).toBeGreaterThan(0);
     expect(result.omittedCounts.suggestions).toBeGreaterThan(0);
     expect(result.stats.candidatePairs).toBeGreaterThan(0);
     expect(result.stats.comparedPairs).toBeGreaterThan(0);
@@ -559,13 +567,14 @@ export function sameRows(rows: number[]) {
     const result = await captureCli(["duplicates", "--root", ".", "src", "--limit", "0", "--include-small"], root);
     const parsed = JSON.parse(result.stdout) as {
       groups?: unknown[];
-      omittedCounts?: { suggestions?: number; candidatePairs?: number };
+      omittedCounts?: { groups?: number; suggestions?: number; candidatePairs?: number };
       stats?: { candidatePairs?: number };
     };
 
     expect(result.exitCode).toBeUndefined();
     expect(result.stderr).toBe("");
     expect(parsed.groups).toHaveLength(0);
+    expect(parsed.omittedCounts?.groups).toBeGreaterThan(0);
     expect(parsed.omittedCounts?.suggestions).toBeGreaterThan(0);
     expect(parsed.omittedCounts?.candidatePairs).toBeUndefined();
     expect(parsed.stats?.candidatePairs).toBeGreaterThan(0);

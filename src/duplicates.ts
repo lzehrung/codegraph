@@ -74,7 +74,10 @@ export type DuplicateDetectionOptions = {
 };
 
 export type DuplicateDetectionOmittedCounts = {
+  groups: number;
+  /** @deprecated Use `groups`; retained as a compatibility alias. */
   suggestions: number;
+  rawSuggestions: number;
   oversizedBuckets: number;
   belowThresholdUnits: number;
   overlappingPairs: number;
@@ -133,6 +136,7 @@ const DEFAULT_MIN_TOKENS = 40;
 const DEFAULT_MAX_TOKENS = 800;
 const DEFAULT_LIMIT = 50;
 const DEFAULT_MAX_BUCKET_SIZE = 200;
+const DEFAULT_GROUP_VARIANT_LIMIT = 5;
 const DEFAULT_SHINGLE_SIZE = 5;
 const DEFAULT_WINDOW_SIZE = 4;
 const DEFAULT_MAX_FINGERPRINTS = 128;
@@ -987,9 +991,16 @@ function mergeReasons(suggestions: readonly DuplicateSuggestion[]): string[] {
   return Array.from(reasons).sort();
 }
 
-function groupForSuggestions(key: string, suggestions: DuplicateSuggestion[], left: UnitCluster, right: UnitCluster): DuplicateGroup {
+function groupForSuggestions(
+  key: string,
+  suggestions: DuplicateSuggestion[],
+  left: UnitCluster,
+  right: UnitCluster,
+  variantLimit: number,
+): DuplicateGroup {
   suggestions.sort(compareSuggestionsForPrimary);
   const primary = suggestions[0]!;
+  const variants = suggestions.slice(0, variantLimit);
   let score = primary.score;
   let confidence = primary.confidence;
   let cloneType = primary.cloneType;
@@ -1005,10 +1016,10 @@ function groupForSuggestions(key: string, suggestions: DuplicateSuggestion[], le
     cloneType,
     primaryLeft: left.primary,
     primaryRight: right.primary,
-    variants: suggestions,
-    variantCount: suggestions.length,
+    variants,
+    variantCount: variants.length,
     rawPairCount: suggestions.length,
-    omittedVariantCount: 0,
+    omittedVariantCount: Math.max(0, suggestions.length - variants.length),
     metrics: primary.metrics,
     reasons: mergeReasons(suggestions),
   };
@@ -1029,9 +1040,10 @@ function compareGroups(left: DuplicateGroup, right: DuplicateGroup): number {
   return compareUnitRefs(left.primaryRight, right.primaryRight);
 }
 
-function groupSuggestions(suggestions: readonly DuplicateSuggestion[]): DuplicateGroup[] {
+function groupSuggestions(suggestions: readonly DuplicateSuggestion[], includeRawPairs: boolean): DuplicateGroup[] {
   const refs = suggestions.flatMap((suggestion) => [suggestion.left, suggestion.right]);
   const clusters = createUnitClusters(refs);
+  const variantLimit = includeRawPairs ? Number.POSITIVE_INFINITY : DEFAULT_GROUP_VARIANT_LIMIT;
   const suggestionsByGroup = new Map<string, { left: UnitCluster; right: UnitCluster; suggestions: DuplicateSuggestion[] }>();
   for (const suggestion of suggestions) {
     let leftCluster = clusters.get(unitRefIdentity(suggestion.left));
@@ -1048,7 +1060,7 @@ function groupSuggestions(suggestions: readonly DuplicateSuggestion[]): Duplicat
     else suggestionsByGroup.set(key, { left: leftCluster, right: rightCluster, suggestions: [suggestion] });
   }
   const groups = Array.from(suggestionsByGroup, ([key, value]) =>
-    groupForSuggestions(key, value.suggestions, value.left, value.right),
+    groupForSuggestions(key, value.suggestions, value.left, value.right, variantLimit),
   );
   groups.sort(compareGroups);
   return groups;
@@ -1107,14 +1119,19 @@ export async function findDuplicates(
 
   suggestions.sort(compareSuggestions);
 
-  const groups = groupSuggestions(suggestions);
+  const includeRawPairs = options.includeRawPairs ?? false;
+  const groups = groupSuggestions(suggestions, includeRawPairs);
   const limitedGroups = groups.slice(0, limit);
+  const omittedGroups = Math.max(0, groups.length - limitedGroups.length);
+  const limitedRawSuggestions = includeRawPairs ? suggestions.slice(0, limit) : [];
   const result: DuplicateDetectionResult = {
     schemaVersion: 1,
     units: units.length,
     groups: limitedGroups,
     omittedCounts: {
-      suggestions: Math.max(0, groups.length - limitedGroups.length),
+      groups: omittedGroups,
+      suggestions: omittedGroups,
+      rawSuggestions: Math.max(0, suggestions.length - limitedRawSuggestions.length),
       oversizedBuckets,
       belowThresholdUnits,
       overlappingPairs,
@@ -1124,8 +1141,8 @@ export async function findDuplicates(
       candidatePairs: pairs.size,
     },
   };
-  if (options.includeRawPairs) {
-    result.suggestions = suggestions.slice(0, limit);
+  if (includeRawPairs) {
+    result.suggestions = limitedRawSuggestions;
   }
   return result;
 }
