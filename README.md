@@ -287,6 +287,8 @@ npm run test:ci
 
 `npm run test:ci` writes a Vitest JSON timing report and prints a slow-test summary. Tests over 2 seconds are review-required, and tests over 10 seconds should be treated as integration-tier candidates unless they have a documented reason.
 
+Use `npm run test:fast` for the shorter non-integration suite. Use `npm run test:integration` for CLI and native-runtime integration coverage.
+
 If you are touching the native workspace directly, also run `npm run build:native` and `npm run test:native`. Benchmark harness coverage lives behind `npm run test:bench`.
 
 Use the root release scripts to cut independent releases for the packages that actually changed:

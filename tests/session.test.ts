@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, vi } from "vitest";
+import { describe, test, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import type { ICodeReviewSession } from "../src/index.js";
 import { CodeReviewSession, SessionManager, createCodeReviewSession } from "../src/session.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
@@ -10,6 +10,26 @@ import { resolveFilePathFromRoot } from "../src/util.js";
 const sampleRoot = path.resolve("tests/samples/typescript");
 
 describe("CodeReviewSession", () => {
+  let sharedReadySession: CodeReviewSession;
+
+  beforeAll(async () => {
+    sharedReadySession = await createCodeReviewSession({
+      root: sampleRoot,
+      buildOptions: { cache: "memory", useBloomFilters: true },
+    });
+  });
+
+  afterAll(() => {
+    sharedReadySession.dispose();
+  });
+
+  function readySession(): CodeReviewSession {
+    if (!sharedReadySession) {
+      throw new Error("Expected shared ready session");
+    }
+    return sharedReadySession;
+  }
+
   test("should initialize successfully", async () => {
     const session = new CodeReviewSession({
       root: sampleRoot,
@@ -25,10 +45,7 @@ describe("CodeReviewSession", () => {
   });
 
   test("should provide session statistics", async () => {
-    const session = await createCodeReviewSession({
-      root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
-    });
+    const session = readySession();
 
     const stats = session.getStats();
 
@@ -40,10 +57,7 @@ describe("CodeReviewSession", () => {
   });
 
   test("should expose analyzeImpactStream on the session interface", async () => {
-    const session = await createCodeReviewSession({
-      root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
-    });
+    const session = readySession();
 
     const typedSession = ((value: ICodeReviewSession) => value)(session);
 
@@ -52,10 +66,7 @@ describe("CodeReviewSession", () => {
   });
 
   test("should pass streaming summary mode through session impact streaming", async () => {
-    const session = await createCodeReviewSession({
-      root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
-    });
+    const session = readySession();
     const diffText = `diff --git a/utils.ts b/utils.ts
 index 1234567..abcdef0 100644
 --- a/utils.ts
@@ -84,10 +95,7 @@ index 1234567..abcdef0 100644
   });
 
   test("should find references using cached index", async () => {
-    const session = await createCodeReviewSession({
-      root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
-    });
+    const session = readySession();
 
     const file = path.resolve(sampleRoot, "utils.ts");
 
@@ -104,10 +112,7 @@ index 1234567..abcdef0 100644
   });
 
   test("should normalize relative session navigation paths", async () => {
-    const session = await createCodeReviewSession({
-      root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
-    });
+    const session = readySession();
 
     const result = await session.goToDefinition({
       file: "main.ts",
@@ -122,10 +127,7 @@ index 1234567..abcdef0 100644
   });
 
   test("should normalize host-native absolute session navigation paths", async () => {
-    const session = await createCodeReviewSession({
-      root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
-    });
+    const session = readySession();
 
     const result = await session.goToDefinition({
       file: path.join(sampleRoot, "main.ts"),
@@ -140,10 +142,7 @@ index 1234567..abcdef0 100644
   });
 
   test("should reject out-of-root session navigation paths explicitly", async () => {
-    const session = await createCodeReviewSession({
-      root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
-    });
+    const session = readySession();
     const outsideFile = path.resolve("README.md");
 
     const definition = await session.goToDefinition({
@@ -331,10 +330,7 @@ index 1234567..abcdef0 100644
   });
 
   test("should reject missing impact providers explicitly", async () => {
-    const session = await createCodeReviewSession({
-      root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
-    });
+    const session = readySession();
 
     await expect(
       Reflect.apply(session.analyzeImpact, session, [{ diffText: "diff --git a/main.ts b/main.ts\n" }]),

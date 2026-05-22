@@ -90,28 +90,32 @@ Goal: review every test or test file with cases over 2 seconds. Optimize product
   - Verify with `tests/cli-regressions.test.ts` skill install and doctor cases.
   - Exported default target resolution, moved the six-agent matrix in-process, and kept subprocess smoke coverage.
 
-- [ ] Reduce `native-fallback-reporting` module reload cost.
+- [x] Reduce `native-fallback-reporting` module reload cost.
   - The slow ast-grep case uses `vi.resetModules()` and imports the public barrel.
   - Import the narrow module under test when possible.
   - Keep one public-barrel smoke test for export wiring.
   - Verify the test still proves unified query execution is used and legacy single-query execution is not called.
+  - Switched the mocked ast-grep test to import `src/graphs/grep.ts` directly after module reset.
 
-- [ ] Review native parity fixture size.
+- [x] Review native parity fixture size.
   - `native-semantic-parity`, `native-worker-parity`, and `detailed-symbol-native-only` are valid integration coverage.
   - Identify whether each slow case needs full representative fixtures.
   - Split broad runtime smoke coverage from focused regression assertions.
   - Keep one full mixed-language parity test in an integration job if needed.
+  - Kept the representative native parity fixtures intact and moved them behind the explicit integration suite.
 
-- [ ] Cache or share session test setup where behavior allows.
+- [x] Cache or share session test setup where behavior allows.
   - `tests/session.test.ts` intentionally covers lifecycle and race behavior.
   - Shared roots or fixture writes can still reduce setup cost for non-mutating cases.
   - Do not weaken tests that validate disposal, expiration, or concurrent warmup semantics.
+  - Shared one ready sample session across read-only session tests and left lifecycle/race cases isolated.
 
-- [ ] Make integration tiers explicit.
+- [x] Make integration tiers explicit.
   - Add scripts for fast PR tests and slower integration tests.
   - Suggested split: unit, navigation, impact/review, cli, native.
   - Keep the default developer loop under a predictable budget.
   - Document the split in `README.md` or contributor docs if scripts change.
+  - Added `npm run test:fast` and `npm run test:integration`, with README contributor guidance.
 
 ## Verification Pattern
 
