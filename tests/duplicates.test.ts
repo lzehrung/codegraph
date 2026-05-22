@@ -435,6 +435,53 @@ export function secondClone(rows: number[]) {
     expect(sameFileResult.groups[0]?.primaryRight.file).toBe("src/local.ts");
   });
 
+  test("does not collapse same-file inner clones into self-duplicate groups", async () => {
+    const root = await makeTempProject();
+    const source = `
+export class InvoiceNormalizer {
+  normalizeDomestic(rows: Array<{ amount: number; tax: number }>) {
+    const output: string[] = [];
+    for (const row of rows) {
+      const subtotal = row.amount + row.tax;
+      const rounded = Math.round(subtotal * 100) / 100;
+      const label = rounded > 100 ? "large" : "small";
+      output.push(label + ":" + rounded.toFixed(2));
+    }
+    return output.filter((value) => value.includes(":")).join(",");
+  }
+
+  normalizeInternational(rows: Array<{ amount: number; tax: number }>) {
+    const output: string[] = [];
+    for (const row of rows) {
+      const subtotal = row.amount + row.tax;
+      const rounded = Math.round(subtotal * 100) / 100;
+      const label = rounded > 100 ? "large" : "small";
+      output.push(label + ":" + rounded.toFixed(2));
+    }
+    return output.filter((value) => value.includes(":")).join(",");
+  }
+}
+`;
+
+    await writeProjectFile(root, "src/local-class.ts", source);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, {
+      includeSameFile: true,
+      minConfidence: "high",
+      limit: 10,
+    });
+
+    const sameFileGroups = result.groups.filter((group) => group.primaryLeft.file === group.primaryRight.file);
+    expect(sameFileGroups.length).toBeGreaterThan(0);
+    for (const group of sameFileGroups) {
+      expect({ startLine: group.primaryLeft.startLine, endLine: group.primaryLeft.endLine }).not.toEqual({
+        startLine: group.primaryRight.startLine,
+        endLine: group.primaryRight.endLine,
+      });
+    }
+  });
+
   test("duplicates CLI emits bounded JSON groups", async () => {
     const root = await makeTempProject();
     const source = `

@@ -970,6 +970,10 @@ function createUnitClusters(refs: readonly DuplicateUnitRef[]): Map<string, Unit
   return clustersByRef;
 }
 
+function singletonUnitCluster(ref: DuplicateUnitRef): UnitCluster {
+  return { id: shortHashText(unitRefIdentity(ref)), refs: [ref], primary: ref };
+}
+
 function orderedGroupKey(left: UnitCluster, right: UnitCluster): string {
   if (left.id < right.id) return `${left.id}\u0000${right.id}`;
   return `${right.id}\u0000${left.id}`;
@@ -1030,9 +1034,14 @@ function groupSuggestions(suggestions: readonly DuplicateSuggestion[]): Duplicat
   const clusters = createUnitClusters(refs);
   const suggestionsByGroup = new Map<string, { left: UnitCluster; right: UnitCluster; suggestions: DuplicateSuggestion[] }>();
   for (const suggestion of suggestions) {
-    const leftCluster = clusters.get(unitRefIdentity(suggestion.left));
-    const rightCluster = clusters.get(unitRefIdentity(suggestion.right));
+    let leftCluster = clusters.get(unitRefIdentity(suggestion.left));
+    let rightCluster = clusters.get(unitRefIdentity(suggestion.right));
     if (!leftCluster || !rightCluster) continue;
+    if (leftCluster.id === rightCluster.id) {
+      if (rangesSubstantiallyOverlap(suggestion.left, suggestion.right)) continue;
+      leftCluster = singletonUnitCluster(suggestion.left);
+      rightCluster = singletonUnitCluster(suggestion.right);
+    }
     const key = orderedGroupKey(leftCluster, rightCluster);
     const existing = suggestionsByGroup.get(key);
     if (existing) existing.suggestions.push(suggestion);
