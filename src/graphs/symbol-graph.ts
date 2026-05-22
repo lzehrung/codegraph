@@ -36,6 +36,10 @@ export type SymbolGraph = {
   edges: SymbolEdge[];
 };
 
+export type BuildSymbolGraphOptions = {
+  files?: Set<FileId>;
+};
+
 function normalizeSymbolNodeKind(kind: string): SymbolNodeKind {
   if (kind === "function") return "function";
   if (kind === "class") return "class";
@@ -79,11 +83,24 @@ export function nodeForDef(def: {
   };
 }
 
-export async function buildSymbolGraph(index: ProjectIndex): Promise<SymbolGraph> {
+const normalizeFilePath = (file: string) => file.replace(/\\/g, "/");
+
+function normalizeFileFilter(files?: Set<FileId>): Set<FileId> | undefined {
+  if (!files) return undefined;
+  return new Set(Array.from(files, normalizeFilePath));
+}
+
+export async function buildSymbolGraph(index: ProjectIndex, opts?: BuildSymbolGraphOptions): Promise<SymbolGraph> {
   await Promise.resolve();
   const nodes = new Map<string, SymbolNode>();
   const edges: SymbolEdge[] = [];
   const seenEdges = new Set<string>();
+  const includedFiles = normalizeFileFilter(opts?.files);
+
+  const shouldIncludeFile = (file: FileId): boolean => {
+    if (!includedFiles) return true;
+    return includedFiles.has(normalizeFilePath(file));
+  };
 
   const addEdge = (from: string, to: string, label?: string) => {
     const key = `${from}->${to}::${label ?? ""}`;
@@ -92,19 +109,19 @@ export async function buildSymbolGraph(index: ProjectIndex): Promise<SymbolGraph
     edges.push(label ? { from, to, label } : { from, to });
   };
 
-  for (const [, mod] of index.byFile) {
+  for (const [file, mod] of index.byFile) {
+    if (!shouldIncludeFile(file)) continue;
     for (const def of mod.locals) {
       const node = nodeForDef(def);
       if (!nodes.has(node.id)) nodes.set(node.id, node);
     }
   }
 
-  const normalizePath = (file: string) => file.replace(/\\/g, "/");
-
   for (const [file, mod] of index.byFile) {
+    if (!shouldIncludeFile(file)) continue;
     for (const imp of mod.imports) {
       if (!imp) continue;
-      const targetFile = typeof imp.resolved === "string" ? normalizePath(imp.resolved) : undefined;
+      const targetFile = typeof imp.resolved === "string" ? normalizeFilePath(imp.resolved) : undefined;
       const targetMod = targetFile ? index.byFile.get(targetFile) : undefined;
 
       if (imp.kind === "named") {

@@ -3,6 +3,7 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import os from "node:os";
 import fsp from "node:fs/promises";
+import { runCli } from "../src/cli.js";
 
 const tsxCliPath = path.resolve(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs");
 const codegraphCliPath = path.resolve(process.cwd(), "src", "cli.ts");
@@ -39,7 +40,42 @@ function runGit(root: string, args: string[]): string {
   return result.stdout.trim();
 }
 
-function runImpactCli(args: string[], opts?: { cwd?: string; stdin?: string }) {
+function stdinForImpactCli(opts?: { stdin?: string }): string {
+  if (opts && Object.hasOwn(opts, "stdin")) return opts.stdin ?? "";
+  return impactDiff;
+}
+
+async function runImpactCli(args: string[], opts?: { cwd?: string; stdin?: string }): Promise<string> {
+  let stdout = "";
+  let stderr = "";
+  let exitCode: number | undefined;
+
+  try {
+    await runCli(args, {
+      cwd: () => opts?.cwd ?? process.cwd(),
+      stdout: (chunk) => {
+        stdout += chunk;
+      },
+      stderr: (chunk) => {
+        stderr += chunk;
+      },
+      readStdin: async () => stdinForImpactCli(opts),
+      exit: (code) => {
+        exitCode = code;
+        throw new Error(`codegraph CLI exited ${code}`);
+      },
+    });
+  } catch (error) {
+    if (exitCode !== undefined) {
+      throw new Error(`codegraph CLI failed (${exitCode}). stderr:\n${stderr}`);
+    }
+    throw error;
+  }
+
+  return stdout;
+}
+
+function runImpactCliSubprocess(args: string[], opts?: { cwd?: string; stdin?: string }) {
   return new Promise<string>((resolve, reject) => {
     const child = spawn(process.execPath, [tsxCliPath, codegraphCliPath, ...args], {
       cwd: opts?.cwd ?? process.cwd(),
@@ -53,11 +89,7 @@ function runImpactCli(args: string[], opts?: { cwd?: string; stdin?: string }) {
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString();
     });
-    if (opts && Object.hasOwn(opts, "stdin")) {
-      child.stdin.write(opts.stdin);
-    } else {
-      child.stdin.write(impactDiff);
-    }
+    child.stdin.write(stdinForImpactCli(opts));
     child.stdin.end();
     child.on("error", reject);
     child.on("exit", (code) => {
@@ -72,7 +104,7 @@ function runImpactCli(args: string[], opts?: { cwd?: string; stdin?: string }) {
 
 describe("impact CLI output", () => {
   it("prints JSON by default", async () => {
-    const stdout = await runImpactCli(["impact", sampleRoot, "--provider", "raw"]);
+    const stdout = await runImpactCliSubprocess(["impact", sampleRoot, "--provider", "raw"]);
     const report = JSON.parse(stdout);
     expect(report.changedFiles).toHaveLength(1);
     expect(report.changedFiles[0]?.file).toBe("utils.ts");

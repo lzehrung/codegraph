@@ -11,6 +11,9 @@ import {
   SymbolListItem,
 } from "../src/index.js";
 
+const sampleRoot = path.resolve(process.cwd(), "tests", "samples").replace(/\\/g, "/");
+const sampleIndexCache = new Map<string, Promise<ProjectIndex>>();
+
 export type SampleLanguage =
   | "typescript"
   | "tsx"
@@ -37,16 +40,50 @@ export function getSamplePath(language: SampleLanguage): string {
   return path.resolve(process.cwd(), "tests", "samples", language);
 }
 
+function normalizeFilePath(filePath: string): string {
+  return filePath.replace(/\\/g, "/");
+}
+
+function isSamplePath(samplePath: string): boolean {
+  const normalized = normalizeFilePath(path.resolve(samplePath));
+  return normalized === sampleRoot || normalized.startsWith(`${sampleRoot}/`);
+}
+
+function cachedSampleIndex(key: string, build: () => Promise<ProjectIndex>): Promise<ProjectIndex> {
+  const cached = sampleIndexCache.get(key);
+  if (cached) return cached;
+  const promise = build().catch((error: unknown) => {
+    sampleIndexCache.delete(key);
+    throw error;
+  });
+  sampleIndexCache.set(key, promise);
+  return promise;
+}
+
 export async function createTestIndex(language: SampleLanguage): Promise<ProjectIndex> {
   const samplePath = getSamplePath(language);
-  return await buildProjectIndex(samplePath);
+  return await cachedSampleIndex(`root:${normalizeFilePath(samplePath)}`, async () => await buildProjectIndex(samplePath));
 }
 
 export async function createTestIndexFromPath(samplePath: string): Promise<ProjectIndex> {
+  if (isSamplePath(samplePath)) {
+    return await cachedSampleIndex(
+      `root:${normalizeFilePath(path.resolve(samplePath))}`,
+      async () => await buildProjectIndex(samplePath),
+    );
+  }
   return await buildProjectIndex(samplePath);
 }
 
 export async function createTestIndexFromFiles(samplePath: string, files: string[]): Promise<ProjectIndex> {
+  if (isSamplePath(samplePath)) {
+    const normalizedRoot = normalizeFilePath(path.resolve(samplePath));
+    const normalizedFiles = files.map((file) => normalizeFilePath(path.resolve(file))).sort();
+    return await cachedSampleIndex(
+      `files:${normalizedRoot}:${normalizedFiles.join("\0")}`,
+      async () => await buildProjectIndexFromFiles(samplePath, files),
+    );
+  }
   return await buildProjectIndexFromFiles(samplePath, files);
 }
 

@@ -152,7 +152,7 @@ describe("native fallback reporting", () => {
         };
       });
 
-      const { astGrep } = await import("../src/index.js");
+      const { astGrep } = await import("../src/graphs/grep.js");
       const hits = await astGrep(root, "(import_statement source: (string) @mod)", ["**/*.ts"]);
 
       expect(unifiedSpy).toHaveBeenCalledTimes(1);
