@@ -46,6 +46,17 @@ Use Codegraph when you need fast structural answers about a repo without relying
       "score": 59
     }
   ],
+  "duplicates": {
+    "minConfidence": "high",
+    "top": [
+      {
+        "confidence": "high",
+        "cloneType": "exact",
+        "left": { "file": "src/a.ts", "startLine": 10, "endLine": 24 },
+        "right": { "file": "src/b.ts", "startLine": 8, "endLine": 22 }
+      }
+    ]
+  },
   "recommendedCommands": ["codegraph hotspots --root \"/workspace/codegraph/src\" --limit 20 --json"]
 }
 ```

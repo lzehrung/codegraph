@@ -491,6 +491,53 @@ export class InvoiceNormalizer {
     }
   });
 
+  test("coalesces repeated groups with the same primary ranges", async () => {
+    const root = await makeTempProject();
+    const source = `
+export class InvoiceNormalizer {
+  normalizeDomestic(rows: Array<{ amount: number; tax: number }>) {
+    const output: string[] = [];
+    for (const row of rows) {
+      const subtotal = row.amount + row.tax;
+      const rounded = Math.round(subtotal * 100) / 100;
+      const label = rounded > 100 ? "large" : "small";
+      output.push(label + ":" + rounded.toFixed(2));
+    }
+    return output.filter((value) => value.includes(":")).join(",");
+  }
+
+  normalizeInternational(rows: Array<{ amount: number; tax: number }>) {
+    const output: string[] = [];
+    for (const row of rows) {
+      const subtotal = row.amount + row.tax;
+      const rounded = Math.round(subtotal * 100) / 100;
+      const label = rounded > 100 ? "large" : "small";
+      output.push(label + ":" + rounded.toFixed(2));
+    }
+    return output.filter((value) => value.includes(":")).join(",");
+  }
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", source);
+    await writeProjectFile(root, "src/b.ts", source);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, {
+      includeSameFile: true,
+      minConfidence: "high",
+      limit: 20,
+    });
+    const primaryPairKeys = result.groups.map((group) => {
+      const left = `${group.primaryLeft.file}:${group.primaryLeft.startLine}-${group.primaryLeft.endLine}`;
+      const right = `${group.primaryRight.file}:${group.primaryRight.startLine}-${group.primaryRight.endLine}`;
+      return [left, right].sort().join("=");
+    });
+
+    expect(result.groups.length).toBeGreaterThan(0);
+    expect(new Set(primaryPairKeys).size).toBe(primaryPairKeys.length);
+  });
+
   test("duplicates CLI emits bounded JSON groups", async () => {
     const root = await makeTempProject();
     const source = `

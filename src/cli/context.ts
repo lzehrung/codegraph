@@ -6,7 +6,7 @@ import picomatch from "picomatch";
 import type { BuildReport } from "../indexer/types.js";
 import type { ReviewBuildReport } from "../review.js";
 import { normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
-import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
+import { matchesDiscoveryGlob, type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { isRelativePathInside } from "../util/projectFiles.js";
 import { isCliValueOption } from "./options.js";
 
@@ -20,18 +20,6 @@ function normalizeCliGlobPattern(globPattern: string): string {
 
 export function isCliDiscoveryRelativePathInside(relativePath: string): boolean {
   return isRelativePathInside(relativePath);
-}
-
-function matchesCliDiscoveryGlob(
-  absolutePath: string,
-  scanRoot: string,
-  matcher: (relativePath: string) => boolean,
-): boolean {
-  const relativePath = path.relative(scanRoot, absolutePath);
-  if (!isCliDiscoveryRelativePathInside(relativePath)) {
-    return false;
-  }
-  return matcher(normalizePath(relativePath));
 }
 
 export function filterFilesByCliDiscoveryGlobs(
@@ -55,11 +43,11 @@ export function filterFilesByCliDiscoveryGlobs(
   return files.filter((filePath) => {
     if (
       includeMatchers.length &&
-      !includeMatchers.some((matcher) => matchesCliDiscoveryGlob(filePath, scanRoot, matcher))
+      !includeMatchers.some((matcher) => matchesDiscoveryGlob(filePath, scanRoot, matcher))
     ) {
       return false;
     }
-    return !ignoreMatchers.some((matcher) => matchesCliDiscoveryGlob(filePath, scanRoot, matcher));
+    return !ignoreMatchers.some((matcher) => matchesDiscoveryGlob(filePath, scanRoot, matcher));
   });
 }
 

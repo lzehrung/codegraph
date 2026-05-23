@@ -107,6 +107,74 @@ The grouped output is usable for triage. Remaining caveats:
   - Example: multiple `src/cli/graph.ts` chunk findings are one underlying helper extraction.
   - Keep raw variants available through `--raw-pairs`.
 
+## Follow-Up Scan: 2026-05-23
+
+Generated after the first duplicate cleanup pass on branch `elim-dups`.
+
+Commands:
+
+```bash
+node ./dist/cli.js duplicates --root . ./src --min-confidence medium --limit 120 --include-same-file
+node ./dist/cli.js duplicates --root . . --min-confidence high --limit 120 --include-same-file
+node ./dist/cli.js inspect --root . ./src --limit 8
+node ./dist/cli.js review --base main --head HEAD --summary
+node ./dist/cli.js doctor
+```
+
+Results:
+
+- `src` scan: 120 returned groups, 849 omitted groups, 1611 omitted raw suggestions.
+- whole-repo scan: 120 returned groups, 973 omitted groups, 2898 omitted raw suggestions.
+- `doctor` reports native runtime availability and artifact health only; it does not surface duplicate cleanup opportunities.
+- `review --summary` reports diff risk and candidate tests only; it does not surface duplicate cleanup opportunities.
+- `inspect` reports hotspots, unresolved imports, cycles, and recommended commands only; it is the best current home for an at-a-glance duplicate opportunity section.
+
+### Product Output Follow-Ups
+
+- [x] Coalesce repeated grouped duplicate findings with the same primary ranges.
+  - Finding: `src/indexer/imports/languageSpecific.ts:249-258 applyJavaStatementOverride` vs `src/indexer/imports/languageSpecific.ts:260-269 applyKotlinStatementOverride` appeared multiple times with the same primary pair.
+  - Preserve raw evidence counts through `rawPairCount` and bounded `variants`.
+  - Keep `--raw-pairs` as the explicit escape hatch for low-level pair inspection.
+
+- [x] Surface bounded duplicate opportunities in `inspect` output.
+  - Include high-signal fields only: confidence, clone type, score, files/ranges, token counts, and raw pair count.
+  - Keep the summary bounded by `--limit`.
+  - Add a `duplicates` follow-up command to `recommendedCommands` so agents can drill into full grouped JSON.
+  - Leave `doctor` focused on package/runtime/artifact health.
+
+### Remaining Source Cleanup Candidates
+
+- [x] Share C/C++ language-definition scaffolding where it stays readable.
+  - Findings: `src/languages/definitions/c.ts:14-147` and `src/languages/definitions/cpp.ts:14-165`.
+  - Preserve C-specific macro support and C++ namespace/class/alias/using/lambda behavior.
+
+- [x] Share package export target selection between node-module and workspace resolution.
+  - Findings: `src/util/resolution/node.ts:22-34 tryResolveRelative` and `src/util/workspace.ts:298-307 pickExportTarget`.
+  - Prefer a small resolver helper over duplicating `exports` target precedence.
+
+- [x] Share Java/Kotlin import override plumbing.
+  - Findings: `src/indexer/imports/languageSpecific.ts:249-258` and `src/indexer/imports/languageSpecific.ts:260-269`.
+  - Keep Java and Kotlin parsing differences explicit at the call site.
+
+- [x] Share range line-counting for coverage suggestions.
+  - Findings: `src/impact/report-suggestions.ts:820-827` and `src/impact/report-suggestions.ts:829-836`.
+  - Preserve zero-count behavior when no coverage is available.
+
+- [x] Share file-like agent handle parsing.
+  - Findings: `src/agent/handles.ts:54-60` and `src/agent/handles.ts:82-88`.
+  - Keep public handle prefixes and return types unchanged.
+
+- [x] Share discovery glob relative-path matching.
+  - Findings: `src/cli/context.ts:25-35` and `src/util/projectFiles.ts:278-288`.
+  - Keep CLI include/ignore globs relative to active scan roots and config globs relative to project roots.
+
+Follow-up verification:
+
+- [x] `src` scan reports `0` repeated displayed primary pairs in the first 80 medium-or-higher groups.
+- [x] `inspect --root . ./src --limit 5` emits compact high-confidence duplicate opportunities and a `duplicates` follow-up command.
+- [x] Focused duplicate, inspect, C/C++, resolution, references, impact-suggestion, and agent-search tests pass.
+- [x] Full test suite passes.
+
 ## Verification Plan
 
 - [x] Run `npm run build`.

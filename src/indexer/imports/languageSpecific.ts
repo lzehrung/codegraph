@@ -28,6 +28,8 @@ export function createStatementImportOverrideState(): StatementImportOverrideSta
   return { handledStatements: new Set() };
 }
 
+type ParsedJvmImportStatement = { kind: "star"; from: string } | { kind: "named"; from: string; imported: string };
+
 function normalizeGoImports(context: LanguageSpecificImportContext): void {
   const imports = context.getBindings();
   if (context.languageId !== "go" || !imports.length) {
@@ -251,10 +253,10 @@ async function applyJavaStatementOverride(
   normalizedStmt: string,
   typeOnly: boolean,
 ): Promise<boolean> {
-  const parsed = parseJavaImportStatement(normalizedStmt);
-  if (!parsed) return false;
-  const local = parsed.kind === "named" ? parsed.imported : undefined;
-  return await pushJvmImportBinding(context, parsed, local, typeOnly);
+  return await applyJvmStatementOverride(context, normalizedStmt, typeOnly, parseJavaImportStatement, (parsed) => {
+    if (parsed.kind === "named") return parsed.imported;
+    return undefined;
+  });
 }
 
 async function applyKotlinStatementOverride(
@@ -262,10 +264,22 @@ async function applyKotlinStatementOverride(
   normalizedStmt: string,
   typeOnly: boolean,
 ): Promise<boolean> {
-  const parsed = parseKotlinImportStatement(normalizedStmt);
+  return await applyJvmStatementOverride(context, normalizedStmt, typeOnly, parseKotlinImportStatement, (parsed) => {
+    if (parsed.kind === "named") return parsed.local;
+    return undefined;
+  });
+}
+
+async function applyJvmStatementOverride<TParsed extends ParsedJvmImportStatement>(
+  context: LanguageSpecificImportContext,
+  normalizedStmt: string,
+  typeOnly: boolean,
+  parseStatement: (statement: string) => TParsed | null,
+  localNameFor: (parsed: TParsed) => string | undefined,
+): Promise<boolean> {
+  const parsed = parseStatement(normalizedStmt);
   if (!parsed) return false;
-  const local = parsed.kind === "named" ? parsed.local : undefined;
-  return await pushJvmImportBinding(context, parsed, local, typeOnly);
+  return await pushJvmImportBinding(context, parsed, localNameFor(parsed), typeOnly);
 }
 
 async function pushJvmImportBinding(
