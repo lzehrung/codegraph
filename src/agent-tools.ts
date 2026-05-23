@@ -115,6 +115,24 @@ type ToolDependencyListResult =
       error: string;
       reason?: "outside_project_root";
     };
+type ToolDependencyOkResult = Extract<ToolDependencyListResult, { status: "ok" }>;
+type ToolDependencyFailureResult = Exclude<ToolDependencyListResult, ToolDependencyOkResult>;
+type ToolDependenciesResponse =
+  | {
+      status: "ok";
+      file: string;
+      dependencies: ToolDependencyEntry[];
+      truncated: boolean;
+    }
+  | ToolDependencyFailureResult;
+type ToolReverseDependenciesResponse =
+  | {
+      status: "ok";
+      file: string;
+      dependents: ToolDependencyEntry[];
+      truncated: boolean;
+    }
+  | ToolDependencyFailureResult;
 
 /** File-level hotspot metrics returned by `tool_getHotspots`. */
 export type ToolHotspotEntry = {
@@ -367,37 +385,16 @@ export async function tool_getDependencies(
   root: string,
   filePath: string,
   options: ToolDependencyOptions = {},
-): Promise<
-  | {
-      status: "ok";
-      file: string;
-      dependencies: ToolDependencyEntry[];
-      truncated: boolean;
-    }
-  | {
-      status: "not_found";
-      file: string;
-      reason: "file_not_found" | "file_not_indexed";
-      error: string;
-    }
-  | {
-      status: "error";
-      error: string;
-      reason?: "outside_project_root";
-    }
-> {
+): Promise<ToolDependenciesResponse> {
   const result = await collectToolDependencyEntries(root, filePath, options, (index, file, traversalOptions) =>
     getDependencies(index.graph, file, traversalOptions),
   );
-  if (result.status !== "ok") {
-    return result;
-  }
-  return {
+  return mapToolDependencyResult(result, (ok) => ({
     status: "ok",
-    file: result.file,
-    dependencies: result.entries,
-    truncated: result.truncated,
-  };
+    file: ok.file,
+    dependencies: ok.entries,
+    truncated: ok.truncated,
+  }));
 }
 
 /**
@@ -407,37 +404,24 @@ export async function tool_getReverseDependencies(
   root: string,
   filePath: string,
   options: ToolDependencyOptions = {},
-): Promise<
-  | {
-      status: "ok";
-      file: string;
-      dependents: ToolDependencyEntry[];
-      truncated: boolean;
-    }
-  | {
-      status: "not_found";
-      file: string;
-      reason: "file_not_found" | "file_not_indexed";
-      error: string;
-    }
-  | {
-      status: "error";
-      error: string;
-      reason?: "outside_project_root";
-    }
-> {
+): Promise<ToolReverseDependenciesResponse> {
   const result = await collectToolDependencyEntries(root, filePath, options, (index, file, traversalOptions) =>
     getReverseDependencies(index.graph, file, traversalOptions),
   );
-  if (result.status !== "ok") {
-    return result;
-  }
-  return {
+  return mapToolDependencyResult(result, (ok) => ({
     status: "ok",
-    file: result.file,
-    dependents: result.entries,
-    truncated: result.truncated,
-  };
+    file: ok.file,
+    dependents: ok.entries,
+    truncated: ok.truncated,
+  }));
+}
+
+function mapToolDependencyResult<T>(
+  result: ToolDependencyListResult,
+  buildOkResult: (result: ToolDependencyOkResult) => T,
+): T | ToolDependencyFailureResult {
+  if (result.status !== "ok") return result;
+  return buildOkResult(result);
 }
 
 async function collectToolDependencyEntries(

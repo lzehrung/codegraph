@@ -19,7 +19,7 @@ import { explainCodegraphTargetWithSession } from "../agent/explain.js";
 import type { AgentExplanation, AgentExplanationReference } from "../agent/explain.js";
 import { searchCodegraphWithSession } from "../agent/search.js";
 import type { AgentSearchMode, AgentSearchResponse } from "../agent/search.js";
-import { getDependencies, getReverseDependencies, getShortestPath } from "../graphs/queries.js";
+import { getDependencies, getReverseDependencies, getShortestPath, type DependencyNode } from "../graphs/queries.js";
 import { findReferences, goToDefinition } from "../indexer/navigation.js";
 import { buildReviewReport, type ReviewDepth, type ReviewReport } from "../review.js";
 import { queryGraphSqliteRaw, type RawSqlResult } from "../sqlite.js";
@@ -139,6 +139,17 @@ export type CodegraphMcpHandlers = {
   }) => Promise<CodegraphArtifactBuildResult>;
 };
 
+type McpDependencyRequest = {
+  file: string;
+  depth?: number | undefined;
+  limit?: number | undefined;
+};
+
+type McpDependencyEntry = {
+  file: string;
+  depth: number;
+};
+
 const MCP_HTTP_PATH = "/mcp";
 const MAX_MCP_HTTP_BODY_BYTES = 1_000_000;
 
@@ -153,6 +164,28 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
   const boundedLimit = (limit: number | undefined, fallback: number, max: number): number => {
     if (typeof limit !== "number" || !Number.isFinite(limit)) return fallback;
     return Math.min(max, Math.max(0, Math.floor(limit)));
+  };
+  const collectMcpDependencyEntries = async (
+    request: McpDependencyRequest,
+    collectEntries: (
+      graph: Awaited<ReturnType<typeof session.loadProject>>["fileGraph"],
+      file: string,
+      options: { depth?: number; limit: number },
+    ) => DependencyNode[],
+  ): Promise<McpDependencyEntry[]> => {
+    const snapshot = await session.loadProject();
+    const queryOptions = {
+      ...(request.depth !== undefined ? { depth: request.depth } : {}),
+      limit: boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT),
+    };
+    return collectEntries(
+      snapshot.fileGraph,
+      await resolveProjectFile(await realRoot, root, request.file),
+      queryOptions,
+    ).map((dependency) => ({
+      file: relative(dependency.file),
+      depth: dependency.depth,
+    }));
   };
 
   return {
@@ -224,36 +257,12 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
     },
 
     deps: async (request) => {
-      const snapshot = await session.loadProject();
-      const queryOptions = {
-        ...(request.depth !== undefined ? { depth: request.depth } : {}),
-        limit: boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT),
-      };
-      const dependencies = getDependencies(
-        snapshot.fileGraph,
-        await resolveProjectFile(await realRoot, root, request.file),
-        queryOptions,
-      ).map((dependency) => ({
-        file: relative(dependency.file),
-        depth: dependency.depth,
-      }));
+      const dependencies = await collectMcpDependencyEntries(request, getDependencies);
       return { dependencies };
     },
 
     rdeps: async (request) => {
-      const snapshot = await session.loadProject();
-      const queryOptions = {
-        ...(request.depth !== undefined ? { depth: request.depth } : {}),
-        limit: boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT),
-      };
-      const reverseDependencies = getReverseDependencies(
-        snapshot.fileGraph,
-        await resolveProjectFile(await realRoot, root, request.file),
-        queryOptions,
-      ).map((dependency) => ({
-        file: relative(dependency.file),
-        depth: dependency.depth,
-      }));
+      const reverseDependencies = await collectMcpDependencyEntries(request, getReverseDependencies);
       return { reverseDependencies };
     },
 

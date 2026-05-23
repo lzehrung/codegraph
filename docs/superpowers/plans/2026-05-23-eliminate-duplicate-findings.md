@@ -49,7 +49,7 @@ The grouped output is usable for triage. Remaining caveats:
   - Introduce a small shared tokenizer helper in `src/chunking`.
   - Keep public chunking options unchanged.
 
-- [ ] Consolidate dependency and reverse-dependency wrappers where useful.
+- [x] Consolidate dependency and reverse-dependency wrappers where useful.
   - Findings: `src/agent-tools.ts:366-441`, `src/mcp/server.ts:228-246`, and `src/mcp/tools.ts:88-114`.
   - Prefer a small result-mapping helper over forcing identical public response shapes.
   - Verify both CLI/agent tools and MCP tools still expose `dependencies` and `reverseDependencies` separately.
