@@ -54,7 +54,7 @@ The grouped output is usable for triage. Remaining caveats:
   - Prefer a small result-mapping helper over forcing identical public response shapes.
   - Verify both CLI/agent tools and MCP tools still expose `dependencies` and `reverseDependencies` separately.
 
-- [ ] Revisit CSS and Less language definitions.
+- [x] Revisit CSS and Less language definitions.
   - Findings: `src/languages/definitions/css.ts:9-17` and `src/languages/definitions/less.ts:9-17`.
   - Extract shared CSS-family structure/query pieces only if it keeps each language definition readable.
   - Consider whether Vue/Svelte stylesheet definitions can reuse the same helper without hiding language-specific behavior.
