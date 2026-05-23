@@ -74,19 +74,19 @@ The grouped output is usable for triage. Remaining caveats:
 
 ### Tests
 
-- [ ] Add a shared temporary directory helper for tests.
+- [x] Add a shared temporary directory helper for tests.
   - Findings: repeated `mkTmpDir` helpers across dynamic resolution, fast graph edge cases, node modules, resolution precedence, robust fast graph, TS paths workspace, cache, and parsed-cache tests.
   - Put it near existing test helpers and migrate only obvious identical helpers first.
 
-- [ ] Add shared edge-normalization helpers for graph tests.
+- [x] Add shared edge-normalization helpers for graph tests.
   - Findings: `tests/fast-graph.test.ts`, `tests/monorepo-fast-graph.test.ts`, and related fast graph tests.
   - Replace duplicated `normEdge`, `toKey`, and slash normalization only where it improves readability.
 
-- [ ] Consolidate repeated SQLite/test database setup blocks.
+- [x] Consolidate repeated SQLite/test database setup blocks.
   - Findings: repeated chunks in `tests/sqlite.test.ts`, `tests/sql-artifact-graph.test.ts`, and `tests/sql-review-context.test.ts`.
   - Extract helpers that describe domain intent, not just line-for-line setup.
 
-- [ ] Leave intentional fixture repetition alone.
+- [x] Leave intentional fixture repetition alone.
   - Repeated sample snippets are often test data, not production maintenance debt.
   - Do not refactor setup that would make an individual test harder to read.
 

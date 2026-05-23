@@ -1,12 +1,8 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
-import os from "node:os";
 import fsp from "node:fs/promises";
 import { collectGraph } from "../src/index.js";
-
-async function mkTmpDir(prefix: string): Promise<string> {
-  return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
-}
+import { mkTmpDir, normalizeTestPath } from "./helpers/filesystem.js";
 
 describe("Node modules resolution (opt-in) and path normalization", () => {
   it("treats packages as external by default; resolves to file with flag", async () => {
@@ -17,7 +13,7 @@ describe("Node modules resolution (opt-in) and path normalization", () => {
     await fsp.writeFile(path.join(nm, "package.json"), '{"name":"my-pkg","main":"index.js"}', "utf8");
     const main = path.join(root, "main.js");
     await fsp.writeFile(main, 'import "my-pkg";\n', "utf8");
-    const files = [main].map((f) => f.replace(/\\/g, "/"));
+    const files = [main].map(normalizeTestPath);
     const g1 = await collectGraph(root, files);
     expect(g1.edges.some((e) => e.raw === "my-pkg" && e.to.type === "external")).toBe(true);
     const g2 = await (await import("../src/graphs.js")).collectGraph(root, files, { resolveNodeModules: true });

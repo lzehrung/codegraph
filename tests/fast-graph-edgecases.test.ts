@@ -1,16 +1,9 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
-import os from "node:os";
 import fsp from "node:fs/promises";
 import { collectGraph } from "../src/index.js";
-
-async function mkTmpDir(prefix: string): Promise<string> {
-  return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
-}
-
-function edgeFrom(file: string) {
-  return (e: { from: string }) => e.from.replace(/\\/g, "/") === file.replace(/\\/g, "/");
-}
+import { mkTmpDir, normalizeTestPath } from "./helpers/filesystem.js";
+import { edgeFrom } from "./helpers/graph.js";
 
 describe("Fast graph edge cases", () => {
   it("detects type-only import with typeOnly=true (TS)", async () => {
@@ -21,7 +14,7 @@ describe("Fast graph edge cases", () => {
     const mainPath = path.join(root, "main.ts");
     await fsp.writeFile(utilPath, util, "utf8");
     await fsp.writeFile(mainPath, main, "utf8");
-    const files = [mainPath.replace(/\\/g, "/"), utilPath.replace(/\\/g, "/")];
+    const files = [normalizeTestPath(mainPath), normalizeTestPath(utilPath)];
 
     const gNormal = await collectGraph(root, files);
     const gFast = await (await import("../src/graphs.js")).collectGraph(root, files, { fast: true });
