@@ -39,12 +39,12 @@ The grouped output is usable for triage. Remaining caveats:
   - Extract shared file index, symbol index, symbol array, and sorted symbol edge construction.
   - Keep the difference between full compact graph output and symbols-only output visible at the call site.
 
-- [ ] Share AST range conversion.
+- [x] Share AST range conversion.
   - Findings: `src/impact/suggestions.ts:372-385` and `src/util/ast.ts:32-41`.
   - Reuse `toRange` from `src/util/ast.ts` or move the non-null conversion into a shared helper.
   - Preserve the existing null-node behavior used by current callers.
 
-- [ ] Share default token counting.
+- [x] Share default token counting.
   - Findings: `src/chunking/chunkFile.ts:28-31` and `src/chunking/chunkTextFile.ts:21-24`.
   - Introduce a small shared tokenizer helper in `src/chunking`.
   - Keep public chunking options unchanged.
