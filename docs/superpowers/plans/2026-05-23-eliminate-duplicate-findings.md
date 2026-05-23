@@ -109,8 +109,8 @@ The grouped output is usable for triage. Remaining caveats:
 
 ## Verification Plan
 
-- [ ] Run `npm run build`.
-- [ ] Run `npm run lint`.
-- [ ] Run focused tests for touched areas.
-- [ ] Run `npm test` before pushing a completed refactor batch.
-- [ ] Re-run the duplicate analyzer and compare top findings against this baseline.
+- [x] Run `npm run build`.
+- [x] Run `npm run lint`.
+- [x] Run focused tests for touched areas.
+- [x] Run `npm test` before pushing a completed refactor batch.
+- [x] Re-run the duplicate analyzer and compare top findings against this baseline.
