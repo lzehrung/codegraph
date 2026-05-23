@@ -59,16 +59,18 @@ The grouped output is usable for triage. Remaining caveats:
   - Extract shared CSS-family structure/query pieces only if it keeps each language definition readable.
   - Consider whether Vue/Svelte stylesheet definitions can reuse the same helper without hiding language-specific behavior.
 
-- [ ] Evaluate JS fallback type duplication.
+- [x] Evaluate JS fallback type duplication.
   - Findings: `packages/codegraph-js-fallback/js-fallback.d.ts` and `src/jsFallback.ts`.
   - Prefer generating or importing a single declaration source if package boundaries allow it.
   - Leave as-is if the duplication is required to keep the fallback package self-contained.
+  - Decision: leave as-is because the fallback package publishes a self-contained `js-fallback.d.ts`.
 
-- [ ] Review smaller wrapper candidates opportunistically.
+- [x] Review smaller wrapper candidates opportunistically.
   - `src/cli/artifact.ts`, `src/cli/explain.ts`, and `src/cli/search.ts` command context interfaces.
   - `src/cli/projectFile.ts` and `src/session.ts` file-input resolution.
   - `src/cli/options.ts` positive and non-negative integer parsers.
   - `src/sqlite/canned-query.ts` direct dependencies and dependents queries.
+  - Decision: extracted the common agent CLI context and canned-query edge loader; left session file resolution and option parsing as-is because their existing helpers already separate concerns.
 
 ### Tests
 

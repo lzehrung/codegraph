@@ -71,6 +71,17 @@ export type CliRuntime = {
   readStdin: () => Promise<string>;
 };
 
+export type CliAgentCommandContext = {
+  positionals: string[];
+  root: string;
+  getOpt: (name: string) => string | undefined;
+  hasFlag: (name: string) => boolean;
+  writeJSONLine: (value: unknown) => void;
+  writeStdoutLine: (message: string) => void;
+  writeStderrLine: (message: string) => void;
+  exit: (code: number) => never;
+};
+
 type CliContext = {
   runtime: CliRuntime;
   stderrFilePath: string | undefined;

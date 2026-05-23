@@ -4,33 +4,34 @@ import type { GraphQueryResult } from "./types.js";
 import { dedupePreservingOrder, execRowsParams, toSqliteText } from "./common.js";
 import { withReadOnlySqliteDatabase } from "./database.js";
 
-const loadDirectFileDependencies = (db: SqliteDatabase, fromPath: string): string[] =>
-  execRowsParams(
+type DirectFileEdgeDirection = "dependencies" | "dependents";
+
+const loadDirectFileEdges = (db: SqliteDatabase, filePath: string, direction: DirectFileEdgeDirection): string[] => {
+  let selectedColumn = "to_path";
+  let constrainedColumn = "from_path";
+  if (direction === "dependents") {
+    selectedColumn = "from_path";
+    constrainedColumn = "to_path";
+  }
+  return execRowsParams(
     db,
     `
-      SELECT to_path
+      SELECT ${selectedColumn}
       FROM file_edges
-      WHERE to_type = ? AND from_path = ?
+      WHERE to_type = ? AND ${constrainedColumn} = ?
       ORDER BY rowid;
     `,
-    ["file", fromPath],
+    ["file", filePath],
   )
     .map((row) => toSqliteText(row[0]))
     .filter(Boolean);
+};
+
+const loadDirectFileDependencies = (db: SqliteDatabase, fromPath: string): string[] =>
+  loadDirectFileEdges(db, fromPath, "dependencies");
 
 const loadDirectFileDependents = (db: SqliteDatabase, toPath: string): string[] =>
-  execRowsParams(
-    db,
-    `
-      SELECT from_path
-      FROM file_edges
-      WHERE to_type = ? AND to_path = ?
-      ORDER BY rowid;
-    `,
-    ["file", toPath],
-  )
-    .map((row) => toSqliteText(row[0]))
-    .filter(Boolean);
+  loadDirectFileEdges(db, toPath, "dependents");
 
 const bfsFileTraversal = (start: string, loadNeighbors: (file: string) => string[]): string[] => {
   const visited = new Set<string>();
