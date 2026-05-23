@@ -47,17 +47,26 @@ Use Codegraph when you need fast structural answers about a repo without relying
     }
   ],
   "duplicates": {
+    "total": 1,
+    "omitted": 0,
     "minConfidence": "high",
     "top": [
       {
         "confidence": "high",
         "cloneType": "exact",
+        "score": 100,
         "left": { "file": "src/a.ts", "startLine": 10, "endLine": 24 },
-        "right": { "file": "src/b.ts", "startLine": 8, "endLine": 22 }
+        "right": { "file": "src/b.ts", "startLine": 8, "endLine": 22 },
+        "rawPairCount": 1
       }
     ]
   },
-  "recommendedCommands": ["codegraph hotspots --root \"/workspace/codegraph/src\" --limit 20 --json"]
+  "recommendedCommands": [
+    "codegraph hotspots --root \"/workspace/codegraph\" \"/workspace/codegraph/src\" --limit 20 --json",
+    "codegraph graph --root \"/workspace/codegraph\" \"/workspace/codegraph/src\" --json --symbols-detailed --compact-json",
+    "codegraph duplicates --root \"/workspace/codegraph\" \"/workspace/codegraph/src\" --min-confidence medium --limit 20 --include-same-file",
+    "codegraph doctor \"/workspace/codegraph/.codegraph-cache/index-v1\""
+  ]
 }
 ```
 
