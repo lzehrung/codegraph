@@ -7,22 +7,21 @@ import { withReadOnlySqliteDatabase } from "./database.js";
 type DirectFileEdgeDirection = "dependencies" | "dependents";
 
 const loadDirectFileEdges = (db: SqliteDatabase, filePath: string, direction: DirectFileEdgeDirection): string[] => {
-  let selectedColumn = "to_path";
-  let constrainedColumn = "from_path";
-  if (direction === "dependents") {
-    selectedColumn = "from_path";
-    constrainedColumn = "to_path";
-  }
-  return execRowsParams(
-    db,
-    `
-      SELECT ${selectedColumn}
+  let sql = `
+      SELECT to_path
       FROM file_edges
-      WHERE to_type = ? AND ${constrainedColumn} = ?
+      WHERE to_type = ? AND from_path = ?
       ORDER BY rowid;
-    `,
-    ["file", filePath],
-  )
+    `;
+  if (direction === "dependents") {
+    sql = `
+      SELECT from_path
+      FROM file_edges
+      WHERE to_type = ? AND to_path = ?
+      ORDER BY rowid;
+    `;
+  }
+  return execRowsParams(db, sql, ["file", filePath])
     .map((row) => toSqliteText(row[0]))
     .filter(Boolean);
 };
