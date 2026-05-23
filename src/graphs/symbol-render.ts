@@ -88,7 +88,7 @@ function buildSymbolWithFileRenderModel(
   for (const [id, node] of sg.nodes) {
     const symbolId = `s${symbolIndex++}`;
     symbolIdOf.set(id, symbolId);
-    symbolNodes.push({ id: symbolId, label: symbolDisplayLabel(node) });
+    symbolNodes.push({ id: symbolId, label: symbolDisplayLabel(node, projectRoot) });
   }
 
   const fileNodes: FileRenderNode[] = [];

@@ -55,9 +55,10 @@ Use Codegraph when you need fast structural answers about a repo without relying
         "confidence": "high",
         "cloneType": "exact",
         "score": 100,
-        "left": { "file": "src/a.ts", "startLine": 10, "endLine": 24 },
-        "right": { "file": "src/b.ts", "startLine": 8, "endLine": 22 },
-        "rawPairCount": 1
+        "left": { "file": "src/a.ts", "startLine": 10, "endLine": 24, "tokenCount": 86 },
+        "right": { "file": "src/b.ts", "startLine": 8, "endLine": 22, "tokenCount": 86 },
+        "rawPairCount": 1,
+        "reasons": ["identical text", "matching normalized token stream"]
       }
     ]
   },
