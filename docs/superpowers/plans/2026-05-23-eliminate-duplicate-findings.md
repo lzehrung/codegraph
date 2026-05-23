@@ -34,7 +34,7 @@ The grouped output is usable for triage. Remaining caveats:
   - Keep Mermaid and DOT formatting separate so escaping and syntax remain explicit.
   - Add or update renderer tests if output ordering or formatting can change.
 
-- [ ] Refactor compact graph symbol projection.
+- [x] Refactor compact graph symbol projection.
   - Findings: `src/cli/graph.ts:121-146` and `src/cli/graph.ts:169-194`.
   - Extract shared file index, symbol index, symbol array, and sorted symbol edge construction.
   - Keep the difference between full compact graph output and symbols-only output visible at the call site.
