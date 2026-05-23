@@ -215,6 +215,7 @@ For git-provider impact and git-scoped review/index/graph commands, `WORKTREE` c
   `codegraph duplicates --root . ./src --min-confidence medium`
   Covers indexed symbols, semantic chunks, and text chunks.
   Reports grouped findings by default so overlapping symbol/chunk variants collapse into one clone.
+  Uses duplicate JSON `schemaVersion: 2`.
   Bounds per-group variants by default and reports hidden evidence with counts.
   A single positional directory becomes the project root unless `--root` is set.
   Use `--include-small` for tiny helpers.

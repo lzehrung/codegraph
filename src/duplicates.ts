@@ -89,7 +89,7 @@ export type DuplicateDetectionStats = {
 };
 
 export type DuplicateDetectionResult = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   units: number;
   groups: DuplicateGroup[];
   suggestions?: DuplicateSuggestion[];
@@ -1125,7 +1125,7 @@ export async function findDuplicates(
   const omittedGroups = Math.max(0, groups.length - limitedGroups.length);
   const limitedRawSuggestions = includeRawPairs ? suggestions.slice(0, limit) : [];
   const result: DuplicateDetectionResult = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     units: units.length,
     groups: limitedGroups,
     omittedCounts: {

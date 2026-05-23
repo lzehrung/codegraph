@@ -217,6 +217,7 @@ Options:
 
 Output:
   Always emits JSON with grouped duplicate findings, confidence, clone type, metrics, omission counts, and pair stats.
+  Grouped duplicate output uses schemaVersion 2.
   Group variants are bounded by default and include rawPairCount/omittedVariantCount for hidden evidence.
   Use --raw-pairs to include the underlying scored unit-pair suggestions.
 `;

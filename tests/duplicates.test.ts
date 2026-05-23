@@ -77,6 +77,7 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     const index = await buildProjectIndex(root);
     const result = await findDuplicates(index, { minConfidence: "high", limit: 5 });
 
+    expect(result.schemaVersion).toBe(2);
     expect(result.groups.length).toBeGreaterThan(0);
     expect(result.groups[0]?.cloneType).toBe("exact");
     expect(result.groups[0]?.confidence).toBe("high");

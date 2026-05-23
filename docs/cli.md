@@ -170,6 +170,7 @@ codegraph grep --pattern 'eval\(' --ignore-case
 `duplicates` always reports grouped exact, renamed, near, and weak clone candidates as JSON.
 
 - It combines indexed symbols, semantic chunks, and text chunks.
+- It emits `schemaVersion: 2` for grouped duplicate output.
 - It reports project-relative paths, confidence, clone type, metrics, variant counts, omission counts, and pair stats.
 - Groups collapse overlapping symbol/chunk variants so one underlying clone appears as one finding.
 - Group `variants` are bounded by default; use `rawPairCount` and `omittedVariantCount` to see hidden evidence counts.
