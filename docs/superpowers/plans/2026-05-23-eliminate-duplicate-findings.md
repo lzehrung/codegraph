@@ -28,7 +28,7 @@ The grouped output is usable for triage. Remaining caveats:
 
 ### Product Code
 
-- [ ] Refactor symbol graph renderers.
+- [x] Refactor symbol graph renderers.
   - Findings: `src/graphs/symbol-render.ts:84-149` and `src/graphs/symbol-render.ts:151-218`.
   - Extract shared file-node, symbol-node, and graph-edge collection.
   - Keep Mermaid and DOT formatting separate so escaping and syntax remain explicit.
