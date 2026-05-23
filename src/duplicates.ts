@@ -140,6 +140,8 @@ const DEFAULT_GROUP_VARIANT_LIMIT = 5;
 const DEFAULT_SHINGLE_SIZE = 5;
 const DEFAULT_WINDOW_SIZE = 4;
 const DEFAULT_MAX_FINGERPRINTS = 128;
+const GROUP_PRIMARY_LENGTH_RATIO_FLOOR = 0.7;
+const NEARBY_CHUNK_VARIANT_MAX_GAP = 2;
 
 const textLanguageByExtension: Record<string, string> = {
   ".json": "json",
@@ -332,6 +334,18 @@ function rangesSubstantiallyOverlap(left: DuplicateUnitRef, right: DuplicateUnit
   const overlap = lineOverlap(left, right);
   if (!overlap) return false;
   return overlap / Math.min(lineSpan(left), lineSpan(right)) >= 0.8;
+}
+
+function lineGap(left: DuplicateUnitRef, right: DuplicateUnitRef): number {
+  if (left.endLine < right.startLine) return right.startLine - left.endLine - 1;
+  if (right.endLine < left.startLine) return left.startLine - right.endLine - 1;
+  return 0;
+}
+
+function rangesAreNearbyChunkVariants(left: DuplicateUnitRef, right: DuplicateUnitRef): boolean {
+  if (left.file !== right.file || left.languageId !== right.languageId) return false;
+  if (left.kind !== "chunk" || right.kind !== "chunk") return false;
+  return lineGap(left, right) <= NEARBY_CHUNK_VARIANT_MAX_GAP;
 }
 
 function ratio(left: number, right: number): number {
@@ -952,8 +966,10 @@ function createUnitClusters(refs: readonly DuplicateUnitRef[]): Map<string, Unit
       const left = fileRefs[i]!;
       for (let j = i + 1; j < fileRefs.length; j++) {
         const right = fileRefs[j]!;
-        if (right.ref.startLine > left.ref.endLine) break;
-        if (rangesSubstantiallyOverlap(left.ref, right.ref)) union(left.key, right.key);
+        if (right.ref.startLine > left.ref.endLine + NEARBY_CHUNK_VARIANT_MAX_GAP + 1) break;
+        if (rangesSubstantiallyOverlap(left.ref, right.ref) || rangesAreNearbyChunkVariants(left.ref, right.ref)) {
+          union(left.key, right.key);
+        }
       }
     }
   }
@@ -1009,6 +1025,13 @@ function groupForSuggestions(
     confidence = bestConfidence(confidence, suggestion.confidence);
     cloneType = bestCloneType(cloneType, suggestion.cloneType);
   }
+  let reasons = mergeReasons(suggestions);
+  const primaryLengthRatio = ratio(left.primary.tokenCount, right.primary.tokenCount);
+  if (primaryLengthRatio < GROUP_PRIMARY_LENGTH_RATIO_FLOOR) {
+    score = Math.min(score, 64);
+    confidence = "low";
+    reasons = Array.from(new Set([...reasons, "different-sized grouped units"])).sort();
+  }
   return {
     id: shortHashText(key),
     score,
@@ -1021,7 +1044,7 @@ function groupForSuggestions(
     rawPairCount: suggestions.length,
     omittedVariantCount: Math.max(0, suggestions.length - variants.length),
     metrics: primary.metrics,
-    reasons: mergeReasons(suggestions),
+    reasons,
   };
 }
 
@@ -1120,7 +1143,9 @@ export async function findDuplicates(
   suggestions.sort(compareSuggestions);
 
   const includeRawPairs = options.includeRawPairs ?? false;
-  const groups = groupSuggestions(suggestions, includeRawPairs);
+  const groups = groupSuggestions(suggestions, includeRawPairs).filter(
+    (group) => confidenceRank[group.confidence] >= confidenceRank[minConfidence],
+  );
   const limitedGroups = groups.slice(0, limit);
   const omittedGroups = Math.max(0, groups.length - limitedGroups.length);
   const limitedRawSuggestions = includeRawPairs ? suggestions.slice(0, limit) : [];

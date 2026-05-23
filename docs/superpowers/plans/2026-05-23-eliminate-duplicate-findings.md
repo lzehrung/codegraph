@@ -18,6 +18,13 @@ Results:
 - Whole-repo top results are dominated by test helpers and setup snippets.
 - Product-code top results are concentrated in `src/graphs`, `src/cli`, `src/impact`, `src/chunking`, `src/mcp`, and language definitions.
 
+Post-refactor comparison:
+
+- `src` scan: 100 returned groups, 869 omitted groups, 1611 omitted raw suggestions.
+- whole-repo scan: 200 returned groups, 899 omitted groups, 2904 omitted raw suggestions.
+- The previous `src/graphs/symbol-render.ts`, `src/cli/graph.ts`, chunk tokenizer, AST range, CSS/LESS, and first-pass test helper findings dropped out of the top product-code results.
+- The analyzer no longer ranks the large C/C++ query chunk against tiny language snippets as a top medium/high finding.
+
 The grouped output is usable for triage. Remaining caveats:
 
 - Some chunk findings are sub-ranges of a larger duplicate and should be handled through the larger refactor.
@@ -92,11 +99,11 @@ The grouped output is usable for triage. Remaining caveats:
 
 ### Analyzer Follow-Ups
 
-- [ ] Consider a length-ratio guard for high-confidence renamed groups.
+- [x] Consider a length-ratio guard for high-confidence renamed groups.
   - Example noise: large C/C++ query chunks paired with tiny language-definition snippets.
   - The detector already reports `lengthRatio`; ranking or confidence can use it more aggressively.
 
-- [ ] Consider collapsing adjacent same-file chunk findings under a larger group.
+- [x] Consider collapsing adjacent same-file chunk findings under a larger group.
   - Example: multiple `src/cli/graph.ts` chunk findings are one underlying helper extraction.
   - Keep raw variants available through `--raw-pairs`.
 
