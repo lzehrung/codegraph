@@ -50,7 +50,7 @@ const EXPLICIT_SPECIFIER_EXTENSION_FAMILIES: Record<string, readonly string[]> =
   ".cjs": [".cts", ".cjs"],
 };
 
-function getResolutionExtensions(resolutionExtensions?: readonly string[]): string[] {
+export function getResolutionExtensions(resolutionExtensions?: readonly string[]): string[] {
   const extensions = resolutionExtensions === undefined ? DEFAULT_RESOLUTION_EXTENSIONS : resolutionExtensions;
   return Array.from(new Set(extensions));
 }

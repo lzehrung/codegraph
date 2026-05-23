@@ -4,6 +4,7 @@ import { getHotspots } from "../graphs/hotspots.js";
 import { type SymbolNode } from "../graphs/symbol-graph.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
 import { queryGraphSqliteRaw, writeGraphSqlite } from "../sqlite.js";
+import { isPlainRecord } from "../util/guards.js";
 import { isFilePathWithinRoot, normalizePath, toProjectRelativePath } from "../util/paths.js";
 import { formatAgentSqlHandle, formatAgentSymbolHandle } from "./handles.js";
 import { createAgentFileLookup, normalizeAgentFilePath } from "./normalize.js";
@@ -266,9 +267,9 @@ async function fileExists(filePath: string): Promise<boolean> {
 
 async function readCodegraphManifest(outDir: string): Promise<ArtifactManifest | undefined> {
   const value = await readJsonIfPresent(path.join(outDir, MANIFEST_FILE));
-  if (!isRecord(value)) return undefined;
+  if (!isPlainRecord(value)) return undefined;
   if (value.schemaVersion !== 1 || value.graphJsonSchema !== "codegraph.graph-json") return undefined;
-  if (!isRecord(value.artifacts)) return undefined;
+  if (!isPlainRecord(value.artifacts)) return undefined;
   const artifacts: CodegraphArtifactBuildResult["artifacts"] = {};
   for (const [key, artifactFile] of Object.entries(value.artifacts)) {
     if (typeof artifactFile !== "string") continue;
@@ -297,11 +298,11 @@ async function isRecognizedCodegraphArtifact(filePath: string, fileName: string)
   }
   if (fileName === GRAPH_JSON_FILE) {
     const value = await readJsonIfPresent(filePath);
-    return isRecord(value) && value.format === "codegraph.graph-json";
+    return isPlainRecord(value) && value.format === "codegraph.graph-json";
   }
   if (fileName === QUESTIONS_FILE) {
     const value = await readJsonIfPresent(filePath);
-    return isRecord(value) && value.format === "codegraph.questions";
+    return isPlainRecord(value) && value.format === "codegraph.questions";
   }
   if (fileName === REPORT_FILE) {
     try {
@@ -368,10 +369,6 @@ async function readJsonIfPresent(filePath: string): Promise<unknown> {
     if (error instanceof SyntaxError) return undefined;
     throw error;
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function readDirectoryIfPresent(outDir: string): Promise<string[]> {

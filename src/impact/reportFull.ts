@@ -1,5 +1,6 @@
 import type { FileId } from "../types.js";
 import { type ProjectIndex } from "../indexer/types.js";
+import { mapExportSummary, mapReexportChains, mapTopImpacts } from "./reportShared.js";
 import { IMPACT_SCHEMA_VERSION } from "./types.js";
 import type {
   ChangedSymbol,
@@ -112,10 +113,7 @@ function buildFullExportSummary(
 ): Pick<ImpactReport, "exportSummary"> {
   if (!exportSummary.length) return {};
   return {
-    exportSummary: exportSummary.map((entry) => ({
-      ...entry,
-      file: displayFile(entry.file),
-    })),
+    exportSummary: mapExportSummary(exportSummary, displayFile),
   };
 }
 
@@ -124,14 +122,10 @@ function buildFullReexportChains(
   displayFile: (file: FileId) => FileId,
 ): Pick<ImpactReport, "reexportChains"> {
   if (!reexportChains) return {};
+  const mappedChains = mapReexportChains(reexportChains, displayFile);
+  if (!mappedChains) return {};
   return {
-    reexportChains: {
-      chains: reexportChains.chains.map((entry) => ({
-        ...entry,
-        file: displayFile(entry.file),
-        paths: entry.paths.map((pathChain) => pathChain.map((file) => displayFile(file))),
-      })),
-    },
+    reexportChains: mappedChains,
   };
 }
 
@@ -141,10 +135,7 @@ function buildFullTopImpacts(
 ): Pick<ImpactReport, "topImpacts"> {
   if (!topImpacts.length) return {};
   return {
-    topImpacts: topImpacts.map((item) => ({
-      ...item,
-      file: displayFile(item.file),
-    })),
+    topImpacts: mapTopImpacts(topImpacts, displayFile),
   };
 }
 

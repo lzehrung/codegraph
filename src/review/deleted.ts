@@ -10,13 +10,14 @@ import { collectLocalsAndExportsFromSource } from "../indexer/locals-and-exports
 import { type ExportEntry, type ImportBinding, type ModuleIndex, type ProjectIndex } from "../indexer/types.js";
 import { supportForFile } from "../languages.js";
 import type { Edge, FileId } from "../types.js";
+import { edgeKey, toRelativeEdge } from "../util/graphEdges.js";
 import { listResolutionCandidates, loadNearestTsconfigFor } from "../util/resolution.js";
 import {
   listWorkspacePackageResolutionCandidates,
   loadWorkspaceConfig,
   type WorkspaceConfig,
 } from "../util/workspace.js";
-import { normalizePath, toProjectDisplayPath } from "../util/paths.js";
+import { normalizePath } from "../util/paths.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
 
 const execFileAsync = promisify(execFile);
@@ -27,10 +28,6 @@ export type DeletedFileSnapshot = {
 };
 
 type ReviewableExportEntry = Exclude<ExportEntry, { type: "local" }>;
-
-function relativePath(root: string, file: string): string {
-  return toProjectDisplayPath(root, file);
-}
 
 function normalizeSpecifierBase(fromFile: string, spec: string): string {
   return normalizePath(path.resolve(path.dirname(fromFile), spec));
@@ -326,27 +323,6 @@ async function resolveDeletedSnapshotTarget(input: {
   }
 
   return { type: "external", name: spec };
-}
-
-export function edgeKey(edge: Edge): string {
-  const toKey = edge.to.type === "file" ? `file:${edge.to.path}` : `external:${edge.to.name}`;
-  const typeOnly = edge.typeOnly ? "1" : "0";
-  return `${edge.from}|${toKey}|${edge.raw}|${typeOnly}`;
-}
-
-export function toRelativeEdge(projectRoot: string, edge: Edge): Edge {
-  return {
-    from: relativePath(projectRoot, edge.from),
-    to:
-      edge.to.type === "file"
-        ? {
-            type: "file",
-            path: relativePath(projectRoot, edge.to.path),
-          }
-        : edge.to,
-    raw: edge.raw,
-    ...(edge.typeOnly ? { typeOnly: edge.typeOnly } : {}),
-  };
 }
 
 export async function collectDeletedImporterEdges(

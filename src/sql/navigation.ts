@@ -13,6 +13,7 @@ import type {
 import type { Range } from "../types.js";
 import { normalizePath } from "../util/paths.js";
 import { extractSqlFactsFromSource } from "./extractFacts.js";
+import { pushSqlLookupValue } from "./lookup.js";
 import {
   maskSqlStringsAndComments,
   normalizeSqlObjectName,
@@ -59,12 +60,6 @@ function sqlFiles(index: ProjectIndex): string[] {
     .sort((left, right) => left.localeCompare(right));
 }
 
-function pushDefinition(lookup: Map<string, SymbolDef[]>, key: string, definition: SymbolDef): void {
-  const existing = lookup.get(key);
-  if (existing) existing.push(definition);
-  else lookup.set(key, [definition]);
-}
-
 function buildSqlDefinitionLookup(index: ProjectIndex): SqlDefinitionLookup {
   const exact = new Map<string, SymbolDef[]>();
   const basename = new Map<string, SymbolDef[]>();
@@ -72,8 +67,8 @@ function buildSqlDefinitionLookup(index: ProjectIndex): SqlDefinitionLookup {
     const module = index.byFile.get(file);
     if (!module) continue;
     for (const local of module.locals) {
-      pushDefinition(exact, local.localName.toLowerCase(), local);
-      pushDefinition(basename, sqlObjectBaseName(local.localName).toLowerCase(), local);
+      pushSqlLookupValue(exact, local.localName.toLowerCase(), local);
+      pushSqlLookupValue(basename, sqlObjectBaseName(local.localName).toLowerCase(), local);
     }
   }
   return { exact, basename };

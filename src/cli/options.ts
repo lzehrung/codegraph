@@ -95,25 +95,46 @@ function parseIntegerOptionValue(
   return parsedValue;
 }
 
+function parseDefaultedIntegerOption(
+  rawValue: string | undefined,
+  optionName: string,
+  defaultValue: number,
+  expectedDescription: string,
+  minValue: number,
+  maxValue?: number,
+): number {
+  if (rawValue === undefined) {
+    return defaultValue;
+  }
+  return parseIntegerOptionValue(rawValue, optionName, expectedDescription, minValue, maxValue);
+}
+
+function parseOptionalIntegerOption(
+  rawValue: string | undefined,
+  optionName: string,
+  expectedDescription: string,
+  minValue: number,
+  maxValue?: number,
+): number | undefined {
+  if (rawValue === undefined) {
+    return undefined;
+  }
+  return parseIntegerOptionValue(rawValue, optionName, expectedDescription, minValue, maxValue);
+}
+
 export function parsePositiveIntegerOption(
   rawValue: string | undefined,
   optionName: string,
   defaultValue: number,
 ): number {
-  if (rawValue === undefined) {
-    return defaultValue;
-  }
-  return parseIntegerOptionValue(rawValue, optionName, "a positive integer", 1);
+  return parseDefaultedIntegerOption(rawValue, optionName, defaultValue, "a positive integer", 1);
 }
 
 export function parseOptionalPositiveIntegerOption(
   rawValue: string | undefined,
   optionName: string,
 ): number | undefined {
-  if (rawValue === undefined) {
-    return undefined;
-  }
-  return parseIntegerOptionValue(rawValue, optionName, "a positive integer", 1);
+  return parseOptionalIntegerOption(rawValue, optionName, "a positive integer", 1);
 }
 
 export function parseNonNegativeIntegerOption(
@@ -121,20 +142,14 @@ export function parseNonNegativeIntegerOption(
   optionName: string,
   defaultValue: number,
 ): number {
-  if (rawValue === undefined) {
-    return defaultValue;
-  }
-  return parseIntegerOptionValue(rawValue, optionName, "a non-negative integer", 0);
+  return parseDefaultedIntegerOption(rawValue, optionName, defaultValue, "a non-negative integer", 0);
 }
 
 export function parseOptionalNonNegativeIntegerOption(
   rawValue: string | undefined,
   optionName: string,
 ): number | undefined {
-  if (rawValue === undefined) {
-    return undefined;
-  }
-  return parseIntegerOptionValue(rawValue, optionName, "a non-negative integer", 0);
+  return parseOptionalIntegerOption(rawValue, optionName, "a non-negative integer", 0);
 }
 
 export function parseBoundedIntegerOption(
@@ -144,12 +159,10 @@ export function parseBoundedIntegerOption(
   minValue: number,
   maxValue: number,
 ): number {
-  if (rawValue === undefined) {
-    return defaultValue;
-  }
-  return parseIntegerOptionValue(
+  return parseDefaultedIntegerOption(
     rawValue,
     optionName,
+    defaultValue,
     `an integer from ${minValue} to ${maxValue}`,
     minValue,
     maxValue,
@@ -162,10 +175,7 @@ export function parseOptionalBoundedIntegerOption(
   minValue: number,
   maxValue: number,
 ): number | undefined {
-  if (rawValue === undefined) {
-    return undefined;
-  }
-  return parseIntegerOptionValue(
+  return parseOptionalIntegerOption(
     rawValue,
     optionName,
     `an integer from ${minValue} to ${maxValue}`,

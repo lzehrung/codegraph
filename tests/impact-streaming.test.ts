@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
-import { execFileSync } from "node:child_process";
 import {
   analyzeImpactFromDiff,
   analyzeImpactStreaming,
@@ -11,23 +10,10 @@ import {
 } from "../src/impact/index.js";
 import { impactItemEmissionKey } from "../src/impact/streaming.js";
 import { buildProjectIndex } from "../src/index.js";
+import { runGit as git } from "./helpers/git.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
-}
-
-function git(root: string, args: string[]): string {
-  return execFileSync("git", args, {
-    cwd: root,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      GIT_AUTHOR_NAME: "Codegraph Test",
-      GIT_AUTHOR_EMAIL: "codegraph@example.test",
-      GIT_COMMITTER_NAME: "Codegraph Test",
-      GIT_COMMITTER_EMAIL: "codegraph@example.test",
-    },
-  }).trim();
 }
 
 async function firstStreamError(stream: AsyncGenerator<ImpactStreamChunk>): Promise<string | undefined> {

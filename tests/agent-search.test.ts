@@ -2,11 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
+import { createAgentSession } from "../src/agent/session.js";
 import { searchCodegraph, searchCodegraphWithSession } from "../src/agent/search.js";
 import type { SymbolEdge, SymbolGraph, SymbolNode } from "../src/graphs.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "../src/indexer/types.js";
 import type { Edge, Graph, Range } from "../src/types.js";
+import { countingSession } from "./helpers/agent.js";
+import { isSymlinkUnavailable } from "./helpers/filesystem.js";
 
 async function mkRepo(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-search-"));
@@ -33,27 +35,6 @@ async function mkRepo(): Promise<string> {
     "CREATE TABLE public.users (id int primary key, email text);\nCREATE VIEW active_users AS SELECT id FROM public.users;\n",
   );
   return root;
-}
-
-function countingSession(session: AgentSession): { session: AgentSession; loads: () => number } {
-  let cached: Promise<AgentProjectSnapshot> | undefined;
-  let loadCount = 0;
-  return {
-    session: {
-      loadProject: async () => {
-        if (!cached) {
-          loadCount += 1;
-          cached = session.loadProject();
-        }
-        return await cached;
-      },
-      invalidate: () => {
-        cached = undefined;
-        session.invalidate();
-      },
-    },
-    loads: () => loadCount,
-  };
 }
 
 function oneLineRange(index: number): Range {
@@ -404,11 +385,3 @@ describe("agent search", () => {
     expect(response.results).toEqual([]);
   });
 });
-
-function isSymlinkUnavailable(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    "code" in error &&
-    (error.code === "EPERM" || error.code === "EACCES" || error.code === "ENOTSUP")
-  );
-}

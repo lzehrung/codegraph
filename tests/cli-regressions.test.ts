@@ -2,12 +2,13 @@ import { describe, it, expect } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fsp from "node:fs/promises";
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { textGrep } from "../src/index.js";
 import { isCliDiscoveryRelativePathInside, runCli } from "../src/cli.js";
 import { getSkillTargetDirForAgent, type SkillInstallAgent } from "../src/cli/skill.js";
 import packageJson from "../package.json" with { type: "json" };
+import { runGit as git } from "./helpers/git.js";
 
 const tsxCliPath = path.resolve(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs");
 const sourceCliPath = path.resolve(process.cwd(), "src", "cli.ts");
@@ -1421,20 +1422,6 @@ index e69de29..4b825dc 100644
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
-}
-
-function git(cwd: string, args: string[]): string {
-  return execFileSync("git", args, {
-    cwd,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      GIT_AUTHOR_NAME: "Codegraph Test",
-      GIT_AUTHOR_EMAIL: "codegraph@example.test",
-      GIT_COMMITTER_NAME: "Codegraph Test",
-      GIT_COMMITTER_EMAIL: "codegraph@example.test",
-    },
-  }).trim();
 }
 
 function initGitRepo(root: string): void {

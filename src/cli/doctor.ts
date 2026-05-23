@@ -11,6 +11,7 @@ import {
   pathExists,
   type CodegraphPackageIdentity,
 } from "./packageInfo.js";
+import { isPlainRecord } from "../util/guards.js";
 
 type IndexedArtifactReport = {
   type: "jsonGraph" | "sqliteGraph" | "diskCache" | "artifactBundle" | "unknown";
@@ -40,9 +41,9 @@ function statIfExists(filePath: string): fs.Stats | null {
 function readArtifactManifest(dirPath: string): { artifacts: Record<string, string> } | null {
   try {
     const parsed = JSON.parse(fs.readFileSync(path.join(dirPath, "manifest.json"), "utf8"));
-    if (!isRecord(parsed)) return null;
+    if (!isPlainRecord(parsed)) return null;
     if (parsed.schemaVersion !== 1 || parsed.graphJsonSchema !== "codegraph.graph-json") return null;
-    if (!isRecord(parsed.artifacts)) return null;
+    if (!isPlainRecord(parsed.artifacts)) return null;
     const artifacts: Record<string, string> = {};
     for (const [key, value] of Object.entries(parsed.artifacts)) {
       if (typeof value === "string") artifacts[key] = value;
@@ -51,10 +52,6 @@ function readArtifactManifest(dirPath: string): { artifacts: Record<string, stri
   } catch {
     return null;
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function detectIndexedArtifactType(filePath: string, stats: fs.Stats | null): IndexedArtifactReport["type"] {

@@ -8,6 +8,7 @@ import type { Edge, Range } from "../types.js";
 import { normalizePath } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
 import { extractSqlFactsFromSource, sqlObjectBaseName } from "./extractFacts.js";
+import { pushSqlLookupValue } from "./lookup.js";
 import type { SqlFactKind, SqlStatementFact } from "./types.js";
 
 const SQL_FACT_READ_CONCURRENCY = 32;
@@ -99,12 +100,6 @@ function referenceObjectNames(fact: SqlStatementFact): string[] {
   return Array.from(new Set(names));
 }
 
-function pushDefinition(lookup: Map<string, SqlStatementFact[]>, key: string, fact: SqlStatementFact): void {
-  const existing = lookup.get(key);
-  if (existing) existing.push(fact);
-  else lookup.set(key, [fact]);
-}
-
 function uniqueFacts(candidates: readonly SqlStatementFact[]): SqlStatementFact[] {
   const unique: SqlStatementFact[] = [];
   const seen = new Set<string>();
@@ -149,8 +144,8 @@ function addDefinition(
 ): void {
   if (!fact.objectName) return;
   const keys = definitionKeys(fact.objectName);
-  pushDefinition(definitionsByExactName, keys.exact, fact);
-  pushDefinition(definitionsByBaseName, keys.base, fact);
+  pushSqlLookupValue(definitionsByExactName, keys.exact, fact);
+  pushSqlLookupValue(definitionsByBaseName, keys.base, fact);
 }
 
 function sqlEdgesForCandidates(

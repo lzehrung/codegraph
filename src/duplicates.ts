@@ -42,6 +42,21 @@ export type DuplicateSuggestion = {
   reasons: string[];
 };
 
+export type DuplicateGroup = {
+  id: string;
+  score: number;
+  confidence: DuplicateConfidence;
+  cloneType: DuplicateCloneType;
+  primaryLeft: DuplicateUnitRef;
+  primaryRight: DuplicateUnitRef;
+  variants: DuplicateSuggestion[];
+  variantCount: number;
+  rawPairCount: number;
+  omittedVariantCount: number;
+  metrics: DuplicateMetrics;
+  reasons: string[];
+};
+
 export type DuplicateDetectionOptions = {
   projectRoot?: string;
   files?: readonly string[];
@@ -55,10 +70,14 @@ export type DuplicateDetectionOptions = {
   maxBucketSize?: number;
   shingleSize?: number;
   windowSize?: number;
+  includeRawPairs?: boolean;
 };
 
 export type DuplicateDetectionOmittedCounts = {
+  groups: number;
+  /** @deprecated Use `groups`; retained as a compatibility alias. */
   suggestions: number;
+  rawSuggestions: number;
   oversizedBuckets: number;
   belowThresholdUnits: number;
   overlappingPairs: number;
@@ -70,11 +89,18 @@ export type DuplicateDetectionStats = {
 };
 
 export type DuplicateDetectionResult = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   units: number;
-  suggestions: DuplicateSuggestion[];
+  groups: DuplicateGroup[];
+  suggestions?: DuplicateSuggestion[];
   omittedCounts: DuplicateDetectionOmittedCounts;
   stats: DuplicateDetectionStats;
+};
+
+type UnitCluster = {
+  id: string;
+  refs: DuplicateUnitRef[];
+  primary: DuplicateUnitRef;
 };
 
 type DuplicateInternalUnit = DuplicateUnitRef & {
@@ -110,6 +136,7 @@ const DEFAULT_MIN_TOKENS = 40;
 const DEFAULT_MAX_TOKENS = 800;
 const DEFAULT_LIMIT = 50;
 const DEFAULT_MAX_BUCKET_SIZE = 200;
+const DEFAULT_GROUP_VARIANT_LIMIT = 5;
 const DEFAULT_SHINGLE_SIZE = 5;
 const DEFAULT_WINDOW_SIZE = 4;
 const DEFAULT_MAX_FINGERPRINTS = 128;
@@ -133,6 +160,13 @@ const confidenceRank: Record<DuplicateConfidence, number> = {
   low: 1,
   medium: 2,
   high: 3,
+};
+
+const cloneTypeRank: Record<DuplicateCloneType, number> = {
+  weak: 1,
+  near: 2,
+  renamed: 3,
+  exact: 4,
 };
 
 const symbolUnitKinds = new Set<SymbolKind>([
@@ -284,6 +318,22 @@ function lineSpan(unit: Pick<DuplicateUnitRef, "startLine" | "endLine">): number
   return Math.max(1, unit.endLine - unit.startLine + 1);
 }
 
+function lineOverlap(
+  left: Pick<DuplicateUnitRef, "startLine" | "endLine">,
+  right: Pick<DuplicateUnitRef, "startLine" | "endLine">,
+): number {
+  const startLine = Math.max(left.startLine, right.startLine);
+  const endLine = Math.min(left.endLine, right.endLine);
+  return Math.max(0, endLine - startLine + 1);
+}
+
+function rangesSubstantiallyOverlap(left: DuplicateUnitRef, right: DuplicateUnitRef): boolean {
+  if (left.file !== right.file || left.languageId !== right.languageId) return false;
+  const overlap = lineOverlap(left, right);
+  if (!overlap) return false;
+  return overlap / Math.min(lineSpan(left), lineSpan(right)) >= 0.8;
+}
+
 function ratio(left: number, right: number): number {
   if (!left || !right) return 0;
   return Math.min(left, right) / Math.max(left, right);
@@ -305,20 +355,36 @@ function normalizeConfidence(value: DuplicateConfidence | undefined): DuplicateC
   return value ?? "medium";
 }
 
-function normalizePositiveIntegerOption(value: number | undefined, optionName: string, fallback: number): number {
+function normalizeIntegerOption(
+  value: number | undefined,
+  optionName: string,
+  fallback: number,
+  minValue: number,
+  expectedDescription: string,
+): number {
   const resolved = value ?? fallback;
-  if (!Number.isInteger(resolved) || resolved < 1) {
-    throw new Error(`Invalid ${optionName} value "${String(resolved)}". Expected a positive integer.`);
+  if (!Number.isInteger(resolved) || resolved < minValue) {
+    throw new Error(`Invalid ${optionName} value "${String(resolved)}". Expected ${expectedDescription}.`);
   }
   return resolved;
 }
 
+function normalizePositiveIntegerOption(value: number | undefined, optionName: string, fallback: number): number {
+  return normalizeIntegerOption(value, optionName, fallback, 1, "a positive integer");
+}
+
 function normalizeNonNegativeIntegerOption(value: number | undefined, optionName: string, fallback: number): number {
-  const resolved = value ?? fallback;
-  if (!Number.isInteger(resolved) || resolved < 0) {
-    throw new Error(`Invalid ${optionName} value "${String(resolved)}". Expected a non-negative integer.`);
-  }
-  return resolved;
+  return normalizeIntegerOption(value, optionName, fallback, 0, "a non-negative integer");
+}
+
+function bestConfidence(left: DuplicateConfidence, right: DuplicateConfidence): DuplicateConfidence {
+  if (confidenceRank[left] >= confidenceRank[right]) return left;
+  return right;
+}
+
+function bestCloneType(left: DuplicateCloneType, right: DuplicateCloneType): DuplicateCloneType {
+  if (cloneTypeRank[left] >= cloneTypeRank[right]) return left;
+  return right;
 }
 
 function confidenceForScore(score: number): DuplicateConfidence {
@@ -784,6 +850,222 @@ function unitRef(unit: DuplicateInternalUnit): DuplicateUnitRef {
   };
 }
 
+function unitRefIdentity(ref: DuplicateUnitRef): string {
+  return [
+    ref.file,
+    ref.startLine,
+    ref.endLine,
+    ref.languageId,
+    ref.kind,
+    ref.name ?? "",
+    ref.symbolKind ?? "",
+  ].join("\u0000");
+}
+
+function compareUnitRefs(left: DuplicateUnitRef, right: DuplicateUnitRef): number {
+  const fileCompare = left.file.localeCompare(right.file);
+  if (fileCompare) return fileCompare;
+  const startCompare = left.startLine - right.startLine;
+  if (startCompare) return startCompare;
+  const endCompare = left.endLine - right.endLine;
+  if (endCompare) return endCompare;
+  return (left.name ?? "").localeCompare(right.name ?? "");
+}
+
+function unitPrimaryRank(ref: DuplicateUnitRef): number {
+  let rank = 0;
+  if (ref.kind === "symbol") rank += 8;
+  if (ref.name) rank += 4;
+  if (ref.symbolKind !== undefined) rank += 2;
+  return rank;
+}
+
+function comparePrimaryUnitRefs(left: DuplicateUnitRef, right: DuplicateUnitRef): number {
+  const rankCompare = unitPrimaryRank(right) - unitPrimaryRank(left);
+  if (rankCompare) return rankCompare;
+  const spanCompare = lineSpan(left) - lineSpan(right);
+  if (spanCompare) return spanCompare;
+  return compareUnitRefs(left, right);
+}
+
+function suggestionPrimaryRank(suggestion: DuplicateSuggestion): number {
+  let rank = 0;
+  if (suggestion.left.kind === "symbol") rank += 8;
+  if (suggestion.right.kind === "symbol") rank += 8;
+  if (suggestion.left.name) rank += 2;
+  if (suggestion.right.name) rank += 2;
+  return rank;
+}
+
+function compareSuggestions(left: DuplicateSuggestion, right: DuplicateSuggestion): number {
+  const scoreCompare = right.score - left.score;
+  if (scoreCompare) return scoreCompare;
+  const confidenceCompare = confidenceRank[right.confidence] - confidenceRank[left.confidence];
+  if (confidenceCompare) return confidenceCompare;
+  const cloneTypeCompare = cloneTypeRank[right.cloneType] - cloneTypeRank[left.cloneType];
+  if (cloneTypeCompare) return cloneTypeCompare;
+  const leftFileCompare = left.left.file.localeCompare(right.left.file);
+  if (leftFileCompare) return leftFileCompare;
+  const rightFileCompare = left.right.file.localeCompare(right.right.file);
+  if (rightFileCompare) return rightFileCompare;
+  return left.left.startLine - right.left.startLine;
+}
+
+function compareSuggestionsForPrimary(left: DuplicateSuggestion, right: DuplicateSuggestion): number {
+  const rankCompare = suggestionPrimaryRank(right) - suggestionPrimaryRank(left);
+  if (rankCompare) return rankCompare;
+  return compareSuggestions(left, right);
+}
+
+function createUnitClusters(refs: readonly DuplicateUnitRef[]): Map<string, UnitCluster> {
+  const uniqueRefs = new Map<string, DuplicateUnitRef>();
+  for (const ref of refs) uniqueRefs.set(unitRefIdentity(ref), ref);
+  const parent = new Map<string, string>();
+  for (const key of uniqueRefs.keys()) parent.set(key, key);
+  const find = (key: string): string => {
+    const current = parent.get(key);
+    if (current === undefined || current === key) return key;
+    const root = find(current);
+    parent.set(key, root);
+    return root;
+  };
+  const union = (left: string, right: string): void => {
+    const leftRoot = find(left);
+    const rightRoot = find(right);
+    if (leftRoot === rightRoot) return;
+    if (leftRoot < rightRoot) {
+      parent.set(rightRoot, leftRoot);
+      return;
+    }
+    parent.set(leftRoot, rightRoot);
+  };
+  const refsByFile = new Map<string, Array<{ key: string; ref: DuplicateUnitRef }>>();
+  for (const [key, ref] of uniqueRefs) {
+    const fileKey = `${ref.file}\u0000${ref.languageId}`;
+    const existing = refsByFile.get(fileKey);
+    if (existing) existing.push({ key, ref });
+    else refsByFile.set(fileKey, [{ key, ref }]);
+  }
+  for (const fileRefs of refsByFile.values()) {
+    fileRefs.sort((left, right) => compareUnitRefs(left.ref, right.ref));
+    for (let i = 0; i < fileRefs.length; i++) {
+      const left = fileRefs[i]!;
+      for (let j = i + 1; j < fileRefs.length; j++) {
+        const right = fileRefs[j]!;
+        if (right.ref.startLine > left.ref.endLine) break;
+        if (rangesSubstantiallyOverlap(left.ref, right.ref)) union(left.key, right.key);
+      }
+    }
+  }
+  const refsByRoot = new Map<string, DuplicateUnitRef[]>();
+  for (const [key, ref] of uniqueRefs) {
+    const root = find(key);
+    const existing = refsByRoot.get(root);
+    if (existing) existing.push(ref);
+    else refsByRoot.set(root, [ref]);
+  }
+  const clustersByRef = new Map<string, UnitCluster>();
+  for (const refsInCluster of refsByRoot.values()) {
+    refsInCluster.sort(comparePrimaryUnitRefs);
+    const primary = refsInCluster[0]!;
+    const cluster = { id: shortHashText(unitRefIdentity(primary)), refs: refsInCluster, primary };
+    for (const ref of refsInCluster) clustersByRef.set(unitRefIdentity(ref), cluster);
+  }
+  return clustersByRef;
+}
+
+function singletonUnitCluster(ref: DuplicateUnitRef): UnitCluster {
+  return { id: shortHashText(unitRefIdentity(ref)), refs: [ref], primary: ref };
+}
+
+function orderedGroupKey(left: UnitCluster, right: UnitCluster): string {
+  if (left.id < right.id) return `${left.id}\u0000${right.id}`;
+  return `${right.id}\u0000${left.id}`;
+}
+
+function mergeReasons(suggestions: readonly DuplicateSuggestion[]): string[] {
+  const reasons = new Set<string>();
+  for (const suggestion of suggestions) {
+    for (const reason of suggestion.reasons) reasons.add(reason);
+  }
+  return Array.from(reasons).sort();
+}
+
+function groupForSuggestions(
+  key: string,
+  suggestions: DuplicateSuggestion[],
+  left: UnitCluster,
+  right: UnitCluster,
+  variantLimit: number,
+): DuplicateGroup {
+  suggestions.sort(compareSuggestionsForPrimary);
+  const primary = suggestions[0]!;
+  const variants = suggestions.slice(0, variantLimit);
+  let score = primary.score;
+  let confidence = primary.confidence;
+  let cloneType = primary.cloneType;
+  for (const suggestion of suggestions.slice(1)) {
+    score = Math.max(score, suggestion.score);
+    confidence = bestConfidence(confidence, suggestion.confidence);
+    cloneType = bestCloneType(cloneType, suggestion.cloneType);
+  }
+  return {
+    id: shortHashText(key),
+    score,
+    confidence,
+    cloneType,
+    primaryLeft: left.primary,
+    primaryRight: right.primary,
+    variants,
+    variantCount: variants.length,
+    rawPairCount: suggestions.length,
+    omittedVariantCount: Math.max(0, suggestions.length - variants.length),
+    metrics: primary.metrics,
+    reasons: mergeReasons(suggestions),
+  };
+}
+
+function compareGroups(left: DuplicateGroup, right: DuplicateGroup): number {
+  const scoreCompare = right.score - left.score;
+  if (scoreCompare) return scoreCompare;
+  const confidenceCompare = confidenceRank[right.confidence] - confidenceRank[left.confidence];
+  if (confidenceCompare) return confidenceCompare;
+  const cloneTypeCompare = cloneTypeRank[right.cloneType] - cloneTypeRank[left.cloneType];
+  if (cloneTypeCompare) return cloneTypeCompare;
+  const tokenCompare =
+    right.primaryLeft.tokenCount + right.primaryRight.tokenCount - (left.primaryLeft.tokenCount + left.primaryRight.tokenCount);
+  if (tokenCompare) return tokenCompare;
+  const leftCompare = compareUnitRefs(left.primaryLeft, right.primaryLeft);
+  if (leftCompare) return leftCompare;
+  return compareUnitRefs(left.primaryRight, right.primaryRight);
+}
+
+function groupSuggestions(suggestions: readonly DuplicateSuggestion[], includeRawPairs: boolean): DuplicateGroup[] {
+  const refs = suggestions.flatMap((suggestion) => [suggestion.left, suggestion.right]);
+  const clusters = createUnitClusters(refs);
+  const variantLimit = includeRawPairs ? Number.POSITIVE_INFINITY : DEFAULT_GROUP_VARIANT_LIMIT;
+  const suggestionsByGroup = new Map<string, { left: UnitCluster; right: UnitCluster; suggestions: DuplicateSuggestion[] }>();
+  for (const suggestion of suggestions) {
+    let leftCluster = clusters.get(unitRefIdentity(suggestion.left));
+    let rightCluster = clusters.get(unitRefIdentity(suggestion.right));
+    if (!leftCluster || !rightCluster) continue;
+    if (leftCluster.id === rightCluster.id) {
+      if (rangesSubstantiallyOverlap(suggestion.left, suggestion.right)) continue;
+      leftCluster = singletonUnitCluster(suggestion.left);
+      rightCluster = singletonUnitCluster(suggestion.right);
+    }
+    const key = orderedGroupKey(leftCluster, rightCluster);
+    const existing = suggestionsByGroup.get(key);
+    if (existing) existing.suggestions.push(suggestion);
+    else suggestionsByGroup.set(key, { left: leftCluster, right: rightCluster, suggestions: [suggestion] });
+  }
+  const groups = Array.from(suggestionsByGroup, ([key, value]) =>
+    groupForSuggestions(key, value.suggestions, value.left, value.right, variantLimit),
+  );
+  groups.sort(compareGroups);
+  return groups;
+}
+
 /** Finds scored duplicate candidates from an already-built project index. */
 export async function findDuplicates(
   index: ProjectIndex,
@@ -835,23 +1117,21 @@ export async function findDuplicates(
     suggestions.push(suggestion);
   }
 
-  suggestions.sort((left, right) => {
-    const scoreCompare = right.score - left.score;
-    if (scoreCompare) return scoreCompare;
-    const leftFileCompare = left.left.file.localeCompare(right.left.file);
-    if (leftFileCompare) return leftFileCompare;
-    const rightFileCompare = left.right.file.localeCompare(right.right.file);
-    if (rightFileCompare) return rightFileCompare;
-    return left.left.startLine - right.left.startLine;
-  });
+  suggestions.sort(compareSuggestions);
 
-  const limitedSuggestions = suggestions.slice(0, limit);
-  return {
-    schemaVersion: 1,
+  const includeRawPairs = options.includeRawPairs ?? false;
+  const groups = groupSuggestions(suggestions, includeRawPairs);
+  const limitedGroups = groups.slice(0, limit);
+  const omittedGroups = Math.max(0, groups.length - limitedGroups.length);
+  const limitedRawSuggestions = includeRawPairs ? suggestions.slice(0, limit) : [];
+  const result: DuplicateDetectionResult = {
+    schemaVersion: 2,
     units: units.length,
-    suggestions: limitedSuggestions,
+    groups: limitedGroups,
     omittedCounts: {
-      suggestions: Math.max(0, suggestions.length - limitedSuggestions.length),
+      groups: omittedGroups,
+      suggestions: omittedGroups,
+      rawSuggestions: Math.max(0, suggestions.length - limitedRawSuggestions.length),
       oversizedBuckets,
       belowThresholdUnits,
       overlappingPairs,
@@ -861,4 +1141,8 @@ export async function findDuplicates(
       candidatePairs: pairs.size,
     },
   };
+  if (includeRawPairs) {
+    result.suggestions = limitedRawSuggestions;
+  }
+  return result;
 }

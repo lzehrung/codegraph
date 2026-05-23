@@ -1,18 +1,6 @@
 import path from "node:path";
-import { listResolutionCandidates } from "../resolutionCandidates.js";
-import { directoryExists, fileExists, loadJSON, type MinimalPackageJson } from "../workspace.js";
-
-async function findFirstExistingResolutionCandidate(
-  base: string,
-  resolutionExtensions?: readonly string[],
-): Promise<string | null> {
-  for (const candidate of listResolutionCandidates(base, resolutionExtensions)) {
-    if (await fileExists(candidate)) {
-      return path.resolve(candidate);
-    }
-  }
-  return null;
-}
+import { findFirstExistingResolutionCandidate } from "./findFirstExisting.js";
+import { directoryExists, loadJSON, type MinimalPackageJson } from "../workspace.js";
 
 export async function resolveFromNodeModules(
   spec: string,

@@ -13,7 +13,7 @@ import { analyzeImpactFromDiff } from "./impact/index.js";
 import type { CompactImpactReport, ImpactOptions, ImpactReport } from "./impact/types.js";
 import type { Edge, Range } from "./types.js";
 import { collectGraph } from "./graph-builder.js";
-import { getDependencies, getReverseDependencies } from "./graphs/queries.js";
+import { getDependencies, getReverseDependencies, type DependencyNode } from "./graphs/queries.js";
 import { getHotspots } from "./graphs/hotspots.js";
 import type { NativeRuntimeMode } from "./native/treeSitterNative.js";
 import { fileExists } from "./util/workspace.js";
@@ -91,6 +91,30 @@ export type ToolDependencyEntry = {
   file: string;
   depth: number;
 };
+
+type ToolDependencyOptions = ToolRuntimeOptions & {
+  depth?: number;
+  limit?: number;
+};
+
+type ToolDependencyListResult =
+  | {
+      status: "ok";
+      file: string;
+      entries: ToolDependencyEntry[];
+      truncated: boolean;
+    }
+  | {
+      status: "not_found";
+      file: string;
+      reason: "file_not_found" | "file_not_indexed";
+      error: string;
+    }
+  | {
+      status: "error";
+      error: string;
+      reason?: "outside_project_root";
+    };
 
 /** File-level hotspot metrics returned by `tool_getHotspots`. */
 export type ToolHotspotEntry = {
@@ -342,12 +366,7 @@ export async function tool_getGraph(
 export async function tool_getDependencies(
   root: string,
   filePath: string,
-  options: {
-    depth?: number;
-    limit?: number;
-    index?: ProjectIndex;
-    native?: NativeRuntimeMode;
-  } = {},
+  options: ToolDependencyOptions = {},
 ): Promise<
   | {
       status: "ok";
@@ -367,37 +386,18 @@ export async function tool_getDependencies(
       reason?: "outside_project_root";
     }
 > {
-  try {
-    const resolvedFile = resolveToolFileInput(root, filePath);
-    if (resolvedFile.status === "error") {
-      return resolvedFile;
-    }
-
-    const index = await getToolIndex(root, options);
-    const missing = await getToolMissingFileResult(index, resolvedFile.absPath, resolvedFile.relativeFile);
-    if (missing) {
-      return missing;
-    }
-
-    const limit = getToolLimit(options.limit) ?? 20;
-    const dependencies = getDependencies(index.graph, resolvedFile.absPath, {
-      ...(options.depth !== undefined ? { depth: options.depth } : {}),
-      limit: limit + 1,
-    });
-    const limited = boundAgentList(dependencies, limit).items.map((entry) => ({
-      file: normalizeToolFileOutput(root, entry.file),
-      depth: entry.depth,
-    }));
-
-    return {
-      status: "ok",
-      file: resolvedFile.relativeFile,
-      dependencies: limited,
-      truncated: dependencies.length !== limited.length,
-    };
-  } catch (error) {
-    return { status: "error", error: String(error) };
+  const result = await collectToolDependencyEntries(root, filePath, options, (index, file, traversalOptions) =>
+    getDependencies(index.graph, file, traversalOptions),
+  );
+  if (result.status !== "ok") {
+    return result;
   }
+  return {
+    status: "ok",
+    file: result.file,
+    dependencies: result.entries,
+    truncated: result.truncated,
+  };
 }
 
 /**
@@ -406,12 +406,7 @@ export async function tool_getDependencies(
 export async function tool_getReverseDependencies(
   root: string,
   filePath: string,
-  options: {
-    depth?: number;
-    limit?: number;
-    index?: ProjectIndex;
-    native?: NativeRuntimeMode;
-  } = {},
+  options: ToolDependencyOptions = {},
 ): Promise<
   | {
       status: "ok";
@@ -431,6 +426,30 @@ export async function tool_getReverseDependencies(
       reason?: "outside_project_root";
     }
 > {
+  const result = await collectToolDependencyEntries(root, filePath, options, (index, file, traversalOptions) =>
+    getReverseDependencies(index.graph, file, traversalOptions),
+  );
+  if (result.status !== "ok") {
+    return result;
+  }
+  return {
+    status: "ok",
+    file: result.file,
+    dependents: result.entries,
+    truncated: result.truncated,
+  };
+}
+
+async function collectToolDependencyEntries(
+  root: string,
+  filePath: string,
+  options: ToolDependencyOptions,
+  collectEntries: (
+    index: ProjectIndex,
+    file: string,
+    traversalOptions: { depth?: number; limit: number },
+  ) => DependencyNode[],
+): Promise<ToolDependencyListResult> {
   try {
     const resolvedFile = resolveToolFileInput(root, filePath);
     if (resolvedFile.status === "error") {
@@ -444,11 +463,11 @@ export async function tool_getReverseDependencies(
     }
 
     const limit = getToolLimit(options.limit) ?? 20;
-    const dependents = getReverseDependencies(index.graph, resolvedFile.absPath, {
+    const entries = collectEntries(index, resolvedFile.absPath, {
       ...(options.depth !== undefined ? { depth: options.depth } : {}),
       limit: limit + 1,
     });
-    const limited = boundAgentList(dependents, limit).items.map((entry) => ({
+    const limited = boundAgentList(entries, limit).items.map((entry) => ({
       file: normalizeToolFileOutput(root, entry.file),
       depth: entry.depth,
     }));
@@ -456,8 +475,8 @@ export async function tool_getReverseDependencies(
     return {
       status: "ok",
       file: resolvedFile.relativeFile,
-      dependents: limited,
-      truncated: dependents.length !== limited.length,
+      entries: limited,
+      truncated: entries.length !== limited.length,
     };
   } catch (error) {
     return { status: "error", error: String(error) };

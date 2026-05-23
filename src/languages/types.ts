@@ -1,27 +1,8 @@
-import type { JsLanguage } from "../jsFallback.js";
+import type { JsLanguage, JsPoint, JsSyntaxNode } from "../jsFallback.js";
 export type { JsLanguage };
 
-export interface SyntaxPositionLike {
-  row: number;
-  column: number;
-}
-
-export interface SyntaxNodeLike {
-  id?: number;
-  type: string;
-  text: string;
-  startIndex: number;
-  endIndex: number;
-  startPosition: SyntaxPositionLike;
-  endPosition: SyntaxPositionLike;
-  parent: SyntaxNodeLike | null;
-  namedChildren: SyntaxNodeLike[];
-  previousSibling?: SyntaxNodeLike | null;
-  previousNamedSibling?: SyntaxNodeLike | null;
-  child(index: number): SyntaxNodeLike | null;
-  childForFieldName(fieldName: string): SyntaxNodeLike | null;
-}
-
+export type SyntaxPositionLike = JsPoint;
+export type SyntaxNodeLike = JsSyntaxNode;
 export interface SyntaxTreeLike {
   rootNode: SyntaxNodeLike & {
     descendantForIndex(startIndex: number, endIndex: number): SyntaxNodeLike;
