@@ -3,7 +3,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { GRAPH_ONLY_RESOLUTION_EXTENSIONS } from "./graphOnlyExtensions.js";
 import { normalizePath, normalizeResolutionHints } from "./paths.js";
-import { DEFAULT_RESOLUTION_EXTENSIONS, listResolutionCandidates } from "./resolutionCandidates.js";
+import { DEFAULT_RESOLUTION_EXTENSIONS, getResolutionExtensions } from "./resolutionCandidates.js";
 import {
   clearWorkspaceCaches,
   clearFileExistsCache,
@@ -13,6 +13,7 @@ import {
   type WorkspaceConfig,
 } from "./workspace.js";
 import { clearJvmResolutionCaches, resolveJavaImportPath, resolveKotlinImportPath } from "./resolution/jvm.js";
+import { findFirstExistingResolutionCandidate } from "./resolution/findFirstExisting.js";
 import { resolveGoImportPath } from "./resolution/go.js";
 import { resolveFromNodeModules } from "./resolution/node.js";
 import { clearPhpResolutionCaches, getPhpComposerImplicitFiles, resolvePhpImportPath } from "./resolution/php.js";
@@ -52,11 +53,6 @@ const GRAPH_ONLY_LANGUAGE_SOURCE_RESOLUTION_EXTENSIONS: Record<string, readonly 
   astro: [".astro", ...DEFAULT_RESOLUTION_EXTENSIONS],
 };
 
-function getResolutionExtensions(resolutionExtensions?: readonly string[]): string[] {
-  const extensions = resolutionExtensions === undefined ? DEFAULT_RESOLUTION_EXTENSIONS : resolutionExtensions;
-  return Array.from(new Set(extensions));
-}
-
 function fileExistsSync(p: string): boolean {
   try {
     return fs.statSync(p).isFile();
@@ -82,18 +78,6 @@ export function getGraphOnlyResolutionExtensions(
       ...DEFAULT_RESOLUTION_EXTENSIONS,
     ]),
   );
-}
-
-async function findFirstExistingResolutionCandidate(
-  base: string,
-  resolutionExtensions?: readonly string[],
-): Promise<string | null> {
-  for (const candidate of listResolutionCandidates(base, resolutionExtensions)) {
-    if (await fileExists(candidate)) {
-      return path.resolve(candidate);
-    }
-  }
-  return null;
 }
 
 async function findFirstExistingScssPartialCandidate(base: string): Promise<string | null> {

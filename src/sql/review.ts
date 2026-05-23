@@ -4,6 +4,7 @@ import { listProjectFiles } from "../util/projectFiles.js";
 import { normalizePath } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
 import { extractSqlFactsFromSource, sqlObjectBaseName } from "./extractFacts.js";
+import { sqlObjectLookupKeys } from "./lookup.js";
 import type { SqlBridgeReason, SqlStatementFact } from "./types.js";
 
 export type SqlReviewContextEntry = {
@@ -97,12 +98,6 @@ async function collectChangedSqlLiteralSources(changedFiles: readonly string[]):
   return sources;
 }
 
-function objectLookupKeys(name: string): string[] {
-  const normalized = name.toLowerCase();
-  const baseName = sqlObjectBaseName(name).toLowerCase();
-  return normalized === baseName ? [normalized] : [normalized, baseName];
-}
-
 function changedSourceObjectMentions(source: string): Set<string> {
   const mentions = new Set<string>();
   const objectRe = /[A-Za-z_][A-Za-z0-9_$]*(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_$]*)*/g;
@@ -122,7 +117,7 @@ function collectChangedSqlLiteralObjects(
   for (const fact of facts) {
     if (!fact.objectName) continue;
     const canonicalName = fact.objectName.toLowerCase();
-    for (const key of objectLookupKeys(fact.objectName)) {
+    for (const key of sqlObjectLookupKeys(fact.objectName)) {
       const existing = objectNamesByKey.get(key);
       if (existing) existing.add(canonicalName);
       else objectNamesByKey.set(key, new Set([canonicalName]));

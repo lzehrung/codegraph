@@ -253,27 +253,8 @@ async function applyJavaStatementOverride(
 ): Promise<boolean> {
   const parsed = parseJavaImportStatement(normalizedStmt);
   if (!parsed) return false;
-
-  const resolved = await context.resolveFrom(parsed.from);
-  if (parsed.kind === "star") {
-    context.pushBinding({
-      kind: "star",
-      from: parsed.from,
-      resolved,
-      typeOnly,
-    });
-    return true;
-  }
-
-  context.pushBinding({
-    kind: "named",
-    local: parsed.imported,
-    imported: parsed.imported,
-    from: parsed.from,
-    resolved,
-    typeOnly,
-  });
-  return true;
+  const local = parsed.kind === "named" ? parsed.imported : undefined;
+  return await pushJvmImportBinding(context, parsed, local, typeOnly);
 }
 
 async function applyKotlinStatementOverride(
@@ -283,7 +264,16 @@ async function applyKotlinStatementOverride(
 ): Promise<boolean> {
   const parsed = parseKotlinImportStatement(normalizedStmt);
   if (!parsed) return false;
+  const local = parsed.kind === "named" ? parsed.local : undefined;
+  return await pushJvmImportBinding(context, parsed, local, typeOnly);
+}
 
+async function pushJvmImportBinding(
+  context: LanguageSpecificImportContext,
+  parsed: { kind: "star"; from: string } | { kind: "named"; from: string; imported: string },
+  local: string | undefined,
+  typeOnly: boolean,
+): Promise<boolean> {
   const resolved = await context.resolveFrom(parsed.from);
   if (parsed.kind === "star") {
     context.pushBinding({
@@ -297,7 +287,7 @@ async function applyKotlinStatementOverride(
 
   context.pushBinding({
     kind: "named",
-    local: parsed.local,
+    local: local ?? parsed.imported,
     imported: parsed.imported,
     from: parsed.from,
     resolved,

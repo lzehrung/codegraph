@@ -6,6 +6,7 @@ import { buildProjectIndex, listProjectFiles, discoverProjectFiles } from "../sr
 import { DEFAULT_PROJECT_MANIFESTS } from "../src/util.js";
 import { isRelativePathInside, translateGlobRootIgnoreGlobsForScanRoot } from "../src/util/projectFiles.js";
 import { parseDotnetName, parseGoModuleName, parsePomName, parseTomlName } from "../src/util/projectFiles/parsers.js";
+import { isSymlinkUnavailable } from "./helpers/filesystem.js";
 
 const normalize = (value: string) => value.replace(/\\/g, "/");
 
@@ -687,11 +688,3 @@ describe("project file discovery", () => {
     expect(discovered.map(normalize)).toContain(normalize(appFile));
   });
 });
-
-function isSymlinkUnavailable(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    "code" in error &&
-    (error.code === "EPERM" || error.code === "EACCES" || error.code === "ENOTSUP")
-  );
-}

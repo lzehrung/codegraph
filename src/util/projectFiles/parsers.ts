@@ -1,10 +1,8 @@
+import { isPlainRecord } from "../guards.js";
+
 export function trimToNull(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
-}
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function parseJsonName(raw: string): string | null {
@@ -80,8 +78,7 @@ export function parseIniName(raw: string, section: string, key: string): string 
 }
 
 export function parseSetupPyName(raw: string): string | null {
-  const match = raw.match(/\bname\s*=\s*["']([^"']+)["']/);
-  return trimToNull(match?.[1]);
+  return parseAssignedStringName(raw);
 }
 
 export function parsePomName(raw: string): string | null {
@@ -141,6 +138,10 @@ export function parseGoModuleName(raw: string): string | null {
 }
 
 export function parseGemspecName(raw: string): string | null {
+  return parseAssignedStringName(raw);
+}
+
+function parseAssignedStringName(raw: string): string | null {
   const match = raw.match(/\bname\s*=\s*["']([^"']+)["']/);
   return trimToNull(match?.[1]);
 }

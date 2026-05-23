@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { explainCodegraphTarget } from "../src/agent/explain.js";
 import { searchCodegraph } from "../src/agent/search.js";
+import { runGit } from "./helpers/git.js";
 
 async function mkRepo(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-explain-"));
@@ -263,7 +263,3 @@ describe("agent explain", () => {
     expect(typeof candidate?.confidence).toBe("string");
   });
 });
-
-function runGit(cwd: string, args: string[]): string {
-  return execFileSync("git", args, { cwd, encoding: "utf8" });
-}

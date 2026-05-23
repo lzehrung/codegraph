@@ -180,16 +180,14 @@ export function getNativeSyntaxTreeExecution(
 function unavailableQueryExecution(state: Extract<NativeBindingState, { loaded: false }>): NativeQueryExecution {
   return {
     results: null,
-    fallbackReason: "unavailable",
-    ...nativeError(state),
+    ...unavailableNativeFailure(state),
   };
 }
 
 function unavailableCompactExecution(state: Extract<NativeBindingState, { loaded: false }>): CompactImportsExecution {
   return {
     results: null,
-    fallbackReason: "unavailable",
-    ...nativeError(state),
+    ...unavailableNativeFailure(state),
   };
 }
 
@@ -198,8 +196,7 @@ function unavailableSingleQueryExecution(
 ): NativeSingleQueryExecution {
   return {
     matches: null,
-    fallbackReason: "unavailable",
-    ...nativeError(state),
+    ...unavailableNativeFailure(state),
   };
 }
 
@@ -208,17 +205,19 @@ function unavailableSyntaxTreeExecution(
 ): NativeSyntaxTreeExecution {
   return {
     tree: null,
-    fallbackReason: "unavailable",
-    ...nativeError(state),
+    ...unavailableNativeFailure(state),
   };
 }
 
-function nativeError(state: Extract<NativeBindingState, { loaded: false }>): { error?: string } {
+function unavailableNativeFailure(state: Extract<NativeBindingState, { loaded: false }>): {
+  fallbackReason: "unavailable";
+  error?: string;
+} {
   if (!state.error) {
-    return {};
+    return { fallbackReason: "unavailable" };
   }
   if (state.error instanceof Error) {
-    return { error: state.error.message };
+    return { fallbackReason: "unavailable", error: state.error.message };
   }
-  return { error: stringifyUnknown(state.error) };
+  return { fallbackReason: "unavailable", error: stringifyUnknown(state.error) };
 }

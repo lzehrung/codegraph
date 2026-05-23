@@ -3,29 +3,10 @@ import { request as httpRequest } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
+import { createAgentSession } from "../src/agent/session.js";
 import { createCodegraphMcpHandlers, listCodegraphMcpTools, startCodegraphMcpHttpServer } from "../src/mcp/server.js";
-
-function countingSession(session: AgentSession): { session: AgentSession; loads: () => number } {
-  let cached: Promise<AgentProjectSnapshot> | undefined;
-  let loadCount = 0;
-  return {
-    session: {
-      loadProject: async () => {
-        if (!cached) {
-          loadCount += 1;
-          cached = session.loadProject();
-        }
-        return await cached;
-      },
-      invalidate: () => {
-        cached = undefined;
-        session.invalidate();
-      },
-    },
-    loads: () => loadCount,
-  };
-}
+import { countingSession } from "./helpers/agent.js";
+import { isSymlinkUnavailable } from "./helpers/filesystem.js";
 
 type JsonRpcObject = {
   jsonrpc?: unknown;
@@ -719,12 +700,4 @@ describe("codegraph MCP handlers", () => {
 
 function normalizeSqlitePath(value: unknown): string {
   return typeof value === "string" ? value.replace(/\\/g, "/") : "";
-}
-
-function isSymlinkUnavailable(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    "code" in error &&
-    (error.code === "EPERM" || error.code === "EACCES" || error.code === "ENOTSUP")
-  );
 }

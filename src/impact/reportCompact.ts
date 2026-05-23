@@ -1,5 +1,6 @@
 import type { FileId } from "../types.js";
 import { type ProjectIndex } from "../indexer/types.js";
+import { mapExportSummary, mapReexportChains, mapTopImpacts } from "./reportShared.js";
 import { IMPACT_SCHEMA_VERSION } from "./types.js";
 import type {
   ChangedSymbol,
@@ -194,10 +195,7 @@ function buildCompactExportSummary(
 ): Pick<CompactImpactReport, "exportSummary"> {
   if (!exportSummary.length) return {};
   return {
-    exportSummary: exportSummary.map((entry) => ({
-      file: fileId(entry.file),
-      symbols: entry.symbols,
-    })),
+    exportSummary: mapExportSummary(exportSummary, fileId),
   };
 }
 
@@ -206,14 +204,10 @@ function buildCompactReexportChains(
   fileId: (file: FileId) => number,
 ): Pick<CompactImpactReport, "reexportChains"> {
   if (!reexportChains) return {};
+  const mappedChains = mapReexportChains(reexportChains, fileId);
+  if (!mappedChains) return {};
   return {
-    reexportChains: {
-      chains: reexportChains.chains.map((entry) => ({
-        symbol: entry.symbol,
-        file: fileId(entry.file),
-        paths: entry.paths.map((pathChain) => pathChain.map((file) => fileId(file))),
-      })),
-    },
+    reexportChains: mappedChains,
   };
 }
 
@@ -223,16 +217,7 @@ function buildCompactTopImpacts(
 ): Pick<CompactImpactReport, "topImpacts"> {
   if (!topImpacts.length) return {};
   return {
-    topImpacts: topImpacts.map((item) => ({
-      file: fileId(item.file),
-      symbols: item.symbols,
-      reasons: item.reasons,
-      severity: item.severity,
-      ...(item.confidence !== undefined ? { confidence: item.confidence } : {}),
-      ...(item.depth !== undefined ? { depth: item.depth } : {}),
-      ...(item.typeOnly !== undefined ? { typeOnly: item.typeOnly } : {}),
-      ...(item.explain ? { explain: item.explain } : {}),
-    })),
+    topImpacts: mapTopImpacts(topImpacts, fileId),
   };
 }
 

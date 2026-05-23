@@ -1,9 +1,10 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import os from "node:os";
 import fsp from "node:fs/promises";
 import { runCli } from "../src/cli.js";
+import { runGit } from "./helpers/git.js";
 
 const tsxCliPath = path.resolve(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs");
 const codegraphCliPath = path.resolve(process.cwd(), "src", "cli.ts");
@@ -26,19 +27,6 @@ index 1234567..abcdef0 100644
 +
 +export const IMPACT_FLAG = "impact";
 `;
-
-function runGit(root: string, args: string[]): string {
-  const result = spawnSync("git", args, {
-    cwd: root,
-    env: process.env,
-    encoding: "utf8",
-  });
-  if (result.error) throw result.error;
-  if (result.status !== 0) {
-    throw new Error(`git ${args.join(" ")} failed (${result.status}): ${result.stderr}`);
-  }
-  return result.stdout.trim();
-}
 
 function stdinForImpactCli(opts?: { stdin?: string }): string {
   if (opts && Object.hasOwn(opts, "stdin")) return opts.stdin ?? "";

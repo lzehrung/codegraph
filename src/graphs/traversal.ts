@@ -9,10 +9,13 @@ import { getFiniteNonNegativeLimit } from "./limits.js";
 
 export type DependencyNode = { file: FileId; depth: number };
 
-export function getDependencies(
+type NeighborProvider = (adjacency: GraphAdjacencyIndex, file: FileId) => readonly FileId[];
+
+function walkDependencies(
   graph: Graph,
   startFile: FileId,
-  opts: { depth?: number; limit?: number; adjacency?: GraphAdjacencyIndex } = {},
+  opts: { depth?: number; limit?: number; adjacency?: GraphAdjacencyIndex },
+  getNeighbors: NeighborProvider,
 ): DependencyNode[] {
   const maxDepth = opts.depth ?? Number.POSITIVE_INFINITY;
   const finiteLimit = getFiniteNonNegativeLimit(opts.limit);
@@ -37,7 +40,7 @@ export function getDependencies(
     }
     if (depth >= maxDepth) continue;
 
-    for (const neighbor of getForwardNeighbors(adjacency, file)) {
+    for (const neighbor of getNeighbors(adjacency, file)) {
       if (!visited.has(neighbor)) {
         visited.add(neighbor);
         queue.push({ file: neighbor, depth: depth + 1 });
@@ -47,42 +50,20 @@ export function getDependencies(
   return out;
 }
 
+export function getDependencies(
+  graph: Graph,
+  startFile: FileId,
+  opts: { depth?: number; limit?: number; adjacency?: GraphAdjacencyIndex } = {},
+): DependencyNode[] {
+  return walkDependencies(graph, startFile, opts, getForwardNeighbors);
+}
+
 export function getReverseDependencies(
   graph: Graph,
   targetFile: FileId,
   opts: { depth?: number; limit?: number; adjacency?: GraphAdjacencyIndex } = {},
 ): DependencyNode[] {
-  const maxDepth = opts.depth ?? Number.POSITIVE_INFINITY;
-  const finiteLimit = getFiniteNonNegativeLimit(opts.limit);
-  const maxResults = finiteLimit ?? Number.POSITIVE_INFINITY;
-  if (maxResults === 0) {
-    return [];
-  }
-  const out: DependencyNode[] = [];
-  const visited = new Set<string>();
-  const queue: Array<{ file: string; depth: number }> = [{ file: targetFile, depth: 0 }];
-  const adjacency = opts.adjacency ?? graphAdjacencyFor(graph);
-  visited.add(targetFile);
-
-  let index = 0;
-  while (index < queue.length) {
-    const { file, depth } = queue[index++]!;
-    if (depth > 0) {
-      out.push({ file, depth });
-      if (out.length >= maxResults) {
-        break;
-      }
-    }
-    if (depth >= maxDepth) continue;
-
-    for (const neighbor of getReverseNeighbors(adjacency, file)) {
-      if (!visited.has(neighbor)) {
-        visited.add(neighbor);
-        queue.push({ file: neighbor, depth: depth + 1 });
-      }
-    }
-  }
-  return out;
+  return walkDependencies(graph, targetFile, opts, getReverseNeighbors);
 }
 
 export function getShortestPath(

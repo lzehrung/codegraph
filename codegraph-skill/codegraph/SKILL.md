@@ -214,9 +214,13 @@ For git-provider impact and git-scoped review/index/graph commands, `WORKTREE` c
 - Duplicate and near-duplicate code:
   `codegraph duplicates --root . ./src --min-confidence medium`
   Covers indexed symbols, semantic chunks, and text chunks.
+  Reports grouped findings by default so overlapping symbol/chunk variants collapse into one clone.
+  Uses duplicate JSON `schemaVersion: 2`.
+  Bounds per-group variants by default and reports hidden evidence with counts.
   A single positional directory becomes the project root unless `--root` is set.
   Use `--include-small` for tiny helpers.
   Use `--include-same-file` for local clone cleanup.
+  Use `--raw-pairs` to include low-level scored unit-pair suggestions.
 - Unresolved project imports:
   `codegraph unresolved`
   Excludes graph-only document/template link edges plus known runtime/package externals: supported-language standard libraries, URL imports, and dependencies declared in nearby manifests such as `package.json`, Python, PHP, Rust, Go, Zig, Ruby, Java/Kotlin, .NET, C/C++, and Swift package manifests.

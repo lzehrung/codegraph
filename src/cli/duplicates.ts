@@ -32,6 +32,7 @@ function parseDuplicateDetectionOptions(context: DuplicatesCommandContext): Dupl
     maxBucketSize: parsePositiveIntegerOption(context.getOpt("--max-bucket-size"), "--max-bucket-size", 200),
     ...(context.hasFlag("--include-same-file") ? { includeSameFile: true } : {}),
     ...(context.hasFlag("--include-small") ? { includeSmall: true } : {}),
+    ...(context.hasFlag("--raw-pairs") ? { includeRawPairs: true } : {}),
   };
 
   if (options.maxTokens !== undefined && options.minTokens !== undefined && options.maxTokens < options.minTokens) {

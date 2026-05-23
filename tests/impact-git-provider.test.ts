@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 import { getDiff } from "../src/impact/providers/base.js";
+import { runGit as git } from "./helpers/git.js";
 
 const gitRepoRoots: string[] = [];
 
@@ -12,20 +12,6 @@ afterEach(() => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
-
-function git(cwd: string, args: string[]): string {
-  return execFileSync("git", args, {
-    cwd,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      GIT_AUTHOR_NAME: "Codegraph Test",
-      GIT_AUTHOR_EMAIL: "codegraph@example.test",
-      GIT_COMMITTER_NAME: "Codegraph Test",
-      GIT_COMMITTER_EMAIL: "codegraph@example.test",
-    },
-  }).trim();
-}
 
 function writeFile(root: string, relativePath: string, text: string): void {
   const filePath = path.join(root, relativePath);
