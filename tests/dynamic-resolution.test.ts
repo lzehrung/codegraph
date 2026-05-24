@@ -1,16 +1,8 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
-import os from "node:os";
 import fsp from "node:fs/promises";
 import { collectGraph } from "../src/index.js";
-
-async function mkTmpDir(prefix: string): Promise<string> {
-  return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
-}
-
-function normalizeFile(p: string): string {
-  return p.replace(/\\/g, "/");
-}
+import { mkTmpDir, normalizeTestPath } from "./helpers/filesystem.js";
 
 describe("Dynamic resolution heuristics", () => {
   it("resolves path.join(__dirname, ...) when enabled", async () => {
@@ -25,7 +17,7 @@ describe("Dynamic resolution heuristics", () => {
     await fsp.writeFile(mainPath, source, "utf8");
     await fsp.writeFile(utilPath, "module.exports = {};", "utf8");
 
-    const graph = await collectGraph(root, [normalizeFile(mainPath), normalizeFile(utilPath)], {
+    const graph = await collectGraph(root, [normalizeTestPath(mainPath), normalizeTestPath(utilPath)], {
       dynamicImportHeuristics: true,
     });
 
@@ -48,7 +40,7 @@ describe("Dynamic resolution heuristics", () => {
     await fsp.writeFile(mainPath, `import Button from "components/button";\nconsole.log(Button);\n`, "utf8");
     await fsp.writeFile(buttonPath, "export default function Button() {}", "utf8");
 
-    const graph = await collectGraph(root, [normalizeFile(mainPath), normalizeFile(buttonPath)], {
+    const graph = await collectGraph(root, [normalizeTestPath(mainPath), normalizeTestPath(buttonPath)], {
       resolutionHints: ["src"],
     });
 

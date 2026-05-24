@@ -1,5 +1,6 @@
 import path from "node:path";
 import { findFirstExistingResolutionCandidate } from "./findFirstExisting.js";
+import { pickPackageExportTarget } from "../packageExports.js";
 import { directoryExists, loadJSON, type MinimalPackageJson } from "../workspace.js";
 
 export async function resolveFromNodeModules(
@@ -22,16 +23,6 @@ export async function resolveFromNodeModules(
         const tryResolveRelative = async (rel: string): Promise<string | null> => {
           return await findFirstExistingResolutionCandidate(path.resolve(baseDir, rel), resolutionExtensions);
         };
-        const pickExportTarget = (target: unknown): string | null => {
-          if (!target) return null;
-          if (typeof target === "string") return target;
-          if (typeof target === "object" && target !== null) {
-            const t = target as Record<string, unknown>;
-            const cand = t.import ?? t.default ?? t.require ?? t.module;
-            if (typeof cand === "string") return cand;
-          }
-          return null;
-        };
         if (pkg?.exports) {
           const key = subpath ? `./${subpath}` : ".";
           if (typeof pkg.exports === "string" && key === ".") {
@@ -40,7 +31,7 @@ export async function resolveFromNodeModules(
           } else if (typeof pkg.exports === "object" && pkg.exports !== null) {
             const map = pkg.exports as Record<string, unknown>;
             const target = map[key] ?? (key === "." ? map["."] : undefined);
-            const rel = pickExportTarget(target);
+            const rel = pickPackageExportTarget(target);
             if (rel) {
               const hit = await tryResolveRelative(rel);
               if (hit) return hit;

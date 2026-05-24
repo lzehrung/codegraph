@@ -14,6 +14,22 @@ function objectSchema(properties: Record<string, object>, required: string[] = [
 const stringProperty = { type: "string" };
 const booleanProperty = { type: "boolean" };
 
+function dependencyInputSchema(): Tool["inputSchema"] {
+  return objectSchema(
+    {
+      file: stringProperty,
+      depth: { type: "integer", minimum: 0, default: 1 },
+      limit: {
+        type: "integer",
+        minimum: 0,
+        maximum: MAX_MCP_COLLECTION_LIMIT,
+        default: DEFAULT_MCP_COLLECTION_LIMIT,
+      },
+    },
+    ["file"],
+  );
+}
+
 export const MCP_TOOLS: Tool[] = [
   {
     name: "search",
@@ -84,36 +100,12 @@ export const MCP_TOOLS: Tool[] = [
   {
     name: "deps",
     description: "List file dependencies.",
-    inputSchema: objectSchema(
-      {
-        file: stringProperty,
-        depth: { type: "integer", minimum: 0, default: 1 },
-        limit: {
-          type: "integer",
-          minimum: 0,
-          maximum: MAX_MCP_COLLECTION_LIMIT,
-          default: DEFAULT_MCP_COLLECTION_LIMIT,
-        },
-      },
-      ["file"],
-    ),
+    inputSchema: dependencyInputSchema(),
   },
   {
     name: "rdeps",
     description: "List reverse file dependencies.",
-    inputSchema: objectSchema(
-      {
-        file: stringProperty,
-        depth: { type: "integer", minimum: 0, default: 1 },
-        limit: {
-          type: "integer",
-          minimum: 0,
-          maximum: MAX_MCP_COLLECTION_LIMIT,
-          default: DEFAULT_MCP_COLLECTION_LIMIT,
-        },
-      },
-      ["file"],
-    ),
+    inputSchema: dependencyInputSchema(),
   },
   {
     name: "path",

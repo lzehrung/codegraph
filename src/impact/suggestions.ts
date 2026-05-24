@@ -4,6 +4,7 @@ import { goToDefinition } from "../indexer/navigation.js";
 import { ensureParsedContext } from "../indexer/parse-context.js";
 import type { LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
+import { toRange } from "../util/ast.js";
 import { normalizePath, resolveFilePathFromRoot, toProjectRelativePath } from "../util/paths.js";
 import { collectChangedLines } from "./hunks.js";
 import type { FileChange, ImpactOptions, ImpactSuggestion, ImpactSuggestionConfidence } from "./types.js";
@@ -367,19 +368,4 @@ function pushUniqueSuggestion(output: ImpactSuggestion[], seen: Set<string>, sug
   if (seen.has(key)) return;
   seen.add(key);
   output.push(suggestion);
-}
-
-function toRange(node: SyntaxNodeLike): Range {
-  return {
-    start: {
-      line: node.startPosition.row + 1,
-      column: node.startPosition.column + 1,
-      index: node.startIndex,
-    },
-    end: {
-      line: node.endPosition.row + 1,
-      column: node.endPosition.column + 1,
-      index: node.endIndex,
-    },
-  };
 }

@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
-import os from "node:os";
 import fsp from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -11,11 +10,7 @@ import {
   queryGraphSqlite,
   queryGraphSqliteRaw,
 } from "../src/index.js";
-
-async function mkTmpDir(prefix: string): Promise<string> {
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
-  return dir;
-}
+import { mkTmpDir, normalizeTestPath } from "./helpers/filesystem.js";
 
 const dbQuery = (db: DatabaseSync, sql: string): string[] => {
   const stmt = db.prepare(sql);
@@ -326,20 +321,20 @@ export const run = () => helper();
       fileGraph: nextIndex.graph,
       symbolGraph: nextSgraph,
       outputPath: dbPath,
-      changedFiles: [path.join(root, "main.ts").replace(/\\/g, "/")],
-      deletedFiles: [path.join(root, "util.ts").replace(/\\/g, "/")],
+      changedFiles: [normalizeTestPath(path.join(root, "main.ts"))],
+      deletedFiles: [normalizeTestPath(path.join(root, "util.ts"))],
       fullGraphSync: true,
     });
 
     const db = new DatabaseSync(dbPath);
     const utilFiles = dbQuery(
       db,
-      `SELECT path FROM files WHERE path = '${path.join(root, "util.ts").replace(/\\/g, "/")}';`,
+      `SELECT path FROM files WHERE path = '${normalizeTestPath(path.join(root, "util.ts"))}';`,
     );
     const utilSymbols = dbQuery(db, "SELECT name FROM symbols WHERE name = 'helper';");
     const staleEdges = dbQuery(
       db,
-      `SELECT to_path FROM file_edges WHERE to_path = '${path.join(root, "util.ts").replace(/\\/g, "/")}';`,
+      `SELECT to_path FROM file_edges WHERE to_path = '${normalizeTestPath(path.join(root, "util.ts"))}';`,
     );
 
     expect(utilFiles).toEqual([]);
@@ -481,8 +476,8 @@ export const run = () => helper();
       fileGraph: nextIndex.graph,
       symbolGraph: nextSgraph,
       outputPath: dbPath,
-      changedFiles: [path.join(root, "main.ts").replace(/\\/g, "/")],
-      deletedFiles: [path.join(root, "util.ts").replace(/\\/g, "/")],
+      changedFiles: [normalizeTestPath(path.join(root, "main.ts"))],
+      deletedFiles: [normalizeTestPath(path.join(root, "util.ts"))],
       fullGraphSync: true,
     });
 

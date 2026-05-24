@@ -1,5 +1,4 @@
 import path from "node:path";
-import os from "node:os";
 import fsp from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import { collectGraph } from "../src/index.js";
@@ -8,6 +7,7 @@ import { buildSqlFactCache, buildSqlModuleIndex, collectSqlEdgesForFile } from "
 import { SymbolKind } from "../src/indexer/types.js";
 import { computeFileSymbolHashes } from "../src/util/symbolHash.js";
 import type { GraphCacheEntry } from "../src/graphs/types.js";
+import { mkTmpDir } from "./helpers/filesystem.js";
 
 const fixtureRoot = path.resolve(process.cwd(), "tests", "samples", "sql", "graph");
 const sqlFiles = ["001_create_users.sql", "002_alter_users.sql", "report.sql"].map((file) =>
@@ -49,7 +49,7 @@ describe("SQL artifact graph", () => {
   });
 
   it("adds SQL-to-SQL edges for read dependencies inside write statements", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-dml-graph-"));
+    const root = await mkTmpDir("cg-sql-dml-graph-");
     try {
       const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
       const pipelineFile = path.join(root, "pipeline.sql").replace(/\\/g, "/");
@@ -101,7 +101,7 @@ describe("SQL artifact graph", () => {
   });
 
   it("links schema-qualified SQL references to unqualified object definitions", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-qualified-edge-"));
+    const root = await mkTmpDir("cg-sql-qualified-edge-");
     try {
       const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
       const publicSchemaFile = path.join(root, "public_schema.sql").replace(/\\/g, "/");
@@ -141,7 +141,7 @@ describe("SQL artifact graph", () => {
   });
 
   it("emits heuristic SQL edges for basename fallback matches", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-fallback-edge-"));
+    const root = await mkTmpDir("cg-sql-fallback-edge-");
     try {
       const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
       const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
@@ -165,7 +165,7 @@ describe("SQL artifact graph", () => {
   });
 
   it("links unqualified SQL references to a single schema-qualified object definition", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-unqualified-qualified-edge-"));
+    const root = await mkTmpDir("cg-sql-unqualified-qualified-edge-");
     try {
       const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
       const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
@@ -189,7 +189,7 @@ describe("SQL artifact graph", () => {
   });
 
   it("does not guess ambiguous SQL edges from unqualified references to schema-qualified definitions", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-ambiguous-unqualified-edge-"));
+    const root = await mkTmpDir("cg-sql-ambiguous-unqualified-edge-");
     try {
       const publicSchemaFile = path.join(root, "public_schema.sql").replace(/\\/g, "/");
       const archiveSchemaFile = path.join(root, "archive_schema.sql").replace(/\\/g, "/");
@@ -211,7 +211,7 @@ describe("SQL artifact graph", () => {
   });
 
   it("does not emit duplicate join edges for the primary FROM object", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-join-primary-edge-"));
+    const root = await mkTmpDir("cg-sql-join-primary-edge-");
     try {
       const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
       const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
@@ -249,7 +249,7 @@ describe("SQL artifact graph", () => {
   });
 
   it("does not emit SQL dependency self-edges inside a single SQL file", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-self-edge-"));
+    const root = await mkTmpDir("cg-sql-self-edge-");
     try {
       const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
       await fsp.writeFile(schemaFile, "CREATE TABLE users (id integer);\nSELECT id FROM users;\n", "utf8");
@@ -267,7 +267,7 @@ describe("SQL artifact graph", () => {
   });
 
   it("links SQL rename statements to the source definition without targeting the new name", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-rename-edge-"));
+    const root = await mkTmpDir("cg-sql-rename-edge-");
     try {
       const oldSchemaFile = path.join(root, "old_schema.sql").replace(/\\/g, "/");
       const unrelatedNewSchemaFile = path.join(root, "unrelated_new_schema.sql").replace(/\\/g, "/");
@@ -337,7 +337,7 @@ describe("SQL artifact graph", () => {
   });
 
   it("includes related SQL objects in artifact graph candidate mentions", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-related-artifacts-"));
+    const root = await mkTmpDir("cg-sql-related-artifacts-");
     try {
       const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
       await fsp.writeFile(
@@ -376,7 +376,7 @@ describe("SQL artifact graph", () => {
   });
 
   it("reuses SQL facts across per-file edge collection", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-cache-"));
+    const root = await mkTmpDir("cg-sql-cache-");
     const files: string[] = [];
     try {
       for (let index = 0; index < 12; index += 1) {
@@ -403,7 +403,7 @@ describe("SQL artifact graph", () => {
   });
 
   it("bounds concurrent SQL fact reads when building the corpus cache", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-cache-concurrency-"));
+    const root = await mkTmpDir("cg-sql-cache-concurrency-");
     const files: string[] = [];
     try {
       for (let index = 0; index < 40; index += 1) {
@@ -440,7 +440,7 @@ describe("SQL artifact graph", () => {
   });
 
   it("reuses SQL edge cache entries when the SQL corpus signature is unchanged", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-edge-cache-reuse-"));
+    const root = await mkTmpDir("cg-sql-edge-cache-reuse-");
     try {
       const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
       const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
@@ -502,7 +502,7 @@ describe("SQL artifact graph", () => {
   });
 
   it("rejects stale SQL edge cache entries when another SQL file changes", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-edge-cache-invalidate-"));
+    const root = await mkTmpDir("cg-sql-edge-cache-invalidate-");
     try {
       const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
       const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
@@ -546,7 +546,7 @@ describe("SQL artifact graph", () => {
   });
 
   it("recomputes unchanged SQL query edges when changed SQL definitions add targets", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-incremental-add-"));
+    const root = await mkTmpDir("cg-sql-incremental-add-");
     try {
       const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
       const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
@@ -581,7 +581,7 @@ describe("SQL artifact graph", () => {
   });
 
   it("removes unchanged SQL query edges when changed SQL definitions drop targets", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-incremental-remove-"));
+    const root = await mkTmpDir("cg-sql-incremental-remove-");
     try {
       const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
       const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");

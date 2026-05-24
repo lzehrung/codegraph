@@ -4,6 +4,7 @@ const directoryExistsCache = new Map<string, boolean>();
 import fsp from "node:fs/promises";
 import path from "node:path";
 import fg from "fast-glob";
+import { pickPackageExportTarget } from "./packageExports.js";
 import { listResolutionCandidates } from "./resolutionCandidates.js";
 
 async function pathMatchesCachedStat(
@@ -295,17 +296,6 @@ export function listWorkspacePackageResolutionCandidates(
   const pushRelativeCandidates = (rel: string): void => {
     candidates.push(...listResolutionCandidates(path.resolve(baseDir, rel), resolutionExtensions));
   };
-  const pickExportTarget = (target: unknown): string | null => {
-    if (!target) return null;
-    if (typeof target === "string") return target;
-    if (typeof target === "object" && target !== null) {
-      const typedTarget = target as Record<string, unknown>;
-      const candidate = typedTarget.import ?? typedTarget.default ?? typedTarget.require ?? typedTarget.module;
-      if (typeof candidate === "string") return candidate;
-    }
-    return null;
-  };
-
   if (pkg.exports) {
     const key = subpath ? `./${subpath}` : ".";
     if (typeof pkg.exports === "string" && key === ".") {
@@ -313,7 +303,7 @@ export function listWorkspacePackageResolutionCandidates(
     } else if (typeof pkg.exports === "object") {
       const exportMap = pkg.exports as Record<string, unknown>;
       const target = exportMap[key] ?? (key === "." ? exportMap["."] : undefined);
-      const rel = pickExportTarget(target);
+      const rel = pickPackageExportTarget(target);
       if (rel) {
         pushRelativeCandidates(rel);
       }

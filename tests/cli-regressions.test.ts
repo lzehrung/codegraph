@@ -814,6 +814,20 @@ describe("CLI regressions", () => {
       "utf8",
     );
     await fsp.writeFile(path.join(srcDir, "b.ts"), "export const b = 1;\n", "utf8");
+    const duplicateSource = `
+export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) {
+  const output: string[] = [];
+  for (const row of rows) {
+    const subtotal = row.amount + row.tax;
+    const rounded = Math.round(subtotal * 100) / 100;
+    const label = rounded > 100 ? "large" : "small";
+    output.push(label + ":" + rounded.toFixed(2));
+  }
+  return output.filter((value) => value.includes(":")).join(",");
+}
+`;
+    await fsp.writeFile(path.join(srcDir, "c.ts"), duplicateSource, "utf8");
+    await fsp.writeFile(path.join(srcDir, "d.ts"), duplicateSource, "utf8");
 
     const stdout = await runCliCommand(["inspect", "--root", tmpDir, srcDir, "--limit", "1"]);
     const report = JSON.parse(stdout) as {
@@ -832,6 +846,18 @@ describe("CLI regressions", () => {
       hotspots: Array<{ file: string; fanIn: number; fanOut: number; score: number }>;
       unresolved: { total: number; top: Array<{ name: string; importerCount: number }> };
       cycles: { total: number; top: Array<{ files: string[]; priorityScore: number; size: number }> };
+      duplicates: {
+        total: number;
+        omitted: number;
+        minConfidence: string;
+        top: Array<{
+          confidence: string;
+          cloneType: string;
+          left: { file: string; startLine: number; endLine: number; tokenCount: number; name?: string };
+          right: { file: string; startLine: number; endLine: number; tokenCount: number; name?: string };
+          rawPairCount: number;
+        }>;
+      };
       recommendedCommands: string[];
     };
 
@@ -839,19 +865,32 @@ describe("CLI regressions", () => {
     expect(report.includeRoots).toEqual([normalize(srcDir)]);
     expect(typeof report.backend.native.available).toBe("boolean");
     expect(Array.isArray(report.backend.native.supportedLanguageIds)).toBe(true);
-    expect(report.files.total).toBe(2);
-    expect(report.files.byLanguage.ts).toBe(2);
+    expect(report.files.total).toBe(4);
+    expect(report.files.byLanguage.ts).toBe(4);
     expect(report.hotspots.length).toBe(1);
     expect(report.hotspots[0].file).toBe(normalize(path.join(srcDir, "b.ts")));
     expect(report.unresolved.total).toBe(0);
     expect(report.unresolved.top).toEqual([]);
     expect(report.cycles.total).toBe(0);
     expect(report.cycles.top).toEqual([]);
+    expect(report.duplicates.total).toBeGreaterThan(0);
+    expect(report.duplicates.omitted).toBeGreaterThanOrEqual(0);
+    expect(report.duplicates.minConfidence).toBe("high");
+    expect(report.duplicates.top).toHaveLength(1);
+    expect(report.duplicates.top[0]?.confidence).toBe("high");
+    expect(report.duplicates.top[0]?.cloneType).toBe("exact");
+    expect(report.duplicates.top[0]?.left.file).toBe("src/c.ts");
+    expect(report.duplicates.top[0]?.right.file).toBe("src/d.ts");
+    expect(report.duplicates.top[0]?.left.tokenCount).toBeGreaterThan(40);
+    expect(report.duplicates.top[0]?.rawPairCount).toBeGreaterThan(0);
     expect(report.recommendedCommands).toContain(
       `codegraph hotspots --root "${normalize(tmpDir)}" "${normalize(srcDir)}" --limit 20 --json`,
     );
     expect(report.recommendedCommands).toContain(
       `codegraph graph --root "${normalize(tmpDir)}" "${normalize(srcDir)}" --json --symbols-detailed --compact-json`,
+    );
+    expect(report.recommendedCommands).toContain(
+      `codegraph duplicates --root "${normalize(tmpDir)}" "${normalize(srcDir)}" --min-confidence medium --limit 20 --include-same-file`,
     );
     expect(report.recommendedCommands).toContain(
       `codegraph doctor "${normalize(path.join(tmpDir, ".codegraph-cache", "index-v1"))}"`,

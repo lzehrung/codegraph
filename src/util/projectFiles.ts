@@ -275,7 +275,7 @@ async function loadGitignoreRulesForRootAliases(projectRoot: string): Promise<Gi
   return rules;
 }
 
-function matchesDiscoveryGlob(
+export function matchesDiscoveryGlob(
   absolutePath: string,
   projectRoot: string,
   matcher: (relativePath: string) => boolean,

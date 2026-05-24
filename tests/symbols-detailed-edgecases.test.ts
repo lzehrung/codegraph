@@ -1,12 +1,8 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
-import os from "node:os";
 import fsp from "node:fs/promises";
 import { buildProjectIndex } from "../src/index.js";
-
-async function mkTmpDir(prefix: string): Promise<string> {
-  return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
-}
+import { mkTmpDir } from "./helpers/filesystem.js";
 
 describe("Symbols-detailed edge cases", () => {
   it("membersOnly keeps namespace member edges but drops direct alias uses", async () => {

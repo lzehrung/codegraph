@@ -34,6 +34,18 @@ type CompactFileEdge = {
   typeOnly?: boolean;
 };
 type CompactSymbolEdge = { from: number; to: number; label?: string };
+type CompactSymbolNode = {
+  id: number;
+  file: number;
+  name: string;
+  kind: string;
+};
+type CompactSymbolProjection = {
+  files: string[];
+  symbols: CompactSymbolNode[];
+  symbolEdges: CompactSymbolEdge[];
+  symbolIdIndex: string[];
+};
 
 type CommandTimingReport = {
   totalMs?: number;
@@ -113,49 +125,26 @@ function compactGraphWithSymbols(fgraph: Graph, sgraph: SymbolGraph, stable = fa
     });
   }
 
-  const symbolIds = [...sgraph.nodes.keys()];
-  if (stable) symbolIds.sort();
-  const symbolIndex = new Map<string, number>();
-  for (let i = 0; i < symbolIds.length; i++) symbolIndex.set(symbolIds[i]!, i);
-
-  const symbols = symbolIds.map((id) => {
-    const n = sgraph.nodes.get(id)!;
-    return {
-      id: symbolIndex.get(id)!,
-      file: fileIndex.get(n.file)!,
-      name: n.name,
-      kind: n.kind,
-    };
-  });
-
-  const symbolEdges: CompactSymbolEdge[] = sgraph.edges.map((e) => ({
-    from: symbolIndex.get(e.from)!,
-    to: symbolIndex.get(e.to)!,
-    ...(e.label ? { label: e.label } : {}),
-  }));
-  if (stable) {
-    symbolEdges.sort((a, b) => {
-      const byFrom = a.from - b.from;
-      if (byFrom) return byFrom;
-      const byTo = a.to - b.to;
-      if (byTo) return byTo;
-      const al = String(a.label ?? "");
-      const bl = String(b.label ?? "");
-      if (al !== bl) return al < bl ? -1 : 1;
-      return 0;
-    });
-  }
+  const symbolProjection = buildCompactSymbolProjection(files, sgraph, stable);
 
   return {
     files,
     fileEdges,
-    symbols,
-    symbolEdges,
-    symbolIdIndex: symbolIds,
+    symbols: symbolProjection.symbols,
+    symbolEdges: symbolProjection.symbolEdges,
+    symbolIdIndex: symbolProjection.symbolIdIndex,
   };
 }
 
 function compactSymbolsOnly(allFiles: string[], sgraph: SymbolGraph, stable = false) {
+  return buildCompactSymbolProjection(allFiles, sgraph, stable);
+}
+
+function buildCompactSymbolProjection(
+  allFiles: string[],
+  sgraph: SymbolGraph,
+  stable = false,
+): CompactSymbolProjection {
   const files = [...allFiles];
   if (stable) files.sort();
   const fileIndex = new Map<string, number>();

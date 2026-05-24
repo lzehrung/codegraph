@@ -3,6 +3,7 @@ import { collectChunkBlockGroups } from "./chunkBlocks.js";
 import { getChunkMatches } from "./chunkMatches.js";
 import { fillGapsWithMiscChunks, mergeSmallChunks } from "./chunkMerge.js";
 import { splitLargeBlockSimple, splitLargeBlockUsingInnerBlocks } from "./chunkSplit.js";
+import { countWhitespaceTokens } from "./tokenizer.js";
 import type { Chunk, ChunkTokenizer } from "./types.js";
 
 export type { Chunk } from "./types.js";
@@ -25,11 +26,6 @@ export interface ChunkFileOptions {
   tokenizer?: ChunkTokenizer | undefined;
 }
 
-function defaultTokenizer(text: string): number {
-  if (!text.trim()) return 0;
-  return text.trim().split(/\s+/).length;
-}
-
 /**
  * Splits code into semantic chunks using Tree-sitter queries.
  * Chunks respect token budgets and preserve semantic boundaries like functions, classes, and methods.
@@ -38,7 +34,7 @@ function defaultTokenizer(text: string): number {
  * @returns Array of semantic chunks
  */
 export function chunkFile(opts: ChunkFileOptions): Chunk[] {
-  const { language, source, filePath, minTokens = 150, maxTokens = 400, tokenizer = defaultTokenizer } = opts;
+  const { language, source, filePath, minTokens = 150, maxTokens = 400, tokenizer = countWhitespaceTokens } = opts;
   const matches = getChunkMatches(language, source, filePath);
   const newlineOffsets = collectNewlineOffsets(source);
   const { mainBlocks, innerBlocks, comments } = collectChunkBlockGroups(language, matches);
