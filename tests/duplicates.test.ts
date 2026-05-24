@@ -114,6 +114,9 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     expect(result.groups[0]?.primaryLeft.kind).toBe("symbol");
     expect(result.groups[0]?.primaryRight.kind).toBe("symbol");
     expect(result.suggestions?.length).toBeGreaterThan(result.groups.length);
+    // With includeRawPairs the variant list is unbounded, so coalescing must not
+    // report omitted variants from deduping merged groups.
+    expect(result.groups[0]?.omittedVariantCount).toBe(0);
   });
 
   test("omits raw unit pairs unless requested", async () => {

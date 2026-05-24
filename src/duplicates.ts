@@ -1122,7 +1122,8 @@ function coalesceDuplicateGroups(groups: DuplicateGroup[], variantLimit: number)
         variantsByKey.set(suggestionVariantKey(variant), variant);
       }
     }
-    const variants = Array.from(variantsByKey.values()).sort(compareSuggestionsForPrimary).slice(0, variantLimit);
+    const dedupedVariants = Array.from(variantsByKey.values()).sort(compareSuggestionsForPrimary);
+    const variants = dedupedVariants.slice(0, variantLimit);
     const rawPairCount = grouped.reduce((count, group) => count + group.rawPairCount, 0);
     let score = primary.score;
     let confidence = primary.confidence;
@@ -1141,7 +1142,7 @@ function coalesceDuplicateGroups(groups: DuplicateGroup[], variantLimit: number)
       variants,
       variantCount: variants.length,
       rawPairCount,
-      omittedVariantCount: Math.max(0, rawPairCount - variants.length),
+      omittedVariantCount: Math.max(0, dedupedVariants.length - variants.length),
       reasons: mergeGroupReasons(grouped),
     });
   }
