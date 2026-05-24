@@ -817,22 +817,26 @@ async function loadCoverageByFile(
   return coverage;
 }
 
-function countCoveredLinesForRange(coverage: FileCoverage | undefined, range: ChangedSymbol["range"]): number {
+function countLinesForRange(
+  coverage: FileCoverage | undefined,
+  range: ChangedSymbol["range"],
+  linesForCoverage: (coverage: FileCoverage) => ReadonlySet<number>,
+): number {
   if (!coverage) return 0;
   let count = 0;
+  const lines = linesForCoverage(coverage);
   for (let line = range.start.line; line <= range.end.line; line += 1) {
-    if (coverage.coveredLines.has(line)) count += 1;
+    if (lines.has(line)) count += 1;
   }
   return count;
 }
 
+function countCoveredLinesForRange(coverage: FileCoverage | undefined, range: ChangedSymbol["range"]): number {
+  return countLinesForRange(coverage, range, (entry) => entry.coveredLines);
+}
+
 function countTotalLinesForRange(coverage: FileCoverage | undefined, range: ChangedSymbol["range"]): number {
-  if (!coverage) return 0;
-  let count = 0;
-  for (let line = range.start.line; line <= range.end.line; line += 1) {
-    if (coverage.allLines.has(line)) count += 1;
-  }
-  return count;
+  return countLinesForRange(coverage, range, (entry) => entry.allLines);
 }
 
 export async function collectImpactReportSuggestions(

@@ -1,13 +1,9 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { buildReviewReport } from "../src/index.js";
 import { collectSqlReviewContext } from "../src/sql/index.js";
-
-async function mkTmpDir(): Promise<string> {
-  return await fs.mkdtemp(path.join(os.tmpdir(), "cg-sql-review-"));
-}
+import { mkTmpDir } from "./helpers/filesystem.js";
 
 async function rmTmpDir(root: string): Promise<void> {
   await fs.rm(root, { recursive: true, force: true });
@@ -21,7 +17,7 @@ async function writeFile(filePath: string, contents: string): Promise<string> {
 
 describe("SQL review context", () => {
   it("surfaces SQL candidates for changed code SQL literals", async () => {
-    const root = await mkTmpDir();
+    const root = await mkTmpDir("cg-sql-review-");
     try {
       const schema = await writeFile(path.join(root, "db", "schema.sql"), "CREATE TABLE users (id integer);\n");
       const repo = await writeFile(
@@ -44,7 +40,7 @@ describe("SQL review context", () => {
   });
 
   it("includes changed SQL files without creating source dependency impact", async () => {
-    const root = await mkTmpDir();
+    const root = await mkTmpDir("cg-sql-review-");
     try {
       const migration = await writeFile(
         path.join(root, "db", "migrations", "20190101000000_legacy.sql"),
@@ -68,7 +64,7 @@ describe("SQL review context", () => {
   });
 
   it("keeps seed SQL visible only when the seed file changes", async () => {
-    const root = await mkTmpDir();
+    const root = await mkTmpDir("cg-sql-review-");
     try {
       const seed = await writeFile(path.join(root, "db", "seeds", "users.sql"), "INSERT INTO users (id) VALUES (1);\n");
       const code = await writeFile(path.join(root, "src", "app.ts"), "export const ok = true;\n");
@@ -90,7 +86,7 @@ describe("SQL review context", () => {
   });
 
   it("does not surface stale SQL for unrelated code-only reviews", async () => {
-    const root = await mkTmpDir();
+    const root = await mkTmpDir("cg-sql-review-");
     try {
       await writeFile(
         path.join(root, "db", "migrations", "20190101000000_legacy.sql"),
@@ -108,7 +104,7 @@ describe("SQL review context", () => {
   });
 
   it("skips the SQL corpus when changed code has no SQL-like text", async () => {
-    const root = await mkTmpDir();
+    const root = await mkTmpDir("cg-sql-review-");
     try {
       await writeFile(path.join(root, "db", "schema.sql"), "CREATE TABLE users (id integer);\n");
       const code = await writeFile(path.join(root, "src", "app.ts"), "export const count = 1;\n");
@@ -126,7 +122,7 @@ describe("SQL review context", () => {
   });
 
   it("does not treat ES module imports as SQL literal hints", async () => {
-    const root = await mkTmpDir();
+    const root = await mkTmpDir("cg-sql-review-");
     try {
       await writeFile(path.join(root, "db", "schema.sql"), "CREATE TABLE users (id integer);\n");
       const code = await writeFile(path.join(root, "src", "app.ts"), 'import users from "./users";\n');
@@ -144,7 +140,7 @@ describe("SQL review context", () => {
   });
 
   it("does not treat a bare with token as a SQL literal hint", async () => {
-    const root = await mkTmpDir();
+    const root = await mkTmpDir("cg-sql-review-");
     try {
       await writeFile(path.join(root, "db", "schema.sql"), "CREATE TABLE users (id integer);\n");
       const code = await writeFile(path.join(root, "src", "app.ts"), 'export const label = "created with care";\n');
@@ -162,7 +158,7 @@ describe("SQL review context", () => {
   });
 
   it("does not treat a bare update phrase as a SQL literal hint", async () => {
-    const root = await mkTmpDir();
+    const root = await mkTmpDir("cg-sql-review-");
     try {
       await writeFile(path.join(root, "db", "schema.sql"), "CREATE TABLE users (id integer);\n");
       const code = await writeFile(path.join(root, "src", "app.ts"), 'export const label = "update x";\n');
@@ -180,7 +176,7 @@ describe("SQL review context", () => {
   });
 
   it("does not treat a bare select identifier as a SQL literal hint", async () => {
-    const root = await mkTmpDir();
+    const root = await mkTmpDir("cg-sql-review-");
     try {
       await writeFile(path.join(root, "db", "schema.sql"), "CREATE TABLE users (id integer);\n");
       const code = await writeFile(
@@ -201,7 +197,7 @@ describe("SQL review context", () => {
   });
 
   it("uses provided project files when matching code SQL literals", async () => {
-    const root = await mkTmpDir();
+    const root = await mkTmpDir("cg-sql-review-");
     try {
       await writeFile(path.join(root, "db", "schema.sql"), "CREATE TABLE users (id integer);\n");
       const code = await writeFile(path.join(root, "src", "userRepo.ts"), "export const query = `SELECT * FROM users`;\n");
@@ -216,7 +212,7 @@ describe("SQL review context", () => {
   });
 
   it("keeps full SQL discovery for sparse reviews that include a changed SQL file", async () => {
-    const root = await mkTmpDir();
+    const root = await mkTmpDir("cg-sql-review-");
     try {
       const schema = await writeFile(path.join(root, "db", "schema.sql"), "CREATE TABLE users (id integer);\n");
       const migration = await writeFile(path.join(root, "db", "migrations", "20260513000000_orders.sql"), [
@@ -247,7 +243,7 @@ describe("SQL review context", () => {
   });
 
   it("bounds concurrent SQL fact reads when matching changed code literals", async () => {
-    const root = await mkTmpDir();
+    const root = await mkTmpDir("cg-sql-review-");
     try {
       for (let index = 0; index < 40; index += 1) {
         await writeFile(path.join(root, "db", `schema_${index}.sql`), `CREATE TABLE table_${index} (id integer);\n`);
@@ -287,7 +283,7 @@ describe("SQL review context", () => {
   });
 
   it("surfaces SQL candidates for changed code update literals", async () => {
-    const root = await mkTmpDir();
+    const root = await mkTmpDir("cg-sql-review-");
     try {
       const schema = await writeFile(path.join(root, "db", "schema.sql"), "CREATE TABLE users (id integer);\n");
       const code = await writeFile(

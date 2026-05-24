@@ -1,17 +1,9 @@
 import { explainCodegraphTarget, formatAgentExplanation } from "../agent/explain.js";
+import type { CliAgentCommandContext } from "./context.js";
 import { EXPLAIN_HELP_TEXT } from "./help.js";
 import { parsePositiveIntegerOption } from "./options.js";
 
-export type ExplainCommandContext = {
-  positionals: string[];
-  root: string;
-  getOpt: (name: string) => string | undefined;
-  hasFlag: (name: string) => boolean;
-  writeJSONLine: (value: unknown) => void;
-  writeStdoutLine: (message: string) => void;
-  writeStderrLine: (message: string) => void;
-  exit: (code: number) => never;
-};
+export type ExplainCommandContext = CliAgentCommandContext;
 
 export async function handleExplainCommand(context: ExplainCommandContext): Promise<void> {
   const target = context.positionals.join(" ").trim();

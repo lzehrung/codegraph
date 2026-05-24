@@ -96,6 +96,8 @@ codegraph index --report
 codegraph review --report --report-file review.report.json
 ```
 
+`inspect` emits bounded hotspots, unresolved imports, cycles, and high-confidence duplicate opportunities. Duplicate opportunities are intentionally compact and include file ranges, confidence, clone type, score, token counts, and raw pair counts; run the recommended `duplicates` command for full grouped JSON.
+
 Graph, index, and review reports include `backend.native.byLanguage` so native usage and fallback remain visible per language. Build reports also include `backend.parser` when syntax-tree backend degradation leaves files without parser context. Reports also include `graph.fallbackImportExtraction.byLanguage` and `byReason` when regex import extraction is used. Review JSON reports `diagnostics.symbolMappingParseFailures`, `diagnostics.missingFiles`, `changedFiles[].status` as `updated`, `deleted`, or `missing`, and `sqlContext` when changed SQL files or changed SQL literals make SQL artifact facts relevant.
 
 ### Symbols, navigation, grep, and chunking

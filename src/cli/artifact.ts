@@ -1,16 +1,8 @@
 import { buildCodegraphArtifact } from "../agent/artifact.js";
+import type { CliAgentCommandContext } from "./context.js";
 import { ARTIFACT_HELP_TEXT } from "./help.js";
 
-export type ArtifactCommandContext = {
-  positionals: string[];
-  root: string;
-  getOpt: (name: string) => string | undefined;
-  hasFlag: (name: string) => boolean;
-  writeJSONLine: (value: unknown) => void;
-  writeStdoutLine: (message: string) => void;
-  writeStderrLine: (message: string) => void;
-  exit: (code: number) => never;
-};
+export type ArtifactCommandContext = CliAgentCommandContext;
 
 export async function handleArtifactCommand(context: ArtifactCommandContext): Promise<void> {
   const artifactCommand = context.positionals[0];

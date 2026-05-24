@@ -140,6 +140,8 @@ const DEFAULT_GROUP_VARIANT_LIMIT = 5;
 const DEFAULT_SHINGLE_SIZE = 5;
 const DEFAULT_WINDOW_SIZE = 4;
 const DEFAULT_MAX_FINGERPRINTS = 128;
+const GROUP_PRIMARY_LENGTH_RATIO_FLOOR = 0.7;
+const NEARBY_CHUNK_VARIANT_MAX_GAP = 2;
 
 const textLanguageByExtension: Record<string, string> = {
   ".json": "json",
@@ -332,6 +334,18 @@ function rangesSubstantiallyOverlap(left: DuplicateUnitRef, right: DuplicateUnit
   const overlap = lineOverlap(left, right);
   if (!overlap) return false;
   return overlap / Math.min(lineSpan(left), lineSpan(right)) >= 0.8;
+}
+
+function lineGap(left: DuplicateUnitRef, right: DuplicateUnitRef): number {
+  if (left.endLine < right.startLine) return right.startLine - left.endLine - 1;
+  if (right.endLine < left.startLine) return left.startLine - right.endLine - 1;
+  return 0;
+}
+
+function rangesAreNearbyChunkVariants(left: DuplicateUnitRef, right: DuplicateUnitRef): boolean {
+  if (left.file !== right.file || left.languageId !== right.languageId) return false;
+  if (left.kind !== "chunk" || right.kind !== "chunk") return false;
+  return lineGap(left, right) <= NEARBY_CHUNK_VARIANT_MAX_GAP;
 }
 
 function ratio(left: number, right: number): number {
@@ -862,6 +876,10 @@ function unitRefIdentity(ref: DuplicateUnitRef): string {
   ].join("\u0000");
 }
 
+function unitRefRangeIdentity(ref: DuplicateUnitRef): string {
+  return [ref.file, ref.startLine, ref.endLine, ref.languageId].join("\u0000");
+}
+
 function compareUnitRefs(left: DuplicateUnitRef, right: DuplicateUnitRef): number {
   const fileCompare = left.file.localeCompare(right.file);
   if (fileCompare) return fileCompare;
@@ -952,8 +970,10 @@ function createUnitClusters(refs: readonly DuplicateUnitRef[]): Map<string, Unit
       const left = fileRefs[i]!;
       for (let j = i + 1; j < fileRefs.length; j++) {
         const right = fileRefs[j]!;
-        if (right.ref.startLine > left.ref.endLine) break;
-        if (rangesSubstantiallyOverlap(left.ref, right.ref)) union(left.key, right.key);
+        if (right.ref.startLine > left.ref.endLine + NEARBY_CHUNK_VARIANT_MAX_GAP + 1) break;
+        if (rangesSubstantiallyOverlap(left.ref, right.ref) || rangesAreNearbyChunkVariants(left.ref, right.ref)) {
+          union(left.key, right.key);
+        }
       }
     }
   }
@@ -983,12 +1003,43 @@ function orderedGroupKey(left: UnitCluster, right: UnitCluster): string {
   return `${right.id}\u0000${left.id}`;
 }
 
-function mergeReasons(suggestions: readonly DuplicateSuggestion[]): string[] {
+function orderedUnitPairKey(left: DuplicateUnitRef, right: DuplicateUnitRef): string {
+  const leftKey = unitRefIdentity(left);
+  const rightKey = unitRefIdentity(right);
+  if (leftKey < rightKey) return `${leftKey}\u0000${rightKey}`;
+  return `${rightKey}\u0000${leftKey}`;
+}
+
+function orderedUnitRangePairKey(left: DuplicateUnitRef, right: DuplicateUnitRef): string {
+  const leftKey = unitRefRangeIdentity(left);
+  const rightKey = unitRefRangeIdentity(right);
+  if (leftKey < rightKey) return `${leftKey}\u0000${rightKey}`;
+  return `${rightKey}\u0000${leftKey}`;
+}
+
+function suggestionVariantKey(suggestion: DuplicateSuggestion): string {
+  return [
+    orderedUnitPairKey(suggestion.left, suggestion.right),
+    suggestion.score,
+    suggestion.confidence,
+    suggestion.cloneType,
+  ].join("\u0000");
+}
+
+function mergeReasonLists(reasonLists: Iterable<readonly string[]>): string[] {
   const reasons = new Set<string>();
-  for (const suggestion of suggestions) {
-    for (const reason of suggestion.reasons) reasons.add(reason);
+  for (const reasonList of reasonLists) {
+    for (const reason of reasonList) reasons.add(reason);
   }
   return Array.from(reasons).sort();
+}
+
+function mergeReasons(suggestions: readonly DuplicateSuggestion[]): string[] {
+  return mergeReasonLists(suggestions.map((suggestion) => suggestion.reasons));
+}
+
+function mergeGroupReasons(groups: readonly DuplicateGroup[]): string[] {
+  return mergeReasonLists(groups.map((group) => group.reasons));
 }
 
 function groupForSuggestions(
@@ -1009,6 +1060,13 @@ function groupForSuggestions(
     confidence = bestConfidence(confidence, suggestion.confidence);
     cloneType = bestCloneType(cloneType, suggestion.cloneType);
   }
+  let reasons = mergeReasons(suggestions);
+  const primaryLengthRatio = ratio(left.primary.tokenCount, right.primary.tokenCount);
+  if (primaryLengthRatio < GROUP_PRIMARY_LENGTH_RATIO_FLOOR) {
+    score = Math.min(score, 64);
+    confidence = "low";
+    reasons = Array.from(new Set([...reasons, "different-sized grouped units"])).sort();
+  }
   return {
     id: shortHashText(key),
     score,
@@ -1021,7 +1079,7 @@ function groupForSuggestions(
     rawPairCount: suggestions.length,
     omittedVariantCount: Math.max(0, suggestions.length - variants.length),
     metrics: primary.metrics,
-    reasons: mergeReasons(suggestions),
+    reasons,
   };
 }
 
@@ -1038,6 +1096,58 @@ function compareGroups(left: DuplicateGroup, right: DuplicateGroup): number {
   const leftCompare = compareUnitRefs(left.primaryLeft, right.primaryLeft);
   if (leftCompare) return leftCompare;
   return compareUnitRefs(left.primaryRight, right.primaryRight);
+}
+
+function coalesceDuplicateGroups(groups: DuplicateGroup[], variantLimit: number): DuplicateGroup[] {
+  const groupsByPrimaryPair = new Map<string, DuplicateGroup[]>();
+  for (const group of groups) {
+    const key = orderedUnitRangePairKey(group.primaryLeft, group.primaryRight);
+    const existing = groupsByPrimaryPair.get(key);
+    if (existing) existing.push(group);
+    else groupsByPrimaryPair.set(key, [group]);
+  }
+
+  const coalesced: DuplicateGroup[] = [];
+  for (const [key, grouped] of groupsByPrimaryPair) {
+    if (grouped.length === 1) {
+      coalesced.push(grouped[0]!);
+      continue;
+    }
+
+    grouped.sort(compareGroups);
+    const primary = grouped[0]!;
+    const variantsByKey = new Map<string, DuplicateSuggestion>();
+    for (const group of grouped) {
+      for (const variant of group.variants) {
+        variantsByKey.set(suggestionVariantKey(variant), variant);
+      }
+    }
+    const dedupedVariants = Array.from(variantsByKey.values()).sort(compareSuggestionsForPrimary);
+    const variants = dedupedVariants.slice(0, variantLimit);
+    const rawPairCount = grouped.reduce((count, group) => count + group.rawPairCount, 0);
+    let score = primary.score;
+    let confidence = primary.confidence;
+    let cloneType = primary.cloneType;
+    for (const group of grouped.slice(1)) {
+      score = Math.max(score, group.score);
+      confidence = bestConfidence(confidence, group.confidence);
+      cloneType = bestCloneType(cloneType, group.cloneType);
+    }
+    coalesced.push({
+      ...primary,
+      id: shortHashText(key),
+      score,
+      confidence,
+      cloneType,
+      variants,
+      variantCount: variants.length,
+      rawPairCount,
+      omittedVariantCount: Math.max(0, dedupedVariants.length - variants.length),
+      reasons: mergeGroupReasons(grouped),
+    });
+  }
+  coalesced.sort(compareGroups);
+  return coalesced;
 }
 
 function groupSuggestions(suggestions: readonly DuplicateSuggestion[], includeRawPairs: boolean): DuplicateGroup[] {
@@ -1062,8 +1172,7 @@ function groupSuggestions(suggestions: readonly DuplicateSuggestion[], includeRa
   const groups = Array.from(suggestionsByGroup, ([key, value]) =>
     groupForSuggestions(key, value.suggestions, value.left, value.right, variantLimit),
   );
-  groups.sort(compareGroups);
-  return groups;
+  return coalesceDuplicateGroups(groups, variantLimit);
 }
 
 /** Finds scored duplicate candidates from an already-built project index. */
@@ -1120,7 +1229,9 @@ export async function findDuplicates(
   suggestions.sort(compareSuggestions);
 
   const includeRawPairs = options.includeRawPairs ?? false;
-  const groups = groupSuggestions(suggestions, includeRawPairs);
+  const groups = groupSuggestions(suggestions, includeRawPairs).filter(
+    (group) => confidenceRank[group.confidence] >= confidenceRank[minConfidence],
+  );
   const limitedGroups = groups.slice(0, limit);
   const omittedGroups = Math.max(0, groups.length - limitedGroups.length);
   const limitedRawSuggestions = includeRawPairs ? suggestions.slice(0, limit) : [];

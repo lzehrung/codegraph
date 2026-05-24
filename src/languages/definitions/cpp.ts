@@ -3,12 +3,18 @@ import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 import {
   cFamilyContainerTypes,
+  cFamilyControlSplitPoints,
+  cFamilyCoreExportQueries,
+  cFamilyCoreLocalQueries,
+  cFamilyIncludeBindingsQuery,
+  cFamilyIncludeImportsQuery,
   cFunctionNameQuery,
   findAncestor,
   isFunctionDeclarator,
   isInAncestorDeclarator,
   isInField,
   isInParameterList,
+  joinQueryPatterns,
 } from "./cFamily.js";
 
 const FUNCTION_NAME_QUERY = cFunctionNameQuery("chunk.name", true);
@@ -56,55 +62,25 @@ export const CPP_DEF: LanguageDefinition = {
         captureId: "type",
       },
     ],
-    splitPoints: [
-      "if_statement",
-      "for_statement",
-      "while_statement",
-      "do_statement",
-      "switch_statement",
-      "case_statement",
-      "try_statement",
-      "catch_clause",
-    ],
+    splitPoints: [...cFamilyControlSplitPoints, "try_statement", "catch_clause"],
     comments: ["comment"],
   },
   graph: {
-    imports: `
-      (preproc_include path: (string_literal) @mod) @stmt
-      (preproc_include path: (system_lib_string) @mod) @stmt
-      (preproc_include path: (identifier) @mod) @stmt
-    `,
-    exports: `
-      (function_definition ${GRAPH_FUNCTION_NAME_QUERY})
-      (declaration ${GRAPH_FUNCTION_NAME_QUERY})
-      (class_specifier name: (type_identifier) @name)
-      (struct_specifier name: (type_identifier) @name)
-      (enum_specifier name: (type_identifier) @name)
-      (namespace_definition name: (namespace_identifier) @name)
-      (alias_declaration name: (type_identifier) @name)
-      (type_definition declarator: (type_identifier) @name)
-      (using_declaration (qualified_identifier name: (identifier) @name))
-      (declaration declarator: (identifier) @name)
-      (declaration declarator: (init_declarator declarator: (identifier) @name))
-    `,
-    locals: `
-      (function_definition ${GRAPH_FUNCTION_NAME_QUERY})
-      (class_specifier name: (type_identifier) @name)
-      (struct_specifier name: (type_identifier) @name)
-      (enum_specifier name: (type_identifier) @name)
-      (namespace_definition name: (namespace_identifier) @name)
-      (alias_declaration name: (type_identifier) @name)
-      (type_definition declarator: (type_identifier) @name)
-      (declaration declarator: (identifier) @name)
-      (declaration declarator: (init_declarator declarator: (identifier) @name))
-      (parameter_declaration declarator: (identifier) @name)
-      (field_declaration declarator: (field_identifier) @name)
-    `,
-    importBindings: `
-      (preproc_include path: (string_literal) @from) @stmt
-      (preproc_include path: (system_lib_string) @from) @stmt
-      (preproc_include path: (identifier) @from) @stmt
-    `,
+    imports: cFamilyIncludeImportsQuery,
+    exports: joinQueryPatterns([
+      ...cFamilyCoreExportQueries(GRAPH_FUNCTION_NAME_QUERY),
+      `(class_specifier name: (type_identifier) @name)`,
+      `(namespace_definition name: (namespace_identifier) @name)`,
+      `(alias_declaration name: (type_identifier) @name)`,
+      `(using_declaration (qualified_identifier name: (identifier) @name))`,
+    ]),
+    locals: joinQueryPatterns([
+      ...cFamilyCoreLocalQueries(GRAPH_FUNCTION_NAME_QUERY),
+      `(class_specifier name: (type_identifier) @name)`,
+      `(namespace_definition name: (namespace_identifier) @name)`,
+      `(alias_declaration name: (type_identifier) @name)`,
+    ]),
+    importBindings: cFamilyIncludeBindingsQuery,
   },
   nodeTypes: {
     identifier: ["identifier", "field_identifier", "type_identifier", "namespace_identifier"],

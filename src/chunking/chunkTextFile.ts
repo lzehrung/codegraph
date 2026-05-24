@@ -1,4 +1,6 @@
 import type { Chunk } from "./chunkFile.js";
+import { countWhitespaceTokens } from "./tokenizer.js";
+import type { ChunkTokenizer } from "./types.js";
 
 /**
  * Options for text file chunking (JSON, YAML, config files, etc.).
@@ -15,12 +17,7 @@ export interface TextChunkOptions {
   /** Maximum tokens per chunk (default: 400). Larger chunks are split. */
   maxTokens?: number;
   /** Custom token counting function (default: whitespace-based) */
-  tokenizer?: ((text: string) => number) | undefined;
-}
-
-function defaultTokenizer(text: string): number {
-  if (!text.trim()) return 0;
-  return text.trim().split(/\s+/).length;
+  tokenizer?: ChunkTokenizer | undefined;
 }
 
 /**
@@ -31,7 +28,7 @@ function defaultTokenizer(text: string): number {
  * @returns Array of text chunks
  */
 export function chunkTextFile(opts: TextChunkOptions): Chunk[] {
-  const { source, filePath, languageId = "text", maxTokens = 400, tokenizer = defaultTokenizer } = opts;
+  const { source, filePath, languageId = "text", maxTokens = 400, tokenizer = countWhitespaceTokens } = opts;
 
   const lines = source.split(/\r?\n/);
   const chunks: Chunk[] = [];

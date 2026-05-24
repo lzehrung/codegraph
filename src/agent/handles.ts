@@ -51,12 +51,17 @@ export function formatAgentFileHandle(handle: AgentFileHandle): string {
   return ["file", encodeURIComponent(handle.file)].join(":");
 }
 
-export function parseAgentFileHandle(handle: string): AgentFileHandle | null {
-  if (!handle.startsWith("file:")) return null;
-  const encodedFile = handle.slice("file:".length);
+function parseAgentFileLikeHandle(handle: string, prefix: "file" | "graph"): AgentFileHandle | null {
+  const handlePrefix = `${prefix}:`;
+  if (!handle.startsWith(handlePrefix)) return null;
+  const encodedFile = handle.slice(handlePrefix.length);
   const file = decodeHandlePart(encodedFile) ?? encodedFile;
   if (!file) return null;
   return { file };
+}
+
+export function parseAgentFileHandle(handle: string): AgentFileHandle | null {
+  return parseAgentFileLikeHandle(handle, "file");
 }
 
 export function formatAgentChunkHandle(handle: AgentChunkHandle): string {
@@ -80,11 +85,7 @@ export function formatAgentGraphHandle(handle: AgentFileHandle): string {
 }
 
 export function parseAgentGraphHandle(handle: string): AgentFileHandle | null {
-  if (!handle.startsWith("graph:")) return null;
-  const encodedFile = handle.slice("graph:".length);
-  const file = decodeHandlePart(encodedFile) ?? encodedFile;
-  if (!file) return null;
-  return { file };
+  return parseAgentFileLikeHandle(handle, "graph");
 }
 
 export function formatAgentSqlHandle(handle: AgentSqlHandle): string {

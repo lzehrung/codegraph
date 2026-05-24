@@ -1,17 +1,9 @@
 import { formatAgentSearchResponse, searchCodegraph, type AgentSearchMode } from "../agent/search.js";
+import type { CliAgentCommandContext } from "./context.js";
 import { SEARCH_HELP_TEXT } from "./help.js";
 import { parsePositiveIntegerOption } from "./options.js";
 
-export type SearchCommandContext = {
-  positionals: string[];
-  root: string;
-  getOpt: (name: string) => string | undefined;
-  hasFlag: (name: string) => boolean;
-  writeJSONLine: (value: unknown) => void;
-  writeStdoutLine: (message: string) => void;
-  writeStderrLine: (message: string) => void;
-  exit: (code: number) => never;
-};
+export type SearchCommandContext = CliAgentCommandContext;
 
 function parseAgentSearchMode(rawValue: string | undefined): AgentSearchMode {
   if (rawValue === undefined) return "hybrid";

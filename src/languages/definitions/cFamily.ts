@@ -9,6 +9,27 @@ export const cFamilyContainerTypes = new Set([
   "init_declarator",
 ]);
 
+export const cFamilyControlSplitPoints = [
+  "if_statement",
+  "for_statement",
+  "while_statement",
+  "do_statement",
+  "switch_statement",
+  "case_statement",
+];
+
+export const cFamilyIncludeImportsQuery = `
+      (preproc_include path: (string_literal) @mod) @stmt
+      (preproc_include path: (system_lib_string) @mod) @stmt
+      (preproc_include path: (identifier) @mod) @stmt
+    `;
+
+export const cFamilyIncludeBindingsQuery = `
+      (preproc_include path: (string_literal) @from) @stmt
+      (preproc_include path: (system_lib_string) @from) @stmt
+      (preproc_include path: (identifier) @from) @stmt
+    `;
+
 const cFamilyParameterListTypes = new Set(["parameter_declaration", "parameter_list"]);
 
 export function cFunctionNameQuery(captureName: string, includeFieldIdentifier: boolean): string {
@@ -31,6 +52,37 @@ export function cFunctionNameQuery(captureName: string, includeFieldIdentifier: 
     ${patterns.join("\n    ")}
   ]
 `;
+}
+
+export function cFamilyCoreExportQueries(functionNameQuery: string): string[] {
+  return [
+    `(function_definition ${functionNameQuery})`,
+    `(declaration ${functionNameQuery})`,
+    `(struct_specifier name: (type_identifier) @name)`,
+    `(enum_specifier name: (type_identifier) @name)`,
+    `(type_definition declarator: (type_identifier) @name)`,
+    `(declaration declarator: (identifier) @name)`,
+    `(declaration declarator: (init_declarator declarator: (identifier) @name))`,
+  ];
+}
+
+export function cFamilyCoreLocalQueries(functionNameQuery: string): string[] {
+  return [
+    `(function_definition ${functionNameQuery})`,
+    `(struct_specifier name: (type_identifier) @name)`,
+    `(enum_specifier name: (type_identifier) @name)`,
+    `(type_definition declarator: (type_identifier) @name)`,
+    `(declaration declarator: (identifier) @name)`,
+    `(declaration declarator: (init_declarator declarator: (identifier) @name))`,
+    `(parameter_declaration declarator: (identifier) @name)`,
+    `(field_declaration declarator: (field_identifier) @name)`,
+  ];
+}
+
+export function joinQueryPatterns(patterns: readonly string[]): string {
+  return `
+      ${patterns.join("\n      ")}
+    `;
 }
 
 export function isWithin(node: SyntaxNodeLike, ancestor: SyntaxNodeLike | null): boolean {

@@ -1,15 +1,11 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import path from "node:path";
-import os from "node:os";
 import fsp from "node:fs/promises";
 import { collectGraph, type Edge } from "../src/index.js";
 import * as nativeRuntime from "../src/native/treeSitterNative.js";
+import { mkTmpDir } from "./helpers/filesystem.js";
+import { graphEdgeKey } from "./helpers/graph.js";
 import { getSamplePath } from "./test-utils.js";
-
-function normEdge(e: any) {
-  const toStr = (t: any) => (t.type === "file" ? t.path : t.name);
-  return { from: e.from.replace(/\\/g, "/"), to: toStr(e.to).replace(/\\/g, "/"), raw: e.raw, typeOnly: !!e.typeOnly };
-}
 
 describe("Fast graph specifier extraction (--fast-graph)", () => {
   afterEach(() => {
@@ -26,12 +22,8 @@ describe("Fast graph specifier extraction (--fast-graph)", () => {
     const g1 = await collectGraph(root, files);
     const g2 = await (await import("../src/graphs.js")).collectGraph(root, files, { fast: true });
 
-    const toKey = (to: unknown) => {
-      const t = to as { type: "file"; path: string } | { type: "external"; name: string };
-      return t.type === "file" ? t.path : t.name;
-    };
-    const aSet = new Set(g1.edges.map((e) => `${e.from}|${toKey(e.to)}|${e.raw}`));
-    const bSet = new Set(g2.edges.map((e) => `${e.from}|${toKey(e.to)}|${e.raw}`));
+    const aSet = new Set(g1.edges.map(graphEdgeKey));
+    const bSet = new Set(g2.edges.map(graphEdgeKey));
     expect(bSet).toEqual(aSet);
   });
 
@@ -47,12 +39,8 @@ describe("Fast graph specifier extraction (--fast-graph)", () => {
     const g1 = await collectGraph(root, files);
     const g2 = await (await import("../src/graphs.js")).collectGraph(root, files, { fast: true });
 
-    const toKey = (to: unknown) => {
-      const t = to as { type: "file"; path: string } | { type: "external"; name: string };
-      return t.type === "file" ? t.path : t.name;
-    };
-    const aSet = new Set(g1.edges.map((e) => `${e.from}|${toKey(e.to)}|${e.raw}`));
-    const bSet = new Set(g2.edges.map((e) => `${e.from}|${toKey(e.to)}|${e.raw}`));
+    const aSet = new Set(g1.edges.map(graphEdgeKey));
+    const bSet = new Set(g2.edges.map(graphEdgeKey));
     expect(bSet).toEqual(aSet);
   });
   it("matches regular graph edges for Python samples", async () => {
@@ -66,17 +54,13 @@ describe("Fast graph specifier extraction (--fast-graph)", () => {
     const g1 = await collectGraph(root, files);
     const g2 = await (await import("../src/graphs.js")).collectGraph(root, files, { fast: true });
 
-    const toKey = (to: unknown) => {
-      const t = to as { type: "file"; path: string } | { type: "external"; name: string };
-      return t.type === "file" ? t.path : t.name;
-    };
-    const aSet = new Set(g1.edges.map((e) => `${e.from}|${toKey(e.to)}|${e.raw}`));
-    const bSet = new Set(g2.edges.map((e) => `${e.from}|${toKey(e.to)}|${e.raw}`));
+    const aSet = new Set(g1.edges.map(graphEdgeKey));
+    const bSet = new Set(g2.edges.map(graphEdgeKey));
     expect(bSet).toEqual(aSet);
   });
 
   it("can miss multiline import edges that full parsing captures", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-fast-graph-"));
+    const root = await mkTmpDir("dg-fast-graph-");
     const entryPath = path.join(root, "entry.ts").replace(/\\/g, "/");
     const depPath = path.join(root, "dep.ts").replace(/\\/g, "/");
     await fsp.writeFile(entryPath, `import {\n  value\n} from './dep';\n\nconsole.log(value);\n`, "utf8");
