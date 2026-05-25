@@ -1,26 +1,6 @@
-import type { LanguageDefinition } from "../types.js";
-import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
+import { htmlStubLanguage } from "./htmlStub.js";
 
-export const ADOC_DEF: LanguageDefinition = {
-  id: "adoc",
-  extensions: [".adoc", ".asciidoc"],
-  // AsciiDoc is graph-first for now; HTML is used only as a permissive parser stub.
-  grammar: () => loadTreeSitterLanguage("tree-sitter-html"),
-  structure: {
-    blocks: [],
-    splitPoints: [],
-    comments: [],
-  },
-  graph: {
-    imports: "",
-    exports: "",
-    locals: "",
-    importBindings: "",
-  },
-  nodeTypes: {
-    identifier: [],
-  },
-};
+export const ADOC_DEF = htmlStubLanguage("adoc", [".adoc", ".asciidoc"]);
 
 registerLanguage(ADOC_DEF);
