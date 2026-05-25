@@ -96,6 +96,22 @@ export function assertFilePathWithinRoot(projectRoot: string, filePath: string, 
   return normalizedFile;
 }
 
+export type FilePathWithinRootResult =
+  | { status: "ok"; file: string }
+  | { status: "error"; reason: "outside_project_root"; error: string };
+
+export function resolveFilePathWithinRoot(projectRoot: string, filePath: string, label?: string): FilePathWithinRootResult {
+  try {
+    return { status: "ok", file: assertFilePathWithinRoot(projectRoot, filePath, label) };
+  } catch (error) {
+    return {
+      status: "error",
+      reason: "outside_project_root",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 export function toProjectRelativePath(projectRoot: string, filePath: string): string | null {
   const normalizedRoot = normalizePath(resolveComparableProjectRoot(projectRoot));
   const normalizedFile = normalizePath(resolveFilePathFromRoot(normalizedRoot, filePath));

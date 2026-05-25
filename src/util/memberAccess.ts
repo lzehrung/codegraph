@@ -81,12 +81,24 @@ export function getNavigationExpressionProperty(expr: SyntaxNodeLike): SyntaxNod
   );
 }
 
+/**
+ * Builds {@link MemberAccessParts} from a member-access node by tree-sitter
+ * field name, falling back to positional children (object → child 0,
+ * property → child 2) when a field is absent.
+ *
+ * Most languages model member access as `<object>.<property>`, so per-language
+ * branches only supply their field names instead of repeating this shape.
+ */
+function fieldParts(node: SyntaxNodeLike, objectField: string, propertyField: string): MemberAccessParts {
+  return {
+    object: node.childForFieldName(objectField) ?? node.child(0),
+    property: node.childForFieldName(propertyField) ?? node.child(2),
+  };
+}
+
 export function getMemberAccessParts(sup: LanguageSupport, memberNode: SyntaxNodeLike): MemberAccessParts {
   if (sup.id === "python") {
-    return {
-      object: memberNode.childForFieldName("object") ?? memberNode.child(0),
-      property: memberNode.childForFieldName("attribute") ?? memberNode.child(2),
-    };
+    return fieldParts(memberNode, "object", "attribute");
   }
   if (sup.id === "csharp") {
     return {
@@ -96,35 +108,20 @@ export function getMemberAccessParts(sup: LanguageSupport, memberNode: SyntaxNod
   }
   if (sup.id === "java") {
     if (memberNode.type === "method_invocation") {
-      return {
-        object: memberNode.childForFieldName("object") ?? memberNode.child(0),
-        property: memberNode.childForFieldName("name") ?? memberNode.child(2),
-      };
+      return fieldParts(memberNode, "object", "name");
     }
     if (memberNode.type === "scoped_identifier" || memberNode.type === "scoped_type_identifier") {
-      return {
-        object: memberNode.childForFieldName("scope") ?? memberNode.child(0),
-        property: memberNode.childForFieldName("name") ?? memberNode.child(2),
-      };
+      return fieldParts(memberNode, "scope", "name");
     }
   }
   if (sup.id === "ruby") {
     if (memberNode.type === "scope_resolution") {
-      return {
-        object: memberNode.childForFieldName("scope") ?? memberNode.child(0),
-        property: memberNode.childForFieldName("name") ?? memberNode.child(2),
-      };
+      return fieldParts(memberNode, "scope", "name");
     }
-    return {
-      object: memberNode.childForFieldName("receiver") ?? memberNode.child(0),
-      property: memberNode.childForFieldName("method") ?? memberNode.child(2),
-    };
+    return fieldParts(memberNode, "receiver", "method");
   }
   if (sup.id === "rust" && memberNode.type === "scoped_identifier") {
-    return {
-      object: memberNode.childForFieldName("path") ?? memberNode.child(0),
-      property: memberNode.childForFieldName("name") ?? memberNode.child(2),
-    };
+    return fieldParts(memberNode, "path", "name");
   }
   if (sup.id === "go" && memberNode.type === "qualified_type") {
     return {

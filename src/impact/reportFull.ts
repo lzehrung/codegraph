@@ -1,6 +1,11 @@
 import type { FileId } from "../types.js";
 import { type ProjectIndex } from "../indexer/types.js";
-import { mapExportSummary, mapReexportChains, mapTopImpacts } from "./reportShared.js";
+import {
+  buildOptionalExportSummary,
+  buildOptionalReexportChains,
+  buildOptionalTopImpacts,
+  mapFileEdges,
+} from "./reportShared.js";
 import { IMPACT_SCHEMA_VERSION } from "./types.js";
 import type {
   ChangedSymbol,
@@ -57,9 +62,9 @@ export function buildFullImpactReport(parts: FullImpactReportParts): ImpactRepor
       file: parts.displayFile(item.file),
     })),
     ...buildFullSuggestions(parts.suggestions, parts.displayFile),
-    ...buildFullExportSummary(parts.exportSummary, parts.displayFile),
-    ...buildFullReexportChains(parts.reexportChains, parts.displayFile),
-    ...buildFullTopImpacts(parts.topImpacts, parts.displayFile),
+    ...buildOptionalExportSummary(parts.exportSummary, parts.displayFile),
+    ...buildOptionalReexportChains(parts.reexportChains, parts.displayFile),
+    ...buildOptionalTopImpacts(parts.topImpacts, parts.displayFile),
     surfaceArea: {
       files: parts.surfaceArea.files.map((item) => ({
         ...item,
@@ -75,16 +80,7 @@ export function buildFullImpactReport(parts: FullImpactReportParts): ImpactRepor
     })),
     ...buildFullCycles(parts.cycles, parts.displayFile),
     graph: {
-      fileEdges: parts.fileEdges.map((edge) => {
-        const fileEdge: { from: FileId; to: FileId; typeOnly?: boolean } = {
-          from: parts.displayFile(edge.from),
-          to: parts.displayFile(edge.to),
-        };
-        if (edge.typeOnly !== undefined) {
-          fileEdge.typeOnly = edge.typeOnly;
-        }
-        return fileEdge;
-      }),
+      fileEdges: mapFileEdges(parts.fileEdges, parts.displayFile),
       symbolEdges: parts.symbolEdges,
     },
   };
@@ -104,38 +100,6 @@ function buildFullSuggestions(
       file: displayFile(suggestion.file),
       ...(suggestion.relatedFile ? { relatedFile: displayFile(suggestion.relatedFile) } : {}),
     })),
-  };
-}
-
-function buildFullExportSummary(
-  exportSummary: ExportSummaryEntry[],
-  displayFile: (file: FileId) => FileId,
-): Pick<ImpactReport, "exportSummary"> {
-  if (!exportSummary.length) return {};
-  return {
-    exportSummary: mapExportSummary(exportSummary, displayFile),
-  };
-}
-
-function buildFullReexportChains(
-  reexportChains: { chains: ReexportChainEntry[] } | undefined,
-  displayFile: (file: FileId) => FileId,
-): Pick<ImpactReport, "reexportChains"> {
-  if (!reexportChains) return {};
-  const mappedChains = mapReexportChains(reexportChains, displayFile);
-  if (!mappedChains) return {};
-  return {
-    reexportChains: mappedChains,
-  };
-}
-
-function buildFullTopImpacts(
-  topImpacts: ImpactTopItem[],
-  displayFile: (file: FileId) => FileId,
-): Pick<ImpactReport, "topImpacts"> {
-  if (!topImpacts.length) return {};
-  return {
-    topImpacts: mapTopImpacts(topImpacts, displayFile),
   };
 }
 

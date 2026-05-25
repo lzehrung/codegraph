@@ -47,3 +47,44 @@ export function mapTopImpacts<TFile extends FileId | number>(
     file: mapFile(item.file),
   }));
 }
+
+export function buildOptionalExportSummary<TFile extends FileId | number>(
+  exportSummary: readonly ExportSummaryEntry[],
+  mapFile: (file: FileId) => TFile,
+): { exportSummary?: Array<MappedExportSummaryEntry<TFile>> } {
+  if (!exportSummary.length) return {};
+  return { exportSummary: mapExportSummary(exportSummary, mapFile) };
+}
+
+export function buildOptionalReexportChains<TFile extends FileId | number>(
+  reexportChains: { chains: ReexportChainEntry[] } | undefined,
+  mapFile: (file: FileId) => TFile,
+): { reexportChains?: { chains: Array<MappedReexportChainEntry<TFile>> } } {
+  const mapped = mapReexportChains(reexportChains, mapFile);
+  if (!mapped) return {};
+  return { reexportChains: mapped };
+}
+
+export function buildOptionalTopImpacts<TFile extends FileId | number>(
+  topImpacts: readonly ImpactTopItem[],
+  mapFile: (file: FileId) => TFile,
+): { topImpacts?: Array<MappedImpactTopItem<TFile>> } {
+  if (!topImpacts.length) return {};
+  return { topImpacts: mapTopImpacts(topImpacts, mapFile) };
+}
+
+export function mapFileEdges<TFile extends FileId | number>(
+  fileEdges: ReadonlyArray<{ from: FileId; to: FileId; typeOnly?: boolean | undefined }>,
+  mapFile: (file: FileId) => TFile,
+): Array<{ from: TFile; to: TFile; typeOnly?: boolean }> {
+  return fileEdges.map((edge) => {
+    const mapped: { from: TFile; to: TFile; typeOnly?: boolean } = {
+      from: mapFile(edge.from),
+      to: mapFile(edge.to),
+    };
+    if (edge.typeOnly !== undefined) {
+      mapped.typeOnly = edge.typeOnly;
+    }
+    return mapped;
+  });
+}
