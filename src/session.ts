@@ -22,7 +22,7 @@ import {
 } from "./impact/index.js";
 import { analyzeImpactStreaming, type ImpactStreamChunk } from "./impact/streaming.js";
 import { getSessionPreset, mergePreset, type PresetName } from "./presets.js";
-import { assertFilePathWithinRoot } from "./util/paths.js";
+import { resolveFilePathWithinRoot } from "./util/paths.js";
 
 export type SessionOptions = {
   /** Project root directory */
@@ -139,18 +139,7 @@ function resolveSessionFileInput(
   file: string,
   label: string,
 ): { status: "ok"; file: string } | SessionInputError {
-  try {
-    return {
-      status: "ok",
-      file: assertFilePathWithinRoot(root, file, label),
-    };
-  } catch (error) {
-    return {
-      status: "error",
-      reason: "outside_project_root",
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
+  return resolveFilePathWithinRoot(root, file, label);
 }
 
 function requireSessionImpactProvider(options: Partial<ImpactOptions>): void {

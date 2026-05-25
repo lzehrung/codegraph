@@ -1,8 +1,6 @@
-import { assertFilePathWithinRoot } from "../util/paths.js";
+import { resolveFilePathWithinRoot, type FilePathWithinRootResult } from "../util/paths.js";
 
-export type CliProjectFileInput =
-  | { status: "ok"; file: string }
-  | { status: "error"; reason: "outside_project_root"; error: string };
+export type CliProjectFileInput = FilePathWithinRootResult;
 
 export type CliProjectFileErrorOutput = "json" | "text";
 
@@ -12,18 +10,7 @@ export type CliProjectFileErrorContext = {
 };
 
 export function resolveCliProjectFile(projectRoot: string, fileArg: string, label: string): CliProjectFileInput {
-  try {
-    return {
-      status: "ok",
-      file: assertFilePathWithinRoot(projectRoot, fileArg, label),
-    };
-  } catch (error) {
-    return {
-      status: "error",
-      reason: "outside_project_root",
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
+  return resolveFilePathWithinRoot(projectRoot, fileArg, label);
 }
 
 export function writeCliProjectFileError(
