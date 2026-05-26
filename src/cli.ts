@@ -37,8 +37,10 @@ import { handleImpactCommand } from "./cli/impact.js";
 import { handleIndexCommand } from "./cli/index.js";
 import { handleHotspotsCommand, handleInspectCommand } from "./cli/inspect.js";
 import { handleMcpServeCommand } from "./cli/mcp.js";
+import { handleOrientCommand } from "./cli/orient.js";
 import { handleDumpmodCommand, handleGotoCommand, handleRefsCommand } from "./cli/navigation.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
+import { handlePacketCommand } from "./cli/packet.js";
 import { handleReviewCommand } from "./cli/review.js";
 import { handleSearchCommand } from "./cli/search.js";
 import { handleSkillCommand } from "./cli/skill.js";
@@ -245,11 +247,19 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     : {};
 
   const supportsIncludeRoots =
-    cmd === "graph" || cmd === "index" || cmd === "hotspots" || cmd === "inspect" || cmd === "duplicates";
+    cmd === "graph" ||
+    cmd === "index" ||
+    cmd === "hotspots" ||
+    cmd === "inspect" ||
+    cmd === "duplicates" ||
+    cmd === "orient";
   let includeRoots: string[] = [];
   if (supportsIncludeRoots) {
     if (rootOpt) {
       // If the user explicitly sets --root, treat all remaining positionals as include roots.
+      includeRoots = parsed.positionals;
+    } else if (cmd === "orient") {
+      // Orient uses positionals only as include roots; it does not use the legacy root positional.
       includeRoots = parsed.positionals;
     } else if (parsed.positionals.length > 1) {
       // Otherwise, a single positional arg is treated as the project root (back-compat).
@@ -358,6 +368,34 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
 
   if (cmd === "explain") {
     await handleExplainCommand({
+      positionals: parsed.positionals,
+      root: projectRootFs,
+      getOpt,
+      hasFlag,
+      writeJSONLine,
+      writeStdoutLine,
+      writeStderrLine,
+      exit: exitCli,
+    });
+    return;
+  }
+
+  if (cmd === "orient") {
+    await handleOrientCommand({
+      positionals: includeRoots,
+      root: projectRootFs,
+      getOpt,
+      hasFlag,
+      writeJSONLine,
+      writeStdoutLine,
+      writeStderrLine,
+      exit: exitCli,
+    });
+    return;
+  }
+
+  if (cmd === "packet") {
+    await handlePacketCommand({
       positionals: parsed.positionals,
       root: projectRootFs,
       getOpt,

@@ -17,6 +17,8 @@ import { buildCodegraphArtifactWithSession } from "../agent/artifact.js";
 import type { CodegraphArtifactBuildResult } from "../agent/artifact.js";
 import { explainCodegraphTargetWithSession } from "../agent/explain.js";
 import type { AgentExplanation, AgentExplanationReference } from "../agent/explain.js";
+import { orientCodegraphWithSession, type AgentOrientBudget, type AgentOrientResponse } from "../agent/orient.js";
+import { getCodegraphPacketWithSession, type AgentPacketResponse } from "../agent/packet.js";
 import { searchCodegraphWithSession } from "../agent/search.js";
 import type { AgentSearchMode, AgentSearchResponse } from "../agent/search.js";
 import { getDependencies, getReverseDependencies, getShortestPath, type DependencyNode } from "../graphs/queries.js";
@@ -96,6 +98,15 @@ export type CodegraphMcpHandlers = {
     depth?: number | undefined;
     limit?: number | undefined;
   }) => Promise<AgentSearchResponse>;
+  orient: (request: {
+    includeRoots?: string[] | undefined;
+    budget?: AgentOrientBudget | undefined;
+  }) => Promise<AgentOrientResponse>;
+  packet_get: (request: {
+    handle: string;
+    maxSymbols?: number | undefined;
+    maxSnippets?: number | undefined;
+  }) => Promise<AgentPacketResponse>;
   get_file: (request: {
     file: string;
     maxBytes?: number | undefined;
@@ -197,6 +208,21 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
         ...(request.from !== undefined ? { from: request.from } : {}),
         ...(request.depth !== undefined ? { depth: request.depth } : {}),
         ...(request.limit !== undefined ? { limit: request.limit } : {}),
+      }),
+
+    orient: async (request) =>
+      await orientCodegraphWithSession(session, {
+        root,
+        ...(request.includeRoots !== undefined ? { includeRoots: request.includeRoots } : {}),
+        ...(request.budget !== undefined ? { budget: request.budget } : {}),
+      }),
+
+    packet_get: async (request) =>
+      await getCodegraphPacketWithSession(session, {
+        root,
+        handle: request.handle,
+        ...(request.maxSymbols !== undefined ? { maxSymbols: request.maxSymbols } : {}),
+        ...(request.maxSnippets !== undefined ? { maxSnippets: request.maxSnippets } : {}),
       }),
 
     get_file: async (request) => {
@@ -547,6 +573,10 @@ async function callMcpTool(handlers: CodegraphMcpHandlers, name: string, input: 
   switch (name) {
     case "search":
       return await handlers.search(searchSchema.parse(input));
+    case "orient":
+      return await handlers.orient(orientSchema.parse(input));
+    case "packet_get":
+      return await handlers.packet_get(packetGetSchema.parse(input));
     case "get_file":
       return await handlers.get_file(getFileSchema.parse(input));
     case "get_symbol":
@@ -613,6 +643,17 @@ const searchSchema = z.object({
   from: z.string().optional(),
   depth: z.number().int().nonnegative().optional(),
   limit: z.number().int().nonnegative().optional(),
+});
+
+const orientSchema = z.object({
+  includeRoots: z.array(z.string()).optional(),
+  budget: z.enum(["small", "medium", "large"]).optional(),
+});
+
+const packetGetSchema = z.object({
+  handle: z.string(),
+  maxSymbols: z.number().int().positive().max(200).optional(),
+  maxSnippets: z.number().int().positive().max(50).optional(),
 });
 
 const getFileSchema = z.object({

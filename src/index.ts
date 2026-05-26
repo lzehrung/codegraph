@@ -225,6 +225,27 @@ export {
 export { createAgentSession } from "./agent/session.js";
 export type { AgentProjectSnapshot, AgentSession, AgentSessionOptions } from "./agent/session.js";
 
+/** Agent first-turn orientation packets with stable follow-up handles. */
+export { orientCodegraph } from "./agent/orient.js";
+export type {
+  AgentModuleSummary,
+  AgentOrientBudget,
+  AgentOrientRequest,
+  AgentOrientResponse,
+  AgentPacketCommand,
+  AgentPacketHandle,
+  AgentTreeEntry,
+} from "./agent/orient.js";
+
+/** Agent packet retrieval by stable handle. */
+export { getCodegraphPacket } from "./agent/packet.js";
+export type {
+  AgentPacketKind,
+  AgentPacketPayload,
+  AgentPacketRequest,
+  AgentPacketResponse,
+} from "./agent/packet.js";
+
 /** Agent-facing deterministic search over symbols, files, chunks, SQL objects, and graph neighborhoods. */
 export { formatAgentSearchResponse, searchCodegraph, searchCodegraphWithSession } from "./agent/search.js";
 export type {

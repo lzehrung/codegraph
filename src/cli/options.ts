@@ -54,6 +54,7 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--agent",
   "--target",
   "--limit",
+  "--budget",
   "--mode",
   "--from",
   "--max-dependencies",

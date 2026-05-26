@@ -7,7 +7,7 @@ import { handleChunkCommand, type ChunkCommandContext } from "../src/cli/chunk.j
 import { buildDoctorReport } from "../src/cli/doctor.js";
 import { handleGraphDeltaCommand } from "../src/cli/graphDelta.js";
 import { handleGraphQueryCommand, type GraphQueryCommandContext } from "../src/cli/graphQueries.js";
-import { CLI_HELP_TEXT, MCP_SERVE_HELP_TEXT } from "../src/cli/help.js";
+import { CLI_HELP_TEXT, MCP_SERVE_HELP_TEXT, PACKET_HELP_TEXT } from "../src/cli/help.js";
 import { handleImpactCommand, type ImpactCommandContext } from "../src/cli/impact.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "../src/cli/packageInfo.js";
 import { handleSkillCommand, type SkillCommandContext } from "../src/cli/skill.js";
@@ -206,9 +206,25 @@ describe("CLI command modules", () => {
     expect(MCP_SERVE_HELP_TEXT).toContain("--stdio");
   });
 
+  test("packet help does not imply CLI orient accepts review ranges", () => {
+    expect(PACKET_HELP_TEXT).toContain("CLI orient returns file handles");
+    expect(PACKET_HELP_TEXT).toContain("library orientation calls that include a review range");
+    expect(PACKET_HELP_TEXT).not.toContain("Review handles are returned by orient when a review range is requested");
+  });
+
   test("routes agent command help to command-specific usage text", async () => {
     const cases = [
       { args: ["search", "--help"], heading: "codegraph search", usage: 'Usage: codegraph search "<query>"' },
+      {
+        args: ["orient", "--help"],
+        heading: "codegraph orient",
+        usage: "Usage: codegraph orient [roots...]",
+      },
+      {
+        args: ["packet", "--help"],
+        heading: "codegraph packet",
+        usage: "Usage: codegraph packet get <handle>",
+      },
       {
         args: ["explain", "--help"],
         heading: "codegraph explain",
