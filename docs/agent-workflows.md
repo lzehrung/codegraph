@@ -305,6 +305,7 @@ Wrapper notes:
 
 - Import only from `@lzehrung/codegraph`.
 - When the agent runtime calls Codegraph as a TypeScript library, prefer structured fields over rendered CLI text. A deterministic review agent should usually call `buildReviewReport()` for changed-file and task metadata, then `analyzeImpactFromDiff()` or `analyzeImpactStreaming()` for impact and graph context. Use CLI output only when the agent is operating through a shell tool.
+- Treat `callCompatibility` as a deterministic review lead, not compiler-grade type checking. Initial likely-mismatch support covers JS/TS-family callsite arity when callee resolution, signature parsing, and argument counting are all high confidence.
 - For streaming review packs, keep the default `streamSummary: "full"` when the final pack needs suggestions, export summaries, re-export chains, ranked top impacts, graph edges, cycles, clusters, and surface area. Streaming always returns `format: "stream-summary"`; forwarded `compact` is accepted only for compatibility and is ignored. Use `streamSummary: "light"` when the agent only needs progressive chunks plus final changed/impacted counts and details.
 - Build one shared index per agent pass when you will call multiple wrappers in sequence. `tool_getFileOverview()`, `tool_getGraph()`, and `tool_impactJSON()` now accept `index` through their runtime-options argument, while the bounded graph wrappers already accept it in their options object.
 - Native runtime control is not passed uniformly across all wrappers: `tool_goToDefinition` and `tool_findReferences` accept trailing runtime options, while `tool_findSymbol`, `tool_getDependencies`, `tool_getReverseDependencies`, and `tool_getHotspots` take `native` inside their options object.
@@ -342,6 +343,7 @@ These bundles highlight:
 - symbol-level changes
 - updated dependency edges
 - likely regression tests
+- JS/TS-family call-arity compatibility leads after signature changes
 - risk summaries and review tasks
 
 For the exact JSON shape and CLI flags, see [docs/cli.md](./cli.md).

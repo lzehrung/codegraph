@@ -282,7 +282,9 @@ codegraph graph-delta --git-base origin/main --git-head HEAD > graph-delta.json
 
 For git-provider impact, `--head` accepts normal revisions plus worktree sentinels. Use `WORKTREE` to compare the base revision against the current working tree, including staged and unstaged tracked-file changes. Use `STAGED` or `INDEX` to compare the base revision against the current index; with `--base HEAD`, that is staged changes only. Untracked files are not included until they are staged or otherwise tracked by Git.
 
-Impact JSON responses include `schemaVersion` plus `format: "full" | "compact"` so downstream tools can branch on payload shape without inferring it from missing fields. Use `--compact` or `--compact-json` for compact impact JSON. Impact JSON can also include `exportSummary`, `reexportChains`, `topImpacts`, `surfaceArea`, and `clusters` when applicable. File paths in impact reports are project-relative, and raw diffs that point outside the project root are rejected.
+Impact JSON responses include `schemaVersion` plus `format: "full" | "compact"` so downstream tools can branch on payload shape without inferring it from missing fields. Use `--compact` or `--compact-json` for compact impact JSON. Impact JSON can also include `exportSummary`, `reexportChains`, `topImpacts`, `surfaceArea`, `clusters`, and `changedSymbols[].callCompatibility` when applicable. File paths in impact reports are project-relative, and raw diffs that point outside the project root are rejected.
+
+`callCompatibility` is a conservative review hint, not type checking. Initial likely-mismatch support is limited to JavaScript, TypeScript, JSX, and TSX callsites where Codegraph resolves the callee and can count arguments with high confidence. Pretty impact and review summaries show only `likely_mismatch` findings; compatible, unsupported, or ambiguous callsites are omitted from human output and appear in structured data only when useful.
 
 `codegraph review --summary` prints the changed-file count, changed-symbol count, risk summary, review tasks, and suggested tests without emitting the full `projectFiles` and symbol-detail JSON payload. High- and medium-confidence candidate tests are listed directly; low-confidence pattern matches are summarized as breadth hints and remain available in the full JSON bundle. Use plain `review` output when a downstream tool needs the complete structured bundle.
 
@@ -448,6 +450,7 @@ Important review-bundle details:
 - `diagnostics.missingFiles` reports explicit paths that were not present on disk.
 - `graph-delta` reports file-level edge additions and removals for changed files and is intended for lightweight CI artifacts.
 - `--include-symbol-details` attaches definition snippets and callsite ranges for changed symbols.
+- Changed symbol details may include `callCompatibility` for high-confidence JS/TS-family callsite arity mismatches after signature changes. Agents should inspect the code before treating these leads as defects.
 - When diff data is available, review reports focus on symbols touched by diff hunks and include `diffSnippets` with changed-line context.
 - `--review-depth minimal|standard|deep` applies preset bundles:
   - `minimal`: fast graph, no symbol snippets, `maxCallsites=0`, `maxCandidates=10`
