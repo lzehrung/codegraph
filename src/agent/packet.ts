@@ -1,5 +1,10 @@
 import type { ReviewReport } from "../review.js";
-import { explainCodegraphTarget, type AgentExplainTarget, type AgentExplanation } from "./explain.js";
+import {
+  explainCodegraphTargetWithSession,
+  type AgentExplainTarget,
+  type AgentExplanation,
+} from "./explain.js";
+import { createAgentSession, type AgentSession } from "./session.js";
 
 export type AgentPacketKind = "file" | "symbol" | "chunk" | "sql_object" | "graph" | "review";
 
@@ -26,6 +31,14 @@ export type AgentPacketResponse = {
 const ACCEPTED_HANDLE_PREFIXES = ["file:", "symbol:", "chunk:", "sql:", "graph:"];
 
 export async function getCodegraphPacket(request: AgentPacketRequest): Promise<AgentPacketResponse> {
+  const session = createAgentSession({ root: request.root });
+  return await getCodegraphPacketWithSession(session, request);
+}
+
+export async function getCodegraphPacketWithSession(
+  session: AgentSession,
+  request: AgentPacketRequest,
+): Promise<AgentPacketResponse> {
   const kind = kindForHandle(request.handle);
   if (!kind) {
     throw new Error(`Unsupported packet handle. Expected one of: ${ACCEPTED_HANDLE_PREFIXES.join(", ")}`);
@@ -42,7 +55,7 @@ export async function getCodegraphPacket(request: AgentPacketRequest): Promise<A
     explainRequest.maxSnippets = request.maxSnippets;
   }
 
-  const explanation = await explainCodegraphTarget(explainRequest);
+  const explanation = await explainCodegraphTargetWithSession(session, explainRequest);
   if (explanation.target.kind === "not_found") {
     throw new Error(`Packet handle did not resolve: ${request.handle}`);
   }

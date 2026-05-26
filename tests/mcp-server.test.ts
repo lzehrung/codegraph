@@ -130,6 +130,8 @@ describe("codegraph MCP handlers", () => {
       expect(Array.isArray(tools)).toBeTruthy();
       const toolNames = (tools as Array<{ name?: unknown }>).map((tool) => tool.name);
       expect(toolNames).toContain("search");
+      expect(toolNames).toContain("orient");
+      expect(toolNames).toContain("packet_get");
       expect(toolNames).toContain("query_sqlite");
     } finally {
       await httpServer.close();
@@ -274,6 +276,23 @@ describe("codegraph MCP handlers", () => {
 
     const refs = await handlers.refs({ handle: first!.handle });
     expect(refs.references.some((ref) => ref.file === "api.ts")).toBeTruthy();
+  });
+
+  it("returns orientation and packet data through MCP handlers", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-packet-"));
+    await fs.mkdir(path.join(root, "src"), { recursive: true });
+    await fs.writeFile(path.join(root, "src", "run.ts"), "export function run() { return 1; }\n");
+
+    const handlers = createCodegraphMcpHandlers({ root });
+    const orient = await handlers.orient({ includeRoots: ["src"], budget: "small" });
+    const fileHandle = orient.handles.find((handle) => handle.kind === "file");
+    expect(fileHandle?.handle).toBeTruthy();
+
+    const packet = await handlers.packet_get({ handle: fileHandle!.handle });
+
+    expect(packet.schemaVersion).toBe(1);
+    expect(packet.kind).toBe("file");
+    expect(JSON.stringify(packet.packet)).toContain("src/run.ts");
   });
 
   it("bounds refs by handle with the refs limit", async () => {

@@ -13,6 +13,7 @@ function objectSchema(properties: Record<string, object>, required: string[] = [
 
 const stringProperty = { type: "string" };
 const booleanProperty = { type: "boolean" };
+const orientBudgetProperty = { type: "string", enum: ["small", "medium", "large"] };
 
 function dependencyInputSchema(): Tool["inputSchema"] {
   return objectSchema(
@@ -43,6 +44,28 @@ export const MCP_TOOLS: Tool[] = [
         limit: { type: "integer", minimum: 0, maximum: 100, default: 20 },
       },
       ["query"],
+    ),
+  },
+  {
+    name: "orient",
+    description: "Build a compact first-turn packet for agent repo context.",
+    inputSchema: objectSchema({
+      root: stringProperty,
+      includeRoots: { type: "array", items: stringProperty },
+      budget: orientBudgetProperty,
+    }),
+  },
+  {
+    name: "packet_get",
+    description: "Retrieve a bounded evidence packet by stable handle.",
+    inputSchema: objectSchema(
+      {
+        root: stringProperty,
+        handle: stringProperty,
+        maxSymbols: { type: "integer", minimum: 1, maximum: 200 },
+        maxSnippets: { type: "integer", minimum: 1, maximum: 50 },
+      },
+      ["handle"],
     ),
   },
   {

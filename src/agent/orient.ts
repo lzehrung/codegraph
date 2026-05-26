@@ -3,7 +3,7 @@ import { findDuplicates } from "../duplicates.js";
 import { findDetailedCycles, getHotspots, getUnresolvedImports, sortDetailedCycles } from "../graphs.js";
 import { normalizePath } from "../util/paths.js";
 import { formatAgentFileHandle } from "./handles.js";
-import { createAgentSession } from "./session.js";
+import { createAgentSession, type AgentSession } from "./session.js";
 import { quoteShellArg } from "./shell.js";
 
 export type AgentOrientBudget = "small" | "medium" | "large";
@@ -71,12 +71,20 @@ const ORIENT_BUDGETS: Record<
 };
 
 export async function orientCodegraph(request: AgentOrientRequest): Promise<AgentOrientResponse> {
+  const root = path.resolve(request.root);
+  const session = createAgentSession({ root });
+  return await orientCodegraphWithSession(session, { ...request, root });
+}
+
+export async function orientCodegraphWithSession(
+  session: AgentSession,
+  request: AgentOrientRequest,
+): Promise<AgentOrientResponse> {
   const budget = request.budget ?? "small";
   const limits = ORIENT_BUDGETS[budget];
-  const root = path.resolve(request.root);
   const includeRoots = normalizeIncludeRoots(request.includeRoots ?? []);
-  const session = createAgentSession({ root });
   const snapshot = await session.loadProject();
+  const root = snapshot.root;
   const projectFiles = snapshot.files.map((file) => normalizeRelativePath(root, file));
   const scopedFiles = projectFiles.filter((file) => isUnderIncludeRoots(file, includeRoots));
   const tree = buildTree(scopedFiles, limits.treeDepth);
