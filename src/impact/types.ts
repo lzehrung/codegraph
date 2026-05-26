@@ -46,6 +46,33 @@ export type ChangedSymbol = {
   changedLines?: readonly number[];
   /** True when the parameter list of a function/method byte-range-overlaps the changed content (from computeChangedByteRanges). */
   signatureChanged?: boolean;
+  callCompatibility?: CallCompatibilityHint[];
+};
+
+export type CallCompatibilityStatus = "likely_mismatch" | "compatible" | "unknown";
+
+export type CallCompatibilityReason =
+  | "argument_count_below_minimum"
+  | "argument_count_above_maximum"
+  | "signature_or_callsite_unknown"
+  | "compatible_argument_count";
+
+export interface CallCompatibilityHint {
+  status: CallCompatibilityStatus;
+  reason: CallCompatibilityReason;
+  changedSymbolId: string;
+  callsiteFile: string;
+  callsiteRange: Range;
+  callerSymbolId?: string;
+  expected: {
+    minArgs: number;
+    maxArgs: number | null;
+    confidence: "high";
+  };
+  actual: {
+    argCount: number;
+    confidence: "high";
+  };
 };
 
 // Impact findings

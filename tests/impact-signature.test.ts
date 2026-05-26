@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildProjectIndex, analyzeImpactFromDiff } from "../src/index.js";
-import type { CompactImpactReport, ImpactReport } from "../src/impact/types.js";
+import type { CallCompatibilityHint, CompactImpactReport, ImpactReport } from "../src/impact/types.js";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
@@ -13,6 +13,25 @@ describe("impact signature hint", () => {
     }
     return report;
   };
+
+  it("models conservative call compatibility hints", () => {
+    const hint: CallCompatibilityHint = {
+      status: "likely_mismatch",
+      reason: "argument_count_below_minimum",
+      changedSymbolId: "src/api.ts#helper",
+      callsiteFile: "src/main.ts",
+      callsiteRange: {
+        start: { line: 3, column: 10, index: 42 },
+        end: { line: 3, column: 21, index: 53 },
+      },
+      callerSymbolId: "src/main.ts#run",
+      expected: { minArgs: 2, maxArgs: 2, confidence: "high" },
+      actual: { argCount: 1, confidence: "high" },
+    };
+
+    expect(hint.status).toBe("likely_mismatch");
+    expect(hint.expected.maxArgs).toBe(2);
+  });
 
   it("should identify signature changes using AST", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-impact-signature-"));
