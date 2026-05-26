@@ -1,10 +1,11 @@
-import type { ReviewReport } from "../review.js";
+import { buildReviewReport, type ReviewReport } from "../review.js";
 import {
   explainCodegraphTargetWithSession,
   type AgentExplainTarget,
   type AgentExplanation,
 } from "./explain.js";
 import { createAgentSession, type AgentSession } from "./session.js";
+import { quoteShellArg } from "./shell.js";
 
 export type AgentPacketKind = "file" | "symbol" | "chunk" | "sql_object" | "graph" | "review";
 
@@ -28,7 +29,7 @@ export type AgentPacketResponse = {
   followUps: string[];
 };
 
-const ACCEPTED_HANDLE_PREFIXES = ["file:", "symbol:", "chunk:", "sql:", "graph:"];
+const ACCEPTED_HANDLE_PREFIXES = ["file:", "symbol:", "chunk:", "sql:", "graph:", "review:"];
 
 export async function getCodegraphPacket(request: AgentPacketRequest): Promise<AgentPacketResponse> {
   const session = createAgentSession({ root: request.root });
@@ -42,6 +43,9 @@ export async function getCodegraphPacketWithSession(
   const kind = kindForHandle(request.handle);
   if (!kind) {
     throw new Error(`Unsupported packet handle. Expected one of: ${ACCEPTED_HANDLE_PREFIXES.join(", ")}`);
+  }
+  if (kind === "review") {
+    return await buildReviewPacket(request);
   }
 
   const explainRequest: AgentExplainTarget = {
@@ -72,11 +76,61 @@ export async function getCodegraphPacketWithSession(
   };
 }
 
+async function buildReviewPacket(request: AgentPacketRequest): Promise<AgentPacketResponse> {
+  const range = parseReviewHandle(request.handle);
+  if (!range) {
+    throw new Error("Invalid review packet handle. Expected review:base=<encoded-ref>;head=<encoded-ref>.");
+  }
+  const report = await buildReviewReport(request.root, {
+    gitBase: range.base,
+    gitHead: range.head,
+    reviewDepth: "minimal",
+  });
+  return {
+    schemaVersion: 1,
+    root: request.root,
+    handle: request.handle,
+    kind: "review",
+    packet: report,
+    limits: {
+      changedFiles: report.changedFiles.length,
+      candidateTests: report.candidateTests.length,
+      reviewTasks: report.reviewTasks.length,
+    },
+    omittedCounts: {
+      changedFiles: 0,
+      candidateTests: 0,
+      reviewTasks: 0,
+    },
+    followUps: [
+      `codegraph impact --provider git --base ${quoteShellArg(range.base)} --head ${quoteShellArg(range.head)} --pretty`,
+      `codegraph review --base ${quoteShellArg(range.base)} --head ${quoteShellArg(range.head)} --summary`,
+    ],
+  };
+}
+
+function parseReviewHandle(handle: string): { base: string; head: string } | null {
+  if (!handle.startsWith("review:")) return null;
+  const fields = new Map<string, string>();
+  for (const part of handle.slice("review:".length).split(";")) {
+    const separator = part.indexOf("=");
+    if (separator < 0) continue;
+    const key = part.slice(0, separator);
+    const value = part.slice(separator + 1);
+    fields.set(key, decodeURIComponent(value));
+  }
+  const base = fields.get("base");
+  const head = fields.get("head");
+  if (!base || !head) return null;
+  return { base, head };
+}
+
 function kindForHandle(handle: string): AgentPacketKind | null {
   if (handle.startsWith("file:")) return "file";
   if (handle.startsWith("symbol:")) return "symbol";
   if (handle.startsWith("chunk:")) return "chunk";
   if (handle.startsWith("sql:")) return "sql_object";
   if (handle.startsWith("graph:")) return "graph";
+  if (handle.startsWith("review:")) return "review";
   return null;
 }

@@ -12,6 +12,10 @@ export type AgentOrientRequest = {
   root: string;
   includeRoots?: string[];
   budget?: AgentOrientBudget;
+  review?: {
+    base: string;
+    head: string;
+  };
 };
 
 export type AgentTreeEntry = {
@@ -29,10 +33,10 @@ export type AgentModuleSummary = {
 };
 
 export type AgentPacketHandle = {
-  kind: "file";
+  kind: "file" | "review";
   handle: string;
   label: string;
-  file: string;
+  file?: string;
 };
 
 export type AgentPacketCommand = {
@@ -106,6 +110,7 @@ export async function orientCodegraphWithSession(
     label: file,
     file,
   }));
+  const reviewHandles = request.review ? [buildReviewPacketHandle(request.review.base, request.review.head)] : [];
   const cycles = sortDetailedCycles(findDetailedCycles(snapshot.fileGraph), "priority");
   const unresolved = getUnresolvedImports(snapshot.fileGraph, { projectRoot: root });
   const duplicateResult = await findDuplicates(snapshot.index, {
@@ -113,7 +118,8 @@ export async function orientCodegraphWithSession(
     limit: 0,
     minConfidence: "high",
   });
-  const recommendedNext = buildRecommendedNext(scopedFiles, fileHandles);
+  const handles = [...reviewHandles, ...fileHandles];
+  const recommendedNext = buildRecommendedNext(scopedFiles, handles);
 
   return {
     schemaVersion: 1,
@@ -131,13 +137,22 @@ export async function orientCodegraphWithSession(
       unresolved: unresolved.length,
       duplicateGroups: duplicateResult.groups.length + duplicateResult.omittedCounts.groups,
     },
-    handles: fileHandles,
+    handles,
     recommendedNext,
     omittedCounts: {
       treeEntries: Math.max(0, tree.length - boundedTree.length),
       hotspots: Math.max(0, scopedHotspots.length - modules.length),
-      handles: Math.max(0, scopedFiles.length - fileHandles.length),
+      handles: Math.max(0, scopedFiles.length + reviewHandles.length - handles.length),
     },
+  };
+}
+
+function buildReviewPacketHandle(base: string, head: string): AgentPacketHandle {
+  const handle = `review:base=${encodeURIComponent(base)};head=${encodeURIComponent(head)}`;
+  return {
+    kind: "review",
+    handle,
+    label: `Review ${base}..${head}`,
   };
 }
 
@@ -197,8 +212,9 @@ function buildRecommendedNext(scopedFiles: string[], handles: AgentPacketHandle[
   const commands: AgentPacketCommand[] = [];
   const firstHandle = handles[0];
   if (firstHandle) {
+    const label = firstHandle.file ?? firstHandle.label;
     commands.push({
-      label: `Get packet for ${firstHandle.file}`,
+      label: `Get packet for ${label}`,
       command: `codegraph packet get ${quoteShellArg(firstHandle.handle)} --json`,
     });
   }
