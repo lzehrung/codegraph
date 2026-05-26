@@ -88,6 +88,30 @@ function appendLowConfidenceCandidateSummary(lines: string[], lowConfidenceCount
   lines.push(`Low-confidence pattern matches: ${lowConfidenceCount} available as breadth hints in full JSON.`);
 }
 
+function appendReviewCallCompatibility(lines: string[], report: Awaited<ReturnType<typeof buildReviewReport>>): void {
+  const findings: string[] = [];
+  for (const file of report.changedFiles) {
+    for (const symbol of file.symbols) {
+      const hints = symbol.callCompatibility ?? [];
+      for (const hint of hints) {
+        if (hint.status !== "likely_mismatch") {
+          continue;
+        }
+        const plural = hint.actual.argCount === 1 ? "argument" : "arguments";
+        findings.push(
+          `- ${symbol.name}: ${hint.callsiteFile}:${hint.callsiteRange.start.line} passes ${hint.actual.argCount} ${plural}; new signature requires ${hint.expected.minArgs}.`,
+        );
+      }
+    }
+  }
+  if (!findings.length) {
+    return;
+  }
+  lines.push("");
+  lines.push("Call compatibility:");
+  lines.push(...findings);
+}
+
 function formatReviewSummary(report: Awaited<ReturnType<typeof buildReviewReport>>): string {
   const lines: string[] = [];
   const candidateCounts = countCandidateTestsByConfidence(report.candidateTests);
@@ -150,6 +174,7 @@ function formatReviewSummary(report: Awaited<ReturnType<typeof buildReviewReport
     lines.push(`- missing files: ${report.diagnostics.missingFiles.length}`);
     lines.push(`- symbol mapping parse failures: ${report.diagnostics.symbolMappingParseFailures.length}`);
   }
+  appendReviewCallCompatibility(lines, report);
   return `${lines.join("\n")}\n`;
 }
 

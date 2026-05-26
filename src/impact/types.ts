@@ -314,6 +314,7 @@ export type CompactImpactReport = {
       end: { line: number; column: number };
     };
     typeOnly?: boolean;
+    callCompatibility?: CallCompatibilityHint[];
   }>;
   impacted: Array<{
     file: number; // index into files array

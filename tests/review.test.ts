@@ -85,6 +85,45 @@ describe("Review report", () => {
     ).toBe(true);
   });
 
+  it("includes call compatibility hints for changed TypeScript signatures", async () => {
+    const root = await mkTmpDir("dg-review-call-compat-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    const apiFile = path.join(srcDir, "api.ts");
+    const mainFile = path.join(srcDir, "main.ts");
+    await fsp.writeFile(apiFile, "export function helper(a: string, b: number) { return a + b; }\n", "utf8");
+    await fsp.writeFile(mainFile, 'import { helper } from "./api";\nexport const value = helper("x");\n', "utf8");
+
+    const diffText = [
+      "diff --git a/src/api.ts b/src/api.ts",
+      "index 1234567..abcdef0 100644",
+      "--- a/src/api.ts",
+      "+++ b/src/api.ts",
+      "@@ -1,1 +1,1 @@",
+      "-export function helper(a: string) { return a; }",
+      "+export function helper(a: string, b: number) { return a + b; }",
+      "",
+    ].join("\n");
+
+    const report = await buildReviewReport(root, {
+      diffText,
+      includeSymbolDetails: true,
+      maxCallsites: 5,
+    });
+
+    const apiSummary = report.changedFiles.find((entry) => entry.file === "src/api.ts");
+    const helper = apiSummary?.symbols.find((symbol) => symbol.name === "helper");
+    expect(helper?.callCompatibility).toContainEqual(
+      expect.objectContaining({
+        status: "likely_mismatch",
+        reason: "argument_count_below_minimum",
+        callsiteFile: "src/main.ts",
+        expected: { minArgs: 2, maxArgs: 2, confidence: "high" },
+        actual: { argCount: 1, confidence: "high" },
+      }),
+    );
+  });
+
   it("limits symbols to diff hunks and includes diff snippets when provided", async () => {
     const root = await mkTmpDir("dg-review-diff-");
     const srcDir = path.join(root, "src");

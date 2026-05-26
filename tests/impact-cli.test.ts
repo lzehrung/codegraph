@@ -91,6 +91,34 @@ function runImpactCliSubprocess(args: string[], opts?: { cwd?: string; stdin?: s
 }
 
 describe("impact CLI output", () => {
+  async function createCallCompatibilityFixture(restSignature = false): Promise<{ root: string; diffText: string }> {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-cli-call-"));
+    await fsp.mkdir(path.join(root, "src"), { recursive: true });
+    const apiFile = path.join(root, "src", "api.ts");
+    const mainFile = path.join(root, "src", "main.ts");
+    const newSignature = restSignature
+      ? "export function helper(a: string, ...rest: string[]) { return rest.join(a); }\n"
+      : "export function helper(a: string, b: number) { return a + b; }\n";
+    const call = restSignature ? 'helper("x", "y", "z")' : 'helper("x")';
+    await fsp.writeFile(apiFile, newSignature, "utf8");
+    await fsp.writeFile(mainFile, `import { helper } from "./api";\nexport const value = ${call};\n`, "utf8");
+
+    const addedLine = newSignature.trimEnd();
+    const removedLine = "export function helper(a: string) { return a; }";
+    const diffText = [
+      "diff --git a/src/api.ts b/src/api.ts",
+      "index 1234567..abcdef0 100644",
+      "--- a/src/api.ts",
+      "+++ b/src/api.ts",
+      "@@ -1,1 +1,1 @@",
+      `-${removedLine}`,
+      `+${addedLine}`,
+      "",
+    ].join("\n");
+
+    return { root, diffText };
+  }
+
   it("prints JSON by default", async () => {
     const stdout = await runImpactCliSubprocess(["impact", sampleRoot, "--provider", "raw"]);
     const report = JSON.parse(stdout);
@@ -111,6 +139,54 @@ describe("impact CLI output", () => {
     expect(stdout).toContain("Impact Analysis Report");
     expect(stdout).toContain("Changed files: 1");
     expect(stdout).toMatch(/utils\.ts: .*reason:/);
+  }, slowCliTimeoutMs);
+
+  it("includes call compatibility in JSON output", async () => {
+    const { root, diffText } = await createCallCompatibilityFixture();
+    try {
+      const stdout = await runImpactCli(["impact", "--root", root, "--provider", "raw"], {
+        cwd: root,
+        stdin: diffText,
+      });
+      const report = JSON.parse(stdout);
+      const helper = report.changedSymbols.find((symbol: { name?: string }) => symbol.name === "helper");
+      expect(helper.callCompatibility).toContainEqual(
+        expect.objectContaining({
+          status: "likely_mismatch",
+          reason: "argument_count_below_minimum",
+          callsiteFile: "src/main.ts",
+        }),
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  }, slowCliTimeoutMs);
+
+  it("prints call compatibility only for likely mismatches in pretty output", async () => {
+    const mismatch = await createCallCompatibilityFixture();
+    const compatible = await createCallCompatibilityFixture(true);
+    try {
+      const mismatchStdout = await runImpactCli(["impact", "--root", mismatch.root, "--provider", "raw", "--pretty"], {
+        cwd: mismatch.root,
+        stdin: mismatch.diffText,
+      });
+      expect(mismatchStdout).toContain("Call compatibility:");
+      expect(mismatchStdout).toContain("helper: src/main.ts:2 passes 1 argument; new signature requires 2.");
+
+      const compatibleStdout = await runImpactCli(
+        ["impact", "--root", compatible.root, "--provider", "raw", "--pretty"],
+        {
+          cwd: compatible.root,
+          stdin: compatible.diffText,
+        },
+      );
+      expect(compatibleStdout).not.toContain("Call compatibility:");
+      expect(compatibleStdout).not.toContain("compatible_argument_count");
+      expect(compatibleStdout).not.toContain("signature_or_callsite_unknown");
+    } finally {
+      await fsp.rm(mismatch.root, { recursive: true, force: true });
+      await fsp.rm(compatible.root, { recursive: true, force: true });
+    }
   }, slowCliTimeoutMs);
 
   it("accepts --compact-json as an alias for compact impact JSON", async () => {

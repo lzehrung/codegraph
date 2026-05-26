@@ -141,6 +141,9 @@ function compactChangedSymbol(symbol: ChangedSymbol, file: number): CompactImpac
   if (symbol.typeOnly !== undefined) {
     compact.typeOnly = symbol.typeOnly;
   }
+  if (symbol.callCompatibility?.length) {
+    compact.callCompatibility = symbol.callCompatibility;
+  }
   return compact;
 }
 

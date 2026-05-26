@@ -5,8 +5,9 @@ import { isSymbolHandleExported } from "../indexer/declarations.js";
 import { findReferences } from "../indexer/navigation.js";
 import { type ExportEntry, type ModuleIndex, type ProjectIndex, type SymbolDef } from "../indexer/types.js";
 import { symbolId } from "../indexer/symbols.js";
+import { attachCallCompatibilityHints } from "../impact/callCompatibility.js";
 import { locateChangedSymbolsWithLines, mapChangedLinesToSymbols } from "../impact/map.js";
-import type { Hunk } from "../impact/types.js";
+import type { CallCompatibilityHint, ChangedSymbol, Hunk } from "../impact/types.js";
 import type { FileId, Range } from "../types.js";
 import { mapLimit } from "../util/concurrency.js";
 import { toProjectDisplayPath } from "../util/paths.js";
@@ -30,6 +31,7 @@ export type ReviewSymbolSummary = {
   kind: string;
   handle: string;
   exported: boolean;
+  callCompatibility?: CallCompatibilityHint[];
   definitionSnippet?: string;
   diffSnippets?: string[];
   callsites?: ReviewSymbolCallsite[];
@@ -233,6 +235,7 @@ export async function summarizeChangedFiles(input: {
           hunks,
           locals: [] as SymbolDef[],
           handles: [] as string[],
+          changedSymbols: [] as ChangedSymbol[],
           diffLinesByHandle: new Map<string, Set<number>>(),
           parseFailed: false,
         };
@@ -245,6 +248,7 @@ export async function summarizeChangedFiles(input: {
           hunks,
           locals,
           handles: locals.map((local) => symbolId(local)),
+          changedSymbols: [] as ChangedSymbol[],
           diffLinesByHandle: new Map<string, Set<number>>(),
           parseFailed: false,
         };
@@ -270,11 +274,26 @@ export async function summarizeChangedFiles(input: {
         hunks,
         locals,
         handles,
+        changedSymbols,
         diffLinesByHandle: await mapChangedLinesToSymbols(index, file, hunks, changedLines),
         parseFailed,
       };
     }),
   );
+
+  const changedSymbolsForCompatibility = fileEntries.flatMap((entry) => entry.changedSymbols);
+  if (changedSymbolsForCompatibility.length) {
+    await attachCallCompatibilityHints(index, changedSymbolsForCompatibility, {
+      maxRefs: Math.max(1, maxCallsites),
+      projectRoot,
+    });
+  }
+  const compatibilityByHandle = new Map<string, CallCompatibilityHint[]>();
+  for (const symbol of changedSymbolsForCompatibility) {
+    if (symbol.callCompatibility?.length) {
+      compatibilityByHandle.set(symbol.id, symbol.callCompatibility);
+    }
+  }
 
   const defsToResolve = fileEntries.flatMap((entry) => entry.locals);
   const referencesStart = performance.now();
@@ -311,6 +330,10 @@ export async function summarizeChangedFiles(input: {
       handle,
       exported: isExported(moduleIndex, handle),
     };
+    const callCompatibility = compatibilityByHandle.get(handle);
+    if (callCompatibility?.length) {
+      base.callCompatibility = callCompatibility;
+    }
     if (!includeSymbolDetails) return base;
 
     const source = await loadSource(local.file);
