@@ -1,6 +1,5 @@
 import { orientCodegraph, type AgentOrientBudget, type AgentOrientResponse } from "../agent/orient.js";
 import type { CliAgentCommandContext } from "./context.js";
-import { ORIENT_HELP_TEXT } from "./help.js";
 
 export type OrientCommandContext = CliAgentCommandContext;
 

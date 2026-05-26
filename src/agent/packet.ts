@@ -32,22 +32,32 @@ export type AgentPacketResponse = {
 const ACCEPTED_HANDLE_PREFIXES = ["file:", "symbol:", "chunk:", "sql:", "graph:", "review:"];
 
 export async function getCodegraphPacket(request: AgentPacketRequest): Promise<AgentPacketResponse> {
+  const kind = requirePacketKind(request.handle);
+  if (kind === "review") {
+    return await buildReviewPacket(request);
+  }
+
   const session = createAgentSession({ root: request.root });
-  return await getCodegraphPacketWithSession(session, request);
+  return await buildExplainPacket(session, request, kind);
 }
 
 export async function getCodegraphPacketWithSession(
   session: AgentSession,
   request: AgentPacketRequest,
 ): Promise<AgentPacketResponse> {
-  const kind = kindForHandle(request.handle);
-  if (!kind) {
-    throw new Error(`Unsupported packet handle. Expected one of: ${ACCEPTED_HANDLE_PREFIXES.join(", ")}`);
-  }
+  const kind = requirePacketKind(request.handle);
   if (kind === "review") {
     return await buildReviewPacket(request);
   }
 
+  return await buildExplainPacket(session, request, kind);
+}
+
+async function buildExplainPacket(
+  session: AgentSession,
+  request: AgentPacketRequest,
+  kind: AgentPacketKind,
+): Promise<AgentPacketResponse> {
   const explainRequest: AgentExplainTarget = {
     root: request.root,
     target: request.handle,
@@ -74,6 +84,14 @@ export async function getCodegraphPacketWithSession(
     omittedCounts: explanation.omittedCounts,
     followUps: explanation.followUps,
   };
+}
+
+function requirePacketKind(handle: string): AgentPacketKind {
+  const kind = kindForHandle(handle);
+  if (!kind) {
+    throw new Error(`Unsupported packet handle. Expected one of: ${ACCEPTED_HANDLE_PREFIXES.join(", ")}`);
+  }
+  return kind;
 }
 
 async function buildReviewPacket(request: AgentPacketRequest): Promise<AgentPacketResponse> {
