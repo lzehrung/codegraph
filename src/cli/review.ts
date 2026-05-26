@@ -159,7 +159,7 @@ function formatReviewSummary(report: Awaited<ReturnType<typeof buildReviewReport
     const listedCandidates =
       appendCandidateTestGroup(lines, "High-confidence tests:", report.candidateTests, "high") +
       appendCandidateTestGroup(lines, "Medium-confidence tests:", report.candidateTests, "medium");
-    if (listedCandidates === 0) {
+    if (!listedCandidates) {
       lines.push("No high- or medium-confidence test candidates found.");
     }
     appendLowConfidenceCandidateSummary(lines, candidateCounts.low);
