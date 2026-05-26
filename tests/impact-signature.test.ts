@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildProjectIndex, analyzeImpactFromDiff } from "../src/index.js";
-import { extractCallableSignature } from "../src/impact/callCompatibility.js";
+import { extractCallableSignature, extractCallsiteArguments } from "../src/impact/callCompatibility.js";
 import type { CallCompatibilityHint, CompactImpactReport, ImpactReport } from "../src/impact/types.js";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
@@ -76,6 +76,39 @@ describe("impact signature hint", () => {
     });
 
     expect(signature).toBeNull();
+  });
+
+  it("counts fixed callsite arguments", () => {
+    const source = "helper(one, two, three);";
+    const call = extractCallsiteArguments({
+      languageId: "typescript",
+      source,
+      calleeStartIndex: source.indexOf("helper"),
+    });
+
+    expect(call).toEqual({ argCount: 3, confidence: "high" });
+  });
+
+  it("counts nested expressions as one argument each", () => {
+    const source = "helper(fn(a, b), { x: [1, 2] });";
+    const call = extractCallsiteArguments({
+      languageId: "typescript",
+      source,
+      calleeStartIndex: source.indexOf("helper"),
+    });
+
+    expect(call).toEqual({ argCount: 2, confidence: "high" });
+  });
+
+  it("returns null for spread arguments", () => {
+    const source = "helper(...values);";
+    const call = extractCallsiteArguments({
+      languageId: "typescript",
+      source,
+      calleeStartIndex: source.indexOf("helper"),
+    });
+
+    expect(call).toBeNull();
   });
 
   it("should identify signature changes using AST", async () => {

@@ -7,7 +7,14 @@ import { collectImpactReportSuggestions } from "./report-suggestions.js";
 export * from "./types.js";
 export { analyzeImpactStreaming, type ImpactStreamChunk, type ImpactStreamingOptions } from "./streaming.js";
 export { collectImpactReportSuggestions } from "./report-suggestions.js";
-export { extractCallableSignature, type CallableSignature, type ExtractCallableSignatureRequest } from "./callCompatibility.js";
+export {
+  extractCallableSignature,
+  extractCallsiteArguments,
+  type CallableSignature,
+  type CallsiteArguments,
+  type ExtractCallableSignatureRequest,
+  type ExtractCallsiteArgumentsRequest,
+} from "./callCompatibility.js";
 
 /**
  * Analyze a diff against an existing project index and return a structured impact report.

@@ -10,6 +10,17 @@ export interface ExtractCallableSignatureRequest {
   symbolStartIndex: number;
 }
 
+export interface CallsiteArguments {
+  argCount: number;
+  confidence: "high";
+}
+
+export interface ExtractCallsiteArgumentsRequest {
+  languageId: string;
+  source: string;
+  calleeStartIndex: number;
+}
+
 type BalancedRange = {
   start: number;
   end: number;
@@ -217,4 +228,29 @@ export function extractCallableSignature(request: ExtractCallableSignatureReques
 
   const maxArgs = hasRest ? null : parameters.length;
   return { minArgs, maxArgs, confidence: "high" };
+}
+
+export function extractCallsiteArguments(request: ExtractCallsiteArgumentsRequest): CallsiteArguments | null {
+  if (!isJsTsLanguage(request.languageId)) {
+    return null;
+  }
+
+  const openIndex = findOpeningParen(request.source, request.calleeStartIndex);
+  const balanced = findBalancedParentheses(request.source, openIndex);
+  if (!balanced) {
+    return null;
+  }
+
+  const args = splitTopLevelCommaGroups(balanced.inner);
+  if (!args) {
+    return null;
+  }
+
+  for (const arg of args) {
+    if (arg.trim().startsWith("...")) {
+      return null;
+    }
+  }
+
+  return { argCount: args.length, confidence: "high" };
 }
