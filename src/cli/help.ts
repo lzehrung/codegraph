@@ -6,6 +6,7 @@ Commands:
   graph         Build dependency graph (default)
   inspect       Summarize repo structure and recommend next commands
   orient        Build a compact first-turn packet for agent repo context
+  packet        Retrieve bounded evidence packets by stable handle
   search        Ranked agent search across files, symbols, chunks, SQL, and graph context
   explain       Explain a file, symbol, SQL object, or search handle
   artifact      Build an agent-ready SQLite/graph/report/question bundle
@@ -68,6 +69,7 @@ Examples:
   codegraph doctor
   codegraph inspect ./src --limit 20
   codegraph orient ./src --budget small --json
+  codegraph packet get file:src%2Fcli.ts --json
   codegraph duplicates ./src --min-confidence medium
   codegraph search "auth user" --json
   codegraph explain src/auth.ts --json
@@ -107,6 +109,7 @@ const knownCliCommands = new Set([
   "inspect",
   "mcp",
   "orient",
+  "packet",
   "path",
   "rdeps",
   "refs",
@@ -144,6 +147,14 @@ Usage: codegraph orient [roots...] [--root <path>] [--budget small|medium|large]
 
 Output:
   Orientation includes summary bullets, a bounded project tree, hotspot modules, health counts, stable packet handles, omission counts, and copyable follow-up commands.
+`;
+
+export const PACKET_HELP_TEXT = `codegraph packet - Retrieve bounded evidence packets by stable handle
+
+Usage: codegraph packet get <handle> [--root <path>] [--json | --pretty] [--max-symbols <n>] [--max-snippets <n>]
+
+Handles:
+  Accepts file:, symbol:, chunk:, sql:, and graph: handles returned by orient, search, and explain.
 `;
 
 export const EXPLAIN_HELP_TEXT = `codegraph explain - Explain a file, symbol, SQL object, or search handle
@@ -236,6 +247,7 @@ Output:
 export function helpTextForCommand(command: string, positionals: readonly string[]): string | undefined {
   if (command === "search") return SEARCH_HELP_TEXT;
   if (command === "orient") return ORIENT_HELP_TEXT;
+  if (command === "packet") return PACKET_HELP_TEXT;
   if (command === "explain") return EXPLAIN_HELP_TEXT;
   if (command === "duplicates") return DUPLICATES_HELP_TEXT;
   if (command === "artifact") return ARTIFACT_HELP_TEXT;

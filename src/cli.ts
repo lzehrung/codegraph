@@ -40,6 +40,7 @@ import { handleMcpServeCommand } from "./cli/mcp.js";
 import { handleOrientCommand } from "./cli/orient.js";
 import { handleDumpmodCommand, handleGotoCommand, handleRefsCommand } from "./cli/navigation.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
+import { handlePacketCommand } from "./cli/packet.js";
 import { handleReviewCommand } from "./cli/review.js";
 import { handleSearchCommand } from "./cli/search.js";
 import { handleSkillCommand } from "./cli/skill.js";
@@ -379,6 +380,20 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   if (cmd === "orient") {
     await handleOrientCommand({
       positionals: includeRoots,
+      root: projectRootFs,
+      getOpt,
+      hasFlag,
+      writeJSONLine,
+      writeStdoutLine,
+      writeStderrLine,
+      exit: exitCli,
+    });
+    return;
+  }
+
+  if (cmd === "packet") {
+    await handlePacketCommand({
+      positionals: parsed.positionals,
       root: projectRootFs,
       getOpt,
       hasFlag,

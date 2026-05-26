@@ -215,6 +215,11 @@ describe("CLI command modules", () => {
         usage: "Usage: codegraph orient [roots...]",
       },
       {
+        args: ["packet", "--help"],
+        heading: "codegraph packet",
+        usage: "Usage: codegraph packet get <handle>",
+      },
+      {
         args: ["explain", "--help"],
         heading: "codegraph explain",
         usage: "Usage: codegraph explain <file|symbol|sql-object|handle>",

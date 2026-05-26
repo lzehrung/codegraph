@@ -1355,6 +1355,31 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     expect(stdout).toContain("file:");
   });
 
+  it("packet get returns a bounded packet for file handles", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-packet-"));
+    await fsp.mkdir(path.join(root, "src"), { recursive: true });
+    await fsp.writeFile(path.join(root, "src", "run.ts"), "export function run() { return 1; }\n");
+
+    const stdout = await runCliCommand(["packet", "get", "file:src%2Frun.ts", "--root", root, "--json"]);
+    const response = JSON.parse(stdout) as {
+      schemaVersion: number;
+      kind: string;
+      packet: { target: { file?: string } };
+    };
+
+    expect(response.schemaVersion).toBe(1);
+    expect(response.kind).toBe("file");
+    expect(response.packet.target.file).toBe("src/run.ts");
+  });
+
+  it("packet get reports accepted prefixes for invalid handles", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-packet-invalid-"));
+
+    await expect(runCliCommandDetailed(["packet", "get", "bogus:thing", "--root", root])).rejects.toThrow(
+      /Expected one of: file:, symbol:, chunk:, sql:, graph:/,
+    );
+  });
+
   it("explain returns compact architecture context", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-explain-"));
     await fsp.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
