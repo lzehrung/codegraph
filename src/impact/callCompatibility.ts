@@ -1,3 +1,10 @@
+import path from "node:path";
+import { findReferences } from "../indexer/navigation.js";
+import { ensureParsedContext } from "../indexer/parse-context.js";
+import { SymbolKind, type ProjectIndex, type Reference, type SymbolDef } from "../indexer/types.js";
+import type { Range } from "../types.js";
+import type { CallCompatibilityHint, ChangedSymbol } from "./types.js";
+
 export interface CallableSignature {
   minArgs: number;
   maxArgs: number | null;
@@ -28,7 +35,14 @@ type BalancedRange = {
 };
 
 function isJsTsLanguage(languageId: string): boolean {
-  return languageId === "javascript" || languageId === "typescript" || languageId === "tsx" || languageId === "jsx";
+  return (
+    languageId === "javascript" ||
+    languageId === "typescript" ||
+    languageId === "tsx" ||
+    languageId === "jsx" ||
+    languageId === "js" ||
+    languageId === "ts"
+  );
 }
 
 function findOpeningParen(source: string, startIndex: number): number {
@@ -253,4 +267,151 @@ export function extractCallsiteArguments(request: ExtractCallsiteArgumentsReques
   }
 
   return { argCount: args.length, confidence: "high" };
+}
+
+function isCallableChangedSymbol(symbol: ChangedSymbol): boolean {
+  return symbol.kind === SymbolKind.Function || symbol.kind === SymbolKind.Default;
+}
+
+function sameRangeStart(left: Range, right: Range): boolean {
+  const leftIndex = left.start.index;
+  const rightIndex = right.start.index;
+  return left.start.line === right.start.line && left.start.column === right.start.column && leftIndex === rightIndex;
+}
+
+function rangeContainsIndex(range: Range, index: number): boolean {
+  const startIndex = range.start.index;
+  const endIndex = range.end.index;
+  if (startIndex === undefined || endIndex === undefined) {
+    return false;
+  }
+  return index >= startIndex && index <= endIndex;
+}
+
+function findCallerSymbolId(index: ProjectIndex, ref: Reference): string | undefined {
+  const startIndex = ref.range.start.index;
+  if (startIndex === undefined) {
+    return undefined;
+  }
+
+  const module = index.byFile.get(ref.file);
+  if (!module) {
+    return undefined;
+  }
+
+  let best: SymbolDef | undefined;
+  for (const local of module.locals) {
+    if (!rangeContainsIndex(local.range, startIndex)) {
+      continue;
+    }
+    if (!best) {
+      best = local;
+      continue;
+    }
+
+    const localSpan = (local.range.end.index ?? 0) - (local.range.start.index ?? 0);
+    const bestSpan = (best.range.end.index ?? 0) - (best.range.start.index ?? 0);
+    if (localSpan < bestSpan) {
+      best = local;
+    }
+  }
+
+  if (!best) {
+    return undefined;
+  }
+  const bestStartIndex = best.range.start.index ?? 0;
+  return `${best.file}::${best.localName}::${bestStartIndex}`;
+}
+
+function classifyCompatibility(
+  expected: CallableSignature,
+  actual: CallsiteArguments,
+): Pick<CallCompatibilityHint, "status" | "reason"> {
+  if (actual.argCount < expected.minArgs) {
+    return { status: "likely_mismatch", reason: "argument_count_below_minimum" };
+  }
+  if (expected.maxArgs !== null && actual.argCount > expected.maxArgs) {
+    return { status: "likely_mismatch", reason: "argument_count_above_maximum" };
+  }
+  return { status: "compatible", reason: "compatible_argument_count" };
+}
+
+export async function attachCallCompatibilityHints(
+  index: ProjectIndex,
+  changedSymbols: ChangedSymbol[],
+  options: { maxRefs: number; projectRoot?: string },
+): Promise<void> {
+  for (const changedSymbol of changedSymbols) {
+    if (!changedSymbol.signatureChanged || !isCallableChangedSymbol(changedSymbol)) {
+      continue;
+    }
+
+    const parsedDefinition = await ensureParsedContext(changedSymbol.file, index.parsed?.get(changedSymbol.file));
+    const signature = extractCallableSignature({
+      languageId: parsedDefinition.sup.id,
+      source: parsedDefinition.source,
+      symbolStartIndex: changedSymbol.range.start.index ?? 0,
+    });
+    if (!signature) {
+      continue;
+    }
+
+    const refs = await findReferences(
+      index,
+      {
+        def: {
+          file: changedSymbol.file,
+          localName: changedSymbol.name,
+          kind: changedSymbol.kind,
+          range: changedSymbol.range,
+        },
+      },
+      { maxReferences: options.maxRefs },
+    );
+    if (refs.status !== "ok") {
+      continue;
+    }
+
+    const hints: CallCompatibilityHint[] = [];
+    for (const ref of refs.references) {
+      if (ref.file === changedSymbol.file && sameRangeStart(ref.range, changedSymbol.range)) {
+        continue;
+      }
+
+      const calleeStartIndex = ref.range.start.index;
+      if (calleeStartIndex === undefined) {
+        continue;
+      }
+
+      const parsedCallsite = await ensureParsedContext(ref.file, index.parsed?.get(ref.file));
+      const actual = extractCallsiteArguments({
+        languageId: parsedCallsite.sup.id,
+        source: parsedCallsite.source,
+        calleeStartIndex,
+      });
+      if (!actual) {
+        continue;
+      }
+
+      const compatibility = classifyCompatibility(signature, actual);
+      const callerSymbolId = findCallerSymbolId(index, ref);
+      let callsiteFile = ref.file;
+      if (options.projectRoot) {
+        callsiteFile = path.relative(options.projectRoot, ref.file).replace(/\\/g, "/");
+      }
+      hints.push({
+        ...compatibility,
+        changedSymbolId: changedSymbol.id,
+        callsiteFile,
+        callsiteRange: ref.range,
+        ...(callerSymbolId ? { callerSymbolId } : {}),
+        expected: signature,
+        actual,
+      });
+    }
+
+    if (hints.length) {
+      changedSymbol.callCompatibility = hints;
+    }
+  }
 }

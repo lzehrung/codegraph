@@ -2,14 +2,109 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
+import { analyzeImpactFromDiff } from "../src/index.js";
 import { analyzeImpact, seedTransitiveFromFiles, calculateSeverity } from "../src/impact/analyzer.js";
 import { DEFAULT_SEVERITY_WEIGHTS } from "../src/impact/types.js";
-import { buildProjectIndexFromFiles, SymbolKind } from "../src/indexer.js";
+import { buildProjectIndex, buildProjectIndexFromFiles, SymbolKind } from "../src/indexer.js";
 import type { ProjectIndex } from "../src/indexer.js";
 import type { Edge } from "../src/types.js";
 import { createTestIndex } from "./test-utils.js";
 
 describe("Impact Analyzer Edge Cases", () => {
+  describe("call compatibility hints", () => {
+    it("flags likely argument-count mismatches for changed TypeScript signatures", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-compat-"));
+      try {
+        await fsp.mkdir(path.join(root, "src"), { recursive: true });
+        const apiFile = path.join(root, "src", "api.ts");
+        const mainFile = path.join(root, "src", "main.ts");
+        await fsp.writeFile(apiFile, "export function helper(a: string, b: number) { return a + b; }\n", "utf8");
+        await fsp.writeFile(mainFile, 'import { helper } from "./api";\nexport const value = helper("x");\n', "utf8");
+
+        const index = await buildProjectIndex(root, { cache: "memory" });
+        const diffText = `diff --git a/src/api.ts b/src/api.ts
+--- a/src/api.ts
++++ b/src/api.ts
+@@ -1,1 +1,1 @@
+-export function helper(a: string) { return a; }
++export function helper(a: string, b: number) { return a + b; }
+`;
+
+        const result = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+          includeTests: true,
+        });
+
+        if ("files" in result) {
+          throw new Error("Expected full impact report");
+        }
+
+        const helper = result.changedSymbols.find((symbol) => symbol.name === "helper");
+        expect(helper?.callCompatibility).toContainEqual(
+          expect.objectContaining({
+            status: "likely_mismatch",
+            reason: "argument_count_below_minimum",
+            actual: { argCount: 1, confidence: "high" },
+            expected: { minArgs: 2, maxArgs: 2, confidence: "high" },
+            callsiteFile: "src/main.ts",
+          }),
+        );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
+    it("does not flag extra arguments for changed rest signatures", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-rest-"));
+      try {
+        await fsp.mkdir(path.join(root, "src"), { recursive: true });
+        const apiFile = path.join(root, "src", "api.ts");
+        const mainFile = path.join(root, "src", "main.ts");
+        await fsp.writeFile(
+          apiFile,
+          "export function helper(a: string, ...rest: string[]) { return rest.join(a); }\n",
+          "utf8",
+        );
+        await fsp.writeFile(mainFile, 'import { helper } from "./api";\nexport const value = helper("x", "y", "z");\n', "utf8");
+
+        const index = await buildProjectIndex(root, { cache: "memory" });
+        const diffText = `diff --git a/src/api.ts b/src/api.ts
+--- a/src/api.ts
++++ b/src/api.ts
+@@ -1,1 +1,1 @@
+-export function helper(a: string) { return a; }
++export function helper(a: string, ...rest: string[]) { return rest.join(a); }
+`;
+
+        const result = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+          includeTests: true,
+        });
+
+        if ("files" in result) {
+          throw new Error("Expected full impact report");
+        }
+
+        const helper = result.changedSymbols.find((symbol) => symbol.name === "helper");
+        const mismatches = helper?.callCompatibility?.filter((hint) => hint.status === "likely_mismatch") ?? [];
+        expect(mismatches).toHaveLength(0);
+        expect(helper?.callCompatibility).toContainEqual(
+          expect.objectContaining({
+            status: "compatible",
+            reason: "compatible_argument_count",
+            expected: { minArgs: 1, maxArgs: null, confidence: "high" },
+            actual: { argCount: 3, confidence: "high" },
+            callsiteFile: "src/main.ts",
+          }),
+        );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+  });
+
   describe("seedTransitiveFromFiles", () => {
     it("should seed transitive impact for deleted files", async () => {
       const index = await createTestIndex("typescript");
