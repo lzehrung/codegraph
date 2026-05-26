@@ -179,7 +179,7 @@ codegraph grep --pattern 'eval\(' --ignore-case
 - It reports project-relative paths, confidence, clone type, metrics, variant counts, omission counts, and pair stats.
 - Groups collapse overlapping symbol/chunk variants so one underlying clone appears as one finding.
 - Group `variants` are bounded by default; use `rawPairCount` and `omittedVariantCount` to see hidden evidence counts.
-- A single positional directory becomes the project root unless `--root` is set.
+- A single positional directory becomes the project root unless `--root` is set. `orient` is the exception: its positionals are always include roots.
 - Use `--root . ./src` for scoped scans with repository-relative paths.
 - Use `--include-small` for tiny helpers.
 - Use `--include-same-file` for non-overlapping clones inside one file.

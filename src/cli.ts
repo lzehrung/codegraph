@@ -258,6 +258,9 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     if (rootOpt) {
       // If the user explicitly sets --root, treat all remaining positionals as include roots.
       includeRoots = parsed.positionals;
+    } else if (cmd === "orient") {
+      // Orient uses positionals only as include roots; it does not use the legacy root positional.
+      includeRoots = parsed.positionals;
     } else if (parsed.positionals.length > 1) {
       // Otherwise, a single positional arg is treated as the project root (back-compat).
       includeRoots = parsed.positionals;

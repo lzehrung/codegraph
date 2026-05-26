@@ -96,9 +96,9 @@ export async function orientCodegraphWithSession(
 ): Promise<AgentOrientResponse> {
   const budget = request.budget ?? "small";
   const limits = ORIENT_BUDGETS[budget];
-  const includeRoots = normalizeIncludeRoots(request.includeRoots ?? []);
   const snapshot = await session.loadProject();
   const root = snapshot.root;
+  const includeRoots = normalizeIncludeRoots(root, request.includeRoots ?? []);
   const projectFiles = snapshot.files.map((file) => normalizeRelativePath(root, file));
   const scopedFiles = projectFiles.filter((file) => isUnderIncludeRoots(file, includeRoots));
   const scopedFileSet = new Set(scopedFiles);
@@ -205,10 +205,13 @@ function buildReviewPacketHandle(base: string, head: string): AgentPacketHandle 
   };
 }
 
-function normalizeIncludeRoots(includeRoots: string[]): string[] {
+function normalizeIncludeRoots(root: string, includeRoots: string[]): string[] {
   return includeRoots
-    .map((root) => normalizePath(root).replace(/^\.?\//, "").replace(/\/$/, ""))
-    .filter((root) => root && root !== ".");
+    .map((includeRoot) => {
+      const relativeRoot = path.isAbsolute(includeRoot) ? path.relative(root, includeRoot) : includeRoot;
+      return normalizePath(relativeRoot).replace(/^\.?\//, "").replace(/\/$/, "");
+    })
+    .filter((includeRoot) => includeRoot && includeRoot !== ".");
 }
 
 function normalizeRelativePath(root: string, file: string): string {

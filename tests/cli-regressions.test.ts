@@ -1341,6 +1341,27 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     expect(response.handles.some((handle) => handle.handle.startsWith("file:"))).toBeTruthy();
   });
 
+  it("orient treats a single positional as an include root", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-orient-single-root-"));
+    await fsp.mkdir(path.join(root, "src"), { recursive: true });
+    await fsp.mkdir(path.join(root, "docs"), { recursive: true });
+    await fsp.writeFile(path.join(root, "src", "run.ts"), "export function run() { return 1; }\n");
+    await fsp.writeFile(path.join(root, "docs", "guide.md"), "# Guide\n");
+
+    const stdout = await runCliCommandDetailed(["orient", "src", "--budget", "small", "--json"], undefined, root);
+    const response = JSON.parse(stdout.stdout) as {
+      tree: Array<{ path: string }>;
+      handles: Array<{ file?: string }>;
+      summary: string[];
+    };
+
+    expect(response.tree.some((entry) => entry.path === "src/run.ts")).toBeTruthy();
+    expect(response.tree.some((entry) => entry.path === "docs/guide.md")).toBeFalsy();
+    expect(response.handles.some((handle) => handle.file === "src/run.ts")).toBeTruthy();
+    expect(response.handles.some((handle) => handle.file === "docs/guide.md")).toBeFalsy();
+    expect(response.summary).toContain("1 file(s) in scope.");
+  });
+
   it("orient prints compact pretty output", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-orient-pretty-"));
     await fsp.mkdir(path.join(root, "src"), { recursive: true });

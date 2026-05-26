@@ -40,6 +40,19 @@ describe("agent orient", () => {
     );
   });
 
+  it("normalizes absolute include roots against the project root", async () => {
+    const root = await mkTmpDir("cg-agent-orient-absolute-root-");
+    await writeFile(root, "src/index.ts", "export const value = 1;\n");
+    await writeFile(root, "docs/guide.md", "# Guide\n");
+
+    const response = await orientCodegraph({ root, includeRoots: [path.join(root, "src")], budget: "small" });
+
+    expect(response.tree.some((entry) => entry.path === "src/index.ts")).toBe(true);
+    expect(response.tree.some((entry) => entry.path === "docs/guide.md")).toBe(false);
+    expect(response.handles.some((handle) => handle.file === "src/index.ts")).toBe(true);
+    expect(response.handles.some((handle) => handle.file === "docs/guide.md")).toBe(false);
+  });
+
   it("uses small budget to skip deep health analysis", async () => {
     const root = await mkTmpDir("cg-agent-orient-budget-");
     await writeFile(root, "src/first.ts", "export function first() { return 1; }\n");
