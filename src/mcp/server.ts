@@ -656,8 +656,8 @@ const orientSchema = z.object({
 const packetGetSchema = z.object({
   root: z.string().optional(),
   handle: z.string(),
-  maxSymbols: z.number().int().positive().optional(),
-  maxSnippets: z.number().int().positive().optional(),
+  maxSymbols: z.number().int().positive().max(200).optional(),
+  maxSnippets: z.number().int().positive().max(50).optional(),
 });
 
 const getFileSchema = z.object({

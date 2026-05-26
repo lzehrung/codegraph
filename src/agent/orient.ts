@@ -95,11 +95,12 @@ export async function orientCodegraphWithSession(
   const scopedFiles = projectFiles.filter((file) => isUnderIncludeRoots(file, includeRoots));
   const tree = buildTree(scopedFiles, limits.treeDepth);
   const boundedTree = tree.slice(0, limits.maxTreeEntries);
-  const hotspots = getHotspots(snapshot.fileGraph, { limit: limits.maxHotspots });
+  const hotspots = getHotspots(snapshot.fileGraph, { limit: snapshot.files.length });
   const scopedHotspots = hotspots
     .map((hotspot) => ({ ...hotspot, file: normalizeRelativePath(root, hotspot.file) }))
     .filter((hotspot) => isUnderIncludeRoots(hotspot.file, includeRoots));
-  const modules = scopedHotspots.map((hotspot) => ({
+  const boundedHotspots = scopedHotspots.slice(0, limits.maxHotspots);
+  const modules = boundedHotspots.map((hotspot) => ({
     file: hotspot.file,
     fanIn: hotspot.fanIn,
     fanOut: hotspot.fanOut,
@@ -143,7 +144,7 @@ export async function orientCodegraphWithSession(
     recommendedNext,
     omittedCounts: {
       treeEntries: Math.max(0, tree.length - boundedTree.length),
-      hotspots: Math.max(0, scopedHotspots.length - modules.length),
+      hotspots: Math.max(0, scopedHotspots.length - boundedHotspots.length),
       handles: Math.max(0, scopedFiles.length + reviewHandles.length - handles.length),
     },
   };
