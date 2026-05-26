@@ -1,6 +1,6 @@
 import path from "node:path";
 import { findDuplicates } from "../duplicates.js";
-import { findDetailedCycles, sortDetailedCycles } from "../graphs/cycles.js";
+import { findDetailedCycles } from "../graphs/cycles.js";
 import { getHotspots } from "../graphs/hotspots.js";
 import { getUnresolvedImports } from "../graphs/unresolved.js";
 import type { Graph } from "../types.js";
@@ -180,7 +180,7 @@ async function buildHealth(
       omittedAnalyses: 3,
     };
   }
-  const cycles = sortDetailedCycles(findDetailedCycles(graph), "priority");
+  const cycles = findDetailedCycles(graph);
   const unresolved = getUnresolvedImports(graph, { projectRoot: root });
   const duplicateResult = await findDuplicates(index, {
     projectRoot: root,

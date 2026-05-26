@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { findDuplicates, type DuplicateConfidence, type DuplicateGroup } from "../duplicates.js";
 import { collectGraph } from "../graph-builder.js";
-import { findDetailedCycles, getUnresolvedImports, sortDetailedCycles } from "../graphs/queries.js";
+import { findDetailedCycles, getUnresolvedImports } from "../graphs/queries.js";
 import { getHotspots } from "../graphs/hotspots.js";
 import { type GraphBuildOptions } from "../graphs/types.js";
 import { buildProjectIndexIncremental } from "../indexer/build-index.js";
@@ -294,7 +294,7 @@ async function buildInspectReport(
   const graph = restrictGraphToIncludeRoots(index.graph, includeRoots);
   const hotspots = getHotspots(graph, { limit });
   const unresolved = getUnresolvedImports(graph, { projectRoot });
-  const cycles = sortDetailedCycles(findDetailedCycles(graph), "priority");
+  const cycles = findDetailedCycles(graph);
   const duplicateMinConfidence: DuplicateConfidence = "high";
   const duplicateResult = await findDuplicates(index, {
     projectRoot,
