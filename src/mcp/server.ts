@@ -99,12 +99,10 @@ export type CodegraphMcpHandlers = {
     limit?: number | undefined;
   }) => Promise<AgentSearchResponse>;
   orient: (request: {
-    root?: string | undefined;
     includeRoots?: string[] | undefined;
     budget?: AgentOrientBudget | undefined;
   }) => Promise<AgentOrientResponse>;
   packet_get: (request: {
-    root?: string | undefined;
     handle: string;
     maxSymbols?: number | undefined;
     maxSnippets?: number | undefined;
@@ -648,13 +646,11 @@ const searchSchema = z.object({
 });
 
 const orientSchema = z.object({
-  root: z.string().optional(),
   includeRoots: z.array(z.string()).optional(),
   budget: z.enum(["small", "medium", "large"]).optional(),
 });
 
 const packetGetSchema = z.object({
-  root: z.string().optional(),
   handle: z.string(),
   maxSymbols: z.number().int().positive().max(200).optional(),
   maxSnippets: z.number().int().positive().max(50).optional(),

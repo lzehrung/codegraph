@@ -117,12 +117,22 @@ function parseReviewHandle(handle: string): { base: string; head: string } | nul
     if (separator < 0) continue;
     const key = part.slice(0, separator);
     const value = part.slice(separator + 1);
-    fields.set(key, decodeURIComponent(value));
+    const decodedValue = decodeReviewHandleField(value);
+    if (decodedValue === null) return null;
+    fields.set(key, decodedValue);
   }
   const base = fields.get("base");
   const head = fields.get("head");
   if (!base || !head) return null;
   return { base, head };
+}
+
+function decodeReviewHandleField(value: string): string | null {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
+  }
 }
 
 function kindForHandle(handle: string): AgentPacketKind | null {

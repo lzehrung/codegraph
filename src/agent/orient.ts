@@ -3,6 +3,7 @@ import { findDuplicates } from "../duplicates.js";
 import { findDetailedCycles, sortDetailedCycles } from "../graphs/cycles.js";
 import { getHotspots } from "../graphs/hotspots.js";
 import { getUnresolvedImports } from "../graphs/unresolved.js";
+import type { Graph } from "../types.js";
 import { normalizePath } from "../util/paths.js";
 import { formatAgentFileHandle } from "./handles.js";
 import { createAgentSession, type AgentSession } from "./session.js";
@@ -54,9 +55,9 @@ export type AgentOrientResponse = {
   tree: AgentTreeEntry[];
   modules: AgentModuleSummary[];
   health: {
-    cycles: number;
-    unresolved: number;
-    duplicateGroups: number;
+    cycles: number | null;
+    unresolved: number | null;
+    duplicateGroups: number | null;
   };
   handles: AgentPacketHandle[];
   recommendedNext: AgentPacketCommand[];
@@ -64,16 +65,23 @@ export type AgentOrientResponse = {
     treeEntries: number;
     hotspots: number;
     handles: number;
+    healthAnalyses: number;
   };
 };
 
 const ORIENT_BUDGETS: Record<
   AgentOrientBudget,
-  { treeDepth: number; maxTreeEntries: number; maxHandles: number; maxHotspots: number }
+  {
+    treeDepth: number;
+    maxTreeEntries: number;
+    maxHandles: number;
+    maxHotspots: number;
+    includeHealth: boolean;
+  }
 > = {
-  small: { treeDepth: 2, maxTreeEntries: 80, maxHandles: 20, maxHotspots: 8 },
-  medium: { treeDepth: 3, maxTreeEntries: 160, maxHandles: 40, maxHotspots: 15 },
-  large: { treeDepth: 4, maxTreeEntries: 320, maxHandles: 80, maxHotspots: 25 },
+  small: { treeDepth: 2, maxTreeEntries: 80, maxHandles: 20, maxHotspots: 8, includeHealth: false },
+  medium: { treeDepth: 3, maxTreeEntries: 160, maxHandles: 40, maxHotspots: 15, includeHealth: true },
+  large: { treeDepth: 4, maxTreeEntries: 320, maxHandles: 80, maxHotspots: 25, includeHealth: true },
 };
 
 export async function orientCodegraph(request: AgentOrientRequest): Promise<AgentOrientResponse> {
@@ -93,12 +101,15 @@ export async function orientCodegraphWithSession(
   const root = snapshot.root;
   const projectFiles = snapshot.files.map((file) => normalizeRelativePath(root, file));
   const scopedFiles = projectFiles.filter((file) => isUnderIncludeRoots(file, includeRoots));
+  const scopedFileSet = new Set(scopedFiles);
+  const scopedAbsoluteFiles = snapshot.files.filter((file) => scopedFileSet.has(normalizeRelativePath(root, file)));
+  const scopedFileGraph = buildScopedGraph(snapshot.fileGraph, root, scopedFileSet);
   const tree = buildTree(scopedFiles, limits.treeDepth);
   const boundedTree = tree.slice(0, limits.maxTreeEntries);
-  const hotspots = getHotspots(snapshot.fileGraph, { limit: snapshot.files.length });
+  const hotspots = getHotspots(scopedFileGraph, { limit: limits.maxHotspots + 1 });
   const scopedHotspots = hotspots
     .map((hotspot) => ({ ...hotspot, file: normalizeRelativePath(root, hotspot.file) }))
-    .filter((hotspot) => isUnderIncludeRoots(hotspot.file, includeRoots));
+    .filter((hotspot) => scopedFileSet.has(hotspot.file));
   const boundedHotspots = scopedHotspots.slice(0, limits.maxHotspots);
   const modules = boundedHotspots.map((hotspot) => ({
     file: hotspot.file,
@@ -114,15 +125,13 @@ export async function orientCodegraphWithSession(
     file,
   }));
   const reviewHandles = request.review ? [buildReviewPacketHandle(request.review.base, request.review.head)] : [];
-  const cycles = sortDetailedCycles(findDetailedCycles(snapshot.fileGraph), "priority");
-  const unresolved = getUnresolvedImports(snapshot.fileGraph, { projectRoot: root });
-  const duplicateResult = await findDuplicates(snapshot.index, {
-    projectRoot: root,
-    limit: 0,
-    minConfidence: "high",
-  });
+  const health = await buildHealth(root, snapshot.index, scopedAbsoluteFiles, scopedFileGraph, limits.includeHealth);
   const handles = [...reviewHandles, ...fileHandles];
-  const recommendedNext = buildRecommendedNext(scopedFiles, handles);
+  const recommendedNext = buildRecommendedNext(scopedFiles, includeRoots, handles);
+  const healthSummary =
+    health.omittedAnalyses
+      ? "Health analysis skipped for small budget."
+      : `${health.cycles} cycle(s), ${health.unresolved} unresolved import group(s), ${health.duplicateGroups} duplicate group(s).`;
 
   return {
     schemaVersion: 1,
@@ -131,22 +140,59 @@ export async function orientCodegraphWithSession(
     summary: [
       `${scopedFiles.length} file(s) in scope.`,
       `${modules.length} hotspot module(s) surfaced for follow-up.`,
-      `${cycles.length} cycle(s), ${unresolved.length} unresolved import group(s).`,
+      healthSummary,
     ],
     tree: boundedTree,
     modules,
     health: {
-      cycles: cycles.length,
-      unresolved: unresolved.length,
-      duplicateGroups: duplicateResult.groups.length + duplicateResult.omittedCounts.groups,
+      cycles: health.cycles,
+      unresolved: health.unresolved,
+      duplicateGroups: health.duplicateGroups,
     },
     handles,
     recommendedNext,
     omittedCounts: {
       treeEntries: Math.max(0, tree.length - boundedTree.length),
-      hotspots: Math.max(0, scopedHotspots.length - boundedHotspots.length),
+      hotspots: Math.max(0, scopedFiles.length - boundedHotspots.length),
       handles: Math.max(0, scopedFiles.length + reviewHandles.length - handles.length),
+      healthAnalyses: health.omittedAnalyses,
     },
+  };
+}
+
+async function buildHealth(
+  root: string,
+  index: Parameters<typeof findDuplicates>[0],
+  files: string[],
+  graph: Graph,
+  includeHealth: boolean,
+): Promise<{
+  cycles: number | null;
+  unresolved: number | null;
+  duplicateGroups: number | null;
+  omittedAnalyses: number;
+}> {
+  if (!includeHealth) {
+    return {
+      cycles: null,
+      unresolved: null,
+      duplicateGroups: null,
+      omittedAnalyses: 3,
+    };
+  }
+  const cycles = sortDetailedCycles(findDetailedCycles(graph), "priority");
+  const unresolved = getUnresolvedImports(graph, { projectRoot: root });
+  const duplicateResult = await findDuplicates(index, {
+    projectRoot: root,
+    files,
+    limit: 0,
+    minConfidence: "high",
+  });
+  return {
+    cycles: cycles.length,
+    unresolved: unresolved.length,
+    duplicateGroups: duplicateResult.groups.length + duplicateResult.omittedCounts.groups,
+    omittedAnalyses: 0,
   };
 }
 
@@ -160,7 +206,9 @@ function buildReviewPacketHandle(base: string, head: string): AgentPacketHandle 
 }
 
 function normalizeIncludeRoots(includeRoots: string[]): string[] {
-  return includeRoots.map((root) => normalizePath(root).replace(/^\.?\//, "").replace(/\/$/, "")).filter(Boolean);
+  return includeRoots
+    .map((root) => normalizePath(root).replace(/^\.?\//, "").replace(/\/$/, ""))
+    .filter((root) => root && root !== ".");
 }
 
 function normalizeRelativePath(root: string, file: string): string {
@@ -173,13 +221,27 @@ function isUnderIncludeRoots(file: string, includeRoots: string[]): boolean {
   return includeRoots.some((root) => file === root || file.startsWith(`${root}/`));
 }
 
+function buildScopedGraph(graph: Graph, root: string, scopedFiles: ReadonlySet<string>): Graph {
+  const nodes = new Set<string>();
+  for (const node of graph.nodes) {
+    if (scopedFiles.has(normalizeRelativePath(root, node))) {
+      nodes.add(node);
+    }
+  }
+  const edges = graph.edges.filter((edge) => {
+    if (!nodes.has(edge.from)) return false;
+    return edge.to.type !== "file" || nodes.has(edge.to.path);
+  });
+  return { nodes, edges };
+}
+
 function buildTree(files: string[], maxDepth: number): AgentTreeEntry[] {
   const entries = new Map<string, AgentTreeEntry>();
   for (const file of files) {
     const parts = file.split("/").filter(Boolean);
     const fileDepth = parts.length;
     for (let index = 1; index < fileDepth; index++) {
-      if (index > maxDepth) continue;
+      if (index > maxDepth) break;
       const directory = parts.slice(0, index).join("/");
       entries.set(directory, { path: directory, kind: "directory", depth: index });
     }
@@ -211,7 +273,11 @@ function parentPath(file: string): string {
   return file.slice(0, separator);
 }
 
-function buildRecommendedNext(scopedFiles: string[], handles: AgentPacketHandle[]): AgentPacketCommand[] {
+function buildRecommendedNext(
+  scopedFiles: string[],
+  includeRoots: string[],
+  handles: AgentPacketHandle[],
+): AgentPacketCommand[] {
   const commands: AgentPacketCommand[] = [];
   const firstHandle = handles[0];
   if (firstHandle) {
@@ -222,7 +288,7 @@ function buildRecommendedNext(scopedFiles: string[], handles: AgentPacketHandle[
     });
   }
   if (scopedFiles.length) {
-    const firstRoot = scopedFiles[0]?.split("/", 1)[0] ?? ".";
+    const firstRoot = includeRoots[0] ?? ".";
     commands.push({
       label: "Inspect hotspots",
       command: `codegraph hotspots ${quoteShellArg(firstRoot)} --limit 20 --json`,

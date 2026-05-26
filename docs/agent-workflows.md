@@ -38,7 +38,7 @@ codegraph packet get file:src%2Fcli.ts --json
 codegraph packet get <handle-from-orient> --max-symbols 25 --json
 ```
 
-Orientation returns summary bullets, a bounded tree, hotspot modules, health counts, stable packet handles, omitted counts, and recommended next commands. Packet retrieval accepts file, symbol, chunk, SQL, graph, and review handles and delegates to the same bounded explain/review helpers used by existing commands. Use review handles from orientation when a git range should become a compact review packet.
+Orientation returns summary bullets, a bounded tree, hotspot modules, budgeted health counts, stable packet handles, omitted counts, and recommended next commands. Small orientation packets skip deeper health analysis and report that omission explicitly; use `--budget medium` or `--budget large` when health counts matter. Packet retrieval accepts file, symbol, chunk, SQL, graph, and review handles and delegates to the same bounded explain/review helpers used by existing commands. Use review handles from orientation when a git range should become a compact review packet.
 
 ## Search anchors
 
@@ -59,7 +59,7 @@ Use `artifact build` when the agent needs a durable handoff directory. The defau
 
 Use `codegraph mcp serve --root . --stdio` when an agent can spawn a stdio MCP server, or `codegraph mcp serve --root . --port 7331` for Streamable HTTP at `/mcp`. HTTP binds to `127.0.0.1` by default; pass `--host <host>` only when the server must be reachable elsewhere. MCP reuses one in-process Codegraph session and exposes the same deterministic primitives as compact tools: `orient`, `packet_get`, `search`, `get_file`, `get_symbol`, `goto`, `refs`, `deps`, `rdeps`, `path`, `impact`, `review`, `query_sqlite`, and `artifact_build`.
 
-MCP is an ergonomics and performance layer, not a separate analysis engine. It gives agents stable handles from `search` and `explain`, avoids rebuilding the project for each follow-up call, and returns bounded snippets/resources. File and artifact paths are confined to the project root after realpath resolution. Tools are read-only by default; `query_sqlite` rejects mutating SQL, recursive queries, and synthetic payload functions while capping returned rows and bytes. `artifact_build` is available only when the server is started with `--allow-build`.
+MCP is an ergonomics and performance layer, not a separate analysis engine. It gives agents stable handles from orientation, `search`, and `explain`, avoids rebuilding the project for each follow-up call, and returns bounded snippets/resources. File and artifact paths are confined to the project root after realpath resolution; tool calls do not accept per-request root overrides. Tools are read-only by default; `query_sqlite` rejects mutating SQL, recursive queries, and synthetic payload functions while capping returned rows and bytes. `artifact_build` is available only when the server is started with `--allow-build`.
 
 ## Session management
 

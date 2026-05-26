@@ -90,6 +90,7 @@ if (handle) {
 ```
 
 Use orientation before broad search when a caller needs repo context but has no query yet. Packet handles cover files, symbols, chunks, SQL objects, graph neighborhoods, and review ranges.
+Small orientation budgets skip deeper health analysis and set health fields to `null` while recording the omission. Use `budget: "medium"` or `budget: "large"` when health counts are needed.
 
 ## Agent search
 
@@ -162,6 +163,7 @@ console.log(packet.kind, refs.references, rows.rows);
 ```
 
 `serveCodegraphMcp()` starts the stdio server used by `codegraph mcp serve`. MCP is an agent ergonomics and cache layer over the same analysis engine, not a separate indexer. MCP file and artifact paths are confined after realpath resolution. `query_sqlite` is read-only and row- and byte-bounded; `artifact_build` is disabled by default and requires `readOnly: false` or CLI `--allow-build`.
+MCP `orient` and `packet_get` calls use the server-configured root; they do not accept per-request root overrides.
 
 ## Semantic chunking
 

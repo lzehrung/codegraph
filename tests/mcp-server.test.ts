@@ -295,6 +295,21 @@ describe("codegraph MCP handlers", () => {
     expect(JSON.stringify(packet.packet)).toContain("src/run.ts");
   });
 
+  it("does not advertise MCP root overrides for orientation packet tools", () => {
+    const orientTool = listCodegraphMcpTools().find((tool) => tool.name === "orient");
+    const packetTool = listCodegraphMcpTools().find((tool) => tool.name === "packet_get");
+    expect(orientTool).toBeTruthy();
+    expect(packetTool).toBeTruthy();
+
+    const orientSchema = readObject(orientTool!.inputSchema);
+    const packetSchema = readObject(packetTool!.inputSchema);
+    const orientProperties = readObject(orientSchema.properties);
+    const packetProperties = readObject(packetSchema.properties);
+
+    expect(orientProperties.root).toBeUndefined();
+    expect(packetProperties.root).toBeUndefined();
+  });
+
   it("bounds refs by handle with the refs limit", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-refs-limit-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");

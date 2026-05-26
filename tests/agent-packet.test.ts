@@ -64,4 +64,13 @@ describe("agent packet", () => {
     expect(packet.packet.summary.symbolsChanged).toBeGreaterThan(0);
     expect(Array.isArray(packet.packet.candidateTests)).toBeTruthy();
   });
+
+  it("rejects malformed percent encoding in review handles cleanly", async () => {
+    const root = await mkTmpDir("cg-agent-packet-malformed-review-");
+    await writeFile(root, "src/run.ts", "export function run() { return 1; }\n");
+
+    await expect(getCodegraphPacket({ root, handle: "review:base=%;head=HEAD" })).rejects.toThrow(
+      "Invalid review packet handle",
+    );
+  });
 });

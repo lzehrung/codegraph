@@ -50,7 +50,6 @@ export const MCP_TOOLS: Tool[] = [
     name: "orient",
     description: "Build a compact first-turn packet for agent repo context.",
     inputSchema: objectSchema({
-      root: stringProperty,
       includeRoots: { type: "array", items: stringProperty },
       budget: orientBudgetProperty,
     }),
@@ -60,7 +59,6 @@ export const MCP_TOOLS: Tool[] = [
     description: "Retrieve a bounded evidence packet by stable handle.",
     inputSchema: objectSchema(
       {
-        root: stringProperty,
         handle: stringProperty,
         maxSymbols: { type: "integer", minimum: 1, maximum: 200 },
         maxSnippets: { type: "integer", minimum: 1, maximum: 50 },

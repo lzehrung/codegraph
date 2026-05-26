@@ -142,6 +142,8 @@ node ./dist/cli.js duplicates ./src --min-confidence medium --limit 20
 
 If you install the published CLI instead of using a source checkout, replace `node ./dist/cli.js` with `codegraph`.
 
+Small orientation packets skip deeper health analysis and record that omission; use `--budget medium` or `--budget large` when health counts matter.
+
 ## Agent setup
 
 Using a skill-aware agent? Install the bundled skill so repo navigation, semantic references, dependency tracing, and PR impact questions route to Codegraph automatically. The installer uses safe per-agent defaults and creates the target skills directory as needed:

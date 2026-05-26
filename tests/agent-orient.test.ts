@@ -24,4 +24,31 @@ describe("agent orient", () => {
     expect(response.handles.some((handle) => handle.handle.startsWith("file:"))).toBe(true);
     expect(response.recommendedNext.length).toBeGreaterThan(0);
   });
+
+  it("treats dot include root as unscoped orientation", async () => {
+    const root = await mkTmpDir("cg-agent-orient-dot-");
+    await writeFile(root, "src/index.ts", "export const value = 1;\n");
+
+    const response = await orientCodegraph({ root, includeRoots: ["."], budget: "small" });
+
+    expect(response.tree.some((entry) => entry.path === "src/index.ts")).toBe(true);
+    expect(response.handles.some((handle) => handle.file === "src/index.ts")).toBe(true);
+    expect(response.recommendedNext.some((next) => next.command === "codegraph hotspots . --limit 20 --json")).toBe(
+      true,
+    );
+  });
+
+  it("uses small budget to skip deep health analysis", async () => {
+    const root = await mkTmpDir("cg-agent-orient-budget-");
+    await writeFile(root, "src/first.ts", "export function first() { return 1; }\n");
+    await writeFile(root, "src/second.ts", "export function second() { return 2; }\n");
+
+    const response = await orientCodegraph({ root, includeRoots: ["src"], budget: "small" });
+
+    expect(response.health.cycles).toBeNull();
+    expect(response.health.unresolved).toBeNull();
+    expect(response.health.duplicateGroups).toBeNull();
+    expect(response.omittedCounts.healthAnalyses).toBe(3);
+    expect(response.summary).toContain("Health analysis skipped for small budget.");
+  });
 });

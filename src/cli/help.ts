@@ -146,7 +146,7 @@ export const ORIENT_HELP_TEXT = `codegraph orient - Build a compact first-turn p
 Usage: codegraph orient [roots...] [--root <path>] [--budget small|medium|large] [--json | --pretty]
 
 Output:
-  Orientation includes summary bullets, a bounded project tree, hotspot modules, health counts, stable packet handles, omission counts, and copyable follow-up commands.
+  Orientation includes summary bullets, a bounded project tree, hotspot modules, budgeted health counts, stable packet handles, omission counts, and copyable follow-up commands.
 `;
 
 export const PACKET_HELP_TEXT = `codegraph packet - Retrieve bounded evidence packets by stable handle
@@ -154,7 +154,7 @@ export const PACKET_HELP_TEXT = `codegraph packet - Retrieve bounded evidence pa
 Usage: codegraph packet get <handle> [--root <path>] [--json | --pretty] [--max-symbols <n>] [--max-snippets <n>]
 
 Handles:
-  Accepts file:, symbol:, chunk:, sql:, graph:, and review: handles returned by orient, search, and explain.
+  Accepts file:, symbol:, chunk:, sql:, graph:, and review: handles returned by orient, search, and explain. Review handles are returned by orient when a review range is requested.
 `;
 
 export const EXPLAIN_HELP_TEXT = `codegraph explain - Explain a file, symbol, SQL object, or search handle

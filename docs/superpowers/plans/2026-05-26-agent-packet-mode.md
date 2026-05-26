@@ -62,9 +62,9 @@ export interface AgentOrientResponse {
   tree: AgentTreeEntry[];
   modules: AgentModuleSummary[];
   health: {
-    cycles: number;
-    unresolved: number;
-    duplicateGroups: number;
+    cycles: number | null;
+    unresolved: number | null;
+    duplicateGroups: number | null;
   };
   handles: AgentPacketHandle[];
   recommendedNext: AgentPacketCommand[];
@@ -72,6 +72,7 @@ export interface AgentOrientResponse {
     treeEntries: number;
     hotspots: number;
     handles: number;
+    healthAnalyses: number;
   };
 }
 ```
@@ -422,13 +423,11 @@ Tool input schemas:
 
 ```ts
 orient: {
-  root?: string;
   includeRoots?: string[];
   budget?: "small" | "medium" | "large";
 }
 
 packet_get: {
-  root?: string;
   handle: string;
   maxSymbols?: number;
   maxSnippets?: number;
@@ -438,6 +437,7 @@ packet_get: {
 Rules:
 
 - Reuse the session if MCP already has one.
+- Use the server-configured root for confinement; do not accept per-request root overrides.
 - Enforce the same root/path confinement as `get_file`, `get_symbol`, and `artifact_build`.
 - Keep tools read-only.
 
