@@ -33,6 +33,8 @@ describe("agent orient", () => {
 
     expect(response.tree.some((entry) => entry.path === "src/index.ts")).toBe(true);
     expect(response.handles.some((handle) => handle.file === "src/index.ts")).toBe(true);
+    expect(response.modules).toHaveLength(0);
+    expect(response.omittedCounts.hotspots).toBe(0);
     expect(response.recommendedNext.some((next) => next.command === "codegraph hotspots . --limit 20 --json")).toBe(
       true,
     );
