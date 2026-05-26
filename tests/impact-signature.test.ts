@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildProjectIndex, analyzeImpactFromDiff } from "../src/index.js";
+import { extractCallableSignature } from "../src/impact/callCompatibility.js";
 import type { CallCompatibilityHint, CompactImpactReport, ImpactReport } from "../src/impact/types.js";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
@@ -31,6 +32,50 @@ describe("impact signature hint", () => {
 
     expect(hint.status).toBe("likely_mismatch");
     expect(hint.expected.maxArgs).toBe(2);
+  });
+
+  it("extracts fixed arity for simple TypeScript functions", () => {
+    const source = "export function helper(a: string, b: number) { return a + b; }";
+    const signature = extractCallableSignature({
+      languageId: "typescript",
+      source,
+      symbolStartIndex: source.indexOf("helper"),
+    });
+
+    expect(signature).toEqual({ minArgs: 2, maxArgs: 2, confidence: "high" });
+  });
+
+  it("extracts minimum arity for optional and defaulted parameters", () => {
+    const source = "export function helper(a: string, b = 1, c?: boolean) { return a; }";
+    const signature = extractCallableSignature({
+      languageId: "typescript",
+      source,
+      symbolStartIndex: source.indexOf("helper"),
+    });
+
+    expect(signature).toEqual({ minArgs: 1, maxArgs: 3, confidence: "high" });
+  });
+
+  it("marks rest signatures as unbounded", () => {
+    const source = "export function helper(a: string, ...rest: string[]) { return rest; }";
+    const signature = extractCallableSignature({
+      languageId: "typescript",
+      source,
+      symbolStartIndex: source.indexOf("helper"),
+    });
+
+    expect(signature).toEqual({ minArgs: 1, maxArgs: null, confidence: "high" });
+  });
+
+  it("returns null for unsupported languages", () => {
+    const source = "def helper(a, b):\n    return a";
+    const signature = extractCallableSignature({
+      languageId: "python",
+      source,
+      symbolStartIndex: source.indexOf("helper"),
+    });
+
+    expect(signature).toBeNull();
   });
 
   it("should identify signature changes using AST", async () => {
