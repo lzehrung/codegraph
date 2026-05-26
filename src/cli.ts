@@ -37,6 +37,7 @@ import { handleImpactCommand } from "./cli/impact.js";
 import { handleIndexCommand } from "./cli/index.js";
 import { handleHotspotsCommand, handleInspectCommand } from "./cli/inspect.js";
 import { handleMcpServeCommand } from "./cli/mcp.js";
+import { handleOrientCommand } from "./cli/orient.js";
 import { handleDumpmodCommand, handleGotoCommand, handleRefsCommand } from "./cli/navigation.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
 import { handleReviewCommand } from "./cli/review.js";
@@ -245,7 +246,12 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     : {};
 
   const supportsIncludeRoots =
-    cmd === "graph" || cmd === "index" || cmd === "hotspots" || cmd === "inspect" || cmd === "duplicates";
+    cmd === "graph" ||
+    cmd === "index" ||
+    cmd === "hotspots" ||
+    cmd === "inspect" ||
+    cmd === "duplicates" ||
+    cmd === "orient";
   let includeRoots: string[] = [];
   if (supportsIncludeRoots) {
     if (rootOpt) {
@@ -359,6 +365,20 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   if (cmd === "explain") {
     await handleExplainCommand({
       positionals: parsed.positionals,
+      root: projectRootFs,
+      getOpt,
+      hasFlag,
+      writeJSONLine,
+      writeStdoutLine,
+      writeStderrLine,
+      exit: exitCli,
+    });
+    return;
+  }
+
+  if (cmd === "orient") {
+    await handleOrientCommand({
+      positionals: includeRoots,
       root: projectRootFs,
       getOpt,
       hasFlag,

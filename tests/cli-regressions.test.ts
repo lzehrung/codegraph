@@ -1324,6 +1324,37 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     expect(response.results[0]?.followUps.some((cmd) => cmd.includes("codegraph refs"))).toBeTruthy();
   });
 
+  it("orient returns compact first-turn context", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-orient-"));
+    await fsp.mkdir(path.join(root, "src"), { recursive: true });
+    await fsp.writeFile(path.join(root, "src", "run.ts"), "export function run() { return 1; }\n");
+
+    const stdout = await runCliCommand(["orient", "src", "--root", root, "--budget", "small", "--json"]);
+    const response = JSON.parse(stdout) as {
+      schemaVersion: number;
+      tree: Array<{ path: string }>;
+      handles: Array<{ handle: string }>;
+    };
+
+    expect(response.schemaVersion).toBe(1);
+    expect(response.tree.some((entry) => entry.path === "src/run.ts")).toBeTruthy();
+    expect(response.handles.some((handle) => handle.handle.startsWith("file:"))).toBeTruthy();
+  });
+
+  it("orient prints compact pretty output", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-orient-pretty-"));
+    await fsp.mkdir(path.join(root, "src"), { recursive: true });
+    await fsp.writeFile(path.join(root, "src", "run.ts"), "export function run() { return 1; }\n");
+
+    const stdout = await runCliCommand(["orient", "src", "--root", root, "--budget", "small", "--pretty"]);
+
+    expect(stdout).toContain("Summary");
+    expect(stdout).toContain("Tree");
+    expect(stdout).toContain("Recommended next");
+    expect(stdout).toContain("codegraph packet get");
+    expect(stdout).toContain("file:");
+  });
+
   it("explain returns compact architecture context", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-explain-"));
     await fsp.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");

@@ -5,6 +5,7 @@ Usage: codegraph <command> [options] [path]
 Commands:
   graph         Build dependency graph (default)
   inspect       Summarize repo structure and recommend next commands
+  orient        Build a compact first-turn packet for agent repo context
   search        Ranked agent search across files, symbols, chunks, SQL, and graph context
   explain       Explain a file, symbol, SQL object, or search handle
   artifact      Build an agent-ready SQLite/graph/report/question bundle
@@ -66,6 +67,7 @@ Examples:
   codegraph version
   codegraph doctor
   codegraph inspect ./src --limit 20
+  codegraph orient ./src --budget small --json
   codegraph duplicates ./src --min-confidence medium
   codegraph search "auth user" --json
   codegraph explain src/auth.ts --json
@@ -104,6 +106,7 @@ const knownCliCommands = new Set([
   "index",
   "inspect",
   "mcp",
+  "orient",
   "path",
   "rdeps",
   "refs",
@@ -133,6 +136,14 @@ Search Modes:
 
 Output:
   Results include stable handles, rank reasons, evidence, graph neighbors, follow-up commands, limits, and omission counts.
+`;
+
+export const ORIENT_HELP_TEXT = `codegraph orient - Build a compact first-turn packet for agent repo context
+
+Usage: codegraph orient [roots...] [--root <path>] [--budget small|medium|large] [--json | --pretty]
+
+Output:
+  Orientation includes summary bullets, a bounded project tree, hotspot modules, health counts, stable packet handles, omission counts, and copyable follow-up commands.
 `;
 
 export const EXPLAIN_HELP_TEXT = `codegraph explain - Explain a file, symbol, SQL object, or search handle
@@ -224,6 +235,7 @@ Output:
 
 export function helpTextForCommand(command: string, positionals: readonly string[]): string | undefined {
   if (command === "search") return SEARCH_HELP_TEXT;
+  if (command === "orient") return ORIENT_HELP_TEXT;
   if (command === "explain") return EXPLAIN_HELP_TEXT;
   if (command === "duplicates") return DUPLICATES_HELP_TEXT;
   if (command === "artifact") return ARTIFACT_HELP_TEXT;

@@ -210,6 +210,11 @@ describe("CLI command modules", () => {
     const cases = [
       { args: ["search", "--help"], heading: "codegraph search", usage: 'Usage: codegraph search "<query>"' },
       {
+        args: ["orient", "--help"],
+        heading: "codegraph orient",
+        usage: "Usage: codegraph orient [roots...]",
+      },
+      {
         args: ["explain", "--help"],
         heading: "codegraph explain",
         usage: "Usage: codegraph explain <file|symbol|sql-object|handle>",
