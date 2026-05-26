@@ -1,6 +1,8 @@
 import path from "node:path";
 import { findDuplicates } from "../duplicates.js";
-import { findDetailedCycles, getHotspots, getUnresolvedImports, sortDetailedCycles } from "../graphs.js";
+import { findDetailedCycles, sortDetailedCycles } from "../graphs/cycles.js";
+import { getHotspots } from "../graphs/hotspots.js";
+import { getUnresolvedImports } from "../graphs/unresolved.js";
 import { normalizePath } from "../util/paths.js";
 import { formatAgentFileHandle } from "./handles.js";
 import { createAgentSession, type AgentSession } from "./session.js";

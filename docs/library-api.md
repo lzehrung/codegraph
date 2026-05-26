@@ -65,6 +65,32 @@ Future API narrowing should happen by first documenting replacements, then
 adding explicit subpath exports or deprecation notes before removing root
 compatibility exports.
 
+## Agent packets
+
+`orientCodegraph()` returns a compact first-turn packet for an agent, and `getCodegraphPacket()` retrieves bounded evidence by stable handle:
+
+```ts
+import { getCodegraphPacket, orientCodegraph } from "@lzehrung/codegraph";
+
+const orientation = await orientCodegraph({
+  root: process.cwd(),
+  includeRoots: ["src"],
+  budget: "small",
+});
+
+const handle = orientation.handles[0]?.handle;
+if (handle) {
+  const packet = await getCodegraphPacket({
+    root: process.cwd(),
+    handle,
+    maxSymbols: 25,
+  });
+  console.log(packet.kind, packet.followUps);
+}
+```
+
+Use orientation before broad search when a caller needs repo context but has no query yet. Packet handles cover files, symbols, chunks, SQL objects, graph neighborhoods, and review ranges.
+
 ## Agent search
 
 `searchCodegraph()` builds a project snapshot and returns deterministic, agent-ready anchors across files, symbols, chunks, SQL objects, and optional graph neighborhoods. Handles are project-relative and explainable; large result packets include `resultCount`, `totalCandidates`, `limits`, and `omittedCounts`.
@@ -116,7 +142,7 @@ console.log(artifact.manifestPath, artifact.artifacts);
 
 The `graph.json` artifact is self-describing (`schemaVersion: 1`, `format: "codegraph.graph-json"`) and uses project-relative file paths and portable symbol handles. `questions.json` uses the same stable handles for follow-up commands. With `force: true`, stale known Codegraph artifact files are removed before the selected outputs are written; unrelated files in the directory are preserved.
 
-`createAgentSession()` keeps one in-process project snapshot warm for repeated search, explain, artifact, and MCP calls. Use `buildCodegraphArtifactWithSession()` when a host already has a session and wants SQLite, graph JSON, report, questions, and manifest outputs from the same snapshot. `createCodegraphMcpHandlers()` exposes the same primitives without starting stdio, which is useful for tests or host applications:
+`createAgentSession()` keeps one in-process project snapshot warm for repeated orient, search, explain, packet, artifact, and MCP calls. Use `buildCodegraphArtifactWithSession()` when a host already has a session and wants SQLite, graph JSON, report, questions, and manifest outputs from the same snapshot. `createCodegraphMcpHandlers()` exposes the same primitives without starting stdio, which is useful for tests or host applications:
 
 ```ts
 import { createCodegraphMcpHandlers } from "@lzehrung/codegraph";
@@ -128,9 +154,11 @@ const handlers = createCodegraphMcpHandlers({
 });
 
 const search = await handlers.search({ query: "auth user", limit: 5 });
+const orient = await handlers.orient({ includeRoots: ["src"], budget: "small" });
+const packet = await handlers.packet_get({ handle: orient.handles[0]!.handle });
 const refs = await handlers.refs({ handle: search.results[0]!.handle });
 const rows = await handlers.query_sqlite({ query: "select path from files", limit: 5 });
-console.log(refs.references, rows.rows);
+console.log(packet.kind, refs.references, rows.rows);
 ```
 
 `serveCodegraphMcp()` starts the stdio server used by `codegraph mcp serve`. MCP is an agent ergonomics and cache layer over the same analysis engine, not a separate indexer. MCP file and artifact paths are confined after realpath resolution. `query_sqlite` is read-only and row- and byte-bounded; `artifact_build` is disabled by default and requires `readOnly: false` or CLI `--allow-build`.

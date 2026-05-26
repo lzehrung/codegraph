@@ -76,7 +76,7 @@ Use Codegraph when you need fast structural answers about a repo without relying
 - Multi-language dependency graphs, including imports, re-exports, `require()`, dynamic imports, workspace resolution, document links, stylesheet imports, and SFC script dependencies.
 - Per-file symbol indexes with locals, exports, docstrings, line spans, and lightweight complexity metadata.
 - Cross-file go-to-definition and find-references support across the shared source-language pipeline.
-- Deterministic agent search, bounded explanation packets, portable artifact bundles, and MCP tools across files, symbols, chunks, SQL objects, and graph neighborhoods with stable follow-up handles.
+- Deterministic agent orientation, packet retrieval, search, bounded explanations, portable artifact bundles, and MCP tools across files, symbols, chunks, SQL objects, graph neighborhoods, and review ranges with stable follow-up handles.
 - Semantic chunking for code and text files, including Vue and Svelte single-file component block splitting.
 - Duplicate and near-duplicate detection over indexed symbols, semantic chunks, and text chunks.
 - AST grep, public API summaries, unresolved import reports, hotspot analysis, cycle detection, and shortest dependency paths.
@@ -122,9 +122,11 @@ Then run a few concrete first-pass commands:
 node ./dist/cli.js doctor
 
 # get a repo summary and next-step suggestions
+node ./dist/cli.js orient --root . --budget small --json
 node ./dist/cli.js inspect ./src --limit 20
 
 # find and explain a concrete anchor
+node ./dist/cli.js packet get <handle-from-orient> --json
 node ./dist/cli.js search "graph json" --json
 node ./dist/cli.js explain src/cli.ts --json
 
@@ -246,8 +248,8 @@ For the full capability matrix, limitations, and fixture coverage, see [docs/lan
 
 - [docs/installation.md](./docs/installation.md): source checkout, scoped registry, release tarball, native runtime modes, and JS fallback details
 - [docs/cli.md](./docs/cli.md): command reference, output formats, SQLite schema, review bundles, and graph viewer usage
-- [docs/library-api.md](./docs/library-api.md): agent search/explain/artifacts, semantic chunking, indexing, graph APIs, read-only SQL, impact examples, and programmatic review output
-- [docs/agent-workflows.md](./docs/agent-workflows.md): search anchors, MCP, sessions, streaming, tool wrappers, review bundles, and agent-oriented review recipes
+- [docs/library-api.md](./docs/library-api.md): agent orientation/packet/search/explain/artifacts, semantic chunking, indexing, graph APIs, read-only SQL, impact examples, and programmatic review output
+- [docs/agent-workflows.md](./docs/agent-workflows.md): orientation packets, search anchors, MCP, sessions, streaming, tool wrappers, review bundles, and agent-oriented review recipes
 - [docs/how-it-works.md](./docs/how-it-works.md): performance, caching, native runtime behavior, architecture, and testing guidance
 - [docs/language-parity.md](./docs/language-parity.md): per-language capability matrix
 - [docs/scenario-catalog.md](./docs/scenario-catalog.md): scenario and fixture coverage

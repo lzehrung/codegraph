@@ -10,24 +10,39 @@ For an unfamiliar repo, the shortest useful loop is:
 
 ```bash
 codegraph doctor
-codegraph inspect ./src --limit 20
+codegraph orient --root . --budget small --json
+codegraph packet get <handle-from-orient> --json
 codegraph search "auth user" --json
 codegraph explain src/auth.ts --json
+codegraph inspect ./src --limit 20
 codegraph artifact build --root . --out codegraph-out --json
 codegraph doctor codegraph-out
 codegraph mcp serve --root . --stdio
 codegraph mcp serve --root . --port 7331
 ```
 
-Then use the recommended commands from `inspect`, or the stable handles and follow-up commands from `search`, to narrow the next graph, navigation, or impact pass.
+Use `orient` for first-turn repo context, then use `packet get` for bounded follow-up evidence by handle. Use `search` when the agent has a query but no handle, and use `explain` when it already knows a file, symbol, SQL object, or search handle. `inspect` remains useful for human-readable architecture summaries and older installs.
 
 For durable repo-local scan scope, add `codegraph.config.json` at the project root. `discovery.ignoreGlobs` keeps large fixture, generated, or vendored folders out of agent search, MCP sessions, graphing, unresolved-import checks, impact, and review unless a command explicitly changes scan scope.
 
 For the raw CLI command reference, see [docs/cli.md](./cli.md).
 
+## Orientation packets
+
+Start with `orient` when an agent needs compact repo context without flooding the first prompt:
+
+```bash
+codegraph orient --root . --budget small --json
+codegraph orient --root . ./src --budget medium --pretty
+codegraph packet get file:src%2Fcli.ts --json
+codegraph packet get <handle-from-orient> --max-symbols 25 --json
+```
+
+Orientation returns summary bullets, a bounded tree, hotspot modules, health counts, stable packet handles, omitted counts, and recommended next commands. Packet retrieval accepts file, symbol, chunk, SQL, graph, and review handles and delegates to the same bounded explain/review helpers used by existing commands. Use review handles from orientation when a git range should become a compact review packet.
+
 ## Search anchors
 
-Use `search` when an agent needs a compact starting point before calling `goto`, `refs`, `deps`, `rdeps`, `chunk`, or later explanation tooling:
+Use `search` when an agent has a query but no packet handle and needs a compact starting point before calling `goto`, `refs`, `deps`, `rdeps`, `chunk`, or later explanation tooling:
 
 ```bash
 codegraph search "validate user" --json
@@ -42,7 +57,7 @@ Use `artifact build` when the agent needs a durable handoff directory. The defau
 
 ## MCP server
 
-Use `codegraph mcp serve --root . --stdio` when an agent can spawn a stdio MCP server, or `codegraph mcp serve --root . --port 7331` for Streamable HTTP at `/mcp`. HTTP binds to `127.0.0.1` by default; pass `--host <host>` only when the server must be reachable elsewhere. MCP reuses one in-process Codegraph session and exposes the same deterministic primitives as compact tools: `search`, `get_file`, `get_symbol`, `goto`, `refs`, `deps`, `rdeps`, `path`, `impact`, `review`, `query_sqlite`, and `artifact_build`.
+Use `codegraph mcp serve --root . --stdio` when an agent can spawn a stdio MCP server, or `codegraph mcp serve --root . --port 7331` for Streamable HTTP at `/mcp`. HTTP binds to `127.0.0.1` by default; pass `--host <host>` only when the server must be reachable elsewhere. MCP reuses one in-process Codegraph session and exposes the same deterministic primitives as compact tools: `orient`, `packet_get`, `search`, `get_file`, `get_symbol`, `goto`, `refs`, `deps`, `rdeps`, `path`, `impact`, `review`, `query_sqlite`, and `artifact_build`.
 
 MCP is an ergonomics and performance layer, not a separate analysis engine. It gives agents stable handles from `search` and `explain`, avoids rebuilding the project for each follow-up call, and returns bounded snippets/resources. File and artifact paths are confined to the project root after realpath resolution. Tools are read-only by default; `query_sqlite` rejects mutating SQL, recursive queries, and synthetic payload functions while capping returned rows and bytes. `artifact_build` is available only when the server is started with `--allow-build`.
 
