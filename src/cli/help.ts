@@ -154,7 +154,7 @@ export const PACKET_HELP_TEXT = `codegraph packet - Retrieve bounded evidence pa
 Usage: codegraph packet get <handle> [--root <path>] [--json | --pretty] [--max-symbols <n>] [--max-snippets <n>]
 
 Handles:
-  Accepts file:, symbol:, chunk:, sql:, graph:, and review: handles returned by orient, search, and explain. Review handles are returned by orient when a review range is requested.
+  Accepts file:, symbol:, chunk:, sql:, graph:, and review: handles. CLI orient returns file handles; review handles are produced by library orientation calls that include a review range.
 `;
 
 export const EXPLAIN_HELP_TEXT = `codegraph explain - Explain a file, symbol, SQL object, or search handle

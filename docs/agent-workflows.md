@@ -38,7 +38,7 @@ codegraph packet get file:src%2Fcli.ts --json
 codegraph packet get <handle-from-orient> --max-symbols 25 --json
 ```
 
-Orientation returns summary bullets, a bounded tree, hotspot modules, budgeted health counts, stable packet handles, omitted counts, and recommended next commands. Small orientation packets skip deeper health analysis and report that omission explicitly; use `--budget medium` or `--budget large` when health counts matter. Packet retrieval accepts file, symbol, chunk, SQL, graph, and review handles and delegates to the same bounded explain/review helpers used by existing commands. Use review handles from orientation when a git range should become a compact review packet.
+Orientation returns summary bullets, a bounded tree, hotspot modules, budgeted health counts, stable packet handles, omitted counts, and recommended next commands. Small orientation packets skip deeper health analysis and report that omission explicitly; use `--budget medium` or `--budget large` when health counts matter. Packet retrieval accepts file, symbol, chunk, SQL, graph, and review handles and delegates to the same bounded explain/review helpers used by existing commands. Review handles are available when orientation is invoked programmatically with a review range.
 
 ## Search anchors
 
