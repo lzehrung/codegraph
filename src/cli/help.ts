@@ -154,7 +154,7 @@ export const PACKET_HELP_TEXT = `codegraph packet - Retrieve bounded evidence pa
 Usage: codegraph packet get <handle> [--root <path>] [--json | --pretty] [--max-symbols <n>] [--max-snippets <n>]
 
 Handles:
-  Accepts file:, symbol:, chunk:, sql:, and graph: handles returned by orient, search, and explain.
+  Accepts file:, symbol:, chunk:, sql:, graph:, and review: handles returned by orient, search, and explain.
 `;
 
 export const EXPLAIN_HELP_TEXT = `codegraph explain - Explain a file, symbol, SQL object, or search handle
