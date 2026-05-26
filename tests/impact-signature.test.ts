@@ -111,6 +111,19 @@ describe("impact signature hint", () => {
     expect(call).toBeNull();
   });
 
+  it("does not treat a non-call reference as a later call expression", () => {
+    const source = "const value = helper;\nother();";
+    const calleeStartIndex = source.indexOf("helper");
+    const call = extractCallsiteArguments({
+      languageId: "typescript",
+      source,
+      calleeStartIndex,
+      calleeEndIndex: calleeStartIndex + "helper".length,
+    });
+
+    expect(call).toBeNull();
+  });
+
   it("should identify signature changes using AST", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-impact-signature-"));
 

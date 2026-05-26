@@ -26,6 +26,7 @@ export interface ExtractCallsiteArgumentsRequest {
   languageId: string;
   source: string;
   calleeStartIndex: number;
+  calleeEndIndex?: number;
 }
 
 type BalancedRange = {
@@ -50,6 +51,30 @@ function findOpeningParen(source: string, startIndex: number): number {
     return -1;
   }
   return source.indexOf("(", startIndex);
+}
+
+function findCallOpeningParen(source: string, startIndex: number, endIndex?: number): number {
+  if (endIndex === undefined) {
+    return findOpeningParen(source, startIndex);
+  }
+  if (endIndex < startIndex || endIndex > source.length) {
+    return -1;
+  }
+
+  for (let index = endIndex; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === undefined) {
+      return -1;
+    }
+    if (/\s/.test(char)) {
+      continue;
+    }
+    if (char === "(") {
+      return index;
+    }
+    return -1;
+  }
+  return -1;
 }
 
 function findBalancedParentheses(source: string, openIndex: number): BalancedRange | null {
@@ -249,7 +274,7 @@ export function extractCallsiteArguments(request: ExtractCallsiteArgumentsReques
     return null;
   }
 
-  const openIndex = findOpeningParen(request.source, request.calleeStartIndex);
+  const openIndex = findCallOpeningParen(request.source, request.calleeStartIndex, request.calleeEndIndex);
   const balanced = findBalancedParentheses(request.source, openIndex);
   if (!balanced) {
     return null;
@@ -384,11 +409,13 @@ export async function attachCallCompatibilityHints(
       }
 
       const parsedCallsite = await ensureParsedContext(ref.file, index.parsed?.get(ref.file));
-      const actual = extractCallsiteArguments({
+      const callsiteRequest: ExtractCallsiteArgumentsRequest = {
         languageId: parsedCallsite.sup.id,
         source: parsedCallsite.source,
         calleeStartIndex,
-      });
+        ...(ref.range.end.index !== undefined ? { calleeEndIndex: ref.range.end.index } : {}),
+      };
+      const actual = extractCallsiteArguments(callsiteRequest);
       if (!actual) {
         continue;
       }
