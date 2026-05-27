@@ -424,17 +424,9 @@ export async function summarizeChangedFiles(input: {
           handles: [] as string[],
         };
       }
-      const localSymbols: ReviewSymbolSummary[] = includeSymbolDetails
-        ? await Promise.all(locals.map((local) => buildSymbolSummary(local, mod, diffLinesByHandle)))
-        : locals.map((local) => {
-            const handle = symbolId(local);
-            return {
-              name: local.localName,
-              kind: local.kind,
-              handle,
-              exported: isExported(mod, handle),
-            };
-          });
+      const localSymbols: ReviewSymbolSummary[] = await Promise.all(
+        locals.map((local) => buildSymbolSummary(local, mod, diffLinesByHandle)),
+      );
       const exportSymbols = shouldIncludeExportSummaries(mod, hunks, locals) ? buildExportSummaries(file, mod) : [];
       const symbols = [...localSymbols, ...exportSymbols];
       return {

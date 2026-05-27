@@ -111,6 +111,17 @@ describe("impact signature hint", () => {
     expect(signature).toEqual({ minArgs: 1, maxArgs: 3, confidence: "high" });
   });
 
+  it("requires arguments through the last required parameter", () => {
+    const source = "export function helper(a = 1, b: string) { return b; }";
+    const signature = extractCallableSignature({
+      languageId: "typescript",
+      source,
+      symbolStartIndex: source.indexOf("helper"),
+    });
+
+    expect(signature).toEqual({ minArgs: 2, maxArgs: 2, confidence: "high" });
+  });
+
   it("marks rest signatures as unbounded", () => {
     const source = "export function helper(a: string, ...rest: string[]) { return rest; }";
     const signature = extractCallableSignature({

@@ -532,6 +532,7 @@ export function extractCallableSignature(request: ExtractCallableSignatureReques
   let minArgs = 0;
   let hasRest = false;
   let maxArgs = 0;
+  let positionalArgCount = 0;
   for (const parameter of parameters) {
     const trimmed = parameter.trim();
     if (!trimmed) {
@@ -544,9 +545,10 @@ export function extractCallableSignature(request: ExtractCallableSignatureReques
       hasRest = true;
       continue;
     }
+    positionalArgCount += 1;
     maxArgs += 1;
     if (!isOptionalParameter(trimmed)) {
-      minArgs += 1;
+      minArgs = positionalArgCount;
     }
   }
 
