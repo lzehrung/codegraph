@@ -77,6 +77,12 @@ export async function analyzeImpact(
     maxRefs,
     ...(projectRoot ? { projectRoot } : {}),
     ...(diagnostics ? { diagnostics } : {}),
+    shouldIncludeReference: (file) => {
+      if (!includeTests && isIndexTestFile(file)) {
+        return false;
+      }
+      return !isIgnored(file);
+    },
   });
   const directOptions = {
     maxRefs,

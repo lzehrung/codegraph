@@ -1289,6 +1289,7 @@ async function collectVerifiedCallsiteReferences(
   index: ProjectIndex,
   changedSymbol: ChangedSymbol,
   maxRefs: number,
+  shouldIncludeReference: (file: string) => boolean,
 ): Promise<Reference[]> {
   const refs: Reference[] = [];
   const seen = new Set<string>();
@@ -1296,6 +1297,9 @@ async function collectVerifiedCallsiteReferences(
   for (const [file] of index.byFile) {
     if (refs.length >= maxRefs) {
       break;
+    }
+    if (!shouldIncludeReference(file)) {
+      continue;
     }
     const support = supportForFile(file);
     if (!support || !supportsCallCompatibilityLanguage(support.id)) {
@@ -1370,7 +1374,12 @@ function incrementSkippedReason(diagnostics: ImpactDiagnostics["callCompatibilit
 export async function attachCallCompatibilityHints(
   index: ProjectIndex,
   changedSymbols: ChangedSymbol[],
-  options: { maxRefs: number; projectRoot?: string; diagnostics?: ImpactDiagnostics },
+  options: {
+    maxRefs: number;
+    projectRoot?: string;
+    diagnostics?: ImpactDiagnostics;
+    shouldIncludeReference?: (file: string) => boolean;
+  },
 ): Promise<void> {
   if (options.maxRefs <= 0) {
     return;
@@ -1421,13 +1430,15 @@ export async function attachCallCompatibilityHints(
       { maxReferences: referenceScanLimitForCallsites(options.maxRefs) },
     );
     let refs: Reference[] = [];
+    const shouldIncludeReference = options.shouldIncludeReference ?? (() => true);
     if (referenceResult.status === "ok") {
-      refs = referenceResult.references;
+      refs = referenceResult.references.filter((ref) => shouldIncludeReference(ref.file));
     }
     const verifiedCallsites = await collectVerifiedCallsiteReferences(
       index,
       changedSymbol,
       referenceScanLimitForCallsites(options.maxRefs),
+      shouldIncludeReference,
     );
     const seenRefs = new Set(refs.map((ref) => `${ref.file}:${ref.range.start.line}:${ref.range.start.column}`));
     for (const ref of verifiedCallsites) {

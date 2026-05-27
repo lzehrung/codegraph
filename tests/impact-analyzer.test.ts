@@ -267,6 +267,95 @@ describe("Impact Analyzer Edge Cases", () => {
         }
       },
     );
+
+    it("does not report call compatibility mismatches from test files unless tests are included", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-filter-tests-"));
+      try {
+        await fsp.mkdir(path.join(root, "src"), { recursive: true });
+        const apiFile = path.join(root, "src", "api.ts");
+        const testFile = path.join(root, "src", "api.test.ts");
+        await fsp.writeFile(apiFile, "export function helper(a: string, b: number) { return a + b; }\n", "utf8");
+        await fsp.writeFile(testFile, 'import { helper } from "./api";\nexport const value = helper("x");\n', "utf8");
+
+        const index = await buildProjectIndex(root, { cache: "memory" });
+        const diffText = `diff --git a/src/api.ts b/src/api.ts
+--- a/src/api.ts
++++ b/src/api.ts
+@@ -1,1 +1,1 @@
+-export function helper(a: string) { return a; }
++export function helper(a: string, b: number) { return a + b; }
+`;
+
+        const withoutTests = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+        });
+
+        if ("files" in withoutTests) {
+          throw new Error("Expected full impact report");
+        }
+
+        const withoutTestsHelper = withoutTests.changedSymbols.find((symbol) => symbol.name === "helper");
+        expect(withoutTestsHelper?.callCompatibility ?? []).toHaveLength(0);
+
+        const withTests = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+          includeTests: true,
+        });
+
+        if ("files" in withTests) {
+          throw new Error("Expected full impact report");
+        }
+
+        const withTestsHelper = withTests.changedSymbols.find((symbol) => symbol.name === "helper");
+        expect(withTestsHelper?.callCompatibility).toContainEqual(
+          expect.objectContaining({
+            status: "likely_mismatch",
+            reason: "argument_count_below_minimum",
+            callsiteFile: "src/api.test.ts",
+          }),
+        );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
+    it("does not report call compatibility mismatches from ignored files", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-filter-ignore-"));
+      try {
+        await fsp.mkdir(path.join(root, "src"), { recursive: true });
+        const apiFile = path.join(root, "src", "api.ts");
+        const ignoredFile = path.join(root, "src", "ignored.ts");
+        await fsp.writeFile(apiFile, "export function helper(a: string, b: number) { return a + b; }\n", "utf8");
+        await fsp.writeFile(ignoredFile, 'import { helper } from "./api";\nexport const value = helper("x");\n', "utf8");
+
+        const index = await buildProjectIndex(root, { cache: "memory" });
+        const diffText = `diff --git a/src/api.ts b/src/api.ts
+--- a/src/api.ts
++++ b/src/api.ts
+@@ -1,1 +1,1 @@
+-export function helper(a: string) { return a; }
++export function helper(a: string, b: number) { return a + b; }
+`;
+
+        const result = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+          includeTests: true,
+          ignoreGlobs: ["src/ignored.ts"],
+        });
+
+        if ("files" in result) {
+          throw new Error("Expected full impact report");
+        }
+
+        const helper = result.changedSymbols.find((symbol) => symbol.name === "helper");
+        expect(helper?.callCompatibility ?? []).toHaveLength(0);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
   });
 
   describe("seedTransitiveFromFiles", () => {
