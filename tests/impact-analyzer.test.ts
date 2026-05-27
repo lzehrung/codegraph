@@ -1250,6 +1250,55 @@ describe("Impact Analyzer Edge Cases", () => {
       }
     });
 
+    it.each([
+      { file: "api.ts", mainFile: "main.ts" },
+      { file: "api.js", mainFile: "main.js" },
+    ])("attaches hints for changed bare arrow function parameters in $file", async ({ file, mainFile }) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-compat-bare-arrow-"));
+      try {
+        await fsp.mkdir(path.join(root, "src"), { recursive: true });
+        await fsp.writeFile(path.join(root, "src", file), "export const helper = a => a;\n", "utf8");
+        await fsp.writeFile(
+          path.join(root, "src", mainFile),
+          'import { helper } from "./api";\nexport const value = helper("x", 1);\n',
+          "utf8",
+        );
+        const index = await buildProjectIndex(root);
+        const diffText = [
+          `diff --git a/src/${file} b/src/${file}`,
+          "index 1234567..abcdef0 100644",
+          `--- a/src/${file}`,
+          `+++ b/src/${file}`,
+          "@@ -1,1 +1,1 @@",
+          "-export const helper = (a, b) => a;",
+          "+export const helper = a => a;",
+          "",
+        ].join("\n");
+
+        const result = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+        });
+        if ("files" in result) {
+          throw new Error("Expected full impact report");
+        }
+        const helper = result.changedSymbols.find((symbol) => symbol.name === "helper");
+
+        expect(helper?.signatureChanged).toBeTruthy();
+        expect(helper?.callCompatibility).toContainEqual(
+          expect.objectContaining({
+            status: "likely_mismatch",
+            reason: "argument_count_above_maximum",
+            callsiteFile: `src/${mainFile}`,
+            expected: { minArgs: 1, maxArgs: 1, confidence: "high" },
+            actual: { argCount: 2, confidence: "high" },
+          }),
+        );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
     it("does not mark object variables as signature changed for nested callback parameter edits", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-compat-nested-callback-"));
       try {

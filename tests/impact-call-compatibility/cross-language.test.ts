@@ -25,6 +25,10 @@ function parseFixture(fileName: string, source: string): { languageId: string; t
 describe("cross-language call compatibility extraction", () => {
   it.each([
     ["helper.ts", "export function helper(a: string, b = 1, ...rest: string[]) { return a; }", 1, null],
+    ["helper.ts", "export const helper = a => a;\n", 1, 1],
+    ["helper.tsx", "export const helper = a => a;\n", 1, 1],
+    ["helper.js", "export const helper = a => a;\n", 1, 1],
+    ["helper.jsx", "export const helper = a => a;\n", 1, 1],
     ["helper.py", "def helper(self, a, b):\n    return a\n", 3, 3],
     ["helper.py", "class Helper:\n    def helper(self, a, b=1, *args, **kwargs):\n        return a\n", 1, null],
     ["helper.go", "package main\nfunc helper(a string, b int, rest ...string) {}\n", 2, null],

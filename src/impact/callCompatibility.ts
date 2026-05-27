@@ -836,6 +836,8 @@ const callableDeclarationTypes = new Set([
   "declaration",
 ]);
 
+const callableVariableValueTypes = new Set(["arrow_function", "function_expression", "function"]);
+
 const parameterListTypes = new Set([
   "parameters",
   "parameter_list",
@@ -847,6 +849,15 @@ const parameterListTypes = new Set([
   "formal_parameters",
   "formal_parameters",
 ]);
+
+function directSignatureParameterNode(node: SyntaxNodeLike): SyntaxNodeLike | null {
+  return (
+    node.childForFieldName("parameters") ??
+    node.childForFieldName("params") ??
+    node.childForFieldName("parameter") ??
+    null
+  );
+}
 
 function isPythonMethodDeclaration(declaration: SyntaxNodeLike): boolean {
   let current = declaration.parent;
@@ -880,10 +891,17 @@ function findSignatureParameterText(request: ExtractCallableSignatureRequest): S
     return null;
   }
 
-  const params =
-    declaration.childForFieldName("parameters") ??
-    declaration.childForFieldName("parameter") ??
-    findFirstDescendantOfTypes(declaration, parameterListTypes);
+  let params = directSignatureParameterNode(declaration);
+  if (!params && declaration.type === "variable_declarator") {
+    const valueNode = declaration.childForFieldName("value");
+    if (!valueNode || !callableVariableValueTypes.has(valueNode.type)) {
+      return null;
+    }
+    params = directSignatureParameterNode(valueNode) ?? findFirstDescendantOfTypes(valueNode, parameterListTypes);
+  }
+  if (!params) {
+    params = findFirstDescendantOfTypes(declaration, parameterListTypes);
+  }
   if (!params) {
     if (request.languageId === "swift") {
       const parameterNodes = declaration.namedChildren.filter((child) => child.type === "parameter");

@@ -319,6 +319,15 @@ const SIGNATURE_PARAMETER_LIST_TYPES = new Set([
 
 type ByteRange = { start: number; end: number };
 
+function directSignatureParameterNode(node: SyntaxNodeLike): SyntaxNodeLike | null {
+  return (
+    node.childForFieldName("parameters") ??
+    node.childForFieldName("params") ??
+    node.childForFieldName("parameter") ??
+    null
+  );
+}
+
 /**
  * Compute precise byte ranges (in the new source) that actually changed, by
  * pairing deleted and added diff lines and finding the minimal changed span
@@ -443,13 +452,13 @@ function computeSignatureChanged(
     declNode = declNode.parent;
   }
   if (!declNode) return false;
-  let params = declNode.childForFieldName("parameters") || declNode.childForFieldName("params");
+  let params = directSignatureParameterNode(declNode);
   if (!params && declNode.type === "variable_declarator") {
     const valueNode = declNode.childForFieldName("value");
     if (!valueNode || !CALLABLE_VARIABLE_VALUE_TYPES.has(valueNode.type)) {
       return false;
     }
-    params = valueNode.childForFieldName("parameters") || valueNode.childForFieldName("params") || null;
+    params = directSignatureParameterNode(valueNode);
   }
   if (!params) {
     params = findFirstDescendantOfTypes(declNode, SIGNATURE_PARAMETER_LIST_TYPES);
