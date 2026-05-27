@@ -45,6 +45,39 @@ describe("impact signature hint", () => {
     expect(signature).toEqual({ minArgs: 2, maxArgs: 2, confidence: "high" });
   });
 
+  it("does not split commas inside TypeScript parameter type arguments", () => {
+    const source = "export function helper(a: Map<string, number>, b: Set<string>) { return a; }";
+    const signature = extractCallableSignature({
+      languageId: "typescript",
+      source,
+      symbolStartIndex: source.indexOf("helper"),
+    });
+
+    expect(signature).toEqual({ minArgs: 2, maxArgs: 2, confidence: "high" });
+  });
+
+  it("ignores TypeScript this parameters in callable signatures", () => {
+    const source = "export function helper(this: Console, a: string) { return a; }";
+    const signature = extractCallableSignature({
+      languageId: "typescript",
+      source,
+      symbolStartIndex: source.indexOf("helper"),
+    });
+
+    expect(signature).toEqual({ minArgs: 1, maxArgs: 1, confidence: "high" });
+  });
+
+  it("does not count trailing parameter commas as parameters", () => {
+    const source = "export function helper(a: string, b: number,) { return a + b; }";
+    const signature = extractCallableSignature({
+      languageId: "typescript",
+      source,
+      symbolStartIndex: source.indexOf("helper"),
+    });
+
+    expect(signature).toEqual({ minArgs: 2, maxArgs: 2, confidence: "high" });
+  });
+
   it("extracts minimum arity for optional and defaulted parameters", () => {
     const source = "export function helper(a: string, b = 1, c?: boolean) { return a; }";
     const signature = extractCallableSignature({
@@ -98,6 +131,41 @@ describe("impact signature hint", () => {
     });
 
     expect(call).toEqual({ argCount: 2, confidence: "high" });
+  });
+
+  it("does not split commas inside TypeScript callsite type arguments", () => {
+    const source = "helper(value as Map<string, number>, other);";
+    const call = extractCallsiteArguments({
+      languageId: "typescript",
+      source,
+      calleeStartIndex: source.indexOf("helper"),
+    });
+
+    expect(call).toEqual({ argCount: 2, confidence: "high" });
+  });
+
+  it("does not count trailing argument commas as arguments", () => {
+    const source = 'helper("x",);';
+    const call = extractCallsiteArguments({
+      languageId: "typescript",
+      source,
+      calleeStartIndex: source.indexOf("helper"),
+    });
+
+    expect(call).toEqual({ argCount: 1, confidence: "high" });
+  });
+
+  it("counts generic TypeScript calls with resolved callee ranges", () => {
+    const source = "helper<string>(value);";
+    const calleeStartIndex = source.indexOf("helper");
+    const call = extractCallsiteArguments({
+      languageId: "typescript",
+      source,
+      calleeStartIndex,
+      calleeEndIndex: calleeStartIndex + "helper".length,
+    });
+
+    expect(call).toEqual({ argCount: 1, confidence: "high" });
   });
 
   it("returns null for spread arguments", () => {

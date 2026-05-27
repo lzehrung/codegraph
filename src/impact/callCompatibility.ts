@@ -72,8 +72,77 @@ function findCallOpeningParen(source: string, startIndex: number, endIndex?: num
     if (char === "(") {
       return index;
     }
+    if (char === "<") {
+      const closeIndex = findBalancedAngleBrackets(source, index);
+      if (closeIndex < 0) {
+        return -1;
+      }
+      for (let afterGeneric = closeIndex + 1; afterGeneric < source.length; afterGeneric += 1) {
+        const nextChar = source[afterGeneric];
+        if (nextChar === undefined) {
+          return -1;
+        }
+        if (/\s/.test(nextChar)) {
+          continue;
+        }
+        if (nextChar === "(") {
+          return afterGeneric;
+        }
+        return -1;
+      }
+      return -1;
+    }
     return -1;
   }
+  return -1;
+}
+
+function findBalancedAngleBrackets(source: string, openIndex: number): number {
+  if (source[openIndex] !== "<") {
+    return -1;
+  }
+
+  let depth = 0;
+  let quote: string | null = null;
+  let escaped = false;
+
+  for (let index = openIndex; index < source.length; index += 1) {
+    const char = source[index];
+
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'" || char === "`") {
+      quote = char;
+      continue;
+    }
+    if (char === "<") {
+      depth += 1;
+      continue;
+    }
+    if (char === ">") {
+      depth -= 1;
+      if (!depth) {
+        return index;
+      }
+      if (depth < 0) {
+        return -1;
+      }
+    }
+  }
+
   return -1;
 }
 
@@ -141,6 +210,7 @@ function splitTopLevelCommaGroups(text: string): string[] | null {
   let parenDepth = 0;
   let bracketDepth = 0;
   let braceDepth = 0;
+  let angleDepth = 0;
   let quote: string | null = null;
   let escaped = false;
 
@@ -199,19 +269,30 @@ function splitTopLevelCommaGroups(text: string): string[] | null {
       }
       continue;
     }
+    if (char === "<") {
+      angleDepth += 1;
+      continue;
+    }
+    if (char === ">" && angleDepth) {
+      angleDepth -= 1;
+      continue;
+    }
 
-    const atTopLevel = !parenDepth && !bracketDepth && !braceDepth;
+    const atTopLevel = !parenDepth && !bracketDepth && !braceDepth && !angleDepth;
     if (char === "," && atTopLevel) {
       groups.push(text.slice(groupStart, index).trim());
       groupStart = index + 1;
     }
   }
 
-  if (quote || parenDepth || bracketDepth || braceDepth) {
+  if (quote || parenDepth || bracketDepth || braceDepth || angleDepth) {
     return null;
   }
 
   groups.push(text.slice(groupStart).trim());
+  if (groups.length && groups[groups.length - 1] === "") {
+    groups.pop();
+  }
   return groups;
 }
 
@@ -233,6 +314,14 @@ function isOptionalParameter(parameter: string): boolean {
   return searchText.includes("?") || hasTopLevelChar(parameter, "=");
 }
 
+function isThisParameter(parameter: string): boolean {
+  const colonIndex = parameter.indexOf(":");
+  if (colonIndex < 0) {
+    return parameter.trim() === "this";
+  }
+  return parameter.slice(0, colonIndex).trim() === "this";
+}
+
 export function extractCallableSignature(request: ExtractCallableSignatureRequest): CallableSignature | null {
   if (!isJsTsLanguage(request.languageId)) {
     return null;
@@ -251,22 +340,26 @@ export function extractCallableSignature(request: ExtractCallableSignatureReques
 
   let minArgs = 0;
   let hasRest = false;
+  let maxArgs = 0;
   for (const parameter of parameters) {
     const trimmed = parameter.trim();
     if (!trimmed) {
+      continue;
+    }
+    if (isThisParameter(trimmed)) {
       continue;
     }
     if (trimmed.startsWith("...")) {
       hasRest = true;
       continue;
     }
+    maxArgs += 1;
     if (!isOptionalParameter(trimmed)) {
       minArgs += 1;
     }
   }
 
-  const maxArgs = hasRest ? null : parameters.length;
-  return { minArgs, maxArgs, confidence: "high" };
+  return { minArgs, maxArgs: hasRest ? null : maxArgs, confidence: "high" };
 }
 
 export function extractCallsiteArguments(request: ExtractCallsiteArgumentsRequest): CallsiteArguments | null {
@@ -295,7 +388,9 @@ export function extractCallsiteArguments(request: ExtractCallsiteArgumentsReques
 }
 
 function isCallableChangedSymbol(symbol: ChangedSymbol): boolean {
-  return symbol.kind === SymbolKind.Function || symbol.kind === SymbolKind.Default;
+  return (
+    symbol.kind === SymbolKind.Function || symbol.kind === SymbolKind.Default || symbol.kind === SymbolKind.Variable
+  );
 }
 
 function sameRangeStart(left: Range, right: Range): boolean {
@@ -366,6 +461,10 @@ export async function attachCallCompatibilityHints(
   changedSymbols: ChangedSymbol[],
   options: { maxRefs: number; projectRoot?: string },
 ): Promise<void> {
+  if (options.maxRefs <= 0) {
+    return;
+  }
+
   for (const changedSymbol of changedSymbols) {
     if (!changedSymbol.signatureChanged || !isCallableChangedSymbol(changedSymbol)) {
       continue;

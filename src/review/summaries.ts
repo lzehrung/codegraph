@@ -284,7 +284,7 @@ export async function summarizeChangedFiles(input: {
   const changedSymbolsForCompatibility = fileEntries.flatMap((entry) => entry.changedSymbols);
   if (changedSymbolsForCompatibility.length) {
     await attachCallCompatibilityHints(index, changedSymbolsForCompatibility, {
-      maxRefs: Math.max(1, maxCallsites),
+      maxRefs: maxCallsites,
       projectRoot,
     });
   }

@@ -199,7 +199,7 @@ function hasOverlapSorted(sorted: number[], lo: number, hi: number): boolean {
 }
 
 function findNodesInLines(tree: SyntaxTreeLike, changedLines: Set<number>): SyntaxNodeLike[] {
-  if (changedLines.size === 0) return [];
+  if (!changedLines.size) return [];
 
   // Build a sorted array once for O(log n) overlap checks during the walk.
   const sortedLines = [...changedLines].sort((a, b) => a - b);
@@ -300,6 +300,7 @@ const SIGNATURE_DECL_TYPES = new Set([
   "method_declaration",
   "class_declaration",
   "class_definition",
+  "variable_declarator",
 ]);
 
 type ByteRange = { start: number; end: number };
@@ -428,7 +429,11 @@ function computeSignatureChanged(
     declNode = declNode.parent;
   }
   if (!declNode) return false;
-  const params = declNode.childForFieldName("parameters") || declNode.childForFieldName("params");
+  let params = declNode.childForFieldName("parameters") || declNode.childForFieldName("params");
+  if (!params && declNode.type === "variable_declarator") {
+    const valueNode = declNode.childForFieldName("value");
+    params = valueNode?.childForFieldName("parameters") || valueNode?.childForFieldName("params") || null;
+  }
   if (!params) return false;
   // Note: namedChildCount === 0 is intentionally NOT checked here.
   // A signature edit that removes ALL parameters (e.g. f(a) -> f()) should
