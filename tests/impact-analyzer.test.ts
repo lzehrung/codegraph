@@ -104,6 +104,45 @@ describe("Impact Analyzer Edge Cases", () => {
       }
     });
 
+    it("does not treat non-callee references inside other calls as changed callsites", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-non-callee-"));
+      try {
+        await fsp.mkdir(path.join(root, "src"), { recursive: true });
+        const apiFile = path.join(root, "src", "api.ts");
+        const mainFile = path.join(root, "src", "main.ts");
+        await fsp.writeFile(apiFile, "export function helper(a: string, b: number) { return a + b; }\n", "utf8");
+        await fsp.writeFile(
+          mainFile,
+          'import { helper } from "./api";\nfunction wrapper(fn: unknown) { return fn; }\nexport const value = wrapper(helper);\n',
+          "utf8",
+        );
+
+        const index = await buildProjectIndex(root, { cache: "memory" });
+        const diffText = `diff --git a/src/api.ts b/src/api.ts
+--- a/src/api.ts
++++ b/src/api.ts
+@@ -1,1 +1,1 @@
+-export function helper(a: string) { return a; }
++export function helper(a: string, b: number) { return a + b; }
+`;
+
+        const result = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+          includeTests: true,
+        });
+
+        if ("files" in result) {
+          throw new Error("Expected full impact report");
+        }
+
+        const helper = result.changedSymbols.find((symbol) => symbol.name === "helper");
+        expect(helper?.callCompatibility ?? []).toHaveLength(0);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
     it.each([
       {
         label: "Python",

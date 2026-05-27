@@ -95,4 +95,32 @@ describe("cross-language call compatibility extraction", () => {
 
     expect(call).toBeNull();
   });
+
+  it.each([
+    ["call.ts", "wrapper(helper);", "helper"],
+    ["call.py", "wrapper(helper)\n", "helper"],
+    ["call.go", "package main\nfunc run(){ wrapper(helper) }\n", "helper"],
+    ["call.rs", "fn run(){ wrapper(helper); }\n", "helper"],
+    ["Call.java", "class Call { void run(){ wrapper(helper); } }\n", "helper"],
+    ["Call.cs", "class Call { void Run(){ Wrapper(Helper); } }\n", "Helper"],
+    ["call.kt", "fun run(){ wrapper(::helper) }\n", "helper"],
+    ["call.swift", "func run(){ wrapper(helper) }\n", "helper"],
+    ["call.php", "<?php wrapper(helper);\n", "helper"],
+    ["call.rb", "wrapper(helper)\n", "helper"],
+    ["call.c", "void run(){ wrapper(helper); }\n", "helper"],
+    ["call.cpp", "void run(){ wrapper(helper); }\n", "helper"],
+    ["call.zig", "fn run() void { wrapper(helper); }\n", "helper"],
+  ])("returns null for non-callee references inside calls in %s", (fileName, source, calleeName) => {
+    const parsed = parseFixture(fileName, source);
+    const calleeStartIndex = source.indexOf(calleeName);
+    const call = extractCallsiteArguments({
+      languageId: parsed.languageId,
+      source,
+      calleeStartIndex,
+      calleeEndIndex: calleeStartIndex + calleeName.length,
+      tree: parsed.tree,
+    });
+
+    expect(call).toBeNull();
+  });
 });

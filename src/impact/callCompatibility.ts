@@ -1131,6 +1131,10 @@ function findCallsiteArgumentText(request: ExtractCallsiteArgumentsRequest): str
   if (request.calleeStartIndex < callNode.startIndex || request.calleeStartIndex > callNode.endIndex) {
     return null;
   }
+  const targetNode = callTargetNode(callNode);
+  if (!targetNode || request.calleeStartIndex < targetNode.startIndex || endIndex > targetNode.endIndex) {
+    return null;
+  }
 
   const argumentNode =
     callNode.childForFieldName("arguments") ??
