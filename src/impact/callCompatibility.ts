@@ -1417,6 +1417,7 @@ export async function attachCallCompatibilityHints(
       continue;
     }
 
+    const referenceScanLimit = referenceScanLimitForCallsites(options.maxRefs);
     const referenceResult = await findReferences(
       index,
       {
@@ -1427,42 +1428,29 @@ export async function attachCallCompatibilityHints(
           range: changedSymbol.range,
         },
       },
-      { maxReferences: referenceScanLimitForCallsites(options.maxRefs) },
+      { maxReferences: referenceScanLimit },
     );
     let refs: Reference[] = [];
     const shouldIncludeReference = options.shouldIncludeReference ?? (() => true);
     if (referenceResult.status === "ok") {
       refs = referenceResult.references.filter((ref) => shouldIncludeReference(ref.file));
     }
-    const verifiedCallsites = await collectVerifiedCallsiteReferences(
-      index,
-      changedSymbol,
-      referenceScanLimitForCallsites(options.maxRefs),
-      shouldIncludeReference,
-    );
-    const seenRefs = new Set(refs.map((ref) => `${ref.file}:${ref.range.start.line}:${ref.range.start.column}`));
-    for (const ref of verifiedCallsites) {
-      const key = `${ref.file}:${ref.range.start.line}:${ref.range.start.column}`;
-      if (seenRefs.has(key)) {
-        continue;
-      }
-      seenRefs.add(key);
-      refs.push(ref);
-    }
 
+    const seenRefs = new Set(refs.map((ref) => `${ref.file}:${ref.range.start.line}:${ref.range.start.column}`));
     const hints: CallCompatibilityHint[] = [];
     let consideredCallsites = 0;
-    for (const ref of refs) {
+
+    const addHintForReference = async (ref: Reference): Promise<void> => {
       if (ref.file === changedSymbol.file && sameRangeStart(ref.range, changedSymbol.range)) {
-        continue;
+        return;
       }
       if (consideredCallsites >= options.maxRefs) {
-        break;
+        return;
       }
 
       const calleeStartIndex = ref.range.start.index;
       if (calleeStartIndex === undefined) {
-        continue;
+        return;
       }
 
       const parsedCallsite = await ensureParsedContext(ref.file, index.parsed?.get(ref.file));
@@ -1478,7 +1466,7 @@ export async function attachCallCompatibilityHints(
         if (diagnostics) {
           diagnostics.unknownCallsites += 1;
         }
-        continue;
+        return;
       }
       consideredCallsites += 1;
 
@@ -1497,6 +1485,38 @@ export async function attachCallCompatibilityHints(
         expected: signature,
         actual,
       });
+    };
+
+    for (const ref of refs) {
+      if (consideredCallsites >= options.maxRefs) {
+        break;
+      }
+      await addHintForReference(ref);
+    }
+
+    const shouldRunVerifiedScan =
+      consideredCallsites < options.maxRefs && (referenceResult.status !== "ok" || !consideredCallsites);
+    if (shouldRunVerifiedScan) {
+      const verifiedScanLimit = Math.max(0, Math.min(referenceScanLimit - refs.length, options.maxRefs - consideredCallsites));
+      if (verifiedScanLimit) {
+        const verifiedCallsites = await collectVerifiedCallsiteReferences(
+          index,
+          changedSymbol,
+          verifiedScanLimit,
+          shouldIncludeReference,
+        );
+        for (const ref of verifiedCallsites) {
+          if (consideredCallsites >= options.maxRefs) {
+            break;
+          }
+          const key = `${ref.file}:${ref.range.start.line}:${ref.range.start.column}`;
+          if (seenRefs.has(key)) {
+            continue;
+          }
+          seenRefs.add(key);
+          await addHintForReference(ref);
+        }
+      }
     }
 
     if (hints.length) {
