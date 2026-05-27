@@ -294,16 +294,30 @@ function isTypeOnlyDeclaration(node: SyntaxNodeLike, source: string): boolean {
 }
 
 const SIGNATURE_DECL_TYPES = new Set([
+  "function_item",
+  "method",
+  "singleton_method",
   "function_declaration",
   "function_definition",
   "method_definition",
   "method_declaration",
+  "constructor_declaration",
+  "init_declaration",
+  "protocol_function_declaration",
   "class_declaration",
   "class_definition",
   "variable_declarator",
+  "declaration",
 ]);
 
 const CALLABLE_VARIABLE_VALUE_TYPES = new Set(["arrow_function", "function_expression"]);
+const SIGNATURE_PARAMETER_LIST_TYPES = new Set([
+  "parameters",
+  "parameter_list",
+  "formal_parameters",
+  "function_value_parameters",
+  "method_parameters",
+]);
 
 type ByteRange = { start: number; end: number };
 
@@ -439,6 +453,21 @@ function computeSignatureChanged(
     }
     params = valueNode.childForFieldName("parameters") || valueNode.childForFieldName("params") || null;
   }
+  if (!params) {
+    params = findFirstDescendantOfTypes(declNode, SIGNATURE_PARAMETER_LIST_TYPES);
+  }
+  if (!params && declNode.type === "function_declaration") {
+    const parameterNodes = declNode.namedChildren.filter((child) => child.type === "parameter");
+    const first = parameterNodes[0];
+    const last = parameterNodes[parameterNodes.length - 1];
+    if (first && last) {
+      params = {
+        ...first,
+        startIndex: first.startIndex,
+        endIndex: last.endIndex,
+      };
+    }
+  }
   if (!params) return false;
   // Note: namedChildCount === 0 is intentionally NOT checked here.
   // A signature edit that removes ALL parameters (e.g. f(a) -> f()) should
@@ -450,6 +479,19 @@ function computeSignatureChanged(
     if (r.start < paramsEnd && r.end > paramsStart) return true;
   }
   return false;
+}
+
+function findFirstDescendantOfTypes(node: SyntaxNodeLike, types: ReadonlySet<string>): SyntaxNodeLike | null {
+  for (const child of node.namedChildren ?? []) {
+    if (types.has(child.type)) {
+      return child;
+    }
+    const found = findFirstDescendantOfTypes(child, types);
+    if (found) {
+      return found;
+    }
+  }
+  return null;
 }
 
 function findSymbolHandleForNode(

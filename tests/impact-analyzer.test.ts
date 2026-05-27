@@ -103,6 +103,125 @@ describe("Impact Analyzer Edge Cases", () => {
         await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }
     });
+
+    it.each([
+      {
+        label: "Python",
+        file: "main.py",
+        before: "def helper(a):\n    return a\n\nvalue = helper(1)\n",
+        after: "def helper(a, b):\n    return a\n\nvalue = helper(1)\n",
+      },
+      {
+        label: "Go",
+        file: "main.go",
+        before: "package main\nfunc helper(a string) string { return a }\nfunc run(){ helper(\"x\") }\n",
+        after: "package main\nfunc helper(a string, b int) string { return a }\nfunc run(){ helper(\"x\") }\n",
+      },
+      {
+        label: "Rust",
+        file: "main.rs",
+        before: "fn helper(a: i32) -> i32 { a }\nfn run(){ helper(1); }\n",
+        after: "fn helper(a: i32, b: i32) -> i32 { a }\nfn run(){ helper(1); }\n",
+      },
+      {
+        label: "Java",
+        file: "Main.java",
+        before: "class Main { void helper(String a) {} void run(){ helper(\"x\"); } }\n",
+        after: "class Main { void helper(String a, int b) {} void run(){ helper(\"x\"); } }\n",
+      },
+      {
+        label: "C#",
+        file: "Main.cs",
+        before: "class Main { void helper(string a) {} void run(){ helper(\"x\"); } }\n",
+        after: "class Main { void helper(string a, int b) {} void run(){ helper(\"x\"); } }\n",
+      },
+      {
+        label: "Kotlin",
+        file: "main.kt",
+        before: "fun helper(a: String) = a\nfun run(){ helper(\"x\") }\n",
+        after: "fun helper(a: String, b: Int) = a\nfun run(){ helper(\"x\") }\n",
+      },
+      {
+        label: "Swift",
+        file: "main.swift",
+        before: "func helper(_ a: String) {}\nfunc run(){ helper(\"x\") }\n",
+        after: "func helper(_ a: String, b: Int) {}\nfunc run(){ helper(\"x\") }\n",
+      },
+      {
+        label: "PHP",
+        file: "main.php",
+        before: "<?php function helper($a) { return $a; }\n$value = helper(\"x\");\n",
+        after: "<?php function helper($a, $b) { return $a; }\n$value = helper(\"x\");\n",
+      },
+      {
+        label: "Ruby",
+        file: "main.rb",
+        before: "def helper(a)\n  a\nend\nvalue = helper(1)\n",
+        after: "def helper(a, b)\n  a\nend\nvalue = helper(1)\n",
+      },
+      {
+        label: "C",
+        file: "main.c",
+        before: "int helper(int a) { return a; }\nvoid run(){ helper(1); }\n",
+        after: "int helper(int a, int b) { return a; }\nvoid run(){ helper(1); }\n",
+      },
+      {
+        label: "C++",
+        file: "main.cpp",
+        before: "int helper(int a) { return a; }\nvoid run(){ helper(1); }\n",
+        after: "int helper(int a, int b) { return a; }\nvoid run(){ helper(1); }\n",
+      },
+      {
+        label: "Zig",
+        file: "main.zig",
+        before: "fn helper(a: i32) i32 { return a; }\nfn run() void { _ = helper(1); }\n",
+        after: "fn helper(a: i32, b: i32) i32 { return a; }\nfn run() void { _ = helper(1); }\n",
+      },
+    ])("flags same-file likely mismatches for changed $label signatures", async ({ file, before, after }) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-cross-call-"));
+      try {
+        const targetFile = path.join(root, file);
+        await fsp.writeFile(targetFile, after, "utf8");
+        const index = await buildProjectIndex(root, { cache: "memory" });
+        const beforeLines = before.split("\n");
+        const afterLines = after.split("\n");
+        const changedLineIndex = beforeLines.findIndex((line, index) => line !== afterLines[index]);
+        if (changedLineIndex < 0) {
+          throw new Error("Expected fixture to include a changed signature line");
+        }
+        const changedLineNumber = changedLineIndex + 1;
+        const diffText = `diff --git a/${file} b/${file}
+--- a/${file}
++++ b/${file}
+@@ -${changedLineNumber},1 +${changedLineNumber},1 @@
+-${beforeLines[changedLineIndex]}
++${afterLines[changedLineIndex]}
+`;
+
+        const result = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+          includeTests: true,
+        });
+
+        if ("files" in result) {
+          throw new Error("Expected full impact report");
+        }
+
+        const helper = result.changedSymbols.find((symbol) => symbol.name === "helper");
+        expect(helper?.callCompatibility).toContainEqual(
+          expect.objectContaining({
+            status: "likely_mismatch",
+            reason: "argument_count_below_minimum",
+            actual: { argCount: 1, confidence: "high" },
+            expected: { minArgs: 2, maxArgs: 2, confidence: "high" },
+            callsiteFile: file,
+          }),
+        );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
   });
 
   describe("seedTransitiveFromFiles", () => {

@@ -1,9 +1,10 @@
 import path from "node:path";
-import { findReferences } from "../indexer/navigation.js";
+import { findReferences, goToDefinition } from "../indexer/navigation.js";
 import { ensureParsedContext } from "../indexer/parse-context.js";
 import { SymbolKind, type ProjectIndex, type Reference, type SymbolDef } from "../indexer/types.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
+import { sliceText, toRange } from "../util/ast.js";
 import type { CallCompatibilityHint, ChangedSymbol } from "./types.js";
 
 export interface CallableSignature {
@@ -1149,6 +1150,15 @@ function sameRangeStart(left: Range, right: Range): boolean {
   return left.start.line === right.start.line && left.start.column === right.start.column && leftIndex === rightIndex;
 }
 
+function sameDefinition(left: SymbolDef, right: SymbolDef): boolean {
+  return (
+    left.file === right.file &&
+    left.localName === right.localName &&
+    left.kind === right.kind &&
+    left.range.start.index === right.range.start.index
+  );
+}
+
 function rangeContainsIndex(range: Range, index: number): boolean {
   const startIndex = range.start.index;
   const endIndex = range.end.index;
@@ -1193,6 +1203,96 @@ function findCallerSymbolId(index: ProjectIndex, ref: Reference): string | undef
   return `${best.file}::${best.localName}::${bestStartIndex}`;
 }
 
+function callTargetNode(node: SyntaxNodeLike): SyntaxNodeLike | null {
+  const explicitTarget =
+    node.childForFieldName("function") ??
+    node.childForFieldName("callee") ??
+    node.childForFieldName("name") ??
+    node.childForFieldName("method") ??
+    node.childForFieldName("member") ??
+    node.childForFieldName("expression");
+  if (explicitTarget) {
+    return explicitTarget;
+  }
+  const argumentTypes = new Set(["argument_list", "arguments", "value_arguments", "call_suffix"]);
+  return node.namedChildren.find((child) => !argumentTypes.has(child.type)) ?? null;
+}
+
+function bestGotoNode(target: SyntaxNodeLike, symbolName: string, source: string): SyntaxNodeLike {
+  let best = target;
+  const walk = (node: SyntaxNodeLike): void => {
+    if (sliceText(node, source) === symbolName) {
+      best = node;
+    }
+    for (const child of node.namedChildren ?? []) {
+      walk(child);
+    }
+  };
+  walk(target);
+  return best;
+}
+
+async function collectVerifiedCallsiteReferences(
+  index: ProjectIndex,
+  changedSymbol: ChangedSymbol,
+  maxRefs: number,
+): Promise<Reference[]> {
+  const refs: Reference[] = [];
+  const seen = new Set<string>();
+
+  for (const [file] of index.byFile) {
+    if (refs.length >= maxRefs) {
+      break;
+    }
+    const parsed = await ensureParsedContext(file, index.parsed?.get(file));
+    if (!supportsCallCompatibilityLanguage(parsed.sup.id)) {
+      continue;
+    }
+
+    const walk = async (node: SyntaxNodeLike): Promise<void> => {
+      if (refs.length >= maxRefs) {
+        return;
+      }
+      if (callExpressionTypes.has(node.type)) {
+        const target = callTargetNode(node);
+        if (target) {
+          const gotoNode = bestGotoNode(target, changedSymbol.name, parsed.source);
+          if (sliceText(gotoNode, parsed.source) === changedSymbol.name) {
+            const result = await goToDefinition(index, {
+              file,
+              line: gotoNode.startPosition.row + 1,
+              column: gotoNode.startPosition.column + 1,
+            });
+            if (result.status === "ok") {
+              const def: SymbolDef = {
+                file: changedSymbol.file,
+                localName: changedSymbol.name,
+                kind: changedSymbol.kind,
+                range: changedSymbol.range,
+              };
+              if (sameDefinition(result.definition, def)) {
+                const range = toRange(gotoNode);
+                const key = `${file}:${range.start.line}:${range.start.column}`;
+                if (!seen.has(key)) {
+                  seen.add(key);
+                  refs.push({ file, range });
+                }
+              }
+            }
+          }
+        }
+      }
+      for (const child of node.namedChildren ?? []) {
+        await walk(child);
+      }
+    };
+
+    await walk(parsed.tree.rootNode);
+  }
+
+  return refs;
+}
+
 function classifyCompatibility(
   expected: CallableSignature,
   actual: CallsiteArguments,
@@ -1231,7 +1331,7 @@ export async function attachCallCompatibilityHints(
       continue;
     }
 
-    const refs = await findReferences(
+    const referenceResult = await findReferences(
       index,
       {
         def: {
@@ -1243,13 +1343,28 @@ export async function attachCallCompatibilityHints(
       },
       { maxReferences: referenceScanLimitForCallsites(options.maxRefs) },
     );
-    if (refs.status !== "ok") {
-      continue;
+    let refs: Reference[] = [];
+    if (referenceResult.status === "ok") {
+      refs = referenceResult.references;
+    }
+    const verifiedCallsites = await collectVerifiedCallsiteReferences(
+      index,
+      changedSymbol,
+      referenceScanLimitForCallsites(options.maxRefs),
+    );
+    const seenRefs = new Set(refs.map((ref) => `${ref.file}:${ref.range.start.line}:${ref.range.start.column}`));
+    for (const ref of verifiedCallsites) {
+      const key = `${ref.file}:${ref.range.start.line}:${ref.range.start.column}`;
+      if (seenRefs.has(key)) {
+        continue;
+      }
+      seenRefs.add(key);
+      refs.push(ref);
     }
 
     const hints: CallCompatibilityHint[] = [];
     let consideredCallsites = 0;
-    for (const ref of refs.references) {
+    for (const ref of refs) {
       if (ref.file === changedSymbol.file && sameRangeStart(ref.range, changedSymbol.range)) {
         continue;
       }
