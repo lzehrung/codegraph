@@ -1289,6 +1289,13 @@ function classifyCompatibility(
   return { status: "compatible", reason: "compatible_argument_count" };
 }
 
+function incrementSkippedReason(diagnostics: ImpactDiagnostics["callCompatibility"] | undefined, reason: string): void {
+  if (!diagnostics) {
+    return;
+  }
+  diagnostics.skippedByReason[reason] = (diagnostics.skippedByReason[reason] ?? 0) + 1;
+}
+
 export async function attachCallCompatibilityHints(
   index: ProjectIndex,
   changedSymbols: ChangedSymbol[],
@@ -1306,8 +1313,7 @@ export async function attachCallCompatibilityHints(
   for (const changedSymbol of changedSymbols) {
     if (!changedSymbol.signatureChanged || !isCallableChangedSymbol(changedSymbol)) {
       if (changedSymbol.signatureChanged) {
-        diagnostics?.skippedByReason &&
-          (diagnostics.skippedByReason.not_callable = (diagnostics.skippedByReason.not_callable ?? 0) + 1);
+        incrementSkippedReason(diagnostics, "not_callable");
       }
       continue;
     }
@@ -1317,9 +1323,7 @@ export async function attachCallCompatibilityHints(
       if (diagnostics && !diagnostics.unsupportedLanguages.includes(parsedDefinition.sup.id)) {
         diagnostics.unsupportedLanguages.push(parsedDefinition.sup.id);
       }
-      diagnostics?.skippedByReason &&
-        (diagnostics.skippedByReason.unsupported_language =
-          (diagnostics.skippedByReason.unsupported_language ?? 0) + 1);
+      incrementSkippedReason(diagnostics, "unsupported_language");
       continue;
     }
     const signature = extractCallableSignature({
@@ -1329,8 +1333,7 @@ export async function attachCallCompatibilityHints(
       tree: parsedDefinition.tree,
     });
     if (!signature) {
-      diagnostics?.skippedByReason &&
-        (diagnostics.skippedByReason.signature_unknown = (diagnostics.skippedByReason.signature_unknown ?? 0) + 1);
+      incrementSkippedReason(diagnostics, "signature_unknown");
       continue;
     }
 
