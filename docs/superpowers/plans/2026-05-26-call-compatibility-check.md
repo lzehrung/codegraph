@@ -765,7 +765,7 @@ Rules:
 
 ## Final Verification
 
-- [ ] Run:
+- [x] Run:
 
 ```bash
 npm run lint
@@ -774,7 +774,7 @@ npm run test:ci
 git diff --check
 ```
 
-- [ ] Expected:
+- [x] Expected:
 
 ```text
 lint passes
@@ -783,4 +783,40 @@ test:ci passes
 git diff --check prints no errors
 ```
 
-- [ ] If focused Windows native artifact copying fails with `EPERM` during targeted tests, rerun the full suite after `npm run build` and document the focused failure separately.
+- [x] If focused Windows native artifact copying fails with `EPERM` during targeted tests, rerun the full suite after `npm run build` and document the focused failure separately.
+
+## Completion Notes
+
+- Implemented provider-backed call compatibility support for source languages with callable syntax:
+  - TypeScript, TSX, JavaScript, JSX
+  - Python, Go, Rust, Java, C#, Kotlin, Swift, PHP, Ruby, C, C++, Zig
+- Kept graph-only and non-call-model languages out of the support matrix:
+  - HTML, Astro, Handlebars, CSS, SCSS, Less, Markdown, MDX, reStructuredText, AsciiDoc, Vue, Svelte, SQL
+- Added AST-first extraction:
+  - Signature extraction locates declaration parameter ranges through Tree-sitter/native AST.
+  - Callsite extraction locates call argument ranges through Tree-sitter/native AST.
+  - Text splitting is limited to AST-identified parameter or argument ranges.
+- Preserved conservative behavior:
+  - Spread/splat callsites return unknown instead of forcing a count.
+  - Unsupported source files are skipped before parsing.
+  - Pretty output still shows only likely mismatches.
+- Added resolution-backed callsite verification:
+  - Uses existing references where available.
+  - Falls back to AST call scanning only when `goToDefinition()` verifies the call target resolves to the changed symbol.
+- Updated docs:
+  - `README.md`
+  - `docs/cli.md`
+  - `docs/library-api.md`
+  - `docs/agent-workflows.md`
+  - `docs/language-parity.md`
+  - `docs/scenario-catalog.md`
+  - `codegraph-skill/codegraph/SKILL.md`
+- Added tests:
+  - `tests/impact-call-compatibility/cross-language.test.ts`
+  - `tests/impact-call-compatibility/provider-registry.test.ts`
+  - Cross-language impact integration coverage in `tests/impact-analyzer.test.ts`
+- Verification completed on 2026-05-27:
+  - `npm run lint`
+  - `npm run build`
+  - `npm run test:ci`
+  - `git diff --check`
