@@ -1234,6 +1234,61 @@ function sameDefinition(left: SymbolDef, right: SymbolDef): boolean {
   );
 }
 
+function callableDeclarationAt(tree: SyntaxTreeLike, startIndex: number): SyntaxNodeLike | null {
+  const node = tree.rootNode.descendantForIndex(startIndex, startIndex);
+  return findAncestorOfTypes(node, callableDeclarationTypes);
+}
+
+function sameOverloadContainer(left: SyntaxNodeLike | null, right: SyntaxNodeLike | null): boolean {
+  if (!left || !right || !left.parent || !right.parent) {
+    return false;
+  }
+  return left.parent.id === right.parent.id;
+}
+
+function hasSameFileOverloadCandidates(
+  index: ProjectIndex,
+  changedSymbol: ChangedSymbol,
+  languageId: string,
+  source: string,
+  tree: SyntaxTreeLike,
+): boolean {
+  const module = index.byFile.get(changedSymbol.file);
+  if (!module) {
+    return false;
+  }
+
+  const changedStartIndex = changedSymbol.range.start.index;
+  if (changedStartIndex === undefined) {
+    return false;
+  }
+  const changedDeclaration = callableDeclarationAt(tree, changedStartIndex);
+
+  for (const local of module.locals) {
+    if (local.localName !== changedSymbol.name || sameRangeStart(local.range, changedSymbol.range)) {
+      continue;
+    }
+    const symbolStartIndex = local.range.start.index;
+    if (symbolStartIndex === undefined) {
+      continue;
+    }
+    const localDeclaration = callableDeclarationAt(tree, symbolStartIndex);
+    if (!sameOverloadContainer(changedDeclaration, localDeclaration)) {
+      continue;
+    }
+    const signature = extractCallableSignature({
+      languageId,
+      source,
+      symbolStartIndex,
+      tree,
+    });
+    if (signature) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function rangeContainsIndex(range: Range, index: number): boolean {
   const startIndex = range.start.index;
   const endIndex = range.end.index;
@@ -1440,6 +1495,18 @@ export async function attachCallCompatibilityHints(
     });
     if (!signature) {
       incrementSkippedReason(diagnostics, "signature_unknown");
+      continue;
+    }
+    if (
+      hasSameFileOverloadCandidates(
+        index,
+        changedSymbol,
+        parsedDefinition.sup.id,
+        parsedDefinition.source,
+        parsedDefinition.tree,
+      )
+    ) {
+      incrementSkippedReason(diagnostics, "overload_set");
       continue;
     }
 

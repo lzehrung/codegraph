@@ -307,6 +307,87 @@ describe("Impact Analyzer Edge Cases", () => {
       },
     );
 
+    it("does not emit call compatibility hints for overloaded Java callables", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-overload-java-"));
+      try {
+        const file = "Main.java";
+        const targetFile = path.join(root, file);
+        const before =
+          'class Main { void helper(String a) {} void helper(String a, int b) {} void run(){ helper("x"); } }\n';
+        const after =
+          'class Main { void helper(String a) {} void helper(String a, int b, int c) {} void run(){ helper("x"); } }\n';
+        await fsp.writeFile(targetFile, after, "utf8");
+        const index = await buildProjectIndex(root, { cache: "memory" });
+        const diffText = `diff --git a/${file} b/${file}
+--- a/${file}
++++ b/${file}
+@@ -1,1 +1,1 @@
+-${before.trimEnd()}
++${after.trimEnd()}
+`;
+
+        const result = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+          includeTests: true,
+        });
+
+        if ("files" in result) {
+          throw new Error("Expected full impact report");
+        }
+
+        const changedHelpers = result.changedSymbols.filter((symbol) => symbol.name === "helper" && symbol.signatureChanged);
+        expect(changedHelpers.length).toBeGreaterThan(0);
+        for (const helper of changedHelpers) {
+          expect(helper.callCompatibility).toBeUndefined();
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
+    it("keeps call compatibility hints for same-name Java methods in different classes", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-same-name-java-"));
+      try {
+        const file = "Main.java";
+        const targetFile = path.join(root, file);
+        const before =
+          'class Main { void helper(String a) {} void run(){ helper("x"); } } class Other { void helper(String a) {} }\n';
+        const after =
+          'class Main { void helper(String a, int b) {} void run(){ helper("x"); } } class Other { void helper(String a) {} }\n';
+        await fsp.writeFile(targetFile, after, "utf8");
+        const index = await buildProjectIndex(root, { cache: "memory" });
+        const diffText = `diff --git a/${file} b/${file}
+--- a/${file}
++++ b/${file}
+@@ -1,1 +1,1 @@
+-${before.trimEnd()}
++${after.trimEnd()}
+`;
+
+        const result = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+          includeTests: true,
+        });
+
+        if ("files" in result) {
+          throw new Error("Expected full impact report");
+        }
+
+        const changedHelper = result.changedSymbols.find((symbol) => symbol.name === "helper" && symbol.signatureChanged);
+        expect(changedHelper?.callCompatibility).toContainEqual(
+          expect.objectContaining({
+            status: "likely_mismatch",
+            reason: "argument_count_below_minimum",
+            callsiteFile: file,
+          }),
+        );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
     it("does not report call compatibility mismatches from test files unless tests are included", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-filter-tests-"));
       try {
