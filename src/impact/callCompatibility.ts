@@ -2,6 +2,7 @@ import path from "node:path";
 import { findReferences, goToDefinition } from "../indexer/navigation.js";
 import { ensureParsedContext } from "../indexer/parse-context.js";
 import { SymbolKind, type ProjectIndex, type Reference, type SymbolDef } from "../indexer/types.js";
+import { supportForFile } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import { sliceText, toRange } from "../util/ast.js";
@@ -1227,10 +1228,11 @@ async function collectVerifiedCallsiteReferences(
     if (refs.length >= maxRefs) {
       break;
     }
-    const parsed = await ensureParsedContext(file, index.parsed?.get(file));
-    if (!supportsCallCompatibilityLanguage(parsed.sup.id)) {
+    const support = supportForFile(file);
+    if (!support || !supportsCallCompatibilityLanguage(support.id)) {
       continue;
     }
+    const parsed = await ensureParsedContext(file, index.parsed?.get(file));
 
     const walk = async (node: SyntaxNodeLike): Promise<void> => {
       if (refs.length >= maxRefs) {
