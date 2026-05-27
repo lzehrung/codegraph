@@ -1403,6 +1403,10 @@ export async function attachCallCompatibilityHints(
     shouldIncludeReference?: (file: string) => boolean;
   },
 ): Promise<void> {
+  for (const changedSymbol of changedSymbols) {
+    delete changedSymbol.callCompatibility;
+  }
+
   if (options.maxRefs <= 0) {
     return;
   }
