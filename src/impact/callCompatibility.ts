@@ -55,6 +55,81 @@ function findOpeningParen(source: string, startIndex: number): number {
   return source.indexOf("(", startIndex);
 }
 
+function findSignatureOpeningParen(source: string, startIndex: number): number {
+  if (startIndex < 0 || startIndex >= source.length) {
+    return -1;
+  }
+
+  let quote: string | null = null;
+  let escaped = false;
+  let isTypeAnnotation = false;
+
+  for (let index = startIndex; index < source.length; index += 1) {
+    const char = source[index];
+
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+
+    const commentEnd = findCommentEnd(source, index);
+    if (commentEnd !== null) {
+      if (commentEnd < 0) {
+        return -1;
+      }
+      index = commentEnd - 1;
+      continue;
+    }
+
+    if (char === '"' || char === "'" || char === "`") {
+      quote = char;
+      continue;
+    }
+    if (char === "<") {
+      const closeIndex = findBalancedAngleBrackets(source, index);
+      if (closeIndex < 0) {
+        return -1;
+      }
+      index = closeIndex;
+      continue;
+    }
+    if (char === ":") {
+      isTypeAnnotation = true;
+      continue;
+    }
+    if (char === "=") {
+      if (source[index + 1] === ">") {
+        index += 1;
+        continue;
+      }
+      isTypeAnnotation = false;
+      continue;
+    }
+    if (char === "(") {
+      if (!isTypeAnnotation) {
+        return index;
+      }
+      const balanced = findBalancedParentheses(source, index);
+      if (!balanced) {
+        return -1;
+      }
+      index = balanced.end - 1;
+    }
+  }
+
+  return -1;
+}
+
 function findCommentEnd(source: string, index: number): number | null {
   if (source[index] !== "/") {
     return null;
@@ -296,6 +371,89 @@ function hasTypeContextBeforeLessThan(text: string, index: number, groupStart: n
   return typeKeywordPattern.test(left);
 }
 
+function previousSignificantIndex(text: string, index: number, groupStart: number): number {
+  for (let current = index - 1; current >= groupStart; current -= 1) {
+    const char = text[current];
+    if (char !== undefined && !/\s/.test(char)) {
+      return current;
+    }
+  }
+  return -1;
+}
+
+function previousSignificantChar(text: string, index: number, groupStart: number): string | null {
+  const previousIndex = previousSignificantIndex(text, index, groupStart);
+  if (previousIndex < 0) {
+    return null;
+  }
+  return text[previousIndex] ?? null;
+}
+
+function previousSignificantCharBefore(text: string, index: number, groupStart: number): string | null {
+  const previousIndex = previousSignificantIndex(text, index, groupStart);
+  if (previousIndex < 0) {
+    return null;
+  }
+
+  return previousSignificantChar(text, previousIndex, groupStart);
+}
+
+function canStartRegexLiteral(text: string, index: number, groupStart: number): boolean {
+  if (text[index] !== "/" || text[index + 1] === "/" || text[index + 1] === "*") {
+    return false;
+  }
+
+  const previous = previousSignificantChar(text, index, groupStart);
+  if (!previous) {
+    return true;
+  }
+  if (previous === ">" && previousSignificantCharBefore(text, index, groupStart) === "=") {
+    return true;
+  }
+
+  return "([{,=:+-!*?&|;".includes(previous);
+}
+
+function findRegexLiteralEnd(text: string, index: number): number | null {
+  if (text[index] !== "/" || text[index + 1] === "/" || text[index + 1] === "*") {
+    return null;
+  }
+
+  let escaped = false;
+  let inCharacterClass = false;
+  for (let current = index + 1; current < text.length; current += 1) {
+    const char = text[current];
+    if (char === "\n" || char === "\r") {
+      return -1;
+    }
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === "[") {
+      inCharacterClass = true;
+      continue;
+    }
+    if (char === "]") {
+      inCharacterClass = false;
+      continue;
+    }
+    if (char === "/" && !inCharacterClass) {
+      let endIndex = current + 1;
+      while (/[A-Za-z]/.test(text[endIndex] ?? "")) {
+        endIndex += 1;
+      }
+      return endIndex;
+    }
+  }
+
+  return -1;
+}
+
 function splitTopLevelCommaGroups(text: string, angleMode: AngleMode): string[] | null {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -335,6 +493,18 @@ function splitTopLevelCommaGroups(text: string, angleMode: AngleMode): string[] 
         return null;
       }
       index = commentEnd - 1;
+      continue;
+    }
+
+    if (canStartRegexLiteral(text, index, groupStart)) {
+      const regexEnd = findRegexLiteralEnd(text, index);
+      if (regexEnd === null) {
+        return null;
+      }
+      if (regexEnd < 0) {
+        return null;
+      }
+      index = regexEnd - 1;
       continue;
     }
 
@@ -379,7 +549,7 @@ function splitTopLevelCommaGroups(text: string, angleMode: AngleMode): string[] 
     if (
       char === "<" &&
       atDelimiterTopLevel &&
-      (angleMode === "always" || hasTypeContextBeforeLessThan(text, index, groupStart))
+      (angleDepth || angleMode === "always" || hasTypeContextBeforeLessThan(text, index, groupStart))
     ) {
       angleDepth += 1;
       continue;
@@ -518,7 +688,7 @@ export function extractCallableSignature(request: ExtractCallableSignatureReques
     return null;
   }
 
-  const openIndex = findOpeningParen(request.source, request.symbolStartIndex);
+  const openIndex = findSignatureOpeningParen(request.source, request.symbolStartIndex);
   const balanced = findBalancedParentheses(request.source, openIndex);
   if (!balanced) {
     return null;

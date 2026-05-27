@@ -67,6 +67,28 @@ describe("impact signature hint", () => {
     expect(signature).toEqual({ minArgs: 2, maxArgs: 2, confidence: "high" });
   });
 
+  it("skips generic constraints before TypeScript function parameters", () => {
+    const source = "export function helper<T extends (x: string) => void>(a: string, b: number) { return b; }";
+    const signature = extractCallableSignature({
+      languageId: "typescript",
+      source,
+      symbolStartIndex: source.indexOf("helper"),
+    });
+
+    expect(signature).toEqual({ minArgs: 2, maxArgs: 2, confidence: "high" });
+  });
+
+  it("skips variable function type annotations before arrow parameters", () => {
+    const source = "export const helper: (x: string) => void = (a: string, b: number) => b;";
+    const signature = extractCallableSignature({
+      languageId: "typescript",
+      source,
+      symbolStartIndex: source.indexOf("helper"),
+    });
+
+    expect(signature).toEqual({ minArgs: 2, maxArgs: 2, confidence: "high" });
+  });
+
   it("does not treat destructuring defaults as optional object parameters", () => {
     const source = "export function helper({ a = 1 }: Options, b: string) { return b; }";
     const signature = extractCallableSignature({
@@ -175,6 +197,50 @@ describe("impact signature hint", () => {
     });
 
     expect(call).toEqual({ argCount: 2, confidence: "high" });
+  });
+
+  it("does not split commas inside nested TypeScript callsite type arguments", () => {
+    const source = "helper(value as Foo<Bar<Baz, Qux>, Quux>, other);";
+    const call = extractCallsiteArguments({
+      languageId: "typescript",
+      source,
+      calleeStartIndex: source.indexOf("helper"),
+    });
+
+    expect(call).toEqual({ argCount: 2, confidence: "high" });
+  });
+
+  it("does not split commas inside JavaScript regex literal arguments", () => {
+    const source = "helper(/[/,]/, other);";
+    const call = extractCallsiteArguments({
+      languageId: "typescript",
+      source,
+      calleeStartIndex: source.indexOf("helper"),
+    });
+
+    expect(call).toEqual({ argCount: 2, confidence: "high" });
+  });
+
+  it("counts a single JavaScript regex literal argument with a comma", () => {
+    const source = "helper(/,/);";
+    const call = extractCallsiteArguments({
+      languageId: "typescript",
+      source,
+      calleeStartIndex: source.indexOf("helper"),
+    });
+
+    expect(call).toEqual({ argCount: 1, confidence: "high" });
+  });
+
+  it("does not split commas inside regex literals returned by arrow arguments", () => {
+    const source = "helper(() => /,/);";
+    const call = extractCallsiteArguments({
+      languageId: "typescript",
+      source,
+      calleeStartIndex: source.indexOf("helper"),
+    });
+
+    expect(call).toEqual({ argCount: 1, confidence: "high" });
   });
 
   it("counts comparison expression callsite arguments separately", () => {
