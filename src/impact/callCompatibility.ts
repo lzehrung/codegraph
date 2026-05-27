@@ -2,6 +2,7 @@ import path from "node:path";
 import { findReferences } from "../indexer/navigation.js";
 import { ensureParsedContext } from "../indexer/parse-context.js";
 import { SymbolKind, type ProjectIndex, type Reference, type SymbolDef } from "../indexer/types.js";
+import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import type { CallCompatibilityHint, ChangedSymbol } from "./types.js";
 
@@ -15,6 +16,7 @@ export interface ExtractCallableSignatureRequest {
   languageId: string;
   source: string;
   symbolStartIndex: number;
+  tree?: SyntaxTreeLike;
 }
 
 export interface CallsiteArguments {
@@ -27,6 +29,7 @@ export interface ExtractCallsiteArgumentsRequest {
   source: string;
   calleeStartIndex: number;
   calleeEndIndex?: number;
+  tree?: SyntaxTreeLike;
 }
 
 type BalancedRange = {
@@ -46,6 +49,31 @@ function isJsTsLanguage(languageId: string): boolean {
     languageId === "js" ||
     languageId === "ts"
   );
+}
+
+const sourceLanguageIdsWithCalls = new Set([
+  "c",
+  "cpp",
+  "csharp",
+  "go",
+  "java",
+  "javascript",
+  "js",
+  "jsx",
+  "kotlin",
+  "php",
+  "python",
+  "ruby",
+  "rust",
+  "swift",
+  "ts",
+  "tsx",
+  "typescript",
+  "zig",
+]);
+
+function supportsCallCompatibilityLanguage(languageId: string): boolean {
+  return sourceLanguageIdsWithCalls.has(languageId);
 }
 
 function findOpeningParen(source: string, startIndex: number): number {
@@ -776,7 +804,213 @@ function isThisParameter(parameter: string): boolean {
   return parameter.slice(0, colonIndex).trim() === "this";
 }
 
+function findAncestorOfTypes(node: SyntaxNodeLike | null, types: ReadonlySet<string>): SyntaxNodeLike | null {
+  let current: SyntaxNodeLike | null = node;
+  while (current) {
+    if (types.has(current.type)) {
+      return current;
+    }
+    current = current.parent;
+  }
+  return null;
+}
+
+function findFirstDescendantOfTypes(node: SyntaxNodeLike, types: ReadonlySet<string>): SyntaxNodeLike | null {
+  for (const child of node.namedChildren ?? []) {
+    if (types.has(child.type)) {
+      return child;
+    }
+    const found = findFirstDescendantOfTypes(child, types);
+    if (found) {
+      return found;
+    }
+  }
+  return null;
+}
+
+const callableDeclarationTypes = new Set([
+  "function_declaration",
+  "function_definition",
+  "function_item",
+  "method",
+  "singleton_method",
+  "method_declaration",
+  "constructor_declaration",
+  "init_declaration",
+  "protocol_function_declaration",
+  "arrow_function",
+  "function",
+  "function_expression",
+  "variable_declarator",
+  "declaration",
+]);
+
+const parameterListTypes = new Set([
+  "parameters",
+  "parameter_list",
+  "formal_parameters",
+  "formal_parameters",
+  "function_value_parameters",
+  "formal_parameters",
+  "method_parameters",
+  "formal_parameters",
+  "formal_parameters",
+]);
+
+function findSignatureParameterText(request: ExtractCallableSignatureRequest): string | null {
+  if (!request.tree) {
+    return null;
+  }
+
+  const node = request.tree.rootNode.descendantForIndex(request.symbolStartIndex, request.symbolStartIndex);
+  const declaration = findAncestorOfTypes(node, callableDeclarationTypes);
+  if (!declaration) {
+    return null;
+  }
+
+  const params =
+    declaration.childForFieldName("parameters") ??
+    declaration.childForFieldName("parameter") ??
+    findFirstDescendantOfTypes(declaration, parameterListTypes);
+  if (!params) {
+    if (request.languageId === "swift") {
+      const parameterNodes = declaration.namedChildren.filter((child) => child.type === "parameter");
+      const first = parameterNodes[0];
+      const last = parameterNodes[parameterNodes.length - 1];
+      if (first && last) {
+        return request.source.slice(first.startIndex, last.endIndex);
+      }
+    }
+    return "";
+  }
+
+  const text = request.source.slice(params.startIndex, params.endIndex).trim();
+  if (text.startsWith("(") && text.endsWith(")")) {
+    return text.slice(1, -1);
+  }
+  return text;
+}
+
+function isReceiverParameter(languageId: string, parameter: string, index: number): boolean {
+  const trimmed = parameter.trim();
+  if (!index && (languageId === "python" || languageId === "ruby")) {
+    return trimmed === "self" || trimmed === "cls" || trimmed.startsWith("self:") || trimmed.startsWith("cls:");
+  }
+  if (!index && languageId === "rust") {
+    return trimmed === "self" || trimmed === "&self" || trimmed === "&mut self" || trimmed.startsWith("self:");
+  }
+  if (isJsTsLanguage(languageId)) {
+    return isThisParameter(trimmed);
+  }
+  return false;
+}
+
+function isRestParameter(languageId: string, parameter: string): boolean {
+  const trimmed = parameter.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (trimmed === "..." || trimmed.startsWith("...")) {
+    return true;
+  }
+  if (languageId === "python" || languageId === "ruby") {
+    return trimmed.startsWith("*") || trimmed.startsWith("**");
+  }
+  if (languageId === "go") {
+    return trimmed.includes("...");
+  }
+  if (languageId === "csharp") {
+    return /\bparams\b/.test(trimmed);
+  }
+  if (languageId === "kotlin") {
+    return /\bvararg\b/.test(trimmed);
+  }
+  if (languageId === "swift") {
+    return trimmed.endsWith("...");
+  }
+  return false;
+}
+
+function isOptionalParameterForLanguage(languageId: string, parameter: string): boolean {
+  const trimmed = parameter.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (isJsTsLanguage(languageId)) {
+    return isOptionalParameter(trimmed);
+  }
+  if (languageId === "ruby" && /^[A-Za-z_]\w*:\s*\S/.test(trimmed)) {
+    return true;
+  }
+  return hasTopLevelEquals(trimmed);
+}
+
+function parameterSlotCount(languageId: string, parameter: string): number {
+  const trimmed = parameter.trim();
+  if (!trimmed) {
+    return 0;
+  }
+  if ((languageId === "c" || languageId === "cpp") && trimmed === "void") {
+    return 0;
+  }
+  return 1;
+}
+
+function signatureFromParameterText(
+  languageId: string,
+  parameterText: string,
+  angleMode: AngleMode,
+): CallableSignature | null {
+  const parameters = splitTopLevelCommaGroups(parameterText, angleMode);
+  if (!parameters) {
+    return null;
+  }
+
+  let minArgs = 0;
+  let maxArgs = 0;
+  let positionalArgCount = 0;
+  let hasRest = false;
+
+  parameters.forEach((parameter, index) => {
+    const trimmed = parameter.trim();
+    if (!trimmed || isReceiverParameter(languageId, trimmed, index)) {
+      return;
+    }
+    if (isRestParameter(languageId, trimmed)) {
+      hasRest = true;
+      return;
+    }
+    if (languageId === "ruby" && /^[A-Za-z_]\w*:/.test(trimmed)) {
+      maxArgs += 1;
+      if (!isOptionalParameterForLanguage(languageId, trimmed)) {
+        minArgs += 1;
+      }
+      return;
+    }
+    const slotCount = parameterSlotCount(languageId, trimmed);
+    if (!slotCount) {
+      return;
+    }
+    positionalArgCount += slotCount;
+    maxArgs += slotCount;
+    if (!isOptionalParameterForLanguage(languageId, trimmed)) {
+      minArgs = positionalArgCount;
+    }
+  });
+
+  return { minArgs, maxArgs: hasRest ? null : maxArgs, confidence: "high" };
+}
+
 export function extractCallableSignature(request: ExtractCallableSignatureRequest): CallableSignature | null {
+  if (!supportsCallCompatibilityLanguage(request.languageId)) {
+    return null;
+  }
+
+  const astParameterText = findSignatureParameterText(request);
+  if (astParameterText !== null) {
+    return signatureFromParameterText(request.languageId, astParameterText, "type-context");
+  }
+
   if (!isJsTsLanguage(request.languageId)) {
     return null;
   }
@@ -787,38 +1021,19 @@ export function extractCallableSignature(request: ExtractCallableSignatureReques
     return null;
   }
 
-  const parameters = splitTopLevelCommaGroups(balanced.inner, "type-context");
-  if (!parameters) {
-    return null;
-  }
-
-  let minArgs = 0;
-  let hasRest = false;
-  let maxArgs = 0;
-  let positionalArgCount = 0;
-  for (const parameter of parameters) {
-    const trimmed = parameter.trim();
-    if (!trimmed) {
-      continue;
-    }
-    if (isThisParameter(trimmed)) {
-      continue;
-    }
-    if (trimmed.startsWith("...")) {
-      hasRest = true;
-      continue;
-    }
-    positionalArgCount += 1;
-    maxArgs += 1;
-    if (!isOptionalParameter(trimmed)) {
-      minArgs = positionalArgCount;
-    }
-  }
-
-  return { minArgs, maxArgs: hasRest ? null : maxArgs, confidence: "high" };
+  return signatureFromParameterText(request.languageId, balanced.inner, "type-context");
 }
 
 export function extractCallsiteArguments(request: ExtractCallsiteArgumentsRequest): CallsiteArguments | null {
+  if (!supportsCallCompatibilityLanguage(request.languageId)) {
+    return null;
+  }
+
+  const astArgumentText = findCallsiteArgumentText(request);
+  if (astArgumentText !== null) {
+    return callsiteFromArgumentText(request.languageId, astArgumentText);
+  }
+
   if (!isJsTsLanguage(request.languageId)) {
     return null;
   }
@@ -829,13 +1044,89 @@ export function extractCallsiteArguments(request: ExtractCallsiteArgumentsReques
     return null;
   }
 
-  const args = splitTopLevelCommaGroups(balanced.inner, "type-context");
+  return callsiteFromArgumentText(request.languageId, balanced.inner);
+}
+
+const callExpressionTypes = new Set([
+  "call_expression",
+  "call",
+  "method_invocation",
+  "invocation_expression",
+  "function_call_expression",
+  "object_creation_expression",
+]);
+
+const argumentListTypes = new Set([
+  "argument_list",
+  "arguments",
+  "value_arguments",
+  "call_suffix",
+]);
+
+function findCallsiteArgumentText(request: ExtractCallsiteArgumentsRequest): string | null {
+  if (!request.tree) {
+    return null;
+  }
+
+  const endIndex = request.calleeEndIndex ?? request.calleeStartIndex;
+  const node = request.tree.rootNode.descendantForIndex(request.calleeStartIndex, endIndex);
+  const callNode = findAncestorOfTypes(node, callExpressionTypes);
+  if (!callNode) {
+    return null;
+  }
+  if (request.calleeStartIndex < callNode.startIndex || request.calleeStartIndex > callNode.endIndex) {
+    return null;
+  }
+
+  const argumentNode =
+    callNode.childForFieldName("arguments") ??
+    callNode.namedChildren.find((child) => argumentListTypes.has(child.type)) ??
+    findFirstDescendantOfTypes(callNode, argumentListTypes);
+  if (argumentNode) {
+    let text = request.source.slice(argumentNode.startIndex, argumentNode.endIndex).trim();
+    if (argumentNode.type === "call_suffix") {
+      const nested = findFirstDescendantOfTypes(argumentNode, new Set(["value_arguments"]));
+      if (nested) {
+        text = request.source.slice(nested.startIndex, nested.endIndex).trim();
+      }
+    }
+    if (text.startsWith("(") && text.endsWith(")")) {
+      return text.slice(1, -1);
+    }
+    return text;
+  }
+
+  if (request.languageId === "zig") {
+    const openIndex = findOpeningParen(request.source, callNode.startIndex);
+    const balanced = findBalancedParentheses(request.source, openIndex);
+    return balanced?.inner ?? null;
+  }
+
+  return null;
+}
+
+function hasUncountableSpreadArgument(languageId: string, arg: string): boolean {
+  const trimmed = arg.trim();
+  if (trimmed.startsWith("...")) {
+    return true;
+  }
+  if (languageId === "python" || languageId === "ruby") {
+    return trimmed.startsWith("*") || trimmed.startsWith("**");
+  }
+  if (languageId === "php") {
+    return trimmed.startsWith("...");
+  }
+  return false;
+}
+
+function callsiteFromArgumentText(languageId: string, argumentText: string): CallsiteArguments | null {
+  const args = splitTopLevelCommaGroups(argumentText, "type-context");
   if (!args) {
     return null;
   }
 
   for (const arg of args) {
-    if (arg.trim().startsWith("...")) {
+    if (hasUncountableSpreadArgument(languageId, arg)) {
       return null;
     }
   }
@@ -845,7 +1136,10 @@ export function extractCallsiteArguments(request: ExtractCallsiteArgumentsReques
 
 function isCallableChangedSymbol(symbol: ChangedSymbol): boolean {
   return (
-    symbol.kind === SymbolKind.Function || symbol.kind === SymbolKind.Default || symbol.kind === SymbolKind.Variable
+    symbol.kind === SymbolKind.Function ||
+    symbol.kind === SymbolKind.Default ||
+    symbol.kind === SymbolKind.Variable ||
+    String(symbol.kind) === "method"
   );
 }
 
@@ -931,6 +1225,7 @@ export async function attachCallCompatibilityHints(
       languageId: parsedDefinition.sup.id,
       source: parsedDefinition.source,
       symbolStartIndex: changedSymbol.range.start.index ?? 0,
+      tree: parsedDefinition.tree,
     });
     if (!signature) {
       continue;
@@ -972,6 +1267,7 @@ export async function attachCallCompatibilityHints(
         languageId: parsedCallsite.sup.id,
         source: parsedCallsite.source,
         calleeStartIndex,
+        tree: parsedCallsite.tree,
         ...(ref.range.end.index !== undefined ? { calleeEndIndex: ref.range.end.index } : {}),
       };
       const actual = extractCallsiteArguments(callsiteRequest);
