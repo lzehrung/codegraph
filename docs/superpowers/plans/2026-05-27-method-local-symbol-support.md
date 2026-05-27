@@ -64,6 +64,19 @@ This survey is based on `src/languages/definitions/*.ts`, `src/indexer/shared.ts
 
 Existing tests provide broad language parity for top-level exported symbols, imports, goto, and references. They are thinner for member-local extraction, constructor locals, property locals, anonymous callables, and assigned callables.
 
+## Agentic Coding Value
+
+This is a precision upgrade for review and impact packets. Agents need changed-symbol reports to name the smallest safe unit; class-level fallback makes method edits look broader than they are and prevents method signature changes from feeding call compatibility.
+
+The highest-value path is:
+
+1. emit JS/TS method locals safely;
+2. map method body and parameter edits to method changed symbols;
+3. add receiver-aware references for high-confidence method callsites;
+4. attach method call compatibility hints only for verified callsites.
+
+Do not add name-only reference matching. Common method names such as `run`, `handle`, and `render` are too ambiguous across classes.
+
 ## Implementation Approach
 
 The safe implementation is two-phase.

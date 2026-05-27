@@ -33,6 +33,19 @@ Current repo facts worth preserving:
 - `unresolved` can legitimately be zero and should be compared by stable import/file identity.
 - Duplicate output has grouped JSON with omission counts. Drift should compare counts and top stable group keys, not assume group ordering is permanent.
 
+## Agentic Coding Use Case
+
+Drift should be the architecture-regression primitive for agents. Instead of asking an agent to manually compare `inspect`, `cycles`, `unresolved`, `apisurface`, `duplicates`, and `graph-delta` outputs, this command should produce one deterministic report that says what got structurally worse and what got better.
+
+High-value agent outputs:
+
+- Review focus: new cycles, public API removals, unresolved imports, hotspot jumps, duplicate increases, and graph-edge changes.
+- CI policy: `--fail-on` gates for selected finding kinds while leaving informational findings in JSON.
+- Fix planning: stable file/symbol/chunk handles for each finding so a follow-up `packet get` can retrieve bounded evidence.
+- Human handoff: short pretty output grouped by severity and kind.
+
+This should not become runtime validation, compiler diagnostics, or a style linter. It compares repository structure over time.
+
 ## Deliverable
 
 Add:
@@ -211,9 +224,7 @@ it("reports new cycles without reporting pre-existing cycles", () => {
 
   const report = compareArchitectureSnapshots(base, head, { failOn: [] });
 
-  expect(report.findings).toContainEqual(
-    expect.objectContaining({ kind: "new-cycle", severity: "error" }),
-  );
+  expect(report.findings).toContainEqual(expect.objectContaining({ kind: "new-cycle", severity: "error" }));
 });
 
 it("reports public API removals", () => {
@@ -222,9 +233,7 @@ it("reports public API removals", () => {
 
   const report = compareArchitectureSnapshots(base, head, { failOn: [] });
 
-  expect(report.findings).toContainEqual(
-    expect.objectContaining({ kind: "public-api-removal", severity: "error" }),
-  );
+  expect(report.findings).toContainEqual(expect.objectContaining({ kind: "public-api-removal", severity: "error" }));
 });
 ```
 

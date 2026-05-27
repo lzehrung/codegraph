@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add conservative call compatibility hints to impact and review output so Codegraph can flag likely arity mismatches after a changed callable signature.
+**Goal:** Add conservative cross-language call compatibility hints to impact and review output so Codegraph can flag likely arity mismatches after a changed callable signature.
 
-**Architecture:** Build a small signature/callsite sidecar on top of existing symbol metadata and `calls` edges. Emit `likely_mismatch` only when the changed symbol, resolved callsite, and argument count are all high confidence; otherwise emit `unknown` or no hint.
+**Architecture:** Build a provider-based signature/callsite sidecar on top of existing symbol metadata and `calls` edges. Emit `likely_mismatch` only when the changed symbol, resolved callsite, and argument count are all high confidence; otherwise emit `unknown` or no hint.
 
 **Tech Stack:** TypeScript, Vitest, existing Tree-sitter/native extraction, `buildSymbolGraphDetailed()`, impact/review report types, CLI JSON and pretty renderers.
 
@@ -13,6 +13,17 @@
 ## Context
 
 Codegraph already has diff impact and review reporting. This plan does not replace that feature. It adds a narrower signal: changed function or method signatures that likely no longer match resolved callsites.
+
+Scope decision:
+
+- Do not merge call compatibility as a public feature if it only supports JS/TS-family syntax.
+- Treat call compatibility as a cross-language capability with explicit provider coverage.
+- Every Codegraph language with callable symbols and resolved calls must have one of:
+  - A provider that emits high-confidence hints.
+  - A documented, tested `unsupported` entry in the parity matrix.
+  - A documented `not_applicable` entry when the language/runtime surface has no meaningful callable model in Codegraph.
+- Do not broaden docs or CLI wording beyond the provider matrix.
+- Prefer no hint over a low-confidence or language-subset mismatch claim.
 
 Important current files:
 
@@ -26,11 +37,14 @@ Important current files:
 - `tests/impact-signature.test.ts`, `tests/impact-analyzer.test.ts`, `tests/review.test.ts`, `tests/symbol-detailed-semantic.test.ts`: nearest regression suites.
 - `docs/language-parity.md`, `docs/scenario-catalog.md`, `docs/cli.md`, `docs/library-api.md`, `docs/agent-workflows.md`, `codegraph-skill/codegraph/SKILL.md`: docs to update because this changes review/impact output contracts.
 
-Relevant prior design constraint:
+Relevant design constraints:
 
 - Do not promise compiler-like type checking.
 - Emit `likely_mismatch` only when callee resolution, signature parsing, and callsite argument counting are confident.
 - Return `unknown` for dynamic calls, spread-only calls, unresolved callees, optional/rest-heavy signatures, macro-like language constructs, or unsupported language syntax.
+- Prefer Tree-sitter/native AST node extraction over whole-file string scanning.
+- Use source-text scanning only inside already-identified declaration or call-expression node ranges.
+- Keep language-specific logic behind providers, not branches in the impact/review analyzer.
 
 ## Deliverable
 
@@ -62,14 +76,167 @@ export interface CallCompatibilityHint {
 
 Use `maxArgs: null` for rest-argument signatures. Do not emit `likely_mismatch` when `maxArgs` is `null`; rest signatures are compatible above the minimum.
 
+The normalized model may need to grow as language providers are added:
+
+- `minArgs`: minimum positional arguments required.
+- `maxArgs`: maximum positional arguments accepted, or `null` for rest/variadic signatures.
+- `requiredNamedArgs`: required named/keyword arguments when the language supports them.
+- `optionalNamedArgs`: optional named/keyword arguments when the language supports them.
+- `supportsNamedArgs`: whether callsites may satisfy parameters by name.
+- `hasRest`: whether the signature accepts unbounded positional arguments.
+- `hasKeywordRest`: whether the signature accepts unbounded keyword/named arguments.
+- `receiverMode`: `implicit`, `explicit`, or `none`.
+- `confidence`: `high` only for emitted hints.
+- `unsupportedReason`: a stable reason for diagnostics when a provider declines a case.
+
 ## Acceptance Criteria
 
 - `impact` and `review` JSON include `callCompatibility` only for changed callable symbols with resolved callsites.
 - Pretty/summary output includes a short section only when at least one `likely_mismatch` exists.
 - Existing `signatureChanged` hints remain intact.
-- TypeScript, JavaScript, TSX, and JSX fixtures are covered first because their function signatures and call expressions are already strong in the current pipeline.
-- Other languages do not receive false mismatch claims. They may receive no hints or `unknown`, and docs must say that compatibility hints are initially JS/TS-family only.
+- Provider coverage exists for every language where Codegraph claims callable signatures and resolved calls, or the language has an explicit documented/tested unsupported entry.
+- Cross-language support claims are backed by tests in `tests/impact-call-compatibility/*.test.ts` plus integration tests in the nearest impact/review suites.
+- Other languages do not receive false mismatch claims. They may receive no hints or `unknown` only when this is documented in the provider matrix.
+- `docs/language-parity.md` and `docs/scenario-catalog.md` include the call compatibility support matrix in the same change.
 - No `any`, no `as unknown as`, no nested ternaries, no `=== true` or `=== false`.
+
+## Cross-Language Provider Architecture
+
+Add a provider registry before broadening public output.
+
+Files:
+
+- Create: `src/impact/call-compatibility/providers/index.ts`
+- Create: `src/impact/call-compatibility/providers/types.ts`
+- Move or replace: `src/impact/callCompatibility.ts`
+- Test: `tests/impact-call-compatibility/provider-registry.test.ts`
+
+Provider contract:
+
+```ts
+export interface CallCompatibilityProvider {
+  languageIds: readonly string[];
+  extractSignature(request: ExtractSignatureRequest): CallableSignature | null;
+  extractCallsite(request: ExtractCallsiteRequest): CallsiteArguments | null;
+  limitations(): readonly CallCompatibilityLimitation[];
+}
+```
+
+Registry rules:
+
+- The analyzer asks the registry for a provider by `languageId`.
+- Providers own all language-specific syntax decisions.
+- Providers return `null` for unsupported, ambiguous, or low-confidence cases.
+- The analyzer never falls back to name-only text matching.
+- The analyzer emits diagnostics for skipped languages and skipped reasons.
+
+Diagnostics to add:
+
+- `callCompatibility.supportedLanguages`
+- `callCompatibility.unsupportedLanguages`
+- `callCompatibility.skippedByReason`
+- `callCompatibility.unknownCallsites`
+- `callCompatibility.emittedHints`
+
+## Cross-Language Provider Matrix
+
+Use this matrix as the implementation checklist. Each row needs parser-level tests, at least one impact/review integration test, docs parity coverage, and explicit unsupported cases.
+
+- [ ] **JS/TS/JSX/TSX**
+  - [ ] Support functions, arrows, callable variables, defaults, optionals, rest args, generic type syntax, and regex literal call args.
+  - [ ] Return `null` for overload-only/type-only declarations unless a runtime implementation target is clear.
+  - [ ] Add method support only when method changed symbols and receiver/callsite resolution are reliable.
+
+- [ ] **Python**
+  - [ ] Support functions and methods.
+  - [ ] Handle `self`/`cls` receiver parameters.
+  - [ ] Handle defaults, keyword calls, `*args`, and `**kwargs`.
+  - [ ] Return `null` for dynamic splat/kwargs callsites that cannot be counted safely.
+
+- [ ] **Go**
+  - [ ] Support free functions and methods.
+  - [ ] Account for receiver parameters as non-callsite arguments.
+  - [ ] Handle variadic parameters.
+  - [ ] Return `null` for unresolved selector calls.
+
+- [ ] **Rust**
+  - [ ] Support free functions, associated functions, and impl methods when references resolve.
+  - [ ] Account for `self` receivers.
+  - [ ] Handle turbofish syntax at callsites.
+  - [ ] Return `null` for macros and unresolved trait-dispatch callsites.
+
+- [ ] **Java**
+  - [ ] Support methods and constructors.
+  - [ ] Handle overloads conservatively.
+  - [ ] Emit only when the changed symbol maps to an unambiguous callable target.
+
+- [ ] **C#**
+  - [ ] Support methods and constructors.
+  - [ ] Handle optional parameters, named arguments, and `params`.
+  - [ ] Handle overloads conservatively.
+
+- [ ] **Kotlin**
+  - [ ] Support functions, methods, constructors, default args, named args, and varargs.
+  - [ ] Return `null` when default/named argument semantics make arity insufficient to judge.
+
+- [ ] **Swift**
+  - [ ] Support functions, methods, initializers, default args, argument labels, and variadics.
+  - [ ] Treat labels as part of compatibility when confidence is high.
+
+- [ ] **PHP**
+  - [ ] Support functions and methods.
+  - [ ] Handle defaults, named args, and variadics.
+  - [ ] Return `null` for dynamic function/method calls.
+
+- [ ] **Ruby**
+  - [ ] Support methods where references resolve.
+  - [ ] Handle optional args, keyword args, splats, double splats, and block args.
+  - [ ] Return `null` for dynamic dispatch.
+
+- [ ] **C**
+  - [ ] Support unambiguous free functions and direct calls.
+  - [ ] Handle prototypes vs definitions conservatively.
+  - [ ] Return `null` for function pointers and macro calls.
+
+- [ ] **C++**
+  - [ ] Support unambiguous free functions first.
+  - [ ] Add methods, constructors, templates, default args, and overloads only when resolution is reliable.
+  - [ ] Return `null` for unresolved overload/template cases.
+
+## Cross-Language Rollout Phases
+
+- [ ] **Phase 1: Provider registry**
+  - [ ] Introduce the provider contract and registry.
+  - [ ] Move JS/TS logic behind the first provider.
+  - [ ] Keep public docs conservative until the full matrix is ready.
+  - [ ] Add diagnostics without changing human output claims.
+
+- [ ] **Phase 2: Parity matrix**
+  - [ ] Inventory all languages with callable symbols and resolved calls.
+  - [ ] Update `docs/language-parity.md`.
+  - [ ] Update `docs/scenario-catalog.md`.
+  - [ ] Add a regression test that the docs matrix matches registered providers or explicit unsupported entries.
+
+- [ ] **Phase 3: Provider implementation**
+  - [ ] Implement lower-overload languages first: Python, Go, PHP, Ruby.
+  - [ ] Implement method/overload-heavy languages next: Java, C#, Kotlin, Swift, Rust.
+  - [ ] Implement C and C++ conservatively.
+  - [ ] Add parser-level and integration tests with each provider.
+
+- [ ] **Phase 4: Public feature gate**
+  - [ ] Enable default `callCompatibility` output only after the matrix meets the merge bar.
+  - [ ] Keep partial provider work internal or branch-only until then.
+  - [ ] Run final review for parity drift and overclaiming.
+
+## Merge Bar
+
+- [ ] Every supported source language has a provider or a documented/tested unsupported entry.
+- [ ] Public docs avoid language-subset claims unless the matrix explicitly says so.
+- [ ] Pretty output emits only high-confidence likely mismatches.
+- [ ] Structured output preserves diagnostics for unsupported and unknown cases.
+- [ ] `docs/language-parity.md` and `docs/scenario-catalog.md` are updated.
+- [ ] `npm run lint`, `npm run build`, `npm run test:ci`, and `git diff --check` pass.
+- [ ] A final review pass finds no parity drift, no unsafe name-only matching, and no overclaiming.
 
 ## Task 1: Add Signature and Callsite Types
 
@@ -171,7 +338,7 @@ git add src/impact/types.ts tests/impact-signature.test.ts
 git commit -m "Add call compatibility report types"
 ```
 
-## Task 2: Extract JS/TS Signature Metadata
+## Task 2: Extract First-Provider Signature Metadata
 
 **Files:**
 
@@ -179,9 +346,9 @@ git commit -m "Add call compatibility report types"
 - Modify: `src/impact/index.ts`
 - Test: `tests/impact-signature.test.ts`
 
-- [ ] **Step 1: Add failing unit tests for signature parsing**
+- [ ] **Step 1: Add failing unit tests for first-provider signature parsing**
 
-Add tests for ordinary, optional, defaulted, and rest parameters.
+Add tests for ordinary, optional, defaulted, and rest parameters in the first JS/TS-family provider. These tests prove the provider contract, not the full merge bar.
 
 ```ts
 import { extractCallableSignature } from "../src/impact/callCompatibility.js";
@@ -247,7 +414,9 @@ Create `src/impact/callCompatibility.ts`.
 
 Implementation guidance:
 
-- Support `javascript`, `typescript`, `tsx`, and `jsx` language IDs.
+- Support `javascript`, `typescript`, `tsx`, and `jsx` language IDs in the first provider.
+- Keep the provider behind the registry when the provider architecture task is in place.
+- Do not document or ship this as a public language-complete feature until the cross-language matrix is complete.
 - Find the nearest parameter list after `symbolStartIndex`.
 - Count top-level comma-separated parameters.
 - Treat `?` and `=` at top level as optional/defaulted.
@@ -301,7 +470,7 @@ git commit -m "Extract conservative callable signatures"
 - Modify: `src/impact/callCompatibility.ts`
 - Test: `tests/impact-signature.test.ts`
 
-- [ ] **Step 1: Add failing callsite tests**
+- [ ] **Step 1: Add failing first-provider callsite tests**
 
 ```ts
 import { extractCallsiteArguments } from "../src/impact/callCompatibility.js";
@@ -371,7 +540,9 @@ export function extractCallsiteArguments(request: ExtractCallsiteArgumentsReques
 
 Implementation rules:
 
-- Support JS/TS-family language IDs only.
+- Support JS/TS-family language IDs in the first provider.
+- Return `null` for every language without a provider.
+- Do not ship public call compatibility output until the provider matrix is complete.
 - Find the first balanced `(` after the callee start.
 - Count top-level comma groups.
 - Return zero for an empty argument list.
@@ -543,7 +714,8 @@ git commit -m "Render call compatibility findings"
 Docs must state:
 
 - Compatibility hints are conservative review/impact hints, not type checking.
-- Initial likely-mismatch support is JS/TS-family only.
+- Public likely-mismatch support depends on the provider matrix in `docs/language-parity.md`.
+- Any language without high-confidence provider coverage is explicitly marked unsupported or not applicable.
 - Unsupported or ambiguous callsites are omitted from pretty output and represented as `unknown` only in structured data when useful.
 - Agents should treat hints as review leads and still inspect the code.
 
@@ -552,7 +724,7 @@ Docs must state:
 In `codegraph-skill/codegraph/SKILL.md`, add a short note under PR impact/review:
 
 ```md
-Impact and review JSON may include `callCompatibility` for high-confidence JS/TS callsite arity mismatches after signature changes. Treat it as a deterministic review lead, not compiler-grade type checking.
+Impact and review JSON may include `callCompatibility` for high-confidence provider-backed callsite arity mismatches after signature changes. Treat it as a deterministic review lead, not compiler-grade type checking, and check the language parity matrix before assuming coverage.
 ```
 
 - [ ] **Step 3: Run metadata and formatting checks**
@@ -573,6 +745,24 @@ git add README.md docs/cli.md docs/library-api.md docs/agent-workflows.md docs/l
 git commit -m "Document call compatibility boundaries"
 ```
 
+## Follow-On: Conservative Repair Hints
+
+Call compatibility is the first deterministic "this likely broke" signal. Future repair hints should follow the same rule: emit only when Codegraph has high-confidence structural evidence, and phrase every result as a review lead.
+
+Candidate hint families:
+
+- missing import, export, and declaration hints already produced by impact suggestions
+- JS/TS method call compatibility after receiver-aware method references are implemented
+- public API removal hints from architecture drift
+- duplicate-touched-code hints from duplicate groups in review or explain packets
+
+Rules:
+
+- Do not generate patches in this layer.
+- Do not claim type safety or semantic equivalence.
+- Keep pretty output limited to likely actionable findings.
+- Preserve complete structured evidence in JSON for agents.
+
 ## Final Verification
 
 - [ ] Run:
@@ -592,4 +782,5 @@ build passes
 test:ci passes
 git diff --check prints no errors
 ```
+
 - [ ] If focused Windows native artifact copying fails with `EPERM` during targeted tests, rerun the full suite after `npm run build` and document the focused failure separately.

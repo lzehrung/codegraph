@@ -582,6 +582,55 @@ git add README.md docs/cli.md docs/library-api.md docs/agent-workflows.md codegr
 git commit -m "Document agent packet mode"
 ```
 
+## Future Agentic Extensions
+
+These are intentionally follow-on features after the base `orient` and `packet get` surfaces are stable.
+
+### Edit packets
+
+Add an optional packet shape for agent implementation planning. Given a review handle, impact item, file handle, or symbol handle, Codegraph should return:
+
+- files to inspect first
+- symbols to update
+- direct references to verify
+- candidate tests and copyable test commands when available
+- risk reasons and omitted-count signals
+
+This should package existing review, impact, dependency, and candidate-test fields. Do not create a separate analysis engine.
+
+Implementation surface:
+
+- `src/agent/packet.ts`
+- `src/agent/explain.ts`
+- `src/impact/types.ts`
+- `src/review.ts`
+- `src/mcp/server.ts`
+
+### Stable-handle repo memory
+
+Make stable handles useful as durable agent memory across sessions and artifact bundles:
+
+- preserve file/symbol/chunk/SQL/graph/review handles in artifacts
+- expose handle refresh diagnostics when a target moved, disappeared, or became ambiguous
+- prefer handles over cursor positions in generated artifact questions
+- allow MCP callers to refresh a packet after edits without rebuilding unrelated context
+
+This extends the existing handle model; it should not require writable project state.
+
+### Artifact question expansion
+
+Expand `artifact build --questions` so generated questions cover:
+
+- hotspots
+- unresolved imports
+- cycles
+- duplicate groups
+- public API surface
+- SQL objects and SQL review context
+- review-range findings when base/head are provided
+
+Questions should include stable handles and copyable follow-up commands, not ambiguous bare names.
+
 ## Final Verification
 
 - [ ] Run:

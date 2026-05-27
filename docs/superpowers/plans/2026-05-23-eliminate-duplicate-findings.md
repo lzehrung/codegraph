@@ -175,6 +175,36 @@ Follow-up verification:
 - [x] Focused duplicate, inspect, C/C++, resolution, references, impact-suggestion, and agent-search tests pass.
 - [x] Full test suite passes.
 
+## Agentic Coding Follow-Ups
+
+This file is mostly a completed duplicate-cleanup ledger. Keep it useful by treating duplicate findings as one input to broader agentic review and repair workflows, not as a standalone roadmap.
+
+High-value follow-ups:
+
+- Add duplicate context to `explain` and `packet get`.
+  - When an agent inspects a file or symbol, include bounded duplicate groups that touch the target.
+  - Surface only high- and medium-confidence groups with ranges, scores, clone type, and raw evidence counts.
+  - Implementation surface: `src/agent/explain.ts`, `src/agent/packet.ts`, `src/duplicates.ts`.
+
+- Add PR-scoped duplicate warnings to `review`.
+  - If a changed symbol or changed file overlaps a duplicate group, add a review task to check the sibling implementation.
+  - Use the existing grouped duplicate output and keep low-level pair evidence behind `--raw-pairs`.
+  - Implementation surface: `src/review.ts`, `src/review/summaries.ts`, `src/cli/review.ts`.
+
+- Feed duplicate deltas into architecture drift.
+  - A future `codegraph drift` command should compare duplicate group counts and stable top group keys between base and head.
+  - Treat duplicate increases as review/CI findings, not automatic failures unless selected by policy.
+  - Implementation surface: planned `src/drift/*`, plus existing `src/duplicates.ts`.
+
+- Preserve stable handles in duplicate-driven packets.
+  - Duplicate findings should point to file/symbol/chunk handles so agents can refresh evidence after edits.
+  - This keeps duplicate cleanup compatible with artifact bundles, MCP packets, and long-running agent sessions.
+  - Implementation surface: `src/agent/handles.ts`, `src/agent/artifact.ts`, `src/mcp/server.ts`.
+
+- Keep repair hints conservative.
+  - Duplicate findings should say "check related implementation" or "possible extraction candidate", not claim semantic equivalence.
+  - This matches the existing design in `2026-05-19-duplicate-detection.md`: deterministic structural signals in core, embeddings and Type-4 semantic equivalence outside core.
+
 ## Verification Plan
 
 - [x] Run `npm run build`.
