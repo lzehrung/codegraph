@@ -303,6 +303,8 @@ const SIGNATURE_DECL_TYPES = new Set([
   "variable_declarator",
 ]);
 
+const CALLABLE_VARIABLE_VALUE_TYPES = new Set(["arrow_function", "function_expression"]);
+
 type ByteRange = { start: number; end: number };
 
 /**
@@ -432,7 +434,10 @@ function computeSignatureChanged(
   let params = declNode.childForFieldName("parameters") || declNode.childForFieldName("params");
   if (!params && declNode.type === "variable_declarator") {
     const valueNode = declNode.childForFieldName("value");
-    params = valueNode?.childForFieldName("parameters") || valueNode?.childForFieldName("params") || null;
+    if (!valueNode || !CALLABLE_VARIABLE_VALUE_TYPES.has(valueNode.type)) {
+      return false;
+    }
+    params = valueNode.childForFieldName("parameters") || valueNode.childForFieldName("params") || null;
   }
   if (!params) return false;
   // Note: namedChildCount === 0 is intentionally NOT checked here.

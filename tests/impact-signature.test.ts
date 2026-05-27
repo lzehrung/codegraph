@@ -56,6 +56,28 @@ describe("impact signature hint", () => {
     expect(signature).toEqual({ minArgs: 2, maxArgs: 2, confidence: "high" });
   });
 
+  it("does not split function type commas or arrows inside TypeScript parameter type arguments", () => {
+    const source = "export function helper(a: Transform<(x: Array<string>) => U, V>, b: string) { return b; }";
+    const signature = extractCallableSignature({
+      languageId: "typescript",
+      source,
+      symbolStartIndex: source.indexOf("helper"),
+    });
+
+    expect(signature).toEqual({ minArgs: 2, maxArgs: 2, confidence: "high" });
+  });
+
+  it("does not treat destructuring defaults as optional object parameters", () => {
+    const source = "export function helper({ a = 1 }: Options, b: string) { return b; }";
+    const signature = extractCallableSignature({
+      languageId: "typescript",
+      source,
+      symbolStartIndex: source.indexOf("helper"),
+    });
+
+    expect(signature).toEqual({ minArgs: 2, maxArgs: 2, confidence: "high" });
+  });
+
   it("ignores TypeScript this parameters in callable signatures", () => {
     const source = "export function helper(this: Console, a: string) { return a; }";
     const signature = extractCallableSignature({
@@ -144,12 +166,73 @@ describe("impact signature hint", () => {
     expect(call).toEqual({ argCount: 2, confidence: "high" });
   });
 
+  it("counts comparison expression callsite arguments separately", () => {
+    const source = "helper(a < b, c > d);";
+    const call = extractCallsiteArguments({
+      languageId: "typescript",
+      source,
+      calleeStartIndex: source.indexOf("helper"),
+    });
+
+    expect(call).toEqual({ argCount: 2, confidence: "high" });
+  });
+
+  it("counts callsite arguments with apostrophes in comments", () => {
+    const source = "helper(a /* user's value */, b);";
+    const call = extractCallsiteArguments({
+      languageId: "typescript",
+      source,
+      calleeStartIndex: source.indexOf("helper"),
+    });
+
+    expect(call).toEqual({ argCount: 2, confidence: "high" });
+  });
+
   it("does not count trailing argument commas as arguments", () => {
     const source = 'helper("x",);';
     const call = extractCallsiteArguments({
       languageId: "typescript",
       source,
       calleeStartIndex: source.indexOf("helper"),
+    });
+
+    expect(call).toEqual({ argCount: 1, confidence: "high" });
+  });
+
+  it("counts nested generic TypeScript calls with resolved callee ranges", () => {
+    const source = "helper<Map<string, Array<number>>>(value);";
+    const calleeStartIndex = source.indexOf("helper");
+    const call = extractCallsiteArguments({
+      languageId: "typescript",
+      source,
+      calleeStartIndex,
+      calleeEndIndex: calleeStartIndex + "helper".length,
+    });
+
+    expect(call).toEqual({ argCount: 1, confidence: "high" });
+  });
+
+  it("does not treat spaced comparison syntax as a generic call", () => {
+    const source = "helper < value > (arg);";
+    const calleeStartIndex = source.indexOf("helper");
+    const call = extractCallsiteArguments({
+      languageId: "typescript",
+      source,
+      calleeStartIndex,
+      calleeEndIndex: calleeStartIndex + "helper".length,
+    });
+
+    expect(call).toBeNull();
+  });
+
+  it("counts generic calls with function type constraints", () => {
+    const source = "helper<T extends (x: Array<string>) => number>(value);";
+    const calleeStartIndex = source.indexOf("helper");
+    const call = extractCallsiteArguments({
+      languageId: "typescript",
+      source,
+      calleeStartIndex,
+      calleeEndIndex: calleeStartIndex + "helper".length,
     });
 
     expect(call).toEqual({ argCount: 1, confidence: "high" });

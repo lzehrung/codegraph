@@ -800,6 +800,54 @@ describe("Impact Analyzer Edge Cases", () => {
       }
     });
 
+    it("accounts for the definition entry when maxRefs is one", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-compat-maxrefs-one-"));
+      try {
+        await fsp.mkdir(path.join(root, "src"), { recursive: true });
+        await fsp.writeFile(
+          path.join(root, "src/api.ts"),
+          'export function helper(a: string, b: number) { return a + b; }\n',
+          "utf8",
+        );
+        await fsp.writeFile(
+          path.join(root, "src/main.ts"),
+          'import { helper } from "./api";\nexport const value = helper("x");\n',
+          "utf8",
+        );
+        const index = await buildProjectIndex(root);
+        const diffText = [
+          "diff --git a/src/api.ts b/src/api.ts",
+          "index 1234567..abcdef0 100644",
+          "--- a/src/api.ts",
+          "+++ b/src/api.ts",
+          "@@ -1,1 +1,1 @@",
+          "-export function helper(a: string) { return a; }",
+          "+export function helper(a: string, b: number) { return a + b; }",
+          "",
+        ].join("\n");
+
+        const result = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+          maxRefs: 1,
+        });
+        if ("files" in result) {
+          throw new Error("Expected full impact report");
+        }
+        const helper = result.changedSymbols.find((symbol) => symbol.name === "helper");
+
+        expect(helper?.callCompatibility).toContainEqual(
+          expect.objectContaining({
+            status: "likely_mismatch",
+            reason: "argument_count_below_minimum",
+            callsiteFile: "src/main.ts",
+          }),
+        );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
     it("attaches hints for changed arrow function variables when signature parsing is high confidence", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-compat-arrow-"));
       try {
@@ -844,6 +892,48 @@ describe("Impact Analyzer Edge Cases", () => {
             actual: { argCount: 1, confidence: "high" },
           }),
         );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
+    it("does not mark object variables as signature changed for nested callback parameter edits", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-compat-nested-callback-"));
+      try {
+        await fsp.mkdir(path.join(root, "src"), { recursive: true });
+        await fsp.writeFile(
+          path.join(root, "src/api.ts"),
+          "export const config = { callback: (a: string, b: number) => a + b };\n",
+          "utf8",
+        );
+        await fsp.writeFile(
+          path.join(root, "src/main.ts"),
+          'import { config } from "./api";\nexport const value = config.callback("x", 1);\n',
+          "utf8",
+        );
+        const index = await buildProjectIndex(root);
+        const diffText = [
+          "diff --git a/src/api.ts b/src/api.ts",
+          "index 1234567..abcdef0 100644",
+          "--- a/src/api.ts",
+          "+++ b/src/api.ts",
+          "@@ -1,1 +1,1 @@",
+          "-export const config = { callback: (a: string) => a };",
+          "+export const config = { callback: (a: string, b: number) => a + b };",
+          "",
+        ].join("\n");
+
+        const result = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+        });
+        if ("files" in result) {
+          throw new Error("Expected full impact report");
+        }
+        const config = result.changedSymbols.find((symbol) => symbol.name === "config");
+
+        expect(config?.signatureChanged).not.toBe(true);
+        expect(config?.callCompatibility).toBeUndefined();
       } finally {
         await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }

@@ -35,6 +35,8 @@ type BalancedRange = {
   inner: string;
 };
 
+type AngleMode = "always" | "type-context";
+
 function isJsTsLanguage(languageId: string): boolean {
   return (
     languageId === "javascript" ||
@@ -53,6 +55,31 @@ function findOpeningParen(source: string, startIndex: number): number {
   return source.indexOf("(", startIndex);
 }
 
+function findCommentEnd(source: string, index: number): number | null {
+  if (source[index] !== "/") {
+    return null;
+  }
+
+  const nextChar = source[index + 1];
+  if (nextChar === "/") {
+    const newlineIndex = source.indexOf("\n", index + 2);
+    if (newlineIndex < 0) {
+      return source.length;
+    }
+    return newlineIndex;
+  }
+
+  if (nextChar === "*") {
+    const closeIndex = source.indexOf("*/", index + 2);
+    if (closeIndex < 0) {
+      return -1;
+    }
+    return closeIndex + 2;
+  }
+
+  return null;
+}
+
 function findCallOpeningParen(source: string, startIndex: number, endIndex?: number): number {
   if (endIndex === undefined) {
     return findOpeningParen(source, startIndex);
@@ -61,18 +88,23 @@ function findCallOpeningParen(source: string, startIndex: number, endIndex?: num
     return -1;
   }
 
+  let skippedWhitespace = false;
   for (let index = endIndex; index < source.length; index += 1) {
     const char = source[index];
     if (char === undefined) {
       return -1;
     }
     if (/\s/.test(char)) {
+      skippedWhitespace = true;
       continue;
     }
     if (char === "(") {
       return index;
     }
     if (char === "<") {
+      if (skippedWhitespace) {
+        return -1;
+      }
       const closeIndex = findBalancedAngleBrackets(source, index);
       if (closeIndex < 0) {
         return -1;
@@ -103,6 +135,9 @@ function findBalancedAngleBrackets(source: string, openIndex: number): number {
   }
 
   let depth = 0;
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  let braceDepth = 0;
   let quote: string | null = null;
   let escaped = false;
 
@@ -124,15 +159,58 @@ function findBalancedAngleBrackets(source: string, openIndex: number): number {
       continue;
     }
 
+    const commentEnd = findCommentEnd(source, index);
+    if (commentEnd !== null) {
+      if (commentEnd < 0) {
+        return -1;
+      }
+      index = commentEnd - 1;
+      continue;
+    }
+
     if (char === '"' || char === "'" || char === "`") {
       quote = char;
       continue;
     }
-    if (char === "<") {
+    if (char === "(") {
+      parenDepth += 1;
+      continue;
+    }
+    if (char === ")") {
+      parenDepth -= 1;
+      if (parenDepth < 0) {
+        return -1;
+      }
+      continue;
+    }
+    if (char === "[") {
+      bracketDepth += 1;
+      continue;
+    }
+    if (char === "]") {
+      bracketDepth -= 1;
+      if (bracketDepth < 0) {
+        return -1;
+      }
+      continue;
+    }
+    if (char === "{") {
+      braceDepth += 1;
+      continue;
+    }
+    if (char === "}") {
+      braceDepth -= 1;
+      if (braceDepth < 0) {
+        return -1;
+      }
+      continue;
+    }
+    const atTopLevel = !parenDepth && !bracketDepth && !braceDepth;
+    if (char === "<" && atTopLevel) {
       depth += 1;
       continue;
     }
-    if (char === ">") {
+    if (char === ">" && source[index - 1] !== "=" && atTopLevel) {
       depth -= 1;
       if (!depth) {
         return index;
@@ -173,6 +251,15 @@ function findBalancedParentheses(source: string, openIndex: number): BalancedRan
       continue;
     }
 
+    const commentEnd = findCommentEnd(source, index);
+    if (commentEnd !== null) {
+      if (commentEnd < 0) {
+        return null;
+      }
+      index = commentEnd - 1;
+      continue;
+    }
+
     if (char === '"' || char === "'" || char === "`") {
       quote = char;
       continue;
@@ -199,7 +286,17 @@ function findBalancedParentheses(source: string, openIndex: number): BalancedRan
   return null;
 }
 
-function splitTopLevelCommaGroups(text: string): string[] | null {
+function hasTypeContextBeforeLessThan(text: string, index: number, groupStart: number): boolean {
+  const left = text.slice(groupStart, index).trimEnd();
+  if (!left) {
+    return false;
+  }
+
+  const typeKeywordPattern = /(^|[\s([{,:?=<>|&])(?:as|satisfies|new)\s+[A-Za-z_$][\w$.[\]\s]*$/;
+  return typeKeywordPattern.test(left);
+}
+
+function splitTopLevelCommaGroups(text: string, angleMode: AngleMode): string[] | null {
   const trimmed = text.trim();
   if (!trimmed) {
     return [];
@@ -229,6 +326,15 @@ function splitTopLevelCommaGroups(text: string): string[] | null {
       if (char === quote) {
         quote = null;
       }
+      continue;
+    }
+
+    const commentEnd = findCommentEnd(text, index);
+    if (commentEnd !== null) {
+      if (commentEnd < 0) {
+        return null;
+      }
+      index = commentEnd - 1;
       continue;
     }
 
@@ -269,16 +375,21 @@ function splitTopLevelCommaGroups(text: string): string[] | null {
       }
       continue;
     }
-    if (char === "<") {
+    const atDelimiterTopLevel = !parenDepth && !bracketDepth && !braceDepth;
+    if (
+      char === "<" &&
+      atDelimiterTopLevel &&
+      (angleMode === "always" || hasTypeContextBeforeLessThan(text, index, groupStart))
+    ) {
       angleDepth += 1;
       continue;
     }
-    if (char === ">" && angleDepth) {
+    if (char === ">" && angleDepth && text[index - 1] !== "=" && atDelimiterTopLevel) {
       angleDepth -= 1;
       continue;
     }
 
-    const atTopLevel = !parenDepth && !bracketDepth && !braceDepth && !angleDepth;
+    const atTopLevel = atDelimiterTopLevel && !angleDepth;
     if (char === "," && atTopLevel) {
       groups.push(text.slice(groupStart, index).trim());
       groupStart = index + 1;
@@ -296,13 +407,93 @@ function splitTopLevelCommaGroups(text: string): string[] | null {
   return groups;
 }
 
-function hasTopLevelChar(text: string, needle: string): boolean {
-  const groups = splitTopLevelCommaGroups(text);
-  if (!groups) {
-    return false;
+function hasTopLevelEquals(text: string): boolean {
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  let braceDepth = 0;
+  let angleDepth = 0;
+  let quote: string | null = null;
+  let escaped = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+
+    const commentEnd = findCommentEnd(text, index);
+    if (commentEnd !== null) {
+      if (commentEnd < 0) {
+        return false;
+      }
+      index = commentEnd - 1;
+      continue;
+    }
+
+    if (char === '"' || char === "'" || char === "`") {
+      quote = char;
+      continue;
+    }
+    if (char === "(") {
+      parenDepth += 1;
+      continue;
+    }
+    if (char === ")") {
+      parenDepth -= 1;
+      if (parenDepth < 0) {
+        return false;
+      }
+      continue;
+    }
+    if (char === "[") {
+      bracketDepth += 1;
+      continue;
+    }
+    if (char === "]") {
+      bracketDepth -= 1;
+      if (bracketDepth < 0) {
+        return false;
+      }
+      continue;
+    }
+    if (char === "{") {
+      braceDepth += 1;
+      continue;
+    }
+    if (char === "}") {
+      braceDepth -= 1;
+      if (braceDepth < 0) {
+        return false;
+      }
+      continue;
+    }
+    const atTopLevel = !parenDepth && !bracketDepth && !braceDepth;
+    if (char === "<" && atTopLevel) {
+      angleDepth += 1;
+      continue;
+    }
+    if (char === ">" && text[index - 1] !== "=" && atTopLevel && angleDepth) {
+      angleDepth -= 1;
+      continue;
+    }
+    if (char === "=" && text[index + 1] !== ">" && atTopLevel && !angleDepth) {
+      return true;
+    }
   }
-  const onlyGroup = groups[0];
-  return groups.length === 1 && Boolean(onlyGroup?.includes(needle));
+
+  return false;
 }
 
 function isOptionalParameter(parameter: string): boolean {
@@ -311,7 +502,7 @@ function isOptionalParameter(parameter: string): boolean {
   if (colonIndex >= 0) {
     searchText = parameter.slice(0, colonIndex);
   }
-  return searchText.includes("?") || hasTopLevelChar(parameter, "=");
+  return searchText.includes("?") || hasTopLevelEquals(parameter);
 }
 
 function isThisParameter(parameter: string): boolean {
@@ -333,7 +524,7 @@ export function extractCallableSignature(request: ExtractCallableSignatureReques
     return null;
   }
 
-  const parameters = splitTopLevelCommaGroups(balanced.inner);
+  const parameters = splitTopLevelCommaGroups(balanced.inner, "always");
   if (!parameters) {
     return null;
   }
@@ -373,7 +564,7 @@ export function extractCallsiteArguments(request: ExtractCallsiteArgumentsReques
     return null;
   }
 
-  const args = splitTopLevelCommaGroups(balanced.inner);
+  const args = splitTopLevelCommaGroups(balanced.inner, "type-context");
   if (!args) {
     return null;
   }
@@ -490,17 +681,22 @@ export async function attachCallCompatibilityHints(
           range: changedSymbol.range,
         },
       },
-      { maxReferences: options.maxRefs },
+      { maxReferences: options.maxRefs + 1 },
     );
     if (refs.status !== "ok") {
       continue;
     }
 
     const hints: CallCompatibilityHint[] = [];
+    let consideredCallsites = 0;
     for (const ref of refs.references) {
       if (ref.file === changedSymbol.file && sameRangeStart(ref.range, changedSymbol.range)) {
         continue;
       }
+      if (consideredCallsites >= options.maxRefs) {
+        break;
+      }
+      consideredCallsites += 1;
 
       const calleeStartIndex = ref.range.start.index;
       if (calleeStartIndex === undefined) {
