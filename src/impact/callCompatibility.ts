@@ -7,8 +7,9 @@ import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import { sliceText, toRange } from "../util/ast.js";
 import {
+  getCallCompatibilityProvider,
   getCallCompatibilitySupportedLanguages,
-  isCallCompatibilityLanguageSupported,
+  registerCallCompatibilityExtractors,
 } from "./call-compatibility/providers/index.js";
 import type { CallCompatibilityHint, ChangedSymbol, ImpactDiagnostics } from "./types.js";
 
@@ -58,7 +59,7 @@ function isJsTsLanguage(languageId: string): boolean {
 }
 
 function supportsCallCompatibilityLanguage(languageId: string): boolean {
-  return isCallCompatibilityLanguageSupported(languageId);
+  return getCallCompatibilityProvider(languageId) !== null;
 }
 
 function findOpeningParen(source: string, startIndex: number): number {
@@ -986,7 +987,7 @@ function signatureFromParameterText(
   return { minArgs, maxArgs: hasRest ? null : maxArgs, confidence: "high" };
 }
 
-export function extractCallableSignature(request: ExtractCallableSignatureRequest): CallableSignature | null {
+function extractCallableSignatureFromProvider(request: ExtractCallableSignatureRequest): CallableSignature | null {
   if (!supportsCallCompatibilityLanguage(request.languageId)) {
     return null;
   }
@@ -1009,7 +1010,7 @@ export function extractCallableSignature(request: ExtractCallableSignatureReques
   return signatureFromParameterText(request.languageId, balanced.inner, "type-context");
 }
 
-export function extractCallsiteArguments(request: ExtractCallsiteArgumentsRequest): CallsiteArguments | null {
+function extractCallsiteArgumentsFromProvider(request: ExtractCallsiteArgumentsRequest): CallsiteArguments | null {
   if (!supportsCallCompatibilityLanguage(request.languageId)) {
     return null;
   }
@@ -1030,6 +1031,27 @@ export function extractCallsiteArguments(request: ExtractCallsiteArgumentsReques
   }
 
   return callsiteFromArgumentText(request.languageId, balanced.inner);
+}
+
+registerCallCompatibilityExtractors({
+  extractSignature: extractCallableSignatureFromProvider,
+  extractCallsite: extractCallsiteArgumentsFromProvider,
+});
+
+export function extractCallableSignature(request: ExtractCallableSignatureRequest): CallableSignature | null {
+  const provider = getCallCompatibilityProvider(request.languageId);
+  if (!provider) {
+    return null;
+  }
+  return provider.extractSignature(request);
+}
+
+export function extractCallsiteArguments(request: ExtractCallsiteArgumentsRequest): CallsiteArguments | null {
+  const provider = getCallCompatibilityProvider(request.languageId);
+  if (!provider) {
+    return null;
+  }
+  return provider.extractCallsite(request);
 }
 
 const callExpressionTypes = new Set([

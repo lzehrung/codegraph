@@ -142,101 +142,101 @@ Diagnostics to add:
 
 Use this matrix as the implementation checklist. Each row needs parser-level tests, at least one impact/review integration test, docs parity coverage, and explicit unsupported cases.
 
-- [ ] **JS/TS/JSX/TSX**
-  - [ ] Support functions, arrows, callable variables, defaults, optionals, rest args, generic type syntax, and regex literal call args.
-  - [ ] Return `null` for overload-only/type-only declarations unless a runtime implementation target is clear.
-  - [ ] Add method support only when method changed symbols and receiver/callsite resolution are reliable.
+- [x] **JS/TS/JSX/TSX**
+  - [x] Support functions, arrows, callable variables, defaults, optionals, rest args, generic type syntax, and regex literal call args.
+  - [x] Return `null` for overload-only/type-only declarations unless a runtime implementation target is clear.
+  - [x] Add method support only when method changed symbols and receiver/callsite resolution are reliable.
 
-- [ ] **Python**
-  - [ ] Support functions and methods.
-  - [ ] Handle `self`/`cls` receiver parameters.
-  - [ ] Handle defaults, keyword calls, `*args`, and `**kwargs`.
-  - [ ] Return `null` for dynamic splat/kwargs callsites that cannot be counted safely.
+- [x] **Python**
+  - [x] Support functions and methods.
+  - [x] Handle `self`/`cls` receiver parameters.
+  - [x] Handle defaults, keyword calls, `*args`, and `**kwargs`.
+  - [x] Return `null` for dynamic splat/kwargs callsites that cannot be counted safely.
 
-- [ ] **Go**
-  - [ ] Support free functions and methods.
-  - [ ] Account for receiver parameters as non-callsite arguments.
-  - [ ] Handle variadic parameters.
-  - [ ] Return `null` for unresolved selector calls.
+- [x] **Go**
+  - [x] Support free functions and methods.
+  - [x] Account for receiver parameters as non-callsite arguments.
+  - [x] Handle variadic parameters.
+  - [x] Return `null` for unresolved selector calls.
 
-- [ ] **Rust**
-  - [ ] Support free functions, associated functions, and impl methods when references resolve.
-  - [ ] Account for `self` receivers.
-  - [ ] Handle turbofish syntax at callsites.
-  - [ ] Return `null` for macros and unresolved trait-dispatch callsites.
+- [x] **Rust**
+  - [x] Support free functions, associated functions, and impl methods when references resolve.
+  - [x] Account for `self` receivers.
+  - [x] Handle turbofish syntax at callsites.
+  - [x] Return `null` for macros and unresolved trait-dispatch callsites.
 
-- [ ] **Java**
-  - [ ] Support methods and constructors.
-  - [ ] Handle overloads conservatively.
-  - [ ] Emit only when the changed symbol maps to an unambiguous callable target.
+- [x] **Java**
+  - [x] Support methods and constructors.
+  - [x] Handle overloads conservatively.
+  - [x] Emit only when the changed symbol maps to an unambiguous callable target.
 
-- [ ] **C#**
-  - [ ] Support methods and constructors.
-  - [ ] Handle optional parameters, named arguments, and `params`.
-  - [ ] Handle overloads conservatively.
+- [x] **C#**
+  - [x] Support methods and constructors.
+  - [x] Handle optional parameters, named arguments, and `params`.
+  - [x] Handle overloads conservatively.
 
-- [ ] **Kotlin**
-  - [ ] Support functions, methods, constructors, default args, named args, and varargs.
-  - [ ] Return `null` when default/named argument semantics make arity insufficient to judge.
+- [x] **Kotlin**
+  - [x] Support functions, methods, constructors, default args, named args, and varargs.
+  - [x] Return `null` when default/named argument semantics make arity insufficient to judge.
 
-- [ ] **Swift**
-  - [ ] Support functions, methods, initializers, default args, argument labels, and variadics.
-  - [ ] Treat labels as part of compatibility when confidence is high.
+- [x] **Swift**
+  - [x] Support functions, methods, initializers, default args, argument labels, and variadics.
+  - [x] Treat labels as part of compatibility when confidence is high.
 
-- [ ] **PHP**
-  - [ ] Support functions and methods.
-  - [ ] Handle defaults, named args, and variadics.
-  - [ ] Return `null` for dynamic function/method calls.
+- [x] **PHP**
+  - [x] Support functions and methods.
+  - [x] Handle defaults, named args, and variadics.
+  - [x] Return `null` for dynamic function/method calls.
 
-- [ ] **Ruby**
-  - [ ] Support methods where references resolve.
-  - [ ] Handle optional args, keyword args, splats, double splats, and block args.
-  - [ ] Return `null` for dynamic dispatch.
+- [x] **Ruby**
+  - [x] Support methods where references resolve.
+  - [x] Handle optional args, keyword args, splats, double splats, and block args.
+  - [x] Return `null` for dynamic dispatch.
 
-- [ ] **C**
-  - [ ] Support unambiguous free functions and direct calls.
-  - [ ] Handle prototypes vs definitions conservatively.
-  - [ ] Return `null` for function pointers and macro calls.
+- [x] **C**
+  - [x] Support unambiguous free functions and direct calls.
+  - [x] Handle prototypes vs definitions conservatively.
+  - [x] Return `null` for function pointers and macro calls.
 
-- [ ] **C++**
-  - [ ] Support unambiguous free functions first.
-  - [ ] Add methods, constructors, templates, default args, and overloads only when resolution is reliable.
-  - [ ] Return `null` for unresolved overload/template cases.
+- [x] **C++**
+  - [x] Support unambiguous free functions first.
+  - [x] Add methods, constructors, templates, default args, and overloads only when resolution is reliable.
+  - [x] Return `null` for unresolved overload/template cases.
 
 ## Cross-Language Rollout Phases
 
-- [ ] **Phase 1: Provider registry**
-  - [ ] Introduce the provider contract and registry.
-  - [ ] Move JS/TS logic behind the first provider.
-  - [ ] Keep public docs conservative until the full matrix is ready.
-  - [ ] Add diagnostics without changing human output claims.
+- [x] **Phase 1: Provider registry**
+  - [x] Introduce the provider contract and registry.
+  - [x] Move JS/TS logic behind the first provider.
+  - [x] Keep public docs conservative until the full matrix is ready.
+  - [x] Add diagnostics without changing human output claims.
 
-- [ ] **Phase 2: Parity matrix**
-  - [ ] Inventory all languages with callable symbols and resolved calls.
-  - [ ] Update `docs/language-parity.md`.
-  - [ ] Update `docs/scenario-catalog.md`.
-  - [ ] Add a regression test that the docs matrix matches registered providers or explicit unsupported entries.
+- [x] **Phase 2: Parity matrix**
+  - [x] Inventory all languages with callable symbols and resolved calls.
+  - [x] Update `docs/language-parity.md`.
+  - [x] Update `docs/scenario-catalog.md`.
+  - [x] Add a regression test that the docs matrix matches registered providers or explicit unsupported entries.
 
-- [ ] **Phase 3: Provider implementation**
-  - [ ] Implement lower-overload languages first: Python, Go, PHP, Ruby.
-  - [ ] Implement method/overload-heavy languages next: Java, C#, Kotlin, Swift, Rust.
-  - [ ] Implement C and C++ conservatively.
-  - [ ] Add parser-level and integration tests with each provider.
+- [x] **Phase 3: Provider implementation**
+  - [x] Implement lower-overload languages first: Python, Go, PHP, Ruby.
+  - [x] Implement method/overload-heavy languages next: Java, C#, Kotlin, Swift, Rust.
+  - [x] Implement C and C++ conservatively.
+  - [x] Add parser-level and integration tests with each provider.
 
-- [ ] **Phase 4: Public feature gate**
-  - [ ] Enable default `callCompatibility` output only after the matrix meets the merge bar.
-  - [ ] Keep partial provider work internal or branch-only until then.
-  - [ ] Run final review for parity drift and overclaiming.
+- [x] **Phase 4: Public feature gate**
+  - [x] Enable default `callCompatibility` output only after the matrix meets the merge bar.
+  - [x] Keep partial provider work internal or branch-only until then.
+  - [x] Run final review for parity drift and overclaiming.
 
 ## Merge Bar
 
-- [ ] Every supported source language has a provider or a documented/tested unsupported entry.
-- [ ] Public docs avoid language-subset claims unless the matrix explicitly says so.
-- [ ] Pretty output emits only high-confidence likely mismatches.
-- [ ] Structured output preserves diagnostics for unsupported and unknown cases.
-- [ ] `docs/language-parity.md` and `docs/scenario-catalog.md` are updated.
-- [ ] `npm run lint`, `npm run build`, `npm run test:ci`, and `git diff --check` pass.
-- [ ] A final review pass finds no parity drift, no unsafe name-only matching, and no overclaiming.
+- [x] Every supported source language has a provider or a documented/tested unsupported entry.
+- [x] Public docs avoid language-subset claims unless the matrix explicitly says so.
+- [x] Pretty output emits only high-confidence likely mismatches.
+- [x] Structured output preserves diagnostics for unsupported and unknown cases.
+- [x] `docs/language-parity.md` and `docs/scenario-catalog.md` are updated.
+- [x] `npm run lint`, `npm run build`, `npm run test:ci`, and `git diff --check` pass.
+- [x] A final review pass finds no parity drift, no unsafe name-only matching, and no overclaiming.
 
 ## Task 1: Add Signature and Callsite Types
 
@@ -246,7 +246,7 @@ Use this matrix as the implementation checklist. Each row needs parser-level tes
 - Modify: `src/impact/types.ts`
 - Test: `tests/impact-signature.test.ts`
 
-- [ ] **Step 1: Add failing type-level fixture expectations**
+- [x] **Step 1: Add failing type-level fixture expectations**
 
 Add a runtime test that imports the new public types and constructs representative objects. This catches export/type drift without relying on TypeScript-only assertions.
 
@@ -273,7 +273,7 @@ it("models conservative call compatibility hints", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run:
 
@@ -283,7 +283,7 @@ npx vitest run tests/impact-signature.test.ts
 
 Expected: TypeScript/Vitest fails because `CallCompatibilityHint` is not exported.
 
-- [ ] **Step 3: Add shared types**
+- [x] **Step 3: Add shared types**
 
 In `src/impact/types.ts`, add `CallCompatibilityHint` near the changed-symbol report types. Reuse existing `SourceRange` instead of creating a duplicate range shape.
 
@@ -321,7 +321,7 @@ Extend the changed-symbol report interface with:
 callCompatibility?: CallCompatibilityHint[];
 ```
 
-- [ ] **Step 4: Run the focused test**
+- [x] **Step 4: Run the focused test**
 
 Run:
 
@@ -331,7 +331,7 @@ npx vitest run tests/impact-signature.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/impact/types.ts tests/impact-signature.test.ts
@@ -346,7 +346,7 @@ git commit -m "Add call compatibility report types"
 - Modify: `src/impact/index.ts`
 - Test: `tests/impact-signature.test.ts`
 
-- [ ] **Step 1: Add failing unit tests for first-provider signature parsing**
+- [x] **Step 1: Add failing unit tests for first-provider signature parsing**
 
 Add tests for ordinary, optional, defaulted, and rest parameters in the first JS/TS-family provider. These tests prove the provider contract, not the full merge bar.
 
@@ -398,7 +398,7 @@ it("returns null for unsupported languages", () => {
 });
 ```
 
-- [ ] **Step 2: Run tests to verify failure**
+- [x] **Step 2: Run tests to verify failure**
 
 Run:
 
@@ -408,7 +408,7 @@ npx vitest run tests/impact-signature.test.ts
 
 Expected: FAIL because `src/impact/callCompatibility.ts` does not exist.
 
-- [ ] **Step 3: Implement the minimal extractor**
+- [x] **Step 3: Implement the minimal extractor**
 
 Create `src/impact/callCompatibility.ts`.
 
@@ -442,11 +442,11 @@ export interface ExtractCallableSignatureRequest {
 export function extractCallableSignature(request: ExtractCallableSignatureRequest): CallableSignature | null;
 ```
 
-- [ ] **Step 4: Re-export from impact index**
+- [x] **Step 4: Re-export from impact index**
 
 In `src/impact/index.ts`, export the new helper only if this file already exports public impact helpers. If it is internal-only today, skip the export and import it directly in tests from the file.
 
-- [ ] **Step 5: Run focused tests**
+- [x] **Step 5: Run focused tests**
 
 Run:
 
@@ -456,7 +456,7 @@ npx vitest run tests/impact-signature.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/impact/callCompatibility.ts src/impact/index.ts tests/impact-signature.test.ts
@@ -470,7 +470,7 @@ git commit -m "Extract conservative callable signatures"
 - Modify: `src/impact/callCompatibility.ts`
 - Test: `tests/impact-signature.test.ts`
 
-- [ ] **Step 1: Add failing first-provider callsite tests**
+- [x] **Step 1: Add failing first-provider callsite tests**
 
 ```ts
 import { extractCallsiteArguments } from "../src/impact/callCompatibility.js";
@@ -509,7 +509,7 @@ it("returns null for spread arguments", () => {
 });
 ```
 
-- [ ] **Step 2: Run tests to verify failure**
+- [x] **Step 2: Run tests to verify failure**
 
 Run:
 
@@ -519,7 +519,7 @@ npx vitest run tests/impact-signature.test.ts
 
 Expected: FAIL because `extractCallsiteArguments` is missing.
 
-- [ ] **Step 3: Implement callsite counting**
+- [x] **Step 3: Implement callsite counting**
 
 Add:
 
@@ -549,7 +549,7 @@ Implementation rules:
 - Return `null` if any top-level argument starts with `...`.
 - Return `null` for unbalanced calls.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Run:
 
@@ -559,7 +559,7 @@ npx vitest run tests/impact-signature.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/impact/callCompatibility.ts tests/impact-signature.test.ts
@@ -575,7 +575,7 @@ git commit -m "Extract conservative callsite arity"
 - Modify: `src/impact/map.ts` if changed-symbol mapping needs source text or symbol range access.
 - Test: `tests/impact-analyzer.test.ts`
 
-- [ ] **Step 1: Add failing impact integration test**
+- [x] **Step 1: Add failing impact integration test**
 
 Create a temp repo fixture where `helper(a)` becomes `helper(a, b)` and `main.ts` still calls `helper("x")`.
 
@@ -596,7 +596,7 @@ expect(helper?.callCompatibility).toContainEqual(
 
 Also add a rest-argument case where `helper(a, ...rest)` does not emit a mismatch for extra arguments.
 
-- [ ] **Step 2: Run tests to verify failure**
+- [x] **Step 2: Run tests to verify failure**
 
 Run:
 
@@ -606,7 +606,7 @@ npx vitest run tests/impact-analyzer.test.ts
 
 Expected: FAIL because compatibility hints are not attached.
 
-- [ ] **Step 3: Implement compatibility collection**
+- [x] **Step 3: Implement compatibility collection**
 
 In `src/impact/analyzer.ts`, after changed symbols are known and before final sorting:
 
@@ -618,7 +618,7 @@ In `src/impact/analyzer.ts`, after changed symbols are known and before final so
 
 Do not scan every matching text occurrence. The feature must be resolution-backed.
 
-- [ ] **Step 4: Run focused impact tests**
+- [x] **Step 4: Run focused impact tests**
 
 Run:
 
@@ -628,7 +628,7 @@ npx vitest run tests/impact-analyzer.test.ts tests/impact-signature.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/impact/analyzer.ts src/impact/map.ts src/impact/types.ts src/impact/callCompatibility.ts tests/impact-analyzer.test.ts tests/impact-signature.test.ts
@@ -648,7 +648,7 @@ git commit -m "Attach call compatibility hints to impact"
 - Test: `tests/review.test.ts`
 - Test: `tests/impact-cli.test.ts`
 
-- [ ] **Step 1: Add failing review and CLI assertions**
+- [x] **Step 1: Add failing review and CLI assertions**
 
 In `tests/review.test.ts`, assert that `buildReviewReport()` carries compatibility hints for the same fixture as Task 4.
 
@@ -658,7 +658,7 @@ In `tests/impact-cli.test.ts`, assert:
 - Pretty output includes `Call compatibility` only when there is a likely mismatch.
 - Pretty output does not print `unknown` hints as findings.
 
-- [ ] **Step 2: Run tests to verify failure**
+- [x] **Step 2: Run tests to verify failure**
 
 Run:
 
@@ -668,7 +668,7 @@ npx vitest run tests/review.test.ts tests/impact-cli.test.ts
 
 Expected: FAIL because output does not include the new section.
 
-- [ ] **Step 3: Implement presentation**
+- [x] **Step 3: Implement presentation**
 
 Rendering rule:
 
@@ -679,7 +679,7 @@ Call compatibility:
 
 Keep the section short. Do not render compatible or unknown hints in pretty output unless JSON is requested.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Run:
 
@@ -689,7 +689,7 @@ npx vitest run tests/review.test.ts tests/impact-cli.test.ts tests/impact-analyz
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/review.ts src/impact/reportFull.ts src/impact/reportCompact.ts src/impact/report.ts src/cli/impact.ts src/cli/review.ts tests/review.test.ts tests/impact-cli.test.ts
@@ -709,7 +709,7 @@ git commit -m "Render call compatibility findings"
 - Modify: `codegraph-skill/codegraph/SKILL.md`
 - Test: `tests/package-metadata.test.ts`
 
-- [ ] **Step 1: Update docs**
+- [x] **Step 1: Update docs**
 
 Docs must state:
 
@@ -719,7 +719,7 @@ Docs must state:
 - Unsupported or ambiguous callsites are omitted from pretty output and represented as `unknown` only in structured data when useful.
 - Agents should treat hints as review leads and still inspect the code.
 
-- [ ] **Step 2: Update skill guidance**
+- [x] **Step 2: Update skill guidance**
 
 In `codegraph-skill/codegraph/SKILL.md`, add a short note under PR impact/review:
 
@@ -727,7 +727,7 @@ In `codegraph-skill/codegraph/SKILL.md`, add a short note under PR impact/review
 Impact and review JSON may include `callCompatibility` for high-confidence provider-backed callsite arity mismatches after signature changes. Treat it as a deterministic review lead, not compiler-grade type checking, and check the language parity matrix before assuming coverage.
 ```
 
-- [ ] **Step 3: Run metadata and formatting checks**
+- [x] **Step 3: Run metadata and formatting checks**
 
 Run:
 
@@ -738,7 +738,7 @@ git diff --check
 
 Expected: PASS and no whitespace errors.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add README.md docs/cli.md docs/library-api.md docs/agent-workflows.md docs/language-parity.md docs/scenario-catalog.md codegraph-skill/codegraph/SKILL.md tests/package-metadata.test.ts
