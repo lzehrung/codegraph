@@ -456,25 +456,26 @@ function computeSignatureChanged(
   if (!params) {
     params = findFirstDescendantOfTypes(declNode, SIGNATURE_PARAMETER_LIST_TYPES);
   }
+  let paramsStart: number | undefined;
+  let paramsEnd: number | undefined;
   if (!params && declNode.type === "function_declaration") {
     const parameterNodes = declNode.namedChildren.filter((child) => child.type === "parameter");
     const first = parameterNodes[0];
     const last = parameterNodes[parameterNodes.length - 1];
     if (first && last) {
-      params = {
-        ...first,
-        startIndex: first.startIndex,
-        endIndex: last.endIndex,
-      };
+      paramsStart = first.startIndex;
+      paramsEnd = last.endIndex;
     }
   }
-  if (!params) return false;
+  if (params) {
+    paramsStart = params.startIndex;
+    paramsEnd = params.endIndex;
+  }
+  if (paramsStart === undefined || paramsEnd === undefined) return false;
   // Note: namedChildCount === 0 is intentionally NOT checked here.
   // A signature edit that removes ALL parameters (e.g. f(a) -> f()) should
   // still be detected: the params node exists and its byte range overlaps the
   // changed content even though it ends up empty.
-  const paramsStart = params.startIndex;
-  const paramsEnd = params.endIndex;
   for (const r of changedByteRanges) {
     if (r.start < paramsEnd && r.end > paramsStart) return true;
   }
