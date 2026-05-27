@@ -144,6 +144,28 @@ describe("impact signature hint", () => {
     expect(signature).toEqual({ minArgs: 2, maxArgs: 2, confidence: "high" });
   });
 
+  it("does not treat default comparison operators as TypeScript parameter type arguments", () => {
+    const source = "export function helper(a = x < y, b = c > d) { return [a, b]; }";
+    const signature = extractCallableSignature({
+      languageId: "typescript",
+      source,
+      symbolStartIndex: source.indexOf("helper"),
+    });
+
+    expect(signature).toEqual({ minArgs: 0, maxArgs: 2, confidence: "high" });
+  });
+
+  it("does not treat typed default comparisons as TypeScript parameter type arguments", () => {
+    const source = "export function helper(a: Box<string> = x < y, b = c > d) { return [a, b]; }";
+    const signature = extractCallableSignature({
+      languageId: "typescript",
+      source,
+      symbolStartIndex: source.indexOf("helper"),
+    });
+
+    expect(signature).toEqual({ minArgs: 0, maxArgs: 2, confidence: "high" });
+  });
+
   it("marks rest signatures as unbounded", () => {
     const source = "export function helper(a: string, ...rest: string[]) { return rest; }";
     const signature = extractCallableSignature({

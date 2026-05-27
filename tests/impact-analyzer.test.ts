@@ -848,6 +848,67 @@ describe("Impact Analyzer Edge Cases", () => {
       }
     });
 
+    it("does not spend the callsite limit on non-call references", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-compat-alias-"));
+      try {
+        await fsp.mkdir(path.join(root, "src"), { recursive: true });
+        await fsp.writeFile(
+          path.join(root, "src/api.ts"),
+          'export function helper(a: string, b: number) { return a + b; }\n',
+          "utf8",
+        );
+        await fsp.writeFile(
+          path.join(root, "src/main.ts"),
+          [
+            'import { helper } from "./api";',
+            "const aliasOne = helper;",
+            "const aliasTwo = helper;",
+            "const aliasThree = helper;",
+            "const aliasFour = helper;",
+            "const aliasFive = helper;",
+            "const aliasSix = helper;",
+            'export const value = helper("x");',
+            "export { aliasOne, aliasTwo, aliasThree, aliasFour, aliasFive, aliasSix };",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        const index = await buildProjectIndex(root);
+        const diffText = [
+          "diff --git a/src/api.ts b/src/api.ts",
+          "index 1234567..abcdef0 100644",
+          "--- a/src/api.ts",
+          "+++ b/src/api.ts",
+          "@@ -1,1 +1,1 @@",
+          "-export function helper(a: string) { return a; }",
+          "+export function helper(a: string, b: number) { return a + b; }",
+          "",
+        ].join("\n");
+
+        const result = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+          maxRefs: 1,
+        });
+        if ("files" in result) {
+          throw new Error("Expected full impact report");
+        }
+        const helper = result.changedSymbols.find((symbol) => symbol.name === "helper");
+
+        expect(helper?.callCompatibility).toContainEqual(
+          expect.objectContaining({
+            status: "likely_mismatch",
+            reason: "argument_count_below_minimum",
+            callsiteFile: "src/main.ts",
+            actual: { argCount: 1, confidence: "high" },
+          }),
+        );
+        expect(helper?.callCompatibility).toHaveLength(1);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
     it("attaches hints for changed arrow function variables when signature parsing is high confidence", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-compat-arrow-"));
       try {

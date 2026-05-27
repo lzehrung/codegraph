@@ -368,7 +368,96 @@ function hasTypeContextBeforeLessThan(text: string, index: number, groupStart: n
   }
 
   const typeKeywordPattern = /(^|[\s([{,:?=<>|&])(?:as|satisfies|new)\s+[A-Za-z_$][\w$.[\]\s]*$/;
-  return typeKeywordPattern.test(left);
+  return typeKeywordPattern.test(left) || hasOpenTypeAnnotationBefore(text, index, groupStart);
+}
+
+function hasOpenTypeAnnotationBefore(text: string, index: number, groupStart: number): boolean {
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  let braceDepth = 0;
+  let quote: string | null = null;
+  let escaped = false;
+  let hasTypeAnnotation = false;
+
+  for (let current = groupStart; current < index; current += 1) {
+    const char = text[current];
+
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+
+    const commentEnd = findCommentEnd(text, current);
+    if (commentEnd !== null) {
+      if (commentEnd < 0) {
+        return false;
+      }
+      current = commentEnd - 1;
+      continue;
+    }
+
+    if (char === '"' || char === "'" || char === "`") {
+      quote = char;
+      continue;
+    }
+    if (char === "(") {
+      parenDepth += 1;
+      continue;
+    }
+    if (char === ")") {
+      parenDepth -= 1;
+      if (parenDepth < 0) {
+        return false;
+      }
+      continue;
+    }
+    if (char === "[") {
+      bracketDepth += 1;
+      continue;
+    }
+    if (char === "]") {
+      bracketDepth -= 1;
+      if (bracketDepth < 0) {
+        return false;
+      }
+      continue;
+    }
+    if (char === "{") {
+      braceDepth += 1;
+      continue;
+    }
+    if (char === "}") {
+      braceDepth -= 1;
+      if (braceDepth < 0) {
+        return false;
+      }
+      continue;
+    }
+
+    const atTopLevel = !parenDepth && !bracketDepth && !braceDepth;
+    if (!atTopLevel) {
+      continue;
+    }
+    if (char === ":") {
+      hasTypeAnnotation = true;
+      continue;
+    }
+    if (char === "=" && text[current + 1] !== ">") {
+      hasTypeAnnotation = false;
+    }
+  }
+
+  return hasTypeAnnotation;
 }
 
 function previousSignificantIndex(text: string, index: number, groupStart: number): number {
@@ -577,6 +666,10 @@ function splitTopLevelCommaGroups(text: string, angleMode: AngleMode): string[] 
   return groups;
 }
 
+function referenceScanLimitForCallsites(maxRefs: number): number {
+  return Math.max(maxRefs + 50, maxRefs * 4);
+}
+
 function hasTopLevelEquals(text: string): boolean {
   let parenDepth = 0;
   let bracketDepth = 0;
@@ -694,7 +787,7 @@ export function extractCallableSignature(request: ExtractCallableSignatureReques
     return null;
   }
 
-  const parameters = splitTopLevelCommaGroups(balanced.inner, "always");
+  const parameters = splitTopLevelCommaGroups(balanced.inner, "type-context");
   if (!parameters) {
     return null;
   }
@@ -853,7 +946,7 @@ export async function attachCallCompatibilityHints(
           range: changedSymbol.range,
         },
       },
-      { maxReferences: options.maxRefs + 1 },
+      { maxReferences: referenceScanLimitForCallsites(options.maxRefs) },
     );
     if (refs.status !== "ok") {
       continue;
@@ -868,7 +961,6 @@ export async function attachCallCompatibilityHints(
       if (consideredCallsites >= options.maxRefs) {
         break;
       }
-      consideredCallsites += 1;
 
       const calleeStartIndex = ref.range.start.index;
       if (calleeStartIndex === undefined) {
@@ -886,6 +978,7 @@ export async function attachCallCompatibilityHints(
       if (!actual) {
         continue;
       }
+      consideredCallsites += 1;
 
       const compatibility = classifyCompatibility(signature, actual);
       const callerSymbolId = findCallerSymbolId(index, ref);
