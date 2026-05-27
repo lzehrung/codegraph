@@ -222,6 +222,51 @@ describe("Impact Analyzer Edge Cases", () => {
         await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }
     });
+
+    it.each(["self", "cls"])(
+      "counts %s as an ordinary parameter for Python free functions",
+      async (receiverName) => {
+        const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-python-free-self-"));
+        try {
+          const file = "main.py";
+          const targetFile = path.join(root, file);
+          const before = `def helper(${receiverName}, a):\n    return a\n\nvalue = helper(obj, 1)\n`;
+          const after = `def helper(${receiverName}, a, b):\n    return a\n\nvalue = helper(obj, 1)\n`;
+          await fsp.writeFile(targetFile, after, "utf8");
+          const index = await buildProjectIndex(root, { cache: "memory" });
+          const diffText = `diff --git a/${file} b/${file}
+--- a/${file}
++++ b/${file}
+@@ -1,1 +1,1 @@
+-def helper(${receiverName}, a):
++def helper(${receiverName}, a, b):
+`;
+
+          const result = await analyzeImpactFromDiff(root, index, {
+            provider: "raw",
+            diffText,
+            includeTests: true,
+          });
+
+          if ("files" in result) {
+            throw new Error("Expected full impact report");
+          }
+
+          const helper = result.changedSymbols.find((symbol) => symbol.name === "helper");
+          expect(helper?.callCompatibility).toContainEqual(
+            expect.objectContaining({
+              status: "likely_mismatch",
+              reason: "argument_count_below_minimum",
+              actual: { argCount: 2, confidence: "high" },
+              expected: { minArgs: 3, maxArgs: 3, confidence: "high" },
+              callsiteFile: file,
+            }),
+          );
+        } finally {
+          await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+        }
+      },
+    );
   });
 
   describe("seedTransitiveFromFiles", () => {

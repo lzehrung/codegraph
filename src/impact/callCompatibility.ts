@@ -47,6 +47,11 @@ type BalancedRange = {
 
 type AngleMode = "always" | "type-context";
 
+interface SignatureParameterText {
+  text: string;
+  skipFirstReceiver: boolean;
+}
+
 function isJsTsLanguage(languageId: string): boolean {
   return (
     languageId === "javascript" ||
@@ -843,7 +848,28 @@ const parameterListTypes = new Set([
   "formal_parameters",
 ]);
 
-function findSignatureParameterText(request: ExtractCallableSignatureRequest): string | null {
+function isPythonMethodDeclaration(declaration: SyntaxNodeLike): boolean {
+  let current = declaration.parent;
+  while (current) {
+    if (current.type === "class_definition") {
+      return true;
+    }
+    if (current.type === "function_definition") {
+      return false;
+    }
+    current = current.parent;
+  }
+  return false;
+}
+
+function shouldSkipFirstReceiverParameter(languageId: string, declaration: SyntaxNodeLike): boolean {
+  if (languageId === "python") {
+    return isPythonMethodDeclaration(declaration);
+  }
+  return true;
+}
+
+function findSignatureParameterText(request: ExtractCallableSignatureRequest): SignatureParameterText | null {
   if (!request.tree) {
     return null;
   }
@@ -864,20 +890,35 @@ function findSignatureParameterText(request: ExtractCallableSignatureRequest): s
       const first = parameterNodes[0];
       const last = parameterNodes[parameterNodes.length - 1];
       if (first && last) {
-        return request.source.slice(first.startIndex, last.endIndex);
+        return {
+          text: request.source.slice(first.startIndex, last.endIndex),
+          skipFirstReceiver: shouldSkipFirstReceiverParameter(request.languageId, declaration),
+        };
       }
     }
-    return "";
+    return {
+      text: "",
+      skipFirstReceiver: shouldSkipFirstReceiverParameter(request.languageId, declaration),
+    };
   }
 
   const text = request.source.slice(params.startIndex, params.endIndex).trim();
   if (text.startsWith("(") && text.endsWith(")")) {
-    return text.slice(1, -1);
+    return {
+      text: text.slice(1, -1),
+      skipFirstReceiver: shouldSkipFirstReceiverParameter(request.languageId, declaration),
+    };
   }
-  return text;
+  return {
+    text,
+    skipFirstReceiver: shouldSkipFirstReceiverParameter(request.languageId, declaration),
+  };
 }
 
-function isReceiverParameter(languageId: string, parameter: string, index: number): boolean {
+function isReceiverParameter(languageId: string, parameter: string, index: number, skipFirstReceiver: boolean): boolean {
+  if (!skipFirstReceiver) {
+    return false;
+  }
   const trimmed = parameter.trim();
   if (!index && (languageId === "python" || languageId === "ruby")) {
     return trimmed === "self" || trimmed === "cls" || trimmed.startsWith("self:") || trimmed.startsWith("cls:");
@@ -946,6 +987,7 @@ function signatureFromParameterText(
   languageId: string,
   parameterText: string,
   angleMode: AngleMode,
+  skipFirstReceiver = true,
 ): CallableSignature | null {
   const parameters = splitTopLevelCommaGroups(parameterText, angleMode);
   if (!parameters) {
@@ -959,7 +1001,7 @@ function signatureFromParameterText(
 
   parameters.forEach((parameter, index) => {
     const trimmed = parameter.trim();
-    if (!trimmed || isReceiverParameter(languageId, trimmed, index)) {
+    if (!trimmed || isReceiverParameter(languageId, trimmed, index, skipFirstReceiver)) {
       return;
     }
     if (isRestParameter(languageId, trimmed)) {
@@ -994,7 +1036,12 @@ function extractCallableSignatureFromProvider(request: ExtractCallableSignatureR
 
   const astParameterText = findSignatureParameterText(request);
   if (astParameterText !== null) {
-    return signatureFromParameterText(request.languageId, astParameterText, "type-context");
+    return signatureFromParameterText(
+      request.languageId,
+      astParameterText.text,
+      "type-context",
+      astParameterText.skipFirstReceiver,
+    );
   }
 
   if (!isJsTsLanguage(request.languageId)) {
