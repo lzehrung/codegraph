@@ -80,7 +80,7 @@ Use Codegraph when you need fast structural answers about a repo without relying
 - Semantic chunking for code and text files, including Vue and Svelte single-file component block splitting.
 - Duplicate and near-duplicate detection over indexed symbols, semantic chunks, and text chunks.
 - AST grep, public API summaries, unresolved import reports, hotspot analysis, cycle detection, and shortest dependency paths.
-- PR impact analysis and review bundles that map diffs to changed symbols, impacted code, likely tests, graph deltas, and conservative JS/TS call-arity hints after signature changes.
+- PR impact analysis and review bundles that map diffs to changed symbols, impacted code, likely tests, graph deltas, and conservative provider-backed call-arity hints after signature changes.
 - SQL language support for `.sql` files, including statement chunks, object symbols, SQL-to-SQL graph edges, SQL navigation, and statement facts.
 - SQLite export plus read-only SQL access for downstream tools and agent workflows.
 - A browser graph viewer app for interactive exploration of generated graph JSON artifacts.
@@ -214,7 +214,7 @@ const wrapped = await tool_impactJSON(root, { provider: "git", base: "HEAD", hea
 
 Good downstream packs preserve structured fields such as symbol handles, ranges, diff snippets, callsites, graph edges, candidate-test confidence, impact reasons, diagnostics, and `schemaVersion`/`format`. Streaming callers that only need incremental chunks can set `streamSummary: "light"` to skip terminal suggestions, export summaries, re-export chains, ranked top impacts, graph metadata, cycles, clusters, and surface-area work. Use [docs/library-api.md](./docs/library-api.md) for the full API reference and [docs/agent-workflows.md](./docs/agent-workflows.md) for session and streaming recipes.
 
-Impact and review JSON may include `callCompatibility` on changed symbols when a JS/TS-family callable signature changes and resolved callsites have high-confidence argument counts. Treat these as review leads, not compiler-grade type checking; unsupported or ambiguous callsites are omitted from pretty output.
+Impact and review JSON may include `callCompatibility` on changed symbols when a provider-backed callable signature changes and resolved callsites have high-confidence argument counts. Treat these as review leads, not compiler-grade type checking; unsupported or ambiguous callsites are omitted from pretty output.
 
 The supported package import surface is the root export, `@lzehrung/codegraph`. The public API boundary and compatibility-export guidance live in [docs/library-api.md](./docs/library-api.md#public-api-boundary).
 

@@ -76,6 +76,7 @@ export async function analyzeImpact(
   await attachCallCompatibilityHints(index, filteredChangedSymbols, {
     maxRefs,
     ...(projectRoot ? { projectRoot } : {}),
+    ...(diagnostics ? { diagnostics } : {}),
   });
   const directOptions = {
     maxRefs,

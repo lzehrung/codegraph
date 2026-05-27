@@ -5,7 +5,11 @@ import { SymbolKind, type ProjectIndex, type Reference, type SymbolDef } from ".
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import { sliceText, toRange } from "../util/ast.js";
-import type { CallCompatibilityHint, ChangedSymbol } from "./types.js";
+import {
+  getCallCompatibilitySupportedLanguages,
+  isCallCompatibilityLanguageSupported,
+} from "./call-compatibility/providers/index.js";
+import type { CallCompatibilityHint, ChangedSymbol, ImpactDiagnostics } from "./types.js";
 
 export interface CallableSignature {
   minArgs: number;
@@ -52,29 +56,8 @@ function isJsTsLanguage(languageId: string): boolean {
   );
 }
 
-const sourceLanguageIdsWithCalls = new Set([
-  "c",
-  "cpp",
-  "csharp",
-  "go",
-  "java",
-  "javascript",
-  "js",
-  "jsx",
-  "kotlin",
-  "php",
-  "python",
-  "ruby",
-  "rust",
-  "swift",
-  "ts",
-  "tsx",
-  "typescript",
-  "zig",
-]);
-
 function supportsCallCompatibilityLanguage(languageId: string): boolean {
-  return sourceLanguageIdsWithCalls.has(languageId);
+  return isCallCompatibilityLanguageSupported(languageId);
 }
 
 function findOpeningParen(source: string, startIndex: number): number {
@@ -1309,18 +1292,36 @@ function classifyCompatibility(
 export async function attachCallCompatibilityHints(
   index: ProjectIndex,
   changedSymbols: ChangedSymbol[],
-  options: { maxRefs: number; projectRoot?: string },
+  options: { maxRefs: number; projectRoot?: string; diagnostics?: ImpactDiagnostics },
 ): Promise<void> {
   if (options.maxRefs <= 0) {
     return;
   }
 
+  const diagnostics = options.diagnostics?.callCompatibility;
+  if (diagnostics) {
+    diagnostics.supportedLanguages = [...getCallCompatibilitySupportedLanguages()];
+  }
+
   for (const changedSymbol of changedSymbols) {
     if (!changedSymbol.signatureChanged || !isCallableChangedSymbol(changedSymbol)) {
+      if (changedSymbol.signatureChanged) {
+        diagnostics?.skippedByReason &&
+          (diagnostics.skippedByReason.not_callable = (diagnostics.skippedByReason.not_callable ?? 0) + 1);
+      }
       continue;
     }
 
     const parsedDefinition = await ensureParsedContext(changedSymbol.file, index.parsed?.get(changedSymbol.file));
+    if (!supportsCallCompatibilityLanguage(parsedDefinition.sup.id)) {
+      if (diagnostics && !diagnostics.unsupportedLanguages.includes(parsedDefinition.sup.id)) {
+        diagnostics.unsupportedLanguages.push(parsedDefinition.sup.id);
+      }
+      diagnostics?.skippedByReason &&
+        (diagnostics.skippedByReason.unsupported_language =
+          (diagnostics.skippedByReason.unsupported_language ?? 0) + 1);
+      continue;
+    }
     const signature = extractCallableSignature({
       languageId: parsedDefinition.sup.id,
       source: parsedDefinition.source,
@@ -1328,6 +1329,8 @@ export async function attachCallCompatibilityHints(
       tree: parsedDefinition.tree,
     });
     if (!signature) {
+      diagnostics?.skippedByReason &&
+        (diagnostics.skippedByReason.signature_unknown = (diagnostics.skippedByReason.signature_unknown ?? 0) + 1);
       continue;
     }
 
@@ -1387,6 +1390,9 @@ export async function attachCallCompatibilityHints(
       };
       const actual = extractCallsiteArguments(callsiteRequest);
       if (!actual) {
+        if (diagnostics) {
+          diagnostics.unknownCallsites += 1;
+        }
         continue;
       }
       consideredCallsites += 1;
@@ -1410,6 +1416,9 @@ export async function attachCallCompatibilityHints(
 
     if (hints.length) {
       changedSymbol.callCompatibility = hints;
+      if (diagnostics) {
+        diagnostics.emittedHints += hints.length;
+      }
     }
   }
 }

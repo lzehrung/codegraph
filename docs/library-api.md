@@ -476,7 +476,7 @@ for (const item of report.impacted.slice(0, 5)) {
 }
 ```
 
-Changed symbols can include `callCompatibility` when a JS/TS-family callable signature changed and Codegraph resolved high-confidence callsites. These hints compare argument counts only; they are deterministic review leads, not type checking or overload analysis.
+Changed symbols can include `callCompatibility` when a provider-backed callable signature changed and Codegraph resolved high-confidence callsites. These hints compare argument counts only; they are deterministic review leads, not type checking or overload analysis.
 
 Include reference context snippets when needed:
 

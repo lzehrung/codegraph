@@ -221,6 +221,13 @@ export type ImpactDiagnostics = {
   refsDroppedByMaxRefs: number;
   fallbackSeededFiles: number;
   fallbackSeededDependents: number;
+  callCompatibility?: {
+    supportedLanguages: string[];
+    unsupportedLanguages: string[];
+    skippedByReason: Record<string, number>;
+    unknownCallsites: number;
+    emittedHints: number;
+  };
 };
 
 /**
