@@ -304,8 +304,6 @@ const SIGNATURE_DECL_TYPES = new Set([
   "constructor_declaration",
   "init_declaration",
   "protocol_function_declaration",
-  "class_declaration",
-  "class_definition",
   "variable_declarator",
   "declaration",
 ]);

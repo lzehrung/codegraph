@@ -353,6 +353,54 @@ describe("method_definition in isDeclarationName", () => {
       expect(changed.some((s) => s.name === "UserService")).toBe(true);
     });
   });
+
+  it.each([
+    {
+      label: "JS",
+      file: "service.js",
+      configFile: "package.json",
+      config: { name: "test", type: "module" },
+      currentMethod: "  fetchUser(id, includePosts) {",
+      oldMethod: "  fetchUser(id) {",
+      newMethod: "  fetchUser(id, includePosts) {",
+    },
+    {
+      label: "TS",
+      file: "service.ts",
+      configFile: "tsconfig.json",
+      config: { compilerOptions: { strict: true } },
+      currentMethod: "  fetchUser(id: number, includePosts: boolean) {",
+      oldMethod: "  fetchUser(id: number) {",
+      newMethod: "  fetchUser(id: number, includePosts: boolean) {",
+    },
+  ])(
+    "does not mark the enclosing $label class as signatureChanged for method parameter edits",
+    async ({ label, file, configFile, config, currentMethod, oldMethod, newMethod }) => {
+      await withTmpDir(`method-param-${label.toLowerCase()}`, async (root) => {
+        await fsp.writeFile(path.join(root, configFile), JSON.stringify(config));
+        await fsp.writeFile(
+          path.join(root, file),
+          ["export class UserService {", currentMethod, "    return { id };", "  }", "}"].join("\n") + "\n",
+        );
+
+        const index = await buildProjectIndex(root);
+        const { locateChangedSymbols } = await import("../src/impact/map.js");
+
+        const svcFile = path.join(root, file).replace(/\\/g, "/");
+        const changed = await locateChangedSymbols(index, svcFile, [
+          {
+            oldStart: 2,
+            newStart: 2,
+            lines: [`-${oldMethod}`, `+${newMethod}`],
+          },
+        ]);
+
+        const userService = changed.find((symbol) => symbol.name === "UserService");
+        expect(userService).toBeDefined();
+        expect(userService?.signatureChanged).not.toBe(true);
+      });
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -378,7 +426,7 @@ describe("TypeScript declare module augmentation", () => {
       );
       expect(edges.length).toBeGreaterThan(0);
       // Ambient module augmentations are purely type-level dependencies
-      expect(edges.every((edge) => edge.typeOnly === true)).toBe(true);
+      expect(edges.every((edge) => edge.typeOnly)).toBe(true);
     });
   });
 });
