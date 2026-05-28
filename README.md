@@ -147,10 +147,62 @@ Small orientation packets skip deeper health analysis and record that omission; 
 
 ## CLI examples
 
-Impact pretty output gives a bounded review map. It includes call compatibility and duplicate leads when they are high-confidence:
+Use orientation for first-turn agent context:
+
+```bash
+codegraph orient --root . --budget small --json
+```
+
+```json
+{
+  "summary": [
+    "537 file(s) in scope.",
+    "8 hotspot module(s) surfaced for follow-up.",
+    "Health analysis skipped for small budget."
+  ],
+  "hotspots": [{ "file": "src/indexer/build-index.ts", "score": 82 }],
+  "recommendedNext": [
+    "codegraph packet get file:src/indexer/build-index.ts --json",
+    "codegraph search \"call compatibility\" --json"
+  ],
+  "omittedCounts": { "treeEntries": 521, "hotspots": 14 }
+}
+```
+
+Find an anchor, then expand only the context you need:
+
+```bash
+codegraph search "graph json" --json
+codegraph explain file:src/cli/graph.ts --json
+```
+
+```json
+{
+  "target": { "kind": "file", "path": "src/cli/graph.ts" },
+  "symbols": [{ "name": "handleGraphCommand", "kind": "function" }],
+  "neighbors": { "imports": ["src/graph.ts"], "importedBy": ["src/cli.ts"] },
+  "nextCommands": ["codegraph refs --file src/cli/graph.ts --line 42 --col 16 --pretty"]
+}
+```
+
+Use semantic navigation when string search is too broad:
+
+```bash
+codegraph refs --file src/index.ts --line 12 --col 17 --pretty
+```
+
+```text
+References for buildProjectIndex
+- src/cli/impact.ts:486 import
+- src/cli/review.ts:310 call
+- tests/indexer.test.ts:22 call
+```
+
+Use impact and review for PR or worktree risk:
 
 ```bash
 codegraph impact --base origin/main --head HEAD --pretty
+codegraph review --base origin/main --head HEAD --summary
 ```
 
 ```text
@@ -162,21 +214,9 @@ Call compatibility:
 - createUser: src/routes/users.ts:42 passes 1 argument; new signature requires 2.
 Duplicate leads:
 - src/api/users.ts:12-28 matches src/services/users.ts:8-24 (renamed, score 91).
-```
 
-Review summary output is the compact human handoff:
-
-```bash
-codegraph review --base origin/main --head HEAD --summary
-```
-
-```text
 Review Summary
-Files changed: 2
-Symbols changed: 3
 Candidate tests: 4 (high: 1, medium: 2, low: 1)
-Duplicate leads:
-- src/api/users.ts:12-28 matches src/services/users.ts:8-24 (renamed, score 91).
 ```
 
 Run duplicate detection directly when refactor risk is the question:
@@ -185,25 +225,19 @@ Run duplicate detection directly when refactor risk is the question:
 codegraph duplicates ./src --min-confidence medium --limit 20
 ```
 
-```text
+```json
 {
   "schemaVersion": 2,
   "groups": [
-    { "confidence": "high", "cloneType": "exact", "score": 100 }
-  ]
-}
-```
-
-Use orientation for first-turn agent context:
-
-```bash
-codegraph orient --root . --budget small --json
-```
-
-```text
-{
-  "summary": ["TypeScript project", "2 dependency cycles"],
-  "recommendedNext": ["codegraph search \"auth user\" --json"]
+    {
+      "confidence": "high",
+      "cloneType": "exact",
+      "score": 100,
+      "primaryLeft": { "file": "src/a.ts", "startLine": 10, "endLine": 24 },
+      "primaryRight": { "file": "src/b.ts", "startLine": 8, "endLine": 22 }
+    }
+  ],
+  "omittedCounts": { "groups": 0, "rawSuggestions": 12 }
 }
 ```
 
