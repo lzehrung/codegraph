@@ -842,12 +842,8 @@ const parameterListTypes = new Set([
   "parameters",
   "parameter_list",
   "formal_parameters",
-  "formal_parameters",
   "function_value_parameters",
-  "formal_parameters",
   "method_parameters",
-  "formal_parameters",
-  "formal_parameters",
 ]);
 
 function directSignatureParameterNode(node: SyntaxNodeLike): SyntaxNodeLike | null {
