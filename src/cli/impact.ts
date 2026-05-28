@@ -3,6 +3,7 @@ import type { BuildOptions } from "../indexer/types.js";
 import {
   analyzeImpactFromDiff,
   type ChangedSymbol,
+  type CallCompatibilityHint,
   type CompactImpactReport,
   type ImpactItem,
   type ImpactOptions,
@@ -99,6 +100,7 @@ function ensureImpactReport(report: ImpactReport | CompactImpactReport): ImpactR
       exported: cs.exported,
       range: cs.range,
       ...(cs.typeOnly !== undefined ? { typeOnly: cs.typeOnly } : {}),
+      ...(cs.callCompatibility?.length ? { callCompatibility: cs.callCompatibility } : {}),
     };
     return symbol;
   });
@@ -198,6 +200,29 @@ function formatImpactReasonLabel(item: Pick<ImpactItem, "reasons" | "explain">):
   const primaryReason = item.explain?.reason ?? item.reasons[0];
   if (!primaryReason) return "reason: impact";
   return IMPACT_REASON_LABELS[primaryReason];
+}
+
+function formatRequiredArgumentCount(hint: CallCompatibilityHint): string {
+  if (hint.reason === "argument_count_above_maximum" && hint.expected.maxArgs !== null) {
+    return `accepts at most ${hint.expected.maxArgs}`;
+  }
+  return `requires ${hint.expected.minArgs}`;
+}
+
+function collectLikelyCallCompatibilityMismatches(report: ImpactReport): Array<{
+  symbol: ChangedSymbol;
+  hint: CallCompatibilityHint;
+}> {
+  const findings: Array<{ symbol: ChangedSymbol; hint: CallCompatibilityHint }> = [];
+  for (const symbol of report.changedSymbols) {
+    const hints = symbol.callCompatibility ?? [];
+    for (const hint of hints) {
+      if (hint.status === "likely_mismatch") {
+        findings.push({ symbol, hint });
+      }
+    }
+  }
+  return findings;
 }
 
 function formatImpactMermaid(report: ImpactReport, root: string): string {
@@ -396,6 +421,19 @@ function writePrettyImpactReport(context: ImpactCommandContext, impactReport: Im
   }
   if (impactReport.impacted.length > 10) {
     context.writeStdoutLine(`... and ${impactReport.impacted.length - 10} more`);
+  }
+  const compatibilityFindings = collectLikelyCallCompatibilityMismatches(impactReport);
+  if (compatibilityFindings.length) {
+    context.writeStdoutLine("");
+    context.writeStdoutLine("Call compatibility:");
+    for (const finding of compatibilityFindings) {
+      const { symbol, hint } = finding;
+      const plural = hint.actual.argCount === 1 ? "argument" : "arguments";
+      const requirement = formatRequiredArgumentCount(hint);
+      context.writeStdoutLine(
+        `- ${symbol.name}: ${hint.callsiteFile}:${hint.callsiteRange.start.line} passes ${hint.actual.argCount} ${plural}; new signature ${requirement}.`,
+      );
+    }
   }
 }
 

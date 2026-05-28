@@ -27,6 +27,19 @@
 - Modify: `README.md`, `docs/cli.md`, `docs/agent-workflows.md`, `codegraph-skill/codegraph/SKILL.md`
   - Document the packaged viewer workflow concisely.
 
+## Agent-to-Human Handoff
+
+The viewer is not an agent transport. MCP, JSON, SQLite, and packet handles remain the machine interfaces.
+
+The high-value agentic use case is handoff: an agent can build or receive a graph artifact, then give a reviewer a one-command visual inspection path:
+
+```bash
+codegraph graph --root . ./src --compact-json --output codegraph.json
+codegraph viewer --root . --graph codegraph.json --open
+```
+
+Artifact reports should mention the viewer only when graph JSON is present. The viewer should not be copied into each artifact bundle.
+
 ## Task 1: Package the Viewer Assets
 
 **Files:**

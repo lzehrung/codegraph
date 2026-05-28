@@ -102,7 +102,7 @@ export async function locateChangedSymbolsWithLines(
         lines,
         // Computed once here so calculateSeverity doesn't re-parse the AST
         // once per reference (which could be hundreds of calls for hot symbols).
-        signatureChanged: computeSignatureChanged(tree, symbolDef, changedByteRanges),
+        signatureChanged: computeSignatureChanged(tree, symbolDef, changedByteRanges, sup.id, trackedPositions),
       });
     }
   }
@@ -199,7 +199,7 @@ function hasOverlapSorted(sorted: number[], lo: number, hi: number): boolean {
 }
 
 function findNodesInLines(tree: SyntaxTreeLike, changedLines: Set<number>): SyntaxNodeLike[] {
-  if (changedLines.size === 0) return [];
+  if (!changedLines.size) return [];
 
   // Build a sorted array once for O(log n) overlap checks during the walk.
   const sortedLines = [...changedLines].sort((a, b) => a - b);
@@ -294,15 +294,138 @@ function isTypeOnlyDeclaration(node: SyntaxNodeLike, source: string): boolean {
 }
 
 const SIGNATURE_DECL_TYPES = new Set([
+  "function_item",
+  "method",
+  "singleton_method",
   "function_declaration",
   "function_definition",
   "method_definition",
   "method_declaration",
-  "class_declaration",
-  "class_definition",
+  "constructor_declaration",
+  "init_declaration",
+  "protocol_function_declaration",
+  "variable_declarator",
+  "declaration",
+]);
+
+const CALLABLE_VARIABLE_VALUE_TYPES = new Set(["arrow_function", "function_expression"]);
+const JS_TS_CLASS_SIGNATURE_FALLBACK_TYPES = new Set(["class_declaration"]);
+const JS_TS_METHOD_SIGNATURE_FALLBACK_TYPES = new Set(["method_definition"]);
+const SIGNATURE_PARAMETER_LIST_TYPES = new Set([
+  "parameters",
+  "parameter_list",
+  "formal_parameters",
+  "function_value_parameters",
+  "method_parameters",
 ]);
 
 type ByteRange = { start: number; end: number };
+
+function directSignatureParameterNode(node: SyntaxNodeLike): SyntaxNodeLike | null {
+  return (
+    node.childForFieldName("parameters") ??
+    node.childForFieldName("params") ??
+    node.childForFieldName("parameter") ??
+    null
+  );
+}
+
+function isJsTsLanguage(languageId: string): boolean {
+  return (
+    languageId === "js" ||
+    languageId === "ts" ||
+    languageId === "tsx" ||
+    languageId === "jsx" ||
+    languageId === "javascript" ||
+    languageId === "typescript"
+  );
+}
+
+function findAncestorOfTypes(node: SyntaxNodeLike | null, types: ReadonlySet<string>): SyntaxNodeLike | null {
+  let current: SyntaxNodeLike | null = node;
+  while (current) {
+    if (types.has(current.type)) {
+      return current;
+    }
+    current = current.parent;
+  }
+  return null;
+}
+
+function signatureParameterSpan(declNode: SyntaxNodeLike): ByteRange | null {
+  let params = directSignatureParameterNode(declNode);
+  if (!params && declNode.type === "variable_declarator") {
+    const valueNode = declNode.childForFieldName("value");
+    if (!valueNode || !CALLABLE_VARIABLE_VALUE_TYPES.has(valueNode.type)) {
+      return null;
+    }
+    params = directSignatureParameterNode(valueNode);
+  }
+  if (!params) {
+    params = findFirstDescendantOfTypes(declNode, SIGNATURE_PARAMETER_LIST_TYPES);
+  }
+  if (!params && declNode.type === "function_declaration") {
+    const parameterNodes = declNode.namedChildren.filter((child) => child.type === "parameter");
+    const first = parameterNodes[0];
+    const last = parameterNodes[parameterNodes.length - 1];
+    if (first && last) {
+      return { start: first.startIndex, end: last.endIndex };
+    }
+  }
+  if (!params) {
+    return null;
+  }
+  return { start: params.startIndex, end: params.endIndex };
+}
+
+function byteRangesOverlap(left: ByteRange, right: ByteRange): boolean {
+  return left.start < right.end && left.end > right.start;
+}
+
+function spanOverlapsAnyChangedRange(span: ByteRange, changedByteRanges: ReadonlyArray<ByteRange>): boolean {
+  for (const changedRange of changedByteRanges) {
+    if (byteRangesOverlap(changedRange, span)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasChangedDescendantMethodSignature(
+  node: SyntaxNodeLike,
+  changedByteRanges: ReadonlyArray<ByteRange>,
+  trackedPositions?: ReadonlySet<string>,
+): boolean {
+  for (const child of node.namedChildren ?? []) {
+    if (JS_TS_METHOD_SIGNATURE_FALLBACK_TYPES.has(child.type)) {
+      const span = signatureParameterSpan(child);
+      const methodNameIsTracked = isMethodNameTracked(child, trackedPositions);
+      if (!methodNameIsTracked && span && spanOverlapsAnyChangedRange(span, changedByteRanges)) {
+        return true;
+      }
+      continue;
+    }
+    if (hasChangedDescendantMethodSignature(child, changedByteRanges, trackedPositions)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isMethodNameTracked(node: SyntaxNodeLike, trackedPositions?: ReadonlySet<string>): boolean {
+  if (!trackedPositions) {
+    return false;
+  }
+
+  const nameNode = node.childForFieldName("name");
+  if (!nameNode) {
+    return false;
+  }
+
+  const line = (nameNode.startPosition?.row ?? 0) + 1;
+  const column = (nameNode.startPosition?.column ?? 0) + 1;
+  return trackedPositions.has(`${line}:${column}`);
+}
 
 /**
  * Compute precise byte ranges (in the new source) that actually changed, by
@@ -416,6 +539,8 @@ function computeSignatureChanged(
   tree: SyntaxTreeLike,
   symbolDef: SymbolDef,
   changedByteRanges: ReadonlyArray<ByteRange>,
+  languageId: string,
+  trackedPositions?: ReadonlySet<string>,
 ): boolean {
   if (!changedByteRanges.length) return false;
   const pos = {
@@ -427,19 +552,36 @@ function computeSignatureChanged(
   while (declNode && !SIGNATURE_DECL_TYPES.has(declNode.type)) {
     declNode = declNode.parent;
   }
+
+  if (!declNode && isJsTsLanguage(languageId)) {
+    const classNode = findAncestorOfTypes(nameNode, JS_TS_CLASS_SIGNATURE_FALLBACK_TYPES);
+    if (classNode) {
+      return hasChangedDescendantMethodSignature(classNode, changedByteRanges, trackedPositions);
+    }
+    return false;
+  }
   if (!declNode) return false;
-  const params = declNode.childForFieldName("parameters") || declNode.childForFieldName("params");
-  if (!params) return false;
+
+  const paramsSpan = signatureParameterSpan(declNode);
+  if (!paramsSpan) return false;
   // Note: namedChildCount === 0 is intentionally NOT checked here.
   // A signature edit that removes ALL parameters (e.g. f(a) -> f()) should
   // still be detected: the params node exists and its byte range overlaps the
   // changed content even though it ends up empty.
-  const paramsStart = params.startIndex;
-  const paramsEnd = params.endIndex;
-  for (const r of changedByteRanges) {
-    if (r.start < paramsEnd && r.end > paramsStart) return true;
+  return spanOverlapsAnyChangedRange(paramsSpan, changedByteRanges);
+}
+
+function findFirstDescendantOfTypes(node: SyntaxNodeLike, types: ReadonlySet<string>): SyntaxNodeLike | null {
+  for (const child of node.namedChildren ?? []) {
+    if (types.has(child.type)) {
+      return child;
+    }
+    const found = findFirstDescendantOfTypes(child, types);
+    if (found) {
+      return found;
+    }
   }
-  return false;
+  return null;
 }
 
 function findSymbolHandleForNode(

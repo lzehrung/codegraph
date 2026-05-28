@@ -2,14 +2,482 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
+import { analyzeImpactFromDiff } from "../src/index.js";
 import { analyzeImpact, seedTransitiveFromFiles, calculateSeverity } from "../src/impact/analyzer.js";
 import { DEFAULT_SEVERITY_WEIGHTS } from "../src/impact/types.js";
-import { buildProjectIndexFromFiles, SymbolKind } from "../src/indexer.js";
+import { buildProjectIndex, buildProjectIndexFromFiles, SymbolKind } from "../src/indexer.js";
 import type { ProjectIndex } from "../src/indexer.js";
 import type { Edge } from "../src/types.js";
 import { createTestIndex } from "./test-utils.js";
 
 describe("Impact Analyzer Edge Cases", () => {
+  describe("call compatibility hints", () => {
+    it("flags likely argument-count mismatches for changed TypeScript signatures", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-compat-"));
+      try {
+        await fsp.mkdir(path.join(root, "src"), { recursive: true });
+        const apiFile = path.join(root, "src", "api.ts");
+        const mainFile = path.join(root, "src", "main.ts");
+        await fsp.writeFile(apiFile, "export function helper(a: string, b: number) { return a + b; }\n", "utf8");
+        await fsp.writeFile(mainFile, 'import { helper } from "./api";\nexport const value = helper("x");\n', "utf8");
+
+        const index = await buildProjectIndex(root, { cache: "memory" });
+        const diffText = `diff --git a/src/api.ts b/src/api.ts
+--- a/src/api.ts
++++ b/src/api.ts
+@@ -1,1 +1,1 @@
+-export function helper(a: string) { return a; }
++export function helper(a: string, b: number) { return a + b; }
+`;
+
+        const result = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+          includeTests: true,
+        });
+
+        if ("files" in result) {
+          throw new Error("Expected full impact report");
+        }
+
+        const helper = result.changedSymbols.find((symbol) => symbol.name === "helper");
+        expect(helper?.callCompatibility).toContainEqual(
+          expect.objectContaining({
+            status: "likely_mismatch",
+            reason: "argument_count_below_minimum",
+            actual: { argCount: 1, confidence: "high" },
+            expected: { minArgs: 2, maxArgs: 2, confidence: "high" },
+            callsiteFile: "src/main.ts",
+          }),
+        );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
+    it("does not flag extra arguments for changed rest signatures", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-rest-"));
+      try {
+        await fsp.mkdir(path.join(root, "src"), { recursive: true });
+        const apiFile = path.join(root, "src", "api.ts");
+        const mainFile = path.join(root, "src", "main.ts");
+        await fsp.writeFile(
+          apiFile,
+          "export function helper(a: string, ...rest: string[]) { return rest.join(a); }\n",
+          "utf8",
+        );
+        await fsp.writeFile(mainFile, 'import { helper } from "./api";\nexport const value = helper("x", "y", "z");\n', "utf8");
+
+        const index = await buildProjectIndex(root, { cache: "memory" });
+        const diffText = `diff --git a/src/api.ts b/src/api.ts
+--- a/src/api.ts
++++ b/src/api.ts
+@@ -1,1 +1,1 @@
+-export function helper(a: string) { return a; }
++export function helper(a: string, ...rest: string[]) { return rest.join(a); }
+`;
+
+        const result = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+          includeTests: true,
+        });
+
+        if ("files" in result) {
+          throw new Error("Expected full impact report");
+        }
+
+        const helper = result.changedSymbols.find((symbol) => symbol.name === "helper");
+        const mismatches = helper?.callCompatibility?.filter((hint) => hint.status === "likely_mismatch") ?? [];
+        expect(mismatches).toHaveLength(0);
+        expect(helper?.callCompatibility).toContainEqual(
+          expect.objectContaining({
+            status: "compatible",
+            reason: "compatible_argument_count",
+            expected: { minArgs: 1, maxArgs: null, confidence: "high" },
+            actual: { argCount: 3, confidence: "high" },
+            callsiteFile: "src/main.ts",
+          }),
+        );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
+    it("does not treat non-callee references inside other calls as changed callsites", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-non-callee-"));
+      try {
+        await fsp.mkdir(path.join(root, "src"), { recursive: true });
+        const apiFile = path.join(root, "src", "api.ts");
+        const mainFile = path.join(root, "src", "main.ts");
+        await fsp.writeFile(apiFile, "export function helper(a: string, b: number) { return a + b; }\n", "utf8");
+        await fsp.writeFile(
+          mainFile,
+          'import { helper } from "./api";\nfunction wrapper(fn: unknown) { return fn; }\nexport const value = wrapper(helper);\n',
+          "utf8",
+        );
+
+        const index = await buildProjectIndex(root, { cache: "memory" });
+        const diffText = `diff --git a/src/api.ts b/src/api.ts
+--- a/src/api.ts
++++ b/src/api.ts
+@@ -1,1 +1,1 @@
+-export function helper(a: string) { return a; }
++export function helper(a: string, b: number) { return a + b; }
+`;
+
+        const result = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+          includeTests: true,
+        });
+
+        if ("files" in result) {
+          throw new Error("Expected full impact report");
+        }
+
+        const helper = result.changedSymbols.find((symbol) => symbol.name === "helper");
+        expect(helper?.callCompatibility ?? []).toHaveLength(0);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
+    it.each([
+      {
+        label: "Python",
+        file: "main.py",
+        before: "def helper(a):\n    return a\n\nvalue = helper(1)\n",
+        after: "def helper(a, b):\n    return a\n\nvalue = helper(1)\n",
+      },
+      {
+        label: "Go",
+        file: "main.go",
+        before: "package main\nfunc helper(a string) string { return a }\nfunc run(){ helper(\"x\") }\n",
+        after: "package main\nfunc helper(a string, b int) string { return a }\nfunc run(){ helper(\"x\") }\n",
+      },
+      {
+        label: "Rust",
+        file: "main.rs",
+        before: "fn helper(a: i32) -> i32 { a }\nfn run(){ helper(1); }\n",
+        after: "fn helper(a: i32, b: i32) -> i32 { a }\nfn run(){ helper(1); }\n",
+      },
+      {
+        label: "Java",
+        file: "Main.java",
+        before: "class Main { void helper(String a) {} void run(){ helper(\"x\"); } }\n",
+        after: "class Main { void helper(String a, int b) {} void run(){ helper(\"x\"); } }\n",
+      },
+      {
+        label: "C#",
+        file: "Main.cs",
+        before: "class Main { void helper(string a) {} void run(){ helper(\"x\"); } }\n",
+        after: "class Main { void helper(string a, int b) {} void run(){ helper(\"x\"); } }\n",
+      },
+      {
+        label: "Kotlin",
+        file: "main.kt",
+        before: "fun helper(a: String) = a\nfun run(){ helper(\"x\") }\n",
+        after: "fun helper(a: String, b: Int) = a\nfun run(){ helper(\"x\") }\n",
+      },
+      {
+        label: "Swift",
+        file: "main.swift",
+        before: "func helper(_ a: String) {}\nfunc run(){ helper(\"x\") }\n",
+        after: "func helper(_ a: String, b: Int) {}\nfunc run(){ helper(\"x\") }\n",
+      },
+      {
+        label: "PHP",
+        file: "main.php",
+        before: "<?php function helper($a) { return $a; }\n$value = helper(\"x\");\n",
+        after: "<?php function helper($a, $b) { return $a; }\n$value = helper(\"x\");\n",
+      },
+      {
+        label: "Ruby",
+        file: "main.rb",
+        before: "def helper(a)\n  a\nend\nvalue = helper(1)\n",
+        after: "def helper(a, b)\n  a\nend\nvalue = helper(1)\n",
+      },
+      {
+        label: "C",
+        file: "main.c",
+        before: "int helper(int a) { return a; }\nvoid run(){ helper(1); }\n",
+        after: "int helper(int a, int b) { return a; }\nvoid run(){ helper(1); }\n",
+      },
+      {
+        label: "C++",
+        file: "main.cpp",
+        before: "int helper(int a) { return a; }\nvoid run(){ helper(1); }\n",
+        after: "int helper(int a, int b) { return a; }\nvoid run(){ helper(1); }\n",
+      },
+      {
+        label: "Zig",
+        file: "main.zig",
+        before: "fn helper(a: i32) i32 { return a; }\nfn run() void { _ = helper(1); }\n",
+        after: "fn helper(a: i32, b: i32) i32 { return a; }\nfn run() void { _ = helper(1); }\n",
+      },
+    ])("flags same-file likely mismatches for changed $label signatures", async ({ file, before, after }) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-cross-call-"));
+      try {
+        const targetFile = path.join(root, file);
+        await fsp.writeFile(targetFile, after, "utf8");
+        const index = await buildProjectIndex(root, { cache: "memory" });
+        const beforeLines = before.split("\n");
+        const afterLines = after.split("\n");
+        const changedLineIndex = beforeLines.findIndex((line, index) => line !== afterLines[index]);
+        if (changedLineIndex < 0) {
+          throw new Error("Expected fixture to include a changed signature line");
+        }
+        const changedLineNumber = changedLineIndex + 1;
+        const diffText = `diff --git a/${file} b/${file}
+--- a/${file}
++++ b/${file}
+@@ -${changedLineNumber},1 +${changedLineNumber},1 @@
+-${beforeLines[changedLineIndex]}
++${afterLines[changedLineIndex]}
+`;
+
+        const result = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+          includeTests: true,
+        });
+
+        if ("files" in result) {
+          throw new Error("Expected full impact report");
+        }
+
+        const helper = result.changedSymbols.find((symbol) => symbol.name === "helper");
+        expect(helper?.callCompatibility).toContainEqual(
+          expect.objectContaining({
+            status: "likely_mismatch",
+            reason: "argument_count_below_minimum",
+            actual: { argCount: 1, confidence: "high" },
+            expected: { minArgs: 2, maxArgs: 2, confidence: "high" },
+            callsiteFile: file,
+          }),
+        );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
+    it.each(["self", "cls"])(
+      "counts %s as an ordinary parameter for Python free functions",
+      async (receiverName) => {
+        const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-python-free-self-"));
+        try {
+          const file = "main.py";
+          const targetFile = path.join(root, file);
+          const before = `def helper(${receiverName}, a):\n    return a\n\nvalue = helper(obj, 1)\n`;
+          const after = `def helper(${receiverName}, a, b):\n    return a\n\nvalue = helper(obj, 1)\n`;
+          await fsp.writeFile(targetFile, after, "utf8");
+          const index = await buildProjectIndex(root, { cache: "memory" });
+          const diffText = `diff --git a/${file} b/${file}
+--- a/${file}
++++ b/${file}
+@@ -1,1 +1,1 @@
+-def helper(${receiverName}, a):
++def helper(${receiverName}, a, b):
+`;
+
+          const result = await analyzeImpactFromDiff(root, index, {
+            provider: "raw",
+            diffText,
+            includeTests: true,
+          });
+
+          if ("files" in result) {
+            throw new Error("Expected full impact report");
+          }
+
+          const helper = result.changedSymbols.find((symbol) => symbol.name === "helper");
+          expect(helper?.callCompatibility).toContainEqual(
+            expect.objectContaining({
+              status: "likely_mismatch",
+              reason: "argument_count_below_minimum",
+              actual: { argCount: 2, confidence: "high" },
+              expected: { minArgs: 3, maxArgs: 3, confidence: "high" },
+              callsiteFile: file,
+            }),
+          );
+        } finally {
+          await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+        }
+      },
+    );
+
+    it("does not emit call compatibility hints for overloaded Java callables", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-overload-java-"));
+      try {
+        const file = "Main.java";
+        const targetFile = path.join(root, file);
+        const before =
+          'class Main { void helper(String a) {} void helper(String a, int b) {} void run(){ helper("x"); } }\n';
+        const after =
+          'class Main { void helper(String a) {} void helper(String a, int b, int c) {} void run(){ helper("x"); } }\n';
+        await fsp.writeFile(targetFile, after, "utf8");
+        const index = await buildProjectIndex(root, { cache: "memory" });
+        const diffText = `diff --git a/${file} b/${file}
+--- a/${file}
++++ b/${file}
+@@ -1,1 +1,1 @@
+-${before.trimEnd()}
++${after.trimEnd()}
+`;
+
+        const result = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+          includeTests: true,
+        });
+
+        if ("files" in result) {
+          throw new Error("Expected full impact report");
+        }
+
+        const changedHelpers = result.changedSymbols.filter((symbol) => symbol.name === "helper" && symbol.signatureChanged);
+        expect(changedHelpers.length).toBeGreaterThan(0);
+        for (const helper of changedHelpers) {
+          expect(helper.callCompatibility).toBeUndefined();
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
+    it("keeps call compatibility hints for same-name Java methods in different classes", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-same-name-java-"));
+      try {
+        const file = "Main.java";
+        const targetFile = path.join(root, file);
+        const before =
+          'class Main { void helper(String a) {} void run(){ helper("x"); } } class Other { void helper(String a) {} }\n';
+        const after =
+          'class Main { void helper(String a, int b) {} void run(){ helper("x"); } } class Other { void helper(String a) {} }\n';
+        await fsp.writeFile(targetFile, after, "utf8");
+        const index = await buildProjectIndex(root, { cache: "memory" });
+        const diffText = `diff --git a/${file} b/${file}
+--- a/${file}
++++ b/${file}
+@@ -1,1 +1,1 @@
+-${before.trimEnd()}
++${after.trimEnd()}
+`;
+
+        const result = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+          includeTests: true,
+        });
+
+        if ("files" in result) {
+          throw new Error("Expected full impact report");
+        }
+
+        const changedHelper = result.changedSymbols.find((symbol) => symbol.name === "helper" && symbol.signatureChanged);
+        expect(changedHelper?.callCompatibility).toContainEqual(
+          expect.objectContaining({
+            status: "likely_mismatch",
+            reason: "argument_count_below_minimum",
+            callsiteFile: file,
+          }),
+        );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
+    it("does not report call compatibility mismatches from test files unless tests are included", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-filter-tests-"));
+      try {
+        await fsp.mkdir(path.join(root, "src"), { recursive: true });
+        const apiFile = path.join(root, "src", "api.ts");
+        const testFile = path.join(root, "src", "api.test.ts");
+        await fsp.writeFile(apiFile, "export function helper(a: string, b: number) { return a + b; }\n", "utf8");
+        await fsp.writeFile(testFile, 'import { helper } from "./api";\nexport const value = helper("x");\n', "utf8");
+
+        const index = await buildProjectIndex(root, { cache: "memory" });
+        const diffText = `diff --git a/src/api.ts b/src/api.ts
+--- a/src/api.ts
++++ b/src/api.ts
+@@ -1,1 +1,1 @@
+-export function helper(a: string) { return a; }
++export function helper(a: string, b: number) { return a + b; }
+`;
+
+        const withoutTests = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+        });
+
+        if ("files" in withoutTests) {
+          throw new Error("Expected full impact report");
+        }
+
+        const withoutTestsHelper = withoutTests.changedSymbols.find((symbol) => symbol.name === "helper");
+        expect(withoutTestsHelper?.callCompatibility ?? []).toHaveLength(0);
+
+        const withTests = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+          includeTests: true,
+        });
+
+        if ("files" in withTests) {
+          throw new Error("Expected full impact report");
+        }
+
+        const withTestsHelper = withTests.changedSymbols.find((symbol) => symbol.name === "helper");
+        expect(withTestsHelper?.callCompatibility).toContainEqual(
+          expect.objectContaining({
+            status: "likely_mismatch",
+            reason: "argument_count_below_minimum",
+            callsiteFile: "src/api.test.ts",
+          }),
+        );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
+    it("does not report call compatibility mismatches from ignored files", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-filter-ignore-"));
+      try {
+        await fsp.mkdir(path.join(root, "src"), { recursive: true });
+        const apiFile = path.join(root, "src", "api.ts");
+        const ignoredFile = path.join(root, "src", "ignored.ts");
+        await fsp.writeFile(apiFile, "export function helper(a: string, b: number) { return a + b; }\n", "utf8");
+        await fsp.writeFile(ignoredFile, 'import { helper } from "./api";\nexport const value = helper("x");\n', "utf8");
+
+        const index = await buildProjectIndex(root, { cache: "memory" });
+        const diffText = `diff --git a/src/api.ts b/src/api.ts
+--- a/src/api.ts
++++ b/src/api.ts
+@@ -1,1 +1,1 @@
+-export function helper(a: string) { return a; }
++export function helper(a: string, b: number) { return a + b; }
+`;
+
+        const result = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+          includeTests: true,
+          ignoreGlobs: ["src/ignored.ts"],
+        });
+
+        if ("files" in result) {
+          throw new Error("Expected full impact report");
+        }
+
+        const helper = result.changedSymbols.find((symbol) => symbol.name === "helper");
+        expect(helper?.callCompatibility ?? []).toHaveLength(0);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+  });
+
   describe("seedTransitiveFromFiles", () => {
     it("should seed transitive impact for deleted files", async () => {
       const index = await createTestIndex("typescript");
@@ -660,6 +1128,297 @@ describe("Impact Analyzer Edge Cases", () => {
           // Should not throw and should handle the case appropriately
           expect(Array.isArray(result)).toBe(true);
         }
+      }
+    });
+
+    it("skips compatibility collection when maxRefs is zero", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-compat-maxrefs-"));
+      try {
+        await fsp.mkdir(path.join(root, "src"), { recursive: true });
+        await fsp.writeFile(
+          path.join(root, "src/api.ts"),
+          'export function helper(a: string, b: number) { return a + b; }\n',
+          "utf8",
+        );
+        await fsp.writeFile(
+          path.join(root, "src/main.ts"),
+          'import { helper } from "./api";\nexport const value = helper("x");\n',
+          "utf8",
+        );
+        const index = await buildProjectIndex(root);
+        const diffText = [
+          "diff --git a/src/api.ts b/src/api.ts",
+          "index 1234567..abcdef0 100644",
+          "--- a/src/api.ts",
+          "+++ b/src/api.ts",
+          "@@ -1,1 +1,1 @@",
+          "-export function helper(a: string) { return a; }",
+          "+export function helper(a: string, b: number) { return a + b; }",
+          "",
+        ].join("\n");
+
+        const result = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+          maxRefs: 0,
+        });
+        if ("files" in result) {
+          throw new Error("Expected full impact report");
+        }
+        const helper = result.changedSymbols.find((symbol) => symbol.name === "helper");
+
+        expect(helper?.callCompatibility).toBeUndefined();
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
+    it("accounts for the definition entry when maxRefs is one", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-compat-maxrefs-one-"));
+      try {
+        await fsp.mkdir(path.join(root, "src"), { recursive: true });
+        await fsp.writeFile(
+          path.join(root, "src/api.ts"),
+          'export function helper(a: string, b: number) { return a + b; }\n',
+          "utf8",
+        );
+        await fsp.writeFile(
+          path.join(root, "src/main.ts"),
+          'import { helper } from "./api";\nexport const value = helper("x");\n',
+          "utf8",
+        );
+        const index = await buildProjectIndex(root);
+        const diffText = [
+          "diff --git a/src/api.ts b/src/api.ts",
+          "index 1234567..abcdef0 100644",
+          "--- a/src/api.ts",
+          "+++ b/src/api.ts",
+          "@@ -1,1 +1,1 @@",
+          "-export function helper(a: string) { return a; }",
+          "+export function helper(a: string, b: number) { return a + b; }",
+          "",
+        ].join("\n");
+
+        const result = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+          maxRefs: 1,
+        });
+        if ("files" in result) {
+          throw new Error("Expected full impact report");
+        }
+        const helper = result.changedSymbols.find((symbol) => symbol.name === "helper");
+
+        expect(helper?.callCompatibility).toContainEqual(
+          expect.objectContaining({
+            status: "likely_mismatch",
+            reason: "argument_count_below_minimum",
+            callsiteFile: "src/main.ts",
+          }),
+        );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
+    it("does not spend the callsite limit on non-call references", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-compat-alias-"));
+      try {
+        await fsp.mkdir(path.join(root, "src"), { recursive: true });
+        await fsp.writeFile(
+          path.join(root, "src/api.ts"),
+          'export function helper(a: string, b: number) { return a + b; }\n',
+          "utf8",
+        );
+        await fsp.writeFile(
+          path.join(root, "src/main.ts"),
+          [
+            'import { helper } from "./api";',
+            "const aliasOne = helper;",
+            "const aliasTwo = helper;",
+            "const aliasThree = helper;",
+            "const aliasFour = helper;",
+            "const aliasFive = helper;",
+            "const aliasSix = helper;",
+            'export const value = helper("x");',
+            "export { aliasOne, aliasTwo, aliasThree, aliasFour, aliasFive, aliasSix };",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        const index = await buildProjectIndex(root);
+        const diffText = [
+          "diff --git a/src/api.ts b/src/api.ts",
+          "index 1234567..abcdef0 100644",
+          "--- a/src/api.ts",
+          "+++ b/src/api.ts",
+          "@@ -1,1 +1,1 @@",
+          "-export function helper(a: string) { return a; }",
+          "+export function helper(a: string, b: number) { return a + b; }",
+          "",
+        ].join("\n");
+
+        const result = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+          maxRefs: 1,
+        });
+        if ("files" in result) {
+          throw new Error("Expected full impact report");
+        }
+        const helper = result.changedSymbols.find((symbol) => symbol.name === "helper");
+
+        expect(helper?.callCompatibility).toContainEqual(
+          expect.objectContaining({
+            status: "likely_mismatch",
+            reason: "argument_count_below_minimum",
+            callsiteFile: "src/main.ts",
+            actual: { argCount: 1, confidence: "high" },
+          }),
+        );
+        expect(helper?.callCompatibility).toHaveLength(1);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
+    it("attaches hints for changed arrow function variables when signature parsing is high confidence", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-compat-arrow-"));
+      try {
+        await fsp.mkdir(path.join(root, "src"), { recursive: true });
+        await fsp.writeFile(
+          path.join(root, "src/api.ts"),
+          'export const helper = (a: string, b: number) => a + b;\n',
+          "utf8",
+        );
+        await fsp.writeFile(
+          path.join(root, "src/main.ts"),
+          'import { helper } from "./api";\nexport const value = helper("x");\n',
+          "utf8",
+        );
+        const index = await buildProjectIndex(root);
+        const diffText = [
+          "diff --git a/src/api.ts b/src/api.ts",
+          "index 1234567..abcdef0 100644",
+          "--- a/src/api.ts",
+          "+++ b/src/api.ts",
+          "@@ -1,1 +1,1 @@",
+          "-export const helper = (a: string) => a;",
+          "+export const helper = (a: string, b: number) => a + b;",
+          "",
+        ].join("\n");
+
+        const result = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+        });
+        if ("files" in result) {
+          throw new Error("Expected full impact report");
+        }
+        const helper = result.changedSymbols.find((symbol) => symbol.name === "helper");
+
+        expect(helper?.callCompatibility).toContainEqual(
+          expect.objectContaining({
+            status: "likely_mismatch",
+            reason: "argument_count_below_minimum",
+            callsiteFile: "src/main.ts",
+            expected: { minArgs: 2, maxArgs: 2, confidence: "high" },
+            actual: { argCount: 1, confidence: "high" },
+          }),
+        );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
+    it.each([
+      { file: "api.ts", mainFile: "main.ts" },
+      { file: "api.js", mainFile: "main.js" },
+    ])("attaches hints for changed bare arrow function parameters in $file", async ({ file, mainFile }) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-compat-bare-arrow-"));
+      try {
+        await fsp.mkdir(path.join(root, "src"), { recursive: true });
+        await fsp.writeFile(path.join(root, "src", file), "export const helper = a => a;\n", "utf8");
+        await fsp.writeFile(
+          path.join(root, "src", mainFile),
+          'import { helper } from "./api";\nexport const value = helper("x", 1);\n',
+          "utf8",
+        );
+        const index = await buildProjectIndex(root);
+        const diffText = [
+          `diff --git a/src/${file} b/src/${file}`,
+          "index 1234567..abcdef0 100644",
+          `--- a/src/${file}`,
+          `+++ b/src/${file}`,
+          "@@ -1,1 +1,1 @@",
+          "-export const helper = (a, b) => a;",
+          "+export const helper = a => a;",
+          "",
+        ].join("\n");
+
+        const result = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+        });
+        if ("files" in result) {
+          throw new Error("Expected full impact report");
+        }
+        const helper = result.changedSymbols.find((symbol) => symbol.name === "helper");
+
+        expect(helper?.signatureChanged).toBeTruthy();
+        expect(helper?.callCompatibility).toContainEqual(
+          expect.objectContaining({
+            status: "likely_mismatch",
+            reason: "argument_count_above_maximum",
+            callsiteFile: `src/${mainFile}`,
+            expected: { minArgs: 1, maxArgs: 1, confidence: "high" },
+            actual: { argCount: 2, confidence: "high" },
+          }),
+        );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
+    it("does not mark object variables as signature changed for nested callback parameter edits", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-compat-nested-callback-"));
+      try {
+        await fsp.mkdir(path.join(root, "src"), { recursive: true });
+        await fsp.writeFile(
+          path.join(root, "src/api.ts"),
+          "export const config = { callback: (a: string, b: number) => a + b };\n",
+          "utf8",
+        );
+        await fsp.writeFile(
+          path.join(root, "src/main.ts"),
+          'import { config } from "./api";\nexport const value = config.callback("x", 1);\n',
+          "utf8",
+        );
+        const index = await buildProjectIndex(root);
+        const diffText = [
+          "diff --git a/src/api.ts b/src/api.ts",
+          "index 1234567..abcdef0 100644",
+          "--- a/src/api.ts",
+          "+++ b/src/api.ts",
+          "@@ -1,1 +1,1 @@",
+          "-export const config = { callback: (a: string) => a };",
+          "+export const config = { callback: (a: string, b: number) => a + b };",
+          "",
+        ].join("\n");
+
+        const result = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+        });
+        if ("files" in result) {
+          throw new Error("Expected full impact report");
+        }
+        const config = result.changedSymbols.find((symbol) => symbol.name === "config");
+
+        expect(config?.signatureChanged).not.toBe(true);
+        expect(config?.callCompatibility).toBeUndefined();
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }
     });
   });

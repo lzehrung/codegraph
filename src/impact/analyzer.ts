@@ -6,6 +6,7 @@ import { createImpactIgnoreMatcher } from "./path.js";
 import { analyzeDirectReferences } from "./direct.js";
 import { analyzeTransitiveImpact, seedTransitiveFromFiles } from "./transitive.js";
 import { buildDependencyStats } from "./severity.js";
+import { attachCallCompatibilityHints } from "./callCompatibility.js";
 export { calculateSeverity, calculateTransitiveSeverity } from "./severity.js";
 export { seedTransitiveFromFiles } from "./transitive.js";
 
@@ -72,6 +73,17 @@ export async function analyzeImpact(
 
   // Filter out changed symbols in ignored files
   const filteredChangedSymbols = changedSymbols.filter((s) => !isIgnored(s.file));
+  await attachCallCompatibilityHints(index, filteredChangedSymbols, {
+    maxRefs,
+    ...(projectRoot ? { projectRoot } : {}),
+    ...(diagnostics ? { diagnostics } : {}),
+    shouldIncludeReference: (file) => {
+      if (!includeTests && isIndexTestFile(file)) {
+        return false;
+      }
+      return !isIgnored(file);
+    },
+  });
   const directOptions = {
     maxRefs,
     includeTests,

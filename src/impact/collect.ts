@@ -39,6 +39,13 @@ export function createImpactDiagnostics(changedFilesTotal: number, changedFilesI
     refsDroppedByMaxRefs: 0,
     fallbackSeededFiles: 0,
     fallbackSeededDependents: 0,
+    callCompatibility: {
+      supportedLanguages: [],
+      unsupportedLanguages: [],
+      skippedByReason: {},
+      unknownCallsites: 0,
+      emittedHints: 0,
+    },
   };
 }
 

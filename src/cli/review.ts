@@ -1,6 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { buildReviewReport, type ReviewBuildReport, type ReviewDepth } from "../review.js";
 import type { CandidateTestFile } from "../impact/context.js";
+import type { CallCompatibilityHint } from "../impact/types.js";
 import type { BuildReport } from "../indexer/types.js";
 import { type GraphBuildOptions } from "../graphs/types.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
@@ -84,8 +85,40 @@ function appendCandidateTestGroup(
 }
 
 function appendLowConfidenceCandidateSummary(lines: string[], lowConfidenceCount: number): void {
-  if (lowConfidenceCount === 0) return;
+  if (!lowConfidenceCount) return;
   lines.push(`Low-confidence pattern matches: ${lowConfidenceCount} available as breadth hints in full JSON.`);
+}
+
+function formatReviewRequiredArgumentCount(hint: CallCompatibilityHint): string {
+  if (hint.reason === "argument_count_above_maximum" && hint.expected.maxArgs !== null) {
+    return `accepts at most ${hint.expected.maxArgs}`;
+  }
+  return `requires ${hint.expected.minArgs}`;
+}
+
+function appendReviewCallCompatibility(lines: string[], report: Awaited<ReturnType<typeof buildReviewReport>>): void {
+  const findings: string[] = [];
+  for (const file of report.changedFiles) {
+    for (const symbol of file.symbols) {
+      const hints = symbol.callCompatibility ?? [];
+      for (const hint of hints) {
+        if (hint.status !== "likely_mismatch") {
+          continue;
+        }
+        const plural = hint.actual.argCount === 1 ? "argument" : "arguments";
+        const requirement = formatReviewRequiredArgumentCount(hint);
+        findings.push(
+          `- ${symbol.name}: ${hint.callsiteFile}:${hint.callsiteRange.start.line} passes ${hint.actual.argCount} ${plural}; new signature ${requirement}.`,
+        );
+      }
+    }
+  }
+  if (!findings.length) {
+    return;
+  }
+  lines.push("");
+  lines.push("Call compatibility:");
+  lines.push(...findings);
 }
 
 function formatReviewSummary(report: Awaited<ReturnType<typeof buildReviewReport>>): string {
@@ -126,7 +159,7 @@ function formatReviewSummary(report: Awaited<ReturnType<typeof buildReviewReport
     const listedCandidates =
       appendCandidateTestGroup(lines, "High-confidence tests:", report.candidateTests, "high") +
       appendCandidateTestGroup(lines, "Medium-confidence tests:", report.candidateTests, "medium");
-    if (listedCandidates === 0) {
+    if (!listedCandidates) {
       lines.push("No high- or medium-confidence test candidates found.");
     }
     appendLowConfidenceCandidateSummary(lines, candidateCounts.low);
@@ -150,6 +183,7 @@ function formatReviewSummary(report: Awaited<ReturnType<typeof buildReviewReport
     lines.push(`- missing files: ${report.diagnostics.missingFiles.length}`);
     lines.push(`- symbol mapping parse failures: ${report.diagnostics.symbolMappingParseFailures.length}`);
   }
+  appendReviewCallCompatibility(lines, report);
   return `${lines.join("\n")}\n`;
 }
 

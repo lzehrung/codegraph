@@ -6,36 +6,36 @@ Status key:
 - Partial = supported with intentional limitations
 - No = not supported for that capability
 
-| Language         | Dependency graph | Symbol extraction | Go-to-definition | Find references | Chunking | SFC integration | PR impact mapping | Native addon | Native parity tests |
-| ---------------- | ---------------- | ----------------- | ---------------- | --------------- | -------- | --------------- | ----------------- | ------------ | ------------------- |
-| TypeScript       | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes          | Yes                 |
-| TSX              | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes          | Yes                 |
-| JavaScript       | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes          | Yes                 |
-| Python           | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes          | Yes                 |
-| PHP              | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes          | Yes                 |
-| Go               | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes          | Yes                 |
-| Java             | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes          | Yes                 |
-| C                | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes          | Yes                 |
-| C++              | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes          | Yes                 |
-| C#               | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes          | Yes                 |
-| Kotlin           | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes          | Yes                 |
-| Ruby             | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes          | Yes                 |
-| Rust             | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes          | Yes                 |
-| Swift            | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes          | Yes                 |
-| Zig              | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes          | Yes                 |
-| HTML             | Yes              | No                | No               | No              | Yes      | No              | Yes               | Yes          | Yes                 |
-| Astro            | Yes              | No                | No               | No              | No       | No              | Yes               | No           | No                  |
-| Handlebars       | Yes              | No                | No               | No              | No       | No              | Yes               | No           | No                  |
-| CSS              | Yes              | No                | No               | No              | Yes      | No              | Yes               | Yes          | Yes                 |
-| SCSS             | Yes              | No                | No               | No              | Yes      | No              | Yes               | Yes          | Yes                 |
-| Less             | Yes              | No                | No               | No              | Yes      | No              | Yes               | Yes          | Yes                 |
-| Markdown         | Yes              | No                | No               | No              | No       | No              | Yes               | No           | No                  |
-| MDX              | Yes              | No                | No               | No              | No       | No              | Yes               | No           | No                  |
-| reStructuredText | Yes              | No                | No               | No              | No       | No              | Yes               | No           | No                  |
-| AsciiDoc         | Yes              | No                | No               | No              | No       | No              | Yes               | No           | No                  |
-| Vue              | Yes              | No                | No               | No              | Yes      | Yes             | Yes               | Yes          | Yes                 |
-| Svelte           | Yes              | No                | No               | No              | Yes      | Yes             | Yes               | Yes          | Yes                 |
-| SQL              | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Partial           | Yes          | Yes                 |
+| Language         | Dependency graph | Symbol extraction | Go-to-definition | Find references | Chunking | SFC integration | PR impact mapping | Call compatibility | Native addon | Native parity tests |
+| ---------------- | ---------------- | ----------------- | ---------------- | --------------- | -------- | --------------- | ----------------- | ------------------ | ------------ | ------------------- |
+| TypeScript       | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes                | Yes          | Yes                 |
+| TSX              | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes                | Yes          | Yes                 |
+| JavaScript       | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes                | Yes          | Yes                 |
+| Python           | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes                | Yes          | Yes                 |
+| PHP              | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes                | Yes          | Yes                 |
+| Go               | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes                | Yes          | Yes                 |
+| Java             | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes                | Yes          | Yes                 |
+| C                | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes                | Yes          | Yes                 |
+| C++              | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes                | Yes          | Yes                 |
+| C#               | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes                | Yes          | Yes                 |
+| Kotlin           | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes                | Yes          | Yes                 |
+| Ruby             | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes                | Yes          | Yes                 |
+| Rust             | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes                | Yes          | Yes                 |
+| Swift            | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes                | Yes          | Yes                 |
+| Zig              | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Yes               | Yes                | Yes          | Yes                 |
+| HTML             | Yes              | No                | No               | No              | Yes      | No              | Yes               | No                 | Yes          | Yes                 |
+| Astro            | Yes              | No                | No               | No              | No       | No              | Yes               | No                 | No           | No                  |
+| Handlebars       | Yes              | No                | No               | No              | No       | No              | Yes               | No                 | No           | No                  |
+| CSS              | Yes              | No                | No               | No              | Yes      | No              | Yes               | No                 | Yes          | Yes                 |
+| SCSS             | Yes              | No                | No               | No              | Yes      | No              | Yes               | No                 | Yes          | Yes                 |
+| Less             | Yes              | No                | No               | No              | Yes      | No              | Yes               | No                 | Yes          | Yes                 |
+| Markdown         | Yes              | No                | No               | No              | No       | No              | Yes               | No                 | No           | No                  |
+| MDX              | Yes              | No                | No               | No              | No       | No              | Yes               | No                 | No           | No                  |
+| reStructuredText | Yes              | No                | No               | No              | No       | No              | Yes               | No                 | No           | No                  |
+| AsciiDoc         | Yes              | No                | No               | No              | No       | No              | Yes               | No                 | No           | No                  |
+| Vue              | Yes              | No                | No               | No              | Yes      | Yes             | Yes               | No                 | Yes          | Yes                 |
+| Svelte           | Yes              | No                | No               | No              | Yes      | Yes             | Yes               | No                 | Yes          | Yes                 |
+| SQL              | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Partial           | No                 | Yes          | Yes                 |
 
 Notes:
 
@@ -50,6 +50,10 @@ Notes:
 - Deeper hardening coverage includes Python `from __future__ import ...` extraction.
 - Deeper hardening coverage includes PHP grouped `use` imports, bracketed namespaces, `__DIR__` includes, fully-qualified Composer-backed references, function/class basename collisions, and Composer classmap-boundary coverage.
 - JavaScript graphing now includes an isolated AngularJS heuristic layer for `templateUrl`, controller-name, and DI-token file/external edges when a file explicitly uses `angular.module(...)`. This coverage lives in dedicated framework tests, not in the generic JavaScript fixture set, and it is not a general claim that arbitrary `controller` or `templateUrl` config objects are Angular-aware.
+- Call compatibility hints compare changed callable arity with resolved callsites when parsing is high confidence. They are not type checking, overload resolution, trait dispatch, function-pointer analysis, macro expansion, or data-flow inference.
+- Call compatibility skips same-file overload sets unless a future resolver can prove the exact overload target.
+- JavaScript, TypeScript, TSX, and JSX call compatibility includes callable variable arrows with parenthesized parameters and single bare parameters such as `const helper = a => a`.
+- JavaScript and TypeScript class method parameter edits currently preserve a `signatureChanged` impact signal on the enclosing class when method locals are not indexed. Method-level call compatibility remains intentionally blocked until receiver-aware method references are implemented.
 - `SCSS` uses the native addon for import/specifier extraction. Dependency graph resolution covers Sass partials for extensionless and explicit `.scss` specifiers, including non-canonical extension casing. Native SCSS symbol queries remain intentionally skipped because symbol extraction is not a supported SCSS capability in either runtime path yet.
 - `HTML`, `CSS`, `Less`, `Vue`, and `Svelte` are graph/chunking-focused today. Their unsupported navigation and symbol features are covered by explicit `not_found` parity tests.
 - `Markdown` and `MDX` are graph-first today. They use shared text extraction for document links and MDX static imports, and they intentionally do not claim semantic chunking, navigation, references, or native-addon parity yet.

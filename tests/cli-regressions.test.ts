@@ -1750,6 +1750,29 @@ index 1111111..2222222 100644
     expect(stdout).not.toContain('"projectFiles"');
   });
 
+  it("review CLI summary prints call compatibility hints without symbol details", async () => {
+    const root = await mkTmpDir("dg-review-summary-call-compat-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.writeFile(path.join(srcDir, "api.ts"), "export function helper(a = 1) { return a; }\n", "utf8");
+    await fsp.writeFile(
+      path.join(srcDir, "main.ts"),
+      'import { helper } from "./api";\nexport const value = helper("x");\n',
+      "utf8",
+    );
+    initGitRepo(root);
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "initial"]);
+
+    await fsp.writeFile(path.join(srcDir, "api.ts"), "export function helper(a = 1, b: string) { return b; }\n", "utf8");
+
+    const stdout = await runCliCommand(["review", "--root", root, "--base", "HEAD", "--head", "WORKTREE", "--summary"]);
+
+    expect(stdout).toContain("Call compatibility:");
+    expect(stdout).toContain("helper:");
+    expect(stdout).toContain("passes 1 argument; new signature requires 2");
+  });
+
   it("review CLI accepts space-separated --max-callsites values", async () => {
     const root = await mkTmpDir("dg-review-cli-callsites-");
     const srcDir = path.join(root, "src");

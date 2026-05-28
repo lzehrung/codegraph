@@ -6,7 +6,8 @@
  * 3. findNodesInLines pruning – empty changedLines returns no nodes
  * 4. findDeclarationNameInAncestors – skips names not tracked in locals,
  *    so a method-body edit is correctly attributed to the containing class
- * 5. method_definition added to isDeclarationName for JS and TS
+ * 5. method_definition added to isDeclarationName for JS and TS, while
+ *    unindexed method signature edits still preserve a class-level signal
  * 6. appendUniqueSpecifiers deduplication is idempotent and O(n) per call
  * 7. TypeScript ambient module augmentation creates a file-graph edge
  */
@@ -323,7 +324,9 @@ describe("method_definition in isDeclarationName", () => {
 
       // The change should be attributed to the Calculator class (since methods
       // aren't tracked as separate locals, the search climbs to the class)
-      expect(changed.some((s) => s.name === "Calculator")).toBe(true);
+      const calculator = changed.find((symbol) => symbol.name === "Calculator");
+      expect(calculator).toBeDefined();
+      expect(calculator?.signatureChanged).not.toBe(true);
     });
   });
 
@@ -350,9 +353,88 @@ describe("method_definition in isDeclarationName", () => {
       ]);
 
       // Should be attributed to UserService (method not a separate local in TS)
-      expect(changed.some((s) => s.name === "UserService")).toBe(true);
+      const userService = changed.find((symbol) => symbol.name === "UserService");
+      expect(userService).toBeDefined();
+      expect(userService?.signatureChanged).not.toBe(true);
     });
   });
+
+  it.each([
+    {
+      label: "JS",
+      file: "service.js",
+      configFile: "package.json",
+      config: { name: "test", type: "module" },
+      currentMethod: "  fetchUser(id, includePosts) {",
+      oldMethod: "  fetchUser(id) {",
+      newMethod: "  fetchUser(id, includePosts) {",
+      consumerFile: "main.js",
+      consumerSource: 'import { UserService } from "./service.js"; new UserService().fetchUser(1);\n',
+    },
+    {
+      label: "TS",
+      file: "service.ts",
+      configFile: "tsconfig.json",
+      config: { compilerOptions: { strict: true } },
+      currentMethod: "  fetchUser(id: number, includePosts: boolean) {",
+      oldMethod: "  fetchUser(id: number) {",
+      newMethod: "  fetchUser(id: number, includePosts: boolean) {",
+      consumerFile: "main.ts",
+      consumerSource: 'import { UserService } from "./service"; new UserService().fetchUser(1);\n',
+    },
+  ])(
+    "preserves an enclosing-class signatureChanged signal for unindexed $label method parameter edits",
+    async ({ label, file, configFile, config, currentMethod, oldMethod, newMethod, consumerFile, consumerSource }) => {
+      await withTmpDir(`method-param-${label.toLowerCase()}`, async (root) => {
+        await fsp.writeFile(path.join(root, configFile), JSON.stringify(config));
+        await fsp.writeFile(
+          path.join(root, file),
+          ["export class UserService {", currentMethod, "    return { id };", "  }", "}"].join("\n") + "\n",
+        );
+        await fsp.writeFile(path.join(root, consumerFile), consumerSource);
+
+        const index = await buildProjectIndex(root);
+        const { locateChangedSymbols } = await import("../src/impact/map.js");
+
+        const svcFile = path.join(root, file).replace(/\\/g, "/");
+        const changed = await locateChangedSymbols(index, svcFile, [
+          {
+            oldStart: 2,
+            newStart: 2,
+            lines: [`-${oldMethod}`, `+${newMethod}`],
+          },
+        ]);
+
+        const userService = changed.find((symbol) => symbol.name === "UserService");
+        expect(userService).toBeDefined();
+        expect(userService?.signatureChanged).toBe(true);
+
+        const result = nonCompact(
+          await analyzeImpactFromDiff(root, index, {
+            provider: "raw",
+            diffText: [
+              `diff --git a/${file} b/${file}`,
+              `--- a/${file}`,
+              `+++ b/${file}`,
+              "@@ -1,5 +1,5 @@",
+              " export class UserService {",
+              `-${oldMethod}`,
+              `+${newMethod}`,
+              "     return { id };",
+              "   }",
+              " }",
+            ].join("\n"),
+            includeTests: true,
+          }),
+        );
+        const changedClass = result.changedSymbols.find((symbol) => symbol.name === "UserService");
+        const impact = result.impacted.find((item) => item.file === consumerFile);
+        expect(changedClass?.signatureChanged).toBe(true);
+        expect(changedClass?.callCompatibility).toBeUndefined();
+        expect(impact?.explain?.hints).toContain("signatureChanged");
+      });
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -378,7 +460,7 @@ describe("TypeScript declare module augmentation", () => {
       );
       expect(edges.length).toBeGreaterThan(0);
       // Ambient module augmentations are purely type-level dependencies
-      expect(edges.every((edge) => edge.typeOnly === true)).toBe(true);
+      expect(edges.every((edge) => edge.typeOnly)).toBe(true);
     });
   });
 });

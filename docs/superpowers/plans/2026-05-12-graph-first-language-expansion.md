@@ -13,17 +13,28 @@ Graph-first source-language support still participates in the normal code depend
 
 ## Target Languages
 
-| Language | Extensions | npm grammar | Rust grammar |
-| --- | --- | --- | --- |
-| Scala | `.scala`, `.sc` | [`tree-sitter-scala`](https://www.npmjs.com/package/tree-sitter-scala) | [`tree-sitter-scala`](https://crates.io/crates/tree-sitter-scala) |
-| Lua | `.lua` | [`tree-sitter-lua`](https://www.npmjs.com/package/tree-sitter-lua) | [`tree-sitter-lua`](https://crates.io/crates/tree-sitter-lua) |
-| PowerShell | `.ps1`, `.psm1`, `.psd1` | [`tree-sitter-powershell`](https://www.npmjs.com/package/tree-sitter-powershell) | [`tree-sitter-powershell`](https://crates.io/crates/tree-sitter-powershell) |
-| Elixir | `.ex`, `.exs` | [`tree-sitter-elixir`](https://www.npmjs.com/package/tree-sitter-elixir) | [`tree-sitter-elixir`](https://crates.io/crates/tree-sitter-elixir) |
-| Objective-C | `.m` | [`tree-sitter-objc`](https://www.npmjs.com/package/tree-sitter-objc) | [`tree-sitter-objc`](https://crates.io/crates/tree-sitter-objc) |
-| Julia | `.jl` | [`tree-sitter-julia`](https://www.npmjs.com/package/tree-sitter-julia) | [`tree-sitter-julia`](https://crates.io/crates/tree-sitter-julia) |
-| Dart | `.dart` | [`tree-sitter-dart`](https://www.npmjs.com/package/tree-sitter-dart) | [`tree-sitter-dart`](https://crates.io/crates/tree-sitter-dart) |
+| Language    | Extensions               | npm grammar                                                                      | Rust grammar                                                                |
+| ----------- | ------------------------ | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| Scala       | `.scala`, `.sc`          | [`tree-sitter-scala`](https://www.npmjs.com/package/tree-sitter-scala)           | [`tree-sitter-scala`](https://crates.io/crates/tree-sitter-scala)           |
+| Lua         | `.lua`                   | [`tree-sitter-lua`](https://www.npmjs.com/package/tree-sitter-lua)               | [`tree-sitter-lua`](https://crates.io/crates/tree-sitter-lua)               |
+| PowerShell  | `.ps1`, `.psm1`, `.psd1` | [`tree-sitter-powershell`](https://www.npmjs.com/package/tree-sitter-powershell) | [`tree-sitter-powershell`](https://crates.io/crates/tree-sitter-powershell) |
+| Elixir      | `.ex`, `.exs`            | [`tree-sitter-elixir`](https://www.npmjs.com/package/tree-sitter-elixir)         | [`tree-sitter-elixir`](https://crates.io/crates/tree-sitter-elixir)         |
+| Objective-C | `.m`                     | [`tree-sitter-objc`](https://www.npmjs.com/package/tree-sitter-objc)             | [`tree-sitter-objc`](https://crates.io/crates/tree-sitter-objc)             |
+| Julia       | `.jl`                    | [`tree-sitter-julia`](https://www.npmjs.com/package/tree-sitter-julia)           | [`tree-sitter-julia`](https://crates.io/crates/tree-sitter-julia)           |
+| Dart        | `.dart`                  | [`tree-sitter-dart`](https://www.npmjs.com/package/tree-sitter-dart)             | [`tree-sitter-dart`](https://crates.io/crates/tree-sitter-dart)             |
 
 Deliberately defer Objective-C `.h` and `.mm` until header and Objective-C++ ownership can be resolved without breaking existing C/C++ `.h` heuristics.
+
+## Agentic Coding Value
+
+Graph-first support is valuable for agents even before full semantic navigation exists. It lets the standard Codegraph workflows answer first-pass questions in more polyglot repos:
+
+- orient a repo and identify language-owned areas
+- include static dependencies in `graph`, `inspect`, `impact`, and `review`
+- chunk unfamiliar source files for bounded model context
+- detect hotspots, unresolved imports, and duplicate code units where supported
+
+The product boundary is important: graph-first languages may participate in dependency and chunking workflows, but docs and tests must continue to say when `goto` and `refs` are unsupported.
 
 ## Support Contract
 

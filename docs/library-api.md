@@ -476,6 +476,8 @@ for (const item of report.impacted.slice(0, 5)) {
 }
 ```
 
+Changed symbols can include `callCompatibility` when a provider-backed callable signature changed and Codegraph resolved high-confidence callsites. These hints compare argument counts only; they are deterministic review leads, not type checking or overload analysis.
+
 Include reference context snippets when needed:
 
 ```ts
@@ -543,11 +545,11 @@ const impact = await tool_impactJSON(root, { provider: "git", base: "HEAD", head
 
 Use the exported TypeScript APIs when another program is composing deterministic review packets, file packs, or model prompts. CLI `--pretty` and `--summary` output is optimized for humans reading a terminal; it is not the stable integration contract.
 
-- `buildReviewReport()` returns a review bundle with `schemaVersion`, changed files, changed symbols, `graphDelta`, candidate tests, `riskSummary`, `reviewTasks`, optional `sqlContext`, and diagnostics.
-- `analyzeImpactFromDiff()` returns the full or compact impact report shape for batch consumers.
+- `buildReviewReport()` returns a review bundle with `schemaVersion`, changed files, changed symbols, `graphDelta`, candidate tests, `riskSummary`, `reviewTasks`, optional `sqlContext`, compatibility hints when available, and diagnostics.
+- `analyzeImpactFromDiff()` returns the full or compact impact report shape for batch consumers, including changed-symbol `callCompatibility` hints when available.
 - `analyzeImpactStreaming()` emits progress and incremental chunks, then a final `complete.report` summary. Streaming always returns `format: "stream-summary"`; forwarded `compact` is accepted only for compatibility and is ignored. By default this includes the same key structured fields needed by pack builders: changed files, changed symbols, impacted items, suggestions, export summaries, re-export chains, ranked top impacts, surface area, clusters, cycles, graph edges, diagnostics, and warning text. Set `streamSummary: "light"` when an incremental-only caller wants changed/impacted details and stable terminal counts without paying for terminal suggestions, export summaries, re-export chains, ranked top impacts, graph metadata, cycles, clusters, or surface-area analysis.
 
-Review-pack builders should preserve symbol handles, diff snippets, callsites, diagnostics, candidate-test confidence, impact reasons, and graph edge metadata. Render prose only at the final UI or prompt boundary.
+Review-pack builders should preserve symbol handles, diff snippets, callsites, `callCompatibility`, diagnostics, candidate-test confidence, impact reasons, and graph edge metadata. Render prose only at the final UI or prompt boundary.
 
 Human-readable summaries such as `codegraph review --summary` and `codegraph impact --pretty` are CLI presentation modes. Library callers should use `buildReviewReport()`, `analyzeImpactFromDiff()`, `analyzeImpactStreaming()`, or `tool_impactJSON()` and format only the selected fields they need.
 
