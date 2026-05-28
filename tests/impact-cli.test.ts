@@ -63,6 +63,36 @@ async function runImpactCli(args: string[], opts?: { cwd?: string; stdin?: strin
   return stdout;
 }
 
+async function runCodegraphCli(args: string[], opts?: { cwd?: string; stdin?: string }): Promise<string> {
+  let stdout = "";
+  let stderr = "";
+  let exitCode: number | undefined;
+
+  try {
+    await runCli(args, {
+      cwd: () => opts?.cwd ?? process.cwd(),
+      stdout: (chunk) => {
+        stdout += chunk;
+      },
+      stderr: (chunk) => {
+        stderr += chunk;
+      },
+      readStdin: async () => opts?.stdin ?? "",
+      exit: (code) => {
+        exitCode = code;
+        throw new Error(`codegraph CLI exited ${code}`);
+      },
+    });
+  } catch (error) {
+    if (exitCode !== undefined) {
+      throw new Error(`codegraph CLI failed (${exitCode}). stderr:\n${stderr}`);
+    }
+    throw error;
+  }
+
+  return stdout;
+}
+
 function runImpactCliSubprocess(args: string[], opts?: { cwd?: string; stdin?: string }) {
   return new Promise<string>((resolve, reject) => {
     const child = spawn(process.execPath, [tsxCliPath, codegraphCliPath, ...args], {
@@ -119,144 +149,295 @@ describe("impact CLI output", () => {
     return { root, diffText };
   }
 
-  it("prints JSON by default", async () => {
-    const stdout = await runImpactCliSubprocess(["impact", sampleRoot, "--provider", "raw"]);
-    const report = JSON.parse(stdout);
-    expect(report.changedFiles).toHaveLength(1);
-    expect(report.changedFiles[0]?.file).toBe("utils.ts");
-  }, slowCliTimeoutMs);
-
-  it("supports pretty summaries", async () => {
-    const stdout = await runImpactCli(["impact", sampleRoot, "--provider", "raw", "--pretty"]);
-    expect(stdout).toContain("Impact Analysis Report");
-    expect(stdout).toContain("Changed files: 1");
-    expect(stdout).toContain("Changed symbols:");
-  }, slowCliTimeoutMs);
-
-  it("prints reason labels in pretty impact output", async () => {
-    const stdout = await runImpactCli(["impact", sampleRoot, "--provider", "raw", "--pretty"]);
-
-    expect(stdout).toContain("Impact Analysis Report");
-    expect(stdout).toContain("Changed files: 1");
-    expect(stdout).toMatch(/utils\.ts: .*reason:/);
-  }, slowCliTimeoutMs);
-
-  it("includes call compatibility in JSON output", async () => {
-    const { root, diffText } = await createCallCompatibilityFixture();
-    try {
-      const stdout = await runImpactCli(["impact", "--root", root, "--provider", "raw"], {
-        cwd: root,
-        stdin: diffText,
-      });
+  it(
+    "prints JSON by default",
+    async () => {
+      const stdout = await runImpactCliSubprocess(["impact", sampleRoot, "--provider", "raw"]);
       const report = JSON.parse(stdout);
-      const helper = report.changedSymbols.find((symbol: { name?: string }) => symbol.name === "helper");
-      expect(helper.callCompatibility).toContainEqual(
-        expect.objectContaining({
-          status: "likely_mismatch",
-          reason: "argument_count_below_minimum",
-          callsiteFile: "src/main.ts",
-        }),
-      );
-    } finally {
-      await fsp.rm(root, { recursive: true, force: true });
-    }
-  }, slowCliTimeoutMs);
+      expect(report.changedFiles).toHaveLength(1);
+      expect(report.changedFiles[0]?.file).toBe("utils.ts");
+    },
+    slowCliTimeoutMs,
+  );
 
-  it("prints call compatibility only for likely mismatches in pretty output", async () => {
-    const mismatch = await createCallCompatibilityFixture();
-    const compatible = await createCallCompatibilityFixture(true);
-    try {
-      const mismatchStdout = await runImpactCli(["impact", "--root", mismatch.root, "--provider", "raw", "--pretty"], {
-        cwd: mismatch.root,
-        stdin: mismatch.diffText,
-      });
-      expect(mismatchStdout).toContain("Call compatibility:");
-      expect(mismatchStdout).toContain("helper: src/main.ts:2 passes 1 argument; new signature requires 2.");
+  it(
+    "supports pretty summaries",
+    async () => {
+      const stdout = await runImpactCli(["impact", sampleRoot, "--provider", "raw", "--pretty"]);
+      expect(stdout).toContain("Impact Analysis Report");
+      expect(stdout).toContain("Changed files: 1");
+      expect(stdout).toContain("Changed symbols:");
+    },
+    slowCliTimeoutMs,
+  );
 
-      const compatibleStdout = await runImpactCli(
-        ["impact", "--root", compatible.root, "--provider", "raw", "--pretty"],
-        {
-          cwd: compatible.root,
-          stdin: compatible.diffText,
-        },
-      );
-      expect(compatibleStdout).not.toContain("Call compatibility:");
-      expect(compatibleStdout).not.toContain("compatible_argument_count");
-      expect(compatibleStdout).not.toContain("signature_or_callsite_unknown");
-    } finally {
-      await fsp.rm(mismatch.root, { recursive: true, force: true });
-      await fsp.rm(compatible.root, { recursive: true, force: true });
-    }
-  }, slowCliTimeoutMs);
+  it(
+    "prints reason labels in pretty impact output",
+    async () => {
+      const stdout = await runImpactCli(["impact", sampleRoot, "--provider", "raw", "--pretty"]);
 
-  it("accepts --compact-json as an alias for compact impact JSON", async () => {
-    const stdout = await runImpactCli(["impact", sampleRoot, "--provider", "raw", "--compact-json"]);
-    const report = JSON.parse(stdout) as { schemaVersion?: number; format?: string; files?: string[] };
+      expect(stdout).toContain("Impact Analysis Report");
+      expect(stdout).toContain("Changed files: 1");
+      expect(stdout).toMatch(/utils\.ts: .*reason:/);
+    },
+    slowCliTimeoutMs,
+  );
 
-    expect(report.schemaVersion).toBe(1);
-    expect(report.format).toBe("compact");
-    expect(Array.isArray(report.files)).toBe(true);
-  }, slowCliTimeoutMs);
-
-  it("rejects invalid numeric analysis options", async () => {
-    await expect(runImpactCli(["impact", sampleRoot, "--provider", "raw", "--max-refs", "NaN"])).rejects.toThrow(
-      /Invalid --max-refs value "NaN"/i,
-    );
-  }, slowCliTimeoutMs);
-
-  it("renders Mermaid output and honors graph/cache flags", async () => {
-    const stdout = await runImpactCli([
-      "impact",
-      sampleRoot,
-      "--provider",
-      "raw",
-      "--mermaid",
-      "--threads",
-      "2",
-      "--cache",
-      "memory",
-      "--cache-strict",
-      "--fast-graph",
-      "--resolve-node-modules",
-    ]);
-    expect(stdout).toContain("flowchart LR");
-    expect(stdout).toContain("utils.ts");
-    expect(stdout).not.toContain("helpers.ts");
-  }, slowCliTimeoutMs);
-
-  it("prints ASCII warnings in pretty mode for large git diffs", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-cli-warning-"));
-    try {
-      runGit(root, ["init"]);
-      runGit(root, ["config", "user.email", "impact@test.local"]);
-      runGit(root, ["config", "user.name", "Codegraph Bot"]);
-
-      const filePath = path.join(root, "notes.txt");
-      await fsp.writeFile(filePath, "seed\n", "utf8");
-      runGit(root, ["add", "."]);
-      runGit(root, ["commit", "-m", "initial"]);
-
-      const largeBody = Array.from({ length: 50001 }, (_, i) => `line ${i}`).join("\n");
-      await fsp.writeFile(filePath, `${largeBody}\n`, "utf8");
-      runGit(root, ["add", "notes.txt"]);
-      runGit(root, ["commit", "-m", "large"]);
-
-      const base = runGit(root, ["rev-parse", "HEAD^"]);
-      const head = runGit(root, ["rev-parse", "HEAD"]);
-
-      const stdout = await runImpactCli(
-        ["impact", "--root", root, "--provider", "git", "--base", base, "--head", head, "--pretty"],
-        {
+  it(
+    "includes call compatibility in JSON output",
+    async () => {
+      const { root, diffText } = await createCallCompatibilityFixture();
+      try {
+        const stdout = await runImpactCli(["impact", "--root", root, "--provider", "raw"], {
           cwd: root,
-          stdin: "",
-        },
-      );
+          stdin: diffText,
+        });
+        const report = JSON.parse(stdout);
+        const helper = report.changedSymbols.find((symbol: { name?: string }) => symbol.name === "helper");
+        expect(helper.callCompatibility).toContainEqual(
+          expect.objectContaining({
+            status: "likely_mismatch",
+            reason: "argument_count_below_minimum",
+            callsiteFile: "src/main.ts",
+          }),
+        );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+    slowCliTimeoutMs,
+  );
 
-      expect(stdout).toContain("WARNING: Large diff detected");
-      expect(stdout).not.toContain("⚠");
-      expect(stdout).not.toContain("âš");
-    } finally {
-      await fsp.rm(root, { recursive: true, force: true });
-    }
-  }, slowCliTimeoutMs);
+  it(
+    "prints call compatibility only for likely mismatches in pretty output",
+    async () => {
+      const mismatch = await createCallCompatibilityFixture();
+      const compatible = await createCallCompatibilityFixture(true);
+      try {
+        const mismatchStdout = await runImpactCli(
+          ["impact", "--root", mismatch.root, "--provider", "raw", "--pretty"],
+          {
+            cwd: mismatch.root,
+            stdin: mismatch.diffText,
+          },
+        );
+        expect(mismatchStdout).toContain("Call compatibility:");
+        expect(mismatchStdout).toContain("helper: src/main.ts:2 passes 1 argument; new signature requires 2.");
+
+        const compatibleStdout = await runImpactCli(
+          ["impact", "--root", compatible.root, "--provider", "raw", "--pretty"],
+          {
+            cwd: compatible.root,
+            stdin: compatible.diffText,
+          },
+        );
+        expect(compatibleStdout).not.toContain("Call compatibility:");
+        expect(compatibleStdout).not.toContain("compatible_argument_count");
+        expect(compatibleStdout).not.toContain("signature_or_callsite_unknown");
+      } finally {
+        await fsp.rm(mismatch.root, { recursive: true, force: true });
+        await fsp.rm(compatible.root, { recursive: true, force: true });
+      }
+    },
+    slowCliTimeoutMs,
+  );
+
+  it(
+    "prints scoped duplicate leads in pretty output by default",
+    async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-cli-duplicates-"));
+      const source = `
+export function summarizeOrders(rows: Array<{ amount: number; tax: number }>) {
+  const output: string[] = [];
+  for (const row of rows) {
+    const subtotal = row.amount + row.tax;
+    const rounded = Math.round(subtotal * 100) / 100;
+    const label = rounded > 100 ? "large" : "small";
+    output.push(label + ":" + rounded.toFixed(2));
+  }
+  return output.filter((value) => value.includes(":")).join(",");
+}
+`;
+      try {
+        await fsp.mkdir(path.join(root, "src"), { recursive: true });
+        await fsp.writeFile(path.join(root, "src", "orders-a.ts"), source, "utf8");
+        await fsp.writeFile(path.join(root, "src", "orders-b.ts"), source, "utf8");
+        const diffText = [
+          "diff --git a/src/orders-a.ts b/src/orders-a.ts",
+          "index 1234567..abcdef0 100644",
+          "--- a/src/orders-a.ts",
+          "+++ b/src/orders-a.ts",
+          "@@ -1,1 +1,1 @@",
+          "-export function oldA() { return 1; }",
+          "+export function summarizeOrders(rows: Array<{ amount: number; tax: number }>) {",
+          "diff --git a/src/orders-b.ts b/src/orders-b.ts",
+          "index 1234567..abcdef0 100644",
+          "--- a/src/orders-b.ts",
+          "+++ b/src/orders-b.ts",
+          "@@ -1,1 +1,1 @@",
+          "-export function oldB() { return 2; }",
+          "+export function summarizeOrders(rows: Array<{ amount: number; tax: number }>) {",
+          "",
+        ].join("\n");
+
+        const stdout = await runImpactCli(["impact", "--root", root, "--provider", "raw", "--pretty"], {
+          cwd: root,
+          stdin: diffText,
+        });
+        const disabledStdout = await runImpactCli(
+          ["impact", "--root", root, "--provider", "raw", "--pretty", "--duplicates", "off"],
+          {
+            cwd: root,
+            stdin: diffText,
+          },
+        );
+
+        expect(stdout).toContain("Duplicate leads:");
+        expect(stdout).toContain("src/orders-a.ts:");
+        expect(stdout).toContain("matches src/orders-b.ts:");
+        expect(stdout).toContain("(exact, score 100)");
+        expect(disabledStdout).not.toContain("Duplicate leads:");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+    slowCliTimeoutMs,
+  );
+
+  it(
+    "accepts --compact-json as an alias for compact impact JSON",
+    async () => {
+      const stdout = await runImpactCli(["impact", sampleRoot, "--provider", "raw", "--compact-json"]);
+      const report = JSON.parse(stdout) as { schemaVersion?: number; format?: string; files?: string[] };
+
+      expect(report.schemaVersion).toBe(1);
+      expect(report.format).toBe("compact");
+      expect(Array.isArray(report.files)).toBe(true);
+    },
+    slowCliTimeoutMs,
+  );
+
+  it(
+    "rejects invalid numeric analysis options",
+    async () => {
+      await expect(runImpactCli(["impact", sampleRoot, "--provider", "raw", "--max-refs", "NaN"])).rejects.toThrow(
+        /Invalid --max-refs value "NaN"/i,
+      );
+    },
+    slowCliTimeoutMs,
+  );
+
+  it(
+    "renders Mermaid output and honors graph/cache flags",
+    async () => {
+      const stdout = await runImpactCli([
+        "impact",
+        sampleRoot,
+        "--provider",
+        "raw",
+        "--mermaid",
+        "--threads",
+        "2",
+        "--cache",
+        "memory",
+        "--cache-strict",
+        "--fast-graph",
+        "--resolve-node-modules",
+      ]);
+      expect(stdout).toContain("flowchart LR");
+      expect(stdout).toContain("utils.ts");
+      expect(stdout).not.toContain("helpers.ts");
+    },
+    slowCliTimeoutMs,
+  );
+
+  it(
+    "prints ASCII warnings in pretty mode for large git diffs",
+    async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-cli-warning-"));
+      try {
+        runGit(root, ["init"]);
+        runGit(root, ["config", "user.email", "impact@test.local"]);
+        runGit(root, ["config", "user.name", "Codegraph Bot"]);
+
+        const filePath = path.join(root, "notes.txt");
+        await fsp.writeFile(filePath, "seed\n", "utf8");
+        runGit(root, ["add", "."]);
+        runGit(root, ["commit", "-m", "initial"]);
+
+        const largeBody = Array.from({ length: 50001 }, (_, i) => `line ${i}`).join("\n");
+        await fsp.writeFile(filePath, `${largeBody}\n`, "utf8");
+        runGit(root, ["add", "notes.txt"]);
+        runGit(root, ["commit", "-m", "large"]);
+
+        const base = runGit(root, ["rev-parse", "HEAD^"]);
+        const head = runGit(root, ["rev-parse", "HEAD"]);
+
+        const stdout = await runImpactCli(
+          ["impact", "--root", root, "--provider", "git", "--base", base, "--head", head, "--pretty"],
+          {
+            cwd: root,
+            stdin: "",
+          },
+        );
+
+        expect(stdout).toContain("WARNING: Large diff detected");
+        expect(stdout).not.toContain("⚠");
+        expect(stdout).not.toContain("âš");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+    slowCliTimeoutMs,
+  );
+});
+
+describe("review CLI output", () => {
+  it(
+    "prints duplicate leads in summary output by default",
+    async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-review-cli-duplicates-"));
+      const source = `
+export function summarizeOrders(rows: Array<{ amount: number; tax: number }>) {
+  const output: string[] = [];
+  for (const row of rows) {
+    const subtotal = row.amount + row.tax;
+    const rounded = Math.round(subtotal * 100) / 100;
+    const label = rounded > 100 ? "large" : "small";
+    output.push(label + ":" + rounded.toFixed(2));
+  }
+  return output.filter((value) => value.includes(":")).join(",");
+}
+`;
+      try {
+        runGit(root, ["init"]);
+        runGit(root, ["config", "user.email", "review@test.local"]);
+        runGit(root, ["config", "user.name", "Codegraph Bot"]);
+        await fsp.mkdir(path.join(root, "src"), { recursive: true });
+        await fsp.writeFile(path.join(root, "src", "orders-a.ts"), "export function oldA() { return 1; }\n", "utf8");
+        await fsp.writeFile(path.join(root, "src", "orders-b.ts"), "export function oldB() { return 2; }\n", "utf8");
+        runGit(root, ["add", "."]);
+        runGit(root, ["commit", "-m", "initial"]);
+        const base = runGit(root, ["rev-parse", "HEAD"]);
+
+        await fsp.writeFile(path.join(root, "src", "orders-a.ts"), source, "utf8");
+        await fsp.writeFile(path.join(root, "src", "orders-b.ts"), source, "utf8");
+        runGit(root, ["add", "."]);
+        runGit(root, ["commit", "-m", "make duplicates"]);
+        const head = runGit(root, ["rev-parse", "HEAD"]);
+
+        const stdout = await runCodegraphCli(["review", "--root", root, "--base", base, "--head", head, "--summary"], {
+          cwd: root,
+        });
+
+        expect(stdout).toContain("Review Summary");
+        expect(stdout).toContain("Duplicate leads:");
+        expect(stdout).toContain("src/orders-a.ts:");
+        expect(stdout).toContain("matches src/orders-b.ts:");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+    slowCliTimeoutMs,
+  );
 });

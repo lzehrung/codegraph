@@ -578,6 +578,8 @@ Review-pack builders should preserve symbol handles, diff snippets, callsites, `
 
 Human-readable summaries such as `codegraph review --summary` and `codegraph impact --pretty` are CLI presentation modes. Library callers should use `buildReviewReport()`, `analyzeImpactFromDiff()`, `analyzeImpactStreaming()`, or `tool_impactJSON()` and format only the selected fields they need.
 
+Duplicate leads in human impact and review summaries are also presentation-only. Programmatic callers should use `findDuplicates()` when they need grouped clone data, variants, raw pair counts, or duplicate omission counts.
+
 Useful wrapper details:
 
 - Build a shared index once and pass it through when an agent will call several wrappers in one pass; otherwise each wrapper may rebuild the same project view.

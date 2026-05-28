@@ -237,6 +237,10 @@ cat diff.txt | codegraph impact --provider raw
 # Pretty summary with severity scores
 codegraph impact --base main --head feature --pretty
 
+# Control duplicate leads in pretty summaries
+codegraph impact --base main --head feature --pretty --duplicates changed
+codegraph impact --base main --head feature --pretty --duplicates off
+
 # Compact JSON using impact's graph-style alias
 codegraph impact --base main --head feature --compact-json
 
@@ -275,6 +279,7 @@ codegraph review --base origin/main --head HEAD --review-depth standard > review
 # Compact human-readable review handoff
 codegraph review --base origin/main --head HEAD --summary
 codegraph review --base HEAD --head WORKTREE --summary
+codegraph review --base origin/main --head HEAD --summary --duplicates impacted
 
 # File-level graph delta between revisions
 codegraph graph-delta --git-base origin/main --git-head HEAD > graph-delta.json
@@ -285,6 +290,13 @@ For git-provider impact, `--head` accepts normal revisions plus worktree sentine
 Impact JSON responses include `schemaVersion` plus `format: "full" | "compact"` so downstream tools can branch on payload shape without inferring it from missing fields. Use `--compact` or `--compact-json` for compact impact JSON. Impact JSON can also include `exportSummary`, `reexportChains`, `topImpacts`, `surfaceArea`, `clusters`, and `changedSymbols[].callCompatibility` when applicable. File paths in impact reports are project-relative, and raw diffs that point outside the project root are rejected.
 
 `callCompatibility` is a conservative review hint, not type checking. Likely-mismatch support is provider-backed for source languages where Codegraph resolves the callee and can count arguments with high confidence. Overload sets are skipped unless Codegraph can prove the exact overload target. Pretty impact and review summaries show only `likely_mismatch` findings; compatible, unsupported, or ambiguous callsites are omitted from human output and appear in structured data only when useful.
+
+Pretty impact and review summaries also show high-confidence exact or renamed duplicate leads by default:
+
+- `impact --pretty` defaults to `--duplicates changed`.
+- `review --summary` defaults to `--duplicates impacted`.
+- Use `--duplicates off|changed|impacted|all` to control duplicate-lead scope.
+- JSON output keeps the existing impact and review contracts; use `codegraph duplicates` for full grouped duplicate JSON.
 
 ### Call Compatibility Output
 

@@ -200,7 +200,8 @@ Prefer impact `--pretty` first when the user asks what a change can break, what 
 - After signature changes, impact and review may show likely call-arity mismatches as call compatibility review leads.
 - Full JSON details live at `changedSymbols[].callCompatibility`; inspect the referenced callsite before treating a hint as a defect.
 - Missing hints are normal for unsupported, ambiguous, overloaded, spread, or unresolved callsites.
-- For copied-code or refactor-risk questions, follow impact with `codegraph duplicates --root . ./src --min-confidence medium --limit 20`; treat duplicate groups as leads, not defects.
+- Pretty impact and review summaries include high-confidence exact or renamed duplicate leads by default. Use `--duplicates off|changed|impacted|all` to control scope.
+- For copied-code or refactor-risk questions, follow impact with `codegraph duplicates --root . ./src --min-confidence medium --limit 20`; treat full duplicate groups as leads, not defects.
 
 In summary output, treat high-confidence candidate tests as first regression targets and medium-confidence tests as likely file-level coverage; low-confidence pattern matches are breadth hints only.
 

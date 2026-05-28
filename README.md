@@ -9,6 +9,7 @@ It is built for agent and human workflows that need repo structure fast without 
 - [Why Codegraph](#why-codegraph)
 - [Features](#features)
 - [Quick start](#quick-start)
+- [CLI examples](#cli-examples)
 - [Agent setup](#agent-setup)
 - [Using as a library](#using-as-a-library)
 - [Common workflows](#common-workflows)
@@ -143,6 +144,70 @@ node ./dist/cli.js duplicates ./src --min-confidence medium --limit 20
 If you install the published CLI instead of using a source checkout, replace `node ./dist/cli.js` with `codegraph`.
 
 Small orientation packets skip deeper health analysis and record that omission; use `--budget medium` or `--budget large` when health counts matter.
+
+## CLI examples
+
+Impact pretty output gives a bounded review map. It includes call compatibility and duplicate leads when they are high-confidence:
+
+```bash
+codegraph impact --base origin/main --head HEAD --pretty
+```
+
+```text
+Impact Analysis Report
+Changed files: 2
+Changed symbols: 3
+Impacted items: 4
+Call compatibility:
+- createUser: src/routes/users.ts:42 passes 1 argument; new signature requires 2.
+Duplicate leads:
+- src/api/users.ts:12-28 matches src/services/users.ts:8-24 (renamed, score 91).
+```
+
+Review summary output is the compact human handoff:
+
+```bash
+codegraph review --base origin/main --head HEAD --summary
+```
+
+```text
+Review Summary
+Files changed: 2
+Symbols changed: 3
+Candidate tests: 4 (high: 1, medium: 2, low: 1)
+Duplicate leads:
+- src/api/users.ts:12-28 matches src/services/users.ts:8-24 (renamed, score 91).
+```
+
+Run duplicate detection directly when refactor risk is the question:
+
+```bash
+codegraph duplicates ./src --min-confidence medium --limit 20
+```
+
+```text
+{
+  "schemaVersion": 2,
+  "groups": [
+    { "confidence": "high", "cloneType": "exact", "score": 100 }
+  ]
+}
+```
+
+Use orientation for first-turn agent context:
+
+```bash
+codegraph orient --root . --budget small --json
+```
+
+```text
+{
+  "summary": ["TypeScript project", "2 dependency cycles"],
+  "recommendedNext": ["codegraph search \"auth user\" --json"]
+}
+```
+
+See [docs/cli.md](./docs/cli.md) for full flags, JSON shapes, duplicate scopes, and review output details.
 
 ## Agent setup
 

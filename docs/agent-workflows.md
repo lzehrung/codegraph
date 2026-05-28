@@ -348,6 +348,13 @@ These bundles highlight:
 
 When `callCompatibility` is present, start with hints where `status` is `likely_mismatch`, inspect `callsiteFile` and `callsiteRange`, and compare `expected` against `actual` before proposing a fix. Missing hints do not prove all callers are valid; Codegraph skips unsupported, ambiguous, overloaded, spread, or unresolved callsites.
 
+Pretty impact and review summaries include scoped duplicate leads by default:
+
+- `impact --pretty`: high-confidence exact or renamed clones within changed files.
+- `review --summary`: high-confidence exact or renamed clones within changed plus graph-impacted files.
+- `--duplicates off|changed|impacted|all`: override the human-summary scope.
+- Full duplicate groups, variants, raw pair counts, and omission counts remain in `codegraph duplicates` JSON.
+
 For copied-code or refactor-risk questions, add duplicate detection after the impact pass:
 
 ```bash

@@ -110,6 +110,7 @@ Language adapters expose:
 ### 5. Impact and Call Compatibility
 
 - Impact maps diff hunks to changed symbols, then scans resolved references and dependency edges to rank affected files.
+- Pretty impact and review summaries add a small duplicate-lead pass over scoped files only; JSON callers use `findDuplicates()` for the full grouped contract.
 - Signature-change detection uses Tree-sitter byte ranges so body-only edits do not look like parameter-list edits.
 - Call compatibility runs only for changed callable signatures with provider-backed signature extraction and high-confidence callsite argument counts.
 - Hints compare arity only. They do not perform type checking, overload resolution, data-flow analysis, macro expansion, or dynamic dispatch.
