@@ -197,15 +197,10 @@ Prefer `refs` over plain text search when you want semantic usages rather than e
 
 Prefer impact `--pretty` first when the user asks what a change can break, what to test, or where a reviewer should focus. Use `review --summary` for compact human handoffs, and use full review JSON only when a script or another agent needs `projectFiles`, `graphDelta`, complete changed-symbol handles, or low-confidence fallback test candidates.
 
-Use call compatibility hints as review leads after signature changes:
-
-- Impact and review JSON may include `changedSymbols[].callCompatibility` for provider-backed callsite arity checks.
-- Human summaries show only likely mismatches; compatible, unsupported, or ambiguous callsites are omitted.
-- `status: "likely_mismatch"` means a resolved callsite appears to pass too few or too many arguments.
-- `reason`, `expected`, `actual`, `callsiteFile`, and `callsiteRange` are the evidence to inspect.
-- Treat hints as deterministic leads, not compiler-grade type checking.
-- Expect skipped hints for unknown signatures, spread calls, unresolved callsites, overload sets, dynamic dispatch, and unsupported language shapes.
-- Check `docs/language-parity.md` before assuming coverage.
+- After signature changes, impact and review may show likely call-arity mismatches as call compatibility review leads.
+- Full JSON details live at `changedSymbols[].callCompatibility`; inspect the referenced callsite before treating a hint as a defect.
+- Missing hints are normal for unsupported, ambiguous, overloaded, spread, or unresolved callsites.
+- For copied-code or refactor-risk questions, follow impact with `codegraph duplicates --root . ./src --min-confidence medium --limit 20`; treat duplicate groups as leads, not defects.
 
 In summary output, treat high-confidence candidate tests as first regression targets and medium-confidence tests as likely file-level coverage; low-confidence pattern matches are breadth hints only.
 

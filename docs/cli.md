@@ -297,19 +297,9 @@ codegraph review --base main --head feature --summary
 codegraph review --base main --head feature > review.json
 ```
 
-Call compatibility appears only after Codegraph detects a changed callable signature. Human output lists likely argument-count mismatches as a review focus area, while JSON output attaches the full hint objects under `changedSymbols[].callCompatibility`.
+Call compatibility appears only after Codegraph detects a changed callable signature. Human output lists likely argument-count mismatches as review leads; JSON output attaches full hint objects under `changedSymbols[].callCompatibility`.
 
-Each hint includes:
-
-- `status`: `likely_mismatch` or `compatible`
-- `reason`: why the callsite was classified
-- `callsiteFile` and `callsiteRange`: where to inspect
-- `expected`: changed callable minimum and maximum arity
-- `actual`: resolved callsite argument count
-
-Treat these as prioritized review leads:
-
-- Inspect the callsite before marking it a defect.
+- Inspect `callsiteFile`, `callsiteRange`, `expected`, and `actual` before treating a hint as a defect.
 - Expect skipped output for overload sets, spread arguments, dynamic dispatch, unresolved callsites, and unsupported syntax.
 - Use `docs/language-parity.md` for the current language support matrix and known limitations.
 

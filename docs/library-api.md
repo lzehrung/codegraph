@@ -501,8 +501,7 @@ for (const hint of likelyMismatches) {
 Coverage is intentionally conservative:
 
 - Compatible callsites may be present in structured data but are omitted from human summaries.
-- Unsupported languages, unknown signatures, spread calls, ambiguous callsites, and overload sets are skipped.
-- JavaScript and TypeScript class method parameter edits currently preserve a class-level `signatureChanged` signal, but method-level call compatibility waits for receiver-aware method references.
+- Unsupported languages, unknown signatures, spread calls, ambiguous callsites, overload sets, and JS/TS method-level call compatibility are skipped until Codegraph can prove the call target.
 
 Include reference context snippets when needed:
 
