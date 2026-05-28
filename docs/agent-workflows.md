@@ -346,6 +346,21 @@ These bundles highlight:
 - Provider-backed call-arity compatibility leads after signature changes
 - risk summaries and review tasks
 
+### Using Call Compatibility Leads
+
+Use `callCompatibility` to rank concrete callsites for human or agent inspection after a signature edit:
+
+- Start with hints where `status` is `likely_mismatch`.
+- Use `callsiteFile` and `callsiteRange` as the evidence location.
+- Compare `expected` against `actual` before proposing a fix.
+- Preserve the original changed symbol handle so later `goto` or `refs` calls can recover context.
+
+Do not treat missing hints as proof that all callers are valid:
+
+- Codegraph skips unknown signatures, unknown callsites, spread calls, overload sets, and unsupported language shapes.
+- Pretty and summary output intentionally omit compatible and ambiguous callsites.
+- JS/TS class method parameter edits may surface as a class-level `signatureChanged` signal until method locals and receiver-aware method references are supported.
+
 For the exact JSON shape and CLI flags, see [docs/cli.md](./cli.md).
 
 ## Backend-focused review recipes

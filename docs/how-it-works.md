@@ -107,7 +107,15 @@ Language adapters expose:
 - `goToDefinition` checks local scope first, then imported bindings, and understands namespace-member access.
 - `findReferences` builds per-file scope, seeds imports as bindings, records occurrences, and resolves through imports and namespace members.
 
-### 5. AST grep
+### 5. Impact and Call Compatibility
+
+- Impact maps diff hunks to changed symbols, then scans resolved references and dependency edges to rank affected files.
+- Signature-change detection uses Tree-sitter byte ranges so body-only edits do not look like parameter-list edits.
+- Call compatibility runs only for changed callable signatures with provider-backed signature extraction and high-confidence callsite argument counts.
+- Hints compare arity only. They do not perform type checking, overload resolution, data-flow analysis, macro expansion, or dynamic dispatch.
+- Existing impact filters apply before hints are emitted, so ignored files and tests excluded by default stay out of call compatibility results.
+
+### 6. AST grep
 
 AST grep runs any Tree-sitter query across matched files and prints hits as `file:line:col: @capture: snippet`.
 

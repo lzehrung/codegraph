@@ -476,7 +476,33 @@ for (const item of report.impacted.slice(0, 5)) {
 }
 ```
 
+### Call Compatibility Hints
+
 Changed symbols can include `callCompatibility` when a provider-backed callable signature changed and Codegraph resolved high-confidence callsites. These hints compare argument counts only; they are deterministic review leads, not type checking or overload analysis.
+
+Use them to prioritize follow-up review:
+
+- `status: "likely_mismatch"` means a resolved callsite now appears to pass too few or too many arguments.
+- `reason` explains the direction, such as `argument_count_below_minimum` or `argument_count_above_maximum`.
+- `expected` is the changed callable arity after the diff.
+- `actual` is the resolved callsite argument count.
+- `callsiteFile` and `callsiteRange` identify the location to inspect.
+
+```ts
+const likelyMismatches = report.changedSymbols.flatMap((symbol) =>
+  (symbol.callCompatibility ?? []).filter((hint) => hint.status === "likely_mismatch"),
+);
+
+for (const hint of likelyMismatches) {
+  console.log(`${hint.callsiteFile}:${hint.callsiteRange.start.line} ${hint.reason}`);
+}
+```
+
+Coverage is intentionally conservative:
+
+- Compatible callsites may be present in structured data but are omitted from human summaries.
+- Unsupported languages, unknown signatures, spread calls, ambiguous callsites, and overload sets are skipped.
+- JavaScript and TypeScript class method parameter edits currently preserve a class-level `signatureChanged` signal, but method-level call compatibility waits for receiver-aware method references.
 
 Include reference context snippets when needed:
 

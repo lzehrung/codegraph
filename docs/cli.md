@@ -286,6 +286,33 @@ Impact JSON responses include `schemaVersion` plus `format: "full" | "compact"` 
 
 `callCompatibility` is a conservative review hint, not type checking. Likely-mismatch support is provider-backed for source languages where Codegraph resolves the callee and can count arguments with high confidence. Overload sets are skipped unless Codegraph can prove the exact overload target. Pretty impact and review summaries show only `likely_mismatch` findings; compatible, unsupported, or ambiguous callsites are omitted from human output and appear in structured data only when useful.
 
+### Call Compatibility Output
+
+Run impact or review normally; no extra flag is required:
+
+```bash
+codegraph impact --base main --head feature --pretty
+codegraph impact --base main --head feature --json
+codegraph review --base main --head feature --summary
+codegraph review --base main --head feature > review.json
+```
+
+Call compatibility appears only after Codegraph detects a changed callable signature. Human output lists likely argument-count mismatches as a review focus area, while JSON output attaches the full hint objects under `changedSymbols[].callCompatibility`.
+
+Each hint includes:
+
+- `status`: `likely_mismatch` or `compatible`
+- `reason`: why the callsite was classified
+- `callsiteFile` and `callsiteRange`: where to inspect
+- `expected`: changed callable minimum and maximum arity
+- `actual`: resolved callsite argument count
+
+Treat these as prioritized review leads:
+
+- Inspect the callsite before marking it a defect.
+- Expect skipped output for overload sets, spread arguments, dynamic dispatch, unresolved callsites, and unsupported syntax.
+- Use `docs/language-parity.md` for the current language support matrix and known limitations.
+
 `codegraph review --summary` prints the changed-file count, changed-symbol count, risk summary, review tasks, and suggested tests without emitting the full `projectFiles` and symbol-detail JSON payload. High- and medium-confidence candidate tests are listed directly; low-confidence pattern matches are summarized as breadth hints and remain available in the full JSON bundle. Use plain `review` output when a downstream tool needs the complete structured bundle.
 
 SQL review context is emitted only as `sqlContext.entries[]` in structured review JSON. Entries carry a `reason` such as `changed_sql_file` or `changed_sql_literal`, the matched `objectName`, and the original SQL statement fact. They are review hints, not source dependency edges.
