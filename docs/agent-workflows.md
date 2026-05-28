@@ -23,6 +23,12 @@ codegraph mcp serve --root . --port 7331
 
 Use `orient` for first-turn repo context, then use `packet get` for bounded follow-up evidence by handle. Use `search` when the agent has a query but no handle, and use `explain` when it already knows a file, symbol, SQL object, or search handle. `inspect` remains useful for human-readable architecture summaries and older installs.
 
+Choose output by the next consumer:
+
+- Use `--pretty` or `--summary` when the next consumer is a person or language model reading the result.
+- Use `--json`, MCP tools, or library APIs when the next step needs exact handles, ranges, schema fields, or filtering.
+- Do not parse pretty text to recover fields already present in structured output.
+
 For durable repo-local scan scope, add `codegraph.config.json` at the project root. `discovery.ignoreGlobs` keeps large fixture, generated, or vendored folders out of agent search, MCP sessions, graphing, unresolved-import checks, impact, and review unless a command explicitly changes scan scope.
 
 For the raw CLI command reference, see [docs/cli.md](./cli.md).
@@ -38,7 +44,7 @@ codegraph packet get file:src%2Fcli.ts --json
 codegraph packet get <handle-from-orient> --max-symbols 25 --json
 ```
 
-Orientation returns summary bullets, a bounded tree, hotspot modules, budgeted health counts, stable packet handles, omitted counts, and recommended next commands. Small orientation packets skip deeper health analysis and report that omission explicitly; use `--budget medium` or `--budget large` when health counts matter. Packet retrieval accepts file, symbol, chunk, SQL, graph, and review handles and delegates to the same bounded explain/review helpers used by existing commands. Review handles are available when orientation is invoked programmatically with a review range.
+Orientation returns summary bullets, a bounded tree, hotspot modules, budgeted health counts, stable packet handles, omitted counts, and recommended next commands. Use `orient --pretty` for compact model-readable triage and `orient --json` when follow-up tools need exact handles or omission counts. Small orientation packets skip deeper health analysis and report that omission explicitly; use `--budget medium` or `--budget large` when health counts matter. Packet retrieval accepts file, symbol, chunk, SQL, graph, and review handles and delegates to the same bounded explain/review helpers used by existing commands. Review handles are available when orientation is invoked programmatically with a review range.
 
 ## Search anchors
 
@@ -317,7 +323,7 @@ Wrapper notes:
 
 ## Review bundles for agents
 
-The `codegraph review` CLI produces JSON bundles that are intended to be fed directly to agents or downstream scripts:
+The `codegraph review` CLI produces JSON bundles for downstream scripts and tool integrations:
 
 ```bash
 codegraph review --base origin/main --head HEAD > review.json
@@ -325,7 +331,7 @@ codegraph review --base origin/main --head HEAD --include-symbol-details --max-c
 codegraph review --base origin/main --head HEAD --review-depth standard > review.json
 ```
 
-For current local edits, start with a ranked human map, then hand off the compact review summary:
+For current local edits, start with a ranked model-readable map, then hand off the compact review summary:
 
 ```bash
 codegraph impact --base HEAD --head WORKTREE --pretty

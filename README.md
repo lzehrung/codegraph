@@ -147,29 +147,37 @@ Small orientation packets skip deeper health analysis and record that omission; 
 
 ## CLI examples
 
-Use orientation for first-turn agent context:
+Choose output by consumer:
+
+- Use `--pretty` or `--summary` when a person or model needs a compact triage view.
+- Use `--json` or library APIs when a script, tool wrapper, or follow-up command needs stable fields.
+
+Use orientation for first-turn agent context. `--pretty` is the quickest reading surface; `--json` preserves handles, limits, and omitted counts for follow-up tools:
 
 ```bash
+codegraph orient --root . --budget small --pretty
 codegraph orient --root . --budget small --json
 ```
 
-```json
-{
-  "summary": [
-    "537 file(s) in scope.",
-    "8 hotspot module(s) surfaced for follow-up.",
-    "Health analysis skipped for small budget."
-  ],
-  "hotspots": [{ "file": "src/indexer/build-index.ts", "score": 82 }],
-  "recommendedNext": [
-    "codegraph packet get file:src/indexer/build-index.ts --json",
-    "codegraph search \"call compatibility\" --json"
-  ],
-  "omittedCounts": { "treeEntries": 521, "hotspots": 14 }
-}
+```text
+Orientation
+- 537 file(s) in scope.
+- 8 hotspot module(s) surfaced for follow-up.
+- Health analysis skipped for small budget.
+
+Hotspots
+- src/indexer/build-index.ts score 82
+
+Recommended next
+- codegraph packet get file:src/indexer/build-index.ts --json
+- codegraph search "call compatibility" --json
+
+Omitted
+- 521 tree entries
+- 14 hotspots
 ```
 
-Find an anchor, then expand only the context you need:
+Find an anchor, then expand only the context you need. JSON keeps handles exact across follow-up calls:
 
 ```bash
 codegraph search "graph json" --json
@@ -271,7 +279,7 @@ For a custom location, use `codegraph skill install --target <path>/skills/codeg
 
 ## Using as a library
 
-Use the TypeScript API when another program needs deterministic file packs, review packets, or model prompts. CLI `--pretty` and `--summary` output is for humans; library callers should keep structured fields until the final UI or prompt boundary.
+Use the TypeScript API when another program needs deterministic file packs, review packets, or model prompts. CLI `--pretty` and `--summary` output is also useful for model-readable triage, but library callers should keep structured fields until the final UI or prompt boundary.
 
 ```ts
 import {
