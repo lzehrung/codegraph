@@ -1,9 +1,9 @@
 import { performance } from "node:perf_hooks";
-import { buildProjectIndex, buildProjectIndexFromFiles } from "../indexer/build-index.js";
+import path from "node:path";
 import { buildReviewReport, type ReviewBuildReport, type ReviewDepth, type ReviewReport } from "../review.js";
 import type { CandidateTestFile } from "../impact/context.js";
 import type { CallCompatibilityHint } from "../impact/types.js";
-import type { BuildOptions, BuildReport, ProjectIndex } from "../indexer/types.js";
+import type { BuildReport, ProjectIndex } from "../indexer/types.js";
 import { type GraphBuildOptions } from "../graphs/types.js";
 import {
   appendDuplicateLeadSummary,
@@ -20,6 +20,7 @@ import {
   REVIEW_SUMMARY_TASK_LIMIT,
 } from "../presentation/bounds.js";
 import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
+import { normalizePath } from "../util/paths.js";
 import { parseCacheModeOption, parseOptionalNonNegativeIntegerOption } from "./options.js";
 
 type CommandTimingReport = {
@@ -153,16 +154,17 @@ function duplicateScopeFilesForReview(
   return collectImpactedReviewFiles(report);
 }
 
-async function buildDuplicateIndexForReview(input: {
+function filterIndexedScopeFiles(input: {
+  index: ProjectIndex;
   projectRoot: string;
-  scopedFiles?: readonly string[];
-  scope: Exclude<DuplicateLeadScope, "off">;
-  indexOptions: BuildOptions;
-}): Promise<ProjectIndex> {
-  if (input.scope === "all") {
-    return await buildProjectIndex(input.projectRoot, input.indexOptions);
-  }
-  return await buildProjectIndexFromFiles(input.projectRoot, [...(input.scopedFiles ?? [])], input.indexOptions);
+  scopedFiles: readonly string[] | undefined;
+}): string[] | undefined {
+  const { index, projectRoot, scopedFiles } = input;
+  if (scopedFiles === undefined) return undefined;
+  return scopedFiles.filter((file) => {
+    if (index.byFile.has(file)) return true;
+    return index.byFile.has(normalizePath(path.resolve(projectRoot, file)));
+  });
 }
 
 function formatReviewSummary(
@@ -239,20 +241,19 @@ async function collectReviewDuplicateSummary(input: {
   projectRoot: string;
   report: ReviewReport;
   duplicateScope: Exclude<DuplicateLeadScope, "off">;
-  indexOptions: BuildOptions;
+  index: ProjectIndex;
 }): Promise<DuplicateLeadSummary | undefined> {
   const scopedFiles = duplicateScopeFilesForReview(input.report, input.duplicateScope);
-  const duplicateIndex = await buildDuplicateIndexForReview({
+  const indexedScopedFiles = filterIndexedScopeFiles({
+    index: input.index,
     projectRoot: input.projectRoot,
-    ...(scopedFiles !== undefined ? { scopedFiles } : {}),
-    scope: input.duplicateScope,
-    indexOptions: input.indexOptions,
+    scopedFiles,
   });
   return await collectDuplicateLeadSummary({
-    index: duplicateIndex,
+    index: input.index,
     projectRoot: input.projectRoot,
     scope: input.duplicateScope,
-    ...(scopedFiles !== undefined ? { scopedFiles } : {}),
+    ...(indexedScopedFiles !== undefined ? { scopedFiles: indexedScopedFiles } : {}),
     ...(input.report.projectFiles?.length !== undefined ? { allScopeFileCount: input.report.projectFiles.length } : {}),
   });
 }
@@ -300,27 +301,31 @@ export async function handleReviewCommand(context: ReviewCommandContext): Promis
   }
   if (maxCallsites !== undefined) reviewOpts.maxCallsites = maxCallsites;
   if (maxTests !== undefined) reviewOpts.maxCandidates = maxTests;
-  if (context.commandReport) {
+  const wantsHumanSummary = context.hasFlag("--summary") || context.hasFlag("--pretty");
+  const needsReviewBuildReport = Boolean(context.commandReport) || wantsHumanSummary;
+  let reviewBuildReport: ReviewBuildReport | undefined;
+  if (needsReviewBuildReport) {
     const reviewReport: ReviewBuildReport = { timings: {} };
-    context.commandReport.review = reviewReport;
+    reviewBuildReport = reviewReport;
+    if (context.commandReport) {
+      context.commandReport.review = reviewReport;
+    }
     reviewOpts.report = reviewReport;
   }
   const report = await buildReviewReport(context.projectRootFs, reviewOpts);
-  if (context.hasFlag("--summary") || context.hasFlag("--pretty")) {
+  if (wantsHumanSummary) {
     const duplicateScope = parseDuplicateLeadScope(context.getOpt("--duplicates"), "impacted");
     let duplicateSummary: DuplicateLeadSummary | undefined;
     if (duplicateScope !== "off") {
-      const indexOptions: BuildOptions = {
-        discovery: context.discoveryOptions,
-        ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
-        ...(context.useNativeWorkers ? { useNativeWorkers: true } : {}),
-      };
-      duplicateSummary = await collectReviewDuplicateSummary({
-        projectRoot: context.projectRootFs,
-        report,
-        duplicateScope,
-        indexOptions,
-      });
+      const reviewIndex = reviewBuildReport?.index;
+      if (reviewIndex) {
+        duplicateSummary = await collectReviewDuplicateSummary({
+          projectRoot: context.projectRootFs,
+          report,
+          duplicateScope,
+          index: reviewIndex,
+        });
+      }
     }
     context.writeStdoutLine(formatReviewSummary(report, duplicateSummary).trimEnd());
   } else {

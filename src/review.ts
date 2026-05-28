@@ -104,6 +104,7 @@ export type ReviewTimingReport = {
 export type ReviewBuildReport = {
   timings: ReviewTimingReport;
   indexReport?: BuildReport;
+  index?: ProjectIndex;
 };
 
 type ReviewPreset = {
@@ -225,6 +226,13 @@ async function buildReviewIndex(input: {
     indexOpts.files = filesToIndex;
   }
   const index = await buildProjectIndexIncremental(projectRoot, indexOpts);
+  if (reviewReport) {
+    Object.defineProperty(reviewReport, "index", {
+      value: index,
+      enumerable: false,
+      configurable: true,
+    });
+  }
   if (reviewTimings) {
     reviewTimings.indexMs = Math.round(performance.now() - indexStart);
   }

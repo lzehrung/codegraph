@@ -64,6 +64,14 @@ async function runImpactCli(args: string[], opts?: { cwd?: string; stdin?: strin
 }
 
 async function runCodegraphCli(args: string[], opts?: { cwd?: string; stdin?: string }): Promise<string> {
+  const result = await runCodegraphCliResult(args, opts);
+  return result.stdout;
+}
+
+async function runCodegraphCliResult(
+  args: string[],
+  opts?: { cwd?: string; stdin?: string },
+): Promise<{ stdout: string; stderr: string }> {
   let stdout = "";
   let stderr = "";
   let exitCode: number | undefined;
@@ -90,7 +98,7 @@ async function runCodegraphCli(args: string[], opts?: { cwd?: string; stdin?: st
     throw error;
   }
 
-  return stdout;
+  return { stdout, stderr };
 }
 
 function runImpactCliSubprocess(args: string[], opts?: { cwd?: string; stdin?: string }) {
@@ -393,6 +401,43 @@ export function summarizeOrders(rows: Array<{ amount: number; tax: number }>) {
 });
 
 describe("review CLI output", () => {
+  it(
+    "does not warn when duplicate scope includes deleted files",
+    async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-review-cli-deleted-"));
+      try {
+        runGit(root, ["init"]);
+        runGit(root, ["config", "user.email", "review@test.local"]);
+        runGit(root, ["config", "user.name", "Codegraph Bot"]);
+        await fsp.mkdir(path.join(root, "src"), { recursive: true });
+        await fsp.writeFile(path.join(root, "src", "removed.ts"), "export function removed() { return 1; }\n", "utf8");
+        await fsp.writeFile(path.join(root, "src", "kept.ts"), "export function kept() { return 2; }\n", "utf8");
+        runGit(root, ["add", "."]);
+        runGit(root, ["commit", "-m", "initial"]);
+        const base = runGit(root, ["rev-parse", "HEAD"]);
+
+        await fsp.rm(path.join(root, "src", "removed.ts"));
+        await fsp.writeFile(path.join(root, "src", "kept.ts"), "export function kept() { return 3; }\n", "utf8");
+        runGit(root, ["add", "."]);
+        runGit(root, ["commit", "-m", "delete one file"]);
+        const head = runGit(root, ["rev-parse", "HEAD"]);
+
+        const result = await runCodegraphCliResult(
+          ["review", "--root", root, "--base", base, "--head", head, "--summary"],
+          {
+            cwd: root,
+          },
+        );
+
+        expect(result.stdout).toContain("Review Summary");
+        expect(result.stderr).not.toContain("No files provided");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+    slowCliTimeoutMs,
+  );
+
   it(
     "prints duplicate leads in summary output by default",
     async () => {
