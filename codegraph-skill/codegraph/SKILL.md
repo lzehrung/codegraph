@@ -195,7 +195,19 @@ Prefer `refs` over plain text search when you want semantic usages rather than e
 - Agent-ready full current worktree bundle:
   `codegraph review --base HEAD --head WORKTREE`
 
-Prefer impact `--pretty` first when the user asks what a change can break, what to test, or where a reviewer should focus. Use `review --summary` for compact human handoffs, and use full review JSON only when a script or another agent needs `projectFiles`, `graphDelta`, complete changed-symbol handles, or low-confidence fallback test candidates. Impact and review JSON may include `callCompatibility` for high-confidence provider-backed callsite arity mismatches after signature changes. Treat it as a deterministic review lead, not compiler-grade type checking; overload sets are skipped unless Codegraph can prove the exact overload target. Check the language parity matrix before assuming coverage. In summary output, treat high-confidence candidate tests as first regression targets and medium-confidence tests as likely file-level coverage; low-confidence pattern matches are breadth hints only.
+Prefer impact `--pretty` first when the user asks what a change can break, what to test, or where a reviewer should focus. Use `review --summary` for compact human handoffs, and use full review JSON only when a script or another agent needs `projectFiles`, `graphDelta`, complete changed-symbol handles, or low-confidence fallback test candidates.
+
+Use call compatibility hints as review leads after signature changes:
+
+- Impact and review JSON may include `changedSymbols[].callCompatibility` for provider-backed callsite arity checks.
+- Human summaries show only likely mismatches; compatible, unsupported, or ambiguous callsites are omitted.
+- `status: "likely_mismatch"` means a resolved callsite appears to pass too few or too many arguments.
+- `reason`, `expected`, `actual`, `callsiteFile`, and `callsiteRange` are the evidence to inspect.
+- Treat hints as deterministic leads, not compiler-grade type checking.
+- Expect skipped hints for unknown signatures, spread calls, unresolved callsites, overload sets, dynamic dispatch, and unsupported language shapes.
+- Check `docs/language-parity.md` before assuming coverage.
+
+In summary output, treat high-confidence candidate tests as first regression targets and medium-confidence tests as likely file-level coverage; low-confidence pattern matches are breadth hints only.
 
 For git-provider impact and git-scoped review/index/graph commands, `WORKTREE` compares the base revision to current staged and unstaged tracked-file changes. Use `STAGED` or `INDEX` to compare the base revision to the current index; with `--base HEAD`, that is staged changes only. Untracked files are outside Git diff output until they are staged or tracked.
 
