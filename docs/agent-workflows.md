@@ -346,20 +346,18 @@ These bundles highlight:
 - Provider-backed call-arity compatibility leads after signature changes
 - risk summaries and review tasks
 
-### Using Call Compatibility Leads
+When `callCompatibility` is present, start with hints where `status` is `likely_mismatch`, inspect `callsiteFile` and `callsiteRange`, and compare `expected` against `actual` before proposing a fix. Missing hints do not prove all callers are valid; Codegraph skips unsupported, ambiguous, overloaded, spread, or unresolved callsites.
 
-Use `callCompatibility` to rank concrete callsites for human or agent inspection after a signature edit:
+For copied-code or refactor-risk questions, add duplicate detection after the impact pass:
 
-- Start with hints where `status` is `likely_mismatch`.
-- Use `callsiteFile` and `callsiteRange` as the evidence location.
-- Compare `expected` against `actual` before proposing a fix.
-- Preserve the original changed symbol handle so later `goto` or `refs` calls can recover context.
+```bash
+codegraph duplicates --root . ./src --min-confidence medium --limit 20
+codegraph duplicates --root . ./src ./packages/app --include-same-file
+```
 
-Do not treat missing hints as proof that all callers are valid:
-
-- Codegraph skips unknown signatures, unknown callsites, spread calls, overload sets, and unsupported language shapes.
-- Pretty and summary output intentionally omit compatible and ambiguous callsites.
-- JS/TS class method parameter edits may surface as a class-level `signatureChanged` signal until method locals and receiver-aware method references are supported.
+- Treat duplicate groups as review or refactor leads, not automatic defects.
+- Start with high-confidence exact or renamed clones.
+- Use full JSON when an agent needs clone variants, omission counts, and raw pair counts.
 
 For the exact JSON shape and CLI flags, see [docs/cli.md](./cli.md).
 
