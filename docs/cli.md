@@ -185,7 +185,7 @@ codegraph grep --pattern 'eval\(' --ignore-case
 - Use `--include-same-file` for non-overlapping clones inside one file.
 - Use `--raw-pairs` when debugging the low-level pair evidence behind each group.
 
-`orient`, `packet`, `search`, `explain`, `artifact`, and `mcp` each support command-specific `--help` output so agents do not have to infer their options from the top-level help. `orient` emits a compact first-turn packet with summary bullets, a bounded tree, hotspot modules, budgeted health counts, stable packet handles, omitted counts, and copyable next commands. Small orientation budgets skip deeper health analysis and mark that omission; use `--budget medium` or `--budget large` when health counts matter. `packet get` accepts file, symbol, chunk, SQL, graph, and review handles, then returns a bounded evidence wrapper with limits, omissions, and follow-ups. CLI `orient` returns file handles; review handles are produced by library orientation calls that include a review range. `search` is deterministic and vectorless. It returns ranked results with project-relative stable handles, rank reasons, evidence, graph neighbors, follow-up commands, result counts, per-packet limits, and omission counts. `explain` resolves file paths, symbol names, SQL object names, and search handles, including file/chunk/graph handles, into bounded packets with symbols, dependencies, reverse dependencies, references, snippets, SQL object relation facts, changed-context review tasks/candidate tests, explicit limits, omission counts, and follow-ups. Generated follow-up and suggested-question commands POSIX-shell-quote dynamic arguments when needed. SQL object names resolve by exact name first; unqualified basenames resolve only when unique, so handles or schema-qualified names are preferred. Reference and snippet omission counts are lower bounds after the bounded navigation scan reaches its cap. `artifact build` writes `codegraph.sqlite`, self-describing project-relative `graph.json`, `CODEGRAPH_REPORT.md`, `questions.json`, and `manifest.json` by default; suggested questions use unique IDs backed by stable handles when a handle is available. Use artifact flags to select a subset. `--force` permits non-empty output directories, removes recognizable stale Codegraph artifacts, preserves unrelated operator files, and refuses unrecognized reserved-name collisions. Artifact contents exclude their own output directory and linked outside-root files. `mcp serve` exposes `orient`, `packet_get`, `search`, `get_file`, `get_symbol`, `goto`, `refs`, `deps`, `rdeps`, `path`, `impact`, `review`, `query_sqlite`, and `artifact_build` over stdio by default or Streamable HTTP with `--port <number>`. HTTP serves `/mcp`, binds to `127.0.0.1` unless `--host <host>` is passed, validates the Host header, allows loopback Host headers for wildcard binds, and rejects oversized request bodies. MCP file and artifact paths are confined to `--root` after realpath resolution; tool calls do not accept per-request root overrides. Tools are read-only by default, `query_sqlite` is row- and byte-bounded and rejects synthetic payload functions, and `--allow-build` enables artifact output only. `chunk` uses semantic Tree-sitter chunking for registered source and stylesheet languages, Vue and Svelte block-aware chunking for single-file components, and text chunking for JSON, YAML, and unsupported extensions. Use `--text` to force text chunking.
+`orient`, `packet`, `search`, `explain`, `artifact`, and `mcp` each support command-specific `--help` output so agents do not have to infer their options from the top-level help. `orient --pretty` is the compact first-turn reading surface for people or models; `orient --json` is the stable handoff for tools that need exact handles, limits, and omitted counts. Small orientation budgets skip deeper health analysis and mark that omission; use `--budget medium` or `--budget large` when health counts matter. `packet get` accepts file, symbol, chunk, SQL, graph, and review handles, then returns a bounded evidence wrapper with limits, omissions, and follow-ups. CLI `orient` returns file handles; review handles are produced by library orientation calls that include a review range. `search` is deterministic and vectorless. It returns ranked results with project-relative stable handles, rank reasons, evidence, graph neighbors, follow-up commands, result counts, per-packet limits, and omission counts. `explain` resolves file paths, symbol names, SQL object names, and search handles, including file/chunk/graph handles, into bounded packets with symbols, dependencies, reverse dependencies, references, snippets, SQL object relation facts, changed-context review tasks/candidate tests, explicit limits, omission counts, and follow-ups. Generated follow-up and suggested-question commands POSIX-shell-quote dynamic arguments when needed. SQL object names resolve by exact name first; unqualified basenames resolve only when unique, so handles or schema-qualified names are preferred. Reference and snippet omission counts are lower bounds after the bounded navigation scan reaches its cap. `artifact build` writes `codegraph.sqlite`, self-describing project-relative `graph.json`, `CODEGRAPH_REPORT.md`, `questions.json`, and `manifest.json` by default; suggested questions use unique IDs backed by stable handles when a handle is available. Use artifact flags to select a subset. `--force` permits non-empty output directories, removes recognizable stale Codegraph artifacts, preserves unrelated operator files, and refuses unrecognized reserved-name collisions. Artifact contents exclude their own output directory and linked outside-root files. `mcp serve` exposes `orient`, `packet_get`, `search`, `get_file`, `get_symbol`, `goto`, `refs`, `deps`, `rdeps`, `path`, `impact`, `review`, `query_sqlite`, and `artifact_build` over stdio by default or Streamable HTTP with `--port <number>`. HTTP serves `/mcp`, binds to `127.0.0.1` unless `--host <host>` is passed, validates the Host header, allows loopback Host headers for wildcard binds, and rejects oversized request bodies. MCP file and artifact paths are confined to `--root` after realpath resolution; tool calls do not accept per-request root overrides. Tools are read-only by default, `query_sqlite` is row- and byte-bounded and rejects synthetic payload functions, and `--allow-build` enables artifact output only. `chunk` uses semantic Tree-sitter chunking for registered source and stylesheet languages, Vue and Svelte block-aware chunking for single-file components, and text chunking for JSON, YAML, and unsupported extensions. Use `--text` to force text chunking.
 
 ### Dependency analysis and diagnostics
 
@@ -237,6 +237,10 @@ cat diff.txt | codegraph impact --provider raw
 # Pretty summary with severity scores
 codegraph impact --base main --head feature --pretty
 
+# Control duplicate leads in pretty summaries
+codegraph impact --base main --head feature --pretty --duplicates changed
+codegraph impact --base main --head feature --pretty --duplicates off
+
 # Compact JSON using impact's graph-style alias
 codegraph impact --base main --head feature --compact-json
 
@@ -275,6 +279,7 @@ codegraph review --base origin/main --head HEAD --review-depth standard > review
 # Compact human-readable review handoff
 codegraph review --base origin/main --head HEAD --summary
 codegraph review --base HEAD --head WORKTREE --summary
+codegraph review --base origin/main --head HEAD --summary --duplicates impacted
 
 # File-level graph delta between revisions
 codegraph graph-delta --git-base origin/main --git-head HEAD > graph-delta.json
@@ -285,6 +290,13 @@ For git-provider impact, `--head` accepts normal revisions plus worktree sentine
 Impact JSON responses include `schemaVersion` plus `format: "full" | "compact"` so downstream tools can branch on payload shape without inferring it from missing fields. Use `--compact` or `--compact-json` for compact impact JSON. Impact JSON can also include `exportSummary`, `reexportChains`, `topImpacts`, `surfaceArea`, `clusters`, and `changedSymbols[].callCompatibility` when applicable. File paths in impact reports are project-relative, and raw diffs that point outside the project root are rejected.
 
 `callCompatibility` is a conservative review hint, not type checking. Likely-mismatch support is provider-backed for source languages where Codegraph resolves the callee and can count arguments with high confidence. Overload sets are skipped unless Codegraph can prove the exact overload target. Pretty impact and review summaries show only `likely_mismatch` findings; compatible, unsupported, or ambiguous callsites are omitted from human output and appear in structured data only when useful.
+
+Pretty impact and review summaries also show high-confidence exact or renamed duplicate leads by default:
+
+- `impact --pretty` defaults to `--duplicates changed`.
+- `review --summary` defaults to `--duplicates impacted`.
+- Use `--duplicates off|changed|impacted|all` to control duplicate-lead scope.
+- JSON output keeps the existing impact and review contracts; use `codegraph duplicates` for full grouped duplicate JSON.
 
 ### Call Compatibility Output
 
@@ -490,7 +502,7 @@ npx tsx src/cli.ts goto <file> <line> <column>
 
 ## Output formats
 
-`--pretty` and `--summary` are presentation modes. They are intentionally compact and may omit low-confidence or verbose context that remains available in structured JSON and TypeScript return values. Integrators that compose deterministic review packs should use the exported TypeScript functions or JSON output.
+`--pretty` and `--summary` are presentation modes for compact reading by people or models. They may omit low-confidence or verbose context that remains available in structured JSON and TypeScript return values. Integrators that compose deterministic review packs should use the exported TypeScript functions or JSON output.
 
 Plain `graph` output is a file dependency graph only. In default graph mode, output goes to `codegraph.json` unless `--stdout` or `--output <path>` is passed.
 

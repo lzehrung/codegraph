@@ -9,6 +9,7 @@ It is built for agent and human workflows that need repo structure fast without 
 - [Why Codegraph](#why-codegraph)
 - [Features](#features)
 - [Quick start](#quick-start)
+- [CLI examples](#cli-examples)
 - [Agent setup](#agent-setup)
 - [Using as a library](#using-as-a-library)
 - [Common workflows](#common-workflows)
@@ -144,6 +145,112 @@ If you install the published CLI instead of using a source checkout, replace `no
 
 Small orientation packets skip deeper health analysis and record that omission; use `--budget medium` or `--budget large` when health counts matter.
 
+## CLI examples
+
+Choose output by consumer:
+
+- Use `--pretty` or `--summary` when a person or model needs a compact triage view.
+- Use `--json` or library APIs when a script, tool wrapper, or follow-up command needs stable fields.
+
+Use orientation for first-turn agent context. `--pretty` is the quickest reading surface; `--json` preserves handles, limits, and omitted counts for follow-up tools:
+
+```bash
+codegraph orient --root . --budget small --pretty
+codegraph orient --root . --budget small --json
+```
+
+```text
+Orientation
+- 537 file(s) in scope.
+- 8 hotspot module(s) surfaced for follow-up.
+- Health analysis skipped for small budget.
+
+Hotspots
+- src/indexer/build-index.ts score 82
+
+Recommended next
+- codegraph packet get file:src/indexer/build-index.ts --json
+- codegraph search "call compatibility" --json
+
+Omitted
+- 521 tree entries
+- 14 hotspots
+```
+
+Find an anchor, then expand only the context you need. JSON keeps handles exact across follow-up calls:
+
+```bash
+codegraph search "graph json" --json
+codegraph explain file:src/cli/graph.ts --json
+```
+
+```json
+{
+  "target": { "kind": "file", "path": "src/cli/graph.ts" },
+  "symbols": [{ "name": "handleGraphCommand", "kind": "function" }],
+  "neighbors": { "imports": ["src/graph.ts"], "importedBy": ["src/cli.ts"] },
+  "nextCommands": ["codegraph refs --file src/cli/graph.ts --line 42 --col 16 --pretty"]
+}
+```
+
+Use semantic navigation when string search is too broad:
+
+```bash
+codegraph refs --file src/index.ts --line 12 --col 17 --pretty
+```
+
+```text
+References for buildProjectIndex
+- src/cli/impact.ts:486 import
+- src/cli/review.ts:310 call
+- tests/indexer.test.ts:22 call
+```
+
+Use impact and review for PR or worktree risk:
+
+```bash
+codegraph impact --base origin/main --head HEAD --pretty
+codegraph review --base origin/main --head HEAD --summary
+```
+
+```text
+Impact Analysis Report
+Changed files: 2
+Changed symbols: 3
+Impacted items: 4
+Call compatibility:
+- createUser: src/routes/users.ts:42 passes 1 argument; new signature requires 2.
+Duplicate leads:
+- src/api/users.ts:12-28 matches src/services/users.ts:8-24 (renamed, score 91).
+
+Review Summary
+Candidate tests: 4 (high: 1, medium: 2, low: 1)
+```
+
+Run duplicate detection directly when refactor risk is the question:
+
+```bash
+codegraph duplicates ./src --min-confidence medium --limit 20
+```
+
+```json
+{
+  "schemaVersion": 2,
+  "groups": [
+    {
+      "confidence": "high",
+      "cloneType": "exact",
+      "score": 100,
+      "primaryLeft": { "file": "src/a.ts", "startLine": 10, "endLine": 24 },
+      "primaryRight": { "file": "src/b.ts", "startLine": 8, "endLine": 22 }
+    }
+  ],
+  "omittedCounts": { "groups": 0, "rawSuggestions": 12 }
+}
+```
+
+See [docs/cli.md](./docs/cli.md) for full flags, JSON shapes, duplicate scopes, and review output details.
+
 ## Agent setup
 
 Using a skill-aware agent? Install the bundled skill so repo navigation, semantic references, dependency tracing, and PR impact questions route to Codegraph automatically. The installer uses safe per-agent defaults and creates the target skills directory as needed:
@@ -172,7 +279,7 @@ For a custom location, use `codegraph skill install --target <path>/skills/codeg
 
 ## Using as a library
 
-Use the TypeScript API when another program needs deterministic file packs, review packets, or model prompts. CLI `--pretty` and `--summary` output is for humans; library callers should keep structured fields until the final UI or prompt boundary.
+Use the TypeScript API when another program needs deterministic file packs, review packets, or model prompts. CLI `--pretty` and `--summary` output is also useful for model-readable triage, but library callers should keep structured fields until the final UI or prompt boundary.
 
 ```ts
 import {

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { runCli } from "../src/cli.js";
+import { appendDuplicateLeadSummary } from "../src/duplicatesLeads.js";
 import { buildProjectIndex, findDuplicates } from "../src/index.js";
 
 const tempRoots: string[] = [];
@@ -53,6 +54,25 @@ afterEach(async () => {
 });
 
 describe("duplicate detection", () => {
+  test("duplicate lead summaries retain omitted counts when no lead survives filters", () => {
+    const lines: string[] = [];
+
+    appendDuplicateLeadSummary(lines, {
+      scope: "changed",
+      leads: [],
+      omittedCounts: {
+        byBudget: 0,
+        byConfidenceOrType: 2,
+        byScope: 3,
+        hiddenEvidence: 0,
+      },
+    });
+
+    expect(lines).toContain("Duplicate leads:");
+    expect(lines).toContain("- none after confidence/type filters");
+    expect(lines).toContain("- omitted: 2 by confidence/type, 3 outside changed scope");
+  });
+
   test("reports exact duplicate functions across files", async () => {
     const root = await makeTempProject();
     const duplicateSource = `
@@ -147,7 +167,9 @@ export function summarizePayments(rows: Array<{ amount: number; fee: number }>) 
     expect(defaultResult.suggestions).toBeUndefined();
     expect(defaultResult.omittedCounts.rawSuggestions).toBeGreaterThan(0);
     expect(defaultGroup?.rawPairCount).toBeGreaterThanOrEqual(defaultGroup?.variantCount ?? 0);
-    expect(defaultGroup?.omittedVariantCount).toBe((defaultGroup?.rawPairCount ?? 0) - (defaultGroup?.variantCount ?? 0));
+    expect(defaultGroup?.omittedVariantCount).toBe(
+      (defaultGroup?.rawPairCount ?? 0) - (defaultGroup?.variantCount ?? 0),
+    );
     expect(rawResult.suggestions?.length).toBeGreaterThan(0);
     expect(rawGroup?.rawPairCount).toBe(rawGroup?.variantCount);
     expect(rawGroup?.omittedVariantCount).toBe(0);
@@ -649,7 +671,11 @@ export function sameRows(rows: number[]) {
 
     await writeProjectFile(root, "src/index.ts", "export const marker = 1;\n");
     await writeProjectFile(root, "src/a.txt", `${commonOversizedBlock}\n${sharedEligibleBlock}\n${leftUniqueBlock}\n+`);
-    await writeProjectFile(root, "src/b.txt", `${commonOversizedBlock}\n${sharedEligibleBlock}\n${rightUniqueBlock}\n-`);
+    await writeProjectFile(
+      root,
+      "src/b.txt",
+      `${commonOversizedBlock}\n${sharedEligibleBlock}\n${rightUniqueBlock}\n-`,
+    );
     await writeProjectFile(root, "src/c.txt", `${commonOversizedBlock}\n${thirdUniqueBlock}\n#`);
 
     const index = await buildProjectIndex(root);
@@ -663,9 +689,7 @@ export function sameRows(rows: number[]) {
 
     expect(result.omittedCounts.oversizedBuckets).toBeGreaterThan(0);
     expect(
-      result.groups.some(
-        (group) => group.primaryLeft.file === "src/a.txt" && group.primaryRight.file === "src/b.txt",
-      ),
+      result.groups.some((group) => group.primaryLeft.file === "src/a.txt" && group.primaryRight.file === "src/b.txt"),
     ).toBeTruthy();
   });
 

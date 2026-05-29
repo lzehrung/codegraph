@@ -23,20 +23,20 @@
 
 ## Phase 1: Documentation Cleanup
 
-- [ ] Tighten call compatibility wording in:
+- [x] Tighten call compatibility wording in:
   - `docs/cli.md`
   - `docs/library-api.md`
   - `docs/agent-workflows.md`
   - `docs/how-it-works.md`
   - `codegraph-skill/codegraph/SKILL.md`
-- [ ] Add duplicate-detection review guidance to `docs/agent-workflows.md`.
-- [ ] Add a concise duplicate-detection pointer to `codegraph-skill/codegraph/SKILL.md`.
-- [ ] Review the changed docs for discoverability, repetition, and unclear source paths.
-- [ ] Verify formatting with Prettier and whitespace checks.
+- [x] Add duplicate-detection review guidance to `docs/agent-workflows.md`.
+- [x] Add a concise duplicate-detection pointer to `codegraph-skill/codegraph/SKILL.md`.
+- [x] Review the changed docs for discoverability, repetition, and unclear source paths.
+- [x] Verify formatting with Prettier and whitespace checks.
 
 ## Phase 2: General Documentation Review
 
-- [ ] Review core documentation for stale or missing workflow guidance:
+- [x] Review core documentation for stale or missing workflow guidance:
   - `README.md`
   - `docs/installation.md`
   - `docs/cli.md`
@@ -46,21 +46,21 @@
   - `docs/language-parity.md`
   - `docs/scenario-catalog.md`
   - `codegraph-skill/codegraph/SKILL.md`
-- [ ] Make feature discovery consistent across README, CLI docs, library docs, and the skill.
-- [ ] Keep detailed contracts in canonical docs and link to them from README.
-- [ ] Confirm README table of contents still matches any added or renamed sections.
+- [x] Make feature discovery consistent across README, CLI docs, library docs, and the skill.
+- [x] Keep detailed contracts in canonical docs and link to them from README.
+- [x] Confirm README table of contents still matches any added or renamed sections.
 
 ## Phase 3: README CLI Examples
 
-- [ ] Add compact README examples with monospace command and output blocks.
-- [ ] Include representative inputs and bounded outputs for:
+- [x] Add compact README examples with monospace command and output blocks.
+- [x] Include representative inputs and bounded outputs for:
   - `codegraph impact --pretty`
   - call compatibility leads inside impact or review output
   - `codegraph review --summary`
   - `codegraph duplicates`
   - `codegraph orient`
-- [ ] Keep examples intentionally small and avoid fixture-specific noise.
-- [ ] Link each example to the canonical CLI section for full flags and JSON shape.
+- [x] Keep examples intentionally small and avoid fixture-specific noise.
+- [x] Link each example to the canonical CLI section for full flags and JSON shape.
 
 Example target shape:
 
@@ -77,22 +77,22 @@ Changed symbols
 
 ## Phase 4: Default Output Refinement
 
-- [ ] Keep call compatibility enabled by default for `impact` and `review` when callable signatures changed.
-- [ ] Add duplicate leads by default only where they are scoped, high-confidence, and review-oriented:
+- [x] Keep call compatibility enabled by default for `impact` and `review` when callable signatures changed.
+- [x] Add duplicate leads by default only where they are scoped, high-confidence, and review-oriented:
   - `impact --pretty`: changed files only.
   - `review --summary`: changed plus impacted files.
   - `orient`: no duplicate detection by default.
   - Repository-level opportunities: explicit `inspect` or `duplicates` commands only.
-- [ ] Consider a small option surface instead of implicit broad scans:
+- [x] Consider a small option surface instead of implicit broad scans:
   - `--duplicates off`
   - `--duplicates changed`
   - `--duplicates impacted`
   - `--duplicates all`
-- [ ] Preserve existing JSON contracts or add explicit schema fields with omission counts.
-- [ ] Ensure human summaries show only high-confidence exact or renamed duplicate leads.
-- [ ] Include omission counts when duplicate leads are hidden by confidence, scope, or budget.
-- [ ] Keep call compatibility default behavior focused on high-confidence `likely_mismatch` findings.
-- [ ] Add tests for any changed CLI or library output contract.
+- [x] Preserve existing JSON contracts or add explicit schema fields with omission counts.
+- [x] Ensure human summaries show only high-confidence exact or renamed duplicate leads.
+- [x] Include omission counts when duplicate leads are hidden by confidence, scope, or budget.
+- [x] Keep call compatibility default behavior focused on high-confidence `likely_mismatch` findings.
+- [x] Add tests for any changed CLI or library output contract.
 
 ## Acceptance Criteria
 

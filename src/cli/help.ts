@@ -85,6 +85,7 @@ Examples:
   codegraph skill install --target ~/.codex/skills/codegraph --force
   codegraph skill doctor
   codegraph impact --provider git --base main --head HEAD
+  codegraph impact --provider git --base main --head HEAD --pretty --duplicates off
   codegraph impact --provider git --base HEAD --head WORKTREE
   codegraph refs --file src/index.ts --line 42 --col 10
 `;

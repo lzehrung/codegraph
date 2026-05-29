@@ -1,9 +1,17 @@
 import { performance } from "node:perf_hooks";
-import { buildReviewReport, type ReviewBuildReport, type ReviewDepth } from "../review.js";
+import path from "node:path";
+import { buildReviewReport, type ReviewBuildReport, type ReviewDepth, type ReviewReport } from "../review.js";
 import type { CandidateTestFile } from "../impact/context.js";
 import type { CallCompatibilityHint } from "../impact/types.js";
-import type { BuildReport } from "../indexer/types.js";
+import type { BuildReport, ProjectIndex } from "../indexer/types.js";
 import { type GraphBuildOptions } from "../graphs/types.js";
+import {
+  appendDuplicateLeadSummary,
+  collectDuplicateLeadSummary,
+  parseDuplicateLeadScope,
+  type DuplicateLeadScope,
+  type DuplicateLeadSummary,
+} from "../duplicatesLeads.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import {
   REVIEW_SUMMARY_CANDIDATES_PER_CONFIDENCE_LIMIT,
@@ -12,6 +20,7 @@ import {
   REVIEW_SUMMARY_TASK_LIMIT,
 } from "../presentation/bounds.js";
 import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
+import { normalizePath } from "../util/paths.js";
 import { parseCacheModeOption, parseOptionalNonNegativeIntegerOption } from "./options.js";
 
 type CommandTimingReport = {
@@ -121,7 +130,47 @@ function appendReviewCallCompatibility(lines: string[], report: Awaited<ReturnTy
   lines.push(...findings);
 }
 
-function formatReviewSummary(report: Awaited<ReturnType<typeof buildReviewReport>>): string {
+function collectChangedReviewFiles(report: ReviewReport): string[] {
+  return report.changedFiles.map((file) => file.file);
+}
+
+function collectImpactedReviewFiles(report: ReviewReport): string[] {
+  const files = new Set<string>(collectChangedReviewFiles(report));
+  for (const edge of report.graphDelta) {
+    files.add(edge.from);
+    if (edge.to.type === "file") {
+      files.add(edge.to.path);
+    }
+  }
+  return Array.from(files).sort((left, right) => left.localeCompare(right));
+}
+
+function duplicateScopeFilesForReview(
+  report: ReviewReport,
+  duplicateScope: Exclude<DuplicateLeadScope, "off">,
+): string[] | undefined {
+  if (duplicateScope === "all") return undefined;
+  if (duplicateScope === "changed") return collectChangedReviewFiles(report);
+  return collectImpactedReviewFiles(report);
+}
+
+function filterIndexedScopeFiles(input: {
+  index: ProjectIndex;
+  projectRoot: string;
+  scopedFiles: readonly string[] | undefined;
+}): string[] | undefined {
+  const { index, projectRoot, scopedFiles } = input;
+  if (scopedFiles === undefined) return undefined;
+  return scopedFiles.filter((file) => {
+    if (index.byFile.has(file)) return true;
+    return index.byFile.has(normalizePath(path.resolve(projectRoot, file)));
+  });
+}
+
+function formatReviewSummary(
+  report: Awaited<ReturnType<typeof buildReviewReport>>,
+  duplicateSummary?: DuplicateLeadSummary,
+): string {
   const lines: string[] = [];
   const candidateCounts = countCandidateTestsByConfidence(report.candidateTests);
   lines.push("Review Summary");
@@ -184,7 +233,29 @@ function formatReviewSummary(report: Awaited<ReturnType<typeof buildReviewReport
     lines.push(`- symbol mapping parse failures: ${report.diagnostics.symbolMappingParseFailures.length}`);
   }
   appendReviewCallCompatibility(lines, report);
+  appendDuplicateLeadSummary(lines, duplicateSummary);
   return `${lines.join("\n")}\n`;
+}
+
+async function collectReviewDuplicateSummary(input: {
+  projectRoot: string;
+  report: ReviewReport;
+  duplicateScope: Exclude<DuplicateLeadScope, "off">;
+  index: ProjectIndex;
+}): Promise<DuplicateLeadSummary | undefined> {
+  const scopedFiles = duplicateScopeFilesForReview(input.report, input.duplicateScope);
+  const indexedScopedFiles = filterIndexedScopeFiles({
+    index: input.index,
+    projectRoot: input.projectRoot,
+    scopedFiles,
+  });
+  return await collectDuplicateLeadSummary({
+    index: input.index,
+    projectRoot: input.projectRoot,
+    scope: input.duplicateScope,
+    ...(indexedScopedFiles !== undefined ? { scopedFiles: indexedScopedFiles } : {}),
+    ...(input.report.projectFiles?.length !== undefined ? { allScopeFileCount: input.report.projectFiles.length } : {}),
+  });
 }
 
 export async function handleReviewCommand(context: ReviewCommandContext): Promise<void> {
@@ -230,14 +301,33 @@ export async function handleReviewCommand(context: ReviewCommandContext): Promis
   }
   if (maxCallsites !== undefined) reviewOpts.maxCallsites = maxCallsites;
   if (maxTests !== undefined) reviewOpts.maxCandidates = maxTests;
-  if (context.commandReport) {
+  const wantsHumanSummary = context.hasFlag("--summary") || context.hasFlag("--pretty");
+  const needsReviewBuildReport = Boolean(context.commandReport) || wantsHumanSummary;
+  let reviewBuildReport: ReviewBuildReport | undefined;
+  if (needsReviewBuildReport) {
     const reviewReport: ReviewBuildReport = { timings: {} };
-    context.commandReport.review = reviewReport;
+    reviewBuildReport = reviewReport;
+    if (context.commandReport) {
+      context.commandReport.review = reviewReport;
+    }
     reviewOpts.report = reviewReport;
   }
   const report = await buildReviewReport(context.projectRootFs, reviewOpts);
-  if (context.hasFlag("--summary") || context.hasFlag("--pretty")) {
-    context.writeStdoutLine(formatReviewSummary(report).trimEnd());
+  if (wantsHumanSummary) {
+    const duplicateScope = parseDuplicateLeadScope(context.getOpt("--duplicates"), "impacted");
+    let duplicateSummary: DuplicateLeadSummary | undefined;
+    if (duplicateScope !== "off") {
+      const reviewIndex = reviewBuildReport?.index;
+      if (reviewIndex) {
+        duplicateSummary = await collectReviewDuplicateSummary({
+          projectRoot: context.projectRootFs,
+          report,
+          duplicateScope,
+          index: reviewIndex,
+        });
+      }
+    }
+    context.writeStdoutLine(formatReviewSummary(report, duplicateSummary).trimEnd());
   } else {
     context.writeJSONLine(report);
   }

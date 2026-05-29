@@ -51,6 +51,7 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--lcov",
   "--coverage-report",
   "--test-command-template",
+  "--duplicates",
   "--agent",
   "--target",
   "--limit",

@@ -1,5 +1,5 @@
 import { buildProjectIndex } from "../indexer/build-index.js";
-import type { BuildOptions } from "../indexer/types.js";
+import type { BuildOptions, ProjectIndex } from "../indexer/types.js";
 import {
   analyzeImpactFromDiff,
   type ChangedSymbol,
@@ -12,6 +12,12 @@ import {
 import { graphToMermaidSymbolsWithFiles } from "../graphs/symbol-render.js";
 import { type GraphBuildOptions } from "../graphs/types.js";
 import { type SymbolGraph, type SymbolNodeKind } from "../graphs/symbol-graph.js";
+import {
+  appendDuplicateLeadSummary,
+  collectDuplicateLeadSummary,
+  parseDuplicateLeadScope,
+  type DuplicateLeadSummary,
+} from "../duplicatesLeads.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import type { Graph } from "../types.js";
 import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
@@ -225,6 +231,32 @@ function collectLikelyCallCompatibilityMismatches(report: ImpactReport): Array<{
   return findings;
 }
 
+function duplicateScopeFilesForImpact(
+  impactReport: ImpactReport,
+  duplicateScope: Exclude<ReturnType<typeof parseDuplicateLeadScope>, "off">,
+): string[] | undefined {
+  if (duplicateScope === "all") return undefined;
+  const changedFiles = impactReport.changedFiles.map((file) => file.file);
+  if (duplicateScope === "changed") return changedFiles;
+  return [...changedFiles, ...impactReport.impacted.map((item) => item.file)];
+}
+
+async function collectImpactDuplicateSummary(input: {
+  index: ProjectIndex;
+  projectRoot: string;
+  impactReport: ImpactReport;
+  duplicateScope: Exclude<ReturnType<typeof parseDuplicateLeadScope>, "off">;
+}): Promise<DuplicateLeadSummary | undefined> {
+  const scopedFiles = duplicateScopeFilesForImpact(input.impactReport, input.duplicateScope);
+  return await collectDuplicateLeadSummary({
+    index: input.index,
+    projectRoot: input.projectRoot,
+    scope: input.duplicateScope,
+    ...(scopedFiles !== undefined ? { scopedFiles } : {}),
+    allScopeFileCount: input.impactReport.projectFiles?.length ?? input.index.byFile.size,
+  });
+}
+
 function formatImpactMermaid(report: ImpactReport, root: string): string {
   const fileGraph: Graph = { nodes: new Set<string>(), edges: [] };
   const ensureFileNode = (file: string) => fileGraph.nodes.add(file);
@@ -385,56 +417,59 @@ function buildIndexOptions(context: ImpactCommandContext, options: ImpactOptions
   return indexOpts;
 }
 
-function writePrettyImpactReport(context: ImpactCommandContext, impactReport: ImpactReport): void {
-  context.writeStdoutLine("Impact Analysis Report");
-  context.writeStdoutLine("======================");
+function formatPrettyImpactReport(impactReport: ImpactReport, duplicateSummary?: DuplicateLeadSummary): string {
+  const lines: string[] = [];
+  lines.push("Impact Analysis Report");
+  lines.push("======================");
   if (impactReport.warning) {
-    context.writeStdoutLine(`WARNING: ${impactReport.warning}`);
-    context.writeStdoutLine("");
+    lines.push(`WARNING: ${impactReport.warning}`);
+    lines.push("");
   }
-  context.writeStdoutLine(`Changed files: ${impactReport.changedFiles.length}`);
-  context.writeStdoutLine(`Changed symbols: ${impactReport.changedSymbols.length}`);
-  context.writeStdoutLine(`Impacted items: ${impactReport.impacted.length}`);
-  context.writeStdoutLine("");
+  lines.push(`Changed files: ${impactReport.changedFiles.length}`);
+  lines.push(`Changed symbols: ${impactReport.changedSymbols.length}`);
+  lines.push(`Impacted items: ${impactReport.impacted.length}`);
+  lines.push("");
   for (const item of impactReport.impacted.slice(0, 10)) {
     const reasonLabel = formatImpactReasonLabel(item);
-    context.writeStdoutLine(
+    lines.push(
       `${item.file}: ${item.symbols.join(", ")} (${reasonLabel}, severity: ${(item.severity * 100).toFixed(1)}%)`,
     );
     if ("refs" in item && item.refs?.length) {
       const contextsToShow = item.refs.slice(0, 2);
       for (const ref of contextsToShow) {
-        context.writeStdoutLine(`  Reference at ${ref.range.start.line}:${ref.range.start.column}:`);
+        lines.push(`  Reference at ${ref.range.start.line}:${ref.range.start.column}:`);
         const refContext = ref.context ?? "";
         const contextLines = refContext.split("\n").slice(0, 5);
         for (const line of contextLines) {
-          context.writeStdoutLine(`    ${line}`);
+          lines.push(`    ${line}`);
         }
         if (refContext.split("\n").length > 5) {
-          context.writeStdoutLine("    ...");
+          lines.push("    ...");
         }
       }
       if (item.refs.length > 2) {
-        context.writeStdoutLine(`  ... and ${item.refs.length - 2} more references`);
+        lines.push(`  ... and ${item.refs.length - 2} more references`);
       }
     }
   }
   if (impactReport.impacted.length > 10) {
-    context.writeStdoutLine(`... and ${impactReport.impacted.length - 10} more`);
+    lines.push(`... and ${impactReport.impacted.length - 10} more`);
   }
   const compatibilityFindings = collectLikelyCallCompatibilityMismatches(impactReport);
   if (compatibilityFindings.length) {
-    context.writeStdoutLine("");
-    context.writeStdoutLine("Call compatibility:");
+    lines.push("");
+    lines.push("Call compatibility:");
     for (const finding of compatibilityFindings) {
       const { symbol, hint } = finding;
       const plural = hint.actual.argCount === 1 ? "argument" : "arguments";
       const requirement = formatRequiredArgumentCount(hint);
-      context.writeStdoutLine(
+      lines.push(
         `- ${symbol.name}: ${hint.callsiteFile}:${hint.callsiteRange.start.line} passes ${hint.actual.argCount} ${plural}; new signature ${requirement}.`,
       );
     }
   }
+  appendDuplicateLeadSummary(lines, duplicateSummary);
+  return lines.join("\n");
 }
 
 export async function handleImpactCommand(context: ImpactCommandContext): Promise<void> {
@@ -452,7 +487,17 @@ export async function handleImpactCommand(context: ImpactCommandContext): Promis
     if (mermaid) {
       context.writeStdoutLine(formatImpactMermaid(impactReport, context.projectRootFs));
     } else if (pretty) {
-      writePrettyImpactReport(context, impactReport);
+      const duplicateScope = parseDuplicateLeadScope(context.getOpt("--duplicates"), "changed");
+      const duplicateSummary =
+        duplicateScope === "off"
+          ? undefined
+          : await collectImpactDuplicateSummary({
+              index,
+              projectRoot: context.projectRootFs,
+              impactReport,
+              duplicateScope,
+            });
+      context.writeStdoutLine(formatPrettyImpactReport(impactReport, duplicateSummary));
     } else {
       context.writeJSONLine(report);
     }
