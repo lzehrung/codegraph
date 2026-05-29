@@ -185,30 +185,39 @@ codegraph grep --pattern 'eval\(' --ignore-case
 - Use `--include-same-file` for non-overlapping clones inside one file.
 - Use `--raw-pairs` when debugging the low-level pair evidence behind each group.
 
-`orient`, `packet`, `search`, `explain`, `artifact`, and `mcp` each support command-specific `--help` output so agents do not have to infer options from top-level help.
+`orient`, `packet`, `search`, `explain`, `artifact`, and `mcp` each support command-specific `--help` output.
 
-- `orient --pretty` is the compact first-turn reading surface for people or models.
-- `orient --json` is the stable handoff when tools need exact handles, limits, and omitted counts.
-- Small orientation budgets skip deeper health analysis and mark that omission; use `--budget medium` or `--budget large` when health counts matter.
-- `packet get` accepts file, symbol, chunk, SQL, graph, and review handles, then returns bounded evidence with limits, omissions, and follow-ups.
-- CLI `orient` returns file handles; library orientation calls can also produce review handles when a review range is supplied.
-- `search` is deterministic and vectorless. It returns ranked project-relative handles, rank reasons, evidence, graph neighbors, follow-up commands, result counts, per-packet limits, and omission counts.
-- `explain` resolves file paths, symbol names, SQL object names, and search handles into bounded packets with symbols, dependencies, reverse dependencies, references, snippets, SQL facts, review tasks, candidate tests, limits, omissions, and follow-ups.
-- Generated follow-up and suggested-question commands POSIX-shell-quote dynamic arguments when needed.
-- SQL object names resolve by exact name first; unqualified basenames resolve only when unique, so handles or schema-qualified names are preferred.
-- Reference and snippet omission counts are lower bounds after the bounded navigation scan reaches its cap.
-- `artifact build` writes `codegraph.sqlite`, project-relative `graph.json`, `CODEGRAPH_REPORT.md`, `questions.json`, and `manifest.json` by default.
-- Artifact suggested questions use unique IDs backed by stable handles when a handle is available.
+#### Agent orientation and packets
+
+- Use `orient --pretty` as the compact first-turn reading surface for people or models.
+- Use `orient --json` when follow-up tools need exact handles, limits, and omitted counts.
+- Small orientation budgets skip deeper health analysis; use `--budget medium` or `--budget large` when health counts matter.
+- Use `packet get` with file, symbol, chunk, SQL, graph, or review handles to retrieve bounded evidence plus follow-up commands.
+
+`search` is deterministic and vectorless. `explain` resolves file paths, symbol names, SQL object names, and search handles into bounded packets with symbols, graph context, references, snippets, SQL facts, review tasks, candidate tests, limits, omissions, and follow-ups.
+
+For SQL, prefer handles or schema-qualified names when basenames may be ambiguous. Reference and snippet omission counts are lower bounds after bounded navigation reaches its cap.
+
+#### Artifact bundles
+
+- `artifact build` writes `codegraph.sqlite`, `graph.json`, `CODEGRAPH_REPORT.md`, `questions.json`, and `manifest.json` by default.
+- Artifact suggested questions use unique IDs backed by stable handles when possible.
 - Use artifact flags to select a subset.
-- `--force` permits non-empty output directories, removes recognizable stale Codegraph artifacts, preserves unrelated operator files, and refuses unrecognized reserved-name collisions.
+- Use `--force` to replace recognizable stale Codegraph artifacts while preserving unrelated files.
 - Artifact contents exclude their own output directory and linked outside-root files.
-- `mcp serve` exposes `orient`, `packet_get`, `search`, `get_file`, `get_symbol`, `goto`, `refs`, `deps`, `rdeps`, `path`, `impact`, `review`, `query_sqlite`, and `artifact_build`.
+
+#### MCP server
+
+- `mcp serve` exposes navigation, search, impact, review, SQLite query, and artifact-build tools.
 - MCP uses stdio by default or Streamable HTTP with `--port <number>`.
-- HTTP serves `/mcp`, binds to `127.0.0.1` unless `--host <host>` is passed, validates Host headers, allows loopback Host headers for wildcard binds, and rejects oversized request bodies.
-- MCP file and artifact paths are confined to `--root` after realpath resolution; tool calls do not accept per-request root overrides.
-- MCP tools are read-only by default; `query_sqlite` is row- and byte-bounded and rejects synthetic payload functions, and `--allow-build` enables artifact output only.
-- `chunk` uses semantic Tree-sitter chunking for registered source and stylesheet languages, Vue and Svelte block-aware chunking for single-file components, and text chunking for JSON, YAML, and unsupported extensions.
-- Use `--text` to force text chunking.
+- HTTP serves `/mcp`, validates Host headers, and binds to `127.0.0.1` unless `--host <host>` is passed.
+- MCP file and artifact paths are confined to `--root` after realpath resolution.
+- MCP tools are read-only by default; `--allow-build` enables artifact output only.
+- `query_sqlite` is row- and byte-bounded and rejects synthetic payload functions.
+
+#### Chunking
+
+`chunk` uses semantic Tree-sitter chunking for registered source and stylesheet languages, Vue and Svelte block-aware chunking for single-file components, and text chunking for JSON, YAML, and unsupported extensions. Use `--text` to force text chunking.
 
 ### Dependency analysis and diagnostics
 
