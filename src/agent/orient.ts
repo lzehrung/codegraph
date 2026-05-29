@@ -128,10 +128,9 @@ export async function orientCodegraphWithSession(
   const health = await buildHealth(root, snapshot.index, scopedAbsoluteFiles, scopedFileGraph, limits.includeHealth);
   const handles = [...reviewHandles, ...fileHandles];
   const recommendedNext = buildRecommendedNext(scopedFiles, includeRoots, handles);
-  const healthSummary =
-    health.omittedAnalyses
-      ? "Health analysis skipped for small budget."
-      : `${health.cycles} cycle(s), ${health.unresolved} unresolved import group(s), ${health.duplicateGroups} duplicate group(s).`;
+  const healthSummary = health.omittedAnalyses
+    ? "Health analysis skipped for small budget."
+    : `${health.cycles} cycle(s), ${health.unresolved} unresolved import group(s), ${health.duplicateGroups} duplicate group(s).`;
 
   return {
     schemaVersion: 1,
@@ -209,7 +208,9 @@ function normalizeIncludeRoots(root: string, includeRoots: string[]): string[] {
   return includeRoots
     .map((includeRoot) => {
       const relativeRoot = path.isAbsolute(includeRoot) ? path.relative(root, includeRoot) : includeRoot;
-      return normalizePath(relativeRoot).replace(/^\.?\//, "").replace(/\/$/, "");
+      return normalizePath(relativeRoot)
+        .replace(/^\.?\//, "")
+        .replace(/\/$/, "");
     })
     .filter((includeRoot) => includeRoot && includeRoot !== ".");
 }

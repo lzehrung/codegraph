@@ -8,7 +8,12 @@ type FileId = string;
 
 const resolvePythonModuleCache = new Map<string, FileId | { external: string }>();
 
-function pythonResolutionCacheKey(projectRoot: string, fromFile: string, moduleName: string | null, importDotCount: number): string {
+function pythonResolutionCacheKey(
+  projectRoot: string,
+  fromFile: string,
+  moduleName: string | null,
+  importDotCount: number,
+): string {
   const normalizedRoot = normalizePath(path.resolve(projectRoot));
   const normalizedFromFile = normalizePath(path.resolve(fromFile));
   return `${normalizedRoot}::${normalizedFromFile}::${".".repeat(importDotCount)}${moduleName ?? ""}`;

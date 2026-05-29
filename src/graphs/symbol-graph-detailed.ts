@@ -8,9 +8,7 @@ import { getNativeSyntaxTreeExecution } from "../native/treeSitterNative.js";
 import { SymbolKind, type ProjectIndex, type ResolvedExport, type SymbolDef } from "../indexer/types.js";
 import type { FileId } from "../types.js";
 import { buildSymbolGraph, type SymbolGraph } from "./symbol-graph.js";
-import {
-  collectDetailedDeclarations,
-} from "./symbol-graph-detailed/ast.js";
+import { collectDetailedDeclarations } from "./symbol-graph-detailed/ast.js";
 import {
   emitClassInheritanceEdges,
   emitFunctionBodyEdges,

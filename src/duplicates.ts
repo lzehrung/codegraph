@@ -267,8 +267,7 @@ function clampScore(score: number): number {
 /** Splits source into names, literals, operators, and punctuation. */
 function tokenizeSource(text: string): string[] {
   return (
-    text.match(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b[A-Za-z_$][\w$]*\b|\d+(?:\.\d+)?|[^\s]/g) ??
-    []
+    text.match(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b[A-Za-z_$][\w$]*\b|\d+(?:\.\d+)?|[^\s]/g) ?? []
   );
 }
 
@@ -451,11 +450,7 @@ function buildInternalUnit(
   const rawHash = hashText(text);
   const sourceTokens = tokenizeSource(text);
   const normalizedTokens = sourceTokens.map(normalizeToken);
-  const signatures = winnowShingles(
-    makeShingles(normalizedTokens, shingleSize),
-    windowSize,
-    DEFAULT_MAX_FINGERPRINTS,
-  );
+  const signatures = winnowShingles(makeShingles(normalizedTokens, shingleSize), windowSize, DEFAULT_MAX_FINGERPRINTS);
   return {
     ...unit,
     id: internalUnitId(unit, absoluteFile),
@@ -561,7 +556,10 @@ function pairKey(left: DuplicateInternalUnit, right: DuplicateInternalUnit): str
   return `${right.id}\u0000${left.id}`;
 }
 
-function orderedPair(left: DuplicateInternalUnit, right: DuplicateInternalUnit): [DuplicateInternalUnit, DuplicateInternalUnit] {
+function orderedPair(
+  left: DuplicateInternalUnit,
+  right: DuplicateInternalUnit,
+): [DuplicateInternalUnit, DuplicateInternalUnit] {
   if (left.absoluteFile < right.absoluteFile) return [left, right];
   if (left.absoluteFile > right.absoluteFile) return [right, left];
   if (left.startLine <= right.startLine) return [left, right];
@@ -717,7 +715,9 @@ async function collectDuplicateUnits(
   > & { projectRoot: string | undefined; files: readonly string[] | undefined },
 ): Promise<{ units: DuplicateInternalUnit[]; belowThresholdUnits: number }> {
   const files = options.files ?? Array.from(index.byFile.keys());
-  const normalizedFiles = Array.from(new Set(files.map((file) => normalizeDetectionFile(file, options.projectRoot)))).sort();
+  const normalizedFiles = Array.from(
+    new Set(files.map((file) => normalizeDetectionFile(file, options.projectRoot))),
+  ).sort();
   const units: DuplicateInternalUnit[] = [];
   let belowThresholdUnits = 0;
 
@@ -749,13 +749,7 @@ async function collectDuplicateUnits(
         return makeSymbolUnit(symbol, chunk, options.projectRoot, options.shingleSize, options.windowSize);
       })
       .filter((unit): unit is DuplicateInternalUnit => unit !== undefined);
-    const chunkUnits = makeChunkUnits(
-      file,
-      chunks,
-      options.projectRoot,
-      options.shingleSize,
-      options.windowSize,
-    );
+    const chunkUnits = makeChunkUnits(file, chunks, options.projectRoot, options.shingleSize, options.windowSize);
     const candidates = [...symbolUnits, ...chunkUnits];
 
     for (const unit of candidates) {
@@ -865,15 +859,9 @@ function unitRef(unit: DuplicateInternalUnit): DuplicateUnitRef {
 }
 
 function unitRefIdentity(ref: DuplicateUnitRef): string {
-  return [
-    ref.file,
-    ref.startLine,
-    ref.endLine,
-    ref.languageId,
-    ref.kind,
-    ref.name ?? "",
-    ref.symbolKind ?? "",
-  ].join("\u0000");
+  return [ref.file, ref.startLine, ref.endLine, ref.languageId, ref.kind, ref.name ?? "", ref.symbolKind ?? ""].join(
+    "\u0000",
+  );
 }
 
 function unitRefRangeIdentity(ref: DuplicateUnitRef): string {
@@ -1091,7 +1079,9 @@ function compareGroups(left: DuplicateGroup, right: DuplicateGroup): number {
   const cloneTypeCompare = cloneTypeRank[right.cloneType] - cloneTypeRank[left.cloneType];
   if (cloneTypeCompare) return cloneTypeCompare;
   const tokenCompare =
-    right.primaryLeft.tokenCount + right.primaryRight.tokenCount - (left.primaryLeft.tokenCount + left.primaryRight.tokenCount);
+    right.primaryLeft.tokenCount +
+    right.primaryRight.tokenCount -
+    (left.primaryLeft.tokenCount + left.primaryRight.tokenCount);
   if (tokenCompare) return tokenCompare;
   const leftCompare = compareUnitRefs(left.primaryLeft, right.primaryLeft);
   if (leftCompare) return leftCompare;
@@ -1154,7 +1144,10 @@ function groupSuggestions(suggestions: readonly DuplicateSuggestion[], includeRa
   const refs = suggestions.flatMap((suggestion) => [suggestion.left, suggestion.right]);
   const clusters = createUnitClusters(refs);
   const variantLimit = includeRawPairs ? Number.POSITIVE_INFINITY : DEFAULT_GROUP_VARIANT_LIMIT;
-  const suggestionsByGroup = new Map<string, { left: UnitCluster; right: UnitCluster; suggestions: DuplicateSuggestion[] }>();
+  const suggestionsByGroup = new Map<
+    string,
+    { left: UnitCluster; right: UnitCluster; suggestions: DuplicateSuggestion[] }
+  >();
   for (const suggestion of suggestions) {
     let leftCluster = clusters.get(unitRefIdentity(suggestion.left));
     let rightCluster = clusters.get(unitRefIdentity(suggestion.right));
@@ -1183,11 +1176,7 @@ export async function findDuplicates(
   const projectRoot = options.projectRoot ?? index.projectRoot;
   const minTokens = normalizePositiveIntegerOption(options.minTokens, "minTokens", DEFAULT_MIN_TOKENS);
   const maxTokens = normalizePositiveIntegerOption(options.maxTokens, "maxTokens", DEFAULT_MAX_TOKENS);
-  const maxBucketSize = normalizePositiveIntegerOption(
-    options.maxBucketSize,
-    "maxBucketSize",
-    DEFAULT_MAX_BUCKET_SIZE,
-  );
+  const maxBucketSize = normalizePositiveIntegerOption(options.maxBucketSize, "maxBucketSize", DEFAULT_MAX_BUCKET_SIZE);
   const shingleSize = normalizePositiveIntegerOption(options.shingleSize, "shingleSize", DEFAULT_SHINGLE_SIZE);
   const windowSize = normalizePositiveIntegerOption(options.windowSize, "windowSize", DEFAULT_WINDOW_SIZE);
   const includeSmall = options.includeSmall ?? false;

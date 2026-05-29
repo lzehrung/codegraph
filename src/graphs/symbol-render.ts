@@ -178,7 +178,9 @@ export function graphToMermaidSymbolsWithFiles(sg: SymbolGraphLike, fg: Graph, p
   for (const node of model.fileNodes) {
     if (declared.has(node.id)) continue;
     declared.add(node.id);
-    lines.push(node.external ? `${node.id}(["${mermaidLabel(node.label)}"])` : `${node.id}["${mermaidLabel(node.label)}"]`);
+    lines.push(
+      node.external ? `${node.id}(["${mermaidLabel(node.label)}"])` : `${node.id}["${mermaidLabel(node.label)}"]`,
+    );
   }
   for (const node of model.symbolNodes) {
     if (declared.has(node.id)) continue;

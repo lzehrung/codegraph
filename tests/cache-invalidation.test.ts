@@ -6,7 +6,12 @@ import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { buildProjectIndex, buildProjectIndexIncremental, type BuildReport } from "../src/index.js";
 import * as indexer from "../src/indexer.js";
-import { MANIFEST_VERSION, summarizeBuildOptions, writeManifest, type IndexManifest } from "../src/indexer/build-cache.js";
+import {
+  MANIFEST_VERSION,
+  summarizeBuildOptions,
+  writeManifest,
+  type IndexManifest,
+} from "../src/indexer/build-cache.js";
 import { collectGraph } from "../src/graphs.js";
 import {
   getGitBlobHash,

@@ -1,10 +1,5 @@
 import type { FileId, Graph } from "../types.js";
-import {
-  getForwardNeighbors,
-  getReverseNeighbors,
-  graphAdjacencyFor,
-  type GraphAdjacencyIndex,
-} from "./adjacency.js";
+import { getForwardNeighbors, getReverseNeighbors, graphAdjacencyFor, type GraphAdjacencyIndex } from "./adjacency.js";
 import { getFiniteNonNegativeLimit } from "./limits.js";
 
 export type DependencyNode = { file: FileId; depth: number };

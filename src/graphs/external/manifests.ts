@@ -380,8 +380,10 @@ export function createDependencyManifestForDirectory(directory: string): Depende
   const declaredPackages = new Set<string>();
   let hasManifest = false;
   hasManifest = addPackageJsonDependencies(path.join(resolvedRoot, "package.json"), declaredPackages) || hasManifest;
-  hasManifest = addRequirementsDependencies(path.join(resolvedRoot, "requirements.txt"), declaredPackages) || hasManifest;
-  hasManifest = addRequirementsDependencies(path.join(resolvedRoot, "requirements.in"), declaredPackages) || hasManifest;
+  hasManifest =
+    addRequirementsDependencies(path.join(resolvedRoot, "requirements.txt"), declaredPackages) || hasManifest;
+  hasManifest =
+    addRequirementsDependencies(path.join(resolvedRoot, "requirements.in"), declaredPackages) || hasManifest;
   hasManifest = addPyprojectDependencies(path.join(resolvedRoot, "pyproject.toml"), declaredPackages) || hasManifest;
   hasManifest = addSetupCfgDependencies(path.join(resolvedRoot, "setup.cfg"), declaredPackages) || hasManifest;
   hasManifest = addPipfileDependencies(path.join(resolvedRoot, "Pipfile"), declaredPackages) || hasManifest;

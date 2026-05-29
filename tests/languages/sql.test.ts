@@ -2,7 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
-import { buildProjectIndex, buildProjectIndexFromFiles, chunkFile, listSymbols, supportForFile } from "../../src/index.js";
+import {
+  buildProjectIndex,
+  buildProjectIndexFromFiles,
+  chunkFile,
+  listSymbols,
+  supportForFile,
+} from "../../src/index.js";
 import { LANG_CONFIGS } from "../../src/bootstrap/treeSitterLanguages.js";
 
 it("registers SQL files as language support", () => {

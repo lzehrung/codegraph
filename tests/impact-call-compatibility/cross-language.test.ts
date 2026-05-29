@@ -57,17 +57,17 @@ describe("cross-language call compatibility extraction", () => {
   it.each([
     ["call.ts", "helper(one, two);", "helper", 2],
     ["call.py", "helper(1, b=2)\n", "helper", 2],
-    ["call.go", "package main\nfunc run(){ helper(\"x\", 1) }\n", "helper", 2],
+    ["call.go", 'package main\nfunc run(){ helper("x", 1) }\n', "helper", 2],
     ["call.rs", "fn run(){ helper(1, String::new()); }\n", "helper", 2],
-    ["Call.java", "class Call { void run(){ helper(\"x\", 1); } }\n", "helper", 2],
-    ["Call.cs", "class Call { void Run(){ Helper(\"x\", b: 2); } }\n", "Helper", 2],
-    ["call.kt", "fun run(){ helper(\"x\", b = 2) }\n", "helper", 2],
-    ["call.swift", "func run(){ helper(\"x\", b: 2) }\n", "helper", 2],
-    ["call.php", "<?php helper(\"x\", b: 2);\n", "helper", 2],
+    ["Call.java", 'class Call { void run(){ helper("x", 1); } }\n', "helper", 2],
+    ["Call.cs", 'class Call { void Run(){ Helper("x", b: 2); } }\n', "Helper", 2],
+    ["call.kt", 'fun run(){ helper("x", b = 2) }\n', "helper", 2],
+    ["call.swift", 'func run(){ helper("x", b: 2) }\n', "helper", 2],
+    ["call.php", '<?php helper("x", b: 2);\n', "helper", 2],
     ["call.rb", "helper(1, c: 2)\n", "helper", 2],
-    ["call.c", "void run(){ helper(\"x\", 1); }\n", "helper", 2],
-    ["call.cpp", "void run(){ helper<int>(\"x\"); }\n", "helper", 1],
-    ["call.zig", "fn run() void { helper(\"x\", 1); }\n", "helper", 2],
+    ["call.c", 'void run(){ helper("x", 1); }\n', "helper", 2],
+    ["call.cpp", 'void run(){ helper<int>("x"); }\n', "helper", 1],
+    ["call.zig", 'fn run() void { helper("x", 1); }\n', "helper", 2],
   ])("extracts callsite arguments for %s", (fileName, source, calleeName, argCount) => {
     const parsed = parseFixture(fileName, source);
     const calleeStartIndex = source.indexOf(calleeName);

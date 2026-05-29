@@ -4,10 +4,4 @@ export { buildSqlArtifactGraphFromFiles, projectSqlFactsToGraph } from "./graph.
 export { collectSqlReviewContext } from "./review.js";
 export type { SqlArtifactEdge, SqlArtifactGraph, SqlArtifactNode } from "./graph.js";
 export type { SqlReviewContext, SqlReviewContextEntry } from "./review.js";
-export type {
-  SqlBridgeReason,
-  SqlFactKind,
-  SqlFileRole,
-  SqlStatementFact,
-  SqlTruthTier,
-} from "./types.js";
+export type { SqlBridgeReason, SqlFactKind, SqlFileRole, SqlStatementFact, SqlTruthTier } from "./types.js";

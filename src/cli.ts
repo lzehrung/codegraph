@@ -52,10 +52,7 @@ import { normalizePath, resolveFilePathFromRoot, toProjectDisplayPath } from "./
 
 export { isCliDiscoveryRelativePathInside } from "./cli/context.js";
 
-const DUPLICATE_PROJECT_PATTERNS = [
-  ...DEFAULT_PROJECT_PATTERNS,
-  "**/*.{json,jsonc,toml,txt,yaml,yml}",
-];
+const DUPLICATE_PROJECT_PATTERNS = [...DEFAULT_PROJECT_PATTERNS, "**/*.{json,jsonc,toml,txt,yaml,yml}"];
 
 function normalizeEntrypointPath(filePath: string): string {
   const resolvedPath = path.resolve(filePath);

@@ -35,8 +35,7 @@ export function readNativeTargetPackage(nativeRoot, suffix) {
     return { suffix, packagePath, packageJson: null, mainFile: null };
   }
   const packageJson = readJsonFile(packagePath);
-  const mainFile =
-    typeof packageJson.main === "string" ? path.join(nativeRoot, "npm", suffix, packageJson.main) : null;
+  const mainFile = typeof packageJson.main === "string" ? path.join(nativeRoot, "npm", suffix, packageJson.main) : null;
   return { suffix, packagePath, packageJson, mainFile };
 }
 
@@ -47,10 +46,7 @@ export function collectNativeTargetPackages(nativeRoot, nativePackage) {
 export function assertCompleteNativeTargetArtifacts(nativeRoot, nativePackage) {
   const targetPackages = collectNativeTargetPackages(nativeRoot, nativePackage);
   const expectedPackageNames = new Map(
-    getSupportedNativeTargetSuffixes(nativePackage).map((suffix) => [
-      suffix,
-      `@lzehrung/codegraph-native-${suffix}`,
-    ]),
+    getSupportedNativeTargetSuffixes(nativePackage).map((suffix) => [suffix, `@lzehrung/codegraph-native-${suffix}`]),
   );
   const missingTargets = targetPackages
     .filter((targetPackage) => !targetPackage.mainFile || !fs.existsSync(targetPackage.mainFile))
@@ -58,8 +54,7 @@ export function assertCompleteNativeTargetArtifacts(nativeRoot, nativePackage) {
   const invalidPackageNames = targetPackages
     .filter(
       (targetPackage) =>
-        targetPackage.packageJson &&
-        targetPackage.packageJson.name !== expectedPackageNames.get(targetPackage.suffix),
+        targetPackage.packageJson && targetPackage.packageJson.name !== expectedPackageNames.get(targetPackage.suffix),
     )
     .map((targetPackage) => targetPackage.suffix);
   const invalidPackageVersions = targetPackages

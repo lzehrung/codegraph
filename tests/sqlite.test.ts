@@ -632,7 +632,10 @@ export function runC() { return 1; }
       expect(chain.results).toEqual([bPath, cPath]);
     }
 
-    const affected = await queryGraphSqlite(dbPath, `What functions would be affected if I change this module ${cPath}`);
+    const affected = await queryGraphSqlite(
+      dbPath,
+      `What functions would be affected if I change this module ${cPath}`,
+    );
     expect(affected.kind).toBe("affectedFunctionsForModule");
     if (affected.kind === "affectedFunctionsForModule") {
       const names = affected.results.map((row) => row.name);

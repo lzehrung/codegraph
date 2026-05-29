@@ -1,8 +1,4 @@
-import type {
-  CallCompatibilityProvider,
-  ExtractCallsiteRequest,
-  ExtractSignatureRequest,
-} from "./types.js";
+import type { CallCompatibilityProvider, ExtractCallsiteRequest, ExtractSignatureRequest } from "./types.js";
 import type { CallableSignature, CallsiteArguments } from "../../callCompatibility.js";
 
 export const callCompatibilityLanguageIds = [
@@ -56,9 +52,7 @@ const structuralCallCompatibilityProvider: CallCompatibilityProvider = {
   },
 };
 
-export const callCompatibilityProviders: readonly CallCompatibilityProvider[] = [
-  structuralCallCompatibilityProvider,
-];
+export const callCompatibilityProviders: readonly CallCompatibilityProvider[] = [structuralCallCompatibilityProvider];
 
 export function getCallCompatibilityProvider(languageId: string): CallCompatibilityProvider | null {
   for (const provider of callCompatibilityProviders) {

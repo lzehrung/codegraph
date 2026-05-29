@@ -76,10 +76,9 @@ describe("graph reports", () => {
     };
 
     expect(getUnresolvedImports(graphWithDocumentLinks).map((entry) => entry.name)).toEqual(["./missing-source"]);
-    expect(getUnresolvedImports(graphWithDocumentLinks, { includeGraphOnly: true }).map((entry) => entry.name)).toEqual([
-      "./missing-source",
-      "./missing-doc.md",
-    ]);
+    expect(getUnresolvedImports(graphWithDocumentLinks, { includeGraphOnly: true }).map((entry) => entry.name)).toEqual(
+      ["./missing-source", "./missing-doc.md"],
+    );
   });
 
   it("does not count declared JS package dependencies as unresolved imports", () => {
@@ -554,7 +553,7 @@ describe("graph reports", () => {
     fs.writeFileSync(path.join(projectRoot, "Cargo.toml"), '[package]\nname = "sample"\nversion = "0.1.0"\n', "utf8");
     fs.writeFileSync(
       path.join(sourceRoot, "lib.rs"),
-      'mod languages;\nmod query;\n#[cfg(test)]\nmod tests;\nuse crate::languages::language_for_id;\n',
+      "mod languages;\nmod query;\n#[cfg(test)]\nmod tests;\nuse crate::languages::language_for_id;\n",
       "utf8",
     );
     fs.writeFileSync(path.join(sourceRoot, "languages.rs"), "pub fn language_for_id() {}\n", "utf8");

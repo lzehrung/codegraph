@@ -1,9 +1,5 @@
 import { buildReviewReport, type ReviewReport } from "../review.js";
-import {
-  explainCodegraphTargetWithSession,
-  type AgentExplainTarget,
-  type AgentExplanation,
-} from "./explain.js";
+import { explainCodegraphTargetWithSession, type AgentExplainTarget, type AgentExplanation } from "./explain.js";
 import { createAgentSession, type AgentSession } from "./session.js";
 import { quoteShellArg } from "./shell.js";
 

@@ -273,7 +273,8 @@ export function extractJsTsDynamicSpecifiers(source: string, fromFile: string, p
       seen.add(spec);
       out.push({ spec, resolved: "heuristic", confidence: 0.7 });
     };
-    const pathCallRe = /(?<!["'`])\b(?:require|import)\s*\(\s*(path\.(?:join|resolve)\s*\((?:[^()]|\([^()]*\))*\))\s*\)/g;
+    const pathCallRe =
+      /(?<!["'`])\b(?:require|import)\s*\(\s*(path\.(?:join|resolve)\s*\((?:[^()]|\([^()]*\))*\))\s*\)/g;
     for (const match of src.matchAll(pathCallRe)) {
       const start = match.index ?? 0;
       if (stringMask?.[start]) continue;

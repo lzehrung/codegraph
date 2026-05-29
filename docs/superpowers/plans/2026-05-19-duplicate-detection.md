@@ -46,12 +46,12 @@ Out of scope:
 
 ## Taxonomy
 
-| Clone type | Description | V1 support | Primary signals |
-| --- | --- | --- | --- |
-| Type-1 | Exact duplicated text | Yes | Raw or normalized text hash |
-| Type-2 | Same structure with renamed identifiers or literals | Yes | AST shape hash, token shingles |
-| Type-3 | Edited copy with inserted or deleted statements | Partial | Winnowing, Jaccard, ordered-token similarity |
-| Type-4 | Semantically equivalent but structurally different | External only | Embeddings or deeper semantic analysis |
+| Clone type | Description                                         | V1 support    | Primary signals                              |
+| ---------- | --------------------------------------------------- | ------------- | -------------------------------------------- |
+| Type-1     | Exact duplicated text                               | Yes           | Raw or normalized text hash                  |
+| Type-2     | Same structure with renamed identifiers or literals | Yes           | AST shape hash, token shingles               |
+| Type-3     | Edited copy with inserted or deleted statements     | Partial       | Winnowing, Jaccard, ordered-token similarity |
+| Type-4     | Semantically equivalent but structurally different  | External only | Embeddings or deeper semantic analysis       |
 
 Type-4 results are discovery hints when powered externally.
 
@@ -234,32 +234,32 @@ Scores are deterministic and capped to `0..100`.
 
 Positive signals:
 
-| Signal | Weight | Reason |
-| --- | ---: | --- |
-| Raw source hash match | +60 | `raw_hash_match` |
-| Normalized text hash match | +50 | `normalized_text_hash_match` |
-| AST shape hash match | +40 | `ast_shape_match` |
-| Token Jaccard >= 0.95 | +30 | `token_jaccard_0.97` |
-| Token Jaccard >= 0.85 | +22 | `token_jaccard_0.88` |
-| Token Jaccard >= 0.70 | +12 | `token_jaccard_0.73` |
-| Shingle overlap | +0..25 | `shared_shingles_14` |
-| Ordered token similarity >= 0.80 | +10 | `ordered_similarity_0.84` |
-| Same symbol kind | +4 | `same_symbol_kind_function` |
-| Similar line span | +4 | `similar_line_span` |
-| Similar complexity | +3 | `similar_complexity` |
-| PR git similarity >= 80% | +20 | `git_similarity_92` |
-| Shared dependency context | +3 | `shared_dependency_context` |
+| Signal                           | Weight | Reason                       |
+| -------------------------------- | -----: | ---------------------------- |
+| Raw source hash match            |    +60 | `raw_hash_match`             |
+| Normalized text hash match       |    +50 | `normalized_text_hash_match` |
+| AST shape hash match             |    +40 | `ast_shape_match`            |
+| Token Jaccard >= 0.95            |    +30 | `token_jaccard_0.97`         |
+| Token Jaccard >= 0.85            |    +22 | `token_jaccard_0.88`         |
+| Token Jaccard >= 0.70            |    +12 | `token_jaccard_0.73`         |
+| Shingle overlap                  | +0..25 | `shared_shingles_14`         |
+| Ordered token similarity >= 0.80 |    +10 | `ordered_similarity_0.84`    |
+| Same symbol kind                 |     +4 | `same_symbol_kind_function`  |
+| Similar line span                |     +4 | `similar_line_span`          |
+| Similar complexity               |     +3 | `similar_complexity`         |
+| PR git similarity >= 80%         |    +20 | `git_similarity_92`          |
+| Shared dependency context        |     +3 | `shared_dependency_context`  |
 
 Negative signals:
 
-| Signal | Weight | Reason |
-| --- | ---: | --- |
-| Token count below threshold | -25 | `trivial_body_penalty` |
-| Length ratio outside `0.5..2.0` | -20 | `length_mismatch_penalty` |
-| Boilerplate bucket too large | -20 | `boilerplate_bucket_penalty` |
-| License/header-only region | -30 | `license_header_penalty` |
-| Generated or vendored path | -15 | `generated_path_penalty` |
-| Same file and adjacent regions | -10 | `same_file_adjacent_penalty` |
+| Signal                          | Weight | Reason                       |
+| ------------------------------- | -----: | ---------------------------- |
+| Token count below threshold     |    -25 | `trivial_body_penalty`       |
+| Length ratio outside `0.5..2.0` |    -20 | `length_mismatch_penalty`    |
+| Boilerplate bucket too large    |    -20 | `boilerplate_bucket_penalty` |
+| License/header-only region      |    -30 | `license_header_penalty`     |
+| Generated or vendored path      |    -15 | `generated_path_penalty`     |
+| Same file and adjacent regions  |    -10 | `same_file_adjacent_penalty` |
 
 Hard filters:
 

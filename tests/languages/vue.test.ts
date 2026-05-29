@@ -94,18 +94,24 @@ it("deduplicates and filters Vue external script src dependencies", async () => 
   const extraFile = path.join(sampleDir, "extra.ts").replace(/\\/g, "/");
   const graph = await collectGraph(sampleDir, [sourceFile, logicFile, extraFile]);
 
-  expect(graph.edges.filter((edge) => edge.from === sourceFile && edge.to.type === "file" && edge.to.path === logicFile))
-    .toHaveLength(1);
-  expect(graph.edges.filter((edge) => edge.from === sourceFile && edge.to.type === "file" && edge.to.path === extraFile))
-    .toHaveLength(1);
+  expect(
+    graph.edges.filter((edge) => edge.from === sourceFile && edge.to.type === "file" && edge.to.path === logicFile),
+  ).toHaveLength(1);
+  expect(
+    graph.edges.filter((edge) => edge.from === sourceFile && edge.to.type === "file" && edge.to.path === extraFile),
+  ).toHaveLength(1);
   expect(
     graph.edges.filter(
-      (edge) => edge.from === sourceFile && edge.to.type === "external" && edge.to.name === "https://cdn.example/vue-helper.js",
+      (edge) =>
+        edge.from === sourceFile && edge.to.type === "external" && edge.to.name === "https://cdn.example/vue-helper.js",
     ),
   ).toHaveLength(1);
   expect(
-    graph.edges.filter((edge) => edge.from === sourceFile && edge.to.type === "external" && edge.to.name === "./missing.ts"),
+    graph.edges.filter(
+      (edge) => edge.from === sourceFile && edge.to.type === "external" && edge.to.name === "./missing.ts",
+    ),
   ).toHaveLength(1);
-  expect(graph.edges.some((edge) => edge.from === sourceFile && edge.to.type === "external" && edge.to.name === ""))
-    .toBe(false);
+  expect(
+    graph.edges.some((edge) => edge.from === sourceFile && edge.to.type === "external" && edge.to.name === ""),
+  ).toBe(false);
 });

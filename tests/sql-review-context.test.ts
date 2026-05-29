@@ -200,7 +200,10 @@ describe("SQL review context", () => {
     const root = await mkTmpDir("cg-sql-review-");
     try {
       await writeFile(path.join(root, "db", "schema.sql"), "CREATE TABLE users (id integer);\n");
-      const code = await writeFile(path.join(root, "src", "userRepo.ts"), "export const query = `SELECT * FROM users`;\n");
+      const code = await writeFile(
+        path.join(root, "src", "userRepo.ts"),
+        "export const query = `SELECT * FROM users`;\n",
+      );
       const options = { changedFiles: [code], projectFiles: [] as string[] };
 
       const context = await collectSqlReviewContext(root, options);
@@ -215,11 +218,14 @@ describe("SQL review context", () => {
     const root = await mkTmpDir("cg-sql-review-");
     try {
       const schema = await writeFile(path.join(root, "db", "schema.sql"), "CREATE TABLE users (id integer);\n");
-      const migration = await writeFile(path.join(root, "db", "migrations", "20260513000000_orders.sql"), [
-        "CREATE TABLE orders (id integer);",
-        "",
-      ].join("\n"));
-      const code = await writeFile(path.join(root, "src", "userRepo.ts"), "export const query = `SELECT * FROM users`;\n");
+      const migration = await writeFile(
+        path.join(root, "db", "migrations", "20260513000000_orders.sql"),
+        ["CREATE TABLE orders (id integer);", ""].join("\n"),
+      );
+      const code = await writeFile(
+        path.join(root, "src", "userRepo.ts"),
+        "export const query = `SELECT * FROM users`;\n",
+      );
 
       const report = await buildReviewReport(root, { files: [code, migration] });
 
@@ -248,7 +254,10 @@ describe("SQL review context", () => {
       for (let index = 0; index < 40; index += 1) {
         await writeFile(path.join(root, "db", `schema_${index}.sql`), `CREATE TABLE table_${index} (id integer);\n`);
       }
-      const code = await writeFile(path.join(root, "src", "repo.ts"), "export const query = `SELECT * FROM table_1`;\n");
+      const code = await writeFile(
+        path.join(root, "src", "repo.ts"),
+        "export const query = `SELECT * FROM table_1`;\n",
+      );
       const originalReadFile = fs.readFile.bind(fs);
       let activeSqlReads = 0;
       let maxActiveSqlReads = 0;

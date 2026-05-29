@@ -4,11 +4,7 @@ import type { SqlFileRole } from "./types.js";
 const MIGRATION_NAME_RE = /^(?:\d{3,}|\d{14}|v\d+__)[\w.-]*\.sql$/i;
 
 function hasPathSegment(filePath: string, segments: readonly string[]): boolean {
-  const parts = filePath
-    .replace(/\\/g, "/")
-    .toLowerCase()
-    .split("/")
-    .filter(Boolean);
+  const parts = filePath.replace(/\\/g, "/").toLowerCase().split("/").filter(Boolean);
   return parts.some((part) => segments.includes(part));
 }
 

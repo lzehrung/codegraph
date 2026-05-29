@@ -305,112 +305,124 @@ jsFallbackDescribe("native tree-sitter integration", () => {
     expect(simplifyModuleIndex(nativeIndex)).toEqual(simplifyModuleIndex(jsIndex));
   });
 
-  it("matches import extraction for representative compiled languages", async () => {
-    const cases = [
-      ["php", "main.php"],
-      ["php", "grouped-consumer.php"],
-      ["php", "composer-consumer.php"],
-      ["go", "main.go"],
-      ["go", "aliased-imports.go"],
-      ["go", "aliased-types.go"],
-      ["go", "dot-imports.go"],
-      ["java", "main.java"],
-      ["java", "WildcardImports.java"],
-      ["java", "static-imports.java"],
-      ["csharp", "Main.cs"],
-      ["rust", "main.rs"],
-      ["rust", "aliased-use.rs"],
-      ["rust", "reexports.rs"],
-      ["rust", "nested.rs"],
-      ["kotlin", "main.kt"],
-      ["kotlin", "Aliases.kt"],
-      ["kotlin", "TypeConsumers.kt"],
-      ["swift", "main.swift"],
-      ["swift", "AdvancedUsage.swift"],
-      ["zig", "main.zig"],
-      ["c", "main.c"],
-      ["c", "advanced-use.c"],
-      ["cpp", "main.cpp"],
-      ["cpp", "namespace-usage.cpp"],
-      ["ruby", "main.rb"],
-      ["ruby", "consumer.rb"],
-      ["tsx", "App.tsx"],
-      ["python", "relative-imports.py"],
-      ["javascript", "mixed.js"],
-    ] as const;
+  it(
+    "matches import extraction for representative compiled languages",
+    async () => {
+      const cases = [
+        ["php", "main.php"],
+        ["php", "grouped-consumer.php"],
+        ["php", "composer-consumer.php"],
+        ["go", "main.go"],
+        ["go", "aliased-imports.go"],
+        ["go", "aliased-types.go"],
+        ["go", "dot-imports.go"],
+        ["java", "main.java"],
+        ["java", "WildcardImports.java"],
+        ["java", "static-imports.java"],
+        ["csharp", "Main.cs"],
+        ["rust", "main.rs"],
+        ["rust", "aliased-use.rs"],
+        ["rust", "reexports.rs"],
+        ["rust", "nested.rs"],
+        ["kotlin", "main.kt"],
+        ["kotlin", "Aliases.kt"],
+        ["kotlin", "TypeConsumers.kt"],
+        ["swift", "main.swift"],
+        ["swift", "AdvancedUsage.swift"],
+        ["zig", "main.zig"],
+        ["c", "main.c"],
+        ["c", "advanced-use.c"],
+        ["cpp", "main.cpp"],
+        ["cpp", "namespace-usage.cpp"],
+        ["ruby", "main.rb"],
+        ["ruby", "consumer.rb"],
+        ["tsx", "App.tsx"],
+        ["python", "relative-imports.py"],
+        ["javascript", "mixed.js"],
+      ] as const;
 
-    for (const [projectDir, relativeFile] of cases) {
-      await expectNativeImportParity(projectDir, relativeFile);
-    }
-  }, slowNativeParityTimeoutMs);
+      for (const [projectDir, relativeFile] of cases) {
+        await expectNativeImportParity(projectDir, relativeFile);
+      }
+    },
+    slowNativeParityTimeoutMs,
+  );
 
-  it("matches symbol extraction for representative compiled languages", async () => {
-    const cases = [
-      "php/utils.php",
-      "php/src/Support/Toolbox.php",
-      "php/src/Support/support_helper.php",
-      "php/src/Domain/Service.php",
-      "go/utils.go",
-      "go/contracts.go",
-      "java/utils/Utils.java",
-      "java/NestedTypes.java",
-      "csharp/Utils.cs",
-      "csharp/AdvancedTypes.cs",
-      "rust/utils.rs",
-      "rust/models.rs",
-      "rust/reexports.rs",
-      "kotlin/utils/helperFunction.kt",
-      "kotlin/Models.kt",
-      "kotlin/utils/MoreTypes.kt",
-      "swift/Utils.swift",
-      "swift/Protocols.swift",
-      "swift/StaticMembers.swift",
-      "zig/helpers.zig",
-      "zig/math.zig",
-      "c/utils.h",
-      "c/advanced.h",
-      "c/function-pointers.h",
-      "cpp/utils.hpp",
-      "cpp/advanced.hpp",
-      "cpp/namespaces.hpp",
-      "javascript/mixed.js",
-      "tsx/components/Button.tsx",
-      "ruby/utils.rb",
-      "ruby/namespaced.rb",
-    ] as const;
+  it(
+    "matches symbol extraction for representative compiled languages",
+    async () => {
+      const cases = [
+        "php/utils.php",
+        "php/src/Support/Toolbox.php",
+        "php/src/Support/support_helper.php",
+        "php/src/Domain/Service.php",
+        "go/utils.go",
+        "go/contracts.go",
+        "java/utils/Utils.java",
+        "java/NestedTypes.java",
+        "csharp/Utils.cs",
+        "csharp/AdvancedTypes.cs",
+        "rust/utils.rs",
+        "rust/models.rs",
+        "rust/reexports.rs",
+        "kotlin/utils/helperFunction.kt",
+        "kotlin/Models.kt",
+        "kotlin/utils/MoreTypes.kt",
+        "swift/Utils.swift",
+        "swift/Protocols.swift",
+        "swift/StaticMembers.swift",
+        "zig/helpers.zig",
+        "zig/math.zig",
+        "c/utils.h",
+        "c/advanced.h",
+        "c/function-pointers.h",
+        "cpp/utils.hpp",
+        "cpp/advanced.hpp",
+        "cpp/namespaces.hpp",
+        "javascript/mixed.js",
+        "tsx/components/Button.tsx",
+        "ruby/utils.rb",
+        "ruby/namespaced.rb",
+      ] as const;
 
-    for (const relativeFile of cases) {
-      await expectNativeModuleIndexParity(relativeFile);
-    }
-  }, slowNativeParityTimeoutMs);
+      for (const relativeFile of cases) {
+        await expectNativeModuleIndexParity(relativeFile);
+      }
+    },
+    slowNativeParityTimeoutMs,
+  );
 
-  it("matches module specifier extraction for stylesheet and component languages", async () => {
-    const cases = [
-      "php/main.php",
-      "php/grouped-consumer.php",
-      "php/composer-consumer.php",
-      "css/main.css",
-      "less/main.less",
-      "less/secondary.less",
-      "scss/use-partials.scss",
-      "scss/forward.scss",
-      "scss/extensionless-forward.scss",
-      "scss/extensionless-import.scss",
-      "vue/inline-script.vue",
-      "vue/script-setup.vue",
-      "vue/App.vue",
-      "vue/ExternalScripts.vue",
-      "vue/TsScript.vue",
-      "svelte/inline-script.svelte",
-      "svelte/reactive.svelte",
-      "svelte/App.svelte",
-      "svelte/ExternalScripts.svelte",
-      "svelte/TypeScriptWidget.svelte",
-      "html/modules.html",
-    ] as const;
+  it(
+    "matches module specifier extraction for stylesheet and component languages",
+    async () => {
+      const cases = [
+        "php/main.php",
+        "php/grouped-consumer.php",
+        "php/composer-consumer.php",
+        "css/main.css",
+        "less/main.less",
+        "less/secondary.less",
+        "scss/use-partials.scss",
+        "scss/forward.scss",
+        "scss/extensionless-forward.scss",
+        "scss/extensionless-import.scss",
+        "vue/inline-script.vue",
+        "vue/script-setup.vue",
+        "vue/App.vue",
+        "vue/ExternalScripts.vue",
+        "vue/TsScript.vue",
+        "svelte/inline-script.svelte",
+        "svelte/reactive.svelte",
+        "svelte/App.svelte",
+        "svelte/ExternalScripts.svelte",
+        "svelte/TypeScriptWidget.svelte",
+        "html/modules.html",
+      ] as const;
 
-    for (const relativeFile of cases) {
-      await expectNativeModuleSpecifierParity(relativeFile);
-    }
-  }, slowNativeParityTimeoutMs);
+      for (const relativeFile of cases) {
+        await expectNativeModuleSpecifierParity(relativeFile);
+      }
+    },
+    slowNativeParityTimeoutMs,
+  );
 });

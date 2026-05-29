@@ -217,7 +217,10 @@ export async function getPhpComposerAutoloadFiles(
       if (existingRoot) {
         if (normalizedPrefix === undefined) {
           existingRoot.namespacePrefixes = [""];
-        } else if (!existingRoot.namespacePrefixes.includes("") && !existingRoot.namespacePrefixes.includes(normalizedPrefix)) {
+        } else if (
+          !existingRoot.namespacePrefixes.includes("") &&
+          !existingRoot.namespacePrefixes.includes(normalizedPrefix)
+        ) {
           existingRoot.namespacePrefixes.push(normalizedPrefix);
         }
         return;
@@ -284,7 +287,10 @@ function normalizePhpNamespacePrefix(prefix: string | undefined): string | undef
   return prefix.replace(/^\\+|\\+$/g, "");
 }
 
-async function phpFileMatchesNamespacePrefixes(filePath: string, namespacePrefixes: readonly string[]): Promise<boolean> {
+async function phpFileMatchesNamespacePrefixes(
+  filePath: string,
+  namespacePrefixes: readonly string[],
+): Promise<boolean> {
   if (!namespacePrefixes.length || namespacePrefixes.includes("")) {
     return true;
   }

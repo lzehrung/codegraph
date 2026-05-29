@@ -100,9 +100,7 @@ describe("SQL fact extraction", () => {
       await readFixture("dump.sql"),
     );
 
-    expect(seedFacts).toEqual([
-      expect.objectContaining({ kind: "writes_to", objectName: "users", role: "seed" }),
-    ]);
+    expect(seedFacts).toEqual([expect.objectContaining({ kind: "writes_to", objectName: "users", role: "seed" })]);
     expect(queryFacts).toEqual([
       expect.objectContaining({ kind: "reads_from", objectName: "users", role: "query" }),
       expect.objectContaining({ kind: "joins", objectName: "organizations", relatedObjectName: "users" }),
@@ -389,9 +387,10 @@ describe("SQL fact extraction", () => {
     const filePath = path.join(fixtureRoot, "migrations", "20240510120400_drop.sql");
     const facts = extractSqlFactsFromSource(
       filePath,
-      ["DROP INDEX CONCURRENTLY IF EXISTS public.users_email_idx;", "DROP MATERIALIZED VIEW IF EXISTS public.active_users;"].join(
-        "\n",
-      ),
+      [
+        "DROP INDEX CONCURRENTLY IF EXISTS public.users_email_idx;",
+        "DROP MATERIALIZED VIEW IF EXISTS public.active_users;",
+      ].join("\n"),
     );
 
     expect(facts).toEqual([

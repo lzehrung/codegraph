@@ -62,7 +62,10 @@ function cachedSampleIndex(key: string, build: () => Promise<ProjectIndex>): Pro
 
 export async function createTestIndex(language: SampleLanguage): Promise<ProjectIndex> {
   const samplePath = getSamplePath(language);
-  return await cachedSampleIndex(`root:${normalizeFilePath(samplePath)}`, async () => await buildProjectIndex(samplePath));
+  return await cachedSampleIndex(
+    `root:${normalizeFilePath(samplePath)}`,
+    async () => await buildProjectIndex(samplePath),
+  );
 }
 
 export async function createTestIndexFromPath(samplePath: string): Promise<ProjectIndex> {

@@ -73,7 +73,7 @@ export interface CallCompatibilityHint {
     argCount: number;
     confidence: "high";
   };
-};
+}
 
 // Impact findings
 export type ImpactReason =

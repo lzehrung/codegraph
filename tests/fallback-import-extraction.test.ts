@@ -92,7 +92,7 @@ describe("Import extraction fallback reporting", () => {
     const source = [
       'const loggedRequire = "call require(\\"./not-real\\") in docs";',
       "const loggedImport = 'call import(\"./also-not-real\") in docs';",
-      "const loggedExport = `export { thing } from \"./template-doc\"`;",
+      'const loggedExport = `export { thing } from "./template-doc"`;',
       "const actual = require('./real')",
       "const dynamic = import('./dynamic')",
     ].join("\n");
@@ -106,7 +106,7 @@ describe("Import extraction fallback reporting", () => {
     const source = [
       "const dynamic = `load ${import('./dep')}`;",
       'const required = `load ${require("./req")}`;',
-      'const nestedString = `skip ${"import(\'./not-real\')"}`;',
+      "const nestedString = `skip ${\"import('./not-real')\"}`;",
       'const nestedTemplate = `skip ${`require("./also-not-real")`}`;',
       "const literalText = `skip import('./literal-only')`;",
     ].join("\n");

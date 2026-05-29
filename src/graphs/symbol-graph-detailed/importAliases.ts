@@ -37,9 +37,7 @@ export function buildImportAliasMaps(
             def: localFallback,
           }
         : null;
-      const resolved =
-        resolveExportNamespace(targetFile, imp.imported) ??
-        fallbackResolved;
+      const resolved = resolveExportNamespace(targetFile, imp.imported) ?? fallbackResolved;
       if (resolved?.kind === "resolved") {
         aliasToTargetDef.set(imp.local, resolved.def);
       } else if (resolved?.kind === "namespace") {

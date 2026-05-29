@@ -59,7 +59,9 @@ describe("artifact build", () => {
     expect(questions.questions.some((question) => question.command.includes("codegraph explain symbol:"))).toBeTruthy();
     expect(questions.questions.some((question) => question.command.includes("codegraph explain sql:"))).toBeTruthy();
     expect(
-      questions.questions.every((question) => question.handle === undefined || question.command.includes(question.handle)),
+      questions.questions.every(
+        (question) => question.handle === undefined || question.command.includes(question.handle),
+      ),
     ).toBeTruthy();
   });
 
@@ -67,7 +69,10 @@ describe("artifact build", () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-graph-symbol-"));
     const outDir = path.join(root, "codegraph-out");
     await fs.writeFile(path.join(root, "source.ts"), "export const sharedValue = 1;\n");
-    await fs.writeFile(path.join(root, "consumer.ts"), "import { sharedValue } from './source';\nexport const value = sharedValue;\n");
+    await fs.writeFile(
+      path.join(root, "consumer.ts"),
+      "import { sharedValue } from './source';\nexport const value = sharedValue;\n",
+    );
 
     await buildCodegraphArtifact({ root, outDir, graphJson: true });
 
@@ -124,7 +129,7 @@ describe("artifact build", () => {
   it("preserves unrecognized reserved-name files when force is set and refuses conflicting writes", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-reserved-"));
     const outDir = path.join(root, "codegraph-out");
-    const operatorGraph = "{\"operator\":true}\n";
+    const operatorGraph = '{"operator":true}\n';
     await fs.mkdir(outDir);
     await fs.writeFile(path.join(outDir, "graph.json"), operatorGraph);
     await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n");
@@ -142,7 +147,10 @@ describe("artifact build", () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-quote-"));
     const outDir = path.join(root, "codegraph-out");
     await fs.writeFile(path.join(root, "cost$center.ts"), "export const costCenter = 1;\n");
-    await fs.writeFile(path.join(root, "api.ts"), "import { costCenter } from './cost$center';\nexport const value = costCenter;\n");
+    await fs.writeFile(
+      path.join(root, "api.ts"),
+      "import { costCenter } from './cost$center';\nexport const value = costCenter;\n",
+    );
 
     await buildCodegraphArtifact({ root, outDir, questions: true });
 
@@ -187,11 +195,13 @@ describe("artifact build", () => {
     const outDir = path.join(root, "codegraph-out");
     await fs.mkdir(outDir);
     await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n");
-    await fs.writeFile(path.join(outDir, "old.json"), "{\"old\":true}\n");
+    await fs.writeFile(path.join(outDir, "old.json"), '{"old":true}\n');
 
     await buildCodegraphArtifact({ root, outDir, force: true, graphJson: true });
 
-    const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as { graph: { files: string[] } };
+    const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as {
+      graph: { files: string[] };
+    };
     expect(graph.graph.files.some((file) => file.includes("codegraph-out"))).toBe(false);
   });
 
@@ -229,7 +239,9 @@ describe("artifact build", () => {
 
     await buildCodegraphArtifact({ root, outDir, graphJson: true });
 
-    const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as { graph: { files: string[] } };
+    const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as {
+      graph: { files: string[] };
+    };
     expect(graph.graph.files.some((file) => file.includes("linked") || file.includes("secret.ts"))).toBe(false);
   });
 });

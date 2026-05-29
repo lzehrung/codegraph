@@ -93,10 +93,9 @@ export function runLanguageTests(def: LanguageTestDefinition) {
 
       beforeAll(async () => {
         const parityFiles = collectParityFiles();
-        index =
-          parityFiles.length
-            ? await createTestIndexFromFiles(samplePath, parityFiles)
-            : await createTestIndexFromPath(samplePath);
+        index = parityFiles.length
+          ? await createTestIndexFromFiles(samplePath, parityFiles)
+          : await createTestIndexFromPath(samplePath);
         graph = parityFiles.length ? await collectGraph(samplePath, parityFiles) : index.graph;
       });
 

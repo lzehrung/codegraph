@@ -128,11 +128,7 @@ async function resolveGoModuleImport(moduleInfo: GoModuleInfo, spec: string): Pr
   return null;
 }
 
-export async function resolveGoImportPath(
-  projectRoot: string,
-  fromFile: string,
-  spec: string,
-): Promise<string | null> {
+export async function resolveGoImportPath(projectRoot: string, fromFile: string, spec: string): Promise<string | null> {
   const startDir = path.dirname(fromFile);
   const goWorkPath = await findNearestFile(startDir, projectRoot, "go.work");
   const moduleInfos: GoModuleInfo[] = [];

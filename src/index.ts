@@ -239,12 +239,7 @@ export type {
 
 /** Agent packet retrieval by stable handle. */
 export { getCodegraphPacket } from "./agent/packet.js";
-export type {
-  AgentPacketKind,
-  AgentPacketPayload,
-  AgentPacketRequest,
-  AgentPacketResponse,
-} from "./agent/packet.js";
+export type { AgentPacketKind, AgentPacketPayload, AgentPacketRequest, AgentPacketResponse } from "./agent/packet.js";
 
 /** Agent-facing deterministic search over symbols, files, chunks, SQL objects, and graph neighborhoods. */
 export { formatAgentSearchResponse, searchCodegraph, searchCodegraphWithSession } from "./agent/search.js";

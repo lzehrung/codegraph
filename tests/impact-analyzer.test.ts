@@ -66,7 +66,11 @@ describe("Impact Analyzer Edge Cases", () => {
           "export function helper(a: string, ...rest: string[]) { return rest.join(a); }\n",
           "utf8",
         );
-        await fsp.writeFile(mainFile, 'import { helper } from "./api";\nexport const value = helper("x", "y", "z");\n', "utf8");
+        await fsp.writeFile(
+          mainFile,
+          'import { helper } from "./api";\nexport const value = helper("x", "y", "z");\n',
+          "utf8",
+        );
 
         const index = await buildProjectIndex(root, { cache: "memory" });
         const diffText = `diff --git a/src/api.ts b/src/api.ts
@@ -153,8 +157,8 @@ describe("Impact Analyzer Edge Cases", () => {
       {
         label: "Go",
         file: "main.go",
-        before: "package main\nfunc helper(a string) string { return a }\nfunc run(){ helper(\"x\") }\n",
-        after: "package main\nfunc helper(a string, b int) string { return a }\nfunc run(){ helper(\"x\") }\n",
+        before: 'package main\nfunc helper(a string) string { return a }\nfunc run(){ helper("x") }\n',
+        after: 'package main\nfunc helper(a string, b int) string { return a }\nfunc run(){ helper("x") }\n',
       },
       {
         label: "Rust",
@@ -165,32 +169,32 @@ describe("Impact Analyzer Edge Cases", () => {
       {
         label: "Java",
         file: "Main.java",
-        before: "class Main { void helper(String a) {} void run(){ helper(\"x\"); } }\n",
-        after: "class Main { void helper(String a, int b) {} void run(){ helper(\"x\"); } }\n",
+        before: 'class Main { void helper(String a) {} void run(){ helper("x"); } }\n',
+        after: 'class Main { void helper(String a, int b) {} void run(){ helper("x"); } }\n',
       },
       {
         label: "C#",
         file: "Main.cs",
-        before: "class Main { void helper(string a) {} void run(){ helper(\"x\"); } }\n",
-        after: "class Main { void helper(string a, int b) {} void run(){ helper(\"x\"); } }\n",
+        before: 'class Main { void helper(string a) {} void run(){ helper("x"); } }\n',
+        after: 'class Main { void helper(string a, int b) {} void run(){ helper("x"); } }\n',
       },
       {
         label: "Kotlin",
         file: "main.kt",
-        before: "fun helper(a: String) = a\nfun run(){ helper(\"x\") }\n",
-        after: "fun helper(a: String, b: Int) = a\nfun run(){ helper(\"x\") }\n",
+        before: 'fun helper(a: String) = a\nfun run(){ helper("x") }\n',
+        after: 'fun helper(a: String, b: Int) = a\nfun run(){ helper("x") }\n',
       },
       {
         label: "Swift",
         file: "main.swift",
-        before: "func helper(_ a: String) {}\nfunc run(){ helper(\"x\") }\n",
-        after: "func helper(_ a: String, b: Int) {}\nfunc run(){ helper(\"x\") }\n",
+        before: 'func helper(_ a: String) {}\nfunc run(){ helper("x") }\n',
+        after: 'func helper(_ a: String, b: Int) {}\nfunc run(){ helper("x") }\n',
       },
       {
         label: "PHP",
         file: "main.php",
-        before: "<?php function helper($a) { return $a; }\n$value = helper(\"x\");\n",
-        after: "<?php function helper($a, $b) { return $a; }\n$value = helper(\"x\");\n",
+        before: '<?php function helper($a) { return $a; }\n$value = helper("x");\n',
+        after: '<?php function helper($a, $b) { return $a; }\n$value = helper("x");\n',
       },
       {
         label: "Ruby",
@@ -262,18 +266,16 @@ describe("Impact Analyzer Edge Cases", () => {
       }
     });
 
-    it.each(["self", "cls"])(
-      "counts %s as an ordinary parameter for Python free functions",
-      async (receiverName) => {
-        const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-python-free-self-"));
-        try {
-          const file = "main.py";
-          const targetFile = path.join(root, file);
-          const before = `def helper(${receiverName}, a):\n    return a\n\nvalue = helper(obj, 1)\n`;
-          const after = `def helper(${receiverName}, a, b):\n    return a\n\nvalue = helper(obj, 1)\n`;
-          await fsp.writeFile(targetFile, after, "utf8");
-          const index = await buildProjectIndex(root, { cache: "memory" });
-          const diffText = `diff --git a/${file} b/${file}
+    it.each(["self", "cls"])("counts %s as an ordinary parameter for Python free functions", async (receiverName) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-python-free-self-"));
+      try {
+        const file = "main.py";
+        const targetFile = path.join(root, file);
+        const before = `def helper(${receiverName}, a):\n    return a\n\nvalue = helper(obj, 1)\n`;
+        const after = `def helper(${receiverName}, a, b):\n    return a\n\nvalue = helper(obj, 1)\n`;
+        await fsp.writeFile(targetFile, after, "utf8");
+        const index = await buildProjectIndex(root, { cache: "memory" });
+        const diffText = `diff --git a/${file} b/${file}
 --- a/${file}
 +++ b/${file}
 @@ -1,1 +1,1 @@
@@ -281,31 +283,30 @@ describe("Impact Analyzer Edge Cases", () => {
 +def helper(${receiverName}, a, b):
 `;
 
-          const result = await analyzeImpactFromDiff(root, index, {
-            provider: "raw",
-            diffText,
-            includeTests: true,
-          });
+        const result = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+          includeTests: true,
+        });
 
-          if ("files" in result) {
-            throw new Error("Expected full impact report");
-          }
-
-          const helper = result.changedSymbols.find((symbol) => symbol.name === "helper");
-          expect(helper?.callCompatibility).toContainEqual(
-            expect.objectContaining({
-              status: "likely_mismatch",
-              reason: "argument_count_below_minimum",
-              actual: { argCount: 2, confidence: "high" },
-              expected: { minArgs: 3, maxArgs: 3, confidence: "high" },
-              callsiteFile: file,
-            }),
-          );
-        } finally {
-          await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+        if ("files" in result) {
+          throw new Error("Expected full impact report");
         }
-      },
-    );
+
+        const helper = result.changedSymbols.find((symbol) => symbol.name === "helper");
+        expect(helper?.callCompatibility).toContainEqual(
+          expect.objectContaining({
+            status: "likely_mismatch",
+            reason: "argument_count_below_minimum",
+            actual: { argCount: 2, confidence: "high" },
+            expected: { minArgs: 3, maxArgs: 3, confidence: "high" },
+            callsiteFile: file,
+          }),
+        );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
 
     it("does not emit call compatibility hints for overloaded Java callables", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-overload-java-"));
@@ -336,7 +337,9 @@ describe("Impact Analyzer Edge Cases", () => {
           throw new Error("Expected full impact report");
         }
 
-        const changedHelpers = result.changedSymbols.filter((symbol) => symbol.name === "helper" && symbol.signatureChanged);
+        const changedHelpers = result.changedSymbols.filter(
+          (symbol) => symbol.name === "helper" && symbol.signatureChanged,
+        );
         expect(changedHelpers.length).toBeGreaterThan(0);
         for (const helper of changedHelpers) {
           expect(helper.callCompatibility).toBeUndefined();
@@ -375,7 +378,9 @@ describe("Impact Analyzer Edge Cases", () => {
           throw new Error("Expected full impact report");
         }
 
-        const changedHelper = result.changedSymbols.find((symbol) => symbol.name === "helper" && symbol.signatureChanged);
+        const changedHelper = result.changedSymbols.find(
+          (symbol) => symbol.name === "helper" && symbol.signatureChanged,
+        );
         expect(changedHelper?.callCompatibility).toContainEqual(
           expect.objectContaining({
             status: "likely_mismatch",
@@ -448,7 +453,11 @@ describe("Impact Analyzer Edge Cases", () => {
         const apiFile = path.join(root, "src", "api.ts");
         const ignoredFile = path.join(root, "src", "ignored.ts");
         await fsp.writeFile(apiFile, "export function helper(a: string, b: number) { return a + b; }\n", "utf8");
-        await fsp.writeFile(ignoredFile, 'import { helper } from "./api";\nexport const value = helper("x");\n', "utf8");
+        await fsp.writeFile(
+          ignoredFile,
+          'import { helper } from "./api";\nexport const value = helper("x");\n',
+          "utf8",
+        );
 
         const index = await buildProjectIndex(root, { cache: "memory" });
         const diffText = `diff --git a/src/api.ts b/src/api.ts
@@ -1137,7 +1146,7 @@ describe("Impact Analyzer Edge Cases", () => {
         await fsp.mkdir(path.join(root, "src"), { recursive: true });
         await fsp.writeFile(
           path.join(root, "src/api.ts"),
-          'export function helper(a: string, b: number) { return a + b; }\n',
+          "export function helper(a: string, b: number) { return a + b; }\n",
           "utf8",
         );
         await fsp.writeFile(
@@ -1179,7 +1188,7 @@ describe("Impact Analyzer Edge Cases", () => {
         await fsp.mkdir(path.join(root, "src"), { recursive: true });
         await fsp.writeFile(
           path.join(root, "src/api.ts"),
-          'export function helper(a: string, b: number) { return a + b; }\n',
+          "export function helper(a: string, b: number) { return a + b; }\n",
           "utf8",
         );
         await fsp.writeFile(
@@ -1227,7 +1236,7 @@ describe("Impact Analyzer Edge Cases", () => {
         await fsp.mkdir(path.join(root, "src"), { recursive: true });
         await fsp.writeFile(
           path.join(root, "src/api.ts"),
-          'export function helper(a: string, b: number) { return a + b; }\n',
+          "export function helper(a: string, b: number) { return a + b; }\n",
           "utf8",
         );
         await fsp.writeFile(
@@ -1288,7 +1297,7 @@ describe("Impact Analyzer Edge Cases", () => {
         await fsp.mkdir(path.join(root, "src"), { recursive: true });
         await fsp.writeFile(
           path.join(root, "src/api.ts"),
-          'export const helper = (a: string, b: number) => a + b;\n',
+          "export const helper = (a: string, b: number) => a + b;\n",
           "utf8",
         );
         await fsp.writeFile(

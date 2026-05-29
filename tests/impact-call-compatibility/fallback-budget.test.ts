@@ -47,7 +47,7 @@ describe("call compatibility fallback budget", () => {
     await fsp.mkdir(path.join(root, "src"), { recursive: true });
     const apiFile = path.join(root, "src", "api.ts");
     const mainFile = path.join(root, "src", "main.ts");
-    const apiSource = 'export function helper(a: string, b: number) { return a + b; }\n';
+    const apiSource = "export function helper(a: string, b: number) { return a + b; }\n";
     const mainSource = 'import { helper } from "./api";\nexport const value = helper("x");\n';
     await fsp.writeFile(apiFile, apiSource, "utf8");
     await fsp.writeFile(mainFile, mainSource, "utf8");

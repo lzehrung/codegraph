@@ -109,7 +109,9 @@ describe("agent search", () => {
     const root = await mkRepo();
     const response = await searchCodegraph({ root, query: "public users", mode: "sql", limit: 5 });
 
-    expect(response.results.some((result) => result.kind === "sql_object" && result.label.includes("public.users"))).toBeTruthy();
+    expect(
+      response.results.some((result) => result.kind === "sql_object" && result.label.includes("public.users")),
+    ).toBeTruthy();
     expect(response.results.every((result) => result.score > 0)).toBeTruthy();
     expect(response.results.every((result) => !result.handle.includes(root.replace(/\\/g, "/")))).toBeTruthy();
   });
@@ -142,7 +144,9 @@ describe("agent search", () => {
 
     const loginResult = response.results.find((result) => result.label.includes("handleLogin"));
     expect(loginResult?.file).toBe("src/api.ts");
-    expect(loginResult?.evidence.some((entry) => entry.source === "graph" && entry.label === "imported_by")).toBeTruthy();
+    expect(
+      loginResult?.evidence.some((entry) => entry.source === "graph" && entry.label === "imported_by"),
+    ).toBeTruthy();
     expect(loginResult?.rankReasons).toContain("graph neighborhood match at depth 1");
   });
 

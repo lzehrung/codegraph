@@ -100,7 +100,11 @@ export type FilePathWithinRootResult =
   | { status: "ok"; file: string }
   | { status: "error"; reason: "outside_project_root"; error: string };
 
-export function resolveFilePathWithinRoot(projectRoot: string, filePath: string, label?: string): FilePathWithinRootResult {
+export function resolveFilePathWithinRoot(
+  projectRoot: string,
+  filePath: string,
+  label?: string,
+): FilePathWithinRootResult {
   try {
     return { status: "ok", file: assertFilePathWithinRoot(projectRoot, filePath, label) };
   } catch (error) {

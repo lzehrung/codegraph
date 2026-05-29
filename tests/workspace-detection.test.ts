@@ -27,7 +27,8 @@ describe("Workspace detection modes", () => {
     const root = await mkTmpMonorepo();
     const nestedDir = path.join(root, "packages", "pkg-b");
     const previousCwd = process.cwd();
-    const { clearWorkspaceCaches, loadWorkspaceConfig, resolveWorkspacePackage } = await import("../src/util/workspace.js");
+    const { clearWorkspaceCaches, loadWorkspaceConfig, resolveWorkspacePackage } =
+      await import("../src/util/workspace.js");
     try {
       process.chdir(nestedDir);
       clearWorkspaceCaches();

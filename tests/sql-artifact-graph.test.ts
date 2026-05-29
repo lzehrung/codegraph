@@ -43,9 +43,9 @@ describe("SQL artifact graph", () => {
         to: { type: "file", path: createUsers },
       }),
     );
-    expect(sourceGraph.edges.some((edge) => edge.from === app || (edge.to.type === "file" && edge.to.path === app))).toBe(
-      false,
-    );
+    expect(
+      sourceGraph.edges.some((edge) => edge.from === app || (edge.to.type === "file" && edge.to.path === app)),
+    ).toBe(false);
   });
 
   it("adds SQL-to-SQL edges for read dependencies inside write statements", async () => {
@@ -106,7 +106,11 @@ describe("SQL artifact graph", () => {
       const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
       const publicSchemaFile = path.join(root, "public_schema.sql").replace(/\\/g, "/");
       const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
-      await fsp.writeFile(schemaFile, "CREATE TABLE users (id integer);\nCREATE TABLE accounts (id integer);\n", "utf8");
+      await fsp.writeFile(
+        schemaFile,
+        "CREATE TABLE users (id integer);\nCREATE TABLE accounts (id integer);\n",
+        "utf8",
+      );
       await fsp.writeFile(publicSchemaFile, "CREATE TABLE public.accounts (id integer);\n", "utf8");
       await fsp.writeFile(reportFile, "SELECT id FROM public.users;\nSELECT id FROM public.accounts;\n", "utf8");
 
@@ -220,7 +224,11 @@ describe("SQL artifact graph", () => {
         ["CREATE TABLE users (id integer);", "CREATE TABLE organizations (id integer);"].join("\n"),
         "utf8",
       );
-      await fsp.writeFile(reportFile, "SELECT * FROM users JOIN organizations ON organizations.id = users.id;\n", "utf8");
+      await fsp.writeFile(
+        reportFile,
+        "SELECT * FROM users JOIN organizations ON organizations.id = users.id;\n",
+        "utf8",
+      );
 
       const sourceGraph = await collectGraph(root, [schemaFile, reportFile]);
 
@@ -382,9 +390,7 @@ describe("SQL artifact graph", () => {
       for (let index = 0; index < 12; index += 1) {
         const file = path.join(root, `migration_${index}.sql`).replace(/\\/g, "/");
         const source =
-          index === 0
-            ? "CREATE TABLE users (id integer);\n"
-            : `SELECT id FROM users WHERE id = ${index};\n`;
+          index === 0 ? "CREATE TABLE users (id integer);\n" : `SELECT id FROM users WHERE id = ${index};\n`;
         await fsp.writeFile(file, source, "utf8");
         files.push(file);
       }
@@ -475,9 +481,7 @@ describe("SQL artifact graph", () => {
           }
         : undefined;
       const cachedFileEdges =
-        cachedReportEntry === undefined
-          ? cachedEntries
-          : new Map([...cachedEntries, [reportFile, cachedReportEntry]]);
+        cachedReportEntry === undefined ? cachedEntries : new Map([...cachedEntries, [reportFile, cachedReportEntry]]);
       const originalReadFile = fsp.readFile.bind(fsp);
       const readSpy = vi.spyOn(fsp, "readFile").mockImplementation(originalReadFile);
 

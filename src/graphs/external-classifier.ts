@@ -1,10 +1,7 @@
 import { declaredPackagesForContext } from "./external/context.js";
 import { isSupportedStdlib, isUrlSpecifier } from "./external/stdlib.js";
 
-export {
-  getExternalClassifierCacheStats,
-  resetExternalClassifierCaches,
-} from "./external/context.js";
+export { getExternalClassifierCacheStats, resetExternalClassifierCaches } from "./external/context.js";
 
 export type ExternalResolutionStatus = "declared-package" | "stdlib" | "url" | "unresolved";
 

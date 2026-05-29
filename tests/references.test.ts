@@ -131,11 +131,7 @@ describe("Find References", () => {
           "SELECT schema1.table1.id FROM schema1.table1;",
           "SELECT table1.id FROM schema1.table1;",
         ];
-        await fsp.writeFile(
-          reportFile,
-          queryLines.join("\n"),
-          "utf8",
-        );
+        await fsp.writeFile(reportFile, queryLines.join("\n"), "utf8");
         const index = await createTestIndexFromFiles(root, [schemaFile, reportFile]);
 
         const table1Result = await testFindReferences(index, schemaFile, 1, 22, 2);

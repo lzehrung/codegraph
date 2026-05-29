@@ -929,7 +929,12 @@ function findSignatureParameterText(request: ExtractCallableSignatureRequest): S
   };
 }
 
-function isReceiverParameter(languageId: string, parameter: string, index: number, skipFirstReceiver: boolean): boolean {
+function isReceiverParameter(
+  languageId: string,
+  parameter: string,
+  index: number,
+  skipFirstReceiver: boolean,
+): boolean {
   if (!skipFirstReceiver) {
     return false;
   }
@@ -1124,12 +1129,7 @@ const callExpressionTypes = new Set([
   "object_creation_expression",
 ]);
 
-const argumentListTypes = new Set([
-  "argument_list",
-  "arguments",
-  "value_arguments",
-  "call_suffix",
-]);
+const argumentListTypes = new Set(["argument_list", "arguments", "value_arguments", "call_suffix"]);
 
 function findCallsiteArgumentText(request: ExtractCallsiteArgumentsRequest): string | null {
   if (!request.tree) {
@@ -1586,7 +1586,10 @@ export async function attachCallCompatibilityHints(
     const shouldRunVerifiedScan =
       consideredCallsites < options.maxRefs && (referenceResult.status !== "ok" || !consideredCallsites);
     if (shouldRunVerifiedScan) {
-      const verifiedScanLimit = Math.max(0, Math.min(referenceScanLimit - refs.length, options.maxRefs - consideredCallsites));
+      const verifiedScanLimit = Math.max(
+        0,
+        Math.min(referenceScanLimit - refs.length, options.maxRefs - consideredCallsites),
+      );
       if (verifiedScanLimit) {
         const verifiedCallsites = await collectVerifiedCallsiteReferences(
           index,

@@ -198,7 +198,11 @@ describe("Import Resolution", () => {
       JSON.stringify({ private: true, workspaces: ["packages/*"] }, null, 2),
       "utf8",
     );
-    await fsp.writeFile(path.join(packageDir, "package.json"), JSON.stringify({ name: "@scope/no-entry" }, null, 2), "utf8");
+    await fsp.writeFile(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({ name: "@scope/no-entry" }, null, 2),
+      "utf8",
+    );
     await fsp.writeFile(appFile, 'import value from "@scope/no-entry";\nexport const result = value;\n', "utf8");
 
     const workspaceConfig = await loadWorkspaceConfig(root);
@@ -291,7 +295,9 @@ describe("Import Resolution", () => {
     await fsp.writeFile(path.join(packageDir, "package.json"), JSON.stringify({ name: "no-entry" }, null, 2), "utf8");
     await fsp.writeFile(appFile, 'import value from "no-entry";\nexport const result = value;\n', "utf8");
 
-    const resolved = await resolveSpecifier(appFile, "no-entry", root, undefined, undefined, { resolveNodeModules: true });
+    const resolved = await resolveSpecifier(appFile, "no-entry", root, undefined, undefined, {
+      resolveNodeModules: true,
+    });
 
     expect(typeof resolved).toBe("object");
     if (typeof resolved !== "string") {

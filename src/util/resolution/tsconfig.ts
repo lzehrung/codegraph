@@ -40,10 +40,7 @@ interface TsconfigJson {
 
 function isPathLikeExtendsSpecifier(spec: string): boolean {
   return (
-    spec.startsWith(".") ||
-    path.posix.isAbsolute(spec) ||
-    path.win32.isAbsolute(spec) ||
-    /^[A-Za-z]:[\\/]/.test(spec)
+    spec.startsWith(".") || path.posix.isAbsolute(spec) || path.win32.isAbsolute(spec) || /^[A-Za-z]:[\\/]/.test(spec)
   );
 }
 

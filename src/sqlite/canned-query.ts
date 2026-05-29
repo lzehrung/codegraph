@@ -92,7 +92,9 @@ export async function queryGraphSqlite(outputPath: string, queryText: string): P
           return { kind: parsed.kind, results: [] };
         }
         const chain = dedupePreservingOrder(
-          startFiles.flatMap((startFile) => bfsFileTraversal(startFile, (file) => loadDirectFileDependencies(db, file))),
+          startFiles.flatMap((startFile) =>
+            bfsFileTraversal(startFile, (file) => loadDirectFileDependencies(db, file)),
+          ),
         );
         return { kind: parsed.kind, results: chain };
       }
