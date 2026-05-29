@@ -152,11 +152,10 @@ Choose output by consumer:
 - Use `--pretty` or `--summary` when a person or model needs a compact triage view.
 - Use `--json` or library APIs when a script, tool wrapper, or follow-up command needs stable fields.
 
-Use orientation for first-turn agent context. `--pretty` is the quickest reading surface; `--json` preserves handles, limits, and omitted counts for follow-up tools:
+Orient a repo before deeper search or review. The command and compact output look like this:
 
 ```bash
 codegraph orient --root . --budget small --pretty
-codegraph orient --root . --budget small --json
 ```
 
 ```text
@@ -175,6 +174,12 @@ Recommended next
 Omitted
 - 521 tree entries
 - 14 hotspots
+```
+
+Use JSON when a follow-up tool needs stable handles, limits, or omitted counts:
+
+```bash
+codegraph orient --root . --budget small --json
 ```
 
 Find an anchor, then expand only the context you need. JSON keeps handles exact across follow-up calls:
