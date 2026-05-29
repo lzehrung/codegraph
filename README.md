@@ -116,14 +116,16 @@ npm run build
 
 `npm run build` always rebuilds `dist/`. If Cargo is available, it also requires the local native workspace build to succeed; if Cargo is unavailable, it still completes with the JavaScript build output and a warning.
 
-Then run a few concrete first-pass commands:
+Then start with orientation and follow the returned handles or commands:
 
 ```bash
 # confirm runtime and artifact state
 node ./dist/cli.js doctor
 
-# get a repo summary and next-step suggestions
+# initial repo orientation with next-step suggestions
 node ./dist/cli.js orient --root . --budget small --json
+
+# optional broader architecture summary
 node ./dist/cli.js inspect ./src --limit 20
 
 # find and explain a concrete anchor
@@ -152,7 +154,7 @@ Choose output by consumer:
 - Use `--pretty` or `--summary` when a person or model needs a compact triage view.
 - Use `--json` or library APIs when a script, tool wrapper, or follow-up command needs stable fields.
 
-Orient a repo before deeper search or review. The command and compact output look like this:
+Initial orientation is the intended first command for repo understanding. The command and compact output look like this:
 
 ```bash
 codegraph orient --root . --budget small --pretty
@@ -366,6 +368,7 @@ For the full capability matrix, limitations, and fixture coverage, see [docs/lan
 - [docs/cli.md](./docs/cli.md): command reference, output formats, SQLite schema, review bundles, and graph viewer usage
 - [docs/library-api.md](./docs/library-api.md): agent orientation/packet/search/explain/artifacts, semantic chunking, indexing, graph APIs, read-only SQL, impact examples, and programmatic review output
 - [docs/agent-workflows.md](./docs/agent-workflows.md): orientation packets, search anchors, MCP, sessions, streaming, tool wrappers, review bundles, and agent-oriented review recipes
+- [docs/mcp.md](./docs/mcp.md): MCP server setup, tool list, safety model, and client configuration examples
 - [docs/how-it-works.md](./docs/how-it-works.md): performance, caching, native runtime behavior, architecture, and testing guidance
 - [docs/language-parity.md](./docs/language-parity.md): per-language capability matrix
 - [docs/scenario-catalog.md](./docs/scenario-catalog.md): scenario and fixture coverage

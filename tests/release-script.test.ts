@@ -68,7 +68,7 @@ function currentNativeTargetSuffix(): string | null {
   }
   if (process.platform === "linux") {
     const report = process.report?.getReport();
-    const abi = report?.header?.glibcVersionRuntime ? "gnu" : "musl";
+    const abi = (report as any)?.header?.glibcVersionRuntime ? "gnu" : "musl";
     if (process.arch === "x64") return `linux-x64-${abi}`;
     if (process.arch === "arm64") return `linux-arm64-${abi}`;
   }
@@ -213,6 +213,10 @@ describe("release script helpers", () => {
         "docs/scenario-catalog.md",
       ]),
     ).toEqual(["root", "native", "js-fallback"]);
+  });
+
+  it("treats published MCP documentation as a root package change", () => {
+    expect(detectChangedReleasePackages(["docs/mcp.md"])).toEqual(["root"]);
   });
 
   it("treats release packaging scripts as root package changes", () => {
@@ -476,15 +480,11 @@ describe("release script helpers", () => {
 
   it("keeps generated native platform dependencies in the publish manifest", () => {
     expect(
-      prepareNativePackageManifestForPublish(
-        nativeSourcePackage,
-        "1.8.50",
-        {
-          name: "@lzehrung/codegraph-native",
-          version: "1.8.50",
-          optionalDependencies: supportedNativeOptionalDependencies("1.8.50"),
-        },
-      ),
+      prepareNativePackageManifestForPublish(nativeSourcePackage, "1.8.50", {
+        name: "@lzehrung/codegraph-native",
+        version: "1.8.50",
+        optionalDependencies: supportedNativeOptionalDependencies("1.8.50"),
+      }),
     ).toEqual({
       name: "@lzehrung/codegraph-native",
       version: "1.8.50",

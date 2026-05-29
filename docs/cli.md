@@ -215,6 +215,8 @@ For SQL, prefer handles or schema-qualified names when basenames may be ambiguou
 - MCP tools are read-only by default; `--allow-build` enables artifact output only.
 - `query_sqlite` is row- and byte-bounded and rejects synthetic payload functions.
 
+See [docs/mcp.md](./mcp.md) for client configuration examples.
+
 #### Chunking
 
 `chunk` uses semantic Tree-sitter chunking for registered source and stylesheet languages, Vue and Svelte block-aware chunking for single-file components, and text chunking for JSON, YAML, and unsupported extensions. Use `--text` to force text chunking.

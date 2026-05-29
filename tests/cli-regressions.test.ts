@@ -1204,7 +1204,12 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     };
 
     await fsp.mkdir(path.dirname(targetDir), { recursive: true });
-    const result = await runCliCommandDetailed(["skill", "doctor", "--agent", "opencode"], undefined, process.cwd(), env);
+    const result = await runCliCommandDetailed(
+      ["skill", "doctor", "--agent", "opencode"],
+      undefined,
+      process.cwd(),
+      env,
+    );
     const report = JSON.parse(result.stdout) as {
       agent?: string;
       defaultTargetDir: string;
@@ -1764,7 +1769,11 @@ index 1111111..2222222 100644
     git(root, ["add", "."]);
     git(root, ["commit", "-m", "initial"]);
 
-    await fsp.writeFile(path.join(srcDir, "api.ts"), "export function helper(a = 1, b: string) { return b; }\n", "utf8");
+    await fsp.writeFile(
+      path.join(srcDir, "api.ts"),
+      "export function helper(a = 1, b: string) { return b; }\n",
+      "utf8",
+    );
 
     const stdout = await runCliCommand(["review", "--root", root, "--base", "HEAD", "--head", "WORKTREE", "--summary"]);
 
@@ -1948,6 +1957,8 @@ index 1111111..2222222 100644
   it("mcp serve help documents read-only agent tools", async () => {
     const stdout = await runCliCommand(["mcp", "serve", "--help"]);
 
+    expect(stdout).toContain("orient");
+    expect(stdout).toContain("packet_get");
     expect(stdout).toContain("search");
     expect(stdout).toContain("query_sqlite");
     expect(stdout).toContain("read-only");

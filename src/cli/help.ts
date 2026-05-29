@@ -201,6 +201,8 @@ export const MCP_SERVE_HELP_TEXT = `codegraph mcp serve - MCP server for agent g
 Usage: codegraph mcp serve [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--allow-build]
 
 Tools:
+  orient          Build a compact first-turn repo packet
+  packet_get      Retrieve bounded evidence by stable handle
   search          Deterministic ranked search with stable handles
   get_file        Bounded project file reads inside the root
   get_symbol      Resolve a search/explain handle

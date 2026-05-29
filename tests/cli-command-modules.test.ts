@@ -204,6 +204,8 @@ describe("CLI command modules", () => {
     expect(MCP_SERVE_HELP_TEXT).toContain("--port <number>");
     expect(MCP_SERVE_HELP_TEXT).toContain("--host <host>");
     expect(MCP_SERVE_HELP_TEXT).toContain("--stdio");
+    expect(MCP_SERVE_HELP_TEXT).toContain("orient");
+    expect(MCP_SERVE_HELP_TEXT).toContain("packet_get");
   });
 
   test("packet help does not imply CLI orient accepts review ranges", () => {

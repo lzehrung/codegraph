@@ -56,7 +56,37 @@ Then choose the narrowest follow-up command:
 
 For `orient`, positional paths are include roots even when there is only one positional. Use `--root /path/to/repo` when targeting a different project root.
 
-Use `--pretty` or `--summary` when the next consumer is a person or model reading the result. Use `--json`, MCP tools, or library APIs when the next step needs exact handles, ranges, schema fields, or filtering. `orient --pretty` is the compact first-turn reading surface; `orient --json` preserves stable packet handles, recommended next commands, budgeted health counts, and omission counts for follow-up tools. Small orientation budgets skip deeper health analysis and record that omission; use `--budget medium` or `--budget large` when health counts matter. `packet get` retrieves bounded evidence for handles from `orient`, `search`, and `explain`; review handles are produced by library orientation calls that include a review range. `inspect` includes compact high-confidence duplicate opportunities plus a recommended `duplicates` command for full grouped JSON. `search` is deterministic and returns project-relative explainable handles, evidence, neighbors, follow-up commands, result counts, limits, and omission counts. `explain` accepts those handles plus file paths, symbol names, and SQL object names, then returns bounded symbols, dependencies, reverse dependencies, references, snippets, SQL relation facts, changed-context review tasks/candidate tests, explicit limits, omission counts, and next commands. Generated command strings POSIX-shell-quote dynamic arguments when needed. For SQL objects, use search handles or schema-qualified names when basenames may be ambiguous. Reference and snippet omission counts are lower bounds after bounded navigation hits its cap. `artifact build` writes a durable SQLite, self-describing project-relative graph JSON, report, questions with unique stable-handle command IDs, and manifest bundle for handoff while excluding its own in-repo output directory and linked outside-root files. With `--force`, recognizable stale artifact files are removed, unrelated operator files are preserved, and unrecognized reserved-name collisions are refused. `codegraph doctor <artifact-dir>` recognizes manifest-backed artifact bundle directories and reports expected artifact presence. `mcp serve` exposes the same primitives as read-only MCP tools by default over stdio, or over Streamable HTTP with `--port <number>` at `/mcp`; HTTP binds to `127.0.0.1` unless `--host <host>` is passed, validates Host headers, and allows loopback Host headers for wildcard binds. File/artifact paths are confined after realpath resolution, MCP tool calls do not accept per-request root overrides, SQLite query results are row- and byte-bounded, synthetic payload functions are rejected, and `--allow-build` is required before an agent may write artifact output.
+## Prefer MCP When Available
+
+Use Codegraph MCP tools when they are already available in the agent runtime. MCP keeps a warm project session and is better for repeated navigation than spawning separate CLI commands.
+
+- Start with MCP `orient` for repo context.
+- Use `search` for anchors and `packet_get` for bounded evidence packets.
+- Use `refs`, `goto`, `deps`, `rdeps`, and `path` for semantic navigation.
+- Use `impact` and `review` for git-range risk analysis.
+- Use `query_sqlite` only for read-only artifact inspection.
+- Use `artifact_build` only when the tool is exposed and write access is intentionally enabled.
+
+Fall back to CLI commands when MCP tools are unavailable.
+
+## Output Modes
+
+- Use `--pretty` or `--summary` when the next consumer is a person or model reading the result.
+- Use `--json`, MCP tools, or library APIs when the next step needs exact handles, ranges, schema fields, or filtering.
+- Use `orient --pretty` as a compact first-turn reading surface.
+- Use `orient --json` when follow-up tools need stable packet handles, recommended next commands, budgeted health counts, and omission counts.
+- Use `--budget medium` or `--budget large` when orientation health counts matter.
+
+## Search, Packets, and Artifacts
+
+- `packet get` retrieves bounded evidence for handles from `orient`, `search`, and `explain`.
+- `search` is deterministic and returns project-relative handles, evidence, graph neighbors, follow-up commands, limits, and omission counts.
+- `explain` accepts handles, file paths, symbol names, and SQL object names, then returns bounded symbols, graph context, references, snippets, SQL facts, review tasks, candidate tests, limits, omissions, and next commands.
+- For SQL objects, use search handles or schema-qualified names when basenames may be ambiguous.
+- Reference and snippet omission counts are lower bounds after bounded navigation hits its cap.
+- `inspect` includes compact high-confidence duplicate opportunities plus a recommended `duplicates` command for full grouped JSON.
+- `artifact build` writes a durable SQLite, graph JSON, report, questions, and manifest bundle for handoff.
+- `codegraph doctor <artifact-dir>` recognizes manifest-backed artifact bundle directories and reports expected artifact presence.
 
 Numeric options such as `--limit`, `--threads`, `--depth`, `--max-refs`, and token bounds must be integers in their documented ranges; invalid numeric values fail instead of being silently clamped or ignored.
 

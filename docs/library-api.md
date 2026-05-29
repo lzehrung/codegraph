@@ -165,6 +165,8 @@ console.log(packet.kind, refs.references, rows.rows);
 `serveCodegraphMcp()` starts the stdio server used by `codegraph mcp serve`. MCP is an agent ergonomics and cache layer over the same analysis engine, not a separate indexer. MCP file and artifact paths are confined after realpath resolution. `query_sqlite` is read-only and row- and byte-bounded; `artifact_build` is disabled by default and requires `readOnly: false` or CLI `--allow-build`.
 MCP `orient` and `packet_get` calls use the server-configured root; they do not accept per-request root overrides.
 
+See [MCP server](./mcp.md) for CLI server setup and client configuration examples.
+
 ## Semantic chunking
 
 The library provides semantic code chunking utilities for preparing codebases for LLM processing and vector embeddings. It uses Tree-sitter to split code into meaningful units while respecting token budgets.

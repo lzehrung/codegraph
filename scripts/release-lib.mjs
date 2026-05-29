@@ -12,6 +12,7 @@ export const releasePackages = [
       "package.json",
       ".github/workflows/release-native.yml",
       "README.md",
+      "docs/mcp.md",
       "scripts/check-native-artifacts.mjs",
       "scripts/native-targets-lib.mjs",
       "scripts/release-lib.mjs",
@@ -53,6 +54,7 @@ export const managedReleasePaths = new Set([
   "scripts/stage-native-package.mjs",
   "scripts/sync-native-meta.mjs",
   "tests/release-script.test.ts",
+  "docs/mcp.md",
   ...releasePackages.map((pkg) => pkg.manifestPath),
 ]);
 
@@ -299,8 +301,12 @@ export function prepareNativePackageManifestForPublish(sourcePkg, version, gener
   }
   const expectedPackageNames = getSupportedNativeTargetPackageNames(sourcePkg);
   const generatedPackageNames = Object.keys(generatedOptionalDependencies ?? {});
-  const missingPackageNames = expectedPackageNames.filter((packageName) => !generatedPackageNames.includes(packageName));
-  const unexpectedPackageNames = generatedPackageNames.filter((packageName) => !expectedPackageNames.includes(packageName));
+  const missingPackageNames = expectedPackageNames.filter(
+    (packageName) => !generatedPackageNames.includes(packageName),
+  );
+  const unexpectedPackageNames = generatedPackageNames.filter(
+    (packageName) => !expectedPackageNames.includes(packageName),
+  );
   const mismatchedVersionPackageNames = generatedPackageNames.filter(
     (packageName) => generatedOptionalDependencies?.[packageName] !== version,
   );

@@ -67,6 +67,8 @@ Use `codegraph mcp serve --root . --stdio` when an agent can spawn a stdio MCP s
 
 MCP is an ergonomics and performance layer, not a separate analysis engine. It gives agents stable handles from orientation, `search`, and `explain`, avoids rebuilding the project for each follow-up call, and returns bounded snippets/resources. File and artifact paths are confined to the project root after realpath resolution; tool calls do not accept per-request root overrides. Tools are read-only by default; `query_sqlite` rejects mutating SQL, recursive queries, and synthetic payload functions while capping returned rows and bytes. `artifact_build` is available only when the server is started with `--allow-build`.
 
+See [MCP server](./mcp.md) for client configuration examples.
+
 ## Session management
 
 For agents performing code reviews or making multiple queries, use sessions to maintain warm caches:
