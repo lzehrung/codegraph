@@ -249,6 +249,13 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
       expect(group.variantCount).toBeLessThanOrEqual(5);
       expect(group.omittedVariantCount).toBe(Math.max(0, (rawGroup?.variantCount ?? 0) - group.variantCount));
     }
+    for (const group of result.groups) {
+      const primaryTouchesTarget = group.primaryLeft.file === "src/g.ts" || group.primaryRight.file === "src/g.ts";
+      const variantTouchesTarget = group.variants.some(
+        (variant) => variant.left.file === "src/g.ts" || variant.right.file === "src/g.ts",
+      );
+      expect(primaryTouchesTarget || variantTouchesTarget).toBeTruthy();
+    }
   });
 
   test("groups overlapping symbol and chunk variants into one finding", async () => {

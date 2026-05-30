@@ -121,6 +121,7 @@ export type AgentExplanationDuplicateSide = {
   handle: string;
   fileHandle: string;
   chunkHandle: string;
+  sqlHandle?: string;
   symbolHandle?: string;
   name?: string;
 };
@@ -668,6 +669,7 @@ function summarizeDuplicateSide(side: DuplicateGroup["primaryLeft"]): AgentExpla
     handle: side.handle,
     fileHandle: side.fileHandle,
     chunkHandle: side.chunkHandle,
+    ...(side.sqlHandle !== undefined ? { sqlHandle: side.sqlHandle } : {}),
     ...(side.symbolHandle !== undefined ? { symbolHandle: side.symbolHandle } : {}),
     ...(side.name !== undefined ? { name: side.name } : {}),
   };

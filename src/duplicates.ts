@@ -21,6 +21,7 @@ export type DuplicateUnitRef = {
   tokenCount: number;
   handle: string;
   fileHandle: string;
+  sqlHandle?: string;
   chunkHandle: string;
   symbolHandle?: string;
   name?: string;
@@ -127,7 +128,7 @@ type DuplicateInternalUnit = DuplicateUnitRef & {
   signatures: Set<string>;
 };
 
-type DuplicateUnitDraft = Omit<DuplicateUnitRef, "tokenCount" | "handle" | "fileHandle" | "chunkHandle" | "symbolHandle">;
+type DuplicateUnitDraft = Omit<DuplicateUnitRef, "tokenCount" | "handle" | "fileHandle" | "chunkHandle" | "symbolHandle" | "sqlHandle">;
 
 type PairEvidence = {
   left: DuplicateInternalUnit;
@@ -447,6 +448,18 @@ function formatDuplicateChunkHandle(file: string, line: number): string {
   return ["chunk", encodeURIComponent(file), String(line)].join(":");
 }
 
+function formatDuplicateSqlHandle(file: string, name: string, line: number): string {
+  return ["sql", encodeURIComponent(name), encodeURIComponent(file), String(line)].join(":");
+}
+
+function sqlHandleForDuplicateSymbol(symbol: SymbolDef, file: string): string | undefined {
+  if (symbol.kind !== SymbolKind.Routine && symbol.kind !== SymbolKind.Table && symbol.kind !== SymbolKind.View) {
+    return undefined;
+  }
+  if (!file.toLowerCase().endsWith(".sql")) return undefined;
+  return formatDuplicateSqlHandle(file, symbol.localName, symbol.range.start.line);
+}
+
 function formatDuplicateSymbolHandle(file: string, name: string, line: number, column: number): string {
   return ["symbol", encodeURIComponent(file), encodeURIComponent(name), String(line), String(column)].join(":");
 }
@@ -472,7 +485,7 @@ function buildInternalUnit(
   text: string,
   shingleSize: number,
   windowSize: number,
-  symbolHandle?: string,
+  handles: { symbolHandle?: string; sqlHandle?: string } = {},
 ): DuplicateInternalUnit {
   const rawHash = hashText(text);
   const sourceTokens = tokenizeSource(text);
@@ -480,6 +493,7 @@ function buildInternalUnit(
   const signatures = winnowShingles(makeShingles(normalizedTokens, shingleSize), windowSize, DEFAULT_MAX_FINGERPRINTS);
   const fileHandle = formatDuplicateFileHandle(unit.file);
   const chunkHandle = formatDuplicateChunkHandle(unit.file, unit.startLine);
+  const handle = handles.sqlHandle ?? handles.symbolHandle ?? chunkHandle;
   return {
     ...unit,
     id: internalUnitId(unit, absoluteFile),
@@ -488,10 +502,11 @@ function buildInternalUnit(
     rawHash,
     normalizedHash: hashText(normalizedTokens.join(" ")),
     tokenCount: sourceTokens.length,
-    handle: symbolHandle ?? chunkHandle,
+    handle,
     fileHandle,
     chunkHandle,
-    ...(symbolHandle !== undefined ? { symbolHandle } : {}),
+    ...(handles.sqlHandle !== undefined ? { sqlHandle: handles.sqlHandle } : {}),
+    ...(handles.symbolHandle !== undefined ? { symbolHandle: handles.symbolHandle } : {}),
     normalizedTokens,
     tokenSet: new Set(normalizedTokens),
     signatures,
@@ -507,12 +522,11 @@ function makeSymbolUnit(
 ): DuplicateInternalUnit | undefined {
   if (!symbolUnitKinds.has(symbol.kind)) return undefined;
   const file = displayPath(projectRoot, symbol.file);
-  const symbolHandle = formatDuplicateSymbolHandle(
-    file,
-    symbol.localName,
-    symbol.range.start.line,
-    symbol.range.start.column,
-  );
+  const sqlHandle = sqlHandleForDuplicateSymbol(symbol, file);
+  const symbolHandle =
+    sqlHandle === undefined
+      ? formatDuplicateSymbolHandle(file, symbol.localName, symbol.range.start.line, symbol.range.start.column)
+      : undefined;
   const unit: DuplicateUnitDraft = {
     file,
     startLine: chunk.startLine,
@@ -523,7 +537,10 @@ function makeSymbolUnit(
     symbolKind: symbol.kind,
     ...(symbol.complexity !== undefined ? { complexity: symbol.complexity } : {}),
   };
-  return buildInternalUnit(unit, symbol.file, chunk.text, shingleSize, windowSize, symbolHandle);
+  return buildInternalUnit(unit, symbol.file, chunk.text, shingleSize, windowSize, {
+    ...(sqlHandle !== undefined ? { sqlHandle } : {}),
+    ...(symbolHandle !== undefined ? { symbolHandle } : {}),
+  });
 }
 
 function makeDuplicateChunks(
@@ -896,6 +913,7 @@ function unitRef(unit: DuplicateInternalUnit): DuplicateUnitRef {
     handle: unit.handle,
     fileHandle: unit.fileHandle,
     chunkHandle: unit.chunkHandle,
+    ...(unit.sqlHandle !== undefined ? { sqlHandle: unit.sqlHandle } : {}),
     ...(unit.symbolHandle !== undefined ? { symbolHandle: unit.symbolHandle } : {}),
     ...(unit.name !== undefined ? { name: unit.name } : {}),
     ...(unit.symbolKind !== undefined ? { symbolKind: unit.symbolKind } : {}),
@@ -1322,9 +1340,20 @@ function groupTouchesDuplicateTarget(group: DuplicateGroup, target: DuplicateTar
   return group.variants.some((variant) => suggestionTouchesDuplicateTarget(variant, target));
 }
 
-function boundDuplicateGroupVariants(group: DuplicateGroup, includeRawPairs: boolean): DuplicateGroup {
+function boundDuplicateGroupVariants(group: DuplicateGroup, target: DuplicateTarget, includeRawPairs: boolean): DuplicateGroup {
   if (includeRawPairs) return group;
-  const variants = group.variants.slice(0, DEFAULT_GROUP_VARIANT_LIMIT);
+  let variants = group.variants;
+  if (!unitTouchesDuplicateTarget(group.primaryLeft, target) && !unitTouchesDuplicateTarget(group.primaryRight, target)) {
+    const targetVariant = group.variants.find((variant) => suggestionTouchesDuplicateTarget(variant, target));
+    if (targetVariant) {
+      const targetVariantKey = suggestionVariantKey(targetVariant);
+      variants = [
+        targetVariant,
+        ...group.variants.filter((variant) => suggestionVariantKey(variant) !== targetVariantKey),
+      ];
+    }
+  }
+  variants = variants.slice(0, DEFAULT_GROUP_VARIANT_LIMIT);
   return {
     ...group,
     variants,
@@ -1332,7 +1361,6 @@ function boundDuplicateGroupVariants(group: DuplicateGroup, includeRawPairs: boo
     omittedVariantCount: Math.max(0, group.variants.length - variants.length),
   };
 }
-
 function duplicateContextFromResult(
   result: DuplicateDetectionResult,
   target: DuplicateTarget,
@@ -1342,7 +1370,7 @@ function duplicateContextFromResult(
   const groups = result.groups.filter((group) => groupTouchesDuplicateTarget(group, normalizedTarget));
   const limitedGroups = groups
     .slice(0, options.limit)
-    .map((group) => boundDuplicateGroupVariants(group, options.includeRawPairs));
+    .map((group) => boundDuplicateGroupVariants(group, normalizedTarget, options.includeRawPairs));
   const omittedGroups = Math.max(0, groups.length - limitedGroups.length);
   const rawSuggestions = options.includeRawPairs
     ? (result.suggestions ?? []).filter((suggestion) => suggestionTouchesDuplicateTarget(suggestion, normalizedTarget))

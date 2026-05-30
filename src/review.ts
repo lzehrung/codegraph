@@ -424,6 +424,11 @@ function duplicateUnitOverlapsTarget(unit: DuplicateUnitRef, target: ReviewDupli
 
 function duplicateSiblingForTarget(group: DuplicateGroup, target: ReviewDuplicateTarget): DuplicateUnitRef {
   if (duplicateUnitOverlapsTarget(group.primaryLeft, target)) return group.primaryRight;
+  if (duplicateUnitOverlapsTarget(group.primaryRight, target)) return group.primaryLeft;
+  for (const variant of group.variants) {
+    if (duplicateUnitOverlapsTarget(variant.left, target)) return variant.right;
+    if (duplicateUnitOverlapsTarget(variant.right, target)) return variant.left;
+  }
   return group.primaryLeft;
 }
 
