@@ -461,11 +461,8 @@ async function collectReviewDuplicateTasks(input: {
       startLine: def.range.start.line,
       endLine: def.range.end.line,
     }));
-  const symbolTargetFiles = new Set(targets.map((target) => target.file));
   for (const summary of input.summaries) {
-    if (summary.status === "updated" && !symbolTargetFiles.has(summary.file)) {
-      targets.push({ file: summary.file });
-    }
+    if (summary.status === "updated") targets.push({ file: summary.file });
   }
   if (!targets.length) return [];
 

@@ -131,6 +131,8 @@ type DuplicateInternalUnit = DuplicateUnitRef & {
 type DuplicateUnitDraft = Omit<DuplicateUnitRef, "tokenCount" | "handle" | "fileHandle" | "chunkHandle" | "symbolHandle" | "sqlHandle">;
 
 type PairFilter = (left: DuplicateInternalUnit, right: DuplicateInternalUnit) => boolean;
+type UnitFilter = (unit: DuplicateInternalUnit) => boolean;
+
 
 type PairEvidence = {
   left: DuplicateInternalUnit;
@@ -630,6 +632,31 @@ function hasLineOverlap(left: DuplicateInternalUnit, right: DuplicateInternalUni
   if (left.absoluteFile !== right.absoluteFile) return false;
   return left.startLine <= right.endLine && right.startLine <= left.endLine;
 }
+function addPairEvidence(
+  pairs: Map<string, PairEvidence>,
+  evidenceKind: "rawHash" | "normalizedHash" | "signature",
+  left: DuplicateInternalUnit,
+  right: DuplicateInternalUnit,
+): void {
+  const key = pairKey(left, right);
+  const existing = pairs.get(key);
+  if (existing) {
+    if (evidenceKind === "signature") {
+      existing.signatureMatches++;
+    } else {
+      existing[evidenceKind] = true;
+    }
+    return;
+  }
+  pairs.set(key, {
+    left,
+    right,
+    rawHash: evidenceKind === "rawHash",
+    normalizedHash: evidenceKind === "normalizedHash",
+    signature: false,
+    signatureMatches: evidenceKind === "signature" ? 1 : 0,
+  });
+}
 
 /** Adds every unique pair from one shared-evidence bucket. */
 function addBucketPairs(
@@ -637,39 +664,50 @@ function addBucketPairs(
   pairs: Map<string, PairEvidence>,
   evidenceKind: "rawHash" | "normalizedHash" | "signature",
   pairFilter?: PairFilter,
+  unitFilter?: UnitFilter,
 ): void {
+  if (unitFilter) {
+    const targetUnits = bucket.filter(unitFilter);
+    const seenPairs = new Set<string>();
+    for (const targetUnit of targetUnits) {
+      for (const otherUnit of bucket) {
+        if (targetUnit.id === otherUnit.id) continue;
+        const [left, right] = orderedPair(targetUnit, otherUnit);
+        const key = pairKey(left, right);
+        if (seenPairs.has(key)) continue;
+        seenPairs.add(key);
+        if (pairFilter && !pairFilter(left, right)) continue;
+        addPairEvidence(pairs, evidenceKind, left, right);
+      }
+    }
+    return;
+  }
   for (let i = 0; i < bucket.length; i++) {
     for (let j = i + 1; j < bucket.length; j++) {
       const [left, right] = orderedPair(bucket[i]!, bucket[j]!);
       if (pairFilter && !pairFilter(left, right)) continue;
-      const key = pairKey(left, right);
-      const existing = pairs.get(key);
-      if (existing) {
-        if (evidenceKind === "signature") {
-          existing.signatureMatches++;
-        } else {
-          existing[evidenceKind] = true;
-        }
-        continue;
-      }
-      pairs.set(key, {
-        left,
-        right,
-        rawHash: evidenceKind === "rawHash",
-        normalizedHash: evidenceKind === "normalizedHash",
-        signature: false,
-        signatureMatches: evidenceKind === "signature" ? 1 : 0,
-      });
+      addPairEvidence(pairs, evidenceKind, left, right);
     }
   }
 }
 
-
-function bucketPairCountExceeds(bucket: readonly DuplicateInternalUnit[], limit: number, pairFilter: PairFilter): boolean {
+function bucketPairCountExceeds(
+  bucket: readonly DuplicateInternalUnit[],
+  limit: number,
+  pairFilter: PairFilter,
+  unitFilter?: UnitFilter,
+): boolean {
   let count = 0;
-  for (let i = 0; i < bucket.length; i++) {
-    for (let j = i + 1; j < bucket.length; j++) {
-      const [left, right] = orderedPair(bucket[i]!, bucket[j]!);
+  const leftUnits = unitFilter ? bucket.filter(unitFilter) : bucket;
+  if (!leftUnits.length) return false;
+  const seenPairs = new Set<string>();
+  for (const leftUnit of leftUnits) {
+    for (const rightUnit of bucket) {
+      if (leftUnit.id === rightUnit.id) continue;
+      const [left, right] = orderedPair(leftUnit, rightUnit);
+      const key = pairKey(left, right);
+      if (seenPairs.has(key)) continue;
+      seenPairs.add(key);
       if (!pairFilter(left, right)) continue;
       count++;
       if (count > limit) return true;
@@ -685,17 +723,19 @@ function addBucketsToPairs(
   evidenceKind: "rawHash" | "normalizedHash" | "signature",
   maxBucketSize: number,
   pairFilter?: PairFilter,
+  unitFilter?: UnitFilter,
 ): number {
   let oversizedBuckets = 0;
   for (const bucket of buckets.values()) {
     if (bucket.length < 2) continue;
+    if (unitFilter && !bucket.some(unitFilter)) continue;
     if (bucket.length > maxBucketSize) {
-      if (!pairFilter || bucketPairCountExceeds(bucket, maxBucketSize, pairFilter)) {
+      if (!pairFilter || bucketPairCountExceeds(bucket, maxBucketSize, pairFilter, unitFilter)) {
         oversizedBuckets++;
         continue;
       }
     }
-    addBucketPairs(bucket, pairs, evidenceKind, pairFilter);
+    addBucketPairs(bucket, pairs, evidenceKind, pairFilter, unitFilter);
   }
   return oversizedBuckets;
 }
@@ -719,12 +759,14 @@ function addSignatureBucketsToPairs(
   consideredSignaturesByUnit: ConsideredSignaturesByUnit,
   maxBucketSize: number,
   pairFilter?: PairFilter,
+  unitFilter?: UnitFilter,
 ): number {
   let oversizedBuckets = 0;
   for (const [signature, bucket] of buckets) {
     if (bucket.length < 2) continue;
+    if (unitFilter && !bucket.some(unitFilter)) continue;
     if (bucket.length > maxBucketSize) {
-      if (!pairFilter || bucketPairCountExceeds(bucket, maxBucketSize, pairFilter)) {
+      if (!pairFilter || bucketPairCountExceeds(bucket, maxBucketSize, pairFilter, unitFilter)) {
         oversizedBuckets++;
         continue;
       }
@@ -732,7 +774,7 @@ function addSignatureBucketsToPairs(
     for (const unit of bucket) {
       addConsideredSignature(consideredSignaturesByUnit, unit, signature);
     }
-    addBucketPairs(bucket, pairs, "signature", pairFilter);
+    addBucketPairs(bucket, pairs, "signature", pairFilter, unitFilter);
   }
   return oversizedBuckets;
 }
@@ -867,6 +909,7 @@ function buildCandidatePairs(
   units: readonly DuplicateInternalUnit[],
   maxBucketSize: number,
   pairFilter?: PairFilter,
+  unitFilter?: UnitFilter,
 ): { pairs: Map<string, PairEvidence>; oversizedBuckets: number } {
   const rawHashBuckets = new Map<string, DuplicateInternalUnit[]>();
   const normalizedHashBuckets = new Map<string, DuplicateInternalUnit[]>();
@@ -884,9 +927,16 @@ function buildCandidatePairs(
   const pairs = new Map<string, PairEvidence>();
   const consideredSignaturesByUnit: ConsideredSignaturesByUnit = new Map();
   let oversizedBuckets = 0;
-  oversizedBuckets += addBucketsToPairs(rawHashBuckets, pairs, "rawHash", maxBucketSize, pairFilter);
-  oversizedBuckets += addBucketsToPairs(normalizedHashBuckets, pairs, "normalizedHash", maxBucketSize, pairFilter);
-  oversizedBuckets += addSignatureBucketsToPairs(signatureBuckets, pairs, consideredSignaturesByUnit, maxBucketSize, pairFilter);
+  oversizedBuckets += addBucketsToPairs(rawHashBuckets, pairs, "rawHash", maxBucketSize, pairFilter, unitFilter);
+  oversizedBuckets += addBucketsToPairs(normalizedHashBuckets, pairs, "normalizedHash", maxBucketSize, pairFilter, unitFilter);
+  oversizedBuckets += addSignatureBucketsToPairs(
+    signatureBuckets,
+    pairs,
+    consideredSignaturesByUnit,
+    maxBucketSize,
+    pairFilter,
+    unitFilter,
+  );
   for (const [key, evidence] of pairs) {
     if (hasEnoughSharedFingerprints(evidence, consideredSignaturesByUnit)) {
       evidence.signature = true;
@@ -1449,9 +1499,9 @@ async function findDuplicatesTouchingTargets(
     shingleSize,
     windowSize,
   });
-  const touchesAnyTarget: PairFilter = (left, right) =>
-    normalizedTargets.some((target) => unitTouchesDuplicateTarget(left, target) || unitTouchesDuplicateTarget(right, target));
-  const { pairs, oversizedBuckets } = buildCandidatePairs(units, maxBucketSize, touchesAnyTarget);
+  const touchesTarget: UnitFilter = (unit) => normalizedTargets.some((target) => unitTouchesDuplicateTarget(unit, target));
+  const touchesAnyTarget: PairFilter = (left, right) => touchesTarget(left) || touchesTarget(right);
+  const { pairs, oversizedBuckets } = buildCandidatePairs(units, maxBucketSize, touchesAnyTarget, touchesTarget);
   const suggestions: DuplicateSuggestion[] = [];
   let overlappingPairs = 0;
   let comparedPairs = 0;
