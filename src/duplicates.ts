@@ -1294,8 +1294,9 @@ export async function findDuplicates(
 }
 
 function normalizeDuplicateTarget(target: DuplicateTarget, projectRoot: string | undefined): DuplicateTarget {
-  const file = normalizePath(target.file);
-  const normalizedFile = projectRoot && path.isAbsolute(file) ? displayPath(projectRoot, file) : file;
+  const normalizedFile = projectRoot
+    ? displayPath(projectRoot, target.file)
+    : normalizePath(target.file).replace(/^\.\//, "");
   return {
     file: normalizedFile,
     ...(target.startLine !== undefined ? { startLine: target.startLine } : {}),

@@ -182,6 +182,38 @@ export function scoreUsers(users: Array<{ active: boolean; points: number }>) {
     expect(result.groups[0]?.primaryRight.file).toBe("src/d.ts");
   });
 
+  test("normalizes duplicate context target paths before filtering", async () => {
+    const root = await makeTempProject();
+    const source = `
+export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }>) {
+  const totals: number[] = [];
+  const labels: string[] = [];
+  for (const row of rows) {
+    const subtotal = row.amount + row.tax;
+    const rounded = Math.round(subtotal * 100) / 100;
+    const label = rounded > 100 ? "large" : "small";
+    labels.push(label);
+    totals.push(rounded);
+  }
+  const encoded = totals.map((value, index) => labels[index] + ":" + value.toFixed(2));
+  return encoded.filter((value) => value.includes(":")).join(",");
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", source);
+    await writeProjectFile(root, "src/b.ts", source);
+
+    const index = await buildProjectIndex(root);
+    const bare = await findDuplicateContext(index, { file: "src/a.ts" }, { minConfidence: "high", limit: 1 });
+    const dotted = await findDuplicateContext(index, { file: "./src/a.ts" }, { minConfidence: "high", limit: 1 });
+    const absolute = await findDuplicateContext(index, { file: path.join(root, "src/a.ts") }, { minConfidence: "high", limit: 1 });
+
+    expect(dotted.target.file).toBe("src/a.ts");
+    expect(absolute.target.file).toBe("src/a.ts");
+    expect(dotted.groups.map((group) => group.id)).toEqual(bare.groups.map((group) => group.id));
+    expect(absolute.groups.map((group) => group.id)).toEqual(bare.groups.map((group) => group.id));
+  });
+
   test("duplicate context includes target matches from raw variants without exposing raw pairs by default", async () => {
     const root = await makeTempProject();
     const source = `
