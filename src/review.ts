@@ -393,6 +393,7 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
       index,
       summaries,
       changedSymbolIds,
+      diffHunksByFile,
     })),
   );
   if (reviewTimings) reviewTimings.totalMs = Math.round(performance.now() - totalStart);
@@ -413,6 +414,49 @@ function relativeReviewPath(projectRoot: string, file: string): string {
   const normalizedRoot = normalizePath(projectRoot);
   const normalizedFile = normalizePath(file);
   return toProjectDisplayPath(normalizedRoot, normalizedFile) || normalizedFile;
+}
+
+function changedLinesForHunks(hunks: readonly Hunk[]): number[] {
+  const changedLines: number[] = [];
+  for (const hunk of hunks) {
+    let nextLine = hunk.newStart;
+    let recordedLine = false;
+    for (const line of hunk.lines) {
+      const prefix = line[0];
+      if (prefix === "+") {
+        changedLines.push(nextLine);
+        nextLine++;
+        recordedLine = true;
+        continue;
+      }
+      if (prefix === " ") {
+        nextLine++;
+      }
+    }
+    if (!recordedLine && hunk.newStart > 0) {
+      changedLines.push(hunk.newStart);
+    }
+  }
+  return changedLines;
+}
+
+function compactChangedLineTargets(file: string, lines: readonly number[]): ReviewDuplicateTarget[] {
+  if (!lines.length) return [];
+  const uniqueLines = Array.from(new Set(lines)).sort((left, right) => left - right);
+  const targets: ReviewDuplicateTarget[] = [];
+  let startLine = uniqueLines[0]!;
+  let endLine = startLine;
+  for (const line of uniqueLines.slice(1)) {
+    if (line === endLine + 1) {
+      endLine = line;
+      continue;
+    }
+    targets.push({ file, startLine, endLine });
+    startLine = line;
+    endLine = line;
+  }
+  targets.push({ file, startLine, endLine });
+  return targets;
 }
 
 function duplicateUnitOverlapsTarget(unit: DuplicateUnitRef, target: ReviewDuplicateTarget): boolean {
@@ -451,7 +495,11 @@ async function collectReviewDuplicateTasks(input: {
   index: ProjectIndex;
   summaries: readonly ReviewFileSummary[];
   changedSymbolIds: readonly string[];
+  diffHunksByFile: ReadonlyMap<string, Hunk[]>;
 }): Promise<ReviewTask[]> {
+  const diffHunksByDisplayFile = new Map(
+    Array.from(input.diffHunksByFile, ([file, hunks]) => [relativeReviewPath(input.projectRoot, file), hunks]),
+  );
   const symbolLookup = buildSymbolDefLookup(input.index);
   const targets: ReviewDuplicateTarget[] = input.changedSymbolIds
     .map((id) => symbolLookup.get(id))
@@ -462,7 +510,21 @@ async function collectReviewDuplicateTasks(input: {
       endLine: def.range.end.line,
     }));
   for (const summary of input.summaries) {
-    if (summary.status === "updated") targets.push({ file: summary.file });
+    if (summary.status !== "updated") continue;
+    const hunks = diffHunksByDisplayFile.get(summary.file);
+    if (!hunks?.length) {
+      targets.push({ file: summary.file });
+      continue;
+    }
+    const symbolTargets = targets.filter((target) => target.file === summary.file && target.startLine !== undefined);
+    const uncoveredChangedLines = changedLinesForHunks(hunks).filter((line) => {
+      return !symbolTargets.some((target) => {
+        const targetEndLine = target.endLine ?? target.startLine!;
+        return target.startLine! <= line && line <= targetEndLine;
+      });
+    });
+    if (!uncoveredChangedLines.length) continue;
+    targets.push(...compactChangedLineTargets(summary.file, uncoveredChangedLines));
   }
   if (!targets.length) return [];
 
