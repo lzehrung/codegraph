@@ -81,7 +81,7 @@ Fall back to CLI commands when MCP tools are unavailable.
 
 - `packet get` retrieves bounded evidence for handles from `orient`, `search`, and `explain`.
 - `search` is deterministic and returns project-relative handles, evidence, graph neighbors, follow-up commands, limits, and omission counts.
-- `explain` accepts handles, file paths, symbol names, and SQL object names, then returns bounded symbols, graph context, references, snippets, SQL facts, review tasks, candidate tests, limits, omissions, and next commands.
+- `explain` accepts handles, file paths, symbol names, and SQL object names, then returns bounded symbols, graph context, references, snippets, duplicate context, SQL facts, review tasks, candidate tests, limits, omissions, and next commands.
 - For SQL objects, use search handles or schema-qualified names when basenames may be ambiguous.
 - Reference and snippet omission counts are lower bounds after bounded navigation hits its cap.
 - `inspect` includes compact high-confidence duplicate opportunities plus a recommended `duplicates` command for full grouped JSON.
@@ -231,6 +231,7 @@ Prefer impact `--pretty` first when the user asks what a change can break, what 
 - Full JSON details live at `changedSymbols[].callCompatibility`; inspect the referenced callsite before treating a hint as a defect.
 - Missing hints are normal for unsupported, ambiguous, overloaded, spread, or unresolved callsites.
 - Pretty impact and review summaries include high-confidence exact or renamed duplicate leads by default. Use `--duplicates off|changed|impacted|all` to control scope.
+- Review JSON adds bounded `duplicate-sibling` tasks when changed ranges overlap high-confidence duplicate groups; treat them as sibling-check prompts.
 - For copied-code or refactor-risk questions, follow impact with `codegraph duplicates --root . ./src --min-confidence medium --limit 20`; treat full duplicate groups as leads, not defects.
 
 In summary output, treat high-confidence candidate tests as first regression targets and medium-confidence tests as likely file-level coverage; low-confidence pattern matches are breadth hints only.

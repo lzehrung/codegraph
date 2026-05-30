@@ -15,6 +15,7 @@ export async function handleExplainCommand(context: ExplainCommandContext): Prom
   const maxDependenciesRaw = context.getOpt("--max-dependencies");
   const maxSnippetsRaw = context.getOpt("--max-snippets");
   const maxSymbolsRaw = context.getOpt("--max-symbols");
+  const maxDuplicatesRaw = context.getOpt("--max-duplicates");
   const base = context.getOpt("--base");
   const head = context.getOpt("--head");
   if (context.hasFlag("--changed-context") && (base === undefined || head === undefined)) {
@@ -36,6 +37,9 @@ export async function handleExplainCommand(context: ExplainCommandContext): Prom
       : {}),
     ...(maxSymbolsRaw !== undefined
       ? { maxSymbols: parsePositiveIntegerOption(maxSymbolsRaw, "--max-symbols", 50) }
+      : {}),
+    ...(maxDuplicatesRaw !== undefined
+      ? { maxDuplicates: parsePositiveIntegerOption(maxDuplicatesRaw, "--max-duplicates", 5) }
       : {}),
   });
 

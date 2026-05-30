@@ -1,10 +1,13 @@
 import { performance } from "node:perf_hooks";
+import { findDuplicateContexts, type DuplicateGroup, type DuplicateUnitRef } from "./duplicates.js";
 import type { Edge, FileId } from "./types.js";
 import { buildProjectIndexIncremental } from "./indexer/build-index.js";
-import { type BuildReport, type IncrementalBuildOptions, type ProjectIndex } from "./indexer/types.js";
+import { type BuildReport, type IncrementalBuildOptions, type ProjectIndex, type SymbolDef } from "./indexer/types.js";
+import { symbolId } from "./indexer/symbols.js";
 import type { GraphBuildOptions } from "./graphs/types.js";
 import type { FileChange, Hunk } from "./impact/types.js";
 import type { CandidateTestFile } from "./impact/context.js";
+import { normalizePath, toProjectDisplayPath } from "./util/paths.js";
 import { fileExists } from "./util/workspace.js";
 import { discoverProjectFiles, type ProjectFileInfo } from "./util/projectFiles.js";
 import type { SqlReviewContext } from "./sql/review.js";
@@ -114,6 +117,12 @@ type ReviewPreset = {
   graph: { fast: boolean };
 };
 
+type ReviewDuplicateTarget = {
+  file: string;
+  startLine?: number;
+  endLine?: number;
+};
+
 const REVIEW_PRESETS: Record<ReviewDepth, ReviewPreset> = {
   minimal: {
     includeSymbolDetails: false,
@@ -134,6 +143,8 @@ const REVIEW_PRESETS: Record<ReviewDepth, ReviewPreset> = {
     graph: { fast: false },
   },
 };
+
+const REVIEW_DUPLICATE_TASK_LIMIT = 5;
 
 function mergeGraphOptions(
   base: IncrementalBuildOptions["graph"] | undefined,
@@ -376,6 +387,94 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
     riskRelevantParseFailures,
     exportedChangedCount,
   });
+  report.reviewTasks.push(
+    ...(await collectReviewDuplicateTasks({
+      projectRoot,
+      index,
+      summaries,
+      changedSymbolIds,
+    })),
+  );
   if (reviewTimings) reviewTimings.totalMs = Math.round(performance.now() - totalStart);
   return report;
+}
+
+function buildSymbolDefLookup(index: ProjectIndex): Map<string, SymbolDef> {
+  const lookup = new Map<string, SymbolDef>();
+  for (const mod of index.byFile.values()) {
+    for (const local of mod.locals) {
+      lookup.set(symbolId(local), local);
+    }
+  }
+  return lookup;
+}
+
+function relativeReviewPath(projectRoot: string, file: string): string {
+  const normalizedRoot = normalizePath(projectRoot);
+  const normalizedFile = normalizePath(file);
+  return toProjectDisplayPath(normalizedRoot, normalizedFile) || normalizedFile;
+}
+
+function duplicateUnitOverlapsTarget(unit: DuplicateUnitRef, target: ReviewDuplicateTarget): boolean {
+  if (unit.file !== target.file) return false;
+  if (target.startLine === undefined) return true;
+  const targetEndLine = target.endLine ?? target.startLine;
+  return unit.startLine <= targetEndLine && target.startLine <= unit.endLine;
+}
+
+function duplicateSiblingForTarget(group: DuplicateGroup, target: ReviewDuplicateTarget): DuplicateUnitRef {
+  if (duplicateUnitOverlapsTarget(group.primaryLeft, target)) return group.primaryRight;
+  return group.primaryLeft;
+}
+
+function duplicateReviewTask(group: DuplicateGroup, target: ReviewDuplicateTarget): ReviewTask {
+  const sibling = duplicateSiblingForTarget(group, target);
+  const targetLabel =
+    target.startLine === undefined ? target.file : `${target.file}:${target.startLine}-${target.endLine ?? target.startLine}`;
+  const siblingLabel = `${sibling.file}:${sibling.startLine}-${sibling.endLine}`;
+  return {
+    id: `duplicate-sibling-check:${group.id}`,
+    title: "Check related duplicate implementation",
+    description: `${targetLabel} overlaps a ${group.confidence}-confidence ${group.cloneType} duplicate group. Check sibling ${siblingLabel} for drift before changing only one side.`,
+    priority: group.confidence === "high" ? "high" : "medium",
+    reason: "duplicate-sibling",
+  };
+}
+
+async function collectReviewDuplicateTasks(input: {
+  projectRoot: string;
+  index: ProjectIndex;
+  summaries: readonly ReviewFileSummary[];
+  changedSymbolIds: readonly string[];
+}): Promise<ReviewTask[]> {
+  const symbolLookup = buildSymbolDefLookup(input.index);
+  const targets: ReviewDuplicateTarget[] = input.changedSymbolIds
+    .map((id) => symbolLookup.get(id))
+    .filter((def): def is SymbolDef => def !== undefined)
+    .map((def) => ({
+      file: relativeReviewPath(input.projectRoot, def.file),
+      startLine: def.range.start.line,
+      endLine: def.range.end.line,
+    }));
+  if (!targets.length) {
+    for (const summary of input.summaries) {
+      if (summary.status === "updated") targets.push({ file: summary.file });
+    }
+  }
+
+  const contexts = await findDuplicateContexts(input.index, targets, {
+    projectRoot: input.projectRoot,
+    minConfidence: "high",
+    includeSameFile: true,
+    limit: REVIEW_DUPLICATE_TASK_LIMIT,
+  });
+  const tasks = new Map<string, ReviewTask>();
+  for (const context of contexts) {
+    for (const group of context.groups) {
+      if (tasks.size >= REVIEW_DUPLICATE_TASK_LIMIT) return [...tasks.values()];
+      const task = duplicateReviewTask(group, context.target);
+      if (!tasks.has(task.id)) tasks.set(task.id, task);
+    }
+  }
+  return [...tasks.values()];
 }

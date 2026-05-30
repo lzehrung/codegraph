@@ -19,6 +19,10 @@ export type DuplicateUnitRef = {
   languageId: string;
   kind: DuplicateUnitKind;
   tokenCount: number;
+  handle: string;
+  fileHandle: string;
+  chunkHandle: string;
+  symbolHandle?: string;
   name?: string;
   symbolKind?: SymbolKind;
   complexity?: number;
@@ -96,6 +100,15 @@ export type DuplicateDetectionResult = {
   omittedCounts: DuplicateDetectionOmittedCounts;
   stats: DuplicateDetectionStats;
 };
+export type DuplicateTarget = {
+  file: string;
+  startLine?: number;
+  endLine?: number;
+};
+
+export type DuplicateContextResult = DuplicateDetectionResult & {
+  target: DuplicateTarget;
+};
 
 type UnitCluster = {
   id: string;
@@ -114,7 +127,7 @@ type DuplicateInternalUnit = DuplicateUnitRef & {
   signatures: Set<string>;
 };
 
-type DuplicateUnitDraft = Omit<DuplicateUnitRef, "tokenCount">;
+type DuplicateUnitDraft = Omit<DuplicateUnitRef, "tokenCount" | "handle" | "fileHandle" | "chunkHandle" | "symbolHandle">;
 
 type PairEvidence = {
   left: DuplicateInternalUnit;
@@ -425,6 +438,19 @@ function languageForFile(filePath: string): LanguageForFileResult | undefined {
   return undefined;
 }
 
+
+function formatDuplicateFileHandle(file: string): string {
+  return ["file", encodeURIComponent(file)].join(":");
+}
+
+function formatDuplicateChunkHandle(file: string, line: number): string {
+  return ["chunk", encodeURIComponent(file), String(line)].join(":");
+}
+
+function formatDuplicateSymbolHandle(file: string, name: string, line: number, column: number): string {
+  return ["symbol", encodeURIComponent(file), encodeURIComponent(name), String(line), String(column)].join(":");
+}
+
 function displayPath(projectRoot: string | undefined, filePath: string): string {
   if (!projectRoot) return normalizePath(filePath);
   return toProjectDisplayPath(projectRoot, filePath) || normalizePath(filePath);
@@ -446,11 +472,14 @@ function buildInternalUnit(
   text: string,
   shingleSize: number,
   windowSize: number,
+  symbolHandle?: string,
 ): DuplicateInternalUnit {
   const rawHash = hashText(text);
   const sourceTokens = tokenizeSource(text);
   const normalizedTokens = sourceTokens.map(normalizeToken);
   const signatures = winnowShingles(makeShingles(normalizedTokens, shingleSize), windowSize, DEFAULT_MAX_FINGERPRINTS);
+  const fileHandle = formatDuplicateFileHandle(unit.file);
+  const chunkHandle = formatDuplicateChunkHandle(unit.file, unit.startLine);
   return {
     ...unit,
     id: internalUnitId(unit, absoluteFile),
@@ -459,6 +488,10 @@ function buildInternalUnit(
     rawHash,
     normalizedHash: hashText(normalizedTokens.join(" ")),
     tokenCount: sourceTokens.length,
+    handle: symbolHandle ?? chunkHandle,
+    fileHandle,
+    chunkHandle,
+    ...(symbolHandle !== undefined ? { symbolHandle } : {}),
     normalizedTokens,
     tokenSet: new Set(normalizedTokens),
     signatures,
@@ -473,8 +506,15 @@ function makeSymbolUnit(
   windowSize: number,
 ): DuplicateInternalUnit | undefined {
   if (!symbolUnitKinds.has(symbol.kind)) return undefined;
+  const file = displayPath(projectRoot, symbol.file);
+  const symbolHandle = formatDuplicateSymbolHandle(
+    file,
+    symbol.localName,
+    symbol.range.start.line,
+    symbol.range.start.column,
+  );
   const unit: DuplicateUnitDraft = {
-    file: displayPath(projectRoot, symbol.file),
+    file,
     startLine: chunk.startLine,
     endLine: chunk.endLine,
     languageId: chunk.languageId,
@@ -483,7 +523,7 @@ function makeSymbolUnit(
     symbolKind: symbol.kind,
     ...(symbol.complexity !== undefined ? { complexity: symbol.complexity } : {}),
   };
-  return buildInternalUnit(unit, symbol.file, chunk.text, shingleSize, windowSize);
+  return buildInternalUnit(unit, symbol.file, chunk.text, shingleSize, windowSize, symbolHandle);
 }
 
 function makeDuplicateChunks(
@@ -534,8 +574,9 @@ function makeChunkUnits(
   windowSize: number,
 ): DuplicateInternalUnit[] {
   return chunks.map((chunk) => {
+    const file = displayPath(projectRoot, filePath);
     const unit: DuplicateUnitDraft = {
-      file: displayPath(projectRoot, filePath),
+      file,
       startLine: chunk.startLine,
       endLine: chunk.endLine,
       languageId: chunk.languageId,
@@ -852,6 +893,10 @@ function unitRef(unit: DuplicateInternalUnit): DuplicateUnitRef {
     languageId: unit.languageId,
     kind: unit.kind,
     tokenCount: unit.tokenCount,
+    handle: unit.handle,
+    fileHandle: unit.fileHandle,
+    chunkHandle: unit.chunkHandle,
+    ...(unit.symbolHandle !== undefined ? { symbolHandle: unit.symbolHandle } : {}),
     ...(unit.name !== undefined ? { name: unit.name } : {}),
     ...(unit.symbolKind !== undefined ? { symbolKind: unit.symbolKind } : {}),
     ...(unit.complexity !== undefined ? { complexity: unit.complexity } : {}),
@@ -1211,6 +1256,7 @@ export async function findDuplicates(
 
     comparedPairs++;
     const suggestion = suggestionForPair(evidence);
+
     if (confidenceRank[suggestion.confidence] < confidenceRank[minConfidence]) continue;
     suggestions.push(suggestion);
   }
@@ -1245,4 +1291,104 @@ export async function findDuplicates(
     result.suggestions = limitedRawSuggestions;
   }
   return result;
+}
+
+function normalizeDuplicateTarget(target: DuplicateTarget, projectRoot: string | undefined): DuplicateTarget {
+  const file = normalizePath(target.file);
+  const normalizedFile = projectRoot && path.isAbsolute(file) ? displayPath(projectRoot, file) : file;
+  return {
+    file: normalizedFile,
+    ...(target.startLine !== undefined ? { startLine: target.startLine } : {}),
+    ...(target.endLine !== undefined ? { endLine: target.endLine } : {}),
+  };
+}
+
+function unitTouchesDuplicateTarget(unit: DuplicateUnitRef, target: DuplicateTarget): boolean {
+  if (unit.file !== target.file) return false;
+  if (target.startLine === undefined) return true;
+  const targetEndLine = target.endLine ?? target.startLine;
+  return lineOverlap(unit, { startLine: target.startLine, endLine: targetEndLine }) > 0;
+}
+
+function suggestionTouchesDuplicateTarget(suggestion: DuplicateSuggestion, target: DuplicateTarget): boolean {
+  return unitTouchesDuplicateTarget(suggestion.left, target) || unitTouchesDuplicateTarget(suggestion.right, target);
+}
+
+function groupTouchesDuplicateTarget(group: DuplicateGroup, target: DuplicateTarget): boolean {
+  if (unitTouchesDuplicateTarget(group.primaryLeft, target) || unitTouchesDuplicateTarget(group.primaryRight, target)) {
+    return true;
+  }
+  return group.variants.some((variant) => suggestionTouchesDuplicateTarget(variant, target));
+}
+
+function boundDuplicateGroupVariants(group: DuplicateGroup, includeRawPairs: boolean): DuplicateGroup {
+  if (includeRawPairs) return group;
+  const variants = group.variants.slice(0, DEFAULT_GROUP_VARIANT_LIMIT);
+  return {
+    ...group,
+    variants,
+    variantCount: variants.length,
+    omittedVariantCount: Math.max(0, group.rawPairCount - variants.length),
+  };
+}
+
+function duplicateContextFromResult(
+  result: DuplicateDetectionResult,
+  target: DuplicateTarget,
+  options: { projectRoot: string | undefined; limit: number; includeRawPairs: boolean },
+): DuplicateContextResult {
+  const normalizedTarget = normalizeDuplicateTarget(target, options.projectRoot);
+  const groups = result.groups.filter((group) => groupTouchesDuplicateTarget(group, normalizedTarget));
+  const limitedGroups = groups
+    .slice(0, options.limit)
+    .map((group) => boundDuplicateGroupVariants(group, options.includeRawPairs));
+  const omittedGroups = Math.max(0, groups.length - limitedGroups.length);
+  const rawSuggestions = options.includeRawPairs
+    ? (result.suggestions ?? []).filter((suggestion) => suggestionTouchesDuplicateTarget(suggestion, normalizedTarget))
+    : [];
+  const limitedRawSuggestions = rawSuggestions.slice(0, options.limit);
+  const context: DuplicateContextResult = {
+    ...result,
+    target: normalizedTarget,
+    groups: limitedGroups,
+    omittedCounts: {
+      ...result.omittedCounts,
+      groups: omittedGroups,
+      suggestions: omittedGroups,
+      rawSuggestions: Math.max(0, rawSuggestions.length - limitedRawSuggestions.length),
+    },
+  };
+  if (options.includeRawPairs) {
+    context.suggestions = limitedRawSuggestions;
+  } else {
+    delete context.suggestions;
+  }
+  return context;
+}
+
+export async function findDuplicateContexts(
+  index: ProjectIndex,
+  targets: readonly DuplicateTarget[],
+  options: DuplicateDetectionOptions = {},
+): Promise<DuplicateContextResult[]> {
+  if (!targets.length) return [];
+  const limit = normalizeNonNegativeIntegerOption(options.limit, "limit", DEFAULT_LIMIT);
+  const includeRawPairs = options.includeRawPairs ?? false;
+  const result = await findDuplicates(index, {
+    ...options,
+    limit: Number.MAX_SAFE_INTEGER,
+    minConfidence: options.minConfidence ?? "medium",
+    includeRawPairs: true,
+  });
+  const projectRoot = options.projectRoot ?? index.projectRoot;
+  return targets.map((target) => duplicateContextFromResult(result, target, { projectRoot, limit, includeRawPairs }));
+}
+
+export async function findDuplicateContext(
+  index: ProjectIndex,
+  target: DuplicateTarget,
+  options: DuplicateDetectionOptions = {},
+): Promise<DuplicateContextResult> {
+  const contexts = await findDuplicateContexts(index, [target], options);
+  return contexts[0]!;
 }

@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { runCli } from "../src/cli.js";
 import { appendDuplicateLeadSummary } from "../src/duplicatesLeads.js";
-import { buildProjectIndex, findDuplicates } from "../src/index.js";
+import { buildProjectIndex, findDuplicateContext, findDuplicates } from "../src/index.js";
 
 const tempRoots: string[] = [];
 
@@ -103,6 +103,115 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     expect(result.groups[0]?.confidence).toBe("high");
     expect(result.groups[0]?.primaryLeft.file).toBe("src/a.ts");
     expect(result.groups[0]?.primaryRight.file).toBe("src/b.ts");
+  });
+
+  test("adds stable handles to duplicate units", async () => {
+    const root = await makeTempProject();
+    const duplicateSource = `
+export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }>) {
+  const totals: number[] = [];
+  const labels: string[] = [];
+  for (const row of rows) {
+    const subtotal = row.amount + row.tax;
+    const rounded = Math.round(subtotal * 100) / 100;
+    const label = rounded > 100 ? "large" : "small";
+    labels.push(label);
+    totals.push(rounded);
+  }
+  const encoded = totals.map((value, index) => labels[index] + ":" + value.toFixed(2));
+  return encoded.filter((value) => value.includes(":")).join(",");
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", duplicateSource);
+    await writeProjectFile(root, "src/b.ts", duplicateSource);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, { minConfidence: "high", limit: 1 });
+    const unit = result.groups[0]?.primaryLeft;
+
+    expect(unit?.fileHandle).toBe("file:src%2Fa.ts");
+    expect(unit?.chunkHandle).toBe("chunk:src%2Fa.ts:2");
+    expect(unit?.symbolHandle).toBe("symbol:src%2Fa.ts:normalizeInvoiceRows:2:17");
+    expect(unit?.handle).toBe(unit?.symbolHandle);
+  });
+
+  test("filters duplicate context by target before limiting", async () => {
+    const root = await makeTempProject();
+    const firstSource = `
+export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }>) {
+  const totals: number[] = [];
+  const labels: string[] = [];
+  for (const row of rows) {
+    const subtotal = row.amount + row.tax;
+    const rounded = Math.round(subtotal * 100) / 100;
+    const label = rounded > 100 ? "large" : "small";
+    labels.push(label);
+    totals.push(rounded);
+  }
+  const encoded = totals.map((value, index) => labels[index] + ":" + value.toFixed(2));
+  return encoded.filter((value) => value.includes(":")).join(",");
+}
+`;
+    const secondSource = `
+export function scoreUsers(users: Array<{ active: boolean; points: number }>) {
+  const scored: number[] = [];
+  const labels: string[] = [];
+  for (const user of users) {
+    const base = user.active ? user.points : 0;
+    const bonus = base > 50 ? 10 : 2;
+    const label = bonus > 5 ? "priority" : "standard";
+    labels.push(label);
+    scored.push(base + bonus);
+  }
+  const total = scored.reduce((currentTotal, value) => currentTotal + value, 0);
+  return total + labels.filter((label) => label.length > 0).length;
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", firstSource);
+    await writeProjectFile(root, "src/b.ts", firstSource);
+    await writeProjectFile(root, "src/c.ts", secondSource);
+    await writeProjectFile(root, "src/d.ts", secondSource);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicateContext(index, { file: "src/c.ts" }, { minConfidence: "high", limit: 1 });
+
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0]?.primaryLeft.file).toBe("src/c.ts");
+    expect(result.groups[0]?.primaryRight.file).toBe("src/d.ts");
+  });
+
+  test("duplicate context includes target matches from raw variants without exposing raw pairs by default", async () => {
+    const root = await makeTempProject();
+    const source = `
+export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }>) {
+  const totals: number[] = [];
+  const labels: string[] = [];
+  for (const row of rows) {
+    const subtotal = row.amount + row.tax;
+    const rounded = Math.round(subtotal * 100) / 100;
+    const label = rounded > 100 ? "large" : "small";
+    labels.push(label);
+    totals.push(rounded);
+  }
+  const encoded = totals.map((value, index) => labels[index] + ":" + value.toFixed(2));
+  return encoded.filter((value) => value.includes(":")).join(",");
+}
+`;
+    for (const name of ["a", "b", "c", "d", "e", "f", "g"]) {
+      await writeProjectFile(root, `src/${name}.ts`, source);
+    }
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicateContext(index, { file: "src/g.ts" }, { minConfidence: "high", limit: 5 });
+
+    expect(result.groups.length).toBeGreaterThan(0);
+    expect(result.groups.some((group) => group.primaryLeft.file === "src/g.ts" || group.primaryRight.file === "src/g.ts")).toBeTruthy();
+    expect(result.suggestions).toBeUndefined();
+    for (const group of result.groups) {
+      expect(group.variantCount).toBeLessThanOrEqual(5);
+    }
   });
 
   test("groups overlapping symbol and chunk variants into one finding", async () => {

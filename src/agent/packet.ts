@@ -10,6 +10,7 @@ export type AgentPacketRequest = {
   handle: string;
   maxSymbols?: number;
   maxSnippets?: number;
+  maxDuplicates?: number;
 };
 
 export type AgentPacketPayload = AgentExplanation | ReviewReport;
@@ -63,6 +64,9 @@ async function buildExplainPacket(
   }
   if (request.maxSnippets !== undefined) {
     explainRequest.maxSnippets = request.maxSnippets;
+  }
+  if (request.maxDuplicates !== undefined) {
+    explainRequest.maxDuplicates = request.maxDuplicates;
   }
 
   const explanation = await explainCodegraphTargetWithSession(session, explainRequest);

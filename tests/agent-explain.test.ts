@@ -20,6 +20,30 @@ async function mkRepo(): Promise<string> {
   return root;
 }
 
+const duplicateSource = `
+export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }>) {
+  const totals: number[] = [];
+  const labels: string[] = [];
+  for (const row of rows) {
+    const subtotal = row.amount + row.tax;
+    const rounded = Math.round(subtotal * 100) / 100;
+    const label = rounded > 100 ? "large" : "small";
+    labels.push(label);
+    totals.push(rounded);
+  }
+  const encoded = totals.map((value, index) => labels[index] + ":" + value.toFixed(2));
+  return encoded.filter((value) => value.includes(":")).join(",");
+}
+`;
+
+async function mkDuplicateRepo(): Promise<string> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-explain-dups-"));
+  await fs.mkdir(path.join(root, "src"), { recursive: true });
+  await fs.writeFile(path.join(root, "src/a.ts"), duplicateSource);
+  await fs.writeFile(path.join(root, "src/b.ts"), duplicateSource);
+  return root;
+}
+
 describe("agent explain", () => {
   it("explains a file with symbols, dependencies, reverse dependencies, and follow-ups", async () => {
     const root = await mkRepo();
@@ -261,5 +285,34 @@ describe("agent explain", () => {
     );
     const candidate = explanation.changedContext?.candidateTests.find((entry) => entry.file === "auth.test.ts");
     expect(typeof candidate?.confidence).toBe("string");
+  });
+
+  it("includes bounded duplicate context for file explanations", async () => {
+    const root = await mkDuplicateRepo();
+
+    const explanation = await explainCodegraphTarget({ root, target: "src/a.ts", maxDuplicates: 1 });
+
+    expect(explanation.duplicates).toHaveLength(1);
+    expect(explanation.limits.duplicates).toBe(1);
+    expect(explanation.duplicates[0]?.left.file).toBe("src/a.ts");
+    expect(explanation.duplicates[0]?.right.file).toBe("src/b.ts");
+    expect(explanation.duplicates[0]?.left.handle).toContain("src%2Fa.ts");
+    expect(explanation.duplicates[0]?.hint).toContain("Possible extraction candidate");
+    expect(explanation.followUps.some((command) => command.includes("codegraph duplicates"))).toBeTruthy();
+  });
+
+  it("includes only duplicate groups overlapping symbol explanations", async () => {
+    const root = await mkDuplicateRepo();
+
+    const explanation = await explainCodegraphTarget({
+      root,
+      target: "normalizeInvoiceRows",
+      maxDuplicates: 1,
+    });
+
+    expect(explanation.target.kind).toBe("symbol");
+    expect(explanation.duplicates).toHaveLength(1);
+    expect(explanation.duplicates[0]?.left.name).toBe("normalizeInvoiceRows");
+    expect(explanation.omittedCounts.duplicates).toBe(0);
   });
 });

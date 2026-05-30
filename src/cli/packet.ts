@@ -24,6 +24,9 @@ export async function handlePacketCommand(context: PacketCommandContext): Promis
       ...(context.getOpt("--max-snippets") !== undefined
         ? { maxSnippets: parsePositiveIntegerOption(context.getOpt("--max-snippets"), "--max-snippets", 8) }
         : {}),
+      ...(context.getOpt("--max-duplicates") !== undefined
+        ? { maxDuplicates: parsePositiveIntegerOption(context.getOpt("--max-duplicates"), "--max-duplicates", 5) }
+        : {}),
     });
 
     if (context.hasFlag("--json") || !context.hasFlag("--pretty")) {

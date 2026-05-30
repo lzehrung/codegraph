@@ -152,7 +152,7 @@ Output:
 
 export const PACKET_HELP_TEXT = `codegraph packet - Retrieve bounded evidence packets by stable handle
 
-Usage: codegraph packet get <handle> [--root <path>] [--json | --pretty] [--max-symbols <n>] [--max-snippets <n>]
+Usage: codegraph packet get <handle> [--root <path>] [--json | --pretty] [--max-symbols <n>] [--max-snippets <n>] [--max-duplicates <n>]
 
 Handles:
   Accepts file:, symbol:, chunk:, sql:, graph:, and review: handles. CLI orient returns file handles; review handles are produced by library orientation calls that include a review range.
@@ -160,13 +160,13 @@ Handles:
 
 export const EXPLAIN_HELP_TEXT = `codegraph explain - Explain a file, symbol, SQL object, or search handle
 
-Usage: codegraph explain <file|symbol|sql-object|handle> [--root <path>] [--max-symbols <n>] [--max-dependencies <n>] [--max-snippets <n>] [--changed-context --base <rev> --head <rev>] [--json]
+Usage: codegraph explain <file|symbol|sql-object|handle> [--root <path>] [--max-symbols <n>] [--max-dependencies <n>] [--max-snippets <n>] [--max-duplicates <n>] [--changed-context --base <rev> --head <rev>] [--json]
 
 Targets:
   File paths, symbol names, SQL object names, and handles returned by codegraph search are accepted.
 
 Output:
-  Explanations include bounded symbols, dependencies, reverse dependencies, references, snippets, SQL facts, follow-up commands, limits, and omission counts.
+  Explanations include bounded symbols, dependencies, reverse dependencies, references, snippets, duplicate context, SQL facts, follow-up commands, limits, and omission counts.
 `;
 
 export const ARTIFACT_HELP_TEXT = `codegraph artifact - Build an agent-ready handoff bundle
