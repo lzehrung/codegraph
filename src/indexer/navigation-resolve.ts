@@ -93,18 +93,19 @@ export function resolveExport(
   index: ProjectIndex,
   file: FileId,
   exportedName: string,
-  opts?: { preferredKind?: SymbolKind },
+  opts?: { preferredKind?: SymbolKind; allowLocalFallback?: boolean },
 ): ResolvedExport | null {
   const visited = new Set<string>();
   const matchesPreferredKind = (def: SymbolDef): boolean => !opts?.preferredKind || def.kind === opts.preferredKind;
+  const allowLocalFallback = opts?.allowLocalFallback ?? true;
 
   function resolveFromFile(fileInner: FileId, name: string): ResolvedExport | null {
     const normalizedFile = fileInner.replace(/\\/g, "/");
     const moduleEntry = index.byFile.get(normalizedFile);
     if (!moduleEntry) return null;
     const key = opts?.preferredKind
-      ? `${cacheKey(normalizedFile, name)}::${opts.preferredKind}`
-      : cacheKey(normalizedFile, name);
+      ? `${cacheKey(normalizedFile, name)}::${opts.preferredKind}::${allowLocalFallback ? "local" : "export"}`
+      : `${cacheKey(normalizedFile, name)}::${allowLocalFallback ? "local" : "export"}`;
     if (index.exportCache.has(key)) return index.exportCache.get(key)!;
 
     const cycleKey = `${normalizedFile}::${name}`;
@@ -158,13 +159,15 @@ export function resolveExport(
       }
     }
 
-    const local = moduleEntry.locals.find(
-      (candidate) => candidate.localName === name && matchesPreferredKind(candidate),
-    );
-    if (local) {
-      const result: ResolvedExport = { kind: "resolved", def: local };
-      index.exportCache.set(key, result);
-      return result;
+    if (allowLocalFallback) {
+      const local = moduleEntry.locals.find(
+        (candidate) => candidate.localName === name && matchesPreferredKind(candidate),
+      );
+      if (local) {
+        const result: ResolvedExport = { kind: "resolved", def: local };
+        index.exportCache.set(key, result);
+        return result;
+      }
     }
 
     index.exportCache.set(key, null);

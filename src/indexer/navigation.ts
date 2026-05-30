@@ -250,7 +250,7 @@ export async function findReferences(
       exportedNames.push(entry.exportedAs);
     }
   }
-  if (!exportedNames.length) {
+  if (!exportedNames.length && shouldUseLocalNameAsExportFallback(def, parsedContext)) {
     exportedNames.push(def.localName);
   }
 
@@ -453,6 +453,20 @@ function shouldScanVerifiedReferences(
   if (!isJsTsLanguage(parsedContext.sup.id)) {
     return false;
   }
+  return isJsTsMethodDefinition(def, parsedContext);
+}
+
+function shouldUseLocalNameAsExportFallback(def: SymbolDef, parsedContext: ParsedFileContext): boolean {
+  if (!isJsTsLanguage(parsedContext.sup.id)) {
+    return true;
+  }
+  return !isJsTsMethodDefinition(def, parsedContext);
+}
+
+function isJsTsMethodDefinition(def: SymbolDef, parsedContext: ParsedFileContext): boolean {
+  if (def.kind !== SymbolKind.Function) {
+    return false;
+  }
   const start = def.range.start;
   const position = {
     row: start.line - 1,
@@ -460,7 +474,11 @@ function shouldScanVerifiedReferences(
   };
   let current: SyntaxNodeLike | null = parsedContext.tree.rootNode.descendantForPosition(position, position);
   while (current) {
-    if (current.type === "method_definition") {
+    if (
+      current.type === "method_definition" ||
+      current.type === "method_signature" ||
+      current.type === "abstract_method_signature"
+    ) {
       return true;
     }
     if (current.type === "function_declaration" || current.type === "program") {

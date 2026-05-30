@@ -32,14 +32,9 @@ const methodLocalCases: MethodLocalCase[] = [
   {
     label: "TypeScript class method",
     file: "service.ts",
-    source: [
-      "export class Service {",
-      "  run(value: number): number {",
-      "    return value;",
-      "  }",
-      "}",
-      "",
-    ].join("\n"),
+    source: ["export class Service {", "  run(value: number): number {", "    return value;", "  }", "}", ""].join(
+      "\n",
+    ),
     methodName: "run",
     methodLine: 2,
     bodyLine: 3,
@@ -50,14 +45,9 @@ const methodLocalCases: MethodLocalCase[] = [
   {
     label: "TSX class method",
     file: "service.tsx",
-    source: [
-      "export class Service {",
-      "  run(value: number): number {",
-      "    return value;",
-      "  }",
-      "}",
-      "",
-    ].join("\n"),
+    source: ["export class Service {", "  run(value: number): number {", "    return value;", "  }", "}", ""].join(
+      "\n",
+    ),
     methodName: "run",
     methodLine: 2,
     bodyLine: 3,
@@ -184,9 +174,7 @@ const methodLocalCases: MethodLocalCase[] = [
   {
     label: "C++ class method",
     file: "service.cpp",
-    source: ["class Service {", "public:", "  int run(int value) {", "    return value;", "  }", "};", ""].join(
-      "\n",
-    ),
+    source: ["class Service {", "public:", "  int run(int value) {", "    return value;", "  }", "};", ""].join("\n"),
     methodName: "run",
     methodLine: 3,
     bodyLine: 4,
@@ -262,6 +250,42 @@ describe("method-like local symbols", () => {
       if (testCase.enclosingName) {
         expect(changed.some((symbol) => symbol.name === testCase.enclosingName)).toBe(false);
       }
+    });
+  });
+
+  it("maps a deleted method before another method to the enclosing class", async () => {
+    await withTmpDir("deleted-method-before-next-method", async (root) => {
+      const file = path.join(root, "service.ts").replace(/\\/g, "/");
+      await fsp.writeFile(
+        file,
+        ["export class Service {", "  keep(): number {", "    return 2;", "  }", "}", ""].join("\n"),
+        "utf8",
+      );
+
+      const index = await buildProjectIndex(root);
+      const changed = await locateChangedSymbols(index, file, [
+        {
+          oldStart: 1,
+          newStart: 1,
+          lines: [
+            " export class Service {",
+            "-  run(): number {",
+            "-    return 1;",
+            "-  }",
+            "   keep(): number {",
+            "     return 2;",
+            "   }",
+          ],
+        },
+      ]);
+
+      expect(changed.map((symbol) => symbol.name)).toEqual(["Service"]);
+      expect(changed[0]).toEqual(
+        expect.objectContaining({
+          kind: SymbolKind.Class,
+          signatureChanged: false,
+        }),
+      );
     });
   });
 

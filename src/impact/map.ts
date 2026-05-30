@@ -118,7 +118,13 @@ export async function locateChangedSymbolsWithLines(
   }
 
   const changedSymbols: ChangedSymbol[] = [];
-  const preciseEntries = removeOuterSymbolsCoveredByNestedChanges(seenHandles, changedByteRanges, changedLines, tree, sup);
+  const preciseEntries = removeOuterSymbolsCoveredByNestedChanges(
+    seenHandles,
+    changedByteRanges,
+    changedLines,
+    tree,
+    sup,
+  );
   for (const [handle, entry] of preciseEntries) {
     changedSymbols.push({
       id: handle,
@@ -148,15 +154,42 @@ function removeOuterSymbolsCoveredByNestedChanges<T extends { symbolDef: SymbolD
     declarationRanges.set(handle, declarationRangeForSymbol(tree, entry.symbolDef, support));
   }
 
-  return [...entries].filter(([handle, entry]) => {
+  const entryList = [...entries];
+  return entryList.filter(([handle, entry]) => {
     const entryRange = declarationRanges.get(handle) ?? entry.symbolDef.range;
-    for (const [otherHandle, otherEntry] of entries) {
+    if (changedByteRanges.length && !changedRangesOverlapDeclaration(entryRange, changedByteRanges)) {
+      const containingChangedEntry = entryList.some(([otherHandle, otherEntry]) => {
+        if (otherHandle === handle) {
+          return false;
+        }
+        const otherRange = declarationRanges.get(otherHandle) ?? otherEntry.symbolDef.range;
+        return (
+          rangeStrictlyContains(otherRange, entryRange) &&
+          changedRangesOverlapDeclaration(otherRange, changedByteRanges)
+        );
+      });
+      if (containingChangedEntry) {
+        return false;
+      }
+    }
+
+    for (const [otherHandle, otherEntry] of entryList) {
       if (otherHandle === handle) continue;
       const otherRange = declarationRanges.get(otherHandle) ?? otherEntry.symbolDef.range;
       if (!rangeStrictlyContains(entryRange, otherRange)) continue;
       const byteRangesAreNested = changedRangesForOuterAreContainedByInner(entryRange, otherRange, changedByteRanges);
       const changedLinesAreNested = changedLinesForOuterAreContainedByInner(entryRange, otherRange, changedLines);
-      if (byteRangesAreNested || changedLinesAreNested) {
+      const innerOverlapsChangedRange = changedRangesOverlapDeclaration(otherRange, changedByteRanges);
+      const changedRangesFallBeforeInner = changedRangesForOuterFallBeforeInner(
+        entryRange,
+        otherRange,
+        changedByteRanges,
+      );
+      if (
+        byteRangesAreNested ||
+        (changedLinesAreNested &&
+          (!changedByteRanges.length || innerOverlapsChangedRange || !changedRangesFallBeforeInner))
+      ) {
         return false;
       }
     }
@@ -522,11 +555,40 @@ function changedRangesForOuterAreContainedByInner(
     return false;
   }
 
-  const relevantChangedRanges = changedByteRanges.filter((changedRange) => byteRangesOverlap(changedRange, outerBounds));
+  const relevantChangedRanges = changedByteRanges.filter((changedRange) =>
+    byteRangesOverlap(changedRange, outerBounds),
+  );
   if (!relevantChangedRanges.length) {
     return false;
   }
   return relevantChangedRanges.every((changedRange) => byteRangeContains(innerBounds, changedRange));
+}
+
+function changedRangesOverlapDeclaration(range: Range, changedByteRanges: ReadonlyArray<ByteRange>): boolean {
+  const bounds = rangeByteBounds(range);
+  if (!bounds) {
+    return false;
+  }
+  return changedByteRanges.some((changedRange) => byteRangesOverlap(changedRange, bounds));
+}
+
+function changedRangesForOuterFallBeforeInner(
+  outer: Range,
+  inner: Range,
+  changedByteRanges: ReadonlyArray<ByteRange>,
+): boolean {
+  const outerBounds = rangeByteBounds(outer);
+  const innerBounds = rangeByteBounds(inner);
+  if (!outerBounds || !innerBounds) {
+    return false;
+  }
+  const relevantChangedRanges = changedByteRanges.filter((changedRange) =>
+    byteRangesOverlap(changedRange, outerBounds),
+  );
+  if (!relevantChangedRanges.length) {
+    return false;
+  }
+  return relevantChangedRanges.every((changedRange) => changedRange.end <= innerBounds.start);
 }
 
 function changedLinesForOuterAreContainedByInner(
@@ -534,9 +596,7 @@ function changedLinesForOuterAreContainedByInner(
   inner: Range,
   changedLines: ReadonlySet<number>,
 ): boolean {
-  const relevantChangedLines = [...changedLines].filter(
-    (line) => line >= outer.start.line && line <= outer.end.line,
-  );
+  const relevantChangedLines = [...changedLines].filter((line) => line >= outer.start.line && line <= outer.end.line);
   if (!relevantChangedLines.length) {
     return false;
   }

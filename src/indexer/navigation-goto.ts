@@ -82,7 +82,7 @@ export async function resolveMemberAccessDefinition(params: {
         const base = await resolveExpression(subObj);
         const memberName = sliceText(subProp, source);
         if (base?.kind === "namespace") {
-          return resolveExport(index, base.file, memberName);
+          return resolveExport(index, base.file, memberName, { allowLocalFallback: false });
         }
         if (base?.kind === "resolved") {
           if (sup.id === "java" || sup.id === "ruby") {
@@ -101,7 +101,7 @@ export async function resolveMemberAccessDefinition(params: {
         const base = await resolveExpression(subObj);
         const memberName = sliceText(subProp, source);
         if (base?.kind === "namespace") {
-          return resolveExport(index, base.file, memberName);
+          return resolveExport(index, base.file, memberName, { allowLocalFallback: false });
         }
         if (base?.kind === "resolved") {
           return resolveExport(index, base.def.file, memberName);
