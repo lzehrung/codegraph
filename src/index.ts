@@ -258,6 +258,8 @@ export type {
   AgentExplainTarget,
   AgentExplanation,
   AgentExplanationChangedContext,
+  AgentExplanationDuplicate,
+  AgentExplanationDuplicateSide,
   AgentExplanationDependency,
   AgentExplanationReference,
   AgentExplanationSnippet,

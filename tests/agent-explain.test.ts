@@ -298,7 +298,9 @@ describe("agent explain", () => {
     expect(explanation.duplicates[0]?.right.file).toBe("src/b.ts");
     expect(explanation.duplicates[0]?.left.handle).toContain("src%2Fa.ts");
     expect(explanation.duplicates[0]?.hint).toContain("Possible extraction candidate");
-    expect(explanation.followUps.some((command) => command.includes("codegraph duplicates"))).toBeTruthy();
+    const duplicateFollowUp = explanation.followUps.find((command) => command.includes("codegraph duplicates"));
+    expect(duplicateFollowUp).toContain("src/a.ts");
+    expect(duplicateFollowUp).toContain("src/b.ts");
   });
 
   it("includes only duplicate groups overlapping symbol explanations", async () => {

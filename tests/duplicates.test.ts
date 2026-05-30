@@ -204,13 +204,18 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     }
 
     const index = await buildProjectIndex(root);
-    const result = await findDuplicateContext(index, { file: "src/g.ts" }, { minConfidence: "high", limit: 5 });
+    const target = { file: "src/g.ts" };
+    const result = await findDuplicateContext(index, target, { minConfidence: "high", limit: 5 });
+    const rawResult = await findDuplicateContext(index, target, { includeRawPairs: true, minConfidence: "high", limit: 5 });
 
     expect(result.groups.length).toBeGreaterThan(0);
     expect(result.groups.some((group) => group.primaryLeft.file === "src/g.ts" || group.primaryRight.file === "src/g.ts")).toBeTruthy();
     expect(result.suggestions).toBeUndefined();
     for (const group of result.groups) {
+      const rawGroup = rawResult.groups.find((entry) => entry.id === group.id);
+      expect(rawGroup).toBeDefined();
       expect(group.variantCount).toBeLessThanOrEqual(5);
+      expect(group.omittedVariantCount).toBe(Math.max(0, (rawGroup?.variantCount ?? 0) - group.variantCount));
     }
   });
 

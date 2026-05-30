@@ -984,10 +984,20 @@ function collectFollowUps(
   }
 
   if (duplicates.length) {
-    followUps.add(`codegraph duplicates --root . ${quoteShellArg(relFile)} --min-confidence medium --include-same-file`);
+    followUps.add(formatDuplicateFollowUp(duplicates));
   }
 
   return [...followUps].sort();
+}
+
+function formatDuplicateFollowUp(duplicates: readonly AgentExplanationDuplicate[]): string {
+  const files = new Set<string>();
+  for (const duplicate of duplicates) {
+    files.add(duplicate.left.file);
+    files.add(duplicate.right.file);
+  }
+  const scope = [...files].sort().map(quoteShellArg).join(" ");
+  return `codegraph duplicates --root . ${scope} --min-confidence medium --include-same-file`;
 }
 
 function buildSummary(

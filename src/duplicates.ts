@@ -1328,7 +1328,7 @@ function boundDuplicateGroupVariants(group: DuplicateGroup, includeRawPairs: boo
     ...group,
     variants,
     variantCount: variants.length,
-    omittedVariantCount: Math.max(0, group.rawPairCount - variants.length),
+    omittedVariantCount: Math.max(0, group.variants.length - variants.length),
   };
 }
 
