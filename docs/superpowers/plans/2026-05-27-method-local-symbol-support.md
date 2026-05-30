@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Status:** Completed on `method-local` and merged to `main` in #112. This file now records the completed checklist and verification surface; the original baseline-only assertions were replaced by permanent regression tests.
+
 **Goal:** Add method-level changed-symbol support only where the index, navigation, and impact model can prove it without broadening false positives.
 
 **Architecture:** The current changed-symbol path is index-driven: `locateChangedSymbols()` can only emit a changed symbol when the matching declaration exists in `mod.locals`. JavaScript and TypeScript method names are recognized during impact attribution, but they are not stored as locals, so method edits fall back to the containing class.
@@ -119,9 +121,11 @@ Adding method locals changes public-ish output shape. Symbol counts, changed-sym
 - Read: `src/impact/map.ts`
 - Read: `tests/parser-efficiency-fixes.test.ts`
 
-- [ ] Run `npm run test:run -- tests/parser-efficiency-fixes.test.ts`.
-- [ ] Add a temporary local assertion or focused test proving TS `run()` is not in `moduleIndex.locals`.
-- [ ] Remove the temporary assertion before committing, or convert it into the failing regression in Task 2.
+- [x] Run `npm run test:run -- tests/parser-efficiency-fixes.test.ts`.
+- [x] Add a temporary local assertion or focused test proving TS `run()` is not in `moduleIndex.locals`.
+- [x] Remove the temporary assertion before committing, or convert it into the failing regression in Task 2.
+
+Completion note: the temporary baseline assertion was not retained. The completed branch converted the behavior into persistent method-local regression coverage in `tests/parser-efficiency-fixes.test.ts` and `tests/method-local-symbols.test.ts`.
 
 ### Task 2: Add JS/TS Method Locals
 
@@ -133,11 +137,11 @@ Adding method locals changes public-ish output shape. Symbol counts, changed-sym
 - Test: `tests/parser-efficiency-fixes.test.ts`
 - Test: nearest symbol extraction test, likely `tests/detailed-symbol-native-only.test.ts` or a new focused indexer test
 
-- [ ] Add `method_definition` to the declaration branch in `buildScopeIndexFromSource()`.
-- [ ] Ensure `method_definition` declarations use the same `Function` symbol kind as other callables.
-- [ ] Update JS/TS `classifyDefinition()` to return `function` for method definitions.
-- [ ] Add or update a test showing `Service.run` appears in locals by name and start position.
-- [ ] Update the method-body changed-symbol tests so the changed symbol is `add` or `fetchUser`, not only `Calculator` or `UserService`.
+- [x] Add `method_definition` to the declaration branch in `buildScopeIndexFromSource()`.
+- [x] Ensure `method_definition` declarations use the same `Function` symbol kind as other callables.
+- [x] Update JS/TS `classifyDefinition()` to return `function` for method definitions.
+- [x] Add or update a test showing `Service.run` appears in locals by name and start position.
+- [x] Update the method-body changed-symbol tests so the changed symbol is `add` or `fetchUser`, not only `Calculator` or `UserService`.
 
 ### Task 3: Prove Signature Detection Still Works
 
@@ -146,10 +150,10 @@ Adding method locals changes public-ish output shape. Symbol counts, changed-sym
 - Modify: `tests/parser-efficiency-fixes.test.ts`
 - Possibly modify: `tests/impact.test.ts`
 
-- [ ] Add a JS or TS method parameter-change test.
-- [ ] Assert `signatureChanged` is true when a method parameter list changes.
-- [ ] Assert `signatureChanged` is false when only a method body changes.
-- [ ] Keep the existing function signature tests unchanged.
+- [x] Add a JS or TS method parameter-change test.
+- [x] Assert `signatureChanged` is true when a method parameter list changes.
+- [x] Assert `signatureChanged` is false when only a method body changes.
+- [x] Keep the existing function signature tests unchanged.
 
 ### Task 4: Add Member-Aware References Before Method Call Compatibility
 
@@ -161,10 +165,10 @@ Adding method locals changes public-ish output shape. Symbol counts, changed-sym
 - Test: `tests/references.test.ts`
 - Test: `tests/native-semantic-parity.test.ts` if native and JS paths both claim the behavior
 
-- [ ] Add a fixture where `new Service().run(1)` resolves to `Service.run`.
-- [ ] Add a fixture where `const service = new Service(); service.run(1)` resolves only if the receiver inference is implemented.
-- [ ] Add a negative fixture with two unrelated classes that both define `run()`.
-- [ ] Do not return a method reference when receiver inference is ambiguous.
+- [x] Add a fixture where `new Service().run(1)` resolves to `Service.run`.
+- [x] Add a fixture where `const service = new Service(); service.run(1)` resolves only if the receiver inference is implemented.
+- [x] Add a negative fixture with two unrelated classes that both define `run()`.
+- [x] Do not return a method reference when receiver inference is ambiguous.
 
 ### Task 5: Attach Method Call Compatibility Hints
 
@@ -173,10 +177,10 @@ Adding method locals changes public-ish output shape. Symbol counts, changed-sym
 - Modify: `src/impact/callCompatibility.ts` only if the existing callable filter or extraction is insufficient
 - Modify: `tests/impact.test.ts` or add a focused call-compatibility impact test
 
-- [ ] Create a JS/TS diff where a method parameter is added.
-- [ ] Assert the changed symbol is the method local and has `signatureChanged`.
-- [ ] Assert a verified callsite with too few arguments receives `likely_mismatch`.
-- [ ] Assert an unrelated same-name method call does not receive a hint.
+- [x] Create a JS/TS diff where a method parameter is added.
+- [x] Assert the changed symbol is the method local and has `signatureChanged`.
+- [x] Assert a verified callsite with too few arguments receives `likely_mismatch`.
+- [x] Assert an unrelated same-name method call does not receive a hint.
 
 ### Task 6: Update Public Documentation If Behavior Changes
 
@@ -187,9 +191,11 @@ Adding method locals changes public-ish output shape. Symbol counts, changed-sym
 - Modify: `docs/cli.md`, `docs/library-api.md`, and `docs/agent-workflows.md` if impact output contracts change
 - Modify: `codegraph-skill/codegraph/SKILL.md` if CLI commands, flags, or capabilities change
 
-- [ ] Document the exact JS/TS method-local support claim.
-- [ ] Document intentional exclusions, especially constructors, overloads, abstract/interface signatures, getters/setters, and ambiguous receivers.
-- [ ] Keep README changes minimal unless the public support summary changes.
+- [x] Document the exact JS/TS method-local support claim.
+- [x] Document intentional exclusions, especially constructors, overloads, abstract/interface signatures, getters/setters, and ambiguous receivers.
+- [x] Keep README changes minimal unless the public support summary changes.
+
+Completion note: the public docs split the claim between broad method-like local indexing and JS/TS-only receiver-aware references/call compatibility. `README.md` did not need a table-of-contents or workflow update because no README section or first-run guidance changed.
 
 ## Verification Guidance
 

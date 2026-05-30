@@ -503,7 +503,7 @@ for (const hint of likelyMismatches) {
 Coverage is intentionally conservative:
 
 - Compatible callsites may be present in structured data but are omitted from human summaries.
-- Unsupported languages, unknown signatures, spread calls, ambiguous callsites, overload sets, and JS/TS method-level call compatibility are skipped until Codegraph can prove the call target.
+- Unsupported languages, unknown signatures, spread calls, ambiguous callsites, and overload sets are skipped until Codegraph can prove the call target. JS/TS method-level call compatibility is included only for verified receivers such as `new Service().run()` and `const service = new Service(); service.run()`.
 
 Include reference context snippets when needed:
 
