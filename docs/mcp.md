@@ -37,6 +37,7 @@ The server exposes the same bounded primitives as the CLI and library session la
 - `artifact_build`: artifact creation, available only with write access enabled.
 
 MCP keeps one Codegraph session warm for the configured root. That makes follow-up calls cheaper than separate CLI invocations.
+Tool schemas are flat JSON objects for broad client compatibility; argument combinations such as `refs` handle-vs-position mode are validated by the server.
 
 ## Safety
 

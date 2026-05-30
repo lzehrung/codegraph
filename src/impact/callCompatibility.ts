@@ -3,6 +3,7 @@ import { findReferences, goToDefinition } from "../indexer/navigation.js";
 import { ensureParsedContext } from "../indexer/parse-context.js";
 import { SymbolKind, type ProjectIndex, type Reference, type SymbolDef } from "../indexer/types.js";
 import { supportForFile } from "../languages.js";
+import { isJsTsLanguage } from "../languages/js-family.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import { sliceText, toRange } from "../util/ast.js";
@@ -11,6 +12,11 @@ import {
   getCallCompatibilitySupportedLanguages,
   registerCallCompatibilityExtractors,
 } from "./call-compatibility/providers/index.js";
+import {
+  directSignatureParameterNode,
+  findAncestorOfTypes,
+  findFirstDescendantOfTypes,
+} from "./signature-node-utils.js";
 import type { CallCompatibilityHint, ChangedSymbol, ImpactDiagnostics } from "./types.js";
 
 export interface CallableSignature {
@@ -50,17 +56,6 @@ type AngleMode = "always" | "type-context";
 interface SignatureParameterText {
   text: string;
   skipFirstReceiver: boolean;
-}
-
-function isJsTsLanguage(languageId: string): boolean {
-  return (
-    languageId === "javascript" ||
-    languageId === "typescript" ||
-    languageId === "tsx" ||
-    languageId === "jsx" ||
-    languageId === "js" ||
-    languageId === "ts"
-  );
 }
 
 function supportsCallCompatibilityLanguage(languageId: string): boolean {
@@ -795,30 +790,6 @@ function isThisParameter(parameter: string): boolean {
   return parameter.slice(0, colonIndex).trim() === "this";
 }
 
-function findAncestorOfTypes(node: SyntaxNodeLike | null, types: ReadonlySet<string>): SyntaxNodeLike | null {
-  let current: SyntaxNodeLike | null = node;
-  while (current) {
-    if (types.has(current.type)) {
-      return current;
-    }
-    current = current.parent;
-  }
-  return null;
-}
-
-function findFirstDescendantOfTypes(node: SyntaxNodeLike, types: ReadonlySet<string>): SyntaxNodeLike | null {
-  for (const child of node.namedChildren ?? []) {
-    if (types.has(child.type)) {
-      return child;
-    }
-    const found = findFirstDescendantOfTypes(child, types);
-    if (found) {
-      return found;
-    }
-  }
-  return null;
-}
-
 const callableDeclarationTypes = new Set([
   "function_declaration",
   "function_definition",
@@ -845,15 +816,6 @@ const parameterListTypes = new Set([
   "function_value_parameters",
   "method_parameters",
 ]);
-
-function directSignatureParameterNode(node: SyntaxNodeLike): SyntaxNodeLike | null {
-  return (
-    node.childForFieldName("parameters") ??
-    node.childForFieldName("params") ??
-    node.childForFieldName("parameter") ??
-    null
-  );
-}
 
 function isPythonMethodDeclaration(declaration: SyntaxNodeLike): boolean {
   let current = declaration.parent;

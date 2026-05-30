@@ -27,6 +27,7 @@ import { extractEnclosingBlock, extractLineContext, rangeContains, sameDef } fro
 import { DEFAULT_REF_CONTEXT_LINES } from "./shared.js";
 import { type ScopeIndex } from "./scope.js";
 import { type FileId, type Range } from "../types.js";
+import { isJsTsLanguage } from "../languages/js-family.js";
 import { resolveImportSpecifier } from "../util/resolution.js";
 import { sliceText, toRange } from "../util/ast.js";
 import {
@@ -249,7 +250,7 @@ export async function findReferences(
       exportedNames.push(entry.exportedAs);
     }
   }
-  if (!exportedNames.length) {
+  if (!exportedNames.length && shouldUseLocalNameAsExportFallback(def, parsedContext)) {
     exportedNames.push(def.localName);
   }
 
@@ -381,6 +382,27 @@ export async function findReferences(
     }
   }
 
+  if (shouldScanVerifiedReferences(def, phpQualifiedNames, parsedContext)) {
+    for (const fileId of index.byFile.keys()) {
+      if (hasReachedMaxReferences()) break;
+      const filter = index.bloomFilters?.get(fileId);
+      if (filter && !filter.mightContain(def.localName)) continue;
+      const remainingReferences = maxReferences !== undefined ? Math.max(0, maxReferences - refs.length) : undefined;
+      const ranges = await collectVerifiedNamedNodeReferences(
+        index,
+        fileId,
+        def.localName,
+        def,
+        (params) => goToDefinition(index, params),
+        remainingReferences,
+      );
+      for (const range of ranges) {
+        if (hasReachedMaxReferences()) break;
+        pushRef({ file: fileId, range });
+      }
+    }
+  }
+
   refs.sort((left, right) => {
     if (left.file === right.file) {
       const leftIndex = left.range.start.index ?? 0;
@@ -418,6 +440,53 @@ export async function findReferences(
     references: refs,
     ...(provenance ? { provenance } : {}),
   };
+}
+
+function shouldScanVerifiedReferences(
+  def: SymbolDef,
+  phpQualifiedNames: readonly string[],
+  parsedContext: ParsedFileContext,
+): boolean {
+  if (def.kind !== SymbolKind.Function || phpQualifiedNames.length) {
+    return false;
+  }
+  if (!isJsTsLanguage(parsedContext.sup.id)) {
+    return false;
+  }
+  return isJsTsMethodDefinition(def, parsedContext);
+}
+
+function shouldUseLocalNameAsExportFallback(def: SymbolDef, parsedContext: ParsedFileContext): boolean {
+  if (!isJsTsLanguage(parsedContext.sup.id)) {
+    return true;
+  }
+  return !isJsTsMethodDefinition(def, parsedContext);
+}
+
+function isJsTsMethodDefinition(def: SymbolDef, parsedContext: ParsedFileContext): boolean {
+  if (def.kind !== SymbolKind.Function) {
+    return false;
+  }
+  const start = def.range.start;
+  const position = {
+    row: start.line - 1,
+    column: start.column - 1,
+  };
+  let current: SyntaxNodeLike | null = parsedContext.tree.rootNode.descendantForPosition(position, position);
+  while (current) {
+    if (
+      current.type === "method_definition" ||
+      current.type === "method_signature" ||
+      current.type === "abstract_method_signature"
+    ) {
+      return true;
+    }
+    if (current.type === "function_declaration" || current.type === "program") {
+      return false;
+    }
+    current = current.parent;
+  }
+  return false;
 }
 
 export async function collectNamespaceMemberRefs(

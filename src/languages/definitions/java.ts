@@ -57,6 +57,14 @@ export const JAVA_DEF: LanguageDefinition = {
     memberExpression: "field_access",
   },
   supportsCrossModuleSymbols: true,
+  classifyDefinition: (node) => {
+    const parent = node.parent;
+    if (!parent) return "variable";
+    if (parent.type === "method_declaration" || parent.type === "constructor_declaration") return "method";
+    if (parent.type === "class_declaration") return "class";
+    if (parent.type === "interface_declaration") return "interface";
+    return "variable";
+  },
   createsFunctionScope: (node) => node.type === "method_declaration" || node.type === "constructor_declaration",
   createsBlockScope: (node) => node.type === "block",
   isDeclarationName: (node) => {

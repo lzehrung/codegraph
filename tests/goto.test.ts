@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
+import { goToDefinition } from "../src/index.js";
 import { createTestIndex, createTestIndexFromFiles, testGoToDefinition } from "./test-utils.js";
 
 describe("Go to Definition", () => {
@@ -316,6 +317,122 @@ describe("Go to Definition", () => {
   });
 
   describe("TypeScript", () => {
+    it("resolves class method calls with high-confidence receivers", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-method-goto-"));
+      try {
+        const serviceFile = path.join(root, "service.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(
+          serviceFile,
+          [
+            "export class Service {",
+            "  run(value: number) {",
+            "    return value;",
+            "  }",
+            "}",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        await fsp.writeFile(
+          consumerFile,
+          [
+            'import { Service } from "./service";',
+            "new Service().run(1);",
+            "const service = new Service();",
+            "service.run(2);",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        const index = await createTestIndexFromFiles(root, [serviceFile, consumerFile]);
+
+        await testGoToDefinition(index, consumerFile, 2, 15, serviceFile, 2);
+        await testGoToDefinition(index, consumerFile, 4, 9, serviceFile, 2);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("does not resolve ambiguous same-name methods without receiver proof", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-method-goto-ambiguous-"));
+      try {
+        const serviceFile = path.join(root, "service.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(
+          serviceFile,
+          [
+            "export class First {",
+            "  run() { return 1; }",
+            "}",
+            "export class Second {",
+            "  run() { return 2; }",
+            "}",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        await fsp.writeFile(
+          consumerFile,
+          [
+            'import { First, Second } from "./service";',
+            "declare const unknown: First | Second;",
+            "unknown.run();",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        const index = await createTestIndexFromFiles(root, [serviceFile, consumerFile]);
+
+        await testGoToDefinition(index, consumerFile, 3, 9, undefined, undefined, "not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("does not reuse constructor proof across a shadowed receiver binding", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-method-goto-shadowed-receiver-"));
+      try {
+        const serviceFile = path.join(root, "service.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(
+          serviceFile,
+          [
+            "export class Service {",
+            "  run() { return 1; }",
+            "}",
+            "export class Other {",
+            "  run() { return 2; }",
+            "}",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        await fsp.writeFile(
+          consumerFile,
+          [
+            'import { Service, Other } from "./service";',
+            "const service = new Service();",
+            "function call(service: Other) {",
+            "  service.run();",
+            "}",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        const index = await createTestIndexFromFiles(root, [serviceFile, consumerFile]);
+
+        const result = await goToDefinition(index, { file: consumerFile, line: 4, column: 11 });
+
+        if (result.status === "ok") {
+          expect(result.definition.file).not.toBe(serviceFile);
+          expect(result.definition.range.start.line).not.toBe(2);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("should find definition of imported function", async () => {
       const index = await createTestIndex("typescript");
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");

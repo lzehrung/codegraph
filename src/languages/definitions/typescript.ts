@@ -151,6 +151,9 @@ const BASE_GRAPH = {
   `,
   locals: `
     (function_declaration name: (identifier) @name)
+    (method_definition name: (property_identifier) @name)
+    (method_signature name: (property_identifier) @name)
+    (abstract_method_signature name: (property_identifier) @name)
     (class_declaration name: (type_identifier) @name)
     (variable_declarator name: (identifier) @name)
     (interface_declaration name: (type_identifier) @name)
@@ -177,6 +180,9 @@ const BASE_HELPERS = {
   classifyDefinition: (n: SyntaxNodeLike) => {
     const t = n.parent?.type;
     if (t === "function_declaration") return "function";
+    if (t === "method_definition") return "function";
+    if (t === "method_signature") return "function";
+    if (t === "abstract_method_signature") return "function";
     if (t === "class_declaration") return "class";
     if (t === "interface_declaration") return "interface";
     if (t === "type_alias_declaration") return "type";

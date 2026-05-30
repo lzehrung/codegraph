@@ -4,10 +4,8 @@
  * 1. signatureChanged hint must only fire when params actually changed
  * 2. seedTransitiveFromFiles must run even when symbols were also detected
  * 3. findNodesInLines pruning – empty changedLines returns no nodes
- * 4. findDeclarationNameInAncestors – skips names not tracked in locals,
- *    so a method-body edit is correctly attributed to the containing class
- * 5. method_definition added to isDeclarationName for JS and TS, while
- *    unindexed method signature edits still preserve a class-level signal
+ * 4. JS/TS method bodies and signatures map to method locals
+ * 5. method_definition names stay declaration-aware for changed-symbol mapping
  * 6. appendUniqueSpecifiers deduplication is idempotent and O(n) per call
  * 7. TypeScript ambient module augmentation creates a file-graph edge
  */
@@ -297,8 +295,8 @@ describe("collectChangedLines", () => {
 // 4. method_definition recognized as declaration name for JS/TS
 // ---------------------------------------------------------------------------
 
-describe("method_definition in isDeclarationName", () => {
-  it("JS – a method-body edit is attributed to the enclosing class", async () => {
+describe("method_definition locals", () => {
+  it("JS – a method-body edit is attributed to the method local", async () => {
     await withTmpDir("method-def-js", async (root) => {
       await fsp.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "test", type: "module" }));
       await fsp.writeFile(
@@ -322,15 +320,15 @@ describe("method_definition in isDeclarationName", () => {
         { oldStart: 3, newStart: 3, lines: ["+    // body edit"] },
       ]);
 
-      // The change should be attributed to the Calculator class (since methods
-      // aren't tracked as separate locals, the search climbs to the class)
-      const calculator = changed.find((symbol) => symbol.name === "Calculator");
-      expect(calculator).toBeDefined();
-      expect(calculator?.signatureChanged).not.toBe(true);
+      const add = changed.find((symbol) => symbol.name === "add");
+      expect(add).toBeDefined();
+      expect(add?.kind).toBe("function");
+      expect(add?.signatureChanged).not.toBe(true);
+      expect(changed.some((symbol) => symbol.name === "Calculator")).toBe(false);
     });
   });
 
-  it("TS – a method-body edit is attributed to the enclosing class", async () => {
+  it("TS – a method-body edit is attributed to the method local", async () => {
     await withTmpDir("method-def-ts", async (root) => {
       await fsp.writeFile(path.join(root, "tsconfig.json"), JSON.stringify({ compilerOptions: { strict: true } }));
       await fsp.writeFile(
@@ -352,10 +350,11 @@ describe("method_definition in isDeclarationName", () => {
         { oldStart: 3, newStart: 3, lines: ["+    // body edit"] },
       ]);
 
-      // Should be attributed to UserService (method not a separate local in TS)
-      const userService = changed.find((symbol) => symbol.name === "UserService");
-      expect(userService).toBeDefined();
-      expect(userService?.signatureChanged).not.toBe(true);
+      const fetchUser = changed.find((symbol) => symbol.name === "fetchUser");
+      expect(fetchUser).toBeDefined();
+      expect(fetchUser?.kind).toBe("function");
+      expect(fetchUser?.signatureChanged).not.toBe(true);
+      expect(changed.some((symbol) => symbol.name === "UserService")).toBe(false);
     });
   });
 
@@ -383,7 +382,7 @@ describe("method_definition in isDeclarationName", () => {
       consumerSource: 'import { UserService } from "./service"; new UserService().fetchUser(1);\n',
     },
   ])(
-    "preserves an enclosing-class signatureChanged signal for unindexed $label method parameter edits",
+    "sets signatureChanged on the $label method local when method parameters change",
     async ({ label, file, configFile, config, currentMethod, oldMethod, newMethod, consumerFile, consumerSource }) => {
       await withTmpDir(`method-param-${label.toLowerCase()}`, async (root) => {
         await fsp.writeFile(path.join(root, configFile), JSON.stringify(config));
@@ -405,9 +404,10 @@ describe("method_definition in isDeclarationName", () => {
           },
         ]);
 
-        const userService = changed.find((symbol) => symbol.name === "UserService");
-        expect(userService).toBeDefined();
-        expect(userService?.signatureChanged).toBe(true);
+        const fetchUser = changed.find((symbol) => symbol.name === "fetchUser");
+        expect(fetchUser).toBeDefined();
+        expect(fetchUser?.kind).toBe("function");
+        expect(fetchUser?.signatureChanged).toBe(true);
 
         const result = nonCompact(
           await analyzeImpactFromDiff(root, index, {
@@ -427,10 +427,9 @@ describe("method_definition in isDeclarationName", () => {
             includeTests: true,
           }),
         );
-        const changedClass = result.changedSymbols.find((symbol) => symbol.name === "UserService");
+        const changedMethod = result.changedSymbols.find((symbol) => symbol.name === "fetchUser");
         const impact = result.impacted.find((item) => item.file === consumerFile);
-        expect(changedClass?.signatureChanged).toBe(true);
-        expect(changedClass?.callCompatibility).toBeUndefined();
+        expect(changedMethod?.signatureChanged).toBe(true);
         expect(impact?.explain?.hints).toContain("signatureChanged");
       });
     },

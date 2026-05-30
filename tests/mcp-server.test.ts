@@ -331,24 +331,32 @@ describe("codegraph MCP handlers", () => {
     expect(refs.references).toHaveLength(1);
   });
 
-  it("advertises refs as either handle or file position input", () => {
+  it("advertises refs with an OpenAI-compatible flat object schema", () => {
     const refsTool = listCodegraphMcpTools().find((tool) => tool.name === "refs");
-    expect(refsTool?.inputSchema).toEqual(
-      expect.objectContaining({
-        oneOf: [
-          expect.objectContaining({
-            required: ["handle"],
-            not: expect.objectContaining({
-              anyOf: [{ required: ["file"] }, { required: ["line"] }, { required: ["column"] }],
-            }),
-          }),
-          expect.objectContaining({
-            required: ["file", "line", "column"],
-            not: { required: ["handle"] },
-          }),
-        ],
-      }),
+    const refsSchema = readObject(refsTool!.inputSchema);
+    const refsProperties = readObject(refsSchema.properties);
+
+    expect(refsSchema.type).toBe("object");
+    expect(refsSchema.required).toBeUndefined();
+    expect(refsSchema.oneOf).toBeUndefined();
+    expect(refsSchema.anyOf).toBeUndefined();
+    expect(refsSchema.allOf).toBeUndefined();
+    expect(refsSchema.not).toBeUndefined();
+    expect(refsProperties.handle).toEqual(expect.objectContaining({ type: "string" }));
+    expect(refsProperties.file).toEqual(expect.objectContaining({ type: "string" }));
+    expect(refsProperties.line).toEqual(expect.objectContaining({ type: "integer", minimum: 1 }));
+    expect(refsProperties.column).toEqual(expect.objectContaining({ type: "integer", minimum: 0 }));
+  });
+
+  it("keeps refs handle-or-position validation in the handler", async () => {
+    const handlers = createCodegraphMcpHandlers({ root: process.cwd() });
+
+    await expect(handlers.refs({ file: "src/index.ts", line: 1 })).rejects.toThrow(
+      "refs requires either handle or file, line, and column.",
     );
+    await expect(
+      handlers.refs({ handle: "symbol:src/index.ts#test", file: "src/index.ts", line: 1, column: 1 }),
+    ).rejects.toThrow("refs requires either handle or file, line, and column.");
   });
 
   it("keeps query_sqlite read-only", async () => {

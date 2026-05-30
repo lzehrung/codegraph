@@ -262,6 +262,96 @@ describe("Find References", () => {
     });
   });
 
+  describe("TypeScript method references", () => {
+    it("finds class method references only through verified receivers", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-method-refs-"));
+      try {
+        const serviceFile = path.join(root, "service.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(
+          serviceFile,
+          [
+            "export class Service {",
+            "  run(value: number) {",
+            "    return value;",
+            "  }",
+            "}",
+            "export class Other {",
+            "  run(value: number) {",
+            "    return value;",
+            "  }",
+            "}",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        await fsp.writeFile(
+          consumerFile,
+          [
+            'import { Other, Service } from "./service";',
+            "new Service().run(1);",
+            "const service = new Service();",
+            "service.run(2);",
+            "new Other().run(3);",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        const index = await createTestIndexFromFiles(root, [serviceFile, consumerFile]);
+
+        const result = await testFindReferences(index, serviceFile, 2, 3, 3);
+
+        expect(result.status).toBe("ok");
+        expectReferenceAt(result, serviceFile, 2);
+        expectReferenceAt(result, consumerFile, 2);
+        expectReferenceAt(result, consumerFile, 4);
+        if (result.status === "ok") {
+          expect(
+            result.references.some((reference) => reference.file === consumerFile && reference.range.start.line === 5),
+          ).toBe(false);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("does not treat class methods as module namespace exports", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-method-refs-namespace-export-"));
+      try {
+        const serviceFile = path.join(root, "service.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(serviceFile, "export class Service {\n  run(): void {}\n}\n", "utf8");
+        await fsp.writeFile(
+          consumerFile,
+          'import * as api from "./service";\napi.run();\nconst service = new api.Service();\nservice.run();\n',
+          "utf8",
+        );
+
+        const index = await createTestIndexFromFiles(root, [serviceFile, consumerFile]);
+        const result = await indexer.findReferences(index, { file: serviceFile, line: 2, column: 3 });
+
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(result.references).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                file: serviceFile,
+                range: expect.objectContaining({
+                  start: expect.objectContaining({ line: 2 }),
+                }),
+              }),
+            ]),
+          );
+          expect(
+            result.references.some((reference) => reference.file === consumerFile && reference.range.start.line === 2),
+          ).toBe(false);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+  });
+
   describe("TypeScript", () => {
     it("should find all references to exported function", async () => {
       const index = await createTestIndex("typescript");

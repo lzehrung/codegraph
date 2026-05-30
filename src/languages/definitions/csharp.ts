@@ -65,6 +65,14 @@ export const CSHARP_DEF: LanguageDefinition = {
     memberExpression: "member_access_expression",
   },
   supportsCrossModuleSymbols: true,
+  classifyDefinition: (node) => {
+    const parent = node.parent;
+    if (!parent) return "variable";
+    if (parent.type === "method_declaration" || parent.type === "constructor_declaration") return "method";
+    if (parent.type === "class_declaration") return "class";
+    if (parent.type === "interface_declaration") return "interface";
+    return "variable";
+  },
   createsFunctionScope: (node) => node.type === "method_declaration" || node.type === "constructor_declaration",
   createsBlockScope: (node) => node.type === "block",
   isDeclarationName: (node) => {

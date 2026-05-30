@@ -55,6 +55,86 @@ describe("Impact Analyzer Edge Cases", () => {
       }
     });
 
+    it("flags likely argument-count mismatches for verified TypeScript method receivers", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-method-call-compat-"));
+      try {
+        await fsp.mkdir(path.join(root, "src"), { recursive: true });
+        const apiFile = path.join(root, "src", "api.ts");
+        const mainFile = path.join(root, "src", "main.ts");
+        await fsp.writeFile(
+          apiFile,
+          [
+            "export class Service {",
+            "  run(a: string, b: number) { return a + b; }",
+            "}",
+            "export class Other {",
+            "  run(a: string, b: number) { return a + b; }",
+            "}",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        await fsp.writeFile(
+          mainFile,
+          [
+            'import { Other, Service } from "./api";',
+            'new Service().run("x");',
+            "const service = new Service();",
+            'service.run("y");',
+            'new Other().run("z", 1);',
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+
+        const index = await buildProjectIndex(root, { cache: "memory" });
+        const diffText = `diff --git a/src/api.ts b/src/api.ts
+--- a/src/api.ts
++++ b/src/api.ts
+@@ -1,5 +1,5 @@
+ export class Service {
+-  run(a: string) { return a; }
++  run(a: string, b: number) { return a + b; }
+ }
+ export class Other {
+   run(a: string, b: number) { return a + b; }
+`;
+
+        const result = await analyzeImpactFromDiff(root, index, {
+          provider: "raw",
+          diffText,
+          includeTests: true,
+        });
+
+        if ("files" in result) {
+          throw new Error("Expected full impact report");
+        }
+
+        const run = result.changedSymbols.find(
+          (symbol) => symbol.name === "run" && symbol.range.start.line === 2,
+        );
+        expect(run?.callCompatibility).toContainEqual(
+          expect.objectContaining({
+            status: "likely_mismatch",
+            reason: "argument_count_below_minimum",
+            callsiteFile: "src/main.ts",
+            callsiteRange: expect.objectContaining({ start: expect.objectContaining({ line: 2 }) }),
+          }),
+        );
+        expect(run?.callCompatibility).toContainEqual(
+          expect.objectContaining({
+            status: "likely_mismatch",
+            reason: "argument_count_below_minimum",
+            callsiteFile: "src/main.ts",
+            callsiteRange: expect.objectContaining({ start: expect.objectContaining({ line: 4 }) }),
+          }),
+        );
+        expect(run?.callCompatibility?.some((hint) => hint.callsiteRange.start.line === 5)).toBe(false);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
     it("does not flag extra arguments for changed rest signatures", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-rest-"));
       try {
