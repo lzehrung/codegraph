@@ -1,5 +1,10 @@
 import fs from "node:fs/promises";
-import { findDuplicateContext, type DuplicateGroup } from "../duplicates.js";
+import {
+  findDuplicateContext,
+  type DuplicateGroup,
+  type DuplicateSuggestion,
+  type DuplicateTarget,
+} from "../duplicates.js";
 import { findReferences } from "../indexer/navigation.js";
 import type { Reference, SymbolDef } from "../indexer/types.js";
 import { getDependencies, getReverseDependencies } from "../graphs/queries.js";
@@ -655,7 +660,7 @@ async function collectDuplicateContext(
     limit,
   });
   return {
-    items: result.groups.map(summarizeDuplicateGroup),
+    items: result.groups.map((group) => summarizeDuplicateGroup(group, result.target)),
     omitted: result.omittedCounts.groups,
   };
 }
@@ -682,14 +687,36 @@ function duplicateRepairHint(group: DuplicateGroup): string {
   return "Check related duplicate implementation for drift.";
 }
 
-function summarizeDuplicateGroup(group: DuplicateGroup): AgentExplanationDuplicate {
+function duplicateUnitTouchesTarget(side: DuplicateGroup["primaryLeft"], target: DuplicateTarget): boolean {
+  if (side.file !== target.file) return false;
+  if (target.startLine === undefined) return true;
+  const targetEndLine = target.endLine ?? target.startLine;
+  return side.startLine <= targetEndLine && target.startLine <= side.endLine;
+}
+
+function duplicatePairForTarget(
+  group: DuplicateGroup,
+  target: DuplicateTarget,
+): Pick<DuplicateSuggestion, "left" | "right"> {
+  if (duplicateUnitTouchesTarget(group.primaryLeft, target) || duplicateUnitTouchesTarget(group.primaryRight, target)) {
+    return { left: group.primaryLeft, right: group.primaryRight };
+  }
+  return (
+    group.variants.find(
+      (variant) => duplicateUnitTouchesTarget(variant.left, target) || duplicateUnitTouchesTarget(variant.right, target),
+    ) ?? { left: group.primaryLeft, right: group.primaryRight }
+  );
+}
+
+function summarizeDuplicateGroup(group: DuplicateGroup, target: DuplicateTarget): AgentExplanationDuplicate {
+  const pair = duplicatePairForTarget(group, target);
   return {
     id: group.id,
     confidence: group.confidence,
     cloneType: group.cloneType,
     score: group.score,
-    left: summarizeDuplicateSide(group.primaryLeft),
-    right: summarizeDuplicateSide(group.primaryRight),
+    left: summarizeDuplicateSide(pair.left),
+    right: summarizeDuplicateSide(pair.right),
     rawPairCount: group.rawPairCount,
     reasons: group.reasons,
     hint: duplicateRepairHint(group),

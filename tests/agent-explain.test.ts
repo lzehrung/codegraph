@@ -44,6 +44,15 @@ async function mkDuplicateRepo(): Promise<string> {
   return root;
 }
 
+async function mkManyDuplicateRepo(): Promise<string> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-explain-many-dups-"));
+  await fs.mkdir(path.join(root, "src"), { recursive: true });
+  for (const name of ["a", "b", "c", "d", "e", "f", "g"]) {
+    await fs.writeFile(path.join(root, "src", `${name}.ts`), duplicateSource);
+  }
+  return root;
+}
+
 describe("agent explain", () => {
   it("explains a file with symbols, dependencies, reverse dependencies, and follow-ups", async () => {
     const root = await mkRepo();
@@ -316,5 +325,18 @@ describe("agent explain", () => {
     expect(explanation.duplicates).toHaveLength(1);
     expect(explanation.duplicates[0]?.left.name).toBe("normalizeInvoiceRows");
     expect(explanation.omittedCounts.duplicates).toBe(0);
+  });
+
+  it("summarizes duplicate variants that touch the explained file", async () => {
+    const root = await mkManyDuplicateRepo();
+
+    const explanation = await explainCodegraphTarget({ root, target: "src/g.ts", maxDuplicates: 5 });
+
+    expect(explanation.duplicates.length).toBeGreaterThan(0);
+    for (const duplicate of explanation.duplicates) {
+      expect(duplicate.left.file === "src/g.ts" || duplicate.right.file === "src/g.ts").toBeTruthy();
+    }
+    const duplicateFollowUp = explanation.followUps.find((command) => command.includes("codegraph duplicates"));
+    expect(duplicateFollowUp).toContain("src/g.ts");
   });
 });
