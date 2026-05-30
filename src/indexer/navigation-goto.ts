@@ -1,4 +1,5 @@
 import type { LanguageSupport } from "../languages.js";
+import { isJsTsLanguage } from "../languages/js-family.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
 import { sliceText } from "../util/ast.js";
 import {
@@ -214,17 +215,6 @@ async function resolveReceiverDefinition(
     return direct.def;
   }
   return null;
-}
-
-function isJsTsLanguage(languageId: string): boolean {
-  return (
-    languageId === "javascript" ||
-    languageId === "jsx" ||
-    languageId === "js" ||
-    languageId === "typescript" ||
-    languageId === "tsx" ||
-    languageId === "ts"
-  );
 }
 
 function receiverConstructorExpression(

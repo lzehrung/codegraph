@@ -3,6 +3,7 @@ import { findReferences, goToDefinition } from "../indexer/navigation.js";
 import { ensureParsedContext } from "../indexer/parse-context.js";
 import { SymbolKind, type ProjectIndex, type Reference, type SymbolDef } from "../indexer/types.js";
 import { supportForFile } from "../languages.js";
+import { isJsTsLanguage } from "../languages/js-family.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import { sliceText, toRange } from "../util/ast.js";
@@ -50,17 +51,6 @@ type AngleMode = "always" | "type-context";
 interface SignatureParameterText {
   text: string;
   skipFirstReceiver: boolean;
-}
-
-function isJsTsLanguage(languageId: string): boolean {
-  return (
-    languageId === "javascript" ||
-    languageId === "typescript" ||
-    languageId === "tsx" ||
-    languageId === "jsx" ||
-    languageId === "js" ||
-    languageId === "ts"
-  );
 }
 
 function supportsCallCompatibilityLanguage(languageId: string): boolean {

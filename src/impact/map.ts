@@ -11,6 +11,7 @@ import {
 import { isGraphOnlyLanguage } from "../documentLinks.js";
 import { supportForFile } from "../languages.js";
 import type { LanguageSupport } from "../languages.js";
+import { isJsTsLanguage } from "../languages/js-family.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { FileChange, ChangedSymbol } from "./types.js";
 import { collectChangedLines } from "./hunks.js";
@@ -430,17 +431,6 @@ function directSignatureParameterNode(node: SyntaxNodeLike): SyntaxNodeLike | nu
     node.childForFieldName("params") ??
     node.childForFieldName("parameter") ??
     null
-  );
-}
-
-function isJsTsLanguage(languageId: string): boolean {
-  return (
-    languageId === "js" ||
-    languageId === "ts" ||
-    languageId === "tsx" ||
-    languageId === "jsx" ||
-    languageId === "javascript" ||
-    languageId === "typescript"
   );
 }
 

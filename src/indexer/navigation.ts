@@ -27,6 +27,7 @@ import { extractEnclosingBlock, extractLineContext, rangeContains, sameDef } fro
 import { DEFAULT_REF_CONTEXT_LINES } from "./shared.js";
 import { type ScopeIndex } from "./scope.js";
 import { type FileId, type Range } from "../types.js";
+import { isJsTsLanguage } from "../languages/js-family.js";
 import { resolveImportSpecifier } from "../util/resolution.js";
 import { sliceText, toRange } from "../util/ast.js";
 import {
@@ -468,17 +469,6 @@ function shouldScanVerifiedReferences(
     current = current.parent;
   }
   return false;
-}
-
-function isJsTsLanguage(languageId: string): boolean {
-  return (
-    languageId === "javascript" ||
-    languageId === "jsx" ||
-    languageId === "js" ||
-    languageId === "typescript" ||
-    languageId === "tsx" ||
-    languageId === "ts"
-  );
 }
 
 export async function collectNamespaceMemberRefs(
