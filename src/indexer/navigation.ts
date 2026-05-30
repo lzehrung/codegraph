@@ -381,7 +381,7 @@ export async function findReferences(
     }
   }
 
-  if (shouldScanVerifiedReferences(def, phpQualifiedNames)) {
+  if (shouldScanVerifiedReferences(def, phpQualifiedNames, parsedContext)) {
     for (const fileId of index.byFile.keys()) {
       if (hasReachedMaxReferences()) break;
       const filter = index.bloomFilters?.get(fileId);
@@ -441,8 +441,44 @@ export async function findReferences(
   };
 }
 
-function shouldScanVerifiedReferences(def: SymbolDef, phpQualifiedNames: readonly string[]): boolean {
-  return def.kind === SymbolKind.Function && !phpQualifiedNames.length;
+function shouldScanVerifiedReferences(
+  def: SymbolDef,
+  phpQualifiedNames: readonly string[],
+  parsedContext: ParsedFileContext,
+): boolean {
+  if (def.kind !== SymbolKind.Function || phpQualifiedNames.length) {
+    return false;
+  }
+  if (!isJsTsLanguage(parsedContext.sup.id)) {
+    return false;
+  }
+  const start = def.range.start;
+  const position = {
+    row: start.line - 1,
+    column: start.column - 1,
+  };
+  let current: SyntaxNodeLike | null = parsedContext.tree.rootNode.descendantForPosition(position, position);
+  while (current) {
+    if (current.type === "method_definition") {
+      return true;
+    }
+    if (current.type === "function_declaration" || current.type === "program") {
+      return false;
+    }
+    current = current.parent;
+  }
+  return false;
+}
+
+function isJsTsLanguage(languageId: string): boolean {
+  return (
+    languageId === "javascript" ||
+    languageId === "jsx" ||
+    languageId === "js" ||
+    languageId === "typescript" ||
+    languageId === "tsx" ||
+    languageId === "ts"
+  );
 }
 
 export async function collectNamespaceMemberRefs(
