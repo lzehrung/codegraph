@@ -4,8 +4,11 @@ import type { SyntaxNodeLike } from "../languages/types.js";
 import { SymbolKind, type ExportEntry, type ProjectIndex, type SymbolDef, type SymbolHandle } from "./types.js";
 import type { BindingKind } from "./scope-types.js";
 
+const DESCENDANT_DECLARATION_CONTAINER_TYPES = new Set(["function_definition", "declaration"]);
+
 export function declarationKindToBindingKind(kind: string): BindingKind {
   if (kind === "function") return "function";
+  if (kind === "method") return "function";
   if (kind === "class" || kind === "interface") return "class";
   if (kind === "type") return "type";
   return "local";
@@ -47,7 +50,33 @@ export function findTrackedDeclarationNameInAncestors(
       }
       return child;
     }
+    if (DESCENDANT_DECLARATION_CONTAINER_TYPES.has(current.type)) {
+      const nested = findTrackedDeclarationNameInDescendants(current, support, trackedPositions);
+      if (nested) return nested;
+    }
     current = current.parent;
+  }
+  return null;
+}
+
+function findTrackedDeclarationNameInDescendants(
+  node: SyntaxNodeLike,
+  support: LanguageSupport,
+  trackedPositions?: ReadonlySet<string>,
+): SyntaxNodeLike | null {
+  const queue: SyntaxNodeLike[] = [...(node.namedChildren || [])];
+  while (queue.length) {
+    const current = queue.shift();
+    if (!current) continue;
+    if (support.isDeclarationName?.(current)) {
+      if (!trackedPositions) return current;
+      const line = (current.startPosition?.row ?? 0) + 1;
+      const column = (current.startPosition?.column ?? 0) + 1;
+      if (trackedPositions.has(`${line}:${column}`)) {
+        return current;
+      }
+    }
+    queue.push(...(current.namedChildren || []));
   }
   return null;
 }

@@ -105,6 +105,7 @@ export function buildScopeIndexFromSource(
     if (
       node.type === "function_declaration" ||
       node.type === "function_definition" ||
+      node.type === "method_definition" ||
       node.type === "method_declaration" ||
       node.type === "method" ||
       node.type === "singleton_method" ||
@@ -152,6 +153,7 @@ export function buildScopeIndexFromSource(
       if (
         node.type === "function_declaration" ||
         node.type === "function_definition" ||
+        node.type === "method_definition" ||
         node.type === "method_declaration" ||
         node.type === "method" ||
         node.type === "singleton_method" ||
@@ -231,6 +233,7 @@ export function buildScopeIndexFromSource(
         if (
           (type === "function_declaration" ||
             type === "function_definition" ||
+            type === "method_definition" ||
             type === "method_declaration" ||
             type === "method" ||
             type === "singleton_method" ||

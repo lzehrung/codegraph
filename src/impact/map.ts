@@ -1,5 +1,5 @@
-import type { FileId } from "../types.js";
-import { type ProjectIndex, type SymbolDef, type SymbolHandle } from "../indexer/types.js";
+import type { FileId, Range } from "../types.js";
+import { type ProjectIndex, SymbolKind, type SymbolDef, type SymbolHandle } from "../indexer/types.js";
 import { ensureParsedContext } from "../indexer/parse-context.js";
 import {
   buildTrackedSymbolPositions,
@@ -14,6 +14,7 @@ import type { LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { FileChange, ChangedSymbol } from "./types.js";
 import { collectChangedLines } from "./hunks.js";
+import { toRange } from "../util/ast.js";
 
 export { collectChangedLines } from "./hunks.js";
 
@@ -108,7 +109,8 @@ export async function locateChangedSymbolsWithLines(
   }
 
   const changedSymbols: ChangedSymbol[] = [];
-  for (const [handle, entry] of seenHandles) {
+  const preciseEntries = removeOuterSymbolsCoveredByNestedChanges(seenHandles, changedByteRanges, changedLines, tree, sup);
+  for (const [handle, entry] of preciseEntries) {
     changedSymbols.push({
       id: handle,
       file,
@@ -123,6 +125,107 @@ export async function locateChangedSymbolsWithLines(
   }
 
   return { changedSymbols, changedLines, parseFailed: false };
+}
+
+function removeOuterSymbolsCoveredByNestedChanges<T extends { symbolDef: SymbolDef }>(
+  entries: ReadonlyMap<SymbolHandle, T>,
+  changedByteRanges: ReadonlyArray<ByteRange>,
+  changedLines: ReadonlySet<number>,
+  tree: SyntaxTreeLike,
+  support: LanguageSupport,
+): Array<[SymbolHandle, T]> {
+  const declarationRanges = new Map<SymbolHandle, Range>();
+  for (const [handle, entry] of entries) {
+    declarationRanges.set(handle, declarationRangeForSymbol(tree, entry.symbolDef, support));
+  }
+
+  return [...entries].filter(([handle, entry]) => {
+    const entryRange = declarationRanges.get(handle) ?? entry.symbolDef.range;
+    for (const [otherHandle, otherEntry] of entries) {
+      if (otherHandle === handle) continue;
+      const otherRange = declarationRanges.get(otherHandle) ?? otherEntry.symbolDef.range;
+      if (!rangeStrictlyContains(entryRange, otherRange)) continue;
+      const byteRangesAreNested = changedRangesForOuterAreContainedByInner(entryRange, otherRange, changedByteRanges);
+      const changedLinesAreNested = changedLinesForOuterAreContainedByInner(entryRange, otherRange, changedLines);
+      if (byteRangesAreNested || changedLinesAreNested) {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
+function declarationRangeForSymbol(tree: SyntaxTreeLike, symbolDef: SymbolDef, support: LanguageSupport): Range {
+  const pos = {
+    row: symbolDef.range.start.line - 1,
+    column: symbolDef.range.start.column - 1,
+  };
+  let current: SyntaxNodeLike | null = tree.rootNode.descendantForPosition(pos, pos);
+  while (current) {
+    const declarationName = findDeclarationNameDescendant(current, symbolDef.range, support);
+    if (declarationName && isSymbolDeclarationRangeNode(current, symbolDef)) {
+      return toRange(current);
+    }
+    current = current.parent;
+  }
+  return symbolDef.range;
+}
+
+const SYMBOL_DECLARATION_RANGE_TYPES = new Set([
+  "function_declaration",
+  "function_definition",
+  "method_definition",
+  "method_declaration",
+  "method",
+  "singleton_method",
+  "function_item",
+  "class_declaration",
+  "class_definition",
+  "class",
+  "class_specifier",
+  "interface_declaration",
+  "struct_item",
+  "struct_specifier",
+  "trait_item",
+  "enum_item",
+  "enum_specifier",
+  "object_declaration",
+  "protocol_declaration",
+  "namespace_definition",
+  "module",
+  "mod_item",
+]);
+
+function isSymbolDeclarationRangeNode(node: SyntaxNodeLike, symbolDef: SymbolDef): boolean {
+  if (node.type === "variable_declaration") {
+    return symbolDef.kind === SymbolKind.Class || symbolDef.kind === SymbolKind.TypeAlias;
+  }
+  return SYMBOL_DECLARATION_RANGE_TYPES.has(node.type);
+}
+
+function findDeclarationNameDescendant(
+  node: SyntaxNodeLike,
+  symbolRange: Range,
+  support: LanguageSupport,
+): SyntaxNodeLike | null {
+  const queue: SyntaxNodeLike[] = [...(node.namedChildren ?? [])];
+  while (queue.length) {
+    const current = queue.shift();
+    if (!current) continue;
+    if (support.isDeclarationName(current) && sameRangeStartPosition(toRange(current), symbolRange)) {
+      return current;
+    }
+    queue.push(...(current.namedChildren ?? []));
+  }
+  return null;
+}
+
+function sameRangeStartPosition(left: Range, right: Range): boolean {
+  return (
+    left.start.line === right.start.line &&
+    left.start.column === right.start.column &&
+    left.start.index === right.start.index
+  );
 }
 
 export async function mapChangedLinesToSymbols(
@@ -380,6 +483,60 @@ function signatureParameterSpan(declNode: SyntaxNodeLike): ByteRange | null {
 
 function byteRangesOverlap(left: ByteRange, right: ByteRange): boolean {
   return left.start < right.end && left.end > right.start;
+}
+
+function rangeStrictlyContains(outer: Range, inner: Range): boolean {
+  const startsBeforeOrEqual =
+    outer.start.line < inner.start.line ||
+    (outer.start.line === inner.start.line && outer.start.column <= inner.start.column);
+  const endsAfterOrEqual =
+    outer.end.line > inner.end.line || (outer.end.line === inner.end.line && outer.end.column >= inner.end.column);
+  return startsBeforeOrEqual && endsAfterOrEqual && !sameRangeStartPosition(outer, inner);
+}
+
+function rangeByteBounds(range: Range): ByteRange | null {
+  const start = range.start.index;
+  const end = range.end.index;
+  if (start === undefined || end === undefined) {
+    return null;
+  }
+  return { start, end };
+}
+
+function byteRangeContains(outer: ByteRange, inner: ByteRange): boolean {
+  return outer.start <= inner.start && outer.end >= inner.end;
+}
+
+function changedRangesForOuterAreContainedByInner(
+  outer: Range,
+  inner: Range,
+  changedByteRanges: ReadonlyArray<ByteRange>,
+): boolean {
+  const outerBounds = rangeByteBounds(outer);
+  const innerBounds = rangeByteBounds(inner);
+  if (!outerBounds || !innerBounds) {
+    return false;
+  }
+
+  const relevantChangedRanges = changedByteRanges.filter((changedRange) => byteRangesOverlap(changedRange, outerBounds));
+  if (!relevantChangedRanges.length) {
+    return false;
+  }
+  return relevantChangedRanges.every((changedRange) => byteRangeContains(innerBounds, changedRange));
+}
+
+function changedLinesForOuterAreContainedByInner(
+  outer: Range,
+  inner: Range,
+  changedLines: ReadonlySet<number>,
+): boolean {
+  const relevantChangedLines = [...changedLines].filter(
+    (line) => line >= outer.start.line && line <= outer.end.line,
+  );
+  if (!relevantChangedLines.length) {
+    return false;
+  }
+  return relevantChangedLines.every((line) => line >= inner.start.line && line <= inner.end.line);
 }
 
 function spanOverlapsAnyChangedRange(span: ByteRange, changedByteRanges: ReadonlyArray<ByteRange>): boolean {

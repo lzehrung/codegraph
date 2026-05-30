@@ -381,6 +381,27 @@ export async function findReferences(
     }
   }
 
+  if (shouldScanVerifiedReferences(def, phpQualifiedNames)) {
+    for (const fileId of index.byFile.keys()) {
+      if (hasReachedMaxReferences()) break;
+      const filter = index.bloomFilters?.get(fileId);
+      if (filter && !filter.mightContain(def.localName)) continue;
+      const remainingReferences = maxReferences !== undefined ? Math.max(0, maxReferences - refs.length) : undefined;
+      const ranges = await collectVerifiedNamedNodeReferences(
+        index,
+        fileId,
+        def.localName,
+        def,
+        (params) => goToDefinition(index, params),
+        remainingReferences,
+      );
+      for (const range of ranges) {
+        if (hasReachedMaxReferences()) break;
+        pushRef({ file: fileId, range });
+      }
+    }
+  }
+
   refs.sort((left, right) => {
     if (left.file === right.file) {
       const leftIndex = left.range.start.index ?? 0;
@@ -418,6 +439,10 @@ export async function findReferences(
     references: refs,
     ...(provenance ? { provenance } : {}),
   };
+}
+
+function shouldScanVerifiedReferences(def: SymbolDef, phpQualifiedNames: readonly string[]): boolean {
+  return def.kind === SymbolKind.Function && !phpQualifiedNames.length;
 }
 
 export async function collectNamespaceMemberRefs(

@@ -21,6 +21,16 @@ import type { LanguageSupport } from "../languages.js";
 import type { JsLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { ExportEntry, ImportBinding, ModuleIndex, SymbolDef } from "./types.js";
 import type { Range } from "../types.js";
+
+const METHOD_LIKE_BINDING_NODE_TYPES = new Set([
+  "method_definition",
+  "method_declaration",
+  "method",
+  "function_item",
+  "function_declaration",
+  "function_definition",
+]);
+
 function appendJsLikeRegexFallbackExports(
   file: string,
   source: string,
@@ -333,6 +343,7 @@ export function collectLocalsAndExportsFromSource(
   const seenLocals = new Set<string>();
   const toKind = (s: string): SymbolKind => {
     if (s === "function") return SymbolKind.Function;
+    if (s === "method") return SymbolKind.Function;
     if (s === "class") return SymbolKind.Class;
     if (s === "interface") return SymbolKind.Interface;
     if (s === "type") return SymbolKind.TypeAlias;
@@ -426,6 +437,23 @@ export function collectLocalsAndExportsFromSource(
     }
   }
 
+  const methodSupplementTree = ensureTree();
+  if (methodSupplementTree) {
+    supplementMethodLocalsFromSyntaxTree(methodSupplementTree.rootNode);
+  }
+
+  function supplementMethodLocalsFromSyntaxTree(node: SyntaxNodeLike): void {
+    if (METHOD_LIKE_BINDING_NODE_TYPES.has(node.type)) {
+      const name = node.childForFieldName("name");
+      if (name) {
+        pushLocal(sliceText(name, source), SymbolKind.Function, toRange(name), name);
+      }
+    }
+    for (const child of node.namedChildren) {
+      supplementMethodLocalsFromSyntaxTree(child);
+    }
+  }
+
   const mergeTypeScriptNamespaceDeclarations = (items: SymbolDef[]): SymbolDef[] => {
     if (support.id !== "ts" && support.id !== "tsx") return items;
     const byName = new Map<string, SymbolDef[]>();
@@ -445,6 +473,10 @@ export function collectLocalsAndExportsFromSource(
     for (const group of byName.values()) {
       if (group.length === 1) {
         out.push(group[0]!);
+        continue;
+      }
+      if (group.every((item) => item.kind === SymbolKind.Function)) {
+        out.push(...group);
         continue;
       }
       const sorted = [...group].sort((a, b) => rank(b.kind) - rank(a.kind));

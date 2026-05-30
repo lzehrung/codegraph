@@ -173,6 +173,7 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
     `,
     locals: `
       (function_declaration name: (identifier) @name)
+      (method_definition name: (property_identifier) @name)
       (class_declaration name: (identifier) @name)
       (variable_declarator name: (identifier) @name)
     `,
@@ -196,6 +197,7 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
   classifyDefinition: (n) => {
     const t = n.parent?.type;
     if (t === "function_declaration") return "function";
+    if (t === "method_definition") return "function";
     if (t === "class_declaration") return "class";
     return "variable";
   },

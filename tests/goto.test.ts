@@ -316,6 +316,79 @@ describe("Go to Definition", () => {
   });
 
   describe("TypeScript", () => {
+    it("resolves class method calls with high-confidence receivers", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-method-goto-"));
+      try {
+        const serviceFile = path.join(root, "service.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(
+          serviceFile,
+          [
+            "export class Service {",
+            "  run(value: number) {",
+            "    return value;",
+            "  }",
+            "}",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        await fsp.writeFile(
+          consumerFile,
+          [
+            'import { Service } from "./service";',
+            "new Service().run(1);",
+            "const service = new Service();",
+            "service.run(2);",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        const index = await createTestIndexFromFiles(root, [serviceFile, consumerFile]);
+
+        await testGoToDefinition(index, consumerFile, 2, 15, serviceFile, 2);
+        await testGoToDefinition(index, consumerFile, 4, 9, serviceFile, 2);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("does not resolve ambiguous same-name methods without receiver proof", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-method-goto-ambiguous-"));
+      try {
+        const serviceFile = path.join(root, "service.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(
+          serviceFile,
+          [
+            "export class First {",
+            "  run() { return 1; }",
+            "}",
+            "export class Second {",
+            "  run() { return 2; }",
+            "}",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        await fsp.writeFile(
+          consumerFile,
+          [
+            'import { First, Second } from "./service";',
+            "declare const unknown: First | Second;",
+            "unknown.run();",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        const index = await createTestIndexFromFiles(root, [serviceFile, consumerFile]);
+
+        await testGoToDefinition(index, consumerFile, 3, 9, undefined, undefined, "not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("should find definition of imported function", async () => {
       const index = await createTestIndex("typescript");
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");

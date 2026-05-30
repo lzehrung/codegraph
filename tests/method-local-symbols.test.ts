@@ -1,0 +1,267 @@
+import { describe, expect, it } from "vitest";
+import os from "node:os";
+import path from "node:path";
+import fsp from "node:fs/promises";
+import { buildProjectIndex, SymbolKind } from "../src/index.js";
+import { locateChangedSymbols } from "../src/impact/map.js";
+
+type MethodLocalCase = {
+  label: string;
+  file: string;
+  source: string;
+  methodName: string;
+  methodLine: number;
+  bodyLine: number;
+  oldBody: string;
+  bodyEdit: string;
+  enclosingName?: string;
+};
+
+const methodLocalCases: MethodLocalCase[] = [
+  {
+    label: "JavaScript class method",
+    file: "service.js",
+    source: ["export class Service {", "  run(value) {", "    return value;", "  }", "}", ""].join("\n"),
+    methodName: "run",
+    methodLine: 2,
+    bodyLine: 3,
+    oldBody: "-    return value;",
+    bodyEdit: "+    return value + 1;",
+    enclosingName: "Service",
+  },
+  {
+    label: "TypeScript class method",
+    file: "service.ts",
+    source: [
+      "export class Service {",
+      "  run(value: number): number {",
+      "    return value;",
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+    methodName: "run",
+    methodLine: 2,
+    bodyLine: 3,
+    oldBody: "-    return value;",
+    bodyEdit: "+    return value + 1;",
+    enclosingName: "Service",
+  },
+  {
+    label: "TSX class method",
+    file: "service.tsx",
+    source: [
+      "export class Service {",
+      "  run(value: number): number {",
+      "    return value;",
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+    methodName: "run",
+    methodLine: 2,
+    bodyLine: 3,
+    oldBody: "-    return value;",
+    bodyEdit: "+    return value + 1;",
+    enclosingName: "Service",
+  },
+  {
+    label: "Python class method",
+    file: "service.py",
+    source: ["class Service:", "    def run(self, value):", "        return value", ""].join("\n"),
+    methodName: "run",
+    methodLine: 2,
+    bodyLine: 3,
+    oldBody: "-        return value",
+    bodyEdit: "+        return value + 1",
+    enclosingName: "Service",
+  },
+  {
+    label: "PHP class method",
+    file: "service.php",
+    source: ["<?php", "class Service {", "  public function run($value) {", "    return $value;", "  }", "}", ""].join(
+      "\n",
+    ),
+    methodName: "run",
+    methodLine: 3,
+    bodyLine: 4,
+    oldBody: "-    return $value;",
+    bodyEdit: "+    return $value + 1;",
+    enclosingName: "Service",
+  },
+  {
+    label: "Java class method",
+    file: "Service.java",
+    source: ["class Service {", "  int run(int value) {", "    return value;", "  }", "}", ""].join("\n"),
+    methodName: "run",
+    methodLine: 2,
+    bodyLine: 3,
+    oldBody: "-    return value;",
+    bodyEdit: "+    return value + 1;",
+    enclosingName: "Service",
+  },
+  {
+    label: "C# class method",
+    file: "Service.cs",
+    source: ["class Service {", "  int Run(int value) {", "    return value;", "  }", "}", ""].join("\n"),
+    methodName: "Run",
+    methodLine: 2,
+    bodyLine: 3,
+    oldBody: "-    return value;",
+    bodyEdit: "+    return value + 1;",
+    enclosingName: "Service",
+  },
+  {
+    label: "Go receiver method",
+    file: "service.go",
+    source: [
+      "package main",
+      "type Service struct{}",
+      "func (s Service) Run(value int) int {",
+      "  return value",
+      "}",
+      "",
+    ].join("\n"),
+    methodName: "Run",
+    methodLine: 3,
+    bodyLine: 4,
+    oldBody: "-  return value",
+    bodyEdit: "+  return value + 1",
+    enclosingName: "Service",
+  },
+  {
+    label: "Kotlin class method",
+    file: "Service.kt",
+    source: ["class Service {", "  fun run(value: Int): Int {", "    return value", "  }", "}", ""].join("\n"),
+    methodName: "run",
+    methodLine: 2,
+    bodyLine: 3,
+    oldBody: "-    return value",
+    bodyEdit: "+    return value + 1",
+    enclosingName: "Service",
+  },
+  {
+    label: "Ruby class method",
+    file: "service.rb",
+    source: ["class Service", "  def run(value)", "    value", "  end", "end", ""].join("\n"),
+    methodName: "run",
+    methodLine: 2,
+    bodyLine: 3,
+    oldBody: "-    value",
+    bodyEdit: "+    value + 1",
+    enclosingName: "Service",
+  },
+  {
+    label: "Rust impl method",
+    file: "service.rs",
+    source: [
+      "struct Service;",
+      "impl Service {",
+      "  fn run(&self, value: i32) -> i32 {",
+      "    value",
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+    methodName: "run",
+    methodLine: 3,
+    bodyLine: 4,
+    oldBody: "-    value",
+    bodyEdit: "+    value + 1",
+    enclosingName: "Service",
+  },
+  {
+    label: "Swift class method",
+    file: "Service.swift",
+    source: ["class Service {", "  func run(_ value: Int) -> Int {", "    return value", "  }", "}", ""].join("\n"),
+    methodName: "run",
+    methodLine: 2,
+    bodyLine: 3,
+    oldBody: "-    return value",
+    bodyEdit: "+    return value + 1",
+    enclosingName: "Service",
+  },
+  {
+    label: "C++ class method",
+    file: "service.cpp",
+    source: ["class Service {", "public:", "  int run(int value) {", "    return value;", "  }", "};", ""].join(
+      "\n",
+    ),
+    methodName: "run",
+    methodLine: 3,
+    bodyLine: 4,
+    oldBody: "-    return value;",
+    bodyEdit: "+    return value + 1;",
+    enclosingName: "Service",
+  },
+  {
+    label: "Zig struct function",
+    file: "service.zig",
+    source: [
+      "const Service = struct {",
+      "  pub fn run(self: Service, value: i32) i32 {",
+      "    _ = self;",
+      "    return value;",
+      "  }",
+      "};",
+      "",
+    ].join("\n"),
+    methodName: "run",
+    methodLine: 2,
+    bodyLine: 4,
+    oldBody: "-    return value;",
+    bodyEdit: "+    return value + 1;",
+    enclosingName: "Service",
+  },
+];
+
+async function withTmpDir(name: string, run: (root: string) => Promise<void>): Promise<void> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), `cg-method-locals-${name}-`));
+  try {
+    await run(root);
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+}
+
+describe("method-like local symbols", () => {
+  it.each(methodLocalCases)("$label is indexed as a function local", async (testCase) => {
+    await withTmpDir(testCase.file.replace(/[^A-Za-z0-9]/g, "-"), async (root) => {
+      const file = path.join(root, testCase.file).replace(/\\/g, "/");
+      await fsp.writeFile(file, testCase.source, "utf8");
+
+      const index = await buildProjectIndex(root);
+      const moduleIndex = index.byFile.get(file);
+      const methodLocal = moduleIndex?.locals.find(
+        (local) => local.localName === testCase.methodName && local.range.start.line === testCase.methodLine,
+      );
+
+      expect(methodLocal).toBeDefined();
+      expect(methodLocal?.kind).toBe(SymbolKind.Function);
+    });
+  });
+
+  it.each(methodLocalCases)("$label body edits map to the method local", async (testCase) => {
+    await withTmpDir(testCase.file.replace(/[^A-Za-z0-9]/g, "-"), async (root) => {
+      const file = path.join(root, testCase.file).replace(/\\/g, "/");
+      await fsp.writeFile(file, testCase.source, "utf8");
+
+      const index = await buildProjectIndex(root);
+      const changed = await locateChangedSymbols(index, file, [
+        {
+          oldStart: testCase.bodyLine,
+          newStart: testCase.bodyLine,
+          lines: [testCase.oldBody, testCase.bodyEdit],
+        },
+      ]);
+
+      const changedMethod = changed.find((symbol) => symbol.name === testCase.methodName);
+      expect(changedMethod).toBeDefined();
+      expect(changedMethod?.kind).toBe(SymbolKind.Function);
+      expect(changedMethod?.signatureChanged).toBe(false);
+      if (testCase.enclosingName) {
+        expect(changed.some((symbol) => symbol.name === testCase.enclosingName)).toBe(false);
+      }
+    });
+  });
+});

@@ -288,7 +288,12 @@ describe("detailed symbol graph in native-only installs", () => {
     const index = await buildProjectIndex(root);
     const moduleIndex = index.byFile.get(normalizePath(entryFile));
 
-    expect(moduleIndex?.locals.map((entry) => entry.localName)).toEqual(expect.arrayContaining(["Service", "helper"]));
+    const method = moduleIndex?.locals.find((entry) => entry.localName === "run");
+    expect(moduleIndex?.locals.map((entry) => entry.localName)).toEqual(
+      expect.arrayContaining(["Service", "run", "helper"]),
+    );
+    expect(method?.kind).toBe("function");
+    expect(method?.range.start.line).toBe(2);
     expect(moduleIndex?.exports.filter((entry) => entry.type === "local").map((entry) => entry.exportedAs)).toEqual(
       expect.arrayContaining(["Service", "helper"]),
     );

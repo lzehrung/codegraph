@@ -133,16 +133,9 @@ export async function resolveMemberAccessDefinition(params: {
     }
   }
 
-  if (
-    obj &&
-    prop &&
-    node.id === prop.id &&
-    (sup.id === "csharp" || sup.id === "java" || sup.id === "ruby" || sup.id === "rust")
-  ) {
+  if (obj && prop && node.id === prop.id && supportsReceiverMemberResolution(sup.id)) {
     const member = sliceText(prop, source);
-    let objDef: SymbolDef | null = null;
-    const result = await resolveExpression(obj);
-    if (result?.kind === "resolved") objDef = result.def;
+    const objDef = await resolveReceiverDefinition(obj, source, sup, resolveExpression);
 
     if (objDef) {
       const targetContext = await ensureParsedContext(objDef.file);
@@ -183,4 +176,129 @@ export async function resolveMemberAccessDefinition(params: {
   }
 
   return null;
+}
+
+function supportsReceiverMemberResolution(languageId: string): boolean {
+  return (
+    languageId === "csharp" ||
+    languageId === "js" ||
+    languageId === "java" ||
+    languageId === "javascript" ||
+    languageId === "jsx" ||
+    languageId === "ruby" ||
+    languageId === "rust" ||
+    languageId === "ts" ||
+    languageId === "typescript" ||
+    languageId === "tsx"
+  );
+}
+
+async function resolveReceiverDefinition(
+  obj: SyntaxNodeLike,
+  source: string,
+  sup: LanguageSupport,
+  resolveExpression: (expr: SyntaxNodeLike) => Promise<ResolvedExport | null>,
+): Promise<SymbolDef | null> {
+  if (isJsTsLanguage(sup.id)) {
+    const constructor = receiverConstructorExpression(obj, source, sup);
+    if (constructor) {
+      const result = await resolveExpression(constructor);
+      if (result?.kind === "resolved") {
+        return result.def;
+      }
+    }
+  }
+
+  const direct = await resolveExpression(obj);
+  if (direct?.kind === "resolved") {
+    return direct.def;
+  }
+  return null;
+}
+
+function isJsTsLanguage(languageId: string): boolean {
+  return (
+    languageId === "javascript" ||
+    languageId === "jsx" ||
+    languageId === "js" ||
+    languageId === "typescript" ||
+    languageId === "tsx" ||
+    languageId === "ts"
+  );
+}
+
+function receiverConstructorExpression(
+  obj: SyntaxNodeLike,
+  source: string,
+  sup: LanguageSupport,
+): SyntaxNodeLike | null {
+  if (obj.type === "new_expression") {
+    return constructorNameNode(obj, sup);
+  }
+  if (!sup.nodeTypes.identifier.includes(obj.type)) {
+    return null;
+  }
+
+  const receiverName = sliceText(obj, source);
+  const root = rootOf(obj);
+  return findPriorNewConstructor(root, receiverName, obj.startIndex, source, sup);
+}
+
+function constructorNameNode(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNodeLike | null {
+  const constructor = node.childForFieldName("constructor") ?? node.child(0);
+  if (constructor && sup.nodeTypes.identifier.includes(constructor.type)) {
+    return constructor;
+  }
+  return null;
+}
+
+function rootOf(node: SyntaxNodeLike): SyntaxNodeLike {
+  let current = node;
+  while (current.parent) {
+    current = current.parent;
+  }
+  return current;
+}
+
+function findPriorNewConstructor(
+  node: SyntaxNodeLike,
+  receiverName: string,
+  beforeIndex: number,
+  source: string,
+  sup: LanguageSupport,
+): SyntaxNodeLike | null {
+  let constructor: SyntaxNodeLike | null = null;
+  const visit = (current: SyntaxNodeLike): boolean => {
+    if (current.startIndex >= beforeIndex) {
+      return true;
+    }
+    if (current.type === "variable_declarator") {
+      const name = current.childForFieldName("name") ?? current.child(0);
+      const value = current.childForFieldName("value");
+      if (
+        name &&
+        value?.type === "new_expression" &&
+        sup.nodeTypes.identifier.includes(name.type) &&
+        sliceText(name, source) === receiverName
+      ) {
+        const candidate = constructorNameNode(value, sup);
+        if (!candidate) {
+          return true;
+        }
+        if (constructor && sliceText(constructor, source) !== sliceText(candidate, source)) {
+          constructor = null;
+          return false;
+        }
+        constructor = candidate;
+      }
+    }
+    for (const child of current.namedChildren) {
+      if (!visit(child)) {
+        return false;
+      }
+    }
+    return true;
+  };
+  visit(node);
+  return constructor;
 }
