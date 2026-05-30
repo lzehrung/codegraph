@@ -208,6 +208,9 @@ async function resolveReceiverDefinition(
         return result.def;
       }
     }
+    if (sup.nodeTypes.identifier.includes(obj.type)) {
+      return null;
+    }
   }
 
   const direct = await resolveExpression(obj);
@@ -230,8 +233,7 @@ function receiverConstructorExpression(
   }
 
   const receiverName = sliceText(obj, source);
-  const root = rootOf(obj);
-  return findPriorNewConstructor(root, receiverName, obj.startIndex, source, sup);
+  return findVisiblePriorNewConstructor(obj, receiverName, source, sup);
 }
 
 function constructorNameNode(node: SyntaxNodeLike, sup: LanguageSupport): SyntaxNodeLike | null {
@@ -250,16 +252,57 @@ function rootOf(node: SyntaxNodeLike): SyntaxNodeLike {
   return current;
 }
 
-function findPriorNewConstructor(
-  node: SyntaxNodeLike,
+const JS_TS_BINDING_CONTAINER_TYPES = new Set([
+  "program",
+  "statement_block",
+  "block",
+  "function_declaration",
+  "function",
+  "function_expression",
+  "arrow_function",
+  "method_definition",
+]);
+
+const JS_TS_BINDING_DECLARATION_TYPES = new Set([
+  "variable_declarator",
+  "formal_parameter",
+  "required_parameter",
+  "optional_parameter",
+]);
+
+function findVisiblePriorNewConstructor(
+  receiver: SyntaxNodeLike,
   receiverName: string,
-  beforeIndex: number,
+  source: string,
+  sup: LanguageSupport,
+): SyntaxNodeLike | null {
+  let current: SyntaxNodeLike | null = receiver;
+  while (current) {
+    if (JS_TS_BINDING_CONTAINER_TYPES.has(current.type)) {
+      const constructor = findPriorNewConstructorInContainer(current, receiver, receiverName, source, sup);
+      if (constructor || bindingContainerDeclaresNameBefore(current, receiver, receiverName, source, sup)) {
+        return constructor;
+      }
+    }
+    current = current.parent;
+  }
+
+  return findPriorNewConstructorInContainer(rootOf(receiver), receiver, receiverName, source, sup);
+}
+
+function findPriorNewConstructorInContainer(
+  node: SyntaxNodeLike,
+  receiver: SyntaxNodeLike,
+  receiverName: string,
   source: string,
   sup: LanguageSupport,
 ): SyntaxNodeLike | null {
   let constructor: SyntaxNodeLike | null = null;
   const visit = (current: SyntaxNodeLike): boolean => {
-    if (current.startIndex >= beforeIndex) {
+    if (current.startIndex >= receiver.startIndex) {
+      return true;
+    }
+    if (current !== node && isSkippableBindingContainer(current, receiver)) {
       return true;
     }
     if (current.type === "variable_declarator") {
@@ -291,4 +334,42 @@ function findPriorNewConstructor(
   };
   visit(node);
   return constructor;
+}
+
+function bindingContainerDeclaresNameBefore(
+  node: SyntaxNodeLike,
+  receiver: SyntaxNodeLike,
+  receiverName: string,
+  source: string,
+  sup: LanguageSupport,
+): boolean {
+  const visit = (current: SyntaxNodeLike): boolean => {
+    if (current.startIndex >= receiver.startIndex) {
+      return false;
+    }
+    if (current !== node && isSkippableBindingContainer(current, receiver)) {
+      return false;
+    }
+    if (JS_TS_BINDING_DECLARATION_TYPES.has(current.type)) {
+      const name = current.childForFieldName("name") ?? current.child(0);
+      if (name && sup.nodeTypes.identifier.includes(name.type) && sliceText(name, source) === receiverName) {
+        return true;
+      }
+    }
+    for (const child of current.namedChildren) {
+      if (visit(child)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  return visit(node);
+}
+
+function isSkippableBindingContainer(node: SyntaxNodeLike, receiver: SyntaxNodeLike): boolean {
+  return JS_TS_BINDING_CONTAINER_TYPES.has(node.type) && !nodeContainsIndex(node, receiver.startIndex);
+}
+
+function nodeContainsIndex(node: SyntaxNodeLike, index: number): boolean {
+  return node.startIndex <= index && node.endIndex >= index;
 }

@@ -24,6 +24,8 @@ import type { Range } from "../types.js";
 
 const METHOD_LIKE_BINDING_NODE_TYPES = new Set([
   "method_definition",
+  "method_signature",
+  "abstract_method_signature",
   "method_declaration",
   "method",
   "function_item",

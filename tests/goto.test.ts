@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
+import { goToDefinition } from "../src/index.js";
 import { createTestIndex, createTestIndexFromFiles, testGoToDefinition } from "./test-utils.js";
 
 describe("Go to Definition", () => {
@@ -384,6 +385,49 @@ describe("Go to Definition", () => {
         const index = await createTestIndexFromFiles(root, [serviceFile, consumerFile]);
 
         await testGoToDefinition(index, consumerFile, 3, 9, undefined, undefined, "not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("does not reuse constructor proof across a shadowed receiver binding", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-method-goto-shadowed-receiver-"));
+      try {
+        const serviceFile = path.join(root, "service.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(
+          serviceFile,
+          [
+            "export class Service {",
+            "  run() { return 1; }",
+            "}",
+            "export class Other {",
+            "  run() { return 2; }",
+            "}",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        await fsp.writeFile(
+          consumerFile,
+          [
+            'import { Service, Other } from "./service";',
+            "const service = new Service();",
+            "function call(service: Other) {",
+            "  service.run();",
+            "}",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        const index = await createTestIndexFromFiles(root, [serviceFile, consumerFile]);
+
+        const result = await goToDefinition(index, { file: consumerFile, line: 4, column: 11 });
+
+        if (result.status === "ok") {
+          expect(result.definition.file).not.toBe(serviceFile);
+          expect(result.definition.range.start.line).not.toBe(2);
+        }
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }

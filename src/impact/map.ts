@@ -103,13 +103,16 @@ export async function locateChangedSymbolsWithLines(
           lines.add(l);
         }
       }
+      const signatureChanged =
+        computeSignatureChanged(tree, symbolDef, changedByteRanges, sup.id, trackedPositions) ||
+        signatureOnlyDeclarationLineChanged(tree, symbolDef, changedLines);
       seenHandles.set(symbolHandle, {
         symbolDef,
         typeOnly: !!classification?.typeOnly,
         lines,
         // Computed once here so calculateSeverity doesn't re-parse the AST
         // once per reference (which could be hundreds of calls for hot symbols).
-        signatureChanged: computeSignatureChanged(tree, symbolDef, changedByteRanges, sup.id, trackedPositions),
+        signatureChanged,
       });
     }
   }
@@ -181,6 +184,8 @@ const SYMBOL_DECLARATION_RANGE_TYPES = new Set([
   "function_declaration",
   "function_definition",
   "method_definition",
+  "method_signature",
+  "abstract_method_signature",
   "method_declaration",
   "method",
   "singleton_method",
@@ -419,7 +424,11 @@ const SIGNATURE_DECL_TYPES = new Set([
 
 const CALLABLE_VARIABLE_VALUE_TYPES = new Set(["arrow_function", "function_expression"]);
 const JS_TS_CLASS_SIGNATURE_FALLBACK_TYPES = new Set(["class_declaration"]);
-const JS_TS_METHOD_SIGNATURE_FALLBACK_TYPES = new Set(["method_definition"]);
+const JS_TS_METHOD_SIGNATURE_FALLBACK_TYPES = new Set([
+  "method_definition",
+  "method_signature",
+  "abstract_method_signature",
+]);
 const SIGNATURE_PARAMETER_LIST_TYPES = new Set([
   "parameters",
   "parameter_list",
@@ -431,13 +440,19 @@ const SIGNATURE_PARAMETER_LIST_TYPES = new Set([
 type ByteRange = { start: number; end: number };
 
 function signatureParameterSpan(declNode: SyntaxNodeLike): ByteRange | null {
+  if (declNode.type === "method_signature" || declNode.type === "abstract_method_signature") {
+    return { start: declNode.startIndex, end: declNode.endIndex };
+  }
+
   let params = directSignatureParameterNode(declNode);
+  params = enclosingSignatureParameterList(params);
   if (!params && declNode.type === "variable_declarator") {
     const valueNode = declNode.childForFieldName("value");
     if (!valueNode || !CALLABLE_VARIABLE_VALUE_TYPES.has(valueNode.type)) {
       return null;
     }
     params = directSignatureParameterNode(valueNode);
+    params = enclosingSignatureParameterList(params);
   }
   if (!params) {
     params = findFirstDescendantOfTypes(declNode, SIGNATURE_PARAMETER_LIST_TYPES);
@@ -454,6 +469,20 @@ function signatureParameterSpan(declNode: SyntaxNodeLike): ByteRange | null {
     return null;
   }
   return { start: params.startIndex, end: params.endIndex };
+}
+
+function enclosingSignatureParameterList(node: SyntaxNodeLike | null): SyntaxNodeLike | null {
+  if (!node) {
+    return null;
+  }
+  if (SIGNATURE_PARAMETER_LIST_TYPES.has(node.type)) {
+    return node;
+  }
+  const parent = node.parent;
+  if (parent && SIGNATURE_PARAMETER_LIST_TYPES.has(parent.type)) {
+    return parent;
+  }
+  return node;
 }
 
 function byteRangesOverlap(left: ByteRange, right: ByteRange): boolean {
@@ -701,6 +730,30 @@ function computeSignatureChanged(
   // still be detected: the params node exists and its byte range overlaps the
   // changed content even though it ends up empty.
   return spanOverlapsAnyChangedRange(paramsSpan, changedByteRanges);
+}
+
+function signatureOnlyDeclarationLineChanged(
+  tree: SyntaxTreeLike,
+  symbolDef: SymbolDef,
+  changedLines: ReadonlySet<number>,
+): boolean {
+  if (!changedLines.has(symbolDef.range.start.line)) {
+    return false;
+  }
+
+  const pos = {
+    row: symbolDef.range.start.line - 1,
+    column: symbolDef.range.start.column - 1,
+  };
+  const nameNode = tree.rootNode.descendantForPosition(pos, pos);
+  let current: SyntaxNodeLike | null = nameNode;
+  while (current) {
+    if (current.type === "method_signature" || current.type === "abstract_method_signature") {
+      return true;
+    }
+    current = current.parent;
+  }
+  return false;
 }
 
 function findSymbolHandleForNode(

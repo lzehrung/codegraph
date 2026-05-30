@@ -264,4 +264,49 @@ describe("method-like local symbols", () => {
       }
     });
   });
+
+  it.each([
+    {
+      label: "TypeScript interface method signature",
+      source: ["export interface Service {", "  run(value: string): void;", "}", ""].join("\n"),
+      methodLine: 2,
+      oldSignature: "-  run(value: string): void;",
+      newSignature: "+  run(value: string, count: number): void;",
+    },
+    {
+      label: "TypeScript abstract method signature",
+      source: ["export abstract class Service {", "  abstract run(value: string): void;", "}", ""].join("\n"),
+      methodLine: 2,
+      oldSignature: "-  abstract run(value: string): void;",
+      newSignature: "+  abstract run(value: string, count: number): void;",
+    },
+  ])("$label is indexed and receives signature edits", async (testCase) => {
+    await withTmpDir(testCase.label.replace(/[^A-Za-z0-9]/g, "-"), async (root) => {
+      const file = path.join(root, "service.ts").replace(/\\/g, "/");
+      await fsp.writeFile(file, testCase.source, "utf8");
+
+      const index = await buildProjectIndex(root);
+      const moduleIndex = index.byFile.get(file);
+      const methodLocal = moduleIndex?.locals.find(
+        (local) => local.localName === "run" && local.range.start.line === testCase.methodLine,
+      );
+      const changed = await locateChangedSymbols(index, file, [
+        {
+          oldStart: testCase.methodLine,
+          newStart: testCase.methodLine,
+          lines: [testCase.oldSignature, testCase.newSignature],
+        },
+      ]);
+
+      expect(methodLocal).toBeDefined();
+      expect(methodLocal?.kind).toBe(SymbolKind.Function);
+      expect(changed).toEqual([
+        expect.objectContaining({
+          name: "run",
+          kind: SymbolKind.Function,
+          signatureChanged: true,
+        }),
+      ]);
+    });
+  });
 });
