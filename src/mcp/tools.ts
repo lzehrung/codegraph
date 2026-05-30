@@ -90,33 +90,18 @@ export const MCP_TOOLS: Tool[] = [
   {
     name: "refs",
     description: "Find references by stable handle or file position.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        handle: stringProperty,
-        file: stringProperty,
-        line: { type: "integer", minimum: 1 },
-        column: { type: "integer", minimum: 0 },
-        limit: {
-          type: "integer",
-          minimum: 0,
-          maximum: MAX_MCP_COLLECTION_LIMIT,
-          default: DEFAULT_MCP_COLLECTION_LIMIT,
-        },
+    inputSchema: objectSchema({
+      handle: stringProperty,
+      file: stringProperty,
+      line: { type: "integer", minimum: 1 },
+      column: { type: "integer", minimum: 0 },
+      limit: {
+        type: "integer",
+        minimum: 0,
+        maximum: MAX_MCP_COLLECTION_LIMIT,
+        default: DEFAULT_MCP_COLLECTION_LIMIT,
       },
-      oneOf: [
-        {
-          required: ["handle"],
-          not: {
-            anyOf: [{ required: ["file"] }, { required: ["line"] }, { required: ["column"] }],
-          },
-        },
-        {
-          required: ["file", "line", "column"],
-          not: { required: ["handle"] },
-        },
-      ],
-    },
+    }),
   },
   {
     name: "deps",

@@ -251,13 +251,29 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
     },
 
     refs: async (request) => {
-      if ("handle" in request) {
+      const handle = "handle" in request ? request.handle : undefined;
+      const file = "file" in request ? request.file : undefined;
+      const line = "line" in request ? request.line : undefined;
+      const column = "column" in request ? request.column : undefined;
+      const hasAnyPosition = file !== undefined || line !== undefined || column !== undefined;
+      const hasCompletePosition = file !== undefined && line !== undefined && column !== undefined;
+      if (handle !== undefined && hasAnyPosition) {
+        throw new Error("refs requires either handle or file, line, and column.");
+      }
+      if (handle === undefined && !hasCompletePosition) {
+        throw new Error("refs requires either handle or file, line, and column.");
+      }
+
+      if (handle !== undefined) {
         const explanation = await explainCodegraphTargetWithSession(session, {
           root,
-          target: request.handle,
+          target: handle,
           maxReferences: boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT),
         });
         return { references: explanation.references };
+      }
+      if (file === undefined || line === undefined || column === undefined) {
+        throw new Error("refs requires either handle or file, line, and column.");
       }
 
       const snapshot = await session.loadProject();
@@ -267,9 +283,9 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
       const result = await findReferences(
         snapshot.index,
         {
-          file: await resolveProjectFile(await realRoot, root, request.file),
-          line: request.line,
-          column: request.column,
+          file: await resolveProjectFile(await realRoot, root, file),
+          line,
+          column,
         },
         referenceOptions,
       );
