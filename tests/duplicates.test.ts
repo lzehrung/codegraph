@@ -239,6 +239,10 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     const target = { file: "src/g.ts" };
     const result = await findDuplicateContext(index, target, { minConfidence: "high", limit: 5 });
     const rawResult = await findDuplicateContext(index, target, { includeRawPairs: true, minConfidence: "high", limit: 5 });
+    expect(rawResult.suggestions?.length).toBeGreaterThan(0);
+    for (const suggestion of rawResult.suggestions ?? []) {
+      expect(suggestion.left.file === "src/g.ts" || suggestion.right.file === "src/g.ts").toBeTruthy();
+    }
 
     expect(result.groups.length).toBeGreaterThan(0);
     expect(result.groups.some((group) => group.primaryLeft.file === "src/g.ts" || group.primaryRight.file === "src/g.ts")).toBeTruthy();
@@ -256,6 +260,27 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
       );
       expect(primaryTouchesTarget || variantTouchesTarget).toBeTruthy();
     }
+  });
+
+  test("uses target pair counts for oversized duplicate context buckets", async () => {
+    const root = await makeTempProject();
+    const source = [
+      "['alpha', 'beta', 'gamma', 'delta']",
+      "  .concat(['epsilon', 'zeta', 'eta', 'theta'])",
+      "  .map((value) => value.toUpperCase())",
+      "  .filter((value) => value.length > 0)",
+      "  .join(',');",
+      "",
+    ].join("\n");
+    await writeProjectFile(root, "src/a.ts", source);
+    await writeProjectFile(root, "src/b.ts", source);
+    await writeProjectFile(root, "src/c.ts", source);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicateContext(index, { file: "src/a.ts" }, { maxBucketSize: 2, minConfidence: "high", minTokens: 1, limit: 5 });
+
+    expect(result.groups.length).toBeGreaterThan(0);
+    expect(result.omittedCounts.oversizedBuckets).toBe(0);
   });
 
   test("groups overlapping symbol and chunk variants into one finding", async () => {

@@ -130,6 +130,8 @@ type DuplicateInternalUnit = DuplicateUnitRef & {
 
 type DuplicateUnitDraft = Omit<DuplicateUnitRef, "tokenCount" | "handle" | "fileHandle" | "chunkHandle" | "symbolHandle" | "sqlHandle">;
 
+type PairFilter = (left: DuplicateInternalUnit, right: DuplicateInternalUnit) => boolean;
+
 type PairEvidence = {
   left: DuplicateInternalUnit;
   right: DuplicateInternalUnit;
@@ -634,10 +636,12 @@ function addBucketPairs(
   bucket: readonly DuplicateInternalUnit[],
   pairs: Map<string, PairEvidence>,
   evidenceKind: "rawHash" | "normalizedHash" | "signature",
+  pairFilter?: PairFilter,
 ): void {
   for (let i = 0; i < bucket.length; i++) {
     for (let j = i + 1; j < bucket.length; j++) {
       const [left, right] = orderedPair(bucket[i]!, bucket[j]!);
+      if (pairFilter && !pairFilter(left, right)) continue;
       const key = pairKey(left, right);
       const existing = pairs.get(key);
       if (existing) {
@@ -660,21 +664,38 @@ function addBucketPairs(
   }
 }
 
+
+function bucketPairCountExceeds(bucket: readonly DuplicateInternalUnit[], limit: number, pairFilter: PairFilter): boolean {
+  let count = 0;
+  for (let i = 0; i < bucket.length; i++) {
+    for (let j = i + 1; j < bucket.length; j++) {
+      const [left, right] = orderedPair(bucket[i]!, bucket[j]!);
+      if (!pairFilter(left, right)) continue;
+      count++;
+      if (count > limit) return true;
+    }
+  }
+  return false;
+}
+
 /** Adds bounded buckets and counts skipped high-fanout buckets. */
 function addBucketsToPairs(
   buckets: Map<string, DuplicateInternalUnit[]>,
   pairs: Map<string, PairEvidence>,
   evidenceKind: "rawHash" | "normalizedHash" | "signature",
   maxBucketSize: number,
+  pairFilter?: PairFilter,
 ): number {
   let oversizedBuckets = 0;
   for (const bucket of buckets.values()) {
     if (bucket.length < 2) continue;
     if (bucket.length > maxBucketSize) {
-      oversizedBuckets++;
-      continue;
+      if (!pairFilter || bucketPairCountExceeds(bucket, maxBucketSize, pairFilter)) {
+        oversizedBuckets++;
+        continue;
+      }
     }
-    addBucketPairs(bucket, pairs, evidenceKind);
+    addBucketPairs(bucket, pairs, evidenceKind, pairFilter);
   }
   return oversizedBuckets;
 }
@@ -697,18 +718,21 @@ function addSignatureBucketsToPairs(
   pairs: Map<string, PairEvidence>,
   consideredSignaturesByUnit: ConsideredSignaturesByUnit,
   maxBucketSize: number,
+  pairFilter?: PairFilter,
 ): number {
   let oversizedBuckets = 0;
   for (const [signature, bucket] of buckets) {
     if (bucket.length < 2) continue;
     if (bucket.length > maxBucketSize) {
-      oversizedBuckets++;
-      continue;
+      if (!pairFilter || bucketPairCountExceeds(bucket, maxBucketSize, pairFilter)) {
+        oversizedBuckets++;
+        continue;
+      }
     }
     for (const unit of bucket) {
       addConsideredSignature(consideredSignaturesByUnit, unit, signature);
     }
-    addBucketPairs(bucket, pairs, "signature");
+    addBucketPairs(bucket, pairs, "signature", pairFilter);
   }
   return oversizedBuckets;
 }
@@ -842,6 +866,7 @@ function addToBucket(buckets: Map<string, DuplicateInternalUnit[]>, key: string,
 function buildCandidatePairs(
   units: readonly DuplicateInternalUnit[],
   maxBucketSize: number,
+  pairFilter?: PairFilter,
 ): { pairs: Map<string, PairEvidence>; oversizedBuckets: number } {
   const rawHashBuckets = new Map<string, DuplicateInternalUnit[]>();
   const normalizedHashBuckets = new Map<string, DuplicateInternalUnit[]>();
@@ -859,9 +884,9 @@ function buildCandidatePairs(
   const pairs = new Map<string, PairEvidence>();
   const consideredSignaturesByUnit: ConsideredSignaturesByUnit = new Map();
   let oversizedBuckets = 0;
-  oversizedBuckets += addBucketsToPairs(rawHashBuckets, pairs, "rawHash", maxBucketSize);
-  oversizedBuckets += addBucketsToPairs(normalizedHashBuckets, pairs, "normalizedHash", maxBucketSize);
-  oversizedBuckets += addSignatureBucketsToPairs(signatureBuckets, pairs, consideredSignaturesByUnit, maxBucketSize);
+  oversizedBuckets += addBucketsToPairs(rawHashBuckets, pairs, "rawHash", maxBucketSize, pairFilter);
+  oversizedBuckets += addBucketsToPairs(normalizedHashBuckets, pairs, "normalizedHash", maxBucketSize, pairFilter);
+  oversizedBuckets += addSignatureBucketsToPairs(signatureBuckets, pairs, consideredSignaturesByUnit, maxBucketSize, pairFilter);
   for (const [key, evidence] of pairs) {
     if (hasEnoughSharedFingerprints(evidence, consideredSignaturesByUnit)) {
       evidence.signature = true;
@@ -1395,6 +1420,79 @@ function duplicateContextFromResult(
   return context;
 }
 
+async function findDuplicatesTouchingTargets(
+  index: ProjectIndex,
+  targets: readonly DuplicateTarget[],
+  options: DuplicateDetectionOptions,
+): Promise<DuplicateDetectionResult> {
+  const projectRoot = options.projectRoot ?? index.projectRoot;
+  const normalizedTargets = targets.map((target) => normalizeDuplicateTarget(target, projectRoot));
+  const minTokens = normalizePositiveIntegerOption(options.minTokens, "minTokens", DEFAULT_MIN_TOKENS);
+  const maxTokens = normalizePositiveIntegerOption(options.maxTokens, "maxTokens", DEFAULT_MAX_TOKENS);
+  const maxBucketSize = normalizePositiveIntegerOption(options.maxBucketSize, "maxBucketSize", DEFAULT_MAX_BUCKET_SIZE);
+  const shingleSize = normalizePositiveIntegerOption(options.shingleSize, "shingleSize", DEFAULT_SHINGLE_SIZE);
+  const windowSize = normalizePositiveIntegerOption(options.windowSize, "windowSize", DEFAULT_WINDOW_SIZE);
+  const includeSmall = options.includeSmall ?? false;
+  const crossFileOnly = options.crossFileOnly ?? !(options.includeSameFile ?? false);
+  const minConfidence = normalizeConfidence(options.minConfidence);
+
+  if (maxTokens < minTokens) {
+    throw new Error(`Invalid maxTokens value "${maxTokens}". Expected a value greater than or equal to minTokens.`);
+  }
+
+  const { units, belowThresholdUnits } = await collectDuplicateUnits(index, {
+    projectRoot,
+    files: options.files,
+    includeSmall,
+    minTokens,
+    maxTokens,
+    shingleSize,
+    windowSize,
+  });
+  const touchesAnyTarget: PairFilter = (left, right) =>
+    normalizedTargets.some((target) => unitTouchesDuplicateTarget(left, target) || unitTouchesDuplicateTarget(right, target));
+  const { pairs, oversizedBuckets } = buildCandidatePairs(units, maxBucketSize, touchesAnyTarget);
+  const suggestions: DuplicateSuggestion[] = [];
+  let overlappingPairs = 0;
+  let comparedPairs = 0;
+
+  for (const evidence of pairs.values()) {
+    if (crossFileOnly && evidence.left.absoluteFile === evidence.right.absoluteFile) continue;
+    if (hasLineOverlap(evidence.left, evidence.right)) {
+      overlappingPairs++;
+      continue;
+    }
+
+    comparedPairs++;
+    const suggestion = suggestionForPair(evidence);
+    if (confidenceRank[suggestion.confidence] < confidenceRank[minConfidence]) continue;
+    suggestions.push(suggestion);
+  }
+
+  suggestions.sort(compareSuggestions);
+  const groups = groupSuggestions(suggestions, true).filter(
+    (group) => confidenceRank[group.confidence] >= confidenceRank[minConfidence],
+  );
+  return {
+    schemaVersion: 2,
+    units: units.length,
+    groups,
+    suggestions,
+    omittedCounts: {
+      groups: 0,
+      suggestions: 0,
+      rawSuggestions: 0,
+      oversizedBuckets,
+      belowThresholdUnits,
+      overlappingPairs,
+    },
+    stats: {
+      comparedPairs,
+      candidatePairs: pairs.size,
+    },
+  };
+}
+
 export async function findDuplicateContexts(
   index: ProjectIndex,
   targets: readonly DuplicateTarget[],
@@ -1403,13 +1501,11 @@ export async function findDuplicateContexts(
   if (!targets.length) return [];
   const limit = normalizeNonNegativeIntegerOption(options.limit, "limit", DEFAULT_LIMIT);
   const includeRawPairs = options.includeRawPairs ?? false;
-  const result = await findDuplicates(index, {
-    ...options,
-    limit: Number.MAX_SAFE_INTEGER,
-    minConfidence: options.minConfidence ?? "medium",
-    includeRawPairs: true,
-  });
   const projectRoot = options.projectRoot ?? index.projectRoot;
+  const result = await findDuplicatesTouchingTargets(index, targets, {
+    ...options,
+    minConfidence: options.minConfidence ?? "medium",
+  });
   return targets.map((target) => duplicateContextFromResult(result, target, { projectRoot, limit, includeRawPairs }));
 }
 
