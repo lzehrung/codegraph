@@ -16,6 +16,11 @@ import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { FileChange, ChangedSymbol } from "./types.js";
 import { collectChangedLines } from "./hunks.js";
 import { toRange } from "../util/ast.js";
+import {
+  directSignatureParameterNode,
+  findAncestorOfTypes,
+  findFirstDescendantOfTypes,
+} from "./signature-node-utils.js";
 
 export { collectChangedLines } from "./hunks.js";
 
@@ -425,26 +430,6 @@ const SIGNATURE_PARAMETER_LIST_TYPES = new Set([
 
 type ByteRange = { start: number; end: number };
 
-function directSignatureParameterNode(node: SyntaxNodeLike): SyntaxNodeLike | null {
-  return (
-    node.childForFieldName("parameters") ??
-    node.childForFieldName("params") ??
-    node.childForFieldName("parameter") ??
-    null
-  );
-}
-
-function findAncestorOfTypes(node: SyntaxNodeLike | null, types: ReadonlySet<string>): SyntaxNodeLike | null {
-  let current: SyntaxNodeLike | null = node;
-  while (current) {
-    if (types.has(current.type)) {
-      return current;
-    }
-    current = current.parent;
-  }
-  return null;
-}
-
 function signatureParameterSpan(declNode: SyntaxNodeLike): ByteRange | null {
   let params = directSignatureParameterNode(declNode);
   if (!params && declNode.type === "variable_declarator") {
@@ -716,19 +701,6 @@ function computeSignatureChanged(
   // still be detected: the params node exists and its byte range overlaps the
   // changed content even though it ends up empty.
   return spanOverlapsAnyChangedRange(paramsSpan, changedByteRanges);
-}
-
-function findFirstDescendantOfTypes(node: SyntaxNodeLike, types: ReadonlySet<string>): SyntaxNodeLike | null {
-  for (const child of node.namedChildren ?? []) {
-    if (types.has(child.type)) {
-      return child;
-    }
-    const found = findFirstDescendantOfTypes(child, types);
-    if (found) {
-      return found;
-    }
-  }
-  return null;
 }
 
 function findSymbolHandleForNode(
