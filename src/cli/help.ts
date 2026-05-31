@@ -10,6 +10,7 @@ Commands:
   search        Ranked agent search across files, symbols, chunks, SQL, and graph context
   explain       Explain a file, symbol, SQL object, or search handle
   artifact      Build an agent-ready SQLite/graph/report/question bundle
+  drift        Compare architecture health between refs or artifacts
   mcp           Serve MCP tools for agent graph navigation
   index         Build the project symbol index
   impact        Analyze PR impact
@@ -94,6 +95,7 @@ const knownCliCommands = new Set([
   "apisurface",
   "artifact",
   "chunk",
+  "drift",
   "cycles",
   "deps",
   "doctor",
@@ -247,11 +249,24 @@ Output:
   Use --raw-pairs to include the underlying scored unit-pair suggestions.
 `;
 
+export const DRIFT_HELP_TEXT = `codegraph drift - Compare architecture drift between graph states
+
+Usage: codegraph drift [roots...] [--root <path>] (--base <ref> [--head <ref>] | --base-artifact <dir>) [--json | --pretty] [--fail-on <kind[,kind...]>]
+
+Signals:
+  Compares dependency cycles, hotspots, unresolved imports, public API symbols, duplicate group counts, and graph edges.
+  Drift is structural architecture comparison, not runtime validation, compiler diagnostics, or a style linter.
+
+Policy:
+  --fail-on exits 1 only when one of the selected finding kinds is present.
+`;
+
 export function helpTextForCommand(command: string, positionals: readonly string[]): string | undefined {
   if (command === "search") return SEARCH_HELP_TEXT;
   if (command === "orient") return ORIENT_HELP_TEXT;
   if (command === "packet") return PACKET_HELP_TEXT;
   if (command === "explain") return EXPLAIN_HELP_TEXT;
+  if (command === "drift") return DRIFT_HELP_TEXT;
   if (command === "duplicates") return DUPLICATES_HELP_TEXT;
   if (command === "artifact") return ARTIFACT_HELP_TEXT;
   if (command === "mcp") {
