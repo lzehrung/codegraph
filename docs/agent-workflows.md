@@ -61,6 +61,15 @@ Search results include project-relative `handle`, `rankReasons`, `evidence`, `ne
 
 Use `artifact build` when the agent needs a durable handoff directory. The default bundle writes SQLite, self-describing project-relative graph JSON with symbols, a concise Markdown report, suggested questions, and a manifest. Suggested questions command stable handles, not ambiguous bare names, and use unique IDs even when display labels collide. In-repo artifact output directories and linked outside-root files are excluded from the emitted artifacts so stale handoff files do not feed back into the graph. With `--force`, Codegraph removes recognizable stale artifact files while preserving unrelated operator files and refusing unrecognized reserved-name collisions. `codegraph doctor <artifact-dir>` recognizes manifest-backed bundle directories and reports which expected artifacts are present.
 
+Use `drift` when the agent needs one architecture-regression report for a base/head range:
+
+```bash
+codegraph drift ./src --base origin/main --head HEAD --pretty
+codegraph drift ./src --base origin/main --head HEAD --fail-on new-cycle,public-api-removal
+```
+
+Drift compares structural signals over time: dependency cycles, hotspots, unresolved imports, API surface changes, duplicate group counts, and graph edges. It is review and CI evidence, not runtime validation or compiler diagnostics.
+
 ## MCP server
 
 Use `codegraph mcp serve --root . --stdio` when an agent can spawn a stdio MCP server, or `codegraph mcp serve --root . --port 7331` for Streamable HTTP at `/mcp`. HTTP binds to `127.0.0.1` by default; pass `--host <host>` only when the server must be reachable elsewhere. MCP reuses one in-process Codegraph session and exposes the same deterministic primitives as compact tools: `orient`, `packet_get`, `search`, `get_file`, `get_symbol`, `goto`, `refs`, `deps`, `rdeps`, `path`, `impact`, `review`, `query_sqlite`, and `artifact_build`.
