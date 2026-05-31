@@ -58,14 +58,22 @@ describe("architecture drift", () => {
     expect(explicitWholeRepo.files).toEqual(wholeRepo.files);
   });
 
+  it("uses collision-safe cycle keys", () => {
+    const ambiguousA = ["a->b", "c"];
+    const ambiguousB = ["a", "b->c"];
+
+    expect(ambiguousA.join("->")).toBe(ambiguousB.join("->"));
+    expect(ambiguousA.join("\u0000")).not.toBe(ambiguousB.join("\u0000"));
+  });
+
   it("reports new cycles without reporting pre-existing cycles", () => {
     const base = makeSnapshot({
-      cycles: [{ key: "src/old-a.ts->src/old-b.ts", files: ["src/old-a.ts", "src/old-b.ts"], priorityScore: 10, size: 2 }],
+      cycles: [{ key: "src/old-a.ts\u0000src/old-b.ts", files: ["src/old-a.ts", "src/old-b.ts"], priorityScore: 10, size: 2 }],
     });
     const head = makeSnapshot({
       cycles: [
-        { key: "src/old-a.ts->src/old-b.ts", files: ["src/old-a.ts", "src/old-b.ts"], priorityScore: 10, size: 2 },
-        { key: "src/a.ts->src/b.ts", files: ["src/a.ts", "src/b.ts"], priorityScore: 20, size: 2 },
+        { key: "src/old-a.ts\u0000src/old-b.ts", files: ["src/old-a.ts", "src/old-b.ts"], priorityScore: 10, size: 2 },
+        { key: "src/a.ts\u0000src/b.ts", files: ["src/a.ts", "src/b.ts"], priorityScore: 20, size: 2 },
       ],
     });
 
@@ -73,7 +81,7 @@ describe("architecture drift", () => {
 
     expect(report.findings).toContainEqual(expect.objectContaining({ kind: "new-cycle", severity: "error" }));
     expect(report.findings).not.toContainEqual(
-      expect.objectContaining({ kind: "new-cycle", key: "src/old-a.ts->src/old-b.ts" }),
+      expect.objectContaining({ kind: "new-cycle", key: "src/old-a.ts\u0000src/old-b.ts" }),
     );
   });
 
@@ -127,7 +135,7 @@ describe("architecture drift", () => {
   it("applies fail-on policy even when matching findings are omitted from the report", () => {
     const base = makeSnapshot();
     const head = makeSnapshot({
-      cycles: [{ key: "src/a.ts->src/b.ts", files: ["src/a.ts", "src/b.ts"], priorityScore: 20, size: 2 }],
+      cycles: [{ key: "src/a.ts\u0000src/b.ts", files: ["src/a.ts", "src/b.ts"], priorityScore: 20, size: 2 }],
     });
 
     const report = compareArchitectureSnapshots(base, head, {
@@ -144,7 +152,7 @@ describe("architecture drift", () => {
     const report = compareArchitectureSnapshots(
       makeSnapshot(),
       makeSnapshot({
-        cycles: [{ key: "src/a.ts->src/b.ts", files: ["src/a.ts", "src/b.ts"], priorityScore: 20, size: 2 }],
+        cycles: [{ key: "src/a.ts\u0000src/b.ts", files: ["src/a.ts", "src/b.ts"], priorityScore: 20, size: 2 }],
       }),
       { failOn: [], thresholds: { hotspotJump: 20, maxFindings: 0 } },
     );
@@ -160,7 +168,7 @@ describe("architecture drift", () => {
     const report = compareArchitectureSnapshots(
       makeSnapshot({ publicApi: [{ id: "src/api.ts#oldName:function", file: "src/api.ts", name: "oldName", kind: "function" }] }),
       makeSnapshot({
-        cycles: [{ key: "src/a.ts->src/b.ts", files: ["src/a.ts", "src/b.ts"], priorityScore: 20, size: 2 }],
+        cycles: [{ key: "src/a.ts\u0000src/b.ts", files: ["src/a.ts", "src/b.ts"], priorityScore: 20, size: 2 }],
         hotspots: [{ file: "src/core.ts", fanIn: 20, fanOut: 32, score: 72 }],
       }),
       { failOn: [], thresholds: { hotspotJump: 20, maxFindings: 100 } },

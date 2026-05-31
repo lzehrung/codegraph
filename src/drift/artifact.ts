@@ -153,7 +153,7 @@ export async function loadArchitectureSnapshotFromArtifact(outDirInput: string):
     cycles: sortDetailedCycles(findDetailedCycles(graph), "priority")
       .map((cycle) => {
         const files = cycle.files.map(normalizePath).sort();
-        return { key: files.join("->"), files, priorityScore: cycle.priorityScore, size: cycle.fileCount };
+        return { key: files.join("\0"), files, priorityScore: cycle.priorityScore, size: cycle.fileCount };
       })
       .sort((left, right) => left.key.localeCompare(right.key)),
     unresolved: unresolvedImports(graph),

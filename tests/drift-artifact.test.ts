@@ -68,7 +68,43 @@ describe("architecture drift artifact baselines", () => {
 
     const snapshot = await loadArchitectureSnapshotFromArtifact(root);
 
-    expect(snapshot.cycles.map((cycle) => cycle.key)).toEqual(["a/a.ts->a/b.ts", "z/a.ts->z/b.ts"]);
+    expect(snapshot.cycles.map((cycle) => cycle.key)).toEqual(["a/a.ts\u0000a/b.ts", "z/a.ts\u0000z/b.ts"]);
+  });
+
+  it("builds distinct artifact cycle keys for ambiguous filenames", async () => {
+    const root = await mkTmpDir("cg-drift-artifact-cycle-keys-");
+    await writeFile(
+      root,
+      "manifest.json",
+      JSON.stringify({
+        schemaVersion: 1,
+        graphJsonSchema: "codegraph.graph-json",
+        artifacts: { graphJson: "graph.json" },
+      }),
+    );
+    await writeFile(
+      root,
+      "graph.json",
+      JSON.stringify({
+        schemaVersion: 1,
+        format: "codegraph.graph-json",
+        graph: {
+          files: ["src/a.d.ts->b.ts", "src/c.ts", "src/a.d.ts", "b.ts->src/d.ts"],
+          fileEdges: [
+            { from: "src/a.d.ts->b.ts", to: { type: "file", path: "src/c.ts" }, raw: "./c" },
+            { from: "src/c.ts", to: { type: "file", path: "src/a.d.ts->b.ts" }, raw: "./a.d.ts->b" },
+            { from: "src/a.d.ts", to: { type: "file", path: "b.ts->src/d.ts" }, raw: "../b.ts->src/d" },
+            { from: "b.ts->src/d.ts", to: { type: "file", path: "src/a.d.ts" }, raw: "../src/a.d" },
+          ],
+          symbols: [],
+        },
+      }),
+    );
+
+    const snapshot = await loadArchitectureSnapshotFromArtifact(root);
+
+    expect(snapshot.cycles).toHaveLength(2);
+    expect(new Set(snapshot.cycles.map((cycle) => cycle.key)).size).toBe(2);
   });
 
   it("compares artifact baselines to the current checkout", async () => {

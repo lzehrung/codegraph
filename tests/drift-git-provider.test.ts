@@ -1,6 +1,6 @@
 import path from "node:path";
 import fsp from "node:fs/promises";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { analyzeArchitectureDrift } from "../src/drift/index.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 import { runGit } from "./helpers/git.js";
@@ -16,6 +16,7 @@ async function commitAll(root: string, message: string): Promise<string> {
   runGit(root, ["commit", "-m", message]);
   return runGit(root, ["rev-parse", "HEAD"]);
 }
+
 
 describe("architecture drift git provider", () => {
   it("compares git refs without dirtying the worktree", async () => {
@@ -59,5 +60,71 @@ describe("architecture drift git provider", () => {
     });
 
     expect(report.findings).toContainEqual(expect.objectContaining({ kind: "new-cycle", severity: "error" }));
+  });
+
+  it("cleans up the base temp checkout when head materialization fails", async () => {
+    const root = await mkTmpDir("cg-drift-git-cleanup-");
+    const isolatedTmp = await mkTmpDir("cg-drift-isolated-tmp-");
+    runGit(root, ["init"]);
+    await writeFile(root, "src/a.ts", "export function a() { return 1; }\n");
+    await commitAll(root, "base");
+
+    vi.resetModules();
+    vi.doMock("node:os", async () => {
+      const actual = await vi.importActual<typeof import("node:os")>("node:os");
+      return { ...actual, tmpdir: () => isolatedTmp };
+    });
+
+    try {
+      const { analyzeArchitectureDrift: analyzeWithMock } = await import("../src/drift/git.js");
+      const beforeEntries = await fsp.readdir(isolatedTmp);
+      await expect(
+        analyzeWithMock(root, {
+          provider: "git",
+          base: "HEAD",
+          head: "definitely-not-a-real-ref",
+          includeRoots: ["src"],
+        }),
+      ).rejects.toThrow();
+      const afterEntries = await fsp.readdir(isolatedTmp);
+      expect(afterEntries).toEqual(beforeEntries);
+    } finally {
+      vi.doUnmock("node:os");
+      vi.resetModules();
+      await fsp.rm(isolatedTmp, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves the original git error when cleanup fails", async () => {
+    const root = await mkTmpDir("cg-drift-git-cleanup-error-");
+    runGit(root, ["init"]);
+    await writeFile(root, "src/a.ts", "export function a() { return 1; }\n");
+    await commitAll(root, "base");
+
+    vi.resetModules();
+    vi.doMock("node:fs/promises", async () => {
+      const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+      return {
+        ...actual,
+        rm: vi.fn(async () => {
+          throw new Error("cleanup failed");
+        }),
+      };
+    });
+
+    try {
+      const { analyzeArchitectureDrift: analyzeWithMock } = await import("../src/drift/git.js");
+      await expect(
+        analyzeWithMock(root, {
+          provider: "git",
+          base: "HEAD",
+          head: "definitely-not-a-real-ref",
+          includeRoots: ["src"],
+        }),
+      ).rejects.not.toThrow("cleanup failed");
+    } finally {
+      vi.doUnmock("node:fs/promises");
+      vi.resetModules();
+    }
   });
 });

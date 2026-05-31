@@ -26,6 +26,16 @@ function isCurrentCheckoutRef(ref: string | undefined): boolean {
   return ref === undefined || ref === "." || (typeof ref === "string" && isGitWorktreeSentinel(ref));
 }
 
+async function cleanupTempDir(dir: string | undefined): Promise<void> {
+  if (!dir) return;
+  try {
+    await fsp.rm(dir, { recursive: true, force: true });
+  } catch {
+    // Ignore cleanup failures so they do not mask the primary drift error.
+  }
+}
+
+
 async function materializeGitRef(root: string, ref: string | undefined, prefix: string): Promise<{ root: string; cleanup?: string }> {
   const checkoutRef = ref;
   if (checkoutRef !== undefined && isGitIndexSentinel(checkoutRef)) {
@@ -38,7 +48,7 @@ async function materializeGitRef(root: string, ref: string | undefined, prefix: 
     await execFileAsync("git", ["checkout", "--quiet", checkoutRef], { cwd: tempRoot, env: process.env });
     return { root: tempRoot, cleanup: tempRoot };
   } catch (error) {
-    await fsp.rm(tempRoot, { recursive: true, force: true });
+    await cleanupTempDir(tempRoot);
     throw error;
   }
 }
@@ -62,9 +72,11 @@ export async function analyzeArchitectureDrift(
     throw new Error("Architecture drift requires --base or --base-artifact.");
   }
   const resolvedRoot = path.resolve(root);
-  const base = await materializeGitRef(resolvedRoot, options.base, "cg-drift-base-");
-  const head = await materializeGitRef(resolvedRoot, options.head, "cg-drift-head-");
+  let base: { root: string; cleanup?: string } | undefined;
+  let head: { root: string; cleanup?: string } | undefined;
   try {
+    base = await materializeGitRef(resolvedRoot, options.base, "cg-drift-base-");
+    head = await materializeGitRef(resolvedRoot, options.head, "cg-drift-head-");
     const baseSnapshot = await buildArchitectureSnapshot(base.root, snapshotOptions(options));
     const headSnapshot = await buildArchitectureSnapshot(head.root, snapshotOptions(options));
     return compareArchitectureSnapshots(baseSnapshot, headSnapshot, {
@@ -72,7 +84,7 @@ export async function analyzeArchitectureDrift(
       ...(options.thresholds ? { thresholds: options.thresholds } : {}),
     });
   } finally {
-    if (base.cleanup) await fsp.rm(base.cleanup, { recursive: true, force: true });
-    if (head.cleanup) await fsp.rm(head.cleanup, { recursive: true, force: true });
+    await cleanupTempDir(head?.cleanup);
+    await cleanupTempDir(base?.cleanup);
   }
 }

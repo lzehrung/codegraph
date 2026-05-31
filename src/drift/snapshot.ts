@@ -59,7 +59,7 @@ function languageCounts(files: Iterable<string>): Record<string, number> {
 }
 
 function cycleKey(files: readonly string[]): string {
-  return [...files].sort().join("->");
+  return [...files].sort().join("\0");
 }
 
 function toSnapshotCycles(root: string, cycles: ReturnType<typeof findDetailedCycles>): ArchitectureCycle[] {
