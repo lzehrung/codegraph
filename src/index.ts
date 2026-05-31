@@ -358,6 +358,7 @@ export {
 export {
   buildArchitectureSnapshot,
   analyzeArchitectureDrift,
+  loadArchitectureSnapshotFromArtifact,
   compareArchitectureSnapshots,
   renderArchitectureDriftReport,
   ARCHITECTURE_DRIFT_FINDING_KINDS,

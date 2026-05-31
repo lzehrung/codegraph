@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { compareArchitectureSnapshots } from "./compare.js";
 import { buildArchitectureSnapshot } from "./snapshot.js";
+import { loadArchitectureSnapshotFromArtifact } from "./artifact.js";
 import type { ArchitectureDriftOptions, ArchitectureDriftReport, ArchitectureSnapshotOptions } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -44,6 +45,14 @@ export async function analyzeArchitectureDrift(
 ): Promise<ArchitectureDriftReport> {
   if (options.provider && options.provider !== "git") {
     throw new Error(`Unsupported architecture drift provider: ${options.provider}`);
+  }
+  if (options.baseArtifact) {
+    const baseSnapshot = await loadArchitectureSnapshotFromArtifact(options.baseArtifact);
+    const headSnapshot = await buildArchitectureSnapshot(path.resolve(root), snapshotOptions(options));
+    return compareArchitectureSnapshots(baseSnapshot, headSnapshot, {
+      ...(options.failOn ? { failOn: options.failOn } : {}),
+      ...(options.thresholds ? { thresholds: options.thresholds } : {}),
+    });
   }
   if (!options.base) {
     throw new Error("Architecture drift requires --base or --base-artifact.");
