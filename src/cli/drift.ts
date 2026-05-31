@@ -49,6 +49,10 @@ export async function handleDriftCommand(context: DriftCommandContext): Promise<
 
   const base = context.getOpt("--base");
   const baseArtifact = context.getOpt("--base-artifact");
+  if (base && baseArtifact) {
+    context.writeStderrLine("Provide either --base or --base-artifact, but not both.");
+    context.exit(2);
+  }
   if (!base && !baseArtifact) {
     context.writeStderrLine("Usage: codegraph drift [roots...] --base <ref> [--head <ref>] [--json | --pretty]");
     context.writeStderrLine("Provide either --base or --base-artifact.");

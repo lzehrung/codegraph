@@ -100,6 +100,35 @@ describe("architecture drift", () => {
     expect(selected.policy.failedKinds).toEqual(["public-api-removal"]);
   });
 
+  it("does not report hotspot drift when scores are unchanged at threshold zero", () => {
+    const base = makeSnapshot({ hotspots: [{ file: "src/core.ts", fanIn: 2, fanOut: 3, score: 7 }] });
+    const head = makeSnapshot({ hotspots: [{ file: "src/core.ts", fanIn: 2, fanOut: 3, score: 7 }] });
+
+    const report = compareArchitectureSnapshots(base, head, {
+      failOn: [],
+      thresholds: { hotspotJump: 0, maxFindings: 100 },
+    });
+
+    expect(report.findings.some((finding) => finding.kind === "hotspot-jump")).toBe(false);
+    expect(report.findings.some((finding) => finding.kind === "hotspot-drop")).toBe(false);
+  });
+
+  it("applies fail-on policy even when matching findings are omitted from the report", () => {
+    const base = makeSnapshot();
+    const head = makeSnapshot({
+      cycles: [{ key: "src/a.ts->src/b.ts", files: ["src/a.ts", "src/b.ts"], priorityScore: 20, size: 2 }],
+    });
+
+    const report = compareArchitectureSnapshots(base, head, {
+      failOn: ["new-cycle"],
+      thresholds: { hotspotJump: 20, maxFindings: 0 },
+    });
+
+    expect(report.findings).toEqual([]);
+    expect(report.policy.failed).toBe(true);
+    expect(report.policy.failedKinds).toEqual(["new-cycle"]);
+  });
+
   it("renders a short grouped pretty report", () => {
     const report = compareArchitectureSnapshots(
       makeSnapshot({ publicApi: [{ id: "src/api.ts#oldName:function", file: "src/api.ts", name: "oldName", kind: "function" }] }),

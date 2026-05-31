@@ -1521,6 +1521,26 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     }
   });
 
+  it("rejects using both --base and --base-artifact", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-drift-cli-conflict-"));
+    try {
+      await fsp.mkdir(path.join(root, "src"), { recursive: true });
+      await fsp.writeFile(path.join(root, "src", "a.ts"), "export const value = 1;\n", "utf8");
+      const baselineDir = path.join(root, "baseline");
+      await runCliCommand(["artifact", "build", "--root", root, "--out", baselineDir, "--json"]);
+
+      const result = await runCliWithExit(
+        ["drift", "src", "--root", root, "--base", "HEAD~1", "--base-artifact", baselineDir, "--json"],
+        root,
+      );
+
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("either --base or --base-artifact");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("drift treats a single positional path as an include root", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-drift-cli-root-"));
     try {

@@ -99,7 +99,7 @@ function compareHotspots(
     const before = baseByFile.get(file)?.score ?? 0;
     const after = headByFile.get(file)?.score ?? 0;
     const delta = after - before;
-    if (Math.abs(delta) < threshold) continue;
+    if (!delta || Math.abs(delta) < threshold) continue;
     const kind: ArchitectureDriftFindingKind = delta > 0 ? "hotspot-jump" : "hotspot-drop";
     findings.push({
       kind,
@@ -262,9 +262,7 @@ export function compareArchitectureSnapshots(
   const limitedFindings = findings.slice(0, thresholds.maxFindings);
   const failOn = [...(options.failOn ?? [])].sort();
   const failOnSet = new Set(failOn);
-  const matchedFailKinds = limitedFindings
-    .filter((finding) => failOnSet.has(finding.kind))
-    .map((finding) => finding.kind);
+  const matchedFailKinds = findings.filter((finding) => failOnSet.has(finding.kind)).map((finding) => finding.kind);
   const failedKinds = Array.from(new Set(matchedFailKinds)).sort();
 
   return {
