@@ -357,6 +357,7 @@ export {
 /** Architecture drift snapshots, comparisons, and report rendering. */
 export {
   buildArchitectureSnapshot,
+  analyzeArchitectureDrift,
   compareArchitectureSnapshots,
   renderArchitectureDriftReport,
   ARCHITECTURE_DRIFT_FINDING_KINDS,

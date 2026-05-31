@@ -5,6 +5,7 @@ export {
   compareArchitectureSnapshots,
 } from "./compare.js";
 export { renderArchitectureDriftReport, type ArchitectureDriftRenderOptions } from "./report.js";
+export { analyzeArchitectureDrift } from "./git.js";
 export type {
   ArchitectureCycle,
   ArchitectureDriftCompareOptions,
