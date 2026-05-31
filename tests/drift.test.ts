@@ -47,6 +47,17 @@ describe("architecture drift", () => {
     expect(first.cycles).toEqual([]);
   });
 
+  it("uses the same default project file patterns when include roots cover the whole repo", async () => {
+    const root = await mkTmpDir("cg-drift-snapshot-roots-");
+    await writeFile(root, "src/a.ts", "export function a() { return 1; }\n");
+    await writeFile(root, "notes.yaml", "ignored: true\n");
+
+    const wholeRepo = await buildArchitectureSnapshot(root);
+    const explicitWholeRepo = await buildArchitectureSnapshot(root, { includeRoots: ["."] });
+
+    expect(explicitWholeRepo.files).toEqual(wholeRepo.files);
+  });
+
   it("reports new cycles without reporting pre-existing cycles", () => {
     const base = makeSnapshot({
       cycles: [{ key: "src/old-a.ts->src/old-b.ts", files: ["src/old-a.ts", "src/old-b.ts"], priorityScore: 10, size: 2 }],
@@ -127,6 +138,22 @@ describe("architecture drift", () => {
     expect(report.findings).toEqual([]);
     expect(report.policy.failed).toBe(true);
     expect(report.policy.failedKinds).toEqual(["new-cycle"]);
+  });
+
+  it("does not say there are no findings when all findings are omitted", () => {
+    const report = compareArchitectureSnapshots(
+      makeSnapshot(),
+      makeSnapshot({
+        cycles: [{ key: "src/a.ts->src/b.ts", files: ["src/a.ts", "src/b.ts"], priorityScore: 20, size: 2 }],
+      }),
+      { failOn: [], thresholds: { hotspotJump: 20, maxFindings: 0 } },
+    );
+
+    const text = renderArchitectureDriftReport(report);
+
+    expect(text).not.toContain("No architecture drift findings.");
+    expect(text).toContain("All architecture drift findings were omitted by the current limit.");
+    expect(text).toContain("Omitted 1 finding(s).");
   });
 
   it("renders a short grouped pretty report", () => {

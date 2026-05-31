@@ -19,7 +19,6 @@ import type {
   ArchitectureUnresolvedImport,
 } from "./types.js";
 
-const DUPLICATE_PROJECT_PATTERNS = [...DEFAULT_PROJECT_PATTERNS, "**/*.{json,jsonc,toml,txt,yaml,yml}"];
 const DEFAULT_DUPLICATE_LIMIT = 50;
 
 function normalizeRoot(root: string): string {
@@ -39,7 +38,7 @@ function isUnderIncludeRoots(filePath: string, roots: readonly string[]): boolea
 async function listFilesForSnapshot(root: string, options: ArchitectureSnapshotOptions): Promise<string[] | undefined> {
   if (!options.includeRoots?.length) return undefined;
   const roots = options.includeRoots.map((entry) => normalizeIncludeRoot(root, entry));
-  const files = await listProjectFiles(root, DUPLICATE_PROJECT_PATTERNS, options.discovery);
+  const files = await listProjectFiles(root, DEFAULT_PROJECT_PATTERNS, options.discovery);
   return files.filter((file) => isUnderIncludeRoots(file, roots)).sort();
 }
 

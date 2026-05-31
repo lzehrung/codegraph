@@ -50,7 +50,11 @@ export function renderArchitectureDriftReport(
   const findings = report.findings.slice(0, limit);
   const lines = ["Architecture drift", ""];
   if (!findings.length) {
-    lines.push("No architecture drift findings.");
+    if (report.omittedCounts.findings || report.findings.length) {
+      lines.push("All architecture drift findings were omitted by the current limit.");
+    } else {
+      lines.push("No architecture drift findings.");
+    }
   } else {
     for (const severity of ["error", "warning", "info"] as const) {
       pushSeveritySection(

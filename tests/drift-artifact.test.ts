@@ -26,6 +26,51 @@ describe("architecture drift artifact baselines", () => {
     expect(snapshot.unresolved.total).toBe(0);
   });
 
+  it("loads artifact cycles in deterministic key order", async () => {
+    const root = await mkTmpDir("cg-drift-artifact-cycles-");
+    await writeFile(
+      root,
+      "manifest.json",
+      JSON.stringify({
+        schemaVersion: 1,
+        graphJsonSchema: "codegraph.graph-json",
+        artifacts: { graphJson: "graph.json" },
+      }),
+    );
+    await writeFile(
+      root,
+      "graph.json",
+      JSON.stringify({
+        schemaVersion: 1,
+        format: "codegraph.graph-json",
+        files: ["z/a.ts", "z/b.ts", "a/a.ts", "a/b.ts"],
+        fileEdges: [
+          { from: "z/a.ts", to: { type: "file", path: "z/b.ts" }, raw: "./b" },
+          { from: "z/b.ts", to: { type: "file", path: "z/a.ts" }, raw: "./a" },
+          { from: "a/a.ts", to: { type: "file", path: "a/b.ts" }, raw: "./b" },
+          { from: "a/b.ts", to: { type: "file", path: "a/a.ts" }, raw: "./a" },
+        ],
+        symbols: [],
+        symbolEdges: [],
+        graph: {
+          files: ["z/a.ts", "z/b.ts", "a/a.ts", "a/b.ts"],
+          fileEdges: [
+            { from: "z/a.ts", to: { type: "file", path: "z/b.ts" }, raw: "./b" },
+            { from: "z/b.ts", to: { type: "file", path: "z/a.ts" }, raw: "./a" },
+            { from: "a/a.ts", to: { type: "file", path: "a/b.ts" }, raw: "./b" },
+            { from: "a/b.ts", to: { type: "file", path: "a/a.ts" }, raw: "./a" },
+          ],
+          symbols: [],
+          symbolEdges: [],
+        },
+      }),
+    );
+
+    const snapshot = await loadArchitectureSnapshotFromArtifact(root);
+
+    expect(snapshot.cycles.map((cycle) => cycle.key)).toEqual(["a/a.ts->a/b.ts", "z/a.ts->z/b.ts"]);
+  });
+
   it("compares artifact baselines to the current checkout", async () => {
     const root = await mkTmpDir("cg-drift-artifact-head-");
     await writeFile(root, "src/a.ts", "import { b } from './b'; export function a() { return b(); }\n");
