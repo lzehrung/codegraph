@@ -194,7 +194,7 @@ codegraph grep --pattern 'eval\(' --ignore-case
 - Small orientation budgets skip deeper health analysis; use `--budget medium` or `--budget large` when health counts matter.
 - Use `packet get` with file, symbol, chunk, SQL, graph, or review handles to retrieve bounded evidence plus follow-up commands.
 
-`search` is deterministic and vectorless. `explain` resolves file paths, symbol names, SQL object names, and search handles into bounded packets with symbols, graph context, references, snippets, SQL facts, review tasks, candidate tests, limits, omissions, and follow-ups.
+`search` is deterministic and vectorless. `explain` resolves file paths, symbol names, SQL object names, and search handles into bounded packets with symbols, graph context, references, snippets, duplicate context, SQL facts, review tasks, candidate tests, limits, omissions, and follow-ups. Use `--max-duplicates` to tune duplicate context in `explain` and `packet get`.
 
 For SQL, prefer handles or schema-qualified names when basenames may be ambiguous. Reference and snippet omission counts are lower bounds after bounded navigation reaches its cap.
 
@@ -330,6 +330,7 @@ Pretty impact and review summaries also show high-confidence exact or renamed du
 - `impact --pretty` defaults to `--duplicates changed`.
 - `review --summary` defaults to `--duplicates impacted`.
 - Use `--duplicates off|changed|impacted|all` to control duplicate-lead scope.
+- Structured review JSON also adds bounded `duplicate-sibling` review tasks when changed files or symbols overlap high-confidence duplicate groups. Treat these as "check the sibling implementation" prompts, not semantic-equivalence claims.
 - JSON output keeps the existing impact and review contracts; use `codegraph duplicates` for full grouped duplicate JSON.
 
 ### Call Compatibility Output

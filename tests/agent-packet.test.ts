@@ -29,6 +29,35 @@ describe("agent packet", () => {
     expect(packet.followUps.length).toBeGreaterThan(0);
   });
 
+  it("retrieves duplicate context in file packets", async () => {
+    const root = await mkTmpDir("cg-agent-packet-dups-");
+    const source = `
+export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }>) {
+  const totals: number[] = [];
+  const labels: string[] = [];
+  for (const row of rows) {
+    const subtotal = row.amount + row.tax;
+    const rounded = Math.round(subtotal * 100) / 100;
+    const label = rounded > 100 ? "large" : "small";
+    labels.push(label);
+    totals.push(rounded);
+  }
+  const encoded = totals.map((value, index) => labels[index] + ":" + value.toFixed(2));
+  return encoded.filter((value) => value.includes(":")).join(",");
+}
+`;
+    await writeFile(root, "src/a.ts", source);
+    await writeFile(root, "src/b.ts", source);
+
+    const packet = await getCodegraphPacket({ root, handle: "file:src%2Fa.ts", maxDuplicates: 1 });
+
+    if (packet.packet.schemaVersion !== 1 || !("duplicates" in packet.packet)) {
+      throw new Error("expected explanation packet");
+    }
+    expect(packet.packet.duplicates).toHaveLength(1);
+    expect(packet.omittedCounts.duplicates).toBe(0);
+  });
+
   it("retrieves review packets from orientation handles", async () => {
     const root = await mkTmpDir("cg-agent-packet-review-");
     runGit(root, ["init"]);

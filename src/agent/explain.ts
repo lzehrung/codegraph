@@ -1,4 +1,10 @@
 import fs from "node:fs/promises";
+import {
+  findDuplicateContext,
+  type DuplicateGroup,
+  type DuplicateSuggestion,
+  type DuplicateTarget,
+} from "../duplicates.js";
 import { findReferences } from "../indexer/navigation.js";
 import type { Reference, SymbolDef } from "../indexer/types.js";
 import { getDependencies, getReverseDependencies } from "../graphs/queries.js";
@@ -11,11 +17,13 @@ import {
   AGENT_EXPLAIN_DEFAULT_DEPENDENCY_LIMIT,
   AGENT_EXPLAIN_DEFAULT_SNIPPET_LIMIT,
   AGENT_EXPLAIN_DEFAULT_SYMBOL_LIMIT,
+  AGENT_EXPLAIN_DEFAULT_DUPLICATE_LIMIT,
   AGENT_EXPLAIN_FILE_SYMBOL_REF_LIMIT,
   AGENT_EXPLAIN_FORMAT_FOLLOWUP_LIMIT,
   AGENT_EXPLAIN_FORMAT_SYMBOL_LIMIT,
   AGENT_EXPLAIN_MAX_DEPENDENCY_LIMIT,
   AGENT_EXPLAIN_MAX_SNIPPET_LIMIT,
+  AGENT_EXPLAIN_MAX_DUPLICATE_LIMIT,
   AGENT_EXPLAIN_MAX_SYMBOL_LIMIT,
   AGENT_EXPLAIN_REVIEW_CONTEXT_CANDIDATE_LIMIT,
   AGENT_EXPLAIN_REVIEW_TASK_LIMIT,
@@ -59,6 +67,7 @@ export type AgentExplainTarget = {
   maxRelatedSqlObjects?: number;
   maxSnippets?: number;
   maxSymbols?: number;
+  maxDuplicates?: number;
 };
 
 export type AgentExplanationTarget = {
@@ -109,6 +118,31 @@ export type AgentExplanationChangedContext = {
   candidateTests: Array<{ file: string; confidence: string; reason: string }>;
 };
 
+export type AgentExplanationDuplicateSide = {
+  file: string;
+  startLine: number;
+  endLine: number;
+  tokenCount: number;
+  handle: string;
+  fileHandle: string;
+  chunkHandle: string;
+  sqlHandle?: string;
+  symbolHandle?: string;
+  name?: string;
+};
+
+export type AgentExplanationDuplicate = {
+  id: string;
+  confidence: DuplicateGroup["confidence"];
+  cloneType: DuplicateGroup["cloneType"];
+  score: number;
+  left: AgentExplanationDuplicateSide;
+  right: AgentExplanationDuplicateSide;
+  rawPairCount: number;
+  reasons: string[];
+  hint: string;
+};
+
 export type AgentExplanation = {
   schemaVersion: 1;
   root: string;
@@ -119,6 +153,7 @@ export type AgentExplanation = {
   reverseDependencies: AgentExplanationDependency[];
   references: AgentExplanationReference[];
   relatedSqlObjects: AgentExplanationSqlObject[];
+  duplicates: AgentExplanationDuplicate[];
   snippets: AgentExplanationSnippet[];
   hotspots: Array<{ file: string; fanIn: number; fanOut: number; score: number }>;
   followUps: string[];
@@ -127,6 +162,7 @@ export type AgentExplanation = {
     dependencies: number;
     references: number;
     relatedSqlObjects: number;
+    duplicates: number;
     snippets: number;
   };
   omittedCounts: {
@@ -135,6 +171,7 @@ export type AgentExplanation = {
     reverseDependencies: number;
     references: number;
     relatedSqlObjects: number;
+    duplicates: number;
     snippets: number;
   };
   changedContext?: AgentExplanationChangedContext;
@@ -406,6 +443,11 @@ async function buildExplanation(
     AGENT_EXPLAIN_DEFAULT_SYMBOL_LIMIT,
     AGENT_EXPLAIN_MAX_SYMBOL_LIMIT,
   );
+  const maxDuplicates = defaultAgentLimit(
+    request.maxDuplicates,
+    AGENT_EXPLAIN_DEFAULT_DUPLICATE_LIMIT,
+    AGENT_EXPLAIN_MAX_DUPLICATE_LIMIT,
+  );
 
   if (resolved.kind === "not_found") {
     return emptyExplanation(snapshot, {
@@ -428,7 +470,8 @@ async function buildExplanation(
   const references = referenceContext.references;
   const snippets = referenceContext.snippets;
   const relatedSqlObjects = await collectRelatedSqlObjects(snapshot, lookup, resolved, file, maxRelatedSqlObjects);
-  const followUps = collectFollowUps(snapshot, resolved, boundedSymbols.items, relFile);
+  const duplicates = await collectDuplicateContext(snapshot, resolved, relFile, maxDuplicates);
+  const followUps = collectFollowUps(snapshot, resolved, boundedSymbols.items, relFile, duplicates.items);
   const changedContext = await collectChangedContext(request);
 
   return {
@@ -449,6 +492,7 @@ async function buildExplanation(
     reverseDependencies: reverseDependencies.items,
     references: references.items,
     relatedSqlObjects: relatedSqlObjects.items,
+    duplicates: duplicates.items,
     snippets: snippets.items,
     hotspots,
     followUps,
@@ -457,6 +501,7 @@ async function buildExplanation(
       dependencies: maxDependencies,
       references: maxReferences,
       relatedSqlObjects: maxRelatedSqlObjects,
+      duplicates: maxDuplicates,
       snippets: maxSnippets,
     },
     omittedCounts: {
@@ -465,6 +510,7 @@ async function buildExplanation(
       reverseDependencies: reverseDependencies.omitted,
       references: references.omitted,
       relatedSqlObjects: relatedSqlObjects.omitted,
+      duplicates: duplicates.omitted,
       snippets: snippets.omitted,
     },
     ...(changedContext ? { changedContext } : {}),
@@ -482,6 +528,7 @@ function emptyExplanation(snapshot: AgentProjectSnapshot, target: AgentExplanati
     reverseDependencies: [],
     references: [],
     relatedSqlObjects: [],
+    duplicates: [],
     snippets: [],
     hotspots: [],
     followUps: [`codegraph search ${quoteShellArg(target.label)} --json`],
@@ -490,6 +537,7 @@ function emptyExplanation(snapshot: AgentProjectSnapshot, target: AgentExplanati
       dependencies: AGENT_EXPLAIN_DEFAULT_DEPENDENCY_LIMIT,
       references: AGENT_EXPLAIN_DEFAULT_DEPENDENCY_LIMIT,
       relatedSqlObjects: AGENT_EXPLAIN_DEFAULT_DEPENDENCY_LIMIT,
+      duplicates: AGENT_EXPLAIN_DEFAULT_DUPLICATE_LIMIT,
       snippets: AGENT_EXPLAIN_DEFAULT_SNIPPET_LIMIT,
     },
     omittedCounts: {
@@ -498,6 +546,7 @@ function emptyExplanation(snapshot: AgentProjectSnapshot, target: AgentExplanati
       reverseDependencies: 0,
       references: 0,
       relatedSqlObjects: 0,
+      duplicates: 0,
       snippets: 0,
     },
   };
@@ -587,6 +636,91 @@ function compareDependencies(left: AgentExplanationDependency, right: AgentExpla
   const depthDelta = left.depth - right.depth;
   if (depthDelta !== 0) return depthDelta;
   return left.file.localeCompare(right.file);
+}
+
+async function collectDuplicateContext(
+  snapshot: AgentProjectSnapshot,
+  resolved: Exclude<ResolvedExplainTarget, { kind: "not_found" }>,
+  relFile: string,
+  limit: number,
+): Promise<BoundedAgentList<AgentExplanationDuplicate>> {
+  if (resolved.kind === "sql_object") return emptyAgentBoundedList();
+  const target =
+    resolved.kind === "file"
+      ? { file: relFile }
+      : {
+          file: relFile,
+          startLine: resolved.def.range.start.line,
+          endLine: resolved.def.range.end.line,
+        };
+  const result = await findDuplicateContext(snapshot.index, target, {
+    projectRoot: snapshot.root,
+    minConfidence: "medium",
+    includeSameFile: true,
+    limit,
+  });
+  return {
+    items: result.groups.map((group) => summarizeDuplicateGroup(group, result.target)),
+    omitted: result.omittedCounts.groups,
+  };
+}
+
+function summarizeDuplicateSide(side: DuplicateGroup["primaryLeft"]): AgentExplanationDuplicateSide {
+  return {
+    file: side.file,
+    startLine: side.startLine,
+    endLine: side.endLine,
+    tokenCount: side.tokenCount,
+    handle: side.handle,
+    fileHandle: side.fileHandle,
+    chunkHandle: side.chunkHandle,
+    ...(side.sqlHandle !== undefined ? { sqlHandle: side.sqlHandle } : {}),
+    ...(side.symbolHandle !== undefined ? { symbolHandle: side.symbolHandle } : {}),
+    ...(side.name !== undefined ? { name: side.name } : {}),
+  };
+}
+
+function duplicateRepairHint(group: DuplicateGroup): string {
+  if (group.cloneType === "exact" || group.cloneType === "renamed") {
+    return "Possible extraction candidate; verify behavior before refactoring.";
+  }
+  return "Check related duplicate implementation for drift.";
+}
+
+function duplicateUnitTouchesTarget(side: DuplicateGroup["primaryLeft"], target: DuplicateTarget): boolean {
+  if (side.file !== target.file) return false;
+  if (target.startLine === undefined) return true;
+  const targetEndLine = target.endLine ?? target.startLine;
+  return side.startLine <= targetEndLine && target.startLine <= side.endLine;
+}
+
+function duplicatePairForTarget(
+  group: DuplicateGroup,
+  target: DuplicateTarget,
+): Pick<DuplicateSuggestion, "left" | "right"> {
+  if (duplicateUnitTouchesTarget(group.primaryLeft, target) || duplicateUnitTouchesTarget(group.primaryRight, target)) {
+    return { left: group.primaryLeft, right: group.primaryRight };
+  }
+  return (
+    group.variants.find(
+      (variant) => duplicateUnitTouchesTarget(variant.left, target) || duplicateUnitTouchesTarget(variant.right, target),
+    ) ?? { left: group.primaryLeft, right: group.primaryRight }
+  );
+}
+
+function summarizeDuplicateGroup(group: DuplicateGroup, target: DuplicateTarget): AgentExplanationDuplicate {
+  const pair = duplicatePairForTarget(group, target);
+  return {
+    id: group.id,
+    confidence: group.confidence,
+    cloneType: group.cloneType,
+    score: group.score,
+    left: summarizeDuplicateSide(pair.left),
+    right: summarizeDuplicateSide(pair.right),
+    rawPairCount: group.rawPairCount,
+    reasons: group.reasons,
+    hint: duplicateRepairHint(group),
+  };
 }
 
 function collectTargetHotspots(
@@ -851,6 +985,7 @@ function collectFollowUps(
   resolved: Exclude<ResolvedExplainTarget, { kind: "not_found" }>,
   symbols: AgentExplanationSymbol[],
   relFile: string,
+  duplicates: AgentExplanationDuplicate[],
 ): string[] {
   const followUps = new Set<string>(collectCommonFileFollowUps(relFile));
 
@@ -877,7 +1012,21 @@ function collectFollowUps(
     followUps.add(`codegraph search ${quoteShellArg(relFile)} --mode sql --json`);
   }
 
+  if (duplicates.length) {
+    followUps.add(formatDuplicateFollowUp(duplicates));
+  }
+
   return [...followUps].sort();
+}
+
+function formatDuplicateFollowUp(duplicates: readonly AgentExplanationDuplicate[]): string {
+  const files = new Set<string>();
+  for (const duplicate of duplicates) {
+    files.add(duplicate.left.file);
+    files.add(duplicate.right.file);
+  }
+  const scope = [...files].sort().map(quoteShellArg).join(" ");
+  return `codegraph duplicates --root . ${scope} --min-confidence medium --include-same-file`;
 }
 
 function buildSummary(

@@ -62,6 +62,7 @@ export const MCP_TOOLS: Tool[] = [
         handle: stringProperty,
         maxSymbols: { type: "integer", minimum: 1, maximum: 200 },
         maxSnippets: { type: "integer", minimum: 1, maximum: 50 },
+        maxDuplicates: { type: "integer", minimum: 1, maximum: 20 },
       },
       ["handle"],
     ),

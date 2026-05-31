@@ -61,6 +61,7 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--max-dependencies",
   "--max-snippets",
   "--max-symbols",
+  "--max-duplicates",
   "--artifact",
   "--host",
   "--port",

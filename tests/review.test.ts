@@ -1578,6 +1578,71 @@ describe("Review report", () => {
       buildSpy.mockRestore();
     }
   });
+
+  it("adds duplicate sibling review tasks for changed duplicate implementations", async () => {
+    const root = await mkTmpDir("dg-review-duplicates-");
+    runGit(root, ["init"]);
+    runGit(root, ["symbolic-ref", "HEAD", "refs/heads/main"]);
+    const source = `
+export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }>) {
+  const totals: number[] = [];
+  const labels: string[] = [];
+  for (const row of rows) {
+    const subtotal = row.amount + row.tax;
+    const rounded = Math.round(subtotal * 100) / 100;
+    const label = rounded > 100 ? "large" : "small";
+    labels.push(label);
+    totals.push(rounded);
+  }
+  const encoded = totals.map((value, index) => labels[index] + ":" + value.toFixed(2));
+  return encoded.filter((value) => value.includes(":")).join(",");
+}
+`;
+    await fsp.mkdir(path.join(root, "src"), { recursive: true });
+    await fsp.writeFile(path.join(root, "src/a.ts"), source, "utf8");
+    await fsp.writeFile(path.join(root, "src/b.ts"), source, "utf8");
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "initial"]);
+
+    await fsp.writeFile(path.join(root, "src/a.ts"), source.replace("large", "huge"), "utf8");
+
+    const report = await buildReviewReport(root, { gitBase: "HEAD", gitHead: "WORKTREE" });
+    const task = report.reviewTasks.find((entry) => entry.reason === "duplicate-sibling");
+
+    expect(task).toBeDefined();
+    expect(task?.title).toBe("Check related duplicate implementation");
+    expect(task?.description).toContain("src/b.ts");
+    expect(task?.priority).toBe("high");
+  });
+
+  it("keeps duplicate sibling tasks for symbol-free changed regions in files with changed symbols", async () => {
+    const root = await mkTmpDir("dg-review-duplicate-top-level-");
+    runGit(root, ["init"]);
+    runGit(root, ["symbolic-ref", "HEAD", "refs/heads/main"]);
+    await fsp.mkdir(path.join(root, "src"), { recursive: true });
+    const topLevelSource = [
+      "['one', 'two', 'three', 'four']",
+      "  .concat(['red', 'blue', 'green', 'yellow'])",
+      "  .map((value) => value.toUpperCase())",
+      "  .filter((value) => value.length > 0)",
+      "  .join(',');",
+      "",
+    ].join("\n");
+    const bSource = `${topLevelSource}export function changed() { return 1; }\n`;
+    await fsp.writeFile(path.join(root, "src/a.ts"), topLevelSource, "utf8");
+    await fsp.writeFile(path.join(root, "src/b.ts"), bSource, "utf8");
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "initial"]);
+
+    await fsp.writeFile(path.join(root, "src/b.ts"), `${topLevelSource}\nexport function changed() { return 2; }\n`, "utf8");
+
+    const report = await buildReviewReport(root, { gitBase: "HEAD", gitHead: "WORKTREE" });
+    const task = report.reviewTasks.find(
+      (entry) => entry.reason === "duplicate-sibling" && entry.description.includes("src/a.ts"),
+    );
+
+    expect(task).toBeDefined();
+  });
 });
 
 describe("Indexing helper", () => {

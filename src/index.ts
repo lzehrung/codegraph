@@ -258,6 +258,8 @@ export type {
   AgentExplainTarget,
   AgentExplanation,
   AgentExplanationChangedContext,
+  AgentExplanationDuplicate,
+  AgentExplanationDuplicateSide,
   AgentExplanationDependency,
   AgentExplanationReference,
   AgentExplanationSnippet,
@@ -335,10 +337,14 @@ export { chunkSFCFile, type ChunkSFCOptions } from "./chunking/chunkSFC.js";
 /** In-memory duplicate and near-duplicate code detection. */
 export {
   findDuplicates,
+  findDuplicateContext,
+  findDuplicateContexts,
   type DuplicateCloneType,
   type DuplicateConfidence,
   type DuplicateDetectionOmittedCounts,
   type DuplicateDetectionOptions,
+  type DuplicateContextResult,
+  type DuplicateTarget,
   type DuplicateDetectionResult,
   type DuplicateDetectionStats,
   type DuplicateGroup,

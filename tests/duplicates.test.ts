@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { runCli } from "../src/cli.js";
 import { appendDuplicateLeadSummary } from "../src/duplicatesLeads.js";
-import { buildProjectIndex, findDuplicates } from "../src/index.js";
+import { buildProjectIndex, findDuplicateContext, findDuplicates } from "../src/index.js";
 
 const tempRoots: string[] = [];
 
@@ -103,6 +103,232 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     expect(result.groups[0]?.confidence).toBe("high");
     expect(result.groups[0]?.primaryLeft.file).toBe("src/a.ts");
     expect(result.groups[0]?.primaryRight.file).toBe("src/b.ts");
+  });
+
+  test("adds stable handles to duplicate units", async () => {
+    const root = await makeTempProject();
+    const duplicateSource = `
+export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }>) {
+  const totals: number[] = [];
+  const labels: string[] = [];
+  for (const row of rows) {
+    const subtotal = row.amount + row.tax;
+    const rounded = Math.round(subtotal * 100) / 100;
+    const label = rounded > 100 ? "large" : "small";
+    labels.push(label);
+    totals.push(rounded);
+  }
+  const encoded = totals.map((value, index) => labels[index] + ":" + value.toFixed(2));
+  return encoded.filter((value) => value.includes(":")).join(",");
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", duplicateSource);
+    await writeProjectFile(root, "src/b.ts", duplicateSource);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, { minConfidence: "high", limit: 1 });
+    const unit = result.groups[0]?.primaryLeft;
+
+    expect(unit?.fileHandle).toBe("file:src%2Fa.ts");
+    expect(unit?.chunkHandle).toBe("chunk:src%2Fa.ts:2");
+    expect(unit?.symbolHandle).toBe("symbol:src%2Fa.ts:normalizeInvoiceRows:2:17");
+    expect(unit?.handle).toBe(unit?.symbolHandle);
+  });
+
+  test("filters duplicate context by target before limiting", async () => {
+    const root = await makeTempProject();
+    const firstSource = `
+export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }>) {
+  const totals: number[] = [];
+  const labels: string[] = [];
+  for (const row of rows) {
+    const subtotal = row.amount + row.tax;
+    const rounded = Math.round(subtotal * 100) / 100;
+    const label = rounded > 100 ? "large" : "small";
+    labels.push(label);
+    totals.push(rounded);
+  }
+  const encoded = totals.map((value, index) => labels[index] + ":" + value.toFixed(2));
+  return encoded.filter((value) => value.includes(":")).join(",");
+}
+`;
+    const secondSource = `
+export function scoreUsers(users: Array<{ active: boolean; points: number }>) {
+  const scored: number[] = [];
+  const labels: string[] = [];
+  for (const user of users) {
+    const base = user.active ? user.points : 0;
+    const bonus = base > 50 ? 10 : 2;
+    const label = bonus > 5 ? "priority" : "standard";
+    labels.push(label);
+    scored.push(base + bonus);
+  }
+  const total = scored.reduce((currentTotal, value) => currentTotal + value, 0);
+  return total + labels.filter((label) => label.length > 0).length;
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", firstSource);
+    await writeProjectFile(root, "src/b.ts", firstSource);
+    await writeProjectFile(root, "src/c.ts", secondSource);
+    await writeProjectFile(root, "src/d.ts", secondSource);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicateContext(index, { file: "src/c.ts" }, { minConfidence: "high", limit: 1 });
+
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0]?.primaryLeft.file).toBe("src/c.ts");
+    expect(result.groups[0]?.primaryRight.file).toBe("src/d.ts");
+  });
+
+  test("normalizes duplicate context target paths before filtering", async () => {
+    const root = await makeTempProject();
+    const source = `
+export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }>) {
+  const totals: number[] = [];
+  const labels: string[] = [];
+  for (const row of rows) {
+    const subtotal = row.amount + row.tax;
+    const rounded = Math.round(subtotal * 100) / 100;
+    const label = rounded > 100 ? "large" : "small";
+    labels.push(label);
+    totals.push(rounded);
+  }
+  const encoded = totals.map((value, index) => labels[index] + ":" + value.toFixed(2));
+  return encoded.filter((value) => value.includes(":")).join(",");
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", source);
+    await writeProjectFile(root, "src/b.ts", source);
+
+    const index = await buildProjectIndex(root);
+    const bare = await findDuplicateContext(index, { file: "src/a.ts" }, { minConfidence: "high", limit: 1 });
+    const dotted = await findDuplicateContext(index, { file: "./src/a.ts" }, { minConfidence: "high", limit: 1 });
+    const absolute = await findDuplicateContext(index, { file: path.join(root, "src/a.ts") }, { minConfidence: "high", limit: 1 });
+
+    expect(dotted.target.file).toBe("src/a.ts");
+    expect(absolute.target.file).toBe("src/a.ts");
+    expect(dotted.groups.map((group) => group.id)).toEqual(bare.groups.map((group) => group.id));
+    expect(absolute.groups.map((group) => group.id)).toEqual(bare.groups.map((group) => group.id));
+  });
+
+  test("duplicate context includes target matches from raw variants without exposing raw pairs by default", async () => {
+    const root = await makeTempProject();
+    const source = `
+export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }>) {
+  const totals: number[] = [];
+  const labels: string[] = [];
+  for (const row of rows) {
+    const subtotal = row.amount + row.tax;
+    const rounded = Math.round(subtotal * 100) / 100;
+    const label = rounded > 100 ? "large" : "small";
+    labels.push(label);
+    totals.push(rounded);
+  }
+  const encoded = totals.map((value, index) => labels[index] + ":" + value.toFixed(2));
+  return encoded.filter((value) => value.includes(":")).join(",");
+}
+`;
+    for (const name of ["a", "b", "c", "d", "e", "f", "g"]) {
+      await writeProjectFile(root, `src/${name}.ts`, source);
+    }
+
+    const index = await buildProjectIndex(root);
+    const target = { file: "src/g.ts" };
+    const result = await findDuplicateContext(index, target, { minConfidence: "high", limit: 5 });
+    const rawResult = await findDuplicateContext(index, target, { includeRawPairs: true, minConfidence: "high", limit: 5 });
+    expect(rawResult.suggestions?.length).toBeGreaterThan(0);
+    for (const suggestion of rawResult.suggestions ?? []) {
+      expect(suggestion.left.file === "src/g.ts" || suggestion.right.file === "src/g.ts").toBeTruthy();
+    }
+
+    expect(result.groups.length).toBeGreaterThan(0);
+    expect(result.groups.some((group) => group.primaryLeft.file === "src/g.ts" || group.primaryRight.file === "src/g.ts")).toBeTruthy();
+    expect(result.suggestions).toBeUndefined();
+    for (const group of result.groups) {
+      const rawGroup = rawResult.groups.find((entry) => entry.id === group.id);
+      expect(rawGroup).toBeDefined();
+      expect(group.variantCount).toBeLessThanOrEqual(5);
+      expect(group.omittedVariantCount).toBe(Math.max(0, (rawGroup?.variantCount ?? 0) - group.variantCount));
+    }
+    for (const group of result.groups) {
+      const primaryTouchesTarget = group.primaryLeft.file === "src/g.ts" || group.primaryRight.file === "src/g.ts";
+      const variantTouchesTarget = group.variants.some(
+        (variant) => variant.left.file === "src/g.ts" || variant.right.file === "src/g.ts",
+      );
+      expect(primaryTouchesTarget || variantTouchesTarget).toBeTruthy();
+    }
+  });
+
+  test("uses target pair counts for oversized duplicate context buckets", async () => {
+    const root = await makeTempProject();
+    const source = [
+      "['alpha', 'beta', 'gamma', 'delta']",
+      "  .concat(['epsilon', 'zeta', 'eta', 'theta'])",
+      "  .map((value) => value.toUpperCase())",
+      "  .filter((value) => value.length > 0)",
+      "  .join(',');",
+      "",
+    ].join("\n");
+    await writeProjectFile(root, "src/a.ts", source);
+    await writeProjectFile(root, "src/b.ts", source);
+    await writeProjectFile(root, "src/c.ts", source);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicateContext(index, { file: "src/a.ts" }, { maxBucketSize: 2, minConfidence: "high", minTokens: 1, limit: 5 });
+
+    expect(result.groups.length).toBeGreaterThan(0);
+    expect(result.omittedCounts.oversizedBuckets).toBe(0);
+  });
+
+  test("ignores unrelated oversized buckets for target context", async () => {
+    const target = `
+export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }>) {
+  const totals: number[] = [];
+  const labels: string[] = [];
+  for (const row of rows) {
+    const subtotal = row.amount + row.tax;
+    const rounded = Math.round(subtotal * 100) / 100;
+    const label = rounded > 100 ? "large" : "small";
+    labels.push(label);
+    totals.push(rounded);
+  }
+  const encoded = totals.map((value, index) => labels[index] + ":" + value.toFixed(2));
+  return encoded.filter((value) => value.includes(":")).join(",");
+}
+`;
+    const repeated = JSON.stringify(
+      {
+        alpha: ["one", "two", "three", "four"],
+        beta: { enabled: true, retries: 3, timeout: 50 },
+        gamma: ["red", "blue", "green", "yellow"],
+      },
+      null,
+      2,
+    );
+
+    const baselineRoot = await makeTempProject();
+    await writeProjectFile(baselineRoot, "src/target-a.ts", target);
+    await writeProjectFile(baselineRoot, "src/target-b.ts", target);
+    const baselineIndex = await buildProjectIndex(baselineRoot);
+    const baseline = await findDuplicateContext(baselineIndex, { file: "src/target-a.ts" }, { maxBucketSize: 4, minConfidence: "high", minTokens: 1, limit: 5 });
+
+    const noisyRoot = await makeTempProject();
+    await writeProjectFile(noisyRoot, "src/noise-a.json", `${repeated}\n`);
+    await writeProjectFile(noisyRoot, "src/noise-b.json", `${repeated}\n`);
+    await writeProjectFile(noisyRoot, "src/noise-c.json", `${repeated}\n`);
+    await writeProjectFile(noisyRoot, "src/noise-d.json", `${repeated}\n`);
+    await writeProjectFile(noisyRoot, "src/noise-e.json", `${repeated}\n`);
+    await writeProjectFile(noisyRoot, "src/target-a.ts", target);
+    await writeProjectFile(noisyRoot, "src/target-b.ts", target);
+    const noisyIndex = await buildProjectIndex(noisyRoot);
+    const noisy = await findDuplicateContext(noisyIndex, { file: "src/target-a.ts" }, { maxBucketSize: 4, minConfidence: "high", minTokens: 1, limit: 5 });
+
+    expect(noisy.groups.length).toBeGreaterThan(0);
+    expect(noisy.omittedCounts.oversizedBuckets).toBe(baseline.omittedCounts.oversizedBuckets);
+    expect(noisy.groups.map((group) => group.id)).toEqual(baseline.groups.map((group) => group.id));
   });
 
   test("groups overlapping symbol and chunk variants into one finding", async () => {

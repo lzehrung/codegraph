@@ -112,7 +112,7 @@ console.log(first?.handle, first?.rankReasons, first?.omittedCounts, first?.foll
 
 Use `mode: "sql"` for SQL objects, or pass `from` plus `depth` with `mode: "graph"` to boost matches near a file path, file/chunk/graph handle, symbol handle, SQL handle, or symbol name.
 
-`explainCodegraphTarget()` resolves a file path, symbol name, SQL object name, or search handle into a bounded packet for follow-up agent work. SQL object names resolve by exact name first; unqualified basenames resolve only when unique. SQL related objects include a `relation` such as `incoming:reads_from`, `outgoing:writes_to`, or `same_file`. With changed context enabled, the packet includes compact review tasks and candidate tests:
+`explainCodegraphTarget()` resolves a file path, symbol name, SQL object name, or search handle into a bounded packet for follow-up agent work. SQL object names resolve by exact name first; unqualified basenames resolve only when unique. File and symbol explanations also include bounded medium-or-higher duplicate context that touches the target, with stable handles and conservative repair hints. SQL related objects include a `relation` such as `incoming:reads_from`, `outgoing:writes_to`, or `same_file`. With changed context enabled, the packet includes compact review tasks and candidate tests:
 
 ```ts
 const explanation = await explainCodegraphTarget({
@@ -123,6 +123,7 @@ const explanation = await explainCodegraphTarget({
   maxReferences: 10,
   maxRelatedSqlObjects: 10,
   maxSnippets: 5,
+  maxDuplicates: 5,
 });
 
 console.log(explanation.summary, explanation.followUps);
@@ -257,7 +258,7 @@ The integration examples demonstrate semantic chunking with type-based filtering
 - Paths are project-relative when the index has a project root.
 
 ```ts
-import { buildProjectIndex, findDuplicates } from "@lzehrung/codegraph";
+import { buildProjectIndex, findDuplicateContext, findDuplicates } from "@lzehrung/codegraph";
 
 const root = process.cwd();
 const index = await buildProjectIndex(root);
@@ -267,15 +268,21 @@ const duplicates = await findDuplicates(index, {
 });
 
 console.log(duplicates.groups);
+
+const duplicateContext = await findDuplicateContext(index, { file: "src/auth.ts" }, {
+  minConfidence: "medium",
+  limit: 5,
+});
 ```
 
 Useful options:
 
 - `minConfidence`: `high`, `medium`, or `low`; default `medium`.
-- `includeSameFile`: report non-overlapping clones in the same file.
+- `includeSameFile`: report non-overlapping clones in the same file. Agent explain, packet, and review duplicate context enable this so sibling implementations in one file are still visible.
 - `includeSmall`: include units below the default token floor.
 - `includeRawPairs`: include low-level symbol/chunk pair evidence as `suggestions`.
 - `minTokens` and `maxTokens`: tune unit and fallback chunk bounds.
+- `findDuplicateContext`: filters duplicate groups to a target file or line range before applying the result limit.
 
 Tests:
 
@@ -572,7 +579,7 @@ const impact = await tool_impactJSON(root, { provider: "git", base: "HEAD", head
 
 Use the exported TypeScript APIs when another program is composing deterministic review packets, file packs, or model prompts. CLI `--pretty` and `--summary` output is optimized for compact reading by people or models; it is not the stable integration contract.
 
-- `buildReviewReport()` returns a review bundle with `schemaVersion`, changed files, changed symbols, `graphDelta`, candidate tests, `riskSummary`, `reviewTasks`, optional `sqlContext`, compatibility hints when available, and diagnostics.
+- `buildReviewReport()` returns a review bundle with `schemaVersion`, changed files, changed symbols, `graphDelta`, candidate tests, `riskSummary`, `reviewTasks`, optional duplicate sibling-check tasks, optional `sqlContext`, compatibility hints when available, and diagnostics.
 - `analyzeImpactFromDiff()` returns the full or compact impact report shape for batch consumers, including changed-symbol `callCompatibility` hints when available.
 - `analyzeImpactStreaming()` emits progress and incremental chunks, then a final `complete.report` summary. Streaming always returns `format: "stream-summary"`; forwarded `compact` is accepted only for compatibility and is ignored. By default this includes the same key structured fields needed by pack builders: changed files, changed symbols, impacted items, suggestions, export summaries, re-export chains, ranked top impacts, surface area, clusters, cycles, graph edges, diagnostics, and warning text. Set `streamSummary: "light"` when an incremental-only caller wants changed/impacted details and stable terminal counts without paying for terminal suggestions, export summaries, re-export chains, ranked top impacts, graph metadata, cycles, clusters, or surface-area analysis.
 

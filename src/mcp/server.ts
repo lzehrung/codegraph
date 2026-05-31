@@ -106,6 +106,7 @@ export type CodegraphMcpHandlers = {
     handle: string;
     maxSymbols?: number | undefined;
     maxSnippets?: number | undefined;
+    maxDuplicates?: number | undefined;
   }) => Promise<AgentPacketResponse>;
   get_file: (request: {
     file: string;
@@ -223,6 +224,7 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
         handle: request.handle,
         ...(request.maxSymbols !== undefined ? { maxSymbols: request.maxSymbols } : {}),
         ...(request.maxSnippets !== undefined ? { maxSnippets: request.maxSnippets } : {}),
+        ...(request.maxDuplicates !== undefined ? { maxDuplicates: request.maxDuplicates } : {}),
       }),
 
     get_file: async (request) => {
@@ -670,6 +672,7 @@ const packetGetSchema = z.object({
   handle: z.string(),
   maxSymbols: z.number().int().positive().max(200).optional(),
   maxSnippets: z.number().int().positive().max(50).optional(),
+  maxDuplicates: z.number().int().positive().max(20).optional(),
 });
 
 const getFileSchema = z.object({

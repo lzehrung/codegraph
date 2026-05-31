@@ -308,6 +308,7 @@ describe("codegraph MCP handlers", () => {
 
     expect(orientProperties.root).toBeUndefined();
     expect(packetProperties.root).toBeUndefined();
+    expect(packetProperties.maxDuplicates).toBeTruthy();
   });
 
   it("bounds refs by handle with the refs limit", async () => {
