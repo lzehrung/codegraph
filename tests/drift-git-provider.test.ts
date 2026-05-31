@@ -41,4 +41,23 @@ describe("architecture drift git provider", () => {
     expect(afterStatus).toBe("");
     expect(report.findings).toContainEqual(expect.objectContaining({ kind: "new-cycle", severity: "error" }));
   });
+
+  it("accepts WORKTREE as the head sentinel", async () => {
+    const root = await mkTmpDir("cg-drift-worktree-");
+    runGit(root, ["init"]);
+    await writeFile(root, "src/a.ts", "import { b } from './b'; export function a() { return b(); }\n");
+    await writeFile(root, "src/b.ts", "export function b() { return 1; }\n");
+    await commitAll(root, "base");
+
+    await writeFile(root, "src/b.ts", "import { a } from './a'; export function b() { return a(); }\n");
+
+    const report = await analyzeArchitectureDrift(root, {
+      provider: "git",
+      base: "HEAD",
+      head: "WORKTREE",
+      includeRoots: ["src"],
+    });
+
+    expect(report.findings).toContainEqual(expect.objectContaining({ kind: "new-cycle", severity: "error" }));
+  });
 });

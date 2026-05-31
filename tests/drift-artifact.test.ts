@@ -39,6 +39,29 @@ describe("architecture drift artifact baselines", () => {
     expect(report.findings).toContainEqual(expect.objectContaining({ kind: "new-cycle" }));
   });
 
+  it("does not invent API or duplicate drift from derived artifact baselines", async () => {
+    const root = await mkTmpDir("cg-drift-artifact-derived-");
+    await writeFile(
+      root,
+      "src/a.ts",
+      "function helper() { return 1; }\nexport function a() { return helper(); }\n",
+    );
+    const outDir = path.join(root, "baseline");
+    await buildCodegraphArtifact({ root, outDir, graphJson: true });
+
+    await writeFile(
+      root,
+      "src/a.ts",
+      "function renamedHelper() { return 1; }\nexport function a() { return renamedHelper(); }\n",
+    );
+    const report = await analyzeArchitectureDrift(root, { baseArtifact: outDir, head: ".", includeRoots: ["src"] });
+
+    expect(report.findings.some((finding) => finding.kind === "public-api-addition")).toBe(false);
+    expect(report.findings.some((finding) => finding.kind === "public-api-removal")).toBe(false);
+    expect(report.findings.some((finding) => finding.kind === "duplicate-increase")).toBe(false);
+    expect(report.findings.some((finding) => finding.kind === "duplicate-decrease")).toBe(false);
+  });
+
   it("rejects directories without required artifact files", async () => {
     const root = await mkTmpDir("cg-drift-bad-artifact-");
     await fsp.writeFile(path.join(root, "manifest.json"), "{}\n", "utf8");

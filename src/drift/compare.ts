@@ -173,6 +173,10 @@ function comparePublicApi(
   }
 }
 
+function signalEnabled(snapshot: ArchitectureSnapshot, signal: "publicApi" | "duplicates"): boolean {
+  return snapshot.signalAvailability?.[signal] !== false;
+}
+
 function compareDuplicates(findings: ArchitectureDriftFinding[], base: ArchitectureSnapshot, head: ArchitectureSnapshot): void {
   const before = base.duplicates.groups.total;
   const after = head.duplicates.groups.total;
@@ -241,8 +245,12 @@ export function compareArchitectureSnapshots(
   compareCycles(findings, base.cycles, head.cycles);
   compareHotspots(findings, base.hotspots, head.hotspots, thresholds.hotspotJump);
   compareUnresolved(findings, base.unresolved.imports, head.unresolved.imports);
-  comparePublicApi(findings, base.publicApi, head.publicApi);
-  compareDuplicates(findings, base, head);
+  if (signalEnabled(base, "publicApi") && signalEnabled(head, "publicApi")) {
+    comparePublicApi(findings, base.publicApi, head.publicApi);
+  }
+  if (signalEnabled(base, "duplicates") && signalEnabled(head, "duplicates")) {
+    compareDuplicates(findings, base, head);
+  }
   compareGraphEdges(findings, base.graphEdges, head.graphEdges);
   findings.sort(compareFindings);
 

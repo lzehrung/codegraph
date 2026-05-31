@@ -3,6 +3,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { isGitIndexSentinel, isGitWorktreeSentinel } from "../util/git.js";
 import { compareArchitectureSnapshots } from "./compare.js";
 import { buildArchitectureSnapshot } from "./snapshot.js";
 import { loadArchitectureSnapshotFromArtifact } from "./artifact.js";
@@ -22,12 +23,15 @@ function snapshotOptions(options: ArchitectureDriftOptions): ArchitectureSnapsho
 }
 
 function isCurrentCheckoutRef(ref: string | undefined): boolean {
-  return ref === undefined || ref === ".";
+  return ref === undefined || ref === "." || (typeof ref === "string" && isGitWorktreeSentinel(ref));
 }
 
 async function materializeGitRef(root: string, ref: string | undefined, prefix: string): Promise<{ root: string; cleanup?: string }> {
   const checkoutRef = ref;
-  if (checkoutRef === undefined || checkoutRef === ".") return { root };
+  if (checkoutRef !== undefined && isGitIndexSentinel(checkoutRef)) {
+    throw new Error("Architecture drift does not support STAGED/INDEX snapshots yet.");
+  }
+  if (checkoutRef === undefined || checkoutRef === "." || isGitWorktreeSentinel(checkoutRef)) return { root };
   const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
   try {
     await execFileAsync("git", ["clone", "--quiet", "--no-checkout", root, tempRoot], { env: process.env });

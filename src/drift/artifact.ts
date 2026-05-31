@@ -144,12 +144,12 @@ export async function loadArchitectureSnapshotFromArtifact(outDirInput: string):
       return { key: files.join("->"), files, priorityScore: cycle.priorityScore, size: cycle.fileCount };
     }),
     unresolved: unresolvedImports(graph),
-    publicApi: graphJson.graph.symbols
-      ? graphJson.graph.symbols
-          .map((symbol) => ({ id: `${normalizePath(symbol.file)}#${symbol.name}:${symbol.kind}`, file: normalizePath(symbol.file), name: symbol.name, kind: symbol.kind }))
-          .sort((left, right) => left.id.localeCompare(right.id))
-      : [],
+    publicApi: [],
     duplicates: { groups: { total: 0 }, topGroupKeys: [] },
     graphEdges: graphEdges(graph.edges),
+    signalAvailability: {
+      publicApi: false,
+      duplicates: false,
+    },
   };
 }

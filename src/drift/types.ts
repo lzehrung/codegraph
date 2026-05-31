@@ -65,6 +65,12 @@ export interface ArchitectureUnresolvedImportSummary {
   imports: ArchitectureUnresolvedImport[];
 }
 
+
+export interface ArchitectureSignalAvailability {
+  publicApi?: boolean;
+  duplicates?: boolean;
+}
+
 export interface ArchitectureSnapshot {
   schemaVersion: 1;
   root: string;
@@ -75,6 +81,7 @@ export interface ArchitectureSnapshot {
   publicApi: ArchitecturePublicApiSymbol[];
   duplicates: ArchitectureDuplicateSummary;
   graphEdges: ArchitectureGraphEdge[];
+  signalAvailability?: ArchitectureSignalAvailability;
 }
 
 export type ArchitectureSnapshotSummary = Pick<

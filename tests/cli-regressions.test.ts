@@ -85,6 +85,36 @@ async function runCliInProcess(args: string[], cwd: string): Promise<{ stdout: s
   return { stdout, stderr };
 }
 
+async function runCliWithExit(
+  args: string[],
+  cwd: string,
+): Promise<{ stdout: string; stderr: string; exitCode: number | undefined }> {
+  let stdout = "";
+  let stderr = "";
+  let exitCode: number | undefined;
+
+  await runCli(args, {
+    cwd: () => cwd,
+    stdout: (chunk) => {
+      stdout += chunk;
+    },
+    stderr: (chunk) => {
+      stderr += chunk;
+    },
+    exit: (code) => {
+      exitCode = code;
+      throw new Error(`codegraph CLI exited ${code}`);
+    },
+  }).catch((error: unknown) => {
+    if (error instanceof Error && exitCode !== undefined && error.message === `codegraph CLI exited ${exitCode}`) {
+      return;
+    }
+    throw error;
+  });
+
+  return { stdout, stderr, exitCode };
+}
+
 function normalize(p: string): string {
   return p.replace(/\\/g, "/");
 }
@@ -1462,6 +1492,33 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     expect(result.manifestPath.endsWith("manifest.json")).toBeTruthy();
     expect(result.artifacts.sqlite).toBe("codegraph.sqlite");
     expect(await fsp.stat(path.join(outDir, "manifest.json"))).toBeTruthy();
+  });
+
+  it("drift CLI prints JSON and honors fail-on policy", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-drift-cli-"));
+    try {
+      await fsp.mkdir(path.join(root, "src"), { recursive: true });
+      await fsp.writeFile(path.join(root, "src", "a.ts"), "import { b } from './b'; export function a() { return b(); }\n", "utf8");
+      await fsp.writeFile(path.join(root, "src", "b.ts"), "export function b() { return 1; }\n", "utf8");
+      git(root, ["init"]);
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "base"]);
+      await fsp.writeFile(path.join(root, "src", "b.ts"), "import { a } from './a'; export function b() { return a(); }\n", "utf8");
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "head"]);
+
+      const json = await runCliCommand(["drift", "src", "--root", root, "--base", "HEAD~1", "--head", "HEAD", "--json"]);
+      const failed = await runCliWithExit(
+        ["drift", "src", "--root", root, "--base", "HEAD~1", "--head", "HEAD", "--fail-on", "new-cycle"],
+        root,
+      );
+
+      expect(JSON.parse(json)).toMatchObject({ schemaVersion: 1 });
+      expect(failed.exitCode).toBe(1);
+      expect(failed.stdout).toContain("new-cycle");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("artifact build treats --sqlite as a boolean artifact selector", async () => {
