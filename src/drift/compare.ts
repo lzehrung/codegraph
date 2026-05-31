@@ -257,7 +257,10 @@ export function compareArchitectureSnapshots(
   const limitedFindings = findings.slice(0, thresholds.maxFindings);
   const failOn = [...(options.failOn ?? [])].sort();
   const failOnSet = new Set(failOn);
-  const failedKinds = Array.from(new Set(limitedFindings.filter((finding) => failOnSet.has(finding.kind)).map((finding) => finding.kind))).sort();
+  const matchedFailKinds = limitedFindings
+    .filter((finding) => failOnSet.has(finding.kind))
+    .map((finding) => finding.kind);
+  const failedKinds = Array.from(new Set(matchedFailKinds)).sort();
 
   return {
     schemaVersion: 1,

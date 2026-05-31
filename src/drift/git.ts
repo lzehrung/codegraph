@@ -47,9 +47,6 @@ export async function analyzeArchitectureDrift(
   root: string,
   options: ArchitectureDriftOptions,
 ): Promise<ArchitectureDriftReport> {
-  if (options.provider && options.provider !== "git") {
-    throw new Error(`Unsupported architecture drift provider: ${options.provider}`);
-  }
   if (options.baseArtifact) {
     const baseSnapshot = await loadArchitectureSnapshotFromArtifact(options.baseArtifact);
     const headSnapshot = await buildArchitectureSnapshot(path.resolve(root), snapshotOptions(options));
