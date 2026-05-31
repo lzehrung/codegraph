@@ -354,6 +354,32 @@ export {
   type DuplicateUnitRef,
 } from "./duplicates.js";
 
+/** Architecture drift snapshots, comparisons, and report rendering. */
+export {
+  buildArchitectureSnapshot,
+  compareArchitectureSnapshots,
+  renderArchitectureDriftReport,
+  ARCHITECTURE_DRIFT_FINDING_KINDS,
+  DEFAULT_DRIFT_THRESHOLDS,
+  type ArchitectureCycle,
+  type ArchitectureDriftCompareOptions,
+  type ArchitectureDriftFinding,
+  type ArchitectureDriftFindingKind,
+  type ArchitectureDriftOptions,
+  type ArchitectureDriftProvider,
+  type ArchitectureDriftReport,
+  type ArchitectureDriftSeverity,
+  type ArchitectureDriftThresholds,
+  type ArchitectureDuplicateSummary,
+  type ArchitectureGraphEdge,
+  type ArchitectureHotspot,
+  type ArchitecturePublicApiSymbol,
+  type ArchitectureSnapshot,
+  type ArchitectureSnapshotOptions,
+  type ArchitectureSnapshotSummary,
+  type ArchitectureUnresolvedImport,
+} from "./drift/index.js";
+
 /** Tree-sitter language configuration registry. */
 export { LANG_CONFIGS, type LanguageConfig } from "./bootstrap/treeSitterLanguages.js";
 
