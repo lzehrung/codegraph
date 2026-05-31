@@ -1521,6 +1521,27 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     }
   });
 
+  it("drift treats a single positional path as an include root", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-drift-cli-root-"));
+    try {
+      await fsp.mkdir(path.join(root, "src"), { recursive: true });
+      await fsp.writeFile(path.join(root, "src", "a.ts"), "import { b } from './b'; export function a() { return b(); }\n", "utf8");
+      await fsp.writeFile(path.join(root, "src", "b.ts"), "export function b() { return 1; }\n", "utf8");
+      git(root, ["init"]);
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "base"]);
+      await fsp.writeFile(path.join(root, "src", "b.ts"), "import { a } from './a'; export function b() { return a(); }\n", "utf8");
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "head"]);
+
+      const json = await runCliCommandDetailed(["drift", "./src", "--base", "HEAD~1", "--head", "HEAD", "--json"], undefined, root);
+
+      expect(JSON.parse(json.stdout)).toMatchObject({ schemaVersion: 1 });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("artifact build treats --sqlite as a boolean artifact selector", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-artifact-sqlite-"));
     const outDir = path.join(root, "out");

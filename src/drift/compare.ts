@@ -173,7 +173,10 @@ function comparePublicApi(
   }
 }
 
-function signalEnabled(snapshot: ArchitectureSnapshot, signal: "publicApi" | "duplicates"): boolean {
+function signalEnabled(
+  snapshot: ArchitectureSnapshot,
+  signal: "unresolved" | "publicApi" | "duplicates",
+): boolean {
   return snapshot.signalAvailability?.[signal] !== false;
 }
 
@@ -244,7 +247,9 @@ export function compareArchitectureSnapshots(
   const findings: ArchitectureDriftFinding[] = [];
   compareCycles(findings, base.cycles, head.cycles);
   compareHotspots(findings, base.hotspots, head.hotspots, thresholds.hotspotJump);
-  compareUnresolved(findings, base.unresolved.imports, head.unresolved.imports);
+  if (signalEnabled(base, "unresolved") && signalEnabled(head, "unresolved")) {
+    compareUnresolved(findings, base.unresolved.imports, head.unresolved.imports);
+  }
   if (signalEnabled(base, "publicApi") && signalEnabled(head, "publicApi")) {
     comparePublicApi(findings, base.publicApi, head.publicApi);
   }

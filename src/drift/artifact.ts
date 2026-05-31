@@ -39,8 +39,18 @@ function parseManifest(value: unknown): ArtifactManifest | null {
   return { artifacts: { graphJson: artifacts.graphJson } };
 }
 
-async function readJson(filePath: string): Promise<unknown> {
-  return JSON.parse(await fsp.readFile(filePath, "utf8"));
+async function readJson(filePath: string, label: string): Promise<unknown> {
+  try {
+    return JSON.parse(await fsp.readFile(filePath, "utf8"));
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      throw new Error(`Codegraph artifact ${label} is missing.`);
+    }
+    if (error instanceof SyntaxError) {
+      throw new Error(`Codegraph artifact ${label} is invalid JSON.`);
+    }
+    throw error;
+  }
 }
 
 function assertArtifactChild(outDir: string, artifactPath: string): string {
@@ -128,11 +138,12 @@ function unresolvedImports(graph: Graph): { total: number; imports: Architecture
 
 export async function loadArchitectureSnapshotFromArtifact(outDirInput: string): Promise<ArchitectureSnapshot> {
   const outDir = path.resolve(outDirInput);
-  const manifest = parseManifest(await readJson(path.join(outDir, "manifest.json")));
+  const manifest = parseManifest(await readJson(path.join(outDir, "manifest.json"), "manifest"));
   if (!manifest) {
     throw new Error("Codegraph artifact manifest is missing graph.json metadata.");
   }
-  const graphJson = parseGraphJson(await readJson(assertArtifactChild(outDir, manifest.artifacts.graphJson)));
+  const graphPath = assertArtifactChild(outDir, manifest.artifacts.graphJson);
+  const graphJson = parseGraphJson(await readJson(graphPath, "graph.json"));
   const graph: Graph = { nodes: new Set(graphJson.graph.files), edges: graphJson.graph.fileEdges };
   return {
     schemaVersion: 1,
@@ -148,6 +159,7 @@ export async function loadArchitectureSnapshotFromArtifact(outDirInput: string):
     duplicates: { groups: { total: 0 }, topGroupKeys: [] },
     graphEdges: graphEdges(graph.edges),
     signalAvailability: {
+      unresolved: false,
       publicApi: false,
       duplicates: false,
     },

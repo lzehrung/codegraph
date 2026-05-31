@@ -67,6 +67,7 @@ export interface ArchitectureUnresolvedImportSummary {
 
 
 export interface ArchitectureSignalAvailability {
+  unresolved?: boolean;
   publicApi?: boolean;
   duplicates?: boolean;
 }

@@ -39,6 +39,48 @@ describe("architecture drift artifact baselines", () => {
     expect(report.findings).toContainEqual(expect.objectContaining({ kind: "new-cycle" }));
   });
 
+  it("rejects non-current heads when comparing against an artifact baseline", async () => {
+    const root = await mkTmpDir("cg-drift-artifact-reject-head-");
+    await writeFile(root, "src/a.ts", "export function a() { return 1; }\n");
+    const outDir = path.join(root, "baseline");
+    await buildCodegraphArtifact({ root, outDir, graphJson: true });
+
+    await expect(
+      analyzeArchitectureDrift(root, { baseArtifact: outDir, head: "HEAD~1", includeRoots: ["src"] }),
+    ).rejects.toThrow("base-artifact");
+  });
+
+  it("does not report unresolved-import drift for declared package imports from graph-json artifacts", async () => {
+    const root = await mkTmpDir("cg-drift-artifact-unresolved-");
+    await writeFile(root, "package.json", '{\n  "name": "artifact-unresolved",\n  "dependencies": { "left-pad": "1.3.0" }\n}\n');
+    await writeFile(root, "src/a.ts", 'import leftPad from "left-pad";\nexport const value = leftPad("a", 2);\n');
+    const outDir = path.join(root, "baseline");
+    await buildCodegraphArtifact({ root, outDir, graphJson: true });
+
+    const report = await analyzeArchitectureDrift(root, { baseArtifact: outDir, head: ".", includeRoots: ["src"] });
+
+    expect(report.findings.some((finding) => finding.kind === "unresolved-import")).toBe(false);
+    expect(report.findings.some((finding) => finding.kind === "resolved-unresolved-import")).toBe(false);
+  });
+
+  it("rejects missing artifact manifest and graph files with clear errors", async () => {
+    const missingManifest = await mkTmpDir("cg-drift-missing-manifest-");
+    await expect(loadArchitectureSnapshotFromArtifact(missingManifest)).rejects.toThrow("Codegraph artifact manifest");
+
+    const missingGraph = await mkTmpDir("cg-drift-missing-graph-");
+    await fsp.writeFile(
+      path.join(missingGraph, "manifest.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        graphJsonSchema: "codegraph.graph-json",
+        artifacts: { graphJson: "graph.json" },
+      }),
+      "utf8",
+    );
+
+    await expect(loadArchitectureSnapshotFromArtifact(missingGraph)).rejects.toThrow("Codegraph artifact graph.json");
+  });
+
   it("does not invent API or duplicate drift from derived artifact baselines", async () => {
     const root = await mkTmpDir("cg-drift-artifact-derived-");
     await writeFile(

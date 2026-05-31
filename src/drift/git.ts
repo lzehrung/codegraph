@@ -48,6 +48,9 @@ export async function analyzeArchitectureDrift(
   options: ArchitectureDriftOptions,
 ): Promise<ArchitectureDriftReport> {
   if (options.baseArtifact) {
+    if (options.head && !isCurrentCheckoutRef(options.head)) {
+      throw new Error("Architecture drift with --base-artifact only supports the current checkout as --head.");
+    }
     const baseSnapshot = await loadArchitectureSnapshotFromArtifact(options.baseArtifact);
     const headSnapshot = await buildArchitectureSnapshot(path.resolve(root), snapshotOptions(options));
     return compareArchitectureSnapshots(baseSnapshot, headSnapshot, {

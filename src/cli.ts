@@ -159,7 +159,6 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       cmd === "hotspots" ||
       cmd === "inspect" ||
       cmd === "duplicates" ||
-      cmd === "drift" ||
       cmd === "impact") &&
     !rootOpt &&
     parsed.positionals.length === 1 &&
@@ -258,8 +257,8 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     if (rootOpt) {
       // If the user explicitly sets --root, treat all remaining positionals as include roots.
       includeRoots = parsed.positionals;
-    } else if (cmd === "orient") {
-      // Orient uses positionals only as include roots; it does not use the legacy root positional.
+    } else if (cmd === "orient" || cmd === "drift") {
+      // Orient and drift use positionals only as include roots; they do not use the legacy root positional.
       includeRoots = parsed.positionals;
     } else if (parsed.positionals.length > 1) {
       // Otherwise, a single positional arg is treated as the project root (back-compat).
