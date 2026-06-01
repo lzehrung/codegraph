@@ -251,13 +251,14 @@ Output:
 
 export const DRIFT_HELP_TEXT = `codegraph drift - Compare architecture drift between graph states
 
-Usage: codegraph drift [roots...] [--root <path>] (--base <ref> [--head <ref>] | --base-artifact <dir>) [--json | --pretty] [--fail-on <kind[,kind...]>] [--hotspot-jump-threshold <n>] [--limit <n>]
+Usage: codegraph drift [roots...] [--root <path>] (--base <ref> | --base-artifact <dir>) [--head <ref>] [--json | --pretty] [--fail-on <kind[,kind...]>] [--hotspot-jump-threshold <n>] [--limit <n>]
 
 Signals:
   Compares dependency cycles, hotspots, unresolved imports, public API symbols, duplicate group counts, and graph edges.
   Drift is structural architecture comparison, not runtime validation, compiler diagnostics, or a style linter.
 
 Options:
+  --head <ref>                    Git ref for the head snapshot. Defaults to the current checkout; with --base-artifact, only the current checkout is supported (., WORKTREE).
   --fail-on <kind[,kind...]>      Exit 1 only when one of the selected finding kinds is present.
   --hotspot-jump-threshold <n>    Minimum absolute hotspot score delta to report.
   --limit <n>                     Maximum findings to emit in the report output.

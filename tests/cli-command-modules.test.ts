@@ -248,11 +248,13 @@ describe("CLI command modules", () => {
     }
   });
 
-  test("documents drift-specific flags in drift help", async () => {
+  test("documents drift-specific flags and head semantics in drift help", async () => {
     const result = await captureCli(["drift", "--help"]);
 
     expect(result.stdout).toContain("--limit");
     expect(result.stdout).toContain("--hotspot-jump-threshold");
+    expect(result.stdout).toContain("--head <ref>");
+    expect(result.stdout).toContain("with --base-artifact, only the current checkout is supported");
   });
 
   test("rejects ambiguous MCP serve transport flags before starting a server", async () => {

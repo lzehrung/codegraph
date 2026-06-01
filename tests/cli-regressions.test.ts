@@ -1558,6 +1558,26 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     }
   });
 
+  it("drift reports invalid git refs without a stack trace", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-drift-cli-invalid-ref-"));
+    try {
+      await fsp.mkdir(path.join(root, "src"), { recursive: true });
+      await fsp.writeFile(path.join(root, "src", "a.ts"), "export const value = 1;\n", "utf8");
+      git(root, ["init"]);
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "base"]);
+
+      const result = await runCliWithExit(["drift", "src", "--root", root, "--base", "definitely-not-a-real-ref"], root);
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("definitely-not-a-real-ref");
+      expect(result.stderr).not.toContain("at analyzeArchitectureDrift");
+      expect(result.stderr).not.toContain("node:child_process");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("drift treats a single positional path as an include root", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-drift-cli-root-"));
     try {

@@ -60,20 +60,26 @@ export async function handleDriftCommand(context: DriftCommandContext): Promise<
   }
 
   const head = context.getOpt("--head");
-  const report = await analyzeArchitectureDrift(context.projectRootFs, {
-    ...(base ? { provider: "git" as const, base } : {}),
-    ...(head ? { head } : {}),
-    ...(baseArtifact ? { baseArtifact } : {}),
-    includeRoots: context.positionals,
-    failOn,
-    thresholds: {
-      ...(hotspotJump !== undefined ? { hotspotJump } : {}),
-      maxFindings,
-    },
-    ...(context.graphOptions ? { graph: context.graphOptions } : {}),
-    ...(context.indexOptions ? { index: context.indexOptions } : {}),
-    ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
-  });
+  let report;
+  try {
+    report = await analyzeArchitectureDrift(context.projectRootFs, {
+      ...(base ? { provider: "git" as const, base } : {}),
+      ...(head ? { head } : {}),
+      ...(baseArtifact ? { baseArtifact } : {}),
+      includeRoots: context.positionals,
+      failOn,
+      thresholds: {
+        ...(hotspotJump !== undefined ? { hotspotJump } : {}),
+        maxFindings,
+      },
+      ...(context.graphOptions ? { graph: context.graphOptions } : {}),
+      ...(context.indexOptions ? { index: context.indexOptions } : {}),
+      ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
+    });
+  } catch (error) {
+    context.writeStderrLine(error instanceof Error ? error.message : String(error));
+    context.exit(1);
+  }
 
   if (context.hasFlag("--json") || !context.hasFlag("--pretty")) {
     context.writeJSONLine(report);
