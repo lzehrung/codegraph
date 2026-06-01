@@ -1,5 +1,13 @@
-import { analyzeArchitectureDrift, ARCHITECTURE_DRIFT_FINDING_KINDS, renderArchitectureDriftReport } from "../drift/index.js";
-import type { ArchitectureDriftFindingKind } from "../drift/types.js";
+import {
+  analyzeArchitectureDrift,
+  ARCHITECTURE_DRIFT_FINDING_KINDS,
+  renderArchitectureDriftReport,
+} from "../drift/index.js";
+import type {
+  ArchitectureDriftFindingKind,
+  ArchitectureDriftGraphEdgesMode,
+  ArchitectureDriftPublicApiMode,
+} from "../drift/types.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
 import type { BuildOptions } from "../indexer/types.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
@@ -20,6 +28,8 @@ export interface DriftCommandContext {
 }
 
 const findingKindSet = new Set<string>(ARCHITECTURE_DRIFT_FINDING_KINDS);
+const graphEdgesModes = new Set<ArchitectureDriftGraphEdgesMode>(["full", "summary", "off"]);
+const publicApiModes = new Set<ArchitectureDriftPublicApiMode>(["all", "removals", "off"]);
 
 function parseFailOn(rawValue: string | undefined): ArchitectureDriftFindingKind[] {
   if (!rawValue) return [];
@@ -34,14 +44,34 @@ function parseFailOn(rawValue: string | undefined): ArchitectureDriftFindingKind
   return Array.from(new Set(values)) as ArchitectureDriftFindingKind[];
 }
 
+function parseGraphEdgesMode(rawValue: string | undefined): ArchitectureDriftGraphEdgesMode | undefined {
+  if (rawValue === undefined) return undefined;
+  if (graphEdgesModes.has(rawValue as ArchitectureDriftGraphEdgesMode)) {
+    return rawValue as ArchitectureDriftGraphEdgesMode;
+  }
+  throw new Error(`Invalid --graph-edges value "${rawValue}". Valid values: full, summary, off.`);
+}
+
+function parsePublicApiMode(rawValue: string | undefined): ArchitectureDriftPublicApiMode | undefined {
+  if (rawValue === undefined) return undefined;
+  if (publicApiModes.has(rawValue as ArchitectureDriftPublicApiMode)) {
+    return rawValue as ArchitectureDriftPublicApiMode;
+  }
+  throw new Error(`Invalid --public-api value "${rawValue}". Valid values: all, removals, off.`);
+}
+
 export async function handleDriftCommand(context: DriftCommandContext): Promise<void> {
   let failOn: ArchitectureDriftFindingKind[];
   let hotspotJump: number | undefined;
   let maxFindings: number;
+  let graphEdges: ArchitectureDriftGraphEdgesMode | undefined;
+  let publicApi: ArchitectureDriftPublicApiMode | undefined;
   try {
     failOn = parseFailOn(context.getOpt("--fail-on"));
     hotspotJump = parseOptionalNonNegativeIntegerOption(context.getOpt("--hotspot-jump-threshold"), "--hotspot-jump-threshold");
     maxFindings = parseNonNegativeIntegerOption(context.getOpt("--limit"), "--limit", 100);
+    graphEdges = parseGraphEdgesMode(context.getOpt("--graph-edges"));
+    publicApi = parsePublicApiMode(context.getOpt("--public-api"));
   } catch (error) {
     context.writeStderrLine(error instanceof Error ? error.message : String(error));
     context.exit(2);
@@ -54,13 +84,20 @@ export async function handleDriftCommand(context: DriftCommandContext): Promise<
     context.exit(2);
   }
   if (!base && !baseArtifact) {
-    context.writeStderrLine("Usage: codegraph drift [roots...] --base <ref> [--head <ref>] [--json | --pretty]");
+    context.writeStderrLine("Usage: codegraph drift [roots...] [--root <path>] (--base <ref> | --base-artifact <dir>) [--head <ref>] [--json | --pretty | --compact-json]");
     context.writeStderrLine("Provide either --base or --base-artifact.");
     context.exit(2);
   }
 
+  const json = context.hasFlag("--json");
+  const compactJson = context.hasFlag("--compact-json");
+  const pretty = context.hasFlag("--pretty");
+  const prettyOutput = pretty && !json && !compactJson;
+  const effectiveGraphEdges = graphEdges ?? (prettyOutput ? "summary" : undefined);
+  const effectivePublicApi = publicApi ?? (prettyOutput || compactJson ? "removals" : undefined);
+
   const head = context.getOpt("--head");
-  let report;
+  let report: Awaited<ReturnType<typeof analyzeArchitectureDrift>>;
   try {
     report = await analyzeArchitectureDrift(context.projectRootFs, {
       ...(base ? { provider: "git" as const, base } : {}),
@@ -72,6 +109,9 @@ export async function handleDriftCommand(context: DriftCommandContext): Promise<
         ...(hotspotJump !== undefined ? { hotspotJump } : {}),
         maxFindings,
       },
+      ...(effectiveGraphEdges !== undefined ? { graphEdges: effectiveGraphEdges } : {}),
+      ...(effectivePublicApi !== undefined ? { publicApi: effectivePublicApi } : {}),
+      ...(compactJson ? { format: "compact" as const } : {}),
       ...(context.graphOptions ? { graph: context.graphOptions } : {}),
       ...(context.indexOptions ? { index: context.indexOptions } : {}),
       ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
@@ -80,13 +120,12 @@ export async function handleDriftCommand(context: DriftCommandContext): Promise<
     context.writeStderrLine(error instanceof Error ? error.message : String(error));
     context.exit(1);
   }
-
-  if (context.hasFlag("--json") || !context.hasFlag("--pretty")) {
-    context.writeJSONLine(report);
-  } else {
+  if (prettyOutput) {
     for (const line of renderArchitectureDriftReport(report, { limit: maxFindings }).trimEnd().split("\n")) {
       context.writeStdoutLine(line);
     }
+  } else {
+    context.writeJSONLine(report);
   }
 
   if (report.policy.failed) {

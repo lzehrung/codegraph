@@ -588,8 +588,18 @@ const report = await analyzeArchitectureDrift(process.cwd(), {
   head: "HEAD",
   includeRoots: ["src"],
   failOn: ["new-cycle", "public-api-removal"],
+  graphEdges: "summary",
+  publicApi: "removals",
+  format: "compact",
 });
 ```
+
+Drift callers can tune noise and payload size without changing the core comparison:
+
+- `graphEdges: "full" | "summary" | "off"` controls graph-edge churn detail.
+- `publicApi: "all" | "removals" | "off"` controls whether API additions are emitted.
+- `format: "compact"` emits bounded example findings plus `summary.byKind` and `summary.bySeverity`.
+- Git-backed reports expose logical `base.ref` and `head.ref` values instead of temporary checkout paths.
 
 The API returns `ArchitectureDriftReport` with `schemaVersion: 1`, base/head summaries, bounded findings, and policy state. Drift compares architecture signals only; it does not run code, typecheck, or lint.
 

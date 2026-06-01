@@ -85,10 +85,27 @@ export interface ArchitectureSnapshot {
   signalAvailability?: ArchitectureSignalAvailability;
 }
 
-export type ArchitectureSnapshotSummary = Pick<
-  ArchitectureSnapshot,
-  "root" | "files" | "hotspots" | "cycles" | "unresolved" | "publicApi" | "duplicates"
->;
+export interface ArchitectureSnapshotSummary {
+  root: string;
+  ref?: string;
+  files: ArchitectureSnapshot["files"];
+  hotspots: ArchitectureHotspot[];
+  cycles: ArchitectureCycle[];
+  unresolved: ArchitectureUnresolvedImportSummary;
+  publicApi: ArchitecturePublicApiSymbol[];
+  duplicates: ArchitectureDuplicateSummary;
+}
+
+export interface ArchitectureDriftSummary {
+  byKind: Partial<Record<ArchitectureDriftFindingKind, number>>;
+  bySeverity: Partial<Record<ArchitectureDriftSeverity, number>>;
+}
+
+export type ArchitectureDriftFormat = "full" | "compact";
+
+export type ArchitectureDriftGraphEdgesMode = "full" | "summary" | "off";
+
+export type ArchitectureDriftPublicApiMode = "all" | "removals" | "off";
 
 export interface ArchitectureDriftFinding {
   kind: ArchitectureDriftFindingKind;
@@ -107,10 +124,12 @@ export interface ArchitectureDriftFinding {
 
 export interface ArchitectureDriftReport {
   schemaVersion: 1;
+  format?: ArchitectureDriftFormat;
   root: string;
   base: ArchitectureSnapshotSummary;
   head: ArchitectureSnapshotSummary;
   findings: ArchitectureDriftFinding[];
+  summary?: ArchitectureDriftSummary;
   policy: {
     failed: boolean;
     failOn: ArchitectureDriftFindingKind[];
@@ -129,6 +148,9 @@ export interface ArchitectureDriftThresholds {
 export interface ArchitectureDriftCompareOptions {
   failOn?: ArchitectureDriftFindingKind[];
   thresholds?: Partial<ArchitectureDriftThresholds>;
+  format?: ArchitectureDriftFormat;
+  graphEdges?: ArchitectureDriftGraphEdgesMode;
+  publicApi?: ArchitectureDriftPublicApiMode;
 }
 
 export interface ArchitectureSnapshotOptions {

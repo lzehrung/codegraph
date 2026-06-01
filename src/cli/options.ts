@@ -58,6 +58,8 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--limit",
   "--fail-on",
   "--hotspot-jump-threshold",
+  "--graph-edges",
+  "--public-api",
   "--budget",
   "--mode",
   "--from",

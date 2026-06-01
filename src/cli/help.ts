@@ -251,7 +251,7 @@ Output:
 
 export const DRIFT_HELP_TEXT = `codegraph drift - Compare architecture drift between graph states
 
-Usage: codegraph drift [roots...] [--root <path>] (--base <ref> | --base-artifact <dir>) [--head <ref>] [--json | --pretty] [--fail-on <kind[,kind...]>] [--hotspot-jump-threshold <n>] [--limit <n>]
+Usage: codegraph drift [roots...] [--root <path>] (--base <ref> | --base-artifact <dir>) [--head <ref>] [--json | --pretty | --compact-json] [--fail-on <kind[,kind...]>] [--hotspot-jump-threshold <n>] [--limit <n>] [--graph-edges <full|summary|off>] [--public-api <all|removals|off>]
 
 Signals:
   Compares dependency cycles, hotspots, unresolved imports, public API symbols, duplicate group counts, and graph edges.
@@ -262,6 +262,9 @@ Options:
   --fail-on <kind[,kind...]>      Exit 1 only when one of the selected finding kinds is present.
   --hotspot-jump-threshold <n>    Minimum absolute hotspot score delta to report.
   --limit <n>                     Maximum findings to emit in the report output.
+  --graph-edges <mode>            Graph edge detail mode: full, summary, or off.
+  --public-api <mode>             Public API finding mode: all, removals, or off.
+  --compact-json                  Emit compact JSON with summary counts and bounded examples.
 `;
 
 export function helpTextForCommand(command: string, positionals: readonly string[]): string | undefined {

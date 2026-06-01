@@ -64,11 +64,11 @@ Use `artifact build` when the agent needs a durable handoff directory. The defau
 Use `drift` when the agent needs one architecture-regression report for a base/head range:
 
 ```bash
-codegraph drift ./src --base origin/main --head HEAD --pretty
-codegraph drift ./src --base origin/main --head HEAD --fail-on new-cycle,public-api-removal
+codegraph drift ./src --base origin/main --head HEAD --pretty --graph-edges summary --public-api removals
+codegraph drift ./src --base origin/main --head HEAD --compact-json
 ```
 
-Drift compares structural signals over time: dependency cycles, hotspots, unresolved imports, API surface changes, duplicate group counts, and graph edges. It is review and CI evidence, not runtime validation or compiler diagnostics.
+Drift compares structural signals over time: dependency cycles, hotspots, unresolved imports, API surface changes, duplicate group counts, and graph edges. It is review and CI evidence, not runtime validation or compiler diagnostics. Use compact JSON for CI or agent handoff, and use graph-edge/API filters to keep human review output bounded.
 
 ## MCP server
 
