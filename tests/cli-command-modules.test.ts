@@ -254,6 +254,9 @@ describe("CLI command modules", () => {
     expect(result.stdout).toContain("--limit");
     expect(result.stdout).toContain("--hotspot-jump-threshold");
     expect(result.stdout).toContain("--head <ref>");
+    expect(result.stdout).toContain("--graph-edges <mode>");
+    expect(result.stdout).toContain("--public-api <mode>");
+    expect(result.stdout).toContain("--compact-json");
     expect(result.stdout).toContain("with --base-artifact, only the current checkout is supported");
   });
 

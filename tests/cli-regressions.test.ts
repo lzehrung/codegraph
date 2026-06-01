@@ -1538,6 +1538,99 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     }
   });
 
+  it("drift compact json summarizes graph edges and suppresses API additions by default", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-drift-cli-compact-"));
+    try {
+      await fsp.mkdir(path.join(root, "src"), { recursive: true });
+      await fsp.writeFile(path.join(root, "src", "a.ts"), "export function a() { return 1; }\n", "utf8");
+      git(root, ["init"]);
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "base"]);
+      await fsp.writeFile(path.join(root, "src", "b.ts"), "import { a } from './a';\nexport function b() { return a(); }\n", "utf8");
+      await fsp.writeFile(path.join(root, "src", "a.ts"), "import { b } from './b';\nexport function a() { return b(); }\n", "utf8");
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "head"]);
+
+      const stdout = await runCliCommand([
+        "drift",
+        "src",
+        "--root",
+        root,
+        "--base",
+        "HEAD~1",
+        "--head",
+        "HEAD",
+        "--compact-json",
+      ]);
+      const report = JSON.parse(stdout) as {
+        format: string;
+        summary: { byKind: Record<string, number> };
+        findings: Array<{ kind: string }>;
+      };
+
+      expect(report.format).toBe("compact");
+      expect(report.summary.byKind["graph-edge-added"]).toBeGreaterThan(0);
+      expect(report.findings.some((finding) => finding.kind === "graph-edge-added")).toBe(true);
+      expect(report.findings.some((finding) => finding.kind === "public-api-addition")).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("drift CLI supports graph edge filtering", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-drift-cli-graph-edges-"));
+    try {
+      await fsp.mkdir(path.join(root, "src"), { recursive: true });
+      await fsp.writeFile(path.join(root, "src", "a.ts"), "export function a() { return 1; }\n", "utf8");
+      git(root, ["init"]);
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "base"]);
+      await fsp.writeFile(path.join(root, "src", "b.ts"), "import { a } from './a';\nexport function b() { return a(); }\n", "utf8");
+      await fsp.writeFile(path.join(root, "src", "a.ts"), "import { b } from './b';\nexport function a() { return b(); }\n", "utf8");
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "head"]);
+
+      const summary = JSON.parse(
+        await runCliCommand(["drift", "src", "--root", root, "--base", "HEAD~1", "--head", "HEAD", "--graph-edges", "summary"]),
+      ) as { findings: Array<{ kind: string; details?: { count?: number } }> };
+      const off = JSON.parse(
+        await runCliCommand(["drift", "src", "--root", root, "--base", "HEAD~1", "--head", "HEAD", "--graph-edges", "off"]),
+      ) as { findings: Array<{ kind: string }> };
+
+      expect(summary.findings.some((finding) => finding.kind === "graph-edge-added" && finding.details?.count === 1)).toBe(true);
+      expect(off.findings.some((finding) => finding.kind === "graph-edge-added")).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("drift CLI supports public API filtering", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-drift-cli-public-api-"));
+    try {
+      await fsp.mkdir(path.join(root, "src"), { recursive: true });
+      await fsp.writeFile(path.join(root, "src", "api.ts"), "export function oldName() { return 1; }\n", "utf8");
+      git(root, ["init"]);
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "base"]);
+      await fsp.writeFile(path.join(root, "src", "api.ts"), "export function newName() { return 2; }\n", "utf8");
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "head"]);
+
+      const removals = JSON.parse(
+        await runCliCommand(["drift", "src", "--root", root, "--base", "HEAD~1", "--head", "HEAD", "--public-api", "removals"]),
+      ) as { findings: Array<{ kind: string }> };
+      const off = JSON.parse(
+        await runCliCommand(["drift", "src", "--root", root, "--base", "HEAD~1", "--head", "HEAD", "--public-api", "off"]),
+      ) as { findings: Array<{ kind: string }> };
+
+      expect(removals.findings.some((finding) => finding.kind === "public-api-removal")).toBe(true);
+      expect(removals.findings.some((finding) => finding.kind === "public-api-addition")).toBe(false);
+      expect(off.findings.some((finding) => finding.kind.startsWith("public-api"))).toBe(false);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects using both --base and --base-artifact", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-drift-cli-conflict-"));
     try {

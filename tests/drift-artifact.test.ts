@@ -152,6 +152,11 @@ describe("architecture drift artifact baselines", () => {
     const report = await analyzeArchitectureDrift(root, { baseArtifact: outDir, head: ".", includeRoots: ["src"] });
 
     expect(report.findings).toContainEqual(expect.objectContaining({ kind: "new-cycle" }));
+
+    expect(report.root.replace(/\\/g, "/")).toBe(root.replace(/\\/g, "/"));
+    expect(report.base.ref).toBe(`artifact:${outDir.replace(/\\/g, "/")}`);
+    expect(report.base.root.replace(/\\/g, "/")).toBe(outDir.replace(/\\/g, "/"));
+    expect(report.head.root.replace(/\\/g, "/")).toBe(root.replace(/\\/g, "/"));
   });
 
   it("rejects non-current heads when comparing against an artifact baseline", async () => {

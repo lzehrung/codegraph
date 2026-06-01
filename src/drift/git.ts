@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { isGitIndexSentinel, isGitWorktreeSentinel } from "../util/git.js";
+import { normalizePath } from "../util/paths.js";
 import { compareArchitectureSnapshots } from "./compare.js";
 import { buildArchitectureSnapshot } from "./snapshot.js";
 import { loadArchitectureSnapshotFromArtifact } from "./artifact.js";
@@ -63,6 +64,29 @@ async function materializeGitRef(root: string, ref: string | undefined, prefix: 
   }
 }
 
+function withReportRefs(
+  report: ArchitectureDriftReport,
+  root: string,
+  refs: { baseRef?: string; headRef?: string; baseRoot?: string; headRoot?: string },
+): ArchitectureDriftReport {
+  const normalizedRoot = normalizePath(path.resolve(root));
+  return {
+    ...report,
+    root: normalizedRoot,
+    base: {
+      ...report.base,
+      root: refs.baseRoot ?? normalizedRoot,
+      ...(refs.baseRef !== undefined ? { ref: refs.baseRef } : {}),
+    },
+    head: {
+      ...report.head,
+      root: refs.headRoot ?? normalizedRoot,
+      ...(refs.headRef !== undefined ? { ref: refs.headRef } : {}),
+    },
+  };
+}
+
+
 export async function analyzeArchitectureDrift(
   root: string,
   options: ArchitectureDriftOptions,
@@ -77,10 +101,21 @@ export async function analyzeArchitectureDrift(
     }
     const baseSnapshot = await loadArchitectureSnapshotFromArtifact(options.baseArtifact);
     const headSnapshot = await buildArchitectureSnapshot(path.resolve(root), snapshotOptions(options));
-    return compareArchitectureSnapshots(baseSnapshot, headSnapshot, {
-      ...(options.failOn ? { failOn: options.failOn } : {}),
-      ...(options.thresholds ? { thresholds: options.thresholds } : {}),
-    });
+    return withReportRefs(
+      compareArchitectureSnapshots(baseSnapshot, headSnapshot, {
+        ...(options.failOn ? { failOn: options.failOn } : {}),
+        ...(options.graphEdges ? { graphEdges: options.graphEdges } : {}),
+        ...(options.publicApi ? { publicApi: options.publicApi } : {}),
+        ...(options.format ? { format: options.format } : {}),
+        ...(options.thresholds ? { thresholds: options.thresholds } : {}),
+      }),
+      root,
+      {
+        baseRef: `artifact:${normalizePath(path.resolve(options.baseArtifact))}`,
+        baseRoot: normalizePath(path.resolve(options.baseArtifact)),
+        headRef: options.head ?? ".",
+      },
+    );
   }
   if (!options.base) {
     throw new Error("Architecture drift requires --base or --base-artifact.");
@@ -93,10 +128,20 @@ export async function analyzeArchitectureDrift(
     head = await materializeGitRef(resolvedRoot, options.head, "cg-drift-head-");
     const baseSnapshot = await buildArchitectureSnapshot(base.root, snapshotOptions(options));
     const headSnapshot = await buildArchitectureSnapshot(head.root, snapshotOptions(options));
-    return compareArchitectureSnapshots(baseSnapshot, headSnapshot, {
-      ...(options.failOn ? { failOn: options.failOn } : {}),
-      ...(options.thresholds ? { thresholds: options.thresholds } : {}),
-    });
+    return withReportRefs(
+      compareArchitectureSnapshots(baseSnapshot, headSnapshot, {
+        ...(options.failOn ? { failOn: options.failOn } : {}),
+        ...(options.graphEdges ? { graphEdges: options.graphEdges } : {}),
+        ...(options.publicApi ? { publicApi: options.publicApi } : {}),
+        ...(options.format ? { format: options.format } : {}),
+        ...(options.thresholds ? { thresholds: options.thresholds } : {}),
+      }),
+      resolvedRoot,
+      {
+        baseRef: options.base,
+        headRef: options.head ?? ".",
+      },
+    );
   } finally {
     await cleanupTempDir(head?.cleanup);
     await cleanupTempDir(base?.cleanup);

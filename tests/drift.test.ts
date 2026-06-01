@@ -107,6 +107,56 @@ describe("architecture drift", () => {
     );
   });
 
+  it("summarizes graph edge drift by source file when requested", () => {
+    const base = makeSnapshot({
+      graphEdges: [{ key: "src/a.ts\u0000./b\u0000src/b.ts", from: "src/a.ts", to: "src/b.ts", raw: "./b" }],
+    });
+    const head = makeSnapshot({
+      graphEdges: [
+        { key: "src/a.ts\u0000./b\u0000src/b.ts", from: "src/a.ts", to: "src/b.ts", raw: "./b" },
+        { key: "src/a.ts\u0000./c\u0000src/c.ts", from: "src/a.ts", to: "src/c.ts", raw: "./c" },
+        { key: "src/a.ts\u0000./d\u0000src/d.ts", from: "src/a.ts", to: "src/d.ts", raw: "./d" },
+      ],
+    });
+
+    const report = compareArchitectureSnapshots(base, head, { graphEdges: "summary" });
+
+    expect(report.findings).toContainEqual(
+      expect.objectContaining({
+        kind: "graph-edge-added",
+        file: "src/a.ts",
+        details: expect.objectContaining({ count: 2 }),
+      }),
+    );
+    expect(report.findings.some((finding) => finding.edge?.to === "src/c.ts")).toBe(false);
+  });
+
+  it("suppresses graph edge drift when graph edges are disabled", () => {
+    const base = makeSnapshot();
+    const head = makeSnapshot({
+      graphEdges: [{ key: "src/a.ts\u0000./b\u0000src/b.ts", from: "src/a.ts", to: "src/b.ts", raw: "./b" }],
+    });
+
+    const report = compareArchitectureSnapshots(base, head, { graphEdges: "off" });
+
+    expect(report.findings.some((finding) => finding.kind === "graph-edge-added")).toBe(false);
+  });
+
+  it("reports duplicate top group additions and removals", () => {
+    const base = makeSnapshot({ duplicates: { groups: { total: 2 }, topGroupKeys: ["a<->b", "c<->d"] } });
+    const head = makeSnapshot({ duplicates: { groups: { total: 3 }, topGroupKeys: ["a<->b", "e<->f", "g<->h"] } });
+
+    const report = compareArchitectureSnapshots(base, head, { failOn: [] });
+    const finding = report.findings.find((entry) => entry.kind === "duplicate-increase");
+
+    expect(finding?.details).toEqual(
+      expect.objectContaining({
+        newTopGroupKeys: ["e<->f", "g<->h"],
+        resolvedTopGroupKeys: ["c<->d"],
+      }),
+    );
+  });
+
   it("applies fail-on policy only to selected finding kinds", () => {
     const base = makeSnapshot({ publicApi: [{ id: "src/api.ts#old:function", file: "src/api.ts", name: "old", kind: "function" }] });
     const head = makeSnapshot({ publicApi: [] });
@@ -117,6 +167,33 @@ describe("architecture drift", () => {
     expect(ignored.policy.failed).toBe(false);
     expect(selected.policy.failed).toBe(true);
     expect(selected.policy.failedKinds).toEqual(["public-api-removal"]);
+  });
+
+  it("suppresses public API additions by default in compact mode", () => {
+    const base = makeSnapshot();
+    const head = makeSnapshot({
+      publicApi: [{ id: "src/api.ts#new:function", file: "src/api.ts", name: "new", kind: "function" }],
+    });
+
+    const report = compareArchitectureSnapshots(base, head, { format: "compact" });
+
+    expect(report.findings.some((finding) => finding.kind === "public-api-addition")).toBe(false);
+  });
+
+  it("supports explicit public API filtering", () => {
+    const base = makeSnapshot({
+      publicApi: [{ id: "src/api.ts#old:function", file: "src/api.ts", name: "old", kind: "function" }],
+    });
+    const head = makeSnapshot({
+      publicApi: [{ id: "src/api.ts#new:function", file: "src/api.ts", name: "new", kind: "function" }],
+    });
+
+    const removalsOnly = compareArchitectureSnapshots(base, head, { publicApi: "removals" });
+    const disabled = compareArchitectureSnapshots(base, head, { publicApi: "off" });
+
+    expect(removalsOnly.findings.some((finding) => finding.kind === "public-api-addition")).toBe(false);
+    expect(removalsOnly.findings.some((finding) => finding.kind === "public-api-removal")).toBe(true);
+    expect(disabled.findings.some((finding) => finding.kind.startsWith("public-api"))).toBe(false);
   });
 
   it("does not report hotspot drift when scores are unchanged at threshold zero", () => {
@@ -162,6 +239,25 @@ describe("architecture drift", () => {
     expect(text).not.toContain("No architecture drift findings.");
     expect(text).toContain("All architecture drift findings were omitted by the current limit.");
     expect(text).toContain("Omitted 1 finding(s).");
+  });
+
+  it("emits compact drift reports with summary counts", () => {
+    const report = compareArchitectureSnapshots(
+      makeSnapshot(),
+      makeSnapshot({
+        cycles: [{ key: "src/a.ts\u0000src/b.ts", files: ["src/a.ts", "src/b.ts"], priorityScore: 20, size: 2 }],
+        graphEdges: [{ key: "src/a.ts\u0000./b\u0000src/b.ts", from: "src/a.ts", to: "src/b.ts", raw: "./b" }],
+      }),
+      { format: "compact", graphEdges: "summary" },
+    );
+
+    expect(report.format).toBe("compact");
+    expect(report.summary).toEqual(
+      expect.objectContaining({
+        byKind: expect.objectContaining({ "new-cycle": 1, "graph-edge-added": 1 }),
+        bySeverity: expect.objectContaining({ error: 1, info: 1 }),
+      }),
+    );
   });
 
   it("renders a short grouped pretty report", () => {

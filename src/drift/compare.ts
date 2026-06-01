@@ -3,7 +3,10 @@ import type {
   ArchitectureDriftCompareOptions,
   ArchitectureDriftFinding,
   ArchitectureDriftFindingKind,
+  ArchitectureDriftGraphEdgesMode,
+  ArchitectureDriftPublicApiMode,
   ArchitectureDriftReport,
+  ArchitectureDriftSummary,
   ArchitectureDriftThresholds,
   ArchitectureGraphEdge,
   ArchitectureHotspot,
@@ -162,11 +165,15 @@ function comparePublicApi(
   findings: ArchitectureDriftFinding[],
   base: readonly ArchitecturePublicApiSymbol[],
   head: readonly ArchitecturePublicApiSymbol[],
+  mode: ArchitectureDriftPublicApiMode,
 ): void {
+  if (mode === "off") return;
   const baseById = byId(base);
   const headById = byId(head);
-  for (const symbol of headById.values()) {
-    if (!baseById.has(symbol.id)) pushPublicApi(findings, "public-api-addition", symbol);
+  if (mode === "all") {
+    for (const symbol of headById.values()) {
+      if (!baseById.has(symbol.id)) pushPublicApi(findings, "public-api-addition", symbol);
+    }
   }
   for (const symbol of baseById.values()) {
     if (!headById.has(symbol.id)) pushPublicApi(findings, "public-api-removal", symbol);
@@ -185,6 +192,12 @@ function compareDuplicates(findings: ArchitectureDriftFinding[], base: Architect
   const after = head.duplicates.groups.total;
   if (before === after) return;
   const kind: ArchitectureDriftFindingKind = after > before ? "duplicate-increase" : "duplicate-decrease";
+  const baseTopGroupKeys = base.duplicates.topGroupKeys;
+  const headTopGroupKeys = head.duplicates.topGroupKeys;
+  const baseSet = new Set(baseTopGroupKeys);
+  const headSet = new Set(headTopGroupKeys);
+  const newTopGroupKeys = headTopGroupKeys.filter((key) => !baseSet.has(key));
+  const resolvedTopGroupKeys = baseTopGroupKeys.filter((key) => !headSet.has(key));
   findings.push({
     kind,
     severity: after > before ? "warning" : "info",
@@ -193,8 +206,10 @@ function compareDuplicates(findings: ArchitectureDriftFinding[], base: Architect
     before,
     after,
     details: {
-      baseTopGroupKeys: base.duplicates.topGroupKeys,
-      headTopGroupKeys: head.duplicates.topGroupKeys,
+      baseTopGroupKeys,
+      headTopGroupKeys,
+      newTopGroupKeys,
+      resolvedTopGroupKeys,
     },
   });
 }
@@ -214,18 +229,56 @@ function pushGraphEdge(
   });
 }
 
+function pushGraphEdgeSummary(
+  findings: ArchitectureDriftFinding[],
+  kind: "graph-edge-added" | "graph-edge-removed",
+  file: string,
+  count: number,
+): void {
+  findings.push({
+    kind,
+    severity: "info",
+    key: `${kind}:${file}`,
+    title: `${kind === "graph-edge-added" ? "Graph edges added" : "Graph edges removed"}: ${file} (${count})`,
+    file,
+    details: { count },
+  });
+}
+
 function compareGraphEdges(
   findings: ArchitectureDriftFinding[],
   base: readonly ArchitectureGraphEdge[],
   head: readonly ArchitectureGraphEdge[],
+  mode: ArchitectureDriftGraphEdgesMode,
 ): void {
+  if (mode === "off") return;
   const baseByKey = byKey(base);
   const headByKey = byKey(head);
+  if (mode === "full") {
+    for (const edge of headByKey.values()) {
+      if (!baseByKey.has(edge.key)) pushGraphEdge(findings, "graph-edge-added", edge);
+    }
+    for (const edge of baseByKey.values()) {
+      if (!headByKey.has(edge.key)) pushGraphEdge(findings, "graph-edge-removed", edge);
+    }
+    return;
+  }
+
+  const addedByFile = new Map<string, number>();
+  const removedByFile = new Map<string, number>();
   for (const edge of headByKey.values()) {
-    if (!baseByKey.has(edge.key)) pushGraphEdge(findings, "graph-edge-added", edge);
+    if (baseByKey.has(edge.key)) continue;
+    addedByFile.set(edge.from, (addedByFile.get(edge.from) ?? 0) + 1);
   }
   for (const edge of baseByKey.values()) {
-    if (!headByKey.has(edge.key)) pushGraphEdge(findings, "graph-edge-removed", edge);
+    if (headByKey.has(edge.key)) continue;
+    removedByFile.set(edge.from, (removedByFile.get(edge.from) ?? 0) + 1);
+  }
+  for (const file of Array.from(addedByFile.keys()).sort()) {
+    pushGraphEdgeSummary(findings, "graph-edge-added", file, addedByFile.get(file) ?? 0);
+  }
+  for (const file of Array.from(removedByFile.keys()).sort()) {
+    pushGraphEdgeSummary(findings, "graph-edge-removed", file, removedByFile.get(file) ?? 0);
   }
 }
 
@@ -236,6 +289,32 @@ function compareFindings(left: ArchitectureDriftFinding, right: ArchitectureDrif
   const kindDelta = left.kind.localeCompare(right.kind);
   if (kindDelta) return kindDelta;
   return left.key.localeCompare(right.key);
+}
+
+function summarizeFindings(findings: readonly ArchitectureDriftFinding[]): ArchitectureDriftSummary {
+  const byKind: Partial<Record<ArchitectureDriftFindingKind, number>> = {};
+  const bySeverity: Partial<Record<"error" | "warning" | "info", number>> = {};
+  for (const finding of findings) {
+    byKind[finding.kind] = (byKind[finding.kind] ?? 0) + 1;
+    bySeverity[finding.severity] = (bySeverity[finding.severity] ?? 0) + 1;
+  }
+  return { byKind, bySeverity };
+}
+
+function effectivePublicApiMode(options: ArchitectureDriftCompareOptions): ArchitectureDriftPublicApiMode {
+  if (options.publicApi) return options.publicApi;
+  if (options.format === "compact") return "removals";
+  return "all";
+}
+
+function effectiveGraphEdgesMode(options: ArchitectureDriftCompareOptions): ArchitectureDriftGraphEdgesMode {
+  if (options.graphEdges) return options.graphEdges;
+  if (options.format === "compact") return "summary";
+  return "full";
+}
+
+function effectiveFormat(options: ArchitectureDriftCompareOptions): "full" | "compact" {
+  return options.format ?? "full";
 }
 
 export function compareArchitectureSnapshots(
@@ -251,12 +330,12 @@ export function compareArchitectureSnapshots(
     compareUnresolved(findings, base.unresolved.imports, head.unresolved.imports);
   }
   if (signalEnabled(base, "publicApi") && signalEnabled(head, "publicApi")) {
-    comparePublicApi(findings, base.publicApi, head.publicApi);
+    comparePublicApi(findings, base.publicApi, head.publicApi, effectivePublicApiMode(options));
   }
   if (signalEnabled(base, "duplicates") && signalEnabled(head, "duplicates")) {
     compareDuplicates(findings, base, head);
   }
-  compareGraphEdges(findings, base.graphEdges, head.graphEdges);
+  compareGraphEdges(findings, base.graphEdges, head.graphEdges, effectiveGraphEdgesMode(options));
   findings.sort(compareFindings);
 
   const limitedFindings = findings.slice(0, thresholds.maxFindings);
@@ -267,10 +346,12 @@ export function compareArchitectureSnapshots(
 
   return {
     schemaVersion: 1,
+    format: effectiveFormat(options),
     root: head.root,
     base: summarize(base),
     head: summarize(head),
     findings: limitedFindings,
+    summary: summarizeFindings(findings),
     policy: {
       failed: !!failedKinds.length,
       failOn,

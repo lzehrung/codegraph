@@ -41,6 +41,12 @@ describe("architecture drift git provider", () => {
     expect(beforeStatus).toBe("");
     expect(afterStatus).toBe("");
     expect(report.findings).toContainEqual(expect.objectContaining({ kind: "new-cycle", severity: "error" }));
+
+    expect(report.root.replace(/\\/g, "/")).toBe(root.replace(/\\/g, "/"));
+    expect(report.base.ref).toBe("HEAD~1");
+    expect(report.head.ref).toBe("HEAD");
+    expect(report.base.root.replace(/\\/g, "/")).toBe(root.replace(/\\/g, "/"));
+    expect(report.head.root.replace(/\\/g, "/")).toBe(root.replace(/\\/g, "/"));
   });
 
   it("accepts WORKTREE as the head sentinel", async () => {

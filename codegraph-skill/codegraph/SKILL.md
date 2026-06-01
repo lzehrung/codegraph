@@ -48,7 +48,7 @@ Then choose the narrowest follow-up command:
 - Worktree impact: `codegraph impact --provider git --base HEAD --head WORKTREE --pretty`
 - Review handoff: `codegraph review --base HEAD --head WORKTREE --summary`
 - Full review JSON: `codegraph review --base origin/main --head HEAD`
-- Architecture drift: `codegraph drift ./src --base origin/main --head HEAD --pretty`
+- Architecture drift: `codegraph drift ./src --base origin/main --head HEAD --pretty --graph-edges summary --public-api removals`
 - Public API: `codegraph apisurface`
 - Duplicate cleanup: `codegraph duplicates --root . ./src --min-confidence medium`
 - Chunks: `codegraph chunk <file>`
@@ -227,10 +227,12 @@ Prefer `refs` over plain text search when you want semantic usages rather than e
 - Agent-ready full current worktree bundle:
   `codegraph review --base HEAD --head WORKTREE`
 - Architecture drift:
-  `codegraph drift ./src --base origin/main --head HEAD --pretty`
+  `codegraph drift ./src --base origin/main --head HEAD --pretty --graph-edges summary --public-api removals`
+- Compact CI drift output:
+  `codegraph drift ./src --base origin/main --head HEAD --compact-json`
 - CI-selected drift gates:
   `codegraph drift ./src --base origin/main --head HEAD --fail-on new-cycle,public-api-removal`
-  Drift compares structural architecture signals, not runtime behavior or compiler diagnostics. Duplicate increases are review or CI findings and only fail when selected by policy.
+  Drift compares structural architecture signals, not runtime behavior or compiler diagnostics. Use `--graph-edges` and `--public-api` to trim noisy findings without changing policy evaluation.
 
 Prefer impact `--pretty` first when the user asks what a change can break, what to test, or where a reviewer should focus. Use `review --summary` for compact model-readable handoffs, and use full review JSON when a script or tool step needs `projectFiles`, `graphDelta`, complete changed-symbol handles, or low-confidence fallback test candidates.
 

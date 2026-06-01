@@ -143,7 +143,8 @@ node ./dist/cli.js apisurface
 node ./dist/cli.js duplicates ./src --min-confidence medium --limit 20
 
 # compare architecture drift between refs
-node ./dist/cli.js drift ./src --base origin/main --head HEAD --pretty
+node ./dist/cli.js drift ./src --base origin/main --head HEAD --compact-json
+node ./dist/cli.js drift ./src --base origin/main --head HEAD --pretty --graph-edges summary --public-api removals
 ```
 
 If you install the published CLI instead of using a source checkout, replace `node ./dist/cli.js` with `codegraph`.
@@ -219,8 +220,8 @@ References for buildProjectIndex
 Use drift, impact, and review for architecture regression and PR or worktree risk:
 
 ```bash
-codegraph drift ./src --base origin/main --head HEAD --pretty
-codegraph drift ./src --base origin/main --head HEAD --fail-on new-cycle,public-api-removal
+codegraph drift ./src --base origin/main --head HEAD --pretty --graph-edges summary --public-api removals
+codegraph drift ./src --base origin/main --head HEAD --compact-json
 codegraph impact --base origin/main --head HEAD --pretty
 codegraph review --base origin/main --head HEAD --summary
 ```
@@ -239,7 +240,7 @@ Review Summary
 Candidate tests: 4 (high: 1, medium: 2, low: 1)
 ```
 
-`drift` compares graph states over time. It reports structural signals such as new cycles, unresolved imports, public API removals, duplicate group count changes, hotspot jumps, and graph-edge changes; it is not runtime validation or compiler diagnostics.
+`drift` compares graph states over time. It reports structural signals such as new cycles, unresolved imports, public API removals, duplicate group count changes, hotspot jumps, and graph-edge changes; it is not runtime validation or compiler diagnostics. Use `--graph-edges summary|off`, `--public-api removals|off`, and `--compact-json` to keep CI and review output bounded.
 
 Run duplicate detection directly when refactor risk is the question:
 
@@ -318,6 +319,9 @@ const drift = await analyzeArchitectureDrift(root, {
   base: "origin/main",
   head: "HEAD",
   failOn: ["new-cycle", "public-api-removal"],
+  format: "compact",
+  graphEdges: "summary",
+  publicApi: "removals",
 });
 
 const impact = await analyzeImpactFromDiff(root, index, {
