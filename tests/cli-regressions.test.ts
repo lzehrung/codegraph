@@ -1538,6 +1538,44 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     }
   });
 
+  it("drift JSON output flags take precedence over pretty output", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-drift-cli-json-precedence-"));
+    try {
+      await fsp.mkdir(path.join(root, "src"), { recursive: true });
+      await fsp.writeFile(path.join(root, "src", "a.ts"), "export function a() { return 1; }\n", "utf8");
+      git(root, ["init"]);
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "base"]);
+
+      const explicitJson = await runCliCommand(["drift", "src", "--root", root, "--base", "HEAD", "--head", "WORKTREE", "--json", "--pretty"]);
+      const compactJson = await runCliCommand([
+        "drift",
+        "src",
+        "--root",
+        root,
+        "--base",
+        "HEAD",
+        "--head",
+        "WORKTREE",
+        "--compact-json",
+        "--pretty",
+      ]);
+
+      expect(JSON.parse(explicitJson)).toMatchObject({ schemaVersion: 1, format: "full" });
+      expect(JSON.parse(compactJson)).toMatchObject({ schemaVersion: 1, format: "compact" });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("drift usage includes compact JSON output mode", async () => {
+    const result = await runCliWithExit(["drift"], process.cwd());
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("--json | --pretty | --compact-json");
+  });
+
+
   it("drift compact json summarizes graph edges and suppresses API additions by default", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-drift-cli-compact-"));
     try {

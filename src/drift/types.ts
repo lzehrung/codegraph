@@ -124,12 +124,12 @@ export interface ArchitectureDriftFinding {
 
 export interface ArchitectureDriftReport {
   schemaVersion: 1;
-  format: ArchitectureDriftFormat;
+  format?: ArchitectureDriftFormat;
   root: string;
   base: ArchitectureSnapshotSummary;
   head: ArchitectureSnapshotSummary;
   findings: ArchitectureDriftFinding[];
-  summary: ArchitectureDriftSummary;
+  summary?: ArchitectureDriftSummary;
   policy: {
     failed: boolean;
     failOn: ArchitectureDriftFindingKind[];

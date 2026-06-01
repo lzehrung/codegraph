@@ -84,15 +84,17 @@ export async function handleDriftCommand(context: DriftCommandContext): Promise<
     context.exit(2);
   }
   if (!base && !baseArtifact) {
-    context.writeStderrLine("Usage: codegraph drift [roots...] [--root <path>] (--base <ref> | --base-artifact <dir>) [--head <ref>] [--json | --pretty]");
+    context.writeStderrLine("Usage: codegraph drift [roots...] [--root <path>] (--base <ref> | --base-artifact <dir>) [--head <ref>] [--json | --pretty | --compact-json]");
     context.writeStderrLine("Provide either --base or --base-artifact.");
     context.exit(2);
   }
 
+  const json = context.hasFlag("--json");
   const compactJson = context.hasFlag("--compact-json");
   const pretty = context.hasFlag("--pretty");
-  const effectiveGraphEdges = graphEdges ?? (pretty ? "summary" : undefined);
-  const effectivePublicApi = publicApi ?? (pretty || compactJson ? "removals" : undefined);
+  const prettyOutput = pretty && !json && !compactJson;
+  const effectiveGraphEdges = graphEdges ?? (prettyOutput ? "summary" : undefined);
+  const effectivePublicApi = publicApi ?? (prettyOutput || compactJson ? "removals" : undefined);
 
   const head = context.getOpt("--head");
   let report: Awaited<ReturnType<typeof analyzeArchitectureDrift>>;
@@ -118,7 +120,7 @@ export async function handleDriftCommand(context: DriftCommandContext): Promise<
     context.writeStderrLine(error instanceof Error ? error.message : String(error));
     context.exit(1);
   }
-  if (pretty) {
+  if (prettyOutput) {
     for (const line of renderArchitectureDriftReport(report, { limit: maxFindings }).trimEnd().split("\n")) {
       context.writeStdoutLine(line);
     }
