@@ -107,6 +107,40 @@ describe("architecture drift artifact baselines", () => {
     expect(new Set(snapshot.cycles.map((cycle) => cycle.key)).size).toBe(2);
   });
 
+  it("loads artifact hotspots in file order", async () => {
+    const root = await mkTmpDir("cg-drift-artifact-hotspots-");
+    await writeFile(
+      root,
+      "manifest.json",
+      JSON.stringify({
+        schemaVersion: 1,
+        graphJsonSchema: "codegraph.graph-json",
+        artifacts: { graphJson: "graph.json" },
+      }),
+    );
+    await writeFile(
+      root,
+      "graph.json",
+      JSON.stringify({
+        schemaVersion: 1,
+        format: "codegraph.graph-json",
+        graph: {
+          files: ["z.ts", "a.ts", "m.ts"],
+          fileEdges: [
+            { from: "z.ts", to: { type: "file", path: "a.ts" }, raw: "./a" },
+            { from: "z.ts", to: { type: "file", path: "m.ts" }, raw: "./m" },
+            { from: "m.ts", to: { type: "file", path: "a.ts" }, raw: "./a" },
+          ],
+          symbols: [],
+        },
+      }),
+    );
+
+    const snapshot = await loadArchitectureSnapshotFromArtifact(root);
+
+    expect(snapshot.hotspots.map((entry) => entry.file)).toEqual(["a.ts", "m.ts", "z.ts"]);
+  });
+
   it("compares artifact baselines to the current checkout", async () => {
     const root = await mkTmpDir("cg-drift-artifact-head-");
     await writeFile(root, "src/a.ts", "import { b } from './b'; export function a() { return b(); }\n");
@@ -129,6 +163,17 @@ describe("architecture drift artifact baselines", () => {
     await expect(
       analyzeArchitectureDrift(root, { baseArtifact: outDir, head: "HEAD~1", includeRoots: ["src"] }),
     ).rejects.toThrow("base-artifact");
+  });
+
+  it("rejects combining base and baseArtifact in the library API", async () => {
+    const root = await mkTmpDir("cg-drift-artifact-reject-base-and-artifact-");
+    await writeFile(root, "src/a.ts", "export function a() { return 1; }\n");
+    const outDir = path.join(root, "baseline");
+    await buildCodegraphArtifact({ root, outDir, graphJson: true });
+
+    await expect(
+      analyzeArchitectureDrift(root, { base: "HEAD", baseArtifact: outDir, includeRoots: ["src"] }),
+    ).rejects.toThrow("cannot combine");
   });
 
   it("does not report unresolved-import drift for declared package imports from graph-json artifacts", async () => {

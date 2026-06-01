@@ -57,6 +57,10 @@ export async function analyzeArchitectureDrift(
   root: string,
   options: ArchitectureDriftOptions,
 ): Promise<ArchitectureDriftReport> {
+  if (options.baseArtifact && options.base) {
+    throw new Error("Architecture drift cannot combine --base with --base-artifact.");
+  }
+
   if (options.baseArtifact) {
     if (options.head && !isCurrentCheckoutRef(options.head)) {
       throw new Error("Architecture drift with --base-artifact only supports the current checkout as --head.");

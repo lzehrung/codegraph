@@ -1521,6 +1521,23 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     }
   });
 
+  it("drift defaults to JSON output when no explicit output flag is passed", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-drift-cli-default-json-"));
+    try {
+      await fsp.mkdir(path.join(root, "src"), { recursive: true });
+      await fsp.writeFile(path.join(root, "src", "a.ts"), "export function a() { return 1; }\n", "utf8");
+      git(root, ["init"]);
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "base"]);
+
+      const stdout = await runCliCommand(["drift", "src", "--root", root, "--base", "HEAD", "--head", "WORKTREE"]);
+
+      expect(JSON.parse(stdout)).toMatchObject({ schemaVersion: 1 });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects using both --base and --base-artifact", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-drift-cli-conflict-"));
     try {

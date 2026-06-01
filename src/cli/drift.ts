@@ -75,7 +75,7 @@ export async function handleDriftCommand(context: DriftCommandContext): Promise<
     ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
   });
 
-  if (context.hasFlag("--json") && !context.hasFlag("--pretty")) {
+  if (context.hasFlag("--json") || !context.hasFlag("--pretty")) {
     context.writeJSONLine(report);
   } else {
     for (const line of renderArchitectureDriftReport(report, { limit: maxFindings }).trimEnd().split("\n")) {

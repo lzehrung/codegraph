@@ -149,7 +149,9 @@ export async function loadArchitectureSnapshotFromArtifact(outDirInput: string):
     schemaVersion: 1,
     root: outDir,
     files: { total: graphJson.graph.files.length, byLanguage: languageCounts(graphJson.graph.files) },
-    hotspots: getHotspots(graph).map((entry) => ({ file: entry.file, fanIn: entry.fanIn, fanOut: entry.fanOut, score: entry.score })),
+    hotspots: getHotspots(graph)
+      .map((entry) => ({ file: entry.file, fanIn: entry.fanIn, fanOut: entry.fanOut, score: entry.score }))
+      .sort((left, right) => left.file.localeCompare(right.file)),
     cycles: sortDetailedCycles(findDetailedCycles(graph), "priority")
       .map((cycle) => {
         const files = cycle.files.map(normalizePath).sort();
