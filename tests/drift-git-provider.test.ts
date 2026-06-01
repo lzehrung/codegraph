@@ -95,6 +95,22 @@ describe("architecture drift git provider", () => {
     }
   });
 
+  it("treats option-like refs as invalid revisions instead of checkout options", async () => {
+    const root = await mkTmpDir("cg-drift-git-option-like-ref-");
+    runGit(root, ["init"]);
+    await writeFile(root, "src/a.ts", "export function a() { return 1; }\n");
+    await commitAll(root, "base");
+
+    await expect(
+      analyzeArchitectureDrift(root, {
+        provider: "git",
+        base: "-h",
+        head: "HEAD",
+        includeRoots: ["src"],
+      }),
+    ).rejects.not.toThrow(/git checkout|switch branches|usage: git checkout/i);
+  });
+
   it("preserves the original git error when cleanup fails", async () => {
     const root = await mkTmpDir("cg-drift-git-cleanup-error-");
     runGit(root, ["init"]);
