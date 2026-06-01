@@ -575,6 +575,24 @@ const references = await tool_findReferences(root, "src/main.ts", 10, 5, index);
 const impact = await tool_impactJSON(root, { provider: "git", base: "HEAD", head: "WORKTREE" }, { index });
 ```
 
+### Architecture drift
+
+Use `analyzeArchitectureDrift()` when a caller needs one deterministic architecture-regression report instead of separately comparing cycles, unresolved imports, API surface, duplicates, hotspots, and graph edges.
+
+```ts
+import { analyzeArchitectureDrift } from "@lzehrung/codegraph";
+
+const report = await analyzeArchitectureDrift(process.cwd(), {
+  provider: "git",
+  base: "origin/main",
+  head: "HEAD",
+  includeRoots: ["src"],
+  failOn: ["new-cycle", "public-api-removal"],
+});
+```
+
+The API returns `ArchitectureDriftReport` with `schemaVersion: 1`, base/head summaries, bounded findings, and policy state. Drift compares architecture signals only; it does not run code, typecheck, or lint.
+
 ### Programmatic review and impact output
 
 Use the exported TypeScript APIs when another program is composing deterministic review packets, file packs, or model prompts. CLI `--pretty` and `--summary` output is optimized for compact reading by people or models; it is not the stable integration contract.

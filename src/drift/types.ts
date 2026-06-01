@@ -1,0 +1,150 @@
+import type { BuildOptions } from "../indexer/types.js";
+import type { GraphBuildOptions } from "../graphs/types.js";
+import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
+import type { ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
+
+export type ArchitectureDriftFindingKind =
+  | "new-cycle"
+  | "resolved-cycle"
+  | "hotspot-jump"
+  | "hotspot-drop"
+  | "unresolved-import"
+  | "resolved-unresolved-import"
+  | "public-api-addition"
+  | "public-api-removal"
+  | "duplicate-increase"
+  | "duplicate-decrease"
+  | "graph-edge-added"
+  | "graph-edge-removed";
+
+export type ArchitectureDriftSeverity = "error" | "warning" | "info";
+
+export interface ArchitectureHotspot {
+  file: string;
+  fanIn: number;
+  fanOut: number;
+  score: number;
+}
+
+export interface ArchitectureCycle {
+  key: string;
+  files: string[];
+  priorityScore: number;
+  size: number;
+}
+
+export interface ArchitectureUnresolvedImport {
+  key: string;
+  file: string;
+  specifier: string;
+}
+
+export interface ArchitecturePublicApiSymbol {
+  id: string;
+  file: string;
+  name: string;
+  kind: string;
+}
+
+export interface ArchitectureDuplicateSummary {
+  groups: {
+    total: number;
+  };
+  topGroupKeys: string[];
+}
+
+export interface ArchitectureGraphEdge {
+  key: string;
+  from: string;
+  to: string;
+  raw: string;
+}
+
+export interface ArchitectureUnresolvedImportSummary {
+  total: number;
+  imports: ArchitectureUnresolvedImport[];
+}
+
+
+export interface ArchitectureSignalAvailability {
+  unresolved?: boolean;
+  publicApi?: boolean;
+  duplicates?: boolean;
+}
+
+export interface ArchitectureSnapshot {
+  schemaVersion: 1;
+  root: string;
+  files: { total: number; byLanguage: Record<string, number> };
+  hotspots: ArchitectureHotspot[];
+  cycles: ArchitectureCycle[];
+  unresolved: ArchitectureUnresolvedImportSummary;
+  publicApi: ArchitecturePublicApiSymbol[];
+  duplicates: ArchitectureDuplicateSummary;
+  graphEdges: ArchitectureGraphEdge[];
+  signalAvailability?: ArchitectureSignalAvailability;
+}
+
+export type ArchitectureSnapshotSummary = Pick<
+  ArchitectureSnapshot,
+  "root" | "files" | "hotspots" | "cycles" | "unresolved" | "publicApi" | "duplicates"
+>;
+
+export interface ArchitectureDriftFinding {
+  kind: ArchitectureDriftFindingKind;
+  severity: ArchitectureDriftSeverity;
+  key: string;
+  title: string;
+  before?: number;
+  after?: number;
+  files?: string[];
+  file?: string;
+  specifier?: string;
+  symbol?: ArchitecturePublicApiSymbol;
+  edge?: ArchitectureGraphEdge;
+  details?: Record<string, string | number | boolean | string[]>;
+}
+
+export interface ArchitectureDriftReport {
+  schemaVersion: 1;
+  root: string;
+  base: ArchitectureSnapshotSummary;
+  head: ArchitectureSnapshotSummary;
+  findings: ArchitectureDriftFinding[];
+  policy: {
+    failed: boolean;
+    failOn: ArchitectureDriftFindingKind[];
+    failedKinds: ArchitectureDriftFindingKind[];
+  };
+  omittedCounts: {
+    findings: number;
+  };
+}
+
+export interface ArchitectureDriftThresholds {
+  hotspotJump: number;
+  maxFindings: number;
+}
+
+export interface ArchitectureDriftCompareOptions {
+  failOn?: ArchitectureDriftFindingKind[];
+  thresholds?: Partial<ArchitectureDriftThresholds>;
+}
+
+export interface ArchitectureSnapshotOptions {
+  includeRoots?: string[];
+  discovery?: ProjectFileDiscoveryOptions;
+  graph?: GraphBuildOptions;
+  index?: BuildOptions;
+  native?: NativeRuntimeMode;
+  duplicateLimit?: number;
+}
+
+export type ArchitectureDriftProvider = "git";
+
+export interface ArchitectureDriftOptions extends ArchitectureSnapshotOptions, ArchitectureDriftCompareOptions {
+  provider?: ArchitectureDriftProvider;
+  base?: string;
+  head?: string;
+  baseArtifact?: string;
+}

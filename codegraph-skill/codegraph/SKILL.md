@@ -48,6 +48,7 @@ Then choose the narrowest follow-up command:
 - Worktree impact: `codegraph impact --provider git --base HEAD --head WORKTREE --pretty`
 - Review handoff: `codegraph review --base HEAD --head WORKTREE --summary`
 - Full review JSON: `codegraph review --base origin/main --head HEAD`
+- Architecture drift: `codegraph drift ./src --base origin/main --head HEAD --pretty`
 - Public API: `codegraph apisurface`
 - Duplicate cleanup: `codegraph duplicates --root . ./src --min-confidence medium`
 - Chunks: `codegraph chunk <file>`
@@ -64,6 +65,7 @@ Use Codegraph MCP tools when they are already available in the agent runtime. MC
 - Use `search` for anchors and `packet_get` for bounded evidence packets.
 - Use `refs`, `goto`, `deps`, `rdeps`, and `path` for semantic navigation.
 - Use `impact` and `review` for git-range risk analysis.
+- Use `drift` for base/head architecture-regression checks.
 - Use `query_sqlite` only for read-only artifact inspection.
 - Use `artifact_build` only when the tool is exposed and write access is intentionally enabled.
 
@@ -224,6 +226,11 @@ Prefer `refs` over plain text search when you want semantic usages rather than e
   `codegraph review --base origin/main --head HEAD`
 - Agent-ready full current worktree bundle:
   `codegraph review --base HEAD --head WORKTREE`
+- Architecture drift:
+  `codegraph drift ./src --base origin/main --head HEAD --pretty`
+- CI-selected drift gates:
+  `codegraph drift ./src --base origin/main --head HEAD --fail-on new-cycle,public-api-removal`
+  Drift compares structural architecture signals, not runtime behavior or compiler diagnostics. Duplicate increases are review or CI findings and only fail when selected by policy.
 
 Prefer impact `--pretty` first when the user asks what a change can break, what to test, or where a reviewer should focus. Use `review --summary` for compact model-readable handoffs, and use full review JSON when a script or tool step needs `projectFiles`, `graphDelta`, complete changed-symbol handles, or low-confidence fallback test candidates.
 

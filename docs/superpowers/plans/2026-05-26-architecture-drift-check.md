@@ -134,7 +134,7 @@ export type ArchitectureDriftFindingKind =
 - Modify: `src/index.ts`
 - Test: `tests/drift.test.ts`
 
-- [ ] **Step 1: Write failing snapshot tests**
+- [x] **Step 1: Write failing snapshot tests**
 
 ```ts
 import { buildArchitectureSnapshot } from "../src/drift/index.js";
@@ -154,7 +154,7 @@ it("builds a deterministic architecture snapshot", async () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify failure**
+- [x] **Step 2: Run test to verify failure**
 
 Run:
 
@@ -164,7 +164,7 @@ npx vitest run tests/drift.test.ts
 
 Expected: FAIL because drift files do not exist.
 
-- [ ] **Step 3: Implement snapshot types**
+- [x] **Step 3: Implement snapshot types**
 
 Define snapshot data that is intentionally smaller than full graph JSON:
 
@@ -182,11 +182,11 @@ export interface ArchitectureSnapshot {
 
 Use existing project index, graph, cycles, unresolved, API surface, and duplicate helpers. If a helper is CLI-only, extract a library helper first instead of parsing CLI text.
 
-- [ ] **Step 4: Export the API**
+- [x] **Step 4: Export the API**
 
 In `src/drift/index.ts`, export snapshot and later analyzer functions. In `src/index.ts`, export from `./drift/index.js`.
 
-- [ ] **Step 5: Run focused test**
+- [x] **Step 5: Run focused test**
 
 Run:
 
@@ -196,7 +196,7 @@ npx vitest run tests/drift.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/drift/types.ts src/drift/snapshot.ts src/drift/index.ts src/index.ts tests/drift.test.ts
@@ -211,7 +211,7 @@ git commit -m "Add architecture drift snapshots"
 - Modify: `src/drift/index.ts`
 - Test: `tests/drift.test.ts`
 
-- [ ] **Step 1: Add failing comparison tests**
+- [x] **Step 1: Add failing comparison tests**
 
 ```ts
 import { compareArchitectureSnapshots } from "../src/drift/index.js";
@@ -239,7 +239,7 @@ it("reports public API removals", () => {
 
 Define a local `makeSnapshot()` helper in the test with complete default fields so the test remains readable.
 
-- [ ] **Step 2: Run test to verify failure**
+- [x] **Step 2: Run test to verify failure**
 
 Run:
 
@@ -249,7 +249,7 @@ npx vitest run tests/drift.test.ts
 
 Expected: FAIL because comparison is missing.
 
-- [ ] **Step 3: Implement comparison**
+- [x] **Step 3: Implement comparison**
 
 Comparison keys:
 
@@ -269,7 +269,7 @@ export const DEFAULT_DRIFT_THRESHOLDS = {
 } as const;
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run:
 
@@ -279,7 +279,7 @@ npx vitest run tests/drift.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/drift/compare.ts src/drift/index.ts tests/drift.test.ts
@@ -294,7 +294,7 @@ git commit -m "Compare architecture drift snapshots"
 - Modify: `src/drift/index.ts`
 - Test: `tests/drift-git-provider.test.ts`
 
-- [ ] **Step 1: Add failing git fixture test**
+- [x] **Step 1: Add failing git fixture test**
 
 Use the existing git fixture style from `tests/impact-git-provider.test.ts`.
 
@@ -305,7 +305,7 @@ Scenario:
 - Run `analyzeArchitectureDrift(root, { provider: "git", base: "HEAD~1", head: "HEAD" })`.
 - Assert a `new-cycle` finding exists.
 
-- [ ] **Step 2: Run test to verify failure**
+- [x] **Step 2: Run test to verify failure**
 
 Run:
 
@@ -315,7 +315,7 @@ npx vitest run tests/drift-git-provider.test.ts
 
 Expected: FAIL because git drift is missing.
 
-- [ ] **Step 3: Implement git comparison**
+- [x] **Step 3: Implement git comparison**
 
 Implementation constraints:
 
@@ -325,7 +325,7 @@ Implementation constraints:
 - Respect `--root` and include roots.
 - Handle `WORKTREE` and `STAGED` only if existing repo helpers already provide that sentinel safely. If not, document v1 as real git refs only plus current checkout.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Run:
 
@@ -335,7 +335,7 @@ npx vitest run tests/drift.test.ts tests/drift-git-provider.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/drift/git.ts src/drift/index.ts tests/drift-git-provider.test.ts
@@ -350,7 +350,7 @@ git commit -m "Compare architecture drift across git refs"
 - Modify: `src/drift/index.ts`
 - Test: `tests/drift-artifact.test.ts`
 
-- [ ] **Step 1: Add failing artifact test**
+- [x] **Step 1: Add failing artifact test**
 
 Build an artifact with `buildCodegraphArtifact()` or the existing artifact test helper. Compare that artifact to a modified current checkout.
 
@@ -360,7 +360,7 @@ Assert:
 - missing required artifact files produce a clear error.
 - unrelated files in the artifact directory are ignored.
 
-- [ ] **Step 2: Run test to verify failure**
+- [x] **Step 2: Run test to verify failure**
 
 Run:
 
@@ -370,7 +370,7 @@ npx vitest run tests/drift-artifact.test.ts
 
 Expected: FAIL because artifact baseline loading is missing.
 
-- [ ] **Step 3: Implement artifact loader**
+- [x] **Step 3: Implement artifact loader**
 
 Rules:
 
@@ -379,7 +379,7 @@ Rules:
 - If a full drift snapshot is not present in old artifacts, derive the v1 snapshot from graph JSON and available files.
 - Do not read arbitrary paths from the artifact manifest without root confinement checks already used by artifact/MCP code.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run:
 
@@ -389,7 +389,7 @@ npx vitest run tests/drift-artifact.test.ts tests/artifact-build.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/drift/artifact.ts src/drift/index.ts tests/drift-artifact.test.ts
@@ -406,7 +406,7 @@ git commit -m "Load drift baselines from artifacts"
 - Test: `tests/cli-command-modules.test.ts`
 - Test: `tests/cli-regressions.test.ts`
 
-- [ ] **Step 1: Add failing CLI tests**
+- [x] **Step 1: Add failing CLI tests**
 
 Assert:
 
@@ -415,7 +415,7 @@ Assert:
 - `--fail-on new-cycle` exits `1` when a new cycle exists.
 - `--fail-on public-api-removal` exits `0` when no API removal exists.
 
-- [ ] **Step 2: Run CLI tests to verify failure**
+- [x] **Step 2: Run CLI tests to verify failure**
 
 Run:
 
@@ -425,7 +425,7 @@ npx vitest run tests/cli-command-modules.test.ts tests/cli-regressions.test.ts
 
 Expected: FAIL because the command is not wired.
 
-- [ ] **Step 3: Implement command**
+- [x] **Step 3: Implement command**
 
 Support flags:
 
@@ -448,7 +448,7 @@ Validation:
 - Default `--head` to current checkout when `--base-artifact` is used.
 - Reject unknown `--fail-on` values with a non-zero exit and a list of valid kinds.
 
-- [ ] **Step 4: Run focused CLI tests**
+- [x] **Step 4: Run focused CLI tests**
 
 Run:
 
@@ -458,7 +458,7 @@ npx vitest run tests/cli-command-modules.test.ts tests/cli-regressions.test.ts t
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/cli/drift.ts src/cli.ts src/cli/help.ts tests/cli-command-modules.test.ts tests/cli-regressions.test.ts
@@ -474,7 +474,7 @@ git commit -m "Add architecture drift CLI"
 - Test: `tests/drift.test.ts`
 - Test: `tests/cli-regressions.test.ts`
 
-- [ ] **Step 1: Add failing renderer test**
+- [x] **Step 1: Add failing renderer test**
 
 Expected pretty output:
 
@@ -489,7 +489,7 @@ Warnings
 - hotspot-jump: src/core.ts score 35 -> 72
 ```
 
-- [ ] **Step 2: Run test to verify failure**
+- [x] **Step 2: Run test to verify failure**
 
 Run:
 
@@ -499,7 +499,7 @@ npx vitest run tests/drift.test.ts tests/cli-regressions.test.ts
 
 Expected: FAIL because pretty rendering is missing.
 
-- [ ] **Step 3: Implement renderer**
+- [x] **Step 3: Implement renderer**
 
 Rules:
 
@@ -508,7 +508,7 @@ Rules:
 - Include omitted count when findings exceed the limit.
 - Keep lines path-first and suitable for CI logs.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Run:
 
@@ -518,7 +518,7 @@ npx vitest run tests/drift.test.ts tests/cli-regressions.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/drift/report.ts src/cli/drift.ts tests/drift.test.ts tests/cli-regressions.test.ts
@@ -536,7 +536,7 @@ git commit -m "Render architecture drift summaries"
 - Modify: `codegraph-skill/codegraph/SKILL.md`
 - Test: `tests/package-metadata.test.ts`
 
-- [ ] **Step 1: Document command and API**
+- [x] **Step 1: Document command and API**
 
 Add concise examples:
 
@@ -548,11 +548,11 @@ codegraph drift --base origin/main --head HEAD --fail-on new-cycle,public-api-re
 
 Docs must explain that drift compares architecture signals, not runtime behavior or compiler diagnostics.
 
-- [ ] **Step 2: Update skill command list**
+- [x] **Step 2: Update skill command list**
 
 Add `drift` to the PR/repo health command area in `codegraph-skill/codegraph/SKILL.md`.
 
-- [ ] **Step 3: Run docs checks**
+- [x] **Step 3: Run docs checks**
 
 Run:
 
@@ -563,7 +563,7 @@ git diff --check
 
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add README.md docs/cli.md docs/library-api.md docs/agent-workflows.md codegraph-skill/codegraph/SKILL.md tests/package-metadata.test.ts
@@ -572,7 +572,7 @@ git commit -m "Document architecture drift checks"
 
 ## Final Verification
 
-- [ ] Run:
+- [x] Run:
 
 ```bash
 npm run lint
@@ -581,7 +581,7 @@ npm run test:ci
 git diff --check
 ```
 
-- [ ] Expected:
+- [x] Expected:
 
 ```text
 lint passes

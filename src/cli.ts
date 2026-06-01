@@ -26,6 +26,7 @@ import {
 } from "./cli/context.js";
 import { handleArtifactCommand } from "./cli/artifact.js";
 import { buildDoctorReport } from "./cli/doctor.js";
+import { handleDriftCommand } from "./cli/drift.js";
 import { handleDuplicatesCommand } from "./cli/duplicates.js";
 import { handleExplainCommand } from "./cli/explain.js";
 import { handleGraphCommand } from "./cli/graph.js";
@@ -249,14 +250,15 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     cmd === "hotspots" ||
     cmd === "inspect" ||
     cmd === "duplicates" ||
+    cmd === "drift" ||
     cmd === "orient";
   let includeRoots: string[] = [];
   if (supportsIncludeRoots) {
     if (rootOpt) {
       // If the user explicitly sets --root, treat all remaining positionals as include roots.
       includeRoots = parsed.positionals;
-    } else if (cmd === "orient") {
-      // Orient uses positionals only as include roots; it does not use the legacy root positional.
+    } else if (cmd === "orient" || cmd === "drift") {
+      // Orient and drift use positionals only as include roots; they do not use the legacy root positional.
       includeRoots = parsed.positionals;
     } else if (parsed.positionals.length > 1) {
       // Otherwise, a single positional arg is treated as the project root (back-compat).
@@ -498,6 +500,29 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       writeCommandReport,
       maybeWriteNativeBackendStatus,
       showProgress,
+    });
+    return;
+  }
+
+  if (cmd === "drift") {
+    const driftGraphOptions = hasGraphOverrides || nativeMode !== "auto" ? buildGraphOptions() : undefined;
+    await handleDriftCommand({
+      projectRootFs,
+      positionals: includeRoots,
+      getOpt,
+      hasFlag,
+      nativeMode,
+      ...(driftGraphOptions ? { graphOptions: driftGraphOptions } : {}),
+      indexOptions: {
+        onProgress: progressHandler,
+        discovery: discoveryOptions,
+        ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
+        ...workerOpts,
+      },
+      writeJSONLine,
+      writeStdoutLine,
+      writeStderrLine,
+      exit: exitCli,
     });
     return;
   }

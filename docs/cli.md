@@ -158,6 +158,12 @@ codegraph duplicates --root . ./src ./packages/app --include-same-file
 codegraph duplicates ./src --raw-pairs
 codegraph duplicates --help
 
+# Compare architecture drift between git refs
+codegraph drift ./src --base origin/main --head HEAD --pretty
+codegraph drift ./src --base origin/main --head HEAD --json
+codegraph drift ./src --base origin/main --head HEAD --fail-on new-cycle,public-api-removal
+codegraph drift --base-artifact ./baseline/codegraph-out --head . --json
+
 # Go to definition
 codegraph goto <file> <line> <column>
 
@@ -185,7 +191,7 @@ codegraph grep --pattern 'eval\(' --ignore-case
 - Use `--include-same-file` for non-overlapping clones inside one file.
 - Use `--raw-pairs` when debugging the low-level pair evidence behind each group.
 
-`orient`, `packet`, `search`, `explain`, `artifact`, and `mcp` each support command-specific `--help` output.
+`orient`, `packet`, `search`, `explain`, `artifact`, `drift`, and `mcp` each support command-specific `--help` output.
 
 #### Agent orientation and packets
 
@@ -318,6 +324,15 @@ codegraph review --base origin/main --head HEAD --summary --duplicates impacted
 # File-level graph delta between revisions
 codegraph graph-delta --git-base origin/main --git-head HEAD > graph-delta.json
 ```
+
+```bash
+# Architecture drift with CI policy gates
+codegraph drift ./src --base origin/main --head HEAD --pretty
+codegraph drift ./src --base origin/main --head HEAD --fail-on new-cycle,unresolved-import,public-api-removal
+codegraph drift --base-artifact ./baseline/codegraph-out --head . --json
+```
+
+`drift` compares architecture signals, not runtime behavior, compiler diagnostics, or style. Duplicate drift compares group counts and stable top group keys; duplicate increases are review or CI findings and only fail the process when selected by `--fail-on`.
 
 For git-provider impact, `--head` accepts normal revisions plus worktree sentinels. Use `WORKTREE` to compare the base revision against the current working tree, including staged and unstaged tracked-file changes. Use `STAGED` or `INDEX` to compare the base revision against the current index; with `--base HEAD`, that is staged changes only. Untracked files are not included until they are staged or otherwise tracked by Git.
 

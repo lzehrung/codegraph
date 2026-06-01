@@ -233,6 +233,7 @@ describe("CLI command modules", () => {
         usage: "Usage: codegraph explain <file|symbol|sql-object|handle>",
       },
       { args: ["artifact", "--help"], heading: "codegraph artifact", usage: "Usage: codegraph artifact build" },
+      { args: ["drift", "--help"], heading: "codegraph drift", usage: "Usage: codegraph drift [roots...]" },
       { args: ["mcp", "--help"], heading: "codegraph mcp", usage: "Usage: codegraph mcp serve" },
     ];
 
@@ -245,6 +246,15 @@ describe("CLI command modules", () => {
       expect(result.stdout).toContain(entry.usage);
       expect(result.stdout).not.toContain("Graph Options:");
     }
+  });
+
+  test("documents drift-specific flags and head semantics in drift help", async () => {
+    const result = await captureCli(["drift", "--help"]);
+
+    expect(result.stdout).toContain("--limit");
+    expect(result.stdout).toContain("--hotspot-jump-threshold");
+    expect(result.stdout).toContain("--head <ref>");
+    expect(result.stdout).toContain("with --base-artifact, only the current checkout is supported");
   });
 
   test("rejects ambiguous MCP serve transport flags before starting a server", async () => {
@@ -742,6 +752,58 @@ describe("CLI command modules", () => {
       expect(unresolved.stdout).toContain('as "missing-pkg"');
       expect(apiSurface.stdout).toContain("API Surface");
       expect(apiSurface.stdout).toContain("run");
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("runs drift through the main CLI dispatcher with policy exits", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-drift-"));
+    await fsp.mkdir(path.join(tempDir, "src"), { recursive: true });
+    await fsp.writeFile(path.join(tempDir, "src", "a.ts"), "import { b } from './b'; export function a() { return b(); }\n", "utf8");
+    await fsp.writeFile(path.join(tempDir, "src", "b.ts"), "export function b() { return 1; }\n", "utf8");
+    await import("./helpers/git.js").then(({ runGit }) => {
+      runGit(tempDir, ["init"]);
+      runGit(tempDir, ["add", "."]);
+      runGit(tempDir, ["commit", "-m", "base"]);
+    });
+    await fsp.writeFile(path.join(tempDir, "src", "b.ts"), "import { a } from './a'; export function b() { return a(); }\n", "utf8");
+    await import("./helpers/git.js").then(({ runGit }) => {
+      runGit(tempDir, ["add", "."]);
+      runGit(tempDir, ["commit", "-m", "head"]);
+    });
+
+    try {
+      const json = await captureCli(["drift", "src", "--root", tempDir, "--base", "HEAD~1", "--head", "HEAD", "--json"]);
+      const noFail = await captureCli([
+        "drift",
+        "src",
+        "--root",
+        tempDir,
+        "--base",
+        "HEAD~1",
+        "--head",
+        "HEAD",
+        "--fail-on",
+        "public-api-removal",
+      ]);
+      const fail = await captureCli([
+        "drift",
+        "src",
+        "--root",
+        tempDir,
+        "--base",
+        "HEAD~1",
+        "--head",
+        "HEAD",
+        "--fail-on",
+        "new-cycle",
+      ]);
+
+      expect(JSON.parse(json.stdout)).toMatchObject({ schemaVersion: 1 });
+      expect(noFail.exitCode).toBeUndefined();
+      expect(fail.exitCode).toBe(1);
+      expect(fail.stdout).toContain("new-cycle");
     } finally {
       await fsp.rm(tempDir, { recursive: true, force: true });
     }

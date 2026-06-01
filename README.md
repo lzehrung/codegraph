@@ -1,6 +1,6 @@
 # codegraph
 
-Codegraph is a small multi-language code analysis library and CLI for understanding repos quickly. It builds dependency graphs, symbol indexes, go-to-definition results, find-references results, semantic chunks, and PR review and impact artifacts across source languages plus graph-first document, stylesheet, and template formats.
+Codegraph is a small multi-language code analysis library and CLI for understanding repos quickly. It builds dependency graphs, symbol indexes, go-to-definition results, find-references results, semantic chunks, architecture drift reports, and PR review and impact artifacts across source languages plus graph-first document, stylesheet, and template formats.
 
 It is built for agent and human workflows that need repo structure fast without standing up a full editor or LSP stack.
 
@@ -141,6 +141,9 @@ node ./dist/cli.js apisurface
 
 # find duplicate and near-duplicate code
 node ./dist/cli.js duplicates ./src --min-confidence medium --limit 20
+
+# compare architecture drift between refs
+node ./dist/cli.js drift ./src --base origin/main --head HEAD --pretty
 ```
 
 If you install the published CLI instead of using a source checkout, replace `node ./dist/cli.js` with `codegraph`.
@@ -213,9 +216,11 @@ References for buildProjectIndex
 - tests/indexer.test.ts:22 call
 ```
 
-Use impact and review for PR or worktree risk:
+Use drift, impact, and review for architecture regression and PR or worktree risk:
 
 ```bash
+codegraph drift ./src --base origin/main --head HEAD --pretty
+codegraph drift ./src --base origin/main --head HEAD --fail-on new-cycle,public-api-removal
 codegraph impact --base origin/main --head HEAD --pretty
 codegraph review --base origin/main --head HEAD --summary
 ```
@@ -233,6 +238,8 @@ Duplicate leads:
 Review Summary
 Candidate tests: 4 (high: 1, medium: 2, low: 1)
 ```
+
+`drift` compares graph states over time. It reports structural signals such as new cycles, unresolved imports, public API removals, duplicate group count changes, hotspot jumps, and graph-edge changes; it is not runtime validation or compiler diagnostics.
 
 Run duplicate detection directly when refactor risk is the question:
 
@@ -256,7 +263,7 @@ codegraph duplicates ./src --min-confidence medium --limit 20
 }
 ```
 
-See [docs/cli.md](./docs/cli.md) for full flags, JSON shapes, duplicate scopes, and review output details.
+See [docs/cli.md](./docs/cli.md) for full flags, JSON shapes, drift policy gates, duplicate scopes, and review output details.
 
 ## Agent setup
 
@@ -292,11 +299,11 @@ Use the TypeScript API when another program needs deterministic file packs, revi
 import {
   buildProjectIndex,
   buildReviewReport,
+  analyzeArchitectureDrift,
   analyzeImpactFromDiff,
   analyzeImpactStreaming,
   tool_impactJSON,
 } from "@lzehrung/codegraph";
-
 const root = process.cwd();
 const index = await buildProjectIndex(root, { native: "auto" });
 
@@ -304,6 +311,13 @@ const review = await buildReviewReport(root, {
   gitBase: "origin/main",
   gitHead: "HEAD",
   reviewDepth: "standard",
+});
+
+const drift = await analyzeArchitectureDrift(root, {
+  provider: "git",
+  base: "origin/main",
+  head: "HEAD",
+  failOn: ["new-cycle", "public-api-removal"],
 });
 
 const impact = await analyzeImpactFromDiff(root, index, {
