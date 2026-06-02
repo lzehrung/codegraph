@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { isGraphOnlyLanguage } from "../documentLinks.js";
 import type { LanguageSupport } from "../languages.js";
 import { stringifyUnknown } from "../util/ast.js";
 import { recordNativeExecutionOutcome } from "../native/nativeBackendReport.js";
@@ -108,7 +109,7 @@ export async function prepareFileContextForBuild(
   report: BuildReport | undefined,
 ): Promise<PreparedFileContext> {
   let prepared: PreparedFileContext;
-  if (workerSetup.pool && !isSFCFile(file)) {
+  if (workerSetup.pool && !isSFCFile(file) && !isGraphOnlyLanguage(support.id)) {
     if (workerSetup.report) workerSetup.report.tasksSubmitted++;
     try {
       const workerResult: NativeExtractResult = await workerSetup.pool.run(buildWorkerTask(file, support));
@@ -129,6 +130,9 @@ export async function prepareFileContextForBuild(
     }
   } else {
     prepared = await prepareFileForIndexing(file, opts?.native);
+  }
+  if (isGraphOnlyLanguage(prepared.sup.id)) {
+    return prepared;
   }
   recordNativeExecutionOutcome(report, {
     file,

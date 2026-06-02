@@ -7,19 +7,34 @@ import {
   buildProjectIndex,
   buildProjectIndexFromFiles,
   buildProjectIndexIncremental,
+  buildSymbolGraphDetailed,
   collectImportsForFile,
   collectLocalsAndExportsFromSource,
+  SymbolKind,
   type BuildReport,
   type ModuleIndex,
+  type ProjectIndex,
 } from "../src/index.js";
 import { prepareParserInput } from "../src/languages/filePrep.js";
 import * as nativeRuntime from "../src/native/treeSitterNative.js";
+import { supportForFile } from "../src/languages.js";
+import type { NativeCapture, NativeQueryResults } from "../src/native/treeSitterNative.js";
 
 const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable() ? describe : describe.skip;
 
 function normalizeFile(file: string): string {
   return path.resolve(file).replace(/\\/g, "/");
 }
+
+const REQUIRED_NATIVE_UNAVAILABLE = "native tree-sitter required by explicit option but unavailable";
+
+const nativeCapture = (name: string, text: string): NativeCapture => ({
+  name,
+  text,
+  nodeType: "identifier",
+  start: { row: 0, column: 0, index: 0 },
+  end: { row: 0, column: text.length, index: text.length },
+});
 
 function simplifyModule(index: ModuleIndex): unknown {
   return {
@@ -133,6 +148,164 @@ function mockNativeFailureForFile(file: string) {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("native required fallback boundaries", () => {
+  it("does not suppress required-native failures during locals enrichment", () => {
+    const file = normalizeFile(path.join(os.tmpdir(), "required-native.ts"));
+    const support = supportForFile(file);
+    expect(support).toBeDefined();
+    if (!support) return;
+
+    const nativeQueries: NativeQueryResults = {
+      imports: [],
+      exports: [],
+      locals: [
+        {
+          patternIndex: 0,
+          captures: [nativeCapture("name", "alpha")],
+        },
+      ],
+      importBindings: [],
+    };
+    vi.spyOn(nativeRuntime, "assertNativeRequiredAvailable").mockImplementation((mode) => {
+      if (mode !== "on") throw new Error(`unexpected native mode: ${String(mode)}`);
+    });
+    const syntaxSpy = vi
+      .spyOn(nativeRuntime, "getNativeSyntaxTreeExecution")
+      .mockImplementation((_source, _support, mode) => {
+        if (mode !== "on") throw new Error(`unexpected native mode: ${String(mode)}`);
+        throw new Error(REQUIRED_NATIVE_UNAVAILABLE);
+      });
+
+    expect(() =>
+      collectLocalsAndExportsFromSource(file, "export const alpha = 1;\n", support, undefined, [], {
+        nativeMode: "on",
+        nativeQueries,
+      }),
+    ).toThrow(REQUIRED_NATIVE_UNAVAILABLE);
+    expect(syntaxSpy).toHaveBeenCalled();
+  });
+
+  it("does not suppress required-native failures for graph-only local collection", () => {
+    const file = normalizeFile(path.join(os.tmpdir(), "required-native.md"));
+    const support = supportForFile(file);
+    expect(support).toBeDefined();
+    if (!support) return;
+
+    vi.spyOn(nativeRuntime, "assertNativeRequiredAvailable").mockImplementation((mode) => {
+      if (mode !== "on") throw new Error(`unexpected native mode: ${String(mode)}`);
+      throw new Error(REQUIRED_NATIVE_UNAVAILABLE);
+    });
+
+    expect(() =>
+      collectLocalsAndExportsFromSource(file, "[Guide](./guide.md)\n", support, undefined, [], {
+        nativeMode: "on",
+      }),
+    ).toThrow(REQUIRED_NATIVE_UNAVAILABLE);
+  });
+
+  it("validates required-native mode before using supplied non-graph-only query data", () => {
+    const file = normalizeFile(path.join(os.tmpdir(), "required-native-supplied.ts"));
+    const support = supportForFile(file);
+    expect(support).toBeDefined();
+    if (!support) return;
+
+    const nativeQueries: NativeQueryResults = {
+      imports: [],
+      exports: [],
+      locals: [],
+      importBindings: [],
+    };
+    vi.spyOn(nativeRuntime, "assertNativeRequiredAvailable").mockImplementation((mode) => {
+      if (mode !== "on") throw new Error(`unexpected native mode: ${String(mode)}`);
+      throw new Error(REQUIRED_NATIVE_UNAVAILABLE);
+    });
+
+    expect(() =>
+      collectLocalsAndExportsFromSource(file, "export const alpha = 1;\n", support, undefined, [], {
+        nativeMode: "on",
+        nativeQueries,
+      }),
+    ).toThrow(REQUIRED_NATIVE_UNAVAILABLE);
+  });
+
+  it("does not suppress required-native failures during detailed symbol graph building", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-required-native-detailed-"));
+    const file = normalizeFile(path.join(root, "entry.ts"));
+    await fsp.writeFile(file, "export function alpha() { return 1; }\n", "utf8");
+    const local = {
+      file,
+      localName: "alpha",
+      kind: SymbolKind.Function,
+      range: {
+        start: { line: 1, column: 16, index: 16 },
+        end: { line: 1, column: 21, index: 21 },
+      },
+    };
+    const moduleIndex: ModuleIndex = {
+      file,
+      exports: [{ type: "local", exportedAs: "alpha", target: local }],
+      imports: [],
+      locals: [local],
+    };
+    const index: ProjectIndex = {
+      graph: { nodes: new Set([file]), edges: [] },
+      modules: new Map([[file, moduleIndex]]),
+      byFile: new Map([[file, moduleIndex]]),
+      projectRoot: root,
+      nativeMode: "on",
+      exportCache: new Map(),
+      scopeCache: new Map(),
+    };
+    vi.spyOn(nativeRuntime, "assertNativeRequiredAvailable").mockImplementation((mode) => {
+      if (mode !== "on") throw new Error(`unexpected native mode: ${String(mode)}`);
+    });
+    const syntaxSpy = vi
+      .spyOn(nativeRuntime, "getNativeSyntaxTreeExecution")
+      .mockImplementation((_source, _support, mode) => {
+        if (mode !== "on") throw new Error(`unexpected native mode: ${String(mode)}`);
+        throw new Error(REQUIRED_NATIVE_UNAVAILABLE);
+      });
+
+    try {
+      await expect(buildSymbolGraphDetailed(index)).rejects.toThrow(REQUIRED_NATIVE_UNAVAILABLE);
+      expect(syntaxSpy).toHaveBeenCalled();
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not suppress required-native failures for graph-only detailed symbol graph files", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-required-native-detailed-md-"));
+    const file = normalizeFile(path.join(root, "entry.md"));
+    await fsp.writeFile(file, "[Guide](./guide.md)\n", "utf8");
+    const moduleIndex: ModuleIndex = {
+      file,
+      exports: [],
+      imports: [],
+      locals: [],
+    };
+    const index: ProjectIndex = {
+      graph: { nodes: new Set([file]), edges: [] },
+      modules: new Map([[file, moduleIndex]]),
+      byFile: new Map([[file, moduleIndex]]),
+      projectRoot: root,
+      nativeMode: "on",
+      exportCache: new Map(),
+      scopeCache: new Map(),
+    };
+    vi.spyOn(nativeRuntime, "assertNativeRequiredAvailable").mockImplementation((mode) => {
+      if (mode !== "on") throw new Error(`unexpected native mode: ${String(mode)}`);
+      throw new Error(REQUIRED_NATIVE_UNAVAILABLE);
+    });
+
+    try {
+      await expect(buildSymbolGraphDetailed(index)).rejects.toThrow(REQUIRED_NATIVE_UNAVAILABLE);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 nativeDescribe("native fallback contract", () => {

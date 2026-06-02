@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
@@ -8,6 +8,7 @@ import {
   getNativeTreeSitterSupportedLanguageIds,
   isNativeTreeSitterAvailable,
 } from "../src/native/treeSitterNative.js";
+import * as nativeRuntime from "../src/native/treeSitterNative.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -222,6 +223,49 @@ describe("Import extraction fallback reporting", () => {
       expect(native?.filesFellBack).toBeGreaterThan(0);
       expect(native?.byLanguage.ts?.filesFellBack).toBeGreaterThan(0);
     }
+  });
+
+  it("does not route graph-only documents through native query reporting", async () => {
+    const root = await mkTmpDir("cg-native-doc-report-");
+    const page = path.join(root, "page.md");
+    const guide = path.join(root, "guide.md");
+    await fsp.writeFile(page, "[Guide](./guide.md)\n", "utf8");
+    await fsp.writeFile(guide, "# Guide\n", "utf8");
+
+    const indexReport: BuildReport = { timings: {} };
+    const graphReport: BuildReport = { timings: {} };
+    const index = await buildProjectIndexFromFiles(root, [page, guide], { report: indexReport });
+    const graph = await collectGraph(root, [page, guide], { report: graphReport });
+
+    expect(index.graph.edges.some((edge) => edge.to.type === "file" && edge.to.path === guide.replace(/\\/g, "/"))).toBe(
+      true,
+    );
+    expect(graph.edges.some((edge) => edge.to.type === "file" && edge.to.path === guide.replace(/\\/g, "/"))).toBe(
+      true,
+    );
+    expect(indexReport.backend?.native.byLanguage.markdown).toBeUndefined();
+    expect(graphReport.backend?.native.byLanguage.markdown).toBeUndefined();
+  });
+
+  it("honors required native availability for graph-only documents without reporting document queries", async () => {
+    const root = await mkTmpDir("cg-native-doc-required-");
+    const page = path.join(root, "page.md");
+    await fsp.writeFile(page, "[Guide](./guide.md)\n", "utf8");
+    const requiredError = "native tree-sitter required by explicit option but unavailable";
+
+    vi.spyOn(nativeRuntime, "assertNativeRequiredAvailable").mockImplementation((mode) => {
+      if (mode !== "on") throw new Error(`unexpected native mode: ${String(mode)}`);
+      throw new Error(requiredError);
+    });
+    await expect(buildProjectIndexFromFiles(root, [page], { native: "on" })).rejects.toThrow(requiredError);
+    vi.restoreAllMocks();
+
+    vi.spyOn(nativeRuntime, "assertNativeRequiredAvailable").mockImplementation((mode) => {
+      if (mode !== "on") throw new Error(`unexpected native mode: ${String(mode)}`);
+      throw new Error(requiredError);
+    });
+    await expect(collectGraph(root, [page], { native: "on" })).rejects.toThrow(requiredError);
+    vi.restoreAllMocks();
   });
 
   it("avoids Python query-empty fallback warnings for __future__ imports", async () => {
