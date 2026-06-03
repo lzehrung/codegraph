@@ -21,6 +21,7 @@ export type {
 
 export {
   __resetNativeTreeSitterBindingForTests,
+  assertNativeRequiredAvailable,
   getNativeTreeSitterLoadError,
   getNativeTreeSitterSupportedLanguageIds,
   isNativeBindingLoadedForLanguage,

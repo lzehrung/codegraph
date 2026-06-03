@@ -96,6 +96,12 @@ export function throwIfNativeRequiredUnavailable(mode: NativeRuntimeMode | undef
   throw new Error(`${NATIVE_REQUIRED_ERROR_PREFIX}${suffix}`);
 }
 
+export function assertNativeRequiredAvailable(mode: NativeRuntimeMode | undefined): void {
+  if (normalizeNativeRuntimeMode(mode) !== "on") return;
+  const state = resolveNativeBindingState(mode);
+  throwIfNativeRequiredUnavailable(mode, state);
+}
+
 export function isNativeBindingLoadedForLanguage(languageId: string, mode?: NativeRuntimeMode): boolean {
   const state = resolveNativeBindingState(mode);
   return state.loaded && state.supportedLanguageIds.has(languageId);

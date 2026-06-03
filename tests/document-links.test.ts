@@ -91,6 +91,122 @@ describe("document link graph extraction", () => {
     ).toBe(true);
   });
 
+  it("handles unmatched markdown labels without rescanning the rest of the document", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-md-unmatched-"));
+    const indexFile = path.join(root, "index.md");
+    const guideFile = path.join(root, "guide.md");
+    const unmatchedLabels = "[".repeat(5000);
+
+    await fsp.writeFile(indexFile, `${unmatchedLabels}\n[Guide](./guide.md)\n`, "utf8");
+    await fsp.writeFile(guideFile, "# Guide\n", "utf8");
+
+    const normalizedIndex = indexFile.replace(/\\/g, "/");
+    const normalizedGuide = guideFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedIndex, normalizedGuide]);
+
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedGuide,
+      ),
+    ).toBe(true);
+  });
+
+  it("handles same-line stale markdown labels before valid links", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-md-stale-same-line-"));
+    const indexFile = path.join(root, "index.md");
+    const guideFile = path.join(root, "guide.md");
+
+    await fsp.writeFile(indexFile, "[broken [Guide](./guide.md)\n[broken [Guide][guide]\n\n[guide]: ./guide.md\n", "utf8");
+    await fsp.writeFile(guideFile, "# Guide\n", "utf8");
+
+    const normalizedIndex = indexFile.replace(/\\/g, "/");
+    const normalizedGuide = guideFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedIndex, normalizedGuide]);
+
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedGuide,
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps enclosing markdown links around nested image labels", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-md-image-label-"));
+    const indexFile = path.join(root, "index.md");
+    const guideFile = path.join(root, "guide.md");
+    const imageFile = path.join(root, "image.png");
+
+    await fsp.writeFile(indexFile, "[![Alt](./image.png)](./guide.md)\n", "utf8");
+    await fsp.writeFile(guideFile, "# Guide\n", "utf8");
+    await fsp.writeFile(imageFile, "png\n", "utf8");
+
+    const normalizedIndex = indexFile.replace(/\\/g, "/");
+    const normalizedGuide = guideFile.replace(/\\/g, "/");
+    const normalizedImage = imageFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedIndex, normalizedGuide, normalizedImage]);
+
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedGuide,
+      ),
+    ).toBe(true);
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedImage,
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps enclosing markdown reference links around nested image labels", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-md-ref-image-label-"));
+    const indexFile = path.join(root, "index.md");
+    const guideFile = path.join(root, "guide.md");
+    const imageFile = path.join(root, "image.png");
+
+    await fsp.writeFile(
+      indexFile,
+      ["[![Alt][img]][guide]", "", "[img]: ./image.png", "[guide]: ./guide.md"].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(guideFile, "# Guide\n", "utf8");
+    await fsp.writeFile(imageFile, "png\n", "utf8");
+
+    const normalizedIndex = indexFile.replace(/\\/g, "/");
+    const normalizedGuide = guideFile.replace(/\\/g, "/");
+    const normalizedImage = imageFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedIndex, normalizedGuide, normalizedImage]);
+
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedGuide,
+      ),
+    ).toBe(true);
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedImage,
+      ),
+    ).toBe(false);
+  });
+
+  it("resolves markdown inline links with multiline labels", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-md-multiline-label-"));
+    const indexFile = path.join(root, "index.md");
+    const guideFile = path.join(root, "guide.md");
+
+    await fsp.writeFile(indexFile, "[Guide\nlabel](./guide.md)\n", "utf8");
+    await fsp.writeFile(guideFile, "# Guide\n", "utf8");
+
+    const normalizedIndex = indexFile.replace(/\\/g, "/");
+    const normalizedGuide = guideFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedIndex, normalizedGuide]);
+
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedGuide,
+      ),
+    ).toBe(true);
+  });
+
   it("ignores raw HTML and JSX tags in markdown-style autolinks", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-mdx-"));
     const pageFile = path.join(root, "page.mdx");
@@ -115,6 +231,102 @@ describe("document link graph extraction", () => {
           edge.from === normalizedPage &&
           edge.to.type === "external" &&
           (edge.to.name === "Guide" || edge.to.name === "br"),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not scan markdown inline destinations as reference links", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-md-inline-destination-ref-"));
+    const indexFile = path.join(root, "index.md");
+    const guideFile = path.join(root, "guide-[ref].md");
+    const otherFile = path.join(root, "other.md");
+
+    await fsp.writeFile(indexFile, ["[Guide](./guide-[ref].md)", "", "[ref]: ./other.md"].join("\n"), "utf8");
+    await fsp.writeFile(guideFile, "# Guide\n", "utf8");
+    await fsp.writeFile(otherFile, "# Other\n", "utf8");
+
+    const normalizedIndex = indexFile.replace(/\\/g, "/");
+    const normalizedGuide = guideFile.replace(/\\/g, "/");
+    const normalizedOther = otherFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedIndex, normalizedGuide, normalizedOther]);
+
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedGuide,
+      ),
+    ).toBe(true);
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedOther,
+      ),
+    ).toBe(false);
+  });
+
+  it("treats failed markdown inline destinations as shortcut references", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-md-failed-inline-shortcut-"));
+    const pageFile = path.join(root, "page.md");
+    const guideFile = path.join(root, "guide.md");
+
+    await fsp.writeFile(pageFile, "[Guide](\n\n[Guide]: ./guide.md\n", "utf8");
+    await fsp.writeFile(guideFile, "# Guide\n", "utf8");
+
+    const normalizedPage = pageFile.replace(/\\/g, "/");
+    const normalizedGuide = guideFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedPage, normalizedGuide]);
+
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedGuide,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not resolve whitespace-only empty markdown inline links as shortcuts", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-md-empty-inline-shortcut-"));
+    const pageFile = path.join(root, "page.md");
+    const guideFile = path.join(root, "guide.md");
+
+    await fsp.writeFile(pageFile, "[Guide]( )\n\n[Guide]: ./guide.md\n", "utf8");
+    await fsp.writeFile(guideFile, "# Guide\n", "utf8");
+
+    const normalizedPage = pageFile.replace(/\\/g, "/");
+    const normalizedGuide = guideFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedPage, normalizedGuide]);
+
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedGuide,
+      ),
+    ).toBe(false);
+  });
+
+  it("does not scan nested bracket text in markdown link labels as references", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-md-nested-label-ref-"));
+    const indexFile = path.join(root, "index.md");
+    const guideFile = path.join(root, "guide.md");
+    const otherFile = path.join(root, "other.md");
+
+    await fsp.writeFile(
+      indexFile,
+      ["[Text [Other] label](./guide.md)", "[Text [Other] label][guide]", "", "[Other]: ./other.md", "[guide]: ./guide.md"].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(guideFile, "# Guide\n", "utf8");
+    await fsp.writeFile(otherFile, "# Other\n", "utf8");
+
+    const normalizedIndex = indexFile.replace(/\\/g, "/");
+    const normalizedGuide = guideFile.replace(/\\/g, "/");
+    const normalizedOther = otherFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedIndex, normalizedGuide, normalizedOther]);
+
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedGuide,
+      ),
+    ).toBe(true);
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedOther,
       ),
     ).toBe(false);
   });
@@ -192,6 +404,264 @@ describe("document link graph extraction", () => {
     expect(
       graph.edges.some(
         (edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedGuide,
+      ),
+    ).toBe(false);
+  });
+
+  it("ignores standalone markdown reference image links", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-md-ref-image-"));
+    const pageFile = path.join(root, "page.md");
+    const imageFile = path.join(root, "image.png");
+
+    await fsp.writeFile(pageFile, "![Alt][img]\n\n[img]: ./image.png\n", "utf8");
+    await fsp.writeFile(imageFile, "png\n", "utf8");
+
+    const normalizedPage = pageFile.replace(/\\/g, "/");
+    const normalizedImage = imageFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedPage, normalizedImage]);
+
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedImage,
+      ),
+    ).toBe(false);
+  });
+
+  it("ignores shortcut markdown reference images with nested label text", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-md-shortcut-ref-image-"));
+    const pageFile = path.join(root, "page.md");
+    const otherFile = path.join(root, "other.md");
+
+    await fsp.writeFile(pageFile, "![Alt [Other]]\n\n[Other]: ./other.md\n", "utf8");
+    await fsp.writeFile(otherFile, "# Other\n", "utf8");
+
+    const normalizedPage = pageFile.replace(/\\/g, "/");
+    const normalizedOther = otherFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedPage, normalizedOther]);
+
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedOther,
+      ),
+    ).toBe(false);
+  });
+
+  it("ignores angle-bracket destinations in markdown images", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-md-angle-image-"));
+    const pageFile = path.join(root, "page.md");
+    const imageFile = path.join(root, "image.png");
+
+    await fsp.writeFile(pageFile, "![Alt](<./image.png>)\n![Alt][img]\n\n[img]: <./image.png>\n", "utf8");
+    await fsp.writeFile(imageFile, "png\n", "utf8");
+
+    const normalizedPage = pageFile.replace(/\\/g, "/");
+    const normalizedImage = imageFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedPage, normalizedImage]);
+
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedImage,
+      ),
+    ).toBe(false);
+  });
+
+  it("resolves long markdown labels and bounds stale reference suffix scans", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-md-long-label-"));
+    const pageFile = path.join(root, "page.md");
+    const guideFile = path.join(root, "guide.md");
+    const longLabel = "a".repeat(300);
+    const staleSuffixes = "[x][".repeat(1000);
+
+    await fsp.writeFile(pageFile, `${staleSuffixes}\n[${longLabel}](./guide.md)\n`, "utf8");
+    await fsp.writeFile(guideFile, "# Guide\n", "utf8");
+
+    const normalizedPage = pageFile.replace(/\\/g, "/");
+    const normalizedGuide = guideFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedPage, normalizedGuide]);
+
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedGuide,
+      ),
+    ).toBe(true);
+  });
+
+  it("resolves maximum-length markdown reference suffix labels", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-md-max-ref-label-"));
+    const pageFile = path.join(root, "page.md");
+    const guideFile = path.join(root, "guide.md");
+    const otherFile = path.join(root, "other.md");
+    const label = "a".repeat(999);
+
+    await fsp.writeFile(pageFile, `[x][${label}]\n\n[x]: ./other.md\n[${label}]: ./guide.md\n`, "utf8");
+    await fsp.writeFile(guideFile, "# Guide\n", "utf8");
+    await fsp.writeFile(otherFile, "# Other\n", "utf8");
+
+    const normalizedPage = pageFile.replace(/\\/g, "/");
+    const normalizedGuide = guideFile.replace(/\\/g, "/");
+    const normalizedOther = otherFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedPage, normalizedGuide, normalizedOther]);
+
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedGuide,
+      ),
+    ).toBe(true);
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedOther,
+      ),
+    ).toBe(false);
+  });
+  it("ignores bracket text inside markdown reference definition destinations", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-md-def-bracket-destination-"));
+    const pageFile = path.join(root, "page.md");
+    const otherFile = path.join(root, "other.md");
+
+    await fsp.writeFile(pageFile, "[foo]: ./guide-[bar].md\n[bar]: ./other.md\n", "utf8");
+    await fsp.writeFile(otherFile, "# Other\n", "utf8");
+
+    const normalizedPage = pageFile.replace(/\\/g, "/");
+    const normalizedOther = otherFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedPage, normalizedOther]);
+
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedOther,
+      ),
+    ).toBe(false);
+  });
+
+  it("resolves balanced bracket markdown reference labels", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-md-balanced-ref-label-"));
+    const pageFile = path.join(root, "page.md");
+    const guideFile = path.join(root, "guide.md");
+
+    await fsp.writeFile(pageFile, "[x][foo [bar]]\n\n[foo [bar]]: ./guide.md\n", "utf8");
+    await fsp.writeFile(guideFile, "# Guide\n", "utf8");
+
+    const normalizedPage = pageFile.replace(/\\/g, "/");
+    const normalizedGuide = guideFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedPage, normalizedGuide]);
+
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedGuide,
+      ),
+    ).toBe(true);
+  });
+
+  it("ignores malformed markdown reference definitions with invalid titles", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-md-invalid-ref-title-"));
+    const pageFile = path.join(root, "page.md");
+    const guideFile = path.join(root, "guide.md");
+
+    await fsp.writeFile(pageFile, "[bad][bad]\n\n[bad]: ./guide.md invalid title\n", "utf8");
+    await fsp.writeFile(guideFile, "# Guide\n", "utf8");
+
+    const normalizedPage = pageFile.replace(/\\/g, "/");
+    const normalizedGuide = guideFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedPage, normalizedGuide]);
+
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedGuide,
+      ),
+    ).toBe(false);
+  });
+
+  it("ignores balanced-label markdown reference definitions with angle destinations", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-md-balanced-angle-dest-"));
+    const pageFile = path.join(root, "page.md");
+    const imageFile = path.join(root, "image.png");
+
+    await fsp.writeFile(pageFile, "[foo [bar]]: <./image.png>\n", "utf8");
+    await fsp.writeFile(imageFile, "png\n", "utf8");
+
+    const normalizedPage = pageFile.replace(/\\/g, "/");
+    const normalizedImage = imageFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedPage, normalizedImage]);
+
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedImage,
+      ),
+    ).toBe(false);
+  });
+
+  it("parseFile still supports graph-only markdown inputs", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-parse-markdown-"));
+    const pageFile = path.join(root, "page.md");
+    await fsp.writeFile(pageFile, "[Guide](./guide.md)\n", "utf8");
+
+    const parsed = await import("../src/indexer.js").then((mod) => mod.parseFile(pageFile));
+    expect(parsed.sup.id).toBe("markdown");
+    expect(parsed.source).toContain("[Guide]");
+  });
+
+  it("ignores markdown reference definitions with trailing title tokens", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-md-extra-ref-title-"));
+    const pageFile = path.join(root, "page.md");
+    const guideFile = path.join(root, "guide.md");
+
+    await fsp.writeFile(pageFile, '[bad][bad]\n\n[bad]: ./guide.md "title" "extra"\n', "utf8");
+    await fsp.writeFile(guideFile, "# Guide\n", "utf8");
+
+    const normalizedPage = pageFile.replace(/\\/g, "/");
+    const normalizedGuide = guideFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedPage, normalizedGuide]);
+
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedGuide,
+      ),
+    ).toBe(false);
+  });
+
+  it("ignores overlong markdown reference labels", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-md-overlong-ref-label-"));
+    const pageFile = path.join(root, "page.md");
+    const guideFile = path.join(root, "guide.md");
+    const label = "a".repeat(1000);
+
+    await fsp.writeFile(pageFile, `[x][${label}]\n\n[${label}]: ./guide.md\n`, "utf8");
+    await fsp.writeFile(guideFile, "# Guide\n", "utf8");
+
+    const normalizedPage = pageFile.replace(/\\/g, "/");
+    const normalizedGuide = guideFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedPage, normalizedGuide]);
+
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedGuide,
+      ),
+    ).toBe(false);
+  });
+
+  it("skips long markdown inline destinations before reference scanning", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-md-long-inline-destination-"));
+    const pageFile = path.join(root, "page.md");
+    const guideFile = path.join(root, "guide-[ref].md");
+    const otherFile = path.join(root, "other.md");
+    const label = "a".repeat(1000);
+
+    await fsp.writeFile(pageFile, `[${label}](./guide-[ref].md)\n\n[ref]: ./other.md\n`, "utf8");
+    await fsp.writeFile(guideFile, "# Guide\n", "utf8");
+    await fsp.writeFile(otherFile, "# Other\n", "utf8");
+
+    const normalizedPage = pageFile.replace(/\\/g, "/");
+    const normalizedGuide = guideFile.replace(/\\/g, "/");
+    const normalizedOther = otherFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedPage, normalizedGuide, normalizedOther]);
+
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedGuide,
+      ),
+    ).toBe(true);
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedPage && edge.to.type === "file" && edge.to.path === normalizedOther,
       ),
     ).toBe(false);
   });

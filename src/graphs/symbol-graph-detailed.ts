@@ -4,7 +4,7 @@ import { isUnsupportedParserInputError, prepareSourceInput } from "../languages/
 import type { SyntaxTreeLike } from "../languages/types.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
 import { ProjectedSyntaxTree } from "../native/projectedTree.js";
-import { getNativeSyntaxTreeExecution } from "../native/treeSitterNative.js";
+import { assertNativeRequiredAvailable, getNativeSyntaxTreeExecution, isNativeRequiredUnavailableError } from "../native/treeSitterNative.js";
 import { SymbolKind, type ProjectIndex, type ResolvedExport, type SymbolDef } from "../indexer/types.js";
 import type { FileId } from "../types.js";
 import { buildSymbolGraph, type SymbolGraph } from "./symbol-graph.js";
@@ -34,6 +34,7 @@ export async function buildSymbolGraphDetailed(
   index: ProjectIndex,
   opts?: BuildDetailedSymbolGraphOptions,
 ): Promise<SymbolGraph> {
+  assertNativeRequiredAvailable(index.nativeMode);
   const base = await buildSymbolGraph(index, opts?.files ? { files: opts.files } : undefined);
   const nodes = new Map(base.nodes);
   const edges = base.edges.slice();
@@ -274,6 +275,9 @@ export async function buildSymbolGraphDetailed(
       emitClassInheritanceEdges(edgePassContext, classNodes);
       emitRustImplEdges(edgePassContext, tree.rootNode);
     } catch (error) {
+      if (isNativeRequiredUnavailableError(error)) {
+        throw error;
+      }
       if (isUnsupportedParserInputError(error)) {
         continue;
       }

@@ -13,6 +13,7 @@ import {
   isGraphOnlyLanguage,
 } from "./documentLinks.js";
 import {
+  assertNativeRequiredAvailable,
   getCompactImportsExecution,
   type NativeRuntimeMode,
   type CompactQueryResults,
@@ -82,6 +83,8 @@ export async function collectEdgesForFile(
   const matchesGitSig = !!gitSig && !!cached?.gitSig && cached.gitSig === gitSig;
   const matchesSig = !!sig && !!cached && cached.sig === sig;
 
+  assertNativeRequiredAvailable(opts.native);
+
   if (cached && (matchesGitSig || matchesSig)) {
     const cloned = cached.edges.map(cloneEdge);
     emitCacheEntry(cloned);
@@ -94,13 +97,21 @@ export async function collectEdgesForFile(
   let src = parsed?.source;
   let nativeQueries = parsed?.nativeQueries ?? null;
   let compactNativeImports: CompactQueryResults | null = null;
+  let graphOnlyLanguage = sup ? isGraphOnlyLanguage(sup.id) : false;
+  if (sup && graphOnlyLanguage) {
+    assertNativeRequiredAvailable(opts.native);
+  }
   if (!sup || src === undefined) {
     const prep = await prepareSourceInput(file);
     sup = prep.sup;
     src = prep.source;
+    graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
+    if (graphOnlyLanguage) {
+      assertNativeRequiredAvailable(opts.native);
+    }
     const fastRegexDisabled = opts.fastRegexDisabledLanguages?.includes(sup.id);
     const shouldSkipNativeForFastGraph = !!opts.fast && (sup.id === "ts" || sup.id === "js") && !fastRegexDisabled;
-    if (!shouldSkipNativeForFastGraph) {
+    if (!graphOnlyLanguage && !shouldSkipNativeForFastGraph) {
       // Use compact imports execution for graph mode -- smaller payload
       const compactExecution = getCompactImportsExecution(src, sup, opts.native);
       compactNativeImports = compactExecution.results;
@@ -146,7 +157,7 @@ export async function collectEdgesForFile(
     }
   }
 
-  const graphOnlyAliasLanguage = graphOnlyLanguageSupportsImportAliases(sup.id);
+  const graphOnlyAliasLanguage = graphOnlyLanguage && graphOnlyLanguageSupportsImportAliases(sup.id);
   const needsGraphOnlyResolutionConfig =
     graphOnlyAliasLanguage && specs.some(({ spec }) => graphOnlySpecifierNeedsResolutionConfig(spec));
   const { matchPath } =

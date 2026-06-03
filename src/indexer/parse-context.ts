@@ -1,6 +1,8 @@
 import { parseWithJsLanguage } from "../jsFallback.js";
+import { isGraphOnlyLanguage } from "../documentLinks.js";
 import { prepareSourceInput } from "../languages/filePrep.js";
 import {
+  assertNativeRequiredAvailable,
   getNativeQueryExecution,
   getNativeSyntaxTreeExecution,
   type NativeQueryResults,
@@ -48,7 +50,10 @@ export type PreparedFileParseAttempt = {
 
 export function attemptParsePreparedFileContext(context: PreparedFileContext): PreparedFileParseAttempt {
   const { file, source, sup, nativeMode, nativeQueries } = context;
-  const nativeTreeExecution = getNativeSyntaxTreeExecution(source, sup, nativeMode);
+  const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
+  const nativeTreeExecution = graphOnlyLanguage
+    ? { tree: null, fallbackReason: "unsupportedLanguage" as const }
+    : getNativeSyntaxTreeExecution(source, sup, nativeMode);
   if (nativeTreeExecution.tree) {
     return {
       parsed: {
@@ -59,7 +64,6 @@ export function attemptParsePreparedFileContext(context: PreparedFileContext): P
       },
     };
   }
-
   try {
     const resolvedLang = context.lang ?? sup.language(file);
     const tree = parseWithJsLanguage(source, resolvedLang);
@@ -90,6 +94,17 @@ export function parsePreparedFileContext(context: PreparedFileContext): ParsedFi
 
 export async function prepareFileForIndexing(file: string, native?: NativeRuntimeMode): Promise<PreparedFileContext> {
   const prep = await prepareSourceInput(file);
+  if (isGraphOnlyLanguage(prep.sup.id)) {
+    assertNativeRequiredAvailable(native);
+    return {
+      file,
+      source: prep.source,
+      sup: prep.sup,
+      ...(native ? { nativeMode: native } : {}),
+      nativeQueries: null,
+    };
+  }
+
   const nativeExecution = getNativeQueryExecution(prep.source, prep.sup, native);
 
   return {

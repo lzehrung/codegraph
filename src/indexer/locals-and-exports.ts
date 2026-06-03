@@ -5,7 +5,9 @@ import { capturesByName, capturesNamed, rangeFromNativeCapture } from "../native
 import { ProjectedSyntaxTree } from "../native/projectedTree.js";
 import {
   executeJsQueryAsNativeMatches,
+  assertNativeRequiredAvailable,
   getNativeSyntaxTreeExecution,
+  isNativeRequiredUnavailableError,
   isNativeBindingLoadedForLanguage,
   type NativeCapture,
   type NativeQueryResults,
@@ -203,6 +205,7 @@ export function collectLocalsAndExportsFromSource(
     logLevel?: LogLevel;
   },
 ): ModuleIndex {
+  assertNativeRequiredAvailable(opts?.nativeMode);
   if (isGraphOnlyLanguage(support.id)) {
     return { file, exports: [], imports, locals: [] };
   }
@@ -324,7 +327,8 @@ export function collectLocalsAndExportsFromSource(
       tree = parsedTree;
       jsQueryTree = parsedTree;
       jsQueryTreeAttempted = true;
-    } catch {
+    } catch (error) {
+      if (isNativeRequiredUnavailableError(error)) throw error;
       /* parse fallback: ignore */
     }
     return tree;
@@ -335,7 +339,8 @@ export function collectLocalsAndExportsFromSource(
     jsQueryTreeAttempted = true;
     try {
       jsQueryTree = parseWithJsLanguage(source, ensureResolvedLang());
-    } catch {
+    } catch (error) {
+      if (isNativeRequiredUnavailableError(error)) throw error;
       /* parse fallback: ignore */
     }
     return jsQueryTree;
@@ -390,7 +395,8 @@ export function collectLocalsAndExportsFromSource(
         }
       }
       return true;
-    } catch {
+    } catch (error) {
+      if (isNativeRequiredUnavailableError(error)) throw error;
       return false;
     }
   };
@@ -420,6 +426,7 @@ export function collectLocalsAndExportsFromSource(
       }
       return true;
     } catch (error) {
+      if (isNativeRequiredUnavailableError(error)) throw error;
       logWithLevel(opts?.logLevel, "warn", `Warning: Query error in locals for ${support.id}:`, error);
       return false;
     }
@@ -734,7 +741,8 @@ export function collectLocalsAndExportsFromSource(
         }
       }
       usedNativeExports = true;
-    } catch {
+    } catch (error) {
+      if (isNativeRequiredUnavailableError(error)) throw error;
       usedNativeExports = false;
     }
   }
@@ -760,7 +768,8 @@ export function collectLocalsAndExportsFromSource(
             });
         }
       }
-    } catch {
+    } catch (error) {
+      if (isNativeRequiredUnavailableError(error)) throw error;
       // fall through to regex fallback below
     }
   }
