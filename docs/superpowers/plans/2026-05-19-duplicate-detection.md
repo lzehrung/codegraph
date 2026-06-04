@@ -289,42 +289,46 @@ Sort order:
 3. Token Jaccard descending.
 4. Left file, left line, right file, right line.
 
-## Rollout
+## Rollout Status
 
 ### Phase 0: Design Doc
 
-- Add this plan.
-- Do not update public capability docs until implementation ships.
+- [x] Add this plan.
+- [x] Do not update public capability docs until implementation ships.
 
 ### Phase 1: In-Memory Engine
 
-- Add unit extraction and fingerprinting helpers.
-- Implement exact hashes, normalized text hashes, shingles, and winnowing.
-- Add focused fixtures.
-- Avoid cache or SQLite persistence.
+- [x] Add unit extraction and fingerprinting helpers.
+- [x] Implement exact hashes, normalized text hashes, shingles, and winnowing.
+- [x] Add focused fixtures.
+- [x] Avoid cache or SQLite persistence.
 
 ### Phase 2: CLI and Library
 
-- Add `findDuplicates(index, options)`.
-- Add `codegraph duplicates`.
-- Return deterministic JSON with bounded results and omission counts.
-- Update CLI, library API, and skill docs.
+- [x] Add `findDuplicates(index, options)`.
+- [x] Add `codegraph duplicates`.
+- [x] Return deterministic JSON with bounded results and omission counts.
+- [x] Update CLI, library API, and skill docs.
 
 ### Phase 3: AST Normalization
 
-- Add language-aware AST shape hashing.
-- Update language parity and scenario docs.
-- Add per-language tests.
+- [ ] Add language-aware AST shape hashing.
+- [ ] Update language parity and scenario docs.
+- [ ] Add per-language tests.
+
+Current renamed-clone detection uses normalized token streams and fingerprints, not AST shape hashes.
 
 ### Phase 4: PR and Agent Integration
 
-- Use git `similarityIndex` in review or impact mode.
-- Add duplicate candidates to explain packets only after output stabilizes.
+- [ ] Use git `similarityIndex` in review or impact mode.
+- [x] Add duplicate candidates to explain packets only after output stabilizes.
+- [x] Add scoped duplicate leads to pretty impact and review summaries.
+- [x] Add bounded `duplicate-sibling` review tasks for changed duplicate implementations.
 
 ### Phase 5: Optional Persistence
 
-- Consider duplicate cache files only if repeated runs need them.
-- Add SQLite schema migrations only with a clear query use case.
+- [ ] Consider duplicate cache files only if repeated runs need them.
+- [ ] Add SQLite schema migrations only with a clear query use case.
 
 ## Parity Rules
 
