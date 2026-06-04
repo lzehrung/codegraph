@@ -165,7 +165,9 @@ function duplicateScopeFilesForReview(
 function duplicateSimilarityHintsFromReview(report: ReviewReport): DuplicateSimilarityHint[] {
   return report.changedFiles
     .filter(
-      (fileChange): fileChange is ReviewReport["changedFiles"][number] & {
+      (
+        fileChange,
+      ): fileChange is ReviewReport["changedFiles"][number] & {
         oldFile: string;
         similarityIndex: number;
       } => fileChange.oldFile !== undefined && fileChange.similarityIndex !== undefined,

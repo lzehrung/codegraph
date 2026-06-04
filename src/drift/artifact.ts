@@ -70,21 +70,38 @@ function parseGraphJson(value: unknown): PortableGraphJson {
   if (!isPlainRecord(value.graph) || !Array.isArray(value.graph.files) || !Array.isArray(value.graph.fileEdges)) {
     throw new Error("Codegraph artifact graph.json does not contain a portable graph.");
   }
-  const files = value.graph.files.filter((entry): entry is string => typeof entry === "string").map(normalizePath).sort();
+  const files = value.graph.files
+    .filter((entry): entry is string => typeof entry === "string")
+    .map(normalizePath)
+    .sort();
   const fileEdges: Edge[] = [];
   for (const edge of value.graph.fileEdges) {
-    if (!isPlainRecord(edge) || typeof edge.from !== "string" || typeof edge.raw !== "string" || !isPlainRecord(edge.to)) {
+    if (
+      !isPlainRecord(edge) ||
+      typeof edge.from !== "string" ||
+      typeof edge.raw !== "string" ||
+      !isPlainRecord(edge.to)
+    ) {
       continue;
     }
     if (edge.to.type === "file" && typeof edge.to.path === "string") {
-      fileEdges.push({ from: normalizePath(edge.from), raw: edge.raw, to: { type: "file", path: normalizePath(edge.to.path) } });
+      fileEdges.push({
+        from: normalizePath(edge.from),
+        raw: edge.raw,
+        to: { type: "file", path: normalizePath(edge.to.path) },
+      });
     } else if (edge.to.type === "external" && typeof edge.to.name === "string") {
       fileEdges.push({ from: normalizePath(edge.from), raw: edge.raw, to: { type: "external", name: edge.to.name } });
     }
   }
   const symbols = Array.isArray(value.graph.symbols)
     ? value.graph.symbols.filter((entry): entry is { file: string; name: string; kind: string } => {
-        return isPlainRecord(entry) && typeof entry.file === "string" && typeof entry.name === "string" && typeof entry.kind === "string";
+        return (
+          isPlainRecord(entry) &&
+          typeof entry.file === "string" &&
+          typeof entry.name === "string" &&
+          typeof entry.kind === "string"
+        );
       })
     : [];
   return {

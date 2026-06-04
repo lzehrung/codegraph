@@ -206,7 +206,11 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     const index = await buildProjectIndex(root);
     const bare = await findDuplicateContext(index, { file: "src/a.ts" }, { minConfidence: "high", limit: 1 });
     const dotted = await findDuplicateContext(index, { file: "./src/a.ts" }, { minConfidence: "high", limit: 1 });
-    const absolute = await findDuplicateContext(index, { file: path.join(root, "src/a.ts") }, { minConfidence: "high", limit: 1 });
+    const absolute = await findDuplicateContext(
+      index,
+      { file: path.join(root, "src/a.ts") },
+      { minConfidence: "high", limit: 1 },
+    );
 
     expect(dotted.target.file).toBe("src/a.ts");
     expect(absolute.target.file).toBe("src/a.ts");
@@ -238,14 +242,20 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     const index = await buildProjectIndex(root);
     const target = { file: "src/g.ts" };
     const result = await findDuplicateContext(index, target, { minConfidence: "high", limit: 5 });
-    const rawResult = await findDuplicateContext(index, target, { includeRawPairs: true, minConfidence: "high", limit: 5 });
+    const rawResult = await findDuplicateContext(index, target, {
+      includeRawPairs: true,
+      minConfidence: "high",
+      limit: 5,
+    });
     expect(rawResult.suggestions?.length).toBeGreaterThan(0);
     for (const suggestion of rawResult.suggestions ?? []) {
       expect(suggestion.left.file === "src/g.ts" || suggestion.right.file === "src/g.ts").toBeTruthy();
     }
 
     expect(result.groups.length).toBeGreaterThan(0);
-    expect(result.groups.some((group) => group.primaryLeft.file === "src/g.ts" || group.primaryRight.file === "src/g.ts")).toBeTruthy();
+    expect(
+      result.groups.some((group) => group.primaryLeft.file === "src/g.ts" || group.primaryRight.file === "src/g.ts"),
+    ).toBeTruthy();
     expect(result.suggestions).toBeUndefined();
     for (const group of result.groups) {
       const rawGroup = rawResult.groups.find((entry) => entry.id === group.id);
@@ -277,7 +287,11 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     await writeProjectFile(root, "src/c.ts", source);
 
     const index = await buildProjectIndex(root);
-    const result = await findDuplicateContext(index, { file: "src/a.ts" }, { maxBucketSize: 2, minConfidence: "high", minTokens: 1, limit: 5 });
+    const result = await findDuplicateContext(
+      index,
+      { file: "src/a.ts" },
+      { maxBucketSize: 2, minConfidence: "high", minTokens: 1, limit: 5 },
+    );
 
     expect(result.groups.length).toBeGreaterThan(0);
     expect(result.omittedCounts.oversizedBuckets).toBe(0);
@@ -313,7 +327,11 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     await writeProjectFile(baselineRoot, "src/target-a.ts", target);
     await writeProjectFile(baselineRoot, "src/target-b.ts", target);
     const baselineIndex = await buildProjectIndex(baselineRoot);
-    const baseline = await findDuplicateContext(baselineIndex, { file: "src/target-a.ts" }, { maxBucketSize: 4, minConfidence: "high", minTokens: 1, limit: 5 });
+    const baseline = await findDuplicateContext(
+      baselineIndex,
+      { file: "src/target-a.ts" },
+      { maxBucketSize: 4, minConfidence: "high", minTokens: 1, limit: 5 },
+    );
 
     const noisyRoot = await makeTempProject();
     await writeProjectFile(noisyRoot, "src/noise-a.json", `${repeated}\n`);
@@ -324,7 +342,11 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     await writeProjectFile(noisyRoot, "src/target-a.ts", target);
     await writeProjectFile(noisyRoot, "src/target-b.ts", target);
     const noisyIndex = await buildProjectIndex(noisyRoot);
-    const noisy = await findDuplicateContext(noisyIndex, { file: "src/target-a.ts" }, { maxBucketSize: 4, minConfidence: "high", minTokens: 1, limit: 5 });
+    const noisy = await findDuplicateContext(
+      noisyIndex,
+      { file: "src/target-a.ts" },
+      { maxBucketSize: 4, minConfidence: "high", minTokens: 1, limit: 5 },
+    );
 
     expect(noisy.groups.length).toBeGreaterThan(0);
     expect(noisy.omittedCounts.oversizedBuckets).toBe(baseline.omittedCounts.oversizedBuckets);
@@ -621,11 +643,15 @@ export function compressSearchTerms(input: string[]) {
     );
 
     const index = await buildProjectIndex(root);
-    const result = await findDuplicateContext(index, { file: "src/copied.ts" }, {
-      minConfidence: "low",
-      limit: 5,
-      similarityHints: [{ leftFile: "src/source.ts", rightFile: "src/copied.ts", similarityIndex: 91 }],
-    });
+    const result = await findDuplicateContext(
+      index,
+      { file: "src/copied.ts" },
+      {
+        minConfidence: "low",
+        limit: 5,
+        similarityHints: [{ leftFile: "src/source.ts", rightFile: "src/copied.ts", similarityIndex: 91 }],
+      },
+    );
     const match = result.groups.find(
       (group) => group.primaryLeft.file === "src/copied.ts" || group.primaryRight.file === "src/copied.ts",
     );

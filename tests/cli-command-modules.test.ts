@@ -2,6 +2,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { describe, expect, test, vi } from "vitest";
 import { handleChunkCommand, type ChunkCommandContext } from "../src/cli/chunk.js";
 import { buildDoctorReport } from "../src/cli/doctor.js";
@@ -27,6 +28,25 @@ function readJsonRecord(value: unknown): Record<string, unknown> {
 function readJsonArray(value: unknown): unknown[] {
   expect(Array.isArray(value)).toBeTruthy();
   return value as unknown[];
+}
+
+function runCliModuleGit(root: string, args: string[]): string {
+  const result = spawnSync("git", args, {
+    cwd: root,
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: process.env.GIT_AUTHOR_NAME ?? "Codegraph Test",
+      GIT_AUTHOR_EMAIL: process.env.GIT_AUTHOR_EMAIL ?? "codegraph@example.test",
+      GIT_COMMITTER_NAME: process.env.GIT_COMMITTER_NAME ?? "Codegraph Test",
+      GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL ?? "codegraph@example.test",
+    },
+    encoding: "utf8",
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(`git ${args.join(" ")} failed (${result.status}): ${result.stderr}`);
+  }
+  return result.stdout.trim();
 }
 
 function createChunkContext(overrides: Partial<ChunkCommandContext>): ChunkCommandContext {
@@ -763,21 +783,35 @@ describe("CLI command modules", () => {
   test("runs drift through the main CLI dispatcher with policy exits", async () => {
     const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-drift-"));
     await fsp.mkdir(path.join(tempDir, "src"), { recursive: true });
-    await fsp.writeFile(path.join(tempDir, "src", "a.ts"), "import { b } from './b'; export function a() { return b(); }\n", "utf8");
+    await fsp.writeFile(
+      path.join(tempDir, "src", "a.ts"),
+      "import { b } from './b'; export function a() { return b(); }\n",
+      "utf8",
+    );
     await fsp.writeFile(path.join(tempDir, "src", "b.ts"), "export function b() { return 1; }\n", "utf8");
-    await import("./helpers/git.js").then(({ runGit }) => {
-      runGit(tempDir, ["init"]);
-      runGit(tempDir, ["add", "."]);
-      runGit(tempDir, ["commit", "-m", "base"]);
-    });
-    await fsp.writeFile(path.join(tempDir, "src", "b.ts"), "import { a } from './a'; export function b() { return a(); }\n", "utf8");
-    await import("./helpers/git.js").then(({ runGit }) => {
-      runGit(tempDir, ["add", "."]);
-      runGit(tempDir, ["commit", "-m", "head"]);
-    });
+    runCliModuleGit(tempDir, ["init"]);
+    runCliModuleGit(tempDir, ["add", "."]);
+    runCliModuleGit(tempDir, ["commit", "-m", "base"]);
+    await fsp.writeFile(
+      path.join(tempDir, "src", "b.ts"),
+      "import { a } from './a'; export function b() { return a(); }\n",
+      "utf8",
+    );
+    runCliModuleGit(tempDir, ["add", "."]);
+    runCliModuleGit(tempDir, ["commit", "-m", "head"]);
 
     try {
-      const json = await captureCli(["drift", "src", "--root", tempDir, "--base", "HEAD~1", "--head", "HEAD", "--json"]);
+      const json = await captureCli([
+        "drift",
+        "src",
+        "--root",
+        tempDir,
+        "--base",
+        "HEAD~1",
+        "--head",
+        "HEAD",
+        "--json",
+      ]);
       const noFail = await captureCli([
         "drift",
         "src",

@@ -183,7 +183,11 @@ describe("architecture drift artifact baselines", () => {
 
   it("does not report unresolved-import drift for declared package imports from graph-json artifacts", async () => {
     const root = await mkTmpDir("cg-drift-artifact-unresolved-");
-    await writeFile(root, "package.json", '{\n  "name": "artifact-unresolved",\n  "dependencies": { "left-pad": "1.3.0" }\n}\n');
+    await writeFile(
+      root,
+      "package.json",
+      '{\n  "name": "artifact-unresolved",\n  "dependencies": { "left-pad": "1.3.0" }\n}\n',
+    );
     await writeFile(root, "src/a.ts", 'import leftPad from "left-pad";\nexport const value = leftPad("a", 2);\n');
     const outDir = path.join(root, "baseline");
     await buildCodegraphArtifact({ root, outDir, graphJson: true });
@@ -214,11 +218,7 @@ describe("architecture drift artifact baselines", () => {
 
   it("does not invent API or duplicate drift from derived artifact baselines", async () => {
     const root = await mkTmpDir("cg-drift-artifact-derived-");
-    await writeFile(
-      root,
-      "src/a.ts",
-      "function helper() { return 1; }\nexport function a() { return helper(); }\n",
-    );
+    await writeFile(root, "src/a.ts", "function helper() { return 1; }\nexport function a() { return helper(); }\n");
     const outDir = path.join(root, "baseline");
     await buildCodegraphArtifact({ root, outDir, graphJson: true });
 

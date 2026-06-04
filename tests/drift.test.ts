@@ -68,7 +68,9 @@ describe("architecture drift", () => {
 
   it("reports new cycles without reporting pre-existing cycles", () => {
     const base = makeSnapshot({
-      cycles: [{ key: "src/old-a.ts\u0000src/old-b.ts", files: ["src/old-a.ts", "src/old-b.ts"], priorityScore: 10, size: 2 }],
+      cycles: [
+        { key: "src/old-a.ts\u0000src/old-b.ts", files: ["src/old-a.ts", "src/old-b.ts"], priorityScore: 10, size: 2 },
+      ],
     });
     const head = makeSnapshot({
       cycles: [
@@ -98,7 +100,9 @@ describe("architecture drift", () => {
 
   it("compares duplicate group counts and stable top group keys", () => {
     const base = makeSnapshot({ duplicates: { groups: { total: 1 }, topGroupKeys: ["a.ts:1-b.ts:1"] } });
-    const head = makeSnapshot({ duplicates: { groups: { total: 3 }, topGroupKeys: ["a.ts:1-b.ts:1", "c.ts:1-d.ts:1"] } });
+    const head = makeSnapshot({
+      duplicates: { groups: { total: 3 }, topGroupKeys: ["a.ts:1-b.ts:1", "c.ts:1-d.ts:1"] },
+    });
 
     const report = compareArchitectureSnapshots(base, head, { failOn: [] });
 
@@ -158,7 +162,9 @@ describe("architecture drift", () => {
   });
 
   it("applies fail-on policy only to selected finding kinds", () => {
-    const base = makeSnapshot({ publicApi: [{ id: "src/api.ts#old:function", file: "src/api.ts", name: "old", kind: "function" }] });
+    const base = makeSnapshot({
+      publicApi: [{ id: "src/api.ts#old:function", file: "src/api.ts", name: "old", kind: "function" }],
+    });
     const head = makeSnapshot({ publicApi: [] });
 
     const ignored = compareArchitectureSnapshots(base, head, { failOn: ["new-cycle"] });
@@ -262,7 +268,9 @@ describe("architecture drift", () => {
 
   it("renders a short grouped pretty report", () => {
     const report = compareArchitectureSnapshots(
-      makeSnapshot({ publicApi: [{ id: "src/api.ts#oldName:function", file: "src/api.ts", name: "oldName", kind: "function" }] }),
+      makeSnapshot({
+        publicApi: [{ id: "src/api.ts#oldName:function", file: "src/api.ts", name: "oldName", kind: "function" }],
+      }),
       makeSnapshot({
         cycles: [{ key: "src/a.ts\u0000src/b.ts", files: ["src/a.ts", "src/b.ts"], priorityScore: 20, size: 2 }],
         hotspots: [{ file: "src/core.ts", fanIn: 20, fanOut: 32, score: 72 }],

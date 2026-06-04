@@ -128,16 +128,8 @@ describe("Review report", () => {
     const root = await mkTmpDir("dg-review-copy-metadata-");
     const srcDir = path.join(root, "src");
     await fsp.mkdir(srcDir, { recursive: true });
-    await fsp.writeFile(
-      path.join(srcDir, "source.ts"),
-      "export function sourceValue() { return 1; }\n",
-      "utf8",
-    );
-    await fsp.writeFile(
-      path.join(srcDir, "copied.ts"),
-      "export function copiedValue() { return 1; }\n",
-      "utf8",
-    );
+    await fsp.writeFile(path.join(srcDir, "source.ts"), "export function sourceValue() { return 1; }\n", "utf8");
+    await fsp.writeFile(path.join(srcDir, "copied.ts"), "export function copiedValue() { return 1; }\n", "utf8");
 
     const diffText = [
       "diff --git a/src/source.ts b/src/copied.ts",
@@ -1671,7 +1663,11 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     runGit(root, ["add", "."]);
     runGit(root, ["commit", "-m", "initial"]);
 
-    await fsp.writeFile(path.join(root, "src/b.ts"), `${topLevelSource}\nexport function changed() { return 2; }\n`, "utf8");
+    await fsp.writeFile(
+      path.join(root, "src/b.ts"),
+      `${topLevelSource}\nexport function changed() { return 2; }\n`,
+      "utf8",
+    );
 
     const report = await buildReviewReport(root, { gitBase: "HEAD", gitHead: "WORKTREE" });
     const task = report.reviewTasks.find(

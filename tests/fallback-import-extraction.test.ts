@@ -237,9 +237,9 @@ describe("Import extraction fallback reporting", () => {
     const index = await buildProjectIndexFromFiles(root, [page, guide], { report: indexReport });
     const graph = await collectGraph(root, [page, guide], { report: graphReport });
 
-    expect(index.graph.edges.some((edge) => edge.to.type === "file" && edge.to.path === guide.replace(/\\/g, "/"))).toBe(
-      true,
-    );
+    expect(
+      index.graph.edges.some((edge) => edge.to.type === "file" && edge.to.path === guide.replace(/\\/g, "/")),
+    ).toBe(true);
     expect(graph.edges.some((edge) => edge.to.type === "file" && edge.to.path === guide.replace(/\\/g, "/"))).toBe(
       true,
     );

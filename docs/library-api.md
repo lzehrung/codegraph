@@ -271,10 +271,14 @@ const duplicates = await findDuplicates(index, {
 
 console.log(duplicates.groups);
 
-const duplicateContext = await findDuplicateContext(index, { file: "src/auth.ts" }, {
-  minConfidence: "medium",
-  limit: 5,
-});
+const duplicateContext = await findDuplicateContext(
+  index,
+  { file: "src/auth.ts" },
+  {
+    minConfidence: "medium",
+    limit: 5,
+  },
+);
 ```
 
 Useful options:

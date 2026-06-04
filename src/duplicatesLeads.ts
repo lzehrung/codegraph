@@ -1,4 +1,9 @@
-import { findDuplicates, type DuplicateCloneType, type DuplicateGroup, type DuplicateSimilarityHint } from "./duplicates.js";
+import {
+  findDuplicates,
+  type DuplicateCloneType,
+  type DuplicateGroup,
+  type DuplicateSimilarityHint,
+} from "./duplicates.js";
 import type { ProjectIndex } from "./indexer/types.js";
 
 export type DuplicateLeadScope = "off" | "changed" | "impacted" | "all";

@@ -141,11 +141,13 @@ type DuplicateInternalUnit = DuplicateUnitRef & {
   signatures: Set<string>;
 };
 
-type DuplicateUnitDraft = Omit<DuplicateUnitRef, "tokenCount" | "handle" | "fileHandle" | "chunkHandle" | "symbolHandle" | "sqlHandle">;
+type DuplicateUnitDraft = Omit<
+  DuplicateUnitRef,
+  "tokenCount" | "handle" | "fileHandle" | "chunkHandle" | "symbolHandle" | "sqlHandle"
+>;
 
 type PairFilter = (left: DuplicateInternalUnit, right: DuplicateInternalUnit) => boolean;
 type UnitFilter = (unit: DuplicateInternalUnit) => boolean;
-
 
 type PairEvidence = {
   left: DuplicateInternalUnit;
@@ -466,7 +468,6 @@ function languageForFile(filePath: string): LanguageForFileResult | undefined {
   }
   return undefined;
 }
-
 
 function formatDuplicateFileHandle(file: string): string {
   return ["file", encodeURIComponent(file)].join(":");
@@ -1038,7 +1039,9 @@ async function collectDuplicateUnits(
       continue;
     }
 
-    const astContext = language.textOnly ? undefined : await getDuplicateAstContext(index, file, source, astContextCache);
+    const astContext = language.textOnly
+      ? undefined
+      : await getDuplicateAstContext(index, file, source, astContextCache);
     const chunks = makeDuplicateChunks(
       file,
       language.id,
@@ -1055,7 +1058,14 @@ async function collectDuplicateUnits(
         return makeSymbolUnit(symbol, chunk, options.projectRoot, options.shingleSize, options.windowSize, astContext);
       })
       .filter((unit): unit is DuplicateInternalUnit => unit !== undefined);
-    const chunkUnits = makeChunkUnits(file, chunks, options.projectRoot, options.shingleSize, options.windowSize, astContext);
+    const chunkUnits = makeChunkUnits(
+      file,
+      chunks,
+      options.projectRoot,
+      options.shingleSize,
+      options.windowSize,
+      astContext,
+    );
     const candidates = [...symbolUnits, ...chunkUnits];
 
     for (const unit of candidates) {
@@ -1116,7 +1126,14 @@ function buildCandidatePairs(
   const consideredSignaturesByUnit: ConsideredSignaturesByUnit = new Map();
   let oversizedBuckets = 0;
   oversizedBuckets += addBucketsToPairs(rawHashBuckets, pairs, "rawHash", maxBucketSize, pairFilter, unitFilter);
-  oversizedBuckets += addBucketsToPairs(normalizedHashBuckets, pairs, "normalizedHash", maxBucketSize, pairFilter, unitFilter);
+  oversizedBuckets += addBucketsToPairs(
+    normalizedHashBuckets,
+    pairs,
+    "normalizedHash",
+    maxBucketSize,
+    pairFilter,
+    unitFilter,
+  );
   oversizedBuckets += addBucketsToPairs(astShapeBuckets, pairs, "astShape", maxBucketSize, pairFilter, unitFilter);
   addSimilarityHintPairs(units, pairs, similarityHints, projectRoot, pairFilter);
   oversizedBuckets += addSignatureBucketsToPairs(
@@ -1595,12 +1612,7 @@ export async function findDuplicates(
     shingleSize,
     windowSize,
   });
-  const { pairs, oversizedBuckets } = buildCandidatePairs(
-    units,
-    maxBucketSize,
-    options.similarityHints,
-    projectRoot,
-  );
+  const { pairs, oversizedBuckets } = buildCandidatePairs(units, maxBucketSize, options.similarityHints, projectRoot);
   const suggestions: DuplicateSuggestion[] = [];
   let overlappingPairs = 0;
   let comparedPairs = 0;
@@ -1680,10 +1692,17 @@ function groupTouchesDuplicateTarget(group: DuplicateGroup, target: DuplicateTar
   return group.variants.some((variant) => suggestionTouchesDuplicateTarget(variant, target));
 }
 
-function boundDuplicateGroupVariants(group: DuplicateGroup, target: DuplicateTarget, includeRawPairs: boolean): DuplicateGroup {
+function boundDuplicateGroupVariants(
+  group: DuplicateGroup,
+  target: DuplicateTarget,
+  includeRawPairs: boolean,
+): DuplicateGroup {
   if (includeRawPairs) return group;
   let variants = group.variants;
-  if (!unitTouchesDuplicateTarget(group.primaryLeft, target) && !unitTouchesDuplicateTarget(group.primaryRight, target)) {
+  if (
+    !unitTouchesDuplicateTarget(group.primaryLeft, target) &&
+    !unitTouchesDuplicateTarget(group.primaryRight, target)
+  ) {
     const targetVariant = group.variants.find((variant) => suggestionTouchesDuplicateTarget(variant, target));
     if (targetVariant) {
       const targetVariantKey = suggestionVariantKey(targetVariant);
@@ -1764,7 +1783,8 @@ async function findDuplicatesTouchingTargets(
     shingleSize,
     windowSize,
   });
-  const touchesTarget: UnitFilter = (unit) => normalizedTargets.some((target) => unitTouchesDuplicateTarget(unit, target));
+  const touchesTarget: UnitFilter = (unit) =>
+    normalizedTargets.some((target) => unitTouchesDuplicateTarget(unit, target));
   const touchesAnyTarget: PairFilter = (left, right) => touchesTarget(left) || touchesTarget(right);
   const { pairs, oversizedBuckets } = buildCandidatePairs(
     units,

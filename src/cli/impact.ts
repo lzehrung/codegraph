@@ -242,9 +242,7 @@ function duplicateScopeFilesForImpact(
   return [...changedFiles, ...impactReport.impacted.map((item) => item.file)];
 }
 
-function duplicateChangedFilesWithSimilaritySources(
-  changedFiles: ImpactReport["changedFiles"],
-): string[] {
+function duplicateChangedFilesWithSimilaritySources(changedFiles: ImpactReport["changedFiles"]): string[] {
   const files = new Set<string>();
   for (const changedFile of changedFiles) {
     files.add(changedFile.file);
@@ -258,7 +256,9 @@ function duplicateChangedFilesWithSimilaritySources(
 function duplicateSimilarityHintsFromImpact(report: ImpactReport): DuplicateSimilarityHint[] {
   return report.changedFiles
     .filter(
-      (fileChange): fileChange is ImpactReport["changedFiles"][number] & {
+      (
+        fileChange,
+      ): fileChange is ImpactReport["changedFiles"][number] & {
         oldFile: string;
         similarityIndex: number;
       } => fileChange.oldFile !== undefined && fileChange.similarityIndex !== undefined,

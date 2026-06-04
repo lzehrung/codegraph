@@ -324,14 +324,7 @@ describe("Go to Definition", () => {
         const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
         await fsp.writeFile(
           serviceFile,
-          [
-            "export class Service {",
-            "  run(value: number) {",
-            "    return value;",
-            "  }",
-            "}",
-            "",
-          ].join("\n"),
+          ["export class Service {", "  run(value: number) {", "    return value;", "  }", "}", ""].join("\n"),
           "utf8",
         );
         await fsp.writeFile(

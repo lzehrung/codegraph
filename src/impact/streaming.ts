@@ -133,6 +133,9 @@ function buildLightStreamSummaryReport(
     format: "stream-summary",
     changedFiles: normalizedChanges.map((change) => ({
       file: displayFile(change.path),
+      kind: change.kind,
+      ...(change.oldPath !== undefined ? { oldFile: displayFile(change.oldPath) } : {}),
+      ...(change.similarityIndex !== undefined ? { similarityIndex: change.similarityIndex } : {}),
       hunks: change.hunks.map((hunk) => newFileRangeForHunk(hunk)),
     })),
     changedSymbols: changedSymbols.map((symbol) => ({
