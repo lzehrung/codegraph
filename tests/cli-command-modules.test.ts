@@ -2,7 +2,6 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { describe, expect, test, vi } from "vitest";
 import { handleChunkCommand, type ChunkCommandContext } from "../src/cli/chunk.js";
 import { buildDoctorReport } from "../src/cli/doctor.js";
@@ -18,6 +17,7 @@ import * as indexerBuild from "../src/indexer/build-index.js";
 import type { ProjectIndex } from "../src/indexer.js";
 import type { BuildOptions } from "../src/indexer/types.js";
 import type { Graph } from "../src/types.js";
+import { runGit } from "./helpers/git.js";
 
 function readJsonRecord(value: unknown): Record<string, unknown> {
   expect(value).toBeTypeOf("object");
@@ -31,22 +31,7 @@ function readJsonArray(value: unknown): unknown[] {
 }
 
 function runCliModuleGit(root: string, args: string[]): string {
-  const result = spawnSync("git", args, {
-    cwd: root,
-    env: {
-      ...process.env,
-      GIT_AUTHOR_NAME: process.env.GIT_AUTHOR_NAME ?? "Codegraph Test",
-      GIT_AUTHOR_EMAIL: process.env.GIT_AUTHOR_EMAIL ?? "codegraph@example.test",
-      GIT_COMMITTER_NAME: process.env.GIT_COMMITTER_NAME ?? "Codegraph Test",
-      GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL ?? "codegraph@example.test",
-    },
-    encoding: "utf8",
-  });
-  if (result.error) throw result.error;
-  if (result.status !== 0) {
-    throw new Error(`git ${args.join(" ")} failed (${result.status}): ${result.stderr}`);
-  }
-  return result.stdout.trim();
+  return runGit(root, args);
 }
 
 function createChunkContext(overrides: Partial<ChunkCommandContext>): ChunkCommandContext {
