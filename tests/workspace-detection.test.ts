@@ -3,6 +3,8 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import { buildProjectIndex } from "../src/index.js";
+import { clearWorkspaceCaches, loadWorkspaceConfig, resolveWorkspacePackage } from "../src/util/workspace.js";
 
 async function copyDir(src: string, dest: string) {
   await fsp.mkdir(dest, { recursive: true });
@@ -27,8 +29,6 @@ describe("Workspace detection modes", () => {
     const root = await mkTmpMonorepo();
     const nestedDir = path.join(root, "packages", "pkg-b");
     const previousCwd = process.cwd();
-    const { clearWorkspaceCaches, loadWorkspaceConfig, resolveWorkspacePackage } =
-      await import("../src/util/workspace.js");
     try {
       process.chdir(nestedDir);
       clearWorkspaceCaches();
@@ -52,7 +52,6 @@ describe("Workspace detection modes", () => {
     await fsp.writeFile(path.join(root, "pnpm-workspace.yaml"), pnpmYaml, "utf8");
     await fsp.writeFile(path.join(root, "lerna.json"), JSON.stringify({ packages: ["packages/*"] }, null, 2), "utf8");
 
-    const { buildProjectIndex } = await import("../src/index.js");
     const index = await buildProjectIndex(root);
     const files = [...index.byFile.keys()].map((f) => f.replace(/\\/g, "/"));
     expect(files.some((f) => f.includes("packages/pkg-a/src/index.ts"))).toBe(true);
@@ -70,7 +69,6 @@ describe("Workspace detection modes", () => {
     const pnpmYaml = "packages:\n  - 'packages/*'\n";
     await fsp.writeFile(path.join(root, "pnpm-workspace.yaml"), pnpmYaml, "utf8");
 
-    const { buildProjectIndex } = await import("../src/index.js");
     const index = await buildProjectIndex(root);
     const files = [...index.byFile.keys()].map((f) => f.replace(/\\/g, "/"));
     expect(files.some((f) => f.includes("packages/pkg-a/src/index.ts"))).toBe(true);
@@ -90,7 +88,6 @@ describe("Workspace detection modes", () => {
     // write lerna config
     await fsp.writeFile(path.join(root, "lerna.json"), JSON.stringify({ packages: ["packages/*"] }, null, 2), "utf8");
 
-    const { buildProjectIndex } = await import("../src/index.js");
     const index = await buildProjectIndex(root);
     const files = [...index.byFile.keys()].map((f) => f.replace(/\\/g, "/"));
     expect(files.some((f) => f.includes("packages/pkg-a/src/index.ts"))).toBe(true);

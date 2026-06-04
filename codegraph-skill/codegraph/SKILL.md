@@ -268,7 +268,7 @@ For git-provider impact and git-scoped review/index/graph commands, `WORKTREE` c
   Covers indexed symbols, semantic chunks, text chunks, token fingerprints, and AST shape hashes when parser context is available.
   Reports grouped findings by default so overlapping symbol/chunk variants collapse into one clone.
   Uses duplicate JSON `schemaVersion: 2`.
-  Metrics can include `astShapeEqual` and `gitSimilarity` when those signals are available.
+  Metrics can include `astShapeEqual` and `gitSimilarity` when those signals are available. Git copy or rename similarity must be at least 80 to boost duplicate evidence.
   Bounds per-group variants by default and reports hidden evidence with counts.
   A single positional directory becomes the project root unless `--root` is set.
   Use `--include-small` for tiny helpers.

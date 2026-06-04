@@ -661,6 +661,146 @@ export function compressSearchTerms(input: string[]) {
     expect(match?.reasons).toContain("git similarity 91%");
   });
 
+  test("ignores invalid and low git similarity hints", async () => {
+    const root = await makeTempProject();
+
+    await writeProjectFile(root, "src/a.ts", `export const alphaConfig = ["bravo", "charlie", "delta"];\n`);
+    await writeProjectFile(root, "src/b.ts", `export const golfConfig = ["hotel", "india", "juliet"];\n`);
+
+    const index = await buildProjectIndex(root);
+    const lowSimilarity = await findDuplicates(index, {
+      includeSmall: true,
+      includeRawPairs: true,
+      minConfidence: "low",
+      similarityHints: [{ leftFile: "src/a.ts", rightFile: "src/b.ts", similarityIndex: 79 }],
+    });
+    const invalidSimilarity = await findDuplicates(index, {
+      includeSmall: true,
+      includeRawPairs: true,
+      minConfidence: "low",
+      similarityHints: [{ leftFile: "src/a.ts", rightFile: "src/b.ts", similarityIndex: Number.NaN }],
+    });
+    const highSimilarity = await findDuplicates(index, {
+      includeSmall: true,
+      includeRawPairs: true,
+      minConfidence: "low",
+      similarityHints: [{ leftFile: "src/a.ts", rightFile: "src/b.ts", similarityIndex: 90 }],
+    });
+
+    expect(lowSimilarity.suggestions?.some((suggestion) => suggestion.metrics.gitSimilarity !== undefined)).toBe(false);
+    expect(invalidSimilarity.suggestions?.some((suggestion) => suggestion.metrics.gitSimilarity !== undefined)).toBe(
+      false,
+    );
+    expect(highSimilarity.suggestions?.some((suggestion) => suggestion.metrics.gitSimilarity === 90)).toBe(true);
+  });
+
+  test("bounds high-fanout git similarity hints to aligned units", async () => {
+    const root = await makeTempProject();
+    const makeFunctions = (prefix: string) =>
+      Array.from(
+        { length: 16 },
+        (_, index) => `
+export function ${prefix}Value${index}(rows: Array<{ amount: number; fee: number }>) {
+  const labels: string[] = [];
+  for (const row of rows) {
+    const total = row.amount + row.fee + ${index};
+    labels.push(String(total));
+  }
+  return labels.join(",");
+}
+`,
+      ).join("\n");
+
+    await writeProjectFile(root, "src/source.ts", makeFunctions("source"));
+    await writeProjectFile(root, "src/copied.ts", makeFunctions("copied"));
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, {
+      includeSmall: true,
+      includeRawPairs: true,
+      minConfidence: "low",
+      maxBucketSize: 8,
+      similarityHints: [{ leftFile: "src/source.ts", rightFile: "src/copied.ts", similarityIndex: 92 }],
+    });
+
+    const hintSuggestions = result.suggestions?.filter((suggestion) => suggestion.metrics.gitSimilarity === 92) ?? [];
+    expect(hintSuggestions.length).toBeLessThanOrEqual(8);
+    expect(result.omittedCounts.oversizedBuckets).toBeGreaterThan(0);
+    expect(hintSuggestions.length).toBeGreaterThan(0);
+  });
+
+  test("does not create git similarity candidates when a rename source is absent", async () => {
+    const root = await makeTempProject();
+
+    await writeProjectFile(
+      root,
+      "src/new.ts",
+      `
+export function newValue(rows: number[]) {
+  return rows.map((row) => row + 1).join(",");
+}
+`,
+    );
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, {
+      includeSmall: true,
+      includeRawPairs: true,
+      minConfidence: "low",
+      similarityHints: [{ leftFile: "src/old.ts", rightFile: "src/new.ts", similarityIndex: 95 }],
+    });
+
+    expect(result.suggestions?.some((suggestion) => suggestion.metrics.gitSimilarity !== undefined)).toBe(false);
+    expect(result.groups).toHaveLength(0);
+  });
+
+  test("does not promote unrelated matching AST shapes to medium confidence", async () => {
+    const root = await makeTempProject();
+
+    await writeProjectFile(
+      root,
+      "src/invoices.ts",
+      `
+export function calculateInvoiceTotals(rows: Array<{ amount: number; tax: number }>) {
+  const totals: number[] = [];
+  for (const row of rows) {
+    if (row.amount > 1000) {
+      totals.push(row.amount * row.tax);
+    } else {
+      totals.push(row.amount + row.tax);
+    }
+  }
+  return totals.reduce((sum, value) => sum + value, 0);
+}
+`,
+    );
+    await writeProjectFile(
+      root,
+      "src/navigation.ts",
+      `
+export function renderNavigationLinks(nodes: Array<{ href: string; label: string }>) {
+  const output: string[] = [];
+  for (const node of nodes) {
+    if (node.href.startsWith("https")) {
+      output.push(node.label.toUpperCase());
+    } else {
+      output.push(node.href.toLowerCase());
+    }
+  }
+  return output.filter((value) => value.length > 3).join("|");
+}
+`,
+    );
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, { minConfidence: "medium", limit: 5 });
+    const match = result.groups.find(
+      (group) => group.primaryLeft.file === "src/invoices.ts" || group.primaryRight.file === "src/invoices.ts",
+    );
+
+    expect(match).toBeUndefined();
+  });
+
   test("does not report matching signatures as high-confidence symbol clones", async () => {
     const root = await makeTempProject();
 

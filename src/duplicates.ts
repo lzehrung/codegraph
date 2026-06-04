@@ -185,6 +185,7 @@ const DEFAULT_WINDOW_SIZE = 4;
 const DEFAULT_MAX_FINGERPRINTS = 128;
 const GROUP_PRIMARY_LENGTH_RATIO_FLOOR = 0.7;
 const NEARBY_CHUNK_VARIANT_MAX_GAP = 2;
+const MIN_SIMILARITY_HINT_INDEX = 80;
 
 const textLanguageByExtension: Record<string, string> = {
   ".json": "json",
@@ -395,6 +396,13 @@ function ratio(left: number, right: number): number {
   return Math.min(left, right) / Math.max(left, right);
 }
 
+function normalizeSimilarityIndex(value: number): number | undefined {
+  if (!Number.isFinite(value)) return undefined;
+  const bounded = Math.max(0, Math.min(100, Math.round(value)));
+  if (bounded < MIN_SIMILARITY_HINT_INDEX) return undefined;
+  return bounded;
+}
+
 /** Measures set similarity as intersection divided by union. */
 function jaccard(left: Set<string>, right: Set<string>): number {
   if (!left.size && !right.size) return 1;
@@ -455,6 +463,14 @@ function cloneTypeForPair(evidence: PairEvidence, metrics: DuplicateMetrics): Du
   if ((evidence.gitSimilarity ?? 0) >= 80) return "near";
   if (metrics.shingleOverlap >= 0.55 || metrics.tokenJaccard >= 0.72) return "near";
   return "weak";
+}
+
+function shouldScoreSignatureEvidence(evidence: PairEvidence, metrics: DuplicateMetrics): boolean {
+  if (!evidence.signature) return false;
+  if (evidence.rawHash || evidence.normalizedHash || evidence.astShape || evidence.gitSimilarity !== undefined) {
+    return true;
+  }
+  return metrics.shingleOverlap >= 0.55;
 }
 
 function languageForFile(filePath: string): LanguageForFileResult | undefined {
@@ -971,7 +987,7 @@ function scorePair(evidence: PairEvidence, metrics: DuplicateMetrics): { score: 
     score += 20;
     reasons.push(`git similarity ${evidence.gitSimilarity}%`);
   }
-  if (evidence.signature) {
+  if (shouldScoreSignatureEvidence(evidence, metrics)) {
     score += 14;
     reasons.push("shared fingerprint bucket");
   }
@@ -1135,7 +1151,7 @@ function buildCandidatePairs(
     unitFilter,
   );
   oversizedBuckets += addBucketsToPairs(astShapeBuckets, pairs, "astShape", maxBucketSize, pairFilter, unitFilter);
-  addSimilarityHintPairs(units, pairs, similarityHints, projectRoot, pairFilter);
+  oversizedBuckets += addSimilarityHintPairs(units, pairs, similarityHints, projectRoot, maxBucketSize, pairFilter);
   oversizedBuckets += addSignatureBucketsToPairs(
     signatureBuckets,
     pairs,
@@ -1161,9 +1177,10 @@ function addSimilarityHintPairs(
   pairs: Map<string, PairEvidence>,
   similarityHints: readonly DuplicateSimilarityHint[] | undefined,
   projectRoot: string | undefined,
+  maxBucketSize: number,
   pairFilter?: PairFilter,
-): void {
-  if (!similarityHints?.length) return;
+): number {
+  if (!similarityHints?.length) return 0;
   const unitsByFile = new Map<string, DuplicateInternalUnit[]>();
   for (const unit of units) {
     const bucket = unitsByFile.get(unit.absoluteFile);
@@ -1174,21 +1191,104 @@ function addSimilarityHintPairs(
     }
   }
 
+  let oversizedHints = 0;
   for (const hint of similarityHints) {
-    if (hint.similarityIndex < 0) continue;
+    const similarityIndex = normalizeSimilarityIndex(hint.similarityIndex);
+    if (similarityIndex === undefined) continue;
     const leftFile = normalizeSimilarityHintFile(hint.leftFile, projectRoot);
     const rightFile = normalizeSimilarityHintFile(hint.rightFile, projectRoot);
     if (!leftFile || !rightFile || leftFile === rightFile) continue;
     const leftUnits = unitsByFile.get(leftFile);
     const rightUnits = unitsByFile.get(rightFile);
     if (!leftUnits?.length || !rightUnits?.length) continue;
+
+    if (similarityHintPairCountExceeds(leftUnits, rightUnits, maxBucketSize, pairFilter)) {
+      oversizedHints++;
+      addAlignedSimilarityHintPairs(pairs, leftUnits, rightUnits, similarityIndex, maxBucketSize, pairFilter);
+      continue;
+    }
     for (const leftUnit of leftUnits) {
       for (const rightUnit of rightUnits) {
         if (leftUnit.languageId !== rightUnit.languageId) continue;
         const [left, right] = orderedPair(leftUnit, rightUnit);
         if (pairFilter && !pairFilter(left, right)) continue;
-        addSimilarityHintPair(pairs, left, right, hint.similarityIndex);
+        addSimilarityHintPair(pairs, left, right, similarityIndex);
       }
+    }
+  }
+  return oversizedHints;
+}
+
+function similarityHintPairCountExceeds(
+  leftUnits: readonly DuplicateInternalUnit[],
+  rightUnits: readonly DuplicateInternalUnit[],
+  limit: number,
+  pairFilter?: PairFilter,
+): boolean {
+  let count = 0;
+  for (const leftUnit of leftUnits) {
+    for (const rightUnit of rightUnits) {
+      if (leftUnit.languageId !== rightUnit.languageId) continue;
+      const [left, right] = orderedPair(leftUnit, rightUnit);
+      if (pairFilter && !pairFilter(left, right)) continue;
+      count++;
+      if (count > limit) return true;
+    }
+  }
+  return false;
+}
+
+function similarityAlignmentKey(unit: DuplicateInternalUnit): string {
+  return [unit.languageId, unit.kind, unit.symbolKind ?? ""].join(":");
+}
+
+function addAlignedSimilarityHintPairs(
+  pairs: Map<string, PairEvidence>,
+  leftUnits: readonly DuplicateInternalUnit[],
+  rightUnits: readonly DuplicateInternalUnit[],
+  similarityIndex: number,
+  maxPairs: number,
+  pairFilter?: PairFilter,
+): void {
+  const rightByKey = new Map<string, DuplicateInternalUnit[]>();
+  for (const unit of rightUnits) {
+    const key = similarityAlignmentKey(unit);
+    const bucket = rightByKey.get(key);
+    if (bucket) bucket.push(unit);
+    else rightByKey.set(key, [unit]);
+  }
+  for (const bucket of rightByKey.values()) {
+    bucket.sort(compareUnitRefs);
+  }
+
+  const leftByKey = new Map<string, DuplicateInternalUnit[]>();
+  for (const unit of leftUnits) {
+    const key = similarityAlignmentKey(unit);
+    const bucket = leftByKey.get(key);
+    if (bucket) bucket.push(unit);
+    else leftByKey.set(key, [unit]);
+  }
+  for (const bucket of leftByKey.values()) {
+    bucket.sort(compareUnitRefs);
+  }
+
+  const seenPairs = new Set<string>();
+  let addedPairs = 0;
+  for (const [key, sortedLeftUnits] of Array.from(leftByKey.entries()).sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    const sortedRightUnits = rightByKey.get(key);
+    if (!sortedRightUnits?.length) continue;
+    const limit = Math.min(sortedLeftUnits.length, sortedRightUnits.length);
+    for (let index = 0; index < limit; index++) {
+      if (addedPairs >= maxPairs) return;
+      const [left, right] = orderedPair(sortedLeftUnits[index]!, sortedRightUnits[index]!);
+      const pairId = pairKey(left, right);
+      if (seenPairs.has(pairId)) continue;
+      seenPairs.add(pairId);
+      if (pairFilter && !pairFilter(left, right)) continue;
+      addSimilarityHintPair(pairs, left, right, similarityIndex);
+      addedPairs++;
     }
   }
 }
@@ -1207,11 +1307,10 @@ function addSimilarityHintPair(
   right: DuplicateInternalUnit,
   similarityIndex: number,
 ): void {
-  const boundedSimilarity = Math.max(0, Math.min(100, Math.round(similarityIndex)));
   const key = pairKey(left, right);
   const existing = pairs.get(key);
   if (existing) {
-    existing.gitSimilarity = Math.max(existing.gitSimilarity ?? 0, boundedSimilarity);
+    existing.gitSimilarity = Math.max(existing.gitSimilarity ?? 0, similarityIndex);
     return;
   }
   pairs.set(key, {
@@ -1220,7 +1319,7 @@ function addSimilarityHintPair(
     rawHash: false,
     normalizedHash: false,
     astShape: false,
-    gitSimilarity: boundedSimilarity,
+    gitSimilarity: similarityIndex,
     signature: false,
     signatureMatches: 0,
   });

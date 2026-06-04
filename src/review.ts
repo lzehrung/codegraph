@@ -230,7 +230,7 @@ async function buildReviewIndex(input: {
   const indexOpts: IncrementalBuildOptions = {
     ...(appliedOptions ?? {}),
     graph: graphOptions,
-    ...(includeSymbolDetails && maxCallsites > 0 ? { keepParsed: true } : {}),
+    keepParsed: true,
     ...(indexReport ? { report: indexReport } : {}),
   };
   if (!hasUnavailableChangedFiles) {

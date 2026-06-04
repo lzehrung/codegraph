@@ -427,10 +427,15 @@ function applyAnalysisOptions(context: ImpactCommandContext, options: ImpactOpti
   options.membersOnly = context.hasFlag("--members-only");
 }
 
-function buildIndexOptions(context: ImpactCommandContext, options: ImpactOptionsBuilder): BuildOptions {
+function buildIndexOptions(
+  context: ImpactCommandContext,
+  options: ImpactOptionsBuilder,
+  analysisOptions: { keepParsedForDuplicates?: boolean } = {},
+): BuildOptions {
   const cacheMode =
     options.cache === "off" || options.cache === "memory" || options.cache === "disk" ? options.cache : undefined;
-  const keepParsed = options.refContext !== undefined;
+  const keepParsedForDuplicates = analysisOptions.keepParsedForDuplicates ?? false;
+  const keepParsed = options.refContext !== undefined || keepParsedForDuplicates;
   const indexOpts: BuildOptions = {
     threads: options.threads ?? 0,
     discovery: context.discoveryOptions,
@@ -510,14 +515,18 @@ export async function handleImpactCommand(context: ImpactCommandContext): Promis
   const pretty = context.hasFlag("--pretty");
   const mermaid = context.hasFlag("--mermaid");
   try {
-    const index = await buildProjectIndex(context.projectRootFs, buildIndexOptions(context, options));
+    const duplicateScope =
+      pretty && !mermaid ? parseDuplicateLeadScope(context.getOpt("--duplicates"), "changed") : "off";
+    const index = await buildProjectIndex(
+      context.projectRootFs,
+      buildIndexOptions(context, options, { keepParsedForDuplicates: duplicateScope !== "off" }),
+    );
     const report = await analyzeImpactFromDiff(context.projectRootFs, index, options as ImpactOptions);
     const impactReport = ensureImpactReport(report);
 
     if (mermaid) {
       context.writeStdoutLine(formatImpactMermaid(impactReport, context.projectRootFs));
     } else if (pretty) {
-      const duplicateScope = parseDuplicateLeadScope(context.getOpt("--duplicates"), "changed");
       const duplicateSummary =
         duplicateScope === "off"
           ? undefined

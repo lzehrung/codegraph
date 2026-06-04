@@ -352,7 +352,7 @@ Pretty impact and review summaries also show high-confidence exact or renamed du
 - `impact --pretty` defaults to `--duplicates changed`.
 - `review --summary` defaults to `--duplicates impacted`.
 - Use `--duplicates off|changed|impacted|all` to control duplicate-lead scope.
-- Git copy or rename `similarityIndex` metadata can boost scoped duplicate leads when both old and new files exist in the indexed snapshot.
+- Git copy or rename `similarityIndex` metadata of 80 or higher can boost scoped duplicate leads when both old and new files exist in the indexed snapshot.
 - Structured review JSON also adds bounded `duplicate-sibling` review tasks when changed files or symbols overlap high-confidence duplicate groups. Treat these as "check the sibling implementation" prompts, not semantic-equivalence claims.
 - JSON output keeps the existing impact and review contracts; use `codegraph duplicates` for full grouped duplicate JSON.
 
