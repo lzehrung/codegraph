@@ -75,13 +75,14 @@ export async function collectReviewChanges(
   const diffChangesByFile = new Map<string, FileChange>();
   if (diff) {
     for (const fileChange of diff.files) {
+      const { oldPath, ...rest } = fileChange;
       const absPath = normalizeFile(fileChange.path, "Review diff file");
       const normalizedChange: FileChange = {
-        ...fileChange,
+        ...rest,
         path: absPath,
-        ...(fileChange.oldPath
+        ...(oldPath
           ? {
-              oldPath: normalizeFile(fileChange.oldPath, "Review old diff file"),
+              oldPath: normalizeFile(oldPath, "Review old diff file"),
             }
           : {}),
       };

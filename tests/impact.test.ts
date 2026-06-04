@@ -342,6 +342,7 @@ index 1234567..abcdef0 100644
 
       expect(report).toBeDefined();
       expect(report.changedFiles).toHaveLength(1);
+      expect("oldFile" in report.changedFiles[0]!).toBe(false);
       expect(report.changedSymbols.length).toBeGreaterThanOrEqual(0); // May be 0 if the new function isn't properly detected
       expect(Array.isArray(report.impacted)).toBe(true);
     });

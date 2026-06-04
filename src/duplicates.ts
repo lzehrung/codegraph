@@ -749,7 +749,7 @@ function normalizedAstShape(root: SyntaxNodeLike): string {
 
 function isAstShapeIgnoredNode(node: SyntaxNodeLike): boolean {
   const type = node.type.toLowerCase();
-  return type.includes("comment") || type === "ERROR";
+  return type.includes("comment") || type === "error";
 }
 
 function normalizeAstNodeType(type: string): string {

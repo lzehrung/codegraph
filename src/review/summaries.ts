@@ -127,7 +127,7 @@ function reviewFileDiffMetadata(
 ): Pick<ReviewFileSummary, "oldFile" | "similarityIndex"> {
   if (!diffChange) return {};
   return {
-    ...(diffChange.oldPath !== undefined ? { oldFile: relativePath(projectRoot, diffChange.oldPath) } : {}),
+    ...(diffChange.oldPath ? { oldFile: relativePath(projectRoot, diffChange.oldPath) } : {}),
     ...(diffChange.similarityIndex !== undefined ? { similarityIndex: diffChange.similarityIndex } : {}),
   };
 }
