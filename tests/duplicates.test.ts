@@ -483,6 +483,105 @@ export function scoreAccounts(accounts: Array<{ enabled: boolean; credits: numbe
     expect(match?.metrics.tokenJaccard).toBeGreaterThan(0.6);
   });
 
+  test("uses AST shape hashes as renamed-clone evidence", async () => {
+    const root = await makeTempProject();
+
+    await writeProjectFile(
+      root,
+      "src/invoices.ts",
+      `
+export function priceInvoices(rows: Array<{ amount: number; tax: number }>) {
+  const totals: number[] = [];
+  for (const row of rows) {
+    if (row.amount > 100) {
+      totals.push(row.amount + row.tax);
+    } else {
+      totals.push(row.amount - row.tax);
+    }
+  }
+  return totals.reduce((sum, value) => sum + value, 0);
+}
+`,
+    );
+    await writeProjectFile(
+      root,
+      "src/packages.ts",
+      `
+export function pricePackages(packages: Array<{ weight: number; fee: number }>) {
+  const values: number[] = [];
+  for (const item of packages) {
+    if (item.weight < 25) {
+      values.push(item.weight - item.fee);
+    } else {
+      values.push(item.weight + item.fee);
+    }
+  }
+  return values.reduce((total, current) => total - current, 0);
+}
+`,
+    );
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, { minConfidence: "medium", limit: 5 });
+    const match = result.groups.find(
+      (group) => group.primaryLeft.file === "src/invoices.ts" || group.primaryRight.file === "src/invoices.ts",
+    );
+
+    expect(match).toBeDefined();
+    expect(match?.metrics.astShapeEqual).toBeTruthy();
+    expect(match?.reasons).toContain("matching AST shape");
+    expect(match?.cloneType).toBe("renamed");
+  });
+
+  test("uses git similarity hints to boost copied-file duplicate candidates", async () => {
+    const root = await makeTempProject();
+
+    await writeProjectFile(
+      root,
+      "src/source.ts",
+      `
+export function collectInvoiceLabels(rows: Array<{ amount: number; tax: number }>) {
+  const labels: string[] = [];
+  for (const row of rows) {
+    const total = row.amount + row.tax;
+    const tier = total > 100 ? "large" : "small";
+    labels.push(tier + ":" + total.toFixed(2));
+  }
+  return labels.filter((label) => label.includes(":")).join(",");
+}
+`,
+    );
+    await writeProjectFile(
+      root,
+      "src/copied.ts",
+      `
+export function collectShipmentLabels(items: Array<{ weight: number; fee: number }>) {
+  const labels: string[] = [];
+  for (const item of items) {
+    const total = item.weight + item.fee;
+    const tier = total > 100 ? "heavy" : "light";
+    labels.push(tier + ":" + total.toFixed(2));
+  }
+  return labels.filter((label) => label.includes(":")).join(",");
+}
+`,
+    );
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, {
+      minConfidence: "medium",
+      limit: 5,
+      similarityHints: [{ leftFile: "src/source.ts", rightFile: "src/copied.ts", similarityIndex: 92 }],
+    });
+    const match = result.groups.find(
+      (group) => group.primaryLeft.file === "src/copied.ts" || group.primaryRight.file === "src/copied.ts",
+    );
+
+    expect(match).toBeDefined();
+    expect(match?.metrics.gitSimilarity).toBe(92);
+    expect(match?.reasons).toContain("git similarity 92%");
+  });
+
   test("does not report matching signatures as high-confidence symbol clones", async () => {
     const root = await makeTempProject();
 

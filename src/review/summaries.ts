@@ -7,7 +7,7 @@ import { type ExportEntry, type ModuleIndex, type ProjectIndex, type SymbolDef }
 import { symbolId } from "../indexer/symbols.js";
 import { attachCallCompatibilityHints } from "../impact/callCompatibility.js";
 import { locateChangedSymbolsWithLines, mapChangedLinesToSymbols } from "../impact/map.js";
-import type { CallCompatibilityHint, ChangedSymbol, Hunk } from "../impact/types.js";
+import type { CallCompatibilityHint, ChangedSymbol, FileChange, Hunk } from "../impact/types.js";
 import type { FileId, Range } from "../types.js";
 import { mapLimit } from "../util/concurrency.js";
 import { toProjectDisplayPath } from "../util/paths.js";
@@ -18,6 +18,8 @@ import { isRiskRelevantSymbolMappingFile } from "./risk.js";
 export type ReviewFileSummary = {
   file: string;
   status: "updated" | "deleted" | "missing";
+  oldFile?: string;
+  similarityIndex?: number;
   symbols: ReviewSymbolSummary[];
 };
 
@@ -119,6 +121,17 @@ function rangeSnippet(source: string, range: Range): string {
   return "";
 }
 
+function reviewFileDiffMetadata(
+  projectRoot: string,
+  diffChange: FileChange | undefined,
+): Pick<ReviewFileSummary, "oldFile" | "similarityIndex"> {
+  if (!diffChange) return {};
+  return {
+    ...(diffChange.oldPath !== undefined ? { oldFile: relativePath(projectRoot, diffChange.oldPath) } : {}),
+    ...(diffChange.similarityIndex !== undefined ? { similarityIndex: diffChange.similarityIndex } : {}),
+  };
+}
+
 function collectDiffSnippets(source: string, range: Range, changedLines: Set<number>, contextLines: number): string[] {
   const startLine = range.start.line ?? 0;
   const endLine = range.end.line ?? startLine;
@@ -182,6 +195,7 @@ export async function summarizeChangedFiles(input: {
   changedFileList: string[];
   diffHunksByFile: ReadonlyMap<string, Hunk[]>;
   diffKindsByFile: ReadonlyMap<string, string>;
+  diffChangesByFile: ReadonlyMap<string, FileChange>;
   explicitFiles: ReadonlySet<string>;
   existenceByFile: ReadonlyMap<string, boolean>;
   deletedSnapshots: ReadonlyMap<FileId, DeletedFileSnapshot>;
@@ -199,6 +213,7 @@ export async function summarizeChangedFiles(input: {
     changedFileList,
     diffHunksByFile,
     diffKindsByFile,
+    diffChangesByFile,
     explicitFiles,
     existenceByFile,
     deletedSnapshots,
@@ -369,6 +384,8 @@ export async function summarizeChangedFiles(input: {
 
   const summariesWithHandles = await Promise.all(
     fileEntries.map(async ({ file, mod, hunks, locals, handles, diffLinesByHandle }) => {
+      const diffChange = diffChangesByFile.get(file);
+      const diffMetadata = reviewFileDiffMetadata(projectRoot, diffChange);
       const deletedSnapshot = deletedSnapshots.get(file);
       if (!mod && deletedSnapshot) {
         const deletedLocals = sortSymbols(deletedSnapshot.module.locals);
@@ -403,6 +420,7 @@ export async function summarizeChangedFiles(input: {
           summary: {
             file: relativePath(projectRoot, file),
             status: "deleted",
+            ...diffMetadata,
             symbols,
           } satisfies ReviewFileSummary,
           handles,
@@ -419,6 +437,7 @@ export async function summarizeChangedFiles(input: {
           summary: {
             file: relativePath(projectRoot, file),
             status: isMissingExplicitInput ? "missing" : "deleted",
+            ...diffMetadata,
             symbols: [],
           } satisfies ReviewFileSummary,
           handles: [] as string[],
@@ -433,6 +452,7 @@ export async function summarizeChangedFiles(input: {
         summary: {
           file: relativePath(projectRoot, file),
           status: "updated",
+          ...diffMetadata,
           symbols,
         } satisfies ReviewFileSummary,
         handles: [...handles, ...exportSymbols.map((symbol) => symbol.handle)],

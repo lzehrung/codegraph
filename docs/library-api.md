@@ -251,6 +251,7 @@ The integration examples demonstrate semantic chunking with type-based filtering
 `findDuplicates()` scans a built `ProjectIndex` for exact, renamed, near, and weak clone candidates.
 
 - It uses indexed symbols, semantic chunks, and text chunks.
+- It uses AST shape hashes when parser context is available, while keeping normal token and hash fallback behavior.
 - Grouped duplicate output uses `schemaVersion: 2`.
 - Results include grouped findings, confidence, score, clone type, metrics, omission counts, and pair stats.
 - Group `variants` are bounded by default and expose hidden evidence through `rawPairCount` and `omittedVariantCount`.
@@ -265,6 +266,7 @@ const index = await buildProjectIndex(root);
 const duplicates = await findDuplicates(index, {
   minConfidence: "medium",
   limit: 20,
+  similarityHints: [{ leftFile: "src/source.ts", rightFile: "src/copied.ts", similarityIndex: 92 }],
 });
 
 console.log(duplicates.groups);
@@ -282,6 +284,7 @@ Useful options:
 - `includeSmall`: include units below the default token floor.
 - `includeRawPairs`: include low-level symbol/chunk pair evidence as `suggestions`.
 - `minTokens` and `maxTokens`: tune unit and fallback chunk bounds.
+- `similarityHints`: optional file-pair hints, usually from git copy or rename metadata, that boost matching unit pairs with `gitSimilarity` metrics.
 - `findDuplicateContext`: filters duplicate groups to a target file or line range before applying the result limit.
 
 Tests:

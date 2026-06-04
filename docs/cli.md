@@ -181,7 +181,7 @@ codegraph grep --pattern 'eval\(' --ignore-case
 
 `duplicates` always reports grouped exact, renamed, near, and weak clone candidates as JSON.
 
-- It combines indexed symbols, semantic chunks, and text chunks.
+- It combines indexed symbols, semantic chunks, text chunks, token fingerprints, and AST shape hashes when parser context is available.
 - It emits `schemaVersion: 2` for grouped duplicate output.
 - It reports project-relative paths, confidence, clone type, metrics, variant counts, omission counts, and pair stats.
 - Groups collapse overlapping symbol/chunk variants so one underlying clone appears as one finding.
@@ -343,7 +343,7 @@ codegraph drift --base-artifact ./baseline/codegraph-out --head . --json
 
 For git-provider impact, `--head` accepts normal revisions plus worktree sentinels. Use `WORKTREE` to compare the base revision against the current working tree, including staged and unstaged tracked-file changes. Use `STAGED` or `INDEX` to compare the base revision against the current index; with `--base HEAD`, that is staged changes only. Untracked files are not included until they are staged or otherwise tracked by Git.
 
-Impact JSON responses include `schemaVersion` plus `format: "full" | "compact"` so downstream tools can branch on payload shape without inferring it from missing fields. Use `--compact` or `--compact-json` for compact impact JSON. Impact JSON can also include `exportSummary`, `reexportChains`, `topImpacts`, `surfaceArea`, `clusters`, and `changedSymbols[].callCompatibility` when applicable. File paths in impact reports are project-relative, and raw diffs that point outside the project root are rejected.
+Impact JSON responses include `schemaVersion` plus `format: "full" | "compact"` so downstream tools can branch on payload shape without inferring it from missing fields. Use `--compact` or `--compact-json` for compact impact JSON. Impact JSON can also include `exportSummary`, `reexportChains`, `topImpacts`, `surfaceArea`, `clusters`, and `changedSymbols[].callCompatibility` when applicable. `changedFiles[]` entries preserve git copy or rename metadata as `oldFile` and `similarityIndex` when present. File paths in impact reports are project-relative, and raw diffs that point outside the project root are rejected.
 
 `callCompatibility` is a conservative review hint, not type checking. Likely-mismatch support is provider-backed for source languages where Codegraph resolves the callee and can count arguments with high confidence. Overload sets are skipped unless Codegraph can prove the exact overload target. Pretty impact and review summaries show only `likely_mismatch` findings; compatible, unsupported, or ambiguous callsites are omitted from human output and appear in structured data only when useful.
 
@@ -352,6 +352,7 @@ Pretty impact and review summaries also show high-confidence exact or renamed du
 - `impact --pretty` defaults to `--duplicates changed`.
 - `review --summary` defaults to `--duplicates impacted`.
 - Use `--duplicates off|changed|impacted|all` to control duplicate-lead scope.
+- Git copy or rename `similarityIndex` metadata can boost scoped duplicate leads when both old and new files exist in the indexed snapshot.
 - Structured review JSON also adds bounded `duplicate-sibling` review tasks when changed files or symbols overlap high-confidence duplicate groups. Treat these as "check the sibling implementation" prompts, not semantic-equivalence claims.
 - JSON output keeps the existing impact and review contracts; use `codegraph duplicates` for full grouped duplicate JSON.
 

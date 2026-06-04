@@ -274,6 +274,9 @@ export type ImpactReport = {
   projectFiles?: ProjectFileInfo[];
   changedFiles: Array<{
     file: FileId;
+    kind?: FileChange["kind"];
+    oldFile?: FileId;
+    similarityIndex?: number;
     hunks: Array<{ start: number; end: number }>; // new-file line ranges
   }>;
   changedSymbols: ChangedSymbol[];
@@ -308,6 +311,9 @@ export type CompactImpactReport = {
   files: FileId[]; // file index -> file path
   changedFiles: Array<{
     file: number; // index into files array
+    kind?: FileChange["kind"];
+    oldFile?: number;
+    similarityIndex?: number;
     hunks: Array<{ start: number; end: number }>; // line ranges
   }>;
   changedSymbols: Array<{

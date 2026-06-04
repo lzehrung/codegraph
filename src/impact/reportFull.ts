@@ -10,6 +10,7 @@ import { IMPACT_SCHEMA_VERSION } from "./types.js";
 import type {
   ChangedSymbol,
   ExportSummaryEntry,
+  FileChange,
   ImpactCluster,
   ImpactCycle,
   ImpactDiagnostics,
@@ -24,6 +25,9 @@ import type {
 export type FullImpactReportParts = {
   changedFiles: Array<{
     file: FileId;
+    kind?: FileChange["kind"];
+    oldFile?: FileId;
+    similarityIndex?: number;
     hunks: Array<{ start: number; end: number }>;
   }>;
   changedSymbols: ChangedSymbol[];

@@ -13,6 +13,7 @@ import type {
   CompactImpactReport,
   CompactImpactSurfaceArea,
   ExportSummaryEntry,
+  FileChange,
   ImpactCluster,
   ImpactCycle,
   ImpactItem,
@@ -26,6 +27,9 @@ import type {
 export type CompactImpactReportParts = {
   changedFiles: Array<{
     file: FileId;
+    kind?: FileChange["kind"];
+    oldFile?: FileId;
+    similarityIndex?: number;
     hunks: Array<{ start: number; end: number }>;
   }>;
   changedSymbols: ChangedSymbol[];
@@ -57,6 +61,9 @@ export function buildCompactImpactReport(parts: CompactImpactReportParts): Compa
     files: context.files,
     changedFiles: parts.changedFiles.map((fileChange) => ({
       file: context.fileId(fileChange.file),
+      ...(fileChange.kind !== undefined ? { kind: fileChange.kind } : {}),
+      ...(fileChange.oldFile !== undefined ? { oldFile: context.fileId(fileChange.oldFile) } : {}),
+      ...(fileChange.similarityIndex !== undefined ? { similarityIndex: fileChange.similarityIndex } : {}),
       hunks: fileChange.hunks,
     })),
     changedSymbols: parts.changedSymbols.map((symbol) => compactChangedSymbol(symbol, context.fileId(symbol.file))),
@@ -86,7 +93,10 @@ function buildCompactSerializerContext(parts: CompactImpactReportParts): Compact
     allFiles.add(parts.displayFile(file));
   };
 
-  for (const fileChange of parts.changedFiles) addFile(fileChange.file);
+  for (const fileChange of parts.changedFiles) {
+    addFile(fileChange.file);
+    if (fileChange.oldFile !== undefined) addFile(fileChange.oldFile);
+  }
   for (const symbol of parts.changedSymbols) addFile(symbol.file);
   for (const item of parts.impactedItems) addFile(item.file);
   for (const edge of parts.fileEdges) {

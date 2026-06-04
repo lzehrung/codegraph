@@ -313,6 +313,68 @@ export function summarizeOrders(rows: Array<{ amount: number; tax: number }>) {
   );
 
   it(
+    "uses raw diff copy similarity metadata for scoped duplicate leads",
+    async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-cli-copy-duplicates-"));
+      const source = `
+export function summarizeSourceOrders(rows: Array<{ amount: number; tax: number }>) {
+  const output: string[] = [];
+  for (const row of rows) {
+    const subtotal = row.amount + row.tax;
+    const rounded = Math.round(subtotal * 100) / 100;
+    const label = rounded > 100 ? "large" : "small";
+    output.push(label + ":" + rounded.toFixed(2));
+  }
+  return output.filter((value) => value.includes(":")).join(",");
+}
+`;
+      const copied = source.replace("summarizeSourceOrders", "summarizeCopiedOrders");
+      try {
+        await fsp.mkdir(path.join(root, "src"), { recursive: true });
+        await fsp.writeFile(path.join(root, "src", "source.ts"), source, "utf8");
+        await fsp.writeFile(path.join(root, "src", "copied.ts"), copied, "utf8");
+        const diffText = [
+          "diff --git a/src/source.ts b/src/copied.ts",
+          "similarity index 92%",
+          "copy from src/source.ts",
+          "copy to src/copied.ts",
+          "--- a/src/source.ts",
+          "+++ b/src/copied.ts",
+          "@@ -1,1 +1,1 @@",
+          "-export function summarizeSourceOrders(rows: Array<{ amount: number; tax: number }>) {",
+          "+export function summarizeCopiedOrders(rows: Array<{ amount: number; tax: number }>) {",
+          "",
+        ].join("\n");
+
+        const jsonStdout = await runImpactCli(["impact", "--root", root, "--provider", "raw"], {
+          cwd: root,
+          stdin: diffText,
+        });
+        const report = JSON.parse(jsonStdout) as {
+          changedFiles: Array<{ file: string; oldFile?: string; similarityIndex?: number }>;
+        };
+        expect(report.changedFiles[0]).toMatchObject({
+          file: "src/copied.ts",
+          oldFile: "src/source.ts",
+          similarityIndex: 92,
+        });
+
+        const prettyStdout = await runImpactCli(["impact", "--root", root, "--provider", "raw", "--pretty"], {
+          cwd: root,
+          stdin: diffText,
+        });
+
+        expect(prettyStdout).toContain("Duplicate leads:");
+        expect(prettyStdout).toContain("src/copied.ts:");
+        expect(prettyStdout).toContain("matches src/source.ts:");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+    slowCliTimeoutMs,
+  );
+
+  it(
     "accepts --compact-json as an alias for compact impact JSON",
     async () => {
       const stdout = await runImpactCli(["impact", sampleRoot, "--provider", "raw", "--compact-json"]);

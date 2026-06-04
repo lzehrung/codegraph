@@ -343,6 +343,7 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
     changedFileList,
     diffHunksByFile,
     diffKindsByFile,
+    diffChangesByFile,
     explicitFiles,
     existenceByFile,
     deletedSnapshots,

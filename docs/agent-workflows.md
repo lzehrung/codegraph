@@ -370,6 +370,7 @@ Pretty impact and review summaries include scoped duplicate leads by default:
 - `impact --pretty`: high-confidence exact or renamed clones within changed files.
 - `review --summary`: high-confidence exact or renamed clones within changed plus graph-impacted files.
 - `--duplicates off|changed|impacted|all`: override the human-summary scope.
+- Git copy or rename similarity metadata can boost duplicate leads when both source and destination are present in the indexed snapshot.
 - Full duplicate groups, variants, raw pair counts, and omission counts remain in `codegraph duplicates` JSON.
 - Structured review packets add bounded `duplicate-sibling` tasks when changed ranges overlap high-confidence duplicate groups.
 
