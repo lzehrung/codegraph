@@ -13,3 +13,5 @@ packages/codegraph-native/artifacts/
 .bench-baselines/
 .vitest/
 .claude/
+.idea/
+.vscode/
