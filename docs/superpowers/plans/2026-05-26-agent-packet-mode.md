@@ -112,7 +112,7 @@ During implementation, replace `unknown` with a discriminated union when the con
 - Modify: `src/agent/index.ts` if an agent barrel exists; otherwise modify `src/index.ts`.
 - Test: `tests/agent-orient.test.ts`
 
-- [ ] **Step 1: Add failing orient tests**
+- [x] **Step 1: Add failing orient tests**
 
 ```ts
 import { orientCodegraph } from "../src/index.js";
@@ -133,7 +133,7 @@ it("returns compact orientation with stable packet handles", async () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify failure**
+- [x] **Step 2: Run test to verify failure**
 
 Run:
 
@@ -143,7 +143,7 @@ npx vitest run tests/agent-orient.test.ts
 
 Expected: FAIL because `orientCodegraph` does not exist.
 
-- [ ] **Step 3: Implement `orientCodegraph()`**
+- [x] **Step 3: Implement `orientCodegraph()`**
 
 Use existing helpers:
 
@@ -165,11 +165,11 @@ const ORIENT_BUDGETS = {
 
 Tree entries should be project-relative and sorted directories before files. Do not include `.git`, `.codegraph-cache`, `node_modules`, or ignored files already excluded by project discovery.
 
-- [ ] **Step 4: Export the API**
+- [x] **Step 4: Export the API**
 
 Export `orientCodegraph` and its request/response types from `src/index.ts`.
 
-- [ ] **Step 5: Run focused tests**
+- [x] **Step 5: Run focused tests**
 
 Run:
 
@@ -179,7 +179,7 @@ npx vitest run tests/agent-orient.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/agent/orient.ts src/index.ts tests/agent-orient.test.ts
@@ -194,7 +194,7 @@ git commit -m "Add agent orientation packets"
 - Modify: `src/index.ts`
 - Test: `tests/agent-packet.test.ts`
 
-- [ ] **Step 1: Add failing packet tests**
+- [x] **Step 1: Add failing packet tests**
 
 ```ts
 import { getCodegraphPacket, orientCodegraph } from "../src/index.js";
@@ -218,7 +218,7 @@ it("retrieves a file packet from an orientation handle", async () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify failure**
+- [x] **Step 2: Run test to verify failure**
 
 Run:
 
@@ -228,7 +228,7 @@ npx vitest run tests/agent-packet.test.ts
 
 Expected: FAIL because `getCodegraphPacket` does not exist.
 
-- [ ] **Step 3: Implement `getCodegraphPacket()`**
+- [x] **Step 3: Implement `getCodegraphPacket()`**
 
 Rules:
 
@@ -238,11 +238,11 @@ Rules:
 - Preserve `limits`, `omittedCounts`, and `followUps`.
 - Reject unsupported handles with a typed error that names the accepted handle prefixes.
 
-- [ ] **Step 4: Export the API**
+- [x] **Step 4: Export the API**
 
 Export `getCodegraphPacket` and types from `src/index.ts`.
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 Run:
 
@@ -252,7 +252,7 @@ npx vitest run tests/agent-orient.test.ts tests/agent-packet.test.ts tests/agent
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/agent/packet.ts src/index.ts tests/agent-packet.test.ts
@@ -269,7 +269,7 @@ git commit -m "Add agent packet retrieval API"
 - Test: `tests/cli-command-modules.test.ts`
 - Test: `tests/cli-regressions.test.ts`
 
-- [ ] **Step 1: Add failing CLI tests**
+- [x] **Step 1: Add failing CLI tests**
 
 Assert:
 
@@ -277,7 +277,7 @@ Assert:
 - `codegraph orient ./src --budget small --json` prints valid JSON with `schemaVersion: 1`.
 - Pretty output includes sections `Summary`, `Tree`, and `Recommended next`.
 
-- [ ] **Step 2: Run test to verify failure**
+- [x] **Step 2: Run test to verify failure**
 
 Run:
 
@@ -287,7 +287,7 @@ npx vitest run tests/cli-command-modules.test.ts tests/cli-regressions.test.ts
 
 Expected: FAIL because `orient` is not wired.
 
-- [ ] **Step 3: Implement command**
+- [x] **Step 3: Implement command**
 
 Support:
 
@@ -312,7 +312,7 @@ Recommended next
 - codegraph hotspots ./src --limit 20 --json
 ```
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Run:
 
@@ -322,7 +322,7 @@ npx vitest run tests/cli-command-modules.test.ts tests/cli-regressions.test.ts t
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/cli/orient.ts src/cli.ts src/cli/help.ts tests/cli-command-modules.test.ts tests/cli-regressions.test.ts
@@ -339,7 +339,7 @@ git commit -m "Add orient CLI command"
 - Test: `tests/cli-command-modules.test.ts`
 - Test: `tests/cli-regressions.test.ts`
 
-- [ ] **Step 1: Add failing CLI tests**
+- [x] **Step 1: Add failing CLI tests**
 
 Assert:
 
@@ -347,7 +347,7 @@ Assert:
 - `codegraph packet get file:src%2Frun.ts --json` prints valid JSON with `kind: "file"`.
 - Invalid handles exit non-zero with accepted handle prefixes.
 
-- [ ] **Step 2: Run tests to verify failure**
+- [x] **Step 2: Run tests to verify failure**
 
 Run:
 
@@ -357,7 +357,7 @@ npx vitest run tests/cli-command-modules.test.ts tests/cli-regressions.test.ts
 
 Expected: FAIL because `packet` is missing.
 
-- [ ] **Step 3: Implement command**
+- [x] **Step 3: Implement command**
 
 Support:
 
@@ -373,7 +373,7 @@ codegraph packet get <handle>
 
 Pretty output can reuse the existing explain formatter. JSON must return the packet response wrapper.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Run:
 
@@ -383,7 +383,7 @@ npx vitest run tests/cli-command-modules.test.ts tests/cli-regressions.test.ts t
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/cli/packet.ts src/cli.ts src/cli/help.ts tests/cli-command-modules.test.ts tests/cli-regressions.test.ts
@@ -398,7 +398,7 @@ git commit -m "Add packet retrieval CLI"
 - Modify: `src/mcp/server.ts`
 - Test: `tests/mcp-server.test.ts`
 
-- [ ] **Step 1: Add failing MCP tests**
+- [x] **Step 1: Add failing MCP tests**
 
 Assert the MCP tool list includes:
 
@@ -407,7 +407,7 @@ Assert the MCP tool list includes:
 
 Then call each tool against a temp project and assert bounded JSON output.
 
-- [ ] **Step 2: Run test to verify failure**
+- [x] **Step 2: Run test to verify failure**
 
 Run:
 
@@ -417,7 +417,7 @@ npx vitest run tests/mcp-server.test.ts
 
 Expected: FAIL because tools are not registered.
 
-- [ ] **Step 3: Register tools**
+- [x] **Step 3: Register tools**
 
 Tool input schemas:
 
@@ -441,7 +441,7 @@ Rules:
 - Enforce the same root/path confinement as `get_file`, `get_symbol`, and `artifact_build`.
 - Keep tools read-only.
 
-- [ ] **Step 4: Run MCP tests**
+- [x] **Step 4: Run MCP tests**
 
 Run:
 
@@ -451,7 +451,7 @@ npx vitest run tests/mcp-server.test.ts tests/agent-orient.test.ts tests/agent-p
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/mcp/tools.ts src/mcp/server.ts tests/mcp-server.test.ts
@@ -466,7 +466,7 @@ git commit -m "Expose agent packets over MCP"
 - Modify: `src/agent/packet.ts`
 - Test: `tests/agent-packet.test.ts`
 
-- [ ] **Step 1: Add failing review packet test**
+- [x] **Step 1: Add failing review packet test**
 
 Create a git fixture with a changed file. Run:
 
@@ -484,7 +484,7 @@ Assert:
 - orientation includes a `review:` handle.
 - `getCodegraphPacket({ root, handle })` returns changed symbols and candidate tests.
 
-- [ ] **Step 2: Run test to verify failure**
+- [x] **Step 2: Run test to verify failure**
 
 Run:
 
@@ -494,7 +494,7 @@ npx vitest run tests/agent-packet.test.ts
 
 Expected: FAIL because review handles are not supported.
 
-- [ ] **Step 3: Implement review packet handles**
+- [x] **Step 3: Implement review packet handles**
 
 Handle format:
 
@@ -509,7 +509,7 @@ Rules:
 - Delegate to `buildReviewReport()` with bounded defaults equivalent to `review --summary`.
 - Include follow-ups for `impact --pretty` and `review --summary`.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Run:
 
@@ -519,7 +519,7 @@ npx vitest run tests/agent-packet.test.ts tests/review.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/agent/orient.ts src/agent/packet.ts tests/agent-packet.test.ts
@@ -537,7 +537,7 @@ git commit -m "Add review packet handles"
 - Modify: `codegraph-skill/codegraph/SKILL.md`
 - Test: `tests/package-metadata.test.ts`
 
-- [ ] **Step 1: Update agent docs**
+- [x] **Step 1: Update agent docs**
 
 Add an agent workflow:
 
@@ -553,7 +553,7 @@ Explain:
 - Use `search` when the agent has a query but no handle.
 - Use `explain` when the agent has a known file/symbol/SQL object and wants the existing direct command.
 
-- [ ] **Step 2: Update skill first move**
+- [x] **Step 2: Update skill first move**
 
 In `codegraph-skill/codegraph/SKILL.md`, change the first move guidance to prefer:
 
@@ -564,7 +564,7 @@ codegraph orient --root . --budget small --json
 
 Keep `inspect ./src --limit 20` as the fallback for humans or older installs.
 
-- [ ] **Step 3: Run metadata and docs checks**
+- [x] **Step 3: Run metadata and docs checks**
 
 Run:
 
@@ -575,7 +575,7 @@ git diff --check
 
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add README.md docs/cli.md docs/library-api.md docs/agent-workflows.md codegraph-skill/codegraph/SKILL.md tests/package-metadata.test.ts
