@@ -367,6 +367,18 @@ export function summarizeSourceOrders(rows: Array<{ amount: number; tax: number 
         expect(prettyStdout).toContain("Duplicate leads:");
         expect(prettyStdout).toContain("src/copied.ts:");
         expect(prettyStdout).toContain("matches src/source.ts:");
+
+        const prettyCompactStdout = await runImpactCli(
+          ["impact", "--root", root, "--provider", "raw", "--pretty", "--compact-json"],
+          {
+            cwd: root,
+            stdin: diffText,
+          },
+        );
+
+        expect(prettyCompactStdout).toContain("Duplicate leads:");
+        expect(prettyCompactStdout).toContain("src/copied.ts:");
+        expect(prettyCompactStdout).toContain("matches src/source.ts:");
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }

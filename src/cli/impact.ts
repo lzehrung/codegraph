@@ -97,6 +97,8 @@ function ensureImpactReport(report: ImpactReport | CompactImpactReport): ImpactR
   const changedFiles = report.changedFiles.map((cf) => ({
     file: resolveFilePath(cf.file),
     hunks: cf.hunks,
+    ...(cf.oldFile !== undefined ? { oldFile: resolveFilePath(cf.oldFile) } : {}),
+    ...(cf.similarityIndex !== undefined ? { similarityIndex: cf.similarityIndex } : {}),
   }));
   const changedSymbols = report.changedSymbols.map((cs) => {
     const symbol: ChangedSymbol = {
