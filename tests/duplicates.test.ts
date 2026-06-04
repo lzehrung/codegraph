@@ -555,6 +555,55 @@ export function pricePackages(packages: Array<{ weight: number; fee: number }>) 
     expect(match?.cloneType).toBe("renamed");
   });
 
+  test("trims CRLF and indentation when hashing AST shapes", async () => {
+    const root = await makeTempProject();
+    const invoiceSource = [
+      "export class InvoiceShell { value = 1; }",
+      "",
+      "  export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) {  ",
+      "    const totals: number[] = [];",
+      "    for (const row of rows) {",
+      "      if (row.amount > 50) {",
+      "        totals.push(row.amount + row.tax);",
+      "      } else {",
+      "        totals.push(row.amount - row.tax);",
+      "      }",
+      "    }",
+      "    return totals.reduce((sum, value) => sum + value, 0);",
+      "  }  ",
+      "",
+    ].join("\r\n");
+    const packageSource = [
+      "export interface PackageShell { value: number; }",
+      "",
+      "  export function summarizePackages(packages: Array<{ weight: number; fee: number }>) {  ",
+      "    const values: number[] = [];",
+      "    for (const item of packages) {",
+      "      if (item.weight > 50) {",
+      "        values.push(item.weight + item.fee);",
+      "      } else {",
+      "        values.push(item.weight - item.fee);",
+      "      }",
+      "    }",
+      "    return values.reduce((total, current) => total + current, 0);",
+      "  }  ",
+      "",
+    ].join("\r\n");
+
+    await writeProjectFile(root, "src/invoices.ts", invoiceSource);
+    await writeProjectFile(root, "src/packages.ts", packageSource);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, { minConfidence: "medium", limit: 5 });
+    const match = result.groups.find(
+      (group) => group.primaryLeft.file === "src/invoices.ts" || group.primaryRight.file === "src/invoices.ts",
+    );
+
+    expect(match).toBeDefined();
+    expect(match?.metrics.astShapeEqual).toBeTruthy();
+    expect(match?.reasons).toContain("matching AST shape");
+  });
+
   test("uses git similarity hints to boost copied-file duplicate candidates", async () => {
     const root = await makeTempProject();
 

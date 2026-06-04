@@ -714,10 +714,18 @@ function lineRangeToByteRange(
   const startOffset = context.lineStartOffsets[Math.max(0, startLine - 1)];
   if (startOffset === undefined) return undefined;
   const nextLineOffset = context.lineStartOffsets[Math.max(startLine, endLine)];
-  const rawEndOffset = nextLineOffset === undefined ? context.source.length : Math.max(startOffset, nextLineOffset - 1);
-  const endOffset = Math.max(startOffset, rawEndOffset);
-  if (endOffset <= startOffset) return undefined;
-  return { start: startOffset, end: endOffset };
+  const rawEndOffset = nextLineOffset === undefined ? context.source.length : Math.max(startOffset, nextLineOffset);
+  let trimmedStartOffset = startOffset;
+  let endOffset = Math.max(startOffset, rawEndOffset);
+  while (trimmedStartOffset < endOffset && /\s/.test(context.source[trimmedStartOffset]!)) {
+    trimmedStartOffset++;
+  }
+  while (endOffset > trimmedStartOffset && /\s/.test(context.source[endOffset - 1]!)) {
+    endOffset--;
+  }
+  const startIndex = trimmedStartOffset;
+  if (endOffset <= startIndex) return undefined;
+  return { start: startIndex, end: endOffset };
 }
 
 function findSmallestCoveringNode(node: SyntaxNodeLike, startIndex: number, endIndex: number): SyntaxNodeLike | null {
