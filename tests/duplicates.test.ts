@@ -582,6 +582,59 @@ export function collectShipmentLabels(items: Array<{ weight: number; fee: number
     expect(match?.reasons).toContain("git similarity 92%");
   });
 
+  test("uses git similarity hints for duplicate contexts when only the copied file is targeted", async () => {
+    const root = await makeTempProject();
+
+    await writeProjectFile(
+      root,
+      "src/source.ts",
+      `
+export function renderInvoiceSummary(rows: Array<{ id: string; amount: number; paid: boolean }>) {
+  const openIds: string[] = [];
+  let openTotal = 0;
+  for (const row of rows) {
+    if (!row.paid) {
+      openIds.push(row.id);
+      openTotal += row.amount;
+    }
+  }
+  return openIds.join("|") + ":" + openTotal.toFixed(2);
+}
+`,
+    );
+    await writeProjectFile(
+      root,
+      "src/copied.ts",
+      `
+export function compressSearchTerms(input: string[]) {
+  const accepted: string[] = [];
+  let acceptedLength = 0;
+  for (const value of input) {
+    if (value.trim()) {
+      accepted.push(value.toLowerCase());
+      acceptedLength += value.length;
+    }
+  }
+  return accepted.join("|") + ":" + acceptedLength.toString();
+}
+`,
+    );
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicateContext(index, { file: "src/copied.ts" }, {
+      minConfidence: "low",
+      limit: 5,
+      similarityHints: [{ leftFile: "src/source.ts", rightFile: "src/copied.ts", similarityIndex: 91 }],
+    });
+    const match = result.groups.find(
+      (group) => group.primaryLeft.file === "src/copied.ts" || group.primaryRight.file === "src/copied.ts",
+    );
+
+    expect(match).toBeDefined();
+    expect(match?.metrics.gitSimilarity).toBe(91);
+    expect(match?.reasons).toContain("git similarity 91%");
+  });
+
   test("does not report matching signatures as high-confidence symbol clones", async () => {
     const root = await makeTempProject();
 

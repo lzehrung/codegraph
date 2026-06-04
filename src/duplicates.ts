@@ -1118,7 +1118,7 @@ function buildCandidatePairs(
   oversizedBuckets += addBucketsToPairs(rawHashBuckets, pairs, "rawHash", maxBucketSize, pairFilter, unitFilter);
   oversizedBuckets += addBucketsToPairs(normalizedHashBuckets, pairs, "normalizedHash", maxBucketSize, pairFilter, unitFilter);
   oversizedBuckets += addBucketsToPairs(astShapeBuckets, pairs, "astShape", maxBucketSize, pairFilter, unitFilter);
-  addSimilarityHintPairs(units, pairs, similarityHints, projectRoot, pairFilter, unitFilter);
+  addSimilarityHintPairs(units, pairs, similarityHints, projectRoot, pairFilter);
   oversizedBuckets += addSignatureBucketsToPairs(
     signatureBuckets,
     pairs,
@@ -1145,7 +1145,6 @@ function addSimilarityHintPairs(
   similarityHints: readonly DuplicateSimilarityHint[] | undefined,
   projectRoot: string | undefined,
   pairFilter?: PairFilter,
-  unitFilter?: UnitFilter,
 ): void {
   if (!similarityHints?.length) return;
   const unitsByFile = new Map<string, DuplicateInternalUnit[]>();
@@ -1167,9 +1166,7 @@ function addSimilarityHintPairs(
     const rightUnits = unitsByFile.get(rightFile);
     if (!leftUnits?.length || !rightUnits?.length) continue;
     for (const leftUnit of leftUnits) {
-      if (unitFilter && !unitFilter(leftUnit)) continue;
       for (const rightUnit of rightUnits) {
-        if (unitFilter && !unitFilter(rightUnit)) continue;
         if (leftUnit.languageId !== rightUnit.languageId) continue;
         const [left, right] = orderedPair(leftUnit, rightUnit);
         if (pairFilter && !pairFilter(left, right)) continue;
