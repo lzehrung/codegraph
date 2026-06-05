@@ -385,6 +385,7 @@ SQL review context is emitted only as `sqlContext.entries[]` in structured revie
 ```bash
 # Print the installed CLI version
 codegraph version
+codegraph -v
 
 # Print package identity as JSON
 codegraph version --json
@@ -421,7 +422,7 @@ codegraph skill install --target ~/.codex/skills/codegraph --force
 codegraph skill doctor
 ```
 
-`codegraph skill install --agent <name>` supports `agents`, `codex`, `claude`, `cursor`, `gemini`, and `opencode`. Skill install targets must end with `skills/codegraph`; when that safe target shape is satisfied, the installer creates the directory as needed. Cursor CLI now supports native skills directories too, so `.cursor/skills/codegraph` works alongside the universal `~/.agents/skills/codegraph` location. `codegraph version --json` and `codegraph doctor` include the installed package name, version, and package root so local tarball or source-checkout installs can confirm which build the `codegraph` command is actually running. `doctor` also reports backend/runtime state and optional artifact details, including `artifactBundle` details for directories with a Codegraph `manifest.json`.
+`codegraph skill install --agent <name>` supports `agents`, `codex`, `claude`, `cursor`, `gemini`, and `opencode`. Skill install targets must end with `skills/codegraph`; when that safe target shape is satisfied, the installer creates the directory as needed. Cursor CLI now supports native skills directories too, so `.cursor/skills/codegraph` works alongside the universal `~/.agents/skills/codegraph` location. `codegraph -v`, `codegraph version --json`, and `codegraph doctor` include or identify the installed package version so local tarball or source-checkout installs can confirm which build the `codegraph` command is actually running. `doctor` also reports backend/runtime state and optional artifact details, including `artifactBundle` details for directories with a Codegraph `manifest.json`.
 
 ## Incremental git-scoped runs
 

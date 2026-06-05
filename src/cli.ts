@@ -24,12 +24,10 @@ import {
   type CliRuntime,
   type CommandReport,
 } from "./cli/context.js";
-import { handleArtifactCommand } from "./cli/artifact.js";
 import { buildDoctorReport } from "./cli/doctor.js";
 import { handleDriftCommand } from "./cli/drift.js";
 import { handleDuplicatesCommand } from "./cli/duplicates.js";
 import { handleExplainCommand } from "./cli/explain.js";
-import { handleGraphCommand } from "./cli/graph.js";
 import { handleGraphDeltaCommand } from "./cli/graphDelta.js";
 import { handleGraphQueryCommand } from "./cli/graphQueries.js";
 import { handleGrepCommand } from "./cli/grep.js";
@@ -37,7 +35,6 @@ import { CLI_HELP_TEXT, helpTextForCommand, isKnownCliCommand } from "./cli/help
 import { handleImpactCommand } from "./cli/impact.js";
 import { handleIndexCommand } from "./cli/index.js";
 import { handleHotspotsCommand, handleInspectCommand } from "./cli/inspect.js";
-import { handleMcpServeCommand } from "./cli/mcp.js";
 import { handleOrientCommand } from "./cli/orient.js";
 import { handleDumpmodCommand, handleGotoCommand, handleRefsCommand } from "./cli/navigation.js";
 import { parseCacheModeOption, parseOptionalNonNegativeIntegerOption } from "./cli/options.js";
@@ -46,7 +43,6 @@ import { handlePacketCommand } from "./cli/packet.js";
 import { handleReviewCommand } from "./cli/review.js";
 import { handleSearchCommand } from "./cli/search.js";
 import { handleSkillCommand } from "./cli/skill.js";
-import { handleSqlCommand } from "./cli/sql.js";
 import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions } from "./config.js";
 import { listChangedFiles } from "./util/git.js";
 import { DEFAULT_PROJECT_PATTERNS, listProjectFiles, type ProjectFileDiscoveryOptions } from "./util/projectFiles.js";
@@ -104,7 +100,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     return;
   }
 
-  if (hasFlag("--version")) {
+  if (hasFlag("--version") || hasFlag("-v")) {
     if (hasFlag("--json")) {
       writeJSONLine(getCodegraphPackageIdentity());
     } else {
@@ -227,6 +223,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "sql") {
+    const { handleSqlCommand } = await import("./cli/sql.js");
     await handleSqlCommand({
       getOpt,
       cwd: getCwd,
@@ -428,6 +425,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "artifact") {
+    const { handleArtifactCommand } = await import("./cli/artifact.js");
     await handleArtifactCommand({
       positionals: parsed.positionals,
       root: projectRootFs,
@@ -443,6 +441,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "mcp") {
+    const { handleMcpServeCommand } = await import("./cli/mcp.js");
     await handleMcpServeCommand({
       positionals: parsed.positionals,
       root: projectRootFs,
@@ -474,6 +473,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "graph") {
+    const { handleGraphCommand } = await import("./cli/graph.js");
     await handleGraphCommand({
       projectRootFs,
       discoveryOptions,

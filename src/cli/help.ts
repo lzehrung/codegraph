@@ -67,6 +67,7 @@ Examples:
   codegraph graph ./src
   codegraph graph --fast-graph --mermaid ./src
   codegraph version
+  codegraph -v
   codegraph doctor
   codegraph inspect ./src --limit 20
   codegraph orient ./src --budget small --json

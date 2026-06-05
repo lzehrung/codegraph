@@ -188,6 +188,20 @@ describe("CLI regressions", () => {
     expect(stdout.trim()).toBe(packageJson.version);
   });
 
+  it("-v prints the package version", async () => {
+    const stdout = await runCliCommand(["-v"]);
+    expect(stdout.trim()).toBe(packageJson.version);
+  });
+
+  it("does not statically load SQLite-backed command modules for version output", async () => {
+    const source = await fsp.readFile(sourceCliPath, "utf8");
+
+    expect(source).not.toContain('from "./cli/artifact.js"');
+    expect(source).not.toContain('from "./cli/graph.js"');
+    expect(source).not.toContain('from "./cli/mcp.js"');
+    expect(source).not.toContain('from "./cli/sql.js"');
+  });
+
   it("importing cli.ts as a module does not execute the entrypoint", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-import-"));
     const importerPath = path.join(tmpDir, "import-cli.mjs");

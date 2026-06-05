@@ -294,7 +294,7 @@ For git-provider impact and git-scoped review/index/graph commands, `WORKTREE` c
 
 Graph, index, and review reports include `backend.native.byLanguage` so native usage and fallback are visible per language. Build reports also include `backend.parser` when syntax-tree backend degradation leaves files without parser context. Reports include `graph.fallbackImportExtraction.byLanguage` and `byReason` when regex import extraction is used. Review JSON also reports `diagnostics.symbolMappingParseFailures`, `diagnostics.missingFiles`, distinguishes `changedFiles[].status` as `updated`, `deleted`, or `missing`, and includes `sqlContext` when changed SQL files or changed SQL literals make SQL artifact facts relevant.
 
-`codegraph version --json` and `codegraph doctor` report package name, version, and package root. Use them when you need to confirm which installed package the `codegraph` command is running.
+`codegraph -v`, `codegraph version --json`, and `codegraph doctor` include or identify the installed package version. Use them when you need to confirm which installed package the `codegraph` command is running.
 
 Worker threads use a Piscina worker pool to offload per-file Rust extraction across CPU cores. This only applies to `index` and build commands, not `graph`, and falls back silently if the native addon or Piscina is unavailable.
 
