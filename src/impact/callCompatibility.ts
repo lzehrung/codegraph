@@ -12,6 +12,12 @@ import {
   getCallCompatibilitySupportedLanguages,
   registerCallCompatibilityExtractors,
 } from "./call-compatibility/providers/index.js";
+import type {
+  CallableSignature,
+  CallsiteArguments,
+  ExtractCallableSignatureRequest,
+  ExtractCallsiteArgumentsRequest,
+} from "./call-compatibility/types.js";
 import {
   directSignatureParameterNode,
   findAncestorOfTypes,
@@ -19,31 +25,12 @@ import {
 } from "./signature-node-utils.js";
 import type { CallCompatibilityHint, ChangedSymbol, ImpactDiagnostics } from "./types.js";
 
-export interface CallableSignature {
-  minArgs: number;
-  maxArgs: number | null;
-  confidence: "high";
-}
-
-export interface ExtractCallableSignatureRequest {
-  languageId: string;
-  source: string;
-  symbolStartIndex: number;
-  tree?: SyntaxTreeLike;
-}
-
-export interface CallsiteArguments {
-  argCount: number;
-  confidence: "high";
-}
-
-export interface ExtractCallsiteArgumentsRequest {
-  languageId: string;
-  source: string;
-  calleeStartIndex: number;
-  calleeEndIndex?: number;
-  tree?: SyntaxTreeLike;
-}
+export type {
+  CallableSignature,
+  CallsiteArguments,
+  ExtractCallableSignatureRequest,
+  ExtractCallsiteArgumentsRequest,
+} from "./call-compatibility/types.js";
 
 type BalancedRange = {
   start: number;

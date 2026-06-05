@@ -82,11 +82,11 @@ Fall back to CLI commands when MCP tools are unavailable.
 ## Search, Packets, and Artifacts
 
 - `packet get` retrieves bounded evidence for handles from `orient`, `search`, and `explain`.
-- `search` is deterministic and returns project-relative handles, evidence, graph neighbors, follow-up commands, limits, and omission counts.
+- `search` is deterministic and returns project-relative handles, evidence, graph neighbors, follow-up commands, limits, and omission counts. Natural-language multi-token searches boost exact documentation phrases, while identifier-like queries stay symbol-first. Pure `--mode path` and `--mode text` searches skip detailed symbol graph construction; hybrid, symbol, SQL, and graph searches keep symbol-aware ranking and neighbors.
 - `explain` accepts handles, file paths, symbol names, and SQL object names, then returns bounded symbols, graph context, references, snippets, duplicate context, SQL facts, review tasks, candidate tests, limits, omissions, and next commands.
 - For SQL objects, use search handles or schema-qualified names when basenames may be ambiguous.
-- Reference and snippet omission counts are lower bounds after bounded navigation hits its cap.
-- `inspect` includes compact high-confidence duplicate opportunities plus a recommended `duplicates` command for full grouped JSON.
+- Reference, snippet, and duplicate omission counts are lower bounds after bounded navigation or duplicate-analysis budgets hit their caps.
+- `inspect` includes compact high-confidence duplicate opportunities from a bounded duplicate-analysis pass plus a recommended `duplicates` command for full grouped JSON.
 - `artifact build` writes a durable SQLite, graph JSON, report, questions, and manifest bundle for handoff.
 - `codegraph doctor <artifact-dir>` recognizes manifest-backed artifact bundle directories and reports expected artifact presence.
 

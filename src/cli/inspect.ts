@@ -21,6 +21,7 @@ import { parseCacheModeOption, parsePositiveIntegerOption } from "./options.js";
 
 type CacheMode = "off" | "memory" | "disk";
 const INSPECT_DUPLICATE_MIN_TOKENS = 60;
+const INSPECT_DUPLICATE_MAX_PAIRS = 20_000;
 
 type IndexCacheMetadata = {
   manifestPath: string;
@@ -302,6 +303,7 @@ async function buildInspectReport(
     includeSameFile: true,
     minConfidence: duplicateMinConfidence,
     minTokens: INSPECT_DUPLICATE_MIN_TOKENS,
+    maxPairs: INSPECT_DUPLICATE_MAX_PAIRS,
     limit,
   });
   const loadError = getNativeTreeSitterLoadError(nativeMode);
@@ -337,8 +339,11 @@ async function buildInspectReport(
       })),
     },
     duplicates: {
-      total: duplicateResult.groups.length + duplicateResult.omittedCounts.groups,
-      omitted: duplicateResult.omittedCounts.groups,
+      total:
+        duplicateResult.groups.length +
+        duplicateResult.omittedCounts.groups +
+        duplicateResult.omittedCounts.candidatePairs,
+      omitted: duplicateResult.omittedCounts.groups + duplicateResult.omittedCounts.candidatePairs,
       minConfidence: duplicateMinConfidence,
       top: duplicateResult.groups.map(summarizeDuplicateGroup),
     },

@@ -96,7 +96,7 @@ codegraph index --report
 codegraph review --report --report-file review.report.json
 ```
 
-`inspect` emits bounded hotspots, unresolved imports, cycles, and high-confidence duplicate opportunities. Duplicate opportunities are intentionally compact and include file ranges, confidence, clone type, score, token counts, and raw pair counts; run the recommended `duplicates` command for full grouped JSON.
+`inspect` emits bounded hotspots, unresolved imports, cycles, and high-confidence duplicate opportunities from a bounded duplicate-analysis pass. Duplicate opportunities are intentionally compact and include file ranges, confidence, clone type, score, token counts, and raw pair counts; run the recommended `duplicates` command for full grouped JSON.
 
 Graph, index, and review reports include `backend.native.byLanguage` so native usage and fallback remain visible per language. Build reports also include `backend.parser` when syntax-tree backend degradation leaves files without parser context. Reports also include `graph.fallbackImportExtraction.byLanguage` and `byReason` when regex import extraction is used. Review JSON reports `diagnostics.symbolMappingParseFailures`, `diagnostics.missingFiles`, `changedFiles[].status` as `updated`, `deleted`, or `missing`, and `sqlContext` when changed SQL files or changed SQL literals make SQL artifact facts relevant.
 
@@ -183,7 +183,7 @@ codegraph grep --pattern 'eval\(' --ignore-case
 
 - It combines indexed symbols, semantic chunks, text chunks, token fingerprints, and AST shape hashes when parser context is available.
 - It emits `schemaVersion: 2` for grouped duplicate output.
-- It reports project-relative paths, confidence, clone type, metrics, variant counts, omission counts, and pair stats.
+- It reports project-relative paths, confidence, clone type, metrics, variant counts, omission counts including skipped candidate pairs, and pair stats.
 - Groups collapse overlapping symbol/chunk variants so one underlying clone appears as one finding.
 - Group `variants` are bounded by default; use `rawPairCount` and `omittedVariantCount` to see hidden evidence counts.
 - A single positional directory becomes the project root unless `--root` is set. `orient` is the exception: its positionals are always include roots.
@@ -202,7 +202,7 @@ codegraph grep --pattern 'eval\(' --ignore-case
 - Use `packet get` with file, symbol, chunk, SQL, graph, or review handles to retrieve bounded evidence plus follow-up commands.
 - Agent commands reuse the incremental index path and default to disk cache. Use shared index flags such as `--cache`, `--cache-strict`, `--cache-verify`, `--threads`, `--native`, `--workers`, `--include-glob`, `--ignore-glob`, and `--no-gitignore` when the packet should match a specific scan mode.
 
-`search` is deterministic and vectorless. `explain` resolves file paths, symbol names, SQL object names, and search handles into bounded packets with symbols, graph context, references, snippets, duplicate context, SQL facts, review tasks, candidate tests, limits, omissions, and follow-ups. Use `--max-duplicates` to tune duplicate context in `explain` and `packet get`.
+`search` is deterministic and vectorless. `explain` resolves file paths, symbol names, SQL object names, and search handles into bounded packets with symbols, graph context, references, snippets, duplicate context, SQL facts, review tasks, candidate tests, limits, omissions, and follow-ups. Use `--max-duplicates` to tune duplicate context in `explain` and `packet get`; duplicate context also uses an internal pair budget and reports skipped duplicate work through omission counts.
 
 For SQL, prefer handles or schema-qualified names when basenames may be ambiguous. Reference and snippet omission counts are lower bounds after bounded navigation reaches its cap.
 

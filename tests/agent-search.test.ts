@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAgentSession } from "../src/agent/session.js";
 import { searchCodegraph, searchCodegraphWithSession } from "../src/agent/search.js";
 import type { SymbolEdge, SymbolGraph, SymbolNode } from "../src/graphs.js";
+import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "../src/indexer/types.js";
 import type { Edge, Graph, Range } from "../src/types.js";
 import { countingSession } from "./helpers/agent.js";
@@ -29,6 +30,21 @@ async function mkRepo(): Promise<string> {
   await fs.writeFile(
     path.join(root, "src", "api.ts"),
     "import { validateUser } from './auth';\nexport function handleLogin(token: string) { return validateUser(token); }\n",
+  );
+  await fs.writeFile(
+    path.join(root, "src", "compatibility.ts"),
+    "export function callCompatibility() { return 'call compatibility symbol'; }\n",
+  );
+  await fs.mkdir(path.join(root, "docs"));
+  await fs.writeFile(
+    path.join(root, "docs", "agent-search.md"),
+    [
+      "# Agent Search",
+      "",
+      "Use call compatibility when reviewing changed TypeScript signatures.",
+      "The docs phrase should be easy to find from natural-language search.",
+      "",
+    ].join("\n"),
   );
   await fs.writeFile(
     path.join(root, "schema.sql"),
@@ -80,6 +96,10 @@ function snapshotSession(snapshot: AgentProjectSnapshot): AgentSession {
 }
 
 describe("agent search", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("ranks exact symbol, path, chunk, and graph evidence with follow-up commands", async () => {
     const root = await mkRepo();
     const response = await searchCodegraph({ root, query: "validate user auth", mode: "hybrid", limit: 5 });
@@ -125,6 +145,36 @@ describe("agent search", () => {
     const second = await searchCodegraph({ root, query: "account", mode: "path", limit: 10 });
 
     expect(second.results.map((result) => result.handle)).toEqual(first.results.map((result) => result.handle));
+  });
+
+  it("skips detailed symbol graph work for path-only and text-only searches", async () => {
+    const root = await mkRepo();
+    const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+
+    await searchCodegraph({ root, query: "auth", mode: "path", limit: 5 });
+    await searchCodegraph({ root, query: "active users", mode: "text", limit: 5 });
+
+    expect(symbolGraphSpy).not.toHaveBeenCalled();
+  });
+
+  it("ranks exact documentation phrases above broader symbol matches for natural language", async () => {
+    const root = await mkRepo();
+
+    const response = await searchCodegraph({ root, query: "call compatibility", mode: "hybrid", limit: 5 });
+
+    expect(response.results[0]?.kind).toBe("chunk");
+    expect(response.results[0]?.file).toBe("docs/agent-search.md");
+    expect(response.results[0]?.rankReasons).toContain("exact phrase match in docs text");
+    expect(response.results.some((result) => result.label === "callCompatibility")).toBeTruthy();
+  });
+
+  it("keeps symbol-first ranking for identifier-like queries", async () => {
+    const root = await mkRepo();
+
+    const response = await searchCodegraph({ root, query: "callCompatibility", mode: "hybrid", limit: 5 });
+
+    expect(response.results[0]?.kind).toBe("symbol");
+    expect(response.results[0]?.label).toBe("callCompatibility");
   });
 
   it("boosts matches reachable from a graph anchor", async () => {

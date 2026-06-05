@@ -105,6 +105,70 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     expect(result.groups[0]?.primaryRight.file).toBe("src/b.ts");
   });
 
+  test("bounds duplicate pair comparisons and reports skipped candidates", async () => {
+    const root = await makeTempProject();
+    const duplicateSource = `
+export function normalizeBudgetedRows(rows: Array<{ amount: number; tax: number }>) {
+  const totals: number[] = [];
+  const labels: string[] = [];
+  for (const row of rows) {
+    const subtotal = row.amount + row.tax;
+    const rounded = Math.round(subtotal * 100) / 100;
+    const label = rounded > 100 ? "large" : "small";
+    labels.push(label);
+    totals.push(rounded);
+  }
+  return totals.map((value, index) => labels[index] + ":" + value.toFixed(2)).join(",");
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", duplicateSource);
+    await writeProjectFile(root, "src/b.ts", duplicateSource);
+    await writeProjectFile(root, "src/c.ts", duplicateSource);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, { minConfidence: "high", limit: 5, maxPairs: 1 });
+
+    expect(result.stats.comparedPairs).toBe(1);
+    expect(result.stats.candidatePairs).toBeGreaterThan(1);
+    expect(result.omittedCounts.candidatePairs).toBeGreaterThan(0);
+    expect(result.omittedCounts.candidatePairs).toBeLessThan(result.stats.candidatePairs);
+  });
+
+  test("bounds duplicate context pair comparisons and reports skipped candidates", async () => {
+    const root = await makeTempProject();
+    const duplicateSource = `
+export function normalizeTargetRows(rows: Array<{ amount: number; tax: number }>) {
+  const totals: number[] = [];
+  const labels: string[] = [];
+  for (const row of rows) {
+    const subtotal = row.amount + row.tax;
+    const rounded = Math.round(subtotal * 100) / 100;
+    const label = rounded > 100 ? "large" : "small";
+    labels.push(label);
+    totals.push(rounded);
+  }
+  return totals.map((value, index) => labels[index] + ":" + value.toFixed(2)).join(",");
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", duplicateSource);
+    await writeProjectFile(root, "src/b.ts", duplicateSource);
+    await writeProjectFile(root, "src/c.ts", duplicateSource);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicateContext(
+      index,
+      { file: "src/a.ts" },
+      { minConfidence: "high", limit: 5, maxPairs: 0 },
+    );
+
+    expect(result.stats.comparedPairs).toBe(0);
+    expect(result.stats.candidatePairs).toBeGreaterThan(0);
+    expect(result.omittedCounts.candidatePairs).toBeGreaterThan(0);
+    expect(result.omittedCounts.candidatePairs).toBeLessThan(result.stats.candidatePairs);
+  });
+
   test("adds stable handles to duplicate units", async () => {
     const root = await makeTempProject();
     const duplicateSource = `
@@ -929,6 +993,9 @@ export function sharedName(input: string): string {
     await expect(findDuplicates(index, { shingleSize: Number.NaN })).rejects.toThrow(
       'Invalid shingleSize value "NaN". Expected a positive integer.',
     );
+    await expect(findDuplicates(index, { maxPairs: -1 })).rejects.toThrow(
+      'Invalid maxPairs value "-1". Expected a non-negative integer.',
+    );
   });
 
   test("keeps cross-language exact text in separate candidate buckets", async () => {
@@ -1242,7 +1309,7 @@ export function sameRows(rows: number[]) {
     expect(parsed.groups).toHaveLength(0);
     expect(parsed.omittedCounts?.groups).toBeGreaterThan(0);
     expect(parsed.omittedCounts?.suggestions).toBeGreaterThan(0);
-    expect(parsed.omittedCounts?.candidatePairs).toBeUndefined();
+    expect(parsed.omittedCounts?.candidatePairs).toBe(0);
     expect(parsed.stats?.candidatePairs).toBeGreaterThan(0);
   });
 

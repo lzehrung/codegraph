@@ -12,7 +12,6 @@ import {
   type DuplicateLeadScope,
   type DuplicateLeadSummary,
 } from "../duplicatesLeads.js";
-import type { DuplicateSimilarityHint } from "../duplicates.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import {
   REVIEW_SUMMARY_CANDIDATES_PER_CONFIDENCE_LIMIT,
@@ -22,6 +21,7 @@ import {
 } from "../presentation/bounds.js";
 import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { normalizePath } from "../util/paths.js";
+import { duplicateSimilarityHintsFromChanges } from "./duplicateSimilarity.js";
 import { parseCacheModeOption, parseOptionalNonNegativeIntegerOption } from "./options.js";
 
 type CommandTimingReport = {
@@ -162,21 +162,8 @@ function duplicateScopeFilesForReview(
   return collectImpactedReviewFiles(report);
 }
 
-function duplicateSimilarityHintsFromReview(report: ReviewReport): DuplicateSimilarityHint[] {
-  return report.changedFiles
-    .filter(
-      (
-        fileChange,
-      ): fileChange is ReviewReport["changedFiles"][number] & {
-        oldFile: string;
-        similarityIndex: number;
-      } => fileChange.oldFile !== undefined && fileChange.similarityIndex !== undefined,
-    )
-    .map((fileChange) => ({
-      leftFile: fileChange.oldFile,
-      rightFile: fileChange.file,
-      similarityIndex: fileChange.similarityIndex,
-    }));
+function duplicateSimilarityHintsFromReview(report: ReviewReport) {
+  return duplicateSimilarityHintsFromChanges(report.changedFiles);
 }
 
 function filterIndexedScopeFiles(input: {

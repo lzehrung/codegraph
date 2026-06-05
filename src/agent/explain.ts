@@ -195,6 +195,7 @@ type ResolvedExplainTarget =
   | { kind: "not_found"; label: string };
 
 const SQL_FACT_READ_CONCURRENCY = 32;
+const AGENT_DUPLICATE_MAX_PAIRS = 20_000;
 
 export async function explainCodegraphTarget(request: AgentExplainTarget): Promise<AgentExplanation> {
   const session = createAgentSession({
@@ -662,10 +663,11 @@ async function collectDuplicateContext(
     minConfidence: "medium",
     includeSameFile: true,
     limit,
+    maxPairs: AGENT_DUPLICATE_MAX_PAIRS,
   });
   return {
     items: result.groups.map((group) => summarizeDuplicateGroup(group, result.target)),
-    omitted: result.omittedCounts.groups,
+    omitted: result.omittedCounts.groups + result.omittedCounts.candidatePairs,
   };
 }
 

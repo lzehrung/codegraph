@@ -31,6 +31,7 @@ export type DuplicateLeadSummary = {
 };
 
 const DEFAULT_DUPLICATE_LEAD_LIMIT = 5;
+const DEFAULT_DUPLICATE_LEAD_MAX_PAIRS = 20_000;
 const REVIEW_CLONE_TYPES = new Set<DuplicateCloneType>(["exact", "renamed"]);
 
 function normalizeDuplicateScope(value: string | undefined, fallback: DuplicateLeadScope): DuplicateLeadScope {
@@ -71,9 +72,11 @@ export async function collectDuplicateLeadSummary(input: {
   scopedFiles?: readonly string[];
   allScopeFileCount?: number;
   limit?: number;
+  maxPairs?: number;
   similarityHints?: readonly DuplicateSimilarityHint[];
 }): Promise<DuplicateLeadSummary | undefined> {
   const limit = input.limit ?? DEFAULT_DUPLICATE_LEAD_LIMIT;
+  const maxPairs = input.maxPairs ?? DEFAULT_DUPLICATE_LEAD_MAX_PAIRS;
   const scopedFiles = input.scope === "all" ? undefined : uniqueFiles(input.scopedFiles ?? []);
   if (input.scope !== "all" && (!scopedFiles || scopedFiles.length < 2)) {
     return undefined;
@@ -84,6 +87,7 @@ export async function collectDuplicateLeadSummary(input: {
     ...(scopedFiles ? { files: scopedFiles } : {}),
     ...(input.similarityHints !== undefined ? { similarityHints: input.similarityHints } : {}),
     minConfidence: "medium",
+    maxPairs,
     limit: limit * 4,
   });
   const visibleGroups = result.groups.filter(
@@ -104,7 +108,10 @@ export async function collectDuplicateLeadSummary(input: {
       byBudget: Math.max(0, visibleGroups.length - limitedGroups.length) + result.omittedCounts.groups,
       byConfidenceOrType: hiddenGroupCount,
       byScope: Math.max(0, allScopeFileCount - scopedFileCount),
-      hiddenEvidence: result.omittedCounts.rawSuggestions + result.omittedCounts.oversizedBuckets,
+      hiddenEvidence:
+        result.omittedCounts.rawSuggestions +
+        result.omittedCounts.oversizedBuckets +
+        result.omittedCounts.candidatePairs,
     },
   };
 }

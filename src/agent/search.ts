@@ -140,9 +140,24 @@ type ReachableFile = {
   relation: string;
 };
 
+type SearchQueryTerms = {
+  tokens: string[];
+  normalizedPhrase: string;
+  identifierLike: boolean;
+};
+
+type TokenMatch = {
+  score: number;
+  matched: string[];
+  exactPhrase: boolean;
+  proximity: boolean;
+};
+
 const DEFAULT_LIMIT = 20;
 const MAX_TEXT_BYTES = 300_000;
 const MAX_GRAPH_DEPTH = 5;
+const DOCS_EXACT_PHRASE_BOOST = 220;
+const DOCS_PROXIMITY_BOOST = 20;
 const CHUNK_LANGUAGE_ALIASES: Record<string, string> = {
   js: "javascript",
   ts: "typescript",
@@ -160,7 +175,9 @@ export async function searchCodegraphWithSession(
   session: AgentSession,
   request: AgentSearchRequest,
 ): Promise<AgentSearchResponse> {
-  const snapshot = await session.loadProject();
+  const snapshot = await session.loadProject({
+    symbolGraph: searchNeedsSymbolGraph(request) ? "eager" : "skip",
+  });
   return await searchSnapshot(snapshot, request);
 }
 
@@ -184,7 +201,7 @@ async function searchSnapshot(
   request: AgentSearchRequest,
 ): Promise<AgentSearchResponse> {
   const mode = request.mode ?? "hybrid";
-  const tokens = tokenizeQuery(request.query);
+  const query = buildQueryTerms(request.query);
   const resultMap = new Map<string, MutableSearchResult>();
   const limit = defaultAgentLimit(request.limit, DEFAULT_LIMIT, AGENT_SEARCH_RESULT_LIMIT);
   let fileNeighborIndex: Map<string, FileNeighbor[]> | undefined;
@@ -193,16 +210,16 @@ async function searchSnapshot(
     return fileNeighborIndex;
   };
 
-  if (tokens.length) {
+  if (query.tokens.length) {
     const symbolLookup = buildSymbolLookup(snapshot);
     if (mode === "hybrid" || mode === "symbol" || mode === "sql" || mode === "graph") {
-      addSymbolResults(snapshot, resultMap, symbolLookup, buildSymbolNeighborIndex(snapshot), tokens, mode);
+      addSymbolResults(snapshot, resultMap, symbolLookup, buildSymbolNeighborIndex(snapshot), query, mode);
     }
     if (mode === "hybrid" || mode === "path" || mode === "graph") {
-      addPathResults(snapshot, resultMap, getFileNeighborIndex(), tokens);
+      addPathResults(snapshot, resultMap, getFileNeighborIndex(), query);
     }
     if (mode === "hybrid" || mode === "text") {
-      await addTextResults(snapshot, resultMap, tokens, request.includeSnippets ?? true);
+      await addTextResults(snapshot, resultMap, query, request.includeSnippets ?? true);
     }
   }
 
@@ -211,7 +228,7 @@ async function searchSnapshot(
       snapshot,
       resultMap,
       getFileNeighborIndex(),
-      tokens,
+      query,
       request.from,
       normalizeDepth(request.depth),
     );
@@ -247,10 +264,19 @@ function normalizeDepth(depth: number | undefined): number {
   return Math.min(MAX_GRAPH_DEPTH, Math.max(0, Math.floor(depth)));
 }
 
-function tokenizeQuery(input: string): string[] {
+function searchNeedsSymbolGraph(request: AgentSearchRequest): boolean {
+  const mode = request.mode ?? "hybrid";
+  return mode !== "path" && mode !== "text";
+}
+
+function buildQueryTerms(input: string): SearchQueryTerms {
   const normalized = normalizeSearchText(input);
   const tokens = normalized.split(/\s+/).filter((token) => token.length);
-  return Array.from(new Set(tokens));
+  return {
+    tokens: Array.from(new Set(tokens)),
+    normalizedPhrase: normalized,
+    identifierLike: isIdentifierLikeQuery(input),
+  };
 }
 
 function normalizeSearchText(input: string): string {
@@ -264,15 +290,24 @@ function splitCamelCase(input: string): string {
   return input.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
 }
 
-function matchTokenScore(text: string, tokens: string[]): { score: number; matched: string[] } {
+function isIdentifierLikeQuery(input: string): boolean {
+  const trimmed = input.trim();
+  return /^[A-Za-z_$][A-Za-z0-9_$]*(?:[.#:][A-Za-z_$][A-Za-z0-9_$]*)*$/.test(trimmed);
+}
+
+function emptyTokenMatch(): TokenMatch {
+  return { score: 0, matched: [], exactPhrase: false, proximity: false };
+}
+
+function matchTokenScore(text: string, query: SearchQueryTerms): TokenMatch {
   const normalized = normalizeSearchText(text);
-  if (!normalized) return { score: 0, matched: [] };
+  if (!normalized) return emptyTokenMatch();
   const words = new Set(normalized.split(/\s+/).filter(Boolean));
   const compact = normalized.replace(/\s+/g, "");
   const matched: string[] = [];
   let score = 0;
 
-  for (const token of tokens) {
+  for (const token of query.tokens) {
     if (words.has(token)) {
       matched.push(token);
       score += 10;
@@ -289,11 +324,30 @@ function matchTokenScore(text: string, tokens: string[]): { score: number; match
     }
   }
 
-  if (matched.length === tokens.length && tokens.length > 1) {
+  let exactPhrase = false;
+  let proximity = false;
+  if (matched.length === query.tokens.length && query.tokens.length > 1) {
     score += 12;
+    if (query.normalizedPhrase.includes(" ") && normalized.includes(query.normalizedPhrase)) {
+      score += 30;
+      exactPhrase = true;
+    } else if (tokensAppearInOrder(normalized, query.tokens)) {
+      score += 10;
+      proximity = true;
+    }
   }
 
-  return { score, matched };
+  return { score, matched, exactPhrase, proximity };
+}
+
+function tokensAppearInOrder(normalizedText: string, tokens: readonly string[]): boolean {
+  let fromIndex = 0;
+  for (const token of tokens) {
+    const tokenIndex = normalizedText.indexOf(token, fromIndex);
+    if (tokenIndex < 0) return false;
+    fromIndex = tokenIndex + token.length;
+  }
+  return true;
 }
 
 function buildSymbolLookup(snapshot: AgentProjectSnapshot): SymbolDefLookup {
@@ -318,7 +372,7 @@ function addSymbolResults(
   resultMap: Map<string, MutableSearchResult>,
   lookup: SymbolDefLookup,
   neighborsBySymbolId: Map<string, SymbolNeighbor[]>,
-  tokens: string[],
+  query: SearchQueryTerms,
   mode: AgentSearchMode,
 ): void {
   for (const node of snapshot.symbolGraph.nodes.values()) {
@@ -326,9 +380,9 @@ function addSymbolResults(
     if (mode === "sql" && !sqlObject) continue;
     if (mode === "symbol" && sqlObject) continue;
 
-    const nameMatch = matchTokenScore(node.name, tokens);
-    const fileMatch = matchTokenScore(normalizeAgentFilePath(snapshot.root, node.file), tokens);
-    const docMatch = node.docstring ? matchTokenScore(node.docstring, tokens) : { score: 0, matched: [] };
+    const nameMatch = matchTokenScore(node.name, query);
+    const fileMatch = matchTokenScore(normalizeAgentFilePath(snapshot.root, node.file), query);
+    const docMatch = node.docstring ? matchTokenScore(node.docstring, query) : emptyTokenMatch();
     const score = nameMatch.score * 4 + fileMatch.score + docMatch.score;
     if (score <= 0) continue;
 
@@ -366,6 +420,8 @@ function addSymbolResults(
     if (docMatch.matched.length) {
       addReason(result, `docstring token match: ${docMatch.matched.join(", ")}`);
     }
+    addPhraseReasons(result, nameMatch, "symbol name");
+    addPhraseReasons(result, docMatch, "docstring");
     addSymbolNeighbors(snapshot, result, neighborsBySymbolId.get(node.id) ?? []);
     addSymbolFollowUps(result, relFile, def);
   }
@@ -375,11 +431,11 @@ function addPathResults(
   snapshot: AgentProjectSnapshot,
   resultMap: Map<string, MutableSearchResult>,
   fileNeighborIndex: Map<string, FileNeighbor[]>,
-  tokens: string[],
+  query: SearchQueryTerms,
 ): void {
   for (const file of snapshot.files) {
     const relFile = normalizeAgentFilePath(snapshot.root, file);
-    const pathMatch = matchTokenScore(relFile, tokens);
+    const pathMatch = matchTokenScore(relFile, query);
     if (pathMatch.score <= 0) continue;
 
     const result = upsertResult(resultMap, {
@@ -399,19 +455,20 @@ function addPathResults(
 async function addTextResults(
   snapshot: AgentProjectSnapshot,
   resultMap: Map<string, MutableSearchResult>,
-  tokens: string[],
+  query: SearchQueryTerms,
   includeSnippets: boolean,
 ): Promise<void> {
   for (const file of snapshot.files) {
     const text = await readSearchableFile(file);
     if (!text) continue;
-    if (!textCouldMatch(text, tokens)) continue;
+    if (!textCouldMatch(text, query.tokens)) continue;
+    const relFile = normalizeAgentFilePath(snapshot.root, file);
+    const documentationFile = isDocumentationFile(relFile);
     const chunks = buildTextChunks(file, text);
     for (const chunk of chunks) {
-      const match = matchTokenScore([chunk.name, chunk.text].filter(Boolean).join(" "), tokens);
+      const match = matchTokenScore([chunk.name, chunk.text].filter(Boolean).join(" "), query);
       if (match.score <= 0) continue;
 
-      const relFile = normalizeAgentFilePath(snapshot.root, file);
       const handle = formatAgentChunkHandle({ file: relFile, line: chunk.startLine });
       const result = upsertResult(resultMap, {
         handle,
@@ -423,17 +480,48 @@ async function addTextResults(
           end: { line: chunk.endLine, column: 0 },
         },
       });
-      result.score += match.score;
+      result.score += match.score + textResultBoost(match, documentationFile, query);
       addReason(result, `text token match: ${match.matched.join(", ")}`);
+      addPhraseReasons(result, match, documentationFile ? "docs text" : "text");
       addEvidence(result, {
         source: "chunk",
         label: result.label,
         file: relFile,
         line: chunk.startLine,
-        ...(includeSnippets ? { snippet: makeSnippet(chunk.text, tokens) } : {}),
+        ...(includeSnippets ? { snippet: makeSnippet(chunk.text, query) } : {}),
       });
       addFileFollowUps(result, relFile);
     }
+  }
+}
+
+function textResultBoost(match: TokenMatch, documentationFile: boolean, query: SearchQueryTerms): number {
+  if (!documentationFile || query.identifierLike) return 0;
+  if (match.exactPhrase) return DOCS_EXACT_PHRASE_BOOST;
+  if (match.proximity) return DOCS_PROXIMITY_BOOST;
+  return 0;
+}
+
+function isDocumentationFile(relFile: string): boolean {
+  const lower = relFile.toLowerCase();
+  return (
+    lower === "readme.md" ||
+    lower.startsWith("docs/") ||
+    lower.endsWith(".md") ||
+    lower.endsWith(".mdx") ||
+    lower.endsWith(".rst") ||
+    lower.endsWith(".adoc") ||
+    lower.endsWith(".txt")
+  );
+}
+
+function addPhraseReasons(result: MutableSearchResult, match: TokenMatch, label: string): void {
+  if (match.exactPhrase) {
+    addReason(result, `exact phrase match in ${label}`);
+    return;
+  }
+  if (match.proximity) {
+    addReason(result, `nearby token match in ${label}`);
   }
 }
 
@@ -446,7 +534,7 @@ function applyGraphNeighborhood(
   snapshot: AgentProjectSnapshot,
   resultMap: Map<string, MutableSearchResult>,
   fileNeighborIndex: Map<string, FileNeighbor[]>,
-  tokens: string[],
+  query: SearchQueryTerms,
   from: string,
   depth: number,
 ): void {
@@ -457,7 +545,7 @@ function applyGraphNeighborhood(
   for (const entry of reachable.values()) {
     const relFile = normalizeAgentFilePath(snapshot.root, entry.file);
     const existingResults = [...resultMap.values()].filter((result) => result.file === relFile);
-    const fileMatch = matchTokenScore(relFile, tokens);
+    const fileMatch = matchTokenScore(relFile, query);
     if (fileMatch.score > 0) {
       const graphResult = upsertResult(resultMap, {
         handle: formatAgentGraphHandle({ file: relFile }),
@@ -606,9 +694,9 @@ function buildTextChunks(
   }));
 }
 
-function makeSnippet(text: string, tokens: string[]): string {
+function makeSnippet(text: string, query: SearchQueryTerms): string {
   const lines = text.split(/\r?\n/);
-  const matchIndex = lines.findIndex((line) => matchTokenScore(line, tokens).score > 0);
+  const matchIndex = lines.findIndex((line) => matchTokenScore(line, query).score > 0);
   const index = matchIndex >= 0 ? matchIndex : 0;
   return lines
     .slice(Math.max(0, index - 1), Math.min(lines.length, index + 2))

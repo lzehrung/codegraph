@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAgentSession } from "../src/agent/session.js";
+import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
 
 async function mkRepo(): Promise<string> {
@@ -20,6 +21,7 @@ describe("agent session", () => {
 
   it("loads index, graph, symbol graph, and SQL files once for repeated agent operations", async () => {
     const root = await mkRepo();
+    const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
     const session = createAgentSession({ root });
 
     const first = await session.loadProject();
@@ -30,6 +32,23 @@ describe("agent session", () => {
     expect(first.symbolGraph.nodes.size).toBeGreaterThan(0);
     expect(first.fileGraph.nodes.size).toBeGreaterThan(0);
     expect(first.fileGraph).toBe(first.index.graph);
+    expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips detailed symbol graph construction until requested", async () => {
+    const root = await mkRepo();
+    const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+    const session = createAgentSession({ root });
+
+    const pathOnlySnapshot = await session.loadProject({ symbolGraph: "skip" });
+
+    expect(pathOnlySnapshot.symbolGraph.nodes.size).toBe(0);
+    expect(symbolGraphSpy).not.toHaveBeenCalled();
+
+    const symbolSnapshot = await session.loadProject();
+
+    expect(symbolSnapshot.symbolGraph.nodes.size).toBeGreaterThan(0);
+    expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
   });
 
   it("builds agent snapshots through incremental disk cache by default", async () => {

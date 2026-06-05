@@ -1,5 +1,5 @@
 import type { CallCompatibilityProvider, ExtractCallsiteRequest, ExtractSignatureRequest } from "./types.js";
-import type { CallableSignature, CallsiteArguments } from "../../callCompatibility.js";
+import type { CallableSignature, CallsiteArguments } from "../types.js";
 
 export const callCompatibilityLanguageIds = [
   "c",

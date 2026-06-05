@@ -79,6 +79,7 @@ export type DuplicateDetectionOptions = {
   minTokens?: number;
   maxTokens?: number;
   maxBucketSize?: number;
+  maxPairs?: number;
   shingleSize?: number;
   windowSize?: number;
   includeRawPairs?: boolean;
@@ -98,6 +99,7 @@ export type DuplicateDetectionOmittedCounts = {
   oversizedBuckets: number;
   belowThresholdUnits: number;
   overlappingPairs: number;
+  candidatePairs: number;
 };
 
 export type DuplicateDetectionStats = {
@@ -1699,6 +1701,10 @@ export async function findDuplicates(
   const minTokens = normalizePositiveIntegerOption(options.minTokens, "minTokens", DEFAULT_MIN_TOKENS);
   const maxTokens = normalizePositiveIntegerOption(options.maxTokens, "maxTokens", DEFAULT_MAX_TOKENS);
   const maxBucketSize = normalizePositiveIntegerOption(options.maxBucketSize, "maxBucketSize", DEFAULT_MAX_BUCKET_SIZE);
+  const maxPairs =
+    options.maxPairs === undefined
+      ? Number.POSITIVE_INFINITY
+      : normalizeNonNegativeIntegerOption(options.maxPairs, "maxPairs", DEFAULT_LIMIT);
   const shingleSize = normalizePositiveIntegerOption(options.shingleSize, "shingleSize", DEFAULT_SHINGLE_SIZE);
   const windowSize = normalizePositiveIntegerOption(options.windowSize, "windowSize", DEFAULT_WINDOW_SIZE);
   const includeSmall = options.includeSmall ?? false;
@@ -1723,11 +1729,16 @@ export async function findDuplicates(
   const suggestions: DuplicateSuggestion[] = [];
   let overlappingPairs = 0;
   let comparedPairs = 0;
+  let skippedCandidatePairs = 0;
 
   for (const evidence of pairs.values()) {
     if (crossFileOnly && evidence.left.absoluteFile === evidence.right.absoluteFile) continue;
     if (hasLineOverlap(evidence.left, evidence.right)) {
       overlappingPairs++;
+      continue;
+    }
+    if (comparedPairs >= maxPairs) {
+      skippedCandidatePairs++;
       continue;
     }
 
@@ -1758,6 +1769,7 @@ export async function findDuplicates(
       oversizedBuckets,
       belowThresholdUnits,
       overlappingPairs,
+      candidatePairs: skippedCandidatePairs,
     },
     stats: {
       comparedPairs,
@@ -1871,6 +1883,10 @@ async function findDuplicatesTouchingTargets(
   const minTokens = normalizePositiveIntegerOption(options.minTokens, "minTokens", DEFAULT_MIN_TOKENS);
   const maxTokens = normalizePositiveIntegerOption(options.maxTokens, "maxTokens", DEFAULT_MAX_TOKENS);
   const maxBucketSize = normalizePositiveIntegerOption(options.maxBucketSize, "maxBucketSize", DEFAULT_MAX_BUCKET_SIZE);
+  const maxPairs =
+    options.maxPairs === undefined
+      ? Number.POSITIVE_INFINITY
+      : normalizeNonNegativeIntegerOption(options.maxPairs, "maxPairs", DEFAULT_LIMIT);
   const shingleSize = normalizePositiveIntegerOption(options.shingleSize, "shingleSize", DEFAULT_SHINGLE_SIZE);
   const windowSize = normalizePositiveIntegerOption(options.windowSize, "windowSize", DEFAULT_WINDOW_SIZE);
   const includeSmall = options.includeSmall ?? false;
@@ -1904,11 +1920,16 @@ async function findDuplicatesTouchingTargets(
   const suggestions: DuplicateSuggestion[] = [];
   let overlappingPairs = 0;
   let comparedPairs = 0;
+  let skippedCandidatePairs = 0;
 
   for (const evidence of pairs.values()) {
     if (crossFileOnly && evidence.left.absoluteFile === evidence.right.absoluteFile) continue;
     if (hasLineOverlap(evidence.left, evidence.right)) {
       overlappingPairs++;
+      continue;
+    }
+    if (comparedPairs >= maxPairs) {
+      skippedCandidatePairs++;
       continue;
     }
 
@@ -1934,6 +1955,7 @@ async function findDuplicatesTouchingTargets(
       oversizedBuckets,
       belowThresholdUnits,
       overlappingPairs,
+      candidatePairs: skippedCandidatePairs,
     },
     stats: {
       comparedPairs,

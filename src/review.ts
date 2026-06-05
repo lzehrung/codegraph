@@ -1,16 +1,14 @@
 import { performance } from "node:perf_hooks";
 import { findDuplicateContexts, type DuplicateGroup, type DuplicateUnitRef } from "./duplicates.js";
-import type { Edge, FileId } from "./types.js";
+import type { FileId } from "./types.js";
 import { buildProjectIndexIncremental } from "./indexer/build-index.js";
-import { type BuildReport, type IncrementalBuildOptions, type ProjectIndex, type SymbolDef } from "./indexer/types.js";
+import { type IncrementalBuildOptions, type ProjectIndex, type SymbolDef } from "./indexer/types.js";
 import { symbolId } from "./indexer/symbols.js";
 import type { GraphBuildOptions } from "./graphs/types.js";
 import type { FileChange, Hunk } from "./impact/types.js";
-import type { CandidateTestFile } from "./impact/context.js";
 import { normalizePath, toProjectDisplayPath } from "./util/paths.js";
 import { fileExists } from "./util/workspace.js";
 import { discoverProjectFiles, type ProjectFileInfo } from "./util/projectFiles.js";
-import type { SqlReviewContext } from "./sql/review.js";
 import { collectReviewCandidateTests } from "./review/candidates.js";
 import { collectReviewChanges } from "./review/changes.js";
 import { buildDeletedFileSnapshots, type DeletedFileSnapshot } from "./review/deleted.js";
@@ -21,7 +19,34 @@ import {
   REVIEW_SCHEMA_VERSION,
 } from "./review/report.js";
 import { buildReviewTasks, computeRiskSummary } from "./review/risk.js";
-import { summarizeChangedFiles, type ReviewFileSummary } from "./review/summaries.js";
+import { summarizeChangedFiles } from "./review/summaries.js";
+import type {
+  ReviewBuildReport,
+  ReviewDepth,
+  ReviewDiagnostics,
+  ReviewFileSummary,
+  ReviewOptions,
+  ReviewReport,
+  ReviewTask,
+  ReviewTimingReport,
+} from "./review/types.js";
+
+export type {
+  ReviewBuildReport,
+  ReviewChangedFileSummaries,
+  ReviewDepth,
+  ReviewDiagnostics,
+  ReviewFileSummary,
+  ReviewOptions,
+  ReviewReport,
+  ReviewRiskLevel,
+  ReviewRiskSummary,
+  ReviewSymbolCallsite,
+  ReviewSymbolSummary,
+  ReviewTask,
+  ReviewTaskPriority,
+  ReviewTimingReport,
+} from "./review/types.js";
 
 /**
  * Structured review bundle for downstream review agents.
@@ -30,86 +55,6 @@ import { summarizeChangedFiles, type ReviewFileSummary } from "./review/summarie
  * tasks, changed symbols, graph deltas, candidate tests, diagnostics, and
  * snippets as data so callers can build deterministic file packs or prompts.
  */
-export type ReviewReport = {
-  schemaVersion: number;
-  status: "ok" | "no_changes";
-  base?: string;
-  head?: string;
-  projectFiles?: ProjectFileInfo[];
-  summary: {
-    filesChanged: number;
-    symbolsChanged: number;
-    candidateTests: number;
-  };
-  riskSummary: ReviewRiskSummary;
-  reviewTasks: ReviewTask[];
-  changedFiles: ReviewFileSummary[];
-  graphDelta: Edge[];
-  candidateTests: CandidateTestFile[];
-  sqlContext?: SqlReviewContext;
-  diagnostics?: ReviewDiagnostics;
-};
-
-/**
- * Options for `buildReviewReport()`.
- *
- * Most review agents use a git range (`gitBase`/`gitHead`) or `diffText`, choose
- * a `reviewDepth`, and preserve the returned structured fields instead of
- * re-parsing terminal summaries.
- */
-export type ReviewOptions = IncrementalBuildOptions & {
-  reviewDepth?: ReviewDepth;
-  maxCandidates?: number;
-  includeSymbolDetails?: boolean;
-  maxCallsites?: number;
-  includeDiffContext?: boolean;
-  diffContextLines?: number;
-  diffText?: string;
-  testPatterns?: string[];
-  referenceConcurrency?: number;
-  report?: ReviewBuildReport;
-};
-
-export type ReviewDepth = "minimal" | "standard" | "deep";
-
-export type ReviewRiskLevel = "low" | "medium" | "high";
-
-export type ReviewRiskSummary = {
-  level: ReviewRiskLevel;
-  score: number;
-  signals: string[];
-};
-
-export type ReviewTaskPriority = "low" | "medium" | "high";
-
-export type ReviewTask = {
-  id: string;
-  title: string;
-  description: string;
-  priority: ReviewTaskPriority;
-  reason: string;
-};
-
-export type ReviewDiagnostics = {
-  missingFiles: string[];
-  symbolMappingParseFailures: string[];
-};
-
-export type ReviewTimingReport = {
-  totalMs?: number;
-  changesMs?: number;
-  diffMs?: number;
-  indexMs?: number;
-  referencesMs?: number;
-  candidatesMs?: number;
-};
-
-export type ReviewBuildReport = {
-  timings: ReviewTimingReport;
-  indexReport?: BuildReport;
-  index?: ProjectIndex;
-};
-
 type ReviewPreset = {
   includeSymbolDetails: boolean;
   maxCallsites: number;
@@ -145,6 +90,7 @@ const REVIEW_PRESETS: Record<ReviewDepth, ReviewPreset> = {
 };
 
 const REVIEW_DUPLICATE_TASK_LIMIT = 5;
+const REVIEW_DUPLICATE_MAX_PAIRS = 20_000;
 
 function mergeGraphOptions(
   base: IncrementalBuildOptions["graph"] | undefined,
@@ -536,6 +482,7 @@ async function collectReviewDuplicateTasks(input: {
     minConfidence: "high",
     includeSameFile: true,
     limit: REVIEW_DUPLICATE_TASK_LIMIT,
+    maxPairs: REVIEW_DUPLICATE_MAX_PAIRS,
   });
   const tasks = new Map<string, ReviewTask>();
   for (const context of contexts) {

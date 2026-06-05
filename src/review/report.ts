@@ -6,10 +6,9 @@ import type { Edge, FileId } from "../types.js";
 import { compareEdges, edgeKey, toRelativeEdge } from "../util/graphEdges.js";
 import { normalizePath } from "../util/paths.js";
 import { type ProjectFileInfo } from "../util/projectFiles.js";
-import type { ReviewDiagnostics, ReviewOptions, ReviewReport } from "../review.js";
 import { collectDeletedImporterEdges, collectDeletedSnapshotEdges, type DeletedFileSnapshot } from "./deleted.js";
 import { buildReviewTasks, computeRiskSummary, hasDiagnostics } from "./risk.js";
-import type { ReviewFileSummary } from "./summaries.js";
+import type { ReviewDiagnostics, ReviewFileSummary, ReviewOptions, ReviewReport } from "./types.js";
 
 export const REVIEW_SCHEMA_VERSION = 2;
 

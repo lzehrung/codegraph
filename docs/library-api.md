@@ -94,7 +94,7 @@ Small orientation budgets default to `health: "skip"` and set health fields to `
 
 ## Agent search
 
-`searchCodegraph()` builds a project snapshot and returns deterministic, agent-ready anchors across files, symbols, chunks, SQL objects, and optional graph neighborhoods. Handles are project-relative and explainable; large result packets include `resultCount`, `totalCandidates`, `limits`, and `omittedCounts`.
+`searchCodegraph()` builds a project snapshot and returns deterministic, agent-ready anchors across files, symbols, chunks, SQL objects, and optional graph neighborhoods. Natural-language multi-token searches boost exact documentation phrases, while identifier-like queries stay symbol-first. Pure `path` and `text` searches skip detailed symbol graph construction; hybrid, symbol, SQL, and graph searches keep symbol-aware ranking and neighbors. Handles are project-relative and explainable; large result packets include `resultCount`, `totalCandidates`, `limits`, and `omittedCounts`.
 
 ```ts
 import { buildCodegraphArtifact, explainCodegraphTarget, searchCodegraph } from "@lzehrung/codegraph";

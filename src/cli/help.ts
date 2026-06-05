@@ -259,7 +259,7 @@ Options:
   --max-bucket-size Skip candidate buckets larger than this value. Defaults to 200.
 
 Output:
-  Always emits JSON with grouped duplicate findings, confidence, clone type, metrics, omission counts, and pair stats.
+  Always emits JSON with grouped duplicate findings, confidence, clone type, metrics, omission counts including skipped candidate pairs, and pair stats.
   Grouped duplicate output uses schemaVersion 2.
   Group variants are bounded by default and include rawPairCount/omittedVariantCount for hidden evidence.
   Use --raw-pairs to include the underlying scored unit-pair suggestions.

@@ -18,7 +18,6 @@ import {
   parseDuplicateLeadScope,
   type DuplicateLeadSummary,
 } from "../duplicatesLeads.js";
-import type { DuplicateSimilarityHint } from "../duplicates.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import type { Graph } from "../types.js";
 import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
@@ -28,6 +27,7 @@ import {
   parseOptionalPositiveIntegerOption,
   parsePositiveIntegerOption,
 } from "./options.js";
+import { changedFilesWithSimilaritySources, duplicateSimilarityHintsFromChanges } from "./duplicateSimilarity.js";
 
 type ImpactOptionsBuilder = Partial<ImpactOptions> & {
   base?: string;
@@ -245,31 +245,11 @@ function duplicateScopeFilesForImpact(
 }
 
 function duplicateChangedFilesWithSimilaritySources(changedFiles: ImpactReport["changedFiles"]): string[] {
-  const files = new Set<string>();
-  for (const changedFile of changedFiles) {
-    files.add(changedFile.file);
-    if (changedFile.oldFile !== undefined && changedFile.similarityIndex !== undefined) {
-      files.add(changedFile.oldFile);
-    }
-  }
-  return Array.from(files).sort((left, right) => left.localeCompare(right));
+  return changedFilesWithSimilaritySources(changedFiles);
 }
 
-function duplicateSimilarityHintsFromImpact(report: ImpactReport): DuplicateSimilarityHint[] {
-  return report.changedFiles
-    .filter(
-      (
-        fileChange,
-      ): fileChange is ImpactReport["changedFiles"][number] & {
-        oldFile: string;
-        similarityIndex: number;
-      } => fileChange.oldFile !== undefined && fileChange.similarityIndex !== undefined,
-    )
-    .map((fileChange) => ({
-      leftFile: fileChange.oldFile,
-      rightFile: fileChange.file,
-      similarityIndex: fileChange.similarityIndex,
-    }));
+function duplicateSimilarityHintsFromImpact(report: ImpactReport) {
+  return duplicateSimilarityHintsFromChanges(report.changedFiles);
 }
 
 async function collectImpactDuplicateSummary(input: {

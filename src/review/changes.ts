@@ -2,9 +2,9 @@ import { performance } from "node:perf_hooks";
 import { createImpactIgnoreMatcher } from "../impact/path.js";
 import { parseUnifiedDiff } from "../impact/parse.js";
 import type { FileChange, Hunk } from "../impact/types.js";
-import type { ReviewOptions, ReviewTimingReport } from "../review.js";
 import { assertFilePathWithinRoot } from "../util/paths.js";
 import { getUnifiedDiff, listChangedFiles } from "../util/git.js";
+import type { ReviewOptions, ReviewTimingReport } from "./types.js";
 
 export type ReviewChangeCollection = {
   changedFiles: Set<string>;

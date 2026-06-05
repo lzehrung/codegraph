@@ -16,11 +16,11 @@ Why this matters:
 
 Implementation outline:
 
-- [ ] Teach `createAgentSession` to accept index/build options.
-- [ ] Use the incremental disk-cache path for `search`, `orient`, `explain`, `packet`, and library equivalents where safe.
-- [ ] Thread worker/native/cache options through the matching CLI commands.
-- [ ] Avoid building the full symbol graph for path-only or text-only query modes.
-- [ ] Add a regression test or benchmark fixture for warm-cache agent command latency.
+- [x] Teach `createAgentSession` to accept index/build options.
+- [x] Use the incremental disk-cache path for `search`, `orient`, `explain`, `packet`, and library equivalents where safe.
+- [x] Thread worker/native/cache options through the matching CLI commands.
+- [x] Avoid building the full symbol graph for path-only or text-only query modes.
+- [x] Add regression coverage for incremental agent indexing and skipped symbol graph work.
 
 ## Priority 2: Cheaper Orientation Health
 
@@ -34,11 +34,11 @@ Why this matters:
 
 Implementation outline:
 
-- [ ] Split cheap health summaries from exhaustive duplicate analysis.
-- [ ] Make duplicate health opt-in or bounded for medium orientation.
-- [ ] Preserve full duplicate counts in `duplicates` and any explicit full-health mode.
-- [ ] Include omitted or partial-analysis metadata in JSON output.
-- [ ] Add tests for budget behavior and stable omitted fields.
+- [x] Split cheap health summaries from exhaustive duplicate analysis.
+- [x] Make duplicate health opt-in or bounded for medium orientation.
+- [x] Preserve full duplicate counts in `duplicates` and any explicit full-health mode.
+- [x] Include omitted or partial-analysis metadata in JSON output.
+- [x] Add tests for budget behavior and stable omitted fields.
 
 ## Priority 3: Reduce Unresolved Import Noise
 
@@ -52,11 +52,11 @@ Why this matters:
 
 Implementation outline:
 
-- [ ] Improve Rust external detection for `crate::module` and grouped-use specifiers such as `tree_sitter::{Language, Parser}`.
-- [ ] Add regression coverage using declared dependencies from `Cargo.toml`.
-- [ ] Decide whether `tests/languages/samples/**` should be ignored by the repo config for default scans.
-- [ ] If fixture scans remain in scope, classify fixture unresolved groups separately in orientation health.
-- [ ] Update `README.md` or CLI docs only if default scan guidance changes.
+- [x] Improve Rust external detection for `crate::module` and grouped-use specifiers such as `tree_sitter::{Language, Parser}`.
+- [x] Add regression coverage using declared dependencies from `Cargo.toml`.
+- [x] Decide whether `tests/languages/samples/**` should be ignored by the repo config for default scans.
+- [x] Keep fixture unresolved noise out of default scans by ignoring `tests/languages/samples/**`; no separate fixture-health bucket is needed for default scope.
+- [x] Update `README.md` or CLI docs only if default scan guidance changes.
 
 ## Priority 4: Cross-Language Receiver-Aware References
 
@@ -70,11 +70,11 @@ Why this matters:
 
 Implementation outline:
 
-- [ ] Start with languages already supported by receiver-aware `goto`.
-- [ ] Extend verified method reference scans conservatively, using receiver proof only.
-- [ ] Add cases to `tests/references.test.ts` for at least Java, C#, Ruby, and Rust where supported.
-- [ ] Update `docs/language-parity.md` and `docs/scenario-catalog.md` with the exact support boundary.
-- [ ] Keep intentional limitations explicit rather than silently falling back to broad name matching.
+- [x] Start with languages already supported by receiver-aware `goto`.
+- [x] Extend verified method reference scans conservatively, using receiver proof only.
+- [x] Add cases to `tests/references.test.ts` and `tests/goto.test.ts` for Java, C#, and Rust; Ruby remains intentionally unclaimed because receiver proof is not reliable yet.
+- [x] Update `docs/language-parity.md` and `docs/scenario-catalog.md` with the exact support boundary.
+- [x] Keep intentional limitations explicit rather than silently falling back to broad name matching.
 
 ## Priority 5: Agent Search Ranking
 
@@ -88,11 +88,11 @@ Why this matters:
 
 Implementation outline:
 
-- [ ] Add phrase and proximity scoring for multi-token queries.
-- [ ] Add a modest Markdown/text boost when exact phrases appear in docs.
-- [ ] Consider a `--mode text` or `--mode docs` option if ranking alone is not enough.
-- [ ] Add tests for exact docs phrase ranking and symbol-heavy query ranking.
-- [ ] Keep symbol-first behavior for identifier-like queries.
+- [x] Add phrase and proximity scoring for multi-token queries.
+- [x] Add a Markdown/text boost when exact phrases appear in docs.
+- [x] Keep ranking-only behavior; no new `--mode docs` option was needed.
+- [x] Add tests for exact docs phrase ranking and symbol-heavy query ranking.
+- [x] Keep symbol-first behavior for identifier-like queries.
 
 ## Priority 6: Break Type-Only Cycles
 
@@ -105,11 +105,11 @@ Why this matters:
 
 Implementation outline:
 
-- [ ] Extract shared review types to `src/review/types.ts`.
-- [ ] Import review shared types from the neutral module in `src/review.ts` and `src/review/*`.
-- [ ] Move `CallableSignature` and `CallsiteArguments` into a neutral call-compatibility types module.
-- [ ] Re-run `cycles --root . ./src --sort priority --json`.
-- [ ] Run the focused review and impact call-compatibility tests.
+- [x] Extract shared review types to `src/review/types.ts`.
+- [x] Import review shared types from the neutral module in `src/review.ts` and `src/review/*`.
+- [x] Move `CallableSignature` and `CallsiteArguments` into a neutral call-compatibility types module.
+- [x] Re-run `cycles --root . ./src --sort priority --json`.
+- [x] Run the focused review and impact call-compatibility tests.
 
 ## Priority 7: Duplicate Detection Budgets
 
@@ -122,11 +122,11 @@ Why this matters:
 
 Implementation outline:
 
-- [ ] Add budget controls such as max units, max pairs, or max time for caller-selected quick modes.
-- [ ] Report partial-analysis metadata in JSON.
-- [ ] Keep exhaustive behavior available for the dedicated `duplicates` command.
-- [ ] Use bounded duplicate checks in `inspect`, `orient`, and review hints.
-- [ ] Add tests for omitted counts and deterministic partial results.
+- [x] Add budget controls such as max units, max pairs, or max time for caller-selected quick modes.
+- [x] Report partial-analysis metadata in JSON.
+- [x] Keep exhaustive behavior available for the dedicated `duplicates` command.
+- [x] Use bounded duplicate checks in `inspect`, agent duplicate context, and review/impact hints; explicit full orientation health remains exhaustive.
+- [x] Add tests for omitted counts and deterministic partial results.
 
 ## Priority 8: Small Simplicity Cleanups
 
@@ -134,8 +134,8 @@ Duplicate analysis surfaced a few operational helpers that are worth consolidati
 
 Candidates:
 
-- [ ] Consolidate dependency and reverse-dependency helpers in `src/agent-tools.ts`.
-- [ ] Share duplicate similarity hint formatting between impact and review CLI paths.
+- [x] Consolidate dependency and reverse-dependency helpers in `src/agent-tools.ts`.
+- [x] Share duplicate similarity hint formatting between impact and review CLI paths.
 - [ ] Consolidate JVM symbol index readers.
 - [ ] Review repeated SQLite write/delete helpers for a small shared helper.
 - [ ] Leave language definition query repetition alone unless the same edit must be made repeatedly.

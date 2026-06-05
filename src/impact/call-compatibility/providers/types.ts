@@ -1,5 +1,5 @@
 import type { SyntaxTreeLike } from "../../../languages/types.js";
-import type { CallableSignature, CallsiteArguments } from "../../callCompatibility.js";
+import type { CallableSignature, CallsiteArguments } from "../types.js";
 
 export interface ExtractSignatureRequest {
   languageId: string;

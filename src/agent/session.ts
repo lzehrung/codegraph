@@ -16,6 +16,10 @@ export type AgentProjectSnapshot = {
   symbolGraph: SymbolGraph;
 };
 
+export type AgentLoadProjectOptions = {
+  symbolGraph?: "eager" | "skip";
+};
+
 export type AgentSessionOptions = {
   root: string;
   discovery?: ProjectFileDiscoveryOptions;
@@ -24,16 +28,25 @@ export type AgentSessionOptions = {
 };
 
 export type AgentSession = {
-  loadProject: () => Promise<AgentProjectSnapshot>;
+  loadProject: (loadOptions?: AgentLoadProjectOptions) => Promise<AgentProjectSnapshot>;
   invalidate: () => void;
 };
 
+type AgentProjectBaseSnapshot = Omit<AgentProjectSnapshot, "symbolGraph">;
+
+const EMPTY_SYMBOL_GRAPH: SymbolGraph = {
+  nodes: new Map(),
+  edges: [],
+};
+
 export function createAgentSession(options: AgentSessionOptions): AgentSession {
-  let cached: Promise<AgentProjectSnapshot> | undefined;
+  let cachedBase: Promise<AgentProjectBaseSnapshot> | undefined;
+  let cachedSymbolGraph: Promise<SymbolGraph> | undefined;
+  let cachedEagerSnapshot: Promise<AgentProjectSnapshot> | undefined;
+  let cachedSkippedSnapshot: Promise<AgentProjectSnapshot> | undefined;
 
-  const loadProject = async (): Promise<AgentProjectSnapshot> => {
-    if (cached) return cached;
-
+  const loadBase = async (): Promise<AgentProjectBaseSnapshot> => {
+    if (cachedBase) return cachedBase;
     const loadPromise = (async () => {
       const useConfig = options.useConfig ?? true;
       const config = useConfig ? await loadCodegraphConfig(options.root) : {};
@@ -51,7 +64,6 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
         ...(discoveryOptions ? { discovery: discoveryOptions } : {}),
       });
       const fileGraph = index.graph;
-      const symbolGraph = await buildSymbolGraphDetailed(index);
 
       return {
         root: options.root,
@@ -59,21 +71,55 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
         fileLookup: createAgentFileLookup(files),
         index,
         fileGraph,
-        symbolGraph,
       };
     })();
-    cached = loadPromise;
+    cachedBase = loadPromise;
     loadPromise.catch(() => {
-      if (cached === loadPromise) cached = undefined;
+      if (cachedBase === loadPromise) cachedBase = undefined;
     });
 
     return loadPromise;
   };
 
+  const loadSymbolGraph = async (base: AgentProjectBaseSnapshot): Promise<SymbolGraph> => {
+    if (cachedSymbolGraph) return cachedSymbolGraph;
+    const loadPromise = buildSymbolGraphDetailed(base.index);
+    cachedSymbolGraph = loadPromise;
+    loadPromise.catch(() => {
+      if (cachedSymbolGraph === loadPromise) cachedSymbolGraph = undefined;
+    });
+    return loadPromise;
+  };
+
+  const loadProject = async (loadOptions?: AgentLoadProjectOptions): Promise<AgentProjectSnapshot> => {
+    if (loadOptions?.symbolGraph === "skip") {
+      cachedSkippedSnapshot ??= loadBase().then((base) => ({
+        ...base,
+        symbolGraph: EMPTY_SYMBOL_GRAPH,
+      }));
+      cachedSkippedSnapshot.catch(() => {
+        cachedSkippedSnapshot = undefined;
+      });
+      return await cachedSkippedSnapshot;
+    }
+
+    cachedEagerSnapshot ??= loadBase().then(async (base) => ({
+      ...base,
+      symbolGraph: await loadSymbolGraph(base),
+    }));
+    cachedEagerSnapshot.catch(() => {
+      cachedEagerSnapshot = undefined;
+    });
+    return await cachedEagerSnapshot;
+  };
+
   return {
     loadProject,
     invalidate: () => {
-      cached = undefined;
+      cachedBase = undefined;
+      cachedSymbolGraph = undefined;
+      cachedEagerSnapshot = undefined;
+      cachedSkippedSnapshot = undefined;
     },
   };
 }

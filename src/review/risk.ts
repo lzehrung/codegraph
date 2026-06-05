@@ -1,5 +1,5 @@
 import { supportForFile } from "../languages.js";
-import type { ReviewDiagnostics, ReviewRiskLevel, ReviewRiskSummary, ReviewTask } from "../review.js";
+import type { ReviewDiagnostics, ReviewRiskLevel, ReviewRiskSummary, ReviewTask } from "./types.js";
 
 export function computeRiskSummary(input: {
   filesChanged: number;

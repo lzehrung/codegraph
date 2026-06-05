@@ -1119,6 +1119,53 @@ describe("Go to Definition", () => {
 
       await testGoToDefinition(index, wildcardFile, 7, 5, utilsFile, 4);
     });
+
+    it("resolves receiver method calls through typed locals", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-java-method-goto-receiver-"));
+      try {
+        const serviceFile = path.join(root, "Service.java").replace(/\\/g, "/");
+        await fsp.writeFile(
+          serviceFile,
+          [
+            "class Service {",
+            "  int run(int value) { return value; }",
+            "}",
+            "class Other {",
+            "  int run(int value) { return value; }",
+            "}",
+            "class Consumer {",
+            "  int test() {",
+            "    Service service = new Service();",
+            "    return service.run(1) + new Other().run(2);",
+            "  }",
+            "}",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        const index = await createTestIndexFromFiles(root, [serviceFile]);
+        const callLine = "    return service.run(1) + new Other().run(2);";
+
+        await testGoToDefinition(
+          index,
+          serviceFile,
+          10,
+          callLine.indexOf("service.run") + "service.".length + 1,
+          serviceFile,
+          2,
+        );
+        await testGoToDefinition(
+          index,
+          serviceFile,
+          10,
+          callLine.indexOf("Other().run") + "Other().".length + 1,
+          serviceFile,
+          5,
+        );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("C#", () => {
@@ -1156,6 +1203,53 @@ describe("Go to Definition", () => {
       const utilsFile = path.join(samplePath, "Utils.cs").replace(/\\/g, "/");
       // UUtils.HelperFunction() on 'U' UUtils line 10 col 5
       await testGoToDefinition(index, mainFile, 10, 5, utilsFile, 2);
+    });
+
+    it("resolves receiver method calls through typed locals", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-method-goto-receiver-"));
+      try {
+        const serviceFile = path.join(root, "Service.cs").replace(/\\/g, "/");
+        await fsp.writeFile(
+          serviceFile,
+          [
+            "class Service {",
+            "  int Run(int value) { return value; }",
+            "}",
+            "class Other {",
+            "  int Run(int value) { return value; }",
+            "}",
+            "class Consumer {",
+            "  int Test() {",
+            "    Service service = new Service();",
+            "    return service.Run(1) + new Other().Run(2);",
+            "  }",
+            "}",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        const index = await createTestIndexFromFiles(root, [serviceFile]);
+        const callLine = "    return service.Run(1) + new Other().Run(2);";
+
+        await testGoToDefinition(
+          index,
+          serviceFile,
+          10,
+          callLine.indexOf("service.Run") + "service.".length + 1,
+          serviceFile,
+          2,
+        );
+        await testGoToDefinition(
+          index,
+          serviceFile,
+          10,
+          callLine.indexOf("Other().Run") + "Other().".length + 1,
+          serviceFile,
+          5,
+        );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
     });
   });
 
@@ -1221,6 +1315,53 @@ describe("Go to Definition", () => {
       const utilsFile = path.join(samplePath, "utils.rs").replace(/\\/g, "/");
 
       await testGoToDefinition(index, aliasFile, 9, 5, utilsFile, 1);
+    });
+
+    it("resolves receiver method calls through impl-backed locals", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-rust-method-goto-receiver-"));
+      try {
+        const serviceFile = path.join(root, "service.rs").replace(/\\/g, "/");
+        await fsp.writeFile(
+          serviceFile,
+          [
+            "struct Service;",
+            "impl Service {",
+            "  fn run(&self, value: i32) -> i32 { value }",
+            "}",
+            "struct Other;",
+            "impl Other {",
+            "  fn run(&self, value: i32) -> i32 { value }",
+            "}",
+            "fn test() -> i32 {",
+            "  let service = Service;",
+            "  service.run(1) + Other.run(2)",
+            "}",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        const index = await createTestIndexFromFiles(root, [serviceFile]);
+        const callLine = "  service.run(1) + Other.run(2)";
+
+        await testGoToDefinition(
+          index,
+          serviceFile,
+          11,
+          callLine.indexOf("service.run") + "service.".length + 1,
+          serviceFile,
+          3,
+        );
+        await testGoToDefinition(
+          index,
+          serviceFile,
+          11,
+          callLine.indexOf("Other.run") + "Other.".length + 1,
+          serviceFile,
+          7,
+        );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
     });
   });
 });

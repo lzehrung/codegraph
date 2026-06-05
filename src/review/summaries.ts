@@ -11,40 +11,17 @@ import type { CallCompatibilityHint, ChangedSymbol, FileChange, Hunk } from "../
 import type { FileId, Range } from "../types.js";
 import { mapLimit } from "../util/concurrency.js";
 import { toProjectDisplayPath } from "../util/paths.js";
-import type { ReviewDiagnostics, ReviewTimingReport } from "../review.js";
 import type { DeletedFileSnapshot } from "./deleted.js";
 import { isRiskRelevantSymbolMappingFile } from "./risk.js";
-
-export type ReviewFileSummary = {
-  file: string;
-  status: "updated" | "deleted" | "missing";
-  oldFile?: string;
-  similarityIndex?: number;
-  symbols: ReviewSymbolSummary[];
-};
-
-type ReviewSymbolCallsite = {
-  file: string;
-  range: Range;
-};
-
-export type ReviewSymbolSummary = {
-  name: string;
-  kind: string;
-  handle: string;
-  exported: boolean;
-  callCompatibility?: CallCompatibilityHint[];
-  definitionSnippet?: string;
-  diffSnippets?: string[];
-  callsites?: ReviewSymbolCallsite[];
-};
-
-export type ReviewChangedFileSummaries = {
-  summaries: ReviewFileSummary[];
-  changedSymbolIds: string[];
-  exportedChangedCount: number;
-  riskRelevantParseFailures: number;
-};
+import type {
+  ReviewChangedFileSummaries,
+  ReviewDiagnostics,
+  ReviewDiffMetadata,
+  ReviewFileSummary,
+  ReviewSymbolCallsite,
+  ReviewSymbolSummary,
+  ReviewTimingReport,
+} from "./types.js";
 
 type ReviewableExportEntry = Exclude<ExportEntry, { type: "local" }>;
 
@@ -121,10 +98,7 @@ function rangeSnippet(source: string, range: Range): string {
   return "";
 }
 
-function reviewFileDiffMetadata(
-  projectRoot: string,
-  diffChange: FileChange | undefined,
-): Pick<ReviewFileSummary, "oldFile" | "similarityIndex"> {
+function reviewFileDiffMetadata(projectRoot: string, diffChange: FileChange | undefined): ReviewDiffMetadata {
   if (!diffChange) return {};
   return {
     ...(diffChange.oldPath ? { oldFile: relativePath(projectRoot, diffChange.oldPath) } : {}),

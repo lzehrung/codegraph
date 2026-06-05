@@ -4,8 +4,8 @@ import { type ProjectIndex } from "../indexer/types.js";
 import { REVIEW_DEFAULT_CANDIDATE_TEST_LIMIT } from "../presentation/bounds.js";
 import type { FileId } from "../types.js";
 import { toProjectDisplayPath } from "../util/paths.js";
-import type { ReviewOptions, ReviewTimingReport } from "../review.js";
 import { listDirectDeletedFileTestImporters } from "./deleted.js";
+import type { ReviewOptions, ReviewTimingReport } from "./types.js";
 
 function relativePath(root: string, file: string): string {
   return toProjectDisplayPath(root, file);
