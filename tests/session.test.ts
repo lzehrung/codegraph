@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import type { ICodeReviewSession } from "../src/index.js";
+import type { BuildOptions } from "../src/indexer/types.js";
 import { CodeReviewSession, SessionManager, createCodeReviewSession } from "../src/session.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
 import path from "node:path";
@@ -8,6 +9,29 @@ import fsp from "node:fs/promises";
 import { resolveFilePathFromRoot } from "../src/util.js";
 
 const sampleRoot = path.resolve("tests/samples/typescript");
+let sessionCacheDir: string | undefined;
+
+function sampleBuildOptions(overrides: BuildOptions = {}): BuildOptions {
+  if (!sessionCacheDir) {
+    throw new Error("Expected session cache directory");
+  }
+  return {
+    cache: "memory",
+    useBloomFilters: true,
+    cacheDir: sessionCacheDir,
+    ...overrides,
+  };
+}
+
+beforeAll(async () => {
+  sessionCacheDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-cache-"));
+});
+
+afterAll(async () => {
+  if (sessionCacheDir) {
+    await fsp.rm(sessionCacheDir, { recursive: true, force: true });
+  }
+});
 
 describe("CodeReviewSession", () => {
   let sharedReadySession: CodeReviewSession | undefined;
@@ -15,7 +39,7 @@ describe("CodeReviewSession", () => {
   beforeAll(async () => {
     sharedReadySession = await createCodeReviewSession({
       root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
+      buildOptions: sampleBuildOptions(),
     });
   });
 
@@ -33,7 +57,7 @@ describe("CodeReviewSession", () => {
   test("should initialize successfully", async () => {
     const session = new CodeReviewSession({
       root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
+      buildOptions: sampleBuildOptions(),
     });
 
     expect(session.getStatus()).toBe("initializing");
@@ -176,7 +200,7 @@ index 1234567..abcdef0 100644
   test("should refresh the index", async () => {
     const session = await createCodeReviewSession({
       root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
+      buildOptions: sampleBuildOptions(),
     });
 
     expect(session.isReady()).toBe(true);
@@ -189,7 +213,7 @@ index 1234567..abcdef0 100644
   test("should preserve the last ready index when refresh fails", async () => {
     const session = await createCodeReviewSession({
       root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
+      buildOptions: sampleBuildOptions(),
     });
 
     const buildSpy = vi
@@ -211,7 +235,7 @@ index 1234567..abcdef0 100644
   test("should expire after timeout", async () => {
     const session = new CodeReviewSession({
       root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
+      buildOptions: sampleBuildOptions(),
       timeout: 100, // 100ms timeout for testing
     });
 
@@ -228,7 +252,7 @@ index 1234567..abcdef0 100644
   test("should re-initialize after expiration", async () => {
     const session = new CodeReviewSession({
       root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
+      buildOptions: sampleBuildOptions(),
       timeout: 100,
     });
 
@@ -245,7 +269,7 @@ index 1234567..abcdef0 100644
   test("should dispose of session", async () => {
     const session = await createCodeReviewSession({
       root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
+      buildOptions: sampleBuildOptions(),
     });
 
     expect(session.isReady()).toBe(true);
@@ -271,7 +295,7 @@ index 1234567..abcdef0 100644
     try {
       const session = new CodeReviewSession({
         root: sampleRoot,
-        buildOptions: { cache: "memory", useBloomFilters: true },
+        buildOptions: sampleBuildOptions(),
       });
 
       const initPromise = session.init();
@@ -289,7 +313,7 @@ index 1234567..abcdef0 100644
   test("should keep a disposed session expired when refresh completes later", async () => {
     const session = await createCodeReviewSession({
       root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
+      buildOptions: sampleBuildOptions(),
     });
     const originalBuild = indexerBuild.buildProjectIndexIncremental;
     let releaseBuild: (() => void) | null = null;
@@ -317,7 +341,7 @@ index 1234567..abcdef0 100644
   test("should throw error when used after expiration", async () => {
     const session = await createCodeReviewSession({
       root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
+      buildOptions: sampleBuildOptions(),
       timeout: 100,
     });
 
@@ -358,7 +382,7 @@ describe("SessionManager", () => {
   test("should create and retrieve sessions", async () => {
     const session = await manager.getOrCreateSession("test-session", {
       root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
+      buildOptions: sampleBuildOptions(),
     });
 
     expect(session).toBeDefined();
@@ -371,12 +395,12 @@ describe("SessionManager", () => {
   test("should reuse existing ready sessions", async () => {
     const session1 = await manager.getOrCreateSession("test-session", {
       root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
+      buildOptions: sampleBuildOptions(),
     });
 
     const session2 = await manager.getOrCreateSession("test-session", {
       root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
+      buildOptions: sampleBuildOptions(),
     });
 
     expect(session1).toBe(session2);
@@ -389,11 +413,11 @@ describe("SessionManager", () => {
       const [sessionA, sessionB] = await Promise.all([
         manager.getOrCreateSession("shared", {
           root: sampleRoot,
-          buildOptions: { cache: "memory", useBloomFilters: true },
+          buildOptions: sampleBuildOptions(),
         }),
         manager.getOrCreateSession("shared", {
           root: sampleRoot,
-          buildOptions: { cache: "memory", useBloomFilters: true },
+          buildOptions: sampleBuildOptions(),
         }),
       ]);
 
@@ -420,7 +444,7 @@ describe("SessionManager", () => {
     try {
       const pendingSession = manager.getOrCreateSession("pending", {
         root: sampleRoot,
-        buildOptions: { cache: "memory", useBloomFilters: true },
+        buildOptions: sampleBuildOptions(),
       });
 
       await Promise.resolve();
@@ -449,14 +473,14 @@ describe("SessionManager", () => {
     try {
       const firstSession = manager.getOrCreateSession("pending", {
         root: sampleRoot,
-        buildOptions: { cache: "memory", useBloomFilters: true },
+        buildOptions: sampleBuildOptions(),
       });
 
       await Promise.resolve();
       manager.disposeSession("pending");
       const secondSession = manager.getOrCreateSession("pending", {
         root: sampleRoot,
-        buildOptions: { cache: "memory", useBloomFilters: true },
+        buildOptions: sampleBuildOptions(),
       });
       releaseBuild?.();
 
@@ -485,14 +509,14 @@ describe("SessionManager", () => {
     try {
       const firstSession = manager.getOrCreateSession("pending", {
         root: sampleRoot,
-        buildOptions: { cache: "memory", useBloomFilters: true },
+        buildOptions: sampleBuildOptions(),
       });
 
       await Promise.resolve();
       manager.disposeAll();
       const secondSession = manager.getOrCreateSession("pending", {
         root: sampleRoot,
-        buildOptions: { cache: "memory", useBloomFilters: true },
+        buildOptions: sampleBuildOptions(),
       });
       releaseBuild?.();
 
@@ -524,7 +548,7 @@ describe("SessionManager", () => {
   test("should remove expired sessions when reinitialization fails", async () => {
     const session = await manager.getOrCreateSession("expiring", {
       root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
+      buildOptions: sampleBuildOptions(),
       timeout: 100,
     });
 
@@ -540,7 +564,7 @@ describe("SessionManager", () => {
       await expect(
         manager.getOrCreateSession("expiring", {
           root: sampleRoot,
-          buildOptions: { cache: "memory", useBloomFilters: true },
+          buildOptions: sampleBuildOptions(),
           timeout: 100,
         }),
       ).rejects.toThrow("synthetic reinit failure");
@@ -579,13 +603,13 @@ describe("SessionManager", () => {
   test("should reject reusing a session id for different build options", async () => {
     await manager.getOrCreateSession("shared", {
       root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
+      buildOptions: sampleBuildOptions(),
     });
 
     await expect(
       manager.getOrCreateSession("shared", {
         root: sampleRoot,
-        buildOptions: { cache: "disk", useBloomFilters: true },
+        buildOptions: sampleBuildOptions({ cache: "disk" }),
       }),
     ).rejects.toThrow(/different configuration/);
   });
@@ -593,19 +617,17 @@ describe("SessionManager", () => {
   test("should reject reusing a session id when graph options drift", async () => {
     await manager.getOrCreateSession("shared", {
       root: sampleRoot,
-      buildOptions: {
-        cache: "memory",
+      buildOptions: sampleBuildOptions({
         graph: { fast: true, logLevel: "warn" },
-      },
+      }),
     });
 
     await expect(
       manager.getOrCreateSession("shared", {
         root: sampleRoot,
-        buildOptions: {
-          cache: "memory",
+        buildOptions: sampleBuildOptions({
           graph: { fast: true, logLevel: "debug" },
-        },
+        }),
       }),
     ).rejects.toThrow(/different configuration/);
   });
@@ -616,19 +638,17 @@ describe("SessionManager", () => {
     try {
       await manager.getOrCreateSession("shared", {
         root: sampleRoot,
-        buildOptions: {
-          cache: "memory",
+        buildOptions: sampleBuildOptions({
           discovery: { useGitignore: true, gitignoreRoot: sampleRoot },
-        },
+        }),
       });
 
       await expect(
         manager.getOrCreateSession("shared", {
           root: sampleRoot,
-          buildOptions: {
-            cache: "memory",
+          buildOptions: sampleBuildOptions({
             discovery: { useGitignore: true, gitignoreRoot },
-          },
+          }),
         }),
       ).rejects.toThrow(/different configuration/);
     } finally {
@@ -639,12 +659,12 @@ describe("SessionManager", () => {
   test("should manage multiple sessions", async () => {
     const session1 = await manager.getOrCreateSession("session-1", {
       root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
+      buildOptions: sampleBuildOptions(),
     });
 
     const session2 = await manager.getOrCreateSession("session-2", {
       root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
+      buildOptions: sampleBuildOptions(),
     });
 
     expect(session1).not.toBe(session2);
@@ -658,12 +678,12 @@ describe("SessionManager", () => {
   test("should dispose of individual sessions", async () => {
     await manager.getOrCreateSession("session-1", {
       root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
+      buildOptions: sampleBuildOptions(),
     });
 
     await manager.getOrCreateSession("session-2", {
       root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
+      buildOptions: sampleBuildOptions(),
     });
 
     manager.disposeSession("session-1");
@@ -675,12 +695,12 @@ describe("SessionManager", () => {
   test("should dispose of all sessions", async () => {
     await manager.getOrCreateSession("session-1", {
       root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
+      buildOptions: sampleBuildOptions(),
     });
 
     await manager.getOrCreateSession("session-2", {
       root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
+      buildOptions: sampleBuildOptions(),
     });
 
     manager.disposeAll();
@@ -691,13 +711,13 @@ describe("SessionManager", () => {
   test("should cleanup expired sessions", async () => {
     await manager.getOrCreateSession("session-1", {
       root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
+      buildOptions: sampleBuildOptions(),
       timeout: 100, // 100ms timeout
     });
 
     await manager.getOrCreateSession("session-2", {
       root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
+      buildOptions: sampleBuildOptions(),
       timeout: 10000, // 10s timeout
     });
 
@@ -713,12 +733,12 @@ describe("SessionManager", () => {
   test("should get statistics for all sessions", async () => {
     await manager.getOrCreateSession("session-1", {
       root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
+      buildOptions: sampleBuildOptions(),
     });
 
     await manager.getOrCreateSession("session-2", {
       root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
+      buildOptions: sampleBuildOptions(),
     });
 
     const allStats = manager.getAllStats();
@@ -779,7 +799,7 @@ describe("SessionManager", () => {
           id: "warm",
           options: {
             root: sampleRoot,
-            buildOptions: { cache: "memory", useBloomFilters: true },
+            buildOptions: sampleBuildOptions(),
           },
         },
       ]);
@@ -813,13 +833,13 @@ describe("SessionManager", () => {
           id: "shared",
           options: {
             root: sampleRoot,
-            buildOptions: { cache: "memory", useBloomFilters: true },
+            buildOptions: sampleBuildOptions(),
           },
         },
       ]);
       const sessionPromise = manager.getOrCreateSession("shared", {
         root: sampleRoot,
-        buildOptions: { cache: "memory", useBloomFilters: true },
+        buildOptions: sampleBuildOptions(),
       });
 
       await Promise.resolve();
@@ -915,7 +935,7 @@ describe("SessionManager", () => {
   test("should keep matching warmup sessions instead of replacing them", async () => {
     const existing = await manager.getOrCreateSession("shared", {
       root: sampleRoot,
-      buildOptions: { cache: "memory", useBloomFilters: true },
+      buildOptions: sampleBuildOptions(),
     });
 
     await manager.warmup([
@@ -923,7 +943,7 @@ describe("SessionManager", () => {
         id: "shared",
         options: {
           root: sampleRoot,
-          buildOptions: { cache: "memory", useBloomFilters: true },
+          buildOptions: sampleBuildOptions(),
         },
       },
     ]);
