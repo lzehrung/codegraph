@@ -48,7 +48,7 @@ export async function collectImportsForFile(
 ): Promise<ImportBinding[]> {
   let source = opts?.source;
   let sup = opts?.sup;
-  let lang = opts?.lang;
+  const lang = opts?.lang;
 
   if (!source || !sup) {
     const prep = await prepareSourceInput(file, source !== undefined ? { source } : undefined);

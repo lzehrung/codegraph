@@ -62,7 +62,7 @@ export async function collectChangedSymbols(
   );
 
   changedByFile.sort((a, b) => a.idx - b.idx);
-  let changedSymbols: ChangedSymbol[] = [];
+  const changedSymbols: ChangedSymbol[] = [];
   const filesWithSymbols = new Set<string>();
   for (const entry of changedByFile) {
     changedSymbols.push(...applyChangedFileSymbolMapping(entry, options, diagnostics, filesWithSymbols));

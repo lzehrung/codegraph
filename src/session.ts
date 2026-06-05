@@ -246,8 +246,8 @@ export class CodeReviewSession implements ICodeReviewSession {
     }
 
     const lifecycleVersion = this.lifecycleVersion;
-    let initPromise!: Promise<void>;
-    initPromise = (async () => {
+    const initState: { promise: Promise<void> | null } = { promise: null };
+    const initPromise = (async () => {
       const previousStatus = this.status;
       try {
         this.status = "initializing";
@@ -260,11 +260,12 @@ export class CodeReviewSession implements ICodeReviewSession {
         }
         throw error;
       } finally {
-        if (this.initPromise === initPromise) {
+        if (this.initPromise === initState.promise) {
           this.initPromise = null;
         }
       }
     })();
+    initState.promise = initPromise;
     this.initPromise = initPromise;
 
     return this.initPromise;

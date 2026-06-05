@@ -1,7 +1,7 @@
 node_modules/
 *.env
 dist/
-coverage/
+/coverage/
 .codegraph-cache/
 codegraph.json
 target/

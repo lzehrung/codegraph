@@ -4,7 +4,13 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["dist/**", "node_modules/**", "packages/codegraph-native/**", "tests/samples/**"],
+    ignores: [
+      "dist/**",
+      "node_modules/**",
+      "packages/codegraph-native/**",
+      "tests/samples/**",
+      "tests/languages/samples/**",
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
@@ -32,7 +38,7 @@ export default tseslint.config(
       ],
       "no-nested-ternary": "error",
       "no-useless-escape": "off",
-      "prefer-const": "off",
+      "prefer-const": "error",
       "@typescript-eslint/no-explicit-any": "error",
       "@typescript-eslint/no-base-to-string": "off",
       "@typescript-eslint/no-duplicate-type-constituents": "off",

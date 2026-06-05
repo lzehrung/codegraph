@@ -254,9 +254,12 @@ describe("package metadata", () => {
   it("keeps lint as a non-mutating verification gate and exposes lint:fix separately", () => {
     const rootPackage = readJson("package.json");
     const scripts = readStringRecord(rootPackage.scripts);
+    const eslintConfig = readText("eslint.config.js");
 
     expect(scripts.lint).toBe('npx eslint "src/**/*.ts" "tests/**/*.test.ts"');
     expect(scripts["lint:fix"]).toBe('npx eslint "src/**/*.ts" "tests/**/*.test.ts" --fix');
+    expect(eslintConfig).toContain('"tests/languages/samples/**"');
+    expect(eslintConfig).toContain('"prefer-const": "error"');
   });
 
   it("keeps implementation modules from importing through the public barrel", () => {

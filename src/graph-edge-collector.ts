@@ -93,9 +93,9 @@ export async function collectEdgesForFile(
 
   const parsed = opts.parsed;
   let sup = parsed?.sup;
-  let lang = parsed?.lang;
+  const lang = parsed?.lang;
   let src = parsed?.source;
-  let nativeQueries = parsed?.nativeQueries ?? null;
+  const nativeQueries = parsed?.nativeQueries ?? null;
   let compactNativeImports: CompactQueryResults | null = null;
   let graphOnlyLanguage = sup ? isGraphOnlyLanguage(sup.id) : false;
   if (sup && graphOnlyLanguage) {

@@ -15,7 +15,7 @@ function normalizeKotlinNativeQuery(kind: string, query: string): string {
       (import (qualified_identifier) @from) @stmt
     `;
   }
-  let normalized = query
+  const normalized = query
     .replace(/\bimport_header\b/g, "import")
     .replace(/\bsimple_identifier\b/g, "identifier")
     .replace(/\btype_identifier\b/g, "identifier");

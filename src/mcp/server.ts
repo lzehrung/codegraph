@@ -530,8 +530,7 @@ async function handleMcpHttpPost(
 
   const protocolServer = createCodegraphMcpProtocolServer(handlers);
   let initializedSessionId: string | undefined;
-  let transport: StreamableHTTPServerTransport | undefined;
-  transport = new StreamableHTTPServerTransport({
+  const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
     enableJsonResponse: true,
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (newSessionId) => {

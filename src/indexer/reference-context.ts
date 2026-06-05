@@ -33,7 +33,7 @@ export function extractLineContextWithMaxTotal(source: string, line: number, max
   const safeMaxLines = Math.max(1, maxLines);
   const focusIndex = Math.max(0, line - 1);
   let startLine = Math.max(0, focusIndex - Math.floor((safeMaxLines - 1) / 2));
-  let endLine = Math.min(allLines.length, startLine + safeMaxLines);
+  const endLine = Math.min(allLines.length, startLine + safeMaxLines);
 
   if (endLine - startLine < safeMaxLines) {
     startLine = Math.max(0, endLine - safeMaxLines);
