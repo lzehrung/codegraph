@@ -235,7 +235,9 @@ describe("graph reports", () => {
       path.join(projectRoot, "Cargo.toml"),
       [
         "[dependencies]",
+        'napi = "3"',
         'serde-json = "1"',
+        'tree-sitter = "0.25"',
         "[dev-dependencies]",
         'rstest = "0.24"',
         "[build-dependencies]",
@@ -358,6 +360,16 @@ describe("graph reports", () => {
         { from: phpFile, to: { type: "external" as const, name: "vendor/pkg" }, raw: "vendor/pkg" },
         { from: phpFile, to: { type: "external" as const, name: "vendor/dev-tool" }, raw: "vendor/dev-tool" },
         { from: rustFile, to: { type: "external" as const, name: "serde_json" }, raw: "serde_json" },
+        {
+          from: rustFile,
+          to: { type: "external" as const, name: "napi::bindgen_prelude" },
+          raw: "napi::bindgen_prelude",
+        },
+        {
+          from: rustFile,
+          to: { type: "external" as const, name: "tree_sitter::{Language, Parser, Tree}" },
+          raw: "tree_sitter::{Language, Parser, Tree}",
+        },
         { from: rustFile, to: { type: "external" as const, name: "rstest" }, raw: "rstest" },
         { from: rustFile, to: { type: "external" as const, name: "cc" }, raw: "cc" },
         {

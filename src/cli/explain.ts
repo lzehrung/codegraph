@@ -26,6 +26,7 @@ export async function handleExplainCommand(context: ExplainCommandContext): Prom
   const response = await explainCodegraphTarget({
     root: context.root,
     target,
+    ...(context.buildOptions ? { buildOptions: context.buildOptions } : {}),
     includeChangedContext: context.hasFlag("--changed-context"),
     ...(base !== undefined ? { base } : {}),
     ...(head !== undefined ? { head } : {}),

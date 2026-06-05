@@ -1,5 +1,5 @@
-import { buildProjectIndexFromFiles } from "../indexer/build-index.js";
-import type { ProjectIndex } from "../indexer/types.js";
+import { buildProjectIndexIncremental } from "../indexer/build-index.js";
+import type { BuildOptions, ProjectIndex } from "../indexer/types.js";
 import { buildSymbolGraphDetailed } from "../graphs/symbol-graph-detailed.js";
 import { type SymbolGraph } from "../graphs/symbol-graph.js";
 import type { Graph } from "../types.js";
@@ -19,6 +19,7 @@ export type AgentProjectSnapshot = {
 export type AgentSessionOptions = {
   root: string;
   discovery?: ProjectFileDiscoveryOptions;
+  buildOptions?: BuildOptions;
   useConfig?: boolean;
 };
 
@@ -36,13 +37,17 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     const loadPromise = (async () => {
       const useConfig = options.useConfig ?? true;
       const config = useConfig ? await loadCodegraphConfig(options.root) : {};
-      const discovery = mergeDiscoveryOptions(config.discovery, options.discovery);
+      const optionDiscovery = mergeDiscoveryOptions(options.buildOptions?.discovery, options.discovery);
+      const discovery = mergeDiscoveryOptions(config.discovery, optionDiscovery);
       const discoveryOptions = hasDiscoveryOptions(discovery)
         ? { ...discovery, globRoot: discovery.globRoot ?? options.root }
         : undefined;
       const files = await listProjectFiles(options.root, undefined, discoveryOptions);
-      const index = await buildProjectIndexFromFiles(options.root, files, {
-        keepParsed: true,
+      const index = await buildProjectIndexIncremental(options.root, {
+        ...options.buildOptions,
+        cache: options.buildOptions?.cache ?? "disk",
+        keepParsed: options.buildOptions?.keepParsed ?? true,
+        files,
         ...(discoveryOptions ? { discovery: discoveryOptions } : {}),
       });
       const fileGraph = index.graph;

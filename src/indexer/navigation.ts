@@ -1,7 +1,7 @@
 import { type LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
-import { resolveMemberAccessDefinition } from "./navigation-goto.js";
+import { resolveMemberAccessDefinition, supportsReceiverMemberResolution } from "./navigation-goto.js";
 import {
   findClosestBinding,
   findDeclarationNameNode,
@@ -108,6 +108,9 @@ export async function goToDefinition(index: ProjectIndex, req: GoToRequest): Pro
     if (memberAccessResult) {
       return memberAccessResult;
     }
+    if (isUnresolvedReceiverMemberProperty(sup, node)) {
+      return { status: "not_found", reason: "No matching receiver member definition" };
+    }
   }
 
   if (sup.id === "php" && phpQualifiedReference && index.projectRoot) {
@@ -169,6 +172,15 @@ export async function goToDefinition(index: ProjectIndex, req: GoToRequest): Pro
     status: "not_found",
     reason: "No matching local or imported definition",
   };
+}
+
+function isUnresolvedReceiverMemberProperty(sup: LanguageSupport, node: SyntaxNodeLike): boolean {
+  const parent = node.parent;
+  if (!parent || !supportsReceiverMemberResolution(sup.id) || !isMemberAccessNode(sup, parent)) {
+    return false;
+  }
+  const { property } = getMemberAccessParts(sup, parent);
+  return !!property && node.id === property.id;
 }
 
 export async function findReferences(
@@ -450,20 +462,17 @@ function shouldScanVerifiedReferences(
   if (def.kind !== SymbolKind.Function || phpQualifiedNames.length) {
     return false;
   }
-  if (!isJsTsLanguage(parsedContext.sup.id)) {
+  if (!supportsReceiverMemberResolution(parsedContext.sup.id)) {
     return false;
   }
-  return isJsTsMethodDefinition(def, parsedContext);
+  return isReceiverMethodDefinition(def, parsedContext);
 }
 
 function shouldUseLocalNameAsExportFallback(def: SymbolDef, parsedContext: ParsedFileContext): boolean {
-  if (!isJsTsLanguage(parsedContext.sup.id)) {
-    return true;
-  }
-  return !isJsTsMethodDefinition(def, parsedContext);
+  return !isReceiverMethodDefinition(def, parsedContext);
 }
 
-function isJsTsMethodDefinition(def: SymbolDef, parsedContext: ParsedFileContext): boolean {
+function isReceiverMethodDefinition(def: SymbolDef, parsedContext: ParsedFileContext): boolean {
   if (def.kind !== SymbolKind.Function) {
     return false;
   }
@@ -473,12 +482,21 @@ function isJsTsMethodDefinition(def: SymbolDef, parsedContext: ParsedFileContext
     column: start.column - 1,
   };
   let current: SyntaxNodeLike | null = parsedContext.tree.rootNode.descendantForPosition(position, position);
+  let sawRustImplFunction = false;
   while (current) {
     if (
       current.type === "method_definition" ||
       current.type === "method_signature" ||
-      current.type === "abstract_method_signature"
+      current.type === "abstract_method_signature" ||
+      current.type === "method_declaration" ||
+      current.type === "method"
     ) {
+      return true;
+    }
+    if (parsedContext.sup.id === "rust" && current.type === "function_item") {
+      sawRustImplFunction = true;
+    }
+    if (sawRustImplFunction && current.type === "impl_item") {
       return true;
     }
     if (current.type === "function_declaration" || current.type === "program") {

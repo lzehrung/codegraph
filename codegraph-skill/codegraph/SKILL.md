@@ -77,7 +77,7 @@ Fall back to CLI commands when MCP tools are unavailable.
 - Use `--json`, MCP tools, or library APIs when the next step needs exact handles, ranges, schema fields, or filtering.
 - Use `orient --pretty` as a compact first-turn reading surface.
 - Use `orient --json` when follow-up tools need stable packet handles, recommended next commands, budgeted health counts, and omission counts.
-- Use `--budget medium` or `--budget large` when orientation health counts matter.
+- Use `--budget medium` or `--budget large` when cycle and unresolved-import orientation health counts matter. Add `--health full` only when exhaustive duplicate health counts are needed.
 
 ## Search, Packets, and Artifacts
 
@@ -92,7 +92,7 @@ Fall back to CLI commands when MCP tools are unavailable.
 
 Numeric options such as `--limit`, `--threads`, `--depth`, `--max-refs`, and token bounds must be integers in their documented ranges; invalid numeric values fail instead of being silently clamped or ignored.
 
-Project scans read `codegraph.config.json` from `--root` when present. `--root` is the project boundary for config lookup, manifests, path confinement, output paths, and cache/manifest storage. Positional paths after the command are include roots inside that project; for example, `codegraph inspect --root . ./src` scans `src` while keeping `.` as the project root. Config `discovery.includeGlobs` and `discovery.ignoreGlobs` are project-root-relative, even for child include-root scans. Use `discovery.ignoreGlobs` for durable repo-local excludes such as large fixtures, generated output, or vendored trees; CLI `--include-glob` and `--ignore-glob` remain additive one-off filters relative to each active scan root. `--no-gitignore` opts out of gitignore filtering for a single command. Cache and manifest reuse is scoped to `--root` and compatible config/build/graph options; child include-root scans can reuse project-root entries while command summaries and follow-up commands stay scoped to the selected include roots.
+Project scans read `codegraph.config.json` from `--root` when present. `--root` is the project boundary for config lookup, manifests, path confinement, output paths, and cache/manifest storage. Positional paths after the command are include roots inside that project; for example, `codegraph inspect --root . ./src` scans `src` while keeping `.` as the project root. Config `discovery.includeGlobs` and `discovery.ignoreGlobs` are project-root-relative, even for child include-root scans. Use `discovery.ignoreGlobs` for durable repo-local excludes such as large fixtures, generated output, or vendored trees; CLI `--include-glob` and `--ignore-glob` remain additive one-off filters relative to each active scan root. `--no-gitignore` opts out of gitignore filtering for a single command. Agent commands use incremental indexing with disk cache by default and honor shared index flags such as `--cache`, `--threads`, `--native`, and `--workers`. Cache and manifest reuse is scoped to `--root` and compatible config/build/graph options; child include-root scans can reuse project-root entries while command summaries and follow-up commands stay scoped to the selected include roots.
 
 ## Tool purpose
 
@@ -177,7 +177,7 @@ Runtime controls:
 - Narrow scan scope and exclude generated/tests while preserving `.gitignore`:
   `codegraph graph --root . ./src --include-glob "**/*.ts" --ignore-glob "**/*.spec.ts" --json`
 - Durable repo-local scan excludes:
-  add `codegraph.config.json` with `{ "discovery": { "ignoreGlobs": ["tests/samples/**"] } }`
+  add `codegraph.config.json` with `{ "discovery": { "ignoreGlobs": ["tests/samples/**", "tests/languages/samples/**"] } }`
 - Disable `.gitignore` filtering when ignored/generated files are intentionally in scope:
   `codegraph graph --root . ./src --no-gitignore --json`
 - Mermaid output:

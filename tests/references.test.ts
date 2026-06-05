@@ -352,6 +352,117 @@ describe("Find References", () => {
     });
   });
 
+  describe("cross-language method references", () => {
+    const cases: Array<{
+      label: string;
+      fileName: string;
+      source: string;
+      definition: { line: number; column: number };
+      expectedLines: number[];
+      rejectedLines: number[];
+    }> = [
+      {
+        label: "Java",
+        fileName: "Service.java",
+        source: [
+          "class Service {",
+          "  int run(int value) { return value; }",
+          "}",
+          "class Other {",
+          "  int run(int value) { return value; }",
+          "}",
+          "class Consumer {",
+          "  int test() {",
+          "    Service service = new Service();",
+          "    return service.run(1) + new Other().run(2);",
+          "  }",
+          "}",
+          "",
+        ].join("\n"),
+        definition: { line: 2, column: 7 },
+        expectedLines: [2, 10],
+        rejectedLines: [5],
+      },
+      {
+        label: "C#",
+        fileName: "Service.cs",
+        source: [
+          "class Service {",
+          "  int Run(int value) { return value; }",
+          "}",
+          "class Other {",
+          "  int Run(int value) { return value; }",
+          "}",
+          "class Consumer {",
+          "  int Test() {",
+          "    Service service = new Service();",
+          "    return service.Run(1) + new Other().Run(2);",
+          "  }",
+          "}",
+          "",
+        ].join("\n"),
+        definition: { line: 2, column: 7 },
+        expectedLines: [2, 10],
+        rejectedLines: [5],
+      },
+      {
+        label: "Rust",
+        fileName: "service.rs",
+        source: [
+          "struct Service;",
+          "impl Service {",
+          "  fn run(&self, value: i32) -> i32 { value }",
+          "}",
+          "struct Other;",
+          "impl Other {",
+          "  fn run(&self, value: i32) -> i32 { value }",
+          "}",
+          "fn test() -> i32 {",
+          "  let service = Service;",
+          "  service.run(1) + Other.run(2)",
+          "}",
+          "",
+        ].join("\n"),
+        definition: { line: 3, column: 6 },
+        expectedLines: [3, 11],
+        rejectedLines: [7],
+      },
+    ];
+
+    for (const testCase of cases) {
+      it(`finds ${testCase.label} method references only through verified receivers`, async () => {
+        const root = await fsp.mkdtemp(path.join(os.tmpdir(), `cg-${testCase.label.toLowerCase()}-method-refs-`));
+        try {
+          const file = path.join(root, testCase.fileName).replace(/\\/g, "/");
+          await fsp.writeFile(file, testCase.source, "utf8");
+          const index = await createTestIndexFromFiles(root, [file]);
+
+          const result = await testFindReferences(
+            index,
+            file,
+            testCase.definition.line,
+            testCase.definition.column,
+            testCase.expectedLines.length,
+          );
+
+          expect(result.status).toBe("ok");
+          for (const line of testCase.expectedLines) {
+            expectReferenceAt(result, file, line);
+          }
+          if (result.status === "ok") {
+            for (const line of testCase.rejectedLines) {
+              expect(
+                result.references.some((reference) => reference.file === file && reference.range.start.line === line),
+              ).toBe(false);
+            }
+          }
+        } finally {
+          await fsp.rm(root, { recursive: true, force: true });
+        }
+      });
+    }
+  });
+
   describe("TypeScript", () => {
     it("should find all references to exported function", async () => {
       const index = await createTestIndex("typescript");

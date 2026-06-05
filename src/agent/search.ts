@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import { LANG_CONFIGS } from "../bootstrap/treeSitterLanguages.js";
 import { supportForFile } from "../languages.js";
 import { chunkFile } from "../chunking/chunkFile.js";
-import type { SymbolDef } from "../indexer/types.js";
+import type { BuildOptions, SymbolDef } from "../indexer/types.js";
 import type { Range } from "../types.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
 import { type SymbolNode } from "../graphs/symbol-graph.js";
@@ -44,6 +44,7 @@ export type AgentSearchRequest = {
   root: string;
   query: string;
   mode?: AgentSearchMode;
+  buildOptions?: BuildOptions;
   from?: string;
   depth?: number;
   limit?: number;
@@ -148,7 +149,10 @@ const CHUNK_LANGUAGE_ALIASES: Record<string, string> = {
 };
 
 export async function searchCodegraph(request: AgentSearchRequest): Promise<AgentSearchResponse> {
-  const session = createAgentSession({ root: request.root });
+  const session = createAgentSession({
+    root: request.root,
+    ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
+  });
   return await searchCodegraphWithSession(session, request);
 }
 

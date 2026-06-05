@@ -230,6 +230,7 @@ export { orientCodegraph } from "./agent/orient.js";
 export type {
   AgentModuleSummary,
   AgentOrientBudget,
+  AgentOrientHealthMode,
   AgentOrientRequest,
   AgentOrientResponse,
   AgentPacketCommand,

@@ -90,7 +90,7 @@ if (handle) {
 ```
 
 Use orientation before broad search when a caller needs repo context but has no query yet. Packet handles cover files, symbols, chunks, SQL objects, graph neighborhoods, and review ranges.
-Small orientation budgets skip deeper health analysis and set health fields to `null` while recording the omission. Use `budget: "medium"` or `budget: "large"` when health counts are needed.
+Small orientation budgets default to `health: "skip"` and set health fields to `null` while recording the omission. Medium and large default to `health: "summary"`, which counts cycles and unresolved imports while omitting duplicate health. Use `health: "full"` when exhaustive duplicate counts are needed.
 
 ## Agent search
 
@@ -144,7 +144,7 @@ console.log(artifact.manifestPath, artifact.artifacts);
 
 The `graph.json` artifact is self-describing (`schemaVersion: 1`, `format: "codegraph.graph-json"`) and uses project-relative file paths and portable symbol handles. `questions.json` uses the same stable handles for follow-up commands. With `force: true`, stale known Codegraph artifact files are removed before the selected outputs are written; unrelated files in the directory are preserved.
 
-`createAgentSession()` keeps one in-process project snapshot warm for repeated orient, search, explain, packet, artifact, and MCP calls. Use `buildCodegraphArtifactWithSession()` when a host already has a session and wants SQLite, graph JSON, report, questions, and manifest outputs from the same snapshot. `createCodegraphMcpHandlers()` exposes the same primitives without starting stdio, which is useful for tests or host applications:
+`createAgentSession()` keeps one in-process project snapshot warm for repeated orient, search, explain, packet, artifact, and MCP calls. It uses incremental indexing with disk cache by default, and accepts `buildOptions` when callers need explicit cache, thread, native runtime, worker, graph, or discovery settings. Use `buildCodegraphArtifactWithSession()` when a host already has a session and wants SQLite, graph JSON, report, questions, and manifest outputs from the same snapshot. `createCodegraphMcpHandlers()` exposes the same primitives without starting stdio, which is useful for tests or host applications:
 
 ```ts
 import { createCodegraphMcpHandlers } from "@lzehrung/codegraph";
@@ -358,7 +358,7 @@ const tsFilesOnly = await listProjectFiles(root, undefined, {
 });
 const scopedTests = await listProjectFiles(`${root}/tests`, undefined, {
   globRoot: root,
-  ignoreGlobs: ["tests/samples/**"],
+  ignoreGlobs: ["tests/samples/**", "tests/languages/samples/**"],
 });
 const includeIgnoredFiles = await listProjectFiles(root, undefined, {
   useGitignore: false,

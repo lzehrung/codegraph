@@ -1,5 +1,5 @@
 {
   "discovery": {
-    "ignoreGlobs": ["tests/samples/**"]
+    "ignoreGlobs": ["tests/samples/**", "tests/languages/samples/**"]
   }
 }

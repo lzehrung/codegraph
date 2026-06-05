@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAgentSession } from "../src/agent/session.js";
+import * as indexerBuild from "../src/indexer/build-index.js";
 
 async function mkRepo(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-session-"));
@@ -13,6 +14,10 @@ async function mkRepo(): Promise<string> {
 }
 
 describe("agent session", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("loads index, graph, symbol graph, and SQL files once for repeated agent operations", async () => {
     const root = await mkRepo();
     const session = createAgentSession({ root });
@@ -25,6 +30,46 @@ describe("agent session", () => {
     expect(first.symbolGraph.nodes.size).toBeGreaterThan(0);
     expect(first.fileGraph.nodes.size).toBeGreaterThan(0);
     expect(first.fileGraph).toBe(first.index.graph);
+  });
+
+  it("builds agent snapshots through incremental disk cache by default", async () => {
+    const root = await mkRepo();
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+
+    const session = createAgentSession({ root });
+    await session.loadProject();
+
+    expect(buildSpy).toHaveBeenCalledTimes(1);
+    const buildOptions = buildSpy.mock.calls[0]?.[1];
+    expect(buildOptions?.cache).toBe("disk");
+    expect(buildOptions?.keepParsed).toBe(true);
+    expect(buildOptions?.files?.map((file) => path.basename(file)).sort()).toEqual([
+      "main.ts",
+      "schema.sql",
+      "util.ts",
+    ]);
+  });
+
+  it("threads explicit build options into incremental agent indexing", async () => {
+    const root = await mkRepo();
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+
+    const session = createAgentSession({
+      root,
+      buildOptions: {
+        cache: "memory",
+        threads: 2,
+        keepParsed: false,
+        useBloomFilters: false,
+      },
+    });
+    await session.loadProject();
+
+    const buildOptions = buildSpy.mock.calls[0]?.[1];
+    expect(buildOptions?.cache).toBe("memory");
+    expect(buildOptions?.threads).toBe(2);
+    expect(buildOptions?.keepParsed).toBe(false);
+    expect(buildOptions?.useBloomFilters).toBe(false);
   });
 
   it("does not cache failed project loads", async () => {

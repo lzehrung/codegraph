@@ -18,6 +18,7 @@ export async function handlePacketCommand(context: PacketCommandContext): Promis
     const response = await getCodegraphPacket({
       root: context.root,
       handle,
+      ...(context.buildOptions ? { buildOptions: context.buildOptions } : {}),
       ...(context.getOpt("--max-symbols") !== undefined
         ? { maxSymbols: parsePositiveIntegerOption(context.getOpt("--max-symbols"), "--max-symbols", 50) }
         : {}),

@@ -1,4 +1,5 @@
 import { buildReviewReport, type ReviewReport } from "../review.js";
+import type { BuildOptions } from "../indexer/types.js";
 import { explainCodegraphTargetWithSession, type AgentExplainTarget, type AgentExplanation } from "./explain.js";
 import { createAgentSession, type AgentSession } from "./session.js";
 import { quoteShellArg } from "./shell.js";
@@ -8,6 +9,7 @@ export type AgentPacketKind = "file" | "symbol" | "chunk" | "sql_object" | "grap
 export type AgentPacketRequest = {
   root: string;
   handle: string;
+  buildOptions?: BuildOptions;
   maxSymbols?: number;
   maxSnippets?: number;
   maxDuplicates?: number;
@@ -34,7 +36,10 @@ export async function getCodegraphPacket(request: AgentPacketRequest): Promise<A
     return await buildReviewPacket(request);
   }
 
-  const session = createAgentSession({ root: request.root });
+  const session = createAgentSession({
+    root: request.root,
+    ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
+  });
   return await buildExplainPacket(session, request, kind);
 }
 

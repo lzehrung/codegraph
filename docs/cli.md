@@ -25,7 +25,7 @@ Commands that scan a project read `codegraph.config.json` from `--root` when it 
 {
   "discovery": {
     "includeGlobs": ["src/**/*.ts"],
-    "ignoreGlobs": ["tests/samples/**"],
+    "ignoreGlobs": ["tests/samples/**", "tests/languages/samples/**"],
     "useGitignore": true
   }
 }
@@ -198,8 +198,9 @@ codegraph grep --pattern 'eval\(' --ignore-case
 
 - Use `orient --pretty` as the compact first-turn reading surface for people or models.
 - Use `orient --json` when follow-up tools need exact handles, limits, and omitted counts.
-- Small orientation budgets skip deeper health analysis; use `--budget medium` or `--budget large` when health counts matter.
+- Small orientation budgets default to `--health skip`. Medium and large default to `--health summary`, which counts cycles and unresolved imports while omitting duplicate health; use `--health full` when exhaustive duplicate counts matter.
 - Use `packet get` with file, symbol, chunk, SQL, graph, or review handles to retrieve bounded evidence plus follow-up commands.
+- Agent commands reuse the incremental index path and default to disk cache. Use shared index flags such as `--cache`, `--cache-strict`, `--cache-verify`, `--threads`, `--native`, `--workers`, `--include-glob`, `--ignore-glob`, and `--no-gitignore` when the packet should match a specific scan mode.
 
 `search` is deterministic and vectorless. `explain` resolves file paths, symbol names, SQL object names, and search handles into bounded packets with symbols, graph context, references, snippets, duplicate context, SQL facts, review tasks, candidate tests, limits, omissions, and follow-ups. Use `--max-duplicates` to tune duplicate context in `explain` and `packet get`.
 

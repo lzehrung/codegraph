@@ -150,19 +150,7 @@ export async function resolveMemberAccessDefinition(params: {
       if (container) {
         const targetModule = index.byFile.get(objDef.file);
         if (targetModule) {
-          const containerStart = container.startIndex;
-          const containerEnd = container.endIndex;
-          const memberDef = targetModule.locals.find((local) => {
-            const startIndex = local.range.start.index;
-            const endIndex = local.range.end.index;
-            return (
-              local.localName === member &&
-              startIndex !== undefined &&
-              endIndex !== undefined &&
-              startIndex >= containerStart &&
-              endIndex <= containerEnd
-            );
-          });
+          const memberDef = findReceiverMemberDefinition(targetModule.locals, member, objDef, container, targetContext);
 
           if (memberDef) {
             return okGoToResult(index, memberDef, {
@@ -179,14 +167,13 @@ export async function resolveMemberAccessDefinition(params: {
   return null;
 }
 
-function supportsReceiverMemberResolution(languageId: string): boolean {
+export function supportsReceiverMemberResolution(languageId: string): boolean {
   return (
     languageId === "csharp" ||
     languageId === "js" ||
     languageId === "java" ||
     languageId === "javascript" ||
     languageId === "jsx" ||
-    languageId === "ruby" ||
     languageId === "rust" ||
     languageId === "ts" ||
     languageId === "typescript" ||
@@ -200,14 +187,14 @@ async function resolveReceiverDefinition(
   sup: LanguageSupport,
   resolveExpression: (expr: SyntaxNodeLike) => Promise<ResolvedExport | null>,
 ): Promise<SymbolDef | null> {
-  if (isJsTsLanguage(sup.id)) {
-    const constructor = receiverConstructorExpression(obj, source, sup);
-    if (constructor) {
-      const result = await resolveExpression(constructor);
-      if (result?.kind === "resolved") {
-        return result.def;
-      }
+  const constructor = receiverConstructorExpression(obj, source, sup);
+  if (constructor) {
+    const result = await resolveExpression(constructor);
+    if (result?.kind === "resolved") {
+      return result.def;
     }
+  }
+  if (isJsTsLanguage(sup.id)) {
     if (sup.nodeTypes.identifier.includes(obj.type)) {
       return null;
     }
@@ -225,8 +212,12 @@ function receiverConstructorExpression(
   source: string,
   sup: LanguageSupport,
 ): SyntaxNodeLike | null {
-  if (obj.type === "new_expression") {
+  if (obj.type === "new_expression" || obj.type === "object_creation_expression") {
     return constructorNameNode(obj, sup);
+  }
+  if (sup.id === "ruby" && obj.type === "call") {
+    const rubyConstructor = rubyNewReceiverNameNode(obj, source, sup);
+    if (rubyConstructor) return rubyConstructor;
   }
   if (!sup.nodeTypes.identifier.includes(obj.type)) {
     return null;
@@ -241,7 +232,24 @@ function constructorNameNode(node: SyntaxNodeLike, sup: LanguageSupport): Syntax
   if (constructor && sup.nodeTypes.identifier.includes(constructor.type)) {
     return constructor;
   }
+  for (const child of node.namedChildren) {
+    if (
+      sup.nodeTypes.identifier.includes(child.type) ||
+      child.type === "type_identifier" ||
+      child.type === "constant"
+    ) {
+      return child;
+    }
+  }
   return null;
+}
+
+function rubyNewReceiverNameNode(node: SyntaxNodeLike, source: string, sup: LanguageSupport): SyntaxNodeLike | null {
+  if (!/^[A-Z]\w*\.new$/.test(sliceText(node, source))) return null;
+  return (
+    node.namedChildren.find((child) => sup.nodeTypes.identifier.includes(child.type) || child.type === "constant") ??
+    null
+  );
 }
 
 function rootOf(node: SyntaxNodeLike): SyntaxNodeLike {
@@ -252,19 +260,26 @@ function rootOf(node: SyntaxNodeLike): SyntaxNodeLike {
   return current;
 }
 
-const JS_TS_BINDING_CONTAINER_TYPES = new Set([
+const BINDING_CONTAINER_TYPES = new Set([
   "program",
+  "compilation_unit",
+  "source_file",
   "statement_block",
   "block",
   "function_declaration",
+  "function_item",
   "function",
   "function_expression",
   "arrow_function",
   "method_definition",
+  "method_declaration",
+  "method",
 ]);
 
-const JS_TS_BINDING_DECLARATION_TYPES = new Set([
+const BINDING_DECLARATION_TYPES = new Set([
   "variable_declarator",
+  "let_declaration",
+  "assignment",
   "formal_parameter",
   "required_parameter",
   "optional_parameter",
@@ -278,7 +293,7 @@ function findVisiblePriorNewConstructor(
 ): SyntaxNodeLike | null {
   let current: SyntaxNodeLike | null = receiver;
   while (current) {
-    if (JS_TS_BINDING_CONTAINER_TYPES.has(current.type)) {
+    if (BINDING_CONTAINER_TYPES.has(current.type)) {
       const constructor = findPriorNewConstructorInContainer(current, receiver, receiverName, source, sup);
       if (constructor || bindingContainerDeclaresNameBefore(current, receiver, receiverName, source, sup)) {
         return constructor;
@@ -310,7 +325,10 @@ function findPriorNewConstructorInContainer(
       const value = current.childForFieldName("value");
       if (
         name &&
-        value?.type === "new_expression" &&
+        value &&
+        (value.type === "new_expression" ||
+          value.type === "object_creation_expression" ||
+          sup.nodeTypes.identifier.includes(value.type)) &&
         sup.nodeTypes.identifier.includes(name.type) &&
         sliceText(name, source) === receiverName
       ) {
@@ -318,6 +336,30 @@ function findPriorNewConstructorInContainer(
         if (!candidate) {
           return true;
         }
+        if (constructor && sliceText(constructor, source) !== sliceText(candidate, source)) {
+          constructor = null;
+          return false;
+        }
+        constructor = candidate;
+      }
+    }
+    if (current.type === "assignment" || current.type === "let_declaration") {
+      const candidate = constructorFromAssignmentLike(current, receiverName, source, sup);
+      if (candidate) {
+        if (constructor && sliceText(constructor, source) !== sliceText(candidate, source)) {
+          constructor = null;
+          return false;
+        }
+        constructor = candidate;
+      }
+    }
+    if (
+      current.type === "local_variable_declaration" ||
+      current.type === "local_declaration_statement" ||
+      current.type === "variable_declaration"
+    ) {
+      const candidate = constructorFromTypedLocalDeclaration(current, receiverName, source, sup);
+      if (candidate) {
         if (constructor && sliceText(constructor, source) !== sliceText(candidate, source)) {
           constructor = null;
           return false;
@@ -336,6 +378,21 @@ function findPriorNewConstructorInContainer(
   return constructor;
 }
 
+function constructorFromTypedLocalDeclaration(
+  node: SyntaxNodeLike,
+  receiverName: string,
+  source: string,
+  sup: LanguageSupport,
+): SyntaxNodeLike | null {
+  if (sup.id !== "csharp" && sup.id !== "java") return null;
+  const text = sliceText(node, source);
+  const match = text.match(
+    new RegExp(`^\\s*([A-Z]\\w*)\\s+${escapeRegExp(receiverName)}\\s*=\\s*new\\s+([A-Z]\\w*)\\b`),
+  );
+  const typeName = match?.[2] ?? match?.[1];
+  return typeName ? findNamedChildText(node, typeName, source, sup) : null;
+}
+
 function bindingContainerDeclaresNameBefore(
   node: SyntaxNodeLike,
   receiver: SyntaxNodeLike,
@@ -350,7 +407,7 @@ function bindingContainerDeclaresNameBefore(
     if (current !== node && isSkippableBindingContainer(current, receiver)) {
       return false;
     }
-    if (JS_TS_BINDING_DECLARATION_TYPES.has(current.type)) {
+    if (BINDING_DECLARATION_TYPES.has(current.type)) {
       const name = current.childForFieldName("name") ?? current.child(0);
       if (name && sup.nodeTypes.identifier.includes(name.type) && sliceText(name, source) === receiverName) {
         return true;
@@ -367,9 +424,110 @@ function bindingContainerDeclaresNameBefore(
 }
 
 function isSkippableBindingContainer(node: SyntaxNodeLike, receiver: SyntaxNodeLike): boolean {
-  return JS_TS_BINDING_CONTAINER_TYPES.has(node.type) && !nodeContainsIndex(node, receiver.startIndex);
+  return BINDING_CONTAINER_TYPES.has(node.type) && !nodeContainsIndex(node, receiver.startIndex);
 }
 
 function nodeContainsIndex(node: SyntaxNodeLike, index: number): boolean {
   return node.startIndex <= index && node.endIndex >= index;
+}
+
+function constructorFromAssignmentLike(
+  node: SyntaxNodeLike,
+  receiverName: string,
+  source: string,
+  sup: LanguageSupport,
+): SyntaxNodeLike | null {
+  const text = sliceText(node, source);
+  if (!new RegExp(`\\b${escapeRegExp(receiverName)}\\b`).test(text)) return null;
+  if (sup.id === "ruby") {
+    const match = text.match(new RegExp(`^\\s*${escapeRegExp(receiverName)}\\s*=\\s*([A-Z]\\w*)\\.new\\b`));
+    if (!match?.[1]) return null;
+    return findNamedChildText(node, match[1], source, sup);
+  }
+  if (sup.id === "rust") {
+    const match = text.match(new RegExp(`^\\s*(?:let\\s+)?${escapeRegExp(receiverName)}\\s*=\\s*([A-Z]\\w*)\\b`));
+    if (!match?.[1]) return null;
+    return findNamedChildText(node, match[1], source, sup);
+  }
+  return null;
+}
+
+function findNamedChildText(
+  node: SyntaxNodeLike,
+  name: string,
+  source: string,
+  sup: LanguageSupport,
+): SyntaxNodeLike | null {
+  const isNameNode = (candidate: SyntaxNodeLike): boolean =>
+    (sup.nodeTypes.identifier.includes(candidate.type) ||
+      candidate.type === "type_identifier" ||
+      candidate.type === "constant") &&
+    sliceText(candidate, source) === name;
+  const visit = (current: SyntaxNodeLike): SyntaxNodeLike | null => {
+    if (isNameNode(current)) return current;
+    for (const child of current.namedChildren) {
+      const hit = visit(child);
+      if (hit) return hit;
+    }
+    return null;
+  };
+  return visit(node);
+}
+
+function findReceiverMemberDefinition(
+  locals: readonly SymbolDef[],
+  member: string,
+  receiverDef: SymbolDef,
+  container: SyntaxNodeLike,
+  targetContext: Awaited<ReturnType<typeof ensureParsedContext>>,
+): SymbolDef | undefined {
+  const containerHit = findLocalWithinNode(locals, member, container);
+  if (containerHit) return containerHit;
+  if (targetContext.sup.id !== "rust") return undefined;
+
+  const implNode = findRustImplForType(targetContext.tree.rootNode, receiverDef.localName, targetContext.source);
+  return implNode ? findLocalWithinNode(locals, member, implNode) : undefined;
+}
+
+function findLocalWithinNode(
+  locals: readonly SymbolDef[],
+  member: string,
+  node: SyntaxNodeLike,
+): SymbolDef | undefined {
+  const containerStart = node.startIndex;
+  const containerEnd = node.endIndex;
+  return locals.find((local) => {
+    const startIndex = local.range.start.index;
+    const endIndex = local.range.end.index;
+    return (
+      local.localName === member &&
+      startIndex !== undefined &&
+      endIndex !== undefined &&
+      startIndex >= containerStart &&
+      endIndex <= containerEnd
+    );
+  });
+}
+
+function findRustImplForType(root: SyntaxNodeLike, typeName: string, source: string): SyntaxNodeLike | null {
+  let found: SyntaxNodeLike | null = null;
+  const visit = (node: SyntaxNodeLike): boolean => {
+    if (node.type === "impl_item") {
+      const text = sliceText(node, source);
+      if (new RegExp(`^\\s*impl\\s+${escapeRegExp(typeName)}\\b`).test(text)) {
+        found = node;
+        return false;
+      }
+    }
+    for (const child of node.namedChildren) {
+      if (!visit(child)) return false;
+    }
+    return true;
+  };
+  visit(root);
+  return found;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

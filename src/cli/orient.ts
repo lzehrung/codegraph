@@ -1,4 +1,9 @@
-import { orientCodegraph, type AgentOrientBudget, type AgentOrientResponse } from "../agent/orient.js";
+import {
+  orientCodegraph,
+  type AgentOrientBudget,
+  type AgentOrientHealthMode,
+  type AgentOrientResponse,
+} from "../agent/orient.js";
 import type { CliAgentCommandContext } from "./context.js";
 
 export type OrientCommandContext = CliAgentCommandContext;
@@ -11,11 +16,22 @@ function parseAgentOrientBudget(rawValue: string | undefined): AgentOrientBudget
   throw new Error(`Invalid --budget value "${rawValue}". Expected small, medium, or large.`);
 }
 
+function parseAgentOrientHealthMode(rawValue: string | undefined): AgentOrientHealthMode | undefined {
+  if (rawValue === undefined) return undefined;
+  if (rawValue === "skip" || rawValue === "summary" || rawValue === "full") {
+    return rawValue;
+  }
+  throw new Error(`Invalid --health value "${rawValue}". Expected skip, summary, or full.`);
+}
+
 export async function handleOrientCommand(context: OrientCommandContext): Promise<void> {
+  const healthMode = parseAgentOrientHealthMode(context.getOpt("--health"));
   const response = await orientCodegraph({
     root: context.root,
     includeRoots: context.positionals,
     budget: parseAgentOrientBudget(context.getOpt("--budget")),
+    ...(healthMode !== undefined ? { health: healthMode } : {}),
+    ...(context.buildOptions ? { buildOptions: context.buildOptions } : {}),
   });
 
   if (context.hasFlag("--json") || !context.hasFlag("--pretty")) {

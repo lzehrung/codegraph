@@ -6,7 +6,7 @@ import {
   type DuplicateTarget,
 } from "../duplicates.js";
 import { findReferences } from "../indexer/navigation.js";
-import type { Reference, SymbolDef } from "../indexer/types.js";
+import type { BuildOptions, Reference, SymbolDef } from "../indexer/types.js";
 import { getDependencies, getReverseDependencies } from "../graphs/queries.js";
 import { getHotspots } from "../graphs/hotspots.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
@@ -59,6 +59,7 @@ import { quoteShellArg } from "./shell.js";
 export type AgentExplainTarget = {
   root: string;
   target: string;
+  buildOptions?: BuildOptions;
   includeChangedContext?: boolean;
   base?: string;
   head?: string;
@@ -196,7 +197,10 @@ type ResolvedExplainTarget =
 const SQL_FACT_READ_CONCURRENCY = 32;
 
 export async function explainCodegraphTarget(request: AgentExplainTarget): Promise<AgentExplanation> {
-  const session = createAgentSession({ root: request.root });
+  const session = createAgentSession({
+    root: request.root,
+    ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
+  });
   return await explainCodegraphTargetWithSession(session, request);
 }
 

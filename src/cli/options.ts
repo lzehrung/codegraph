@@ -61,6 +61,7 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--graph-edges",
   "--public-api",
   "--budget",
+  "--health",
   "--mode",
   "--from",
   "--max-dependencies",

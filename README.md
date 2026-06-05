@@ -94,7 +94,7 @@ This repo keeps test fixtures out of default Codegraph scans with `codegraph.con
 ```json
 {
   "discovery": {
-    "ignoreGlobs": ["tests/samples/**"]
+    "ignoreGlobs": ["tests/samples/**", "tests/languages/samples/**"]
   }
 }
 ```

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import picomatch from "picomatch";
-import type { BuildReport } from "../indexer/types.js";
+import type { BuildOptions, BuildReport } from "../indexer/types.js";
 import type { ReviewBuildReport } from "../review.js";
 import { normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
 import { matchesDiscoveryGlob, type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
@@ -62,6 +62,7 @@ export type CliRuntime = {
 export type CliAgentCommandContext = {
   positionals: string[];
   root: string;
+  buildOptions?: BuildOptions;
   getOpt: (name: string) => string | undefined;
   hasFlag: (name: string) => boolean;
   writeJSONLine: (value: unknown) => void;

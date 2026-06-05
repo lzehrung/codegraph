@@ -3,6 +3,7 @@ import path from "node:path";
 import { getHotspots } from "../graphs/hotspots.js";
 import { type SymbolNode } from "../graphs/symbol-graph.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
+import type { BuildOptions } from "../indexer/types.js";
 import { queryGraphSqliteRaw, writeGraphSqlite } from "../sqlite.js";
 import { isPlainRecord } from "../util/guards.js";
 import { isFilePathWithinRoot, normalizePath, toProjectRelativePath } from "../util/paths.js";
@@ -15,6 +16,7 @@ import { quoteShellArg } from "./shell.js";
 export type CodegraphArtifactBuildRequest = {
   root: string;
   outDir?: string;
+  buildOptions?: BuildOptions;
   filterOutDir?: string;
   sqlite?: boolean;
   graphJson?: boolean;
@@ -86,6 +88,7 @@ export async function buildCodegraphArtifact(
   const outDir = path.resolve(root, request.outDir ?? DEFAULT_OUT_DIR);
   const session = createAgentSession({
     root,
+    ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
     discovery: {
       ignoreGlobs: outputIgnoreGlobs(root, outDir),
     },

@@ -19,6 +19,7 @@ export async function handleArtifactCommand(context: ArtifactCommandContext): Pr
     context.hasFlag("--questions");
   const result = await buildCodegraphArtifact({
     root: context.root,
+    ...(context.buildOptions ? { buildOptions: context.buildOptions } : {}),
     ...(outDir !== undefined ? { outDir } : {}),
     force: context.hasFlag("--force"),
     ...(hasArtifactSelection

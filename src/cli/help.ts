@@ -142,14 +142,21 @@ Search Modes:
 
 Output:
   Results include stable handles, rank reasons, evidence, graph neighbors, follow-up commands, limits, and omission counts.
+
+Index options:
+  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
 `;
 
 export const ORIENT_HELP_TEXT = `codegraph orient - Build a compact first-turn packet for agent repo context
 
-Usage: codegraph orient [roots...] [--root <path>] [--budget small|medium|large] [--json | --pretty]
+Usage: codegraph orient [roots...] [--root <path>] [--budget small|medium|large] [--health skip|summary|full] [--json | --pretty]
 
 Output:
   Orientation includes summary bullets, a bounded project tree, hotspot modules, budgeted health counts, stable packet handles, omission counts, and copyable follow-up commands.
+  Small budget defaults to --health skip. Medium and large default to --health summary, which counts cycles and unresolved imports without duplicate detection. Use --health full for exhaustive duplicate health.
+
+Index options:
+  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
 `;
 
 export const PACKET_HELP_TEXT = `codegraph packet - Retrieve bounded evidence packets by stable handle
@@ -158,6 +165,9 @@ Usage: codegraph packet get <handle> [--root <path>] [--json | --pretty] [--max-
 
 Handles:
   Accepts file:, symbol:, chunk:, sql:, graph:, and review: handles. CLI orient returns file handles; review handles are produced by library orientation calls that include a review range.
+
+Index options:
+  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
 `;
 
 export const EXPLAIN_HELP_TEXT = `codegraph explain - Explain a file, symbol, SQL object, or search handle
@@ -169,6 +179,9 @@ Targets:
 
 Output:
   Explanations include bounded symbols, dependencies, reverse dependencies, references, snippets, duplicate context, SQL facts, follow-up commands, limits, and omission counts.
+
+Index options:
+  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
 `;
 
 export const ARTIFACT_HELP_TEXT = `codegraph artifact - Build an agent-ready handoff bundle
@@ -185,6 +198,9 @@ Artifacts:
 Defaults:
   With no artifact selector flags, all artifacts are written.
   --force removes recognizable stale artifact files while preserving unrelated operator files.
+
+Index options:
+  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
 `;
 
 export const MCP_HELP_TEXT = `codegraph mcp - Serve MCP tools for agent graph navigation

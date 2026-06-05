@@ -33,6 +33,7 @@ export async function handleSearchCommand(context: SearchCommandContext): Promis
     root: context.root,
     query,
     mode: parseAgentSearchMode(context.getOpt("--mode")),
+    ...(context.buildOptions ? { buildOptions: context.buildOptions } : {}),
     limit: parsePositiveIntegerOption(context.getOpt("--limit"), "--limit", 20),
     includeSnippets: !context.hasFlag("--no-snippets"),
     ...(from !== undefined ? { from } : {}),

@@ -19,12 +19,15 @@ function packageNameForSpecifier(specifier: string): string {
     const [scope, name] = specifier.split("/");
     return scope && name ? `${scope}/${name}` : specifier;
   }
+  const rustRoot = specifier.split("::")[0];
+  if (rustRoot && rustRoot !== specifier) return rustRoot;
   return specifier.split("/")[0] ?? specifier;
 }
 
 function isDeclaredPackageSpecifier(specifier: string, declaredPackage: string): boolean {
   if (specifier === declaredPackage) return true;
   if (specifier.startsWith(`${declaredPackage}/`)) return true;
+  if (specifier.startsWith(`${declaredPackage}::`)) return true;
   if (specifier.startsWith(`${declaredPackage}.`)) return true;
   return packageNameForSpecifier(specifier) === declaredPackage;
 }

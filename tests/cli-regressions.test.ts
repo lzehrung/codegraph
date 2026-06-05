@@ -1085,6 +1085,18 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     );
   });
 
+  it("agent commands reject invalid shared index options", async () => {
+    await expect(runCliCommand(["search", "hello", "--root", tsRoot, "--cache", "banana"])).rejects.toThrow(
+      /Invalid --cache value "banana"/i,
+    );
+    await expect(runCliCommand(["orient", "--root", tsRoot, "--threads", "1.5"])).rejects.toThrow(
+      /Invalid --threads value "1.5"/i,
+    );
+    await expect(runCliCommand(["orient", "--root", tsRoot, "--health", "deep"])).rejects.toThrow(
+      /Invalid --health value "deep"/i,
+    );
+  });
+
   it("skill install copies the bundled skill into the target directory", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-skill-install-"));
     const targetDir = skillInstallTarget(tmpDir);

@@ -3,6 +3,7 @@ import { findDuplicates } from "../duplicates.js";
 import { findDetailedCycles } from "../graphs/cycles.js";
 import { getHotspots } from "../graphs/hotspots.js";
 import { getUnresolvedImports } from "../graphs/unresolved.js";
+import type { BuildOptions } from "../indexer/types.js";
 import type { Graph } from "../types.js";
 import { normalizePath } from "../util/paths.js";
 import { formatAgentFileHandle } from "./handles.js";
@@ -10,11 +11,14 @@ import { createAgentSession, type AgentSession } from "./session.js";
 import { quoteShellArg } from "./shell.js";
 
 export type AgentOrientBudget = "small" | "medium" | "large";
+export type AgentOrientHealthMode = "skip" | "summary" | "full";
 
 export type AgentOrientRequest = {
   root: string;
   includeRoots?: string[];
   budget?: AgentOrientBudget;
+  health?: AgentOrientHealthMode;
+  buildOptions?: BuildOptions;
   review?: {
     base: string;
     head: string;
@@ -86,7 +90,10 @@ const ORIENT_BUDGETS: Record<
 
 export async function orientCodegraph(request: AgentOrientRequest): Promise<AgentOrientResponse> {
   const root = path.resolve(request.root);
-  const session = createAgentSession({ root });
+  const session = createAgentSession({
+    root,
+    ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
+  });
   return await orientCodegraphWithSession(session, { ...request, root });
 }
 
@@ -125,12 +132,11 @@ export async function orientCodegraphWithSession(
     file,
   }));
   const reviewHandles = request.review ? [buildReviewPacketHandle(request.review.base, request.review.head)] : [];
-  const health = await buildHealth(root, snapshot.index, scopedAbsoluteFiles, scopedFileGraph, limits.includeHealth);
+  const healthMode = request.health ?? (limits.includeHealth ? "summary" : "skip");
+  const health = await buildHealth(root, snapshot.index, scopedAbsoluteFiles, scopedFileGraph, healthMode);
   const handles = [...reviewHandles, ...fileHandles];
   const recommendedNext = buildRecommendedNext(scopedFiles, includeRoots, handles);
-  const healthSummary = health.omittedAnalyses
-    ? "Health analysis skipped for small budget."
-    : `${health.cycles} cycle(s), ${health.unresolved} unresolved import group(s), ${health.duplicateGroups} duplicate group(s).`;
+  const healthSummary = formatHealthSummary(health);
 
   return {
     schemaVersion: 1,
@@ -164,14 +170,14 @@ async function buildHealth(
   index: Parameters<typeof findDuplicates>[0],
   files: string[],
   graph: Graph,
-  includeHealth: boolean,
+  healthMode: AgentOrientHealthMode,
 ): Promise<{
   cycles: number | null;
   unresolved: number | null;
   duplicateGroups: number | null;
   omittedAnalyses: number;
 }> {
-  if (!includeHealth) {
+  if (healthMode === "skip") {
     return {
       cycles: null,
       unresolved: null,
@@ -181,6 +187,14 @@ async function buildHealth(
   }
   const cycles = findDetailedCycles(graph);
   const unresolved = getUnresolvedImports(graph, { projectRoot: root });
+  if (healthMode === "summary") {
+    return {
+      cycles: cycles.length,
+      unresolved: unresolved.length,
+      duplicateGroups: null,
+      omittedAnalyses: 1,
+    };
+  }
   const duplicateResult = await findDuplicates(index, {
     projectRoot: root,
     files,
@@ -193,6 +207,21 @@ async function buildHealth(
     duplicateGroups: duplicateResult.groups.length + duplicateResult.omittedCounts.groups,
     omittedAnalyses: 0,
   };
+}
+
+function formatHealthSummary(health: {
+  cycles: number | null;
+  unresolved: number | null;
+  duplicateGroups: number | null;
+  omittedAnalyses: number;
+}): string {
+  if (health.cycles === null || health.unresolved === null) {
+    return "Health analysis skipped for small budget.";
+  }
+  if (health.duplicateGroups === null) {
+    return `${health.cycles} cycle(s), ${health.unresolved} unresolved import group(s); duplicate health skipped.`;
+  }
+  return `${health.cycles} cycle(s), ${health.unresolved} unresolved import group(s), ${health.duplicateGroups} duplicate group(s).`;
 }
 
 function buildReviewPacketHandle(base: string, head: string): AgentPacketHandle {

@@ -40,6 +40,7 @@ import { handleHotspotsCommand, handleInspectCommand } from "./cli/inspect.js";
 import { handleMcpServeCommand } from "./cli/mcp.js";
 import { handleOrientCommand } from "./cli/orient.js";
 import { handleDumpmodCommand, handleGotoCommand, handleRefsCommand } from "./cli/navigation.js";
+import { parseCacheModeOption, parseOptionalNonNegativeIntegerOption } from "./cli/options.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
 import { handlePacketCommand } from "./cli/packet.js";
 import { handleReviewCommand } from "./cli/review.js";
@@ -143,6 +144,21 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
     ...(graphFlags.resolutionHints.length ? { resolutionHints: graphFlags.resolutionHints } : {}),
   });
+  const buildAgentOptions = (): BuildOptions => {
+    const cache = parseCacheModeOption(getOpt("--cache"));
+    const threads = parseOptionalNonNegativeIntegerOption(getOpt("--threads"), "--threads");
+    return {
+      ...(progressHandler ? { onProgress: progressHandler } : {}),
+      discovery: discoveryOptions,
+      ...(cache !== undefined ? { cache } : {}),
+      ...(hasFlag("--cache-strict") ? { cacheStrict: true } : {}),
+      ...(hasFlag("--cache-verify") ? { cacheVerify: true } : {}),
+      ...(hasGraphOverrides || nativeMode !== "auto" ? { graph: buildGraphOptions() } : {}),
+      ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
+      ...(threads !== undefined ? { threads } : {}),
+      ...workerOpts,
+    };
+  };
 
   const changedSince = getOpt("--changed-since");
   const gitBase = getOpt("--git-base");
@@ -355,6 +371,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     await handleSearchCommand({
       positionals: parsed.positionals,
       root: projectRootFs,
+      buildOptions: buildAgentOptions(),
       getOpt,
       hasFlag,
       writeJSONLine,
@@ -369,6 +386,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     await handleExplainCommand({
       positionals: parsed.positionals,
       root: projectRootFs,
+      buildOptions: buildAgentOptions(),
       getOpt,
       hasFlag,
       writeJSONLine,
@@ -383,6 +401,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     await handleOrientCommand({
       positionals: includeRoots,
       root: projectRootFs,
+      buildOptions: buildAgentOptions(),
       getOpt,
       hasFlag,
       writeJSONLine,
@@ -397,6 +416,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     await handlePacketCommand({
       positionals: parsed.positionals,
       root: projectRootFs,
+      buildOptions: buildAgentOptions(),
       getOpt,
       hasFlag,
       writeJSONLine,
@@ -411,6 +431,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     await handleArtifactCommand({
       positionals: parsed.positionals,
       root: projectRootFs,
+      buildOptions: buildAgentOptions(),
       getOpt,
       hasFlag,
       writeJSONLine,

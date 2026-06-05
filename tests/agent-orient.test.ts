@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { orientCodegraph } from "../src/index.js";
+import * as duplicates from "../src/duplicates.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 
 async function writeFile(root: string, relativePath: string, content: string): Promise<void> {
@@ -11,6 +12,10 @@ async function writeFile(root: string, relativePath: string, content: string): P
 }
 
 describe("agent orient", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("returns compact orientation with stable packet handles", async () => {
     const root = await mkTmpDir("cg-agent-orient-");
     await writeFile(root, "src/index.ts", "export { run } from './run';\n");
@@ -65,5 +70,36 @@ describe("agent orient", () => {
     expect(response.health.duplicateGroups).toBeNull();
     expect(response.omittedCounts.healthAnalyses).toBe(3);
     expect(response.summary).toContain("Health analysis skipped for small budget.");
+  });
+
+  it("uses summary health by default for medium budgets without duplicate detection", async () => {
+    const root = await mkTmpDir("cg-agent-orient-summary-health-");
+    await writeFile(root, "src/first.ts", "export function first() { return 1; }\n");
+    await writeFile(root, "src/second.ts", "import { first } from './first';\nexport const second = first();\n");
+    const duplicateSpy = vi.spyOn(duplicates, "findDuplicates");
+
+    const response = await orientCodegraph({ root, includeRoots: ["src"], budget: "medium" });
+
+    expect(response.health.cycles).toBe(0);
+    expect(response.health.unresolved).toBe(0);
+    expect(response.health.duplicateGroups).toBeNull();
+    expect(response.omittedCounts.healthAnalyses).toBe(1);
+    expect(response.summary).toContain("0 cycle(s), 0 unresolved import group(s); duplicate health skipped.");
+    expect(duplicateSpy).not.toHaveBeenCalled();
+  });
+
+  it("runs full duplicate health only when requested", async () => {
+    const root = await mkTmpDir("cg-agent-orient-full-health-");
+    await writeFile(root, "src/first.ts", "export function first() { return 1; }\n");
+    await writeFile(root, "src/second.ts", "export function second() { return 2; }\n");
+    const duplicateSpy = vi.spyOn(duplicates, "findDuplicates");
+
+    const response = await orientCodegraph({ root, includeRoots: ["src"], budget: "medium", health: "full" });
+
+    expect(response.health.cycles).toBe(0);
+    expect(response.health.unresolved).toBe(0);
+    expect(response.health.duplicateGroups).not.toBeNull();
+    expect(response.omittedCounts.healthAnalyses).toBe(0);
+    expect(duplicateSpy).toHaveBeenCalledTimes(1);
   });
 });
