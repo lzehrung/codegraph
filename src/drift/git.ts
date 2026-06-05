@@ -38,15 +38,18 @@ async function cleanupTempDir(dir: string | undefined): Promise<void> {
 
 async function resolveGitCommit(root: string, ref: string): Promise<string> {
   const rev = `${ref}^{commit}`;
-  const { stdout } = await execFileAsync(
-    "git",
-    ["rev-parse", "--verify", "--quiet", "--end-of-options", rev],
-    { cwd: root, env: process.env },
-  );
+  const { stdout } = await execFileAsync("git", ["rev-parse", "--verify", "--quiet", "--end-of-options", rev], {
+    cwd: root,
+    env: process.env,
+  });
   return stdout.toString().trim();
 }
 
-async function materializeGitRef(root: string, ref: string | undefined, prefix: string): Promise<{ root: string; cleanup?: string }> {
+async function materializeGitRef(
+  root: string,
+  ref: string | undefined,
+  prefix: string,
+): Promise<{ root: string; cleanup?: string }> {
   const checkoutRef = ref;
   if (checkoutRef !== undefined && isGitIndexSentinel(checkoutRef)) {
     throw new Error("Architecture drift does not support STAGED/INDEX snapshots yet.");
@@ -85,7 +88,6 @@ function withReportRefs(
     },
   };
 }
-
 
 export async function analyzeArchitectureDrift(
   root: string,

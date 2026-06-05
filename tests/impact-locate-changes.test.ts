@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createTestIndex } from "./test-utils.js";
+import { locateChangedSymbols } from "../src/impact/map.js";
 import type { ChangedSymbol, Hunk } from "../src/impact/types.js";
 
 function norm(p: string) {
@@ -28,7 +29,6 @@ describe("Impact: changed-lines → symbol mapping", () => {
       },
     ];
 
-    const { locateChangedSymbols } = await import("../src/impact/map.js");
     const changed = await locateChangedSymbols(index, file, hunks);
     expect(changed.some((s: ChangedSymbol) => s.name === target.localName)).toBe(true);
   });
@@ -51,7 +51,6 @@ describe("Impact: changed-lines → symbol mapping", () => {
       lines: ["+// changed"],
     }));
 
-    const { locateChangedSymbols } = await import("../src/impact/map.js");
     const changed = await locateChangedSymbols(index, file, hunks);
     for (const t of targets) {
       expect(changed.some((s: ChangedSymbol) => s.name === t.localName)).toBe(true);
@@ -74,7 +73,6 @@ describe("Impact: changed-lines → symbol mapping", () => {
       },
     ];
 
-    const { locateChangedSymbols } = await import("../src/impact/map.js");
     const changed = await locateChangedSymbols(index, file, hunks);
     expect(changed.some((s: ChangedSymbol) => s.name === target.localName)).toBe(true);
   });

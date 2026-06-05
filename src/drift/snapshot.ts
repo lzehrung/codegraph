@@ -124,15 +124,19 @@ function toSnapshotPublicApi(root: string, index: Parameters<typeof getApiSurfac
   return symbols.sort((left, right) => left.id.localeCompare(right.id));
 }
 
-function duplicateGroupKey(
-  group: { primaryLeft: { file: string; startLine: number }; primaryRight: { file: string; startLine: number } },
-): string {
+function duplicateGroupKey(group: {
+  primaryLeft: { file: string; startLine: number };
+  primaryRight: { file: string; startLine: number };
+}): string {
   const left = `${group.primaryLeft.file}:${group.primaryLeft.startLine}`;
   const right = `${group.primaryRight.file}:${group.primaryRight.startLine}`;
   return left < right ? `${left}<->${right}` : `${right}<->${left}`;
 }
 
-async function duplicateSummary(index: Parameters<typeof findDuplicates>[0], limit: number): Promise<ArchitectureDuplicateSummary> {
+async function duplicateSummary(
+  index: Parameters<typeof findDuplicates>[0],
+  limit: number,
+): Promise<ArchitectureDuplicateSummary> {
   const duplicateOptions = {
     limit,
     minConfidence: "medium" as const,

@@ -1,3 +1,1 @@
-tests/samples/hbs/page.hbs
-tests/samples/hbs/page.handlebars
-tests/samples/pathological/syntax-errors/partial-syntax.ts
+tests/samples/**

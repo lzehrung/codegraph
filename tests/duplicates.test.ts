@@ -206,7 +206,11 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     const index = await buildProjectIndex(root);
     const bare = await findDuplicateContext(index, { file: "src/a.ts" }, { minConfidence: "high", limit: 1 });
     const dotted = await findDuplicateContext(index, { file: "./src/a.ts" }, { minConfidence: "high", limit: 1 });
-    const absolute = await findDuplicateContext(index, { file: path.join(root, "src/a.ts") }, { minConfidence: "high", limit: 1 });
+    const absolute = await findDuplicateContext(
+      index,
+      { file: path.join(root, "src/a.ts") },
+      { minConfidence: "high", limit: 1 },
+    );
 
     expect(dotted.target.file).toBe("src/a.ts");
     expect(absolute.target.file).toBe("src/a.ts");
@@ -238,14 +242,20 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     const index = await buildProjectIndex(root);
     const target = { file: "src/g.ts" };
     const result = await findDuplicateContext(index, target, { minConfidence: "high", limit: 5 });
-    const rawResult = await findDuplicateContext(index, target, { includeRawPairs: true, minConfidence: "high", limit: 5 });
+    const rawResult = await findDuplicateContext(index, target, {
+      includeRawPairs: true,
+      minConfidence: "high",
+      limit: 5,
+    });
     expect(rawResult.suggestions?.length).toBeGreaterThan(0);
     for (const suggestion of rawResult.suggestions ?? []) {
       expect(suggestion.left.file === "src/g.ts" || suggestion.right.file === "src/g.ts").toBeTruthy();
     }
 
     expect(result.groups.length).toBeGreaterThan(0);
-    expect(result.groups.some((group) => group.primaryLeft.file === "src/g.ts" || group.primaryRight.file === "src/g.ts")).toBeTruthy();
+    expect(
+      result.groups.some((group) => group.primaryLeft.file === "src/g.ts" || group.primaryRight.file === "src/g.ts"),
+    ).toBeTruthy();
     expect(result.suggestions).toBeUndefined();
     for (const group of result.groups) {
       const rawGroup = rawResult.groups.find((entry) => entry.id === group.id);
@@ -277,7 +287,11 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     await writeProjectFile(root, "src/c.ts", source);
 
     const index = await buildProjectIndex(root);
-    const result = await findDuplicateContext(index, { file: "src/a.ts" }, { maxBucketSize: 2, minConfidence: "high", minTokens: 1, limit: 5 });
+    const result = await findDuplicateContext(
+      index,
+      { file: "src/a.ts" },
+      { maxBucketSize: 2, minConfidence: "high", minTokens: 1, limit: 5 },
+    );
 
     expect(result.groups.length).toBeGreaterThan(0);
     expect(result.omittedCounts.oversizedBuckets).toBe(0);
@@ -313,7 +327,11 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     await writeProjectFile(baselineRoot, "src/target-a.ts", target);
     await writeProjectFile(baselineRoot, "src/target-b.ts", target);
     const baselineIndex = await buildProjectIndex(baselineRoot);
-    const baseline = await findDuplicateContext(baselineIndex, { file: "src/target-a.ts" }, { maxBucketSize: 4, minConfidence: "high", minTokens: 1, limit: 5 });
+    const baseline = await findDuplicateContext(
+      baselineIndex,
+      { file: "src/target-a.ts" },
+      { maxBucketSize: 4, minConfidence: "high", minTokens: 1, limit: 5 },
+    );
 
     const noisyRoot = await makeTempProject();
     await writeProjectFile(noisyRoot, "src/noise-a.json", `${repeated}\n`);
@@ -324,7 +342,11 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     await writeProjectFile(noisyRoot, "src/target-a.ts", target);
     await writeProjectFile(noisyRoot, "src/target-b.ts", target);
     const noisyIndex = await buildProjectIndex(noisyRoot);
-    const noisy = await findDuplicateContext(noisyIndex, { file: "src/target-a.ts" }, { maxBucketSize: 4, minConfidence: "high", minTokens: 1, limit: 5 });
+    const noisy = await findDuplicateContext(
+      noisyIndex,
+      { file: "src/target-a.ts" },
+      { maxBucketSize: 4, minConfidence: "high", minTokens: 1, limit: 5 },
+    );
 
     expect(noisy.groups.length).toBeGreaterThan(0);
     expect(noisy.omittedCounts.oversizedBuckets).toBe(baseline.omittedCounts.oversizedBuckets);
@@ -481,6 +503,351 @@ export function scoreAccounts(accounts: Array<{ enabled: boolean; credits: numbe
     expect(match).toBeDefined();
     expect(match?.cloneType === "renamed" || match?.cloneType === "near").toBeTruthy();
     expect(match?.metrics.tokenJaccard).toBeGreaterThan(0.6);
+  });
+
+  test("uses AST shape hashes as renamed-clone evidence", async () => {
+    const root = await makeTempProject();
+
+    await writeProjectFile(
+      root,
+      "src/invoices.ts",
+      `
+export function priceInvoices(rows: Array<{ amount: number; tax: number }>) {
+  const totals: number[] = [];
+  for (const row of rows) {
+    if (row.amount > 100) {
+      totals.push(row.amount + row.tax);
+    } else {
+      totals.push(row.amount - row.tax);
+    }
+  }
+  return totals.reduce((sum, value) => sum + value, 0);
+}
+`,
+    );
+    await writeProjectFile(
+      root,
+      "src/packages.ts",
+      `
+export function pricePackages(packages: Array<{ weight: number; fee: number }>) {
+  const values: number[] = [];
+  for (const item of packages) {
+    if (item.weight < 25) {
+      values.push(item.weight - item.fee);
+    } else {
+      values.push(item.weight + item.fee);
+    }
+  }
+  return values.reduce((total, current) => total - current, 0);
+}
+`,
+    );
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, { minConfidence: "medium", limit: 5 });
+    const match = result.groups.find(
+      (group) => group.primaryLeft.file === "src/invoices.ts" || group.primaryRight.file === "src/invoices.ts",
+    );
+
+    expect(match).toBeDefined();
+    expect(match?.metrics.astShapeEqual).toBeTruthy();
+    expect(match?.reasons).toContain("matching AST shape");
+    expect(match?.cloneType).toBe("renamed");
+  });
+
+  test("trims CRLF and indentation when hashing AST shapes", async () => {
+    const root = await makeTempProject();
+    const invoiceSource = [
+      "export class InvoiceShell { value = 1; }",
+      "",
+      "  export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) {  ",
+      "    const totals: number[] = [];",
+      "    for (const row of rows) {",
+      "      if (row.amount > 50) {",
+      "        totals.push(row.amount + row.tax);",
+      "      } else {",
+      "        totals.push(row.amount - row.tax);",
+      "      }",
+      "    }",
+      "    return totals.reduce((sum, value) => sum + value, 0);",
+      "  }  ",
+      "",
+    ].join("\r\n");
+    const packageSource = [
+      "export interface PackageShell { value: number; }",
+      "",
+      "  export function summarizePackages(packages: Array<{ weight: number; fee: number }>) {  ",
+      "    const values: number[] = [];",
+      "    for (const item of packages) {",
+      "      if (item.weight > 50) {",
+      "        values.push(item.weight + item.fee);",
+      "      } else {",
+      "        values.push(item.weight - item.fee);",
+      "      }",
+      "    }",
+      "    return values.reduce((total, current) => total + current, 0);",
+      "  }  ",
+      "",
+    ].join("\r\n");
+
+    await writeProjectFile(root, "src/invoices.ts", invoiceSource);
+    await writeProjectFile(root, "src/packages.ts", packageSource);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, { minConfidence: "medium", limit: 5 });
+    const match = result.groups.find(
+      (group) => group.primaryLeft.file === "src/invoices.ts" || group.primaryRight.file === "src/invoices.ts",
+    );
+
+    expect(match).toBeDefined();
+    expect(match?.metrics.astShapeEqual).toBeTruthy();
+    expect(match?.reasons).toContain("matching AST shape");
+  });
+
+  test("uses git similarity hints to boost copied-file duplicate candidates", async () => {
+    const root = await makeTempProject();
+
+    await writeProjectFile(
+      root,
+      "src/source.ts",
+      `
+export function collectInvoiceLabels(rows: Array<{ amount: number; tax: number }>) {
+  const labels: string[] = [];
+  for (const row of rows) {
+    const total = row.amount + row.tax;
+    const tier = total > 100 ? "large" : "small";
+    labels.push(tier + ":" + total.toFixed(2));
+  }
+  return labels.filter((label) => label.includes(":")).join(",");
+}
+`,
+    );
+    await writeProjectFile(
+      root,
+      "src/copied.ts",
+      `
+export function collectShipmentLabels(items: Array<{ weight: number; fee: number }>) {
+  const labels: string[] = [];
+  for (const item of items) {
+    const total = item.weight + item.fee;
+    const tier = total > 100 ? "heavy" : "light";
+    labels.push(tier + ":" + total.toFixed(2));
+  }
+  return labels.filter((label) => label.includes(":")).join(",");
+}
+`,
+    );
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, {
+      minConfidence: "medium",
+      limit: 5,
+      similarityHints: [{ leftFile: "src/source.ts", rightFile: "src/copied.ts", similarityIndex: 92 }],
+    });
+    const match = result.groups.find(
+      (group) => group.primaryLeft.file === "src/copied.ts" || group.primaryRight.file === "src/copied.ts",
+    );
+
+    expect(match).toBeDefined();
+    expect(match?.metrics.gitSimilarity).toBe(92);
+    expect(match?.reasons).toContain("git similarity 92%");
+  });
+
+  test("uses git similarity hints for duplicate contexts when only the copied file is targeted", async () => {
+    const root = await makeTempProject();
+
+    await writeProjectFile(
+      root,
+      "src/source.ts",
+      `
+export function renderInvoiceSummary(rows: Array<{ id: string; amount: number; paid: boolean }>) {
+  const openIds: string[] = [];
+  let openTotal = 0;
+  for (const row of rows) {
+    if (!row.paid) {
+      openIds.push(row.id);
+      openTotal += row.amount;
+    }
+  }
+  return openIds.join("|") + ":" + openTotal.toFixed(2);
+}
+`,
+    );
+    await writeProjectFile(
+      root,
+      "src/copied.ts",
+      `
+export function compressSearchTerms(input: string[]) {
+  const accepted: string[] = [];
+  let acceptedLength = 0;
+  for (const value of input) {
+    if (value.trim()) {
+      accepted.push(value.toLowerCase());
+      acceptedLength += value.length;
+    }
+  }
+  return accepted.join("|") + ":" + acceptedLength.toString();
+}
+`,
+    );
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicateContext(
+      index,
+      { file: "src/copied.ts" },
+      {
+        minConfidence: "low",
+        limit: 5,
+        similarityHints: [{ leftFile: "src/source.ts", rightFile: "src/copied.ts", similarityIndex: 91 }],
+      },
+    );
+    const match = result.groups.find(
+      (group) => group.primaryLeft.file === "src/copied.ts" || group.primaryRight.file === "src/copied.ts",
+    );
+
+    expect(match).toBeDefined();
+    expect(match?.metrics.gitSimilarity).toBe(91);
+    expect(match?.reasons).toContain("git similarity 91%");
+  });
+
+  test("ignores invalid and low git similarity hints", async () => {
+    const root = await makeTempProject();
+
+    await writeProjectFile(root, "src/a.ts", `export const alphaConfig = ["bravo", "charlie", "delta"];\n`);
+    await writeProjectFile(root, "src/b.ts", `export const golfConfig = ["hotel", "india", "juliet"];\n`);
+
+    const index = await buildProjectIndex(root);
+    const lowSimilarity = await findDuplicates(index, {
+      includeSmall: true,
+      includeRawPairs: true,
+      minConfidence: "low",
+      similarityHints: [{ leftFile: "src/a.ts", rightFile: "src/b.ts", similarityIndex: 79 }],
+    });
+    const invalidSimilarity = await findDuplicates(index, {
+      includeSmall: true,
+      includeRawPairs: true,
+      minConfidence: "low",
+      similarityHints: [{ leftFile: "src/a.ts", rightFile: "src/b.ts", similarityIndex: Number.NaN }],
+    });
+    const highSimilarity = await findDuplicates(index, {
+      includeSmall: true,
+      includeRawPairs: true,
+      minConfidence: "low",
+      similarityHints: [{ leftFile: "src/a.ts", rightFile: "src/b.ts", similarityIndex: 90 }],
+    });
+
+    expect(lowSimilarity.suggestions?.some((suggestion) => suggestion.metrics.gitSimilarity !== undefined)).toBe(false);
+    expect(invalidSimilarity.suggestions?.some((suggestion) => suggestion.metrics.gitSimilarity !== undefined)).toBe(
+      false,
+    );
+    expect(highSimilarity.suggestions?.some((suggestion) => suggestion.metrics.gitSimilarity === 90)).toBe(true);
+  });
+
+  test("bounds high-fanout git similarity hints to aligned units", async () => {
+    const root = await makeTempProject();
+    const makeFunctions = (prefix: string) =>
+      Array.from(
+        { length: 16 },
+        (_, index) => `
+export function ${prefix}Value${index}(rows: Array<{ amount: number; fee: number }>) {
+  const labels: string[] = [];
+  for (const row of rows) {
+    const total = row.amount + row.fee + ${index};
+    labels.push(String(total));
+  }
+  return labels.join(",");
+}
+`,
+      ).join("\n");
+
+    await writeProjectFile(root, "src/source.ts", makeFunctions("source"));
+    await writeProjectFile(root, "src/copied.ts", makeFunctions("copied"));
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, {
+      includeSmall: true,
+      includeRawPairs: true,
+      minConfidence: "low",
+      maxBucketSize: 8,
+      similarityHints: [{ leftFile: "src/source.ts", rightFile: "src/copied.ts", similarityIndex: 92 }],
+    });
+
+    const hintSuggestions = result.suggestions?.filter((suggestion) => suggestion.metrics.gitSimilarity === 92) ?? [];
+    expect(hintSuggestions.length).toBeLessThanOrEqual(8);
+    expect(result.omittedCounts.oversizedBuckets).toBeGreaterThan(0);
+    expect(hintSuggestions.length).toBeGreaterThan(0);
+  });
+
+  test("does not create git similarity candidates when a rename source is absent", async () => {
+    const root = await makeTempProject();
+
+    await writeProjectFile(
+      root,
+      "src/new.ts",
+      `
+export function newValue(rows: number[]) {
+  return rows.map((row) => row + 1).join(",");
+}
+`,
+    );
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, {
+      includeSmall: true,
+      includeRawPairs: true,
+      minConfidence: "low",
+      similarityHints: [{ leftFile: "src/old.ts", rightFile: "src/new.ts", similarityIndex: 95 }],
+    });
+
+    expect(result.suggestions?.some((suggestion) => suggestion.metrics.gitSimilarity !== undefined)).toBe(false);
+    expect(result.groups).toHaveLength(0);
+  });
+
+  test("does not promote unrelated matching AST shapes to medium confidence", async () => {
+    const root = await makeTempProject();
+
+    await writeProjectFile(
+      root,
+      "src/invoices.ts",
+      `
+export function calculateInvoiceTotals(rows: Array<{ amount: number; tax: number }>) {
+  const totals: number[] = [];
+  for (const row of rows) {
+    if (row.amount > 1000) {
+      totals.push(row.amount * row.tax);
+    } else {
+      totals.push(row.amount + row.tax);
+    }
+  }
+  return totals.reduce((sum, value) => sum + value, 0);
+}
+`,
+    );
+    await writeProjectFile(
+      root,
+      "src/navigation.ts",
+      `
+export function renderNavigationLinks(nodes: Array<{ href: string; label: string }>) {
+  const output: string[] = [];
+  for (const node of nodes) {
+    if (node.href.startsWith("https")) {
+      output.push(node.label.toUpperCase());
+    } else {
+      output.push(node.href.toLowerCase());
+    }
+  }
+  return output.filter((value) => value.length > 3).join("|");
+}
+`,
+    );
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, { minConfidence: "medium", limit: 5 });
+    const match = result.groups.find(
+      (group) => group.primaryLeft.file === "src/invoices.ts" || group.primaryRight.file === "src/invoices.ts",
+    );
+
+    expect(match).toBeUndefined();
   });
 
   test("does not report matching signatures as high-confidence symbol clones", async () => {

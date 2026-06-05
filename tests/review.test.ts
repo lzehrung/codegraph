@@ -124,6 +124,59 @@ describe("Review report", () => {
     );
   });
 
+  it("preserves copy similarity metadata in changed file summaries", async () => {
+    const root = await mkTmpDir("dg-review-copy-metadata-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.writeFile(path.join(srcDir, "source.ts"), "export function sourceValue() { return 1; }\n", "utf8");
+    await fsp.writeFile(path.join(srcDir, "copied.ts"), "export function copiedValue() { return 1; }\n", "utf8");
+
+    const diffText = [
+      "diff --git a/src/source.ts b/src/copied.ts",
+      "similarity index 91%",
+      "copy from src/source.ts",
+      "copy to src/copied.ts",
+      "--- a/src/source.ts",
+      "+++ b/src/copied.ts",
+      "@@ -1,1 +1,1 @@",
+      "-export function sourceValue() { return 1; }",
+      "+export function copiedValue() { return 1; }",
+      "",
+    ].join("\n");
+
+    const report = await buildReviewReport(root, { diffText });
+    const summary = report.changedFiles.find((entry) => entry.file === "src/copied.ts");
+
+    expect(summary).toMatchObject({
+      oldFile: "src/source.ts",
+      similarityIndex: 91,
+    });
+  });
+
+  it("omits oldFile metadata for normal modified diffs", async () => {
+    const root = await mkTmpDir("dg-review-modified-summary-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.writeFile(path.join(srcDir, "feature.ts"), "export function feature() { return 1; }\n", "utf8");
+
+    const diffText = [
+      "diff --git a/src/feature.ts b/src/feature.ts",
+      "index 1234567..abcdef0 100644",
+      "--- a/src/feature.ts",
+      "+++ b/src/feature.ts",
+      "@@ -1,1 +1,1 @@",
+      "-export function feature() { return 1; }",
+      "+export function feature() { return 2; }",
+      "",
+    ].join("\n");
+
+    const report = await buildReviewReport(root, { diffText });
+    const summary = report.changedFiles.find((entry) => entry.file === "src/feature.ts");
+
+    expect(summary).toBeDefined();
+    expect("oldFile" in summary!).toBe(false);
+  });
+
   it("includes call compatibility hints when symbol details are disabled", async () => {
     const root = await mkTmpDir("dg-review-call-compat-summary-");
     const srcDir = path.join(root, "src");
@@ -1634,7 +1687,11 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     runGit(root, ["add", "."]);
     runGit(root, ["commit", "-m", "initial"]);
 
-    await fsp.writeFile(path.join(root, "src/b.ts"), `${topLevelSource}\nexport function changed() { return 2; }\n`, "utf8");
+    await fsp.writeFile(
+      path.join(root, "src/b.ts"),
+      `${topLevelSource}\nexport function changed() { return 2; }\n`,
+      "utf8",
+    );
 
     const report = await buildReviewReport(root, { gitBase: "HEAD", gitHead: "WORKTREE" });
     const task = report.reviewTasks.find(

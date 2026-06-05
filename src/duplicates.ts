@@ -5,7 +5,10 @@ import { LANG_CONFIGS } from "./bootstrap/treeSitterLanguages.js";
 import { chunkFile, type Chunk } from "./chunking/chunkFile.js";
 import { chunkTextFile } from "./chunking/chunkTextFile.js";
 import { supportForFile } from "./languages.js";
+import type { SyntaxNodeLike, SyntaxTreeLike } from "./languages/types.js";
+import { attemptParsePreparedFileContext, type ParsedFileContext } from "./indexer/parse-context.js";
 import { SymbolKind, type ProjectIndex, type SymbolDef } from "./indexer/types.js";
+import { prepareSourceInput } from "./languages/filePrep.js";
 import { assertFilePathWithinRoot, normalizePath, toProjectDisplayPath } from "./util/paths.js";
 
 export type DuplicateConfidence = "high" | "medium" | "low";
@@ -34,6 +37,8 @@ export type DuplicateMetrics = {
   shingleOverlap: number;
   lengthRatio: number;
   lineSpanRatio: number;
+  astShapeEqual?: boolean;
+  gitSimilarity?: number;
   complexityDelta?: number;
 };
 
@@ -65,6 +70,7 @@ export type DuplicateGroup = {
 export type DuplicateDetectionOptions = {
   projectRoot?: string;
   files?: readonly string[];
+  similarityHints?: readonly DuplicateSimilarityHint[];
   minConfidence?: DuplicateConfidence;
   limit?: number;
   crossFileOnly?: boolean;
@@ -76,6 +82,12 @@ export type DuplicateDetectionOptions = {
   shingleSize?: number;
   windowSize?: number;
   includeRawPairs?: boolean;
+};
+
+export type DuplicateSimilarityHint = {
+  leftFile: string;
+  rightFile: string;
+  similarityIndex: number;
 };
 
 export type DuplicateDetectionOmittedCounts = {
@@ -123,22 +135,27 @@ type DuplicateInternalUnit = DuplicateUnitRef & {
   text: string;
   rawHash: string;
   normalizedHash: string;
+  astShapeHash?: string;
   normalizedTokens: string[];
   tokenSet: Set<string>;
   signatures: Set<string>;
 };
 
-type DuplicateUnitDraft = Omit<DuplicateUnitRef, "tokenCount" | "handle" | "fileHandle" | "chunkHandle" | "symbolHandle" | "sqlHandle">;
+type DuplicateUnitDraft = Omit<
+  DuplicateUnitRef,
+  "tokenCount" | "handle" | "fileHandle" | "chunkHandle" | "symbolHandle" | "sqlHandle"
+>;
 
 type PairFilter = (left: DuplicateInternalUnit, right: DuplicateInternalUnit) => boolean;
 type UnitFilter = (unit: DuplicateInternalUnit) => boolean;
-
 
 type PairEvidence = {
   left: DuplicateInternalUnit;
   right: DuplicateInternalUnit;
   rawHash: boolean;
   normalizedHash: boolean;
+  astShape: boolean;
+  gitSimilarity?: number;
   signature: boolean;
   signatureMatches: number;
 };
@@ -150,6 +167,14 @@ type LanguageForFileResult = {
 
 type ConsideredSignaturesByUnit = Map<string, Set<string>>;
 
+type DuplicateAstContext = {
+  source: string;
+  tree: SyntaxTreeLike;
+  lineStartOffsets: number[];
+};
+
+type DuplicateAstContextCache = Map<string, DuplicateAstContext | null>;
+
 const DEFAULT_MIN_TOKENS = 40;
 const DEFAULT_MAX_TOKENS = 800;
 const DEFAULT_LIMIT = 50;
@@ -160,6 +185,7 @@ const DEFAULT_WINDOW_SIZE = 4;
 const DEFAULT_MAX_FINGERPRINTS = 128;
 const GROUP_PRIMARY_LENGTH_RATIO_FLOOR = 0.7;
 const NEARBY_CHUNK_VARIANT_MAX_GAP = 2;
+const MIN_SIMILARITY_HINT_INDEX = 80;
 
 const textLanguageByExtension: Record<string, string> = {
   ".json": "json",
@@ -370,6 +396,13 @@ function ratio(left: number, right: number): number {
   return Math.min(left, right) / Math.max(left, right);
 }
 
+function normalizeSimilarityIndex(value: number): number | undefined {
+  if (!Number.isFinite(value)) return undefined;
+  const bounded = Math.max(0, Math.min(100, Math.round(value)));
+  if (bounded < MIN_SIMILARITY_HINT_INDEX) return undefined;
+  return bounded;
+}
+
 /** Measures set similarity as intersection divided by union. */
 function jaccard(left: Set<string>, right: Set<string>): number {
   if (!left.size && !right.size) return 1;
@@ -426,9 +459,18 @@ function confidenceForScore(score: number): DuplicateConfidence {
 
 function cloneTypeForPair(evidence: PairEvidence, metrics: DuplicateMetrics): DuplicateCloneType {
   if (evidence.rawHash) return "exact";
-  if (evidence.normalizedHash && metrics.tokenJaccard >= 0.75) return "renamed";
+  if ((evidence.astShape || evidence.normalizedHash) && metrics.tokenJaccard >= 0.75) return "renamed";
+  if ((evidence.gitSimilarity ?? 0) >= 80) return "near";
   if (metrics.shingleOverlap >= 0.55 || metrics.tokenJaccard >= 0.72) return "near";
   return "weak";
+}
+
+function shouldScoreSignatureEvidence(evidence: PairEvidence, metrics: DuplicateMetrics): boolean {
+  if (!evidence.signature) return false;
+  if (evidence.rawHash || evidence.normalizedHash || evidence.astShape || evidence.gitSimilarity !== undefined) {
+    return true;
+  }
+  return metrics.shingleOverlap >= 0.55;
 }
 
 function languageForFile(filePath: string): LanguageForFileResult | undefined {
@@ -442,7 +484,6 @@ function languageForFile(filePath: string): LanguageForFileResult | undefined {
   }
   return undefined;
 }
-
 
 function formatDuplicateFileHandle(file: string): string {
   return ["file", encodeURIComponent(file)].join(":");
@@ -490,6 +531,7 @@ function buildInternalUnit(
   shingleSize: number,
   windowSize: number,
   handles: { symbolHandle?: string; sqlHandle?: string } = {},
+  astShapeHash?: string,
 ): DuplicateInternalUnit {
   const rawHash = hashText(text);
   const sourceTokens = tokenizeSource(text);
@@ -505,6 +547,7 @@ function buildInternalUnit(
     text,
     rawHash,
     normalizedHash: hashText(normalizedTokens.join(" ")),
+    ...(astShapeHash !== undefined ? { astShapeHash } : {}),
     tokenCount: sourceTokens.length,
     handle,
     fileHandle,
@@ -523,6 +566,7 @@ function makeSymbolUnit(
   projectRoot: string | undefined,
   shingleSize: number,
   windowSize: number,
+  astContext: DuplicateAstContext | undefined,
 ): DuplicateInternalUnit | undefined {
   if (!symbolUnitKinds.has(symbol.kind)) return undefined;
   const file = displayPath(projectRoot, symbol.file);
@@ -541,10 +585,18 @@ function makeSymbolUnit(
     symbolKind: symbol.kind,
     ...(symbol.complexity !== undefined ? { complexity: symbol.complexity } : {}),
   };
-  return buildInternalUnit(unit, symbol.file, chunk.text, shingleSize, windowSize, {
-    ...(sqlHandle !== undefined ? { sqlHandle } : {}),
-    ...(symbolHandle !== undefined ? { symbolHandle } : {}),
-  });
+  return buildInternalUnit(
+    unit,
+    symbol.file,
+    chunk.text,
+    shingleSize,
+    windowSize,
+    {
+      ...(sqlHandle !== undefined ? { sqlHandle } : {}),
+      ...(symbolHandle !== undefined ? { symbolHandle } : {}),
+    },
+    astShapeHashForRange(astContext, chunk.startLine, chunk.endLine),
+  );
 }
 
 function makeDuplicateChunks(
@@ -586,6 +638,139 @@ function findChunkForSymbol(symbol: SymbolDef, chunks: readonly Chunk[]): Chunk 
   return candidates[0];
 }
 
+async function getDuplicateAstContext(
+  index: ProjectIndex,
+  file: string,
+  source: string,
+  cache: DuplicateAstContextCache,
+): Promise<DuplicateAstContext | undefined> {
+  if (cache.has(file)) return cache.get(file) ?? undefined;
+
+  const retained = index.parsed?.get(file);
+  if (retained?.source === source) {
+    const context = astContextFromParsed(retained);
+    cache.set(file, context);
+    return context;
+  }
+
+  try {
+    const prepared = await prepareSourceInput(file, { source });
+    const attempt = attemptParsePreparedFileContext({
+      file,
+      source: prepared.source,
+      sup: prepared.sup,
+      ...(index.nativeMode !== undefined ? { nativeMode: index.nativeMode } : {}),
+      nativeQueries: null,
+    });
+    if (!attempt.parsed) {
+      cache.set(file, null);
+      return undefined;
+    }
+    const context = astContextFromParsed(attempt.parsed);
+    cache.set(file, context);
+    return context;
+  } catch {
+    cache.set(file, null);
+    return undefined;
+  }
+}
+
+function astContextFromParsed(parsed: ParsedFileContext): DuplicateAstContext {
+  return {
+    source: parsed.source,
+    tree: parsed.tree,
+    lineStartOffsets: collectLineStartOffsets(parsed.source),
+  };
+}
+
+function collectLineStartOffsets(source: string): number[] {
+  const offsets = [0];
+  for (let index = 0; index < source.length; index++) {
+    if (source[index] === "\n") offsets.push(index + 1);
+  }
+  return offsets;
+}
+
+function astShapeHashForRange(
+  context: DuplicateAstContext | undefined,
+  startLine: number,
+  endLine: number,
+): string | undefined {
+  if (!context) return undefined;
+  const range = lineRangeToByteRange(context, startLine, endLine);
+  if (!range) return undefined;
+  const node = findSmallestCoveringNode(context.tree.rootNode, range.start, range.end);
+  if (!node) return undefined;
+  const shape = normalizedAstShape(node);
+  if (!shape) return undefined;
+  return hashText(shape);
+}
+
+function lineRangeToByteRange(
+  context: DuplicateAstContext,
+  startLine: number,
+  endLine: number,
+): { start: number; end: number } | undefined {
+  const startOffset = context.lineStartOffsets[Math.max(0, startLine - 1)];
+  if (startOffset === undefined) return undefined;
+  const nextLineOffset = context.lineStartOffsets[Math.max(startLine, endLine)];
+  const rawEndOffset = nextLineOffset === undefined ? context.source.length : Math.max(startOffset, nextLineOffset);
+  let trimmedStartOffset = startOffset;
+  let endOffset = Math.max(startOffset, rawEndOffset);
+  while (trimmedStartOffset < endOffset && /\s/.test(context.source[trimmedStartOffset]!)) {
+    trimmedStartOffset++;
+  }
+  while (endOffset > trimmedStartOffset && /\s/.test(context.source[endOffset - 1]!)) {
+    endOffset--;
+  }
+  const startIndex = trimmedStartOffset;
+  if (endOffset <= startIndex) return undefined;
+  return { start: startIndex, end: endOffset };
+}
+
+function findSmallestCoveringNode(node: SyntaxNodeLike, startIndex: number, endIndex: number): SyntaxNodeLike | null {
+  if (node.endIndex < startIndex || node.startIndex > endIndex) return null;
+  if (node.startIndex > startIndex || node.endIndex < endIndex) return null;
+  for (const child of node.namedChildren) {
+    const candidate = findSmallestCoveringNode(child, startIndex, endIndex);
+    if (candidate) return candidate;
+  }
+  return node;
+}
+
+function normalizedAstShape(root: SyntaxNodeLike): string {
+  let visited = 0;
+  const maxNodes = 512;
+  const walk = (node: SyntaxNodeLike): string => {
+    visited++;
+    if (visited > maxNodes) return "...";
+    const nodeType = normalizeAstNodeType(node.type);
+    const childShapes = node.namedChildren
+      .filter((child) => !isAstShapeIgnoredNode(child))
+      .map(walk)
+      .filter(Boolean);
+    if (!childShapes.length) return nodeType;
+    return `${nodeType}(${childShapes.join(",")})`;
+  };
+  return walk(root);
+}
+
+function isAstShapeIgnoredNode(node: SyntaxNodeLike): boolean {
+  const type = node.type.toLowerCase();
+  return type.includes("comment") || type === "error";
+}
+
+function normalizeAstNodeType(type: string): string {
+  const lower = type.toLowerCase();
+  if (lower.includes("identifier") || lower === "name" || lower.endsWith("_name")) return "identifier";
+  if (lower.includes("string") || lower.includes("char") || lower.includes("template")) return "literal";
+  if (lower.includes("number") || lower.includes("integer") || lower.includes("float")) return "literal";
+  if (lower.includes("boolean") || lower === "true" || lower === "false" || lower === "null" || lower === "nil") {
+    return "literal";
+  }
+  return type;
+}
+
 /** Falls back to semantic chunks so body-level clones are still visible. */
 function makeChunkUnits(
   filePath: string,
@@ -593,6 +778,7 @@ function makeChunkUnits(
   projectRoot: string | undefined,
   shingleSize: number,
   windowSize: number,
+  astContext: DuplicateAstContext | undefined,
 ): DuplicateInternalUnit[] {
   return chunks.map((chunk) => {
     const file = displayPath(projectRoot, filePath);
@@ -604,7 +790,15 @@ function makeChunkUnits(
       kind: "chunk",
       ...(chunk.name !== undefined ? { name: chunk.name } : {}),
     };
-    return buildInternalUnit(unit, filePath, chunk.text, shingleSize, windowSize);
+    return buildInternalUnit(
+      unit,
+      filePath,
+      chunk.text,
+      shingleSize,
+      windowSize,
+      {},
+      astShapeHashForRange(astContext, chunk.startLine, chunk.endLine),
+    );
   });
 }
 
@@ -634,7 +828,7 @@ function hasLineOverlap(left: DuplicateInternalUnit, right: DuplicateInternalUni
 }
 function addPairEvidence(
   pairs: Map<string, PairEvidence>,
-  evidenceKind: "rawHash" | "normalizedHash" | "signature",
+  evidenceKind: "rawHash" | "normalizedHash" | "astShape" | "signature",
   left: DuplicateInternalUnit,
   right: DuplicateInternalUnit,
 ): void {
@@ -653,6 +847,7 @@ function addPairEvidence(
     right,
     rawHash: evidenceKind === "rawHash",
     normalizedHash: evidenceKind === "normalizedHash",
+    astShape: evidenceKind === "astShape",
     signature: false,
     signatureMatches: evidenceKind === "signature" ? 1 : 0,
   });
@@ -662,7 +857,7 @@ function addPairEvidence(
 function addBucketPairs(
   bucket: readonly DuplicateInternalUnit[],
   pairs: Map<string, PairEvidence>,
-  evidenceKind: "rawHash" | "normalizedHash" | "signature",
+  evidenceKind: "rawHash" | "normalizedHash" | "astShape" | "signature",
   pairFilter?: PairFilter,
   unitFilter?: UnitFilter,
 ): void {
@@ -720,7 +915,7 @@ function bucketPairCountExceeds(
 function addBucketsToPairs(
   buckets: Map<string, DuplicateInternalUnit[]>,
   pairs: Map<string, PairEvidence>,
-  evidenceKind: "rawHash" | "normalizedHash" | "signature",
+  evidenceKind: "rawHash" | "normalizedHash" | "astShape" | "signature",
   maxBucketSize: number,
   pairFilter?: PairFilter,
   unitFilter?: UnitFilter,
@@ -792,7 +987,15 @@ function scorePair(evidence: PairEvidence, metrics: DuplicateMetrics): { score: 
     score += 48;
     reasons.push("matching normalized token stream");
   }
-  if (evidence.signature) {
+  if (evidence.astShape) {
+    score += 40;
+    reasons.push("matching AST shape");
+  }
+  if (evidence.gitSimilarity !== undefined && evidence.gitSimilarity >= 80) {
+    score += 20;
+    reasons.push(`git similarity ${evidence.gitSimilarity}%`);
+  }
+  if (shouldScoreSignatureEvidence(evidence, metrics)) {
     score += 14;
     reasons.push("shared fingerprint bucket");
   }
@@ -824,6 +1027,8 @@ function metricsForPair(evidence: PairEvidence): DuplicateMetrics {
     shingleOverlap: jaccard(left.signatures, right.signatures),
     lengthRatio: ratio(left.tokenCount, right.tokenCount),
     lineSpanRatio: ratio(lineSpan(left), lineSpan(right)),
+    ...(evidence.astShape ? { astShapeEqual: true } : {}),
+    ...(evidence.gitSimilarity !== undefined ? { gitSimilarity: evidence.gitSimilarity } : {}),
   };
   if (left.complexity !== undefined && right.complexity !== undefined) {
     metrics.complexityDelta = Math.abs(left.complexity - right.complexity);
@@ -843,6 +1048,7 @@ async function collectDuplicateUnits(
     new Set(files.map((file) => normalizeDetectionFile(file, options.projectRoot))),
   ).sort();
   const units: DuplicateInternalUnit[] = [];
+  const astContextCache: DuplicateAstContextCache = new Map();
   let belowThresholdUnits = 0;
 
   for (const file of normalizedFiles) {
@@ -857,6 +1063,9 @@ async function collectDuplicateUnits(
       continue;
     }
 
+    const astContext = language.textOnly
+      ? undefined
+      : await getDuplicateAstContext(index, file, source, astContextCache);
     const chunks = makeDuplicateChunks(
       file,
       language.id,
@@ -870,10 +1079,17 @@ async function collectDuplicateUnits(
       .map((symbol) => {
         const chunk = findChunkForSymbol(symbol, symbolChunks);
         if (!chunk) return undefined;
-        return makeSymbolUnit(symbol, chunk, options.projectRoot, options.shingleSize, options.windowSize);
+        return makeSymbolUnit(symbol, chunk, options.projectRoot, options.shingleSize, options.windowSize, astContext);
       })
       .filter((unit): unit is DuplicateInternalUnit => unit !== undefined);
-    const chunkUnits = makeChunkUnits(file, chunks, options.projectRoot, options.shingleSize, options.windowSize);
+    const chunkUnits = makeChunkUnits(
+      file,
+      chunks,
+      options.projectRoot,
+      options.shingleSize,
+      options.windowSize,
+      astContext,
+    );
     const candidates = [...symbolUnits, ...chunkUnits];
 
     for (const unit of candidates) {
@@ -908,17 +1124,23 @@ function addToBucket(buckets: Map<string, DuplicateInternalUnit[]>, key: string,
 function buildCandidatePairs(
   units: readonly DuplicateInternalUnit[],
   maxBucketSize: number,
+  similarityHints: readonly DuplicateSimilarityHint[] | undefined,
+  projectRoot: string | undefined,
   pairFilter?: PairFilter,
   unitFilter?: UnitFilter,
 ): { pairs: Map<string, PairEvidence>; oversizedBuckets: number } {
   const rawHashBuckets = new Map<string, DuplicateInternalUnit[]>();
   const normalizedHashBuckets = new Map<string, DuplicateInternalUnit[]>();
+  const astShapeBuckets = new Map<string, DuplicateInternalUnit[]>();
   const signatureBuckets = new Map<string, DuplicateInternalUnit[]>();
 
   for (const unit of units) {
     const languagePrefix = `${unit.languageId}:`;
     addToBucket(rawHashBuckets, `${languagePrefix}${unit.rawHash}`, unit);
     addToBucket(normalizedHashBuckets, `${languagePrefix}${unit.normalizedHash}`, unit);
+    if (unit.astShapeHash !== undefined) {
+      addToBucket(astShapeBuckets, `${languagePrefix}${unit.astShapeHash}`, unit);
+    }
     for (const signature of unit.signatures) {
       addToBucket(signatureBuckets, `${languagePrefix}${signature}`, unit);
     }
@@ -928,7 +1150,16 @@ function buildCandidatePairs(
   const consideredSignaturesByUnit: ConsideredSignaturesByUnit = new Map();
   let oversizedBuckets = 0;
   oversizedBuckets += addBucketsToPairs(rawHashBuckets, pairs, "rawHash", maxBucketSize, pairFilter, unitFilter);
-  oversizedBuckets += addBucketsToPairs(normalizedHashBuckets, pairs, "normalizedHash", maxBucketSize, pairFilter, unitFilter);
+  oversizedBuckets += addBucketsToPairs(
+    normalizedHashBuckets,
+    pairs,
+    "normalizedHash",
+    maxBucketSize,
+    pairFilter,
+    unitFilter,
+  );
+  oversizedBuckets += addBucketsToPairs(astShapeBuckets, pairs, "astShape", maxBucketSize, pairFilter, unitFilter);
+  oversizedBuckets += addSimilarityHintPairs(units, pairs, similarityHints, projectRoot, maxBucketSize, pairFilter);
   oversizedBuckets += addSignatureBucketsToPairs(
     signatureBuckets,
     pairs,
@@ -942,11 +1173,164 @@ function buildCandidatePairs(
       evidence.signature = true;
       continue;
     }
-    if (!evidence.rawHash && !evidence.normalizedHash) {
+    if (!evidence.rawHash && !evidence.normalizedHash && !evidence.astShape && evidence.gitSimilarity === undefined) {
       pairs.delete(key);
     }
   }
   return { pairs, oversizedBuckets };
+}
+
+function addSimilarityHintPairs(
+  units: readonly DuplicateInternalUnit[],
+  pairs: Map<string, PairEvidence>,
+  similarityHints: readonly DuplicateSimilarityHint[] | undefined,
+  projectRoot: string | undefined,
+  maxBucketSize: number,
+  pairFilter?: PairFilter,
+): number {
+  if (!similarityHints?.length) return 0;
+  const unitsByFile = new Map<string, DuplicateInternalUnit[]>();
+  for (const unit of units) {
+    const bucket = unitsByFile.get(unit.absoluteFile);
+    if (bucket) {
+      bucket.push(unit);
+    } else {
+      unitsByFile.set(unit.absoluteFile, [unit]);
+    }
+  }
+
+  let oversizedHints = 0;
+  for (const hint of similarityHints) {
+    const similarityIndex = normalizeSimilarityIndex(hint.similarityIndex);
+    if (similarityIndex === undefined) continue;
+    const leftFile = normalizeSimilarityHintFile(hint.leftFile, projectRoot);
+    const rightFile = normalizeSimilarityHintFile(hint.rightFile, projectRoot);
+    if (!leftFile || !rightFile || leftFile === rightFile) continue;
+    const leftUnits = unitsByFile.get(leftFile);
+    const rightUnits = unitsByFile.get(rightFile);
+    if (!leftUnits?.length || !rightUnits?.length) continue;
+
+    if (similarityHintPairCountExceeds(leftUnits, rightUnits, maxBucketSize, pairFilter)) {
+      oversizedHints++;
+      addAlignedSimilarityHintPairs(pairs, leftUnits, rightUnits, similarityIndex, maxBucketSize, pairFilter);
+      continue;
+    }
+    for (const leftUnit of leftUnits) {
+      for (const rightUnit of rightUnits) {
+        if (leftUnit.languageId !== rightUnit.languageId) continue;
+        const [left, right] = orderedPair(leftUnit, rightUnit);
+        if (pairFilter && !pairFilter(left, right)) continue;
+        addSimilarityHintPair(pairs, left, right, similarityIndex);
+      }
+    }
+  }
+  return oversizedHints;
+}
+
+function similarityHintPairCountExceeds(
+  leftUnits: readonly DuplicateInternalUnit[],
+  rightUnits: readonly DuplicateInternalUnit[],
+  limit: number,
+  pairFilter?: PairFilter,
+): boolean {
+  let count = 0;
+  for (const leftUnit of leftUnits) {
+    for (const rightUnit of rightUnits) {
+      if (leftUnit.languageId !== rightUnit.languageId) continue;
+      const [left, right] = orderedPair(leftUnit, rightUnit);
+      if (pairFilter && !pairFilter(left, right)) continue;
+      count++;
+      if (count > limit) return true;
+    }
+  }
+  return false;
+}
+
+function similarityAlignmentKey(unit: DuplicateInternalUnit): string {
+  return [unit.languageId, unit.kind, unit.symbolKind ?? ""].join(":");
+}
+
+function addAlignedSimilarityHintPairs(
+  pairs: Map<string, PairEvidence>,
+  leftUnits: readonly DuplicateInternalUnit[],
+  rightUnits: readonly DuplicateInternalUnit[],
+  similarityIndex: number,
+  maxPairs: number,
+  pairFilter?: PairFilter,
+): void {
+  const rightByKey = new Map<string, DuplicateInternalUnit[]>();
+  for (const unit of rightUnits) {
+    const key = similarityAlignmentKey(unit);
+    const bucket = rightByKey.get(key);
+    if (bucket) bucket.push(unit);
+    else rightByKey.set(key, [unit]);
+  }
+  for (const bucket of rightByKey.values()) {
+    bucket.sort(compareUnitRefs);
+  }
+
+  const leftByKey = new Map<string, DuplicateInternalUnit[]>();
+  for (const unit of leftUnits) {
+    const key = similarityAlignmentKey(unit);
+    const bucket = leftByKey.get(key);
+    if (bucket) bucket.push(unit);
+    else leftByKey.set(key, [unit]);
+  }
+  for (const bucket of leftByKey.values()) {
+    bucket.sort(compareUnitRefs);
+  }
+
+  const seenPairs = new Set<string>();
+  let addedPairs = 0;
+  for (const [key, sortedLeftUnits] of Array.from(leftByKey.entries()).sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    const sortedRightUnits = rightByKey.get(key);
+    if (!sortedRightUnits?.length) continue;
+    const limit = Math.min(sortedLeftUnits.length, sortedRightUnits.length);
+    for (let index = 0; index < limit; index++) {
+      if (addedPairs >= maxPairs) return;
+      const [left, right] = orderedPair(sortedLeftUnits[index]!, sortedRightUnits[index]!);
+      const pairId = pairKey(left, right);
+      if (seenPairs.has(pairId)) continue;
+      seenPairs.add(pairId);
+      if (pairFilter && !pairFilter(left, right)) continue;
+      addSimilarityHintPair(pairs, left, right, similarityIndex);
+      addedPairs++;
+    }
+  }
+}
+
+function normalizeSimilarityHintFile(file: string, projectRoot: string | undefined): string | undefined {
+  try {
+    return normalizeDetectionFile(file, projectRoot);
+  } catch {
+    return undefined;
+  }
+}
+
+function addSimilarityHintPair(
+  pairs: Map<string, PairEvidence>,
+  left: DuplicateInternalUnit,
+  right: DuplicateInternalUnit,
+  similarityIndex: number,
+): void {
+  const key = pairKey(left, right);
+  const existing = pairs.get(key);
+  if (existing) {
+    existing.gitSimilarity = Math.max(existing.gitSimilarity ?? 0, similarityIndex);
+    return;
+  }
+  pairs.set(key, {
+    left,
+    right,
+    rawHash: false,
+    normalizedHash: false,
+    astShape: false,
+    gitSimilarity: similarityIndex,
+    signature: false,
+    signatureMatches: 0,
+  });
 }
 
 /** Requires enough shared fingerprints to avoid incidental syntax matches. */
@@ -1335,7 +1719,7 @@ export async function findDuplicates(
     shingleSize,
     windowSize,
   });
-  const { pairs, oversizedBuckets } = buildCandidatePairs(units, maxBucketSize);
+  const { pairs, oversizedBuckets } = buildCandidatePairs(units, maxBucketSize, options.similarityHints, projectRoot);
   const suggestions: DuplicateSuggestion[] = [];
   let overlappingPairs = 0;
   let comparedPairs = 0;
@@ -1415,10 +1799,17 @@ function groupTouchesDuplicateTarget(group: DuplicateGroup, target: DuplicateTar
   return group.variants.some((variant) => suggestionTouchesDuplicateTarget(variant, target));
 }
 
-function boundDuplicateGroupVariants(group: DuplicateGroup, target: DuplicateTarget, includeRawPairs: boolean): DuplicateGroup {
+function boundDuplicateGroupVariants(
+  group: DuplicateGroup,
+  target: DuplicateTarget,
+  includeRawPairs: boolean,
+): DuplicateGroup {
   if (includeRawPairs) return group;
   let variants = group.variants;
-  if (!unitTouchesDuplicateTarget(group.primaryLeft, target) && !unitTouchesDuplicateTarget(group.primaryRight, target)) {
+  if (
+    !unitTouchesDuplicateTarget(group.primaryLeft, target) &&
+    !unitTouchesDuplicateTarget(group.primaryRight, target)
+  ) {
     const targetVariant = group.variants.find((variant) => suggestionTouchesDuplicateTarget(variant, target));
     if (targetVariant) {
       const targetVariantKey = suggestionVariantKey(targetVariant);
@@ -1499,9 +1890,17 @@ async function findDuplicatesTouchingTargets(
     shingleSize,
     windowSize,
   });
-  const touchesTarget: UnitFilter = (unit) => normalizedTargets.some((target) => unitTouchesDuplicateTarget(unit, target));
+  const touchesTarget: UnitFilter = (unit) =>
+    normalizedTargets.some((target) => unitTouchesDuplicateTarget(unit, target));
   const touchesAnyTarget: PairFilter = (left, right) => touchesTarget(left) || touchesTarget(right);
-  const { pairs, oversizedBuckets } = buildCandidatePairs(units, maxBucketSize, touchesAnyTarget, touchesTarget);
+  const { pairs, oversizedBuckets } = buildCandidatePairs(
+    units,
+    maxBucketSize,
+    options.similarityHints,
+    projectRoot,
+    touchesAnyTarget,
+    touchesTarget,
+  );
   const suggestions: DuplicateSuggestion[] = [];
   let overlappingPairs = 0;
   let comparedPairs = 0;

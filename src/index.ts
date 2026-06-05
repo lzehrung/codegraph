@@ -350,6 +350,7 @@ export {
   type DuplicateGroup,
   type DuplicateMetrics,
   type DuplicateSuggestion,
+  type DuplicateSimilarityHint,
   type DuplicateUnitKind,
   type DuplicateUnitRef,
 } from "./duplicates.js";

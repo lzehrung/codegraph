@@ -39,7 +39,9 @@ function parseFailOn(rawValue: string | undefined): ArchitectureDriftFindingKind
     .filter(Boolean);
   const invalid = values.filter((value) => !findingKindSet.has(value));
   if (invalid.length) {
-    throw new Error(`Invalid --fail-on value(s): ${invalid.join(", ")}. Valid kinds: ${ARCHITECTURE_DRIFT_FINDING_KINDS.join(", ")}.`);
+    throw new Error(
+      `Invalid --fail-on value(s): ${invalid.join(", ")}. Valid kinds: ${ARCHITECTURE_DRIFT_FINDING_KINDS.join(", ")}.`,
+    );
   }
   return Array.from(new Set(values)) as ArchitectureDriftFindingKind[];
 }
@@ -68,7 +70,10 @@ export async function handleDriftCommand(context: DriftCommandContext): Promise<
   let publicApi: ArchitectureDriftPublicApiMode | undefined;
   try {
     failOn = parseFailOn(context.getOpt("--fail-on"));
-    hotspotJump = parseOptionalNonNegativeIntegerOption(context.getOpt("--hotspot-jump-threshold"), "--hotspot-jump-threshold");
+    hotspotJump = parseOptionalNonNegativeIntegerOption(
+      context.getOpt("--hotspot-jump-threshold"),
+      "--hotspot-jump-threshold",
+    );
     maxFindings = parseNonNegativeIntegerOption(context.getOpt("--limit"), "--limit", 100);
     graphEdges = parseGraphEdgesMode(context.getOpt("--graph-edges"));
     publicApi = parsePublicApiMode(context.getOpt("--public-api"));
@@ -84,7 +89,9 @@ export async function handleDriftCommand(context: DriftCommandContext): Promise<
     context.exit(2);
   }
   if (!base && !baseArtifact) {
-    context.writeStderrLine("Usage: codegraph drift [roots...] [--root <path>] (--base <ref> | --base-artifact <dir>) [--head <ref>] [--json | --pretty | --compact-json]");
+    context.writeStderrLine(
+      "Usage: codegraph drift [roots...] [--root <path>] (--base <ref> | --base-artifact <dir>) [--head <ref>] [--json | --pretty | --compact-json]",
+    );
     context.writeStderrLine("Provide either --base or --base-artifact.");
     context.exit(2);
   }

@@ -17,7 +17,6 @@ async function commitAll(root: string, message: string): Promise<string> {
   return runGit(root, ["rev-parse", "HEAD"]);
 }
 
-
 describe("architecture drift git provider", () => {
   it("compares git refs without dirtying the worktree", async () => {
     const root = await mkTmpDir("cg-drift-git-");

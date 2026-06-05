@@ -48,6 +48,9 @@ export async function buildImpactReport(
   // Build changedFiles summary
   const changedFiles = normalizedDiffFiles.map((fileChange) => ({
     file: displayFile(fileChange.path),
+    kind: fileChange.kind,
+    ...(fileChange.oldPath ? { oldFile: displayFile(fileChange.oldPath) } : {}),
+    ...(fileChange.similarityIndex !== undefined ? { similarityIndex: fileChange.similarityIndex } : {}),
     hunks: fileChange.hunks.map((hunk) => newFileRangeForHunk(hunk)),
   }));
 

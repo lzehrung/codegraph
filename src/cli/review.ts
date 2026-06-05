@@ -12,6 +12,7 @@ import {
   type DuplicateLeadScope,
   type DuplicateLeadSummary,
 } from "../duplicatesLeads.js";
+import type { DuplicateSimilarityHint } from "../duplicates.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import {
   REVIEW_SUMMARY_CANDIDATES_PER_CONFIDENCE_LIMIT,
@@ -131,7 +132,14 @@ function appendReviewCallCompatibility(lines: string[], report: Awaited<ReturnTy
 }
 
 function collectChangedReviewFiles(report: ReviewReport): string[] {
-  return report.changedFiles.map((file) => file.file);
+  const files = new Set<string>();
+  for (const file of report.changedFiles) {
+    files.add(file.file);
+    if (file.oldFile !== undefined && file.similarityIndex !== undefined) {
+      files.add(file.oldFile);
+    }
+  }
+  return Array.from(files).sort((left, right) => left.localeCompare(right));
 }
 
 function collectImpactedReviewFiles(report: ReviewReport): string[] {
@@ -152,6 +160,23 @@ function duplicateScopeFilesForReview(
   if (duplicateScope === "all") return undefined;
   if (duplicateScope === "changed") return collectChangedReviewFiles(report);
   return collectImpactedReviewFiles(report);
+}
+
+function duplicateSimilarityHintsFromReview(report: ReviewReport): DuplicateSimilarityHint[] {
+  return report.changedFiles
+    .filter(
+      (
+        fileChange,
+      ): fileChange is ReviewReport["changedFiles"][number] & {
+        oldFile: string;
+        similarityIndex: number;
+      } => fileChange.oldFile !== undefined && fileChange.similarityIndex !== undefined,
+    )
+    .map((fileChange) => ({
+      leftFile: fileChange.oldFile,
+      rightFile: fileChange.file,
+      similarityIndex: fileChange.similarityIndex,
+    }));
 }
 
 function filterIndexedScopeFiles(input: {
@@ -254,6 +279,7 @@ async function collectReviewDuplicateSummary(input: {
     projectRoot: input.projectRoot,
     scope: input.duplicateScope,
     ...(indexedScopedFiles !== undefined ? { scopedFiles: indexedScopedFiles } : {}),
+    similarityHints: duplicateSimilarityHintsFromReview(input.report),
     ...(input.report.projectFiles?.length !== undefined ? { allScopeFileCount: input.report.projectFiles.length } : {}),
   });
 }

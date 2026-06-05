@@ -116,7 +116,11 @@ describe("document link graph extraction", () => {
     const indexFile = path.join(root, "index.md");
     const guideFile = path.join(root, "guide.md");
 
-    await fsp.writeFile(indexFile, "[broken [Guide](./guide.md)\n[broken [Guide][guide]\n\n[guide]: ./guide.md\n", "utf8");
+    await fsp.writeFile(
+      indexFile,
+      "[broken [Guide](./guide.md)\n[broken [Guide][guide]\n\n[guide]: ./guide.md\n",
+      "utf8",
+    );
     await fsp.writeFile(guideFile, "# Guide\n", "utf8");
 
     const normalizedIndex = indexFile.replace(/\\/g, "/");
@@ -308,7 +312,13 @@ describe("document link graph extraction", () => {
 
     await fsp.writeFile(
       indexFile,
-      ["[Text [Other] label](./guide.md)", "[Text [Other] label][guide]", "", "[Other]: ./other.md", "[guide]: ./guide.md"].join("\n"),
+      [
+        "[Text [Other] label](./guide.md)",
+        "[Text [Other] label][guide]",
+        "",
+        "[Other]: ./other.md",
+        "[guide]: ./guide.md",
+      ].join("\n"),
       "utf8",
     );
     await fsp.writeFile(guideFile, "# Guide\n", "utf8");

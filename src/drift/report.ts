@@ -26,7 +26,9 @@ function findingSubject(finding: ArchitectureDriftFinding): string {
   }
   if (finding.kind === "duplicate-increase" || finding.kind === "duplicate-decrease") {
     const newKeys = Array.isArray(finding.details?.newTopGroupKeys) ? finding.details.newTopGroupKeys.length : 0;
-    const resolvedKeys = Array.isArray(finding.details?.resolvedTopGroupKeys) ? finding.details.resolvedTopGroupKeys.length : 0;
+    const resolvedKeys = Array.isArray(finding.details?.resolvedTopGroupKeys)
+      ? finding.details.resolvedTopGroupKeys.length
+      : 0;
     return `groups ${finding.before ?? 0} -> ${finding.after ?? 0} (top +${newKeys}/-${resolvedKeys})`;
   }
   if (finding.kind === "graph-edge-added" || finding.kind === "graph-edge-removed") {

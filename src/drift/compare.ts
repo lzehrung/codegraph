@@ -78,7 +78,11 @@ function pushResolvedCycle(findings: ArchitectureDriftFinding[], cycle: Architec
   });
 }
 
-function compareCycles(findings: ArchitectureDriftFinding[], base: readonly ArchitectureCycle[], head: readonly ArchitectureCycle[]): void {
+function compareCycles(
+  findings: ArchitectureDriftFinding[],
+  base: readonly ArchitectureCycle[],
+  head: readonly ArchitectureCycle[],
+): void {
   const baseByKey = byKey(base);
   const headByKey = byKey(head);
   for (const cycle of headByKey.values()) {
@@ -180,14 +184,15 @@ function comparePublicApi(
   }
 }
 
-function signalEnabled(
-  snapshot: ArchitectureSnapshot,
-  signal: "unresolved" | "publicApi" | "duplicates",
-): boolean {
+function signalEnabled(snapshot: ArchitectureSnapshot, signal: "unresolved" | "publicApi" | "duplicates"): boolean {
   return snapshot.signalAvailability?.[signal] !== false;
 }
 
-function compareDuplicates(findings: ArchitectureDriftFinding[], base: ArchitectureSnapshot, head: ArchitectureSnapshot): void {
+function compareDuplicates(
+  findings: ArchitectureDriftFinding[],
+  base: ArchitectureSnapshot,
+  head: ArchitectureSnapshot,
+): void {
   const before = base.duplicates.groups.total;
   const after = head.duplicates.groups.total;
   if (before === after) return;

@@ -312,23 +312,25 @@ Sort order:
 
 ### Phase 3: AST Normalization
 
-- [ ] Add language-aware AST shape hashing.
-- [ ] Update language parity and scenario docs.
-- [ ] Add per-language tests.
+- [x] Add language-aware AST shape hashing.
+- [x] Update language parity and scenario docs.
+- [x] Add per-language tests.
 
-Current renamed-clone detection uses normalized token streams and fingerprints, not AST shape hashes.
+Renamed-clone detection uses normalized token streams, fingerprints, and parser-backed AST shape hashes when parser context is available.
 
 ### Phase 4: PR and Agent Integration
 
-- [ ] Use git `similarityIndex` in review or impact mode.
+- [x] Use git `similarityIndex` in review or impact mode.
 - [x] Add duplicate candidates to explain packets only after output stabilizes.
 - [x] Add scoped duplicate leads to pretty impact and review summaries.
 - [x] Add bounded `duplicate-sibling` review tasks for changed duplicate implementations.
 
 ### Phase 5: Optional Persistence
 
-- [ ] Consider duplicate cache files only if repeated runs need them.
-- [ ] Add SQLite schema migrations only with a clear query use case.
+- [x] Consider duplicate cache files only if repeated runs need them.
+- [x] Add SQLite schema migrations only with a clear query use case.
+
+No duplicate-specific persistence or SQLite schema migration is needed for this rollout. The detector remains in-memory and uses existing project indexing/cache behavior.
 
 ## Parity Rules
 

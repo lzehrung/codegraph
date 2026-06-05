@@ -4,7 +4,11 @@ import { isUnsupportedParserInputError, prepareSourceInput } from "../languages/
 import type { SyntaxTreeLike } from "../languages/types.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
 import { ProjectedSyntaxTree } from "../native/projectedTree.js";
-import { assertNativeRequiredAvailable, getNativeSyntaxTreeExecution, isNativeRequiredUnavailableError } from "../native/treeSitterNative.js";
+import {
+  assertNativeRequiredAvailable,
+  getNativeSyntaxTreeExecution,
+  isNativeRequiredUnavailableError,
+} from "../native/treeSitterNative.js";
 import { SymbolKind, type ProjectIndex, type ResolvedExport, type SymbolDef } from "../indexer/types.js";
 import type { FileId } from "../types.js";
 import { buildSymbolGraph, type SymbolGraph } from "./symbol-graph.js";

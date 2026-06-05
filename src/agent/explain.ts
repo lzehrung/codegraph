@@ -703,7 +703,8 @@ function duplicatePairForTarget(
   }
   return (
     group.variants.find(
-      (variant) => duplicateUnitTouchesTarget(variant.left, target) || duplicateUnitTouchesTarget(variant.right, target),
+      (variant) =>
+        duplicateUnitTouchesTarget(variant.left, target) || duplicateUnitTouchesTarget(variant.right, target),
     ) ?? { left: group.primaryLeft, right: group.primaryRight }
   );
 }

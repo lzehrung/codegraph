@@ -230,7 +230,7 @@ async function buildReviewIndex(input: {
   const indexOpts: IncrementalBuildOptions = {
     ...(appliedOptions ?? {}),
     graph: graphOptions,
-    ...(includeSymbolDetails && maxCallsites > 0 ? { keepParsed: true } : {}),
+    keepParsed: true,
     ...(indexReport ? { report: indexReport } : {}),
   };
   if (!hasUnavailableChangedFiles) {
@@ -343,6 +343,7 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
     changedFileList,
     diffHunksByFile,
     diffKindsByFile,
+    diffChangesByFile,
     explicitFiles,
     existenceByFile,
     deletedSnapshots,
@@ -479,7 +480,9 @@ function duplicateSiblingForTarget(group: DuplicateGroup, target: ReviewDuplicat
 function duplicateReviewTask(group: DuplicateGroup, target: ReviewDuplicateTarget): ReviewTask {
   const sibling = duplicateSiblingForTarget(group, target);
   const targetLabel =
-    target.startLine === undefined ? target.file : `${target.file}:${target.startLine}-${target.endLine ?? target.startLine}`;
+    target.startLine === undefined
+      ? target.file
+      : `${target.file}:${target.startLine}-${target.endLine ?? target.startLine}`;
   const siblingLabel = `${sibling.file}:${sibling.startLine}-${sibling.endLine}`;
   return {
     id: `duplicate-sibling-check:${group.id}`,

@@ -1498,16 +1498,34 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-drift-cli-"));
     try {
       await fsp.mkdir(path.join(root, "src"), { recursive: true });
-      await fsp.writeFile(path.join(root, "src", "a.ts"), "import { b } from './b'; export function a() { return b(); }\n", "utf8");
+      await fsp.writeFile(
+        path.join(root, "src", "a.ts"),
+        "import { b } from './b'; export function a() { return b(); }\n",
+        "utf8",
+      );
       await fsp.writeFile(path.join(root, "src", "b.ts"), "export function b() { return 1; }\n", "utf8");
       git(root, ["init"]);
       git(root, ["add", "."]);
       git(root, ["commit", "-m", "base"]);
-      await fsp.writeFile(path.join(root, "src", "b.ts"), "import { a } from './a'; export function b() { return a(); }\n", "utf8");
+      await fsp.writeFile(
+        path.join(root, "src", "b.ts"),
+        "import { a } from './a'; export function b() { return a(); }\n",
+        "utf8",
+      );
       git(root, ["add", "."]);
       git(root, ["commit", "-m", "head"]);
 
-      const json = await runCliCommand(["drift", "src", "--root", root, "--base", "HEAD~1", "--head", "HEAD", "--json"]);
+      const json = await runCliCommand([
+        "drift",
+        "src",
+        "--root",
+        root,
+        "--base",
+        "HEAD~1",
+        "--head",
+        "HEAD",
+        "--json",
+      ]);
       const failed = await runCliWithExit(
         ["drift", "src", "--root", root, "--base", "HEAD~1", "--head", "HEAD", "--fail-on", "new-cycle"],
         root,
@@ -1547,7 +1565,18 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
       git(root, ["add", "."]);
       git(root, ["commit", "-m", "base"]);
 
-      const explicitJson = await runCliCommand(["drift", "src", "--root", root, "--base", "HEAD", "--head", "WORKTREE", "--json", "--pretty"]);
+      const explicitJson = await runCliCommand([
+        "drift",
+        "src",
+        "--root",
+        root,
+        "--base",
+        "HEAD",
+        "--head",
+        "WORKTREE",
+        "--json",
+        "--pretty",
+      ]);
       const compactJson = await runCliCommand([
         "drift",
         "src",
@@ -1575,7 +1604,6 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     expect(result.stderr).toContain("--json | --pretty | --compact-json");
   });
 
-
   it("drift compact json summarizes graph edges and suppresses API additions by default", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-drift-cli-compact-"));
     try {
@@ -1584,8 +1612,16 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
       git(root, ["init"]);
       git(root, ["add", "."]);
       git(root, ["commit", "-m", "base"]);
-      await fsp.writeFile(path.join(root, "src", "b.ts"), "import { a } from './a';\nexport function b() { return a(); }\n", "utf8");
-      await fsp.writeFile(path.join(root, "src", "a.ts"), "import { b } from './b';\nexport function a() { return b(); }\n", "utf8");
+      await fsp.writeFile(
+        path.join(root, "src", "b.ts"),
+        "import { a } from './a';\nexport function b() { return a(); }\n",
+        "utf8",
+      );
+      await fsp.writeFile(
+        path.join(root, "src", "a.ts"),
+        "import { b } from './b';\nexport function a() { return b(); }\n",
+        "utf8",
+      );
       git(root, ["add", "."]);
       git(root, ["commit", "-m", "head"]);
 
@@ -1623,19 +1659,51 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
       git(root, ["init"]);
       git(root, ["add", "."]);
       git(root, ["commit", "-m", "base"]);
-      await fsp.writeFile(path.join(root, "src", "b.ts"), "import { a } from './a';\nexport function b() { return a(); }\n", "utf8");
-      await fsp.writeFile(path.join(root, "src", "a.ts"), "import { b } from './b';\nexport function a() { return b(); }\n", "utf8");
+      await fsp.writeFile(
+        path.join(root, "src", "b.ts"),
+        "import { a } from './a';\nexport function b() { return a(); }\n",
+        "utf8",
+      );
+      await fsp.writeFile(
+        path.join(root, "src", "a.ts"),
+        "import { b } from './b';\nexport function a() { return b(); }\n",
+        "utf8",
+      );
       git(root, ["add", "."]);
       git(root, ["commit", "-m", "head"]);
 
       const summary = JSON.parse(
-        await runCliCommand(["drift", "src", "--root", root, "--base", "HEAD~1", "--head", "HEAD", "--graph-edges", "summary"]),
+        await runCliCommand([
+          "drift",
+          "src",
+          "--root",
+          root,
+          "--base",
+          "HEAD~1",
+          "--head",
+          "HEAD",
+          "--graph-edges",
+          "summary",
+        ]),
       ) as { findings: Array<{ kind: string; details?: { count?: number } }> };
       const off = JSON.parse(
-        await runCliCommand(["drift", "src", "--root", root, "--base", "HEAD~1", "--head", "HEAD", "--graph-edges", "off"]),
+        await runCliCommand([
+          "drift",
+          "src",
+          "--root",
+          root,
+          "--base",
+          "HEAD~1",
+          "--head",
+          "HEAD",
+          "--graph-edges",
+          "off",
+        ]),
       ) as { findings: Array<{ kind: string }> };
 
-      expect(summary.findings.some((finding) => finding.kind === "graph-edge-added" && finding.details?.count === 1)).toBe(true);
+      expect(
+        summary.findings.some((finding) => finding.kind === "graph-edge-added" && finding.details?.count === 1),
+      ).toBe(true);
       expect(off.findings.some((finding) => finding.kind === "graph-edge-added")).toBe(false);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
@@ -1655,10 +1723,32 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
       git(root, ["commit", "-m", "head"]);
 
       const removals = JSON.parse(
-        await runCliCommand(["drift", "src", "--root", root, "--base", "HEAD~1", "--head", "HEAD", "--public-api", "removals"]),
+        await runCliCommand([
+          "drift",
+          "src",
+          "--root",
+          root,
+          "--base",
+          "HEAD~1",
+          "--head",
+          "HEAD",
+          "--public-api",
+          "removals",
+        ]),
       ) as { findings: Array<{ kind: string }> };
       const off = JSON.parse(
-        await runCliCommand(["drift", "src", "--root", root, "--base", "HEAD~1", "--head", "HEAD", "--public-api", "off"]),
+        await runCliCommand([
+          "drift",
+          "src",
+          "--root",
+          root,
+          "--base",
+          "HEAD~1",
+          "--head",
+          "HEAD",
+          "--public-api",
+          "off",
+        ]),
       ) as { findings: Array<{ kind: string }> };
 
       expect(removals.findings.some((finding) => finding.kind === "public-api-removal")).toBe(true);
@@ -1698,7 +1788,10 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
       git(root, ["add", "."]);
       git(root, ["commit", "-m", "base"]);
 
-      const result = await runCliWithExit(["drift", "src", "--root", root, "--base", "definitely-not-a-real-ref"], root);
+      const result = await runCliWithExit(
+        ["drift", "src", "--root", root, "--base", "definitely-not-a-real-ref"],
+        root,
+      );
 
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("definitely-not-a-real-ref");
@@ -1713,16 +1806,28 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-drift-cli-root-"));
     try {
       await fsp.mkdir(path.join(root, "src"), { recursive: true });
-      await fsp.writeFile(path.join(root, "src", "a.ts"), "import { b } from './b'; export function a() { return b(); }\n", "utf8");
+      await fsp.writeFile(
+        path.join(root, "src", "a.ts"),
+        "import { b } from './b'; export function a() { return b(); }\n",
+        "utf8",
+      );
       await fsp.writeFile(path.join(root, "src", "b.ts"), "export function b() { return 1; }\n", "utf8");
       git(root, ["init"]);
       git(root, ["add", "."]);
       git(root, ["commit", "-m", "base"]);
-      await fsp.writeFile(path.join(root, "src", "b.ts"), "import { a } from './a'; export function b() { return a(); }\n", "utf8");
+      await fsp.writeFile(
+        path.join(root, "src", "b.ts"),
+        "import { a } from './a'; export function b() { return a(); }\n",
+        "utf8",
+      );
       git(root, ["add", "."]);
       git(root, ["commit", "-m", "head"]);
 
-      const json = await runCliCommandDetailed(["drift", "./src", "--base", "HEAD~1", "--head", "HEAD", "--json"], undefined, root);
+      const json = await runCliCommandDetailed(
+        ["drift", "./src", "--base", "HEAD~1", "--head", "HEAD", "--json"],
+        undefined,
+        root,
+      );
 
       expect(JSON.parse(json.stdout)).toMatchObject({ schemaVersion: 1 });
     } finally {

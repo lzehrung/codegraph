@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
-import { buildProjectIndex, collectGraph } from "../src/index.js";
+import { buildProjectIndex, collectGraph, goToDefinition } from "../src/index.js";
 
 // Minimal smoke tests to validate workspace detection wiring.
 // Full fixtures are created in tests/samples/monorepo in a later step.
@@ -49,7 +49,6 @@ describe("Monorepo workspace support", () => {
 
   it("resolves exports-based default import across packages", async () => {
     const root = path.join(process.cwd(), "tests", "samples", "monorepo");
-    const { buildProjectIndex, goToDefinition } = await import("../src/index.js");
     const index = await buildProjectIndex(root);
     const pkga = path.join(root, "packages", "pkg-a", "src", "index.ts");
     const pkgb = path.join(root, "packages", "pkg-b", "src", "index.js");
@@ -62,7 +61,6 @@ describe("Monorepo workspace support", () => {
 
   it("per-package tsconfig paths: pkg-ts-consumer local alias and cross-package import", async () => {
     const root = path.join(process.cwd(), "tests", "samples", "monorepo");
-    const { buildProjectIndex, goToDefinition } = await import("../src/index.js");
     const index = await buildProjectIndex(root);
     const pkga = path.join(root, "packages", "pkg-a", "src", "index.ts");
     const pkgt = path.join(root, "packages", "pkg-ts-consumer", "src", "index.ts");

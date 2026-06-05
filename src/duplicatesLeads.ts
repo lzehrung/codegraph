@@ -1,4 +1,9 @@
-import { findDuplicates, type DuplicateCloneType, type DuplicateGroup } from "./duplicates.js";
+import {
+  findDuplicates,
+  type DuplicateCloneType,
+  type DuplicateGroup,
+  type DuplicateSimilarityHint,
+} from "./duplicates.js";
 import type { ProjectIndex } from "./indexer/types.js";
 
 export type DuplicateLeadScope = "off" | "changed" | "impacted" | "all";
@@ -66,6 +71,7 @@ export async function collectDuplicateLeadSummary(input: {
   scopedFiles?: readonly string[];
   allScopeFileCount?: number;
   limit?: number;
+  similarityHints?: readonly DuplicateSimilarityHint[];
 }): Promise<DuplicateLeadSummary | undefined> {
   const limit = input.limit ?? DEFAULT_DUPLICATE_LEAD_LIMIT;
   const scopedFiles = input.scope === "all" ? undefined : uniqueFiles(input.scopedFiles ?? []);
@@ -76,6 +82,7 @@ export async function collectDuplicateLeadSummary(input: {
   const result = await findDuplicates(input.index, {
     projectRoot: input.projectRoot,
     ...(scopedFiles ? { files: scopedFiles } : {}),
+    ...(input.similarityHints !== undefined ? { similarityHints: input.similarityHints } : {}),
     minConfidence: "medium",
     limit: limit * 4,
   });

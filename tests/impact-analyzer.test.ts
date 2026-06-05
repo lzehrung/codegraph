@@ -110,9 +110,7 @@ describe("Impact Analyzer Edge Cases", () => {
           throw new Error("Expected full impact report");
         }
 
-        const run = result.changedSymbols.find(
-          (symbol) => symbol.name === "run" && symbol.range.start.line === 2,
-        );
+        const run = result.changedSymbols.find((symbol) => symbol.name === "run" && symbol.range.start.line === 2);
         expect(run?.callCompatibility).toContainEqual(
           expect.objectContaining({
             status: "likely_mismatch",

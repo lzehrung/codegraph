@@ -20,13 +20,14 @@ export function assertImpactFilePathWithinRoot(
 }
 
 export function normalizeImpactFileChange(projectRoot: string, change: FileChange): FileChange {
+  const { oldPath, ...rest } = change;
   const normalizedPath = assertImpactFilePathWithinRoot(projectRoot, change.path, "Impact diff file");
   return {
-    ...change,
+    ...rest,
     path: normalizedPath,
-    ...(change.oldPath
+    ...(oldPath
       ? {
-          oldPath: assertImpactFilePathWithinRoot(projectRoot, change.oldPath, "Impact old diff file"),
+          oldPath: assertImpactFilePathWithinRoot(projectRoot, oldPath, "Impact old diff file"),
         }
       : {}),
   };

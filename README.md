@@ -79,7 +79,7 @@ Use Codegraph when you need fast structural answers about a repo without relying
 - Cross-file go-to-definition and find-references support across the shared source-language pipeline.
 - Deterministic agent orientation, packet retrieval, search, bounded explanations, portable artifact bundles, and MCP tools across files, symbols, chunks, SQL objects, graph neighborhoods, and review ranges with stable follow-up handles.
 - Semantic chunking for code and text files, including Vue and Svelte single-file component block splitting.
-- Duplicate and near-duplicate detection over indexed symbols, semantic chunks, and text chunks.
+- Duplicate and near-duplicate detection over indexed symbols, semantic chunks, text chunks, token fingerprints, and AST shape hashes when parser context is available.
 - AST grep, public API summaries, unresolved import reports, hotspot analysis, cycle detection, and shortest dependency paths.
 - PR impact analysis and review bundles that map diffs to changed symbols, impacted code, likely tests, graph deltas, and conservative provider-backed call-arity hints after signature changes.
 - SQL language support for `.sql` files, including statement chunks, object symbols, SQL-to-SQL graph edges, SQL navigation, and statement facts.
@@ -346,14 +346,14 @@ const wrapped = await tool_impactJSON(root, { provider: "git", base: "HEAD", hea
 
 Good downstream packs preserve structured fields such as symbol handles, ranges, diff snippets, callsites, graph edges, candidate-test confidence, impact reasons, diagnostics, and `schemaVersion`/`format`. Streaming callers that only need incremental chunks can set `streamSummary: "light"` to skip terminal suggestions, export summaries, re-export chains, ranked top impacts, graph metadata, cycles, clusters, and surface-area work. Use [docs/library-api.md](./docs/library-api.md) for the full API reference and [docs/agent-workflows.md](./docs/agent-workflows.md) for session and streaming recipes.
 
-Impact and review JSON may include `callCompatibility` on changed symbols when a provider-backed callable signature changes and resolved callsites have high-confidence argument counts. Treat these as review leads, not compiler-grade type checking; unsupported or ambiguous callsites are omitted from pretty output.
+Impact and review JSON may include `callCompatibility` on changed symbols when a provider-backed callable signature changes and resolved callsites have high-confidence argument counts. Treat these as review leads, not compiler-grade type checking; unsupported or ambiguous callsites are omitted from pretty output. Impact changed-file entries also preserve git copy or rename `oldFile` and `similarityIndex` metadata when available.
 
 The supported package import surface is the root export, `@lzehrung/codegraph`. The public API boundary and compatibility-export guidance live in [docs/library-api.md](./docs/library-api.md#public-api-boundary).
 
 ## Common workflows
 
 - Repo triage: run `codegraph inspect ./src --limit 20`, then follow with `codegraph hotspots ./src --limit 20` or `codegraph unresolved` to focus the next pass.
-- Duplicate cleanup: run `codegraph duplicates ./src --min-confidence medium` before refactors to find grouped extraction candidates.
+- Duplicate cleanup: run `codegraph duplicates ./src --min-confidence medium` before refactors to find grouped extraction candidates, including renamed structural clones.
 - Symbol navigation: use `codegraph goto <file> <line> <column>` and `codegraph refs --file <file> --line <line> --col <column> --pretty` when a question is about definitions or semantic usages rather than matching strings.
 - PR review: run `codegraph impact --base origin/main --head HEAD --pretty` for a ranked map, `codegraph review --base origin/main --head HEAD --summary` for a compact reviewer handoff with actionable candidate tests, or redirect plain `review` output when a downstream tool needs the full JSON bundle.
 - Worktree review: run `codegraph impact --base HEAD --head WORKTREE --pretty` for current staged and unstaged tracked-file changes, then `codegraph review --base HEAD --head WORKTREE --summary` for a compact handoff. Use `--head STAGED` to compare `HEAD` against the current index.

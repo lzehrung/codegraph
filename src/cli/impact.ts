@@ -18,6 +18,7 @@ import {
   parseDuplicateLeadScope,
   type DuplicateLeadSummary,
 } from "../duplicatesLeads.js";
+import type { DuplicateSimilarityHint } from "../duplicates.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import type { Graph } from "../types.js";
 import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
@@ -96,6 +97,8 @@ function ensureImpactReport(report: ImpactReport | CompactImpactReport): ImpactR
   const changedFiles = report.changedFiles.map((cf) => ({
     file: resolveFilePath(cf.file),
     hunks: cf.hunks,
+    ...(cf.oldFile !== undefined ? { oldFile: resolveFilePath(cf.oldFile) } : {}),
+    ...(cf.similarityIndex !== undefined ? { similarityIndex: cf.similarityIndex } : {}),
   }));
   const changedSymbols = report.changedSymbols.map((cs) => {
     const symbol: ChangedSymbol = {
@@ -236,9 +239,37 @@ function duplicateScopeFilesForImpact(
   duplicateScope: Exclude<ReturnType<typeof parseDuplicateLeadScope>, "off">,
 ): string[] | undefined {
   if (duplicateScope === "all") return undefined;
-  const changedFiles = impactReport.changedFiles.map((file) => file.file);
+  const changedFiles = duplicateChangedFilesWithSimilaritySources(impactReport.changedFiles);
   if (duplicateScope === "changed") return changedFiles;
   return [...changedFiles, ...impactReport.impacted.map((item) => item.file)];
+}
+
+function duplicateChangedFilesWithSimilaritySources(changedFiles: ImpactReport["changedFiles"]): string[] {
+  const files = new Set<string>();
+  for (const changedFile of changedFiles) {
+    files.add(changedFile.file);
+    if (changedFile.oldFile !== undefined && changedFile.similarityIndex !== undefined) {
+      files.add(changedFile.oldFile);
+    }
+  }
+  return Array.from(files).sort((left, right) => left.localeCompare(right));
+}
+
+function duplicateSimilarityHintsFromImpact(report: ImpactReport): DuplicateSimilarityHint[] {
+  return report.changedFiles
+    .filter(
+      (
+        fileChange,
+      ): fileChange is ImpactReport["changedFiles"][number] & {
+        oldFile: string;
+        similarityIndex: number;
+      } => fileChange.oldFile !== undefined && fileChange.similarityIndex !== undefined,
+    )
+    .map((fileChange) => ({
+      leftFile: fileChange.oldFile,
+      rightFile: fileChange.file,
+      similarityIndex: fileChange.similarityIndex,
+    }));
 }
 
 async function collectImpactDuplicateSummary(input: {
@@ -253,6 +284,7 @@ async function collectImpactDuplicateSummary(input: {
     projectRoot: input.projectRoot,
     scope: input.duplicateScope,
     ...(scopedFiles !== undefined ? { scopedFiles } : {}),
+    similarityHints: duplicateSimilarityHintsFromImpact(input.impactReport),
     allScopeFileCount: input.impactReport.projectFiles?.length ?? input.index.byFile.size,
   });
 }
@@ -397,10 +429,15 @@ function applyAnalysisOptions(context: ImpactCommandContext, options: ImpactOpti
   options.membersOnly = context.hasFlag("--members-only");
 }
 
-function buildIndexOptions(context: ImpactCommandContext, options: ImpactOptionsBuilder): BuildOptions {
+function buildIndexOptions(
+  context: ImpactCommandContext,
+  options: ImpactOptionsBuilder,
+  analysisOptions: { keepParsedForDuplicates?: boolean } = {},
+): BuildOptions {
   const cacheMode =
     options.cache === "off" || options.cache === "memory" || options.cache === "disk" ? options.cache : undefined;
-  const keepParsed = options.refContext !== undefined;
+  const keepParsedForDuplicates = analysisOptions.keepParsedForDuplicates ?? false;
+  const keepParsed = options.refContext !== undefined || keepParsedForDuplicates;
   const indexOpts: BuildOptions = {
     threads: options.threads ?? 0,
     discovery: context.discoveryOptions,
@@ -480,14 +517,18 @@ export async function handleImpactCommand(context: ImpactCommandContext): Promis
   const pretty = context.hasFlag("--pretty");
   const mermaid = context.hasFlag("--mermaid");
   try {
-    const index = await buildProjectIndex(context.projectRootFs, buildIndexOptions(context, options));
+    const duplicateScope =
+      pretty && !mermaid ? parseDuplicateLeadScope(context.getOpt("--duplicates"), "changed") : "off";
+    const index = await buildProjectIndex(
+      context.projectRootFs,
+      buildIndexOptions(context, options, { keepParsedForDuplicates: duplicateScope !== "off" }),
+    );
     const report = await analyzeImpactFromDiff(context.projectRootFs, index, options as ImpactOptions);
     const impactReport = ensureImpactReport(report);
 
     if (mermaid) {
       context.writeStdoutLine(formatImpactMermaid(impactReport, context.projectRootFs));
     } else if (pretty) {
-      const duplicateScope = parseDuplicateLeadScope(context.getOpt("--duplicates"), "changed");
       const duplicateSummary =
         duplicateScope === "off"
           ? undefined

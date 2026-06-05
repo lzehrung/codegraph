@@ -17,6 +17,7 @@ import * as indexerBuild from "../src/indexer/build-index.js";
 import type { ProjectIndex } from "../src/indexer.js";
 import type { BuildOptions } from "../src/indexer/types.js";
 import type { Graph } from "../src/types.js";
+import { runGit } from "./helpers/git.js";
 
 function readJsonRecord(value: unknown): Record<string, unknown> {
   expect(value).toBeTypeOf("object");
@@ -27,6 +28,10 @@ function readJsonRecord(value: unknown): Record<string, unknown> {
 function readJsonArray(value: unknown): unknown[] {
   expect(Array.isArray(value)).toBeTruthy();
   return value as unknown[];
+}
+
+function runCliModuleGit(root: string, args: string[]): string {
+  return runGit(root, args);
 }
 
 function createChunkContext(overrides: Partial<ChunkCommandContext>): ChunkCommandContext {
@@ -763,21 +768,35 @@ describe("CLI command modules", () => {
   test("runs drift through the main CLI dispatcher with policy exits", async () => {
     const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-drift-"));
     await fsp.mkdir(path.join(tempDir, "src"), { recursive: true });
-    await fsp.writeFile(path.join(tempDir, "src", "a.ts"), "import { b } from './b'; export function a() { return b(); }\n", "utf8");
+    await fsp.writeFile(
+      path.join(tempDir, "src", "a.ts"),
+      "import { b } from './b'; export function a() { return b(); }\n",
+      "utf8",
+    );
     await fsp.writeFile(path.join(tempDir, "src", "b.ts"), "export function b() { return 1; }\n", "utf8");
-    await import("./helpers/git.js").then(({ runGit }) => {
-      runGit(tempDir, ["init"]);
-      runGit(tempDir, ["add", "."]);
-      runGit(tempDir, ["commit", "-m", "base"]);
-    });
-    await fsp.writeFile(path.join(tempDir, "src", "b.ts"), "import { a } from './a'; export function b() { return a(); }\n", "utf8");
-    await import("./helpers/git.js").then(({ runGit }) => {
-      runGit(tempDir, ["add", "."]);
-      runGit(tempDir, ["commit", "-m", "head"]);
-    });
+    runCliModuleGit(tempDir, ["init"]);
+    runCliModuleGit(tempDir, ["add", "."]);
+    runCliModuleGit(tempDir, ["commit", "-m", "base"]);
+    await fsp.writeFile(
+      path.join(tempDir, "src", "b.ts"),
+      "import { a } from './a'; export function b() { return a(); }\n",
+      "utf8",
+    );
+    runCliModuleGit(tempDir, ["add", "."]);
+    runCliModuleGit(tempDir, ["commit", "-m", "head"]);
 
     try {
-      const json = await captureCli(["drift", "src", "--root", tempDir, "--base", "HEAD~1", "--head", "HEAD", "--json"]);
+      const json = await captureCli([
+        "drift",
+        "src",
+        "--root",
+        tempDir,
+        "--base",
+        "HEAD~1",
+        "--head",
+        "HEAD",
+        "--json",
+      ]);
       const noFail = await captureCli([
         "drift",
         "src",

@@ -3,6 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs/promises";
 import { buildProjectIndex } from "../src/index.js";
+import { buildSymbolGraphDetailed } from "../src/graphs.js";
 
 async function createFile(filePath: string, contents: string): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -17,7 +18,6 @@ describe("Symbols-detailed pruning flags", () => {
   it("scope=imported filters files while still producing edges", async () => {
     const root = path.resolve(process.cwd(), "tests", "samples", "javascript");
     const index = await buildProjectIndex(root);
-    const { buildSymbolGraphDetailed } = await import("../src/graphs.js");
     const sgAll = await buildSymbolGraphDetailed(index, { scope: "all" });
     const sgImported = await buildSymbolGraphDetailed(index, { scope: "imported" });
     // Imported should not exceed all; typically fewer or equal edges
@@ -27,7 +27,6 @@ describe("Symbols-detailed pruning flags", () => {
   it("maxEdges caps the number of uses edges", async () => {
     const root = path.resolve(process.cwd(), "tests", "samples", "javascript");
     const index = await buildProjectIndex(root);
-    const { buildSymbolGraphDetailed } = await import("../src/graphs.js");
     const cap = 2;
     const sg = await buildSymbolGraphDetailed(index, { maxEdges: cap });
     // Only count 'uses' edges for cap; file/symbol containment edges are not part of this graph
@@ -38,7 +37,6 @@ describe("Symbols-detailed pruning flags", () => {
   it("membersOnly omits direct alias uses edges", async () => {
     const root = path.resolve(process.cwd(), "tests", "samples", "javascript");
     const index = await buildProjectIndex(root);
-    const { buildSymbolGraphDetailed } = await import("../src/graphs.js");
     const full = await buildSymbolGraphDetailed(index, { membersOnly: false });
     const membersOnly = await buildSymbolGraphDetailed(index, { membersOnly: true });
     // membersOnly should be less than or equal in edges
@@ -49,7 +47,6 @@ describe("Symbols-detailed pruning flags", () => {
     const root = path.resolve(process.cwd(), "tests", "samples", "javascript");
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const index = await buildProjectIndex(root);
-    const { buildSymbolGraphDetailed } = await import("../src/graphs.js");
 
     await buildSymbolGraphDetailed(index, { scope: "all" });
 
@@ -74,7 +71,6 @@ describe("Symbols-detailed pruning flags", () => {
       await createFile(cFile, 'import { b } from "./b";\nexport function c() { return b(); }\n');
 
       const index = await buildProjectIndex(root, { keepParsed: true });
-      const { buildSymbolGraphDetailed } = await import("../src/graphs.js");
       const graph = await buildSymbolGraphDetailed(index, { files: new Set([aGraphFile]) });
 
       expect(Array.from(graph.nodes.values()).some((node) => node.file === cGraphFile)).toBe(false);
