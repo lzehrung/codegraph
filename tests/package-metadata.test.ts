@@ -323,7 +323,7 @@ describe("package metadata", () => {
     expect(scripts["test:bench"]).toContain("tests/bench-harness.test.ts");
   });
 
-  it("exposes opt-in JavaScript and native HTML coverage reporting", () => {
+  it("exposes opt-in JavaScript, native, and Markdown coverage reporting", () => {
     const rootPackage = readJson("package.json");
     const scripts = readStringRecord(rootPackage.scripts);
     const vitestConfig = readText("vitest.config.ts");
@@ -334,6 +334,7 @@ describe("package metadata", () => {
     expect(scripts["test:coverage"]).toBe("node ./scripts/coverage.mjs js");
     expect(scripts["test:coverage:native"]).toBe("node ./scripts/coverage.mjs native");
     expect(scripts["test:coverage:all"]).toBe("node ./scripts/coverage.mjs all");
+    expect(scripts["coverage:markdown"]).toBe("node ./scripts/coverage-markdown.mjs all");
     expect(scripts["coverage:setup:native"]).toBe(
       "rustup component add llvm-tools-preview && cargo install cargo-llvm-cov --locked",
     );
@@ -348,9 +349,12 @@ describe("package metadata", () => {
     expect(vitestConfig).toContain('reportsDirectory: "./coverage/js"');
     expect(coverageScript).toContain("cargo llvm-cov");
     expect(coverageScript).toContain("coverage/native");
-    expect(coverageScript).toContain("./native/html/index.html");
+    expect(coverageScript).toContain("tests/bench-harness.test.ts");
+    expect(coverageScript).toContain("--maxWorkers");
+    expect(coverageScript).toContain("writeCoverageMarkdownReports");
+    expect(coverageScript).toContain("native/html/index.html");
     expect(coverageScript).toContain("<iframe");
-    expect(gitignore).toContain("coverage/");
+    expect(gitignore).toContain("/coverage/");
   });
 
   it("lets global installs reuse an existing dist build without invoking workspace builds", () => {

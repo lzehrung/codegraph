@@ -36,6 +36,7 @@
     "test:coverage": "node ./scripts/coverage.mjs js",
     "test:coverage:native": "node ./scripts/coverage.mjs native",
     "test:coverage:all": "node ./scripts/coverage.mjs all",
+    "coverage:markdown": "node ./scripts/coverage-markdown.mjs all",
     "coverage:setup:native": "rustup component add llvm-tools-preview && cargo install cargo-llvm-cov --locked",
     "test:native": "cargo test --manifest-path packages/codegraph-native/Cargo.toml",
     "bench:native": "node ./scripts/bench-native.mjs",

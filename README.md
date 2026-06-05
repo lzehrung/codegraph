@@ -390,6 +390,7 @@ For the full capability matrix, limitations, and fixture coverage, see [docs/lan
 - [docs/how-it-works.md](./docs/how-it-works.md): performance, caching, native runtime behavior, architecture, and testing guidance
 - [docs/language-parity.md](./docs/language-parity.md): per-language capability matrix
 - [docs/scenario-catalog.md](./docs/scenario-catalog.md): scenario and fixture coverage
+- [docs/coverage/README.md](./docs/coverage/README.md): committed Markdown coverage summaries
 - [docs/adding-language-support.md](./docs/adding-language-support.md): checklist for new language support
 - [PUBLISHING.md](./PUBLISHING.md): release and native artifact workflow
 - [docs/graph-visualization/index.html](./docs/graph-visualization/index.html): browser graph viewer app for interactive exploration of graph JSON
@@ -448,6 +449,8 @@ npm run test:ci
 `npm run test:ci` writes a Vitest JSON timing report and prints a slow-test summary. Tests over 2 seconds are review-required, and tests over 10 seconds should be treated as integration-tier candidates unless they have a documented reason.
 
 Use `npm test` or `npm run test:fast` for the shorter non-integration suite. Use `npm run test:integration` for CLI and native-runtime integration coverage.
+
+Use `npm run test:coverage`, `npm run test:coverage:native`, or `npm run test:coverage:all` to generate local HTML/LCOV coverage and refresh the compact Markdown summaries in `docs/coverage/`. Use `npm run coverage:markdown` to refresh the Markdown files from existing LCOV output.
 
 If you are touching the native workspace directly, also run `npm run build:native` and `npm run test:native`. Benchmark harness coverage lives behind `npm run test:bench`.
 
