@@ -136,9 +136,9 @@ Candidates:
 
 - [x] Consolidate dependency and reverse-dependency helpers in `src/agent-tools.ts`.
 - [x] Share duplicate similarity hint formatting between impact and review CLI paths.
-- [ ] Consolidate JVM symbol index readers.
-- [ ] Review repeated SQLite write/delete helpers for a small shared helper.
-- [ ] Leave language definition query repetition alone unless the same edit must be made repeatedly.
+- [-] Consolidate JVM symbol index readers. (Deferred: no active edit required it, and the current split keeps language-specific behavior explicit.)
+- [-] Review repeated SQLite write/delete helpers for a small shared helper. (Deferred: repetition is local to `src/sqlite/write.ts`, and a generic placeholder helper would not clearly reduce complexity yet.)
+- [x] Leave language definition query repetition alone unless the same edit must be made repeatedly.
 
 ## Priority 9: Public API Boundary
 
