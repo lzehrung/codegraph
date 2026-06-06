@@ -207,18 +207,31 @@ Index options:
 
 export const MCP_HELP_TEXT = `codegraph mcp - Serve MCP tools for agent graph navigation
 
-Usage: codegraph mcp serve [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--allow-build]
+Usage: codegraph mcp serve [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--allow-build] [--warmup | --warmup-symbols]
 
 Transports:
   --stdio          Serve MCP over stdio (default)
   --port <number> Serve Streamable HTTP at /mcp
+  --warmup        Build the base session cache at startup
+  --warmup-symbols Build the base cache and detailed symbol graph at startup
+
+Index Options:
+  --cache <mode>     Session cache mode: disk, memory, off
+  --cache-strict     Force strict content-hash cache validation
+  --cache-verify     Re-stat cached files before trusting disk cache entries
+  --threads N        Number of worker threads (default: auto)
+  --native <mode>    Native runtime mode: auto, on, off
+  --workers          Use Piscina worker threads for native extraction
+  --include-glob <glob> Restrict discovered files to extra glob(s)
+  --ignore-glob <glob>  Exclude extra discovered files by glob
+  --no-gitignore        Do not apply .gitignore files during discovery
 
 Tools are read-only unless --allow-build is passed.
 `;
 
 export const MCP_SERVE_HELP_TEXT = `codegraph mcp serve - MCP server for agent graph navigation
 
-Usage: codegraph mcp serve [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--allow-build]
+Usage: codegraph mcp serve [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--allow-build] [--warmup | --warmup-symbols]
 
 Tools:
   orient          Build a compact first-turn repo packet
@@ -234,11 +247,25 @@ Tools:
   impact          Build compact impact context for a git range
   review          Build review context for a git range
   query_sqlite    Read-only row- and byte-bounded SQLite artifact query
+  refresh_index   Invalidate and optionally rebuild the MCP session snapshot
   artifact_build  Build artifacts only with --allow-build
+
+Index Options:
+  --cache <mode>     Session cache mode: disk, memory, off
+  --cache-strict     Force strict content-hash cache validation
+  --cache-verify     Re-stat cached files before trusting disk cache entries
+  --threads N        Number of worker threads (default: auto)
+  --native <mode>    Native runtime mode: auto, on, off
+  --workers          Use Piscina worker threads for native extraction
+  --include-glob <glob> Restrict discovered files to extra glob(s)
+  --ignore-glob <glob>  Exclude extra discovered files by glob
+  --no-gitignore        Do not apply .gitignore files during discovery
 
 Defaults:
   Transport defaults to stdio.
   HTTP transport binds to 127.0.0.1 unless --host is passed and serves /mcp.
+  Startup is lazy unless --warmup or --warmup-symbols is passed.
+  Warmup uses the configured session cache and shared index flags.
   Tools are read-only unless --allow-build is passed.
 `;
 

@@ -1,5 +1,5 @@
 import { performance } from "node:perf_hooks";
-import { createImpactIgnoreMatcher } from "../impact/path.js";
+import { createImpactIgnoreMatcher, createImpactIncludeMatcher } from "../impact/path.js";
 import { parseUnifiedDiff } from "../impact/parse.js";
 import type { FileChange, Hunk } from "../impact/types.js";
 import { assertFilePathWithinRoot } from "../util/paths.js";
@@ -23,6 +23,10 @@ export async function collectReviewChanges(
   const discoveryIgnoreGlobs = appliedOptions.discovery?.ignoreGlobs ?? [];
   const discoveryGlobRoot = appliedOptions.discovery?.globRoot ?? projectRoot;
   const isIgnoredReviewFile = createImpactIgnoreMatcher(discoveryGlobRoot, discoveryIgnoreGlobs);
+  const isIncludedReviewFile = createImpactIncludeMatcher(
+    discoveryGlobRoot,
+    appliedOptions.discovery?.includeGlobs ?? [],
+  );
 
   const changedFiles = new Set<string>();
   const explicitFiles = new Set<string>();
@@ -47,7 +51,7 @@ export async function collectReviewChanges(
     }
     const gitList = await listChangedFiles(projectRoot, gitDiffOpts);
     for (const file of gitList) {
-      if (!isIgnoredReviewFile(file)) changedFiles.add(file);
+      if (isIncludedReviewFile(file) && !isIgnoredReviewFile(file)) changedFiles.add(file);
     }
   }
   if (reviewTimings) {
@@ -55,7 +59,12 @@ export async function collectReviewChanges(
   }
 
   const diffStart = performance.now();
-  const shouldLoadGitDiff = (appliedOptions.gitBase || appliedOptions.changedSince) && changedFiles.size;
+  const shouldLoadGitDiff = Boolean(
+    (appliedOptions.gitBase || appliedOptions.changedSince) &&
+    (changedFiles.size ||
+      appliedOptions.discovery?.includeGlobs?.length ||
+      appliedOptions.discovery?.ignoreGlobs?.length),
+  );
   const diffText =
     appliedOptions.diffText ??
     (shouldLoadGitDiff
@@ -77,23 +86,48 @@ export async function collectReviewChanges(
     for (const fileChange of diff.files) {
       const { oldPath, ...rest } = fileChange;
       const absPath = normalizeFile(fileChange.path, "Review diff file");
+      const oldAbsPath = oldPath ? normalizeFile(oldPath, "Review old diff file") : undefined;
       const normalizedChange: FileChange = {
         ...rest,
         path: absPath,
-        ...(oldPath
-          ? {
-              oldPath: normalizeFile(oldPath, "Review old diff file"),
-            }
-          : {}),
+        ...(oldAbsPath ? { oldPath: oldAbsPath } : {}),
       };
-      if (isIgnoredReviewFile(absPath)) {
+      const newPathIncluded = isIncludedReviewFile(absPath);
+      const oldPathIncluded = oldAbsPath !== undefined && isIncludedReviewFile(oldAbsPath);
+      const newPathIgnored = isIgnoredReviewFile(absPath);
+      const oldPathIgnored = oldAbsPath !== undefined && isIgnoredReviewFile(oldAbsPath);
+      const explicitlyRequested =
+        explicitFiles.has(absPath) || (oldAbsPath !== undefined && explicitFiles.has(oldAbsPath));
+      const newPathVisible = newPathIncluded && !newPathIgnored;
+      const oldPathVisible = oldPathIncluded && !oldPathIgnored;
+      const included = explicitlyRequested || newPathVisible || oldPathVisible;
+      if (!included) {
         changedFiles.delete(absPath);
+        if (oldAbsPath !== undefined) changedFiles.delete(oldAbsPath);
         continue;
       }
-      changedFiles.add(absPath);
-      diffHunksByFile.set(absPath, normalizedChange.hunks);
-      diffKindsByFile.set(absPath, normalizedChange.kind);
-      diffChangesByFile.set(absPath, normalizedChange);
+      let reportPath = absPath;
+      let reportChange = normalizedChange;
+      if (
+        normalizedChange.kind === "renamed" &&
+        !explicitlyRequested &&
+        !newPathVisible &&
+        oldPathVisible &&
+        oldAbsPath !== undefined
+      ) {
+        reportPath = oldAbsPath;
+        reportChange = {
+          path: reportPath,
+          kind: "deleted",
+          hunks: normalizedChange.hunks,
+          ...(normalizedChange.isBinary ? { isBinary: normalizedChange.isBinary } : {}),
+          ...(normalizedChange.modeChanged ? { modeChanged: normalizedChange.modeChanged } : {}),
+        };
+      }
+      changedFiles.add(reportPath);
+      diffHunksByFile.set(reportPath, reportChange.hunks);
+      diffKindsByFile.set(reportPath, reportChange.kind);
+      diffChangesByFile.set(reportPath, reportChange);
     }
   }
 

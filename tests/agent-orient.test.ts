@@ -1,8 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { orientCodegraph } from "../src/index.js";
+import { createAgentSession } from "../src/agent/session.js";
+import { orientCodegraph, orientCodegraphWithSession } from "../src/agent/orient.js";
 import * as duplicates from "../src/duplicates.js";
+import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
+import { countingSession } from "./helpers/agent.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 
 async function writeFile(root: string, relativePath: string, content: string): Promise<void> {
@@ -28,6 +31,24 @@ describe("agent orient", () => {
     expect(response.tree.some((entry) => entry.path === "src/index.ts")).toBe(true);
     expect(response.handles.some((handle) => handle.handle.startsWith("file:"))).toBe(true);
     expect(response.recommendedNext.length).toBeGreaterThan(0);
+  });
+
+  it("does not build the detailed symbol graph for orientation", async () => {
+    const root = await mkTmpDir("cg-agent-orient-skip-symbol-graph-");
+    await writeFile(root, "src/index.ts", "export { run } from './run';\n");
+    await writeFile(root, "src/run.ts", "export function run() { return 1; }\n");
+    const counted = countingSession(createAgentSession({ root }));
+    const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+
+    const response = await orientCodegraphWithSession(counted.session, {
+      root,
+      includeRoots: ["src"],
+      budget: "small",
+    });
+
+    expect(response.tree.some((entry) => entry.path === "src/index.ts")).toBe(true);
+    expect(symbolGraphSpy).not.toHaveBeenCalled();
+    expect(counted.loads()).toBe(1);
   });
 
   it("treats dot include root as unscoped orientation", async () => {

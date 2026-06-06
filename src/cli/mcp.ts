@@ -1,10 +1,12 @@
-import { serveCodegraphMcp } from "../mcp/server.js";
+import { serveCodegraphMcp, type CodegraphMcpWarmupMode } from "../mcp/server.js";
 import { MCP_HELP_TEXT } from "./help.js";
 import { parseOptionalBoundedIntegerOption } from "./options.js";
+import type { BuildOptions } from "../indexer/types.js";
 
 export type McpServeCommandContext = {
   positionals: string[];
   root: string;
+  buildOptions?: BuildOptions;
   getOpt: (name: string) => string | undefined;
   hasFlag: (name: string) => boolean;
   writeStderrLine: (message: string) => void;
@@ -27,6 +29,7 @@ export async function handleMcpServeCommand(context: McpServeCommandContext): Pr
     context.exit(2);
   }
   const host = context.getOpt("--host");
+  const warmup = parseMcpWarmupMode(context);
   if (context.hasFlag("--stdio") && port !== undefined) {
     context.writeStderrLine("Choose either --stdio or --port for mcp serve transport.");
     context.exit(2);
@@ -42,8 +45,20 @@ export async function handleMcpServeCommand(context: McpServeCommandContext): Pr
     ...(port !== undefined ? { port } : {}),
     ...(host !== undefined ? { host } : {}),
     ...(artifactPath !== undefined ? { artifactPath } : {}),
+    ...(context.buildOptions !== undefined ? { buildOptions: context.buildOptions } : {}),
+    ...(warmup !== undefined ? { warmup } : {}),
     onHttpListen: (info) => {
       context.writeStderrLine(`Codegraph MCP HTTP server listening at ${info.url}`);
     },
   });
+}
+
+function parseMcpWarmupMode(context: McpServeCommandContext): CodegraphMcpWarmupMode | undefined {
+  if (context.hasFlag("--warmup") && context.hasFlag("--warmup-symbols")) {
+    context.writeStderrLine("Choose either --warmup or --warmup-symbols for mcp serve startup.");
+    context.exit(2);
+  }
+  if (context.hasFlag("--warmup-symbols")) return "symbols";
+  if (context.hasFlag("--warmup")) return "base";
+  return undefined;
 }

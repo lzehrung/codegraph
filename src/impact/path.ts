@@ -37,6 +37,24 @@ export function toImpactReportFilePath(projectRoot: string, filePath: string): s
   return toProjectDisplayPath(projectRoot, filePath);
 }
 
+export function createImpactIncludeMatcher(
+  projectRoot: string,
+  includeGlobs: readonly string[],
+): (filePath: string) => boolean {
+  const normalizedIncludeGlobs = includeGlobs
+    .map((globPattern) => globPattern.trim().replace(/\\/g, "/"))
+    .filter(Boolean);
+  if (!normalizedIncludeGlobs.length) {
+    return () => true;
+  }
+  const matchesGlob = pm(normalizedIncludeGlobs, { dot: true });
+  return (filePath: string): boolean => {
+    const normalizedFile = normalizePath(filePath);
+    const displayPath = toImpactReportFilePath(projectRoot, normalizedFile);
+    return displayPath !== normalizedFile && matchesGlob(displayPath);
+  };
+}
+
 export function createImpactIgnoreMatcher(
   projectRoot: string,
   ignoreGlobs: readonly string[],
@@ -47,7 +65,7 @@ export function createImpactIgnoreMatcher(
   if (!normalizedIgnoreGlobs.length) {
     return () => false;
   }
-  const matchesGlob = pm(normalizedIgnoreGlobs);
+  const matchesGlob = pm(normalizedIgnoreGlobs, { dot: true });
   return (filePath: string): boolean => {
     const normalizedFile = normalizePath(filePath);
     return matchesGlob(toImpactReportFilePath(projectRoot, normalizedFile)) || matchesGlob(normalizedFile);

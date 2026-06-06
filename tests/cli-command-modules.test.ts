@@ -210,8 +210,13 @@ describe("CLI command modules", () => {
     expect(MCP_SERVE_HELP_TEXT).toContain("--port <number>");
     expect(MCP_SERVE_HELP_TEXT).toContain("--host <host>");
     expect(MCP_SERVE_HELP_TEXT).toContain("--stdio");
+    expect(MCP_SERVE_HELP_TEXT).toMatch(/--warmup\s/);
+    expect(MCP_SERVE_HELP_TEXT).toContain("--warmup-symbols");
+    expect(MCP_SERVE_HELP_TEXT).toContain("--include-glob");
+    expect(MCP_SERVE_HELP_TEXT).toContain("--ignore-glob");
     expect(MCP_SERVE_HELP_TEXT).toContain("orient");
     expect(MCP_SERVE_HELP_TEXT).toContain("packet_get");
+    expect(MCP_SERVE_HELP_TEXT).toContain("refresh_index");
   });
 
   test("packet help does not imply CLI orient accepts review ranges", () => {
