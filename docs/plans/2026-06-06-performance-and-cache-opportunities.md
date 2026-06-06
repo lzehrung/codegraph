@@ -103,6 +103,8 @@ Likely files:
 - `src/agent/session.ts`
 - `src/cli/help.ts`
 - `docs/cli.md`
+- `docs/mcp.md`
+- `docs/agent-workflows.md`
 - `codegraph-skill/codegraph/SKILL.md`
 - `tests/mcp-server.test.ts`
 - `tests/cli-command-modules.test.ts`
@@ -134,6 +136,7 @@ Likely files:
 
 - `src/agent/session.ts`
 - `src/mcp/server.ts`
+- `src/mcp/tools.ts`
 - `src/indexer/build-cache/manifest.ts`
 - `src/indexer/build-index.ts`
 - `tests/mcp-server.test.ts`
@@ -292,7 +295,7 @@ Implementation checklist:
 - [ ] Identify where file signatures are computed for disk cache entries.
 - [ ] Add a git-backed signature provider when the project root is inside a git worktree.
 - [ ] Use git object id for tracked clean files when safe.
-- [ ] Use mtime/size or content hash fallback for untracked, modified, or ignored files.
+- [ ] Use content hashing for `--cache-strict`; use mtime/size metadata only in non-strict modes where `--cache-verify` and existing cache contracts allow it.
 - [ ] Keep `--cache-strict` and `--cache-verify` semantics intact.
 
 Likely files:
