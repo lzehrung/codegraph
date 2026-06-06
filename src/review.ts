@@ -247,7 +247,7 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
       candidateTests: [],
     };
     if (appliedOptions.gitBase !== undefined) report.base = appliedOptions.gitBase;
-    if (appliedOptions.gitHead !== undefined) report.head = appliedOptions.gitHead;
+    report.head = appliedOptions.gitHead ?? "HEAD";
     if (reviewTimings) reviewTimings.totalMs = Math.round(performance.now() - totalStart);
     return report;
   }

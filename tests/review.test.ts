@@ -417,6 +417,22 @@ describe("Review report", () => {
     expect(report.head).toBe("HEAD");
   });
 
+  it("reports the default git head when a git comparison has no changes", async () => {
+    const root = await mkTmpDir("dg-review-git-no-changes-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "test@git.local"]);
+    runGit(root, ["config", "user.name", "Codegraph Bot"]);
+    await fsp.writeFile(path.join(root, "tracked.ts"), `export const value = 1;\n`, "utf8");
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "initial"]);
+
+    const report = await buildReviewReport(root, { gitBase: "HEAD" });
+
+    expect(report.status).toBe("no_changes");
+    expect(report.base).toBe("HEAD");
+    expect(report.head).toBe("HEAD");
+  });
+
   it("surfaces invalid git revisions instead of reporting no changes", async () => {
     const root = await mkTmpDir("dg-review-invalid-git-");
     runGit(root, ["init"]);

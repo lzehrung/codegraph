@@ -180,13 +180,14 @@ describe("CLI command modules", () => {
     expect(result.stdout.trim()).toBe(getCodegraphVersion());
   });
 
-  test("lists cache-strict and progress as build options in CLI help", () => {
+  test("lists cache verification and progress as build options in CLI help", () => {
     const buildOptions = CLI_HELP_TEXT.slice(
       CLI_HELP_TEXT.indexOf("Build Options:"),
       CLI_HELP_TEXT.indexOf("Output Options:"),
     );
 
     expect(buildOptions).toContain("--cache-strict");
+    expect(buildOptions).toContain("--cache-verify");
     expect(buildOptions).toContain("--progress");
   });
 

@@ -52,6 +52,7 @@ Build Options:
   --cache <mode>            Cache mode: disk, memory, off
   --limit N                 Result limit for hotspots/inspect summaries
   --cache-strict            Force strict content-hash cache validation
+  --cache-verify            Re-stat cached files before trusting disk cache entries
   --progress                Show progress tracking during indexing
 
 Output Options:
