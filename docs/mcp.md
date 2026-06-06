@@ -12,10 +12,10 @@ Stdio is the default transport and is the best fit when the MCP client launches 
 codegraph mcp serve --root . --stdio
 ```
 
-Streamable HTTP is useful when the client connects to an already-running local server:
+Streamable HTTP is useful when multiple IDE, terminal, or agent instances should share one repo-local server:
 
 ```bash
-codegraph mcp serve --root . --port 7331
+codegraph mcp serve --root /path/to/repo --port 7331 --warmup
 ```
 
 Warm the server session when first-request latency matters:
@@ -27,7 +27,9 @@ codegraph mcp serve --root . --port 7331 --warmup-symbols
 
 `--warmup` builds the base session cache before serving requests. `--warmup-symbols` also builds the detailed symbol graph before serving requests.
 
-The HTTP endpoint is `http://127.0.0.1:7331/mcp`. HTTP binds to `127.0.0.1` by default; pass `--host <host>` only when another machine or container must reach it.
+The shared HTTP endpoint is `http://127.0.0.1:7331/mcp`. HTTP binds to `127.0.0.1` by default; pass `--host <host>` only when another machine or container must reach it.
+
+Use stdio for a client-owned subprocess. Use HTTP for one long-running Codegraph process per repository, then point every MCP-capable IDE, terminal, or agent client at the same local URL. Exact config keys vary by client, but the MCP settings should use HTTP/Streamable HTTP transport plus the `/mcp` URL instead of a `command`/`args` stdio launch.
 
 ## Tools
 
@@ -78,18 +80,31 @@ Use `command: "codegraph"` when the CLI is on `PATH`. Use the full executable pa
 
 ### Generic Streamable HTTP
 
-Start Codegraph yourself:
+Start one Codegraph process per repository:
 
 ```bash
-codegraph mcp serve --root . --port 7331
+codegraph mcp serve --root /path/to/repo --port 7331 --warmup
 ```
 
-Point the client at:
+Point each MCP client at the shared endpoint:
 
 ```json
 {
-  "url": "http://127.0.0.1:7331/mcp"
+  "mcpServers": {
+    "codegraph": {
+      "type": "http",
+      "url": "http://127.0.0.1:7331/mcp"
+    }
+  }
 }
+```
+
+For TOML-based clients, the same setup is usually expressed as a URL-backed server:
+
+```toml
+[mcp_servers.codegraph]
+transport = "http"
+url = "http://127.0.0.1:7331/mcp"
 ```
 
 ### Codex

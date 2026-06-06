@@ -1,7 +1,13 @@
 import type { FileId } from "../types.js";
 import type { FileChange } from "./types.js";
 import pm from "picomatch";
-import { isFilePathWithinRoot, normalizePath, resolveFilePathFromRoot, toProjectDisplayPath } from "../util/paths.js";
+import {
+  isAbsoluteFilePath,
+  isFilePathWithinRoot,
+  normalizePath,
+  resolveFilePathFromRoot,
+  toProjectDisplayPath,
+} from "../util/paths.js";
 
 export function normalizeImpactFilePath(projectRoot: string, filePath: string): string {
   return normalizePath(resolveFilePathFromRoot(projectRoot, filePath));
@@ -51,7 +57,7 @@ export function createImpactIncludeMatcher(
   return (filePath: string): boolean => {
     const normalizedFile = normalizePath(filePath);
     const displayPath = toImpactReportFilePath(projectRoot, normalizedFile);
-    return displayPath !== normalizedFile && matchesGlob(displayPath);
+    return matchesGlob(displayPath) || (!isAbsoluteFilePath(normalizedFile) && matchesGlob(normalizedFile));
   };
 }
 
