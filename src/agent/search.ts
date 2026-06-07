@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import { LANG_CONFIGS } from "../bootstrap/treeSitterLanguages.js";
 import { supportForFile } from "../languages.js";
 import { chunkFile } from "../chunking/chunkFile.js";
-import type { BuildOptions, SymbolDef } from "../indexer/types.js";
+import { SymbolKind, type BuildOptions, type SymbolDef } from "../indexer/types.js";
 import type { Range } from "../types.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
 import { type SymbolNode } from "../graphs/symbol-graph.js";
@@ -211,8 +211,10 @@ async function searchSnapshot(
   };
 
   if (query.tokens.length) {
-    const symbolLookup = buildSymbolLookup(snapshot);
-    if (mode === "hybrid" || mode === "symbol" || mode === "sql" || mode === "graph") {
+    if (mode === "sql") {
+      addSqlResults(snapshot, resultMap, getFileNeighborIndex(), query);
+    } else if (mode === "hybrid" || mode === "symbol" || mode === "graph") {
+      const symbolLookup = buildSymbolLookup(snapshot);
       addSymbolResults(snapshot, resultMap, symbolLookup, buildSymbolNeighborIndex(snapshot), query, mode);
     }
     if (mode === "hybrid" || mode === "path" || mode === "graph") {
@@ -266,7 +268,7 @@ function normalizeDepth(depth: number | undefined): number {
 
 function searchNeedsSymbolGraph(request: AgentSearchRequest): boolean {
   const mode = request.mode ?? "hybrid";
-  return mode !== "path" && mode !== "text";
+  return mode !== "path" && mode !== "text" && mode !== "sql";
 }
 
 function buildQueryTerms(input: string): SearchQueryTerms {
@@ -425,6 +427,62 @@ function addSymbolResults(
     addSymbolNeighbors(snapshot, result, neighborsBySymbolId.get(node.id) ?? []);
     addSymbolFollowUps(result, relFile, def);
   }
+}
+
+function addSqlResults(
+  snapshot: AgentProjectSnapshot,
+  resultMap: Map<string, MutableSearchResult>,
+  fileNeighborIndex: Map<string, FileNeighbor[]>,
+  query: SearchQueryTerms,
+): void {
+  for (const moduleIndex of snapshot.index.byFile.values()) {
+    for (const local of moduleIndex.locals) {
+      if (!isSqlObjectSymbol(local)) continue;
+      const nameMatch = matchTokenScore(local.localName, query);
+      const relFile = normalizeAgentFilePath(snapshot.root, local.file);
+      const fileMatch = matchTokenScore(relFile, query);
+      const docMatch = local.docstring ? matchTokenScore(local.docstring, query) : emptyTokenMatch();
+      const score = nameMatch.score * 4 + fileMatch.score + docMatch.score;
+      if (score <= 0) continue;
+
+      const result = upsertResult(resultMap, {
+        handle: formatAgentSqlHandle({ name: local.localName, file: relFile, line: local.range.start.line }),
+        kind: "sql_object",
+        label: local.localName,
+        file: relFile,
+        range: local.range,
+      });
+      result.score += score;
+      if (nameMatch.matched.length) {
+        addReason(result, `SQL object token match: ${nameMatch.matched.join(", ")}`);
+        addEvidence(result, {
+          source: "sql",
+          label: local.localName,
+          file: relFile,
+          line: local.range.start.line,
+        });
+      }
+      if (fileMatch.matched.length) {
+        addReason(result, `path token match: ${fileMatch.matched.join(", ")}`);
+      }
+      if (docMatch.matched.length) {
+        addReason(result, `docstring token match: ${docMatch.matched.join(", ")}`);
+      }
+      addPhraseReasons(result, nameMatch, "SQL object name");
+      addPhraseReasons(result, docMatch, "docstring");
+      addFileNeighbors(snapshot, result, fileNeighborIndex.get(normalizePath(local.file)) ?? []);
+      addSymbolFollowUps(result, relFile, local);
+    }
+  }
+}
+
+function isSqlObjectSymbol(symbol: SymbolDef): boolean {
+  return (
+    symbol.kind === SymbolKind.Table ||
+    symbol.kind === SymbolKind.View ||
+    symbol.kind === SymbolKind.Index ||
+    symbol.kind === SymbolKind.Routine
+  );
 }
 
 function addPathResults(

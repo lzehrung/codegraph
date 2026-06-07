@@ -55,6 +55,10 @@ function manifestPathFor(root: string): string {
   return path.join(root, ".codegraph-cache", "index-v1", "manifest.json");
 }
 
+function projectSnapshotPathFor(root: string): string {
+  return path.join(root, ".codegraph-cache", "index-v1", "project-index-snapshot.json");
+}
+
 async function readManifest(root: string): Promise<IndexManifest> {
   const mf = path.join(root, ".codegraph-cache", "index-v1", "manifest.json");
   const raw = await fsp.readFile(mf, "utf8");
@@ -390,10 +394,12 @@ describe("Cache invalidation and strict hashing", () => {
     });
 
     expect(prepSpy).not.toHaveBeenCalled();
+
     prepSpy.mockRestore();
     expect(graph.edges.length).toBe(1);
     expect(graph.edges[0]?.from).toBe(normalize(trackedPath));
   });
+
 
   it("rebuilds when cache verification detects manifest mismatches", async () => {
     const root = await mkTmpDir("dg-cache-verify-");
@@ -532,6 +538,57 @@ describe("Cache invalidation and strict hashing", () => {
     expect(report.timings?.totalMs).toEqual(expect.any(Number));
   });
 
+
+  it("loads unchanged incremental indexes from a project snapshot", async () => {
+    const root = await mkTmpDir("dg-incremental-project-snapshot-");
+    const filePath = path.join(root, "foo.ts");
+    await fsp.writeFile(filePath, `export const snap = 1;\n`, "utf8");
+
+    await buildProjectIndex(root, { threads: 2, cache: "disk" });
+    await expect(fsp.stat(projectSnapshotPathFor(root))).resolves.toBeTruthy();
+
+    const db = new DatabaseSync(diskCacheDbPathFor(root));
+    try {
+      db.prepare("UPDATE module_cache SET payload = ?").run("{bad json");
+    } finally {
+      db.close();
+    }
+
+    const incremental = await buildProjectIndexIncremental(root, {
+      threads: 2,
+      cache: "disk",
+    });
+
+    const moduleIndex = incremental.byFile.get(normalize(filePath));
+    expect(moduleIndex?.locals.some((local) => local.localName === "snap")).toBe(true);
+  });
+
+  it("falls back when the project snapshot payload is malformed", async () => {
+    const root = await mkTmpDir("dg-incremental-bad-project-snapshot-");
+    const filePath = path.join(root, "foo.ts");
+    await fsp.writeFile(filePath, `export const snap = 1;\n`, "utf8");
+
+    await buildProjectIndex(root, { threads: 2, cache: "disk" });
+    await fsp.writeFile(
+      projectSnapshotPathFor(root),
+      JSON.stringify({
+        version: 1,
+        filesSignature: "ignored",
+        nativeAvailable: true,
+        graph: { nodes: [], edges: [] },
+        modules: [{}],
+      }),
+      "utf8",
+    );
+
+    const incremental = await buildProjectIndexIncremental(root, {
+      threads: 2,
+      cache: "disk",
+    });
+
+    const moduleIndex = incremental.byFile.get(normalize(filePath));
+    expect(moduleIndex?.locals.some((local) => local.localName === "snap")).toBe(true);
+  });
   it("drops manifest edges for deleted files during incremental builds", async () => {
     const root = await mkTmpDir("dg-incremental-delete-");
     const aPath = path.join(root, "a.ts");

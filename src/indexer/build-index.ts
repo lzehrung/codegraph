@@ -39,13 +39,16 @@ import {
   initManifestReport,
   loadManifest,
   normalizeGraphOptions,
+  projectSnapshotFilesSignature,
   normalizeIndexedFileInputs,
   recordConfigHashResult,
   recordFileFailure,
   sanitizeManifestEntriesForRoot,
   tryLoadFromCache,
   verifyManifestEntries,
+  tryLoadProjectIndexSnapshot,
   writeToCache,
+  writeProjectIndexSnapshot,
   type FileSignature,
   type ManifestFileEntry,
 } from "./build-cache.js";
@@ -697,7 +700,7 @@ async function buildIndexFromFileListShared(
         manifestReport: report?.manifest,
       });
     }
-    return finalizeProjectIndex({
+    const index = await finalizeProjectIndex({
       projectRoot,
       normalizedProjectRoot,
       opts,
@@ -709,6 +712,10 @@ async function buildIndexFromFileListShared(
       bloomFilterCache,
       ...(projectFiles !== undefined ? { projectFiles } : {}),
     });
+    if (manifestEntries) {
+      await writeProjectIndexSnapshot(projectRoot, opts, index, projectSnapshotFilesSignature(manifestEntries));
+    }
+    return index;
   } finally {
     await teardownWorkerPool(workerSetup, report);
   }
@@ -934,7 +941,6 @@ export async function buildProjectIndexIncremental(
       const markAsChanged = (file: string) => {
         if (fs.existsSync(file)) changedFiles.add(file);
       };
-      explicitFiles.forEach(markAsChanged);
       manifestDiffFiles.forEach(markAsChanged);
       gitFiles.forEach(markAsChanged);
       dependentFilesOfDeletedTracked.forEach(markAsChanged);
@@ -947,6 +953,38 @@ export async function buildProjectIndexIncremental(
         const hasMatchingSig = entry?.sig === sigInfo.sig;
         if (!entry || !(hasMatchingGitSig || hasMatchingSig)) {
           changedFiles.add(file);
+        }
+      }
+      if (
+        !changedFiles.size &&
+        !deletedTrackedFiles.size &&
+        Object.keys(trackedEntries).length === Object.keys(manifest.files ?? {}).length &&
+        !report
+      ) {
+        const filesSignature = projectSnapshotFilesSignature(new Map(Object.entries(trackedEntries)));
+        const snapshot = await tryLoadProjectIndexSnapshot(projectRoot, opts, filesSignature);
+        if (snapshot) {
+          snapshot.projectFiles = await discoverProjectFiles(projectRoot, {
+            ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+          });
+          if (opts?.useBloomFilters ?? true) {
+            const cache = new (await import("../util/bloomFilter.js")).BloomFilterCache();
+            for (const file of allFiles) {
+              const filter = await buildBloomFilterForFile(file);
+              if (filter) cache.set(file, filter);
+            }
+            snapshot.bloomFilters = cache;
+          }
+          await writeIndexManifestSnapshot({
+            projectRoot,
+            opts,
+            graphOptions,
+            files: new Map(Object.entries(trackedEntries)),
+            timings,
+            manifestReport,
+          });
+          if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
+          return snapshot;
         }
       }
       for (const file of allFiles) {
@@ -1076,7 +1114,7 @@ export async function buildProjectIndexIncremental(
         timings,
         manifestReport,
       });
-      return finalizeProjectIndex({
+      const index = await finalizeProjectIndex({
         projectRoot,
         normalizedProjectRoot,
         opts,
@@ -1087,6 +1125,8 @@ export async function buildProjectIndexIncremental(
         parsedMap,
         bloomFilterCache,
       });
+      await writeProjectIndexSnapshot(projectRoot, opts, index, projectSnapshotFilesSignature(manifestEntries));
+      return index;
     } finally {
       await teardownWorkerPool(workerSetup, report);
     }

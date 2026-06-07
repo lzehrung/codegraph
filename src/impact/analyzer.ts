@@ -7,6 +7,7 @@ import { analyzeDirectReferences } from "./direct.js";
 import { analyzeTransitiveImpact, seedTransitiveFromFiles } from "./transitive.js";
 import { buildDependencyStats } from "./severity.js";
 import { attachCallCompatibilityHints } from "./callCompatibility.js";
+import { createReferenceLookupCache } from "./referenceCache.js";
 export { calculateSeverity, calculateTransitiveSeverity } from "./severity.js";
 export { seedTransitiveFromFiles } from "./transitive.js";
 
@@ -38,6 +39,7 @@ export async function analyzeImpact(
   const patternMatchers = compileTestPatterns(testPatterns);
   const isIndexTestFile = createIndexTestFileMatcher(index, patternMatchers, projectRoot);
   const isIgnored = projectRoot ? createImpactIgnoreMatcher(projectRoot, ignoreGlobs) : () => false;
+  const referenceCache = createReferenceLookupCache();
 
   const impacted = new Map<FileId, ImpactItem>();
   const processedSymbols = new Set<string>();
@@ -77,6 +79,7 @@ export async function analyzeImpact(
     maxRefs,
     ...(projectRoot ? { projectRoot } : {}),
     ...(diagnostics ? { diagnostics } : {}),
+    referenceCache,
     shouldIncludeReference: (file) => {
       if (!includeTests && isIndexTestFile(file)) {
         return false;
@@ -91,6 +94,7 @@ export async function analyzeImpact(
     ...(refContextLines !== undefined ? { refContextLines } : {}),
     ...(refBlockMaxLines !== undefined ? { refBlockMaxLines } : {}),
     ...(diagnostics !== undefined ? { diagnostics } : {}),
+    referenceCache,
   };
 
   await analyzeDirectReferences({
