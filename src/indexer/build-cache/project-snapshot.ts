@@ -57,7 +57,7 @@ export async function tryLoadProjectIndexSnapshot(
       graph,
       graphAdjacency: buildGraphAdjacency(graph),
       modules,
-      byFile: new Map(modules),
+      byFile: modules,
       ...(payload.projectRoot ? { projectRoot: payload.projectRoot } : {}),
       ...(payload.nativeMode ? { nativeMode: payload.nativeMode } : {}),
       exportCache: new Map(),

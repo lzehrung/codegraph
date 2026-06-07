@@ -975,10 +975,10 @@ export async function buildProjectIndexIncremental(
           });
           if (opts?.useBloomFilters ?? true) {
             const cache = new (await import("../util/bloomFilter.js")).BloomFilterCache();
-            for (const file of allFiles) {
+            await mapLimit([...allFiles], conc, async (file) => {
               const filter = await buildBloomFilterForFile(file);
               if (filter) cache.set(file, filter);
-            }
+            });
             snapshot.bloomFilters = cache;
           }
           await writeIndexManifestSnapshot({
