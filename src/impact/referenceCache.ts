@@ -26,8 +26,9 @@ export function createReferenceLookupCache(): ReferenceLookupCache {
   const baseCache = new Map<string, BaseReferenceEntry[]>();
   return {
     async get(index, def, options) {
-      const baseResult = await getBaseReferences(index, def, options?.maxReferences, baseCache);
-      const bounded = cloneReferenceResult(baseResult, options?.maxReferences);
+      const maxReferences = normalizeMaxReferences(options?.maxReferences);
+      const baseResult = await getBaseReferences(index, def, maxReferences, baseCache);
+      const bounded = cloneReferenceResult(baseResult, maxReferences);
       if (bounded.status !== "ok" || options?.context === undefined) return bounded;
       await attachReferenceContext(index, bounded.references, options);
       return bounded;
@@ -55,6 +56,11 @@ function canReuseEntry(existingLimit: number | undefined, requestedLimit: number
   if (existingLimit === undefined) return true;
   if (requestedLimit === undefined) return false;
   return existingLimit >= requestedLimit;
+}
+
+function normalizeMaxReferences(maxReferences: number | undefined): number | undefined {
+  if (maxReferences === undefined || maxReferences <= 0) return undefined;
+  return maxReferences;
 }
 
 function cloneReferenceResult(result: FindReferencesResult, maxReferences: number | undefined): FindReferencesResult {

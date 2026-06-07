@@ -49,7 +49,7 @@ export async function tryLoadProjectIndexSnapshot(
     if (
       !isProjectIndexSnapshotPayload(payload) ||
       payload.filesSignature !== filesSignature ||
-      payload.nativeMode !== opts?.native ||
+      payload.nativeMode !== normalizedSnapshotNativeMode(opts?.native) ||
       payload.nativeAvailable !== isNativeTreeSitterAvailable(opts?.native)
     ) {
       return null;
@@ -92,7 +92,7 @@ export async function writeProjectIndexSnapshot(
     },
     modules: [...index.byFile.values()],
     ...(index.projectRoot ? { projectRoot: index.projectRoot } : {}),
-    ...(index.nativeMode ? { nativeMode: index.nativeMode } : {}),
+    ...(normalizedSnapshotNativeMode(index.nativeMode) ? { nativeMode: normalizedSnapshotNativeMode(index.nativeMode) } : {}),
     ...(index.projectFiles ? { projectFiles: index.projectFiles } : {}),
   };
   try {
@@ -106,6 +106,11 @@ export async function writeProjectIndexSnapshot(
 
 function projectSnapshotPath(projectRoot: string, opts: BuildOptions | undefined): string {
   return path.join(cacheRoot(projectRoot, opts), "project-index-snapshot.json");
+}
+
+function normalizedSnapshotNativeMode(nativeMode: ProjectIndex["nativeMode"] | undefined): ProjectIndex["nativeMode"] | undefined {
+  if (nativeMode === undefined || nativeMode === "auto") return undefined;
+  return nativeMode;
 }
 
 function isProjectIndexSnapshotPayload(value: unknown): value is ProjectIndexSnapshotPayload {
