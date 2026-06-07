@@ -16,6 +16,7 @@ import {
 import { cacheRoot } from "./module-cache.js";
 import type { ManifestFileEntry } from "./manifest.js";
 
+const SNAPSHOT_SYMBOL_KINDS = new Set<SymbolKind>(Object.values(SymbolKind));
 const PROJECT_SNAPSHOT_VERSION = 1;
 
 type ProjectIndexSnapshotPayload = {
@@ -293,7 +294,7 @@ function isOptionalNumber(value: unknown): boolean {
 }
 
 function isSymbolKind(value: unknown): value is SymbolKind {
-  return Object.values(SymbolKind).includes(value as SymbolKind);
+  return SNAPSHOT_SYMBOL_KINDS.has(value as SymbolKind);
 }
 
 function isRange(value: unknown): value is Range {
