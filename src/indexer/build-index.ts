@@ -941,6 +941,12 @@ export async function buildProjectIndexIncremental(
       const markAsChanged = (file: string) => {
         if (fs.existsSync(file)) changedFiles.add(file);
       };
+      const explicitFileSet = new Set(explicitFiles);
+      const explicitFilesCoverAllFiles =
+        explicitFileSet.size === allFiles.size && [...allFiles].every((file) => explicitFileSet.has(file));
+      if (explicitFileSet.size && (!explicitFilesCoverAllFiles || report)) {
+        explicitFileSet.forEach(markAsChanged);
+      }
       manifestDiffFiles.forEach(markAsChanged);
       gitFiles.forEach(markAsChanged);
       dependentFilesOfDeletedTracked.forEach(markAsChanged);
