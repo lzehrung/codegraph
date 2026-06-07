@@ -4,7 +4,15 @@ import path from "node:path";
 import type { Edge, EdgeTo, Graph, Pos, Range } from "../../types.js";
 import { buildGraphAdjacency } from "../../graphs/adjacency.js";
 import type { ProjectFileInfo } from "../../util/projectFiles.js";
-import { SymbolKind, type BuildOptions, type ModuleIndex, type ProjectIndex, type SymbolDef } from "../types.js";
+import {
+  SymbolKind,
+  type BuildOptions,
+  type ExportEntry,
+  type ImportBinding,
+  type ModuleIndex,
+  type ProjectIndex,
+  type SymbolDef,
+} from "../types.js";
 import { cacheRoot } from "./module-cache.js";
 import type { ManifestFileEntry } from "./manifest.js";
 
@@ -115,6 +123,46 @@ function normalizedSnapshotNativeMode(nativeMode: ProjectIndex["nativeMode"] | u
   return nativeMode;
 }
 
+function isSnapshotNativeMode(value: unknown): value is ProjectIndex["nativeMode"] {
+  return value === "auto" || value === "on" || value === "off";
+}
+
+function isProjectFileInfo(value: unknown): value is ProjectFileInfo {
+  if (!value || typeof value !== "object") return false;
+  const projectFile = value as Partial<ProjectFileInfo>;
+  return (
+    typeof projectFile.path === "string" &&
+    (projectFile.kind === "file" || projectFile.kind === "dir") &&
+    isProjectFileType(projectFile.type) &&
+    isProjectFileRole(projectFile.role) &&
+    typeof projectFile.projectRoot === "string" &&
+    (projectFile.name === undefined || typeof projectFile.name === "string")
+  );
+}
+
+function isProjectFileType(value: unknown): boolean {
+  return (
+    value === "node" ||
+    value === "typescript" ||
+    value === "python" ||
+    value === "rust" ||
+    value === "go" ||
+    value === "maven" ||
+    value === "gradle" ||
+    value === "dotnet" ||
+    value === "ruby" ||
+    value === "php" ||
+    value === "swift" ||
+    value === "native" ||
+    value === "ide"
+  );
+}
+
+function isProjectFileRole(value: unknown): boolean {
+  return value === "manifest" || value === "lockfile" || value === "config" || value === "solution" || value === "ide";
+}
+
+
 function isProjectIndexSnapshotPayload(value: unknown): value is ProjectIndexSnapshotPayload {
   if (!value || typeof value !== "object") return false;
   const payload = value as Partial<ProjectIndexSnapshotPayload>;
@@ -127,7 +175,11 @@ function isProjectIndexSnapshotPayload(value: unknown): value is ProjectIndexSna
     Array.isArray(payload.graph.edges) &&
     payload.graph.edges.every(isGraphEdge) &&
     Array.isArray(payload.modules) &&
-    payload.modules.every(isModuleIndex)
+    payload.modules.every(isModuleIndex) &&
+    (payload.projectRoot === undefined || typeof payload.projectRoot === "string") &&
+    (payload.nativeMode === undefined || isSnapshotNativeMode(payload.nativeMode)) &&
+    (payload.projectFiles === undefined ||
+      (Array.isArray(payload.projectFiles) && payload.projectFiles.every(isProjectFileInfo)))
   );
 }
 
@@ -139,7 +191,9 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
     Array.isArray(moduleIndex.locals) &&
     moduleIndex.locals.every(isSymbolDef) &&
     Array.isArray(moduleIndex.imports) &&
-    Array.isArray(moduleIndex.exports)
+    moduleIndex.imports.every(isImportBinding) &&
+    Array.isArray(moduleIndex.exports) &&
+    moduleIndex.exports.every(isExportEntry)
   );
 }
 
@@ -155,6 +209,87 @@ function isSymbolDef(value: unknown): value is SymbolDef {
     (symbol.lineSpan === undefined || typeof symbol.lineSpan === "number") &&
     (symbol.complexity === undefined || typeof symbol.complexity === "number")
   );
+}
+
+function isImportBinding(value: unknown): value is ImportBinding {
+  if (!value || typeof value !== "object") return false;
+  const binding = value as Partial<ImportBinding>;
+  if (
+    typeof binding.from !== "string" ||
+    !isResolvedImportTarget(binding.resolved) ||
+    !isOptionalBoolean(binding.typeOnly) ||
+    !isImportMechanism(binding.mechanism) ||
+    !isResolvedType(binding.resolvedType) ||
+    !isOptionalNumber(binding.confidence)
+  ) {
+    return false;
+  }
+  if (binding.kind === "default") return typeof binding.local === "string";
+  if (binding.kind === "named") {
+    return (
+      typeof binding.local === "string" &&
+      typeof binding.imported === "string" &&
+      (binding.phpImportType === undefined ||
+        binding.phpImportType === "class" ||
+        binding.phpImportType === "function" ||
+        binding.phpImportType === "const")
+    );
+  }
+  if (binding.kind === "namespace") return typeof binding.localNS === "string";
+  return binding.kind === "star";
+}
+
+function isExportEntry(value: unknown): value is ExportEntry {
+  if (!value || typeof value !== "object") return false;
+  const entry = value as Partial<ExportEntry>;
+  if (entry.type === "local") return typeof entry.exportedAs === "string" && isSymbolDef(entry.target);
+  if (entry.type === "reexport") {
+    return (
+      typeof entry.exportedAs === "string" &&
+      typeof entry.fromModule === "string" &&
+      typeof entry.sourceSpecifier === "string" &&
+      (entry.moduleSpecifier === undefined || typeof entry.moduleSpecifier === "string") &&
+      isOptionalBoolean(entry.typeOnly)
+    );
+  }
+  if (entry.type === "namespaceReexport") {
+    return (
+      typeof entry.exportedAs === "string" &&
+      typeof entry.fromModule === "string" &&
+      (entry.moduleSpecifier === undefined || typeof entry.moduleSpecifier === "string") &&
+      isOptionalBoolean(entry.typeOnly)
+    );
+  }
+  if (entry.type === "exportStar") {
+    return (
+      typeof entry.fromModule === "string" &&
+      typeof entry.sourceSpecifier === "string" &&
+      (entry.moduleSpecifier === undefined || typeof entry.moduleSpecifier === "string") &&
+      isOptionalBoolean(entry.typeOnly)
+    );
+  }
+  return false;
+}
+
+function isResolvedImportTarget(value: ImportBinding["resolved"] | undefined): boolean {
+  if (value === undefined || typeof value === "string") return true;
+  return Boolean(value && typeof value === "object" && typeof value.external === "string");
+}
+
+function isImportMechanism(value: unknown): boolean {
+  return value === undefined || value === "es" || value === "cjs" || value === "python" || value === "php";
+}
+
+function isResolvedType(value: unknown): boolean {
+  return value === undefined || value === "heuristic" || value === "precise";
+}
+
+function isOptionalBoolean(value: unknown): boolean {
+  return value === undefined || typeof value === "boolean";
+}
+
+function isOptionalNumber(value: unknown): boolean {
+  return value === undefined || typeof value === "number";
 }
 
 function isSymbolKind(value: unknown): value is SymbolKind {
