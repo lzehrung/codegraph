@@ -1,7 +1,7 @@
 import fsp from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import type { Graph } from "../../types.js";
+import type { Edge, EdgeTo, Graph } from "../../types.js";
 import { buildGraphAdjacency } from "../../graphs/adjacency.js";
 import type { ProjectFileInfo } from "../../util/projectFiles.js";
 import type { BuildOptions, ModuleIndex, ProjectIndex } from "../types.js";
@@ -25,7 +25,7 @@ type ProjectIndexSnapshotPayload = {
 
 export function projectSnapshotFilesSignature(entries: ReadonlyMap<string, ManifestFileEntry>): string {
   const hash = createHash("sha256");
-  for (const [file, entry] of [...entries.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+  for (const [file, entry] of [...entries.entries()].sort(([left], [right]) => compareSnapshotPath(left, right))) {
     hash.update(file);
     hash.update("\0");
     hash.update(entry.sig);
@@ -34,6 +34,12 @@ export function projectSnapshotFilesSignature(entries: ReadonlyMap<string, Manif
     hash.update("\0");
   }
   return hash.digest("hex");
+}
+
+function compareSnapshotPath(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
 }
 
 export async function tryLoadProjectIndexSnapshot(
@@ -117,7 +123,9 @@ function isProjectIndexSnapshotPayload(value: unknown): value is ProjectIndexSna
     typeof payload.filesSignature === "string" &&
     !!payload.graph &&
     Array.isArray(payload.graph.nodes) &&
+    payload.graph.nodes.every((node) => typeof node === "string") &&
     Array.isArray(payload.graph.edges) &&
+    payload.graph.edges.every(isGraphEdge) &&
     Array.isArray(payload.modules) &&
     payload.modules.every(isModuleIndex)
   );
@@ -132,4 +140,26 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
     Array.isArray(moduleIndex.imports) &&
     Array.isArray(moduleIndex.exports)
   );
+}
+
+function isGraphEdge(value: unknown): value is Edge {
+  if (!value || typeof value !== "object") return false;
+  const edge = value as Partial<Edge>;
+  const resolved = edge.resolved;
+  return (
+    typeof edge.from === "string" &&
+    isEdgeTo(edge.to) &&
+    typeof edge.raw === "string" &&
+    (edge.typeOnly === undefined || typeof edge.typeOnly === "boolean") &&
+    (resolved === undefined || resolved === "heuristic" || resolved === "precise") &&
+    (edge.confidence === undefined || typeof edge.confidence === "number")
+  );
+}
+
+function isEdgeTo(value: unknown): value is EdgeTo {
+  if (!value || typeof value !== "object") return false;
+  const edgeTo = value as Partial<EdgeTo>;
+  if (edgeTo.type === "file") return typeof edgeTo.path === "string";
+  if (edgeTo.type === "external") return typeof edgeTo.name === "string";
+  return false;
 }
