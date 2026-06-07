@@ -41,6 +41,8 @@ export function projectSnapshotFilesSignature(entries: ReadonlyMap<string, Manif
     hash.update("\0");
     hash.update(entry.gitSig ?? "");
     hash.update("\0");
+    hash.update(entry.sqlCorpusSig ?? "");
+    hash.update("\0");
   }
   return hash.digest("hex");
 }
