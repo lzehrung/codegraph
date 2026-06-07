@@ -554,13 +554,19 @@ describe("Cache invalidation and strict hashing", () => {
       db.close();
     }
 
-    const incremental = await buildProjectIndexIncremental(root, {
-      threads: 2,
-      cache: "disk",
-    });
+    const prepSpy = vi.spyOn(filePrep, "prepareSourceInput");
+    try {
+      const incremental = await buildProjectIndexIncremental(root, {
+        threads: 2,
+        cache: "disk",
+      });
 
-    const moduleIndex = incremental.byFile.get(normalize(filePath));
-    expect(moduleIndex?.locals.some((local) => local.localName === "snap")).toBe(true);
+      expect(prepSpy).not.toHaveBeenCalled();
+      const moduleIndex = incremental.byFile.get(normalize(filePath));
+      expect(moduleIndex?.locals.some((local) => local.localName === "snap")).toBe(true);
+    } finally {
+      prepSpy.mockRestore();
+    }
   });
 
   it("falls back when the project snapshot payload is malformed", async () => {

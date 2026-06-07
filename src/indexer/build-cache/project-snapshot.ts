@@ -4,7 +4,6 @@ import path from "node:path";
 import type { Graph } from "../../types.js";
 import { buildGraphAdjacency } from "../../graphs/adjacency.js";
 import type { ProjectFileInfo } from "../../util/projectFiles.js";
-import { isNativeTreeSitterAvailable } from "../../native/treeSitterNative.js";
 import type { BuildOptions, ModuleIndex, ProjectIndex } from "../types.js";
 import { cacheRoot } from "./module-cache.js";
 import type { ManifestFileEntry } from "./manifest.js";
@@ -18,7 +17,6 @@ type ProjectIndexSnapshotPayload = {
     nodes: string[];
     edges: Graph["edges"];
   };
-  nativeAvailable: boolean;
   modules: ModuleIndex[];
   projectRoot?: string;
   nativeMode?: ProjectIndex["nativeMode"];
@@ -49,8 +47,7 @@ export async function tryLoadProjectIndexSnapshot(
     if (
       !isProjectIndexSnapshotPayload(payload) ||
       payload.filesSignature !== filesSignature ||
-      payload.nativeMode !== normalizedSnapshotNativeMode(opts?.native) ||
-      payload.nativeAvailable !== isNativeTreeSitterAvailable(opts?.native)
+      payload.nativeMode !== normalizedSnapshotNativeMode(opts?.native)
     ) {
       return null;
     }
@@ -85,7 +82,6 @@ export async function writeProjectIndexSnapshot(
   const payload: ProjectIndexSnapshotPayload = {
     version: PROJECT_SNAPSHOT_VERSION,
     filesSignature,
-    nativeAvailable: isNativeTreeSitterAvailable(opts?.native),
     graph: {
       nodes: [...index.graph.nodes],
       edges: index.graph.edges,
@@ -118,7 +114,6 @@ function isProjectIndexSnapshotPayload(value: unknown): value is ProjectIndexSna
   const payload = value as Partial<ProjectIndexSnapshotPayload>;
   return (
     payload.version === PROJECT_SNAPSHOT_VERSION &&
-    typeof payload.nativeAvailable === "boolean" &&
     typeof payload.filesSignature === "string" &&
     !!payload.graph &&
     Array.isArray(payload.graph.nodes) &&
