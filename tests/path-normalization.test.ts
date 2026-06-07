@@ -9,7 +9,7 @@ import {
   toProjectDisplayPath,
   toProjectRelativePath,
 } from "../src/util.js";
-import { normalizeImpactFilePath } from "../src/impact/path.js";
+import { createImpactIncludeMatcher, normalizeImpactFilePath } from "../src/impact/path.js";
 
 describe("cross-platform path normalization", () => {
   it("treats Windows-style paths as absolute regardless of host OS", () => {
@@ -34,6 +34,14 @@ describe("cross-platform path normalization", () => {
     expect(normalizeImpactFilePath("/workspace/codegraph", String.raw`C:\repo\src\main.ts`)).toBe(
       "C:/repo/src/main.ts",
     );
+  });
+
+  it("matches impact include globs against absolute and relative project paths", () => {
+    const matcher = createImpactIncludeMatcher("/workspace/codegraph", ["src/**/*.ts"]);
+
+    expect(matcher("/workspace/codegraph/src/main.ts")).toBe(true);
+    expect(matcher("src/main.ts")).toBe(true);
+    expect(matcher("/workspace/codegraph/tests/main.test.ts")).toBe(false);
   });
 
   it("does not treat Windows-style absolute paths as inside a POSIX project root", () => {

@@ -433,6 +433,148 @@ describe("Review report", () => {
     expect(report.head).toBe("HEAD");
   });
 
+  it("applies discovery filters to changed git comparisons", async () => {
+    const root = await mkTmpDir("dg-review-git-changed-discovery-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "test@git.local"]);
+    runGit(root, ["config", "user.name", "Codegraph Bot"]);
+    await fsp.mkdir(path.join(root, "src"), { recursive: true });
+    await fsp.writeFile(path.join(root, "package.json"), `{"name":"demo"}\n`, "utf8");
+    const trackedFile = path.join(root, "src", "tracked.ts");
+    await fsp.writeFile(trackedFile, `export const value = 1;\n`, "utf8");
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "initial"]);
+    await fsp.writeFile(trackedFile, `export const value = 2;\n`, "utf8");
+    await fsp.writeFile(path.join(root, "package.json"), `{"name":"demo","version":"1.0.0"}\n`, "utf8");
+
+    const report = await buildReviewReport(root, {
+      gitBase: "HEAD",
+      gitHead: "WORKTREE",
+      discovery: { includeGlobs: ["src/**"], globRoot: root },
+    });
+
+    expect(report.status).toBe("ok");
+    expect(report.changedFiles.some((changedFile) => changedFile.file === "package.json")).toBe(false);
+  });
+
+  it("applies discovery include globs to hidden paths", async () => {
+    const root = await mkTmpDir("dg-review-git-dot-discovery-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "test@git.local"]);
+    runGit(root, ["config", "user.name", "Codegraph Bot"]);
+    const workflowFile = path.join(root, ".github", "workflows", "ci.yml");
+    await fsp.mkdir(path.dirname(workflowFile), { recursive: true });
+    await fsp.writeFile(workflowFile, "name: ci\n", "utf8");
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "initial"]);
+    await fsp.writeFile(workflowFile, "name: ci\non: push\n", "utf8");
+
+    const report = await buildReviewReport(root, {
+      gitBase: "HEAD",
+      gitHead: "WORKTREE",
+      discovery: { includeGlobs: ["**/*.yml"], globRoot: root },
+    });
+
+    expect(report.status).toBe("ok");
+    expect(report.changedFiles.some((changedFile) => changedFile.file === ".github/workflows/ci.yml")).toBe(true);
+  });
+
+  it("keeps explicitly requested files outside discovery include globs", async () => {
+    const root = await mkTmpDir("dg-review-git-explicit-discovery-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "test@git.local"]);
+    runGit(root, ["config", "user.name", "Codegraph Bot"]);
+    const packageFile = path.join(root, "package.json");
+    await fsp.writeFile(packageFile, `{"name":"demo"}\n`, "utf8");
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "initial"]);
+    await fsp.writeFile(packageFile, `{"name":"demo","version":"1.0.0"}\n`, "utf8");
+
+    const report = await buildReviewReport(root, {
+      files: [packageFile],
+      gitBase: "HEAD",
+      gitHead: "WORKTREE",
+      discovery: { includeGlobs: ["src/**"], globRoot: root },
+    });
+
+    expect(report.status).toBe("ok");
+    expect(report.changedFiles.some((changedFile) => changedFile.file === "package.json")).toBe(true);
+  });
+
+  it("reports renames from inside discovery include globs", async () => {
+    const root = await mkTmpDir("dg-review-git-rename-discovery-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "test@git.local"]);
+    runGit(root, ["config", "user.name", "Codegraph Bot"]);
+    await fsp.mkdir(path.join(root, "src"), { recursive: true });
+    await fsp.mkdir(path.join(root, "docs"), { recursive: true });
+    const sourceFile = path.join(root, "src", "tracked.ts");
+    const movedFile = path.join(root, "docs", "tracked.ts");
+    await fsp.writeFile(sourceFile, `export const value = 1;\n`, "utf8");
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "initial"]);
+    await fsp.rename(sourceFile, movedFile);
+
+    const report = await buildReviewReport(root, {
+      gitBase: "HEAD",
+      gitHead: "WORKTREE",
+      discovery: { includeGlobs: ["src/**"], globRoot: root },
+    });
+    expect(report.changedFiles.some((changedFile) => changedFile.file === "src/tracked.ts")).toBe(true);
+    expect(report.status).toBe("ok");
+    expect(report.changedFiles.length).toBeGreaterThan(0);
+  });
+
+  it("models renames from included paths into ignored paths as scoped deletions", async () => {
+    const root = await mkTmpDir("dg-review-git-rename-ignore-discovery-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "test@git.local"]);
+    runGit(root, ["config", "user.name", "Codegraph Bot"]);
+    await fsp.mkdir(path.join(root, "src"), { recursive: true });
+    await fsp.mkdir(path.join(root, "src", "generated"), { recursive: true });
+    const sourceFile = path.join(root, "src", "tracked.ts");
+    const movedFile = path.join(root, "src", "generated", "tracked.ts");
+    await fsp.writeFile(sourceFile, `export const value = 1;\n`, "utf8");
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "initial"]);
+    await fsp.rename(sourceFile, movedFile);
+
+    const report = await buildReviewReport(root, {
+      gitBase: "HEAD",
+      gitHead: "WORKTREE",
+      discovery: { includeGlobs: ["src/**"], ignoreGlobs: ["src/generated/**"], globRoot: root },
+    });
+
+    expect(report.status).toBe("ok");
+    expect(report.changedFiles.some((changedFile) => changedFile.file === "src/tracked.ts")).toBe(true);
+    expect(report.changedFiles.some((changedFile) => changedFile.file === "src/generated/tracked.ts")).toBe(false);
+  });
+
+  it("models renames into ignored paths as scoped deletions without include globs", async () => {
+    const root = await mkTmpDir("dg-review-git-rename-ignore-only-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "test@git.local"]);
+    runGit(root, ["config", "user.name", "Codegraph Bot"]);
+    await fsp.mkdir(path.join(root, "src"), { recursive: true });
+    await fsp.mkdir(path.join(root, "src", "generated"), { recursive: true });
+    const sourceFile = path.join(root, "src", "tracked.ts");
+    const movedFile = path.join(root, "src", "generated", "tracked.ts");
+    await fsp.writeFile(sourceFile, `export const value = 1;\n`, "utf8");
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "initial"]);
+    await fsp.rename(sourceFile, movedFile);
+
+    const report = await buildReviewReport(root, {
+      gitBase: "HEAD",
+      gitHead: "WORKTREE",
+      discovery: { ignoreGlobs: ["src/generated/**"], globRoot: root },
+    });
+
+    expect(report.status).toBe("ok");
+    expect(report.changedFiles.some((changedFile) => changedFile.file === "src/tracked.ts")).toBe(true);
+    expect(report.changedFiles.some((changedFile) => changedFile.file === "src/generated/tracked.ts")).toBe(false);
+  });
+
   it("surfaces invalid git revisions instead of reporting no changes", async () => {
     const root = await mkTmpDir("dg-review-invalid-git-");
     runGit(root, ["init"]);

@@ -53,7 +53,7 @@ Then choose the narrowest follow-up command:
 - Duplicate cleanup: `codegraph duplicates --root . ./src --min-confidence medium`
 - Chunks: `codegraph chunk <file>`
 - Artifact bundle: `codegraph artifact build --root . --out codegraph-out --json`
-- MCP server: `codegraph mcp serve --root . --stdio` or `codegraph mcp serve --root . --port 7331`
+- MCP server: configure it in the agent/client MCP config; use MCP tools when they are already available.
 
 For `orient`, positional paths are include roots even when there is only one positional. Use `--root /path/to/repo` when targeting a different project root.
 
@@ -67,6 +67,7 @@ Use Codegraph MCP tools when they are already available in the agent runtime. MC
 - Use `impact` and `review` for git-range risk analysis.
 - Use `drift` for base/head architecture-regression checks.
 - Use `query_sqlite` only for read-only artifact inspection.
+- Use `refresh_index` after changing files while a long-running MCP server is active.
 - Use `artifact_build` only when the tool is exposed and write access is intentionally enabled.
 
 Fall back to CLI commands when MCP tools are unavailable.

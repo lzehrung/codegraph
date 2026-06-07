@@ -28,6 +28,7 @@ import { queryGraphSqliteRaw, type RawSqlResult } from "../sqlite.js";
 import { toProjectDisplayPath } from "../util/paths.js";
 import { createAgentSession } from "../agent/session.js";
 import type { AgentSession } from "../agent/session.js";
+import type { BuildOptions } from "../indexer/types.js";
 import {
   assertMcpSqliteQueryResourceBounded,
   boundRawSqlResult,
@@ -69,11 +70,18 @@ import {
   resolveReadableFile,
 } from "./security.js";
 
-export type CodegraphMcpServerOptions = {
+export type CodegraphMcpWarmupMode = "off" | "base" | "symbols";
+
+export type CodegraphMcpHandlerOptions = {
   root: string;
   artifactPath?: string;
   readOnly?: boolean;
   session?: AgentSession;
+  buildOptions?: BuildOptions;
+};
+
+export type CodegraphMcpServerOptions = CodegraphMcpHandlerOptions & {
+  warmup?: CodegraphMcpWarmupMode;
   host?: string;
   port?: number;
   onHttpListen?: ((info: CodegraphMcpHttpServerInfo) => void) | undefined;
@@ -136,6 +144,10 @@ export type CodegraphMcpHandlers = {
   path: (request: { from: string; to: string }) => Promise<{ path: string[] | null }>;
   impact: (request: { base: string; head: string }) => Promise<ReviewReport>;
   review: (request: { base: string; head: string; reviewDepth?: ReviewDepth | undefined }) => Promise<ReviewReport>;
+  refresh_index: (request: { warmup?: CodegraphMcpWarmupMode | undefined }) => Promise<{
+    refreshed: true;
+    warmup: CodegraphMcpWarmupMode;
+  }>;
   query_sqlite: (request: {
     query: string;
     params?: Array<string | number | null> | undefined;
@@ -162,15 +174,65 @@ type McpDependencyEntry = {
   depth: number;
 };
 
+function assertMcpSessionOptions(options: CodegraphMcpHandlerOptions): void {
+  if (options.session !== undefined && options.buildOptions !== undefined) {
+    throw new Error("MCP server options cannot combine a prebuilt session with buildOptions.");
+  }
+}
+
+function createCodegraphMcpSession(options: CodegraphMcpHandlerOptions, root: string): AgentSession {
+  assertMcpSessionOptions(options);
+  return (
+    options.session ??
+    createAgentSession({ root, ...(options.buildOptions ? { buildOptions: options.buildOptions } : {}) })
+  );
+}
+
+function startCodegraphMcpWarmup(
+  session: AgentSession,
+  warmup: CodegraphMcpWarmupMode | undefined,
+): Promise<Awaited<ReturnType<AgentSession["loadProject"]>>> | undefined {
+  if (warmup === "base") {
+    return session.loadProject({ symbolGraph: "skip" });
+  }
+  if (warmup === "symbols") {
+    return session.loadProject();
+  }
+  return undefined;
+}
+
+async function createWarmedCodegraphMcpHandlers(options: CodegraphMcpServerOptions): Promise<CodegraphMcpHandlers> {
+  const root = path.resolve(options.root);
+  const session = createCodegraphMcpSession(options, root);
+  await startCodegraphMcpWarmup(session, options.warmup);
+  const { warmup, host, port, onHttpListen, ...handlerOptions } = options;
+  void warmup;
+  void host;
+  void port;
+  void onHttpListen;
+  return createCodegraphMcpHandlersForSession({ ...handlerOptions, root }, session);
+}
+
 const MCP_HTTP_PATH = "/mcp";
 const MAX_MCP_HTTP_BODY_BYTES = 1_000_000;
 
-export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): CodegraphMcpHandlers {
+export function createCodegraphMcpHandlers(options: CodegraphMcpHandlerOptions): CodegraphMcpHandlers {
+  const root = path.resolve(options.root);
+  const session = createCodegraphMcpSession(options, root);
+  return createCodegraphMcpHandlersForSession(options, session);
+}
+
+function createCodegraphMcpHandlersForSession(
+  options: CodegraphMcpHandlerOptions,
+  session: AgentSession,
+): CodegraphMcpHandlers {
   const root = path.resolve(options.root);
   const readOnly = options.readOnly ?? true;
-  const session = options.session ?? createAgentSession({ root });
   const realRoot = fs.realpath(root);
-  let sqlitePath = options.artifactPath ? resolveArtifactSqlitePathCandidate(root, options.artifactPath) : undefined;
+  const configuredSqlitePath = options.artifactPath
+    ? resolveArtifactSqlitePathCandidate(root, options.artifactPath)
+    : undefined;
+  let sqlitePath = configuredSqlitePath;
 
   const relative = (file: string): string => toProjectDisplayPath(root, file);
   const boundedLimit = (limit: number | undefined, fallback: number, max: number): number => {
@@ -185,7 +247,7 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
       options: { depth?: number; limit: number },
     ) => DependencyNode[],
   ): Promise<McpDependencyEntry[]> => {
-    const snapshot = await session.loadProject();
+    const snapshot = await session.loadProject({ symbolGraph: "skip" });
     const queryOptions = {
       ...(request.depth !== undefined ? { depth: request.depth } : {}),
       limit: boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT),
@@ -244,7 +306,7 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
     },
 
     goto: async (request) => {
-      const snapshot = await session.loadProject();
+      const snapshot = await session.loadProject({ symbolGraph: "skip" });
       return await goToDefinition(snapshot.index, {
         file: await resolveProjectFile(await realRoot, root, request.file),
         line: request.line,
@@ -278,7 +340,7 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
         throw new Error("refs requires either handle or file, line, and column.");
       }
 
-      const snapshot = await session.loadProject();
+      const snapshot = await session.loadProject({ symbolGraph: "skip" });
       const referenceOptions = {
         maxReferences: boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT),
       };
@@ -311,7 +373,7 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
     },
 
     path: async (request) => {
-      const snapshot = await session.loadProject();
+      const snapshot = await session.loadProject({ symbolGraph: "skip" });
       const result = getShortestPath(
         snapshot.fileGraph,
         await resolveProjectFile(await realRoot, root, request.from),
@@ -324,6 +386,7 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
 
     impact: async (request) =>
       await buildReviewReport(root, {
+        ...options.buildOptions,
         gitBase: request.base,
         gitHead: request.head,
         reviewDepth: "minimal",
@@ -331,6 +394,7 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
 
     review: async (request) =>
       await buildReviewReport(root, {
+        ...options.buildOptions,
         gitBase: request.base,
         gitHead: request.head,
         ...(request.reviewDepth !== undefined ? { reviewDepth: request.reviewDepth } : {}),
@@ -346,6 +410,14 @@ export function createCodegraphMcpHandlers(options: CodegraphMcpServerOptions): 
         maxRows: normalizeSqliteRowLimit(request.limit),
       });
       return boundRawSqlResult(result, DEFAULT_SQLITE_BYTE_LIMIT);
+    },
+
+    refresh_index: async (request) => {
+      const warmup = request.warmup ?? "off";
+      session.invalidate();
+      sqlitePath = configuredSqlitePath;
+      await startCodegraphMcpWarmup(session, warmup);
+      return { refreshed: true, warmup };
     },
 
     artifact_build: async (request) => {
@@ -413,7 +485,7 @@ export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Pro
     return;
   }
 
-  const handlers = createCodegraphMcpHandlers(options);
+  const handlers = await createWarmedCodegraphMcpHandlers(options);
   const server = createCodegraphMcpProtocolServer(handlers);
   await server.connect(new StdioServerTransport());
 }
@@ -422,7 +494,7 @@ export async function startCodegraphMcpHttpServer(
   options: CodegraphMcpServerOptions & { port: number },
 ): Promise<CodegraphMcpHttpServer> {
   const host = options.host ?? "127.0.0.1";
-  const handlers = createCodegraphMcpHandlers(options);
+  const handlers = await createWarmedCodegraphMcpHandlers(options);
   const sessions = new Map<string, { server: McpServer; transport: StreamableHTTPServerTransport }>();
   let allowedHostHeaders = emptyAllowedHostHeaderRules();
 
@@ -614,6 +686,8 @@ async function callMcpTool(handlers: CodegraphMcpHandlers, name: string, input: 
       return await handlers.review(reviewSchema.parse(input));
     case "query_sqlite":
       return await handlers.query_sqlite(querySqliteSchema.parse(input));
+    case "refresh_index":
+      return await handlers.refresh_index(refreshIndexSchema.parse(input));
     case "artifact_build":
       return await handlers.artifact_build(artifactBuildSchema.parse(input));
     default:
@@ -736,6 +810,10 @@ const querySqliteSchema = z.object({
   query: z.string(),
   params: z.array(z.union([z.string(), z.number(), z.null()])).optional(),
   limit: z.number().int().nonnegative().optional(),
+});
+
+const refreshIndexSchema = z.object({
+  warmup: z.enum(["off", "base", "symbols"]).optional(),
 });
 
 const artifactBuildSchema = z.object({

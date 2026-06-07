@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createAgentSession } from "../src/agent/session.js";
 import { createCodegraphMcpHandlers, listCodegraphMcpTools, startCodegraphMcpHttpServer } from "../src/mcp/server.js";
+import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import { countingSession } from "./helpers/agent.js";
 import { isSymlinkUnavailable } from "./helpers/filesystem.js";
 
@@ -133,6 +134,7 @@ describe("codegraph MCP handlers", () => {
       expect(toolNames).toContain("orient");
       expect(toolNames).toContain("packet_get");
       expect(toolNames).toContain("query_sqlite");
+      expect(toolNames).toContain("refresh_index");
     } finally {
       await httpServer.close();
     }
@@ -645,6 +647,202 @@ describe("codegraph MCP handlers", () => {
     await handlers.refs({ handle: first!.handle });
 
     expect(counted.loads()).toBe(1);
+  });
+
+  it("uses skipped symbol graph snapshots for each base navigation and graph tool", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-skipped-symbol-graph-"));
+    const authPath = path.join(root, "auth.ts");
+    const apiPath = path.join(root, "api.ts");
+    const apiSource = "import { validateUser } from './auth';\nexport const ok = validateUser(1);\n";
+    await fs.writeFile(authPath, "export function validateUser(id: number) { return id > 0; }\n", "utf8");
+    await fs.writeFile(apiPath, apiSource, "utf8");
+
+    const scenarios: Array<{
+      name: string;
+      run: (handlers: ReturnType<typeof createCodegraphMcpHandlers>) => Promise<void>;
+    }> = [
+      {
+        name: "goto",
+        run: async (handlers) => {
+          const result = await handlers.goto({
+            file: apiPath,
+            line: 2,
+            column: apiSource.split("\n")[1]!.indexOf("validateUser"),
+          });
+          expect(result.status).toBe("ok");
+        },
+      },
+      {
+        name: "position refs",
+        run: async (handlers) => {
+          const result = await handlers.refs({ file: authPath, line: 1, column: "export function ".length });
+          expect(result.references.some((reference) => reference.file === "api.ts")).toBe(true);
+        },
+      },
+      {
+        name: "deps",
+        run: async (handlers) => {
+          const result = await handlers.deps({ file: apiPath });
+          expect(result.dependencies.some((dependency) => dependency.file === "auth.ts")).toBe(true);
+        },
+      },
+      {
+        name: "rdeps",
+        run: async (handlers) => {
+          const result = await handlers.rdeps({ file: authPath });
+          expect(result.reverseDependencies.some((dependency) => dependency.file === "api.ts")).toBe(true);
+        },
+      },
+      {
+        name: "path",
+        run: async (handlers) => {
+          const result = await handlers.path({ from: apiPath, to: authPath });
+          expect(result.path).toEqual(["api.ts", "auth.ts"]);
+        },
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const counted = countingSession(createAgentSession({ root }));
+      const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+      const handlers = createCodegraphMcpHandlers({ root, session: counted.session });
+
+      await scenario.run(handlers);
+
+      expect(symbolGraphSpy, scenario.name).not.toHaveBeenCalled();
+      expect(counted.loads(), scenario.name).toBe(1);
+      symbolGraphSpy.mockRestore();
+    }
+  });
+
+  it("keeps MCP sessions lazy unless warmup is requested", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-warmup-off-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const counted = countingSession(createAgentSession({ root }));
+
+    createCodegraphMcpHandlers({ root, session: counted.session });
+
+    expect(counted.loads()).toBe(0);
+  });
+
+  it("refresh_index invalidates stale MCP session snapshots", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-refresh-index-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const handlers = createCodegraphMcpHandlers({ root });
+
+    const before = await handlers.search({ query: "lateSymbol", mode: "symbol", limit: 5 });
+    await fs.writeFile(path.join(root, "late.ts"), "export const lateSymbol = 1;\n", "utf8");
+    const stale = await handlers.search({ query: "lateSymbol", mode: "symbol", limit: 5 });
+    const refresh = await handlers.refresh_index({ warmup: "base" });
+    const fresh = await handlers.search({ query: "lateSymbol", mode: "symbol", limit: 5 });
+
+    expect(before.results.some((result) => result.label === "lateSymbol")).toBe(false);
+    expect(stale.results.some((result) => result.label === "lateSymbol")).toBe(false);
+    expect(refresh).toEqual({ refreshed: true, warmup: "base" });
+    expect(fresh.results.some((result) => result.label === "lateSymbol")).toBe(true);
+  });
+
+  it("refresh_index reloads edited files in stale MCP session snapshots", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-refresh-edit-"));
+    const filePath = path.join(root, "auth.ts");
+    await fs.writeFile(filePath, "export const oldSymbol = 1;\n", "utf8");
+    const handlers = createCodegraphMcpHandlers({ root });
+
+    await handlers.search({ query: "oldSymbol", mode: "symbol", limit: 5 });
+    await fs.writeFile(filePath, "export const editedSymbol = 1;\n", "utf8");
+    const stale = await handlers.search({ query: "editedSymbol", mode: "symbol", limit: 5 });
+    await handlers.refresh_index({});
+    const fresh = await handlers.search({ query: "editedSymbol", mode: "symbol", limit: 5 });
+
+    expect(stale.results.some((result) => result.label === "editedSymbol")).toBe(false);
+    expect(fresh.results.some((result) => result.label === "editedSymbol")).toBe(true);
+  });
+
+  it("refresh_index clears stale SQLite artifact state", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-refresh-sqlite-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const handlers = createCodegraphMcpHandlers({ root, readOnly: false });
+
+    await handlers.artifact_build({ outDir: path.join(root, "out"), sqlite: true });
+    await expect(handlers.query_sqlite({ query: "select path from files order by path" })).resolves.toEqual(
+      expect.objectContaining({ truncated: false }),
+    );
+    await handlers.refresh_index({});
+
+    await expect(handlers.query_sqlite({ query: "select path from files order by path" })).rejects.toThrow(
+      /No SQLite artifact/,
+    );
+  });
+
+  it("refresh_index preserves configured SQLite artifact paths", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-refresh-artifact-path-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const outDir = path.join(root, "out");
+    const buildHandlers = createCodegraphMcpHandlers({ root, readOnly: false });
+    await buildHandlers.artifact_build({ outDir, sqlite: true });
+    const readHandlers = createCodegraphMcpHandlers({ root, artifactPath: path.join(outDir, "codegraph.sqlite") });
+
+    await expect(readHandlers.query_sqlite({ query: "select path from files order by path" })).resolves.toEqual(
+      expect.objectContaining({ truncated: false }),
+    );
+    await readHandlers.refresh_index({});
+
+    await expect(readHandlers.query_sqlite({ query: "select path from files order by path" })).resolves.toEqual(
+      expect.objectContaining({ truncated: false }),
+    );
+  });
+
+  it("rejects mixed prebuilt session and build options", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-session-options-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+
+    expect(() =>
+      createCodegraphMcpHandlers({
+        root,
+        session: createAgentSession({ root }),
+        buildOptions: { cache: "memory" },
+      }),
+    ).toThrow(/prebuilt session with buildOptions/);
+  });
+
+  it("warms the base MCP session snapshot before HTTP serving", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-warmup-base-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const counted = countingSession(createAgentSession({ root }));
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      port: 0,
+      session: counted.session,
+      warmup: "base",
+    });
+
+    try {
+      expect(counted.loads()).toBe(1);
+      await counted.session.loadProject({ symbolGraph: "skip" });
+      expect(counted.loads()).toBe(1);
+    } finally {
+      await httpServer.close();
+    }
+  });
+
+  it("warms the detailed symbol graph before HTTP serving", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-warmup-symbols-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser() { return true; }\n", "utf8");
+    const counted = countingSession(createAgentSession({ root }));
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      port: 0,
+      session: counted.session,
+      warmup: "symbols",
+    });
+
+    try {
+      expect(counted.loads()).toBe(1);
+      await counted.session.loadProject();
+      expect(counted.loads()).toBe(1);
+    } finally {
+      await httpServer.close();
+    }
   });
 
   it("uses the MCP session snapshot when artifact_build is enabled", async () => {

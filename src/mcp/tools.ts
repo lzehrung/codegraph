@@ -152,6 +152,13 @@ export const MCP_TOOLS: Tool[] = [
     ),
   },
   {
+    name: "refresh_index",
+    description: "Invalidate the in-memory Codegraph session and optionally rebuild it.",
+    inputSchema: objectSchema({
+      warmup: { type: "string", enum: ["off", "base", "symbols"] },
+    }),
+  },
+  {
     name: "artifact_build",
     description: "Build Codegraph artifacts when write tools are explicitly enabled.",
     inputSchema: objectSchema({

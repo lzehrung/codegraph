@@ -103,7 +103,7 @@ export async function orientCodegraphWithSession(
 ): Promise<AgentOrientResponse> {
   const budget = request.budget ?? "small";
   const limits = ORIENT_BUDGETS[budget];
-  const snapshot = await session.loadProject();
+  const snapshot = await session.loadProject({ symbolGraph: "skip" });
   const root = snapshot.root;
   const includeRoots = normalizeIncludeRoots(root, request.includeRoots ?? []);
   const projectFiles = snapshot.files.map((file) => normalizeRelativePath(root, file));

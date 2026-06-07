@@ -445,6 +445,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     await handleMcpServeCommand({
       positionals: parsed.positionals,
       root: projectRootFs,
+      buildOptions: buildAgentOptions(),
       getOpt,
       hasFlag,
       writeStderrLine,

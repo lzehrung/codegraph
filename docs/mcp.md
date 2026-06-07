@@ -12,13 +12,24 @@ Stdio is the default transport and is the best fit when the MCP client launches 
 codegraph mcp serve --root . --stdio
 ```
 
-Streamable HTTP is useful when the client connects to an already-running local server:
+Streamable HTTP is useful when multiple IDE, terminal, or agent instances should share one repo-local server:
 
 ```bash
-codegraph mcp serve --root . --port 7331
+codegraph mcp serve --root /path/to/repo --port 7331 --warmup
 ```
 
-The HTTP endpoint is `http://127.0.0.1:7331/mcp`. HTTP binds to `127.0.0.1` by default; pass `--host <host>` only when another machine or container must reach it.
+Warm the server session when first-request latency matters:
+
+```bash
+codegraph mcp serve --root . --stdio --warmup
+codegraph mcp serve --root . --port 7331 --warmup-symbols
+```
+
+`--warmup` builds the base session cache before serving requests. `--warmup-symbols` also builds the detailed symbol graph before serving requests.
+
+The shared HTTP endpoint is `http://127.0.0.1:7331/mcp`. HTTP binds to `127.0.0.1` by default; pass `--host <host>` only when another machine or container must reach it.
+
+Use stdio for a client-owned subprocess. Use HTTP for one long-running Codegraph process per repository, then point every MCP-capable IDE, terminal, or agent client at the same local URL. Exact config keys vary by client, but the MCP settings should use HTTP/Streamable HTTP transport plus the `/mcp` URL instead of a `command`/`args` stdio launch.
 
 ## Tools
 
@@ -34,9 +45,11 @@ The server exposes the same bounded primitives as the CLI and library session la
 - `deps`, `rdeps`, `path`: dependency navigation.
 - `impact`, `review`: git-range risk and review context.
 - `query_sqlite`: bounded read-only SQLite artifact query.
+- `refresh_index`: invalidate the in-memory session and optionally rebuild the base or symbol snapshot.
 - `artifact_build`: artifact creation, available only with write access enabled.
 
-MCP keeps one Codegraph session warm for the configured root. That makes follow-up calls cheaper than separate CLI invocations.
+MCP keeps one Codegraph session warm for the configured root. That makes follow-up calls cheaper than separate CLI invocations. Startup is lazy unless `--warmup` or `--warmup-symbols` is passed.
+Use `refresh_index` after changing files while the server is running, or when you need a fresh cache-backed snapshot without restarting the MCP process.
 Tool schemas are flat JSON objects for broad client compatibility; argument combinations such as `refs` handle-vs-position mode are validated by the server.
 
 ## Safety
@@ -67,18 +80,31 @@ Use `command: "codegraph"` when the CLI is on `PATH`. Use the full executable pa
 
 ### Generic Streamable HTTP
 
-Start Codegraph yourself:
+Start one Codegraph process per repository:
 
 ```bash
-codegraph mcp serve --root . --port 7331
+codegraph mcp serve --root /path/to/repo --port 7331 --warmup
 ```
 
-Point the client at:
+Point each MCP client at the shared endpoint:
 
 ```json
 {
-  "url": "http://127.0.0.1:7331/mcp"
+  "mcpServers": {
+    "codegraph": {
+      "type": "http",
+      "url": "http://127.0.0.1:7331/mcp"
+    }
+  }
 }
+```
+
+For TOML-based clients, the same setup is usually expressed as a URL-backed server:
+
+```toml
+[mcp_servers.codegraph]
+transport = "http"
+url = "http://127.0.0.1:7331/mcp"
 ```
 
 ### Codex
@@ -171,6 +197,7 @@ When Codegraph MCP tools are available to an agent:
 3. Use `packet_get`, `refs`, `goto`, `deps`, `rdeps`, or `path` for focused follow-up.
 4. Use `impact` and `review` for git-range risk analysis.
 5. Use `query_sqlite` only for read-only artifact inspection.
-6. Use `artifact_build` only when write access was intentionally enabled.
+6. Use `refresh_index` after changing files while a long-running server is active.
+7. Use `artifact_build` only when write access was intentionally enabled.
 
 Fall back to CLI commands when MCP tools are unavailable.

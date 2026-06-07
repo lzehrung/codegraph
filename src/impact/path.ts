@@ -1,7 +1,13 @@
 import type { FileId } from "../types.js";
 import type { FileChange } from "./types.js";
 import pm from "picomatch";
-import { isFilePathWithinRoot, normalizePath, resolveFilePathFromRoot, toProjectDisplayPath } from "../util/paths.js";
+import {
+  isAbsoluteFilePath,
+  isFilePathWithinRoot,
+  normalizePath,
+  resolveFilePathFromRoot,
+  toProjectDisplayPath,
+} from "../util/paths.js";
 
 export function normalizeImpactFilePath(projectRoot: string, filePath: string): string {
   return normalizePath(resolveFilePathFromRoot(projectRoot, filePath));
@@ -37,6 +43,24 @@ export function toImpactReportFilePath(projectRoot: string, filePath: string): s
   return toProjectDisplayPath(projectRoot, filePath);
 }
 
+export function createImpactIncludeMatcher(
+  projectRoot: string,
+  includeGlobs: readonly string[],
+): (filePath: string) => boolean {
+  const normalizedIncludeGlobs = includeGlobs
+    .map((globPattern) => globPattern.trim().replace(/\\/g, "/"))
+    .filter(Boolean);
+  if (!normalizedIncludeGlobs.length) {
+    return () => true;
+  }
+  const matchesGlob = pm(normalizedIncludeGlobs, { dot: true });
+  return (filePath: string): boolean => {
+    const normalizedFile = normalizePath(filePath);
+    const displayPath = toImpactReportFilePath(projectRoot, normalizedFile);
+    return matchesGlob(displayPath) || (!isAbsoluteFilePath(normalizedFile) && matchesGlob(normalizedFile));
+  };
+}
+
 export function createImpactIgnoreMatcher(
   projectRoot: string,
   ignoreGlobs: readonly string[],
@@ -47,7 +71,7 @@ export function createImpactIgnoreMatcher(
   if (!normalizedIgnoreGlobs.length) {
     return () => false;
   }
-  const matchesGlob = pm(normalizedIgnoreGlobs);
+  const matchesGlob = pm(normalizedIgnoreGlobs, { dot: true });
   return (filePath: string): boolean => {
     const normalizedFile = normalizePath(filePath);
     return matchesGlob(toImpactReportFilePath(projectRoot, normalizedFile)) || matchesGlob(normalizedFile);

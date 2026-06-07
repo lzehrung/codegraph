@@ -141,6 +141,8 @@ codegraph mcp serve --root . --stdio
 codegraph mcp serve --root . --artifact codegraph-out --stdio
 codegraph mcp serve --root . --stdio --allow-build
 codegraph mcp serve --root . --port 7331
+codegraph mcp serve --root . --stdio --warmup
+codegraph mcp serve --root . --port 7331 --warmup-symbols
 codegraph mcp --help
 
 # Chunk a file for LLM processing
@@ -216,8 +218,10 @@ For SQL, prefer handles or schema-qualified names when basenames may be ambiguou
 
 #### MCP server
 
-- `mcp serve` exposes navigation, search, impact, review, SQLite query, and artifact-build tools.
+- `mcp serve` exposes navigation, search, impact, review, SQLite query, session refresh, and artifact-build tools.
 - MCP uses stdio by default or Streamable HTTP with `--port <number>`.
+- Startup is lazy by default; `--warmup` builds the base session cache before serving requests, and `--warmup-symbols` also builds the detailed symbol graph.
+- Use `refresh_index` after changing files while a long-running server is active.
 - HTTP serves `/mcp`, validates Host headers, and binds to `127.0.0.1` unless `--host <host>` is passed.
 - MCP file and artifact paths are confined to `--root` after realpath resolution.
 - MCP tools are read-only by default; `--allow-build` enables artifact output only.
