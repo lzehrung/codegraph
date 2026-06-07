@@ -1,10 +1,10 @@
 import fsp from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import type { Edge, EdgeTo, Graph } from "../../types.js";
+import type { Edge, EdgeTo, Graph, Pos, Range } from "../../types.js";
 import { buildGraphAdjacency } from "../../graphs/adjacency.js";
 import type { ProjectFileInfo } from "../../util/projectFiles.js";
-import type { BuildOptions, ModuleIndex, ProjectIndex } from "../types.js";
+import { SymbolKind, type BuildOptions, type ModuleIndex, type ProjectIndex, type SymbolDef } from "../types.js";
 import { cacheRoot } from "./module-cache.js";
 import type { ManifestFileEntry } from "./manifest.js";
 
@@ -137,8 +137,43 @@ function isModuleIndex(value: unknown): value is ModuleIndex {
   return (
     typeof moduleIndex.file === "string" &&
     Array.isArray(moduleIndex.locals) &&
+    moduleIndex.locals.every(isSymbolDef) &&
     Array.isArray(moduleIndex.imports) &&
     Array.isArray(moduleIndex.exports)
+  );
+}
+
+function isSymbolDef(value: unknown): value is SymbolDef {
+  if (!value || typeof value !== "object") return false;
+  const symbol = value as Partial<SymbolDef>;
+  return (
+    typeof symbol.file === "string" &&
+    typeof symbol.localName === "string" &&
+    isSymbolKind(symbol.kind) &&
+    isRange(symbol.range) &&
+    (symbol.docstring === undefined || typeof symbol.docstring === "string") &&
+    (symbol.lineSpan === undefined || typeof symbol.lineSpan === "number") &&
+    (symbol.complexity === undefined || typeof symbol.complexity === "number")
+  );
+}
+
+function isSymbolKind(value: unknown): value is SymbolKind {
+  return Object.values(SymbolKind).includes(value as SymbolKind);
+}
+
+function isRange(value: unknown): value is Range {
+  if (!value || typeof value !== "object") return false;
+  const range = value as Partial<Range>;
+  return isPos(range.start) && isPos(range.end);
+}
+
+function isPos(value: unknown): value is Pos {
+  if (!value || typeof value !== "object") return false;
+  const pos = value as Partial<Pos>;
+  return (
+    typeof pos.line === "number" &&
+    typeof pos.column === "number" &&
+    (pos.index === undefined || typeof pos.index === "number")
   );
 }
 

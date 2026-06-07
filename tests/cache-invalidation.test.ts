@@ -589,6 +589,28 @@ describe("Cache invalidation and strict hashing", () => {
     expect(moduleIndex?.locals.some((local) => local.localName === "snap")).toBe(true);
   });
 
+  it("falls back when project snapshot symbol entries are malformed", async () => {
+    const root = await mkTmpDir("dg-incremental-bad-project-snapshot-symbol-");
+    const filePath = path.join(root, "foo.ts");
+    await fsp.writeFile(filePath, `export const snap = 1;\n`, "utf8");
+
+    await buildProjectIndex(root, { threads: 2, cache: "disk" });
+    const snapshotPath = projectSnapshotPathFor(root);
+    const snapshot = JSON.parse(await fsp.readFile(snapshotPath, "utf8")) as {
+      modules?: Array<{ locals?: unknown[] }>;
+    };
+    if (snapshot.modules?.[0]) snapshot.modules[0].locals = [{}];
+    await fsp.writeFile(snapshotPath, JSON.stringify(snapshot), "utf8");
+
+    const incremental = await buildProjectIndexIncremental(root, {
+      threads: 2,
+      cache: "disk",
+    });
+
+    const moduleIndex = incremental.byFile.get(normalize(filePath));
+    expect(moduleIndex?.locals.some((local) => local.localName === "snap")).toBe(true);
+  });
+
   it("falls back when project snapshot graph edges are malformed", async () => {
     const root = await mkTmpDir("dg-incremental-bad-project-snapshot-edge-");
     const filePath = path.join(root, "foo.ts");
