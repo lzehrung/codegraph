@@ -23,11 +23,12 @@ export type ReferenceLookupCache = {
 };
 
 export function createReferenceLookupCache(): ReferenceLookupCache {
-  const baseCache = new Map<string, BaseReferenceEntry[]>();
+  const cachesByIndex = new WeakMap<ProjectIndex, Map<string, BaseReferenceEntry[]>>();
   return {
     async get(index, def, options) {
       const maxReferences = normalizeMaxReferences(options?.maxReferences);
-      const baseResult = await getBaseReferences(index, def, maxReferences, baseCache);
+      const indexCache = getIndexReferenceCache(cachesByIndex, index);
+      const baseResult = await getBaseReferences(index, def, maxReferences, indexCache);
       const bounded = cloneReferenceResult(baseResult, maxReferences);
       if (bounded.status !== "ok" || options?.context === undefined) return bounded;
       await attachReferenceContext(index, bounded.references, options);
@@ -35,6 +36,18 @@ export function createReferenceLookupCache(): ReferenceLookupCache {
     },
   };
 }
+function getIndexReferenceCache(
+  cachesByIndex: WeakMap<ProjectIndex, Map<string, BaseReferenceEntry[]>>,
+  index: ProjectIndex,
+): Map<string, BaseReferenceEntry[]> {
+  let cache = cachesByIndex.get(index);
+  if (!cache) {
+    cache = new Map();
+    cachesByIndex.set(index, cache);
+  }
+  return cache;
+}
+
 
 function getBaseReferences(
   index: ProjectIndex,
