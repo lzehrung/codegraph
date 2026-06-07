@@ -569,17 +569,10 @@ describe("Cache invalidation and strict hashing", () => {
     await fsp.writeFile(filePath, `export const snap = 1;\n`, "utf8");
 
     await buildProjectIndex(root, { threads: 2, cache: "disk" });
-    await fsp.writeFile(
-      projectSnapshotPathFor(root),
-      JSON.stringify({
-        version: 1,
-        filesSignature: "ignored",
-        nativeAvailable: true,
-        graph: { nodes: [], edges: [] },
-        modules: [{}],
-      }),
-      "utf8",
-    );
+    const snapshotPath = projectSnapshotPathFor(root);
+    const snapshot = JSON.parse(await fsp.readFile(snapshotPath, "utf8")) as Record<string, unknown>;
+    snapshot.modules = [{}];
+    await fsp.writeFile(snapshotPath, JSON.stringify(snapshot), "utf8");
 
     const incremental = await buildProjectIndexIncremental(root, {
       threads: 2,

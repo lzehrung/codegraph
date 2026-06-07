@@ -1,4 +1,5 @@
 import fsp from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import type { Graph } from "../../types.js";
 import { buildGraphAdjacency } from "../../graphs/adjacency.js";
@@ -25,11 +26,16 @@ type ProjectIndexSnapshotPayload = {
 };
 
 export function projectSnapshotFilesSignature(entries: ReadonlyMap<string, ManifestFileEntry>): string {
-  return JSON.stringify(
-    [...entries.entries()]
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([file, entry]) => [file, entry.sig, entry.gitSig ?? ""]),
-  );
+  const hash = createHash("sha256");
+  for (const [file, entry] of [...entries.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+    hash.update(file);
+    hash.update("\0");
+    hash.update(entry.sig);
+    hash.update("\0");
+    hash.update(entry.gitSig ?? "");
+    hash.update("\0");
+  }
+  return hash.digest("hex");
 }
 
 export async function tryLoadProjectIndexSnapshot(
