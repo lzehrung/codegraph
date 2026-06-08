@@ -9,9 +9,10 @@ import { supportForFile } from "./languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "./languages/types.js";
 import { getNativeDuplicateTokens } from "./native/treeSitterNative.js";
 import { attemptParsePreparedFileContext, type ParsedFileContext } from "./indexer/parse-context.js";
-import { SymbolKind, type ProjectIndex, type SymbolDef } from "./indexer/types.js";
+import { SymbolKind, type BuildOptions, type ProjectIndex, type SymbolDef } from "./indexer/types.js";
 import { prepareSourceInput } from "./languages/filePrep.js";
 import { SqliteDatabase } from "./sqlite-driver.js";
+import { cacheRoot } from "./indexer/build-cache/module-cache.js";
 import { assertFilePathWithinRoot, normalizePath, toProjectDisplayPath } from "./util/paths.js";
 export type DuplicateConfidence = "high" | "medium" | "low";
 export type DuplicateCloneType = "exact" | "renamed" | "near" | "weak";
@@ -576,9 +577,13 @@ function duplicateUnitCacheKey(file: string, variant: string): string {
   return `${file}\u0000${variant}`;
 }
 
+function duplicateUnitCacheDatabasePath(projectRoot: string, opts?: BuildOptions): string {
+  return path.join(cacheRoot(projectRoot, opts), "duplicate-unit-cache.sqlite").replace(/\\/g, "/");
+}
+
 function duplicateUnitCacheDatabase(index: ProjectIndex): SqliteDatabase | null {
   if (index.cacheMode !== "disk" || !index.cacheRootDir) return null;
-  const dbPath = path.join(index.cacheRootDir, "duplicate-unit-cache.sqlite").replace(/\\/g, "/");
+  const dbPath = duplicateUnitCacheDatabasePath(index.projectRoot ?? "", { cacheDir: index.cacheRootDir });
   const existing = duplicateUnitDiskDatabases.get(dbPath);
   if (existing) return existing;
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -598,6 +603,23 @@ function duplicateUnitCacheDatabase(index: ProjectIndex): SqliteDatabase | null 
   `);
   duplicateUnitDiskDatabases.set(dbPath, db);
   return db;
+}
+
+export function closeDuplicateUnitCacheDatabase(projectRoot: string, opts?: BuildOptions): void {
+  const dbPath = duplicateUnitCacheDatabasePath(projectRoot, opts);
+  const db = duplicateUnitDiskDatabases.get(dbPath);
+  if (!db) return;
+  try {
+    db.pragma("wal_checkpoint(TRUNCATE)");
+  } catch {
+    // checkpoint best-effort
+  }
+  try {
+    db.close();
+    duplicateUnitDiskDatabases.delete(dbPath);
+  } catch {
+    // Keep handle for later retry if close fails.
+  }
 }
 
 function tryLoadDuplicateUnitsFromCache(

@@ -22,6 +22,7 @@ import { collectLocalsAndExportsFromSource } from "./locals-and-exports.js";
 import { compareEdges, edgeKey, toRelativeEdge } from "./shared.js";
 import { buildBloomFilterFromSource } from "../util/bloomFilter.js";
 import { initNativeBackendReport } from "../native/nativeBackendReport.js";
+import { closeDuplicateUnitCacheDatabase } from "../duplicates.js";
 import { isNativeRequiredUnavailableError } from "../native/treeSitterNative.js";
 import type { JsLanguage, SyntaxTreeLike } from "../languages/types.js";
 import type { Edge, FileId, Graph } from "../types.js";
@@ -746,6 +747,7 @@ async function buildProjectIndexWithManifestOptions(
   } finally {
     if ((opts?.cache ?? "off") === "disk") {
       closeDiskCacheDatabase(projectRoot, opts);
+      closeDuplicateUnitCacheDatabase(projectRoot, opts);
     }
   }
 }
@@ -782,6 +784,7 @@ export async function buildProjectIndexFromFiles(
   } finally {
     if ((opts?.cache ?? "off") === "disk") {
       closeDiskCacheDatabase(projectRoot, opts);
+      closeDuplicateUnitCacheDatabase(projectRoot, opts);
     }
   }
 }
@@ -1141,7 +1144,10 @@ export async function buildProjectIndexIncremental(
       await teardownWorkerPool(workerSetup, report);
     }
   } finally {
-    if (cacheMode === "disk") closeDiskCacheDatabase(projectRoot, opts);
+    if (cacheMode === "disk") {
+      closeDiskCacheDatabase(projectRoot, opts);
+      closeDuplicateUnitCacheDatabase(projectRoot, opts);
+    }
   }
 }
 
