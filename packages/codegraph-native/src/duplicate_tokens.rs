@@ -86,7 +86,11 @@ fn is_identifier_continue(ch: char) -> bool {
 }
 
 fn normalize_token(token: &str) -> String {
-    if token.starts_with('"') || token.starts_with('\'') || token.starts_with('`') || token.starts_with(|ch: char| ch.is_ascii_digit()) {
+    if token.starts_with('"')
+        || token.starts_with('\'')
+        || token.starts_with('`')
+        || token.chars().next().map_or(false, |ch| ch.is_ascii_digit())
+    {
         return "<literal>".to_string();
     }
     if token.chars().next().is_some_and(is_identifier_start) && token.chars().all(is_identifier_continue) {

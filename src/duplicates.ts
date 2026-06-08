@@ -12,7 +12,6 @@ import { attemptParsePreparedFileContext, type ParsedFileContext } from "./index
 import { SymbolKind, type ProjectIndex, type SymbolDef } from "./indexer/types.js";
 import { prepareSourceInput } from "./languages/filePrep.js";
 import { SqliteDatabase } from "./sqlite-driver.js";
-import { cacheRoot } from "./indexer/build-cache/module-cache.js";
 import { assertFilePathWithinRoot, normalizePath, toProjectDisplayPath } from "./util/paths.js";
 export type DuplicateConfidence = "high" | "medium" | "low";
 export type DuplicateCloneType = "exact" | "renamed" | "near" | "weak";
@@ -584,6 +583,8 @@ function duplicateUnitCacheDatabase(index: ProjectIndex): SqliteDatabase | null 
   if (existing) return existing;
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new SqliteDatabase(dbPath);
+  db.pragma("journal_mode = WAL");
+  db.pragma("synchronous = NORMAL");
   db.exec(`
     CREATE TABLE IF NOT EXISTS duplicate_unit_cache (
       file TEXT NOT NULL,
@@ -2159,8 +2160,7 @@ function duplicateContextFromResult(
       groups: omittedGroups,
       suggestions: omittedGroups,
       rawSuggestions: Math.max(0, rawSuggestions.length - limitedRawSuggestions.length),
-      candidatePairs:
-        result.perTargetSkippedCandidateCounts?.get(duplicateTargetKey(normalizedTarget)) ?? result.omittedCounts.candidatePairs,
+      candidatePairs: result.perTargetSkippedCandidateCounts?.get(duplicateTargetKey(normalizedTarget)) ?? 0,
     },
     stats: {
       ...result.stats,
