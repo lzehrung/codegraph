@@ -496,6 +496,9 @@ async function buildIndexFromFileListShared(
     report.manifest.reused = !!cachedGraphEntries;
   }
   const manifestEntries = shouldWriteManifest ? new Map<string, ManifestFileEntry>() : undefined;
+  const manifestEntriesForIndex = useManifest
+    ? new Map<string, ManifestFileEntry>(cachedGraphEntries ?? [])
+    : new Map<string, ManifestFileEntry>();
   const modules = new Map<FileId, ModuleIndex>();
   const gitAvailable = await isGitRepo(projectRoot);
   const useGitSignatures = gitAvailable && (cacheMode !== "off" || opts?.cacheStrict);
@@ -558,6 +561,13 @@ async function buildIndexFromFileListShared(
           });
           fileSignatures.set(file, sigInfo);
         }
+        const indexManifestEntry = manifestEntriesForIndex.get(file);
+        manifestEntriesForIndex.set(file, {
+          sig: sigInfo.sig,
+          ...(sigInfo.gitSig ? { gitSig: sigInfo.gitSig } : {}),
+          ...(sqlCorpusSig ? { sqlCorpusSig } : {}),
+          edges: indexManifestEntry?.edges ?? [],
+        });
         const cacheSig = cacheEnabled ? await cacheSignatureForFile(file, sigInfo) : sigInfo.cacheSig;
         let mod: ModuleIndex | null = cacheEnabled ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report) : null;
         if (mod && fileReport) {
@@ -713,7 +723,7 @@ async function buildIndexFromFileListShared(
       parsedMap,
       bloomFilterCache,
       ...(projectFiles !== undefined ? { projectFiles } : {}),
-      ...(manifestEntries ? { manifestEntries } : {}),
+      manifestEntries: manifestEntriesForIndex,
     });
     if (manifestEntries) {
       await writeProjectIndexSnapshot(projectRoot, opts, index, projectSnapshotFilesSignature(manifestEntries));
