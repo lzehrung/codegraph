@@ -468,10 +468,11 @@ function duplicateUnitCacheVariant(
   shingleSize: number,
   windowSize: number,
 ): string {
+  const nativeMode = normalizedDuplicateUnitCacheNativeMode(index.nativeMode);
   return JSON.stringify({
     version: DUPLICATE_UNIT_CACHE_VERSION,
-    nativeMode: normalizedDuplicateUnitCacheNativeMode(index.nativeMode),
-    nativeEnvDisabled: index.nativeMode === "auto" ? isNativeTreeSitterDisabledByEnv() : undefined,
+    nativeMode,
+    nativeEnvDisabled: nativeMode === undefined ? isNativeTreeSitterDisabledByEnv() : undefined,
     minTokens,
     maxTokens,
     shingleSize,
@@ -2185,15 +2186,17 @@ async function findDuplicatesTouchingTargets(
       }
       continue;
     }
-    const eligibleTargets = touchedTargets.filter(
-      (target) => (targetCompareCounts.get(duplicateTargetKey(target)) ?? 0) < maxPairs,
-    );
-    if (!eligibleTargets.length) {
-      skippedCandidatePairs++;
-      for (const target of touchedTargets) {
-        const key = duplicateTargetKey(target);
+    const eligibleTargets: DuplicateTarget[] = [];
+    for (const target of touchedTargets) {
+      const key = duplicateTargetKey(target);
+      if ((targetCompareCounts.get(key) ?? 0) < maxPairs) {
+        eligibleTargets.push(target);
+      } else {
         targetSkippedCandidateCounts.set(key, (targetSkippedCandidateCounts.get(key) ?? 0) + 1);
       }
+    }
+    if (!eligibleTargets.length) {
+      skippedCandidatePairs++;
       continue;
     }
 
