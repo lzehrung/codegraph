@@ -47,8 +47,12 @@ function renderRust(keywords) {
 }
 
 async function assertMatches(targetPath, expected) {
-  const actual = await fs.readFile(targetPath, "utf8");
-  if (actual !== expected) {
+  const actual = normalizeNewlines(await fs.readFile(targetPath, "utf8"));
+  if (actual !== normalizeNewlines(expected)) {
     throw new Error(`${path.relative(process.cwd(), targetPath)} is out of date. Run node ./scripts/generate-duplicate-keywords.mjs`);
   }
+}
+
+function normalizeNewlines(text) {
+  return text.replace(/\r\n/g, "\n");
 }

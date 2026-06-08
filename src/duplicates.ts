@@ -12,7 +12,7 @@ import {
 } from "./duplicate-token-normalization.js";
 import { supportForFile } from "./languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "./languages/types.js";
-import { getNativeDuplicateTokens } from "./native/treeSitterNative.js";
+import { getNativeDuplicateTokens, isNativeTreeSitterDisabledByEnv } from "./native/treeSitterNative.js";
 import { attemptParsePreparedFileContext, type ParsedFileContext } from "./indexer/parse-context.js";
 import { SymbolKind, type BuildOptions, type ProjectIndex, type SymbolDef } from "./indexer/types.js";
 import { prepareSourceInput } from "./languages/filePrep.js";
@@ -471,6 +471,7 @@ function duplicateUnitCacheVariant(
   return JSON.stringify({
     version: DUPLICATE_UNIT_CACHE_VERSION,
     nativeMode: normalizedDuplicateUnitCacheNativeMode(index.nativeMode),
+    nativeEnvDisabled: index.nativeMode === "auto" ? isNativeTreeSitterDisabledByEnv() : undefined,
     minTokens,
     maxTokens,
     shingleSize,
