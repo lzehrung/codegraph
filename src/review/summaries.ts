@@ -13,6 +13,7 @@ import { mapLimit } from "../util/concurrency.js";
 import { toProjectDisplayPath } from "../util/paths.js";
 import type { DeletedFileSnapshot } from "./deleted.js";
 import { isRiskRelevantSymbolMappingFile } from "./risk.js";
+import { createReferenceLookupCache } from "../impact/referenceCache.js";
 import type {
   ReviewChangedFileSummaries,
   ReviewDiagnostics,
@@ -271,10 +272,12 @@ export async function summarizeChangedFiles(input: {
   );
 
   const changedSymbolsForCompatibility = fileEntries.flatMap((entry) => entry.changedSymbols);
+  const referenceCache = createReferenceLookupCache();
   if (changedSymbolsForCompatibility.length) {
     await attachCallCompatibilityHints(index, changedSymbolsForCompatibility, {
       maxRefs: maxCallsites,
       projectRoot,
+      referenceCache,
     });
   }
   const compatibilityByHandle = new Map<string, CallCompatibilityHint[]>();
@@ -289,13 +292,9 @@ export async function summarizeChangedFiles(input: {
   const referenceResults =
     includeSymbolDetails && maxCallsites > 0
       ? await mapLimit(defsToResolve, referenceConcurrency, async (def) => {
-          const refs = await findReferences(
-            index,
-            { def },
-            {
-              maxReferences: maxCallsites + 1,
-            },
-          );
+          const refs = await referenceCache.get(index, def, {
+            maxReferences: maxCallsites + 1,
+          });
           return { def, refs };
         })
       : [];

@@ -55,6 +55,10 @@ function manifestPathFor(root: string): string {
   return path.join(root, ".codegraph-cache", "index-v1", "manifest.json");
 }
 
+function projectSnapshotPathFor(root: string): string {
+  return path.join(root, ".codegraph-cache", "index-v1", "project-index-snapshot.json");
+}
+
 async function readManifest(root: string): Promise<IndexManifest> {
   const mf = path.join(root, ".codegraph-cache", "index-v1", "manifest.json");
   const raw = await fsp.readFile(mf, "utf8");
@@ -390,10 +394,12 @@ describe("Cache invalidation and strict hashing", () => {
     });
 
     expect(prepSpy).not.toHaveBeenCalled();
+
     prepSpy.mockRestore();
     expect(graph.edges.length).toBe(1);
     expect(graph.edges[0]?.from).toBe(normalize(trackedPath));
   });
+
 
   it("rebuilds when cache verification detects manifest mismatches", async () => {
     const root = await mkTmpDir("dg-cache-verify-");
@@ -532,6 +538,149 @@ describe("Cache invalidation and strict hashing", () => {
     expect(report.timings?.totalMs).toEqual(expect.any(Number));
   });
 
+
+  it("loads unchanged incremental indexes from a project snapshot", async () => {
+    const root = await mkTmpDir("dg-incremental-project-snapshot-");
+    const filePath = path.join(root, "foo.ts");
+    await fsp.writeFile(filePath, `export const snap = 1;\n`, "utf8");
+
+    await buildProjectIndex(root, { threads: 2, cache: "disk" });
+    await expect(fsp.stat(projectSnapshotPathFor(root))).resolves.toBeTruthy();
+
+    const db = new DatabaseSync(diskCacheDbPathFor(root));
+    try {
+      db.prepare("UPDATE module_cache SET payload = ?").run("{bad json");
+    } finally {
+      db.close();
+    }
+
+    const prepSpy = vi.spyOn(filePrep, "prepareSourceInput");
+    try {
+      const incremental = await buildProjectIndexIncremental(root, {
+        threads: 2,
+        cache: "disk",
+      });
+
+      expect(prepSpy).not.toHaveBeenCalled();
+      const moduleIndex = incremental.byFile.get(normalize(filePath));
+      expect(moduleIndex?.locals.some((local) => local.localName === "snap")).toBe(true);
+    } finally {
+      prepSpy.mockRestore();
+    }
+  });
+
+  it("falls back when the project snapshot payload is malformed", async () => {
+    const root = await mkTmpDir("dg-incremental-bad-project-snapshot-");
+    const filePath = path.join(root, "foo.ts");
+    await fsp.writeFile(filePath, `export const snap = 1;\n`, "utf8");
+
+    await buildProjectIndex(root, { threads: 2, cache: "disk" });
+    const snapshotPath = projectSnapshotPathFor(root);
+    const snapshot = JSON.parse(await fsp.readFile(snapshotPath, "utf8")) as Record<string, unknown>;
+    snapshot.modules = [{}];
+    await fsp.writeFile(snapshotPath, JSON.stringify(snapshot), "utf8");
+
+    const incremental = await buildProjectIndexIncremental(root, {
+      threads: 2,
+      cache: "disk",
+    });
+
+    const moduleIndex = incremental.byFile.get(normalize(filePath));
+    expect(moduleIndex?.locals.some((local) => local.localName === "snap")).toBe(true);
+  });
+
+  it("falls back when project snapshot symbol entries are malformed", async () => {
+    const root = await mkTmpDir("dg-incremental-bad-project-snapshot-symbol-");
+    const filePath = path.join(root, "foo.ts");
+    await fsp.writeFile(filePath, `export const snap = 1;\n`, "utf8");
+
+    await buildProjectIndex(root, { threads: 2, cache: "disk" });
+    const snapshotPath = projectSnapshotPathFor(root);
+    const snapshot = JSON.parse(await fsp.readFile(snapshotPath, "utf8")) as {
+      modules?: Array<{ locals?: unknown[] }>;
+    };
+    if (snapshot.modules?.[0]) snapshot.modules[0].locals = [{}];
+    await fsp.writeFile(snapshotPath, JSON.stringify(snapshot), "utf8");
+
+    const incremental = await buildProjectIndexIncremental(root, {
+      threads: 2,
+      cache: "disk",
+    });
+
+    const moduleIndex = incremental.byFile.get(normalize(filePath));
+    expect(moduleIndex?.locals.some((local) => local.localName === "snap")).toBe(true);
+  });
+
+  it("falls back when project snapshot imports or exports are malformed", async () => {
+    const root = await mkTmpDir("dg-incremental-bad-project-snapshot-bindings-");
+    const depPath = path.join(root, "dep.ts");
+    const filePath = path.join(root, "foo.ts");
+    await fsp.writeFile(depPath, `export const dep = 1;\n`, "utf8");
+    await fsp.writeFile(filePath, `import { dep } from "./dep";\nexport const snap = dep;\n`, "utf8");
+
+    await buildProjectIndex(root, { threads: 2, cache: "disk" });
+    const snapshotPath = projectSnapshotPathFor(root);
+    const snapshot = JSON.parse(await fsp.readFile(snapshotPath, "utf8")) as {
+      modules?: Array<{ file?: string; imports?: unknown[]; exports?: unknown[] }>;
+    };
+    const moduleSnapshot = snapshot.modules?.find((moduleIndex) => moduleIndex.file === normalize(filePath));
+    if (moduleSnapshot) {
+      moduleSnapshot.imports = [{}];
+      moduleSnapshot.exports = [{}];
+    }
+    await fsp.writeFile(snapshotPath, JSON.stringify(snapshot), "utf8");
+
+    const incremental = await buildProjectIndexIncremental(root, {
+      threads: 2,
+      cache: "disk",
+    });
+
+    const moduleIndex = incremental.byFile.get(normalize(filePath));
+    expect(moduleIndex?.locals.some((local) => local.localName === "snap")).toBe(true);
+  });
+
+  it("falls back when project snapshot metadata fields are malformed", async () => {
+    const root = await mkTmpDir("dg-incremental-bad-project-snapshot-metadata-");
+    const filePath = path.join(root, "foo.ts");
+    await fsp.writeFile(filePath, `export const snap = 1;\n`, "utf8");
+
+    await buildProjectIndex(root, { threads: 2, cache: "disk" });
+    const snapshotPath = projectSnapshotPathFor(root);
+    const snapshot = JSON.parse(await fsp.readFile(snapshotPath, "utf8")) as Record<string, unknown>;
+    snapshot.projectRoot = 1;
+    snapshot.nativeMode = "sometimes";
+    snapshot.projectFiles = [{}];
+    await fsp.writeFile(snapshotPath, JSON.stringify(snapshot), "utf8");
+
+    const incremental = await buildProjectIndexIncremental(root, {
+      threads: 2,
+      cache: "disk",
+    });
+
+    const moduleIndex = incremental.byFile.get(normalize(filePath));
+    expect(moduleIndex?.locals.some((local) => local.localName === "snap")).toBe(true);
+  });
+
+
+  it("falls back when project snapshot graph edges are malformed", async () => {
+    const root = await mkTmpDir("dg-incremental-bad-project-snapshot-edge-");
+    const filePath = path.join(root, "foo.ts");
+    await fsp.writeFile(filePath, `export const snap = 1;\n`, "utf8");
+
+    await buildProjectIndex(root, { threads: 2, cache: "disk" });
+    const snapshotPath = projectSnapshotPathFor(root);
+    const snapshot = JSON.parse(await fsp.readFile(snapshotPath, "utf8")) as Record<string, unknown>;
+    snapshot.graph = { nodes: [normalize(filePath)], edges: [{ from: normalize(filePath), to: {} }] };
+    await fsp.writeFile(snapshotPath, JSON.stringify(snapshot), "utf8");
+
+    const incremental = await buildProjectIndexIncremental(root, {
+      threads: 2,
+      cache: "disk",
+    });
+
+    const moduleIndex = incremental.byFile.get(normalize(filePath));
+    expect(moduleIndex?.locals.some((local) => local.localName === "snap")).toBe(true);
+  });
   it("drops manifest edges for deleted files during incremental builds", async () => {
     const root = await mkTmpDir("dg-incremental-delete-");
     const aPath = path.join(root, "a.ts");

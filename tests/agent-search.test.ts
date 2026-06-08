@@ -147,12 +147,13 @@ describe("agent search", () => {
     expect(second.results.map((result) => result.handle)).toEqual(first.results.map((result) => result.handle));
   });
 
-  it("skips detailed symbol graph work for path-only and text-only searches", async () => {
+  it("skips detailed symbol graph work for path-only, text-only, and sql-only searches", async () => {
     const root = await mkRepo();
     const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
 
     await searchCodegraph({ root, query: "auth", mode: "path", limit: 5 });
     await searchCodegraph({ root, query: "active users", mode: "text", limit: 5 });
+    await searchCodegraph({ root, query: "public users", mode: "sql", limit: 5 });
 
     expect(symbolGraphSpy).not.toHaveBeenCalled();
   });

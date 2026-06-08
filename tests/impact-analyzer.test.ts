@@ -5,10 +5,50 @@ import fsp from "node:fs/promises";
 import { analyzeImpactFromDiff } from "../src/index.js";
 import { analyzeImpact, seedTransitiveFromFiles, calculateSeverity } from "../src/impact/analyzer.js";
 import { DEFAULT_SEVERITY_WEIGHTS } from "../src/impact/types.js";
+import { createReferenceLookupCache } from "../src/impact/referenceCache.js";
 import { buildProjectIndex, buildProjectIndexFromFiles, SymbolKind } from "../src/indexer.js";
 import type { ProjectIndex } from "../src/indexer.js";
+import { normalizePath } from "../src/util/paths.js";
 import type { Edge } from "../src/types.js";
 import { createTestIndex } from "./test-utils.js";
+
+describe("Reference lookup cache", () => {
+  it("scopes cached references by ProjectIndex instance", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-reference-cache-index-scope-"));
+    try {
+      await fsp.mkdir(path.join(root, "src"), { recursive: true });
+      const apiFile = path.join(root, "src", "api.ts");
+      const mainFile = path.join(root, "src", "main.ts");
+      const apiFileId = normalizePath(apiFile);
+      const mainFileId = normalizePath(mainFile);
+      await fsp.writeFile(apiFile, "export function helper() { return 1; }\n", "utf8");
+      await fsp.writeFile(mainFile, 'import { helper } from "./api";\nexport const value = helper();\n', "utf8");
+
+      const firstIndex = await buildProjectIndex(root, { cache: "memory" });
+      const firstDef = firstIndex.byFile.get(apiFileId)?.locals.find((local) => local.localName === "helper");
+      expect(firstDef).toBeDefined();
+      const cache = createReferenceLookupCache();
+      const firstRefs = await cache.get(firstIndex, firstDef!);
+      expect(firstRefs.status).toBe("ok");
+      if (firstRefs.status === "ok") {
+        expect(firstRefs.references.some((reference) => reference.file === mainFileId)).toBe(true);
+      }
+
+      await fsp.writeFile(mainFile, "export const value = 1;\n", "utf8");
+      const secondIndex = await buildProjectIndex(root, { cache: "memory" });
+      const secondDef = secondIndex.byFile.get(apiFileId)?.locals.find((local) => local.localName === "helper");
+      expect(secondDef).toBeDefined();
+      const secondRefs = await cache.get(secondIndex, secondDef!);
+
+      expect(secondRefs.status).toBe("ok");
+      if (secondRefs.status === "ok") {
+        expect(secondRefs.references.some((reference) => reference.file === mainFileId)).toBe(false);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("Impact Analyzer Edge Cases", () => {
   describe("call compatibility hints", () => {

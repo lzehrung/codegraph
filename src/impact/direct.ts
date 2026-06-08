@@ -3,6 +3,7 @@ import { type ProjectIndex, type SymbolDef } from "../indexer/types.js";
 import { findReferences } from "../indexer/navigation.js";
 import { Semaphore } from "../util/concurrency.js";
 import type { ChangedSymbol, ImpactItem, ImpactOptions, ImpactReason } from "./types.js";
+import type { ReferenceLookupCache } from "./referenceCache.js";
 import { calculateSeverity, selectStrongerImpactReason } from "./severity.js";
 
 type ImpactEmitter = (item: ImpactItem, phase: "partial" | "final") => void;
@@ -13,6 +14,7 @@ export type DirectImpactOptions = Pick<
 > & {
   maxRefs: number;
   includeTests: boolean;
+  referenceCache?: ReferenceLookupCache;
 };
 
 export type DirectImpactContext = {
@@ -50,29 +52,27 @@ async function analyzeChangedSymbolReferences(
   changedSymbol: ChangedSymbol,
 ): Promise<void> {
   const { index, options } = context;
-  const refs = await findReferences(
-    index,
-    {
-      def: {
-        file: changedSymbol.file,
-        localName: changedSymbol.name,
-        kind: changedSymbol.kind,
-        range: changedSymbol.range,
-      } as SymbolDef,
-    },
-    options.refContext
-      ? {
-          context: options.refContext,
-          ...(options.refContextLines !== undefined && {
-            lines: options.refContextLines,
-          }),
-          ...(options.refBlockMaxLines !== undefined && {
-            blockMaxLines: options.refBlockMaxLines,
-          }),
-          maxReferences: referenceScanLimitForKeptRefs(options.maxRefs),
-        }
-      : { maxReferences: referenceScanLimitForKeptRefs(options.maxRefs) },
-  );
+  const def: SymbolDef = {
+    file: changedSymbol.file,
+    localName: changedSymbol.name,
+    kind: changedSymbol.kind,
+    range: changedSymbol.range,
+  };
+  const referenceOptions = options.refContext
+    ? {
+        context: options.refContext,
+        ...(options.refContextLines !== undefined && {
+          lines: options.refContextLines,
+        }),
+        ...(options.refBlockMaxLines !== undefined && {
+          blockMaxLines: options.refBlockMaxLines,
+        }),
+        maxReferences: referenceScanLimitForKeptRefs(options.maxRefs),
+      }
+    : { maxReferences: referenceScanLimitForKeptRefs(options.maxRefs) };
+  const refs = options.referenceCache
+    ? await options.referenceCache.get(index, def, referenceOptions)
+    : await findReferences(index, { def }, referenceOptions);
 
   if (refs.status !== "ok") return;
 

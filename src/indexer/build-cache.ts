@@ -21,6 +21,11 @@ export {
   type FileSignature,
 } from "./build-cache/module-cache.js";
 export {
+  projectSnapshotFilesSignature,
+  tryLoadProjectIndexSnapshot,
+  writeProjectIndexSnapshot,
+} from "./build-cache/project-snapshot.js";
+export {
   diffBuildOptions,
   graphOptionsEqual,
   normalizeGraphOptions,
