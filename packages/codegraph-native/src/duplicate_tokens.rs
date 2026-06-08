@@ -144,9 +144,9 @@ mod tests {
             tokens.normalized_tokens,
             vec![
                 "if",
-                "<identifier>",
+                "left",
                 "and",
-                "<identifier>",
+                "right",
                 "{",
                 "delete",
                 "<identifier>",
@@ -162,11 +162,20 @@ mod tests {
         let keywords: Vec<&str> = source
             .lines()
             .map(str::trim)
-            .filter(|line| !line.is_empty())
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
             .collect();
         assert_eq!(DUPLICATE_IDENTIFIER_KEYWORDS.len(), keywords.len());
         for keyword in keywords {
             assert!(DUPLICATE_IDENTIFIER_KEYWORDS.contains(keyword));
         }
+    }
+
+    #[test]
+    fn tokenization_preserves_every_generated_keyword() {
+        let mut keywords: Vec<&str> = DUPLICATE_IDENTIFIER_KEYWORDS.iter().copied().collect();
+        keywords.sort_unstable();
+        let source = keywords.join(" ");
+        let tokens = tokenize_duplicate_source(&source);
+        assert_eq!(tokens.normalized_tokens, keywords);
     }
 }

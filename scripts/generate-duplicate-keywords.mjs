@@ -24,7 +24,7 @@ function parseKeywords(text) {
   const keywords = text
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .filter(Boolean);
+    .filter((line) => line && !line.startsWith("#"));
   const sorted = [...keywords].sort();
   if (keywords.join("\n") !== sorted.join("\n")) {
     throw new Error(`${path.relative(process.cwd(), SOURCE_PATH)} must stay sorted ascending.`);

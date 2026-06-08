@@ -9,7 +9,7 @@ import { appendDuplicateLeadSummary } from "../src/duplicatesLeads.js";
 import { buildProjectIndex, findDuplicateContext, findDuplicateContexts, findDuplicates } from "../src/index.js";
 import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
 import { DUPLICATE_IDENTIFIER_KEYWORDS } from "../src/duplicate-keywords.js";
-import { getNativeDuplicateTokens } from "../src/native/treeSitterNative.js";
+import { normalizeDuplicateSourceTokens } from "../src/duplicate-token-normalization.js";
 
 const tempRoots: string[] = [];
 
@@ -253,15 +253,22 @@ export function normalizeSecondRows(rows: Array<{ count: number; price: number }
     const keywords = source
       .split(/\r?\n/)
       .map((line) => line.trim())
-      .filter(Boolean);
+      .filter((line) => line && !line.startsWith("#"));
     expect([...DUPLICATE_IDENTIFIER_KEYWORDS]).toEqual(keywords);
   });
 
-  test("native duplicate tokenization preserves every shared keyword", () => {
-    if (!isNativeTreeSitterAvailable("auto")) return;
+  test("TypeScript duplicate normalization preserves every shared keyword", () => {
     const source = DUPLICATE_IDENTIFIER_KEYWORDS.join(" ");
-    const nativeTokens = getNativeDuplicateTokens(source, "auto");
-    expect(nativeTokens?.normalizedTokens).toEqual([...DUPLICATE_IDENTIFIER_KEYWORDS]);
+    expect(normalizeDuplicateSourceTokens(source)).toEqual([...DUPLICATE_IDENTIFIER_KEYWORDS]);
+  });
+
+  test("TypeScript duplicate normalization still collapses non-keyword identifiers", () => {
+    expect(normalizeDuplicateSourceTokens("userName _private $value Widget42")).toEqual([
+      "<identifier>",
+      "<identifier>",
+      "<identifier>",
+      "<identifier>",
+    ]);
   });
 
   test("adds stable handles to duplicate units", async () => {

@@ -5,7 +5,11 @@ import path from "node:path";
 import { LANG_CONFIGS } from "./bootstrap/treeSitterLanguages.js";
 import { chunkFile, type Chunk } from "./chunking/chunkFile.js";
 import { chunkTextFile } from "./chunking/chunkTextFile.js";
-import { duplicateIdentifierKeywords } from "./duplicate-keywords.js";
+import {
+  countDuplicateTokens,
+  hasUnterminatedQuotedLiteral,
+  normalizeDuplicateSourceTokens,
+} from "./duplicate-token-normalization.js";
 import { supportForFile } from "./languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "./languages/types.js";
 import { getNativeDuplicateTokens } from "./native/treeSitterNative.js";
@@ -262,9 +266,6 @@ const symbolUnitKinds = new Set<SymbolKind>([
   SymbolKind.Table,
   SymbolKind.View,
 ]);
-
-const identifierKeywords = duplicateIdentifierKeywords;
-
 function hashText(value: string): string {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
@@ -275,29 +276,6 @@ function shortHashText(value: string): string {
 
 function clampScore(score: number): number {
   return Math.max(0, Math.min(100, Math.round(score)));
-}
-
-/** Splits source into names, literals, operators, and punctuation. */
-function tokenizeSource(text: string): string[] {
-  return (
-    text.match(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b[A-Za-z_$][\w$]*\b|\d+(?:\.\d+)?|[^\s]/g) ?? []
-  );
-}
-
-function countDuplicateTokens(text: string): number {
-  return tokenizeSource(text).length;
-}
-
-/** Replaces names and literals while preserving syntax and keywords. */
-function normalizeToken(token: string): string {
-  if (/^["'`]/.test(token)) return "<literal>";
-  if (/^\d/.test(token)) return "<literal>";
-  if (/^[A-Za-z_$][\w$]*$/.test(token)) {
-    const lower = token.toLowerCase();
-    if (identifierKeywords.has(lower)) return lower;
-    return "<identifier>";
-  }
-  return token;
 }
 
 /** Builds hashed token windows used as local structural fingerprints. */
@@ -675,35 +653,9 @@ function internalUnitId(unit: DuplicateUnitDraft, absoluteFile: string): string 
 
 function normalizedDuplicateTokens(text: string, nativeMode: ProjectIndex["nativeMode"] | undefined): string[] {
   if (text.includes("$") || hasUnterminatedQuotedLiteral(text)) {
-    return tokenizeSource(text).map(normalizeToken);
+    return normalizeDuplicateSourceTokens(text);
   }
-  return getNativeDuplicateTokens(text, nativeMode)?.normalizedTokens ?? tokenizeSource(text).map(normalizeToken);
-}
-
-function hasUnterminatedQuotedLiteral(text: string): boolean {
-  for (let index = 0; index < text.length; index++) {
-    const quote = text[index];
-    if (quote !== '"' && quote !== "'" && quote !== "`") continue;
-    let escaped = false;
-    let closed = false;
-    for (index += 1; index < text.length; index++) {
-      const current = text[index];
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (current === "\\") {
-        escaped = true;
-        continue;
-      }
-      if (current === quote) {
-        closed = true;
-        break;
-      }
-    }
-    if (!closed) return true;
-  }
-  return false;
+  return getNativeDuplicateTokens(text, nativeMode)?.normalizedTokens ?? normalizeDuplicateSourceTokens(text);
 }
 
 /** Adds hashes, normalized tokens, and fingerprints to a reportable unit. */
