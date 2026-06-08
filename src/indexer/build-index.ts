@@ -40,19 +40,20 @@ import {
   initManifestReport,
   loadManifest,
   normalizeGraphOptions,
-  projectSnapshotFilesSignature,
   normalizeIndexedFileInputs,
+  projectSnapshotFilesSignature,
   recordConfigHashResult,
   recordFileFailure,
   sanitizeManifestEntriesForRoot,
   tryLoadFromCache,
-  verifyManifestEntries,
   tryLoadProjectIndexSnapshot,
-  writeToCache,
+  verifyManifestEntries,
   writeProjectIndexSnapshot,
+  writeToCache,
   type FileSignature,
   type ManifestFileEntry,
 } from "./build-cache.js";
+import { cacheRoot } from "./build-cache/module-cache.js";
 import {
   type BuildOptions,
   type BuildReport,
@@ -978,7 +979,10 @@ export async function buildProjectIndexIncremental(
             ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
           });
           snapshot.manifestEntries = new Map(Object.entries(trackedEntries));
-          if (opts?.cache) snapshot.cacheMode = opts.cache;
+          if (opts?.cache) {
+            snapshot.cacheMode = opts.cache;
+            snapshot.cacheRootDir = cacheRoot(projectRoot, opts);
+          }
           if (opts?.useBloomFilters ?? true) {
             const cache = new (await import("../util/bloomFilter.js")).BloomFilterCache();
             await mapLimit([...allFiles], conc, async (file) => {
