@@ -560,12 +560,19 @@ function duplicateUnitCacheVariant(
 ): string {
   return JSON.stringify({
     version: DUPLICATE_UNIT_CACHE_VERSION,
-    nativeMode: index.nativeMode,
+    nativeMode: normalizedDuplicateUnitCacheNativeMode(index.nativeMode),
     minTokens,
     maxTokens,
     shingleSize,
     windowSize,
   });
+}
+
+function normalizedDuplicateUnitCacheNativeMode(
+  nativeMode: ProjectIndex["nativeMode"] | undefined,
+): ProjectIndex["nativeMode"] | undefined {
+  if (nativeMode === undefined || nativeMode === "auto") return undefined;
+  return nativeMode;
 }
 
 function duplicateUnitCacheSignature(index: ProjectIndex, file: string): string | undefined {
@@ -2277,11 +2284,19 @@ async function findDuplicatesTouchingTargets(
       }
       continue;
     }
-
-    comparedPairs++;
     const eligibleTargets = touchedTargets.filter(
       (target) => (targetCompareCounts.get(duplicateTargetKey(target)) ?? 0) < maxPairs,
     );
+    if (!eligibleTargets.length) {
+      skippedCandidatePairs++;
+      for (const target of touchedTargets) {
+        const key = duplicateTargetKey(target);
+        targetSkippedCandidateCounts.set(key, (targetSkippedCandidateCounts.get(key) ?? 0) + 1);
+      }
+      continue;
+    }
+
+    comparedPairs++;
     for (const target of eligibleTargets) {
       const key = duplicateTargetKey(target);
       targetCompareCounts.set(key, (targetCompareCounts.get(key) ?? 0) + 1);
