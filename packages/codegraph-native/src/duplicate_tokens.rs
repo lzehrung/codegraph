@@ -1,3 +1,4 @@
+use crate::duplicate_keywords::DUPLICATE_IDENTIFIER_KEYWORDS;
 use crate::types::NativeDuplicateTokens;
 
 pub fn tokenize_duplicate_source(source: &str) -> NativeDuplicateTokens {
@@ -104,82 +105,13 @@ fn normalize_token(token: &str) -> String {
 }
 
 fn is_identifier_keyword(value: &str) -> bool {
-    matches!(
-        value,
-        "abstract"
-            | "and"
-            | "as"
-            | "async"
-            | "await"
-            | "break"
-            | "case"
-            | "catch"
-            | "class"
-            | "const"
-            | "continue"
-            | "def"
-            | "default"
-            | "defer"
-            | "delete"
-            | "do"
-            | "else"
-            | "enum"
-            | "export"
-            | "extends"
-            | "false"
-            | "final"
-            | "finally"
-            | "fn"
-            | "for"
-            | "from"
-            | "func"
-            | "function"
-            | "if"
-            | "implements"
-            | "import"
-            | "in"
-            | "interface"
-            | "is"
-            | "lambda"
-            | "let"
-            | "match"
-            | "module"
-            | "namespace"
-            | "new"
-            | "nil"
-            | "none"
-            | "not"
-            | "null"
-            | "or"
-            | "package"
-            | "private"
-            | "protected"
-            | "public"
-            | "return"
-            | "self"
-            | "static"
-            | "struct"
-            | "switch"
-            | "this"
-            | "throw"
-            | "throws"
-            | "trait"
-            | "true"
-            | "try"
-            | "type"
-            | "use"
-            | "using"
-            | "var"
-            | "void"
-            | "when"
-            | "where"
-            | "while"
-    )
+    DUPLICATE_IDENTIFIER_KEYWORDS.contains(value)
 }
 
 #[cfg(test)]
 mod tests {
     use super::tokenize_duplicate_source;
+    use crate::duplicate_keywords::DUPLICATE_IDENTIFIER_KEYWORDS;
 
     #[test]
     fn normalizes_duplicate_tokens() {
@@ -222,5 +154,19 @@ mod tests {
                 "}",
             ]
         );
+    }
+
+    #[test]
+    fn generated_keyword_set_matches_canonical_source_file() {
+        let source = include_str!("duplicate_keywords.txt");
+        let keywords: Vec<&str> = source
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect();
+        assert_eq!(DUPLICATE_IDENTIFIER_KEYWORDS.len(), keywords.len());
+        for keyword in keywords {
+            assert!(DUPLICATE_IDENTIFIER_KEYWORDS.contains(keyword));
+        }
     }
 }

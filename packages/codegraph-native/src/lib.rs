@@ -1,5 +1,6 @@
-mod languages;
+mod duplicate_keywords;
 mod duplicate_tokens;
+mod languages;
 mod parser_pool;
 mod projection;
 mod query;

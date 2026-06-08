@@ -5,6 +5,7 @@ import path from "node:path";
 import { LANG_CONFIGS } from "./bootstrap/treeSitterLanguages.js";
 import { chunkFile, type Chunk } from "./chunking/chunkFile.js";
 import { chunkTextFile } from "./chunking/chunkTextFile.js";
+import { duplicateIdentifierKeywords } from "./duplicate-keywords.js";
 import { supportForFile } from "./languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "./languages/types.js";
 import { getNativeDuplicateTokens } from "./native/treeSitterNative.js";
@@ -262,76 +263,7 @@ const symbolUnitKinds = new Set<SymbolKind>([
   SymbolKind.View,
 ]);
 
-const identifierKeywords = new Set([
-  "abstract",
-  "and",
-  "as",
-  "async",
-  "await",
-  "break",
-  "case",
-  "catch",
-  "class",
-  "const",
-  "continue",
-  "def",
-  "default",
-  "defer",
-  "delete",
-  "do",
-  "else",
-  "enum",
-  "export",
-  "extends",
-  "false",
-  "final",
-  "finally",
-  "fn",
-  "for",
-  "from",
-  "func",
-  "function",
-  "if",
-  "implements",
-  "import",
-  "in",
-  "interface",
-  "is",
-  "lambda",
-  "let",
-  "match",
-  "module",
-  "namespace",
-  "new",
-  "nil",
-  "none",
-  "not",
-  "null",
-  "or",
-  "package",
-  "private",
-  "protected",
-  "public",
-  "return",
-  "self",
-  "static",
-  "struct",
-  "switch",
-  "this",
-  "throw",
-  "throws",
-  "trait",
-  "true",
-  "try",
-  "type",
-  "use",
-  "using",
-  "var",
-  "void",
-  "when",
-  "where",
-  "while",
-]);
+const identifierKeywords = duplicateIdentifierKeywords;
 
 function hashText(value: string): string {
   return crypto.createHash("sha256").update(value).digest("hex");

@@ -1,13 +1,19 @@
+import { execFile } from "node:child_process";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, test } from "vitest";
 import { runCli } from "../src/cli.js";
 import { appendDuplicateLeadSummary } from "../src/duplicatesLeads.js";
 import { buildProjectIndex, findDuplicateContext, findDuplicateContexts, findDuplicates } from "../src/index.js";
 import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
+import { DUPLICATE_IDENTIFIER_KEYWORDS } from "../src/duplicate-keywords.js";
+import { getNativeDuplicateTokens } from "../src/native/treeSitterNative.js";
 
 const tempRoots: string[] = [];
+
+const execFileAsync = promisify(execFile);
 
 async function makeTempProject(): Promise<string> {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-duplicates-"));
@@ -234,6 +240,28 @@ export function normalizeSecondRows(rows: Array<{ count: number; price: number }
     expect(nativeResult.groups.map((group) => group.confidence)).toEqual(
       fallbackResult.groups.map((group) => group.confidence),
     );
+  });
+
+  test("generated TypeScript and Rust keyword lists stay in sync with the canonical source", async () => {
+    await expect(
+      execFileAsync(process.execPath, ["./scripts/generate-duplicate-keywords.mjs", "--check"], {
+        cwd: process.cwd(),
+      }),
+    ).resolves.toBeDefined();
+
+    const source = await fsp.readFile("packages/codegraph-native/src/duplicate_keywords.txt", "utf8");
+    const keywords = source
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    expect([...DUPLICATE_IDENTIFIER_KEYWORDS]).toEqual(keywords);
+  });
+
+  test("native duplicate tokenization preserves every shared keyword", () => {
+    if (!isNativeTreeSitterAvailable("auto")) return;
+    const source = DUPLICATE_IDENTIFIER_KEYWORDS.join(" ");
+    const nativeTokens = getNativeDuplicateTokens(source, "auto");
+    expect(nativeTokens?.normalizedTokens).toEqual([...DUPLICATE_IDENTIFIER_KEYWORDS]);
   });
 
   test("adds stable handles to duplicate units", async () => {
