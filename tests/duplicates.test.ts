@@ -223,12 +223,12 @@ export function normalizeSecondRows(rows: Array<{ count: number; price: number }
     await writeProjectFile(
       root,
       "src/a.ts",
-      `export function alpha(userName: string) {\n  const greeting = "hello " + userName;\n  return greeting.toUpperCase();\n}\n`,
+      `export function alpha($userName: string) {\n  const $greeting = "hello " + $userName;\n  return $greeting.toUpperCase();\n}\n`,
     );
     await writeProjectFile(
       root,
       "src/b.ts",
-      `export function beta(accountName: string) {\n  const greeting = "hello " + accountName;\n  return greeting.toUpperCase();\n}\n`,
+      `export function beta($accountName: string) {\n  const $greeting = "hello " + $accountName;\n  return $greeting.toUpperCase();\n}\n`,
     );
 
     const nativeIndex = await buildProjectIndex(root, { native: "auto" });

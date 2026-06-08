@@ -540,6 +540,11 @@ export function closeDuplicateUnitCacheDatabase(projectRoot: string, opts?: Buil
   }
 }
 
+function closeDuplicateUnitCacheForIndex(index: ProjectIndex): void {
+  if (index.cacheMode !== "disk" || !index.cacheRootDir) return;
+  closeDuplicateUnitCacheDatabase(index.projectRoot ?? "", { cacheDir: index.cacheRootDir });
+}
+
 function tryLoadDuplicateUnitsFromCache(
   index: ProjectIndex,
   file: string,
@@ -653,7 +658,7 @@ function internalUnitId(unit: DuplicateUnitDraft, absoluteFile: string): string 
 }
 
 function normalizedDuplicateTokens(text: string, nativeMode: ProjectIndex["nativeMode"] | undefined): string[] {
-  if (text.includes("$") || hasUnterminatedQuotedLiteral(text)) {
+  if (hasUnterminatedQuotedLiteral(text)) {
     return normalizeDuplicateSourceTokens(text);
   }
   return getNativeDuplicateTokens(text, nativeMode)?.normalizedTokens ?? normalizeDuplicateSourceTokens(text);
@@ -1895,8 +1900,19 @@ function groupSuggestions(suggestions: readonly DuplicateSuggestion[], includeRa
   return coalesceDuplicateGroups(groups, variantLimit);
 }
 
-/** Finds scored duplicate candidates from an already-built project index. */
 export async function findDuplicates(
+  index: ProjectIndex,
+  options: DuplicateDetectionOptions = {},
+): Promise<DuplicateDetectionResult> {
+  try {
+    return await findDuplicatesWithOpenDuplicateUnitCache(index, options);
+  } finally {
+    closeDuplicateUnitCacheForIndex(index);
+  }
+}
+
+/** Finds scored duplicate candidates from an already-built project index. */
+async function findDuplicatesWithOpenDuplicateUnitCache(
   index: ProjectIndex,
   options: DuplicateDetectionOptions = {},
 ): Promise<DuplicateDetectionResult> {
@@ -2228,6 +2244,18 @@ async function findDuplicatesTouchingTargets(
 }
 
 export async function findDuplicateContexts(
+  index: ProjectIndex,
+  targets: readonly DuplicateTarget[],
+  options: DuplicateDetectionOptions = {},
+): Promise<DuplicateContextResult[]> {
+  try {
+    return await findDuplicateContextsWithOpenDuplicateUnitCache(index, targets, options);
+  } finally {
+    closeDuplicateUnitCacheForIndex(index);
+  }
+}
+
+async function findDuplicateContextsWithOpenDuplicateUnitCache(
   index: ProjectIndex,
   targets: readonly DuplicateTarget[],
   options: DuplicateDetectionOptions = {},

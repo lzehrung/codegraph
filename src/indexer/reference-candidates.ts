@@ -25,8 +25,8 @@ export function buildReferenceCandidateIndex(modules: ReadonlyMap<FileId, Module
 export function candidateFilesImportingTarget(
   candidateIndex: ReferenceCandidateIndex | undefined,
   targetFile: FileId,
-): readonly FileId[] | undefined {
+): ReadonlySet<FileId> | undefined {
   const files = candidateIndex?.byTargetFile.get(targetFile);
   if (!files) return undefined;
-  return [...files].sort((left, right) => left.localeCompare(right));
+  return files;
 }
