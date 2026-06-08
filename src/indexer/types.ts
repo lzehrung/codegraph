@@ -4,9 +4,11 @@ import type { GraphBuildOptions } from "../graphs/types.js";
 import type { LogLevel } from "../logging.js";
 import type { NativeFallbackReason, NativeRuntimeMode } from "../native/contracts.js";
 import type { ScopeIndex } from "./scope-types.js";
+import type { ReferenceCandidateIndex } from "./reference-candidates.js";
 import type { ParsedFileContext } from "./parse-context.js";
 import type { Edge, FileId, Graph, Range } from "../types.js";
 import { type ProjectFileDiscoveryOptions, type ProjectFileInfo } from "../util/projectFiles.js";
+import type { ManifestFileEntry } from "./build-cache/manifest.js";
 import type { ImportBinding } from "./import-types.js";
 
 export type { ImportBinding } from "./import-types.js";
@@ -88,6 +90,10 @@ export type ProjectIndex = {
   parsed?: Map<string, ParsedFileContext> | undefined;
   bloomFilters?: import("../util/bloomFilter.js").BloomFilterCache;
   projectFiles?: ProjectFileInfo[];
+  referenceCandidates?: ReferenceCandidateIndex;
+  manifestEntries?: Map<FileId, ManifestFileEntry>;
+  cacheMode?: BuildOptions["cache"];
+  cacheRootDir?: string;
 };
 
 /**

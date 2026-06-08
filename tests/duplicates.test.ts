@@ -4,7 +4,8 @@ import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { runCli } from "../src/cli.js";
 import { appendDuplicateLeadSummary } from "../src/duplicatesLeads.js";
-import { buildProjectIndex, findDuplicateContext, findDuplicates } from "../src/index.js";
+import { buildProjectIndex, findDuplicateContext, findDuplicateContexts, findDuplicates } from "../src/index.js";
+import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
 
 const tempRoots: string[] = [];
 
@@ -167,6 +168,72 @@ export function normalizeTargetRows(rows: Array<{ amount: number; tax: number }>
     expect(result.stats.candidatePairs).toBeGreaterThan(0);
     expect(result.omittedCounts.candidatePairs).toBeGreaterThan(0);
     expect(result.omittedCounts.candidatePairs).toBeLessThan(result.stats.candidatePairs);
+  });
+
+  test("applies duplicate context pair budgets per target", async () => {
+    const root = await makeTempProject();
+    const firstSource = `
+export function normalizeFirstRows(rows: Array<{ amount: number; tax: number }>) {
+  const totals: number[] = [];
+  for (const row of rows) {
+    const subtotal = row.amount + row.tax;
+    const rounded = Math.round(subtotal * 100) / 100;
+    totals.push(rounded);
+  }
+  return totals.map((value) => value.toFixed(2)).join(",");
+}
+`;
+    const secondSource = `
+export function normalizeSecondRows(rows: Array<{ count: number; price: number }>) {
+  const totals: number[] = [];
+  for (const row of rows) {
+    const subtotal = row.count * row.price;
+    const rounded = Math.round(subtotal * 100) / 100;
+    totals.push(rounded);
+  }
+  return totals.map((value) => value.toFixed(2)).join(",");
+}
+`;
+    await writeProjectFile(root, "src/a.ts", firstSource);
+    await writeProjectFile(root, "src/b.ts", firstSource);
+    await writeProjectFile(root, "src/c.ts", secondSource);
+    await writeProjectFile(root, "src/d.ts", secondSource);
+
+    const index = await buildProjectIndex(root);
+    const contexts = await findDuplicateContexts(
+      index,
+      [{ file: "src/a.ts" }, { file: "src/c.ts" }],
+      { minConfidence: "high", includeSameFile: true, limit: 5, maxPairs: 1 },
+    );
+
+    expect(contexts).toHaveLength(2);
+    expect(contexts.reduce((total, context) => total + context.stats.comparedPairs, 0)).toBeLessThanOrEqual(1);
+    expect(contexts.some((context) => context.groups.length > 0)).toBe(true);
+  });
+
+  test("matches duplicate groups through native duplicate tokenization", async () => {
+    if (!isNativeTreeSitterAvailable("auto")) return;
+    const root = await makeTempProject();
+    await writeProjectFile(
+      root,
+      "src/a.ts",
+      `export function alpha(userName: string) {\n  const greeting = "hello " + userName;\n  return greeting.toUpperCase();\n}\n`,
+    );
+    await writeProjectFile(
+      root,
+      "src/b.ts",
+      `export function beta(accountName: string) {\n  const greeting = "hello " + accountName;\n  return greeting.toUpperCase();\n}\n`,
+    );
+
+    const nativeIndex = await buildProjectIndex(root, { native: "auto" });
+    const fallbackIndex = await buildProjectIndex(root, { native: "off" });
+    const nativeResult = await findDuplicates(nativeIndex, { includeSmall: true, minConfidence: "high", limit: 5 });
+    const fallbackResult = await findDuplicates(fallbackIndex, { includeSmall: true, minConfidence: "high", limit: 5 });
+
+    expect(nativeResult.groups.map((group) => group.cloneType)).toEqual(fallbackResult.groups.map((group) => group.cloneType));
+    expect(nativeResult.groups.map((group) => group.confidence)).toEqual(
+      fallbackResult.groups.map((group) => group.confidence),
+    );
   });
 
   test("adds stable handles to duplicate units", async () => {

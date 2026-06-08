@@ -711,6 +711,7 @@ async function buildIndexFromFileListShared(
       parsedMap,
       bloomFilterCache,
       ...(projectFiles !== undefined ? { projectFiles } : {}),
+      ...(manifestEntries ? { manifestEntries } : {}),
     });
     if (manifestEntries) {
       await writeProjectIndexSnapshot(projectRoot, opts, index, projectSnapshotFilesSignature(manifestEntries));
@@ -973,6 +974,8 @@ export async function buildProjectIndexIncremental(
           snapshot.projectFiles = await discoverProjectFiles(projectRoot, {
             ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
           });
+          snapshot.manifestEntries = new Map(Object.entries(trackedEntries));
+          if (opts?.cache) snapshot.cacheMode = opts.cache;
           if (opts?.useBloomFilters ?? true) {
             const cache = new (await import("../util/bloomFilter.js")).BloomFilterCache();
             await mapLimit([...allFiles], conc, async (file) => {
@@ -1130,6 +1133,7 @@ export async function buildProjectIndexIncremental(
         modules,
         parsedMap,
         bloomFilterCache,
+        manifestEntries,
       });
       await writeProjectIndexSnapshot(projectRoot, opts, index, projectSnapshotFilesSignature(manifestEntries));
       return index;

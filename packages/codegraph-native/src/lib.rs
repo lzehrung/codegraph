@@ -1,4 +1,5 @@
 mod languages;
+mod duplicate_tokens;
 mod parser_pool;
 mod projection;
 mod query;
@@ -15,7 +16,8 @@ use crate::parser_pool::parse_source;
 use crate::projection::push_projected_node;
 use crate::query::{execute_query_cached, execute_query_compact};
 use crate::types::{
-    CompactQueryResults, NativeQueryResults, NativeQueryRunResult, NativeSyntaxTree,
+    CompactQueryResults, NativeDuplicateTokens, NativeQueryResults, NativeQueryRunResult,
+    NativeSyntaxTree,
 };
 
 #[napi]
@@ -74,6 +76,11 @@ pub fn run_imports_query_compact(
             language_id.as_str(),
         )?,
     })
+}
+
+#[napi]
+pub fn tokenize_duplicate_source(source: String) -> NativeDuplicateTokens {
+    duplicate_tokens::tokenize_duplicate_source(source.as_str())
 }
 
 #[napi]

@@ -175,6 +175,7 @@ async function buildReviewIndex(input: {
   }
   const indexOpts: IncrementalBuildOptions = {
     ...(appliedOptions ?? {}),
+    ...(appliedOptions.cache === undefined ? { cache: "disk" } : {}),
     graph: graphOptions,
     keepParsed: true,
     ...(indexReport ? { report: indexReport } : {}),

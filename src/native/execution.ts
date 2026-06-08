@@ -4,6 +4,7 @@ import type {
   CompactImportsExecution,
   NativeBindingState,
   NativeQueryExecution,
+  NativeDuplicateTokens,
   NativeQueryResults,
   NativeQueryScope,
   NativeRuntimeMode,
@@ -13,6 +14,17 @@ import type {
 import { getCachedNormalizedQuery, normalizeNativeQueryForSupport } from "./queries.js";
 import { loadBinding, resolveNativeBindingState, throwIfNativeRequiredUnavailable } from "./runtime.js";
 
+
+export function getNativeDuplicateTokens(source: string, mode?: NativeRuntimeMode): NativeDuplicateTokens | null {
+  const state = resolveNativeBindingState(mode);
+  throwIfNativeRequiredUnavailable(mode, state);
+  if (!state.loaded || !state.binding.tokenizeDuplicateSource) return null;
+  try {
+    return state.binding.tokenizeDuplicateSource(source);
+  } catch {
+    return null;
+  }
+}
 export function runNativeLanguageQueries(
   source: string,
   support: LanguageSupport,

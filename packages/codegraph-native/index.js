@@ -70,5 +70,6 @@ export const parseSyntaxTree = binding.parseSyntaxTree;
 export const runImportsQueryCompact = binding.runImportsQueryCompact;
 export const runLanguageQueries = binding.runLanguageQueries;
 export const runQuery = binding.runQuery;
+export const tokenizeDuplicateSource = binding.tokenizeDuplicateSource;
 export const supportedLanguageIds = binding.supportedLanguageIds;
 export default binding;
