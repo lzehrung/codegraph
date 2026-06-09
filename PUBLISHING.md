@@ -33,7 +33,7 @@ npm run publish:resume
 - the `@lzehrung/codegraph-js-fallback` package when it changed
 - the root `@lzehrung/codegraph` package when it changed
 
-When a publish includes `@lzehrung/codegraph-native`, the script verifies the complete supported native target set before running the full test suite. A local WSL/macOS/Windows shell can only build its own target, so use the `release-native` GitHub Actions workflow or manually collect every target artifact before running a native publish locally.
+When a publish includes `@lzehrung/codegraph-native`, the script verifies the complete supported native target set before running the full test suite. A local WSL/macOS/Windows shell can only build its own target, so use the `release` GitHub Actions workflow or manually collect every target artifact before running a native publish locally.
 
 You can force a package-scoped release with `--package`:
 
@@ -51,12 +51,12 @@ Use the `release-root` GitHub Actions workflow when you want GitHub to cut a roo
 - On success it creates or updates the matching `vX.Y.Z` GitHub Release and uploads the root `.tgz` asset.
 - The workflow refuses reruns from a commit that is already tagged for the current root version. A fresh Actions runner cannot reconstruct the dirty local resume state that `publish:resume` expects.
 
-Use the `release-native` GitHub Actions workflow for native package releases.
+Use the `release` GitHub Actions workflow for native and JS fallback package releases.
 
 - Trigger it manually with `release_type=patch|minor|major`.
 - The workflow builds every target declared in `packages/codegraph-native/package.json` `napi.targets`.
-- It collects the per-target npm package artifacts, then runs `npm run publish:<release_type> -- --package native`.
-- The publish step still verifies that every supported target artifact is present before publishing target packages or the native meta package.
+- It collects the per-target npm package artifacts, then runs `npm run publish:<release_type> -- --package native --package js-fallback`.
+- The publish step still verifies that every supported target artifact is present before publishing target packages, the native meta package, or the JS fallback package.
 
 ## Package Roles
 
