@@ -2270,13 +2270,10 @@ async function findDuplicatesTouchingTargets(
   }
 
   suggestions.sort(compareSuggestions);
-  const groups = groupSuggestions(suggestions, true).filter(
-    (group) => confidenceRank[group.confidence] >= confidenceRank[minConfidence],
-  );
   return {
     schemaVersion: 2,
     units: units.length,
-    groups,
+    groups: [],
     suggestions,
     omittedCounts: {
       groups: 0,
