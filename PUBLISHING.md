@@ -57,6 +57,7 @@ Use the `release` GitHub Actions workflow for native and JS fallback package rel
 - The workflow builds every target declared in `packages/codegraph-native/package.json` `napi.targets`.
 - It collects the per-target npm package artifacts, then runs `npm run publish:<release_type> -- --package native --package js-fallback`.
 - The publish step still verifies that every supported target artifact is present before publishing target packages, the native meta package, or the JS fallback package.
+- By default the workflow uses `GITHUB_TOKEN` for GitHub Packages. If an existing package is not linked to this repository or does not grant this repository write access, create a `PACKAGE_PUBLISH_TOKEN` Actions secret from an account or fine-grained token that can write the `@lzehrung` packages; the workflow will use it for npm publishing.
 
 ## Package Roles
 

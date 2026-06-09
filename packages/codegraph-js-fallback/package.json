@@ -14,6 +14,11 @@
     "js-fallback.d.ts"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lzehrung/codegraph.git",
+    "directory": "packages/codegraph-js-fallback"
+  },
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"
   },

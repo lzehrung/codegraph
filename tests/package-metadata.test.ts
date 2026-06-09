@@ -193,6 +193,17 @@ describe("package metadata", () => {
     expect(nativePackage.license).toBe("MIT");
     expect(fallbackPackage.license).toBe("MIT");
 
+    expect(nativePackage.repository).toEqual({
+      type: "git",
+      url: "git+https://github.com/lzehrung/codegraph.git",
+      directory: "packages/codegraph-native",
+    });
+    expect(fallbackPackage.repository).toEqual({
+      type: "git",
+      url: "git+https://github.com/lzehrung/codegraph.git",
+      directory: "packages/codegraph-js-fallback",
+    });
+
     for (const artifactPackage of nativeArtifactPackages) {
       expect(artifactPackage.license).toBe("MIT");
     }
@@ -641,6 +652,7 @@ void onImpactItemStreaming;
     expect(workflow).toContain('bumpVersion(nativePackage.version, "${{ inputs.release_type }}")');
     expect(workflow).toContain("needs.plan-release.outputs.version");
     expect(workflow).toContain('hasTagForPackageVersion("@lzehrung/codegraph-native", version, tagNames)');
+    expect(workflow).toContain("NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN || secrets.GITHUB_TOKEN }}");
     expect(installIndex).toBeGreaterThan(-1);
     expect(rerunGuardIndex).toBeGreaterThan(versionIndex);
     expect(publishInstallIndex).toBeGreaterThan(rerunGuardIndex);
