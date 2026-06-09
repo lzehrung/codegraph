@@ -197,7 +197,7 @@ function moduleExportProbeNames(
   const names = new Set(exportedNames);
   const nextVisited = new Set([...visited, moduleIndex.file]);
   for (const entry of moduleIndex.exports) {
-    if (entry.type === "local" || entry.type === "reexport" || entry.type === "namespaceReexport") {
+    if (entry.type === "reexport" || entry.type === "namespaceReexport") {
       names.add(entry.exportedAs);
       continue;
     }
