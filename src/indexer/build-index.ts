@@ -64,6 +64,7 @@ import {
   type NativeBackendFallbackReason,
   type ParserBackendDegradationReport,
   type ProjectIndex,
+  type ProjectIndexManifestEntry,
   type SymbolDef,
   SymbolKind,
 } from "./types.js";
@@ -375,6 +376,19 @@ function expandStarImports(modules: Map<FileId, ModuleIndex>): void {
   }
 }
 
+function toProjectIndexManifestEntry(entry: Pick<ManifestFileEntry, "sig" | "gitSig">): ProjectIndexManifestEntry {
+  return {
+    sig: entry.sig,
+    ...(entry.gitSig ? { gitSig: entry.gitSig } : {}),
+  };
+}
+
+function projectIndexManifestEntries(
+  entries: Iterable<readonly [string, Pick<ManifestFileEntry, "sig" | "gitSig">]>,
+): Map<string, ProjectIndexManifestEntry> {
+  return new Map(Array.from(entries, ([file, entry]) => [file, toProjectIndexManifestEntry(entry)]));
+}
+
 type ManifestMode = "off" | "read-only" | "read-write";
 
 type BuildIndexHelperOptions = {
@@ -497,8 +511,8 @@ async function buildIndexFromFileListShared(
   }
   const manifestEntries = shouldWriteManifest ? new Map<string, ManifestFileEntry>() : undefined;
   const manifestEntriesForIndex = useManifest
-    ? new Map<string, ManifestFileEntry>(cachedGraphEntries ?? [])
-    : new Map<string, ManifestFileEntry>();
+    ? projectIndexManifestEntries(cachedGraphEntries ?? [])
+    : new Map<string, ProjectIndexManifestEntry>();
   const modules = new Map<FileId, ModuleIndex>();
   const gitAvailable = await isGitRepo(projectRoot);
   const useGitSignatures = gitAvailable && (cacheMode !== "off" || opts?.cacheStrict);
@@ -561,13 +575,7 @@ async function buildIndexFromFileListShared(
           });
           fileSignatures.set(file, sigInfo);
         }
-        const indexManifestEntry = manifestEntriesForIndex.get(file);
-        manifestEntriesForIndex.set(file, {
-          sig: sigInfo.sig,
-          ...(sigInfo.gitSig ? { gitSig: sigInfo.gitSig } : {}),
-          ...(sqlCorpusSig ? { sqlCorpusSig } : {}),
-          edges: indexManifestEntry?.edges ?? [],
-        });
+        manifestEntriesForIndex.set(file, toProjectIndexManifestEntry(sigInfo));
         const cacheSig = cacheEnabled ? await cacheSignatureForFile(file, sigInfo) : sigInfo.cacheSig;
         let mod: ModuleIndex | null = cacheEnabled ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report) : null;
         if (mod && fileReport) {
@@ -988,7 +996,7 @@ export async function buildProjectIndexIncremental(
           snapshot.projectFiles = await discoverProjectFiles(projectRoot, {
             ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
           });
-          snapshot.manifestEntries = new Map(Object.entries(trackedEntries));
+          snapshot.manifestEntries = projectIndexManifestEntries(Object.entries(trackedEntries));
           if (opts?.cache) {
             snapshot.cacheMode = opts.cache;
             snapshot.cacheRootDir = cacheRoot(projectRoot, opts);
@@ -1150,7 +1158,7 @@ export async function buildProjectIndexIncremental(
         modules,
         parsedMap,
         bloomFilterCache,
-        manifestEntries,
+        manifestEntries: projectIndexManifestEntries(manifestEntries),
       });
       await writeProjectIndexSnapshot(projectRoot, opts, index, projectSnapshotFilesSignature(manifestEntries));
       return index;

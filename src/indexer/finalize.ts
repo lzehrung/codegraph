@@ -7,8 +7,7 @@ import type { ParsedFileContext } from "./parse-context.js";
 import { retainedParsedCache } from "./parsed-cache.js";
 import { buildReferenceCandidateIndex } from "./reference-candidates.js";
 import { cacheRoot } from "./build-cache/module-cache.js";
-import type { ManifestFileEntry } from "./build-cache/manifest.js";
-import type { BuildOptions, BuildReport, ModuleIndex, ProjectIndex } from "./types.js";
+import type { BuildOptions, BuildReport, ModuleIndex, ProjectIndex, ProjectIndexManifestEntry } from "./types.js";
 
 export async function finalizeProjectIndex(args: {
   projectRoot: string;
@@ -21,7 +20,7 @@ export async function finalizeProjectIndex(args: {
   parsedMap: Map<string, ParsedFileContext>;
   bloomFilterCache: BloomFilterCache | undefined;
   projectFiles?: ProjectFileInfo[] | Promise<ProjectFileInfo[]>;
-  manifestEntries?: Map<FileId, ManifestFileEntry>;
+  manifestEntries?: Map<FileId, ProjectIndexManifestEntry>;
 }): Promise<ProjectIndex> {
   if (args.timings) args.timings.totalMs = Math.round(performance.now() - args.totalStart);
   const projectFiles = await (args.projectFiles ??

@@ -173,7 +173,7 @@ export function normalizeTargetRows(rows: Array<{ amount: number; tax: number }>
     expect(result.stats.comparedPairs).toBe(0);
     expect(result.stats.candidatePairs).toBeGreaterThan(0);
     expect(result.omittedCounts.candidatePairs).toBeGreaterThan(0);
-    expect(result.omittedCounts.candidatePairs).toBeLessThan(result.stats.candidatePairs);
+    expect(result.omittedCounts.candidatePairs).toBe(result.stats.candidatePairs);
   });
 
   test("applies duplicate context pair budgets per target", async () => {
@@ -213,7 +213,7 @@ export function normalizeSecondRows(rows: Array<{ count: number; price: number }
     );
 
     expect(contexts).toHaveLength(2);
-    expect(contexts.reduce((total, context) => total + context.stats.comparedPairs, 0)).toBeLessThanOrEqual(1);
+    expect(contexts.every((context) => context.stats.comparedPairs <= 1)).toBe(true);
     expect(contexts.some((context) => context.groups.length > 0)).toBe(true);
   });
 
@@ -223,12 +223,12 @@ export function normalizeSecondRows(rows: Array<{ count: number; price: number }
     await writeProjectFile(
       root,
       "src/a.ts",
-      `export function alpha($userName: string) {\n  const $greeting = "hello " + $userName;\n  return $greeting.toUpperCase();\n}\n`,
+      `// don't treat John's comment as a string\nexport function alpha($userName: string) {\n  const $greeting = "hello " + $userName;\n  return $greeting.toUpperCase();\n}\n`,
     );
     await writeProjectFile(
       root,
       "src/b.ts",
-      `export function beta($accountName: string) {\n  const $greeting = "hello " + $accountName;\n  return $greeting.toUpperCase();\n}\n`,
+      `// don't treat Jane's comment as a string\nexport function beta($accountName: string) {\n  const $greeting = "hello " + $accountName;\n  return $greeting.toUpperCase();\n}\n`,
     );
 
     const nativeIndex = await buildProjectIndex(root, { native: "auto" });

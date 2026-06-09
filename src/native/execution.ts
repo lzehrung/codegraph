@@ -14,6 +14,12 @@ import type {
 import { getCachedNormalizedQuery, normalizeNativeQueryForSupport } from "./queries.js";
 import { loadBinding, resolveNativeBindingState, throwIfNativeRequiredUnavailable } from "./runtime.js";
 
+export function isNativeDuplicateTokenizationAvailable(mode?: NativeRuntimeMode): boolean {
+  const state = resolveNativeBindingState(mode);
+  throwIfNativeRequiredUnavailable(mode, state);
+  return state.loaded && typeof state.binding.tokenizeDuplicateSource === "function";
+}
+
 
 export function getNativeDuplicateTokens(source: string, mode?: NativeRuntimeMode): NativeDuplicateTokens | null {
   const state = resolveNativeBindingState(mode);

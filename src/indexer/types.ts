@@ -78,6 +78,8 @@ export type ResolvedExport = { kind: "resolved"; def: SymbolDef } | { kind: "nam
  * reuse it across graph, navigation, review, impact, and agent-tool calls that
  * should agree on the same repo state.
  */
+export type ProjectIndexManifestEntry = Pick<ManifestFileEntry, "sig" | "gitSig">;
+
 export type ProjectIndex = {
   graph: Graph;
   graphAdjacency?: GraphAdjacencyIndex;
@@ -91,7 +93,7 @@ export type ProjectIndex = {
   bloomFilters?: import("../util/bloomFilter.js").BloomFilterCache;
   projectFiles?: ProjectFileInfo[];
   referenceCandidates?: ReferenceCandidateIndex;
-  manifestEntries?: Map<FileId, ManifestFileEntry>;
+  manifestEntries?: Map<FileId, ProjectIndexManifestEntry>;
   cacheMode?: BuildOptions["cache"];
   cacheRootDir?: string;
 };

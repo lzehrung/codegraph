@@ -46,6 +46,7 @@ export {
   getNativeQueryExecutionForState,
   getNativeSingleQueryExecution,
   getNativeDuplicateTokens,
+  isNativeDuplicateTokenizationAvailable,
   getNativeSyntaxTreeExecution,
   runNativeLanguageQueries,
 } from "./execution.js";

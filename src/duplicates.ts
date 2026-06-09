@@ -12,7 +12,12 @@ import {
 } from "./duplicate-token-normalization.js";
 import { supportForFile } from "./languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "./languages/types.js";
-import { getNativeDuplicateTokens, isNativeTreeSitterDisabledByEnv } from "./native/treeSitterNative.js";
+import {
+  getNativeDuplicateTokens,
+  getNativeTreeSitterSupportedLanguageIds,
+  isNativeDuplicateTokenizationAvailable,
+  isNativeTreeSitterDisabledByEnv,
+} from "./native/treeSitterNative.js";
 import { attemptParsePreparedFileContext, type ParsedFileContext } from "./indexer/parse-context.js";
 import { SymbolKind, type BuildOptions, type ProjectIndex, type SymbolDef } from "./indexer/types.js";
 import { prepareSourceInput } from "./languages/filePrep.js";
@@ -198,7 +203,8 @@ type CollectedDuplicateUnits = {
   units: DuplicateInternalUnit[];
   belowThresholdUnits: number;
 };
-const DUPLICATE_UNIT_CACHE_VERSION = 1;
+const DUPLICATE_UNIT_CACHE_VERSION = 2;
+const DUPLICATE_TOKENIZER_REVISION = 2;
 
 type DuplicateSerializedUnit = Omit<DuplicateInternalUnit, "tokenSet" | "signatures"> & {
   tokenSet: string[];
@@ -211,12 +217,18 @@ type DuplicateUnitCacheEntry = {
 };
 
 type DuplicateTargetedResult = DuplicateDetectionResult & {
+  perTargetCandidateCounts?: Map<string, number>;
   perTargetComparedCounts?: Map<string, number>;
   perTargetSkippedCandidateCounts?: Map<string, number>;
   perTargetSuggestionKeys?: Map<string, Set<string>>;
 };
 const duplicateUnitMemoryCache = new Map<string, DuplicateUnitCacheEntry>();
-const duplicateUnitDiskDatabases = new Map<string, SqliteDatabase>();
+type DuplicateUnitDiskDatabaseEntry = {
+  db?: SqliteDatabase;
+  leases: number;
+  closeRequested: boolean;
+};
+const duplicateUnitDiskDatabases = new Map<string, DuplicateUnitDiskDatabaseEntry>();
 const DEFAULT_MIN_TOKENS = 40;
 const DEFAULT_MAX_TOKENS = 800;
 const DEFAULT_LIMIT = 50;
@@ -471,7 +483,10 @@ function duplicateUnitCacheVariant(
   const nativeMode = normalizedDuplicateUnitCacheNativeMode(index.nativeMode);
   return JSON.stringify({
     version: DUPLICATE_UNIT_CACHE_VERSION,
+    tokenizerRevision: DUPLICATE_TOKENIZER_REVISION,
     nativeMode,
+    nativeDuplicateTokens: isNativeDuplicateTokenizationAvailable(index.nativeMode),
+    nativeSyntaxLanguages: getNativeTreeSitterSupportedLanguageIds(index.nativeMode),
     nativeEnvDisabled: nativeMode === undefined ? isNativeTreeSitterDisabledByEnv() : undefined,
     minTokens,
     maxTokens,
@@ -503,8 +518,12 @@ function duplicateUnitCacheDatabasePath(projectRoot: string, opts?: BuildOptions
 function duplicateUnitCacheDatabase(index: ProjectIndex): SqliteDatabase | null {
   if (index.cacheMode !== "disk" || !index.cacheRootDir) return null;
   const dbPath = duplicateUnitCacheDatabasePath(index.projectRoot ?? "", { cacheDir: index.cacheRootDir });
-  const existing = duplicateUnitDiskDatabases.get(dbPath);
-  if (existing) return existing;
+  let entry = duplicateUnitDiskDatabases.get(dbPath);
+  if (!entry) {
+    entry = { leases: 0, closeRequested: false };
+    duplicateUnitDiskDatabases.set(dbPath, entry);
+  }
+  if (entry.db) return entry.db;
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new SqliteDatabase(dbPath);
   db.pragma("journal_mode = WAL");
@@ -520,25 +539,54 @@ function duplicateUnitCacheDatabase(index: ProjectIndex): SqliteDatabase | null 
       PRIMARY KEY (file, variant)
     );
   `);
-  duplicateUnitDiskDatabases.set(dbPath, db);
+  entry.db = db;
   return db;
 }
 
-export function closeDuplicateUnitCacheDatabase(projectRoot: string, opts?: BuildOptions): void {
-  const dbPath = duplicateUnitCacheDatabasePath(projectRoot, opts);
-  const db = duplicateUnitDiskDatabases.get(dbPath);
-  if (!db) return;
+function closeDuplicateUnitDiskDatabaseEntry(dbPath: string, entry: DuplicateUnitDiskDatabaseEntry): void {
+  if (entry.leases > 0) {
+    entry.closeRequested = true;
+    return;
+  }
+  if (!entry.db) {
+    duplicateUnitDiskDatabases.delete(dbPath);
+    return;
+  }
   try {
-    db.pragma("wal_checkpoint(TRUNCATE)");
+    entry.db.pragma("wal_checkpoint(TRUNCATE)");
   } catch {
     // checkpoint best-effort
   }
   try {
-    db.close();
+    entry.db.close();
     duplicateUnitDiskDatabases.delete(dbPath);
   } catch {
     // Keep handle for later retry if close fails.
   }
+}
+
+export function closeDuplicateUnitCacheDatabase(projectRoot: string, opts?: BuildOptions): void {
+  const dbPath = duplicateUnitCacheDatabasePath(projectRoot, opts);
+  const entry = duplicateUnitDiskDatabases.get(dbPath);
+  if (!entry) return;
+  closeDuplicateUnitDiskDatabaseEntry(dbPath, entry);
+}
+
+function leaseDuplicateUnitCacheForIndex(index: ProjectIndex): () => void {
+  if (index.cacheMode !== "disk" || !index.cacheRootDir) return () => {};
+  const dbPath = duplicateUnitCacheDatabasePath(index.projectRoot ?? "", { cacheDir: index.cacheRootDir });
+  let entry = duplicateUnitDiskDatabases.get(dbPath);
+  if (!entry) {
+    entry = { leases: 0, closeRequested: false };
+    duplicateUnitDiskDatabases.set(dbPath, entry);
+  }
+  entry.leases++;
+  return () => {
+    entry.leases = Math.max(0, entry.leases - 1);
+    if (entry.closeRequested) {
+      closeDuplicateUnitDiskDatabaseEntry(dbPath, entry);
+    }
+  };
 }
 
 function closeDuplicateUnitCacheForIndex(index: ProjectIndex): void {
@@ -1905,10 +1953,12 @@ export async function findDuplicates(
   index: ProjectIndex,
   options: DuplicateDetectionOptions = {},
 ): Promise<DuplicateDetectionResult> {
+  const releaseDuplicateUnitCache = leaseDuplicateUnitCacheForIndex(index);
   try {
     return await findDuplicatesWithOpenDuplicateUnitCache(index, options);
   } finally {
     closeDuplicateUnitCacheForIndex(index);
+    releaseDuplicateUnitCache();
   }
 }
 
@@ -2095,6 +2145,7 @@ function duplicateContextFromResult(
     },
     stats: {
       ...result.stats,
+      candidatePairs: result.perTargetCandidateCounts?.get(duplicateTargetKey(normalizedTarget)) ?? 0,
       comparedPairs: result.perTargetComparedCounts?.get(duplicateTargetKey(normalizedTarget)) ?? 0,
     },
   };
@@ -2151,9 +2202,13 @@ async function findDuplicatesTouchingTargets(
   const { units, belowThresholdUnits } = collectedUnits ?? (await collectDuplicateUnitsForOptions(index, options));
   const touchesTarget: UnitFilter = (unit) =>
     normalizedTargets.some((target) => unitTouchesDuplicateTarget(unit, target));
+  const targetCandidateCounts = new Map<string, number>();
   const targetCompareCounts = new Map<string, number>();
   const targetSkippedCandidateCounts = new Map<string, number>();
   const targetSuggestionKeys = new Map<string, Set<string>>();
+  for (const target of normalizedTargets) {
+    targetSuggestionKeys.set(duplicateTargetKey(target), new Set());
+  }
   const targetsTouchedByPair = (left: DuplicateInternalUnit, right: DuplicateInternalUnit): DuplicateTarget[] =>
     normalizedTargets.filter((target) => unitTouchesDuplicateTarget(left, target) || unitTouchesDuplicateTarget(right, target));
   const touchesAnyTarget: PairFilter = (left, right) => targetsTouchedByPair(left, right).length > 0;
@@ -2178,13 +2233,9 @@ async function findDuplicatesTouchingTargets(
     }
     const touchedTargets = targetsTouchedByPair(evidence.left, evidence.right);
     if (!touchedTargets.length) continue;
-    if (comparedPairs >= maxPairs) {
-      skippedCandidatePairs++;
-      for (const target of touchedTargets) {
-        const key = duplicateTargetKey(target);
-        targetSkippedCandidateCounts.set(key, (targetSkippedCandidateCounts.get(key) ?? 0) + 1);
-      }
-      continue;
+    for (const target of touchedTargets) {
+      const key = duplicateTargetKey(target);
+      targetCandidateCounts.set(key, (targetCandidateCounts.get(key) ?? 0) + 1);
     }
     const eligibleTargets: DuplicateTarget[] = [];
     for (const target of touchedTargets) {
@@ -2240,6 +2291,7 @@ async function findDuplicatesTouchingTargets(
       comparedPairs,
       candidatePairs: pairs.size,
     },
+    perTargetCandidateCounts: targetCandidateCounts,
     perTargetComparedCounts: targetCompareCounts,
     perTargetSkippedCandidateCounts: targetSkippedCandidateCounts,
     perTargetSuggestionKeys: targetSuggestionKeys,
@@ -2251,10 +2303,12 @@ export async function findDuplicateContexts(
   targets: readonly DuplicateTarget[],
   options: DuplicateDetectionOptions = {},
 ): Promise<DuplicateContextResult[]> {
+  const releaseDuplicateUnitCache = leaseDuplicateUnitCacheForIndex(index);
   try {
     return await findDuplicateContextsWithOpenDuplicateUnitCache(index, targets, options);
   } finally {
     closeDuplicateUnitCacheForIndex(index);
+    releaseDuplicateUnitCache();
   }
 }
 
