@@ -26,6 +26,10 @@ export interface NativeCapture {
   end: NativePoint
 }
 
+export interface NativeDuplicateTokens {
+  normalizedTokens: Array<string>
+}
+
 export interface NativeMatch {
   patternIndex: number
   captures: Array<NativeCapture>
@@ -79,3 +83,5 @@ export declare function runLanguageQueries(source: string, languageId: string, i
 export declare function runQuery(source: string, languageId: string, queryText: string): NativeQueryRunResult
 
 export declare function supportedLanguageIds(): Array<string>
+
+export declare function tokenizeDuplicateSource(source: string): NativeDuplicateTokens

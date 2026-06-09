@@ -22,6 +22,7 @@ import { collectLocalsAndExportsFromSource } from "./locals-and-exports.js";
 import { compareEdges, edgeKey, toRelativeEdge } from "./shared.js";
 import { buildBloomFilterFromSource } from "../util/bloomFilter.js";
 import { initNativeBackendReport } from "../native/nativeBackendReport.js";
+import { closeDuplicateUnitCacheDatabase } from "../duplicates.js";
 import { isNativeRequiredUnavailableError } from "../native/treeSitterNative.js";
 import type { JsLanguage, SyntaxTreeLike } from "../languages/types.js";
 import type { Edge, FileId, Graph } from "../types.js";
@@ -39,19 +40,20 @@ import {
   initManifestReport,
   loadManifest,
   normalizeGraphOptions,
-  projectSnapshotFilesSignature,
   normalizeIndexedFileInputs,
+  projectSnapshotFilesSignature,
   recordConfigHashResult,
   recordFileFailure,
   sanitizeManifestEntriesForRoot,
   tryLoadFromCache,
-  verifyManifestEntries,
   tryLoadProjectIndexSnapshot,
-  writeToCache,
+  verifyManifestEntries,
   writeProjectIndexSnapshot,
+  writeToCache,
   type FileSignature,
   type ManifestFileEntry,
 } from "./build-cache.js";
+import { cacheRoot } from "./build-cache/module-cache.js";
 import {
   type BuildOptions,
   type BuildReport,
@@ -62,6 +64,7 @@ import {
   type NativeBackendFallbackReason,
   type ParserBackendDegradationReport,
   type ProjectIndex,
+  type ProjectIndexManifestEntry,
   type SymbolDef,
   SymbolKind,
 } from "./types.js";
@@ -373,6 +376,19 @@ function expandStarImports(modules: Map<FileId, ModuleIndex>): void {
   }
 }
 
+function toProjectIndexManifestEntry(entry: Pick<ManifestFileEntry, "sig" | "gitSig">): ProjectIndexManifestEntry {
+  return {
+    sig: entry.sig,
+    ...(entry.gitSig ? { gitSig: entry.gitSig } : {}),
+  };
+}
+
+function projectIndexManifestEntries(
+  entries: Iterable<readonly [string, Pick<ManifestFileEntry, "sig" | "gitSig">]>,
+): Map<string, ProjectIndexManifestEntry> {
+  return new Map(Array.from(entries, ([file, entry]) => [file, toProjectIndexManifestEntry(entry)]));
+}
+
 type ManifestMode = "off" | "read-only" | "read-write";
 
 type BuildIndexHelperOptions = {
@@ -494,6 +510,9 @@ async function buildIndexFromFileListShared(
     report.manifest.reused = !!cachedGraphEntries;
   }
   const manifestEntries = shouldWriteManifest ? new Map<string, ManifestFileEntry>() : undefined;
+  const manifestEntriesForIndex = useManifest
+    ? projectIndexManifestEntries(cachedGraphEntries ?? [])
+    : new Map<string, ProjectIndexManifestEntry>();
   const modules = new Map<FileId, ModuleIndex>();
   const gitAvailable = await isGitRepo(projectRoot);
   const useGitSignatures = gitAvailable && (cacheMode !== "off" || opts?.cacheStrict);
@@ -556,6 +575,7 @@ async function buildIndexFromFileListShared(
           });
           fileSignatures.set(file, sigInfo);
         }
+        manifestEntriesForIndex.set(file, toProjectIndexManifestEntry(sigInfo));
         const cacheSig = cacheEnabled ? await cacheSignatureForFile(file, sigInfo) : sigInfo.cacheSig;
         let mod: ModuleIndex | null = cacheEnabled ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report) : null;
         if (mod && fileReport) {
@@ -711,6 +731,7 @@ async function buildIndexFromFileListShared(
       parsedMap,
       bloomFilterCache,
       ...(projectFiles !== undefined ? { projectFiles } : {}),
+      manifestEntries: manifestEntriesForIndex,
     });
     if (manifestEntries) {
       await writeProjectIndexSnapshot(projectRoot, opts, index, projectSnapshotFilesSignature(manifestEntries));
@@ -745,6 +766,7 @@ async function buildProjectIndexWithManifestOptions(
   } finally {
     if ((opts?.cache ?? "off") === "disk") {
       closeDiskCacheDatabase(projectRoot, opts);
+      closeDuplicateUnitCacheDatabase(projectRoot, opts);
     }
   }
 }
@@ -781,6 +803,7 @@ export async function buildProjectIndexFromFiles(
   } finally {
     if ((opts?.cache ?? "off") === "disk") {
       closeDiskCacheDatabase(projectRoot, opts);
+      closeDuplicateUnitCacheDatabase(projectRoot, opts);
     }
   }
 }
@@ -973,6 +996,11 @@ export async function buildProjectIndexIncremental(
           snapshot.projectFiles = await discoverProjectFiles(projectRoot, {
             ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
           });
+          snapshot.manifestEntries = projectIndexManifestEntries(Object.entries(trackedEntries));
+          if (opts?.cache) {
+            snapshot.cacheMode = opts.cache;
+            snapshot.cacheRootDir = cacheRoot(projectRoot, opts);
+          }
           if (opts?.useBloomFilters ?? true) {
             const cache = new (await import("../util/bloomFilter.js")).BloomFilterCache();
             await mapLimit([...allFiles], conc, async (file) => {
@@ -1130,6 +1158,7 @@ export async function buildProjectIndexIncremental(
         modules,
         parsedMap,
         bloomFilterCache,
+        manifestEntries: projectIndexManifestEntries(manifestEntries),
       });
       await writeProjectIndexSnapshot(projectRoot, opts, index, projectSnapshotFilesSignature(manifestEntries));
       return index;
@@ -1137,7 +1166,10 @@ export async function buildProjectIndexIncremental(
       await teardownWorkerPool(workerSetup, report);
     }
   } finally {
-    if (cacheMode === "disk") closeDiskCacheDatabase(projectRoot, opts);
+    if (cacheMode === "disk") {
+      closeDiskCacheDatabase(projectRoot, opts);
+      closeDuplicateUnitCacheDatabase(projectRoot, opts);
+    }
   }
 }
 

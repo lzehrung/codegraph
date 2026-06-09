@@ -1,12 +1,19 @@
+import { execFile } from "node:child_process";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, test } from "vitest";
 import { runCli } from "../src/cli.js";
 import { appendDuplicateLeadSummary } from "../src/duplicatesLeads.js";
-import { buildProjectIndex, findDuplicateContext, findDuplicates } from "../src/index.js";
+import { buildProjectIndex, findDuplicateContext, findDuplicateContexts, findDuplicates } from "../src/index.js";
+import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
+import { DUPLICATE_IDENTIFIER_KEYWORDS } from "../src/duplicate-keywords.js";
+import { normalizeDuplicateSourceTokens } from "../src/duplicate-token-normalization.js";
 
 const tempRoots: string[] = [];
+
+const execFileAsync = promisify(execFile);
 
 async function makeTempProject(): Promise<string> {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-duplicates-"));
@@ -166,7 +173,102 @@ export function normalizeTargetRows(rows: Array<{ amount: number; tax: number }>
     expect(result.stats.comparedPairs).toBe(0);
     expect(result.stats.candidatePairs).toBeGreaterThan(0);
     expect(result.omittedCounts.candidatePairs).toBeGreaterThan(0);
-    expect(result.omittedCounts.candidatePairs).toBeLessThan(result.stats.candidatePairs);
+    expect(result.omittedCounts.candidatePairs).toBe(result.stats.candidatePairs);
+  });
+
+  test("applies duplicate context pair budgets per target", async () => {
+    const root = await makeTempProject();
+    const firstSource = `
+export function normalizeFirstRows(rows: Array<{ amount: number; tax: number }>) {
+  const totals: number[] = [];
+  for (const row of rows) {
+    const subtotal = row.amount + row.tax;
+    const rounded = Math.round(subtotal * 100) / 100;
+    totals.push(rounded);
+  }
+  return totals.map((value) => value.toFixed(2)).join(",");
+}
+`;
+    const secondSource = `
+export function normalizeSecondRows(rows: Array<{ count: number; price: number }>) {
+  const totals: number[] = [];
+  for (const row of rows) {
+    const subtotal = row.count * row.price;
+    const rounded = Math.round(subtotal * 100) / 100;
+    totals.push(rounded);
+  }
+  return totals.map((value) => value.toFixed(2)).join(",");
+}
+`;
+    await writeProjectFile(root, "src/a.ts", firstSource);
+    await writeProjectFile(root, "src/b.ts", firstSource);
+    await writeProjectFile(root, "src/c.ts", secondSource);
+    await writeProjectFile(root, "src/d.ts", secondSource);
+
+    const index = await buildProjectIndex(root);
+    const contexts = await findDuplicateContexts(
+      index,
+      [{ file: "src/a.ts" }, { file: "src/c.ts" }],
+      { minConfidence: "high", includeSameFile: true, limit: 5, maxPairs: 1 },
+    );
+
+    expect(contexts).toHaveLength(2);
+    expect(contexts.every((context) => context.stats.comparedPairs <= 1)).toBe(true);
+    expect(contexts.some((context) => context.groups.length > 0)).toBe(true);
+  });
+
+  test("matches duplicate groups through native duplicate tokenization", async () => {
+    if (!isNativeTreeSitterAvailable("auto")) return;
+    const root = await makeTempProject();
+    await writeProjectFile(
+      root,
+      "src/a.ts",
+      `// don't treat John's comment as a string\nexport function alpha($userName: string) {\n  const $greeting = "hello " + $userName;\n  return $greeting.toUpperCase();\n}\n`,
+    );
+    await writeProjectFile(
+      root,
+      "src/b.ts",
+      `// don't treat Jane's comment as a string\nexport function beta($accountName: string) {\n  const $greeting = "hello " + $accountName;\n  return $greeting.toUpperCase();\n}\n`,
+    );
+
+    const nativeIndex = await buildProjectIndex(root, { native: "auto" });
+    const fallbackIndex = await buildProjectIndex(root, { native: "off" });
+    const nativeResult = await findDuplicates(nativeIndex, { includeSmall: true, minConfidence: "high", limit: 5 });
+    const fallbackResult = await findDuplicates(fallbackIndex, { includeSmall: true, minConfidence: "high", limit: 5 });
+
+    expect(nativeResult.groups.map((group) => group.cloneType)).toEqual(fallbackResult.groups.map((group) => group.cloneType));
+    expect(nativeResult.groups.map((group) => group.confidence)).toEqual(
+      fallbackResult.groups.map((group) => group.confidence),
+    );
+  });
+
+  test("generated TypeScript and Rust keyword lists stay in sync with the canonical source", async () => {
+    await expect(
+      execFileAsync(process.execPath, ["./scripts/generate-duplicate-keywords.mjs", "--check"], {
+        cwd: process.cwd(),
+      }),
+    ).resolves.toBeDefined();
+
+    const source = await fsp.readFile("packages/codegraph-native/src/duplicate_keywords.txt", "utf8");
+    const keywords = source
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("#"));
+    expect([...DUPLICATE_IDENTIFIER_KEYWORDS]).toEqual(keywords);
+  });
+
+  test("TypeScript duplicate normalization preserves every shared keyword", () => {
+    const source = DUPLICATE_IDENTIFIER_KEYWORDS.join(" ");
+    expect(normalizeDuplicateSourceTokens(source)).toEqual([...DUPLICATE_IDENTIFIER_KEYWORDS]);
+  });
+
+  test("TypeScript duplicate normalization still collapses non-keyword identifiers", () => {
+    expect(normalizeDuplicateSourceTokens("userName _private $value Widget42")).toEqual([
+      "<identifier>",
+      "<identifier>",
+      "<identifier>",
+      "<identifier>",
+    ]);
   });
 
   test("adds stable handles to duplicate units", async () => {

@@ -5,7 +5,9 @@ import type { FileId, Graph } from "../types.js";
 import type { BloomFilterCache } from "../util/bloomFilter.js";
 import type { ParsedFileContext } from "./parse-context.js";
 import { retainedParsedCache } from "./parsed-cache.js";
-import type { BuildOptions, BuildReport, ModuleIndex, ProjectIndex } from "./types.js";
+import { buildReferenceCandidateIndex } from "./reference-candidates.js";
+import { cacheRoot } from "./build-cache/module-cache.js";
+import type { BuildOptions, BuildReport, ModuleIndex, ProjectIndex, ProjectIndexManifestEntry } from "./types.js";
 
 export async function finalizeProjectIndex(args: {
   projectRoot: string;
@@ -18,6 +20,7 @@ export async function finalizeProjectIndex(args: {
   parsedMap: Map<string, ParsedFileContext>;
   bloomFilterCache: BloomFilterCache | undefined;
   projectFiles?: ProjectFileInfo[] | Promise<ProjectFileInfo[]>;
+  manifestEntries?: Map<FileId, ProjectIndexManifestEntry>;
 }): Promise<ProjectIndex> {
   if (args.timings) args.timings.totalMs = Math.round(performance.now() - args.totalStart);
   const projectFiles = await (args.projectFiles ??
@@ -37,5 +40,8 @@ export async function finalizeProjectIndex(args: {
     ...(parsed ? { parsed } : {}),
     ...(args.bloomFilterCache ? { bloomFilters: args.bloomFilterCache } : {}),
     projectFiles,
+    referenceCandidates: buildReferenceCandidateIndex(args.modules),
+    ...(args.manifestEntries ? { manifestEntries: args.manifestEntries } : {}),
+    ...(args.opts?.cache ? { cacheMode: args.opts.cache, cacheRootDir: cacheRoot(args.projectRoot, args.opts) } : {}),
   };
 }

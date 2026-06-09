@@ -59,6 +59,12 @@ pub struct CompactQueryResults {
 
 #[derive(Debug)]
 #[napi(object)]
+pub struct NativeDuplicateTokens {
+    pub normalized_tokens: Vec<String>,
+}
+
+#[derive(Debug)]
+#[napi(object)]
 pub struct NativeQueryRunResult {
     pub matches: Vec<NativeMatch>,
 }

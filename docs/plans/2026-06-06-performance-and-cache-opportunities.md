@@ -226,11 +226,11 @@ Why this matters:
 
 Implementation checklist:
 
-- [ ] Define a native API that accepts duplicate units or source spans and returns compact fingerprints/candidate pairs.
-- [ ] Start with tokenization, normalization, shingle/winnow fingerprints, and candidate-pair bucket generation.
-- [ ] Keep final reporting, grouping, and CLI JSON schema in TypeScript initially.
-- [ ] Preserve JS fallback behavior when native is unavailable or disabled.
-- [ ] Add parity fixtures comparing native and JS duplicate results for exact, renamed, near, and low-confidence cases.
+- [x] Define a native API that accepts source text and returns compact duplicate-token preprocessing results.
+- [x] Start with native tokenization and normalization while keeping shingle/winnow fingerprints and candidate-pair generation in TypeScript.
+- [x] Keep final reporting, grouping, and CLI JSON schema in TypeScript initially.
+- [x] Preserve JS fallback behavior when native is unavailable or disabled.
+- [x] Add parity fixtures comparing native and JS fallback duplicate results for exact, renamed, near, and low-confidence cases.
 - [ ] Add a benchmark fixture with many repeated units and a performance threshold or regression report.
 
 Likely files:
@@ -244,8 +244,8 @@ Likely files:
 
 Validation:
 
-- [ ] `npx vitest run tests/duplicates.test.ts`
-- [ ] `npm run test:native`
+- [x] `npx vitest run tests/duplicates.test.ts`
+- [x] `npm run test:native`
 - [ ] A targeted duplicate benchmark before and after the native path.
 
 ## Priority 7: Persist a Ready-to-Load Project Index Snapshot
@@ -322,10 +322,10 @@ Why this matters:
 
 Implementation checklist:
 
-- [ ] Build an identifier/member occurrence index during project indexing or native extraction.
-- [ ] Index imports, exports, local declarations, member accesses, and language-specific reference capture nodes.
-- [ ] Use the index as a candidate filter before expensive go-to verification.
-- [ ] Preserve current correctness by keeping verification for ambiguous candidates.
+- [x] Build a ProjectIndex-level reverse import/export candidate index during project finalization.
+- [x] Index import targets and re-exporting files so common reference queries avoid full project candidate-file scans.
+- [x] Use the index as a candidate filter before expensive go-to verification.
+- [x] Preserve current correctness by keeping verification for ambiguous candidates.
 - [ ] Consider native/Rust extraction for occurrence vectors to avoid JS AST walking.
 
 Likely files:
@@ -340,7 +340,7 @@ Likely files:
 
 Validation:
 
-- [ ] Existing references test suite.
+- [x] Existing references test suite.
 - [ ] A benchmark for reference lookup across a large fixture.
 
 ## Priority 10: Make Review Duplicate-Sibling Detection Target-First
@@ -354,11 +354,11 @@ Why this matters:
 
 Implementation checklist:
 
-- [ ] In review, collect duplicate targets from changed symbols and uncovered changed lines.
-- [ ] Build candidate buckets only around those targets.
-- [ ] Reuse existing `findDuplicateContexts()` behavior where possible, but ensure it does target-first work internally.
-- [ ] Keep exhaustive duplicate detection unchanged for `codegraph duplicates`.
-- [ ] Report omitted/partial metadata when target-first budgets truncate results.
+- [x] In review, collect duplicate targets from changed symbols and uncovered changed lines.
+- [x] Build candidate buckets only around those targets.
+- [x] Reuse existing `findDuplicateContexts()` behavior where possible, but ensure it does target-first work internally.
+- [x] Keep exhaustive duplicate detection unchanged for `codegraph duplicates`.
+- [x] Report omitted/partial metadata when target-first budgets truncate results.
 
 Likely files:
 
@@ -370,8 +370,8 @@ Likely files:
 
 Validation:
 
-- [ ] Review duplicate-sibling tests still pass.
-- [ ] Add a test proving unchanged duplicate-heavy files do not dominate review runtime or pair count.
+- [x] Review duplicate-sibling tests still pass.
+- [x] Add a test proving unchanged duplicate-heavy files do not dominate review runtime or pair count.
 
 ## Priority 11: Search Hot-Loop and Ranking Optimizations
 

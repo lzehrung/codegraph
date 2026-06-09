@@ -5,6 +5,7 @@ import { sliceText, toRange } from "../util/ast.js";
 import { ensureParsedContext } from "./parse-context.js";
 import { sameDef } from "./reference-context.js";
 import { readPhpNamespaceFromRange } from "./navigation-php.js";
+import { candidateFilesImportingTarget } from "./reference-candidates.js";
 import { buildScopeIndexFromSource, type ScopeIndex } from "./scope.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
 import type { ModuleIndex, ProjectIndex, SymbolDef } from "./types.js";
@@ -187,6 +188,73 @@ function importCanReferenceDefinition(
   return exportedNames.some((exportedName) => resolvesToDefinition(exportedName));
 }
 
+function moduleExportProbeNames(
+  index: ProjectIndex,
+  moduleIndex: ModuleIndex,
+  exportedNames: readonly string[],
+  visited: ReadonlySet<string> = new Set(),
+): string[] {
+  const names = new Set(exportedNames);
+  const nextVisited = new Set([...visited, moduleIndex.file]);
+  for (const entry of moduleIndex.exports) {
+    if (entry.type === "reexport" || entry.type === "namespaceReexport") {
+      names.add(entry.exportedAs);
+      continue;
+    }
+    if (entry.type === "exportStar") {
+      const targetModule = index.byFile.get(entry.fromModule);
+      if (!targetModule || nextVisited.has(targetModule.file)) continue;
+      for (const exportedName of moduleExportProbeNames(index, targetModule, exportedNames, nextVisited)) {
+        names.add(exportedName);
+      }
+    }
+  }
+  return [...names];
+}
+
+
+function filesExportingDefinition(index: ProjectIndex, def: SymbolDef, exportedNames: readonly string[]): Set<string> {
+  const files = new Set<string>([def.file]);
+  for (const [fileId, moduleIndex] of index.byFile) {
+    if (fileId === def.file || !moduleIndex.exports.length) continue;
+    for (const exportedName of moduleExportProbeNames(index, moduleIndex, exportedNames)) {
+      const resolved = resolveExport(index, fileId, exportedName);
+      if (resolved?.kind === "resolved" && sameDef(resolved.def, def)) {
+        files.add(fileId);
+        break;
+      }
+    }
+  }
+  return files;
+}
+
+function getIndexedReferenceCandidateFiles(
+  index: ProjectIndex,
+  def: SymbolDef,
+  exportedNames: readonly string[],
+): readonly string[] | undefined {
+  if (def.file.toLowerCase().endsWith(".php")) return undefined;
+  if (!index.referenceCandidates) return undefined;
+  const files = new Set<string>();
+  for (const exportingFile of filesExportingDefinition(index, def, exportedNames)) {
+    for (const importingFile of candidateFilesImportingTarget(index.referenceCandidates, exportingFile) ?? []) {
+      files.add(importingFile);
+    }
+  }
+  for (const [fileId, moduleIndex] of index.byFile) {
+    if (fileId === def.file || files.has(fileId)) continue;
+    if (
+      moduleIndex.imports.some(
+        (imp) => (imp.kind === "star" || imp.kind === "namespace") && importCanReferenceDefinition(index, imp, def, exportedNames),
+      )
+    ) {
+      files.add(fileId);
+    }
+  }
+  return [...files].sort((left, right) => left.localeCompare(right));
+}
+
+
 export function getCachedReferenceCandidateFiles(
   index: ProjectIndex,
   def: SymbolDef,
@@ -210,8 +278,11 @@ export function getCachedReferenceCandidateFiles(
   if (cached) return cached;
 
   const candidates = new Set<string>();
-  for (const [fileId, moduleIndex] of index.byFile) {
+  const candidateFileEntries = getIndexedReferenceCandidateFiles(index, def, exportedNames) ?? index.byFile.keys();
+  for (const fileId of candidateFileEntries) {
     if (fileId === def.file) continue;
+    const moduleIndex = index.byFile.get(fileId);
+    if (!moduleIndex) continue;
     if (moduleIndex.imports.some((imp) => importCanReferenceDefinition(index, imp, def, exportedNames))) {
       candidates.add(fileId);
     }

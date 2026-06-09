@@ -7,6 +7,7 @@ export type {
   NativeCapture,
   NativeFallbackReason,
   NativeMatch,
+  NativeDuplicateTokens,
   NativePoint,
   NativeQueryExecution,
   NativeQueryResults,
@@ -44,6 +45,8 @@ export {
   getNativeQueryExecution,
   getNativeQueryExecutionForState,
   getNativeSingleQueryExecution,
+  getNativeDuplicateTokens,
+  isNativeDuplicateTokenizationAvailable,
   getNativeSyntaxTreeExecution,
   runNativeLanguageQueries,
 } from "./execution.js";

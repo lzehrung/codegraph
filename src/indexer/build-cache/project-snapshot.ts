@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import type { Edge, EdgeTo, Graph, Pos, Range } from "../../types.js";
 import { buildGraphAdjacency } from "../../graphs/adjacency.js";
+import { buildReferenceCandidateIndex } from "../reference-candidates.js";
 import type { ProjectFileInfo } from "../../util/projectFiles.js";
 import {
   SymbolKind,
@@ -83,6 +84,8 @@ export async function tryLoadProjectIndexSnapshot(
       exportCache: new Map(),
       scopeCache: new Map(),
       ...(payload.projectFiles ? { projectFiles: payload.projectFiles } : {}),
+      referenceCandidates: buildReferenceCandidateIndex(modules),
+      ...(opts?.cache ? { cacheMode: opts.cache, cacheRootDir: cacheRoot(projectRoot, opts) } : {}),
     };
   } catch {
     return null;

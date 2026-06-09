@@ -55,6 +55,10 @@ export type CompactQueryResults = {
   imports: CompactMatch[];
 };
 
+export type NativeDuplicateTokens = {
+  normalizedTokens: string[];
+};
+
 export type NativeFallbackReason = "unavailable" | "unsupportedLanguage" | "queryFailure";
 
 export type NativeQueryExecution = {
@@ -109,6 +113,7 @@ export type NativeBinding = {
   runImportsQueryCompact?: (source: string, languageId: string, importsQuery: string) => CompactQueryResults;
   runQuery?: (source: string, languageId: string, queryText: string) => { matches: NativeMatch[] };
   parseSyntaxTree?: (source: string, languageId: string) => NativeSyntaxTree;
+  tokenizeDuplicateSource?: (source: string) => NativeDuplicateTokens;
   supportedLanguageIds: () => string[];
 };
 
