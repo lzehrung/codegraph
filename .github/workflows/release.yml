@@ -29,7 +29,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Compute native package release version
         id: version
@@ -79,7 +79,7 @@ jobs:
             suffix: darwin-arm64
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -100,7 +100,7 @@ jobs:
           echo "RUSTFLAGS=-C link-arg=-L/usr/lib/${host_triplet} -C link-arg=-L/lib/${host_triplet} ${RUSTFLAGS:-}" >> "$GITHUB_ENV"
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 24.10.0
           cache: npm
@@ -109,7 +109,6 @@ jobs:
         run: |
           npm ci --ignore-scripts
           node ./scripts/patch-tree-sitter-node24.mjs
-          npm rebuild
 
       - name: Apply native package release version
         run: node ./scripts/set-native-package-version.mjs ${{ needs.plan-release.outputs.version }}
@@ -130,7 +129,7 @@ jobs:
           tar -czf "native-artifacts/${{ matrix.suffix }}.tgz" -C packages/codegraph-native/npm "${{ matrix.suffix }}"
 
       - name: Upload native target artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: native-${{ matrix.suffix }}
           path: native-artifacts/${{ matrix.suffix }}.tgz
@@ -144,7 +143,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: ${{ github.ref_name }}
@@ -153,7 +152,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 24.10.0
           cache: npm
@@ -198,7 +197,7 @@ jobs:
           npm rebuild
 
       - name: Download native artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: native-*
           path: native-artifacts

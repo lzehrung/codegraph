@@ -606,6 +606,7 @@ void onImpactItemStreaming;
     const publishInstallIndex = workflow.lastIndexOf("npm ci --ignore-scripts");
     const publishPatchIndex = workflow.lastIndexOf("node ./scripts/patch-tree-sitter-node24.mjs");
     const publishRebuildIndex = workflow.lastIndexOf("npm rebuild");
+    const firstRebuildIndex = workflow.indexOf("npm rebuild");
     const rerunGuardIndex = workflow.indexOf("Refuse reruns on an already-tagged release commit");
     const versionIndex = workflow.indexOf("node ./scripts/set-native-package-version.mjs");
     const createDirsIndex = workflow.indexOf("npm run native:create-npm-dirs");
@@ -644,6 +645,7 @@ void onImpactItemStreaming;
     expect(rerunGuardIndex).toBeGreaterThan(versionIndex);
     expect(publishInstallIndex).toBeGreaterThan(rerunGuardIndex);
     expect(publishPatchIndex).toBeGreaterThan(publishInstallIndex);
+    expect(firstRebuildIndex).toBeGreaterThan(rerunGuardIndex);
     expect(publishRebuildIndex).toBeGreaterThan(publishPatchIndex);
     expect(versionIndex).toBeGreaterThan(installIndex);
     expect(createDirsIndex).toBeGreaterThan(versionIndex);
@@ -653,6 +655,22 @@ void onImpactItemStreaming;
     expect(publishIndex).toBeGreaterThan(publishRebuildIndex);
     expect(workflow).toContain("- build-native-artifacts");
     expect(workflow).toContain("npm run publish:${{ inputs.release_type }} -- --package native --package js-fallback");
+  });
+
+  it("keeps GitHub-owned actions off deprecated Node 20 action majors", () => {
+    const workflowPaths = [
+      ".github/workflows/on-demand-ci.yml",
+      ".github/workflows/release-root.yml",
+      ".github/workflows/release.yml",
+    ];
+
+    for (const workflowPath of workflowPaths) {
+      const workflow = readText(workflowPath);
+      expect(workflow).not.toContain("actions/checkout@v4");
+      expect(workflow).not.toContain("actions/setup-node@v4");
+      expect(workflow).not.toContain("actions/upload-artifact@v4");
+      expect(workflow).not.toContain("actions/download-artifact@v4");
+    }
   });
 
   it("keeps public-facing docs ASCII-clean", () => {
