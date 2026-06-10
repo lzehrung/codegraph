@@ -391,6 +391,46 @@ describe("CLI regressions", () => {
     };
     expect(fullGraph.nodes.map(normalize)).toContain(normalize(ignoredFile));
   });
+  it("graph can index sibling child git repositories as one project graph", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-parent-multirepo-"));
+    const repoA = path.join(tmpDir, "billing-service");
+    const repoB = path.join(tmpDir, "shared-ui");
+    const importerFile = path.join(repoA, "src", "checkout.ts");
+    const importedFile = path.join(repoB, "src", "money.ts");
+    const ignoredFile = path.join(repoA, "src", "generated.ts");
+
+    await fsp.mkdir(path.join(repoA, ".git"), { recursive: true });
+    await fsp.mkdir(path.dirname(importerFile), { recursive: true });
+    await fsp.mkdir(path.join(repoB, ".git"), { recursive: true });
+    await fsp.mkdir(path.dirname(importedFile), { recursive: true });
+    await fsp.writeFile(path.join(repoA, ".gitignore"), "src/generated.ts\n", "utf8");
+    await fsp.writeFile(
+      importerFile,
+      'import { formatMoney } from "../../shared-ui/src/money";\nexport const checkoutTotal = formatMoney(4200);\n',
+      "utf8",
+    );
+    await fsp.writeFile(
+      importedFile,
+      "export function formatMoney(cents: number) { return `$${cents / 100}`; }\n",
+      "utf8",
+    );
+    await fsp.writeFile(ignoredFile, "export const generated = 1;\n", "utf8");
+
+    const graph = JSON.parse(await runCliCommand(["graph", "--root", tmpDir, repoA, repoB, "--json"])) as {
+      nodes: string[];
+      edges: Array<{ from: string; to: { type: string; path?: string }; raw: string }>;
+    };
+    const nodes = graph.nodes.map(normalize);
+
+    expect(nodes).toContain(normalize(importerFile));
+    expect(nodes).toContain(normalize(importedFile));
+    expect(nodes).not.toContain(normalize(ignoredFile));
+    expect(graph.edges).toContainEqual({
+      from: normalize(importerFile),
+      to: { type: "file", path: normalize(importedFile) },
+      raw: "../../shared-ui/src/money",
+    });
+  });
 
   it("graph applies additive --include-glob and --ignore-glob filters to scanned files", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-scan-glob-"));

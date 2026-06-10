@@ -15,6 +15,12 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | Method-local changed-symbol support     | `tests/method-local-symbols.test.ts`, `tests/parser-efficiency-fixes.test.ts`, `tests/goto.test.ts`, `tests/references.test.ts`, `tests/impact-analyzer.test.ts` | Method-like declarations are indexed as function locals across supported source languages; body edits map to the method and parameter edits set method-level `signatureChanged`. Verified receiver method references cover JS/TS plus Java, C#, and Rust receiver forms proven by `goto`; method-level call compatibility remains JS/TS-only. | Internal regression test | 2026-05-27 |
 | Copy-similarity duplicate leads         | `tests/impact-cli.test.ts`, `tests/duplicates.test.ts`                                                                                                           | Raw or git diff copy/rename `similarityIndex` metadata is preserved on changed files and can boost scoped duplicate leads at 80 or higher when both source and destination files exist in the indexed snapshot.                                                                                                                               | Internal regression test | 2026-06-04 |
 
+## Project discovery
+
+| Scenario                                     | Sample                          | Expected behavior                                                                                                                                                                | Source                   | Date added |
+| -------------------------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ | ---------- |
+| Parent-scoped sibling child git repositories | `tests/cli-regressions.test.ts` | `graph --root <parent> <child-a> <child-b>` indexes source files from separate child git repositories into one dependency graph, resolves cross-child imports, and skips `.git`. | Internal regression test | 2026-06-10 |
+
 ## Duplicate detection
 
 | Scenario                     | Sample                     | Expected behavior                                                                                                                                     | Source                   | Date added |

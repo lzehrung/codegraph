@@ -171,6 +171,9 @@ Runtime controls:
   `codegraph graph ./src --fast-graph`
 - Full AST-based graph:
   `codegraph graph ./src`
+- Parent folder containing separate child git repositories:
+  `codegraph graph --root ~/work billing-service shared-ui --json`
+  This indexes the included child repos into one graph, resolves cross-child imports when their specifiers are resolvable, and ignores nested `.git` metadata.
 - Graph-first document/template edges:
   HTML, Astro, Handlebars, Markdown, MDX, reStructuredText, and AsciiDoc local links, plus MDX/Astro static imports, Vue/Svelte script imports including external `script src`, and stylesheet imports for CSS, SCSS, and Less.
 - SQL support:
