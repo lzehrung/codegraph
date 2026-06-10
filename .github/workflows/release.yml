@@ -217,3 +217,25 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN || secrets.GITHUB_TOKEN }}
         run: npm run publish:${{ inputs.release_type }} -- --package native --package js-fallback
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          native_version="${{ needs.plan-release.outputs.version }}"
+          native_tag="@lzehrung/codegraph-native@$native_version"
+          fallback_version=$(node -p "JSON.parse(require('node:fs').readFileSync('packages/codegraph-js-fallback/package.json', 'utf8')).version")
+          fallback_tag="@lzehrung/codegraph-js-fallback@$fallback_version"
+          release_notes=$(mktemp)
+          {
+            echo "Published packages:"
+            echo ""
+            echo "- \`$native_tag\`"
+            echo "- \`$fallback_tag\`"
+          } > "$release_notes"
+          if gh release view "$native_tag" >/dev/null 2>&1; then
+            gh release edit "$native_tag" --title "$native_tag" --notes-file "$release_notes"
+          else
+            gh release create "$native_tag" --title "$native_tag" --notes-file "$release_notes"
+          fi

@@ -625,6 +625,7 @@ void onImpactItemStreaming;
     const publishIndex = workflow.indexOf(
       "npm run publish:${{ inputs.release_type }} -- --package native --package js-fallback",
     );
+    const releaseIndex = workflow.indexOf("Create or update GitHub Release");
     const nativePackage = readJson("packages/codegraph-native/package.json");
     const targets =
       nativePackage.napi &&
@@ -653,6 +654,10 @@ void onImpactItemStreaming;
     expect(workflow).toContain("needs.plan-release.outputs.version");
     expect(workflow).toContain('hasTagForPackageVersion("@lzehrung/codegraph-native", version, tagNames)');
     expect(workflow).toContain("NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN || secrets.GITHUB_TOKEN }}");
+    expect(workflow).toContain("native_tag=\"@lzehrung/codegraph-native@$native_version\"");
+    expect(workflow).toContain("fallback_tag=\"@lzehrung/codegraph-js-fallback@$fallback_version\"");
+    expect(workflow).toContain('gh release create "$native_tag" --title "$native_tag" --notes-file "$release_notes"');
+    expect(workflow).toContain('gh release edit "$native_tag" --title "$native_tag" --notes-file "$release_notes"');
     expect(installIndex).toBeGreaterThan(-1);
     expect(rerunGuardIndex).toBeGreaterThan(versionIndex);
     expect(publishInstallIndex).toBeGreaterThan(rerunGuardIndex);
@@ -665,7 +670,7 @@ void onImpactItemStreaming;
     expect(workflow).not.toContain("native:stage-local");
     expect(publishIndex).toBeGreaterThan(cleanupArtifactsIndex);
     expect(publishIndex).toBeGreaterThan(publishRebuildIndex);
-    expect(workflow).toContain("- build-native-artifacts");
+    expect(releaseIndex).toBeGreaterThan(publishIndex);
     expect(workflow).toContain("npm run publish:${{ inputs.release_type }} -- --package native --package js-fallback");
   });
 
