@@ -427,13 +427,18 @@ describe("CLI regressions", () => {
       edges: Array<{ from: string; to: { type: string; path?: string }; raw: string }>;
     };
     const nodes = graph.nodes.map(normalize);
+    const edges = graph.edges.map((edge) => ({
+      ...edge,
+      from: normalize(edge.from),
+      to: edge.to.path ? { ...edge.to, path: normalize(edge.to.path) } : edge.to,
+    }));
 
     expect(nodes).toContain(normalize(importerFile));
     expect(nodes).toContain(normalize(importedFile));
     expect(nodes).not.toContain(normalize(ignoredFile));
     expect(nodes).not.toContain(normalize(nestedGitFileA));
     expect(nodes).not.toContain(normalize(nestedGitFileB));
-    expect(graph.edges).toContainEqual(
+    expect(edges).toContainEqual(
       expect.objectContaining({
         from: normalize(importerFile),
         to: expect.objectContaining({ type: "file", path: normalize(importedFile) }),
