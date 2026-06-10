@@ -398,10 +398,12 @@ describe("CLI regressions", () => {
     const importerFile = path.join(repoA, "src", "checkout.ts");
     const importedFile = path.join(repoB, "src", "money.ts");
     const ignoredFile = path.join(repoA, "src", "generated.ts");
+    const nestedGitFileA = path.join(repoA, ".git", "hooks.ts");
+    const nestedGitFileB = path.join(repoB, ".git", "index.ts");
 
-    await fsp.mkdir(path.join(repoA, ".git"), { recursive: true });
+    await fsp.mkdir(path.dirname(nestedGitFileA), { recursive: true });
     await fsp.mkdir(path.dirname(importerFile), { recursive: true });
-    await fsp.mkdir(path.join(repoB, ".git"), { recursive: true });
+    await fsp.mkdir(path.dirname(nestedGitFileB), { recursive: true });
     await fsp.mkdir(path.dirname(importedFile), { recursive: true });
     await fsp.writeFile(path.join(repoA, ".gitignore"), "src/generated.ts\n", "utf8");
     await fsp.writeFile(
@@ -415,6 +417,8 @@ describe("CLI regressions", () => {
       "utf8",
     );
     await fsp.writeFile(ignoredFile, "export const generated = 1;\n", "utf8");
+    await fsp.writeFile(nestedGitFileA, "export const nestedGitHook = 1;\n", "utf8");
+    await fsp.writeFile(nestedGitFileB, "export const nestedGitIndex = 1;\n", "utf8");
 
     const graph = JSON.parse(await runCliCommand(["graph", "--root", tmpDir, repoA, repoB, "--json"])) as {
       nodes: string[];
@@ -425,6 +429,8 @@ describe("CLI regressions", () => {
     expect(nodes).toContain(normalize(importerFile));
     expect(nodes).toContain(normalize(importedFile));
     expect(nodes).not.toContain(normalize(ignoredFile));
+    expect(nodes).not.toContain(normalize(nestedGitFileA));
+    expect(nodes).not.toContain(normalize(nestedGitFileB));
     expect(graph.edges).toContainEqual({
       from: normalize(importerFile),
       to: { type: "file", path: normalize(importedFile) },
