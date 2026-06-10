@@ -435,7 +435,7 @@ It answers: after this name resolves to this definition, where do recorded impor
 Yes. Both `const { helperFunction } = require("./module")` and aliased destructuring patterns are supported.
 
 **Does it work with monorepos?**
-Yes, with two layers. Node workspace package imports resolve through `package.json` workspaces, `pnpm-workspace.yaml`, and `lerna.json`; pnpm exclude globs are honored. Broader monorepo and project metadata such as `nx.json`, `turbo.json`, `go.work`, `Cargo.toml`, `composer.json`, Maven/Gradle files, .NET projects, Swift packages, and C/C++ build files are detected for project discovery, inspection, and review risk signals.
+Yes, with two layers. Node workspace package imports resolve through `package.json` workspaces, `pnpm-workspace.yaml`, and `lerna.json`; pnpm exclude globs are honored. Broader monorepo and project metadata such as `nx.json`, `turbo.json`, `go.work`, `Cargo.toml`, `composer.json`, Maven/Gradle files, .NET projects, Swift packages, and C/C++ build files are detected for project discovery, inspection, and review risk signals. For a parent directory that contains separate child git repositories, use `codegraph graph --root ~/work billing-service shared-ui --json` to index the selected children into one graph without indexing their nested `.git` metadata.
 
 ## Contributing and releases
 

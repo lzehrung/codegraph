@@ -391,6 +391,65 @@ describe("CLI regressions", () => {
     };
     expect(fullGraph.nodes.map(normalize)).toContain(normalize(ignoredFile));
   });
+  it("graph can index sibling child git repositories as one project graph", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-parent-multirepo-"));
+    try {
+      const repoA = path.join(tmpDir, "billing-service");
+      const repoB = path.join(tmpDir, "shared-ui");
+      const importerFile = path.join(repoA, "src", "checkout.ts");
+      const importedFile = path.join(repoB, "src", "money.ts");
+      const ignoredFile = path.join(repoA, "src", "generated.ts");
+      const nestedGitFileA = path.join(repoA, ".git", "hooks.ts");
+      const nestedGitFileB = path.join(repoB, ".git", "index.ts");
+
+      await fsp.mkdir(path.dirname(nestedGitFileA), { recursive: true });
+      await fsp.mkdir(path.dirname(importerFile), { recursive: true });
+      await fsp.mkdir(path.dirname(nestedGitFileB), { recursive: true });
+      await fsp.mkdir(path.dirname(importedFile), { recursive: true });
+      await fsp.writeFile(path.join(repoA, ".gitignore"), "src/generated.ts\n", "utf8");
+      await fsp.writeFile(
+        importerFile,
+        'import { formatMoney } from "../../shared-ui/src/money";\nexport const checkoutTotal = formatMoney(4200);\n',
+        "utf8",
+      );
+      await fsp.writeFile(
+        importedFile,
+        "export function formatMoney(cents: number) { return `$${cents / 100}`; }\n",
+        "utf8",
+      );
+      await fsp.writeFile(ignoredFile, "export const generated = 1;\n", "utf8");
+      await fsp.writeFile(nestedGitFileA, "export const nestedGitHook = 1;\n", "utf8");
+      await fsp.writeFile(nestedGitFileB, "export const nestedGitIndex = 1;\n", "utf8");
+
+      const graph = JSON.parse(
+        await runCliCommand(["graph", "--root", tmpDir, "billing-service", "shared-ui", "--json"]),
+      ) as {
+        nodes: string[];
+        edges: Array<{ from: string; to: { type: string; path?: string }; raw: string }>;
+      };
+      const nodes = graph.nodes.map(normalize);
+      const edges = graph.edges.map((edge) => ({
+        ...edge,
+        from: normalize(edge.from),
+        to: edge.to.path ? { ...edge.to, path: normalize(edge.to.path) } : edge.to,
+      }));
+
+      expect(nodes).toContain(normalize(importerFile));
+      expect(nodes).toContain(normalize(importedFile));
+      expect(nodes).not.toContain(normalize(ignoredFile));
+      expect(nodes).not.toContain(normalize(nestedGitFileA));
+      expect(nodes).not.toContain(normalize(nestedGitFileB));
+      expect(edges).toContainEqual(
+        expect.objectContaining({
+          from: normalize(importerFile),
+          to: expect.objectContaining({ type: "file", path: normalize(importedFile) }),
+          raw: "../../shared-ui/src/money",
+        }),
+      );
+    } finally {
+      await fsp.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
 
   it("graph applies additive --include-glob and --ignore-glob filters to scanned files", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-scan-glob-"));
