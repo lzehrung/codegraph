@@ -230,16 +230,10 @@ function writePublishReadyNativePackage(versionPlan) {
 }
 
 function restoreRootPackage(versionPlan) {
-  const intendedVersion = versionPlan.get("root");
-  if (!intendedVersion) {
-    fs.writeFileSync(rootPackagePath, originalRootPackageJson);
-    return;
-  }
   const sourceManifest = JSON.parse(originalRootPackageJson);
-  writeJson(
-    rootPackagePath,
-    restoreRootPackageManifest(sourceManifest, intendedVersion, readJson(nativePackagePath).version),
-  );
+  const intendedVersion = versionPlan.get("root") ?? sourceManifest.version;
+  const nativeVersion = versionPlan.get("native") ?? readJson(nativePackagePath).version;
+  writeJson(rootPackagePath, restoreRootPackageManifest(sourceManifest, intendedVersion, nativeVersion));
 }
 
 function doesLocalTagExist(tagName) {

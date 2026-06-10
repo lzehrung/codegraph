@@ -10,7 +10,7 @@ export const releasePackages = [
     publishWorkspace: null,
     ownedFiles: new Set([
       "package.json",
-      ".github/workflows/release-native.yml",
+      ".github/workflows/release.yml",
       "README.md",
       "docs/mcp.md",
       "scripts/check-native-artifacts.mjs",

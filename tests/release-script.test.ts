@@ -94,6 +94,9 @@ describe("release script helpers", () => {
     expect(releaseScript).toContain('run("node", ["./scripts/stage-native-package.mjs", "--if-missing"])');
     expect(releaseScript).toContain("assertCompleteNativeTargetArtifacts(nativeRootPath");
     expect(releaseScript).toContain("if (!rootVersion && nativeVersion)");
+    expect(releaseScript).toContain('const intendedVersion = versionPlan.get("root") ?? sourceManifest.version');
+    expect(releaseScript).toContain('const nativeVersion = versionPlan.get("native") ?? readJson(nativePackagePath).version');
+    expect(releaseScript).toContain("restoreRootPackageManifest(sourceManifest, intendedVersion, nativeVersion)");
     expect(fs.readFileSync("scripts/publish-native-targets.mjs", "utf8")).toContain(
       "Skipping existing native target package",
     );
@@ -221,7 +224,12 @@ describe("release script helpers", () => {
 
   it("treats release packaging scripts as root package changes", () => {
     expect(
-      detectChangedReleasePackages(["scripts/release.mjs", "scripts/release-lib.mjs", "tests/release-script.test.ts"]),
+      detectChangedReleasePackages([
+        ".github/workflows/release.yml",
+        "scripts/release.mjs",
+        "scripts/release-lib.mjs",
+        "tests/release-script.test.ts",
+      ]),
     ).toEqual(["root"]);
   });
 
