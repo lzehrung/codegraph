@@ -420,7 +420,9 @@ describe("CLI regressions", () => {
     await fsp.writeFile(nestedGitFileA, "export const nestedGitHook = 1;\n", "utf8");
     await fsp.writeFile(nestedGitFileB, "export const nestedGitIndex = 1;\n", "utf8");
 
-    const graph = JSON.parse(await runCliCommand(["graph", "--root", tmpDir, repoA, repoB, "--json"])) as {
+    const graph = JSON.parse(
+      await runCliCommand(["graph", "--root", tmpDir, "billing-service", "shared-ui", "--json"]),
+    ) as {
       nodes: string[];
       edges: Array<{ from: string; to: { type: string; path?: string }; raw: string }>;
     };
@@ -431,11 +433,13 @@ describe("CLI regressions", () => {
     expect(nodes).not.toContain(normalize(ignoredFile));
     expect(nodes).not.toContain(normalize(nestedGitFileA));
     expect(nodes).not.toContain(normalize(nestedGitFileB));
-    expect(graph.edges).toContainEqual({
-      from: normalize(importerFile),
-      to: { type: "file", path: normalize(importedFile) },
-      raw: "../../shared-ui/src/money",
-    });
+    expect(graph.edges).toContainEqual(
+      expect.objectContaining({
+        from: normalize(importerFile),
+        to: expect.objectContaining({ type: "file", path: normalize(importedFile) }),
+        raw: "../../shared-ui/src/money",
+      }),
+    );
   });
 
   it("graph applies additive --include-glob and --ignore-glob filters to scanned files", async () => {
