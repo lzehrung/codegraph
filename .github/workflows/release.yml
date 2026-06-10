@@ -26,12 +26,13 @@ jobs:
     name: Plan release
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.version.outputs.version }}
+      root_version: ${{ steps.version.outputs.root_version }}
+      native_version: ${{ steps.version.outputs.native_version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Compute native package release version
+      - name: Compute release versions
         id: version
         shell: bash
         run: |
@@ -39,11 +40,13 @@ jobs:
           import fs from "node:fs";
           import { bumpVersion } from "./scripts/release-lib.mjs";
 
+          const rootPackage = JSON.parse(fs.readFileSync("package.json", "utf8"));
           const nativePackage = JSON.parse(fs.readFileSync("packages/codegraph-native/package.json", "utf8"));
-          console.log(bumpVersion(nativePackage.version, "${{ inputs.release_type }}"));
+          console.log(`root_version=${bumpVersion(rootPackage.version, "${{ inputs.release_type }}")}`);
+          console.log(`native_version=${bumpVersion(nativePackage.version, "${{ inputs.release_type }}")}`);
           NODE
           )
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "$version" >> "$GITHUB_OUTPUT"
 
   build-native-artifacts:
     name: Build ${{ matrix.suffix }}
@@ -111,7 +114,7 @@ jobs:
           node ./scripts/patch-tree-sitter-node24.mjs
 
       - name: Apply native package release version
-        run: node ./scripts/set-native-package-version.mjs ${{ needs.plan-release.outputs.version }}
+        run: node ./scripts/set-native-package-version.mjs ${{ needs.plan-release.outputs.native_version }}
 
       - name: Create native package directories
         run: npm run native:create-npm-dirs
@@ -136,7 +139,7 @@ jobs:
           if-no-files-found: error
 
   publish-packages:
-    name: Publish native and JS fallback packages
+    name: Publish release packages
     needs:
       - plan-release
       - build-native-artifacts
@@ -172,17 +175,17 @@ jobs:
           import { execFileSync } from "node:child_process";
           import { hasTagForPackageVersion } from "./scripts/release-lib.mjs";
 
-          const version = JSON.parse(fs.readFileSync("packages/codegraph-native/package.json", "utf8")).version;
+          const version = JSON.parse(fs.readFileSync("package.json", "utf8")).version;
           const tagOutput = execFileSync("git", ["tag", "--points-at", "HEAD"], { encoding: "utf8" }).trim();
           const tagNames = tagOutput ? tagOutput.split("\n").filter(Boolean) : [];
 
-          if (!hasTagForPackageVersion("@lzehrung/codegraph-native", version, tagNames)) {
+          if (!hasTagForPackageVersion("@lzehrung/codegraph", version, tagNames)) {
             process.exit(0);
           }
 
           console.error(
             [
-              `HEAD already carries the native release tag for version ${version}.`,
+              `HEAD already carries the root release tag for version ${version}.`,
               "This workflow runs from a fresh runner and cannot resume a partially completed publish.",
               "Recover the release locally with publish:resume if needed, or trigger a new release from a new commit.",
             ].join(" "),
@@ -216,26 +219,32 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN || secrets.GITHUB_TOKEN }}
-        run: npm run publish:${{ inputs.release_type }} -- --package native --package js-fallback
+        run: npm run publish:${{ inputs.release_type }} -- --package root --package native --package js-fallback
 
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          native_version="${{ needs.plan-release.outputs.version }}"
+          root_version="${{ needs.plan-release.outputs.root_version }}"
+          root_tag="v$root_version"
+          root_package_tag="@lzehrung/codegraph@$root_version"
+          native_version="${{ needs.plan-release.outputs.native_version }}"
           native_tag="@lzehrung/codegraph-native@$native_version"
           fallback_version=$(node -p "JSON.parse(require('node:fs').readFileSync('packages/codegraph-js-fallback/package.json', 'utf8')).version")
           fallback_tag="@lzehrung/codegraph-js-fallback@$fallback_version"
+          tarball=$(npm pack --ignore-scripts --json | jq -r '.[0].filename')
           release_notes=$(mktemp)
           {
             echo "Published packages:"
             echo ""
+            echo "- \`$root_package_tag\`"
             echo "- \`$native_tag\`"
             echo "- \`$fallback_tag\`"
           } > "$release_notes"
-          if gh release view "$native_tag" >/dev/null 2>&1; then
-            gh release edit "$native_tag" --title "$native_tag" --notes-file "$release_notes"
+          if gh release view "$root_tag" >/dev/null 2>&1; then
+            gh release edit "$root_tag" --title "$root_tag" --notes-file "$release_notes"
+            gh release upload "$root_tag" "$tarball" --clobber
           else
-            gh release create "$native_tag" --title "$native_tag" --notes-file "$release_notes"
+            gh release create "$root_tag" "$tarball" --title "$root_tag" --notes-file "$release_notes"
           fi

@@ -470,6 +470,6 @@ npm run publish:resume
 
 Use `--package root`, `--package native`, `--package js-fallback`, or a full package name when you need to force a specific package.
 
-For GitHub-driven root releases, use the manual `release-root` Actions workflow with `patch`, `minor`, or `major`. It publishes the root package, then creates or updates the matching `vX.Y.Z` GitHub Release with the packed root tarball asset. For native plus JS fallback releases, use the manual `release` Actions workflow. It publishes both packages, pushes their package-scoped tags, then creates or updates the GitHub Release for the native package tag. These workflows refuse reruns on an already-tagged release commit because fresh Actions runners cannot reconstruct the local `publish:resume` state.
+For GitHub-driven releases, use the manual `release` Actions workflow with `patch`, `minor`, or `major`. It publishes the root, native, and JS fallback packages together, pushes their tags, then creates or updates the overall `vX.Y.Z` GitHub Release with the packed root tarball asset. The workflow refuses reruns on an already-tagged release commit because fresh Actions runners cannot reconstruct the local `publish:resume` state.
 
 For the detailed release flow, native artifact staging, and tag behavior, see [PUBLISHING.md](./PUBLISHING.md).

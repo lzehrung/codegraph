@@ -608,7 +608,7 @@ void onImpactItemStreaming;
     expect(skillDoc).toContain("@lzehrung/codegraph-js-fallback");
   });
 
-  it("keeps the release workflow building every supported native target before publishing native and fallback packages", () => {
+  it("keeps the release workflow publishing the root, native, and fallback packages together", () => {
     const workflow = readText(".github/workflows/release.yml");
     const runCommands = workflowRunCommands(workflow);
     const buildCommand = runCommands.find((command) => command.includes("cli.js build --platform"));
@@ -623,7 +623,7 @@ void onImpactItemStreaming;
     const createDirsIndex = workflow.indexOf("npm run native:create-npm-dirs");
     const cleanupArtifactsIndex = workflow.indexOf("rm -rf native-artifacts");
     const publishIndex = workflow.indexOf(
-      "npm run publish:${{ inputs.release_type }} -- --package native --package js-fallback",
+      "npm run publish:${{ inputs.release_type }} -- --package root --package native --package js-fallback",
     );
     const releaseIndex = workflow.indexOf("Create or update GitHub Release");
     const nativePackage = readJson("packages/codegraph-native/package.json");
@@ -650,14 +650,17 @@ void onImpactItemStreaming;
     expect(workflow).toContain('test -e "/lib/${host_triplet}/libgcc_s.so.1"');
     expect(workflow).toContain("LIBRARY_PATH=/usr/lib/${host_triplet}:/lib/${host_triplet}:${LIBRARY_PATH:-}");
     expect(workflow).toContain("RUSTFLAGS=-C link-arg=-L/usr/lib/${host_triplet}");
+    expect(workflow).toContain('bumpVersion(rootPackage.version, "${{ inputs.release_type }}")');
     expect(workflow).toContain('bumpVersion(nativePackage.version, "${{ inputs.release_type }}")');
-    expect(workflow).toContain("needs.plan-release.outputs.version");
-    expect(workflow).toContain('hasTagForPackageVersion("@lzehrung/codegraph-native", version, tagNames)');
+    expect(workflow).toContain("needs.plan-release.outputs.native_version");
+    expect(workflow).toContain('hasTagForPackageVersion("@lzehrung/codegraph", version, tagNames)');
     expect(workflow).toContain("NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN || secrets.GITHUB_TOKEN }}");
+    expect(workflow).toContain('root_tag="v$root_version"');
+    expect(workflow).toContain("root_package_tag=\"@lzehrung/codegraph@$root_version\"");
     expect(workflow).toContain("native_tag=\"@lzehrung/codegraph-native@$native_version\"");
     expect(workflow).toContain("fallback_tag=\"@lzehrung/codegraph-js-fallback@$fallback_version\"");
-    expect(workflow).toContain('gh release create "$native_tag" --title "$native_tag" --notes-file "$release_notes"');
-    expect(workflow).toContain('gh release edit "$native_tag" --title "$native_tag" --notes-file "$release_notes"');
+    expect(workflow).toContain('gh release create "$root_tag" "$tarball" --title "$root_tag" --notes-file "$release_notes"');
+    expect(workflow).toContain('gh release edit "$root_tag" --title "$root_tag" --notes-file "$release_notes"');
     expect(installIndex).toBeGreaterThan(-1);
     expect(rerunGuardIndex).toBeGreaterThan(versionIndex);
     expect(publishInstallIndex).toBeGreaterThan(rerunGuardIndex);
@@ -671,13 +674,12 @@ void onImpactItemStreaming;
     expect(publishIndex).toBeGreaterThan(cleanupArtifactsIndex);
     expect(publishIndex).toBeGreaterThan(publishRebuildIndex);
     expect(releaseIndex).toBeGreaterThan(publishIndex);
-    expect(workflow).toContain("npm run publish:${{ inputs.release_type }} -- --package native --package js-fallback");
+    expect(workflow).toContain("npm run publish:${{ inputs.release_type }} -- --package root --package native --package js-fallback");
   });
 
   it("keeps GitHub-owned actions off deprecated Node 20 action majors", () => {
     const workflowPaths = [
       ".github/workflows/on-demand-ci.yml",
-      ".github/workflows/release-root.yml",
       ".github/workflows/release.yml",
     ];
 

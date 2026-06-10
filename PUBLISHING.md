@@ -44,21 +44,15 @@ npm run release:minor -- --package @lzehrung/codegraph-native
 
 ## GitHub Release Workflows
 
-Use the `release-root` GitHub Actions workflow when you want GitHub to cut a root package release end-to-end.
-
-- Trigger it manually with `release_type=patch|minor|major`.
-- The workflow runs `npm run publish:<release_type> -- --package root`.
-- On success it creates or updates the matching `vX.Y.Z` GitHub Release and uploads the root `.tgz` asset.
-- The workflow refuses reruns from a commit that is already tagged for the current root version. A fresh Actions runner cannot reconstruct the dirty local resume state that `publish:resume` expects.
-
-Use the `release` GitHub Actions workflow for native and JS fallback package releases.
+Use the `release` GitHub Actions workflow when you want GitHub to cut a complete release.
 
 - Trigger it manually with `release_type=patch|minor|major`.
 - The workflow builds every target declared in `packages/codegraph-native/package.json` `napi.targets`.
-- It collects the per-target npm package artifacts, then runs `npm run publish:<release_type> -- --package native --package js-fallback`.
-- The publish step still verifies that every supported target artifact is present before publishing target packages, the native meta package, or the JS fallback package.
-- On success it creates or updates the GitHub Release for the native package tag and lists both published package tags in the notes.
-- By default the workflow uses `GITHUB_TOKEN` for GitHub Packages. If an existing package is not linked to this repository or does not grant this repository write access, create a `PACKAGE_PUBLISH_TOKEN` Actions secret from an account or fine-grained token that can write the `@lzehrung` packages; the workflow will use it for npm publishing.
+- It collects the per-target npm package artifacts, then runs `npm run publish:<release_type> -- --package root --package native --package js-fallback`.
+- The publish step verifies that every supported native target artifact is present before publishing target packages, the native meta package, the JS fallback package, and the root package.
+- On success it pushes all package tags, creates or updates the overall `vX.Y.Z` GitHub Release for the root package version, and uploads the root `.tgz` asset.
+- The workflow refuses reruns from a commit that is already tagged for the current root version. A fresh Actions runner cannot reconstruct the dirty local resume state that `publish:resume` expects.
+- By default the workflow uses `GITHUB_TOKEN` for GitHub Packages. If an existing package is not linked to this repository or does not grant this repository write access, create a `PACKAGE_PUBLISH_TOKEN` Actions secret from a classic PAT that can write the `@lzehrung` packages; the workflow will use it for npm publishing.
 
 ## Package Roles
 
