@@ -445,6 +445,12 @@ describe("package metadata", () => {
     expect(Object.keys(optionalDependencies)).toEqual([]);
     expect(exportsField).not.toHaveProperty("./js-fallback");
   });
+  it("ships the native package runtime helper alongside the entrypoint", () => {
+    const nativePackage = readJson("packages/codegraph-native/package.json");
+    const files = Array.isArray(nativePackage.files) ? nativePackage.files : [];
+
+    expect(files).toEqual(["index.js", "index.d.ts", "platform.js"]);
+  });
 
   it("keeps JS fallback grammars in the separate opt-in package", () => {
     const fallbackPackage = readJson("packages/codegraph-js-fallback/package.json");

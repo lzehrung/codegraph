@@ -9,19 +9,19 @@ This plan captures follow-up work for the `codegraph duplicates` command after a
 - The command is JSON-only, so exploratory duplicate triage requires post-processing even when the operator only needs a shortlist.
 - High-confidence output is dominated by acceptable repetition unless the caller already knows which directories and file classes to exclude.
 
-## Priority 1: Clarify Discovery and Exclusion Semantics
+## Completed in PR #125: Clarify Discovery and Exclusion Semantics
 
-Why this matters:
+Why this mattered:
 
 - Duplicate cleanup is only useful when scan scope is easy to control.
-- Confusing root-vs-glob behavior creates avoidable retries and mistrust.
+- Confusing root-vs-glob behavior created avoidable retries and mistrust.
 
-Implementation outline:
+Delivered:
 
-- [ ] Document shared discovery flags directly in `duplicates --help`.
-- [ ] Document that positional arguments are scan roots, not globs.
-- [ ] Fail early with a targeted error when a positional include root looks like a glob pattern.
-- [ ] Add CLI docs and skill examples that repeat `--ignore-glob` per pattern.
+- [x] Documented shared discovery flags directly in `duplicates --help`.
+- [x] Documented that positional arguments are scan roots, not globs.
+- [x] Added an early targeted error when a positional include root looks like a glob pattern.
+- [x] Added CLI docs and skill examples that repeat `--ignore-glob` per pattern.
 
 ## Priority 2: Improve Human Triage Output
 
@@ -51,7 +51,7 @@ Implementation outline:
 
 ## Validation Checklist
 
-- [ ] `node ./dist/cli.js duplicates --help`
-- [ ] `node ./dist/cli.js duplicates --root . ./src --min-confidence medium`
-- [ ] `node ./dist/cli.js duplicates --root . ./src --ignore-glob "tests/**" --ignore-glob "docs/**"`
-- [ ] A misuse case with a glob-looking positional root should fail with a targeted message.
+- [x] `node ./dist/cli.js duplicates --help`
+- [x] `node ./dist/cli.js duplicates --root . ./src --min-confidence medium`
+- [x] `node ./dist/cli.js duplicates --root . ./src --ignore-glob "tests/**" --ignore-glob "docs/**"`
+- [x] A misuse case with a glob-looking positional root fails with a targeted message.
