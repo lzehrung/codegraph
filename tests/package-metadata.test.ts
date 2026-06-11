@@ -656,10 +656,12 @@ void onImpactItemStreaming;
     expect(workflow).toContain('hasTagForPackageVersion("@lzehrung/codegraph", version, tagNames)');
     expect(workflow).toContain("NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN || secrets.GITHUB_TOKEN }}");
     expect(workflow).toContain('root_tag="v$root_version"');
-    expect(workflow).toContain("root_package_tag=\"@lzehrung/codegraph@$root_version\"");
-    expect(workflow).toContain("native_tag=\"@lzehrung/codegraph-native@$native_version\"");
-    expect(workflow).toContain("fallback_tag=\"@lzehrung/codegraph-js-fallback@$fallback_version\"");
-    expect(workflow).toContain('gh release create "$root_tag" "$tarball" --title "$root_tag" --notes-file "$release_notes"');
+    expect(workflow).toContain('root_package_tag="@lzehrung/codegraph@$root_version"');
+    expect(workflow).toContain('native_tag="@lzehrung/codegraph-native@$native_version"');
+    expect(workflow).toContain('fallback_tag="@lzehrung/codegraph-js-fallback@$fallback_version"');
+    expect(workflow).toContain(
+      'gh release create "$root_tag" "$tarball" --title "$root_tag" --notes-file "$release_notes"',
+    );
     expect(workflow).toContain('gh release edit "$root_tag" --title "$root_tag" --notes-file "$release_notes"');
     expect(installIndex).toBeGreaterThan(-1);
     expect(rerunGuardIndex).toBeGreaterThan(versionIndex);
@@ -674,14 +676,13 @@ void onImpactItemStreaming;
     expect(publishIndex).toBeGreaterThan(cleanupArtifactsIndex);
     expect(publishIndex).toBeGreaterThan(publishRebuildIndex);
     expect(releaseIndex).toBeGreaterThan(publishIndex);
-    expect(workflow).toContain("npm run publish:${{ inputs.release_type }} -- --package root --package native --package js-fallback");
+    expect(workflow).toContain(
+      "npm run publish:${{ inputs.release_type }} -- --package root --package native --package js-fallback",
+    );
   });
 
   it("keeps GitHub-owned actions off deprecated Node 20 action majors", () => {
-    const workflowPaths = [
-      ".github/workflows/on-demand-ci.yml",
-      ".github/workflows/release.yml",
-    ];
+    const workflowPaths = [".github/workflows/on-demand-ci.yml", ".github/workflows/release.yml"];
 
     for (const workflowPath of workflowPaths) {
       const workflow = readText(workflowPath);

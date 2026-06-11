@@ -1,3 +1,4 @@
+import { collectLineStartOffsets } from "../util/lines.js";
 import { normalizePath } from "../util/paths.js";
 import { classifySqlFile } from "./classifySqlFile.js";
 import {
@@ -52,11 +53,7 @@ const SQL_KEYWORDS = new Set([
 ]);
 
 function lineStartsFor(source: string): number[] {
-  const lineStarts = [0];
-  for (let index = 0; index < source.length; index += 1) {
-    if (source[index] === "\n") lineStarts.push(index + 1);
-  }
-  return lineStarts;
+  return collectLineStartOffsets(source);
 }
 
 function positionAt(

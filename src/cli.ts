@@ -60,6 +60,17 @@ function normalizeEntrypointPath(filePath: string): string {
     return resolvedPath;
   }
 }
+function looksLikeGlobPattern(value: string): boolean {
+  return /[*?[\]{}]/.test(value);
+}
+
+function assertValidIncludeRoots(command: string, includeRoots: readonly string[]): void {
+  const globLikeRoot = includeRoots.find(looksLikeGlobPattern);
+  if (!globLikeRoot) return;
+  throw new Error(
+    `Invalid ${command} path "${globLikeRoot}". Positional paths are scan roots, not glob patterns. Repeat --ignore-glob or --include-glob for each glob filter.`,
+  );
+}
 
 function isDirectCliExecution(importMetaUrl: string, argv: string[] = process.argv): boolean {
   const argv1 = argv[1];
@@ -73,7 +84,6 @@ function isDirectCliExecution(importMetaUrl: string, argv: string[] = process.ar
   }
   return modulePath === invokedPath;
 }
-
 function parseNativeRuntimeMode(value: string | undefined): NativeRuntimeMode {
   if (value === undefined) return "auto";
   if (value === "auto" || value === "on" || value === "off") {
@@ -278,6 +288,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       includeRoots = parsed.positionals;
     }
   }
+  assertValidIncludeRoots(cmd, includeRoots);
   const includeRootsAbs = includeRoots.map((r) => normalizePath(resolveFilePathFromRoot(projectRootFs, r)));
 
   const isUnderIncludeRoots = (filePath: string): boolean => {

@@ -206,11 +206,12 @@ export function normalizeSecondRows(rows: Array<{ count: number; price: number }
     await writeProjectFile(root, "src/d.ts", secondSource);
 
     const index = await buildProjectIndex(root);
-    const contexts = await findDuplicateContexts(
-      index,
-      [{ file: "src/a.ts" }, { file: "src/c.ts" }],
-      { minConfidence: "high", includeSameFile: true, limit: 5, maxPairs: 1 },
-    );
+    const contexts = await findDuplicateContexts(index, [{ file: "src/a.ts" }, { file: "src/c.ts" }], {
+      minConfidence: "high",
+      includeSameFile: true,
+      limit: 5,
+      maxPairs: 1,
+    });
 
     expect(contexts).toHaveLength(2);
     expect(contexts.every((context) => context.stats.comparedPairs <= 1)).toBe(true);
@@ -236,7 +237,9 @@ export function normalizeSecondRows(rows: Array<{ count: number; price: number }
     const nativeResult = await findDuplicates(nativeIndex, { includeSmall: true, minConfidence: "high", limit: 5 });
     const fallbackResult = await findDuplicates(fallbackIndex, { includeSmall: true, minConfidence: "high", limit: 5 });
 
-    expect(nativeResult.groups.map((group) => group.cloneType)).toEqual(fallbackResult.groups.map((group) => group.cloneType));
+    expect(nativeResult.groups.map((group) => group.cloneType)).toEqual(
+      fallbackResult.groups.map((group) => group.cloneType),
+    );
     expect(nativeResult.groups.map((group) => group.confidence)).toEqual(
       fallbackResult.groups.map((group) => group.confidence),
     );
@@ -1155,6 +1158,59 @@ export function sharedClone(rows) {
     expect(parsed.groups?.[0]?.primaryLeft?.file).toBe("configs/a.json");
     expect(parsed.groups?.[0]?.primaryRight?.file).toBe("configs/b.json");
     expect(parsed.groups?.[0]?.primaryLeft?.tokenCount).toBeGreaterThan(40);
+  });
+  test("duplicates CLI honors repeated ignore-glob filters", async () => {
+    const root = await makeTempProject();
+    const duplicateSource = `
+export function summarizeOrders(rows: number[]) {
+  const output: number[] = [];
+  for (const row of rows) output.push(row * 2 + 1);
+  return output;
+}
+`;
+    const ignoredSource = `
+export function ignoredOrders(rows: number[]) {
+  const output: number[] = [];
+  for (const row of rows) output.push(row * 2 + 1);
+  return output;
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", duplicateSource);
+    await writeProjectFile(root, "src/b.ts", duplicateSource);
+    await writeProjectFile(root, "tests/c.ts", ignoredSource);
+    await writeProjectFile(root, "docs/d.ts", ignoredSource);
+
+    const result = await captureCli(
+      ["duplicates", "--root", ".", "src", "--ignore-glob", "tests/**", "--ignore-glob", "docs/**", "--include-small"],
+      root,
+    );
+    const parsed = JSON.parse(result.stdout) as {
+      groups?: Array<{ primaryLeft?: { file?: string }; primaryRight?: { file?: string } }>;
+    };
+
+    expect(result.exitCode).toBeUndefined();
+    expect(parsed.groups?.length).toBeGreaterThan(0);
+    for (const group of parsed.groups ?? []) {
+      expect(group.primaryLeft?.file?.startsWith("src/")).toBeTruthy();
+      expect(group.primaryRight?.file?.startsWith("src/")).toBeTruthy();
+    }
+  });
+
+  test("duplicates CLI rejects glob-like positional scan roots with guidance", async () => {
+    const root = await makeTempProject();
+    await writeProjectFile(root, "src/a.ts", "export const a = 1;\n");
+
+    await expect(
+      runCli(["duplicates", "--root", ".", "src", "--ignore-glob", "tests/**", "docs/**"], {
+        cwd: () => root,
+        stdout: () => {},
+        stderr: () => {},
+        exit: (code) => {
+          throw new Error(`cli exit ${code}`);
+        },
+      }),
+    ).rejects.toThrow('Invalid duplicates path "docs/**". Positional paths are scan roots, not glob patterns.');
   });
 
   test("accepts project-relative file filters", async () => {

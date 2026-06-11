@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { nativeTargetSuffixForPlatform } from "../packages/codegraph-native/platform.js";
 
 const rootDir = process.cwd();
 const nativeRoot = path.join(rootDir, "packages", "codegraph-native");
@@ -13,21 +14,8 @@ function isMusl() {
 }
 
 function currentTargetSuffix() {
-  const { platform, arch } = process;
-  if (platform === "win32") {
-    if (arch === "x64") return "win32-x64-msvc";
-    if (arch === "arm64") return "win32-arm64-msvc";
-  }
-  if (platform === "darwin") {
-    if (arch === "x64") return "darwin-x64";
-    if (arch === "arm64") return "darwin-arm64";
-  }
-  if (platform === "linux") {
-    const abi = isMusl() ? "musl" : "gnu";
-    if (arch === "x64") return `linux-x64-${abi}`;
-    if (arch === "arm64") return `linux-arm64-${abi}`;
-  }
-  return null;
+  const linuxAbi = isMusl() ? "musl" : "gnu";
+  return nativeTargetSuffixForPlatform(process.platform, process.arch, linuxAbi);
 }
 
 const suffix = currentTargetSuffix();

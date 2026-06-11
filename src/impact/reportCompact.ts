@@ -1,5 +1,4 @@
 import type { FileId } from "../types.js";
-import { type ProjectIndex } from "../indexer/types.js";
 import {
   buildOptionalExportSummary,
   buildOptionalReexportChains,
@@ -8,50 +7,22 @@ import {
   mapSuggestions,
   mapSurfaceArea,
 } from "./reportShared.js";
+import type { ImpactReportPartsBase } from "./reportParts.js";
 import { IMPACT_SCHEMA_VERSION } from "./types.js";
 import type {
   ChangedSymbol,
   CompactImpactCluster,
   CompactImpactReport,
   CompactImpactSurfaceArea,
-  ExportSummaryEntry,
-  FileChange,
   ImpactCluster,
   ImpactCycle,
   ImpactItem,
   ImpactReason,
   ImpactSuggestion,
   ImpactSurfaceArea,
-  ImpactTopItem,
-  ReexportChainEntry,
 } from "./types.js";
 
-export type CompactImpactReportParts = {
-  changedFiles: Array<{
-    file: FileId;
-    kind?: FileChange["kind"];
-    oldFile?: FileId;
-    similarityIndex?: number;
-    hunks: Array<{ start: number; end: number }>;
-  }>;
-  changedSymbols: ChangedSymbol[];
-  impactedItems: ImpactItem[];
-  suggestions: ImpactSuggestion[];
-  exportSummary: ExportSummaryEntry[];
-  reexportChains: { chains: ReexportChainEntry[] } | undefined;
-  topImpacts: ImpactTopItem[];
-  surfaceArea: ImpactSurfaceArea;
-  clusters: ImpactCluster[];
-  cycles: ImpactCycle[];
-  fileEdges: Array<{
-    from: FileId;
-    to: FileId;
-    typeOnly?: boolean | undefined;
-  }>;
-  symbolEdges: Array<{ from: number; to: number; label: string }>;
-  projectFiles: ProjectIndex["projectFiles"];
-  displayFile: (file: FileId) => FileId;
-};
+export type CompactImpactReportParts = ImpactReportPartsBase;
 
 export function buildCompactImpactReport(parts: CompactImpactReportParts): CompactImpactReport {
   const context = buildCompactSerializerContext(parts);

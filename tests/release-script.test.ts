@@ -95,7 +95,9 @@ describe("release script helpers", () => {
     expect(releaseScript).toContain("assertCompleteNativeTargetArtifacts(nativeRootPath");
     expect(releaseScript).toContain("if (!rootVersion && nativeVersion)");
     expect(releaseScript).toContain('const intendedVersion = versionPlan.get("root") ?? sourceManifest.version');
-    expect(releaseScript).toContain('const nativeVersion = versionPlan.get("native") ?? readJson(nativePackagePath).version');
+    expect(releaseScript).toContain(
+      'const nativeVersion = versionPlan.get("native") ?? readJson(nativePackagePath).version',
+    );
     expect(releaseScript).toContain("restoreRootPackageManifest(sourceManifest, intendedVersion, nativeVersion)");
     expect(fs.readFileSync("scripts/publish-native-targets.mjs", "utf8")).toContain(
       "Skipping existing native target package",

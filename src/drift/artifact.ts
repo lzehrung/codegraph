@@ -2,10 +2,10 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { getHotspots } from "../graphs/hotspots.js";
 import { findDetailedCycles, getUnresolvedImports, sortDetailedCycles } from "../graphs/queries.js";
-import { supportForFile } from "../languages.js";
 import type { Edge, Graph } from "../types.js";
 import { isPlainRecord } from "../util/guards.js";
 import { normalizePath } from "../util/paths.js";
+import { countFilesByLanguage } from "./languages.js";
 import type { ArchitectureGraphEdge, ArchitectureSnapshot, ArchitectureUnresolvedImport } from "./types.js";
 
 interface ArtifactManifest {
@@ -111,22 +111,6 @@ function parseGraphJson(value: unknown): PortableGraphJson {
   };
 }
 
-function languageId(id: string): string {
-  if (id === "ts") return "typescript";
-  return id;
-}
-
-function languageCounts(files: readonly string[]): Record<string, number> {
-  const counts: Record<string, number> = {};
-  for (const file of files) {
-    const support = supportForFile(file);
-    if (!support) continue;
-    const id = languageId(support.id);
-    counts[id] = (counts[id] ?? 0) + 1;
-  }
-  return Object.fromEntries(Object.entries(counts).sort(([left], [right]) => left.localeCompare(right)));
-}
-
 function edgeTarget(edge: Edge): string {
   if (edge.to.type === "file") return edge.to.path;
   return `external:${edge.to.name}`;
@@ -165,7 +149,7 @@ export async function loadArchitectureSnapshotFromArtifact(outDirInput: string):
   return {
     schemaVersion: 1,
     root: outDir,
-    files: { total: graphJson.graph.files.length, byLanguage: languageCounts(graphJson.graph.files) },
+    files: { total: graphJson.graph.files.length, byLanguage: countFilesByLanguage(graphJson.graph.files) },
     hotspots: getHotspots(graph)
       .map((entry) => ({ file: entry.file, fanIn: entry.fanIn, fanOut: entry.fanOut, score: entry.score }))
       .sort((left, right) => left.file.localeCompare(right.file)),
