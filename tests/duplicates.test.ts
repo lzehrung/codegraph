@@ -1179,10 +1179,10 @@ export function ignoredOrders(rows: number[]) {
     await writeProjectFile(root, "src/a.ts", duplicateSource);
     await writeProjectFile(root, "src/b.ts", duplicateSource);
     await writeProjectFile(root, "tests/c.ts", ignoredSource);
-    await writeProjectFile(root, "docs/d.ts", ignoredSource);
+    await writeProjectFile(root, "docs/dummy.ts", ignoredSource);
 
     const result = await captureCli(
-      ["duplicates", "--root", ".", "src", "--ignore-glob", "tests/**", "--ignore-glob", "docs/**", "--include-small"],
+      ["duplicates", "--root", ".", "--ignore-glob", "tests/**", "--ignore-glob", "docs/**", "--include-small"],
       root,
     );
     const parsed = JSON.parse(result.stdout) as {
