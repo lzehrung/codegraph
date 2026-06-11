@@ -1230,8 +1230,8 @@ export function formatUsage(value: string) {
 
     expect(result.exitCode).toBeUndefined();
     expect(parsed.groups?.length).toBeGreaterThan(0);
-    expect(parsed.groups?.[0]?.primaryLeft?.file.startsWith("src/app/[slug]/")).toBeTruthy();
-    expect(parsed.groups?.[0]?.primaryRight?.file.startsWith("src/app/[slug]/")).toBeTruthy();
+    expect(parsed.groups?.[0]?.primaryLeft?.file?.startsWith("src/app/[slug]/")).toBeTruthy();
+    expect(parsed.groups?.[0]?.primaryRight?.file?.startsWith("src/app/[slug]/")).toBeTruthy();
   });
   test("duplicates CLI rejects brace glob positional roots with guidance", async () => {
     const root = await makeTempProject();
@@ -1453,10 +1453,10 @@ export interface NormalizedModeMap {
     expect(actionabilityResult.exitCode).toBeUndefined();
     expect(defaultParsed.groups).toHaveLength(1);
     expect(actionabilityParsed.groups).toHaveLength(1);
-    expect(defaultParsed.groups?.[0]?.primaryLeft?.file.startsWith("types/")).toBeTruthy();
-    expect(defaultParsed.groups?.[0]?.primaryRight?.file.startsWith("types/")).toBeTruthy();
-    expect(actionabilityParsed.groups?.[0]?.primaryLeft?.file.startsWith("src/")).toBeTruthy();
-    expect(actionabilityParsed.groups?.[0]?.primaryRight?.file.startsWith("src/")).toBeTruthy();
+    expect(defaultParsed.groups?.[0]?.primaryLeft?.file?.startsWith("types/")).toBeTruthy();
+    expect(defaultParsed.groups?.[0]?.primaryRight?.file?.startsWith("types/")).toBeTruthy();
+    expect(actionabilityParsed.groups?.[0]?.primaryLeft?.file?.startsWith("src/")).toBeTruthy();
+    expect(actionabilityParsed.groups?.[0]?.primaryRight?.file?.startsWith("src/")).toBeTruthy();
   });
   test("duplicates CLI actionability sort keeps omitted group alias counts aligned", async () => {
     const root = await makeTempProject();
