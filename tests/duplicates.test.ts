@@ -1458,7 +1458,7 @@ export interface NormalizedModeMap {
     expect(actionabilityParsed.groups?.[0]?.primaryLeft?.file.startsWith("src/")).toBeTruthy();
     expect(actionabilityParsed.groups?.[0]?.primaryRight?.file.startsWith("src/")).toBeTruthy();
   });
-  test("duplicates CLI actionability sort updates omitted raw suggestion counts", async () => {
+  test("duplicates CLI actionability sort keeps omitted group alias counts aligned", async () => {
     const root = await makeTempProject();
     const sourceDuplicateA = `
 export function summarizeOrders(rows: number[]) {
@@ -1484,22 +1484,27 @@ export interface NormalizedModeMap {
 `;
 
     await writeProjectFile(root, "src/a.ts", sourceDuplicateA);
+
     await writeProjectFile(root, "src/b.ts", sourceDuplicateB);
     await writeProjectFile(root, "types/a.d.ts", declarationDuplicate);
     await writeProjectFile(root, "types/b.d.ts", declarationDuplicate);
-
     const result = await captureCli(
       ["duplicates", "--root", ".", "--sort", "actionability", "--include-small", "--limit", "1"],
       root,
     );
+    const defaultResult = await captureCli(["duplicates", "--root", ".", "--include-small", "--limit", "1"], root);
+    const defaultParsed = JSON.parse(defaultResult.stdout) as {
+      omittedCounts?: { groups?: number; suggestions?: number; rawSuggestions?: number };
+    };
     const parsed = JSON.parse(result.stdout) as {
       omittedCounts?: { groups?: number; suggestions?: number; rawSuggestions?: number };
     };
 
+    expect(defaultResult.exitCode).toBeUndefined();
     expect(result.exitCode).toBeUndefined();
     expect(parsed.omittedCounts?.groups).toBeGreaterThan(0);
-    expect(parsed.omittedCounts?.suggestions).toBeGreaterThan(0);
-    expect(parsed.omittedCounts?.rawSuggestions).toBeGreaterThan(0);
+    expect(parsed.omittedCounts?.suggestions).toBe(parsed.omittedCounts?.groups);
+    expect(parsed.omittedCounts?.rawSuggestions).toBe(defaultParsed.omittedCounts?.rawSuggestions);
   });
 
   test("duplicates CLI pretty output labels declaration-only groups", async () => {

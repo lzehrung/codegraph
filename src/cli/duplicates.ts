@@ -134,9 +134,7 @@ function actionabilityScore(group: DuplicateGroup): number {
     }
     if (family === "declaration-mirror") {
       score -= 40;
-      continue;
     }
-    score -= 20;
   }
   return score;
 }
@@ -160,7 +158,6 @@ function formatUnitLabel(unit: DuplicateUnitRef): string {
 function formatOmittedCounts(result: DuplicateDetectionResult): string | undefined {
   const entries: string[] = [];
   if (result.omittedCounts.groups) entries.push(`groups=${result.omittedCounts.groups}`);
-  if (result.omittedCounts.suggestions) entries.push(`suggestions=${result.omittedCounts.suggestions}`);
   if (result.omittedCounts.rawSuggestions) entries.push(`rawSuggestions=${result.omittedCounts.rawSuggestions}`);
   if (result.omittedCounts.oversizedBuckets) entries.push(`oversizedBuckets=${result.omittedCounts.oversizedBuckets}`);
   if (result.omittedCounts.belowThresholdUnits)
@@ -233,15 +230,13 @@ function sortedResult(
 
   const omittedGroups = groups.slice(requestedLimit);
   const omittedBySort = omittedGroups.length;
-  const omittedSuggestions = omittedGroups.reduce((count, group) => count + group.rawPairCount, 0);
   return {
     ...result,
     groups: groups.slice(0, requestedLimit),
     omittedCounts: {
       ...result.omittedCounts,
       groups: result.omittedCounts.groups + omittedBySort,
-      suggestions: result.omittedCounts.suggestions + omittedSuggestions,
-      rawSuggestions: result.omittedCounts.rawSuggestions + omittedSuggestions,
+      suggestions: result.omittedCounts.suggestions + omittedBySort,
     },
   };
 }
