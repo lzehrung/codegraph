@@ -993,7 +993,7 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
       `codegraph graph --root "${normalize(tmpDir)}" "${normalize(srcDir)}" --json --symbols-detailed --compact-json`,
     );
     expect(report.recommendedCommands).toContain(
-      `codegraph duplicates --root "${normalize(tmpDir)}" "${normalize(srcDir)}" --min-confidence medium --limit 20 --include-same-file`,
+      `codegraph duplicates --root "${normalize(tmpDir)}" "${normalize(srcDir)}" --json --min-confidence medium --limit 20 --include-same-file`,
     );
     expect(report.recommendedCommands).toContain(
       `codegraph doctor "${normalize(path.join(tmpDir, ".codegraph-cache", "index-v1"))}"`,

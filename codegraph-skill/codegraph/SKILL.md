@@ -245,7 +245,7 @@ Prefer impact `--pretty` first when the user asks what a change can break, what 
 - Missing hints are normal for unsupported, ambiguous, overloaded, spread, or unresolved callsites.
 - Pretty impact and review summaries include high-confidence exact or renamed duplicate leads by default. Git copy or rename similarity metadata can boost scoped duplicate leads when both files exist in the indexed snapshot. Use `--duplicates off|changed|impacted|all` to control scope.
 - Review JSON adds bounded `duplicate-sibling` tasks when changed ranges overlap high-confidence duplicate groups; treat them as sibling-check prompts.
-- For copied-code or refactor-risk questions, follow impact with `codegraph duplicates --root . ./src --min-confidence medium --limit 20`; treat full duplicate groups as leads, not defects.
+- For copied-code or refactor-risk questions, follow impact with `codegraph duplicates --root . ./src --json --min-confidence medium --limit 20`; treat full duplicate groups as leads, not defects.
 
 In summary output, treat high-confidence candidate tests as first regression targets and medium-confidence tests as likely file-level coverage; low-confidence pattern matches are breadth hints only.
 
@@ -270,9 +270,9 @@ For git-provider impact and git-scoped review/index/graph commands, `WORKTREE` c
 - Duplicate and near-duplicate code:
   `codegraph duplicates --root . ./src --min-confidence medium`
   Covers indexed symbols, semantic chunks, text chunks, token fingerprints, and AST shape hashes when parser context is available.
-  Reports grouped findings by default so overlapping symbol/chunk variants collapse into one clone.
-  JSON output uses duplicate `schemaVersion: 2`.
-  Pretty output is available with `--pretty` for one-line triage summaries, including heuristic family hints derived from the displayed duplicate pair.
+  Pretty output is the default because duplicate triage is usually an inspection workflow for both humans and agents.
+  Use `--json` for the stable machine contract; grouped duplicate JSON uses schemaVersion 2.
+  Pretty output includes one-line triage summaries with heuristic family hints derived from the displayed duplicate pair.
   Metrics can include `astShapeEqual` and `gitSimilarity` when those signals are available. Git copy or rename similarity must be at least 80 to boost duplicate evidence.
   Bounds per-group variants by default and reports hidden evidence with counts.
   A single positional directory becomes the project root unless `--root` is set.
@@ -280,7 +280,8 @@ For git-provider impact and git-scoped review/index/graph commands, `WORKTREE` c
   Shared discovery flags also apply: `--include-glob`, `--ignore-glob`, and `--no-gitignore`.
   Repeat `--ignore-glob` or `--include-glob` once per pattern, for example:
   `codegraph duplicates --root . ./src --ignore-glob "tests/**" --ignore-glob "docs/**"`
-  Use `--sort actionability` to rank likely cleanup wins above declaration mirrors and language-parity definitions based on grouped visible evidence from a bounded candidate window. Narrow CLI boilerplate hints only apply to small `src/cli/` helpers with presentation-oriented names such as `format*` or `render*`. `--pretty` defaults to actionability ordering; JSON defaults to similarity ordering.
+  Pretty mode defaults to `--sort actionability`; JSON defaults to similarity ordering unless `--sort` is explicit.
+  Narrow CLI boilerplate hints only apply to small `src/cli/` helpers with presentation-oriented names such as `format*` or `render*`.
   Use `--include-small` for tiny helpers.
   Use `--include-same-file` for local clone cleanup.
   Use `--raw-pairs` to include low-level scored unit-pair suggestions in similarity-ranked JSON output. `--pretty --raw-pairs` and `--sort actionability --raw-pairs` are rejected.

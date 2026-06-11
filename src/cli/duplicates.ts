@@ -245,14 +245,17 @@ export async function handleDuplicatesCommand(context: DuplicatesCommandContext)
   try {
     const jsonOutput = context.hasFlag("--json");
     const prettyOutput = context.hasFlag("--pretty");
+    const rawPairsOutput = context.hasFlag("--raw-pairs");
     if (jsonOutput && prettyOutput) {
       throw new Error("Invalid flag combination: choose either --json or --pretty.");
     }
-    if (prettyOutput && context.hasFlag("--raw-pairs")) {
+    if (prettyOutput && rawPairsOutput) {
       throw new Error("Invalid flag combination: --raw-pairs is only supported with similarity-ranked JSON output.");
     }
-    const sortMode = parseSortOption(context.getOpt("--sort")) ?? (prettyOutput ? "actionability" : "similarity");
-    if (sortMode === "actionability" && context.hasFlag("--raw-pairs")) {
+
+    const renderPretty = prettyOutput || (!jsonOutput && !rawPairsOutput);
+    const sortMode = parseSortOption(context.getOpt("--sort")) ?? (renderPretty ? "actionability" : "similarity");
+    if (sortMode === "actionability" && rawPairsOutput) {
       throw new Error("Invalid flag combination: --raw-pairs is only supported with similarity-ranked JSON output.");
     }
 
@@ -269,7 +272,7 @@ export async function handleDuplicatesCommand(context: DuplicatesCommandContext)
     const index = await buildProjectIndexFromFiles(context.projectRootFs, context.files, context.indexOptions);
     const result = await findDuplicates(index, options);
     const sorted = sortedResult(result, sortMode, requestedLimit);
-    if (!prettyOutput) {
+    if (!renderPretty) {
       context.writeJSONLine(sorted);
       return;
     }
