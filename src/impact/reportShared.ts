@@ -1,5 +1,12 @@
 import type { FileId } from "../types.js";
-import type { ExportSummaryEntry, ImpactTopItem, ReexportChainEntry } from "./types.js";
+import type {
+  CallCompatibilityHint,
+  ExportSummaryEntry,
+  ImpactSuggestion,
+  ImpactSurfaceAreaFile,
+  ImpactTopItem,
+  ReexportChainEntry,
+} from "./types.js";
 
 export type MappedExportSummaryEntry<TFile extends FileId | number> = Omit<ExportSummaryEntry, "file"> & {
   file: TFile;
@@ -71,6 +78,62 @@ export function buildOptionalTopImpacts<TFile extends FileId | number>(
 ): { topImpacts?: Array<MappedImpactTopItem<TFile>> } {
   if (!topImpacts.length) return {};
   return { topImpacts: mapTopImpacts(topImpacts, mapFile) };
+}
+
+export type MappedImpactSuggestion<TFile extends FileId | number> = Omit<ImpactSuggestion, "file" | "relatedFile"> & {
+  file: TFile;
+  relatedFile?: TFile;
+};
+
+// Generic over both directions: compact serialization maps FileId -> number, while the CLI
+// re-hydrates a compact report by mapping number -> FileId.
+export function mapSuggestions<TIn extends FileId | number, TOut extends FileId | number>(
+  suggestions: readonly MappedImpactSuggestion<TIn>[],
+  mapFile: (file: TIn) => TOut,
+): Array<MappedImpactSuggestion<TOut>> {
+  return suggestions.map((suggestion) => ({
+    file: mapFile(suggestion.file),
+    kind: suggestion.kind,
+    ...(suggestion.range ? { range: suggestion.range } : {}),
+    ...(suggestion.symbol ? { symbol: suggestion.symbol } : {}),
+    ...(suggestion.relatedFile !== undefined ? { relatedFile: mapFile(suggestion.relatedFile) } : {}),
+    ...(suggestion.details ? { details: suggestion.details } : {}),
+    confidence: suggestion.confidence,
+  }));
+}
+
+export type MappedImpactSurfaceArea<TFile extends FileId | number> = {
+  files: Array<Omit<ImpactSurfaceAreaFile, "file"> & { file: TFile }>;
+  topFanIn: TFile[];
+  topFanOut: TFile[];
+};
+
+export function mapSurfaceArea<TIn extends FileId | number, TOut extends FileId | number>(
+  surfaceArea: MappedImpactSurfaceArea<TIn>,
+  mapFile: (file: TIn) => TOut,
+): MappedImpactSurfaceArea<TOut> {
+  return {
+    files: surfaceArea.files.map((item) => ({
+      file: mapFile(item.file),
+      fanIn: item.fanIn,
+      fanOut: item.fanOut,
+      changed: item.changed,
+      impacted: item.impacted,
+    })),
+    topFanIn: surfaceArea.topFanIn.map((file) => mapFile(file)),
+    topFanOut: surfaceArea.topFanOut.map((file) => mapFile(file)),
+  };
+}
+
+/**
+ * Render the required-argument-count clause of a call-compatibility hint for human-facing summaries.
+ * Shared by the impact and review CLI presenters.
+ */
+export function formatRequiredArgumentCount(hint: CallCompatibilityHint): string {
+  if (hint.reason === "argument_count_above_maximum" && hint.expected.maxArgs !== null) {
+    return `accepts at most ${hint.expected.maxArgs}`;
+  }
+  return `requires ${hint.expected.minArgs}`;
 }
 
 export function mapFileEdges<TFile extends FileId | number>(
