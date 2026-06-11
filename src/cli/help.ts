@@ -271,7 +271,7 @@ Defaults:
 
 export const DUPLICATES_HELP_TEXT = `codegraph duplicates - Detect duplicate and near-duplicate code units
 
-Usage: codegraph duplicates [path ...] [--root <path>] [--min-confidence high|medium|low] [--limit <n>] [--include-same-file] [--include-small] [--raw-pairs]
+Usage: codegraph duplicates [path ...] [--root <path>] [--json | --pretty] [--sort similarity|actionability] [--min-confidence high|medium|low] [--limit <n>] [--include-same-file] [--include-small] [--raw-pairs]
 
 Path behavior:
   A single positional directory becomes the project root when --root is omitted.
@@ -284,20 +284,23 @@ Discovery filters:
     codegraph duplicates --root . ./src --ignore-glob "tests/**" --ignore-glob "docs/**"
 
 Options:
-  --min-confidence  Minimum confidence to report. Defaults to medium.
-  --limit           Maximum duplicate groups to return. Defaults to 50.
+  --pretty            Emit one-line duplicate summaries for human triage.
+  --json              Emit grouped duplicate findings as JSON. This remains the default.
+  --sort <mode>       Order output by similarity or actionability. Actionability uses grouped visible evidence over a bounded candidate window; pretty output defaults to it.
+  --min-confidence    Minimum confidence to report. Defaults to medium.
+  --limit             Maximum duplicate groups to return. Defaults to 50.
   --include-same-file Report non-overlapping clones in the same file.
-  --include-small   Include units below the default token floor.
-  --raw-pairs       Include low-level scored unit pairs as suggestions.
-  --min-tokens      Minimum unit tokens. Defaults to 40.
-  --max-tokens      Maximum fallback chunk tokens. Defaults to 800.
-  --max-bucket-size Skip candidate buckets larger than this value. Defaults to 200.
+  --include-small     Include units below the default token floor.
+  --raw-pairs         Include low-level scored unit-pair suggestions in JSON output.
+  --min-tokens        Minimum unit tokens. Defaults to 40.
+  --max-tokens        Maximum fallback chunk tokens. Defaults to 800.
+  --max-bucket-size   Skip candidate buckets larger than this value. Defaults to 200.
 
 Output:
-  Always emits JSON with grouped duplicate findings, confidence, clone type, metrics, omission counts including skipped candidate pairs, and pair stats.
-  Grouped duplicate output uses schemaVersion 2.
-  Group variants are bounded by default and include rawPairCount/omittedVariantCount for hidden evidence.
-  Use --raw-pairs to include the underlying scored unit-pair suggestions.
+  JSON output reports grouped duplicate findings, confidence, clone type, metrics, omission counts including skipped candidate pairs, and pair stats.
+  Pretty output emits one line per group with file spans, symbol or chunk labels, confidence, clone type, score, token counts, and heuristic family annotations derived from the displayed duplicate pair.
+  Grouped duplicate JSON uses schemaVersion 2.
+  --raw-pairs is only supported with similarity-ranked JSON output.
 `;
 
 export const DRIFT_HELP_TEXT = `codegraph drift - Compare architecture drift between graph states
