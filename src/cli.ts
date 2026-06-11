@@ -60,12 +60,15 @@ function normalizeEntrypointPath(filePath: string): string {
     return resolvedPath;
   }
 }
-function looksLikeGlobPattern(value: string): boolean {
-  return /[*?[\]{}]/.test(value);
+function looksLikeGlobPattern(baseRoot: string, value: string): boolean {
+  const hasGlobSyntax =
+    /[*?]/.test(value) || (value.includes("{") && value.includes("}")) || (value.includes("[") && value.includes("]"));
+  if (!hasGlobSyntax) return false;
+  return !fs.existsSync(resolveFilePathFromRoot(baseRoot, value));
 }
 
-function assertValidIncludeRoots(command: string, includeRoots: readonly string[]): void {
-  const globLikeRoot = includeRoots.find(looksLikeGlobPattern);
+function assertValidIncludeRoots(command: string, baseRoot: string, includeRoots: readonly string[]): void {
+  const globLikeRoot = includeRoots.find((includeRoot) => looksLikeGlobPattern(baseRoot, includeRoot));
   if (!globLikeRoot) return;
   throw new Error(
     `Invalid ${command} path "${globLikeRoot}". Positional paths are scan roots, not glob patterns. Repeat --ignore-glob or --include-glob for each glob filter.`,
@@ -286,9 +289,13 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     } else if (parsed.positionals.length > 1) {
       // Otherwise, a single positional arg is treated as the project root (back-compat).
       includeRoots = parsed.positionals;
+    } else if (parsed.positionals.length === 1 && looksLikeGlobPattern(getCwd(), parsed.positionals[0]!)) {
+      throw new Error(
+        `Invalid ${cmd} path "${parsed.positionals[0]!}". Positional paths are scan roots, not glob patterns. Repeat --ignore-glob or --include-glob for each glob filter.`,
+      );
     }
   }
-  assertValidIncludeRoots(cmd, includeRoots);
+  assertValidIncludeRoots(cmd, projectRootFs, includeRoots);
   const includeRootsAbs = includeRoots.map((r) => normalizePath(resolveFilePathFromRoot(projectRootFs, r)));
 
   const isUnderIncludeRoots = (filePath: string): boolean => {
@@ -575,6 +582,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
         ...workerOpts,
       },
       writeJSONLine,
+      writeStdoutLine,
       writeStderrLine,
       exit: exitCli,
     });

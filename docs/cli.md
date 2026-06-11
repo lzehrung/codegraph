@@ -187,11 +187,12 @@ codegraph grep --query '(function_declaration name: (identifier) @name)'
 codegraph grep --pattern 'eval\(' --ignore-case
 ```
 
-`duplicates` always reports grouped exact, renamed, near, and weak clone candidates as JSON.
+`duplicates` emits grouped exact, renamed, near, and weak clone candidates as JSON by default, or one-line triage summaries with `--pretty`.
 
 - It combines indexed symbols, semantic chunks, text chunks, token fingerprints, and AST shape hashes when parser context is available.
-- It emits `schemaVersion: 2` for grouped duplicate output.
-- It reports project-relative paths, confidence, clone type, metrics, variant counts, omission counts including skipped candidate pairs, and pair stats.
+- JSON output emits `schemaVersion: 2`.
+- JSON reports project-relative paths, confidence, clone type, metrics, variant counts, omission counts including skipped candidate pairs, and pair stats.
+- `--pretty` emits one line per group with file spans, symbol or chunk labels, confidence, clone type, score, token counts, and heuristic family annotations derived from the displayed duplicate pair.
 - Groups collapse overlapping symbol/chunk variants so one underlying clone appears as one finding.
 - Group `variants` are bounded by default; use `rawPairCount` and `omittedVariantCount` to see hidden evidence counts.
 - A single positional directory becomes the project root unless `--root` is set. `orient` is the exception: its positionals are always include roots.
@@ -199,9 +200,10 @@ codegraph grep --pattern 'eval\(' --ignore-case
 - Positional paths are scan roots, not glob patterns.
 - Shared discovery flags also apply here: `--include-glob`, `--ignore-glob`, and `--no-gitignore`.
 - Repeat `--ignore-glob` or `--include-glob` once per pattern.
+- Use `--sort actionability` to rank likely cleanup wins above declaration mirrors and language-parity definitions based on grouped visible evidence from a bounded candidate window. Narrow CLI boilerplate hints only apply to small `src/cli/` helpers with presentation-oriented names such as `format*` or `render*`. `--pretty` defaults to actionability ordering; JSON defaults to similarity ordering.
 - Use `--include-small` for tiny helpers.
 - Use `--include-same-file` for non-overlapping clones inside one file.
-- Use `--raw-pairs` when debugging the low-level pair evidence behind each group.
+- Use `--raw-pairs` when debugging the low-level pair evidence behind each group in similarity-ranked JSON output. `--pretty --raw-pairs` and `--sort actionability --raw-pairs` are rejected.
 
 `orient`, `packet`, `search`, `explain`, `artifact`, `drift`, and `mcp` each support command-specific `--help` output.
 

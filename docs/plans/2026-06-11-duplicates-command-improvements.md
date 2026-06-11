@@ -23,35 +23,37 @@ Delivered:
 - [x] Added an early targeted error when a positional include root looks like a glob pattern.
 - [x] Added CLI docs and skill examples that repeat `--ignore-glob` per pattern.
 
-## Priority 2: Improve Human Triage Output
+## Completed in this branch: Improve Human Triage Output
 
-Why this matters:
+Why this mattered:
 
 - The command is often used interactively before a follow-up refactor.
 - Large grouped JSON is correct but expensive to read by hand.
 
-Implementation outline:
+Delivered:
 
-- [ ] Add `--pretty` or `--summary` output for one-line-per-group review.
-- [ ] Include file paths, symbol or chunk names, confidence, clone type, score, and token span in the human summary.
-- [ ] Keep JSON as the default machine contract.
+- [x] Added `--pretty` output for one-line-per-group review.
+- [x] Included file paths, symbol or chunk names, confidence, clone type, score, and token counts in the human summary.
+- [x] Kept JSON as the default machine contract.
 
-## Priority 3: Make Actionable Duplicates Easier to Isolate
+## Completed in this branch: Make Actionable Duplicates Easier to Isolate
 
-Why this matters:
+Why this mattered:
 
 - Repo audits care about utilities and business logic, not intentional parity files.
-- Manual filtering currently happens outside the tool.
+- Manual filtering previously happened outside the tool.
 
-Implementation outline:
+Delivered:
 
-- [ ] Consider output annotations for common duplicate families such as language-parity definitions, declaration mirrors, and CLI boilerplate.
-- [ ] Consider an actionability-oriented ranking mode that weighs copy count, token span, and subsystem distance instead of similarity alone.
-- [ ] Keep exact grouped JSON available even when higher-level ranking or suppression is added.
+- [x] Added heuristic family annotations for common duplicate families: language-parity definitions, declaration mirrors, and small CLI boilerplate.
+- [x] Added an actionability-oriented ranking mode with `--sort actionability`, and made `--pretty` default to actionability ordering.
+- [x] Kept exact grouped JSON available as the default output while allowing explicit sort control.
 
 ## Validation Checklist
 
 - [x] `node ./dist/cli.js duplicates --help`
 - [x] `node ./dist/cli.js duplicates --root . ./src --min-confidence medium`
 - [x] `node ./dist/cli.js duplicates --root . ./src --ignore-glob "tests/**" --ignore-glob "docs/**"`
+- [x] `node ./dist/cli.js duplicates --root . ./src --pretty --include-small`
+- [x] `node ./dist/cli.js duplicates --root . --sort actionability --include-small`
 - [x] A misuse case with a glob-looking positional root fails with a targeted message.

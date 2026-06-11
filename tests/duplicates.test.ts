@@ -1212,6 +1212,347 @@ export function ignoredOrders(rows: number[]) {
       }),
     ).rejects.toThrow('Invalid duplicates path "docs/**". Positional paths are scan roots, not glob patterns.');
   });
+  test("duplicates CLI accepts literal include roots with bracketed directory names", async () => {
+    const root = await makeTempProject();
+    const source = `
+export function formatUsage(value: string) {
+  return value.toUpperCase();
+}
+`;
+
+    await writeProjectFile(root, "src/app/[slug]/a.ts", source);
+    await writeProjectFile(root, "src/app/[slug]/b.ts", source);
+
+    const result = await captureCli(["duplicates", "--root", ".", "src/app/[slug]", "--include-small"], root);
+    const parsed = JSON.parse(result.stdout) as {
+      groups?: Array<{ primaryLeft?: { file?: string }; primaryRight?: { file?: string } }>;
+    };
+
+    expect(result.exitCode).toBeUndefined();
+    expect(parsed.groups?.length).toBeGreaterThan(0);
+    expect(parsed.groups?.[0]?.primaryLeft?.file.startsWith("src/app/[slug]/")).toBeTruthy();
+    expect(parsed.groups?.[0]?.primaryRight?.file.startsWith("src/app/[slug]/")).toBeTruthy();
+  });
+  test("duplicates CLI rejects brace glob positional roots with guidance", async () => {
+    const root = await makeTempProject();
+    await writeProjectFile(root, "src/a.ts", "export const a = 1;\n");
+
+    await expect(
+      runCli(["duplicates", "src/{api,web}"], {
+        cwd: () => root,
+        stdout: () => {},
+        stderr: () => {},
+        exit: (code) => {
+          throw new Error(`cli exit ${code}`);
+        },
+      }),
+    ).rejects.toThrow('Invalid duplicates path "src/{api,web}". Positional paths are scan roots, not glob patterns.');
+  });
+  test("duplicates CLI rejects character-class positional roots with guidance", async () => {
+    const root = await makeTempProject();
+    await writeProjectFile(root, "src/a.ts", "export const a = 1;\n");
+
+    await expect(
+      runCli(["duplicates", "src/[ab]"], {
+        cwd: () => root,
+        stdout: () => {},
+        stderr: () => {},
+        exit: (code) => {
+          throw new Error(`cli exit ${code}`);
+        },
+      }),
+    ).rejects.toThrow('Invalid duplicates path "src/[ab]". Positional paths are scan roots, not glob patterns.');
+  });
+  test("duplicates CLI rejects range-style positional roots with guidance", async () => {
+    const root = await makeTempProject();
+    await writeProjectFile(root, "src/a.ts", "export const a = 1;\n");
+
+    await expect(
+      runCli(["duplicates", "src/[a-z]"], {
+        cwd: () => root,
+        stdout: () => {},
+        stderr: () => {},
+        exit: (code) => {
+          throw new Error(`cli exit ${code}`);
+        },
+      }),
+    ).rejects.toThrow('Invalid duplicates path "src/[a-z]". Positional paths are scan roots, not glob patterns.');
+  });
+  test("duplicates CLI rejects longer character-class positional roots with guidance", async () => {
+    const root = await makeTempProject();
+    await writeProjectFile(root, "src/a.ts", "export const a = 1;\n");
+
+    await expect(
+      runCli(["duplicates", "src/[abc]"], {
+        cwd: () => root,
+        stdout: () => {},
+        stderr: () => {},
+        exit: (code) => {
+          throw new Error(`cli exit ${code}`);
+        },
+      }),
+    ).rejects.toThrow('Invalid duplicates path "src/[abc]". Positional paths are scan roots, not glob patterns.');
+  });
+
+  test("duplicates CLI rejects glob-like single positional roots with guidance", async () => {
+    const root = await makeTempProject();
+    await writeProjectFile(root, "src/a.ts", "export const a = 1;\n");
+
+    await expect(
+      runCli(["duplicates", "docs/**"], {
+        cwd: () => root,
+        stdout: () => {},
+        stderr: () => {},
+        exit: (code) => {
+          throw new Error(`cli exit ${code}`);
+        },
+      }),
+    ).rejects.toThrow('Invalid duplicates path "docs/**". Positional paths are scan roots, not glob patterns.');
+  });
+  test("duplicates CLI does not mark help-prefixed helpers as cli boilerplate", async () => {
+    const root = await makeTempProject();
+    const source = `
+export function helpTextForCommand(value: string) {
+  return value.toUpperCase();
+}
+`;
+
+    await writeProjectFile(root, "src/cli/a.ts", source);
+    await writeProjectFile(root, "src/cli/b.ts", source);
+
+    const result = await captureCli(["duplicates", "--root", ".", "src", "--pretty", "--include-small"], root);
+
+    expect(result.exitCode).toBeUndefined();
+    expect(result.stdout).not.toContain("family=cli-boilerplate");
+  });
+
+  test("duplicates CLI pretty output includes heuristic family annotations", async () => {
+    const root = await makeTempProject();
+    const source = `
+export function formatUsage(value: string) {
+  return value.toUpperCase();
+}
+`;
+
+    await writeProjectFile(root, "src/cli/a.ts", source);
+    await writeProjectFile(root, "src/cli/b.ts", source);
+
+    const result = await captureCli(["duplicates", "--root", ".", "src", "--pretty", "--include-small"], root);
+
+    expect(result.exitCode).toBeUndefined();
+    expect(result.stdout).toContain("Sorted by: actionability");
+    expect(result.stdout).toContain("family=cli-boilerplate");
+    expect(result.stdout).toContain("src/cli/a.ts:2-4 formatUsage <-> src/cli/b.ts:2-4 formatUsage");
+  });
+  test("duplicates CLI rejects --pretty with --raw-pairs", async () => {
+    const root = await makeTempProject();
+    const source = `
+export function summarizeOrders(rows: number[]) {
+  let total = 0;
+  for (const row of rows) total += row * 2 + 1;
+  return total;
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", source);
+    await writeProjectFile(root, "src/b.ts", source);
+
+    const result = await captureCli(["duplicates", "--root", ".", "src", "--pretty", "--raw-pairs"], root);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "Invalid flag combination: --raw-pairs is only supported with similarity-ranked JSON output.",
+    );
+  });
+  test("duplicates CLI rejects --json with --pretty", async () => {
+    const root = await makeTempProject();
+    const source = `
+export function summarizeOrders(rows: number[]) {
+  let total = 0;
+  for (const row of rows) total += row * 2 + 1;
+  return total;
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", source);
+    await writeProjectFile(root, "src/b.ts", source);
+
+    const result = await captureCli(["duplicates", "--root", ".", "src", "--json", "--pretty"], root);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("Invalid flag combination: choose either --json or --pretty.");
+  });
+  test("duplicates CLI rejects --sort actionability with --raw-pairs", async () => {
+    const root = await makeTempProject();
+    const source = `
+export function summarizeOrders(rows: number[]) {
+  let total = 0;
+  for (const row of rows) total += row * 2 + 1;
+  return total;
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", source);
+    await writeProjectFile(root, "src/b.ts", source);
+
+    const result = await captureCli(
+      ["duplicates", "--root", ".", "src", "--sort", "actionability", "--raw-pairs"],
+      root,
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "Invalid flag combination: --raw-pairs is only supported with similarity-ranked JSON output.",
+    );
+  });
+
+  test("duplicates CLI can sort JSON output by actionability", async () => {
+    const root = await makeTempProject();
+    const sourceDuplicateA = `
+export function summarizeOrders(rows: number[]) {
+  let total = 0;
+  for (const row of rows) total += row * 2 + 1;
+  return total;
+}
+`;
+    const sourceDuplicateB = `
+export function collectOrders(rows: number[]) {
+  let total = 0;
+  for (const row of rows) total += row * 2 + 1;
+  return total;
+}
+`;
+    const declarationDuplicate = `
+export interface NormalizedModeMap {
+  on: "enabled";
+  off: "disabled";
+  standby: "paused";
+  maintenance: "offline";
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", sourceDuplicateA);
+    await writeProjectFile(root, "src/b.ts", sourceDuplicateB);
+    await writeProjectFile(root, "types/a.d.ts", declarationDuplicate);
+    await writeProjectFile(root, "types/b.d.ts", declarationDuplicate);
+
+    const defaultResult = await captureCli(["duplicates", "--root", ".", "--include-small", "--limit", "1"], root);
+    const actionabilityResult = await captureCli(
+      ["duplicates", "--root", ".", "--sort", "actionability", "--include-small", "--limit", "1"],
+      root,
+    );
+    const defaultParsed = JSON.parse(defaultResult.stdout) as {
+      groups?: Array<{ primaryLeft?: { file?: string }; primaryRight?: { file?: string } }>;
+    };
+    const actionabilityParsed = JSON.parse(actionabilityResult.stdout) as {
+      groups?: Array<{ primaryLeft?: { file?: string }; primaryRight?: { file?: string } }>;
+      omittedCounts?: { groups?: number; suggestions?: number; rawSuggestions?: number };
+    };
+
+    expect(defaultResult.exitCode).toBeUndefined();
+    expect(actionabilityResult.exitCode).toBeUndefined();
+    expect(defaultParsed.groups).toHaveLength(1);
+    expect(actionabilityParsed.groups).toHaveLength(1);
+    expect(defaultParsed.groups?.[0]?.primaryLeft?.file.startsWith("types/")).toBeTruthy();
+    expect(defaultParsed.groups?.[0]?.primaryRight?.file.startsWith("types/")).toBeTruthy();
+    expect(actionabilityParsed.groups?.[0]?.primaryLeft?.file.startsWith("src/")).toBeTruthy();
+    expect(actionabilityParsed.groups?.[0]?.primaryRight?.file.startsWith("src/")).toBeTruthy();
+  });
+  test("duplicates CLI actionability sort updates omitted raw suggestion counts", async () => {
+    const root = await makeTempProject();
+    const sourceDuplicateA = `
+export function summarizeOrders(rows: number[]) {
+  let total = 0;
+  for (const row of rows) total += row * 2 + 1;
+  return total;
+}
+`;
+    const sourceDuplicateB = `
+export function collectOrders(rows: number[]) {
+  let total = 0;
+  for (const row of rows) total += row * 2 + 1;
+  return total;
+}
+`;
+    const declarationDuplicate = `
+export interface NormalizedModeMap {
+  on: "enabled";
+  off: "disabled";
+  standby: "paused";
+  maintenance: "offline";
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", sourceDuplicateA);
+    await writeProjectFile(root, "src/b.ts", sourceDuplicateB);
+    await writeProjectFile(root, "types/a.d.ts", declarationDuplicate);
+    await writeProjectFile(root, "types/b.d.ts", declarationDuplicate);
+
+    const result = await captureCli(
+      ["duplicates", "--root", ".", "--sort", "actionability", "--include-small", "--limit", "1"],
+      root,
+    );
+    const parsed = JSON.parse(result.stdout) as {
+      omittedCounts?: { groups?: number; suggestions?: number; rawSuggestions?: number };
+    };
+
+    expect(result.exitCode).toBeUndefined();
+    expect(parsed.omittedCounts?.groups).toBeGreaterThan(0);
+    expect(parsed.omittedCounts?.suggestions).toBeGreaterThan(0);
+    expect(parsed.omittedCounts?.rawSuggestions).toBeGreaterThan(0);
+  });
+
+  test("duplicates CLI pretty output labels declaration-only groups", async () => {
+    const root = await makeTempProject();
+    const source = `export interface NormalizedModeMap { on: "enabled"; off: "disabled"; }\n`;
+
+    await writeProjectFile(root, "types/a.d.ts", source);
+    await writeProjectFile(root, "types/b.d.ts", source);
+
+    const result = await captureCli(["duplicates", "--root", ".", "--pretty", "--include-small"], root);
+
+    expect(result.exitCode).toBeUndefined();
+    expect(result.stdout).toContain("family=declaration-mirror");
+    expect(result.stdout).toContain("types/a.d.ts:1-1");
+    expect(result.stdout).toContain("types/b.d.ts:1-1");
+  });
+  test("duplicates CLI pretty output distinguishes limit zero from no matches", async () => {
+    const root = await makeTempProject();
+    const source = `
+export function summarizeOrders(rows: number[]) {
+  let total = 0;
+  for (const row of rows) total += row * 2 + 1;
+  return total;
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", source);
+    await writeProjectFile(root, "src/b.ts", source);
+
+    const result = await captureCli(
+      ["duplicates", "--root", ".", "src", "--pretty", "--include-small", "--limit", "0"],
+      root,
+    );
+
+    expect(result.exitCode).toBeUndefined();
+    expect(result.stdout).toContain("All duplicate groups were omitted by the current limit.");
+    expect(result.stdout).not.toContain("No duplicate groups matched the current filters.");
+  });
+
+  test("duplicates CLI does not label mixed source and declaration groups as declaration mirrors", async () => {
+    const root = await makeTempProject();
+    const source = `export type Mode = "on" | "off";\n`;
+
+    await writeProjectFile(root, "src/a.ts", source);
+    await writeProjectFile(root, "types/a.d.ts", source);
+
+    const result = await captureCli(["duplicates", "--root", ".", "--pretty", "--include-small"], root);
+
+    expect(result.exitCode).toBeUndefined();
+    expect(result.stdout).toContain("src/a.ts:1-1");
+    expect(result.stdout).toContain("types/a.d.ts:1-1");
+    expect(result.stdout).not.toContain("family=declaration-mirror");
+  });
 
   test("accepts project-relative file filters", async () => {
     const root = await makeTempProject();
