@@ -400,7 +400,6 @@ describe("Cache invalidation and strict hashing", () => {
     expect(graph.edges[0]?.from).toBe(normalize(trackedPath));
   });
 
-
   it("rebuilds when cache verification detects manifest mismatches", async () => {
     const root = await mkTmpDir("dg-cache-verify-");
     const filePath = path.join(root, "verify.ts");
@@ -538,7 +537,6 @@ describe("Cache invalidation and strict hashing", () => {
     expect(report.timings?.totalMs).toEqual(expect.any(Number));
   });
 
-
   it("loads unchanged incremental indexes from a project snapshot", async () => {
     const root = await mkTmpDir("dg-incremental-project-snapshot-");
     const filePath = path.join(root, "foo.ts");
@@ -660,7 +658,6 @@ describe("Cache invalidation and strict hashing", () => {
     const moduleIndex = incremental.byFile.get(normalize(filePath));
     expect(moduleIndex?.locals.some((local) => local.localName === "snap")).toBe(true);
   });
-
 
   it("falls back when project snapshot graph edges are malformed", async () => {
     const root = await mkTmpDir("dg-incremental-bad-project-snapshot-edge-");

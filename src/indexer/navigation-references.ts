@@ -212,7 +212,6 @@ function moduleExportProbeNames(
   return [...names];
 }
 
-
 function filesExportingDefinition(index: ProjectIndex, def: SymbolDef, exportedNames: readonly string[]): Set<string> {
   const files = new Set<string>([def.file]);
   for (const [fileId, moduleIndex] of index.byFile) {
@@ -245,7 +244,9 @@ function getIndexedReferenceCandidateFiles(
     if (fileId === def.file || files.has(fileId)) continue;
     if (
       moduleIndex.imports.some(
-        (imp) => (imp.kind === "star" || imp.kind === "namespace") && importCanReferenceDefinition(index, imp, def, exportedNames),
+        (imp) =>
+          (imp.kind === "star" || imp.kind === "namespace") &&
+          importCanReferenceDefinition(index, imp, def, exportedNames),
       )
     ) {
       files.add(fileId);
@@ -253,7 +254,6 @@ function getIndexedReferenceCandidateFiles(
   }
   return [...files].sort((left, right) => left.localeCompare(right));
 }
-
 
 export function getCachedReferenceCandidateFiles(
   index: ProjectIndex,

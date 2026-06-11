@@ -20,7 +20,6 @@ export function isNativeDuplicateTokenizationAvailable(mode?: NativeRuntimeMode)
   return state.loaded && typeof state.binding.tokenizeDuplicateSource === "function";
 }
 
-
 export function getNativeDuplicateTokens(source: string, mode?: NativeRuntimeMode): NativeDuplicateTokens | null {
   const state = resolveNativeBindingState(mode);
   throwIfNativeRequiredUnavailable(mode, state);
