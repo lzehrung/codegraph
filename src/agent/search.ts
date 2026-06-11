@@ -4,8 +4,8 @@ import { supportForFile } from "../languages.js";
 import { chunkFile } from "../chunking/chunkFile.js";
 import { SymbolKind, type BuildOptions, type SymbolDef } from "../indexer/types.js";
 import type { Range } from "../types.js";
-import { defNodeId } from "../graphs/symbol-graph.js";
 import { type SymbolNode } from "../graphs/symbol-graph.js";
+import { buildSymbolLookup, type SymbolLookup as SymbolDefLookup } from "./symbolLookup.js";
 import {
   AGENT_SEARCH_EVIDENCE_PER_RESULT_LIMIT,
   AGENT_SEARCH_FOLLOWUPS_PER_RESULT_LIMIT,
@@ -108,11 +108,6 @@ type MutableSearchResult = Omit<
   evidence: AgentSearchEvidence[];
   neighbors: Map<string, { relation: string; target: string; file?: string }>;
   followUps: Set<string>;
-};
-
-type SymbolDefLookup = {
-  defById: Map<string, SymbolDef>;
-  exportedIds: Set<string>;
 };
 
 type SymbolNeighbor = {
@@ -350,23 +345,6 @@ function tokensAppearInOrder(normalizedText: string, tokens: readonly string[]):
     fromIndex = tokenIndex + token.length;
   }
   return true;
-}
-
-function buildSymbolLookup(snapshot: AgentProjectSnapshot): SymbolDefLookup {
-  const defById = new Map<string, SymbolDef>();
-  const exportedIds = new Set<string>();
-
-  for (const moduleIndex of snapshot.index.byFile.values()) {
-    for (const local of moduleIndex.locals) {
-      defById.set(defNodeId(local), local);
-    }
-    for (const exportEntry of moduleIndex.exports) {
-      if (exportEntry.type !== "local") continue;
-      exportedIds.add(defNodeId(exportEntry.target));
-    }
-  }
-
-  return { defById, exportedIds };
 }
 
 function addSymbolResults(

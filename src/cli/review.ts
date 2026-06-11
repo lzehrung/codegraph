@@ -2,7 +2,7 @@ import { performance } from "node:perf_hooks";
 import path from "node:path";
 import { buildReviewReport, type ReviewBuildReport, type ReviewDepth, type ReviewReport } from "../review.js";
 import type { CandidateTestFile } from "../impact/context.js";
-import type { CallCompatibilityHint } from "../impact/types.js";
+import { formatRequiredArgumentCount } from "../impact/reportShared.js";
 import type { BuildReport, ProjectIndex } from "../indexer/types.js";
 import { type GraphBuildOptions } from "../graphs/types.js";
 import {
@@ -99,13 +99,6 @@ function appendLowConfidenceCandidateSummary(lines: string[], lowConfidenceCount
   lines.push(`Low-confidence pattern matches: ${lowConfidenceCount} available as breadth hints in full JSON.`);
 }
 
-function formatReviewRequiredArgumentCount(hint: CallCompatibilityHint): string {
-  if (hint.reason === "argument_count_above_maximum" && hint.expected.maxArgs !== null) {
-    return `accepts at most ${hint.expected.maxArgs}`;
-  }
-  return `requires ${hint.expected.minArgs}`;
-}
-
 function appendReviewCallCompatibility(lines: string[], report: Awaited<ReturnType<typeof buildReviewReport>>): void {
   const findings: string[] = [];
   for (const file of report.changedFiles) {
@@ -116,7 +109,7 @@ function appendReviewCallCompatibility(lines: string[], report: Awaited<ReturnTy
           continue;
         }
         const plural = hint.actual.argCount === 1 ? "argument" : "arguments";
-        const requirement = formatReviewRequiredArgumentCount(hint);
+        const requirement = formatRequiredArgumentCount(hint);
         findings.push(
           `- ${symbol.name}: ${hint.callsiteFile}:${hint.callsiteRange.start.line} passes ${hint.actual.argCount} ${plural}; new signature ${requirement}.`,
         );

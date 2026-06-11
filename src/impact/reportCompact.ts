@@ -5,6 +5,8 @@ import {
   buildOptionalReexportChains,
   buildOptionalTopImpacts,
   mapFileEdges,
+  mapSuggestions,
+  mapSurfaceArea,
 } from "./reportShared.js";
 import { IMPACT_SCHEMA_VERSION } from "./types.js";
 import type {
@@ -185,34 +187,14 @@ function buildCompactSuggestions(
   fileId: (file: FileId) => number,
 ): Pick<CompactImpactReport, "suggestions"> {
   if (!suggestions.length) return {};
-  return {
-    suggestions: suggestions.map((suggestion) => ({
-      file: fileId(suggestion.file),
-      kind: suggestion.kind,
-      ...(suggestion.range ? { range: suggestion.range } : {}),
-      ...(suggestion.symbol ? { symbol: suggestion.symbol } : {}),
-      ...(suggestion.relatedFile !== undefined ? { relatedFile: fileId(suggestion.relatedFile) } : {}),
-      ...(suggestion.details ? { details: suggestion.details } : {}),
-      confidence: suggestion.confidence,
-    })),
-  };
+  return { suggestions: mapSuggestions(suggestions, fileId) };
 }
 
 function buildCompactSurfaceArea(
   surfaceArea: ImpactSurfaceArea,
   fileId: (file: FileId) => number,
 ): CompactImpactSurfaceArea {
-  return {
-    files: surfaceArea.files.map((item) => ({
-      file: fileId(item.file),
-      fanIn: item.fanIn,
-      fanOut: item.fanOut,
-      changed: item.changed,
-      impacted: item.impacted,
-    })),
-    topFanIn: surfaceArea.topFanIn.map((file) => fileId(file)),
-    topFanOut: surfaceArea.topFanOut.map((file) => fileId(file)),
-  };
+  return mapSurfaceArea(surfaceArea, fileId);
 }
 
 function buildCompactClusters(clusters: ImpactCluster[], fileId: (file: FileId) => number): CompactImpactCluster[] {

@@ -468,11 +468,6 @@ function formatDuplicateSymbolHandle(file: string, name: string, line: number, c
   return ["symbol", encodeURIComponent(file), encodeURIComponent(name), String(line), String(column)].join(":");
 }
 
-function displayPath(projectRoot: string | undefined, filePath: string): string {
-  if (!projectRoot) return normalizePath(filePath);
-  return toProjectDisplayPath(projectRoot, filePath) || normalizePath(filePath);
-}
-
 function duplicateUnitCacheVariant(
   index: ProjectIndex,
   minTokens: number,
@@ -760,7 +755,7 @@ function makeSymbolUnit(
   astContext: DuplicateAstContext | undefined,
 ): DuplicateInternalUnit | undefined {
   if (!symbolUnitKinds.has(symbol.kind)) return undefined;
-  const file = displayPath(projectRoot, symbol.file);
+  const file = toProjectDisplayPath(projectRoot, symbol.file);
   const sqlHandle = sqlHandleForDuplicateSymbol(symbol, file);
   const symbolHandle =
     sqlHandle === undefined
@@ -974,7 +969,7 @@ function makeChunkUnits(
   astContext: DuplicateAstContext | undefined,
 ): DuplicateInternalUnit[] {
   return chunks.map((chunk) => {
-    const file = displayPath(projectRoot, filePath);
+    const file = toProjectDisplayPath(projectRoot, filePath);
     const unit: DuplicateUnitDraft = {
       file,
       startLine: chunk.startLine,
@@ -2054,7 +2049,7 @@ async function findDuplicatesWithOpenDuplicateUnitCache(
 
 function normalizeDuplicateTarget(target: DuplicateTarget, projectRoot: string | undefined): DuplicateTarget {
   const normalizedFile = projectRoot
-    ? displayPath(projectRoot, target.file)
+    ? toProjectDisplayPath(projectRoot, target.file)
     : normalizePath(target.file).replace(/^\.\//, "");
   return {
     file: normalizedFile,

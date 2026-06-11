@@ -9,6 +9,7 @@ import {
   type ImpactOptions,
   type ImpactReport,
 } from "../impact/index.js";
+import { formatRequiredArgumentCount, mapSuggestions, mapSurfaceArea } from "../impact/reportShared.js";
 import { graphToMermaidSymbolsWithFiles } from "../graphs/symbol-render.js";
 import { type GraphBuildOptions } from "../graphs/types.js";
 import { type SymbolGraph, type SymbolNodeKind } from "../graphs/symbol-graph.js";
@@ -83,17 +84,6 @@ function ensureImpactReport(report: ImpactReport | CompactImpactReport): ImpactR
     }
     return file;
   };
-  const resolveSurfaceArea = (surfaceArea: CompactImpactReport["surfaceArea"]) => ({
-    files: surfaceArea.files.map((item) => ({
-      file: resolveFilePath(item.file),
-      fanIn: item.fanIn,
-      fanOut: item.fanOut,
-      changed: item.changed,
-      impacted: item.impacted,
-    })),
-    topFanIn: surfaceArea.topFanIn.map((file) => resolveFilePath(file)),
-    topFanOut: surfaceArea.topFanOut.map((file) => resolveFilePath(file)),
-  });
   const changedFiles = report.changedFiles.map((cf) => ({
     file: resolveFilePath(cf.file),
     hunks: cf.hunks,
@@ -127,15 +117,7 @@ function ensureImpactReport(report: ImpactReport | CompactImpactReport): ImpactR
     if (maybeRefs !== undefined) impact.refs = maybeRefs;
     return impact;
   });
-  const suggestions = report.suggestions?.map((suggestion) => ({
-    file: resolveFilePath(suggestion.file),
-    kind: suggestion.kind,
-    ...(suggestion.range ? { range: suggestion.range } : {}),
-    ...(suggestion.symbol ? { symbol: suggestion.symbol } : {}),
-    ...(suggestion.relatedFile !== undefined ? { relatedFile: resolveFilePath(suggestion.relatedFile) } : {}),
-    ...(suggestion.details ? { details: suggestion.details } : {}),
-    confidence: suggestion.confidence,
-  }));
+  const suggestions = report.suggestions ? mapSuggestions(report.suggestions, resolveFilePath) : undefined;
   const exportSummary = report.exportSummary?.map((entry) => ({
     file: resolveFilePath(entry.file),
     symbols: entry.symbols,
@@ -184,7 +166,7 @@ function ensureImpactReport(report: ImpactReport | CompactImpactReport): ImpactR
     ...(exportSummary ? { exportSummary } : {}),
     ...(reexportChains ? { reexportChains } : {}),
     ...(topImpacts ? { topImpacts } : {}),
-    surfaceArea: resolveSurfaceArea(report.surfaceArea),
+    surfaceArea: mapSurfaceArea(report.surfaceArea, resolveFilePath),
     clusters,
     graph: {
       fileEdges,
@@ -209,13 +191,6 @@ function formatImpactReasonLabel(item: Pick<ImpactItem, "reasons" | "explain">):
   const primaryReason = item.explain?.reason ?? item.reasons[0];
   if (!primaryReason) return "reason: impact";
   return IMPACT_REASON_LABELS[primaryReason];
-}
-
-function formatRequiredArgumentCount(hint: CallCompatibilityHint): string {
-  if (hint.reason === "argument_count_above_maximum" && hint.expected.maxArgs !== null) {
-    return `accepts at most ${hint.expected.maxArgs}`;
-  }
-  return `requires ${hint.expected.minArgs}`;
 }
 
 function collectLikelyCallCompatibilityMismatches(report: ImpactReport): Array<{

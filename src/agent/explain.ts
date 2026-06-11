@@ -54,6 +54,7 @@ import {
   resolveAgentSnapshotFile,
 } from "./normalize.js";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "./session.js";
+import { buildSymbolLookup, type SymbolLookup } from "./symbolLookup.js";
 import { quoteShellArg } from "./shell.js";
 
 export type AgentExplainTarget = {
@@ -178,11 +179,6 @@ export type AgentExplanation = {
   changedContext?: AgentExplanationChangedContext;
 };
 
-type SymbolLookup = {
-  defById: Map<string, SymbolDef>;
-  exportedIds: Set<string>;
-};
-
 type ReferenceContext = {
   references: BoundedAgentList<AgentExplanationReference>;
   snippets: BoundedAgentList<AgentExplanationSnippet>;
@@ -241,22 +237,6 @@ export function formatAgentExplanation(explanation: AgentExplanation): string {
     );
   }
   return lines.join("\n");
-}
-
-function buildSymbolLookup(snapshot: AgentProjectSnapshot): SymbolLookup {
-  const defById = new Map<string, SymbolDef>();
-  const exportedIds = new Set<string>();
-
-  for (const moduleIndex of snapshot.index.byFile.values()) {
-    for (const local of moduleIndex.locals) {
-      defById.set(defNodeId(local), local);
-    }
-    for (const exportEntry of moduleIndex.exports) {
-      if (exportEntry.type === "local") exportedIds.add(defNodeId(exportEntry.target));
-    }
-  }
-
-  return { defById, exportedIds };
 }
 
 function resolveTarget(snapshot: AgentProjectSnapshot, lookup: SymbolLookup, target: string): ResolvedExplainTarget {
