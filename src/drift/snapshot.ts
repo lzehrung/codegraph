@@ -4,10 +4,10 @@ import { getHotspots } from "../graphs/hotspots.js";
 import { findDetailedCycles, getUnresolvedImports, sortDetailedCycles } from "../graphs/queries.js";
 import { buildProjectIndex, buildProjectIndexFromFiles } from "../indexer/build-index.js";
 import { getApiSurface } from "../indexer/symbols.js";
-import { supportForFile } from "../languages.js";
 import type { Edge } from "../types.js";
 import { DEFAULT_PROJECT_PATTERNS, listProjectFiles } from "../util/projectFiles.js";
 import { normalizePath, resolveFilePathFromRoot, toProjectDisplayPath } from "../util/paths.js";
+import { countFilesByLanguage } from "./languages.js";
 import type {
   ArchitectureCycle,
   ArchitectureDuplicateSummary,
@@ -40,22 +40,6 @@ async function listFilesForSnapshot(root: string, options: ArchitectureSnapshotO
   const roots = options.includeRoots.map((entry) => normalizeIncludeRoot(root, entry));
   const files = await listProjectFiles(root, DEFAULT_PROJECT_PATTERNS, options.discovery);
   return files.filter((file) => isUnderIncludeRoots(file, roots)).sort();
-}
-
-function snapshotLanguageId(id: string): string {
-  if (id === "ts") return "typescript";
-  return id;
-}
-
-function languageCounts(files: Iterable<string>): Record<string, number> {
-  const counts: Record<string, number> = {};
-  for (const file of files) {
-    const support = supportForFile(file);
-    if (!support) continue;
-    const languageId = snapshotLanguageId(support.id);
-    counts[languageId] = (counts[languageId] ?? 0) + 1;
-  }
-  return Object.fromEntries(Object.entries(counts).sort(([left], [right]) => left.localeCompare(right)));
 }
 
 function cycleKey(files: readonly string[]): string {
@@ -193,7 +177,7 @@ export async function buildArchitectureSnapshot(
     root,
     files: {
       total: indexedFiles.length,
-      byLanguage: languageCounts(indexedFiles),
+      byLanguage: countFilesByLanguage(indexedFiles),
     },
     hotspots: toSnapshotHotspots(root, getHotspots(index.graph, { includeRoots })),
     cycles: toSnapshotCycles(root, findDetailedCycles(index.graph)),

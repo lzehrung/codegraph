@@ -33,7 +33,7 @@ import {
 const nativeSourcePackage = {
   name: "@lzehrung/codegraph-native",
   version: "1.8.49",
-  files: ["index.js", "index.d.ts"],
+  files: ["index.js", "index.d.ts", "platform.js"],
   napi: {
     packageName: "@lzehrung/codegraph-native",
     targets: [
@@ -95,7 +95,9 @@ describe("release script helpers", () => {
     expect(releaseScript).toContain("assertCompleteNativeTargetArtifacts(nativeRootPath");
     expect(releaseScript).toContain("if (!rootVersion && nativeVersion)");
     expect(releaseScript).toContain('const intendedVersion = versionPlan.get("root") ?? sourceManifest.version');
-    expect(releaseScript).toContain('const nativeVersion = versionPlan.get("native") ?? readJson(nativePackagePath).version');
+    expect(releaseScript).toContain(
+      'const nativeVersion = versionPlan.get("native") ?? readJson(nativePackagePath).version',
+    );
     expect(releaseScript).toContain("restoreRootPackageManifest(sourceManifest, intendedVersion, nativeVersion)");
     expect(fs.readFileSync("scripts/publish-native-targets.mjs", "utf8")).toContain(
       "Skipping existing native target package",
@@ -126,7 +128,7 @@ describe("release script helpers", () => {
       `${JSON.stringify({
         name: "@lzehrung/codegraph-native",
         version: "1.8.49",
-        files: ["index.js", "index.d.ts"],
+        files: ["index.js", "index.d.ts", "platform.js"],
       })}\n`,
     );
 
@@ -140,7 +142,7 @@ describe("release script helpers", () => {
       expect(readJsonFile(path.join(nativePackageDir, "package.json"))).toEqual({
         name: "@lzehrung/codegraph-native",
         version: "1.8.50",
-        files: ["index.js", "index.d.ts"],
+        files: ["index.js", "index.d.ts", "platform.js"],
       });
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
@@ -496,7 +498,7 @@ describe("release script helpers", () => {
     ).toEqual({
       name: "@lzehrung/codegraph-native",
       version: "1.8.50",
-      files: ["index.js", "index.d.ts"],
+      files: ["index.js", "index.d.ts", "platform.js"],
       napi: {
         packageName: "@lzehrung/codegraph-native",
         targets: [

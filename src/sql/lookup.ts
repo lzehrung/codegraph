@@ -1,3 +1,4 @@
+import { appendToArrayMap } from "../util/collections.js";
 import { sqlObjectBaseName } from "./lex.js";
 
 export function sqlObjectLookupKeys(name: string): string[] {
@@ -7,10 +8,5 @@ export function sqlObjectLookupKeys(name: string): string[] {
 }
 
 export function pushSqlLookupValue<T>(lookup: Map<string, T[]>, key: string, value: T): void {
-  const existing = lookup.get(key);
-  if (existing) {
-    existing.push(value);
-    return;
-  }
-  lookup.set(key, [value]);
+  appendToArrayMap(lookup, key, value);
 }

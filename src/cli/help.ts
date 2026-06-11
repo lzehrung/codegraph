@@ -276,6 +276,12 @@ Usage: codegraph duplicates [path ...] [--root <path>] [--min-confidence high|me
 Path behavior:
   A single positional directory becomes the project root when --root is omitted.
   Use --root . ./src to scan a subtree while keeping repository-relative paths.
+  Positional paths are scan roots, not glob patterns.
+
+Discovery filters:
+  Shared scan flags also apply here: --include-glob, --ignore-glob, and --no-gitignore.
+  Repeat --ignore-glob or --include-glob for each pattern:
+    codegraph duplicates --root . ./src --ignore-glob "tests/**" --ignore-glob "docs/**"
 
 Options:
   --min-confidence  Minimum confidence to report. Defaults to medium.

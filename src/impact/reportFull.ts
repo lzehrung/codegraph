@@ -1,52 +1,15 @@
 import type { FileId } from "../types.js";
-import { type ProjectIndex } from "../indexer/types.js";
 import {
   buildOptionalExportSummary,
   buildOptionalReexportChains,
   buildOptionalTopImpacts,
   mapFileEdges,
 } from "./reportShared.js";
+import type { ImpactReportPartsBase } from "./reportParts.js";
 import { IMPACT_SCHEMA_VERSION } from "./types.js";
-import type {
-  ChangedSymbol,
-  ExportSummaryEntry,
-  FileChange,
-  ImpactCluster,
-  ImpactCycle,
-  ImpactDiagnostics,
-  ImpactItem,
-  ImpactReport,
-  ImpactSuggestion,
-  ImpactSurfaceArea,
-  ImpactTopItem,
-  ReexportChainEntry,
-} from "./types.js";
+import type { ImpactCycle, ImpactDiagnostics, ImpactReport, ImpactSuggestion } from "./types.js";
 
-export type FullImpactReportParts = {
-  changedFiles: Array<{
-    file: FileId;
-    kind?: FileChange["kind"];
-    oldFile?: FileId;
-    similarityIndex?: number;
-    hunks: Array<{ start: number; end: number }>;
-  }>;
-  changedSymbols: ChangedSymbol[];
-  impactedItems: ImpactItem[];
-  suggestions: ImpactSuggestion[];
-  exportSummary: ExportSummaryEntry[];
-  reexportChains: { chains: ReexportChainEntry[] } | undefined;
-  topImpacts: ImpactTopItem[];
-  surfaceArea: ImpactSurfaceArea;
-  clusters: ImpactCluster[];
-  cycles: ImpactCycle[];
-  fileEdges: Array<{
-    from: FileId;
-    to: FileId;
-    typeOnly?: boolean | undefined;
-  }>;
-  symbolEdges: Array<{ from: number; to: number; label: string }>;
-  projectFiles: ProjectIndex["projectFiles"];
-  displayFile: (file: FileId) => FileId;
+export type FullImpactReportParts = ImpactReportPartsBase & {
   diagnostics?: ImpactDiagnostics | undefined;
   warning?: string | undefined;
 };

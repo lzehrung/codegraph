@@ -162,6 +162,7 @@ codegraph chunk config.yaml --language yaml --min-tokens 100 --max-tokens 300
 # Detect duplicate and near-duplicate code units
 codegraph duplicates ./src --min-confidence medium --limit 20
 codegraph duplicates --root . ./src ./packages/app --include-same-file
+codegraph duplicates --root . ./src --ignore-glob "tests/**" --ignore-glob "docs/**"
 codegraph duplicates ./src --raw-pairs
 codegraph duplicates --help
 
@@ -195,6 +196,9 @@ codegraph grep --pattern 'eval\(' --ignore-case
 - Group `variants` are bounded by default; use `rawPairCount` and `omittedVariantCount` to see hidden evidence counts.
 - A single positional directory becomes the project root unless `--root` is set. `orient` is the exception: its positionals are always include roots.
 - Use `--root . ./src` for scoped scans with repository-relative paths.
+- Positional paths are scan roots, not glob patterns.
+- Shared discovery flags also apply here: `--include-glob`, `--ignore-glob`, and `--no-gitignore`.
+- Repeat `--ignore-glob` or `--include-glob` once per pattern.
 - Use `--include-small` for tiny helpers.
 - Use `--include-same-file` for non-overlapping clones inside one file.
 - Use `--raw-pairs` when debugging the low-level pair evidence behind each group.

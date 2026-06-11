@@ -48,7 +48,6 @@ function getIndexReferenceCache(
   return cache;
 }
 
-
 function getBaseReferences(
   index: ProjectIndex,
   def: SymbolDef,
@@ -113,7 +112,13 @@ async function attachReferenceContext(
     if (options.context === "line") {
       ref.context = extractLineContext(cached.source, ref.range.start.line, options.lines ?? DEFAULT_REF_CONTEXT_LINES);
     } else if (options.context === "block") {
-      ref.context = extractEnclosingBlock(cached.source, cached.tree, ref.range, options.blockMaxLines ?? 60, cached.sup);
+      ref.context = extractEnclosingBlock(
+        cached.source,
+        cached.tree,
+        ref.range,
+        options.blockMaxLines ?? 60,
+        cached.sup,
+      );
     }
   }
 }

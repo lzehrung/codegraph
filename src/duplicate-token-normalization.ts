@@ -1,6 +1,7 @@
 import { duplicateIdentifierKeywords } from "./duplicate-keywords.js";
 
-const duplicateTokenPattern = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|[A-Za-z_$][\w$]*|\d+(?:\.\d+)?|[^\s]/g;
+const duplicateTokenPattern =
+  /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|[A-Za-z_$][\w$]*|\d+(?:\.\d+)?|[^\s]/g;
 const identifierTokenPattern = /^[A-Za-z_$][\w$]*$/;
 
 export function tokenizeDuplicateSource(text: string): string[] {

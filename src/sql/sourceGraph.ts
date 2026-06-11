@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
+import { uniqueByKey } from "../util/collections.js";
 import type { ModuleIndex, SymbolDef } from "../indexer/types.js";
 import { SymbolKind } from "../indexer/types.js";
 import type { Edge, Range } from "../types.js";
@@ -101,15 +102,10 @@ function referenceObjectNames(fact: SqlStatementFact): string[] {
 }
 
 function uniqueFacts(candidates: readonly SqlStatementFact[]): SqlStatementFact[] {
-  const unique: SqlStatementFact[] = [];
-  const seen = new Set<string>();
-  for (const candidate of candidates) {
-    const seenKey = `${candidate.filePath}:${candidate.startLine}:${candidate.kind}:${candidate.objectName ?? ""}`;
-    if (seen.has(seenKey)) continue;
-    seen.add(seenKey);
-    unique.push(candidate);
-  }
-  return unique;
+  return uniqueByKey(
+    candidates,
+    (candidate) => `${candidate.filePath}:${candidate.startLine}:${candidate.kind}:${candidate.objectName ?? ""}`,
+  );
 }
 
 function sqlDefinitionCandidates(cache: SqlFactCache, objectName: string): SqlDefinitionCandidateMatch {

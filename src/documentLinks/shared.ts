@@ -1,6 +1,6 @@
 import path from "node:path";
+import { uniqueByKey } from "../util/collections.js";
 import { type ModuleSpecifier } from "../util/specifiers.js";
-
 const DOCUMENT_RELATIVE_EXTENSIONS = new Set([
   ".md",
   ".mdx",
@@ -42,15 +42,11 @@ const DOCUMENT_RELATIVE_EXTENSIONS = new Set([
 ]);
 
 export function dedupeModuleSpecifiers(entries: ModuleSpecifier[]): ModuleSpecifier[] {
-  const out: ModuleSpecifier[] = [];
-  const seen = new Set<string>();
-  for (const entry of entries) {
-    const key = `${entry.spec}::${entry.typeOnly ? 1 : 0}::${entry.resolutionKind ?? ""}::${entry.dropIfUnresolved ? 1 : 0}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(entry);
-  }
-  return out;
+  return uniqueByKey(
+    entries,
+    (entry) =>
+      `${entry.spec}::${entry.typeOnly ? 1 : 0}::${entry.resolutionKind ?? ""}::${entry.dropIfUnresolved ? 1 : 0}`,
+  );
 }
 
 export function normalizeLinkSpecifier(

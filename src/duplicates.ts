@@ -23,7 +23,10 @@ import { SymbolKind, type BuildOptions, type ProjectIndex, type SymbolDef } from
 import { prepareSourceInput } from "./languages/filePrep.js";
 import { SqliteDatabase } from "./sqlite-driver.js";
 import { cacheRoot } from "./indexer/build-cache/module-cache.js";
+import { appendToArrayMap } from "./util/collections.js";
+import { collectLineStartOffsets } from "./util/lines.js";
 import { assertFilePathWithinRoot, normalizePath, toProjectDisplayPath } from "./util/paths.js";
+
 export type DuplicateConfidence = "high" | "medium" | "low";
 export type DuplicateCloneType = "exact" | "renamed" | "near" | "weak";
 export type DuplicateUnitKind = "symbol" | "chunk";
@@ -137,7 +140,6 @@ export type DuplicateTarget = {
 export type DuplicateContextResult = DuplicateDetectionResult & {
   target: DuplicateTarget;
 };
-
 
 type UnitCluster = {
   id: string;
@@ -644,7 +646,14 @@ function writeDuplicateUnitsToCache(
            version = excluded.version,
            payload = excluded.payload,
            updated_at = excluded.updated_at`,
-      ).run(file, variant, sig, DUPLICATE_UNIT_CACHE_VERSION, JSON.stringify(serializeDuplicateUnits(units)), Date.now());
+      ).run(
+        file,
+        variant,
+        sig,
+        DUPLICATE_UNIT_CACHE_VERSION,
+        JSON.stringify(serializeDuplicateUnits(units)),
+        Date.now(),
+      );
     } catch {
       // best-effort cache
     }
@@ -868,14 +877,6 @@ function astContextFromParsed(parsed: ParsedFileContext): DuplicateAstContext {
     tree: parsed.tree,
     lineStartOffsets: collectLineStartOffsets(parsed.source),
   };
-}
-
-function collectLineStartOffsets(source: string): number[] {
-  const offsets = [0];
-  for (let index = 0; index < source.length; index++) {
-    if (source[index] === "\n") offsets.push(index + 1);
-  }
-  return offsets;
 }
 
 function astShapeHashForRange(
@@ -1284,12 +1285,7 @@ async function collectDuplicateUnits(
 }
 
 function addToBucket(buckets: Map<string, DuplicateInternalUnit[]>, key: string, unit: DuplicateInternalUnit): void {
-  const bucket = buckets.get(key);
-  if (bucket) {
-    bucket.push(unit);
-    return;
-  }
-  buckets.set(key, [unit]);
+  appendToArrayMap(buckets, key, unit);
 }
 
 function prepareDuplicateCandidateBuckets(units: readonly DuplicateInternalUnit[]): PreparedDuplicateBuckets {
@@ -1342,9 +1338,7 @@ async function buildDuplicateUnitsForFile(
     }
   }
 
-  const astContext = language.textOnly
-    ? undefined
-    : await getDuplicateAstContext(index, file, source, astContextCache);
+  const astContext = language.textOnly ? undefined : await getDuplicateAstContext(index, file, source, astContextCache);
   const chunks = makeDuplicateChunks(file, language.id, language.textOnly, source, minTokens, maxTokens);
   const symbolChunks = makeSymbolSourceChunks(file, language.id, language.textOnly, source, maxTokens);
   const symbolUnits = (moduleIndex?.locals ?? [])
@@ -1354,15 +1348,7 @@ async function buildDuplicateUnitsForFile(
       return makeSymbolUnit(symbol, chunk, projectRoot, index.nativeMode, shingleSize, windowSize, astContext);
     })
     .filter((unit): unit is DuplicateInternalUnit => unit !== undefined);
-  const chunkUnits = makeChunkUnits(
-    file,
-    chunks,
-    projectRoot,
-    index.nativeMode,
-    shingleSize,
-    windowSize,
-    astContext,
-  );
+  const chunkUnits = makeChunkUnits(file, chunks, projectRoot, index.nativeMode, shingleSize, windowSize, astContext);
   return [...symbolUnits, ...chunkUnits];
 }
 
@@ -1378,7 +1364,14 @@ function buildCandidatePairsFromPreparedBuckets(
   const pairs = new Map<string, PairEvidence>();
   const consideredSignaturesByUnit: ConsideredSignaturesByUnit = new Map();
   let oversizedBuckets = 0;
-  oversizedBuckets += addBucketsToPairs(preparedBuckets.rawHashBuckets, pairs, "rawHash", maxBucketSize, pairFilter, unitFilter);
+  oversizedBuckets += addBucketsToPairs(
+    preparedBuckets.rawHashBuckets,
+    pairs,
+    "rawHash",
+    maxBucketSize,
+    pairFilter,
+    unitFilter,
+  );
   oversizedBuckets += addBucketsToPairs(
     preparedBuckets.normalizedHashBuckets,
     pairs,
@@ -1395,7 +1388,14 @@ function buildCandidatePairsFromPreparedBuckets(
     pairFilter,
     unitFilter,
   );
-  oversizedBuckets += addSimilarityHintPairs(preparedBuckets.units, pairs, similarityHints, projectRoot, maxBucketSize, pairFilter);
+  oversizedBuckets += addSimilarityHintPairs(
+    preparedBuckets.units,
+    pairs,
+    similarityHints,
+    projectRoot,
+    maxBucketSize,
+    pairFilter,
+  );
   oversizedBuckets += addSignatureBucketsToPairs(
     preparedBuckets.signatureBuckets,
     pairs,
@@ -2205,7 +2205,9 @@ async function findDuplicatesTouchingTargets(
     targetSuggestionKeys.set(duplicateTargetKey(target), new Set());
   }
   const targetsTouchedByPair = (left: DuplicateInternalUnit, right: DuplicateInternalUnit): DuplicateTarget[] =>
-    normalizedTargets.filter((target) => unitTouchesDuplicateTarget(left, target) || unitTouchesDuplicateTarget(right, target));
+    normalizedTargets.filter(
+      (target) => unitTouchesDuplicateTarget(left, target) || unitTouchesDuplicateTarget(right, target),
+    );
   const touchesAnyTarget: PairFilter = (left, right) => targetsTouchedByPair(left, right).length > 0;
   const { pairs, oversizedBuckets } = buildCandidatePairsFromPreparedBuckets(
     preparedBuckets ?? prepareDuplicateCandidateBuckets(units),

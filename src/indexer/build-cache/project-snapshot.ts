@@ -108,7 +108,9 @@ export async function writeProjectIndexSnapshot(
     },
     modules: [...index.byFile.values()],
     ...(index.projectRoot ? { projectRoot: index.projectRoot } : {}),
-    ...(normalizedSnapshotNativeMode(index.nativeMode) ? { nativeMode: normalizedSnapshotNativeMode(index.nativeMode) } : {}),
+    ...(normalizedSnapshotNativeMode(index.nativeMode)
+      ? { nativeMode: normalizedSnapshotNativeMode(index.nativeMode) }
+      : {}),
     ...(index.projectFiles ? { projectFiles: index.projectFiles } : {}),
   };
   try {
@@ -124,7 +126,9 @@ function projectSnapshotPath(projectRoot: string, opts: BuildOptions | undefined
   return path.join(cacheRoot(projectRoot, opts), "project-index-snapshot.json");
 }
 
-function normalizedSnapshotNativeMode(nativeMode: ProjectIndex["nativeMode"] | undefined): ProjectIndex["nativeMode"] | undefined {
+function normalizedSnapshotNativeMode(
+  nativeMode: ProjectIndex["nativeMode"] | undefined,
+): ProjectIndex["nativeMode"] | undefined {
   if (nativeMode === undefined || nativeMode === "auto") return undefined;
   return nativeMode;
 }
@@ -167,7 +171,6 @@ function isProjectFileType(value: unknown): boolean {
 function isProjectFileRole(value: unknown): boolean {
   return value === "manifest" || value === "lockfile" || value === "config" || value === "solution" || value === "ide";
 }
-
 
 function isProjectIndexSnapshotPayload(value: unknown): value is ProjectIndexSnapshotPayload {
   if (!value || typeof value !== "object") return false;
