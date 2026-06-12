@@ -66,7 +66,7 @@ Use Codegraph when you need fast structural answers about a repo without relying
   "recommendedCommands": [
     "codegraph hotspots --root \"/workspace/codegraph\" \"/workspace/codegraph/src\" --limit 20 --json",
     "codegraph graph --root \"/workspace/codegraph\" \"/workspace/codegraph/src\" --json --symbols-detailed --compact-json",
-    "codegraph duplicates --root \"/workspace/codegraph\" \"/workspace/codegraph/src\" --min-confidence medium --limit 20 --include-same-file",
+    "codegraph duplicates --root \"/workspace/codegraph\" \"/workspace/codegraph/src\" --json --min-confidence medium --limit 20 --include-same-file",
     "codegraph doctor \"/workspace/codegraph/.codegraph-cache/index-v1\""
   ]
 }
@@ -245,7 +245,7 @@ Candidate tests: 4 (high: 1, medium: 2, low: 1)
 Run duplicate detection directly when refactor risk is the question:
 
 ```bash
-codegraph duplicates ./src --min-confidence medium --limit 20
+codegraph duplicates ./src --json --min-confidence medium --limit 20
 ```
 
 ```json
@@ -353,7 +353,7 @@ The supported package import surface is the root export, `@lzehrung/codegraph`. 
 ## Common workflows
 
 - Repo triage: run `codegraph inspect ./src --limit 20`, then follow with `codegraph hotspots ./src --limit 20` or `codegraph unresolved` to focus the next pass.
-- Duplicate cleanup: run `codegraph duplicates ./src --min-confidence medium` before refactors to find grouped extraction candidates, including renamed structural clones.
+- Duplicate cleanup: run `codegraph duplicates ./src --min-confidence medium` for the default pretty triage view, or add `--json` when a downstream tool needs grouped duplicate data.
 - Symbol navigation: use `codegraph goto <file> <line> <column>` and `codegraph refs --file <file> --line <line> --col <column> --pretty` when a question is about definitions or semantic usages rather than matching strings.
 - PR review: run `codegraph impact --base origin/main --head HEAD --pretty` for a ranked map, `codegraph review --base origin/main --head HEAD --summary` for a compact reviewer handoff with actionable candidate tests, or redirect plain `review` output when a downstream tool needs the full JSON bundle.
 - Worktree review: run `codegraph impact --base HEAD --head WORKTREE --pretty` for current staged and unstaged tracked-file changes, then `codegraph review --base HEAD --head WORKTREE --summary` for a compact handoff. Use `--head STAGED` to compare `HEAD` against the current index.

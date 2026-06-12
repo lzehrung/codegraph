@@ -34,7 +34,7 @@ Delivered:
 
 - [x] Added `--pretty` output for one-line-per-group review.
 - [x] Included file paths, symbol or chunk names, confidence, clone type, score, and token counts in the human summary.
-- [x] Kept JSON as the default machine contract.
+- [x] Flipped `duplicates` to pretty-by-default while keeping `--json` as the stable machine contract.
 
 ## Completed in this branch: Make Actionable Duplicates Easier to Isolate
 
@@ -46,14 +46,14 @@ Why this mattered:
 Delivered:
 
 - [x] Added heuristic family annotations for common duplicate families: language-parity definitions, declaration mirrors, and small CLI boilerplate.
-- [x] Added an actionability-oriented ranking mode with `--sort actionability`, and made `--pretty` default to actionability ordering.
-- [x] Kept exact grouped JSON available as the default output while allowing explicit sort control.
+- [x] Added an actionability-oriented ranking mode with `--sort actionability`, and made the default pretty output use actionability ordering.
+- [x] Kept exact grouped JSON available via `--json` while allowing explicit sort control.
 
 ## Validation Checklist
 
 - [x] `node ./dist/cli.js duplicates --help`
-- [x] `node ./dist/cli.js duplicates --root . ./src --min-confidence medium`
-- [x] `node ./dist/cli.js duplicates --root . ./src --ignore-glob "tests/**" --ignore-glob "docs/**"`
-- [x] `node ./dist/cli.js duplicates --root . ./src --pretty --include-small`
-- [x] `node ./dist/cli.js duplicates --root . --sort actionability --include-small`
+- [x] `node ./dist/cli.js duplicates --root . ./src --json --min-confidence medium`
+- [x] `node ./dist/cli.js duplicates --root . ./src --json --ignore-glob "tests/**" --ignore-glob "docs/**"`
+- [x] `node ./dist/cli.js duplicates --root . ./src --include-small`
+- [x] `node ./dist/cli.js duplicates --root . --json --sort actionability --include-small`
 - [x] A misuse case with a glob-looking positional root fails with a targeted message.

@@ -284,9 +284,9 @@ Discovery filters:
     codegraph duplicates --root . ./src --ignore-glob "tests/**" --ignore-glob "docs/**"
 
 Options:
-  --pretty            Emit one-line duplicate summaries for human triage.
-  --json              Emit grouped duplicate findings as JSON. This remains the default.
-  --sort <mode>       Order output by similarity or actionability. Actionability uses grouped visible evidence over a bounded candidate window; pretty output defaults to it.
+  --pretty            Emit one-line duplicate summaries for human triage. This is the default output.
+  --json              Emit grouped duplicate findings as JSON for programmatic consumers.
+  --sort <mode>       Order output by similarity or actionability. Pretty output defaults to actionability; JSON defaults to similarity unless --sort is explicit.
   --min-confidence    Minimum confidence to report. Defaults to medium.
   --limit             Maximum duplicate groups to return. Defaults to 50.
   --include-same-file Report non-overlapping clones in the same file.
@@ -297,8 +297,8 @@ Options:
   --max-bucket-size   Skip candidate buckets larger than this value. Defaults to 200.
 
 Output:
+  Pretty output is the default and emits one line per group with file spans, symbol or chunk labels, confidence, clone type, score, token counts, and heuristic family annotations derived from the displayed duplicate pair.
   JSON output reports grouped duplicate findings, confidence, clone type, metrics, omission counts including skipped candidate pairs, and pair stats.
-  Pretty output emits one line per group with file spans, symbol or chunk labels, confidence, clone type, score, token counts, and heuristic family annotations derived from the displayed duplicate pair.
   Grouped duplicate JSON uses schemaVersion 2.
   --raw-pairs is only supported with similarity-ranked JSON output.
 `;

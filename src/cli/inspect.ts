@@ -253,7 +253,7 @@ function buildRecommendedInspectCommands(
   const commands = [
     `codegraph hotspots ${rootFlag}${targetSuffix} --limit 20 --json`,
     `codegraph graph ${rootFlag}${targetSuffix} --json --symbols-detailed --compact-json`,
-    `codegraph duplicates ${rootFlag}${targetSuffix} --min-confidence medium --limit 20 --include-same-file`,
+    `codegraph duplicates ${rootFlag}${targetSuffix} --json --min-confidence medium --limit 20 --include-same-file`,
   ];
   if (hasUnresolvedImports) {
     commands.push(`codegraph unresolved ${rootFlag}${targetSuffix} --json`);

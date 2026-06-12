@@ -1145,7 +1145,7 @@ export function sharedClone(rows) {
     await writeProjectFile(root, "configs/b.json", source);
 
     const result = await captureCli(
-      ["duplicates", "--root", ".", "configs", "--min-confidence", "high", "--limit", "1"],
+      ["duplicates", "--root", ".", "configs", "--json", "--min-confidence", "high", "--limit", "1"],
       root,
     );
     const parsed = JSON.parse(result.stdout) as {
@@ -1182,7 +1182,17 @@ export function ignoredOrders(rows: number[]) {
     await writeProjectFile(root, "docs/dummy.ts", ignoredSource);
 
     const result = await captureCli(
-      ["duplicates", "--root", ".", "--ignore-glob", "tests/**", "--ignore-glob", "docs/**", "--include-small"],
+      [
+        "duplicates",
+        "--root",
+        ".",
+        "--json",
+        "--ignore-glob",
+        "tests/**",
+        "--ignore-glob",
+        "docs/**",
+        "--include-small",
+      ],
       root,
     );
     const parsed = JSON.parse(result.stdout) as {
@@ -1223,7 +1233,7 @@ export function formatUsage(value: string) {
     await writeProjectFile(root, "src/app/[slug]/a.ts", source);
     await writeProjectFile(root, "src/app/[slug]/b.ts", source);
 
-    const result = await captureCli(["duplicates", "--root", ".", "src/app/[slug]", "--include-small"], root);
+    const result = await captureCli(["duplicates", "--root", ".", "src/app/[slug]", "--json", "--include-small"], root);
     const parsed = JSON.parse(result.stdout) as {
       groups?: Array<{ primaryLeft?: { file?: string }; primaryRight?: { file?: string } }>;
     };
@@ -1324,6 +1334,25 @@ export function helpTextForCommand(value: string) {
 
     expect(result.exitCode).toBeUndefined();
     expect(result.stdout).not.toContain("family=cli-boilerplate");
+  });
+
+  test("duplicates CLI defaults to pretty actionability output", async () => {
+    const root = await makeTempProject();
+    const source = `
+export function formatUsage(value: string) {
+  return value.toUpperCase();
+}
+`;
+
+    await writeProjectFile(root, "src/cli/a.ts", source);
+    await writeProjectFile(root, "src/cli/b.ts", source);
+
+    const result = await captureCli(["duplicates", "--root", ".", "src", "--include-small"], root);
+
+    expect(result.exitCode).toBeUndefined();
+    expect(result.stdout).toContain("Duplicate groups shown:");
+    expect(result.stdout).toContain("Sorted by: actionability");
+    expect(result.stdout).toContain("family=cli-boilerplate");
   });
 
   test("duplicates CLI pretty output includes heuristic family annotations", async () => {
@@ -1436,9 +1465,12 @@ export interface NormalizedModeMap {
     await writeProjectFile(root, "types/a.d.ts", declarationDuplicate);
     await writeProjectFile(root, "types/b.d.ts", declarationDuplicate);
 
-    const defaultResult = await captureCli(["duplicates", "--root", ".", "--include-small", "--limit", "1"], root);
+    const defaultResult = await captureCli(
+      ["duplicates", "--root", ".", "--json", "--include-small", "--limit", "1"],
+      root,
+    );
     const actionabilityResult = await captureCli(
-      ["duplicates", "--root", ".", "--sort", "actionability", "--include-small", "--limit", "1"],
+      ["duplicates", "--root", ".", "--json", "--sort", "actionability", "--include-small", "--limit", "1"],
       root,
     );
     const defaultParsed = JSON.parse(defaultResult.stdout) as {
@@ -1489,10 +1521,13 @@ export interface NormalizedModeMap {
     await writeProjectFile(root, "types/a.d.ts", declarationDuplicate);
     await writeProjectFile(root, "types/b.d.ts", declarationDuplicate);
     const result = await captureCli(
-      ["duplicates", "--root", ".", "--sort", "actionability", "--include-small", "--limit", "1"],
+      ["duplicates", "--root", ".", "--json", "--sort", "actionability", "--include-small", "--limit", "1"],
       root,
     );
-    const defaultResult = await captureCli(["duplicates", "--root", ".", "--include-small", "--limit", "1"], root);
+    const defaultResult = await captureCli(
+      ["duplicates", "--root", ".", "--json", "--include-small", "--limit", "1"],
+      root,
+    );
     const defaultParsed = JSON.parse(defaultResult.stdout) as {
       omittedCounts?: { groups?: number; suggestions?: number; rawSuggestions?: number };
     };
@@ -1745,7 +1780,7 @@ export function summarizeOrders(rows: Array<{ amount: number; tax: number }>) {
     await writeProjectFile(root, "src/orders-a.ts", source);
     await writeProjectFile(root, "src/orders-b.ts", source);
 
-    const result = await captureCli(["duplicates", "src", "--min-confidence", "high", "--limit", "1"], root);
+    const result = await captureCli(["duplicates", "src", "--json", "--min-confidence", "high", "--limit", "1"], root);
     const parsed = JSON.parse(result.stdout) as { groups?: Array<{ score?: number }> };
 
     expect(result.exitCode).toBeUndefined();
@@ -1772,9 +1807,12 @@ export function summarizeOrders(rows: Array<{ amount: number; tax: number }>) {
     await writeProjectFile(root, "src/orders-a.ts", source);
     await writeProjectFile(root, "src/orders-b.ts", source);
 
-    const defaultResult = await captureCli(["duplicates", "src", "--min-confidence", "high", "--limit", "5"], root);
+    const defaultResult = await captureCli(
+      ["duplicates", "src", "--json", "--min-confidence", "high", "--limit", "5"],
+      root,
+    );
     const rawResult = await captureCli(
-      ["duplicates", "src", "--min-confidence", "high", "--limit", "5", "--raw-pairs"],
+      ["duplicates", "src", "--json", "--min-confidence", "high", "--limit", "5", "--raw-pairs"],
       root,
     );
     const defaultParsed = JSON.parse(defaultResult.stdout) as { suggestions?: unknown[] };
@@ -1801,7 +1839,10 @@ export function sameRows(rows: number[]) {
     await writeProjectFile(root, "src/a.ts", source);
     await writeProjectFile(root, "src/b.ts", source);
 
-    const result = await captureCli(["duplicates", "--root", ".", "src", "--limit", "0", "--include-small"], root);
+    const result = await captureCli(
+      ["duplicates", "--root", ".", "src", "--json", "--limit", "0", "--include-small"],
+      root,
+    );
     const parsed = JSON.parse(result.stdout) as {
       groups?: unknown[];
       omittedCounts?: { groups?: number; suggestions?: number; candidatePairs?: number };

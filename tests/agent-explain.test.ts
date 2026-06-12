@@ -308,6 +308,7 @@ describe("agent explain", () => {
     expect(explanation.duplicates[0]?.left.handle).toContain("src%2Fa.ts");
     expect(explanation.duplicates[0]?.hint).toContain("Possible extraction candidate");
     const duplicateFollowUp = explanation.followUps.find((command) => command.includes("codegraph duplicates"));
+    expect(duplicateFollowUp).toContain("--json");
     expect(duplicateFollowUp).toContain("src/a.ts");
     expect(duplicateFollowUp).toContain("src/b.ts");
   });
@@ -337,6 +338,7 @@ describe("agent explain", () => {
       expect(duplicate.left.file === "src/g.ts" || duplicate.right.file === "src/g.ts").toBeTruthy();
     }
     const duplicateFollowUp = explanation.followUps.find((command) => command.includes("codegraph duplicates"));
+    expect(duplicateFollowUp).toContain("--json");
     expect(duplicateFollowUp).toContain("src/g.ts");
   });
 });

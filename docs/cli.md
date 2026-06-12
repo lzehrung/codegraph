@@ -163,7 +163,7 @@ codegraph chunk config.yaml --language yaml --min-tokens 100 --max-tokens 300
 codegraph duplicates ./src --min-confidence medium --limit 20
 codegraph duplicates --root . ./src ./packages/app --include-same-file
 codegraph duplicates --root . ./src --ignore-glob "tests/**" --ignore-glob "docs/**"
-codegraph duplicates ./src --raw-pairs
+codegraph duplicates ./src --json --raw-pairs
 codegraph duplicates --help
 
 # Compare architecture drift between git refs
@@ -187,12 +187,15 @@ codegraph grep --query '(function_declaration name: (identifier) @name)'
 codegraph grep --pattern 'eval\(' --ignore-case
 ```
 
-`duplicates` emits grouped exact, renamed, near, and weak clone candidates as JSON by default, or one-line triage summaries with `--pretty`.
+`duplicates` emits one-line triage summaries by default, or grouped exact, renamed, near, and weak clone candidates as JSON with `--json`.
 
 - It combines indexed symbols, semantic chunks, text chunks, token fingerprints, and AST shape hashes when parser context is available.
+- Pretty output is the default because duplicate triage is usually an inspection workflow for both humans and agents.
+- `--pretty` emits one line per group with file spans, symbol or chunk labels, confidence, clone type, score, token counts, and heuristic family annotations derived from the displayed duplicate pair.
+- `--sort actionability` is the default in pretty mode and ranks likely cleanup wins above declaration mirrors and language-parity definitions based on grouped visible evidence from a bounded candidate window.
 - JSON output emits `schemaVersion: 2`.
 - JSON reports project-relative paths, confidence, clone type, metrics, variant counts, omission counts including skipped candidate pairs, and pair stats.
-- `--pretty` emits one line per group with file spans, symbol or chunk labels, confidence, clone type, score, token counts, and heuristic family annotations derived from the displayed duplicate pair.
+- JSON defaults to similarity ordering unless `--sort` is explicit.
 - Groups collapse overlapping symbol/chunk variants so one underlying clone appears as one finding.
 - Group `variants` are bounded by default; use `rawPairCount` and `omittedVariantCount` to see hidden evidence counts.
 - A single positional directory becomes the project root unless `--root` is set. `orient` is the exception: its positionals are always include roots.
@@ -200,9 +203,10 @@ codegraph grep --pattern 'eval\(' --ignore-case
 - Positional paths are scan roots, not glob patterns.
 - Shared discovery flags also apply here: `--include-glob`, `--ignore-glob`, and `--no-gitignore`.
 - Repeat `--ignore-glob` or `--include-glob` once per pattern.
-- Use `--sort actionability` to rank likely cleanup wins above declaration mirrors and language-parity definitions based on grouped visible evidence from a bounded candidate window. Narrow CLI boilerplate hints only apply to small `src/cli/` helpers with presentation-oriented names such as `format*` or `render*`. `--pretty` defaults to actionability ordering; JSON defaults to similarity ordering.
+- Narrow CLI boilerplate hints only apply to small `src/cli/` helpers with presentation-oriented names such as `format*` or `render*`.
 - Use `--include-small` for tiny helpers.
 - Use `--include-same-file` for non-overlapping clones inside one file.
+- Use `--json` for stable machine consumption.
 - Use `--raw-pairs` when debugging the low-level pair evidence behind each group in similarity-ranked JSON output. `--pretty --raw-pairs` and `--sort actionability --raw-pairs` are rejected.
 
 `orient`, `packet`, `search`, `explain`, `artifact`, `drift`, and `mcp` each support command-specific `--help` output.
@@ -370,7 +374,7 @@ Pretty impact and review summaries also show high-confidence exact or renamed du
 - Use `--duplicates off|changed|impacted|all` to control duplicate-lead scope.
 - Git copy or rename `similarityIndex` metadata of 80 or higher can boost scoped duplicate leads when both old and new files exist in the indexed snapshot.
 - Structured review JSON also adds bounded `duplicate-sibling` review tasks when changed files or symbols overlap high-confidence duplicate groups. Treat these as "check the sibling implementation" prompts, not semantic-equivalence claims.
-- JSON output keeps the existing impact and review contracts; use `codegraph duplicates` for full grouped duplicate JSON.
+- JSON output keeps the existing impact and review contracts; use `codegraph duplicates --json` for full grouped duplicate JSON.
 
 ### Call Compatibility Output
 
