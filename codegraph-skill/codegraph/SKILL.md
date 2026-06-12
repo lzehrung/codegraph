@@ -270,7 +270,7 @@ For git-provider impact and git-scoped review/index/graph commands, `WORKTREE` c
 - Duplicate and near-duplicate code:
   `codegraph duplicates --root . ./src --min-confidence medium`
   Covers indexed symbols, semantic chunks, text chunks, token fingerprints, and AST shape hashes when parser context is available.
-  Pretty output is the default because duplicate triage is usually an inspection workflow for both humans and agents.
+  Pretty output is the default.
   Use `--json` for the stable machine contract; grouped duplicate JSON uses schemaVersion 2.
   Pretty output includes one-line triage summaries with heuristic family hints derived from the displayed duplicate pair.
   Metrics can include `astShapeEqual` and `gitSimilarity` when those signals are available. Git copy or rename similarity must be at least 80 to boost duplicate evidence.
