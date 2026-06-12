@@ -375,14 +375,14 @@ Pretty impact and review summaries include scoped duplicate leads by default:
 - `review --summary`: high-confidence exact or renamed clones within changed plus graph-impacted files.
 - `--duplicates off|changed|impacted|all`: override the human-summary scope.
 - Git copy or rename similarity metadata can boost duplicate leads when both source and destination are present in the indexed snapshot.
-- Full duplicate groups, variants, raw pair counts, and omission counts remain in `codegraph duplicates` JSON.
+- Full duplicate groups, variants, raw pair counts, and omission counts remain in `codegraph duplicates --json`.
 - Structured review packets add bounded `duplicate-sibling` tasks when changed ranges overlap high-confidence duplicate groups.
 
 For copied-code or refactor-risk questions, add duplicate detection after the impact pass:
 
 ```bash
-codegraph duplicates --root . ./src --min-confidence medium --limit 20
-codegraph duplicates --root . ./src ./packages/app --include-same-file
+codegraph duplicates --root . ./src --json --min-confidence medium --limit 20
+codegraph duplicates --root . ./src ./packages/app --json --include-same-file
 ```
 
 - Treat duplicate groups as review or refactor leads, not automatic defects.

@@ -235,7 +235,10 @@ describe("package metadata", () => {
     const skillDoc = readText("codegraph-skill/codegraph/SKILL.md");
     const frontmatter = readFrontmatter(skillDoc);
 
-    expect(frontmatter).toContain('description: "Use for codebase navigation and repo impact analysis:');
+    expect(frontmatter).toContain("name: codegraph");
+    expect(frontmatter).toContain(
+      'description: "Use for repo structure, symbol navigation, dependency analysis, duplicate triage, and PR impact review when plain text search is too shallow."',
+    );
     expect(frontmatter.split(/\r?\n/).filter(frontmatterHasUnsafePlainColon)).toEqual([]);
   });
 

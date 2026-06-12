@@ -1013,7 +1013,7 @@ function formatDuplicateFollowUp(duplicates: readonly AgentExplanationDuplicate[
     files.add(duplicate.right.file);
   }
   const scope = [...files].sort().map(quoteShellArg).join(" ");
-  return `codegraph duplicates --root . ${scope} --min-confidence medium --include-same-file`;
+  return `codegraph duplicates --root . ${scope} --json --min-confidence medium --include-same-file`;
 }
 
 function buildSummary(
