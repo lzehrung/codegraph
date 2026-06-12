@@ -1,0 +1,689 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`native semantic coverage > keeps native semantics stable for normalization-sensitive TypeScript export assignment 1`] = `
+{
+  "goto": {
+    "file": "module.ts",
+    "line": 3,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "consumer.ts:1",
+      "consumer.ts:2",
+      "module.ts:3",
+      "module.ts:4",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 1`] = `
+{
+  "goto": {
+    "file": "utils.ts",
+    "line": 1,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "main.ts:11",
+      "main.ts:16",
+      "main.ts:7",
+      "utils.ts:1",
+      "utils.ts:29",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 2`] = `
+{
+  "goto": {
+    "file": "utils.js",
+    "line": 1,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "main.js:11",
+      "main.js:16",
+      "main.js:7",
+      "utils.js:1",
+      "utils.js:22",
+      "utils.js:31",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 3`] = `
+{
+  "goto": {
+    "file": "components/Button.tsx",
+    "line": 5,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "App.tsx:5",
+      "utils.ts:3",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 4`] = `
+{
+  "goto": {
+    "file": "components/Button.tsx",
+    "line": 5,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "JsxImportApp.tsx:4",
+      "components/Button.tsx:5",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 5`] = `
+{
+  "goto": {
+    "file": "utils.py",
+    "line": 1,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "main.py:1",
+      "main.py:11",
+      "main.py:16",
+      "main.py:3",
+      "main.py:7",
+      "main.py:7",
+      "utils.py:1",
+      "utils.py:30",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 6`] = `
+{
+  "goto": {
+    "file": "src/Support/Toolbox.php",
+    "line": 5,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "grouped-consumer.php:6",
+      "grouped-consumer.php:8",
+      "src/Support/Toolbox.php:5",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 7`] = `
+{
+  "goto": {
+    "file": "multi-namespace/Library.php",
+    "line": 8,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "bracketed-consumer.php:3",
+      "bracketed-consumer.php:5",
+      "bracketed-qualified-consumer.php:3",
+      "bracketed-qualified-consumer.php:3",
+      "multi-namespace/Library.php:8",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 8`] = `
+{
+  "goto": {
+    "file": "src/Domain/Service.php",
+    "line": 5,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "function-import-consumer.php:3",
+      "function-import-consumer.php:5",
+      "src/Collision/ThingFunction.php:5",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 9`] = `
+{
+  "goto": {
+    "file": "utils.go",
+    "line": 9,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "main.go:12",
+      "utils.go:13",
+      "utils.go:14",
+      "utils.go:17",
+      "utils.go:21",
+      "utils.go:9",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 10`] = `
+{
+  "goto": {
+    "file": "aliased-types.go",
+    "line": 8,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "aliased-types.go:9",
+      "interfaces.go:9",
+      "utils.go:13",
+      "utils.go:14",
+      "utils.go:17",
+      "utils.go:21",
+      "utils.go:9",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 11`] = `
+{
+  "goto": {
+    "file": "utils/Utils.java",
+    "line": 4,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "main.java:8",
+      "utils/Utils.java:4",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 12`] = `
+{
+  "goto": {
+    "file": "pkg/PackageService.java",
+    "line": 3,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "WildcardImports.java:7",
+      "pkg/PackageTypes.java:7",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 13`] = `
+{
+  "goto": {
+    "file": "utils/Utils.java",
+    "line": 4,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "StaticWildcardImports.java:7",
+      "utils/Utils.java:4",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 14`] = `
+{
+  "goto": {
+    "file": "Utils.cs",
+    "line": 3,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "Main.cs:10",
+      "Main.cs:7",
+      "Utils.cs:3",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 15`] = `
+{
+  "goto": {
+    "file": "NamespaceAlias.cs",
+    "line": 3,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "NamespaceAlias.cs:3",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 16`] = `
+{
+  "goto": {
+    "file": "utils.rs",
+    "line": 1,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "main.rs:4",
+      "main.rs:4",
+      "main.rs:8",
+      "utils.rs:1",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 17`] = `
+{
+  "goto": {
+    "file": "utils.rs",
+    "line": 1,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "aliased-use.rs:5",
+      "aliased-use.rs:5",
+      "aliased-use.rs:9",
+      "utils.rs:1",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 18`] = `
+{
+  "goto": {
+    "file": "nested_service.rs",
+    "line": 1,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "nested.rs:3",
+      "nested.rs:3",
+      "nested.rs:6",
+      "nested_service.rs:1",
+      "nested_service.rs:3",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 19`] = `
+{
+  "goto": {
+    "file": "extern-crate.rs",
+    "line": 6,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "extern-crate.rs:4",
+      "extern-crate.rs:4",
+      "extern-crate.rs:7",
+      "utils.rs:1",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 20`] = `
+{
+  "goto": {
+    "file": "utils/helperFunction.kt",
+    "line": 7,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "main.kt:2",
+      "main.kt:7",
+      "utils/helperFunction.kt:7",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 21`] = `
+{
+  "goto": {
+    "file": "utils/MoreTypes.kt",
+    "line": 3,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "TypeConsumers.kt:3",
+      "utils/MoreTypes.kt:3",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 22`] = `
+{
+  "goto": {
+    "file": "Utils.swift",
+    "line": 1,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "Utils.swift:1",
+      "main.swift:5",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 23`] = `
+{
+  "goto": {
+    "file": "StaticMembers.swift",
+    "line": 6,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "AdvancedUsage.swift:4",
+      "StaticMembers.swift:6",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 24`] = `
+{
+  "goto": {
+    "file": "helpers.zig",
+    "line": 1,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "helpers.zig:1",
+      "main.zig:5",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 25`] = `
+{
+  "goto": {
+    "file": "utils.h",
+    "line": 8,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "main.c:6",
+      "utils.h:6",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 26`] = `
+{
+  "goto": {
+    "file": "function-pointers.h",
+    "line": 3,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "advanced-use.c:4",
+      "function-pointers.h:3",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 27`] = `
+{
+  "goto": {
+    "file": "utils.hpp",
+    "line": 7,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "main.cpp:5",
+      "utils.hpp:7",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 28`] = `
+{
+  "goto": {
+    "file": "namespaces.hpp",
+    "line": 4,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "namespace-usage.cpp:4",
+      "namespaces.hpp:4",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 29`] = `
+{
+  "goto": {
+    "file": "utils.rb",
+    "line": 2,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "main.rb:4",
+      "main.rb:4",
+      "utils.rb:2",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 30`] = `
+{
+  "goto": {
+    "file": "namespaced.rb",
+    "line": 5,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "consumer.rb:3",
+      "namespaced.rb:5",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 31`] = `
+{
+  "goto": {
+    "status": "not_found",
+  },
+  "references": {
+    "status": "not_found",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 32`] = `
+{
+  "goto": {
+    "status": "not_found",
+  },
+  "references": {
+    "status": "not_found",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 33`] = `
+{
+  "goto": {
+    "status": "not_found",
+  },
+  "references": {
+    "status": "not_found",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 34`] = `
+{
+  "goto": {
+    "status": "not_found",
+  },
+  "references": {
+    "status": "not_found",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 35`] = `
+{
+  "goto": {
+    "status": "not_found",
+  },
+  "references": {
+    "status": "not_found",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 36`] = `
+{
+  "goto": {
+    "status": "not_found",
+  },
+  "references": {
+    "status": "not_found",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 37`] = `
+{
+  "goto": {
+    "status": "not_found",
+  },
+  "references": {
+    "status": "not_found",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 38`] = `
+{
+  "goto": {
+    "status": "not_found",
+  },
+  "references": {
+    "status": "not_found",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 39`] = `
+{
+  "goto": {
+    "status": "not_found",
+  },
+  "references": {
+    "status": "not_found",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 40`] = `
+{
+  "goto": {
+    "status": "not_found",
+  },
+  "references": {
+    "status": "not_found",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 41`] = `
+{
+  "goto": {
+    "status": "not_found",
+  },
+  "references": {
+    "status": "not_found",
+  },
+}
+`;

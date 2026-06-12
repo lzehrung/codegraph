@@ -99,6 +99,83 @@ export function maskJsLikeCommentsAndStrings(src: string): string {
   });
 }
 
+function previousNonWhitespaceIndex(src: string, start: number): number {
+  for (let i = start; i >= 0; i -= 1) {
+    if (!/\s/.test(src[i] ?? "")) return i;
+  }
+  return -1;
+}
+
+function precedingKeywordAllowsRegex(src: string, prevIndex: number): boolean {
+  let end = prevIndex + 1;
+  while (end > 0 && /\s/.test(src[end - 1] ?? "")) {
+    end -= 1;
+  }
+  let start = end;
+  while (start > 0 && /[A-Za-z]/.test(src[start - 1] ?? "")) {
+    start -= 1;
+  }
+  const keyword = src.slice(start, end);
+  return keyword === "return" || keyword === "case" || keyword === "throw" || keyword === "yield";
+}
+
+function canStartJsLikeRegex(src: string, slashIndex: number): boolean {
+  const prevIndex = previousNonWhitespaceIndex(src, slashIndex - 1);
+  if (prevIndex < 0) return true;
+  const prev = src[prevIndex] ?? "";
+  if ("([{,:;=!?&|^~<>+-*%".includes(prev)) return true;
+  return precedingKeywordAllowsRegex(src, prevIndex);
+}
+
+function maskJsLikeRegexLiterals(src: string): string {
+  const chars = [...src];
+  for (let i = 0; i < src.length; i += 1) {
+    if (src[i] !== "/" || !canStartJsLikeRegex(src, i)) continue;
+    let inClass = false;
+    let end = i + 1;
+    let found = false;
+    while (end < src.length) {
+      const ch = src[end] ?? "";
+      if (ch === "\n" || ch === "\r") break;
+      if (ch === "\\") {
+        end += 2;
+        continue;
+      }
+      if (ch === "[") {
+        inClass = true;
+        end += 1;
+        continue;
+      }
+      if (ch === "]" && inClass) {
+        inClass = false;
+        end += 1;
+        continue;
+      }
+      if (ch === "/" && !inClass) {
+        end += 1;
+        while (/[A-Za-z]/.test(src[end] ?? "")) {
+          end += 1;
+        }
+        found = true;
+        break;
+      }
+      end += 1;
+    }
+    if (!found) continue;
+    for (let index = i; index < end; index += 1) {
+      const ch = chars[index] ?? "";
+      if (ch === "\n" || ch === "\r") continue;
+      chars[index] = " ";
+    }
+    i = end - 1;
+  }
+  return chars.join("");
+}
+
+export function maskJsLikeCommentsStringsAndRegex(src: string): string {
+  return maskJsLikeRegexLiterals(maskJsLikeCommentsAndStrings(src));
+}
+
 export function stripJsonTrailingCommas(src: string): string {
   let out = "";
   let inSingle = false;

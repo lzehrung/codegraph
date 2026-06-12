@@ -157,6 +157,7 @@ export async function collectImportsForFile(
     lang?: JsLanguage;
     nativeQueries?: NativeQueryResults | null;
     graphOptions?: GraphBuildOptions;
+    native?: import("./native/treeSitterNative.js").NativeRuntimeMode;
     onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
     logLevel?: import("./logging.js").LogLevel;
   },

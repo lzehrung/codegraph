@@ -58,9 +58,9 @@ Checklist for landing a new first-class source language without drifting from re
 
 - Add shared go-to-definition coverage in `tests/goto.test.ts`.
 - Add shared references coverage in `tests/references.test.ts`.
-- Add native-vs-JS semantic parity in `tests/native-semantic-parity.test.ts`.
-- Add native extraction parity in `tests/native-tree-sitter.test.ts`.
-- Add native-only ownership coverage in `tests/native-parser-ownership.test.ts` when the language is expected to work without the JS fallback package.
+- Add native semantic coverage in `tests/native-semantic-parity.test.ts`.
+- Add native parser ownership coverage in `tests/native-parser-ownership.test.ts` when the language uses the native runtime.
+- Add reduced-mode safety or recovery coverage when the language has graph-only or regex fallback behavior.
 
 ## 8. Update public docs in the same change
 

@@ -237,6 +237,7 @@ async function buildIndexedModuleForFile(args: {
           ...(resolvedLang ? { lang: resolvedLang } : {}),
           ...(nativeQueries !== undefined ? { nativeQueries } : {}),
           graphOptions: args.graphOptions,
+          ...(args.opts?.native ? { native: args.opts.native } : {}),
           ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
           ...(args.onFallbackImportExtraction ? { onFallbackImportExtraction: args.onFallbackImportExtraction } : {}),
         });

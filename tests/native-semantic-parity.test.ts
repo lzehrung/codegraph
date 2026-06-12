@@ -126,6 +126,41 @@ async function normalizeReferences(
     ...(result.provenance ? { provenance: result.provenance } : {}),
   };
 }
+type NormalizedGoto = Awaited<ReturnType<typeof normalizeGoto>>;
+type NormalizedReferences = Awaited<ReturnType<typeof normalizeReferences>>;
+
+function relativeFile(root: string, file: string): string {
+  return path.relative(root, file).replace(/\\/g, "/");
+}
+
+function stableGotoSnapshot(root: string, result: NormalizedGoto): NormalizedGoto {
+  if (result.status !== "ok") {
+    return result;
+  }
+  return {
+    status: "ok",
+    file: relativeFile(root, result.file),
+    line: result.line,
+  };
+}
+
+function stableReferencesSnapshot(
+  root: string,
+  result: NormalizedReferences,
+): { status: "ok"; refs: string[] } | { status: "not_found" } {
+  if (result.status !== "ok") {
+    return result;
+  }
+  return {
+    status: "ok",
+    refs: result.refs
+      .map((reference) => {
+        const [file, line] = reference.split(/:(?=\d+$)/);
+        return `${relativeFile(root, file ?? "")}:${line ?? ""}`;
+      })
+      .sort(),
+  };
+}
 
 async function withNativeMode<T>(mode: "native" | "reduced", run: () => Promise<T>): Promise<T> {
   const previous = process.env.CODEGRAPH_DISABLE_NATIVE;
@@ -184,10 +219,35 @@ async function expectNativeSemantics(expectation: SemanticExpectation): Promise<
   );
 
   const nativeGoto = await normalizeGoto(nativeIndex, expectation.goto);
-  expect(nativeGoto.status).toBe(expectation.goto.expectedStatus);
+  if (expectation.goto.expectedStatus === "ok") {
+    expect(nativeGoto.status).toBe("ok");
+    if (nativeGoto.status === "ok") {
+      expect(expectation.files.map(normalizeFile)).toContain(nativeGoto.file);
+      expect(nativeGoto.line).toBeGreaterThan(0);
+    }
+  } else {
+    expect(nativeGoto).toEqual({ status: "not_found" });
+  }
 
   const nativeReferences = await normalizeReferences(nativeIndex, expectation.references);
-  expect(nativeReferences.status).toBe(expectation.references.expectedStatus);
+  expect({
+    goto: stableGotoSnapshot(expectation.root, nativeGoto),
+    references: stableReferencesSnapshot(expectation.root, nativeReferences),
+  }).toMatchSnapshot();
+
+  if (expectation.references.expectedStatus === "ok") {
+    expect(nativeReferences.status).toBe("ok");
+    if (nativeReferences.status === "ok") {
+      const indexedFiles = new Set(expectation.files.map(normalizeFile));
+      expect(nativeReferences.refs.length).toBeGreaterThan(0);
+      for (const reference of nativeReferences.refs) {
+        const [file] = reference.split(/:(?=\d+$)/);
+        expect(indexedFiles.has(file ?? "")).toBeTruthy();
+      }
+    }
+  } else {
+    expect(nativeReferences).toEqual({ status: "not_found" });
+  }
 }
 
 async function createTypeScriptNormalizationCase(): Promise<SemanticExpectation> {

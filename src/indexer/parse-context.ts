@@ -46,7 +46,7 @@ export type PreparedFileParseAttempt = {
   jsError?: string;
 };
 function createGraphOnlySyntaxTree(): SyntaxTreeLike {
-  const rootNode = {
+  const rootNode: SyntaxTreeLike["rootNode"] = {
     type: "document",
     text: "",
     startIndex: 0,

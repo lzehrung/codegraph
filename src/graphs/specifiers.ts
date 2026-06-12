@@ -149,10 +149,16 @@ function extractCssUrlSpecifiers(source: string): ModuleSpecifier[] {
   }
   return out;
 }
+
+function stripCssComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, (match) => match.replace(/[^\r\n]/g, " "));
+}
+
 function extractCssImportSpecifiers(source: string): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
-  const re = /@(import|use|forward)\s+(?:url\()?["']([^"']+)["']/gi;
-  for (const match of source.matchAll(re)) {
+  const cleaned = stripCssComments(source);
+  const re = /(?:^|[;{}])\s*@(import|use|forward)\s+(?:url\()?["']([^"']+)["']/gim;
+  for (const match of cleaned.matchAll(re)) {
     const spec = (match[2] ?? "").trim();
     if (!spec) continue;
     out.push({ spec, typeOnly: false });
@@ -288,7 +294,6 @@ export function collectModuleSpecifiersFromSource(
   const hasNativeImports = !!nativeImportsArray;
 
   let queryFailed = false;
-  let fallbackReasonOverride: FallbackImportExtractionReason | undefined;
   if (hasNativeImports) {
     try {
       for (const match of nativeImportsArray) {
@@ -362,13 +367,9 @@ export function collectModuleSpecifiersFromSource(
     return normalizeModuleSpecifiers(out);
   }
 
-  if (queryFailed) {
-    reportFallback("query-error");
-  } else if (!out.length) {
-    reportFallback("reduced-mode");
-  }
-
+  const reducedRecoveryReason = queryFailed ? "query-error" : "reduced-mode";
   if (htmlLikeLanguage && !out.length) {
+    const beforeRecovery = out.length;
     const attributeSpecs = extractHtmlAttributeSpecifiers(source);
     const inlineSpecs = extractHtmlInlineScriptSpecifiers(source);
     if (attributeSpecs.length || inlineSpecs.length) {
@@ -376,11 +377,18 @@ export function collectModuleSpecifiersFromSource(
       appendUniqueSpecifiers(out, attributeSpecs, fallbackSeen);
       appendUniqueSpecifiers(out, inlineSpecs, fallbackSeen);
     }
+    if (out.length > beforeRecovery) {
+      reportFallback(reducedRecoveryReason);
+    }
   }
   if (support.id === "css" || support.id === "scss" || support.id === "less") {
+    const beforeRecovery = out.length;
     const cssSeen = makeSeenSet(out);
     appendUniqueSpecifiers(out, extractCssImportSpecifiers(source), cssSeen);
     appendUniqueSpecifiers(out, extractCssUrlSpecifiers(source), cssSeen);
+    if (out.length > beforeRecovery) {
+      reportFallback(reducedRecoveryReason);
+    }
   }
   return normalizeModuleSpecifiers(out);
 }

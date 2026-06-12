@@ -5,15 +5,19 @@ import { type LogLevel } from "../logging.js";
 import { type FallbackImportExtractionEvent, type FallbackImportExtractionReason } from "../graphs/specifiers.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
 import { isGraphOnlyLanguage } from "../documentLinks.js";
+import { stripJsLikeComments } from "../util/comments.js";
 import {
+  assertNativeRequiredAvailable,
+  getNativeQueryExecution,
   isNativeBindingLoadedForLanguage,
   isNativeQueryAuthoritative,
   shouldAvoidJsFallbackForLanguage,
   type NativeQueryResults,
+  type NativeRuntimeMode,
 } from "../native/treeSitterNative.js";
 import type { ResolvedImportTarget } from "./imports/context.js";
 import { collectGraphOnlyImports } from "./imports/graphOnly.js";
-import { collectJsTextImports } from "./imports/jsFallback.js";
+import { collectJsTextImports, collectJsTextValueRequireImports } from "./imports/jsFallback.js";
 import {
   applyStatementImportOverride,
   createStatementImportOverrideState,
@@ -35,6 +39,7 @@ export async function collectImportsForFile(
     lang?: JsLanguage;
     nativeQueries?: NativeQueryResults | null;
     graphOptions?: GraphBuildOptions;
+    native?: NativeRuntimeMode;
     onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
     logLevel?: LogLevel;
   },
@@ -59,7 +64,12 @@ export async function collectImportsForFile(
       reason,
     });
   };
-  const resolvedNativeQueries = opts?.nativeQueries ?? null;
+  const nativeMode = opts?.native ?? opts?.graphOptions?.native;
+  assertNativeRequiredAvailable(nativeMode);
+  const resolvedNativeQueries =
+    opts?.nativeQueries !== undefined
+      ? opts.nativeQueries
+      : getNativeQueryExecution(resolvedSource, resolvedSup, nativeMode).results;
   if (isGraphOnlyLanguage(resolvedSup.id)) {
     return await collectGraphOnlyImports({
       file,
@@ -138,7 +148,16 @@ export async function collectImportsForFile(
     });
   };
 
-  const nativeLanguageAvailable = isNativeBindingLoadedForLanguage(resolvedSup.id);
+  const runValueRequireFallback = async () => {
+    await collectJsTextValueRequireImports({
+      source: resolvedSource,
+      languageId: resolvedSup.id,
+      resolveFrom,
+      pushBinding: (binding) => imports.push(binding),
+    });
+  };
+
+  const nativeLanguageAvailable = isNativeBindingLoadedForLanguage(resolvedSup.id, nativeMode);
 
   if (resolvedNativeQueries) {
     try {
@@ -159,6 +178,13 @@ export async function collectImportsForFile(
       // but only when the importBindings query was not modified by
       // normalization. Languages whose importBindings query is normalized
       // or blanked (e.g. Kotlin) may need the JS/text fallback.
+      if (
+        (resolvedSup.id === "ts" || resolvedSup.id === "tsx") &&
+        /\brequire\s*\(/.test(stripJsLikeComments(resolvedSource))
+      ) {
+        await runValueRequireFallback();
+        await finalizeImports();
+      }
       if (imports.length || isNativeQueryAuthoritative(resolvedSup, "importBindings")) {
         return imports;
       }

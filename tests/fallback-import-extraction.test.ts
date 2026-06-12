@@ -14,6 +14,62 @@ async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
 }
 
+const nativeTsDescribe =
+  isNativeTreeSitterAvailable() && getNativeTreeSitterSupportedLanguageIds().includes("ts") ? describe : describe.skip;
+
+nativeTsDescribe("native TypeScript import binding recovery", () => {
+  it("preserves CommonJS value require bindings in native mode", async () => {
+    const root = await mkTmpDir("cg-native-ts-require-");
+    const main = path.join(root, "main.ts");
+    const dep = path.join(root, "dep.ts");
+    await fsp.writeFile(dep, "export const dep = 1;\n", "utf8");
+    await fsp.writeFile(
+      main,
+      [
+        "const dep = /* webpackChunkName: 'dep' */",
+        "  require /* webpackMode: 'eager' */ ('./dep');",
+        "const example = \"const fake = require('./fake')\";",
+        "const pattern = /const fake = require ('react')/;",
+        "const docs = `\\n  import { fake } from './fake';\\n  const alsoFake = require('./also-fake');\\n`;",
+        "console.log(dep, example);",
+      ].join("\n"),
+      "utf8",
+    );
+
+    try {
+      const index = await buildProjectIndexFromFiles(root, [main, dep]);
+      const mod = index.byFile.get(main.replace(/\\/g, "/"));
+      expect(mod?.imports).toEqual([
+        expect.objectContaining({ kind: "default", local: "dep", from: "./dep", mechanism: "cjs" }),
+      ]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps exported CommonJS require bindings in reduced mode", async () => {
+    const root = await mkTmpDir("cg-reduced-exported-require-");
+    const main = path.join(root, "main.ts");
+    const dep = path.join(root, "dep.ts");
+    await fsp.writeFile(dep, "export const dep = 1;\n", "utf8");
+    await fsp.writeFile(
+      main,
+      "const before = 1; export const depRef = require('./dep');\nconsole.log(before, depRef);\n",
+      "utf8",
+    );
+
+    try {
+      const index = await buildProjectIndexFromFiles(root, [main, dep], { native: "off" });
+      const mod = index.byFile.get(main.replace(/\\/g, "/"));
+      expect(mod?.imports).toEqual([
+        expect.objectContaining({ kind: "default", local: "depRef", from: "./dep", mechanism: "cjs" }),
+      ]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("Import extraction fallback reporting", () => {
   it("avoids regex fallback for TypeScript import equals", async () => {
     const root = await mkTmpDir("cg-import-equals-");
@@ -40,6 +96,25 @@ describe("Import extraction fallback reporting", () => {
     );
     expect(importBinding).toBeTruthy();
     expect(edge).toBeTruthy();
+  });
+
+  it("does not emit default bindings for type-only named imports in reduced mode", async () => {
+    const root = await mkTmpDir("cg-type-import-fallback-");
+    const main = path.join(root, "main.ts");
+    const types = path.join(root, "types.ts");
+    await fsp.writeFile(types, "export type Foo = { value: string };\n", "utf8");
+    await fsp.writeFile(main, "import type { Foo } from './types';\nconst value: Foo = { value: 'x' };\n", "utf8");
+
+    try {
+      const index = await buildProjectIndexFromFiles(root, [main, types], { native: "off" });
+      const mod = index.byFile.get(main.replace(/\\/g, "/"));
+      expect(mod?.imports).toEqual([
+        expect.objectContaining({ kind: "named", imported: "Foo", local: "Foo", typeOnly: true }),
+      ]);
+      expect(mod?.imports).not.toEqual([expect.objectContaining({ kind: "default", local: "type" })]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("preserves // inside string literals while stripping comments", () => {
@@ -94,6 +169,7 @@ describe("Import extraction fallback reporting", () => {
       'const loggedRequire = "call require(\\"./not-real\\") in docs";',
       "const loggedImport = 'call import(\"./also-not-real\") in docs';",
       'const loggedExport = `export { thing } from "./template-doc"`;',
+      'const loggedRegex = /require("\\.\\/regex-not-real")/;',
       "const actual = require('./real')",
       "const dynamic = import('./dynamic')",
     ].join("\n");
