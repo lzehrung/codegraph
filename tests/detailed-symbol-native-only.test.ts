@@ -190,6 +190,14 @@ describe("detailed symbol graph in native-only installs", () => {
         resolved: normalizePath(depFile),
         typeOnly: false,
       },
+      {
+        kind: "named",
+        local: "helper",
+        imported: "helper",
+        from: "./dep",
+        resolved: normalizePath(depFile),
+        typeOnly: false,
+      },
     ]);
     expect(parseSpy).not.toHaveBeenCalled();
     expect(querySpy).not.toHaveBeenCalled();
