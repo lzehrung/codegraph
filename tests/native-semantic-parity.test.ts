@@ -127,9 +127,9 @@ async function normalizeReferences(
   };
 }
 
-async function withNativeMode<T>(mode: "native" | "js", run: () => Promise<T>): Promise<T> {
+async function withNativeMode<T>(mode: "native" | "reduced", run: () => Promise<T>): Promise<T> {
   const previous = process.env.CODEGRAPH_DISABLE_NATIVE;
-  if (mode === "js") {
+  if (mode === "reduced") {
     process.env.CODEGRAPH_DISABLE_NATIVE = "1";
   } else {
     delete process.env.CODEGRAPH_DISABLE_NATIVE;
@@ -147,7 +147,7 @@ async function withNativeMode<T>(mode: "native" | "js", run: () => Promise<T>): 
   }
 }
 
-async function buildSemanticIndex(expectation: SemanticExpectation, mode: "native" | "js"): Promise<ProjectIndex> {
+async function buildSemanticIndex(expectation: SemanticExpectation, mode: "native" | "reduced"): Promise<ProjectIndex> {
   return await withNativeMode(mode, async () => {
     const files = expectation.files.map(normalizeFile);
     return await buildProjectIndexFromFiles(expectation.root, files);
@@ -174,21 +174,19 @@ function sampleExpectation(
   };
 }
 
-async function expectSemanticParity(expectation: SemanticExpectation): Promise<void> {
+async function expectNativeSemantics(expectation: SemanticExpectation): Promise<void> {
   const nativeIndex = await buildSemanticIndex(expectation, "native");
-  const jsIndex = await buildSemanticIndex(expectation, "js");
 
-  expect(normalizeGraphEdges(nativeIndex)).toEqual(normalizeGraphEdges(jsIndex));
-  expect(normalizeSymbols(nativeIndex, expectation.symbols)).toEqual(normalizeSymbols(jsIndex, expectation.symbols));
+  expect(normalizeSymbols(nativeIndex, expectation.symbols)).toEqual(
+    Object.fromEntries(
+      (expectation.symbols ?? []).map((entry) => [normalizeFile(entry.file), [...entry.names].sort()]),
+    ),
+  );
 
   const nativeGoto = await normalizeGoto(nativeIndex, expectation.goto);
-  const jsGoto = await normalizeGoto(jsIndex, expectation.goto);
-  expect(nativeGoto).toEqual(jsGoto);
   expect(nativeGoto.status).toBe(expectation.goto.expectedStatus);
 
   const nativeReferences = await normalizeReferences(nativeIndex, expectation.references);
-  const jsReferences = await normalizeReferences(jsIndex, expectation.references);
-  expect(nativeReferences).toEqual(jsReferences);
   expect(nativeReferences.status).toBe(expectation.references.expectedStatus);
 }
 
@@ -238,8 +236,8 @@ async function createTypeScriptNormalizationCase(): Promise<SemanticExpectation>
   };
 }
 
-nativeDescribe("native semantic parity", () => {
-  it("matches native and JS semantics for representative language fixtures", async () => {
+nativeDescribe("native semantic coverage", () => {
+  it("keeps native semantics stable for representative language fixtures", async () => {
     const cases: SemanticExpectation[] = [
       sampleExpectation(
         "typescript",
@@ -590,12 +588,12 @@ nativeDescribe("native semantic parity", () => {
     ];
 
     for (const testCase of cases) {
-      await expectSemanticParity(testCase);
+      await expectNativeSemantics(testCase);
     }
   }, 60_000);
 
-  it("matches native and JS semantics for normalization-sensitive TypeScript export assignment", async () => {
+  it("keeps native semantics stable for normalization-sensitive TypeScript export assignment", async () => {
     const testCase = await createTypeScriptNormalizationCase();
-    await expectSemanticParity(testCase);
+    await expectNativeSemantics(testCase);
   });
 });

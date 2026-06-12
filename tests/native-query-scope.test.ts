@@ -212,17 +212,14 @@ describe("authoritative empty native results", () => {
     expect(fallbackEvents).toEqual([
       expect.objectContaining({
         language: "ts",
-        reason: "query-empty",
+        reason: "reduced-mode",
         file: "main.ts",
       }),
     ]);
   });
 
-  it("recovers HTML specifiers without warning when JS query fallback fails", () => {
+  it("recovers HTML specifiers without warning in reduced mode", () => {
     const support = supportById("html")!;
-    const executeSpy = vi.spyOn(jsFallback, "executeJsQueryAsNativeMatches").mockImplementation(() => {
-      throw new Error("HTML JS query fallback should not be required");
-    });
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     try {
@@ -240,7 +237,6 @@ describe("authoritative empty native results", () => {
         { spec: "./app.js", resolutionKind: "document" },
         { spec: "./about.html", resolutionKind: "document" },
       ]);
-      expect(executeSpy).toHaveBeenCalledOnce();
       expect(warnSpy).not.toHaveBeenCalled();
     } finally {
       warnSpy.mockRestore();

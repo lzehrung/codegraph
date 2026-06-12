@@ -1,14 +1,11 @@
-import { isJsSyntaxTree, parseWithJsLanguage, type JsSyntaxTree } from "../jsFallback.js";
-import { logWithLevel, type LogLevel } from "../logging.js";
+import type { LogLevel } from "../logging.js";
 import { isGraphOnlyLanguage } from "../documentLinks.js";
 import { capturesByName, capturesNamed, rangeFromNativeCapture } from "../native/queryResults.js";
 import { ProjectedSyntaxTree } from "../native/projectedTree.js";
 import {
-  executeJsQueryAsNativeMatches,
   assertNativeRequiredAvailable,
   getNativeSyntaxTreeExecution,
   isNativeRequiredUnavailableError,
-  isNativeBindingLoadedForLanguage,
   type NativeCapture,
   type NativeQueryResults,
   type NativeRuntimeMode,
@@ -302,18 +299,9 @@ export function collectLocalsAndExportsFromSource(
   const nativeQueries = opts?.nativeQueries ?? null;
   let tree: SyntaxTreeLike | null = opts?.tree ?? null;
   let treeAttempted = !!tree;
-  let jsQueryTree = opts?.tree && isJsSyntaxTree(opts.tree) ? opts.tree : null;
-  let jsQueryTreeAttempted = !!jsQueryTree;
-  let resolvedLang = lang;
-  const ensureResolvedLang = (): JsLanguage => {
-    resolvedLang ??= support.language(file);
-    return resolvedLang;
-  };
 
-  // Lazily parse the JS tree on first access. This avoids re-parsing files
-  // in JS when native queries already cover the needed data and downstream
-  // logic never touches the tree (e.g. languages where native locals/exports
-  // succeed without needing tree-based enrichment).
+  // Lazily parse a native-projected tree on first access. In zero-native mode
+  // there is no grammar fallback; callers get reduced locals/exports instead.
   const ensureTree = (): SyntaxTreeLike | null => {
     if (tree || treeAttempted) return tree;
     treeAttempted = true;
@@ -323,27 +311,11 @@ export function collectLocalsAndExportsFromSource(
         tree = new ProjectedSyntaxTree(source, nativeTreeExecution.tree);
         return tree;
       }
-      const parsedTree = parseWithJsLanguage(source, ensureResolvedLang());
-      tree = parsedTree;
-      jsQueryTree = parsedTree;
-      jsQueryTreeAttempted = true;
     } catch (error) {
       if (isNativeRequiredUnavailableError(error)) throw error;
-      /* parse fallback: ignore */
+      /* reduced mode: ignore */
     }
     return tree;
-  };
-
-  const ensureJsQueryTree = (): JsSyntaxTree | null => {
-    if (jsQueryTree || jsQueryTreeAttempted) return jsQueryTree;
-    jsQueryTreeAttempted = true;
-    try {
-      jsQueryTree = parseWithJsLanguage(source, ensureResolvedLang());
-    } catch (error) {
-      if (isNativeRequiredUnavailableError(error)) throw error;
-      /* parse fallback: ignore */
-    }
-    return jsQueryTree;
   };
 
   const locals: SymbolDef[] = [];
@@ -401,36 +373,7 @@ export function collectLocalsAndExportsFromSource(
     }
   };
 
-  const extractLocalsFromJsQueries = (): boolean => {
-    if (isNativeBindingLoadedForLanguage(support.id, opts?.nativeMode)) {
-      return false;
-    }
-    const jsTree = ensureJsQueryTree();
-    if (!jsTree || !support.queries.locals.trim()) return false;
-    if (!QUERY_DRIVEN_LOCALS_LANGUAGES.has(support.id)) return false;
-    try {
-      const matches = executeJsQueryAsNativeMatches(
-        source,
-        support,
-        ensureResolvedLang(),
-        support.queries.locals,
-        jsTree,
-      );
-      for (const match of matches) {
-        for (const cap of match.captures) {
-          if (cap.name !== "name" && cap.name !== "tname") continue;
-          const range = rangeFromNativeCapture(cap);
-          const node = jsTree.rootNode.descendantForIndex(range.start.index ?? 0, range.end.index ?? 0) ?? undefined;
-          pushLocal(cap.text, classifyLocalCapture(cap, range, node), range, node);
-        }
-      }
-      return true;
-    } catch (error) {
-      if (isNativeRequiredUnavailableError(error)) throw error;
-      logWithLevel(opts?.logLevel, "warn", `Warning: Query error in locals for ${support.id}:`, error);
-      return false;
-    }
-  };
+  const extractLocalsFromJsQueries = (): boolean => false;
 
   const usedNativeLocals = extractLocalsFromNativeQueries();
   const usedQueryLocals = usedNativeLocals || extractLocalsFromJsQueries();
@@ -744,33 +687,6 @@ export function collectLocalsAndExportsFromSource(
     } catch (error) {
       if (isNativeRequiredUnavailableError(error)) throw error;
       usedNativeExports = false;
-    }
-  }
-  const jsExportTree =
-    !usedNativeExports && !isNativeBindingLoadedForLanguage(support.id, opts?.nativeMode) ? ensureJsQueryTree() : null;
-  if (support.queries.exports.trim() && jsExportTree && !usedNativeExports) {
-    try {
-      appendExportsFromMatches(
-        executeJsQueryAsNativeMatches(source, support, ensureResolvedLang(), support.queries.exports, jsExportTree),
-        jsExportTree,
-      );
-      if (!exports.some((e) => e.type === "local" && e.exportedAs === "default")) {
-        const mDefFn = source.match(/\bexport\s+default\s+function\s+([A-Za-z_$][\w$]*)/);
-        const mDefCls = source.match(/\bexport\s+default\s+class\s+([A-Za-z_$][\w$]*)/);
-        const name = mDefFn?.[1] ?? mDefCls?.[1];
-        if (name) {
-          const local = locals.find((d) => d.localName === name);
-          if (local)
-            exports.push({
-              type: "local",
-              exportedAs: "default",
-              target: { ...local, kind: SymbolKind.Default },
-            });
-        }
-      }
-    } catch (error) {
-      if (isNativeRequiredUnavailableError(error)) throw error;
-      // fall through to regex fallback below
     }
   }
 

@@ -117,7 +117,7 @@ describe("detailed symbol graph in native-only installs", () => {
     const warnings = warnSpy.mock.calls.map((call) => String(call[0] ?? ""));
     expect(index.byFile.size).toBe(1);
     expect(index.byFile.get(normalizePath(path.join(root, "legacy.js")))).toBeDefined();
-    expect(parseSpy.mock.calls.length).toBeGreaterThan(0);
+    expect(parseSpy).not.toHaveBeenCalled();
     expect(report.backend?.parser?.total).toBe(1);
     expect(report.backend?.parser?.byLanguage.js).toBe(1);
     expect(report.backend?.parser?.files).toContainEqual(

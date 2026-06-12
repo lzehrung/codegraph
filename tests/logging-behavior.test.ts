@@ -129,9 +129,6 @@ describe("logging behavior", () => {
     await fsp.writeFile(dependencyFile, "export const dep = 1;\n", "utf8");
 
     const availabilitySpy = vi.spyOn(jsFallback, "isJsFallbackAvailable").mockReturnValue(false);
-    const parseSpy = vi.spyOn(jsFallback, "parseWithJsLanguage").mockImplementation(() => {
-      throw new Error("JS Tree-sitter fallback is unavailable for test recovery");
-    });
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
     const fallbackEvents: FallbackImportExtractionEvent[] = [];
@@ -148,18 +145,12 @@ describe("logging behavior", () => {
       });
 
       expect(imports).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "named", imported: "dep" })]));
-      expect(fallbackEvents).toContainEqual(
-        expect.objectContaining({
-          language: "ts",
-          reason: "js-fallback-unavailable",
-        }),
-      );
+      expect(fallbackEvents).toEqual([]);
       expect(warnSpy).not.toHaveBeenCalled();
       expect(debugSpy).not.toHaveBeenCalled();
     } finally {
       debugSpy.mockRestore();
       warnSpy.mockRestore();
-      parseSpy.mockRestore();
       availabilitySpy.mockRestore();
       await fsp.rm(root, { recursive: true, force: true });
     }

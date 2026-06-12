@@ -423,8 +423,7 @@ describe("package metadata", () => {
     expect(devDependencies["@typescript-eslint/parser"]).toBeUndefined();
     expect(devDependencies["eslint-import-resolver-typescript"]).toBeUndefined();
     expect(devDependencies["eslint-plugin-import"]).toBeUndefined();
-    expect(fallbackDependencies["tree-sitter-svelte"]).toBeUndefined();
-    expect(fallbackDependencies["@tree-sitter-grammars/tree-sitter-svelte"]).toBeDefined();
+    expect(Object.keys(fallbackDependencies)).toHaveLength(0);
   });
 
   it("keeps all publishable workspaces under the packages directory", () => {
@@ -455,17 +454,16 @@ describe("package metadata", () => {
     expect(files).toEqual(["index.js", "index.d.ts", "platform.js"]);
   });
 
-  it("keeps JS fallback grammars in the separate opt-in package", () => {
+  it("keeps the compatibility fallback package free of grammar dependencies", () => {
     const fallbackPackage = readJson("packages/codegraph-js-fallback/package.json");
     const dependencies = readStringRecord(fallbackPackage.dependencies);
 
-    expect(dependencies["tree-sitter"]).toBeDefined();
-    expect(dependencies["tree-sitter-php"]).toBeDefined();
-    expect(dependencies["tree-sitter-typescript"]).toBeDefined();
-    expect(dependencies["tree-sitter-vue"]).toBeDefined();
-    expect(dependencies["@tree-sitter-grammars/tree-sitter-svelte"]).toBeDefined();
-    expect(dependencies["@tree-sitter-grammars/tree-sitter-zig"]).toBeDefined();
-    expect(dependencies["tree-sitter-svelte"]).toBeUndefined();
+    expect(dependencies["tree-sitter"]).toBeUndefined();
+    expect(dependencies["tree-sitter-php"]).toBeUndefined();
+    expect(dependencies["tree-sitter-typescript"]).toBeUndefined();
+    expect(dependencies["tree-sitter-vue"]).toBeUndefined();
+    expect(dependencies["@tree-sitter-grammars/tree-sitter-svelte"]).toBeUndefined();
+    expect(dependencies["@tree-sitter-grammars/tree-sitter-zig"]).toBeUndefined();
   });
 
   it("does not publish local file dependencies in the JS fallback package", () => {
@@ -604,17 +602,18 @@ void onImpactItemStreaming;
     expect(streamingSource).toContain("top impacts");
   });
 
-  it("keeps fallback install guidance aligned with the scoped registry requirement", () => {
+  it("keeps installation guidance aligned with native-first reduced-mode behavior", () => {
     const readme = readText("README.md");
     const installationDoc = readText("docs/installation.md");
     const skillDoc = readText("codegraph-skill/codegraph/SKILL.md");
 
     expect(readme).toContain("@lzehrung:registry");
-    expect(readme).toContain("@lzehrung/codegraph-js-fallback");
+    expect(readme).not.toContain("opt-in JS fallback path");
     expect(installationDoc).toContain("@lzehrung:registry");
-    expect(installationDoc).toContain("@lzehrung/codegraph-js-fallback");
-    expect(skillDoc).toContain("@lzehrung:registry");
+    expect(installationDoc).toContain("reduced graph-only and regex recovery mode");
+    expect(installationDoc).not.toContain("--legacy-peer-deps");
     expect(skillDoc).toContain("@lzehrung/codegraph-js-fallback");
+    expect(skillDoc).toContain("compatibility shim");
   });
 
   it("keeps the release workflow publishing the root, native, and fallback packages together", () => {
@@ -624,9 +623,8 @@ void onImpactItemStreaming;
     const artifactsCommand = runCommands.find((command) => command.includes("cli.js artifacts"));
     const installIndex = workflow.indexOf("npm ci --ignore-scripts");
     const publishInstallIndex = workflow.lastIndexOf("npm ci --ignore-scripts");
-    const publishPatchIndex = workflow.lastIndexOf("node ./scripts/patch-tree-sitter-node24.mjs");
     const publishRebuildIndex = workflow.lastIndexOf("npm rebuild");
-    const firstRebuildIndex = workflow.indexOf("npm rebuild");
+    const patchIndex = workflow.indexOf("patch-tree-sitter-node24");
     const rerunGuardIndex = workflow.indexOf("Refuse reruns on an already-tagged release commit");
     const versionIndex = workflow.indexOf("node ./scripts/set-native-package-version.mjs");
     const createDirsIndex = workflow.indexOf("npm run native:create-npm-dirs");
@@ -675,15 +673,13 @@ void onImpactItemStreaming;
     expect(installIndex).toBeGreaterThan(-1);
     expect(rerunGuardIndex).toBeGreaterThan(versionIndex);
     expect(publishInstallIndex).toBeGreaterThan(rerunGuardIndex);
-    expect(publishPatchIndex).toBeGreaterThan(publishInstallIndex);
-    expect(firstRebuildIndex).toBeGreaterThan(rerunGuardIndex);
-    expect(publishRebuildIndex).toBeGreaterThan(publishPatchIndex);
+    expect(publishRebuildIndex).toBe(-1);
+    expect(patchIndex).toBe(-1);
     expect(versionIndex).toBeGreaterThan(installIndex);
     expect(createDirsIndex).toBeGreaterThan(versionIndex);
     expect(cleanupArtifactsIndex).toBeGreaterThan(createDirsIndex);
     expect(workflow).not.toContain("native:stage-local");
     expect(publishIndex).toBeGreaterThan(cleanupArtifactsIndex);
-    expect(publishIndex).toBeGreaterThan(publishRebuildIndex);
     expect(releaseIndex).toBeGreaterThan(publishIndex);
     expect(workflow).toContain(
       "npm run publish:${{ inputs.release_type }} -- --package root --package native --package js-fallback",

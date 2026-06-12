@@ -110,8 +110,6 @@ function runOutput(command, args, options = {}) {
 
 function refreshDependencies() {
   run("npm", ["install"]);
-  run("node", ["./scripts/patch-tree-sitter-node24.mjs"]);
-  run("npm", ["rebuild"]);
 }
 
 function gitOutput(args) {

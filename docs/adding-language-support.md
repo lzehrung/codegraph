@@ -17,13 +17,12 @@ Checklist for landing a new first-class source language without drifting from re
 - Add the file extension to discovery and resolution in `src/util.ts`.
 - Update CLI help in `src/cli.ts` when a command accepts a language override and cannot derive it from the registered chunking configs.
 
-## 3. Wire both runtime paths
+## 3. Wire the native runtime path
 
-- Add the JS fallback grammar dependency in `packages/codegraph-js-fallback/package.json`.
-- Update the fallback loader if the grammar package exports a non-standard symbol.
 - Add the native grammar dependency in `packages/codegraph-native/Cargo.toml`.
 - Register the native language id and smoke coverage in `packages/codegraph-native/src/lib.rs`.
 - Rebuild the native addon before trusting any native parity failures.
+- If reduced-mode recovery needs language-specific heuristics, add them in the existing regex/graph-only recovery paths rather than adding a second grammar backend.
 
 ## 4. Implement the language definition cleanly
 

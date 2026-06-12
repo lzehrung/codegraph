@@ -4,9 +4,9 @@ Codegraph publishes as three standalone packages:
 
 - `@lzehrung/codegraph`: the main JS package and CLI
 - `@lzehrung/codegraph-native`: the optional native Tree-sitter meta package plus per-platform binary packages
-- `@lzehrung/codegraph-js-fallback`: the opt-in JS Tree-sitter fallback package
+- `@lzehrung/codegraph-js-fallback`: a compatibility shim package with no grammar bundle
 
-The main package depends on the native package optionally, so installs still succeed when no matching native binary exists. The JS fallback package is standalone and is only published when its own package changes.
+The main package depends on the native package optionally, so installs still succeed when no matching native binary exists. The compatibility shim remains standalone and versioned separately for package continuity.
 
 ## Fast Path
 
@@ -24,13 +24,12 @@ npm run publish:major
 npm run publish:resume
 ```
 
-`release:*` detects changed packages, bumps only those packages, refreshes the lockfile, reapplies the Node 24 Tree-sitter patch, rebuilds native npm dependencies, requires the native addon to build or load for the current platform, runs tests/builds, commits, creates package-scoped tags, and pushes.
+`release:*` detects changed packages, bumps only those packages, refreshes the lockfile, requires the native addon to build or load for the current platform, runs tests/builds, commits, creates package-scoped tags, and pushes.
 
 `publish:*` does the same work and also publishes:
 
-- staged native target packages when `@lzehrung/codegraph-native` is selected
-- the `@lzehrung/codegraph-native` meta package when it changed
-- the `@lzehrung/codegraph-js-fallback` package when it changed
+- staged native target packages plus the `@lzehrung/codegraph-native` meta package when `@lzehrung/codegraph-native` is selected
+- the `@lzehrung/codegraph-js-fallback` shim package when it changed
 - the root `@lzehrung/codegraph` package when it changed
 
 When a publish includes `@lzehrung/codegraph-native`, the script verifies the complete supported native target set before running the full test suite. A local WSL/macOS/Windows shell can only build its own target, so use the `release` GitHub Actions workflow or manually collect every target artifact before running a native publish locally.
@@ -49,7 +48,7 @@ Use the `release` GitHub Actions workflow when you want GitHub to cut a complete
 - Trigger it manually with `release_type=patch|minor|major`.
 - The workflow builds every target declared in `packages/codegraph-native/package.json` `napi.targets`.
 - It collects the per-target npm package artifacts, then runs `npm run publish:<release_type> -- --package root --package native --package js-fallback`.
-- The publish step verifies that every supported native target artifact is present before publishing target packages, the native meta package, the JS fallback package, and the root package.
+- The publish step verifies that every supported native target artifact is present before publishing target packages, the native meta package, the compatibility js-fallback shim package, and the root package.
 - On success it pushes all package tags, creates or updates the overall `vX.Y.Z` GitHub Release for the root package version, and uploads the root `.tgz` asset.
 - The workflow refuses reruns from a commit that is already tagged for the current root version. A fresh Actions runner cannot reconstruct the dirty local resume state that `publish:resume` expects.
 - By default the workflow uses `GITHUB_TOKEN` for GitHub Packages. If an existing package is not linked to this repository or does not grant this repository write access, create a `PACKAGE_PUBLISH_TOKEN` Actions secret from a classic PAT that can write the `@lzehrung` packages; the workflow will use it for npm publishing.
@@ -59,13 +58,13 @@ Use the `release` GitHub Actions workflow when you want GitHub to cut a complete
 - `@lzehrung/codegraph`
   - Publishes `dist/` and the CLI.
   - Loads `@lzehrung/codegraph-native` when present.
-  - Falls back to the JS Tree-sitter path automatically otherwise.
+  - Drops to reduced graph-only and regex recovery mode when native is unavailable.
 - `@lzehrung/codegraph-native`
   - Publishes the meta package.
   - Resolves and loads the correct per-platform binary package.
 - `@lzehrung/codegraph-js-fallback`
-  - Publishes the opt-in JS fallback runtime and Tree-sitter grammars.
-  - Does not depend on the root package through a local `file:` dependency.
+  - Publishes the compatibility shim package.
+  - Does not ship grammar dependencies or depend on the root package through a local `file:` dependency.
 
 ## Manual Native Staging
 
@@ -133,7 +132,6 @@ npm publish --workspace=@lzehrung/codegraph-js-fallback
 
 ## Release Notes
 
-- Root releases create both `v1.8.44` and `@lzehrung/codegraph@1.8.44`; workspace package releases keep package-scoped tags like `@lzehrung/codegraph-native@1.8.44`.
 - `@lzehrung/codegraph`, `@lzehrung/codegraph-native`, and `@lzehrung/codegraph-js-fallback` version independently.
 - `src/native/treeSitterNative.ts` prefers the installed `@lzehrung/codegraph-native` package and falls back to the local workspace package for development.
-- If a native binary or query is unavailable at runtime, Codegraph automatically uses the JS Tree-sitter implementation.
+- If a native binary or query is unavailable at runtime, Codegraph degrades to reduced graph-only and regex recovery mode.

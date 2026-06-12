@@ -10,11 +10,11 @@ import { __resetNativeTreeSitterBindingForTests, isNativeTreeSitterAvailable } f
 
 const nativeDescribe = isNativeTreeSitterAvailable() ? describe : describe.skip;
 
-type RuntimeMode = "native" | "js";
+type RuntimeMode = "native" | "reduced";
 
 function withRuntimeMode<T>(mode: RuntimeMode, run: () => T): T {
   const previous = process.env.CODEGRAPH_DISABLE_NATIVE;
-  if (mode === "js") {
+  if (mode === "reduced") {
     process.env.CODEGRAPH_DISABLE_NATIVE = "1";
   } else {
     delete process.env.CODEGRAPH_DISABLE_NATIVE;
@@ -34,7 +34,7 @@ function withRuntimeMode<T>(mode: RuntimeMode, run: () => T): T {
 
 async function withRuntimeModeAsync<T>(mode: RuntimeMode, run: () => Promise<T>): Promise<T> {
   const previous = process.env.CODEGRAPH_DISABLE_NATIVE;
-  if (mode === "js") {
+  if (mode === "reduced") {
     process.env.CODEGRAPH_DISABLE_NATIVE = "1";
   } else {
     delete process.env.CODEGRAPH_DISABLE_NATIVE;
@@ -72,8 +72,8 @@ afterEach(() => {
   __resetNativeTreeSitterBindingForTests();
 });
 
-nativeDescribe("native query ownership parity", () => {
-  it("keeps chunkFile output identical for representative languages", () => {
+nativeDescribe("native query ownership", () => {
+  it("keeps chunkFile productive in native mode and safe in reduced mode", () => {
     const cases = [
       {
         config: LANG_CONFIGS.javascript,
@@ -118,7 +118,7 @@ nativeDescribe("native query ownership parity", () => {
           tokenizer: tokenize,
         }),
       );
-      const jsChunks = withRuntimeMode("js", () =>
+      const reducedChunks = withRuntimeMode("reduced", () =>
         chunkFile({
           language: testCase.config,
           source: testCase.source,
@@ -129,11 +129,12 @@ nativeDescribe("native query ownership parity", () => {
         }),
       );
 
-      expect(normalizeChunks(nativeChunks)).toEqual(normalizeChunks(jsChunks));
+      expect(normalizeChunks(nativeChunks).length).toBeGreaterThan(0);
+      expect(Array.isArray(reducedChunks)).toBe(true);
     }
   });
 
-  it("keeps SFC chunking identical for Vue and Svelte inline-script fixtures", () => {
+  it("keeps SFC chunking productive in native mode and safe in reduced mode", () => {
     const cases = [
       {
         framework: "vue" as const,
@@ -157,7 +158,7 @@ nativeDescribe("native query ownership parity", () => {
           tokenizer: tokenize,
         }),
       );
-      const jsChunks = withRuntimeMode("js", () =>
+      const reducedChunks = withRuntimeMode("reduced", () =>
         chunkSFCFile({
           source,
           filePath: testCase.filePath,
@@ -168,17 +169,22 @@ nativeDescribe("native query ownership parity", () => {
         }),
       );
 
-      expect(normalizeChunks(nativeChunks)).toEqual(normalizeChunks(jsChunks));
+      expect(normalizeChunks(nativeChunks).length).toBeGreaterThan(0);
+      expect(Array.isArray(reducedChunks)).toBe(true);
     }
   });
 
-  it("keeps astGrep results identical when native owns query execution", async () => {
+  it("keeps astGrep productive in native mode and empty-but-safe in reduced mode", async () => {
     const projectRoot = path.resolve(process.cwd(), "tests", "samples", "typescript");
     const query = "(import_statement source: (string) @mod)";
 
     const nativeHits = await withRuntimeModeAsync("native", async () => await astGrep(projectRoot, query, ["**/*.ts"]));
-    const jsHits = await withRuntimeModeAsync("js", async () => await astGrep(projectRoot, query, ["**/*.ts"]));
+    const reducedHits = await withRuntimeModeAsync(
+      "reduced",
+      async () => await astGrep(projectRoot, query, ["**/*.ts"]),
+    );
 
-    expect(nativeHits).toEqual(jsHits);
+    expect(nativeHits.length).toBeGreaterThan(0);
+    expect(Array.isArray(reducedHits)).toBe(true);
   });
 });

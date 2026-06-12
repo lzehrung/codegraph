@@ -55,7 +55,7 @@ function initFallbackImportExtractionReport(
         byLanguage: {},
         byReason: {
           fast: 0,
-          "js-fallback-unavailable": 0,
+          "reduced-mode": 0,
           "query-error": 0,
           "query-empty": 0,
         },
@@ -68,7 +68,7 @@ function initFallbackImportExtractionReport(
       byLanguage: {},
       byReason: {
         fast: 0,
-        "js-fallback-unavailable": 0,
+        "reduced-mode": 0,
         "query-error": 0,
         "query-empty": 0,
       },
@@ -95,7 +95,7 @@ export function createFallbackImportExtractionHandler(
         fallbackReport.byLanguage[event.language] = (fallbackReport.byLanguage[event.language] ?? 0) + 1;
         fallbackReport.byReason ??= {
           fast: 0,
-          "js-fallback-unavailable": 0,
+          "reduced-mode": 0,
           "query-error": 0,
           "query-empty": 0,
         };
@@ -111,14 +111,12 @@ export function createFallbackImportExtractionHandler(
     if (warned.has(warningKey)) return;
     warned.add(warningKey);
     const severity =
-      event.reason === "fast" ||
-      event.reason === "js-fallback-unavailable" ||
-      shouldAvoidJsFallbackForLanguage(event.language)
+      event.reason === "fast" || event.reason === "reduced-mode" || shouldAvoidJsFallbackForLanguage(event.language)
         ? "debug"
         : "warn";
     let message = "Regex fallback import extraction";
-    if (event.reason === "js-fallback-unavailable") {
-      message = `JS fallback unavailable for ${event.language} query recovery; using regex import extraction.`;
+    if (event.reason === "reduced-mode") {
+      message = `Native parser unavailable for ${event.language}; using reduced import extraction.`;
     } else if (shouldAvoidJsFallbackForLanguage(event.language)) {
       message = `Native import recovery degraded for ${event.language}; using native-owned fallback extraction.`;
     }

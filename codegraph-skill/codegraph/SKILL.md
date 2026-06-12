@@ -182,7 +182,7 @@ Use the scoped package only:
 - package: `@lzehrung/codegraph`
 - CLI: `codegraph`
 - native backend: `@lzehrung/codegraph-native`
-- optional JS fallback: `@lzehrung/codegraph-js-fallback`
+- compatibility shim: `@lzehrung/codegraph-js-fallback`
 
 Registry:
 

@@ -1,4 +1,3 @@
-import { parseWithJsLanguage } from "../jsFallback.js";
 import { isGraphOnlyLanguage } from "../documentLinks.js";
 import { prepareSourceInput } from "../languages/filePrep.js";
 import {
@@ -10,7 +9,6 @@ import {
 } from "../native/treeSitterNative.js";
 import type { NativeFallbackReason } from "../native/contracts.js";
 import { ProjectedSyntaxTree } from "../native/projectedTree.js";
-import { stringifyUnknown } from "../util/ast.js";
 import type { LanguageSupport } from "../languages.js";
 import type { JsLanguage, SyntaxTreeLike } from "../languages/types.js";
 
@@ -47,13 +45,41 @@ export type PreparedFileParseAttempt = {
   nativeError?: string;
   jsError?: string;
 };
+function createGraphOnlySyntaxTree(): SyntaxTreeLike {
+  const rootNode = {
+    type: "document",
+    text: "",
+    startIndex: 0,
+    endIndex: 0,
+    startPosition: { row: 0, column: 0 },
+    endPosition: { row: 0, column: 0 },
+    parent: null,
+    namedChildren: [],
+    child: () => null,
+    childForFieldName: () => null,
+    descendantForIndex: () => rootNode,
+    descendantForPosition: () => rootNode,
+  };
+  return {
+    rootNode,
+  };
+}
 
 export function attemptParsePreparedFileContext(context: PreparedFileContext): PreparedFileParseAttempt {
   const { file, source, sup, nativeMode, nativeQueries } = context;
   const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
-  const nativeTreeExecution = graphOnlyLanguage
-    ? { tree: null, fallbackReason: "unsupportedLanguage" as const }
-    : getNativeSyntaxTreeExecution(source, sup, nativeMode);
+  if (graphOnlyLanguage) {
+    return {
+      parsed: {
+        source,
+        tree: createGraphOnlySyntaxTree(),
+        sup,
+        nativeQueries,
+      },
+      nativeFallbackReason: "unsupportedLanguage",
+    };
+  }
+  const nativeTreeExecution = getNativeSyntaxTreeExecution(source, sup, nativeMode);
   if (nativeTreeExecution.tree) {
     return {
       parsed: {
@@ -64,22 +90,11 @@ export function attemptParsePreparedFileContext(context: PreparedFileContext): P
       },
     };
   }
-  try {
-    const resolvedLang = context.lang ?? sup.language(file);
-    const tree = parseWithJsLanguage(source, resolvedLang);
-    return {
-      parsed: { source, tree, sup, lang: resolvedLang, nativeQueries },
-      ...(nativeTreeExecution.fallbackReason ? { nativeFallbackReason: nativeTreeExecution.fallbackReason } : {}),
-      ...(nativeTreeExecution.error ? { nativeError: nativeTreeExecution.error } : {}),
-    };
-  } catch (error) {
-    return {
-      parsed: null,
-      ...(nativeTreeExecution.fallbackReason ? { nativeFallbackReason: nativeTreeExecution.fallbackReason } : {}),
-      ...(nativeTreeExecution.error ? { nativeError: nativeTreeExecution.error } : {}),
-      jsError: stringifyUnknown(error),
-    };
-  }
+  return {
+    parsed: null,
+    ...(nativeTreeExecution.fallbackReason ? { nativeFallbackReason: nativeTreeExecution.fallbackReason } : {}),
+    ...(nativeTreeExecution.error ? { nativeError: nativeTreeExecution.error } : {}),
+  };
 }
 
 export function tryParsePreparedFileContext(context: PreparedFileContext): ParsedFileContext | null {

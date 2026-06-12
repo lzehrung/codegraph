@@ -80,17 +80,11 @@ describe("release script helpers", () => {
     const releaseScript = fs.readFileSync("scripts/release.mjs", "utf8");
 
     expect(releaseScript).toContain('run("npm", ["install"])');
-    expect(releaseScript).toContain('run("node", ["./scripts/patch-tree-sitter-node24.mjs"])');
-    expect(releaseScript).toContain('run("npm", ["rebuild"])');
-    expect(releaseScript.indexOf('run("node", ["./scripts/patch-tree-sitter-node24.mjs"])')).toBeGreaterThan(
-      releaseScript.indexOf('run("npm", ["install"])'),
-    );
-    expect(releaseScript.indexOf('run("npm", ["rebuild"])')).toBeGreaterThan(
-      releaseScript.indexOf('run("node", ["./scripts/patch-tree-sitter-node24.mjs"])'),
-    );
+    expect(releaseScript).not.toContain('run("node", ["./scripts/patch-tree-sitter-node24.mjs"])');
+    expect(releaseScript).not.toContain('run("npm", ["rebuild"])');
     expect(
       releaseScript.indexOf('run("node", ["./scripts/build-native-if-available.mjs", "--strict"])'),
-    ).toBeGreaterThan(releaseScript.indexOf('run("npm", ["rebuild"])'));
+    ).toBeGreaterThan(releaseScript.indexOf('run("npm", ["install"])'));
     expect(releaseScript).toContain('run("node", ["./scripts/stage-native-package.mjs", "--if-missing"])');
     expect(releaseScript).toContain("assertCompleteNativeTargetArtifacts(nativeRootPath");
     expect(releaseScript).toContain("if (!rootVersion && nativeVersion)");

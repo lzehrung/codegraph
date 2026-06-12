@@ -51,8 +51,4 @@ export {
   runNativeLanguageQueries,
 } from "./execution.js";
 
-export {
-  executeJsQueryAsNativeMatches,
-  getUnifiedQueryExecution,
-  shouldAvoidJsFallbackForLanguage,
-} from "./jsBridge.js";
+export { getUnifiedQueryExecution, shouldAvoidJsFallbackForLanguage } from "./jsBridge.js";

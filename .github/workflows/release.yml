@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_type:
-        description: Release type for native and JS fallback packages
+        description: Release type for the root, native, and compatibility packages
         required: true
         type: choice
         default: patch
@@ -109,10 +109,7 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: |
-          npm ci --ignore-scripts
-          node ./scripts/patch-tree-sitter-node24.mjs
-
+        run: npm ci --ignore-scripts
       - name: Apply native package release version
         run: node ./scripts/set-native-package-version.mjs ${{ needs.plan-release.outputs.native_version }}
 
@@ -194,10 +191,7 @@ jobs:
           NODE
 
       - name: Install dependencies
-        run: |
-          npm ci --ignore-scripts
-          node ./scripts/patch-tree-sitter-node24.mjs
-          npm rebuild
+        run: npm ci --ignore-scripts
 
       - name: Download native artifacts
         uses: actions/download-artifact@v8

@@ -12,9 +12,8 @@ describe("chunkFile detailed behavior", () => {
     vi.restoreAllMocks();
   });
 
-  it("uses native chunk queries for JavaScript without touching the JS fallback", () => {
+  it("uses native chunk queries for JavaScript", () => {
     const nativeSpy = vi.spyOn(nativeRuntime, "getNativeSingleQueryExecution");
-    const jsFallbackSpy = vi.spyOn(nativeRuntime, "executeJsQueryAsNativeMatches");
 
     const chunks = chunkFile({
       language: LANG_CONFIGS.javascript,
@@ -27,12 +26,10 @@ describe("chunkFile detailed behavior", () => {
 
     expect(chunks.length).toBeGreaterThan(0);
     expect(nativeSpy).toHaveBeenCalledTimes(1);
-    expect(jsFallbackSpy).not.toHaveBeenCalled();
   });
 
-  it("uses native chunk queries for TSX without touching the JS fallback", () => {
+  it("uses native chunk queries for TSX", () => {
     const nativeSpy = vi.spyOn(nativeRuntime, "getNativeSingleQueryExecution");
-    const jsFallbackSpy = vi.spyOn(nativeRuntime, "executeJsQueryAsNativeMatches");
 
     const chunks = chunkFile({
       language: LANG_CONFIGS.tsx,
@@ -52,7 +49,6 @@ describe("chunkFile detailed behavior", () => {
     expect(chunks.some((chunk) => chunk.name === "Button")).toBe(true);
     expect(chunks.every((chunk) => chunk.languageId === "tsx")).toBe(true);
     expect(nativeSpy).toHaveBeenCalledTimes(1);
-    expect(jsFallbackSpy).not.toHaveBeenCalled();
   });
 
   it("uses public chunking language ids while keeping internal support ids", () => {

@@ -1,4 +1,3 @@
-import { isJsFallbackAvailable, parseWithJsLanguage } from "../jsFallback.js";
 import { type LanguageSupport } from "../languages.js";
 import { isUnsupportedParserInputError, prepareSourceInput } from "../languages/filePrep.js";
 import type { SyntaxTreeLike } from "../languages/types.js";
@@ -199,7 +198,6 @@ export async function buildSymbolGraphDetailed(
     try {
       const parsedEntry = index.parsed?.get(file);
       let sup = parsedEntry?.sup;
-      let lang = parsedEntry?.lang;
       let src = parsedEntry?.source;
       let tree: SyntaxTreeLike | undefined = parsedEntry?.tree;
       if (!sup || src === undefined) {
@@ -215,12 +213,8 @@ export async function buildSymbolGraphDetailed(
         if (nativeTreeExecution.tree) {
           tree = new ProjectedSyntaxTree(src, nativeTreeExecution.tree);
         } else {
-          if (!isJsFallbackAvailable()) {
-            skippedSyntaxTreeFiles += 1;
-            continue;
-          }
-          lang ??= sup.language(file);
-          tree = parseWithJsLanguage(src, lang);
+          skippedSyntaxTreeFiles += 1;
+          continue;
         }
       }
       if (!sup || src === undefined || !tree) {
