@@ -104,14 +104,19 @@ describe("Import extraction fallback reporting", () => {
     const root = await mkTmpDir("cg-type-import-fallback-");
     const main = path.join(root, "main.ts");
     const types = path.join(root, "types.ts");
-    await fsp.writeFile(types, "export type Foo = { value: string };\n", "utf8");
-    await fsp.writeFile(main, "import type { Foo } from './types';\nconst value: Foo = { value: 'x' };\n", "utf8");
+    await fsp.writeFile(types, "export type Foo = { value: string };\nexport const bar = 1;\n", "utf8");
+    await fsp.writeFile(
+      main,
+      "import { type Foo, bar } from './types';\nconst value: Foo = { value: String(bar) };\n",
+      "utf8",
+    );
 
     try {
       const index = await buildProjectIndexFromFiles(root, [main, types], { native: "off" });
       const mod = index.byFile.get(main.replace(/\\/g, "/"));
       expect(mod?.imports).toEqual([
         expect.objectContaining({ kind: "named", imported: "Foo", local: "Foo", typeOnly: true }),
+        expect.objectContaining({ kind: "named", imported: "bar", local: "bar", typeOnly: false }),
       ]);
       expect(mod?.imports).not.toEqual([expect.objectContaining({ kind: "default", local: "type" })]);
     } finally {

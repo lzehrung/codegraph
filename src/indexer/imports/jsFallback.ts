@@ -22,6 +22,19 @@ function splitNamedImports(namedBlock: string): string[] {
     .filter(Boolean);
 }
 
+function parseNamedImportSpecifier(spec: string): { imported: string; local: string; typeOnly: boolean } | null {
+  const typeOnlyMatch = spec.match(/^type\s+([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
+  if (typeOnlyMatch) {
+    const imported = typeOnlyMatch[1]!;
+    return { imported, local: typeOnlyMatch[2] ?? imported, typeOnly: true };
+  }
+
+  const namedMatch = spec.match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
+  if (!namedMatch) return null;
+  const imported = namedMatch[1]!;
+  return { imported, local: namedMatch[2] ?? imported, typeOnly: false };
+}
+
 function matchStartsInCode(maskedSource: string, match: RegExpMatchArray): boolean {
   const index = match.index;
   if (index === undefined) return true;
@@ -76,17 +89,16 @@ async function collectEsImports(
     }
     const namedBlock = namedBlockMatch?.groups?.named ?? "";
     for (const spec of splitNamedImports(namedBlock)) {
-      const namedMatch = spec.match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
-      if (!namedMatch) continue;
-      const imported = namedMatch[1]!;
-      const local = namedMatch[2] ?? imported;
+      const namedImport = parseNamedImportSpecifier(spec);
+      if (!namedImport) continue;
+      const bindingTypeOnly = typeOnly || namedImport.typeOnly;
       context.pushBinding({
         kind: "named",
-        local,
-        imported,
+        local: namedImport.local,
+        imported: namedImport.imported,
         from: moduleSpecifier,
         resolved,
-        typeOnly,
+        typeOnly: bindingTypeOnly,
       });
     }
   }
