@@ -13,7 +13,7 @@ import {
   getCompactImportsExecution,
   getNativeSyntaxTreeExecution,
   isNativeQueryAuthoritative,
-  shouldAvoidJsFallbackForLanguage,
+  supportsReducedModeRegexRecovery,
   type CompactQueryResults,
   type NativeQueryResults,
   type NativeRuntimeMode,
@@ -174,7 +174,7 @@ export function collectModuleSpecifiersFromSource(
 ): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
 
-  const supportsRegexImportRecovery = shouldAvoidJsFallbackForLanguage(support.id);
+  const supportsRegexImportRecovery = supportsReducedModeRegexRecovery(support.id);
   const htmlLikeLanguage = isHtmlLikeLanguage(support.id, opts?.file);
   const graphOnlyLanguage = isGraphOnlyLanguage(support.id);
   const fastRegexDisabled = opts?.fastRegexDisabledLanguages?.includes(support.id);

@@ -10,6 +10,7 @@ import {
   type NativeMatch,
   type NativeQueryResults,
 } from "../src/native/treeSitterNative.js";
+import * as nativeRuntime from "../src/native/treeSitterNative.js";
 import * as jsFallback from "../src/jsFallback.js";
 
 const nativeDescribe = isNativeTreeSitterAvailable() ? describe : describe.skip;
@@ -245,6 +246,37 @@ describe("authoritative empty native results", () => {
       source: "import { foo } from './bar';\nconsole.log(foo);\n",
       sup: support,
       nativeQueries: nativeResults,
+      onFallbackImportExtraction: (event) => fallbackEvents.push(event),
+    });
+
+    expect(imports).toEqual([expect.objectContaining({ kind: "named", local: "foo", imported: "foo", from: "./bar" })]);
+    expect(fallbackEvents).toEqual([
+      expect.objectContaining({
+        language: "ts",
+        reason: "query-error",
+        file: "main.ts",
+      }),
+    ]);
+  });
+
+  it("reports query-error when native query execution fails before text recovery", async () => {
+    const support = supportById("ts")!;
+    const fallbackEvents: FallbackImportExtractionEvent[] = [];
+    const original = nativeRuntime.getNativeQueryExecution;
+    vi.spyOn(nativeRuntime, "getNativeQueryExecution").mockImplementation((source, nativeSupport, mode, scope) => {
+      if (nativeSupport.id === "ts" && source.includes("foo")) {
+        return {
+          results: null,
+          fallbackReason: "queryFailure",
+          error: "forced native query failure",
+        };
+      }
+      return original(source, nativeSupport, mode, scope);
+    });
+
+    const imports = await collectImportsForFile("main.ts", ".", {
+      source: "import { foo } from './bar';\nconsole.log(foo);\n",
+      sup: support,
       onFallbackImportExtraction: (event) => fallbackEvents.push(event),
     });
 

@@ -12,6 +12,7 @@ import {
   isNativeBindingLoadedForLanguage,
   isNativeRequiredUnavailableError,
   isNativeQueryAuthoritative,
+  type NativeQueryExecution,
   type NativeQueryResults,
   type NativeRuntimeMode,
 } from "../native/treeSitterNative.js";
@@ -66,10 +67,12 @@ export async function collectImportsForFile(
   };
   const nativeMode = opts?.native ?? opts?.graphOptions?.native;
   assertNativeRequiredAvailable(nativeMode);
-  const resolvedNativeQueries =
-    opts?.nativeQueries !== undefined
-      ? opts.nativeQueries
-      : getNativeQueryExecution(resolvedSource, resolvedSup, nativeMode).results;
+  let nativeExecution: NativeQueryExecution | null = null;
+  let resolvedNativeQueries: NativeQueryResults | null = opts?.nativeQueries ?? null;
+  if (opts?.nativeQueries === undefined) {
+    nativeExecution = getNativeQueryExecution(resolvedSource, resolvedSup, nativeMode);
+    resolvedNativeQueries = nativeExecution.results;
+  }
   if (isGraphOnlyLanguage(resolvedSup.id)) {
     return await collectGraphOnlyImports({
       file,
@@ -159,6 +162,9 @@ export async function collectImportsForFile(
 
   const nativeLanguageAvailable = isNativeBindingLoadedForLanguage(resolvedSup.id, nativeMode);
   let nativeFallbackReason: FallbackImportExtractionReason | null = null;
+  if (nativeExecution?.fallbackReason === "queryFailure") {
+    nativeFallbackReason = "query-error";
+  }
 
   if (resolvedNativeQueries) {
     try {

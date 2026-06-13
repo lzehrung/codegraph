@@ -51,4 +51,4 @@ export {
   runNativeLanguageQueries,
 } from "./execution.js";
 
-export { getUnifiedQueryExecution, shouldAvoidJsFallbackForLanguage } from "./jsBridge.js";
+export { getUnifiedQueryExecution, supportsReducedModeRegexRecovery } from "./jsBridge.js";

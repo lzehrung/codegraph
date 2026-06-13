@@ -1,4 +1,4 @@
-import { shouldAvoidJsFallbackForLanguage } from "../../native/treeSitterNative.js";
+import { supportsReducedModeRegexRecovery } from "../../native/treeSitterNative.js";
 import type { FallbackImportExtractionEvent } from "../../graphs/specifiers.js";
 import { logWithLevel, type LogLevel } from "../../logging.js";
 import { stringifyUnknown } from "../../util/ast.js";
@@ -111,13 +111,13 @@ export function createFallbackImportExtractionHandler(
     if (warned.has(warningKey)) return;
     warned.add(warningKey);
     const severity =
-      event.reason === "fast" || event.reason === "reduced-mode" || shouldAvoidJsFallbackForLanguage(event.language)
+      event.reason === "fast" || event.reason === "reduced-mode" || supportsReducedModeRegexRecovery(event.language)
         ? "debug"
         : "warn";
     let message = "Regex fallback import extraction";
     if (event.reason === "reduced-mode") {
       message = `Native parser unavailable for ${event.language}; using reduced import extraction.`;
-    } else if (shouldAvoidJsFallbackForLanguage(event.language)) {
+    } else if (supportsReducedModeRegexRecovery(event.language)) {
       message = `Native import recovery degraded for ${event.language}; using native-owned fallback extraction.`;
     }
     logWithLevel(opts?.logLevel, severity, message, {

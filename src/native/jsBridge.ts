@@ -8,7 +8,7 @@ const REDUCED_MODE_REGEX_LANGUAGES: Record<string, true> = {
   tsx: true,
 };
 
-export function shouldAvoidJsFallbackForLanguage(languageId: string): boolean {
+export function supportsReducedModeRegexRecovery(languageId: string): boolean {
   return REDUCED_MODE_REGEX_LANGUAGES[languageId] === true;
 }
 
