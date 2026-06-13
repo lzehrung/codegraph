@@ -10,6 +10,7 @@ import {
   assertNativeRequiredAvailable,
   getNativeQueryExecution,
   isNativeBindingLoadedForLanguage,
+  isNativeRequiredUnavailableError,
   isNativeQueryAuthoritative,
   type NativeQueryResults,
   type NativeRuntimeMode,
@@ -157,6 +158,7 @@ export async function collectImportsForFile(
   };
 
   const nativeLanguageAvailable = isNativeBindingLoadedForLanguage(resolvedSup.id, nativeMode);
+  let nativeFallbackReason: FallbackImportExtractionReason | null = null;
 
   if (resolvedNativeQueries) {
     try {
@@ -184,17 +186,27 @@ export async function collectImportsForFile(
         await runValueRequireFallback();
         await finalizeImports();
       }
-      if (imports.length || isNativeQueryAuthoritative(resolvedSup, "importBindings")) {
+      if (imports.length) {
         return imports;
       }
-    } catch {
+      if (isNativeQueryAuthoritative(resolvedSup, "importBindings")) {
+        return imports;
+      }
+      nativeFallbackReason = "query-empty";
+    } catch (error) {
+      if (isNativeRequiredUnavailableError(error)) throw error;
       imports.length = 0;
+      nativeFallbackReason = "query-error";
     }
+  }
+
+  if (nativeFallbackReason) {
+    reportFallback(nativeFallbackReason);
   }
 
   await runFallback();
   await finalizeImports();
-  if (!nativeLanguageAvailable && imports.length) {
+  if (!nativeFallbackReason && !nativeLanguageAvailable && imports.length) {
     reportFallback("reduced-mode");
   }
   return imports;
