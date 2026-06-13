@@ -161,7 +161,7 @@ function canStartJsLikeRegex(src: string, slashIndex: number): boolean {
 }
 
 function maskJsLikeRegexLiterals(src: string): string {
-  const chars = [...src];
+  const chars = src.split("");
   for (let i = 0; i < src.length; i += 1) {
     if (src[i] !== "/" || !canStartJsLikeRegex(src, i)) continue;
     let inClass = false;

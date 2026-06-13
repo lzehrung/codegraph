@@ -30,6 +30,7 @@ nativeTsDescribe("native TypeScript import binding recovery", () => {
         "  require /* webpackMode: 'eager' */ ('./dep');",
         "const example = \"const fake = require('./fake')\";",
         "const pattern = /const fake = require ('react')/;",
+        "const emoji = '😀';",
         "if (dep) /const branchFake = require ('branch-fake')/.test(String(dep));",
         "const docs = `\\n  import { fake } from './fake';\\n  const alsoFake = require('./also-fake');\\n`;",
         "console.log(dep, example);",
