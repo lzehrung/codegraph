@@ -197,12 +197,12 @@ function formatNativeBackendStatus(report: BuildReport | undefined): string | un
   const fallbackTotal = native.filesFellBack;
   if (native.available) {
     if (fallbackTotal > 0) {
-      return `Backend: JS tree-sitter fallback for ${fallbackTotal} file(s)`;
+      return `Backend: reduced graph/regex mode for ${fallbackTotal} file(s)`;
     }
     return "Backend: native tree-sitter available";
   }
   const reason = native.loadError ? ` (${native.loadError})` : "";
-  return `Backend: JS tree-sitter fallback; native addon unavailable${reason}`;
+  return `Backend: reduced graph/regex mode; native addon unavailable${reason}`;
 }
 
 function formatNativeBackendFallbackSummary(report: BuildReport | undefined): string | undefined {

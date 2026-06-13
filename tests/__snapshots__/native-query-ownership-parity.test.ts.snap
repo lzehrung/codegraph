@@ -1,0 +1,369 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`native query ownership > keeps SFC chunking productive in native mode 1`] = `
+[
+  {
+    "endLine": 3,
+    "filePath": "tests/samples/vue/inline-script.vue",
+    "languageId": "html",
+    "name": undefined,
+    "startLine": 1,
+    "text": "
+  <div class="app">Inline</div>
+",
+    "tokenCount": 2,
+    "type": "template:misc",
+  },
+  {
+    "endLine": 5,
+    "filePath": "tests/samples/vue/inline-script.vue",
+    "languageId": "typescript",
+    "name": undefined,
+    "startLine": 5,
+    "text": "import { useLogic } from "./logic";",
+    "tokenCount": 6,
+    "type": "script:imports",
+  },
+  {
+    "endLine": 7,
+    "filePath": "tests/samples/vue/inline-script.vue",
+    "languageId": "typescript",
+    "name": "state",
+    "startLine": 7,
+    "text": "const state = useLogic();",
+    "tokenCount": 4,
+    "type": "script:module_var",
+  },
+  {
+    "endLine": 12,
+    "filePath": "tests/samples/vue/inline-script.vue",
+    "languageId": "css",
+    "name": undefined,
+    "startLine": 10,
+    "text": ".app {
+  color: #444;
+}",
+    "tokenCount": 5,
+    "type": "style:rule",
+  },
+]
+`;
+
+exports[`native query ownership > keeps SFC chunking productive in native mode 2`] = `
+[
+  {
+    "endLine": 2,
+    "filePath": "tests/samples/svelte/inline-script.svelte",
+    "languageId": "typescript",
+    "name": undefined,
+    "startLine": 2,
+    "text": "import { loadWidget } from "./logic";",
+    "tokenCount": 6,
+    "type": "script:imports",
+  },
+  {
+    "endLine": 4,
+    "filePath": "tests/samples/svelte/inline-script.svelte",
+    "languageId": "typescript",
+    "name": "state",
+    "startLine": 4,
+    "text": "const state = loadWidget();",
+    "tokenCount": 4,
+    "type": "script:module_var",
+  },
+  {
+    "endLine": 9,
+    "filePath": "tests/samples/svelte/inline-script.svelte",
+    "languageId": "svelte-template",
+    "name": undefined,
+    "startLine": 5,
+    "text": "
+
+<main class="app">{state}</main>
+
+",
+    "tokenCount": 2,
+    "type": "template:text",
+  },
+  {
+    "endLine": 12,
+    "filePath": "tests/samples/svelte/inline-script.svelte",
+    "languageId": "css",
+    "name": undefined,
+    "startLine": 10,
+    "text": ".app {
+    color: #333;
+  }",
+    "tokenCount": 5,
+    "type": "style:rule",
+  },
+]
+`;
+
+exports[`native query ownership > keeps astGrep productive in native mode 1`] = `
+[
+  {
+    "capture": "mod",
+    "column": 75,
+    "file": "main.ts",
+    "line": 1,
+    "snippet": ""./utils"",
+  },
+  {
+    "capture": "mod",
+    "column": 24,
+    "file": "main.ts",
+    "line": 2,
+    "snippet": ""./utils"",
+  },
+  {
+    "capture": "mod",
+    "column": 47,
+    "file": "main.ts",
+    "line": 3,
+    "snippet": ""./utils"",
+  },
+  {
+    "capture": "mod",
+    "column": 27,
+    "file": "main.ts",
+    "line": 4,
+    "snippet": ""./utils"",
+  },
+]
+`;
+
+exports[`native query ownership > keeps chunkFile productive in native mode 1`] = `
+[
+  {
+    "endLine": 4,
+    "filePath": "sample.js",
+    "languageId": "javascript",
+    "name": "alpha",
+    "startLine": 1,
+    "text": "function alpha(input) {
+  if (!input) return 0;
+  return input + 1;
+}",
+    "tokenCount": 12,
+    "type": "function",
+  },
+  {
+    "endLine": 6,
+    "filePath": "sample.js",
+    "languageId": "javascript",
+    "name": "beta",
+    "startLine": 6,
+    "text": "const beta = () => alpha(2);",
+    "tokenCount": 6,
+    "type": "module_var",
+  },
+]
+`;
+
+exports[`native query ownership > keeps chunkFile productive in native mode 2`] = `
+[
+  {
+    "endLine": 4,
+    "filePath": "sample.ts",
+    "languageId": "typescript",
+    "name": "Tools",
+    "startLine": 1,
+    "text": "{
+  export function build(value: number): number {
+    return value + 1;
+  }",
+    "tokenCount": 12,
+    "type": "namespace",
+  },
+  {
+    "endLine": 4,
+    "filePath": "sample.ts",
+    "languageId": "typescript",
+    "name": "build",
+    "startLine": 2,
+    "text": "function build(value: number): number {
+    return value + 1;
+  }",
+    "tokenCount": 10,
+    "type": "function",
+  },
+  {
+    "endLine": 5,
+    "filePath": "sample.ts",
+    "languageId": "typescript",
+    "name": "Tools",
+    "startLine": 5,
+    "text": "}",
+    "tokenCount": 1,
+    "type": "namespace",
+  },
+]
+`;
+
+exports[`native query ownership > keeps chunkFile productive in native mode 3`] = `
+[
+  {
+    "endLine": 4,
+    "filePath": "sample.py",
+    "languageId": "python",
+    "name": "classify",
+    "startLine": 1,
+    "text": "def classify(value):
+    if value > 0:
+        return "positive"
+    return "zero"",
+    "tokenCount": 10,
+    "type": "function",
+  },
+]
+`;
+
+exports[`reduced query mode > keeps SFC chunking safe without native 1`] = `
+[
+  {
+    "endLine": 3,
+    "filePath": "tests/samples/vue/inline-script.vue",
+    "languageId": "html",
+    "name": undefined,
+    "startLine": 1,
+    "text": "
+  <div class="app">Inline</div>
+",
+    "tokenCount": 2,
+    "type": "template:misc",
+  },
+  {
+    "endLine": 8,
+    "filePath": "tests/samples/vue/inline-script.vue",
+    "languageId": "typescript",
+    "name": undefined,
+    "startLine": 4,
+    "text": "
+import { useLogic } from "./logic";
+
+const state = useLogic();
+",
+    "tokenCount": 10,
+    "type": "script:misc",
+  },
+  {
+    "endLine": 13,
+    "filePath": "tests/samples/vue/inline-script.vue",
+    "languageId": "css",
+    "name": undefined,
+    "startLine": 9,
+    "text": "
+.app {
+  color: #444;
+}
+",
+    "tokenCount": 5,
+    "type": "style:misc",
+  },
+]
+`;
+
+exports[`reduced query mode > keeps SFC chunking safe without native 2`] = `
+[
+  {
+    "endLine": 5,
+    "filePath": "tests/samples/svelte/inline-script.svelte",
+    "languageId": "typescript",
+    "name": undefined,
+    "startLine": 1,
+    "text": "
+  import { loadWidget } from "./logic";
+
+  const state = loadWidget();
+",
+    "tokenCount": 10,
+    "type": "script:misc",
+  },
+  {
+    "endLine": 9,
+    "filePath": "tests/samples/svelte/inline-script.svelte",
+    "languageId": "svelte-template",
+    "name": undefined,
+    "startLine": 5,
+    "text": "
+
+<main class="app">{state}</main>
+
+",
+    "tokenCount": 2,
+    "type": "template:text",
+  },
+  {
+    "endLine": 13,
+    "filePath": "tests/samples/svelte/inline-script.svelte",
+    "languageId": "css",
+    "name": undefined,
+    "startLine": 9,
+    "text": "
+  .app {
+    color: #333;
+  }
+",
+    "tokenCount": 5,
+    "type": "style:misc",
+  },
+]
+`;
+
+exports[`reduced query mode > keeps chunkFile safe without native 1`] = `
+[
+  {
+    "endLine": 6,
+    "filePath": "sample.js",
+    "languageId": "javascript",
+    "name": undefined,
+    "startLine": 1,
+    "text": "function alpha(input) {
+  if (!input) return 0;
+  return input + 1;
+}
+
+const beta = () => alpha(2);",
+    "tokenCount": 18,
+    "type": "misc",
+  },
+]
+`;
+
+exports[`reduced query mode > keeps chunkFile safe without native 2`] = `
+[
+  {
+    "endLine": 5,
+    "filePath": "sample.ts",
+    "languageId": "typescript",
+    "name": undefined,
+    "startLine": 1,
+    "text": "export namespace Tools {
+  export function build(value: number): number {
+    return value + 1;
+  }
+}",
+    "tokenCount": 16,
+    "type": "misc",
+  },
+]
+`;
+
+exports[`reduced query mode > keeps chunkFile safe without native 3`] = `
+[
+  {
+    "endLine": 4,
+    "filePath": "sample.py",
+    "languageId": "python",
+    "name": undefined,
+    "startLine": 1,
+    "text": "def classify(value):
+    if value > 0:
+        return "positive"
+    return "zero"",
+    "tokenCount": 10,
+    "type": "misc",
+  },
+]
+`;

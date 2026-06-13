@@ -85,7 +85,7 @@ Use Codegraph when you need fast structural answers about a repo without relying
 - SQL language support for `.sql` files, including statement chunks, object symbols, SQL-to-SQL graph edges, SQL navigation, and statement facts.
 - SQLite export plus read-only SQL access for downstream tools and agent workflows.
 - A browser graph viewer app for interactive exploration of generated graph JSON artifacts.
-- Native Tree-sitter acceleration by default when a compatible artifact is available, with an opt-in JS fallback path when you need it.
+- Native Tree-sitter parsing by default when a matching prebuilt is available, with reduced graph-only and regex recovery when native is unavailable.
 
 Sample graph output can be generated with `npm run graph:mermaid` or `npm run graph:json`, and the repo also ships a browser viewer app in `docs/graph-visualization` for inspecting graph JSON interactively.
 
@@ -382,7 +382,7 @@ For the full capability matrix, limitations, and fixture coverage, see [docs/lan
 
 ## Documentation
 
-- [docs/installation.md](./docs/installation.md): source checkout, scoped registry, release tarball, native runtime modes, and JS fallback details
+- [docs/installation.md](./docs/installation.md): source checkout, scoped registry, release tarball, native runtime modes, and reduced-mode behavior
 - [docs/cli.md](./docs/cli.md): command reference, output formats, SQLite schema, review bundles, and graph viewer usage
 - [docs/library-api.md](./docs/library-api.md): agent orientation/packet/search/explain/artifacts, semantic chunking, indexing, graph APIs, read-only SQL, impact examples, and programmatic review output
 - [docs/agent-workflows.md](./docs/agent-workflows.md): orientation packets, search anchors, MCP, sessions, streaming, tool wrappers, review bundles, and agent-oriented review recipes
@@ -418,7 +418,7 @@ npm install @lzehrung/codegraph
 npm install https://github.com/lzehrung/codegraph/releases/download/vVERSION/lzehrung-codegraph-VERSION.tgz
 ```
 
-Replace `VERSION` with the release you want. The root tarball does not bundle the native addon or optional JS fallback grammars; source-language parsing still needs the scoped native package path or `@lzehrung/codegraph-js-fallback`, both via the `@lzehrung` GitHub Packages registry.
+Replace `VERSION` with the release you want. The root tarball does not bundle the native addon; source-language parsing still needs the scoped native package path via the `@lzehrung` GitHub Packages registry. Without it, Codegraph runs in reduced graph-only mode.
 
 ## FAQ
 
@@ -468,8 +468,8 @@ npm run publish:major
 npm run publish:resume
 ```
 
-Use `--package root`, `--package native`, `--package js-fallback`, or a full package name when you need to force a specific package.
+Use `--package root`, `--package native`, or `--package js-fallback`, or a full package name when you need to force a specific package.
 
-For GitHub-driven releases, use the manual `release` Actions workflow with `patch`, `minor`, or `major`. It publishes the root, native, and JS fallback packages together, pushes their tags, then creates or updates the overall `vX.Y.Z` GitHub Release with the packed root tarball asset. The workflow refuses reruns on an already-tagged release commit because fresh Actions runners cannot reconstruct the local `publish:resume` state.
+For GitHub-driven releases, use the manual `release` Actions workflow with `patch`, `minor`, or `major`. It publishes the root, native, and compatibility js-fallback shim packages together, pushes their tags, then creates or updates the overall `vX.Y.Z` GitHub Release with the packed root tarball asset. The workflow refuses reruns on an already-tagged release commit because fresh Actions runners cannot reconstruct the local `publish:resume` state.
 
 For the detailed release flow, native artifact staging, and tag behavior, see [PUBLISHING.md](./PUBLISHING.md).

@@ -14,6 +14,64 @@ async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
 }
 
+const nativeTsDescribe =
+  isNativeTreeSitterAvailable() && getNativeTreeSitterSupportedLanguageIds().includes("ts") ? describe : describe.skip;
+
+nativeTsDescribe("native TypeScript import binding recovery", () => {
+  it("preserves CommonJS value require bindings in native mode", async () => {
+    const root = await mkTmpDir("cg-native-ts-require-");
+    const main = path.join(root, "main.ts");
+    const dep = path.join(root, "dep.ts");
+    await fsp.writeFile(dep, "export const dep = 1;\n", "utf8");
+    await fsp.writeFile(
+      main,
+      [
+        "const dep = /* webpackChunkName: 'dep' */",
+        "  require /* webpackMode: 'eager' */ ('./dep');",
+        "const example = \"const fake = require('./fake')\";",
+        "const pattern = /const fake = require ('react')/;",
+        "const emoji = '😀';",
+        "if (dep) /const branchFake = require ('branch-fake')/.test(String(dep));",
+        "const docs = `\\n  import { fake } from './fake';\\n  const alsoFake = require('./also-fake');\\n`;",
+        "console.log(dep, example);",
+      ].join("\n"),
+      "utf8",
+    );
+
+    try {
+      const index = await buildProjectIndexFromFiles(root, [main, dep]);
+      const mod = index.byFile.get(main.replace(/\\/g, "/"));
+      expect(mod?.imports).toEqual([
+        expect.objectContaining({ kind: "default", local: "dep", from: "./dep", mechanism: "cjs" }),
+      ]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps exported CommonJS require bindings in reduced mode", async () => {
+    const root = await mkTmpDir("cg-reduced-exported-require-");
+    const main = path.join(root, "main.ts");
+    const dep = path.join(root, "dep.ts");
+    await fsp.writeFile(dep, "export const dep = 1;\n", "utf8");
+    await fsp.writeFile(
+      main,
+      "const before = 1; export const depRef = require('./dep');\nconsole.log(before, depRef);\n",
+      "utf8",
+    );
+
+    try {
+      const index = await buildProjectIndexFromFiles(root, [main, dep], { native: "off" });
+      const mod = index.byFile.get(main.replace(/\\/g, "/"));
+      expect(mod?.imports).toEqual([
+        expect.objectContaining({ kind: "default", local: "depRef", from: "./dep", mechanism: "cjs" }),
+      ]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("Import extraction fallback reporting", () => {
   it("avoids regex fallback for TypeScript import equals", async () => {
     const root = await mkTmpDir("cg-import-equals-");
@@ -40,6 +98,30 @@ describe("Import extraction fallback reporting", () => {
     );
     expect(importBinding).toBeTruthy();
     expect(edge).toBeTruthy();
+  });
+
+  it("does not emit default bindings for type-only named imports in reduced mode", async () => {
+    const root = await mkTmpDir("cg-type-import-fallback-");
+    const main = path.join(root, "main.ts");
+    const types = path.join(root, "types.ts");
+    await fsp.writeFile(types, "export type Foo = { value: string };\nexport const bar = 1;\n", "utf8");
+    await fsp.writeFile(
+      main,
+      "import { type Foo, bar } from './types';\nconst value: Foo = { value: String(bar) };\n",
+      "utf8",
+    );
+
+    try {
+      const index = await buildProjectIndexFromFiles(root, [main, types], { native: "off" });
+      const mod = index.byFile.get(main.replace(/\\/g, "/"));
+      expect(mod?.imports).toEqual([
+        expect.objectContaining({ kind: "named", imported: "Foo", local: "Foo", typeOnly: true }),
+        expect.objectContaining({ kind: "named", imported: "bar", local: "bar", typeOnly: false }),
+      ]);
+      expect(mod?.imports).not.toEqual([expect.objectContaining({ kind: "default", local: "type" })]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("preserves // inside string literals while stripping comments", () => {
@@ -94,6 +176,8 @@ describe("Import extraction fallback reporting", () => {
       'const loggedRequire = "call require(\\"./not-real\\") in docs";',
       "const loggedImport = 'call import(\"./also-not-real\") in docs';",
       'const loggedExport = `export { thing } from "./template-doc"`;',
+      'const loggedRegex = /require("\\.\\/regex-not-real")/;',
+      'if (ready) /import\\("\\.\\/branch-not-real"\\)/.test(source);',
       "const actual = require('./real')",
       "const dynamic = import('./dynamic')",
     ].join("\n");
@@ -247,25 +331,31 @@ describe("Import extraction fallback reporting", () => {
     expect(graphReport.backend?.native.byLanguage.markdown).toBeUndefined();
   });
 
-  it("honors required native availability for graph-only documents without reporting document queries", async () => {
+  it("does not require native availability for graph-only documents", async () => {
     const root = await mkTmpDir("cg-native-doc-required-");
     const page = path.join(root, "page.md");
+    const guide = path.join(root, "guide.md");
     await fsp.writeFile(page, "[Guide](./guide.md)\n", "utf8");
+    await fsp.writeFile(guide, "# Guide\n", "utf8");
     const requiredError = "native tree-sitter required by explicit option but unavailable";
 
-    vi.spyOn(nativeRuntime, "assertNativeRequiredAvailable").mockImplementation((mode) => {
-      if (mode !== "on") throw new Error(`unexpected native mode: ${String(mode)}`);
+    const nativeRequiredSpy = vi.spyOn(nativeRuntime, "assertNativeRequiredAvailable").mockImplementation(() => {
       throw new Error(requiredError);
     });
-    await expect(buildProjectIndexFromFiles(root, [page], { native: "on" })).rejects.toThrow(requiredError);
-    vi.restoreAllMocks();
+    try {
+      const index = await buildProjectIndexFromFiles(root, [page, guide], { native: "on" });
+      const graph = await collectGraph(root, [page, guide], { native: "on" });
 
-    vi.spyOn(nativeRuntime, "assertNativeRequiredAvailable").mockImplementation((mode) => {
-      if (mode !== "on") throw new Error(`unexpected native mode: ${String(mode)}`);
-      throw new Error(requiredError);
-    });
-    await expect(collectGraph(root, [page], { native: "on" })).rejects.toThrow(requiredError);
-    vi.restoreAllMocks();
+      expect(
+        index.graph.edges.some((edge) => edge.to.type === "file" && edge.to.path === guide.replace(/\\/g, "/")),
+      ).toBe(true);
+      expect(graph.edges.some((edge) => edge.to.type === "file" && edge.to.path === guide.replace(/\\/g, "/"))).toBe(
+        true,
+      );
+      expect(nativeRequiredSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it("avoids Python query-empty fallback warnings for __future__ imports", async () => {

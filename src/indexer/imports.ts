@@ -1,35 +1,33 @@
-import {
-  isJsFallbackAvailable,
-  isJsFallbackUnavailableError,
-  parseWithJsLanguage,
-  type JsSyntaxTree,
-} from "../jsFallback.js";
 import { prepareSourceInput } from "../languages/filePrep.js";
 import { loadNearestTsconfigFor, resolveImportSpecifier } from "../util/resolution.js";
 import { loadWorkspaceConfig } from "../util/workspace.js";
-import { logWithLevel, type LogLevel } from "../logging.js";
+import { type LogLevel } from "../logging.js";
 import { type FallbackImportExtractionEvent, type FallbackImportExtractionReason } from "../graphs/specifiers.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
 import { isGraphOnlyLanguage } from "../documentLinks.js";
+import { stripJsLikeComments } from "../util/comments.js";
 import {
-  executeJsQueryAsNativeMatches,
-  isNativeQueryAuthoritative,
+  assertNativeRequiredAvailable,
+  getNativeQueryExecution,
+  isNativeBindingLoadedForLanguage,
   isNativeRequiredUnavailableError,
-  shouldAvoidJsFallbackForLanguage,
+  isNativeQueryAuthoritative,
+  type NativeQueryExecution,
   type NativeQueryResults,
+  type NativeRuntimeMode,
 } from "../native/treeSitterNative.js";
 import type { ResolvedImportTarget } from "./imports/context.js";
 import { collectGraphOnlyImports } from "./imports/graphOnly.js";
-import { collectJsTextImports } from "./imports/jsFallback.js";
+import { collectJsTextImports, collectJsTextValueRequireImports } from "./imports/jsFallback.js";
 import {
   applyStatementImportOverride,
   createStatementImportOverrideState,
   finalizeLanguageSpecificImports,
 } from "./imports/languageSpecific.js";
-import { collectJsQueryCaptureImportBindings, collectNativeCaptureImportBindings } from "./imports/nativeCaptures.js";
+import { collectNativeCaptureImportBindings } from "./imports/nativeCaptures.js";
 import { collectPythonImportsFromSource } from "./imports/python.js";
 import type { LanguageSupport } from "../languages.js";
-import type { JsLanguage } from "../languages/types.js";
+import type { JsLanguage, SyntaxTreeLike } from "../languages/types.js";
 import type { ImportBinding } from "./types.js";
 
 export async function collectImportsForFile(
@@ -37,18 +35,18 @@ export async function collectImportsForFile(
   projectRoot: string,
   opts?: {
     source?: string;
-    tree?: JsSyntaxTree;
+    tree?: SyntaxTreeLike;
     sup?: LanguageSupport;
     lang?: JsLanguage;
     nativeQueries?: NativeQueryResults | null;
     graphOptions?: GraphBuildOptions;
+    native?: NativeRuntimeMode;
     onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
     logLevel?: LogLevel;
   },
 ): Promise<ImportBinding[]> {
   let source = opts?.source;
   let sup = opts?.sup;
-  const lang = opts?.lang;
 
   if (!source || !sup) {
     const prep = await prepareSourceInput(file, source !== undefined ? { source } : undefined);
@@ -58,7 +56,7 @@ export async function collectImportsForFile(
 
   const resolvedSource = source;
   const resolvedSup = sup;
-  let resolvedLang = lang;
+
   if (isGraphOnlyLanguage(resolvedSup.id)) {
     return await collectGraphOnlyImports({
       file,
@@ -70,12 +68,6 @@ export async function collectImportsForFile(
     });
   }
 
-  const resolvedNativeQueries = opts?.nativeQueries ?? null;
-  const ensureResolvedLang = (): JsLanguage => {
-    resolvedLang ??= resolvedSup.language(file);
-    return resolvedLang;
-  };
-
   const imports: ImportBinding[] = [];
   const reportFallback = (reason: FallbackImportExtractionReason) => {
     opts?.onFallbackImportExtraction?.({
@@ -84,6 +76,14 @@ export async function collectImportsForFile(
       reason,
     });
   };
+  const nativeMode = opts?.native ?? opts?.graphOptions?.native;
+  assertNativeRequiredAvailable(nativeMode);
+  let nativeExecution: NativeQueryExecution | null = null;
+  let resolvedNativeQueries: NativeQueryResults | null = opts?.nativeQueries ?? null;
+  if (opts?.nativeQueries === undefined) {
+    nativeExecution = getNativeQueryExecution(resolvedSource, resolvedSup, nativeMode);
+    resolvedNativeQueries = nativeExecution.results;
+  }
 
   if (resolvedSup.id === "python") {
     await collectPythonImportsFromSource({
@@ -152,20 +152,19 @@ export async function collectImportsForFile(
     });
   };
 
-  const shouldUseTextImportRecoveryOnly = shouldAvoidJsFallbackForLanguage(resolvedSup.id);
-  const hasPotentialTextImportRecovery =
-    shouldUseTextImportRecoveryOnly && /\b(import|require|from)\b/.test(resolvedSource);
+  const runValueRequireFallback = async () => {
+    await collectJsTextValueRequireImports({
+      source: resolvedSource,
+      languageId: resolvedSup.id,
+      resolveFrom,
+      pushBinding: (binding) => imports.push(binding),
+    });
+  };
 
-  if (shouldUseTextImportRecoveryOnly) {
-    const importCountBeforeFallback = imports.length;
-    if (hasPotentialTextImportRecovery) {
-      await runFallback();
-    }
-    await finalizeImports();
-    if (imports.length > importCountBeforeFallback && !isJsFallbackAvailable()) {
-      reportFallback("js-fallback-unavailable");
-    }
-    return imports;
+  const nativeLanguageAvailable = isNativeBindingLoadedForLanguage(resolvedSup.id, nativeMode);
+  let nativeFallbackReason: FallbackImportExtractionReason | null = null;
+  if (nativeExecution?.fallbackReason === "queryFailure") {
+    nativeFallbackReason = "query-error";
   }
 
   if (resolvedNativeQueries) {
@@ -187,72 +186,35 @@ export async function collectImportsForFile(
       // but only when the importBindings query was not modified by
       // normalization. Languages whose importBindings query is normalized
       // or blanked (e.g. Kotlin) may need the JS/text fallback.
-      if (imports.length || isNativeQueryAuthoritative(resolvedSup, "importBindings")) {
+      if (
+        (resolvedSup.id === "ts" || resolvedSup.id === "tsx") &&
+        /\brequire\s*\(/.test(stripJsLikeComments(resolvedSource))
+      ) {
+        await runValueRequireFallback();
+        await finalizeImports();
+      }
+      if (imports.length) {
         return imports;
       }
-    } catch {
+      if (isNativeQueryAuthoritative(resolvedSup, "importBindings")) {
+        return imports;
+      }
+      nativeFallbackReason = "query-empty";
+    } catch (error) {
+      if (isNativeRequiredUnavailableError(error)) throw error;
       imports.length = 0;
+      nativeFallbackReason = "query-error";
     }
   }
 
-  try {
-    let tree: JsSyntaxTree;
-    try {
-      tree = opts?.tree ?? parseWithJsLanguage(resolvedSource, ensureResolvedLang());
-    } catch (error) {
-      if (isNativeRequiredUnavailableError(error)) throw error;
-      if (isJsFallbackUnavailableError(error)) {
-        reportFallback("js-fallback-unavailable");
-        logWithLevel(
-          opts?.logLevel,
-          "debug",
-          `JS fallback unavailable for ${resolvedSup.id} import-binding recovery; using regex import extraction.`,
-        );
-        await runFallback();
-        await finalizeImports();
-        return imports;
-      }
-      throw error;
-    }
-    let ranFallback = false;
-    try {
-      const matches = executeJsQueryAsNativeMatches(
-        resolvedSource,
-        resolvedSup,
-        ensureResolvedLang(),
-        resolvedSup.queries.importBindings,
-        tree,
-      );
-      await collectJsQueryCaptureImportBindings(
-        {
-          source: resolvedSource,
-          languageId: resolvedSup.id,
-          isTypeOnly: (stmtText) => resolvedSup.isTypeOnly(stmtText),
-          resolveFrom,
-          pushBinding: (binding) => imports.push(binding),
-          languageContext,
-          applyStatementOverride,
-        },
-        matches,
-        tree,
-      );
-    } catch (error) {
-      if (isNativeRequiredUnavailableError(error)) throw error;
-      if (isJsFallbackUnavailableError(error)) {
-        reportFallback("js-fallback-unavailable");
-      }
-      await runFallback();
-      ranFallback = true;
-    }
-    await finalizeImports();
-    // Only run fallback when query path produced no results
-    if (!ranFallback && !imports.length) {
-      await runFallback();
-      await finalizeImports();
-    }
-    return imports;
-  } finally {
-    // No parser cleanup required: JS fallback parsing is delegated to
-    // the optional JS fallback loader bridge.
+  if (nativeFallbackReason) {
+    reportFallback(nativeFallbackReason);
   }
+
+  await runFallback();
+  await finalizeImports();
+  if (!nativeFallbackReason && !nativeLanguageAvailable && imports.length) {
+    reportFallback("reduced-mode");
+  }
+  return imports;
 }

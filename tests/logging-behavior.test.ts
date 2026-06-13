@@ -11,7 +11,6 @@ import {
 } from "../src/index.js";
 import type { FallbackImportExtractionEvent } from "../src/graphs.js";
 import { logWithLevel } from "../src/logging.js";
-import * as jsFallback from "../src/jsFallback.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -121,17 +120,13 @@ describe("logging behavior", () => {
     }
   });
 
-  it("uses regex import recovery without warning spam when JS fallback is unavailable", async () => {
-    const root = await mkTmpDir("dg-logging-js-fallback-");
+  it("uses reduced-mode regex import recovery without warning spam", async () => {
+    const root = await mkTmpDir("dg-logging-fallback-");
     const sourceFile = path.join(root, "main.ts");
     const dependencyFile = path.join(root, "dep.ts");
-    await fsp.writeFile(sourceFile, "import { dep } from './dep';\nexport const value = dep;\n", "utf8");
+    await fsp.writeFile(sourceFile, "import { dep } from './dep';\nconsole.log(dep);\n", "utf8");
     await fsp.writeFile(dependencyFile, "export const dep = 1;\n", "utf8");
 
-    const availabilitySpy = vi.spyOn(jsFallback, "isJsFallbackAvailable").mockReturnValue(false);
-    const parseSpy = vi.spyOn(jsFallback, "parseWithJsLanguage").mockImplementation(() => {
-      throw new Error("JS Tree-sitter fallback is unavailable for test recovery");
-    });
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
     const fallbackEvents: FallbackImportExtractionEvent[] = [];
@@ -143,24 +138,18 @@ describe("logging behavior", () => {
         source: await fsp.readFile(sourceFile, "utf8"),
         sup: support,
         nativeQueries: null,
+        graphOptions: { native: "off" },
         logLevel: "silent",
         onFallbackImportExtraction: (event) => fallbackEvents.push(event),
       });
 
       expect(imports).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "named", imported: "dep" })]));
-      expect(fallbackEvents).toContainEqual(
-        expect.objectContaining({
-          language: "ts",
-          reason: "js-fallback-unavailable",
-        }),
-      );
+      expect(fallbackEvents).toEqual([expect.objectContaining({ language: "ts", reason: "reduced-mode" })]);
       expect(warnSpy).not.toHaveBeenCalled();
       expect(debugSpy).not.toHaveBeenCalled();
     } finally {
       debugSpy.mockRestore();
       warnSpy.mockRestore();
-      parseSpy.mockRestore();
-      availabilitySpy.mockRestore();
       await fsp.rm(root, { recursive: true, force: true });
     }
   });

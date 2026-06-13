@@ -36,9 +36,7 @@ export async function astGrep(
       const prep = await prepareSourceInput(file);
       const support = prep.sup;
       const source = prep.source;
-      const matches = getUnifiedQueryExecution(source, support, querySource, {
-        getLanguage: () => support.language(file),
-      }).matches;
+      const matches = getUnifiedQueryExecution(source, support, querySource).matches;
       if (!matches) continue;
 
       for (const match of matches) {

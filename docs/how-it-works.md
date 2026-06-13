@@ -53,7 +53,7 @@ Runtime behavior, performance characteristics, architecture, extension points, a
 - `npm run build` requires the local native workspace build to succeed when Cargo is available.
 - Use `npm run build:native` when you want native-only rebuilds or a hard failure if Rust is missing.
 - When the addon is present, Codegraph runs supported Tree-sitter parse and query work in Rust.
-- If native mode is `auto`, unavailable query recovery paths can degrade through the optional JS fallback package or native-owned final recovery paths.
+- If native mode is `auto` or `off` and native is unavailable, Codegraph drops to reduced graph-only and regex recovery mode.
 - If native mode is `on`, a missing native addon is a hard error.
 - `--workers` uses a Piscina worker pool to offload per-file Rust extraction across CPU cores.
 - Vue, Svelte, and Astro files stay on the main thread because they need source preprocessing before extraction.

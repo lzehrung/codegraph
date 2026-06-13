@@ -1,4 +1,3 @@
-import { parseWithJsLanguage } from "../jsFallback.js";
 import { sliceText, toRange } from "../util/ast.js";
 import { getNativeSyntaxTreeExecution, type NativeRuntimeMode } from "../native/treeSitterNative.js";
 import { ProjectedSyntaxTree } from "../native/projectedTree.js";
@@ -27,8 +26,7 @@ export function buildScopeIndexFromSource(
     }
   }
   if (!tree) {
-    const resolvedLang = lang ?? support.language(file);
-    tree = parseWithJsLanguage(source, resolvedLang);
+    throw new Error(`Native parser unavailable for ${file}; scope reconstruction requires parser context.`);
   }
 
   const rootScope: Scope = {

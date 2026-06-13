@@ -1,15 +1,10 @@
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { createRequire } from "node:module";
-import fs from "node:fs";
-
 export interface JsPoint {
   row: number;
   column: number;
 }
 
 export interface JsSyntaxNode {
-  id?: number;
+  readonly id?: number;
   type: string;
   text: string;
   startIndex: number;
@@ -55,71 +50,19 @@ export interface JsNativeMatch {
   captures: JsNativeCapture[];
 }
 
-type JsFallbackModule = {
-  loadTreeSitterLanguage: (packageName: string) => JsLanguage;
-  loadTypeScriptGrammars: () => {
-    typescript: JsLanguage;
-    tsx: JsLanguage;
-  };
-  parseWithJsLanguage: (source: string, language: JsLanguage) => JsSyntaxTree;
-  executeJsQueryAsNativeMatches: (
-    source: string,
-    language: JsLanguage,
-    queryText: string,
-    tree?: JsSyntaxTree,
-  ) => JsNativeMatch[];
-};
+const JS_GRAMMAR_FALLBACK_UNAVAILABLE_MESSAGE =
+  "JS Tree-sitter fallback is unavailable; native parser is the only grammar backend";
 
-const require = createRequire(import.meta.url);
-function existingLocalJsFallbackCandidates(): string[] {
-  const roots = [path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../packages/codegraph-js-fallback")];
-  const candidates: string[] = [];
-  for (const packageRoot of roots) {
-    const entry = path.join(packageRoot, "js-fallback.cjs");
-    if (!fs.existsSync(entry)) continue;
-    candidates.push(packageRoot, entry);
-  }
-  return candidates;
-}
-
-let jsFallbackState: { loaded: true; module: JsFallbackModule } | { loaded: false; error?: unknown } | undefined;
-
-function loadJsFallbackModule(): { loaded: true; module: JsFallbackModule } | { loaded: false; error?: unknown } {
-  if (jsFallbackState) return jsFallbackState;
-
-  const candidates = ["@lzehrung/codegraph-js-fallback", ...existingLocalJsFallbackCandidates()] as const;
-  let lastError: unknown;
-
-  for (const candidate of candidates) {
-    try {
-      const loaded = require(candidate) as JsFallbackModule;
-      jsFallbackState = { loaded: true, module: loaded };
-      return jsFallbackState;
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  jsFallbackState = { loaded: false, error: lastError };
-  return jsFallbackState;
-}
-
-function requireJsFallback(feature: string): JsFallbackModule {
-  const state = loadJsFallbackModule();
-  if (state.loaded) return state.module;
-
-  const suffix = state.error instanceof Error && state.error.message ? ` (${state.error.message})` : "";
-  throw new Error(
-    `JS Tree-sitter fallback is unavailable for ${feature}. Install @lzehrung/codegraph-js-fallback to enable it${suffix}`,
-  );
+function createUnavailableError(feature: string): Error {
+  return new Error(`${JS_GRAMMAR_FALLBACK_UNAVAILABLE_MESSAGE} for ${feature}`);
 }
 
 export function __resetJsFallbackModuleForTests(): void {
-  jsFallbackState = undefined;
+  // Kept for tests that reset parser backends between cases.
 }
 
 export function isJsFallbackAvailable(): boolean {
-  return loadJsFallbackModule().loaded;
+  return false;
 }
 
 export function isJsFallbackUnavailableError(error: unknown): boolean {
@@ -127,18 +70,21 @@ export function isJsFallbackUnavailableError(error: unknown): boolean {
 }
 
 export function loadTreeSitterLanguage(packageName: string): JsLanguage {
-  return requireJsFallback("grammar loading").loadTreeSitterLanguage(packageName);
+  return { name: packageName };
 }
 
 export function loadTypeScriptGrammars(): {
   typescript: JsLanguage;
   tsx: JsLanguage;
 } {
-  return requireJsFallback("TypeScript grammar loading").loadTypeScriptGrammars();
+  return {
+    typescript: { name: "tree-sitter-typescript/typescript" },
+    tsx: { name: "tree-sitter-typescript/tsx" },
+  };
 }
 
-export function parseWithJsLanguage(source: string, language: JsLanguage): JsSyntaxTree {
-  return requireJsFallback("JS syntax-tree parsing").parseWithJsLanguage(source, language);
+export function parseWithJsLanguage(_source: string, _language: JsLanguage): JsSyntaxTree {
+  throw createUnavailableError("syntax-tree parsing");
 }
 
 export function isJsSyntaxTree(tree: unknown): tree is JsSyntaxTree {
@@ -146,10 +92,10 @@ export function isJsSyntaxTree(tree: unknown): tree is JsSyntaxTree {
 }
 
 export function executeJsQueryAsNativeMatches(
-  source: string,
-  language: JsLanguage,
-  queryText: string,
-  tree?: JsSyntaxTree,
+  _source: string,
+  _language: JsLanguage,
+  _queryText: string,
+  _tree?: JsSyntaxTree,
 ): JsNativeMatch[] {
-  return requireJsFallback("JS query execution").executeJsQueryAsNativeMatches(source, language, queryText, tree);
+  throw createUnavailableError("query execution");
 }

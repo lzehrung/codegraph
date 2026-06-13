@@ -39,8 +39,8 @@ Status key:
 
 Notes:
 
-- The native addon uses the same Tree-sitter query model as the opt-in `@lzehrung/codegraph-js-fallback` path for all listed source languages.
-- Native-only installs do not require `@lzehrung/codegraph-js-fallback` for normal supported source-language graph extraction, symbol indexing, chunking, or AST grep. When query recovery degrades in `auto` mode, Codegraph reports it in diagnostics and stays on native-owned recovery paths where the language supports them.
+- The native addon is the only Tree-sitter grammar backend for the listed source languages.
+- Without native, Codegraph degrades to reduced graph-only and regex recovery mode; it does not switch to a JS grammar stack.
 - Native parity coverage includes both extraction parity and end-to-end semantic parity on the current source-language fixture set (`TypeScript`, `TSX`, `JavaScript`, `Python`, `PHP`, `Go`, `Java`, `C#`, `Rust`, `Kotlin`, `Swift`, `Zig`, `C`, `C++`, `Ruby`) plus graph/specifier parity for `HTML`, `CSS`, `Less`, `SCSS`, `Vue`, and `Svelte`.
 - Deeper hardening coverage includes Go aliases and interface-typed uses.
 - Deeper hardening coverage includes Kotlin aliases, wildcard imports, package-wide wildcard graph expansion, and native-owned import-binding recovery.

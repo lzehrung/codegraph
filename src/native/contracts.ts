@@ -81,7 +81,7 @@ export type NativeSingleQueryExecution = {
 
 export type UnifiedQueryExecution = {
   matches: NativeMatch[] | null;
-  backend: "native" | "js";
+  backend: "native";
   fallbackReason?: NativeFallbackReason;
   error?: string;
 };

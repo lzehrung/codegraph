@@ -1,5 +1,5 @@
 import path from "node:path";
-import { stripJsLikeComments, stripPythonCommentsAndStrings } from "./comments.js";
+import { buildJsLikeLiteralMask, stripJsLikeComments, stripPythonCommentsAndStrings } from "./comments.js";
 import { normalizePath } from "./paths.js";
 
 export type ModuleSpecifier = {
@@ -13,116 +13,40 @@ export type ModuleSpecifier = {
   confidence?: number;
 };
 
-function buildStringLiteralMask(source: string): Uint8Array | undefined {
-  if (!hasStringLiteralDelimiter(source)) return undefined;
-  const mask = new Uint8Array(source.length);
-  for (let i = 0; i < source.length; i++) {
-    const ch = source[i]!;
-    if (ch === "'" || ch === `"`) {
-      i = maskQuotedString(source, mask, i, ch) - 1;
-      continue;
-    }
-    if (ch === "`") {
-      i = maskTemplateLiteral(source, mask, i) - 1;
-    }
+function matchStartsInCode(mask: Uint8Array | undefined, match: RegExpMatchArray): boolean {
+  const index = match.index;
+  if (index === undefined || !mask) return true;
+  const text = match[0] ?? "";
+  for (let offset = 0; offset < text.length; offset += 1) {
+    const ch = text[offset]!;
+    if (/\s/.test(ch)) continue;
+    return mask[index + offset] === 0;
   }
-  return mask;
-}
-
-function hasStringLiteralDelimiter(source: string): boolean {
-  return source.includes("'") || source.includes(`"`) || source.includes("`");
-}
-
-function maskQuotedString(source: string, mask: Uint8Array, start: number, quote: "'" | `"`): number {
-  for (let i = start; i < source.length; i++) {
-    const ch = source[i]!;
-    mask[i] = 1;
-    if (ch === "\\") {
-      const nextIndex = i + 1;
-      if (nextIndex < source.length) {
-        mask[nextIndex] = 1;
-        i = nextIndex;
-      }
-      continue;
-    }
-    if (i > start && ch === quote) return i + 1;
-  }
-  return source.length;
-}
-
-function maskTemplateLiteral(source: string, mask: Uint8Array, start: number): number {
-  mask[start] = 1;
-  for (let i = start + 1; i < source.length; i++) {
-    const ch = source[i]!;
-    mask[i] = 1;
-    if (ch === "\\") {
-      const nextIndex = i + 1;
-      if (nextIndex < source.length) {
-        mask[nextIndex] = 1;
-        i = nextIndex;
-      }
-      continue;
-    }
-    if (ch === "`") return i + 1;
-    if (ch === "$" && source[i + 1] === "{") {
-      mask[i + 1] = 1;
-      i = scanTemplateExpression(source, mask, i + 2) - 1;
-    }
-  }
-  return source.length;
-}
-
-function scanTemplateExpression(source: string, mask: Uint8Array, start: number): number {
-  let depth = 1;
-  for (let i = start; i < source.length; i++) {
-    const ch = source[i]!;
-    if (ch === "'" || ch === `"`) {
-      i = maskQuotedString(source, mask, i, ch) - 1;
-      continue;
-    }
-    if (ch === "`") {
-      i = maskTemplateLiteral(source, mask, i) - 1;
-      continue;
-    }
-    if (ch === "{") {
-      depth += 1;
-      continue;
-    }
-    if (ch === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        mask[i] = 1;
-        return i + 1;
-      }
-    }
-  }
-  return source.length;
+  return true;
 }
 
 export function extractJsTsSpecifiers(source: string): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
   try {
     const src = stripJsLikeComments(source);
-    const stringMask = buildStringLiteralMask(src);
     const push = (spec: string, typeOnly?: boolean) => {
       if (spec) out.push({ spec, ...(typeOnly ? { typeOnly: true } : {}) });
     };
-
+    const literalMask = buildJsLikeLiteralMask(src);
     const combined =
-      /^\s*import\s+[^\n;]*?\s+from\s+["']([^"']+)["']|^\s*import\s+["']([^"']+)["']|\bexport\s+[^\n;]*?\s+from\s+["']([^"']+)["']|\b(?:const|let|var)\s*\{[^}]*\}\s*=\s*require\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\brequire\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\bimport\(\s*["']([^"']+)["']\s*\)|^\s*import\s+[A-Za-z_$][\w$]*\s*=\s*require\(\s*["']([^"']+)["']\s*\)|^\s*declare\s+module\s+["']([^"']+)["']/gm;
+      /^\s*import\s+[^\n;]*?\s+from\s+["']([^"']+)["']|^\s*import\s+["']([^"']+)["']|\bexport\s+[^\n;]*?\s+from\s+["']([^"']+)["']|\b(?:const|let|var)\s*\{[^}]*\}\s*=\s*require\s*\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\brequire\s*\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\bimport\s*\(\s*["']([^"']+)["']\s*\)|^\s*import\s+[A-Za-z_$][\w$]*\s*=\s*require\s*\(\s*["']([^"']+)["']\s*\)|^\s*declare\s+module\s+["']([^"']+)["']/gm;
 
-    for (const m of src.matchAll(combined)) {
-      const start = m.index ?? 0;
-      if (stringMask?.[start]) continue;
-      const spec = m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5] ?? m[6] ?? m[7] ?? m[8];
+    for (const match of src.matchAll(combined)) {
+      if (!matchStartsInCode(literalMask, match)) continue;
+      const spec = match[1] ?? match[2] ?? match[3] ?? match[4] ?? match[5] ?? match[6] ?? match[7] ?? match[8];
       if (!spec) continue;
-      const text = m[0] ?? "";
+      const text = match[0] ?? "";
       let typeOnly = false;
-      if (m[1] !== undefined || m[2] !== undefined) {
+      if (match[1] !== undefined || match[2] !== undefined) {
         typeOnly = /\bimport\s+type\b/.test(text);
-      } else if (m[3] !== undefined) {
+      } else if (match[3] !== undefined) {
         typeOnly = /\bexport\s+type\b/.test(text);
-      } else if (m[8] !== undefined) {
+      } else if (match[8] !== undefined) {
         typeOnly = true;
       }
       push(spec, typeOnly);
@@ -151,7 +75,7 @@ function splitTopLevelArgs(text: string): string[] | null {
   let current = "";
   let depth = 0;
   let quote: "'" | '"' | "`" | null = null;
-  for (let i = 0; i < text.length; i++) {
+  for (let i = 0; i < text.length; i += 1) {
     const ch = text[i]!;
     if (quote) {
       current += ch;
@@ -266,7 +190,7 @@ export function extractJsTsDynamicSpecifiers(source: string, fromFile: string, p
   const out: ModuleSpecifier[] = [];
   try {
     const src = stripJsLikeComments(source);
-    const stringMask = buildStringLiteralMask(src);
+    const literalMask = buildJsLikeLiteralMask(src);
     const seen = new Set<string>();
     const addSpec = (spec: string | null) => {
       if (!spec || seen.has(spec)) return;
@@ -276,8 +200,7 @@ export function extractJsTsDynamicSpecifiers(source: string, fromFile: string, p
     const pathCallRe =
       /(?<!["'`])\b(?:require|import)\s*\(\s*(path\.(?:join|resolve)\s*\((?:[^()]|\([^()]*\))*\))\s*\)/g;
     for (const match of src.matchAll(pathCallRe)) {
-      const start = match.index ?? 0;
-      if (stringMask?.[start]) continue;
+      if (!matchStartsInCode(literalMask, match)) continue;
       const argText = match[1] ?? "";
       const parsed = parsePathCallArg(argText);
       if (!parsed) continue;
@@ -292,8 +215,7 @@ export function extractJsTsDynamicSpecifiers(source: string, fromFile: string, p
     }
     const urlCallRe = /(?<!["'`])\b(?:require|import)\s*\(\s*(new\s+URL\s*\([^)]*\))\s*\)/g;
     for (const match of src.matchAll(urlCallRe)) {
-      const start = match.index ?? 0;
-      if (stringMask?.[start]) continue;
+      if (!matchStartsInCode(literalMask, match)) continue;
       const argText = match[1] ?? "";
       const parsed = parseNewUrlArg(argText);
       if (!parsed) continue;
@@ -312,9 +234,9 @@ export function extractPythonSpecifiers(source: string): string[] {
   try {
     const cleaned = stripPythonCommentsAndStrings(source);
     const reImport = /^\s*import\s+([A-Za-z_][\w.]*)/gm;
-    for (const m of cleaned.matchAll(reImport)) out.push(m[1]!);
+    for (const match of cleaned.matchAll(reImport)) out.push(match[1]!);
     const reFrom = /^\s*from\s+(\.+(?:[A-Za-z_][\w.]*)?|[A-Za-z_][\w.]*)\s+import/gm;
-    for (const m of cleaned.matchAll(reFrom)) out.push(m[1]!);
+    for (const match of cleaned.matchAll(reFrom)) out.push(match[1]!);
   } catch {
     /* parse fallback: ignore */
   }

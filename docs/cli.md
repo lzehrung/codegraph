@@ -15,7 +15,7 @@ Numeric options such as `--limit`, `--threads`, `--depth`, `--max-refs`, and tok
 The CLI defaults to `--native auto`, which uses the native Tree-sitter path when a compatible native artifact is available and falls back automatically otherwise.
 
 - `--native on`: require native explicitly and fail if it is unavailable
-- `--native off`: force the opt-in JS Tree-sitter fallback path for comparison and debugging when `@lzehrung/codegraph-js-fallback` is installed
+- `--native off`: disable native explicitly and run reduced graph-only and regex recovery mode
 
 ## Project config
 

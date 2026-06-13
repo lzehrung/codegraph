@@ -13,13 +13,13 @@ The library defaults to `native: "auto"`, which uses the native Tree-sitter path
 Override that per call with `native: "on"` or `native: "off"`.
 
 - `native: "on"` requires the native addon and raises an error if it cannot be loaded.
-- `native: "off"` means the opt-in JS fallback path and requires `@lzehrung/codegraph-js-fallback`.
+- `native: "off"` disables native explicitly and runs reduced graph-only and regex recovery mode.
 
 ```ts
 import { buildProjectIndex } from "@lzehrung/codegraph";
 
 const index = await buildProjectIndex(process.cwd(), { native: "auto" });
-const jsOnlyIndex = await buildProjectIndex(process.cwd(), { native: "off" });
+const reducedIndex = await buildProjectIndex(process.cwd(), { native: "off" });
 ```
 
 CLI commands and agent sessions read `codegraph.config.json` from the project root when it exists. Core indexing APIs keep discovery explicit, so pass `discovery` options directly when you want the same scan scope in custom code:

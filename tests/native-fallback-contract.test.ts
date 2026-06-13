@@ -16,6 +16,7 @@ import {
   type ProjectIndex,
 } from "../src/index.js";
 import { prepareParserInput } from "../src/languages/filePrep.js";
+import { parsePreparedFileContext } from "../src/indexer/parse-context.js";
 import * as nativeRuntime from "../src/native/treeSitterNative.js";
 import { supportForFile } from "../src/languages.js";
 import type { NativeCapture, NativeQueryResults } from "../src/native/treeSitterNative.js";
@@ -187,22 +188,65 @@ describe("native required fallback boundaries", () => {
     expect(syntaxSpy).toHaveBeenCalled();
   });
 
-  it("does not suppress required-native failures for graph-only local collection", () => {
+  it("does not require native availability for graph-only local collection", () => {
     const file = normalizeFile(path.join(os.tmpdir(), "required-native.md"));
     const support = supportForFile(file);
     expect(support).toBeDefined();
     if (!support) return;
 
-    vi.spyOn(nativeRuntime, "assertNativeRequiredAvailable").mockImplementation((mode) => {
-      if (mode !== "on") throw new Error(`unexpected native mode: ${String(mode)}`);
+    const nativeRequiredSpy = vi.spyOn(nativeRuntime, "assertNativeRequiredAvailable").mockImplementation(() => {
       throw new Error(REQUIRED_NATIVE_UNAVAILABLE);
     });
 
+    const moduleIndex = collectLocalsAndExportsFromSource(file, "[Guide](./guide.md)\n", support, undefined, [], {
+      nativeMode: "on",
+    });
+
+    expect(moduleIndex).toEqual({ file, exports: [], imports: [], locals: [] });
+    expect(nativeRequiredSpy).not.toHaveBeenCalled();
+  });
+
+  it("uses a minimal syntax tree for reduced-mode parse recovery", () => {
+    const file = normalizeFile(path.join(os.tmpdir(), "reduced-mode-parse.ts"));
+    const support = supportForFile(file);
+    expect(support).toBeDefined();
+    if (!support) return;
+
+    const parsed = parsePreparedFileContext({
+      file,
+      source: "export const alpha = 1;\n",
+      sup: support,
+      nativeMode: "off",
+      nativeQueries: null,
+    });
+
+    expect(parsed.source).toBe("export const alpha = 1;\n");
+    expect(parsed.sup.id).toBe("ts");
+    expect(parsed.tree.rootNode.type).toBe("document");
+    expect(parsed.tree.rootNode.namedChildren).toEqual([]);
+  });
+
+  it("preserves required-native parse failures", () => {
+    const file = normalizeFile(path.join(os.tmpdir(), "required-native-parse.ts"));
+    const support = supportForFile(file);
+    expect(support).toBeDefined();
+    if (!support) return;
+
+    vi.spyOn(nativeRuntime, "getNativeSyntaxTreeExecution").mockReturnValue({
+      tree: null,
+      fallbackReason: "unavailable",
+      error: REQUIRED_NATIVE_UNAVAILABLE,
+    });
+
     expect(() =>
-      collectLocalsAndExportsFromSource(file, "[Guide](./guide.md)\n", support, undefined, [], {
+      parsePreparedFileContext({
+        file,
+        source: "export const alpha = 1;\n",
+        sup: support,
         nativeMode: "on",
+        nativeQueries: null,
       }),
-    ).toThrow(REQUIRED_NATIVE_UNAVAILABLE);
+    ).toThrow(`Failed to reconstruct syntax tree for ${file}`);
   });
 
   it("validates required-native mode before using supplied non-graph-only query data", () => {

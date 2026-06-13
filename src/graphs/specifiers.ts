@@ -1,10 +1,3 @@
-import {
-  isJsFallbackAvailable,
-  isJsFallbackUnavailableError,
-  isJsSyntaxTree,
-  parseWithJsLanguage,
-  type JsLanguage,
-} from "../jsFallback.js";
 import { type LanguageSupport } from "../languages.js";
 import {
   parseCsharpUsingDirective,
@@ -17,12 +10,10 @@ import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
 import { ProjectedSyntaxTree } from "../native/projectedTree.js";
 import {
-  executeJsQueryAsNativeMatches,
   getCompactImportsExecution,
   getNativeSyntaxTreeExecution,
-  isNativeBindingLoadedForLanguage,
   isNativeQueryAuthoritative,
-  shouldAvoidJsFallbackForLanguage,
+  supportsReducedModeRegexRecovery,
   type CompactQueryResults,
   type NativeQueryResults,
   type NativeRuntimeMode,
@@ -36,7 +27,7 @@ import {
 import { sliceText, unquote } from "../util/ast.js";
 import { extractJsTsSpecifiers, extractPythonSpecifiers, type ModuleSpecifier } from "../util/specifiers.js";
 
-export type FallbackImportExtractionReason = "fast" | "js-fallback-unavailable" | "query-error" | "query-empty";
+export type FallbackImportExtractionReason = "fast" | "reduced-mode" | "query-error" | "query-empty";
 
 export type FallbackImportExtractionEvent = {
   file?: string;
@@ -159,14 +150,31 @@ function extractCssUrlSpecifiers(source: string): ModuleSpecifier[] {
   return out;
 }
 
+function stripCssComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, (match) => match.replace(/[^\r\n]/g, " "));
+}
+
+function extractCssImportSpecifiers(source: string): ModuleSpecifier[] {
+  const out: ModuleSpecifier[] = [];
+  const cleaned = stripCssComments(source);
+  const re = /(?:^|[;{}])\s*@(import|use|forward)\s+(?:url\()?["']([^"']+)["']/gim;
+  for (const match of cleaned.matchAll(re)) {
+    const spec = (match[2] ?? "").trim();
+    if (!spec) continue;
+    out.push({ spec, typeOnly: false });
+  }
+  return out;
+}
+
 export function collectModuleSpecifiersFromSource(
   support: LanguageSupport,
-  lang: JsLanguage | undefined,
+  _lang: unknown,
   source: string,
   opts?: CollectModuleSpecifiersOptions,
 ): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
-  const supportsRegexImportRecovery = shouldAvoidJsFallbackForLanguage(support.id);
+
+  const supportsRegexImportRecovery = supportsReducedModeRegexRecovery(support.id);
   const htmlLikeLanguage = isHtmlLikeLanguage(support.id, opts?.file);
   const graphOnlyLanguage = isGraphOnlyLanguage(support.id);
   const fastRegexDisabled = opts?.fastRegexDisabledLanguages?.includes(support.id);
@@ -183,13 +191,6 @@ export function collectModuleSpecifiersFromSource(
       ...(opts?.file ? { file: opts.file } : {}),
     };
     opts?.onFallbackImportExtraction?.(event);
-  };
-  const ensureResolvedLang = (): JsLanguage => {
-    if (!lang) {
-      const fileForLanguage = opts?.file ?? `temp.${support.matchExts[0]?.replace(/^\./, "") ?? "txt"}`;
-      lang = support.language(fileForLanguage);
-    }
-    return lang;
   };
   const resolvedNativeImports =
     opts?.compactNativeImports?.imports ??
@@ -244,23 +245,7 @@ export function collectModuleSpecifiersFromSource(
 
   if (support.id === "php") {
     let queryFailed = false;
-    const phpMatches =
-      resolvedNativeImports ??
-      (() => {
-        try {
-          const jsQueryTree = opts?.tree && isJsSyntaxTree(opts.tree) ? opts.tree : undefined;
-          return executeJsQueryAsNativeMatches(
-            source,
-            support,
-            ensureResolvedLang(),
-            support.queries.imports,
-            jsQueryTree,
-          );
-        } catch {
-          queryFailed = true;
-          return null;
-        }
-      })();
+    const phpMatches = resolvedNativeImports;
     if (phpMatches) {
       try {
         for (const match of phpMatches) {
@@ -285,13 +270,6 @@ export function collectModuleSpecifiersFromSource(
       (() => {
         const nativeTreeExecution = getNativeSyntaxTreeExecution(source, support, opts?.native);
         return nativeTreeExecution.tree ? new ProjectedSyntaxTree(source, nativeTreeExecution.tree) : null;
-      })() ??
-      (() => {
-        try {
-          return parseWithJsLanguage(source, ensureResolvedLang());
-        } catch {
-          return null;
-        }
       })();
     if (phpTree) {
       const qualifiedSpecifiers = extractPhpQualifiedSpecifiersFromTree(source, phpTree);
@@ -316,7 +294,6 @@ export function collectModuleSpecifiersFromSource(
   const hasNativeImports = !!nativeImportsArray;
 
   let queryFailed = false;
-  let fallbackReasonOverride: FallbackImportExtractionReason | undefined;
   if (hasNativeImports) {
     try {
       for (const match of nativeImportsArray) {
@@ -350,13 +327,21 @@ export function collectModuleSpecifiersFromSource(
         }
       }
       if (htmlLikeLanguage) {
+        const beforeHtmlRecovery = out.length;
         const htmlSeen = makeSeenSet(out);
         appendUniqueSpecifiers(out, extractHtmlAttributeSpecifiers(source), htmlSeen);
         appendUniqueSpecifiers(out, extractHtmlInlineScriptSpecifiers(source), htmlSeen);
+        if (!beforeHtmlRecovery && out.length) {
+          reportFallback("query-empty");
+        }
       }
       if (support.id === "css" || support.id === "scss" || support.id === "less") {
+        const beforeCssRecovery = out.length;
         const cssSeen = makeSeenSet(out);
         appendUniqueSpecifiers(out, extractCssUrlSpecifiers(source), cssSeen);
+        if (!beforeCssRecovery && out.length) {
+          reportFallback("query-empty");
+        }
       }
       if (out.length || isNativeQueryAuthoritative(support, "imports")) {
         return normalizeModuleSpecifiers(out);
@@ -375,14 +360,17 @@ export function collectModuleSpecifiersFromSource(
     }
   }
   if (supportsRegexImportRecovery) {
-    if (!isJsFallbackAvailable()) {
-      fallbackReasonOverride = "js-fallback-unavailable";
-    }
     if ((queryFailed || !out.length) && shouldAttemptFallback) {
       try {
         const extracted = extractJsTsSpecifiers(source);
         if (extracted.length) {
-          reportFallback(fallbackReasonOverride ?? (queryFailed ? "query-error" : "query-empty"));
+          let reason: FallbackImportExtractionReason = "reduced-mode";
+          if (queryFailed) {
+            reason = "query-error";
+          } else if (hasNativeImports) {
+            reason = "query-empty";
+          }
+          reportFallback(reason);
           out.push(...extracted);
         }
       } catch {
@@ -392,99 +380,32 @@ export function collectModuleSpecifiersFromSource(
     return normalizeModuleSpecifiers(out);
   }
 
-  if (isNativeBindingLoadedForLanguage(support.id, opts?.native)) {
-    return normalizeModuleSpecifiers(out);
+  let reducedRecoveryReason: FallbackImportExtractionReason = "reduced-mode";
+  if (queryFailed) {
+    reducedRecoveryReason = "query-error";
+  } else if (hasNativeImports) {
+    reducedRecoveryReason = "query-empty";
   }
-
-  try {
-    const jsQueryTree = opts?.tree && isJsSyntaxTree(opts.tree) ? opts.tree : undefined;
-    const matches = executeJsQueryAsNativeMatches(
-      source,
-      support,
-      ensureResolvedLang(),
-      support.queries.imports,
-      jsQueryTree,
-    );
-    for (const match of matches) {
-      const caps = Object.fromEntries(match.captures.map((capture) => [capture.name, capture] as const));
-      const modNodes = match.captures.filter((capture) => capture.name === "mod");
-      const stmtText = caps["stmt"]?.text ?? "";
-      const typeOnly =
-        (support.id === "ts" || support.id === "tsx") &&
-        (/\b(import|export)\s+type\b/.test(stmtText) || /^\s*declare\s+module\s+["']/.test(stmtText));
-      if (support.id === "kotlin") {
-        const parsed = parseKotlinImportStatement(stmtText);
-        if (parsed) out.push({ spec: parsed.from, typeOnly: false });
-        continue;
-      }
-      if (support.id === "rust") {
-        const parsed = parseRustImportStatement(stmtText);
-        if (parsed) {
-          out.push(rustSpecifierFromParsedImport(parsed));
-          continue;
-        }
-      }
-      if (support.id === "csharp") {
-        const parsed = parseCsharpUsingDirective(stmtText);
-        if (parsed) {
-          out.push({ spec: parsed.from, typeOnly: false });
-          continue;
-        }
-      }
-      for (const capture of modNodes) {
-        out.push({ spec: unquote(capture.text), typeOnly });
-      }
-    }
-    if (htmlLikeLanguage) {
-      const htmlSeen = makeSeenSet(out);
-      appendUniqueSpecifiers(out, extractHtmlAttributeSpecifiers(source), htmlSeen);
-      appendUniqueSpecifiers(out, extractHtmlInlineScriptSpecifiers(source), htmlSeen);
-    }
-    if (support.id === "css" || support.id === "scss" || support.id === "less") {
-      const cssSeen = makeSeenSet(out);
-      appendUniqueSpecifiers(out, extractCssUrlSpecifiers(source), cssSeen);
-    }
-    if (out.length) return normalizeModuleSpecifiers(out);
-  } catch (error) {
-    if (isJsFallbackUnavailableError(error)) {
-      fallbackReasonOverride = "js-fallback-unavailable";
-      logWithLevel(
-        opts?.logLevel,
-        "debug",
-        `JS fallback unavailable for ${support.id} query recovery; using regex import extraction.`,
-      );
-    } else {
-      if (!htmlLikeLanguage) {
-        logWithLevel(
-          opts?.logLevel,
-          "warn",
-          `Warning: Query error in collectModuleSpecifiersFromSource for ${support.id}:`,
-          error,
-        );
-      }
-    }
-    queryFailed = true;
-  }
-
-  if (supportsRegexImportRecovery && (queryFailed || !out.length) && shouldAttemptFallback) {
-    try {
-      const extracted = extractJsTsSpecifiers(source);
-      if (extracted.length) {
-        reportFallback(fallbackReasonOverride ?? (queryFailed ? "query-error" : "query-empty"));
-        out.push(...extracted);
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  if (htmlLikeLanguage && (queryFailed || !out.length)) {
+  if (htmlLikeLanguage && !out.length) {
+    const beforeRecovery = out.length;
     const attributeSpecs = extractHtmlAttributeSpecifiers(source);
     const inlineSpecs = extractHtmlInlineScriptSpecifiers(source);
     if (attributeSpecs.length || inlineSpecs.length) {
       const fallbackSeen = makeSeenSet(out);
       appendUniqueSpecifiers(out, attributeSpecs, fallbackSeen);
       appendUniqueSpecifiers(out, inlineSpecs, fallbackSeen);
+    }
+    if (out.length > beforeRecovery) {
+      reportFallback(reducedRecoveryReason);
+    }
+  }
+  if (support.id === "css" || support.id === "scss" || support.id === "less") {
+    const beforeRecovery = out.length;
+    const cssSeen = makeSeenSet(out);
+    appendUniqueSpecifiers(out, extractCssImportSpecifiers(source), cssSeen);
+    appendUniqueSpecifiers(out, extractCssUrlSpecifiers(source), cssSeen);
+    if (out.length > beforeRecovery) {
+      reportFallback(reducedRecoveryReason);
     }
   }
   return normalizeModuleSpecifiers(out);

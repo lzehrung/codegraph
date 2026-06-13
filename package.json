@@ -22,7 +22,6 @@
   "scripts": {
     "clean": "node -e \"import('node:fs').then(({ rmSync }) => rmSync('dist', { recursive: true, force: true }))\"",
     "check": "npm run lint && npm run format && npm run build && npm run test",
-    "fallback:install": "npm install --workspace=@lzehrung/codegraph-js-fallback --legacy-peer-deps",
     "build": "npm run clean && tsc -p tsconfig.json && node ./scripts/build-native-if-available.mjs",
     "generate:duplicate-keywords": "node ./scripts/generate-duplicate-keywords.mjs",
     "format": "prettier --write . --ignore-unknown",
