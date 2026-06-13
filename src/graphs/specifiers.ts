@@ -327,13 +327,21 @@ export function collectModuleSpecifiersFromSource(
         }
       }
       if (htmlLikeLanguage) {
+        const beforeHtmlRecovery = out.length;
         const htmlSeen = makeSeenSet(out);
         appendUniqueSpecifiers(out, extractHtmlAttributeSpecifiers(source), htmlSeen);
         appendUniqueSpecifiers(out, extractHtmlInlineScriptSpecifiers(source), htmlSeen);
+        if (!beforeHtmlRecovery && out.length) {
+          reportFallback("query-empty");
+        }
       }
       if (support.id === "css" || support.id === "scss" || support.id === "less") {
+        const beforeCssRecovery = out.length;
         const cssSeen = makeSeenSet(out);
         appendUniqueSpecifiers(out, extractCssUrlSpecifiers(source), cssSeen);
+        if (!beforeCssRecovery && out.length) {
+          reportFallback("query-empty");
+        }
       }
       if (out.length || isNativeQueryAuthoritative(support, "imports")) {
         return normalizeModuleSpecifiers(out);
@@ -356,7 +364,12 @@ export function collectModuleSpecifiersFromSource(
       try {
         const extracted = extractJsTsSpecifiers(source);
         if (extracted.length) {
-          const reason = queryFailed ? "query-error" : "reduced-mode";
+          let reason: FallbackImportExtractionReason = "reduced-mode";
+          if (queryFailed) {
+            reason = "query-error";
+          } else if (hasNativeImports) {
+            reason = "query-empty";
+          }
           reportFallback(reason);
           out.push(...extracted);
         }
@@ -367,7 +380,12 @@ export function collectModuleSpecifiersFromSource(
     return normalizeModuleSpecifiers(out);
   }
 
-  const reducedRecoveryReason = queryFailed ? "query-error" : "reduced-mode";
+  let reducedRecoveryReason: FallbackImportExtractionReason = "reduced-mode";
+  if (queryFailed) {
+    reducedRecoveryReason = "query-error";
+  } else if (hasNativeImports) {
+    reducedRecoveryReason = "query-empty";
+  }
   if (htmlLikeLanguage && !out.length) {
     const beforeRecovery = out.length;
     const attributeSpecs = extractHtmlAttributeSpecifiers(source);

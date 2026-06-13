@@ -191,6 +191,39 @@ describe("authoritative empty native results", () => {
     expect(specs[0]!.spec).toBe("./bar");
   });
 
+  it("reports query-empty when non-authoritative native module specifiers fall back to regex recovery", () => {
+    const tsxSupport = supportById("tsx")!;
+    const support = {
+      ...tsxSupport,
+      native: {
+        ...tsxSupport.native,
+        normalizeQuery: (kind, query) => (kind === "imports" ? `${query}\n;` : query),
+      },
+    };
+    const fallbackEvents: FallbackImportExtractionEvent[] = [];
+    const emptyNativeResults: NativeQueryResults = {
+      imports: [],
+      exports: [],
+      locals: [],
+      importBindings: [],
+    };
+
+    const specs = collectModuleSpecifiersFromSource(support, undefined, "import { foo } from './bar';\n", {
+      file: "main.tsx",
+      nativeQueries: emptyNativeResults,
+      onFallbackImportExtraction: (event) => fallbackEvents.push(event),
+    });
+
+    expect(specs).toEqual([{ spec: "./bar" }]);
+    expect(fallbackEvents).toEqual([
+      expect.objectContaining({
+        language: "tsx",
+        reason: "query-empty",
+        file: "main.tsx",
+      }),
+    ]);
+  });
+
   it("reports query-empty when non-authoritative native import-binding results fall back to text recovery", async () => {
     const tsSupport = supportById("ts")!;
     const support = {
@@ -342,6 +375,39 @@ describe("authoritative empty native results", () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+
+  it("reports query-empty when non-authoritative native HTML-like results fall back to reduced extraction", () => {
+    const vueSupport = supportById("vue")!;
+    const support = {
+      ...vueSupport,
+      native: {
+        ...vueSupport.native,
+        normalizeQuery: (kind, query) => (kind === "imports" ? `${query}\n;` : query),
+      },
+    };
+    const fallbackEvents: FallbackImportExtractionEvent[] = [];
+    const emptyNativeResults: NativeQueryResults = {
+      imports: [],
+      exports: [],
+      locals: [],
+      importBindings: [],
+    };
+
+    const specs = collectModuleSpecifiersFromSource(support, undefined, '<script src="./app.js"></script>', {
+      file: "App.vue",
+      nativeQueries: emptyNativeResults,
+      onFallbackImportExtraction: (event) => fallbackEvents.push(event),
+    });
+
+    expect(specs).toEqual([{ spec: "./app.js", resolutionKind: "document" }]);
+    expect(fallbackEvents).toEqual([
+      expect.objectContaining({
+        language: "vue",
+        reason: "query-empty",
+        file: "App.vue",
+      }),
+    ]);
   });
 });
 
