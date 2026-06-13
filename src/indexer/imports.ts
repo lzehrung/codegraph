@@ -57,6 +57,17 @@ export async function collectImportsForFile(
   const resolvedSource = source;
   const resolvedSup = sup;
 
+  if (isGraphOnlyLanguage(resolvedSup.id)) {
+    return await collectGraphOnlyImports({
+      file,
+      projectRoot,
+      source: resolvedSource,
+      languageId: resolvedSup.id,
+      ...(opts?.graphOptions ? { graphOptions: opts.graphOptions } : {}),
+      ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+    });
+  }
+
   const imports: ImportBinding[] = [];
   const reportFallback = (reason: FallbackImportExtractionReason) => {
     opts?.onFallbackImportExtraction?.({
@@ -72,16 +83,6 @@ export async function collectImportsForFile(
   if (opts?.nativeQueries === undefined) {
     nativeExecution = getNativeQueryExecution(resolvedSource, resolvedSup, nativeMode);
     resolvedNativeQueries = nativeExecution.results;
-  }
-  if (isGraphOnlyLanguage(resolvedSup.id)) {
-    return await collectGraphOnlyImports({
-      file,
-      projectRoot,
-      source: resolvedSource,
-      languageId: resolvedSup.id,
-      ...(opts?.graphOptions ? { graphOptions: opts.graphOptions } : {}),
-      ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
-    });
   }
 
   if (resolvedSup.id === "python") {

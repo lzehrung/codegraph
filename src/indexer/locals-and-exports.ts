@@ -202,10 +202,10 @@ export function collectLocalsAndExportsFromSource(
     logLevel?: LogLevel;
   },
 ): ModuleIndex {
-  assertNativeRequiredAvailable(opts?.nativeMode);
   if (isGraphOnlyLanguage(support.id)) {
     return { file, exports: [], imports, locals: [] };
   }
+  assertNativeRequiredAvailable(opts?.nativeMode);
 
   const normalizeDocstringLine = (line: string) => line.replace(/^\s*(?:\/\/\/?\s?|#\s?)/, "").replace(/^\s*\*\s?/, "");
 

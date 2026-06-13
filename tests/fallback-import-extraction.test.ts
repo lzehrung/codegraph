@@ -331,25 +331,31 @@ describe("Import extraction fallback reporting", () => {
     expect(graphReport.backend?.native.byLanguage.markdown).toBeUndefined();
   });
 
-  it("honors required native availability for graph-only documents without reporting document queries", async () => {
+  it("does not require native availability for graph-only documents", async () => {
     const root = await mkTmpDir("cg-native-doc-required-");
     const page = path.join(root, "page.md");
+    const guide = path.join(root, "guide.md");
     await fsp.writeFile(page, "[Guide](./guide.md)\n", "utf8");
+    await fsp.writeFile(guide, "# Guide\n", "utf8");
     const requiredError = "native tree-sitter required by explicit option but unavailable";
 
-    vi.spyOn(nativeRuntime, "assertNativeRequiredAvailable").mockImplementation((mode) => {
-      if (mode !== "on") throw new Error(`unexpected native mode: ${String(mode)}`);
+    const nativeRequiredSpy = vi.spyOn(nativeRuntime, "assertNativeRequiredAvailable").mockImplementation(() => {
       throw new Error(requiredError);
     });
-    await expect(buildProjectIndexFromFiles(root, [page], { native: "on" })).rejects.toThrow(requiredError);
-    vi.restoreAllMocks();
+    try {
+      const index = await buildProjectIndexFromFiles(root, [page, guide], { native: "on" });
+      const graph = await collectGraph(root, [page, guide], { native: "on" });
 
-    vi.spyOn(nativeRuntime, "assertNativeRequiredAvailable").mockImplementation((mode) => {
-      if (mode !== "on") throw new Error(`unexpected native mode: ${String(mode)}`);
-      throw new Error(requiredError);
-    });
-    await expect(collectGraph(root, [page], { native: "on" })).rejects.toThrow(requiredError);
-    vi.restoreAllMocks();
+      expect(
+        index.graph.edges.some((edge) => edge.to.type === "file" && edge.to.path === guide.replace(/\\/g, "/")),
+      ).toBe(true);
+      expect(graph.edges.some((edge) => edge.to.type === "file" && edge.to.path === guide.replace(/\\/g, "/"))).toBe(
+        true,
+      );
+      expect(nativeRequiredSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it("avoids Python query-empty fallback warnings for __future__ imports", async () => {

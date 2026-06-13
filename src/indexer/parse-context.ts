@@ -1,7 +1,6 @@
 import { isGraphOnlyLanguage } from "../documentLinks.js";
 import { prepareSourceInput } from "../languages/filePrep.js";
 import {
-  assertNativeRequiredAvailable,
   getNativeQueryExecution,
   getNativeSyntaxTreeExecution,
   type NativeQueryResults,
@@ -110,7 +109,6 @@ export function parsePreparedFileContext(context: PreparedFileContext): ParsedFi
 export async function prepareFileForIndexing(file: string, native?: NativeRuntimeMode): Promise<PreparedFileContext> {
   const prep = await prepareSourceInput(file);
   if (isGraphOnlyLanguage(prep.sup.id)) {
-    assertNativeRequiredAvailable(native);
     return {
       file,
       source: prep.source,

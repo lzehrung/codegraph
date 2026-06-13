@@ -187,22 +187,22 @@ describe("native required fallback boundaries", () => {
     expect(syntaxSpy).toHaveBeenCalled();
   });
 
-  it("does not suppress required-native failures for graph-only local collection", () => {
+  it("does not require native availability for graph-only local collection", () => {
     const file = normalizeFile(path.join(os.tmpdir(), "required-native.md"));
     const support = supportForFile(file);
     expect(support).toBeDefined();
     if (!support) return;
 
-    vi.spyOn(nativeRuntime, "assertNativeRequiredAvailable").mockImplementation((mode) => {
-      if (mode !== "on") throw new Error(`unexpected native mode: ${String(mode)}`);
+    const nativeRequiredSpy = vi.spyOn(nativeRuntime, "assertNativeRequiredAvailable").mockImplementation(() => {
       throw new Error(REQUIRED_NATIVE_UNAVAILABLE);
     });
 
-    expect(() =>
-      collectLocalsAndExportsFromSource(file, "[Guide](./guide.md)\n", support, undefined, [], {
-        nativeMode: "on",
-      }),
-    ).toThrow(REQUIRED_NATIVE_UNAVAILABLE);
+    const moduleIndex = collectLocalsAndExportsFromSource(file, "[Guide](./guide.md)\n", support, undefined, [], {
+      nativeMode: "on",
+    });
+
+    expect(moduleIndex).toEqual({ file, exports: [], imports: [], locals: [] });
+    expect(nativeRequiredSpy).not.toHaveBeenCalled();
   });
 
   it("validates required-native mode before using supplied non-graph-only query data", () => {

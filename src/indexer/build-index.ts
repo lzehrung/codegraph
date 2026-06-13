@@ -14,7 +14,6 @@ import { collectEdgesForFile } from "../graph-edge-collector.js";
 import { buildGraphAdjacency } from "../graphs/adjacency.js";
 import type { FallbackImportExtractionEvent } from "../graphs/specifiers.js";
 import type { GraphBuildOptions, GraphCacheEntry } from "../graphs/types.js";
-import { assertNativeRequiredAvailable } from "../native/treeSitterNative.js";
 import { isGraphOnlyLanguage } from "../documentLinks.js";
 import { attemptParsePreparedFileContext, type ParsedFileContext } from "./parse-context.js";
 import { collectImportsForFile } from "./imports.js";
@@ -416,7 +415,6 @@ function createIndexBuildRunState(
   graphOptions = normalizeGraphOptions(opts?.graph),
 ): IndexBuildRunState {
   const report = opts?.report;
-  assertNativeRequiredAvailable(opts?.native);
   initNativeBackendReport(report);
   const cacheMode = opts?.cache ?? "off";
   return {
