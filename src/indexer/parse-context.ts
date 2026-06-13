@@ -101,8 +101,17 @@ export function tryParsePreparedFileContext(context: PreparedFileContext): Parse
 }
 
 export function parsePreparedFileContext(context: PreparedFileContext): ParsedFileContext {
-  const parsed = tryParsePreparedFileContext(context);
-  if (parsed) return parsed;
+  const attempt = attemptParsePreparedFileContext(context);
+  if (attempt.parsed) return attempt.parsed;
+  if (context.nativeMode !== "on") {
+    return {
+      source: context.source,
+      tree: createGraphOnlySyntaxTree(),
+      sup: context.sup,
+      ...(context.lang ? { lang: context.lang } : {}),
+      nativeQueries: context.nativeQueries,
+    };
+  }
   throw new Error(`Failed to reconstruct syntax tree for ${context.file}`);
 }
 

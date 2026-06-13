@@ -292,12 +292,23 @@ export function buildJsLikeLiteralMask(source: string): Uint8Array | undefined {
 
 function applyMask(source: string, mask: Uint8Array | undefined): string {
   if (!mask) return source;
-  let out = "";
+  const parts: string[] = [];
+  let segmentStart = 0;
   for (let i = 0; i < source.length; i += 1) {
     const ch = source[i]!;
-    out += mask[i] && ch !== "\n" && ch !== "\r" ? " " : ch;
+    if (!mask[i] || ch === "\n" || ch === "\r") continue;
+    if (segmentStart < i) parts.push(source.slice(segmentStart, i));
+    const maskStart = i;
+    while (i < source.length && mask[i] && source[i] !== "\n" && source[i] !== "\r") {
+      i += 1;
+    }
+    parts.push(" ".repeat(i - maskStart));
+    segmentStart = i;
+    i -= 1;
   }
-  return out;
+  if (!parts.length) return source;
+  if (segmentStart < source.length) parts.push(source.slice(segmentStart));
+  return parts.join("");
 }
 
 export function maskJsLikeCommentsStringsAndRegex(src: string): string {
