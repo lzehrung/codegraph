@@ -118,12 +118,45 @@ function precedingKeywordAllowsRegex(src: string, prevIndex: number): boolean {
   const keyword = src.slice(start, end);
   return keyword === "return" || keyword === "case" || keyword === "throw" || keyword === "yield";
 }
+function keywordBeforeParenAllowsRegex(src: string, closeParenIndex: number): boolean {
+  let depth = 1;
+  for (let i = closeParenIndex - 1; i >= 0; i -= 1) {
+    const ch = src[i] ?? "";
+    if (ch === ")") {
+      depth += 1;
+      continue;
+    }
+    if (ch === "(") {
+      depth -= 1;
+      if (!depth) {
+        const keywordIndex = previousNonWhitespaceIndex(src, i - 1);
+        if (keywordIndex < 0) return false;
+        const end = keywordIndex + 1;
+        let start = end;
+        while (start > 0 && /[A-Za-z]/.test(src[start - 1] ?? "")) {
+          start -= 1;
+        }
+        const keyword = src.slice(start, end);
+        return (
+          keyword === "if" ||
+          keyword === "while" ||
+          keyword === "for" ||
+          keyword === "switch" ||
+          keyword === "catch" ||
+          keyword === "with"
+        );
+      }
+    }
+  }
+  return false;
+}
 
 function canStartJsLikeRegex(src: string, slashIndex: number): boolean {
   const prevIndex = previousNonWhitespaceIndex(src, slashIndex - 1);
   if (prevIndex < 0) return true;
   const prev = src[prevIndex] ?? "";
   if ("([{,:;=!?&|^~<>+-*%".includes(prev)) return true;
+  if (prev === ")" && keywordBeforeParenAllowsRegex(src, prevIndex)) return true;
   return precedingKeywordAllowsRegex(src, prevIndex);
 }
 

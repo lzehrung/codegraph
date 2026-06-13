@@ -153,7 +153,7 @@ nativeDescribe("native query scope with real binding", () => {
 describe("authoritative empty native results", () => {
   it("treats empty native imports as authoritative for non-normalized languages", () => {
     const support = supportById("ts")!;
-    // File with no imports -- native returns 0 matches; should NOT fall through to JS
+    // File with no imports -- native returns 0 matches; should not fall through to text recovery
     const emptyNativeResults: NativeQueryResults = {
       imports: [],
       exports: [],
@@ -181,15 +181,15 @@ describe("authoritative empty native results", () => {
     expect(specs).toEqual([]);
   });
 
-  it("still falls through to JS fallback when native queries are absent", () => {
+  it("uses regex recovery when native queries are absent", () => {
     const support = supportById("ts")!;
-    // Without nativeQueries, should use JS path and find the import
     const specs = collectModuleSpecifiersFromSource(support, undefined, "import { foo } from './bar';\n");
+    // Without nativeQueries, text recovery should find the import
     expect(specs.length).toBeGreaterThan(0);
     expect(specs[0]!.spec).toBe("./bar");
   });
 
-  it("uses regex recovery for TypeScript when JS fallback is unavailable", () => {
+  it("uses regex recovery for TypeScript without JS fallback", () => {
     const support = supportById("ts")!;
     const executeSpy = vi.spyOn(jsFallback, "executeJsQueryAsNativeMatches").mockImplementation(() => {
       throw new Error("JS fallback should not be used for TypeScript import recovery");

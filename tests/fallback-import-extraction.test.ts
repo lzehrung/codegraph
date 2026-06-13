@@ -30,6 +30,7 @@ nativeTsDescribe("native TypeScript import binding recovery", () => {
         "  require /* webpackMode: 'eager' */ ('./dep');",
         "const example = \"const fake = require('./fake')\";",
         "const pattern = /const fake = require ('react')/;",
+        "if (dep) /const branchFake = require ('branch-fake')/.test(String(dep));",
         "const docs = `\\n  import { fake } from './fake';\\n  const alsoFake = require('./also-fake');\\n`;",
         "console.log(dep, example);",
       ].join("\n"),
@@ -170,6 +171,7 @@ describe("Import extraction fallback reporting", () => {
       "const loggedImport = 'call import(\"./also-not-real\") in docs';",
       'const loggedExport = `export { thing } from "./template-doc"`;',
       'const loggedRegex = /require("\\.\\/regex-not-real")/;',
+      'if (ready) /import\\("\\.\\/branch-not-real"\\)/.test(source);',
       "const actual = require('./real')",
       "const dynamic = import('./dynamic')",
     ].join("\n");

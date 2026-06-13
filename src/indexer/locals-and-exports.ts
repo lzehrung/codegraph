@@ -664,7 +664,6 @@ export function collectLocalsAndExportsFromSource(
     }
   };
 
-  let usedNativeExports = false;
   if (support.queries.exports.trim() && nativeQueries) {
     try {
       appendExportsFromMatches(nativeQueries.exports);
@@ -683,10 +682,8 @@ export function collectLocalsAndExportsFromSource(
           }
         }
       }
-      usedNativeExports = true;
     } catch (error) {
       if (isNativeRequiredUnavailableError(error)) throw error;
-      usedNativeExports = false;
     }
   }
 

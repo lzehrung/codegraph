@@ -356,7 +356,7 @@ export function collectModuleSpecifiersFromSource(
       try {
         const extracted = extractJsTsSpecifiers(source);
         if (extracted.length) {
-          const reason = queryFailed || resolvedNativeImports !== null ? "query-error" : "reduced-mode";
+          const reason = queryFailed ? "query-error" : "reduced-mode";
           reportFallback(reason);
           out.push(...extracted);
         }

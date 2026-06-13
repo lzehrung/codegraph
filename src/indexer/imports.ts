@@ -11,7 +11,6 @@ import {
   getNativeQueryExecution,
   isNativeBindingLoadedForLanguage,
   isNativeQueryAuthoritative,
-  shouldAvoidJsFallbackForLanguage,
   type NativeQueryResults,
   type NativeRuntimeMode,
 } from "../native/treeSitterNative.js";
