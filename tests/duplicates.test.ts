@@ -1972,6 +1972,80 @@ export class InvoiceNormalizer {
     expect(result.groups.length).toBeGreaterThan(0);
     expect(new Set(primaryPairKeys).size).toBe(primaryPairKeys.length);
   });
+  test("recomputes saved lines after coalescing repeated primary ranges", async () => {
+    const root = await makeTempProject();
+    const source = `
+export class InvoiceNormalizer {
+  normalizeDomestic(rows: Array<{ amount: number; tax: number }>) {
+    const output: string[] = [];
+    for (const row of rows) {
+      const subtotal = row.amount + row.tax;
+      const rounded = Math.round(subtotal * 100) / 100;
+      const label = rounded > 100 ? "large" : "small";
+      output.push(label + ":" + rounded.toFixed(2));
+    }
+    return output.filter((value) => value.includes(":")).join(",");
+  }
+
+  normalizeInternational(rows: Array<{ amount: number; tax: number }>) {
+    const output: string[] = [];
+    for (const row of rows) {
+      const subtotal = row.amount + row.tax;
+      const rounded = Math.round(subtotal * 100) / 100;
+      const label = rounded > 100 ? "large" : "small";
+      output.push(label + ":" + rounded.toFixed(2));
+    }
+    return output.filter((value) => value.includes(":")).join(",");
+  }
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", source);
+    await writeProjectFile(root, "src/b.ts", source);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, {
+      includeSameFile: true,
+      minConfidence: "high",
+      limit: 20,
+    });
+    const group = result.groups.find((candidate) => candidate.locations.length > 2);
+    expect(group).toBeDefined();
+    expect(group?.locations.length).toBeGreaterThan(2);
+    const spansByFile = new Map<string, Array<{ startLine: number; endLine: number }>>();
+    for (const location of group?.locations ?? []) {
+      const spans = spansByFile.get(location.file) ?? [];
+      spans.push({ startLine: location.startLine, endLine: location.endLine });
+      spansByFile.set(location.file, spans);
+    }
+    const mergedLengths = Array.from(spansByFile.values()).flatMap((spans) => {
+      const sorted = [...spans].sort((left, right) => left.startLine - right.startLine || left.endLine - right.endLine);
+      const lengths: number[] = [];
+      let currentStart = 0;
+      let currentEnd = 0;
+      let hasCurrent = false;
+      for (const span of sorted) {
+        if (!hasCurrent) {
+          currentStart = span.startLine;
+          currentEnd = span.endLine;
+          hasCurrent = true;
+          continue;
+        }
+        if (span.startLine <= currentEnd) {
+          currentEnd = Math.max(currentEnd, span.endLine);
+          continue;
+        }
+        lengths.push(currentEnd - currentStart + 1);
+        currentStart = span.startLine;
+        currentEnd = span.endLine;
+      }
+      if (hasCurrent) lengths.push(currentEnd - currentStart + 1);
+      return lengths;
+    });
+    const total = mergedLengths.reduce((sum, length) => sum + length, 0);
+    const expectedSaved = Math.max(0, total - Math.max(...mergedLengths));
+    expect(group?.estimatedLinesSaved).toBe(expectedSaved);
+  });
 
   test("duplicates CLI emits bounded JSON groups", async () => {
     const root = await makeTempProject();

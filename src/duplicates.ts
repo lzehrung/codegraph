@@ -2139,7 +2139,7 @@ function enrichDuplicateGroups(groups: DuplicateGroup[]): DuplicateGroup[] {
       ...group,
       locations: localLocations,
       reducedLines: reducedLinesForPair(group.primaryLeft, group.primaryRight),
-      estimatedLinesSaved: group.estimatedLinesSaved,
+      estimatedLinesSaved: estimatedLinesSavedForLocations(localLocations),
       cleanupLabels,
       ...(cluster !== undefined ? { cluster } : {}),
     };
