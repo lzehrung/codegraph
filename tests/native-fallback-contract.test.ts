@@ -413,4 +413,40 @@ nativeDescribe("native fallback contract", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+  it("falls back to syntax-tree locals when supplied native local queries are empty", () => {
+    const file = normalizeFile(path.join(os.tmpdir(), "native-empty-python.py"));
+    const support = supportForFile(file);
+    expect(support).toBeDefined();
+    if (!support) return;
+
+    const nativeQueries: NativeQueryResults = {
+      imports: [],
+      exports: [
+        {
+          patternIndex: 0,
+          captures: [nativeCapture("name", "do_work")],
+        },
+      ],
+      locals: [],
+      importBindings: [],
+    };
+
+    const moduleIndex = collectLocalsAndExportsFromSource(
+      file,
+      "def do_work():\n    return 42\n",
+      support,
+      undefined,
+      [],
+      {
+        nativeMode: "on",
+        nativeQueries,
+      },
+    );
+
+    expect(simplifyModule(moduleIndex)).toEqual({
+      imports: [],
+      locals: [{ localName: "do_work", kind: SymbolKind.Function }],
+      exports: [{ type: "local", exportedAs: "do_work", localName: "do_work", kind: SymbolKind.Function }],
+    });
+  });
 });

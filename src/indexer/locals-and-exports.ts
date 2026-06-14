@@ -351,6 +351,7 @@ export function collectLocalsAndExportsFromSource(
   const extractLocalsFromNativeQueries = (): boolean => {
     if (!nativeQueries) return false;
     if (!QUERY_DRIVEN_LOCALS_LANGUAGES.has(support.id)) return false;
+    let capturedLocals = false;
     try {
       // Lazily get the tree only for enrichment (classification + docstrings).
       // If the tree was already provided or the language benefits from it, use
@@ -364,9 +365,10 @@ export function collectLocalsAndExportsFromSource(
             enrichmentTree?.rootNode.descendantForIndex(nativeRange.start.index ?? 0, nativeRange.end.index ?? 0) ??
             undefined;
           pushLocal(capture.text, classifyLocalCapture(capture, nativeRange, node), nativeRange, node);
+          capturedLocals = true;
         }
       }
-      return true;
+      return capturedLocals;
     } catch (error) {
       if (isNativeRequiredUnavailableError(error)) throw error;
       return false;
