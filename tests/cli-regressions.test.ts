@@ -390,6 +390,46 @@ describe("CLI regressions", () => {
     expect(nodes).not.toContain(normalize(specFile));
     expect(nodes).not.toContain(normalize(jsFile));
   });
+  it("graph rejects duplicates-only root-glob filters", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-root-glob-"));
+    const appFile = path.join(tmpDir, "src", "main.ts");
+    await fsp.mkdir(path.dirname(appFile), { recursive: true });
+    await fsp.writeFile(appFile, "export const main = 1;\n", "utf8");
+
+    await expect(
+      runCliInProcess(["graph", "--root", tmpDir, "--json", "--ignore-root-glob", "src/**"], tmpDir),
+    ).rejects.toThrow(
+      "The --include-root-glob and --ignore-root-glob flags are currently supported only by duplicates.",
+    );
+  });
+  it("graph-delta rejects scan globs combined with git-head alone", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-graph-delta-git-head-"));
+    const appFile = path.join(tmpDir, "src", "main.ts");
+    await fsp.mkdir(path.dirname(appFile), { recursive: true });
+    await fsp.writeFile(appFile, "export const main = 1;\n", "utf8");
+
+    await expect(
+      runCliInProcess(["graph-delta", "--root", tmpDir, "--git-head", "HEAD", "--include-glob", "src/**"], tmpDir),
+    ).rejects.toThrow(
+      "graph-delta does not support CLI discovery globs together with --git-base/--git-head or --changed-since.",
+    );
+  });
+
+  it("graph rejects scan globs combined with git-head alone when sqlite output is requested", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-graph-git-head-"));
+    const appFile = path.join(tmpDir, "src", "main.ts");
+    await fsp.mkdir(path.dirname(appFile), { recursive: true });
+    await fsp.writeFile(appFile, "export const main = 1;\n", "utf8");
+
+    await expect(
+      runCliInProcess(
+        ["graph", "--root", tmpDir, "--db", "graph.sqlite", "--git-head", "HEAD", "--include-glob", "src/**"],
+        tmpDir,
+      ),
+    ).rejects.toThrow(
+      "graph does not support CLI discovery globs together with --git-base/--git-head or --changed-since when --sqlite/--db is used.",
+    );
+  });
 
   it("graph applies codegraph.config.json discovery ignores", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-config-ignore-"));

@@ -88,12 +88,109 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     const index = await buildProjectIndex(root);
     const result = await findDuplicates(index, { minConfidence: "high", limit: 5 });
 
-    expect(result.schemaVersion).toBe(2);
+    expect(result.schemaVersion).toBe(3);
     expect(result.groups.length).toBeGreaterThan(0);
     expect(result.groups[0]?.cloneType).toBe("exact");
     expect(result.groups[0]?.confidence).toBe("high");
     expect(result.groups[0]?.primaryLeft.file).toBe("src/a.ts");
     expect(result.groups[0]?.primaryRight.file).toBe("src/b.ts");
+  });
+  test("enriches duplicate groups with cleanup labels, reduced lines, and cluster summaries", async () => {
+    const root = await makeTempProject();
+    const duplicateSource = `
+export function formatUsage(value: string) {
+  const normalized = value.trim().toUpperCase();
+  return normalized.slice(0, 12);
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", duplicateSource);
+    await writeProjectFile(root, "src/b.ts", duplicateSource);
+    await writeProjectFile(root, "src/c.ts", duplicateSource);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, { includeSmall: true, minConfidence: "high", limit: 5 });
+    const group = result.groups[0];
+
+    expect(group).toBeDefined();
+    expect(group?.reducedLines).toBeGreaterThan(0);
+    expect(group?.estimatedLinesSaved).toBe(group?.reducedLines);
+    expect(group?.cleanupLabels).toContain("production-helper-extraction");
+    expect(group?.locations.map((location) => location.file)).toEqual(["src/a.ts", "src/b.ts"]);
+    expect(group?.cluster?.locationCount).toBe(3);
+    expect(group?.cluster?.estimatedLinesSaved).toBeGreaterThan(group?.estimatedLinesSaved ?? 0);
+    expect(group?.cluster?.locations.map((location) => location.file)).toEqual(["src/a.ts", "src/b.ts", "src/c.ts"]);
+  });
+  test("labels clustered helper duplicates across three test files", async () => {
+    const root = await makeTempProject();
+    const duplicateSource = `
+export function runFixture(values: number[]) {
+  return values.map((value) => value * 3 - 1);
+}
+`;
+
+    await writeProjectFile(root, "tests/a.test.ts", duplicateSource);
+    await writeProjectFile(root, "tests/b.test.ts", duplicateSource);
+    await writeProjectFile(root, "tests/c.test.ts", duplicateSource);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, { includeSmall: true, minConfidence: "high", limit: 5 });
+    const group = result.groups[0];
+
+    expect(group?.cleanupLabels).toContain("test-helper-extraction");
+    expect(group?.cluster?.locationCount).toBe(3);
+  });
+  test("does not label export constants containing from as barrel noise", async () => {
+    const root = await makeTempProject();
+    const duplicateSource = `
+export const pathFragment = "from";
+export const suffix = "-value";
+`;
+
+    await writeProjectFile(root, "src/a.ts", duplicateSource);
+    await writeProjectFile(root, "src/b.ts", duplicateSource);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, { includeSmall: true, minConfidence: "high", limit: 5 });
+    const group = result.groups[0];
+
+    expect(group?.cleanupLabels).not.toContain("barrel-export-noise");
+  });
+
+  test("does not label test files under src-shaped subpaths as production helpers", async () => {
+    const root = await makeTempProject();
+    const duplicateSource = `
+export function runFixture(values: number[]) {
+  return values.map((value) => value + 1);
+}
+`;
+
+    await writeProjectFile(root, "tests/src/a.test.ts", duplicateSource);
+    await writeProjectFile(root, "tests/src/b.test.ts", duplicateSource);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, { includeSmall: true, minConfidence: "high", limit: 5 });
+    const group = result.groups[0];
+
+    expect(group?.cleanupLabels).toContain("test-helper-extraction");
+    expect(group?.cleanupLabels).not.toContain("production-helper-extraction");
+  });
+  test("does not label import.meta expressions as import-list noise", async () => {
+    const root = await makeTempProject();
+    const duplicateSource = `
+export function loadAssetUrl() {
+  return import.meta.url;
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", duplicateSource);
+    await writeProjectFile(root, "src/b.ts", duplicateSource);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, { includeSmall: true, minConfidence: "high", limit: 5 });
+    const group = result.groups[0];
+
+    expect(group?.cleanupLabels).not.toContain("import-list-noise");
   });
 
   test("bounds duplicate pair comparisons and reports skipped candidates", async () => {
@@ -1191,6 +1288,60 @@ export function ignoredOrders(rows: number[]) {
     }
   });
 
+  test("duplicates CLI warns when scan-root-relative ignore-globs miss under include roots", async () => {
+    const root = await makeTempProject();
+    const duplicateSource = `
+export function summarizeOrders(rows: number[]) {
+  return rows.map((row) => row * 2 + 1);
+}
+`;
+
+    await writeProjectFile(root, "tests/languages/ts/a.ts", duplicateSource);
+    await writeProjectFile(root, "tests/languages/ts/b.ts", duplicateSource);
+
+    const result = await captureCli(
+      ["duplicates", "--root", ".", "tests", "--pretty", "--include-small", "--ignore-glob", "tests/languages/**"],
+      { cwd: root },
+    );
+
+    expect(result.exitCode).toBeUndefined();
+    expect(result.stderr).toContain(
+      'Warning: --ignore-glob "tests/languages/**" matched no files under scan root "tests".',
+    );
+    expect(result.stderr).toContain('Did you mean "languages/**"?');
+    expect(result.stdout).toContain("tests/languages/ts/a.ts");
+  });
+
+  test("duplicates CLI supports project-root-relative ignore-root-glob filters", async () => {
+    const root = await makeTempProject();
+    const duplicateSource = `
+export function summarizeOrders(rows: number[]) {
+  return rows.map((row) => row * 2 + 1);
+}
+`;
+
+    await writeProjectFile(root, "tests/languages/ts/a.ts", duplicateSource);
+    await writeProjectFile(root, "tests/languages/ts/b.ts", duplicateSource);
+    await writeProjectFile(root, "tests/unit/a.ts", duplicateSource);
+    await writeProjectFile(root, "tests/unit/b.ts", duplicateSource);
+
+    const result = await captureCli(
+      ["duplicates", "--root", ".", "tests", "--json", "--include-small", "--ignore-root-glob", "tests/languages/**"],
+      { cwd: root },
+    );
+    const parsed = JSON.parse(result.stdout) as {
+      groups?: Array<{ primaryLeft?: { file?: string }; primaryRight?: { file?: string } }>;
+    };
+
+    expect(result.exitCode).toBeUndefined();
+    expect(result.stderr).toBe("");
+    expect(parsed.groups?.length).toBeGreaterThan(0);
+    for (const group of parsed.groups ?? []) {
+      expect(group.primaryLeft?.file?.startsWith("tests/unit/")).toBeTruthy();
+      expect(group.primaryRight?.file?.startsWith("tests/unit/")).toBeTruthy();
+    }
+  });
+
   test("duplicates CLI rejects glob-like positional scan roots with guidance", async () => {
     const root = await makeTempProject();
     await writeProjectFile(root, "src/a.ts", "export const a = 1;\n");
@@ -1221,6 +1372,120 @@ export function formatUsage(value: string) {
     expect(parsed.groups?.length).toBeGreaterThan(0);
     expect(parsed.groups?.[0]?.primaryLeft?.file?.startsWith("src/app/[slug]/")).toBeTruthy();
     expect(parsed.groups?.[0]?.primaryRight?.file?.startsWith("src/app/[slug]/")).toBeTruthy();
+  });
+
+  test("duplicates CLI cleanup profile defaults to reduced-lines and summary output", async () => {
+    const root = await makeTempProject();
+    const source = `
+export function formatUsage(value: string) {
+  const normalized = value.trim().toUpperCase();
+  return normalized.slice(0, 12);
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", source);
+    await writeProjectFile(root, "src/b.ts", source);
+    await writeProjectFile(root, "src/c.ts", source);
+
+    const result = await captureCli(["duplicates", "--root", ".", "src", "--profile", "cleanup", "--include-small"], {
+      cwd: root,
+    });
+
+    expect(result.exitCode).toBeUndefined();
+    expect(result.stdout).toContain("Sorted by: reduced-lines");
+    expect(result.stdout).toContain("Summary:");
+    expect(result.stdout).toContain("labels=production-helper-extraction");
+    expect(result.stdout).toContain("cluster=3loc:formatUsage");
+  });
+
+  test("duplicates CLI cleanup profile JSON exposes reduced lines and cluster fields", async () => {
+    const root = await makeTempProject();
+    const source = `
+export function formatUsage(value: string) {
+  const normalized = value.trim().toUpperCase();
+  return normalized.slice(0, 12);
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", source);
+    await writeProjectFile(root, "src/b.ts", source);
+    await writeProjectFile(root, "src/c.ts", source);
+
+    const result = await captureCli(
+      ["duplicates", "--root", ".", "src", "--json", "--profile", "cleanup", "--include-small"],
+      { cwd: root },
+    );
+    const parsed = JSON.parse(result.stdout) as {
+      schemaVersion: number;
+      groups?: Array<{
+        reducedLines?: number;
+        estimatedLinesSaved?: number;
+        cleanupLabels?: string[];
+        locations?: Array<{ file?: string }>;
+        cluster?: { locationCount?: number; estimatedLinesSaved?: number };
+      }>;
+    };
+
+    expect(result.exitCode).toBeUndefined();
+    expect(parsed.schemaVersion).toBe(3);
+    expect(parsed.groups?.[0]?.reducedLines).toBeGreaterThan(0);
+    expect(parsed.groups?.[0]?.estimatedLinesSaved).toBe(parsed.groups?.[0]?.reducedLines);
+    expect(parsed.groups?.[0]?.cleanupLabels).toContain("production-helper-extraction");
+    expect(parsed.groups?.[0]?.locations).toHaveLength(2);
+    expect(parsed.groups?.[0]?.cluster?.locationCount).toBe(3);
+  });
+  test("duplicates CLI reduced-lines sort ranks larger duplicate groups first", async () => {
+    const root = await makeTempProject();
+    const smallSource = `
+export function shortFormat(value: string) {
+  return value.trim();
+}
+`;
+    const largeSource = `
+export function expandBudget(values: number[]) {
+  const adjusted = values.map((value) => value * 4 + 3);
+  const filtered = adjusted.filter((value) => value > 10);
+  const total = filtered.reduce((sum, value) => sum + value, 0);
+  return total.toString();
+}
+`;
+
+    await writeProjectFile(root, "src/small-a.ts", smallSource);
+    await writeProjectFile(root, "src/small-b.ts", smallSource);
+    await writeProjectFile(root, "src/large-a.ts", largeSource);
+    await writeProjectFile(root, "src/large-b.ts", largeSource);
+
+    const result = await captureCli(
+      ["duplicates", "--root", ".", "src", "--json", "--sort", "reduced-lines", "--include-small"],
+      { cwd: root },
+    );
+    const parsed = JSON.parse(result.stdout) as {
+      groups?: Array<{ reducedLines?: number; primaryLeft?: { file?: string } }>;
+    };
+
+    expect(result.exitCode).toBeUndefined();
+    expect(parsed.groups?.[0]?.primaryLeft?.file).toBe("src/large-a.ts");
+    expect(parsed.groups?.[0]?.reducedLines).toBeGreaterThan(parsed.groups?.[1]?.reducedLines ?? 0);
+  });
+
+  test("duplicates CLI supports suppressing the pretty summary footer", async () => {
+    const root = await makeTempProject();
+    const source = `
+export function formatUsage(value: string) {
+  return value.toUpperCase();
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", source);
+    await writeProjectFile(root, "src/b.ts", source);
+
+    const result = await captureCli(
+      ["duplicates", "--root", ".", "src", "--profile", "cleanup", "--include-small", "--no-summary"],
+      { cwd: root },
+    );
+
+    expect(result.exitCode).toBeUndefined();
+    expect(result.stdout).not.toContain("Summary:");
   });
   test("duplicates CLI rejects brace glob positional roots with guidance", async () => {
     const root = await makeTempProject();
@@ -1337,6 +1602,28 @@ export function summarizeOrders(rows: number[]) {
       "Invalid flag combination: --raw-pairs is only supported with similarity-ranked JSON output.",
     );
   });
+  test("duplicates CLI rejects cleanup profile with raw-pairs", async () => {
+    const root = await makeTempProject();
+    const source = `
+export function summarizeOrders(rows: number[]) {
+  let total = 0;
+  for (const row of rows) total += row * 2 + 1;
+  return total;
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", source);
+    await writeProjectFile(root, "src/b.ts", source);
+
+    const result = await captureCli(
+      ["duplicates", "--root", ".", "src", "--json", "--profile", "cleanup", "--raw-pairs"],
+      { cwd: root },
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("Invalid flag combination: --profile cleanup is not supported with --raw-pairs.");
+  });
+
   test("duplicates CLI rejects --json with --pretty", async () => {
     const root = await makeTempProject();
     const source = `
@@ -1701,6 +1988,107 @@ export class InvoiceNormalizer {
 
     expect(result.groups.length).toBeGreaterThan(0);
     expect(new Set(primaryPairKeys).size).toBe(primaryPairKeys.length);
+  });
+  test("coalescing repeated groups keeps named symbol locations for identical spans", async () => {
+    const root = await makeTempProject();
+    const source = `
+export function formatUsage(value: string) {
+  const normalized = value.trim().toUpperCase();
+  return normalized.slice(0, 12);
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", source);
+    await writeProjectFile(root, "src/b.ts", source);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, {
+      includeSmall: true,
+      minConfidence: "high",
+      limit: 20,
+    });
+    const group = result.groups.find((candidate) =>
+      candidate.locations.every((location) => location.file.startsWith("src/")),
+    );
+
+    expect(group).toBeDefined();
+    expect(group?.locations.map((location) => location.name)).toContain("formatUsage");
+    expect(group?.cleanupLabels).toContain("production-helper-extraction");
+  });
+
+  test("recomputes saved lines after coalescing repeated primary ranges", async () => {
+    const root = await makeTempProject();
+    const source = `
+export class InvoiceNormalizer {
+  normalizeDomestic(rows: Array<{ amount: number; tax: number }>) {
+    const output: string[] = [];
+    for (const row of rows) {
+      const subtotal = row.amount + row.tax;
+      const rounded = Math.round(subtotal * 100) / 100;
+      const label = rounded > 100 ? "large" : "small";
+      output.push(label + ":" + rounded.toFixed(2));
+    }
+    return output.filter((value) => value.includes(":")).join(",");
+  }
+
+  normalizeInternational(rows: Array<{ amount: number; tax: number }>) {
+    const output: string[] = [];
+    for (const row of rows) {
+      const subtotal = row.amount + row.tax;
+      const rounded = Math.round(subtotal * 100) / 100;
+      const label = rounded > 100 ? "large" : "small";
+      output.push(label + ":" + rounded.toFixed(2));
+    }
+    return output.filter((value) => value.includes(":")).join(",");
+  }
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", source);
+    await writeProjectFile(root, "src/b.ts", source);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, {
+      includeSameFile: true,
+      minConfidence: "high",
+      limit: 20,
+    });
+    const group = result.groups.find((candidate) => candidate.locations.length > 2);
+    expect(group).toBeDefined();
+    expect(group?.locations.length).toBeGreaterThan(2);
+    const spansByFile = new Map<string, Array<{ startLine: number; endLine: number }>>();
+    for (const location of group?.locations ?? []) {
+      const spans = spansByFile.get(location.file) ?? [];
+      spans.push({ startLine: location.startLine, endLine: location.endLine });
+      spansByFile.set(location.file, spans);
+    }
+    const mergedLengths = Array.from(spansByFile.values()).flatMap((spans) => {
+      const sorted = [...spans].sort((left, right) => left.startLine - right.startLine || left.endLine - right.endLine);
+      const lengths: number[] = [];
+      let currentStart = 0;
+      let currentEnd = 0;
+      let hasCurrent = false;
+      for (const span of sorted) {
+        if (!hasCurrent) {
+          currentStart = span.startLine;
+          currentEnd = span.endLine;
+          hasCurrent = true;
+          continue;
+        }
+        if (span.startLine <= currentEnd) {
+          currentEnd = Math.max(currentEnd, span.endLine);
+          continue;
+        }
+        lengths.push(currentEnd - currentStart + 1);
+        currentStart = span.startLine;
+        currentEnd = span.endLine;
+      }
+      if (hasCurrent) lengths.push(currentEnd - currentStart + 1);
+      return lengths;
+    });
+    const total = mergedLengths.reduce((sum, length) => sum + length, 0);
+    const expectedSaved = Math.max(0, total - Math.max(...mergedLengths));
+    expect(group?.estimatedLinesSaved).toBe(expectedSaved);
   });
 
   test("duplicates CLI emits bounded JSON groups", async () => {

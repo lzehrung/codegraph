@@ -33,18 +33,11 @@ Commands that scan a project read `codegraph.config.json` from `--root` when it 
 
 - `discovery.includeGlobs` and `discovery.ignoreGlobs` are project-root-relative, even when a command scans child include roots.
 - `discovery.ignoreGlobs` is for large fixture, generated, or vendored folders that should not be indexed.
-- CLI `--include-glob` and `--ignore-glob` values are one-off additions and stay relative to each scanned root.
+- CLI `--include-glob` and `--ignore-glob` values are one-off additions relative to each scanned root.
 - `inspect` follow-up commands preserve the selected `--root` and include roots.
 - `--no-gitignore` overrides `useGitignore`.
 
-## Scan Scope
-
-`--root` selects the project boundary for config lookup, package/workspace manifest lookup, path confinement, output path normalization, and cache/manifest storage. Positional path arguments after the command are include roots inside that project. For example, `codegraph inspect --root . ./src ./packages/app` keeps `.` as the project root while limiting the reported scan to `src` and `packages/app`.
-
-For sibling repositories under one parent directory, set `--root` to the parent and pass each child repo as an include root. Codegraph indexes the included children into one graph, resolves cross-child imports when the specifiers are resolvable from those files, and still ignores nested `.git` metadata.
-
-Config globs and one-off CLI globs apply at different layers. `codegraph.config.json` globs are durable and project-root-relative. CLI `--include-glob` and `--ignore-glob` values are additive for a single command and are evaluated relative to each active scan root. `--no-gitignore` disables `.gitignore` filtering for that command only; it does not change config.
-
+Config globs and one-off CLI globs apply at different layers. `codegraph.config.json` globs are durable and project-root-relative. CLI scan-root globs are additive for a single command and are evaluated relative to each active scan root. `--no-gitignore` disables `.gitignore` filtering for that command only; it does not change config.
 Cache and manifest reuse is rooted at `--root`. Reusing a project root lets commands share compatible index and graph entries when the file signatures, config, graph options, and relevant build options still match. Changing `--root`, changing discovery config, or changing graph options creates a different reuse boundary. Child include-root scans can reuse project-root cache entries, but command summaries and follow-up commands stay scoped to the selected include roots.
 
 ## Core commands
@@ -160,9 +153,11 @@ codegraph chunk package.json --text --max-tokens 200
 codegraph chunk config.yaml --language yaml --min-tokens 100 --max-tokens 300
 
 # Detect duplicate and near-duplicate code units
-codegraph duplicates ./src --min-confidence medium --limit 20
+codegraph duplicates --root . ./src --profile cleanup
 codegraph duplicates --root . ./src ./packages/app --include-same-file
 codegraph duplicates --root . ./src --ignore-glob "tests/**" --ignore-glob "docs/**"
+codegraph duplicates --root . ./tests --ignore-root-glob "tests/languages/**"
+codegraph duplicates ./src --json --sort reduced-lines
 codegraph duplicates ./src --json --raw-pairs
 codegraph duplicates --help
 
@@ -190,26 +185,45 @@ codegraph grep --pattern 'eval\(' --ignore-case
 `duplicates` emits one-line triage summaries by default, or grouped exact, renamed, near, and weak clone candidates as JSON with `--json`.
 
 - It combines indexed symbols, semantic chunks, text chunks, token fingerprints, and AST shape hashes when parser context is available.
-- Pretty output is the default because duplicate triage is usually an inspection workflow for both humans and agents.
-- `--pretty` emits one line per group with file spans, symbol or chunk labels, confidence, clone type, score, token counts, and heuristic family annotations derived from the displayed duplicate pair.
-- `--sort actionability` is the default in pretty mode and ranks likely cleanup wins above declaration mirrors and language-parity definitions based on grouped visible evidence from a bounded candidate window.
-- JSON output emits `schemaVersion: 2`.
-- JSON reports project-relative paths, confidence, clone type, metrics, variant counts, omission counts including skipped candidate pairs, and pair stats.
+- Pretty output is the default.
+- `--profile cleanup` and `--profile refactor-roi` are aliases for cleanup triage defaults. In pretty mode they default to `--sort reduced-lines`; in JSON mode they keep similarity order unless `--sort` is explicit. Both profiles also default `--min-confidence medium` and `--min-tokens 80`, and they suppress groups labeled `import-list-noise` or `barrel-export-noise`.
+- Pretty output includes reduced lines, estimated reducible lines, cleanup labels, cluster counts, and a compact summary footer. Use `--no-summary` to suppress the footer.
+- `--sort actionability` remains the default in pretty mode outside the cleanup profile.
+- JSON output emits `schemaVersion: 3`.
+- JSON reports project-relative paths, confidence, clone type, metrics, `reducedLines`, `estimatedLinesSaved`, local `locations`, optional transitive `cluster`, omission counts, and pair stats.
 - JSON defaults to similarity ordering unless `--sort` is explicit.
 - Groups collapse overlapping symbol/chunk variants so one underlying clone appears as one finding.
-- Group `variants` are bounded by default; use `rawPairCount` and `omittedVariantCount` to see hidden evidence counts.
 - A single positional directory becomes the project root unless `--root` is set. `orient` is the exception: its positionals are always include roots.
 - Use `--root . ./src` for scoped scans with repository-relative paths.
 - Positional paths are scan roots, not glob patterns.
-- Shared discovery flags also apply here: `--include-glob`, `--ignore-glob`, and `--no-gitignore`.
-- Repeat `--ignore-glob` or `--include-glob` once per pattern.
-- Narrow CLI boilerplate hints only apply to small `src/cli/` helpers with presentation-oriented names such as `format*` or `render*`.
+- `--include-glob` and `--ignore-glob` are relative to each active scan root.
+- `--include-root-glob` and `--ignore-root-glob` are duplicates-only project-root-relative one-off filters.
+- Zero-match scan-root glob warnings explain the scan-root-relative interpretation and suggest likely replacements when a root-prefixed pattern misses under an include root.
 - Use `--include-small` for tiny helpers.
 - Use `--include-same-file` for non-overlapping clones inside one file.
 - Use `--json` for stable machine consumption.
-- Use `--raw-pairs` when debugging the low-level pair evidence behind each group in similarity-ranked JSON output. `--pretty --raw-pairs` and `--sort actionability --raw-pairs` are rejected.
+- Use `--raw-pairs` when debugging low-level pair evidence. `--pretty --raw-pairs`, `--sort actionability --raw-pairs`, `--sort reduced-lines --raw-pairs`, and `--profile cleanup --raw-pairs` are rejected.
 
-`orient`, `packet`, `search`, `explain`, `artifact`, `drift`, and `mcp` each support command-specific `--help` output.
+Short JSON shape:
+
+```json
+{
+  "schemaVersion": 3,
+  "groups": [
+    {
+      "primaryLeft": { "file": "src/a.ts", "startLine": 10, "endLine": 24 },
+      "primaryRight": { "file": "src/b.ts", "startLine": 12, "endLine": 26 },
+      "locations": [
+        { "file": "src/a.ts", "startLine": 10, "endLine": 24 },
+        { "file": "src/b.ts", "startLine": 12, "endLine": 26 }
+      ],
+      "reducedLines": 15,
+      "estimatedLinesSaved": 15,
+      "cleanupLabels": ["production-helper-extraction"]
+    }
+  ]
+}
+```
 
 #### Agent orientation and packets
 

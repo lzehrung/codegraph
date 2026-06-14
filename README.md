@@ -99,7 +99,7 @@ This repo keeps test fixtures out of default Codegraph scans with `codegraph.con
 }
 ```
 
-Use this pattern in other repos when large fixture, generated, or vendored trees should not participate in search, unresolved-import checks, graphing, indexing, inspect, impact, or review runs. Config globs are project-root-relative; CLI `--include-glob`, `--ignore-glob`, and `--no-gitignore` options remain available for one-off overrides relative to the active scan root.
+Use this pattern in other repos when large fixture, generated, or vendored trees should not participate in search, unresolved-import checks, graphing, indexing, inspect, impact, or review runs. Config globs are project-root-relative. CLI `--include-glob` and `--ignore-glob` stay relative to each active scan root.
 
 ## Quick start
 
