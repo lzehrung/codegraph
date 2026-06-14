@@ -1926,8 +1926,6 @@ function preferredDuplicateUnitRef(left: DuplicateUnitRef, right: DuplicateUnitR
   const qualityDiff = duplicateUnitRefQuality(left) - duplicateUnitRefQuality(right);
   if (qualityDiff > 0) return left;
   if (qualityDiff < 0) return right;
-  if (left.kind === "symbol" && right.kind !== "symbol") return left;
-  if (right.kind === "symbol" && left.kind !== "symbol") return right;
   return compareUnitRefs(left, right) <= 0 ? left : right;
 }
 
