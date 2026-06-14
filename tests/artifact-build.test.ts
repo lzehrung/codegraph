@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { buildCodegraphArtifact, buildCodegraphArtifactWithSession } from "../src/agent/artifact.js";
 import { createAgentSession } from "../src/agent/session.js";
 import { countingSession } from "./helpers/agent.js";
-import { isSymlinkUnavailable } from "./helpers/filesystem.js";
+import { createArtifactOutputWithStaleFile, mkTmpDir, tryCreateDirectorySymlink } from "./helpers/filesystem.js";
 
 describe("artifact build", () => {
   it("writes sqlite, graph JSON, optional report, questions, and manifest from real project logic", async () => {
@@ -191,12 +191,12 @@ describe("artifact build", () => {
   });
 
   it("does not index stale files from an in-repo output directory", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-ignore-out-"));
-    const outDir = path.join(root, "codegraph-out");
-    await fs.mkdir(outDir);
-    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n");
-    await fs.writeFile(path.join(outDir, "old.json"), '{"old":true}\n');
-
+    const { root, outDir } = await createArtifactOutputWithStaleFile({
+      prefix: "cg-artifact-ignore-out-",
+      outDirName: "codegraph-out",
+      staleFileName: "old.json",
+      staleContents: '{"old":true}\n',
+    });
     await buildCodegraphArtifact({ root, outDir, force: true, graphJson: true });
 
     const graph = JSON.parse(await fs.readFile(path.join(outDir, "graph.json"), "utf8")) as {
@@ -225,16 +225,18 @@ describe("artifact build", () => {
   });
 
   it("does not include files that escape the root through a directory link", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-linked-root-"));
-    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-linked-outside-"));
+    const root = await mkTmpDir("cg-artifact-linked-root-");
+    const outside = await mkTmpDir("cg-artifact-linked-outside-");
     const outDir = path.join(root, "codegraph-out");
     await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n");
     await fs.writeFile(path.join(outside, "secret.ts"), "export const outsideSecretNeedle = true;\n");
-    try {
-      await fs.symlink(outside, path.join(root, "linked"), "junction");
-    } catch (error) {
-      if (isSymlinkUnavailable(error)) return;
-      throw error;
+    const symlinkCreated = await tryCreateDirectorySymlink(outside, path.join(root, "linked"));
+    if (!symlinkCreated) {
+      await Promise.all([
+        fs.rm(root, { recursive: true, force: true }),
+        fs.rm(outside, { recursive: true, force: true }),
+      ]);
+      return;
     }
 
     await buildCodegraphArtifact({ root, outDir, graphJson: true });

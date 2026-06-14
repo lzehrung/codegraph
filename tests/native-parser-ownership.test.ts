@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as nativeRuntime from "../src/native/treeSitterNative.js";
+import { createUnavailableJsFallbackSpies, expectJsFallbackUnusedForNativeOwnership } from "./helpers/native.js";
 
 const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable() ? describe : describe.skip;
 
@@ -62,16 +63,7 @@ nativeDescribe("native parser ownership", () => {
   });
 
   it("keeps representative source-language navigation on the native runtime when the JS fallback package is unavailable", async () => {
-    const parseSpy = vi.fn(() => {
-      throw new Error(
-        "JS Tree-sitter fallback is unavailable for grammar loading. Install @lzehrung/codegraph-js-fallback to enable it",
-      );
-    });
-    const querySpy = vi.fn(() => {
-      throw new Error(
-        "JS Tree-sitter fallback is unavailable for JS query execution. Install @lzehrung/codegraph-js-fallback to enable it",
-      );
-    });
+    const fallbackSpies = createUnavailableJsFallbackSpies("grammar");
 
     vi.resetModules();
     vi.doMock("../src/jsFallback.js", async () => {
@@ -79,8 +71,8 @@ nativeDescribe("native parser ownership", () => {
       return {
         ...actual,
         isJsFallbackAvailable: () => false,
-        parseWithJsLanguage: parseSpy,
-        executeJsQueryAsNativeMatches: querySpy,
+        parseWithJsLanguage: fallbackSpies.parseSpy,
+        executeJsQueryAsNativeMatches: fallbackSpies.querySpy,
       };
     });
 
@@ -248,21 +240,11 @@ nativeDescribe("native parser ownership", () => {
       expect(referencesResult.status).toBe(testCase.references.expectedStatus);
     }
 
-    expect(parseSpy).not.toHaveBeenCalled();
-    expect(querySpy).not.toHaveBeenCalled();
+    expectJsFallbackUnusedForNativeOwnership(fallbackSpies);
   }, 45_000);
 
   it("builds detailed TypeScript symbol edges without loading the JS fallback package", async () => {
-    const parseSpy = vi.fn(() => {
-      throw new Error(
-        "JS Tree-sitter fallback is unavailable for grammar loading. Install @lzehrung/codegraph-js-fallback to enable it",
-      );
-    });
-    const querySpy = vi.fn(() => {
-      throw new Error(
-        "JS Tree-sitter fallback is unavailable for JS query execution. Install @lzehrung/codegraph-js-fallback to enable it",
-      );
-    });
+    const fallbackSpies = createUnavailableJsFallbackSpies("grammar");
 
     vi.resetModules();
     vi.doMock("../src/jsFallback.js", async () => {
@@ -270,8 +252,8 @@ nativeDescribe("native parser ownership", () => {
       return {
         ...actual,
         isJsFallbackAvailable: () => false,
-        parseWithJsLanguage: parseSpy,
-        executeJsQueryAsNativeMatches: querySpy,
+        parseWithJsLanguage: fallbackSpies.parseSpy,
+        executeJsQueryAsNativeMatches: fallbackSpies.querySpy,
       };
     });
 
@@ -287,7 +269,6 @@ nativeDescribe("native parser ownership", () => {
 
     expect(detailed.nodes.size).toBeGreaterThan(0);
     expect(detailed.edges.length).toBeGreaterThan(0);
-    expect(parseSpy).not.toHaveBeenCalled();
-    expect(querySpy).not.toHaveBeenCalled();
+    expectJsFallbackUnusedForNativeOwnership(fallbackSpies);
   });
 });

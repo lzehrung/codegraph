@@ -7,7 +7,7 @@ import { createAgentSession } from "../src/agent/session.js";
 import { createCodegraphMcpHandlers, listCodegraphMcpTools, startCodegraphMcpHttpServer } from "../src/mcp/server.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import { countingSession } from "./helpers/agent.js";
-import { isSymlinkUnavailable } from "./helpers/filesystem.js";
+import { createArtifactOutputWithStaleFile, createLinkedTempRoot, isSymlinkUnavailable } from "./helpers/filesystem.js";
 
 type JsonRpcObject = {
   jsonrpc?: unknown;
@@ -863,11 +863,12 @@ describe("codegraph MCP handlers", () => {
   });
 
   it("omits stale files from an in-repo artifact output directory", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-artifact-ignore-"));
-    const outDir = path.join(root, "out");
-    await fs.mkdir(outDir);
-    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n");
-    await fs.writeFile(path.join(outDir, "old.ts"), "export const stale = true;\n");
+    const { root, outDir } = await createArtifactOutputWithStaleFile({
+      prefix: "cg-mcp-artifact-ignore-",
+      outDirName: "out",
+      staleFileName: "old.ts",
+      staleContents: "export const stale = true;\n",
+    });
     const handlers = createCodegraphMcpHandlers({ root, readOnly: false });
 
     await handlers.artifact_build({ outDir, graphJson: true, force: true });
@@ -879,15 +880,13 @@ describe("codegraph MCP handlers", () => {
   });
 
   it("omits stale output files when the MCP root is a directory link", async () => {
-    const realRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-real-root-"));
-    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-root-link-parent-"));
-    const linkedRoot = path.join(parent, "repo-link");
-    try {
-      await fs.symlink(realRoot, linkedRoot, "junction");
-    } catch (error) {
-      if (isSymlinkUnavailable(error)) return;
-      throw error;
-    }
+    const linkedFixture = await createLinkedTempRoot({
+      realRootPrefix: "cg-mcp-real-root-",
+      parentPrefix: "cg-mcp-root-link-parent-",
+      linkName: "repo-link",
+    });
+    if (!linkedFixture) return;
+    const { linkedRoot } = linkedFixture;
 
     const outDir = path.join(linkedRoot, "out");
     await fs.mkdir(outDir);
@@ -904,15 +903,13 @@ describe("codegraph MCP handlers", () => {
   });
 
   it("accepts artifact paths and output directories through a symlinked root realpath", async () => {
-    const realRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-real-artifact-root-"));
-    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-artifact-link-parent-"));
-    const linkedRoot = path.join(parent, "repo-link");
-    try {
-      await fs.symlink(realRoot, linkedRoot, "junction");
-    } catch (error) {
-      if (isSymlinkUnavailable(error)) return;
-      throw error;
-    }
+    const linkedFixture = await createLinkedTempRoot({
+      realRootPrefix: "cg-mcp-real-artifact-root-",
+      parentPrefix: "cg-mcp-artifact-link-parent-",
+      linkName: "repo-link",
+    });
+    if (!linkedFixture) return;
+    const { realRoot, linkedRoot } = linkedFixture;
 
     await fs.writeFile(path.join(linkedRoot, "auth.ts"), "export const ok = 1;\n");
     const realOutDir = path.join(realRoot, "out");

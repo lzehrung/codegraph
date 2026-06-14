@@ -13,11 +13,13 @@ import { getCodegraphPackageIdentity, getCodegraphVersion } from "../src/cli/pac
 import { handleSkillCommand, type SkillCommandContext } from "../src/cli/skill.js";
 import { handleSqlCommand } from "../src/cli/sql.js";
 import { runCli } from "../src/cli.js";
+import { captureCli } from "./helpers/cli.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
 import type { ProjectIndex } from "../src/indexer.js";
 import type { BuildOptions } from "../src/indexer/types.js";
 import type { Graph } from "../src/types.js";
 import { runGit } from "./helpers/git.js";
+import { createTwoCommitCycleProject } from "./helpers/filesystem.js";
 
 function readJsonRecord(value: unknown): Record<string, unknown> {
   expect(value).toBeTypeOf("object");
@@ -131,36 +133,6 @@ function createImpactContext(overrides: Partial<ImpactCommandContext>): ImpactCo
     },
     ...overrides,
   };
-}
-
-async function captureCli(
-  args: string[],
-  cwd = process.cwd(),
-): Promise<{ stdout: string; stderr: string; exitCode: number | undefined }> {
-  let stdout = "";
-  let stderr = "";
-  let exitCode: number | undefined;
-
-  await runCli(args, {
-    cwd: () => cwd,
-    stdout: (chunk) => {
-      stdout += chunk;
-    },
-    stderr: (chunk) => {
-      stderr += chunk;
-    },
-    exit: (code) => {
-      exitCode = code;
-      throw new Error(`cli exit ${code}`);
-    },
-  }).catch((error: unknown) => {
-    if (error instanceof Error && exitCode !== undefined && error.message === `cli exit ${exitCode}`) {
-      return;
-    }
-    throw error;
-  });
-
-  return { stdout, stderr, exitCode };
 }
 
 describe("CLI command modules", () => {
@@ -641,7 +613,9 @@ describe("CLI command modules", () => {
     await fsp.writeFile(filePath, "export function beta() {\n  return 2;\n}\n", "utf8");
 
     try {
-      const result = await captureCli(["chunk", "sample.ts", "--min-tokens", "1", "--max-tokens", "50"], tempDir);
+      const result = await captureCli(["chunk", "sample.ts", "--min-tokens", "1", "--max-tokens", "50"], {
+        cwd: tempDir,
+      });
 
       expect(result.exitCode).toBeUndefined();
       expect(result.stderr).toBe("");
@@ -772,25 +746,7 @@ describe("CLI command modules", () => {
   });
 
   test("runs drift through the main CLI dispatcher with policy exits", async () => {
-    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-drift-"));
-    await fsp.mkdir(path.join(tempDir, "src"), { recursive: true });
-    await fsp.writeFile(
-      path.join(tempDir, "src", "a.ts"),
-      "import { b } from './b'; export function a() { return b(); }\n",
-      "utf8",
-    );
-    await fsp.writeFile(path.join(tempDir, "src", "b.ts"), "export function b() { return 1; }\n", "utf8");
-    runCliModuleGit(tempDir, ["init"]);
-    runCliModuleGit(tempDir, ["add", "."]);
-    runCliModuleGit(tempDir, ["commit", "-m", "base"]);
-    await fsp.writeFile(
-      path.join(tempDir, "src", "b.ts"),
-      "import { a } from './a'; export function b() { return a(); }\n",
-      "utf8",
-    );
-    runCliModuleGit(tempDir, ["add", "."]);
-    runCliModuleGit(tempDir, ["commit", "-m", "head"]);
-
+    const tempDir = await createTwoCommitCycleProject("codegraph-cli-drift-", runCliModuleGit);
     try {
       const json = await captureCli([
         "drift",

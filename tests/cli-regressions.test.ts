@@ -2,15 +2,15 @@ import { describe, it, expect } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fsp from "node:fs/promises";
-import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { textGrep } from "../src/index.js";
-import { isCliDiscoveryRelativePathInside, runCli } from "../src/cli.js";
+import { isCliDiscoveryRelativePathInside } from "../src/cli.js";
 import { getSkillTargetDirForAgent, type SkillInstallAgent } from "../src/cli/skill.js";
 import packageJson from "../package.json" with { type: "json" };
 import { runGit as git } from "./helpers/git.js";
+import { captureCli, runCliOrThrow, runTsxScriptOrThrow } from "./helpers/cli.js";
+import { createTwoCommitCycleProject } from "./helpers/filesystem.js";
 
-const tsxCliPath = path.resolve(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs");
 const sourceCliPath = path.resolve(process.cwd(), "src", "cli.ts");
 
 async function runCliCommand(args: string[], input?: string): Promise<string> {
@@ -27,92 +27,27 @@ async function runCliCommandDetailed(
   if (input === undefined && !Object.keys(env).length) {
     return await runCliInProcess(args, cwd);
   }
-  return await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [tsxCliPath, sourceCliPath, ...args], {
+  return await runTsxScriptOrThrow(
+    sourceCliPath,
+    args,
+    {
       cwd,
-      env: { ...process.env, ...env },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-    if (input) child.stdin.write(input);
-    child.stdin.end();
-
-    child.on("error", reject);
-    child.on("exit", (code) => {
-      if (code !== 0) {
-        reject(new Error(`codegraph CLI failed (${code}). stderr:\n${stderr}`));
-        return;
-      }
-      resolve({ stdout, stderr });
-    });
-  });
+      env,
+      stdin: input,
+    },
+    "codegraph CLI",
+  );
 }
 
 async function runCliInProcess(args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
-  let stdout = "";
-  let stderr = "";
-  let exitCode: number | undefined;
-
-  try {
-    await runCli(args, {
-      cwd: () => cwd,
-      stdout: (chunk) => {
-        stdout += chunk;
-      },
-      stderr: (chunk) => {
-        stderr += chunk;
-      },
-      exit: (code) => {
-        exitCode = code;
-        throw new Error(`codegraph CLI exited ${code}`);
-      },
-    });
-  } catch (error) {
-    if (exitCode !== undefined) {
-      throw new Error(`codegraph CLI failed (${exitCode}). stderr:\n${stderr}`);
-    }
-    throw error;
-  }
-
-  return { stdout, stderr };
+  return await runCliOrThrow(args, { cwd });
 }
 
 async function runCliWithExit(
   args: string[],
   cwd: string,
 ): Promise<{ stdout: string; stderr: string; exitCode: number | undefined }> {
-  let stdout = "";
-  let stderr = "";
-  let exitCode: number | undefined;
-
-  await runCli(args, {
-    cwd: () => cwd,
-    stdout: (chunk) => {
-      stdout += chunk;
-    },
-    stderr: (chunk) => {
-      stderr += chunk;
-    },
-    exit: (code) => {
-      exitCode = code;
-      throw new Error(`codegraph CLI exited ${code}`);
-    },
-  }).catch((error: unknown) => {
-    if (error instanceof Error && exitCode !== undefined && error.message === `codegraph CLI exited ${exitCode}`) {
-      return;
-    }
-    throw error;
-  });
-
-  return { stdout, stderr, exitCode };
+  return await captureCli(args, { cwd });
 }
 
 function normalize(p: string): string {
@@ -212,31 +147,7 @@ describe("CLI regressions", () => {
       "utf8",
     );
 
-    const result = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
-      const child = spawn(process.execPath, [tsxCliPath, importerPath], {
-        cwd: process.cwd(),
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-
-      let stdout = "";
-      let stderr = "";
-      child.stdout.on("data", (chunk) => {
-        stdout += chunk.toString();
-      });
-      child.stderr.on("data", (chunk) => {
-        stderr += chunk.toString();
-      });
-      child.stdin.end();
-
-      child.on("error", reject);
-      child.on("exit", (code) => {
-        if (code !== 0) {
-          reject(new Error(`codegraph CLI import failed (${code}). stderr:\n${stderr}`));
-          return;
-        }
-        resolve({ stdout, stderr });
-      });
-    });
+    const result = await runTsxScriptOrThrow(importerPath, [], {}, "codegraph CLI import");
 
     expect(result.stdout.trim()).toBe(sentinel);
     expect(result.stderr).not.toContain("Unknown command");
@@ -1580,26 +1491,8 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
   });
 
   it("drift CLI prints JSON and honors fail-on policy", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-drift-cli-"));
+    const root = await createTwoCommitCycleProject("codegraph-drift-cli-", git);
     try {
-      await fsp.mkdir(path.join(root, "src"), { recursive: true });
-      await fsp.writeFile(
-        path.join(root, "src", "a.ts"),
-        "import { b } from './b'; export function a() { return b(); }\n",
-        "utf8",
-      );
-      await fsp.writeFile(path.join(root, "src", "b.ts"), "export function b() { return 1; }\n", "utf8");
-      git(root, ["init"]);
-      git(root, ["add", "."]);
-      git(root, ["commit", "-m", "base"]);
-      await fsp.writeFile(
-        path.join(root, "src", "b.ts"),
-        "import { a } from './a'; export function b() { return a(); }\n",
-        "utf8",
-      );
-      git(root, ["add", "."]);
-      git(root, ["commit", "-m", "head"]);
-
       const json = await runCliCommand([
         "drift",
         "src",

@@ -6,51 +6,8 @@ import { LANG_CONFIGS } from "../src/bootstrap/treeSitterLanguages.js";
 import { chunkFile, type Chunk } from "../src/chunking/chunkFile.js";
 import { chunkSFCFile } from "../src/chunking/chunkSFC.js";
 import { astGrep } from "../src/index.js";
-import { __resetNativeTreeSitterBindingForTests, isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
-
-const nativeDescribe = isNativeTreeSitterAvailable() ? describe : describe.skip;
-
-type RuntimeMode = "native" | "reduced";
-
-function withRuntimeMode<T>(mode: RuntimeMode, run: () => T): T {
-  const previous = process.env.CODEGRAPH_DISABLE_NATIVE;
-  if (mode === "reduced") {
-    process.env.CODEGRAPH_DISABLE_NATIVE = "1";
-  } else {
-    delete process.env.CODEGRAPH_DISABLE_NATIVE;
-  }
-  __resetNativeTreeSitterBindingForTests();
-  try {
-    return run();
-  } finally {
-    if (previous === undefined) {
-      delete process.env.CODEGRAPH_DISABLE_NATIVE;
-    } else {
-      process.env.CODEGRAPH_DISABLE_NATIVE = previous;
-    }
-    __resetNativeTreeSitterBindingForTests();
-  }
-}
-
-async function withRuntimeModeAsync<T>(mode: RuntimeMode, run: () => Promise<T>): Promise<T> {
-  const previous = process.env.CODEGRAPH_DISABLE_NATIVE;
-  if (mode === "reduced") {
-    process.env.CODEGRAPH_DISABLE_NATIVE = "1";
-  } else {
-    delete process.env.CODEGRAPH_DISABLE_NATIVE;
-  }
-  __resetNativeTreeSitterBindingForTests();
-  try {
-    return await run();
-  } finally {
-    if (previous === undefined) {
-      delete process.env.CODEGRAPH_DISABLE_NATIVE;
-    } else {
-      process.env.CODEGRAPH_DISABLE_NATIVE = previous;
-    }
-    __resetNativeTreeSitterBindingForTests();
-  }
-}
+import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
+import { resetNativeRuntimeModeForTests, withNativeRuntimeMode, withNativeRuntimeModeAsync } from "./helpers/native.js";
 
 function normalizeChunks(chunks: Chunk[]) {
   return chunks.map((chunk) => ({
@@ -123,16 +80,16 @@ const SFC_CHUNK_CASES = [
     filePath: path.resolve(process.cwd(), "tests", "samples", "svelte", "inline-script.svelte"),
   },
 ];
+const nativeDescribe = isNativeTreeSitterAvailable() ? describe : describe.skip;
 
 afterEach(() => {
-  delete process.env.CODEGRAPH_DISABLE_NATIVE;
-  __resetNativeTreeSitterBindingForTests();
+  resetNativeRuntimeModeForTests();
 });
 
 nativeDescribe("native query ownership", () => {
   it("keeps chunkFile productive in native mode", () => {
     for (const testCase of SOURCE_CHUNK_CASES) {
-      const nativeChunks = withRuntimeMode("native", () =>
+      const nativeChunks = withNativeRuntimeMode("native", () =>
         chunkFile({
           language: testCase.config,
           source: testCase.source,
@@ -150,7 +107,7 @@ nativeDescribe("native query ownership", () => {
   it("keeps SFC chunking productive in native mode", () => {
     for (const testCase of SFC_CHUNK_CASES) {
       const source = fs.readFileSync(testCase.filePath, "utf8");
-      const nativeChunks = withRuntimeMode("native", () =>
+      const nativeChunks = withNativeRuntimeMode("native", () =>
         chunkSFCFile({
           source,
           filePath: testCase.filePath,
@@ -169,7 +126,10 @@ nativeDescribe("native query ownership", () => {
     const projectRoot = path.resolve(process.cwd(), "tests", "samples", "typescript");
     const query = "(import_statement source: (string) @mod)";
 
-    const nativeHits = await withRuntimeModeAsync("native", async () => await astGrep(projectRoot, query, ["**/*.ts"]));
+    const nativeHits = await withNativeRuntimeModeAsync(
+      "native",
+      async () => await astGrep(projectRoot, query, ["**/*.ts"]),
+    );
 
     expect(stableAstGrepHits(projectRoot, nativeHits)).toMatchSnapshot();
   });
@@ -178,7 +138,7 @@ nativeDescribe("native query ownership", () => {
 describe("reduced query mode", () => {
   it("keeps chunkFile safe without native", () => {
     for (const testCase of SOURCE_CHUNK_CASES) {
-      const reducedChunks = withRuntimeMode("reduced", () =>
+      const reducedChunks = withNativeRuntimeMode("reduced", () =>
         chunkFile({
           language: testCase.config,
           source: testCase.source,
@@ -196,7 +156,7 @@ describe("reduced query mode", () => {
   it("keeps SFC chunking safe without native", () => {
     for (const testCase of SFC_CHUNK_CASES) {
       const source = fs.readFileSync(testCase.filePath, "utf8");
-      const reducedChunks = withRuntimeMode("reduced", () =>
+      const reducedChunks = withNativeRuntimeMode("reduced", () =>
         chunkSFCFile({
           source,
           filePath: testCase.filePath,
@@ -215,7 +175,7 @@ describe("reduced query mode", () => {
     const projectRoot = path.resolve(process.cwd(), "tests", "samples", "typescript");
     const query = "(import_statement source: (string) @mod)";
 
-    const reducedHits = await withRuntimeModeAsync(
+    const reducedHits = await withNativeRuntimeModeAsync(
       "reduced",
       async () => await astGrep(projectRoot, query, ["**/*.ts"]),
     );

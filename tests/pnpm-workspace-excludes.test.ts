@@ -41,6 +41,26 @@ describe("pnpm-workspace.yaml parsing", () => {
     expect(cfg?.packages.has("included")).toBe(true);
     expect(cfg?.packages.has("excluded")).toBe(false);
   });
+  it("keeps hash characters inside quoted pnpm workspace globs", async () => {
+    const root = await mkTmpDir("dg-pnpm-hash-globs-");
+
+    await fsp.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "root", private: true }, null, 2),
+      "utf8",
+    );
+
+    const pnpmYaml = ["packages:", "  - 'packages/hash#pkg' # inline comment", ""].join("\n");
+    await fsp.writeFile(path.join(root, "pnpm-workspace.yaml"), pnpmYaml, "utf8");
+
+    const packageDir = path.join(root, "packages", "hash#pkg");
+    await fsp.mkdir(packageDir, { recursive: true });
+    await fsp.writeFile(path.join(packageDir, "package.json"), JSON.stringify({ name: "hash-pkg" }, null, 2), "utf8");
+
+    const cfg = await loadWorkspaceConfig(root);
+    expect(cfg).toBeDefined();
+    expect(cfg?.packages.has("hash-pkg")).toBe(true);
+  });
 
   it("handles negated and overlapping pnpm patterns", async () => {
     const root = await mkTmpDir("dg-pnpm-overlap-");

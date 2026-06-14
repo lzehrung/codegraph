@@ -25,10 +25,7 @@ import {
 import * as util from "../src/util.js";
 import * as filePrep from "../src/languages/filePrep.js";
 import { runGit } from "./helpers/git.js";
-
-async function mkTmpDir(prefix: string): Promise<string> {
-  return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
-}
+import { createTempProjectRoot, mkTmpDir } from "./helpers/filesystem.js";
 
 function normalize(p: string): string {
   return p.replace(/\\/g, "/");
@@ -785,9 +782,9 @@ describe("Cache invalidation and strict hashing", () => {
   });
 
   it("rejects explicit incremental files outside the project root", async () => {
-    const root = await mkTmpDir("dg-incremental-explicit-root-");
-    const insideFile = path.join(root, "inside.ts");
-    await fsp.writeFile(insideFile, `export const inside = 1;\n`, "utf8");
+    const root = await createTempProjectRoot("dg-incremental-explicit-root-", [
+      { path: "inside.ts", contents: "export const inside = 1;\n" },
+    ]);
     await buildProjectIndex(root, { threads: 2, cache: "disk" });
 
     await expect(

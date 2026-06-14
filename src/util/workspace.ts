@@ -4,6 +4,7 @@ const directoryExistsCache = new Map<string, boolean>();
 import fsp from "node:fs/promises";
 import path from "node:path";
 import fg from "fast-glob";
+import { stripHashInlineComment } from "./comments.js";
 import { pickPackageExportTarget } from "./packageExports.js";
 import { listResolutionCandidates } from "./resolutionCandidates.js";
 
@@ -104,24 +105,6 @@ function parsePnpmWorkspacePackages(rawYaml: string): string[] {
   const lines = src.split(/\r?\n/);
   const out: string[] = [];
 
-  // Strip YAML-style inline comments, but keep `#` characters that appear inside quoted strings.
-  const stripInlineComment = (line: string): string => {
-    let quote: "'" | '"' | null = null;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      if (quote) {
-        if (ch === quote) quote = null;
-        continue;
-      }
-      if (ch === "'" || ch === '"') {
-        quote = ch;
-        continue;
-      }
-      if (ch === "#") return line.slice(0, i);
-    }
-    return line;
-  };
-
   // Remove surrounding single or double quotes from a YAML string value,
   // preserving values that are not enclosed in matching quotes.
   const unquoteMaybe = (value: string): string => {
@@ -139,7 +122,7 @@ function parsePnpmWorkspacePackages(rawYaml: string): string[] {
   //   '!b/*'
   // ]
   {
-    const cleanedSrc = lines.map((line) => stripInlineComment(line)).join("\n");
+    const cleanedSrc = lines.map((line) => stripHashInlineComment(line, "preserve")).join("\n");
     const m = cleanedSrc.match(/^packages\s*:\s*\[([\s\S]*?)\]\s*$/m);
     if (m) {
       const inner = m[1] ?? "";
@@ -160,7 +143,7 @@ function parsePnpmWorkspacePackages(rawYaml: string): string[] {
   let inPackages = false;
   let packagesIndent: number | null = null;
   for (const rawLine of lines) {
-    const commentStripped = stripInlineComment(rawLine);
+    const commentStripped = stripHashInlineComment(rawLine, "preserve");
     const line = commentStripped.replace(/\t/g, "  ");
     if (!inPackages) {
       const m = line.match(/^(\s*)packages\s*:\s*$/);

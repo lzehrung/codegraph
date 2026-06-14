@@ -1,14 +1,10 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
-import os from "node:os";
 import fsp from "node:fs/promises";
 import { buildProjectIndex, buildGraphDelta } from "../src/index.js";
 import type { IndexManifest } from "../src/indexer/build-cache.js";
 import { runGit } from "./helpers/git.js";
-
-async function mkTmpDir(prefix: string): Promise<string> {
-  return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
-}
+import { createTempProjectRoot, mkTmpDir } from "./helpers/filesystem.js";
 
 function hasFileEdge(
   edges: Array<{ from: string; to: { type: string; path?: string }; raw: string }>,
@@ -88,9 +84,9 @@ describe("Graph delta export", () => {
   });
 
   it("rejects changed files outside the project root", async () => {
-    const root = await mkTmpDir("dg-graph-delta-root-");
-    const insideFile = path.join(root, "a.ts");
-    await fsp.writeFile(insideFile, `export const a = 1;\n`, "utf8");
+    const root = await createTempProjectRoot("dg-graph-delta-root-", [
+      { path: "a.ts", contents: "export const a = 1;\n" },
+    ]);
     await buildProjectIndex(root, { cache: "disk", threads: 2 });
 
     await expect(

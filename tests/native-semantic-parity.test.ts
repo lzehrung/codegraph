@@ -10,6 +10,7 @@ import {
   type ProjectIndex,
 } from "../src/index.js";
 import * as nativeRuntime from "../src/native/treeSitterNative.js";
+import { withNativeRuntimeModeAsync } from "./helpers/native.js";
 
 const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable() ? describe : describe.skip;
 const sampleRoot = path.resolve(process.cwd(), "tests", "samples");
@@ -162,28 +163,8 @@ function stableReferencesSnapshot(
   };
 }
 
-async function withNativeMode<T>(mode: "native" | "reduced", run: () => Promise<T>): Promise<T> {
-  const previous = process.env.CODEGRAPH_DISABLE_NATIVE;
-  if (mode === "reduced") {
-    process.env.CODEGRAPH_DISABLE_NATIVE = "1";
-  } else {
-    delete process.env.CODEGRAPH_DISABLE_NATIVE;
-  }
-  nativeRuntime.__resetNativeTreeSitterBindingForTests();
-  try {
-    return await run();
-  } finally {
-    if (previous === undefined) {
-      delete process.env.CODEGRAPH_DISABLE_NATIVE;
-    } else {
-      process.env.CODEGRAPH_DISABLE_NATIVE = previous;
-    }
-    nativeRuntime.__resetNativeTreeSitterBindingForTests();
-  }
-}
-
 async function buildSemanticIndex(expectation: SemanticExpectation, mode: "native" | "reduced"): Promise<ProjectIndex> {
-  return await withNativeMode(mode, async () => {
+  return await withNativeRuntimeModeAsync(mode, async () => {
     const files = expectation.files.map(normalizeFile);
     return await buildProjectIndexFromFiles(expectation.root, files);
   });
