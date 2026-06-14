@@ -1913,11 +1913,30 @@ function estimatedLinesSavedForLocations(locations: readonly DuplicateUnitRef[])
   const max = mergedSpanLengths.reduce((best, spanLength) => Math.max(best, spanLength), 0);
   return Math.max(0, total - max);
 }
+function duplicateUnitRefQuality(unit: DuplicateUnitRef): number {
+  let score = 0;
+  if (unit.kind === "symbol") score += 8;
+  if (unit.name) score += 4;
+  if (unit.symbolKind !== undefined) score += 2;
+  if (unit.symbolHandle !== undefined) score += 1;
+  return score;
+}
+
+function preferredDuplicateUnitRef(left: DuplicateUnitRef, right: DuplicateUnitRef): DuplicateUnitRef {
+  const qualityDiff = duplicateUnitRefQuality(left) - duplicateUnitRefQuality(right);
+  if (qualityDiff > 0) return left;
+  if (qualityDiff < 0) return right;
+  if (left.kind === "symbol" && right.kind !== "symbol") return left;
+  if (right.kind === "symbol" && left.kind !== "symbol") return right;
+  return compareUnitRefs(left, right) <= 0 ? left : right;
+}
 
 function mergeLocations(locations: Iterable<DuplicateUnitRef>): DuplicateUnitRef[] {
   const locationsByKey = new Map<string, DuplicateUnitRef>();
   for (const location of locations) {
-    locationsByKey.set(unitRefRangeIdentity(location), location);
+    const key = unitRefRangeIdentity(location);
+    const existing = locationsByKey.get(key);
+    locationsByKey.set(key, existing ? preferredDuplicateUnitRef(existing, location) : location);
   }
   return Array.from(locationsByKey.values()).sort(compareUnitRefs);
 }

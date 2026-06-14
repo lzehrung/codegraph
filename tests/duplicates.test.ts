@@ -1972,6 +1972,33 @@ export class InvoiceNormalizer {
     expect(result.groups.length).toBeGreaterThan(0);
     expect(new Set(primaryPairKeys).size).toBe(primaryPairKeys.length);
   });
+  test("coalescing repeated groups keeps named symbol locations for identical spans", async () => {
+    const root = await makeTempProject();
+    const source = `
+export function formatUsage(value: string) {
+  const normalized = value.trim().toUpperCase();
+  return normalized.slice(0, 12);
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", source);
+    await writeProjectFile(root, "src/b.ts", source);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, {
+      includeSmall: true,
+      minConfidence: "high",
+      limit: 20,
+    });
+    const group = result.groups.find((candidate) =>
+      candidate.locations.every((location) => location.file.startsWith("src/")),
+    );
+
+    expect(group).toBeDefined();
+    expect(group?.locations.map((location) => location.name)).toContain("formatUsage");
+    expect(group?.cleanupLabels).toContain("production-helper-extraction");
+  });
+
   test("recomputes saved lines after coalescing repeated primary ranges", async () => {
     const root = await makeTempProject();
     const source = `
