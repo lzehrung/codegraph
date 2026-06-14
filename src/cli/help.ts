@@ -222,8 +222,8 @@ Index Options:
   --threads N        Number of worker threads (default: auto)
   --native <mode>    Native runtime mode: auto, on, off
   --workers          Use Piscina worker threads for native extraction
-  --include-glob <glob> Restrict discovered files to extra glob(s)
-  --ignore-glob <glob>  Exclude extra discovered files by glob
+  --include-glob <glob> Restrict discovered files to extra glob(s), relative to each scan root
+  --ignore-glob <glob>  Exclude extra discovered files by glob, relative to each scan root
   --no-gitignore        Do not apply .gitignore files during discovery
 
 Tools are read-only unless --allow-build is passed.
@@ -257,8 +257,8 @@ Index Options:
   --threads N        Number of worker threads (default: auto)
   --native <mode>    Native runtime mode: auto, on, off
   --workers          Use Piscina worker threads for native extraction
-  --include-glob <glob> Restrict discovered files to extra glob(s)
-  --ignore-glob <glob>  Exclude extra discovered files by glob
+  --include-glob <glob> Restrict discovered files to extra glob(s), relative to each scan root
+  --ignore-glob <glob>  Exclude extra discovered files by glob, relative to each scan root
   --no-gitignore        Do not apply .gitignore files during discovery
 
 Defaults:
@@ -271,7 +271,7 @@ Defaults:
 
 export const DUPLICATES_HELP_TEXT = `codegraph duplicates - Detect duplicate and near-duplicate code units
 
-Usage: codegraph duplicates [path ...] [--root <path>] [--json | --pretty] [--sort similarity|actionability] [--min-confidence high|medium|low] [--limit <n>] [--include-same-file] [--include-small] [--raw-pairs]
+Usage: codegraph duplicates [path ...] [--root <path>] [--json | --pretty] [--profile cleanup|refactor-roi] [--sort similarity|actionability|reduced-lines] [--min-confidence high|medium|low] [--limit <n>] [--include-same-file] [--include-small] [--raw-pairs] [--no-summary]
 
 Path behavior:
   A single positional directory becomes the project root when --root is omitted.
@@ -279,28 +279,36 @@ Path behavior:
   Positional paths are scan roots, not glob patterns.
 
 Discovery filters:
-  Shared scan flags also apply here: --include-glob, --ignore-glob, and --no-gitignore.
-  Repeat --ignore-glob or --include-glob for each pattern:
+  --include-glob and --ignore-glob are relative to each active scan root.
+  --include-root-glob and --ignore-root-glob are project-root-relative.
+  --no-gitignore disables .gitignore filtering for the current command.
+  Repeat each glob flag once per pattern:
     codegraph duplicates --root . ./src --ignore-glob "tests/**" --ignore-glob "docs/**"
+    codegraph duplicates --root . ./tests --ignore-root-glob "tests/languages/**"
 
 Options:
   --pretty            Emit one-line duplicate summaries for human triage. This is the default output.
   --json              Emit grouped duplicate findings as JSON for programmatic consumers.
-  --sort <mode>       Order output by similarity or actionability. Pretty output defaults to actionability; JSON defaults to similarity unless --sort is explicit.
+  --profile <name>    Apply cleanup-oriented defaults. cleanup and refactor-roi are aliases.
+  --sort <mode>       Order output by similarity, actionability, or reduced-lines.
+                      Pretty output defaults to actionability. Cleanup profile defaults to reduced-lines.
+                      JSON defaults to similarity unless --sort is explicit.
   --min-confidence    Minimum confidence to report. Defaults to medium.
   --limit             Maximum duplicate groups to return. Defaults to 50.
   --include-same-file Report non-overlapping clones in the same file.
   --include-small     Include units below the default token floor.
   --raw-pairs         Include low-level scored unit-pair suggestions in JSON output.
-  --min-tokens        Minimum unit tokens. Defaults to 40.
+  --no-summary        Suppress the pretty summary footer.
+  --min-tokens        Minimum unit tokens. Defaults to 40, or 80 under cleanup profile.
   --max-tokens        Maximum fallback chunk tokens. Defaults to 800.
   --max-bucket-size   Skip candidate buckets larger than this value. Defaults to 200.
 
 Output:
-  Pretty output is the default and emits one line per group with file spans, symbol or chunk labels, confidence, clone type, score, token counts, and heuristic family annotations derived from the displayed duplicate pair.
-  JSON output reports grouped duplicate findings, confidence, clone type, metrics, omission counts including skipped candidate pairs, and pair stats.
-  Grouped duplicate JSON uses schemaVersion 2.
-  --raw-pairs is only supported with similarity-ranked JSON output.
+  Pretty output is the default and emits one line per group with file spans, symbol or chunk labels, confidence, clone type, score, reduced lines, estimated reducible lines, token counts, heuristic family annotations, and cleanup labels.
+  Pretty output also emits a compact summary footer unless --no-summary is passed.
+  JSON output reports grouped duplicate findings, confidence, clone type, metrics, reduced-line fields, cleanup labels, clustered locations, omission counts including skipped candidate pairs, and pair stats.
+  Grouped duplicate JSON uses schemaVersion 3.
+  --raw-pairs is only supported with similarity-ranked JSON output and cannot be combined with the cleanup profile.
 `;
 
 export const DRIFT_HELP_TEXT = `codegraph drift - Compare architecture drift between graph states

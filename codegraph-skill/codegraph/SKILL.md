@@ -40,7 +40,7 @@ Then pick the smallest useful follow-up:
 - cycles: `codegraph cycles --sort priority`
 - goto: `codegraph goto <file> <line> <column>`
 - refs: `codegraph refs --file <file> --line <line> --col <column> --pretty`
-- duplicate triage: `codegraph duplicates --root . ./src --min-confidence medium`
+- duplicate triage: `codegraph duplicates --root . ./src --profile cleanup`
 - PR impact: `codegraph impact --provider git --base main --head HEAD --pretty`
 - worktree impact: `codegraph impact --provider git --base HEAD --head WORKTREE --pretty`
 - review handoff: `codegraph review --base HEAD --head WORKTREE --summary`
@@ -64,6 +64,7 @@ Important command notes:
 
 - `duplicates` defaults to pretty triage output.
 - `duplicates --json` is the stable machine contract.
+- `duplicates --profile cleanup` is the default cleanup audit surface.
 - `duplicates --raw-pairs` is JSON-only.
 - `impact --pretty` and `review --summary` are the main human-facing surfaces.
 - `orient --json` is best when you need packet handles and omission counts.
@@ -88,17 +89,18 @@ Fall back to CLI when MCP is unavailable.
 Use:
 
 ```bash
-codegraph duplicates --root . ./src --min-confidence medium
+codegraph duplicates --root . ./src --profile cleanup
 ```
 
 Notes:
 
 - pretty output is the default triage surface
+- use `--profile cleanup` for refactor ROI ordering
 - use `--json` for grouped duplicate data
-- use `--sort actionability` to rank likely cleanup wins
-- use `--ignore-glob` repeatedly for noisy trees
+- use `--ignore-glob` for scan-root-relative one-off noise filters
+- use `--ignore-root-glob` for project-root-relative one-off noise filters
 - use `--include-same-file` for local clone cleanup
-- use `--raw-pairs` only when debugging low-level JSON evidence
+- use `--raw-pairs` only when debugging low-level JSON evidence; do not combine it with `--profile cleanup`
 
 ### Impact and review
 
@@ -207,5 +209,5 @@ Codegraph requires Node.js 24.10 or newer.
 - prefer readable defaults unless you need exact fields
 - use `--json` explicitly when you plan to parse or post-process
 - use `--root` deliberately; it changes config lookup and cache scope
-- for copied-code or refactor-risk questions, follow impact with `codegraph duplicates --json ...`
+- for copied-code or refactor-risk questions, follow impact with `codegraph duplicates --profile cleanup` or `codegraph duplicates --json ...`
 - if a command already has a good human surface, do not force JSON unless the next step needs it

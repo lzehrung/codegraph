@@ -29,6 +29,14 @@ import { assertFilePathWithinRoot, normalizePath, toProjectDisplayPath } from ".
 
 export type DuplicateConfidence = "high" | "medium" | "low";
 export type DuplicateCloneType = "exact" | "renamed" | "near" | "weak";
+export type DuplicateCleanupLabel =
+  | "test-helper-extraction"
+  | "production-helper-extraction"
+  | "fixture-boilerplate"
+  | "barrel-export-noise"
+  | "type-shape-noise"
+  | "import-list-noise";
+
 export type DuplicateUnitKind = "symbol" | "chunk";
 
 export type DuplicateUnitRef = {
@@ -46,6 +54,8 @@ export type DuplicateUnitRef = {
   name?: string;
   symbolKind?: SymbolKind;
   complexity?: number;
+  looksLikeImportList?: boolean;
+  looksLikeBarrel?: boolean;
 };
 
 export type DuplicateMetrics = {
@@ -68,6 +78,16 @@ export type DuplicateSuggestion = {
   reasons: string[];
 };
 
+export type DuplicateClusterSummary = {
+  id: string;
+  label?: string;
+  locationCount: number;
+  locations: DuplicateUnitRef[];
+  files: string[];
+  estimatedLinesSaved: number;
+  groupIds: string[];
+};
+
 export type DuplicateGroup = {
   id: string;
   score: number;
@@ -75,6 +95,11 @@ export type DuplicateGroup = {
   cloneType: DuplicateCloneType;
   primaryLeft: DuplicateUnitRef;
   primaryRight: DuplicateUnitRef;
+  locations: DuplicateUnitRef[];
+  reducedLines: number;
+  estimatedLinesSaved: number;
+  cleanupLabels: DuplicateCleanupLabel[];
+  cluster?: DuplicateClusterSummary;
   variants: DuplicateSuggestion[];
   variantCount: number;
   rawPairCount: number;
@@ -123,12 +148,17 @@ export type DuplicateDetectionStats = {
   candidatePairs: number;
 };
 
+export type DuplicateDetectionFilteredCounts = {
+  cleanupProfileGroups: number;
+};
+
 export type DuplicateDetectionResult = {
-  schemaVersion: 2;
+  schemaVersion: 3;
   units: number;
   groups: DuplicateGroup[];
   suggestions?: DuplicateSuggestion[];
   omittedCounts: DuplicateDetectionOmittedCounts;
+  filteredCounts?: DuplicateDetectionFilteredCounts;
   stats: DuplicateDetectionStats;
 };
 export type DuplicateTarget = {
@@ -717,6 +747,37 @@ function normalizedDuplicateTokens(text: string, nativeMode: ProjectIndex["nativ
   return getNativeDuplicateTokens(text, nativeMode)?.normalizedTokens ?? normalizeDuplicateSourceTokens(text);
 }
 
+function duplicateTextLines(text: string): string[] {
+  return text
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function looksLikeImportListText(text: string): boolean {
+  const lines = duplicateTextLines(text);
+  if (!lines.length || lines.length > 12) return false;
+  const statements = lines
+    .join(" ")
+    .split(";")
+    .map((statement) => statement.trim())
+    .filter(Boolean);
+  return statements.length > 0 && statements.every((statement) => /^import\b/u.test(statement));
+}
+
+function looksLikeBarrelText(text: string): boolean {
+  const lines = duplicateTextLines(text);
+  if (!lines.length || lines.length > 12) return false;
+  const statements = lines
+    .join(" ")
+    .split(";")
+    .map((statement) => statement.trim())
+    .filter(Boolean);
+  return (
+    statements.length > 0 && statements.every((statement) => /^export\b[\s\S]*(\bfrom\b|export\s+\*)/u.test(statement))
+  );
+}
+
 /** Adds hashes, normalized tokens, and fingerprints to a reportable unit. */
 function buildInternalUnit(
   unit: DuplicateUnitDraft,
@@ -748,6 +809,8 @@ function buildInternalUnit(
     chunkHandle,
     ...(handles.sqlHandle !== undefined ? { sqlHandle: handles.sqlHandle } : {}),
     ...(handles.symbolHandle !== undefined ? { symbolHandle: handles.symbolHandle } : {}),
+    ...(looksLikeImportListText(text) ? { looksLikeImportList: true } : {}),
+    ...(looksLikeBarrelText(text) ? { looksLikeBarrel: true } : {}),
     normalizedTokens,
     tokenSet: new Set(normalizedTokens),
     signatures,
@@ -1631,6 +1694,8 @@ function unitRef(unit: DuplicateInternalUnit): DuplicateUnitRef {
     ...(unit.name !== undefined ? { name: unit.name } : {}),
     ...(unit.symbolKind !== undefined ? { symbolKind: unit.symbolKind } : {}),
     ...(unit.complexity !== undefined ? { complexity: unit.complexity } : {}),
+    ...(unit.looksLikeImportList ? { looksLikeImportList: true } : {}),
+    ...(unit.looksLikeBarrel ? { looksLikeBarrel: true } : {}),
   };
 }
 
@@ -1790,6 +1855,280 @@ function suggestionVariantKey(suggestion: DuplicateSuggestion): string {
   ].join("\u0000");
 }
 
+function duplicateUnitLineSpan(unit: DuplicateUnitRef): number {
+  return Math.max(0, unit.endLine - unit.startLine + 1);
+}
+
+function reducedLinesForPair(left: DuplicateUnitRef, right: DuplicateUnitRef): number {
+  return Math.min(duplicateUnitLineSpan(left), duplicateUnitLineSpan(right));
+}
+
+function estimatedLinesSavedForLocations(locations: readonly DuplicateUnitRef[]): number {
+  if (locations.length < 2) return 0;
+  const spansByFile = new Map<string, Array<{ startLine: number; endLine: number }>>();
+  for (const location of locations) {
+    appendToArrayMap(spansByFile, location.file, {
+      startLine: location.startLine,
+      endLine: location.endLine,
+    });
+  }
+  const mergedSpanLengths = Array.from(spansByFile.values()).flatMap((spans) => {
+    const sortedSpans = [...spans].sort(
+      (left, right) => left.startLine - right.startLine || left.endLine - right.endLine,
+    );
+    const lengths: number[] = [];
+    let currentStart = 0;
+    let currentEnd = 0;
+    let hasCurrent = false;
+    for (const span of sortedSpans) {
+      if (!hasCurrent) {
+        currentStart = span.startLine;
+        currentEnd = span.endLine;
+        hasCurrent = true;
+        continue;
+      }
+      if (span.startLine <= currentEnd) {
+        currentEnd = Math.max(currentEnd, span.endLine);
+        continue;
+      }
+      lengths.push(Math.max(0, currentEnd - currentStart + 1));
+      currentStart = span.startLine;
+      currentEnd = span.endLine;
+    }
+    if (hasCurrent) {
+      lengths.push(Math.max(0, currentEnd - currentStart + 1));
+    }
+    return lengths;
+  });
+  const total = mergedSpanLengths.reduce((sum, spanLength) => sum + spanLength, 0);
+  const max = mergedSpanLengths.reduce((best, spanLength) => Math.max(best, spanLength), 0);
+  return Math.max(0, total - max);
+}
+
+function mergeLocations(locations: Iterable<DuplicateUnitRef>): DuplicateUnitRef[] {
+  const locationsByKey = new Map<string, DuplicateUnitRef>();
+  for (const location of locations) {
+    locationsByKey.set(unitRefRangeIdentity(location), location);
+  }
+  return Array.from(locationsByKey.values()).sort(compareUnitRefs);
+}
+
+function groupLocations(group: DuplicateGroup): DuplicateUnitRef[] {
+  if (group.locations.length) return [...group.locations].sort(compareUnitRefs);
+  return mergeLocations([
+    group.primaryLeft,
+    group.primaryRight,
+    ...group.variants.flatMap((variant) => [variant.left, variant.right]),
+  ]);
+}
+
+function locationsForSuggestions(
+  primaryLeft: DuplicateUnitRef,
+  primaryRight: DuplicateUnitRef,
+  suggestions: readonly DuplicateSuggestion[],
+): DuplicateUnitRef[] {
+  return mergeLocations([
+    primaryLeft,
+    primaryRight,
+    ...suggestions.flatMap((suggestion) => [suggestion.left, suggestion.right]),
+  ]);
+}
+
+function commonLocationName(locations: readonly DuplicateUnitRef[]): string | undefined {
+  let name: string | undefined;
+  for (const location of locations) {
+    if (!location.name) return undefined;
+    if (name === undefined) {
+      name = location.name;
+      continue;
+    }
+    if (name !== location.name) return undefined;
+  }
+  return name;
+}
+
+function clusterFiles(locations: readonly DuplicateUnitRef[]): string[] {
+  return Array.from(new Set(locations.map((location) => location.file))).sort();
+}
+
+function isTestFile(file: string): boolean {
+  return (
+    file.startsWith("test/") ||
+    file.startsWith("tests/") ||
+    file.startsWith("spec/") ||
+    file.startsWith("specs/") ||
+    file.startsWith("__tests__/") ||
+    file.includes("/test/") ||
+    file.includes("/tests/") ||
+    file.includes("/spec/") ||
+    file.includes("/specs/") ||
+    file.includes("/__tests__/") ||
+    /\.test\.[^.]+$/u.test(file) ||
+    /\.spec\.[^.]+$/u.test(file)
+  );
+}
+
+function isProductionFile(file: string): boolean {
+  return file.startsWith("src/") || file.includes("/src/");
+}
+
+function isTopLevelSourceBarrel(file: string): boolean {
+  return /^src\/[^/]+\.ts$/.test(file);
+}
+
+function isFixtureLikeFile(file: string): boolean {
+  return (
+    file.startsWith("fixtures/") ||
+    file.startsWith("samples/") ||
+    file.includes("/fixtures/") ||
+    file.includes("/samples/") ||
+    file.startsWith("tests/languages/") ||
+    file.includes("/tests/languages/")
+  );
+}
+
+function groupLooksLikeImportListNoise(locations: readonly DuplicateUnitRef[]): boolean {
+  if (!locations.length) return false;
+  return locations.every((location) => location.looksLikeImportList);
+}
+
+function groupLooksLikeBarrelNoise(locations: readonly DuplicateUnitRef[]): boolean {
+  if (!locations.length) return false;
+  return locations.every((location) => location.looksLikeBarrel && isTopLevelSourceBarrel(location.file));
+}
+
+function cleanupLabelsForGroup(group: DuplicateGroup, locations: readonly DuplicateUnitRef[]): DuplicateCleanupLabel[] {
+  const labels = new Set<DuplicateCleanupLabel>();
+  const files = clusterFiles(locations);
+  const allTests = files.length > 0 && files.every(isTestFile);
+  const allProduction = files.length > 0 && files.every(isProductionFile);
+  const hasCommonName = commonLocationName(locations) !== undefined;
+
+  if (allTests && (hasCommonName || locations.length >= 3)) labels.add("test-helper-extraction");
+  if (allProduction && hasCommonName) labels.add("production-helper-extraction");
+  if (files.some(isFixtureLikeFile)) labels.add("fixture-boilerplate");
+  if (groupLooksLikeImportListNoise(locations)) labels.add("import-list-noise");
+  if (groupLooksLikeBarrelNoise(locations)) labels.add("barrel-export-noise");
+  if (group.cloneType !== "exact" && group.metrics.astShapeEqual && group.metrics.tokenJaccard < 0.65) {
+    labels.add("type-shape-noise");
+  }
+
+  return Array.from(labels).sort();
+}
+function isLocationClique(locations: readonly DuplicateUnitRef[], coveredPairs: ReadonlySet<string>): boolean {
+  for (let index = 0; index < locations.length; index += 1) {
+    const left = locations[index]!;
+    for (let otherIndex = index + 1; otherIndex < locations.length; otherIndex += 1) {
+      const right = locations[otherIndex]!;
+      if (!coveredPairs.has(orderedUnitRangePairKey(left, right))) return false;
+    }
+  }
+  return true;
+}
+
+function groupClusterSummary(
+  locations: readonly DuplicateUnitRef[],
+  groupIds: readonly string[],
+  coveredPairs: ReadonlySet<string>,
+): DuplicateClusterSummary | undefined {
+  if (locations.length <= 2 && groupIds.length <= 1) return undefined;
+  if (!isLocationClique(locations, coveredPairs)) return undefined;
+  const label = commonLocationName(locations);
+  return {
+    id: shortHashText(locations.map(unitRefRangeIdentity).join("\u0000")),
+    ...(label !== undefined ? { label } : {}),
+    locationCount: locations.length,
+    locations: [...locations],
+    files: clusterFiles(locations),
+    estimatedLinesSaved: estimatedLinesSavedForLocations(locations),
+    groupIds: [...groupIds].sort(),
+  };
+}
+
+function enrichDuplicateGroups(groups: DuplicateGroup[]): DuplicateGroup[] {
+  const locationsByGroupId = new Map<string, DuplicateUnitRef[]>();
+  const adjacency = new Map<string, Set<string>>();
+  const locationsByKey = new Map<string, DuplicateUnitRef>();
+  const coveredPairs = new Set<string>();
+
+  const ensureNode = (location: DuplicateUnitRef) => {
+    const key = unitRefRangeIdentity(location);
+    locationsByKey.set(key, location);
+    if (!adjacency.has(key)) adjacency.set(key, new Set<string>());
+    return key;
+  };
+
+  for (const group of groups) {
+    const locations = groupLocations(group);
+    locationsByGroupId.set(group.id, locations);
+    const keys = locations.map(ensureNode);
+    const firstKey = keys[0];
+    if (!firstKey) continue;
+    for (const key of keys.slice(1)) {
+      adjacency.get(firstKey)?.add(key);
+      adjacency.get(key)?.add(firstKey);
+    }
+    coveredPairs.add(orderedUnitRangePairKey(group.primaryLeft, group.primaryRight));
+    for (const variant of group.variants) {
+      coveredPairs.add(orderedUnitRangePairKey(variant.left, variant.right));
+    }
+  }
+
+  const componentByKey = new Map<string, DuplicateUnitRef[]>();
+  const visited = new Set<string>();
+  for (const key of Array.from(adjacency.keys()).sort()) {
+    if (visited.has(key)) continue;
+    const stack = [key];
+    const componentKeys: string[] = [];
+    visited.add(key);
+    while (stack.length) {
+      const current = stack.pop()!;
+      componentKeys.push(current);
+      for (const next of adjacency.get(current) ?? []) {
+        if (visited.has(next)) continue;
+        visited.add(next);
+        stack.push(next);
+      }
+    }
+    const locations = componentKeys
+      .map((componentKey) => locationsByKey.get(componentKey))
+      .filter((location): location is DuplicateUnitRef => location !== undefined)
+      .sort(compareUnitRefs);
+    for (const componentKey of componentKeys) componentByKey.set(componentKey, locations);
+  }
+
+  return groups.map((group) => {
+    const localLocations = locationsByGroupId.get(group.id) ?? groupLocations(group);
+    const componentLocations = componentByKey.get(unitRefRangeIdentity(group.primaryLeft)) ?? localLocations;
+    const groupIds = groups
+      .filter((candidate) => {
+        const candidateLocations = locationsByGroupId.get(candidate.id) ?? groupLocations(candidate);
+        return candidateLocations.some((location) =>
+          componentLocations.some(
+            (componentLocation) => unitRefRangeIdentity(componentLocation) === unitRefRangeIdentity(location),
+          ),
+        );
+      })
+      .map((candidate) => candidate.id);
+    const cluster = groupClusterSummary(componentLocations, groupIds, coveredPairs);
+    const cleanupLabels = cleanupLabelsForGroup(group, localLocations);
+    if (!cleanupLabels.includes("test-helper-extraction") && cluster) {
+      if (cluster.files.length && cluster.files.every(isTestFile) && cluster.locationCount >= 3) {
+        cleanupLabels.push("test-helper-extraction");
+        cleanupLabels.sort();
+      }
+    }
+    return {
+      ...group,
+      locations: localLocations,
+      reducedLines: reducedLinesForPair(group.primaryLeft, group.primaryRight),
+      estimatedLinesSaved: group.estimatedLinesSaved,
+      cleanupLabels,
+      ...(cluster !== undefined ? { cluster } : {}),
+    };
+  });
+}
+
 function mergeReasonLists(reasonLists: Iterable<readonly string[]>): string[] {
   const reasons = new Set<string>();
   for (const reasonList of reasonLists) {
@@ -1825,7 +2164,7 @@ function groupForSuggestions(
     cloneType = bestCloneType(cloneType, suggestion.cloneType);
   }
   let reasons = mergeReasons(suggestions);
-  const primaryLengthRatio = ratio(left.primary.tokenCount, right.primary.tokenCount);
+  const primaryLengthRatio = ratio(primary.left.tokenCount, primary.right.tokenCount);
   if (primaryLengthRatio < GROUP_PRIMARY_LENGTH_RATIO_FLOOR) {
     score = Math.min(score, 64);
     confidence = "low";
@@ -1836,8 +2175,12 @@ function groupForSuggestions(
     score,
     confidence,
     cloneType,
-    primaryLeft: left.primary,
-    primaryRight: right.primary,
+    primaryLeft: primary.left,
+    primaryRight: primary.right,
+    locations: locationsForSuggestions(primary.left, primary.right, suggestions),
+    reducedLines: reducedLinesForPair(primary.left, primary.right),
+    estimatedLinesSaved: reducedLinesForPair(primary.left, primary.right),
+    cleanupLabels: [],
     variants,
     variantCount: variants.length,
     rawPairCount: suggestions.length,
@@ -1905,6 +2248,7 @@ function coalesceDuplicateGroups(groups: DuplicateGroup[], variantLimit: number)
       score,
       confidence,
       cloneType,
+      locations: mergeLocations(grouped.flatMap((group) => group.locations)),
       variants,
       variantCount: variants.length,
       rawPairCount,
@@ -1941,7 +2285,7 @@ function groupSuggestions(suggestions: readonly DuplicateSuggestion[], includeRa
   const groups = Array.from(suggestionsByGroup, ([key, value]) =>
     groupForSuggestions(key, value.suggestions, value.left, value.right, variantLimit),
   );
-  return coalesceDuplicateGroups(groups, variantLimit);
+  return enrichDuplicateGroups(coalesceDuplicateGroups(groups, variantLimit));
 }
 
 export async function findDuplicates(
@@ -2024,7 +2368,7 @@ async function findDuplicatesWithOpenDuplicateUnitCache(
   const omittedGroups = Math.max(0, groups.length - limitedGroups.length);
   const limitedRawSuggestions = includeRawPairs ? suggestions.slice(0, limit) : [];
   const result: DuplicateDetectionResult = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     units: units.length,
     groups: limitedGroups,
     omittedCounts: {
@@ -2268,7 +2612,7 @@ async function findDuplicatesTouchingTargets(
 
   suggestions.sort(compareSuggestions);
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     units: units.length,
     groups: [],
     suggestions,

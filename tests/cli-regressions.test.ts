@@ -390,6 +390,18 @@ describe("CLI regressions", () => {
     expect(nodes).not.toContain(normalize(specFile));
     expect(nodes).not.toContain(normalize(jsFile));
   });
+  it("graph rejects duplicates-only root-glob filters", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-root-glob-"));
+    const appFile = path.join(tmpDir, "src", "main.ts");
+    await fsp.mkdir(path.dirname(appFile), { recursive: true });
+    await fsp.writeFile(appFile, "export const main = 1;\n", "utf8");
+
+    await expect(
+      runCliInProcess(["graph", "--root", tmpDir, "--json", "--ignore-root-glob", "src/**"], tmpDir),
+    ).rejects.toThrow(
+      "The --include-root-glob and --ignore-root-glob flags are currently supported only by duplicates.",
+    );
+  });
 
   it("graph applies codegraph.config.json discovery ignores", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-config-ignore-"));

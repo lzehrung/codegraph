@@ -8,6 +8,7 @@ import { type NativeRuntimeMode } from "./native/treeSitterNative.js";
 import { handleChunkCommand } from "./cli/chunk.js";
 import {
   createCliProgressHandler,
+  diagnoseCliDiscoveryGlobs,
   exitCli,
   filterFilesByCliDiscoveryGlobs,
   getCwd,
@@ -196,17 +197,32 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   const projectRootAbs = projectRootFs.replace(/\\/g, "/");
   const includeGlobs = parsed.options.get("--include-glob") ?? [];
   const scanIgnoreGlobs = parsed.options.get("--ignore-glob") ?? [];
+  const rootIncludeGlobs = parsed.options.get("--include-root-glob") ?? [];
+  const rootIgnoreGlobs = parsed.options.get("--ignore-root-glob") ?? [];
   const cliGlobDiscoveryOptions: ProjectFileDiscoveryOptions = {
     ...(includeGlobs.length ? { includeGlobs } : {}),
     ...(scanIgnoreGlobs.length ? { ignoreGlobs: scanIgnoreGlobs } : {}),
   };
+  const supportsRootDiscoveryGlobs = cmd === "duplicates";
+  if (!supportsRootDiscoveryGlobs && (rootIncludeGlobs.length || rootIgnoreGlobs.length)) {
+    throw new Error("The --include-root-glob and --ignore-root-glob flags are currently supported only by duplicates.");
+  }
+  const activeCliRootGlobDiscoveryOptions: ProjectFileDiscoveryOptions = supportsRootDiscoveryGlobs
+    ? {
+        ...(rootIncludeGlobs.length ? { includeGlobs: rootIncludeGlobs } : {}),
+        ...(rootIgnoreGlobs.length ? { ignoreGlobs: rootIgnoreGlobs } : {}),
+      }
+    : {};
   const cliGitignoreDiscoveryOptions: ProjectFileDiscoveryOptions = {
     ...(hasFlag("--no-gitignore") ? { useGitignore: false } : {}),
   };
-  const explicitDiscoveryOptions: ProjectFileDiscoveryOptions = {
-    ...cliGlobDiscoveryOptions,
-    ...cliGitignoreDiscoveryOptions,
-  };
+  const explicitDiscoveryOptions = mergeDiscoveryOptions(cliGlobDiscoveryOptions, cliGitignoreDiscoveryOptions);
+  const hasCliDiscoveryGlobs = Boolean(
+    includeGlobs.length ||
+    scanIgnoreGlobs.length ||
+    activeCliRootGlobDiscoveryOptions.includeGlobs?.length ||
+    activeCliRootGlobDiscoveryOptions.ignoreGlobs?.length,
+  );
 
   if (cmd === "version") {
     if (hasFlag("--json")) {
@@ -261,14 +277,19 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   const config = await loadCodegraphConfig(projectRootFs);
-  const configDiscoveryOptions = mergeDiscoveryOptions(config.discovery, cliGitignoreDiscoveryOptions);
+  const baseDiscoveryOptions = mergeDiscoveryOptions(config.discovery, cliGitignoreDiscoveryOptions);
   const mergedDiscoveryOptions = mergeDiscoveryOptions(config.discovery, explicitDiscoveryOptions);
+  const rootFilteredDiscoveryOptions = mergeDiscoveryOptions(baseDiscoveryOptions, activeCliRootGlobDiscoveryOptions);
   const discoveryOptions: ProjectFileDiscoveryOptions = hasDiscoveryOptions(mergedDiscoveryOptions)
     ? { ...mergedDiscoveryOptions, globRoot: projectRootFs }
     : {};
-  const includeRootDiscoveryOptions: ProjectFileDiscoveryOptions = hasDiscoveryOptions(configDiscoveryOptions)
-    ? { ...configDiscoveryOptions, globRoot: projectRootFs }
+  const diagnosticDiscoveryOptions: ProjectFileDiscoveryOptions = hasDiscoveryOptions(baseDiscoveryOptions)
+    ? { ...baseDiscoveryOptions, globRoot: projectRootFs }
     : {};
+  const includeRootDiscoveryOptions: ProjectFileDiscoveryOptions = hasDiscoveryOptions(rootFilteredDiscoveryOptions)
+    ? { ...rootFilteredDiscoveryOptions, globRoot: projectRootFs }
+    : {};
+  const cliGlobDiagnostics: string[] = [];
 
   const supportsIncludeRoots =
     cmd === "graph" ||
@@ -303,21 +324,70 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     const f = filePath.replace(/\\/g, "/");
     return includeRootsAbs.some((root) => f === root || f.startsWith(`${root}/`));
   };
+  const displayScanRoot = (scanRoot: string): string => {
+    const relative = normalizePath(path.relative(projectRootFs, scanRoot));
+    if (!relative) return ".";
+    return relative;
+  };
+
+  const recordCliGlobDiagnostics = (files: readonly string[], scanRoot: string): void => {
+    for (const diagnostic of diagnoseCliDiscoveryGlobs(files, scanRoot, projectRootFs, cliGlobDiscoveryOptions)) {
+      const optionName = diagnostic.kind === "include" ? "--include-glob" : "--ignore-glob";
+      let message = `Warning: ${optionName} "${diagnostic.glob}" matched no files under scan root "${displayScanRoot(
+        diagnostic.scanRoot,
+      )}". CLI globs are relative to each active scan root.`;
+      if (diagnostic.suggestion) {
+        message += ` Did you mean "${diagnostic.suggestion}"?`;
+      }
+      cliGlobDiagnostics.push(message);
+    }
+  };
+  const fileMatchesCliScanGlobs = (filePath: string): boolean => {
+    if (!includeRootsAbs.length) {
+      return filterFilesByCliDiscoveryGlobs([filePath], projectRootFs, cliGlobDiscoveryOptions).length > 0;
+    }
+    return includeRootsAbs.some((scanRoot) => {
+      const normalizedFile = filePath.replace(/\\/g, "/");
+      if (normalizedFile !== scanRoot && !normalizedFile.startsWith(`${scanRoot}/`)) return false;
+      return filterFilesByCliDiscoveryGlobs([filePath], scanRoot, cliGlobDiscoveryOptions).length > 0;
+    });
+  };
+
+  const applyCliDiscoveryFilters = (files: readonly string[]): string[] => {
+    const rootFilteredFiles = filterFilesByCliDiscoveryGlobs(files, projectRootFs, activeCliRootGlobDiscoveryOptions);
+    return rootFilteredFiles.filter((filePath) => fileMatchesCliScanGlobs(filePath));
+  };
 
   const resolveFilesFromRoots = async (): Promise<string[]> => {
     const patterns = cmd === "duplicates" ? DUPLICATE_PROJECT_PATTERNS : undefined;
-    if (!includeRootsAbs.length) return await listProjectFiles(projectRootFs, patterns, discoveryOptions);
+    if (!includeRootsAbs.length) {
+      const diagnosticFiles = await listProjectFiles(projectRootFs, patterns, {
+        ...diagnosticDiscoveryOptions,
+        gitignoreRoot: projectRootFs,
+      });
+      recordCliGlobDiagnostics(diagnosticFiles, projectRootFs);
+      flushCliGlobDiagnostics();
+      if (!hasDiscoveryOptions(activeCliRootGlobDiscoveryOptions)) {
+        return await listProjectFiles(projectRootFs, patterns, {
+          ...discoveryOptions,
+          gitignoreRoot: projectRootFs,
+        });
+      }
+      return applyCliDiscoveryFilters(diagnosticFiles);
+    }
     const normalizedRoots = includeRootsAbs;
     const all: string[][] = await Promise.all(
       normalizedRoots.map(async (r) => {
         const files = await listProjectFiles(r, patterns, {
-          ...includeRootDiscoveryOptions,
+          ...diagnosticDiscoveryOptions,
           gitignoreRoot: projectRootFs,
         });
-        return filterFilesByCliDiscoveryGlobs(files, r, cliGlobDiscoveryOptions);
+        recordCliGlobDiagnostics(files, r);
+        return files;
       }),
     );
-    return Array.from(new Set(all.flat()));
+    flushCliGlobDiagnostics();
+    return applyCliDiscoveryFilters(Array.from(new Set(all.flat())));
   };
 
   const listProjectFilesForScan = async (scanRoot: string): Promise<string[]> => {
@@ -347,20 +417,54 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     return null;
   };
 
+  const flushCliGlobDiagnostics = (): void => {
+    for (const diagnostic of Array.from(new Set(cliGlobDiagnostics))) {
+      writeStderrLine(diagnostic);
+    }
+    cliGlobDiagnostics.length = 0;
+  };
+
+  const emitCliGlobDiagnosticsForChangedFiles = async (files: readonly string[]): Promise<void> => {
+    if (!cliGlobDiscoveryOptions.includeGlobs?.length && !cliGlobDiscoveryOptions.ignoreGlobs?.length) return;
+    const patterns = cmd === "duplicates" ? DUPLICATE_PROJECT_PATTERNS : undefined;
+    const deletedFiles = files.filter((filePath) => !fs.existsSync(filePath));
+    const scanRoots = includeRootsAbs.length ? includeRootsAbs : [projectRootFs];
+    await Promise.all(
+      scanRoots.map(async (scanRoot) => {
+        const currentFiles = fs.existsSync(scanRoot)
+          ? await listProjectFiles(scanRoot, patterns, {
+              ...diagnosticDiscoveryOptions,
+              gitignoreRoot: projectRootFs,
+            })
+          : [];
+        const deletedScanRootFiles = deletedFiles.filter((filePath) => {
+          const normalizedFile = filePath.replace(/\\/g, "/");
+          return normalizedFile === scanRoot || normalizedFile.startsWith(`${scanRoot}/`);
+        });
+        recordCliGlobDiagnostics(Array.from(new Set([...currentFiles, ...deletedScanRootFiles])), scanRoot);
+      }),
+    );
+    flushCliGlobDiagnostics();
+  };
+
   const resolveChangedFilesWithDeletes = async (): Promise<{
     existingFiles: string[];
     deletedFiles: string[];
   } | null> => {
     const gitFiles = await resolveChangedFiles();
     if (!gitFiles) return null;
+    await emitCliGlobDiagnosticsForChangedFiles(gitFiles);
     const existence = gitFiles.map((file: string) => ({
       file,
       exists: fs.existsSync(file),
     }));
-    return {
-      existingFiles: existence.filter((entry) => entry.exists).map((entry) => entry.file),
-      deletedFiles: existence.filter((entry) => !entry.exists).map((entry) => entry.file),
-    };
+    const existingFiles = applyCliDiscoveryFilters(
+      existence.filter((entry) => entry.exists).map((entry) => entry.file),
+    );
+    const deletedFiles = applyCliDiscoveryFilters(
+      existence.filter((entry) => !entry.exists).map((entry) => entry.file),
+    );
+    return { existingFiles, deletedFiles };
   };
 
   const resolveFiles = async (): Promise<string[]> => {
@@ -473,6 +577,11 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "graph-delta") {
+    if (hasCliDiscoveryGlobs && (gitBase || changedSince)) {
+      throw new Error(
+        "graph-delta does not support CLI discovery globs together with --git-base/--git-head or --changed-since.",
+      );
+    }
     const files = await resolveFiles();
     await handleGraphDeltaCommand({
       projectRootFs,
@@ -492,6 +601,11 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "graph") {
+    if (hasCliDiscoveryGlobs && (gitBase || changedSince) && (getOpt("--sqlite") || getOpt("--db"))) {
+      throw new Error(
+        "graph does not support CLI discovery globs together with --git-base/--git-head or --changed-since when --sqlite/--db is used.",
+      );
+    }
     const { handleGraphCommand } = await import("./cli/graph.js");
     await handleGraphCommand({
       projectRootFs,

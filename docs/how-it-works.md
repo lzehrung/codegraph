@@ -21,7 +21,7 @@ Runtime behavior, performance characteristics, architecture, extension points, a
 
 - Keep large fixtures, generated trees, and vendored code out of default scans with `codegraph.config.json`.
 - `discovery.ignoreGlobs` reduces the file set before indexing, search text reads, unresolved-import checks, graphing, impact, and review work.
-- CLI `--include-glob` and `--ignore-glob` are additive one-off filters. `--no-gitignore` disables gitignore filtering for that command.
+- CLI `--include-glob` and `--ignore-glob` are additive one-off scan-root-relative filters. `--no-gitignore` disables gitignore filtering for that command.
 
 ### Caching
 
