@@ -776,16 +776,14 @@ function looksLikeBarrelStatement(statement: string): boolean {
   return !/\b(?:const|let|var|function|class|return|if|for|while|switch|import|new)\b/u.test(statement.slice(6));
 }
 
-function looksLikeImportListText(text: string): boolean {
+function duplicateTextHeuristics(text: string): { looksLikeImportList: boolean; looksLikeBarrel: boolean } {
   const statements = maskedDuplicateStatements(text);
-  if (!statements.length || statements.length > 12) return false;
-  return statements.every(looksLikeImportStatement);
-}
-
-function looksLikeBarrelText(text: string): boolean {
-  const statements = maskedDuplicateStatements(text);
-  if (!statements.length || statements.length > 12) return false;
-  return statements.every(looksLikeBarrelStatement);
+  if (!statements.length || statements.length > 12) {
+    return { looksLikeImportList: false, looksLikeBarrel: false };
+  }
+  const looksLikeImportList = statements.every(looksLikeImportStatement);
+  const looksLikeBarrel = statements.every(looksLikeBarrelStatement);
+  return { looksLikeImportList, looksLikeBarrel };
 }
 
 /** Adds hashes, normalized tokens, and fingerprints to a reportable unit. */
@@ -805,6 +803,7 @@ function buildInternalUnit(
   const fileHandle = formatDuplicateFileHandle(unit.file);
   const chunkHandle = formatDuplicateChunkHandle(unit.file, unit.startLine);
   const handle = handles.sqlHandle ?? handles.symbolHandle ?? chunkHandle;
+  const heuristics = duplicateTextHeuristics(text);
   return {
     ...unit,
     id: internalUnitId(unit, absoluteFile),
@@ -819,8 +818,8 @@ function buildInternalUnit(
     chunkHandle,
     ...(handles.sqlHandle !== undefined ? { sqlHandle: handles.sqlHandle } : {}),
     ...(handles.symbolHandle !== undefined ? { symbolHandle: handles.symbolHandle } : {}),
-    ...(looksLikeImportListText(text) ? { looksLikeImportList: true } : {}),
-    ...(looksLikeBarrelText(text) ? { looksLikeBarrel: true } : {}),
+    ...(heuristics.looksLikeImportList ? { looksLikeImportList: true } : {}),
+    ...(heuristics.looksLikeBarrel ? { looksLikeBarrel: true } : {}),
     normalizedTokens,
     tokenSet: new Set(normalizedTokens),
     signatures,

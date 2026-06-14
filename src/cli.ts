@@ -342,20 +342,24 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       cliGlobDiagnostics.push(message);
     }
   };
-  const fileMatchesCliScanGlobs = (filePath: string): boolean => {
-    if (!includeRootsAbs.length) {
-      return filterFilesByCliDiscoveryGlobs([filePath], projectRootFs, cliGlobDiscoveryOptions).length > 0;
-    }
-    return includeRootsAbs.some((scanRoot) => {
-      const normalizedFile = filePath.replace(/\\/g, "/");
-      if (normalizedFile !== scanRoot && !normalizedFile.startsWith(`${scanRoot}/`)) return false;
-      return filterFilesByCliDiscoveryGlobs([filePath], scanRoot, cliGlobDiscoveryOptions).length > 0;
-    });
-  };
 
   const applyCliDiscoveryFilters = (files: readonly string[]): string[] => {
     const rootFilteredFiles = filterFilesByCliDiscoveryGlobs(files, projectRootFs, activeCliRootGlobDiscoveryOptions);
-    return rootFilteredFiles.filter((filePath) => fileMatchesCliScanGlobs(filePath));
+    if (!includeRootsAbs.length) {
+      return filterFilesByCliDiscoveryGlobs(rootFilteredFiles, projectRootFs, cliGlobDiscoveryOptions);
+    }
+
+    const matchedFiles = new Set<string>();
+    for (const scanRoot of includeRootsAbs) {
+      const scanRootFiles = rootFilteredFiles.filter((filePath) => {
+        const normalizedFile = filePath.replace(/\\/g, "/");
+        return normalizedFile === scanRoot || normalizedFile.startsWith(`${scanRoot}/`);
+      });
+      for (const filePath of filterFilesByCliDiscoveryGlobs(scanRootFiles, scanRoot, cliGlobDiscoveryOptions)) {
+        matchedFiles.add(filePath);
+      }
+    }
+    return rootFilteredFiles.filter((filePath) => matchedFiles.has(filePath));
   };
 
   const resolveFilesFromRoots = async (): Promise<string[]> => {
