@@ -33,6 +33,8 @@ describe("project file discovery", () => {
     expect(parseDotnetName("<Project><PropertyGroup><PackageId>DotNet.App</PackageId></PropertyGroup></Project>")).toBe(
       "DotNet.App",
     );
+    expect(parseTomlName('[project]\nname = "py#app" # comment\n', ["project"])).toBe("py#app");
+    expect(parseGoModuleName("module example.com/app # keep comment out\n")).toBe("example.com/app");
   });
 
   it("fails explicitly when the project root is invalid", async () => {

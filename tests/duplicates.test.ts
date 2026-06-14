@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, test } from "vitest";
+import { captureCli, runCliOrThrow } from "./helpers/cli.js";
 import { runCli } from "../src/cli.js";
 import { appendDuplicateLeadSummary } from "../src/duplicatesLeads.js";
 import { buildProjectIndex, findDuplicateContext, findDuplicateContexts, findDuplicates } from "../src/index.js";
@@ -27,33 +28,16 @@ async function writeProjectFile(root: string, relativePath: string, source: stri
   await fsp.writeFile(filePath, source);
   return filePath;
 }
-
-async function captureCli(
-  args: string[],
-  cwd: string,
-): Promise<{ stdout: string; stderr: string; exitCode: number | undefined }> {
-  let stdout = "";
-  let stderr = "";
-  let exitCode: number | undefined;
-
+async function runDuplicatesCliForValidation(args: string[], cwd: string): Promise<void> {
   await runCli(args, {
     cwd: () => cwd,
-    stdout: (chunk) => {
-      stdout += chunk;
-    },
-    stderr: (chunk) => {
-      stderr += chunk;
-    },
+    stdout: () => {},
+    stderr: () => {},
+    readStdin: async () => "",
     exit: (code) => {
-      exitCode = code;
-      throw new Error(`cli exit ${code}`);
+      throw new Error(`unexpected duplicates CLI exit ${code}`);
     },
-  }).catch((error: unknown) => {
-    if (error instanceof Error && exitCode !== undefined && error.message === `cli exit ${exitCode}`) return;
-    throw error;
   });
-
-  return { stdout, stderr, exitCode };
 }
 
 afterEach(async () => {
@@ -1146,7 +1130,7 @@ export function sharedClone(rows) {
 
     const result = await captureCli(
       ["duplicates", "--root", ".", "configs", "--json", "--min-confidence", "high", "--limit", "1"],
-      root,
+      { cwd: root },
     );
     const parsed = JSON.parse(result.stdout) as {
       groups?: Array<{ primaryLeft?: { file?: string; tokenCount?: number }; primaryRight?: { file?: string } }>;
@@ -1193,7 +1177,7 @@ export function ignoredOrders(rows: number[]) {
         "docs/**",
         "--include-small",
       ],
-      root,
+      { cwd: root },
     );
     const parsed = JSON.parse(result.stdout) as {
       groups?: Array<{ primaryLeft?: { file?: string }; primaryRight?: { file?: string } }>;
@@ -1212,14 +1196,7 @@ export function ignoredOrders(rows: number[]) {
     await writeProjectFile(root, "src/a.ts", "export const a = 1;\n");
 
     await expect(
-      runCli(["duplicates", "--root", ".", "src", "--ignore-glob", "tests/**", "docs/**"], {
-        cwd: () => root,
-        stdout: () => {},
-        stderr: () => {},
-        exit: (code) => {
-          throw new Error(`cli exit ${code}`);
-        },
-      }),
+      runDuplicatesCliForValidation(["duplicates", "--root", ".", "src", "--ignore-glob", "tests/**", "docs/**"], root),
     ).rejects.toThrow('Invalid duplicates path "docs/**". Positional paths are scan roots, not glob patterns.');
   });
   test("duplicates CLI accepts literal include roots with bracketed directory names", async () => {
@@ -1233,7 +1210,9 @@ export function formatUsage(value: string) {
     await writeProjectFile(root, "src/app/[slug]/a.ts", source);
     await writeProjectFile(root, "src/app/[slug]/b.ts", source);
 
-    const result = await captureCli(["duplicates", "--root", ".", "src/app/[slug]", "--json", "--include-small"], root);
+    const result = await captureCli(["duplicates", "--root", ".", "src/app/[slug]", "--json", "--include-small"], {
+      cwd: root,
+    });
     const parsed = JSON.parse(result.stdout) as {
       groups?: Array<{ primaryLeft?: { file?: string }; primaryRight?: { file?: string } }>;
     };
@@ -1247,77 +1226,42 @@ export function formatUsage(value: string) {
     const root = await makeTempProject();
     await writeProjectFile(root, "src/a.ts", "export const a = 1;\n");
 
-    await expect(
-      runCli(["duplicates", "src/{api,web}"], {
-        cwd: () => root,
-        stdout: () => {},
-        stderr: () => {},
-        exit: (code) => {
-          throw new Error(`cli exit ${code}`);
-        },
-      }),
-    ).rejects.toThrow('Invalid duplicates path "src/{api,web}". Positional paths are scan roots, not glob patterns.');
+    await expect(runCliOrThrow(["duplicates", "src/{api,web}"], { cwd: root })).rejects.toThrow(
+      'Invalid duplicates path "src/{api,web}". Positional paths are scan roots, not glob patterns.',
+    );
   });
   test("duplicates CLI rejects character-class positional roots with guidance", async () => {
     const root = await makeTempProject();
     await writeProjectFile(root, "src/a.ts", "export const a = 1;\n");
 
-    await expect(
-      runCli(["duplicates", "src/[ab]"], {
-        cwd: () => root,
-        stdout: () => {},
-        stderr: () => {},
-        exit: (code) => {
-          throw new Error(`cli exit ${code}`);
-        },
-      }),
-    ).rejects.toThrow('Invalid duplicates path "src/[ab]". Positional paths are scan roots, not glob patterns.');
+    await expect(runCliOrThrow(["duplicates", "src/[ab]"], { cwd: root })).rejects.toThrow(
+      'Invalid duplicates path "src/[ab]". Positional paths are scan roots, not glob patterns.',
+    );
   });
   test("duplicates CLI rejects range-style positional roots with guidance", async () => {
     const root = await makeTempProject();
     await writeProjectFile(root, "src/a.ts", "export const a = 1;\n");
 
-    await expect(
-      runCli(["duplicates", "src/[a-z]"], {
-        cwd: () => root,
-        stdout: () => {},
-        stderr: () => {},
-        exit: (code) => {
-          throw new Error(`cli exit ${code}`);
-        },
-      }),
-    ).rejects.toThrow('Invalid duplicates path "src/[a-z]". Positional paths are scan roots, not glob patterns.');
+    await expect(runCliOrThrow(["duplicates", "src/[a-z]"], { cwd: root })).rejects.toThrow(
+      'Invalid duplicates path "src/[a-z]". Positional paths are scan roots, not glob patterns.',
+    );
   });
   test("duplicates CLI rejects longer character-class positional roots with guidance", async () => {
     const root = await makeTempProject();
     await writeProjectFile(root, "src/a.ts", "export const a = 1;\n");
 
-    await expect(
-      runCli(["duplicates", "src/[abc]"], {
-        cwd: () => root,
-        stdout: () => {},
-        stderr: () => {},
-        exit: (code) => {
-          throw new Error(`cli exit ${code}`);
-        },
-      }),
-    ).rejects.toThrow('Invalid duplicates path "src/[abc]". Positional paths are scan roots, not glob patterns.');
+    await expect(runCliOrThrow(["duplicates", "src/[abc]"], { cwd: root })).rejects.toThrow(
+      'Invalid duplicates path "src/[abc]". Positional paths are scan roots, not glob patterns.',
+    );
   });
 
   test("duplicates CLI rejects glob-like single positional roots with guidance", async () => {
     const root = await makeTempProject();
     await writeProjectFile(root, "src/a.ts", "export const a = 1;\n");
 
-    await expect(
-      runCli(["duplicates", "docs/**"], {
-        cwd: () => root,
-        stdout: () => {},
-        stderr: () => {},
-        exit: (code) => {
-          throw new Error(`cli exit ${code}`);
-        },
-      }),
-    ).rejects.toThrow('Invalid duplicates path "docs/**". Positional paths are scan roots, not glob patterns.');
+    await expect(runCliOrThrow(["duplicates", "docs/**"], { cwd: root })).rejects.toThrow(
+      'Invalid duplicates path "docs/**". Positional paths are scan roots, not glob patterns.',
+    );
   });
   test("duplicates CLI does not mark help-prefixed helpers as cli boilerplate", async () => {
     const root = await makeTempProject();
@@ -1330,7 +1274,7 @@ export function helpTextForCommand(value: string) {
     await writeProjectFile(root, "src/cli/a.ts", source);
     await writeProjectFile(root, "src/cli/b.ts", source);
 
-    const result = await captureCli(["duplicates", "--root", ".", "src", "--pretty", "--include-small"], root);
+    const result = await captureCli(["duplicates", "--root", ".", "src", "--pretty", "--include-small"], { cwd: root });
 
     expect(result.exitCode).toBeUndefined();
     expect(result.stdout).not.toContain("family=cli-boilerplate");
@@ -1347,7 +1291,7 @@ export function formatUsage(value: string) {
     await writeProjectFile(root, "src/cli/a.ts", source);
     await writeProjectFile(root, "src/cli/b.ts", source);
 
-    const result = await captureCli(["duplicates", "--root", ".", "src", "--include-small"], root);
+    const result = await captureCli(["duplicates", "--root", ".", "src", "--include-small"], { cwd: root });
 
     expect(result.exitCode).toBeUndefined();
     expect(result.stdout).toContain("Duplicate groups shown:");
@@ -1366,7 +1310,7 @@ export function formatUsage(value: string) {
     await writeProjectFile(root, "src/cli/a.ts", source);
     await writeProjectFile(root, "src/cli/b.ts", source);
 
-    const result = await captureCli(["duplicates", "--root", ".", "src", "--pretty", "--include-small"], root);
+    const result = await captureCli(["duplicates", "--root", ".", "src", "--pretty", "--include-small"], { cwd: root });
 
     expect(result.exitCode).toBeUndefined();
     expect(result.stdout).toContain("Sorted by: actionability");
@@ -1386,7 +1330,7 @@ export function summarizeOrders(rows: number[]) {
     await writeProjectFile(root, "src/a.ts", source);
     await writeProjectFile(root, "src/b.ts", source);
 
-    const result = await captureCli(["duplicates", "--root", ".", "src", "--pretty", "--raw-pairs"], root);
+    const result = await captureCli(["duplicates", "--root", ".", "src", "--pretty", "--raw-pairs"], { cwd: root });
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain(
@@ -1406,7 +1350,7 @@ export function summarizeOrders(rows: number[]) {
     await writeProjectFile(root, "src/a.ts", source);
     await writeProjectFile(root, "src/b.ts", source);
 
-    const result = await captureCli(["duplicates", "--root", ".", "src", "--json", "--pretty"], root);
+    const result = await captureCli(["duplicates", "--root", ".", "src", "--json", "--pretty"], { cwd: root });
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("Invalid flag combination: choose either --json or --pretty.");
@@ -1424,10 +1368,9 @@ export function summarizeOrders(rows: number[]) {
     await writeProjectFile(root, "src/a.ts", source);
     await writeProjectFile(root, "src/b.ts", source);
 
-    const result = await captureCli(
-      ["duplicates", "--root", ".", "src", "--sort", "actionability", "--raw-pairs"],
-      root,
-    );
+    const result = await captureCli(["duplicates", "--root", ".", "src", "--sort", "actionability", "--raw-pairs"], {
+      cwd: root,
+    });
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain(
@@ -1465,13 +1408,12 @@ export interface NormalizedModeMap {
     await writeProjectFile(root, "types/a.d.ts", declarationDuplicate);
     await writeProjectFile(root, "types/b.d.ts", declarationDuplicate);
 
-    const defaultResult = await captureCli(
-      ["duplicates", "--root", ".", "--json", "--include-small", "--limit", "1"],
-      root,
-    );
+    const defaultResult = await captureCli(["duplicates", "--root", ".", "--json", "--include-small", "--limit", "1"], {
+      cwd: root,
+    });
     const actionabilityResult = await captureCli(
       ["duplicates", "--root", ".", "--json", "--sort", "actionability", "--include-small", "--limit", "1"],
-      root,
+      { cwd: root },
     );
     const defaultParsed = JSON.parse(defaultResult.stdout) as {
       groups?: Array<{ primaryLeft?: { file?: string }; primaryRight?: { file?: string } }>;
@@ -1522,12 +1464,11 @@ export interface NormalizedModeMap {
     await writeProjectFile(root, "types/b.d.ts", declarationDuplicate);
     const result = await captureCli(
       ["duplicates", "--root", ".", "--json", "--sort", "actionability", "--include-small", "--limit", "1"],
-      root,
+      { cwd: root },
     );
-    const defaultResult = await captureCli(
-      ["duplicates", "--root", ".", "--json", "--include-small", "--limit", "1"],
-      root,
-    );
+    const defaultResult = await captureCli(["duplicates", "--root", ".", "--json", "--include-small", "--limit", "1"], {
+      cwd: root,
+    });
     const defaultParsed = JSON.parse(defaultResult.stdout) as {
       omittedCounts?: { groups?: number; suggestions?: number; rawSuggestions?: number };
     };
@@ -1549,7 +1490,7 @@ export interface NormalizedModeMap {
     await writeProjectFile(root, "types/a.d.ts", source);
     await writeProjectFile(root, "types/b.d.ts", source);
 
-    const result = await captureCli(["duplicates", "--root", ".", "--pretty", "--include-small"], root);
+    const result = await captureCli(["duplicates", "--root", ".", "--pretty", "--include-small"], { cwd: root });
 
     expect(result.exitCode).toBeUndefined();
     expect(result.stdout).toContain("family=declaration-mirror");
@@ -1571,7 +1512,7 @@ export function summarizeOrders(rows: number[]) {
 
     const result = await captureCli(
       ["duplicates", "--root", ".", "src", "--pretty", "--include-small", "--limit", "0"],
-      root,
+      { cwd: root },
     );
 
     expect(result.exitCode).toBeUndefined();
@@ -1586,7 +1527,7 @@ export function summarizeOrders(rows: number[]) {
     await writeProjectFile(root, "src/a.ts", source);
     await writeProjectFile(root, "types/a.d.ts", source);
 
-    const result = await captureCli(["duplicates", "--root", ".", "--pretty", "--include-small"], root);
+    const result = await captureCli(["duplicates", "--root", ".", "--pretty", "--include-small"], { cwd: root });
 
     expect(result.exitCode).toBeUndefined();
     expect(result.stdout).toContain("src/a.ts:1-1");
@@ -1780,7 +1721,9 @@ export function summarizeOrders(rows: Array<{ amount: number; tax: number }>) {
     await writeProjectFile(root, "src/orders-a.ts", source);
     await writeProjectFile(root, "src/orders-b.ts", source);
 
-    const result = await captureCli(["duplicates", "src", "--json", "--min-confidence", "high", "--limit", "1"], root);
+    const result = await captureCli(["duplicates", "src", "--json", "--min-confidence", "high", "--limit", "1"], {
+      cwd: root,
+    });
     const parsed = JSON.parse(result.stdout) as { groups?: Array<{ score?: number }> };
 
     expect(result.exitCode).toBeUndefined();
@@ -1809,11 +1752,11 @@ export function summarizeOrders(rows: Array<{ amount: number; tax: number }>) {
 
     const defaultResult = await captureCli(
       ["duplicates", "src", "--json", "--min-confidence", "high", "--limit", "5"],
-      root,
+      { cwd: root },
     );
     const rawResult = await captureCli(
       ["duplicates", "src", "--json", "--min-confidence", "high", "--limit", "5", "--raw-pairs"],
-      root,
+      { cwd: root },
     );
     const defaultParsed = JSON.parse(defaultResult.stdout) as { suggestions?: unknown[] };
     const rawParsed = JSON.parse(rawResult.stdout) as { suggestions?: unknown[] };
@@ -1839,10 +1782,9 @@ export function sameRows(rows: number[]) {
     await writeProjectFile(root, "src/a.ts", source);
     await writeProjectFile(root, "src/b.ts", source);
 
-    const result = await captureCli(
-      ["duplicates", "--root", ".", "src", "--json", "--limit", "0", "--include-small"],
-      root,
-    );
+    const result = await captureCli(["duplicates", "--root", ".", "src", "--json", "--limit", "0", "--include-small"], {
+      cwd: root,
+    });
     const parsed = JSON.parse(result.stdout) as {
       groups?: unknown[];
       omittedCounts?: { groups?: number; suggestions?: number; candidatePairs?: number };

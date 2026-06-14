@@ -1,13 +1,10 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { runCliOrThrow, runCliStdout, runTsxScriptOrThrow } from "./helpers/cli.js";
 import os from "node:os";
 import fsp from "node:fs/promises";
-import { runCli } from "../src/cli.js";
 import { runGit } from "./helpers/git.js";
 
-const tsxCliPath = path.resolve(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs");
-const codegraphCliPath = path.resolve(process.cwd(), "src", "cli.ts");
 const sampleRoot = path.resolve(process.cwd(), "tests", "samples", "typescript");
 const slowCliTimeoutMs = 30000;
 const impactDiff = `diff --git a/utils.ts b/utils.ts
@@ -34,33 +31,20 @@ function stdinForImpactCli(opts?: { stdin?: string }): string {
 }
 
 async function runImpactCli(args: string[], opts?: { cwd?: string; stdin?: string }): Promise<string> {
-  let stdout = "";
-  let stderr = "";
-  let exitCode: number | undefined;
+  return await runCliStdout(args, {
+    cwd: opts?.cwd,
+    stdin: () => stdinForImpactCli(opts),
+  });
+}
 
-  try {
-    await runCli(args, {
-      cwd: () => opts?.cwd ?? process.cwd(),
-      stdout: (chunk) => {
-        stdout += chunk;
-      },
-      stderr: (chunk) => {
-        stderr += chunk;
-      },
-      readStdin: async () => stdinForImpactCli(opts),
-      exit: (code) => {
-        exitCode = code;
-        throw new Error(`codegraph CLI exited ${code}`);
-      },
-    });
-  } catch (error) {
-    if (exitCode !== undefined) {
-      throw new Error(`codegraph CLI failed (${exitCode}). stderr:\n${stderr}`);
-    }
-    throw error;
-  }
-
-  return stdout;
+async function runCodegraphCliResult(
+  args: string[],
+  opts?: { cwd?: string; stdin?: string },
+): Promise<{ stdout: string; stderr: string }> {
+  return await runCliOrThrow(args, {
+    cwd: opts?.cwd,
+    stdin: opts?.stdin,
+  });
 }
 
 async function runCodegraphCli(args: string[], opts?: { cwd?: string; stdin?: string }): Promise<string> {
@@ -68,64 +52,17 @@ async function runCodegraphCli(args: string[], opts?: { cwd?: string; stdin?: st
   return result.stdout;
 }
 
-async function runCodegraphCliResult(
-  args: string[],
-  opts?: { cwd?: string; stdin?: string },
-): Promise<{ stdout: string; stderr: string }> {
-  let stdout = "";
-  let stderr = "";
-  let exitCode: number | undefined;
-
-  try {
-    await runCli(args, {
-      cwd: () => opts?.cwd ?? process.cwd(),
-      stdout: (chunk) => {
-        stdout += chunk;
-      },
-      stderr: (chunk) => {
-        stderr += chunk;
-      },
-      readStdin: async () => opts?.stdin ?? "",
-      exit: (code) => {
-        exitCode = code;
-        throw new Error(`codegraph CLI exited ${code}`);
-      },
-    });
-  } catch (error) {
-    if (exitCode !== undefined) {
-      throw new Error(`codegraph CLI failed (${exitCode}). stderr:\n${stderr}`);
-    }
-    throw error;
-  }
-
-  return { stdout, stderr };
-}
-
-function runImpactCliSubprocess(args: string[], opts?: { cwd?: string; stdin?: string }) {
-  return new Promise<string>((resolve, reject) => {
-    const child = spawn(process.execPath, [tsxCliPath, codegraphCliPath, ...args], {
-      cwd: opts?.cwd ?? process.cwd(),
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-    child.stdin.write(stdinForImpactCli(opts));
-    child.stdin.end();
-    child.on("error", reject);
-    child.on("exit", (code) => {
-      if (code !== 0) {
-        reject(new Error(`codegraph CLI failed (${code}). stderr:\n${stderr}`));
-        return;
-      }
-      resolve(stdout);
-    });
-  });
+async function runImpactCliSubprocess(args: string[], opts?: { cwd?: string; stdin?: string }): Promise<string> {
+  const result = await runTsxScriptOrThrow(
+    path.resolve(process.cwd(), "src", "cli.ts"),
+    args,
+    {
+      cwd: opts?.cwd,
+      stdin: stdinForImpactCli(opts),
+    },
+    "codegraph CLI",
+  );
+  return result.stdout;
 }
 
 describe("impact CLI output", () => {

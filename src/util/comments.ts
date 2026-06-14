@@ -1,3 +1,25 @@
+export type InlineCommentTrimMode = "preserve" | "trim";
+
+export function stripHashInlineComment(line: string, trimMode: InlineCommentTrimMode): string {
+  let quote: "'" | '"' | null = null;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (ch === "#") {
+      const stripped = line.slice(0, i);
+      return trimMode === "trim" ? stripped.trim() : stripped;
+    }
+  }
+  return trimMode === "trim" ? line.trim() : line;
+}
+
 function transformJsLikeTrivia(src: string, options?: { maskStrings?: boolean; preserveLength?: boolean }): string {
   let out = "";
   let i = 0;

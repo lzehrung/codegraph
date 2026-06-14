@@ -7,6 +7,7 @@ import { collectImportsForFile, collectLocalsAndExportsFromSource, parseFile } f
 import { languageForFile, supportForFile } from "../src/languages.js";
 import { collectModuleSpecifiersFromSource } from "../src/graphs.js";
 import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
+import { simplifyNativeTestImports, simplifyNativeTestModuleIndex } from "./helpers/native.js";
 
 const nativeDescribe = isNativeTreeSitterAvailable() ? describe : describe.skip;
 const jsFallbackDescribe = isJsFallbackAvailable() ? describe : describe.skip;
@@ -22,55 +23,6 @@ async function makeTempProject(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-native-"));
   tempDirs.push(dir);
   return dir;
-}
-
-function simplifyImports(imports: Awaited<ReturnType<typeof collectImportsForFile>>): unknown[] {
-  return imports.map((entry) => ({
-    ...entry,
-    resolved: typeof entry.resolved === "string" ? entry.resolved.replace(/\\/g, "/") : entry.resolved,
-  }));
-}
-
-function simplifyModuleIndex(index: ReturnType<typeof collectLocalsAndExportsFromSource>): unknown {
-  return {
-    locals: index.locals.map((local) => ({
-      localName: local.localName,
-      kind: local.kind,
-    })),
-    exports: index.exports.map((entry) => {
-      if (entry.type === "local") {
-        return {
-          type: entry.type,
-          exportedAs: entry.exportedAs,
-          localName: entry.target.localName,
-          kind: entry.target.kind,
-        };
-      }
-      if (entry.type === "reexport") {
-        return {
-          type: entry.type,
-          exportedAs: entry.exportedAs,
-          fromModule: entry.fromModule,
-          sourceSpecifier: entry.sourceSpecifier,
-          typeOnly: entry.typeOnly ?? false,
-        };
-      }
-      if (entry.type === "namespaceReexport") {
-        return {
-          type: entry.type,
-          exportedAs: entry.exportedAs,
-          fromModule: entry.fromModule,
-          typeOnly: entry.typeOnly ?? false,
-        };
-      }
-      return {
-        type: entry.type,
-        fromModule: entry.fromModule,
-        sourceSpecifier: entry.sourceSpecifier,
-        typeOnly: entry.typeOnly ?? false,
-      };
-    }),
-  };
 }
 
 function sampleFile(...parts: string[]): string {
@@ -109,7 +61,7 @@ async function expectNativeImportParity(projectDir: string, relativeFile: string
     nativeMode: "off",
   });
 
-  expect(simplifyImports(nativeImports)).toEqual(simplifyImports(jsImports));
+  expect(simplifyNativeTestImports(nativeImports)).toEqual(simplifyNativeTestImports(jsImports));
 }
 
 async function expectNativeModuleIndexParity(relativeFile: string): Promise<void> {
@@ -134,7 +86,7 @@ async function expectNativeModuleIndexParity(relativeFile: string): Promise<void
     nativeMode: "off",
   });
 
-  expect(simplifyModuleIndex(nativeIndex)).toEqual(simplifyModuleIndex(jsIndex));
+  expect(simplifyNativeTestModuleIndex(nativeIndex)).toEqual(simplifyNativeTestModuleIndex(jsIndex));
 }
 
 async function expectNativeModuleSpecifierParity(relativeFile: string): Promise<void> {
@@ -192,7 +144,7 @@ jsFallbackDescribe("native tree-sitter integration", () => {
       nativeMode: "off",
     });
 
-    expect(simplifyImports(nativeImports)).toEqual(simplifyImports(jsImports));
+    expect(simplifyNativeTestImports(nativeImports)).toEqual(simplifyNativeTestImports(jsImports));
   });
 
   it("matches Python locals and exports with and without native query results", async () => {
@@ -235,7 +187,7 @@ jsFallbackDescribe("native tree-sitter integration", () => {
       nativeMode: "off",
     });
 
-    expect(simplifyModuleIndex(nativeIndex)).toEqual(simplifyModuleIndex(jsIndex));
+    expect(simplifyNativeTestModuleIndex(nativeIndex)).toEqual(simplifyNativeTestModuleIndex(jsIndex));
   });
 
   it("matches HTML module specifier extraction with and without native query results", async () => {
@@ -302,7 +254,7 @@ jsFallbackDescribe("native tree-sitter integration", () => {
       nativeMode: "off",
     });
 
-    expect(simplifyModuleIndex(nativeIndex)).toEqual(simplifyModuleIndex(jsIndex));
+    expect(simplifyNativeTestModuleIndex(nativeIndex)).toEqual(simplifyNativeTestModuleIndex(jsIndex));
   });
 
   it(

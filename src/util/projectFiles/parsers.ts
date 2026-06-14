@@ -1,3 +1,4 @@
+import { stripHashInlineComment } from "../comments.js";
 import { isPlainRecord } from "../guards.js";
 
 export function trimToNull(value: string | null | undefined): string | null {
@@ -17,28 +18,11 @@ export function parseJsonName(raw: string): string | null {
   }
 }
 
-function stripTomlInlineComment(line: string): string {
-  let quote: "'" | '"' | null = null;
-  for (let i = 0; i < line.length; i += 1) {
-    const ch = line[i];
-    if (quote) {
-      if (ch === quote) quote = null;
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      quote = ch;
-      continue;
-    }
-    if (ch === "#") return line.slice(0, i);
-  }
-  return line;
-}
-
 export function parseTomlName(raw: string, sections: string[]): string | null {
   const lines = raw.split(/\r?\n/);
   let currentSection = "";
   for (const rawLine of lines) {
-    const line = stripTomlInlineComment(rawLine).trim();
+    const line = stripHashInlineComment(rawLine, "preserve").trim();
     if (!line) continue;
     const sectionMatch = line.match(/^\[([^\]]+)\]\s*$/);
     if (sectionMatch) {
@@ -109,27 +93,10 @@ export function parseDotnetName(raw: string): string | null {
   return null;
 }
 
-function stripInlineComment(line: string): string {
-  let quote: "'" | '"' | null = null;
-  for (let i = 0; i < line.length; i += 1) {
-    const ch = line[i];
-    if (quote) {
-      if (ch === quote) quote = null;
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      quote = ch;
-      continue;
-    }
-    if (ch === "#") return line.slice(0, i).trim();
-  }
-  return line.trim();
-}
-
 export function parseGoModuleName(raw: string): string | null {
   const lines = raw.split(/\r?\n/);
   for (const rawLine of lines) {
-    const line = stripInlineComment(rawLine);
+    const line = stripHashInlineComment(rawLine, "trim");
     if (!line) continue;
     const match = line.match(/^module\s+(.+)$/);
     if (match) return trimToNull(match[1]);

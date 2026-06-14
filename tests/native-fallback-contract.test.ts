@@ -20,6 +20,7 @@ import { parsePreparedFileContext } from "../src/indexer/parse-context.js";
 import * as nativeRuntime from "../src/native/treeSitterNative.js";
 import { supportForFile } from "../src/languages.js";
 import type { NativeCapture, NativeQueryResults } from "../src/native/treeSitterNative.js";
+import { simplifyNativeTestModuleIndex } from "./helpers/native.js";
 
 const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable() ? describe : describe.skip;
 
@@ -36,52 +37,6 @@ const nativeCapture = (name: string, text: string): NativeCapture => ({
   start: { row: 0, column: 0, index: 0 },
   end: { row: 0, column: text.length, index: text.length },
 });
-
-function simplifyModule(index: ModuleIndex): unknown {
-  return {
-    imports: index.imports.map((entry) => ({
-      ...entry,
-      resolved: typeof entry.resolved === "string" ? normalizeFile(entry.resolved) : entry.resolved,
-    })),
-    locals: index.locals.map((local) => ({
-      localName: local.localName,
-      kind: local.kind,
-    })),
-    exports: index.exports.map((entry) => {
-      if (entry.type === "local") {
-        return {
-          type: entry.type,
-          exportedAs: entry.exportedAs,
-          localName: entry.target.localName,
-          kind: entry.target.kind,
-        };
-      }
-      if (entry.type === "reexport") {
-        return {
-          type: entry.type,
-          exportedAs: entry.exportedAs,
-          fromModule: normalizeFile(entry.fromModule),
-          sourceSpecifier: entry.sourceSpecifier,
-          typeOnly: entry.typeOnly ?? false,
-        };
-      }
-      if (entry.type === "namespaceReexport") {
-        return {
-          type: entry.type,
-          exportedAs: entry.exportedAs,
-          fromModule: normalizeFile(entry.fromModule),
-          typeOnly: entry.typeOnly ?? false,
-        };
-      }
-      return {
-        type: entry.type,
-        fromModule: normalizeFile(entry.fromModule),
-        sourceSpecifier: entry.sourceSpecifier,
-        typeOnly: entry.typeOnly ?? false,
-      };
-    }),
-  };
-}
 
 async function makeTempProject(): Promise<{
   root: string;
@@ -129,7 +84,7 @@ async function computeJsOnlyModule(file: string, projectRoot: string): Promise<u
     imports,
   );
   moduleIndex.imports = imports;
-  return simplifyModule(moduleIndex);
+  return simplifyNativeTestModuleIndex(moduleIndex);
 }
 
 function mockNativeFailureForFile(file: string) {
@@ -367,7 +322,7 @@ nativeDescribe("native fallback contract", () => {
         report,
       });
 
-      expect(simplifyModule(index.byFile.get(alphaNormalized)!)).toEqual(jsOnlyAlpha);
+      expect(simplifyNativeTestModuleIndex(index.byFile.get(alphaNormalized)!)).toEqual(jsOnlyAlpha);
       expect(report.backend?.native.byLanguage.ts?.filesSeen).toBe(2);
       expect(report.backend?.native.byLanguage.ts?.filesUsed).toBe(1);
       expect(report.backend?.native.byLanguage.ts?.filesFellBack).toBe(1);
@@ -403,7 +358,7 @@ nativeDescribe("native fallback contract", () => {
         report,
       });
 
-      expect(simplifyModule(index.byFile.get(alphaNormalized)!)).toEqual(jsOnlyAlpha);
+      expect(simplifyNativeTestModuleIndex(index.byFile.get(alphaNormalized)!)).toEqual(jsOnlyAlpha);
       expect(report.backend?.native.byLanguage.ts?.filesSeen).toBe(2);
       expect(report.backend?.native.byLanguage.ts?.filesUsed).toBe(1);
       expect(report.backend?.native.byLanguage.ts?.filesFellBack).toBe(1);
@@ -443,7 +398,7 @@ nativeDescribe("native fallback contract", () => {
       },
     );
 
-    expect(simplifyModule(moduleIndex)).toEqual({
+    expect(simplifyNativeTestModuleIndex(moduleIndex)).toEqual({
       imports: [],
       locals: [{ localName: "do_work", kind: SymbolKind.Function }],
       exports: [{ type: "local", exportedAs: "do_work", localName: "do_work", kind: SymbolKind.Function }],

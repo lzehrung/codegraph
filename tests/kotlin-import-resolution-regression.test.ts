@@ -1,4 +1,3 @@
-import os from "node:os";
 import path from "node:path";
 import fsp from "node:fs/promises";
 import { describe, expect, it } from "vitest";
@@ -9,10 +8,7 @@ import {
   collectImportsForFile,
   parseFile,
 } from "../src/index.js";
-
-async function mkTmpDir(prefix: string): Promise<string> {
-  return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
-}
+import { mkTmpDir } from "./helpers/filesystem.js";
 
 describe("Kotlin import resolution regression", () => {
   it("ignores generated trees when resolving package imports from a repo root", async () => {
