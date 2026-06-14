@@ -140,6 +140,41 @@ export function runFixture(values: number[]) {
     expect(group?.cleanupLabels).toContain("test-helper-extraction");
     expect(group?.cluster?.locationCount).toBe(3);
   });
+  test("does not label export constants containing from as barrel noise", async () => {
+    const root = await makeTempProject();
+    const duplicateSource = `
+export const pathFragment = "from";
+export const suffix = "-value";
+`;
+
+    await writeProjectFile(root, "src/a.ts", duplicateSource);
+    await writeProjectFile(root, "src/b.ts", duplicateSource);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, { includeSmall: true, minConfidence: "high", limit: 5 });
+    const group = result.groups[0];
+
+    expect(group?.cleanupLabels).not.toContain("barrel-export-noise");
+  });
+
+  test("does not label test files under src-shaped subpaths as production helpers", async () => {
+    const root = await makeTempProject();
+    const duplicateSource = `
+export function runFixture(values: number[]) {
+  return values.map((value) => value + 1);
+}
+`;
+
+    await writeProjectFile(root, "tests/src/a.test.ts", duplicateSource);
+    await writeProjectFile(root, "tests/src/b.test.ts", duplicateSource);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, { includeSmall: true, minConfidence: "high", limit: 5 });
+    const group = result.groups[0];
+
+    expect(group?.cleanupLabels).toContain("test-helper-extraction");
+    expect(group?.cleanupLabels).not.toContain("production-helper-extraction");
+  });
 
   test("bounds duplicate pair comparisons and reports skipped candidates", async () => {
     const root = await makeTempProject();

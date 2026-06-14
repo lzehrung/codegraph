@@ -24,6 +24,7 @@ import { prepareSourceInput } from "./languages/filePrep.js";
 import { SqliteDatabase } from "./sqlite-driver.js";
 import { cacheRoot } from "./indexer/build-cache/module-cache.js";
 import { appendToArrayMap } from "./util/collections.js";
+import { maskJsLikeCommentsStringsAndRegex } from "./util/comments.js";
 import { collectLineStartOffsets } from "./util/lines.js";
 import { assertFilePathWithinRoot, normalizePath, toProjectDisplayPath } from "./util/paths.js";
 
@@ -754,28 +755,37 @@ function duplicateTextLines(text: string): string[] {
     .filter(Boolean);
 }
 
-function looksLikeImportListText(text: string): boolean {
-  const lines = duplicateTextLines(text);
-  if (!lines.length || lines.length > 12) return false;
-  const statements = lines
+function maskedDuplicateStatements(text: string): string[] {
+  return duplicateTextLines(maskJsLikeCommentsStringsAndRegex(text))
     .join(" ")
     .split(";")
     .map((statement) => statement.trim())
     .filter(Boolean);
-  return statements.length > 0 && statements.every((statement) => /^import\b/u.test(statement));
+}
+
+function looksLikeImportStatement(statement: string): boolean {
+  if (!/^import\b/u.test(statement)) return false;
+  if (/[=()]/u.test(statement)) return false;
+  return !/\b(?:const|let|var|function|class|return|if|for|while|switch|export|new)\b/u.test(statement.slice(6));
+}
+
+function looksLikeBarrelStatement(statement: string): boolean {
+  if (!/^export\b/u.test(statement)) return false;
+  if (/[=()]/u.test(statement)) return false;
+  if (!/\bfrom\b/u.test(statement) && !/^export\s+\*/u.test(statement)) return false;
+  return !/\b(?:const|let|var|function|class|return|if|for|while|switch|import|new)\b/u.test(statement.slice(6));
+}
+
+function looksLikeImportListText(text: string): boolean {
+  const statements = maskedDuplicateStatements(text);
+  if (!statements.length || statements.length > 12) return false;
+  return statements.every(looksLikeImportStatement);
 }
 
 function looksLikeBarrelText(text: string): boolean {
-  const lines = duplicateTextLines(text);
-  if (!lines.length || lines.length > 12) return false;
-  const statements = lines
-    .join(" ")
-    .split(";")
-    .map((statement) => statement.trim())
-    .filter(Boolean);
-  return (
-    statements.length > 0 && statements.every((statement) => /^export\b[\s\S]*(\bfrom\b|export\s+\*)/u.test(statement))
-  );
+  const statements = maskedDuplicateStatements(text);
+  if (!statements.length || statements.length > 12) return false;
+  return statements.every(looksLikeBarrelStatement);
 }
 
 /** Adds hashes, normalized tokens, and fingerprints to a reportable unit. */
@@ -1969,7 +1979,7 @@ function isTestFile(file: string): boolean {
 }
 
 function isProductionFile(file: string): boolean {
-  return file.startsWith("src/") || file.includes("/src/");
+  return !isTestFile(file) && (file.startsWith("src/") || file.includes("/src/"));
 }
 
 function isTopLevelSourceBarrel(file: string): boolean {
@@ -2075,6 +2085,8 @@ function enrichDuplicateGroups(groups: DuplicateGroup[]): DuplicateGroup[] {
   }
 
   const componentByKey = new Map<string, DuplicateUnitRef[]>();
+  const componentIdByKey = new Map<string, string>();
+  const groupIdsByComponentId = new Map<string, string[]>();
   const visited = new Set<string>();
   for (const key of Array.from(adjacency.keys()).sort()) {
     if (visited.has(key)) continue;
@@ -2094,22 +2106,27 @@ function enrichDuplicateGroups(groups: DuplicateGroup[]): DuplicateGroup[] {
       .map((componentKey) => locationsByKey.get(componentKey))
       .filter((location): location is DuplicateUnitRef => location !== undefined)
       .sort(compareUnitRefs);
-    for (const componentKey of componentKeys) componentByKey.set(componentKey, locations);
+    const componentId = shortHashText(componentKeys.sort().join("\u0000"));
+    for (const componentKey of componentKeys) {
+      componentByKey.set(componentKey, locations);
+      componentIdByKey.set(componentKey, componentId);
+    }
+  }
+
+  for (const group of groups) {
+    const componentId = componentIdByKey.get(unitRefRangeIdentity(group.primaryLeft));
+    if (!componentId) continue;
+    appendToArrayMap(groupIdsByComponentId, componentId, group.id);
   }
 
   return groups.map((group) => {
     const localLocations = locationsByGroupId.get(group.id) ?? groupLocations(group);
-    const componentLocations = componentByKey.get(unitRefRangeIdentity(group.primaryLeft)) ?? localLocations;
-    const groupIds = groups
-      .filter((candidate) => {
-        const candidateLocations = locationsByGroupId.get(candidate.id) ?? groupLocations(candidate);
-        return candidateLocations.some((location) =>
-          componentLocations.some(
-            (componentLocation) => unitRefRangeIdentity(componentLocation) === unitRefRangeIdentity(location),
-          ),
-        );
-      })
-      .map((candidate) => candidate.id);
+    const primaryKey = unitRefRangeIdentity(group.primaryLeft);
+    const componentLocations = componentByKey.get(primaryKey) ?? localLocations;
+    const componentId = componentIdByKey.get(primaryKey);
+    const groupIds = componentId
+      ? Array.from(new Set(groupIdsByComponentId.get(componentId) ?? [group.id])).sort()
+      : [group.id];
     const cluster = groupClusterSummary(componentLocations, groupIds, coveredPairs);
     const cleanupLabels = cleanupLabelsForGroup(group, localLocations);
     if (!cleanupLabels.includes("test-helper-extraction") && cluster) {

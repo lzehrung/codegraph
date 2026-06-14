@@ -28,6 +28,8 @@ type DuplicateProfile = "cleanup";
 type DuplicateSortMode = "similarity" | "actionability" | "reduced-lines";
 const ACTIONABILITY_SORT_OVERFETCH_MULTIPLIER = 10;
 const ACTIONABILITY_SORT_MAX_CANDIDATES = 500;
+const REDUCED_LINES_SORT_OVERFETCH_MULTIPLIER = 25;
+const REDUCED_LINES_SORT_MAX_CANDIDATES = 5000;
 
 const confidenceWeight: Record<DuplicateConfidence, number> = {
   high: 3,
@@ -429,7 +431,11 @@ export async function handleDuplicatesCommand(context: DuplicatesCommandContext)
     const options = parseDuplicateDetectionOptions(context, profile);
     const requestedLimit = options.limit ?? 50;
     if (profile === "cleanup" || sortMode === "reduced-lines") {
-      options.limit = Number.MAX_SAFE_INTEGER;
+      const boundedLimit = Math.max(
+        requestedLimit,
+        Math.min(REDUCED_LINES_SORT_MAX_CANDIDATES, requestedLimit * REDUCED_LINES_SORT_OVERFETCH_MULTIPLIER),
+      );
+      options.limit = boundedLimit;
     } else if (sortMode === "actionability") {
       const boundedLimit = Math.max(
         requestedLimit,
