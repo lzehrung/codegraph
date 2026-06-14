@@ -175,6 +175,23 @@ export function runFixture(values: number[]) {
     expect(group?.cleanupLabels).toContain("test-helper-extraction");
     expect(group?.cleanupLabels).not.toContain("production-helper-extraction");
   });
+  test("does not label import.meta expressions as import-list noise", async () => {
+    const root = await makeTempProject();
+    const duplicateSource = `
+export function loadAssetUrl() {
+  return import.meta.url;
+}
+`;
+
+    await writeProjectFile(root, "src/a.ts", duplicateSource);
+    await writeProjectFile(root, "src/b.ts", duplicateSource);
+
+    const index = await buildProjectIndex(root);
+    const result = await findDuplicates(index, { includeSmall: true, minConfidence: "high", limit: 5 });
+    const group = result.groups[0];
+
+    expect(group?.cleanupLabels).not.toContain("import-list-noise");
+  });
 
   test("bounds duplicate pair comparisons and reports skipped candidates", async () => {
     const root = await makeTempProject();

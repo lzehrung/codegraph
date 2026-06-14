@@ -765,6 +765,10 @@ function maskedDuplicateStatements(text: string): string[] {
 
 function looksLikeImportStatement(statement: string): boolean {
   if (!/^import\b/u.test(statement)) return false;
+  const remainder = statement.slice(6).trimStart();
+  if (!remainder.length || remainder.startsWith(".") || remainder.startsWith("(") || remainder.startsWith("=")) {
+    return false;
+  }
   if (/[=()]/u.test(statement)) return false;
   return !/\b(?:const|let|var|function|class|return|if|for|while|switch|export|new)\b/u.test(statement.slice(6));
 }

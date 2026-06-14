@@ -581,7 +581,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "graph-delta") {
-    if (hasCliDiscoveryGlobs && (gitBase || changedSince)) {
+    if (hasCliDiscoveryGlobs && (gitBase || gitHead || changedSince)) {
       throw new Error(
         "graph-delta does not support CLI discovery globs together with --git-base/--git-head or --changed-since.",
       );
@@ -605,7 +605,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "graph") {
-    if (hasCliDiscoveryGlobs && (gitBase || changedSince) && (getOpt("--sqlite") || getOpt("--db"))) {
+    if (hasCliDiscoveryGlobs && (gitBase || gitHead || changedSince) && (getOpt("--sqlite") || getOpt("--db"))) {
       throw new Error(
         "graph does not support CLI discovery globs together with --git-base/--git-head or --changed-since when --sqlite/--db is used.",
       );
