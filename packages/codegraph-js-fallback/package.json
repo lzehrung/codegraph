@@ -1,6 +1,6 @@
 {
   "name": "@lzehrung/codegraph-js-fallback",
-  "version": "1.8.58",
+  "version": "1.8.59",
   "description": "Compatibility shim for hosts without a native Codegraph parser backend.",
   "main": "./js-fallback.cjs",
   "types": "./js-fallback.d.ts",
