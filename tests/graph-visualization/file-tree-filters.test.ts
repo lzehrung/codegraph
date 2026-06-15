@@ -22,15 +22,15 @@ describe("kindAbbrev", () => {
   });
 
   it("returns ? for null/undefined/empty", () => {
-    expect(kindAbbrev(undefined as unknown as string)).toBe("?");
-    expect(kindAbbrev(null as unknown as string)).toBe("?");
+    expect(Reflect.apply(kindAbbrev, undefined, [undefined])).toBe("?");
+    expect(Reflect.apply(kindAbbrev, undefined, [null])).toBe("?");
     expect(kindAbbrev("")).toBe("?");
   });
 });
 
 describe("matchesFilter", () => {
   it("returns true when no filter", () => {
-    expect(matchesFilter("anything", null as unknown as string)).toBe(true);
+    expect(Reflect.apply(matchesFilter, undefined, ["anything", null])).toBe(true);
     expect(matchesFilter("anything", "")).toBe(true);
   });
 
@@ -47,7 +47,7 @@ describe("matchesFilter", () => {
 
 describe("subtreeMatchesFilter", () => {
   it("returns true when no filter", () => {
-    expect(subtreeMatchesFilter({ name: "x", type: "file" }, null as unknown as string)).toBe(true);
+    expect(Reflect.apply(subtreeMatchesFilter, undefined, [{ name: "x", type: "file" }, null])).toBe(true);
   });
 
   it("matches the node name itself", () => {
@@ -98,7 +98,7 @@ describe("subtreeMatchesFilter", () => {
 
 describe("highlightMatch", () => {
   it("returns plain text node when no filter", () => {
-    const result = highlightMatch("hello", null as unknown as string);
+    const result = Reflect.apply(highlightMatch, undefined, ["hello", null]);
     expect(result.nodeType).toBe(Node.TEXT_NODE);
     expect(result.textContent).toBe("hello");
   });

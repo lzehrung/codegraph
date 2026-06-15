@@ -1,6 +1,16 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
 import { collectGraph, buildProjectIndex } from "../src/index.js";
+import type { ImportBinding } from "../src/index.js";
+
+function expectNamespaceImport(binding: ImportBinding | undefined, localNS: string): void {
+  expect(binding).toBeDefined();
+  expect(binding?.kind).toBe("namespace");
+  if (binding?.kind !== "namespace") {
+    throw new Error(`Expected namespace import for ${localNS}`);
+  }
+  expect(binding.localNS).toBe(localNS);
+}
 
 describe("Complex Monorepo Scenarios", () => {
   const root = path.join(process.cwd(), "tests", "samples", "complex-monorepo");
@@ -156,15 +166,11 @@ describe("Complex Monorepo Scenarios", () => {
 
     // Check for "fmt"
     const fmtImport = fileIndex?.imports.find((i) => i.from === "fmt");
-    expect(fmtImport).toBeDefined();
-    expect(fmtImport?.kind).toBe("namespace");
-    expect((fmtImport as any).localNS).toBe("fmt");
+    expectNamespaceImport(fmtImport, "fmt");
 
     // Check for aliased "os"
     const osImport = fileIndex?.imports.find((i) => i.from === "os");
-    expect(osImport).toBeDefined();
-    expect(osImport?.kind).toBe("namespace");
-    expect((osImport as any).localNS).toBe("oslib");
+    expectNamespaceImport(osImport, "oslib");
   });
 
   it("handles Rust mod items", async () => {

@@ -2,10 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createAgentSession } from "../src/agent/session.js";
+import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
 import { searchCodegraph, searchCodegraphWithSession } from "../src/agent/search.js";
 import type { SymbolEdge, SymbolGraph, SymbolNode } from "../src/graphs.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
+import * as indexerBuild from "../src/indexer/build-index.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex, type SymbolDef } from "../src/indexer/types.js";
 import type { Edge, Graph, Range } from "../src/types.js";
 import { countingSession } from "./helpers/agent.js";
@@ -90,6 +91,7 @@ function moduleIndex(file: string, locals: SymbolDef[]): ModuleIndex {
 
 function snapshotSession(snapshot: AgentProjectSnapshot): AgentSession {
   return {
+    root: snapshot.root,
     loadProject: async () => snapshot,
     invalidate: () => undefined,
   };
@@ -123,6 +125,71 @@ describe("agent search", () => {
 
     expect(result?.followUps).toContain("codegraph chunk 'src/cost$center.ts'");
     expect(result?.followUps).not.toContain('codegraph chunk "src/cost$center.ts"');
+  });
+
+  it("uses a file-list fast path for pure path searches", async () => {
+    const root = await mkRepo();
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+
+    const response = await searchCodegraph({ root, query: "agent search", mode: "path", limit: 5 });
+
+    expect(response.results.some((result) => result.file === "docs/agent-search.md")).toBe(true);
+    expect(buildSpy).not.toHaveBeenCalled();
+  });
+
+  it("normalizes path fast-path results against the session root", async () => {
+    const root = await mkRepo();
+    const session = createAgentSession({ root });
+    const response = await searchCodegraphWithSession(session, {
+      root: path.dirname(root),
+      query: "agent search",
+      mode: "path",
+      limit: 5,
+    });
+
+    const result = response.results.find((entry) => entry.file === "docs/agent-search.md");
+    expect(response.root).toBe(root);
+    expect(result?.handle).toBe("file:docs%2Fagent-search.md");
+    expect(result?.file).toBe("docs/agent-search.md");
+  });
+
+  it("keeps legacy custom sessions without root on the snapshot-backed path", async () => {
+    const root = await mkRepo();
+    const docsFile = path.join(root, "docs", "agent-search.md");
+    const fileGraph: Graph = { nodes: new Set([docsFile]), edges: [] };
+    const index: ProjectIndex = {
+      graph: fileGraph,
+      modules: new Map(),
+      byFile: new Map(),
+      exportCache: new Map(),
+      scopeCache: new Map(),
+    };
+    let loadCount = 0;
+    const session: AgentSession = {
+      listFiles: async () => [docsFile],
+      loadProject: async () => {
+        loadCount += 1;
+        return {
+          root,
+          files: [docsFile],
+          index,
+          fileGraph,
+          symbolGraph: { nodes: new Map(), edges: [] },
+        };
+      },
+      invalidate: () => undefined,
+    };
+
+    const response = await searchCodegraphWithSession(session, {
+      root: path.dirname(root),
+      query: "agent search",
+      mode: "path",
+      limit: 5,
+    });
+
+    expect(loadCount).toBe(1);
+    expect(response.root).toBe(root);
+    expect(response.results[0]?.file).toBe("docs/agent-search.md");
   });
 
   it("includes SQL object results from .sql language support", async () => {
@@ -215,6 +282,33 @@ describe("agent search", () => {
     await searchCodegraphWithSession(counted.session, { root, query: "validate user", mode: "hybrid", limit: 5 });
 
     expect(counted.loads()).toBe(1);
+  });
+
+  it("reuses searchable file text and chunks across repeated session searches", async () => {
+    const root = await mkRepo();
+    const docsFile = path.join(root, "docs", "agent-search.md");
+    const fileGraph: Graph = { nodes: new Set([docsFile]), edges: [] };
+    const index: ProjectIndex = {
+      graph: fileGraph,
+      modules: new Map(),
+      byFile: new Map(),
+      exportCache: new Map(),
+      scopeCache: new Map(),
+    };
+    const session = snapshotSession({
+      root,
+      files: [docsFile],
+      index,
+      fileGraph,
+      symbolGraph: { nodes: new Map(), edges: [] },
+    });
+    const readSpy = vi.spyOn(fs, "readFile");
+
+    await searchCodegraphWithSession(session, { root, query: "natural language search", mode: "text", limit: 5 });
+    await searchCodegraphWithSession(session, { root, query: "call compatibility", mode: "text", limit: 5 });
+
+    const docsReads = readSpy.mock.calls.filter((call) => call[0] === docsFile);
+    expect(docsReads).toHaveLength(1);
   });
 
   it("indexes symbol neighbors once per search instead of scanning edges per match", async () => {

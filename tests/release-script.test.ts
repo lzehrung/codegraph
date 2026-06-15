@@ -57,6 +57,10 @@ function readJsonFile(filePath: string): Record<string, unknown> {
   return JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
 }
 
+function reportHasGlibcRuntime(report: ReturnType<NonNullable<typeof process.report>["getReport"]>): boolean {
+  return "glibcVersionRuntime" in report.header;
+}
+
 function currentNativeTargetSuffix(): string | null {
   if (process.platform === "win32") {
     if (process.arch === "x64") return "win32-x64-msvc";
@@ -68,7 +72,7 @@ function currentNativeTargetSuffix(): string | null {
   }
   if (process.platform === "linux") {
     const report = process.report?.getReport();
-    const abi = (report as any)?.header?.glibcVersionRuntime ? "gnu" : "musl";
+    const abi = report && reportHasGlibcRuntime(report) ? "gnu" : "musl";
     if (process.arch === "x64") return `linux-x64-${abi}`;
     if (process.arch === "arm64") return `linux-arm64-${abi}`;
   }

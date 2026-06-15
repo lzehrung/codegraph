@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAgentSession } from "../src/agent/session.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
+import type { ProjectIndex } from "../src/indexer/types.js";
 
 async function mkRepo(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-session-"));
@@ -89,6 +90,28 @@ describe("agent session", () => {
     expect(buildOptions?.threads).toBe(2);
     expect(buildOptions?.keepParsed).toBe(false);
     expect(buildOptions?.useBloomFilters).toBe(false);
+  });
+
+  it("auto-enables native workers for large agent builds unless explicitly disabled", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-session-large-"));
+    for (let index = 0; index < 260; index += 1) {
+      await fs.writeFile(path.join(root, `file-${index}.ts`), `export const value${index} = ${index};\n`);
+    }
+    const emptyGraph = { nodes: new Set<string>(), edges: [] };
+    const emptyIndex: ProjectIndex = {
+      graph: emptyGraph,
+      modules: new Map(),
+      byFile: new Map(),
+      exportCache: new Map(),
+      scopeCache: new Map(),
+    };
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockResolvedValue(emptyIndex);
+
+    await createAgentSession({ root }).loadProject({ symbolGraph: "skip" });
+    await createAgentSession({ root, buildOptions: { useNativeWorkers: false } }).loadProject({ symbolGraph: "skip" });
+
+    expect(buildSpy.mock.calls[0]?.[1]?.useNativeWorkers).toBe(true);
+    expect(buildSpy.mock.calls[1]?.[1]?.useNativeWorkers).toBe(false);
   });
 
   it("does not cache failed project loads", async () => {

@@ -6,7 +6,8 @@ For sessions, streaming workflows, tool wrappers, and review-oriented recipes, s
 
 ## Runtime model
 
-Import only from `@lzehrung/codegraph` and call the API directly.
+Import from `@lzehrung/codegraph` or one of its documented subpath facades and
+call the API directly.
 
 The library defaults to `native: "auto"`, which uses the native Tree-sitter path when `@lzehrung/codegraph-native` is installed for the current platform and falls back automatically otherwise.
 
@@ -36,7 +37,19 @@ const index = await buildProjectIndex(root, {
 
 ## Public API Boundary
 
-The npm package exposes one supported entry point: `@lzehrung/codegraph`.
+The npm package exposes these supported entry points:
+
+- `@lzehrung/codegraph` for the compatibility root surface.
+- `@lzehrung/codegraph/agent` for agent sessions, orient/search/explain,
+  artifacts, and MCP handler helpers.
+- `@lzehrung/codegraph/graphs` for graph builders, graph queries, renderers,
+  symbol graphs, grep, hotspots, cycles, and unresolved-import helpers.
+- `@lzehrung/codegraph/indexer` for project indexing, navigation, references,
+  symbols, and API-surface analysis.
+- `@lzehrung/codegraph/impact` for diff impact analysis, streaming impact
+  reports, impact context, and candidate test helpers.
+- `@lzehrung/codegraph/languages` for language-support metadata.
+
 Do not import from generated paths such as `@lzehrung/codegraph/dist/...` or
 repo-internal source paths. Those modules are implementation details and can
 move during refactors.
@@ -61,8 +74,8 @@ as three groups:
   not covered by semver, even when their generated declaration files exist in
   `dist/`.
 
-Future API narrowing should happen by first documenting replacements, then
-adding explicit subpath exports or deprecation notes before removing root
+Future API narrowing should happen by first documenting replacements on these
+subpath facades, then adding deprecation notes before removing root
 compatibility exports.
 
 ## Agent packets
@@ -144,7 +157,7 @@ console.log(artifact.manifestPath, artifact.artifacts);
 
 The `graph.json` artifact is self-describing (`schemaVersion: 1`, `format: "codegraph.graph-json"`) and uses project-relative file paths and portable symbol handles. `questions.json` uses the same stable handles for follow-up commands. With `force: true`, stale known Codegraph artifact files are removed before the selected outputs are written; unrelated files in the directory are preserved.
 
-`createAgentSession()` keeps one in-process project snapshot warm for repeated orient, search, explain, packet, artifact, and MCP calls. It uses incremental indexing with disk cache by default, and accepts `buildOptions` when callers need explicit cache, thread, native runtime, worker, graph, or discovery settings. Use `buildCodegraphArtifactWithSession()` when a host already has a session and wants SQLite, graph JSON, report, questions, and manifest outputs from the same snapshot. `createCodegraphMcpHandlers()` exposes the same primitives without starting stdio, which is useful for tests or host applications:
+`createAgentSession()` keeps one in-process project snapshot warm for repeated orient, search, explain, packet, artifact, and MCP calls. It uses incremental indexing with disk cache by default, auto-enables native workers for large cold builds, and accepts `buildOptions` when callers need explicit cache, thread, native runtime, worker, graph, or discovery settings. Set `buildOptions.useNativeWorkers` to `false` to opt out. Use `buildCodegraphArtifactWithSession()` when a host already has a session and wants SQLite, graph JSON, report, questions, and manifest outputs from the same snapshot. `createCodegraphMcpHandlers()` exposes the same primitives without starting stdio, which is useful for tests or host applications:
 
 ```ts
 import { createCodegraphMcpHandlers } from "@lzehrung/codegraph";

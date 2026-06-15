@@ -36,9 +36,9 @@ describe("shortLabel", () => {
   });
 
   it("returns empty string for non-string input", () => {
-    expect(shortLabel(undefined as unknown as string)).toBe("");
-    expect(shortLabel(null as unknown as string)).toBe("");
-    expect(shortLabel(42 as unknown as string)).toBe("");
+    expect(Reflect.apply(shortLabel, undefined, [undefined])).toBe("");
+    expect(Reflect.apply(shortLabel, undefined, [null])).toBe("");
+    expect(Reflect.apply(shortLabel, undefined, [42])).toBe("");
   });
 
   it("returns empty string for empty string input", () => {

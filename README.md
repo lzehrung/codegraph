@@ -226,7 +226,7 @@ Good downstream packs preserve structured fields such as symbol handles, ranges,
 
 Impact and review JSON may include `callCompatibility` on changed symbols when a provider-backed callable signature changes and resolved callsites have high-confidence argument counts. Treat these as review leads, not compiler-grade type checking; unsupported or ambiguous callsites are omitted from pretty output. Impact changed-file entries also preserve git copy or rename `oldFile` and `similarityIndex` metadata when available.
 
-The supported package import surface is the root export, `@lzehrung/codegraph`. The public API boundary and compatibility-export guidance live in [docs/library-api.md](./docs/library-api.md#public-api-boundary).
+The supported package import surface includes the compatibility root export, `@lzehrung/codegraph`, plus documented subpath facades such as `@lzehrung/codegraph/agent`, `@lzehrung/codegraph/indexer`, and `@lzehrung/codegraph/impact`. The public API boundary and compatibility-export guidance live in [docs/library-api.md](./docs/library-api.md#public-api-boundary).
 
 ## Common workflows
 

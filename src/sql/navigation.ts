@@ -60,7 +60,17 @@ function sqlFiles(index: ProjectIndex): string[] {
     .sort((left, right) => left.localeCompare(right));
 }
 
-function buildSqlDefinitionLookup(index: ProjectIndex): SqlDefinitionLookup {
+function getSqlNavigationCache(index: ProjectIndex): NonNullable<ProjectIndex["sqlNavigation"]> {
+  index.sqlNavigation ??= {
+    sourceByFile: new Map(),
+    factsByFile: new Map(),
+  };
+  return index.sqlNavigation;
+}
+
+function getSqlDefinitionLookup(index: ProjectIndex): SqlDefinitionLookup {
+  const cache = getSqlNavigationCache(index);
+  if (cache.definitionLookup) return cache.definitionLookup;
   const exact = new Map<string, SymbolDef[]>();
   const basename = new Map<string, SymbolDef[]>();
   for (const file of sqlFiles(index)) {
@@ -71,7 +81,8 @@ function buildSqlDefinitionLookup(index: ProjectIndex): SqlDefinitionLookup {
       pushSqlLookupValue(basename, sqlObjectBaseName(local.localName).toLowerCase(), local);
     }
   }
-  return { exact, basename };
+  cache.definitionLookup = { exact, basename };
+  return cache.definitionLookup;
 }
 
 function sqlDefinitionsFromLookup(lookup: SqlDefinitionLookup, objectName: string): SymbolDef[] {
@@ -337,9 +348,22 @@ function qualifiedReferenceRanges(
 }
 
 async function sourceForFile(filePath: string, index: ProjectIndex): Promise<string> {
+  const cache = getSqlNavigationCache(index);
+  const cached = cache.sourceByFile.get(filePath);
+  if (cached !== undefined) return cached;
   const parsed = index.parsed?.get(filePath);
-  if (parsed) return parsed.source;
-  return await fsp.readFile(filePath, "utf8");
+  const source = parsed ? parsed.source : await fsp.readFile(filePath, "utf8");
+  cache.sourceByFile.set(filePath, source);
+  return source;
+}
+
+async function sqlFactsForFile(index: ProjectIndex, filePath: string): Promise<SqlStatementFact[]> {
+  const cache = getSqlNavigationCache(index);
+  const cached = cache.factsByFile.get(filePath);
+  if (cached) return cached;
+  const facts = extractSqlFactsFromSource(filePath, await sourceForFile(filePath, index));
+  cache.factsByFile.set(filePath, facts);
+  return facts;
 }
 
 export async function goToSqlDefinition(index: ProjectIndex, req: GoToRequest): Promise<GoToResult | null> {
@@ -347,8 +371,8 @@ export async function goToSqlDefinition(index: ProjectIndex, req: GoToRequest): 
   const source = await sourceForFile(req.file, index);
   const name = wordAtPosition(source, req.line, req.column);
   if (!name) return { status: "not_found", reason: "No SQL object at position" };
-  const lookup = buildSqlDefinitionLookup(index);
-  const facts = extractSqlFactsFromSource(req.file, source);
+  const lookup = getSqlDefinitionLookup(index);
+  const facts = await sqlFactsForFile(index, req.file);
   const statement = sqlStatementAtLine(facts, req.line);
   const resolvedName = resolveQualifiedSqlName(lookup, name, statement?.text ?? null);
   if (!resolvedName) return { status: "not_found", reason: "No matching SQL object definition" };
@@ -370,10 +394,9 @@ export async function findSqlReferences(
   const targetNames = new Set([objectName.toLowerCase(), sqlObjectBaseName(objectName).toLowerCase()]);
   const references: Reference[] = [];
   const seen = new Set<string>();
-  const lookup = buildSqlDefinitionLookup(index);
+  const lookup = getSqlDefinitionLookup(index);
   for (const file of sqlFiles(index)) {
-    const source = await sourceForFile(file, index);
-    const facts = extractSqlFactsFromSource(file, source);
+    const facts = await sqlFactsForFile(index, file);
     for (const fact of facts) {
       const names = new Set<string>();
       for (const name of [fact.objectName, fact.relatedObjectName]) {
