@@ -1,17 +1,42 @@
-export function isRustCfgTestStatement(source: string, statementText: string): boolean {
+export function isRustCfgTestStatement(source: string, statementText: string, statementStartIndex?: number): boolean {
   const normalizedStatement = statementText.trim();
   if (!normalizedStatement) return false;
 
-  const moduleMatch = /^mod\s+([A-Za-z_][\w]*)\b/.exec(normalizedStatement);
-  const moduleName = moduleMatch?.[1];
-  if (moduleName) {
-    const modulePattern = new RegExp(`#\\s*\\[cfg\\s*\\(\\s*test\\s*\\)\\]\\s*mod\\s+${moduleName}\\s*(?:;|\\{)`);
-    if (modulePattern.test(source)) return true;
-  }
-
-  const statementIndex = source.indexOf(normalizedStatement);
+  const statementIndex = resolveStatementIndex(source, statementText, normalizedStatement, statementStartIndex);
   if (statementIndex === -1) return false;
+  if (hasImmediateRustCfgTestAttribute(source, statementIndex)) return true;
   return isInsideRustCfgTestModule(source, statementIndex);
+}
+
+export function utf8ByteOffsetToStringIndex(source: string, byteOffset: number): number {
+  if (byteOffset <= 0) return 0;
+  let bytesSeen = 0;
+  for (let index = 0; index < source.length; ) {
+    if (bytesSeen >= byteOffset) return index;
+    const codePoint = source.codePointAt(index);
+    if (codePoint === undefined) return source.length;
+    bytesSeen += Buffer.byteLength(String.fromCodePoint(codePoint), "utf8");
+    index += codePoint > 0xffff ? 2 : 1;
+  }
+  return source.length;
+}
+
+function resolveStatementIndex(
+  source: string,
+  statementText: string,
+  normalizedStatement: string,
+  statementStartIndex?: number,
+): number {
+  if (statementStartIndex !== undefined) {
+    const leadingWhitespace = statementText.search(/\S/);
+    return statementStartIndex + Math.max(0, leadingWhitespace);
+  }
+  return source.indexOf(normalizedStatement);
+}
+
+function hasImmediateRustCfgTestAttribute(source: string, statementIndex: number): boolean {
+  const prefix = source.slice(0, statementIndex).trimEnd();
+  return /#\s*\[cfg\s*\(\s*test\s*\)\]\s*$/.test(prefix);
 }
 
 function isInsideRustCfgTestModule(source: string, statementIndex: number): boolean {

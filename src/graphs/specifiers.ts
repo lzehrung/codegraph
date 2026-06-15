@@ -14,7 +14,9 @@ import {
   getNativeSyntaxTreeExecution,
   isNativeQueryAuthoritative,
   supportsReducedModeRegexRecovery,
+  type CompactCapture,
   type CompactQueryResults,
+  type NativeCapture,
   type NativeQueryResults,
   type NativeRuntimeMode,
 } from "../native/treeSitterNative.js";
@@ -25,7 +27,7 @@ import {
   isGraphOnlyLanguage,
 } from "../documentLinks.js";
 import { sliceText, unquote } from "../util/ast.js";
-import { isRustCfgTestStatement } from "../util/rustTestModules.js";
+import { isRustCfgTestStatement, utf8ByteOffsetToStringIndex } from "../util/rustTestModules.js";
 import { extractJsTsSpecifiers, extractPythonSpecifiers, type ModuleSpecifier } from "../util/specifiers.js";
 
 export type FallbackImportExtractionReason = "fast" | "reduced-mode" | "query-error" | "query-empty";
@@ -138,6 +140,14 @@ function appendUniqueSpecifiers(target: ModuleSpecifier[], incoming: ModuleSpeci
 
 function makeSeenSet(target: ModuleSpecifier[]): Set<string> {
   return new Set(target.map((entry) => `${entry.spec}::${entry.typeOnly ? 1 : 0}`));
+}
+
+function nativeCaptureStartIndex(
+  source: string,
+  capture: CompactCapture | NativeCapture | undefined,
+): number | undefined {
+  if (capture === undefined || !("start" in capture)) return undefined;
+  return utf8ByteOffsetToStringIndex(source, capture.start.index);
 }
 
 function extractCssUrlSpecifiers(source: string): ModuleSpecifier[] {
@@ -298,7 +308,10 @@ export function collectModuleSpecifiersFromSource(
   if (hasNativeImports) {
     try {
       for (const match of nativeImportsArray) {
-        const capMap = Object.fromEntries(match.captures.map((capture) => [capture.name, capture] as const));
+        const capMap = Object.fromEntries(match.captures.map((capture) => [capture.name, capture] as const)) as Record<
+          string,
+          CompactCapture | NativeCapture | undefined
+        >;
         const stmtText = capMap["stmt"]?.text ?? "";
         const typeOnly =
           (support.id === "ts" || support.id === "tsx") &&
@@ -309,7 +322,8 @@ export function collectModuleSpecifiersFromSource(
           continue;
         }
         if (support.id === "rust") {
-          if (isRustCfgTestStatement(source, stmtText)) continue;
+          const statementStartIndex = nativeCaptureStartIndex(source, capMap["stmt"]);
+          if (isRustCfgTestStatement(source, stmtText, statementStartIndex)) continue;
           const parsed = parseRustImportStatement(stmtText);
           if (parsed) {
             out.push(rustSpecifierFromParsedImport(parsed));

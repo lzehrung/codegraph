@@ -512,6 +512,21 @@ describe("CLI command modules", () => {
     }
   });
 
+  test("reports impact positional validation when legacy root stat fails", async () => {
+    const statSpy = vi.spyOn(fs, "statSync").mockImplementation(() => {
+      throw new Error("permission denied");
+    });
+    try {
+      const result = await captureCli(["impact", "src", "--provider", "raw", "--pretty"]);
+
+      expect(result.exitCode).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("Unexpected positional argument for impact: src");
+    } finally {
+      statSpy.mockRestore();
+    }
+  });
+
   test("keeps overlapping in-process CLI runs isolated by runtime context", async () => {
     const firstRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-runcli-first-"));
     const secondRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-runcli-second-"));

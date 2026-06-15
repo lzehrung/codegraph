@@ -27,6 +27,17 @@ function diffResponse(diff: string): Response {
   } as Response;
 }
 
+function textDiffResponse(diff: string): Response {
+  return {
+    ok: true,
+    body: null,
+    status: 200,
+    statusText: "OK",
+    headers: new Headers(),
+    text: async () => diff,
+  } as Response;
+}
+
 function createGitRepo(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-github-provider-"));
   gitRepoRoots.push(root);
@@ -125,6 +136,24 @@ index 0000000..1111111 100644
 
     expect(res.warning).toContain("GitHub PR diff exceeded");
     expect(res.files.length).toBe(1);
+    expect(res.files[0].hunks[0]?.lines).toEqual(["+export const a = 1;"]);
+  });
+
+  it("applies GitHub maxBytes as a UTF-8 byte limit for buffered response text", async () => {
+    const content = "界".repeat(32);
+    const diff = `diff --git a/src/a.ts b/src/a.ts
+--- a/src/a.ts
++++ b/src/a.ts
+@@ -1,0 +1,1 @@
++${content}
+`;
+    vi.spyOn(global, "fetch").mockResolvedValue(textDiffResponse(diff));
+
+    const res = await getDiff({ provider: "github", repo: "owner/repo", pr: 123, maxBytes: diff.length + 1 });
+
+    expect(Buffer.byteLength(diff, "utf8")).toBeGreaterThan(diff.length + 1);
+    expect(res.warning).toContain("GitHub PR diff exceeded");
+    expect(res.files[0].hunks[0]?.lines).not.toContain(`+${content}`);
   });
 
   it("parses equivalent local git and GitHub provider diffs for the same fixture", async () => {

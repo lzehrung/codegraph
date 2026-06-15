@@ -6,6 +6,7 @@ import { collectGraph, getUnresolvedImports, getHotspots, getApiSurface, SymbolK
 import { getExternalClassifierCacheStats, resetExternalClassifierCaches } from "../src/graphs/external-classifier.js";
 import { findDetailedCycles } from "../src/graphs/queries.js";
 import { resolveRustImportPath } from "../src/util/resolution.js";
+import { isRustCfgTestStatement } from "../src/util/rustTestModules.js";
 
 describe("graph reports", () => {
   const tempRoots: string[] = [];
@@ -642,6 +643,32 @@ describe("graph reports", () => {
       graph.edges.some((edge) => edge.from === duplicateFile && edge.to.type === "file" && edge.to.path === libFile),
     ).toBe(false);
     expect(findDetailedCycles(graph)).toEqual([]);
+  });
+
+  it("uses statement offsets when classifying duplicate Rust cfg-test statements", () => {
+    const source = [
+      "use crate::helper::shared;",
+      "",
+      "#[cfg(test)]",
+      "mod tests {",
+      "    use crate::helper::shared;",
+      "}",
+      "",
+      "#[cfg(test)]",
+      "mod test_helpers;",
+      "",
+      "mod production_helpers;",
+      "",
+    ].join("\n");
+    const productionUseIndex = source.indexOf("use crate::helper::shared;");
+    const testUseIndex = source.lastIndexOf("use crate::helper::shared;");
+    const testModuleIndex = source.indexOf("mod test_helpers;");
+    const productionModuleIndex = source.indexOf("mod production_helpers;");
+
+    expect(isRustCfgTestStatement(source, "use crate::helper::shared;", productionUseIndex)).toBe(false);
+    expect(isRustCfgTestStatement(source, "use crate::helper::shared;", testUseIndex)).toBe(true);
+    expect(isRustCfgTestStatement(source, "mod test_helpers;", testModuleIndex)).toBe(true);
+    expect(isRustCfgTestStatement(source, "mod production_helpers;", productionModuleIndex)).toBe(false);
   });
 
   it("resolves Rust super imports from mod.rs files against the parent module directory", async () => {

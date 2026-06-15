@@ -315,8 +315,9 @@ async function applyRustStatementOverride(
   context: LanguageSpecificImportContext,
   normalizedStmt: string,
   typeOnly: boolean,
+  statementStartIndex?: number,
 ): Promise<boolean> {
-  if (isRustTestOnlyStatement(context, normalizedStmt)) return true;
+  if (isRustTestOnlyStatement(context, normalizedStmt, statementStartIndex)) return true;
 
   const parsed = parseRustImportStatement(normalizedStmt);
   if (!parsed) return false;
@@ -350,9 +351,13 @@ async function applyRustStatementOverride(
   return true;
 }
 
-function isRustTestOnlyStatement(context: LanguageSpecificImportContext, normalizedStmt: string): boolean {
+function isRustTestOnlyStatement(
+  context: LanguageSpecificImportContext,
+  normalizedStmt: string,
+  statementStartIndex?: number,
+): boolean {
   if (context.languageId !== "rust") return false;
-  return isRustCfgTestStatement(context.source, normalizedStmt);
+  return isRustCfgTestStatement(context.source, normalizedStmt, statementStartIndex);
 }
 
 async function applyPhpStatementOverride(
@@ -395,10 +400,12 @@ export async function applyStatementImportOverride(
   state: StatementImportOverrideState,
   stmtText: string,
   typeOnly: boolean,
+  statementStartIndex?: number,
 ): Promise<boolean> {
   const normalizedStmt = stmtText.trim();
   if (!normalizedStmt) return false;
-  if (state.handledStatements.has(normalizedStmt)) return true;
+  const statementKey = statementImportOverrideKey(context.languageId, normalizedStmt, statementStartIndex);
+  if (state.handledStatements.has(statementKey)) return true;
 
   let handled = false;
   if (context.languageId === "csharp") {
@@ -408,14 +415,21 @@ export async function applyStatementImportOverride(
   } else if (context.languageId === "kotlin") {
     handled = await applyKotlinStatementOverride(context, normalizedStmt, typeOnly);
   } else if (context.languageId === "rust") {
-    handled = await applyRustStatementOverride(context, normalizedStmt, typeOnly);
+    handled = await applyRustStatementOverride(context, normalizedStmt, typeOnly, statementStartIndex);
   } else if (context.languageId === "php") {
     handled = await applyPhpStatementOverride(context, normalizedStmt, typeOnly);
   }
 
   if (!handled) return false;
-  state.handledStatements.add(normalizedStmt);
+  state.handledStatements.add(statementKey);
   return true;
+}
+
+function statementImportOverrideKey(languageId: string, normalizedStmt: string, statementStartIndex?: number): string {
+  if (languageId === "rust" && statementStartIndex !== undefined) {
+    return `${normalizedStmt}@${statementStartIndex}`;
+  }
+  return normalizedStmt;
 }
 
 export function appendImplicitImportBinding(

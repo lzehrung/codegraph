@@ -181,10 +181,10 @@ function limitDiffText(
   diffText: string,
   limits: { maxBytes: number; maxLines: number },
 ): { text: string; truncated: boolean } {
-  const bytes = Buffer.byteLength(diffText, "utf8");
-  const lines = diffText.split(/\r?\n/);
-  if (bytes <= limits.maxBytes && lines.length <= limits.maxLines) return { text: diffText, truncated: false };
-  return { text: lines.slice(0, limits.maxLines).join("\n").slice(0, limits.maxBytes), truncated: true };
+  const buffer = Buffer.from(diffText, "utf8");
+  const end = byteEndForLimits(buffer, 0, limits);
+  if (end >= buffer.length) return { text: diffText, truncated: false };
+  return { text: buffer.subarray(0, safeUtf8End(buffer, end)).toString("utf8"), truncated: true };
 }
 
 function limitDiffReadable(
@@ -194,19 +194,17 @@ function limitDiffReadable(
   let truncated = false;
   async function* generate(): AsyncGenerator<Buffer> {
     let bytesRead = 0;
-    let linesRead = 0;
+    let newlinesRead = 0;
     for await (const chunk of stream) {
       const buffer = bufferFromStreamChunk(chunk);
-      const byteLimitEnd = bytesRead + buffer.length > limits.maxBytes ? limits.maxBytes - bytesRead : buffer.length;
-      const lineLimitEnd = byteEndForLineLimit(buffer, Math.max(0, limits.maxLines - linesRead));
-      const end = lineLimitEnd === undefined ? byteLimitEnd : Math.min(byteLimitEnd, lineLimitEnd);
+      const end = byteEndForLimits(buffer, bytesRead, limits, newlinesRead);
       if (end > 0) {
-        const next = buffer.subarray(0, end);
+        const next = buffer.subarray(0, safeUtf8End(buffer, end));
         bytesRead += next.length;
-        linesRead += countNewlines(next);
+        newlinesRead += countNewlines(next);
         yield next;
       }
-      if (end < buffer.length || bytesRead >= limits.maxBytes || linesRead >= limits.maxLines) {
+      if (end < buffer.length) {
         truncated = true;
         break;
       }
@@ -224,15 +222,59 @@ function bufferFromStreamChunk(chunk: unknown): Buffer {
   return Buffer.from(String(chunk));
 }
 
-function byteEndForLineLimit(buffer: Buffer, remainingLines: number): number | undefined {
-  if (remainingLines <= 0) return 0;
-  let lines = 0;
+function byteEndForLimits(
+  buffer: Buffer,
+  bytesRead: number,
+  limits: { maxBytes: number; maxLines: number },
+  newlinesRead = 0,
+): number {
+  const remainingBytes = Math.max(0, limits.maxBytes - bytesRead);
+  const byteLimitEnd = Math.min(buffer.length, remainingBytes);
+  const allowedNewlines = Math.max(0, limits.maxLines - 1);
+  const remainingNewlines = Math.max(0, allowedNewlines - newlinesRead);
+  const lineLimitEnd = byteEndBeforeForbiddenNewline(buffer, remainingNewlines);
+  if (lineLimitEnd === undefined) return byteLimitEnd;
+  return Math.min(byteLimitEnd, lineLimitEnd);
+}
+
+function byteEndBeforeForbiddenNewline(buffer: Buffer, remainingNewlines: number): number | undefined {
+  let newlines = 0;
   for (let index = 0; index < buffer.length; index++) {
     if (buffer[index] === 10) {
-      lines++;
-      if (lines >= remainingLines) return index + 1;
+      if (newlines >= remainingNewlines) return index;
+      newlines++;
     }
   }
+  return undefined;
+}
+
+function safeUtf8End(buffer: Buffer, end: number): number {
+  if (end >= buffer.length) return buffer.length;
+  if (end <= 0) return 0;
+
+  let characterStart = end;
+  while (characterStart > 0 && isUtf8ContinuationByte(buffer[characterStart])) {
+    characterStart--;
+  }
+  if (characterStart === end) return end;
+
+  const leadByte = buffer[characterStart];
+  const expectedLength = utf8SequenceLength(leadByte);
+  if (expectedLength === undefined) return characterStart;
+  if (characterStart + expectedLength <= end) return end;
+  return characterStart;
+}
+
+function isUtf8ContinuationByte(byte: number | undefined): boolean {
+  return byte !== undefined && (byte & 0xc0) === 0x80;
+}
+
+function utf8SequenceLength(byte: number | undefined): number | undefined {
+  if (byte === undefined) return undefined;
+  if ((byte & 0x80) === 0) return 1;
+  if ((byte & 0xe0) === 0xc0) return 2;
+  if ((byte & 0xf0) === 0xe0) return 3;
+  if ((byte & 0xf8) === 0xf0) return 4;
   return undefined;
 }
 

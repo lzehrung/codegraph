@@ -69,6 +69,14 @@ function looksLikeGlobPattern(baseRoot: string, value: string): boolean {
   return !fs.existsSync(resolveFilePathFromRoot(baseRoot, value));
 }
 
+function isExistingDirectory(filePath: string): boolean {
+  try {
+    return fs.statSync(filePath, { throwIfNoEntry: false })?.isDirectory() ?? false;
+  } catch {
+    return false;
+  }
+}
+
 function assertValidIncludeRoots(command: string, baseRoot: string, includeRoots: readonly string[]): void {
   const globLikeRoot = includeRoots.find((includeRoot) => looksLikeGlobPattern(baseRoot, includeRoot));
   if (!globLikeRoot) return;
@@ -193,8 +201,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   if (cmd === "impact" && parsed.positionals.length) {
     const impactRootArg = parsed.positionals[0]!;
     const resolvedImpactRoot = resolveAbs(impactRootArg);
-    const isLegacyImpactRoot =
-      !rootOpt && fs.existsSync(resolvedImpactRoot) && fs.statSync(resolvedImpactRoot).isDirectory();
+    const isLegacyImpactRoot = !rootOpt && isExistingDirectory(resolvedImpactRoot);
     if (!isLegacyImpactRoot) {
       writeStderrLine(`Unexpected positional argument for impact: ${impactRootArg}`);
       writeStderrLine("Usage: codegraph impact [project-root] [--provider git|github|raw] [options]");
@@ -202,6 +209,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     }
   }
 
+  const firstPositionalRoot = parsed.positionals.length === 1 ? resolveAbs(parsed.positionals[0]!) : undefined;
   const defaultProjectRoot =
     (cmd === "graph" ||
       cmd === "graph-delta" ||
@@ -212,10 +220,9 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       cmd === "duplicates" ||
       cmd === "impact") &&
     !rootOpt &&
-    parsed.positionals.length === 1 &&
-    fs.existsSync(resolveAbs(parsed.positionals[0]!)) &&
-    fs.statSync(resolveAbs(parsed.positionals[0]!)).isDirectory()
-      ? resolveAbs(parsed.positionals[0]!)
+    firstPositionalRoot !== undefined &&
+    isExistingDirectory(firstPositionalRoot)
+      ? firstPositionalRoot
       : getCwd();
 
   const projectRootFs = rootOpt ? resolveAbs(rootOpt) : defaultProjectRoot;
