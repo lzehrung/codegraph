@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 
@@ -9,6 +10,10 @@ function sourceLineCount(relativePath: string): number {
   const source = fs.readFileSync(path.join(repoRoot, relativePath), "utf8").trimEnd();
   return source.split(/\r?\n/).length;
 }
+
+type CycleReport = {
+  files: string[];
+};
 
 describe("source module structure", () => {
   test("keeps shared utility concerns in focused modules", () => {
@@ -68,5 +73,21 @@ describe("source module structure", () => {
       expect(fs.existsSync(path.join(repoRoot, relativePath)), relativePath).toBeTruthy();
     }
     expect(sourceLineCount("src/cli.ts")).toBeLessThanOrEqual(2400);
+  });
+
+  test("keeps TypeScript source modules free of dependency cycles", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["./dist/cli.js", "cycles", "--root", ".", "./src", "--sort", "priority", "--json"],
+      {
+        cwd: repoRoot,
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const cycles = JSON.parse(result.stdout) as CycleReport[];
+    expect(cycles).toEqual([]);
   });
 });

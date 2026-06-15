@@ -1,86 +1,41 @@
-import type { LanguageDefinition } from "../types.js";
-import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 import {
+  cFamilyBlock,
   cFamilyContainerTypes,
-  cFamilyControlSplitPoints,
-  cFamilyCoreExportQueries,
-  cFamilyCoreLocalQueries,
-  cFamilyIncludeBindingsQuery,
-  cFamilyIncludeImportsQuery,
-  cFunctionNameQuery,
+  cFamilyFunctionBlock,
+  cFamilyTypeIdentifierBlock,
+  createCFamilyLanguageDefinition,
   findAncestor,
   isFunctionDeclarator,
   isInAncestorDeclarator,
   isInField,
   isInParameterList,
-  joinQueryPatterns,
 } from "./cFamily.js";
 
-const FUNCTION_NAME_QUERY = cFunctionNameQuery("chunk.name", false);
-const GRAPH_FUNCTION_NAME_QUERY = cFunctionNameQuery("name", false);
-
-export const C_DEF: LanguageDefinition = {
+export const C_DEF = createCFamilyLanguageDefinition({
   id: "c",
   extensions: [".c", ".h", ".i"],
-  grammar: () => loadTreeSitterLanguage("tree-sitter-c"),
-  structure: {
-    blocks: [
-      {
-        type: "function_definition",
-        nameQuery: FUNCTION_NAME_QUERY,
-        captureId: "function",
-      },
-      {
-        type: "struct_specifier",
-        nameQuery: "name: (type_identifier) @chunk.name",
-        captureId: "struct",
-      },
-      {
-        type: "union_specifier",
-        nameQuery: "name: (type_identifier) @chunk.name",
-        captureId: "union",
-      },
-      {
-        type: "enum_specifier",
-        nameQuery: "name: (type_identifier) @chunk.name",
-        captureId: "enum",
-      },
-      {
-        type: "type_definition",
-        nameQuery: "declarator: (type_identifier) @chunk.name",
-        captureId: "type",
-      },
-      {
-        type: "preproc_def",
-        nameQuery: "name: (identifier) @chunk.name",
-        captureId: "macro",
-      },
-      {
-        type: "preproc_function_def",
-        nameQuery: "name: (identifier) @chunk.name",
-        captureId: "macro",
-      },
-    ],
-    splitPoints: cFamilyControlSplitPoints,
-    comments: ["comment"],
-  },
-  graph: {
-    imports: cFamilyIncludeImportsQuery,
-    exports: joinQueryPatterns([
-      ...cFamilyCoreExportQueries(GRAPH_FUNCTION_NAME_QUERY),
-      `(union_specifier name: (type_identifier) @name)`,
-      `(preproc_def name: (identifier) @name)`,
-      `(preproc_function_def name: (identifier) @name)`,
-    ]),
-    locals: joinQueryPatterns([
-      ...cFamilyCoreLocalQueries(GRAPH_FUNCTION_NAME_QUERY),
-      `(union_specifier name: (type_identifier) @name)`,
-      `(preproc_def name: (identifier) @name)`,
-      `(preproc_function_def name: (identifier) @name)`,
-    ]),
-    importBindings: cFamilyIncludeBindingsQuery,
-  },
+  grammarPackage: "tree-sitter-c",
+  includeFieldIdentifier: false,
+  blocks: (functionNameQuery) => [
+    cFamilyFunctionBlock(functionNameQuery),
+    cFamilyTypeIdentifierBlock("struct_specifier", "struct"),
+    cFamilyTypeIdentifierBlock("union_specifier", "union"),
+    cFamilyTypeIdentifierBlock("enum_specifier", "enum"),
+    cFamilyBlock("type_definition", "declarator: (type_identifier) @chunk.name", "type"),
+    cFamilyBlock("preproc_def", "name: (identifier) @chunk.name", "macro"),
+    cFamilyBlock("preproc_function_def", "name: (identifier) @chunk.name", "macro"),
+  ],
+  extraExportQueries: [
+    `(union_specifier name: (type_identifier) @name)`,
+    `(preproc_def name: (identifier) @name)`,
+    `(preproc_function_def name: (identifier) @name)`,
+  ],
+  extraLocalQueries: [
+    `(union_specifier name: (type_identifier) @name)`,
+    `(preproc_def name: (identifier) @name)`,
+    `(preproc_function_def name: (identifier) @name)`,
+  ],
   nodeTypes: {
     identifier: ["identifier", "field_identifier", "type_identifier"],
     propertyIdentifier: ["field_identifier"],
@@ -120,7 +75,6 @@ export const C_DEF: LanguageDefinition = {
     return false;
   },
   createsFunctionScope: (node) => node.type === "function_definition",
-  createsBlockScope: (node) => node.type === "compound_statement",
-  supportsCrossModuleSymbols: true,
-};
+});
+
 registerLanguage(C_DEF);

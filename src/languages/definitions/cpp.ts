@@ -1,87 +1,44 @@
-import type { LanguageDefinition } from "../types.js";
-import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
 import {
+  cFamilyBlock,
   cFamilyContainerTypes,
   cFamilyControlSplitPoints,
-  cFamilyCoreExportQueries,
-  cFamilyCoreLocalQueries,
-  cFamilyIncludeBindingsQuery,
-  cFamilyIncludeImportsQuery,
-  cFunctionNameQuery,
+  cFamilyFunctionBlock,
+  cFamilyTypeIdentifierBlock,
+  createCFamilyLanguageDefinition,
   findAncestor,
   isFunctionDeclarator,
   isInAncestorDeclarator,
   isInField,
   isInParameterList,
-  joinQueryPatterns,
 } from "./cFamily.js";
 
-const FUNCTION_NAME_QUERY = cFunctionNameQuery("chunk.name", true);
-const GRAPH_FUNCTION_NAME_QUERY = cFunctionNameQuery("name", true);
-
-export const CPP_DEF: LanguageDefinition = {
+export const CPP_DEF = createCFamilyLanguageDefinition({
   id: "cpp",
   extensions: [".cc", ".cpp", ".cxx", ".c++", ".hpp", ".hh", ".hxx", ".ipp", ".tpp", ".inl"],
-  grammar: () => loadTreeSitterLanguage("tree-sitter-cpp"),
-  structure: {
-    blocks: [
-      {
-        type: "function_definition",
-        nameQuery: FUNCTION_NAME_QUERY,
-        captureId: "function",
-      },
-      {
-        type: "class_specifier",
-        nameQuery: "name: (type_identifier) @chunk.name",
-        captureId: "class",
-      },
-      {
-        type: "struct_specifier",
-        nameQuery: "name: (type_identifier) @chunk.name",
-        captureId: "struct",
-      },
-      {
-        type: "enum_specifier",
-        nameQuery: "name: (type_identifier) @chunk.name",
-        captureId: "enum",
-      },
-      {
-        type: "namespace_definition",
-        nameQuery: "name: (namespace_identifier) @chunk.name",
-        captureId: "namespace",
-      },
-      {
-        type: "alias_declaration",
-        nameQuery: "name: (type_identifier) @chunk.name",
-        captureId: "type",
-      },
-      {
-        type: "type_definition",
-        nameQuery: "declarator: (type_identifier) @chunk.name",
-        captureId: "type",
-      },
-    ],
-    splitPoints: [...cFamilyControlSplitPoints, "try_statement", "catch_clause"],
-    comments: ["comment"],
-  },
-  graph: {
-    imports: cFamilyIncludeImportsQuery,
-    exports: joinQueryPatterns([
-      ...cFamilyCoreExportQueries(GRAPH_FUNCTION_NAME_QUERY),
-      `(class_specifier name: (type_identifier) @name)`,
-      `(namespace_definition name: (namespace_identifier) @name)`,
-      `(alias_declaration name: (type_identifier) @name)`,
-      `(using_declaration (qualified_identifier name: (identifier) @name))`,
-    ]),
-    locals: joinQueryPatterns([
-      ...cFamilyCoreLocalQueries(GRAPH_FUNCTION_NAME_QUERY),
-      `(class_specifier name: (type_identifier) @name)`,
-      `(namespace_definition name: (namespace_identifier) @name)`,
-      `(alias_declaration name: (type_identifier) @name)`,
-    ]),
-    importBindings: cFamilyIncludeBindingsQuery,
-  },
+  grammarPackage: "tree-sitter-cpp",
+  includeFieldIdentifier: true,
+  blocks: (functionNameQuery) => [
+    cFamilyFunctionBlock(functionNameQuery),
+    cFamilyTypeIdentifierBlock("class_specifier", "class"),
+    cFamilyTypeIdentifierBlock("struct_specifier", "struct"),
+    cFamilyTypeIdentifierBlock("enum_specifier", "enum"),
+    cFamilyBlock("namespace_definition", "name: (namespace_identifier) @chunk.name", "namespace"),
+    cFamilyTypeIdentifierBlock("alias_declaration", "type"),
+    cFamilyBlock("type_definition", "declarator: (type_identifier) @chunk.name", "type"),
+  ],
+  splitPoints: [...cFamilyControlSplitPoints, "try_statement", "catch_clause"],
+  extraExportQueries: [
+    `(class_specifier name: (type_identifier) @name)`,
+    `(namespace_definition name: (namespace_identifier) @name)`,
+    `(alias_declaration name: (type_identifier) @name)`,
+    `(using_declaration (qualified_identifier name: (identifier) @name))`,
+  ],
+  extraLocalQueries: [
+    `(class_specifier name: (type_identifier) @name)`,
+    `(namespace_definition name: (namespace_identifier) @name)`,
+    `(alias_declaration name: (type_identifier) @name)`,
+  ],
   nodeTypes: {
     identifier: ["identifier", "field_identifier", "type_identifier", "namespace_identifier"],
     propertyIdentifier: ["field_identifier", "identifier"],
@@ -136,7 +93,6 @@ export const CPP_DEF: LanguageDefinition = {
     return false;
   },
   createsFunctionScope: (node) => node.type === "function_definition" || node.type === "lambda_expression",
-  createsBlockScope: (node) => node.type === "compound_statement",
-  supportsCrossModuleSymbols: true,
-};
+});
+
 registerLanguage(CPP_DEF);

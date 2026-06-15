@@ -1,17 +1,15 @@
 import { astGrep, textGrep } from "../graphs/grep.js";
 import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
+import type { CliJsonWriterContext, CliOptionContext, CliStderrExitContext } from "./context.js";
 import { parseOptionalPositiveIntegerOption } from "./options.js";
 
-export type GrepCommandContext = {
-  projectRootFs: string;
-  discoveryOptions: ProjectFileDiscoveryOptions;
-  parsedOptions: ReadonlyMap<string, readonly string[]>;
-  getOpt: (name: string) => string | undefined;
-  hasFlag: (name: string) => boolean;
-  writeJSONLine: (value: unknown) => void;
-  writeStderrLine: (message: string) => void;
-  exit: (code: number) => never;
-};
+export type GrepCommandContext = CliOptionContext &
+  CliJsonWriterContext &
+  CliStderrExitContext & {
+    projectRootFs: string;
+    discoveryOptions: ProjectFileDiscoveryOptions;
+    parsedOptions: ReadonlyMap<string, readonly string[]>;
+  };
 
 export async function handleGrepCommand(context: GrepCommandContext): Promise<void> {
   const querySource = context.getOpt("--query");

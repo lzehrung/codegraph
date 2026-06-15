@@ -13,6 +13,7 @@ import { formatRequiredArgumentCount, mapSuggestions, mapSurfaceArea } from "../
 import { graphToMermaidSymbolsWithFiles } from "../graphs/symbol-render.js";
 import { type GraphBuildOptions } from "../graphs/types.js";
 import { type SymbolGraph, type SymbolNodeKind } from "../graphs/symbol-graph.js";
+import { parseGitHubRepo } from "../impact/providers/base.js";
 import {
   appendDuplicateLeadSummary,
   collectDuplicateLeadSummary,
@@ -316,6 +317,7 @@ async function hydrateDiffProviderOptions(context: ImpactCommandContext, options
       );
     }
     options.pr = parsePositiveIntegerOption(pr, "--pr", 1);
+    parseGitHubRepo(repo);
     options.repo = repo;
     return;
   }

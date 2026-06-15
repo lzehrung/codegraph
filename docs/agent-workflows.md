@@ -6,22 +6,16 @@ Use Codegraph for structural repo questions: architecture, dependency direction,
 
 ## Start here
 
-For an unfamiliar repo, the shortest useful loop is:
+For an unfamiliar repo, keep the first loop bounded:
 
 ```bash
 codegraph doctor
 codegraph orient --root . --budget small --json
 codegraph packet get <handle-from-orient> --json
-codegraph search "auth user" --json
-codegraph explain src/auth.ts --json
-codegraph inspect ./src --limit 20
-codegraph artifact build --root . --out codegraph-out --json
-codegraph doctor codegraph-out
-codegraph mcp serve --root . --stdio
-codegraph mcp serve --root . --port 7331
 ```
 
-Use `orient` for first-turn repo context, then use `packet get` for bounded follow-up evidence by handle. Use `search` when the agent has a query but no handle, and use `explain` when it already knows a file, symbol, SQL object, or search handle. `inspect` remains useful for human-readable architecture summaries and older installs.
+Use `search` when the agent has a query but no handle, `explain` when it already knows a file/symbol/SQL object/handle, and `inspect` for a human-readable architecture summary.
+Use `artifact build` for durable handoff directories and `mcp serve` when repeated follow-up calls should share one warm repo session.
 
 Choose output by the next consumer:
 
@@ -31,7 +25,7 @@ Choose output by the next consumer:
 
 For durable repo-local scan scope, add `codegraph.config.json` at the project root. `discovery.ignoreGlobs` keeps large fixture, generated, or vendored folders out of agent search, MCP sessions, graphing, unresolved-import checks, impact, and review unless a command explicitly changes scan scope.
 
-For the raw CLI command reference, see [docs/cli.md](./cli.md).
+For raw command flags and output contracts, see [docs/cli.md](./cli.md). For library types and wrappers, see [docs/library-api.md](./library-api.md).
 
 ## Orientation packets
 
@@ -44,7 +38,9 @@ codegraph packet get file:src%2Fcli.ts --json
 codegraph packet get <handle-from-orient> --max-symbols 25 --json
 ```
 
-Orientation returns summary bullets, a bounded tree, hotspot modules, budgeted health counts, stable packet handles, omitted counts, and recommended next commands. Use `orient --pretty` for compact model-readable triage and `orient --json` when follow-up tools need exact handles or omission counts. Small orientation packets default to `--health skip`; medium and large default to `--health summary`, which counts cycles and unresolved imports while omitting duplicate health. Use `--health full` only when exhaustive duplicate counts matter. Packet retrieval accepts file, symbol, chunk, SQL, graph, and review handles and delegates to the same bounded explain/review helpers used by existing commands. Review handles are available when orientation is invoked programmatically with a review range.
+Orientation returns summary bullets, a bounded tree, hotspot modules, budgeted health counts, stable packet handles, omitted counts, and recommended next commands.
+Use `orient --pretty` for compact model-readable triage and `orient --json` when follow-up tools need exact handles or omission counts.
+Small orientation packets default to cheap health analysis; use larger budgets only when cycle, unresolved-import, or duplicate counts matter.
 
 ## Search anchors
 
@@ -57,13 +53,13 @@ codegraph search "handle login" --mode graph --from src/auth.ts --depth 1 --json
 codegraph explain "<handle-from-search>" --json
 ```
 
-Search results include project-relative `handle`, `rankReasons`, `evidence`, `neighbors`, `followUps`, `resultCount`, `totalCandidates`, `limits`, and `omittedCounts`. `explain` accepts those handles plus file paths, symbol names, and SQL object names, then returns bounded symbols, dependencies, reverse dependencies, references, snippets, duplicate context, SQL relation facts, optional changed-context review tasks/candidate tests, explicit limits, omission counts, and follow-ups. Generated command strings POSIX-shell-quote dynamic arguments when needed. SQL object handles or schema-qualified names avoid ambiguous unqualified basenames. Reference, snippet, and duplicate omission counts are bounded lower bounds once navigation or duplicate-analysis limits are reached, so small explain packets stay cheap on high-fan-in symbols or noisy duplicate buckets.
+Search results include stable handles, evidence, rank reasons, neighbors, follow-ups, limits, and omitted counts.
+`explain` accepts those handles plus file paths, symbol names, and SQL object names, then returns bounded dependencies, references, snippets, duplicate context, SQL relation facts, review context, and follow-ups.
+Generated command strings quote dynamic arguments, SQL handles avoid ambiguous basenames, and omission counts stay explicit when packets hit limits.
 
-Natural-language multi-token searches give exact documentation phrases a ranking boost, while identifier-like queries such as `validateUser` stay symbol-first.
-
-Use `artifact build` when the agent needs a durable handoff directory. The default bundle writes SQLite, self-describing project-relative graph JSON with symbols, a concise Markdown report, suggested questions, and a manifest. Suggested questions command stable handles, not ambiguous bare names, and use unique IDs even when display labels collide. In-repo artifact output directories and linked outside-root files are excluded from the emitted artifacts so stale handoff files do not feed back into the graph. With `--force`, Codegraph removes recognizable stale artifact files while preserving unrelated operator files and refusing unrecognized reserved-name collisions. `codegraph doctor <artifact-dir>` recognizes manifest-backed bundle directories and reports which expected artifacts are present.
-
-Agent CLI commands use the incremental index path and default to disk cache. Pure `search --mode path` and `search --mode text` calls skip detailed symbol graph construction, while hybrid, symbol, SQL, and graph searches keep symbol-aware ranking and neighbors. Pass shared index flags such as `--cache`, `--threads`, `--native`, `--workers`, `--include-glob`, or `--ignore-glob` when `orient`, `search`, `explain`, `packet get`, or `artifact build` should mirror a specific scan mode.
+Agent CLI commands use the incremental index path and default to disk cache.
+Pure path/text searches skip detailed symbol graph construction; hybrid, symbol, SQL, and graph searches keep symbol-aware ranking and neighbors.
+Pass shared index flags only when an agent pass must mirror a specific scan mode; see [docs/cli.md](./cli.md#agent-oriented-commands) for the canonical flag list.
 
 Use `drift` when the agent needs one architecture-regression report for a base/head range:
 
@@ -76,9 +72,9 @@ Drift compares structural signals over time: dependency cycles, hotspots, unreso
 
 ## MCP server
 
-Use `codegraph mcp serve --root . --stdio` when an agent can spawn and own a stdio MCP subprocess. Use `codegraph mcp serve --root /path/to/repo --port 7331 --warmup` for one shared repo-local Streamable HTTP server, then point each IDE, terminal, or agent MCP config at `http://127.0.0.1:7331/mcp`. Add `--warmup-symbols` when symbol-heavy tools should be ready before the first request. HTTP binds to `127.0.0.1` by default; pass `--host <host>` only when the server must be reachable elsewhere. MCP reuses one in-process Codegraph session and exposes the same deterministic primitives as compact tools: `orient`, `packet_get`, `search`, `get_file`, `get_symbol`, `goto`, `refs`, `deps`, `rdeps`, `path`, `impact`, `review`, `query_sqlite`, `refresh_index`, and `artifact_build`.
-
-MCP is an ergonomics and performance layer, not a separate analysis engine. It gives agents stable handles from orientation, `search`, and `explain`, avoids rebuilding the project for each follow-up call, and returns bounded snippets/resources. File and artifact paths are confined to the project root after realpath resolution; tool calls do not accept per-request root overrides. Use `refresh_index` after changing files while a long-running server is active. Tools are read-only by default; `query_sqlite` rejects mutating SQL, recursive queries, and synthetic payload functions while capping returned rows and bytes. `artifact_build` is available only when the server is started with `--allow-build`.
+Use `codegraph mcp serve --root . --stdio` when an agent can spawn and own a stdio MCP subprocess.
+Use `codegraph mcp serve --root /path/to/repo --port 7331 --warmup` for one shared repo-local Streamable HTTP server, then point clients at `http://127.0.0.1:7331/mcp`.
+MCP is an ergonomics and performance layer over the same analysis engine; it keeps warm session state, returns bounded resources, confines paths to the project root, and keeps tools read-only unless the server is started with `--allow-build`.
 
 See [MCP server](./mcp.md) for client configuration examples.
 

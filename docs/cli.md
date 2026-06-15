@@ -326,7 +326,7 @@ codegraph impact --base main --head feature --depth 2 --max-refs 1000
 codegraph impact --base main --head feature --scope imported
 
 # Ignore noisy files
-codegraph impact --base main --head feature --ignore-glob "**/package-lock.json" "**/dist/**"
+codegraph impact --base main --head feature --ignore-glob "**/package-lock.json" --ignore-glob "**/dist/**"
 
 # Symbol references only
 codegraph impact --base main --head feature --members-only

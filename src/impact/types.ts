@@ -30,7 +30,15 @@ export type Diff = {
 // Provider options
 export type DiffProviderOptions =
   | { provider: "git"; base: string; head: string; cwd?: string }
-  | { provider: "github"; repo: string; pr: number; token?: string }
+  | {
+      provider: "github";
+      repo: string;
+      pr: number;
+      token?: string;
+      timeoutMs?: number;
+      maxBytes?: number;
+      maxLines?: number;
+    }
   | { provider: "raw"; diffText: string };
 
 // Changed symbols

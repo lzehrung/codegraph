@@ -7,6 +7,7 @@ import {
   parseRustImportStatement,
 } from "../../languages/importStatementParsers.js";
 import { getPhpComposerImplicitFiles } from "../../util/resolution.js";
+import { isRustCfgTestStatement } from "../../util/rustTestModules.js";
 import type { ImportBinding } from "../types.js";
 import type { ImportBindingSink, ImportResolver, ResolvedImportTarget } from "./context.js";
 
@@ -315,6 +316,8 @@ async function applyRustStatementOverride(
   normalizedStmt: string,
   typeOnly: boolean,
 ): Promise<boolean> {
+  if (isRustTestOnlyStatement(context, normalizedStmt)) return true;
+
   const parsed = parseRustImportStatement(normalizedStmt);
   if (!parsed) return false;
 
@@ -345,6 +348,11 @@ async function applyRustStatementOverride(
     });
   }
   return true;
+}
+
+function isRustTestOnlyStatement(context: LanguageSpecificImportContext, normalizedStmt: string): boolean {
+  if (context.languageId !== "rust") return false;
+  return isRustCfgTestStatement(context.source, normalizedStmt);
 }
 
 async function applyPhpStatementOverride(

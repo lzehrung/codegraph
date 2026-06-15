@@ -6,10 +6,27 @@ import { supportForFile } from "../../languages.js";
 import { logWithLevel } from "../../logging.js";
 import { SqliteDatabase } from "../../sqlite-driver.js";
 import { buildBloomFilterFromSource } from "../../util/bloomFilter.js";
+import {
+  createSqliteTableIfMissing,
+  ensureSqliteVersionedTableSchema,
+  recreateSqliteTable,
+  sqliteTableColumns,
+  type SqliteTableColumn,
+} from "../../util/sqliteSchema.js";
 import type { BuildOptions, BuildReport, ModuleIndex } from "../types.js";
 import { initCacheReport } from "./reports.js";
 
 const PARSED_CACHE_VERSION = 1;
+const MODULE_CACHE_SCHEMA_VERSION = 1;
+const MODULE_CACHE_TABLE = "module_cache";
+const MODULE_CACHE_SCHEMA_VERSION_KEY = "module_cache.schema_version";
+const MODULE_CACHE_COLUMNS: readonly SqliteTableColumn[] = [
+  { name: "file", definition: "TEXT PRIMARY KEY" },
+  { name: "sig", definition: "TEXT NOT NULL" },
+  { name: "version", definition: "INTEGER NOT NULL" },
+  { name: "payload", definition: "TEXT NOT NULL" },
+  { name: "updated_at", definition: "INTEGER NOT NULL" },
+];
 
 type ModuleCacheEntry = {
   version: number;
@@ -24,8 +41,48 @@ export function cacheRoot(projectRoot: string, opts?: BuildOptions): string {
   return opts?.cacheDir || path.join(projectRoot, ".codegraph-cache", "index-v1");
 }
 
+export function cacheDatabasePath(projectRoot: string, opts: BuildOptions | undefined, filename: string): string {
+  return path.join(cacheRoot(projectRoot, opts), filename).replace(/\\/g, "/");
+}
+
 function diskCacheDatabasePath(projectRoot: string, opts?: BuildOptions): string {
-  return path.join(cacheRoot(projectRoot, opts), "index-cache.sqlite").replace(/\\/g, "/");
+  return cacheDatabasePath(projectRoot, opts, "index-cache.sqlite");
+}
+
+function createModuleCacheTable(db: SqliteDatabase): void {
+  createSqliteTableIfMissing(db, MODULE_CACHE_TABLE, MODULE_CACHE_COLUMNS);
+}
+
+function recreateModuleCacheTable(db: SqliteDatabase): void {
+  recreateSqliteTable(db, MODULE_CACHE_TABLE, createModuleCacheTable);
+}
+
+function migrateModuleCacheTable(db: SqliteDatabase): void {
+  const columns = sqliteTableColumns(db, MODULE_CACHE_TABLE);
+  if (!columns.size) {
+    createModuleCacheTable(db);
+    return;
+  }
+  if (!columns.has("file")) {
+    recreateModuleCacheTable(db);
+    return;
+  }
+  if (!columns.has("sig")) db.exec("ALTER TABLE module_cache ADD COLUMN sig TEXT NOT NULL DEFAULT '';");
+  if (!columns.has("version")) db.exec("ALTER TABLE module_cache ADD COLUMN version INTEGER NOT NULL DEFAULT 0;");
+  if (!columns.has("payload")) db.exec("ALTER TABLE module_cache ADD COLUMN payload TEXT NOT NULL DEFAULT '{}';");
+  if (!columns.has("updated_at")) db.exec("ALTER TABLE module_cache ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;");
+}
+
+function ensureModuleCacheSchema(db: SqliteDatabase): void {
+  ensureSqliteVersionedTableSchema({
+    db,
+    tableName: MODULE_CACHE_TABLE,
+    schemaVersionKey: MODULE_CACHE_SCHEMA_VERSION_KEY,
+    schemaVersion: MODULE_CACHE_SCHEMA_VERSION,
+    createTable: createModuleCacheTable,
+    migrateTable: migrateModuleCacheTable,
+  });
+  db.exec("CREATE INDEX IF NOT EXISTS idx_module_cache_sig ON module_cache(sig);");
 }
 
 function getDiskCacheDatabase(projectRoot: string, opts?: BuildOptions): SqliteDatabase {
@@ -36,16 +93,7 @@ function getDiskCacheDatabase(projectRoot: string, opts?: BuildOptions): SqliteD
   const db = new SqliteDatabase(dbPath);
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = NORMAL");
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS module_cache (
-      file TEXT PRIMARY KEY,
-      sig TEXT NOT NULL,
-      version INTEGER NOT NULL,
-      payload TEXT NOT NULL,
-      updated_at INTEGER NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_module_cache_sig ON module_cache(sig);
-  `);
+  ensureModuleCacheSchema(db);
   diskCacheDatabases.set(dbPath, db);
   return db;
 }

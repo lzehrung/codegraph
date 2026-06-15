@@ -22,11 +22,18 @@ import { attemptParsePreparedFileContext, type ParsedFileContext } from "./index
 import { SymbolKind, type BuildOptions, type ProjectIndex, type SymbolDef } from "./indexer/types.js";
 import { prepareSourceInput } from "./languages/filePrep.js";
 import { SqliteDatabase } from "./sqlite-driver.js";
-import { cacheRoot } from "./indexer/build-cache/module-cache.js";
+import { cacheDatabasePath } from "./indexer/build-cache/module-cache.js";
 import { appendToArrayMap } from "./util/collections.js";
 import { maskJsLikeCommentsStringsAndRegex } from "./util/comments.js";
 import { collectLineStartOffsets } from "./util/lines.js";
 import { assertFilePathWithinRoot, normalizePath, toProjectDisplayPath } from "./util/paths.js";
+import {
+  createSqliteTableIfMissing,
+  ensureSqliteVersionedTableSchema,
+  recreateSqliteTable,
+  sqliteTableColumns,
+  type SqliteTableColumn,
+} from "./util/sqliteSchema.js";
 
 export type DuplicateConfidence = "high" | "medium" | "low";
 export type DuplicateCloneType = "exact" | "renamed" | "near" | "weak";
@@ -237,7 +244,18 @@ type CollectedDuplicateUnits = {
   belowThresholdUnits: number;
 };
 const DUPLICATE_UNIT_CACHE_VERSION = 2;
+const DUPLICATE_UNIT_CACHE_SCHEMA_VERSION = 1;
+const DUPLICATE_UNIT_CACHE_TABLE = "duplicate_unit_cache";
+const DUPLICATE_UNIT_CACHE_SCHEMA_VERSION_KEY = "duplicate_unit_cache.schema_version";
 const DUPLICATE_TOKENIZER_REVISION = 2;
+const DUPLICATE_UNIT_CACHE_COLUMNS: readonly SqliteTableColumn[] = [
+  { name: "file", definition: "TEXT NOT NULL" },
+  { name: "variant", definition: "TEXT NOT NULL" },
+  { name: "sig", definition: "TEXT NOT NULL" },
+  { name: "version", definition: "INTEGER NOT NULL" },
+  { name: "payload", definition: "TEXT NOT NULL" },
+  { name: "updated_at", definition: "INTEGER NOT NULL" },
+];
 
 type DuplicateSerializedUnit = Omit<DuplicateInternalUnit, "tokenSet" | "signatures"> & {
   tokenSet: string[];
@@ -540,7 +558,48 @@ function duplicateUnitCacheKey(file: string, variant: string): string {
 }
 
 function duplicateUnitCacheDatabasePath(projectRoot: string, opts?: BuildOptions): string {
-  return path.join(cacheRoot(projectRoot, opts), "duplicate-unit-cache.sqlite").replace(/\\/g, "/");
+  return cacheDatabasePath(projectRoot, opts, "duplicate-unit-cache.sqlite");
+}
+
+function createDuplicateUnitCacheTable(db: SqliteDatabase): void {
+  createSqliteTableIfMissing(db, DUPLICATE_UNIT_CACHE_TABLE, DUPLICATE_UNIT_CACHE_COLUMNS, [
+    "PRIMARY KEY (file, variant)",
+  ]);
+}
+
+function recreateDuplicateUnitCacheTable(db: SqliteDatabase): void {
+  recreateSqliteTable(db, DUPLICATE_UNIT_CACHE_TABLE, createDuplicateUnitCacheTable);
+}
+
+function migrateDuplicateUnitCacheTable(db: SqliteDatabase): void {
+  const columns = sqliteTableColumns(db, DUPLICATE_UNIT_CACHE_TABLE);
+  if (!columns.size) {
+    createDuplicateUnitCacheTable(db);
+    return;
+  }
+  if (!columns.has("file") || !columns.has("variant")) {
+    recreateDuplicateUnitCacheTable(db);
+    return;
+  }
+  if (!columns.has("sig")) db.exec("ALTER TABLE duplicate_unit_cache ADD COLUMN sig TEXT NOT NULL DEFAULT '';");
+  if (!columns.has("version"))
+    db.exec("ALTER TABLE duplicate_unit_cache ADD COLUMN version INTEGER NOT NULL DEFAULT 0;");
+  if (!columns.has("payload"))
+    db.exec("ALTER TABLE duplicate_unit_cache ADD COLUMN payload TEXT NOT NULL DEFAULT '[]';");
+  if (!columns.has("updated_at")) {
+    db.exec("ALTER TABLE duplicate_unit_cache ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;");
+  }
+}
+
+function ensureDuplicateUnitCacheSchema(db: SqliteDatabase): void {
+  ensureSqliteVersionedTableSchema({
+    db,
+    tableName: DUPLICATE_UNIT_CACHE_TABLE,
+    schemaVersionKey: DUPLICATE_UNIT_CACHE_SCHEMA_VERSION_KEY,
+    schemaVersion: DUPLICATE_UNIT_CACHE_SCHEMA_VERSION,
+    createTable: createDuplicateUnitCacheTable,
+    migrateTable: migrateDuplicateUnitCacheTable,
+  });
 }
 
 function duplicateUnitCacheDatabase(index: ProjectIndex): SqliteDatabase | null {
@@ -556,17 +615,7 @@ function duplicateUnitCacheDatabase(index: ProjectIndex): SqliteDatabase | null 
   const db = new SqliteDatabase(dbPath);
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = NORMAL");
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS duplicate_unit_cache (
-      file TEXT NOT NULL,
-      variant TEXT NOT NULL,
-      sig TEXT NOT NULL,
-      version INTEGER NOT NULL,
-      payload TEXT NOT NULL,
-      updated_at INTEGER NOT NULL,
-      PRIMARY KEY (file, variant)
-    );
-  `);
+  ensureDuplicateUnitCacheSchema(db);
   entry.db = db;
   return db;
 }

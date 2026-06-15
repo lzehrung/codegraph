@@ -25,6 +25,7 @@ import {
   isGraphOnlyLanguage,
 } from "../documentLinks.js";
 import { sliceText, unquote } from "../util/ast.js";
+import { isRustCfgTestStatement } from "../util/rustTestModules.js";
 import { extractJsTsSpecifiers, extractPythonSpecifiers, type ModuleSpecifier } from "../util/specifiers.js";
 
 export type FallbackImportExtractionReason = "fast" | "reduced-mode" | "query-error" | "query-empty";
@@ -308,6 +309,7 @@ export function collectModuleSpecifiersFromSource(
           continue;
         }
         if (support.id === "rust") {
+          if (isRustCfgTestStatement(source, stmtText)) continue;
           const parsed = parseRustImportStatement(stmtText);
           if (parsed) {
             out.push(rustSpecifierFromParsedImport(parsed));

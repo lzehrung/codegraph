@@ -4,11 +4,10 @@ import type { GraphBuildOptions } from "../graphs/types.js";
 import type { LogLevel } from "../logging.js";
 import type { NativeFallbackReason, NativeRuntimeMode } from "../native/contracts.js";
 import type { ScopeIndex } from "./scope-types.js";
-import type { ReferenceCandidateIndex } from "./reference-candidates.js";
+import type { ReferenceCandidateIndex } from "./reference-candidate-types.js";
 import type { ParsedFileContext } from "./parse-context.js";
 import type { Edge, FileId, Graph, Range } from "../types.js";
 import { type ProjectFileDiscoveryOptions, type ProjectFileInfo } from "../util/projectFiles.js";
-import type { ManifestFileEntry } from "./build-cache/manifest.js";
 import type { ImportBinding } from "./import-types.js";
 
 export type { ImportBinding } from "./import-types.js";
@@ -78,7 +77,10 @@ export type ResolvedExport = { kind: "resolved"; def: SymbolDef } | { kind: "nam
  * reuse it across graph, navigation, review, impact, and agent-tool calls that
  * should agree on the same repo state.
  */
-export type ProjectIndexManifestEntry = Pick<ManifestFileEntry, "sig" | "gitSig">;
+export type ProjectIndexManifestEntry = {
+  sig: string;
+  gitSig?: string;
+};
 
 export type ProjectIndex = {
   graph: Graph;

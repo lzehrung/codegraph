@@ -38,13 +38,13 @@ Why it matters:
 
 ### 2. A docs command silently drops one ignore glob
 
-`docs/cli.md` shows:
+`docs/cli.md` previously showed:
 
 ```bash
-codegraph impact --base main --head feature --ignore-glob "**/package-lock.json" "**/dist/**"
+codegraph impact --base main --head feature --ignore-glob "**/package-lock.json" --ignore-glob "**/dist/**"
 ```
 
-The second glob is a bare positional for a command that does not use include roots, so it is ignored. The command should repeat `--ignore-glob` for the second pattern.
+The second glob was a bare positional for a command that does not use include roots, so it was ignored. The documented command now repeats `--ignore-glob` for the second pattern.
 
 ### 3. Current cycle output has one real TypeScript architecture cycle and one Rust analyzer false positive
 
@@ -150,18 +150,18 @@ Why it matters:
 
 Changes:
 
-- [ ] Add per-command allowed flags, options, and positional arity validation.
-- [ ] Reject unknown long flags, unknown short flags, and unexpected positionals before command execution.
-- [ ] Preserve deliberate pass-through behavior only after a `--` separator where a command truly supports it.
-- [ ] Improve typo errors so `--limt 1` reports an unknown option instead of treating `1` as a scan root.
-- [ ] Fix `docs/cli.md` to repeat `--ignore-glob` for each `impact` ignore pattern.
+- [x] Add per-command allowed flags, options, and positional arity validation.
+- [x] Reject unknown long flags, unknown short flags, and unexpected positionals before command execution.
+- [x] Preserve deliberate pass-through behavior only after a `--` separator where a command truly supports it.
+- [x] Improve typo errors so `--limt 1` reports an unknown option instead of treating `1` as a scan root.
+- [x] Fix `docs/cli.md` to repeat `--ignore-glob` for each `impact` ignore pattern.
 
 Tests:
 
-- [ ] Add CLI regression tests for unknown flags on `graph`, `inspect`, `duplicates`, `impact`, `search`, `explain`, and `packet`.
-- [ ] Add tests for unexpected positionals on commands that do not use include roots.
-- [ ] Add a docs/package metadata test for the corrected `impact --ignore-glob` example.
-- [ ] Run `npm run test:integration` and `npm run check`.
+- [x] Add CLI regression tests for unknown flags on `graph`, `inspect`, `duplicates`, `impact`, `search`, `explain`, and `packet`.
+- [x] Add tests for unexpected positionals on commands that do not use include roots.
+- [x] Add a docs/package metadata test for the corrected `impact --ignore-glob` example.
+- [x] Run `npm run test:integration` and `npm run check`.
 
 Watch out:
 
@@ -173,18 +173,18 @@ Watch out:
 
 Changes:
 
-- [ ] Filter or annotate Rust `#[cfg(test)]` module edges so test-only Rust modules do not appear as production dependency cycles.
-- [ ] Add a native Rust fixture with `#[cfg(test)] mod tests` and an inner local `mod tests` to lock the behavior.
-- [ ] Break the TypeScript indexer/cache SCC by moving shared cache manifest entry types out of `src/indexer/types.ts`.
-- [ ] Move reference-candidate index types into a neutral type-only module or inline the small shape where appropriate.
-- [ ] Keep runtime cache helpers out of broad shared type modules.
+- [x] Filter or annotate Rust `#[cfg(test)]` module edges so test-only Rust modules do not appear as production dependency cycles.
+- [x] Add a native Rust fixture with `#[cfg(test)] mod tests` and an inner local `mod tests` to lock the behavior.
+- [x] Break the TypeScript indexer/cache SCC by moving shared cache manifest entry types out of `src/indexer/types.ts`.
+- [x] Move reference-candidate index types into a neutral type-only module or inline the small shape where appropriate.
+- [x] Keep runtime cache helpers out of broad shared type modules.
 
 Tests:
 
-- [ ] Add Rust graph/cycle regression coverage for test-only modules.
-- [ ] Add a source-structure test that `cycles --root . ./src --sort priority --json` reports no TypeScript source cycles.
-- [ ] Run `node ./dist/cli.js cycles --root . --sort priority --json`.
-- [ ] Run focused graph, native, and source-structure tests, then `npm run check`.
+- [x] Add Rust graph/cycle regression coverage for test-only modules.
+- [x] Add a source-structure test that `cycles --root . ./src --sort priority --json` reports no TypeScript source cycles.
+- [x] Run `node ./dist/cli.js cycles --root . --sort priority --json`.
+- [x] Run focused graph, native, and source-structure tests, then `npm run check`.
 
 Watch out:
 
@@ -195,18 +195,18 @@ Watch out:
 
 Changes:
 
-- [ ] Add schema version metadata to `index-cache.sqlite`.
-- [ ] Add schema version metadata to `duplicate-unit-cache.sqlite`.
-- [ ] Add migration helpers that inspect existing columns and indexes before use.
-- [ ] Keep incompatible old cache handling safe: migrate when possible, otherwise invalidate and rebuild.
-- [ ] Document the persistent cache schema policy briefly in `docs/how-it-works.md` or `docs/cli.md`.
+- [x] Add schema version metadata to `index-cache.sqlite`.
+- [x] Add schema version metadata to `duplicate-unit-cache.sqlite`.
+- [x] Add migration helpers that inspect existing columns and indexes before use.
+- [x] Keep incompatible old cache handling safe: migrate when possible, otherwise invalidate and rebuild.
+- [x] Document the persistent cache schema policy briefly in `docs/how-it-works.md` or `docs/cli.md`.
 
 Tests:
 
-- [ ] Add an old `module_cache` DB fixture/test that lacks the newest expected schema and proves upgrade behavior.
-- [ ] Add an old `duplicate_unit_cache` DB fixture/test with the same upgrade proof.
-- [ ] Add corrupt metadata tests that fall back to rebuild without crashing user commands.
-- [ ] Run `tests/disk-cache-sqlite.test.ts`, `tests/cache-invalidation.test.ts`, `tests/duplicates.test.ts`, and `npm run check`.
+- [x] Add an old `module_cache` DB fixture/test that lacks the newest expected schema and proves upgrade behavior.
+- [x] Add an old `duplicate_unit_cache` DB fixture/test with the same upgrade proof.
+- [x] Add corrupt metadata tests that fall back to rebuild without crashing user commands.
+- [x] Run `tests/disk-cache-sqlite.test.ts`, `tests/cache-invalidation.test.ts`, `tests/duplicates.test.ts`, and `npm run check`.
 
 Watch out:
 
@@ -217,17 +217,17 @@ Watch out:
 
 Changes:
 
-- [ ] Add timeout and `AbortController` support to GitHub PR diff fetches.
-- [ ] Stream GitHub diff response bodies into `parseUnifiedDiffStreaming` where possible.
-- [ ] Enforce a byte cap or line cap with an explicit warning for oversized remote diffs.
-- [ ] Validate `--repo owner/name` strictly before making a network request.
-- [ ] Consider moving the git-provider shortstat warning threshold into a named option or constant.
+- [x] Add timeout and `AbortController` support to GitHub PR diff fetches.
+- [x] Stream GitHub diff response bodies into `parseUnifiedDiffStreaming` where possible.
+- [x] Enforce a byte cap or line cap with an explicit warning for oversized remote diffs.
+- [x] Validate `--repo owner/name` strictly before making a network request.
+- [x] Consider moving the git-provider shortstat warning threshold into a named option or constant.
 
 Tests:
 
-- [ ] Add GitHub provider tests for timeout, HTTP failure, malformed repo, oversized diff, and normal diff parsing.
-- [ ] Add parity tests showing local git and GitHub providers produce equivalent parsed diff shapes for the same fixture.
-- [ ] Run `tests/impact-provider-github.test.ts`, `tests/impact-git-provider.test.ts`, `tests/impact-cli.test.ts`, and `npm run check`.
+- [x] Add GitHub provider tests for timeout, HTTP failure, malformed repo, oversized diff, and normal diff parsing.
+- [x] Add parity tests showing local git and GitHub providers produce equivalent parsed diff shapes for the same fixture.
+- [x] Run `tests/impact-provider-github.test.ts`, `tests/impact-git-provider.test.ts`, `tests/impact-cli.test.ts`, and `npm run check`.
 
 Watch out:
 
@@ -238,17 +238,17 @@ Watch out:
 
 Changes:
 
-- [ ] Add a native-required JS test script that fails immediately if native is unavailable.
-- [ ] Use that script for native semantic, parser ownership, native query, and native worker suites.
-- [ ] Keep reduced-mode fallback tests separate so unsupported hosts can still validate graceful degradation.
-- [ ] Make skip counts visible in CI summaries.
+- [x] Add a native-required JS test script that fails immediately if native is unavailable.
+- [x] Use that script for native semantic, parser ownership, native query, and native worker suites.
+- [x] Keep reduced-mode fallback tests separate so unsupported hosts can still validate graceful degradation.
+- [x] Make skip counts visible in CI summaries.
 
 Tests:
 
-- [ ] Run the new native-required JS script on a host with the native addon.
-- [ ] Run reduced-mode fallback tests with native disabled.
-- [ ] Run `npm run test:native`.
-- [ ] Run `npm run check`.
+- [x] Run the new native-required JS script on a host with the native addon.
+- [x] Run reduced-mode fallback tests with native disabled.
+- [x] Run `npm run test:native`.
+- [x] Run `npm run check`.
 
 Watch out:
 
@@ -259,18 +259,18 @@ Watch out:
 
 Changes:
 
-- [ ] Extract C-family language-definition builders for C and C++ shared query/block patterns.
-- [ ] Extract a JVM symbol-index reader helper for Java and Kotlin.
-- [ ] Introduce small command-context helpers only where they remove repeated shape definitions.
-- [ ] Consolidate project-file definition table boilerplate while keeping per-ecosystem metadata explicit.
-- [ ] Leave intentional language-specific differences visible in data, not hidden in control flow.
+- [x] Extract C-family language-definition builders for C and C++ shared query/block patterns.
+- [x] Extract a JVM symbol-index reader helper for Java and Kotlin.
+- [x] Introduce small command-context helpers only where they remove repeated shape definitions.
+- [x] Consolidate project-file definition table boilerplate while keeping per-ecosystem metadata explicit.
+- [x] Leave intentional language-specific differences visible in data, not hidden in control flow.
 
 Tests:
 
-- [ ] Run `node ./dist/cli.js duplicates --root . ./src --profile cleanup` and confirm high-ROI groups shrink.
-- [ ] Run nearest language tests for every touched language definition.
-- [ ] Run shared `tests/goto.test.ts`, `tests/references.test.ts`, and `tests/native-semantic-parity.test.ts` when source-language behavior changes.
-- [ ] Update `docs/language-parity.md` and `docs/scenario-catalog.md` only if support claims change.
+- [x] Run `node ./dist/cli.js duplicates --root . ./src --profile cleanup` and confirm high-ROI groups shrink.
+- [x] Run nearest language tests for every touched language definition.
+- [x] Run shared `tests/goto.test.ts`, `tests/references.test.ts`, and `tests/native-semantic-parity.test.ts` when source-language behavior changes.
+- [x] Update `docs/language-parity.md` and `docs/scenario-catalog.md` only if support claims change.
 
 Watch out:
 
@@ -281,18 +281,18 @@ Watch out:
 
 Changes:
 
-- [ ] Change the lint script to cover `tests/**/*.ts`, not only test files.
-- [ ] Remove broad test type-safety disables incrementally, starting with helper files and new tests.
-- [ ] Replace loose test casts with typed helper return shapes or narrow runtime guards.
-- [ ] Exclude type-only modules from the coverage least-covered table, or show them in a separate section.
-- [ ] Add targeted tests for low-coverage CLI/resolution modules: `cli/navigation`, `cli/search`, `cli/packet`, `cli/graph`, `cli/context`, `util/packageExports`, `util/resolution/node`, and `sqlite/common`.
+- [x] Change the lint script to cover `tests/**/*.ts`, not only test files.
+- [x] Remove broad test type-safety disables incrementally, starting with helper files and new tests.
+- [x] Replace loose test casts with typed helper return shapes or narrow runtime guards.
+- [x] Exclude type-only modules from the coverage least-covered table, or show them in a separate section.
+- [x] Add targeted tests for low-coverage CLI/resolution modules: `cli/navigation`, `cli/search`, `cli/packet`, `cli/graph`, `cli/context`, `util/packageExports`, `util/resolution/node`, and `sqlite/common`.
 
 Tests:
 
-- [ ] Run broad lint over `src/**/*.ts` and `tests/**/*.ts`.
-- [ ] Run `npm run test:coverage` and refresh `docs/coverage/js.md`.
-- [ ] Run the narrow suites for each newly covered module.
-- [ ] Run `npm run check`.
+- [x] Run broad lint over `src/**/*.ts` and `tests/**/*.ts`.
+- [x] Run `npm run test:coverage` and refresh `docs/coverage/js.md`.
+- [x] Run the narrow suites for each newly covered module.
+- [x] Run `npm run check`.
 
 Watch out:
 
@@ -303,17 +303,17 @@ Watch out:
 
 Changes:
 
-- [ ] Keep README as a landing page and docs index, with fewer long JSON examples.
-- [ ] Make `docs/cli.md` the canonical CLI contract page.
-- [ ] Make `docs/agent-workflows.md` recipe-oriented and link to CLI/API docs instead of repeating option contracts.
-- [ ] Keep `codegraph-skill/codegraph/SKILL.md` short and operational, with only agent-first command guidance.
-- [ ] Add a lightweight docs consistency test for shared CLI examples that appear in multiple files.
+- [x] Keep README as a landing page and docs index, with fewer long JSON examples.
+- [x] Make `docs/cli.md` the canonical CLI contract page.
+- [x] Make `docs/agent-workflows.md` recipe-oriented and link to CLI/API docs instead of repeating option contracts.
+- [x] Keep `codegraph-skill/codegraph/SKILL.md` short and operational, with only agent-first command guidance.
+- [x] Add a lightweight docs consistency test for shared CLI examples that appear in multiple files.
 
 Tests:
 
-- [ ] Run package metadata/docs tests.
-- [ ] Run a docs grep for repeated stale commands.
-- [ ] Run `npm run check`.
+- [x] Run package metadata/docs tests.
+- [x] Run a docs grep for repeated stale commands.
+- [x] Run `npm run check`.
 
 Watch out:
 

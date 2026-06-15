@@ -6,72 +6,86 @@ import {
   type LanguageProjectSymbolIndex,
 } from "./projectSymbols.js";
 
-type KotlinSymbolIndexEntry = {
+type JvmSymbolIndexEntry = {
   packageName: string | null;
   symbols: Set<string>;
 };
 
-type JavaSymbolIndexEntry = {
-  packageName: string | null;
-  symbols: Set<string>;
+type JvmSymbolIndexReaderOptions = {
+  packagePattern: RegExp;
+  declarationPattern: RegExp;
 };
 
 const kotlinImportResolutionCache = new Map<string, string | null>();
-const kotlinSymbolIndexCache = new Map<string, KotlinSymbolIndexEntry>();
+const kotlinSymbolIndexCache = new Map<string, JvmSymbolIndexEntry>();
 const kotlinProjectSymbolIndexCache = new Map<string, Promise<LanguageProjectSymbolIndex>>();
 const javaImportResolutionCache = new Map<string, string | null>();
-const javaSymbolIndexCache = new Map<string, JavaSymbolIndexEntry>();
+const javaSymbolIndexCache = new Map<string, JvmSymbolIndexEntry>();
 const javaProjectSymbolIndexCache = new Map<string, Promise<LanguageProjectSymbolIndex>>();
 
-async function readKotlinSymbolIndex(filePath: string): Promise<KotlinSymbolIndexEntry> {
-  const cached = kotlinSymbolIndexCache.get(filePath);
+async function readJvmSymbolIndex(
+  filePath: string,
+  cache: Map<string, JvmSymbolIndexEntry>,
+  options: JvmSymbolIndexReaderOptions,
+): Promise<JvmSymbolIndexEntry> {
+  const cached = cache.get(filePath);
   if (cached) return cached;
 
   const source = await fsp.readFile(filePath, "utf8");
-  const packageName = source.match(/^\s*package\s+([A-Za-z_][\w.]*)/m)?.[1] ?? null;
+  const packageName = source.match(options.packagePattern)?.[1] ?? null;
   const symbols = new Set<string>();
-  const declarationPattern = /\b(?:class|object|fun|typealias|interface)\s+([A-Za-z_][\w]*)\b/g;
-  for (const match of source.matchAll(declarationPattern)) {
+  for (const match of source.matchAll(options.declarationPattern)) {
     const symbolName = match[1];
     if (symbolName) symbols.add(symbolName);
   }
 
   const entry = { packageName, symbols };
-  kotlinSymbolIndexCache.set(filePath, entry);
+  cache.set(filePath, entry);
   return entry;
 }
 
-async function readJavaSymbolIndex(filePath: string): Promise<JavaSymbolIndexEntry> {
-  const cached = javaSymbolIndexCache.get(filePath);
-  if (cached) return cached;
+async function readKotlinSymbolIndex(filePath: string): Promise<JvmSymbolIndexEntry> {
+  return await readJvmSymbolIndex(filePath, kotlinSymbolIndexCache, {
+    packagePattern: /^\s*package\s+([A-Za-z_][\w.]*)/m,
+    declarationPattern: /\b(?:class|object|fun|typealias|interface)\s+([A-Za-z_][\w]*)\b/g,
+  });
+}
 
-  const source = await fsp.readFile(filePath, "utf8");
-  const packageName = source.match(/^\s*package\s+([A-Za-z_][\w.]*)\s*;/m)?.[1] ?? null;
-  const symbols = new Set<string>();
-  const declarationPattern = /\b(?:class|interface|enum)\s+([A-Za-z_][\w]*)\b/g;
-  for (const match of source.matchAll(declarationPattern)) {
-    const symbolName = match[1];
-    if (symbolName) symbols.add(symbolName);
-  }
+async function readJavaSymbolIndex(filePath: string): Promise<JvmSymbolIndexEntry> {
+  return await readJvmSymbolIndex(filePath, javaSymbolIndexCache, {
+    packagePattern: /^\s*package\s+([A-Za-z_][\w.]*)\s*;/m,
+    declarationPattern: /\b(?:class|interface|enum)\s+([A-Za-z_][\w]*)\b/g,
+  });
+}
 
-  const entry = { packageName, symbols };
-  javaSymbolIndexCache.set(filePath, entry);
-  return entry;
+async function getJvmLanguageProjectSymbolIndex(
+  projectRoot: string,
+  cache: Map<string, Promise<LanguageProjectSymbolIndex>>,
+  includeGlobs: string[],
+  readSymbolIndex: (filePath: string) => Promise<JvmSymbolIndexEntry>,
+): Promise<LanguageProjectSymbolIndex> {
+  return await getOrCreateProjectSymbolIndex(
+    cache,
+    projectRoot,
+    async () => await buildProjectSymbolIndex(projectRoot, includeGlobs, readSymbolIndex),
+  );
 }
 
 async function getKotlinProjectSymbolIndex(projectRoot: string): Promise<LanguageProjectSymbolIndex> {
-  return await getOrCreateProjectSymbolIndex(
-    kotlinProjectSymbolIndexCache,
+  return await getJvmLanguageProjectSymbolIndex(
     projectRoot,
-    async () => await buildProjectSymbolIndex(projectRoot, ["**/*.kt", "**/*.kts"], readKotlinSymbolIndex),
+    kotlinProjectSymbolIndexCache,
+    ["**/*.kt", "**/*.kts"],
+    readKotlinSymbolIndex,
   );
 }
 
 async function getJavaProjectSymbolIndex(projectRoot: string): Promise<LanguageProjectSymbolIndex> {
-  return await getOrCreateProjectSymbolIndex(
-    javaProjectSymbolIndexCache,
+  return await getJvmLanguageProjectSymbolIndex(
     projectRoot,
-    async () => await buildProjectSymbolIndex(projectRoot, ["**/*.java"], readJavaSymbolIndex),
+    javaProjectSymbolIndexCache,
+    ["**/*.java"],
+    readJavaSymbolIndex,
   );
 }
 

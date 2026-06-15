@@ -242,10 +242,25 @@ function formatFileRow(file) {
   )} | ${formatPercent(file.metrics.branches)} |`;
 }
 
+function hasRuntimeCoverageRecords(file) {
+  return file.metrics.functions.found || file.metrics.branches.found;
+}
+
+function appendFileCoverageTable(lines, files) {
+  lines.push("| File | Lines | Functions | Branches |");
+  lines.push("| --- | ---: | ---: | ---: |");
+  for (const file of files) {
+    lines.push(formatFileRow(file));
+  }
+}
+
 function markdownForReport(config, parsed, rootDir) {
   const lcovDisplayPath = normalizePathForMarkdown(config.lcovPath);
   const sortedFiles = parsed.files.filter((file) => file.metrics.lines.found).sort(compareFilesByLineCoverage);
-  const limitedFiles = sortedFiles.slice(0, 20);
+  const runtimeFiles = sortedFiles.filter(hasRuntimeCoverageRecords);
+  const nonRuntimeFiles = sortedFiles.filter((file) => !hasRuntimeCoverageRecords(file));
+  const limitedRuntimeFiles = runtimeFiles.slice(0, 20);
+  const limitedNonRuntimeFiles = nonRuntimeFiles.slice(0, 10);
   const lines = [
     `# ${config.title} Coverage`,
     "",
@@ -263,14 +278,21 @@ function markdownForReport(config, parsed, rootDir) {
     "",
   ];
 
-  if (limitedFiles.length) {
-    lines.push("| File | Lines | Functions | Branches |");
-    lines.push("| --- | ---: | ---: | ---: |");
-    for (const file of limitedFiles) {
-      lines.push(formatFileRow(file));
-    }
+  if (limitedRuntimeFiles.length) {
+    appendFileCoverageTable(lines, limitedRuntimeFiles);
   } else {
     lines.push("No file coverage records found.");
+  }
+
+  if (limitedNonRuntimeFiles.length) {
+    lines.push("");
+    lines.push("## Type-Only Or Re-Export Files");
+    lines.push("");
+    lines.push(
+      "These files have line records but no function or branch records, so they are tracked outside the runtime ranking.",
+    );
+    lines.push("");
+    appendFileCoverageTable(lines, limitedNonRuntimeFiles);
   }
 
   lines.push("");

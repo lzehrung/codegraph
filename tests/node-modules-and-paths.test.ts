@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import fsp from "node:fs/promises";
 import { collectGraph } from "../src/index.js";
+import { resolveFromNodeModules } from "../src/util/resolution/node.js";
 import { mkTmpDir, normalizeTestPath } from "./helpers/filesystem.js";
 
 describe("Node modules resolution (opt-in) and path normalization", () => {
@@ -25,6 +26,43 @@ describe("Node modules resolution (opt-in) and path normalization", () => {
           e.to.path.replace(/\\/g, "/").endsWith("/node_modules/my-pkg/index.js"),
       ),
     ).toBe(true);
+  });
+
+  it("resolves package exports maps with condition fallback", async () => {
+    const root = await mkTmpDir("dg-nm-exports-");
+    const nm = path.join(root, "node_modules", "my-pkg");
+    const sourceFile = path.join(root, "src", "main.ts");
+    await fsp.mkdir(path.dirname(sourceFile), { recursive: true });
+    await fsp.mkdir(nm, { recursive: true });
+    await fsp.writeFile(sourceFile, 'import "my-pkg";\nimport "my-pkg/feature";\n', "utf8");
+    await fsp.writeFile(path.join(nm, "esm.js"), "export const value = 1;\n", "utf8");
+    await fsp.writeFile(path.join(nm, "feature.cjs"), "module.exports = 2;\n", "utf8");
+    await fsp.writeFile(
+      path.join(nm, "package.json"),
+      JSON.stringify(
+        {
+          name: "my-pkg",
+          exports: {
+            ".": {
+              require: "./cjs.cjs",
+              import: "./esm.js",
+            },
+            "./feature": {
+              require: "./feature.cjs",
+              module: "./feature.module.js",
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    await expect(resolveFromNodeModules("my-pkg", sourceFile, root)).resolves.toBe(path.join(nm, "esm.js"));
+    await expect(resolveFromNodeModules("my-pkg/feature", sourceFile, root)).resolves.toBe(
+      path.join(nm, "feature.cjs"),
+    );
   });
 
   it("normalizes paths to forward slashes in nodes and edges", async () => {

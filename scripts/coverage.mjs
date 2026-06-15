@@ -169,17 +169,7 @@ ${mainContent.trimEnd()}
 
 function runJavaScriptCoverage() {
   run(process.execPath, ["./scripts/ensure-dist-for-tests.mjs"]);
-  run("npx", [
-    "vitest",
-    "run",
-    "--coverage",
-    "--exclude",
-    "tests/bench-harness.test.ts",
-    "--maxWorkers",
-    "4",
-    "--minWorkers",
-    "1",
-  ]);
+  run("npx", ["vitest", "run", "--coverage", "--exclude", "tests/bench-harness.test.ts", "--maxWorkers", "4"]);
 }
 
 function runNativeCoverage() {

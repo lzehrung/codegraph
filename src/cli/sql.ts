@@ -1,14 +1,9 @@
 import path from "node:path";
 import { queryGraphSqliteRaw } from "../sqlite.js";
 import { normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
+import type { CliCwdContext, CliGetOptContext, CliJsonWriterContext, CliStderrExitContext } from "./context.js";
 
-export type SqlCommandContext = {
-  getOpt: (name: string) => string | undefined;
-  cwd: () => string;
-  writeJSONLine: (value: unknown) => void;
-  writeStderrLine: (message: string) => void;
-  exit: (code: number) => never;
-};
+export type SqlCommandContext = CliGetOptContext & CliCwdContext & CliJsonWriterContext & CliStderrExitContext;
 
 export async function handleSqlCommand(context: SqlCommandContext): Promise<void> {
   const dbOpt = context.getOpt("--db") ?? context.getOpt("--sqlite");
