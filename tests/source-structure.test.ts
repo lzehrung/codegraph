@@ -15,6 +15,15 @@ type CycleReport = {
   files: string[];
 };
 
+function removeNodeSqliteExperimentalWarning(stderr: string): string {
+  return stderr
+    .replace(
+      /\(node:\d+\) ExperimentalWarning: SQLite is an experimental feature and might change at any time\r?\n/g,
+      "",
+    )
+    .replace(/\(Use `node --trace-warnings \.\.\.` to show where the warning was created\)\r?\n/g, "");
+}
+
 describe("source module structure", () => {
   test("keeps shared utility concerns in focused modules", () => {
     const expectedModules = [
@@ -86,7 +95,7 @@ describe("source module structure", () => {
     );
 
     expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
+    expect(removeNodeSqliteExperimentalWarning(result.stderr)).toBe("");
     const cycles = JSON.parse(result.stdout) as CycleReport[];
     expect(cycles).toEqual([]);
   });
