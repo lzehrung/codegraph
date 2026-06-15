@@ -2,6 +2,7 @@ import type { JsSyntaxTree } from "../../jsFallback.js";
 import { capturesByName, capturesNamed, rangeFromNativeCapture } from "../../native/queryResults.js";
 import type { NativeCapture, NativeMatch } from "../../native/treeSitterNative.js";
 import { sliceText, unquote } from "../../util/ast.js";
+import { utf8ByteOffsetToStringIndex } from "../../util/rustTestModules.js";
 import { parseGoImportAlias } from "../shared.js";
 import type { ImportBinding } from "../types.js";
 import type { ImportResolver, ResolvedImportTarget } from "./context.js";
@@ -14,7 +15,7 @@ type ImportCaptureExtractionContext = {
   resolveFrom: ImportResolver;
   pushBinding: (binding: ImportBinding) => void;
   languageContext: LanguageSpecificImportContext;
-  applyStatementOverride: (stmtText: string, typeOnly: boolean) => Promise<boolean>;
+  applyStatementOverride: (stmtText: string, typeOnly: boolean, statementStartIndex?: number) => Promise<boolean>;
 };
 
 function parseObjectPatternBindings(patternText: string): Array<{ imported: string; local: string }> {
@@ -204,9 +205,14 @@ export async function collectNativeCaptureImportBindings(
 ): Promise<void> {
   for (const match of matches) {
     const caps = capturesByName(match);
-    const stmtText = caps["stmt"]?.text ?? "";
+    const statementCapture = caps["stmt"];
+    const stmtText = statementCapture?.text ?? "";
     const typeOnly = context.isTypeOnly(stmtText);
-    if (await context.applyStatementOverride(stmtText, typeOnly)) {
+    const statementStartIndex =
+      statementCapture !== undefined
+        ? utf8ByteOffsetToStringIndex(context.source, statementCapture.start.index)
+        : undefined;
+    if (await context.applyStatementOverride(stmtText, typeOnly, statementStartIndex)) {
       continue;
     }
     const from = caps["from"] ? unquote(caps["from"].text) : undefined;
@@ -223,9 +229,14 @@ export async function collectJsQueryCaptureImportBindings(
 ): Promise<void> {
   for (const match of matches) {
     const caps = capturesByName(match);
-    const stmtText = caps["stmt"]?.text ?? "";
+    const statementCapture = caps["stmt"];
+    const stmtText = statementCapture?.text ?? "";
     const typeOnly = context.isTypeOnly(stmtText);
-    if (await context.applyStatementOverride(stmtText, typeOnly)) {
+    const statementStartIndex =
+      statementCapture !== undefined
+        ? utf8ByteOffsetToStringIndex(context.source, statementCapture.start.index)
+        : undefined;
+    if (await context.applyStatementOverride(stmtText, typeOnly, statementStartIndex)) {
       continue;
     }
     const from = caps["from"] ? unquote(caps["from"].text) : undefined;

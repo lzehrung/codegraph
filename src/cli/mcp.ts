@@ -2,16 +2,14 @@ import { serveCodegraphMcp, type CodegraphMcpWarmupMode } from "../mcp/server.js
 import { MCP_HELP_TEXT } from "./help.js";
 import { parseOptionalBoundedIntegerOption } from "./options.js";
 import type { BuildOptions } from "../indexer/types.js";
+import type { CliOptionContext, CliPositionalsContext, CliRootContext, CliStderrExitContext } from "./context.js";
 
-export type McpServeCommandContext = {
-  positionals: string[];
-  root: string;
-  buildOptions?: BuildOptions;
-  getOpt: (name: string) => string | undefined;
-  hasFlag: (name: string) => boolean;
-  writeStderrLine: (message: string) => void;
-  exit: (code: number) => never;
-};
+export type McpServeCommandContext = CliPositionalsContext &
+  CliRootContext &
+  CliOptionContext &
+  CliStderrExitContext & {
+    buildOptions?: BuildOptions;
+  };
 
 export async function handleMcpServeCommand(context: McpServeCommandContext): Promise<void> {
   const mcpCommand = context.positionals[0];

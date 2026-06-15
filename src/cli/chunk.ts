@@ -5,6 +5,13 @@ import { chunkFile } from "../chunking/chunkFile.js";
 import { chunkSFCFile } from "../chunking/chunkSFC.js";
 import { chunkTextFile } from "../chunking/chunkTextFile.js";
 import { supportForFile } from "../languages.js";
+import type {
+  CliCwdContext,
+  CliJsonWriterContext,
+  CliOptionContext,
+  CliPositionalsContext,
+  CliStderrExitContext,
+} from "./context.js";
 import { parsePositiveIntegerOption } from "./options.js";
 
 const chunkLanguageAliases: Record<string, string> = {
@@ -26,15 +33,11 @@ function normalizeChunkLanguageId(languageId: string): string {
   return chunkLanguageAliases[languageId] ?? languageId;
 }
 
-export type ChunkCommandContext = {
-  positionals: string[];
-  getOpt: (name: string) => string | undefined;
-  hasFlag: (name: string) => boolean;
-  cwd: () => string;
-  writeJSONLine: (value: unknown) => void;
-  writeStderrLine: (message: string) => void;
-  exit: (code: number) => never;
-};
+export type ChunkCommandContext = CliPositionalsContext &
+  CliOptionContext &
+  CliCwdContext &
+  CliJsonWriterContext &
+  CliStderrExitContext;
 
 export async function handleChunkCommand(context: ChunkCommandContext): Promise<void> {
   const inputFilePath = context.positionals[0];

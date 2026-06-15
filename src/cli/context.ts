@@ -8,7 +8,7 @@ import type { ReviewBuildReport } from "../review.js";
 import { normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
 import { matchesDiscoveryGlob, type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { isRelativePathInside } from "../util/projectFiles.js";
-import { isCliValueOption } from "./options.js";
+import { isCliValueOption, type ParsedCliArgs } from "./options.js";
 
 function toJSON(obj: unknown): string {
   return JSON.stringify(obj, null, 2);
@@ -116,6 +116,37 @@ export type CliRuntime = {
   exit: (code: number) => never;
   cwd: () => string;
   readStdin: () => Promise<string>;
+};
+
+export type CliPositionalsContext = {
+  positionals: string[];
+};
+
+export type CliRootContext = {
+  root: string;
+};
+
+export type CliGetOptContext = {
+  getOpt: (name: string) => string | undefined;
+};
+
+export type CliFlagContext = {
+  hasFlag: (name: string) => boolean;
+};
+
+export type CliOptionContext = CliGetOptContext & CliFlagContext;
+
+export type CliCwdContext = {
+  cwd: () => string;
+};
+
+export type CliJsonWriterContext = {
+  writeJSONLine: (value: unknown) => void;
+};
+
+export type CliStderrExitContext = {
+  writeStderrLine: (message: string) => void;
+  exit: (code: number) => never;
 };
 
 export type CliAgentCommandContext = {
@@ -338,12 +369,6 @@ export type CommandReport = {
   timings: CommandTimingReport;
   index?: BuildReport;
   review?: ReviewBuildReport;
-};
-
-export type ParsedCliArgs = {
-  positionals: string[];
-  flags: Set<string>;
-  options: Map<string, string[]>;
 };
 
 export function parseCliArgs(command: string, tokens: string[]): ParsedCliArgs {

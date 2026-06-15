@@ -139,8 +139,18 @@ export async function collectImportsForFile(
     await finalizeLanguageSpecificImports(languageContext);
   };
 
-  const applyStatementOverride = async (stmtText: string, typeOnly: boolean): Promise<boolean> => {
-    return await applyStatementImportOverride(languageContext, statementOverrideState, stmtText, typeOnly);
+  const applyStatementOverride = async (
+    stmtText: string,
+    typeOnly: boolean,
+    statementStartIndex?: number,
+  ): Promise<boolean> => {
+    return await applyStatementImportOverride(
+      languageContext,
+      statementOverrideState,
+      stmtText,
+      typeOnly,
+      statementStartIndex,
+    );
   };
 
   const runFallback = async () => {

@@ -1,9 +1,6 @@
 import type { FileId } from "../types.js";
 import type { ModuleIndex } from "./types.js";
-
-export type ReferenceCandidateIndex = {
-  byTargetFile: Map<FileId, Set<FileId>>;
-};
+import type { ReferenceCandidateIndex } from "./reference-candidate-types.js";
 
 export function buildReferenceCandidateIndex(modules: ReadonlyMap<FileId, ModuleIndex>): ReferenceCandidateIndex {
   const byTargetFile = new Map<FileId, Set<FileId>>();

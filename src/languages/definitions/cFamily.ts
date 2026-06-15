@@ -1,4 +1,5 @@
-import type { SyntaxNodeLike } from "../types.js";
+import type { BlockDefinition, LanguageDefinition, SyntaxNodeLike } from "../types.js";
+import { loadTreeSitterLanguage } from "./loadLanguage.js";
 
 export const cFamilyContainerTypes = new Set([
   "function_definition",
@@ -83,6 +84,70 @@ export function joinQueryPatterns(patterns: readonly string[]): string {
   return `
       ${patterns.join("\n      ")}
     `;
+}
+
+export type CFamilyLanguageDefinitionOptions = {
+  id: string;
+  extensions: string[];
+  grammarPackage: string;
+  includeFieldIdentifier: boolean;
+  blocks: (functionNameQuery: string) => BlockDefinition[];
+  splitPoints?: readonly string[];
+  extraExportQueries?: readonly string[];
+  extraLocalQueries?: readonly string[];
+  nodeTypes: NonNullable<LanguageDefinition["nodeTypes"]>;
+  classifyDefinition: NonNullable<LanguageDefinition["classifyDefinition"]>;
+  isDeclarationName: NonNullable<LanguageDefinition["isDeclarationName"]>;
+  createsFunctionScope: NonNullable<LanguageDefinition["createsFunctionScope"]>;
+};
+
+export function cFamilyBlock(type: string, nameQuery: string, captureId: string): BlockDefinition {
+  return {
+    type,
+    nameQuery,
+    captureId,
+  };
+}
+
+export function cFamilyFunctionBlock(functionNameQuery: string): BlockDefinition {
+  return cFamilyBlock("function_definition", functionNameQuery, "function");
+}
+
+export function cFamilyTypeIdentifierBlock(type: string, captureId: string): BlockDefinition {
+  return cFamilyBlock(type, "name: (type_identifier) @chunk.name", captureId);
+}
+
+export function createCFamilyLanguageDefinition(options: CFamilyLanguageDefinitionOptions): LanguageDefinition {
+  const functionNameQuery = cFunctionNameQuery("chunk.name", options.includeFieldIdentifier);
+  const graphFunctionNameQuery = cFunctionNameQuery("name", options.includeFieldIdentifier);
+  return {
+    id: options.id,
+    extensions: [...options.extensions],
+    grammar: () => loadTreeSitterLanguage(options.grammarPackage),
+    structure: {
+      blocks: options.blocks(functionNameQuery),
+      splitPoints: [...(options.splitPoints ?? cFamilyControlSplitPoints)],
+      comments: ["comment"],
+    },
+    graph: {
+      imports: cFamilyIncludeImportsQuery,
+      exports: joinQueryPatterns([
+        ...cFamilyCoreExportQueries(graphFunctionNameQuery),
+        ...(options.extraExportQueries ?? []),
+      ]),
+      locals: joinQueryPatterns([
+        ...cFamilyCoreLocalQueries(graphFunctionNameQuery),
+        ...(options.extraLocalQueries ?? []),
+      ]),
+      importBindings: cFamilyIncludeBindingsQuery,
+    },
+    nodeTypes: options.nodeTypes,
+    classifyDefinition: options.classifyDefinition,
+    isDeclarationName: options.isDeclarationName,
+    createsFunctionScope: options.createsFunctionScope,
+    createsBlockScope: (node) => node.type === "compound_statement",
+    supportsCrossModuleSymbols: true,
+  };
 }
 
 export function isWithin(node: SyntaxNodeLike, ancestor: SyntaxNodeLike | null): boolean {

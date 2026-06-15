@@ -347,6 +347,16 @@ export function summarizeSourceOrders(rows: Array<{ amount: number; tax: number 
   );
 
   it(
+    "rejects malformed GitHub repos before impact analysis",
+    async () => {
+      await expect(
+        runImpactCli(["impact", sampleRoot, "--provider", "github", "--repo", "owner/repo/extra", "--pr", "42"]),
+      ).rejects.toThrow(/Invalid GitHub repo "owner\/repo\/extra"/);
+    },
+    slowCliTimeoutMs,
+  );
+
+  it(
     "renders Mermaid output and honors graph/cache flags",
     async () => {
       const stdout = await runImpactCli([

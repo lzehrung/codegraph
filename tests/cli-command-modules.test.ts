@@ -4,12 +4,17 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { handleChunkCommand, type ChunkCommandContext } from "../src/cli/chunk.js";
+import type { CliAgentCommandContext } from "../src/cli/context.js";
 import { buildDoctorReport } from "../src/cli/doctor.js";
+import { handleGraphCommand, type GraphCommandContext } from "../src/cli/graph.js";
 import { handleGraphDeltaCommand } from "../src/cli/graphDelta.js";
 import { handleGraphQueryCommand, type GraphQueryCommandContext } from "../src/cli/graphQueries.js";
 import { CLI_HELP_TEXT, MCP_SERVE_HELP_TEXT, PACKET_HELP_TEXT } from "../src/cli/help.js";
 import { handleImpactCommand, type ImpactCommandContext } from "../src/cli/impact.js";
+import { handleGotoCommand, type NavigationCommandContext } from "../src/cli/navigation.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "../src/cli/packageInfo.js";
+import { handlePacketCommand } from "../src/cli/packet.js";
+import { handleSearchCommand } from "../src/cli/search.js";
 import { handleSkillCommand, type SkillCommandContext } from "../src/cli/skill.js";
 import { handleSqlCommand } from "../src/cli/sql.js";
 import { runCli } from "../src/cli.js";
@@ -19,7 +24,7 @@ import type { ProjectIndex } from "../src/indexer.js";
 import type { BuildOptions } from "../src/indexer/types.js";
 import type { Graph } from "../src/types.js";
 import { runGit } from "./helpers/git.js";
-import { createTwoCommitCycleProject } from "./helpers/filesystem.js";
+import { createTwoCommitCycleProject, mkTmpDir } from "./helpers/filesystem.js";
 
 function readJsonRecord(value: unknown): Record<string, unknown> {
   expect(value).toBeTypeOf("object");
@@ -51,6 +56,91 @@ function createChunkContext(overrides: Partial<ChunkCommandContext>): ChunkComma
     exit: (code) => {
       throw new Error(`chunk exit ${code}`);
     },
+    ...overrides,
+  };
+}
+
+function createAgentCommandContext(overrides: Partial<CliAgentCommandContext>): CliAgentCommandContext {
+  const root = path.join(os.tmpdir(), "codegraph-agent-command-context").replace(/\\/g, "/");
+  return {
+    positionals: [],
+    root,
+    getOpt: () => undefined,
+    hasFlag: () => false,
+    writeJSONLine: () => {
+      throw new Error("unexpected json output");
+    },
+    writeStdoutLine: () => {
+      throw new Error("unexpected stdout");
+    },
+    writeStderrLine: () => {
+      throw new Error("unexpected stderr");
+    },
+    exit: (code) => {
+      throw new Error(`agent command exit ${code}`);
+    },
+    ...overrides,
+  };
+}
+
+function createNavigationContext(overrides: Partial<NavigationCommandContext>): NavigationCommandContext {
+  const projectRoot = path.join(os.tmpdir(), "codegraph-navigation-context").replace(/\\/g, "/");
+  return {
+    projectRootFs: projectRoot,
+    discoveryOptions: {},
+    positionals: [],
+    getOpt: () => undefined,
+    hasFlag: () => false,
+    nativeMode: "auto",
+    workerOpts: {},
+    progressHandler: undefined,
+    writeJSONLine: () => {
+      throw new Error("unexpected json output");
+    },
+    writeStdoutLine: () => {
+      throw new Error("unexpected stdout");
+    },
+    writeStderrLine: () => {
+      throw new Error("unexpected stderr");
+    },
+    exit: (code) => {
+      throw new Error(`navigation exit ${code}`);
+    },
+    ...overrides,
+  };
+}
+
+function createGraphContext(overrides: Partial<GraphCommandContext>): GraphCommandContext {
+  const projectRoot = path.join(os.tmpdir(), "codegraph-graph-context").replace(/\\/g, "/");
+  return {
+    projectRootFs: projectRoot,
+    discoveryOptions: {},
+    nativeMode: "auto",
+    workerOpts: {},
+    progressHandler: undefined,
+    graphFlags: {
+      fast: false,
+      resolveNodeModules: false,
+      dynamicImportHeuristics: false,
+      resolutionHints: [],
+    },
+    gitBase: undefined,
+    gitHead: undefined,
+    changedSince: undefined,
+    reportEnabled: false,
+    reportFile: undefined,
+    showProgress: false,
+    getOpt: () => undefined,
+    hasFlag: () => false,
+    cwd: () => projectRoot,
+    resolveFiles: async () => [],
+    resolveChangedFilesWithDeletes: async () => null,
+    writeStdoutLine: () => {
+      throw new Error("unexpected stdout");
+    },
+    setStderrFilePath: () => {},
+    writeCommandReport: async () => {},
+    maybeWriteNativeBackendStatus: () => {},
     ...overrides,
   };
 }
@@ -197,6 +287,84 @@ describe("CLI command modules", () => {
     expect(PACKET_HELP_TEXT).not.toContain("Review handles are returned by orient when a review range is requested");
   });
 
+  test("search command prints usage before running without a query", async () => {
+    const stderr: string[] = [];
+
+    await expect(
+      handleSearchCommand(
+        createAgentCommandContext({
+          writeStderrLine: (message) => stderr.push(message),
+        }),
+      ),
+    ).rejects.toThrow("agent command exit 2");
+
+    expect(stderr.join("\n")).toContain("Usage: codegraph search");
+  });
+
+  test("search command rejects unsupported modes before searching", async () => {
+    await expect(
+      handleSearchCommand(
+        createAgentCommandContext({
+          positionals: ["auth"],
+          getOpt: (name) => (name === "--mode" ? "invalid" : undefined),
+        }),
+      ),
+    ).rejects.toThrow("Invalid --mode value");
+  });
+
+  test("packet command validates subcommand and handle before lookup", async () => {
+    const stderr: string[] = [];
+
+    await expect(
+      handlePacketCommand(
+        createAgentCommandContext({
+          positionals: ["show"],
+          writeStderrLine: (message) => stderr.push(message),
+        }),
+      ),
+    ).rejects.toThrow("agent command exit 2");
+
+    expect(stderr.join("\n")).toContain("Usage: codegraph packet get <handle>");
+  });
+
+  test("goto command validates positional shape before indexing", async () => {
+    const stderr: string[] = [];
+
+    await expect(
+      handleGotoCommand(
+        createNavigationContext({
+          positionals: ["src/index.ts"],
+          writeStderrLine: (message) => stderr.push(message),
+        }),
+      ),
+    ).rejects.toThrow("navigation exit 2");
+
+    expect(stderr).toEqual(["Usage: goto <file> <line> <column>"]);
+  });
+
+  test("graph command can write compact JSON to stdout without default files", async () => {
+    const root = await mkTmpDir("dg-cli-graph-module-");
+    const entryFile = path.join(root, "entry.ts");
+    const stdout: string[] = [];
+    const stderrFiles: Array<string | undefined> = [];
+    await fsp.writeFile(entryFile, "export const value = 1;\n", "utf8");
+
+    await handleGraphCommand(
+      createGraphContext({
+        projectRootFs: root,
+        cwd: () => root,
+        resolveFiles: async () => [entryFile.replace(/\\/g, "/")],
+        hasFlag: (name) => name === "--stdout" || name === "--json",
+        writeStdoutLine: (message) => stdout.push(message),
+        setStderrFilePath: (filePath) => stderrFiles.push(filePath),
+      }),
+    );
+
+    const graph = readJsonRecord(JSON.parse(stdout[0] ?? "{}"));
+    expect(readJsonArray(graph.nodes)).toContain(entryFile.replace(/\\/g, "/"));
+    expect(stderrFiles).toEqual([undefined]);
+  });
+
   test("routes agent command help to command-specific usage text", async () => {
     const cases = [
       { args: ["search", "--help"], heading: "codegraph search", usage: 'Usage: codegraph search "<query>"' },
@@ -283,6 +451,80 @@ describe("CLI command modules", () => {
     expect(result.exitCode).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("Unknown command: missing-command");
+  });
+
+  test("rejects unknown command options before execution", async () => {
+    const cases = [
+      ["graph", "--root", ".", "./src", "--json", "--nonesuch"],
+      ["inspect", "--root", ".", "./src", "--json", "--nonesuch"],
+      ["duplicates", "--root", ".", "./src", "--nonesuch", "--limit", "0"],
+      ["impact", "--provider", "raw", "--nonesuch"],
+      ["search", "auth", "--nonesuch"],
+      ["explain", "src/cli.ts", "--nonesuch"],
+      ["packet", "get", "file:src%2Fcli.ts", "--nonesuch"],
+    ];
+
+    for (const args of cases) {
+      const result = await captureCli(args);
+      const command = args[0];
+
+      expect(result.exitCode, command).toBe(2);
+      expect(result.stdout, command).toBe("");
+      expect(result.stderr, command).toContain(`Unknown option for ${command}: --nonesuch`);
+    }
+  });
+
+  test("reports mistyped value options without treating values as roots", async () => {
+    const result = await captureCli(["inspect", "--root", ".", "./src", "--limt", "1", "--json"]);
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("Unknown option for inspect: --limt");
+    expect(result.stderr).not.toContain("project root");
+  });
+
+  test("rejects unknown short command flags", async () => {
+    const result = await captureCli(["search", "auth", "-z"]);
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("Unknown option for search: -z");
+  });
+
+  test("rejects unexpected positionals for commands without include roots", async () => {
+    const cases = [
+      {
+        args: ["impact", "--provider", "raw", "stray-position", "--pretty"],
+        expected: "Unexpected positional argument for impact: stray-position",
+      },
+      {
+        args: ["graph-delta", "stray-position"],
+        expected: "Unexpected positional argument for graph-delta: stray-position",
+      },
+    ];
+
+    for (const entry of cases) {
+      const result = await captureCli(entry.args);
+
+      expect(result.exitCode, entry.args[0]).toBe(2);
+      expect(result.stdout, entry.args[0]).toBe("");
+      expect(result.stderr, entry.args[0]).toContain(entry.expected);
+    }
+  });
+
+  test("reports impact positional validation when legacy root stat fails", async () => {
+    const statSpy = vi.spyOn(fs, "statSync").mockImplementation(() => {
+      throw new Error("permission denied");
+    });
+    try {
+      const result = await captureCli(["impact", "src", "--provider", "raw", "--pretty"]);
+
+      expect(result.exitCode).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("Unexpected positional argument for impact: src");
+    } finally {
+      statSpy.mockRestore();
+    }
   });
 
   test("keeps overlapping in-process CLI runs isolated by runtime context", async () => {

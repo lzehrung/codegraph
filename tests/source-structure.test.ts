@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 
@@ -8,6 +9,19 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 function sourceLineCount(relativePath: string): number {
   const source = fs.readFileSync(path.join(repoRoot, relativePath), "utf8").trimEnd();
   return source.split(/\r?\n/).length;
+}
+
+type CycleReport = {
+  files: string[];
+};
+
+function removeNodeSqliteExperimentalWarning(stderr: string): string {
+  return stderr
+    .replace(
+      /\(node:\d+\) ExperimentalWarning: SQLite is an experimental feature and might change at any time\r?\n/g,
+      "",
+    )
+    .replace(/\(Use `node --trace-warnings \.\.\.` to show where the warning was created\)\r?\n/g, "");
 }
 
 describe("source module structure", () => {
@@ -68,5 +82,21 @@ describe("source module structure", () => {
       expect(fs.existsSync(path.join(repoRoot, relativePath)), relativePath).toBeTruthy();
     }
     expect(sourceLineCount("src/cli.ts")).toBeLessThanOrEqual(2400);
+  });
+
+  test("keeps TypeScript source modules free of dependency cycles", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["./dist/cli.js", "cycles", "--root", ".", "./src", "--sort", "priority", "--json"],
+      {
+        cwd: repoRoot,
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(removeNodeSqliteExperimentalWarning(result.stderr)).toBe("");
+    const cycles = JSON.parse(result.stdout) as CycleReport[];
+    expect(cycles).toEqual([]);
   });
 });

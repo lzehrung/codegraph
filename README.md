@@ -28,49 +28,9 @@ Use Codegraph when you need fast structural answers about a repo without relying
 - Export graph data as JSON, Mermaid, DOT, or SQLite, then inspect it from scripts or the browser graph viewer app.
 - Keep one workflow across source languages, monorepos, and graph-first document and template formats instead of stitching together separate tools.
 
-`inspect` returns a bounded repo summary plus next commands:
-
-```json
-{
-  "backend": {
-    "native": { "available": true }
-  },
-  "files": {
-    "total": 80,
-    "byLanguage": { "ts": 80 }
-  },
-  "hotspots": [
-    {
-      "file": "/workspace/codegraph/src/indexer.ts",
-      "fanIn": 16,
-      "fanOut": 27,
-      "score": 59
-    }
-  ],
-  "duplicates": {
-    "total": 1,
-    "omitted": 0,
-    "minConfidence": "high",
-    "top": [
-      {
-        "confidence": "high",
-        "cloneType": "exact",
-        "score": 100,
-        "left": { "file": "src/a.ts", "startLine": 10, "endLine": 24, "tokenCount": 86 },
-        "right": { "file": "src/b.ts", "startLine": 8, "endLine": 22, "tokenCount": 86 },
-        "rawPairCount": 1,
-        "reasons": ["identical text", "matching normalized token stream"]
-      }
-    ]
-  },
-  "recommendedCommands": [
-    "codegraph hotspots --root \"/workspace/codegraph\" \"/workspace/codegraph/src\" --limit 20 --json",
-    "codegraph graph --root \"/workspace/codegraph\" \"/workspace/codegraph/src\" --json --symbols-detailed --compact-json",
-    "codegraph duplicates --root \"/workspace/codegraph\" \"/workspace/codegraph/src\" --json --min-confidence medium --limit 20 --include-same-file",
-    "codegraph doctor \"/workspace/codegraph/.codegraph-cache/index-v1\""
-  ]
-}
-```
+For a first pass, run `doctor`, then `orient --root . --budget small --json`.
+Use `inspect`, `search`, `packet get`, `impact`, and `review` as follow-ups when you need deeper architecture, symbol, or change context.
+Detailed command contracts and JSON shapes live in [docs/cli.md](./docs/cli.md).
 
 ## Features
 
@@ -158,110 +118,28 @@ Choose output by consumer:
 - Use `--pretty` or `--summary` when a person or model needs a compact triage view.
 - Use `--json` or library APIs when a script, tool wrapper, or follow-up command needs stable fields.
 
-Initial orientation is the intended first command for repo understanding. The command and compact output look like this:
+Use these as starting points, then see [docs/cli.md](./docs/cli.md) for all flags, defaults, and output contracts.
 
 ```bash
-codegraph orient --root . --budget small --pretty
-```
-
-```text
-Orientation
-- 537 file(s) in scope.
-- 8 hotspot module(s) surfaced for follow-up.
-- Health analysis skipped for small budget.
-
-Hotspots
-- src/indexer/build-index.ts score 82
-
-Recommended next
-- codegraph packet get file:src/indexer/build-index.ts --json
-- codegraph search "call compatibility" --json
-
-Omitted
-- 521 tree entries
-- 14 hotspots
-```
-
-Use JSON when a follow-up tool needs stable handles, limits, or omitted counts:
-
-```bash
+# repo orientation and bounded follow-up
 codegraph orient --root . --budget small --json
-```
-
-Find an anchor, then expand only the context you need. JSON keeps handles exact across follow-up calls:
-
-```bash
+codegraph packet get <handle-from-orient> --json
 codegraph search "graph json" --json
 codegraph explain file:src/cli/graph.ts --json
-```
 
-```json
-{
-  "target": { "kind": "file", "path": "src/cli/graph.ts" },
-  "symbols": [{ "name": "handleGraphCommand", "kind": "function" }],
-  "neighbors": { "imports": ["src/graph.ts"], "importedBy": ["src/cli.ts"] },
-  "nextCommands": ["codegraph refs --file src/cli/graph.ts --line 42 --col 16 --pretty"]
-}
-```
-
-Use semantic navigation when string search is too broad:
-
-```bash
+# semantic navigation
+codegraph goto <file> <line> <column>
 codegraph refs --file src/index.ts --line 12 --col 17 --pretty
-```
 
-```text
-References for buildProjectIndex
-- src/cli/impact.ts:486 import
-- src/cli/review.ts:310 call
-- tests/indexer.test.ts:22 call
-```
-
-Use drift, impact, and review for architecture regression and PR or worktree risk:
-
-```bash
+# architecture and review
 codegraph drift ./src --base origin/main --head HEAD --pretty --graph-edges summary --public-api removals
 codegraph drift ./src --base origin/main --head HEAD --compact-json
 codegraph impact --base origin/main --head HEAD --pretty
 codegraph review --base origin/main --head HEAD --summary
-```
 
-```text
-Impact Analysis Report
-Changed files: 2
-Changed symbols: 3
-Impacted items: 4
-Call compatibility:
-- createUser: src/routes/users.ts:42 passes 1 argument; new signature requires 2.
-Duplicate leads:
-- src/api/users.ts:12-28 matches src/services/users.ts:8-24 (renamed, score 91).
-
-Review Summary
-Candidate tests: 4 (high: 1, medium: 2, low: 1)
-```
-
-`drift` compares graph states over time. It reports structural signals such as new cycles, unresolved imports, public API removals, duplicate group count changes, hotspot jumps, and graph-edge changes; it is not runtime validation or compiler diagnostics. Use `--graph-edges summary|off`, `--public-api removals|off`, and `--compact-json` to keep CI and review output bounded.
-
-Run duplicate detection directly when refactor risk is the question:
-
-```bash
+# duplicate and graph exploration
 codegraph duplicates ./src --json --min-confidence medium --limit 20
-```
-
-```json
-{
-  "schemaVersion": 2,
-  "groups": [
-    {
-      "confidence": "high",
-      "cloneType": "exact",
-      "score": 100,
-      "primaryLeft": { "file": "src/a.ts", "startLine": 10, "endLine": 24 },
-      "primaryRight": { "file": "src/b.ts", "startLine": 8, "endLine": 22 }
-    }
-  ],
-  "omittedCounts": { "groups": 0, "rawSuggestions": 12 }
-}
+codegraph graph --root . ./src --compact-json --output codegraph.json
 ```
 
 See [docs/cli.md](./docs/cli.md) for full flags, JSON shapes, drift policy gates, duplicate scopes, and review output details.

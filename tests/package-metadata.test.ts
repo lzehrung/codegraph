@@ -270,8 +270,8 @@ describe("package metadata", () => {
     const scripts = readStringRecord(rootPackage.scripts);
     const eslintConfig = readText("eslint.config.js");
 
-    expect(scripts.lint).toBe('npx eslint "src/**/*.ts" "tests/**/*.test.ts"');
-    expect(scripts["lint:fix"]).toBe('npx eslint "src/**/*.ts" "tests/**/*.test.ts" --fix');
+    expect(scripts.lint).toBe('npx eslint "src/**/*.ts" "tests/**/*.ts"');
+    expect(scripts["lint:fix"]).toBe('npx eslint "src/**/*.ts" "tests/**/*.ts" --fix');
     expect(eslintConfig).toContain('"tests/languages/samples/**"');
     expect(eslintConfig).toContain('"prefer-const": "error"');
   });
@@ -337,7 +337,22 @@ describe("package metadata", () => {
 
     expect(scripts.test).toBe("npm run test:fast");
     expect(scripts["test:fast"]).toContain("--exclude tests/bench-harness.test.ts");
+    expect(scripts["test:fast"]).toContain("--exclude tests/native-semantic-parity.test.ts");
     expect(scripts["test:bench"]).toContain("tests/bench-harness.test.ts");
+  });
+
+  it("keeps native-required and reduced-mode fallback test lanes explicit", () => {
+    const rootPackage = readJson("package.json");
+    const scripts = readStringRecord(rootPackage.scripts);
+
+    expect(scripts["test:native"]).toBe(
+      "npm run test:native:rust && npm run test:native:required && npm run test:native:fallback",
+    );
+    expect(scripts["test:native:required"]).toBe("node ./scripts/run-native-required-tests.mjs");
+    expect(scripts["test:native:fallback"]).toContain("tests/native-fallback-reporting.test.ts");
+    expect(scripts["test:native:fallback"]).toContain("tests/native-fallback-contract.test.ts");
+    expect(scripts["test:ci"]).toContain("--reporter=json");
+    expect(scripts["test:ci"]).toContain("--exclude tests/native-worker-parity.test.ts");
   });
 
   it("exposes opt-in JavaScript, native, and Markdown coverage reporting", () => {
@@ -368,6 +383,7 @@ describe("package metadata", () => {
     expect(coverageScript).toContain("coverage/native");
     expect(coverageScript).toContain("tests/bench-harness.test.ts");
     expect(coverageScript).toContain("--maxWorkers");
+    expect(coverageScript).not.toContain("--minWorkers");
     expect(coverageScript).toContain("writeCoverageMarkdownReports");
     expect(coverageScript).toContain("native/html/index.html");
     expect(coverageScript).toContain("<iframe");
@@ -600,6 +616,52 @@ void onImpactItemStreaming;
     expect(agentWorkflows).toContain("ranked top impacts");
     expect(agentWorkflows).toContain('streaming `complete.report` uses `format: "stream-summary"`');
     expect(streamingSource).toContain("top impacts");
+  });
+
+  it("keeps repeated impact ignore globs explicit in CLI docs", () => {
+    const cliDoc = readText("docs/cli.md");
+
+    expect(cliDoc).toContain(
+      'codegraph impact --base main --head feature --ignore-glob "**/package-lock.json" --ignore-glob "**/dist/**"',
+    );
+    expect(cliDoc).not.toContain(
+      'codegraph impact --base main --head feature --ignore-glob "**/package-lock.json" "**/dist/**"',
+    );
+  });
+
+  it("keeps intentionally repeated CLI examples synchronized across docs", () => {
+    const docs = new Map([
+      ["README.md", readText("README.md")],
+      ["docs/cli.md", readText("docs/cli.md")],
+      ["docs/agent-workflows.md", readText("docs/agent-workflows.md")],
+      ["codegraph-skill/codegraph/SKILL.md", readText("codegraph-skill/codegraph/SKILL.md")],
+    ]);
+    const sharedExamples = [
+      {
+        command: "codegraph orient --root . --budget small --json",
+        files: ["README.md", "docs/cli.md", "docs/agent-workflows.md", "codegraph-skill/codegraph/SKILL.md"],
+      },
+      {
+        command: "codegraph review --base HEAD --head WORKTREE --summary",
+        files: ["README.md", "docs/cli.md", "docs/agent-workflows.md", "codegraph-skill/codegraph/SKILL.md"],
+      },
+      {
+        command:
+          "codegraph drift ./src --base origin/main --head HEAD --pretty --graph-edges summary --public-api removals",
+        files: ["README.md", "docs/cli.md", "docs/agent-workflows.md", "codegraph-skill/codegraph/SKILL.md"],
+      },
+    ];
+
+    for (const example of sharedExamples) {
+      for (const filePath of example.files) {
+        expect(docs.get(filePath), `${filePath} should include ${example.command}`).toContain(example.command);
+      }
+    }
+
+    expect(docs.get("README.md")).not.toContain("codegraph impact --provider git --base HEAD --head WORKTREE");
+    expect(docs.get("codegraph-skill/codegraph/SKILL.md")).not.toContain(
+      "codegraph impact --provider git --base HEAD --head WORKTREE",
+    );
   });
 
   it("keeps installation guidance aligned with native-first reduced-mode behavior", () => {

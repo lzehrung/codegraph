@@ -12,6 +12,7 @@ import {
 } from "../src/native/treeSitterNative.js";
 
 const slowNativeIntegrationTimeoutMs = 30000;
+const nativeIt = isNativeTreeSitterAvailable() ? it : it.skip;
 
 describe("native fallback reporting", () => {
   it("detects when native tree-sitter is disabled by environment", () => {
@@ -90,7 +91,7 @@ describe("native fallback reporting", () => {
     expect(result.error).toContain("bad native query");
   });
 
-  it("normalizes ad hoc native queries through language compatibility hooks", () => {
+  nativeIt("normalizes ad hoc native queries through language compatibility hooks", () => {
     const support = supportById("ts");
     expect(support).toBeDefined();
     const result = getNativeSingleQueryExecution(

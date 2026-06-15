@@ -4,7 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { collectGraph, getUnresolvedImports, getHotspots, getApiSurface, SymbolKind } from "../src/index.js";
 import { getExternalClassifierCacheStats, resetExternalClassifierCaches } from "../src/graphs/external-classifier.js";
+import { findDetailedCycles } from "../src/graphs/queries.js";
 import { resolveRustImportPath } from "../src/util/resolution.js";
+import { isRustCfgTestStatement } from "../src/util/rustTestModules.js";
 
 describe("graph reports", () => {
   const tempRoots: string[] = [];
@@ -585,6 +587,88 @@ describe("graph reports", () => {
         (edge) => edge.from.endsWith("tests.rs") && edge.to.type === "file" && edge.to.path.endsWith("query.rs"),
       ),
     ).toBeTruthy();
+  });
+
+  it("excludes Rust cfg-test modules from production cycle edges", async () => {
+    const projectRoot = makeTempRoot("cg-rust-cfg-test-cycles-");
+    const sourceRoot = path.join(projectRoot, "src");
+    fs.mkdirSync(sourceRoot, { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, "Cargo.toml"), '[package]\nname = "sample"\nversion = "0.1.0"\n', "utf8");
+    fs.writeFileSync(
+      path.join(sourceRoot, "lib.rs"),
+      [
+        "mod duplicate_tokens;",
+        "#[cfg(test)]",
+        "mod tests;",
+        "",
+        "pub fn tokenize_duplicate_source() {",
+        "    duplicate_tokens::tokenize_duplicate_source();",
+        "}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(sourceRoot, "duplicate_tokens.rs"),
+      [
+        "pub fn tokenize_duplicate_source() {}",
+        "",
+        "#[cfg(test)]",
+        "mod tests {",
+        "    use super::tokenize_duplicate_source;",
+        "",
+        "    mod nested {",
+        "        use super::super::tokenize_duplicate_source;",
+        "    }",
+        "}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(sourceRoot, "tests.rs"),
+      "use super::{tokenize_duplicate_source};\nuse crate::duplicate_tokens;\n",
+      "utf8",
+    );
+
+    const libFile = path.join(sourceRoot, "lib.rs");
+    const duplicateFile = path.join(sourceRoot, "duplicate_tokens.rs");
+    const testsFile = path.join(sourceRoot, "tests.rs");
+    const graph = await collectGraph(projectRoot, [libFile, duplicateFile, testsFile]);
+
+    expect(
+      graph.edges.some((edge) => edge.from === libFile && edge.to.type === "file" && edge.to.path === testsFile),
+    ).toBe(false);
+    expect(
+      graph.edges.some((edge) => edge.from === duplicateFile && edge.to.type === "file" && edge.to.path === libFile),
+    ).toBe(false);
+    expect(findDetailedCycles(graph)).toEqual([]);
+  });
+
+  it("uses statement offsets when classifying duplicate Rust cfg-test statements", () => {
+    const source = [
+      "use crate::helper::shared;",
+      "",
+      "#[cfg(test)]",
+      "mod tests {",
+      "    use crate::helper::shared;",
+      "}",
+      "",
+      "#[cfg(test)]",
+      "mod test_helpers;",
+      "",
+      "mod production_helpers;",
+      "",
+    ].join("\n");
+    const productionUseIndex = source.indexOf("use crate::helper::shared;");
+    const testUseIndex = source.lastIndexOf("use crate::helper::shared;");
+    const testModuleIndex = source.indexOf("mod test_helpers;");
+    const productionModuleIndex = source.indexOf("mod production_helpers;");
+
+    expect(isRustCfgTestStatement(source, "use crate::helper::shared;", productionUseIndex)).toBe(false);
+    expect(isRustCfgTestStatement(source, "use crate::helper::shared;", testUseIndex)).toBe(true);
+    expect(isRustCfgTestStatement(source, "mod test_helpers;", testModuleIndex)).toBe(true);
+    expect(isRustCfgTestStatement(source, "mod production_helpers;", productionModuleIndex)).toBe(false);
   });
 
   it("resolves Rust super imports from mod.rs files against the parent module directory", async () => {

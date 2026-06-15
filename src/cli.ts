@@ -2,6 +2,7 @@
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
+import { collectGraph } from "./graph-builder.js";
 import type { BuildOptions } from "./indexer/types.js";
 import { type GraphBuildOptions } from "./graphs/types.js";
 import { type NativeRuntimeMode } from "./native/treeSitterNative.js";
@@ -38,7 +39,7 @@ import { handleIndexCommand } from "./cli/index.js";
 import { handleHotspotsCommand, handleInspectCommand } from "./cli/inspect.js";
 import { handleOrientCommand } from "./cli/orient.js";
 import { handleDumpmodCommand, handleGotoCommand, handleRefsCommand } from "./cli/navigation.js";
-import { parseCacheModeOption, parseOptionalNonNegativeIntegerOption } from "./cli/options.js";
+import { parseCacheModeOption, parseOptionalNonNegativeIntegerOption, validateCliArgs } from "./cli/options.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
 import { handlePacketCommand } from "./cli/packet.js";
 import { handleReviewCommand } from "./cli/review.js";
@@ -66,6 +67,14 @@ function looksLikeGlobPattern(baseRoot: string, value: string): boolean {
     /[*?]/.test(value) || (value.includes("{") && value.includes("}")) || (value.includes("[") && value.includes("]"));
   if (!hasGlobSyntax) return false;
   return !fs.existsSync(resolveFilePathFromRoot(baseRoot, value));
+}
+
+function isExistingDirectory(filePath: string): boolean {
+  try {
+    return fs.statSync(filePath, { throwIfNoEntry: false })?.isDirectory() ?? false;
+  } catch {
+    return false;
+  }
 }
 
 function assertValidIncludeRoots(command: string, baseRoot: string, includeRoots: readonly string[]): void {
@@ -100,7 +109,13 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   const cmd = rawArgs[0] && !rawArgs[0].startsWith("-") ? rawArgs[0] : "graph";
   const argTokens = rawArgs[0] && !rawArgs[0].startsWith("-") ? rawArgs.slice(1) : rawArgs;
 
-  const parsed = parseCliArgs(cmd, argTokens);
+  let parsed: ReturnType<typeof parseCliArgs>;
+  try {
+    parsed = parseCliArgs(cmd, argTokens);
+  } catch (error) {
+    writeStderrLine(error instanceof Error ? error.message : String(error));
+    exitCli(2);
+  }
   const hasFlag = (name: string) => parsed.flags.has(name);
   const getOpt = (name: string) => {
     const v = parsed.options.get(name);
@@ -127,6 +142,12 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     writeStderrLine(`Unknown command: ${cmd}`);
     exitCli(1);
     return;
+  }
+  try {
+    validateCliArgs(cmd, parsed);
+  } catch (error) {
+    writeStderrLine(error instanceof Error ? error.message : String(error));
+    exitCli(2);
   }
 
   const reportFile = getOpt("--report-file");
@@ -177,6 +198,18 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   const rootOpt = getOpt("--root");
   const resolveAbs = (p: string) => resolveFilePathFromRoot(getCwd(), p);
 
+  if (cmd === "impact" && parsed.positionals.length) {
+    const impactRootArg = parsed.positionals[0]!;
+    const resolvedImpactRoot = resolveAbs(impactRootArg);
+    const isLegacyImpactRoot = !rootOpt && isExistingDirectory(resolvedImpactRoot);
+    if (!isLegacyImpactRoot) {
+      writeStderrLine(`Unexpected positional argument for impact: ${impactRootArg}`);
+      writeStderrLine("Usage: codegraph impact [project-root] [--provider git|github|raw] [options]");
+      exitCli(2);
+    }
+  }
+
+  const firstPositionalRoot = parsed.positionals.length === 1 ? resolveAbs(parsed.positionals[0]!) : undefined;
   const defaultProjectRoot =
     (cmd === "graph" ||
       cmd === "graph-delta" ||
@@ -187,10 +220,9 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       cmd === "duplicates" ||
       cmd === "impact") &&
     !rootOpt &&
-    parsed.positionals.length === 1 &&
-    fs.existsSync(resolveAbs(parsed.positionals[0]!)) &&
-    fs.statSync(resolveAbs(parsed.positionals[0]!)).isDirectory()
-      ? resolveAbs(parsed.positionals[0]!)
+    firstPositionalRoot !== undefined &&
+    isExistingDirectory(firstPositionalRoot)
+      ? firstPositionalRoot
       : getCwd();
 
   const projectRootFs = rootOpt ? resolveAbs(rootOpt) : defaultProjectRoot;
@@ -298,7 +330,8 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     cmd === "inspect" ||
     cmd === "duplicates" ||
     cmd === "drift" ||
-    cmd === "orient";
+    cmd === "orient" ||
+    cmd === "cycles";
   let includeRoots: string[] = [];
   if (supportsIncludeRoots) {
     if (rootOpt) {
@@ -865,7 +898,11 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       writeStdoutLine,
       writeStderrLine,
       exit: exitCli,
-      listProjectFilesForScan: async () => await listProjectFilesForScan(projectRootFs),
+      listProjectFilesForScan: async () => {
+        if (cmd === "cycles") return await resolveFilesFromRoots();
+        return await listProjectFilesForScan(projectRootFs);
+      },
+      ...(cmd === "cycles" ? { collectGraph } : {}),
       ...(graphOptions ? { graphOptions } : {}),
       indexOptions: buildGraphQueryIndexOptions(graphOptions),
     });

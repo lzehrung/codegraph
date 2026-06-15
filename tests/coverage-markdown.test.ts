@@ -61,6 +61,16 @@ describe("coverage markdown reports", () => {
         "BRF:1",
         "BRH:0",
         "end_of_record",
+        "SF:src/types.ts",
+        "DA:1,0",
+        "DA:2,0",
+        "LF:2",
+        "LH:0",
+        "FNF:0",
+        "FNH:0",
+        "BRF:0",
+        "BRH:0",
+        "end_of_record",
       ].join("\n"),
       "utf8",
     );
@@ -74,8 +84,10 @@ describe("coverage markdown reports", () => {
     expect(writtenPaths).toContain(markdownPath);
     expect(writtenPaths).toContain(indexPath);
     expect(markdown).toContain("# JavaScript/TypeScript Coverage");
-    expect(markdown).toContain("| Lines | 2 | 4 | 50.00% |");
+    expect(markdown).toContain("| Lines | 2 | 6 | 33.33% |");
     expect(markdown).toContain("| `src/uncovered.ts` | 0.00% | 0.00% | 0.00% |");
+    expect(markdown).toContain("## Type-Only Or Re-Export Files");
+    expect(markdown).toContain("| `src/types.ts` | 0.00% | n/a | n/a |");
     expect(index).toContain("[JavaScript/TypeScript](./js.md)");
     expect(index).toContain("npm run coverage:markdown");
   });

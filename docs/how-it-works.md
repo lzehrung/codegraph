@@ -29,6 +29,7 @@ Runtime behavior, performance characteristics, architecture, extension points, a
 - Content-hash caching is the default: parsed-module cache keys use content SHA1 for reliability.
 - `cacheStrict` defaults to true. Set `cacheStrict: false` only when mtime and size checks are an acceptable speed tradeoff.
 - Per-file parsed caches are versioned; version mismatches trigger a rebuild of that file's cached outputs.
+- Persistent SQLite caches record table schema versions. Older compatible tables are migrated in place, while corrupt or unsupported schema metadata causes that cache table to be rebuilt.
 - Bloom filters are built automatically during indexing for faster reference scanning. Disable them with `useBloomFilters: false` if needed.
 - `.codegraph-cache/index-v1/manifest.json` stores the last indexed commit, graph options, and per-file signatures plus resolved edges.
 - Incremental runs treat the manifest as a cached base graph: unchanged files keep their edges, while changed files are reparsed and their edges replaced.
@@ -156,6 +157,9 @@ Recommended strategy:
 
 - Feed inline strings as source and assert on JSON-serializable structures.
 - For end-to-end tests, create a small temp directory with a few files and run the CLI with `tsx`.
+- Use `npm run test:native:required` for JS suites that must fail when the native addon is unavailable.
+- Use `npm run test:native:fallback` for reduced-mode fallback coverage on hosts without native support.
+- `npm run test:native` runs Rust native tests, native-required JS suites, and reduced-mode fallback suites together.
 
 ## Related docs
 
