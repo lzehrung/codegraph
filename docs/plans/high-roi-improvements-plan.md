@@ -146,10 +146,10 @@ The root export is intentionally broad today. That keeps compatibility simple, b
 
 Implementation outline:
 
-- [ ] Sketch stable subpath exports for agent, graph, indexer, impact, and language support.
-- [ ] Add an API surface snapshot or CI check before narrowing exports.
-- [ ] Document replacement paths before any deprecation.
-- [ ] Update `docs/library-api.md` only when an actual API contract changes.
+- [x] Sketch stable subpath exports for agent, graph, indexer, impact, and language support.
+- [x] Add an API surface snapshot or CI check before narrowing exports.
+- [x] Document replacement paths before any deprecation.
+- [x] Update `docs/library-api.md` only when an actual API contract changes.
 
 ## Priority 10: Test Type Hygiene
 
@@ -157,9 +157,9 @@ The source tree largely avoids forbidden casts, but tests still contain some `as
 
 Implementation outline:
 
-- [ ] Replace casts with typed fixture builders as files are touched.
-- [ ] Avoid a large mechanical cleanup unless it removes repeated friction.
-- [ ] Keep test behavior realistic; do not weaken assertions to satisfy types.
+- [x] Replace casts with typed fixture builders as files are touched.
+- [x] Avoid a large mechanical cleanup unless it removes repeated friction.
+- [x] Keep test behavior realistic; do not weaken assertions to satisfy types.
 
 ## Suggested Execution Order
 

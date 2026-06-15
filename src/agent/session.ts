@@ -28,6 +28,7 @@ export type AgentSessionOptions = {
 };
 
 export type AgentSession = {
+  listFiles?: () => Promise<string[]>;
   loadProject: (loadOptions?: AgentLoadProjectOptions) => Promise<AgentProjectSnapshot>;
   invalidate: () => void;
 };
@@ -38,12 +39,34 @@ const EMPTY_SYMBOL_GRAPH: SymbolGraph = {
   nodes: new Map(),
   edges: [],
 };
+const AGENT_NATIVE_WORKER_AUTO_FILE_THRESHOLD = 250;
 
 export function createAgentSession(options: AgentSessionOptions): AgentSession {
+  let cachedFiles: Promise<string[]> | undefined;
   let cachedBase: Promise<AgentProjectBaseSnapshot> | undefined;
   let cachedSymbolGraph: Promise<SymbolGraph> | undefined;
   let cachedEagerSnapshot: Promise<AgentProjectSnapshot> | undefined;
   let cachedSkippedSnapshot: Promise<AgentProjectSnapshot> | undefined;
+
+  const loadFiles = async (): Promise<string[]> => {
+    if (cachedFiles) return cachedFiles;
+    const loadPromise = (async () => {
+      const useConfig = options.useConfig ?? true;
+      const config = useConfig ? await loadCodegraphConfig(options.root) : {};
+      const optionDiscovery = mergeDiscoveryOptions(options.buildOptions?.discovery, options.discovery);
+      const discovery = mergeDiscoveryOptions(config.discovery, optionDiscovery);
+      const discoveryOptions = hasDiscoveryOptions(discovery)
+        ? { ...discovery, globRoot: discovery.globRoot ?? options.root }
+        : undefined;
+
+      return await listProjectFiles(options.root, undefined, discoveryOptions);
+    })();
+    cachedFiles = loadPromise;
+    loadPromise.catch(() => {
+      if (cachedFiles === loadPromise) cachedFiles = undefined;
+    });
+    return loadPromise;
+  };
 
   const loadBase = async (): Promise<AgentProjectBaseSnapshot> => {
     if (cachedBase) return cachedBase;
@@ -55,14 +78,21 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
       const discoveryOptions = hasDiscoveryOptions(discovery)
         ? { ...discovery, globRoot: discovery.globRoot ?? options.root }
         : undefined;
-      const files = await listProjectFiles(options.root, undefined, discoveryOptions);
-      const index = await buildProjectIndexIncremental(options.root, {
+      const files = await loadFiles();
+      const buildOptions: BuildOptions & { files: string[] } = {
         ...options.buildOptions,
         cache: options.buildOptions?.cache ?? "disk",
         keepParsed: options.buildOptions?.keepParsed ?? true,
         files,
         ...(discoveryOptions ? { discovery: discoveryOptions } : {}),
-      });
+      };
+      if (
+        options.buildOptions?.useNativeWorkers === undefined &&
+        files.length >= AGENT_NATIVE_WORKER_AUTO_FILE_THRESHOLD
+      ) {
+        buildOptions.useNativeWorkers = true;
+      }
+      const index = await buildProjectIndexIncremental(options.root, buildOptions);
       const fileGraph = index.graph;
 
       return {
@@ -114,8 +144,10 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
   };
 
   return {
+    listFiles: loadFiles,
     loadProject,
     invalidate: () => {
+      cachedFiles = undefined;
       cachedBase = undefined;
       cachedSymbolGraph = undefined;
       cachedEagerSnapshot = undefined;

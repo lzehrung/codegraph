@@ -534,10 +534,28 @@ describe("package metadata", () => {
     const rootPackage = readJson("package.json");
     const rootExports = rootPackage.exports;
     expect(rootExports).toBeDefined();
-    expect(Object.keys(rootExports as Record<string, unknown>).sort()).toEqual(["."]);
+    const expectedExports = [".", "./agent", "./graphs", "./impact", "./indexer", "./languages"];
+    expect(Object.keys(rootExports as Record<string, unknown>).sort()).toEqual(expectedExports);
+
+    for (const packageExport of expectedExports) {
+      const exportConfig = (rootExports as Record<string, unknown>)[packageExport];
+      expect(exportConfig && typeof exportConfig === "object", packageExport).toBe(true);
+      const entry = exportConfig as Record<string, unknown>;
+      expect(typeof entry.types, `${packageExport}:types`).toBe("string");
+      expect(typeof entry.import, `${packageExport}:import`).toBe("string");
+      expect(typeof entry.default, `${packageExport}:default`).toBe("string");
+      expect(entry.import, `${packageExport}:import`).toBe(entry.default);
+      expect(readText((entry.types as string).replace(/^\.\//, ""))).not.toBe("");
+      expect(readText((entry.import as string).replace(/^\.\//, ""))).not.toBe("");
+    }
 
     const libraryApi = readText("docs/library-api.md");
     expect(libraryApi).toContain("## Public API Boundary");
+    expect(libraryApi).toContain("@lzehrung/codegraph/agent");
+    expect(libraryApi).toContain("@lzehrung/codegraph/graphs");
+    expect(libraryApi).toContain("@lzehrung/codegraph/indexer");
+    expect(libraryApi).toContain("@lzehrung/codegraph/impact");
+    expect(libraryApi).toContain("@lzehrung/codegraph/languages");
     expect(libraryApi).toContain("Public-stable APIs");
     expect(libraryApi).toContain("Public-legacy APIs");
     expect(libraryApi).toContain("Internal-only modules");

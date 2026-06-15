@@ -82,6 +82,15 @@ export type ProjectIndexManifestEntry = {
   gitSig?: string;
 };
 
+export type SqlNavigationCache = {
+  sourceByFile: Map<FileId, string>;
+  factsByFile: Map<FileId, import("../sql/types.js").SqlStatementFact[]>;
+  definitionLookup?: {
+    exact: Map<string, SymbolDef[]>;
+    basename: Map<string, SymbolDef[]>;
+  };
+};
+
 export type ProjectIndex = {
   graph: Graph;
   graphAdjacency?: GraphAdjacencyIndex;
@@ -95,6 +104,7 @@ export type ProjectIndex = {
   bloomFilters?: import("../util/bloomFilter.js").BloomFilterCache;
   projectFiles?: ProjectFileInfo[];
   referenceCandidates?: ReferenceCandidateIndex;
+  sqlNavigation?: SqlNavigationCache;
   manifestEntries?: Map<FileId, ProjectIndexManifestEntry>;
   cacheMode?: BuildOptions["cache"];
   cacheRootDir?: string;

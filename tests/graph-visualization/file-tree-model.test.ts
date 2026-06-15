@@ -210,7 +210,7 @@ describe("autoExpandSingleChildren", () => {
 
   it("does nothing for file nodes", () => {
     const node = { type: "file" as const, expanded: false };
-    autoExpandSingleChildren(node as unknown as Parameters<typeof autoExpandSingleChildren>[0]);
+    Reflect.apply(autoExpandSingleChildren, undefined, [node]);
     expect(node.expanded).toBe(false);
   });
 });

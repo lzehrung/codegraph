@@ -148,6 +148,20 @@ type TokenMatch = {
   proximity: boolean;
 };
 
+type SearchTextChunk = {
+  name?: string;
+  text: string;
+  normalizedText: string;
+  startLine: number;
+  endLine: number;
+};
+
+type SearchCache = {
+  fileText: Map<string, Promise<string | null>>;
+  normalizedText: Map<string, Promise<string | null>>;
+  textChunks: Map<string, Promise<SearchTextChunk[]>>;
+};
+
 const DEFAULT_LIMIT = 20;
 const MAX_TEXT_BYTES = 300_000;
 const MAX_GRAPH_DEPTH = 5;
@@ -157,6 +171,7 @@ const CHUNK_LANGUAGE_ALIASES: Record<string, string> = {
   js: "javascript",
   ts: "typescript",
 };
+const SEARCH_CACHES = new WeakMap<AgentProjectSnapshot, SearchCache>();
 
 export async function searchCodegraph(request: AgentSearchRequest): Promise<AgentSearchResponse> {
   const session = createAgentSession({
@@ -170,6 +185,11 @@ export async function searchCodegraphWithSession(
   session: AgentSession,
   request: AgentSearchRequest,
 ): Promise<AgentSearchResponse> {
+  if (canUsePathFastPath(request) && session.listFiles) {
+    const files = await session.listFiles();
+    return searchPathOnly(request.root, files, request);
+  }
+
   const snapshot = await session.loadProject({
     symbolGraph: searchNeedsSymbolGraph(request) ? "eager" : "skip",
   });
@@ -231,9 +251,8 @@ async function searchSnapshot(
     );
   }
 
-  const candidates = [...resultMap.values()].filter((result) => result.score > 0).sort(compareResults);
-  const boundedResults = boundAgentList(candidates, limit);
-  const results = boundedResults.items.map(finalizeResult);
+  const selectedResults = selectTopResults(resultMap, limit);
+  const results = selectedResults.items.map(finalizeResult);
 
   return {
     schemaVersion: 1,
@@ -248,9 +267,61 @@ async function searchSnapshot(
       followUpsPerResult: AGENT_SEARCH_FOLLOWUPS_PER_RESULT_LIMIT,
     },
     resultCount: results.length,
-    totalCandidates: candidates.length,
+    totalCandidates: selectedResults.totalCandidates,
     omittedCounts: {
-      results: boundedResults.omitted,
+      results: selectedResults.omitted,
+    },
+    results,
+  };
+}
+
+function canUsePathFastPath(request: AgentSearchRequest): boolean {
+  return (request.mode ?? "hybrid") === "path" && request.from === undefined;
+}
+
+function searchPathOnly(root: string, files: readonly string[], request: AgentSearchRequest): AgentSearchResponse {
+  const query = buildQueryTerms(request.query);
+  const resultMap = new Map<string, MutableSearchResult>();
+  const limit = defaultAgentLimit(request.limit, DEFAULT_LIMIT, AGENT_SEARCH_RESULT_LIMIT);
+
+  if (query.tokens.length) {
+    for (const file of files) {
+      const relFile = normalizeAgentFilePath(root, file);
+      const pathMatch = matchTokenScore(relFile, query);
+      if (pathMatch.score <= 0) continue;
+
+      const result = upsertResult(resultMap, {
+        handle: formatAgentFileHandle({ file: relFile }),
+        kind: "file",
+        label: relFile,
+        file: relFile,
+      });
+      result.score += pathMatch.score * 2;
+      addReason(result, `path token match: ${pathMatch.matched.join(", ")}`);
+      addEvidence(result, { source: "path", label: relFile, file: relFile });
+      addFileFollowUps(result, relFile);
+    }
+  }
+
+  const selectedResults = selectTopResults(resultMap, limit);
+  const results = selectedResults.items.map(finalizeResult);
+
+  return {
+    schemaVersion: 1,
+    query: request.query,
+    mode: "path",
+    root,
+    limits: {
+      results: limit,
+      rankReasonsPerResult: AGENT_SEARCH_RANK_REASONS_PER_RESULT_LIMIT,
+      evidencePerResult: AGENT_SEARCH_EVIDENCE_PER_RESULT_LIMIT,
+      neighborsPerResult: AGENT_SEARCH_NEIGHBORS_PER_RESULT_LIMIT,
+      followUpsPerResult: AGENT_SEARCH_FOLLOWUPS_PER_RESULT_LIMIT,
+    },
+    resultCount: results.length,
+    totalCandidates: selectedResults.totalCandidates,
+    omittedCounts: {
+      results: selectedResults.omitted,
     },
     results,
   };
@@ -298,6 +369,10 @@ function emptyTokenMatch(): TokenMatch {
 
 function matchTokenScore(text: string, query: SearchQueryTerms): TokenMatch {
   const normalized = normalizeSearchText(text);
+  return matchTokenScoreFromNormalized(normalized, query);
+}
+
+function matchTokenScoreFromNormalized(normalized: string, query: SearchQueryTerms): TokenMatch {
   if (!normalized) return emptyTokenMatch();
   const words = new Set(normalized.split(/\s+/).filter(Boolean));
   const compact = normalized.replace(/\s+/g, "");
@@ -494,15 +569,16 @@ async function addTextResults(
   query: SearchQueryTerms,
   includeSnippets: boolean,
 ): Promise<void> {
+  const cache = getSearchCache(snapshot);
   for (const file of snapshot.files) {
-    const text = await readSearchableFile(file);
-    if (!text) continue;
-    if (!textCouldMatch(text, query.tokens)) continue;
+    const normalizedText = await getCachedNormalizedText(cache, file);
+    if (!normalizedText) continue;
+    if (!textCouldMatchNormalized(normalizedText, query.tokens)) continue;
     const relFile = normalizeAgentFilePath(snapshot.root, file);
     const documentationFile = isDocumentationFile(relFile);
-    const chunks = buildTextChunks(file, text);
+    const chunks = await getCachedTextChunks(cache, file);
     for (const chunk of chunks) {
-      const match = matchTokenScore([chunk.name, chunk.text].filter(Boolean).join(" "), query);
+      const match = matchTokenScoreFromNormalized(chunk.normalizedText, query);
       if (match.score <= 0) continue;
 
       const handle = formatAgentChunkHandle({ file: relFile, line: chunk.startLine });
@@ -561,9 +637,53 @@ function addPhraseReasons(result: MutableSearchResult, match: TokenMatch, label:
   }
 }
 
-function textCouldMatch(text: string, tokens: string[]): boolean {
-  const normalized = normalizeSearchText(text);
-  return tokens.some((token) => normalized.includes(token));
+function textCouldMatchNormalized(normalizedText: string, tokens: string[]): boolean {
+  return tokens.some((token) => normalizedText.includes(token));
+}
+
+function getSearchCache(snapshot: AgentProjectSnapshot): SearchCache {
+  const existing = SEARCH_CACHES.get(snapshot);
+  if (existing) return existing;
+  const created: SearchCache = {
+    fileText: new Map(),
+    normalizedText: new Map(),
+    textChunks: new Map(),
+  };
+  SEARCH_CACHES.set(snapshot, created);
+  return created;
+}
+
+async function getCachedFileText(cache: SearchCache, file: string): Promise<string | null> {
+  const cached = cache.fileText.get(file);
+  if (cached) return await cached;
+  const loadPromise = readSearchableFile(file);
+  cache.fileText.set(file, loadPromise);
+  loadPromise.catch(() => {
+    if (cache.fileText.get(file) === loadPromise) cache.fileText.delete(file);
+  });
+  return await loadPromise;
+}
+
+async function getCachedNormalizedText(cache: SearchCache, file: string): Promise<string | null> {
+  const cached = cache.normalizedText.get(file);
+  if (cached) return await cached;
+  const loadPromise = getCachedFileText(cache, file).then((text) => (text ? normalizeSearchText(text) : null));
+  cache.normalizedText.set(file, loadPromise);
+  loadPromise.catch(() => {
+    if (cache.normalizedText.get(file) === loadPromise) cache.normalizedText.delete(file);
+  });
+  return await loadPromise;
+}
+
+async function getCachedTextChunks(cache: SearchCache, file: string): Promise<SearchTextChunk[]> {
+  const cached = cache.textChunks.get(file);
+  if (cached) return await cached;
+  const loadPromise = getCachedFileText(cache, file).then((text) => (text ? buildTextChunks(file, text) : []));
+  cache.textChunks.set(file, loadPromise);
+  loadPromise.catch(() => {
+    if (cache.textChunks.get(file) === loadPromise) cache.textChunks.delete(file);
+  });
+  return await loadPromise;
 }
 
 function applyGraphNeighborhood(
@@ -694,10 +814,7 @@ async function readSearchableFile(file: string): Promise<string | null> {
   }
 }
 
-function buildTextChunks(
-  file: string,
-  text: string,
-): Array<{ name?: string; text: string; startLine: number; endLine: number }> {
+function buildTextChunks(file: string, text: string): SearchTextChunk[] {
   const support = supportForFile(file);
   const languageId = support ? (CHUNK_LANGUAGE_ALIASES[support.id] ?? support.id) : undefined;
   const language = languageId ? LANG_CONFIGS[languageId] : undefined;
@@ -714,6 +831,7 @@ function buildTextChunks(
         return chunks.map((chunk) => ({
           ...(chunk.name ? { name: chunk.name } : {}),
           text: chunk.text,
+          normalizedText: normalizeSearchText([chunk.name, chunk.text].filter(Boolean).join(" ")),
           startLine: chunk.startLine,
           endLine: chunk.endLine,
         }));
@@ -725,6 +843,7 @@ function buildTextChunks(
 
   return text.split(/\r?\n/).map((line, index) => ({
     text: line,
+    normalizedText: normalizeSearchText(line),
     startLine: index + 1,
     endLine: index + 1,
   }));
@@ -880,6 +999,37 @@ function compareResults(left: MutableSearchResult, right: MutableSearchResult): 
   const labelDelta = left.label.localeCompare(right.label);
   if (labelDelta !== 0) return labelDelta;
   return left.file.localeCompare(right.file);
+}
+
+function selectTopResults(
+  resultMap: Map<string, MutableSearchResult>,
+  limit: number,
+): { items: MutableSearchResult[]; totalCandidates: number; omitted: number } {
+  const top: MutableSearchResult[] = [];
+  let totalCandidates = 0;
+
+  for (const result of resultMap.values()) {
+    if (result.score <= 0) continue;
+    totalCandidates += 1;
+    insertTopResult(top, result, limit);
+  }
+
+  return {
+    items: top,
+    totalCandidates,
+    omitted: Math.max(0, totalCandidates - top.length),
+  };
+}
+
+function insertTopResult(top: MutableSearchResult[], result: MutableSearchResult, limit: number): void {
+  if (limit <= 0) return;
+  let insertIndex = top.length;
+  while (insertIndex > 0 && compareResults(result, top[insertIndex - 1]!) < 0) {
+    insertIndex -= 1;
+  }
+  if (insertIndex >= limit) return;
+  top.splice(insertIndex, 0, result);
+  if (top.length > limit) top.pop();
 }
 
 function finalizeResult(result: MutableSearchResult): AgentSearchResult {

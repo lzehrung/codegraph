@@ -384,10 +384,10 @@ Why this matters:
 
 Implementation checklist:
 
-- [ ] Add session-level caches for file text, normalized text, text chunks, and chunk boundaries.
-- [ ] Replace full-result sort with bounded top-K where output limit is small.
-- [ ] Make path-only search a file-list fast path that avoids index load entirely when possible.
-- [ ] Move token scoring and text prefilter loops to native/Rust only after cache boundaries are stable.
+- [x] Add session-level caches for file text, normalized text, text chunks, and chunk boundaries.
+- [x] Replace full-result sort with bounded top-K where output limit is small.
+- [x] Make path-only search a file-list fast path that avoids index load entirely when possible.
+- [-] Move token scoring and text prefilter loops to native/Rust only after cache boundaries are stable. Deferred until search cache boundaries have production timing evidence.
 
 Likely files:
 
@@ -399,7 +399,7 @@ Likely files:
 
 Validation:
 
-- [ ] Existing agent search tests.
+- [x] Existing agent search tests.
 - [ ] Repeated MCP search timing before/after.
 
 ## Priority 12: Smaller Performance Cleanups
@@ -408,12 +408,16 @@ These are useful after the larger wins or when touching nearby code.
 
 Checklist:
 
-- [ ] Persist SQL navigation lookup/facts on `ProjectIndex` instead of rebuilding per SQL goto/refs request.
-- [ ] Auto-enable native workers for large MCP/agent cold builds, with explicit opt-out.
+- [x] Persist SQL navigation lookup/facts on `ProjectIndex` instead of rebuilding per SQL goto/refs request.
+- [x] Auto-enable native workers for large MCP/agent cold builds, with explicit opt-out.
 - [ ] Precompute candidate-test indexes once per impact/review run.
 - [ ] Cache receiver/member/local-scope lookup primitives used by `goToDefinition()`.
 - [ ] Scope detailed symbol graph construction to changed-file context for impact where full graph context is unnecessary.
 - [ ] Persist or reuse Bloom filters instead of rereading every cached source file.
+
+Status note:
+
+- Priority 12 remains a tracking bucket, not one atomic feature. The bounded cache and worker items are implemented; the remaining items need separate design because they affect impact/review output shape, navigation resolver internals, detailed symbol-graph semantics, or persistent cache schema.
 
 ## Correctness Opportunities Still Worth Tracking
 

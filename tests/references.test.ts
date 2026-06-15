@@ -66,6 +66,30 @@ describe("Find References", () => {
       expectReferenceAt(result, reportFile, 1);
     });
 
+    it("reuses SQL source and fact caches across repeated reference lookups", async () => {
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "sql", "graph");
+      const schemaFile = path.join(samplePath, "001_create_users.sql").replace(/\\/g, "/");
+      const alterFile = path.join(samplePath, "002_alter_users.sql").replace(/\\/g, "/");
+      const reportFile = path.join(samplePath, "report.sql").replace(/\\/g, "/");
+      const index = await createTestIndexFromFiles(samplePath, [schemaFile, alterFile, reportFile]);
+      delete index.parsed;
+
+      await testFindReferences(index, schemaFile, 1, 16, 3);
+      const cachedFacts = new Map(index.sqlNavigation?.factsByFile);
+      const cachedSources = new Map(index.sqlNavigation?.sourceByFile);
+
+      await testFindReferences(index, schemaFile, 1, 16, 3);
+
+      expect(index.sqlNavigation?.factsByFile.size).toBe(3);
+      expect(index.sqlNavigation?.sourceByFile.size).toBe(3);
+      expect(index.sqlNavigation?.factsByFile.get(schemaFile)).toBe(cachedFacts.get(schemaFile));
+      expect(index.sqlNavigation?.factsByFile.get(alterFile)).toBe(cachedFacts.get(alterFile));
+      expect(index.sqlNavigation?.factsByFile.get(reportFile)).toBe(cachedFacts.get(reportFile));
+      expect(index.sqlNavigation?.sourceByFile.get(schemaFile)).toBe(cachedSources.get(schemaFile));
+      expect(index.sqlNavigation?.sourceByFile.get(alterFile)).toBe(cachedSources.get(alterFile));
+      expect(index.sqlNavigation?.sourceByFile.get(reportFile)).toBe(cachedSources.get(reportFile));
+    });
+
     it("finds schema-qualified SQL object references", async () => {
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "sql", "graph");
       const schemaFile = path.join(samplePath, "qualified_schema.sql").replace(/\\/g, "/");
