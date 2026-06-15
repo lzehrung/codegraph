@@ -76,9 +76,10 @@ export function ensureSqliteVersionedTableSchema(args: {
 }): void {
   ensureSqliteSchemaMetadataTable(args.db);
   const schemaVersion = readSqliteSchemaVersion(args.db, args.schemaVersionKey);
-  if (schemaVersion.status === "invalid") {
-    recreateSqliteTable(args.db, args.tableName, args.createTable);
-  } else if (schemaVersion.status === "ok" && schemaVersion.version !== args.schemaVersion) {
+  if (
+    schemaVersion.status === "invalid" ||
+    (schemaVersion.status === "ok" && schemaVersion.version > args.schemaVersion)
+  ) {
     recreateSqliteTable(args.db, args.tableName, args.createTable);
   } else {
     args.migrateTable(args.db);
