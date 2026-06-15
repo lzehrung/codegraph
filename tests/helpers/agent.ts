@@ -6,6 +6,8 @@ export function countingSession(session: AgentSession): { session: AgentSession;
   let loadCount = 0;
   return {
     session: {
+      root: session.root,
+      ...(session.listFiles ? { listFiles: session.listFiles } : {}),
       loadProject: async (options) => {
         const mode = options?.symbolGraph ?? "eager";
         if (!cached || cachedMode !== mode) {

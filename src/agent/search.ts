@@ -187,7 +187,7 @@ export async function searchCodegraphWithSession(
 ): Promise<AgentSearchResponse> {
   if (canUsePathFastPath(request) && session.listFiles) {
     const files = await session.listFiles();
-    return searchPathOnly(request.root, files, request);
+    return searchPathOnly(session.root, files, request);
   }
 
   const snapshot = await session.loadProject({

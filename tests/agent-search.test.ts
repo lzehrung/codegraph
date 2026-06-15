@@ -91,6 +91,7 @@ function moduleIndex(file: string, locals: SymbolDef[]): ModuleIndex {
 
 function snapshotSession(snapshot: AgentProjectSnapshot): AgentSession {
   return {
+    root: snapshot.root,
     loadProject: async () => snapshot,
     invalidate: () => undefined,
   };
@@ -134,6 +135,22 @@ describe("agent search", () => {
 
     expect(response.results.some((result) => result.file === "docs/agent-search.md")).toBe(true);
     expect(buildSpy).not.toHaveBeenCalled();
+  });
+
+  it("normalizes path fast-path results against the session root", async () => {
+    const root = await mkRepo();
+    const session = createAgentSession({ root });
+    const response = await searchCodegraphWithSession(session, {
+      root: path.dirname(root),
+      query: "agent search",
+      mode: "path",
+      limit: 5,
+    });
+
+    const result = response.results.find((entry) => entry.file === "docs/agent-search.md");
+    expect(response.root).toBe(root);
+    expect(result?.handle).toBe("file:docs%2Fagent-search.md");
+    expect(result?.file).toBe("docs/agent-search.md");
   });
 
   it("includes SQL object results from .sql language support", async () => {
