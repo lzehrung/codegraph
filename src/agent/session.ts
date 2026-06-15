@@ -28,7 +28,7 @@ export type AgentSessionOptions = {
 };
 
 export type AgentSession = {
-  root: string;
+  root?: string;
   listFiles?: () => Promise<string[]>;
   loadProject: (loadOptions?: AgentLoadProjectOptions) => Promise<AgentProjectSnapshot>;
   invalidate: () => void;

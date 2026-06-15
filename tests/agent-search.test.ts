@@ -153,6 +153,45 @@ describe("agent search", () => {
     expect(result?.file).toBe("docs/agent-search.md");
   });
 
+  it("keeps legacy custom sessions without root on the snapshot-backed path", async () => {
+    const root = await mkRepo();
+    const docsFile = path.join(root, "docs", "agent-search.md");
+    const fileGraph: Graph = { nodes: new Set([docsFile]), edges: [] };
+    const index: ProjectIndex = {
+      graph: fileGraph,
+      modules: new Map(),
+      byFile: new Map(),
+      exportCache: new Map(),
+      scopeCache: new Map(),
+    };
+    let loadCount = 0;
+    const session: AgentSession = {
+      listFiles: async () => [docsFile],
+      loadProject: async () => {
+        loadCount += 1;
+        return {
+          root,
+          files: [docsFile],
+          index,
+          fileGraph,
+          symbolGraph: { nodes: new Map(), edges: [] },
+        };
+      },
+      invalidate: () => undefined,
+    };
+
+    const response = await searchCodegraphWithSession(session, {
+      root: path.dirname(root),
+      query: "agent search",
+      mode: "path",
+      limit: 5,
+    });
+
+    expect(loadCount).toBe(1);
+    expect(response.root).toBe(root);
+    expect(response.results[0]?.file).toBe("docs/agent-search.md");
+  });
+
   it("includes SQL object results from .sql language support", async () => {
     const root = await mkRepo();
     const response = await searchCodegraph({ root, query: "public users", mode: "sql", limit: 5 });
