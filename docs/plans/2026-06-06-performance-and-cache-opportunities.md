@@ -387,7 +387,7 @@ Implementation checklist:
 - [x] Add session-level caches for file text, normalized text, text chunks, and chunk boundaries.
 - [x] Replace full-result sort with bounded top-K where output limit is small.
 - [x] Make path-only search a file-list fast path that avoids index load entirely when possible.
-- [-] Move token scoring and text prefilter loops to native/Rust only after cache boundaries are stable. Deferred until search cache boundaries have production timing evidence.
+- [ ] Move token scoring and text prefilter loops to native/Rust only after cache boundaries are stable. Deferred until search cache boundaries have production timing evidence.
 
 Likely files:
 
