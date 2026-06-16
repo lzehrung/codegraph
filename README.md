@@ -287,13 +287,13 @@ For a local global install from the source checkout, run `npm run build` first a
 
 ```bash
 npm config set "@lzehrung:registry" "https://npm.pkg.github.com"
-npm install @lzehrung/codegraph
+npm i -g @lzehrung/codegraph
 ```
 
 ### Release tarball install
 
 ```bash
-npm install https://github.com/lzehrung/codegraph/releases/download/vVERSION/lzehrung-codegraph-VERSION.tgz
+npm i -g https://github.com/lzehrung/codegraph/releases/download/vVERSION/lzehrung-codegraph-VERSION.tgz
 ```
 
 Replace `VERSION` with the release you want. The root tarball does not bundle the native addon; source-language parsing still needs the scoped native package path via the `@lzehrung` GitHub Packages registry. Without it, Codegraph runs in reduced graph-only mode.
