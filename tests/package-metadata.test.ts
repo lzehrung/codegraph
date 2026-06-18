@@ -656,7 +656,7 @@ void onImpactItemStreaming;
     ]);
     const sharedExamples = [
       {
-        command: "codegraph orient --root . --budget small --json",
+        command: "codegraph orient --root . --budget small --pretty",
         files: ["README.md", "docs/cli.md", "docs/agent-workflows.md", "codegraph-skill/codegraph/SKILL.md"],
       },
       {

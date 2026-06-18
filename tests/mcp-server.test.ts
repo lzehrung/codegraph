@@ -287,10 +287,10 @@ describe("codegraph MCP handlers", () => {
 
     const handlers = createCodegraphMcpHandlers({ root });
     const orient = await handlers.orient({ includeRoots: ["src"], budget: "small" });
-    const fileHandle = orient.handles.find((handle) => handle.kind === "file");
-    expect(fileHandle?.handle).toBeTruthy();
+    const fileFocus = orient.focus.find((focus) => focus.file);
+    expect(fileFocus?.file).toBe("src/run.ts");
 
-    const packet = await handlers.packet_get({ handle: fileHandle!.handle });
+    const packet = await handlers.packet_get({ target: fileFocus!.file! });
 
     expect(packet.schemaVersion).toBe(1);
     expect(packet.kind).toBe("file");
@@ -311,6 +311,7 @@ describe("codegraph MCP handlers", () => {
     expect(orientProperties.root).toBeUndefined();
     expect(packetProperties.root).toBeUndefined();
     expect(packetProperties.maxDuplicates).toBeTruthy();
+    expect(packetProperties.target).toBeTruthy();
   });
 
   it("bounds refs by handle with the refs limit", async () => {

@@ -2,13 +2,11 @@ export { createAgentSession } from "./agent/session.js";
 export type { AgentProjectSnapshot, AgentSession, AgentSessionOptions } from "./agent/session.js";
 export { orientCodegraph } from "./agent/orient.js";
 export type {
-  AgentModuleSummary,
   AgentOrientBudget,
   AgentOrientHealthMode,
   AgentOrientRequest,
   AgentOrientResponse,
   AgentPacketCommand,
-  AgentPacketHandle,
   AgentTreeEntry,
 } from "./agent/orient.js";
 export { getCodegraphPacket } from "./agent/packet.js";

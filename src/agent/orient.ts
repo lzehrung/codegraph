@@ -31,19 +31,26 @@ export type AgentTreeEntry = {
   depth: number;
 };
 
-export type AgentModuleSummary = {
+type AgentModuleSummary = {
   file: string;
   fanIn: number;
   fanOut: number;
   score: number;
-  handle: string;
 };
 
-export type AgentPacketHandle = {
-  kind: "file" | "review";
-  handle: string;
-  label: string;
+type AgentPacketRef = {
+  id: number;
+  kind: "file";
+  file: string;
+};
+
+export type AgentOrientationFocus = {
+  id?: number;
+  kind: "hotspot" | "file" | "review";
+  label?: string;
   file?: string;
+  why: string;
+  followUps: string[];
 };
 
 export type AgentPacketCommand = {
@@ -52,23 +59,21 @@ export type AgentPacketCommand = {
 };
 
 export type AgentOrientResponse = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   root: string;
   budget: AgentOrientBudget;
   summary: string[];
+  focus: AgentOrientationFocus[];
   tree: AgentTreeEntry[];
-  modules: AgentModuleSummary[];
   health: {
     cycles: number | null;
     unresolved: number | null;
     duplicateGroups: number | null;
   };
-  handles: AgentPacketHandle[];
   recommendedNext: AgentPacketCommand[];
   omittedCounts: {
     treeEntries: number;
-    hotspots: number;
-    handles: number;
+    focusTargets: number;
     healthAnalyses: number;
   };
 };
@@ -83,9 +88,9 @@ const ORIENT_BUDGETS: Record<
     includeHealth: boolean;
   }
 > = {
-  small: { treeDepth: 2, maxTreeEntries: 80, maxHandles: 20, maxHotspots: 8, includeHealth: false },
-  medium: { treeDepth: 3, maxTreeEntries: 160, maxHandles: 40, maxHotspots: 15, includeHealth: true },
-  large: { treeDepth: 4, maxTreeEntries: 320, maxHandles: 80, maxHotspots: 25, includeHealth: true },
+  small: { treeDepth: 2, maxTreeEntries: 25, maxHandles: 5, maxHotspots: 5, includeHealth: false },
+  medium: { treeDepth: 3, maxTreeEntries: 80, maxHandles: 10, maxHotspots: 10, includeHealth: true },
+  large: { treeDepth: 4, maxTreeEntries: 160, maxHandles: 15, maxHotspots: 15, includeHealth: true },
 };
 
 export async function orientCodegraph(request: AgentOrientRequest): Promise<AgentOrientResponse> {
@@ -123,43 +128,38 @@ export async function orientCodegraphWithSession(
     fanIn: hotspot.fanIn,
     fanOut: hotspot.fanOut,
     score: hotspot.score,
-    handle: formatAgentFileHandle({ file: hotspot.file }),
   }));
-  const fileHandles = scopedFiles.slice(0, limits.maxHandles).map((file) => ({
-    kind: "file" as const,
-    handle: formatAgentFileHandle({ file }),
-    label: file,
-    file,
-  }));
-  const reviewHandles = request.review ? [buildReviewPacketHandle(request.review.base, request.review.head)] : [];
+  const packets = buildFilePackets(
+    scopedFiles,
+    modules.map((module) => module.file),
+    limits.maxHandles,
+  );
+  const focus = buildFocusTargets(modules, packets, request.review);
   const healthMode = request.health ?? (limits.includeHealth ? "summary" : "skip");
   const health = await buildHealth(root, snapshot.index, scopedAbsoluteFiles, scopedFileGraph, healthMode);
-  const handles = [...reviewHandles, ...fileHandles];
-  const recommendedNext = buildRecommendedNext(scopedFiles, includeRoots, handles);
+  const recommendedNext = buildRecommendedNext(includeRoots, focus);
   const healthSummary = formatHealthSummary(health);
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     root,
     budget,
     summary: [
       `${scopedFiles.length} file(s) in scope.`,
-      `${modules.length} hotspot module(s) surfaced for follow-up.`,
+      `${modules.length} graph-central module(s) ranked for first follow-up.`,
       healthSummary,
     ],
+    focus,
     tree: boundedTree,
-    modules,
     health: {
       cycles: health.cycles,
       unresolved: health.unresolved,
       duplicateGroups: health.duplicateGroups,
     },
-    handles,
     recommendedNext,
     omittedCounts: {
       treeEntries: Math.max(0, tree.length - boundedTree.length),
-      hotspots: Math.max(0, scopedHotspots.length - boundedHotspots.length),
-      handles: Math.max(0, scopedFiles.length + reviewHandles.length - handles.length),
+      focusTargets: Math.max(0, scopedFiles.length - packets.length),
       healthAnalyses: health.omittedAnalyses,
     },
   };
@@ -224,12 +224,15 @@ function formatHealthSummary(health: {
   return `${health.cycles} cycle(s), ${health.unresolved} unresolved import group(s), ${health.duplicateGroups} duplicate group(s).`;
 }
 
-function buildReviewPacketHandle(base: string, head: string): AgentPacketHandle {
-  const handle = `review:base=${encodeURIComponent(base)};head=${encodeURIComponent(head)}`;
+function buildReviewFocus(base: string, head: string): AgentOrientationFocus {
   return {
     kind: "review",
-    handle,
     label: `Review ${base}..${head}`,
+    why: "review range requested by the caller",
+    followUps: [
+      `codegraph review --base ${quoteShellArg(base)} --head ${quoteShellArg(head)} --summary`,
+      `codegraph impact --base ${quoteShellArg(base)} --head ${quoteShellArg(head)} --pretty`,
+    ],
   };
 }
 
@@ -306,30 +309,101 @@ function parentPath(file: string): string {
   return file.slice(0, separator);
 }
 
-function buildRecommendedNext(
-  scopedFiles: string[],
-  includeRoots: string[],
-  handles: AgentPacketHandle[],
-): AgentPacketCommand[] {
+function buildFilePackets(scopedFiles: string[], priorityFiles: string[], maxPackets: number): AgentPacketRef[] {
+  if (!maxPackets) return [];
+  const scopedFileSet = new Set(scopedFiles);
+  const seen = new Set<string>();
+  const orderedFiles: string[] = [];
+  for (const file of priorityFiles) {
+    if (!scopedFileSet.has(file) || seen.has(file)) continue;
+    seen.add(file);
+    orderedFiles.push(file);
+  }
+  for (const file of scopedFiles) {
+    if (seen.has(file)) continue;
+    seen.add(file);
+    orderedFiles.push(file);
+  }
+  return orderedFiles.slice(0, maxPackets).map((file, index) => ({
+    id: index + 1,
+    kind: "file" as const,
+    file,
+  }));
+}
+
+function buildFocusTargets(
+  modules: AgentModuleSummary[],
+  packets: AgentPacketRef[],
+  review: AgentOrientRequest["review"] | undefined,
+): AgentOrientationFocus[] {
+  const focus: AgentOrientationFocus[] = [];
+  if (review) {
+    focus.push(buildReviewFocus(review.base, review.head));
+  }
+  const modulesByFile = new Map(modules.map((module) => [module.file, module]));
+  for (const packet of packets) {
+    const module = modulesByFile.get(packet.file);
+    if (module) {
+      focus.push({
+        id: packet.id,
+        kind: "hotspot" as const,
+        file: module.file,
+        why: `graph-central module: fan-in ${module.fanIn}, fan-out ${module.fanOut}, score ${module.score}`,
+        followUps: [formatPacketCommand(packet.file), `codegraph explain ${quoteShellArg(module.file)}`],
+      });
+      continue;
+    }
+    focus.push({
+      id: packet.id,
+      kind: "file" as const,
+      file: packet.file,
+      why: "bounded file packet candidate inside the requested scope",
+      followUps: [formatPacketCommand(packet.file)],
+    });
+  }
+  return focus;
+}
+
+function buildRecommendedNext(includeRoots: string[], focus: AgentOrientationFocus[]): AgentPacketCommand[] {
   const commands: AgentPacketCommand[] = [];
-  const firstHandle = handles[0];
-  if (firstHandle) {
-    const label = firstHandle.file ?? firstHandle.label;
-    commands.push({
-      label: `Get packet for ${label}`,
-      command: `codegraph packet get ${quoteShellArg(firstHandle.handle)} --json`,
-    });
+  const firstFocus = focus[0];
+  if (firstFocus) {
+    for (const followUp of firstFocus.followUps) {
+      commands.push({
+        label: labelForFollowUp(firstFocus, followUp),
+        command: followUp,
+      });
+    }
   }
-  if (scopedFiles.length) {
-    const firstRoot = includeRoots[0] ?? ".";
-    commands.push({
-      label: "Inspect hotspots",
-      command: `codegraph hotspots ${quoteShellArg(firstRoot)} --limit 20 --json`,
-    });
-  }
+  const firstRoot = includeRoots[0] ?? ".";
   commands.push({
-    label: "Search for an anchor",
+    label: "Rank scoped hotspots",
+    command: `codegraph hotspots ${quoteShellArg(firstRoot)} --limit 20`,
+  });
+  commands.push({
+    label: "Map current worktree impact",
+    command: "codegraph impact --base HEAD --head WORKTREE --pretty",
+  });
+  commands.push({
+    label: "Review current worktree",
+    command: "codegraph review --base HEAD --head WORKTREE --summary",
+  });
+  commands.push({
+    label: "Search for a task-specific anchor",
     command: "codegraph search <query> --json",
   });
   return commands;
+}
+
+function formatPacketCommand(file: string): string {
+  return `codegraph packet get ${quoteShellArg(file)} --pretty`;
+}
+
+function labelForFollowUp(focus: AgentOrientationFocus, followUp: string): string {
+  const label = focus.file ?? focus.label ?? "focus target";
+  if (followUp.startsWith("codegraph packet get ")) return `Get packet for ${label}`;
+  if (followUp.startsWith("codegraph explain ")) return `Explain ${label}`;
+  if (followUp.startsWith("codegraph review ")) return `Review ${label}`;
+  if (followUp.startsWith("codegraph impact ")) return `Map impact for ${label}`;
+  return label;
 }

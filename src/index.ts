@@ -225,20 +225,18 @@ export {
 export { createAgentSession } from "./agent/session.js";
 export type { AgentProjectSnapshot, AgentSession, AgentSessionOptions } from "./agent/session.js";
 
-/** Agent first-turn orientation packets with stable follow-up handles. */
+/** Agent first-turn orientation packets with file-path follow-up targets. */
 export { orientCodegraph } from "./agent/orient.js";
 export type {
-  AgentModuleSummary,
   AgentOrientBudget,
   AgentOrientHealthMode,
   AgentOrientRequest,
   AgentOrientResponse,
   AgentPacketCommand,
-  AgentPacketHandle,
   AgentTreeEntry,
 } from "./agent/orient.js";
 
-/** Agent packet retrieval by stable handle. */
+/** Agent packet retrieval by file path or stable target. */
 export { getCodegraphPacket } from "./agent/packet.js";
 export type { AgentPacketKind, AgentPacketPayload, AgentPacketRequest, AgentPacketResponse } from "./agent/packet.js";
 

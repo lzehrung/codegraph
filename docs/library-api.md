@@ -80,7 +80,7 @@ compatibility exports.
 
 ## Agent packets
 
-`orientCodegraph()` returns a compact first-turn packet for an agent, and `getCodegraphPacket()` retrieves bounded evidence by stable handle:
+`orientCodegraph()` returns compact first-turn context for an agent, and `getCodegraphPacket()` retrieves bounded evidence by file path or stable target:
 
 ```ts
 import { getCodegraphPacket, orientCodegraph } from "@lzehrung/codegraph";
@@ -91,18 +91,18 @@ const orientation = await orientCodegraph({
   budget: "small",
 });
 
-const handle = orientation.handles[0]?.handle;
-if (handle) {
+const target = orientation.focus.find((entry) => entry.file);
+if (target?.file) {
   const packet = await getCodegraphPacket({
     root: process.cwd(),
-    handle,
+    target: target.file,
     maxSymbols: 25,
   });
-  console.log(packet.kind, packet.followUps);
+  console.log(target.why, packet.kind, packet.followUps);
 }
 ```
 
-Use orientation before broad search when a caller needs repo context but has no query yet. Packet handles cover files, symbols, chunks, SQL objects, graph neighborhoods, and review ranges.
+Use orientation before broad search when a caller needs repo context but has no query yet. `focus` ranks file targets that should be tried first, with graph-central hotspots ahead of shallow root files. Search and explain still expose stable handles for symbols, chunks, SQL objects, graph neighborhoods, and review ranges.
 Small orientation budgets default to `health: "skip"` and set health fields to `null` while recording the omission. Medium and large default to `health: "summary"`, which counts cycles and unresolved imports while omitting duplicate health. Use `health: "full"` when exhaustive duplicate counts are needed.
 
 ## Agent search
@@ -170,7 +170,7 @@ const handlers = createCodegraphMcpHandlers({
 
 const search = await handlers.search({ query: "auth user", limit: 5 });
 const orient = await handlers.orient({ includeRoots: ["src"], budget: "small" });
-const packet = await handlers.packet_get({ handle: orient.handles[0]!.handle });
+const packet = await handlers.packet_get({ target: orient.focus.find((entry) => entry.file)!.file! });
 const refs = await handlers.refs({ handle: search.results[0]!.handle });
 const rows = await handlers.query_sqlite({ query: "select path from files", limit: 5 });
 console.log(packet.kind, refs.references, rows.rows);

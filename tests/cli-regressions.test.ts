@@ -1403,13 +1403,13 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     const stdout = await runCliCommand(["orient", "src", "--root", root, "--budget", "small", "--json"]);
     const response = JSON.parse(stdout) as {
       schemaVersion: number;
+      focus: Array<{ file?: string }>;
       tree: Array<{ path: string }>;
-      handles: Array<{ handle: string }>;
     };
 
-    expect(response.schemaVersion).toBe(1);
+    expect(response.schemaVersion).toBe(2);
     expect(response.tree.some((entry) => entry.path === "src/run.ts")).toBeTruthy();
-    expect(response.handles.some((handle) => handle.handle.startsWith("file:"))).toBeTruthy();
+    expect(response.focus.some((focus) => focus.file === "src/run.ts")).toBeTruthy();
   });
 
   it("orient treats a single positional as an include root", async () => {
@@ -1422,14 +1422,14 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     const stdout = await runCliCommandDetailed(["orient", "src", "--budget", "small", "--json"], undefined, root);
     const response = JSON.parse(stdout.stdout) as {
       tree: Array<{ path: string }>;
-      handles: Array<{ file?: string }>;
+      focus: Array<{ file?: string }>;
       summary: string[];
     };
 
     expect(response.tree.some((entry) => entry.path === "src/run.ts")).toBeTruthy();
     expect(response.tree.some((entry) => entry.path === "docs/guide.md")).toBeFalsy();
-    expect(response.handles.some((handle) => handle.file === "src/run.ts")).toBeTruthy();
-    expect(response.handles.some((handle) => handle.file === "docs/guide.md")).toBeFalsy();
+    expect(response.focus.some((focus) => focus.file === "src/run.ts")).toBeTruthy();
+    expect(response.focus.some((focus) => focus.file === "docs/guide.md")).toBeFalsy();
     expect(response.summary).toContain("1 file(s) in scope.");
   });
 
@@ -1441,18 +1441,19 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     const stdout = await runCliCommand(["orient", "src", "--root", root, "--budget", "small", "--pretty"]);
 
     expect(stdout).toContain("Summary");
+    expect(stdout).toContain("Start here");
     expect(stdout).toContain("Tree");
     expect(stdout).toContain("Recommended next");
     expect(stdout).toContain("codegraph packet get");
-    expect(stdout).toContain("file:");
+    expect(stdout).toContain("src/run.ts");
   });
 
-  it("packet get returns a bounded packet for file handles", async () => {
+  it("packet get returns a bounded packet for file paths", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-packet-"));
     await fsp.mkdir(path.join(root, "src"), { recursive: true });
     await fsp.writeFile(path.join(root, "src", "run.ts"), "export function run() { return 1; }\n");
 
-    const stdout = await runCliCommand(["packet", "get", "file:src%2Frun.ts", "--root", root, "--json"]);
+    const stdout = await runCliCommand(["packet", "get", "src/run.ts", "--root", root, "--json"]);
     const response = JSON.parse(stdout) as {
       schemaVersion: number;
       kind: string;
@@ -1464,11 +1465,11 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     expect(response.packet.target.file).toBe("src/run.ts");
   });
 
-  it("packet get reports accepted prefixes for invalid handles", async () => {
+  it("packet get reports unresolved file targets", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-packet-invalid-"));
 
     await expect(runCliCommandDetailed(["packet", "get", "bogus:thing", "--root", root])).rejects.toThrow(
-      /Expected one of: file:, symbol:, chunk:, sql:, graph:/,
+      "Packet target did not resolve: bogus:thing",
     );
   });
 

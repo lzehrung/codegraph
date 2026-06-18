@@ -12,17 +12,17 @@ async function writeFile(root: string, relativePath: string, content: string): P
 }
 
 describe("agent packet", () => {
-  it("retrieves a file packet from an orientation handle", async () => {
+  it("retrieves a file packet from an orientation file target", async () => {
     const root = await mkTmpDir("cg-agent-packet-");
     await writeFile(root, "src/run.ts", "export function run() { return 1; }\n");
 
     const orient = await orientCodegraph({ root, includeRoots: ["src"], budget: "small" });
-    const fileHandle = orient.handles.find((handle) => handle.kind === "file");
-    if (!fileHandle) {
-      throw new Error("expected file handle");
+    const target = orient.focus.find((focus) => focus.file);
+    if (!target?.file) {
+      throw new Error("expected file focus target");
     }
 
-    const packet = await getCodegraphPacket({ root, handle: fileHandle.handle });
+    const packet = await getCodegraphPacket({ root, target: target.file });
 
     expect(packet.schemaVersion).toBe(1);
     expect(packet.kind).toBe("file");
@@ -49,7 +49,7 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     await writeFile(root, "src/a.ts", source);
     await writeFile(root, "src/b.ts", source);
 
-    const packet = await getCodegraphPacket({ root, handle: "file:src%2Fa.ts", maxDuplicates: 1 });
+    const packet = await getCodegraphPacket({ root, target: "src/a.ts", maxDuplicates: 1 });
 
     if (packet.packet.schemaVersion !== 1 || !("duplicates" in packet.packet)) {
       throw new Error("expected explanation packet");
@@ -58,7 +58,7 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     expect(packet.omittedCounts.duplicates).toBe(0);
   });
 
-  it("retrieves review packets from orientation handles", async () => {
+  it("retrieves review packets from review targets", async () => {
     const root = await mkTmpDir("cg-agent-packet-review-");
     runGit(root, ["init"]);
     runGit(root, ["symbolic-ref", "HEAD", "refs/heads/main"]);
@@ -77,12 +77,10 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
       budget: "small",
       review: { base: "HEAD~1", head: "HEAD" },
     });
-    const reviewHandle = orient.handles.find((handle) => handle.kind === "review");
-    if (!reviewHandle) {
-      throw new Error("expected review handle");
-    }
+    expect(orient.focus[0]?.kind).toBe("review");
+    expect(orient.focus[0]?.followUps[0]).toBe("codegraph review --base 'HEAD~1' --head HEAD --summary");
 
-    const packet = await getCodegraphPacket({ root, handle: reviewHandle.handle });
+    const packet = await getCodegraphPacket({ root, target: "review:base=HEAD~1;head=HEAD" });
 
     expect(packet.schemaVersion).toBe(1);
     expect(packet.kind).toBe("review");
@@ -98,8 +96,8 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     const root = await mkTmpDir("cg-agent-packet-malformed-review-");
     await writeFile(root, "src/run.ts", "export function run() { return 1; }\n");
 
-    await expect(getCodegraphPacket({ root, handle: "review:base=%;head=HEAD" })).rejects.toThrow(
-      "Invalid review packet handle",
+    await expect(getCodegraphPacket({ root, target: "review:base=%;head=HEAD" })).rejects.toThrow(
+      "Invalid review packet target",
     );
   });
 });

@@ -6,21 +6,23 @@ Use Codegraph for structural repo questions: architecture, dependency direction,
 
 ## Start here
 
-For an unfamiliar repo, keep the first loop bounded:
+For an unfamiliar repo, keep the first loop bounded and actionable:
 
 ```bash
-codegraph doctor
-codegraph orient --root . --budget small --json
-codegraph packet get <handle-from-orient> --json
+codegraph orient --root . --budget small --pretty
+codegraph packet get <file-from-orient> --pretty
 ```
 
+For PR, worktree, or sweeping review tasks, start with `codegraph review --base HEAD --head WORKTREE --summary` or `codegraph impact --base HEAD --head WORKTREE --pretty` instead of orientation.
+
+Use `doctor` only when package/runtime state or an existing artifact path is the question.
 Use `search` when the agent has a query but no handle, `explain` when it already knows a file/symbol/SQL object/handle, and `inspect` for a human-readable architecture summary.
 Use `artifact build` for durable handoff directories and `mcp serve` when repeated follow-up calls should share one warm repo session.
 
 Choose output by the next consumer:
 
 - Use `--pretty` or `--summary` when the next consumer is a person or language model reading the result.
-- Use `--json`, MCP tools, or library APIs when the next step needs exact handles, ranges, schema fields, or filtering.
+- Use `--json`, MCP tools, or library APIs when the next step needs exact fields, ranges, schema fields, or filtering.
 - Do not parse pretty text to recover fields already present in structured output.
 
 For durable repo-local scan scope, add `codegraph.config.json` at the project root. `discovery.ignoreGlobs` keeps large fixture, generated, or vendored folders out of agent search, MCP sessions, graphing, unresolved-import checks, impact, and review unless a command explicitly changes scan scope.
@@ -32,19 +34,19 @@ For raw command flags and output contracts, see [docs/cli.md](./cli.md). For lib
 Start with `orient` when an agent needs compact repo context without flooding the first prompt:
 
 ```bash
-codegraph orient --root . --budget small --json
-codegraph orient --root . ./src --budget medium --pretty
-codegraph packet get file:src%2Fcli.ts --json
-codegraph packet get <handle-from-orient> --max-symbols 25 --json
+codegraph orient --root . --budget small --pretty
+codegraph orient --root . ./src --budget medium --json
+codegraph packet get src/cli.ts --pretty
+codegraph packet get <file-from-orient> --max-symbols 25 --json
 ```
 
-Orientation returns summary bullets, a bounded tree, hotspot modules, budgeted health counts, stable packet handles, omitted counts, and recommended next commands.
-Use `orient --pretty` for compact model-readable triage and `orient --json` when follow-up tools need exact handles or omission counts.
+Orientation returns summary bullets, ranked `focus` targets, a bounded tree, budgeted health counts, omitted counts, and recommended next commands.
+Use `orient --pretty` or MCP `orient` for compact model-readable triage and `orient --json` when follow-up tools need exact focus reasons, limits, or omission counts.
 Small orientation packets default to cheap health analysis; use larger budgets only when cycle, unresolved-import, or duplicate counts matter.
 
 ## Search anchors
 
-Use `search` when an agent has a query but no packet handle and needs a compact starting point before calling `goto`, `refs`, `deps`, `rdeps`, `chunk`, or later explanation tooling:
+Use `search` when an agent has a query but no file target or search handle and needs a compact starting point before calling `goto`, `refs`, `deps`, `rdeps`, `chunk`, or later explanation tooling:
 
 ```bash
 codegraph search "validate user" --json

@@ -6,7 +6,7 @@ Commands:
   graph         Build dependency graph (default)
   inspect       Summarize repo structure and recommend next commands
   orient        Build a compact first-turn packet for agent repo context
-  packet        Retrieve bounded evidence packets by stable handle
+  packet        Retrieve bounded evidence packets by file path or stable target
   search        Ranked agent search across files, symbols, chunks, SQL, and graph context
   explain       Explain a file, symbol, SQL object, or search handle
   artifact      Build an agent-ready SQLite/graph/report/question bundle
@@ -69,10 +69,10 @@ Examples:
   codegraph graph --fast-graph --mermaid ./src
   codegraph version
   codegraph -v
+  codegraph orient ./src --budget small --pretty
+  codegraph packet get file:src%2Fcli.ts --json
   codegraph doctor
   codegraph inspect ./src --limit 20
-  codegraph orient ./src --budget small --json
-  codegraph packet get file:src%2Fcli.ts --json
   codegraph duplicates ./src --min-confidence medium
   codegraph search "auth user" --json
   codegraph explain src/auth.ts --json
@@ -154,19 +154,19 @@ export const ORIENT_HELP_TEXT = `codegraph orient - Build a compact first-turn p
 Usage: codegraph orient [roots...] [--root <path>] [--budget small|medium|large] [--health skip|summary|full] [--json | --pretty]
 
 Output:
-  Orientation includes summary bullets, a bounded project tree, hotspot modules, budgeted health counts, stable packet handles, omission counts, and copyable follow-up commands.
-  Small budget defaults to --health skip. Medium and large default to --health summary, which counts cycles and unresolved imports without duplicate detection. Use --health full for exhaustive duplicate health.
+  Orientation includes summary bullets, ranked focus targets with follow-up commands, a bounded project tree, budgeted health counts, and omission counts.
+  Use --pretty for model-readable triage and --json when tooling needs exact focus reasons, limits, or omissions. Small budget defaults to --health skip. Medium and large default to --health summary, which counts cycles and unresolved imports without duplicate detection.
 
 Index options:
   Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
 `;
 
-export const PACKET_HELP_TEXT = `codegraph packet - Retrieve bounded evidence packets by stable handle
+export const PACKET_HELP_TEXT = `codegraph packet - Retrieve bounded evidence packets by file path or stable target
 
-Usage: codegraph packet get <handle> [--root <path>] [--json | --pretty] [--max-symbols <n>] [--max-snippets <n>] [--max-duplicates <n>]
+Usage: codegraph packet get <file|handle> [--root <path>] [--json | --pretty] [--max-symbols <n>] [--max-snippets <n>] [--max-duplicates <n>]
 
-Handles:
-  Accepts file:, symbol:, chunk:, sql:, graph:, and review: handles. CLI orient returns file handles; review handles are produced by library orientation calls that include a review range.
+Targets:
+  Accepts project file paths plus symbol:, chunk:, sql:, graph:, and review: handles from search or explain output.
 
 Index options:
   Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
@@ -235,7 +235,7 @@ Usage: codegraph mcp serve [--root <path>] [--artifact <path>] [--stdio | --port
 
 Tools:
   orient          Build a compact first-turn repo packet
-  packet_get      Retrieve bounded evidence by stable handle
+  packet_get      Retrieve bounded evidence by file path or stable target
   search          Deterministic ranked search with stable handles
   get_file        Bounded project file reads inside the root
   get_symbol      Resolve a search/explain handle

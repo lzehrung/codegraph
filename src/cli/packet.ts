@@ -8,8 +8,8 @@ export type PacketCommandContext = CliAgentCommandContext;
 
 export async function handlePacketCommand(context: PacketCommandContext): Promise<void> {
   const subcommand = context.positionals[0];
-  const handle = context.positionals[1];
-  if (subcommand !== "get" || handle === undefined) {
+  const target = context.positionals[1];
+  if (subcommand !== "get" || target === undefined) {
     context.writeStderrLine(PACKET_HELP_TEXT.trimEnd());
     context.exit(2);
   }
@@ -17,7 +17,7 @@ export async function handlePacketCommand(context: PacketCommandContext): Promis
   try {
     const response = await getCodegraphPacket({
       root: context.root,
-      handle,
+      target,
       ...(context.buildOptions ? { buildOptions: context.buildOptions } : {}),
       ...(context.getOpt("--max-symbols") !== undefined
         ? { maxSymbols: parsePositiveIntegerOption(context.getOpt("--max-symbols"), "--max-symbols", 50) }

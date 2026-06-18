@@ -111,7 +111,7 @@ export type CodegraphMcpHandlers = {
     budget?: AgentOrientBudget | undefined;
   }) => Promise<AgentOrientResponse>;
   packet_get: (request: {
-    handle: string;
+    target: string;
     maxSymbols?: number | undefined;
     maxSnippets?: number | undefined;
     maxDuplicates?: number | undefined;
@@ -283,7 +283,7 @@ function createCodegraphMcpHandlersForSession(
     packet_get: async (request) =>
       await getCodegraphPacketWithSession(session, {
         root,
-        handle: request.handle,
+        target: request.target,
         ...(request.maxSymbols !== undefined ? { maxSymbols: request.maxSymbols } : {}),
         ...(request.maxSnippets !== undefined ? { maxSnippets: request.maxSnippets } : {}),
         ...(request.maxDuplicates !== undefined ? { maxDuplicates: request.maxDuplicates } : {}),
@@ -742,7 +742,7 @@ const orientSchema = z.object({
 });
 
 const packetGetSchema = z.object({
-  handle: z.string(),
+  target: z.string(),
   maxSymbols: z.number().int().positive().max(200).optional(),
   maxSnippets: z.number().int().positive().max(50).optional(),
   maxDuplicates: z.number().int().positive().max(20).optional(),

@@ -8,7 +8,7 @@ export type AgentPacketKind = "file" | "symbol" | "chunk" | "sql_object" | "grap
 
 export type AgentPacketRequest = {
   root: string;
-  handle: string;
+  target: string;
   buildOptions?: BuildOptions;
   maxSymbols?: number;
   maxSnippets?: number;
@@ -20,7 +20,7 @@ export type AgentPacketPayload = AgentExplanation | ReviewReport;
 export type AgentPacketResponse = {
   schemaVersion: 1;
   root: string;
-  handle: string;
+  target: string;
   kind: AgentPacketKind;
   packet: AgentPacketPayload;
   limits: Record<string, number>;
@@ -28,10 +28,8 @@ export type AgentPacketResponse = {
   followUps: string[];
 };
 
-const ACCEPTED_HANDLE_PREFIXES = ["file:", "symbol:", "chunk:", "sql:", "graph:", "review:"];
-
 export async function getCodegraphPacket(request: AgentPacketRequest): Promise<AgentPacketResponse> {
-  const kind = requirePacketKind(request.handle);
+  const kind = inferPacketKind(request.target);
   if (kind === "review") {
     return await buildReviewPacket(request);
   }
@@ -47,7 +45,7 @@ export async function getCodegraphPacketWithSession(
   session: AgentSession,
   request: AgentPacketRequest,
 ): Promise<AgentPacketResponse> {
-  const kind = requirePacketKind(request.handle);
+  const kind = inferPacketKind(request.target);
   if (kind === "review") {
     return await buildReviewPacket(request);
   }
@@ -62,7 +60,7 @@ async function buildExplainPacket(
 ): Promise<AgentPacketResponse> {
   const explainRequest: AgentExplainTarget = {
     root: request.root,
-    target: request.handle,
+    target: request.target,
   };
   if (request.maxSymbols !== undefined) {
     explainRequest.maxSymbols = request.maxSymbols;
@@ -76,13 +74,13 @@ async function buildExplainPacket(
 
   const explanation = await explainCodegraphTargetWithSession(session, explainRequest);
   if (explanation.target.kind === "not_found") {
-    throw new Error(`Packet handle did not resolve: ${request.handle}`);
+    throw new Error(`Packet target did not resolve: ${request.target}`);
   }
 
   return {
     schemaVersion: 1,
     root: explanation.root,
-    handle: request.handle,
+    target: request.target,
     kind,
     packet: explanation,
     limits: explanation.limits,
@@ -91,18 +89,16 @@ async function buildExplainPacket(
   };
 }
 
-function requirePacketKind(handle: string): AgentPacketKind {
-  const kind = kindForHandle(handle);
-  if (!kind) {
-    throw new Error(`Unsupported packet handle. Expected one of: ${ACCEPTED_HANDLE_PREFIXES.join(", ")}`);
-  }
-  return kind;
+function inferPacketKind(target: string): AgentPacketKind {
+  const kind = kindForHandle(target);
+  if (kind) return kind;
+  return "file";
 }
 
 async function buildReviewPacket(request: AgentPacketRequest): Promise<AgentPacketResponse> {
-  const range = parseReviewHandle(request.handle);
+  const range = parseReviewHandle(request.target);
   if (!range) {
-    throw new Error("Invalid review packet handle. Expected review:base=<encoded-ref>;head=<encoded-ref>.");
+    throw new Error("Invalid review packet target. Expected review:base=<encoded-ref>;head=<encoded-ref>.");
   }
   const report = await buildReviewReport(request.root, {
     gitBase: range.base,
@@ -112,7 +108,7 @@ async function buildReviewPacket(request: AgentPacketRequest): Promise<AgentPack
   return {
     schemaVersion: 1,
     root: request.root,
-    handle: request.handle,
+    target: request.target,
     kind: "review",
     packet: report,
     limits: {
@@ -132,10 +128,10 @@ async function buildReviewPacket(request: AgentPacketRequest): Promise<AgentPack
   };
 }
 
-function parseReviewHandle(handle: string): { base: string; head: string } | null {
-  if (!handle.startsWith("review:")) return null;
+function parseReviewHandle(target: string): { base: string; head: string } | null {
+  if (!target.startsWith("review:")) return null;
   const fields = new Map<string, string>();
-  for (const part of handle.slice("review:".length).split(";")) {
+  for (const part of target.slice("review:".length).split(";")) {
     const separator = part.indexOf("=");
     if (separator < 0) continue;
     const key = part.slice(0, separator);
