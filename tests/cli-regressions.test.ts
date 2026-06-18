@@ -1446,6 +1446,7 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     expect(stdout).toContain("Recommended next");
     expect(stdout).toContain("codegraph packet get");
     expect(stdout).toContain("src/run.ts");
+    expect(stdout.split("codegraph packet get").length - 1).toBe(1);
   });
 
   it("packet get returns a bounded packet for file paths", async () => {

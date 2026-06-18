@@ -6,6 +6,7 @@ import { orientCodegraph, orientCodegraphWithSession } from "../src/agent/orient
 import * as duplicates from "../src/duplicates.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import { countingSession } from "./helpers/agent.js";
+import { runGit } from "./helpers/git.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 
 async function writeFile(root: string, relativePath: string, content: string): Promise<void> {
@@ -81,6 +82,23 @@ describe("agent orient", () => {
     expect(response.focus.some((focus) => focus.file === "src/index.ts")).toBe(true);
     expect(response.omittedCounts.focusTargets).toBe(0);
     expect(response.recommendedNext.some((next) => next.command === "codegraph hotspots . --limit 20")).toBe(true);
+    expect(
+      response.recommendedNext.some((next) => next.command === "codegraph impact --base HEAD --head WORKTREE --pretty"),
+    ).toBe(false);
+    expect(
+      response.recommendedNext.some(
+        (next) => next.command === "codegraph review --base HEAD --head WORKTREE --summary",
+      ),
+    ).toBe(false);
+  });
+
+  it("recommends worktree review commands inside git repos", async () => {
+    const root = await mkTmpDir("cg-agent-orient-git-");
+    runGit(root, ["init"]);
+    await writeFile(root, "src/index.ts", "export const value = 1;\n");
+
+    const response = await orientCodegraph({ root, includeRoots: ["."], budget: "small" });
+
     expect(
       response.recommendedNext.some((next) => next.command === "codegraph impact --base HEAD --head WORKTREE --pretty"),
     ).toBe(true);

@@ -5,6 +5,7 @@ import { getHotspots } from "../graphs/hotspots.js";
 import { getUnresolvedImports } from "../graphs/unresolved.js";
 import type { BuildOptions } from "../indexer/types.js";
 import type { Graph } from "../types.js";
+import { isGitRepo } from "../util/git.js";
 import { normalizePath } from "../util/paths.js";
 import { createAgentSession, type AgentSession } from "./session.js";
 import { quoteShellArg } from "./shell.js";
@@ -135,8 +136,11 @@ export async function orientCodegraphWithSession(
   );
   const focus = buildFocusTargets(modules, packets, request.review);
   const healthMode = request.health ?? (limits.includeHealth ? "summary" : "skip");
-  const health = await buildHealth(root, snapshot.index, scopedAbsoluteFiles, scopedFileGraph, healthMode);
-  const recommendedNext = buildRecommendedNext(includeRoots, focus);
+  const [health, hasGitRepo] = await Promise.all([
+    buildHealth(root, snapshot.index, scopedAbsoluteFiles, scopedFileGraph, healthMode),
+    isGitRepo(root),
+  ]);
+  const recommendedNext = buildRecommendedNext(includeRoots, focus, hasGitRepo);
   const healthSummary = formatHealthSummary(health);
 
   return {
@@ -363,7 +367,11 @@ function buildFocusTargets(
   return focus;
 }
 
-function buildRecommendedNext(includeRoots: string[], focus: AgentOrientationFocus[]): AgentPacketCommand[] {
+function buildRecommendedNext(
+  includeRoots: string[],
+  focus: AgentOrientationFocus[],
+  hasGitRepo: boolean,
+): AgentPacketCommand[] {
   const commands: AgentPacketCommand[] = [];
   const firstFocus = focus[0];
   if (firstFocus) {
@@ -379,14 +387,16 @@ function buildRecommendedNext(includeRoots: string[], focus: AgentOrientationFoc
     label: "Rank scoped hotspots",
     command: `codegraph hotspots ${quoteShellArg(firstRoot)} --limit 20`,
   });
-  commands.push({
-    label: "Map current worktree impact",
-    command: "codegraph impact --base HEAD --head WORKTREE --pretty",
-  });
-  commands.push({
-    label: "Review current worktree",
-    command: "codegraph review --base HEAD --head WORKTREE --summary",
-  });
+  if (hasGitRepo) {
+    commands.push({
+      label: "Map current worktree impact",
+      command: "codegraph impact --base HEAD --head WORKTREE --pretty",
+    });
+    commands.push({
+      label: "Review current worktree",
+      command: "codegraph review --base HEAD --head WORKTREE --summary",
+    });
+  }
   commands.push({
     label: "Search for a task-specific anchor",
     command: "codegraph search <query> --json",

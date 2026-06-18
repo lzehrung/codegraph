@@ -34,7 +34,7 @@ export async function handleOrientCommand(context: OrientCommandContext): Promis
     includeRoots: context.positionals,
     budget: parseAgentOrientBudget(context.getOpt("--budget")),
     ...(healthMode !== undefined ? { health: healthMode } : {}),
-    ...(buildOptions ? { buildOptions } : {}),
+    buildOptions,
   });
 
   if (writesJson) {
@@ -57,9 +57,13 @@ export function formatAgentOrientation(response: AgentOrientResponse): string {
     }
   }
 
-  lines.push("", "Recommended next");
-  for (const next of response.recommendedNext) {
-    lines.push(`- ${next.command}`);
+  const focusFollowUps = new Set(response.focus.flatMap((focus) => focus.followUps));
+  const remainingRecommendations = response.recommendedNext.filter((next) => !focusFollowUps.has(next.command));
+  if (remainingRecommendations.length) {
+    lines.push("", "Recommended next");
+    for (const next of remainingRecommendations) {
+      lines.push(`- ${next.command}`);
+    }
   }
 
   lines.push("", "Tree");
