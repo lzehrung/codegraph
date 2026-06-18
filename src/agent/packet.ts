@@ -18,7 +18,7 @@ export type AgentPacketRequest = {
 export type AgentPacketPayload = AgentExplanation | ReviewReport;
 
 export type AgentPacketResponse = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   root: string;
   target: string;
   kind: AgentPacketKind;
@@ -56,7 +56,7 @@ export async function getCodegraphPacketWithSession(
 async function buildExplainPacket(
   session: AgentSession,
   request: AgentPacketRequest,
-  kind: AgentPacketKind,
+  kind: AgentPacketKind | null,
 ): Promise<AgentPacketResponse> {
   const explainRequest: AgentExplainTarget = {
     root: request.root,
@@ -78,10 +78,10 @@ async function buildExplainPacket(
   }
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     root: explanation.root,
     target: request.target,
-    kind,
+    kind: kind ?? packetKindForResolvedTarget(explanation.target.kind),
     packet: explanation,
     limits: explanation.limits,
     omittedCounts: explanation.omittedCounts,
@@ -89,9 +89,13 @@ async function buildExplainPacket(
   };
 }
 
-function inferPacketKind(target: string): AgentPacketKind {
-  const kind = kindForHandle(target);
-  if (kind) return kind;
+function inferPacketKind(target: string): AgentPacketKind | null {
+  return kindForHandle(target);
+}
+
+function packetKindForResolvedTarget(kind: AgentExplanation["target"]["kind"]): AgentPacketKind {
+  if (kind === "sql_object") return "sql_object";
+  if (kind === "symbol") return "symbol";
   return "file";
 }
 
@@ -106,7 +110,7 @@ async function buildReviewPacket(request: AgentPacketRequest): Promise<AgentPack
     reviewDepth: "minimal",
   });
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     root: request.root,
     target: request.target,
     kind: "review",

@@ -6,6 +6,7 @@ export type {
   AgentOrientHealthMode,
   AgentOrientRequest,
   AgentOrientResponse,
+  AgentOrientationFocus,
   AgentPacketCommand,
   AgentTreeEntry,
 } from "./agent/orient.js";

@@ -166,7 +166,7 @@ export const PACKET_HELP_TEXT = `codegraph packet - Retrieve bounded evidence pa
 Usage: codegraph packet get <file|handle> [--root <path>] [--json | --pretty] [--max-symbols <n>] [--max-snippets <n>] [--max-duplicates <n>]
 
 Targets:
-  Accepts project file paths plus symbol:, chunk:, sql:, graph:, and review: handles from search or explain output.
+  Accepts project file paths plus symbol:, chunk:, sql:, and graph: handles from search or explain output; review packets use quoted 'review:base=<encoded-ref>;head=<encoded-ref>' targets.
 
 Index options:
   Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.

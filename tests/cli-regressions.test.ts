@@ -1460,9 +1460,19 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
       packet: { target: { file?: string } };
     };
 
-    expect(response.schemaVersion).toBe(1);
+    expect(response.schemaVersion).toBe(2);
     expect(response.kind).toBe("file");
     expect(response.packet.target.file).toBe("src/run.ts");
+
+    const handleStdout = await runCliCommand(["packet", "get", "file:src%2Frun.ts", "--root", root, "--json"]);
+    const handleResponse = JSON.parse(handleStdout) as {
+      schemaVersion: number;
+      kind: string;
+      packet: { target: { file?: string } };
+    };
+    expect(handleResponse.schemaVersion).toBe(2);
+    expect(handleResponse.kind).toBe("file");
+    expect(handleResponse.packet.target.file).toBe("src/run.ts");
   });
 
   it("packet get reports unresolved file targets", async () => {

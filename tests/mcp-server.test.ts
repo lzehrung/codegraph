@@ -292,7 +292,7 @@ describe("codegraph MCP handlers", () => {
 
     const packet = await handlers.packet_get({ target: fileFocus!.file! });
 
-    expect(packet.schemaVersion).toBe(1);
+    expect(packet.schemaVersion).toBe(2);
     expect(packet.kind).toBe("file");
     expect(JSON.stringify(packet.packet)).toContain("src/run.ts");
   });

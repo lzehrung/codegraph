@@ -312,7 +312,7 @@ describe("CLI command modules", () => {
     ).rejects.toThrow("Invalid --mode value");
   });
 
-  test("packet command validates subcommand and handle before lookup", async () => {
+  test("packet command validates subcommand and target before lookup", async () => {
     const stderr: string[] = [];
 
     await expect(

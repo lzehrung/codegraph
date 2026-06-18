@@ -24,9 +24,23 @@ describe("agent packet", () => {
 
     const packet = await getCodegraphPacket({ root, target: target.file });
 
-    expect(packet.schemaVersion).toBe(1);
+    expect(packet.schemaVersion).toBe(2);
     expect(packet.kind).toBe("file");
     expect(packet.followUps.length).toBeGreaterThan(0);
+  });
+
+  it("reports bare symbol packet targets as symbols", async () => {
+    const root = await mkTmpDir("cg-agent-packet-symbol-");
+    await writeFile(root, "src/auth.ts", "export function validateUser() { return true; }\n");
+
+    const packet = await getCodegraphPacket({ root, target: "validateUser" });
+
+    expect(packet.schemaVersion).toBe(2);
+    expect(packet.kind).toBe("symbol");
+    if (packet.packet.schemaVersion !== 1) {
+      throw new Error("expected explanation packet");
+    }
+    expect(packet.packet.target.kind).toBe("symbol");
   });
 
   it("retrieves duplicate context in file packets", async () => {
@@ -82,7 +96,7 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
 
     const packet = await getCodegraphPacket({ root, target: "review:base=HEAD~1;head=HEAD" });
 
-    expect(packet.schemaVersion).toBe(1);
+    expect(packet.schemaVersion).toBe(2);
     expect(packet.kind).toBe("review");
     expect(packet.followUps.some((command) => command.includes("codegraph review"))).toBeTruthy();
     if (packet.packet.schemaVersion !== 2) {

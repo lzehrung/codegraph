@@ -33,6 +33,26 @@ describe("agent orient", () => {
     expect(response.recommendedNext.length).toBeGreaterThan(0);
   });
 
+  it("quotes dash-prefixed file targets in follow-up commands", async () => {
+    const root = await mkTmpDir("cg-agent-orient-dash-file-");
+    await writeFile(root, "-entry.ts", "export const value = 1;\n");
+
+    const response = await orientCodegraph({ root, includeRoots: ["."], budget: "small" });
+
+    expect(response.focus[0]?.file).toBe("-entry.ts");
+    expect(response.focus[0]?.followUps[0]).toBe("codegraph packet get ./-entry.ts --pretty");
+  });
+
+  it("disambiguates handle-like file targets in follow-up commands", async () => {
+    const root = await mkTmpDir("cg-agent-orient-handle-like-file-");
+    await writeFile(root, "file:entry.ts", "export const value = 1;\n");
+
+    const response = await orientCodegraph({ root, includeRoots: ["."], budget: "small" });
+
+    expect(response.focus[0]?.file).toBe("file:entry.ts");
+    expect(response.focus[0]?.followUps[0]).toBe("codegraph packet get ./file:entry.ts --pretty");
+  });
+
   it("does not build the detailed symbol graph for orientation", async () => {
     const root = await mkTmpDir("cg-agent-orient-skip-symbol-graph-");
     await writeFile(root, "src/index.ts", "export { run } from './run';\n");

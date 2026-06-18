@@ -6,7 +6,6 @@ import { getUnresolvedImports } from "../graphs/unresolved.js";
 import type { BuildOptions } from "../indexer/types.js";
 import type { Graph } from "../types.js";
 import { normalizePath } from "../util/paths.js";
-import { formatAgentFileHandle } from "./handles.js";
 import { createAgentSession, type AgentSession } from "./session.js";
 import { quoteShellArg } from "./shell.js";
 
@@ -83,14 +82,14 @@ const ORIENT_BUDGETS: Record<
   {
     treeDepth: number;
     maxTreeEntries: number;
-    maxHandles: number;
+    maxFocusTargets: number;
     maxHotspots: number;
     includeHealth: boolean;
   }
 > = {
-  small: { treeDepth: 2, maxTreeEntries: 25, maxHandles: 5, maxHotspots: 5, includeHealth: false },
-  medium: { treeDepth: 3, maxTreeEntries: 80, maxHandles: 10, maxHotspots: 10, includeHealth: true },
-  large: { treeDepth: 4, maxTreeEntries: 160, maxHandles: 15, maxHotspots: 15, includeHealth: true },
+  small: { treeDepth: 2, maxTreeEntries: 25, maxFocusTargets: 5, maxHotspots: 5, includeHealth: false },
+  medium: { treeDepth: 3, maxTreeEntries: 80, maxFocusTargets: 10, maxHotspots: 10, includeHealth: true },
+  large: { treeDepth: 4, maxTreeEntries: 160, maxFocusTargets: 15, maxHotspots: 15, includeHealth: true },
 };
 
 export async function orientCodegraph(request: AgentOrientRequest): Promise<AgentOrientResponse> {
@@ -132,7 +131,7 @@ export async function orientCodegraphWithSession(
   const packets = buildFilePackets(
     scopedFiles,
     modules.map((module) => module.file),
-    limits.maxHandles,
+    limits.maxFocusTargets,
   );
   const focus = buildFocusTargets(modules, packets, request.review);
   const healthMode = request.health ?? (limits.includeHealth ? "summary" : "skip");
@@ -349,7 +348,7 @@ function buildFocusTargets(
         kind: "hotspot" as const,
         file: module.file,
         why: `graph-central module: fan-in ${module.fanIn}, fan-out ${module.fanOut}, score ${module.score}`,
-        followUps: [formatPacketCommand(packet.file), `codegraph explain ${quoteShellArg(module.file)}`],
+        followUps: [formatPacketCommand(packet.file), `codegraph explain ${formatFileTargetCommandArg(module.file)}`],
       });
       continue;
     }
@@ -396,7 +395,24 @@ function buildRecommendedNext(includeRoots: string[], focus: AgentOrientationFoc
 }
 
 function formatPacketCommand(file: string): string {
-  return `codegraph packet get ${quoteShellArg(file)} --pretty`;
+  return `codegraph packet get ${formatFileTargetCommandArg(file)} --pretty`;
+}
+
+function formatFileTargetCommandArg(file: string): string {
+  const target = fileNeedsRelativePrefix(file) ? `./${file}` : file;
+  return quoteShellArg(target);
+}
+
+function fileNeedsRelativePrefix(file: string): boolean {
+  return (
+    file.startsWith("-") ||
+    file.startsWith("file:") ||
+    file.startsWith("symbol:") ||
+    file.startsWith("chunk:") ||
+    file.startsWith("sql:") ||
+    file.startsWith("graph:") ||
+    file.startsWith("review:")
+  );
 }
 
 function labelForFollowUp(focus: AgentOrientationFocus, followUp: string): string {
