@@ -584,94 +584,80 @@ function countParams(raw: string): number {
   return count;
 }
 
-function parseExportSignature(line: string): ExportSignature | null {
-  const defaultFunctionMatch = line.match(
-    /^\s*export\s+default\s+(?:async\s+)?function(?:\s+([A-Za-z_$][\w$]*))?(?:\s*<[^>]+>)?\s*\(([^)]*)\)/,
-  );
-  if (defaultFunctionMatch) {
-    return {
-      name: defaultFunctionMatch[1] ?? "default",
-      paramCount: countParams(defaultFunctionMatch[2] ?? ""),
-    };
+function countNewlines(text: string): number {
+  let count = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    if (text.charCodeAt(index) === 10) count += 1;
   }
+  return count;
+}
 
-  const functionMatch = line.match(
-    /^\s*export\s+(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)(?:\s*<[^>]+>)?\s*\(([^)]*)\)/,
-  );
-  if (functionMatch) {
-    const name = functionMatch[1];
-    if (!name) return null;
-    return {
+function collectExportSignaturesFromText(
+  text: string,
+  hunkIndex: number,
+  startLine: number,
+): ExportSignatureWithLocation[] {
+  const output: ExportSignatureWithLocation[] = [];
+  const pushMatch = (match: RegExpExecArray, name: string, rawParams: string): void => {
+    output.push({
       name,
-      paramCount: countParams(functionMatch[2] ?? ""),
-    };
+      paramCount: countParams(rawParams),
+      hunkIndex,
+      line: startLine + countNewlines(text.slice(0, match.index)),
+    });
+  };
+
+  const functionRe =
+    /^\s*export\s+(?:default\s+)?(?:async\s+)?function(?:\s+([A-Za-z_$][\w$]*))?(?:\s*<[^>]+>)?\s*\(([\s\S]*?)\)/gm;
+  for (let match; (match = functionRe.exec(text)); ) {
+    pushMatch(match, match[1] ?? "default", match[2] ?? "");
   }
 
-  const constArrowMatch = line.match(
-    /^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:<[^>]+>\s*)?\(([^)]*)\)\s*=>/,
-  );
-  if (constArrowMatch) {
-    const name = constArrowMatch[1];
-    if (!name) return null;
-    return {
-      name,
-      paramCount: countParams(constArrowMatch[2] ?? ""),
-    };
+  const arrowRe = /^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:<[^>]+>\s*)?\(([\s\S]*?)\)\s*=>/gm;
+  for (let match; (match = arrowRe.exec(text)); ) {
+    const name = match[1];
+    if (name) pushMatch(match, name, match[2] ?? "");
   }
 
-  const constArrowSingleParamMatch = line.match(
-    /^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?([A-Za-z_$][\w$]*)\s*=>/,
-  );
-  if (constArrowSingleParamMatch) {
-    const name = constArrowSingleParamMatch[1];
-    if (!name) return null;
-    return {
+  const singleParamArrowRe = /^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?([A-Za-z_$][\w$]*)\s*=>/gm;
+  for (let match; (match = singleParamArrowRe.exec(text)); ) {
+    const name = match[1];
+    if (!name) continue;
+    output.push({
       name,
       paramCount: 1,
-    };
+      hunkIndex,
+      line: startLine + countNewlines(text.slice(0, match.index)),
+    });
   }
 
-  return null;
+  return output;
 }
 
 function detectExportSignatureChanges(change: FileChange): SignatureChange[] {
   const removed: ExportSignatureWithLocation[] = [];
   const added: ExportSignatureWithLocation[] = [];
-
   for (let hunkIndex = 0; hunkIndex < change.hunks.length; hunkIndex += 1) {
     const hunk = change.hunks[hunkIndex]!;
-    let oldLine = hunk.oldStart;
-    let newLine = hunk.newStart;
+    const oldSideLines: string[] = [];
+    const newSideLines: string[] = [];
     for (const rawLine of hunk.lines) {
       if (rawLine.startsWith(" ")) {
-        oldLine += 1;
-        newLine += 1;
+        const line = rawLine.slice(1);
+        oldSideLines.push(line);
+        newSideLines.push(line);
         continue;
       }
       if (rawLine.startsWith("-")) {
-        const parsed = parseExportSignature(rawLine.slice(1));
-        if (parsed) {
-          removed.push({
-            ...parsed,
-            line: oldLine,
-            hunkIndex,
-          });
-        }
-        oldLine += 1;
+        oldSideLines.push(rawLine.slice(1));
         continue;
       }
       if (rawLine.startsWith("+")) {
-        const parsed = parseExportSignature(rawLine.slice(1));
-        if (parsed) {
-          added.push({
-            ...parsed,
-            line: newLine,
-            hunkIndex,
-          });
-        }
-        newLine += 1;
+        newSideLines.push(rawLine.slice(1));
       }
     }
+    removed.push(...collectExportSignaturesFromText(oldSideLines.join("\n"), hunkIndex, hunk.oldStart));
+    added.push(...collectExportSignaturesFromText(newSideLines.join("\n"), hunkIndex, hunk.newStart));
   }
 
   const addedByName = new Map<string, ExportSignatureWithLocation[]>();

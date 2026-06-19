@@ -269,6 +269,23 @@ export function collectLocalsAndExportsFromSource(
     return 1 + count;
   };
 
+  const positionForIndex = (index: number): { line: number; column: number; index: number } => {
+    let line = 1;
+    let lineStart = 0;
+    for (let offset = 0; offset < index && offset < source.length; offset += 1) {
+      if (source.charCodeAt(offset) === 10) {
+        line += 1;
+        lineStart = offset + 1;
+      }
+    }
+    return { line, column: index - lineStart + 1, index };
+  };
+
+  const rangeFromOffsets = (start: number, end: number): Range => ({
+    start: positionForIndex(start),
+    end: positionForIndex(end),
+  });
+
   const buildSymbolDef = (localName: string, kind: SymbolKind, range: Range, node?: SyntaxNodeLike): SymbolDef => {
     let lineSpan: number | undefined;
     if (
@@ -589,15 +606,29 @@ export function collectLocalsAndExportsFromSource(
         continue;
       }
       if (map["anon_default"]) {
+        if (!/^\s*export\s+default\b/.test(stmtText)) continue;
+        if (/^\s*(?:async\s+)?function\s+[A-Za-z_$][\w$]*\b/.test(map["anon_default"].text)) continue;
+        if (/^\s*class\s+[A-Za-z_$][\w$]*\b/.test(map["anon_default"].text)) continue;
         const defaultNode = nodeForCapture(map["anon_default"]);
-        const sym = buildSymbolDef(
-          "__default_export__",
-          SymbolKind.Default,
-          rangeFromNativeCapture(map["anon_default"]),
-          defaultNode,
-        );
-        locals.push(sym);
-        exports.push({ type: "local", exportedAs: "default", target: sym });
+        const declaredName = defaultNode?.childForFieldName("name");
+        const declaredNameText = declaredName ? sliceText(declaredName, source) : null;
+        const declaredLocal = declaredNameText ? locals.find((def) => def.localName === declaredNameText) : undefined;
+        if (declaredLocal) {
+          exports.push({
+            type: "local",
+            exportedAs: "default",
+            target: { ...declaredLocal, kind: SymbolKind.Default },
+          });
+        } else {
+          const sym = buildSymbolDef(
+            "__default_export__",
+            SymbolKind.Default,
+            rangeFromNativeCapture(map["anon_default"]),
+            defaultNode,
+          );
+          locals.push(sym);
+          exports.push({ type: "local", exportedAs: "default", target: sym });
+        }
         continue;
       }
       const tsExportAssignMatch =
@@ -711,13 +742,14 @@ export function collectLocalsAndExportsFromSource(
   }
 
   if (
-    (support.id === "ts" || support.id === "js") &&
+    (support.id === "ts" || support.id === "tsx" || support.id === "js") &&
     !exports.some((e) => e.type === "local" && e.exportedAs === "default")
   ) {
     const defFn = source.match(/\bexport\s+default\s+function\s+([A-Za-z_$][\w$]*)/);
     const defCls = source.match(/\bexport\s+default\s+class\s+([A-Za-z_$][\w$]*)/);
     const defIdent = source.match(/\bexport\s+default\s+([A-Za-z_$][\w$]*)\b/);
-    const name = defFn?.[1] ?? defCls?.[1] ?? defIdent?.[1];
+    const identName = defIdent && defIdent[1] !== "function" && defIdent[1] !== "class" ? defIdent[1] : undefined;
+    const name = defFn?.[1] ?? defCls?.[1] ?? identName;
     if (name) {
       const local = locals.find((d) => d.localName === name);
       if (local)
@@ -726,6 +758,20 @@ export function collectLocalsAndExportsFromSource(
           exportedAs: "default",
           target: { ...local, kind: SymbolKind.Default },
         });
+    } else {
+      const anon = source.match(/\bexport\s+default\s+(?:async\s+)?(?:function|class)\b/);
+      if (anon && anon.index !== undefined) {
+        const startIndex = anon.index;
+        const endIndex = startIndex + anon[0].length;
+        const treeNode = ensureTree()?.rootNode.descendantForIndex(startIndex, endIndex) ?? undefined;
+        const sym = buildSymbolDef(
+          "__default_export__",
+          SymbolKind.Default,
+          treeNode ? toRange(treeNode) : rangeFromOffsets(startIndex, endIndex),
+        );
+        locals.push(sym);
+        exports.push({ type: "local", exportedAs: "default", target: sym });
+      }
     }
   }
 

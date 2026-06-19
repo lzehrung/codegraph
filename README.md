@@ -297,7 +297,7 @@ npm i -g @lzehrung/codegraph
 npm i -g https://github.com/lzehrung/codegraph/releases/download/vVERSION/lzehrung-codegraph-VERSION.tgz
 ```
 
-Replace `VERSION` with the release you want. The root tarball does not bundle the native addon; source-language parsing still needs the scoped native package path via the `@lzehrung` GitHub Packages registry. Without it, Codegraph runs in reduced graph-only mode.
+Replace `VERSION` with the release you want. The root tarball does not bundle the native addon; source-language parsing still needs the scoped native package path via the `@lzehrung` GitHub Packages registry. Without it, Codegraph runs in reduced graph-only mode. The `@lzehrung/codegraph-js-fallback` package is a compatibility shim, not an alternate parser bundle.
 
 ## FAQ
 

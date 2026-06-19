@@ -86,7 +86,8 @@ export async function goToDefinition(index: ProjectIndex, req: GoToRequest): Pro
   while (node && (node.type === "," || node.type === ".")) node = node.parent;
   if (!node) return { status: "not_found", reason: "No node at position" };
 
-  const isId = sup.nodeTypes.identifier.includes(node.type);
+  const shorthandId = sup.nodeTypes.shorthandPropertyIdentifier ?? [];
+  const isId = sup.nodeTypes.identifier.includes(node.type) || shorthandId.includes(node.type);
   let name: string | null = isId ? sliceText(node, source) : null;
   const phpQualifiedReference = sup.id === "php" ? getPhpQualifiedReference(node, source) : null;
 

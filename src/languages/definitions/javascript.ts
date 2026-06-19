@@ -117,6 +117,8 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
       (export_statement) @stmt
       (export_statement declaration: (function_declaration name: (identifier) @name)) @stmt
       (export_statement declaration: (class_declaration name: (identifier) @name)) @stmt
+      (export_statement declaration: (function_declaration) @anon_default) @stmt
+      (export_statement declaration: (class_declaration) @anon_default) @stmt
       (export_statement declaration: (lexical_declaration (variable_declarator name: (identifier) @name))) @stmt
       (export_statement (export_clause (export_specifier name: (identifier) @src alias: (identifier) @alias)) (string) @from)
       (export_statement (export_clause (export_specifier name: (identifier) @src)) (string) @from)
@@ -191,7 +193,7 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
   nodeTypes: {
     identifier: ["identifier"],
     propertyIdentifier: ["property_identifier"],
-    shorthandPropertyIdentifier: ["shorthand_property_identifier"],
+    shorthandPropertyIdentifier: ["shorthand_property_identifier", "shorthand_property_identifier_pattern"],
     memberExpression: "member_expression",
   },
   classifyDefinition: (n) => {

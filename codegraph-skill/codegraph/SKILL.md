@@ -82,6 +82,8 @@ Use the scoped packages only:
 - native backend: `@lzehrung/codegraph-native`
 - compatibility shim: `@lzehrung/codegraph-js-fallback`
 
+The compatibility shim is not a grammar fallback. Do not suggest installing it to restore source-language parsing when the native backend is unavailable.
+
 Registry:
 
 ```bash

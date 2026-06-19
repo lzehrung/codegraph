@@ -99,6 +99,29 @@ export function buildScopeIndexFromSource(
     return rootScope.map.get(name);
   };
 
+  const addPatternDecls = (pattern: SyntaxNodeLike, kind: BindingKind): void => {
+    if (idSet.has(pattern.type)) {
+      addDecl(pattern, kind);
+      return;
+    }
+    if (pattern.type === "pair_pattern") {
+      const value = pattern.childForFieldName("value");
+      if (value) {
+        addPatternDecls(value, kind);
+      }
+      return;
+    }
+    for (const child of pattern.namedChildren) {
+      addPatternDecls(child, kind);
+    }
+  };
+
+  const isRequireCall = (node: SyntaxNodeLike | null): boolean => {
+    if (!node || node.type !== "call_expression") return false;
+    const callee = node.childForFieldName("function") ?? node.childForFieldName("callee") ?? node.child(0);
+    return !!callee && sliceText(callee, source) === "require";
+  };
+
   const walk = (node: SyntaxNodeLike) => {
     if (
       node.type === "function_declaration" ||
@@ -130,7 +153,8 @@ export function buildScopeIndexFromSource(
       node.type === "interface_declaration" ||
       node.type === "type_alias_declaration" ||
       node.type === "type_spec" ||
-      node.type === "trait_item"
+      node.type === "trait_item" ||
+      node.type === "enum_declaration"
     ) {
       const name = node.childForFieldName("name");
       if (name) addDecl(name, "type");
@@ -199,7 +223,8 @@ export function buildScopeIndexFromSource(
       for (const child of node.namedChildren) {
         if (child.type === "variable_declarator" || child.type === "var_spec" || child.type === "const_spec") {
           const name = child.childForFieldName("name");
-          if (name) addDecl(name, "local");
+          const value = child.childForFieldName("value");
+          if (name && !isRequireCall(value)) addPatternDecls(name, "local");
         } else if (
           (child.type === "identifier" || child.type === "field_identifier") &&
           (node.type === "assignment" || node.type === "short_var_declaration")
@@ -207,7 +232,7 @@ export function buildScopeIndexFromSource(
           addDecl(child, "local");
         } else if (node.type === "let_declaration" || node.type === "const_item" || node.type === "static_item") {
           const pattern = node.childForFieldName("pattern") || node.childForFieldName("name");
-          if (pattern && pattern.type === "identifier") addDecl(pattern, "local");
+          if (pattern) addPatternDecls(pattern, "local");
         }
       }
     }

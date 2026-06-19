@@ -317,6 +317,57 @@ describe("Go to Definition", () => {
   });
 
   describe("TypeScript", () => {
+    it("resolves TypeScript enum imports to enum declarations", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-enum-goto-"));
+      try {
+        const typesFile = path.join(root, "types.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(typesFile, "export enum Mode {\n  Light,\n  Dark,\n}\n", "utf8");
+        const usageLine = "const selected = Mode.Light;";
+        const consumer = ['import { Mode } from "./types";', usageLine, ""].join("\n");
+        await fsp.writeFile(consumerFile, consumer, "utf8");
+        const index = await createTestIndexFromFiles(root, [typesFile, consumerFile]);
+
+        await testGoToDefinition(index, consumerFile, 2, usageLine.indexOf("Mode.Light") + 1, typesFile, 1);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("resolves default imports to anonymous default exports", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-anon-default-goto-"));
+      try {
+        const widgetFile = path.join(root, "widget.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(widgetFile, "export default function(value: string) {\n  return value;\n}\n", "utf8");
+        const usageLine = 'render("ok");';
+        const consumer = ['import render from "./widget";', usageLine, ""].join("\n");
+        await fsp.writeFile(consumerFile, consumer, "utf8");
+        const index = await createTestIndexFromFiles(root, [widgetFile, consumerFile]);
+
+        await testGoToDefinition(index, consumerFile, 2, usageLine.indexOf("render(") + 1, widgetFile, 1);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("resolves shorthand object properties through imports", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-shorthand-goto-"));
+      try {
+        const valuesFile = path.join(root, "values.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(valuesFile, "export const value = 1;\n", "utf8");
+        const usageLine = "const packet = { value };";
+        const consumer = ['import { value } from "./values";', usageLine, ""].join("\n");
+        await fsp.writeFile(consumerFile, consumer, "utf8");
+        const index = await createTestIndexFromFiles(root, [valuesFile, consumerFile]);
+
+        await testGoToDefinition(index, consumerFile, 2, usageLine.indexOf("value };") + 1, valuesFile, 1);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("resolves class method calls with high-confidence receivers", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-method-goto-"));
       try {

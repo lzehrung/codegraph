@@ -425,12 +425,12 @@ These are not primarily performance work, but they remained confirmed high-value
 
 Checklist:
 
-- [ ] TypeScript enum declarations should be indexed as real symbols for goto/refs.
-- [ ] Anonymous JS/TS default exports should resolve through default imports.
-- [ ] JS/TS shorthand binding nodes should navigate to the actual binding/import.
-- [ ] Breaking-change suggestions should handle multiline exported signatures.
-- [ ] Publishing/install docs should clarify that JS fallback is only available when `@lzehrung/codegraph-js-fallback` is installed.
-- [ ] Consider stable subpath exports before narrowing the broad root API.
+- [x] TypeScript enum declarations should be indexed as real symbols for goto/refs.
+- [x] Anonymous JS/TS default exports should resolve through default imports.
+- [x] JS/TS shorthand binding nodes should navigate to the actual binding/import.
+- [x] Breaking-change suggestions should handle multiline exported signatures.
+- [x] Publishing/install docs should clarify that JS fallback is only available when `@lzehrung/codegraph-js-fallback` is installed.
+- [x] Consider stable subpath exports before narrowing the broad root API.
 
 ## Suggested Execution Order
 
