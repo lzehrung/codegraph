@@ -281,9 +281,9 @@ describe("CLI command modules", () => {
     expect(MCP_SERVE_HELP_TEXT).toContain("refresh_index");
   });
 
-  test("packet help documents file path targets", () => {
-    expect(PACKET_HELP_TEXT).toContain("project file paths");
-    expect(PACKET_HELP_TEXT).toContain("search or explain output");
+  test("packet help documents accepted target shapes", () => {
+    expect(PACKET_HELP_TEXT).toContain("file paths, symbol names, SQL object names");
+    expect(PACKET_HELP_TEXT).toContain("file:/symbol:/chunk:/sql:/graph: handles");
     expect(PACKET_HELP_TEXT).not.toContain("CLI orient returns file handles");
   });
 
@@ -324,7 +324,7 @@ describe("CLI command modules", () => {
       ),
     ).rejects.toThrow("agent command exit 2");
 
-    expect(stderr.join("\n")).toContain("Usage: codegraph packet get <file|handle>");
+    expect(stderr.join("\n")).toContain("Usage: codegraph packet get <target>");
   });
 
   test("goto command validates positional shape before indexing", async () => {
@@ -376,7 +376,7 @@ describe("CLI command modules", () => {
       {
         args: ["packet", "--help"],
         heading: "codegraph packet",
-        usage: "Usage: codegraph packet get <file|handle>",
+        usage: "Usage: codegraph packet get <target>",
       },
       {
         args: ["explain", "--help"],

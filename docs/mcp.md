@@ -36,7 +36,7 @@ Use stdio for a client-owned subprocess. Use HTTP for one long-running Codegraph
 The server exposes the same bounded primitives as the CLI and library session layer:
 
 - `orient`: compact first-turn repo context.
-- `packet_get`: bounded evidence packet by file path or stable target.
+- `packet_get`: bounded evidence packet by file path, symbol name, SQL object name, or stable target.
 - `search`: deterministic ranked search across paths, symbols, chunks, SQL objects, and graph context.
 - `get_file`: bounded project file read.
 - `get_symbol`: resolve a stable search or explain handle.

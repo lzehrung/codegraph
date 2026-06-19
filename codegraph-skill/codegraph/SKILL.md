@@ -30,9 +30,9 @@ For PR, worktree, or sweeping review tasks, start with `codegraph review --base 
 
 Then choose the smallest useful follow-up:
 
-- packet: `codegraph packet get <file|handle> --pretty`
+- packet: `codegraph packet get <file|symbol|sql-object|handle> --pretty`
 - search: `codegraph search "auth user" --json`
-- explain: `codegraph explain <file|symbol|handle>`
+- explain: `codegraph explain <file|symbol|sql-object|handle>`
 - architecture: `codegraph inspect ./src --limit 20`
 - dependencies: `codegraph deps <file>` or `codegraph rdeps <file>`
 - path: `codegraph path <from> <to>`

@@ -80,7 +80,7 @@ compatibility exports.
 
 ## Agent packets
 
-`orientCodegraph()` returns compact first-turn context for an agent, and `getCodegraphPacket()` retrieves bounded evidence by file path or stable target:
+`orientCodegraph()` returns compact first-turn context for an agent, and `getCodegraphPacket()` retrieves bounded evidence by file path, symbol name, SQL object name, or stable target:
 
 ```ts
 import { getCodegraphPacket, orientCodegraph } from "@lzehrung/codegraph";

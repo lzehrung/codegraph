@@ -380,7 +380,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       {
         kind: "max",
         max: 2,
-        usage: "Usage: codegraph packet get <file|handle> [--root <path>] [--json | --pretty]",
+        usage: "Usage: codegraph packet get <target> [--root <path>] [--json | --pretty]",
       },
     ),
   ],
