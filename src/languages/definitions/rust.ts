@@ -19,6 +19,11 @@ export const RUST_DEF: LanguageDefinition = {
         captureId: "struct",
       },
       {
+        type: "enum_item",
+        nameQuery: "name: (type_identifier) @chunk.name",
+        captureId: "enum",
+      },
+      {
         type: "impl_item",
         nameQuery: "type: (type_identifier) @chunk.name",
         captureId: "impl",
@@ -43,6 +48,7 @@ export const RUST_DEF: LanguageDefinition = {
       (struct_item name: (type_identifier) @name) @stmt
       (trait_item name: (type_identifier) @name) @stmt
       (enum_item name: (type_identifier) @name) @stmt
+      (enum_variant name: (identifier) @name) @stmt
       (const_item name: (identifier) @name) @stmt
       (static_item name: (identifier) @name) @stmt
       (use_declaration argument: (scoped_identifier path: (identifier) @from name: (identifier) @src)) @stmt
@@ -53,6 +59,7 @@ export const RUST_DEF: LanguageDefinition = {
       (struct_item name: (type_identifier) @name)
       (trait_item name: (type_identifier) @name)
       (enum_item name: (type_identifier) @name)
+      (enum_variant name: (identifier) @name)
       (const_item name: (identifier) @name)
       (static_item name: (identifier) @name)
       (let_declaration pattern: (identifier) @name)
@@ -89,6 +96,7 @@ export const RUST_DEF: LanguageDefinition = {
     if (p.type === "struct_item" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "trait_item" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "enum_item" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "enum_variant" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "const_item" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "static_item" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "let_declaration" && p.childForFieldName("pattern")?.id === node.id) return true;

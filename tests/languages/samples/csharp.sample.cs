@@ -11,5 +11,10 @@ namespace MyNamespace {
     public interface IMyInterface {
         void InterfaceMethod();
     }
+
+    public enum MyEnum {
+        One,
+        Two
+    }
 }
 

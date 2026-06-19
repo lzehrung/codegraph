@@ -18,4 +18,9 @@ func topLevel() {}
 
 typealias Alias = String
 
+enum SampleMode {
+  case fast
+  case slow
+}
+
 let topValue = 1

@@ -9,6 +9,11 @@ public:
 struct MyStruct {
   int value;
 };
+
+enum class MyMode {
+  One,
+  Two
+};
 }
 
 template <typename T>

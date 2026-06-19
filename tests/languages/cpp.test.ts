@@ -11,6 +11,7 @@ const definition: LanguageTestDefinition = {
       expectedChunks: (chunks) => {
         expect(chunks.some((c) => c.type === "class" && c.name === "MyClass")).toBe(true);
         expect(chunks.some((c) => c.type === "struct" && c.name === "MyStruct")).toBe(true);
+        expect(chunks.some((c) => c.type === "enum" && c.name === "MyMode")).toBe(true);
         expect(chunks.some((c) => c.type === "function" && c.name === "add")).toBe(true);
       },
     },
@@ -25,7 +26,15 @@ const definition: LanguageTestDefinition = {
     symbols: [
       {
         file: "advanced.hpp",
-        includes: [{ name: "demo" }, { name: "Mode" }, { name: "Count" }, { name: "Engine" }, { name: "combine" }],
+        includes: [
+          { name: "demo" },
+          { name: "Mode" },
+          { name: "Fast", kind: "variable" },
+          { name: "Slow", kind: "variable" },
+          { name: "Count" },
+          { name: "Engine" },
+          { name: "combine" },
+        ],
       },
       {
         file: "namespaces.hpp",

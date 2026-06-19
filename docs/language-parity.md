@@ -44,11 +44,11 @@ Notes:
 - Native parity coverage includes both extraction parity and end-to-end semantic parity on the current source-language fixture set (`TypeScript`, `TSX`, `JavaScript`, `Python`, `PHP`, `Go`, `Java`, `C#`, `Rust`, `Kotlin`, `Swift`, `Zig`, `C`, `C++`, `Ruby`) plus graph/specifier parity for `HTML`, `CSS`, `Less`, `SCSS`, `Vue`, and `Svelte`.
 - Deeper hardening coverage includes Go aliases and interface-typed uses.
 - Deeper hardening coverage includes Kotlin aliases, wildcard imports, package-wide wildcard graph expansion, and native-owned import-binding recovery.
-- Deeper hardening coverage includes Java wildcard package fixtures, package-wide graph expansion, and static wildcard imports.
-- Deeper hardening coverage includes Rust aliased `use` imports and `extern crate` graph fixtures.
-- Deeper hardening coverage includes C# aliases, Swift static members, Zig `@import` namespace members, C function-pointer typedefs, C++ namespace/templates, and Ruby nested modules.
+- Deeper hardening coverage includes Java wildcard package fixtures, package-wide graph expansion, static wildcard imports, and enum type navigation.
+- Deeper hardening coverage includes Rust aliased `use` imports, `extern crate` graph fixtures, and enum variant extraction.
+- Deeper hardening coverage includes C# aliases/enums, Swift enums/static members, Zig `@import` namespace members, C/C++ enum constants, and Ruby nested modules.
 - Deeper hardening coverage includes Python `from __future__ import ...` extraction.
-- Deeper hardening coverage includes PHP grouped `use` imports, bracketed namespaces, `__DIR__` includes, fully-qualified Composer-backed references, function/class basename collisions, and Composer classmap-boundary coverage.
+- Deeper hardening coverage includes PHP grouped `use` imports, bracketed namespaces, `__DIR__` includes, fully-qualified Composer-backed references, enum cases, function/class basename collisions, and Composer classmap-boundary coverage.
 - JavaScript graphing now includes an isolated AngularJS heuristic layer for `templateUrl`, controller-name, and DI-token file/external edges when a file explicitly uses `angular.module(...)`. This coverage lives in dedicated framework tests, not in the generic JavaScript fixture set, and it is not a general claim that arbitrary `controller` or `templateUrl` config objects are Angular-aware.
 - Call compatibility hints compare changed callable arity with resolved callsites when parsing is high confidence. They are not type checking, overload resolution, trait dispatch, function-pointer analysis, macro expansion, or data-flow inference.
 - Call compatibility skips same-file overload sets unless a future resolver can prove the exact overload target.

@@ -26,11 +26,24 @@ const definition: LanguageTestDefinition = {
     symbols: [
       {
         file: "advanced.h",
-        includes: [{ name: "DEFAULT_COUNT" }, { name: "AdvancedOptions" }, { name: "Mode" }, { name: "run_advanced" }],
+        includes: [
+          { name: "DEFAULT_COUNT" },
+          { name: "AdvancedOptions" },
+          { name: "Mode" },
+          { name: "MODE_FAST", kind: "variable" },
+          { name: "MODE_SLOW", kind: "variable" },
+          { name: "run_advanced" },
+        ],
       },
       {
         file: "function-pointers.h",
-        includes: [{ name: "Comparator" }, { name: "AdvancedState" }, { name: "compare_values" }],
+        includes: [
+          { name: "Comparator" },
+          { name: "AdvancedState" },
+          { name: "STATE_READY", kind: "variable" },
+          { name: "STATE_DONE", kind: "variable" },
+          { name: "compare_values" },
+        ],
       },
     ],
     goToDefinition: [

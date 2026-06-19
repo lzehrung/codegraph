@@ -19,6 +19,11 @@ export const CSHARP_DEF: LanguageDefinition = {
         captureId: "interface",
       },
       {
+        type: "enum_declaration",
+        nameQuery: "name: (identifier) @chunk.name",
+        captureId: "enum",
+      },
+      {
         type: "method_declaration",
         nameQuery: "name: (identifier) @chunk.name",
         captureId: "method",
@@ -46,12 +51,16 @@ export const CSHARP_DEF: LanguageDefinition = {
     exports: `
       (class_declaration name: (identifier) @name)
       (interface_declaration name: (identifier) @name)
+      (enum_declaration name: (identifier) @name)
+      (enum_member_declaration name: (identifier) @name)
       (method_declaration name: (identifier) @name)
       (property_declaration name: (identifier) @name)
     `,
     locals: `
       (class_declaration name: (identifier) @name)
       (interface_declaration name: (identifier) @name)
+      (enum_declaration name: (identifier) @name)
+      (enum_member_declaration name: (identifier) @name)
       (method_declaration name: (identifier) @name)
       (variable_declarator (identifier) @name)
     `,
@@ -71,6 +80,7 @@ export const CSHARP_DEF: LanguageDefinition = {
     if (parent.type === "method_declaration" || parent.type === "constructor_declaration") return "method";
     if (parent.type === "class_declaration") return "class";
     if (parent.type === "interface_declaration") return "interface";
+    if (parent.type === "enum_declaration") return "type";
     return "variable";
   },
   createsFunctionScope: (node) => node.type === "method_declaration" || node.type === "constructor_declaration",
@@ -80,6 +90,8 @@ export const CSHARP_DEF: LanguageDefinition = {
     if (!p) return false;
     if (p.type === "class_declaration" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "interface_declaration" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "enum_declaration" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "enum_member_declaration" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "method_declaration" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "variable_declarator" && p.child(0)?.id === node.id) return true;
     if (p.type === "parameter" && p.childForFieldName("name")?.id === node.id) return true;

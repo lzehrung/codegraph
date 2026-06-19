@@ -771,11 +771,11 @@ describe("Find References", () => {
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "php");
       const utilsFile = path.join(samplePath, "utils.php").replace(/\\/g, "/");
 
-      const result = await testFindReferences(index, utilsFile, 13, 11, 2);
+      const result = await testFindReferences(index, utilsFile, 19, 11, 2);
 
       expect(result.status).toBe("ok");
       if (result.status === "ok") {
-        expectReferenceAt(result, utilsFile, 13);
+        expectReferenceAt(result, utilsFile, 19);
         expectReferenceAt(result, path.join(samplePath, "main.php").replace(/\\/g, "/"), 9);
       }
     });

@@ -59,7 +59,14 @@ const definition: LanguageTestDefinition = {
     symbols: [
       {
         file: "models.rs",
-        includes: [{ name: "Runner" }, { name: "Engine" }, { name: "run" }],
+        includes: [
+          { name: "Runner" },
+          { name: "Mode" },
+          { name: "Fast", kind: "variable" },
+          { name: "Slow", kind: "variable" },
+          { name: "Engine" },
+          { name: "run" },
+        ],
       },
       {
         file: "reexports.rs",

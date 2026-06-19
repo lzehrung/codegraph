@@ -12,6 +12,7 @@ const definition: LanguageTestDefinition = {
         expect(chunks.some((c) => c.type === "class" && c.name === "MyClass")).toBe(true);
         expect(chunks.some((c) => c.type === "method" && c.name === "myMethod")).toBe(true);
         expect(chunks.some((c) => c.type === "interface" && c.name === "MyInterface")).toBe(true);
+        expect(chunks.some((c) => c.type === "enum" && c.name === "MyEnum")).toBe(true);
       },
     },
   ],
@@ -50,7 +51,14 @@ const definition: LanguageTestDefinition = {
       },
       {
         file: "pkg/PackageTypes.java",
-        includes: [{ name: "PackageTypes" }, { name: "NestedValue" }, { name: "ServiceContract" }],
+        includes: [
+          { name: "PackageTypes" },
+          { name: "NestedValue" },
+          { name: "ServiceContract" },
+          { name: "Mode", kind: "type" },
+          { name: "FAST", kind: "variable" },
+          { name: "SLOW", kind: "variable" },
+        ],
       },
       {
         file: "pkg/PackageService.java",
@@ -71,6 +79,13 @@ const definition: LanguageTestDefinition = {
         line: 8,
         column: 3,
         expectedDefinition: { file: "pkg/PackageService.java", line: 3 },
+      },
+      {
+        name: "go to definition resolves wildcard-imported enum type",
+        file: "WildcardImports.java",
+        line: 9,
+        column: 3,
+        expectedDefinition: { file: "pkg/PackageTypes.java", line: 11 },
       },
       {
         name: "go to definition resolves static wildcard imports",

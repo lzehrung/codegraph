@@ -28,11 +28,13 @@ export const C_DEF = createCFamilyLanguageDefinition({
   ],
   extraExportQueries: [
     `(union_specifier name: (type_identifier) @name)`,
+    `(enumerator name: (identifier) @name)`,
     `(preproc_def name: (identifier) @name)`,
     `(preproc_function_def name: (identifier) @name)`,
   ],
   extraLocalQueries: [
     `(union_specifier name: (type_identifier) @name)`,
+    `(enumerator name: (identifier) @name)`,
     `(preproc_def name: (identifier) @name)`,
     `(preproc_function_def name: (identifier) @name)`,
   ],

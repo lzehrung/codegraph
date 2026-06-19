@@ -10,8 +10,18 @@ export const SWIFT_DEF: LanguageDefinition = {
     blocks: [
       {
         type: "class_declaration",
-        nameQuery: "name: (_) @chunk.name",
+        nameQuery: 'declaration_kind: "class" name: (_) @chunk.name',
         captureId: "class",
+      },
+      {
+        type: "class_declaration",
+        nameQuery: 'declaration_kind: "struct" name: (_) @chunk.name',
+        captureId: "struct",
+      },
+      {
+        type: "class_declaration",
+        nameQuery: 'declaration_kind: "enum" name: (_) @chunk.name',
+        captureId: "enum",
       },
       {
         type: "protocol_declaration",
@@ -63,7 +73,10 @@ export const SWIFT_DEF: LanguageDefinition = {
       (import_declaration (identifier) @mod) @stmt
     `,
     exports: `
-      (class_declaration name: (_) @name)
+      (class_declaration declaration_kind: "class" name: (_) @name)
+      (class_declaration declaration_kind: "struct" name: (_) @name)
+      (class_declaration declaration_kind: "enum" name: (_) @name)
+      (enum_entry name: (simple_identifier) @name)
       (protocol_declaration name: (type_identifier) @name)
       (function_declaration name: (simple_identifier) @name)
       (typealias_declaration name: (type_identifier) @name)
@@ -72,7 +85,10 @@ export const SWIFT_DEF: LanguageDefinition = {
       (protocol_property_declaration name: (pattern bound_identifier: (simple_identifier) @name))
     `,
     locals: `
-      (class_declaration name: (_) @name)
+      (class_declaration declaration_kind: "class" name: (_) @name)
+      (class_declaration declaration_kind: "struct" name: (_) @name)
+      (class_declaration declaration_kind: "enum" name: (_) @name)
+      (enum_entry name: (simple_identifier) @name)
       (protocol_declaration name: (type_identifier) @name)
       (function_declaration name: (simple_identifier) @name)
       (typealias_declaration name: (type_identifier) @name)
@@ -95,8 +111,12 @@ export const SWIFT_DEF: LanguageDefinition = {
     if (!parent) return "variable";
     if (parent.type === "function_declaration") return "function";
     if (parent.type === "protocol_function_declaration") return "function";
-    if (parent.type === "class_declaration" || parent.type === "protocol_declaration") return "class";
-    if (parent.type === "typealias_declaration") return "type";
+    if (parent.type === "class_declaration") {
+      const declarationKind = parent.childForFieldName("declaration_kind")?.text;
+      if (declarationKind === "enum") return "type";
+      return "class";
+    }
+    if (parent.type === "protocol_declaration" || parent.type === "typealias_declaration") return "type";
     return "variable";
   },
   isDeclarationName: (node) => {
@@ -104,6 +124,7 @@ export const SWIFT_DEF: LanguageDefinition = {
     if (!parent) return false;
     if (parent.type === "class_declaration" && parent.childForFieldName("name")?.id === node.id) return true;
     if (parent.type === "protocol_declaration" && parent.childForFieldName("name")?.id === node.id) return true;
+    if (parent.type === "enum_entry" && parent.childForFieldName("name")?.id === node.id) return true;
     if (parent.type === "function_declaration" && parent.childForFieldName("name")?.id === node.id) return true;
     if (parent.type === "typealias_declaration" && parent.childForFieldName("name")?.id === node.id) return true;
     if (parent.type === "parameter" && parent.childForFieldName("name")?.id === node.id) return true;

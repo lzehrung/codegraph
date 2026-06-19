@@ -13,6 +13,7 @@ const definition: LanguageTestDefinition = {
         expect(chunks.some((c) => c.type === "class" && c.name === "MyClass")).toBe(true);
         expect(chunks.some((c) => c.type === "method" && c.name === "MyMethod")).toBe(true);
         expect(chunks.some((c) => c.type === "interface" && c.name === "IMyInterface")).toBe(true);
+        expect(chunks.some((c) => c.type === "enum" && c.name === "MyEnum")).toBe(true);
       },
     },
   ],
@@ -39,7 +40,15 @@ const definition: LanguageTestDefinition = {
     symbols: [
       {
         file: "AdvancedTypes.cs",
-        includes: [{ name: "IRunnable" }, { name: "Toolbox" }, { name: "NestedTool" }, { name: "Execute" }],
+        includes: [
+          { name: "IRunnable" },
+          { name: "Toolbox" },
+          { name: "NestedTool" },
+          { name: "Execute" },
+          { name: "Mode", kind: "type" },
+          { name: "Fast", kind: "variable" },
+          { name: "Slow", kind: "variable" },
+        ],
       },
     ],
   },
