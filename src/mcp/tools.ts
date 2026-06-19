@@ -56,7 +56,7 @@ export const MCP_TOOLS: Tool[] = [
   },
   {
     name: "packet_get",
-    description: "Retrieve a bounded evidence packet by file path or stable target.",
+    description: "Retrieve a bounded evidence packet by file path, symbol name, SQL object name, or stable target.",
     inputSchema: objectSchema(
       {
         target: stringProperty,

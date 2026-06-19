@@ -88,6 +88,8 @@ describe("agent orient", () => {
     expect(response.focus).toHaveLength(5);
     expect(response.focus[0]?.kind).toBe("review");
     expect(response.focus.filter((focus) => focus.file).length).toBe(4);
+    expect(response.recommendedNext[0]?.label).toBe("Review HEAD~1..HEAD");
+    expect(response.recommendedNext[1]?.label).toBe("Map impact for HEAD~1..HEAD");
   });
 
   it("treats dot include root as unscoped orientation", async () => {

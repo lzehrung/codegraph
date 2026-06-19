@@ -249,7 +249,7 @@ function formatHealthSummary(health: {
 function buildReviewFocus(base: string, head: string): AgentOrientationFocus {
   return {
     kind: "review",
-    label: `Review ${base}..${head}`,
+    label: `${base}..${head}`,
     why: "review range requested by the caller",
     followUps: [
       `codegraph review --base ${quoteShellArg(base)} --head ${quoteShellArg(head)} --summary`,

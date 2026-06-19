@@ -302,6 +302,8 @@ describe("codegraph MCP handlers", () => {
     const packetTool = listCodegraphMcpTools().find((tool) => tool.name === "packet_get");
     expect(orientTool).toBeTruthy();
     expect(packetTool).toBeTruthy();
+    expect(packetTool?.description).toContain("symbol name");
+    expect(packetTool?.description).toContain("SQL object name");
 
     const orientSchema = readObject(orientTool!.inputSchema);
     const packetSchema = readObject(packetTool!.inputSchema);
