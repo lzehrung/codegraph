@@ -28,7 +28,7 @@ const definition: LanguageTestDefinition = {
         file: "advanced.hpp",
         includes: [
           { name: "demo" },
-          { name: "Mode" },
+          { name: "Mode", kind: "type" },
           { name: "Fast", kind: "variable" },
           { name: "Slow", kind: "variable" },
           { name: "Count" },

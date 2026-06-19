@@ -61,7 +61,7 @@ const definition: LanguageTestDefinition = {
         file: "models.rs",
         includes: [
           { name: "Runner" },
-          { name: "Mode" },
+          { name: "Mode", kind: "type" },
           { name: "Fast", kind: "variable" },
           { name: "Slow", kind: "variable" },
           { name: "Engine" },

@@ -37,6 +37,15 @@ export function buildScopeIndexFromSource(
   };
   const stack: Scope[] = [rootScope];
   const allScopes: Scope[] = [rootScope];
+  const extraBindings: Binding[] = [];
+
+  const buildBinding = (nameNode: SyntaxNodeLike, kind: BindingKind): Binding => ({
+    name: sliceText(nameNode, source),
+    kind,
+    def: toRange(nameNode),
+    node: nameNode,
+    occurrences: [],
+  });
 
   for (const imp of imports) {
     if (imp.kind === "default") {
@@ -79,16 +88,9 @@ export function buildScopeIndexFromSource(
   };
 
   const addDecl = (nameNode: SyntaxNodeLike, kind: BindingKind) => {
-    const name = sliceText(nameNode, source);
     const target = stack[stack.length - 1];
-    const binding: Binding = {
-      name,
-      kind,
-      def: toRange(nameNode),
-      node: nameNode,
-      occurrences: [],
-    };
-    target?.map.set(name, binding);
+    const binding = buildBinding(nameNode, kind);
+    target?.map.set(binding.name, binding);
   };
 
   const lookup = (name: string): Binding | undefined => {
@@ -143,7 +145,9 @@ export function buildScopeIndexFromSource(
         if (value) {
           addPatternDecls(value, "local");
         }
+        continue;
       }
+      addPatternDecls(child, "local");
     }
   };
 
@@ -180,10 +184,26 @@ export function buildScopeIndexFromSource(
       node.type === "type_alias_declaration" ||
       node.type === "type_spec" ||
       node.type === "trait_item" ||
-      node.type === "enum_declaration"
+      node.type === "enum_declaration" ||
+      node.type === "enum_item" ||
+      node.type === "enum_specifier"
     ) {
       const name = node.childForFieldName("name");
       if (name) addDecl(name, "type");
+    }
+    if (
+      node.type === "enum_case" ||
+      node.type === "enum_constant" ||
+      node.type === "enum_entry" ||
+      node.type === "enum_member_declaration" ||
+      node.type === "enum_variant" ||
+      node.type === "enumerator"
+    ) {
+      const name = node.childForFieldName("name");
+      if (name) {
+        if (node.type === "enumerator" && support.id === "c") addDecl(name, "local");
+        else extraBindings.push(buildBinding(name, "local"));
+      }
     }
 
     let pushed = false;
@@ -321,5 +341,10 @@ export function buildScopeIndexFromSource(
     }
   };
   for (const scope of allScopes) flush(scope);
+  for (const binding of extraBindings) {
+    if (!bindings.has(binding.name)) bindings.set(binding.name, []);
+    bindings.get(binding.name)!.push(binding);
+    all.push(binding);
+  }
   return { bindings, all, allScopes };
 }

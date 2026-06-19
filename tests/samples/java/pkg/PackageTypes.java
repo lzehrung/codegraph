@@ -7,8 +7,3 @@ public class PackageTypes {
 interface ServiceContract {
   void serve();
 }
-
-public enum Mode {
-  FAST,
-  SLOW
-}

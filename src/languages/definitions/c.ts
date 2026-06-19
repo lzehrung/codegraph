@@ -46,8 +46,8 @@ export const C_DEF = createCFamilyLanguageDefinition({
   classifyDefinition: (node) => {
     const parent = node.parent;
     if (!parent) return "variable";
-    if (parent.type === "struct_specifier" || parent.type === "union_specifier" || parent.type === "enum_specifier")
-      return "class";
+    if (parent.type === "enum_specifier") return "type";
+    if (parent.type === "struct_specifier" || parent.type === "union_specifier") return "class";
     if (parent.type === "type_definition" && isInField(node, parent, "declarator")) return "type";
     const container = findAncestor(node, cFamilyContainerTypes);
     if (container?.type === "function_definition") return "function";

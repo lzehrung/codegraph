@@ -84,7 +84,8 @@ export const RUST_DEF: LanguageDefinition = {
     const parent = node.parent;
     if (!parent) return "variable";
     if (parent.type === "function_item") return "function";
-    if (parent.type === "struct_item" || parent.type === "trait_item" || parent.type === "enum_item") return "class";
+    if (parent.type === "enum_item") return "type";
+    if (parent.type === "struct_item" || parent.type === "trait_item") return "class";
     return "variable";
   },
   createsFunctionScope: (node) => node.type === "function_item",

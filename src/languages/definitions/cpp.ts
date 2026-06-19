@@ -49,10 +49,10 @@ export const CPP_DEF = createCFamilyLanguageDefinition({
   classifyDefinition: (node) => {
     const parent = node.parent;
     if (!parent) return "variable";
+    if (parent.type === "enum_specifier") return "type";
     if (
       parent.type === "class_specifier" ||
       parent.type === "struct_specifier" ||
-      parent.type === "enum_specifier" ||
       parent.type === "namespace_definition"
     )
       return "class";

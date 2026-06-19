@@ -51,10 +51,11 @@ const definition: LanguageTestDefinition = {
       },
       {
         file: "pkg/PackageTypes.java",
+        includes: [{ name: "PackageTypes" }, { name: "NestedValue" }, { name: "ServiceContract" }],
+      },
+      {
+        file: "pkg/Mode.java",
         includes: [
-          { name: "PackageTypes" },
-          { name: "NestedValue" },
-          { name: "ServiceContract" },
           { name: "Mode", kind: "type" },
           { name: "FAST", kind: "variable" },
           { name: "SLOW", kind: "variable" },
@@ -85,7 +86,14 @@ const definition: LanguageTestDefinition = {
         file: "WildcardImports.java",
         line: 9,
         column: 3,
-        expectedDefinition: { file: "pkg/PackageTypes.java", line: 11 },
+        expectedDefinition: { file: "pkg/Mode.java", line: 3 },
+      },
+      {
+        name: "go to definition resolves wildcard-imported enum constants",
+        file: "WildcardImports.java",
+        line: 9,
+        column: 20,
+        expectedDefinition: { file: "pkg/Mode.java", line: 4 },
       },
       {
         name: "go to definition resolves static wildcard imports",

@@ -4,6 +4,7 @@ import {
   buildScopeIndexFromSource,
   TS_SUPPORT,
   PY_SUPPORT,
+  PHP_SUPPORT,
   goToDefinition,
   findReferences,
 } from "../src/index.js";
@@ -209,9 +210,9 @@ def foo(x):
 
   it("keeps unsupported require destructuring patterns as locals", () => {
     const source = `
-      const { shallow, nested: { value } } = require("./dep");
+      const { shallow, nested: { value }, ...rest } = require("./dep");
       const [first] = require("./dep");
-      console.log(shallow, value, first);
+      console.log(shallow, value, rest, first);
     `;
     const file = "test.ts";
     const imports: ImportBinding[] = [
@@ -228,11 +229,14 @@ def foo(x):
     const shallowBindings = scopeIndex.bindings.get("shallow") ?? [];
     const valueBindings = scopeIndex.bindings.get("value") ?? [];
     const firstBindings = scopeIndex.bindings.get("first") ?? [];
+    const restBindings = scopeIndex.bindings.get("rest") ?? [];
 
     expect(shallowBindings).toHaveLength(1);
     expect(shallowBindings[0]?.kind).toBe("importNamed");
     expect(valueBindings).toHaveLength(1);
     expect(valueBindings[0]?.kind).toBe("local");
+    expect(restBindings).toHaveLength(1);
+    expect(restBindings[0]?.kind).toBe("local");
     expect(firstBindings).toHaveLength(1);
     expect(firstBindings[0]?.kind).toBe("local");
   });
@@ -249,5 +253,28 @@ def foo(x):
 
     expect(dynamicBindings).toHaveLength(1);
     expect(dynamicBindings[0]?.kind).toBe("local");
+  });
+
+  it("indexes enum cases without flattening them into lexical lookup", () => {
+    const source = `
+      <?php
+      enum PrimaryMode
+      {
+          case Ready;
+      }
+      enum SecondaryMode
+      {
+          case Ready;
+      }
+      $mode = PrimaryMode::Ready;
+    `;
+    const file = "test.php";
+    const scopeIndex = buildScopeIndexFromSource(file, source, PHP_SUPPORT);
+    const readyBindings = scopeIndex.bindings.get("Ready") ?? [];
+    const rootReadyBinding = scopeIndex.allScopes[0]?.map.get("Ready");
+
+    expect(readyBindings).toHaveLength(2);
+    expect(readyBindings.every((binding) => binding.kind === "local")).toBeTruthy();
+    expect(rootReadyBinding).toBeUndefined();
   });
 });

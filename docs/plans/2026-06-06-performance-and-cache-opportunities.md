@@ -429,7 +429,7 @@ Checklist:
 - [x] Anonymous JS/TS default exports should resolve through default imports.
 - [x] JS/TS shorthand binding nodes should navigate to the actual binding/import.
 - [x] Breaking-change suggestions should handle multiline exported signatures.
-- [x] Publishing/install docs should clarify that JS fallback is only available when `@lzehrung/codegraph-js-fallback` is installed.
+- [x] Publishing/install docs should clarify that the JS fallback package is only a compatibility shim and does not provide parser recovery.
 - [x] Consider stable subpath exports before narrowing the broad root API.
 
 ## Suggested Execution Order

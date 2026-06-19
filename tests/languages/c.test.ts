@@ -29,7 +29,7 @@ const definition: LanguageTestDefinition = {
         includes: [
           { name: "DEFAULT_COUNT" },
           { name: "AdvancedOptions" },
-          { name: "Mode" },
+          { name: "Mode", kind: "type" },
           { name: "MODE_FAST", kind: "variable" },
           { name: "MODE_SLOW", kind: "variable" },
           { name: "run_advanced" },
@@ -39,7 +39,7 @@ const definition: LanguageTestDefinition = {
         file: "function-pointers.h",
         includes: [
           { name: "Comparator" },
-          { name: "AdvancedState" },
+          { name: "AdvancedState", kind: "type" },
           { name: "STATE_READY", kind: "variable" },
           { name: "STATE_DONE", kind: "variable" },
           { name: "compare_values" },
