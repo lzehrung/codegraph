@@ -28,8 +28,9 @@ Use Codegraph when you need fast structural answers about a repo without relying
 - Export graph data as JSON, Mermaid, DOT, or SQLite, then inspect it from scripts or the browser graph viewer app.
 - Keep one workflow across source languages, monorepos, and graph-first document and template formats instead of stitching together separate tools.
 
-For a first pass, run `doctor`, then `orient --root . --budget small --json`.
-Use `inspect`, `search`, `packet get`, `impact`, and `review` as follow-ups when you need deeper architecture, symbol, or change context.
+For a first pass, run `orient --root . --budget small --pretty`.
+Use `packet get`, `search`, `explain`, `impact`, and `review` from the recommended next commands when you need deeper architecture, symbol, or change context.
+For PR, worktree, or sweeping review tasks, start with `review --base HEAD --head WORKTREE --summary` or `impact --base HEAD --head WORKTREE --pretty`.
 Detailed command contracts and JSON shapes live in [docs/cli.md](./docs/cli.md).
 
 ## Features
@@ -37,7 +38,7 @@ Detailed command contracts and JSON shapes live in [docs/cli.md](./docs/cli.md).
 - Multi-language dependency graphs, including imports, re-exports, `require()`, dynamic imports, workspace resolution, document links, stylesheet imports, and SFC script dependencies.
 - Per-file symbol indexes with locals, exports, docstrings, line spans, and lightweight complexity metadata.
 - Cross-file go-to-definition and find-references support across the shared source-language pipeline.
-- Deterministic agent orientation, packet retrieval, search, bounded explanations, portable artifact bundles, and MCP tools across files, symbols, chunks, SQL objects, graph neighborhoods, and review ranges with stable follow-up handles.
+- Deterministic agent orientation, packet retrieval, search, bounded explanations, portable artifact bundles, and MCP tools across files, symbols, chunks, SQL objects, graph neighborhoods, and review ranges with stable follow-up targets.
 - Semantic chunking for code and text files, including Vue and Svelte single-file component block splitting.
 - Duplicate and near-duplicate detection over indexed symbols, semantic chunks, text chunks, token fingerprints, and AST shape hashes when parser context is available.
 - AST grep, public API summaries, unresolved import reports, hotspot analysis, cycle detection, and shortest dependency paths.
@@ -76,22 +77,22 @@ npm run build
 
 `npm run build` always rebuilds `dist/`. If Cargo is available, it also requires the local native workspace build to succeed; if Cargo is unavailable, it still completes with the JavaScript build output and a warning.
 
-Then start with orientation and follow the returned handles or commands:
+Then start with orientation and follow the returned commands:
 
 ```bash
-# confirm runtime and artifact state
-node ./dist/cli.js doctor
-
 # initial repo orientation with next-step suggestions
-node ./dist/cli.js orient --root . --budget small --json
+node ./dist/cli.js orient --root . --budget small --pretty
+
+# optional runtime and artifact health check
+node ./dist/cli.js doctor
 
 # optional broader architecture summary
 node ./dist/cli.js inspect ./src --limit 20
 
 # find and explain a concrete anchor
-node ./dist/cli.js packet get <handle-from-orient> --json
+node ./dist/cli.js packet get src/cli.ts --pretty
 node ./dist/cli.js search "graph json" --json
-node ./dist/cli.js explain src/cli.ts --json
+node ./dist/cli.js explain src/cli.ts
 
 # build a graph for product code
 node ./dist/cli.js graph --root . ./src --compact-json --output codegraph.json
@@ -122,10 +123,10 @@ Use these as starting points, then see [docs/cli.md](./docs/cli.md) for all flag
 
 ```bash
 # repo orientation and bounded follow-up
-codegraph orient --root . --budget small --json
-codegraph packet get <handle-from-orient> --json
+codegraph orient --root . --budget small --pretty
+codegraph packet get src/cli/graph.ts --pretty
 codegraph search "graph json" --json
-codegraph explain file:src/cli/graph.ts --json
+codegraph explain file:src/cli/graph.ts
 
 # semantic navigation
 codegraph goto <file> <line> <column>

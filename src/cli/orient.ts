@@ -4,6 +4,7 @@ import {
   type AgentOrientHealthMode,
   type AgentOrientResponse,
 } from "../agent/orient.js";
+import type { BuildOptions } from "../indexer/types.js";
 import type { CliAgentCommandContext } from "./context.js";
 
 export type OrientCommandContext = CliAgentCommandContext;
@@ -26,15 +27,17 @@ function parseAgentOrientHealthMode(rawValue: string | undefined): AgentOrientHe
 
 export async function handleOrientCommand(context: OrientCommandContext): Promise<void> {
   const healthMode = parseAgentOrientHealthMode(context.getOpt("--health"));
+  const writesJson = context.hasFlag("--json") || !context.hasFlag("--pretty");
+  const buildOptions: BuildOptions = { ...(context.buildOptions ?? {}), logLevel: "silent" };
   const response = await orientCodegraph({
     root: context.root,
     includeRoots: context.positionals,
     budget: parseAgentOrientBudget(context.getOpt("--budget")),
     ...(healthMode !== undefined ? { health: healthMode } : {}),
-    ...(context.buildOptions ? { buildOptions: context.buildOptions } : {}),
+    buildOptions,
   });
 
-  if (context.hasFlag("--json") || !context.hasFlag("--pretty")) {
+  if (writesJson) {
     context.writeJSONLine(response);
   } else {
     context.writeStdoutLine(formatAgentOrientation(response));
@@ -42,23 +45,39 @@ export async function handleOrientCommand(context: OrientCommandContext): Promis
 }
 
 export function formatAgentOrientation(response: AgentOrientResponse): string {
-  const lines: string[] = ["Summary", ...response.summary.map((entry) => `- ${entry}`), "", "Tree"];
+  const lines: string[] = ["Summary", ...response.summary.map((entry) => `- ${entry}`)];
+
+  if (response.focus.length) {
+    lines.push("", "Start here");
+    for (const focus of response.focus) {
+      lines.push(`- ${focus.file ?? focus.label}: ${focus.why}`);
+      for (const followUp of focus.followUps) {
+        lines.push(`  - ${followUp}`);
+      }
+    }
+  }
+
+  const focusFollowUps = new Set(response.focus.flatMap((focus) => focus.followUps));
+  const remainingRecommendations = response.recommendedNext.filter((next) => !focusFollowUps.has(next.command));
+  if (remainingRecommendations.length) {
+    lines.push("", "Recommended next");
+    for (const next of remainingRecommendations) {
+      lines.push(`- ${next.command}`);
+    }
+  }
+
+  lines.push("", "Tree");
   if (response.tree.length) {
     lines.push(...response.tree.map(formatTreeEntry));
   } else {
     lines.push("- No files in scope.");
   }
 
-  if (response.modules.length) {
-    lines.push("", "Hotspots");
-    for (const module of response.modules) {
-      lines.push(`- ${module.file} fan-in ${module.fanIn}, fan-out ${module.fanOut}, score ${module.score}`);
-    }
-  }
-
-  lines.push("", "Recommended next");
-  for (const next of response.recommendedNext) {
-    lines.push(`- ${next.command}`);
+  if (response.omittedCounts.treeEntries || response.omittedCounts.focusTargets) {
+    lines.push(
+      "",
+      `Omitted: ${response.omittedCounts.treeEntries} tree entries, ${response.omittedCounts.focusTargets} focus targets.`,
+    );
   }
   return lines.join("\n");
 }

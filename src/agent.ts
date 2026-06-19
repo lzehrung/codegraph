@@ -7,6 +7,7 @@ export type {
   AgentOrientHealthMode,
   AgentOrientRequest,
   AgentOrientResponse,
+  AgentOrientationFocus,
   AgentPacketCommand,
   AgentPacketHandle,
   AgentTreeEntry,

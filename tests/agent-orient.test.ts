@@ -6,6 +6,7 @@ import { orientCodegraph, orientCodegraphWithSession } from "../src/agent/orient
 import * as duplicates from "../src/duplicates.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import { countingSession } from "./helpers/agent.js";
+import { runGit } from "./helpers/git.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 
 async function writeFile(root: string, relativePath: string, content: string): Promise<void> {
@@ -19,18 +20,38 @@ describe("agent orient", () => {
     vi.restoreAllMocks();
   });
 
-  it("returns compact orientation with stable packet handles", async () => {
+  it("returns compact orientation with file focus targets", async () => {
     const root = await mkTmpDir("cg-agent-orient-");
     await writeFile(root, "src/index.ts", "export { run } from './run';\n");
     await writeFile(root, "src/run.ts", "export function run() { return 1; }\n");
 
     const response = await orientCodegraph({ root, includeRoots: ["src"], budget: "small" });
 
-    expect(response.schemaVersion).toBe(1);
+    expect(response.schemaVersion).toBe(2);
     expect(response.summary.length).toBeGreaterThan(0);
     expect(response.tree.some((entry) => entry.path === "src/index.ts")).toBe(true);
-    expect(response.handles.some((handle) => handle.handle.startsWith("file:"))).toBe(true);
+    expect(response.focus.some((focus) => focus.file === "src/index.ts")).toBe(true);
     expect(response.recommendedNext.length).toBeGreaterThan(0);
+  });
+
+  it("quotes dash-prefixed file targets in follow-up commands", async () => {
+    const root = await mkTmpDir("cg-agent-orient-dash-file-");
+    await writeFile(root, "-entry.ts", "export const value = 1;\n");
+
+    const response = await orientCodegraph({ root, includeRoots: ["."], budget: "small" });
+
+    expect(response.focus[0]?.file).toBe("-entry.ts");
+    expect(response.focus[0]?.followUps[0]).toBe("codegraph packet get ./-entry.ts --pretty");
+  });
+
+  it("disambiguates handle-like file targets in follow-up commands", async () => {
+    const root = await mkTmpDir("cg-agent-orient-handle-like-file-");
+    await writeFile(root, "file:entry.ts", "export const value = 1;\n");
+
+    const response = await orientCodegraph({ root, includeRoots: ["."], budget: "small" });
+
+    expect(response.focus[0]?.file).toBe("file:entry.ts");
+    expect(response.focus[0]?.followUps[0]).toBe("codegraph packet get ./file:entry.ts --pretty");
   });
 
   it("does not build the detailed symbol graph for orientation", async () => {
@@ -51,6 +72,26 @@ describe("agent orient", () => {
     expect(counted.loads()).toBe(1);
   });
 
+  it("keeps review orientation within the focus target budget", async () => {
+    const root = await mkTmpDir("cg-agent-orient-review-budget-");
+    for (let index = 0; index < 8; index += 1) {
+      await writeFile(root, `src/file-${index}.ts`, `export const value${index} = ${index};\n`);
+    }
+
+    const response = await orientCodegraph({
+      root,
+      includeRoots: ["src"],
+      budget: "small",
+      review: { base: "HEAD~1", head: "HEAD" },
+    });
+
+    expect(response.focus).toHaveLength(5);
+    expect(response.focus[0]?.kind).toBe("review");
+    expect(response.focus.filter((focus) => focus.file).length).toBe(4);
+    expect(response.recommendedNext[0]?.label).toBe("Review HEAD~1..HEAD");
+    expect(response.recommendedNext[1]?.label).toBe("Map impact for HEAD~1..HEAD");
+  });
+
   it("treats dot include root as unscoped orientation", async () => {
     const root = await mkTmpDir("cg-agent-orient-dot-");
     await writeFile(root, "src/index.ts", "export const value = 1;\n");
@@ -58,12 +99,34 @@ describe("agent orient", () => {
     const response = await orientCodegraph({ root, includeRoots: ["."], budget: "small" });
 
     expect(response.tree.some((entry) => entry.path === "src/index.ts")).toBe(true);
-    expect(response.handles.some((handle) => handle.file === "src/index.ts")).toBe(true);
-    expect(response.modules).toHaveLength(0);
-    expect(response.omittedCounts.hotspots).toBe(0);
-    expect(response.recommendedNext.some((next) => next.command === "codegraph hotspots . --limit 20 --json")).toBe(
-      true,
-    );
+    expect(response.focus.some((focus) => focus.file === "src/index.ts")).toBe(true);
+    expect(response.omittedCounts.focusTargets).toBe(0);
+    expect(response.recommendedNext.some((next) => next.command === "codegraph hotspots . --limit 20")).toBe(true);
+    expect(
+      response.recommendedNext.some((next) => next.command === "codegraph impact --base HEAD --head WORKTREE --pretty"),
+    ).toBe(false);
+    expect(
+      response.recommendedNext.some(
+        (next) => next.command === "codegraph review --base HEAD --head WORKTREE --summary",
+      ),
+    ).toBe(false);
+  });
+
+  it("recommends worktree review commands inside git repos", async () => {
+    const root = await mkTmpDir("cg-agent-orient-git-");
+    runGit(root, ["init"]);
+    await writeFile(root, "src/index.ts", "export const value = 1;\n");
+
+    const response = await orientCodegraph({ root, includeRoots: ["."], budget: "small" });
+
+    expect(
+      response.recommendedNext.some((next) => next.command === "codegraph impact --base HEAD --head WORKTREE --pretty"),
+    ).toBe(true);
+    expect(
+      response.recommendedNext.some(
+        (next) => next.command === "codegraph review --base HEAD --head WORKTREE --summary",
+      ),
+    ).toBe(true);
   });
 
   it("normalizes absolute include roots against the project root", async () => {
@@ -75,8 +138,25 @@ describe("agent orient", () => {
 
     expect(response.tree.some((entry) => entry.path === "src/index.ts")).toBe(true);
     expect(response.tree.some((entry) => entry.path === "docs/guide.md")).toBe(false);
-    expect(response.handles.some((handle) => handle.file === "src/index.ts")).toBe(true);
-    expect(response.handles.some((handle) => handle.file === "docs/guide.md")).toBe(false);
+    expect(response.focus.some((focus) => focus.file === "src/index.ts")).toBe(true);
+    expect(response.focus.some((focus) => focus.file === "docs/guide.md")).toBe(false);
+  });
+
+  it("prioritizes graph-central files over shallow root files", async () => {
+    const root = await mkTmpDir("cg-agent-orient-hotspot-first-");
+    await writeFile(root, "package.json", '{"name":"sample"}\n');
+    await writeFile(root, "src/core.ts", "export function core() { return 1; }\n");
+    await writeFile(root, "src/alpha.ts", "import { core } from './core';\nexport const alpha = core();\n");
+    await writeFile(root, "src/beta.ts", "import { core } from './core';\nexport const beta = core();\n");
+    await writeFile(root, "src/gamma.ts", "import { core } from './core';\nexport const gamma = core();\n");
+
+    const response = await orientCodegraph({ root, includeRoots: ["."], budget: "small" });
+
+    expect(response.focus[0]?.file).toBe("src/core.ts");
+    expect(response.focus[0]?.kind).toBe("hotspot");
+    expect(response.focus[0]?.followUps.some((followUp) => followUp.includes("codegraph explain src/core.ts"))).toBe(
+      true,
+    );
   });
 
   it("uses small budget to skip deep health analysis", async () => {

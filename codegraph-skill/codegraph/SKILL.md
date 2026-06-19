@@ -21,15 +21,18 @@ Do not use Codegraph as the only evidence for runtime behavior; pair it with tes
 Start bounded:
 
 ```bash
-codegraph doctor
-codegraph orient --root . --budget small --json
+codegraph orient --root . --budget small --pretty
 ```
+
+Use `doctor` only when install, native-runtime, or artifact health is the task.
+
+For PR, worktree, or sweeping review tasks, start with `codegraph review --base HEAD --head WORKTREE --summary` or `codegraph impact --base HEAD --head WORKTREE --pretty` instead.
 
 Then choose the smallest useful follow-up:
 
-- packet: `codegraph packet get <handle> --json`
+- packet: `codegraph packet get <file|symbol|sql-object|handle> --pretty`
 - search: `codegraph search "auth user" --json`
-- explain: `codegraph explain <file|symbol|handle> --json`
+- explain: `codegraph explain <file|symbol|sql-object|handle>`
 - architecture: `codegraph inspect ./src --limit 20`
 - dependencies: `codegraph deps <file>` or `codegraph rdeps <file>`
 - path: `codegraph path <from> <to>`
@@ -47,11 +50,11 @@ For `orient`, `drift`, and positional graph commands, positional paths are inclu
 ## Output Choice
 
 Use readable output when a human or model will read the result.
-Use JSON when the next step needs exact fields, handles, counts, or filtering.
+Use JSON when the next step needs exact fields, counts, or filtering.
 
 Current high-value surfaces:
 
-- `orient --json`: stable handles and omission counts
+- `orient --pretty`: ranked first-turn focus targets with copyable follow-ups
 - `impact --pretty`: ranked "what could this break?" map
 - `review --summary`: compact reviewer handoff
 - `duplicates --profile cleanup`: refactor ROI ordering

@@ -287,12 +287,12 @@ describe("codegraph MCP handlers", () => {
 
     const handlers = createCodegraphMcpHandlers({ root });
     const orient = await handlers.orient({ includeRoots: ["src"], budget: "small" });
-    const fileHandle = orient.handles.find((handle) => handle.kind === "file");
-    expect(fileHandle?.handle).toBeTruthy();
+    const fileFocus = orient.focus.find((focus) => focus.file);
+    expect(fileFocus?.file).toBe("src/run.ts");
 
-    const packet = await handlers.packet_get({ handle: fileHandle!.handle });
+    const packet = await handlers.packet_get({ target: fileFocus!.file! });
 
-    expect(packet.schemaVersion).toBe(1);
+    expect(packet.schemaVersion).toBe(2);
     expect(packet.kind).toBe("file");
     expect(JSON.stringify(packet.packet)).toContain("src/run.ts");
   });
@@ -302,6 +302,8 @@ describe("codegraph MCP handlers", () => {
     const packetTool = listCodegraphMcpTools().find((tool) => tool.name === "packet_get");
     expect(orientTool).toBeTruthy();
     expect(packetTool).toBeTruthy();
+    expect(packetTool?.description).toContain("symbol name");
+    expect(packetTool?.description).toContain("SQL object name");
 
     const orientSchema = readObject(orientTool!.inputSchema);
     const packetSchema = readObject(packetTool!.inputSchema);
@@ -311,6 +313,7 @@ describe("codegraph MCP handlers", () => {
     expect(orientProperties.root).toBeUndefined();
     expect(packetProperties.root).toBeUndefined();
     expect(packetProperties.maxDuplicates).toBeTruthy();
+    expect(packetProperties.target).toBeTruthy();
   });
 
   it("bounds refs by handle with the refs limit", async () => {

@@ -56,15 +56,15 @@ export const MCP_TOOLS: Tool[] = [
   },
   {
     name: "packet_get",
-    description: "Retrieve a bounded evidence packet by stable handle.",
+    description: "Retrieve a bounded evidence packet by file path, symbol name, SQL object name, or stable target.",
     inputSchema: objectSchema(
       {
-        handle: stringProperty,
+        target: stringProperty,
         maxSymbols: { type: "integer", minimum: 1, maximum: 200 },
         maxSnippets: { type: "integer", minimum: 1, maximum: 50 },
         maxDuplicates: { type: "integer", minimum: 1, maximum: 20 },
       },
-      ["handle"],
+      ["target"],
     ),
   },
   {

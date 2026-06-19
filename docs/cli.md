@@ -114,9 +114,9 @@ codegraph index --threads 8 --cache disk
 codegraph index --workers --threads 8 --cache disk
 
 # Search for agent-ready anchors across symbols, paths, chunks, SQL objects, and graph context
-codegraph orient --root . --budget small --json
-codegraph orient --root . ./src --budget medium --pretty
-codegraph packet get <handle-from-orient> --json
+codegraph orient --root . --budget small --pretty
+codegraph orient --root . ./src --budget medium --json
+codegraph packet get src/cli.ts --pretty
 codegraph search "validate user" --json
 codegraph search "public users" --mode sql --json
 codegraph search "handle login" --from src/auth.ts --mode graph --depth 1 --json
@@ -227,10 +227,10 @@ Short JSON shape:
 
 #### Agent orientation and packets
 
-- Use `orient --pretty` as the compact first-turn reading surface for people or models.
-- Use `orient --json` when follow-up tools need exact handles, limits, and omitted counts.
+- Use `orient --pretty` as the compact first-turn reading surface for people or models; it prints the ranked `focus` targets and their follow-up commands before the scope sketch.
+- Use `orient --json` when follow-up tools need exact focus reasons, limits, and omitted counts. Orient suppresses index rebuild warnings so stdout stays parseable.
 - Small orientation budgets default to `--health skip`. Medium and large default to `--health summary`, which counts cycles and unresolved imports while omitting duplicate health; use `--health full` when exhaustive duplicate counts matter.
-- Use `packet get` with file, symbol, chunk, SQL, graph, or review handles to retrieve bounded evidence plus follow-up commands.
+- Use `packet get` with file paths, symbol names, SQL object names, file/symbol/chunk/SQL/graph handles, or review handles to retrieve bounded evidence plus follow-up commands.
 - Agent commands reuse the incremental index path and default to disk cache. Use shared index flags such as `--cache`, `--cache-strict`, `--cache-verify`, `--threads`, `--native`, `--workers`, `--include-glob`, `--ignore-glob`, and `--no-gitignore` when the packet should match a specific scan mode.
 
 `search` is deterministic and vectorless. `explain` resolves file paths, symbol names, SQL object names, and search handles into bounded packets with symbols, graph context, references, snippets, duplicate context, SQL facts, review tasks, candidate tests, limits, omissions, and follow-ups. Use `--max-duplicates` to tune duplicate context in `explain` and `packet get`; duplicate context also uses an internal pair budget and reports skipped duplicate work through omission counts.

@@ -281,10 +281,10 @@ describe("CLI command modules", () => {
     expect(MCP_SERVE_HELP_TEXT).toContain("refresh_index");
   });
 
-  test("packet help does not imply CLI orient accepts review ranges", () => {
-    expect(PACKET_HELP_TEXT).toContain("CLI orient returns file handles");
-    expect(PACKET_HELP_TEXT).toContain("library orientation calls that include a review range");
-    expect(PACKET_HELP_TEXT).not.toContain("Review handles are returned by orient when a review range is requested");
+  test("packet help documents accepted target shapes", () => {
+    expect(PACKET_HELP_TEXT).toContain("file paths, symbol names, SQL object names");
+    expect(PACKET_HELP_TEXT).toContain("file:/symbol:/chunk:/sql:/graph: handles");
+    expect(PACKET_HELP_TEXT).not.toContain("CLI orient returns file handles");
   });
 
   test("search command prints usage before running without a query", async () => {
@@ -312,7 +312,7 @@ describe("CLI command modules", () => {
     ).rejects.toThrow("Invalid --mode value");
   });
 
-  test("packet command validates subcommand and handle before lookup", async () => {
+  test("packet command validates subcommand and target before lookup", async () => {
     const stderr: string[] = [];
 
     await expect(
@@ -324,7 +324,7 @@ describe("CLI command modules", () => {
       ),
     ).rejects.toThrow("agent command exit 2");
 
-    expect(stderr.join("\n")).toContain("Usage: codegraph packet get <handle>");
+    expect(stderr.join("\n")).toContain("Usage: codegraph packet get <target>");
   });
 
   test("goto command validates positional shape before indexing", async () => {
@@ -376,7 +376,7 @@ describe("CLI command modules", () => {
       {
         args: ["packet", "--help"],
         heading: "codegraph packet",
-        usage: "Usage: codegraph packet get <handle>",
+        usage: "Usage: codegraph packet get <target>",
       },
       {
         args: ["explain", "--help"],
