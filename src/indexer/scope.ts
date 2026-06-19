@@ -116,15 +116,41 @@ export function buildScopeIndexFromSource(
     }
   };
 
-  const isRequireCall = (node: SyntaxNodeLike | null): boolean => {
+  const isStaticRequireCall = (node: SyntaxNodeLike | null): boolean => {
     if (!node || node.type !== "call_expression") return false;
     const callee = node.childForFieldName("function") ?? node.childForFieldName("callee") ?? node.child(0);
-    return !!callee && sliceText(callee, source) === "require";
+    if (!callee || sliceText(callee, source) !== "require") return false;
+    const args = node.childForFieldName("arguments");
+    return !!args && /^\(\s*["'][^"']+["']\s*\)$/.test(sliceText(args, source));
+  };
+
+  const addUnsupportedRequirePatternDecls = (pattern: SyntaxNodeLike): void => {
+    if (idSet.has(pattern.type)) return;
+    if (pattern.type !== "object_pattern") {
+      addPatternDecls(pattern, "local");
+      return;
+    }
+    for (const child of pattern.namedChildren) {
+      if (child.type === "shorthand_property_identifier" || child.type === "shorthand_property_identifier_pattern") {
+        continue;
+      }
+      if (child.type === "pair_pattern") {
+        const key = child.childForFieldName("key");
+        const value = child.childForFieldName("value");
+        if (key && value && key.type === "property_identifier" && value.type === "identifier") {
+          continue;
+        }
+        if (value) {
+          addPatternDecls(value, "local");
+        }
+      }
+    }
   };
 
   const walk = (node: SyntaxNodeLike) => {
     if (
       node.type === "function_declaration" ||
+      node.type === "generator_function_declaration" ||
       node.type === "function_definition" ||
       node.type === "method_definition" ||
       node.type === "method_declaration" ||
@@ -224,7 +250,10 @@ export function buildScopeIndexFromSource(
         if (child.type === "variable_declarator" || child.type === "var_spec" || child.type === "const_spec") {
           const name = child.childForFieldName("name");
           const value = child.childForFieldName("value");
-          if (name && !isRequireCall(value)) addPatternDecls(name, "local");
+          if (name) {
+            if (isStaticRequireCall(value)) addUnsupportedRequirePatternDecls(name);
+            else addPatternDecls(name, "local");
+          }
         } else if (
           (child.type === "identifier" || child.type === "field_identifier") &&
           (node.type === "assignment" || node.type === "short_var_declaration")
@@ -255,6 +284,7 @@ export function buildScopeIndexFromSource(
         const type = node.type;
         if (
           (type === "function_declaration" ||
+            type === "generator_function_declaration" ||
             type === "function_definition" ||
             type === "method_definition" ||
             type === "method_declaration" ||

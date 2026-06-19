@@ -35,6 +35,11 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
         captureId: "function",
       },
       {
+        type: "generator_function_declaration",
+        nameQuery: "name: (identifier) @chunk.name",
+        captureId: "function",
+      },
+      {
         type: "method_definition",
         nameQuery: "name: (_) @chunk.name body: (statement_block) @chunk.block.method",
         captureId: "method",
@@ -116,8 +121,10 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
     exports: `
       (export_statement) @stmt
       (export_statement declaration: (function_declaration name: (identifier) @name)) @stmt
+      (export_statement declaration: (generator_function_declaration name: (identifier) @name)) @stmt
       (export_statement declaration: (class_declaration name: (identifier) @name)) @stmt
       (export_statement declaration: (function_declaration) @anon_default) @stmt
+      (export_statement declaration: (generator_function_declaration) @anon_default) @stmt
       (export_statement declaration: (class_declaration) @anon_default) @stmt
       (export_statement declaration: (lexical_declaration (variable_declarator name: (identifier) @name))) @stmt
       (export_statement (export_clause (export_specifier name: (identifier) @src alias: (identifier) @alias)) (string) @from)
@@ -175,6 +182,7 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
     `,
     locals: `
       (function_declaration name: (identifier) @name)
+      (generator_function_declaration name: (identifier) @name)
       (method_definition name: (property_identifier) @name)
       (class_declaration name: (identifier) @name)
       (variable_declarator name: (identifier) @name)
@@ -199,6 +207,7 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
   classifyDefinition: (n) => {
     const t = n.parent?.type;
     if (t === "function_declaration") return "function";
+    if (t === "generator_function_declaration") return "function";
     if (t === "method_definition") return "function";
     if (t === "class_declaration") return "class";
     return "variable";
@@ -209,6 +218,7 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
       !!p &&
       [
         "function_declaration",
+        "generator_function_declaration",
         "class_declaration",
         "variable_declarator",
         "import_specifier",
@@ -223,6 +233,7 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
   createsBlockScope: (n) => n.type === "program" || n.type === "block",
   createsFunctionScope: (n) =>
     n.type === "function_declaration" ||
+    n.type === "generator_function_declaration" ||
     n.type === "function" ||
     n.type === "function_expression" ||
     n.type === "arrow_function" ||

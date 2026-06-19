@@ -206,4 +206,48 @@ def foo(x):
     expect(binding?.import?.from).toBe("./dep");
     expect(binding?.import?.resolved).toBe("dep.ts");
   });
+
+  it("keeps unsupported require destructuring patterns as locals", () => {
+    const source = `
+      const { shallow, nested: { value } } = require("./dep");
+      const [first] = require("./dep");
+      console.log(shallow, value, first);
+    `;
+    const file = "test.ts";
+    const imports: ImportBinding[] = [
+      {
+        kind: "named",
+        local: "shallow",
+        imported: "shallow",
+        from: "./dep",
+        resolved: "dep.ts",
+        mechanism: "cjs",
+      },
+    ];
+    const scopeIndex = buildScopeIndexFromSource(file, source, TS_SUPPORT, undefined, imports);
+    const shallowBindings = scopeIndex.bindings.get("shallow") ?? [];
+    const valueBindings = scopeIndex.bindings.get("value") ?? [];
+    const firstBindings = scopeIndex.bindings.get("first") ?? [];
+
+    expect(shallowBindings).toHaveLength(1);
+    expect(shallowBindings[0]?.kind).toBe("importNamed");
+    expect(valueBindings).toHaveLength(1);
+    expect(valueBindings[0]?.kind).toBe("local");
+    expect(firstBindings).toHaveLength(1);
+    expect(firstBindings[0]?.kind).toBe("local");
+  });
+
+  it("keeps dynamic require declarations as locals", () => {
+    const source = `
+      const moduleName = "./dep";
+      const dynamicDep = require(moduleName);
+      console.log(dynamicDep);
+    `;
+    const file = "test.ts";
+    const scopeIndex = buildScopeIndexFromSource(file, source, TS_SUPPORT);
+    const dynamicBindings = scopeIndex.bindings.get("dynamicDep") ?? [];
+
+    expect(dynamicBindings).toHaveLength(1);
+    expect(dynamicBindings[0]?.kind).toBe("local");
+  });
 });

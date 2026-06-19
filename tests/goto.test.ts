@@ -351,6 +351,32 @@ describe("Go to Definition", () => {
       }
     });
 
+    it("resolves named default exports without synthetic defaults", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-named-default-goto-"));
+      try {
+        const widgetFile = path.join(root, "widget.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(widgetFile, "export default abstract class Widget {\n  abstract run(): void;\n}\n", "utf8");
+        const usageLine = "class Impl extends Widget { run() {} }";
+        const consumer = ['import Widget from "./widget";', usageLine, ""].join("\n");
+        await fsp.writeFile(consumerFile, consumer, "utf8");
+        const index = await createTestIndexFromFiles(root, [widgetFile, consumerFile]);
+        const widgetModule = index.byFile.get(widgetFile);
+        const defaultExport = widgetModule?.exports.find(
+          (entry) => entry.type === "local" && entry.exportedAs === "default",
+        );
+
+        expect(widgetModule?.locals.some((local) => local.localName === "__default_export__")).toBe(false);
+        expect(defaultExport?.type).toBe("local");
+        if (defaultExport?.type === "local") {
+          expect(defaultExport.target.localName).toBe("Widget");
+        }
+        await testGoToDefinition(index, consumerFile, 2, usageLine.indexOf("Widget") + 1, widgetFile, 1);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("resolves shorthand object properties through imports", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-shorthand-goto-"));
       try {

@@ -27,6 +27,11 @@ const BASE_STRUCTURE = {
       captureId: "function",
     },
     {
+      type: "generator_function_declaration",
+      nameQuery: "name: (identifier) @chunk.name",
+      captureId: "function",
+    },
+    {
       type: "method_definition",
       nameQuery: "name: (_) @chunk.name body: (statement_block) @chunk.block.method",
       captureId: "method",
@@ -140,10 +145,13 @@ const BASE_GRAPH = {
   exports: `
     (export_statement) @stmt
     (export_statement declaration: (function_declaration name: (identifier) @name)) @stmt
+    (export_statement declaration: (generator_function_declaration name: (identifier) @name)) @stmt
     (export_statement declaration: (class_declaration name: (type_identifier) @name)) @stmt
     (export_statement declaration: (enum_declaration name: [ (identifier) (type_identifier) ] @name)) @stmt
     (export_statement declaration: (function_declaration) @anon_default) @stmt
+    (export_statement declaration: (generator_function_declaration) @anon_default) @stmt
     (export_statement declaration: (class_declaration) @anon_default) @stmt
+    (export_statement declaration: (abstract_class_declaration) @anon_default) @stmt
     (export_statement declaration: (lexical_declaration (variable_declarator name: (identifier) @name))) @stmt
     (export_statement (export_clause (export_specifier name: (identifier) @src alias: (identifier) @alias)) (string) @from) @stmt
     (export_statement (export_clause (export_specifier name: (identifier) @src)) (string) @from) @stmt
@@ -154,6 +162,7 @@ const BASE_GRAPH = {
   `,
   locals: `
     (function_declaration name: (identifier) @name)
+    (generator_function_declaration name: (identifier) @name)
     (method_definition name: (property_identifier) @name)
     (method_signature name: (property_identifier) @name)
     (abstract_method_signature name: (property_identifier) @name)
@@ -184,6 +193,7 @@ const BASE_HELPERS = {
   classifyDefinition: (n: SyntaxNodeLike) => {
     const t = n.parent?.type;
     if (t === "function_declaration") return "function";
+    if (t === "generator_function_declaration") return "function";
     if (t === "method_definition") return "function";
     if (t === "method_signature") return "function";
     if (t === "abstract_method_signature") return "function";
@@ -198,6 +208,7 @@ const BASE_HELPERS = {
     return (
       !!p &&
       [
+        "generator_function_declaration",
         "function_declaration",
         "class_declaration",
         "variable_declarator",
@@ -218,6 +229,7 @@ const BASE_HELPERS = {
   },
   createsBlockScope: (n: SyntaxNodeLike) => n.type === "program" || n.type === "block",
   createsFunctionScope: (n: SyntaxNodeLike) =>
+    n.type === "generator_function_declaration" ||
     n.type === "function_declaration" ||
     n.type === "function" ||
     n.type === "function_expression" ||

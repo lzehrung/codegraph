@@ -353,6 +353,17 @@ export function collectLocalsAndExportsFromSource(
     locals.push(buildSymbolDef(localName, kind, range, node));
   };
 
+  const symbolKindForDeclarationNode = (node: SyntaxNodeLike): SymbolKind => {
+    if (
+      node.type === "function_declaration" ||
+      node.type === "generator_function_declaration" ||
+      node.type === "function"
+    )
+      return SymbolKind.Function;
+    if (node.type === "class_declaration" || node.type === "abstract_class_declaration") return SymbolKind.Class;
+    return SymbolKind.Variable;
+  };
+
   const classifyLocalCapture = (
     capture: NativeCapture | { name: string },
     range: Range,
@@ -470,6 +481,16 @@ export function collectLocalsAndExportsFromSource(
       const range = rangeFromNativeCapture(capture);
       return treeForEnrichment.rootNode.descendantForIndex(range.start.index ?? 0, range.end.index ?? 0) ?? undefined;
     };
+
+    const defaultDeclarationNameNode = (node: SyntaxNodeLike | undefined): SyntaxNodeLike | undefined => {
+      if (!node) return undefined;
+      return (
+        node.childForFieldName("name") ?? node.childForFieldName("declaration")?.childForFieldName("name") ?? undefined
+      );
+    };
+
+    const hasDefaultExport = (): boolean =>
+      exports.some((entry) => entry.type === "local" && entry.exportedAs === "default");
 
     for (const match of matches) {
       const map = capturesByName(match);
@@ -607,12 +628,19 @@ export function collectLocalsAndExportsFromSource(
       }
       if (map["anon_default"]) {
         if (!/^\s*export\s+default\b/.test(stmtText)) continue;
-        if (/^\s*(?:async\s+)?function\s+[A-Za-z_$][\w$]*\b/.test(map["anon_default"].text)) continue;
-        if (/^\s*class\s+[A-Za-z_$][\w$]*\b/.test(map["anon_default"].text)) continue;
         const defaultNode = nodeForCapture(map["anon_default"]);
-        const declaredName = defaultNode?.childForFieldName("name");
+        const declaredName = defaultDeclarationNameNode(defaultNode);
         const declaredNameText = declaredName ? sliceText(declaredName, source) : null;
-        const declaredLocal = declaredNameText ? locals.find((def) => def.localName === declaredNameText) : undefined;
+        let declaredLocal = declaredNameText ? locals.find((def) => def.localName === declaredNameText) : undefined;
+        if (declaredName && declaredNameText && !declaredLocal && defaultNode) {
+          declaredLocal = buildSymbolDef(
+            declaredNameText,
+            symbolKindForDeclarationNode(defaultNode),
+            toRange(declaredName),
+            declaredName,
+          );
+          locals.push(declaredLocal);
+        }
         if (declaredLocal) {
           exports.push({
             type: "local",
@@ -671,7 +699,7 @@ export function collectLocalsAndExportsFromSource(
               target: local,
             });
           }
-          if (isDefaultExport) {
+          if (isDefaultExport && !hasDefaultExport()) {
             exports.push({
               type: "local",
               exportedAs: "default",
@@ -699,10 +727,10 @@ export function collectLocalsAndExportsFromSource(
 
   if (support.queries.exports.trim() && nativeQueries) {
     try {
-      appendExportsFromMatches(nativeQueries.exports);
+      appendExportsFromMatches(nativeQueries.exports, ensureTree() ?? undefined);
       if (!exports.some((entry) => entry.type === "local" && entry.exportedAs === "default")) {
-        const mDefFn = source.match(/\bexport\s+default\s+function\s+([A-Za-z_$][\w$]*)/);
-        const mDefCls = source.match(/\bexport\s+default\s+class\s+([A-Za-z_$][\w$]*)/);
+        const mDefFn = source.match(/\bexport\s+default\s+(?:async\s+)?(?:function\*?|function)\s+([A-Za-z_$][\w$]*)/);
+        const mDefCls = source.match(/\bexport\s+default\s+(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/);
         const name = mDefFn?.[1] ?? mDefCls?.[1];
         if (name) {
           const local = locals.find((def) => def.localName === name);
@@ -745,10 +773,13 @@ export function collectLocalsAndExportsFromSource(
     (support.id === "ts" || support.id === "tsx" || support.id === "js") &&
     !exports.some((e) => e.type === "local" && e.exportedAs === "default")
   ) {
-    const defFn = source.match(/\bexport\s+default\s+function\s+([A-Za-z_$][\w$]*)/);
-    const defCls = source.match(/\bexport\s+default\s+class\s+([A-Za-z_$][\w$]*)/);
+    const defFn = source.match(/\bexport\s+default\s+(?:async\s+)?(?:function\*?|function)\s+([A-Za-z_$][\w$]*)/);
+    const defCls = source.match(/\bexport\s+default\s+(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/);
     const defIdent = source.match(/\bexport\s+default\s+([A-Za-z_$][\w$]*)\b/);
-    const identName = defIdent && defIdent[1] !== "function" && defIdent[1] !== "class" ? defIdent[1] : undefined;
+    const identName =
+      defIdent && defIdent[1] !== "function" && defIdent[1] !== "class" && defIdent[1] !== "abstract"
+        ? defIdent[1]
+        : undefined;
     const name = defFn?.[1] ?? defCls?.[1] ?? identName;
     if (name) {
       const local = locals.find((d) => d.localName === name);
@@ -759,7 +790,7 @@ export function collectLocalsAndExportsFromSource(
           target: { ...local, kind: SymbolKind.Default },
         });
     } else {
-      const anon = source.match(/\bexport\s+default\s+(?:async\s+)?(?:function|class)\b/);
+      const anon = source.match(/\bexport\s+default\s+(?:async\s+)?(?:function\*?|function|(?:abstract\s+)?class)\b/);
       if (anon && anon.index !== undefined) {
         const startIndex = anon.index;
         const endIndex = startIndex + anon[0].length;
