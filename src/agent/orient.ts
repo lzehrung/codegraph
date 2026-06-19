@@ -31,7 +31,24 @@ export type AgentTreeEntry = {
   depth: number;
 };
 
-type AgentModuleSummary = {
+/** @deprecated Orient schema v2 no longer returns module summaries directly; use AgentOrientationFocus instead. */
+export type AgentModuleSummary = {
+  file: string;
+  fanIn: number;
+  fanOut: number;
+  score: number;
+  handle: string;
+};
+
+/** @deprecated Orient schema v2 no longer returns packet handles; use file-path focus targets instead. */
+export type AgentPacketHandle = {
+  kind: "file" | "review";
+  handle: string;
+  label: string;
+  file?: string;
+};
+
+type AgentFocusModuleSummary = {
   file: string;
   fanIn: number;
   fanOut: number;
@@ -129,10 +146,12 @@ export async function orientCodegraphWithSession(
     fanOut: hotspot.fanOut,
     score: hotspot.score,
   }));
+  const reviewFocusSlots = request.review ? 1 : 0;
+  const maxFileFocusTargets = Math.max(0, limits.maxFocusTargets - reviewFocusSlots);
   const packets = buildFilePackets(
     scopedFiles,
     modules.map((module) => module.file),
-    limits.maxFocusTargets,
+    maxFileFocusTargets,
   );
   const focus = buildFocusTargets(modules, packets, request.review);
   const healthMode = request.health ?? (limits.includeHealth ? "summary" : "skip");
@@ -335,7 +354,7 @@ function buildFilePackets(scopedFiles: string[], priorityFiles: string[], maxPac
 }
 
 function buildFocusTargets(
-  modules: AgentModuleSummary[],
+  modules: AgentFocusModuleSummary[],
   packets: AgentPacketRef[],
   review: AgentOrientRequest["review"] | undefined,
 ): AgentOrientationFocus[] {

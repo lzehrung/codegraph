@@ -72,6 +72,24 @@ describe("agent orient", () => {
     expect(counted.loads()).toBe(1);
   });
 
+  it("keeps review orientation within the focus target budget", async () => {
+    const root = await mkTmpDir("cg-agent-orient-review-budget-");
+    for (let index = 0; index < 8; index += 1) {
+      await writeFile(root, `src/file-${index}.ts`, `export const value${index} = ${index};\n`);
+    }
+
+    const response = await orientCodegraph({
+      root,
+      includeRoots: ["src"],
+      budget: "small",
+      review: { base: "HEAD~1", head: "HEAD" },
+    });
+
+    expect(response.focus).toHaveLength(5);
+    expect(response.focus[0]?.kind).toBe("review");
+    expect(response.focus.filter((focus) => focus.file).length).toBe(4);
+  });
+
   it("treats dot include root as unscoped orientation", async () => {
     const root = await mkTmpDir("cg-agent-orient-dot-");
     await writeFile(root, "src/index.ts", "export const value = 1;\n");
