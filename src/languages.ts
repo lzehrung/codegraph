@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { LanguageDefinition, JsLanguage, NativeCompatibility, SyntaxNodeLike } from "./languages/types.js";
+import type { LanguageDefinition, ParserLanguage, NativeCompatibility, SyntaxNodeLike } from "./languages/types.js";
 import { getAllLanguages, getLanguageById } from "./languages/registry.js";
 import "./languages/all.js";
 
@@ -9,7 +9,7 @@ export type IdentifierNodeType = string;
 export type LanguageSupport = {
   id: string;
   matchExts: string[];
-  language: (filename: string) => JsLanguage;
+  language: (filename: string) => ParserLanguage;
   nodeTypes: {
     identifier: IdentifierNodeType[];
     propertyIdentifier?: IdentifierNodeType[];
@@ -82,7 +82,7 @@ export function supportForFile(filename: string): LanguageSupport | undefined {
   }
   return LANGUAGE_SUPPORTS.find((s) => s.matchExts.includes(ext));
 }
-export function languageForFile(filename: string): JsLanguage {
+export function languageForFile(filename: string): ParserLanguage {
   const sup = supportForFile(filename);
   if (!sup) throw new Error(`Unsupported file extension: ${filename}`);
   return sup.language(filename);

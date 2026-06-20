@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import path from "node:path";
 import { buildProjectIndex, buildSymbolGraphDetailed, collectGraph, type BuildReport } from "../src/index.js";
-import { isJsFallbackAvailable } from "../src/jsFallback.js";
+import { isNonNativeParserAvailable } from "../src/parserBackend.js";
 import * as nativeRuntime from "../src/native/treeSitterNative.js";
 
 describe("native runtime mode", () => {
   const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
-  const jsFallbackIt = isJsFallbackAvailable() ? it : it.skip;
+  const nonNativeParserIt = isNonNativeParserAvailable() ? it : it.skip;
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -39,7 +39,7 @@ describe("native runtime mode", () => {
     expect(report.backend?.native?.enabled).toBe(false);
   });
 
-  jsFallbackIt("threads native: off through syntax-tree reconstruction paths", async () => {
+  nonNativeParserIt("threads native: off through syntax-tree reconstruction paths", async () => {
     const spy = vi.spyOn(nativeRuntime, "getNativeSyntaxTreeExecution");
 
     const index = await buildProjectIndex(samplePath, {

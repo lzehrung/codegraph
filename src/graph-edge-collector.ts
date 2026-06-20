@@ -1,5 +1,5 @@
 import path from "node:path";
-import { type JsLanguage } from "./jsFallback.js";
+import { type ParserLanguage } from "./parserBackend.js";
 import { prepareSourceInput } from "./languages/filePrep.js";
 import { type LanguageSupport } from "./languages.js";
 import type { Edge } from "./types.js";
@@ -40,7 +40,7 @@ export async function collectEdgesForFile(
       source: string;
       tree?: SyntaxTreeLike;
       sup: LanguageSupport;
-      lang?: JsLanguage;
+      lang?: ParserLanguage;
       nativeQueries?: NativeQueryResults | null;
     };
     fast?: boolean;

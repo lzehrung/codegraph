@@ -1,1 +1,1 @@
-export { loadTreeSitterLanguage, loadTypeScriptGrammars } from "../../jsFallback.js";
+export { loadTreeSitterLanguage, loadTypeScriptGrammars } from "../../parserBackend.js";

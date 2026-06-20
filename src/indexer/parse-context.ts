@@ -9,13 +9,13 @@ import {
 import type { NativeFallbackReason } from "../native/contracts.js";
 import { ProjectedSyntaxTree } from "../native/projectedTree.js";
 import type { LanguageSupport } from "../languages.js";
-import type { JsLanguage, SyntaxTreeLike } from "../languages/types.js";
+import type { ParserLanguage, SyntaxTreeLike } from "../languages/types.js";
 
 export type ParsedFileContext = {
   source: string;
   tree: SyntaxTreeLike;
   sup: LanguageSupport;
-  lang?: JsLanguage;
+  lang?: ParserLanguage;
   nativeQueries?: NativeQueryResults | null;
 };
 
@@ -23,7 +23,7 @@ export type ParsedFileCacheEntry = {
   source: string;
   tree: SyntaxTreeLike;
   sup: LanguageSupport | undefined;
-  lang?: JsLanguage;
+  lang?: ParserLanguage;
   nativeQueries?: NativeQueryResults | null;
 };
 
@@ -31,7 +31,7 @@ export type PreparedFileContext = {
   file: string;
   source: string;
   sup: LanguageSupport;
-  lang?: JsLanguage;
+  lang?: ParserLanguage;
   nativeMode?: NativeRuntimeMode;
   nativeQueries: NativeQueryResults | null;
   nativeFallbackReason?: NativeFallbackReason;

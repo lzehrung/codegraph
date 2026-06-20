@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { isJsFallbackAvailable, parseWithJsLanguage } from "../src/jsFallback.js";
+import { isNonNativeParserAvailable, parseWithLanguage } from "../src/parserBackend.js";
 
-describe("esm fallback compatibility shim", () => {
-  it("imports codegraph and exposes the unavailable grammar shim", async () => {
+describe("ESM parser backend unavailable contract", () => {
+  it("imports codegraph and exposes the unavailable parser backend", async () => {
     const mod = await import("../src/index.ts");
     expect(mod).toBeDefined();
-    expect(isJsFallbackAvailable()).toBe(false);
-    expect(() => parseWithJsLanguage("body { color: red; }", { name: "tree-sitter-css" })).toThrow(
-      "JS Tree-sitter fallback is unavailable",
+    expect(isNonNativeParserAvailable()).toBe(false);
+    expect(() => parseWithLanguage("body { color: red; }", { name: "tree-sitter-css" })).toThrow(
+      "Non-native Tree-sitter parser is unavailable",
     );
   });
 });

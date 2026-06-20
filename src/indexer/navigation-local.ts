@@ -1,5 +1,5 @@
 import type { LanguageSupport } from "../languages.js";
-import type { JsLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
+import type { ParserLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { FileId } from "../types.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { buildScopeIndexFromSource, type ScopeIndex } from "./scope.js";
@@ -43,7 +43,7 @@ export function getOrBuildScopeIndex(
   file: FileId,
   source: string,
   sup: LanguageSupport,
-  lang: JsLanguage | undefined,
+  lang: ParserLanguage | undefined,
   mod: ModuleIndex,
   tree: SyntaxTreeLike,
 ): ScopeIndex {

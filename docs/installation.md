@@ -8,7 +8,6 @@ Requirements and install paths for local source checkouts, published packages, r
 - Published installs do not require Rust or a manual native setup step on supported targets.
 - Local source checkouts do not require Rust just to build `dist/`, but the native workspace addon only builds when Cargo is available.
 - If no compatible native artifact is available, Codegraph drops to reduced graph-only and regex recovery mode instead of loading JS grammars.
-- The root package does not install a JavaScript grammar fallback. `@lzehrung/codegraph-js-fallback` is only a compatibility shim package and does not provide parser recovery unless a future release documents that capability explicitly.
 
 ## Option 1: Local source checkout
 
@@ -84,7 +83,6 @@ Explicit CLI, library, and tool `native` options take precedence over `CODEGRAPH
 
 - `@lzehrung/codegraph`: main library and CLI
 - `@lzehrung/codegraph-native`: optional native runtime package that resolves the matching binary artifact
-- `@lzehrung/codegraph-js-fallback`: compatibility shim package with no grammar bundle; installing it separately does not restore non-native Tree-sitter parsing
 
 Reduced mode preserves graph-only and regex-backed recovery where available; it does not provide a non-native Tree-sitter parser.
 

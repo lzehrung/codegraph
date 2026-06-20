@@ -9,7 +9,7 @@ function getNavigationBackend(index: ProjectIndex): ResolutionProvenance["backen
     return "native";
   }
   if (index.nativeMode === "off") {
-    return "js-fallback";
+    return "graph-only";
   }
   return undefined;
 }

@@ -18,7 +18,7 @@ import {
 } from "../native/treeSitterNative.js";
 import type { ResolvedImportTarget } from "./imports/context.js";
 import { collectGraphOnlyImports } from "./imports/graphOnly.js";
-import { collectJsTextImports, collectJsTextValueRequireImports } from "./imports/jsFallback.js";
+import { collectJsTextImports, collectJsTextValueRequireImports } from "./imports/jsTextImports.js";
 import {
   applyStatementImportOverride,
   createStatementImportOverrideState,
@@ -27,7 +27,7 @@ import {
 import { collectNativeCaptureImportBindings } from "./imports/nativeCaptures.js";
 import { collectPythonImportsFromSource } from "./imports/python.js";
 import type { LanguageSupport } from "../languages.js";
-import type { JsLanguage, SyntaxTreeLike } from "../languages/types.js";
+import type { ParserLanguage, SyntaxTreeLike } from "../languages/types.js";
 import type { ImportBinding } from "./types.js";
 
 export async function collectImportsForFile(
@@ -37,7 +37,7 @@ export async function collectImportsForFile(
     source?: string;
     tree?: SyntaxTreeLike;
     sup?: LanguageSupport;
-    lang?: JsLanguage;
+    lang?: ParserLanguage;
     nativeQueries?: NativeQueryResults | null;
     graphOptions?: GraphBuildOptions;
     native?: NativeRuntimeMode;
