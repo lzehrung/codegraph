@@ -50,11 +50,11 @@ export interface QueryMatch {
   captures: QueryCapture[];
 }
 
-const NON_NATIVE_PARSER_UNAVAILABLE_MESSAGE =
-  "Non-native Tree-sitter parser is unavailable; native parser is the only grammar backend";
+const NON_NATIVE_PARSER_UNAVAILABLE_PREFIX = "Non-native Tree-sitter parser is unavailable";
+const NON_NATIVE_PARSER_UNAVAILABLE_SUFFIX = "native parser is the only grammar backend";
 
 function createUnavailableError(feature: string): Error {
-  return new Error(`${NON_NATIVE_PARSER_UNAVAILABLE_MESSAGE} for ${feature}`);
+  return new Error(`${NON_NATIVE_PARSER_UNAVAILABLE_PREFIX} for ${feature}; ${NON_NATIVE_PARSER_UNAVAILABLE_SUFFIX}`);
 }
 
 export function __resetParserBackendModuleForTests(): void {
@@ -66,7 +66,7 @@ export function isNonNativeParserAvailable(): boolean {
 }
 
 export function isNonNativeParserUnavailableError(error: unknown): boolean {
-  return error instanceof Error && error.message.includes(NON_NATIVE_PARSER_UNAVAILABLE_MESSAGE);
+  return error instanceof Error && error.message.includes(NON_NATIVE_PARSER_UNAVAILABLE_PREFIX);
 }
 
 export function loadTreeSitterLanguage(packageName: string): ParserLanguage {

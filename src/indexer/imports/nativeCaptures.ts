@@ -1,7 +1,6 @@
-import type { ParserSyntaxTree } from "../../parserBackend.js";
-import { capturesByName, capturesNamed, rangeFromNativeCapture } from "../../native/queryResults.js";
+import { capturesByName, capturesNamed } from "../../native/queryResults.js";
 import type { NativeCapture, NativeMatch } from "../../native/treeSitterNative.js";
-import { sliceText, unquote } from "../../util/ast.js";
+import { unquote } from "../../util/ast.js";
 import { utf8ByteOffsetToStringIndex } from "../../util/rustTestModules.js";
 import { parseGoImportAlias } from "../shared.js";
 import type { ImportBinding } from "../types.js";
@@ -58,52 +57,6 @@ async function pushTextObjectPatternBindings(
         resolved,
         typeOnly,
       });
-    }
-  }
-}
-
-async function pushTreeObjectPatternBindings(
-  context: ImportCaptureExtractionContext,
-  tree: ParserSyntaxTree,
-  patterns: NativeCapture[],
-  from: string | undefined,
-  typeOnly: boolean,
-): Promise<void> {
-  if (!from) return;
-  for (const pattern of patterns) {
-    const patternRange = rangeFromNativeCapture(pattern);
-    const patternNode = tree.rootNode.descendantForIndex(patternRange.start.index ?? 0, patternRange.end.index ?? 0);
-    if (patternNode.type !== "object_pattern") continue;
-
-    for (const child of patternNode.namedChildren) {
-      if (child.type === "shorthand_property_identifier" || child.type === "shorthand_property_identifier_pattern") {
-        const name = sliceText(child, context.source);
-        const resolved = await context.resolveFrom(from);
-        context.pushBinding({
-          kind: "named",
-          local: name,
-          imported: name,
-          from,
-          resolved,
-          typeOnly,
-        });
-      } else if (child.type === "pair_pattern") {
-        const key = child.childForFieldName("key");
-        const value = child.childForFieldName("value");
-        if (key && value && key.type === "property_identifier" && value.type === "identifier") {
-          const imported = sliceText(key, context.source);
-          const local = sliceText(value, context.source);
-          const resolved = await context.resolveFrom(from);
-          context.pushBinding({
-            kind: "named",
-            local,
-            imported,
-            from,
-            resolved,
-            typeOnly,
-          });
-        }
-      }
     }
   }
 }
@@ -218,30 +171,6 @@ export async function collectNativeCaptureImportBindings(
     const from = caps["from"] ? unquote(caps["from"].text) : undefined;
     const patterns = capturesNamed(match, "pattern");
     await pushTextObjectPatternBindings(context, patterns, from, typeOnly);
-    await pushStandardBindings(context, match, caps, stmtText, from, patterns.length, typeOnly);
-  }
-}
-
-export async function collectJsQueryCaptureImportBindings(
-  context: ImportCaptureExtractionContext,
-  matches: NativeMatch[],
-  tree: ParserSyntaxTree,
-): Promise<void> {
-  for (const match of matches) {
-    const caps = capturesByName(match);
-    const statementCapture = caps["stmt"];
-    const stmtText = statementCapture?.text ?? "";
-    const typeOnly = context.isTypeOnly(stmtText);
-    const statementStartIndex =
-      statementCapture !== undefined
-        ? utf8ByteOffsetToStringIndex(context.source, statementCapture.start.index)
-        : undefined;
-    if (await context.applyStatementOverride(stmtText, typeOnly, statementStartIndex)) {
-      continue;
-    }
-    const from = caps["from"] ? unquote(caps["from"].text) : undefined;
-    const patterns = capturesNamed(match, "pattern");
-    await pushTreeObjectPatternBindings(context, tree, patterns, from, typeOnly);
     await pushStandardBindings(context, match, caps, stmtText, from, patterns.length, typeOnly);
   }
 }
