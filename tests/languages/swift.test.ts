@@ -13,6 +13,8 @@ const definition: LanguageTestDefinition = {
         expect(chunks.some((c) => c.type === "protocol" && c.name === "MyProtocol")).toBe(true);
         expect(chunks.some((c) => c.type === "function" && c.name === "topLevel")).toBe(true);
         expect(chunks.some((c) => c.type === "type" && c.name === "Alias")).toBe(true);
+        expect(chunks.some((c) => c.type === "struct" && c.name === "MyStruct")).toBe(true);
+        expect(chunks.some((c) => c.type === "enum" && c.name === "SampleMode")).toBe(true);
       },
     },
   ],
@@ -40,7 +42,13 @@ const definition: LanguageTestDefinition = {
       },
       {
         file: "StaticMembers.swift",
-        includes: [{ name: "Status" }, { name: "UtilityFactory" }, { name: "build" }],
+        includes: [
+          { name: "Status", kind: "type" },
+          { name: "ready", kind: "variable" },
+          { name: "done", kind: "variable" },
+          { name: "UtilityFactory", kind: "class" },
+          { name: "build" },
+        ],
       },
     ],
     goToDefinition: [

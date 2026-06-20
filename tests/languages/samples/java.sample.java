@@ -18,3 +18,8 @@ interface MyInterface {
     void interfaceMethod();
 }
 
+enum MyEnum {
+    One,
+    Two
+}
+

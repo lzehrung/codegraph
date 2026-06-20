@@ -14,6 +14,7 @@ const definition: LanguageTestDefinition = {
         expect(chunks.some((c) => c.type === "method" && c.name === "run")).toBe(true);
         expect(chunks.some((c) => c.type === "function" && c.name === "helper_function")).toBe(true);
         expect(chunks.some((c) => c.type === "const" && c.name === "APP_MODE")).toBe(true);
+        expect(chunks.some((c) => c.type === "enum" && c.name === "AppMode")).toBe(true);
       },
     },
   ],
@@ -123,7 +124,13 @@ const definition: LanguageTestDefinition = {
     symbols: [
       {
         file: "utils.php",
-        includes: [{ name: "UtilityClass" }, { name: "helper_function" }],
+        includes: [
+          { name: "UtilityClass" },
+          { name: "UtilityMode", kind: "type" },
+          { name: "Fast", kind: "variable" },
+          { name: "Slow", kind: "variable" },
+          { name: "helper_function" },
+        ],
       },
       {
         file: "src/Domain/Service.php",

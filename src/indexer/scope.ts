@@ -37,6 +37,15 @@ export function buildScopeIndexFromSource(
   };
   const stack: Scope[] = [rootScope];
   const allScopes: Scope[] = [rootScope];
+  const extraBindings: Binding[] = [];
+
+  const buildBinding = (nameNode: SyntaxNodeLike, kind: BindingKind): Binding => ({
+    name: sliceText(nameNode, source),
+    kind,
+    def: toRange(nameNode),
+    node: nameNode,
+    occurrences: [],
+  });
 
   for (const imp of imports) {
     if (imp.kind === "default") {
@@ -79,16 +88,9 @@ export function buildScopeIndexFromSource(
   };
 
   const addDecl = (nameNode: SyntaxNodeLike, kind: BindingKind) => {
-    const name = sliceText(nameNode, source);
     const target = stack[stack.length - 1];
-    const binding: Binding = {
-      name,
-      kind,
-      def: toRange(nameNode),
-      node: nameNode,
-      occurrences: [],
-    };
-    target?.map.set(name, binding);
+    const binding = buildBinding(nameNode, kind);
+    target?.map.set(binding.name, binding);
   };
 
   const lookup = (name: string): Binding | undefined => {
@@ -99,9 +101,81 @@ export function buildScopeIndexFromSource(
     return rootScope.map.get(name);
   };
 
+  const addPatternDecls = (pattern: SyntaxNodeLike, kind: BindingKind): void => {
+    if (idSet.has(pattern.type)) {
+      addDecl(pattern, kind);
+      return;
+    }
+    if (pattern.type === "pair_pattern") {
+      const value = pattern.childForFieldName("value");
+      if (value) {
+        addPatternDecls(value, kind);
+      }
+      return;
+    }
+    for (const child of pattern.namedChildren) {
+      addPatternDecls(child, kind);
+    }
+  };
+
+  const isStaticRequireCall = (node: SyntaxNodeLike | null): boolean => {
+    if (!node || node.type !== "call_expression") return false;
+    const callee = node.childForFieldName("function") ?? node.childForFieldName("callee") ?? node.child(0);
+    if (!callee || sliceText(callee, source) !== "require") return false;
+    const args = node.childForFieldName("arguments");
+    return !!args && /^\(\s*["'][^"']+["']\s*\)$/.test(sliceText(args, source));
+  };
+
+  const hasImportBinding = (nameNode: SyntaxNodeLike): boolean => {
+    const name = sliceText(nameNode, source);
+    const binding = rootScope.map.get(name);
+    return (
+      !!binding && (binding.kind === "importDefault" || binding.kind === "importNamed" || binding.kind === "namespace")
+    );
+  };
+
+  const isScopedCppEnumeratorName = (node: SyntaxNodeLike): boolean => {
+    if (support.id !== "cpp" || node.parent?.type !== "enumerator") return false;
+    let current = node.parent.parent;
+    while (current) {
+      if (current.type === "enum_specifier") return /^\s*enum\s+(?:class|struct)\b/.test(sliceText(current, source));
+      current = current.parent;
+    }
+    return false;
+  };
+
+  const addUnsupportedRequirePatternDecls = (pattern: SyntaxNodeLike): void => {
+    if (idSet.has(pattern.type)) {
+      if (!hasImportBinding(pattern)) addPatternDecls(pattern, "local");
+      return;
+    }
+    if (pattern.type !== "object_pattern") {
+      addPatternDecls(pattern, "local");
+      return;
+    }
+    for (const child of pattern.namedChildren) {
+      if (child.type === "shorthand_property_identifier" || child.type === "shorthand_property_identifier_pattern") {
+        if (!hasImportBinding(child)) addPatternDecls(child, "local");
+        continue;
+      }
+      if (child.type === "pair_pattern") {
+        const value = child.childForFieldName("value");
+        if (value && idSet.has(value.type) && hasImportBinding(value)) {
+          continue;
+        }
+        if (value) {
+          addPatternDecls(value, "local");
+        }
+        continue;
+      }
+      addPatternDecls(child, "local");
+    }
+  };
+
   const walk = (node: SyntaxNodeLike) => {
     if (
       node.type === "function_declaration" ||
+      node.type === "generator_function_declaration" ||
       node.type === "function_definition" ||
       node.type === "method_definition" ||
       node.type === "method_declaration" ||
@@ -130,10 +204,31 @@ export function buildScopeIndexFromSource(
       node.type === "interface_declaration" ||
       node.type === "type_alias_declaration" ||
       node.type === "type_spec" ||
-      node.type === "trait_item"
+      node.type === "trait_item" ||
+      node.type === "enum_declaration" ||
+      node.type === "enum_item" ||
+      node.type === "enum_specifier"
     ) {
       const name = node.childForFieldName("name");
       if (name) addDecl(name, "type");
+    }
+    if (
+      node.type === "enum_case" ||
+      node.type === "enum_constant" ||
+      node.type === "enum_entry" ||
+      node.type === "enum_member_declaration" ||
+      node.type === "enum_variant" ||
+      node.type === "enumerator"
+    ) {
+      const name = node.childForFieldName("name");
+      if (name) {
+        if (
+          node.type === "enumerator" &&
+          (support.id === "c" || (support.id === "cpp" && !isScopedCppEnumeratorName(name)))
+        )
+          addDecl(name, "local");
+        else extraBindings.push(buildBinding(name, "local"));
+      }
     }
 
     let pushed = false;
@@ -150,6 +245,7 @@ export function buildScopeIndexFromSource(
 
       if (
         node.type === "function_declaration" ||
+        node.type === "generator_function_declaration" ||
         node.type === "function_definition" ||
         node.type === "method_definition" ||
         node.type === "method_declaration" ||
@@ -199,7 +295,11 @@ export function buildScopeIndexFromSource(
       for (const child of node.namedChildren) {
         if (child.type === "variable_declarator" || child.type === "var_spec" || child.type === "const_spec") {
           const name = child.childForFieldName("name");
-          if (name) addDecl(name, "local");
+          const value = child.childForFieldName("value");
+          if (name) {
+            if (isStaticRequireCall(value)) addUnsupportedRequirePatternDecls(name);
+            else addPatternDecls(name, "local");
+          }
         } else if (
           (child.type === "identifier" || child.type === "field_identifier") &&
           (node.type === "assignment" || node.type === "short_var_declaration")
@@ -207,12 +307,17 @@ export function buildScopeIndexFromSource(
           addDecl(child, "local");
         } else if (node.type === "let_declaration" || node.type === "const_item" || node.type === "static_item") {
           const pattern = node.childForFieldName("pattern") || node.childForFieldName("name");
-          if (pattern && pattern.type === "identifier") addDecl(pattern, "local");
+          if (pattern) addPatternDecls(pattern, "local");
         }
       }
     }
 
-    if (customDeclLanguages.has(support.id) && idSet.has(node.type) && support.isDeclarationName(node)) {
+    if (
+      customDeclLanguages.has(support.id) &&
+      idSet.has(node.type) &&
+      support.isDeclarationName(node) &&
+      !isScopedCppEnumeratorName(node)
+    ) {
       const kind = isParamNode(node) ? "param" : declarationKindToBindingKind(support.classifyDefinition(node));
       addDecl(node, kind);
     }
@@ -230,6 +335,7 @@ export function buildScopeIndexFromSource(
         const type = node.type;
         if (
           (type === "function_declaration" ||
+            type === "generator_function_declaration" ||
             type === "function_definition" ||
             type === "method_definition" ||
             type === "method_declaration" ||
@@ -266,5 +372,10 @@ export function buildScopeIndexFromSource(
     }
   };
   for (const scope of allScopes) flush(scope);
+  for (const binding of extraBindings) {
+    if (!bindings.has(binding.name)) bindings.set(binding.name, []);
+    bindings.get(binding.name)!.push(binding);
+    all.push(binding);
+  }
   return { bindings, all, allScopes };
 }

@@ -10,6 +10,12 @@ class UtilityClass
     }
 }
 
+enum UtilityMode
+{
+    case Fast;
+    case Slow;
+}
+
 function helper_function(): string
 {
     return 'ok';

@@ -282,6 +282,64 @@ index 1111111..2222222 100644
     expect(breaking?.confidence).toBe("high");
   });
 
+  it("detects multiline exported function signature arity changes", async () => {
+    const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,8 +1,9 @@
+ export function helperFunction(
+   input: string,
+-  options?: { trim?: boolean },
++  options: { trim?: boolean },
++  fallback: string,
+ ): string {
+   return input;
+ }
+`;
+
+    const report = await buildSampleReport(diffText, {
+      detectBreakingChanges: true,
+      verifyReferences: false,
+    });
+
+    const breaking = (report.suggestions ?? []).find(
+      (entry) =>
+        entry.kind === "breakingChange" &&
+        entry.symbol === "helperFunction" &&
+        entry.details?.includes("signature changed") &&
+        entry.confidence === "high",
+    );
+    expect(breaking).toBeDefined();
+  });
+
+  it("detects exported generator function signature arity changes", async () => {
+    const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,3 +1,3 @@
+-export function* helperFunction(input: string): Generator<string> {
++export function* helperFunction(input: string, extra: number): Generator<string> {
+   yield input;
+ }
+`;
+
+    const report = await buildSampleReport(diffText, {
+      detectBreakingChanges: true,
+      verifyReferences: false,
+    });
+
+    const breaking = (report.suggestions ?? []).find(
+      (entry) =>
+        entry.kind === "breakingChange" &&
+        entry.symbol === "helperFunction" &&
+        entry.details?.includes("signature changed") &&
+        entry.confidence === "high",
+    );
+    expect(breaking).toBeDefined();
+  });
+
   it("detects exported default function arity changes", async () => {
     const diffText = `diff --git a/helpers.ts b/helpers.ts
 index 1111111..2222222 100644
@@ -352,6 +410,128 @@ index 1111111..2222222 100644
     expect(signatureBreaking).toBeUndefined();
   });
 
+  it("detects arity changes after function-typed parameters", async () => {
+    const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,3 +1,3 @@
+-export function helperFunction(cb: (x: number) => void): void {
++export function helperFunction(cb: (x: number) => void, fallback: number): void {
+   cb(1);
+ }
+`;
+
+    const report = await buildSampleReport(diffText, {
+      detectBreakingChanges: true,
+      verifyReferences: false,
+    });
+
+    const signatureBreaking = (report.suggestions ?? []).find(
+      (entry) =>
+        entry.kind === "breakingChange" &&
+        entry.symbol === "helperFunction" &&
+        entry.details?.includes("signature changed") &&
+        entry.confidence === "high",
+    );
+    expect(signatureBreaking).toBeDefined();
+  });
+
+  it("detects exported arrow arity changes after function-typed parameters", async () => {
+    const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,2 +1,2 @@
+-export const helperFunction = (cb: (x: number) => void) => cb(1);
++export const helperFunction = (cb: (x: number) => void, fallback: number) => cb(fallback);
+`;
+
+    const report = await buildSampleReport(diffText, {
+      detectBreakingChanges: true,
+      verifyReferences: false,
+    });
+
+    const signatureBreaking = (report.suggestions ?? []).find(
+      (entry) =>
+        entry.kind === "breakingChange" &&
+        entry.symbol === "helperFunction" &&
+        entry.details?.includes("signature changed") &&
+        entry.confidence === "high",
+    );
+    expect(signatureBreaking).toBeDefined();
+  });
+
+  it("detects exported arrow arity changes with return type annotations", async () => {
+    const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,2 +1,2 @@
+-export const helperFunction = (input: number): { value: number } => ({ value: input });
++export const helperFunction = (input: number, fallback: number): { value: number } => ({ value: fallback });
+`;
+
+    const report = await buildSampleReport(diffText, {
+      detectBreakingChanges: true,
+      verifyReferences: false,
+    });
+
+    const signatureBreaking = (report.suggestions ?? []).find(
+      (entry) =>
+        entry.kind === "breakingChange" &&
+        entry.symbol === "helperFunction" &&
+        entry.details?.includes("1 parameter(s) to 2") &&
+        entry.confidence === "high",
+    );
+    expect(signatureBreaking).toBeDefined();
+  });
+
+  it("does not treat ASI parenthesized exports as arrow signatures", async () => {
+    const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,3 +1,3 @@
+-export const value = (oldValue)
++export const value = (oldValue, nextValue)
+ export const helperFunction = () => 1;
+`;
+
+    const report = await buildSampleReport(diffText, {
+      detectBreakingChanges: true,
+      verifyReferences: false,
+    });
+
+    const signatureBreaking = (report.suggestions ?? []).find(
+      (entry) =>
+        entry.kind === "breakingChange" && entry.symbol === "value" && entry.details?.includes("signature changed"),
+    );
+    expect(signatureBreaking).toBeUndefined();
+  });
+
+  it("does not treat same-line parenthesized expressions as arrow signatures", async () => {
+    const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,2 +1,2 @@
+-export const value = (oldValue) ? oldValue : () => 1;
++export const value = (oldValue, nextValue) ? oldValue : () => 1;
+`;
+
+    const report = await buildSampleReport(diffText, {
+      detectBreakingChanges: true,
+      verifyReferences: false,
+    });
+
+    const signatureBreaking = (report.suggestions ?? []).find(
+      (entry) =>
+        entry.kind === "breakingChange" && entry.symbol === "value" && entry.details?.includes("signature changed"),
+    );
+    expect(signatureBreaking).toBeUndefined();
+  });
+
   it("detects arity changes for exported generic functions", async () => {
     const diffText = `diff --git a/helpers.ts b/helpers.ts
 index 1111111..2222222 100644
@@ -377,6 +557,60 @@ index 1111111..2222222 100644
         entry.confidence === "high",
     );
     expect(signatureBreaking).toBeDefined();
+  });
+
+  it("matches changed overload signatures by nearby line", async () => {
+    const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,5 +1,5 @@
+ export function helperFunction(input: string): string;
+-export function helperFunction(input: string, fallback: number): string;
++export function helperFunction(input: string, fallback: number, strict: boolean): string;
+ export function helperFunction(input: string, fallback?: number): string {
+   return input + String(fallback ?? "");
+ }
+`;
+
+    const report = await buildSampleReport(diffText, {
+      detectBreakingChanges: true,
+      verifyReferences: false,
+    });
+
+    const signatureBreaking = (report.suggestions ?? []).find(
+      (entry) =>
+        entry.kind === "breakingChange" &&
+        entry.symbol === "helperFunction" &&
+        entry.details?.includes("2 parameter(s) to 3") &&
+        entry.confidence === "high",
+    );
+    expect(signatureBreaking).toBeDefined();
+  });
+
+  it("ignores export-like signatures changed inside template text", async () => {
+    const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,6 +1,6 @@
+ export const docs = \`
+-export function fake(cb: (x: number) => void): void {
++export function fake(cb: (x: number) => void, fallback: number): void {
+ }
+ \`;
+`;
+
+    const report = await buildSampleReport(diffText, {
+      detectBreakingChanges: true,
+      verifyReferences: false,
+    });
+
+    const signatureBreaking = (report.suggestions ?? []).find(
+      (entry) =>
+        entry.kind === "breakingChange" && entry.symbol === "fake" && entry.details?.includes("signature changed"),
+    );
+    expect(signatureBreaking).toBeUndefined();
   });
 
   it("does not miscount params when default values use comparison operators", async () => {

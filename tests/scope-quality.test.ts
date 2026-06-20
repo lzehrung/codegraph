@@ -4,6 +4,8 @@ import {
   buildScopeIndexFromSource,
   TS_SUPPORT,
   PY_SUPPORT,
+  PHP_SUPPORT,
+  CPP_SUPPORT,
   goToDefinition,
   findReferences,
 } from "../src/index.js";
@@ -205,5 +207,115 @@ def foo(x):
 
     expect(binding?.import?.from).toBe("./dep");
     expect(binding?.import?.resolved).toBe("dep.ts");
+  });
+
+  it("keeps unsupported require destructuring patterns as locals", () => {
+    const source = `
+      const { shallow, nested: { value }, explicit: alias, missing, ...rest } = require("./dep");
+      const [first] = require("./dep");
+      console.log(shallow, value, alias, missing, rest, first);
+    `;
+    const file = "test.ts";
+    const imports: ImportBinding[] = [
+      {
+        kind: "named",
+        local: "shallow",
+        imported: "shallow",
+        from: "./dep",
+        resolved: "dep.ts",
+        mechanism: "cjs",
+      },
+    ];
+    const scopeIndex = buildScopeIndexFromSource(file, source, TS_SUPPORT, undefined, imports);
+    const shallowBindings = scopeIndex.bindings.get("shallow") ?? [];
+    const valueBindings = scopeIndex.bindings.get("value") ?? [];
+    const firstBindings = scopeIndex.bindings.get("first") ?? [];
+    const restBindings = scopeIndex.bindings.get("rest") ?? [];
+    const aliasBindings = scopeIndex.bindings.get("alias") ?? [];
+    const missingBindings = scopeIndex.bindings.get("missing") ?? [];
+
+    expect(shallowBindings).toHaveLength(1);
+    expect(shallowBindings[0]?.kind).toBe("importNamed");
+    expect(valueBindings).toHaveLength(1);
+    expect(valueBindings[0]?.kind).toBe("local");
+    expect(restBindings).toHaveLength(1);
+    expect(restBindings[0]?.kind).toBe("local");
+    expect(aliasBindings).toHaveLength(1);
+    expect(aliasBindings[0]?.kind).toBe("local");
+    expect(missingBindings).toHaveLength(1);
+    expect(missingBindings[0]?.kind).toBe("local");
+    expect(firstBindings).toHaveLength(1);
+    expect(firstBindings[0]?.kind).toBe("local");
+  });
+
+  it("keeps dynamic require declarations as locals", () => {
+    const source = `
+      const moduleName = "./dep";
+      const dynamicDep = require(moduleName);
+      console.log(dynamicDep);
+    `;
+    const file = "test.ts";
+    const scopeIndex = buildScopeIndexFromSource(file, source, TS_SUPPORT);
+    const dynamicBindings = scopeIndex.bindings.get("dynamicDep") ?? [];
+
+    expect(dynamicBindings).toHaveLength(1);
+    expect(dynamicBindings[0]?.kind).toBe("local");
+  });
+
+  it("tracks generator function parameters", () => {
+    const source = `
+      function* streamItems(input: string) {
+        yield input;
+      }
+    `;
+    const file = "test.ts";
+    const scopeIndex = buildScopeIndexFromSource(file, source, TS_SUPPORT);
+    const inputBindings = scopeIndex.bindings.get("input") ?? [];
+
+    expect(inputBindings).toHaveLength(1);
+    expect(inputBindings[0]?.kind).toBe("param");
+  });
+
+  it("indexes enum cases without flattening them into lexical lookup", () => {
+    const source = `
+      <?php
+      enum PrimaryMode
+      {
+          case Ready;
+      }
+      enum SecondaryMode
+      {
+          case Ready;
+      }
+      $mode = PrimaryMode::Ready;
+    `;
+    const file = "test.php";
+    const scopeIndex = buildScopeIndexFromSource(file, source, PHP_SUPPORT);
+    const readyBindings = scopeIndex.bindings.get("Ready") ?? [];
+    const rootReadyBinding = scopeIndex.allScopes[0]?.map.get("Ready");
+
+    expect(readyBindings).toHaveLength(2);
+    expect(readyBindings.every((binding) => binding.kind === "local")).toBeTruthy();
+    expect(rootReadyBinding).toBeUndefined();
+  });
+
+  it("keeps scoped C++ enum class cases out of lexical lookup", () => {
+    const source = `
+      enum class PrimaryMode {
+        Ready,
+      };
+      enum class SecondaryMode {
+        Ready,
+      };
+      auto mode = PrimaryMode::Ready;
+    `;
+    const file = "test.cpp";
+    const scopeIndex = buildScopeIndexFromSource(file, source, CPP_SUPPORT);
+    const readyBindings = scopeIndex.bindings.get("Ready") ?? [];
+    const rootReadyBinding = scopeIndex.allScopes[0]?.map.get("Ready");
+
+    expect(readyBindings).toHaveLength(2);
+    expect(readyBindings.every((binding) => binding.kind === "local")).toBeTruthy();
+    expect(rootReadyBinding).toBeUndefined();
   });
 });

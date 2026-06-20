@@ -286,6 +286,31 @@ describe("Find References", () => {
     });
   });
 
+  describe("TypeScript enum references", () => {
+    it("finds references to exported enum declarations", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-enum-refs-"));
+      try {
+        const typesFile = path.join(root, "types.ts").replace(/\\/g, "/");
+        const consumerFile = path.join(root, "consumer.ts").replace(/\\/g, "/");
+        await fsp.writeFile(typesFile, "export enum Mode {\n  Light,\n  Dark,\n}\n", "utf8");
+        await fsp.writeFile(
+          consumerFile,
+          ['import { Mode } from "./types";', "const selected = Mode.Light;", ""].join("\n"),
+          "utf8",
+        );
+        const index = await createTestIndexFromFiles(root, [typesFile, consumerFile]);
+
+        const result = await testFindReferences(index, typesFile, 1, 13, 2);
+
+        expect(result.status).toBe("ok");
+        expectReferenceAt(result, typesFile, 1);
+        expectReferenceAt(result, consumerFile, 2);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+  });
+
   describe("TypeScript method references", () => {
     it("finds class method references only through verified receivers", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-method-refs-"));
@@ -746,11 +771,11 @@ describe("Find References", () => {
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "php");
       const utilsFile = path.join(samplePath, "utils.php").replace(/\\/g, "/");
 
-      const result = await testFindReferences(index, utilsFile, 13, 11, 2);
+      const result = await testFindReferences(index, utilsFile, 19, 11, 2);
 
       expect(result.status).toBe("ok");
       if (result.status === "ok") {
-        expectReferenceAt(result, utilsFile, 13);
+        expectReferenceAt(result, utilsFile, 19);
         expectReferenceAt(result, path.join(samplePath, "main.php").replace(/\\/g, "/"), 9);
       }
     });

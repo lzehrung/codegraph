@@ -12,6 +12,7 @@ const definition: LanguageTestDefinition = {
         expect(chunks.some((c) => c.type === "class" && c.name === "MyClass")).toBe(true);
         expect(chunks.some((c) => c.type === "method" && c.name === "myMethod")).toBe(true);
         expect(chunks.some((c) => c.type === "interface" && c.name === "MyInterface")).toBe(true);
+        expect(chunks.some((c) => c.type === "enum" && c.name === "MyEnum")).toBe(true);
       },
     },
   ],
@@ -53,8 +54,25 @@ const definition: LanguageTestDefinition = {
         includes: [{ name: "PackageTypes" }, { name: "NestedValue" }, { name: "ServiceContract" }],
       },
       {
+        file: "pkg/Mode.java",
+        includes: [
+          { name: "Mode", kind: "type" },
+          { name: "FAST", kind: "variable" },
+          { name: "SLOW", kind: "variable" },
+        ],
+      },
+      {
         file: "pkg/PackageService.java",
         includes: [{ name: "PackageService" }],
+      },
+      {
+        file: "pkg/ScopedEnums.java",
+        includes: [
+          { name: "ScopedEnums", kind: "class" },
+          { name: "PrimaryMode", kind: "type" },
+          { name: "SecondaryMode", kind: "type" },
+          { name: "Ready", kind: "variable" },
+        ],
       },
     ],
     goToDefinition: [
@@ -71,6 +89,34 @@ const definition: LanguageTestDefinition = {
         line: 8,
         column: 3,
         expectedDefinition: { file: "pkg/PackageService.java", line: 3 },
+      },
+      {
+        name: "go to definition resolves wildcard-imported enum type",
+        file: "WildcardImports.java",
+        line: 9,
+        column: 3,
+        expectedDefinition: { file: "pkg/Mode.java", line: 3 },
+      },
+      {
+        name: "go to definition resolves wildcard-imported enum constants",
+        file: "WildcardImports.java",
+        line: 9,
+        column: 20,
+        expectedDefinition: { file: "pkg/Mode.java", line: 4 },
+      },
+      {
+        name: "go to definition resolves enum constants by owner",
+        file: "EnumMemberAccess.java",
+        line: 6,
+        column: 62,
+        expectedDefinition: { file: "pkg/ScopedEnums.java", line: 18 },
+      },
+      {
+        name: "go to definition ignores nested locals for missing Java owner members",
+        file: "EnumMemberAccess.java",
+        line: 7,
+        column: 32,
+        expectedStatus: "not_found",
       },
       {
         name: "go to definition resolves static wildcard imports",

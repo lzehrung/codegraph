@@ -75,6 +75,7 @@ export const PHP_DEF: LanguageDefinition = {
       (interface_declaration name: (name) @name)
       (trait_declaration name: (name) @name)
       (enum_declaration name: (name) @name)
+      (enum_case name: (name) @name)
       (function_definition name: (name) @name)
       (const_declaration (const_element (name) @name))
     `,
@@ -84,6 +85,7 @@ export const PHP_DEF: LanguageDefinition = {
       (interface_declaration name: (name) @name)
       (trait_declaration name: (name) @name)
       (enum_declaration name: (name) @name)
+      (enum_case name: (name) @name)
       (function_definition name: (name) @name)
       (method_declaration name: (name) @name)
       (const_declaration (const_element (name) @name))
@@ -107,7 +109,8 @@ export const PHP_DEF: LanguageDefinition = {
     if (parentType === "class_declaration") return "class";
     if (parentType === "interface_declaration") return "interface";
     if (parentType === "trait_declaration") return "trait";
-    if (parentType === "enum_declaration") return "enum";
+    if (parentType === "enum_declaration") return "type";
+    if (parentType === "enum_case") return "constant";
     if (parentType === "function_definition") return "function";
     if (parentType === "method_declaration") return "method";
     if (parentType === "namespace_definition") return "namespace";
@@ -126,6 +129,7 @@ export const PHP_DEF: LanguageDefinition = {
       "interface_declaration",
       "trait_declaration",
       "enum_declaration",
+      "enum_case",
       "function_definition",
       "method_declaration",
     ]);

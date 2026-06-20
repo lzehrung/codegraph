@@ -8,4 +8,9 @@ namespace Advanced {
       public void Execute() {}
     }
   }
+
+  public enum Mode {
+    Fast,
+    Slow
+  }
 }

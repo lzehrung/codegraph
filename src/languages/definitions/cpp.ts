@@ -30,12 +30,14 @@ export const CPP_DEF = createCFamilyLanguageDefinition({
   splitPoints: [...cFamilyControlSplitPoints, "try_statement", "catch_clause"],
   extraExportQueries: [
     `(class_specifier name: (type_identifier) @name)`,
+    `(enumerator name: (identifier) @name)`,
     `(namespace_definition name: (namespace_identifier) @name)`,
     `(alias_declaration name: (type_identifier) @name)`,
     `(using_declaration (qualified_identifier name: (identifier) @name))`,
   ],
   extraLocalQueries: [
     `(class_specifier name: (type_identifier) @name)`,
+    `(enumerator name: (identifier) @name)`,
     `(namespace_definition name: (namespace_identifier) @name)`,
     `(alias_declaration name: (type_identifier) @name)`,
   ],
@@ -47,10 +49,10 @@ export const CPP_DEF = createCFamilyLanguageDefinition({
   classifyDefinition: (node) => {
     const parent = node.parent;
     if (!parent) return "variable";
+    if (parent.type === "enum_specifier") return "type";
     if (
       parent.type === "class_specifier" ||
       parent.type === "struct_specifier" ||
-      parent.type === "enum_specifier" ||
       parent.type === "namespace_definition"
     )
       return "class";
