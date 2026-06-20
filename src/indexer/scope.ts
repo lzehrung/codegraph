@@ -126,20 +126,41 @@ export function buildScopeIndexFromSource(
     return !!args && /^\(\s*["'][^"']+["']\s*\)$/.test(sliceText(args, source));
   };
 
+  const hasImportBinding = (nameNode: SyntaxNodeLike): boolean => {
+    const name = sliceText(nameNode, source);
+    const binding = rootScope.map.get(name);
+    return (
+      !!binding && (binding.kind === "importDefault" || binding.kind === "importNamed" || binding.kind === "namespace")
+    );
+  };
+
+  const isScopedCppEnumeratorName = (node: SyntaxNodeLike): boolean => {
+    if (support.id !== "cpp" || node.parent?.type !== "enumerator") return false;
+    let current = node.parent.parent;
+    while (current) {
+      if (current.type === "enum_specifier") return /^\s*enum\s+(?:class|struct)\b/.test(sliceText(current, source));
+      current = current.parent;
+    }
+    return false;
+  };
+
   const addUnsupportedRequirePatternDecls = (pattern: SyntaxNodeLike): void => {
-    if (idSet.has(pattern.type)) return;
+    if (idSet.has(pattern.type)) {
+      if (!hasImportBinding(pattern)) addPatternDecls(pattern, "local");
+      return;
+    }
     if (pattern.type !== "object_pattern") {
       addPatternDecls(pattern, "local");
       return;
     }
     for (const child of pattern.namedChildren) {
       if (child.type === "shorthand_property_identifier" || child.type === "shorthand_property_identifier_pattern") {
+        if (!hasImportBinding(child)) addPatternDecls(child, "local");
         continue;
       }
       if (child.type === "pair_pattern") {
-        const key = child.childForFieldName("key");
         const value = child.childForFieldName("value");
-        if (key && value && key.type === "property_identifier" && value.type === "identifier") {
+        if (value && idSet.has(value.type) && hasImportBinding(value)) {
           continue;
         }
         if (value) {
@@ -201,7 +222,11 @@ export function buildScopeIndexFromSource(
     ) {
       const name = node.childForFieldName("name");
       if (name) {
-        if (node.type === "enumerator" && support.id === "c") addDecl(name, "local");
+        if (
+          node.type === "enumerator" &&
+          (support.id === "c" || (support.id === "cpp" && !isScopedCppEnumeratorName(name)))
+        )
+          addDecl(name, "local");
         else extraBindings.push(buildBinding(name, "local"));
       }
     }
@@ -220,6 +245,7 @@ export function buildScopeIndexFromSource(
 
       if (
         node.type === "function_declaration" ||
+        node.type === "generator_function_declaration" ||
         node.type === "function_definition" ||
         node.type === "method_definition" ||
         node.type === "method_declaration" ||
@@ -286,7 +312,12 @@ export function buildScopeIndexFromSource(
       }
     }
 
-    if (customDeclLanguages.has(support.id) && idSet.has(node.type) && support.isDeclarationName(node)) {
+    if (
+      customDeclLanguages.has(support.id) &&
+      idSet.has(node.type) &&
+      support.isDeclarationName(node) &&
+      !isScopedCppEnumeratorName(node)
+    ) {
       const kind = isParamNode(node) ? "param" : declarationKindToBindingKind(support.classifyDefinition(node));
       addDecl(node, kind);
     }

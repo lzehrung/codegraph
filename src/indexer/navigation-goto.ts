@@ -85,7 +85,13 @@ export async function resolveMemberAccessDefinition(params: {
           return resolveExport(index, base.file, memberName, { allowLocalFallback: false });
         }
         if (base?.kind === "resolved") {
-          if (sup.id === "java" || sup.id === "ruby") {
+          if (sup.id === "java") {
+            const memberDef = await resolveMemberDefinitionForBase(index, base.def, memberName);
+            return memberDef ? { kind: "resolved", def: memberDef } : null;
+          }
+          if (sup.id === "ruby") {
+            const memberDef = await resolveMemberDefinitionForBase(index, base.def, memberName);
+            if (memberDef) return { kind: "resolved", def: memberDef };
             const localHit = resolveExport(index, base.def.file, memberName);
             if (localHit) return localHit;
           }
@@ -104,7 +110,8 @@ export async function resolveMemberAccessDefinition(params: {
           return resolveExport(index, base.file, memberName, { allowLocalFallback: false });
         }
         if (base?.kind === "resolved") {
-          return resolveExport(index, base.def.file, memberName);
+          const memberDef = await resolveMemberDefinitionForBase(index, base.def, memberName);
+          return memberDef ? { kind: "resolved", def: memberDef } : null;
         }
       }
     }
@@ -150,7 +157,10 @@ export async function resolveMemberAccessDefinition(params: {
       if (container) {
         const targetModule = index.byFile.get(objDef.file);
         if (targetModule) {
-          const memberDef = findReceiverMemberDefinition(targetModule.locals, member, objDef, container, targetContext);
+          const memberDef =
+            targetContext.sup.id === "java"
+              ? findDirectLocalWithinNode(targetModule.locals, member, container, targetContext)
+              : findReceiverMemberDefinition(targetModule.locals, member, objDef, container, targetContext);
 
           if (memberDef) {
             return okGoToResult(index, memberDef, {
@@ -474,6 +484,28 @@ function findNamedChildText(
   return visit(node);
 }
 
+async function resolveMemberDefinitionForBase(
+  index: ProjectIndex,
+  baseDef: SymbolDef,
+  member: string,
+): Promise<SymbolDef | undefined> {
+  const targetContext = await ensureParsedContext(baseDef.file);
+  const start = baseDef.range.start;
+  const targetPosition = {
+    row: start.line - 1,
+    column: start.column - 1,
+  };
+  const nameNode = targetContext.tree.rootNode.descendantForPosition(targetPosition, targetPosition);
+  const container = nameNode.parent;
+  if (!container) return undefined;
+  const targetModule = index.byFile.get(baseDef.file);
+  if (!targetModule) return undefined;
+  const directHit = findDirectLocalWithinNode(targetModule.locals, member, container, targetContext);
+  if (directHit) return directHit;
+  if (targetContext.sup.id === "java") return undefined;
+  return findReceiverMemberDefinition(targetModule.locals, member, baseDef, container, targetContext);
+}
+
 function findReceiverMemberDefinition(
   locals: readonly SymbolDef[],
   member: string,
@@ -507,6 +539,70 @@ function findLocalWithinNode(
       endIndex <= containerEnd
     );
   });
+}
+
+const NESTED_MEMBER_LOCAL_CONTAINERS = new Set([
+  "block",
+  "class",
+  "class_declaration",
+  "class_definition",
+  "constructor_declaration",
+  "enum_declaration",
+  "enum_item",
+  "enum_specifier",
+  "function_declaration",
+  "function_definition",
+  "function_item",
+  "interface_declaration",
+  "method",
+  "method_declaration",
+  "method_definition",
+  "module",
+  "statement_block",
+]);
+
+function findDirectLocalWithinNode(
+  locals: readonly SymbolDef[],
+  member: string,
+  container: SyntaxNodeLike,
+  targetContext: Awaited<ReturnType<typeof ensureParsedContext>>,
+): SymbolDef | undefined {
+  const containerStart = container.startIndex;
+  const containerEnd = container.endIndex;
+  for (const local of locals) {
+    const startIndex = local.range.start.index;
+    const endIndex = local.range.end.index;
+    if (
+      local.localName !== member ||
+      startIndex === undefined ||
+      endIndex === undefined ||
+      startIndex < containerStart ||
+      endIndex > containerEnd
+    ) {
+      continue;
+    }
+    const start = local.range.start;
+    const position = {
+      row: start.line - 1,
+      column: start.column - 1,
+    };
+    let current = targetContext.tree.rootNode.descendantForPosition(position, position).parent;
+    let isDeclarationParent = true;
+    while (current && current !== container) {
+      if (
+        !isDeclarationParent &&
+        ((current.type === "class_body" && current.parent !== container) ||
+          NESTED_MEMBER_LOCAL_CONTAINERS.has(current.type))
+      ) {
+        current = null;
+        break;
+      }
+      isDeclarationParent = false;
+      current = current.parent;
+    }
+    if (current) return local;
+  }
+  return undefined;
 }
 
 function findRustImplForType(root: SyntaxNodeLike, typeName: string, source: string): SyntaxNodeLike | null {

@@ -729,7 +729,7 @@ export function collectLocalsAndExportsFromSource(
     try {
       appendExportsFromMatches(nativeQueries.exports, ensureTree() ?? undefined);
       if (!exports.some((entry) => entry.type === "local" && entry.exportedAs === "default")) {
-        const mDefFn = source.match(/\bexport\s+default\s+(?:async\s+)?(?:function\*?|function)\s+([A-Za-z_$][\w$]*)/);
+        const mDefFn = source.match(/\bexport\s+default\s+(?:async\s+)?function\b\s*\*?\s*([A-Za-z_$][\w$]*)/);
         const mDefCls = source.match(/\bexport\s+default\s+(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/);
         const name = mDefFn?.[1] ?? mDefCls?.[1];
         if (name) {
@@ -773,13 +773,11 @@ export function collectLocalsAndExportsFromSource(
     (support.id === "ts" || support.id === "tsx" || support.id === "js") &&
     !exports.some((e) => e.type === "local" && e.exportedAs === "default")
   ) {
-    const defFn = source.match(/\bexport\s+default\s+(?:async\s+)?(?:function\*?|function)\s+([A-Za-z_$][\w$]*)/);
+    const defFn = source.match(/\bexport\s+default\s+(?:async\s+)?function\b\s*\*?\s*([A-Za-z_$][\w$]*)/);
     const defCls = source.match(/\bexport\s+default\s+(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/);
     const defIdent = source.match(/\bexport\s+default\s+([A-Za-z_$][\w$]*)\b/);
-    const identName =
-      defIdent && defIdent[1] !== "function" && defIdent[1] !== "class" && defIdent[1] !== "abstract"
-        ? defIdent[1]
-        : undefined;
+    const ignoredDefaultIdentifiers = new Set(["abstract", "async", "class", "function"]);
+    const identName = defIdent && defIdent[1] && !ignoredDefaultIdentifiers.has(defIdent[1]) ? defIdent[1] : undefined;
     const name = defFn?.[1] ?? defCls?.[1] ?? identName;
     if (name) {
       const local = locals.find((d) => d.localName === name);
@@ -790,7 +788,7 @@ export function collectLocalsAndExportsFromSource(
           target: { ...local, kind: SymbolKind.Default },
         });
     } else {
-      const anon = source.match(/\bexport\s+default\s+(?:async\s+)?(?:function\*?|function|(?:abstract\s+)?class)\b/);
+      const anon = source.match(/\bexport\s+default\s+(?:async\s+)?(?:function\b\s*\*?|(?:abstract\s+)?class\b)/);
       if (anon && anon.index !== undefined) {
         const startIndex = anon.index;
         const endIndex = startIndex + anon[0].length;

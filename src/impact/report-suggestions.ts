@@ -608,7 +608,7 @@ function collectExportSignaturesFromText(
   };
 
   const functionRe =
-    /^\s*export\s+(?:default\s+)?(?:async\s+)?function(?:\s+([A-Za-z_$][\w$]*))?(?:\s*<[^>]+>)?\s*\(([\s\S]*?)\)/gm;
+    /^\s*export\s+(?:default\s+)?(?:async\s+)?function\s*(?:\*\s*)?(?:([A-Za-z_$][\w$]*))?(?:\s*<[^>]+>)?\s*\(([\s\S]*?)\)/gm;
   for (let match; (match = functionRe.exec(text)); ) {
     pushMatch(match, match[1] ?? "default", match[2] ?? "");
   }

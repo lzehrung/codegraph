@@ -36,4 +36,19 @@ describe("JS export fallback regressions", () => {
 
     expect(moduleIndex.exports).toHaveLength(0);
   });
+
+  it("detects anonymous async default functions in reduced mode", () => {
+    const file = "/virtual/module.ts";
+    const source = "export default async function () {\n  return 1;\n}\n";
+    const support = supportForFile(file)!;
+
+    const moduleIndex = collectLocalsAndExportsFromSource(file, source, support, undefined, [], { nativeMode: "off" });
+
+    expect(moduleIndex.exports).toEqual([
+      expect.objectContaining({
+        type: "local",
+        exportedAs: "default",
+      }),
+    ]);
+  });
 });

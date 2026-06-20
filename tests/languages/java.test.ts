@@ -65,6 +65,15 @@ const definition: LanguageTestDefinition = {
         file: "pkg/PackageService.java",
         includes: [{ name: "PackageService" }],
       },
+      {
+        file: "pkg/ScopedEnums.java",
+        includes: [
+          { name: "ScopedEnums", kind: "class" },
+          { name: "PrimaryMode", kind: "type" },
+          { name: "SecondaryMode", kind: "type" },
+          { name: "Ready", kind: "variable" },
+        ],
+      },
     ],
     goToDefinition: [
       {
@@ -94,6 +103,20 @@ const definition: LanguageTestDefinition = {
         line: 9,
         column: 20,
         expectedDefinition: { file: "pkg/Mode.java", line: 4 },
+      },
+      {
+        name: "go to definition resolves enum constants by owner",
+        file: "EnumMemberAccess.java",
+        line: 6,
+        column: 62,
+        expectedDefinition: { file: "pkg/ScopedEnums.java", line: 18 },
+      },
+      {
+        name: "go to definition ignores nested locals for missing Java owner members",
+        file: "EnumMemberAccess.java",
+        line: 7,
+        column: 32,
+        expectedStatus: "not_found",
       },
       {
         name: "go to definition resolves static wildcard imports",

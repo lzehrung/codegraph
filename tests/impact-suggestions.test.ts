@@ -313,6 +313,33 @@ index 1111111..2222222 100644
     expect(breaking).toBeDefined();
   });
 
+  it("detects exported generator function signature arity changes", async () => {
+    const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,3 +1,3 @@
+-export function* helperFunction(input: string): Generator<string> {
++export function* helperFunction(input: string, extra: number): Generator<string> {
+   yield input;
+ }
+`;
+
+    const report = await buildSampleReport(diffText, {
+      detectBreakingChanges: true,
+      verifyReferences: false,
+    });
+
+    const breaking = (report.suggestions ?? []).find(
+      (entry) =>
+        entry.kind === "breakingChange" &&
+        entry.symbol === "helperFunction" &&
+        entry.details?.includes("signature changed") &&
+        entry.confidence === "high",
+    );
+    expect(breaking).toBeDefined();
+  });
+
   it("detects exported default function arity changes", async () => {
     const diffText = `diff --git a/helpers.ts b/helpers.ts
 index 1111111..2222222 100644
