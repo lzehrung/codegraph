@@ -24,12 +24,12 @@ Decision:
 
 Implementation checklist:
 
-- [ ] Delete `packages/codegraph-js-fallback/`.
-- [ ] Remove package-specific release metadata for `js-fallback` from `scripts/release-lib.mjs`.
-- [ ] Remove `js-fallback` version planning, manifest normalization, package selection, and publish handling from `scripts/release.mjs`.
-- [ ] Remove `js-fallback` from `.github/workflows/release.yml` publish commands and release notes.
-- [ ] Remove package-specific checks from `tests/package-metadata.test.ts`.
-- [ ] Confirm root `package.json` workspaces remain correct after deleting the package.
+- [x] Delete `packages/codegraph-js-fallback/`.
+- [x] Remove package-specific release metadata for `js-fallback` from `scripts/release-lib.mjs`.
+- [x] Remove `js-fallback` version planning, manifest normalization, package selection, and publish handling from `scripts/release.mjs`.
+- [x] Remove `js-fallback` from `.github/workflows/release.yml` publish commands and release notes.
+- [x] Remove package-specific checks from `tests/package-metadata.test.ts`.
+- [x] Confirm root `package.json` workspaces remain correct after deleting the package.
 
 Acceptance:
 
@@ -41,11 +41,11 @@ Acceptance:
 
 Implementation checklist:
 
-- [ ] Audit every import from `src/jsFallback.ts`.
-- [ ] Keep `JsSyntaxTree`, `JsSyntaxNode`, and related structural types only if native query/result adapters still need them.
-- [ ] Rename internal-only concepts if useful so `jsFallback` does not imply an external parser backend.
-- [ ] Preserve `isJsFallbackUnavailableError()` behavior if build/index fallback diagnostics still depend on it.
-- [ ] Do not reintroduce any JS Tree-sitter grammar dependency.
+- [x] Audit every import from `src/jsFallback.ts`.
+- [x] Keep `JsSyntaxTree`, `JsSyntaxNode`, and related structural types only if native query/result adapters still need them.
+- [x] Rename internal-only concepts if useful so `jsFallback` does not imply an external parser backend.
+- [x] Preserve `isJsFallbackUnavailableError()` behavior if build/index fallback diagnostics still depend on it.
+- [x] Do not reintroduce any JS Tree-sitter grammar dependency.
 
 Acceptance:
 
@@ -57,12 +57,12 @@ Acceptance:
 
 Implementation checklist:
 
-- [ ] Remove `@lzehrung/codegraph-js-fallback` from `README.md` install/release guidance.
-- [ ] Remove fallback shim package role from `docs/installation.md`.
-- [ ] Remove fallback shim release guidance from `PUBLISHING.md`.
-- [ ] Remove fallback shim mention from `codegraph-skill/codegraph/SKILL.md`.
-- [ ] Update any release examples that mention `--package js-fallback`.
-- [ ] Keep reduced-mode documentation explicit: without native, Codegraph has graph-only and regex recovery, not parser recovery.
+- [x] Remove `@lzehrung/codegraph-js-fallback` from `README.md` install/release guidance.
+- [x] Remove fallback shim package role from `docs/installation.md`.
+- [x] Remove fallback shim release guidance from `PUBLISHING.md`.
+- [x] Remove fallback shim mention from `codegraph-skill/codegraph/SKILL.md`.
+- [x] Update any release examples that mention `--package js-fallback`.
+- [x] Keep reduced-mode documentation explicit: without native, Codegraph has graph-only and regex recovery, not parser recovery.
 
 Acceptance:
 
@@ -74,10 +74,10 @@ Acceptance:
 
 Implementation checklist:
 
-- [ ] Replace package metadata tests that assert shim properties with tests asserting the shim package is absent.
-- [ ] Update release-script tests to cover the two-package release model.
-- [ ] Keep native fallback contract tests focused on reduced mode and native package absence.
-- [ ] Add a regression test that release commands reject `--package js-fallback` with a clear unknown-selector error.
+- [x] Replace package metadata tests that assert shim properties with tests asserting the shim package is absent.
+- [x] Update release-script tests to cover the two-package release model.
+- [x] Keep native fallback contract tests focused on reduced mode and native package absence.
+- [x] Add a regression test that release commands reject `--package js-fallback` with a clear unknown-selector error.
 
 Acceptance:
 
@@ -89,14 +89,14 @@ Acceptance:
 
 Run focused checks during implementation:
 
-- [ ] `npx vitest run tests/package-metadata.test.ts tests/release-script.test.ts tests/native-fallback-contract.test.ts tests/native-fallback-reporting.test.ts`
-- [ ] `npx vitest run tests/js-fallback-loader.test.ts` if the file still exists; otherwise delete or replace it with reduced-mode coverage.
-- [ ] `npm run check`
+- [x] `npx vitest run tests/package-metadata.test.ts tests/release-script.test.ts tests/native-fallback-contract.test.ts tests/native-fallback-reporting.test.ts`
+- [x] `npx vitest run tests/js-fallback-loader.test.ts` if the file still exists; otherwise delete or replace it with reduced-mode coverage.
+- [x] `npm run check`
 
 Manual verification:
 
-- [ ] `node ./dist/cli.js doctor` reports native status without mentioning a JS fallback package.
-- [ ] `node ./dist/cli.js orient --root . --budget small --json` still works with native available.
+- [x] `node ./dist/cli.js doctor` reports native status without mentioning a JS fallback package.
+- [x] `node ./dist/cli.js orient --root . --budget small --json` still works with native available.
 
 ## Risks and Non-Goals
 
