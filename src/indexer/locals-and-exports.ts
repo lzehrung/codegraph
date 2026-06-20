@@ -628,6 +628,7 @@ export function collectLocalsAndExportsFromSource(
       }
       if (map["anon_default"]) {
         if (!/^\s*export\s+default\b/.test(stmtText)) continue;
+        if (hasDefaultExport()) continue;
         const defaultNode = nodeForCapture(map["anon_default"]);
         const declaredName = defaultDeclarationNameNode(defaultNode);
         const declaredNameText = declaredName ? sliceText(declaredName, source) : null;
@@ -773,9 +774,10 @@ export function collectLocalsAndExportsFromSource(
     (support.id === "ts" || support.id === "tsx" || support.id === "js") &&
     !exports.some((e) => e.type === "local" && e.exportedAs === "default")
   ) {
-    const defFn = source.match(/\bexport\s+default\s+(?:async\s+)?function\b\s*\*?\s*([A-Za-z_$][\w$]*)/);
-    const defCls = source.match(/\bexport\s+default\s+(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/);
-    const defIdent = source.match(/\bexport\s+default\s+([A-Za-z_$][\w$]*)\b/);
+    const maskedSource = maskJsLikeCommentsAndStrings(source);
+    const defFn = maskedSource.match(/\bexport\s+default\s+(?:async\s+)?function\b\s*\*?\s*([A-Za-z_$][\w$]*)/);
+    const defCls = maskedSource.match(/\bexport\s+default\s+(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/);
+    const defIdent = maskedSource.match(/\bexport\s+default\s+([A-Za-z_$][\w$]*)\b/);
     const ignoredDefaultIdentifiers = new Set(["abstract", "async", "class", "function"]);
     const identName = defIdent && defIdent[1] && !ignoredDefaultIdentifiers.has(defIdent[1]) ? defIdent[1] : undefined;
     const name = defFn?.[1] ?? defCls?.[1] ?? identName;
@@ -788,7 +790,7 @@ export function collectLocalsAndExportsFromSource(
           target: { ...local, kind: SymbolKind.Default },
         });
     } else {
-      const anon = source.match(/\bexport\s+default\s+(?:async\s+)?(?:function\b\s*\*?|(?:abstract\s+)?class\b)/);
+      const anon = maskedSource.match(/\bexport\s+default\s+(?:async\s+)?(?:function\b\s*\*?|(?:abstract\s+)?class\b)/);
       if (anon && anon.index !== undefined) {
         const startIndex = anon.index;
         const endIndex = startIndex + anon[0].length;

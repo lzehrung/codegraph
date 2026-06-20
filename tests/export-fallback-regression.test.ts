@@ -51,4 +51,46 @@ describe("JS export fallback regressions", () => {
       }),
     ]);
   });
+
+  it("does not duplicate named default exports when native captures overlap", () => {
+    const file = "/virtual/module.ts";
+    const source = "export default function Foo() {\n  return 1;\n}\n";
+    const support = supportForFile(file)!;
+
+    const moduleIndex = collectLocalsAndExportsFromSource(file, source, support, support.language(file));
+    const defaultExports = moduleIndex.exports.filter(
+      (entry) => entry.type === "local" && entry.exportedAs === "default",
+    );
+
+    expect(defaultExports).toHaveLength(1);
+    expect(defaultExports[0]).toEqual(
+      expect.objectContaining({
+        type: "local",
+        exportedAs: "default",
+        target: expect.objectContaining({
+          localName: "Foo",
+        }),
+      }),
+    );
+  });
+
+  it("ignores anonymous default syntax inside comments and strings in reduced mode", () => {
+    const file = "/virtual/module.ts";
+    const source = [
+      "// export default function () {}",
+      'const text = "export default class Ghost {}";',
+      "export function real() {",
+      "  return text;",
+      "}",
+      "",
+    ].join("\n");
+    const support = supportForFile(file)!;
+
+    const moduleIndex = collectLocalsAndExportsFromSource(file, source, support, undefined, [], { nativeMode: "off" });
+    const defaultExports = moduleIndex.exports.filter(
+      (entry) => entry.type === "local" && entry.exportedAs === "default",
+    );
+
+    expect(defaultExports).toHaveLength(0);
+  });
 });

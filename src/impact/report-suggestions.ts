@@ -4,6 +4,7 @@ import { SymbolKind, type ProjectIndex } from "../indexer/types.js";
 import { findReferences } from "../indexer/navigation.js";
 import { resolveFilePathFromRoot, toProjectDisplayPath } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
+import { maskJsLikeCommentsAndStrings } from "../util/comments.js";
 import { listCandidateTestFiles } from "./context.js";
 import { collectHunkLineText, collectRemovedLines } from "./hunks.js";
 import { normalizeImpactFilePath } from "./path.js";
@@ -592,6 +593,50 @@ function countNewlines(text: string): number {
   return count;
 }
 
+function readBalancedParenContent(text: string, openParenIndex: number): { content: string; endIndex: number } | null {
+  let depth = 0;
+  let quote: string | null = null;
+  let escaping = false;
+  for (let index = openParenIndex; index < text.length; index += 1) {
+    const ch = text[index]!;
+    if (quote) {
+      if (escaping) {
+        escaping = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escaping = true;
+        continue;
+      }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "(") {
+      depth += 1;
+      continue;
+    }
+    if (ch === ")") {
+      depth -= 1;
+      if (!depth) {
+        return { content: text.slice(openParenIndex + 1, index), endIndex: index };
+      }
+    }
+  }
+  return null;
+}
+
+function functionSuffixStartsAfterParams(text: string, closeParenIndex: number): boolean {
+  return /^\s*(?::|[{;])/.test(text.slice(closeParenIndex + 1));
+}
+
+function arrowSuffixStartsAfterParams(text: string, closeParenIndex: number): boolean {
+  return /^\s*=>/.test(text.slice(closeParenIndex + 1));
+}
+
 function collectExportSignaturesFromText(
   text: string,
   hunkIndex: number,
@@ -606,21 +651,30 @@ function collectExportSignaturesFromText(
       line: startLine + countNewlines(text.slice(0, match.index)),
     });
   };
+  const scanText = maskJsLikeCommentsAndStrings(text);
 
   const functionRe =
-    /^\s*export\s+(?:default\s+)?(?:async\s+)?function\s*(?:\*\s*)?(?:([A-Za-z_$][\w$]*))?(?:\s*<[^>]+>)?\s*\(([\s\S]*?)\)/gm;
-  for (let match; (match = functionRe.exec(text)); ) {
-    pushMatch(match, match[1] ?? "default", match[2] ?? "");
+    /^\s*export\s+(?:default\s+)?(?:async\s+)?function\s*(?:\*\s*)?(?:([A-Za-z_$][\w$]*))?(?:\s*<[^>]+>)?\s*\(/gm;
+  for (let match; (match = functionRe.exec(scanText)); ) {
+    const params = readBalancedParenContent(scanText, functionRe.lastIndex - 1);
+    if (params && functionSuffixStartsAfterParams(scanText, params.endIndex)) {
+      pushMatch(match, match[1] ?? "default", params.content);
+      functionRe.lastIndex = params.endIndex + 1;
+    }
   }
 
-  const arrowRe = /^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:<[^>]+>\s*)?\(([\s\S]*?)\)\s*=>/gm;
-  for (let match; (match = arrowRe.exec(text)); ) {
+  const arrowRe = /^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:<[^>]+>\s*)?\(/gm;
+  for (let match; (match = arrowRe.exec(scanText)); ) {
     const name = match[1];
-    if (name) pushMatch(match, name, match[2] ?? "");
+    const params = readBalancedParenContent(scanText, arrowRe.lastIndex - 1);
+    if (name && params && arrowSuffixStartsAfterParams(scanText, params.endIndex)) {
+      pushMatch(match, name, params.content);
+      arrowRe.lastIndex = params.endIndex + 1;
+    }
   }
 
   const singleParamArrowRe = /^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?([A-Za-z_$][\w$]*)\s*=>/gm;
-  for (let match; (match = singleParamArrowRe.exec(text)); ) {
+  for (let match; (match = singleParamArrowRe.exec(scanText)); ) {
     const name = match[1];
     if (!name) continue;
     output.push({
@@ -672,9 +726,27 @@ function detectExportSignatureChanges(change: FileChange): SignatureChange[] {
     else addedByHunk.set(entry.hunkIndex, [entry]);
   }
 
+  const bestAddedMatchForRemoved = (
+    removedSig: ExportSignatureWithLocation,
+  ): ExportSignatureWithLocation | undefined => {
+    const sameName = addedByName.get(removedSig.name);
+    if (!sameName?.length) return undefined;
+    let best = sameName[0]!;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const candidate of sameName) {
+      const hunkPenalty = candidate.hunkIndex === removedSig.hunkIndex ? 0 : 100_000;
+      const distance = hunkPenalty + Math.abs(candidate.line - removedSig.line);
+      if (distance < bestDistance) {
+        best = candidate;
+        bestDistance = distance;
+      }
+    }
+    return best;
+  };
+
   const output: SignatureChange[] = [];
   for (const removedSig of removed) {
-    const matched = addedByName.get(removedSig.name)?.[0];
+    const matched = bestAddedMatchForRemoved(removedSig);
     if (matched && matched.paramCount !== removedSig.paramCount) {
       output.push({
         name: removedSig.name,
