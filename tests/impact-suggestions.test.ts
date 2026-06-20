@@ -462,6 +462,76 @@ index 1111111..2222222 100644
     expect(signatureBreaking).toBeDefined();
   });
 
+  it("detects exported arrow arity changes with return type annotations", async () => {
+    const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,2 +1,2 @@
+-export const helperFunction = (input: number): { value: number } => ({ value: input });
++export const helperFunction = (input: number, fallback: number): { value: number } => ({ value: fallback });
+`;
+
+    const report = await buildSampleReport(diffText, {
+      detectBreakingChanges: true,
+      verifyReferences: false,
+    });
+
+    const signatureBreaking = (report.suggestions ?? []).find(
+      (entry) =>
+        entry.kind === "breakingChange" &&
+        entry.symbol === "helperFunction" &&
+        entry.details?.includes("1 parameter(s) to 2") &&
+        entry.confidence === "high",
+    );
+    expect(signatureBreaking).toBeDefined();
+  });
+
+  it("does not treat ASI parenthesized exports as arrow signatures", async () => {
+    const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,3 +1,3 @@
+-export const value = (oldValue)
++export const value = (oldValue, nextValue)
+ export const helperFunction = () => 1;
+`;
+
+    const report = await buildSampleReport(diffText, {
+      detectBreakingChanges: true,
+      verifyReferences: false,
+    });
+
+    const signatureBreaking = (report.suggestions ?? []).find(
+      (entry) =>
+        entry.kind === "breakingChange" && entry.symbol === "value" && entry.details?.includes("signature changed"),
+    );
+    expect(signatureBreaking).toBeUndefined();
+  });
+
+  it("does not treat same-line parenthesized expressions as arrow signatures", async () => {
+    const diffText = `diff --git a/helpers.ts b/helpers.ts
+index 1111111..2222222 100644
+--- a/helpers.ts
++++ b/helpers.ts
+@@ -1,2 +1,2 @@
+-export const value = (oldValue) ? oldValue : () => 1;
++export const value = (oldValue, nextValue) ? oldValue : () => 1;
+`;
+
+    const report = await buildSampleReport(diffText, {
+      detectBreakingChanges: true,
+      verifyReferences: false,
+    });
+
+    const signatureBreaking = (report.suggestions ?? []).find(
+      (entry) =>
+        entry.kind === "breakingChange" && entry.symbol === "value" && entry.details?.includes("signature changed"),
+    );
+    expect(signatureBreaking).toBeUndefined();
+  });
+
   it("detects arity changes for exported generic functions", async () => {
     const diffText = `diff --git a/helpers.ts b/helpers.ts
 index 1111111..2222222 100644

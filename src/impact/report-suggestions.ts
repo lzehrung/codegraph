@@ -634,7 +634,55 @@ function functionSuffixStartsAfterParams(text: string, closeParenIndex: number):
 }
 
 function arrowSuffixStartsAfterParams(text: string, closeParenIndex: number): boolean {
-  return /^\s*=>/.test(text.slice(closeParenIndex + 1));
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  let braceDepth = 0;
+  let angleDepth = 0;
+  let sawReturnTypeAnnotation = false;
+  for (let index = closeParenIndex + 1; index < text.length; index += 1) {
+    const ch = text[index];
+    if (!ch) continue;
+    const atTopLevel = !parenDepth && !bracketDepth && !braceDepth && !angleDepth;
+    if (atTopLevel && ch === "=" && text[index + 1] === ">") return true;
+    if (atTopLevel && (ch === ";" || ch === "\n" || ch === "\r")) return false;
+    if (atTopLevel && ch === ":") {
+      sawReturnTypeAnnotation = true;
+      continue;
+    }
+    if (atTopLevel && !sawReturnTypeAnnotation && !/\s/.test(ch)) return false;
+    if (ch === "(") {
+      parenDepth += 1;
+      continue;
+    }
+    if (ch === ")") {
+      if (parenDepth) parenDepth -= 1;
+      continue;
+    }
+    if (ch === "[") {
+      bracketDepth += 1;
+      continue;
+    }
+    if (ch === "]") {
+      if (bracketDepth) bracketDepth -= 1;
+      continue;
+    }
+    if (ch === "{") {
+      braceDepth += 1;
+      continue;
+    }
+    if (ch === "}") {
+      if (braceDepth) braceDepth -= 1;
+      continue;
+    }
+    if (ch === "<") {
+      angleDepth += 1;
+      continue;
+    }
+    if (ch === ">") {
+      if (angleDepth) angleDepth -= 1;
+    }
+  }
+  return false;
 }
 
 function collectExportSignaturesFromText(
