@@ -86,11 +86,11 @@ nativeDescribe("native parse tree projection", () => {
 
     const file = "scope.ts";
     const lang = languageForFile(file);
-    const jsTree = parseWithLanguage(source, lang);
+    const tree = parseWithLanguage(source, lang);
 
     const nativeScope = buildScopeIndexFromSource(file, source, TS_SUPPORT, lang);
-    const jsScope = buildScopeIndexFromSource(file, source, TS_SUPPORT, lang, [], {
-      tree: jsTree,
+    const nonNativeScope = buildScopeIndexFromSource(file, source, TS_SUPPORT, lang, [], {
+      tree,
     });
 
     const normalize = (scopeIndex: ReturnType<typeof buildScopeIndexFromSource>) =>
@@ -107,6 +107,6 @@ nativeDescribe("native parse tree projection", () => {
         }))
         .sort((left, right) => left.name.localeCompare(right.name));
 
-    expect(normalize(nativeScope)).toEqual(normalize(jsScope));
+    expect(normalize(nativeScope)).toEqual(normalize(nonNativeScope));
   });
 });
