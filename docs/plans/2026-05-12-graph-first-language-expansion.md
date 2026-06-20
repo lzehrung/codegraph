@@ -5,7 +5,7 @@
 
 ## Context
 
-The repo has an established language-support workflow: define support surface, add a language definition, wire JS fallback and native grammars, add fixtures/tests, then update parity/scenario docs and the agent skill surface. Follow [docs/adding-language-support.md](../../adding-language-support.md) exactly.
+The repo has an established language-support workflow: define support surface, add a language definition, wire native grammars and reduced-mode behavior, add fixtures/tests, then update parity/scenario docs and the agent skill surface. Follow [docs/adding-language-support.md](../../adding-language-support.md) exactly.
 
 This plan intentionally targets graph-first support. Each language should provide parsing, chunking, top-level symbol extraction, and static dependency edges. It should not claim full cross-file semantic navigation until shared `goto`, `references`, and native semantic parity tests prove that behavior.
 
@@ -41,8 +41,8 @@ The product boundary is important: graph-first languages may participate in depe
 For each language, v1 support should provide:
 
 - File discovery for listed extensions.
-- Tree-sitter parsing through JS fallback.
-- Native parser support when the Rust grammar exposes a compatible API.
+- Tree-sitter parsing through the native runtime when the Rust grammar exposes a compatible API.
+- Reduced-mode graph and regex recovery that stays safe when native is unavailable.
 - Chunking for top-level declarations and important nested declarations.
 - Definition extraction for top-level names.
 - Static import/include/dependency extraction.
@@ -76,7 +76,6 @@ Register them in:
 - `src/languages/all.ts`
 - `src/languages.ts`
 - `src/util/projectFiles.ts` if discovery is not fully driven by definitions
-- `packages/codegraph-js-fallback/package.json`
 - `packages/codegraph-native/Cargo.toml`
 - `packages/codegraph-native/src/languages.rs`
 
@@ -255,7 +254,6 @@ git commit -m "docs: define graph-first language tier"
 
 Files:
 
-- `packages/codegraph-js-fallback/package.json`
 - `packages/codegraph-native/Cargo.toml`
 - `packages/codegraph-native/src/languages.rs`
 - `tests/native-tree-sitter.test.ts`
@@ -263,8 +261,8 @@ Files:
 
 Changes:
 
-- Add JS grammar dependencies for all seven languages.
 - Add Rust grammar dependencies for all seven languages.
+- Keep reduced-mode behavior safe without adding a JavaScript grammar fallback.
 - Register native IDs using stable lowercase language ids:
   - `scala`
   - `lua`
@@ -287,7 +285,7 @@ npx vitest run tests/native-tree-sitter.test.ts tests/native-parser-ownership.te
 Commit:
 
 ```bash
-git add packages/codegraph-js-fallback/package.json packages/codegraph-native/Cargo.toml packages/codegraph-native/src/languages.rs package-lock.json tests/native-tree-sitter.test.ts tests/native-parser-ownership.test.ts
+git add packages/codegraph-native/Cargo.toml packages/codegraph-native/src/languages.rs package-lock.json tests/native-tree-sitter.test.ts tests/native-parser-ownership.test.ts
 git commit -m "feat: add graph-first language parsers"
 ```
 
@@ -563,8 +561,8 @@ git commit -m "docs: finalize graph-first language support"
 
 ## Acceptance Criteria
 
-- All seven languages parse through JS fallback.
 - All seven languages parse through native runtime, unless a documented grammar compatibility blocker is found and reflected in parity docs.
+- All seven languages retain safe reduced-mode behavior when native is unavailable.
 - File discovery includes the planned extensions.
 - Each language has a focused `tests/languages/*.test.ts` suite and fixtures.
 - Each language extracts top-level declarations and static dependency edges listed in this plan.

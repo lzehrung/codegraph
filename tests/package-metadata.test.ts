@@ -184,24 +184,17 @@ describe("package metadata", () => {
     const licensePath = path.resolve(process.cwd(), "LICENSE");
     const rootPackage = readJson("package.json");
     const nativePackage = readJson("packages/codegraph-native/package.json");
-    const fallbackPackage = readJson("packages/codegraph-js-fallback/package.json");
     const nativeArtifactPackages = readNativeArtifactPackages(process.cwd());
 
     expect(fs.existsSync(licensePath)).toBe(true);
     expect(fs.readFileSync(licensePath, "utf8")).toContain("MIT License");
     expect(rootPackage.license).toBe("MIT");
     expect(nativePackage.license).toBe("MIT");
-    expect(fallbackPackage.license).toBe("MIT");
 
     expect(nativePackage.repository).toEqual({
       type: "git",
       url: "git+https://github.com/lzehrung/codegraph.git",
       directory: "packages/codegraph-native",
-    });
-    expect(fallbackPackage.repository).toEqual({
-      type: "git",
-      url: "git+https://github.com/lzehrung/codegraph.git",
-      directory: "packages/codegraph-js-fallback",
     });
 
     for (const artifactPackage of nativeArtifactPackages) {
@@ -427,10 +420,8 @@ describe("package metadata", () => {
 
   it("keeps removed deprecated or redundant package edges out of manifests", () => {
     const rootPackage = readJson("package.json");
-    const fallbackPackage = readJson("packages/codegraph-js-fallback/package.json");
     const dependencies = readStringRecord(rootPackage.dependencies);
     const devDependencies = readStringRecord(rootPackage.devDependencies);
-    const fallbackDependencies = readStringRecord(fallbackPackage.dependencies);
 
     expect(dependencies["better-sqlite3"]).toBeUndefined();
     expect(devDependencies["@types/better-sqlite3"]).toBeUndefined();
@@ -439,7 +430,6 @@ describe("package metadata", () => {
     expect(devDependencies["@typescript-eslint/parser"]).toBeUndefined();
     expect(devDependencies["eslint-import-resolver-typescript"]).toBeUndefined();
     expect(devDependencies["eslint-plugin-import"]).toBeUndefined();
-    expect(Object.keys(fallbackDependencies)).toHaveLength(0);
   });
 
   it("keeps all publishable workspaces under the packages directory", () => {
@@ -452,7 +442,7 @@ describe("package metadata", () => {
     expect(workspaces).toEqual(["packages/*"]);
   });
 
-  it("keeps JS fallback grammars out of the native package", () => {
+  it("keeps fallback parser exports out of the native package", () => {
     const nativePackage = readJson("packages/codegraph-native/package.json");
     const dependencies = readStringRecord(nativePackage.dependencies);
     const optionalDependencies = readStringRecord(nativePackage.optionalDependencies);
@@ -470,23 +460,13 @@ describe("package metadata", () => {
     expect(files).toEqual(["index.js", "index.d.ts", "platform.js"]);
   });
 
-  it("keeps the compatibility fallback package free of grammar dependencies", () => {
-    const fallbackPackage = readJson("packages/codegraph-js-fallback/package.json");
-    const dependencies = readStringRecord(fallbackPackage.dependencies);
+  it("does not keep the removed JS fallback workspace package", () => {
+    const rootPackage = readJson("package.json");
+    const workspaces = Array.isArray(rootPackage.workspaces) ? rootPackage.workspaces : [];
 
-    expect(dependencies["tree-sitter"]).toBeUndefined();
-    expect(dependencies["tree-sitter-php"]).toBeUndefined();
-    expect(dependencies["tree-sitter-typescript"]).toBeUndefined();
-    expect(dependencies["tree-sitter-vue"]).toBeUndefined();
-    expect(dependencies["@tree-sitter-grammars/tree-sitter-svelte"]).toBeUndefined();
-    expect(dependencies["@tree-sitter-grammars/tree-sitter-zig"]).toBeUndefined();
-  });
-
-  it("does not publish local file dependencies in the JS fallback package", () => {
-    const fallbackPackage = readJson("packages/codegraph-js-fallback/package.json");
-    const dependencies = readStringRecord(fallbackPackage.dependencies);
-
-    expect(dependencies["@lzehrung/codegraph"]).toBeUndefined();
+    expect(workspaces).toEqual(["packages/*"]);
+    expect(fs.existsSync(path.resolve(process.cwd(), "packages/codegraph-js-fallback"))).toBe(false);
+    expect(fs.existsSync(path.resolve(process.cwd(), "packages/codegraph-js-fallback/package.json"))).toBe(false);
   });
 
   it("keeps the landing README linked to the canonical reference docs", () => {
@@ -692,11 +672,11 @@ void onImpactItemStreaming;
     expect(installationDoc).toContain("@lzehrung:registry");
     expect(installationDoc).toContain("reduced graph-only and regex recovery mode");
     expect(installationDoc).not.toContain("--legacy-peer-deps");
-    expect(skillDoc).toContain("@lzehrung/codegraph-js-fallback");
-    expect(skillDoc).toContain("compatibility shim");
+    expect(skillDoc).not.toContain("@lzehrung/codegraph-js-fallback");
+    expect(skillDoc).not.toContain("compatibility shim");
   });
 
-  it("keeps the release workflow publishing the root, native, and fallback packages together", () => {
+  it("keeps the release workflow publishing only the root and native packages", () => {
     const workflow = readText(".github/workflows/release.yml");
     const runCommands = workflowRunCommands(workflow);
     const buildCommand = runCommands.find((command) => command.includes("cli.js build --platform"));
@@ -710,7 +690,7 @@ void onImpactItemStreaming;
     const createDirsIndex = workflow.indexOf("npm run native:create-npm-dirs");
     const cleanupArtifactsIndex = workflow.indexOf("rm -rf native-artifacts");
     const publishIndex = workflow.indexOf(
-      "npm run publish:${{ inputs.release_type }} -- --package root --package native --package js-fallback",
+      "npm run publish:${{ inputs.release_type }} -- --package root --package native",
     );
     const releaseIndex = workflow.indexOf("Create or update GitHub Release");
     const nativePackage = readJson("packages/codegraph-native/package.json");
@@ -745,7 +725,6 @@ void onImpactItemStreaming;
     expect(workflow).toContain('root_tag="v$root_version"');
     expect(workflow).toContain('root_package_tag="@lzehrung/codegraph@$root_version"');
     expect(workflow).toContain('native_tag="@lzehrung/codegraph-native@$native_version"');
-    expect(workflow).toContain('fallback_tag="@lzehrung/codegraph-js-fallback@$fallback_version"');
     expect(workflow).toContain(
       'gh release create "$root_tag" "$tarball" --title "$root_tag" --notes-file "$release_notes"',
     );
@@ -761,9 +740,9 @@ void onImpactItemStreaming;
     expect(workflow).not.toContain("native:stage-local");
     expect(publishIndex).toBeGreaterThan(cleanupArtifactsIndex);
     expect(releaseIndex).toBeGreaterThan(publishIndex);
-    expect(workflow).toContain(
-      "npm run publish:${{ inputs.release_type }} -- --package root --package native --package js-fallback",
-    );
+    expect(workflow).toContain("npm run publish:${{ inputs.release_type }} -- --package root --package native");
+    expect(workflow).not.toContain("js-fallback");
+    expect(workflow).not.toContain("@lzehrung/codegraph-js-fallback");
   });
 
   it("keeps GitHub-owned actions off deprecated Node 20 action majors", () => {

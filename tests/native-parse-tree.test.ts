@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isJsFallbackAvailable, parseWithJsLanguage } from "../src/jsFallback.js";
+import { isNonNativeParserAvailable, parseWithLanguage } from "../src/parserBackend.js";
 
 import { TS_SUPPORT, languageForFile, supportById } from "../src/languages.js";
 import { buildScopeIndexFromSource } from "../src/indexer.js";
@@ -7,7 +7,7 @@ import { getNativeSyntaxTreeExecution, isNativeTreeSitterAvailable } from "../sr
 import { ProjectedSyntaxTree } from "../src/native/projectedTree.js";
 
 const nativeDescribe = isNativeTreeSitterAvailable() ? describe : describe.skip;
-const jsFallbackIt = isJsFallbackAvailable() ? it : it.skip;
+const nonNativeParserIt = isNonNativeParserAvailable() ? it : it.skip;
 
 nativeDescribe("native parse tree projection", () => {
   it("projects child and field relationships for TypeScript", () => {
@@ -72,7 +72,7 @@ nativeDescribe("native parse tree projection", () => {
     expect(nameNode?.startIndex).toBe(unicodeSource.indexOf("afterUnicode"));
   });
 
-  jsFallbackIt("builds the same TypeScript scope bindings as the JS tree walker", () => {
+  nonNativeParserIt("builds the same TypeScript scope bindings as the non-native tree walker", () => {
     const source = [
       "const top = 1;",
       "function outer(arg: string) {",
@@ -86,7 +86,7 @@ nativeDescribe("native parse tree projection", () => {
 
     const file = "scope.ts";
     const lang = languageForFile(file);
-    const jsTree = parseWithJsLanguage(source, lang);
+    const jsTree = parseWithLanguage(source, lang);
 
     const nativeScope = buildScopeIndexFromSource(file, source, TS_SUPPORT, lang);
     const jsScope = buildScopeIndexFromSource(file, source, TS_SUPPORT, lang, [], {

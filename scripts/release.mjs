@@ -17,7 +17,6 @@ import {
   restoreRootPackageManifest,
   restoreNativePackageManifest,
   sanitizePublishedRootPackageManifest,
-  sanitizeJsFallbackPackageManifest,
   selectLatestLegacyTag,
   selectLatestSemverTag,
   tagNamesForPackageVersion,
@@ -29,7 +28,6 @@ const rootDir = process.cwd();
 const rootPackagePath = path.join(rootDir, "package.json");
 const nativeRootPath = path.join(rootDir, "packages", "codegraph-native");
 const nativePackagePath = path.join(rootDir, "packages", "codegraph-native", "package.json");
-const jsFallbackPackagePath = path.join(rootDir, "packages", "codegraph-js-fallback", "package.json");
 const currentRootPackage = readJson(rootPackagePath);
 const currentNativePackage = readJson(nativePackagePath);
 const originalRootPackageJson = `${JSON.stringify(
@@ -163,20 +161,15 @@ function readCurrentPackageVersions() {
 function normalizeManagedManifests(versionPlan) {
   let rootPackage = JSON.parse(originalRootPackageJson);
   const nativePackage = JSON.parse(originalNativePackageJson);
-  const jsFallbackPackage = sanitizeJsFallbackPackageManifest(readJson(jsFallbackPackagePath));
 
   const rootVersion = versionPlan.get("root");
   const nativeVersion = versionPlan.get("native");
-  const jsFallbackVersion = versionPlan.get("js-fallback");
 
   if (rootVersion) {
     rootPackage.version = rootVersion;
   }
   if (nativeVersion) {
     nativePackage.version = nativeVersion;
-  }
-  if (jsFallbackVersion) {
-    jsFallbackPackage.version = jsFallbackVersion;
   }
   if (rootVersion) {
     rootPackage = restoreRootPackageManifest(rootPackage, rootVersion, nativePackage.version);
@@ -187,7 +180,6 @@ function normalizeManagedManifests(versionPlan) {
 
   writeJson(rootPackagePath, rootPackage);
   writeJson(nativePackagePath, nativePackage);
-  writeJson(jsFallbackPackagePath, jsFallbackPackage);
 }
 
 function restoreNativePackage(versionPlan) {
@@ -335,13 +327,7 @@ function planVersions(selectedPackages, currentVersions, { releaseType, shouldRe
 }
 
 function commitAndTag(selectedPackages, versionPlan) {
-  runGit([
-    "add",
-    "package.json",
-    "package-lock.json",
-    "packages/codegraph-native/package.json",
-    "packages/codegraph-js-fallback/package.json",
-  ]);
+  runGit(["add", "package.json", "package-lock.json", "packages/codegraph-native/package.json"]);
   const commitNeeded =
     spawnSync("git", ["diff", "--cached", "--quiet"], {
       cwd: rootDir,
@@ -392,7 +378,7 @@ const shouldResume = releaseType === "resume";
 
 if (!shouldResume && !validReleaseTypes.has(releaseType)) {
   console.error(
-    "Usage: node ./scripts/release.mjs <patch|minor|major|resume> [--publish] [--package <root|native|js-fallback|package-name>]",
+    "Usage: node ./scripts/release.mjs <patch|minor|major|resume> [--publish] [--package <root|native|package-name>]",
   );
   process.exit(1);
 }
@@ -458,10 +444,6 @@ if (publishPlan) {
       }
       if (step === "publishNativeMeta") {
         run("npm", ["run", "publish:native:meta"]);
-        continue;
-      }
-      if (step === "publishJsFallback") {
-        run("npm", ["publish", "--workspace=@lzehrung/codegraph-js-fallback"]);
         continue;
       }
       if (step === "prepareRootManifest") {

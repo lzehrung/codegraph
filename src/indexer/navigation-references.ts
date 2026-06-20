@@ -1,5 +1,5 @@
 import type { LanguageSupport } from "../languages.js";
-import type { JsLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
+import type { ParserLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import { sliceText, toRange } from "../util/ast.js";
 import { ensureParsedContext } from "./parse-context.js";
@@ -18,7 +18,7 @@ export function getCachedScope(
   parsedCtx: {
     source: string;
     sup: LanguageSupport;
-    lang?: JsLanguage;
+    lang?: ParserLanguage;
     tree: SyntaxTreeLike;
   },
 ): ScopeIndex {

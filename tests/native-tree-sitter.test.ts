@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { isJsFallbackAvailable, parseWithJsLanguage } from "../src/jsFallback.js";
+import { isNonNativeParserAvailable, parseWithLanguage } from "../src/parserBackend.js";
 import { collectImportsForFile, collectLocalsAndExportsFromSource, parseFile } from "../src/indexer.js";
 import { languageForFile, supportForFile } from "../src/languages.js";
 import { collectModuleSpecifiersFromSource } from "../src/graphs.js";
@@ -10,7 +10,7 @@ import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
 import { simplifyNativeTestImports, simplifyNativeTestModuleIndex } from "./helpers/native.js";
 
 const nativeDescribe = isNativeTreeSitterAvailable() ? describe : describe.skip;
-const jsFallbackDescribe = isJsFallbackAvailable() ? describe : describe.skip;
+const nonNativeParserDescribe = isNonNativeParserAvailable() ? describe : describe.skip;
 const sampleRoot = path.resolve(process.cwd(), "tests", "samples");
 const slowNativeParityTimeoutMs = 30000;
 const tempDirs: string[] = [];
@@ -32,7 +32,7 @@ function sampleFile(...parts: string[]): string {
 async function parseWithJsTreeSitter(file: string) {
   const parsed = await parseFile(file);
   const lang = languageForFile(file);
-  const tree = parseWithJsLanguage(parsed.source, lang);
+  const tree = parseWithLanguage(parsed.source, lang);
   return {
     ...parsed,
     tree,
@@ -108,7 +108,7 @@ async function expectNativeModuleSpecifierParity(relativeFile: string): Promise<
   expect(nativeSpecifiers).toEqual(jsSpecifiers);
 }
 
-jsFallbackDescribe("native tree-sitter integration", () => {
+nonNativeParserDescribe("non-native tree-sitter integration", () => {
   it("matches JS import extraction with and without native query results", async () => {
     const projectRoot = await makeTempProject();
     const entry = path.join(projectRoot, "entry.js");

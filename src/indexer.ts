@@ -67,10 +67,10 @@ import {
 } from "./indexer/types.js";
 import { buildScopeIndexFromSource as buildScopeIndexFromSourceFromModule, type ScopeIndex } from "./indexer/scope.js";
 import type { LanguageSupport } from "./languages.js";
-import type { JsLanguage, SyntaxTreeLike } from "./languages/types.js";
+import type { ParserLanguage, SyntaxTreeLike } from "./languages/types.js";
 import type { NativeQueryResults, NativeRuntimeMode } from "./native/treeSitterNative.js";
 import type { FileId } from "./types.js";
-import type { JsSyntaxTree } from "./jsFallback.js";
+import type { ParserSyntaxTree } from "./parserBackend.js";
 
 export { SymbolKind } from "./indexer/types.js";
 export type {
@@ -135,7 +135,7 @@ export function collectLocalsAndExportsFromSource(
   file: string,
   source: string,
   support: LanguageSupport,
-  lang?: JsLanguage,
+  lang?: ParserLanguage,
   imports: ImportBinding[] = [],
   opts?: {
     tree?: SyntaxTreeLike;
@@ -152,9 +152,9 @@ export async function collectImportsForFile(
   projectRoot: string,
   opts?: {
     source?: string;
-    tree?: JsSyntaxTree;
+    tree?: ParserSyntaxTree;
     sup?: LanguageSupport;
-    lang?: JsLanguage;
+    lang?: ParserLanguage;
     nativeQueries?: NativeQueryResults | null;
     graphOptions?: GraphBuildOptions;
     native?: import("./native/treeSitterNative.js").NativeRuntimeMode;
@@ -180,7 +180,7 @@ export function buildScopeIndexFromSource(
   file: string,
   source: string,
   support: LanguageSupport,
-  lang?: JsLanguage,
+  lang?: ParserLanguage,
   imports: ImportBinding[] = [],
   opts?: { tree?: SyntaxTreeLike; nativeMode?: NativeRuntimeMode },
 ): ScopeIndex {

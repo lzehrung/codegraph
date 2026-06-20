@@ -3,7 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
 import { buildProjectIndex } from "../src/indexer.js";
-import { createUnavailableJsFallbackSpies, expectJsFallbackUnusedForNativeOwnership } from "./helpers/native.js";
+import { createUnavailableParserBackendSpies, expectParserBackendUnusedForNativeOwnership } from "./helpers/native.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -15,7 +15,7 @@ describe("detailed symbol graph in native-only installs", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.resetModules();
-    vi.doUnmock("../src/jsFallback.js");
+    vi.doUnmock("../src/parserBackend.js");
     vi.doUnmock("../src/native/treeSitterNative.js");
   });
 
@@ -32,15 +32,15 @@ describe("detailed symbol graph in native-only installs", () => {
     index.parsed = new Map();
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const fallbackSpies = createUnavailableJsFallbackSpies("grammar");
+    const fallbackSpies = createUnavailableParserBackendSpies("grammar");
 
     vi.resetModules();
-    vi.doMock("../src/jsFallback.js", async () => {
-      const actual = await vi.importActual<typeof import("../src/jsFallback.js")>("../src/jsFallback.js");
+    vi.doMock("../src/parserBackend.js", async () => {
+      const actual = await vi.importActual<typeof import("../src/parserBackend.js")>("../src/parserBackend.js");
       return {
         ...actual,
-        isJsFallbackAvailable: () => false,
-        parseWithJsLanguage: fallbackSpies.parseSpy,
+        isNonNativeParserAvailable: () => false,
+        parseWithLanguage: fallbackSpies.parseSpy,
       };
     });
     vi.doMock("../src/native/treeSitterNative.js", async () => {
@@ -60,7 +60,7 @@ describe("detailed symbol graph in native-only installs", () => {
     const detailed = await buildSymbolGraphDetailed(index);
     const warnings = warnSpy.mock.calls.map((call) => String(call[0] ?? ""));
 
-    expectJsFallbackUnusedForNativeOwnership({ parseSpy: fallbackSpies.parseSpy });
+    expectParserBackendUnusedForNativeOwnership({ parseSpy: fallbackSpies.parseSpy });
     expect(warnings.some((warning) => warning.includes("Failed to build detailed symbol edges for"))).toBe(false);
     expect(warnings).toContain(
       "Warning: Skipped detailed symbol edges for 1 file(s) because no syntax-tree backend was available.",
@@ -77,14 +77,14 @@ describe("detailed symbol graph in native-only installs", () => {
     );
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const fallbackSpies = createUnavailableJsFallbackSpies("grammar");
+    const fallbackSpies = createUnavailableParserBackendSpies("grammar");
 
     vi.resetModules();
-    vi.doMock("../src/jsFallback.js", async () => {
-      const actual = await vi.importActual<typeof import("../src/jsFallback.js")>("../src/jsFallback.js");
+    vi.doMock("../src/parserBackend.js", async () => {
+      const actual = await vi.importActual<typeof import("../src/parserBackend.js")>("../src/parserBackend.js");
       return {
         ...actual,
-        parseWithJsLanguage: fallbackSpies.parseSpy,
+        parseWithLanguage: fallbackSpies.parseSpy,
       };
     });
     vi.doMock("../src/native/treeSitterNative.js", async () => {
@@ -110,7 +110,7 @@ describe("detailed symbol graph in native-only installs", () => {
     const warnings = warnSpy.mock.calls.map((call) => String(call[0] ?? ""));
     expect(index.byFile.size).toBe(1);
     expect(index.byFile.get(normalizePath(path.join(root, "legacy.js")))).toBeDefined();
-    expectJsFallbackUnusedForNativeOwnership({ parseSpy: fallbackSpies.parseSpy });
+    expectParserBackendUnusedForNativeOwnership({ parseSpy: fallbackSpies.parseSpy });
     expect(report.backend?.parser?.total).toBe(1);
     expect(report.backend?.parser?.byLanguage.js).toBe(1);
     expect(report.backend?.parser?.files).toContainEqual(
@@ -123,7 +123,7 @@ describe("detailed symbol graph in native-only installs", () => {
     expect(warnings.some((warning) => warning.includes("Warning: Failed to process file"))).toBe(false);
   });
 
-  it("recovers TypeScript imports without loading the JS fallback package", async () => {
+  it("recovers TypeScript imports without loading a non-native parser", async () => {
     const root = await mkTmpDir("cg-ts-imports-native-only-");
     const entryFile = path.join(root, "entry.ts");
     const depFile = path.join(root, "dep.ts");
@@ -134,16 +134,16 @@ describe("detailed symbol graph in native-only installs", () => {
     );
     await fsp.writeFile(depFile, ["export default 1;", "export const helper = 2;", ""].join("\n"), "utf8");
 
-    const fallbackSpies = createUnavailableJsFallbackSpies("TypeScript grammar");
+    const fallbackSpies = createUnavailableParserBackendSpies("TypeScript grammar");
 
     vi.resetModules();
-    vi.doMock("../src/jsFallback.js", async () => {
-      const actual = await vi.importActual<typeof import("../src/jsFallback.js")>("../src/jsFallback.js");
+    vi.doMock("../src/parserBackend.js", async () => {
+      const actual = await vi.importActual<typeof import("../src/parserBackend.js")>("../src/parserBackend.js");
       return {
         ...actual,
-        isJsFallbackAvailable: () => false,
-        parseWithJsLanguage: fallbackSpies.parseSpy,
-        executeJsQueryAsNativeMatches: fallbackSpies.querySpy,
+        isNonNativeParserAvailable: () => false,
+        parseWithLanguage: fallbackSpies.parseSpy,
+        executeQueryAsNativeMatches: fallbackSpies.querySpy,
       };
     });
 
@@ -183,24 +183,24 @@ describe("detailed symbol graph in native-only installs", () => {
         typeOnly: false,
       },
     ]);
-    expectJsFallbackUnusedForNativeOwnership(fallbackSpies);
+    expectParserBackendUnusedForNativeOwnership(fallbackSpies);
   });
 
-  it("recovers Kotlin alias imports without loading the JS fallback package", async () => {
+  it("recovers Kotlin alias imports without loading a non-native parser", async () => {
     const root = path.resolve(process.cwd(), "tests", "samples", "kotlin");
     const entryFile = path.join(root, "Aliases.kt");
     const depFile = path.join(root, "utils", "helperFunction.kt");
 
-    const fallbackSpies = createUnavailableJsFallbackSpies("Kotlin grammar");
+    const fallbackSpies = createUnavailableParserBackendSpies("Kotlin grammar");
 
     vi.resetModules();
-    vi.doMock("../src/jsFallback.js", async () => {
-      const actual = await vi.importActual<typeof import("../src/jsFallback.js")>("../src/jsFallback.js");
+    vi.doMock("../src/parserBackend.js", async () => {
+      const actual = await vi.importActual<typeof import("../src/parserBackend.js")>("../src/parserBackend.js");
       return {
         ...actual,
-        isJsFallbackAvailable: () => false,
-        parseWithJsLanguage: fallbackSpies.parseSpy,
-        executeJsQueryAsNativeMatches: fallbackSpies.querySpy,
+        isNonNativeParserAvailable: () => false,
+        parseWithLanguage: fallbackSpies.parseSpy,
+        executeQueryAsNativeMatches: fallbackSpies.querySpy,
       };
     });
 
@@ -223,10 +223,10 @@ describe("detailed symbol graph in native-only installs", () => {
         typeOnly: false,
       },
     ]);
-    expectJsFallbackUnusedForNativeOwnership(fallbackSpies);
+    expectParserBackendUnusedForNativeOwnership(fallbackSpies);
   });
 
-  it("indexes TypeScript locals and exports without loading the JS fallback package", async () => {
+  it("indexes TypeScript locals and exports without loading a non-native parser", async () => {
     const root = await mkTmpDir("cg-ts-index-native-only-");
     const entryFile = path.join(root, "entry.ts");
     await fsp.writeFile(
@@ -243,16 +243,16 @@ describe("detailed symbol graph in native-only installs", () => {
       "utf8",
     );
 
-    const fallbackSpies = createUnavailableJsFallbackSpies("TypeScript grammar");
+    const fallbackSpies = createUnavailableParserBackendSpies("TypeScript grammar");
 
     vi.resetModules();
-    vi.doMock("../src/jsFallback.js", async () => {
-      const actual = await vi.importActual<typeof import("../src/jsFallback.js")>("../src/jsFallback.js");
+    vi.doMock("../src/parserBackend.js", async () => {
+      const actual = await vi.importActual<typeof import("../src/parserBackend.js")>("../src/parserBackend.js");
       return {
         ...actual,
-        isJsFallbackAvailable: () => false,
-        parseWithJsLanguage: fallbackSpies.parseSpy,
-        executeJsQueryAsNativeMatches: fallbackSpies.querySpy,
+        isNonNativeParserAvailable: () => false,
+        parseWithLanguage: fallbackSpies.parseSpy,
+        executeQueryAsNativeMatches: fallbackSpies.querySpy,
       };
     });
 
@@ -269,10 +269,10 @@ describe("detailed symbol graph in native-only installs", () => {
     expect(moduleIndex?.exports.filter((entry) => entry.type === "local").map((entry) => entry.exportedAs)).toEqual(
       expect.arrayContaining(["Service", "helper"]),
     );
-    expectJsFallbackUnusedForNativeOwnership(fallbackSpies);
+    expectParserBackendUnusedForNativeOwnership(fallbackSpies);
   });
 
-  it("runs TypeScript AST grep without loading the JS fallback package", async () => {
+  it("runs TypeScript AST grep without loading a non-native parser", async () => {
     const root = await mkTmpDir("cg-ts-grep-native-only-");
     const entryFile = path.join(root, "entry.ts");
     await fsp.writeFile(
@@ -282,16 +282,16 @@ describe("detailed symbol graph in native-only installs", () => {
     );
     await fsp.writeFile(path.join(root, "dep.ts"), "export function helper() { return 1; }\n", "utf8");
 
-    const fallbackSpies = createUnavailableJsFallbackSpies("TypeScript grammar");
+    const fallbackSpies = createUnavailableParserBackendSpies("TypeScript grammar");
 
     vi.resetModules();
-    vi.doMock("../src/jsFallback.js", async () => {
-      const actual = await vi.importActual<typeof import("../src/jsFallback.js")>("../src/jsFallback.js");
+    vi.doMock("../src/parserBackend.js", async () => {
+      const actual = await vi.importActual<typeof import("../src/parserBackend.js")>("../src/parserBackend.js");
       return {
         ...actual,
-        isJsFallbackAvailable: () => false,
-        parseWithJsLanguage: fallbackSpies.parseSpy,
-        executeJsQueryAsNativeMatches: fallbackSpies.querySpy,
+        isNonNativeParserAvailable: () => false,
+        parseWithLanguage: fallbackSpies.parseSpy,
+        executeQueryAsNativeMatches: fallbackSpies.querySpy,
       };
     });
 
@@ -305,6 +305,6 @@ describe("detailed symbol graph in native-only installs", () => {
         snippet: "'./dep'",
       }),
     ]);
-    expectJsFallbackUnusedForNativeOwnership(fallbackSpies);
+    expectParserBackendUnusedForNativeOwnership(fallbackSpies);
   });
 });

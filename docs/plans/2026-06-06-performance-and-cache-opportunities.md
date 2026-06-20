@@ -229,8 +229,8 @@ Implementation checklist:
 - [x] Define a native API that accepts source text and returns compact duplicate-token preprocessing results.
 - [x] Start with native tokenization and normalization while keeping shingle/winnow fingerprints and candidate-pair generation in TypeScript.
 - [x] Keep final reporting, grouping, and CLI JSON schema in TypeScript initially.
-- [x] Preserve JS fallback behavior when native is unavailable or disabled.
-- [x] Add parity fixtures comparing native and JS fallback duplicate results for exact, renamed, near, and low-confidence cases.
+- [x] Preserve reduced-mode behavior when native is unavailable or disabled.
+- [x] Add parity fixtures comparing native and reduced-mode duplicate results for exact, renamed, near, and low-confidence cases.
 - [ ] Add a benchmark fixture with many repeated units and a performance threshold or regression report.
 
 Likely files:
@@ -429,7 +429,7 @@ Checklist:
 - [x] Anonymous JS/TS default exports should resolve through default imports.
 - [x] JS/TS shorthand binding nodes should navigate to the actual binding/import.
 - [x] Breaking-change suggestions should handle multiline exported signatures.
-- [x] Publishing/install docs should clarify that the JS fallback package is only a compatibility shim and does not provide parser recovery.
+- [x] Publishing/install docs should clarify that reduced mode has graph-only and regex recovery, not parser recovery.
 - [x] Consider stable subpath exports before narrowing the broad root API.
 
 ## Suggested Execution Order

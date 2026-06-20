@@ -3,7 +3,7 @@ import { getNativeSyntaxTreeExecution, type NativeRuntimeMode } from "../native/
 import { ProjectedSyntaxTree } from "../native/projectedTree.js";
 import { declarationKindToBindingKind } from "./declarations.js";
 import type { LanguageSupport } from "../languages.js";
-import type { JsLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
+import type { ParserLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import type { ImportBinding } from "./types.js";
 import type { Binding, BindingKind, Scope, ScopeIndex } from "./scope-types.js";
@@ -14,7 +14,7 @@ export function buildScopeIndexFromSource(
   file: string,
   source: string,
   support: LanguageSupport,
-  lang?: JsLanguage,
+  lang?: ParserLanguage,
   imports: ImportBinding[] = [],
   opts?: { tree?: SyntaxTreeLike; nativeMode?: NativeRuntimeMode },
 ): ScopeIndex {

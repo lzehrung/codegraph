@@ -33,14 +33,6 @@ export const releasePackages = [
     ownedFiles: new Set([]),
     ownedPrefixes: ["packages/codegraph-native/"],
   },
-  {
-    id: "js-fallback",
-    name: "@lzehrung/codegraph-js-fallback",
-    manifestPath: "packages/codegraph-js-fallback/package.json",
-    publishWorkspace: "@lzehrung/codegraph-js-fallback",
-    ownedFiles: new Set([]),
-    ownedPrefixes: ["packages/codegraph-js-fallback/"],
-  },
 ];
 
 export const managedReleasePaths = new Set([
@@ -205,27 +197,10 @@ export function computePublishExecutionSteps(publishPlan) {
   if (publishPlan.publishByPackage["@lzehrung/codegraph-native"]) {
     steps.push("publishNativeTargets", "prepareNativeMeta", "publishNativeMeta");
   }
-  if (publishPlan.publishByPackage["@lzehrung/codegraph-js-fallback"]) {
-    steps.push("publishJsFallback");
-  }
   if (publishPlan.publishByPackage["@lzehrung/codegraph"]) {
     steps.push("prepareRootManifest", "publishRoot");
   }
   return steps;
-}
-
-export function sanitizeJsFallbackPackageManifest(pkg) {
-  const normalized = { ...pkg };
-  if (
-    normalized.dependencies &&
-    typeof normalized.dependencies === "object" &&
-    !Array.isArray(normalized.dependencies)
-  ) {
-    const dependencies = { ...normalized.dependencies };
-    delete dependencies["@lzehrung/codegraph"];
-    normalized.dependencies = dependencies;
-  }
-  return normalized;
 }
 
 export function sanitizePublishedRootPackageManifest(pkg) {

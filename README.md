@@ -297,7 +297,7 @@ npm i -g @lzehrung/codegraph
 npm i -g https://github.com/lzehrung/codegraph/releases/download/vVERSION/lzehrung-codegraph-VERSION.tgz
 ```
 
-Replace `VERSION` with the release you want. The root tarball does not bundle the native addon; source-language parsing still needs the scoped native package path via the `@lzehrung` GitHub Packages registry. Without it, Codegraph runs in reduced graph-only mode. The `@lzehrung/codegraph-js-fallback` package is a compatibility shim, not an alternate parser bundle.
+Replace `VERSION` with the release you want. The root tarball does not bundle the native addon; source-language parsing still needs the scoped native package path via the `@lzehrung` GitHub Packages registry. Without it, Codegraph runs in reduced graph-only and regex recovery mode.
 
 ## FAQ
 
@@ -347,8 +347,8 @@ npm run publish:major
 npm run publish:resume
 ```
 
-Use `--package root`, `--package native`, or `--package js-fallback`, or a full package name when you need to force a specific package.
+Use `--package root`, `--package native`, or a full package name when you need to force a specific package.
 
-For GitHub-driven releases, use the manual `release` Actions workflow with `patch`, `minor`, or `major`. It publishes the root, native, and compatibility js-fallback shim packages together, pushes their tags, then creates or updates the overall `vX.Y.Z` GitHub Release with the packed root tarball asset. The workflow refuses reruns on an already-tagged release commit because fresh Actions runners cannot reconstruct the local `publish:resume` state.
+For GitHub-driven releases, use the manual `release` Actions workflow with `patch`, `minor`, or `major`. It publishes the root and native packages together, pushes their tags, then creates or updates the overall `vX.Y.Z` GitHub Release with the packed root tarball asset. The workflow refuses reruns on an already-tagged release commit because fresh Actions runners cannot reconstruct the local `publish:resume` state.
 
 For the detailed release flow, native artifact staging, and tag behavior, see [PUBLISHING.md](./PUBLISHING.md).

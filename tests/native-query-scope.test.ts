@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { isJsFallbackAvailable } from "../src/jsFallback.js";
+import { isNonNativeParserAvailable } from "../src/parserBackend.js";
 import { supportById } from "../src/languages.js";
 import { collectModuleSpecifiersFromSource, type FallbackImportExtractionEvent } from "../src/graphs.js";
 import { collectImportsForFile } from "../src/indexer.js";
@@ -11,10 +11,10 @@ import {
   type NativeQueryResults,
 } from "../src/native/treeSitterNative.js";
 import * as nativeRuntime from "../src/native/treeSitterNative.js";
-import * as jsFallback from "../src/jsFallback.js";
+import * as parserBackend from "../src/parserBackend.js";
 
 const nativeDescribe = isNativeTreeSitterAvailable() ? describe : describe.skip;
-const jsFallbackDescribe = isJsFallbackAvailable() ? describe : describe.skip;
+const nonNativeParserDescribe = isNonNativeParserAvailable() ? describe : describe.skip;
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -323,10 +323,10 @@ describe("authoritative empty native results", () => {
     ]);
   });
 
-  it("uses regex recovery for TypeScript without JS fallback", () => {
+  it("uses regex recovery for TypeScript without non-native parser queries", () => {
     const support = supportById("ts")!;
-    const executeSpy = vi.spyOn(jsFallback, "executeJsQueryAsNativeMatches").mockImplementation(() => {
-      throw new Error("JS fallback should not be used for TypeScript import recovery");
+    const executeSpy = vi.spyOn(parserBackend, "executeQueryAsNativeMatches").mockImplementation(() => {
+      throw new Error("Non-native parser should not be used for TypeScript import recovery");
     });
     const fallbackEvents: FallbackImportExtractionEvent[] = [];
 
@@ -479,7 +479,7 @@ nativeDescribe("compact imports execution", () => {
   });
 });
 
-jsFallbackDescribe("native import fallback contract by language", () => {
+nonNativeParserDescribe("native import fallback contract by language", () => {
   it("treats empty native imports as authoritative for TypeScript and Java", () => {
     const cases = [
       {

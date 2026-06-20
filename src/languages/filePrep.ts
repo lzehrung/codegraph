@@ -1,5 +1,5 @@
 import fsp from "node:fs/promises";
-import type { JsLanguage } from "../languages/types.js";
+import type { ParserLanguage } from "../languages/types.js";
 
 import {
   JS_SUPPORT,
@@ -14,7 +14,7 @@ import { prepareSFCScriptSource, detectSFCFramework, type SFCFramework } from ".
 interface ParserInput {
   source: string;
   sup: LanguageSupport;
-  lang: JsLanguage;
+  lang: ParserLanguage;
 }
 
 interface SourceInput {

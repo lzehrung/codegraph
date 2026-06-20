@@ -23,7 +23,7 @@ import { buildBloomFilterFromSource } from "../util/bloomFilter.js";
 import { initNativeBackendReport } from "../native/nativeBackendReport.js";
 import { closeDuplicateUnitCacheDatabase } from "../duplicates.js";
 import { isNativeRequiredUnavailableError } from "../native/treeSitterNative.js";
-import type { JsLanguage, SyntaxTreeLike } from "../languages/types.js";
+import type { ParserLanguage, SyntaxTreeLike } from "../languages/types.js";
 import type { Edge, FileId, Graph } from "../types.js";
 import {
   buildBloomFilterForFile,
@@ -67,7 +67,7 @@ import {
   type SymbolDef,
   SymbolKind,
 } from "./types.js";
-import { isJsFallbackUnavailableError, isJsSyntaxTree } from "../jsFallback.js";
+import { isNonNativeParserUnavailableError, isParserSyntaxTree } from "../parserBackend.js";
 import { isUnsupportedParserInputError } from "../languages/filePrep.js";
 import { buildSqlFactCache, buildSqlModuleIndex, sqlCorpusSignature, type SqlFactCache } from "../sql/sourceGraph.js";
 import { finalizeProjectIndex } from "./finalize.js";
@@ -89,7 +89,7 @@ import { parsedCacheMaxEntries, setParsedCacheEntry } from "./parsed-cache.js";
 type IndexedFileGraphContext = {
   source: string;
   sup: LanguageSupport;
-  lang?: JsLanguage;
+  lang?: ParserLanguage;
   nativeQueries?: import("../native/treeSitterNative.js").NativeQueryResults | null;
   tree?: SyntaxTreeLike;
 };
@@ -231,7 +231,7 @@ async function buildIndexedModuleForFile(args: {
       ? []
       : await collectImportsForFile(args.file, args.projectRoot, {
           source,
-          ...(tree && isJsSyntaxTree(tree) ? { tree } : {}),
+          ...(tree && isParserSyntaxTree(tree) ? { tree } : {}),
           sup,
           ...(resolvedLang ? { lang: resolvedLang } : {}),
           ...(nativeQueries !== undefined ? { nativeQueries } : {}),
@@ -663,7 +663,7 @@ async function buildIndexFromFileListShared(
         return [file, mod ?? createEmptyModuleIndex(file), edges] as const;
       } catch (error) {
         if (isNativeRequiredUnavailableError(error)) throw error;
-        if (isUnsupportedParserInputError(error) || isJsFallbackUnavailableError(error)) {
+        if (isUnsupportedParserInputError(error) || isNonNativeParserUnavailableError(error)) {
           return [file, createEmptyModuleIndex(file), []] as const;
         }
         recordFileFailure(report, file, error);
@@ -1068,7 +1068,7 @@ export async function buildProjectIndexIncremental(
             return [file, built.module] as const;
           } catch (error) {
             if (isNativeRequiredUnavailableError(error)) throw error;
-            if (isUnsupportedParserInputError(error) || isJsFallbackUnavailableError(error)) {
+            if (isUnsupportedParserInputError(error) || isNonNativeParserUnavailableError(error)) {
               return [file, createEmptyModuleIndex(file)] as const;
             }
             recordFileFailure(report, file, error);

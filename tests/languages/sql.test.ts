@@ -106,24 +106,24 @@ it("includes discovered SQL files in the normal repository index", async () => {
 });
 
 describe("native-only SQL support", () => {
-  it("indexes SQL without the JS fallback parser when native parsing is unavailable", async () => {
+  it("indexes SQL without a non-native parser when native parsing is unavailable", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-native-only-"));
     const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
     await fsp.writeFile(schemaFile, "CREATE TABLE users (id integer);\n", "utf8");
 
     const parseSpy = vi.fn(() => {
       throw new Error(
-        "JS Tree-sitter fallback is unavailable for grammar loading. Install @lzehrung/codegraph-js-fallback to enable it",
+        "Non-native Tree-sitter parser is unavailable for grammar loading; native parser is the only grammar backend",
       );
     });
 
     vi.resetModules();
-    vi.doMock("../../src/jsFallback.js", async () => {
-      const actual = await vi.importActual<typeof import("../../src/jsFallback.js")>("../../src/jsFallback.js");
+    vi.doMock("../../src/parserBackend.js", async () => {
+      const actual = await vi.importActual<typeof import("../../src/parserBackend.js")>("../../src/parserBackend.js");
       return {
         ...actual,
-        isJsFallbackAvailable: () => false,
-        parseWithJsLanguage: parseSpy,
+        isNonNativeParserAvailable: () => false,
+        parseWithLanguage: parseSpy,
       };
     });
     vi.doMock("../../src/native/treeSitterNative.js", async () => {
@@ -155,7 +155,7 @@ describe("native-only SQL support", () => {
       );
       expect(parseSpy).not.toHaveBeenCalled();
     } finally {
-      vi.doUnmock("../../src/jsFallback.js");
+      vi.doUnmock("../../src/parserBackend.js");
       vi.doUnmock("../../src/native/treeSitterNative.js");
       vi.resetModules();
       await fsp.rm(root, { recursive: true, force: true });

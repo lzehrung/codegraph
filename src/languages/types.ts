@@ -1,8 +1,8 @@
-import type { JsLanguage, JsPoint, JsSyntaxNode } from "../jsFallback.js";
-export type { JsLanguage };
+import type { ParserLanguage, ParserSyntaxNode, SyntaxPoint } from "../parserBackend.js";
+export type { ParserLanguage };
 
-export type SyntaxPositionLike = JsPoint;
-export type SyntaxNodeLike = JsSyntaxNode;
+export type SyntaxPositionLike = SyntaxPoint;
+export type SyntaxNodeLike = ParserSyntaxNode;
 export interface SyntaxTreeLike {
   rootNode: SyntaxNodeLike & {
     descendantForIndex(startIndex: number, endIndex: number): SyntaxNodeLike;
@@ -23,7 +23,7 @@ export interface NativeCompatibility {
 export interface LanguageDefinition {
   id: string;
   extensions: string[];
-  grammar: (filename?: string) => JsLanguage;
+  grammar: (filename?: string) => ParserLanguage;
 
   /**
    * Configuration for semantic chunking.

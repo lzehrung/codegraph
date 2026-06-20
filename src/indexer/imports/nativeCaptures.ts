@@ -1,4 +1,4 @@
-import type { JsSyntaxTree } from "../../jsFallback.js";
+import type { ParserSyntaxTree } from "../../parserBackend.js";
 import { capturesByName, capturesNamed, rangeFromNativeCapture } from "../../native/queryResults.js";
 import type { NativeCapture, NativeMatch } from "../../native/treeSitterNative.js";
 import { sliceText, unquote } from "../../util/ast.js";
@@ -64,7 +64,7 @@ async function pushTextObjectPatternBindings(
 
 async function pushTreeObjectPatternBindings(
   context: ImportCaptureExtractionContext,
-  tree: JsSyntaxTree,
+  tree: ParserSyntaxTree,
   patterns: NativeCapture[],
   from: string | undefined,
   typeOnly: boolean,
@@ -225,7 +225,7 @@ export async function collectNativeCaptureImportBindings(
 export async function collectJsQueryCaptureImportBindings(
   context: ImportCaptureExtractionContext,
   matches: NativeMatch[],
-  tree: JsSyntaxTree,
+  tree: ParserSyntaxTree,
 ): Promise<void> {
   for (const match of matches) {
     const caps = capturesByName(match);

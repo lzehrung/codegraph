@@ -11,21 +11,23 @@ export type NativeOwnershipFallbackSpies = {
   querySpy?: ReturnType<typeof vi.fn>;
 };
 
-export function createUnavailableJsFallbackSpies(grammarDescription: string): Required<NativeOwnershipFallbackSpies> {
+export function createUnavailableParserBackendSpies(
+  grammarDescription: string,
+): Required<NativeOwnershipFallbackSpies> {
   const parseSpy = vi.fn(() => {
     throw new Error(
-      `JS Tree-sitter fallback is unavailable for ${grammarDescription} loading. Install @lzehrung/codegraph-js-fallback to enable it`,
+      `Non-native Tree-sitter parser is unavailable for ${grammarDescription} loading; native parser is the only grammar backend`,
     );
   });
   const querySpy = vi.fn(() => {
     throw new Error(
-      "JS Tree-sitter fallback is unavailable for JS query execution. Install @lzehrung/codegraph-js-fallback to enable it",
+      "Non-native Tree-sitter parser is unavailable for query execution; native parser is the only grammar backend",
     );
   });
   return { parseSpy, querySpy };
 }
 
-export function expectJsFallbackUnusedForNativeOwnership(spies: NativeOwnershipFallbackSpies): void {
+export function expectParserBackendUnusedForNativeOwnership(spies: NativeOwnershipFallbackSpies): void {
   expect(spies.parseSpy).not.toHaveBeenCalled();
   if (spies.querySpy) {
     expect(spies.querySpy).not.toHaveBeenCalled();

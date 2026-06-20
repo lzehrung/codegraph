@@ -300,7 +300,7 @@ export type ApiSurface = Array<{
 export type GoToRequest = { file: FileId; line: number; column: number };
 
 export type ResolutionProvenance = {
-  backend?: "native" | "js-fallback" | "graph-only" | "heuristic";
+  backend?: "native" | "graph-only" | "heuristic";
   resolution?: "exact" | "import" | "import-star" | "namespace" | "reexport" | "php-qualified" | "member-access";
   confidence?: "high" | "medium" | "low";
 };
