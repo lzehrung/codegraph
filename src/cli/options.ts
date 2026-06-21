@@ -528,6 +528,8 @@ export function parseCacheModeOption(rawValue: string | undefined): CacheModeOpt
   throw new Error(`Invalid --cache value "${rawValue}". Expected one of: off, memory, disk.`);
 }
 
+const STRICT_INTEGER_PATTERN = /^-?\d+$/;
+
 function parseIntegerOptionValue(
   rawValue: string,
   optionName: string,
@@ -535,13 +537,39 @@ function parseIntegerOptionValue(
   minValue: number,
   maxValue?: number,
 ): number {
-  const parsedValue = Number(rawValue);
+  const trimmed = rawValue.trim();
+  if (!STRICT_INTEGER_PATTERN.test(trimmed)) {
+    throw new Error(`Invalid ${optionName} value "${rawValue}". Expected ${expectedDescription}.`);
+  }
+  const parsedValue = Number(trimmed);
   const isAboveMinimum = parsedValue >= minValue;
   const isBelowMaximum = maxValue === undefined || parsedValue <= maxValue;
   if (!Number.isInteger(parsedValue) || !isAboveMinimum || !isBelowMaximum) {
     throw new Error(`Invalid ${optionName} value "${rawValue}". Expected ${expectedDescription}.`);
   }
   return parsedValue;
+}
+
+export type SymbolGraphScopeOption = "all" | "imported";
+export type RefContextOption = "line" | "block";
+
+export function parseSymbolGraphScopeOption(
+  rawValue: string | undefined,
+  optionName: string,
+): SymbolGraphScopeOption | undefined {
+  if (rawValue === undefined) return undefined;
+  if (rawValue === "all" || rawValue === "imported") return rawValue;
+  throw new Error(`Invalid ${optionName} value "${rawValue}". Expected one of: all, imported.`);
+}
+
+export function parseRefContextOption(rawValue: string | undefined, optionName: string): RefContextOption | undefined {
+  if (rawValue === undefined) return undefined;
+  if (rawValue === "line" || rawValue === "block") return rawValue;
+  throw new Error(`Invalid ${optionName} value "${rawValue}". Expected one of: line, block.`);
+}
+
+export function parseImpactScopeOption(rawValue: string | undefined, optionName: string): SymbolGraphScopeOption | undefined {
+  return parseSymbolGraphScopeOption(rawValue, optionName);
 }
 
 function parseDefaultedIntegerOption(

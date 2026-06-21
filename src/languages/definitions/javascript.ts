@@ -1,6 +1,11 @@
 import type { LanguageDefinition } from "../types.js";
 import { loadTreeSitterLanguage } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
+import {
+  ECMASCRIPT_CONTROL_SPLIT_POINTS,
+  ECMASCRIPT_CORE_FUNCTION_BLOCKS,
+  ECMASCRIPT_MODULE_VAR_BLOCKS,
+} from "./jsFamily.js";
 
 const JS_OBJECT_METHOD_EXPORT_PATTERN = `
       ;; CJS: module.exports = { helper () {} }
@@ -23,91 +28,8 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
   extensions: [".js", ".jsx", ".mjs", ".cjs"],
   grammar: () => loadTreeSitterLanguage("tree-sitter-javascript"),
   structure: {
-    blocks: [
-      {
-        type: "class_declaration",
-        nameQuery: "name: (identifier) @chunk.name",
-        captureId: "class",
-      },
-      {
-        type: "function_declaration",
-        nameQuery: "name: (identifier) @chunk.name",
-        captureId: "function",
-      },
-      {
-        type: "generator_function_declaration",
-        nameQuery: "name: (identifier) @chunk.name",
-        captureId: "function",
-      },
-      {
-        type: "method_definition",
-        nameQuery: "name: (_) @chunk.name body: (statement_block) @chunk.block.method",
-        captureId: "method",
-      },
-
-      // Variable assignments (functions/arrows)
-      {
-        type: "lexical_declaration",
-        nameQuery: `(variable_declarator name: (identifier) @chunk.name value: [ (function_expression body: (statement_block) @chunk.block.function) (arrow_function body: (statement_block) @chunk.block.function) ])`,
-        captureId: "function",
-      },
-      {
-        type: "variable_declaration",
-        nameQuery: `(variable_declarator name: (identifier) @chunk.name value: [ (function_expression body: (statement_block) @chunk.block.function) (arrow_function body: (statement_block) @chunk.block.function) ])`,
-        captureId: "function",
-      },
-      {
-        type: "assignment_expression",
-        nameQuery: `left: (_) @chunk.name right: [ (function_expression body: (statement_block) @chunk.block.function) (arrow_function body: (statement_block) @chunk.block.function) ]`,
-        captureId: "function",
-      },
-
-      // Remaining functions
-      {
-        type: "arrow_function",
-        nameQuery: "body: (statement_block) @chunk.block.function",
-        captureId: "function",
-      },
-      {
-        type: "function_expression",
-        nameQuery: "body: (statement_block) @chunk.block.function",
-        captureId: "function",
-      },
-
-      // Data & JSX
-      // { type: "object", captureId: "data" },
-      // { type: "jsx_element", captureId: "jsx" },
-      // { type: "jsx_self_closing_element", captureId: "jsx" },
-
-      // Top level vars
-      { type: "import_statement", captureId: "imports" },
-      {
-        type: "lexical_declaration",
-        nameQuery: `(variable_declarator name: (identifier) @chunk.name)`,
-        captureId: "module_var",
-        parentType: "program",
-      },
-      {
-        type: "variable_declaration",
-        nameQuery: `(variable_declarator name: (identifier) @chunk.name)`,
-        captureId: "module_var",
-        parentType: "program",
-      },
-    ],
-    splitPoints: [
-      "if_statement",
-      "else_clause",
-      "switch_statement",
-      // "switch_case",
-      // "switch_default",
-      "for_statement",
-      "for_in_statement",
-      "while_statement",
-      "do_statement",
-      "try_statement",
-      "catch_clause",
-      "finally_clause",
-    ],
+    blocks: [...ECMASCRIPT_CORE_FUNCTION_BLOCKS, ...ECMASCRIPT_MODULE_VAR_BLOCKS],
+    splitPoints: [...ECMASCRIPT_CONTROL_SPLIT_POINTS],
     comments: ["comment"],
   },
   graph: {

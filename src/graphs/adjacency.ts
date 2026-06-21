@@ -25,8 +25,16 @@ export function buildGraphAdjacency(graph: Graph): GraphAdjacencyIndex {
   return { forward, reverse };
 }
 
+const adjacencyByGraph = new WeakMap<Graph, GraphAdjacencyIndex>();
+
 export function graphAdjacencyFor(graph: Graph): GraphAdjacencyIndex {
-  return buildGraphAdjacency(graph);
+  const cached = adjacencyByGraph.get(graph);
+  if (cached) {
+    return cached;
+  }
+  const built = buildGraphAdjacency(graph);
+  adjacencyByGraph.set(graph, built);
+  return built;
 }
 
 export function getForwardNeighbors(adjacency: GraphAdjacencyIndex, file: FileId): readonly FileId[] {

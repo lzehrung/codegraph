@@ -24,6 +24,7 @@ import {
   parseCacheModeOption,
   parseNonNegativeIntegerOption,
   parseOptionalNonNegativeIntegerOption,
+  parseSymbolGraphScopeOption,
 } from "./options.js";
 
 type CompactEdgeTo = { type: "file"; path: number } | { type: "external"; name: string };
@@ -340,7 +341,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
     context.maybeWriteNativeBackendStatus(indexReport, context.showProgress);
 
     const detailedSymbols = context.hasFlag("--symbols-detailed");
-    const scope = context.getOpt("--symbols-detailed-scope") as "all" | "imported" | undefined;
+    const scope = parseSymbolGraphScopeOption(context.getOpt("--symbols-detailed-scope"), "--symbols-detailed-scope");
     const maxEdgesRaw = context.getOpt("--symbols-detailed-max-edges");
     const maxEdges = parseOptionalNonNegativeIntegerOption(maxEdgesRaw, "--symbols-detailed-max-edges");
     const membersOnly = context.hasFlag("--symbols-detailed-members-only");
@@ -392,7 +393,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
     context.maybeWriteNativeBackendStatus(indexReport, context.showProgress);
     let sgraph: SymbolGraph;
     if (detailedSymbols) {
-      const scope = context.getOpt("--symbols-detailed-scope") as "all" | "imported" | undefined;
+      const scope = parseSymbolGraphScopeOption(context.getOpt("--symbols-detailed-scope"), "--symbols-detailed-scope");
       const maxEdgesRaw = context.getOpt("--symbols-detailed-max-edges");
       const maxEdges = parseOptionalNonNegativeIntegerOption(maxEdgesRaw, "--symbols-detailed-max-edges");
       const membersOnly = context.hasFlag("--symbols-detailed-members-only");

@@ -277,6 +277,6 @@ Ordered checklist. Each item should land with a regression test in the same chan
 - [x] **4. C2 stale incremental graph** (`indexer/build-index.ts`, `incremental-plan.ts`) -- reverse-dependency closure over all changed files; test dependents re-resolve after an export change.
 - [x] **5. P6/P7/P5 unbounded caches** (`module-cache.ts`, `lazySymbols.ts`, `resolution.ts`) -- LRU + cap + teardown clear; test eviction.
 - [x] **6. SQLite schema migration** (`sqlite/schema.ts`) -- versioned migrator keyed off on-disk version; v1->v2 upgrade regression test (`AGENTS.md:26`).
-- [ ] **7. U1 sort-before-truncate / U2-U4 CLI validation** -- sort before bound; reject bad enum/int flags.
-- [ ] **8. P1/P2 cycles + adjacency** (`graphs/cycles.ts`, `traversal.ts`) -- iterative Tarjan, memoized adjacency.
-- [ ] **9. S1-S6 structural** -- split god modules, dedupe JS/TS + cycle mappers.
+- [x] **7. U1 sort-before-truncate / U2-U4 CLI validation** -- sort before bound; reject bad enum/int flags.
+- [x] **8. P1/P2 cycles + adjacency** (`graphs/cycles.ts`, `traversal.ts`) -- iterative Tarjan, memoized adjacency.
+- [x] **9. S1-S6 structural** -- split god modules, dedupe JS/TS + cycle mappers.

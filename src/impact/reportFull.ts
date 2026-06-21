@@ -4,6 +4,7 @@ import {
   buildOptionalReexportChains,
   buildOptionalTopImpacts,
   mapFileEdges,
+  mapImpactCyclesForDisplay,
 } from "./reportShared.js";
 import type { ImpactReportPartsBase } from "./reportParts.js";
 import { IMPACT_SCHEMA_VERSION } from "./types.js";
@@ -73,19 +74,6 @@ function buildFullSuggestions(
 function buildFullCycles(cycles: ImpactCycle[], displayFile: (file: FileId) => FileId): Pick<ImpactReport, "cycles"> {
   if (!cycles.length) return {};
   return {
-    cycles: cycles.map((cycle) => ({
-      ...cycle,
-      files: cycle.files.map((file) => displayFile(file)),
-      entryEdges: cycle.entryEdges.map((edge) => ({
-        ...edge,
-        from: displayFile(edge.from),
-        to: displayFile(edge.to),
-      })),
-      internalEdges: cycle.internalEdges.map((edge) => ({
-        ...edge,
-        from: displayFile(edge.from),
-        to: displayFile(edge.to),
-      })),
-    })),
+    cycles: mapImpactCyclesForDisplay(cycles, displayFile),
   };
 }

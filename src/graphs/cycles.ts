@@ -81,38 +81,55 @@ export function findDetailedCycles(
   let nextIndex = 0;
   const stronglyConnectedComponents: number[][] = [];
 
-  function strongconnect(vertex: number) {
-    indices[vertex] = nextIndex;
-    lowlink[vertex] = nextIndex;
-    nextIndex++;
-    stack.push(vertex);
-    onStack[vertex] = true;
+  type TarjanFrame = { vertex: number; nextNeighbor: number };
 
-    for (const neighbor of adjacency[vertex]!) {
-      if (indices[neighbor] === -1) {
-        strongconnect(neighbor);
-        lowlink[vertex] = Math.min(lowlink[vertex], lowlink[neighbor]!);
-      } else if (onStack[neighbor]) {
-        lowlink[vertex] = Math.min(lowlink[vertex], indices[neighbor]!);
+  for (let start = 0; start < nodeCount; start++) {
+    if (indices[start] !== -1) continue;
+    const callStack: TarjanFrame[] = [{ vertex: start, nextNeighbor: 0 }];
+
+    while (callStack.length > 0) {
+      const frame = callStack[callStack.length - 1]!;
+      const vertex = frame.vertex;
+
+      if (indices[vertex] === -1) {
+        indices[vertex] = nextIndex;
+        lowlink[vertex] = nextIndex;
+        nextIndex += 1;
+        stack.push(vertex);
+        onStack[vertex] = true;
+      }
+
+      const neighbors = adjacency[vertex]!;
+      if (frame.nextNeighbor < neighbors.length) {
+        const neighbor = neighbors[frame.nextNeighbor]!;
+        frame.nextNeighbor += 1;
+        if (indices[neighbor] === -1) {
+          callStack.push({ vertex: neighbor, nextNeighbor: 0 });
+        } else if (onStack[neighbor]) {
+          lowlink[vertex] = Math.min(lowlink[vertex]!, indices[neighbor]!);
+        }
+        continue;
+      }
+
+      callStack.pop();
+      if (callStack.length > 0) {
+        const parent = callStack[callStack.length - 1]!.vertex;
+        lowlink[parent] = Math.min(lowlink[parent]!, lowlink[vertex]!);
+      }
+
+      if (lowlink[vertex]! === indices[vertex]!) {
+        const component: number[] = [];
+        let popped: number;
+        do {
+          popped = stack.pop()!;
+          onStack[popped] = false;
+          component.push(popped);
+        } while (popped !== vertex);
+        if (component.length > 1 || adjacency[vertex]!.includes(vertex)) {
+          stronglyConnectedComponents.push(component);
+        }
       }
     }
-
-    if (lowlink[vertex] === indices[vertex]) {
-      const component: number[] = [];
-      let popped: number;
-      do {
-        popped = stack.pop()!;
-        onStack[popped] = false;
-        component.push(popped);
-      } while (popped !== vertex);
-      if (component.length > 1 || adjacency[vertex]!.includes(vertex)) {
-        stronglyConnectedComponents.push(component);
-      }
-    }
-  }
-
-  for (let index = 0; index < nodeCount; index++) {
-    if (indices[index] === -1) strongconnect(index);
   }
 
   const cycleDetails: DetailedCycle[] = [];

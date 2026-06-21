@@ -371,6 +371,16 @@ export type CommandReport = {
   review?: ReviewBuildReport;
 };
 
+function isCliOptionValueToken(token: string): boolean {
+  if (token.startsWith("--")) {
+    return false;
+  }
+  if (/^-?\d+$/.test(token)) {
+    return true;
+  }
+  return !token.startsWith("-");
+}
+
 export function parseCliArgs(command: string, tokens: string[]): ParsedCliArgs {
   const positionals: string[] = [];
   const flags = new Set<string>();
@@ -400,7 +410,9 @@ export function parseCliArgs(command: string, tokens: string[]): ParsedCliArgs {
       const key = t;
       if (isCliValueOption(command, key, positionals)) {
         const next = tokens[i + 1];
-        if (next === undefined) throw new Error(`Missing value for ${key} option`);
+        if (next === undefined || !isCliOptionValueToken(next)) {
+          throw new Error(`Missing value for ${key} option`);
+        }
         pushOpt(key, next);
         i++;
       } else {

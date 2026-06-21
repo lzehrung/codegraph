@@ -1412,6 +1412,12 @@ function incrementSkippedReason(diagnostics: ImpactDiagnostics["callCompatibilit
   diagnostics.skippedByReason[reason] = (diagnostics.skippedByReason[reason] ?? 0) + 1;
 }
 
+function resetCallCompatibilityHints(changedSymbols: ChangedSymbol[]): void {
+  for (const changedSymbol of changedSymbols) {
+    delete changedSymbol.callCompatibility;
+  }
+}
+
 export async function attachCallCompatibilityHints(
   index: ProjectIndex,
   changedSymbols: ChangedSymbol[],
@@ -1423,9 +1429,7 @@ export async function attachCallCompatibilityHints(
     referenceCache?: ReferenceLookupCache;
   },
 ): Promise<void> {
-  for (const changedSymbol of changedSymbols) {
-    delete changedSymbol.callCompatibility;
-  }
+  resetCallCompatibilityHints(changedSymbols);
 
   if (options.maxRefs <= 0) {
     return;

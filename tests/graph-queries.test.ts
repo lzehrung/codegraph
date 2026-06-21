@@ -110,7 +110,7 @@ describe("graph queries", () => {
       `${perfRoot}/4.ts`,
       `${perfRoot}/5.ts`,
     ]);
-    expect(edgeIterations).toBe(3);
+    expect(edgeIterations).toBe(1);
   });
 
   it("should find cycles", () => {

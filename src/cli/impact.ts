@@ -24,6 +24,8 @@ import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import type { Graph } from "../types.js";
 import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import {
+  parseImpactScopeOption,
+  parseRefContextOption,
   parseCacheModeOption,
   parseOptionalNonNegativeIntegerOption,
   parseOptionalPositiveIntegerOption,
@@ -344,11 +346,11 @@ function applyAnalysisOptions(context: ImpactCommandContext, options: ImpactOpti
   const parsedDepth = parseOptionalNonNegativeIntegerOption(depth, "--depth");
   if (parsedDepth !== undefined) options.depth = parsedDepth;
 
-  const scope = context.getOpt("--scope");
-  if (scope === "all" || scope === "imported") options.scope = scope;
+  const scope = parseImpactScopeOption(context.getOpt("--scope"), "--scope");
+  if (scope !== undefined) options.scope = scope;
 
-  const refContext = context.getOpt("--ref-context");
-  if (refContext) options.refContext = refContext as "line" | "block";
+  const refContext = parseRefContextOption(context.getOpt("--ref-context"), "--ref-context");
+  if (refContext !== undefined) options.refContext = refContext;
 
   const refContextLines = context.getOpt("--ref-context-lines");
   const parsedRefContextLines = parseOptionalNonNegativeIntegerOption(refContextLines, "--ref-context-lines");
