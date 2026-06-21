@@ -38,9 +38,7 @@ describe("CLI enum option parsers", () => {
 
 describe("parseCliArgs value-option guard", () => {
   it("does not consume a following flag as a value", () => {
-    expect(() => parseCliArgs("graph", ["--threads", "--json"])).toThrow(
-      /Missing value for --threads option/,
-    );
+    expect(() => parseCliArgs("graph", ["--threads", "--json"])).toThrow(/Missing value for --threads option/);
   });
 
   it("allows negative decimal values for integer options", () => {

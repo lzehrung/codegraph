@@ -240,6 +240,11 @@ export const ensureSchema = (db: SqliteDatabase) => {
   `);
 
   const currentVersion = readGraphSchemaVersion(db);
+  if (currentVersion > SQLITE_SCHEMA_VERSION) {
+    throw new Error(
+      `Unsupported codegraph SQLite schema version ${currentVersion}; this version supports up to ${SQLITE_SCHEMA_VERSION}.`,
+    );
+  }
   migrateGraphSchema(db, currentVersion);
   ensureGraphIndexes(db);
   writeGraphSchemaVersion(db, SQLITE_SCHEMA_VERSION);

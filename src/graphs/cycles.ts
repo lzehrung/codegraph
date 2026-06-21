@@ -64,12 +64,19 @@ export function findDetailedCycles(
   nodes.forEach((node, index) => indexByNode.set(node, index));
 
   const adjacency = nodes.map(() => [] as number[]);
+  const incomingFileEdges = nodes.map(() => [] as CycleInternalEdge[]);
   for (const edge of graph.edges) {
     if (edge.to.type !== "file") continue;
     const fromIndex = indexByNode.get(edge.from);
     const toIndex = indexByNode.get(edge.to.path);
     if (fromIndex !== undefined && toIndex !== undefined) {
       adjacency[fromIndex]!.push(toIndex);
+      incomingFileEdges[toIndex]!.push({
+        from: edge.from,
+        to: edge.to.path,
+        raw: edge.raw,
+        ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
+      });
     }
   }
 
@@ -144,27 +151,15 @@ export function findDetailedCycles(
     let internalEdgeCount = 0;
     let fanInFromOutside = 0;
 
-    for (const edge of graph.edges) {
-      if (edge.to.type !== "file") continue;
-      const fromInComponent = componentFiles.has(edge.from);
-      const toInComponent = componentFiles.has(edge.to.path);
-      if (fromInComponent && toInComponent) {
-        internalEdgeCount += 1;
-        internalEdges.push({
-          from: edge.from,
-          to: edge.to.path,
-          raw: edge.raw,
-          ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
-        });
-      }
-      if (!fromInComponent && toInComponent) {
-        fanInFromOutside += 1;
-        entryEdges.push({
-          from: edge.from,
-          to: edge.to.path,
-          raw: edge.raw,
-          ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
-        });
+    for (const nodeIndex of component) {
+      for (const edge of incomingFileEdges[nodeIndex]!) {
+        if (componentFiles.has(edge.from)) {
+          internalEdgeCount += 1;
+          internalEdges.push(edge);
+        } else {
+          fanInFromOutside += 1;
+          entryEdges.push(edge);
+        }
       }
     }
 

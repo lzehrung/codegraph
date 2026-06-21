@@ -477,7 +477,6 @@ describe("LazyProjectIndex", () => {
     expect(index.getFiles().length).toBeLessThan(300);
     expect(index.getFiles().length).toBeGreaterThan(0);
   });
-
 });
 
 describe("createSymbolLoader", () => {

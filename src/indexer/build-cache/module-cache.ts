@@ -46,6 +46,15 @@ function memoryCacheKey(projectRoot: string, file: string): string {
 export function clearMemoryCache(): void {
   memoryCache.clear();
 }
+
+function clearMemoryCacheForProject(projectRoot: string): void {
+  const prefix = `${normalizePath(projectRoot)}::`;
+  for (const key of memoryCache.keys()) {
+    if (key.startsWith(prefix)) {
+      memoryCache.delete(key);
+    }
+  }
+}
 const diskCacheDatabases = new Map<string, SqliteDatabase>();
 
 export function cacheRoot(projectRoot: string, opts?: BuildOptions): string {
@@ -110,7 +119,7 @@ function getDiskCacheDatabase(projectRoot: string, opts?: BuildOptions): SqliteD
 }
 
 export function closeDiskCacheDatabase(projectRoot: string, opts?: BuildOptions): void {
-  clearMemoryCache();
+  clearMemoryCacheForProject(projectRoot);
   const dbPath = diskCacheDatabasePath(projectRoot, opts);
   const db = diskCacheDatabases.get(dbPath);
   if (!db) return;

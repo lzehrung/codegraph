@@ -24,4 +24,27 @@ describe("lruMap", () => {
     expect(map.get("a")).toBe(1);
     expect(map.get("c")).toBe(3);
   });
+
+  it("refreshes undefined-valued entries on get", () => {
+    const map = new Map<string, number | undefined>();
+    lruMapSet(map, "a", undefined, 2);
+    lruMapSet(map, "b", 2, 2);
+    expect(lruMapGet(map, "a")).toBeUndefined();
+    lruMapSet(map, "c", 3, 2);
+
+    expect(map.has("a")).toBe(true);
+    expect(map.has("b")).toBe(false);
+    expect(map.get("c")).toBe(3);
+  });
+
+  it("evicts an undefined key when it is the oldest entry", () => {
+    const map = new Map<string | undefined, number>();
+    lruMapSet(map, undefined, 1, 2);
+    lruMapSet(map, "b", 2, 2);
+    lruMapSet(map, "c", 3, 2);
+
+    expect(map.has(undefined)).toBe(false);
+    expect(map.get("b")).toBe(2);
+    expect(map.get("c")).toBe(3);
+  });
 });

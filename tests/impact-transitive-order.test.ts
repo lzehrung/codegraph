@@ -18,10 +18,7 @@ function runDiamondAnalysis(edgeOrder: Edge[]): Map<string, ImpactItem> {
   const root = "/proj/root.ts";
   const mid = "/proj/mid.ts";
   const leaf = "/proj/leaf.ts";
-  const edges: Edge[] = [
-    { from: mid, to: { type: "file", path: root }, raw: "./root" },
-    ...edgeOrder,
-  ];
+  const edges: Edge[] = [{ from: mid, to: { type: "file", path: root }, raw: "./root" }, ...edgeOrder];
   const reverseDeps = buildReverseDeps(edges);
   const impacted = new Map<string, ImpactItem>([
     [

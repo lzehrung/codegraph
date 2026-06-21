@@ -113,6 +113,30 @@ describe("graph queries", () => {
     expect(edgeIterations).toBe(1);
   });
 
+  it("indexes cycle edges once when reporting many SCCs", () => {
+    const cycleNodes = new Set<string>();
+    const cycleEdges: Edge[] = [];
+    for (let index = 0; index < 20; index += 1) {
+      const a = `${root}/cycle-${index}-a.ts`;
+      const b = `${root}/cycle-${index}-b.ts`;
+      cycleNodes.add(a);
+      cycleNodes.add(b);
+      cycleEdges.push({ from: a, to: { type: "file", path: b }, raw: "./b" });
+      cycleEdges.push({ from: b, to: { type: "file", path: a }, raw: "./a" });
+    }
+
+    let edgeIterations = 0;
+    const trackedEdges: Edge[] = [...cycleEdges];
+    const originalIterator = trackedEdges[Symbol.iterator].bind(trackedEdges);
+    trackedEdges[Symbol.iterator] = function (): ArrayIterator<Edge> {
+      edgeIterations += 1;
+      return originalIterator();
+    };
+
+    expect(findDetailedCycles({ nodes: cycleNodes, edges: trackedEdges })).toHaveLength(20);
+    expect(edgeIterations).toBe(1);
+  });
+
   it("should find cycles", () => {
     const cycles = findCycles(graph);
     expect(cycles.length).toBe(1);

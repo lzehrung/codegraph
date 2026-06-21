@@ -247,6 +247,25 @@ export function run() { helper(); new Widget(); }
     db.close();
   });
 
+  it("rejects future schema_version databases without downgrading them", async () => {
+    const root = await mkTmpDir("dg-sqlite-future-version-");
+    const dbPath = path.join(root, "graph.sqlite");
+    const db = new SqliteDatabase(dbPath);
+    const { ensureSchema, readGraphSchemaVersion, SQLITE_SCHEMA_VERSION } = await import("../src/sqlite/schema.js");
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS graph_metadata (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+      INSERT INTO graph_metadata (key, value) VALUES ('schema_version', '999');
+    `);
+
+    expect(() => ensureSchema(db)).toThrow(`Unsupported codegraph SQLite schema version 999`);
+    expect(readGraphSchemaVersion(db)).toBe(999);
+    expect(SQLITE_SCHEMA_VERSION).toBeLessThan(999);
+    db.close();
+  });
+
   it("updates changed files incrementally", async () => {
     const root = await mkTmpDir("dg-sqlite-update-");
     const base = `

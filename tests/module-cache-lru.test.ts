@@ -3,6 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import {
   clearMemoryCache,
+  closeDiskCacheDatabase,
   tryLoadFromCache,
   writeToCache,
 } from "../src/indexer/build-cache/module-cache.js";
@@ -13,7 +14,9 @@ function moduleFor(file: string, label: string): ModuleIndex {
     file,
     exports: [],
     imports: [],
-    locals: [{ file, localName: label, kind: 1, range: { start: { line: 1, column: 0 }, end: { line: 1, column: 1 } } }],
+    locals: [
+      { file, localName: label, kind: 1, range: { start: { line: 1, column: 0 }, end: { line: 1, column: 1 } } },
+    ],
   };
 }
 
@@ -36,5 +39,20 @@ describe("module memory cache bounds", () => {
     clearMemoryCache();
     expect(tryLoadFromCache(rootA, "/files/a-5000.ts", sig, { cache: "memory" })).toBeNull();
     expect(tryLoadFromCache(rootB, "/files/b.ts", sig, { cache: "memory" })).toBeNull();
+  });
+
+  it("clears only the closed project from the memory cache", () => {
+    const rootA = path.join(os.tmpdir(), "dg-cache-close-a");
+    const rootB = path.join(os.tmpdir(), "dg-cache-close-b");
+    const sig = "sig-2";
+
+    writeToCache(rootA, "/files/a.ts", sig, moduleFor("/files/a.ts", "a"), { cache: "memory" });
+    writeToCache(rootB, "/files/b.ts", sig, moduleFor("/files/b.ts", "b"), { cache: "memory" });
+
+    closeDiskCacheDatabase(rootA);
+
+    expect(tryLoadFromCache(rootA, "/files/a.ts", sig, { cache: "memory" })).toBeNull();
+    expect(tryLoadFromCache(rootB, "/files/b.ts", sig, { cache: "memory" })?.locals[0]?.localName).toBe("b");
+    clearMemoryCache();
   });
 });

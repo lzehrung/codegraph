@@ -3,9 +3,7 @@ import { assertSafeRevision, gitDiffArgs, getUnifiedDiff, listChangedFiles } fro
 
 describe("git revision safety", () => {
   it("rejects revisions that start with -", () => {
-    expect(() => assertSafeRevision("--output=/tmp/evil", "base")).toThrow(
-      /must not start with "-"/,
-    );
+    expect(() => assertSafeRevision("--output=/tmp/evil", "base")).toThrow(/must not start with "-"/);
     expect(() => assertSafeRevision("", "head")).toThrow(/must not be empty/);
   });
 

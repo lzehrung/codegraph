@@ -44,7 +44,6 @@ async function mkDuplicateRepo(): Promise<string> {
   return root;
 }
 
-
 async function mkManyReferenceRepo(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-explain-refs-"));
   await fs.writeFile(path.join(root, "target.ts"), "export function sharedTarget() { return 1; }\n");
@@ -264,7 +263,6 @@ describe("agent explain", () => {
     expect(explanation.omittedCounts.references).toBeGreaterThan(0);
     expect(explanation.omittedCounts.snippets).toBeGreaterThan(0);
   });
-
 
   it("returns references sorted by file before truncation", async () => {
     const root = await mkManyReferenceRepo();

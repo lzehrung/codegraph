@@ -568,7 +568,10 @@ export function parseRefContextOption(rawValue: string | undefined, optionName: 
   throw new Error(`Invalid ${optionName} value "${rawValue}". Expected one of: line, block.`);
 }
 
-export function parseImpactScopeOption(rawValue: string | undefined, optionName: string): SymbolGraphScopeOption | undefined {
+export function parseImpactScopeOption(
+  rawValue: string | undefined,
+  optionName: string,
+): SymbolGraphScopeOption | undefined {
   return parseSymbolGraphScopeOption(rawValue, optionName);
 }
 

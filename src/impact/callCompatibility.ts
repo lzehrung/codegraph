@@ -1391,7 +1391,6 @@ function classifyCompatibility(
   return { status: "compatible", reason: "compatible_argument_count" };
 }
 
-
 async function tryEnsureParsedContext(
   file: string,
   parsedEntry: Parameters<typeof ensureParsedContext>[1],
@@ -1410,6 +1409,57 @@ function incrementSkippedReason(diagnostics: ImpactDiagnostics["callCompatibilit
     return;
   }
   diagnostics.skippedByReason[reason] = (diagnostics.skippedByReason[reason] ?? 0) + 1;
+}
+
+async function buildCallCompatibilityHintForReference(input: {
+  index: ProjectIndex;
+  changedSymbol: ChangedSymbol;
+  signature: CallableSignature;
+  ref: Reference;
+  diagnostics?: ImpactDiagnostics["callCompatibility"] | undefined;
+  projectRoot?: string | undefined;
+}): Promise<CallCompatibilityHint | null> {
+  const { index, changedSymbol, signature, ref, diagnostics, projectRoot } = input;
+  if (ref.file === changedSymbol.file && sameRangeStart(ref.range, changedSymbol.range)) {
+    return null;
+  }
+
+  const calleeStartIndex = ref.range.start.index;
+  if (calleeStartIndex === undefined) {
+    return null;
+  }
+
+  const parsedCallsite = await tryEnsureParsedContext(ref.file, index.parsed?.get(ref.file), diagnostics);
+  if (!parsedCallsite) {
+    return null;
+  }
+  const callsiteRequest: ExtractCallsiteArgumentsRequest = {
+    languageId: parsedCallsite.sup.id,
+    source: parsedCallsite.source,
+    calleeStartIndex,
+    tree: parsedCallsite.tree,
+    ...(ref.range.end.index !== undefined ? { calleeEndIndex: ref.range.end.index } : {}),
+  };
+  const actual = extractCallsiteArguments(callsiteRequest);
+  if (!actual) {
+    if (diagnostics) {
+      diagnostics.unknownCallsites += 1;
+    }
+    return null;
+  }
+
+  const compatibility = classifyCompatibility(signature, actual);
+  const callerSymbolId = findCallerSymbolId(index, ref);
+  const callsiteFile = projectRoot ? path.relative(projectRoot, ref.file).replace(/\\/g, "/") : ref.file;
+  return {
+    ...compatibility,
+    changedSymbolId: changedSymbol.id,
+    callsiteFile,
+    callsiteRange: ref.range,
+    ...(callerSymbolId ? { callerSymbolId } : {}),
+    expected: signature,
+    actual,
+  };
 }
 
 function resetCallCompatibilityHints(changedSymbols: ChangedSymbol[]): void {
@@ -1507,53 +1557,22 @@ export async function attachCallCompatibilityHints(
     let consideredCallsites = 0;
 
     const addHintForReference = async (ref: Reference): Promise<void> => {
-      if (ref.file === changedSymbol.file && sameRangeStart(ref.range, changedSymbol.range)) {
-        return;
-      }
       if (consideredCallsites >= options.maxRefs) {
         return;
       }
-
-      const calleeStartIndex = ref.range.start.index;
-      if (calleeStartIndex === undefined) {
-        return;
-      }
-
-      const parsedCallsite = await tryEnsureParsedContext(ref.file, index.parsed?.get(ref.file), diagnostics);
-      if (!parsedCallsite) {
-        return;
-      }
-      const callsiteRequest: ExtractCallsiteArgumentsRequest = {
-        languageId: parsedCallsite.sup.id,
-        source: parsedCallsite.source,
-        calleeStartIndex,
-        tree: parsedCallsite.tree,
-        ...(ref.range.end.index !== undefined ? { calleeEndIndex: ref.range.end.index } : {}),
-      };
-      const actual = extractCallsiteArguments(callsiteRequest);
-      if (!actual) {
-        if (diagnostics) {
-          diagnostics.unknownCallsites += 1;
-        }
+      const hint = await buildCallCompatibilityHintForReference({
+        index,
+        changedSymbol,
+        signature,
+        ref,
+        diagnostics,
+        ...(options.projectRoot ? { projectRoot: options.projectRoot } : {}),
+      });
+      if (!hint) {
         return;
       }
       consideredCallsites += 1;
-
-      const compatibility = classifyCompatibility(signature, actual);
-      const callerSymbolId = findCallerSymbolId(index, ref);
-      let callsiteFile = ref.file;
-      if (options.projectRoot) {
-        callsiteFile = path.relative(options.projectRoot, ref.file).replace(/\\/g, "/");
-      }
-      hints.push({
-        ...compatibility,
-        changedSymbolId: changedSymbol.id,
-        callsiteFile,
-        callsiteRange: ref.range,
-        ...(callerSymbolId ? { callerSymbolId } : {}),
-        expected: signature,
-        actual,
-      });
+      hints.push(hint);
     };
 
     for (const ref of refs) {

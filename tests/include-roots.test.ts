@@ -19,9 +19,7 @@ describe("includeRoots helpers", () => {
   it("restricts graphs to include roots", () => {
     const graph: Graph = {
       nodes: new Set(["/proj/src/a.ts", "/proj/lib/b.ts"]),
-      edges: [
-        { from: "/proj/src/a.ts", to: { type: "file", path: "/proj/lib/b.ts" }, raw: "../lib/b" },
-      ],
+      edges: [{ from: "/proj/src/a.ts", to: { type: "file", path: "/proj/lib/b.ts" }, raw: "../lib/b" }],
     };
     const scoped = restrictGraphToIncludeRoots(graph, ["src"], (file) => file.replace("/proj/", ""));
     expect([...scoped.nodes]).toEqual(["src/a.ts"]);
