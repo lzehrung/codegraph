@@ -2,7 +2,7 @@ export function lruMapGet<K, V>(map: Map<K, V>, key: K): V | undefined {
   if (!map.has(key)) {
     return undefined;
   }
-  const value = map.get(key) as V;
+  const value = map.get(key)!;
   map.delete(key);
   map.set(key, value);
   return value;

@@ -371,14 +371,12 @@ export type CommandReport = {
   review?: ReviewBuildReport;
 };
 
+function isSupportedShortFlagToken(token: string): boolean {
+  return token === "-h" || token === "-v" || token === "-o";
+}
+
 function isCliOptionValueToken(token: string): boolean {
-  if (token.startsWith("--")) {
-    return false;
-  }
-  if (/^-?\d+$/.test(token)) {
-    return true;
-  }
-  return !token.startsWith("-");
+  return !token.startsWith("--") && !isSupportedShortFlagToken(token);
 }
 
 export function parseCliArgs(command: string, tokens: string[]): ParsedCliArgs {

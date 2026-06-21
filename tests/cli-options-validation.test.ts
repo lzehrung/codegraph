@@ -41,6 +41,17 @@ describe("parseCliArgs value-option guard", () => {
     expect(() => parseCliArgs("graph", ["--threads", "--json"])).toThrow(/Missing value for --threads option/);
   });
 
+  it("allows dash-prefixed option values that are not supported short flags", () => {
+    const parsed = parseCliArgs("graph", ["--ignore-glob", "-generated/**", "--pattern", "-bar"]);
+    expect(parsed.options.get("--ignore-glob")).toEqual(["-generated/**"]);
+    expect(parsed.options.get("--pattern")).toEqual(["-bar"]);
+  });
+
+  it("still rejects supported short flags as missing long-option values", () => {
+    expect(() => parseCliArgs("graph", ["--threads", "-v"])).toThrow(/Missing value for --threads option/);
+    expect(() => parseCliArgs("graph", ["--output", "-o"])).toThrow(/Missing value for --output option/);
+  });
+
   it("allows negative decimal values for integer options", () => {
     const parsed = parseCliArgs("hotspots", ["--limit", "-1"]);
     expect(parsed.options.get("--limit")).toEqual(["-1"]);
