@@ -6,6 +6,23 @@ import { buildProjectIndex } from "../../src/indexer.js";
 import { findReferences } from "../../src/indexer/navigation.js";
 import { attachCallCompatibilityHints } from "../../src/impact/callCompatibility.js";
 import type { ChangedSymbol, ImpactDiagnostics } from "../../src/impact/types.js";
+import type { Range } from "../../src/types.js";
+
+function rangeFor(source: string, needle: string): Range {
+  const index = source.lastIndexOf(needle);
+  if (index < 0) {
+    throw new Error(`Expected source to contain ${needle}`);
+  }
+  const prefix = source.slice(0, index);
+  const lines = prefix.split("\n");
+  const line = lines.length;
+  const column = (lines[lines.length - 1]?.length ?? 0) + 1;
+  return {
+    start: { line, column, index },
+    end: { line, column: column + needle.length, index: index + needle.length },
+  };
+}
+
 
 vi.mock(
   "../../src/indexer/navigation.js",
@@ -111,17 +128,13 @@ describe("call compatibility parse resilience", () => {
       signatureChanged: true,
     };
 
-    const callIndex = mainSource.indexOf("helper(");
     vi.mocked(findReferences).mockResolvedValue({
       status: "ok",
       definition: helperDef,
       references: [
         {
           file: indexedMainFile,
-          range: {
-            start: { line: 2, column: 28, index: callIndex },
-            end: { line: 2, column: 34, index: callIndex + 6 },
-          },
+          range: rangeFor(mainSource, "helper"),
         },
       ],
     });

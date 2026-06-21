@@ -83,9 +83,8 @@ export function collectTrackedFileDependents(
   const queue = [...changedFiles];
   let head = 0;
   while (head < queue.length) {
-    const target = queue[head];
+    const target = queue[head]!;
     head += 1;
-    if (!target) continue;
     for (const dependent of reverseDeps.get(target) ?? []) {
       if (enqueued.has(dependent)) continue;
       enqueued.add(dependent);
