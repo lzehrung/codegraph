@@ -279,4 +279,4 @@ Ordered checklist. Each item should land with a regression test in the same chan
 - [x] **6. SQLite schema migration** (`sqlite/schema.ts`) -- versioned migrator keyed off on-disk version; v1->v2 upgrade regression test (`AGENTS.md:26`).
 - [x] **7. U1 sort-before-truncate / U2-U4 CLI validation** -- sort before bound; reject bad enum/int flags.
 - [x] **8. P1/P2 cycles + adjacency** (`graphs/cycles.ts`, `traversal.ts`) -- iterative Tarjan, memoized adjacency.
-- [x] **9. S1-S6 structural** -- split god modules, dedupe JS/TS + cycle mappers.
+- [x] **9. S3-S6 structural (S1/S2 deferred)** -- dedupe JS/TS shared blocks, cycle mappers, include-root util, callCompatibility reset helper; full `duplicates.ts`/`cli.ts` splits deferred.

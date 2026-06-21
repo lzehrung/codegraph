@@ -731,8 +731,7 @@ async function collectReferenceContext(
   referenceLimit: number,
   snippetLimit: number,
 ): Promise<ReferenceContext> {
-  const collectionLimit = Math.max(referenceLimit, snippetLimit) + 1;
-  const result = await findReferences(snapshot.index, { def }, { context: "line", maxReferences: collectionLimit });
+  const result = await findReferences(snapshot.index, { def }, { context: "line" });
   if (result.status !== "ok") return emptyReferenceContext();
 
   const references = result.references
