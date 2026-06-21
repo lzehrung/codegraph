@@ -54,6 +54,35 @@ describe("analyzeTransitiveImpact order independence", () => {
     expect(directFirst.get(leaf)?.severity).toBe(viaMidFirst.get(leaf)?.severity);
   });
 
+  it("keeps the stronger path when a deeper value edge beats a shallow type-only edge", () => {
+    const root = "/proj/root.ts";
+    const mid = "/proj/mid.ts";
+    const leaf = "/proj/leaf.ts";
+    const edges: Edge[] = [
+      { from: leaf, to: { type: "file", path: root }, raw: "./root", typeOnly: true },
+      { from: mid, to: { type: "file", path: root }, raw: "./root" },
+      { from: leaf, to: { type: "file", path: mid }, raw: "./mid" },
+    ];
+    const impacted = new Map<string, ImpactItem>([
+      [
+        root,
+        {
+          file: root,
+          symbols: [],
+          reasons: ["directRef"],
+          severity: 0.9,
+          depth: 0,
+          confidence: 0.9,
+        },
+      ],
+    ]);
+
+    analyzeTransitiveImpact(impacted, 5, {}, () => false, buildReverseDeps(edges));
+
+    expect(impacted.get(leaf)?.depth).toBe(1);
+    expect(impacted.get(leaf)?.severity).toBeGreaterThan(0.14);
+  });
+
   it("does not mutate shared reasons arrays across updates", () => {
     const root = "/proj/root.ts";
     const child = "/proj/child.ts";

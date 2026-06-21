@@ -154,14 +154,10 @@ export function analyzeTransitiveImpact(
 
       const nextDepth = depth + 1;
       const knownDepth = bestDepth.get(dependentFile);
-      if (knownDepth !== undefined && nextDepth > knownDepth) {
-        continue;
-      }
-
       const existing = impacted.get(dependentFile);
-      const isUpgrade = knownDepth === undefined || nextDepth < knownDepth;
       const reasons = [...(existing?.reasons ?? [])];
-      if (!reasons.includes(reason)) {
+      const addsReason = !reasons.includes(reason);
+      if (addsReason) {
         reasons.push(reason);
       }
 
@@ -171,15 +167,22 @@ export function analyzeTransitiveImpact(
         0.2,
         Math.min(1, upstreamConfidence * (edge.typeOnly ? 0.75 : 0.85) * Math.pow(0.95, depth)),
       );
+      const existingSeverity = existing?.severity ?? 0;
+      const existingConfidence = existing?.confidence ?? 0;
+      const improvesDepth = knownDepth === undefined || nextDepth < knownDepth;
+      const improvesStrength = severity > existingSeverity || nextConfidence > existingConfidence || addsReason;
+      if (!improvesDepth && !improvesStrength) {
+        continue;
+      }
 
       const fanIn = reverseDeps.get(dependentFile)?.length || 0;
-      const resolvedDepth = isUpgrade ? nextDepth : Math.min(existing?.depth ?? nextDepth, nextDepth);
+      const resolvedDepth = improvesDepth ? nextDepth : Math.min(existing?.depth ?? nextDepth, nextDepth);
 
       const transitiveItem: ImpactItem = {
         file: dependentFile,
         symbols: existing?.symbols || [],
         reasons,
-        severity: Math.max(existing?.severity || 0, severity),
+        severity: Math.max(existingSeverity, severity),
         depth: resolvedDepth,
         explain: {
           ...existing?.explain,
@@ -187,7 +190,7 @@ export function analyzeTransitiveImpact(
           depth: resolvedDepth,
           ...(fanIn > 0 && { fanIn }),
         },
-        confidence: Math.max(existing?.confidence ?? 0, nextConfidence),
+        confidence: Math.max(existingConfidence, nextConfidence),
       };
 
       if (edge.typeOnly !== undefined) {
@@ -200,8 +203,10 @@ export function analyzeTransitiveImpact(
       impacted.set(dependentFile, transitiveItem);
       emitImpactItem?.(transitiveItem, "partial");
 
-      if (isUpgrade) {
-        bestDepth.set(dependentFile, nextDepth);
+      if (improvesDepth || improvesStrength) {
+        if (improvesDepth) {
+          bestDepth.set(dependentFile, nextDepth);
+        }
         queue.push({
           file: dependentFile,
           depth: nextDepth,
