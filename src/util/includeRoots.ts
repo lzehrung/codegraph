@@ -39,11 +39,19 @@ export function restrictGraphToIncludeRoots(
       nodes.add(normalizedFile);
     }
   }
-  const edges = graph.edges.filter((edge) => {
-    if (!nodes.has(normalizeFile(edge.from))) {
-      return false;
+  const edges = graph.edges.flatMap((edge) => {
+    const from = normalizeFile(edge.from);
+    if (!nodes.has(from)) {
+      return [];
     }
-    return edge.to.type === "external" || nodes.has(normalizeFile(edge.to.path));
+    if (edge.to.type === "external") {
+      return [{ ...edge, from }];
+    }
+    const toPath = normalizeFile(edge.to.path);
+    if (!nodes.has(toPath)) {
+      return [];
+    }
+    return [{ ...edge, from, to: { type: "file" as const, path: toPath } }];
   });
   return {
     nodes,
