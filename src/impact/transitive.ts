@@ -130,13 +130,14 @@ export function analyzeTransitiveImpact(
   const { ignoreGlobs = [] } = options;
   const isIgnored = options.projectRoot ? createImpactIgnoreMatcher(options.projectRoot, ignoreGlobs) : () => false;
 
-  const visited = new Set<FileId>();
+  const bestDepth = new Map<FileId, number>();
   const queue: Array<{ file: FileId; depth: number; reason: ImpactReason }> = [];
 
-  for (const [file] of impacted) {
+  for (const [file, item] of impacted) {
     if (isIgnored(file)) continue;
-    visited.add(file);
-    queue.push({ file, depth: 0, reason: "transitive" });
+    const seedDepth = item.depth ?? 0;
+    bestDepth.set(file, seedDepth);
+    queue.push({ file, depth: seedDepth, reason: "transitive" });
   }
 
   let qi = 0;
@@ -147,22 +148,24 @@ export function analyzeTransitiveImpact(
     const edgesIn = reverseDeps.get(file) || [];
     for (const edge of edgesIn) {
       const dependentFile = edge.from;
-      if (
-        visited.has(dependentFile) ||
-        (!options.includeTests && isIndexTestFile(dependentFile)) ||
-        isIgnored(dependentFile)
-      )
+      if ((!options.includeTests && isIndexTestFile(dependentFile)) || isIgnored(dependentFile)) {
         continue;
+      }
 
-      visited.add(dependentFile);
+      const nextDepth = depth + 1;
+      const knownDepth = bestDepth.get(dependentFile);
+      if (knownDepth !== undefined && nextDepth > knownDepth) {
+        continue;
+      }
 
       const existing = impacted.get(dependentFile);
-      const reasons = existing?.reasons || [];
+      const isUpgrade = knownDepth === undefined || nextDepth < knownDepth;
+      const reasons = [...(existing?.reasons ?? [])];
       if (!reasons.includes(reason)) {
         reasons.push(reason);
       }
 
-      const severity = calculateTransitiveSeverity(edge, depth + 1);
+      const severity = calculateTransitiveSeverity(edge, nextDepth);
       const upstreamConfidence = impacted.get(file)?.confidence ?? 0.6;
       const nextConfidence = Math.max(
         0.2,
@@ -170,17 +173,18 @@ export function analyzeTransitiveImpact(
       );
 
       const fanIn = reverseDeps.get(dependentFile)?.length || 0;
+      const resolvedDepth = isUpgrade ? nextDepth : Math.min(existing?.depth ?? nextDepth, nextDepth);
 
       const transitiveItem: ImpactItem = {
         file: dependentFile,
         symbols: existing?.symbols || [],
         reasons,
         severity: Math.max(existing?.severity || 0, severity),
-        depth: depth + 1,
+        depth: resolvedDepth,
         explain: {
           ...existing?.explain,
           reason,
-          depth: depth + 1,
+          depth: resolvedDepth,
           ...(fanIn > 0 && { fanIn }),
         },
         confidence: Math.max(existing?.confidence ?? 0, nextConfidence),
@@ -196,11 +200,14 @@ export function analyzeTransitiveImpact(
       impacted.set(dependentFile, transitiveItem);
       emitImpactItem?.(transitiveItem, "partial");
 
-      queue.push({
-        file: dependentFile,
-        depth: depth + 1,
-        reason: "exportChain",
-      });
+      if (isUpgrade) {
+        bestDepth.set(dependentFile, nextDepth);
+        queue.push({
+          file: dependentFile,
+          depth: nextDepth,
+          reason: "exportChain",
+        });
+      }
     }
   }
 }

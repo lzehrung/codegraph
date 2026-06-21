@@ -450,6 +450,34 @@ describe("LazyProjectIndex", () => {
     expect(index.getModuleShallow("src/feature.ts")?.locals.isLoaded).toBe(false);
     expect(index.getModuleShallow("src/alert.hot.ts")?.locals.isLoaded).toBe(true);
   });
+  test("clear() removes all tracked modules", () => {
+    const index = new LazyProjectIndex();
+    index.addModule("file1.ts", {
+      file: "file1.ts",
+      loaded: false,
+      imports: [],
+      exports: [],
+      locals: new LazyArray(async () => []),
+    });
+    index.clear();
+    expect(index.getFiles()).toEqual([]);
+  });
+
+  test("trims unloaded module entries when the map grows too large", () => {
+    const index = new LazyProjectIndex({ maxCached: 1 });
+    for (let i = 0; i < 300; i += 1) {
+      index.addModule(`file${i}.ts`, {
+        file: `file${i}.ts`,
+        loaded: false,
+        imports: [],
+        exports: [],
+        locals: new LazyArray(async () => []),
+      });
+    }
+    expect(index.getFiles().length).toBeLessThan(300);
+    expect(index.getFiles().length).toBeGreaterThan(0);
+  });
+
 });
 
 describe("createSymbolLoader", () => {

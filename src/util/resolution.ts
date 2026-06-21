@@ -20,6 +20,7 @@ import { clearPhpResolutionCaches, getPhpComposerImplicitFiles, resolvePhpImport
 import { clearPythonResolutionCache, resolvePythonModule } from "./resolution/python.js";
 import { resolveRustImportPath } from "./resolution/rust.js";
 import { clearTsconfigCache, loadNearestTsconfigFor, type MatchPathFn } from "./resolution/tsconfig.js";
+import { lruMapGet, lruMapSet } from "./lruMap.js";
 export { resolveGoImportPath } from "./resolution/go.js";
 export { resolveJvmPackageImportPaths } from "./resolution/jvm.js";
 export { getPhpComposerImplicitFiles } from "./resolution/php.js";
@@ -29,7 +30,16 @@ export { loadNearestTsconfigFor, type MatchPathFn } from "./resolution/tsconfig.
 export { mapLimit } from "./concurrency.js";
 export { listResolutionCandidates } from "./resolutionCandidates.js";
 
+const MAX_RESOLVE_SPECIFIER_CACHE_ENTRIES = 10_000;
 const resolveSpecifierCache = new Map<string, FileId | { external: string }>();
+
+function getResolveSpecifierCacheEntry(key: string): FileId | { external: string } | undefined {
+  return lruMapGet(resolveSpecifierCache, key);
+}
+
+function setResolveSpecifierCacheEntry(key: string, value: FileId | { external: string }): void {
+  lruMapSet(resolveSpecifierCache, key, value, MAX_RESOLVE_SPECIFIER_CACHE_ENTRIES);
+}
 export type FileId = string;
 
 export {
@@ -187,13 +197,13 @@ export async function resolveSpecifier(
     `hints=${hintKey}`,
     `exts=${extensionKey}`,
   ].join("::");
-  const cached = resolveSpecifierCache.get(cacheKey);
+  const cached = getResolveSpecifierCacheEntry(cacheKey);
   if (cached) return cached;
   const hasSchemePrefix = /^[A-Za-z][A-Za-z0-9+.-]*:/.test(spec);
   const isWindowsAbsolutePath = /^[A-Za-z]:[\\/]/.test(spec);
   if (!isWindowsAbsolutePath && (hasSchemePrefix || spec.startsWith("//"))) {
     const ext = { external: spec } as const;
-    resolveSpecifierCache.set(cacheKey, ext);
+    setResolveSpecifierCacheEntry(cacheKey, ext);
     return ext;
   }
 
@@ -207,18 +217,18 @@ export async function resolveSpecifier(
     }
     const hit = await findFirstExistingResolutionCandidate(base, resolutionExtensions);
     if (hit) {
-      resolveSpecifierCache.set(cacheKey, hit);
+      setResolveSpecifierCacheEntry(cacheKey, hit);
       return hit;
     }
     if (opts?.allowScssPartialResolution && path.extname(fromFile).toLowerCase() === ".scss") {
       const partialHit = await findFirstExistingScssPartialCandidate(base);
       if (partialHit) {
-        resolveSpecifierCache.set(cacheKey, partialHit);
+        setResolveSpecifierCacheEntry(cacheKey, partialHit);
         return partialHit;
       }
     }
     const ext = { external: spec } as const;
-    resolveSpecifierCache.set(cacheKey, ext);
+    setResolveSpecifierCacheEntry(cacheKey, ext);
     return ext;
   }
   // Bare specifier: prefer TS path mappings (tsconfig `paths`) before workspace/node_modules.
@@ -235,20 +245,20 @@ export async function resolveSpecifier(
       const cand = path.resolve(m);
       const hasExt = !!path.extname(cand);
       if (hasExt && fileExistsSync(cand)) {
-        resolveSpecifierCache.set(cacheKey, cand);
+        setResolveSpecifierCacheEntry(cacheKey, cand);
         return cand;
       }
       for (const e of resolutionExtensions) {
         const pth = cand + e;
         if (fileExistsSync(pth)) {
-          resolveSpecifierCache.set(cacheKey, pth);
+          setResolveSpecifierCacheEntry(cacheKey, pth);
           return pth;
         }
       }
       for (const e of resolutionExtensions) {
         const pth = path.join(cand, "index" + e);
         if (fileExistsSync(pth)) {
-          resolveSpecifierCache.set(cacheKey, pth);
+          setResolveSpecifierCacheEntry(cacheKey, pth);
           return pth;
         }
       }
@@ -258,7 +268,7 @@ export async function resolveSpecifier(
   if (!spec.startsWith(".") && !spec.startsWith("/")) {
     const resolvedWs = await resolveWorkspacePackage(spec, workspaceConfig, opts?.resolutionExtensions);
     if (resolvedWs) {
-      resolveSpecifierCache.set(cacheKey, resolvedWs);
+      setResolveSpecifierCacheEntry(cacheKey, resolvedWs);
       return resolvedWs;
     }
     const fromExt = path.extname(fromFile).toLowerCase();
@@ -268,14 +278,14 @@ export async function resolveSpecifier(
       // Try path-like fallback for languages that often map package-like names to source paths.
       const pathLike = await resolvePathLikeModule(projectRoot, spec, opts?.resolutionExtensions);
       if (pathLike) {
-        resolveSpecifierCache.set(cacheKey, pathLike);
+        setResolveSpecifierCacheEntry(cacheKey, pathLike);
         return pathLike;
       }
     }
     if (opts?.resolveNodeModules) {
       const nm = await resolveFromNodeModules(spec, fromFile, projectRoot, opts?.resolutionExtensions);
       if (nm) {
-        resolveSpecifierCache.set(cacheKey, nm);
+        setResolveSpecifierCacheEntry(cacheKey, nm);
         return nm;
       }
     }
@@ -286,13 +296,13 @@ export async function resolveSpecifier(
       const base = path.resolve(baseDir, spec);
       const hit = await findFirstExistingResolutionCandidate(base, resolutionExtensions);
       if (hit) {
-        resolveSpecifierCache.set(cacheKey, hit);
+        setResolveSpecifierCacheEntry(cacheKey, hit);
         return hit;
       }
     }
   }
   const ext = { external: spec } as const;
-  resolveSpecifierCache.set(cacheKey, ext);
+  setResolveSpecifierCacheEntry(cacheKey, ext);
   return ext;
 }
 

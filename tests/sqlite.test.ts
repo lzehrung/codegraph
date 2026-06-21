@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import fsp from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
+import { SqliteDatabase } from "../src/sqlite-driver.js";
 import {
   buildProjectIndex,
   buildSymbolGraphDetailed,
@@ -179,6 +180,70 @@ export function run() { helper(); new Widget(); }
     expect(tables).toContain("graph_snapshots");
     const schemaVersion = dbQuery(db, "SELECT value FROM graph_metadata WHERE key = 'schema_version';");
     expect(schemaVersion[0]).toBe("2");
+    db.close();
+  });
+
+  it("migrates v1 schema_version databases to v2", async () => {
+    const root = await mkTmpDir("dg-sqlite-v1-version-");
+    const dbPath = path.join(root, "graph.sqlite");
+    {
+      const db = new DatabaseSync(dbPath);
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS files (
+          path TEXT PRIMARY KEY,
+          is_external INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS symbols (
+          id TEXT PRIMARY KEY,
+          file TEXT NOT NULL,
+          name TEXT NOT NULL,
+          kind TEXT,
+          docstring TEXT,
+          line_span INTEGER,
+          complexity INTEGER,
+          FOREIGN KEY(file) REFERENCES files(path)
+        );
+        CREATE TABLE IF NOT EXISTS file_edges (
+          from_path TEXT NOT NULL,
+          to_path TEXT NOT NULL,
+          to_type TEXT NOT NULL,
+          raw TEXT,
+          type_only INTEGER,
+          FOREIGN KEY(from_path) REFERENCES files(path),
+          FOREIGN KEY(to_path) REFERENCES files(path)
+        );
+        CREATE TABLE IF NOT EXISTS symbol_edges (
+          from_id TEXT NOT NULL,
+          to_id TEXT NOT NULL,
+          label TEXT,
+          FOREIGN KEY(from_id) REFERENCES symbols(id),
+          FOREIGN KEY(to_id) REFERENCES symbols(id)
+        );
+        CREATE TABLE IF NOT EXISTS graph_metadata (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+        INSERT INTO graph_metadata (key, value) VALUES ('schema_version', '1');
+      `);
+      db.close();
+    }
+
+    const db = new SqliteDatabase(dbPath);
+    const { ensureSchema, readGraphSchemaVersion, SQLITE_SCHEMA_VERSION } = await import("../src/sqlite/schema.js");
+    expect(readGraphSchemaVersion(db)).toBe(1);
+    ensureSchema(db);
+    expect(readGraphSchemaVersion(db)).toBe(SQLITE_SCHEMA_VERSION);
+    const columns = db
+      .prepare("PRAGMA table_info(symbols);")
+      .all()
+      .map((row) => (typeof row.name === "string" ? row.name : ""))
+      .filter(Boolean);
+    expect(columns).toContain("visibility");
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table';")
+      .all()
+      .map((row) => String((row as { name?: unknown }).name));
+    expect(tables).toContain("graph_snapshots");
     db.close();
   });
 

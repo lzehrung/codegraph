@@ -14,6 +14,8 @@ import {
   type SqliteTableColumn,
 } from "../../util/sqliteSchema.js";
 import type { BuildOptions, BuildReport, ModuleIndex } from "../types.js";
+import { normalizePath } from "../../util/paths.js";
+import { lruMapGet, lruMapSet } from "../../util/lruMap.js";
 import { initCacheReport } from "./reports.js";
 
 const PARSED_CACHE_VERSION = 1;
@@ -34,7 +36,16 @@ type ModuleCacheEntry = {
   mod: ModuleIndex;
 };
 
+const MAX_MEMORY_CACHE_ENTRIES = 5000;
 const memoryCache = new Map<string, ModuleCacheEntry>();
+
+function memoryCacheKey(projectRoot: string, file: string): string {
+  return `${normalizePath(projectRoot)}::${file}`;
+}
+
+export function clearMemoryCache(): void {
+  memoryCache.clear();
+}
 const diskCacheDatabases = new Map<string, SqliteDatabase>();
 
 export function cacheRoot(projectRoot: string, opts?: BuildOptions): string {
@@ -99,6 +110,7 @@ function getDiskCacheDatabase(projectRoot: string, opts?: BuildOptions): SqliteD
 }
 
 export function closeDiskCacheDatabase(projectRoot: string, opts?: BuildOptions): void {
+  clearMemoryCache();
   const dbPath = diskCacheDatabasePath(projectRoot, opts);
   const db = diskCacheDatabases.get(dbPath);
   if (!db) return;
@@ -225,7 +237,7 @@ export function tryLoadFromCache(
   const cacheReport = initCacheReport(report, mode);
   const cacheEnabled = mode !== "off";
   if (mode === "memory") {
-    const entry = memoryCache.get(file);
+    const entry = lruMapGet(memoryCache, memoryCacheKey(projectRoot, file));
     if (entry && entry.sig === sig) {
       if (cacheEnabled && cacheReport) cacheReport.hits += 1;
       return entry.mod;
@@ -263,7 +275,12 @@ export function writeToCache(
 ): void {
   const mode = opts?.cache ?? "off";
   if (mode === "memory") {
-    memoryCache.set(file, { version: PARSED_CACHE_VERSION, sig, mod });
+    lruMapSet(
+      memoryCache,
+      memoryCacheKey(projectRoot, file),
+      { version: PARSED_CACHE_VERSION, sig, mod },
+      MAX_MEMORY_CACHE_ENTRIES,
+    );
   } else if (mode === "disk") {
     try {
       const db = getDiskCacheDatabase(projectRoot, opts);
