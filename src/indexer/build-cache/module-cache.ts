@@ -246,10 +246,15 @@ export function tryLoadFromCache(
   const cacheReport = initCacheReport(report, mode);
   const cacheEnabled = mode !== "off";
   if (mode === "memory") {
-    const entry = lruMapGet(memoryCache, memoryCacheKey(projectRoot, file));
-    if (entry && entry.sig === sig) {
-      if (cacheEnabled && cacheReport) cacheReport.hits += 1;
-      return entry.mod;
+    const key = memoryCacheKey(projectRoot, file);
+    const entry = memoryCache.get(key);
+    if (entry) {
+      if (entry.sig === sig) {
+        lruMapGet(memoryCache, key);
+        if (cacheEnabled && cacheReport) cacheReport.hits += 1;
+        return entry.mod;
+      }
+      memoryCache.delete(key);
     }
     if (cacheEnabled && cacheReport) cacheReport.misses += 1;
     return null;

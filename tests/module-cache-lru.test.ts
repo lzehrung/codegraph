@@ -41,6 +41,24 @@ describe("module memory cache bounds", () => {
     expect(tryLoadFromCache(rootB, "/files/b.ts", sig, { cache: "memory" })).toBeNull();
   });
 
+  it("deletes stale signature mismatches instead of refreshing them", () => {
+    const root = path.join(os.tmpdir(), "dg-cache-stale-signature");
+    clearMemoryCache();
+
+    writeToCache(root, "/files/stale.ts", "old-sig", moduleFor("/files/stale.ts", "stale"), { cache: "memory" });
+    for (let i = 0; i < 4999; i += 1) {
+      const file = `/files/current-${i}.ts`;
+      writeToCache(root, file, "sig", moduleFor(file, `current-${i}`), { cache: "memory" });
+    }
+
+    expect(tryLoadFromCache(root, "/files/stale.ts", "new-sig", { cache: "memory" })).toBeNull();
+    writeToCache(root, "/files/extra.ts", "sig", moduleFor("/files/extra.ts", "extra"), { cache: "memory" });
+
+    expect(tryLoadFromCache(root, "/files/stale.ts", "old-sig", { cache: "memory" })).toBeNull();
+    expect(tryLoadFromCache(root, "/files/extra.ts", "sig", { cache: "memory" })?.locals[0]?.localName).toBe("extra");
+    clearMemoryCache();
+  });
+
   it("clears only the closed project from the memory cache", () => {
     const rootA = path.join(os.tmpdir(), "dg-cache-close-a");
     const rootB = path.join(os.tmpdir(), "dg-cache-close-b");
