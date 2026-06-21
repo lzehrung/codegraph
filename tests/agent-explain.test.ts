@@ -273,6 +273,21 @@ describe("agent explain", () => {
     expect(explanation.references.map((reference) => reference.file)).toEqual(["ref-00.ts", "ref-01.ts"]);
   });
 
+  it("skips reference collection when reference and snippet limits are zero", async () => {
+    const root = await mkRepo();
+    const explanation = await explainCodegraphTarget({
+      root,
+      target: "validateUser",
+      maxReferences: 0,
+      maxSnippets: 0,
+    });
+
+    expect(explanation.references).toEqual([]);
+    expect(explanation.snippets).toEqual([]);
+    expect(explanation.limits.references).toBe(0);
+    expect(explanation.limits.snippets).toBe(0);
+  });
+
   it("bounds file symbols and reports omitted counts", async () => {
     const root = await mkRepo();
     await fs.writeFile(

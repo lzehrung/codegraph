@@ -263,6 +263,11 @@ export function run() { helper(); new Widget(); }
     expect(() => ensureSchema(db)).toThrow(`Unsupported codegraph SQLite schema version 999`);
     expect(readGraphSchemaVersion(db)).toBe(999);
     expect(SQLITE_SCHEMA_VERSION).toBeLessThan(999);
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;")
+      .all()
+      .map((row) => String((row as { name?: unknown }).name));
+    expect(tables).toEqual(["graph_metadata"]);
     db.close();
   });
 

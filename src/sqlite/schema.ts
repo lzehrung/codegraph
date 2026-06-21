@@ -179,6 +179,13 @@ const ensureGraphIndexes = (db: SqliteDatabase): boolean => {
 };
 
 export const ensureSchema = (db: SqliteDatabase) => {
+  const currentVersion = readGraphSchemaVersion(db);
+  if (currentVersion > SQLITE_SCHEMA_VERSION) {
+    throw new Error(
+      `Unsupported codegraph SQLite schema version ${currentVersion}; this version supports up to ${SQLITE_SCHEMA_VERSION}.`,
+    );
+  }
+
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = NORMAL");
   db.pragma("temp_store = MEMORY");
@@ -239,12 +246,6 @@ export const ensureSchema = (db: SqliteDatabase) => {
     );
   `);
 
-  const currentVersion = readGraphSchemaVersion(db);
-  if (currentVersion > SQLITE_SCHEMA_VERSION) {
-    throw new Error(
-      `Unsupported codegraph SQLite schema version ${currentVersion}; this version supports up to ${SQLITE_SCHEMA_VERSION}.`,
-    );
-  }
   migrateGraphSchema(db, currentVersion);
   ensureGraphIndexes(db);
   writeGraphSchemaVersion(db, SQLITE_SCHEMA_VERSION);
