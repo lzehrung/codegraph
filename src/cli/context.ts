@@ -371,6 +371,14 @@ export type CommandReport = {
   review?: ReviewBuildReport;
 };
 
+function isSupportedShortFlagToken(token: string): boolean {
+  return token === "-h" || token === "-v" || token === "-o";
+}
+
+function isCliOptionValueToken(token: string): boolean {
+  return !token.startsWith("--") && !isSupportedShortFlagToken(token);
+}
+
 export function parseCliArgs(command: string, tokens: string[]): ParsedCliArgs {
   const positionals: string[] = [];
   const flags = new Set<string>();
@@ -400,7 +408,9 @@ export function parseCliArgs(command: string, tokens: string[]): ParsedCliArgs {
       const key = t;
       if (isCliValueOption(command, key, positionals)) {
         const next = tokens[i + 1];
-        if (next === undefined) throw new Error(`Missing value for ${key} option`);
+        if (next === undefined || !isCliOptionValueToken(next)) {
+          throw new Error(`Missing value for ${key} option`);
+        }
         pushOpt(key, next);
         i++;
       } else {

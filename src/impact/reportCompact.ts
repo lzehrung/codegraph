@@ -5,6 +5,7 @@ import {
   buildOptionalTopImpacts,
   mapFileEdges,
   mapSuggestions,
+  mapImpactCyclesToCompact,
   mapSurfaceArea,
 } from "./reportShared.js";
 import type { ImpactReportPartsBase } from "./reportParts.js";
@@ -183,28 +184,6 @@ function buildCompactCycles(
 ): Pick<CompactImpactReport, "cycles"> {
   if (!cycles.length) return {};
   return {
-    cycles: cycles.map((cycle) => ({
-      files: cycle.files.map((file) => fileId(file)),
-      entryEdges: cycle.entryEdges.map((edge) => ({
-        from: fileId(edge.from),
-        to: fileId(edge.to),
-        raw: edge.raw,
-        ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
-      })),
-      internalEdges: cycle.internalEdges.map((edge) => ({
-        from: fileId(edge.from),
-        to: fileId(edge.to),
-        raw: edge.raw,
-        ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
-      })),
-      fileCount: cycle.fileCount,
-      internalEdgeCount: cycle.internalEdgeCount,
-      fanInFromOutside: cycle.fanInFromOutside,
-      priorityScore: cycle.priorityScore,
-      remediationHint: cycle.remediationHint,
-      touchesChangedFile: cycle.touchesChangedFile,
-      touchesImpactedFile: cycle.touchesImpactedFile,
-      severity: cycle.severity,
-    })),
+    cycles: mapImpactCyclesToCompact(cycles, fileId),
   };
 }

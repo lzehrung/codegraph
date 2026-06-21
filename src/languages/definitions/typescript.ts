@@ -1,6 +1,11 @@
 import type { LanguageDefinition, SyntaxNodeLike } from "../types.js";
 import { loadTypeScriptGrammars } from "./loadLanguage.js";
 import { registerLanguage } from "../registry.js";
+import {
+  ECMASCRIPT_CONTROL_SPLIT_POINTS,
+  ECMASCRIPT_CORE_FUNCTION_BLOCKS,
+  ECMASCRIPT_MODULE_VAR_BLOCKS,
+} from "./jsFamily.js";
 
 function normalizeTypeScriptNativeQuery(kind: string, query: string): string {
   let normalized = query.replace(
@@ -14,58 +19,16 @@ function normalizeTypeScriptNativeQuery(kind: string, query: string): string {
   return normalized;
 }
 
+const TYPESCRIPT_CLASS_BLOCK = {
+  type: "class_declaration",
+  nameQuery: "name: (type_identifier) @chunk.name",
+  captureId: "class",
+} as const;
+
 const BASE_STRUCTURE = {
   blocks: [
-    {
-      type: "class_declaration",
-      nameQuery: "name: (type_identifier) @chunk.name",
-      captureId: "class",
-    },
-    {
-      type: "function_declaration",
-      nameQuery: "name: (identifier) @chunk.name",
-      captureId: "function",
-    },
-    {
-      type: "generator_function_declaration",
-      nameQuery: "name: (identifier) @chunk.name",
-      captureId: "function",
-    },
-    {
-      type: "method_definition",
-      nameQuery: "name: (_) @chunk.name body: (statement_block) @chunk.block.method",
-      captureId: "method",
-    },
-
-    // Variable assignments (functions/arrows)
-    {
-      type: "lexical_declaration",
-      nameQuery: `(variable_declarator name: (identifier) @chunk.name value: [ (function_expression body: (statement_block) @chunk.block.function) (arrow_function body: (statement_block) @chunk.block.function) ])`,
-      captureId: "function",
-    },
-    {
-      type: "variable_declaration",
-      nameQuery: `(variable_declarator name: (identifier) @chunk.name value: [ (function_expression body: (statement_block) @chunk.block.function) (arrow_function body: (statement_block) @chunk.block.function) ])`,
-      captureId: "function",
-    },
-    {
-      type: "assignment_expression",
-      nameQuery: `left: (_) @chunk.name right: [ (function_expression body: (statement_block) @chunk.block.function) (arrow_function body: (statement_block) @chunk.block.function) ]`,
-      captureId: "function",
-    },
-
-    // Remaining functions
-    {
-      type: "arrow_function",
-      nameQuery: "body: (statement_block) @chunk.block.function",
-      captureId: "function",
-    },
-    {
-      type: "function_expression",
-      nameQuery: "body: (statement_block) @chunk.block.function",
-      captureId: "function",
-    },
-
+    TYPESCRIPT_CLASS_BLOCK,
+    ...ECMASCRIPT_CORE_FUNCTION_BLOCKS.filter((block) => block.type !== "class_declaration"),
     // TS Specifics
     {
       type: "interface_declaration",
@@ -97,34 +60,11 @@ const BASE_STRUCTURE = {
     { type: "object", captureId: "data" },
 
     // Top level vars
-    { type: "import_statement", captureId: "imports", parentType: "program" },
-    {
-      type: "lexical_declaration",
-      nameQuery: `(variable_declarator name: (identifier) @chunk.name)`,
-      captureId: "module_var",
-      parentType: "program",
-    },
-    {
-      type: "variable_declaration",
-      nameQuery: `(variable_declarator name: (identifier) @chunk.name)`,
-      captureId: "module_var",
-      parentType: "program",
-    },
+    ...ECMASCRIPT_MODULE_VAR_BLOCKS.map((block) =>
+      block.type === "import_statement" ? { ...block, parentType: "program" as const } : block,
+    ),
   ],
-  splitPoints: [
-    "if_statement",
-    "else_clause",
-    "switch_statement",
-    "switch_case",
-    "switch_default",
-    "for_statement",
-    "for_in_statement",
-    "while_statement",
-    "do_statement",
-    "try_statement",
-    "catch_clause",
-    "finally_clause",
-  ],
+  splitPoints: [...ECMASCRIPT_CONTROL_SPLIT_POINTS, "switch_case", "switch_default"],
   comments: ["comment"],
 };
 

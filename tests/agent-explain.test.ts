@@ -44,6 +44,19 @@ async function mkDuplicateRepo(): Promise<string> {
   return root;
 }
 
+async function mkManyReferenceRepo(): Promise<string> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-explain-refs-"));
+  await fs.writeFile(path.join(root, "target.ts"), "export function sharedTarget() { return 1; }\n");
+  for (let index = 0; index < 8; index += 1) {
+    const name = `ref-${String(index).padStart(2, "0")}.ts`;
+    await fs.writeFile(
+      path.join(root, name),
+      `import { sharedTarget } from './target';\nexport const value${index} = sharedTarget();\n`,
+    );
+  }
+  return root;
+}
+
 async function mkManyDuplicateRepo(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-explain-many-dups-"));
   await fs.mkdir(path.join(root, "src"), { recursive: true });
@@ -249,6 +262,30 @@ describe("agent explain", () => {
     expect(explanation.omittedCounts.reverseDependencies).toBe(1);
     expect(explanation.omittedCounts.references).toBeGreaterThan(0);
     expect(explanation.omittedCounts.snippets).toBeGreaterThan(0);
+  });
+
+  it("returns references sorted by file before truncation", async () => {
+    const root = await mkManyReferenceRepo();
+    const explanation = await explainCodegraphTarget({ root, target: "sharedTarget", maxReferences: 2 });
+
+    expect(explanation.references).toHaveLength(2);
+    expect(explanation.omittedCounts.references).toBeGreaterThan(0);
+    expect(explanation.references.map((reference) => reference.file)).toEqual(["ref-00.ts", "ref-01.ts"]);
+  });
+
+  it("skips reference collection when reference and snippet limits are zero", async () => {
+    const root = await mkRepo();
+    const explanation = await explainCodegraphTarget({
+      root,
+      target: "validateUser",
+      maxReferences: 0,
+      maxSnippets: 0,
+    });
+
+    expect(explanation.references).toEqual([]);
+    expect(explanation.snippets).toEqual([]);
+    expect(explanation.limits.references).toBe(0);
+    expect(explanation.limits.snippets).toBe(0);
   });
 
   it("bounds file symbols and reports omitted counts", async () => {

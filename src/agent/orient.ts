@@ -6,6 +6,7 @@ import { getUnresolvedImports } from "../graphs/unresolved.js";
 import type { BuildOptions } from "../indexer/types.js";
 import type { Graph } from "../types.js";
 import { isGitRepo } from "../util/git.js";
+import { isPathUnderIncludeRoots, normalizeIncludeRootsRelative } from "../util/includeRoots.js";
 import { normalizePath } from "../util/paths.js";
 import { createAgentSession, type AgentSession } from "./session.js";
 import { quoteShellArg } from "./shell.js";
@@ -127,9 +128,9 @@ export async function orientCodegraphWithSession(
   const limits = ORIENT_BUDGETS[budget];
   const snapshot = await session.loadProject({ symbolGraph: "skip" });
   const root = snapshot.root;
-  const includeRoots = normalizeIncludeRoots(root, request.includeRoots ?? []);
+  const includeRoots = normalizeIncludeRootsRelative(root, request.includeRoots ?? []);
   const projectFiles = snapshot.files.map((file) => normalizeRelativePath(root, file));
-  const scopedFiles = projectFiles.filter((file) => isUnderIncludeRoots(file, includeRoots));
+  const scopedFiles = projectFiles.filter((file) => isPathUnderIncludeRoots(file, includeRoots));
   const scopedFileSet = new Set(scopedFiles);
   const scopedAbsoluteFiles = snapshot.files.filter((file) => scopedFileSet.has(normalizeRelativePath(root, file)));
   const scopedFileGraph = buildScopedGraph(snapshot.fileGraph, root, scopedFileSet);
@@ -258,25 +259,9 @@ function buildReviewFocus(base: string, head: string): AgentOrientationFocus {
   };
 }
 
-function normalizeIncludeRoots(root: string, includeRoots: string[]): string[] {
-  return includeRoots
-    .map((includeRoot) => {
-      const relativeRoot = path.isAbsolute(includeRoot) ? path.relative(root, includeRoot) : includeRoot;
-      return normalizePath(relativeRoot)
-        .replace(/^\.?\//, "")
-        .replace(/\/$/, "");
-    })
-    .filter((includeRoot) => includeRoot && includeRoot !== ".");
-}
-
 function normalizeRelativePath(root: string, file: string): string {
   const relative = path.isAbsolute(file) ? path.relative(root, file) : file;
   return normalizePath(relative);
-}
-
-function isUnderIncludeRoots(file: string, includeRoots: string[]): boolean {
-  if (!includeRoots.length) return true;
-  return includeRoots.some((root) => file === root || file.startsWith(`${root}/`));
 }
 
 function buildScopedGraph(graph: Graph, root: string, scopedFiles: ReadonlySet<string>): Graph {

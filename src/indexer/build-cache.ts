@@ -14,6 +14,7 @@ export {
   buildBloomFilterForFile,
   cacheRoot,
   cacheSignatureForFile,
+  clearMemoryCache,
   closeDiskCacheDatabase,
   fileSignature,
   tryLoadFromCache,

@@ -6,6 +6,7 @@ import { buildProjectIndex, buildProjectIndexFromFiles } from "../indexer/build-
 import { getApiSurface } from "../indexer/symbols.js";
 import type { Edge } from "../types.js";
 import { DEFAULT_PROJECT_PATTERNS, listProjectFiles } from "../util/projectFiles.js";
+import { isPathUnderIncludeRoots, normalizeIncludeRootsAbsolute } from "../util/includeRoots.js";
 import { normalizePath, resolveFilePathFromRoot, toProjectDisplayPath } from "../util/paths.js";
 import { countFilesByLanguage } from "./languages.js";
 import type {
@@ -25,21 +26,11 @@ function normalizeRoot(root: string): string {
   return normalizePath(path.resolve(root));
 }
 
-function normalizeIncludeRoot(root: string, includeRoot: string): string {
-  return normalizePath(resolveFilePathFromRoot(root, includeRoot));
-}
-
-function isUnderIncludeRoots(filePath: string, roots: readonly string[]): boolean {
-  if (!roots.length) return true;
-  const normalizedFile = normalizePath(filePath);
-  return roots.some((root) => normalizedFile === root || normalizedFile.startsWith(`${root}/`));
-}
-
 async function listFilesForSnapshot(root: string, options: ArchitectureSnapshotOptions): Promise<string[] | undefined> {
   if (!options.includeRoots?.length) return undefined;
-  const roots = options.includeRoots.map((entry) => normalizeIncludeRoot(root, entry));
+  const roots = normalizeIncludeRootsAbsolute(root, options.includeRoots);
   const files = await listProjectFiles(root, DEFAULT_PROJECT_PATTERNS, options.discovery);
-  return files.filter((file) => isUnderIncludeRoots(file, roots)).sort();
+  return files.filter((file) => isPathUnderIncludeRoots(normalizePath(file), roots)).sort();
 }
 
 function cycleKey(files: readonly string[]): string {
@@ -169,7 +160,7 @@ export async function buildArchitectureSnapshot(
   const index = files
     ? await buildProjectIndexFromFiles(root, files, indexOptions)
     : await buildProjectIndex(root, indexOptions);
-  const includeRoots = options.includeRoots?.map((entry) => normalizeIncludeRoot(root, entry)) ?? [];
+  const includeRoots = options.includeRoots ? normalizeIncludeRootsAbsolute(root, options.includeRoots) : [];
   const indexedFiles = [...index.byFile.keys()].sort();
 
   return {

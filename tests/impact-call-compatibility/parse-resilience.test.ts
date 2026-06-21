@@ -23,7 +23,6 @@ function rangeFor(source: string, needle: string): Range {
   };
 }
 
-
 vi.mock(
   "../../src/indexer/navigation.js",
   async (importOriginal: () => Promise<typeof import("../../src/indexer/navigation.js")>) => {
@@ -236,6 +235,4 @@ describe("call compatibility parse resilience", () => {
     expect(diagnostics.callCompatibility?.skippedByReason["parse-failed"]).toBe(1);
     vi.mocked(findReferences).mockReset();
   });
-
 });
-

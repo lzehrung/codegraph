@@ -3,6 +3,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { collectGraph } from "./graph-builder.js";
+import { isPathUnderIncludeRoots } from "./util/includeRoots.js";
 import type { BuildOptions } from "./indexer/types.js";
 import { type GraphBuildOptions } from "./graphs/types.js";
 import { type NativeRuntimeMode } from "./native/treeSitterNative.js";
@@ -353,9 +354,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   const includeRootsAbs = includeRoots.map((r) => normalizePath(resolveFilePathFromRoot(projectRootFs, r)));
 
   const isUnderIncludeRoots = (filePath: string): boolean => {
-    if (!includeRootsAbs.length) return true;
-    const f = filePath.replace(/\\/g, "/");
-    return includeRootsAbs.some((root) => f === root || f.startsWith(`${root}/`));
+    return isPathUnderIncludeRoots(filePath.replace(/\\/g, "/"), includeRootsAbs);
   };
   const displayScanRoot = (scanRoot: string): string => {
     const relative = normalizePath(path.relative(projectRootFs, scanRoot));

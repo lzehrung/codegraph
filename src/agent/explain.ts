@@ -192,6 +192,7 @@ type ResolvedExplainTarget =
 
 const SQL_FACT_READ_CONCURRENCY = 32;
 const AGENT_DUPLICATE_MAX_PAIRS = 20_000;
+const AGENT_EXPLAIN_REFERENCE_COLLECTION_MULTIPLIER = 10;
 
 export async function explainCodegraphTarget(request: AgentExplainTarget): Promise<AgentExplanation> {
   const session = createAgentSession({
@@ -731,7 +732,11 @@ async function collectReferenceContext(
   referenceLimit: number,
   snippetLimit: number,
 ): Promise<ReferenceContext> {
-  const collectionLimit = Math.max(referenceLimit, snippetLimit) + 1;
+  const displayLimit = Math.max(referenceLimit, snippetLimit);
+  if (displayLimit <= 0) {
+    return emptyReferenceContext();
+  }
+  const collectionLimit = displayLimit * AGENT_EXPLAIN_REFERENCE_COLLECTION_MULTIPLIER;
   const result = await findReferences(snapshot.index, { def }, { context: "line", maxReferences: collectionLimit });
   if (result.status !== "ok") return emptyReferenceContext();
 

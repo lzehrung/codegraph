@@ -396,7 +396,7 @@ export async function findReferences(
   }
 
   if (shouldScanVerifiedReferences(def, phpQualifiedNames, parsedContext)) {
-    for (const fileId of index.byFile.keys()) {
+    for (const fileId of Array.from(index.byFile.keys()).sort((left, right) => left.localeCompare(right))) {
       if (hasReachedMaxReferences()) break;
       const filter = index.bloomFilters?.get(fileId);
       if (filter && !filter.mightContain(def.localName)) continue;

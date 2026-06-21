@@ -451,7 +451,12 @@ async function collectToolDependencyEntries(
       ...(options.depth !== undefined ? { depth: options.depth } : {}),
       limit: limit + 1,
     });
-    const limited = boundAgentList(entries, limit).items.map((entry) => ({
+    const sortedEntries = [...entries].sort((left, right) => {
+      const fileDelta = left.file.localeCompare(right.file);
+      if (fileDelta !== 0) return fileDelta;
+      return left.depth - right.depth;
+    });
+    const limited = boundAgentList(sortedEntries, limit).items.map((entry) => ({
       file: normalizeToolFileOutput(root, entry.file),
       depth: entry.depth,
     }));

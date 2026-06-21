@@ -197,6 +197,7 @@ export class LazyProjectIndex {
   private preloadStrategy: LazyLoadOptions["preloadStrategy"];
   private preloadMatcher: ((file: string) => boolean) | null;
   private loadedOrder: FileId[] = [];
+  private readonly maxModuleEntries: number;
 
   constructor(options?: LazyLoadOptions) {
     this.maxCached =
@@ -205,6 +206,12 @@ export class LazyProjectIndex {
         : 100;
     this.preloadStrategy = options?.preloadStrategy ?? "none";
     this.preloadMatcher = options?.preloadPatterns?.length ? picomatch(options.preloadPatterns, { dot: true }) : null;
+    this.maxModuleEntries = Math.max(this.maxCached * 4, 256);
+  }
+
+  clear(): void {
+    this.modules.clear();
+    this.loadedOrder = [];
   }
 
   /**
@@ -218,6 +225,7 @@ export class LazyProjectIndex {
       this.enforceMaxCached(file);
     }
     this.autoPreloadModule(file, module);
+    this.trimUnloadedModules();
   }
 
   /**
@@ -375,9 +383,6 @@ export class LazyProjectIndex {
   }
 
   private enforceMaxCached(pinnedFile?: FileId): void {
-    if (this.maxCached < 0) {
-      return;
-    }
     while (this.loadedOrder.length > this.maxCached) {
       const evictionIndex = this.loadedOrder.findIndex((file) => file !== pinnedFile);
       const victimIndex = evictionIndex >= 0 ? evictionIndex : 0;
@@ -391,6 +396,23 @@ export class LazyProjectIndex {
       }
       module.locals.unload();
       this.syncModuleLoadedFlag(module);
+    }
+    this.trimUnloadedModules();
+  }
+
+  private trimUnloadedModules(): void {
+    if (this.modules.size <= this.maxModuleEntries) {
+      return;
+    }
+    for (const [file, module] of this.modules) {
+      if (this.isModuleLoaded(module)) {
+        continue;
+      }
+      this.modules.delete(file);
+      this.removeLoadedFile(file);
+      if (this.modules.size <= this.maxModuleEntries) {
+        break;
+      }
     }
   }
 }

@@ -2,11 +2,87 @@ import type { FileId } from "../types.js";
 import type {
   CallCompatibilityHint,
   ExportSummaryEntry,
+  ImpactCycle,
+  ImpactCycleEdge,
   ImpactSuggestion,
   ImpactSurfaceAreaFile,
   ImpactTopItem,
   ReexportChainEntry,
+  CompactImpactReport,
 } from "./types.js";
+
+type MappedImpactCycleEdge<TFile extends FileId | number> = {
+  from: TFile;
+  to: TFile;
+  raw: string;
+  typeOnly?: boolean;
+};
+
+type MappedImpactCycleFiles<TFile extends FileId | number> = {
+  files: TFile[];
+  entryEdges: MappedImpactCycleEdge<TFile>[];
+  internalEdges: MappedImpactCycleEdge<TFile>[];
+};
+
+function mapImpactCycleEdge<TFile extends FileId | number>(
+  edge: ImpactCycleEdge,
+  mapFile: (file: FileId) => TFile,
+): MappedImpactCycleEdge<TFile> {
+  const mapped: MappedImpactCycleEdge<TFile> = {
+    from: mapFile(edge.from),
+    to: mapFile(edge.to),
+    raw: edge.raw,
+  };
+  if (edge.typeOnly !== undefined) {
+    mapped.typeOnly = edge.typeOnly;
+  }
+  return mapped;
+}
+
+export function mapImpactCycleFiles<TFile extends FileId | number>(
+  cycle: ImpactCycle,
+  mapFile: (file: FileId) => TFile,
+): MappedImpactCycleFiles<TFile> {
+  return {
+    files: cycle.files.map((file) => mapFile(file)),
+    entryEdges: cycle.entryEdges.map((edge) => mapImpactCycleEdge(edge, mapFile)),
+    internalEdges: cycle.internalEdges.map((edge) => mapImpactCycleEdge(edge, mapFile)),
+  };
+}
+
+export function mapImpactCyclesForDisplay(
+  cycles: readonly ImpactCycle[],
+  mapFile: (file: FileId) => FileId,
+): ImpactCycle[] {
+  return cycles.map((cycle) => ({
+    ...cycle,
+    ...mapImpactCycleFiles(cycle, mapFile),
+  }));
+}
+
+export type CompactImpactCycle = NonNullable<CompactImpactReport["cycles"]>[number];
+
+export function mapImpactCyclesToCompact(
+  cycles: readonly ImpactCycle[],
+  fileId: (file: FileId) => number,
+): CompactImpactCycle[] {
+  return cycles.map((cycle) => {
+    const mapped = mapImpactCycleFiles(cycle, fileId);
+    return {
+      files: mapped.files,
+      entryEdges: mapped.entryEdges,
+      internalEdges: mapped.internalEdges,
+      fileCount: cycle.fileCount,
+      internalEdgeCount: cycle.internalEdgeCount,
+      fanInFromOutside: cycle.fanInFromOutside,
+      priorityScore: cycle.priorityScore,
+      remediationHint: cycle.remediationHint,
+      touchesChangedFile: cycle.touchesChangedFile,
+      touchesImpactedFile: cycle.touchesImpactedFile,
+      severity: cycle.severity,
+    };
+  });
+}
 
 export type MappedExportSummaryEntry<TFile extends FileId | number> = Omit<ExportSummaryEntry, "file"> & {
   file: TFile;

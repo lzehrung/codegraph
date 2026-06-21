@@ -14,6 +14,7 @@ import {
   type NativeRuntimeMode,
 } from "../native/treeSitterNative.js";
 import type { Graph } from "../types.js";
+import { restrictGraphToIncludeRoots } from "../util/includeRoots.js";
 import { supportForFile } from "../languages.js";
 import { toProjectDisplayPath } from "../util/paths.js";
 import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
@@ -141,30 +142,6 @@ function formatIndexCacheMetadata(metadata: IndexCacheMetadata): string {
   return `Index cache: manifest=${metadata.manifestPath} updatedAt=${updatedAt} lastCommit=${lastCommit}`;
 }
 
-function restrictGraphToIncludeRoots(graph: Graph, includeRoots: string[]): Graph {
-  if (!includeRoots.length) {
-    return graph;
-  }
-  const normalizedRoots = includeRoots.map(normalizePathForDisplay);
-  const nodes = new Set<string>();
-  for (const file of graph.nodes) {
-    const normalizedFile = normalizePathForDisplay(file);
-    if (normalizedRoots.some((root) => normalizedFile === root || normalizedFile.startsWith(`${root}/`))) {
-      nodes.add(normalizedFile);
-    }
-  }
-  const edges = graph.edges.filter((edge) => {
-    if (!nodes.has(normalizePathForDisplay(edge.from))) {
-      return false;
-    }
-    return edge.to.type === "external" || nodes.has(normalizePathForDisplay(edge.to.path));
-  });
-  return {
-    nodes,
-    edges,
-  };
-}
-
 async function buildScopedReportGraph(
   projectRoot: string,
   includeRoots: string[],
@@ -195,7 +172,7 @@ async function buildScopedReportGraph(
       ...(opts.report ? { report: opts.report } : {}),
     });
     return {
-      graph: restrictGraphToIncludeRoots(index.graph, includeRoots),
+      graph: restrictGraphToIncludeRoots(index.graph, includeRoots, normalizePathForDisplay),
       indexCache,
     };
   }
@@ -205,7 +182,7 @@ async function buildScopedReportGraph(
     ...(opts.report ? { report: opts.report } : {}),
   });
   return {
-    graph: restrictGraphToIncludeRoots(sourceGraph, includeRoots),
+    graph: restrictGraphToIncludeRoots(sourceGraph, includeRoots, normalizePathForDisplay),
   };
 }
 
@@ -292,7 +269,7 @@ async function buildInspectReport(
     ...workerOpts,
     ...(graphOptions ? { graph: graphOptions } : {}),
   });
-  const graph = restrictGraphToIncludeRoots(index.graph, includeRoots);
+  const graph = restrictGraphToIncludeRoots(index.graph, includeRoots, normalizePathForDisplay);
   const hotspots = getHotspots(graph, { limit });
   const unresolved = getUnresolvedImports(graph, { projectRoot });
   const cycles = findDetailedCycles(graph);

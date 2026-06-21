@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  collectDeletedTrackedFileDependents,
-  collectTrackedFileDependents,
-} from "../src/indexer/incremental-plan.js";
+import { collectDeletedTrackedFileDependents, collectTrackedFileDependents } from "../src/indexer/incremental-plan.js";
 import type { ManifestFileEntry } from "../src/indexer/build-cache.js";
 import type { Edge } from "../src/types.js";
 
@@ -23,9 +20,7 @@ describe("incremental-plan dependents", () => {
     };
 
     const changed = new Set(["/proj/c.ts"]);
-    expect(collectTrackedFileDependents(trackedEntries, changed)).toEqual(
-      new Set(["/proj/b.ts", "/proj/a.ts"]),
-    );
+    expect(collectTrackedFileDependents(trackedEntries, changed)).toEqual(new Set(["/proj/b.ts", "/proj/a.ts"]));
   });
 
   it("still collects dependents of deleted tracked files", () => {
