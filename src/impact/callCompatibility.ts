@@ -1313,6 +1313,7 @@ async function collectVerifiedCallsiteReferences(
   changedSymbol: ChangedSymbol,
   maxRefs: number,
   shouldIncludeReference: (file: string) => boolean,
+  diagnostics: ImpactDiagnostics["callCompatibility"] | undefined,
 ): Promise<Reference[]> {
   const refs: Reference[] = [];
   const seen = new Set<string>();
@@ -1328,7 +1329,10 @@ async function collectVerifiedCallsiteReferences(
     if (!support || !supportsCallCompatibilityLanguage(support.id)) {
       continue;
     }
-    const parsed = await ensureParsedContext(file, index.parsed?.get(file));
+    const parsed = await tryEnsureParsedContext(file, index.parsed?.get(file), diagnostics);
+    if (!parsed) {
+      continue;
+    }
 
     const walk = async (node: SyntaxNodeLike): Promise<void> => {
       if (refs.length >= maxRefs) {
@@ -1387,6 +1391,20 @@ function classifyCompatibility(
   return { status: "compatible", reason: "compatible_argument_count" };
 }
 
+
+async function tryEnsureParsedContext(
+  file: string,
+  parsedEntry: Parameters<typeof ensureParsedContext>[1],
+  diagnostics: ImpactDiagnostics["callCompatibility"] | undefined,
+): Promise<Awaited<ReturnType<typeof ensureParsedContext>> | null> {
+  try {
+    return await ensureParsedContext(file, parsedEntry);
+  } catch {
+    incrementSkippedReason(diagnostics, "parse-failed");
+    return null;
+  }
+}
+
 function incrementSkippedReason(diagnostics: ImpactDiagnostics["callCompatibility"] | undefined, reason: string): void {
   if (!diagnostics) {
     return;
@@ -1426,7 +1444,14 @@ export async function attachCallCompatibilityHints(
       continue;
     }
 
-    const parsedDefinition = await ensureParsedContext(changedSymbol.file, index.parsed?.get(changedSymbol.file));
+    const parsedDefinition = await tryEnsureParsedContext(
+      changedSymbol.file,
+      index.parsed?.get(changedSymbol.file),
+      diagnostics,
+    );
+    if (!parsedDefinition) {
+      continue;
+    }
     if (!supportsCallCompatibilityLanguage(parsedDefinition.sup.id)) {
       if (diagnostics && !diagnostics.unsupportedLanguages.includes(parsedDefinition.sup.id)) {
         diagnostics.unsupportedLanguages.push(parsedDefinition.sup.id);
@@ -1490,7 +1515,10 @@ export async function attachCallCompatibilityHints(
         return;
       }
 
-      const parsedCallsite = await ensureParsedContext(ref.file, index.parsed?.get(ref.file));
+      const parsedCallsite = await tryEnsureParsedContext(ref.file, index.parsed?.get(ref.file), diagnostics);
+      if (!parsedCallsite) {
+        return;
+      }
       const callsiteRequest: ExtractCallsiteArgumentsRequest = {
         languageId: parsedCallsite.sup.id,
         source: parsedCallsite.source,
@@ -1544,6 +1572,7 @@ export async function attachCallCompatibilityHints(
           changedSymbol,
           verifiedScanLimit,
           shouldIncludeReference,
+          diagnostics,
         );
         for (const ref of verifiedCallsites) {
           if (consideredCallsites >= options.maxRefs) {

@@ -81,6 +81,7 @@ import {
 import {
   buildIncrementalGitDiffOptions,
   collectDeletedTrackedFileDependents,
+  collectTrackedFileDependents,
   isMissingGitRevisionError,
   partitionTrackedManifestFiles,
 } from "./incremental-plan.js";
@@ -983,6 +984,20 @@ export async function buildProjectIndexIncremental(
           changedFiles.add(file);
         }
       }
+      const invalidateCachedDependents = () => {
+        const dependentFilesOfChanged = collectTrackedFileDependents(trackedEntries, changedFiles);
+        for (const file of dependentFilesOfChanged) {
+          if (modules.has(file)) {
+            modules.delete(file);
+            if (fileReport) {
+              fileReport.cached = Math.max(0, (fileReport.cached ?? 0) - 1);
+            }
+          }
+          markAsChanged(file);
+        }
+      };
+      invalidateCachedDependents();
+      if (fileReport) fileReport.changed = changedFiles.size;
       if (
         !changedFiles.size &&
         !deletedTrackedFiles.size &&
@@ -1037,6 +1052,7 @@ export async function buildProjectIndexIncremental(
           changedFiles.add(file);
         }
       }
+      invalidateCachedDependents();
       const changedList = Array.from(changedFiles);
       if (fileReport) fileReport.changed = changedList.length;
       if (changedList.length) {

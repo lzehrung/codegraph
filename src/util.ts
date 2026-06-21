@@ -11,6 +11,7 @@ export {
   getGitBlobHashes,
   getGitHead,
   getUnifiedDiff,
+  assertSafeRevision,
   gitDiffArgs,
   isGitIndexSentinel,
   isGitRepo,

@@ -502,6 +502,37 @@ describe("Cache invalidation and strict hashing", () => {
     expect(bEdges).toEqual(bEntryAfter.edges);
   });
 
+  it("invalidates transitive dependents when an imported file changes", async () => {
+    const root = await mkTmpDir("dg-incremental-dependents-");
+    const aPath = path.join(root, "a.ts");
+    const bPath = path.join(root, "b.ts");
+    const cPath = path.join(root, "c.ts");
+
+    await fsp.writeFile(aPath, `import './b';\n`, "utf8");
+    await fsp.writeFile(bPath, `import './c';\nexport { c } from './c';\n`, "utf8");
+    await fsp.writeFile(cPath, `export const c = 1;\n`, "utf8");
+
+    await buildProjectIndex(root, { threads: 2, cache: "disk" });
+
+    await fsp.writeFile(cPath, `export const c = 2;\nexport const c2 = 3;\n`, "utf8");
+
+    const prepSpy = vi.spyOn(filePrep, "prepareSourceInput");
+    const report: BuildReport = { timings: {} };
+    await buildProjectIndexIncremental(root, {
+      threads: 2,
+      cache: "disk",
+      report,
+    });
+
+    const preparedFiles = prepSpy.mock.calls.map(([filePath]) => normalize(String(filePath))).sort();
+    prepSpy.mockRestore();
+
+    expect(report.files?.changed).toBe(3);
+    expect(report.files?.cached ?? 0).toBe(0);
+    expect(report.files?.parsed).toBe(3);
+    expect(new Set(preparedFiles)).toEqual(new Set([normalize(aPath), normalize(bPath), normalize(cPath)]));
+  });
+
   it("reuses cached graph edges when no files change", async () => {
     const root = await mkTmpDir("dg-incremental-nochange-");
     const aPath = path.join(root, "a.ts");
