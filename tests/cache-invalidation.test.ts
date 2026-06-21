@@ -528,6 +528,8 @@ describe("Cache invalidation and strict hashing", () => {
     prepSpy.mockRestore();
 
     expect(report.files?.changed).toBe(3);
+    expect(report.files?.cached ?? 0).toBe(0);
+    expect(report.files?.parsed).toBe(3);
     expect(new Set(preparedFiles)).toEqual(new Set([normalize(aPath), normalize(bPath), normalize(cPath)]));
   });
 

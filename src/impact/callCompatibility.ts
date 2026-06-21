@@ -1313,6 +1313,7 @@ async function collectVerifiedCallsiteReferences(
   changedSymbol: ChangedSymbol,
   maxRefs: number,
   shouldIncludeReference: (file: string) => boolean,
+  diagnostics: ImpactDiagnostics["callCompatibility"] | undefined,
 ): Promise<Reference[]> {
   const refs: Reference[] = [];
   const seen = new Set<string>();
@@ -1328,7 +1329,7 @@ async function collectVerifiedCallsiteReferences(
     if (!support || !supportsCallCompatibilityLanguage(support.id)) {
       continue;
     }
-    const parsed = await tryEnsureParsedContext(file, index.parsed?.get(file), undefined);
+    const parsed = await tryEnsureParsedContext(file, index.parsed?.get(file), diagnostics);
     if (!parsed) {
       continue;
     }
@@ -1571,6 +1572,7 @@ export async function attachCallCompatibilityHints(
           changedSymbol,
           verifiedScanLimit,
           shouldIncludeReference,
+          diagnostics,
         );
         for (const ref of verifiedCallsites) {
           if (consideredCallsites >= options.maxRefs) {

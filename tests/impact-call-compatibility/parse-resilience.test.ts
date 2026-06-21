@@ -168,7 +168,74 @@ describe("call compatibility parse resilience", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(diagnostics.callCompatibility?.skippedByReason["parse-failed"]).toBe(1);
+    expect(diagnostics.callCompatibility?.skippedByReason["parse-failed"]).toBe(2);
     expect(changedSymbol.callCompatibility).toBeUndefined();
   });
+  it("counts verified scan parse failures in diagnostics", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-call-compat-verified-parse-"));
+    await fsp.mkdir(path.join(root, "src"), { recursive: true });
+    const apiFile = path.join(root, "src", "api.ts");
+    const extraFile = path.join(root, "src", "extra.ts");
+    await fsp.writeFile(apiFile, "export function helper(a: string, b: number) { return a + b; }\n", "utf8");
+    await fsp.writeFile(extraFile, 'import { helper } from "./api";\nexport const value = helper("x", 1);\n', "utf8");
+
+    const index = await buildProjectIndex(root, { cache: "memory" });
+    const indexedApiFile = [...index.byFile.keys()].find((file) => file.endsWith("/src/api.ts"));
+    if (!indexedApiFile) {
+      throw new Error("Expected indexed api file");
+    }
+    const helperDef = index.byFile.get(indexedApiFile)?.locals.find((local) => local.localName === "helper");
+    if (!helperDef) {
+      throw new Error("Expected helper definition");
+    }
+
+    const changedSymbol: ChangedSymbol = {
+      id: `${indexedApiFile}#helper`,
+      file: indexedApiFile,
+      name: "helper",
+      kind: helperDef.kind,
+      exported: true,
+      range: helperDef.range,
+      signatureChanged: true,
+    };
+
+    vi.mocked(findReferences).mockResolvedValue({
+      status: "ok",
+      references: [],
+    });
+
+    await fsp.unlink(extraFile);
+
+    const diagnostics: ImpactDiagnostics = {
+      changedFilesTotal: 1,
+      changedFilesIgnored: 0,
+      changedFilesWithoutSymbols: 0,
+      symbolMappingParseFailures: 0,
+      refsScanned: 0,
+      refsFilteredTests: 0,
+      refsFilteredIgnored: 0,
+      refsDroppedByMaxRefs: 0,
+      fallbackSeededFiles: 0,
+      fallbackSeededDependents: 0,
+      callCompatibility: {
+        supportedLanguages: [],
+        unsupportedLanguages: [],
+        skippedByReason: {},
+        unknownCallsites: 0,
+        emittedHints: 0,
+      },
+    };
+
+    await expect(
+      attachCallCompatibilityHints(index, [changedSymbol], {
+        maxRefs: 5,
+        diagnostics,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(diagnostics.callCompatibility?.skippedByReason["parse-failed"]).toBe(1);
+    vi.mocked(findReferences).mockReset();
+  });
+
 });
+
