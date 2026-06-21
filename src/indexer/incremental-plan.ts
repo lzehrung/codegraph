@@ -57,3 +57,41 @@ export function collectDeletedTrackedFileDependents(
   }
   return dependents;
 }
+
+export function collectTrackedFileDependents(
+  trackedEntries: Record<string, ManifestFileEntry>,
+  changedFiles: ReadonlySet<string>,
+): Set<string> {
+  const dependents = new Set<string>();
+  if (!changedFiles.size) return dependents;
+
+  const reverseDeps = new Map<string, Set<string>>();
+  for (const [file, entry] of Object.entries(trackedEntries)) {
+    for (const edge of entry.edges) {
+      if (edge.to.type !== "file") continue;
+      const importedFile = edge.to.path;
+      let bucket = reverseDeps.get(importedFile);
+      if (!bucket) {
+        bucket = new Set<string>();
+        reverseDeps.set(importedFile, bucket);
+      }
+      bucket.add(file);
+    }
+  }
+
+  const enqueued = new Set<string>(changedFiles);
+  const queue = [...changedFiles];
+  while (queue.length) {
+    const target = queue.shift();
+    if (!target) continue;
+    for (const dependent of reverseDeps.get(target) ?? []) {
+      if (enqueued.has(dependent)) continue;
+      enqueued.add(dependent);
+      dependents.add(dependent);
+      queue.push(dependent);
+    }
+  }
+
+  return dependents;
+}
+

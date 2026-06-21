@@ -271,10 +271,10 @@ flowchart TD
 
 Ordered checklist. Each item should land with a regression test in the same change.
 
-- [ ] **1. C1 git injection** (`util/git.ts`) -- `assertSafeRevision` + `--end-of-options`; test crafted `--output=`/`--upload-pack=` revisions are rejected.
-- [ ] **2. C3 unguarded parse** (`impact/callCompatibility.ts`) -- wrap the three `ensureParsedContext` calls in try/catch + `incrementSkippedReason`; test a deleted/unparseable file no longer zeroes the report.
+- [x] **1. C1 git injection** (`util/git.ts`) -- `assertSafeRevision` + `--end-of-options`; test crafted `--output=`/`--upload-pack=` revisions are rejected.
+- [x] **2. C3 unguarded parse** (`impact/callCompatibility.ts`) -- wrap the three `ensureParsedContext` calls in try/catch + `incrementSkippedReason`; test a deleted/unparseable file no longer zeroes the report.
 - [ ] **3. H1/H2 transitive BFS** (`impact/transitive.ts`) -- copy-on-write `reasons`, upgrade severity/reasons on a stronger path; test order-independence.
-- [ ] **4. C2 stale incremental graph** (`indexer/build-index.ts`, `incremental-plan.ts`) -- reverse-dependency closure over all changed files; test dependents re-resolve after an export change.
+- [x] **4. C2 stale incremental graph** (`indexer/build-index.ts`, `incremental-plan.ts`) -- reverse-dependency closure over all changed files; test dependents re-resolve after an export change.
 - [ ] **5. P6/P7/P5 unbounded caches** (`module-cache.ts`, `lazySymbols.ts`, `resolution.ts`) -- LRU + cap + teardown clear; test eviction.
 - [ ] **6. SQLite schema migration** (`sqlite/schema.ts`) -- versioned migrator keyed off on-disk version; v1->v2 upgrade regression test (`AGENTS.md:26`).
 - [ ] **7. U1 sort-before-truncate / U2-U4 CLI validation** -- sort before bound; reject bad enum/int flags.

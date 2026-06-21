@@ -15,14 +15,27 @@ export function isGitIndexSentinel(value: string): boolean {
   return normalized === "INDEX" || normalized === "STAGED";
 }
 
+export function assertSafeRevision(value: string, label: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new Error(`Invalid ${label}: revision must not be empty.`);
+  }
+  if (trimmed.startsWith("-")) {
+    throw new Error(`Invalid ${label} "${trimmed}": revisions must not start with "-".`);
+  }
+  return trimmed;
+}
+
 export function gitDiffArgs(base: string, head: string, extraArgs: string[] = []): string[] {
+  const safeBase = assertSafeRevision(base, "base");
   if (isGitWorktreeSentinel(head)) {
-    return ["diff", ...extraArgs, base];
+    return ["diff", "--end-of-options", ...extraArgs, safeBase];
   }
   if (isGitIndexSentinel(head)) {
-    return ["diff", "--cached", ...extraArgs, base];
+    return ["diff", "--cached", "--end-of-options", ...extraArgs, safeBase];
   }
-  return ["diff", ...extraArgs, `${base}..${head}`];
+  const safeHead = assertSafeRevision(head, "head");
+  return ["diff", "--end-of-options", ...extraArgs, `${safeBase}..${safeHead}`];
 }
 export async function getGitHead(projectRoot: string): Promise<string | null> {
   try {
@@ -166,7 +179,7 @@ export async function listChangedFiles(
     const head = opts.head ?? "HEAD";
     args = gitDiffArgs(opts.base, head, ["--name-only", "--diff-filter=ACDMRTUXB"]);
   } else if (opts.changedSince) {
-    args.push(opts.changedSince);
+    args.push("--end-of-options", assertSafeRevision(opts.changedSince, "changedSince"));
   } else {
     return [];
   }
@@ -210,7 +223,7 @@ export async function getUnifiedDiff(
     const head = opts.head ?? "HEAD";
     args = gitDiffArgs(opts.base, head, ["--unified=0", "--no-color", "--diff-filter=ACDMRTUXB"]);
   } else if (opts.changedSince) {
-    args.push(opts.changedSince);
+    args.push("--end-of-options", assertSafeRevision(opts.changedSince, "changedSince"));
   } else {
     return "";
   }
