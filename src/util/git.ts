@@ -29,13 +29,13 @@ export function assertSafeRevision(value: string, label: string): string {
 export function gitDiffArgs(base: string, head: string, extraArgs: string[] = []): string[] {
   const safeBase = assertSafeRevision(base, "base");
   if (isGitWorktreeSentinel(head)) {
-    return ["diff", "--end-of-options", ...extraArgs, safeBase];
+    return ["diff", ...extraArgs, "--end-of-options", safeBase];
   }
   if (isGitIndexSentinel(head)) {
-    return ["diff", "--cached", "--end-of-options", ...extraArgs, safeBase];
+    return ["diff", "--cached", ...extraArgs, "--end-of-options", safeBase];
   }
   const safeHead = assertSafeRevision(head, "head");
-  return ["diff", "--end-of-options", ...extraArgs, `${safeBase}..${safeHead}`];
+  return ["diff", ...extraArgs, "--end-of-options", `${safeBase}..${safeHead}`];
 }
 export async function getGitHead(projectRoot: string): Promise<string | null> {
   try {

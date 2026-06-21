@@ -9,19 +9,19 @@ describe("git revision safety", () => {
     expect(() => assertSafeRevision("", "head")).toThrow(/must not be empty/);
   });
 
-  it("places --end-of-options before revision arguments in gitDiffArgs", () => {
+  it("places --end-of-options immediately before revision arguments in gitDiffArgs", () => {
     expect(gitDiffArgs("main", "HEAD")).toEqual(["diff", "--end-of-options", "main..HEAD"]);
     expect(gitDiffArgs("main", "WORKTREE", ["--name-only"])).toEqual([
       "diff",
-      "--end-of-options",
       "--name-only",
+      "--end-of-options",
       "main",
     ]);
     expect(gitDiffArgs("main", "STAGED", ["--name-only"])).toEqual([
       "diff",
       "--cached",
-      "--end-of-options",
       "--name-only",
+      "--end-of-options",
       "main",
     ]);
   });
