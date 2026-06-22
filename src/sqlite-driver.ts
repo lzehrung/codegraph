@@ -1,12 +1,6 @@
 import { createRequire } from "node:module";
 import type { PathLike } from "node:fs";
-import type {
-  constants as sqliteConstants,
-  DatabaseSync,
-  StatementColumnMetadata,
-  StatementResultingChanges,
-  StatementSync,
-} from "node:sqlite";
+import type { DatabaseSync, StatementColumnMetadata, StatementResultingChanges, StatementSync } from "node:sqlite";
 
 export type SqliteValue = null | number | bigint | string | NodeJS.ArrayBufferView;
 export type SqliteRow = Record<string, unknown>;
@@ -14,9 +8,21 @@ export type SqliteRawRow = unknown[];
 export type SqliteRunResult = StatementResultingChanges;
 export type SqliteColumn = StatementColumnMetadata;
 
-type SqliteConstants = typeof sqliteConstants;
+type SqliteConstants = {
+  SQLITE_DENY: number;
+  SQLITE_FUNCTION: number;
+  SQLITE_OK: number;
+  SQLITE_PRAGMA: number;
+  SQLITE_READ: number;
+  SQLITE_SELECT: number;
+  SQLITE_TRANSACTION: number;
+};
+type SqliteDatabaseConstructor = new (
+  filePath: PathLike,
+  options?: { readOnly?: boolean | undefined; timeout?: number },
+) => DatabaseSync;
 type NodeSqliteModule = {
-  DatabaseSync: typeof DatabaseSync;
+  DatabaseSync: SqliteDatabaseConstructor;
   constants: SqliteConstants;
 };
 type SqliteParameterInput = SqliteValue | readonly SqliteValue[];
