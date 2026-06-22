@@ -1,5 +1,7 @@
-import { constants, DatabaseSync, type StatementColumnMetadata, type StatementResultingChanges } from "node:sqlite";
+import { createRequire } from "node:module";
 import type { PathLike } from "node:fs";
+import type * as NodeSqlite from "node:sqlite";
+import type { DatabaseSync, StatementColumnMetadata, StatementResultingChanges, StatementSync } from "node:sqlite";
 
 export type SqliteValue = null | number | bigint | string | NodeJS.ArrayBufferView;
 export type SqliteRow = Record<string, unknown>;
@@ -7,17 +9,31 @@ export type SqliteRawRow = unknown[];
 export type SqliteRunResult = StatementResultingChanges;
 export type SqliteColumn = StatementColumnMetadata;
 
+type NodeSqliteModule = typeof NodeSqlite;
+type SqliteConstants = NodeSqliteModule["constants"];
 type SqliteParameterInput = SqliteValue | readonly SqliteValue[];
 
-const isSqliteValueArray = (value: SqliteParameterInput): value is readonly SqliteValue[] => Array.isArray(value);
+const requireNodeModule = createRequire(import.meta.url);
+let sqliteModule: NodeSqliteModule | undefined;
 
-const readOnlyAllowedActions = new Set<number>([
-  constants.SQLITE_FUNCTION,
-  constants.SQLITE_PRAGMA,
-  constants.SQLITE_READ,
-  constants.SQLITE_SELECT,
-  constants.SQLITE_TRANSACTION,
-]);
+function loadNodeSqlite(): NodeSqliteModule {
+  if (sqliteModule) return sqliteModule;
+  const loaded = requireNodeModule("node:sqlite") as NodeSqliteModule;
+  sqliteModule = loaded;
+  return loaded;
+}
+
+function isReadOnlyAllowedAction(actionCode: number, constants: SqliteConstants): boolean {
+  return (
+    actionCode === constants.SQLITE_FUNCTION ||
+    actionCode === constants.SQLITE_PRAGMA ||
+    actionCode === constants.SQLITE_READ ||
+    actionCode === constants.SQLITE_SELECT ||
+    actionCode === constants.SQLITE_TRANSACTION
+  );
+}
+
+const isSqliteValueArray = (value: SqliteParameterInput): value is readonly SqliteValue[] => Array.isArray(value);
 
 const normalizeParams = (params: readonly SqliteParameterInput[]): SqliteValue[] => {
   if (params.length === 1) {
@@ -36,7 +52,7 @@ const normalizeParams = (params: readonly SqliteParameterInput[]): SqliteValue[]
 
 export class SqliteStatement {
   constructor(
-    private readonly statement: ReturnType<DatabaseSync["prepare"]>,
+    private readonly statement: StatementSync,
     private readonly returnArrays = false,
   ) {
     this.statement.setReturnArrays(returnArrays);
@@ -71,13 +87,15 @@ export class SqliteDatabase {
   private readonly db: DatabaseSync;
 
   constructor(filePath: PathLike, options?: { readonly?: boolean }) {
-    this.db = new DatabaseSync(filePath, {
+    const sqlite = loadNodeSqlite();
+    this.db = new sqlite.DatabaseSync(filePath, {
       readOnly: options?.readonly,
       timeout: 5000,
     });
     if (options?.readonly) {
+      const { constants } = sqlite;
       this.db.setAuthorizer((actionCode) =>
-        readOnlyAllowedActions.has(actionCode) ? constants.SQLITE_OK : constants.SQLITE_DENY,
+        isReadOnlyAllowedAction(actionCode, constants) ? constants.SQLITE_OK : constants.SQLITE_DENY,
       );
     }
   }
