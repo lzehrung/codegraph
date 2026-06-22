@@ -128,13 +128,16 @@ describe("CLI regressions", () => {
     expect(stdout.trim()).toBe(packageJson.version);
   });
 
-  it("does not statically load SQLite-backed command modules for version output", async () => {
+  it("does not statically load SQLite for version output", async () => {
     const source = await fsp.readFile(sourceCliPath, "utf8");
+    const sqliteDriverSource = await fsp.readFile(path.resolve(process.cwd(), "src", "sqlite-driver.ts"), "utf8");
 
     expect(source).not.toContain('from "./cli/artifact.js"');
     expect(source).not.toContain('from "./cli/graph.js"');
     expect(source).not.toContain('from "./cli/mcp.js"');
     expect(source).not.toContain('from "./cli/sql.js"');
+    expect(sqliteDriverSource).not.toMatch(/import\s*\{[^}]*\b(?:constants|DatabaseSync)\b[^}]*\}\s*from\s*[\"']node:sqlite[\"']/s);
+    expect(sqliteDriverSource).toMatch(/requireNodeModule\(\s*[\"']node:sqlite[\"']\s*\)/);
   });
 
   it("importing cli.ts as a module does not execute the entrypoint", async () => {
