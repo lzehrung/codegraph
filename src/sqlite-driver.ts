@@ -1,7 +1,12 @@
 import { createRequire } from "node:module";
 import type { PathLike } from "node:fs";
-import type * as NodeSqlite from "node:sqlite";
-import type { DatabaseSync, StatementColumnMetadata, StatementResultingChanges, StatementSync } from "node:sqlite";
+import type {
+  constants as sqliteConstants,
+  DatabaseSync,
+  StatementColumnMetadata,
+  StatementResultingChanges,
+  StatementSync,
+} from "node:sqlite";
 
 export type SqliteValue = null | number | bigint | string | NodeJS.ArrayBufferView;
 export type SqliteRow = Record<string, unknown>;
@@ -9,8 +14,11 @@ export type SqliteRawRow = unknown[];
 export type SqliteRunResult = StatementResultingChanges;
 export type SqliteColumn = StatementColumnMetadata;
 
-type NodeSqliteModule = typeof NodeSqlite;
-type SqliteConstants = NodeSqliteModule["constants"];
+type SqliteConstants = typeof sqliteConstants;
+type NodeSqliteModule = {
+  DatabaseSync: typeof DatabaseSync;
+  constants: SqliteConstants;
+};
 type SqliteParameterInput = SqliteValue | readonly SqliteValue[];
 
 const requireNodeModule = createRequire(import.meta.url);
