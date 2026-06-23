@@ -652,27 +652,20 @@ When targeting a different repo, pass it with `--root` rather than as an extra p
 codegraph graph --root /path/to/project --json --symbols-detailed --compact-json --output graph.json
 ```
 
-## Graph viewer
+## Graph export inspection
 
-Use the Sigma-based viewer to interactively explore `graph --json` or `graph --compact-json` output:
+Codegraph currently ships graph data formats, not a packaged interactive viewer. Use the exported artifacts directly with scripts or existing graph tools:
 
 ```bash
-# 1) Produce graph data
+# Compact JSON for scripts and downstream tooling
 codegraph graph --root . ./src --compact-json --output codegraph.json
 
-# 2) Serve the repo root and open the viewer
-python3 -m http.server 4173
-# open http://localhost:4173/docs/graph-visualization/
+# Mermaid for Markdown renderers that support Mermaid diagrams
+codegraph graph --root . ./src --mermaid --output graph.mmd
 
-# optional
-npm run visualizer:start
+# DOT for Graphviz
+codegraph graph --root . ./src --dot --output graph.dot
 ```
-
-Viewer features:
-
-- renders file dependency graphs with Sigma.js
-- supports both default JSON and compact JSON graph payloads
-- supports optional symbol-node rendering for compact JSON payloads
 
 ## Related docs
 

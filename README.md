@@ -10,6 +10,7 @@ It is built for agent and human workflows that need repo structure fast without 
 - [Features](#features)
 - [Quick start](#quick-start)
 - [CLI examples](#cli-examples)
+- [Key output examples](#key-output-examples)
 - [Agent setup](#agent-setup)
 - [Using as a library](#using-as-a-library)
 - [Common workflows](#common-workflows)
@@ -25,7 +26,7 @@ Use Codegraph when you need fast structural answers about a repo without relying
 
 - Triage an unfamiliar codebase with one pass that highlights hotspots, unresolved imports, cycles, and next commands to run.
 - Review diffs with changed symbols, graph deltas, likely regression tests, and risk signals that agents or humans can consume directly.
-- Export graph data as JSON, Mermaid, DOT, or SQLite, then inspect it from scripts or the browser graph viewer app.
+- Export graph data as JSON, Mermaid, DOT, or SQLite, then inspect it from scripts, Markdown renderers, Graphviz, or SQL tools.
 - Keep one workflow across source languages, monorepos, and graph-first document and template formats instead of stitching together separate tools.
 
 For a first pass, run `orient --root . --budget small --pretty`.
@@ -45,10 +46,9 @@ Detailed command contracts and JSON shapes live in [docs/cli.md](./docs/cli.md).
 - PR impact analysis and review bundles that map diffs to changed symbols, impacted code, likely tests, graph deltas, and conservative provider-backed call-arity hints after signature changes.
 - SQL language support for `.sql` files, including statement chunks, object symbols, SQL-to-SQL graph edges, SQL navigation, and statement facts.
 - SQLite export plus read-only SQL access for downstream tools and agent workflows.
-- A browser graph viewer app for interactive exploration of generated graph JSON artifacts.
 - Native Tree-sitter parsing by default when a matching prebuilt is available, with reduced graph-only and regex recovery when native is unavailable.
 
-Sample graph output can be generated with `npm run graph:mermaid` or `npm run graph:json`, and the repo also ships a browser viewer app in `docs/graph-visualization` for inspecting graph JSON interactively.
+Sample graph output can be generated with `npm run graph:mermaid`, `npm run graph:dot`, or `npm run graph:json`.
 
 This repo keeps test fixtures out of default Codegraph scans with `codegraph.config.json`:
 
@@ -145,6 +145,152 @@ codegraph graph --root . ./src --compact-json --output codegraph.json
 
 See [docs/cli.md](./docs/cli.md) for full flags, JSON shapes, drift policy gates, duplicate scopes, and review output details.
 
+## Key output examples
+
+These excerpts show the shape of the outputs agents and humans usually consume. Use `--pretty` or `--summary` for triage, and switch to JSON when a follow-up command needs stable handles, paths, ranges, reasons, or counts.
+
+### Orientation
+
+`orient --root . --budget small --pretty` gives first-turn focus targets plus copyable follow-ups:
+
+```text
+Summary
+- 567 file(s) in scope.
+- 5 graph-central module(s) ranked for first follow-up.
+- Health analysis skipped for small budget.
+
+Start here
+- src/index.ts: graph-central module: fan-in 96, fan-out 40, score 232
+  - codegraph packet get src/index.ts --pretty
+  - codegraph explain src/index.ts
+
+Recommended next
+- codegraph hotspots . --limit 20
+- codegraph impact --base HEAD --head WORKTREE --pretty
+- codegraph review --base HEAD --head WORKTREE --summary
+- codegraph search <query> --json
+```
+
+### Search
+
+`search "graph json" --json` returns ranked, explainable anchors. Follow-up commands reuse the returned handle, file, or symbol path:
+
+```json
+{
+  "schemaVersion": 1,
+  "query": "graph json",
+  "mode": "hybrid",
+  "resultCount": 20,
+  "totalCandidates": 7911,
+  "results": [
+    {
+      "handle": "chunk:docs%2Fcli.md:646",
+      "kind": "chunk",
+      "label": "docs/cli.md:646",
+      "file": "docs/cli.md",
+      "score": 282,
+      "rankReasons": ["exact phrase match in docs text", "text token match: graph, json"],
+      "followUps": ["codegraph chunk docs/cli.md", "codegraph deps docs/cli.md --json"]
+    }
+  ]
+}
+```
+
+### Impact
+
+`impact --base HEAD --head WORKTREE --pretty` answers what changed and what else can break. Pretty output keeps severity and reason labels visible:
+
+```text
+Impact Analysis Report
+======================
+Changed files: 1
+Changed symbols: 1
+Impacted items: 2
+
+utils.ts: defaultExport (reason: direct reference, severity: 100.0%)
+main.ts: defaultExport (reason: transitive dependency, severity: 72.0%)
+```
+
+Use `--compact-json` when tooling needs normalized arrays, graph edges, diagnostics, and `schemaVersion`:
+
+```json
+{
+  "schemaVersion": 1,
+  "format": "compact",
+  "files": ["utils.ts", "main.ts", "dynamic-import.ts", "helpers.ts", "tsconfig.json"],
+  "changedFiles": [{ "file": 0, "kind": "modified", "hunks": [{ "start": 28, "end": 38 }] }],
+  "changedSymbols": [{ "file": 0, "name": "defaultExport", "kind": "function", "exported": true }],
+  "impacted": [
+    { "file": 0, "symbols": ["defaultExport"], "reasons": ["directRef"], "severity": 1 },
+    { "file": 1, "symbols": ["defaultExport"], "reasons": ["importAlias", "transitive"], "severity": 0.72 }
+  ]
+}
+```
+
+### Review
+
+`review --base HEAD --head WORKTREE --summary` is the compact reviewer handoff. It combines changed files, changed symbols, candidate tests, risk signals, review tasks, duplicate leads, and call-compatibility hints when a supported signature change has resolvable callsites:
+
+```text
+Review Summary
+==============
+Status: ok
+Files changed: 5
+Symbols changed: 22
+Candidate tests: 1 (high: 1, medium: 0, low: 0)
+Risk: high (80)
+Signals: exported-symbols-changed, many-symbols-changed
+
+Changed files:
+- src/invoices-a.ts: updated (label, output, rounded, subtotal, summarizeInvoices)
+- src/invoices-b.ts: updated (label, output, rounded, subtotal, summarizeInvoices)
+- src/orders-a.ts: updated (label, output, rounded, subtotal, summarizeOrders)
+- src/orders-b.ts: updated (label, output, rounded, subtotal, summarizeOrders)
+- src/pricing.ts: updated (calculateTotal, discounted)
+
+Candidate tests:
+High-confidence tests:
+- tests/pricing.test.ts: importsChanged
+
+Review tasks:
+- review-summary: medium - Review changed symbols (baseline-review)
+- api-compat: high - Verify API compatibility (exported-symbols-changed)
+- high-change-volume: high - Assess change scope (large-change-set)
+- duplicate-sibling-check:d9a0ad66c9cb5610: high - Check related duplicate implementation (duplicate-sibling)
+- duplicate-sibling-check:a9188e0046912ef6: high - Check related duplicate implementation (duplicate-sibling)
+
+Call compatibility:
+- calculateTotal: src/checkout.ts:3 passes 2 arguments; new signature requires 3.
+- calculateTotal: tests/pricing.test.ts:2 passes 2 arguments; new signature requires 3.
+
+Duplicate leads:
+- src/invoices-a.ts:1-10 matches src/invoices-b.ts:1-10 (exact, score 100).
+- src/orders-a.ts:1-10 matches src/orders-b.ts:1-10 (exact, score 100).
+- src/invoices-a.ts:1-10 matches src/orders-a.ts:1-10 (renamed, score 100).
+- omitted: 1 by budget, 24 hidden evidence items
+```
+
+### Dependency graph
+
+For a small dependency slice, Mermaid output can be pasted directly into Markdown renderers that support Mermaid:
+
+```mermaid
+flowchart LR
+f0["utils.ts"]
+f1["main.ts"]
+s0["utils.ts:defaultExport"]
+f1 --> f0
+f0 --> s0
+```
+
+For full-repo exploration, generate a portable graph artifact for scripts or downstream tools:
+
+```bash
+codegraph graph --root . ./src --compact-json --output codegraph.json
+codegraph graph --root . ./src --mermaid --output graph.mmd
+codegraph graph --root . ./src --dot --output graph.dot
+```
+
 ## Agent setup
 
 Using a skill-aware agent? Install the bundled skill so repo navigation, semantic references, dependency tracing, and PR impact questions route to Codegraph automatically. The installer uses safe per-agent defaults and creates the target skills directory as needed:
@@ -236,7 +382,7 @@ The supported package import surface includes the compatibility root export, `@l
 - Symbol navigation: use `codegraph goto <file> <line> <column>` and `codegraph refs --file <file> --line <line> --col <column> --pretty` when a question is about definitions or semantic usages rather than matching strings.
 - PR review: run `codegraph impact --base origin/main --head HEAD --pretty` for a ranked map, `codegraph review --base origin/main --head HEAD --summary` for a compact reviewer handoff with actionable candidate tests, or redirect plain `review` output when a downstream tool needs the full JSON bundle.
 - Worktree review: run `codegraph impact --base HEAD --head WORKTREE --pretty` for current staged and unstaged tracked-file changes, then `codegraph review --base HEAD --head WORKTREE --summary` for a compact handoff. Use `--head STAGED` to compare `HEAD` against the current index.
-- Visual graph exploration: run `codegraph graph --root . ./src --compact-json --output codegraph.json`, then open `docs/graph-visualization/`. Bare `codegraph graph` writes `codegraph.json`; add `--stdout` when piping.
+- Graph exploration: run `codegraph graph --root . ./src --compact-json --output codegraph.json` for scripts, `--mermaid` for Markdown renderers, or `--dot` for Graphviz. Bare `codegraph graph` writes `codegraph.json`; add `--stdout` when piping.
 - Public API inspection: run `codegraph apisurface` to summarize exported symbols before refactors, reviews, or release checks.
 
 ## Supported languages
@@ -262,7 +408,7 @@ For the full capability matrix, limitations, and fixture coverage, see [docs/lan
 ## Documentation
 
 - [docs/installation.md](./docs/installation.md): source checkout, scoped registry, release tarball, native runtime modes, and reduced-mode behavior
-- [docs/cli.md](./docs/cli.md): command reference, output formats, SQLite schema, review bundles, and graph viewer usage
+- [docs/cli.md](./docs/cli.md): command reference, output formats, SQLite schema, review bundles, and graph export usage
 - [docs/library-api.md](./docs/library-api.md): agent orientation/packet/search/explain/artifacts, semantic chunking, indexing, graph APIs, read-only SQL, impact examples, and programmatic review output
 - [docs/agent-workflows.md](./docs/agent-workflows.md): orientation packets, search anchors, MCP, sessions, streaming, tool wrappers, review bundles, and agent-oriented review recipes
 - [docs/mcp.md](./docs/mcp.md): MCP server setup, tool list, safety model, and client configuration examples
@@ -272,7 +418,6 @@ For the full capability matrix, limitations, and fixture coverage, see [docs/lan
 - [docs/coverage/README.md](./docs/coverage/README.md): committed Markdown coverage summaries
 - [docs/adding-language-support.md](./docs/adding-language-support.md): checklist for new language support
 - [PUBLISHING.md](./PUBLISHING.md): release and native artifact workflow
-- [docs/graph-visualization/index.html](./docs/graph-visualization/index.html): browser graph viewer app for interactive exploration of graph JSON
 
 ## Installation options
 
