@@ -41,15 +41,8 @@ Notes:
 
 - The native addon is the only Tree-sitter grammar backend for the listed source languages.
 - Without native, Codegraph degrades to reduced graph-only and regex recovery mode; it does not switch to a JS grammar stack.
-- Native parity coverage includes both extraction parity and end-to-end semantic parity on the current source-language fixture set (`TypeScript`, `TSX`, `JavaScript`, `Python`, `PHP`, `Go`, `Java`, `C#`, `Rust`, `Kotlin`, `Swift`, `Zig`, `C`, `C++`, `Ruby`) plus graph/specifier parity for `HTML`, `CSS`, `Less`, `SCSS`, `Vue`, and `Svelte`.
-- Deeper hardening coverage includes Go aliases and interface-typed uses.
-- Deeper hardening coverage includes Kotlin aliases, wildcard imports, package-wide wildcard graph expansion, and native-owned import-binding recovery.
-- Deeper hardening coverage includes Java wildcard package fixtures, package-wide graph expansion, static wildcard imports, and enum type navigation.
-- Deeper hardening coverage includes Rust aliased `use` imports, `extern crate` graph fixtures, and enum variant extraction.
-- Deeper hardening coverage includes C# aliases/enums, Swift enums/static members, Zig `@import` namespace members, C/C++ enum constants, and Ruby nested modules.
-- Deeper hardening coverage includes Python `from __future__ import ...` extraction.
-- Deeper hardening coverage includes PHP grouped `use` imports, bracketed namespaces, `__DIR__` includes, fully-qualified Composer-backed references, enum cases, function/class basename collisions, and Composer classmap-boundary coverage.
-- JavaScript graphing now includes an isolated AngularJS heuristic layer for `templateUrl`, controller-name, and DI-token file/external edges when a file explicitly uses `angular.module(...)`. This coverage lives in dedicated framework tests, not in the generic JavaScript fixture set, and it is not a general claim that arbitrary `controller` or `templateUrl` config objects are Angular-aware.
+- Native parity tests cover source-language extraction and end-to-end semantics for `TypeScript`, `TSX`, `JavaScript`, `Python`, `PHP`, `Go`, `Java`, `C#`, `Rust`, `Kotlin`, `Swift`, `Zig`, `C`, `C++`, `Ruby`, and `SQL`. Graph/specifier parity is covered for `HTML`, `CSS`, `Less`, `SCSS`, `Vue`, and `Svelte`.
+- JavaScript graphing has an AngularJS-only heuristic for `templateUrl`, controller-name, and DI-token file/external edges. It only applies when a file explicitly uses `angular.module(...)`; generic `controller` or `templateUrl` objects are not treated as Angular.
 - Call compatibility hints compare changed callable arity with resolved callsites when parsing is high confidence. They are not type checking, overload resolution, trait dispatch, function-pointer analysis, macro expansion, or data-flow inference.
 - Call compatibility skips same-file overload sets unless a future resolver can prove the exact overload target.
 - JavaScript, TypeScript, TSX, and JSX call compatibility includes callable variable arrows with parenthesized parameters and single bare parameters such as `const helper = a => a`.
@@ -60,28 +53,41 @@ Notes:
 - `HTML`, `CSS`, `Less`, `Vue`, and `Svelte` are graph/chunking-focused today. Their unsupported navigation and symbol features are covered by explicit `not_found` parity tests.
 - `Markdown` and `MDX` are graph-first today. They use shared text extraction for document links and MDX static imports, and they intentionally do not claim semantic chunking, navigation, references, or native-addon parity yet.
 - `Astro`, `Handlebars`, `reStructuredText`, and `AsciiDoc` are also graph-first today. They use shared text extraction for local links and format-specific include/import syntax, and they intentionally do not claim semantic chunking, navigation, references, or native-addon parity yet.
-- `SQL` is supported as a repository language with SQL-specific semantics. Codegraph discovers `.sql` files by default, chunks statements, extracts table/view/index/routine symbols, records common DDL/DML and CTE read/write facts, creates SQL-to-SQL object edges, and supports go-to-definition and find-references inside SQL files. SQL-to-SQL edges are precise for exact object-name matches, heuristic for unambiguous qualified-to-basename fallback matches, and skipped for ambiguous basename guesses. SQL navigation resolves schema-qualified names plus object-level `alias.column`, `table.column`, and `schema.table.column` references to table/view definitions when the prefix is unambiguous; it does not resolve specific column definitions. Agent explain targets follow the same conservative rule: exact SQL object names win, and unqualified basenames resolve only when unique. It does not infer a current schema from migrations, seeds, dumps, or fixtures, and it does not globally link application-code string literals to SQL objects; those literals only surface SQL facts through explicit review-context bridge rules. SQL is covered in native-only parser ownership tests and does not require the JS fallback package for indexing, graphing, or SQL navigation.
-- One deeper semantic shape remains intentionally limited and is covered by explicit regression tests instead of an optimistic support claim: macro-expanded or otherwise non-local C typedef reference recovery beyond the current direct declaration use-site coverage.
-- Another intentionally limited semantic shape is C# alias-only `using Alias = Namespace.Type;` navigation without a companion namespace import. Graph extraction is covered, but alias-only member navigation is not claimed yet.
+- `SQL` is supported as a repository language, not a full database analyzer. It discovers `.sql` files by default, chunks statements, extracts table/view/index/routine symbols, records common DDL/DML and CTE read/write facts, creates SQL-to-SQL object edges, and supports SQL-file go-to-definition and find-references.
+- SQL object edges are exact for unique object-name matches. Qualified-to-basename fallback is heuristic and only used when unambiguous; ambiguous basename guesses are skipped.
+- SQL navigation resolves schema-qualified names plus object-level `alias.column`, `table.column`, and `schema.table.column` references to table/view definitions when the prefix is unambiguous. It does not resolve specific column definitions.
+- SQL explain targets use the same conservative rule: exact object names win, and unqualified basenames resolve only when unique. SQL does not infer a current schema from migrations, seeds, dumps, or fixtures.
+- Application-code string literals are not globally linked to SQL objects. They only surface SQL facts through explicit review-context bridge rules.
+- SQL indexing, graphing, and navigation are native-only and do not require the JS fallback package.
+- C typedef reference recovery is limited to direct declaration use-site coverage. Macro-expanded or otherwise non-local typedef references are not claimed.
+- C# alias-only `using Alias = Namespace.Type;` navigation is limited when there is no companion namespace import. Graph extraction is covered, but alias-only member navigation is not claimed yet.
 
 ## Project file discovery coverage
+
+The status key describes project-name extraction only. File discovery and monorepo boundary handling are separate checks.
 
 Status key:
 
 - Yes = extracts a project name from metadata
-- Partial = detected, but name falls back to directory or filename
+- Partial = detects the project file, but the name falls back to the directory or filename
 - No = not detected
 
-- Node.js: `package.json`, `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lockb`, `tsconfig.json`, `jsconfig.json`, `pnpm-workspace.yaml`, `lerna.json`, `nx.json`, `turbo.json`. Name extraction: Yes for `package.json`; workspace configs fall back to the directory name.
-- Python: `pyproject.toml`, `requirements.txt`, `requirements.in`, `Pipfile`, `Pipfile.lock`, `poetry.lock`, `setup.py`, `setup.cfg`. Name extraction: Yes for `pyproject.toml`, `setup.cfg`, and `setup.py`.
-- Go: `go.mod`, `go.sum`, `go.work`. Name extraction: Yes for `go.mod`.
-- Rust: `Cargo.toml`, `Cargo.lock`, `rust-toolchain`, `rust-toolchain.toml`. Name extraction: Yes for `Cargo.toml`.
-- Java and Kotlin: `pom.xml`, `mvnw`, `build.gradle`, `build.gradle.kts`, `settings.gradle`, `settings.gradle.kts`, `gradle.properties`, `gradlew`. Name extraction: Yes for `pom.xml` and `settings.gradle`.
-- .NET: `*.csproj`, `*.fsproj`, `*.vbproj`, `*.sln`, `Directory.Build.props`, `Directory.Build.targets`, `global.json`. Name extraction: Yes for project files.
-- Ruby: `Gemfile`, `Gemfile.lock`, `*.gemspec`. Name extraction: Yes for `*.gemspec`, Partial for `Gemfile`.
-- PHP: `composer.json`, `composer.lock`. Name extraction: Yes for `composer.json`.
-- Swift: `Package.swift`, `Package.resolved`, `*.xcodeproj`, `*.xcworkspace`. Name extraction: Yes for `Package.swift`.
-- C and C++: `CMakeLists.txt`, `CMakePresets.json`, `CMakeUserPresets.json`, `Makefile`, `makefile`, `GNUmakefile`, `configure.ac`, `configure.in`, `meson.build`, `meson_options.txt`, `conanfile.txt`, `conanfile.py`, `vcpkg.json`. Name extraction: Yes for `vcpkg.json`, Partial for directory fallback cases.
-- IDE: `.idea`. Name extraction: Partial via directory fallback.
+| Ecosystem       | Project files                                                                                                                                                                                                            | Name extraction                                                           |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------- |
+| Node.js         | `package.json`, `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lockb`, `tsconfig.json`, `jsconfig.json`, `pnpm-workspace.yaml`, `lerna.json`, `nx.json`, `turbo.json`                                          | Yes for `package.json`; workspace configs fall back to the directory name |
+| Python          | `pyproject.toml`, `requirements.txt`, `requirements.in`, `Pipfile`, `Pipfile.lock`, `poetry.lock`, `setup.py`, `setup.cfg`                                                                                               | Yes for `pyproject.toml`, `setup.cfg`, and `setup.py`                     |
+| Go              | `go.mod`, `go.sum`, `go.work`                                                                                                                                                                                            | Yes for `go.mod`                                                          |
+| Rust            | `Cargo.toml`, `Cargo.lock`, `rust-toolchain`, `rust-toolchain.toml`                                                                                                                                                      | Yes for `Cargo.toml`                                                      |
+| Java and Kotlin | `pom.xml`, `mvnw`, `build.gradle`, `build.gradle.kts`, `settings.gradle`, `settings.gradle.kts`, `gradle.properties`, `gradlew`                                                                                          | Yes for `pom.xml` and `settings.gradle`                                   |
+| .NET            | `*.csproj`, `*.fsproj`, `*.vbproj`, `*.sln`, `Directory.Build.props`, `Directory.Build.targets`, `global.json`                                                                                                           | Yes for project files                                                     |
+| Ruby            | `Gemfile`, `Gemfile.lock`, `*.gemspec`                                                                                                                                                                                   | Yes for `*.gemspec`; Partial for `Gemfile`                                |
+| PHP             | `composer.json`, `composer.lock`                                                                                                                                                                                         | Yes for `composer.json`                                                   |
+| Swift           | `Package.swift`, `Package.resolved`, `*.xcodeproj`, `*.xcworkspace`                                                                                                                                                      | Yes for `Package.swift`                                                   |
+| C and C++       | `CMakeLists.txt`, `CMakePresets.json`, `CMakeUserPresets.json`, `Makefile`, `makefile`, `GNUmakefile`, `configure.ac`, `configure.in`, `meson.build`, `meson_options.txt`, `conanfile.txt`, `conanfile.py`, `vcpkg.json` | Yes for `vcpkg.json`; Partial for directory fallback cases                |
+| IDE             | `.idea`                                                                                                                                                                                                                  | Partial via directory fallback                                            |
 
-`inspect` and `unresolved` also use supported-language dependency manifests to suppress declared third-party packages from unresolved-import diagnostics. Manifest traversal is bounded to the nearest project manifest boundary so scoped scans stay deterministic and do not inherit unrelated parent directories. Graph-only document and template link edges stay available in graph output, but unresolved-import diagnostics exclude them by default so source import health is not mixed with documentation link checking.
+Monorepo and diagnostic behavior:
+
+- Project file traversal stops at the nearest manifest boundary, so scoped scans do not inherit unrelated parent projects.
+- `inspect` and `unresolved` use supported dependency manifests to suppress declared third-party packages from unresolved-import diagnostics.
+- Graph-only document and template link edges still appear in graph output. They are excluded from unresolved-import diagnostics by default, so source import health is not mixed with documentation link checking.
