@@ -7,6 +7,7 @@ import { parseUnifiedDiff } from "../src/impact/parse.js";
 import { analyzeImpactFromDiff, listCandidateTestFiles } from "../src/impact/index.js";
 import { buildImpactReport } from "../src/impact/report.js";
 import { CompactImpactReport, type ImpactItem } from "../src/impact/types.js";
+import type { BuildReport } from "../src/indexer/types.js";
 import type { Range } from "../src/types.js";
 import { createTestIndex } from "./test-utils.js";
 import { buildProjectIndexFromFiles } from "../src/index.js";
@@ -335,11 +336,39 @@ index 1234567..abcdef0 100644
 +}
 `;
 
-      const report = await analyzeImpactFromDiff(samplePath, index, {
-        provider: "raw",
-        diffText,
-      });
-      expect(report.analysis?.label).toBeTruthy();
+      const buildReport: BuildReport = {
+        timings: {},
+        backend: {
+          native: {
+            available: true,
+            enabled: true,
+            supportedLanguageIds: ["typescript"],
+            filesUsed: 1,
+            filesFellBack: 0,
+            fallbackReasons: {},
+            byLanguage: {},
+            errors: [],
+          },
+        },
+        graph: {
+          fallbackImportExtraction: {
+            total: 0,
+            byLanguage: {},
+            files: {},
+          },
+        },
+      };
+      const report = await analyzeImpactFromDiff(
+        samplePath,
+        index,
+        {
+          provider: "raw",
+          diffText,
+        },
+        { buildReport },
+      );
+      expect(report.analysis?.label).toBe("native semantic");
+      expect(report.analysis?.backend).toBe("native");
 
       expect(report).toBeDefined();
       expect(report.changedFiles).toHaveLength(1);

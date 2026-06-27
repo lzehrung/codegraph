@@ -107,6 +107,7 @@ export type ProjectIndex = {
   sqlNavigation?: SqlNavigationCache;
   manifestEntries?: Map<FileId, ProjectIndexManifestEntry>;
   cacheMode?: BuildOptions["cache"];
+  buildReport?: BuildReport;
   cacheRootDir?: string;
 };
 

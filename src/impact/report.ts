@@ -1,6 +1,6 @@
 import type { FileId } from "../types.js";
 import path from "node:path";
-import { type ProjectIndex } from "../indexer/types.js";
+import { type ProjectIndex, type BuildReport } from "../indexer/types.js";
 import { summarizeAnalysis } from "../analysisSummary.js";
 import type {
   FileChange,
@@ -35,7 +35,7 @@ export async function buildImpactReport(
   changedSymbols: ChangedSymbol[],
   impactedItems: ImpactItem[],
   suggestions: ImpactSuggestion[],
-  options: Partial<ImpactOptions> & { warning?: string | undefined } = {},
+  options: Partial<ImpactOptions> & { warning?: string | undefined; buildReport?: BuildReport | undefined } = {},
   diagnostics?: ImpactDiagnostics,
 ): Promise<ImpactReport | CompactImpactReport> {
   const normalizedDiffFiles = diffFiles.map((change) => normalizeImpactFileChange(projectRoot, change));
@@ -45,7 +45,7 @@ export async function buildImpactReport(
   const topImpacts = buildTopImpacts(impactedItems);
   const surfaceArea = buildSurfaceArea(index, normalizedDiffFiles, impactedItems);
   const projectFiles = index.projectFiles ?? (await discoverProjectFiles(projectRoot));
-  const analysis = summarizeAnalysis({ index });
+  const analysis = summarizeAnalysis({ index, report: options.buildReport ?? index.buildReport });
 
   // Build changedFiles summary
   const changedFiles = normalizedDiffFiles.map((fileChange) => ({

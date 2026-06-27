@@ -152,6 +152,16 @@ describe("agent search", () => {
     const response = await searchCodegraph({ root, query: "agent search", mode: "path", limit: 5 });
 
     expect(response.results.some((result) => result.file === "docs/agent-search.md")).toBe(true);
+    expect(response.analysis).toMatchObject({
+      mode: "reduced",
+      backend: "unknown",
+      label: "path-only",
+    });
+    expect(response.results[0]?.provenance).toMatchObject({
+      capability: "text",
+      analysisMode: "reduced",
+      backend: "unknown",
+    });
     expect(buildSpy).not.toHaveBeenCalled();
   });
 

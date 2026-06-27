@@ -14,7 +14,10 @@ export type AnalysisSummary = {
   label: string;
 };
 
-function deriveAnalysisBackend(input: { index?: ProjectIndex; report?: BuildReport }): AnalysisBackend {
+function deriveAnalysisBackend(input: {
+  index?: ProjectIndex | undefined;
+  report?: BuildReport | undefined;
+}): AnalysisBackend {
   const nativeReport = input.report?.backend?.native;
   const parserFallbackCount = input.report?.backend?.parser?.total ?? 0;
   const importFallbackCount = input.report?.graph?.fallbackImportExtraction.total ?? 0;
@@ -70,7 +73,10 @@ export function formatAnalysisSummaryLabel(summary: AnalysisSummary): string {
   return details.length ? `mixed semantics (${details.join(", ")})` : "mixed semantics";
 }
 
-export function summarizeAnalysis(input: { index?: ProjectIndex; report?: BuildReport }): AnalysisSummary {
+export function summarizeAnalysis(input: {
+  index?: ProjectIndex | undefined;
+  report?: BuildReport | undefined;
+}): AnalysisSummary {
   const parserDegradedFiles = input.report?.backend?.parser?.total ?? 0;
   const fallbackImportExtractionFiles = input.report?.graph?.fallbackImportExtraction.total ?? 0;
   const nativeFilesUsed = input.report?.backend?.native.filesUsed ?? 0;

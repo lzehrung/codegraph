@@ -415,7 +415,7 @@ function createIndexBuildRunState(
   opts: BuildOptions | undefined,
   graphOptions = normalizeGraphOptions(opts?.graph),
 ): IndexBuildRunState {
-  const report = opts?.report;
+  const report = opts?.report ?? { timings: {} };
   initNativeBackendReport(report);
   const cacheMode = opts?.cache ?? "off";
   return {
@@ -731,6 +731,7 @@ async function buildIndexFromFileListShared(
       parsedMap,
       bloomFilterCache,
       ...(projectFiles !== undefined ? { projectFiles } : {}),
+      buildReport: report,
       manifestEntries: manifestEntriesForIndex,
     });
     if (manifestEntries) {
@@ -998,12 +999,7 @@ export async function buildProjectIndexIncremental(
       };
       invalidateCachedDependents();
       if (fileReport) fileReport.changed = changedFiles.size;
-      if (
-        !changedFiles.size &&
-        !deletedTrackedFiles.size &&
-        Object.keys(trackedEntries).length === Object.keys(manifest.files ?? {}).length &&
-        !report
-      ) {
+      if (!changedFiles.size && !deletedTrackedFiles.size && !opts?.report) {
         const filesSignature = projectSnapshotFilesSignature(new Map(Object.entries(trackedEntries)));
         const snapshot = await tryLoadProjectIndexSnapshot(projectRoot, opts, filesSignature);
         if (snapshot) {

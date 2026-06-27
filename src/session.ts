@@ -8,7 +8,9 @@ import path from "node:path";
 import {
   type ProjectIndex,
   type BuildOptions,
+  type BuildReport,
   type GoToResult,
+  type IncrementalBuildOptions,
   type Reference,
   type SymbolDef,
 } from "./indexer/types.js";
@@ -24,6 +26,7 @@ import {
 import { analyzeImpactStreaming, type ImpactStreamChunk } from "./impact/streaming.js";
 import { getSessionPreset, mergePreset, type PresetName } from "./presets.js";
 import { resolveFilePathWithinRoot } from "./util/paths.js";
+import { listProjectFiles } from "./util/projectFiles.js";
 
 export type SessionOptions = {
   /** Project root directory */
@@ -188,6 +191,7 @@ export class CodeReviewSession implements ICodeReviewSession {
   private static readonly STALE_CHECK_INTERVAL_MS = 5_000;
 
   private index: ProjectIndex | null = null;
+  private buildReport: BuildReport | undefined;
   private status: SessionStatus = "initializing";
   private lastActivity: number = Date.now();
   private timeout: number;
@@ -199,7 +203,9 @@ export class CodeReviewSession implements ICodeReviewSession {
   private lifecycleVersion = 0;
   private trackedFileSignatures = new Map<string, string>();
   private configSignature: string | undefined;
+  private trackedDirectorySignatures = new Map<string, string>();
   private staleReason: SessionStaleReason | undefined;
+  private forceFullRefreshOnNextStaleCheck = false;
   private lastStaleCheckAt = 0;
   private lastRefreshAt: number | undefined;
   private lastRefreshReason: "initialization" | "manual" | "stale_check" | undefined;
@@ -227,12 +233,25 @@ export class CodeReviewSession implements ICodeReviewSession {
   getRoot(): string {
     return this.root;
   }
-
-  private async buildIndex(): Promise<ProjectIndex> {
-    if (this.incremental) {
-      return await buildProjectIndexIncremental(this.root, this.buildOptions);
+  private async buildIndex(options: { forceFull?: boolean } = {}): Promise<{
+    index: ProjectIndex;
+    report: BuildReport;
+    projectFiles: string[];
+  }> {
+    if (options.forceFull) {
+      const projectFiles = await this.currentProjectFiles();
+      const report: BuildReport = { timings: {} };
+      const buildOptions: IncrementalBuildOptions = { ...this.buildOptions, files: projectFiles, report };
+      const index = await buildProjectIndexIncremental(this.root, buildOptions);
+      return { index, report: index.buildReport ?? report, projectFiles };
     }
-    return await buildProjectIndex(this.root, this.buildOptions);
+    const buildOptions: BuildOptions = { ...this.buildOptions };
+    const index = this.incremental
+      ? await buildProjectIndexIncremental(this.root, buildOptions)
+      : await buildProjectIndex(this.root, buildOptions);
+    const projectFiles = this.indexedProjectFiles(index);
+    const report = index.buildReport ?? { timings: {} };
+    return { index, report, projectFiles };
   }
 
   private createDisposedDuringOperationError(operation: string): Error {
@@ -262,15 +281,87 @@ export class CodeReviewSession implements ICodeReviewSession {
     }
   }
 
+  private directorySignature(directory: string): string {
+    const stat = this.statSignature(directory);
+    try {
+      const entries = fs
+        .readdirSync(directory, { withFileTypes: true })
+        .filter((entry) => entry.name !== ".codegraph-cache" && entry.name !== ".git")
+        .map((entry) => `${entry.isDirectory() ? "d" : "f"}:${entry.name}`)
+        .sort()
+        .join("\n");
+      return `${stat}\n${entries}`;
+    } catch {
+      return stat;
+    }
+  }
+
   private configFilePath(): string {
     return path.join(this.root, "codegraph.config.json");
   }
 
-  private captureFreshnessBaseline(index: ProjectIndex, reason: "initialization" | "manual" | "stale_check"): void {
+  private async currentProjectFiles(): Promise<string[]> {
+    const discoveryOptions = {
+      ...this.buildOptions?.discovery,
+      ...(this.buildOptions?.logLevel ? { logLevel: this.buildOptions.logLevel } : {}),
+    };
+    return await listProjectFiles(this.root, undefined, discoveryOptions);
+  }
+
+  private indexedProjectFiles(index: ProjectIndex): string[] {
+    const files = index.manifestEntries ? [...index.manifestEntries.keys()] : [...index.byFile.keys()];
+    return files.map((file) => {
+      if (path.isAbsolute(file)) {
+        return file;
+      }
+      return path.resolve(this.root, file);
+    });
+  }
+
+  private directoriesForProjectFiles(files: Iterable<string>): Set<string> {
+    const directories = new Set<string>([this.root]);
+    for (const file of files) {
+      let directory = path.dirname(path.resolve(file));
+      while (directory.startsWith(this.root)) {
+        directories.add(directory);
+        if (directory === this.root) break;
+        const parent = path.dirname(directory);
+        if (parent === directory) break;
+        directory = parent;
+      }
+    }
+    return directories;
+  }
+
+  private directorySignatures(files: Iterable<string>): Map<string, string> {
+    const signatures = new Map<string, string>();
+    for (const directory of this.directoriesForProjectFiles(files)) {
+      signatures.set(directory, this.directorySignature(directory));
+    }
+    return signatures;
+  }
+
+  private projectDirectoriesChanged(): boolean {
+    if (!this.trackedDirectorySignatures.size) {
+      return true;
+    }
+    for (const [directory, signature] of this.trackedDirectorySignatures) {
+      if (this.directorySignature(directory) !== signature) {
+        return true;
+      }
+    }
+    return false;
+  }
+  private captureFreshnessBaseline(
+    index: ProjectIndex,
+    reason: "initialization" | "manual" | "stale_check",
+    projectFiles: string[],
+  ): void {
     const trackedEntries = index.manifestEntries
       ? [...index.manifestEntries].map(([file, entry]) => [file, this.trackedSignatureFromManifest(entry.sig)] as const)
       : [...index.byFile.keys()].map((file) => [file, this.statSignature(file)] as const);
     this.trackedFileSignatures = new Map(trackedEntries);
+    this.trackedDirectorySignatures = this.directorySignatures(projectFiles);
     this.configSignature = this.statSignature(this.configFilePath());
     this.staleReason = undefined;
     this.lastStaleCheckAt = Date.now();
@@ -298,18 +389,46 @@ export class CodeReviewSession implements ICodeReviewSession {
     return undefined;
   }
 
-  private checkForStaleness(): void {
+  private checkForStaleness(options: { force?: boolean } = {}): void {
     if (this.status !== "ready" || !this.index) return;
     const now = Date.now();
-    if (now - this.lastStaleCheckAt < CodeReviewSession.STALE_CHECK_INTERVAL_MS) return;
+    if (!options.force && now - this.lastStaleCheckAt < CodeReviewSession.STALE_CHECK_INTERVAL_MS) return;
     this.lastStaleCheckAt = now;
-    this.staleReason = this.refreshNeededFromTrackedFiles();
+    const trackedReason = this.refreshNeededFromTrackedFiles();
+    if (trackedReason) {
+      this.staleReason = trackedReason;
+      this.forceFullRefreshOnNextStaleCheck = false;
+      return;
+    }
+    const projectFilesChanged = this.projectDirectoriesChanged();
+    this.staleReason = projectFilesChanged ? "tracked_files_changed" : undefined;
+    this.forceFullRefreshOnNextStaleCheck = projectFilesChanged;
   }
 
-  private commitReadyIndex(index: ProjectIndex, reason: "initialization" | "manual" | "stale_check"): void {
+  private checkForStalenessNow(): void {
+    if (this.status !== "ready" || !this.index) return;
+    this.lastStaleCheckAt = Date.now();
+    const trackedReason = this.refreshNeededFromTrackedFiles();
+    if (trackedReason) {
+      this.staleReason = trackedReason;
+      this.forceFullRefreshOnNextStaleCheck = false;
+      return;
+    }
+    const projectFilesChanged = this.projectDirectoriesChanged();
+    this.staleReason = projectFilesChanged ? "tracked_files_changed" : undefined;
+    this.forceFullRefreshOnNextStaleCheck = projectFilesChanged;
+  }
+  private commitReadyIndex(
+    index: ProjectIndex,
+    reason: "initialization" | "manual" | "stale_check",
+    report: BuildReport,
+    projectFiles: string[],
+  ): void {
     this.index = index;
+    this.buildReport = report;
     this.status = "ready";
-    this.captureFreshnessBaseline(index, reason);
+    this.captureFreshnessBaseline(index, reason, projectFiles);
+    this.forceFullRefreshOnNextStaleCheck = false;
     this.touch();
   }
 
@@ -330,9 +449,9 @@ export class CodeReviewSession implements ICodeReviewSession {
       const previousStatus = this.status;
       try {
         this.status = "initializing";
-        const nextIndex = await this.buildIndex();
+        const nextBuild = await this.buildIndex();
         this.assertLifecycleVersion(lifecycleVersion, "initialization");
-        this.commitReadyIndex(nextIndex, "initialization");
+        this.commitReadyIndex(nextBuild.index, "initialization", nextBuild.report, nextBuild.projectFiles);
       } catch (error) {
         if (this.lifecycleVersion === lifecycleVersion) {
           this.status = previousStatus === "expired" ? "expired" : "error";
@@ -399,10 +518,22 @@ export class CodeReviewSession implements ICodeReviewSession {
   }
 
   private async ensureFreshIndex(): Promise<ProjectIndex> {
+    this.checkExpiration();
+    this.checkForStalenessNow();
     const index = this.getIndex();
     if (!this.staleReason) {
       return index;
     }
+    await this.refreshInternal("stale_check");
+    return this.getIndex();
+  }
+
+  private async refreshForExistingUnindexedFile(file: string): Promise<ProjectIndex | undefined> {
+    if (!fs.existsSync(file)) {
+      return undefined;
+    }
+    this.staleReason = "tracked_files_changed";
+    this.forceFullRefreshOnNextStaleCheck = true;
     await this.refreshInternal("stale_check");
     return this.getIndex();
   }
@@ -414,7 +545,7 @@ export class CodeReviewSession implements ICodeReviewSession {
   async analyzeImpact(options: ImpactOptions): Promise<ImpactReport | CompactImpactReport> {
     const index = await this.ensureFreshIndex();
     requireSessionImpactProvider(options);
-    return await analyzeImpactFromDiff(this.root, index, options);
+    return await analyzeImpactFromDiff(this.root, index, options, { buildReport: this.buildReport });
   }
 
   /**
@@ -424,41 +555,61 @@ export class CodeReviewSession implements ICodeReviewSession {
   async *analyzeImpactStream(options: ImpactStreamingOptions): AsyncGenerator<ImpactStreamChunk> {
     const index = await this.ensureFreshIndex();
     requireSessionImpactProvider(options);
-    yield* analyzeImpactStreaming(this.root, index, options);
+    yield* analyzeImpactStreaming(this.root, index, options, { buildReport: this.buildReport });
   }
 
   /**
    * Find references to a symbol
    */
   async findReferences(params: { file: string; line: number; column: number }): Promise<SessionFindReferencesResult> {
-    const index = await this.ensureFreshIndex();
     const resolved = resolveSessionFileInput(this.root, params.file, "Session file");
     if (resolved.status === "error") {
       return resolved;
     }
-    return await findReferences(index, {
+    const index = await this.ensureFreshIndex();
+    const result = await findReferences(index, {
       ...params,
       file: resolved.file,
     });
+    if (result.status === "not_found" && result.reason === "File not indexed") {
+      const refreshedIndex = await this.refreshForExistingUnindexedFile(resolved.file);
+      if (refreshedIndex) {
+        return await findReferences(refreshedIndex, {
+          ...params,
+          file: resolved.file,
+        });
+      }
+    }
+    return result;
   }
 
   /**
    * Go to definition of a symbol
    */
   async goToDefinition(params: { file: string; line: number; column: number }): Promise<SessionGoToDefinitionResult> {
-    const index = await this.ensureFreshIndex();
     const resolved = resolveSessionFileInput(this.root, params.file, "Session file");
     if (resolved.status === "error") {
       return resolved;
     }
-    return await goToDefinition(index, {
+    const index = await this.ensureFreshIndex();
+    const result = await goToDefinition(index, {
       ...params,
       file: resolved.file,
     });
+    if (result.status === "not_found" && result.reason === "File not indexed") {
+      const refreshedIndex = await this.refreshForExistingUnindexedFile(resolved.file);
+      if (refreshedIndex) {
+        return await goToDefinition(refreshedIndex, {
+          ...params,
+          file: resolved.file,
+        });
+      }
+    }
+    return result;
   }
 
   /**
-   * Refresh the index (incremental rebuild)
+   * Refresh the index (manual full rebuild; stale checks full rebuild only after file-set drift)
    */
   private async refreshInternal(refreshReason: "manual" | "stale_check"): Promise<void> {
     const previousIndex = this.index;
@@ -466,9 +617,11 @@ export class CodeReviewSession implements ICodeReviewSession {
     const lifecycleVersion = this.lifecycleVersion;
     this.status = "initializing";
     try {
-      const nextIndex = await this.buildIndex();
+      const forceFull =
+        refreshReason === "manual" || (refreshReason === "stale_check" && this.forceFullRefreshOnNextStaleCheck);
+      const nextBuild = await this.buildIndex({ forceFull });
       this.assertLifecycleVersion(lifecycleVersion, "refresh");
-      this.commitReadyIndex(nextIndex, refreshReason);
+      this.commitReadyIndex(nextBuild.index, refreshReason, nextBuild.report, nextBuild.projectFiles);
     } catch (error) {
       if (this.lifecycleVersion !== lifecycleVersion) {
         throw error;

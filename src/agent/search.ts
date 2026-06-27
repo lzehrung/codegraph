@@ -309,8 +309,8 @@ function searchPathOnly(root: string, files: readonly string[], request: AgentSe
         kind: "file",
         label: relFile,
         file: relFile,
-        provenance: createSearchProvenance(relFile, "graph", "high", {
-          mode: "semantic",
+        provenance: createSearchProvenance(relFile, "text", "high", {
+          mode: "reduced",
           backend: "unknown",
         }),
       });
@@ -330,13 +330,13 @@ function searchPathOnly(root: string, files: readonly string[], request: AgentSe
     mode: "path",
     root,
     analysis: {
-      mode: "semantic",
+      mode: "reduced",
       backend: "unknown",
       parserDegradedFiles: 0,
       fallbackImportExtractionFiles: 0,
       nativeFilesUsed: 0,
       nativeFilesFellBack: 0,
-      label: "semantic",
+      label: "path-only",
     },
     limits: {
       results: limit,

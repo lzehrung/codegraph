@@ -1,5 +1,5 @@
 import { buildProjectIndex } from "../indexer/build-index.js";
-import type { BuildOptions, ProjectIndex } from "../indexer/types.js";
+import type { BuildOptions, BuildReport, ProjectIndex } from "../indexer/types.js";
 import {
   analyzeImpactFromDiff,
   type ChangedSymbol,
@@ -482,11 +482,11 @@ export async function handleImpactCommand(context: ImpactCommandContext): Promis
   try {
     const duplicateScope =
       pretty && !mermaid ? parseDuplicateLeadScope(context.getOpt("--duplicates"), "changed") : "off";
-    const index = await buildProjectIndex(
-      context.projectRootFs,
-      buildIndexOptions(context, options, { keepParsedForDuplicates: duplicateScope !== "off" }),
-    );
-    const report = await analyzeImpactFromDiff(context.projectRootFs, index, options as ImpactOptions);
+    const buildReport: BuildReport = { timings: {} };
+    const indexOptions = buildIndexOptions(context, options, { keepParsedForDuplicates: duplicateScope !== "off" });
+    indexOptions.report = buildReport;
+    const index = await buildProjectIndex(context.projectRootFs, indexOptions);
+    const report = await analyzeImpactFromDiff(context.projectRootFs, index, options as ImpactOptions, { buildReport });
     const impactReport = ensureImpactReport(report);
 
     if (mermaid) {

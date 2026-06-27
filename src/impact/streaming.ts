@@ -3,7 +3,7 @@
  * Allows incremental results to be emitted as they're discovered
  */
 
-import { type ProjectIndex } from "../indexer/types.js";
+import { type ProjectIndex, type BuildReport } from "../indexer/types.js";
 import { summarizeAnalysis } from "../analysisSummary.js";
 import {
   IMPACT_SCHEMA_VERSION,
@@ -179,6 +179,10 @@ export function impactItemEmissionKey(item: ImpactItem, partial: boolean): strin
   ].join("|");
 }
 
+export type ImpactStreamingContext = {
+  buildReport?: BuildReport | undefined;
+};
+
 /**
  * Stream impact analysis results as they are discovered.
  *
@@ -194,12 +198,13 @@ export async function* analyzeImpactStreaming(
   projectRoot: string,
   index: ProjectIndex,
   options: ImpactStreamingOptions,
+  context: ImpactStreamingContext = {},
 ): AsyncGenerator<ImpactStreamChunk> {
   try {
     const streamSummary = validateImpactStreamingOptions(options);
     const impactOptions = toImpactOptions(options);
     const displayFile = (filePath: string): string => toImpactReportFilePath(projectRoot, filePath);
-    const analysis = summarizeAnalysis({ index });
+    const analysis = summarizeAnalysis({ index, report: context.buildReport ?? index.buildReport });
     const projectFiles = index.projectFiles ?? (await discoverProjectFiles(projectRoot));
     yield { type: "projectFiles", files: projectFiles };
 
@@ -333,6 +338,7 @@ export async function* analyzeImpactStreaming(
             impactedItems,
             diagnostics,
             diff.warning,
+            context,
           );
 
     yield {
@@ -367,6 +373,7 @@ async function buildFullStreamSummaryReport(
   impactedItems: ImpactItem[],
   diagnostics: ImpactStreamSummaryReport["diagnostics"],
   warning: string | undefined,
+  context: ImpactStreamingContext,
 ): Promise<ImpactStreamSummaryReport> {
   const suggestions = await collectImpactReportSuggestions(
     projectRoot,
@@ -382,7 +389,7 @@ async function buildFullStreamSummaryReport(
     changedSymbols,
     impactedItems,
     suggestions,
-    { ...options, compact: false, warning },
+    { ...options, compact: false, warning, buildReport: context.buildReport },
     diagnostics,
   );
   if (fullReport.format !== "full") {

@@ -251,18 +251,11 @@ index 1234567..abcdef0 100644
         root,
         buildOptions: { cache: "memory", useBloomFilters: true },
       });
-      const freshness = session as { lastStaleCheckAt: number };
-
       await fsp.writeFile(
         path.join(root, "utils.ts"),
         "export function helper(value: string) { return value.trim(); }\n",
         "utf8",
       );
-      freshness.lastStaleCheckAt = 0;
-
-      const staleStats = session.getStats();
-      expect(staleStats.stale).toBe(true);
-      expect(staleStats.staleReason).toBe("tracked_files_changed");
 
       const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
       try {
@@ -274,6 +267,82 @@ index 1234567..abcdef0 100644
         expect(result.status).toBe("ok");
         expect(session.getStats().stale).toBe(false);
         expect(session.getStats().lastRefreshReason).toBe("stale_check");
+        expect(buildSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        buildSpy.mockRestore();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("should auto-refresh before navigation when a new source file is added", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-added-file-"));
+    try {
+      await fsp.writeFile(
+        path.join(root, "main.ts"),
+        "import { late } from './late';\nexport const value = late();\n",
+        "utf8",
+      );
+      const session = await createCodeReviewSession({
+        root,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+
+      await fsp.writeFile(
+        path.join(root, "late.ts"),
+        "export function late() { return 1; }\nexport const value = late();\n",
+        "utf8",
+      );
+
+      const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+      try {
+        const result = await session.goToDefinition({
+          file: path.join(root, "late.ts"),
+          line: 2,
+          column: 22,
+        });
+        expect(result.status).toBe("ok");
+        expect(session.getStats().stale).toBe(false);
+        expect(session.getStats().lastRefreshReason).toBe("stale_check");
+        expect(buildSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        buildSpy.mockRestore();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("should include new source files on manual refresh", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-manual-added-file-"));
+    try {
+      await fsp.writeFile(
+        path.join(root, "main.ts"),
+        "import { late } from './late';\nexport const value = late();\n",
+        "utf8",
+      );
+      const session = await createCodeReviewSession({
+        root,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+
+      await fsp.writeFile(
+        path.join(root, "late.ts"),
+        "export function late() { return 1; }\nexport const value = late();\n",
+        "utf8",
+      );
+
+      const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+      try {
+        await session.refresh();
+        const result = await session.goToDefinition({
+          file: path.join(root, "late.ts"),
+          line: 2,
+          column: 22,
+        });
+        expect(result.status).toBe("ok");
+        expect(session.getStats().lastRefreshReason).toBe("manual");
         expect(buildSpy).toHaveBeenCalledTimes(1);
       } finally {
         buildSpy.mockRestore();
