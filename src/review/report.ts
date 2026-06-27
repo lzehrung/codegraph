@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { AnalysisSummary } from "../analysisSummary.js";
 import type { CandidateTestFile } from "../impact/context.js";
 import { type ProjectIndex } from "../indexer/types.js";
 import { collectSqlReviewContext, type SqlReviewContext } from "../sql/review.js";
@@ -62,6 +63,7 @@ export function assembleReviewReport(input: {
   changedSymbolIds: string[];
   candidateTests: CandidateTestFile[];
   graphDelta: Edge[];
+  analysis?: AnalysisSummary;
   sqlContext?: SqlReviewContext;
   diagnostics: ReviewDiagnostics;
   riskRelevantParseFailures: number;
@@ -70,6 +72,7 @@ export function assembleReviewReport(input: {
   const report: ReviewReport = {
     schemaVersion: REVIEW_SCHEMA_VERSION,
     status: "ok",
+    ...(input.analysis ? { analysis: input.analysis } : {}),
     projectFiles: input.projectFiles,
     summary: {
       filesChanged: input.summaries.length,

@@ -34,6 +34,7 @@ Runtime behavior, performance characteristics, architecture, extension points, a
 - `.codegraph-cache/index-v1/manifest.json` stores the last indexed commit, graph options, and per-file signatures plus resolved edges.
 - Incremental runs treat the manifest as a cached base graph: unchanged files keep their edges, while changed files are reparsed and their edges replaced.
 - `codegraph hotspots` and `codegraph inspect` reuse the disk index cache when the manifest is present and log the manifest path, timestamp, and last commit hash to stderr.
+- Agent tool wrappers and agent sessions default to incremental warm-cache reuse so repeated local and MCP queries pay the cold build cost once, then reuse compatible manifests and parsed state.
 - Remove the manifest, clear `.codegraph-cache/index-v1`, or rerun with different graph flags to force a full graph rebuild.
 
 ### Read paths
@@ -117,6 +118,7 @@ Language adapters expose:
 - Call compatibility runs only for changed callable signatures with provider-backed signature extraction and high-confidence callsite argument counts.
 - Hints compare arity only. They do not perform type checking, overload resolution, data-flow analysis, macro expansion, or dynamic dispatch.
 - Existing impact filters apply before hints are emitted, so ignored files and tests excluded by default stay out of call compatibility results.
+- Long-lived `CodeReviewSession` instances also watch tracked file and config signatures. When the working tree drifts, the next navigation or impact call refreshes the cached snapshot before serving results, and `getStats()` exposes stale/refresh metadata for callers that want to surface it.
 
 ### 6. AST grep
 

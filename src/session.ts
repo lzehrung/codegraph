@@ -3,6 +3,7 @@
  * Maintains warm caches across multiple queries for better agent UX
  */
 
+import fs from "node:fs";
 import path from "node:path";
 import {
   type ProjectIndex,
@@ -42,6 +43,20 @@ export type SessionOptions = {
 };
 
 export type SessionStatus = "initializing" | "ready" | "expired" | "error";
+
+type SessionStaleReason = "tracked_files_changed" | "config_changed";
+
+type SessionStats = {
+  status: SessionStatus;
+  fileCount: number;
+  symbolCount: number;
+  lastActivity: Date;
+  timeUntilExpiration: number;
+  stale: boolean;
+  staleReason?: SessionStaleReason;
+  lastRefreshAt?: Date;
+  lastRefreshReason?: "initialization" | "manual" | "stale_check";
+};
 
 type SessionIdentity = {
   root: string;
@@ -162,13 +177,7 @@ export interface ICodeReviewSession {
   goToDefinition(params: { file: string; line: number; column: number }): Promise<SessionGoToDefinitionResult>;
   refresh(): Promise<void>;
   dispose(): void;
-  getStats(): {
-    status: SessionStatus;
-    fileCount: number;
-    symbolCount: number;
-    lastActivity: Date;
-    timeUntilExpiration: number;
-  };
+  getStats(): SessionStats;
 }
 
 /**
@@ -176,6 +185,8 @@ export interface ICodeReviewSession {
  * Use this to avoid rebuilding the index for multiple queries
  */
 export class CodeReviewSession implements ICodeReviewSession {
+  private static readonly STALE_CHECK_INTERVAL_MS = 5_000;
+
   private index: ProjectIndex | null = null;
   private status: SessionStatus = "initializing";
   private lastActivity: number = Date.now();
@@ -186,6 +197,12 @@ export class CodeReviewSession implements ICodeReviewSession {
   private initPromise: Promise<void> | null = null;
   private identityFingerprint: string;
   private lifecycleVersion = 0;
+  private trackedFileSignatures = new Map<string, string>();
+  private configSignature: string | undefined;
+  private staleReason: SessionStaleReason | undefined;
+  private lastStaleCheckAt = 0;
+  private lastRefreshAt: number | undefined;
+  private lastRefreshReason: "initialization" | "manual" | "stale_check" | undefined;
 
   constructor(options: SessionOptions) {
     const identity = resolveSessionIdentity(options);
@@ -228,9 +245,71 @@ export class CodeReviewSession implements ICodeReviewSession {
     }
   }
 
-  private commitReadyIndex(index: ProjectIndex): void {
+  private trackedSignatureFromManifest(sig: string): string {
+    const parts = sig.split(":");
+    if (parts.length >= 2) {
+      return `${parts[0]}:${parts[1]}`;
+    }
+    return sig;
+  }
+
+  private statSignature(file: string): string {
+    try {
+      const stat = fs.statSync(file);
+      return `${stat.mtimeMs}:${stat.size}`;
+    } catch {
+      return "0:0";
+    }
+  }
+
+  private configFilePath(): string {
+    return path.join(this.root, "codegraph.config.json");
+  }
+
+  private captureFreshnessBaseline(index: ProjectIndex, reason: "initialization" | "manual" | "stale_check"): void {
+    const trackedEntries = index.manifestEntries
+      ? [...index.manifestEntries].map(([file, entry]) => [file, this.trackedSignatureFromManifest(entry.sig)] as const)
+      : [...index.byFile.keys()].map((file) => [file, this.statSignature(file)] as const);
+    this.trackedFileSignatures = new Map(trackedEntries);
+    this.configSignature = this.statSignature(this.configFilePath());
+    this.staleReason = undefined;
+    this.lastStaleCheckAt = Date.now();
+    this.lastRefreshAt = this.lastStaleCheckAt;
+    this.lastRefreshReason = reason;
+  }
+
+  private refreshNeededFromTrackedFiles(): SessionStaleReason | undefined {
+    if (!this.trackedFileSignatures.size) {
+      const configSignature = this.statSignature(this.configFilePath());
+      if (configSignature !== this.configSignature) {
+        return "config_changed";
+      }
+      return undefined;
+    }
+    for (const [file, signature] of this.trackedFileSignatures) {
+      if (this.statSignature(file) !== signature) {
+        return "tracked_files_changed";
+      }
+    }
+    const configSignature = this.statSignature(this.configFilePath());
+    if (configSignature !== this.configSignature) {
+      return "config_changed";
+    }
+    return undefined;
+  }
+
+  private checkForStaleness(): void {
+    if (this.status !== "ready" || !this.index) return;
+    const now = Date.now();
+    if (now - this.lastStaleCheckAt < CodeReviewSession.STALE_CHECK_INTERVAL_MS) return;
+    this.lastStaleCheckAt = now;
+    this.staleReason = this.refreshNeededFromTrackedFiles();
+  }
+
+  private commitReadyIndex(index: ProjectIndex, reason: "initialization" | "manual" | "stale_check"): void {
     this.index = index;
     this.status = "ready";
+    this.captureFreshnessBaseline(index, reason);
     this.touch();
   }
 
@@ -253,7 +332,7 @@ export class CodeReviewSession implements ICodeReviewSession {
         this.status = "initializing";
         const nextIndex = await this.buildIndex();
         this.assertLifecycleVersion(lifecycleVersion, "initialization");
-        this.commitReadyIndex(nextIndex);
+        this.commitReadyIndex(nextIndex, "initialization");
       } catch (error) {
         if (this.lifecycleVersion === lifecycleVersion) {
           this.status = previousStatus === "expired" ? "expired" : "error";
@@ -276,6 +355,7 @@ export class CodeReviewSession implements ICodeReviewSession {
    */
   isReady(): boolean {
     this.checkExpiration();
+    this.checkForStaleness();
     return this.status === "ready";
   }
 
@@ -284,6 +364,7 @@ export class CodeReviewSession implements ICodeReviewSession {
    */
   getStatus(): SessionStatus {
     this.checkExpiration();
+    this.checkForStaleness();
     return this.status;
   }
 
@@ -309,6 +390,7 @@ export class CodeReviewSession implements ICodeReviewSession {
    */
   private getIndex(): ProjectIndex {
     this.checkExpiration();
+    this.checkForStaleness();
     if (this.status !== "ready" || !this.index) {
       throw new Error(`Session not ready (status: ${this.status})`);
     }
@@ -316,12 +398,21 @@ export class CodeReviewSession implements ICodeReviewSession {
     return this.index;
   }
 
+  private async ensureFreshIndex(): Promise<ProjectIndex> {
+    const index = this.getIndex();
+    if (!this.staleReason) {
+      return index;
+    }
+    await this.refreshInternal("stale_check");
+    return this.getIndex();
+  }
+
   /**
    * Analyze impact from a diff
    * Results are cached in the warm index
    */
   async analyzeImpact(options: ImpactOptions): Promise<ImpactReport | CompactImpactReport> {
-    const index = this.getIndex();
+    const index = await this.ensureFreshIndex();
     requireSessionImpactProvider(options);
     return await analyzeImpactFromDiff(this.root, index, options);
   }
@@ -331,7 +422,7 @@ export class CodeReviewSession implements ICodeReviewSession {
    * Better for agents as they can start processing immediately
    */
   async *analyzeImpactStream(options: ImpactStreamingOptions): AsyncGenerator<ImpactStreamChunk> {
-    const index = this.getIndex();
+    const index = await this.ensureFreshIndex();
     requireSessionImpactProvider(options);
     yield* analyzeImpactStreaming(this.root, index, options);
   }
@@ -340,7 +431,7 @@ export class CodeReviewSession implements ICodeReviewSession {
    * Find references to a symbol
    */
   async findReferences(params: { file: string; line: number; column: number }): Promise<SessionFindReferencesResult> {
-    const index = this.getIndex();
+    const index = await this.ensureFreshIndex();
     const resolved = resolveSessionFileInput(this.root, params.file, "Session file");
     if (resolved.status === "error") {
       return resolved;
@@ -355,7 +446,7 @@ export class CodeReviewSession implements ICodeReviewSession {
    * Go to definition of a symbol
    */
   async goToDefinition(params: { file: string; line: number; column: number }): Promise<SessionGoToDefinitionResult> {
-    const index = this.getIndex();
+    const index = await this.ensureFreshIndex();
     const resolved = resolveSessionFileInput(this.root, params.file, "Session file");
     if (resolved.status === "error") {
       return resolved;
@@ -369,7 +460,7 @@ export class CodeReviewSession implements ICodeReviewSession {
   /**
    * Refresh the index (incremental rebuild)
    */
-  async refresh(): Promise<void> {
+  private async refreshInternal(refreshReason: "manual" | "stale_check"): Promise<void> {
     const previousIndex = this.index;
     const previousStatus = this.status;
     const lifecycleVersion = this.lifecycleVersion;
@@ -377,7 +468,7 @@ export class CodeReviewSession implements ICodeReviewSession {
     try {
       const nextIndex = await this.buildIndex();
       this.assertLifecycleVersion(lifecycleVersion, "refresh");
-      this.commitReadyIndex(nextIndex);
+      this.commitReadyIndex(nextIndex, refreshReason);
     } catch (error) {
       if (this.lifecycleVersion !== lifecycleVersion) {
         throw error;
@@ -390,6 +481,10 @@ export class CodeReviewSession implements ICodeReviewSession {
       }
       throw error;
     }
+  }
+
+  async refresh(): Promise<void> {
+    await this.refreshInternal("manual");
   }
 
   /**
@@ -405,14 +500,9 @@ export class CodeReviewSession implements ICodeReviewSession {
   /**
    * Get session statistics
    */
-  getStats(): {
-    status: SessionStatus;
-    fileCount: number;
-    symbolCount: number;
-    lastActivity: Date;
-    timeUntilExpiration: number;
-  } {
+  getStats(): SessionStats {
     this.checkExpiration();
+    this.checkForStaleness();
 
     const index = this.index;
     const fileCount = index?.byFile.size ?? 0;
@@ -424,6 +514,10 @@ export class CodeReviewSession implements ICodeReviewSession {
       symbolCount,
       lastActivity: new Date(this.lastActivity),
       timeUntilExpiration: this.status === "ready" ? Math.max(0, this.timeout - (Date.now() - this.lastActivity)) : 0,
+      stale: !!this.staleReason,
+      ...(this.staleReason ? { staleReason: this.staleReason } : {}),
+      ...(this.lastRefreshAt ? { lastRefreshAt: new Date(this.lastRefreshAt) } : {}),
+      ...(this.lastRefreshReason ? { lastRefreshReason: this.lastRefreshReason } : {}),
     };
   }
 }

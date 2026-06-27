@@ -78,6 +78,8 @@ describe("CodeReviewSession", () => {
     expect(stats.symbolCount).toBeGreaterThan(0);
     expect(stats.lastActivity).toBeInstanceOf(Date);
     expect(stats.timeUntilExpiration).toBeGreaterThan(0);
+    expect(stats.stale).toBe(false);
+    expect(stats.lastRefreshReason).toBe("initialization");
   });
 
   test("should expose analyzeImpactStream on the session interface", async () => {
@@ -229,6 +231,55 @@ index 1234567..abcdef0 100644
       await expect(session.findReferences({ file, line: 1, column: 17 })).resolves.toMatchObject({ status: "ok" });
     } finally {
       buildSpy.mockRestore();
+    }
+  });
+
+  test("should mark stale sessions and auto-refresh before serving navigation", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-stale-"));
+    try {
+      await fsp.writeFile(
+        path.join(root, "utils.ts"),
+        "export function helper(value: string) { return value; }\n",
+        "utf8",
+      );
+      await fsp.writeFile(
+        path.join(root, "main.ts"),
+        "import { helper } from './utils';\nexport const ok = helper('token');\n",
+        "utf8",
+      );
+      const session = await createCodeReviewSession({
+        root,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+      const freshness = session as { lastStaleCheckAt: number };
+
+      await fsp.writeFile(
+        path.join(root, "utils.ts"),
+        "export function helper(value: string) { return value.trim(); }\n",
+        "utf8",
+      );
+      freshness.lastStaleCheckAt = 0;
+
+      const staleStats = session.getStats();
+      expect(staleStats.stale).toBe(true);
+      expect(staleStats.staleReason).toBe("tracked_files_changed");
+
+      const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+      try {
+        const result = await session.findReferences({
+          file: path.join(root, "utils.ts"),
+          line: 1,
+          column: 17,
+        });
+        expect(result.status).toBe("ok");
+        expect(session.getStats().stale).toBe(false);
+        expect(session.getStats().lastRefreshReason).toBe("stale_check");
+        expect(buildSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        buildSpy.mockRestore();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
     }
   });
 

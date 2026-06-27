@@ -1,4 +1,5 @@
 import type { FileId } from "../types.js";
+import type { AnalysisSummary } from "../analysisSummary.js";
 import {
   buildOptionalExportSummary,
   buildOptionalReexportChains,
@@ -23,7 +24,9 @@ import type {
   ImpactSurfaceArea,
 } from "./types.js";
 
-export type CompactImpactReportParts = ImpactReportPartsBase;
+export type CompactImpactReportParts = ImpactReportPartsBase & {
+  analysis?: AnalysisSummary;
+};
 
 export function buildCompactImpactReport(parts: CompactImpactReportParts): CompactImpactReport {
   const context = buildCompactSerializerContext(parts);
@@ -31,6 +34,7 @@ export function buildCompactImpactReport(parts: CompactImpactReportParts): Compa
   return {
     schemaVersion: IMPACT_SCHEMA_VERSION,
     format: "compact",
+    ...(parts.analysis ? { analysis: parts.analysis } : {}),
     ...(parts.projectFiles ? { projectFiles: parts.projectFiles } : {}),
     files: context.files,
     changedFiles: parts.changedFiles.map((fileChange) => ({

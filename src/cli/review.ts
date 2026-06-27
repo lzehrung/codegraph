@@ -181,6 +181,9 @@ function formatReviewSummary(
   lines.push("Review Summary");
   lines.push("==============");
   lines.push(`Status: ${report.status}`);
+  if (report.analysis) {
+    lines.push(`Analysis: ${report.analysis.label}`);
+  }
   lines.push(`Files changed: ${report.summary.filesChanged}`);
   lines.push(`Symbols changed: ${report.summary.symbolsChanged}`);
   lines.push(

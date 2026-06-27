@@ -1,6 +1,7 @@
 import type { FileId } from "../types.js";
 import path from "node:path";
 import { type ProjectIndex } from "../indexer/types.js";
+import { summarizeAnalysis } from "../analysisSummary.js";
 import type {
   FileChange,
   ChangedSymbol,
@@ -44,6 +45,7 @@ export async function buildImpactReport(
   const topImpacts = buildTopImpacts(impactedItems);
   const surfaceArea = buildSurfaceArea(index, normalizedDiffFiles, impactedItems);
   const projectFiles = index.projectFiles ?? (await discoverProjectFiles(projectRoot));
+  const analysis = summarizeAnalysis({ index });
 
   // Build changedFiles summary
   const changedFiles = normalizedDiffFiles.map((fileChange) => ({
@@ -128,6 +130,7 @@ export async function buildImpactReport(
   // Check if compact format is requested
   if (options.compact) {
     const report = buildCompactImpactReport({
+      analysis,
       changedFiles,
       changedSymbols,
       impactedItems,
@@ -149,6 +152,7 @@ export async function buildImpactReport(
   }
 
   return buildFullImpactReport({
+    analysis,
     projectFiles,
     changedFiles,
     changedSymbols,

@@ -339,6 +339,7 @@ index 1234567..abcdef0 100644
         provider: "raw",
         diffText,
       });
+      expect(report.analysis?.label).toBeTruthy();
 
       expect(report).toBeDefined();
       expect(report.changedFiles).toHaveLength(1);

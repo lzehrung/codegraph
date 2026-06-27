@@ -1,4 +1,5 @@
 import type { CandidateTestFile } from "../impact/context.js";
+import type { AnalysisSummary } from "../analysisSummary.js";
 import type { CallCompatibilityHint, FileChange } from "../impact/types.js";
 import type { BuildReport, IncrementalBuildOptions, ProjectIndex } from "../indexer/types.js";
 import type { SqlReviewContext } from "../sql/review.js";
@@ -41,6 +42,7 @@ export type ReviewReport = {
   status: "ok" | "no_changes";
   base?: string;
   head?: string;
+  analysis?: AnalysisSummary;
   projectFiles?: ProjectFileInfo[];
   summary: {
     filesChanged: number;

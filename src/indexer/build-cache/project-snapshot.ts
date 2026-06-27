@@ -5,6 +5,7 @@ import type { Edge, EdgeTo, Graph, Pos, Range } from "../../types.js";
 import { buildGraphAdjacency } from "../../graphs/adjacency.js";
 import { buildReferenceCandidateIndex } from "../reference-candidates.js";
 import type { ProjectFileInfo } from "../../util/projectFiles.js";
+import { BloomFilter, BloomFilterCache } from "../../util/bloomFilter.js";
 import {
   SymbolKind,
   type BuildOptions,
@@ -18,7 +19,13 @@ import { cacheRoot } from "./module-cache.js";
 import type { ManifestFileEntry } from "./manifest.js";
 
 const SNAPSHOT_SYMBOL_KINDS = new Set<SymbolKind>(Object.values(SymbolKind));
-const PROJECT_SNAPSHOT_VERSION = 1;
+const PROJECT_SNAPSHOT_VERSION = 2;
+
+type SerializedBloomFilter = {
+  size: number;
+  hashCount: number;
+  bitsBase64: string;
+};
 
 type ProjectIndexSnapshotPayload = {
   version: number;
@@ -31,6 +38,7 @@ type ProjectIndexSnapshotPayload = {
   projectRoot?: string;
   nativeMode?: ProjectIndex["nativeMode"];
   projectFiles?: ProjectFileInfo[];
+  bloomFilters?: Record<string, SerializedBloomFilter>;
 };
 
 export function projectSnapshotFilesSignature(entries: ReadonlyMap<string, ManifestFileEntry>): string {
@@ -83,6 +91,7 @@ export async function tryLoadProjectIndexSnapshot(
       ...(payload.nativeMode ? { nativeMode: payload.nativeMode } : {}),
       exportCache: new Map(),
       scopeCache: new Map(),
+      ...(payload.bloomFilters ? { bloomFilters: deserializeBloomFilterCache(payload.bloomFilters) } : {}),
       ...(payload.projectFiles ? { projectFiles: payload.projectFiles } : {}),
       referenceCandidates: buildReferenceCandidateIndex(modules),
       ...(opts?.cache ? { cacheMode: opts.cache, cacheRootDir: cacheRoot(projectRoot, opts) } : {}),
@@ -99,6 +108,9 @@ export async function writeProjectIndexSnapshot(
   filesSignature: string,
 ): Promise<void> {
   if ((opts?.cache ?? "off") !== "disk") return;
+  const serializedBloomFilters = index.bloomFilters
+    ? serializeBloomFilterCache(index.bloomFilters, index.byFile.keys())
+    : undefined;
   const payload: ProjectIndexSnapshotPayload = {
     version: PROJECT_SNAPSHOT_VERSION,
     filesSignature,
@@ -112,6 +124,7 @@ export async function writeProjectIndexSnapshot(
       ? { nativeMode: normalizedSnapshotNativeMode(index.nativeMode) }
       : {}),
     ...(index.projectFiles ? { projectFiles: index.projectFiles } : {}),
+    ...(serializedBloomFilters ? { bloomFilters: serializedBloomFilters } : {}),
   };
   try {
     const snapshotPath = projectSnapshotPath(projectRoot, opts);
@@ -187,8 +200,52 @@ function isProjectIndexSnapshotPayload(value: unknown): value is ProjectIndexSna
     payload.modules.every(isModuleIndex) &&
     (payload.projectRoot === undefined || typeof payload.projectRoot === "string") &&
     (payload.nativeMode === undefined || isSnapshotNativeMode(payload.nativeMode)) &&
+    (payload.bloomFilters === undefined || isSerializedBloomFilterRecord(payload.bloomFilters)) &&
     (payload.projectFiles === undefined ||
       (Array.isArray(payload.projectFiles) && payload.projectFiles.every(isProjectFileInfo)))
+  );
+}
+
+function serializeBloomFilterCache(
+  cache: BloomFilterCache,
+  files: Iterable<string>,
+): Record<string, SerializedBloomFilter> | undefined {
+  const serialized: Record<string, SerializedBloomFilter> = {};
+  for (const file of files) {
+    const filter = cache.get(file);
+    if (!filter) continue;
+    const metadata = filter.getMetadata();
+    serialized[file] = {
+      size: metadata.size,
+      hashCount: metadata.hashCount,
+      bitsBase64: filter.toBuffer().toString("base64"),
+    };
+  }
+  return Object.keys(serialized).length ? serialized : undefined;
+}
+
+function deserializeBloomFilterCache(serialized: Record<string, SerializedBloomFilter>): BloomFilterCache {
+  const cache = new BloomFilterCache();
+  for (const [file, filter] of Object.entries(serialized)) {
+    cache.set(file, BloomFilter.fromBuffer(Buffer.from(filter.bitsBase64, "base64"), filter.size, filter.hashCount));
+  }
+  return cache;
+}
+
+function isSerializedBloomFilterRecord(value: unknown): value is Record<string, SerializedBloomFilter> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return Object.values(value).every(isSerializedBloomFilter);
+}
+
+function isSerializedBloomFilter(value: unknown): value is SerializedBloomFilter {
+  if (!value || typeof value !== "object") return false;
+  const filter = value as Partial<SerializedBloomFilter>;
+  return (
+    typeof filter.size === "number" &&
+    Number.isFinite(filter.size) &&
+    typeof filter.hashCount === "number" &&
+    Number.isFinite(filter.hashCount) &&
+    typeof filter.bitsBase64 === "string"
   );
 }
 

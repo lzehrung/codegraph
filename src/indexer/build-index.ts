@@ -1015,14 +1015,6 @@ export async function buildProjectIndexIncremental(
             snapshot.cacheMode = opts.cache;
             snapshot.cacheRootDir = cacheRoot(projectRoot, opts);
           }
-          if (opts?.useBloomFilters ?? true) {
-            const cache = new (await import("../util/bloomFilter.js")).BloomFilterCache();
-            await mapLimit([...allFiles], conc, async (file) => {
-              const filter = await buildBloomFilterForFile(file);
-              if (filter) cache.set(file, filter);
-            });
-            snapshot.bloomFilters = cache;
-          }
           await writeIndexManifestSnapshot({
             projectRoot,
             opts,

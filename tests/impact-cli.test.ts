@@ -99,6 +99,7 @@ describe("impact CLI output", () => {
     async () => {
       const stdout = await runImpactCliSubprocess(["impact", sampleRoot, "--provider", "raw"]);
       const report = JSON.parse(stdout);
+      expect(report.analysis?.label).toBeTruthy();
       expect(report.changedFiles).toHaveLength(1);
       expect(report.changedFiles[0]?.file).toBe("utils.ts");
     },
@@ -110,6 +111,7 @@ describe("impact CLI output", () => {
     async () => {
       const stdout = await runImpactCli(["impact", sampleRoot, "--provider", "raw", "--pretty"]);
       expect(stdout).toContain("Impact Analysis Report");
+      expect(stdout).toContain("Analysis:");
       expect(stdout).toContain("Changed files: 1");
       expect(stdout).toContain("Changed symbols:");
     },

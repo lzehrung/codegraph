@@ -136,7 +136,9 @@ describe("CLI regressions", () => {
     expect(source).not.toContain('from "./cli/graph.js"');
     expect(source).not.toContain('from "./cli/mcp.js"');
     expect(source).not.toContain('from "./cli/sql.js"');
-    expect(sqliteDriverSource).not.toMatch(/import\s*\{[^}]*\b(?:constants|DatabaseSync)\b[^}]*\}\s*from\s*[\"']node:sqlite[\"']/s);
+    expect(sqliteDriverSource).not.toMatch(
+      /import\s*\{[^}]*\b(?:constants|DatabaseSync)\b[^}]*\}\s*from\s*[\"']node:sqlite[\"']/s,
+    );
     expect(sqliteDriverSource).toMatch(/requireNodeModule\(\s*[\"']node:sqlite[\"']\s*\)/);
   });
 

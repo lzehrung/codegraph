@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { LANG_CONFIGS } from "../bootstrap/treeSitterLanguages.js";
+import { type AnalysisBackend, type AnalysisMode, type AnalysisSummary } from "../analysisSummary.js";
 import { supportForFile } from "../languages.js";
 import { chunkFile } from "../chunking/chunkFile.js";
 import { SymbolKind, type BuildOptions, type SymbolDef } from "../indexer/types.js";
@@ -68,6 +69,13 @@ export type AgentSearchResult = {
   file: string;
   range?: Range;
   score: number;
+  provenance: {
+    surface: "code" | "docs" | "config";
+    capability: "semantic" | "graph" | "text";
+    analysisMode: AnalysisMode;
+    backend: AnalysisBackend;
+    confidence: "high" | "medium";
+  };
   rankReasons: string[];
   evidence: AgentSearchEvidence[];
   neighbors: Array<{ relation: string; target: string; file?: string }>;
@@ -85,6 +93,7 @@ export type AgentSearchResponse = {
   query: string;
   mode: AgentSearchMode;
   root: string;
+  analysis: AnalysisSummary;
   limits: {
     results: number;
     rankReasonsPerResult: number;
@@ -127,6 +136,7 @@ type SearchResultBase = {
   label: string;
   file: string;
   range?: Range;
+  provenance: AgentSearchResult["provenance"];
 };
 
 type ReachableFile = {
@@ -165,8 +175,8 @@ type SearchCache = {
 const DEFAULT_LIMIT = 20;
 const MAX_TEXT_BYTES = 300_000;
 const MAX_GRAPH_DEPTH = 5;
-const DOCS_EXACT_PHRASE_BOOST = 220;
-const DOCS_PROXIMITY_BOOST = 20;
+const DOCS_EXACT_PHRASE_BOOST = 18;
+const DOCS_PROXIMITY_BOOST = 6;
 const CHUNK_LANGUAGE_ALIASES: Record<string, string> = {
   js: "javascript",
   ts: "typescript",
@@ -198,17 +208,20 @@ export async function searchCodegraphWithSession(
 
 export function formatAgentSearchResponse(response: AgentSearchResponse): string {
   if (!response.results.length) {
-    return `No matches for "${response.query}"`;
+    return `No matches for "${response.query}"\nAnalysis: ${response.analysis.label}`;
   }
-  return response.results
-    .map((result, index) => {
-      const location = result.range
-        ? `${result.file}:${result.range.start.line}:${result.range.start.column}`
-        : result.file;
-      const reasons = result.rankReasons.slice(0, AGENT_SEARCH_FORMAT_REASON_LIMIT).join("; ");
-      return `${index + 1}. ${result.label} [${result.kind}] ${location} score=${result.score}\n   ${reasons}`;
-    })
-    .join("\n");
+  const lines = [`Analysis: ${response.analysis.label}`];
+  for (const [index, result] of response.results.entries()) {
+    const location = result.range
+      ? `${result.file}:${result.range.start.line}:${result.range.start.column}`
+      : result.file;
+    const reasons = result.rankReasons.slice(0, AGENT_SEARCH_FORMAT_REASON_LIMIT).join("; ");
+    lines.push(
+      `${index + 1}. ${result.label} [${result.kind}] ${location} score=${result.score} (${result.provenance.surface}, ${result.provenance.capability})`,
+    );
+    lines.push(`   ${reasons}`);
+  }
+  return lines.join("\n");
 }
 
 async function searchSnapshot(
@@ -236,7 +249,7 @@ async function searchSnapshot(
       addPathResults(snapshot, resultMap, getFileNeighborIndex(), query);
     }
     if (mode === "hybrid" || mode === "text") {
-      await addTextResults(snapshot, resultMap, query, request.includeSnippets ?? true);
+      await addTextResults(snapshot, resultMap, query, request.includeSnippets ?? true, mode);
     }
   }
 
@@ -259,6 +272,7 @@ async function searchSnapshot(
     query: request.query,
     mode,
     root: snapshot.root,
+    analysis: snapshot.analysis,
     limits: {
       results: limit,
       rankReasonsPerResult: AGENT_SEARCH_RANK_REASONS_PER_RESULT_LIMIT,
@@ -295,6 +309,10 @@ function searchPathOnly(root: string, files: readonly string[], request: AgentSe
         kind: "file",
         label: relFile,
         file: relFile,
+        provenance: createSearchProvenance(relFile, "graph", "high", {
+          mode: "semantic",
+          backend: "unknown",
+        }),
       });
       result.score += pathMatch.score * 2;
       addReason(result, `path token match: ${pathMatch.matched.join(", ")}`);
@@ -311,6 +329,15 @@ function searchPathOnly(root: string, files: readonly string[], request: AgentSe
     query: request.query,
     mode: "path",
     root,
+    analysis: {
+      mode: "semantic",
+      backend: "unknown",
+      parserDegradedFiles: 0,
+      fallbackImportExtractionFiles: 0,
+      nativeFilesUsed: 0,
+      nativeFilesFellBack: 0,
+      label: "semantic",
+    },
     limits: {
       results: limit,
       rankReasonsPerResult: AGENT_SEARCH_RANK_REASONS_PER_RESULT_LIMIT,
@@ -458,6 +485,7 @@ function addSymbolResults(
       label: node.name,
       file: relFile,
       range: def.range,
+      provenance: createSearchProvenance(relFile, "semantic", "high", snapshot.analysis),
     });
     result.score += score + (lookup.exportedIds.has(node.id) ? 5 : 0);
     if (nameMatch.matched.length) {
@@ -504,6 +532,7 @@ function addSqlResults(
         label: local.localName,
         file: relFile,
         range: local.range,
+        provenance: createSearchProvenance(relFile, "semantic", "high", snapshot.analysis),
       });
       result.score += score;
       if (nameMatch.matched.length) {
@@ -554,6 +583,7 @@ function addPathResults(
       kind: "file",
       label: relFile,
       file: relFile,
+      provenance: createSearchProvenance(relFile, "graph", "high", snapshot.analysis),
     });
     result.score += pathMatch.score * 2;
     addReason(result, `path token match: ${pathMatch.matched.join(", ")}`);
@@ -568,6 +598,7 @@ async function addTextResults(
   resultMap: Map<string, MutableSearchResult>,
   query: SearchQueryTerms,
   includeSnippets: boolean,
+  mode: AgentSearchMode,
 ): Promise<void> {
   const cache = getSearchCache(snapshot);
   for (const file of snapshot.files) {
@@ -591,8 +622,9 @@ async function addTextResults(
           start: { line: chunk.startLine, column: 0 },
           end: { line: chunk.endLine, column: 0 },
         },
+        provenance: createSearchProvenance(relFile, "text", documentationFile ? "medium" : "high", snapshot.analysis),
       });
-      result.score += match.score + textResultBoost(match, documentationFile, query);
+      result.score += match.score + textResultBoost(match, documentationFile, query, mode);
       addReason(result, `text token match: ${match.matched.join(", ")}`);
       addPhraseReasons(result, match, documentationFile ? "docs text" : "text");
       addEvidence(result, {
@@ -607,8 +639,14 @@ async function addTextResults(
   }
 }
 
-function textResultBoost(match: TokenMatch, documentationFile: boolean, query: SearchQueryTerms): number {
+function textResultBoost(
+  match: TokenMatch,
+  documentationFile: boolean,
+  query: SearchQueryTerms,
+  mode: AgentSearchMode,
+): number {
   if (!documentationFile || query.identifierLike) return 0;
+  if (mode !== "text" && mode !== "hybrid") return 0;
   if (match.exactPhrase) return DOCS_EXACT_PHRASE_BOOST;
   if (match.proximity) return DOCS_PROXIMITY_BOOST;
   return 0;
@@ -708,6 +746,7 @@ function applyGraphNeighborhood(
         kind: "graph_node",
         label: relFile,
         file: relFile,
+        provenance: createSearchProvenance(relFile, "graph", "medium", snapshot.analysis),
       });
       graphResult.score += fileMatch.score + graphBoost(entry.distance);
       addGraphEvidence(graphResult, relFile, entry);
@@ -868,6 +907,7 @@ function upsertResult(resultMap: Map<string, MutableSearchResult>, base: SearchR
     label: base.label,
     file: base.file,
     ...(base.range ? { range: base.range } : {}),
+    provenance: base.provenance,
     score: 0,
     rankReasons: new Set(),
     evidence: [],
@@ -1057,6 +1097,7 @@ function finalizeResult(result: MutableSearchResult): AgentSearchResult {
     file: result.file,
     ...(result.range ? { range: result.range } : {}),
     score: Number(result.score.toFixed(3)),
+    provenance: result.provenance,
     rankReasons: boundedRankReasons.items,
     evidence: boundedEvidence.items,
     neighbors: boundedNeighbors.items,
@@ -1068,4 +1109,39 @@ function finalizeResult(result: MutableSearchResult): AgentSearchResult {
       followUps: boundedFollowUps.omitted,
     },
   };
+}
+
+function createSearchProvenance(
+  relFile: string,
+  capability: "semantic" | "graph" | "text",
+  confidence: "high" | "medium",
+  analysis: Pick<AnalysisSummary, "mode" | "backend">,
+): AgentSearchResult["provenance"] {
+  return {
+    surface: detectSearchSurface(relFile),
+    capability,
+    analysisMode: analysis.mode,
+    backend: analysis.backend,
+    confidence,
+  };
+}
+
+function detectSearchSurface(relFile: string): "code" | "docs" | "config" {
+  const lower = relFile.toLowerCase();
+  if (isDocumentationFile(lower)) {
+    return "docs";
+  }
+  if (
+    lower.endsWith(".json") ||
+    lower.endsWith(".yaml") ||
+    lower.endsWith(".yml") ||
+    lower.endsWith(".toml") ||
+    lower.endsWith(".ini") ||
+    lower.endsWith(".env") ||
+    lower === "dockerfile" ||
+    lower.startsWith(".github/")
+  ) {
+    return "config";
+  }
+  return "code";
 }

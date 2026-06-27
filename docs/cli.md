@@ -10,6 +10,12 @@ Bare `codegraph graph` writes `codegraph.json` and `codegraph.err` in the curren
 
 Numeric options such as `--limit`, `--threads`, `--depth`, `--max-refs`, and token bounds must be integers in their documented ranges; invalid numeric values fail instead of being silently clamped or ignored.
 
+Default workflow:
+
+- current edits: `codegraph review --base HEAD --head WORKTREE --summary`
+- unfamiliar repo: `codegraph orient --root . --budget small --pretty`
+- follow-up anchor: `codegraph search "<query>" --json` then `codegraph explain <handle|file|symbol>`
+
 ## Runtime selection
 
 The CLI defaults to `--native auto`, which uses the native Tree-sitter path when a compatible native artifact is available and falls back automatically otherwise.
@@ -45,7 +51,12 @@ Cache and manifest reuse is rooted at `--root`. Reusing a project root lets comm
 ### Dependency graphs
 
 ```bash
+# First-pass review for current local edits
+codegraph review --base HEAD --head WORKTREE --summary
+codegraph impact --base HEAD --head WORKTREE --pretty
+
 # First-pass repo summary and next-step suggestions
+codegraph orient --root . --budget small --pretty
 codegraph inspect ./src --limit 20
 
 # Whole-repo graph
@@ -116,8 +127,9 @@ codegraph index --workers --threads 8 --cache disk
 # Search for agent-ready anchors across symbols, paths, chunks, SQL objects, and graph context
 codegraph orient --root . --budget small --pretty
 codegraph orient --root . ./src --budget medium --json
+codegraph search "build review report" --json
+codegraph explain src/review.ts --json
 codegraph packet get src/cli.ts --pretty
-codegraph search "validate user" --json
 codegraph search "public users" --mode sql --json
 codegraph search "handle login" --from src/auth.ts --mode graph --depth 1 --json
 codegraph search --help
@@ -233,7 +245,7 @@ Short JSON shape:
 - Use `packet get` with file paths, symbol names, SQL object names, file/symbol/chunk/SQL/graph handles, or review handles to retrieve bounded evidence plus follow-up commands.
 - Agent commands reuse the incremental index path and default to disk cache. Use shared index flags such as `--cache`, `--cache-strict`, `--cache-verify`, `--threads`, `--native`, `--workers`, `--include-glob`, `--ignore-glob`, and `--no-gitignore` when the packet should match a specific scan mode.
 
-`search` is deterministic and vectorless. `explain` resolves file paths, symbol names, SQL object names, and search handles into bounded packets with symbols, graph context, references, snippets, duplicate context, SQL facts, review tasks, candidate tests, limits, omissions, and follow-ups. Use `--max-duplicates` to tune duplicate context in `explain` and `packet get`; duplicate context also uses an internal pair budget and reports skipped duplicate work through omission counts.
+`search` is deterministic and vectorless. Hybrid search is code-first by default: source symbols and implementation files outrank docs unless `--mode text` is explicit or docs are the strongest remaining evidence. Search JSON now includes top-level `analysis` metadata plus per-result `provenance` so mixed or reduced runs stay visible. `explain` resolves file paths, symbol names, SQL object names, and search handles into bounded packets with symbols, graph context, references, snippets, duplicate context, SQL facts, review tasks, candidate tests, analysis metadata, limits, omissions, and follow-ups. Use `--max-duplicates` to tune duplicate context in `explain` and `packet get`; duplicate context also uses an internal pair budget and reports skipped duplicate work through omission counts.
 
 For SQL, prefer handles or schema-qualified names when basenames may be ambiguous. Reference and snippet omission counts are lower bounds after bounded navigation reaches its cap.
 

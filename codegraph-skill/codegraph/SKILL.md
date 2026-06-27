@@ -26,7 +26,7 @@ codegraph orient --root . --budget small --pretty
 
 Use `doctor` only when install, native-runtime, or artifact health is the task.
 
-For PR, worktree, or sweeping review tasks, start with `codegraph review --base HEAD --head WORKTREE --summary` or `codegraph impact --base HEAD --head WORKTREE --pretty` instead.
+For PR, worktree, or sweeping review tasks, start with `codegraph review --base HEAD --head WORKTREE --summary`. Use `codegraph impact --base HEAD --head WORKTREE --pretty` when you need the broader blast radius map.
 
 Then choose the smallest useful follow-up:
 
@@ -51,6 +51,8 @@ For `orient`, `drift`, and positional graph commands, positional paths are inclu
 
 Use readable output when a human or model will read the result.
 Use JSON when the next step needs exact fields, counts, or filtering.
+
+Hybrid search is code-first by default, and search/explain packets include analysis labels plus per-result provenance so reduced or mixed runs stay visible.
 
 Current high-value surfaces:
 

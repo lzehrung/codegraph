@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import type { AnalysisSummary } from "../analysisSummary.js";
 import {
   findDuplicateContext,
   type DuplicateGroup,
@@ -148,6 +149,7 @@ export type AgentExplanationDuplicate = {
 export type AgentExplanation = {
   schemaVersion: 1;
   root: string;
+  analysis: AnalysisSummary;
   target: AgentExplanationTarget;
   summary: string[];
   symbols: AgentExplanationSymbol[];
@@ -215,6 +217,7 @@ export async function explainCodegraphTargetWithSession(
 export function formatAgentExplanation(explanation: AgentExplanation): string {
   const lines = [
     `${explanation.target.kind}: ${explanation.target.label}`,
+    `Analysis: ${explanation.analysis.label}`,
     ...explanation.summary.map((entry) => `- ${entry}`),
   ];
   if (explanation.symbols.length) {
@@ -463,6 +466,7 @@ async function buildExplanation(
   return {
     schemaVersion: 1,
     root: snapshot.root,
+    analysis: snapshot.analysis,
     target: explainTarget(snapshot, resolved, relFile),
     summary: buildSummary(
       resolved,
@@ -507,6 +511,7 @@ function emptyExplanation(snapshot: AgentProjectSnapshot, target: AgentExplanati
   return {
     schemaVersion: 1,
     root: snapshot.root,
+    analysis: snapshot.analysis,
     target,
     summary: [`No indexed target resolved for ${target.label}.`],
     symbols: [],

@@ -6,6 +6,7 @@ import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { buildProjectIndex, buildProjectIndexIncremental, type BuildReport } from "../src/index.js";
 import * as indexer from "../src/indexer.js";
+import * as buildCache from "../src/indexer/build-cache.js";
 import {
   MANIFEST_VERSION,
   summarizeBuildOptions,
@@ -906,6 +907,82 @@ describe("Cache invalidation and strict hashing", () => {
     const nextModule = incremental.byFile.get(normalize(nextPath));
     expect(nextModule).toBeDefined();
     expect(nextModule?.locals.some((l) => l.localName === "next")).toBe(true);
+  });
+
+  it("reuses persisted bloom filters from the project snapshot on unchanged incremental loads", async () => {
+    const root = await mkTmpDir("dg-snapshot-bloom-reuse-");
+    const alphaPath = path.join(root, "alpha.ts");
+    const betaPath = path.join(root, "beta.ts");
+    await fsp.writeFile(alphaPath, "export const alphaValue = 1;\n", "utf8");
+    await fsp.writeFile(
+      betaPath,
+      'import { alphaValue } from "./alpha";\nexport const betaValue = alphaValue;\n',
+      "utf8",
+    );
+
+    await buildProjectIndex(root, { threads: 2, cache: "disk", useBloomFilters: true });
+
+    const bloomSpy = vi.spyOn(buildCache, "buildBloomFilterForFile");
+
+    const incremental = await buildProjectIndexIncremental(root, {
+      threads: 2,
+      cache: "disk",
+      useBloomFilters: true,
+    });
+
+    expect(bloomSpy).not.toHaveBeenCalled();
+    expect(incremental.bloomFilters?.size()).toBe(2);
+    expect(incremental.bloomFilters?.get(normalize(alphaPath))?.mightContain("alphaValue")).toBe(true);
+
+    bloomSpy.mockRestore();
+  });
+
+  it("falls back from older project snapshot versions and rewrites the current schema", async () => {
+    const root = await mkTmpDir("dg-snapshot-version-upgrade-");
+    const entryPath = path.join(root, "entry.ts");
+    await fsp.writeFile(entryPath, "export const versioned = 1;\n", "utf8");
+
+    const initial = await buildProjectIndex(root, { threads: 2, cache: "disk", useBloomFilters: true });
+    const snapshotPath = projectSnapshotPathFor(root);
+    const originalSnapshot = JSON.parse(await fsp.readFile(snapshotPath, "utf8")) as {
+      version: number;
+      filesSignature: string;
+      graph: unknown;
+      modules: unknown;
+      projectRoot?: string;
+      nativeMode?: string;
+      projectFiles?: unknown;
+    };
+
+    await fsp.writeFile(
+      snapshotPath,
+      JSON.stringify({
+        version: 1,
+        filesSignature: originalSnapshot.filesSignature,
+        graph: originalSnapshot.graph,
+        modules: originalSnapshot.modules,
+        ...(originalSnapshot.projectRoot ? { projectRoot: originalSnapshot.projectRoot } : {}),
+        ...(originalSnapshot.nativeMode ? { nativeMode: originalSnapshot.nativeMode } : {}),
+        ...(originalSnapshot.projectFiles ? { projectFiles: originalSnapshot.projectFiles } : {}),
+      }),
+      "utf8",
+    );
+
+    const rebuilt = await buildProjectIndexIncremental(root, {
+      threads: 2,
+      cache: "disk",
+      useBloomFilters: true,
+    });
+    const rewrittenSnapshot = JSON.parse(await fsp.readFile(snapshotPath, "utf8")) as {
+      version: number;
+      bloomFilters?: Record<string, unknown>;
+    };
+
+    expect(initial.byFile.has(normalize(entryPath))).toBe(true);
+    expect(rebuilt.byFile.has(normalize(entryPath))).toBe(true);
+    expect(rebuilt.bloomFilters?.get(normalize(entryPath))?.mightContain("versioned")).toBe(true);
+    expect(rewrittenSnapshot.version).toBe(2);
+    expect(rewrittenSnapshot.bloomFilters?.[normalize(entryPath)]).toBeDefined();
   });
 
   it("clears stale negative resolve caches when requested", async () => {

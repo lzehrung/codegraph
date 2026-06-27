@@ -6,14 +6,22 @@ Use Codegraph for structural repo questions: architecture, dependency direction,
 
 ## Start here
 
+For current edits, start with one compact review packet:
+
+```bash
+codegraph review --base HEAD --head WORKTREE --summary
+codegraph impact --base HEAD --head WORKTREE --pretty
+```
+
 For an unfamiliar repo, keep the first loop bounded and actionable:
 
 ```bash
 codegraph orient --root . --budget small --pretty
-codegraph packet get <file-from-orient> --pretty
+codegraph search "auth user" --json
+codegraph explain <file-from-search-or-orient> --json
 ```
 
-For PR, worktree, or sweeping review tasks, start with `codegraph review --base HEAD --head WORKTREE --summary` or `codegraph impact --base HEAD --head WORKTREE --pretty` instead of orientation.
+For PR, worktree, or sweeping review tasks, prefer `review` first; use `impact` when you need the broader blast radius map instead of the reviewer handoff.
 
 Use `doctor` only when package/runtime state or an existing artifact path is the question.
 Use `search` when the agent has a query but no handle, `explain` when it already knows a file/symbol/SQL object/handle, and `inspect` for a human-readable architecture summary.
@@ -55,11 +63,12 @@ codegraph search "handle login" --mode graph --from src/auth.ts --depth 1 --json
 codegraph explain "<handle-from-search>" --json
 ```
 
-Search results include stable handles, evidence, rank reasons, neighbors, follow-ups, limits, and omitted counts.
+Search results include top-level `analysis` metadata plus stable handles, per-result `provenance`, evidence, rank reasons, neighbors, follow-ups, limits, and omitted counts.
 `explain` accepts those handles plus file paths, symbol names, and SQL object names, then returns bounded dependencies, references, snippets, duplicate context, SQL relation facts, review context, and follow-ups.
 Generated command strings quote dynamic arguments, SQL handles avoid ambiguous basenames, and omission counts stay explicit when packets hit limits.
 
 Agent CLI commands use the incremental index path and default to disk cache.
+Hybrid search is code-first by default. Use `mode: "text"` when you specifically want documentation or prose-heavy matches to outrank implementation symbols.
 Pure path/text searches skip detailed symbol graph construction; hybrid, symbol, SQL, and graph searches keep symbol-aware ranking and neighbors.
 Pass shared index flags only when an agent pass must mirror a specific scan mode; see [docs/cli.md](./cli.md#agent-oriented-commands) for the canonical flag list.
 
@@ -82,7 +91,14 @@ See [MCP server](./mcp.md) for client configuration examples.
 
 ## Session management
 
-For agents performing code reviews or making multiple queries, use sessions to maintain warm caches:
+For agents performing code reviews or making multiple queries, use sessions to maintain warm caches. Use one of these canonical reuse models:
+
+- library callers: one shared `createCodeReviewSession()` per repo snapshot
+- agent hosts: one shared `createAgentSession()` or MCP server per repo snapshot
+
+The local review session refreshes manually with `refresh()` and records stale-snapshot metadata in `getStats()`. Navigation and impact calls auto-refresh before serving results when tracked files drift.
+
+For library callers performing repeated navigation or impact work, use sessions like this:
 
 ```ts
 import { createCodeReviewSession } from "@lzehrung/codegraph";

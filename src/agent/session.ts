@@ -1,11 +1,12 @@
 import { buildProjectIndexIncremental } from "../indexer/build-index.js";
-import type { BuildOptions, ProjectIndex } from "../indexer/types.js";
+import type { BuildOptions, BuildReport, ProjectIndex } from "../indexer/types.js";
 import { buildSymbolGraphDetailed } from "../graphs/symbol-graph-detailed.js";
 import { type SymbolGraph } from "../graphs/symbol-graph.js";
 import type { Graph } from "../types.js";
 import { listProjectFiles, type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions } from "../config.js";
 import { createAgentFileLookup } from "./normalize.js";
+import { summarizeAnalysis, type AnalysisSummary } from "../analysisSummary.js";
 
 export type AgentProjectSnapshot = {
   root: string;
@@ -14,6 +15,8 @@ export type AgentProjectSnapshot = {
   index: ProjectIndex;
   fileGraph: Graph;
   symbolGraph: SymbolGraph;
+  buildReport?: BuildReport;
+  analysis: AnalysisSummary;
 };
 
 export type AgentLoadProjectOptions = {
@@ -93,6 +96,8 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
       ) {
         buildOptions.useNativeWorkers = true;
       }
+      const buildReport: BuildReport = { timings: {} };
+      buildOptions.report = buildReport;
       const index = await buildProjectIndexIncremental(options.root, buildOptions);
       const fileGraph = index.graph;
 
@@ -102,6 +107,8 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
         fileLookup: createAgentFileLookup(files),
         index,
         fileGraph,
+        buildReport,
+        analysis: summarizeAnalysis({ index, report: buildReport }),
       };
     })();
     cachedBase = loadPromise;

@@ -162,6 +162,7 @@ function ensureImpactReport(report: ImpactReport | CompactImpactReport): ImpactR
   const result: ImpactReport = {
     schemaVersion: report.schemaVersion,
     format: "full",
+    ...(report.analysis ? { analysis: report.analysis } : {}),
     changedFiles,
     changedSymbols,
     impacted,
@@ -420,6 +421,9 @@ function formatPrettyImpactReport(impactReport: ImpactReport, duplicateSummary?:
   if (impactReport.warning) {
     lines.push(`WARNING: ${impactReport.warning}`);
     lines.push("");
+  }
+  if (impactReport.analysis) {
+    lines.push(`Analysis: ${impactReport.analysis.label}`);
   }
   lines.push(`Changed files: ${impactReport.changedFiles.length}`);
   lines.push(`Changed symbols: ${impactReport.changedSymbols.length}`);
