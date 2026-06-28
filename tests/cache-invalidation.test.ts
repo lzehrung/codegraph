@@ -937,6 +937,25 @@ describe("Cache invalidation and strict hashing", () => {
     bloomSpy.mockRestore();
   });
 
+  it("does not hydrate persisted bloom filters when bloom filters are disabled", async () => {
+    const root = await mkTmpDir("dg-snapshot-bloom-disabled-");
+    const entryPath = path.join(root, "entry.ts");
+    await fsp.writeFile(entryPath, "export const disabledBloom = 1;\n", "utf8");
+
+    await buildProjectIndex(root, { threads: 2, cache: "disk", useBloomFilters: true });
+
+    const incremental = await buildProjectIndexIncremental(root, {
+      threads: 2,
+      cache: "disk",
+      useBloomFilters: false,
+    });
+
+    expect(
+      incremental.byFile.get(normalize(entryPath))?.locals.some((local) => local.localName === "disabledBloom"),
+    ).toBe(true);
+    expect(incremental.bloomFilters).toBeUndefined();
+  });
+
   it("falls back when project snapshot bloom filters are malformed", async () => {
     const root = await mkTmpDir("dg-snapshot-bloom-malformed-");
     const entryPath = path.join(root, "entry.ts");

@@ -86,6 +86,7 @@ export async function tryLoadProjectIndexSnapshot(
       edges: payload.graph.edges,
     };
     const modules = new Map(payload.modules.map((moduleIndex) => [moduleIndex.file, moduleIndex]));
+    const shouldHydrateBloomFilters = opts?.useBloomFilters ?? true;
     return {
       graph,
       graphAdjacency: buildGraphAdjacency(graph),
@@ -95,7 +96,9 @@ export async function tryLoadProjectIndexSnapshot(
       ...(payload.nativeMode ? { nativeMode: payload.nativeMode } : {}),
       exportCache: new Map(),
       scopeCache: new Map(),
-      ...(payload.bloomFilters ? { bloomFilters: deserializeBloomFilterCache(payload.bloomFilters) } : {}),
+      ...(shouldHydrateBloomFilters && payload.bloomFilters
+        ? { bloomFilters: deserializeBloomFilterCache(payload.bloomFilters) }
+        : {}),
       ...(payload.projectFiles ? { projectFiles: payload.projectFiles } : {}),
       referenceCandidates: buildReferenceCandidateIndex(modules),
       ...(opts?.cache ? { cacheMode: opts.cache, cacheRootDir: cacheRoot(projectRoot, opts) } : {}),
