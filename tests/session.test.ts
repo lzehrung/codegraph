@@ -391,6 +391,38 @@ index 1234567..abcdef0 100644
     }
   });
 
+  test("should reload config discovery options before refresh builds", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-config-refresh-"));
+    const configPath = path.join(root, "codegraph.config.json");
+    try {
+      await fsp.writeFile(configPath, JSON.stringify({ discovery: { includeGlobs: ["main.ts"] } }, null, 2), "utf8");
+      await fsp.writeFile(
+        path.join(root, "main.ts"),
+        "import { late } from './late';\nexport const value = late();\n",
+        "utf8",
+      );
+      await fsp.writeFile(path.join(root, "late.ts"), "export function late() { return 1; }\n", "utf8");
+      const session = await createCodeReviewSession({
+        root,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+      expect(session.getStats().fileCount).toBe(1);
+
+      await fsp.writeFile(configPath, JSON.stringify({ discovery: { includeGlobs: ["*.ts"] } }, null, 2), "utf8");
+      await session.refresh();
+
+      expect(session.getStats().fileCount).toBe(2);
+      const result = await session.goToDefinition({
+        file: path.join(root, "main.ts"),
+        line: 2,
+        column: 22,
+      });
+      expect(result.status).toBe("ok");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("should use full builds for force refreshes when incremental is disabled", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-manual-full-refresh-"));
     try {
@@ -1136,7 +1168,16 @@ describe("SessionManager", () => {
     const buildGate = new Promise<void>((resolve) => {
       releaseBuild = resolve;
     });
+    let buildStarts = 0;
+    let markAllBuildsStarted: (() => void) | null = null;
+    const allBuildsStarted = new Promise<void>((resolve) => {
+      markAllBuildsStarted = resolve;
+    });
     const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+      buildStarts += 1;
+      if (buildStarts === 2) {
+        markAllBuildsStarted?.();
+      }
       await buildGate;
       return await originalBuild(...args);
     });
@@ -1159,8 +1200,7 @@ describe("SessionManager", () => {
           },
         ]);
 
-        await Promise.resolve();
-        await Promise.resolve();
+        await allBuildsStarted;
 
         expect(buildSpy).toHaveBeenCalledTimes(2);
 

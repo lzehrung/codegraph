@@ -25,6 +25,7 @@ import {
 } from "./impact/index.js";
 import { analyzeImpactStreaming, type ImpactStreamChunk } from "./impact/streaming.js";
 import { getSessionPreset, mergePreset, type PresetName } from "./presets.js";
+import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions } from "./config.js";
 import { normalizePath, resolveFilePathWithinRoot } from "./util/paths.js";
 import { listProjectFiles } from "./util/projectFiles.js";
 
@@ -234,26 +235,36 @@ export class CodeReviewSession implements ICodeReviewSession {
   getRoot(): string {
     return this.root;
   }
+  private async currentBuildOptions(): Promise<BuildOptions | undefined> {
+    const config = await loadCodegraphConfig(this.root);
+    const discovery = mergeDiscoveryOptions(config.discovery, this.buildOptions?.discovery);
+    if (!hasDiscoveryOptions(discovery)) {
+      return this.buildOptions;
+    }
+    return { ...this.buildOptions, discovery };
+  }
+
   private async buildIndex(options: { forceFull?: boolean } = {}): Promise<{
     index: ProjectIndex;
     report: BuildReport;
     projectFiles: string[];
   }> {
+    const currentBuildOptions = await this.currentBuildOptions();
     if (options.forceFull && this.incremental) {
-      const projectFiles = await this.currentProjectFiles();
+      const projectFiles = await this.currentProjectFiles(currentBuildOptions);
       const report: BuildReport = { timings: {} };
-      const buildOptions: IncrementalBuildOptions = { ...this.buildOptions, files: projectFiles, report };
+      const buildOptions: IncrementalBuildOptions = { ...currentBuildOptions, files: projectFiles, report };
       const index = await buildProjectIndexIncremental(this.root, buildOptions);
       return { index, report: index.buildReport ?? report, projectFiles };
     }
     if (options.forceFull) {
       const report: BuildReport = { timings: {} };
-      const buildOptions: BuildOptions = { ...this.buildOptions, report };
+      const buildOptions: BuildOptions = { ...currentBuildOptions, report };
       const index = await buildProjectIndex(this.root, buildOptions);
       const projectFiles = this.indexedProjectFiles(index);
       return { index, report: index.buildReport ?? report, projectFiles };
     }
-    const buildOptions: BuildOptions = { ...this.buildOptions };
+    const buildOptions: BuildOptions = { ...currentBuildOptions };
     const index = this.incremental
       ? await buildProjectIndexIncremental(this.root, buildOptions)
       : await buildProjectIndex(this.root, buildOptions);
@@ -297,10 +308,10 @@ export class CodeReviewSession implements ICodeReviewSession {
     return path.join(this.root, "codegraph.config.json");
   }
 
-  private async currentProjectFiles(): Promise<string[]> {
+  private async currentProjectFiles(buildOptions?: BuildOptions): Promise<string[]> {
     const discoveryOptions = {
-      ...this.buildOptions?.discovery,
-      ...(this.buildOptions?.logLevel ? { logLevel: this.buildOptions.logLevel } : {}),
+      ...buildOptions?.discovery,
+      ...(buildOptions?.logLevel ? { logLevel: buildOptions.logLevel } : {}),
     };
     return await listProjectFiles(this.root, undefined, discoveryOptions);
   }

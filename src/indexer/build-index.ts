@@ -1025,6 +1025,7 @@ export async function buildProjectIndexIncremental(
           });
           if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
           if (report) {
+            initNativeBackendReport(report);
             snapshot.buildReport = report;
           }
           return snapshot;

@@ -622,6 +622,7 @@ describe("Cache invalidation and strict hashing", () => {
 
       expect(prepSpy).not.toHaveBeenCalled();
       expect(incremental.buildReport).toBe(report);
+      expect(report.backend?.native.available).toEqual(expect.any(Boolean));
       const moduleIndex = incremental.byFile.get(normalize(filePath));
       expect(moduleIndex?.locals.some((local) => local.localName === "reportedSnap")).toBe(true);
     } finally {
