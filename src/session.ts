@@ -264,13 +264,14 @@ export class CodeReviewSession implements ICodeReviewSession {
       const projectFiles = this.indexedProjectFiles(index);
       return { index, report: index.buildReport ?? report, projectFiles };
     }
-    const buildOptions: BuildOptions = { ...currentBuildOptions };
+    const report: BuildReport = { timings: {} };
+    const buildOptions: BuildOptions = { ...currentBuildOptions, report };
     const index = this.incremental
       ? await buildProjectIndexIncremental(this.root, buildOptions)
       : await buildProjectIndex(this.root, buildOptions);
     const projectFiles = this.indexedProjectFiles(index);
-    const report = index.buildReport ?? { timings: {} };
-    return { index, report, projectFiles };
+    const buildReport = index.buildReport ?? report;
+    return { index, report: buildReport, projectFiles };
   }
 
   private createDisposedDuringOperationError(operation: string): Error {

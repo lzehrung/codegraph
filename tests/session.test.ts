@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import type { ICodeReviewSession } from "../src/index.js";
-import type { BuildOptions } from "../src/indexer/types.js";
+import type { BuildOptions, BuildReport } from "../src/indexer/types.js";
 import { CodeReviewSession, SessionManager, createCodeReviewSession } from "../src/session.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
 import path from "node:path";
@@ -67,6 +67,32 @@ describe("CodeReviewSession", () => {
 
     expect(session.getStatus()).toBe("ready");
     expect(session.isReady()).toBe(true);
+  });
+
+  test("should request build reports during default initialization", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-default-report-"));
+    await fsp.writeFile(path.join(root, "main.ts"), "export const value = 1;\n", "utf8");
+    const originalBuild = indexerBuild.buildProjectIndexIncremental;
+    let requestedReport: BuildReport | undefined;
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+      requestedReport = args[1]?.report;
+      return await originalBuild(...args);
+    });
+
+    try {
+      const session = await createCodeReviewSession({
+        root,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+
+      expect(session.getStatus()).toBe("ready");
+      expect(requestedReport?.timings).toBeDefined();
+      expect(buildSpy).toHaveBeenCalledTimes(1);
+      session.dispose();
+    } finally {
+      buildSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 
   test("should provide session statistics", async () => {
