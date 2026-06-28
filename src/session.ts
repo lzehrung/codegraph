@@ -383,12 +383,14 @@ export class CodeReviewSession implements ICodeReviewSession {
     const now = Date.now();
     if (!options.force && now - this.lastStaleCheckAt < CodeReviewSession.STALE_CHECK_INTERVAL_MS) return;
     this.lastStaleCheckAt = now;
-    const trackedReason = this.refreshNeededFromTrackedFiles();
-    if (trackedReason) {
-      this.staleReason = trackedReason;
+
+    const configSignature = this.statSignature(this.configFilePath());
+    if (configSignature !== this.configSignature) {
+      this.staleReason = "config_changed";
       this.forceFullRefreshOnNextStaleCheck = false;
       return;
     }
+
     const projectFilesChanged = this.projectDirectoriesChanged();
     this.staleReason = projectFilesChanged ? "tracked_files_changed" : undefined;
     this.forceFullRefreshOnNextStaleCheck = projectFilesChanged;
@@ -498,7 +500,6 @@ export class CodeReviewSession implements ICodeReviewSession {
    */
   private getIndex(): ProjectIndex {
     this.checkExpiration();
-    this.checkForStaleness();
     if (this.status !== "ready" || !this.index) {
       throw new Error(`Session not ready (status: ${this.status})`);
     }
