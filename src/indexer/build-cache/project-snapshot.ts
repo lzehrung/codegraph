@@ -259,7 +259,7 @@ function isSerializedBloomFilter(value: unknown): value is SerializedBloomFilter
   }
   const maxBytes = Math.ceil(filter.size / 8);
   const maxBase64Length = Math.ceil(maxBytes / 3) * 4;
-  return filter.bitsBase64.length <= maxBase64Length;
+  return filter.bitsBase64.length === maxBase64Length;
 }
 
 function isModuleIndex(value: unknown): value is ModuleIndex {

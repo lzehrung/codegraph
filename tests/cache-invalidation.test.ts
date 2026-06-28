@@ -949,8 +949,8 @@ describe("Cache invalidation and strict hashing", () => {
     };
     snapshot.bloomFilters = {
       [normalize(entryPath)]: {
-        size: 2_000_000,
-        hashCount: 99,
+        size: 1_000,
+        hashCount: 3,
         bitsBase64: "AAAA",
       },
     };
