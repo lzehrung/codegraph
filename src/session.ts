@@ -25,7 +25,7 @@ import {
 } from "./impact/index.js";
 import { analyzeImpactStreaming, type ImpactStreamChunk } from "./impact/streaming.js";
 import { getSessionPreset, mergePreset, type PresetName } from "./presets.js";
-import { resolveFilePathWithinRoot } from "./util/paths.js";
+import { normalizePath, resolveFilePathWithinRoot } from "./util/paths.js";
 import { listProjectFiles } from "./util/projectFiles.js";
 
 export type SessionOptions = {
@@ -314,11 +314,16 @@ export class CodeReviewSession implements ICodeReviewSession {
     });
   }
 
+  private isPathInsideRoot(candidate: string): boolean {
+    const relative = path.relative(this.root, candidate);
+    return relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+  }
+
   private directoriesForProjectFiles(files: Iterable<string>): Set<string> {
     const directories = new Set<string>([this.root]);
     for (const file of files) {
       let directory = path.dirname(path.resolve(file));
-      while (directory.startsWith(this.root)) {
+      while (this.isPathInsideRoot(directory)) {
         directories.add(directory);
         if (directory === this.root) break;
         const parent = path.dirname(directory);
@@ -385,6 +390,15 @@ export class CodeReviewSession implements ICodeReviewSession {
     return undefined;
   }
 
+  private refreshNeededFromTrackedFile(file: string): SessionStaleReason | undefined {
+    const resolved = normalizePath(path.resolve(file));
+    const signature = this.trackedFileSignatures.get(resolved) ?? this.trackedFileSignatures.get(file);
+    if (!signature) {
+      return undefined;
+    }
+    return this.statSignature(resolved) !== signature ? "tracked_files_changed" : undefined;
+  }
+
   private checkForStaleness(options: { force?: boolean } = {}): void {
     if (this.status !== "ready" || !this.index) return;
     const now = Date.now();
@@ -403,9 +417,18 @@ export class CodeReviewSession implements ICodeReviewSession {
     this.forceFullRefreshOnNextStaleCheck = projectFilesChanged;
   }
 
-  private checkForStalenessNow(): void {
+  private checkForStalenessNow(options: { force?: boolean; file?: string } = {}): void {
     if (this.status !== "ready" || !this.index) return;
-    this.lastStaleCheckAt = Date.now();
+    const now = Date.now();
+    const targetReason = options.file ? this.refreshNeededFromTrackedFile(options.file) : undefined;
+    if (targetReason) {
+      this.lastStaleCheckAt = now;
+      this.staleReason = targetReason;
+      this.forceFullRefreshOnNextStaleCheck = false;
+      return;
+    }
+    if (!options.force && now - this.lastStaleCheckAt < CodeReviewSession.STALE_CHECK_INTERVAL_MS) return;
+    this.lastStaleCheckAt = now;
     const trackedReason = this.refreshNeededFromTrackedFiles();
     if (trackedReason) {
       this.staleReason = trackedReason;
@@ -514,9 +537,9 @@ export class CodeReviewSession implements ICodeReviewSession {
     return this.index;
   }
 
-  private async ensureFreshIndex(): Promise<ProjectIndex> {
+  private async ensureFreshIndex(options: { force?: boolean; file?: string } = {}): Promise<ProjectIndex> {
     this.checkExpiration();
-    this.checkForStalenessNow();
+    this.checkForStalenessNow(options);
     const index = this.getIndex();
     if (!this.staleReason) {
       return index;
@@ -563,7 +586,7 @@ export class CodeReviewSession implements ICodeReviewSession {
     if (resolved.status === "error") {
       return resolved;
     }
-    const index = await this.ensureFreshIndex();
+    const index = await this.ensureFreshIndex({ file: resolved.file });
     const result = await findReferences(index, {
       ...params,
       file: resolved.file,
@@ -588,7 +611,7 @@ export class CodeReviewSession implements ICodeReviewSession {
     if (resolved.status === "error") {
       return resolved;
     }
-    const index = await this.ensureFreshIndex();
+    const index = await this.ensureFreshIndex({ file: resolved.file });
     const result = await goToDefinition(index, {
       ...params,
       file: resolved.file,
@@ -658,14 +681,17 @@ export class CodeReviewSession implements ICodeReviewSession {
     const fileCount = index?.byFile.size ?? 0;
     const symbolCount = index ? Array.from(index.byFile.values()).reduce((sum, mod) => sum + mod.locals.length, 0) : 0;
 
+    const ready = this.status === "ready";
+    const staleReason = ready ? this.staleReason : undefined;
+
     return {
       status: this.status,
       fileCount,
       symbolCount,
       lastActivity: new Date(this.lastActivity),
       timeUntilExpiration: this.status === "ready" ? Math.max(0, this.timeout - (Date.now() - this.lastActivity)) : 0,
-      stale: !!this.staleReason,
-      ...(this.staleReason ? { staleReason: this.staleReason } : {}),
+      stale: !!staleReason,
+      ...(staleReason ? { staleReason } : {}),
       ...(this.lastRefreshAt ? { lastRefreshAt: new Date(this.lastRefreshAt) } : {}),
       ...(this.lastRefreshReason ? { lastRefreshReason: this.lastRefreshReason } : {}),
     };

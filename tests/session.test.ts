@@ -5,6 +5,7 @@ import { CodeReviewSession, SessionManager, createCodeReviewSession } from "../s
 import * as indexerBuild from "../src/indexer/build-index.js";
 import path from "node:path";
 import os from "node:os";
+import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { resolveFilePathFromRoot } from "../src/util.js";
 
@@ -276,6 +277,44 @@ index 1234567..abcdef0 100644
     }
   });
 
+  test("should throttle full stale scans while checking the navigation target", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-stale-throttle-"));
+    try {
+      await fsp.writeFile(path.join(root, "utils.ts"), "export function helper() { return 1; }\n", "utf8");
+      await fsp.writeFile(
+        path.join(root, "main.ts"),
+        "import { helper } from './utils';\nexport const value = helper();\n",
+        "utf8",
+      );
+      const session = await createCodeReviewSession({
+        root,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+
+      const statSpy = vi.spyOn(fs, "statSync");
+      try {
+        const first = await session.goToDefinition({
+          file: path.join(root, "main.ts"),
+          line: 2,
+          column: 22,
+        });
+        const second = await session.goToDefinition({
+          file: path.join(root, "main.ts"),
+          line: 2,
+          column: 22,
+        });
+
+        expect(first.status).toBe("ok");
+        expect(second.status).toBe("ok");
+        expect(statSpy).toHaveBeenCalledTimes(2);
+      } finally {
+        statSpy.mockRestore();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("should auto-refresh before navigation when a new source file is added", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-added-file-"));
     try {
@@ -409,6 +448,26 @@ index 1234567..abcdef0 100644
 
     expect(session.getStatus()).toBe("expired");
     expect(session.isReady()).toBe(false);
+  });
+
+  test("should omit stale metadata after disposal", async () => {
+    const session = await createCodeReviewSession({
+      root: sampleRoot,
+      buildOptions: sampleBuildOptions(),
+    });
+
+    Object.defineProperty(session, "staleReason", {
+      configurable: true,
+      value: "tracked_files_changed",
+      writable: true,
+    });
+
+    session.dispose();
+
+    const stats = session.getStats();
+    expect(stats.status).toBe("expired");
+    expect(stats.stale).toBe(false);
+    expect(stats.staleReason).toBeUndefined();
   });
 
   test("should re-initialize after expiration", async () => {
