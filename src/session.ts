@@ -282,18 +282,7 @@ export class CodeReviewSession implements ICodeReviewSession {
   }
 
   private directorySignature(directory: string): string {
-    const stat = this.statSignature(directory);
-    try {
-      const entries = fs
-        .readdirSync(directory, { withFileTypes: true })
-        .filter((entry) => entry.name !== ".codegraph-cache" && entry.name !== ".git")
-        .map((entry) => `${entry.isDirectory() ? "d" : "f"}:${entry.name}`)
-        .sort()
-        .join("\n");
-      return `${stat}\n${entries}`;
-    } catch {
-      return stat;
-    }
+    return this.statSignature(directory);
   }
 
   private configFilePath(): string {
@@ -357,7 +346,7 @@ export class CodeReviewSession implements ICodeReviewSession {
     reason: "initialization" | "manual" | "stale_check",
     projectFiles: string[],
   ): void {
-    const trackedEntries = index.manifestEntries
+    const trackedEntries = index.manifestEntries?.size
       ? [...index.manifestEntries].map(([file, entry]) => [file, this.trackedSignatureFromManifest(entry.sig)] as const)
       : [...index.byFile.keys()].map((file) => [file, this.statSignature(file)] as const);
     this.trackedFileSignatures = new Map(trackedEntries);

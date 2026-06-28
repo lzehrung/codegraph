@@ -20,7 +20,7 @@ function deriveAnalysisBackend(input: {
 }): AnalysisBackend {
   const nativeReport = input.report?.backend?.native;
   const parserFallbackCount = input.report?.backend?.parser?.total ?? 0;
-  const importFallbackCount = input.report?.graph?.fallbackImportExtraction.total ?? 0;
+  const importFallbackCount = input.report?.graph?.fallbackImportExtraction?.total ?? 0;
   if (nativeReport) {
     if (!nativeReport.filesUsed && (parserFallbackCount || importFallbackCount)) {
       return "graph-only";
@@ -78,9 +78,9 @@ export function summarizeAnalysis(input: {
   report?: BuildReport | undefined;
 }): AnalysisSummary {
   const parserDegradedFiles = input.report?.backend?.parser?.total ?? 0;
-  const fallbackImportExtractionFiles = input.report?.graph?.fallbackImportExtraction.total ?? 0;
-  const nativeFilesUsed = input.report?.backend?.native.filesUsed ?? 0;
-  const nativeFilesFellBack = input.report?.backend?.native.filesFellBack ?? 0;
+  const fallbackImportExtractionFiles = input.report?.graph?.fallbackImportExtraction?.total ?? 0;
+  const nativeFilesUsed = input.report?.backend?.native?.filesUsed ?? 0;
+  const nativeFilesFellBack = input.report?.backend?.native?.filesFellBack ?? 0;
   const backend = deriveAnalysisBackend(input);
   const summaryBase = {
     backend,

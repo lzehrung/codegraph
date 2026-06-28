@@ -20,6 +20,10 @@ import type { ManifestFileEntry } from "./manifest.js";
 
 const SNAPSHOT_SYMBOL_KINDS = new Set<SymbolKind>(Object.values(SymbolKind));
 const PROJECT_SNAPSHOT_VERSION = 2;
+const BLOOM_FILTER_MIN_SIZE = 1_000;
+const BLOOM_FILTER_MAX_SIZE = 1_000_000;
+const BLOOM_FILTER_MIN_HASH_COUNT = 1;
+const BLOOM_FILTER_MAX_HASH_COUNT = 10;
 
 type SerializedBloomFilter = {
   size: number;
@@ -240,13 +244,22 @@ function isSerializedBloomFilterRecord(value: unknown): value is Record<string, 
 function isSerializedBloomFilter(value: unknown): value is SerializedBloomFilter {
   if (!value || typeof value !== "object") return false;
   const filter = value as Partial<SerializedBloomFilter>;
-  return (
-    typeof filter.size === "number" &&
-    Number.isFinite(filter.size) &&
-    typeof filter.hashCount === "number" &&
-    Number.isFinite(filter.hashCount) &&
-    typeof filter.bitsBase64 === "string"
-  );
+  if (
+    typeof filter.size !== "number" ||
+    !Number.isInteger(filter.size) ||
+    filter.size < BLOOM_FILTER_MIN_SIZE ||
+    filter.size > BLOOM_FILTER_MAX_SIZE ||
+    typeof filter.hashCount !== "number" ||
+    !Number.isInteger(filter.hashCount) ||
+    filter.hashCount < BLOOM_FILTER_MIN_HASH_COUNT ||
+    filter.hashCount > BLOOM_FILTER_MAX_HASH_COUNT ||
+    typeof filter.bitsBase64 !== "string"
+  ) {
+    return false;
+  }
+  const maxBytes = Math.ceil(filter.size / 8);
+  const maxBase64Length = Math.ceil(maxBytes / 3) * 4;
+  return filter.bitsBase64.length <= maxBase64Length;
 }
 
 function isModuleIndex(value: unknown): value is ModuleIndex {

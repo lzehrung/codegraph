@@ -937,6 +937,35 @@ describe("Cache invalidation and strict hashing", () => {
     bloomSpy.mockRestore();
   });
 
+  it("falls back when project snapshot bloom filters are malformed", async () => {
+    const root = await mkTmpDir("dg-snapshot-bloom-malformed-");
+    const entryPath = path.join(root, "entry.ts");
+    await fsp.writeFile(entryPath, "export const guarded = 1;\n", "utf8");
+
+    await buildProjectIndex(root, { threads: 2, cache: "disk", useBloomFilters: true });
+    const snapshotPath = projectSnapshotPathFor(root);
+    const snapshot = JSON.parse(await fsp.readFile(snapshotPath, "utf8")) as {
+      bloomFilters?: Record<string, unknown>;
+    };
+    snapshot.bloomFilters = {
+      [normalize(entryPath)]: {
+        size: 2_000_000,
+        hashCount: 99,
+        bitsBase64: "AAAA",
+      },
+    };
+    await fsp.writeFile(snapshotPath, JSON.stringify(snapshot), "utf8");
+
+    const rebuilt = await buildProjectIndexIncremental(root, {
+      threads: 2,
+      cache: "disk",
+      useBloomFilters: true,
+    });
+
+    expect(rebuilt.byFile.get(normalize(entryPath))?.locals.some((local) => local.localName === "guarded")).toBe(true);
+    expect(rebuilt.bloomFilters?.get(normalize(entryPath))?.mightContain("guarded")).toBe(true);
+  });
+
   it("falls back from older project snapshot versions and rewrites the current schema", async () => {
     const root = await mkTmpDir("dg-snapshot-version-upgrade-");
     const entryPath = path.join(root, "entry.ts");
