@@ -999,7 +999,7 @@ export async function buildProjectIndexIncremental(
       };
       invalidateCachedDependents();
       if (fileReport) fileReport.changed = changedFiles.size;
-      if (!changedFiles.size && !deletedTrackedFiles.size && !opts?.report) {
+      if (!changedFiles.size && !deletedTrackedFiles.size) {
         const filesSignature = projectSnapshotFilesSignature(new Map(Object.entries(trackedEntries)));
         const snapshot = await tryLoadProjectIndexSnapshot(projectRoot, opts, filesSignature);
         if (snapshot) {
@@ -1011,6 +1011,10 @@ export async function buildProjectIndexIncremental(
             snapshot.cacheMode = opts.cache;
             snapshot.cacheRootDir = cacheRoot(projectRoot, opts);
           }
+          if (fileReport) {
+            fileReport.cached = allFiles.size;
+          }
+          if (timings) timings.graphMs = 0;
           await writeIndexManifestSnapshot({
             projectRoot,
             opts,
@@ -1020,6 +1024,9 @@ export async function buildProjectIndexIncremental(
             manifestReport,
           });
           if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
+          if (report) {
+            snapshot.buildReport = report;
+          }
           return snapshot;
         }
       }

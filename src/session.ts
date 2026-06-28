@@ -238,11 +238,18 @@ export class CodeReviewSession implements ICodeReviewSession {
     report: BuildReport;
     projectFiles: string[];
   }> {
-    if (options.forceFull) {
+    if (options.forceFull && this.incremental) {
       const projectFiles = await this.currentProjectFiles();
       const report: BuildReport = { timings: {} };
       const buildOptions: IncrementalBuildOptions = { ...this.buildOptions, files: projectFiles, report };
       const index = await buildProjectIndexIncremental(this.root, buildOptions);
+      return { index, report: index.buildReport ?? report, projectFiles };
+    }
+    if (options.forceFull) {
+      const report: BuildReport = { timings: {} };
+      const buildOptions: BuildOptions = { ...this.buildOptions, report };
+      const index = await buildProjectIndex(this.root, buildOptions);
+      const projectFiles = this.indexedProjectFiles(index);
       return { index, report: index.buildReport ?? report, projectFiles };
     }
     const buildOptions: BuildOptions = { ...this.buildOptions };

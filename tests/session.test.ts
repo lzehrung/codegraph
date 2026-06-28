@@ -352,6 +352,48 @@ index 1234567..abcdef0 100644
     }
   });
 
+  test("should use full builds for force refreshes when incremental is disabled", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-manual-full-refresh-"));
+    try {
+      await fsp.writeFile(
+        path.join(root, "main.ts"),
+        "import { late } from './late';\nexport const value = late();\n",
+        "utf8",
+      );
+      const session = await createCodeReviewSession({
+        root,
+        incremental: false,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+
+      await fsp.writeFile(
+        path.join(root, "late.ts"),
+        "export function late() { return 1; }\nexport const value = late();\n",
+        "utf8",
+      );
+
+      const fullBuildSpy = vi.spyOn(indexerBuild, "buildProjectIndex");
+      const incrementalBuildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+      try {
+        await session.refresh();
+        const result = await session.goToDefinition({
+          file: path.join(root, "late.ts"),
+          line: 2,
+          column: 22,
+        });
+        expect(result.status).toBe("ok");
+        expect(session.getStats().lastRefreshReason).toBe("manual");
+        expect(fullBuildSpy).toHaveBeenCalledTimes(1);
+        expect(incrementalBuildSpy).not.toHaveBeenCalled();
+      } finally {
+        fullBuildSpy.mockRestore();
+        incrementalBuildSpy.mockRestore();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("should expire after timeout", async () => {
     const session = new CodeReviewSession({
       root: sampleRoot,

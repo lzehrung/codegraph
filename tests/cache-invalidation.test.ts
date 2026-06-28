@@ -596,6 +596,39 @@ describe("Cache invalidation and strict hashing", () => {
     }
   });
 
+  it("loads unchanged project snapshots when a build report is requested", async () => {
+    const root = await mkTmpDir("dg-incremental-project-snapshot-report-");
+    const filePath = path.join(root, "foo.ts");
+    await fsp.writeFile(filePath, `export const reportedSnap = 1;\n`, "utf8");
+
+    await buildProjectIndex(root, { threads: 2, cache: "disk" });
+    await expect(fsp.stat(projectSnapshotPathFor(root))).resolves.toBeTruthy();
+
+    const db = new DatabaseSync(diskCacheDbPathFor(root));
+    try {
+      db.prepare("UPDATE module_cache SET payload = ?").run("{bad json");
+    } finally {
+      db.close();
+    }
+
+    const report: BuildReport = { timings: {} };
+    const prepSpy = vi.spyOn(filePrep, "prepareSourceInput");
+    try {
+      const incremental = await buildProjectIndexIncremental(root, {
+        threads: 2,
+        cache: "disk",
+        report,
+      });
+
+      expect(prepSpy).not.toHaveBeenCalled();
+      expect(incremental.buildReport).toBe(report);
+      const moduleIndex = incremental.byFile.get(normalize(filePath));
+      expect(moduleIndex?.locals.some((local) => local.localName === "reportedSnap")).toBe(true);
+    } finally {
+      prepSpy.mockRestore();
+    }
+  });
+
   it("falls back when the project snapshot payload is malformed", async () => {
     const root = await mkTmpDir("dg-incremental-bad-project-snapshot-");
     const filePath = path.join(root, "foo.ts");
