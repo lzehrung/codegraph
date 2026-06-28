@@ -559,6 +559,61 @@ index 1234567..abcdef0 100644
     }
   });
 
+  test("should await in-flight refreshes for concurrent navigation", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-concurrent-refresh-"));
+    try {
+      const utilsPath = path.join(root, "utils.ts");
+      const mainPath = path.join(root, "main.ts");
+      await fsp.writeFile(utilsPath, "export function helper(value: string) { return value; }\n", "utf8");
+      await fsp.writeFile(mainPath, "import { helper } from './utils';\nexport const ok = helper('token');\n", "utf8");
+      const session = await createCodeReviewSession({
+        root,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+      await fsp.writeFile(utilsPath, "export function helper(value: string) { return value.trim(); }\n", "utf8");
+
+      const originalBuild = indexerBuild.buildProjectIndexIncremental;
+      let releaseBuild: (() => void) | null = null;
+      let markBuildStarted: (() => void) | null = null;
+      const buildGate = new Promise<void>((resolve) => {
+        releaseBuild = resolve;
+      });
+      const buildStarted = new Promise<void>((resolve) => {
+        markBuildStarted = resolve;
+      });
+      const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+        markBuildStarted?.();
+        await buildGate;
+        return await originalBuild(...args);
+      });
+
+      try {
+        const first = session.findReferences({
+          file: utilsPath,
+          line: 1,
+          column: 17,
+        });
+        await buildStarted;
+        const second = session.goToDefinition({
+          file: mainPath,
+          line: 2,
+          column: 19,
+        });
+
+        releaseBuild?.();
+        const [firstResult, secondResult] = await Promise.all([first, second]);
+
+        expect(firstResult.status).toBe("ok");
+        expect(secondResult.status).toBe("ok");
+        expect(buildSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        buildSpy.mockRestore();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("should throw error when used after expiration", async () => {
     const session = await createCodeReviewSession({
       root: sampleRoot,

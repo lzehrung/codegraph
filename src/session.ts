@@ -47,9 +47,9 @@ export type SessionOptions = {
 
 export type SessionStatus = "initializing" | "ready" | "expired" | "error";
 
-type SessionStaleReason = "tracked_files_changed" | "config_changed";
+export type SessionStaleReason = "tracked_files_changed" | "config_changed";
 
-type SessionStats = {
+export type SessionStats = {
   status: SessionStatus;
   fileCount: number;
   symbolCount: number;
@@ -199,6 +199,7 @@ export class CodeReviewSession implements ICodeReviewSession {
   private buildOptions: BuildOptions | undefined;
   private incremental: boolean;
   private initPromise: Promise<void> | null = null;
+  private refreshPromise: Promise<void> | null = null;
   private identityFingerprint: string;
   private lifecycleVersion = 0;
   private trackedFileSignatures = new Map<string, string>();
@@ -539,6 +540,10 @@ export class CodeReviewSession implements ICodeReviewSession {
 
   private async ensureFreshIndex(options: { force?: boolean; file?: string } = {}): Promise<ProjectIndex> {
     this.checkExpiration();
+    if (this.refreshPromise) {
+      await this.refreshPromise;
+      return this.getIndex();
+    }
     this.checkForStalenessNow(options);
     const index = this.getIndex();
     if (!this.staleReason) {
@@ -632,6 +637,22 @@ export class CodeReviewSession implements ICodeReviewSession {
    * Refresh the index (manual full rebuild; stale checks full rebuild only after file-set drift)
    */
   private async refreshInternal(refreshReason: "manual" | "stale_check"): Promise<void> {
+    if (this.refreshPromise) {
+      await this.refreshPromise;
+      return;
+    }
+    const refreshPromise = this.performRefresh(refreshReason);
+    this.refreshPromise = refreshPromise;
+    try {
+      await refreshPromise;
+    } finally {
+      if (this.refreshPromise === refreshPromise) {
+        this.refreshPromise = null;
+      }
+    }
+  }
+
+  private async performRefresh(refreshReason: "manual" | "stale_check"): Promise<void> {
     const previousIndex = this.index;
     const previousStatus = this.status;
     const lifecycleVersion = this.lifecycleVersion;

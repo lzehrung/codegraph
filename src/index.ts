@@ -175,6 +175,8 @@ export {
   type ICodeReviewSession,
   type SessionOptions,
   type SessionStatus,
+  type SessionStats,
+  type SessionStaleReason,
 } from "./session.js";
 
 /** Preset helpers for build, impact, and session defaults. */
