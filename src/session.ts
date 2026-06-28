@@ -442,11 +442,13 @@ export class CodeReviewSession implements ICodeReviewSession {
     }
     if (!options.force && now - this.lastStaleCheckAt < CodeReviewSession.STALE_CHECK_INTERVAL_MS) return;
     this.lastStaleCheckAt = now;
-    const trackedReason = this.refreshNeededFromTrackedFiles();
-    if (trackedReason) {
-      this.staleReason = trackedReason;
-      this.forceFullRefreshOnNextStaleCheck = false;
-      return;
+    if (options.force) {
+      const trackedReason = this.refreshNeededFromTrackedFiles();
+      if (trackedReason) {
+        this.staleReason = trackedReason;
+        this.forceFullRefreshOnNextStaleCheck = false;
+        return;
+      }
     }
     const projectFilesChanged = this.projectDirectoriesChanged();
     this.staleReason = projectFilesChanged ? "tracked_files_changed" : undefined;

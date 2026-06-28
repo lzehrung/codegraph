@@ -341,6 +341,46 @@ index 1234567..abcdef0 100644
     }
   });
 
+  test("should avoid full tracked-file scans after the stale interval", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-stale-cheap-"));
+    try {
+      const exports = Array.from({ length: 20 }, (_, index) => `export const value${index} = ${index};\n`);
+      await Promise.all(
+        exports.map((source, index) => fsp.writeFile(path.join(root, `dep${index}.ts`), source, "utf8")),
+      );
+      await fsp.writeFile(
+        path.join(root, "main.ts"),
+        "import { value0 } from './dep0';\nexport const value = value0;\n",
+        "utf8",
+      );
+      const session = await createCodeReviewSession({
+        root,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+      Object.defineProperty(session, "lastStaleCheckAt", {
+        configurable: true,
+        value: 0,
+        writable: true,
+      });
+
+      const statSpy = vi.spyOn(fs, "statSync");
+      try {
+        const result = await session.goToDefinition({
+          file: path.join(root, "main.ts"),
+          line: 2,
+          column: 22,
+        });
+
+        expect(result.status).toBe("ok");
+        expect(statSpy.mock.calls.length).toBeLessThan(10);
+      } finally {
+        statSpy.mockRestore();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("should auto-refresh before navigation when a new source file is added", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-added-file-"));
     try {
