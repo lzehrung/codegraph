@@ -26,6 +26,9 @@ type NodeSqliteModule = {
   constants: SqliteConstants;
 };
 type SqliteParameterInput = SqliteValue | readonly SqliteValue[];
+type ReadonlyAuthorizerDatabase = DatabaseSync & {
+  setAuthorizer?: (callback: (actionCode: number) => number) => void;
+};
 
 const requireNodeModule = createRequire(import.meta.url);
 let sqliteModule: NodeSqliteModule | undefined;
@@ -98,7 +101,7 @@ export class SqliteStatement {
 }
 
 export class SqliteDatabase {
-  private readonly db: DatabaseSync;
+  private readonly db: ReadonlyAuthorizerDatabase;
 
   constructor(filePath: PathLike, options?: { readonly?: boolean }) {
     const sqlite = loadNodeSqlite();
@@ -108,7 +111,7 @@ export class SqliteDatabase {
     });
     if (options?.readonly) {
       const { constants } = sqlite;
-      this.db.setAuthorizer((actionCode) =>
+      this.db.setAuthorizer?.((actionCode) =>
         isReadOnlyAllowedAction(actionCode, constants) ? constants.SQLITE_OK : constants.SQLITE_DENY,
       );
     }

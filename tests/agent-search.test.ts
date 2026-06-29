@@ -12,6 +12,16 @@ import type { Edge, Graph, Range } from "../src/types.js";
 import { countingSession } from "./helpers/agent.js";
 import { isSymlinkUnavailable } from "./helpers/filesystem.js";
 
+const DEFAULT_ANALYSIS = {
+  mode: "semantic" as const,
+  backend: "unknown" as const,
+  parserDegradedFiles: 0,
+  fallbackImportExtractionFiles: 0,
+  nativeFilesUsed: 0,
+  nativeFilesFellBack: 0,
+  label: "semantic",
+};
+
 async function mkRepo(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-search-"));
   await fs.mkdir(path.join(root, "src"));
@@ -89,10 +99,16 @@ function moduleIndex(file: string, locals: SymbolDef[]): ModuleIndex {
   };
 }
 
-function snapshotSession(snapshot: AgentProjectSnapshot): AgentSession {
+function snapshotSession(
+  snapshot: Omit<AgentProjectSnapshot, "analysis"> & { analysis?: AgentProjectSnapshot["analysis"] },
+): AgentSession {
+  const fullSnapshot: AgentProjectSnapshot = {
+    ...snapshot,
+    analysis: snapshot.analysis ?? DEFAULT_ANALYSIS,
+  };
   return {
-    root: snapshot.root,
-    loadProject: async () => snapshot,
+    root: fullSnapshot.root,
+    loadProject: async () => fullSnapshot,
     invalidate: () => undefined,
   };
 }
@@ -113,6 +129,8 @@ describe("agent search", () => {
     expect(response.results[0]?.evidence.some((entry) => entry.source === "symbol")).toBeTruthy();
     expect(response.results[0]?.neighbors.some((entry) => entry.file?.endsWith("src/api.ts"))).toBeTruthy();
     expect(response.results[0]?.followUps.some((cmd) => cmd.includes("codegraph refs"))).toBeTruthy();
+    expect(response.results[0]?.provenance.surface).toBe("code");
+    expect(response.results[0]?.provenance.capability).toBe("semantic");
     expect(response.results.some((result) => result.file.endsWith("src/auth.ts"))).toBeTruthy();
   });
 
@@ -134,6 +152,16 @@ describe("agent search", () => {
     const response = await searchCodegraph({ root, query: "agent search", mode: "path", limit: 5 });
 
     expect(response.results.some((result) => result.file === "docs/agent-search.md")).toBe(true);
+    expect(response.analysis).toMatchObject({
+      mode: "reduced",
+      backend: "unknown",
+      label: "path-only",
+    });
+    expect(response.results[0]?.provenance).toMatchObject({
+      capability: "text",
+      analysisMode: "reduced",
+      backend: "unknown",
+    });
     expect(buildSpy).not.toHaveBeenCalled();
   });
 
@@ -175,6 +203,7 @@ describe("agent search", () => {
           index,
           fileGraph,
           symbolGraph: { nodes: new Map(), edges: [] },
+          analysis: DEFAULT_ANALYSIS,
         };
       },
       invalidate: () => undefined,
@@ -225,15 +254,15 @@ describe("agent search", () => {
     expect(symbolGraphSpy).not.toHaveBeenCalled();
   });
 
-  it("ranks exact documentation phrases above broader symbol matches for natural language", async () => {
+  it("keeps implementation results ahead of documentation phrases in hybrid mode", async () => {
     const root = await mkRepo();
 
     const response = await searchCodegraph({ root, query: "call compatibility", mode: "hybrid", limit: 5 });
 
-    expect(response.results[0]?.kind).toBe("chunk");
-    expect(response.results[0]?.file).toBe("docs/agent-search.md");
-    expect(response.results[0]?.rankReasons).toContain("exact phrase match in docs text");
+    expect(response.results[0]?.kind).toBe("symbol");
+    expect(response.results[0]?.label).toBe("callCompatibility");
     expect(response.results.some((result) => result.label === "callCompatibility")).toBeTruthy();
+    expect(response.results.some((result) => result.file === "docs/agent-search.md")).toBeTruthy();
   });
 
   it("keeps symbol-first ranking for identifier-like queries", async () => {

@@ -1,10 +1,11 @@
-import { describe, test, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
+import { describe, test, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from "vitest";
 import type { ICodeReviewSession } from "../src/index.js";
-import type { BuildOptions } from "../src/indexer/types.js";
+import type { BuildOptions, BuildReport } from "../src/indexer/types.js";
 import { CodeReviewSession, SessionManager, createCodeReviewSession } from "../src/session.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
 import path from "node:path";
 import os from "node:os";
+import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { resolveFilePathFromRoot } from "../src/util.js";
 
@@ -32,6 +33,19 @@ afterAll(async () => {
     await fsp.rm(sessionCacheDir, { recursive: true, force: true });
   }
 });
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+function setSessionClock(): void {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+}
+
+function advancePastStaleInterval(): void {
+  vi.setSystemTime(Date.now() + 5_001);
+}
 
 describe("CodeReviewSession", () => {
   let sharedReadySession: CodeReviewSession | undefined;
@@ -68,6 +82,32 @@ describe("CodeReviewSession", () => {
     expect(session.isReady()).toBe(true);
   });
 
+  test("should request build reports during default initialization", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-default-report-"));
+    await fsp.writeFile(path.join(root, "main.ts"), "export const value = 1;\n", "utf8");
+    const originalBuild = indexerBuild.buildProjectIndexIncremental;
+    let requestedReport: BuildReport | undefined;
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+      requestedReport = args[1]?.report;
+      return await originalBuild(...args);
+    });
+
+    try {
+      const session = await createCodeReviewSession({
+        root,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+
+      expect(session.getStatus()).toBe("ready");
+      expect(requestedReport?.timings).toBeDefined();
+      expect(buildSpy).toHaveBeenCalledTimes(1);
+      session.dispose();
+    } finally {
+      buildSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("should provide session statistics", async () => {
     const session = readySession();
 
@@ -78,6 +118,8 @@ describe("CodeReviewSession", () => {
     expect(stats.symbolCount).toBeGreaterThan(0);
     expect(stats.lastActivity).toBeInstanceOf(Date);
     expect(stats.timeUntilExpiration).toBeGreaterThan(0);
+    expect(stats.stale).toBe(false);
+    expect(stats.lastRefreshReason).toBe("initialization");
   });
 
   test("should expose analyzeImpactStream on the session interface", async () => {
@@ -232,6 +274,641 @@ index 1234567..abcdef0 100644
     }
   });
 
+  test("should mark stale sessions and auto-refresh before serving navigation", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-stale-"));
+    try {
+      await fsp.writeFile(
+        path.join(root, "utils.ts"),
+        "export function helper(value: string) { return value; }\n",
+        "utf8",
+      );
+      await fsp.writeFile(
+        path.join(root, "main.ts"),
+        "import { helper } from './utils';\nexport const ok = helper('token');\n",
+        "utf8",
+      );
+      const session = await createCodeReviewSession({
+        root,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+      await fsp.writeFile(
+        path.join(root, "utils.ts"),
+        "export function helper(value: string) { return value.trim(); }\n",
+        "utf8",
+      );
+
+      const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+      try {
+        const result = await session.findReferences({
+          file: path.join(root, "utils.ts"),
+          line: 1,
+          column: 17,
+        });
+        expect(result.status).toBe("ok");
+        expect(session.getStats().stale).toBe(false);
+        expect(session.getStats().lastRefreshReason).toBe("stale_check");
+        expect(buildSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        buildSpy.mockRestore();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("should throttle full stale scans while checking the navigation target", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-stale-throttle-"));
+    try {
+      await fsp.writeFile(path.join(root, "utils.ts"), "export function helper() { return 1; }\n", "utf8");
+      await fsp.writeFile(
+        path.join(root, "main.ts"),
+        "import { helper } from './utils';\nexport const value = helper();\n",
+        "utf8",
+      );
+      const session = await createCodeReviewSession({
+        root,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+
+      const statSpy = vi.spyOn(fs, "statSync");
+      try {
+        const first = await session.goToDefinition({
+          file: path.join(root, "main.ts"),
+          line: 2,
+          column: 22,
+        });
+        const second = await session.goToDefinition({
+          file: path.join(root, "main.ts"),
+          line: 2,
+          column: 22,
+        });
+
+        expect(first.status).toBe("ok");
+        expect(second.status).toBe("ok");
+        expect(statSpy).toHaveBeenCalledTimes(2);
+      } finally {
+        statSpy.mockRestore();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("should avoid full tracked-file scans after the stale interval", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-stale-cheap-"));
+    try {
+      const exports = Array.from({ length: 20 }, (_, index) => `export const value${index} = ${index};\n`);
+      await Promise.all(
+        exports.map((source, index) => fsp.writeFile(path.join(root, `dep${index}.ts`), source, "utf8")),
+      );
+      await fsp.writeFile(
+        path.join(root, "main.ts"),
+        "import { value0 } from './dep0';\nexport const value = value0;\n",
+        "utf8",
+      );
+      setSessionClock();
+      const session = await createCodeReviewSession({
+        root,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+      advancePastStaleInterval();
+
+      const statSpy = vi.spyOn(fs, "statSync");
+      try {
+        const result = await session.goToDefinition({
+          file: path.join(root, "main.ts"),
+          line: 2,
+          column: 22,
+        });
+
+        expect(result.status).toBe("ok");
+        expect(statSpy.mock.calls.length).toBeLessThan(10);
+      } finally {
+        statSpy.mockRestore();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("should run tracked-file stale scans before impact analysis", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-impact-stale-"));
+    try {
+      const utilsPath = path.join(root, "utils.ts");
+      const mainPath = path.join(root, "main.ts");
+      await fsp.writeFile(utilsPath, "export function helper() { return 1; }\n", "utf8");
+      await fsp.writeFile(mainPath, "import { helper } from './utils';\nexport const value = helper();\n", "utf8");
+      setSessionClock();
+      const session = await createCodeReviewSession({
+        root,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+      const navigation = await session.goToDefinition({
+        file: mainPath,
+        line: 2,
+        column: 22,
+      });
+      expect(navigation.status).toBe("ok");
+      await fsp.writeFile(utilsPath, "export function helper() { return 42; }\n", "utf8");
+      advancePastStaleInterval();
+      expect(session.getStats().status).toBe("ready");
+
+      const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+      try {
+        await session.analyzeImpact({
+          provider: "raw",
+          diffText: `diff --git a/main.ts b/main.ts
+index 1234567..abcdef0 100644
+--- a/main.ts
++++ b/main.ts
+@@ -1,2 +1,2 @@
+ import { helper } from './utils';
+-export const value = helper();
++export const value = helper() + 1;
+`,
+        });
+
+        expect(session.getStats().stale).toBe(false);
+        expect(session.getStats().lastRefreshReason).toBe("stale_check");
+        expect(buildSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        buildSpy.mockRestore();
+        session.dispose();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("should run tracked-file stale scans before streaming impact analysis", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-impact-stream-stale-"));
+    try {
+      const utilsPath = path.join(root, "utils.ts");
+      const mainPath = path.join(root, "main.ts");
+      await fsp.writeFile(utilsPath, "export function helper() { return 1; }\n", "utf8");
+      await fsp.writeFile(mainPath, "import { helper } from './utils';\nexport const value = helper();\n", "utf8");
+      setSessionClock();
+      const session = await createCodeReviewSession({
+        root,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+      const navigation = await session.goToDefinition({
+        file: mainPath,
+        line: 2,
+        column: 22,
+      });
+      expect(navigation.status).toBe("ok");
+      await fsp.writeFile(utilsPath, "export function helper() { return 42; }\n", "utf8");
+      advancePastStaleInterval();
+      expect(session.getStats().status).toBe("ready");
+
+      const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+      try {
+        for await (const chunk of session.analyzeImpactStream({
+          provider: "raw",
+          diffText: `diff --git a/main.ts b/main.ts
+index 1234567..abcdef0 100644
+--- a/main.ts
++++ b/main.ts
+@@ -1,2 +1,2 @@
+ import { helper } from './utils';
+-export const value = helper();
++export const value = helper() + 1;
+`,
+          streamSummary: "light",
+        })) {
+          if (chunk.type === "complete") {
+            break;
+          }
+        }
+
+        expect(session.getStats().stale).toBe(false);
+        expect(session.getStats().lastRefreshReason).toBe("stale_check");
+        expect(buildSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        buildSpy.mockRestore();
+        session.dispose();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("should throttle tracked-file stale scans across repeated impact calls", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-impact-scan-throttle-"));
+    try {
+      const exports = Array.from({ length: 20 }, (_, index) => `export const value${index} = ${index};\n`);
+      await Promise.all(
+        exports.map((source, index) => fsp.writeFile(path.join(root, `dep${index}.ts`), source, "utf8")),
+      );
+      const mainPath = path.join(root, "main.ts");
+      await fsp.writeFile(mainPath, "import { value0 } from './dep0';\nexport const value = value0;\n", "utf8");
+      setSessionClock();
+      const session = await createCodeReviewSession({
+        root,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+      const diffText = `diff --git a/main.ts b/main.ts
+index 1234567..abcdef0 100644
+--- a/main.ts
++++ b/main.ts
+@@ -1,2 +1,2 @@
+ import { value0 } from './dep0';
+-export const value = value0;
++export const value = value0 + 1;
+`;
+      advancePastStaleInterval();
+
+      const statSpy = vi.spyOn(fs, "statSync");
+      const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+      try {
+        await session.analyzeImpact({ provider: "raw", diffText });
+        const broadScanStatCalls = statSpy.mock.calls.length;
+        statSpy.mockClear();
+
+        await session.analyzeImpact({ provider: "raw", diffText });
+
+        expect(buildSpy).not.toHaveBeenCalled();
+        expect(broadScanStatCalls).toBeGreaterThan(statSpy.mock.calls.length);
+        expect(statSpy.mock.calls.length).toBeLessThan(10);
+      } finally {
+        buildSpy.mockRestore();
+        statSpy.mockRestore();
+        session.dispose();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("should not let impact postpone navigation directory checks", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-impact-navigation-timer-"));
+    try {
+      const mainPath = path.join(root, "main.ts");
+      const latePath = path.join(root, "late.ts");
+      await fsp.writeFile(mainPath, "import { late } from './late';\nexport const value = late();\n", "utf8");
+      setSessionClock();
+      const session = await createCodeReviewSession({
+        root,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+      advancePastStaleInterval();
+
+      await session.analyzeImpact({
+        provider: "raw",
+        diffText: `diff --git a/main.ts b/main.ts
+index 1234567..abcdef0 100644
+--- a/main.ts
++++ b/main.ts
+@@ -1,2 +1,2 @@
+ import { late } from './late';
+-export const value = late();
++export const value = late() + 1;
+`,
+      });
+      await fsp.writeFile(latePath, "export function late() { return 1; }\n", "utf8");
+      await fsp.utimes(root, new Date(), new Date(Date.now() + 10_000));
+
+      const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+      try {
+        const result = await session.goToDefinition({
+          file: mainPath,
+          line: 2,
+          column: 22,
+        });
+
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(result.definition.file).toBe(path.resolve(latePath));
+          expect(result.definition.localName).toBe("late");
+        }
+        expect(session.getStats().lastRefreshReason).toBe("stale_check");
+        expect(buildSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        buildSpy.mockRestore();
+        session.dispose();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("should not let passive status checks postpone navigation directory checks", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-status-navigation-timer-"));
+    try {
+      const mainPath = path.join(root, "main.ts");
+      const latePath = path.join(root, "late.ts");
+      await fsp.writeFile(mainPath, "import { late } from './late';\nexport const value = late();\n", "utf8");
+      setSessionClock();
+      const session = await createCodeReviewSession({
+        root,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+
+      advancePastStaleInterval();
+      expect(session.getStats().status).toBe("ready");
+      await fsp.writeFile(latePath, "export function late() { return 1; }\n", "utf8");
+      await fsp.utimes(root, new Date(), new Date(Date.now() + 10_000));
+
+      const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+      try {
+        const result = await session.goToDefinition({
+          file: mainPath,
+          line: 2,
+          column: 22,
+        });
+
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(result.definition.file).toBe(path.resolve(latePath));
+          expect(result.definition.localName).toBe("late");
+        }
+        expect(session.getStats().lastRefreshReason).toBe("stale_check");
+        expect(buildSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        buildSpy.mockRestore();
+        session.dispose();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("should refresh impact analysis when a source file is added", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-impact-added-file-"));
+    try {
+      const mainPath = path.join(root, "main.ts");
+      await fsp.writeFile(mainPath, "export const value = 1;\n", "utf8");
+      setSessionClock();
+      const session = await createCodeReviewSession({
+        root,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+      await fsp.writeFile(path.join(root, "late.ts"), "export const late = 1;\n", "utf8");
+      await fsp.utimes(root, new Date(), new Date(Date.now() + 10_000));
+      advancePastStaleInterval();
+
+      const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+      try {
+        await session.analyzeImpact({
+          provider: "raw",
+          diffText: `diff --git a/main.ts b/main.ts
+index 1234567..abcdef0 100644
+--- a/main.ts
++++ b/main.ts
+@@ -1 +1 @@
+-export const value = 1;
++export const value = 2;
+`,
+        });
+
+        expect(session.getStats().lastRefreshReason).toBe("stale_check");
+        expect(buildSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        buildSpy.mockRestore();
+        session.dispose();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("should refresh streaming impact analysis when a source file is added", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-impact-stream-added-file-"));
+    try {
+      const mainPath = path.join(root, "main.ts");
+      await fsp.writeFile(mainPath, "export const value = 1;\n", "utf8");
+      setSessionClock();
+      const session = await createCodeReviewSession({
+        root,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+      await fsp.writeFile(path.join(root, "late.ts"), "export const late = 1;\n", "utf8");
+      await fsp.utimes(root, new Date(), new Date(Date.now() + 10_000));
+      advancePastStaleInterval();
+
+      const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+      try {
+        for await (const chunk of session.analyzeImpactStream({
+          provider: "raw",
+          diffText: `diff --git a/main.ts b/main.ts
+index 1234567..abcdef0 100644
+--- a/main.ts
++++ b/main.ts
+@@ -1 +1 @@
+-export const value = 1;
++export const value = 2;
+`,
+          streamSummary: "light",
+        })) {
+          if (chunk.type === "complete") {
+            break;
+          }
+        }
+
+        expect(session.getStats().lastRefreshReason).toBe("stale_check");
+        expect(buildSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        buildSpy.mockRestore();
+        session.dispose();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("should refresh navigation when config changes", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-config-navigation-"));
+    try {
+      const mainPath = path.join(root, "main.ts");
+      await fsp.writeFile(mainPath, "export function helper() { return 1; }\n", "utf8");
+      await fsp.writeFile(
+        path.join(root, "codegraph.config.json"),
+        JSON.stringify({ discovery: { includeGlobs: ["main.ts"] } }),
+        "utf8",
+      );
+      setSessionClock();
+      const session = await createCodeReviewSession({
+        root,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+      await fsp.writeFile(
+        path.join(root, "codegraph.config.json"),
+        JSON.stringify({ discovery: { includeGlobs: ["other.ts"] } }),
+        "utf8",
+      );
+      advancePastStaleInterval();
+
+      const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+      try {
+        const result = await session.goToDefinition({
+          file: mainPath,
+          line: 1,
+          column: 17,
+        });
+
+        expect(result.status).toBe("not_found");
+        expect(session.getStats().lastRefreshReason).toBe("stale_check");
+        expect(buildSpy.mock.calls.length).toBeGreaterThan(0);
+      } finally {
+        buildSpy.mockRestore();
+        session.dispose();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("should auto-refresh before navigation when a new source file is added", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-added-file-"));
+    try {
+      await fsp.writeFile(
+        path.join(root, "main.ts"),
+        "import { late } from './late';\nexport const value = late();\n",
+        "utf8",
+      );
+      const session = await createCodeReviewSession({
+        root,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+
+      await fsp.writeFile(
+        path.join(root, "late.ts"),
+        "export function late() { return 1; }\nexport const value = late();\n",
+        "utf8",
+      );
+
+      const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+      try {
+        const result = await session.goToDefinition({
+          file: path.join(root, "late.ts"),
+          line: 2,
+          column: 22,
+        });
+        expect(result.status).toBe("ok");
+        expect(session.getStats().stale).toBe(false);
+        expect(session.getStats().lastRefreshReason).toBe("stale_check");
+        expect(buildSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        buildSpy.mockRestore();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("should include new source files on manual refresh", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-manual-added-file-"));
+    try {
+      await fsp.writeFile(
+        path.join(root, "main.ts"),
+        "import { late } from './late';\nexport const value = late();\n",
+        "utf8",
+      );
+      const session = await createCodeReviewSession({
+        root,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+
+      await fsp.writeFile(
+        path.join(root, "late.ts"),
+        "export function late() { return 1; }\nexport const value = late();\n",
+        "utf8",
+      );
+
+      const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+      try {
+        await session.refresh();
+        const result = await session.goToDefinition({
+          file: path.join(root, "late.ts"),
+          line: 2,
+          column: 22,
+        });
+        expect(result.status).toBe("ok");
+        expect(session.getStats().lastRefreshReason).toBe("manual");
+        expect(buildSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        buildSpy.mockRestore();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("should reload config discovery options before refresh builds", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-config-refresh-"));
+    const configPath = path.join(root, "codegraph.config.json");
+    try {
+      await fsp.writeFile(configPath, JSON.stringify({ discovery: { includeGlobs: ["main.ts"] } }, null, 2), "utf8");
+      await fsp.writeFile(
+        path.join(root, "main.ts"),
+        "import { late } from './late';\nexport const value = late();\n",
+        "utf8",
+      );
+      await fsp.writeFile(path.join(root, "late.ts"), "export function late() { return 1; }\n", "utf8");
+      const session = await createCodeReviewSession({
+        root,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+      expect(session.getStats().fileCount).toBe(1);
+
+      await fsp.writeFile(configPath, JSON.stringify({ discovery: { includeGlobs: ["*.ts"] } }, null, 2), "utf8");
+      await session.refresh();
+
+      expect(session.getStats().fileCount).toBe(2);
+      const result = await session.goToDefinition({
+        file: path.join(root, "main.ts"),
+        line: 2,
+        column: 22,
+      });
+      expect(result.status).toBe("ok");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("should use full builds for force refreshes when incremental is disabled", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-manual-full-refresh-"));
+    try {
+      await fsp.writeFile(
+        path.join(root, "main.ts"),
+        "import { late } from './late';\nexport const value = late();\n",
+        "utf8",
+      );
+      const session = await createCodeReviewSession({
+        root,
+        incremental: false,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+
+      await fsp.writeFile(
+        path.join(root, "late.ts"),
+        "export function late() { return 1; }\nexport const value = late();\n",
+        "utf8",
+      );
+
+      const fullBuildSpy = vi.spyOn(indexerBuild, "buildProjectIndex");
+      const incrementalBuildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+      try {
+        await session.refresh();
+        const result = await session.goToDefinition({
+          file: path.join(root, "late.ts"),
+          line: 2,
+          column: 22,
+        });
+        expect(result.status).toBe("ok");
+        expect(session.getStats().lastRefreshReason).toBe("manual");
+        expect(fullBuildSpy).toHaveBeenCalledTimes(1);
+        expect(incrementalBuildSpy).not.toHaveBeenCalled();
+      } finally {
+        fullBuildSpy.mockRestore();
+        incrementalBuildSpy.mockRestore();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("should expire after timeout", async () => {
     const session = new CodeReviewSession({
       root: sampleRoot,
@@ -247,6 +924,26 @@ index 1234567..abcdef0 100644
 
     expect(session.getStatus()).toBe("expired");
     expect(session.isReady()).toBe(false);
+  });
+
+  test("should omit stale metadata after disposal", async () => {
+    const session = await createCodeReviewSession({
+      root: sampleRoot,
+      buildOptions: sampleBuildOptions(),
+    });
+
+    Object.defineProperty(session, "staleReason", {
+      configurable: true,
+      value: "tracked_files_changed",
+      writable: true,
+    });
+
+    session.dispose();
+
+    const stats = session.getStats();
+    expect(stats.status).toBe("expired");
+    expect(stats.stale).toBe(false);
+    expect(stats.staleReason).toBeUndefined();
   });
 
   test("should re-initialize after expiration", async () => {
@@ -335,6 +1032,61 @@ index 1234567..abcdef0 100644
       expect(session.isReady()).toBe(false);
     } finally {
       buildSpy.mockRestore();
+    }
+  });
+
+  test("should await in-flight refreshes for concurrent navigation", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-concurrent-refresh-"));
+    try {
+      const utilsPath = path.join(root, "utils.ts");
+      const mainPath = path.join(root, "main.ts");
+      await fsp.writeFile(utilsPath, "export function helper(value: string) { return value; }\n", "utf8");
+      await fsp.writeFile(mainPath, "import { helper } from './utils';\nexport const ok = helper('token');\n", "utf8");
+      const session = await createCodeReviewSession({
+        root,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+      await fsp.writeFile(utilsPath, "export function helper(value: string) { return value.trim(); }\n", "utf8");
+
+      const originalBuild = indexerBuild.buildProjectIndexIncremental;
+      let releaseBuild: (() => void) | null = null;
+      let markBuildStarted: (() => void) | null = null;
+      const buildGate = new Promise<void>((resolve) => {
+        releaseBuild = resolve;
+      });
+      const buildStarted = new Promise<void>((resolve) => {
+        markBuildStarted = resolve;
+      });
+      const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+        markBuildStarted?.();
+        await buildGate;
+        return await originalBuild(...args);
+      });
+
+      try {
+        const first = session.findReferences({
+          file: utilsPath,
+          line: 1,
+          column: 17,
+        });
+        await buildStarted;
+        const second = session.goToDefinition({
+          file: mainPath,
+          line: 2,
+          column: 19,
+        });
+
+        releaseBuild?.();
+        const [firstResult, secondResult] = await Promise.all([first, second]);
+
+        expect(firstResult.status).toBe("ok");
+        expect(secondResult.status).toBe("ok");
+        expect(buildSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        buildSpy.mockRestore();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
     }
   });
 
@@ -553,7 +1305,8 @@ describe("SessionManager", () => {
     });
 
     expect(session.getStatus()).toBe("ready");
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 150);
     expect(session.getStatus()).toBe("expired");
 
     const buildSpy = vi
@@ -860,7 +1613,16 @@ describe("SessionManager", () => {
     const buildGate = new Promise<void>((resolve) => {
       releaseBuild = resolve;
     });
+    let buildStarts = 0;
+    let markAllBuildsStarted: (() => void) | null = null;
+    const allBuildsStarted = new Promise<void>((resolve) => {
+      markAllBuildsStarted = resolve;
+    });
     const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+      buildStarts += 1;
+      if (buildStarts === 2) {
+        markAllBuildsStarted?.();
+      }
       await buildGate;
       return await originalBuild(...args);
     });
@@ -883,8 +1645,7 @@ describe("SessionManager", () => {
           },
         ]);
 
-        await Promise.resolve();
-        await Promise.resolve();
+        await allBuildsStarted;
 
         expect(buildSpy).toHaveBeenCalledTimes(2);
 

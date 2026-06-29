@@ -5,20 +5,45 @@ import type { Edge, EdgeTo, Graph, Pos, Range } from "../../types.js";
 import { buildGraphAdjacency } from "../../graphs/adjacency.js";
 import { buildReferenceCandidateIndex } from "../reference-candidates.js";
 import type { ProjectFileInfo } from "../../util/projectFiles.js";
-import {
-  SymbolKind,
-  type BuildOptions,
-  type ExportEntry,
-  type ImportBinding,
-  type ModuleIndex,
-  type ProjectIndex,
-  type SymbolDef,
+import { BloomFilter, BloomFilterCache } from "../../util/bloomFilter.js";
+import { summarizeAnalysis } from "../../analysisSummary.js";
+import type { AnalysisSummary } from "../../analysisSummary.js";
+import { SymbolKind } from "../types.js";
+import type {
+  BackendReport,
+  BuildOptions,
+  ExportEntry,
+  GraphReport,
+  ImportBinding,
+  ModuleIndex,
+  ProjectIndex,
+  SymbolDef,
 } from "../types.js";
 import { cacheRoot } from "./module-cache.js";
 import type { ManifestFileEntry } from "./manifest.js";
 
 const SNAPSHOT_SYMBOL_KINDS = new Set<SymbolKind>(Object.values(SymbolKind));
-const PROJECT_SNAPSHOT_VERSION = 1;
+const PROJECT_SNAPSHOT_VERSION = 2;
+const BLOOM_FILTER_MIN_SIZE = 1_000;
+const BLOOM_FILTER_MAX_SIZE = 1_000_000;
+const BLOOM_FILTER_MIN_HASH_COUNT = 1;
+const BLOOM_FILTER_MAX_HASH_COUNT = 10;
+
+type SerializedBloomFilter = {
+  size: number;
+  hashCount: number;
+  bitsBase64: string;
+};
+
+type SnapshotAnalysisReport = {
+  backend?: BackendReport;
+  graph?: GraphReport;
+};
+
+export type LoadedProjectIndexSnapshot = {
+  index: ProjectIndex;
+  analysisReport?: SnapshotAnalysisReport;
+};
 
 type ProjectIndexSnapshotPayload = {
   version: number;
@@ -31,6 +56,9 @@ type ProjectIndexSnapshotPayload = {
   projectRoot?: string;
   nativeMode?: ProjectIndex["nativeMode"];
   projectFiles?: ProjectFileInfo[];
+  bloomFilters?: Record<string, SerializedBloomFilter>;
+  analysis?: AnalysisSummary;
+  analysisReport?: SnapshotAnalysisReport;
 };
 
 export function projectSnapshotFilesSignature(entries: ReadonlyMap<string, ManifestFileEntry>): string {
@@ -58,7 +86,7 @@ export async function tryLoadProjectIndexSnapshot(
   projectRoot: string,
   opts: BuildOptions | undefined,
   filesSignature: string,
-): Promise<ProjectIndex | null> {
+): Promise<LoadedProjectIndexSnapshot | null> {
   if ((opts?.cache ?? "off") !== "disk") return null;
   try {
     const payload = JSON.parse(await fsp.readFile(projectSnapshotPath(projectRoot, opts), "utf8")) as unknown;
@@ -74,7 +102,8 @@ export async function tryLoadProjectIndexSnapshot(
       edges: payload.graph.edges,
     };
     const modules = new Map(payload.modules.map((moduleIndex) => [moduleIndex.file, moduleIndex]));
-    return {
+    const shouldHydrateBloomFilters = opts?.useBloomFilters ?? true;
+    const index: ProjectIndex = {
       graph,
       graphAdjacency: buildGraphAdjacency(graph),
       modules,
@@ -83,9 +112,20 @@ export async function tryLoadProjectIndexSnapshot(
       ...(payload.nativeMode ? { nativeMode: payload.nativeMode } : {}),
       exportCache: new Map(),
       scopeCache: new Map(),
+      ...(shouldHydrateBloomFilters && payload.bloomFilters
+        ? { bloomFilters: deserializeBloomFilterCache(payload.bloomFilters) }
+        : {}),
       ...(payload.projectFiles ? { projectFiles: payload.projectFiles } : {}),
       referenceCandidates: buildReferenceCandidateIndex(modules),
       ...(opts?.cache ? { cacheMode: opts.cache, cacheRootDir: cacheRoot(projectRoot, opts) } : {}),
+    };
+    return {
+      index: {
+        ...index,
+        ...(payload.analysis ? { analysis: payload.analysis } : {}),
+      },
+      ...(payload.analysis ? { analysis: payload.analysis } : {}),
+      ...(payload.analysisReport ? { analysisReport: payload.analysisReport } : {}),
     };
   } catch {
     return null;
@@ -99,6 +139,11 @@ export async function writeProjectIndexSnapshot(
   filesSignature: string,
 ): Promise<void> {
   if ((opts?.cache ?? "off") !== "disk") return;
+  const serializedBloomFilters = index.bloomFilters
+    ? serializeBloomFilterCache(index.bloomFilters, index.byFile.keys())
+    : undefined;
+  const snapshotAnalysisReport = analysisReportFromBuildReport(index.buildReport);
+  const snapshotAnalysis = index.buildReport ? summarizeAnalysis({ index, report: index.buildReport }) : index.analysis;
   const payload: ProjectIndexSnapshotPayload = {
     version: PROJECT_SNAPSHOT_VERSION,
     filesSignature,
@@ -112,6 +157,9 @@ export async function writeProjectIndexSnapshot(
       ? { nativeMode: normalizedSnapshotNativeMode(index.nativeMode) }
       : {}),
     ...(index.projectFiles ? { projectFiles: index.projectFiles } : {}),
+    ...(serializedBloomFilters ? { bloomFilters: serializedBloomFilters } : {}),
+    ...(snapshotAnalysis ? { analysis: snapshotAnalysis } : {}),
+    ...(snapshotAnalysisReport ? { analysisReport: snapshotAnalysisReport } : {}),
   };
   try {
     const snapshotPath = projectSnapshotPath(projectRoot, opts);
@@ -187,9 +235,157 @@ function isProjectIndexSnapshotPayload(value: unknown): value is ProjectIndexSna
     payload.modules.every(isModuleIndex) &&
     (payload.projectRoot === undefined || typeof payload.projectRoot === "string") &&
     (payload.nativeMode === undefined || isSnapshotNativeMode(payload.nativeMode)) &&
+    (payload.bloomFilters === undefined || isSerializedBloomFilterRecord(payload.bloomFilters)) &&
+    (payload.analysis === undefined || isAnalysisSummary(payload.analysis)) &&
+    (payload.analysisReport === undefined || isSnapshotAnalysisReport(payload.analysisReport)) &&
     (payload.projectFiles === undefined ||
       (Array.isArray(payload.projectFiles) && payload.projectFiles.every(isProjectFileInfo)))
   );
+}
+
+function analysisReportFromBuildReport(report: ProjectIndex["buildReport"]): SnapshotAnalysisReport | undefined {
+  if (!report?.backend && !report?.graph) {
+    return undefined;
+  }
+  return {
+    ...(report.backend ? { backend: report.backend } : {}),
+    ...(report.graph ? { graph: report.graph } : {}),
+  };
+}
+
+function isSnapshotAnalysisReport(value: unknown): value is SnapshotAnalysisReport {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const report = value as Partial<SnapshotAnalysisReport>;
+  return (
+    (report.backend === undefined || isBackendReport(report.backend)) &&
+    (report.graph === undefined || isGraphReport(report.graph))
+  );
+}
+
+function isBackendReport(value: unknown): value is BackendReport {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const report = value as Partial<BackendReport>;
+  return (
+    !!report.native &&
+    isNativeBackendReport(report.native) &&
+    (report.parser === undefined || isParserBackendDegradationReport(report.parser))
+  );
+}
+
+function isNativeBackendReport(value: unknown): value is BackendReport["native"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const report = value as Partial<BackendReport["native"]>;
+  return (
+    typeof report.available === "boolean" &&
+    typeof report.enabled === "boolean" &&
+    Array.isArray(report.supportedLanguageIds) &&
+    report.supportedLanguageIds.every((languageId) => typeof languageId === "string") &&
+    typeof report.filesUsed === "number" &&
+    typeof report.filesFellBack === "number" &&
+    isUnknownRecord(report.fallbackReasons) &&
+    isUnknownRecord(report.byLanguage) &&
+    Array.isArray(report.errors)
+  );
+}
+
+function isParserBackendDegradationReport(value: unknown): value is NonNullable<BackendReport["parser"]> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const report = value as Partial<NonNullable<BackendReport["parser"]>>;
+  return typeof report.total === "number" && isNumberRecord(report.byLanguage) && Array.isArray(report.files);
+}
+
+function isGraphReport(value: unknown): value is GraphReport {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const report = value as Partial<GraphReport>;
+  return !!report.fallbackImportExtraction && isFallbackImportExtractionReport(report.fallbackImportExtraction);
+}
+
+function isFallbackImportExtractionReport(value: unknown): value is GraphReport["fallbackImportExtraction"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const report = value as Partial<GraphReport["fallbackImportExtraction"]>;
+  return (
+    typeof report.total === "number" &&
+    isNumberRecord(report.byLanguage) &&
+    isUnknownRecord(report.files) &&
+    (report.byReason === undefined || isNumberRecord(report.byReason))
+  );
+}
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNumberRecord(value: unknown): value is Record<string, number> {
+  return isUnknownRecord(value) && Object.values(value).every((entry) => typeof entry === "number");
+}
+
+function isAnalysisSummary(value: unknown): value is AnalysisSummary {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const summary = value as Partial<AnalysisSummary>;
+  return (
+    (summary.mode === "semantic" || summary.mode === "mixed" || summary.mode === "reduced") &&
+    (summary.backend === "native" ||
+      summary.backend === "mixed" ||
+      summary.backend === "graph-only" ||
+      summary.backend === "unknown") &&
+    typeof summary.parserDegradedFiles === "number" &&
+    typeof summary.fallbackImportExtractionFiles === "number" &&
+    typeof summary.nativeFilesUsed === "number" &&
+    typeof summary.nativeFilesFellBack === "number" &&
+    typeof summary.label === "string"
+  );
+}
+
+function serializeBloomFilterCache(
+  cache: BloomFilterCache,
+  files: Iterable<string>,
+): Record<string, SerializedBloomFilter> | undefined {
+  const serialized: Record<string, SerializedBloomFilter> = {};
+  for (const file of files) {
+    const filter = cache.get(file);
+    if (!filter) continue;
+    const metadata = filter.getMetadata();
+    serialized[file] = {
+      size: metadata.size,
+      hashCount: metadata.hashCount,
+      bitsBase64: filter.toBuffer().toString("base64"),
+    };
+  }
+  return Object.keys(serialized).length ? serialized : undefined;
+}
+
+function deserializeBloomFilterCache(serialized: Record<string, SerializedBloomFilter>): BloomFilterCache {
+  const cache = new BloomFilterCache();
+  for (const [file, filter] of Object.entries(serialized)) {
+    cache.set(file, BloomFilter.fromBuffer(Buffer.from(filter.bitsBase64, "base64"), filter.size, filter.hashCount));
+  }
+  return cache;
+}
+
+function isSerializedBloomFilterRecord(value: unknown): value is Record<string, SerializedBloomFilter> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return Object.values(value).every(isSerializedBloomFilter);
+}
+
+function isSerializedBloomFilter(value: unknown): value is SerializedBloomFilter {
+  if (!value || typeof value !== "object") return false;
+  const filter = value as Partial<SerializedBloomFilter>;
+  if (
+    typeof filter.size !== "number" ||
+    !Number.isInteger(filter.size) ||
+    filter.size < BLOOM_FILTER_MIN_SIZE ||
+    filter.size > BLOOM_FILTER_MAX_SIZE ||
+    typeof filter.hashCount !== "number" ||
+    !Number.isInteger(filter.hashCount) ||
+    filter.hashCount < BLOOM_FILTER_MIN_HASH_COUNT ||
+    filter.hashCount > BLOOM_FILTER_MAX_HASH_COUNT ||
+    typeof filter.bitsBase64 !== "string"
+  ) {
+    return false;
+  }
+  const maxBytes = Math.ceil(filter.size / 8);
+  const maxBase64Length = Math.ceil(maxBytes / 3) * 4;
+  return filter.bitsBase64.length === maxBase64Length;
 }
 
 function isModuleIndex(value: unknown): value is ModuleIndex {

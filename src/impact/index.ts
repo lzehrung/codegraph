@@ -1,4 +1,4 @@
-import { type ProjectIndex } from "../indexer/types.js";
+import { type ProjectIndex, type BuildReport } from "../indexer/types.js";
 import type { ImpactReport, CompactImpactReport, ImpactOptions } from "./types.js";
 import { collectImpactAnalysis } from "./collect.js";
 import { buildImpactReport } from "./report.js";
@@ -16,6 +16,10 @@ export {
   type ExtractCallsiteArgumentsRequest,
 } from "./callCompatibility.js";
 
+export type ImpactAnalysisContext = {
+  buildReport?: BuildReport | undefined;
+};
+
 /**
  * Analyze a diff against an existing project index and return a structured impact report.
  *
@@ -28,6 +32,7 @@ export async function analyzeImpactFromDiff(
   projectRoot: string,
   index: ProjectIndex,
   options: ImpactOptions,
+  context: ImpactAnalysisContext = {},
 ): Promise<ImpactReport | CompactImpactReport> {
   const analysis = await collectImpactAnalysis(projectRoot, index, options);
   const suggestions = await collectImpactReportSuggestions(
@@ -46,7 +51,7 @@ export async function analyzeImpactFromDiff(
     analysis.changedSymbols,
     analysis.impactedItems,
     suggestions,
-    { ...options, warning: analysis.warning },
+    { ...options, warning: analysis.warning, buildReport: context.buildReport },
     analysis.diagnostics,
   );
 }

@@ -29,9 +29,9 @@ Use Codegraph when you need fast structural answers about a repo without relying
 - Export graph data as JSON, Mermaid, DOT, or SQLite, then inspect it from scripts, Markdown renderers, Graphviz, or SQL tools.
 - Keep one workflow across source languages, monorepos, and graph-first document and template formats instead of stitching together separate tools.
 
-For a first pass, run `orient --root . --budget small --pretty`.
-Use `packet get`, `search`, `explain`, `impact`, and `review` from the recommended next commands when you need deeper architecture, symbol, or change context.
-For PR, worktree, or sweeping review tasks, start with `review --base HEAD --head WORKTREE --summary` or `impact --base HEAD --head WORKTREE --pretty`.
+For unfamiliar repos, start with `orient --root . --budget small --pretty`, then use `search` and `explain` to land on one concrete code anchor.
+For daily change work, start with `review --base HEAD --head WORKTREE --summary`; use `impact --base HEAD --head WORKTREE --pretty` as the broader blast-radius map when needed.
+Search is code-first by default in hybrid mode, and search, explain, and review packets now include analysis labels so reduced-mode or mixed-semantics runs stay visible.
 Detailed command contracts and JSON shapes live in [docs/cli.md](./docs/cli.md).
 
 ## Features
@@ -77,22 +77,27 @@ npm run build
 
 `npm run build` always rebuilds `dist/`. If Cargo is available, it also requires the local native workspace build to succeed; if Cargo is unavailable, it still completes with the JavaScript build output and a warning.
 
-Then start with orientation and follow the returned commands:
+Then start with the default workflow. For code reviews, the lowest-friction loop is `review --summary` first, `impact --pretty` only when you need blast radius, then `search` or `explain` on a file or symbol named in the summary; use review JSON when a follow-up needs stable handles.
 
 ```bash
-# initial repo orientation with next-step suggestions
+# compact reviewer handoff for current edits
+node ./dist/cli.js review --base HEAD --head WORKTREE --summary
+
+# broader blast-radius map when the review packet needs expansion
+node ./dist/cli.js impact --base HEAD --head WORKTREE --pretty
+
+# bounded repo orientation with next-step suggestions
 node ./dist/cli.js orient --root . --budget small --pretty
+
+# find and explain a concrete anchor
+node ./dist/cli.js search "build review report" --json
+node ./dist/cli.js explain src/cli.ts
 
 # optional runtime and artifact health check
 node ./dist/cli.js doctor
 
 # optional broader architecture summary
 node ./dist/cli.js inspect ./src --limit 20
-
-# find and explain a concrete anchor
-node ./dist/cli.js packet get src/cli.ts --pretty
-node ./dist/cli.js search "graph json" --json
-node ./dist/cli.js explain src/cli.ts
 
 # build a graph for product code
 node ./dist/cli.js graph --root . ./src --compact-json --output codegraph.json
@@ -122,11 +127,14 @@ Choose output by consumer:
 Use these as starting points, then see [docs/cli.md](./docs/cli.md) for all flags, defaults, and output contracts.
 
 ```bash
+# fastest code-review handoff for current edits
+codegraph review --base HEAD --head WORKTREE --summary
+codegraph impact --base HEAD --head WORKTREE --pretty
+
 # repo orientation and bounded follow-up
 codegraph orient --root . --budget small --pretty
-codegraph packet get src/cli/graph.ts --pretty
-codegraph search "graph json" --json
-codegraph explain file:src/cli/graph.ts
+codegraph search "build review report" --json
+codegraph explain src/review.ts
 
 # semantic navigation
 codegraph goto <file> <line> <column>
@@ -178,19 +186,32 @@ Recommended next
 ```json
 {
   "schemaVersion": 1,
-  "query": "graph json",
+  "query": "build review report",
   "mode": "hybrid",
-  "resultCount": 20,
-  "totalCandidates": 7911,
+  "analysis": {
+    "label": "native semantic"
+  },
+  "resultCount": 1,
+  "totalCandidates": 42,
   "results": [
     {
-      "handle": "chunk:docs%2Fcli.md:646",
-      "kind": "chunk",
-      "label": "docs/cli.md:646",
-      "file": "docs/cli.md",
-      "score": 282,
-      "rankReasons": ["exact phrase match in docs text", "text token match: graph, json"],
-      "followUps": ["codegraph chunk docs/cli.md", "codegraph deps docs/cli.md --json"]
+      "handle": "symbol:src%2Freview.ts:buildReviewReport:214:1",
+      "kind": "symbol",
+      "label": "buildReviewReport",
+      "file": "src/review.ts",
+      "score": 248,
+      "provenance": {
+        "surface": "code",
+        "capability": "semantic",
+        "analysisMode": "semantic",
+        "backend": "native",
+        "confidence": "high"
+      },
+      "rankReasons": ["exact phrase match in symbol name", "symbol token match: build, review, report"],
+      "followUps": [
+        "codegraph explain \"symbol:src%2Freview.ts:buildReviewReport:214:1\"",
+        "codegraph refs --file src/review.ts --line 214 --col 1 --pretty"
+      ]
     }
   ]
 }
@@ -319,7 +340,7 @@ For a custom location, use `codegraph skill install --target <path>/skills/codeg
 
 ## Using as a library
 
-Use the TypeScript API when another program needs deterministic file packs, review packets, or model prompts. CLI `--pretty` and `--summary` output is also useful for model-readable triage, but library callers should keep structured fields until the final UI or prompt boundary.
+Use the TypeScript API when another program needs deterministic file packs, review packets, or model prompts. CLI `--pretty` and `--summary` output is also useful for model-readable triage, but library callers should keep structured fields until the final UI or prompt boundary. For repeated calls, prefer one warm `createCodeReviewSession()` or one agent/MCP session over rebuilding ad hoc indexes.
 
 ```ts
 import {
@@ -380,8 +401,8 @@ The supported package import surface includes the compatibility root export, `@l
 - Repo triage: run `codegraph inspect ./src --limit 20`, then follow with `codegraph hotspots ./src --limit 20` or `codegraph unresolved` to focus the next pass.
 - Duplicate cleanup: run `codegraph duplicates ./src --min-confidence medium` for the default pretty triage view, or add `--json` when a downstream tool needs grouped duplicate data.
 - Symbol navigation: use `codegraph goto <file> <line> <column>` and `codegraph refs --file <file> --line <line> --col <column> --pretty` when a question is about definitions or semantic usages rather than matching strings.
-- PR review: run `codegraph impact --base origin/main --head HEAD --pretty` for a ranked map, `codegraph review --base origin/main --head HEAD --summary` for a compact reviewer handoff with actionable candidate tests, or redirect plain `review` output when a downstream tool needs the full JSON bundle.
-- Worktree review: run `codegraph impact --base HEAD --head WORKTREE --pretty` for current staged and unstaged tracked-file changes, then `codegraph review --base HEAD --head WORKTREE --summary` for a compact handoff. Use `--head STAGED` to compare `HEAD` against the current index.
+- PR review: run `codegraph review --base origin/main --head HEAD --summary` for a compact reviewer handoff with actionable candidate tests, add `codegraph impact --base origin/main --head HEAD --pretty` when you need a ranked blast-radius map, or redirect plain `review` output when a downstream tool needs the full JSON bundle.
+- Worktree review: run `codegraph review --base HEAD --head WORKTREE --summary` for current staged and unstaged tracked-file changes, then add `codegraph impact --base HEAD --head WORKTREE --pretty` only when the handoff needs wider blast-radius context. Use `--head STAGED` to compare `HEAD` against the current index.
 - Graph exploration: run `codegraph graph --root . ./src --compact-json --output codegraph.json` for scripts, `--mermaid` for Markdown renderers, or `--dot` for Graphviz. Bare `codegraph graph` writes `codegraph.json`; add `--stdout` when piping.
 - Public API inspection: run `codegraph apisurface` to summarize exported symbols before refactors, reviews, or release checks.
 

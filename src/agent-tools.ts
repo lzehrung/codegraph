@@ -1,4 +1,4 @@
-import { buildProjectIndex } from "./indexer/build-index.js";
+import { buildProjectIndexIncremental } from "./indexer/build-index.js";
 import { listSymbols, symbolId } from "./indexer/symbols.js";
 import { goToDefinition, findReferences } from "./indexer/navigation.js";
 import type {
@@ -266,12 +266,7 @@ export async function tool_findSymbol(
   error?: string;
 }> {
   try {
-    const index =
-      options.index ??
-      (await buildProjectIndex(root, {
-        logLevel: "error",
-        ...(options.native ? { native: options.native } : {}),
-      }));
+    const index = options.index ?? (await getToolIndex(root, options));
     const allSymbols = listSymbols(index, { includeImports: false });
     const q = query.toLowerCase();
 
@@ -515,7 +510,10 @@ function normalizePathArg(root: string, file: string): string {
 async function getToolIndex(root: string, options: ToolRuntimeOptions): Promise<ProjectIndex> {
   return (
     options.index ??
-    (await buildProjectIndex(root, {
+    (await buildProjectIndexIncremental(root, {
+      cache: "disk",
+      keepParsed: true,
+      useBloomFilters: true,
       logLevel: "error",
       ...(options.native ? { native: options.native } : {}),
     }))

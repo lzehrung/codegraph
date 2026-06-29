@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks";
 import { findDuplicateContexts, type DuplicateGroup, type DuplicateUnitRef } from "./duplicates.js";
 import type { FileId } from "./types.js";
 import { buildProjectIndexIncremental } from "./indexer/build-index.js";
+import { summarizeAnalysis } from "./analysisSummary.js";
 import { type IncrementalBuildOptions, type ProjectIndex, type SymbolDef } from "./indexer/types.js";
 import { symbolId } from "./indexer/symbols.js";
 import type { GraphBuildOptions } from "./graphs/types.js";
@@ -231,6 +232,9 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
     const report: ReviewReport = {
       schemaVersion: REVIEW_SCHEMA_VERSION,
       status: "no_changes",
+      ...(reviewReport?.indexReport
+        ? { analysis: summarizeAnalysis({ nativeMode: appliedOptions.native, report: reviewReport.indexReport }) }
+        : {}),
       projectFiles,
       summary: { filesChanged: 0, symbolsChanged: 0, candidateTests: 0 },
       riskSummary,
@@ -329,6 +333,10 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
     changedSymbolIds,
     candidateTests,
     graphDelta,
+    analysis: summarizeAnalysis({
+      index,
+      ...(reviewReport?.indexReport ? { report: reviewReport.indexReport } : {}),
+    }),
     ...(sqlContext ? { sqlContext } : {}),
     diagnostics,
     riskRelevantParseFailures,

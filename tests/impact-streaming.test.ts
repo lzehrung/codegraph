@@ -75,6 +75,7 @@ index 1234567..abcdef0 100644
       provider: "raw",
       diffText,
     });
+    expect(report.analysis?.label).toBeTruthy();
 
     const streamedItems: string[] = [];
     const streamedChangedSymbols: string[] = [];
@@ -133,6 +134,7 @@ index 1234567..abcdef0 100644
       expect(complete.report).toBeDefined();
       expect(complete.report.schemaVersion).toBe(1);
       expect(complete.report.format).toBe("stream-summary");
+      expect(complete.report.analysis?.label).toBeTruthy();
       expect(complete.report.changedFiles.length).toBeGreaterThan(0);
       expect("oldFile" in complete.report.changedFiles[0]!).toBe(false);
       expect(complete.report.changedSymbols.length).toBeGreaterThan(0);

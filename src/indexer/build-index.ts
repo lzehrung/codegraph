@@ -416,7 +416,7 @@ function createIndexBuildRunState(
   graphOptions = normalizeGraphOptions(opts?.graph),
 ): IndexBuildRunState {
   const report = opts?.report;
-  initNativeBackendReport(report);
+  if (report) initNativeBackendReport(report);
   const cacheMode = opts?.cache ?? "off";
   return {
     normalizedProjectRoot: normalizePath(projectRoot),
@@ -731,6 +731,7 @@ async function buildIndexFromFileListShared(
       parsedMap,
       bloomFilterCache,
       ...(projectFiles !== undefined ? { projectFiles } : {}),
+      buildReport: report,
       manifestEntries: manifestEntriesForIndex,
     });
     if (manifestEntries) {
@@ -998,15 +999,11 @@ export async function buildProjectIndexIncremental(
       };
       invalidateCachedDependents();
       if (fileReport) fileReport.changed = changedFiles.size;
-      if (
-        !changedFiles.size &&
-        !deletedTrackedFiles.size &&
-        Object.keys(trackedEntries).length === Object.keys(manifest.files ?? {}).length &&
-        !report
-      ) {
+      if (!changedFiles.size && !deletedTrackedFiles.size) {
         const filesSignature = projectSnapshotFilesSignature(new Map(Object.entries(trackedEntries)));
-        const snapshot = await tryLoadProjectIndexSnapshot(projectRoot, opts, filesSignature);
-        if (snapshot) {
+        const snapshotLoad = await tryLoadProjectIndexSnapshot(projectRoot, opts, filesSignature);
+        if (snapshotLoad) {
+          const snapshot = snapshotLoad.index;
           snapshot.projectFiles = await discoverProjectFiles(projectRoot, {
             ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
           });
@@ -1015,14 +1012,10 @@ export async function buildProjectIndexIncremental(
             snapshot.cacheMode = opts.cache;
             snapshot.cacheRootDir = cacheRoot(projectRoot, opts);
           }
-          if (opts?.useBloomFilters ?? true) {
-            const cache = new (await import("../util/bloomFilter.js")).BloomFilterCache();
-            await mapLimit([...allFiles], conc, async (file) => {
-              const filter = await buildBloomFilterForFile(file);
-              if (filter) cache.set(file, filter);
-            });
-            snapshot.bloomFilters = cache;
+          if (fileReport) {
+            fileReport.cached = allFiles.size;
           }
+          if (timings) timings.graphMs = 0;
           await writeIndexManifestSnapshot({
             projectRoot,
             opts,
@@ -1032,6 +1025,18 @@ export async function buildProjectIndexIncremental(
             manifestReport,
           });
           if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
+          if (report) {
+            if (snapshotLoad.analysisReport?.backend) {
+              report.backend = snapshotLoad.analysisReport.backend;
+            }
+            if (snapshotLoad.analysisReport?.graph) {
+              report.graph = snapshotLoad.analysisReport.graph;
+            }
+            if (!report.backend) {
+              initNativeBackendReport(report);
+            }
+            snapshot.buildReport = report;
+          }
           return snapshot;
         }
       }
@@ -1174,6 +1179,7 @@ export async function buildProjectIndexIncremental(
         parsedMap,
         bloomFilterCache,
         manifestEntries: projectIndexManifestEntries(manifestEntries),
+        buildReport: report,
       });
       await writeProjectIndexSnapshot(projectRoot, opts, index, projectSnapshotFilesSignature(manifestEntries));
       return index;

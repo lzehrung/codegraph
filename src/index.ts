@@ -92,6 +92,7 @@ export { graphToTriples, type Triple, type TripleNode } from "./triples.js";
 
 /** Core graph primitives shared across index, graph, and tool APIs. */
 export type { Pos, Range, FileId, EdgeTo, Edge, Graph } from "./types.js";
+export type { AnalysisBackend, AnalysisMode, AnalysisSummary } from "./analysisSummary.js";
 
 /** Project indexing, navigation, reference search, and API-surface analysis. */
 export {
@@ -174,6 +175,8 @@ export {
   type ICodeReviewSession,
   type SessionOptions,
   type SessionStatus,
+  type SessionStats,
+  type SessionStaleReason,
 } from "./session.js";
 
 /** Preset helpers for build, impact, and session defaults. */

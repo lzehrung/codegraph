@@ -3,7 +3,8 @@
  * Allows incremental results to be emitted as they're discovered
  */
 
-import { type ProjectIndex } from "../indexer/types.js";
+import { type ProjectIndex, type BuildReport } from "../indexer/types.js";
+import { summarizeAnalysis } from "../analysisSummary.js";
 import {
   IMPACT_SCHEMA_VERSION,
   type ImpactOptions,
@@ -121,6 +122,7 @@ function createAsyncQueue<T>(): AsyncQueue<T> {
 }
 
 function buildLightStreamSummaryReport(
+  analysis: ImpactStreamSummaryReport["analysis"],
   normalizedChanges: FileChange[],
   changedSymbols: ChangedSymbol[],
   impactedItems: ImpactItem[],
@@ -131,6 +133,7 @@ function buildLightStreamSummaryReport(
   return {
     schemaVersion: IMPACT_SCHEMA_VERSION,
     format: "stream-summary",
+    ...(analysis ? { analysis } : {}),
     changedFiles: normalizedChanges.map((change) => ({
       file: displayFile(change.path),
       kind: change.kind,
@@ -176,6 +179,10 @@ export function impactItemEmissionKey(item: ImpactItem, partial: boolean): strin
   ].join("|");
 }
 
+export type ImpactStreamingContext = {
+  buildReport?: BuildReport | undefined;
+};
+
 /**
  * Stream impact analysis results as they are discovered.
  *
@@ -191,11 +198,13 @@ export async function* analyzeImpactStreaming(
   projectRoot: string,
   index: ProjectIndex,
   options: ImpactStreamingOptions,
+  context: ImpactStreamingContext = {},
 ): AsyncGenerator<ImpactStreamChunk> {
   try {
     const streamSummary = validateImpactStreamingOptions(options);
     const impactOptions = toImpactOptions(options);
     const displayFile = (filePath: string): string => toImpactReportFilePath(projectRoot, filePath);
+    const analysis = summarizeAnalysis({ index, report: context.buildReport ?? index.buildReport });
     const projectFiles = index.projectFiles ?? (await discoverProjectFiles(projectRoot));
     yield { type: "projectFiles", files: projectFiles };
 
@@ -312,6 +321,7 @@ export async function* analyzeImpactStreaming(
     const report =
       streamSummary === "light"
         ? buildLightStreamSummaryReport(
+            analysis,
             normalizedChanges,
             changedSymbols,
             impactedItems,
@@ -328,6 +338,7 @@ export async function* analyzeImpactStreaming(
             impactedItems,
             diagnostics,
             diff.warning,
+            context,
           );
 
     yield {
@@ -362,6 +373,7 @@ async function buildFullStreamSummaryReport(
   impactedItems: ImpactItem[],
   diagnostics: ImpactStreamSummaryReport["diagnostics"],
   warning: string | undefined,
+  context: ImpactStreamingContext,
 ): Promise<ImpactStreamSummaryReport> {
   const suggestions = await collectImpactReportSuggestions(
     projectRoot,
@@ -377,7 +389,7 @@ async function buildFullStreamSummaryReport(
     changedSymbols,
     impactedItems,
     suggestions,
-    { ...options, compact: false, warning },
+    { ...options, compact: false, warning, buildReport: context.buildReport },
     diagnostics,
   );
   if (fullReport.format !== "full") {
@@ -386,6 +398,7 @@ async function buildFullStreamSummaryReport(
   return {
     schemaVersion: fullReport.schemaVersion,
     format: "stream-summary",
+    ...(fullReport.analysis ? { analysis: fullReport.analysis } : {}),
     changedFiles: fullReport.changedFiles,
     changedSymbols: fullReport.changedSymbols,
     impacted: fullReport.impacted,

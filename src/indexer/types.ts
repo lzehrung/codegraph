@@ -90,6 +90,15 @@ export type SqlNavigationCache = {
     basename: Map<string, SymbolDef[]>;
   };
 };
+export type CachedAnalysisSummary = {
+  mode: "semantic" | "mixed" | "reduced";
+  backend: "native" | "mixed" | "graph-only" | "unknown";
+  parserDegradedFiles: number;
+  fallbackImportExtractionFiles: number;
+  nativeFilesUsed: number;
+  nativeFilesFellBack: number;
+  label: string;
+};
 
 export type ProjectIndex = {
   graph: Graph;
@@ -107,6 +116,8 @@ export type ProjectIndex = {
   sqlNavigation?: SqlNavigationCache;
   manifestEntries?: Map<FileId, ProjectIndexManifestEntry>;
   cacheMode?: BuildOptions["cache"];
+  buildReport?: BuildReport;
+  analysis?: CachedAnalysisSummary;
   cacheRootDir?: string;
 };
 

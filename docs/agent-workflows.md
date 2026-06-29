@@ -6,14 +6,27 @@ Use Codegraph for structural repo questions: architecture, dependency direction,
 
 ## Start here
 
+For code reviews, start with `review`; it is the compact handoff with changed files, changed symbols, candidate tests, risks, duplicate leads, and analysis labels.
+
+```bash
+codegraph review --base HEAD --head WORKTREE --summary
+```
+
+Add `impact` only when you need a wider blast-radius map:
+
+```bash
+codegraph impact --base HEAD --head WORKTREE --pretty
+```
+
 For an unfamiliar repo, keep the first loop bounded and actionable:
 
 ```bash
 codegraph orient --root . --budget small --pretty
-codegraph packet get <file-from-orient> --pretty
+codegraph search "auth user" --json
+codegraph explain <file-from-search-or-orient> --json
 ```
 
-For PR, worktree, or sweeping review tasks, start with `codegraph review --base HEAD --head WORKTREE --summary` or `codegraph impact --base HEAD --head WORKTREE --pretty` instead of orientation.
+For PR, worktree, or sweeping review tasks, prefer `review` first; use `impact` when you need the broader blast radius map instead of the reviewer handoff.
 
 Use `doctor` only when package/runtime state or an existing artifact path is the question.
 Use `search` when the agent has a query but no handle, `explain` when it already knows a file/symbol/SQL object/handle, and `inspect` for a human-readable architecture summary.
@@ -55,11 +68,12 @@ codegraph search "handle login" --mode graph --from src/auth.ts --depth 1 --json
 codegraph explain "<handle-from-search>" --json
 ```
 
-Search results include stable handles, evidence, rank reasons, neighbors, follow-ups, limits, and omitted counts.
+Search results include top-level `analysis` metadata plus stable handles, per-result `provenance`, evidence, rank reasons, neighbors, follow-ups, limits, and omitted counts.
 `explain` accepts those handles plus file paths, symbol names, and SQL object names, then returns bounded dependencies, references, snippets, duplicate context, SQL relation facts, review context, and follow-ups.
 Generated command strings quote dynamic arguments, SQL handles avoid ambiguous basenames, and omission counts stay explicit when packets hit limits.
 
 Agent CLI commands use the incremental index path and default to disk cache.
+Hybrid search is code-first by default. Use `mode: "text"` when you specifically want documentation or prose-heavy matches to outrank implementation symbols.
 Pure path/text searches skip detailed symbol graph construction; hybrid, symbol, SQL, and graph searches keep symbol-aware ranking and neighbors.
 Pass shared index flags only when an agent pass must mirror a specific scan mode; see [docs/cli.md](./cli.md#agent-oriented-commands) for the canonical flag list.
 
@@ -82,7 +96,14 @@ See [MCP server](./mcp.md) for client configuration examples.
 
 ## Session management
 
-For agents performing code reviews or making multiple queries, use sessions to maintain warm caches:
+For agents performing code reviews or making multiple queries, use sessions to maintain warm caches. Use one of these canonical reuse models:
+
+- library callers: one shared `createCodeReviewSession()` per repo snapshot
+- agent hosts: one shared `createAgentSession()` or MCP server per repo snapshot
+
+The local review session refreshes manually with `refresh()` and records stale-snapshot metadata in `getStats()`. Navigation checks the requested file immediately and checks config or added/removed-file drift on the stale-check interval; impact calls add an interval-throttled tracked-file scan before computing the report.
+
+For library callers performing repeated navigation or impact work, use sessions like this:
 
 ```ts
 import { createCodeReviewSession } from "@lzehrung/codegraph";
@@ -344,11 +365,16 @@ codegraph review --base origin/main --head HEAD --include-symbol-details --max-c
 codegraph review --base origin/main --head HEAD --review-depth standard > review.json
 ```
 
-For current local edits, start with a ranked model-readable map, then hand off the compact review summary:
+For current local edits, start with the compact review summary:
+
+```bash
+codegraph review --base HEAD --head WORKTREE --summary
+```
+
+Add a ranked blast-radius map only when needed:
 
 ```bash
 codegraph impact --base HEAD --head WORKTREE --pretty
-codegraph review --base HEAD --head WORKTREE --summary
 ```
 
 Use `--head STAGED` instead of `WORKTREE` when the review should cover only the index. Keep the full JSON review bundle for scripts or agent steps that need `projectFiles`, `graphDelta`, or detailed symbol handles.

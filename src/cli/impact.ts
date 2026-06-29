@@ -1,5 +1,5 @@
 import { buildProjectIndex } from "../indexer/build-index.js";
-import type { BuildOptions, ProjectIndex } from "../indexer/types.js";
+import type { BuildOptions, BuildReport, ProjectIndex } from "../indexer/types.js";
 import {
   analyzeImpactFromDiff,
   type ChangedSymbol,
@@ -162,6 +162,7 @@ function ensureImpactReport(report: ImpactReport | CompactImpactReport): ImpactR
   const result: ImpactReport = {
     schemaVersion: report.schemaVersion,
     format: "full",
+    ...(report.analysis ? { analysis: report.analysis } : {}),
     changedFiles,
     changedSymbols,
     impacted,
@@ -421,6 +422,9 @@ function formatPrettyImpactReport(impactReport: ImpactReport, duplicateSummary?:
     lines.push(`WARNING: ${impactReport.warning}`);
     lines.push("");
   }
+  if (impactReport.analysis) {
+    lines.push(`Analysis: ${impactReport.analysis.label}`);
+  }
   lines.push(`Changed files: ${impactReport.changedFiles.length}`);
   lines.push(`Changed symbols: ${impactReport.changedSymbols.length}`);
   lines.push(`Impacted items: ${impactReport.impacted.length}`);
@@ -478,11 +482,11 @@ export async function handleImpactCommand(context: ImpactCommandContext): Promis
   try {
     const duplicateScope =
       pretty && !mermaid ? parseDuplicateLeadScope(context.getOpt("--duplicates"), "changed") : "off";
-    const index = await buildProjectIndex(
-      context.projectRootFs,
-      buildIndexOptions(context, options, { keepParsedForDuplicates: duplicateScope !== "off" }),
-    );
-    const report = await analyzeImpactFromDiff(context.projectRootFs, index, options as ImpactOptions);
+    const buildReport: BuildReport = { timings: {} };
+    const indexOptions = buildIndexOptions(context, options, { keepParsedForDuplicates: duplicateScope !== "off" });
+    indexOptions.report = buildReport;
+    const index = await buildProjectIndex(context.projectRootFs, indexOptions);
+    const report = await analyzeImpactFromDiff(context.projectRootFs, index, options as ImpactOptions, { buildReport });
     const impactReport = ensureImpactReport(report);
 
     if (mermaid) {

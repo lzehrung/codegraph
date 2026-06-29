@@ -3,18 +3,18 @@ export const CLI_HELP_TEXT = `codegraph - Code analysis and dependency graph too
 Usage: codegraph <command> [options] [path]
 
 Commands:
-  graph         Build dependency graph (default)
-  inspect       Summarize repo structure and recommend next commands
   orient        Build a compact first-turn packet for agent repo context
+  review        Generate code review report
   packet        Retrieve bounded evidence packets by file path or stable target
   search        Ranked agent search across files, symbols, chunks, SQL, and graph context
   explain       Explain a file, symbol, SQL object, or search handle
+  impact        Analyze PR impact
+  inspect       Summarize repo structure and recommend next commands
+  graph         Build dependency graph (default)
   artifact      Build an agent-ready SQLite/graph/report/question bundle
   drift        Compare architecture health between refs or artifacts
   mcp           Serve MCP tools for agent graph navigation
   index         Build the project symbol index
-  impact        Analyze PR impact
-  review        Generate code review report
   goto          Go to definition
   refs          Find references
   deps          List dependencies
@@ -64,20 +64,28 @@ Output Options:
   --output <path>           Write to file instead of stdout
   --stdout                  Write default graph output to stdout
 
-Examples:
-  codegraph graph ./src
-  codegraph graph --fast-graph --mermaid ./src
-  codegraph version
-  codegraph -v
-  codegraph orient ./src --budget small --pretty
-  codegraph packet get file:src%2Fcli.ts --json
-  codegraph doctor
-  codegraph inspect ./src --limit 20
-  codegraph duplicates ./src --min-confidence medium
+Recommended review commands:
+  codegraph review --base HEAD --head WORKTREE --summary
+  codegraph impact --base HEAD --head WORKTREE --pretty  (optional blast-radius follow-up)
   codegraph search "auth user" --json
   codegraph explain src/auth.ts --json
+
+Unfamiliar repo:
+  codegraph orient --root . --budget small --pretty
+
+Examples:
+  codegraph review --base HEAD --head WORKTREE --summary
+  codegraph orient ./src --budget small --pretty
+  codegraph search "auth user" --json
+  codegraph explain src/auth.ts --json
+  codegraph impact --provider git --base HEAD --head WORKTREE
+  codegraph packet get file:src%2Fcli.ts --json
   codegraph artifact build --root . --out codegraph-out --json
   codegraph mcp serve --root . --stdio
+  codegraph inspect ./src --limit 20
+  codegraph duplicates ./src --min-confidence medium
+  codegraph graph ./src
+  codegraph graph --fast-graph --mermaid ./src
   codegraph graph --root . ./src --include-glob "**/*.ts" --ignore-glob "**/*.spec.ts"
   codegraph skill install --agent agents
   codegraph skill install --agent codex
@@ -87,10 +95,11 @@ Examples:
   codegraph skill install --agent opencode
   codegraph skill install --target ~/.codex/skills/codegraph --force
   codegraph skill doctor
-  codegraph impact --provider git --base main --head HEAD
   codegraph impact --provider git --base main --head HEAD --pretty --duplicates off
-  codegraph impact --provider git --base HEAD --head WORKTREE
   codegraph refs --file src/index.ts --line 42 --col 10
+  codegraph doctor
+  codegraph version
+  codegraph -v
 `;
 
 const knownCliCommands = new Set([
@@ -143,7 +152,8 @@ Search Modes:
   sql      Prefer SQL object context
 
 Output:
-  Results include stable handles, rank reasons, evidence, graph neighbors, follow-up commands, limits, and omission counts.
+  Results include top-level analysis metadata plus stable handles, rank reasons, provenance, evidence, graph neighbors, follow-up commands, limits, and omission counts.
+  Hybrid search is code-first by default: source files and symbols outrank docs unless you use text mode or the docs are the strongest remaining evidence.
 
 Index options:
   Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.

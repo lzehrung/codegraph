@@ -1,4 +1,5 @@
 import type { FileId } from "../types.js";
+import type { AnalysisSummary } from "../analysisSummary.js";
 import {
   buildOptionalExportSummary,
   buildOptionalReexportChains,
@@ -11,6 +12,7 @@ import { IMPACT_SCHEMA_VERSION } from "./types.js";
 import type { ImpactCycle, ImpactDiagnostics, ImpactReport, ImpactSuggestion } from "./types.js";
 
 export type FullImpactReportParts = ImpactReportPartsBase & {
+  analysis?: AnalysisSummary;
   diagnostics?: ImpactDiagnostics | undefined;
   warning?: string | undefined;
 };
@@ -19,6 +21,7 @@ export function buildFullImpactReport(parts: FullImpactReportParts): ImpactRepor
   const report: ImpactReport = {
     schemaVersion: IMPACT_SCHEMA_VERSION,
     format: "full",
+    ...(parts.analysis ? { analysis: parts.analysis } : {}),
     ...(parts.projectFiles ? { projectFiles: parts.projectFiles } : {}),
     changedFiles: parts.changedFiles,
     changedSymbols: parts.changedSymbols.map((symbol) => ({

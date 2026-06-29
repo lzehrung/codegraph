@@ -1,3 +1,4 @@
+import type { AnalysisSummary } from "../analysisSummary.js";
 import type { FileId, Range } from "../types.js";
 import { type SymbolHandle, type SymbolDef } from "../indexer/types.js";
 import { type ProjectFileInfo } from "../util/projectFiles.js";
@@ -253,6 +254,7 @@ export type ImpactDiagnostics = {
 export type ImpactStreamSummaryReport = {
   schemaVersion: number;
   format: "stream-summary";
+  analysis?: AnalysisSummary;
   changedFiles: ImpactReport["changedFiles"];
   changedSymbols: ChangedSymbol[];
   impacted: ImpactItem[];
@@ -279,6 +281,7 @@ export const IMPACT_SCHEMA_VERSION = 1;
 export type ImpactReport = {
   schemaVersion: number;
   format: "full";
+  analysis?: AnalysisSummary;
   projectFiles?: ProjectFileInfo[];
   changedFiles: Array<{
     file: FileId;
@@ -315,6 +318,7 @@ export type ImpactReport = {
 export type CompactImpactReport = {
   schemaVersion: number;
   format: "compact";
+  analysis?: AnalysisSummary;
   projectFiles?: ProjectFileInfo[];
   files: FileId[]; // file index -> file path
   changedFiles: Array<{

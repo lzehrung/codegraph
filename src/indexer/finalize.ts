@@ -21,6 +21,7 @@ export async function finalizeProjectIndex(args: {
   bloomFilterCache: BloomFilterCache | undefined;
   projectFiles?: ProjectFileInfo[] | Promise<ProjectFileInfo[]>;
   manifestEntries?: Map<FileId, ProjectIndexManifestEntry>;
+  buildReport?: BuildReport | undefined;
 }): Promise<ProjectIndex> {
   if (args.timings) args.timings.totalMs = Math.round(performance.now() - args.totalStart);
   const projectFiles = await (args.projectFiles ??
@@ -42,6 +43,7 @@ export async function finalizeProjectIndex(args: {
     projectFiles,
     referenceCandidates: buildReferenceCandidateIndex(args.modules),
     ...(args.manifestEntries ? { manifestEntries: args.manifestEntries } : {}),
+    ...(args.buildReport ? { buildReport: args.buildReport } : {}),
     ...(args.opts?.cache ? { cacheMode: args.opts.cache, cacheRootDir: cacheRoot(args.projectRoot, args.opts) } : {}),
   };
 }
