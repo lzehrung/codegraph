@@ -365,10 +365,15 @@ codegraph review --base origin/main --head HEAD --include-symbol-details --max-c
 codegraph review --base origin/main --head HEAD --review-depth standard > review.json
 ```
 
-For current local edits, start with the compact review summary, then add a ranked blast-radius map only when needed:
+For current local edits, start with the compact review summary:
 
 ```bash
 codegraph review --base HEAD --head WORKTREE --summary
+```
+
+Add a ranked blast-radius map only when needed:
+
+```bash
 codegraph impact --base HEAD --head WORKTREE --pretty
 ```
 

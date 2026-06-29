@@ -610,9 +610,15 @@ describe("Cache invalidation and strict hashing", () => {
         backend?: unknown;
         label?: unknown;
       };
+      analysisReport?: {
+        backend?: unknown;
+        graph?: unknown;
+      };
     };
     expect(typeof snapshot.analysis?.backend).toBe("string");
     expect(typeof snapshot.analysis?.label).toBe("string");
+    expect(snapshot.analysisReport?.backend).toBeDefined();
+    expect(snapshot.analysisReport?.graph).toBeDefined();
 
     const db = new DatabaseSync(diskCacheDbPathFor(root));
     try {
@@ -634,6 +640,8 @@ describe("Cache invalidation and strict hashing", () => {
       expect(incremental.buildReport).toBe(report);
       expect(incremental.analysis?.backend).toBe(snapshot.analysis?.backend);
       expect(incremental.analysis?.label).toBe(snapshot.analysis?.label);
+      expect(report.backend).toEqual(snapshot.analysisReport?.backend);
+      expect(report.graph).toEqual(snapshot.analysisReport?.graph);
       const moduleIndex = incremental.byFile.get(normalize(filePath));
       expect(moduleIndex?.locals.some((local) => local.localName === "reportedSnap")).toBe(true);
     } finally {

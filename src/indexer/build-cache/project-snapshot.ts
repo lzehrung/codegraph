@@ -9,7 +9,16 @@ import { BloomFilter, BloomFilterCache } from "../../util/bloomFilter.js";
 import { summarizeAnalysis } from "../../analysisSummary.js";
 import type { AnalysisSummary } from "../../analysisSummary.js";
 import { SymbolKind } from "../types.js";
-import type { BuildOptions, ExportEntry, ImportBinding, ModuleIndex, ProjectIndex, SymbolDef } from "../types.js";
+import type {
+  BackendReport,
+  BuildOptions,
+  ExportEntry,
+  GraphReport,
+  ImportBinding,
+  ModuleIndex,
+  ProjectIndex,
+  SymbolDef,
+} from "../types.js";
 import { cacheRoot } from "./module-cache.js";
 import type { ManifestFileEntry } from "./manifest.js";
 
@@ -26,9 +35,14 @@ type SerializedBloomFilter = {
   bitsBase64: string;
 };
 
+type SnapshotAnalysisReport = {
+  backend?: BackendReport;
+  graph?: GraphReport;
+};
+
 export type LoadedProjectIndexSnapshot = {
   index: ProjectIndex;
-  analysis?: AnalysisSummary;
+  analysisReport?: SnapshotAnalysisReport;
 };
 
 type ProjectIndexSnapshotPayload = {
@@ -44,6 +58,7 @@ type ProjectIndexSnapshotPayload = {
   projectFiles?: ProjectFileInfo[];
   bloomFilters?: Record<string, SerializedBloomFilter>;
   analysis?: AnalysisSummary;
+  analysisReport?: SnapshotAnalysisReport;
 };
 
 export function projectSnapshotFilesSignature(entries: ReadonlyMap<string, ManifestFileEntry>): string {
@@ -110,6 +125,7 @@ export async function tryLoadProjectIndexSnapshot(
         ...(payload.analysis ? { analysis: payload.analysis } : {}),
       },
       ...(payload.analysis ? { analysis: payload.analysis } : {}),
+      ...(payload.analysisReport ? { analysisReport: payload.analysisReport } : {}),
     };
   } catch {
     return null;
@@ -126,6 +142,7 @@ export async function writeProjectIndexSnapshot(
   const serializedBloomFilters = index.bloomFilters
     ? serializeBloomFilterCache(index.bloomFilters, index.byFile.keys())
     : undefined;
+  const snapshotAnalysisReport = analysisReportFromBuildReport(index.buildReport);
   const snapshotAnalysis = index.buildReport ? summarizeAnalysis({ index, report: index.buildReport }) : index.analysis;
   const payload: ProjectIndexSnapshotPayload = {
     version: PROJECT_SNAPSHOT_VERSION,
@@ -142,6 +159,7 @@ export async function writeProjectIndexSnapshot(
     ...(index.projectFiles ? { projectFiles: index.projectFiles } : {}),
     ...(serializedBloomFilters ? { bloomFilters: serializedBloomFilters } : {}),
     ...(snapshotAnalysis ? { analysis: snapshotAnalysis } : {}),
+    ...(snapshotAnalysisReport ? { analysisReport: snapshotAnalysisReport } : {}),
   };
   try {
     const snapshotPath = projectSnapshotPath(projectRoot, opts);
@@ -219,9 +237,86 @@ function isProjectIndexSnapshotPayload(value: unknown): value is ProjectIndexSna
     (payload.nativeMode === undefined || isSnapshotNativeMode(payload.nativeMode)) &&
     (payload.bloomFilters === undefined || isSerializedBloomFilterRecord(payload.bloomFilters)) &&
     (payload.analysis === undefined || isAnalysisSummary(payload.analysis)) &&
+    (payload.analysisReport === undefined || isSnapshotAnalysisReport(payload.analysisReport)) &&
     (payload.projectFiles === undefined ||
       (Array.isArray(payload.projectFiles) && payload.projectFiles.every(isProjectFileInfo)))
   );
+}
+
+function analysisReportFromBuildReport(report: ProjectIndex["buildReport"]): SnapshotAnalysisReport | undefined {
+  if (!report?.backend && !report?.graph) {
+    return undefined;
+  }
+  return {
+    ...(report.backend ? { backend: report.backend } : {}),
+    ...(report.graph ? { graph: report.graph } : {}),
+  };
+}
+
+function isSnapshotAnalysisReport(value: unknown): value is SnapshotAnalysisReport {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const report = value as Partial<SnapshotAnalysisReport>;
+  return (
+    (report.backend === undefined || isBackendReport(report.backend)) &&
+    (report.graph === undefined || isGraphReport(report.graph))
+  );
+}
+
+function isBackendReport(value: unknown): value is BackendReport {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const report = value as Partial<BackendReport>;
+  return (
+    !!report.native &&
+    isNativeBackendReport(report.native) &&
+    (report.parser === undefined || isParserBackendDegradationReport(report.parser))
+  );
+}
+
+function isNativeBackendReport(value: unknown): value is BackendReport["native"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const report = value as Partial<BackendReport["native"]>;
+  return (
+    typeof report.available === "boolean" &&
+    typeof report.enabled === "boolean" &&
+    Array.isArray(report.supportedLanguageIds) &&
+    report.supportedLanguageIds.every((languageId) => typeof languageId === "string") &&
+    typeof report.filesUsed === "number" &&
+    typeof report.filesFellBack === "number" &&
+    isUnknownRecord(report.fallbackReasons) &&
+    isUnknownRecord(report.byLanguage) &&
+    Array.isArray(report.errors)
+  );
+}
+
+function isParserBackendDegradationReport(value: unknown): value is NonNullable<BackendReport["parser"]> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const report = value as Partial<NonNullable<BackendReport["parser"]>>;
+  return typeof report.total === "number" && isNumberRecord(report.byLanguage) && Array.isArray(report.files);
+}
+
+function isGraphReport(value: unknown): value is GraphReport {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const report = value as Partial<GraphReport>;
+  return !!report.fallbackImportExtraction && isFallbackImportExtractionReport(report.fallbackImportExtraction);
+}
+
+function isFallbackImportExtractionReport(value: unknown): value is GraphReport["fallbackImportExtraction"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const report = value as Partial<GraphReport["fallbackImportExtraction"]>;
+  return (
+    typeof report.total === "number" &&
+    isNumberRecord(report.byLanguage) &&
+    isUnknownRecord(report.files) &&
+    (report.byReason === undefined || isNumberRecord(report.byReason))
+  );
+}
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNumberRecord(value: unknown): value is Record<string, number> {
+  return isUnknownRecord(value) && Object.values(value).every((entry) => typeof entry === "number");
 }
 
 function isAnalysisSummary(value: unknown): value is AnalysisSummary {

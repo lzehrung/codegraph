@@ -211,6 +211,7 @@ export class CodeReviewSession implements ICodeReviewSession {
   private lastStaleCheckAt = 0;
   private lastTrackedFileScanAt = 0;
   private lastImpactProjectDriftCheckAt = 0;
+  private lastPassiveStaleCheckAt = 0;
   private lastRefreshAt: number | undefined;
   private lastRefreshReason: "initialization" | "manual" | "stale_check" | undefined;
 
@@ -381,6 +382,7 @@ export class CodeReviewSession implements ICodeReviewSession {
     this.configSignature = this.statSignature(this.configFilePath());
     this.staleReason = undefined;
     this.lastStaleCheckAt = Date.now();
+    this.lastPassiveStaleCheckAt = 0;
     this.lastTrackedFileScanAt = 0;
     this.lastImpactProjectDriftCheckAt = 0;
     this.lastRefreshAt = this.lastStaleCheckAt;
@@ -419,8 +421,8 @@ export class CodeReviewSession implements ICodeReviewSession {
   private checkForStaleness(options: { force?: boolean } = {}): void {
     if (this.status !== "ready" || !this.index) return;
     const now = Date.now();
-    if (!options.force && now - this.lastStaleCheckAt < CodeReviewSession.STALE_CHECK_INTERVAL_MS) return;
-    this.lastStaleCheckAt = now;
+    if (!options.force && now - this.lastPassiveStaleCheckAt < CodeReviewSession.STALE_CHECK_INTERVAL_MS) return;
+    this.lastPassiveStaleCheckAt = now;
 
     const configSignature = this.statSignature(this.configFilePath());
     if (configSignature !== this.configSignature) {
