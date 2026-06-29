@@ -64,11 +64,14 @@ Output Options:
   --output <path>           Write to file instead of stdout
   --stdout                  Write default graph output to stdout
 
-Recommended first commands:
+Recommended review commands:
   codegraph review --base HEAD --head WORKTREE --summary
-  codegraph impact --base HEAD --head WORKTREE --pretty
+  codegraph impact --base HEAD --head WORKTREE --pretty  (optional blast-radius follow-up)
   codegraph search "auth user" --json
   codegraph explain src/auth.ts --json
+
+Unfamiliar repo:
+  codegraph orient --root . --budget small --pretty
 
 Examples:
   codegraph review --base HEAD --head WORKTREE --summary

@@ -6,7 +6,7 @@ import fsp from "node:fs/promises";
 import { buildProjectIndex, buildProjectIndexFromFiles, buildReviewReport } from "../src/index.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
 import * as indexerNavigation from "../src/indexer/navigation.js";
-import type { IncrementalBuildOptions, SymbolDef } from "../src/indexer/types.js";
+import type { BuildReport, IncrementalBuildOptions, SymbolDef } from "../src/indexer/types.js";
 import * as impactMap from "../src/impact/map.js";
 import { runGit } from "./helpers/git.js";
 
@@ -431,6 +431,42 @@ describe("Review report", () => {
     expect(report.status).toBe("no_changes");
     expect(report.base).toBe("HEAD");
     expect(report.head).toBe("HEAD");
+  });
+
+  it("reports graph-only analysis for no-change native-off reviews", async () => {
+    const root = await mkTmpDir("dg-review-git-no-changes-native-off-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "test@git.local"]);
+    runGit(root, ["config", "user.name", "Codegraph Bot"]);
+    await fsp.writeFile(path.join(root, "tracked.ts"), `export const value = 1;\n`, "utf8");
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "initial"]);
+    const indexReport: BuildReport = {
+      timings: {},
+      backend: {
+        native: {
+          available: true,
+          enabled: false,
+          supportedLanguageIds: [],
+          filesUsed: 0,
+          filesFellBack: 0,
+          fallbackReasons: {},
+          byLanguage: {},
+          errors: [],
+        },
+      },
+    };
+
+    const report = await buildReviewReport(root, {
+      gitBase: "HEAD",
+      native: "off",
+      report: { timings: {}, indexReport },
+    });
+
+    expect(report.status).toBe("no_changes");
+    expect(report.analysis?.backend).toBe("graph-only");
+    expect(report.analysis?.mode).toBe("reduced");
+    expect(report.analysis?.label).toBe("reduced graph-only");
   });
 
   it("applies discovery filters to changed git comparisons", async () => {

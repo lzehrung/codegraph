@@ -101,7 +101,7 @@ For agents performing code reviews or making multiple queries, use sessions to m
 - library callers: one shared `createCodeReviewSession()` per repo snapshot
 - agent hosts: one shared `createAgentSession()` or MCP server per repo snapshot
 
-The local review session refreshes manually with `refresh()` and records stale-snapshot metadata in `getStats()`. Navigation auto-refreshes for config changes, added or removed files, or edits to the requested file; impact calls add an interval-throttled tracked-file scan before computing the report.
+The local review session refreshes manually with `refresh()` and records stale-snapshot metadata in `getStats()`. Navigation checks the requested file immediately and checks config or added/removed-file drift on the stale-check interval; impact calls add an interval-throttled tracked-file scan before computing the report.
 
 For library callers performing repeated navigation or impact work, use sessions like this:
 

@@ -448,8 +448,7 @@ export class CodeReviewSession implements ICodeReviewSession {
       (options.scanTrackedFiles && now - this.lastTrackedFileScanAt >= CodeReviewSession.STALE_CHECK_INTERVAL_MS);
     const cheapCheckDue =
       options.force ||
-      options.scanTrackedFiles ||
-      now - this.lastStaleCheckAt >= CodeReviewSession.STALE_CHECK_INTERVAL_MS;
+      (!options.scanTrackedFiles && now - this.lastStaleCheckAt >= CodeReviewSession.STALE_CHECK_INTERVAL_MS);
     if (!trackedScanDue && !cheapCheckDue) return;
 
     if (trackedScanDue) {

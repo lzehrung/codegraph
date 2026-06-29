@@ -548,6 +548,61 @@ index 1234567..abcdef0 100644
     }
   });
 
+  test("should not let impact postpone navigation directory checks", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-impact-navigation-timer-"));
+    try {
+      const mainPath = path.join(root, "main.ts");
+      const latePath = path.join(root, "late.ts");
+      await fsp.writeFile(mainPath, "import { late } from './late';\nexport const value = late();\n", "utf8");
+      const session = await createCodeReviewSession({
+        root,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+      Object.defineProperty(session, "lastStaleCheckAt", {
+        configurable: true,
+        value: 0,
+        writable: true,
+      });
+      Object.defineProperty(session, "lastTrackedFileScanAt", {
+        configurable: true,
+        value: 0,
+        writable: true,
+      });
+
+      await session.analyzeImpact({
+        provider: "raw",
+        diffText: `diff --git a/main.ts b/main.ts
+index 1234567..abcdef0 100644
+--- a/main.ts
++++ b/main.ts
+@@ -1,2 +1,2 @@
+ import { late } from './late';
+-export const value = late();
++export const value = late() + 1;
+`,
+      });
+      await fsp.writeFile(latePath, "export function late() { return 1; }\n", "utf8");
+
+      const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+      try {
+        const result = await session.goToDefinition({
+          file: mainPath,
+          line: 2,
+          column: 22,
+        });
+
+        expect(result.status).toBeDefined();
+        expect(session.getStats().lastRefreshReason).toBe("stale_check");
+        expect(buildSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        buildSpy.mockRestore();
+        session.dispose();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("should auto-refresh before navigation when a new source file is added", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-added-file-"));
     try {

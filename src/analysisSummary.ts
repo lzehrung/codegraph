@@ -17,8 +17,9 @@ export type AnalysisSummary = {
 function deriveAnalysisBackend(input: {
   index?: ProjectIndex | undefined;
   report?: BuildReport | undefined;
+  nativeMode?: ProjectIndex["nativeMode"] | undefined;
 }): AnalysisBackend {
-  if (input.index?.nativeMode === "off") {
+  if (input.nativeMode === "off" || input.index?.nativeMode === "off") {
     return "graph-only";
   }
   const nativeReport = input.report?.backend?.native;
@@ -78,6 +79,7 @@ export function formatAnalysisSummaryLabel(summary: AnalysisSummary): string {
 
 export function summarizeAnalysis(input: {
   index?: ProjectIndex | undefined;
+  nativeMode?: ProjectIndex["nativeMode"] | undefined;
   report?: BuildReport | undefined;
 }): AnalysisSummary {
   const parserDegradedFiles = input.report?.backend?.parser?.total ?? 0;
