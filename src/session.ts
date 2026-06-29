@@ -210,6 +210,7 @@ export class CodeReviewSession implements ICodeReviewSession {
   private forceFullRefreshOnNextStaleCheck = false;
   private lastStaleCheckAt = 0;
   private lastTrackedFileScanAt = 0;
+  private lastImpactProjectDriftCheckAt = 0;
   private lastRefreshAt: number | undefined;
   private lastRefreshReason: "initialization" | "manual" | "stale_check" | undefined;
 
@@ -381,6 +382,7 @@ export class CodeReviewSession implements ICodeReviewSession {
     this.staleReason = undefined;
     this.lastStaleCheckAt = Date.now();
     this.lastTrackedFileScanAt = 0;
+    this.lastImpactProjectDriftCheckAt = 0;
     this.lastRefreshAt = this.lastStaleCheckAt;
     this.lastRefreshReason = reason;
   }
@@ -446,10 +448,14 @@ export class CodeReviewSession implements ICodeReviewSession {
     const trackedScanDue =
       options.force ||
       (options.scanTrackedFiles && now - this.lastTrackedFileScanAt >= CodeReviewSession.STALE_CHECK_INTERVAL_MS);
-    const cheapCheckDue =
+    const navigationProjectDriftDue =
       options.force ||
       (!options.scanTrackedFiles && now - this.lastStaleCheckAt >= CodeReviewSession.STALE_CHECK_INTERVAL_MS);
-    if (!trackedScanDue && !cheapCheckDue) return;
+    const impactProjectDriftDue =
+      options.force ||
+      (options.scanTrackedFiles &&
+        now - this.lastImpactProjectDriftCheckAt >= CodeReviewSession.STALE_CHECK_INTERVAL_MS);
+    if (!trackedScanDue && !navigationProjectDriftDue && !impactProjectDriftDue) return;
 
     if (trackedScanDue) {
       this.lastTrackedFileScanAt = now;
@@ -461,8 +467,19 @@ export class CodeReviewSession implements ICodeReviewSession {
       }
     }
 
-    if (!cheapCheckDue) return;
-    this.lastStaleCheckAt = now;
+    if (!navigationProjectDriftDue && !impactProjectDriftDue) return;
+    if (navigationProjectDriftDue) {
+      this.lastStaleCheckAt = now;
+    }
+    if (impactProjectDriftDue) {
+      this.lastImpactProjectDriftCheckAt = now;
+    }
+    const configSignature = this.statSignature(this.configFilePath());
+    if (configSignature !== this.configSignature) {
+      this.staleReason = "config_changed";
+      this.forceFullRefreshOnNextStaleCheck = false;
+      return;
+    }
     const projectFilesChanged = this.projectDirectoriesChanged();
     this.staleReason = projectFilesChanged ? "tracked_files_changed" : undefined;
     this.forceFullRefreshOnNextStaleCheck = projectFilesChanged;

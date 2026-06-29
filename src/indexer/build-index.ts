@@ -1001,8 +1001,9 @@ export async function buildProjectIndexIncremental(
       if (fileReport) fileReport.changed = changedFiles.size;
       if (!changedFiles.size && !deletedTrackedFiles.size) {
         const filesSignature = projectSnapshotFilesSignature(new Map(Object.entries(trackedEntries)));
-        const snapshot = await tryLoadProjectIndexSnapshot(projectRoot, opts, filesSignature);
-        if (snapshot) {
+        const snapshotLoad = await tryLoadProjectIndexSnapshot(projectRoot, opts, filesSignature);
+        if (snapshotLoad) {
+          const snapshot = snapshotLoad.index;
           snapshot.projectFiles = await discoverProjectFiles(projectRoot, {
             ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
           });
@@ -1026,11 +1027,18 @@ export async function buildProjectIndexIncremental(
           if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
           if (report) {
             initNativeBackendReport(report);
-            if (snapshot.buildReport?.backend) {
-              report.backend = snapshot.buildReport.backend;
+            const snapshotBackend = snapshotLoad.buildReport?.backend;
+            if (snapshotBackend?.native && report.backend) {
+              report.backend.native.filesUsed = snapshotBackend.native.filesUsed;
+              report.backend.native.filesFellBack = snapshotBackend.native.filesFellBack;
+              report.backend.native.fallbackReasons = snapshotBackend.native.fallbackReasons;
+              report.backend.native.byLanguage = snapshotBackend.native.byLanguage;
             }
-            if (snapshot.buildReport?.graph) {
-              report.graph = snapshot.buildReport.graph;
+            if (snapshotBackend?.parser && report.backend) {
+              report.backend.parser = snapshotBackend.parser;
+            }
+            if (snapshotLoad.buildReport?.graph) {
+              report.graph = snapshotLoad.buildReport.graph;
             }
             snapshot.buildReport = report;
           }

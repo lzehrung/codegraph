@@ -365,11 +365,11 @@ codegraph review --base origin/main --head HEAD --include-symbol-details --max-c
 codegraph review --base origin/main --head HEAD --review-depth standard > review.json
 ```
 
-For current local edits, start with a ranked model-readable map, then hand off the compact review summary:
+For current local edits, start with the compact review summary, then add a ranked blast-radius map only when needed:
 
 ```bash
-codegraph impact --base HEAD --head WORKTREE --pretty
 codegraph review --base HEAD --head WORKTREE --summary
+codegraph impact --base HEAD --head WORKTREE --pretty
 ```
 
 Use `--head STAGED` instead of `WORKTREE` when the review should cover only the index. Keep the full JSON review bundle for scripts or agent steps that need `projectFiles`, `graphDelta`, or detailed symbol handles.
