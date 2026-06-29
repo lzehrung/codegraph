@@ -82,6 +82,9 @@ export function summarizeAnalysis(input: {
   nativeMode?: ProjectIndex["nativeMode"] | undefined;
   report?: BuildReport | undefined;
 }): AnalysisSummary {
+  if (input.index?.analysis) {
+    return input.index.analysis;
+  }
   const parserDegradedFiles = input.report?.backend?.parser?.total ?? 0;
   const fallbackImportExtractionFiles = input.report?.graph?.fallbackImportExtraction?.total ?? 0;
   const nativeFilesUsed = input.report?.backend?.native?.filesUsed ?? 0;

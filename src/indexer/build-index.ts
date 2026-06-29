@@ -1027,19 +1027,6 @@ export async function buildProjectIndexIncremental(
           if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
           if (report) {
             initNativeBackendReport(report);
-            const snapshotBackend = snapshotLoad.buildReport?.backend;
-            if (snapshotBackend?.native && report.backend) {
-              report.backend.native.filesUsed = snapshotBackend.native.filesUsed;
-              report.backend.native.filesFellBack = snapshotBackend.native.filesFellBack;
-              report.backend.native.fallbackReasons = snapshotBackend.native.fallbackReasons;
-              report.backend.native.byLanguage = snapshotBackend.native.byLanguage;
-            }
-            if (snapshotBackend?.parser && report.backend) {
-              report.backend.parser = snapshotBackend.parser;
-            }
-            if (snapshotLoad.buildReport?.graph) {
-              report.graph = snapshotLoad.buildReport.graph;
-            }
             snapshot.buildReport = report;
           }
           return snapshot;

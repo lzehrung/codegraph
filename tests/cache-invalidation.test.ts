@@ -601,44 +601,18 @@ describe("Cache invalidation and strict hashing", () => {
     const filePath = path.join(root, "foo.ts");
     await fsp.writeFile(filePath, `export const reportedSnap = 1;\n`, "utf8");
 
-    await buildProjectIndex(root, { threads: 2, cache: "disk" });
+    const initialReport: BuildReport = { timings: {} };
+    await buildProjectIndex(root, { threads: 2, cache: "disk", report: initialReport });
     const snapshotPath = projectSnapshotPathFor(root);
     await expect(fsp.stat(snapshotPath)).resolves.toBeTruthy();
-    const snapshot = JSON.parse(await fsp.readFile(snapshotPath, "utf8")) as Record<string, unknown>;
-    snapshot.buildReport = {
-      backend: {
-        native: {
-          available: true,
-          enabled: true,
-          supportedLanguageIds: ["typescript"],
-          filesUsed: 7,
-          filesFellBack: 1,
-          fallbackReasons: { queryFailure: 1 },
-          byLanguage: {
-            typescript: {
-              filesSeen: 8,
-              filesUsed: 7,
-              filesFellBack: 1,
-              fallbackReasons: { queryFailure: 1 },
-            },
-          },
-          errors: [],
-        },
-      },
-      graph: {
-        fallbackImportExtraction: {
-          total: 2,
-          byLanguage: { typescript: 2 },
-          files: {
-            [normalize(filePath)]: {
-              language: "typescript",
-              reason: "parse_error",
-            },
-          },
-        },
-      },
+    const snapshot = JSON.parse(await fsp.readFile(snapshotPath, "utf8")) as {
+      analysis?: {
+        backend?: unknown;
+        label?: unknown;
+      };
     };
-    await fsp.writeFile(snapshotPath, JSON.stringify(snapshot), "utf8");
+    expect(typeof snapshot.analysis?.backend).toBe("string");
+    expect(typeof snapshot.analysis?.label).toBe("string");
 
     const db = new DatabaseSync(diskCacheDbPathFor(root));
     try {
@@ -658,9 +632,8 @@ describe("Cache invalidation and strict hashing", () => {
 
       expect(prepSpy).not.toHaveBeenCalled();
       expect(incremental.buildReport).toBe(report);
-      expect(report.backend?.native.filesUsed).toBe(7);
-      expect(report.backend?.native.filesFellBack).toBe(1);
-      expect(report.graph?.fallbackImportExtraction.total).toBe(2);
+      expect(incremental.analysis?.backend).toBe(snapshot.analysis?.backend);
+      expect(incremental.analysis?.label).toBe(snapshot.analysis?.label);
       const moduleIndex = incremental.byFile.get(normalize(filePath));
       expect(moduleIndex?.locals.some((local) => local.localName === "reportedSnap")).toBe(true);
     } finally {
