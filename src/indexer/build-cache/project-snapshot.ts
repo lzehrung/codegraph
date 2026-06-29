@@ -124,7 +124,6 @@ export async function tryLoadProjectIndexSnapshot(
         ...index,
         ...(payload.analysis ? { analysis: payload.analysis } : {}),
       },
-      ...(payload.analysis ? { analysis: payload.analysis } : {}),
       ...(payload.analysisReport ? { analysisReport: payload.analysisReport } : {}),
     };
   } catch {
