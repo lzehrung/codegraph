@@ -1026,6 +1026,12 @@ export async function buildProjectIndexIncremental(
           if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
           if (report) {
             initNativeBackendReport(report);
+            if (snapshot.buildReport?.backend) {
+              report.backend = snapshot.buildReport.backend;
+            }
+            if (snapshot.buildReport?.graph) {
+              report.graph = snapshot.buildReport.graph;
+            }
             snapshot.buildReport = report;
           }
           return snapshot;
@@ -1170,6 +1176,7 @@ export async function buildProjectIndexIncremental(
         parsedMap,
         bloomFilterCache,
         manifestEntries: projectIndexManifestEntries(manifestEntries),
+        buildReport: report,
       });
       await writeProjectIndexSnapshot(projectRoot, opts, index, projectSnapshotFilesSignature(manifestEntries));
       return index;

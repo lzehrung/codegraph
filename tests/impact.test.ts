@@ -6,8 +6,9 @@ import { SymbolKind } from "../src/index.js";
 import { parseUnifiedDiff } from "../src/impact/parse.js";
 import { analyzeImpactFromDiff, listCandidateTestFiles } from "../src/impact/index.js";
 import { buildImpactReport } from "../src/impact/report.js";
+import { summarizeAnalysis } from "../src/analysisSummary.js";
 import { CompactImpactReport, type ImpactItem } from "../src/impact/types.js";
-import type { BuildReport } from "../src/indexer/types.js";
+import type { BuildReport, ProjectIndex } from "../src/indexer/types.js";
 import type { Range } from "../src/types.js";
 import { createTestIndex } from "./test-utils.js";
 import { buildProjectIndexFromFiles } from "../src/index.js";
@@ -375,6 +376,33 @@ index 1234567..abcdef0 100644
       expect("oldFile" in report.changedFiles[0]!).toBe(false);
       expect(report.changedSymbols.length).toBeGreaterThanOrEqual(0); // May be 0 if the new function isn't properly detected
       expect(Array.isArray(report.impacted)).toBe(true);
+    });
+
+    it("should report graph-only analysis when native mode is disabled", () => {
+      const report: BuildReport = {
+        timings: {},
+        backend: {
+          native: {
+            available: true,
+            enabled: false,
+            supportedLanguageIds: [],
+            filesUsed: 0,
+            filesFellBack: 0,
+            fallbackReasons: {},
+            byLanguage: {},
+            errors: [],
+          },
+        },
+      };
+
+      const summary = summarizeAnalysis({
+        index: { nativeMode: "off" } as ProjectIndex,
+        report,
+      });
+
+      expect(summary.backend).toBe("graph-only");
+      expect(summary.mode).toBe("reduced");
+      expect(summary.label).toBe("reduced graph-only");
     });
 
     it("rejects raw diff files outside the project root", async () => {

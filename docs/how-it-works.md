@@ -118,7 +118,7 @@ Language adapters expose:
 - Call compatibility runs only for changed callable signatures with provider-backed signature extraction and high-confidence callsite argument counts.
 - Hints compare arity only. They do not perform type checking, overload resolution, data-flow analysis, macro expansion, or dynamic dispatch.
 - Existing impact filters apply before hints are emitted, so ignored files and tests excluded by default stay out of call compatibility results.
-- Long-lived `CodeReviewSession` instances also watch tracked file and config signatures. When the working tree drifts, the next navigation or impact call refreshes the cached snapshot before serving results, and `getStats()` exposes stale/refresh metadata for callers that want to surface it.
+- Long-lived `CodeReviewSession` instances keep cheap freshness baselines for config files and project-directory mtimes. Navigation also checks the requested file signature, while impact calls add an interval-throttled tracked-file scan before reuse. When those signals show drift, the session refreshes before serving results, and `getStats()` exposes stale/refresh metadata for callers that want to surface it.
 
 ### 6. AST grep
 

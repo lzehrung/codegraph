@@ -66,7 +66,7 @@ Output Options:
 
 Recommended first commands:
   codegraph review --base HEAD --head WORKTREE --summary
-  codegraph orient --root . --budget small --pretty
+  codegraph impact --base HEAD --head WORKTREE --pretty
   codegraph search "auth user" --json
   codegraph explain src/auth.ts --json
 

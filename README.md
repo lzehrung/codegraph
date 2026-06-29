@@ -77,13 +77,16 @@ npm run build
 
 `npm run build` always rebuilds `dist/`. If Cargo is available, it also requires the local native workspace build to succeed; if Cargo is unavailable, it still completes with the JavaScript build output and a warning.
 
-Then start with the default workflow:
+Then start with the default workflow. For code reviews, the lowest-friction loop is `review --summary` first, `impact --pretty` only when you need blast radius, then `search` or `explain` on a file or symbol named in the summary; use review JSON when a follow-up needs stable handles.
 
 ```bash
-# daily worktree review
+# compact reviewer handoff for current edits
 node ./dist/cli.js review --base HEAD --head WORKTREE --summary
 
-# initial repo orientation with next-step suggestions
+# broader blast-radius map when the review packet needs expansion
+node ./dist/cli.js impact --base HEAD --head WORKTREE --pretty
+
+# bounded repo orientation with next-step suggestions
 node ./dist/cli.js orient --root . --budget small --pretty
 
 # find and explain a concrete anchor
@@ -124,7 +127,7 @@ Choose output by consumer:
 Use these as starting points, then see [docs/cli.md](./docs/cli.md) for all flags, defaults, and output contracts.
 
 ```bash
-# review-first workflow for current edits
+# fastest code-review handoff for current edits
 codegraph review --base HEAD --head WORKTREE --summary
 codegraph impact --base HEAD --head WORKTREE --pretty
 

@@ -12,9 +12,10 @@ Numeric options such as `--limit`, `--threads`, `--depth`, `--max-refs`, and tok
 
 Default workflow:
 
-- current edits: `codegraph review --base HEAD --head WORKTREE --summary`
+- code review: `codegraph review --base HEAD --head WORKTREE --summary`
+- blast-radius follow-up: `codegraph impact --base HEAD --head WORKTREE --pretty`
 - unfamiliar repo: `codegraph orient --root . --budget small --pretty`
-- follow-up anchor: `codegraph search "<query>" --json` then `codegraph explain <handle|file|symbol>`
+- targeted follow-up: `codegraph search "<query>" --json` then `codegraph explain <handle|file|symbol>`
 
 ## Runtime selection
 
@@ -51,7 +52,7 @@ Cache and manifest reuse is rooted at `--root`. Reusing a project root lets comm
 ### Dependency graphs
 
 ```bash
-# First-pass review for current local edits
+# Fast code-review handoff for current local edits
 codegraph review --base HEAD --head WORKTREE --summary
 codegraph impact --base HEAD --head WORKTREE --pretty
 

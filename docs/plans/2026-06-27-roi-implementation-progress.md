@@ -81,7 +81,7 @@ All ROI plan checklist items are complete.
 
 ### Repo-wide validation
 
-- `npm run check` passes.
+- `npm run check` passed in the implementation checkout; rerun it in the target native-build environment before merge.
 
 ## Working tree notes
 

@@ -209,6 +209,7 @@ export class CodeReviewSession implements ICodeReviewSession {
   private staleReason: SessionStaleReason | undefined;
   private forceFullRefreshOnNextStaleCheck = false;
   private lastStaleCheckAt = 0;
+  private lastTrackedFileScanAt = 0;
   private lastRefreshAt: number | undefined;
   private lastRefreshReason: "initialization" | "manual" | "stale_check" | undefined;
 
@@ -379,6 +380,7 @@ export class CodeReviewSession implements ICodeReviewSession {
     this.configSignature = this.statSignature(this.configFilePath());
     this.staleReason = undefined;
     this.lastStaleCheckAt = Date.now();
+    this.lastTrackedFileScanAt = 0;
     this.lastRefreshAt = this.lastStaleCheckAt;
     this.lastRefreshReason = reason;
   }
@@ -430,7 +432,7 @@ export class CodeReviewSession implements ICodeReviewSession {
     this.forceFullRefreshOnNextStaleCheck = projectFilesChanged;
   }
 
-  private checkForStalenessNow(options: { force?: boolean; file?: string } = {}): void {
+  private checkForStalenessNow(options: { force?: boolean; file?: string; scanTrackedFiles?: boolean } = {}): void {
     if (this.status !== "ready" || !this.index) return;
     const now = Date.now();
     const targetReason = options.file ? this.refreshNeededFromTrackedFile(options.file) : undefined;
@@ -440,9 +442,18 @@ export class CodeReviewSession implements ICodeReviewSession {
       this.forceFullRefreshOnNextStaleCheck = false;
       return;
     }
-    if (!options.force && now - this.lastStaleCheckAt < CodeReviewSession.STALE_CHECK_INTERVAL_MS) return;
-    this.lastStaleCheckAt = now;
-    if (options.force) {
+
+    const trackedScanDue =
+      options.force ||
+      (options.scanTrackedFiles && now - this.lastTrackedFileScanAt >= CodeReviewSession.STALE_CHECK_INTERVAL_MS);
+    const cheapCheckDue =
+      options.force ||
+      options.scanTrackedFiles ||
+      now - this.lastStaleCheckAt >= CodeReviewSession.STALE_CHECK_INTERVAL_MS;
+    if (!trackedScanDue && !cheapCheckDue) return;
+
+    if (trackedScanDue) {
+      this.lastTrackedFileScanAt = now;
       const trackedReason = this.refreshNeededFromTrackedFiles();
       if (trackedReason) {
         this.staleReason = trackedReason;
@@ -450,6 +461,9 @@ export class CodeReviewSession implements ICodeReviewSession {
         return;
       }
     }
+
+    if (!cheapCheckDue) return;
+    this.lastStaleCheckAt = now;
     const projectFilesChanged = this.projectDirectoriesChanged();
     this.staleReason = projectFilesChanged ? "tracked_files_changed" : undefined;
     this.forceFullRefreshOnNextStaleCheck = projectFilesChanged;
@@ -552,7 +566,9 @@ export class CodeReviewSession implements ICodeReviewSession {
     return this.index;
   }
 
-  private async ensureFreshIndex(options: { force?: boolean; file?: string } = {}): Promise<ProjectIndex> {
+  private async ensureFreshIndex(
+    options: { force?: boolean; file?: string; scanTrackedFiles?: boolean } = {},
+  ): Promise<ProjectIndex> {
     this.checkExpiration();
     if (this.refreshPromise) {
       await this.refreshPromise;
@@ -582,7 +598,7 @@ export class CodeReviewSession implements ICodeReviewSession {
    * Results are cached in the warm index
    */
   async analyzeImpact(options: ImpactOptions): Promise<ImpactReport | CompactImpactReport> {
-    const index = await this.ensureFreshIndex();
+    const index = await this.ensureFreshIndex({ scanTrackedFiles: true });
     requireSessionImpactProvider(options);
     return await analyzeImpactFromDiff(this.root, index, options, { buildReport: this.buildReport });
   }
@@ -592,7 +608,7 @@ export class CodeReviewSession implements ICodeReviewSession {
    * Better for agents as they can start processing immediately
    */
   async *analyzeImpactStream(options: ImpactStreamingOptions): AsyncGenerator<ImpactStreamChunk> {
-    const index = await this.ensureFreshIndex();
+    const index = await this.ensureFreshIndex({ scanTrackedFiles: true });
     requireSessionImpactProvider(options);
     yield* analyzeImpactStreaming(this.root, index, options, { buildReport: this.buildReport });
   }

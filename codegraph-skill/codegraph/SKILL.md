@@ -18,16 +18,14 @@ Do not use Codegraph as the only evidence for runtime behavior; pair it with tes
 
 ## First Move
 
-Start bounded:
+For PR, worktree, or sweeping review tasks, start with the compact reviewer handoff:
 
 ```bash
-codegraph orient --root . --budget small --pretty
+codegraph review --base HEAD --head WORKTREE --summary
 ```
 
+Use `codegraph impact --base HEAD --head WORKTREE --pretty` when you need the broader blast-radius map. For unfamiliar repos without a diff, start bounded with `codegraph orient --root . --budget small --pretty`.
 Use `doctor` only when install, native-runtime, or artifact health is the task.
-
-For PR, worktree, or sweeping review tasks, start with `codegraph review --base HEAD --head WORKTREE --summary`. Use `codegraph impact --base HEAD --head WORKTREE --pretty` when you need the broader blast radius map.
-
 Then choose the smallest useful follow-up:
 
 - packet: `codegraph packet get <file|symbol|sql-object|handle> --pretty`

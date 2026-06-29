@@ -6,10 +6,15 @@ Use Codegraph for structural repo questions: architecture, dependency direction,
 
 ## Start here
 
-For current edits, start with one compact review packet:
+For code reviews, start with `review`; it is the compact handoff with changed files, changed symbols, candidate tests, risks, duplicate leads, and analysis labels.
 
 ```bash
 codegraph review --base HEAD --head WORKTREE --summary
+```
+
+Add `impact` only when you need a wider blast-radius map:
+
+```bash
 codegraph impact --base HEAD --head WORKTREE --pretty
 ```
 
@@ -96,7 +101,7 @@ For agents performing code reviews or making multiple queries, use sessions to m
 - library callers: one shared `createCodeReviewSession()` per repo snapshot
 - agent hosts: one shared `createAgentSession()` or MCP server per repo snapshot
 
-The local review session refreshes manually with `refresh()` and records stale-snapshot metadata in `getStats()`. Navigation and impact calls auto-refresh before serving results when tracked files drift.
+The local review session refreshes manually with `refresh()` and records stale-snapshot metadata in `getStats()`. Navigation auto-refreshes for config changes, added or removed files, or edits to the requested file; impact calls add an interval-throttled tracked-file scan before computing the report.
 
 For library callers performing repeated navigation or impact work, use sessions like this:
 

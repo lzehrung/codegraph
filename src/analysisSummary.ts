@@ -18,6 +18,9 @@ function deriveAnalysisBackend(input: {
   index?: ProjectIndex | undefined;
   report?: BuildReport | undefined;
 }): AnalysisBackend {
+  if (input.index?.nativeMode === "off") {
+    return "graph-only";
+  }
   const nativeReport = input.report?.backend?.native;
   const parserFallbackCount = input.report?.backend?.parser?.total ?? 0;
   const importFallbackCount = input.report?.graph?.fallbackImportExtraction?.total ?? 0;
@@ -32,7 +35,7 @@ function deriveAnalysisBackend(input: {
       return "native";
     }
   }
-  if (input.index?.nativeMode === "off") {
+  if (parserFallbackCount || importFallbackCount) {
     return "graph-only";
   }
   return "unknown";
