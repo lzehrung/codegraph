@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
+import { describe, test, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from "vitest";
 import type { ICodeReviewSession } from "../src/index.js";
 import type { BuildOptions, BuildReport } from "../src/indexer/types.js";
 import { CodeReviewSession, SessionManager, createCodeReviewSession } from "../src/session.js";
@@ -33,6 +33,19 @@ afterAll(async () => {
     await fsp.rm(sessionCacheDir, { recursive: true, force: true });
   }
 });
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+function setSessionClock(): void {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+}
+
+function advancePastStaleInterval(): void {
+  vi.setSystemTime(Date.now() + 5_001);
+}
 
 describe("CodeReviewSession", () => {
   let sharedReadySession: CodeReviewSession | undefined;
@@ -353,15 +366,12 @@ index 1234567..abcdef0 100644
         "import { value0 } from './dep0';\nexport const value = value0;\n",
         "utf8",
       );
+      setSessionClock();
       const session = await createCodeReviewSession({
         root,
         buildOptions: { cache: "memory", useBloomFilters: true },
       });
-      Object.defineProperty(session, "lastStaleCheckAt", {
-        configurable: true,
-        value: 0,
-        writable: true,
-      });
+      advancePastStaleInterval();
 
       const statSpy = vi.spyOn(fs, "statSync");
       try {
@@ -388,6 +398,7 @@ index 1234567..abcdef0 100644
       const mainPath = path.join(root, "main.ts");
       await fsp.writeFile(utilsPath, "export function helper() { return 1; }\n", "utf8");
       await fsp.writeFile(mainPath, "import { helper } from './utils';\nexport const value = helper();\n", "utf8");
+      setSessionClock();
       const session = await createCodeReviewSession({
         root,
         buildOptions: { cache: "memory", useBloomFilters: true },
@@ -399,16 +410,8 @@ index 1234567..abcdef0 100644
       });
       expect(navigation.status).toBe("ok");
       await fsp.writeFile(utilsPath, "export function helper() { return 42; }\n", "utf8");
-      Object.defineProperty(session, "lastStaleCheckAt", {
-        configurable: true,
-        value: Date.now(),
-        writable: true,
-      });
-      Object.defineProperty(session, "lastTrackedFileScanAt", {
-        configurable: true,
-        value: 0,
-        writable: true,
-      });
+      advancePastStaleInterval();
+      expect(session.getStats().status).toBe("ready");
 
       const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
       try {
@@ -444,6 +447,7 @@ index 1234567..abcdef0 100644
       const mainPath = path.join(root, "main.ts");
       await fsp.writeFile(utilsPath, "export function helper() { return 1; }\n", "utf8");
       await fsp.writeFile(mainPath, "import { helper } from './utils';\nexport const value = helper();\n", "utf8");
+      setSessionClock();
       const session = await createCodeReviewSession({
         root,
         buildOptions: { cache: "memory", useBloomFilters: true },
@@ -455,16 +459,8 @@ index 1234567..abcdef0 100644
       });
       expect(navigation.status).toBe("ok");
       await fsp.writeFile(utilsPath, "export function helper() { return 42; }\n", "utf8");
-      Object.defineProperty(session, "lastStaleCheckAt", {
-        configurable: true,
-        value: Date.now(),
-        writable: true,
-      });
-      Object.defineProperty(session, "lastTrackedFileScanAt", {
-        configurable: true,
-        value: 0,
-        writable: true,
-      });
+      advancePastStaleInterval();
+      expect(session.getStats().status).toBe("ready");
 
       const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
       try {
@@ -507,6 +503,7 @@ index 1234567..abcdef0 100644
       );
       const mainPath = path.join(root, "main.ts");
       await fsp.writeFile(mainPath, "import { value0 } from './dep0';\nexport const value = value0;\n", "utf8");
+      setSessionClock();
       const session = await createCodeReviewSession({
         root,
         buildOptions: { cache: "memory", useBloomFilters: true },
@@ -520,11 +517,7 @@ index 1234567..abcdef0 100644
 -export const value = value0;
 +export const value = value0 + 1;
 `;
-      Object.defineProperty(session, "lastTrackedFileScanAt", {
-        configurable: true,
-        value: 0,
-        writable: true,
-      });
+      advancePastStaleInterval();
 
       const statSpy = vi.spyOn(fs, "statSync");
       const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
@@ -554,20 +547,12 @@ index 1234567..abcdef0 100644
       const mainPath = path.join(root, "main.ts");
       const latePath = path.join(root, "late.ts");
       await fsp.writeFile(mainPath, "import { late } from './late';\nexport const value = late();\n", "utf8");
+      setSessionClock();
       const session = await createCodeReviewSession({
         root,
         buildOptions: { cache: "memory", useBloomFilters: true },
       });
-      Object.defineProperty(session, "lastStaleCheckAt", {
-        configurable: true,
-        value: 0,
-        writable: true,
-      });
-      Object.defineProperty(session, "lastTrackedFileScanAt", {
-        configurable: true,
-        value: 0,
-        writable: true,
-      });
+      advancePastStaleInterval();
 
       await session.analyzeImpact({
         provider: "raw",
@@ -614,16 +599,13 @@ index 1234567..abcdef0 100644
       const mainPath = path.join(root, "main.ts");
       const latePath = path.join(root, "late.ts");
       await fsp.writeFile(mainPath, "import { late } from './late';\nexport const value = late();\n", "utf8");
+      setSessionClock();
       const session = await createCodeReviewSession({
         root,
         buildOptions: { cache: "memory", useBloomFilters: true },
       });
 
-      Object.defineProperty(session, "lastStaleCheckAt", {
-        configurable: true,
-        value: 0,
-        writable: true,
-      });
+      advancePastStaleInterval();
       expect(session.getStats().status).toBe("ready");
       await fsp.writeFile(latePath, "export function late() { return 1; }\n", "utf8");
       await fsp.utimes(root, new Date(), new Date(Date.now() + 10_000));
@@ -657,27 +639,14 @@ index 1234567..abcdef0 100644
     try {
       const mainPath = path.join(root, "main.ts");
       await fsp.writeFile(mainPath, "export const value = 1;\n", "utf8");
+      setSessionClock();
       const session = await createCodeReviewSession({
         root,
         buildOptions: { cache: "memory", useBloomFilters: true },
       });
       await fsp.writeFile(path.join(root, "late.ts"), "export const late = 1;\n", "utf8");
       await fsp.utimes(root, new Date(), new Date(Date.now() + 10_000));
-      Object.defineProperty(session, "lastStaleCheckAt", {
-        configurable: true,
-        value: Date.now(),
-        writable: true,
-      });
-      Object.defineProperty(session, "lastTrackedFileScanAt", {
-        configurable: true,
-        value: Date.now(),
-        writable: true,
-      });
-      Object.defineProperty(session, "lastImpactProjectDriftCheckAt", {
-        configurable: true,
-        value: 0,
-        writable: true,
-      });
+      advancePastStaleInterval();
 
       const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
       try {
@@ -709,27 +678,14 @@ index 1234567..abcdef0 100644
     try {
       const mainPath = path.join(root, "main.ts");
       await fsp.writeFile(mainPath, "export const value = 1;\n", "utf8");
+      setSessionClock();
       const session = await createCodeReviewSession({
         root,
         buildOptions: { cache: "memory", useBloomFilters: true },
       });
       await fsp.writeFile(path.join(root, "late.ts"), "export const late = 1;\n", "utf8");
       await fsp.utimes(root, new Date(), new Date(Date.now() + 10_000));
-      Object.defineProperty(session, "lastStaleCheckAt", {
-        configurable: true,
-        value: Date.now(),
-        writable: true,
-      });
-      Object.defineProperty(session, "lastTrackedFileScanAt", {
-        configurable: true,
-        value: Date.now(),
-        writable: true,
-      });
-      Object.defineProperty(session, "lastImpactProjectDriftCheckAt", {
-        configurable: true,
-        value: 0,
-        writable: true,
-      });
+      advancePastStaleInterval();
 
       const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
       try {
@@ -771,6 +727,7 @@ index 1234567..abcdef0 100644
         JSON.stringify({ discovery: { includeGlobs: ["main.ts"] } }),
         "utf8",
       );
+      setSessionClock();
       const session = await createCodeReviewSession({
         root,
         buildOptions: { cache: "memory", useBloomFilters: true },
@@ -780,11 +737,7 @@ index 1234567..abcdef0 100644
         JSON.stringify({ discovery: { includeGlobs: ["other.ts"] } }),
         "utf8",
       );
-      Object.defineProperty(session, "lastStaleCheckAt", {
-        configurable: true,
-        value: 0,
-        writable: true,
-      });
+      advancePastStaleInterval();
 
       const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
       try {
@@ -1352,7 +1305,8 @@ describe("SessionManager", () => {
     });
 
     expect(session.getStatus()).toBe("ready");
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 150);
     expect(session.getStatus()).toBe("expired");
 
     const buildSpy = vi
