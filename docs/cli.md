@@ -157,6 +157,12 @@ codegraph mcp serve --root . --stdio --allow-build
 codegraph mcp serve --root . --port 7331
 codegraph mcp serve --root . --stdio --warmup
 codegraph mcp serve --root . --port 7331 --warmup-symbols
+
+# Install or preview agent client integration
+codegraph install --target codex,claude --dry-run
+codegraph install --target codex,claude --yes
+codegraph install --print-config codex
+codegraph uninstall --target codex --yes
 codegraph mcp --help
 
 # Chunk a file for LLM processing
@@ -263,6 +269,13 @@ For SQL, prefer handles or schema-qualified names when basenames may be ambiguou
 - Use artifact flags to select a subset.
 - Use `--force` to replace recognizable stale Codegraph artifacts while preserving unrelated files.
 - Artifact contents exclude their own output directory and linked outside-root files.
+
+#### Agent client installer
+
+- `install` configures Codegraph-owned MCP entries and marker files for supported local agent clients: `codex`, `claude`, `cursor`, `gemini`, `opencode`, and `agents`.
+- Writes require `--yes`; use `--dry-run` to preview exact file changes or `--print-config <target>` to print a copyable MCP snippet without writing.
+- `uninstall` removes only Codegraph-owned marker blocks, marker files, or MCP entries whose command is `codegraph`.
+- `skill install` remains the lower-level primitive for copying the bundled skill directly.
 
 #### MCP server
 
