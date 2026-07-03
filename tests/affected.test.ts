@@ -330,7 +330,7 @@ describe("affected CLI", () => {
   );
 
   it(
-    "reports existing tests that import a source file deleted across --base/--head",
+    "honors --depth for existing tests that import a source file deleted across --base/--head",
     async () => {
       const root = await createTypescriptProject("cg-affected-git-deleted-", [
         {
@@ -353,13 +353,80 @@ describe("affected CLI", () => {
       runGit(root, ["rm", "src/legacy.ts"]);
       runGit(root, ["commit", "-m", "delete legacy"]);
 
-      const report = await runAffectedJson(root, ["--base", "HEAD~1", "--head", "HEAD"]);
+      const depthZeroReport = await runAffectedJson(root, ["--base", "HEAD~1", "--head", "HEAD", "--depth", "0"]);
+      const depthOneReport = await runAffectedJson(root, ["--base", "HEAD~1", "--head", "HEAD", "--depth", "1"]);
 
-      expect(report.changedFiles).toEqual(["src/legacy.ts"]);
-      expect(report.affectedTests.map(({ file, depth }) => ({ file, depth }))).toEqual([
+      expect(depthZeroReport.changedFiles).toEqual(["src/legacy.ts"]);
+      expect(depthZeroReport.affectedTests).toEqual([]);
+      expect(depthOneReport.changedFiles).toEqual(["src/legacy.ts"]);
+      expect(depthOneReport.affectedTests.map(({ file, depth }) => ({ file, depth }))).toEqual([
         { file: "tests/legacy.test.ts", depth: 1 },
       ]);
-      expectReasonMentions(report.affectedTests[0], "src/legacy.ts");
+      expectReasonMentions(depthOneReport.affectedTests[0], "src/legacy.ts");
+
+      await writeProjectFile(root, {
+        path: "tests/legacy.test.ts",
+        contents: "const legacyTestStillRuns = true;\nif (!legacyTestStillRuns) throw new Error('bad legacy test');\n",
+      });
+      runGit(root, ["add", "tests/legacy.test.ts"]);
+      runGit(root, ["commit", "-m", "update legacy test"]);
+
+      const depthZeroWithChangedTestReport = await runAffectedJson(root, [
+        "--base",
+        "HEAD~2",
+        "--head",
+        "HEAD",
+        "--depth",
+        "0",
+      ]);
+
+      expect(depthZeroWithChangedTestReport.changedFiles).toEqual(["src/legacy.ts", "tests/legacy.test.ts"]);
+      expect(depthZeroWithChangedTestReport.affectedTests.map(({ file, depth }) => ({ file, depth }))).toEqual([
+        { file: "tests/legacy.test.ts", depth: 0 },
+      ]);
+      expect(depthZeroWithChangedTestReport.affectedTests[0]?.reasons).toEqual(["changed test file"]);
+    },
+    affectedCliTimeoutMs,
+  );
+
+  it(
+    "walks transitive reverse dependencies from a source file deleted across --base/--head only within --depth",
+    async () => {
+      const root = await createTypescriptProject("cg-affected-git-deleted-transitive-", [
+        {
+          path: ".gitignore",
+          contents: ".codegraph-cache/\n",
+        },
+        {
+          path: "src/core.ts",
+          contents: "export function coreValue() { return 11; }\n",
+        },
+        {
+          path: "src/service.ts",
+          contents: "import { coreValue } from './core';\nexport function serviceValue() { return coreValue() + 1; }\n",
+        },
+        {
+          path: "tests/service.test.ts",
+          contents:
+            "import { serviceValue } from '../src/service';\nif (serviceValue() !== 12) throw new Error('bad service');\n",
+        },
+      ]);
+      runGit(root, ["init"]);
+      runGit(root, ["add", "."]);
+      runGit(root, ["commit", "-m", "base"]);
+      runGit(root, ["rm", "src/core.ts"]);
+      runGit(root, ["commit", "-m", "delete core"]);
+
+      const depthOneReport = await runAffectedJson(root, ["--base", "HEAD~1", "--head", "HEAD", "--depth", "1"]);
+      const depthTwoReport = await runAffectedJson(root, ["--base", "HEAD~1", "--head", "HEAD", "--depth", "2"]);
+
+      expect(depthOneReport.changedFiles).toEqual(["src/core.ts"]);
+      expect(depthOneReport.affectedTests).toEqual([]);
+      expect(depthTwoReport.changedFiles).toEqual(["src/core.ts"]);
+      expect(depthTwoReport.affectedTests.map(({ file, depth }) => ({ file, depth }))).toEqual([
+        { file: "tests/service.test.ts", depth: 2 },
+      ]);
+      expectReasonMentions(depthTwoReport.affectedTests[0], "src/core.ts");
     },
     affectedCliTimeoutMs,
   );

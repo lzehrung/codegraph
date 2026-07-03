@@ -6,7 +6,7 @@ import { createGraphFileResolver, normalizeImpactFileChange } from "../impact/pa
 import { getDiff } from "../impact/providers/base.js";
 import { compileTestPatterns, createIndexTestFileMatcher, isTestFilePath } from "../impact/testPatterns.js";
 import type { FileChange } from "../impact/types.js";
-import { listDirectDeletedFileTestImporters } from "../review/deleted.js";
+import { listDirectDeletedFileImporters } from "../review/deleted.js";
 import type { FileId } from "../types.js";
 import { normalizePath, resolveFilePathWithinRoot, toProjectDisplayPath } from "../util/paths.js";
 import { parseNonNegativeIntegerOption } from "./options.js";
@@ -126,11 +126,39 @@ async function addDeletedImporterTests(
   deletedFiles: readonly string[],
   omittedCounts: AffectedOmittedCounts,
 ): Promise<void> {
+  if (!state.maxDepth) return;
+
+  const adjacency = state.index.graphAdjacency ?? graphAdjacencyFor(state.index.graph);
   for (const deletedFile of deletedFiles) {
-    const candidates = await listDirectDeletedFileTestImporters(state.index, [deletedFile], [], state.projectRoot);
     const reasonSource = toProjectDisplayPath(state.projectRoot, deletedFile);
-    for (const candidate of candidates) {
-      maybeAddTest(affected, state, candidate.file, `deleted import from ${reasonSource}`, 1, omittedCounts);
+    const directImporters = await listDirectDeletedFileImporters(state.index, [deletedFile], state.projectRoot);
+    const visited = new Set<string>();
+    const queue: Array<{ file: string; depth: number }> = [];
+    for (const importer of directImporters) {
+      if (visited.has(importer.file)) continue;
+      visited.add(importer.file);
+      queue.push({ file: importer.file, depth: 1 });
+    }
+
+    let queueIndex = 0;
+    while (queueIndex < queue.length) {
+      const current = queue[queueIndex]!;
+      queueIndex += 1;
+      maybeAddTest(
+        affected,
+        state,
+        current.file,
+        `deleted import from ${reasonSource}, depth ${current.depth}`,
+        current.depth,
+        omittedCounts,
+      );
+      if (current.depth >= state.maxDepth) continue;
+      const nextDepth = current.depth + 1;
+      for (const neighbor of getReverseNeighbors(adjacency, current.file)) {
+        if (visited.has(neighbor)) continue;
+        visited.add(neighbor);
+        queue.push({ file: neighbor, depth: nextDepth });
+      }
     }
   }
 }
