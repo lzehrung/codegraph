@@ -4,6 +4,8 @@ import { DEFAULT_SQLITE_ROW_LIMIT, MAX_SQLITE_ROW_LIMIT } from "./sqliteGuard.js
 
 export const DEFAULT_FILE_BYTES = 80_000;
 export const MAX_FILE_BYTES = 500_000;
+export const DEFAULT_FILE_LINES = 2000;
+export const MAX_FILE_LINES = 10_000;
 export const DEFAULT_MCP_COLLECTION_LIMIT = 100;
 export const MAX_MCP_COLLECTION_LIMIT = 500;
 
@@ -84,9 +86,15 @@ export const MCP_TOOLS: Tool[] = [
   },
   {
     name: "get_file",
-    description: "Read a bounded project file by relative path.",
+    description: "Read a bounded project file by relative path with line pagination and optional graph context.",
     inputSchema: objectSchema(
-      { file: stringProperty, maxBytes: { type: "integer", minimum: 1, maximum: MAX_FILE_BYTES } },
+      {
+        file: stringProperty,
+        offset: { type: "integer", minimum: 1, default: 1 },
+        limit: { type: "integer", minimum: 1, maximum: MAX_FILE_LINES, default: DEFAULT_FILE_LINES },
+        maxBytes: { type: "integer", minimum: 1, maximum: MAX_FILE_BYTES },
+        includeGraphContext: { type: "boolean" },
+      },
       ["file"],
     ),
   },

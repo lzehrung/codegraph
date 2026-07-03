@@ -40,9 +40,11 @@ import {
 } from "./sqliteGuard.js";
 import {
   DEFAULT_FILE_BYTES,
+  DEFAULT_FILE_LINES,
   DEFAULT_MCP_COLLECTION_LIMIT,
   listCodegraphMcpTools,
   MAX_FILE_BYTES,
+  MAX_FILE_LINES,
   MAX_MCP_COLLECTION_LIMIT,
   MCP_TOOLS,
 } from "./tools.js";
@@ -74,6 +76,100 @@ import {
 } from "./security.js";
 
 export type CodegraphMcpWarmupMode = "off" | "base" | "symbols";
+type CodegraphMcpFileGraphContext = {
+  usedBy: string[];
+  imports: string[];
+  symbols: Array<{ name: string; kind: string; line: number }>;
+};
+
+type CodegraphMcpFileViewResponse = {
+  schemaVersion: 1;
+  file: string;
+  offset: number;
+  limit: number;
+  totalLines: number;
+  content: string;
+  lineFormat: "number-tab-line";
+  text: string;
+  truncated: boolean;
+  graphContext?: CodegraphMcpFileGraphContext;
+  page?: { nextOffset?: number };
+};
+
+function splitFileLines(text: string): string[] {
+  return text.split("\n");
+}
+
+function formatNumberedLines(lines: readonly string[], offset: number, limit: number): string {
+  const start = Math.max(0, offset - 1);
+  return lines
+    .slice(start, start + limit)
+    .map((line, index) => `${start + index + 1}\t${line}`)
+    .join("\n");
+}
+
+function uniqueSorted(values: Iterable<string>): string[] {
+  return Array.from(new Set(values)).sort((left, right) => left.localeCompare(right));
+}
+
+function buildFileGraphContext(
+  snapshot: AgentProjectSnapshot,
+  file: string,
+  relative: (file: string) => string,
+): CodegraphMcpFileGraphContext | undefined {
+  const moduleIndex = snapshot.index.byFile.get(file);
+  if (!moduleIndex) return undefined;
+
+  const usedBy = uniqueSorted(
+    snapshot.fileGraph.edges
+      .filter((edge) => edge.to.type === "file" && edge.to.path === file)
+      .map((edge) => relative(edge.from)),
+  );
+  const imports = uniqueSorted(
+    moduleIndex.imports.map((importBinding) => {
+      const resolved = importBinding.resolved;
+      if (typeof resolved === "string") return relative(resolved);
+      if (resolved) return resolved.external;
+      return importBinding.from;
+    }),
+  );
+  const symbols = moduleIndex.locals
+    .map((symbol) => ({ name: symbol.localName, kind: symbol.kind, line: symbol.range.start.line }))
+    .sort((left, right) => left.line - right.line || left.name.localeCompare(right.name));
+
+  return { usedBy, imports, symbols };
+}
+
+function buildFileView(args: {
+  file: string;
+  text: string;
+  truncated: boolean;
+  offset: number;
+  limit: number;
+  graphContext?: CodegraphMcpFileGraphContext | undefined;
+}): CodegraphMcpFileViewResponse {
+  const lines = splitFileLines(args.text);
+  const start = Math.max(0, args.offset - 1);
+  let nextOffset: number | undefined;
+  if (start + args.limit < lines.length) {
+    nextOffset = start + args.limit + 1;
+  } else if (args.truncated) {
+    nextOffset = lines.length + 1;
+  }
+  return {
+    schemaVersion: 1,
+    file: args.file,
+    offset: args.offset,
+    limit: args.limit,
+    totalLines: lines.length,
+    content: formatNumberedLines(lines, args.offset, args.limit),
+    lineFormat: "number-tab-line",
+    text: args.text,
+    truncated: args.truncated,
+    ...(args.graphContext ? { graphContext: args.graphContext } : {}),
+    ...(nextOffset ? { page: { nextOffset } } : {}),
+  };
+}
 
 export type CodegraphMcpHandlerOptions = {
   root: string;
@@ -130,8 +226,11 @@ export type CodegraphMcpHandlers = {
   }) => Promise<CodegraphMcpFreshResult<AgentPacketResponse>>;
   get_file: (request: {
     file: string;
+    offset?: number | undefined;
+    limit?: number | undefined;
     maxBytes?: number | undefined;
-  }) => Promise<CodegraphMcpFreshResult<{ file: string; text: string; truncated: boolean }>>;
+    includeGraphContext?: boolean | undefined;
+  }) => Promise<CodegraphMcpFreshResult<CodegraphMcpFileViewResponse>>;
   get_symbol: (request: { handle: string }) => Promise<CodegraphMcpFreshResult<AgentExplanation["target"]>>;
   goto: (request: { file: string; line: number; column: number }) => Promise<CodegraphMcpFreshResult<GoToResult>>;
   refs: (
@@ -267,6 +366,10 @@ function createCodegraphMcpHandlersForSession(
   const boundedLimit = (limit: number | undefined, fallback: number, max: number): number => {
     if (typeof limit !== "number" || !Number.isFinite(limit)) return fallback;
     return Math.min(max, Math.max(0, Math.floor(limit)));
+  };
+  const boundedPositiveLimit = (limit: number | undefined, fallback: number, max: number): number => {
+    if (typeof limit !== "number" || !Number.isFinite(limit)) return fallback;
+    return Math.min(max, Math.max(1, Math.floor(limit)));
   };
   const staleFreshness = (files: readonly string[], reason: string): AgentFreshnessResult => {
     const changedFiles = [...files].sort();
@@ -511,18 +614,31 @@ function createCodegraphMcpHandlersForSession(
       ),
 
     get_file: async (request) => {
-      // get_file returns live bytes read directly from disk and never consults the indexed
-      // session, so it must not trigger a workspace-wide freshness scan or rebuild. The bytes
-      // are always current, so report fresh without re-stating the project.
-      const resolvedFile = await resolveReadableFile(await realRoot, root, request.file);
-      const maxBytes = boundedLimit(request.maxBytes, DEFAULT_FILE_BYTES, MAX_FILE_BYTES);
+      // A plain get_file request returns live bytes and must not trigger workspace-wide
+      // freshness or indexing work. Graph context is explicitly opt-in.
+      const rootRealPath = await realRoot;
+      const resolvedFile = await resolveReadableFile(rootRealPath, root, request.file);
+      const maxBytes = boundedPositiveLimit(request.maxBytes, DEFAULT_FILE_BYTES, MAX_FILE_BYTES);
+      const offset = boundedPositiveLimit(request.offset, 1, Number.MAX_SAFE_INTEGER);
+      const lineLimit = boundedPositiveLimit(request.limit, DEFAULT_FILE_LINES, MAX_FILE_LINES);
       const read = await readFilePrefix(resolvedFile.realPath, maxBytes);
-      return {
-        file: resolvedFile.displayPath,
-        text: read.text,
-        truncated: read.truncated,
-        freshness: { state: "fresh" },
-      };
+      const buildView = (graphContext?: CodegraphMcpFileGraphContext): CodegraphMcpFileViewResponse =>
+        buildFileView({
+          file: resolvedFile.displayPath,
+          text: read.text,
+          truncated: read.truncated,
+          offset,
+          limit: lineLimit,
+          ...(graphContext ? { graphContext } : {}),
+        });
+      if (!request.includeGraphContext) {
+        return { ...buildView(), freshness: { state: "fresh" } as const };
+      }
+      return await withFreshness(async () => {
+        const projectFile = await resolveProjectFile(rootRealPath, root, request.file);
+        const snapshot = await session.loadProject({ symbolGraph: "skip" });
+        return buildView(buildFileGraphContext(snapshot, projectFile, relative));
+      });
     },
 
     get_symbol: async (request) =>
@@ -1023,7 +1139,10 @@ const packetGetSchema = z.object({
 
 const getFileSchema = z.object({
   file: z.string(),
+  offset: z.number().int().positive().optional(),
+  limit: z.number().int().positive().max(MAX_FILE_LINES).optional(),
   maxBytes: z.number().int().positive().optional(),
+  includeGraphContext: z.boolean().optional(),
 });
 
 const handleSchema = z.object({

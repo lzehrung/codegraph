@@ -873,6 +873,45 @@ describe("codegraph MCP handlers", () => {
     });
   });
 
+  it("returns numbered get_file content with stable line pagination", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-file-lines-"));
+    await fs.writeFile(path.join(root, "notes.txt"), "one\ntwo\nthree\n", "utf8");
+    const handlers = createCodegraphMcpHandlers({ root });
+
+    const result = await handlers.get_file({ file: "notes.txt", offset: 2, limit: 2, includeGraphContext: false });
+
+    expect(result).toMatchObject({
+      schemaVersion: 1,
+      file: "notes.txt",
+      offset: 2,
+      limit: 2,
+      totalLines: 4,
+      content: "2\ttwo\n3\tthree",
+      lineFormat: "number-tab-line",
+      page: { nextOffset: 4 },
+    });
+  });
+
+  it("includes direct graph context for indexed source files", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-file-graph-"));
+    await fs.mkdir(path.join(root, "src"), { recursive: true });
+    await fs.writeFile(path.join(root, "src", "auth.ts"), "export function validateUser() { return true; }\n", "utf8");
+    await fs.writeFile(
+      path.join(root, "src", "server.ts"),
+      "import { validateUser } from './auth';\nexport const ok = validateUser();\n",
+      "utf8",
+    );
+    const handlers = createCodegraphMcpHandlers({ root });
+
+    const result = await handlers.get_file({ file: "src/auth.ts", limit: 1 });
+
+    expect(result.content).toBe("1\texport function validateUser() { return true; }");
+    expect(result.graphContext?.usedBy).toContain("src/server.ts");
+    expect(result.graphContext?.symbols).toContainEqual(
+      expect.objectContaining({ name: "validateUser", kind: "function", line: 1 }),
+    );
+  });
+
   it("does not split multi-byte UTF-8 characters in bounded get_file reads", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-file-utf8-bound-"));
     await fs.writeFile(path.join(root, "unicode.txt"), "abc😀def", "utf8");
@@ -1185,9 +1224,12 @@ describe("codegraph MCP handlers", () => {
     await fs.writeFile(filePath, "export function readAfter() { return 'new bytes'; }\n", "utf8");
     const read = await handlers.get_file({ file: "auth.ts" });
 
-    expect(read).toEqual({
+    expect(read).toMatchObject({
+      schemaVersion: 1,
       file: "auth.ts",
       text: "export function readAfter() { return 'new bytes'; }\n",
+      content: "1\texport function readAfter() { return 'new bytes'; }\n2\t",
+      lineFormat: "number-tab-line",
       truncated: false,
       freshness: { state: "fresh" },
     });
