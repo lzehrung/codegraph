@@ -12,6 +12,7 @@ import {
   type CodegraphMcpHandlers,
 } from "../src/mcp/server.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
+import { SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY } from "../src/sqlite.js";
 import { countingSession } from "./helpers/agent.js";
 import { createArtifactOutputWithStaleFile, createLinkedTempRoot, isSymlinkUnavailable } from "./helpers/filesystem.js";
 
@@ -1170,6 +1171,59 @@ describe("codegraph MCP handlers", () => {
 
     expect(paths.some((file) => file.endsWith("auth.ts"))).toBeTruthy();
     expect(paths.some((file) => file.includes("/out/") || file.endsWith("/out/old.ts"))).toBe(false);
+  });
+
+  it("query_sqlite treats corrupted SQLite freshness metadata as a missing baseline", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-corrupt-metadata-"));
+    const outDir = path.join(root, "out");
+    await fs.writeFile(path.join(root, "one.ts"), "export const one = 1;\n");
+    const buildHandlers = createCodegraphMcpHandlers({ root, readOnly: false });
+    await buildHandlers.artifact_build({ outDir, sqlite: true });
+
+    const db = new DatabaseSync(path.join(outDir, "codegraph.sqlite"));
+    try {
+      const updated = db
+        .prepare("UPDATE graph_metadata SET value = ? WHERE key = ?;")
+        .run("this-is-not-json", SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY);
+      if (Number(updated.changes) === 0) {
+        db.prepare("INSERT OR REPLACE INTO graph_metadata (key, value) VALUES (?, ?);").run(
+          SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY,
+          "this-is-not-json",
+        );
+      }
+    } finally {
+      db.close();
+    }
+
+    const readHandlers = createCodegraphMcpHandlers({ root, artifactPath: outDir });
+
+    await expect(readHandlers.query_sqlite({ query: "SELECT path FROM files ORDER BY path;" })).rejects.toThrow(
+      /no freshness baseline/i,
+    );
+
+    let caught: unknown;
+    try {
+      await readHandlers.query_sqlite({ query: "SELECT path FROM files ORDER BY path;" });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).not.toMatch(/JSON|Unexpected token/i);
+  });
+
+  it("reports fresh when a prebuilt MCP session has no freshness check", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-session-no-freshness-check-"));
+    await fs.writeFile(path.join(root, "one.ts"), "export const one = 1;\n");
+    const backingSession = createAgentSession({ root });
+    const session: AgentSession = {
+      loadProject: backingSession.loadProject,
+      invalidate: backingSession.invalidate,
+    };
+    const handlers = createCodegraphMcpHandlers({ root, session });
+
+    const read = await handlers.get_file({ file: "one.ts" });
+
+    expect(read.freshness).toEqual({ state: "fresh" });
   });
 });
 

@@ -28,6 +28,7 @@ import { SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY, queryGraphSqliteRaw, type
 import { isPlainRecord } from "../util/guards.js";
 import { toProjectDisplayPath } from "../util/paths.js";
 import { createAgentSession, listAgentSessionFiles } from "../agent/session.js";
+import { mapLimit } from "../util/concurrency.js";
 import type { AgentFreshnessResult, AgentProjectSnapshot, AgentSession } from "../agent/session.js";
 import type { BuildOptions, GoToResult } from "../indexer/types.js";
 import {
@@ -184,6 +185,7 @@ type SqliteArtifactFileSignature = {
 };
 
 const MAX_MCP_FRESHNESS_CHANGED_FILES = 25;
+const SQLITE_ARTIFACT_STAT_CONCURRENCY = 64;
 
 function assertMcpSessionOptions(options: CodegraphMcpHandlerOptions): void {
   if (options.session !== undefined && options.buildOptions !== undefined) {
@@ -271,7 +273,7 @@ function createCodegraphMcpHandlersForSession(
   };
   const checkMcpFreshness = async (): Promise<AgentFreshnessResult> => {
     if (session.checkFreshness) return await session.checkFreshness();
-    return staleFreshness([], "freshness check unavailable");
+    return { state: "fresh" };
   };
   const withFreshness = async <T extends object>(
     run: () => Promise<T>,
@@ -337,7 +339,12 @@ function createCodegraphMcpHandlersForSession(
     );
     const rawValue = result.rows[0]?.[0];
     if (typeof rawValue !== "string") return null;
-    const parsed: unknown = JSON.parse(rawValue);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawValue);
+    } catch {
+      return null;
+    }
     if (!Array.isArray(parsed)) return null;
     const signatures: SqliteArtifactFileSignature[] = [];
     for (const value of parsed) {
@@ -375,20 +382,18 @@ function createCodegraphMcpHandlersForSession(
       (file) => !outputDirectories.some((directory) => isFileInsideDirectory(file, directory)),
     );
     const signatures = new Map<string, SqliteArtifactFileSignature>();
-    await Promise.all(
-      currentFiles.map(async (file) => {
-        try {
-          const stat = await fs.stat(file);
-          if (!stat.isFile()) return;
-          signatures.set(relative(file), { path: file, size: stat.size, mtimeMs: stat.mtimeMs });
-        } catch (error) {
-          if (error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR")) {
-            return;
-          }
-          throw error;
+    await mapLimit(currentFiles, SQLITE_ARTIFACT_STAT_CONCURRENCY, async (file) => {
+      try {
+        const stat = await fs.stat(file);
+        if (!stat.isFile()) return;
+        signatures.set(relative(file), { path: file, size: stat.size, mtimeMs: stat.mtimeMs });
+      } catch (error) {
+        if (error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR")) {
+          return;
         }
-      }),
-    );
+        throw error;
+      }
+    });
     return signatures;
   };
   const checkSqliteArtifactFreshness = async (realSqlitePath: string): Promise<AgentFreshnessResult> => {
