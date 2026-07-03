@@ -159,6 +159,19 @@ Graph, index, search, inspect, and review reports include `backend.native.byLang
 - `uninit` removes only recognized lifecycle state by default and leaves any root `.gitignore` rule in place. It refuses unknown `.codegraph/` entries unless `--force` is passed.
 - Lifecycle commands accept either a positional project path or `--root <path>`. They reject using both together because lifecycle manifests and automatic ignore updates always use one resolved project boundary, not include-root subsets.
 
+### Affected tests
+
+- `affected` maps changed source files to likely test files by traversing reverse dependencies through the project graph. It also includes directly changed test files at depth 0.
+- Inputs can be positional files, newline-delimited `--stdin`, or a Git range with `--base <ref> --head <ref>`. Paths are normalized under `--root` and output as project-root-relative paths.
+- Use `--depth <n>` to expand transitive reverse dependencies, `--filter <glob>` to restrict returned test paths, `--quiet` for path-only output, or `--json` for `schemaVersion: 1`, `changedFiles`, `affectedTests`, and `omittedCounts`.
+
+```bash
+codegraph affected src/auth.ts src/db.ts
+codegraph affected --stdin --quiet
+codegraph affected --base main --head HEAD --json
+codegraph affected --base HEAD --head WORKTREE --filter "tests/**/*.test.ts" --quiet
+```
+
 ### Symbols, navigation, grep, and chunking
 
 ```bash

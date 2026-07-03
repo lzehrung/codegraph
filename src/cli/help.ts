@@ -72,6 +72,7 @@ Recommended review commands:
   codegraph impact (defaults to HEAD..WORKTREE)
   codegraph search "auth user" --json
   codegraph explain src/auth.ts --json
+  codegraph affected --base HEAD --head WORKTREE --quiet
 
 Unfamiliar repo:
   codegraph explore "how does auth reach db?" --root .
@@ -84,6 +85,7 @@ Examples:
   codegraph explore "how does auth reach db?"
   codegraph file src/auth.ts
   codegraph explain src/auth.ts --json
+  codegraph affected src/auth.ts --quiet
   codegraph impact --provider git --base HEAD --head WORKTREE
   codegraph init --root .
   codegraph status --root . --json
@@ -124,6 +126,7 @@ Examples:
   codegraph -v
 `;
 
+
 export const LIFECYCLE_HELP_TEXT = `codegraph init/status/sync/uninit - Initialize, inspect, refresh, or remove project-local Codegraph state
 
 Usage:
@@ -141,6 +144,20 @@ State:
   A tracked manifest is left tracked with a warning. Uninit removes lifecycle state but leaves the root .gitignore rule; ordinary sync never changes ignore policy.
   Init and sync may warm or update the disk cache under .codegraph-cache/index-v1/. Other commands do not depend on the manifest.
   Positional paths and --root are alternatives for lifecycle commands; do not combine them.
+`;
+
+export const AFFECTED_HELP_TEXT = `codegraph affected - List tests likely affected by changed files
+
+Usage:
+  codegraph affected <file...> [--root <path>] [--depth <n>] [--json | --quiet]
+  codegraph affected --stdin [--root <path>] [--filter <glob>] [--quiet]
+  codegraph affected --base <ref> --head <ref> [--root <path>] [--json]
+
+Options:
+  --depth <n>       Reverse dependency traversal depth (default: 1)
+  --filter <glob>   Restrict returned test files by project-root-relative glob
+  --stdin           Read newline-delimited changed files from stdin
+  --quiet           Print affected test paths only
 `;
 
 export const INSTALL_HELP_TEXT = `codegraph install - Configure Codegraph for supported agent clients

@@ -93,6 +93,7 @@ git clone https://github.com/lzehrung/codegraph.git
 cd codegraph
 npm install
 npm run build
+
 node ./dist/cli.js doctor
 node ./dist/cli.js orient --root . --budget small
 ```

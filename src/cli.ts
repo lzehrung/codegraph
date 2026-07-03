@@ -1184,6 +1184,23 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     return;
   }
 
+  if (cmd === "affected") {
+    await handleAffectedCommand({
+      projectRootFs,
+      buildOptions: buildAgentOptions(),
+      positionals: parsed.positionals,
+      getOpt,
+      hasFlag,
+      parsedOptions: parsed.options,
+      readStdin: readCliStdin,
+      writeJSONLine,
+      writeStdoutLine,
+      writeStderrLine,
+      exit: exitCli,
+    });
+    return;
+  }
+
   // Review entry point: CLI workflow for review reports.
   if (cmd === "review") {
     const commandReport: CommandReport | undefined = reportEnabled ? { command: "review", timings: {} } : undefined;
