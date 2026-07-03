@@ -39,6 +39,7 @@ import { CLI_HELP_TEXT, helpTextForCommand, isKnownCliCommand } from "./cli/help
 import { handleImpactCommand } from "./cli/impact.js";
 import { handleInstallerCommand } from "./cli/install.js";
 import { handleLifecycleCommand } from "./cli/lifecycle.js";
+import { CodegraphLifecycleUserError } from "./lifecycle/manifest.js";
 import { handleIndexCommand } from "./cli/index.js";
 import { handleHotspotsCommand, handleInspectCommand } from "./cli/inspect.js";
 import { handleOrientCommand } from "./cli/orient.js";
@@ -574,8 +575,11 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
         writeStdoutLine,
       });
     } catch (error) {
-      writeStderrLine(error instanceof Error ? error.message : String(error));
-      exitCli(1);
+      if (error instanceof CodegraphLifecycleUserError) {
+        writeStderrLine(error.message);
+        exitCli(1);
+      }
+      throw error;
     }
     return;
   }

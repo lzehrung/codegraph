@@ -366,7 +366,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--force"], SHARED_BUILD_OPTIONS, {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph init [path] [--root <path>] [--force] [--json]",
+      usage: "Usage: codegraph init [path] [--force] [--json] OR codegraph init --root <path> [--force] [--json]",
     }),
   ],
   [
@@ -493,7 +493,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], SHARED_BUILD_OPTIONS, {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph status [path] [--root <path>] [--json]",
+      usage: "Usage: codegraph status [path] [--json] OR codegraph status --root <path> [--json]",
     }),
   ],
   [
@@ -501,7 +501,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--init"], SHARED_BUILD_OPTIONS, {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph sync [path] [--root <path>] [--init] [--json]",
+      usage: "Usage: codegraph sync [path] [--init] [--json] OR codegraph sync --root <path> [--init] [--json]",
     }),
   ],
   [
@@ -516,7 +516,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     commandSchema(["--force", "--json"], ["--root"], {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph uninit [path] [--root <path>] [--force] [--json]",
+      usage: "Usage: codegraph uninit [path] [--force] [--json] OR codegraph uninit --root <path> [--force] [--json]",
     }),
   ],
   [

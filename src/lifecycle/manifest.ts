@@ -3,7 +3,11 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { createAgentSession, listAgentSessionFiles } from "../agent/session.js";
 import { computeConfigHash } from "../indexer/build-cache/manifest.js";
-import { summarizeBuildOptions } from "../indexer/build-cache/options.js";
+import {
+  normalizeGraphOptions,
+  summarizeBuildOptions,
+  type ManifestBuildOptions,
+} from "../indexer/build-cache/options.js";
 import type { BuildOptions } from "../indexer/types.js";
 import type { AnalysisSummary } from "../analysisSummary.js";
 
@@ -59,7 +63,21 @@ export type CodegraphLifecycleUninitResult = {
 const MANIFEST_SCHEMA_VERSION = 1;
 const CODEGRAPH_DIR = ".codegraph";
 const MANIFEST_FILE = "manifest.json";
+
+type LifecycleBuildOptionsSummary = ManifestBuildOptions & {
+  graph?: ReturnType<typeof normalizeGraphOptions>;
+  native?: BuildOptions["native"];
+  threads?: number;
+  nativeThreads?: number;
+  useNativeWorkers?: boolean;
+  cacheVerify?: boolean;
+  cacheDir?: string;
+};
 const KNOWN_CODEGRAPH_FILES = new Set([MANIFEST_FILE]);
+
+export class CodegraphLifecycleUserError extends Error {
+  override name = "CodegraphLifecycleUserError";
+}
 
 export function codegraphLifecycleManifestPath(root: string): string {
   return path.join(root, CODEGRAPH_DIR, MANIFEST_FILE);
@@ -92,7 +110,9 @@ export async function syncCodegraphLifecycle(
 ): Promise<CodegraphLifecycleSyncResult> {
   const existing = await readLifecycleManifest(root, { allowInvalid: Boolean(options.init && options.force) });
   if (!existing && !options.init) {
-    throw new Error("Codegraph is not initialized for this project. Run codegraph init or codegraph sync --init.");
+    throw new CodegraphLifecycleUserError(
+      "Codegraph is not initialized for this project. Run codegraph init or codegraph sync --init.",
+    );
   }
   const manifest = await buildLifecycleManifest(
     root,
@@ -176,7 +196,7 @@ export async function uninitCodegraphLifecycle(
   }
   const unknownEntries = entries.filter((entry) => !KNOWN_CODEGRAPH_FILES.has(entry));
   if (unknownEntries.length && !options.force) {
-    throw new Error(
+    throw new CodegraphLifecycleUserError(
       `Refusing to remove .codegraph with unknown entries: ${unknownEntries.join(", ")}. Use --force to remove them.`,
     );
   }
@@ -233,7 +253,9 @@ async function readLifecycleManifest(
     throw new Error("Invalid Codegraph lifecycle manifest schema.");
   } catch (error) {
     if (options.allowInvalid) return null;
-    throw new Error(`Unable to read Codegraph lifecycle manifest at ${manifestPath}: ${stringifyError(error)}`);
+    throw new CodegraphLifecycleUserError(
+      `Unable to read Codegraph lifecycle manifest at ${manifestPath}: ${stringifyError(error)}`,
+    );
   }
 }
 
@@ -268,7 +290,19 @@ function stringifyError(error: unknown): string {
 }
 
 function hashBuildOptions(buildOptions: BuildOptions | undefined): string {
-  return sha256(stableStringify(summarizeBuildOptions(buildOptions)));
+  return sha256(stableStringify(summarizeLifecycleBuildOptions(buildOptions)));
+}
+
+function summarizeLifecycleBuildOptions(buildOptions: BuildOptions | undefined): LifecycleBuildOptionsSummary {
+  const summary: LifecycleBuildOptionsSummary = { ...summarizeBuildOptions(buildOptions) };
+  if (buildOptions?.graph) summary.graph = normalizeGraphOptions(buildOptions.graph);
+  if (buildOptions?.native !== undefined) summary.native = buildOptions.native;
+  if (buildOptions?.threads !== undefined) summary.threads = buildOptions.threads;
+  if (buildOptions?.nativeThreads !== undefined) summary.nativeThreads = buildOptions.nativeThreads;
+  if (buildOptions?.useNativeWorkers !== undefined) summary.useNativeWorkers = buildOptions.useNativeWorkers;
+  if (buildOptions?.cacheVerify !== undefined) summary.cacheVerify = buildOptions.cacheVerify;
+  if (buildOptions?.cacheDir !== undefined) summary.cacheDir = buildOptions.cacheDir;
+  return summary;
 }
 
 function stableStringify(value: unknown): string {

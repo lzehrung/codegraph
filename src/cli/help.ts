@@ -165,13 +165,18 @@ export function isKnownCliCommand(command: string): boolean {
 export const LIFECYCLE_HELP_TEXT = `codegraph init/status/sync/uninit - Initialize, inspect, refresh, or remove project-local Codegraph state
 
 Usage:
-  codegraph init [path] [--root <path>] [--force] [--json]
-  codegraph status [path] [--root <path>] [--json]
-  codegraph sync [path] [--root <path>] [--init] [--json]
-  codegraph uninit [path] [--root <path>] [--force] [--json]
+  codegraph init [path] [--force] [--json]
+  codegraph init --root <path> [--force] [--json]
+  codegraph status [path] [--json]
+  codegraph status --root <path> [--json]
+  codegraph sync [path] [--init] [--json]
+  codegraph sync --root <path> [--init] [--json]
+  codegraph uninit [path] [--force] [--json]
+  codegraph uninit --root <path> [--force] [--json]
 
 State:
   Lifecycle commands own only .codegraph/manifest.json metadata. Init and sync may warm or update the disk cache under .codegraph-cache/index-v1/. Other commands do not depend on the manifest.
+  Positional paths and --root are alternatives for lifecycle commands; do not combine them.
 `;
 
 export const INSTALL_HELP_TEXT = `codegraph install - Configure Codegraph for supported agent clients

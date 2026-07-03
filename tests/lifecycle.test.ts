@@ -12,6 +12,7 @@ import {
   type CodegraphLifecycleSyncResult,
   type CodegraphLifecycleUninitResult,
 } from "../src/lifecycle/manifest.js";
+import type { BuildOptions } from "../src/indexer/types.js";
 import { captureCli } from "./helpers/cli.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 
@@ -42,6 +43,33 @@ describe("project lifecycle commands", () => {
     expect(second.changedFiles.totalDelta).toBe(0);
     expect(await readManifest(root)).toEqual(first.manifest);
     expect(await readCodegraphEntries(root)).toEqual(["manifest.json"]);
+  });
+
+  it("init --force refreshes lastSyncAt when project files and options are current", async () => {
+    const root = await mkTmpDir("cg-life-force-current-");
+    await writeFile(root, "src/main.ts", "export const main = 1;\n");
+    const first = await initCodegraphLifecycle(root);
+    const manifestPath = codegraphLifecycleManifestPath(root);
+    const staleManifest: CodegraphLifecycleManifest = {
+      ...first.manifest,
+      lastSyncAt: "2000-01-01T00:00:00.000Z",
+    };
+    await fsp.writeFile(manifestPath, `${JSON.stringify(staleManifest, null, 2)}\n`, "utf8");
+
+    const currentStatus = await getCodegraphLifecycleStatus(root);
+    const withoutForce = await initCodegraphLifecycle(root);
+
+    expect(currentStatus.suggestedNextCommand).toBe("codegraph status");
+    expect(currentStatus.lastSyncAt).toBe(staleManifest.lastSyncAt);
+    expect(withoutForce.manifest).toEqual(staleManifest);
+    expect(await readManifest(root)).toEqual(staleManifest);
+
+    const forced = await initCodegraphLifecycle(root, { force: true });
+
+    expect(forced.manifest.createdAt).toBe(first.manifest.createdAt);
+    expect(forced.manifest.lastSyncAt).not.toBe(staleManifest.lastSyncAt);
+    expect(forced.changedFiles.totalDelta).toBe(0);
+    expect(await readManifest(root)).toEqual(forced.manifest);
   });
 
   it("init --force recomputes stale manifest metadata for current project files", async () => {
@@ -124,6 +152,47 @@ describe("project lifecycle commands", () => {
 
     expect(status.configChanged).toBeTruthy();
     expect(status.suggestedNextCommand).toBe("codegraph sync");
+  });
+
+  it("status detects lifecycle-relevant build option drift", async () => {
+    const cases: { name: string; initial: BuildOptions; current: BuildOptions }[] = [
+      {
+        name: "native mode",
+        initial: { native: "off" },
+        current: { native: "auto" },
+      },
+      {
+        name: "graph options",
+        initial: { graph: { fast: true } },
+        current: { graph: { fast: false } },
+      },
+    ];
+
+    for (const testCase of cases) {
+      const root = await mkTmpDir(`cg-life-build-options-${testCase.name.replaceAll(" ", "-")}-`);
+      await writeFile(root, "src/main.ts", "export const main = 1;\n");
+      await initCodegraphLifecycle(root, { buildOptions: testCase.initial });
+
+      const status = await getCodegraphLifecycleStatus(root, { buildOptions: testCase.current });
+
+      expect(status.fileCount, testCase.name).toEqual({ then: 1, current: 1 });
+      expect(status.filesChanged, testCase.name).toBeFalsy();
+      expect(status.buildOptionsChanged, testCase.name).toBeTruthy();
+      expect(status.suggestedNextCommand, testCase.name).toBe("codegraph sync");
+    }
+  });
+
+  it("status treats omitted cache and explicit cache off as the same build options", async () => {
+    const root = await mkTmpDir("cg-life-cache-equivalent-");
+    await writeFile(root, "src/main.ts", "export const main = 1;\n");
+    await initCodegraphLifecycle(root, { buildOptions: { cache: "off" } });
+
+    const status = await getCodegraphLifecycleStatus(root);
+
+    expect(status.fileCount).toEqual({ then: 1, current: 1 });
+    expect(status.filesChanged).toBeFalsy();
+    expect(status.buildOptionsChanged).toBeFalsy();
+    expect(status.suggestedNextCommand).toBe("codegraph status");
   });
 
   it("sync updates manifest after a file edit", async () => {
