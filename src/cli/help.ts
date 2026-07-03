@@ -162,7 +162,7 @@ export function isKnownCliCommand(command: string): boolean {
   return knownCliCommands.has(command);
 }
 
-export const LIFECYCLE_HELP_TEXT = `codegraph lifecycle - Initialize, inspect, refresh, or remove project-local Codegraph state
+export const LIFECYCLE_HELP_TEXT = `codegraph init/status/sync/uninit - Initialize, inspect, refresh, or remove project-local Codegraph state
 
 Usage:
   codegraph init [path] [--root <path>] [--force] [--json]

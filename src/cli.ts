@@ -218,6 +218,13 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   const firstPositionalRoot = parsed.positionals.length === 1 ? resolveAbs(parsed.positionals[0]!) : undefined;
+  if (isLifecycleCommand(cmd) && rootOpt && parsed.positionals.length) {
+    writeStderrLine(
+      `Invalid ${cmd} path "${parsed.positionals[0]!}". Positional paths cannot be combined with --root for lifecycle commands.`,
+    );
+    exitCli(2);
+    return;
+  }
   if (
     isLifecycleCommand(cmd) &&
     !rootOpt &&
@@ -557,14 +564,19 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   };
 
   if (isLifecycleCommand(cmd)) {
-    await handleLifecycleCommand({
-      command: cmd,
-      root: projectRootFs,
-      buildOptions: buildAgentOptions(),
-      hasFlag,
-      writeJSONLine,
-      writeStdoutLine,
-    });
+    try {
+      await handleLifecycleCommand({
+        command: cmd,
+        root: projectRootFs,
+        buildOptions: buildAgentOptions(),
+        hasFlag,
+        writeJSONLine,
+        writeStdoutLine,
+      });
+    } catch (error) {
+      writeStderrLine(error instanceof Error ? error.message : String(error));
+      exitCli(1);
+    }
     return;
   }
 

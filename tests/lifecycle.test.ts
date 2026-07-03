@@ -8,6 +8,7 @@ import {
   syncCodegraphLifecycle,
   uninitCodegraphLifecycle,
   type CodegraphLifecycleManifest,
+  type CodegraphLifecycleStatus,
   type CodegraphLifecycleSyncResult,
   type CodegraphLifecycleUninitResult,
 } from "../src/lifecycle/manifest.js";
@@ -43,22 +44,28 @@ describe("project lifecycle commands", () => {
     expect(await readCodegraphEntries(root)).toEqual(["manifest.json"]);
   });
 
-  it("init --force rebuilds and updates lastSyncAt", async () => {
+  it("init --force recomputes stale manifest metadata for current project files", async () => {
     const root = await mkTmpDir("cg-life-force-");
     await writeFile(root, "src/main.ts", "export const main = 1;\n");
-    await initCodegraphLifecycle(root);
+    const first = await initCodegraphLifecycle(root);
+    await writeFile(root, "src/extra.ts", "export const extra = 2;\n");
     const manifestPath = codegraphLifecycleManifestPath(root);
-    const manifest = await readManifest(root);
-    const oldManifest = {
-      ...manifest,
-      lastSyncAt: "2000-01-01T00:00:00.000Z",
+    const staleManifest = {
+      ...first.manifest,
+      fileCount: 99,
+      fileSignatureHash: "stale-file-signature-hash",
     };
-    await fsp.writeFile(manifestPath, `${JSON.stringify(oldManifest, null, 2)}\n`, "utf8");
+    await fsp.writeFile(manifestPath, `${JSON.stringify(staleManifest, null, 2)}\n`, "utf8");
 
     const result = await initCodegraphLifecycle(root, { force: true });
+    const status = await getCodegraphLifecycleStatus(root);
 
-    expect(result.manifest.createdAt).toBe(manifest.createdAt);
-    expect(result.manifest.lastSyncAt).not.toBe(oldManifest.lastSyncAt);
+    expect(result.manifest.createdAt).toBe(first.manifest.createdAt);
+    expect(result.manifest.fileCount).toBe(2);
+    expect(result.manifest.fileSignatureHash).not.toBe(staleManifest.fileSignatureHash);
+    expect(status.fileCount).toEqual({ then: 2, current: 2 });
+    expect(status.filesChanged).toBeFalsy();
+    expect(await readManifest(root)).toEqual(result.manifest);
   });
 
   it("init --force recovers from a corrupt manifest", async () => {
@@ -211,6 +218,90 @@ describe("project lifecycle commands", () => {
     expect(uninitPayload.root).toBe(syncRoot);
     expect(uninitPayload.removed).toBeTruthy();
     await expect(fsp.stat(path.join(syncRoot, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("CLI lifecycle commands reject positional roots when --root is supplied", async () => {
+    const commands = ["init", "status", "sync", "uninit"] as const;
+
+    for (const command of commands) {
+      const cwd = await mkTmpDir(`cg-life-cli-root-conflict-${command}-`);
+      const positionalRoot = path.join(cwd, "positional-root");
+      const flagRoot = path.join(cwd, "flag-root");
+      await fsp.mkdir(positionalRoot);
+      await fsp.mkdir(flagRoot);
+      const args = [command, positionalRoot, "--root", flagRoot, "--json"];
+      if (command === "sync") args.push("--init");
+      if (command === "uninit") args.push("--force");
+
+      const result = await captureCli(args, { cwd });
+
+      expect(result.exitCode, `${command} should reject a positional path combined with --root`).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(command);
+      expect(result.stderr).toContain(positionalRoot);
+      expect(result.stderr).toContain("--root");
+      expect(result.stderr).toMatch(/positional/i);
+    }
+  });
+
+  it("CLI status --json reports initialized and uninitialized lifecycle state", async () => {
+    const uninitializedRoot = await mkTmpDir("cg-life-cli-status-uninitialized-");
+    await writeFile(uninitializedRoot, "src/main.ts", "export const main = 1;\n");
+
+    const uninitializedResult = await captureCli(["status", uninitializedRoot, "--json"]);
+
+    expect(uninitializedResult.exitCode).toBeUndefined();
+    expect(uninitializedResult.stderr).toBe("");
+    const uninitializedPayload = JSON.parse(uninitializedResult.stdout) as CodegraphLifecycleStatus;
+    expect(uninitializedPayload.schemaVersion).toBe(1);
+    expect(uninitializedPayload.root).toBe(uninitializedRoot);
+    expect(uninitializedPayload.initialized).toBeFalsy();
+    expect(uninitializedPayload.fileCount).toBeUndefined();
+    expect(uninitializedPayload.suggestedNextCommand).toBe("codegraph init");
+
+    const initializedRoot = await mkTmpDir("cg-life-cli-status-initialized-");
+    await writeFile(initializedRoot, "src/main.ts", "export const main = 1;\n");
+    await initCodegraphLifecycle(initializedRoot);
+
+    const initializedResult = await captureCli(["status", initializedRoot, "--json"]);
+
+    expect(initializedResult.exitCode).toBeUndefined();
+    expect(initializedResult.stderr).toBe("");
+    const initializedPayload = JSON.parse(initializedResult.stdout) as CodegraphLifecycleStatus;
+    expect(initializedPayload.schemaVersion).toBe(1);
+    expect(initializedPayload.root).toBe(initializedRoot);
+    expect(initializedPayload.initialized).toBeTruthy();
+    expect(initializedPayload.fileCount).toEqual({ then: 1, current: 1 });
+    expect(initializedPayload.suggestedNextCommand).toBe("codegraph status");
+  });
+
+  it("CLI lifecycle user errors fail cleanly without stack traces", async () => {
+    const syncRoot = await mkTmpDir("cg-life-cli-sync-user-error-");
+    await writeFile(syncRoot, "src/main.ts", "export const main = 1;\n");
+
+    const syncResult = await captureCli(["sync", syncRoot, "--json"]);
+
+    expect(syncResult.exitCode).toBe(1);
+    expect(syncResult.stdout).toBe("");
+    expect(syncResult.stderr).toContain("not initialized");
+    expect(syncResult.stderr).toContain("codegraph init");
+    expect(syncResult.stderr).not.toMatch(/^Error:/m);
+    expect(syncResult.stderr).not.toMatch(/\n\s+at /);
+
+    const uninitRoot = await mkTmpDir("cg-life-cli-uninit-user-error-");
+    await writeFile(uninitRoot, "src/main.ts", "export const main = 1;\n");
+    await initCodegraphLifecycle(uninitRoot);
+    await fsp.writeFile(path.join(uninitRoot, ".codegraph", "operator-note.txt"), "operator data\n", "utf8");
+
+    const uninitResult = await captureCli(["uninit", uninitRoot, "--json"]);
+
+    expect(uninitResult.exitCode).toBe(1);
+    expect(uninitResult.stdout).toBe("");
+    expect(uninitResult.stderr).toContain("unknown entries");
+    expect(uninitResult.stderr).toContain("operator-note.txt");
+    expect(uninitResult.stderr).toContain("--force");
+    expect(uninitResult.stderr).not.toMatch(/^Error:/m);
+    expect(uninitResult.stderr).not.toMatch(/\n\s+at /);
   });
 
   it("CLI lifecycle commands reject invalid positional roots instead of falling back to cwd", async () => {

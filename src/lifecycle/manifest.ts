@@ -3,6 +3,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { createAgentSession, listAgentSessionFiles } from "../agent/session.js";
 import { computeConfigHash } from "../indexer/build-cache/manifest.js";
+import { summarizeBuildOptions } from "../indexer/build-cache/options.js";
 import type { BuildOptions } from "../indexer/types.js";
 import type { AnalysisSummary } from "../analysisSummary.js";
 
@@ -267,19 +268,7 @@ function stringifyError(error: unknown): string {
 }
 
 function hashBuildOptions(buildOptions: BuildOptions | undefined): string {
-  return sha256(stableStringify(stripUnhashableBuildOptions(buildOptions ?? {})));
-}
-
-function stripUnhashableBuildOptions(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stripUnhashableBuildOptions);
-  if (typeof value === "function") return "[function]";
-  if (typeof value !== "object" || value === null) return value;
-  const out: Record<string, unknown> = {};
-  for (const [key, nested] of Object.entries(value)) {
-    if (typeof nested === "function") continue;
-    out[key] = stripUnhashableBuildOptions(nested);
-  }
-  return out;
+  return sha256(stableStringify(summarizeBuildOptions(buildOptions)));
 }
 
 function stableStringify(value: unknown): string {
