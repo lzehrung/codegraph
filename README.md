@@ -318,7 +318,18 @@ codegraph graph --root . ./src --dot --output graph.dot
 
 ## Agent setup
 
-Using a skill-aware agent? Install the bundled skill so repo navigation, semantic references, dependency tracing, and PR impact questions route to Codegraph automatically. The installer uses safe per-agent defaults and creates the target skills directory as needed:
+Using a local agent client? The top-level installer configures Codegraph-owned MCP entries and marker files for supported clients, while preserving existing user config:
+
+```bash
+codegraph install --target codex,claude --dry-run
+codegraph install --target codex,claude --yes
+codegraph install --print-config codex
+codegraph uninstall --target codex --yes
+```
+
+Supported installer targets are `codex`, `claude`, `cursor`, `gemini`, `opencode`, and `agents`. Writes require `--yes`; `--dry-run` previews files, and `uninstall` removes only Codegraph-owned marker blocks, marker files, or MCP entries whose command is `codegraph`.
+
+Using a skill-aware agent only? Install the bundled skill directly so repo navigation, semantic references, dependency tracing, and PR impact questions route to Codegraph automatically:
 
 ```bash
 # Codex CLI: ${CODEX_HOME:-~/.codex}/skills/codegraph
@@ -340,7 +351,7 @@ codegraph skill install --agent gemini
 codegraph skill install --agent opencode
 ```
 
-For a custom location, use `codegraph skill install --target <path>/skills/codegraph`; the target must end with `skills/codegraph`, and the installer creates the directory as needed. Cursor CLI now supports native skills directories too, so `.cursor/skills/codegraph` works alongside the universal `~/.agents/skills/codegraph` location. To inspect the packaged skill paths and target health, run `codegraph skill doctor`.
+For a custom skill location, use `codegraph skill install --target <path>/skills/codegraph`; the target must end with `skills/codegraph`, and the installer creates the directory as needed. Cursor CLI supports native skills directories too, so `.cursor/skills/codegraph` works alongside the universal `~/.agents/skills/codegraph` location. To inspect the packaged skill paths and target health, run `codegraph skill doctor`.
 
 ## Using as a library
 

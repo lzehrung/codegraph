@@ -86,6 +86,19 @@ Explicit CLI, library, and tool `native` options take precedence over `CODEGRAPH
 
 Reduced mode preserves graph-only and regex-backed recovery where available; it does not provide a non-native Tree-sitter parser.
 
+## Agent client setup
+
+After installing the CLI, `codegraph install` can configure Codegraph-owned MCP entries and skill marker files for supported agent clients:
+
+```bash
+codegraph install --target codex,claude --dry-run
+codegraph install --target codex,claude --yes
+codegraph install --print-config codex
+```
+
+Supported targets are `codex`, `claude`, `cursor`, `gemini`, `opencode`, and `agents`. Writes require `--yes`; `--dry-run` reports the files that would change, and `uninstall` removes only Codegraph-owned marker blocks, marker files, or MCP entries whose command is `codegraph`.
+The lower-level `codegraph skill install --agent <name>` command remains available when you only want to copy the bundled skill.
+
 ## Next steps
 
 - For CLI commands and examples, see [docs/cli.md](./cli.md).
