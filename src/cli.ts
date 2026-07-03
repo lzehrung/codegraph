@@ -31,6 +31,7 @@ import { buildDoctorReport } from "./cli/doctor.js";
 import { handleDriftCommand } from "./cli/drift.js";
 import { handleDuplicatesCommand } from "./cli/duplicates.js";
 import { handleExplainCommand } from "./cli/explain.js";
+import { handleExploreCommand } from "./cli/explore.js";
 import { handleGraphDeltaCommand } from "./cli/graphDelta.js";
 import { handleGraphQueryCommand } from "./cli/graphQueries.js";
 import { handleGrepCommand } from "./cli/grep.js";
@@ -521,6 +522,21 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     }
     return await resolveFilesFromRoots();
   };
+
+  if (cmd === "explore") {
+    await handleExploreCommand({
+      positionals: parsed.positionals,
+      root: projectRootFs,
+      buildOptions: buildAgentOptions(),
+      getOpt,
+      hasFlag,
+      writeJSONLine,
+      writeStdoutLine,
+      writeStderrLine,
+      exit: exitCli,
+    });
+    return;
+  }
 
   if (cmd === "search") {
     await handleSearchCommand({

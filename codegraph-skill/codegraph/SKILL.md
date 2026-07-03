@@ -11,7 +11,7 @@ Use Codegraph for structure-aware repo questions:
 - symbol navigation with definitions, references, dependencies, and paths
 - PR or worktree impact review with candidate tests and risk signals
 - duplicate cleanup and refactor-risk triage
-- bounded agent context through orientation, search, packets, explain, and MCP
+- bounded agent context through explore, orientation, search, packets, explain, and MCP
 
 Prefer plain text search for raw strings, logs, config keys, secrets, and exact literals.
 Do not use Codegraph as the only evidence for runtime behavior; pair it with tests or execution.
@@ -24,10 +24,11 @@ For PR, worktree, or sweeping review tasks, start with the compact reviewer hand
 codegraph review --base HEAD --head WORKTREE --summary
 ```
 
-Use `codegraph impact --base HEAD --head WORKTREE --pretty` when you need the broader blast-radius map. For unfamiliar repos without a diff, start bounded with `codegraph orient --root . --budget small --pretty`.
+Use `codegraph impact --base HEAD --head WORKTREE --pretty` when you need the broader blast-radius map. For unfamiliar repos without a diff, start bounded with `codegraph explore "how does auth reach db?" --root . --pretty` or `codegraph orient --root . --budget small --pretty` when no concrete question exists.
 Use `doctor` only when install, native-runtime, or artifact health is the task.
 Then choose the smallest useful follow-up:
 
+- explore: `codegraph explore "how does auth reach db?" --pretty`
 - packet: `codegraph packet get <file|symbol|sql-object|handle> --pretty`
 - search: `codegraph search "auth user" --json`
 - explain: `codegraph explain <file|symbol|sql-object|handle>`
@@ -54,6 +55,7 @@ Hybrid search is code-first by default, and search/explain packets include analy
 
 Current high-value surfaces:
 
+- `explore --pretty`: one-call question answer with anchors, packets, paths, blast radius, candidate tests, and follow-ups
 - `orient --pretty`: ranked first-turn focus targets with copyable follow-ups
 - `impact --pretty`: ranked "what could this break?" map
 - `review --summary`: compact reviewer handoff
@@ -65,7 +67,7 @@ Treat duplicate leads and call-compatibility hints as review leads, not proof.
 ## MCP
 
 If MCP tools are available, prefer them over repeated CLI invocations.
-Use MCP `orient`, `search`, `packet_get`, `goto`, `refs`, `deps`, `rdeps`, `path`, `impact`, `review`, and `query_sqlite` first.
+Use MCP `explore`, `orient`, `search`, `packet_get`, `goto`, `refs`, `deps`, `rdeps`, `path`, `impact`, `review`, and `query_sqlite` first.
 After edits, check MCP response `freshness`: `refreshed` means Codegraph rebuilt before answering, and `stale` includes a reason plus bounded changed-file metadata before indexed context is trusted.
 Run `refresh_index` before `artifact_build` when MCP reports a stale index; artifact writes refuse stale snapshots.
 Fall back to CLI when MCP is unavailable.

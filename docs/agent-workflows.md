@@ -21,6 +21,7 @@ codegraph impact --base HEAD --head WORKTREE --pretty
 For an unfamiliar repo, keep the first loop bounded and actionable:
 
 ```bash
+codegraph explore "how does auth reach db?" --root . --pretty
 codegraph orient --root . --budget small --pretty
 codegraph search "auth user" --json
 codegraph explain <file-from-search-or-orient> --json
@@ -29,7 +30,7 @@ codegraph explain <file-from-search-or-orient> --json
 For PR, worktree, or sweeping review tasks, prefer `review` first; use `impact` when you need the broader blast radius map instead of the reviewer handoff.
 
 Use `doctor` only when package/runtime state or an existing artifact path is the question.
-Use `search` when the agent has a query but no handle, `explain` when it already knows a file/symbol/SQL object/handle, and `inspect` for a human-readable architecture summary.
+Use `explore` when the agent has a broad question and needs search anchors, packets, paths, blast radius, candidate tests, and follow-ups in one bounded response. Use `search` when it only needs anchors, `explain` when it already knows a file/symbol/SQL object/handle, and `inspect` for a human-readable architecture summary.
 Use `artifact build` for durable handoff directories and `mcp serve` when repeated follow-up calls should share one warm repo session.
 
 Choose output by the next consumer:
@@ -41,6 +42,18 @@ Choose output by the next consumer:
 For durable repo-local scan scope, add `codegraph.config.json` at the project root. `discovery.ignoreGlobs` keeps large fixture, generated, or vendored folders out of agent search, MCP sessions, graphing, unresolved-import checks, impact, and review unless a command explicitly changes scan scope.
 
 For raw command flags and output contracts, see [docs/cli.md](./cli.md). For library types and wrappers, see [docs/library-api.md](./library-api.md).
+
+## Explore facade
+
+Start with `explore` when an agent can ask a concrete repo question:
+
+```bash
+codegraph explore "how does auth reach db?" --root . --pretty
+codegraph explore src/auth.ts --json --limit 5 --max-packets 3
+```
+
+Explore orchestrates existing search, packet, path, reverse-dependency, and candidate-test surfaces. It returns `schemaVersion: 1`, the query, analysis metadata, summary bullets, anchors, bounded packets, dependency paths, blast radius, candidate tests, follow-ups, flat limits, and omission counts.
+Use `--no-source` when the caller only needs anchors, paths, and follow-up commands.
 
 ## Orientation packets
 

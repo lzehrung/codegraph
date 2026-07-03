@@ -7,6 +7,14 @@ export type {
   AgentSessionFreshnessOptions,
   AgentSessionOptions,
 } from "./agent/session.js";
+export { exploreCodegraph, exploreCodegraphWithSession, formatAgentExploreResponse } from "./agent/explore.js";
+export type {
+  AgentExploreBlastRadiusSummary,
+  AgentExploreDependencyPathSummary,
+  AgentExplorePacketSummary,
+  AgentExploreRequest,
+  AgentExploreResponse,
+} from "./agent/explore.js";
 export { orientCodegraph } from "./agent/orient.js";
 export type {
   AgentModuleSummary,
