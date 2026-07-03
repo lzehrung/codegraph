@@ -10,6 +10,7 @@ import {
   updateGraphSqlite,
   queryGraphSqlite,
   queryGraphSqliteRaw,
+  SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY,
 } from "../src/index.js";
 import { mkTmpDir, normalizeTestPath } from "./helpers/filesystem.js";
 
@@ -67,6 +68,36 @@ export function run() { helper(); new Widget(); }
 
     const calls = dbQuery(db, "SELECT label FROM symbol_edges WHERE label = 'calls';");
     expect(calls.length).toBeGreaterThan(0);
+    db.close();
+  });
+
+  it("clears artifact freshness metadata on unsigned full rewrites", async () => {
+    const root = await mkTmpDir("dg-sqlite-freshness-rewrite-");
+    const mainPath = path.join(root, "main.ts");
+    await fsp.writeFile(mainPath, "export const one = 1;\n", "utf8");
+    const index = await buildProjectIndex(root);
+    const sgraph = await buildSymbolGraphDetailed(index);
+    const dbPath = path.join(root, "graph.sqlite");
+    const stat = await fsp.stat(mainPath);
+    await writeGraphSqlite({
+      fileGraph: index.graph,
+      symbolGraph: sgraph,
+      outputPath: dbPath,
+      fileSignatures: [{ path: mainPath, size: stat.size, mtimeMs: stat.mtimeMs }],
+    });
+    let db = new DatabaseSync(dbPath);
+    expect(dbQuery(db, "SELECT value FROM graph_metadata WHERE key = 'artifact_file_signatures_v1';")).toHaveLength(1);
+    db.close();
+
+    await writeGraphSqlite({
+      fileGraph: index.graph,
+      symbolGraph: sgraph,
+      outputPath: dbPath,
+    });
+    db = new DatabaseSync(dbPath);
+    expect(
+      dbQuery(db, `SELECT value FROM graph_metadata WHERE key = '${SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY}';`),
+    ).toHaveLength(0);
     db.close();
   });
 

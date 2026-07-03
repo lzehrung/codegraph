@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
-import { createAgentSession } from "../src/agent/session.js";
+import { createAgentSession, type AgentSession } from "../src/agent/session.js";
 import {
   createCodegraphMcpHandlers,
   listCodegraphMcpTools,
@@ -528,6 +528,25 @@ describe("codegraph MCP handlers", () => {
     expect(refreshedPaths.some((file) => file.endsWith("late.ts"))).toBe(true);
     expect(refreshedPaths.some((file) => file.endsWith("ignored.ts"))).toBe(false);
     expect(refreshed.freshness).toEqual({ state: "refreshed", changedFiles: ["late.ts"] });
+  });
+
+  it("rejects prebuilt SQLite sessions without live discovery", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-no-discovery-"));
+    const outDir = path.join(root, "out");
+    await fs.writeFile(path.join(root, "one.ts"), "export const one = 1;\n");
+    const buildHandlers = createCodegraphMcpHandlers({ root, readOnly: false });
+    await buildHandlers.artifact_build({ outDir, sqlite: true });
+    const backingSession = createAgentSession({ root });
+    const session: AgentSession = {
+      loadProject: backingSession.loadProject,
+      checkFreshness: async () => ({ state: "fresh" }),
+      invalidate: backingSession.invalidate,
+    };
+    const readHandlers = createCodegraphMcpHandlers({ root, artifactPath: outDir, session });
+
+    await expect(readHandlers.query_sqlite({ query: "SELECT path FROM files ORDER BY path;" })).rejects.toThrow(
+      /does not expose live file discovery/,
+    );
   });
 
   it("bounds query_sqlite bytes for MCP responses", async () => {
