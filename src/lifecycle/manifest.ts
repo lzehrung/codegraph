@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { CODEGRAPH_CONFIG_FILE } from "../config.js";
 import { createAgentSession, listAgentSessionFiles } from "../agent/session.js";
+import { computeConfigHash } from "../indexer/build-cache/manifest.js";
 import type { BuildOptions } from "../indexer/types.js";
 import type { AnalysisSummary } from "../analysisSummary.js";
 
@@ -14,6 +14,7 @@ export type CodegraphLifecycleManifest = {
   configHash: string;
   buildOptionsHash: string;
   fileCount: number;
+  fileSignatureHash: string;
   analysis: AnalysisSummary;
 };
 
@@ -29,6 +30,7 @@ export type CodegraphLifecycleStatus = {
   };
   configChanged: boolean;
   buildOptionsChanged: boolean;
+  filesChanged: boolean;
   analysis?: AnalysisSummary;
   suggestedNextCommand: string;
 };
@@ -66,10 +68,10 @@ export async function initCodegraphLifecycle(
   root: string,
   options: { buildOptions?: BuildOptions; force?: boolean } = {},
 ): Promise<CodegraphLifecycleSyncResult> {
-  const existing = await readLifecycleManifest(root);
+  const existing = await readLifecycleManifest(root, options.force ? { allowInvalid: true } : {});
   if (existing && !options.force) {
     const status = await getCodegraphLifecycleStatus(root, options);
-    if (!status.configChanged && !status.buildOptionsChanged && status.fileCount?.then === status.fileCount?.current) {
+    if (!status.configChanged && !status.buildOptionsChanged && !status.filesChanged) {
       return {
         schemaVersion: MANIFEST_SCHEMA_VERSION,
         root,
@@ -87,11 +89,16 @@ export async function syncCodegraphLifecycle(
   root: string,
   options: { buildOptions?: BuildOptions; init?: boolean; force?: boolean } = {},
 ): Promise<CodegraphLifecycleSyncResult> {
-  const existing = await readLifecycleManifest(root);
+  const existing = await readLifecycleManifest(root, { allowInvalid: Boolean(options.init && options.force) });
   if (!existing && !options.init) {
     throw new Error("Codegraph is not initialized for this project. Run codegraph init or codegraph sync --init.");
   }
-  const manifest = await buildLifecycleManifest(root, options.buildOptions, existing);
+  const manifest = await buildLifecycleManifest(
+    root,
+    options.buildOptions,
+    existing,
+    options.force ? { force: true } : {},
+  );
   await writeLifecycleManifest(root, manifest);
   const thenCount = existing?.fileCount ?? 0;
   const totalDelta = manifest.fileCount - thenCount;
@@ -129,12 +136,15 @@ export async function getCodegraphLifecycleStatus(
       manifestPath,
       configChanged: false,
       buildOptionsChanged: false,
+      filesChanged: false,
       suggestedNextCommand: "codegraph init",
     };
   }
+  const fileSignatureHash = await hashDiscoveredFiles(files, root);
   const configChanged = manifest.configHash !== configHash;
   const buildOptionsChanged = manifest.buildOptionsHash !== buildOptionsHash;
-  const changed = configChanged || buildOptionsChanged || manifest.fileCount !== files.length;
+  const filesChanged = manifest.fileSignatureHash !== fileSignatureHash;
+  const changed = configChanged || buildOptionsChanged || filesChanged;
   return {
     schemaVersion: MANIFEST_SCHEMA_VERSION,
     root,
@@ -147,6 +157,7 @@ export async function getCodegraphLifecycleStatus(
     },
     configChanged,
     buildOptionsChanged,
+    filesChanged,
     analysis: manifest.analysis,
     suggestedNextCommand: changed ? "codegraph sync" : "codegraph status",
   };
@@ -181,10 +192,14 @@ async function buildLifecycleManifest(
   root: string,
   buildOptions: BuildOptions | undefined,
   existing: CodegraphLifecycleManifest | null,
+  options: { force?: boolean } = {},
 ): Promise<CodegraphLifecycleManifest> {
   const now = new Date().toISOString();
-  const options = { ...(buildOptions ?? {}), cache: "disk" as const };
-  const session = createAgentSession({ root, buildOptions: options });
+  const sessionBuildOptions = { ...(buildOptions ?? {}), cache: "disk" as const };
+  const forcedSessionBuildOptions = options.force
+    ? { ...sessionBuildOptions, cacheStrict: true, cacheVerify: true }
+    : sessionBuildOptions;
+  const session = createAgentSession({ root, buildOptions: forcedSessionBuildOptions });
   const snapshot = await session.loadProject({ symbolGraph: "skip" });
   return {
     schemaVersion: MANIFEST_SCHEMA_VERSION,
@@ -194,19 +209,30 @@ async function buildLifecycleManifest(
     configHash: await hashConfig(root),
     buildOptionsHash: hashBuildOptions(buildOptions),
     fileCount: snapshot.files.length,
+    fileSignatureHash: await hashDiscoveredFiles(snapshot.files, root),
     analysis: snapshot.analysis,
   };
 }
 
-async function readLifecycleManifest(root: string): Promise<CodegraphLifecycleManifest | null> {
+async function readLifecycleManifest(
+  root: string,
+  options: { allowInvalid?: boolean } = {},
+): Promise<CodegraphLifecycleManifest | null> {
+  const manifestPath = codegraphLifecycleManifestPath(root);
+  let raw: string;
   try {
-    const raw = await fsp.readFile(codegraphLifecycleManifestPath(root), "utf8");
+    raw = await fsp.readFile(manifestPath, "utf8");
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+    throw new Error(`Unable to read Codegraph lifecycle manifest at ${manifestPath}: ${stringifyError(error)}`);
+  }
+  try {
     const parsed: unknown = JSON.parse(raw);
     if (isLifecycleManifest(parsed)) return parsed;
     throw new Error("Invalid Codegraph lifecycle manifest schema.");
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
-    throw error;
+    if (options.allowInvalid) return null;
+    throw new Error(`Unable to read Codegraph lifecycle manifest at ${manifestPath}: ${stringifyError(error)}`);
   }
 }
 
@@ -219,13 +245,25 @@ async function writeLifecycleManifest(root: string, manifest: CodegraphLifecycle
 }
 
 async function hashConfig(root: string): Promise<string> {
-  const configPath = path.join(root, CODEGRAPH_CONFIG_FILE);
-  try {
-    return sha256(await fsp.readFile(configPath, "utf8"));
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return sha256("");
-    throw error;
+  const result = await computeConfigHash(root);
+  return result.hash;
+}
+
+async function hashDiscoveredFiles(files: readonly string[], root: string): Promise<string> {
+  const hash = createHash("sha256");
+  for (const file of [...files].sort((left, right) => left.localeCompare(right))) {
+    const relative = path.relative(root, file).replace(/\\/g, "/");
+    hash.update(relative);
+    hash.update("\0");
+    hash.update(await fsp.readFile(file));
+    hash.update("\0");
   }
+  return hash.digest("hex");
+}
+
+function stringifyError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
 }
 
 function hashBuildOptions(buildOptions: BuildOptions | undefined): string {
@@ -285,6 +323,7 @@ function isLifecycleManifest(value: unknown): value is CodegraphLifecycleManifes
     typeof record.configHash === "string" &&
     typeof record.buildOptionsHash === "string" &&
     typeof record.fileCount === "number" &&
+    typeof record.fileSignatureHash === "string" &&
     typeof record.analysis === "object" &&
     record.analysis !== null
   );

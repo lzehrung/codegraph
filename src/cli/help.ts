@@ -167,11 +167,11 @@ export const LIFECYCLE_HELP_TEXT = `codegraph lifecycle - Initialize, inspect, r
 Usage:
   codegraph init [path] [--root <path>] [--force] [--json]
   codegraph status [path] [--root <path>] [--json]
-  codegraph sync [path] [--root <path>] [--init] [--force] [--json]
+  codegraph sync [path] [--root <path>] [--init] [--json]
   codegraph uninit [path] [--root <path>] [--force] [--json]
 
 State:
-  Lifecycle commands write only .codegraph/manifest.json metadata. They reuse the existing disk cache and never make other commands depend on the manifest.
+  Lifecycle commands own only .codegraph/manifest.json metadata. Init and sync may warm or update the disk cache under .codegraph-cache/index-v1/. Other commands do not depend on the manifest.
 `;
 
 export const INSTALL_HELP_TEXT = `codegraph install - Configure Codegraph for supported agent clients

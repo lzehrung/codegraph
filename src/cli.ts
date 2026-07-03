@@ -81,6 +81,10 @@ function isExistingDirectory(filePath: string): boolean {
   }
 }
 
+function isLifecycleCommand(command: string): command is "init" | "status" | "sync" | "uninit" {
+  return command === "init" || command === "status" || command === "sync" || command === "uninit";
+}
+
 function assertValidIncludeRoots(command: string, baseRoot: string, includeRoots: readonly string[]): void {
   const globLikeRoot = includeRoots.find((includeRoot) => looksLikeGlobPattern(baseRoot, includeRoot));
   if (!globLikeRoot) return;
@@ -214,6 +218,18 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   const firstPositionalRoot = parsed.positionals.length === 1 ? resolveAbs(parsed.positionals[0]!) : undefined;
+  if (
+    isLifecycleCommand(cmd) &&
+    !rootOpt &&
+    firstPositionalRoot !== undefined &&
+    !isExistingDirectory(firstPositionalRoot)
+  ) {
+    writeStderrLine(
+      `Invalid ${cmd} path "${parsed.positionals[0]!}". Expected an existing directory or use --root <path>.`,
+    );
+    exitCli(2);
+    return;
+  }
   const defaultProjectRoot =
     (cmd === "graph" ||
       cmd === "graph-delta" ||
@@ -223,10 +239,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       cmd === "inspect" ||
       cmd === "duplicates" ||
       cmd === "impact" ||
-      cmd === "init" ||
-      cmd === "status" ||
-      cmd === "sync" ||
-      cmd === "uninit") &&
+      isLifecycleCommand(cmd)) &&
     !rootOpt &&
     firstPositionalRoot !== undefined &&
     isExistingDirectory(firstPositionalRoot)
@@ -543,12 +556,11 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     return await resolveFilesFromRoots();
   };
 
-  if (cmd === "init" || cmd === "status" || cmd === "sync" || cmd === "uninit") {
+  if (isLifecycleCommand(cmd)) {
     await handleLifecycleCommand({
       command: cmd,
       root: projectRootFs,
       buildOptions: buildAgentOptions(),
-      getOpt,
       hasFlag,
       writeJSONLine,
       writeStdoutLine,

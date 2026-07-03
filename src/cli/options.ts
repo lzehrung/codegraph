@@ -498,10 +498,10 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ],
   [
     "sync",
-    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--force", "--init"], SHARED_BUILD_OPTIONS, {
+    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--init"], SHARED_BUILD_OPTIONS, {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph sync [path] [--root <path>] [--init] [--force] [--json]",
+      usage: "Usage: codegraph sync [path] [--root <path>] [--init] [--json]",
     }),
   ],
   [

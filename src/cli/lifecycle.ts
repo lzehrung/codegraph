@@ -13,7 +13,6 @@ export type LifecycleCommandContext = {
   command: "init" | "status" | "sync" | "uninit";
   root: string;
   buildOptions?: BuildOptions;
-  getOpt: (name: string) => string | undefined;
   hasFlag: (name: string) => boolean;
   writeJSONLine: (value: unknown) => void;
   writeStdoutLine: (message: string) => void;
@@ -33,7 +32,6 @@ export async function handleLifecycleCommand(context: LifecycleCommandContext): 
     const result = await syncCodegraphLifecycle(context.root, {
       ...(context.buildOptions ? { buildOptions: context.buildOptions } : {}),
       init: context.hasFlag("--init"),
-      force: context.hasFlag("--force"),
     });
     writeLifecycleResult(context, result, formatSyncResult("Synced", result));
     return;
