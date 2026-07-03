@@ -149,9 +149,7 @@ State:
 export const AFFECTED_HELP_TEXT = `codegraph affected - List tests likely affected by changed files
 
 Usage:
-  codegraph affected <file...> [--root <path>] [--depth <n>] [--json | --quiet]
-  codegraph affected --stdin [--root <path>] [--filter <glob>] [--quiet]
-  codegraph affected --base <ref> --head <ref> [--root <path>] [--json]
+  codegraph affected [file...] [--stdin] [--base <ref> --head <ref>] [--root <path>] [--depth <n>] [--filter <glob>] [--json | --quiet]
 
 Options:
   --depth <n>       Reverse dependency traversal depth (default: 1)
