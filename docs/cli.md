@@ -36,18 +36,27 @@ Commands that scan a project read `codegraph.config.json` from `--root` when it 
     "includeGlobs": ["src/**/*.ts"],
     "ignoreGlobs": ["tests/samples/**", "tests/languages/samples/**"],
     "useGitignore": true
+  },
+  "languages": {
+    "extensions": {
+      ".tpl": "php",
+      ".inc.php": "php",
+      ".build.ts": "ts"
+    }
   }
 }
 ```
 
 - `discovery.includeGlobs` and `discovery.ignoreGlobs` are project-root-relative, even when a command scans child include roots.
 - `discovery.ignoreGlobs` is for large fixture, generated, or vendored folders that should not be indexed.
+- `languages.extensions` maps additional or built-in suffixes to supported language IDs; keys must start with `.`, values must name a supported language, and the longest suffix wins.
+- Built-in suffixes remain active unless explicitly remapped by `languages.extensions`.
 - CLI `--include-glob` and `--ignore-glob` values are one-off additions relative to each scanned root.
 - `inspect` follow-up commands preserve the selected `--root` and include roots.
 - `--no-gitignore` overrides `useGitignore`.
 
 Config globs and one-off CLI globs apply at different layers. `codegraph.config.json` globs are durable and project-root-relative. CLI scan-root globs are additive for a single command and are evaluated relative to each active scan root. `--no-gitignore` disables `.gitignore` filtering for that command only; it does not change config.
-Cache and manifest reuse is rooted at `--root`. Reusing a project root lets commands share compatible index and graph entries when the file signatures, config, graph options, and relevant build options still match. Changing `--root`, changing discovery config, or changing graph options creates a different reuse boundary. Child include-root scans can reuse project-root cache entries, but command summaries and follow-up commands stay scoped to the selected include roots.
+Configured language extensions automatically extend discovery for matching files and participate in cache compatibility checks. Reusing a project root lets commands share compatible index and graph entries when the file signatures, config, graph options, and relevant build options still match. Changing `--root`, changing discovery or language-extension config, or changing graph options creates a different reuse boundary. Child include-root scans can reuse project-root cache entries, but command summaries and follow-up commands stay scoped to the selected include roots.
 
 ## Core commands
 

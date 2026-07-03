@@ -3,7 +3,12 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { supportForFile, type LanguageSupport } from "../languages.js";
 import { loadWorkspaceConfig, resolveWorkspacePackage } from "../util/workspace.js";
-import { discoverProjectFiles, listProjectFiles, type ProjectFileInfo } from "../util/projectFiles.js";
+import {
+  DEFAULT_PROJECT_PATTERNS,
+  discoverProjectFiles,
+  listProjectFiles,
+  type ProjectFileInfo,
+} from "../util/projectFiles.js";
 import { getGitHead, isGitRepo, getGitBlobHashes, listChangedFiles } from "../util/git.js";
 import { clearImportResolutionCaches, resolveSpecifier } from "../util/resolution.js";
 import { assertFilePathWithinRoot, normalizePath } from "../util/paths.js";
@@ -239,6 +244,7 @@ async function buildIndexedModuleForFile(args: {
           graphOptions: args.graphOptions,
           ...(args.opts?.native ? { native: args.opts.native } : {}),
           ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
+          ...(args.opts?.languageExtensions ? { languageExtensions: args.opts.languageExtensions } : {}),
           ...(args.onFallbackImportExtraction ? { onFallbackImportExtraction: args.onFallbackImportExtraction } : {}),
         });
   collectJsonDependencies(imports, args.jsonDependencies);
@@ -268,7 +274,9 @@ async function buildIndexedModuleForFile(args: {
 
   const sigInfo = args.fileSignatures.get(args.file);
   if (sigInfo) {
-    const cacheSig = args.cacheEnabled ? await cacheSignatureForFile(args.file, sigInfo) : sigInfo.cacheSig;
+    const cacheSig = args.cacheEnabled
+      ? await moduleCacheSignatureForFile(args.file, sigInfo, args.opts)
+      : sigInfo.cacheSig;
     writeToCache(args.projectRoot, args.file, cacheSig, mod, args.opts);
   }
 
@@ -320,7 +328,28 @@ function graphEdgeKey(edge: Edge): string {
   return `${edge.from}::${target}::${edge.raw ?? ""}::${edge.typeOnly ? 1 : 0}`;
 }
 
-function expandStarImports(modules: Map<FileId, ModuleIndex>): void {
+async function moduleCacheSignatureForFile(file: string, sigInfo: FileSignature, opts?: BuildOptions): Promise<string> {
+  const baseSignature = await cacheSignatureForFile(file, sigInfo);
+  const languageExtensions = opts?.languageExtensions;
+  if (!languageExtensions || !Object.keys(languageExtensions).length) return baseSignature;
+  const normalizedExtensions = Object.entries(languageExtensions)
+    .map(([key, value]) => [key.trim().toLowerCase(), value.trim()] as const)
+    .filter(([key, value]) => key && value)
+    .sort((left, right) => left[0].localeCompare(right[0]));
+  return `${baseSignature}\0languageExtensions:${JSON.stringify(normalizedExtensions)}`;
+}
+
+function projectPatternsForLanguageExtensions(opts?: BuildOptions): string[] | undefined {
+  const extensions = Object.keys(opts?.languageExtensions ?? {})
+    .map((extension) => extension.trim().toLowerCase())
+    .filter((extension) => extension.startsWith("."))
+    .sort();
+  if (!extensions.length) return undefined;
+  const customPatterns = extensions.map((extension) => `**/*${extension}`);
+  return [...DEFAULT_PROJECT_PATTERNS, ...customPatterns];
+}
+
+function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: BuildOptions): void {
   const importAlreadyPresent = (imports: ImportBinding[], candidate: ImportBinding): boolean =>
     imports.some((existing) => {
       if (existing.kind !== candidate.kind) return false;
@@ -343,7 +372,7 @@ function expandStarImports(modules: Map<FileId, ModuleIndex>): void {
       if (imp.kind !== "star" || typeof imp.resolved !== "string") continue;
       const target = modules.get(imp.resolved);
       if (!target) continue;
-      const targetSupport = supportForFile(imp.resolved);
+      const targetSupport = supportForFile(imp.resolved, opts?.languageExtensions);
       const exportedSymbols = target.exports.filter((entry) => entry.type === "local").length
         ? target.exports
             .filter((entry): entry is Extract<typeof entry, { type: "local" }> => entry.type === "local")
@@ -576,7 +605,7 @@ async function buildIndexFromFileListShared(
           fileSignatures.set(file, sigInfo);
         }
         manifestEntriesForIndex.set(file, toProjectIndexManifestEntry(sigInfo));
-        const cacheSig = cacheEnabled ? await cacheSignatureForFile(file, sigInfo) : sigInfo.cacheSig;
+        const cacheSig = cacheEnabled ? await moduleCacheSignatureForFile(file, sigInfo, opts) : sigInfo.cacheSig;
         let mod: ModuleIndex | null = cacheEnabled ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report) : null;
         if (mod && fileReport) {
           fileReport.cached = (fileReport.cached ?? 0) + 1;
@@ -599,6 +628,7 @@ async function buildIndexFromFileListShared(
             resolveNodeModules: !!graphOptions.resolveNodeModules,
             dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
             ...(opts?.native ? { native: opts.native } : {}),
+            ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
             ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
             ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
             fileSignature: sigInfo,
@@ -610,13 +640,13 @@ async function buildIndexFromFileListShared(
             ...(sqlFactCache ? { sqlFactCache } : {}),
           });
           if (bloomFilterCache) {
-            const filter = await buildBloomFilterForFile(file);
+            const filter = await buildBloomFilterForFile(file, opts);
             if (filter) bloomFilterCache.set(file, filter);
           }
           return [file, mod, edges] as const;
         }
         if (fileReport) fileReport.parsed = (fileReport.parsed ?? 0) + 1;
-        const support = supportForFile(file);
+        const support = supportForFile(file, opts?.languageExtensions);
         if (!support) return [file, createEmptyModuleIndex(file), []] as const;
         let graphContext: IndexedFileGraphContext | undefined;
         if (!mod) {
@@ -651,6 +681,7 @@ async function buildIndexFromFileListShared(
           resolveNodeModules: !!graphOptions.resolveNodeModules,
           dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
           ...(opts?.native ? { native: opts.native } : {}),
+          ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
           ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
           ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
           fileSignature: sigInfo,
@@ -709,7 +740,7 @@ async function buildIndexFromFileListShared(
     for (const jsonPath of jsonDependencies) {
       ensureJsonModule(modules, jsonPath);
     }
-    expandStarImports(modules);
+    expandStarImports(modules, opts);
     if (manifestEntries) {
       await writeIndexManifestSnapshot({
         projectRoot,
@@ -750,7 +781,7 @@ async function buildProjectIndexWithManifestOptions(
 ): Promise<ProjectIndex> {
   try {
     const [files, projectFiles] = await Promise.all([
-      listProjectFiles(projectRoot, undefined, {
+      listProjectFiles(projectRoot, projectPatternsForLanguageExtensions(opts), {
         ...opts?.discovery,
         ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
       }),
@@ -1043,14 +1074,14 @@ export async function buildProjectIndexIncremental(
       for (const file of allFiles) {
         if (changedFiles.has(file)) continue;
         const sigInfo = fileSignatures.get(file)!;
-        const cacheSig = cacheEnabled ? await cacheSignatureForFile(file, sigInfo) : sigInfo.cacheSig;
+        const cacheSig = cacheEnabled ? await moduleCacheSignatureForFile(file, sigInfo, opts) : sigInfo.cacheSig;
         const cached = cacheEnabled ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report) : null;
         if (cached) {
           if (fileReport) fileReport.cached = (fileReport.cached ?? 0) + 1;
           modules.set(file, cached);
           collectJsonDependencies(cached.imports, jsonDependencies);
           if (bloomFilterCache) {
-            const filter = await buildBloomFilterForFile(file);
+            const filter = await buildBloomFilterForFile(file, opts);
             if (filter) bloomFilterCache.set(file, filter);
           }
         } else {
@@ -1067,7 +1098,7 @@ export async function buildProjectIndexIncremental(
         const fileResults = await mapLimit(changedList, conc, async (file) => {
           try {
             if (fileReport) fileReport.parsed = (fileReport.parsed ?? 0) + 1;
-            const support = supportForFile(file);
+            const support = supportForFile(file, opts?.languageExtensions);
             if (!support) return [file, createEmptyModuleIndex(file)] as const;
             const built = await buildIndexedModuleForFile({
               file,
@@ -1114,7 +1145,7 @@ export async function buildProjectIndexIncremental(
       for (const jsonPath of jsonDependencies) {
         ensureJsonModule(modules, jsonPath);
       }
-      expandStarImports(modules);
+      expandStarImports(modules, opts);
       const retainedTrackedEntries = Object.entries(trackedEntries).filter(([file]) => !deletedTrackedFiles.has(file));
       const cachedGraphEntries = new Map<string, ManifestFileEntry>(retainedTrackedEntries);
       const manifestEntries = new Map<string, ManifestFileEntry>(cachedGraphEntries);
@@ -1145,6 +1176,7 @@ export async function buildProjectIndexIncremental(
               resolveNodeModules: !!graphOptions.resolveNodeModules,
               dynamicImportHeuristics: !!graphOptions.dynamicImportHeuristics,
               ...(opts?.native ? { native: opts.native } : {}),
+              ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
               ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
               ...(graphOptions.resolutionHints ? { resolutionHints: graphOptions.resolutionHints } : {}),
               allFiles: Array.from(allFiles),

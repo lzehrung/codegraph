@@ -80,7 +80,8 @@ Fall back to CLI when MCP is unavailable.
 
 ## Discovery
 
-Durable repo-local ignores belong in `codegraph.config.json`.
+Durable repo-local ignores and custom language suffixes belong in `codegraph.config.json`.
+Use `languages.extensions` for suffix-to-language mappings such as `.tpl` to `php`; keys start with `.`, values are supported language IDs, and the longest suffix wins.
 One-off CLI filters use scan-root-relative `--include-glob` and `--ignore-glob`.
 Use `--no-gitignore` only when ignored files are intentionally in scope.
 

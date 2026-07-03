@@ -191,6 +191,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     return {
       ...(progressHandler ? { onProgress: progressHandler } : {}),
       discovery: discoveryOptions,
+      ...(config.languages?.extensions ? { languageExtensions: config.languages.extensions } : {}),
       ...(cache !== undefined ? { cache } : {}),
       ...(hasFlag("--cache-strict") ? { cacheStrict: true } : {}),
       ...(hasFlag("--cache-verify") ? { cacheVerify: true } : {}),
@@ -756,6 +757,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       discoveryOptions,
       nativeMode,
       workerOpts,
+      languageExtensions: config.languages?.extensions,
       progressHandler,
       graphOptions: hasGraphOverrides ? buildGraphOptions() : undefined,
       reportEnabled,
@@ -785,6 +787,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
         onProgress: progressHandler,
         discovery: discoveryOptions,
         ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
+        ...(config.languages?.extensions ? { languageExtensions: config.languages.extensions } : {}),
         ...workerOpts,
       },
       writeJSONLine,
@@ -807,6 +810,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
         discovery: discoveryOptions,
         ...(hasGraphOverrides ? { graph: buildGraphOptions() } : {}),
         ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
+        ...(config.languages?.extensions ? { languageExtensions: config.languages.extensions } : {}),
         ...workerOpts,
       },
       writeJSONLine,
@@ -956,6 +960,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     discovery: discoveryOptions,
     ...(graphOptions ? { graph: graphOptions } : {}),
     ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
+    ...(config.languages?.extensions ? { languageExtensions: config.languages.extensions } : {}),
     ...workerOpts,
   });
 
@@ -1008,6 +1013,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       projectRootFs,
       includeRootsAbs,
       discoveryOptions,
+      languageExtensions: config.languages?.extensions,
       graphOptions: hasGraphOverrides || nativeMode !== "auto" ? buildGraphOptions() : undefined,
       nativeMode,
       workerOpts,
@@ -1027,6 +1033,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       projectRootFs,
       includeRootsAbs,
       discoveryOptions,
+      languageExtensions: config.languages?.extensions,
       graphOptions: hasGraphOverrides || nativeMode !== "auto" ? buildGraphOptions() : undefined,
       nativeMode,
       workerOpts,
@@ -1058,6 +1065,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
         onProgress: progressHandler,
         discovery: discoveryOptions,
         ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
+        ...(config.languages?.extensions ? { languageExtensions: config.languages.extensions } : {}),
         ...workerOpts,
       },
     });

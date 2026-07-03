@@ -5,12 +5,15 @@ import type { Edge, Graph } from "./types.js";
 import { loadWorkspaceConfig } from "./util/workspace.js";
 import { normalizeResolutionHints } from "./util/paths.js";
 import { mapLimit } from "./util/concurrency.js";
-import { logWithLevel, type LogLevel } from "./logging.js";
-import { isNativeRequiredUnavailableError, type NativeRuntimeMode } from "./native/treeSitterNative.js";
+import { logWithLevel } from "./logging.js";
+import type { LogLevel } from "./logging.js";
+import { isNativeRequiredUnavailableError } from "./native/treeSitterNative.js";
+import type { NativeRuntimeMode } from "./native/treeSitterNative.js";
 import { initNativeBackendReport } from "./native/nativeBackendReport.js";
 import { collectAngularJsFrameworkEdges } from "./graphs/angularjs.js";
-import { type FallbackImportExtractionEvent } from "./graphs/specifiers.js";
+import type { FallbackImportExtractionEvent } from "./graphs/specifiers.js";
 import type { GraphCacheEntry } from "./graphs/types.js";
+import type { LanguageExtensionMap } from "./languages.js";
 import type { BuildReport } from "./indexer/types.js";
 import type { ParsedFileContext } from "./indexer/parse-context.js";
 import { collectEdgesForFile } from "./graph-edge-collector.js";
@@ -57,6 +60,7 @@ export async function collectGraph(
     replaceFiles?: Set<string>;
     logLevel?: LogLevel;
     allFiles?: string[];
+    languageExtensions?: LanguageExtensionMap;
   },
 ): Promise<Graph> {
   const normalizePath = (file: string) => file.replace(/\\/g, "/");
@@ -146,6 +150,7 @@ export async function collectGraph(
         ...(opts?.report ? { report: opts.report } : {}),
         allFiles: normalizedAllFiles,
         ...(sqlFactCache ? { sqlFactCache } : {}),
+        ...(opts?.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
       });
       addEdgeTargetsToGraph(edges);
       return edges;

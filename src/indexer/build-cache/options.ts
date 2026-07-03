@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { GraphBuildOptions } from "../../graphs/types.js";
 import { normalizePath, normalizeResolutionHints } from "../../util/paths.js";
-import { type ProjectFileDiscoveryOptions } from "../../util/projectFiles.js";
+import type { ProjectFileDiscoveryOptions } from "../../util/projectFiles.js";
 import type { BuildOptions } from "../types.js";
 
 export type ManifestBuildOptions = {
@@ -17,9 +17,11 @@ export type ManifestBuildOptions = {
     gitignoreRoot?: string;
     useGitignore: boolean;
   };
+  languageExtensions?: Record<string, string>;
 };
 
 function normalizeManifestBuildOptions(opts?: ManifestBuildOptions): ManifestBuildOptions {
+  const languageExtensions = normalizeLanguageExtensions(opts?.languageExtensions);
   return {
     cache: opts?.cache ?? "off",
     cacheStrict: opts?.cacheStrict ?? true,
@@ -27,6 +29,7 @@ function normalizeManifestBuildOptions(opts?: ManifestBuildOptions): ManifestBui
     preset: opts?.preset,
     incrementalStrict: opts?.incrementalStrict ?? false,
     ...(opts?.discovery ? { discovery: opts.discovery } : {}),
+    ...(languageExtensions ? { languageExtensions } : {}),
   };
 }
 
@@ -50,8 +53,18 @@ function normalizeDiscoveryOptions(discovery?: ProjectFileDiscoveryOptions): Man
   };
 }
 
+function normalizeLanguageExtensions(extensions?: Record<string, string>): Record<string, string> | undefined {
+  const entries = Object.entries(extensions ?? {})
+    .map(([key, value]) => [key.trim().toLowerCase(), value.trim()] as const)
+    .filter(([key, value]) => key && value)
+    .sort((left, right) => left[0].localeCompare(right[0]));
+  if (!entries.length) return undefined;
+  return Object.fromEntries(entries);
+}
+
 function normalizeBuildOptions(opts?: BuildOptions): ManifestBuildOptions {
   const discovery = normalizeDiscoveryOptions(opts?.discovery);
+  const languageExtensions = normalizeLanguageExtensions(opts?.languageExtensions);
   return {
     cache: opts?.cache ?? "off",
     cacheStrict: opts?.cacheStrict ?? true,
@@ -59,6 +72,7 @@ function normalizeBuildOptions(opts?: BuildOptions): ManifestBuildOptions {
     preset: opts?.preset,
     incrementalStrict: opts?.incrementalStrict ?? false,
     ...(discovery ? { discovery } : {}),
+    ...(languageExtensions ? { languageExtensions } : {}),
   };
 }
 
@@ -101,6 +115,19 @@ function normalizedDiscoveryOptionsEqual(
   return true;
 }
 
+function normalizedLanguageExtensionsEqual(
+  a: Record<string, string> | undefined,
+  b: Record<string, string> | undefined,
+): boolean {
+  const normalizedA = normalizeLanguageExtensions(a) ?? {};
+  const normalizedB = normalizeLanguageExtensions(b) ?? {};
+  const keys = Array.from(new Set([...Object.keys(normalizedA), ...Object.keys(normalizedB)])).sort();
+  for (const key of keys) {
+    if (normalizedA[key] !== normalizedB[key]) return false;
+  }
+  return true;
+}
+
 export function diffBuildOptions(
   manifestOpts: ManifestBuildOptions | undefined,
   currentOpts: BuildOptions | undefined,
@@ -122,6 +149,9 @@ export function diffBuildOptions(
   }
   if (!normalizedDiscoveryOptionsEqual(normalizedManifest.discovery, normalizedCurrent.discovery)) {
     diffs.push("discovery");
+  }
+  if (!normalizedLanguageExtensionsEqual(normalizedManifest.languageExtensions, normalizedCurrent.languageExtensions)) {
+    diffs.push("languageExtensions");
   }
   return diffs;
 }

@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions } from "../src/config.js";
 import { searchCodegraph } from "../src/agent/search.js";
+import { buildProjectIndex } from "../src/indexer/build-index.js";
 
 async function mkRepo(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-config-"));
@@ -12,6 +13,36 @@ async function mkRepo(): Promise<string> {
   await fs.writeFile(path.join(root, "src", "kept.ts"), "export const keptAlpha = true;\n", "utf8");
   await fs.writeFile(path.join(root, "tests", "samples", "ignored.ts"), "export const ignoredZebra = true;\n", "utf8");
   return root;
+}
+
+async function writeConfig(root: string, config: unknown): Promise<void> {
+  await fs.writeFile(path.join(root, "codegraph.config.json"), JSON.stringify(config), "utf8");
+}
+
+function normalizedFile(root: string, relativePath: string): string {
+  return path.join(root, relativePath).replace(/\\/g, "/");
+}
+
+async function buildWithProjectConfig(root: string) {
+  const config = await loadCodegraphConfig(root);
+  return await buildProjectIndex(root, {
+    cache: "disk",
+    ...(config.languages?.extensions ? { languageExtensions: config.languages.extensions } : {}),
+  });
+}
+
+function localExportNames(
+  index: Awaited<ReturnType<typeof buildProjectIndex>>,
+  root: string,
+  relativePath: string,
+): string[] {
+  const moduleIndex = index.byFile.get(normalizedFile(root, relativePath));
+  return (
+    moduleIndex?.exports
+      .filter((entry) => entry.type === "local")
+      .map((entry) => entry.exportedAs)
+      .sort() ?? []
+  );
 }
 
 describe("codegraph config", () => {
@@ -118,5 +149,140 @@ describe("codegraph config", () => {
 
     expect(kept.results.map((result) => result.file)).toContain("src/kept.ts");
     expect(ignored.results).toEqual([]);
+  });
+
+  it("loads language extension mappings from codegraph.config.json", async () => {
+    const root = await mkRepo();
+    await writeConfig(root, {
+      languages: {
+        extensions: {
+          ".TPL": "php",
+        },
+      },
+    });
+
+    const config = await loadCodegraphConfig(root);
+
+    expect(config.languages?.extensions).toEqual({ ".tpl": "php" });
+    expect(config.discovery?.includeGlobs).toEqual(["**/*.tpl"]);
+  });
+
+  it("indexes configured nonstandard extensions with the mapped language", async () => {
+    const root = await mkRepo();
+    await fs.writeFile(
+      path.join(root, "src", "template.tpl"),
+      "<?php function mapped_template() { return 1; }\n",
+      "utf8",
+    );
+    await writeConfig(root, {
+      languages: {
+        extensions: {
+          ".tpl": "php",
+        },
+      },
+    });
+
+    const index = await buildWithProjectConfig(root);
+
+    expect(localExportNames(index, root, "src/template.tpl")).toContain("mapped_template");
+  });
+
+  it("uses the longest configured extension match before shorter remaps", async () => {
+    const root = await mkRepo();
+    await fs.writeFile(
+      path.join(root, "src", "view.inc.php"),
+      "<?php function longest_extension() { return 1; }\n",
+      "utf8",
+    );
+    await writeConfig(root, {
+      languages: {
+        extensions: {
+          ".php": "html",
+          ".inc.php": "php",
+        },
+      },
+    });
+
+    const index = await buildWithProjectConfig(root);
+
+    expect(localExportNames(index, root, "src/view.inc.php")).toContain("longest_extension");
+  });
+
+  it("keeps built-in extensions unless a matching mapping overrides them", async () => {
+    const root = await mkRepo();
+    await fs.writeFile(path.join(root, "src", "builtin.ts"), "export const builtinValue = 1;\n", "utf8");
+    await fs.writeFile(path.join(root, "src", "remapped.php"), "<?php function remapped_php() { return 1; }\n", "utf8");
+    await writeConfig(root, {
+      languages: {
+        extensions: {
+          ".tpl": "php",
+          ".php": "html",
+        },
+      },
+    });
+
+    const index = await buildWithProjectConfig(root);
+
+    expect(localExportNames(index, root, "src/builtin.ts")).toContain("builtinValue");
+    expect(localExportNames(index, root, "src/remapped.php")).not.toContain("remapped_php");
+  });
+
+  it("invalidates disk cache entries when language extension mappings change", async () => {
+    const root = await mkRepo();
+    await fs.writeFile(
+      path.join(root, "src", "cached.tpl"),
+      "<?php function cached_template() { return 1; }\n",
+      "utf8",
+    );
+    await writeConfig(root, {
+      languages: {
+        extensions: {
+          ".tpl": "html",
+        },
+      },
+    });
+
+    const htmlIndex = await buildWithProjectConfig(root);
+    expect(localExportNames(htmlIndex, root, "src/cached.tpl")).not.toContain("cached_template");
+
+    await writeConfig(root, {
+      languages: {
+        extensions: {
+          ".tpl": "php",
+        },
+      },
+    });
+
+    const phpIndex = await buildWithProjectConfig(root);
+
+    expect(localExportNames(phpIndex, root, "src/cached.tpl")).toContain("cached_template");
+  });
+
+  it("rejects language extension keys that do not start with a dot", async () => {
+    const root = await mkRepo();
+    await writeConfig(root, {
+      languages: {
+        extensions: {
+          tpl: "php",
+        },
+      },
+    });
+
+    await expect(loadCodegraphConfig(root)).rejects.toThrow('languages.extensions key "tpl" must start with "."');
+  });
+
+  it("rejects language extension mappings to unknown languages", async () => {
+    const root = await mkRepo();
+    await writeConfig(root, {
+      languages: {
+        extensions: {
+          ".tpl": "wat",
+        },
+      },
+    });
+
+    await expect(loadCodegraphConfig(root)).rejects.toThrow(
+      'languages.extensions[".tpl"] references unknown language "wat"',
+    );
   });
 });

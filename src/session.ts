@@ -110,6 +110,7 @@ function normalizeBuildOptions(options?: BuildOptions): Record<string, unknown> 
           gitignoreRoot: options.discovery.gitignoreRoot ? path.resolve(options.discovery.gitignoreRoot) : undefined,
         }
       : undefined,
+    languageExtensions: options.languageExtensions ? { ...options.languageExtensions } : undefined,
   };
 }
 
@@ -241,10 +242,16 @@ export class CodeReviewSession implements ICodeReviewSession {
   private async currentBuildOptions(): Promise<BuildOptions | undefined> {
     const config = await loadCodegraphConfig(this.root);
     const discovery = mergeDiscoveryOptions(config.discovery, this.buildOptions?.discovery);
-    if (!hasDiscoveryOptions(discovery)) {
+    const hasDiscovery = hasDiscoveryOptions(discovery);
+    const languageExtensions = this.buildOptions?.languageExtensions ?? config.languages?.extensions;
+    if (!hasDiscovery && !languageExtensions) {
       return this.buildOptions;
     }
-    return { ...this.buildOptions, discovery };
+    return {
+      ...this.buildOptions,
+      ...(hasDiscovery ? { discovery } : {}),
+      ...(languageExtensions ? { languageExtensions } : {}),
+    };
   }
 
   private async buildIndex(options: { forceFull?: boolean } = {}): Promise<{

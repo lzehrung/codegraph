@@ -6,8 +6,8 @@ import type { NativeFallbackReason, NativeRuntimeMode } from "../native/contract
 import type { ScopeIndex } from "./scope-types.js";
 import type { ReferenceCandidateIndex } from "./reference-candidate-types.js";
 import type { ParsedFileContext } from "./parse-context.js";
-import type { Edge, FileId, Graph, Range } from "../types.js";
-import { type ProjectFileDiscoveryOptions, type ProjectFileInfo } from "../util/projectFiles.js";
+import type { Edge, FileId, Graph, ProgressUpdate, Range } from "../types.js";
+import type { ProjectFileDiscoveryOptions, ProjectFileInfo } from "../util/projectFiles.js";
 import type { ImportBinding } from "./import-types.js";
 
 export type { ImportBinding } from "./import-types.js";
@@ -128,8 +128,10 @@ export type ProjectIndex = {
  * optional `discovery` globs, and a `report` object when the caller wants
  * timings/backend diagnostics alongside the resulting index.
  */
+export type LanguageExtensionMap = Record<string, string>;
+
 export type BuildOptions = {
-  onProgress?: ((progress: import("../types.js").ProgressUpdate) => void) | undefined;
+  onProgress?: ((progress: ProgressUpdate) => void) | undefined;
   threads?: number;
   cache?: "off" | "memory" | "disk";
   cacheDir?: string;
@@ -147,6 +149,7 @@ export type BuildOptions = {
   useNativeWorkers?: boolean;
   nativeThreads?: number;
   discovery?: ProjectFileDiscoveryOptions;
+  languageExtensions?: LanguageExtensionMap;
 };
 
 /**

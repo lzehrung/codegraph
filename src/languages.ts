@@ -73,7 +73,30 @@ export const SQL_SUPPORT = adaptDefinition(getLanguageById("sql")!);
 
 export const LANGUAGE_SUPPORTS: LanguageSupport[] = getAllLanguages().map(adaptDefinition);
 
-export function supportForFile(filename: string): LanguageSupport | undefined {
+export type LanguageExtensionMap = Record<string, string>;
+
+function mappedSupportForFile(
+  filename: string,
+  extensionMap: LanguageExtensionMap | undefined,
+): LanguageSupport | undefined {
+  const mappings = Object.entries(extensionMap ?? {})
+    .map(([extension, languageId]) => [extension.trim().toLowerCase(), languageId.trim()] as const)
+    .filter(([extension, languageId]) => extension && languageId)
+    .sort((left, right) => right[0].length - left[0].length || left[0].localeCompare(right[0]));
+  const lowerFilename = filename.toLowerCase();
+  for (const [extension, languageId] of mappings) {
+    if (!lowerFilename.endsWith(extension)) continue;
+    return supportById(languageId);
+  }
+  return undefined;
+}
+
+export function supportForFile(
+  filename: string,
+  extensionMap?: LanguageExtensionMap | undefined,
+): LanguageSupport | undefined {
+  const mapped = mappedSupportForFile(filename, extensionMap);
+  if (mapped) return mapped;
   const ext = path.extname(filename).toLowerCase();
   if (ext === ".h") {
     const sample = readFileSample(filename);
@@ -82,8 +105,8 @@ export function supportForFile(filename: string): LanguageSupport | undefined {
   }
   return LANGUAGE_SUPPORTS.find((s) => s.matchExts.includes(ext));
 }
-export function languageForFile(filename: string): ParserLanguage {
-  const sup = supportForFile(filename);
+export function languageForFile(filename: string, extensionMap?: LanguageExtensionMap | undefined): ParserLanguage {
+  const sup = supportForFile(filename, extensionMap);
   if (!sup) throw new Error(`Unsupported file extension: ${filename}`);
   return sup.language(filename);
 }
