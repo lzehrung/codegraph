@@ -203,6 +203,52 @@ describe("project lifecycle commands", () => {
     expect(status.suggestedNextCommand).toBe("codegraph status");
   });
 
+  it("status treats omitted and explicit default-equivalent native and graph options as current", async () => {
+    const explicitDefaultGraphOptions: BuildOptions = {
+      graph: { fast: false, resolveNodeModules: false, dynamicImportHeuristics: false },
+    };
+    const cases: { name: string; initial?: BuildOptions; current?: BuildOptions }[] = [
+      {
+        name: "omitted at init and explicit native auto at status",
+        current: { native: "auto" },
+      },
+      {
+        name: "explicit native auto at init and omitted at status",
+        initial: { native: "auto" },
+      },
+      {
+        name: "omitted at init and explicit graph defaults at status",
+        current: explicitDefaultGraphOptions,
+      },
+      {
+        name: "explicit graph defaults at init and omitted at status",
+        initial: explicitDefaultGraphOptions,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const root = await mkTmpDir(`cg-life-build-options-defaults-${testCase.name.replaceAll(" ", "-")}-`);
+      await writeFile(root, "src/main.ts", "export const main = 1;\n");
+      if (testCase.initial) {
+        await initCodegraphLifecycle(root, { buildOptions: testCase.initial });
+      } else {
+        await initCodegraphLifecycle(root);
+      }
+
+      let status: CodegraphLifecycleStatus;
+      if (testCase.current) {
+        status = await getCodegraphLifecycleStatus(root, { buildOptions: testCase.current });
+      } else {
+        status = await getCodegraphLifecycleStatus(root);
+      }
+
+      expect(status.fileCount, testCase.name).toEqual({ then: 1, current: 1 });
+      expect(status.filesChanged, testCase.name).toBeFalsy();
+      expect(status.buildOptionsChanged, testCase.name).toBeFalsy();
+      expect(status.suggestedNextCommand, testCase.name).toBe("codegraph status");
+    }
+  });
+
   it("sync updates manifest after a file edit", async () => {
     const root = await mkTmpDir("cg-life-sync-");
     await writeFile(root, "src/main.ts", "export const main = 1;\n");
