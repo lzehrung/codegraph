@@ -27,6 +27,11 @@ export type DeletedFileSnapshot = {
   module: ModuleIndex;
 };
 
+export type DeletedFileImporter = {
+  file: FileId;
+  deletedFile: FileId;
+};
+
 type ReviewableExportEntry = Exclude<ExportEntry, { type: "local" }>;
 
 function normalizeSpecifierBase(fromFile: string, spec: string): string {
@@ -114,18 +119,15 @@ async function resolveDeletedAliasImportTarget(
     .find((candidate) => candidate === deletedTarget);
 }
 
-export async function listDirectDeletedFileTestImporters(
+export async function listDirectDeletedFileImporters(
   index: ProjectIndex,
   deletedFiles: readonly string[],
-  testPatterns: string[] = [],
   projectRoot?: string,
-): Promise<CandidateTestFile[]> {
+): Promise<DeletedFileImporter[]> {
   if (!deletedFiles.length) return [];
 
   const deletedFileSet = new Set(deletedFiles.map((file) => normalizePath(file)));
-  const compiledPatterns = compileTestPatterns(testPatterns);
-  const isIndexTestFile = createIndexTestFileMatcher(index, compiledPatterns, projectRoot);
-  const candidates = new Map<FileId, CandidateTestFile>();
+  const candidates = new Map<string, DeletedFileImporter>();
   const importsByFile = new Map<FileId, Array<{ spec: string; resolved?: string }>>();
   const workspaceConfig = projectRoot ? await loadWorkspaceConfig(projectRoot) : undefined;
 
@@ -142,7 +144,6 @@ export async function listDirectDeletedFileTestImporters(
   }
 
   for (const mod of index.byFile.values()) {
-    if (!isIndexTestFile(mod.file)) continue;
     const uniqueImports = new Map<string, { spec: string; resolved?: string }>();
     for (const entry of importsByFile.get(mod.file) ?? []) {
       uniqueImports.set(`${entry.spec}::${entry.resolved ?? ""}`, entry);
@@ -164,16 +165,32 @@ export async function listDirectDeletedFileTestImporters(
         if (!matchesDeletedImportTarget(mod.file, entry.spec, resolvedAliasTarget, deletedFile)) {
           continue;
         }
-        candidates.set(mod.file, {
+        candidates.set(`${mod.file}::${deletedFile}`, {
           file: mod.file,
-          confidence: "high",
-          reason: "importsChanged",
+          deletedFile,
         });
       }
     }
   }
 
   return Array.from(candidates.values());
+}
+
+export async function listDirectDeletedFileTestImporters(
+  index: ProjectIndex,
+  deletedFiles: readonly string[],
+  testPatterns: string[] = [],
+  projectRoot?: string,
+): Promise<CandidateTestFile[]> {
+  const compiledPatterns = compileTestPatterns(testPatterns);
+  const isIndexTestFile = createIndexTestFileMatcher(index, compiledPatterns, projectRoot);
+  return (await listDirectDeletedFileImporters(index, deletedFiles, projectRoot))
+    .filter((candidate) => isIndexTestFile(candidate.file))
+    .map((candidate) => ({
+      file: candidate.file,
+      confidence: "high",
+      reason: "importsChanged",
+    }));
 }
 
 async function readGitFileAtRevision(projectRoot: string, revision: string, file: string): Promise<string | null> {
