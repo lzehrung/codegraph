@@ -1,9 +1,38 @@
+import fs from "node:fs/promises";
 import { type SymbolGraph, type SymbolNode } from "../graphs/symbol-graph.js";
 import type { Graph } from "../types.js";
 import type { SqliteDatabase } from "../sqlite-driver.js";
 import type { SqliteGraphOptions, SqliteGraphUpdateOptions } from "./types.js";
 import { execRowsParams } from "./common.js";
 import { withSqliteDatabase } from "./database.js";
+
+export const SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY = "artifact_file_signatures_v1";
+
+type SqliteArtifactFileSignature = {
+  path: string;
+  size: number;
+  mtimeMs: number;
+};
+
+async function collectSqliteArtifactFileSignatures(files: Iterable<string>): Promise<SqliteArtifactFileSignature[]> {
+  const signatures: SqliteArtifactFileSignature[] = [];
+  await Promise.all(
+    [...files].map(async (file) => {
+      const stat = await fs.stat(file);
+      if (!stat.isFile()) return;
+      signatures.push({ path: file, size: stat.size, mtimeMs: stat.mtimeMs });
+    }),
+  );
+  signatures.sort((left, right) => left.path.localeCompare(right.path));
+  return signatures;
+}
+
+function writeArtifactFileSignatures(db: SqliteDatabase, signatures: readonly SqliteArtifactFileSignature[]): void {
+  db.prepare("INSERT OR REPLACE INTO graph_metadata (key, value) VALUES (?, ?);").run([
+    SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY,
+    JSON.stringify(signatures),
+  ]);
+}
 
 const collectSymbolIdsForFiles = (symbolGraph: SymbolGraph, changedSet: Set<string>): Set<string> => {
   const ids = new Set<string>();
@@ -212,6 +241,7 @@ const deleteUnreferencedExternalFiles = (db: SqliteDatabase) => {
 };
 
 export async function writeGraphSqlite(options: SqliteGraphOptions): Promise<void> {
+  const fileSignatures = await collectSqliteArtifactFileSignatures(options.fileGraph.nodes);
   await withSqliteDatabase(options.outputPath, (db) => {
     const runInsert = db.transaction(() => {
       clearCurrentGraphState(db);
@@ -239,6 +269,7 @@ export async function writeGraphSqlite(options: SqliteGraphOptions): Promise<voi
         symbolNodes: options.symbolGraph.nodes.size,
         symbolEdges: options.symbolGraph.edges.length,
       });
+      writeArtifactFileSignatures(db, fileSignatures);
     });
     runInsert();
     db.exec("ANALYZE;");

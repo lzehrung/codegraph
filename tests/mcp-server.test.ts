@@ -409,6 +409,21 @@ describe("codegraph MCP handlers", () => {
     expect(result.freshness).toEqual({ state: "refreshed", changedFiles: ["two.ts"] });
   });
 
+  it("refuses stale configured SQLite artifacts in read-only mode", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-stale-artifact-"));
+    const outDir = path.join(root, "out");
+    await fs.writeFile(path.join(root, "one.ts"), "export const one = 1;\n");
+    const buildHandlers = createCodegraphMcpHandlers({ root, readOnly: false });
+    await buildHandlers.artifact_build({ outDir, sqlite: true });
+
+    await fs.writeFile(path.join(root, "two.ts"), "export const two = 2;\n");
+    const readHandlers = createCodegraphMcpHandlers({ root, artifactPath: outDir });
+
+    await expect(readHandlers.query_sqlite({ query: "SELECT path FROM files ORDER BY path;" })).rejects.toThrow(
+      /SQLite artifact is stale[\s\S]*two\.ts/,
+    );
+  });
+
   it("bounds query_sqlite bytes for MCP responses", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-bytes-"));
     await fs.writeFile(path.join(root, "one.ts"), "export const one = 1;\n");
@@ -813,6 +828,27 @@ describe("codegraph MCP handlers", () => {
       changedFileCount: 30,
       omittedChangedFileCount: 5,
       reason: "changed file count exceeds 1",
+    });
+  });
+
+  it("reports stale metadata when MCP auto-refresh byte thresholds are exceeded", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-auto-fresh-bytes-"));
+    const filePath = path.join(root, "auth.ts");
+    await fs.writeFile(filePath, "export function cachedSymbol() { return 1; }\n", "utf8");
+    const session = createAgentSession({ root, freshness: { policy: "auto", maxAutoRefreshBytes: 5 } });
+    const handlers = createCodegraphMcpHandlers({ root, session });
+
+    await handlers.search({ query: "cachedSymbol", mode: "symbol", limit: 5 });
+    await fs.writeFile(filePath, `export function largeSymbol() { return "${"x".repeat(64)}"; }\n`, "utf8");
+    const after = await handlers.search({ query: "cachedSymbol", mode: "symbol", limit: 5 });
+
+    expect(after.results.some((result) => result.label === "cachedSymbol")).toBe(true);
+    expect(after.freshness).toEqual({
+      state: "stale",
+      changedFiles: ["auth.ts"],
+      changedFileCount: 1,
+      omittedChangedFileCount: 0,
+      reason: "changed byte count exceeds 5",
     });
   });
 
