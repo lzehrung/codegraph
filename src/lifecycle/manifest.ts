@@ -65,8 +65,8 @@ const CODEGRAPH_DIR = ".codegraph";
 const MANIFEST_FILE = "manifest.json";
 
 type LifecycleBuildOptionsSummary = ManifestBuildOptions & {
-  graph?: ReturnType<typeof normalizeGraphOptions>;
-  native?: BuildOptions["native"];
+  graph: ReturnType<typeof normalizeGraphOptions>;
+  native: BuildOptions["native"];
 };
 const KNOWN_CODEGRAPH_FILES = new Set([MANIFEST_FILE]);
 
@@ -289,10 +289,11 @@ function hashBuildOptions(buildOptions: BuildOptions | undefined): string {
 }
 
 function summarizeLifecycleBuildOptions(buildOptions: BuildOptions | undefined): LifecycleBuildOptionsSummary {
-  const summary: LifecycleBuildOptionsSummary = { ...summarizeBuildOptions(buildOptions) };
-  if (buildOptions?.graph) summary.graph = normalizeGraphOptions(buildOptions.graph);
-  if (buildOptions?.native !== undefined) summary.native = buildOptions.native;
-  return summary;
+  return {
+    ...summarizeBuildOptions(buildOptions),
+    graph: normalizeGraphOptions(buildOptions?.graph),
+    native: buildOptions?.native ?? "auto",
+  };
 }
 
 function stableStringify(value: unknown): string {
