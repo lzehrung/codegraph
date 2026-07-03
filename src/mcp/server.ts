@@ -27,7 +27,7 @@ import { buildReviewReport, type ReviewDepth, type ReviewReport } from "../revie
 import { SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY, queryGraphSqliteRaw, type RawSqlResult } from "../sqlite.js";
 import { isPlainRecord } from "../util/guards.js";
 import { toProjectDisplayPath } from "../util/paths.js";
-import { createAgentSession } from "../agent/session.js";
+import { createAgentSession, listAgentSessionFiles } from "../agent/session.js";
 import type { AgentFreshnessResult, AgentProjectSnapshot, AgentSession } from "../agent/session.js";
 import type { BuildOptions, GoToResult } from "../indexer/types.js";
 import {
@@ -248,8 +248,10 @@ function createCodegraphMcpHandlersForSession(
     ? resolveArtifactSqlitePathCandidate(root, options.artifactPath)
     : undefined;
   const configuredSqliteOutDir = configuredSqlitePath ? path.dirname(configuredSqlitePath) : undefined;
+  const configuredSqliteCanRefresh = options.artifactPath ? !/\.(sqlite|db)$/i.test(options.artifactPath) : false;
   let sqlitePath = configuredSqlitePath;
   let sqliteOutDir = configuredSqliteOutDir;
+  let sqliteCanRefresh = configuredSqliteCanRefresh;
 
   const relative = (file: string): string => toProjectDisplayPath(root, file);
   const boundedLimit = (limit: number | undefined, fallback: number, max: number): number => {
@@ -289,7 +291,7 @@ function createCodegraphMcpHandlersForSession(
     return `SQLite artifact is stale; run artifact_build before query_sqlite. ${reason}.${changed}${omitted}`;
   };
   const canRefreshSqliteArtifact = (): boolean => {
-    if (!sqlitePath || !sqliteOutDir || readOnly) return false;
+    if (!sqlitePath || !sqliteOutDir || readOnly || !sqliteCanRefresh) return false;
     return path.basename(sqlitePath) === "codegraph.sqlite";
   };
   const rebuildSqliteArtifactForQuery = async (): Promise<void> => {
@@ -314,10 +316,10 @@ function createCodegraphMcpHandlersForSession(
   };
   const refreshSqliteArtifactForQuery = async (
     freshness: AgentFreshnessResult,
-    options?: { allowStaleRebuild?: boolean },
+    refreshOptions?: { allowStaleRebuild?: boolean },
   ): Promise<AgentFreshnessResult> => {
     if (freshness.state === "fresh") return freshness;
-    if (freshness.state === "stale" && !options?.allowStaleRebuild) {
+    if (freshness.state === "stale" && !refreshOptions?.allowStaleRebuild) {
       throw new Error(formatSqliteFreshnessError(freshness));
     }
     if (!canRefreshSqliteArtifact()) throw new Error(formatSqliteFreshnessError(freshness));
@@ -352,16 +354,18 @@ function createCodegraphMcpHandlersForSession(
     return !relativeFile.startsWith("..") && !path.isAbsolute(relativeFile);
   };
   const collectCurrentSqliteArtifactSignatures = async (): Promise<Map<string, SqliteArtifactFileSignature>> => {
-    if (!session.listFiles) throw new Error("MCP session does not expose file discovery for SQLite freshness.");
     const outputDirectories: string[] = [];
     if (sqliteOutDir) {
       outputDirectories.push(sqliteOutDir);
       const lexicalOutDir = path.resolve(root, path.relative(await realRoot, sqliteOutDir));
       outputDirectories.push(lexicalOutDir);
     }
-    const currentFiles = (await session.listFiles()).filter(
-      (file) => !outputDirectories.some((directory) => isFileInsideDirectory(file, directory)),
-    );
+    const currentFiles = (
+      await listAgentSessionFiles({
+        root,
+        ...(options.buildOptions ? { buildOptions: options.buildOptions } : {}),
+      })
+    ).filter((file) => !outputDirectories.some((directory) => isFileInsideDirectory(file, directory)));
     const signatures = new Map<string, SqliteArtifactFileSignature>();
     await Promise.all(
       currentFiles.map(async (file) => {
@@ -613,6 +617,7 @@ function createCodegraphMcpHandlersForSession(
       session.invalidate();
       sqlitePath = configuredSqlitePath;
       sqliteOutDir = configuredSqliteOutDir;
+      sqliteCanRefresh = configuredSqliteCanRefresh;
       await startCodegraphMcpWarmup(session, warmup);
       return { refreshed: true, warmup };
     },
@@ -645,6 +650,7 @@ function createCodegraphMcpHandlersForSession(
         if (sqliteArtifact) {
           sqlitePath = path.join(result.outDir, sqliteArtifact);
           sqliteOutDir = result.outDir;
+          sqliteCanRefresh = true;
         }
         return result;
       }),

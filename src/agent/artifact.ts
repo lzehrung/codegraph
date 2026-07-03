@@ -114,11 +114,21 @@ export async function buildCodegraphArtifactWithSession(
   const artifacts: CodegraphArtifactBuildResult["artifacts"] = {};
 
   if (selected.sqlite) {
+    let fileSignatures: Array<{ path: string; size: number; mtimeMs: number }> | undefined;
+    if (snapshot.fileSignatures) {
+      fileSignatures = [];
+      for (const file of snapshot.fileGraph.nodes) {
+        const signature = snapshot.fileSignatures.get(file);
+        if (!signature) continue;
+        fileSignatures.push({ path: signature.file, size: signature.size, mtimeMs: signature.mtimeMs });
+      }
+    }
     const outputPath = path.join(outDir, SQLITE_FILE);
     await writeGraphSqlite({
       fileGraph: snapshot.fileGraph,
       symbolGraph: snapshot.symbolGraph,
       outputPath,
+      ...(fileSignatures ? { fileSignatures } : {}),
     });
     artifacts.sqlite = SQLITE_FILE;
   }

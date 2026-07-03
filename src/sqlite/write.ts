@@ -27,6 +27,18 @@ async function collectSqliteArtifactFileSignatures(files: Iterable<string>): Pro
   return signatures;
 }
 
+function normalizeSqliteArtifactFileSignatures(
+  signatures: Iterable<SqliteArtifactFileSignature>,
+): SqliteArtifactFileSignature[] {
+  const normalized = [...signatures].map((signature) => ({
+    path: signature.path,
+    size: signature.size,
+    mtimeMs: signature.mtimeMs,
+  }));
+  normalized.sort((left, right) => left.path.localeCompare(right.path));
+  return normalized;
+}
+
 function writeArtifactFileSignatures(db: SqliteDatabase, signatures: readonly SqliteArtifactFileSignature[]): void {
   db.prepare("INSERT OR REPLACE INTO graph_metadata (key, value) VALUES (?, ?);").run([
     SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY,
@@ -241,7 +253,9 @@ const deleteUnreferencedExternalFiles = (db: SqliteDatabase) => {
 };
 
 export async function writeGraphSqlite(options: SqliteGraphOptions): Promise<void> {
-  const fileSignatures = await collectSqliteArtifactFileSignatures(options.fileGraph.nodes);
+  const fileSignatures = options.fileSignatures
+    ? normalizeSqliteArtifactFileSignatures(options.fileSignatures)
+    : await collectSqliteArtifactFileSignatures(options.fileGraph.nodes);
   await withSqliteDatabase(options.outputPath, (db) => {
     const runInsert = db.transaction(() => {
       clearCurrentGraphState(db);

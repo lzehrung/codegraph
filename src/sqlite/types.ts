@@ -5,6 +5,7 @@ export type SqliteGraphOptions = {
   fileGraph: Graph;
   symbolGraph: SymbolGraph;
   outputPath: string;
+  fileSignatures?: Iterable<{ path: string; size: number; mtimeMs: number }>;
 };
 
 export type SqliteGraphUpdateOptions = {

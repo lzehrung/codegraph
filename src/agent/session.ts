@@ -19,6 +19,7 @@ export type AgentProjectSnapshot = {
   symbolGraph: SymbolGraph;
   buildReport?: BuildReport;
   analysis: AnalysisSummary;
+  fileSignatures?: ReadonlyMap<string, AgentFileSignature>;
 };
 
 export type AgentLoadProjectOptions = {
@@ -71,7 +72,7 @@ const DEFAULT_MAX_FRESHNESS_CHANGED_FILES = 25;
 
 type AgentProjectBaseSnapshot = Omit<AgentProjectSnapshot, "symbolGraph">;
 
-type AgentFileSignature = {
+export type AgentFileSignature = {
   file: string;
   size: number;
   mtimeMs: number;
@@ -95,6 +96,11 @@ async function resolveAgentDiscoverySettings(options: AgentSessionOptions): Prom
     ? { ...discovery, globRoot: discovery.globRoot ?? options.root }
     : undefined;
   return discoveryOptions ? { discoveryOptions } : {};
+}
+
+export async function listAgentSessionFiles(options: AgentSessionOptions): Promise<string[]> {
+  const { discoveryOptions } = await resolveAgentDiscoverySettings(options);
+  return await listProjectFiles(options.root, undefined, discoveryOptions);
 }
 
 function isMissingStatRace(error: unknown): boolean {
@@ -182,10 +188,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
 
   const loadFiles = async (): Promise<string[]> => {
     if (cachedFiles) return cachedFiles;
-    const loadPromise = (async () => {
-      const { discoveryOptions } = await resolveAgentDiscoverySettings(options);
-      return await listProjectFiles(options.root, undefined, discoveryOptions);
-    })();
+    const loadPromise = listAgentSessionFiles(options);
     cachedFiles = loadPromise;
     loadPromise.catch(() => {
       if (cachedFiles === loadPromise) cachedFiles = undefined;
@@ -223,6 +226,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
         fileLookup: createAgentFileLookup(files),
         index,
         fileGraph,
+        fileSignatures: cachedFileSignatures,
         buildReport,
         analysis: summarizeAnalysis({ index, report: buildReport }),
       };

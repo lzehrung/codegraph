@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { createAgentSession } from "../src/agent/session.js";
 import {
@@ -409,6 +410,26 @@ describe("codegraph MCP handlers", () => {
     expect(result.freshness).toEqual({ state: "refreshed", changedFiles: ["two.ts"] });
   });
 
+  it("refreshes the SQLite artifact before query_sqlite after edits and deletions", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-fresh-edit-delete-"));
+    const keptFile = path.join(root, "one.ts");
+    const removedFile = path.join(root, "remove.ts");
+    await fs.writeFile(keptFile, "export function oldName() { return 1; }\n");
+    await fs.writeFile(removedFile, "export function removedName() { return 2; }\n");
+    const handlers = createCodegraphMcpHandlers({ root, readOnly: false });
+    await handlers.artifact_build({ outDir: path.join(root, "out"), sqlite: true });
+
+    await fs.writeFile(keptFile, "export function editedName() { return 3; }\n");
+    await fs.unlink(removedFile);
+    const result = await handlers.query_sqlite({ query: "SELECT name FROM symbols ORDER BY name;" });
+    const names = result.rows.map((row) => String(row[0]));
+
+    expect(names).toContain("editedName");
+    expect(names).not.toContain("oldName");
+    expect(names).not.toContain("removedName");
+    expect(result.freshness).toEqual({ state: "refreshed", changedFiles: ["one.ts", "remove.ts"] });
+  });
+
   it("refuses stale configured SQLite artifacts in read-only mode", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-stale-artifact-"));
     const outDir = path.join(root, "out");
@@ -421,6 +442,25 @@ describe("codegraph MCP handlers", () => {
 
     await expect(readHandlers.query_sqlite({ query: "SELECT path FROM files ORDER BY path;" })).rejects.toThrow(
       /SQLite artifact is stale[\s\S]*two\.ts/,
+    );
+  });
+
+  it("refuses older SQLite artifacts without freshness metadata in read-only mode", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-legacy-artifact-"));
+    const outDir = path.join(root, "out");
+    await fs.writeFile(path.join(root, "one.ts"), "export const one = 1;\n");
+    const buildHandlers = createCodegraphMcpHandlers({ root, readOnly: false });
+    await buildHandlers.artifact_build({ outDir, sqlite: true });
+    const db = new DatabaseSync(path.join(outDir, "codegraph.sqlite"));
+    try {
+      db.exec("DELETE FROM graph_metadata WHERE key = 'artifact_file_signatures_v1';");
+    } finally {
+      db.close();
+    }
+    const readHandlers = createCodegraphMcpHandlers({ root, artifactPath: outDir });
+
+    await expect(readHandlers.query_sqlite({ query: "SELECT path FROM files ORDER BY path;" })).rejects.toThrow(
+      /SQLite artifact has no freshness baseline/,
     );
   });
 
