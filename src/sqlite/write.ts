@@ -46,6 +46,10 @@ function writeArtifactFileSignatures(db: SqliteDatabase, signatures: readonly Sq
   ]);
 }
 
+function clearArtifactFileSignatures(db: SqliteDatabase): void {
+  db.prepare("DELETE FROM graph_metadata WHERE key = ?;").run([SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY]);
+}
+
 const collectSymbolIdsForFiles = (symbolGraph: SymbolGraph, changedSet: Set<string>): Set<string> => {
   const ids = new Set<string>();
   for (const [id, node] of symbolGraph.nodes.entries()) {
@@ -285,6 +289,8 @@ export async function writeGraphSqlite(options: SqliteGraphOptions): Promise<voi
       });
       if (fileSignatures) {
         writeArtifactFileSignatures(db, fileSignatures);
+      } else {
+        clearArtifactFileSignatures(db);
       }
     });
     runInsert();

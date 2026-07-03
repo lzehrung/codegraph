@@ -360,14 +360,18 @@ function createCodegraphMcpHandlersForSession(
       const lexicalOutDir = path.resolve(root, path.relative(await realRoot, sqliteOutDir));
       outputDirectories.push(lexicalOutDir);
     }
-    const discoverFiles =
-      session.discoverFiles ??
-      (async (): Promise<string[]> =>
-        await listAgentSessionFiles({
-          root,
-          ...(options.buildOptions ? { buildOptions: options.buildOptions } : {}),
-        }));
-    const currentFiles = (await discoverFiles()).filter(
+    let discoveredFiles: string[];
+    if (session.discoverFiles) {
+      discoveredFiles = await session.discoverFiles();
+    } else if (options.session) {
+      throw new Error("MCP session does not expose live file discovery for SQLite freshness.");
+    } else {
+      discoveredFiles = await listAgentSessionFiles({
+        root,
+        ...(options.buildOptions ? { buildOptions: options.buildOptions } : {}),
+      });
+    }
+    const currentFiles = discoveredFiles.filter(
       (file) => !outputDirectories.some((directory) => isFileInsideDirectory(file, directory)),
     );
     const signatures = new Map<string, SqliteArtifactFileSignature>();

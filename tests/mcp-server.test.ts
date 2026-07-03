@@ -508,16 +508,26 @@ describe("codegraph MCP handlers", () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-session-discovery-"));
     await fs.writeFile(path.join(root, "keep.ts"), "export const keep = 1;\n");
     await fs.writeFile(path.join(root, "ignored.ts"), "export const ignored = 2;\n");
-    const session = createAgentSession({ root, discovery: { ignoreGlobs: ["ignored.ts"] } });
+    const session = createAgentSession({
+      root,
+      discovery: { ignoreGlobs: ["ignored.ts"] },
+      freshness: { policy: "auto" },
+    });
     const handlers = createCodegraphMcpHandlers({ root, session, readOnly: false });
     await handlers.artifact_build({ outDir: path.join(root, "out"), sqlite: true });
 
-    const result = await handlers.query_sqlite({ query: "SELECT path FROM files ORDER BY path;" });
-    const paths = result.rows.map((row) => normalizeSqlitePath(row[0]));
+    const initial = await handlers.query_sqlite({ query: "SELECT path FROM files ORDER BY path;" });
+    await fs.writeFile(path.join(root, "late.ts"), "export const late = 3;\n");
+    const refreshed = await handlers.query_sqlite({ query: "SELECT path FROM files ORDER BY path;" });
+    const initialPaths = initial.rows.map((row) => normalizeSqlitePath(row[0]));
+    const refreshedPaths = refreshed.rows.map((row) => normalizeSqlitePath(row[0]));
 
-    expect(paths.some((file) => file.endsWith("keep.ts"))).toBe(true);
-    expect(paths.some((file) => file.endsWith("ignored.ts"))).toBe(false);
-    expect(result.freshness).toEqual({ state: "fresh" });
+    expect(initialPaths.some((file) => file.endsWith("keep.ts"))).toBe(true);
+    expect(initialPaths.some((file) => file.endsWith("ignored.ts"))).toBe(false);
+    expect(initial.freshness).toEqual({ state: "fresh" });
+    expect(refreshedPaths.some((file) => file.endsWith("late.ts"))).toBe(true);
+    expect(refreshedPaths.some((file) => file.endsWith("ignored.ts"))).toBe(false);
+    expect(refreshed.freshness).toEqual({ state: "refreshed", changedFiles: ["late.ts"] });
   });
 
   it("bounds query_sqlite bytes for MCP responses", async () => {
