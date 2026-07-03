@@ -175,6 +175,8 @@ describe("agent session", () => {
     expect(freshness).toEqual({
       state: "stale",
       changedFiles: ["auth.ts"],
+      changedFileCount: 1,
+      omittedChangedFileCount: 0,
       reason: "session snapshot is older than files on disk",
     });
     expect(afterCheck).toBe(cached);

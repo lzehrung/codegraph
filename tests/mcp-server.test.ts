@@ -395,6 +395,20 @@ describe("codegraph MCP handlers", () => {
     expect(result.rowLimit).toBe(1);
   });
 
+  it("refreshes the SQLite artifact before query_sqlite after small workspace edits", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-fresh-"));
+    await fs.writeFile(path.join(root, "one.ts"), "export const one = 1;\n");
+    const handlers = createCodegraphMcpHandlers({ root, readOnly: false });
+    await handlers.artifact_build({ outDir: path.join(root, "out"), sqlite: true });
+
+    await fs.writeFile(path.join(root, "two.ts"), "export const two = 2;\n");
+    const result = await handlers.query_sqlite({ query: "SELECT path FROM files ORDER BY path;" });
+    const paths = result.rows.map((row) => normalizeSqlitePath(row[0]));
+
+    expect(paths.some((file) => file.endsWith("two.ts"))).toBe(true);
+    expect(result.freshness).toEqual({ state: "refreshed", changedFiles: ["two.ts"] });
+  });
+
   it("bounds query_sqlite bytes for MCP responses", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-bytes-"));
     await fs.writeFile(path.join(root, "one.ts"), "export const one = 1;\n");
@@ -760,6 +774,46 @@ describe("codegraph MCP handlers", () => {
     expect(before.results.some((result) => result.label === "oldSymbol")).toBe(true);
     expect(after.results.some((result) => result.label === "editedSymbol")).toBe(true);
     expect(after.freshness).toEqual({ state: "refreshed", changedFiles: ["auth.ts"] });
+  });
+
+  it("auto-refreshes deleted files before MCP search", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-auto-fresh-delete-"));
+    const filePath = path.join(root, "remove.ts");
+    await fs.writeFile(filePath, "export function removedSymbol() { return 1; }\n", "utf8");
+    const handlers = createCodegraphMcpHandlers({ root });
+
+    const before = await handlers.search({ query: "removedSymbol", mode: "symbol", limit: 5 });
+    await fs.unlink(filePath);
+    const after = await handlers.search({ query: "removedSymbol", mode: "symbol", limit: 5 });
+
+    expect(before.results.some((result) => result.label === "removedSymbol")).toBe(true);
+    expect(after.results.some((result) => result.label === "removedSymbol")).toBe(false);
+    expect(after.freshness).toEqual({ state: "refreshed", changedFiles: ["remove.ts"] });
+  });
+
+  it("reports bounded stale metadata when MCP auto-refresh thresholds are exceeded", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-auto-fresh-burst-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export function cachedSymbol() { return 1; }\n", "utf8");
+    const session = createAgentSession({ root, freshness: { policy: "auto", maxAutoRefreshFiles: 1 } });
+    const handlers = createCodegraphMcpHandlers({ root, session });
+
+    await handlers.search({ query: "cachedSymbol", mode: "symbol", limit: 5 });
+    await Promise.all(
+      Array.from({ length: 30 }, async (_, index) => {
+        const suffix = String(index).padStart(2, "0");
+        await fs.writeFile(path.join(root, `late-${suffix}.ts`), `export const late${suffix} = ${index};\n`, "utf8");
+      }),
+    );
+    const after = await handlers.search({ query: "cachedSymbol", mode: "symbol", limit: 5 });
+
+    expect(after.results.some((result) => result.label === "cachedSymbol")).toBe(true);
+    expect(after.freshness).toEqual({
+      state: "stale",
+      changedFiles: Array.from({ length: 25 }, (_, index) => `late-${String(index).padStart(2, "0")}.ts`),
+      changedFileCount: 30,
+      omittedChangedFileCount: 5,
+      reason: "changed file count exceeds 1",
+    });
   });
 
   it("returns live file bytes and freshness metadata after MCP file edits", async () => {

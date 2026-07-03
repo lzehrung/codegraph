@@ -65,8 +65,8 @@ Treat duplicate leads and call-compatibility hints as review leads, not proof.
 ## MCP
 
 If MCP tools are available, prefer them over repeated CLI invocations.
-Use MCP `orient`, `search`, `packet_get`, `goto`, `refs`, `deps`, `rdeps`, `path`, `impact`, and `review` first.
-After edits, check MCP response `freshness`: `refreshed` means Codegraph rebuilt before answering, and `stale` means use `refresh_index` or live file reads before trusting indexed context.
+Use MCP `orient`, `search`, `packet_get`, `goto`, `refs`, `deps`, `rdeps`, `path`, `impact`, `review`, and `query_sqlite` first.
+After edits, check MCP response `freshness`: `refreshed` means Codegraph rebuilt before answering, and `stale` includes a reason plus bounded changed-file metadata before indexed context is trusted.
 Fall back to CLI when MCP is unavailable.
 
 ## Discovery

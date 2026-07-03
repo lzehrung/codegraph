@@ -154,7 +154,7 @@ export type CodegraphMcpHandlers = {
     query: string;
     params?: Array<string | number | null> | undefined;
     limit?: number | undefined;
-  }) => Promise<RawSqlResult>;
+  }) => Promise<CodegraphMcpFreshResult<RawSqlResult>>;
   artifact_build: (request: {
     outDir?: string | undefined;
     sqlite?: boolean | undefined;
@@ -239,18 +239,65 @@ function createCodegraphMcpHandlersForSession(
     ? resolveArtifactSqlitePathCandidate(root, options.artifactPath)
     : undefined;
   let sqlitePath = configuredSqlitePath;
+  let sqliteOutDir = configuredSqlitePath ? path.dirname(configuredSqlitePath) : undefined;
 
   const relative = (file: string): string => toProjectDisplayPath(root, file);
   const boundedLimit = (limit: number | undefined, fallback: number, max: number): number => {
     if (typeof limit !== "number" || !Number.isFinite(limit)) return fallback;
     return Math.min(max, Math.max(0, Math.floor(limit)));
   };
+  const checkMcpFreshness = async (): Promise<AgentFreshnessResult> => {
+    if (session.checkFreshness) return await session.checkFreshness();
+    return {
+      state: "stale",
+      changedFiles: [],
+      changedFileCount: 0,
+      omittedChangedFileCount: 0,
+      reason: "freshness check unavailable",
+    };
+  };
   const withFreshness = async <T extends object>(
     run: () => Promise<T>,
   ): Promise<T & { freshness: AgentFreshnessResult }> => {
-    const freshness = session.checkFreshness ? await session.checkFreshness() : { state: "fresh" as const };
+    const freshness = await checkMcpFreshness();
     const result = await run();
     return { ...result, freshness };
+  };
+  const formatSqliteFreshnessError = (freshness: AgentFreshnessResult): string => {
+    if (freshness.state === "fresh") return "SQLite artifact freshness check unexpectedly failed.";
+    const reason = freshness.state === "stale" ? freshness.reason : "workspace changed after artifact build";
+    const changed = freshness.changedFiles.length ? ` Changed files: ${freshness.changedFiles.join(", ")}.` : "";
+    const omitted =
+      freshness.state === "stale" && freshness.omittedChangedFileCount
+        ? ` Omitted changed files: ${freshness.omittedChangedFileCount}.`
+        : "";
+    return `SQLite artifact is stale; run artifact_build before query_sqlite. ${reason}.${changed}${omitted}`;
+  };
+  const refreshSqliteArtifactForQuery = async (freshness: AgentFreshnessResult): Promise<void> => {
+    if (freshness.state === "fresh") return;
+    if (!sqlitePath || !sqliteOutDir || readOnly || path.basename(sqlitePath) !== "codegraph.sqlite") {
+      throw new Error(formatSqliteFreshnessError(freshness));
+    }
+    if (freshness.state === "stale") {
+      throw new Error(formatSqliteFreshnessError(freshness));
+    }
+    const outDir = await assertWritableDirectoryRealPathWithinRoot(
+      await realRoot,
+      root,
+      sqliteOutDir,
+      "Artifact output directory",
+    );
+    const result = await buildCodegraphArtifactWithSession(session, {
+      root,
+      outDir,
+      filterOutDir: outDir,
+      sqlite: true,
+      force: true,
+    });
+    const sqliteArtifact = result.artifacts.sqlite;
+    if (!sqliteArtifact) throw new Error("SQLite artifact refresh did not produce a SQLite file.");
+    sqlitePath = path.join(result.outDir, sqliteArtifact);
+    sqliteOutDir = result.outDir;
   };
 
   const collectMcpDependencyEntries = async (
@@ -440,12 +487,14 @@ function createCodegraphMcpHandlersForSession(
       if (!sqlitePath) {
         throw new Error("No SQLite artifact is available. Run artifact_build first or pass artifactPath.");
       }
-      const realSqlitePath = await assertRealPathCandidateWithinRoot(await realRoot, sqlitePath, "SQLite artifact");
       assertMcpSqliteQueryResourceBounded(request.query);
+      const freshness = await checkMcpFreshness();
+      await refreshSqliteArtifactForQuery(freshness);
+      const realSqlitePath = await assertRealPathCandidateWithinRoot(await realRoot, sqlitePath, "SQLite artifact");
       const result = await queryGraphSqliteRaw(realSqlitePath, request.query, request.params ?? [], {
         maxRows: normalizeSqliteRowLimit(request.limit),
       });
-      return boundRawSqlResult(result, DEFAULT_SQLITE_BYTE_LIMIT);
+      return { ...boundRawSqlResult(result, DEFAULT_SQLITE_BYTE_LIMIT), freshness };
     },
 
     refresh_index: async (request) => {
@@ -483,6 +532,7 @@ function createCodegraphMcpHandlersForSession(
         const sqliteArtifact = result.artifacts.sqlite;
         if (sqliteArtifact) {
           sqlitePath = path.join(result.outDir, sqliteArtifact);
+          sqliteOutDir = result.outDir;
         }
         return result;
       }),

@@ -30,7 +30,13 @@ export type AgentFreshnessPolicy = "manual" | "check" | "auto";
 export type AgentFreshnessResult =
   | { state: "fresh" }
   | { state: "refreshed"; changedFiles: string[] }
-  | { state: "stale"; changedFiles: string[]; reason: string };
+  | {
+      state: "stale";
+      changedFiles: string[];
+      changedFileCount: number;
+      omittedChangedFileCount: number;
+      reason: string;
+    };
 
 export type AgentSessionFreshnessOptions = {
   policy?: AgentFreshnessPolicy;
@@ -61,6 +67,7 @@ const EMPTY_SYMBOL_GRAPH: SymbolGraph = {
 const AGENT_NATIVE_WORKER_AUTO_FILE_THRESHOLD = 250;
 const DEFAULT_MAX_AUTO_REFRESH_FILES = 50;
 const DEFAULT_MAX_AUTO_REFRESH_BYTES = 2_000_000;
+const DEFAULT_MAX_FRESHNESS_CHANGED_FILES = 25;
 
 type AgentProjectBaseSnapshot = Omit<AgentProjectSnapshot, "symbolGraph">;
 
@@ -90,6 +97,25 @@ async function resolveAgentDiscoverySettings(options: AgentSessionOptions): Prom
   return discoveryOptions ? { discoveryOptions } : {};
 }
 
+function isMissingStatRace(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if (!("code" in error)) return false;
+  return error.code === "ENOENT" || error.code === "ENOTDIR";
+}
+
+function summarizeChangedFiles(files: readonly string[]): {
+  changedFiles: string[];
+  changedFileCount: number;
+  omittedChangedFileCount: number;
+} {
+  const changedFiles = files.slice(0, DEFAULT_MAX_FRESHNESS_CHANGED_FILES);
+  return {
+    changedFiles,
+    changedFileCount: files.length,
+    omittedChangedFileCount: Math.max(0, files.length - changedFiles.length),
+  };
+}
+
 async function collectAgentFileSignatures(files: readonly string[]): Promise<Map<string, AgentFileSignature>> {
   const signatures = new Map<string, AgentFileSignature>();
   await Promise.all(
@@ -103,8 +129,9 @@ async function collectAgentFileSignatures(files: readonly string[]): Promise<Map
           size: stat.size,
           mtimeMs: stat.mtimeMs,
         });
-      } catch {
-        return;
+      } catch (error) {
+        if (isMissingStatRace(error)) return;
+        throw new Error(`Unable to verify freshness for ${resolvedFile}`, { cause: error });
       }
     }),
   );
@@ -258,16 +285,28 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
       return relativeFile;
     });
     if (policy === "check") {
-      return { state: "stale", changedFiles, reason: "session snapshot is older than files on disk" };
+      return {
+        state: "stale",
+        ...summarizeChangedFiles(changedFiles),
+        reason: "session snapshot is older than files on disk",
+      };
     }
 
     const maxFiles = options.freshness?.maxAutoRefreshFiles ?? DEFAULT_MAX_AUTO_REFRESH_FILES;
     const maxBytes = options.freshness?.maxAutoRefreshBytes ?? DEFAULT_MAX_AUTO_REFRESH_BYTES;
     if (diff.changedFiles.length > maxFiles) {
-      return { state: "stale", changedFiles, reason: `changed file count exceeds ${maxFiles}` };
+      return {
+        state: "stale",
+        ...summarizeChangedFiles(changedFiles),
+        reason: `changed file count exceeds ${maxFiles}`,
+      };
     }
     if (diff.changedBytes > maxBytes) {
-      return { state: "stale", changedFiles, reason: `changed byte count exceeds ${maxBytes}` };
+      return {
+        state: "stale",
+        ...summarizeChangedFiles(changedFiles),
+        reason: `changed byte count exceeds ${maxBytes}`,
+      };
     }
 
     invalidate();
