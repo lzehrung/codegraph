@@ -123,6 +123,7 @@ Graph, index, and review reports include `backend.native.byLanguage` so native u
 - `status` reports whether lifecycle metadata exists, last sync time, then/current file counts, config/build-option drift, analysis label, and the suggested next command. Use `--json` for `schemaVersion: 1`.
 - `sync` refreshes the manifest after edits and requires an initialized project unless `--init` is passed.
 - `uninit` removes only recognized lifecycle state by default. It refuses unknown `.codegraph/` entries unless `--force` is passed.
+- Lifecycle commands accept either a positional project path or `--root <path>`. They reject using both together because lifecycle manifests always describe one project boundary, not include-root subsets.
 
 ### Symbols, navigation, grep, and chunking
 

@@ -31,6 +31,14 @@ async function readCodegraphEntries(root: string): Promise<string[]> {
   return (await fsp.readdir(path.join(root, ".codegraph"))).sort();
 }
 
+async function expectDiskIndexCacheHasArtifacts(root: string): Promise<void> {
+  const cacheRoot = path.join(root, ".codegraph-cache", "index-v1");
+  const stats = await fsp.stat(cacheRoot);
+  expect(stats.isDirectory()).toBeTruthy();
+  const entries = await fsp.readdir(cacheRoot);
+  expect(entries.length).toBeGreaterThan(0);
+}
+
 describe("project lifecycle commands", () => {
   it("init creates a manifest and is idempotent when current", async () => {
     const root = await mkTmpDir("cg-life-init-");
@@ -205,6 +213,25 @@ describe("project lifecycle commands", () => {
 
     expect(result.manifest.fileCount).toBe(2);
     expect(result.changedFiles.added).toBe(1);
+    expect(await readCodegraphEntries(root)).toEqual(["manifest.json"]);
+  });
+
+  it("init and sync keep lifecycle metadata separate from the disk index cache", async () => {
+    const root = await mkTmpDir("cg-life-cache-warm-");
+    const cacheRoot = path.join(root, ".codegraph-cache", "index-v1");
+    await writeFile(root, "src/main.ts", "export const main = 1;\n");
+
+    await initCodegraphLifecycle(root);
+
+    expect(await readCodegraphEntries(root)).toEqual(["manifest.json"]);
+    await expectDiskIndexCacheHasArtifacts(root);
+
+    await fsp.rm(cacheRoot, { recursive: true, force: true });
+    await fsp.mkdir(cacheRoot, { recursive: true });
+    await writeFile(root, "src/extra.ts", "export const extra = 2;\n");
+    await syncCodegraphLifecycle(root);
+
+    await expectDiskIndexCacheHasArtifacts(root);
     expect(await readCodegraphEntries(root)).toEqual(["manifest.json"]);
   });
 

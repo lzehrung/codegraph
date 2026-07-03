@@ -49,6 +49,7 @@ Use `--root` to define the project boundary for config lookup, cache scope, path
 For `orient`, `drift`, and positional graph commands, positional paths are include roots inside that project.
 Use `codegraph install --target <ids> --yes` to configure supported local agent clients. Use `--dry-run` or `--print-config <target>` first; uninstall removes only Codegraph-owned marker blocks, marker files, or MCP entries whose command is `codegraph`.
 Lifecycle commands own only `.codegraph/manifest.json` metadata. `init` and `sync` may warm or update `.codegraph-cache/index-v1/`; other commands do not depend on the manifest. Use `uninit` to remove recognized lifecycle state.
+Lifecycle commands accept either a positional project path or `--root <path>`; never combine both.
 
 ## Output Choice
 

@@ -67,11 +67,6 @@ const MANIFEST_FILE = "manifest.json";
 type LifecycleBuildOptionsSummary = ManifestBuildOptions & {
   graph?: ReturnType<typeof normalizeGraphOptions>;
   native?: BuildOptions["native"];
-  threads?: number;
-  nativeThreads?: number;
-  useNativeWorkers?: boolean;
-  cacheVerify?: boolean;
-  cacheDir?: string;
 };
 const KNOWN_CODEGRAPH_FILES = new Set([MANIFEST_FILE]);
 
@@ -297,11 +292,6 @@ function summarizeLifecycleBuildOptions(buildOptions: BuildOptions | undefined):
   const summary: LifecycleBuildOptionsSummary = { ...summarizeBuildOptions(buildOptions) };
   if (buildOptions?.graph) summary.graph = normalizeGraphOptions(buildOptions.graph);
   if (buildOptions?.native !== undefined) summary.native = buildOptions.native;
-  if (buildOptions?.threads !== undefined) summary.threads = buildOptions.threads;
-  if (buildOptions?.nativeThreads !== undefined) summary.nativeThreads = buildOptions.nativeThreads;
-  if (buildOptions?.useNativeWorkers !== undefined) summary.useNativeWorkers = buildOptions.useNativeWorkers;
-  if (buildOptions?.cacheVerify !== undefined) summary.cacheVerify = buildOptions.cacheVerify;
-  if (buildOptions?.cacheDir !== undefined) summary.cacheDir = buildOptions.cacheDir;
   return summary;
 }
 
