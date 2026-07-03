@@ -360,12 +360,16 @@ function createCodegraphMcpHandlersForSession(
       const lexicalOutDir = path.resolve(root, path.relative(await realRoot, sqliteOutDir));
       outputDirectories.push(lexicalOutDir);
     }
-    const currentFiles = (
-      await listAgentSessionFiles({
-        root,
-        ...(options.buildOptions ? { buildOptions: options.buildOptions } : {}),
-      })
-    ).filter((file) => !outputDirectories.some((directory) => isFileInsideDirectory(file, directory)));
+    const discoverFiles =
+      session.discoverFiles ??
+      (async (): Promise<string[]> =>
+        await listAgentSessionFiles({
+          root,
+          ...(options.buildOptions ? { buildOptions: options.buildOptions } : {}),
+        }));
+    const currentFiles = (await discoverFiles()).filter(
+      (file) => !outputDirectories.some((directory) => isFileInsideDirectory(file, directory)),
+    );
     const signatures = new Map<string, SqliteArtifactFileSignature>();
     await Promise.all(
       currentFiles.map(async (file) => {

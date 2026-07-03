@@ -255,7 +255,7 @@ const deleteUnreferencedExternalFiles = (db: SqliteDatabase) => {
 export async function writeGraphSqlite(options: SqliteGraphOptions): Promise<void> {
   const fileSignatures = options.fileSignatures
     ? normalizeSqliteArtifactFileSignatures(options.fileSignatures)
-    : await collectSqliteArtifactFileSignatures(options.fileGraph.nodes);
+    : undefined;
   await withSqliteDatabase(options.outputPath, (db) => {
     const runInsert = db.transaction(() => {
       clearCurrentGraphState(db);
@@ -283,7 +283,9 @@ export async function writeGraphSqlite(options: SqliteGraphOptions): Promise<voi
         symbolNodes: options.symbolGraph.nodes.size,
         symbolEdges: options.symbolGraph.edges.length,
       });
-      writeArtifactFileSignatures(db, fileSignatures);
+      if (fileSignatures) {
+        writeArtifactFileSignatures(db, fileSignatures);
+      }
     });
     runInsert();
     db.exec("ANALYZE;");

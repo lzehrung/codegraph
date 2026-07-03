@@ -464,6 +464,62 @@ describe("codegraph MCP handlers", () => {
     );
   });
 
+  it("rebuilds stale configured SQLite artifact bundles in writable mode", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-writable-bundle-"));
+    const outDir = path.join(root, "out");
+    await fs.writeFile(path.join(root, "one.ts"), "export const one = 1;\n");
+    const buildHandlers = createCodegraphMcpHandlers({ root, readOnly: false });
+    await buildHandlers.artifact_build({ outDir, sqlite: true });
+    const db = new DatabaseSync(path.join(outDir, "codegraph.sqlite"));
+    try {
+      db.exec("DELETE FROM graph_metadata WHERE key = 'artifact_file_signatures_v1';");
+    } finally {
+      db.close();
+    }
+    await fs.writeFile(path.join(root, "two.ts"), "export const two = 2;\n");
+    const readHandlers = createCodegraphMcpHandlers({ root, artifactPath: outDir, readOnly: false });
+    const result = await readHandlers.query_sqlite({ query: "SELECT path FROM files ORDER BY path;" });
+    const paths = result.rows.map((row) => normalizeSqlitePath(row[0]));
+
+    expect(paths.some((file) => file.endsWith("two.ts"))).toBe(true);
+    expect(result.freshness).toEqual({ state: "refreshed", changedFiles: [] });
+  });
+
+  it("refuses stale explicit SQLite artifact files in writable mode", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-explicit-file-"));
+    const outDir = path.join(root, "out");
+    await fs.writeFile(path.join(root, "one.ts"), "export const one = 1;\n");
+    const buildHandlers = createCodegraphMcpHandlers({ root, readOnly: false });
+    await buildHandlers.artifact_build({ outDir, sqlite: true });
+
+    await fs.writeFile(path.join(root, "two.ts"), "export const two = 2;\n");
+    const readHandlers = createCodegraphMcpHandlers({
+      root,
+      artifactPath: path.join(outDir, "codegraph.sqlite"),
+      readOnly: false,
+    });
+
+    await expect(readHandlers.query_sqlite({ query: "SELECT path FROM files ORDER BY path;" })).rejects.toThrow(
+      /SQLite artifact is stale[\s\S]*two\.ts/,
+    );
+  });
+
+  it("uses prebuilt session discovery for SQLite artifact freshness", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-session-discovery-"));
+    await fs.writeFile(path.join(root, "keep.ts"), "export const keep = 1;\n");
+    await fs.writeFile(path.join(root, "ignored.ts"), "export const ignored = 2;\n");
+    const session = createAgentSession({ root, discovery: { ignoreGlobs: ["ignored.ts"] } });
+    const handlers = createCodegraphMcpHandlers({ root, session, readOnly: false });
+    await handlers.artifact_build({ outDir: path.join(root, "out"), sqlite: true });
+
+    const result = await handlers.query_sqlite({ query: "SELECT path FROM files ORDER BY path;" });
+    const paths = result.rows.map((row) => normalizeSqlitePath(row[0]));
+
+    expect(paths.some((file) => file.endsWith("keep.ts"))).toBe(true);
+    expect(paths.some((file) => file.endsWith("ignored.ts"))).toBe(false);
+    expect(result.freshness).toEqual({ state: "fresh" });
+  });
+
   it("bounds query_sqlite bytes for MCP responses", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-bytes-"));
     await fs.writeFile(path.join(root, "one.ts"), "export const one = 1;\n");

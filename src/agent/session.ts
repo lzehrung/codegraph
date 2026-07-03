@@ -55,6 +55,7 @@ export type AgentSessionOptions = {
 
 export type AgentSession = {
   root?: string;
+  discoverFiles?: () => Promise<string[]>;
   listFiles?: () => Promise<string[]>;
   loadProject: (loadOptions?: AgentLoadProjectOptions) => Promise<AgentProjectSnapshot>;
   checkFreshness?: () => Promise<AgentFreshnessResult>;
@@ -319,6 +320,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
 
   return {
     root: options.root,
+    discoverFiles: () => listAgentSessionFiles(options),
     listFiles: loadFiles,
     loadProject,
     checkFreshness,

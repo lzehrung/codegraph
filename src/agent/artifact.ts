@@ -114,14 +114,16 @@ export async function buildCodegraphArtifactWithSession(
   const artifacts: CodegraphArtifactBuildResult["artifacts"] = {};
 
   if (selected.sqlite) {
-    let fileSignatures: Array<{ path: string; size: number; mtimeMs: number }> | undefined;
-    if (snapshot.fileSignatures) {
-      fileSignatures = [];
-      for (const file of snapshot.fileGraph.nodes) {
-        const signature = snapshot.fileSignatures.get(file);
-        if (!signature) continue;
-        fileSignatures.push({ path: signature.file, size: signature.size, mtimeMs: signature.mtimeMs });
+    if (!snapshot.fileSignatures) {
+      throw new Error("SQLite artifact freshness signatures are unavailable.");
+    }
+    const fileSignatures: Array<{ path: string; size: number; mtimeMs: number }> = [];
+    for (const file of snapshot.fileGraph.nodes) {
+      const signature = snapshot.fileSignatures.get(file);
+      if (!signature) {
+        throw new Error(`SQLite artifact freshness signature is missing for ${file}.`);
       }
+      fileSignatures.push({ path: signature.file, size: signature.size, mtimeMs: signature.mtimeMs });
     }
     const outputPath = path.join(outDir, SQLITE_FILE);
     await writeGraphSqlite({
