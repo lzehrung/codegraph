@@ -27,8 +27,8 @@ import { buildReviewReport, type ReviewDepth, type ReviewReport } from "../revie
 import { queryGraphSqliteRaw, type RawSqlResult } from "../sqlite.js";
 import { toProjectDisplayPath } from "../util/paths.js";
 import { createAgentSession } from "../agent/session.js";
-import type { AgentSession } from "../agent/session.js";
-import type { BuildOptions } from "../indexer/types.js";
+import type { AgentFreshnessResult, AgentProjectSnapshot, AgentSession } from "../agent/session.js";
+import type { BuildOptions, GoToResult } from "../indexer/types.js";
 import {
   assertMcpSqliteQueryResourceBounded,
   boundRawSqlResult,
@@ -98,6 +98,8 @@ export type CodegraphMcpHttpServer = CodegraphMcpHttpServerInfo & {
   close: () => Promise<void>;
 };
 
+export type CodegraphMcpFreshResult<T extends object> = T & { freshness: AgentFreshnessResult };
+
 export type CodegraphMcpHandlers = {
   search: (request: {
     query: string;
@@ -105,45 +107,45 @@ export type CodegraphMcpHandlers = {
     from?: string | undefined;
     depth?: number | undefined;
     limit?: number | undefined;
-  }) => Promise<AgentSearchResponse>;
+  }) => Promise<CodegraphMcpFreshResult<AgentSearchResponse>>;
   orient: (request: {
     includeRoots?: string[] | undefined;
     budget?: AgentOrientBudget | undefined;
-  }) => Promise<AgentOrientResponse>;
+  }) => Promise<CodegraphMcpFreshResult<AgentOrientResponse>>;
   packet_get: (request: {
     target: string;
     maxSymbols?: number | undefined;
     maxSnippets?: number | undefined;
     maxDuplicates?: number | undefined;
-  }) => Promise<AgentPacketResponse>;
+  }) => Promise<CodegraphMcpFreshResult<AgentPacketResponse>>;
   get_file: (request: {
     file: string;
     maxBytes?: number | undefined;
-  }) => Promise<{ file: string; text: string; truncated: boolean }>;
-  get_symbol: (request: { handle: string }) => Promise<AgentExplanation["target"]>;
-  goto: (request: {
-    file: string;
-    line: number;
-    column: number;
-  }) => Promise<Awaited<ReturnType<typeof goToDefinition>>>;
+  }) => Promise<CodegraphMcpFreshResult<{ file: string; text: string; truncated: boolean }>>;
+  get_symbol: (request: { handle: string }) => Promise<CodegraphMcpFreshResult<AgentExplanation["target"]>>;
+  goto: (request: { file: string; line: number; column: number }) => Promise<CodegraphMcpFreshResult<GoToResult>>;
   refs: (
     request:
       | { handle: string; limit?: number | undefined }
       | { file: string; line: number; column: number; limit?: number | undefined },
-  ) => Promise<{ references: AgentExplanationReference[] }>;
+  ) => Promise<CodegraphMcpFreshResult<{ references: AgentExplanationReference[] }>>;
   deps: (request: {
     file: string;
     depth?: number | undefined;
     limit?: number | undefined;
-  }) => Promise<{ dependencies: Array<{ file: string; depth: number }> }>;
+  }) => Promise<CodegraphMcpFreshResult<{ dependencies: Array<{ file: string; depth: number }> }>>;
   rdeps: (request: {
     file: string;
     depth?: number | undefined;
     limit?: number | undefined;
-  }) => Promise<{ reverseDependencies: Array<{ file: string; depth: number }> }>;
-  path: (request: { from: string; to: string }) => Promise<{ path: string[] | null }>;
-  impact: (request: { base: string; head: string }) => Promise<ReviewReport>;
-  review: (request: { base: string; head: string; reviewDepth?: ReviewDepth | undefined }) => Promise<ReviewReport>;
+  }) => Promise<CodegraphMcpFreshResult<{ reverseDependencies: Array<{ file: string; depth: number }> }>>;
+  path: (request: { from: string; to: string }) => Promise<CodegraphMcpFreshResult<{ path: string[] | null }>>;
+  impact: (request: { base: string; head: string }) => Promise<CodegraphMcpFreshResult<ReviewReport>>;
+  review: (request: {
+    base: string;
+    head: string;
+    reviewDepth?: ReviewDepth | undefined;
+  }) => Promise<CodegraphMcpFreshResult<ReviewReport>>;
   refresh_index: (request: { warmup?: CodegraphMcpWarmupMode | undefined }) => Promise<{
     refreshed: true;
     warmup: CodegraphMcpWarmupMode;
@@ -160,7 +162,7 @@ export type CodegraphMcpHandlers = {
     report?: boolean | undefined;
     questions?: boolean | undefined;
     force?: boolean | undefined;
-  }) => Promise<CodegraphArtifactBuildResult>;
+  }) => Promise<CodegraphMcpFreshResult<CodegraphArtifactBuildResult>>;
 };
 
 type McpDependencyRequest = {
@@ -184,14 +186,18 @@ function createCodegraphMcpSession(options: CodegraphMcpHandlerOptions, root: st
   assertMcpSessionOptions(options);
   return (
     options.session ??
-    createAgentSession({ root, ...(options.buildOptions ? { buildOptions: options.buildOptions } : {}) })
+    createAgentSession({
+      root,
+      ...(options.buildOptions ? { buildOptions: options.buildOptions } : {}),
+      freshness: { policy: "auto" },
+    })
   );
 }
 
 function startCodegraphMcpWarmup(
   session: AgentSession,
   warmup: CodegraphMcpWarmupMode | undefined,
-): Promise<Awaited<ReturnType<AgentSession["loadProject"]>>> | undefined {
+): Promise<AgentProjectSnapshot> | undefined {
   if (warmup === "base") {
     return session.loadProject({ symbolGraph: "skip" });
   }
@@ -239,10 +245,18 @@ function createCodegraphMcpHandlersForSession(
     if (typeof limit !== "number" || !Number.isFinite(limit)) return fallback;
     return Math.min(max, Math.max(0, Math.floor(limit)));
   };
+  const withFreshness = async <T extends object>(
+    run: () => Promise<T>,
+  ): Promise<T & { freshness: AgentFreshnessResult }> => {
+    const freshness = session.checkFreshness ? await session.checkFreshness() : { state: "fresh" as const };
+    const result = await run();
+    return { ...result, freshness };
+  };
+
   const collectMcpDependencyEntries = async (
     request: McpDependencyRequest,
     collectEntries: (
-      graph: Awaited<ReturnType<typeof session.loadProject>>["fileGraph"],
+      graph: AgentProjectSnapshot["fileGraph"],
       file: string,
       options: { depth?: number; limit: number },
     ) => DependencyNode[],
@@ -264,141 +278,163 @@ function createCodegraphMcpHandlersForSession(
 
   return {
     search: async (request) =>
-      await searchCodegraphWithSession(session, {
-        root,
-        query: request.query,
-        ...(request.mode !== undefined ? { mode: request.mode } : {}),
-        ...(request.from !== undefined ? { from: request.from } : {}),
-        ...(request.depth !== undefined ? { depth: request.depth } : {}),
-        ...(request.limit !== undefined ? { limit: request.limit } : {}),
-      }),
+      await withFreshness(
+        async () =>
+          await searchCodegraphWithSession(session, {
+            root,
+            query: request.query,
+            ...(request.mode !== undefined ? { mode: request.mode } : {}),
+            ...(request.from !== undefined ? { from: request.from } : {}),
+            ...(request.depth !== undefined ? { depth: request.depth } : {}),
+            ...(request.limit !== undefined ? { limit: request.limit } : {}),
+          }),
+      ),
 
     orient: async (request) =>
-      await orientCodegraphWithSession(session, {
-        root,
-        ...(request.includeRoots !== undefined ? { includeRoots: request.includeRoots } : {}),
-        ...(request.budget !== undefined ? { budget: request.budget } : {}),
-      }),
+      await withFreshness(
+        async () =>
+          await orientCodegraphWithSession(session, {
+            root,
+            ...(request.includeRoots !== undefined ? { includeRoots: request.includeRoots } : {}),
+            ...(request.budget !== undefined ? { budget: request.budget } : {}),
+          }),
+      ),
 
     packet_get: async (request) =>
-      await getCodegraphPacketWithSession(session, {
-        root,
-        target: request.target,
-        ...(request.maxSymbols !== undefined ? { maxSymbols: request.maxSymbols } : {}),
-        ...(request.maxSnippets !== undefined ? { maxSnippets: request.maxSnippets } : {}),
-        ...(request.maxDuplicates !== undefined ? { maxDuplicates: request.maxDuplicates } : {}),
+      await withFreshness(
+        async () =>
+          await getCodegraphPacketWithSession(session, {
+            root,
+            target: request.target,
+            ...(request.maxSymbols !== undefined ? { maxSymbols: request.maxSymbols } : {}),
+            ...(request.maxSnippets !== undefined ? { maxSnippets: request.maxSnippets } : {}),
+            ...(request.maxDuplicates !== undefined ? { maxDuplicates: request.maxDuplicates } : {}),
+          }),
+      ),
+
+    get_file: async (request) =>
+      await withFreshness(async () => {
+        const resolvedFile = await resolveReadableFile(await realRoot, root, request.file);
+        const maxBytes = boundedLimit(request.maxBytes, DEFAULT_FILE_BYTES, MAX_FILE_BYTES);
+        const read = await readFilePrefix(resolvedFile.realPath, maxBytes);
+        return {
+          file: resolvedFile.displayPath,
+          text: read.text,
+          truncated: read.truncated,
+        };
       }),
 
-    get_file: async (request) => {
-      const resolvedFile = await resolveReadableFile(await realRoot, root, request.file);
-      const maxBytes = boundedLimit(request.maxBytes, DEFAULT_FILE_BYTES, MAX_FILE_BYTES);
-      const read = await readFilePrefix(resolvedFile.realPath, maxBytes);
-      return {
-        file: resolvedFile.displayPath,
-        text: read.text,
-        truncated: read.truncated,
-      };
-    },
+    get_symbol: async (request) =>
+      await withFreshness(async () => {
+        const explanation = await explainCodegraphTargetWithSession(session, { root, target: request.handle });
+        return explanation.target;
+      }),
 
-    get_symbol: async (request) => {
-      const explanation = await explainCodegraphTargetWithSession(session, { root, target: request.handle });
-      return explanation.target;
-    },
-
-    goto: async (request) => {
-      const snapshot = await session.loadProject({ symbolGraph: "skip" });
-      return await goToDefinition(snapshot.index, {
-        file: await resolveProjectFile(await realRoot, root, request.file),
-        line: request.line,
-        column: request.column,
-      });
-    },
-
-    refs: async (request) => {
-      const handle = "handle" in request ? request.handle : undefined;
-      const file = "file" in request ? request.file : undefined;
-      const line = "line" in request ? request.line : undefined;
-      const column = "column" in request ? request.column : undefined;
-      const hasAnyPosition = file !== undefined || line !== undefined || column !== undefined;
-      const hasCompletePosition = file !== undefined && line !== undefined && column !== undefined;
-      if (handle !== undefined && hasAnyPosition) {
-        throw new Error("refs requires either handle or file, line, and column.");
-      }
-      if (handle === undefined && !hasCompletePosition) {
-        throw new Error("refs requires either handle or file, line, and column.");
-      }
-
-      if (handle !== undefined) {
-        const explanation = await explainCodegraphTargetWithSession(session, {
-          root,
-          target: handle,
-          maxReferences: boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT),
+    goto: async (request) =>
+      await withFreshness(async () => {
+        const snapshot = await session.loadProject({ symbolGraph: "skip" });
+        return await goToDefinition(snapshot.index, {
+          file: await resolveProjectFile(await realRoot, root, request.file),
+          line: request.line,
+          column: request.column,
         });
-        return { references: explanation.references };
-      }
-      if (file === undefined || line === undefined || column === undefined) {
-        throw new Error("refs requires either handle or file, line, and column.");
-      }
+      }),
 
-      const snapshot = await session.loadProject({ symbolGraph: "skip" });
-      const referenceOptions = {
-        maxReferences: boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT),
-      };
-      const result = await findReferences(
-        snapshot.index,
-        {
-          file: await resolveProjectFile(await realRoot, root, file),
-          line,
-          column,
-        },
-        referenceOptions,
-      );
-      if (result.status !== "ok") return { references: [] };
-      return {
-        references: result.references.map((reference) => ({
-          file: relative(reference.file),
-          range: reference.range,
-        })),
-      };
-    },
+    refs: async (request) =>
+      await withFreshness(async () => {
+        const handle = "handle" in request ? request.handle : undefined;
+        const file = "file" in request ? request.file : undefined;
+        const line = "line" in request ? request.line : undefined;
+        const column = "column" in request ? request.column : undefined;
+        const hasAnyPosition = file !== undefined || line !== undefined || column !== undefined;
+        const hasCompletePosition = file !== undefined && line !== undefined && column !== undefined;
+        if (handle !== undefined && hasAnyPosition) {
+          throw new Error("refs requires either handle or file, line, and column.");
+        }
+        if (handle === undefined && !hasCompletePosition) {
+          throw new Error("refs requires either handle or file, line, and column.");
+        }
 
-    deps: async (request) => {
-      const dependencies = await collectMcpDependencyEntries(request, getDependencies);
-      return { dependencies };
-    },
+        if (handle !== undefined) {
+          const explanation = await explainCodegraphTargetWithSession(session, {
+            root,
+            target: handle,
+            maxReferences: boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT),
+          });
+          return { references: explanation.references };
+        }
+        if (file === undefined || line === undefined || column === undefined) {
+          throw new Error("refs requires either handle or file, line, and column.");
+        }
 
-    rdeps: async (request) => {
-      const reverseDependencies = await collectMcpDependencyEntries(request, getReverseDependencies);
-      return { reverseDependencies };
-    },
+        const snapshot = await session.loadProject({ symbolGraph: "skip" });
+        const referenceOptions = {
+          maxReferences: boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT),
+        };
+        const result = await findReferences(
+          snapshot.index,
+          {
+            file: await resolveProjectFile(await realRoot, root, file),
+            line,
+            column,
+          },
+          referenceOptions,
+        );
+        if (result.status !== "ok") return { references: [] };
+        return {
+          references: result.references.map((reference) => ({
+            file: relative(reference.file),
+            range: reference.range,
+          })),
+        };
+      }),
 
-    path: async (request) => {
-      const snapshot = await session.loadProject({ symbolGraph: "skip" });
-      const result = getShortestPath(
-        snapshot.fileGraph,
-        await resolveProjectFile(await realRoot, root, request.from),
-        await resolveProjectFile(await realRoot, root, request.to),
-      );
-      return {
-        path: result ? result.map(relative) : null,
-      };
-    },
+    deps: async (request) =>
+      await withFreshness(async () => {
+        const dependencies = await collectMcpDependencyEntries(request, getDependencies);
+        return { dependencies };
+      }),
+
+    rdeps: async (request) =>
+      await withFreshness(async () => {
+        const reverseDependencies = await collectMcpDependencyEntries(request, getReverseDependencies);
+        return { reverseDependencies };
+      }),
+
+    path: async (request) =>
+      await withFreshness(async () => {
+        const snapshot = await session.loadProject({ symbolGraph: "skip" });
+        const result = getShortestPath(
+          snapshot.fileGraph,
+          await resolveProjectFile(await realRoot, root, request.from),
+          await resolveProjectFile(await realRoot, root, request.to),
+        );
+        return {
+          path: result ? result.map(relative) : null,
+        };
+      }),
 
     impact: async (request) =>
-      await buildReviewReport(root, {
-        ...options.buildOptions,
-        gitBase: request.base,
-        gitHead: request.head,
-        reviewDepth: "minimal",
-      }),
+      await withFreshness(
+        async () =>
+          await buildReviewReport(root, {
+            ...options.buildOptions,
+            gitBase: request.base,
+            gitHead: request.head,
+            reviewDepth: "minimal",
+          }),
+      ),
 
     review: async (request) =>
-      await buildReviewReport(root, {
-        ...options.buildOptions,
-        gitBase: request.base,
-        gitHead: request.head,
-        ...(request.reviewDepth !== undefined ? { reviewDepth: request.reviewDepth } : {}),
-      }),
+      await withFreshness(
+        async () =>
+          await buildReviewReport(root, {
+            ...options.buildOptions,
+            gitBase: request.base,
+            gitHead: request.head,
+            ...(request.reviewDepth !== undefined ? { reviewDepth: request.reviewDepth } : {}),
+          }),
+      ),
 
     query_sqlite: async (request) => {
       if (!sqlitePath) {
@@ -420,35 +456,36 @@ function createCodegraphMcpHandlersForSession(
       return { refreshed: true, warmup };
     },
 
-    artifact_build: async (request) => {
-      if (readOnly) {
-        throw new Error("artifact_build is disabled in read-only MCP mode.");
-      }
-      const outDir =
-        request.outDir !== undefined
-          ? await assertWritableDirectoryRealPathWithinRoot(
-              await realRoot,
-              root,
-              request.outDir,
-              "Artifact output directory",
-            )
-          : undefined;
-      const result = await buildCodegraphArtifactWithSession(session, {
-        root,
-        ...(outDir !== undefined ? { outDir } : {}),
-        ...(request.outDir !== undefined ? { filterOutDir: request.outDir } : {}),
-        ...(request.sqlite !== undefined ? { sqlite: request.sqlite } : {}),
-        ...(request.graphJson !== undefined ? { graphJson: request.graphJson } : {}),
-        ...(request.report !== undefined ? { report: request.report } : {}),
-        ...(request.questions !== undefined ? { questions: request.questions } : {}),
-        ...(request.force !== undefined ? { force: request.force } : {}),
-      });
-      const sqliteArtifact = result.artifacts.sqlite;
-      if (sqliteArtifact) {
-        sqlitePath = path.join(result.outDir, sqliteArtifact);
-      }
-      return result;
-    },
+    artifact_build: async (request) =>
+      await withFreshness(async () => {
+        if (readOnly) {
+          throw new Error("artifact_build is disabled in read-only MCP mode.");
+        }
+        const outDir =
+          request.outDir !== undefined
+            ? await assertWritableDirectoryRealPathWithinRoot(
+                await realRoot,
+                root,
+                request.outDir,
+                "Artifact output directory",
+              )
+            : undefined;
+        const result = await buildCodegraphArtifactWithSession(session, {
+          root,
+          ...(outDir !== undefined ? { outDir } : {}),
+          ...(request.outDir !== undefined ? { filterOutDir: request.outDir } : {}),
+          ...(request.sqlite !== undefined ? { sqlite: request.sqlite } : {}),
+          ...(request.graphJson !== undefined ? { graphJson: request.graphJson } : {}),
+          ...(request.report !== undefined ? { report: request.report } : {}),
+          ...(request.questions !== undefined ? { questions: request.questions } : {}),
+          ...(request.force !== undefined ? { force: request.force } : {}),
+        });
+        const sqliteArtifact = result.artifacts.sqlite;
+        if (sqliteArtifact) {
+          sqlitePath = path.join(result.outDir, sqliteArtifact);
+        }
+        return result;
+      }),
   };
 }
 

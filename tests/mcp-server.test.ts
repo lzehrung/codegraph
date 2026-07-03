@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createAgentSession } from "../src/agent/session.js";
-import { createCodegraphMcpHandlers, listCodegraphMcpTools, startCodegraphMcpHttpServer } from "../src/mcp/server.js";
+import {
+  createCodegraphMcpHandlers,
+  listCodegraphMcpTools,
+  startCodegraphMcpHttpServer,
+  type CodegraphMcpHandlers,
+} from "../src/mcp/server.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import { countingSession } from "./helpers/agent.js";
 import { createArtifactOutputWithStaleFile, createLinkedTempRoot, isSymlinkUnavailable } from "./helpers/filesystem.js";
@@ -509,7 +514,7 @@ describe("codegraph MCP handlers", () => {
 
     const result = await handlers.get_file({ file: "large.txt", maxBytes: 5 });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       file: "large.txt",
       text: "abcde",
       truncated: true,
@@ -523,7 +528,7 @@ describe("codegraph MCP handlers", () => {
 
     const result = await handlers.get_file({ file: "unicode.txt", maxBytes: 5 });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       file: "unicode.txt",
       text: "abc",
       truncated: true,
@@ -662,7 +667,7 @@ describe("codegraph MCP handlers", () => {
 
     const scenarios: Array<{
       name: string;
-      run: (handlers: ReturnType<typeof createCodegraphMcpHandlers>) => Promise<void>;
+      run: (handlers: CodegraphMcpHandlers) => Promise<void>;
     }> = [
       {
         name: "goto",
@@ -728,37 +733,51 @@ describe("codegraph MCP handlers", () => {
     expect(counted.loads()).toBe(0);
   });
 
-  it("refresh_index invalidates stale MCP session snapshots", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-refresh-index-"));
+  it("auto-refreshes added files before MCP search", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-auto-fresh-add-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
     const handlers = createCodegraphMcpHandlers({ root });
 
     const before = await handlers.search({ query: "lateSymbol", mode: "symbol", limit: 5 });
-    await fs.writeFile(path.join(root, "late.ts"), "export const lateSymbol = 1;\n", "utf8");
-    const stale = await handlers.search({ query: "lateSymbol", mode: "symbol", limit: 5 });
-    const refresh = await handlers.refresh_index({ warmup: "base" });
-    const fresh = await handlers.search({ query: "lateSymbol", mode: "symbol", limit: 5 });
+    await fs.writeFile(path.join(root, "late.ts"), "export function lateSymbol() { return 1; }\n", "utf8");
+    const after = await handlers.search({ query: "lateSymbol", mode: "symbol", limit: 5 });
 
     expect(before.results.some((result) => result.label === "lateSymbol")).toBe(false);
-    expect(stale.results.some((result) => result.label === "lateSymbol")).toBe(false);
-    expect(refresh).toEqual({ refreshed: true, warmup: "base" });
-    expect(fresh.results.some((result) => result.label === "lateSymbol")).toBe(true);
+    expect(after.results.some((result) => result.label === "lateSymbol")).toBe(true);
+    expect(after.freshness).toEqual({ state: "refreshed", changedFiles: ["late.ts"] });
   });
 
-  it("refresh_index reloads edited files in stale MCP session snapshots", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-refresh-edit-"));
+  it("auto-refreshes edited files before MCP search and reports root-relative changed paths", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-auto-fresh-edit-"));
     const filePath = path.join(root, "auth.ts");
-    await fs.writeFile(filePath, "export const oldSymbol = 1;\n", "utf8");
+    await fs.writeFile(filePath, "export function oldSymbol() { return 1; }\n", "utf8");
     const handlers = createCodegraphMcpHandlers({ root });
 
-    await handlers.search({ query: "oldSymbol", mode: "symbol", limit: 5 });
-    await fs.writeFile(filePath, "export const editedSymbol = 1;\n", "utf8");
-    const stale = await handlers.search({ query: "editedSymbol", mode: "symbol", limit: 5 });
-    await handlers.refresh_index({});
-    const fresh = await handlers.search({ query: "editedSymbol", mode: "symbol", limit: 5 });
+    const before = await handlers.search({ query: "oldSymbol", mode: "symbol", limit: 5 });
+    await fs.writeFile(filePath, "export function editedSymbol() { return 2; }\n", "utf8");
+    const after = await handlers.search({ query: "editedSymbol", mode: "symbol", limit: 5 });
 
-    expect(stale.results.some((result) => result.label === "editedSymbol")).toBe(false);
-    expect(fresh.results.some((result) => result.label === "editedSymbol")).toBe(true);
+    expect(before.results.some((result) => result.label === "oldSymbol")).toBe(true);
+    expect(after.results.some((result) => result.label === "editedSymbol")).toBe(true);
+    expect(after.freshness).toEqual({ state: "refreshed", changedFiles: ["auth.ts"] });
+  });
+
+  it("returns live file bytes and freshness metadata after MCP file edits", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-auto-fresh-read-"));
+    const filePath = path.join(root, "auth.ts");
+    await fs.writeFile(filePath, "export function readBefore() { return 'old'; }\n", "utf8");
+    const handlers = createCodegraphMcpHandlers({ root });
+
+    await handlers.search({ query: "readBefore", mode: "symbol", limit: 5 });
+    await fs.writeFile(filePath, "export function readAfter() { return 'new bytes'; }\n", "utf8");
+    const read = await handlers.get_file({ file: "auth.ts" });
+
+    expect(read).toEqual({
+      file: "auth.ts",
+      text: "export function readAfter() { return 'new bytes'; }\n",
+      truncated: false,
+      freshness: { state: "refreshed", changedFiles: ["auth.ts"] },
+    });
   });
 
   it("refresh_index clears stale SQLite artifact state", async () => {

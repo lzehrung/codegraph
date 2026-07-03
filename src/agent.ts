@@ -1,5 +1,12 @@
 export { createAgentSession } from "./agent/session.js";
-export type { AgentProjectSnapshot, AgentSession, AgentSessionOptions } from "./agent/session.js";
+export type {
+  AgentFreshnessPolicy,
+  AgentFreshnessResult,
+  AgentProjectSnapshot,
+  AgentSession,
+  AgentSessionFreshnessOptions,
+  AgentSessionOptions,
+} from "./agent/session.js";
 export { orientCodegraph } from "./agent/orient.js";
 export type {
   AgentModuleSummary,

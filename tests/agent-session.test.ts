@@ -156,4 +156,28 @@ describe("agent session", () => {
     expect(files).toContain(keptFile.replace(/\\/g, "/"));
     expect(files).not.toContain(ignoredFile.replace(/\\/g, "/"));
   });
+
+  it("reports stale file edits in check policy without invalidating cached project state", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-session-check-fresh-"));
+    const filePath = path.join(root, "auth.ts");
+    await fs.writeFile(filePath, "export function oldSymbol() { return 1; }\n", "utf8");
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    const cached = await session.loadProject({ symbolGraph: "skip" });
+    if (!session.checkFreshness) {
+      throw new Error("agent session should expose freshness checks");
+    }
+
+    await fs.writeFile(filePath, "export function editedSymbol() { return 22; }\n", "utf8");
+    const freshness = await session.checkFreshness();
+    const afterCheck = await session.loadProject({ symbolGraph: "skip" });
+
+    expect(freshness).toEqual({
+      state: "stale",
+      changedFiles: ["auth.ts"],
+      reason: "session snapshot is older than files on disk",
+    });
+    expect(afterCheck).toBe(cached);
+    expect(buildSpy).toHaveBeenCalledTimes(1);
+  });
 });

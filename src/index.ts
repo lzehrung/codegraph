@@ -226,7 +226,14 @@ export {
 
 /** Agent project snapshots and cached service-layer helpers. */
 export { createAgentSession } from "./agent/session.js";
-export type { AgentProjectSnapshot, AgentSession, AgentSessionOptions } from "./agent/session.js";
+export type {
+  AgentFreshnessPolicy,
+  AgentFreshnessResult,
+  AgentProjectSnapshot,
+  AgentSession,
+  AgentSessionFreshnessOptions,
+  AgentSessionOptions,
+} from "./agent/session.js";
 
 /** Agent first-turn orientation packets with file-path follow-up targets. */
 export { orientCodegraph } from "./agent/orient.js";
