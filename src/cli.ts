@@ -27,6 +27,7 @@ import {
   type CliRuntime,
   type CommandReport,
 } from "./cli/context.js";
+import { handleAffectedCommand } from "./cli/affected.js";
 import { buildDoctorReport } from "./cli/doctor.js";
 import { handleDriftCommand } from "./cli/drift.js";
 import { handleDuplicatesCommand } from "./cli/duplicates.js";
@@ -902,6 +903,23 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
           }
         : undefined,
       progressHandler,
+      readStdin: readCliStdin,
+      writeJSONLine,
+      writeStdoutLine,
+      writeStderrLine,
+      exit: exitCli,
+    });
+    return;
+  }
+
+  if (cmd === "affected") {
+    await handleAffectedCommand({
+      projectRootFs,
+      buildOptions: buildAgentOptions(),
+      positionals: parsed.positionals,
+      getOpt,
+      hasFlag,
+      parsedOptions: parsed.options,
       readStdin: readCliStdin,
       writeJSONLine,
       writeStdoutLine,

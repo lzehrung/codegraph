@@ -9,7 +9,7 @@ Use Codegraph for structure-aware repo questions:
 
 - repo overview, hotspots, cycles, unresolved imports, and public API surface
 - symbol navigation with definitions, references, dependencies, and paths
-- PR or worktree impact review with candidate tests and risk signals
+- PR or worktree impact review with candidate tests, affected test lists, and risk signals
 - duplicate cleanup and refactor-risk triage
 - bounded agent context through explore, orientation, search, packets, explain, and MCP
 
@@ -40,6 +40,7 @@ Then choose the smallest useful follow-up:
 - references: `codegraph refs --file <file> --line <line> --col <column> --pretty`
 - duplicates: `codegraph duplicates --root . ./src --profile cleanup`
 - impact: `codegraph impact --base HEAD --head WORKTREE --pretty`
+- affected tests: `codegraph affected --base HEAD --head WORKTREE --quiet`
 - review: `codegraph review --base HEAD --head WORKTREE --summary`
 - drift: `codegraph drift ./src --base origin/main --head HEAD --pretty --graph-edges summary --public-api removals`
 - installer: `codegraph install --target codex,claude --dry-run`
@@ -64,6 +65,7 @@ Current high-value surfaces:
 - `orient --pretty`: ranked first-turn focus targets with copyable follow-ups
 - `impact --pretty`: ranked "what could this break?" map
 - `review --summary`: compact reviewer handoff
+- `affected --quiet`: deterministic path-only test selection for a changed-file set
 - `duplicates --profile cleanup`: refactor ROI ordering
 - `duplicates --json`: full grouped duplicate data
 

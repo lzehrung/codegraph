@@ -14,6 +14,7 @@ Default workflow:
 
 - code review: `codegraph review --base HEAD --head WORKTREE --summary`
 - blast-radius follow-up: `codegraph impact --base HEAD --head WORKTREE --pretty`
+- affected tests: `codegraph affected --base HEAD --head WORKTREE --quiet`
 - unfamiliar repo: `codegraph explore "how does auth reach db?" --root . --pretty`
 - first-turn map: `codegraph orient --root . --budget small --pretty`
 - targeted follow-up: `codegraph search "<query>" --json` then `codegraph explain <handle|file|symbol>`
@@ -56,6 +57,7 @@ Cache and manifest reuse is rooted at `--root`. Reusing a project root lets comm
 # Fast code-review handoff for current local edits
 codegraph review --base HEAD --head WORKTREE --summary
 codegraph impact --base HEAD --head WORKTREE --pretty
+codegraph affected --base HEAD --head WORKTREE --quiet
 
 # First-pass repo summary and next-step suggestions
 codegraph orient --root . --budget small --pretty
@@ -124,6 +126,19 @@ Graph, index, and review reports include `backend.native.byLanguage` so native u
 - `sync` refreshes the manifest after edits and requires an initialized project unless `--init` is passed.
 - `uninit` removes only recognized lifecycle state by default. It refuses unknown `.codegraph/` entries unless `--force` is passed.
 - Lifecycle commands accept either a positional project path or `--root <path>`. They reject using both together because lifecycle manifests always describe one project boundary, not include-root subsets.
+
+### Affected tests
+
+- `affected` maps changed source files to likely test files by traversing reverse dependencies through the project graph. It also includes directly changed test files at depth 0.
+- Inputs can be positional files, newline-delimited `--stdin`, or a Git range with `--base <ref> --head <ref>`. Paths are normalized under `--root` and output as project-root-relative paths.
+- Use `--depth <n>` to expand transitive reverse dependencies, `--filter <glob>` to restrict returned test paths, `--quiet` for path-only output, or `--json` for `schemaVersion: 1`, `changedFiles`, `affectedTests`, and `omittedCounts`.
+
+```bash
+codegraph affected src/auth.ts src/db.ts
+codegraph affected --stdin --quiet
+codegraph affected --base main --head HEAD --json
+codegraph affected --base HEAD --head WORKTREE --filter "tests/**/*.test.ts" --quiet
+```
 
 ### Symbols, navigation, grep, and chunking
 

@@ -9,6 +9,7 @@ Commands:
   packet        Retrieve bounded evidence packets by file path or stable target
   search        Ranked agent search across files, symbols, chunks, SQL, and graph context
   explain       Explain a file, symbol, SQL object, or search handle
+  affected      List tests likely affected by changed files
   impact        Analyze PR impact
   inspect       Summarize repo structure and recommend next commands
   graph         Build dependency graph (default)
@@ -76,6 +77,7 @@ Recommended review commands:
   codegraph impact --base HEAD --head WORKTREE --pretty  (optional blast-radius follow-up)
   codegraph search "auth user" --json
   codegraph explain src/auth.ts --json
+  codegraph affected --base HEAD --head WORKTREE --quiet
 
 Unfamiliar repo:
   codegraph orient --root . --budget small --pretty
@@ -87,6 +89,7 @@ Examples:
   codegraph search "auth user" --json
   codegraph explore "how does auth reach db?" --pretty
   codegraph explain src/auth.ts --json
+  codegraph affected src/auth.ts --quiet
   codegraph impact --provider git --base HEAD --head WORKTREE
   codegraph init --root .
   codegraph status --root . --json
@@ -119,6 +122,7 @@ Examples:
 `;
 
 const knownCliCommands = new Set([
+  "affected",
   "apisurface",
   "artifact",
   "chunk",
@@ -177,6 +181,20 @@ Usage:
 State:
   Lifecycle commands own only .codegraph/manifest.json metadata. Init and sync may warm or update the disk cache under .codegraph-cache/index-v1/. Other commands do not depend on the manifest.
   Positional paths and --root are alternatives for lifecycle commands; do not combine them.
+`;
+
+export const AFFECTED_HELP_TEXT = `codegraph affected - List tests likely affected by changed files
+
+Usage:
+  codegraph affected <file...> [--root <path>] [--depth <n>] [--json | --quiet]
+  codegraph affected --stdin [--root <path>] [--filter <glob>] [--quiet]
+  codegraph affected --base <ref> --head <ref> [--root <path>] [--json]
+
+Options:
+  --depth <n>       Reverse dependency traversal depth (default: 1)
+  --filter <glob>   Restrict returned test files by project-root-relative glob
+  --stdin           Read newline-delimited changed files from stdin
+  --quiet           Print affected test paths only
 `;
 
 export const INSTALL_HELP_TEXT = `codegraph install - Configure Codegraph for supported agent clients
@@ -411,6 +429,7 @@ Options:
 `;
 
 export function helpTextForCommand(command: string, positionals: readonly string[]): string | undefined {
+  if (command === "affected") return AFFECTED_HELP_TEXT;
   if (command === "search") return SEARCH_HELP_TEXT;
   if (command === "orient") return ORIENT_HELP_TEXT;
   if (command === "packet") return PACKET_HELP_TEXT;

@@ -87,6 +87,9 @@ node ./dist/cli.js review --base HEAD --head WORKTREE --summary
 # broader blast-radius map when the review packet needs expansion
 node ./dist/cli.js impact --base HEAD --head WORKTREE --pretty
 
+# focused affected-test list for current edits
+node ./dist/cli.js affected --base HEAD --head WORKTREE --quiet
+
 # one-call answer for a concrete repo question
 node ./dist/cli.js explore "how does auth reach db?" --root . --pretty
 
@@ -138,6 +141,7 @@ Use these as starting points, then see [docs/cli.md](./docs/cli.md) for all flag
 # fastest code-review handoff for current edits
 codegraph review --base HEAD --head WORKTREE --summary
 codegraph impact --base HEAD --head WORKTREE --pretty
+codegraph affected --base HEAD --head WORKTREE --quiet
 
 # repo question, orientation, and bounded follow-up
 codegraph explore "how does auth reach db?" --root . --pretty

@@ -37,6 +37,7 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--repo",
   "--max-refs",
   "--depth",
+  "--filter",
   "--sort",
   "--scope",
   "--ref-context",
@@ -164,6 +165,16 @@ function graphCommandSchema(positionals: CliPositionalPolicy): CliCommandSchema 
 }
 
 const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
+  [
+    "affected",
+    commandSchema(
+      [...SHARED_BUILD_FLAGS, "--json", "--quiet", "--stdin"],
+      [...SHARED_BUILD_OPTIONS, "--base", "--depth", "--filter", "--head"],
+      {
+        kind: "any",
+      },
+    ),
+  ],
   [
     "apisurface",
     commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], SHARED_BUILD_OPTIONS, {
