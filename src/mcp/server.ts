@@ -17,6 +17,7 @@ import { buildCodegraphArtifactWithSession } from "../agent/artifact.js";
 import type { CodegraphArtifactBuildResult } from "../agent/artifact.js";
 import { explainCodegraphTargetWithSession } from "../agent/explain.js";
 import type { AgentExplanation, AgentExplanationReference } from "../agent/explain.js";
+import { exploreCodegraphWithSession, type AgentExploreResponse } from "../agent/explore.js";
 import { orientCodegraphWithSession, type AgentOrientBudget, type AgentOrientResponse } from "../agent/orient.js";
 import { getCodegraphPacketWithSession, type AgentPacketResponse } from "../agent/packet.js";
 import { searchCodegraphWithSession } from "../agent/search.js";
@@ -109,6 +110,13 @@ export type CodegraphMcpHandlers = {
     depth?: number | undefined;
     limit?: number | undefined;
   }) => Promise<CodegraphMcpFreshResult<AgentSearchResponse>>;
+  explore: (request: {
+    query: string;
+    limit?: number | undefined;
+    maxPackets?: number | undefined;
+    maxPaths?: number | undefined;
+    includeSource?: boolean | undefined;
+  }) => Promise<CodegraphMcpFreshResult<AgentExploreResponse>>;
   orient: (request: {
     includeRoots?: string[] | undefined;
     budget?: AgentOrientBudget | undefined;
@@ -452,6 +460,19 @@ function createCodegraphMcpHandlersForSession(
             ...(request.from !== undefined ? { from: request.from } : {}),
             ...(request.depth !== undefined ? { depth: request.depth } : {}),
             ...(request.limit !== undefined ? { limit: request.limit } : {}),
+          }),
+      ),
+
+    explore: async (request) =>
+      await withFreshness(
+        async () =>
+          await exploreCodegraphWithSession(session, {
+            root,
+            query: request.query,
+            ...(request.limit !== undefined ? { limit: request.limit } : {}),
+            ...(request.maxPackets !== undefined ? { maxPackets: request.maxPackets } : {}),
+            ...(request.maxPaths !== undefined ? { maxPaths: request.maxPaths } : {}),
+            ...(request.includeSource !== undefined ? { includeSource: request.includeSource } : {}),
           }),
       ),
 
@@ -875,6 +896,8 @@ async function callMcpTool(handlers: CodegraphMcpHandlers, name: string, input: 
   switch (name) {
     case "search":
       return await handlers.search(searchSchema.parse(input));
+    case "explore":
+      return await handlers.explore(exploreSchema.parse(input));
     case "orient":
       return await handlers.orient(orientSchema.parse(input));
     case "packet_get":
@@ -947,6 +970,14 @@ const searchSchema = z.object({
   from: z.string().optional(),
   depth: z.number().int().nonnegative().optional(),
   limit: z.number().int().nonnegative().optional(),
+});
+
+const exploreSchema = z.object({
+  query: z.string(),
+  limit: z.number().int().nonnegative().optional(),
+  maxPackets: z.number().int().nonnegative().optional(),
+  maxPaths: z.number().int().nonnegative().optional(),
+  includeSource: z.boolean().optional(),
 });
 
 const orientSchema = z.object({

@@ -77,6 +77,8 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--max-snippets",
   "--max-symbols",
   "--max-duplicates",
+  "--max-packets",
+  "--max-paths",
   "--artifact",
   "--host",
   "--port",
@@ -274,6 +276,14 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
         "--max-snippets",
         "--max-symbols",
       ],
+      { kind: "any" },
+    ),
+  ],
+  [
+    "explore",
+    commandSchema(
+      [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--no-source"],
+      [...SHARED_BUILD_OPTIONS, "--limit", "--max-packets", "--max-paths"],
       { kind: "any" },
     ),
   ],

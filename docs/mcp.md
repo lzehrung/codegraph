@@ -2,7 +2,7 @@
 
 Codegraph can run as a Model Context Protocol server so tool-capable agents can query repo structure without spawning a new CLI process for every follow-up.
 
-Use MCP when an agent will make repeated navigation, search, packet, review, or artifact queries. Use normal CLI commands for one-off local inspection or when your agent runtime does not expose MCP tools.
+Use MCP when an agent will make repeated explore, navigation, search, packet, review, or artifact queries. Use normal CLI commands for one-off local inspection or when your agent runtime does not expose MCP tools.
 
 ## Start the server
 
@@ -35,6 +35,7 @@ Use stdio for a client-owned subprocess. Use HTTP for one long-running Codegraph
 
 The server exposes the same bounded primitives as the CLI and library session layer:
 
+- `explore`: recommended first tool for broad repo questions; returns bounded anchors, packets, paths, blast radius, candidate tests, and follow-ups.
 - `orient`: compact first-turn repo context.
 - `packet_get`: bounded evidence packet by file path, symbol name, SQL object name, or stable target.
 - `search`: deterministic ranked search across paths, symbols, chunks, SQL objects, and graph context.
@@ -193,9 +194,9 @@ OpenCode uses the `mcp` object in `opencode.json`:
 
 When Codegraph MCP tools are available to an agent:
 
-1. Start with `orient`.
-2. Use `search` to find anchors.
-3. Use `packet_get`, `refs`, `goto`, `deps`, `rdeps`, or `path` for focused follow-up.
+1. Start with `explore` for a broad question.
+2. Use `orient` when you need a compact first-turn map rather than a question answer.
+3. Use `search` to find anchors and `packet_get`, `refs`, `goto`, `deps`, `rdeps`, or `path` for focused follow-up.
 4. Check `freshness` on MCP responses after edits; `refreshed` means the answer used an updated snapshot, and `stale` includes a reason plus a bounded changed-file sample.
 5. Use `impact` and `review` for git-range risk analysis.
 6. Use `query_sqlite` only for read-only artifact inspection; rebuild the artifact when it reports stale state.

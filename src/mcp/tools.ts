@@ -47,6 +47,21 @@ export const MCP_TOOLS: Tool[] = [
     ),
   },
   {
+    name: "explore",
+    description:
+      "Recommended first tool for broad repo questions; returns bounded anchors, source packets, paths, blast radius, tests, and follow-ups.",
+    inputSchema: objectSchema(
+      {
+        query: stringProperty,
+        limit: { type: "integer", minimum: 0, maximum: 50, default: 5 },
+        maxPackets: { type: "integer", minimum: 0, maximum: 10, default: 3 },
+        maxPaths: { type: "integer", minimum: 0, maximum: 10, default: 3 },
+        includeSource: { type: "boolean", default: true },
+      },
+      ["query"],
+    ),
+  },
+  {
     name: "orient",
     description: "Build a compact first-turn packet for agent repo context.",
     inputSchema: objectSchema({
