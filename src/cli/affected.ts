@@ -2,10 +2,12 @@ import pm from "picomatch";
 import { buildProjectIndex } from "../indexer/build-index.js";
 import type { BuildOptions, ProjectIndex } from "../indexer/types.js";
 import { getReverseNeighbors, graphAdjacencyFor } from "../graphs/adjacency.js";
-import { createGraphFileResolver } from "../impact/path.js";
+import { createGraphFileResolver, normalizeImpactFileChange } from "../impact/path.js";
+import { getDiff } from "../impact/providers/base.js";
 import { compileTestPatterns, createIndexTestFileMatcher, isTestFilePath } from "../impact/testPatterns.js";
+import type { FileChange } from "../impact/types.js";
+import { listDirectDeletedFileTestImporters } from "../review/deleted.js";
 import type { FileId } from "../types.js";
-import { listChangedFiles } from "../util/git.js";
 import { normalizePath, resolveFilePathWithinRoot, toProjectDisplayPath } from "../util/paths.js";
 import { parseNonNegativeIntegerOption } from "./options.js";
 
@@ -48,9 +50,9 @@ type AffectedTestAccumulator = {
   depth: number;
 };
 
-type ChangedFileInput = {
-  file: string;
-  source: "positional" | "stdin" | "git";
+type ChangedFileInputs = {
+  files: string[];
+  deletedFiles: string[];
 };
 
 type AffectedTraversalState = {
@@ -68,8 +70,8 @@ function parseStdinFiles(raw: string): string[] {
     .filter(Boolean);
 }
 
-function normalizeChangedFileInput(projectRoot: string, input: ChangedFileInput): string {
-  const resolved = resolveFilePathWithinRoot(projectRoot, input.file, "Changed file");
+function normalizeChangedFileInput(projectRoot: string, input: string): string {
+  const resolved = resolveFilePathWithinRoot(projectRoot, input, "Changed file");
   if (resolved.status === "error") {
     throw new Error(resolved.error);
   }
@@ -118,10 +120,26 @@ function maybeAddTest(
   addAffectedTest(affected, file, reason, depth);
 }
 
-function collectAffectedTests(
-  changedFiles: readonly string[],
+async function addDeletedImporterTests(
+  affected: Map<string, AffectedTestAccumulator>,
   state: AffectedTraversalState,
-): { affected: Map<string, AffectedTestAccumulator>; omittedCounts: AffectedOmittedCounts } {
+  deletedFiles: readonly string[],
+  omittedCounts: AffectedOmittedCounts,
+): Promise<void> {
+  for (const deletedFile of deletedFiles) {
+    const candidates = await listDirectDeletedFileTestImporters(state.index, [deletedFile], [], state.projectRoot);
+    const reasonSource = toProjectDisplayPath(state.projectRoot, deletedFile);
+    for (const candidate of candidates) {
+      maybeAddTest(affected, state, candidate.file, `deleted import from ${reasonSource}`, 1, omittedCounts);
+    }
+  }
+}
+
+async function collectAffectedTests(
+  changedFiles: readonly string[],
+  deletedFiles: readonly string[],
+  state: AffectedTraversalState,
+): Promise<{ affected: Map<string, AffectedTestAccumulator>; omittedCounts: AffectedOmittedCounts }> {
   const affected = new Map<string, AffectedTestAccumulator>();
   const omittedCounts: AffectedOmittedCounts = { changedFiles: 0, filteredTests: 0 };
   const resolver = createGraphFileResolver(state.index.graph.nodes);
@@ -168,6 +186,7 @@ function collectAffectedTests(
     }
   }
 
+  await addDeletedImporterTests(affected, state, deletedFiles, omittedCounts);
   return { affected, omittedCounts };
 }
 
@@ -209,38 +228,53 @@ function formatPrettyReport(report: AffectedTestsReport): string {
   return lines.join("\n");
 }
 
-async function collectChangedFileInputs(context: AffectedCommandContext): Promise<ChangedFileInput[]> {
-  const inputs: ChangedFileInput[] = context.positionals.map((file) => ({ file, source: "positional" }));
+async function collectChangedFileInputs(context: AffectedCommandContext): Promise<ChangedFileInputs> {
+  const inputs: string[] = [...context.positionals];
+  const deletedFiles: string[] = [];
   if (context.hasFlag("--stdin")) {
-    for (const file of parseStdinFiles(await context.readStdin())) {
-      inputs.push({ file, source: "stdin" });
-    }
+    inputs.push(...parseStdinFiles(await context.readStdin()));
   }
 
   const base = context.getOpt("--base");
   const head = context.getOpt("--head");
-  if (head && !base) {
-    throw new Error("--head requires --base for affected git diff input.");
+  if ((base && !head) || (head && !base)) {
+    throw new Error("--base and --head must be provided together for affected git diff input.");
   }
-  if (base) {
-    const diffOptions: { base: string; head?: string } = { base };
-    if (head) diffOptions.head = head;
-    for (const file of await listChangedFiles(context.projectRootFs, diffOptions)) {
-      inputs.push({ file, source: "git" });
+  if (base && head) {
+    const diff = await getDiff({ provider: "git", base, head, cwd: context.projectRootFs });
+    for (const change of diff.files) {
+      const normalizedChange = normalizeImpactFileChange(context.projectRootFs, change);
+      inputs.push(normalizedChange.path);
+      for (const deletedFile of deletedPathsForChange(normalizedChange)) {
+        deletedFiles.push(deletedFile);
+      }
     }
   }
 
-  return inputs;
+  return { files: inputs, deletedFiles };
+}
+
+function deletedPathsForChange(change: FileChange): string[] {
+  if (change.kind === "deleted") {
+    return [change.path];
+  }
+  if (change.kind === "renamed" && change.oldPath) {
+    return [change.oldPath];
+  }
+  return [];
 }
 
 async function buildAffectedReportFromContext(context: AffectedCommandContext): Promise<AffectedTestsReport> {
   const inputs = await collectChangedFileInputs(context);
-  if (!inputs.length) {
+  if (!inputs.files.length) {
     throw new Error("Usage: codegraph affected <file...> [--stdin] [--base <ref> --head <ref>] [--root <path>]");
   }
 
   const normalizedChangedFiles = Array.from(
-    new Set(inputs.map((input) => normalizeChangedFileInput(context.projectRootFs, input))),
+    new Set(inputs.files.map((input) => normalizeChangedFileInput(context.projectRootFs, input))),
+  ).sort();
+  const normalizedDeletedFiles = Array.from(
+    new Set(inputs.deletedFiles.map((input) => normalizeChangedFileInput(context.projectRootFs, input))),
   ).sort();
   const depth = parseNonNegativeIntegerOption(context.getOpt("--depth"), "--depth", 1);
   const index = await buildProjectIndex(context.projectRootFs, context.buildOptions);
@@ -252,7 +286,7 @@ async function buildAffectedReportFromContext(context: AffectedCommandContext): 
     normalizedChangedFiles,
   );
   const passesFilter = createTestFilter(context.projectRootFs, context.parsedOptions.get("--filter") ?? []);
-  const { affected, omittedCounts } = collectAffectedTests(normalizedChangedFiles, {
+  const { affected, omittedCounts } = await collectAffectedTests(normalizedChangedFiles, normalizedDeletedFiles, {
     index,
     projectRoot: context.projectRootFs,
     maxDepth: depth,

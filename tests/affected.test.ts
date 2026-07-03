@@ -2,7 +2,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { runCliOrThrow } from "./helpers/cli.js";
+import { captureCli, runCliOrThrow } from "./helpers/cli.js";
 import { mkTmpDir, normalizeTestPath } from "./helpers/filesystem.js";
 import { runGit } from "./helpers/git.js";
 
@@ -42,9 +42,14 @@ async function createTypescriptProject(prefix: string, files: readonly ProjectFi
   return root;
 }
 
-async function runAffectedJson(root: string, args: readonly string[], stdin?: string): Promise<AffectedJsonReport> {
+async function runAffectedJson(
+  root: string,
+  args: readonly string[],
+  stdin?: string,
+  cwd = root,
+): Promise<AffectedJsonReport> {
   const result = await runCliOrThrow(["affected", "--root", root, "--cache", "memory", "--json", ...args], {
-    cwd: root,
+    cwd,
     stdin,
   });
   expect(result.stderr).toBe("");
@@ -130,8 +135,11 @@ describe("affected CLI", () => {
         },
       ]);
 
+      const shallowReport = await runAffectedJson(root, ["src/core.ts", "--depth", "1"]);
       const report = await runAffectedJson(root, ["src/core.ts", "--depth", "2"]);
 
+      expect(shallowReport.changedFiles).toEqual(["src/core.ts"]);
+      expect(shallowReport.affectedTests).toEqual([]);
       expect(report.changedFiles).toEqual(["src/core.ts"]);
       expect(report.affectedTests.map(({ file, depth }) => ({ file, depth }))).toEqual([
         { file: "tests/service.test.ts", depth: 2 },
@@ -192,6 +200,55 @@ describe("affected CLI", () => {
         { file: "tests/parser.test.ts", depth: 1 },
       ]);
       expectReasonMentions(report.affectedTests[0], "src/parser.ts");
+    },
+    affectedCliTimeoutMs,
+  );
+
+  it(
+    "resolves --root as the project boundary when invoked from another cwd",
+    async () => {
+      const root = await createTypescriptProject("cg-affected-root-cwd-", [
+        {
+          path: "src/widget.ts",
+          contents: "export function renderWidget() { return 'widget'; }\n",
+        },
+        {
+          path: "tests/widget.test.ts",
+          contents:
+            "import { renderWidget } from '../src/widget';\nif (renderWidget() !== 'widget') throw new Error('bad widget');\n",
+        },
+      ]);
+      const cwd = await mkTmpDir("cg-affected-outside-cwd-");
+
+      const report = await runAffectedJson(root, ["src/widget.ts"], undefined, cwd);
+
+      expect(normalizeTestPath(report.root)).toBe(normalizeTestPath(root));
+      expect(report.changedFiles).toEqual(["src/widget.ts"]);
+      expect(report.affectedTests.map(({ file, depth }) => ({ file, depth }))).toEqual([
+        { file: "tests/widget.test.ts", depth: 1 },
+      ]);
+      expectReasonMentions(report.affectedTests[0], "src/widget.ts");
+    },
+    affectedCliTimeoutMs,
+  );
+
+  it(
+    "rejects --base without --head with a nonzero usage error",
+    async () => {
+      const root = await createTypescriptProject("cg-affected-base-without-head-", [
+        {
+          path: "src/api.ts",
+          contents: "export const api = 1;\n",
+        },
+      ]);
+
+      const result = await captureCli(["affected", "--root", root, "--cache", "memory", "--json", "--base", "HEAD"], {
+        cwd: root,
+      });
+
+      expect(result.exitCode).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("--base and --head must be provided together");
     },
     affectedCliTimeoutMs,
   );
@@ -268,6 +325,41 @@ describe("affected CLI", () => {
       expectReasonMentions(report.affectedTests[0], "src/api.ts");
       expect(headAfter).toBe(headBefore);
       expect(statusAfter).toBe(statusBefore);
+    },
+    affectedCliTimeoutMs,
+  );
+
+  it(
+    "reports existing tests that import a source file deleted across --base/--head",
+    async () => {
+      const root = await createTypescriptProject("cg-affected-git-deleted-", [
+        {
+          path: ".gitignore",
+          contents: ".codegraph-cache/\n",
+        },
+        {
+          path: "src/legacy.ts",
+          contents: "export function legacyValue() { return 7; }\n",
+        },
+        {
+          path: "tests/legacy.test.ts",
+          contents:
+            "import { legacyValue } from '../src/legacy';\nif (legacyValue() !== 7) throw new Error('bad legacy');\n",
+        },
+      ]);
+      runGit(root, ["init"]);
+      runGit(root, ["add", "."]);
+      runGit(root, ["commit", "-m", "base"]);
+      runGit(root, ["rm", "src/legacy.ts"]);
+      runGit(root, ["commit", "-m", "delete legacy"]);
+
+      const report = await runAffectedJson(root, ["--base", "HEAD~1", "--head", "HEAD"]);
+
+      expect(report.changedFiles).toEqual(["src/legacy.ts"]);
+      expect(report.affectedTests.map(({ file, depth }) => ({ file, depth }))).toEqual([
+        { file: "tests/legacy.test.ts", depth: 1 },
+      ]);
+      expectReasonMentions(report.affectedTests[0], "src/legacy.ts");
     },
     affectedCliTimeoutMs,
   );
