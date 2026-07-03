@@ -16,6 +16,10 @@ Commands:
   drift        Compare architecture health between refs or artifacts
   mcp           Serve MCP tools for agent graph navigation
   index         Build the project symbol index
+  init          Initialize project-local Codegraph lifecycle metadata
+  status        Inspect project-local Codegraph lifecycle metadata
+  sync          Refresh project-local Codegraph lifecycle metadata
+  uninit        Remove project-local Codegraph lifecycle metadata
   goto          Go to definition
   refs          Find references
   deps          List dependencies
@@ -84,6 +88,10 @@ Examples:
   codegraph explore "how does auth reach db?" --pretty
   codegraph explain src/auth.ts --json
   codegraph impact --provider git --base HEAD --head WORKTREE
+  codegraph init --root .
+  codegraph status --root . --json
+  codegraph sync --root .
+  codegraph uninit --root . --force
   codegraph packet get file:src%2Fcli.ts --json
   codegraph artifact build --root . --out codegraph-out --json
   codegraph mcp serve --root . --stdio
@@ -129,6 +137,7 @@ const knownCliCommands = new Set([
   "hotspots",
   "impact",
   "index",
+  "init",
   "install",
   "inspect",
   "mcp",
@@ -140,8 +149,11 @@ const knownCliCommands = new Set([
   "review",
   "search",
   "skill",
+  "status",
+  "sync",
   "sql",
   "unresolved",
+  "uninit",
   "version",
   "uninstall",
 ]);
@@ -149,6 +161,18 @@ const knownCliCommands = new Set([
 export function isKnownCliCommand(command: string): boolean {
   return knownCliCommands.has(command);
 }
+
+export const LIFECYCLE_HELP_TEXT = `codegraph lifecycle - Initialize, inspect, refresh, or remove project-local Codegraph state
+
+Usage:
+  codegraph init [path] [--root <path>] [--force] [--json]
+  codegraph status [path] [--root <path>] [--json]
+  codegraph sync [path] [--root <path>] [--init] [--force] [--json]
+  codegraph uninit [path] [--root <path>] [--force] [--json]
+
+State:
+  Lifecycle commands write only .codegraph/manifest.json metadata. They reuse the existing disk cache and never make other commands depend on the manifest.
+`;
 
 export const INSTALL_HELP_TEXT = `codegraph install - Configure Codegraph for supported agent clients
 
@@ -388,6 +412,8 @@ export function helpTextForCommand(command: string, positionals: readonly string
   if (command === "explain") return EXPLAIN_HELP_TEXT;
   if (command === "install") return INSTALL_HELP_TEXT;
   if (command === "uninstall") return UNINSTALL_HELP_TEXT;
+  if (command === "init" || command === "status" || command === "sync" || command === "uninit")
+    return LIFECYCLE_HELP_TEXT;
   if (command === "drift") return DRIFT_HELP_TEXT;
   if (command === "duplicates") return DUPLICATES_HELP_TEXT;
   if (command === "artifact") return ARTIFACT_HELP_TEXT;

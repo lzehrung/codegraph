@@ -43,10 +43,12 @@ Then choose the smallest useful follow-up:
 - review: `codegraph review --base HEAD --head WORKTREE --summary`
 - drift: `codegraph drift ./src --base origin/main --head HEAD --pretty --graph-edges summary --public-api removals`
 - installer: `codegraph install --target codex,claude --dry-run`
+- lifecycle: `codegraph init --root .`, `codegraph status --root . --json`, `codegraph sync --root .`
 
 Use `--root` to define the project boundary for config lookup, cache scope, path confinement, and output normalization.
 For `orient`, `drift`, and positional graph commands, positional paths are include roots inside that project.
 Use `codegraph install --target <ids> --yes` to configure supported local agent clients. Use `--dry-run` or `--print-config <target>` first; uninstall removes only Codegraph-owned marker blocks, marker files, or MCP entries whose command is `codegraph`.
+Lifecycle commands write only `.codegraph/manifest.json` metadata and reuse the existing disk cache; use `uninit` to remove recognized lifecycle state.
 
 ## Output Choice
 

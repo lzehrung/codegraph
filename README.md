@@ -40,6 +40,7 @@ Detailed command contracts and JSON shapes live in [docs/cli.md](./docs/cli.md).
 - Per-file symbol indexes with locals, exports, docstrings, line spans, and lightweight complexity metadata.
 - Cross-file go-to-definition and find-references support across the shared source-language pipeline.
 - Deterministic agent exploration, orientation, packet retrieval, search, bounded explanations, portable artifact bundles, and MCP tools across files, symbols, chunks, SQL objects, graph neighborhoods, and review ranges with stable follow-up targets.
+- Project lifecycle commands initialize, inspect, refresh, and remove `.codegraph/manifest.json` metadata while reusing the existing disk cache.
 - Semantic chunking for code and text files, including Vue and Svelte single-file component block splitting.
 - Duplicate and near-duplicate detection over indexed symbols, semantic chunks, text chunks, token fingerprints, and AST shape hashes when parser context is available.
 - AST grep, public API summaries, unresolved import reports, hotspot analysis, cycle detection, and shortest dependency paths.
@@ -96,6 +97,10 @@ node ./dist/cli.js orient --root . --budget small --pretty
 node ./dist/cli.js search "build review report" --json
 node ./dist/cli.js explain src/cli.ts
 
+# optional lifecycle manifest and cache warmup
+node ./dist/cli.js init --root .
+node ./dist/cli.js status --root . --json
+
 # optional runtime and artifact health check
 node ./dist/cli.js doctor
 
@@ -139,6 +144,11 @@ codegraph explore "how does auth reach db?" --root . --pretty
 codegraph orient --root . --budget small --pretty
 codegraph search "build review report" --json
 codegraph explain src/review.ts
+
+# project lifecycle marker and cache warmup
+codegraph init --root .
+codegraph status --root . --json
+codegraph sync --root .
 
 # semantic navigation
 codegraph goto <file> <line> <column>

@@ -101,6 +101,12 @@ codegraph graph --root . --sql-artifacts --json
 # SQLite export
 codegraph graph --sqlite ./codegraph.sqlite
 
+# Project lifecycle marker and cache warmup
+codegraph init --root .
+codegraph status --root . --json
+codegraph sync --root .
+codegraph uninit --root . --force
+
 # Build and report diagnostics
 codegraph graph --report
 codegraph index --report
@@ -110,6 +116,13 @@ codegraph review --report --report-file review.report.json
 `inspect` emits bounded hotspots, unresolved imports, cycles, and high-confidence duplicate opportunities from a bounded duplicate-analysis pass. Duplicate opportunities are intentionally compact and include file ranges, confidence, clone type, score, token counts, and raw pair counts; run the recommended `duplicates` command for full grouped JSON.
 
 Graph, index, and review reports include `backend.native.byLanguage` so native usage and fallback remain visible per language. Build reports also include `backend.parser` when syntax-tree backend degradation leaves files without parser context. Reports also include `graph.fallbackImportExtraction.byLanguage` and `byReason` when regex import extraction is used. Review JSON reports `diagnostics.symbolMappingParseFailures`, `diagnostics.missingFiles`, `changedFiles[].status` as `updated`, `deleted`, or `missing`, and `sqlContext` when changed SQL files or changed SQL literals make SQL artifact facts relevant.
+
+### Project lifecycle
+
+- `init` creates `.codegraph/manifest.json`, warms the existing disk cache through the index build path, and is idempotent when the manifest is current. Use `--force` to rebuild and overwrite the manifest metadata.
+- `status` reports whether lifecycle metadata exists, last sync time, then/current file counts, config/build-option drift, analysis label, and the suggested next command. Use `--json` for `schemaVersion: 1`.
+- `sync` refreshes the manifest after edits and requires an initialized project unless `--init` is passed.
+- `uninit` removes only recognized lifecycle state by default. It refuses unknown `.codegraph/` entries unless `--force` is passed.
 
 ### Symbols, navigation, grep, and chunking
 

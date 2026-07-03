@@ -38,6 +38,7 @@ import { handleGrepCommand } from "./cli/grep.js";
 import { CLI_HELP_TEXT, helpTextForCommand, isKnownCliCommand } from "./cli/help.js";
 import { handleImpactCommand } from "./cli/impact.js";
 import { handleInstallerCommand } from "./cli/install.js";
+import { handleLifecycleCommand } from "./cli/lifecycle.js";
 import { handleIndexCommand } from "./cli/index.js";
 import { handleHotspotsCommand, handleInspectCommand } from "./cli/inspect.js";
 import { handleOrientCommand } from "./cli/orient.js";
@@ -221,7 +222,11 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       cmd === "hotspots" ||
       cmd === "inspect" ||
       cmd === "duplicates" ||
-      cmd === "impact") &&
+      cmd === "impact" ||
+      cmd === "init" ||
+      cmd === "status" ||
+      cmd === "sync" ||
+      cmd === "uninit") &&
     !rootOpt &&
     firstPositionalRoot !== undefined &&
     isExistingDirectory(firstPositionalRoot)
@@ -537,6 +542,19 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     }
     return await resolveFilesFromRoots();
   };
+
+  if (cmd === "init" || cmd === "status" || cmd === "sync" || cmd === "uninit") {
+    await handleLifecycleCommand({
+      command: cmd,
+      root: projectRootFs,
+      buildOptions: buildAgentOptions(),
+      getOpt,
+      hasFlag,
+      writeJSONLine,
+      writeStdoutLine,
+    });
+    return;
+  }
 
   if (cmd === "explore") {
     await handleExploreCommand({

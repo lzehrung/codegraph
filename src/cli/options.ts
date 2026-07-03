@@ -362,6 +362,14 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ],
   ["index", graphCommandSchema({ kind: "any" })],
   [
+    "init",
+    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--force"], SHARED_BUILD_OPTIONS, {
+      kind: "max",
+      max: 1,
+      usage: "Usage: codegraph init [path] [--root <path>] [--force] [--json]",
+    }),
+  ],
+  [
     "install",
     commandSchema(["--detect", "--dry-run", "--json", "--yes"], ["--print-config", "--target"], {
       kind: "max",
@@ -481,10 +489,34 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     }),
   ],
   [
+    "status",
+    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], SHARED_BUILD_OPTIONS, {
+      kind: "max",
+      max: 1,
+      usage: "Usage: codegraph status [path] [--root <path>] [--json]",
+    }),
+  ],
+  [
+    "sync",
+    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--force", "--init"], SHARED_BUILD_OPTIONS, {
+      kind: "max",
+      max: 1,
+      usage: "Usage: codegraph sync [path] [--root <path>] [--init] [--force] [--json]",
+    }),
+  ],
+  [
     "sql",
     commandSchema(["--json"], ["--db", "--query", "--sqlite"], {
       kind: "none",
       usage: 'Usage: codegraph sql --db <sqlite path> --query "SELECT ..."',
+    }),
+  ],
+  [
+    "uninit",
+    commandSchema(["--force", "--json"], ["--root"], {
+      kind: "max",
+      max: 1,
+      usage: "Usage: codegraph uninit [path] [--root <path>] [--force] [--json]",
     }),
   ],
   [
