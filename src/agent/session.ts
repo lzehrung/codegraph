@@ -7,6 +7,7 @@ import { type SymbolGraph } from "../graphs/symbol-graph.js";
 import type { Graph } from "../types.js";
 import { listProjectFiles, type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { mapLimit } from "../util/concurrency.js";
+import { normalizePath } from "../util/paths.js";
 import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions } from "../config.js";
 import { createAgentFileLookup } from "./normalize.js";
 import { summarizeAnalysis, type AnalysisSummary } from "../analysisSummary.js";
@@ -129,7 +130,7 @@ const FILE_SIGNATURE_STAT_CONCURRENCY = 64;
 async function collectAgentFileSignatures(files: readonly string[]): Promise<Map<string, AgentFileSignature>> {
   const signatures = new Map<string, AgentFileSignature>();
   await mapLimit([...files], FILE_SIGNATURE_STAT_CONCURRENCY, async (file) => {
-    const resolvedFile = path.resolve(file);
+    const resolvedFile = normalizePath(path.resolve(file));
     try {
       const stat = await fsp.stat(resolvedFile);
       if (!stat.isFile()) return;

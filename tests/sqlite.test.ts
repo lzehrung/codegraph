@@ -86,7 +86,9 @@ export function run() { helper(); new Widget(); }
       fileSignatures: [{ path: mainPath, size: stat.size, mtimeMs: stat.mtimeMs }],
     });
     let db = new DatabaseSync(dbPath);
-    expect(dbQuery(db, "SELECT value FROM graph_metadata WHERE key = 'artifact_file_signatures_v1';")).toHaveLength(1);
+    expect(
+      dbQuery(db, `SELECT value FROM graph_metadata WHERE key = '${SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY}';`),
+    ).toHaveLength(1);
     db.close();
 
     await writeGraphSqlite({

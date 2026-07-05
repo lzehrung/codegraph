@@ -316,6 +316,7 @@ export {
   updateGraphSqlite,
   queryGraphSqlite,
   queryGraphSqliteRaw,
+  SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY,
   type SqliteGraphOptions,
   type SqliteGraphUpdateOptions,
   type GraphQueryResult,

@@ -130,7 +130,7 @@ export async function buildCodegraphArtifactWithSession(
       fileGraph: snapshot.fileGraph,
       symbolGraph: snapshot.symbolGraph,
       outputPath,
-      ...(fileSignatures ? { fileSignatures } : {}),
+      fileSignatures,
     });
     artifacts.sqlite = SQLITE_FILE;
   }
