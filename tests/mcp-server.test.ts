@@ -550,6 +550,32 @@ describe("codegraph MCP handlers", () => {
     );
   });
 
+  it("serves a fresh SQLite artifact even when the session snapshot is stale", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-stale-session-fresh-artifact-"));
+    await fs.writeFile(path.join(root, "one.ts"), "export const one = 1;\n");
+    const outDir = path.join(root, "out");
+    const buildHandlers = createCodegraphMcpHandlers({ root, readOnly: false });
+    await buildHandlers.artifact_build({ outDir, sqlite: true });
+
+    const backingSession = createAgentSession({ root });
+    const session: AgentSession = {
+      ...backingSession,
+      checkFreshness: async () => ({
+        state: "stale",
+        changedFiles: ["phantom.ts"],
+        changedFileCount: 1,
+        omittedChangedFileCount: 0,
+        reason: "forced stale for test",
+      }),
+    };
+    const readHandlers = createCodegraphMcpHandlers({ root, artifactPath: outDir, session });
+
+    const result = await readHandlers.query_sqlite({ query: "SELECT path FROM files ORDER BY path;" });
+
+    expect(result.rows.map((row) => normalizeSqlitePath(row[0])).some((file) => file.endsWith("one.ts"))).toBe(true);
+    expect(result.freshness).toEqual({ state: "fresh" });
+  });
+
   it("bounds query_sqlite bytes for MCP responses", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-bytes-"));
     await fs.writeFile(path.join(root, "one.ts"), "export const one = 1;\n");
@@ -992,7 +1018,7 @@ describe("codegraph MCP handlers", () => {
       file: "auth.ts",
       text: "export function readAfter() { return 'new bytes'; }\n",
       truncated: false,
-      freshness: { state: "refreshed", changedFiles: ["auth.ts"] },
+      freshness: { state: "fresh" },
     });
   });
 
@@ -1213,7 +1239,7 @@ describe("codegraph MCP handlers", () => {
 
   it("reports fresh when a prebuilt MCP session has no freshness check", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-session-no-freshness-check-"));
-    await fs.writeFile(path.join(root, "one.ts"), "export const one = 1;\n");
+    await fs.writeFile(path.join(root, "one.ts"), "export function lonelySymbol() { return 1; }\n");
     const backingSession = createAgentSession({ root });
     const session: AgentSession = {
       loadProject: backingSession.loadProject,
@@ -1221,9 +1247,9 @@ describe("codegraph MCP handlers", () => {
     };
     const handlers = createCodegraphMcpHandlers({ root, session });
 
-    const read = await handlers.get_file({ file: "one.ts" });
+    const result = await handlers.search({ query: "lonelySymbol", mode: "symbol", limit: 5 });
 
-    expect(read.freshness).toEqual({ state: "fresh" });
+    expect(result.freshness).toEqual({ state: "fresh" });
   });
 });
 

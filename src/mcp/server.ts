@@ -482,17 +482,20 @@ function createCodegraphMcpHandlersForSession(
           }),
       ),
 
-    get_file: async (request) =>
-      await withFreshness(async () => {
-        const resolvedFile = await resolveReadableFile(await realRoot, root, request.file);
-        const maxBytes = boundedLimit(request.maxBytes, DEFAULT_FILE_BYTES, MAX_FILE_BYTES);
-        const read = await readFilePrefix(resolvedFile.realPath, maxBytes);
-        return {
-          file: resolvedFile.displayPath,
-          text: read.text,
-          truncated: read.truncated,
-        };
-      }),
+    get_file: async (request) => {
+      // get_file returns live bytes read directly from disk and never consults the indexed
+      // session, so it must not trigger a workspace-wide freshness scan or rebuild. The bytes
+      // are always current, so report fresh without re-stating the project.
+      const resolvedFile = await resolveReadableFile(await realRoot, root, request.file);
+      const maxBytes = boundedLimit(request.maxBytes, DEFAULT_FILE_BYTES, MAX_FILE_BYTES);
+      const read = await readFilePrefix(resolvedFile.realPath, maxBytes);
+      return {
+        file: resolvedFile.displayPath,
+        text: read.text,
+        truncated: read.truncated,
+        freshness: { state: "fresh" },
+      };
+    },
 
     get_symbol: async (request) =>
       await withFreshness(async () => {
@@ -611,18 +614,24 @@ function createCodegraphMcpHandlersForSession(
         throw new Error("No SQLite artifact is available. Run artifact_build first or pass artifactPath.");
       }
       assertMcpSqliteQueryResourceBounded(request.query);
-      let freshness = await checkMcpFreshness();
-      freshness = await refreshSqliteArtifactForQuery(freshness);
+      // The artifact's own baseline decides whether the query can be served; session freshness
+      // only decides whether an automatic rebuild is safe. A fresh artifact is served even when
+      // the in-memory session snapshot is stale, and an unsafe session refresh burst blocks the
+      // automatic rebuild instead of silently rebuilding from stale in-memory state.
+      const sessionFreshness = await checkMcpFreshness();
       let realSqlitePath = await assertRealPathCandidateWithinRoot(await realRoot, sqlitePath, "SQLite artifact");
-      const artifactFreshness = await checkSqliteArtifactFreshness(realSqlitePath);
+      let artifactFreshness = await checkSqliteArtifactFreshness(realSqlitePath);
       if (artifactFreshness.state !== "fresh") {
-        freshness = await refreshSqliteArtifactForQuery(artifactFreshness, { allowStaleRebuild: true });
+        if (sessionFreshness.state === "stale") {
+          throw new Error(formatSqliteFreshnessError(sessionFreshness));
+        }
+        artifactFreshness = await refreshSqliteArtifactForQuery(artifactFreshness, { allowStaleRebuild: true });
         realSqlitePath = await assertRealPathCandidateWithinRoot(await realRoot, sqlitePath, "SQLite artifact");
       }
       const result = await queryGraphSqliteRaw(realSqlitePath, request.query, request.params ?? [], {
         maxRows: normalizeSqliteRowLimit(request.limit),
       });
-      return { ...boundRawSqlResult(result, DEFAULT_SQLITE_BYTE_LIMIT), freshness };
+      return { ...boundRawSqlResult(result, DEFAULT_SQLITE_BYTE_LIMIT), freshness: artifactFreshness };
     },
 
     refresh_index: async (request) => {
