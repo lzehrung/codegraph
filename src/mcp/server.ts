@@ -1004,9 +1004,9 @@ const searchSchema = z.object({
 
 const exploreSchema = z.object({
   query: z.string(),
-  limit: z.number().int().nonnegative().optional(),
-  maxPackets: z.number().int().nonnegative().optional(),
-  maxPaths: z.number().int().nonnegative().optional(),
+  limit: z.number().int().nonnegative().max(50).optional(),
+  maxPackets: z.number().int().nonnegative().max(10).optional(),
+  maxPaths: z.number().int().nonnegative().max(10).optional(),
   includeSource: z.boolean().optional(),
 });
 
