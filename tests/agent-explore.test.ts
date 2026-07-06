@@ -119,6 +119,32 @@ describe("agent explore", () => {
     expect(readArray(response.followUps, "followUps").length).toBeGreaterThan(0);
   });
 
+  it("matches basename-only file mentions case-insensitively", async () => {
+    const root = await mkExploreRepo();
+    const query = "Auth.ts";
+
+    const response = expectExploreEnvelope(await exploreCodegraph({ root, query }), query);
+    const packets = readArray(response.packets, "packets");
+    const blastRadius = readArray(response.blastRadius, "blastRadius");
+
+    expect(textOf(packets)).toContain("src/auth.ts");
+    expect(textOf(blastRadius)).toContain("src/routes.ts");
+  });
+
+  it("matches basename-only file mentions with trailing question or exclamation punctuation", async () => {
+    const root = await mkExploreRepo();
+    const queries = ["auth.ts?", "auth.ts!"];
+
+    for (const query of queries) {
+      const response = expectExploreEnvelope(await exploreCodegraph({ root, query }), query);
+      const blastRadius = readArray(response.blastRadius, "blastRadius");
+      const followUps = readArray(response.followUps, "followUps");
+
+      expect(textOf(blastRadius), query).toContain("src/routes.ts");
+      expect(followUps, query).toContain("codegraph packet get src/auth.ts --pretty");
+    }
+  });
+
   it("returns symbol anchors and evidence packets for a symbol query", async () => {
     const root = await mkExploreRepo();
     const query = "validateUser";

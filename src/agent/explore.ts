@@ -274,7 +274,7 @@ function extractFileMentions(snapshot: AgentProjectSnapshot, query: string): str
       explicitFiles.push(file);
       continue;
     }
-    const basename = path.basename(relative);
+    const basename = path.basename(relative).toLowerCase();
     const bucket = basenameMatches.get(basename) ?? [];
     bucket.push(file);
     basenameMatches.set(basename, bucket);
@@ -296,7 +296,7 @@ function normalizeQueryPathText(input: string): string {
 function tokenizeQuery(query: string): string[] {
   return query
     .split(/\s+/)
-    .map((token) => token.replace(/^["'`([{]+|["'`\])},.:;]+$/g, ""))
+    .map((token) => token.replace(/^["'`([{]+|["'`\])},.:;?!]+$/g, "").toLowerCase())
     .filter((token) => token.length > 0);
 }
 
