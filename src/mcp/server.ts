@@ -290,7 +290,13 @@ function createCodegraphMcpHandlersForSession(
       freshness.state === "stale" && freshness.omittedChangedFileCount
         ? ` Omitted changed files: ${freshness.omittedChangedFileCount}.`
         : "";
-    const action = freshness.state === "stale" ? "run refresh_index, then artifact_build" : "run artifact_build";
+    let action = "run artifact_build";
+    if (readOnly) {
+      action = "rebuild the artifact with write access enabled";
+    }
+    if (freshness.state === "stale") {
+      action = `run refresh_index, then ${action}`;
+    }
     return `SQLite artifact is stale; ${action} before query_sqlite. ${reason}.${changed}${omitted}`;
   };
   const canRefreshSqliteArtifact = (): boolean => {
@@ -646,6 +652,9 @@ function createCodegraphMcpHandlersForSession(
     },
 
     artifact_build: async (request) => {
+      if (readOnly) {
+        throw new Error("artifact_build is disabled in read-only MCP mode.");
+      }
       const freshness = await checkMcpFreshness();
       if (freshness.state === "stale") {
         const changed = freshness.changedFiles.length ? ` Changed files: ${freshness.changedFiles.join(", ")}.` : "";
@@ -655,9 +664,6 @@ function createCodegraphMcpHandlersForSession(
         throw new Error(
           `Cannot build artifacts from a stale MCP index; run refresh_index first. ${freshness.reason}.${changed}${omitted}`,
         );
-      }
-      if (readOnly) {
-        throw new Error("artifact_build is disabled in read-only MCP mode.");
       }
       const outDir =
         request.outDir !== undefined

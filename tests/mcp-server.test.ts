@@ -454,14 +454,14 @@ describe("codegraph MCP handlers", () => {
       throw new Error("query_sqlite should reject stale SQLite rebuilds with an Error");
     }
     expect(caught.message).toMatch(/SQLite artifact is stale/);
-    expect(caught.message).toMatch(/run refresh_index, then artifact_build before query_sqlite/);
+    expect(caught.message).toMatch(/refresh_index[\s\S]*artifact_build[\s\S]*query_sqlite/);
     expect(caught.message).toMatch(/changed byte count exceeds 16/);
     expect(caught.message).toMatch(/remove\.ts/);
     expect(caught.message.indexOf("refresh_index")).toBeLessThan(caught.message.indexOf("artifact_build"));
     expect(caught.message.indexOf("artifact_build")).toBeLessThan(caught.message.indexOf("query_sqlite"));
   });
 
-  it("refuses stale configured SQLite artifacts in read-only mode", async () => {
+  it("guides read-only stale SQLite artifacts to rebuild with write access enabled", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-stale-artifact-"));
     const outDir = path.join(root, "out");
     await fs.writeFile(path.join(root, "one.ts"), "export const one = 1;\n");
@@ -469,11 +469,55 @@ describe("codegraph MCP handlers", () => {
     await buildHandlers.artifact_build({ outDir, sqlite: true });
 
     await fs.writeFile(path.join(root, "two.ts"), "export const two = 2;\n");
-    const readHandlers = createCodegraphMcpHandlers({ root, artifactPath: outDir });
+    const readHandlers = createCodegraphMcpHandlers({ root, artifactPath: outDir, readOnly: true });
+    let caught: unknown;
+    try {
+      await readHandlers.query_sqlite({ query: "SELECT path FROM files ORDER BY path;" });
+    } catch (error) {
+      caught = error;
+    }
 
-    await expect(readHandlers.query_sqlite({ query: "SELECT path FROM files ORDER BY path;" })).rejects.toThrow(
-      /SQLite artifact is stale[\s\S]*two\.ts/,
-    );
+    expect(caught).toBeInstanceOf(Error);
+    if (!(caught instanceof Error)) {
+      throw new Error("query_sqlite should reject stale SQLite artifacts with an Error");
+    }
+    expect(caught.message).toMatch(/SQLite artifact is stale/);
+    expect(caught.message).toMatch(/rebuild[\s\S]*write access enabled/i);
+    expect(caught.message).toMatch(/two\.ts/);
+    expect(caught.message).not.toMatch(/artifact_build before query_sqlite/i);
+  });
+
+  it("guides read-only stale SQLite rebuilds through refresh_index when the session is stale", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-readonly-stale-session-"));
+    const outDir = path.join(root, "out");
+    const removedFile = path.join(root, "remove.ts");
+    await fs.writeFile(path.join(root, "keep.ts"), "export const keep = 1;\n");
+    await fs.writeFile(removedFile, `export const payload = "${"x".repeat(64)}";\n`);
+    const session = createAgentSession({ root, freshness: { policy: "auto", maxAutoRefreshBytes: 16 } });
+    const buildHandlers = createCodegraphMcpHandlers({ root, session, readOnly: false });
+    await buildHandlers.artifact_build({ outDir, sqlite: true });
+
+    await fs.unlink(removedFile);
+    const readHandlers = createCodegraphMcpHandlers({ root, artifactPath: outDir, readOnly: true, session });
+    let caught: unknown;
+    try {
+      await readHandlers.query_sqlite({ query: "SELECT path FROM files ORDER BY path;" });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    if (!(caught instanceof Error)) {
+      throw new Error("query_sqlite should reject stale read-only rebuilds with an Error");
+    }
+    expect(caught.message).toMatch(/SQLite artifact is stale/);
+    expect(caught.message).toMatch(/refresh_index/i);
+    expect(caught.message).toMatch(/rebuild[\s\S]*write access enabled/i);
+    expect(caught.message).toMatch(/changed byte count exceeds 16/);
+    expect(caught.message).toMatch(/remove\.ts/);
+    const writeAccessIndex = caught.message.toLowerCase().indexOf("write access enabled");
+    expect(caught.message.indexOf("refresh_index")).toBeLessThan(writeAccessIndex);
+    expect(caught.message).not.toMatch(/artifact_build before query_sqlite/i);
   });
 
   it("refuses older SQLite artifacts without freshness metadata in read-only mode", async () => {
@@ -657,19 +701,24 @@ describe("codegraph MCP handlers", () => {
     ).resolves.toEqual(expect.objectContaining({ rows: [[1]] }));
   });
 
-  it("disables artifact builds by default and in explicit read-only mode", async () => {
+  it("disables artifact builds in read-only mode before checking freshness", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-readonly-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
+    const backingSession = createAgentSession({ root });
+    let freshnessChecks = 0;
+    const session: AgentSession = {
+      ...backingSession,
+      checkFreshness: async () => {
+        freshnessChecks += 1;
+        throw new Error("checkFreshness should not run before read-only artifact_build rejection");
+      },
+    };
 
-    const defaultHandlers = createCodegraphMcpHandlers({ root });
-    await expect(defaultHandlers.artifact_build({ outDir: path.join(root, "out"), sqlite: true })).rejects.toThrow(
-      /read-only/i,
-    );
-
-    const readOnlyHandlers = createCodegraphMcpHandlers({ root, readOnly: true });
+    const readOnlyHandlers = createCodegraphMcpHandlers({ root, readOnly: true, session });
     await expect(readOnlyHandlers.artifact_build({ outDir: path.join(root, "out"), sqlite: true })).rejects.toThrow(
-      /read-only/i,
+      /artifact_build is disabled in read-only MCP mode/i,
     );
+    expect(freshnessChecks).toBe(0);
   });
 
   it("rejects artifact paths outside the root", async () => {
