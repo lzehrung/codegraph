@@ -76,6 +76,11 @@ function readNumber(value: unknown, label: string): number {
   return value as number;
 }
 
+function readString(value: unknown, label: string): string {
+  expect(value, label).toBeTypeOf("string");
+  return value as string;
+}
+
 function textOf(value: unknown): string {
   return JSON.stringify(value);
 }
@@ -143,6 +148,52 @@ describe("agent explore", () => {
       expect(textOf(blastRadius), query).toContain("src/routes.ts");
       expect(followUps, query).toContain("codegraph packet get src/auth.ts --pretty");
     }
+  });
+
+  it("does not treat a full-path mention as a match for another path that is only a string prefix", async () => {
+    const root = await mkExploreRepo();
+    await writeFile(
+      root,
+      "src/auth.tsx",
+      ["export function AuthPanel() {", "  return <section>authenticated</section>;", "}", ""].join("\n"),
+    );
+    const query = "src/auth.tsx";
+
+    const response = expectExploreEnvelope(await exploreCodegraph({ root, query, limit: 1, maxPackets: 1 }), query);
+    const packetTargets = readArray(response.packets, "packets").map((packet) =>
+      readString(readRecord(packet, "packet").target, "packet target"),
+    );
+    const blastRadiusFiles = readArray(response.blastRadius, "blastRadius").map((entry) =>
+      readString(readRecord(entry, "blastRadius entry").file, "blast radius file"),
+    );
+    const followUps = readArray(response.followUps, "followUps");
+
+    expect(packetTargets).toContain("src/auth.tsx");
+    expect(packetTargets).not.toContain("src/auth.ts");
+    expect(blastRadiusFiles).toContain("src/auth.tsx");
+    expect(blastRadiusFiles).not.toContain("src/auth.ts");
+    expect(followUps).toContain("codegraph packet get src/auth.tsx --pretty");
+    expect(followUps).not.toContain("codegraph packet get src/auth.ts --pretty");
+    expect(followUps).not.toContain("codegraph refs --file src/auth.ts --line 1 --col 0 --pretty");
+  });
+
+  it("matches explicit full-path file mentions with trailing question punctuation", async () => {
+    const root = await mkExploreRepo();
+    const query = "src/auth.ts?";
+
+    const response = expectExploreEnvelope(await exploreCodegraph({ root, query }), query);
+    const packetTargets = readArray(response.packets, "packets").map((packet) =>
+      readString(readRecord(packet, "packet").target, "packet target"),
+    );
+    const blastRadiusFiles = readArray(response.blastRadius, "blastRadius").map((entry) =>
+      readString(readRecord(entry, "blastRadius entry").file, "blast radius file"),
+    );
+    const followUps = readArray(response.followUps, "followUps");
+
+    expect(packetTargets).toContain("src/auth.ts");
+    expect(blastRadiusFiles).toContain("src/auth.ts");
+    expect(textOf(response.blastRadius)).toContain("src/routes.ts");
+    expect(followUps).toContain("codegraph packet get src/auth.ts --pretty");
   });
 
   it("returns symbol anchors and evidence packets for a symbol query", async () => {

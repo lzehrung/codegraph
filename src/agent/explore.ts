@@ -288,7 +288,7 @@ function extractFileMentions(snapshot: AgentProjectSnapshot, query: string): str
   for (const file of snapshot.fileGraph.nodes) {
     const relative = toProjectDisplayPath(snapshot.root, file);
     const normalizedRelative = normalizeQueryPathText(relative);
-    if (normalizedQuery.includes(normalizedRelative)) {
+    if (includesStandalonePathMention(normalizedQuery, normalizedRelative)) {
       explicitFiles.push(file);
       continue;
     }
@@ -309,6 +309,23 @@ function extractFileMentions(snapshot: AgentProjectSnapshot, query: string): str
 
 function normalizeQueryPathText(input: string): string {
   return input.replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
+}
+
+function includesStandalonePathMention(query: string, target: string): boolean {
+  let start = query.indexOf(target);
+  while (start !== -1) {
+    const end = start + target.length;
+    const before = start > 0 ? query[start - 1] : undefined;
+    const after = end < query.length ? query[end] : undefined;
+    if (isPathMentionBoundary(before) && isPathMentionBoundary(after)) return true;
+    start = query.indexOf(target, start + 1);
+  }
+  return false;
+}
+
+function isPathMentionBoundary(char: string | undefined): boolean {
+  if (char === undefined) return true;
+  return /[\s"'`()\[\]{},.:;?!#]/.test(char);
 }
 
 function tokenizeQuery(query: string): string[] {
