@@ -7,7 +7,7 @@ import { type SymbolGraph } from "../graphs/symbol-graph.js";
 import type { Graph } from "../types.js";
 import { listProjectFiles, type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { mapLimit } from "../util/concurrency.js";
-import { normalizePath } from "../util/paths.js";
+import { normalizePath, toProjectDisplayPath } from "../util/paths.js";
 import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions } from "../config.js";
 import { createAgentFileLookup } from "./normalize.js";
 import { summarizeAnalysis, type AnalysisSummary } from "../analysisSummary.js";
@@ -286,11 +286,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     const diff = diffAgentFileSignatures(cachedFileSignatures, currentSignatures);
     if (!diff.changedFiles.length) return { state: "fresh" };
 
-    const changedFiles = diff.changedFiles.map((file) => {
-      const relativeFile = path.relative(options.root, file).replace(/\\/g, "/");
-      if (!relativeFile || relativeFile.startsWith("../")) return file.replace(/\\/g, "/");
-      return relativeFile;
-    });
+    const changedFiles = diff.changedFiles.map((file) => toProjectDisplayPath(options.root, file));
     if (policy === "check") {
       return {
         state: "stale",
