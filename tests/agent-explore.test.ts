@@ -124,6 +124,24 @@ describe("agent explore", () => {
     expect(readArray(response.followUps, "followUps").length).toBeGreaterThan(0);
   });
 
+  it("orders anchor-file derived outputs by project path for multi-file mentions", async () => {
+    const root = await mkExploreRepo();
+    const query = "src/routes.ts src/db.ts src/auth.ts";
+
+    const response = expectExploreEnvelope(await exploreCodegraph({ root, query }), query);
+    const blastRadiusFiles = readArray(response.blastRadius, "blastRadius").map((entry) =>
+      readString(readRecord(entry, "blastRadius entry").file, "blast radius file"),
+    );
+    const followUps = readArray(response.followUps, "followUps");
+
+    expect(blastRadiusFiles.slice(0, 3)).toEqual(["src/auth.ts", "src/db.ts", "src/routes.ts"]);
+    expect(followUps.slice(0, 3)).toEqual([
+      "codegraph packet get src/auth.ts --pretty",
+      "codegraph packet get src/db.ts --pretty",
+      "codegraph packet get src/routes.ts --pretty",
+    ]);
+  });
+
   it("matches basename-only file mentions case-insensitively", async () => {
     const root = await mkExploreRepo();
     const query = "Auth.ts";

@@ -278,7 +278,9 @@ function collectAnchorFiles(
       files.add(absolute);
     }
   }
-  return [...files];
+  return [...files].sort((left, right) =>
+    toProjectDisplayPath(snapshot.root, left).localeCompare(toProjectDisplayPath(snapshot.root, right)),
+  );
 }
 
 function extractFileMentions(snapshot: AgentProjectSnapshot, query: string): string[] {
@@ -423,6 +425,7 @@ function collectCandidateTests(
 }
 
 function candidateTestsForAnchors(snapshot: AgentProjectSnapshot, anchorFiles: readonly string[]): string[] {
+  if (!anchorFiles.length) return [];
   const candidateNames = new Set<string>();
   for (const file of anchorFiles) {
     candidateNames.add(normalizeStem(path.basename(file)));
