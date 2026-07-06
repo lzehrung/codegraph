@@ -197,14 +197,14 @@ async function resolveRequestedTargets(options: InstallOptions): Promise<Install
   if (options.targetIds?.length) {
     return options.targetIds.map((id) => createInstallTarget(definitionForTarget(id)));
   }
-  const detections = await detectInstallTargets(options);
-  const detectedIds = detections
-    .filter((detection) => detection.detected)
-    .map((detection, index) => {
-      const definition = TARGET_DEFINITIONS[index]!;
-      return definition.id;
-    });
-  return detectedIds.map((id) => createInstallTarget(definitionForTarget(id)));
+  const targets = listInstallTargets();
+  const detections = await Promise.all(targets.map(async (target) => await target.detect(options)));
+  const detectedTargets: InstallTarget[] = [];
+  for (const [index, target] of targets.entries()) {
+    const detection = detections[index];
+    if (detection?.detected) detectedTargets.push(target);
+  }
+  return detectedTargets;
 }
 
 function assertWriteAllowed(options: InstallOptions): void {
@@ -327,23 +327,27 @@ function renderConfigWithCodegraph(definition: TargetDefinition, existing: strin
   }
   const parsed = parseConfigJson(existing, configPath);
   if (definition.kind === "json-opencode-mcp") {
-    parsed.mcp = mergeRecord(readRecordProperty(parsed, "mcp"), {
-      codegraph: {
-        type: "local",
-        enabled: true,
-        command: ["codegraph", "mcp", "serve", "--root", ".", "--stdio"],
-      },
-    });
+    const mcp = readRecordProperty(parsed, "mcp");
+    const desiredServer = {
+      type: "local",
+      enabled: true,
+      command: ["codegraph", "mcp", "serve", "--root", ".", "--stdio"],
+    };
+    if (shouldPreserveExistingServer(mcp, desiredServer)) return existing ?? renderJsonConfig(parsed);
+    mcp.codegraph = desiredServer;
+    parsed.mcp = mcp;
   } else {
-    parsed.mcpServers = mergeRecord(readRecordProperty(parsed, "mcpServers"), {
-      codegraph: {
-        type: "stdio",
-        command: "codegraph",
-        args: ["mcp", "serve", "--root", ".", "--stdio"],
-      },
-    });
+    const mcpServers = readRecordProperty(parsed, "mcpServers");
+    const desiredServer = {
+      type: "stdio",
+      command: "codegraph",
+      args: ["mcp", "serve", "--root", ".", "--stdio"],
+    };
+    if (shouldPreserveExistingServer(mcpServers, desiredServer)) return existing ?? renderJsonConfig(parsed);
+    mcpServers.codegraph = desiredServer;
+    parsed.mcpServers = mcpServers;
   }
-  return `${JSON.stringify(parsed, null, 2)}\n`;
+  return renderJsonConfig(parsed);
 }
 
 function removeCodegraphConfig(definition: TargetDefinition, existing: string, configPath: string): string {
@@ -361,7 +365,7 @@ function removeCodegraphConfig(definition: TargetDefinition, existing: string, c
   } else {
     delete parsed[property];
   }
-  return `${JSON.stringify(parsed, null, 2)}\n`;
+  return renderJsonConfig(parsed);
 }
 
 function printTargetConfig(definition: TargetDefinition, options: PrintConfigOptions): string {
@@ -418,8 +422,15 @@ function readRecordProperty(record: JsonRecord, property: string): JsonRecord {
   throw new Error(`Existing ${property} config must be a JSON object before codegraph can merge into it.`);
 }
 
-function mergeRecord(left: JsonRecord, right: JsonRecord): JsonRecord {
-  return { ...left, ...right };
+function shouldPreserveExistingServer(servers: JsonRecord, desiredServer: JsonRecord): boolean {
+  const existingServer = servers.codegraph;
+  if (existingServer === undefined) return false;
+  return JSON.stringify(existingServer) !== JSON.stringify(desiredServer);
+}
+
+function renderJsonConfig(record: JsonRecord): string {
+  if (!Object.keys(record).length) return "";
+  return `${JSON.stringify(record, null, 2)}\n`;
 }
 
 function isCodegraphJsonServer(value: unknown): boolean {

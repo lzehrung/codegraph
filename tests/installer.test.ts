@@ -28,6 +28,21 @@ describe("agent installer workflow", () => {
     expect(gemini?.detected).toBeFalsy();
   });
 
+  it("auto-detect installs detected Cursor target without shifting past missing Claude", async () => {
+    const homeDir = await mkTmpDir("cg-install-detect-cursor-");
+    await fsp.mkdir(path.join(homeDir, ".codex"), { recursive: true });
+    await fsp.mkdir(path.join(homeDir, ".cursor"), { recursive: true });
+
+    const result = await installCodegraphTargets({ homeDir, yes: true });
+
+    expect(result.targets).toEqual(["codex", "cursor"]);
+    const cursorConfig = JSON.parse(await readFile(path.join(homeDir, ".cursor", "mcp.json"))) as {
+      mcpServers?: { codegraph?: { command?: string } };
+    };
+    expect(cursorConfig.mcpServers?.codegraph?.command).toBe("codegraph");
+    await expect(fsp.stat(path.join(homeDir, ".claude", "mcp.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("prints a Codex MCP TOML snippet from the CLI", async () => {
     const result = await captureCli(["install", "--print-config", "codex"]);
 
@@ -64,6 +79,41 @@ describe("agent installer workflow", () => {
     expect(cursorConfig.mcpServers?.codegraph?.command).toBe("codegraph");
   });
 
+  it("uses XDG_CONFIG_HOME for OpenCode config and installed marker on install and uninstall", async () => {
+    const homeDir = await mkTmpDir("cg-install-opencode-home-");
+    const xdgConfigHome = await mkTmpDir("cg-install-opencode-xdg-");
+    const env = { XDG_CONFIG_HOME: xdgConfigHome };
+    const configPath = path.join(xdgConfigHome, "opencode", "opencode.json");
+    const markerPath = path.join(xdgConfigHome, "opencode", "skills", "codegraph", "CODEGRAPH_INSTALLED");
+    const homeMarkerPath = path.join(homeDir, ".config", "opencode", "skills", "codegraph", "CODEGRAPH_INSTALLED");
+    await fsp.mkdir(path.dirname(configPath), { recursive: true });
+    await fsp.writeFile(
+      configPath,
+      `${JSON.stringify({ mcp: { other: { type: "local", enabled: true, command: ["other-tool"] } } }, null, 2)}\n`,
+      "utf8",
+    );
+
+    await installCodegraphTargets({ homeDir, env, targetIds: ["opencode"], yes: true });
+
+    const installedConfig = JSON.parse(await readFile(configPath)) as {
+      mcp?: { codegraph?: { command?: string[] }; other?: { command?: string[] } };
+    };
+    expect(installedConfig.mcp?.codegraph?.command).toEqual(["codegraph", "mcp", "serve", "--root", ".", "--stdio"]);
+    expect(installedConfig.mcp?.other?.command).toEqual(["other-tool"]);
+    expect(await readFile(markerPath)).toContain("OpenCode");
+    await expect(fsp.stat(homeMarkerPath)).rejects.toMatchObject({ code: "ENOENT" });
+
+    await uninstallCodegraphTargets({ homeDir, env, targetIds: ["opencode"], yes: true });
+
+    const remainingConfig = JSON.parse(await readFile(configPath)) as {
+      mcp?: { codegraph?: { command?: string[] }; other?: { command?: string[] } };
+    };
+    expect(remainingConfig.mcp?.other?.command).toEqual(["other-tool"]);
+    expect(remainingConfig.mcp?.codegraph).toBeUndefined();
+    await expect(fsp.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fsp.stat(homeMarkerPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("uninstalls only Codegraph-owned config entries", async () => {
     const homeDir = await mkTmpDir("cg-install-uninstall-");
     const cursorConfigPath = path.join(homeDir, ".cursor", "mcp.json");
@@ -82,6 +132,50 @@ describe("agent installer workflow", () => {
     };
     expect(cursorConfig.mcpServers?.other?.command).toBe("other-tool");
     expect(JSON.stringify(cursorConfig)).not.toContain("codegraph");
+  });
+
+  it("preserves a pre-existing non-Codegraph-owned mcpServers.codegraph entry on JSON install", async () => {
+    const homeDir = await mkTmpDir("cg-install-json-owned-");
+    const cursorConfigPath = path.join(homeDir, ".cursor", "mcp.json");
+    const existingCodegraphEntry = {
+      type: "stdio",
+      command: "other-codegraph",
+      args: ["serve"],
+      env: { TOKEN: "keep" },
+    };
+    await fsp.mkdir(path.dirname(cursorConfigPath), { recursive: true });
+    await fsp.writeFile(
+      cursorConfigPath,
+      `${JSON.stringify(
+        { mcpServers: { codegraph: existingCodegraphEntry, other: { command: "other-tool" } } },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    await installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true });
+
+    const cursorConfig = JSON.parse(await readFile(cursorConfigPath)) as {
+      mcpServers?: { codegraph?: typeof existingCodegraphEntry; other?: { command?: string } };
+    };
+    expect(cursorConfig.mcpServers?.codegraph).toEqual(existingCodegraphEntry);
+    expect(cursorConfig.mcpServers?.other?.command).toBe("other-tool");
+  });
+
+  it("deletes a JSON config file when uninstall removes its only Codegraph entry", async () => {
+    const homeDir = await mkTmpDir("cg-install-json-delete-");
+    const cursorConfigPath = path.join(homeDir, ".cursor", "mcp.json");
+
+    await installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true });
+    const installedConfig = JSON.parse(await readFile(cursorConfigPath)) as {
+      mcpServers?: { codegraph?: { command?: string } };
+    };
+    expect(installedConfig.mcpServers?.codegraph?.command).toBe("codegraph");
+
+    await uninstallCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true });
+
+    await expect(fsp.stat(cursorConfigPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("requires --yes for writes", async () => {
