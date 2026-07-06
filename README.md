@@ -29,9 +29,9 @@ Use Codegraph when you need fast structural answers about a repo without relying
 - Export graph data as JSON, Mermaid, DOT, or SQLite, then inspect it from scripts, Markdown renderers, Graphviz, or SQL tools.
 - Keep one workflow across source languages, monorepos, and graph-first document and template formats instead of stitching together separate tools.
 
-For unfamiliar repos, start with `orient --root . --budget small --pretty`, then use `search` and `explain` to land on one concrete code anchor.
+For unfamiliar repos with a concrete question, start with `explore "how does auth reach db?" --root . --pretty`; use `orient --root . --budget small --pretty` when you need a map before asking a question.
 For daily change work, start with `review --base HEAD --head WORKTREE --summary`; use `impact --base HEAD --head WORKTREE --pretty` as the broader blast-radius map when needed.
-Search is code-first by default in hybrid mode, and search, explain, and review packets now include analysis labels so reduced-mode or mixed-semantics runs stay visible.
+Search is code-first by default in hybrid mode, and explore, search, explain, and review packets include analysis labels so reduced-mode or mixed-semantics runs stay visible.
 Detailed command contracts and JSON shapes live in [docs/cli.md](./docs/cli.md).
 
 ## Features
@@ -39,7 +39,7 @@ Detailed command contracts and JSON shapes live in [docs/cli.md](./docs/cli.md).
 - Multi-language dependency graphs, including imports, re-exports, `require()`, dynamic imports, workspace resolution, document links, stylesheet imports, and SFC script dependencies.
 - Per-file symbol indexes with locals, exports, docstrings, line spans, and lightweight complexity metadata.
 - Cross-file go-to-definition and find-references support across the shared source-language pipeline.
-- Deterministic agent orientation, packet retrieval, search, bounded explanations, portable artifact bundles, and MCP tools across files, symbols, chunks, SQL objects, graph neighborhoods, and review ranges with stable follow-up targets.
+- Deterministic agent exploration, orientation, packet retrieval, search, bounded explanations, portable artifact bundles, and MCP tools across files, symbols, chunks, SQL objects, graph neighborhoods, and review ranges with stable follow-up targets.
 - Semantic chunking for code and text files, including Vue and Svelte single-file component block splitting.
 - Duplicate and near-duplicate detection over indexed symbols, semantic chunks, text chunks, token fingerprints, and AST shape hashes when parser context is available.
 - AST grep, public API summaries, unresolved import reports, hotspot analysis, cycle detection, and shortest dependency paths.
@@ -86,6 +86,9 @@ node ./dist/cli.js review --base HEAD --head WORKTREE --summary
 # broader blast-radius map when the review packet needs expansion
 node ./dist/cli.js impact --base HEAD --head WORKTREE --pretty
 
+# one-call answer for a concrete repo question
+node ./dist/cli.js explore "how does auth reach db?" --root . --pretty
+
 # bounded repo orientation with next-step suggestions
 node ./dist/cli.js orient --root . --budget small --pretty
 
@@ -131,7 +134,8 @@ Use these as starting points, then see [docs/cli.md](./docs/cli.md) for all flag
 codegraph review --base HEAD --head WORKTREE --summary
 codegraph impact --base HEAD --head WORKTREE --pretty
 
-# repo orientation and bounded follow-up
+# repo question, orientation, and bounded follow-up
+codegraph explore "how does auth reach db?" --root . --pretty
 codegraph orient --root . --budget small --pretty
 codegraph search "build review report" --json
 codegraph explain src/review.ts
@@ -340,7 +344,7 @@ For a custom location, use `codegraph skill install --target <path>/skills/codeg
 
 ## Using as a library
 
-Use the TypeScript API when another program needs deterministic file packs, review packets, or model prompts. CLI `--pretty` and `--summary` output is also useful for model-readable triage, but library callers should keep structured fields until the final UI or prompt boundary. For repeated calls, prefer one warm `createCodeReviewSession()` or one agent/MCP session over rebuilding ad hoc indexes.
+Use the TypeScript API when another program needs deterministic explore responses, file packs, review packets, or model prompts. CLI `--pretty` and `--summary` output is also useful for model-readable triage, but library callers should keep structured fields until the final UI or prompt boundary. For repeated calls, prefer one warm `createCodeReviewSession()` or one agent/MCP session over rebuilding ad hoc indexes.
 
 ```ts
 import {
@@ -430,8 +434,8 @@ For the full capability matrix, limitations, and fixture coverage, see [docs/lan
 
 - [docs/installation.md](./docs/installation.md): source checkout, scoped registry, release tarball, native runtime modes, and reduced-mode behavior
 - [docs/cli.md](./docs/cli.md): command reference, output formats, SQLite schema, review bundles, and graph export usage
-- [docs/library-api.md](./docs/library-api.md): agent orientation/packet/search/explain/artifacts, semantic chunking, indexing, graph APIs, read-only SQL, impact examples, and programmatic review output
-- [docs/agent-workflows.md](./docs/agent-workflows.md): orientation packets, search anchors, MCP, sessions, streaming, tool wrappers, review bundles, and agent-oriented review recipes
+- [docs/library-api.md](./docs/library-api.md): agent explore/orientation/packet/search/explain/artifacts, semantic chunking, indexing, graph APIs, read-only SQL, impact examples, and programmatic review output
+- [docs/agent-workflows.md](./docs/agent-workflows.md): explore, orientation packets, search anchors, MCP, sessions, streaming, tool wrappers, review bundles, and agent-oriented review recipes
 - [docs/mcp.md](./docs/mcp.md): MCP server setup, tool list, safety model, and client configuration examples
 - [docs/how-it-works.md](./docs/how-it-works.md): performance, caching, native runtime behavior, architecture, and testing guidance
 - [docs/language-parity.md](./docs/language-parity.md): per-language capability matrix

@@ -4,6 +4,7 @@ Usage: codegraph <command> [options] [path]
 
 Commands:
   orient        Build a compact first-turn packet for agent repo context
+  explore       Answer a broad repo question with search, packets, paths, and blast radius
   review        Generate code review report
   packet        Retrieve bounded evidence packets by file path or stable target
   search        Ranked agent search across files, symbols, chunks, SQL, and graph context
@@ -71,12 +72,14 @@ Recommended review commands:
   codegraph explain src/auth.ts --json
 
 Unfamiliar repo:
+  codegraph explore "how does auth reach db?" --root . --pretty
   codegraph orient --root . --budget small --pretty
 
 Examples:
   codegraph review --base HEAD --head WORKTREE --summary
   codegraph orient ./src --budget small --pretty
   codegraph search "auth user" --json
+  codegraph explore "how does auth reach db?" --pretty
   codegraph explain src/auth.ts --json
   codegraph impact --provider git --base HEAD --head WORKTREE
   codegraph packet get file:src%2Fcli.ts --json
@@ -113,6 +116,7 @@ const knownCliCommands = new Set([
   "duplicates",
   "dumpmod",
   "explain",
+  "explore",
   "goto",
   "graph",
   "graph-delta",
@@ -138,6 +142,18 @@ const knownCliCommands = new Set([
 export function isKnownCliCommand(command: string): boolean {
   return knownCliCommands.has(command);
 }
+
+export const EXPLORE_HELP_TEXT = `codegraph explore - Answer a broad repo question with bounded repo context
+
+Usage: codegraph explore "<query>" [--root <path>] [--limit <n>] [--max-packets <n>] [--max-paths <n>] [--no-source] [--json | --pretty]
+
+Output:
+  Explore orchestrates search, packet retrieval, dependency paths, reverse dependencies, candidate tests, and follow-up commands.
+  JSON is the default. Use --pretty for concise model-readable sections.
+
+Index options:
+  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+`;
 
 export const SEARCH_HELP_TEXT = `codegraph search - Ranked agent search across project context
 
@@ -340,6 +356,7 @@ Options:
 `;
 
 export function helpTextForCommand(command: string, positionals: readonly string[]): string | undefined {
+  if (command === "explore") return EXPLORE_HELP_TEXT;
   if (command === "search") return SEARCH_HELP_TEXT;
   if (command === "orient") return ORIENT_HELP_TEXT;
   if (command === "packet") return PACKET_HELP_TEXT;

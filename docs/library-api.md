@@ -115,7 +115,7 @@ Small orientation budgets default to `health: "skip"` and set health fields to `
 `searchCodegraph()` builds a project snapshot and returns deterministic, agent-ready anchors across files, symbols, chunks, SQL objects, and optional graph neighborhoods. Hybrid search is code-first by default, so implementation files and symbols outrank docs unless `mode: "text"` is explicit or docs are the strongest remaining evidence. Identifier-like queries stay symbol-first. Pure `path` and `text` searches skip detailed symbol graph construction; hybrid, symbol, SQL, and graph searches keep symbol-aware ranking and neighbors. Handles are project-relative and explainable; result packets include top-level `analysis`, per-result `provenance`, `resultCount`, `totalCandidates`, `limits`, and `omittedCounts`.
 
 ```ts
-import { buildCodegraphArtifact, explainCodegraphTarget, searchCodegraph } from "@lzehrung/codegraph";
+import { buildCodegraphArtifact, explainCodegraphTarget, exploreCodegraph, searchCodegraph } from "@lzehrung/codegraph";
 
 const response = await searchCodegraph({
   root: process.cwd(),
@@ -126,7 +126,19 @@ const response = await searchCodegraph({
 
 const first = response.results[0];
 console.log(first?.handle, first?.rankReasons, first?.omittedCounts, first?.followUps);
+
+const explored = await exploreCodegraph({
+  root: process.cwd(),
+  query: "how does auth reach db?",
+  limit: 5,
+  maxPackets: 3,
+  maxPaths: 3,
+});
+
+console.log(explored.summary, explored.paths, explored.followUps);
 ```
+
+Use `exploreCodegraph()` when the caller has a broad question and needs one bounded response over the existing search, packet, path, reverse-dependency, and candidate-test surfaces. The response has `schemaVersion: 1`, the original query, `analysis`, summary bullets, anchors, packets, paths, blast radius with per-entry omitted lower bounds, candidate tests, follow-ups, flat limits, and omission counts. Path and blast-radius omissions may be lower bounds after bounded scans reach their caps.
 
 Use `mode: "sql"` for SQL objects, or pass `from` plus `depth` with `mode: "graph"` to boost matches near a file path, file/chunk/graph handle, symbol handle, SQL handle, or symbol name.
 
@@ -162,7 +174,7 @@ console.log(artifact.manifestPath, artifact.artifacts);
 
 The `graph.json` artifact is self-describing (`schemaVersion: 1`, `format: "codegraph.graph-json"`) and uses project-relative file paths and portable symbol handles. `questions.json` uses the same stable handles for follow-up commands. With `force: true`, stale known Codegraph artifact files are removed before the selected outputs are written; unrelated files in the directory are preserved.
 
-`createAgentSession()` keeps one in-process project snapshot warm for repeated orient, search, explain, packet, artifact, and MCP calls. It uses incremental indexing with disk cache by default, auto-enables native workers for large cold builds, and carries forward top-level analysis metadata from the build report.
+`createAgentSession()` keeps one in-process project snapshot warm for repeated explore, orient, search, explain, packet, artifact, and MCP calls. It uses incremental indexing with disk cache by default, auto-enables native workers for large cold builds, and carries forward top-level analysis metadata from the build report.
 Session callers can use `freshness: { policy: "check" | "auto" | "manual" }` plus `checkFreshness()` to detect file edits before reusing a warm snapshot. `check` reports stale state without invalidating, `auto` invalidates for bounded changes, and stale results include `changedFileCount`, `omittedChangedFileCount`, `reason`, and a bounded changed-file sample.
 Set `buildOptions.useNativeWorkers` to `false` to opt out. Use `buildCodegraphArtifactWithSession()` when a host already has a session and wants SQLite, graph JSON, report, questions, and manifest outputs from the same snapshot. `createCodegraphMcpHandlers()` exposes the same primitives without starting stdio, which is useful for tests or host applications:
 

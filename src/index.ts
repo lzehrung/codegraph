@@ -235,6 +235,18 @@ export type {
   AgentSessionOptions,
 } from "./agent/session.js";
 
+/** Agent one-call exploration facade over search, packets, paths, and blast radius. */
+export { exploreCodegraph, exploreCodegraphWithSession, formatAgentExploreResponse } from "./agent/explore.js";
+export type {
+  AgentExploreBlastRadiusSummary,
+  AgentExploreDependencyPathSummary,
+  AgentExploreLimits,
+  AgentExploreOmittedCounts,
+  AgentExplorePacketSummary,
+  AgentExploreRequest,
+  AgentExploreResponse,
+} from "./agent/explore.js";
+
 /** Agent first-turn orientation packets with file-path follow-up targets. */
 export { orientCodegraph } from "./agent/orient.js";
 export type {

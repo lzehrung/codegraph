@@ -147,6 +147,100 @@ describe("codegraph MCP handlers", () => {
     }
   });
 
+  it("rejects explore calls above the published MCP schema maximums over Streamable HTTP", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-explore-schema-max-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser() { return true; }\n", "utf8");
+    const counted = countingSession(createAgentSession({ root }));
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      host: "127.0.0.1",
+      port: 0,
+      session: counted.session,
+    });
+
+    try {
+      const initialize = await postMcpJson(httpServer.url, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "codegraph-test", version: "1.0.0" },
+        },
+      });
+      expect(initialize.response.status).toBe(200);
+      const sessionId = initialize.response.headers.get("mcp-session-id");
+      expect(sessionId).toBeTruthy();
+      if (sessionId === null) {
+        throw new Error("MCP initialize response did not include a session id.");
+      }
+
+      const toolsList = await postMcpJson(
+        httpServer.url,
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/list",
+          params: {},
+        },
+        sessionId,
+      );
+      expect(toolsList.response.status).toBe(200);
+      const toolsResult = readObject(toolsList.payload.result);
+      const tools = toolsResult.tools;
+      expect(Array.isArray(tools)).toBeTruthy();
+      const exploreTool = (tools as Array<{ name?: unknown; inputSchema?: unknown }>).find(
+        (tool) => tool.name === "explore",
+      );
+      expect(exploreTool).toBeTruthy();
+      if (exploreTool === undefined) {
+        throw new Error("MCP tools/list did not include the explore tool.");
+      }
+      const exploreSchema = readObject(exploreTool.inputSchema);
+      const exploreProperties = readObject(exploreSchema.properties);
+      const maxFields = [
+        { name: "limit", maximum: 50 },
+        { name: "maxPackets", maximum: 10 },
+        { name: "maxPaths", maximum: 10 },
+      ] as const;
+
+      for (const [index, field] of maxFields.entries()) {
+        const fieldSchema = readObject(exploreProperties[field.name]);
+        expect(fieldSchema.maximum).toBe(field.maximum);
+
+        const toolCall = await postMcpJson(
+          httpServer.url,
+          {
+            jsonrpc: "2.0",
+            id: 3 + index,
+            method: "tools/call",
+            params: {
+              name: "explore",
+              arguments: { query: "auth", [field.name]: field.maximum + 1 },
+            },
+          },
+          sessionId,
+        );
+        expect(toolCall.response.status).toBe(200);
+        expect(toolCall.payload.result).toBeUndefined();
+        const error = readObject(toolCall.payload.error);
+        expect(error.code).toEqual(expect.any(Number));
+        expect(error.message).toEqual(expect.any(String));
+        const serializedError = JSON.stringify(error);
+        if (serializedError === undefined) {
+          throw new Error("MCP validation error was not JSON serializable.");
+        }
+        expect(serializedError).toContain(field.name);
+        expect(serializedError).toContain(String(field.maximum));
+        expect(serializedError).toMatch(/too_big|maximum|max|less than or equal|at most/i);
+      }
+      expect(counted.loads()).toBe(0);
+    } finally {
+      await httpServer.close();
+    }
+  });
+
   it("rejects HTTP MCP requests with an unexpected host header", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-http-host-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");

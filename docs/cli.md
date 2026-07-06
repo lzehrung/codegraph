@@ -14,7 +14,8 @@ Default workflow:
 
 - code review: `codegraph review --base HEAD --head WORKTREE --summary`
 - blast-radius follow-up: `codegraph impact --base HEAD --head WORKTREE --pretty`
-- unfamiliar repo: `codegraph orient --root . --budget small --pretty`
+- unfamiliar repo: `codegraph explore "how does auth reach db?" --root . --pretty`
+- first-turn map: `codegraph orient --root . --budget small --pretty`
 - targeted follow-up: `codegraph search "<query>" --json` then `codegraph explain <handle|file|symbol>`
 
 ## Runtime selection
@@ -128,6 +129,8 @@ codegraph index --workers --threads 8 --cache disk
 # Search for agent-ready anchors across symbols, paths, chunks, SQL objects, and graph context
 codegraph orient --root . --budget small --pretty
 codegraph orient --root . ./src --budget medium --json
+codegraph explore "how does auth reach db?" --root . --pretty
+codegraph explore src/auth.ts --json
 codegraph search "build review report" --json
 codegraph explain src/review.ts --json
 codegraph packet get src/cli.ts --pretty
@@ -240,6 +243,7 @@ Short JSON shape:
 
 #### Agent orientation and packets
 
+- Use `explore --pretty` for a one-call repo question that combines search anchors, bounded packets, dependency paths, reverse dependencies, candidate tests, limits, omissions, and follow-ups. Use `--limit`, `--max-packets`, `--max-paths`, or `--no-source` to keep output small.
 - Use `orient --pretty` as the compact first-turn reading surface for people or models; it prints the ranked `focus` targets and their follow-up commands before the scope sketch.
 - Use `orient --json` when follow-up tools need exact focus reasons, limits, and omitted counts. Orient suppresses index rebuild warnings so stdout stays parseable.
 - Small orientation budgets default to `--health skip`. Medium and large default to `--health summary`, which counts cycles and unresolved imports while omitting duplicate health; use `--health full` when exhaustive duplicate counts matter.
@@ -247,6 +251,8 @@ Short JSON shape:
 - Agent commands reuse the incremental index path and default to disk cache. Use shared index flags such as `--cache`, `--cache-strict`, `--cache-verify`, `--threads`, `--native`, `--workers`, `--include-glob`, `--ignore-glob`, and `--no-gitignore` when the packet should match a specific scan mode.
 
 `search` is deterministic and vectorless. Hybrid search is code-first by default: source symbols and implementation files outrank docs unless `--mode text` is explicit or docs are the strongest remaining evidence. Search JSON now includes top-level `analysis` metadata plus per-result `provenance` so mixed or reduced runs stay visible. `explain` resolves file paths, symbol names, SQL object names, and search handles into bounded packets with symbols, graph context, references, snippets, duplicate context, SQL facts, review tasks, candidate tests, analysis metadata, limits, omissions, and follow-ups. Use `--max-duplicates` to tune duplicate context in `explain` and `packet get`; duplicate context also uses an internal pair budget and reports skipped duplicate work through omission counts.
+
+`explore` is a facade over existing primitives, not a second search engine. It returns `schemaVersion: 1`, the original query, `analysis`, summary bullets, anchors, packets, dependency paths, blast radius with per-entry omitted lower bounds, candidate tests, follow-ups, flat limits, and omission counts; path and blast-radius omissions may be lower bounds after bounded scans reach their caps.
 
 For SQL, prefer handles or schema-qualified names when basenames may be ambiguous. Reference and snippet omission counts are lower bounds after bounded navigation reaches its cap.
 
@@ -260,7 +266,7 @@ For SQL, prefer handles or schema-qualified names when basenames may be ambiguou
 
 #### MCP server
 
-- `mcp serve` exposes navigation, search, impact, review, SQLite query, session refresh, and artifact-build tools.
+- `mcp serve` exposes explore, navigation, search, impact, review, SQLite query, session refresh, and artifact-build tools.
 - MCP uses stdio by default or Streamable HTTP with `--port <number>`.
 - Startup is lazy by default; `--warmup` builds the base session cache before serving requests, and `--warmup-symbols` also builds the detailed symbol graph.
 - Index-backed responses include `freshness`; small file changes auto-refresh, while stale responses include a reason, total changed-file count, and a bounded changed-file sample.
