@@ -71,6 +71,10 @@ function readArray(value: unknown, label: string): unknown[] {
   expect(Array.isArray(value), label).toBeTruthy();
   return value as unknown[];
 }
+function readNumber(value: unknown, label: string): number {
+  expect(value, label).toBeTypeOf("number");
+  return value as number;
+}
 
 function textOf(value: unknown): string {
   return JSON.stringify(value);
@@ -92,9 +96,12 @@ function expectExploreEnvelope(response: unknown, query: string): JsonRecord {
   expect(limits.anchors).toBeTypeOf("number");
   expect(limits.packets).toBeTypeOf("number");
   expect(limits.paths).toBeTypeOf("number");
+  expect(limits.blastRadiusEntries).toBeTypeOf("number");
   expect(limits.reverseDependencies).toBeTypeOf("number");
   expect(limits.candidateTests).toBeTypeOf("number");
-  expect(record.omittedCounts).toBeTypeOf("object");
+  const omittedCounts = readRecord(record.omittedCounts, "omittedCounts");
+  expect(omittedCounts.blastRadius).toBeTypeOf("number");
+  expect(omittedCounts.blastRadiusEntries).toBeTypeOf("number");
   return record;
 }
 
@@ -138,17 +145,21 @@ describe("agent explore", () => {
     expect(pathText).toContain("src/db.ts");
   });
 
-  it("returns follow-ups instead of throwing when a query has no graph matches", async () => {
+  it("returns follow-ups and no candidate tests when a query has no graph matches", async () => {
     const root = await mkExploreRepo();
     const query = "definitelyMissingPaymentWebhook";
 
     const response = expectExploreEnvelope(await exploreCodegraph({ root, query }), query);
     const anchors = readArray(response.anchors, "anchors");
     const packets = readArray(response.packets, "packets");
+    const candidateTests = readArray(response.candidateTests, "candidateTests");
     const followUps = readArray(response.followUps, "followUps");
+    const omittedCounts = readRecord(response.omittedCounts, "omittedCounts");
 
     expect(anchors).toHaveLength(0);
     expect(packets).toHaveLength(0);
+    expect(candidateTests).toHaveLength(0);
+    expect(omittedCounts.candidateTests).toBe(0);
     expect(followUps.length).toBeGreaterThan(0);
     expect(textOf(followUps)).toContain("definitelyMissingPaymentWebhook");
   });
@@ -188,6 +199,91 @@ describe("agent explore", () => {
     expect(limits.packets).toBe(1);
     expect(limits.paths).toBe(1);
     expect(omittedCounts.anchors).toBeGreaterThan(0);
+  });
+
+  it("reports blast-radius entry and reverse dependency omissions as lower bounds", async () => {
+    const root = await mkExploreRepo();
+    for (let index = 0; index < 22; index += 1) {
+      await writeFile(
+        root,
+        `src/consumer-${String(index).padStart(2, "0")}.ts`,
+        "import { validateUser } from './auth';\nexport const allowed = validateUser('user');\n",
+      );
+    }
+    for (const name of ["feature-a", "feature-b", "feature-c", "feature-d"]) {
+      await writeFile(root, `src/${name}.ts`, `export const ${name.replace("-", "")} = true;\n`);
+    }
+    const query = [
+      "src/auth.ts",
+      "src/db.ts",
+      "src/routes.ts",
+      "src/feature-a.ts",
+      "src/feature-b.ts",
+      "src/feature-c.ts",
+      "src/feature-d.ts",
+    ].join(" ");
+
+    const response = expectExploreEnvelope(await exploreCodegraph({ root, query }), query);
+    const limits = readRecord(response.limits, "limits");
+    const omittedCounts = readRecord(response.omittedCounts, "omittedCounts");
+    const blastRadius = readArray(response.blastRadius, "blastRadius").map((entry) =>
+      readRecord(entry, "blast radius entry"),
+    );
+    const entryLimit = readNumber(limits.blastRadiusEntries, "limits.blastRadiusEntries");
+    const topLevelReverseOmissions = readNumber(omittedCounts.blastRadius, "omittedCounts.blastRadius");
+
+    expect(blastRadius).toHaveLength(entryLimit);
+    expect(readNumber(omittedCounts.blastRadiusEntries, "omittedCounts.blastRadiusEntries")).toBeGreaterThan(0);
+    const authEntry = blastRadius.find((entry) => entry.file === "src/auth.ts");
+    expect(authEntry).toBeDefined();
+    expect(authEntry?.omittedCount).toBeUndefined();
+    expect(readNumber(authEntry?.omittedLowerBound, "auth omittedLowerBound")).toBeGreaterThan(0);
+    expect(
+      blastRadius.reduce((sum, entry) => sum + readNumber(entry.omittedLowerBound, "entry omittedLowerBound"), 0),
+    ).toBe(topLevelReverseOmissions);
+  });
+
+  it("accepts zero CLI limits and returns empty bounded sections", async () => {
+    const root = await mkExploreRepo();
+    const query = "validateUser";
+
+    const result = await captureCli([
+      "explore",
+      query,
+      "--root",
+      root,
+      "--limit",
+      "0",
+      "--max-packets",
+      "0",
+      "--max-paths",
+      "0",
+      "--json",
+    ]);
+
+    expect(result.exitCode).toBeUndefined();
+    expect(result.stderr).toBe("");
+    const response = expectExploreEnvelope(JSON.parse(result.stdout) as unknown, query);
+    const limits = readRecord(response.limits, "limits");
+    expect(readArray(response.anchors, "anchors")).toHaveLength(0);
+    expect(readArray(response.packets, "packets")).toHaveLength(0);
+    expect(readArray(response.paths, "paths")).toHaveLength(0);
+    expect(readArray(response.blastRadius, "blastRadius")).toHaveLength(0);
+    expect(readArray(response.candidateTests, "candidateTests")).toHaveLength(0);
+    expect(limits.anchors).toBe(0);
+    expect(limits.packets).toBe(0);
+    expect(limits.paths).toBe(0);
+  });
+
+  it("prints explore-specific help for codegraph explore --help", async () => {
+    const result = await captureCli(["explore", "--help"]);
+
+    expect(result.exitCode).toBeUndefined();
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("codegraph explore -");
+    expect(result.stdout).toContain('Usage: codegraph explore "<query>"');
+    expect(result.stdout).toContain("--max-packets");
+    expect(result.stdout).not.toContain("Commands:");
   });
 
   it("prints the same bounded JSON envelope from the CLI explore command", async () => {

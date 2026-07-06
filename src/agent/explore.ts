@@ -29,7 +29,7 @@ export type AgentExploreDependencyPathSummary = {
 export type AgentExploreBlastRadiusSummary = {
   file: string;
   reverseDependencies: Array<{ file: string; depth: number }>;
-  omittedCount: number;
+  omittedLowerBound: number;
 };
 
 export type AgentExploreResponse = {
@@ -47,10 +47,16 @@ export type AgentExploreResponse = {
   omittedCounts: Record<string, number>;
 };
 
+type AgentExploreCollection<T> = {
+  items: T[];
+  omittedCount: number;
+};
+
 const DEFAULT_ANCHOR_LIMIT = 5;
 const DEFAULT_MAX_PACKETS = 3;
 const DEFAULT_MAX_PATHS = 3;
 const DEFAULT_MAX_REVERSE_DEPENDENCIES = 20;
+const DEFAULT_MAX_BLAST_RADIUS_ENTRIES = DEFAULT_ANCHOR_LIMIT;
 const DEFAULT_MAX_CANDIDATE_TESTS = 10;
 const MAX_ANCHOR_LIMIT = 50;
 const MAX_PACKET_LIMIT = 10;
@@ -68,9 +74,9 @@ export async function exploreCodegraphWithSession(
   session: AgentSession,
   request: AgentExploreRequest,
 ): Promise<AgentExploreResponse> {
-  const anchorLimit = boundedPositiveInteger(request.limit, DEFAULT_ANCHOR_LIMIT, MAX_ANCHOR_LIMIT);
-  const maxPackets = boundedPositiveInteger(request.maxPackets, DEFAULT_MAX_PACKETS, MAX_PACKET_LIMIT);
-  const maxPaths = boundedPositiveInteger(request.maxPaths, DEFAULT_MAX_PATHS, MAX_PATH_LIMIT);
+  const anchorLimit = boundedNonNegativeInteger(request.limit, DEFAULT_ANCHOR_LIMIT, MAX_ANCHOR_LIMIT);
+  const maxPackets = boundedNonNegativeInteger(request.maxPackets, DEFAULT_MAX_PACKETS, MAX_PACKET_LIMIT);
+  const maxPaths = boundedNonNegativeInteger(request.maxPaths, DEFAULT_MAX_PATHS, MAX_PATH_LIMIT);
   const includeSource = request.includeSource ?? true;
   const search = await searchCodegraphWithSession(session, {
     root: request.root,
@@ -83,9 +89,16 @@ export async function exploreCodegraphWithSession(
   const anchorFiles = collectAnchorFiles(snapshot, request.query, anchors);
   const packetTargets = includeSource ? collectPacketTargets(anchors, maxPackets) : [];
   const packets = await collectPackets(session, request.root, packetTargets);
-  const paths = collectDependencyPaths(snapshot, request.query, anchorFiles, maxPaths);
-  const blastRadius = collectBlastRadius(snapshot, anchorFiles, DEFAULT_MAX_REVERSE_DEPENDENCIES);
-  const candidateTests = collectCandidateTests(snapshot, anchorFiles, DEFAULT_MAX_CANDIDATE_TESTS);
+  const pathResult = collectDependencyPaths(snapshot, request.query, anchorFiles, maxPaths);
+  const paths = pathResult.items;
+  const blastRadius = collectBlastRadius(
+    snapshot,
+    anchorFiles,
+    DEFAULT_MAX_BLAST_RADIUS_ENTRIES,
+    DEFAULT_MAX_REVERSE_DEPENDENCIES,
+  );
+  const candidateTestResult = collectCandidateTests(snapshot, anchorFiles, DEFAULT_MAX_CANDIDATE_TESTS);
+  const candidateTests = candidateTestResult.items;
   const followUps = collectFollowUps(request.root, request.query, anchors, packets, anchorFiles, includeSource);
 
   return {
@@ -103,15 +116,17 @@ export async function exploreCodegraphWithSession(
       anchors: anchorLimit,
       packets: maxPackets,
       paths: maxPaths,
+      blastRadiusEntries: DEFAULT_MAX_BLAST_RADIUS_ENTRIES,
       reverseDependencies: DEFAULT_MAX_REVERSE_DEPENDENCIES,
       candidateTests: DEFAULT_MAX_CANDIDATE_TESTS,
     },
     omittedCounts: {
       anchors: search.omittedCounts.results,
       packets: Math.max(0, collectPacketTargets(anchors, Number.POSITIVE_INFINITY).length - packetTargets.length),
-      paths: countOmittedPaths(snapshot, request.query, anchorFiles, maxPaths),
-      blastRadius: blastRadius.reduce((sum, entry) => sum + entry.omittedCount, 0),
-      candidateTests: Math.max(0, countCandidateTests(snapshot, anchorFiles) - candidateTests.length),
+      paths: pathResult.omittedCount,
+      blastRadius: blastRadius.reduce((sum, entry) => sum + entry.omittedLowerBound, 0),
+      blastRadiusEntries: Math.max(0, anchorFiles.length - blastRadius.length),
+      candidateTests: candidateTestResult.omittedCount,
     },
   };
 }
@@ -158,7 +173,7 @@ export function formatAgentExploreResponse(response: AgentExploreResponse): stri
   if (response.blastRadius.length) {
     for (const entry of response.blastRadius) {
       const files = entry.reverseDependencies.map((dependency) => dependency.file).join(", ");
-      const suffix = entry.omittedCount ? `, ${entry.omittedCount} omitted` : "";
+      const suffix = entry.omittedLowerBound ? `, at least ${entry.omittedLowerBound} omitted` : "";
       lines.push(`- ${entry.file}: ${files || "no reverse dependencies"}${suffix}`);
     }
   } else {
@@ -188,7 +203,7 @@ function packetSummaryLines(packet: AgentPacketResponse): string[] {
   return Array.isArray(payload.summary) ? payload.summary : [];
 }
 
-function boundedPositiveInteger(value: number | undefined, fallback: number, max: number): number {
+function boundedNonNegativeInteger(value: number | undefined, fallback: number, max: number): number {
   if (value === undefined) return fallback;
   if (!Number.isFinite(value)) return fallback;
   return Math.min(max, Math.max(0, Math.floor(value)));
@@ -294,9 +309,10 @@ function collectDependencyPaths(
   query: string,
   anchorFiles: readonly string[],
   maxPaths: number,
-): AgentExploreDependencyPathSummary[] {
-  if (!shouldCollectPaths(query, anchorFiles)) return [];
+): AgentExploreCollection<AgentExploreDependencyPathSummary> {
   const paths: AgentExploreDependencyPathSummary[] = [];
+  let omittedCount = 0;
+  if (!shouldCollectPaths(query, anchorFiles)) return { items: paths, omittedCount };
   for (let fromIndex = 0; fromIndex < anchorFiles.length; fromIndex += 1) {
     for (let toIndex = 0; toIndex < anchorFiles.length; toIndex += 1) {
       if (fromIndex === toIndex) continue;
@@ -304,35 +320,18 @@ function collectDependencyPaths(
       const to = anchorFiles[toIndex]!;
       const pathResult = getShortestPath(snapshot.fileGraph, from, to);
       if (!pathResult || pathResult.length < 2) continue;
-      paths.push({
-        from: toProjectDisplayPath(snapshot.root, from),
-        to: toProjectDisplayPath(snapshot.root, to),
-        path: pathResult.map((file) => toProjectDisplayPath(snapshot.root, file)),
-      });
-      if (paths.length >= maxPaths) return paths;
-    }
-  }
-  return paths;
-}
-
-function countOmittedPaths(
-  snapshot: AgentProjectSnapshot,
-  query: string,
-  anchorFiles: readonly string[],
-  maxPaths: number,
-): number {
-  if (!shouldCollectPaths(query, anchorFiles)) return 0;
-  let count = 0;
-  for (let fromIndex = 0; fromIndex < anchorFiles.length; fromIndex += 1) {
-    for (let toIndex = 0; toIndex < anchorFiles.length; toIndex += 1) {
-      if (fromIndex === toIndex) continue;
-      const pathResult = getShortestPath(snapshot.fileGraph, anchorFiles[fromIndex]!, anchorFiles[toIndex]!);
-      if (pathResult && pathResult.length > 1) {
-        count += 1;
+      if (paths.length < maxPaths) {
+        paths.push({
+          from: toProjectDisplayPath(snapshot.root, from),
+          to: toProjectDisplayPath(snapshot.root, to),
+          path: pathResult.map((file) => toProjectDisplayPath(snapshot.root, file)),
+        });
+      } else {
+        omittedCount += 1;
       }
     }
   }
-  return Math.max(0, count - maxPaths);
+  return { items: paths, omittedCount };
 }
 
 function shouldCollectPaths(query: string, anchorFiles: readonly string[]): boolean {
@@ -344,16 +343,17 @@ function shouldCollectPaths(query: string, anchorFiles: readonly string[]): bool
 function collectBlastRadius(
   snapshot: AgentProjectSnapshot,
   anchorFiles: readonly string[],
-  limit: number,
+  entryLimit: number,
+  dependencyLimit: number,
 ): AgentExploreBlastRadiusSummary[] {
   const summaries: AgentExploreBlastRadiusSummary[] = [];
-  for (const file of anchorFiles.slice(0, DEFAULT_ANCHOR_LIMIT)) {
-    const dependencies = getReverseDependencies(snapshot.fileGraph, file, { limit: limit + 1, depth: 2 });
-    const visible = dependencies.slice(0, limit).map((dependency) => formatDependency(snapshot, dependency));
+  for (const file of anchorFiles.slice(0, entryLimit)) {
+    const dependencies = getReverseDependencies(snapshot.fileGraph, file, { limit: dependencyLimit + 1, depth: 2 });
+    const visible = dependencies.slice(0, dependencyLimit).map((dependency) => formatDependency(snapshot, dependency));
     summaries.push({
       file: toProjectDisplayPath(snapshot.root, file),
       reverseDependencies: visible,
-      omittedCount: Math.max(0, dependencies.length - limit),
+      omittedLowerBound: Math.max(0, dependencies.length - dependencyLimit),
     });
   }
   return summaries;
@@ -370,12 +370,12 @@ function collectCandidateTests(
   snapshot: AgentProjectSnapshot,
   anchorFiles: readonly string[],
   limit: number,
-): string[] {
-  return candidateTestsForAnchors(snapshot, anchorFiles).slice(0, limit);
-}
-
-function countCandidateTests(snapshot: AgentProjectSnapshot, anchorFiles: readonly string[]): number {
-  return candidateTestsForAnchors(snapshot, anchorFiles).length;
+): AgentExploreCollection<string> {
+  const tests = candidateTestsForAnchors(snapshot, anchorFiles);
+  return {
+    items: tests.slice(0, limit),
+    omittedCount: Math.max(0, tests.length - limit),
+  };
 }
 
 function candidateTestsForAnchors(snapshot: AgentProjectSnapshot, anchorFiles: readonly string[]): string[] {
@@ -395,7 +395,7 @@ function candidateTestsForAnchors(snapshot: AgentProjectSnapshot, anchorFiles: r
     const relative = toProjectDisplayPath(snapshot.root, file);
     if (!looksLikeTestFile(relative)) continue;
     const testStem = normalizeStem(path.basename(relative));
-    if (!candidateNameList.length || candidateNameList.some((candidateName) => testStem.includes(candidateName))) {
+    if (candidateNameList.some((candidateName) => testStem.includes(candidateName))) {
       tests.push(relative);
     }
   }

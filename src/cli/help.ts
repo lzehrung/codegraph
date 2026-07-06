@@ -356,6 +356,7 @@ Options:
 `;
 
 export function helpTextForCommand(command: string, positionals: readonly string[]): string | undefined {
+  if (command === "explore") return EXPLORE_HELP_TEXT;
   if (command === "search") return SEARCH_HELP_TEXT;
   if (command === "orient") return ORIENT_HELP_TEXT;
   if (command === "packet") return PACKET_HELP_TEXT;
