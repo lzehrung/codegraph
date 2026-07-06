@@ -240,6 +240,8 @@ export { exploreCodegraph, exploreCodegraphWithSession, formatAgentExploreRespon
 export type {
   AgentExploreBlastRadiusSummary,
   AgentExploreDependencyPathSummary,
+  AgentExploreLimits,
+  AgentExploreOmittedCounts,
   AgentExplorePacketSummary,
   AgentExploreRequest,
   AgentExploreResponse,

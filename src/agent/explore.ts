@@ -32,6 +32,24 @@ export type AgentExploreBlastRadiusSummary = {
   omittedLowerBound: number;
 };
 
+export type AgentExploreLimits = {
+  anchors: number;
+  packets: number;
+  paths: number;
+  blastRadiusEntries: number;
+  reverseDependencies: number;
+  candidateTests: number;
+};
+
+export type AgentExploreOmittedCounts = {
+  anchors: number;
+  packets: number;
+  paths: number;
+  blastRadius: number;
+  blastRadiusEntries: number;
+  candidateTests: number;
+};
+
 export type AgentExploreResponse = {
   schemaVersion: 1;
   query: string;
@@ -43,8 +61,8 @@ export type AgentExploreResponse = {
   blastRadius: AgentExploreBlastRadiusSummary[];
   candidateTests: string[];
   followUps: string[];
-  limits: Record<string, number>;
-  omittedCounts: Record<string, number>;
+  limits: AgentExploreLimits;
+  omittedCounts: AgentExploreOmittedCounts;
 };
 
 type AgentExploreCollection<T> = {
