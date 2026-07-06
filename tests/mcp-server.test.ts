@@ -431,6 +431,36 @@ describe("codegraph MCP handlers", () => {
     expect(result.freshness).toEqual({ state: "refreshed", changedFiles: ["one.ts", "remove.ts"] });
   });
 
+  it("guides stale SQLite rebuilds through refresh_index before artifact_build when the session is stale", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-stale-session-guidance-"));
+    const outDir = path.join(root, "out");
+    const removedFile = path.join(root, "remove.ts");
+    await fs.writeFile(path.join(root, "keep.ts"), "export const keep = 1;\n");
+    await fs.writeFile(removedFile, `export const payload = "${"x".repeat(64)}";\n`);
+    const session = createAgentSession({ root, freshness: { policy: "auto", maxAutoRefreshBytes: 16 } });
+    const handlers = createCodegraphMcpHandlers({ root, session, readOnly: false });
+    await handlers.artifact_build({ outDir, sqlite: true });
+
+    await fs.unlink(removedFile);
+    let caught: unknown;
+    try {
+      await handlers.query_sqlite({ query: "SELECT path FROM files ORDER BY path;" });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    if (!(caught instanceof Error)) {
+      throw new Error("query_sqlite should reject stale SQLite rebuilds with an Error");
+    }
+    expect(caught.message).toMatch(/SQLite artifact is stale/);
+    expect(caught.message).toMatch(/run refresh_index, then artifact_build before query_sqlite/);
+    expect(caught.message).toMatch(/changed byte count exceeds 16/);
+    expect(caught.message).toMatch(/remove\.ts/);
+    expect(caught.message.indexOf("refresh_index")).toBeLessThan(caught.message.indexOf("artifact_build"));
+    expect(caught.message.indexOf("artifact_build")).toBeLessThan(caught.message.indexOf("query_sqlite"));
+  });
+
   it("refuses stale configured SQLite artifacts in read-only mode", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-stale-artifact-"));
     const outDir = path.join(root, "out");

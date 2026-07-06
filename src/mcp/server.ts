@@ -290,7 +290,8 @@ function createCodegraphMcpHandlersForSession(
       freshness.state === "stale" && freshness.omittedChangedFileCount
         ? ` Omitted changed files: ${freshness.omittedChangedFileCount}.`
         : "";
-    return `SQLite artifact is stale; run artifact_build before query_sqlite. ${reason}.${changed}${omitted}`;
+    const action = freshness.state === "stale" ? "run refresh_index, then artifact_build" : "run artifact_build";
+    return `SQLite artifact is stale; ${action} before query_sqlite. ${reason}.${changed}${omitted}`;
   };
   const canRefreshSqliteArtifact = (): boolean => {
     if (!sqlitePath || !sqliteOutDir || readOnly || !sqliteCanRefresh) return false;

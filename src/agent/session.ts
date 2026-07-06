@@ -164,9 +164,10 @@ function diffAgentFileSignatures(
       changedBytes += currentSignature.size;
     }
   }
-  for (const file of previous.keys()) {
+  for (const [file, previousSignature] of previous.entries()) {
     if (current.has(file)) continue;
     changedFiles.push(file);
+    changedBytes += previousSignature.size;
   }
   changedFiles.sort();
   return { changedFiles, changedBytes };
