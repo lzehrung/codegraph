@@ -268,6 +268,22 @@ describe("CLI command modules", () => {
     }
   });
 
+  test("lists explore before orient in unfamiliar repo guidance", () => {
+    const unfamiliarRepoStart = CLI_HELP_TEXT.indexOf("Unfamiliar repo:");
+    const examplesStart = CLI_HELP_TEXT.indexOf("Examples:", unfamiliarRepoStart);
+
+    expect(unfamiliarRepoStart).toBeGreaterThanOrEqual(0);
+    expect(examplesStart).toBeGreaterThan(unfamiliarRepoStart);
+
+    const unfamiliarRepoGuidance = CLI_HELP_TEXT.slice(unfamiliarRepoStart, examplesStart);
+    const exploreIndex = unfamiliarRepoGuidance.indexOf('codegraph explore "how does auth reach db?"');
+    const orientIndex = unfamiliarRepoGuidance.indexOf("codegraph orient --root . --budget small --pretty");
+
+    expect(exploreIndex).toBeGreaterThanOrEqual(0);
+    expect(orientIndex).toBeGreaterThanOrEqual(0);
+    expect(exploreIndex).toBeLessThan(orientIndex);
+  });
+
   test("documents HTTP host and port options in MCP serve help", () => {
     expect(MCP_SERVE_HELP_TEXT).toContain("--port <number>");
     expect(MCP_SERVE_HELP_TEXT).toContain("--host <host>");

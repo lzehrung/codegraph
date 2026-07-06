@@ -72,8 +72,8 @@ Recommended review commands:
   codegraph explain src/auth.ts --json
 
 Unfamiliar repo:
-  codegraph orient --root . --budget small --pretty
   codegraph explore "how does auth reach db?" --root . --pretty
+  codegraph orient --root . --budget small --pretty
 
 Examples:
   codegraph review --base HEAD --head WORKTREE --summary
