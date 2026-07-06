@@ -625,10 +625,10 @@ function createCodegraphMcpHandlersForSession(
       // only decides whether an automatic rebuild is safe. A fresh artifact is served even when
       // the in-memory session snapshot is stale, and an unsafe session refresh burst blocks the
       // automatic rebuild instead of silently rebuilding from stale in-memory state.
-      const sessionFreshness = await checkMcpFreshness();
       let realSqlitePath = await assertRealPathCandidateWithinRoot(await realRoot, sqlitePath, "SQLite artifact");
       let artifactFreshness = await checkSqliteArtifactFreshness(realSqlitePath);
       if (artifactFreshness.state !== "fresh") {
+        const sessionFreshness = await checkMcpFreshness();
         if (sessionFreshness.state === "stale") {
           throw new Error(formatSqliteFreshnessError(sessionFreshness));
         }

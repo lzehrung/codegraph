@@ -624,23 +624,21 @@ describe("codegraph MCP handlers", () => {
     );
   });
 
-  it("serves a fresh SQLite artifact even when the session snapshot is stale", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-stale-session-fresh-artifact-"));
+  it("serves a fresh SQLite artifact without checking session freshness", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-fresh-artifact-no-session-check-"));
     await fs.writeFile(path.join(root, "one.ts"), "export const one = 1;\n");
     const outDir = path.join(root, "out");
     const buildHandlers = createCodegraphMcpHandlers({ root, readOnly: false });
     await buildHandlers.artifact_build({ outDir, sqlite: true });
 
     const backingSession = createAgentSession({ root });
+    let freshnessChecks = 0;
     const session: AgentSession = {
       ...backingSession,
-      checkFreshness: async () => ({
-        state: "stale",
-        changedFiles: ["phantom.ts"],
-        changedFileCount: 1,
-        omittedChangedFileCount: 0,
-        reason: "forced stale for test",
-      }),
+      checkFreshness: async () => {
+        freshnessChecks += 1;
+        throw new Error("query_sqlite should inspect fresh SQLite artifact metadata before session freshness");
+      },
     };
     const readHandlers = createCodegraphMcpHandlers({ root, artifactPath: outDir, session });
 
@@ -648,6 +646,7 @@ describe("codegraph MCP handlers", () => {
 
     expect(result.rows.map((row) => normalizeSqlitePath(row[0])).some((file) => file.endsWith("one.ts"))).toBe(true);
     expect(result.freshness).toEqual({ state: "fresh" });
+    expect(freshnessChecks).toBe(0);
   });
 
   it("bounds query_sqlite bytes for MCP responses", async () => {
