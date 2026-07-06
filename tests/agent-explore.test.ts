@@ -132,6 +132,32 @@ describe("agent explore", () => {
     expect(packets.some((packet) => textOf(packet).includes("validateUser"))).toBeTruthy();
   });
 
+  it("disables packet limits and packet omissions when source packets are excluded", async () => {
+    const root = await mkExploreRepo();
+    const query = "validateUser";
+
+    const response = expectExploreEnvelope(await exploreCodegraph({ root, query, includeSource: false }), query);
+    const limits = readRecord(response.limits, "limits");
+    const omittedCounts = readRecord(response.omittedCounts, "omittedCounts");
+
+    expect(readArray(response.packets, "packets")).toHaveLength(0);
+    expect(limits.packets).toBe(0);
+    expect(omittedCounts.packets).toBe(0);
+  });
+
+  it("includes pretty refs commands in explore follow-ups", async () => {
+    const root = await mkExploreRepo();
+    const query = "src/auth.ts";
+
+    const response = expectExploreEnvelope(await exploreCodegraph({ root, query }), query);
+    const refsFollowUps = readArray(response.followUps, "followUps").filter(
+      (followUp): followUp is string => typeof followUp === "string" && followUp.startsWith("codegraph refs "),
+    );
+
+    expect(refsFollowUps.length).toBeGreaterThan(0);
+    expect(refsFollowUps.every((followUp) => followUp.includes(" --pretty"))).toBeTruthy();
+  });
+
   it("includes the dependency path for a flow-style query between connected files", async () => {
     const root = await mkExploreRepo();
     const query = "flow src/routes.ts to src/db.ts";
@@ -143,6 +169,18 @@ describe("agent explore", () => {
     expect(pathText).toContain("src/routes.ts");
     expect(pathText).toContain("src/auth.ts");
     expect(pathText).toContain("src/db.ts");
+  });
+
+  it("reports path omissions as a lower bound after the first over-limit path", async () => {
+    const root = await mkExploreRepo();
+    const query = "flow src/routes.ts src/auth.ts src/db.ts";
+
+    const response = expectExploreEnvelope(await exploreCodegraph({ root, query, maxPaths: 1 }), query);
+    const paths = readArray(response.paths, "paths");
+    const omittedCounts = readRecord(response.omittedCounts, "omittedCounts");
+
+    expect(paths).toHaveLength(1);
+    expect(omittedCounts.paths).toBe(1);
   });
 
   it("returns follow-ups and no candidate tests when a query has no graph matches", async () => {

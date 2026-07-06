@@ -78,6 +78,7 @@ export async function exploreCodegraphWithSession(
   const maxPackets = boundedNonNegativeInteger(request.maxPackets, DEFAULT_MAX_PACKETS, MAX_PACKET_LIMIT);
   const maxPaths = boundedNonNegativeInteger(request.maxPaths, DEFAULT_MAX_PATHS, MAX_PATH_LIMIT);
   const includeSource = request.includeSource ?? true;
+  const effectivePacketLimit = includeSource ? maxPackets : 0;
   const search = await searchCodegraphWithSession(session, {
     root: request.root,
     query: request.query,
@@ -87,7 +88,7 @@ export async function exploreCodegraphWithSession(
   const snapshot = await session.loadProject({ symbolGraph: "skip" });
   const anchors = search.results.slice(0, anchorLimit);
   const anchorFiles = collectAnchorFiles(snapshot, request.query, anchors);
-  const packetTargets = includeSource ? collectPacketTargets(anchors, maxPackets) : [];
+  const packetTargets = includeSource ? collectPacketTargets(anchors, effectivePacketLimit) : [];
   const packets = await collectPackets(session, request.root, packetTargets);
   const pathResult = collectDependencyPaths(snapshot, request.query, anchorFiles, maxPaths);
   const paths = pathResult.items;
@@ -114,7 +115,7 @@ export async function exploreCodegraphWithSession(
     followUps,
     limits: {
       anchors: anchorLimit,
-      packets: maxPackets,
+      packets: effectivePacketLimit,
       paths: maxPaths,
       blastRadiusEntries: DEFAULT_MAX_BLAST_RADIUS_ENTRIES,
       reverseDependencies: DEFAULT_MAX_REVERSE_DEPENDENCIES,
@@ -122,7 +123,9 @@ export async function exploreCodegraphWithSession(
     },
     omittedCounts: {
       anchors: search.omittedCounts.results,
-      packets: Math.max(0, collectPacketTargets(anchors, Number.POSITIVE_INFINITY).length - packetTargets.length),
+      packets: includeSource
+        ? Math.max(0, collectPacketTargets(anchors, Number.POSITIVE_INFINITY).length - packetTargets.length)
+        : 0,
       paths: pathResult.omittedCount,
       blastRadius: blastRadius.reduce((sum, entry) => sum + entry.omittedLowerBound, 0),
       blastRadiusEntries: Math.max(0, anchorFiles.length - blastRadius.length),
@@ -313,6 +316,7 @@ function collectDependencyPaths(
   const paths: AgentExploreDependencyPathSummary[] = [];
   let omittedCount = 0;
   if (!shouldCollectPaths(query, anchorFiles)) return { items: paths, omittedCount };
+  if (maxPaths <= 0) return { items: paths, omittedCount };
   for (let fromIndex = 0; fromIndex < anchorFiles.length; fromIndex += 1) {
     for (let toIndex = 0; toIndex < anchorFiles.length; toIndex += 1) {
       if (fromIndex === toIndex) continue;
@@ -327,7 +331,8 @@ function collectDependencyPaths(
           path: pathResult.map((file) => toProjectDisplayPath(snapshot.root, file)),
         });
       } else {
-        omittedCount += 1;
+        omittedCount = 1;
+        return { items: paths, omittedCount };
       }
     }
   }
@@ -435,7 +440,7 @@ function collectFollowUps(
   }
   for (const file of anchorFiles.slice(0, 3)) {
     const relative = toProjectDisplayPath(root, file);
-    followUps.push(`codegraph refs --file ${quoteShellArg(relative)} --line 1 --col 0`);
+    followUps.push(`codegraph refs --file ${quoteShellArg(relative)} --line 1 --col 0 --pretty`);
   }
   if (!includeSource) {
     followUps.push(`codegraph explore ${quoteShellArg(query)} --root ${quoteShellArg(root)} --pretty`);

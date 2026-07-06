@@ -252,7 +252,7 @@ Short JSON shape:
 
 `search` is deterministic and vectorless. Hybrid search is code-first by default: source symbols and implementation files outrank docs unless `--mode text` is explicit or docs are the strongest remaining evidence. Search JSON now includes top-level `analysis` metadata plus per-result `provenance` so mixed or reduced runs stay visible. `explain` resolves file paths, symbol names, SQL object names, and search handles into bounded packets with symbols, graph context, references, snippets, duplicate context, SQL facts, review tasks, candidate tests, analysis metadata, limits, omissions, and follow-ups. Use `--max-duplicates` to tune duplicate context in `explain` and `packet get`; duplicate context also uses an internal pair budget and reports skipped duplicate work through omission counts.
 
-`explore` is a facade over existing primitives, not a second search engine. It returns `schemaVersion: 1`, the original query, `analysis`, summary bullets, anchors, packets, dependency paths, blast radius with per-entry omitted lower bounds, candidate tests, follow-ups, flat limits, and omission counts.
+`explore` is a facade over existing primitives, not a second search engine. It returns `schemaVersion: 1`, the original query, `analysis`, summary bullets, anchors, packets, dependency paths, blast radius with per-entry omitted lower bounds, candidate tests, follow-ups, flat limits, and omission counts; path and blast-radius omissions may be lower bounds after bounded scans reach their caps.
 
 For SQL, prefer handles or schema-qualified names when basenames may be ambiguous. Reference and snippet omission counts are lower bounds after bounded navigation reaches its cap.
 

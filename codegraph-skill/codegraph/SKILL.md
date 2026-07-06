@@ -55,7 +55,7 @@ Hybrid search is code-first by default, and search/explain packets include analy
 
 Current high-value surfaces:
 
-- `explore --pretty`: one-call question answer with anchors, packets, paths, blast radius with omitted lower bounds, candidate tests, limits, omissions, and follow-ups
+- `explore --pretty`: one-call question answer with anchors, packets, paths, blast radius with omitted lower bounds, candidate tests, limits, lower-bound omissions, and follow-ups
 - `orient --pretty`: ranked first-turn focus targets with copyable follow-ups
 - `impact --pretty`: ranked "what could this break?" map
 - `review --summary`: compact reviewer handoff
