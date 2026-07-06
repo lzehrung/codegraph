@@ -159,8 +159,12 @@ export function formatAgentExploreResponse(response: AgentExploreResponse): stri
         lines.push(`  - ${summary}`);
       }
     }
+  } else if ((response.limits.packets ?? 0) <= 0) {
+    lines.push("- Source packets disabled by limit or option.");
+  } else if (!response.anchors.length) {
+    lines.push("- No anchors found for source packets.");
   } else {
-    lines.push("- Not included.");
+    lines.push("- No source packets found.");
   }
 
   lines.push("", "Paths");
@@ -342,7 +346,7 @@ function collectDependencyPaths(
 function shouldCollectPaths(query: string, anchorFiles: readonly string[]): boolean {
   if (anchorFiles.length < 2) return false;
   const normalized = query.toLowerCase();
-  return /\b(reach|flow|call|through|path|depend|from|to)\b/.test(normalized);
+  return /\b(reach|flow|call|through|path|depend|from)\b/.test(normalized);
 }
 
 function collectBlastRadius(

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { exploreCodegraph } from "../src/index.js";
+import { exploreCodegraph, formatAgentExploreResponse } from "../src/index.js";
 import { createCodegraphMcpHandlers, listCodegraphMcpTools } from "../src/mcp/server.js";
 import { captureCli } from "./helpers/cli.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
@@ -145,6 +145,33 @@ describe("agent explore", () => {
     expect(omittedCounts.packets).toBe(0);
   });
 
+  it("pretty output distinguishes empty relevant source reasons", async () => {
+    const root = await mkExploreRepo();
+    const noAnchorQuery = "definitelyMissingPaymentWebhook";
+    const cases = [
+      {
+        name: "source disabled",
+        query: "validateUser",
+        response: await exploreCodegraph({ root, query: "validateUser", includeSource: false }),
+        expected: "- Source packets disabled by limit or option.",
+      },
+      {
+        name: "no anchors",
+        query: noAnchorQuery,
+        response: await exploreCodegraph({ root, query: noAnchorQuery }),
+        expected: "- No anchors found for source packets.",
+      },
+    ];
+
+    for (const { name, query, response, expected } of cases) {
+      expectExploreEnvelope(response, query);
+      const pretty = formatAgentExploreResponse(response);
+
+      expect(pretty, name).toContain(expected);
+      expect(pretty, name).not.toContain("- Not included.");
+    }
+  });
+
   it("includes pretty refs commands in explore follow-ups", async () => {
     const root = await mkExploreRepo();
     const query = "src/auth.ts";
@@ -169,6 +196,32 @@ describe("agent explore", () => {
     expect(pathText).toContain("src/routes.ts");
     expect(pathText).toContain("src/auth.ts");
     expect(pathText).toContain("src/db.ts");
+  });
+
+  it("does not collect dependency paths for standalone to in instructional queries", async () => {
+    const root = await mkExploreRepo();
+    const instructionalQuery = "how to connect src/routes.ts src/db.ts";
+
+    const response = expectExploreEnvelope(
+      await exploreCodegraph({ root, query: instructionalQuery }),
+      instructionalQuery,
+    );
+    const anchors = readArray(response.anchors, "anchors");
+
+    expect(textOf(anchors)).toContain("src/routes.ts");
+    expect(textOf(anchors)).toContain("src/db.ts");
+    expect(readArray(response.paths, "paths")).toHaveLength(0);
+
+    const triggeredQuery = "path src/routes.ts src/db.ts";
+    const triggeredResponse = expectExploreEnvelope(
+      await exploreCodegraph({ root, query: triggeredQuery }),
+      triggeredQuery,
+    );
+    const triggeredPathText = textOf(readArray(triggeredResponse.paths, "triggered paths"));
+
+    expect(triggeredPathText).toContain("src/routes.ts");
+    expect(triggeredPathText).toContain("src/auth.ts");
+    expect(triggeredPathText).toContain("src/db.ts");
   });
 
   it("reports path omissions as a lower bound after the first over-limit path", async () => {
