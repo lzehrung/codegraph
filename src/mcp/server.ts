@@ -644,38 +644,47 @@ function createCodegraphMcpHandlersForSession(
       return { refreshed: true, warmup };
     },
 
-    artifact_build: async (request) =>
-      await withFreshness(async () => {
-        if (readOnly) {
-          throw new Error("artifact_build is disabled in read-only MCP mode.");
-        }
-        const outDir =
-          request.outDir !== undefined
-            ? await assertWritableDirectoryRealPathWithinRoot(
-                await realRoot,
-                root,
-                request.outDir,
-                "Artifact output directory",
-              )
-            : undefined;
-        const result = await buildCodegraphArtifactWithSession(session, {
-          root,
-          ...(outDir !== undefined ? { outDir } : {}),
-          ...(request.outDir !== undefined ? { filterOutDir: request.outDir } : {}),
-          ...(request.sqlite !== undefined ? { sqlite: request.sqlite } : {}),
-          ...(request.graphJson !== undefined ? { graphJson: request.graphJson } : {}),
-          ...(request.report !== undefined ? { report: request.report } : {}),
-          ...(request.questions !== undefined ? { questions: request.questions } : {}),
-          ...(request.force !== undefined ? { force: request.force } : {}),
-        });
-        const sqliteArtifact = result.artifacts.sqlite;
-        if (sqliteArtifact) {
-          sqlitePath = path.join(result.outDir, sqliteArtifact);
-          sqliteOutDir = result.outDir;
-          sqliteCanRefresh = true;
-        }
-        return result;
-      }),
+    artifact_build: async (request) => {
+      const freshness = await checkMcpFreshness();
+      if (freshness.state === "stale") {
+        const changed = freshness.changedFiles.length ? ` Changed files: ${freshness.changedFiles.join(", ")}.` : "";
+        const omitted = freshness.omittedChangedFileCount
+          ? ` Omitted changed files: ${freshness.omittedChangedFileCount}.`
+          : "";
+        throw new Error(
+          `Cannot build artifacts from a stale MCP index; run refresh_index first. ${freshness.reason}.${changed}${omitted}`,
+        );
+      }
+      if (readOnly) {
+        throw new Error("artifact_build is disabled in read-only MCP mode.");
+      }
+      const outDir =
+        request.outDir !== undefined
+          ? await assertWritableDirectoryRealPathWithinRoot(
+              await realRoot,
+              root,
+              request.outDir,
+              "Artifact output directory",
+            )
+          : undefined;
+      const result = await buildCodegraphArtifactWithSession(session, {
+        root,
+        ...(outDir !== undefined ? { outDir } : {}),
+        ...(request.outDir !== undefined ? { filterOutDir: request.outDir } : {}),
+        ...(request.sqlite !== undefined ? { sqlite: request.sqlite } : {}),
+        ...(request.graphJson !== undefined ? { graphJson: request.graphJson } : {}),
+        ...(request.report !== undefined ? { report: request.report } : {}),
+        ...(request.questions !== undefined ? { questions: request.questions } : {}),
+        ...(request.force !== undefined ? { force: request.force } : {}),
+      });
+      const sqliteArtifact = result.artifacts.sqlite;
+      if (sqliteArtifact) {
+        sqlitePath = path.join(result.outDir, sqliteArtifact);
+        sqliteOutDir = result.outDir;
+        sqliteCanRefresh = true;
+      }
+      return { ...result, freshness };
+    },
   };
 }
 

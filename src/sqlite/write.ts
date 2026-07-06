@@ -337,6 +337,7 @@ export async function updateGraphSqlite(options: SqliteGraphUpdateOptions): Prom
       }
 
       deleteUnreferencedExternalFiles(db);
+      clearArtifactFileSignatures(db);
 
       recordGraphSnapshot(db, {
         mode: "incremental",

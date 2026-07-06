@@ -267,7 +267,7 @@ For SQL, prefer handles or schema-qualified names when basenames may be ambiguou
 - Use `refresh_index` to force a rebuild, reset SQLite artifact state, or recover after stale change bursts.
 - HTTP serves `/mcp`, validates Host headers, and binds to `127.0.0.1` unless `--host <host>` is passed.
 - MCP file and artifact paths are confined to `--root` after realpath resolution.
-- MCP tools are read-only by default; `--allow-build` enables artifact output only.
+- MCP tools are read-only by default; `--allow-build` enables artifact output only when the MCP index is fresh or auto-refreshed.
 - `query_sqlite` is row- and byte-bounded, returns freshness metadata, rejects synthetic payload functions, and refuses stale artifact rows it cannot refresh safely.
 
 See [docs/mcp.md](./mcp.md) for client configuration examples.

@@ -454,7 +454,7 @@ describe("codegraph MCP handlers", () => {
     await buildHandlers.artifact_build({ outDir, sqlite: true });
     const db = new DatabaseSync(path.join(outDir, "codegraph.sqlite"));
     try {
-      db.exec("DELETE FROM graph_metadata WHERE key = 'artifact_file_signatures_v1';");
+      db.prepare("DELETE FROM graph_metadata WHERE key = ?;").run(SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY);
     } finally {
       db.close();
     }
@@ -473,7 +473,7 @@ describe("codegraph MCP handlers", () => {
     await buildHandlers.artifact_build({ outDir, sqlite: true });
     const db = new DatabaseSync(path.join(outDir, "codegraph.sqlite"));
     try {
-      db.exec("DELETE FROM graph_metadata WHERE key = 'artifact_file_signatures_v1';");
+      db.prepare("DELETE FROM graph_metadata WHERE key = ?;").run(SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY);
     } finally {
       db.close();
     }
@@ -1109,7 +1109,7 @@ describe("codegraph MCP handlers", () => {
     }
   });
 
-  it("uses the MCP session snapshot when artifact_build is enabled", async () => {
+  it("refuses artifact_build when the MCP session snapshot is stale before creating output", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-artifact-session-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
     const counted = countingSession(createAgentSession({ root }));
@@ -1117,12 +1117,12 @@ describe("codegraph MCP handlers", () => {
 
     await handlers.search({ query: "validate user", limit: 5 });
     await fs.writeFile(path.join(root, "late.ts"), "export const late = 1;\n");
-    await handlers.artifact_build({ outDir: path.join(root, "out"), graphJson: true });
+    const outDir = path.join(root, "out");
 
-    const graph = JSON.parse(await fs.readFile(path.join(root, "out", "graph.json"), "utf8")) as {
-      graph: { files: string[] };
-    };
-    expect(graph.graph.files.some((file) => file.endsWith("late.ts"))).toBe(false);
+    await expect(handlers.artifact_build({ outDir, graphJson: true })).rejects.toThrow(
+      /Cannot build artifacts from a stale MCP index[\s\S]*late\.ts/,
+    );
+    await expect(fs.readdir(outDir)).rejects.toMatchObject({ code: "ENOENT" });
     expect(counted.loads()).toBe(1);
   });
 
