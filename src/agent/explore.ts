@@ -443,11 +443,11 @@ function collectFollowUps(
     followUps.push(`codegraph refs --file ${quoteShellArg(relative)} --line 1 --col 0 --pretty`);
   }
   if (!includeSource) {
-    followUps.push(`codegraph explore ${quoteShellArg(query)} --root ${quoteShellArg(root)} --pretty`);
+    followUps.push(`codegraph explore ${quoteShellArg(query)} --pretty`);
   }
   if (!anchors.length) {
-    followUps.push(`codegraph search ${quoteShellArg(query)} --root ${quoteShellArg(root)} --json`);
-    followUps.push(`codegraph orient --root ${quoteShellArg(root)} --budget small --pretty`);
+    followUps.push(`codegraph search ${quoteShellArg(query)} --json`);
+    followUps.push("codegraph orient --budget small --pretty");
   }
   return dedupeStrings(followUps).slice(0, 12);
 }

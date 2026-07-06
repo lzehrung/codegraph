@@ -202,6 +202,21 @@ describe("agent explore", () => {
     expect(textOf(followUps)).toContain("definitelyMissingPaymentWebhook");
   });
 
+  it("omits absolute root paths from internally generated explore follow-ups", async () => {
+    const root = await mkExploreRepo();
+    const query = "definitelyMissingPaymentWebhook";
+
+    const response = expectExploreEnvelope(await exploreCodegraph({ root, query, includeSource: false }), query);
+    const followUps = readArray(response.followUps, "followUps");
+    const followUpText = followUps.join("\n");
+
+    expect(followUps).toContain(`codegraph explore ${query} --pretty`);
+    expect(followUps).toContain(`codegraph search ${query} --json`);
+    expect(followUps).toContain("codegraph orient --budget small --pretty");
+    expect(followUpText).not.toContain(root);
+    expect(followUpText).not.toContain(" --root ");
+  });
+
   it("applies per-section limits and reports omitted counts", async () => {
     const root = await mkExploreRepo();
     await writeFile(
