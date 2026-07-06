@@ -5,6 +5,37 @@ import type { SqliteGraphOptions, SqliteGraphUpdateOptions } from "./types.js";
 import { execRowsParams } from "./common.js";
 import { withSqliteDatabase } from "./database.js";
 
+export const SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY = "artifact_file_signatures_v1";
+
+type SqliteArtifactFileSignature = {
+  path: string;
+  size: number;
+  mtimeMs: number;
+};
+
+function normalizeSqliteArtifactFileSignatures(
+  signatures: Iterable<SqliteArtifactFileSignature>,
+): SqliteArtifactFileSignature[] {
+  const normalized = [...signatures].map((signature) => ({
+    path: signature.path,
+    size: signature.size,
+    mtimeMs: signature.mtimeMs,
+  }));
+  normalized.sort((left, right) => left.path.localeCompare(right.path));
+  return normalized;
+}
+
+function writeArtifactFileSignatures(db: SqliteDatabase, signatures: readonly SqliteArtifactFileSignature[]): void {
+  db.prepare("INSERT OR REPLACE INTO graph_metadata (key, value) VALUES (?, ?);").run([
+    SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY,
+    JSON.stringify(signatures),
+  ]);
+}
+
+function clearArtifactFileSignatures(db: SqliteDatabase): void {
+  db.prepare("DELETE FROM graph_metadata WHERE key = ?;").run([SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY]);
+}
+
 const collectSymbolIdsForFiles = (symbolGraph: SymbolGraph, changedSet: Set<string>): Set<string> => {
   const ids = new Set<string>();
   for (const [id, node] of symbolGraph.nodes.entries()) {
@@ -212,6 +243,9 @@ const deleteUnreferencedExternalFiles = (db: SqliteDatabase) => {
 };
 
 export async function writeGraphSqlite(options: SqliteGraphOptions): Promise<void> {
+  const fileSignatures = options.fileSignatures
+    ? normalizeSqliteArtifactFileSignatures(options.fileSignatures)
+    : undefined;
   await withSqliteDatabase(options.outputPath, (db) => {
     const runInsert = db.transaction(() => {
       clearCurrentGraphState(db);
@@ -239,6 +273,11 @@ export async function writeGraphSqlite(options: SqliteGraphOptions): Promise<voi
         symbolNodes: options.symbolGraph.nodes.size,
         symbolEdges: options.symbolGraph.edges.length,
       });
+      if (fileSignatures) {
+        writeArtifactFileSignatures(db, fileSignatures);
+      } else {
+        clearArtifactFileSignatures(db);
+      }
     });
     runInsert();
     db.exec("ANALYZE;");
@@ -298,6 +337,7 @@ export async function updateGraphSqlite(options: SqliteGraphUpdateOptions): Prom
       }
 
       deleteUnreferencedExternalFiles(db);
+      clearArtifactFileSignatures(db);
 
       recordGraphSnapshot(db, {
         mode: "incremental",

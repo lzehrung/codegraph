@@ -24,11 +24,13 @@ import type { AgentSearchMode, AgentSearchResponse } from "../agent/search.js";
 import { getDependencies, getReverseDependencies, getShortestPath, type DependencyNode } from "../graphs/queries.js";
 import { findReferences, goToDefinition } from "../indexer/navigation.js";
 import { buildReviewReport, type ReviewDepth, type ReviewReport } from "../review.js";
-import { queryGraphSqliteRaw, type RawSqlResult } from "../sqlite.js";
+import { SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY, queryGraphSqliteRaw, type RawSqlResult } from "../sqlite.js";
+import { isPlainRecord } from "../util/guards.js";
 import { toProjectDisplayPath } from "../util/paths.js";
-import { createAgentSession } from "../agent/session.js";
-import type { AgentSession } from "../agent/session.js";
-import type { BuildOptions } from "../indexer/types.js";
+import { createAgentSession, listAgentSessionFiles } from "../agent/session.js";
+import { mapLimit } from "../util/concurrency.js";
+import type { AgentFreshnessResult, AgentProjectSnapshot, AgentSession } from "../agent/session.js";
+import type { BuildOptions, GoToResult } from "../indexer/types.js";
 import {
   assertMcpSqliteQueryResourceBounded,
   boundRawSqlResult,
@@ -98,6 +100,8 @@ export type CodegraphMcpHttpServer = CodegraphMcpHttpServerInfo & {
   close: () => Promise<void>;
 };
 
+export type CodegraphMcpFreshResult<T extends object> = T & { freshness: AgentFreshnessResult };
+
 export type CodegraphMcpHandlers = {
   search: (request: {
     query: string;
@@ -105,45 +109,45 @@ export type CodegraphMcpHandlers = {
     from?: string | undefined;
     depth?: number | undefined;
     limit?: number | undefined;
-  }) => Promise<AgentSearchResponse>;
+  }) => Promise<CodegraphMcpFreshResult<AgentSearchResponse>>;
   orient: (request: {
     includeRoots?: string[] | undefined;
     budget?: AgentOrientBudget | undefined;
-  }) => Promise<AgentOrientResponse>;
+  }) => Promise<CodegraphMcpFreshResult<AgentOrientResponse>>;
   packet_get: (request: {
     target: string;
     maxSymbols?: number | undefined;
     maxSnippets?: number | undefined;
     maxDuplicates?: number | undefined;
-  }) => Promise<AgentPacketResponse>;
+  }) => Promise<CodegraphMcpFreshResult<AgentPacketResponse>>;
   get_file: (request: {
     file: string;
     maxBytes?: number | undefined;
-  }) => Promise<{ file: string; text: string; truncated: boolean }>;
-  get_symbol: (request: { handle: string }) => Promise<AgentExplanation["target"]>;
-  goto: (request: {
-    file: string;
-    line: number;
-    column: number;
-  }) => Promise<Awaited<ReturnType<typeof goToDefinition>>>;
+  }) => Promise<CodegraphMcpFreshResult<{ file: string; text: string; truncated: boolean }>>;
+  get_symbol: (request: { handle: string }) => Promise<CodegraphMcpFreshResult<AgentExplanation["target"]>>;
+  goto: (request: { file: string; line: number; column: number }) => Promise<CodegraphMcpFreshResult<GoToResult>>;
   refs: (
     request:
       | { handle: string; limit?: number | undefined }
       | { file: string; line: number; column: number; limit?: number | undefined },
-  ) => Promise<{ references: AgentExplanationReference[] }>;
+  ) => Promise<CodegraphMcpFreshResult<{ references: AgentExplanationReference[] }>>;
   deps: (request: {
     file: string;
     depth?: number | undefined;
     limit?: number | undefined;
-  }) => Promise<{ dependencies: Array<{ file: string; depth: number }> }>;
+  }) => Promise<CodegraphMcpFreshResult<{ dependencies: Array<{ file: string; depth: number }> }>>;
   rdeps: (request: {
     file: string;
     depth?: number | undefined;
     limit?: number | undefined;
-  }) => Promise<{ reverseDependencies: Array<{ file: string; depth: number }> }>;
-  path: (request: { from: string; to: string }) => Promise<{ path: string[] | null }>;
-  impact: (request: { base: string; head: string }) => Promise<ReviewReport>;
-  review: (request: { base: string; head: string; reviewDepth?: ReviewDepth | undefined }) => Promise<ReviewReport>;
+  }) => Promise<CodegraphMcpFreshResult<{ reverseDependencies: Array<{ file: string; depth: number }> }>>;
+  path: (request: { from: string; to: string }) => Promise<CodegraphMcpFreshResult<{ path: string[] | null }>>;
+  impact: (request: { base: string; head: string }) => Promise<CodegraphMcpFreshResult<ReviewReport>>;
+  review: (request: {
+    base: string;
+    head: string;
+    reviewDepth?: ReviewDepth | undefined;
+  }) => Promise<CodegraphMcpFreshResult<ReviewReport>>;
   refresh_index: (request: { warmup?: CodegraphMcpWarmupMode | undefined }) => Promise<{
     refreshed: true;
     warmup: CodegraphMcpWarmupMode;
@@ -152,7 +156,7 @@ export type CodegraphMcpHandlers = {
     query: string;
     params?: Array<string | number | null> | undefined;
     limit?: number | undefined;
-  }) => Promise<RawSqlResult>;
+  }) => Promise<CodegraphMcpFreshResult<RawSqlResult>>;
   artifact_build: (request: {
     outDir?: string | undefined;
     sqlite?: boolean | undefined;
@@ -160,7 +164,7 @@ export type CodegraphMcpHandlers = {
     report?: boolean | undefined;
     questions?: boolean | undefined;
     force?: boolean | undefined;
-  }) => Promise<CodegraphArtifactBuildResult>;
+  }) => Promise<CodegraphMcpFreshResult<CodegraphArtifactBuildResult>>;
 };
 
 type McpDependencyRequest = {
@@ -174,6 +178,15 @@ type McpDependencyEntry = {
   depth: number;
 };
 
+type SqliteArtifactFileSignature = {
+  path: string;
+  size: number;
+  mtimeMs: number;
+};
+
+const MAX_MCP_FRESHNESS_CHANGED_FILES = 25;
+const SQLITE_ARTIFACT_STAT_CONCURRENCY = 64;
+
 function assertMcpSessionOptions(options: CodegraphMcpHandlerOptions): void {
   if (options.session !== undefined && options.buildOptions !== undefined) {
     throw new Error("MCP server options cannot combine a prebuilt session with buildOptions.");
@@ -184,14 +197,18 @@ function createCodegraphMcpSession(options: CodegraphMcpHandlerOptions, root: st
   assertMcpSessionOptions(options);
   return (
     options.session ??
-    createAgentSession({ root, ...(options.buildOptions ? { buildOptions: options.buildOptions } : {}) })
+    createAgentSession({
+      root,
+      ...(options.buildOptions ? { buildOptions: options.buildOptions } : {}),
+      freshness: { policy: "auto" },
+    })
   );
 }
 
 function startCodegraphMcpWarmup(
   session: AgentSession,
   warmup: CodegraphMcpWarmupMode | undefined,
-): Promise<Awaited<ReturnType<AgentSession["loadProject"]>>> | undefined {
+): Promise<AgentProjectSnapshot> | undefined {
   if (warmup === "base") {
     return session.loadProject({ symbolGraph: "skip" });
   }
@@ -232,17 +249,191 @@ function createCodegraphMcpHandlersForSession(
   const configuredSqlitePath = options.artifactPath
     ? resolveArtifactSqlitePathCandidate(root, options.artifactPath)
     : undefined;
+  const configuredSqliteOutDir = configuredSqlitePath ? path.dirname(configuredSqlitePath) : undefined;
+  const configuredSqliteCanRefresh = options.artifactPath ? !/\.(sqlite|db)$/i.test(options.artifactPath) : false;
   let sqlitePath = configuredSqlitePath;
+  let sqliteOutDir = configuredSqliteOutDir;
+  let sqliteCanRefresh = configuredSqliteCanRefresh;
 
   const relative = (file: string): string => toProjectDisplayPath(root, file);
   const boundedLimit = (limit: number | undefined, fallback: number, max: number): number => {
     if (typeof limit !== "number" || !Number.isFinite(limit)) return fallback;
     return Math.min(max, Math.max(0, Math.floor(limit)));
   };
+  const staleFreshness = (files: readonly string[], reason: string): AgentFreshnessResult => {
+    const changedFiles = [...files].sort();
+    const boundedChangedFiles = changedFiles.slice(0, MAX_MCP_FRESHNESS_CHANGED_FILES);
+    return {
+      state: "stale",
+      changedFiles: boundedChangedFiles,
+      changedFileCount: changedFiles.length,
+      omittedChangedFileCount: Math.max(0, changedFiles.length - boundedChangedFiles.length),
+      reason,
+    };
+  };
+  const checkMcpFreshness = async (): Promise<AgentFreshnessResult> => {
+    if (session.checkFreshness) return await session.checkFreshness();
+    return { state: "fresh" };
+  };
+  const withFreshness = async <T extends object>(
+    run: () => Promise<T>,
+  ): Promise<T & { freshness: AgentFreshnessResult }> => {
+    const freshness = await checkMcpFreshness();
+    const result = await run();
+    return { ...result, freshness };
+  };
+  const formatSqliteFreshnessError = (freshness: AgentFreshnessResult): string => {
+    if (freshness.state === "fresh") return "SQLite artifact freshness check unexpectedly failed.";
+    const reason = freshness.state === "stale" ? freshness.reason : "workspace changed after artifact build";
+    const changed = freshness.changedFiles.length ? ` Changed files: ${freshness.changedFiles.join(", ")}.` : "";
+    const omitted =
+      freshness.state === "stale" && freshness.omittedChangedFileCount
+        ? ` Omitted changed files: ${freshness.omittedChangedFileCount}.`
+        : "";
+    let action = "run artifact_build";
+    if (readOnly) {
+      action = "rebuild the artifact with write access enabled";
+    }
+    if (freshness.state === "stale") {
+      action = `run refresh_index, then ${action}`;
+    }
+    return `SQLite artifact is stale; ${action} before query_sqlite. ${reason}.${changed}${omitted}`;
+  };
+  const canRefreshSqliteArtifact = (): boolean => {
+    if (!sqlitePath || !sqliteOutDir || readOnly || !sqliteCanRefresh) return false;
+    return path.basename(sqlitePath) === "codegraph.sqlite";
+  };
+  const rebuildSqliteArtifactForQuery = async (): Promise<void> => {
+    if (!sqliteOutDir) throw new Error("SQLite artifact output directory is unavailable.");
+    const outDir = await assertWritableDirectoryRealPathWithinRoot(
+      await realRoot,
+      root,
+      sqliteOutDir,
+      "Artifact output directory",
+    );
+    const result = await buildCodegraphArtifactWithSession(session, {
+      root,
+      outDir,
+      filterOutDir: outDir,
+      sqlite: true,
+      force: true,
+    });
+    const sqliteArtifact = result.artifacts.sqlite;
+    if (!sqliteArtifact) throw new Error("SQLite artifact refresh did not produce a SQLite file.");
+    sqlitePath = path.join(result.outDir, sqliteArtifact);
+    sqliteOutDir = result.outDir;
+  };
+  const refreshSqliteArtifactForQuery = async (
+    freshness: AgentFreshnessResult,
+    refreshOptions?: { allowStaleRebuild?: boolean },
+  ): Promise<AgentFreshnessResult> => {
+    if (freshness.state === "fresh") return freshness;
+    if (freshness.state === "stale" && !refreshOptions?.allowStaleRebuild) {
+      throw new Error(formatSqliteFreshnessError(freshness));
+    }
+    if (!canRefreshSqliteArtifact()) throw new Error(formatSqliteFreshnessError(freshness));
+    await rebuildSqliteArtifactForQuery();
+    return { state: "refreshed", changedFiles: freshness.changedFiles };
+  };
+  const readSqliteArtifactSignatures = async (
+    realSqlitePath: string,
+  ): Promise<SqliteArtifactFileSignature[] | null> => {
+    const result = await queryGraphSqliteRaw(
+      realSqlitePath,
+      "SELECT value FROM graph_metadata WHERE key = ?;",
+      [SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY],
+      { maxRows: 1 },
+    );
+    const rawValue = result.rows[0]?.[0];
+    if (typeof rawValue !== "string") return null;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawValue);
+    } catch {
+      return null;
+    }
+    if (!Array.isArray(parsed)) return null;
+    const signatures: SqliteArtifactFileSignature[] = [];
+    for (const value of parsed) {
+      if (!isPlainRecord(value)) continue;
+      if (typeof value.path !== "string") continue;
+      if (typeof value.size !== "number" || typeof value.mtimeMs !== "number") continue;
+      signatures.push({ path: value.path, size: value.size, mtimeMs: value.mtimeMs });
+    }
+    return signatures;
+  };
+  const isFileInsideDirectory = (file: string, directory: string): boolean => {
+    const relativeFile = path.relative(directory, file);
+    if (!relativeFile) return true;
+    return !relativeFile.startsWith("..") && !path.isAbsolute(relativeFile);
+  };
+  const collectCurrentSqliteArtifactSignatures = async (): Promise<Map<string, SqliteArtifactFileSignature>> => {
+    const outputDirectories: string[] = [];
+    if (sqliteOutDir) {
+      outputDirectories.push(sqliteOutDir);
+      const lexicalOutDir = path.resolve(root, path.relative(await realRoot, sqliteOutDir));
+      outputDirectories.push(lexicalOutDir);
+    }
+    let discoveredFiles: string[];
+    if (session.discoverFiles) {
+      discoveredFiles = await session.discoverFiles();
+    } else if (options.session) {
+      throw new Error("MCP session does not expose live file discovery for SQLite freshness.");
+    } else {
+      discoveredFiles = await listAgentSessionFiles({
+        root,
+        ...(options.buildOptions ? { buildOptions: options.buildOptions } : {}),
+      });
+    }
+    const currentFiles = discoveredFiles.filter(
+      (file) => !outputDirectories.some((directory) => isFileInsideDirectory(file, directory)),
+    );
+    const signatures = new Map<string, SqliteArtifactFileSignature>();
+    await mapLimit(currentFiles, SQLITE_ARTIFACT_STAT_CONCURRENCY, async (file) => {
+      try {
+        const stat = await fs.stat(file);
+        if (!stat.isFile()) return;
+        signatures.set(relative(file), { path: file, size: stat.size, mtimeMs: stat.mtimeMs });
+      } catch (error) {
+        if (error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR")) {
+          return;
+        }
+        throw error;
+      }
+    });
+    return signatures;
+  };
+  const checkSqliteArtifactFreshness = async (realSqlitePath: string): Promise<AgentFreshnessResult> => {
+    const storedSignatures = await readSqliteArtifactSignatures(realSqlitePath);
+    if (!storedSignatures) return staleFreshness([], "SQLite artifact has no freshness baseline");
+    const storedByFile = new Map<string, SqliteArtifactFileSignature>();
+    for (const signature of storedSignatures) {
+      storedByFile.set(relative(signature.path), signature);
+    }
+    const currentByFile = await collectCurrentSqliteArtifactSignatures();
+    const changedFiles: string[] = [];
+    for (const [file, currentSignature] of currentByFile.entries()) {
+      const storedSignature = storedByFile.get(file);
+      if (!storedSignature) {
+        changedFiles.push(file);
+        continue;
+      }
+      if (storedSignature.size !== currentSignature.size || storedSignature.mtimeMs !== currentSignature.mtimeMs) {
+        changedFiles.push(file);
+      }
+    }
+    for (const file of storedByFile.keys()) {
+      if (currentByFile.has(file)) continue;
+      changedFiles.push(file);
+    }
+    if (!changedFiles.length) return { state: "fresh" };
+    return staleFreshness(changedFiles, "SQLite artifact is older than files on disk");
+  };
+
   const collectMcpDependencyEntries = async (
     request: McpDependencyRequest,
     collectEntries: (
-      graph: Awaited<ReturnType<typeof session.loadProject>>["fileGraph"],
+      graph: AgentProjectSnapshot["fileGraph"],
       file: string,
       options: { depth?: number; limit: number },
     ) => DependencyNode[],
@@ -264,32 +455,44 @@ function createCodegraphMcpHandlersForSession(
 
   return {
     search: async (request) =>
-      await searchCodegraphWithSession(session, {
-        root,
-        query: request.query,
-        ...(request.mode !== undefined ? { mode: request.mode } : {}),
-        ...(request.from !== undefined ? { from: request.from } : {}),
-        ...(request.depth !== undefined ? { depth: request.depth } : {}),
-        ...(request.limit !== undefined ? { limit: request.limit } : {}),
-      }),
+      await withFreshness(
+        async () =>
+          await searchCodegraphWithSession(session, {
+            root,
+            query: request.query,
+            ...(request.mode !== undefined ? { mode: request.mode } : {}),
+            ...(request.from !== undefined ? { from: request.from } : {}),
+            ...(request.depth !== undefined ? { depth: request.depth } : {}),
+            ...(request.limit !== undefined ? { limit: request.limit } : {}),
+          }),
+      ),
 
     orient: async (request) =>
-      await orientCodegraphWithSession(session, {
-        root,
-        ...(request.includeRoots !== undefined ? { includeRoots: request.includeRoots } : {}),
-        ...(request.budget !== undefined ? { budget: request.budget } : {}),
-      }),
+      await withFreshness(
+        async () =>
+          await orientCodegraphWithSession(session, {
+            root,
+            ...(request.includeRoots !== undefined ? { includeRoots: request.includeRoots } : {}),
+            ...(request.budget !== undefined ? { budget: request.budget } : {}),
+          }),
+      ),
 
     packet_get: async (request) =>
-      await getCodegraphPacketWithSession(session, {
-        root,
-        target: request.target,
-        ...(request.maxSymbols !== undefined ? { maxSymbols: request.maxSymbols } : {}),
-        ...(request.maxSnippets !== undefined ? { maxSnippets: request.maxSnippets } : {}),
-        ...(request.maxDuplicates !== undefined ? { maxDuplicates: request.maxDuplicates } : {}),
-      }),
+      await withFreshness(
+        async () =>
+          await getCodegraphPacketWithSession(session, {
+            root,
+            target: request.target,
+            ...(request.maxSymbols !== undefined ? { maxSymbols: request.maxSymbols } : {}),
+            ...(request.maxSnippets !== undefined ? { maxSnippets: request.maxSnippets } : {}),
+            ...(request.maxDuplicates !== undefined ? { maxDuplicates: request.maxDuplicates } : {}),
+          }),
+      ),
 
     get_file: async (request) => {
+      // get_file returns live bytes read directly from disk and never consults the indexed
+      // session, so it must not trigger a workspace-wide freshness scan or rebuild. The bytes
+      // are always current, so report fresh without re-stating the project.
       const resolvedFile = await resolveReadableFile(await realRoot, root, request.file);
       const maxBytes = boundedLimit(request.maxBytes, DEFAULT_FILE_BYTES, MAX_FILE_BYTES);
       const read = await readFilePrefix(resolvedFile.realPath, maxBytes);
@@ -297,125 +500,153 @@ function createCodegraphMcpHandlersForSession(
         file: resolvedFile.displayPath,
         text: read.text,
         truncated: read.truncated,
+        freshness: { state: "fresh" },
       };
     },
 
-    get_symbol: async (request) => {
-      const explanation = await explainCodegraphTargetWithSession(session, { root, target: request.handle });
-      return explanation.target;
-    },
+    get_symbol: async (request) =>
+      await withFreshness(async () => {
+        const explanation = await explainCodegraphTargetWithSession(session, { root, target: request.handle });
+        return explanation.target;
+      }),
 
-    goto: async (request) => {
-      const snapshot = await session.loadProject({ symbolGraph: "skip" });
-      return await goToDefinition(snapshot.index, {
-        file: await resolveProjectFile(await realRoot, root, request.file),
-        line: request.line,
-        column: request.column,
-      });
-    },
-
-    refs: async (request) => {
-      const handle = "handle" in request ? request.handle : undefined;
-      const file = "file" in request ? request.file : undefined;
-      const line = "line" in request ? request.line : undefined;
-      const column = "column" in request ? request.column : undefined;
-      const hasAnyPosition = file !== undefined || line !== undefined || column !== undefined;
-      const hasCompletePosition = file !== undefined && line !== undefined && column !== undefined;
-      if (handle !== undefined && hasAnyPosition) {
-        throw new Error("refs requires either handle or file, line, and column.");
-      }
-      if (handle === undefined && !hasCompletePosition) {
-        throw new Error("refs requires either handle or file, line, and column.");
-      }
-
-      if (handle !== undefined) {
-        const explanation = await explainCodegraphTargetWithSession(session, {
-          root,
-          target: handle,
-          maxReferences: boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT),
+    goto: async (request) =>
+      await withFreshness(async () => {
+        const snapshot = await session.loadProject({ symbolGraph: "skip" });
+        return await goToDefinition(snapshot.index, {
+          file: await resolveProjectFile(await realRoot, root, request.file),
+          line: request.line,
+          column: request.column,
         });
-        return { references: explanation.references };
-      }
-      if (file === undefined || line === undefined || column === undefined) {
-        throw new Error("refs requires either handle or file, line, and column.");
-      }
+      }),
 
-      const snapshot = await session.loadProject({ symbolGraph: "skip" });
-      const referenceOptions = {
-        maxReferences: boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT),
-      };
-      const result = await findReferences(
-        snapshot.index,
-        {
-          file: await resolveProjectFile(await realRoot, root, file),
-          line,
-          column,
-        },
-        referenceOptions,
-      );
-      if (result.status !== "ok") return { references: [] };
-      return {
-        references: result.references.map((reference) => ({
-          file: relative(reference.file),
-          range: reference.range,
-        })),
-      };
-    },
+    refs: async (request) =>
+      await withFreshness(async () => {
+        const handle = "handle" in request ? request.handle : undefined;
+        const file = "file" in request ? request.file : undefined;
+        const line = "line" in request ? request.line : undefined;
+        const column = "column" in request ? request.column : undefined;
+        const hasAnyPosition = file !== undefined || line !== undefined || column !== undefined;
+        const hasCompletePosition = file !== undefined && line !== undefined && column !== undefined;
+        if (handle !== undefined && hasAnyPosition) {
+          throw new Error("refs requires either handle or file, line, and column.");
+        }
+        if (handle === undefined && !hasCompletePosition) {
+          throw new Error("refs requires either handle or file, line, and column.");
+        }
 
-    deps: async (request) => {
-      const dependencies = await collectMcpDependencyEntries(request, getDependencies);
-      return { dependencies };
-    },
+        if (handle !== undefined) {
+          const explanation = await explainCodegraphTargetWithSession(session, {
+            root,
+            target: handle,
+            maxReferences: boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT),
+          });
+          return { references: explanation.references };
+        }
+        if (file === undefined || line === undefined || column === undefined) {
+          throw new Error("refs requires either handle or file, line, and column.");
+        }
 
-    rdeps: async (request) => {
-      const reverseDependencies = await collectMcpDependencyEntries(request, getReverseDependencies);
-      return { reverseDependencies };
-    },
+        const snapshot = await session.loadProject({ symbolGraph: "skip" });
+        const referenceOptions = {
+          maxReferences: boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT),
+        };
+        const result = await findReferences(
+          snapshot.index,
+          {
+            file: await resolveProjectFile(await realRoot, root, file),
+            line,
+            column,
+          },
+          referenceOptions,
+        );
+        if (result.status !== "ok") return { references: [] };
+        return {
+          references: result.references.map((reference) => ({
+            file: relative(reference.file),
+            range: reference.range,
+          })),
+        };
+      }),
 
-    path: async (request) => {
-      const snapshot = await session.loadProject({ symbolGraph: "skip" });
-      const result = getShortestPath(
-        snapshot.fileGraph,
-        await resolveProjectFile(await realRoot, root, request.from),
-        await resolveProjectFile(await realRoot, root, request.to),
-      );
-      return {
-        path: result ? result.map(relative) : null,
-      };
-    },
+    deps: async (request) =>
+      await withFreshness(async () => {
+        const dependencies = await collectMcpDependencyEntries(request, getDependencies);
+        return { dependencies };
+      }),
+
+    rdeps: async (request) =>
+      await withFreshness(async () => {
+        const reverseDependencies = await collectMcpDependencyEntries(request, getReverseDependencies);
+        return { reverseDependencies };
+      }),
+
+    path: async (request) =>
+      await withFreshness(async () => {
+        const snapshot = await session.loadProject({ symbolGraph: "skip" });
+        const result = getShortestPath(
+          snapshot.fileGraph,
+          await resolveProjectFile(await realRoot, root, request.from),
+          await resolveProjectFile(await realRoot, root, request.to),
+        );
+        return {
+          path: result ? result.map(relative) : null,
+        };
+      }),
 
     impact: async (request) =>
-      await buildReviewReport(root, {
-        ...options.buildOptions,
-        gitBase: request.base,
-        gitHead: request.head,
-        reviewDepth: "minimal",
-      }),
+      await withFreshness(
+        async () =>
+          await buildReviewReport(root, {
+            ...options.buildOptions,
+            gitBase: request.base,
+            gitHead: request.head,
+            reviewDepth: "minimal",
+          }),
+      ),
 
     review: async (request) =>
-      await buildReviewReport(root, {
-        ...options.buildOptions,
-        gitBase: request.base,
-        gitHead: request.head,
-        ...(request.reviewDepth !== undefined ? { reviewDepth: request.reviewDepth } : {}),
-      }),
+      await withFreshness(
+        async () =>
+          await buildReviewReport(root, {
+            ...options.buildOptions,
+            gitBase: request.base,
+            gitHead: request.head,
+            ...(request.reviewDepth !== undefined ? { reviewDepth: request.reviewDepth } : {}),
+          }),
+      ),
 
     query_sqlite: async (request) => {
       if (!sqlitePath) {
         throw new Error("No SQLite artifact is available. Run artifact_build first or pass artifactPath.");
       }
-      const realSqlitePath = await assertRealPathCandidateWithinRoot(await realRoot, sqlitePath, "SQLite artifact");
       assertMcpSqliteQueryResourceBounded(request.query);
+      // The artifact's own baseline decides whether the query can be served; session freshness
+      // only decides whether an automatic rebuild is safe. A fresh artifact is served even when
+      // the in-memory session snapshot is stale, and an unsafe session refresh burst blocks the
+      // automatic rebuild instead of silently rebuilding from stale in-memory state.
+      let realSqlitePath = await assertRealPathCandidateWithinRoot(await realRoot, sqlitePath, "SQLite artifact");
+      let artifactFreshness = await checkSqliteArtifactFreshness(realSqlitePath);
+      if (artifactFreshness.state !== "fresh") {
+        const sessionFreshness = await checkMcpFreshness();
+        if (sessionFreshness.state === "stale") {
+          throw new Error(formatSqliteFreshnessError(sessionFreshness));
+        }
+        artifactFreshness = await refreshSqliteArtifactForQuery(artifactFreshness, { allowStaleRebuild: true });
+        realSqlitePath = await assertRealPathCandidateWithinRoot(await realRoot, sqlitePath, "SQLite artifact");
+      }
       const result = await queryGraphSqliteRaw(realSqlitePath, request.query, request.params ?? [], {
         maxRows: normalizeSqliteRowLimit(request.limit),
       });
-      return boundRawSqlResult(result, DEFAULT_SQLITE_BYTE_LIMIT);
+      return { ...boundRawSqlResult(result, DEFAULT_SQLITE_BYTE_LIMIT), freshness: artifactFreshness };
     },
 
     refresh_index: async (request) => {
       const warmup = request.warmup ?? "off";
       session.invalidate();
       sqlitePath = configuredSqlitePath;
+      sqliteOutDir = configuredSqliteOutDir;
+      sqliteCanRefresh = configuredSqliteCanRefresh;
       await startCodegraphMcpWarmup(session, warmup);
       return { refreshed: true, warmup };
     },
@@ -423,6 +654,16 @@ function createCodegraphMcpHandlersForSession(
     artifact_build: async (request) => {
       if (readOnly) {
         throw new Error("artifact_build is disabled in read-only MCP mode.");
+      }
+      const freshness = await checkMcpFreshness();
+      if (freshness.state === "stale") {
+        const changed = freshness.changedFiles.length ? ` Changed files: ${freshness.changedFiles.join(", ")}.` : "";
+        const omitted = freshness.omittedChangedFileCount
+          ? ` Omitted changed files: ${freshness.omittedChangedFileCount}.`
+          : "";
+        throw new Error(
+          `Cannot build artifacts from a stale MCP index; run refresh_index first. ${freshness.reason}.${changed}${omitted}`,
+        );
       }
       const outDir =
         request.outDir !== undefined
@@ -446,8 +687,10 @@ function createCodegraphMcpHandlersForSession(
       const sqliteArtifact = result.artifacts.sqlite;
       if (sqliteArtifact) {
         sqlitePath = path.join(result.outDir, sqliteArtifact);
+        sqliteOutDir = result.outDir;
+        sqliteCanRefresh = true;
       }
-      return result;
+      return { ...result, freshness };
     },
   };
 }

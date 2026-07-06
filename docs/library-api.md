@@ -162,7 +162,9 @@ console.log(artifact.manifestPath, artifact.artifacts);
 
 The `graph.json` artifact is self-describing (`schemaVersion: 1`, `format: "codegraph.graph-json"`) and uses project-relative file paths and portable symbol handles. `questions.json` uses the same stable handles for follow-up commands. With `force: true`, stale known Codegraph artifact files are removed before the selected outputs are written; unrelated files in the directory are preserved.
 
-`createAgentSession()` keeps one in-process project snapshot warm for repeated orient, search, explain, packet, artifact, and MCP calls. It uses incremental indexing with disk cache by default, auto-enables native workers for large cold builds, and carries forward top-level analysis metadata from the build report. Set `buildOptions.useNativeWorkers` to `false` to opt out. Use `buildCodegraphArtifactWithSession()` when a host already has a session and wants SQLite, graph JSON, report, questions, and manifest outputs from the same snapshot. `createCodegraphMcpHandlers()` exposes the same primitives without starting stdio, which is useful for tests or host applications:
+`createAgentSession()` keeps one in-process project snapshot warm for repeated orient, search, explain, packet, artifact, and MCP calls. It uses incremental indexing with disk cache by default, auto-enables native workers for large cold builds, and carries forward top-level analysis metadata from the build report.
+Session callers can use `freshness: { policy: "check" | "auto" | "manual" }` plus `checkFreshness()` to detect file edits before reusing a warm snapshot. `check` reports stale state without invalidating, `auto` invalidates for bounded changes, and stale results include `changedFileCount`, `omittedChangedFileCount`, `reason`, and a bounded changed-file sample.
+Set `buildOptions.useNativeWorkers` to `false` to opt out. Use `buildCodegraphArtifactWithSession()` when a host already has a session and wants SQLite, graph JSON, report, questions, and manifest outputs from the same snapshot. `createCodegraphMcpHandlers()` exposes the same primitives without starting stdio, which is useful for tests or host applications:
 
 ```ts
 import { createCodegraphMcpHandlers } from "@lzehrung/codegraph";
@@ -178,11 +180,13 @@ const orient = await handlers.orient({ includeRoots: ["src"], budget: "small" })
 const packet = await handlers.packet_get({ target: orient.focus.find((entry) => entry.file)!.file! });
 const refs = await handlers.refs({ handle: search.results[0]!.handle });
 const rows = await handlers.query_sqlite({ query: "select path from files", limit: 5 });
-console.log(packet.kind, refs.references, rows.rows);
+console.log(search.freshness.state);
+console.log(packet.kind, refs.references, rows.rows, rows.freshness.state);
 ```
 
-`serveCodegraphMcp()` starts the stdio server used by `codegraph mcp serve`. MCP is an agent ergonomics and cache layer over the same analysis engine, not a separate indexer. MCP file and artifact paths are confined after realpath resolution. `query_sqlite` is read-only and row- and byte-bounded; `artifact_build` is disabled by default and requires `readOnly: false` or CLI `--allow-build`.
-MCP `orient` and `packet_get` calls use the server-configured root; they do not accept per-request root overrides.
+`serveCodegraphMcp()` starts the stdio server used by `codegraph mcp serve`. MCP is an agent ergonomics and cache layer over the same analysis engine, not a separate indexer. MCP file and artifact paths are confined after realpath resolution.
+`query_sqlite` is read-only and row- and byte-bounded. It returns freshness metadata for fresh artifact reads, refreshes Codegraph-owned SQLite artifacts after small edits when write access is enabled, and rejects stale artifact queries it cannot refresh safely.
+`artifact_build` is disabled by default and requires `readOnly: false` or CLI `--allow-build`; it refuses to write outputs from a stale MCP index until `refresh_index` succeeds. MCP `orient` and `packet_get` calls use the server-configured root; they do not accept per-request root overrides.
 
 See [MCP server](./mcp.md) for CLI server setup and client configuration examples.
 

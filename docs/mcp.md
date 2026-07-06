@@ -44,12 +44,13 @@ The server exposes the same bounded primitives as the CLI and library session la
 - `refs`: references by handle or file position.
 - `deps`, `rdeps`, `path`: dependency navigation.
 - `impact`, `review`: git-range risk and review context.
-- `query_sqlite`: bounded read-only SQLite artifact query.
+- `query_sqlite`: bounded read-only SQLite artifact query with freshness metadata.
 - `refresh_index`: invalidate the in-memory session and optionally rebuild the base or symbol snapshot.
 - `artifact_build`: artifact creation, available only with write access enabled.
 
 MCP keeps one Codegraph session warm for the configured root. That makes follow-up calls cheaper than separate CLI invocations. Startup is lazy unless `--warmup` or `--warmup-symbols` is passed.
-Use `refresh_index` after changing files while the server is running, or when you need a fresh cache-backed snapshot without restarting the MCP process.
+Before index-backed tool calls, MCP checks whether discovered files changed since the warm snapshot. Small changes refresh the session automatically, and responses include `freshness.state` as `fresh`, `refreshed`, or `stale`; stale responses also include `changedFileCount`, `omittedChangedFileCount`, and a bounded changed-file sample.
+Use `refresh_index` when you need to force a rebuild, reset SQLite artifact state, or refresh after a change burst that exceeds the automatic refresh limits. `query_sqlite` refreshes Codegraph-owned SQLite artifacts after small edits when write access is enabled; otherwise it refuses to serve stale artifact rows. `artifact_build` refuses to write outputs from a stale MCP index; run `refresh_index` first after large change bursts.
 Tool schemas are flat JSON objects for broad client compatibility; argument combinations such as `refs` handle-vs-position mode are validated by the server.
 
 ## Safety
@@ -57,8 +58,8 @@ Tool schemas are flat JSON objects for broad client compatibility; argument comb
 - File and artifact paths are confined to `--root` after realpath resolution.
 - Tool calls do not accept per-request root overrides.
 - Tools are read-only by default.
-- `artifact_build` requires `--allow-build`.
-- `query_sqlite` rejects mutating SQL, recursive queries, and synthetic payload functions.
+- `artifact_build` requires `--allow-build` and a fresh or auto-refreshed MCP index.
+- `query_sqlite` rejects mutating SQL, recursive queries, synthetic payload functions, and stale artifact queries it cannot refresh safely.
 - SQLite responses are row- and byte-bounded.
 
 ## Client Configuration Examples
@@ -195,9 +196,10 @@ When Codegraph MCP tools are available to an agent:
 1. Start with `orient`.
 2. Use `search` to find anchors.
 3. Use `packet_get`, `refs`, `goto`, `deps`, `rdeps`, or `path` for focused follow-up.
-4. Use `impact` and `review` for git-range risk analysis.
-5. Use `query_sqlite` only for read-only artifact inspection.
-6. Use `refresh_index` after changing files while a long-running server is active.
-7. Use `artifact_build` only when write access was intentionally enabled.
+4. Check `freshness` on MCP responses after edits; `refreshed` means the answer used an updated snapshot, and `stale` includes a reason plus a bounded changed-file sample.
+5. Use `impact` and `review` for git-range risk analysis.
+6. Use `query_sqlite` only for read-only artifact inspection; rebuild the artifact when it reports stale state.
+7. Use `refresh_index` when you need an explicit rebuild.
+8. Use `artifact_build` only when write access was intentionally enabled.
 
 Fall back to CLI commands when MCP tools are unavailable.

@@ -263,11 +263,12 @@ For SQL, prefer handles or schema-qualified names when basenames may be ambiguou
 - `mcp serve` exposes navigation, search, impact, review, SQLite query, session refresh, and artifact-build tools.
 - MCP uses stdio by default or Streamable HTTP with `--port <number>`.
 - Startup is lazy by default; `--warmup` builds the base session cache before serving requests, and `--warmup-symbols` also builds the detailed symbol graph.
-- Use `refresh_index` after changing files while a long-running server is active.
+- Index-backed responses include `freshness`; small file changes auto-refresh, while stale responses include a reason, total changed-file count, and a bounded changed-file sample.
+- Use `refresh_index` to force a rebuild, reset SQLite artifact state, or recover after stale change bursts.
 - HTTP serves `/mcp`, validates Host headers, and binds to `127.0.0.1` unless `--host <host>` is passed.
 - MCP file and artifact paths are confined to `--root` after realpath resolution.
-- MCP tools are read-only by default; `--allow-build` enables artifact output only.
-- `query_sqlite` is row- and byte-bounded and rejects synthetic payload functions.
+- MCP tools are read-only by default; `--allow-build` enables artifact output only when the MCP index is fresh or auto-refreshed.
+- `query_sqlite` is row- and byte-bounded, returns freshness metadata, rejects synthetic payload functions, and refuses stale artifact rows it cannot refresh safely.
 
 See [docs/mcp.md](./mcp.md) for client configuration examples.
 
