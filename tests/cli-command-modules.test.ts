@@ -245,7 +245,7 @@ describe("CLI command modules", () => {
   test("lists cache verification and progress as build options in CLI help", () => {
     const buildOptions = CLI_HELP_TEXT.slice(
       CLI_HELP_TEXT.indexOf("Build Options:"),
-      CLI_HELP_TEXT.indexOf("Output Options:"),
+      CLI_HELP_TEXT.indexOf("Analysis Output Options:"),
     );
 
     expect(buildOptions).toContain("--cache-strict");
@@ -314,11 +314,24 @@ describe("CLI command modules", () => {
     }
   });
 
-  test("top-level help does not show --json on installer command lines", async () => {
+  test("top-level help scopes output options to analysis commands", async () => {
     const result = await captureCli(["--help"]);
 
     expect(result.exitCode).toBeUndefined();
     expect(result.stderr).toBe("");
+    expect(result.stdout).toMatch(/^Analysis Output Options:$/m);
+    expect(result.stdout).not.toMatch(/^Output Options:$/m);
+
+    const outputSectionStart = result.stdout.indexOf("Analysis Output Options:");
+    const examplesStart = result.stdout.indexOf("Examples:", outputSectionStart);
+    expect(outputSectionStart).toBeGreaterThanOrEqual(0);
+    expect(examplesStart).toBeGreaterThan(outputSectionStart);
+
+    const outputSection = result.stdout.slice(outputSectionStart, examplesStart);
+    expect(outputSection).toContain("--json");
+    expect(outputSection).toContain("Output analysis commands as JSON");
+    expect(outputSection).not.toContain("Output as JSON (default)");
+
     const installerLines = result.stdout
       .split("\n")
       .filter((line) => /\bcodegraph (?:install|uninstall)\b|\b(?:install|uninstall)\s{2,}/.test(line));

@@ -166,7 +166,7 @@ export const UNINSTALL_HELP_TEXT = `codegraph uninstall - Remove Codegraph-owned
 Usage: codegraph uninstall [target] [--target <codex,claude,cursor,gemini,opencode,agents>] [--yes | --dry-run] [--detect]
 
 Safety:
-  Removes only Codegraph-owned marker blocks, marker files, or exact installer-owned MCP entries.
+  Removes only Codegraph-owned marker blocks, marker files, exact bundled skill payloads, or exact installer-owned MCP entries.
 `;
 
 export const EXPLORE_HELP_TEXT = `codegraph explore - Answer a broad repo question with bounded repo context

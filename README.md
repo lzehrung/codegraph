@@ -318,7 +318,7 @@ codegraph graph --root . ./src --dot --output graph.dot
 
 ## Agent setup
 
-Using a local agent client? The top-level installer configures Codegraph-owned MCP entries and marker files for supported clients, while preserving existing user config:
+Using a local agent client? The top-level installer configures Codegraph-owned MCP entries, bundled skill payloads, and marker files for supported clients, while preserving existing user config:
 
 ```bash
 codegraph install --target codex,claude --dry-run
@@ -327,7 +327,7 @@ codegraph install --print-config codex
 codegraph uninstall --target codex --yes
 ```
 
-Supported installer targets are `codex`, `claude`, `cursor`, `gemini`, `opencode`, and `agents`. Writes require `--yes`; `--dry-run` previews files, and `uninstall` removes only Codegraph-owned marker blocks, marker files, or exact installer-owned MCP entries.
+Supported installer targets are `codex`, `claude`, `cursor`, `gemini`, `opencode`, and `agents`. Writes require `--yes`; `--dry-run` previews files, and `uninstall` removes only Codegraph-owned marker blocks, marker files, exact bundled skill payloads, or exact installer-owned MCP entries.
 
 Using a skill-aware agent only? Install the bundled skill directly so repo navigation, semantic references, dependency tracing, and PR impact questions route to Codegraph automatically:
 

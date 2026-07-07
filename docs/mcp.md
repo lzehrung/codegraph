@@ -73,7 +73,7 @@ codegraph install --target codex,claude --yes
 codegraph install --print-config codex
 ```
 
-The installer writes only Codegraph-owned marker blocks, marker files, or exact installer-owned MCP entries. `codegraph uninstall --target <ids> --yes` removes only those owned entries.
+The installer writes only Codegraph-owned marker blocks, marker files, bundled skill payloads, or exact installer-owned MCP entries. `codegraph uninstall --target <ids> --yes` removes only those owned entries.
 
 ## Client Configuration Examples
 

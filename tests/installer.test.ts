@@ -235,6 +235,42 @@ describe("agent installer workflow", () => {
     await expect(fsp.stat(path.join(skillDir, "CODEGRAPH_INSTALLED"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("preserves user files under installer-owned skill directory on uninstall", async () => {
+    const homeDir = await mkTmpDir("cg-uninstall-skill-extra-file-");
+    const skillDir = path.join(homeDir, ".agents", "skills", "codegraph");
+    const installedSkillPath = path.join(skillDir, "SKILL.md");
+    const markerPath = path.join(skillDir, "CODEGRAPH_INSTALLED");
+    const extraDir = path.join(skillDir, "notes");
+    const extraFilePath = path.join(extraDir, "README.md");
+    const extraFile = "# User notes\n";
+
+    await installCodegraphTargets({ homeDir, targetIds: ["agents"], yes: true });
+    await fsp.mkdir(extraDir, { recursive: true });
+    await fsp.writeFile(extraFilePath, extraFile, "utf8");
+
+    await uninstallCodegraphTargets({ homeDir, targetIds: ["agents"], yes: true });
+
+    await expect(fsp.stat(installedSkillPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fsp.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(extraFilePath)).toBe(extraFile);
+  });
+
+  it("preserves modified installer-owned SKILL.md on uninstall", async () => {
+    const homeDir = await mkTmpDir("cg-uninstall-skill-modified-");
+    const skillDir = path.join(homeDir, ".agents", "skills", "codegraph");
+    const installedSkillPath = path.join(skillDir, "SKILL.md");
+    const markerPath = path.join(skillDir, "CODEGRAPH_INSTALLED");
+    const modifiedSkill = `${await readFile(BUNDLED_SKILL_PATH)}\n# User customization\n`;
+
+    await installCodegraphTargets({ homeDir, targetIds: ["agents"], yes: true });
+    await fsp.writeFile(installedSkillPath, modifiedSkill, "utf8");
+
+    await uninstallCodegraphTargets({ homeDir, targetIds: ["agents"], yes: true });
+
+    expect(await readFile(installedSkillPath)).toBe(modifiedSkill);
+    await expect(fsp.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("preserves an unmarked user-owned skill payload on uninstall", async () => {
     const homeDir = await mkTmpDir("cg-uninstall-user-skill-payload-");
     const skillDir = path.join(homeDir, ".agents", "skills", "codegraph");

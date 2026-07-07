@@ -272,7 +272,7 @@ async function upsertSkillPayload(
   skillTargetDir: string,
   dryRun: boolean,
 ): Promise<InstallChange> {
-  const bundledSkillPath = path.join(getCodegraphPackageRoot(), "codegraph-skill", "codegraph", "SKILL.md");
+  const bundledSkillPath = bundledSkillFilePath();
   const targetSkillPath = path.join(skillTargetDir, "SKILL.md");
   const bundledSkill = await fsp.readFile(bundledSkillPath, "utf8");
   const existing = await readOptionalFile(targetSkillPath);
@@ -308,8 +308,11 @@ async function removeSkillPointer(
   const markerPath = path.join(skillTargetDir, "CODEGRAPH_INSTALLED");
   const markerExists = await pathExistsUnlessMissing(markerPath);
   if (!markerExists) return change(definition.id, "unchanged", markerPath, dryRun);
-  if (!dryRun) await fsp.rm(skillTargetDir, { recursive: true, force: true });
-  return change(definition.id, "delete", skillTargetDir, dryRun);
+  if (!dryRun) {
+    await removeBundledSkillPayload(skillTargetDir);
+    await fsp.rm(markerPath, { force: true });
+  }
+  return change(definition.id, "delete", markerPath, dryRun);
 }
 
 async function upsertConfig(definition: TargetDefinition, configPath: string, dryRun: boolean): Promise<InstallChange> {
@@ -504,6 +507,18 @@ function requireConfigPath(definition: TargetDefinition, settings: InstallerSett
     throw new Error(`${definition.label} does not have an MCP config file target.`);
   }
   return configPath;
+}
+
+function bundledSkillFilePath(): string {
+  return path.join(getCodegraphPackageRoot(), "codegraph-skill", "codegraph", "SKILL.md");
+}
+
+async function removeBundledSkillPayload(skillTargetDir: string): Promise<void> {
+  const targetSkillPath = path.join(skillTargetDir, "SKILL.md");
+  const existing = await readOptionalFile(targetSkillPath);
+  if (existing === null) return;
+  const bundledSkill = await fsp.readFile(bundledSkillFilePath(), "utf8");
+  if (existing === bundledSkill) await fsp.rm(targetSkillPath, { force: true });
 }
 
 async function pathExistsUnlessMissing(filePath: string): Promise<boolean> {

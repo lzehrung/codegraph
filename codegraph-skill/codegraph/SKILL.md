@@ -46,7 +46,7 @@ Then choose the smallest useful follow-up:
 
 Use `--root` to define the project boundary for config lookup, cache scope, path confinement, and output normalization.
 For `orient`, `drift`, and positional graph commands, positional paths are include roots inside that project.
-Use `codegraph install --target <ids> --yes` to configure supported local agent clients. Use `--dry-run` or `--print-config <target>` first; uninstall removes only Codegraph-owned marker blocks, marker files, or exact installer-owned MCP entries.
+Use `codegraph install --target <ids> --yes` to configure supported local agent clients with MCP entries, bundled skill payloads, and marker files. Use `--dry-run` or `--print-config <target>` first; uninstall removes only Codegraph-owned marker blocks, marker files, exact bundled skill payloads, or exact installer-owned MCP entries.
 
 ## Output Choice
 

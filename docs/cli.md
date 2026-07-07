@@ -272,10 +272,10 @@ For SQL, prefer handles or schema-qualified names when basenames may be ambiguou
 
 #### Agent client installer
 
-- `install` configures Codegraph-owned MCP entries and marker files for supported local agent clients: `codex`, `claude`, `cursor`, `gemini`, `opencode`, and `agents`.
+- `install` configures Codegraph-owned MCP entries, bundled skill payloads, and marker files for supported local agent clients: `codex`, `claude`, `cursor`, `gemini`, `opencode`, and `agents`.
 - Writes require `--yes`; use `--dry-run` to preview changed file paths and actions or `--print-config <target>` to print a copyable MCP snippet without writing.
-- `uninstall` removes only Codegraph-owned marker blocks, marker files, or exact installer-owned MCP entries.
-- `skill install` remains the lower-level primitive for copying the bundled skill directly.
+- `uninstall` removes only Codegraph-owned marker blocks, marker files, exact bundled skill payloads, or exact installer-owned MCP entries.
+- `skill install` remains the lower-level primitive when you only want to copy the bundled skill directly without MCP config.
 
 #### MCP server
 
