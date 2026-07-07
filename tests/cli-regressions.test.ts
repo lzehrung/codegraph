@@ -1272,6 +1272,7 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
       HOME: tmpDir,
       USERPROFILE: tmpDir,
       CODEX_HOME: "",
+      XDG_CONFIG_HOME: "",
     };
 
     await fsp.mkdir(path.dirname(targetDir), { recursive: true });
