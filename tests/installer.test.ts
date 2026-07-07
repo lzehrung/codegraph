@@ -6,6 +6,7 @@ import {
   installCodegraphTargets,
   printInstallConfig,
   uninstallCodegraphTargets,
+  type InstallChange,
 } from "../src/installer/registry.js";
 import { captureCli } from "./helpers/cli.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
@@ -15,6 +16,10 @@ async function readFile(filePath: string): Promise<string> {
 }
 
 const BUNDLED_SKILL_PATH = path.join(process.cwd(), "codegraph-skill", "codegraph", "SKILL.md");
+
+function expectInstallerChange(changes: InstallChange[], expected: InstallChange): void {
+  expect(changes).toContainEqual(expected);
+}
 
 const CURSOR_INSTALLER_SERVER = {
   type: "stdio",
@@ -219,6 +224,34 @@ describe("agent installer workflow", () => {
     }
   });
 
+  it("dry-run uninstall reports separate skill payload and marker deletes without removing installer-owned files", async () => {
+    const homeDir = await mkTmpDir("cg-uninstall-skill-dry-run-");
+    const skillDir = path.join(homeDir, ".agents", "skills", "codegraph");
+    const installedSkillPath = path.join(skillDir, "SKILL.md");
+    const markerPath = path.join(skillDir, "CODEGRAPH_INSTALLED");
+    const bundledSkill = await readFile(BUNDLED_SKILL_PATH);
+
+    await installCodegraphTargets({ homeDir, targetIds: ["agents"], yes: true });
+
+    const result = await uninstallCodegraphTargets({ homeDir, targetIds: ["agents"], dryRun: true });
+
+    expect(result.dryRun).toBe(true);
+    expectInstallerChange(result.changes, {
+      target: "agents",
+      action: "delete",
+      path: installedSkillPath,
+      dryRun: true,
+    });
+    expectInstallerChange(result.changes, {
+      target: "agents",
+      action: "delete",
+      path: markerPath,
+      dryRun: true,
+    });
+    expect(await readFile(installedSkillPath)).toBe(bundledSkill);
+    expect(await readFile(markerPath)).toContain("Agents skill directory");
+  });
+
   it("installs the bundled skill payload and removes marker-owned payload on uninstall", async () => {
     const homeDir = await mkTmpDir("cg-install-skill-payload-");
     const skillDir = path.join(homeDir, ".agents", "skills", "codegraph");
@@ -229,10 +262,55 @@ describe("agent installer workflow", () => {
     expect(await readFile(installedSkillPath)).toBe(await readFile(BUNDLED_SKILL_PATH));
     expect(await readFile(path.join(skillDir, "CODEGRAPH_INSTALLED"))).toContain("Agents skill directory");
 
-    await uninstallCodegraphTargets({ homeDir, targetIds: ["agents"], yes: true });
+    const result = await uninstallCodegraphTargets({ homeDir, targetIds: ["agents"], yes: true });
 
+    expectInstallerChange(result.changes, {
+      target: "agents",
+      action: "delete",
+      path: installedSkillPath,
+      dryRun: false,
+    });
+    expectInstallerChange(result.changes, {
+      target: "agents",
+      action: "delete",
+      path: path.join(skillDir, "CODEGRAPH_INSTALLED"),
+      dryRun: false,
+    });
     await expect(fsp.stat(installedSkillPath)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fsp.stat(path.join(skillDir, "CODEGRAPH_INSTALLED"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("installs and removes the bundled skill payload for a Codex MCP target without deleting user files", async () => {
+    const homeDir = await mkTmpDir("cg-install-codex-skill-payload-");
+    const skillDir = path.join(homeDir, ".codex", "skills", "codegraph");
+    const installedSkillPath = path.join(skillDir, "SKILL.md");
+    const markerPath = path.join(skillDir, "CODEGRAPH_INSTALLED");
+    const userFilePath = path.join(skillDir, "notes.md");
+    const userFile = "# Keep my Codex notes\n";
+
+    await installCodegraphTargets({ homeDir, targetIds: ["codex"], yes: true });
+    await fsp.writeFile(userFilePath, userFile, "utf8");
+
+    expect(await readFile(installedSkillPath)).toBe(await readFile(BUNDLED_SKILL_PATH));
+    expect(await readFile(markerPath)).toContain("Codex CLI");
+
+    const result = await uninstallCodegraphTargets({ homeDir, targetIds: ["codex"], yes: true });
+
+    expectInstallerChange(result.changes, {
+      target: "codex",
+      action: "delete",
+      path: installedSkillPath,
+      dryRun: false,
+    });
+    expectInstallerChange(result.changes, {
+      target: "codex",
+      action: "delete",
+      path: markerPath,
+      dryRun: false,
+    });
+    await expect(fsp.stat(installedSkillPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fsp.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(userFilePath)).toBe(userFile);
   });
 
   it("preserves user files under installer-owned skill directory on uninstall", async () => {

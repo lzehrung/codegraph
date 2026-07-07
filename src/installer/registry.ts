@@ -259,6 +259,7 @@ async function uninstallTarget(definition: TargetDefinition, options: UninstallO
   const dryRun = options.dryRun ?? false;
   const changes: InstallChange[] = [];
   const skillTargetDir = getSkillTargetDirForAgent(definition.id, settings.homeDir, settings.env);
+  changes.push(await removeSkillPayload(definition, skillTargetDir, dryRun));
   changes.push(await removeSkillPointer(definition, skillTargetDir, dryRun));
   if (definition.kind !== "skill-only") {
     const configPath = requireConfigPath(definition, settings);
@@ -300,6 +301,23 @@ async function upsertSkillPointer(
   return change(definition.id, existing === null ? "create" : "update", markerPath, dryRun);
 }
 
+async function removeSkillPayload(
+  definition: TargetDefinition,
+  skillTargetDir: string,
+  dryRun: boolean,
+): Promise<InstallChange> {
+  const markerPath = path.join(skillTargetDir, "CODEGRAPH_INSTALLED");
+  const targetSkillPath = path.join(skillTargetDir, "SKILL.md");
+  const markerExists = await pathExistsUnlessMissing(markerPath);
+  if (!markerExists) return change(definition.id, "unchanged", targetSkillPath, dryRun);
+  const existing = await readOptionalFile(targetSkillPath);
+  if (existing === null) return change(definition.id, "unchanged", targetSkillPath, dryRun);
+  const bundledSkill = await fsp.readFile(bundledSkillFilePath(), "utf8");
+  if (existing !== bundledSkill) return change(definition.id, "unchanged", targetSkillPath, dryRun);
+  if (!dryRun) await fsp.rm(targetSkillPath, { force: true });
+  return change(definition.id, "delete", targetSkillPath, dryRun);
+}
+
 async function removeSkillPointer(
   definition: TargetDefinition,
   skillTargetDir: string,
@@ -308,10 +326,7 @@ async function removeSkillPointer(
   const markerPath = path.join(skillTargetDir, "CODEGRAPH_INSTALLED");
   const markerExists = await pathExistsUnlessMissing(markerPath);
   if (!markerExists) return change(definition.id, "unchanged", markerPath, dryRun);
-  if (!dryRun) {
-    await removeBundledSkillPayload(skillTargetDir);
-    await fsp.rm(markerPath, { force: true });
-  }
+  if (!dryRun) await fsp.rm(markerPath, { force: true });
   return change(definition.id, "delete", markerPath, dryRun);
 }
 
@@ -511,14 +526,6 @@ function requireConfigPath(definition: TargetDefinition, settings: InstallerSett
 
 function bundledSkillFilePath(): string {
   return path.join(getCodegraphPackageRoot(), "codegraph-skill", "codegraph", "SKILL.md");
-}
-
-async function removeBundledSkillPayload(skillTargetDir: string): Promise<void> {
-  const targetSkillPath = path.join(skillTargetDir, "SKILL.md");
-  const existing = await readOptionalFile(targetSkillPath);
-  if (existing === null) return;
-  const bundledSkill = await fsp.readFile(bundledSkillFilePath(), "utf8");
-  if (existing === bundledSkill) await fsp.rm(targetSkillPath, { force: true });
 }
 
 async function pathExistsUnlessMissing(filePath: string): Promise<boolean> {
