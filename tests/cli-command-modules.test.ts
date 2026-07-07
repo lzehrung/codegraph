@@ -314,6 +314,18 @@ describe("CLI command modules", () => {
     }
   });
 
+  test("top-level help does not show --json on installer command lines", async () => {
+    const result = await captureCli(["--help"]);
+
+    expect(result.exitCode).toBeUndefined();
+    expect(result.stderr).toBe("");
+    const installerLines = result.stdout
+      .split("\n")
+      .filter((line) => /\bcodegraph (?:install|uninstall)\b|\b(?:install|uninstall)\s{2,}/.test(line));
+    expect(installerLines.length).toBeGreaterThan(0);
+    expect(installerLines.join("\n")).not.toContain("--json");
+  });
+
   test("search command prints usage before running without a query", async () => {
     const stderr: string[] = [];
 

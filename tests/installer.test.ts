@@ -14,6 +14,83 @@ async function readFile(filePath: string): Promise<string> {
   return await fsp.readFile(filePath, "utf8");
 }
 
+const BUNDLED_SKILL_PATH = path.join(process.cwd(), "codegraph-skill", "codegraph", "SKILL.md");
+
+const CURSOR_INSTALLER_SERVER = {
+  type: "stdio",
+  command: "codegraph",
+  args: ["mcp", "serve", "--root", ".", "--stdio"],
+};
+
+const OPENCODE_INSTALLER_SERVER = {
+  type: "local",
+  enabled: true,
+  command: ["codegraph", "mcp", "serve", "--root", ".", "--stdio"],
+};
+
+const JSON_UNINSTALL_PRESERVE_CASES = [
+  {
+    name: "Cursor mcpServers.codegraph with custom args",
+    targetId: "cursor" as const,
+    property: "mcpServers" as const,
+    configPath: (homeDir: string) => path.join(homeDir, ".cursor", "mcp.json"),
+    codegraphEntry: {
+      ...CURSOR_INSTALLER_SERVER,
+      args: ["mcp", "serve", "--root", "/custom-project", "--stdio"],
+    },
+  },
+  {
+    name: "Cursor mcpServers.codegraph with added env",
+    targetId: "cursor" as const,
+    property: "mcpServers" as const,
+    configPath: (homeDir: string) => path.join(homeDir, ".cursor", "mcp.json"),
+    codegraphEntry: {
+      ...CURSOR_INSTALLER_SERVER,
+      env: { CODEGRAPH_CONTEXT: "keep" },
+    },
+  },
+  {
+    name: "Cursor mcpServers.codegraph with an added extra key",
+    targetId: "cursor" as const,
+    property: "mcpServers" as const,
+    configPath: (homeDir: string) => path.join(homeDir, ".cursor", "mcp.json"),
+    codegraphEntry: {
+      ...CURSOR_INSTALLER_SERVER,
+      note: "user-owned",
+    },
+  },
+  {
+    name: "OpenCode mcp.codegraph with custom command args",
+    targetId: "opencode" as const,
+    property: "mcp" as const,
+    configPath: (homeDir: string) => path.join(homeDir, ".config", "opencode", "opencode.json"),
+    codegraphEntry: {
+      ...OPENCODE_INSTALLER_SERVER,
+      command: ["codegraph", "mcp", "serve", "--root", "/custom-project", "--stdio"],
+    },
+  },
+  {
+    name: "OpenCode mcp.codegraph with added env",
+    targetId: "opencode" as const,
+    property: "mcp" as const,
+    configPath: (homeDir: string) => path.join(homeDir, ".config", "opencode", "opencode.json"),
+    codegraphEntry: {
+      ...OPENCODE_INSTALLER_SERVER,
+      env: { CODEGRAPH_CONTEXT: "keep" },
+    },
+  },
+  {
+    name: "OpenCode mcp.codegraph with an added extra key",
+    targetId: "opencode" as const,
+    property: "mcp" as const,
+    configPath: (homeDir: string) => path.join(homeDir, ".config", "opencode", "opencode.json"),
+    codegraphEntry: {
+      ...OPENCODE_INSTALLER_SERVER,
+      note: "user-owned",
+    },
+  },
+];
+
 describe("agent installer workflow", () => {
   it("detects present and missing target directories", async () => {
     const homeDir = await mkTmpDir("cg-install-detect-");
@@ -114,9 +191,9 @@ describe("agent installer workflow", () => {
     await expect(fsp.stat(homeMarkerPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("treats a blank XDG_CONFIG_HOME as unset for OpenCode config writes", async () => {
+  it("treats a blank XDG_CONFIG_HOME as unset for OpenCode install and uninstall", async () => {
     const homeDir = await mkTmpDir("cg-install-opencode-blank-xdg-");
-    const env = { XDG_CONFIG_HOME: "" };
+    const env = { XDG_CONFIG_HOME: "   " };
     const expectedConfigPath = path.join(homeDir, ".config", "opencode", "opencode.json");
     const previousCwd = process.cwd();
     const sandboxCwd = path.join(homeDir, "cwd");
@@ -132,9 +209,56 @@ describe("agent installer workflow", () => {
       };
       expect(installedConfig.mcp?.codegraph?.command).toEqual(["codegraph", "mcp", "serve", "--root", ".", "--stdio"]);
       await expect(fsp.stat(path.join(relativeConfigDir, "opencode.json"))).rejects.toMatchObject({ code: "ENOENT" });
+
+      await uninstallCodegraphTargets({ homeDir, env, targetIds: ["opencode"], yes: true });
+
+      await expect(fsp.stat(expectedConfigPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fsp.stat(path.join(relativeConfigDir, "opencode.json"))).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       process.chdir(previousCwd);
     }
+  });
+
+  it("installs the bundled skill payload and removes marker-owned payload on uninstall", async () => {
+    const homeDir = await mkTmpDir("cg-install-skill-payload-");
+    const skillDir = path.join(homeDir, ".agents", "skills", "codegraph");
+    const installedSkillPath = path.join(skillDir, "SKILL.md");
+
+    await installCodegraphTargets({ homeDir, targetIds: ["agents"], yes: true });
+
+    expect(await readFile(installedSkillPath)).toBe(await readFile(BUNDLED_SKILL_PATH));
+    expect(await readFile(path.join(skillDir, "CODEGRAPH_INSTALLED"))).toContain("Agents skill directory");
+
+    await uninstallCodegraphTargets({ homeDir, targetIds: ["agents"], yes: true });
+
+    await expect(fsp.stat(installedSkillPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fsp.stat(path.join(skillDir, "CODEGRAPH_INSTALLED"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("preserves an unmarked user-owned skill payload on uninstall", async () => {
+    const homeDir = await mkTmpDir("cg-uninstall-user-skill-payload-");
+    const skillDir = path.join(homeDir, ".agents", "skills", "codegraph");
+    const installedSkillPath = path.join(skillDir, "SKILL.md");
+    const userSkill = "# User maintained Codegraph skill\n";
+
+    await fsp.mkdir(skillDir, { recursive: true });
+    await fsp.writeFile(installedSkillPath, userSkill, "utf8");
+
+    await uninstallCodegraphTargets({ homeDir, targetIds: ["agents"], yes: true });
+
+    expect(await readFile(installedSkillPath)).toBe(userSkill);
+  });
+
+  it("surfaces non-missing installer marker access errors during uninstall", async () => {
+    const homeDir = await mkTmpDir("cg-uninstall-marker-access-");
+    const skillsPath = path.join(homeDir, ".cursor", "skills");
+
+    await fsp.mkdir(path.dirname(skillsPath), { recursive: true });
+    await fsp.writeFile(skillsPath, "not a directory", "utf8");
+
+    await expect(uninstallCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true })).rejects.toThrow(
+      /CODEGRAPH_INSTALLED|marker|ENOTDIR|not a directory/i,
+    );
   });
 
   it("uninstalls only Codegraph-owned config entries", async () => {
@@ -157,35 +281,31 @@ describe("agent installer workflow", () => {
     expect(JSON.stringify(cursorConfig)).not.toContain("codegraph");
   });
 
-  it("preserves JSON codegraph entries on uninstall unless they exactly match the installer-owned shape", async () => {
-    const homeDir = await mkTmpDir("cg-install-uninstall-owned-shape-");
-    const cursorConfigPath = path.join(homeDir, ".cursor", "mcp.json");
-    const customCodegraphEntry = {
-      type: "stdio",
-      command: "codegraph",
-      args: ["mcp", "serve", "--root", "/custom-project", "--stdio"],
-      env: { CODEGRAPH_CONTEXT: "keep" },
-      note: "user-owned",
-    };
-    await fsp.mkdir(path.dirname(cursorConfigPath), { recursive: true });
-    await fsp.writeFile(
-      cursorConfigPath,
-      `${JSON.stringify(
-        { mcpServers: { codegraph: customCodegraphEntry, other: { command: "other-tool" } } },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
+  it.each(JSON_UNINSTALL_PRESERVE_CASES)(
+    "preserves user-owned $name on uninstall when only one dimension differs from the installer shape",
+    async ({ targetId, property, configPath, codegraphEntry }) => {
+      const homeDir = await mkTmpDir(`cg-install-uninstall-owned-shape-${targetId}-`);
+      const targetConfigPath = configPath(homeDir);
+      const otherEntry = { command: "other-tool" };
 
-    await uninstallCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true });
+      await fsp.mkdir(path.dirname(targetConfigPath), { recursive: true });
+      await fsp.writeFile(
+        targetConfigPath,
+        `${JSON.stringify({ [property]: { codegraph: codegraphEntry, other: otherEntry } }, null, 2)}\n`,
+        "utf8",
+      );
 
-    const cursorConfig = JSON.parse(await readFile(cursorConfigPath)) as {
-      mcpServers?: { codegraph?: typeof customCodegraphEntry; other?: { command?: string } };
-    };
-    expect(cursorConfig.mcpServers?.codegraph).toEqual(customCodegraphEntry);
-    expect(cursorConfig.mcpServers?.other?.command).toBe("other-tool");
-  });
+      await uninstallCodegraphTargets({ homeDir, targetIds: [targetId], yes: true });
+
+      const parsedConfig = JSON.parse(await readFile(targetConfigPath)) as {
+        mcpServers?: { codegraph?: typeof codegraphEntry; other?: typeof otherEntry };
+        mcp?: { codegraph?: typeof codegraphEntry; other?: typeof otherEntry };
+      };
+      const servers = parsedConfig[property];
+      expect(servers?.codegraph).toEqual(codegraphEntry);
+      expect(servers?.other).toEqual(otherEntry);
+    },
+  );
 
   it("preserves a pre-existing non-Codegraph-owned mcpServers.codegraph entry on JSON install", async () => {
     const homeDir = await mkTmpDir("cg-install-json-owned-");
@@ -261,6 +381,23 @@ describe("agent installer workflow", () => {
     await expect(installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true })).rejects.toThrow(
       /Unable to parse .*mcp\.json as JSON/,
     );
+  });
+
+  it("reports malformed JSON during uninstall without install-only remediation wording", async () => {
+    const homeDir = await mkTmpDir("cg-uninstall-malformed-");
+    const configPath = path.join(homeDir, ".cursor", "mcp.json");
+    await fsp.mkdir(path.dirname(configPath), { recursive: true });
+    await fsp.writeFile(configPath, "{ not json", "utf8");
+
+    let message = "";
+    try {
+      await uninstallCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toMatch(/Unable to parse .*mcp\.json as JSON/);
+    expect(message).not.toMatch(/before running codegraph install\b/);
   });
 
   it("prints direct config snippets through the library helper", async () => {

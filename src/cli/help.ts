@@ -58,8 +58,8 @@ Build Options:
   --cache-verify            Re-stat cached files before trusting disk cache entries
   --progress                Show progress tracking during indexing
 
-Output Options:
-  --json                    Output as JSON (default)
+Analysis Output Options:
+  --json                    Output analysis commands as JSON (default where supported)
   --mermaid                 Output as Mermaid diagram
   --dot                     Output as DOT graph
   --sqlite <path>           Write to SQLite database

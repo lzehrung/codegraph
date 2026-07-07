@@ -2,7 +2,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { getSkillTargetDirForAgent, type SkillInstallAgent } from "../cli/skill.js";
-import { normalizePathForDisplay, pathExists } from "../cli/packageInfo.js";
+import { getCodegraphPackageRoot, normalizePathForDisplay, pathExists } from "../cli/packageInfo.js";
 
 export type InstallTargetId = SkillInstallAgent;
 
@@ -245,6 +245,7 @@ async function installTarget(definition: TargetDefinition, options: InstallOptio
   const dryRun = options.dryRun ?? false;
   const changes: InstallChange[] = [];
   const skillTargetDir = getSkillTargetDirForAgent(definition.id, settings.homeDir, settings.env);
+  changes.push(await upsertSkillPayload(definition, skillTargetDir, dryRun));
   changes.push(await upsertSkillPointer(definition, skillTargetDir, dryRun));
   if (definition.kind !== "skill-only") {
     const configPath = requireConfigPath(definition, settings);
@@ -264,6 +265,23 @@ async function uninstallTarget(definition: TargetDefinition, options: UninstallO
     changes.push(await removeConfig(definition, configPath, dryRun));
   }
   return { uninstalled: true, dryRun, targets: [definition.id], changes };
+}
+
+async function upsertSkillPayload(
+  definition: TargetDefinition,
+  skillTargetDir: string,
+  dryRun: boolean,
+): Promise<InstallChange> {
+  const bundledSkillPath = path.join(getCodegraphPackageRoot(), "codegraph-skill", "codegraph", "SKILL.md");
+  const targetSkillPath = path.join(skillTargetDir, "SKILL.md");
+  const bundledSkill = await fsp.readFile(bundledSkillPath, "utf8");
+  const existing = await readOptionalFile(targetSkillPath);
+  if (existing === bundledSkill) return change(definition.id, "unchanged", targetSkillPath, dryRun);
+  if (!dryRun) {
+    await fsp.mkdir(skillTargetDir, { recursive: true });
+    await fsp.writeFile(targetSkillPath, bundledSkill, "utf8");
+  }
+  return change(definition.id, existing === null ? "create" : "update", targetSkillPath, dryRun);
 }
 
 async function upsertSkillPointer(
@@ -288,9 +306,10 @@ async function removeSkillPointer(
   dryRun: boolean,
 ): Promise<InstallChange> {
   const markerPath = path.join(skillTargetDir, "CODEGRAPH_INSTALLED");
-  if (!pathExists(markerPath)) return change(definition.id, "unchanged", markerPath, dryRun);
-  if (!dryRun) await fsp.rm(markerPath, { force: true });
-  return change(definition.id, "delete", markerPath, dryRun);
+  const markerExists = await pathExistsUnlessMissing(markerPath);
+  if (!markerExists) return change(definition.id, "unchanged", markerPath, dryRun);
+  if (!dryRun) await fsp.rm(skillTargetDir, { recursive: true, force: true });
+  return change(definition.id, "delete", skillTargetDir, dryRun);
 }
 
 async function upsertConfig(definition: TargetDefinition, configPath: string, dryRun: boolean): Promise<InstallChange> {
@@ -397,7 +416,7 @@ function parseConfigJson(existing: string | null, configPath: string): JsonRecor
     if (isJsonRecord(parsed)) return parsed;
   } catch (error) {
     throw new Error(
-      `Unable to parse ${normalizePathForDisplay(configPath)} as JSON. Fix the file before running codegraph install.`,
+      `Unable to parse ${normalizePathForDisplay(configPath)} as JSON. Fix the file before running the installer.`,
       {
         cause: error,
       },
@@ -485,6 +504,16 @@ function requireConfigPath(definition: TargetDefinition, settings: InstallerSett
     throw new Error(`${definition.label} does not have an MCP config file target.`);
   }
   return configPath;
+}
+
+async function pathExistsUnlessMissing(filePath: string): Promise<boolean> {
+  try {
+    await fsp.stat(filePath);
+    return true;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 function definitionForTarget(id: InstallTargetId): TargetDefinition {
