@@ -152,7 +152,7 @@ export function isKnownCliCommand(command: string): boolean {
 
 export const INSTALL_HELP_TEXT = `codegraph install - Configure Codegraph for supported agent clients
 
-Usage: codegraph install [target] [--target <codex,claude,cursor,gemini,opencode,agents>] [--yes | --dry-run] [--print-config <target>] [--detect] [--json]
+Usage: codegraph install [target] [--target <codex,claude,cursor,gemini,opencode,agents>] [--yes | --dry-run] [--print-config <target>] [--detect]
 
 Targets:
   codex, claude, cursor, gemini, opencode, agents
@@ -163,10 +163,10 @@ Safety:
 
 export const UNINSTALL_HELP_TEXT = `codegraph uninstall - Remove Codegraph-owned installer configuration
 
-Usage: codegraph uninstall [target] [--target <codex,claude,cursor,gemini,opencode,agents>] [--yes | --dry-run] [--detect] [--json]
+Usage: codegraph uninstall [target] [--target <codex,claude,cursor,gemini,opencode,agents>] [--yes | --dry-run] [--detect]
 
 Safety:
-  Removes only Codegraph-owned marker blocks, marker files, or MCP entries whose command is codegraph.
+  Removes only Codegraph-owned marker blocks, marker files, or exact installer-owned MCP entries.
 `;
 
 export const EXPLORE_HELP_TEXT = `codegraph explore - Answer a broad repo question with bounded repo context

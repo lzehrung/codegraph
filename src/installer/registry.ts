@@ -104,8 +104,7 @@ const TARGET_DEFINITIONS: TargetDefinition[] = [
     id: "opencode",
     label: "OpenCode",
     kind: "json-opencode-mcp",
-    configPath: ({ env, homeDir }) =>
-      path.join(env.XDG_CONFIG_HOME ?? path.join(homeDir, ".config"), "opencode", "opencode.json"),
+    configPath: (settings) => path.join(opencodeConfigHome(settings), "opencode", "opencode.json"),
   },
   {
     id: "agents",
@@ -210,7 +209,7 @@ async function resolveRequestedTargets(options: InstallOptions): Promise<Install
 function assertWriteAllowed(options: InstallOptions): void {
   if (options.dryRun) return;
   if (options.yes) return;
-  throw new Error("Install writes require --yes. Use --dry-run or --print-config to inspect changes first.");
+  throw new Error("Writes require --yes. Use --dry-run to inspect changes first.");
 }
 
 function detectTarget(definition: TargetDefinition, options: InstallOptions): TargetDetection {
@@ -328,21 +327,13 @@ function renderConfigWithCodegraph(definition: TargetDefinition, existing: strin
   const parsed = parseConfigJson(existing, configPath);
   if (definition.kind === "json-opencode-mcp") {
     const mcp = readRecordProperty(parsed, "mcp");
-    const desiredServer = {
-      type: "local",
-      enabled: true,
-      command: ["codegraph", "mcp", "serve", "--root", ".", "--stdio"],
-    };
+    const desiredServer = codegraphJsonServer(definition);
     if (shouldPreserveExistingServer(mcp, desiredServer)) return existing ?? renderJsonConfig(parsed);
     mcp.codegraph = desiredServer;
     parsed.mcp = mcp;
   } else {
     const mcpServers = readRecordProperty(parsed, "mcpServers");
-    const desiredServer = {
-      type: "stdio",
-      command: "codegraph",
-      args: ["mcp", "serve", "--root", ".", "--stdio"],
-    };
+    const desiredServer = codegraphJsonServer(definition);
     if (shouldPreserveExistingServer(mcpServers, desiredServer)) return existing ?? renderJsonConfig(parsed);
     mcpServers.codegraph = desiredServer;
     parsed.mcpServers = mcpServers;
@@ -358,7 +349,7 @@ function removeCodegraphConfig(definition: TargetDefinition, existing: string, c
   const property = definition.kind === "json-opencode-mcp" ? "mcp" : "mcpServers";
   const servers = readRecordProperty(parsed, property);
   const server = servers.codegraph;
-  if (!isCodegraphJsonServer(server)) return existing;
+  if (!isInstallerOwnedJsonServer(definition, server)) return existing;
   delete servers.codegraph;
   if (Object.keys(servers).length) {
     parsed[property] = servers;
@@ -373,12 +364,12 @@ function printTargetConfig(definition: TargetDefinition, options: PrintConfigOpt
   const skillTargetDir = getSkillTargetDirForAgent(definition.id, settings.homeDir, settings.env);
   if (definition.kind === "toml-block") return codexTomlSnippet();
   if (definition.kind === "json-opencode-mcp") {
-    return `${JSON.stringify({ mcp: { codegraph: { type: "local", enabled: true, command: ["codegraph", "mcp", "serve", "--root", ".", "--stdio"] } } }, null, 2)}\n`;
+    return renderJsonConfig({ mcp: { codegraph: codegraphJsonServer(definition) } });
   }
   if (definition.kind === "skill-only") {
     return `codegraph skill install --agent ${definition.id} --target ${normalizePathForDisplay(skillTargetDir)}\n`;
   }
-  return `${JSON.stringify({ mcpServers: { codegraph: { type: "stdio", command: "codegraph", args: ["mcp", "serve", "--root", ".", "--stdio"] } } }, null, 2)}\n`;
+  return renderJsonConfig({ mcpServers: { codegraph: codegraphJsonServer(definition) } });
 }
 
 function codexTomlSnippet(): string {
@@ -422,23 +413,59 @@ function readRecordProperty(record: JsonRecord, property: string): JsonRecord {
   throw new Error(`Existing ${property} config must be a JSON object before codegraph can merge into it.`);
 }
 
-function shouldPreserveExistingServer(servers: JsonRecord, desiredServer: JsonRecord): boolean {
-  const existingServer = servers.codegraph;
-  if (existingServer === undefined) return false;
-  return JSON.stringify(existingServer) !== JSON.stringify(desiredServer);
-}
-
 function renderJsonConfig(record: JsonRecord): string {
   if (!Object.keys(record).length) return "";
   return `${JSON.stringify(record, null, 2)}\n`;
 }
 
-function isCodegraphJsonServer(value: unknown): boolean {
-  if (!isJsonRecord(value)) return false;
-  const command = value.command;
-  if (command === "codegraph") return true;
-  if (Array.isArray(command) && command[0] === "codegraph") return true;
-  return false;
+function opencodeConfigHome(settings: InstallerSettings): string {
+  const configHome = settings.env.XDG_CONFIG_HOME?.trim();
+  return configHome || path.join(settings.homeDir, ".config");
+}
+
+function codegraphJsonServer(definition: TargetDefinition): JsonRecord {
+  if (definition.kind === "json-opencode-mcp") {
+    return {
+      type: "local",
+      enabled: true,
+      command: ["codegraph", "mcp", "serve", "--root", ".", "--stdio"],
+    };
+  }
+  return {
+    type: "stdio",
+    command: "codegraph",
+    args: ["mcp", "serve", "--root", ".", "--stdio"],
+  };
+}
+
+function shouldPreserveExistingServer(servers: JsonRecord, desiredServer: JsonRecord): boolean {
+  const existingServer = servers.codegraph;
+  if (existingServer === undefined) return false;
+  return !jsonValueEquals(existingServer, desiredServer);
+}
+
+function isInstallerOwnedJsonServer(definition: TargetDefinition, value: unknown): boolean {
+  return jsonValueEquals(value, codegraphJsonServer(definition));
+}
+
+function jsonValueEquals(left: unknown, right: unknown): boolean {
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right)) return false;
+    if (left.length !== right.length) return false;
+    return left.every((value, index) => jsonValueEquals(value, right[index]));
+  }
+  if (isJsonRecord(left) || isJsonRecord(right)) {
+    if (!isJsonRecord(left) || !isJsonRecord(right)) return false;
+    const leftKeys = Object.keys(left);
+    const rightKeys = Object.keys(right);
+    if (leftKeys.length !== rightKeys.length) return false;
+    for (const key of rightKeys) {
+      if (!Object.prototype.hasOwnProperty.call(left, key)) return false;
+      if (!jsonValueEquals(left[key], right[key])) return false;
+    }
+    return true;
+  }
+  return left === right;
 }
 
 function isJsonRecord(value: unknown): value is JsonRecord {

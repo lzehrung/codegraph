@@ -274,7 +274,7 @@ For SQL, prefer handles or schema-qualified names when basenames may be ambiguou
 
 - `install` configures Codegraph-owned MCP entries and marker files for supported local agent clients: `codex`, `claude`, `cursor`, `gemini`, `opencode`, and `agents`.
 - Writes require `--yes`; use `--dry-run` to preview exact file changes or `--print-config <target>` to print a copyable MCP snippet without writing.
-- `uninstall` removes only Codegraph-owned marker blocks, marker files, or MCP entries whose command is `codegraph`.
+- `uninstall` removes only Codegraph-owned marker blocks, marker files, or exact installer-owned MCP entries.
 - `skill install` remains the lower-level primitive for copying the bundled skill directly.
 
 #### MCP server

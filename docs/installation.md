@@ -96,7 +96,7 @@ codegraph install --target codex,claude --yes
 codegraph install --print-config codex
 ```
 
-Supported targets are `codex`, `claude`, `cursor`, `gemini`, `opencode`, and `agents`. Writes require `--yes`; `--dry-run` reports the files that would change, and `uninstall` removes only Codegraph-owned marker blocks, marker files, or MCP entries whose command is `codegraph`.
+Supported targets are `codex`, `claude`, `cursor`, `gemini`, `opencode`, and `agents`. Writes require `--yes`; `--dry-run` reports the files that would change, and `uninstall` removes only Codegraph-owned marker blocks, marker files, or exact installer-owned MCP entries.
 The lower-level `codegraph skill install --agent <name>` command remains available when you only want to copy the bundled skill.
 
 ## Next steps

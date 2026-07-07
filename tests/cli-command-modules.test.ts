@@ -303,6 +303,17 @@ describe("CLI command modules", () => {
     expect(PACKET_HELP_TEXT).not.toContain("CLI orient returns file handles");
   });
 
+  test("install and uninstall help omit --json because output is always structured", async () => {
+    for (const command of ["install", "uninstall"]) {
+      const result = await captureCli([command, "--help"]);
+
+      expect(result.exitCode, command).toBeUndefined();
+      expect(result.stderr, command).toBe("");
+      expect(result.stdout, command).toContain(`Usage: codegraph ${command}`);
+      expect(result.stdout, command).not.toContain("--json");
+    }
+  });
+
   test("search command prints usage before running without a query", async () => {
     const stderr: string[] = [];
 
