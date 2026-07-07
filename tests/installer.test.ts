@@ -135,6 +135,62 @@ describe("agent installer workflow", () => {
     expect(result.stdout).toContain('["mcp", "serve", "--root", ".", "--stdio"]');
   });
 
+  it("rejects --print-config combined with target selection or action flags", async () => {
+    const cases = [
+      {
+        name: "--target",
+        args: ["install", "--print-config", "codex", "--target", "cursor"],
+        conflict: "--target",
+      },
+      {
+        name: "positional target after the print-config value",
+        args: ["install", "--print-config", "codex", "cursor"],
+        conflict: "positional targets",
+      },
+      {
+        name: "--detect",
+        args: ["install", "--print-config", "codex", "--detect"],
+        conflict: "--detect",
+      },
+      {
+        name: "--yes",
+        args: ["install", "--print-config", "codex", "--yes"],
+        conflict: "--yes",
+      },
+      {
+        name: "--dry-run",
+        args: ["install", "--print-config", "codex", "--dry-run"],
+        conflict: "--dry-run",
+      },
+    ];
+
+    for (const testCase of cases) {
+      const result = await captureCli(testCase.args);
+
+      expect(result.exitCode, testCase.name).toBe(2);
+      expect(result.stdout, testCase.name).toBe("");
+      expect(result.stderr, testCase.name).toContain("--print-config cannot be combined");
+      expect(result.stderr, testCase.name).toContain(testCase.conflict);
+      expect(result.stderr, testCase.name).not.toContain("Error:");
+    }
+  });
+
+  it("rejects installer commands that combine --target with a positional target", async () => {
+    const cases = [
+      { name: "install", args: ["install", "--target", "codex", "cursor", "--yes"] },
+      { name: "uninstall", args: ["uninstall", "--target", "codex", "cursor", "--yes"] },
+    ];
+
+    for (const testCase of cases) {
+      const result = await captureCli(testCase.args);
+
+      expect(result.exitCode, testCase.name).toBe(2);
+      expect(result.stdout, testCase.name).toBe("");
+      expect(result.stderr, testCase.name).toContain("Use either --target or a positional target");
+      expect(result.stderr, testCase.name).not.toContain("Error:");
+    }
+  });
+
   it("previews install changes without writing files", async () => {
     const homeDir = await mkTmpDir("cg-install-dry-run-");
     const configPath = path.join(homeDir, ".codex", "config.toml");
