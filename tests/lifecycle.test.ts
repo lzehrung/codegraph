@@ -177,6 +177,22 @@ describe("project lifecycle commands", () => {
 
     expect(after.configChanged).toBeTruthy();
     expect(after.suggestedNextCommand).toBe("codegraph sync");
+
+    // Sync so the manifest baselines against the file's current ("dist/**") content.
+    await initCodegraphLifecycle(root, { force: true });
+
+    const baselined = await getCodegraphLifecycleStatus(root);
+    expect(baselined.configChanged).toBeFalsy();
+
+    // Rewrite with different valid content (not a mere appearance) and confirm drift is detected again.
+    // An implementation that only checks the file's presence/path (and ignores content) would still see
+    // this as "unchanged since sync" and wrongly report configChanged: false here.
+    await writeFile(root, CODEGRAPH_CONFIG_FILE, `${JSON.stringify({ discovery: { ignoreGlobs: ["build/**"] } })}\n`);
+
+    const driftedAgain = await getCodegraphLifecycleStatus(root);
+
+    expect(driftedAgain.configChanged).toBeTruthy();
+    expect(driftedAgain.suggestedNextCommand).toBe("codegraph sync");
   });
 
   it("status detects lifecycle-relevant build option drift", async () => {

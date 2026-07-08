@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { createAgentSession, listAgentSessionFiles } from "../agent/session.js";
-import { CODEGRAPH_CONFIG_FILE } from "../config.js";
 import { computeConfigHash } from "../indexer/build-cache/manifest.js";
 import {
   normalizeGraphOptions,
@@ -264,18 +263,7 @@ async function writeLifecycleManifest(root: string, manifest: CodegraphLifecycle
 
 async function hashConfig(root: string): Promise<string> {
   const result = await computeConfigHash(root);
-  const codegraphConfig = await readOptionalConfigContent(path.join(root, CODEGRAPH_CONFIG_FILE));
-  if (codegraphConfig === null) return result.hash;
-  return sha256(`${result.hash}\0${codegraphConfig}`);
-}
-
-async function readOptionalConfigContent(filePath: string): Promise<string | null> {
-  try {
-    return await fsp.readFile(filePath, "utf8");
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
-    throw error;
-  }
+  return result.hash;
 }
 
 function discoveredFileRelativePaths(files: readonly string[], root: string): string[] {
