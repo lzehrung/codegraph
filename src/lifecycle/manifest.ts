@@ -362,9 +362,17 @@ function summarizeLifecycleBuildOptions(buildOptions: BuildOptions | undefined):
 
 export function stableStringify(value: unknown): string {
   if (Array.isArray(value)) {
-    return `[${value.map((item) => (item === undefined ? "null" : stableStringify(item))).join(",")}]`;
+    const items: string[] = [];
+    for (let index = 0; index < value.length; index += 1) {
+      const item: unknown = value[index];
+      items.push(item === undefined ? "null" : stableStringify(item));
+    }
+    return `[${items.join(",")}]`;
   }
-  if (typeof value !== "object" || value === null) return JSON.stringify(value);
+  if (typeof value !== "object" || value === null) {
+    const serialized = JSON.stringify(value);
+    return serialized === undefined ? "null" : serialized;
+  }
   const entries = Object.entries(value)
     .filter(([, nested]) => nested !== undefined)
     .sort(([left], [right]) => left.localeCompare(right));

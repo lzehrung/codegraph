@@ -688,6 +688,30 @@ describe("project lifecycle commands", () => {
     expect(stableStringify({ preset: undefined })).not.toContain("undefined");
   });
 
+  it("stableStringify is total: top-level undefined, sparse arrays, and non-JSON leaves never yield the JS undefined value", () => {
+    // 1. Top-level undefined must serialize to the real string "null", not the JS value undefined.
+    expect(typeof stableStringify(undefined)).toBe("string");
+    expect(stableStringify(undefined)).toBe("null");
+
+    // 2. Sparse arrays (holes) must be read by index like JSON.stringify does, not silently
+    // skipped by map/join, so they no longer collide with a true empty array.
+    expect(stableStringify(new Array(1))).toBe("[null]"); // JSON.stringify(new Array(1)) === '[null]'
+    expect(stableStringify(new Array(1))).not.toBe(stableStringify([]));
+    expect(stableStringify(new Array(1))).toBe(stableStringify([undefined]));
+
+    // 3. Leaves where JSON.stringify itself returns the JS value undefined (functions, symbols)
+    // must still produce a real "null" string, never crash or leak undefined.
+    expect(JSON.stringify(() => {})).toBeUndefined();
+    expect(JSON.stringify(Symbol("x"))).toBeUndefined();
+    expect(typeof stableStringify(() => {})).toBe("string");
+    expect(stableStringify(() => {})).toBe("null");
+    expect(stableStringify(Symbol("x"))).toBe("null");
+
+    // 4. The same totality fix must apply recursively to nested object values, not just at the
+    // top level or inside arrays.
+    expect(stableStringify({ a: () => {} })).toContain('"a":null');
+  });
+
   it("init cleans up its hidden temp manifest file when fs.rename fails", async () => {
     const root = await mkTmpDir("cg-life-write-failure-");
     await writeFile(root, "src/main.ts", "export const main = 1;\n");
