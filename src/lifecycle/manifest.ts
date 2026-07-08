@@ -1,9 +1,10 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { createAgentSession, listAgentSessionFiles } from "../agent/session.js";
 import { computeConfigHash } from "../indexer/build-cache/manifest.js";
 import { logWithLevel } from "../logging.js";
+import { mapLimit } from "../util/concurrency.js";
 import {
   normalizeGraphOptions,
   summarizeBuildOptions,
@@ -137,12 +138,6 @@ export async function getCodegraphLifecycleStatus(
 ): Promise<CodegraphLifecycleStatus> {
   const manifestPath = codegraphLifecycleManifestPath(root);
   const manifest = await readLifecycleManifest(root);
-  const configHash = await hashConfig(root, options.buildOptions?.logLevel);
-  const buildOptionsHash = hashBuildOptions(options.buildOptions);
-  const files = await listAgentSessionFiles({
-    root,
-    ...(options.buildOptions ? { buildOptions: options.buildOptions } : {}),
-  });
   if (!manifest) {
     return {
       schemaVersion: MANIFEST_SCHEMA_VERSION,
@@ -155,6 +150,12 @@ export async function getCodegraphLifecycleStatus(
       suggestedNextCommand: "codegraph init",
     };
   }
+  const configHash = await hashConfig(root, options.buildOptions?.logLevel);
+  const buildOptionsHash = hashBuildOptions(options.buildOptions);
+  const files = await listAgentSessionFiles({
+    root,
+    ...(options.buildOptions ? { buildOptions: options.buildOptions } : {}),
+  });
   const fileSignatureHash = await hashDiscoveredFiles(files, root);
   const configChanged = manifest.configHash !== configHash;
   const buildOptionsChanged = manifest.buildOptionsHash !== buildOptionsHash;
@@ -254,12 +255,25 @@ async function readLifecycleManifest(
   }
 }
 
+function lifecycleManifestTempFilePath(manifestPath: string): string {
+  const dir = path.dirname(manifestPath);
+  const base = path.basename(manifestPath);
+  return path.join(dir, `.${base}.${process.pid}.${randomUUID()}.tmp`);
+}
+
 async function writeLifecycleManifest(root: string, manifest: CodegraphLifecycleManifest): Promise<void> {
   const manifestPath = codegraphLifecycleManifestPath(root);
   await fsp.mkdir(path.dirname(manifestPath), { recursive: true });
-  const tempPath = `${manifestPath}.${process.pid}.${Date.now()}.tmp`;
-  await fsp.writeFile(tempPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-  await fsp.rename(tempPath, manifestPath);
+  const tempPath = lifecycleManifestTempFilePath(manifestPath);
+  try {
+    await fsp.writeFile(tempPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    await fsp.rename(tempPath, manifestPath);
+  } catch (error) {
+    await fsp.rm(tempPath, { force: true }).catch(() => {
+      // Cleanup is best-effort; surfacing the original error matters more.
+    });
+    throw error;
+  }
 }
 
 async function hashConfig(root: string, logLevel: BuildOptions["logLevel"]): Promise<string> {
@@ -292,13 +306,36 @@ function diffLifecycleFileCounts(
   return { added, removed, totalDelta };
 }
 
+const FILE_SIGNATURE_STAT_CONCURRENCY = 64;
+
+function isMissingStatRace(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if (!("code" in error)) return false;
+  return error.code === "ENOENT" || error.code === "ENOTDIR";
+}
+
 async function hashDiscoveredFiles(files: readonly string[], root: string): Promise<string> {
+  const sorted = [...files].sort((left, right) => left.localeCompare(right));
+  const signatures = new Map<string, { size: number; mtimeMs: number }>();
+  await mapLimit(sorted, FILE_SIGNATURE_STAT_CONCURRENCY, async (file) => {
+    try {
+      const stat = await fsp.stat(file);
+      signatures.set(file, { size: stat.size, mtimeMs: stat.mtimeMs });
+    } catch (error) {
+      if (isMissingStatRace(error)) return;
+      throw error;
+    }
+  });
   const hash = createHash("sha256");
-  for (const file of [...files].sort((left, right) => left.localeCompare(right))) {
+  for (const file of sorted) {
+    const signature = signatures.get(file);
+    if (!signature) continue;
     const relative = path.relative(root, file).replace(/\\/g, "/");
     hash.update(relative);
     hash.update("\0");
-    hash.update(await fsp.readFile(file));
+    hash.update(String(signature.size));
+    hash.update("\0");
+    hash.update(String(signature.mtimeMs));
     hash.update("\0");
   }
   return hash.digest("hex");
@@ -321,10 +358,14 @@ function summarizeLifecycleBuildOptions(buildOptions: BuildOptions | undefined):
   };
 }
 
-function stableStringify(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+export function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => (item === undefined ? "null" : stableStringify(item))).join(",")}]`;
+  }
   if (typeof value !== "object" || value === null) return JSON.stringify(value);
-  const entries = Object.entries(value).sort(([left], [right]) => left.localeCompare(right));
+  const entries = Object.entries(value)
+    .filter(([, nested]) => nested !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right));
   return `{${entries.map(([key, nested]) => `${JSON.stringify(key)}:${stableStringify(nested)}`).join(",")}}`;
 }
 

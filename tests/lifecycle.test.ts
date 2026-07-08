@@ -1,10 +1,11 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   codegraphLifecycleManifestPath,
   getCodegraphLifecycleStatus,
   initCodegraphLifecycle,
+  stableStringify,
   syncCodegraphLifecycle,
   uninitCodegraphLifecycle,
   type CodegraphLifecycleManifest,
@@ -12,6 +13,8 @@ import {
   type CodegraphLifecycleSyncResult,
   type CodegraphLifecycleUninitResult,
 } from "../src/lifecycle/manifest.js";
+import * as indexerManifest from "../src/indexer/build-cache/manifest.js";
+import * as agentSession from "../src/agent/session.js";
 import type { BuildOptions } from "../src/indexer/types.js";
 import { captureCli } from "./helpers/cli.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
@@ -41,6 +44,10 @@ async function expectDiskIndexCacheHasArtifacts(root: string): Promise<void> {
 }
 
 describe("project lifecycle commands", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("init creates a manifest and is idempotent when current", async () => {
     const root = await mkTmpDir("cg-life-init-");
     await writeFile(root, "src/main.ts", "export const main = 1;\n");
@@ -633,5 +640,72 @@ describe("project lifecycle commands", () => {
       expect(result.stderr).toContain(command);
       expect(result.stderr).toContain(invalidRoot);
     }
+  });
+
+  it("status short-circuits without hashing config or discovering files when uninitialized", async () => {
+    const root = await mkTmpDir("cg-life-status-short-circuit-");
+    await writeFile(root, "src/main.ts", "export const main = 1;\n");
+
+    const configHashSpy = vi.spyOn(indexerManifest, "computeConfigHash");
+    const listFilesSpy = vi.spyOn(agentSession, "listAgentSessionFiles");
+
+    const status = await getCodegraphLifecycleStatus(root);
+
+    expect(status.initialized).toBeFalsy();
+    expect(configHashSpy).not.toHaveBeenCalled();
+    expect(listFilesSpy).not.toHaveBeenCalled();
+  });
+
+  it("status treats an mtime-only rewrite as a file change even with byte-identical content", async () => {
+    const root = await mkTmpDir("cg-life-status-mtime-");
+    const relativePath = "src/main.ts";
+    const content = "export const main = 1;\n";
+    await writeFile(root, relativePath, content);
+    await initCodegraphLifecycle(root);
+
+    const initialStatus = await getCodegraphLifecycleStatus(root);
+    expect(initialStatus.filesChanged).toBeFalsy();
+
+    const filePath = path.join(root, relativePath);
+    const originalStat = await fsp.stat(filePath);
+    const futureDate = new Date(originalStat.mtime.getTime() + 60_000);
+    await fsp.writeFile(filePath, content, "utf8");
+    await fsp.utimes(filePath, futureDate, futureDate);
+
+    const status = await getCodegraphLifecycleStatus(root);
+
+    expect(status.filesChanged).toBeTruthy();
+  });
+
+  it("stableStringify omits undefined object values and disambiguates undefined array elements from empty arrays", () => {
+    expect(stableStringify({ a: undefined, b: 1 })).toBe(stableStringify({ b: 1 }));
+    expect(stableStringify({ b: 1 })).toBe('{"b":1}');
+
+    expect(stableStringify([])).not.toBe(stableStringify([undefined]));
+    expect(stableStringify([undefined])).toBe("[null]");
+
+    expect(stableStringify({ preset: undefined })).not.toContain("undefined");
+  });
+
+  it("init cleans up its hidden temp manifest file when fs.rename fails", async () => {
+    const root = await mkTmpDir("cg-life-write-failure-");
+    await writeFile(root, "src/main.ts", "export const main = 1;\n");
+
+    const manifestPath = codegraphLifecycleManifestPath(root);
+    const renameError = new Error("injected rename failure");
+    const realRename = fsp.rename.bind(fsp);
+    const renameSpy = vi.spyOn(fsp, "rename").mockImplementation(async (oldPath, newPath) => {
+      if (newPath === manifestPath) {
+        throw renameError;
+      }
+      return realRename(oldPath, newPath);
+    });
+
+    await expect(initCodegraphLifecycle(root)).rejects.toThrow("injected rename failure");
+
+    renameSpy.mockRestore();
+
+    const entries = await fsp.readdir(path.join(root, ".codegraph"));
+    expect(entries.some((name) => name.endsWith(".tmp"))).toBe(false);
   });
 });

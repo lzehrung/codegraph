@@ -80,7 +80,6 @@ Recommended review commands:
 Unfamiliar repo:
   codegraph explore "how does auth reach db?" --root . --pretty
   codegraph orient --root . --budget small --pretty
-  codegraph explore "how does auth reach db?" --root . --pretty
 
 Examples:
   codegraph review --base HEAD --head WORKTREE --summary
