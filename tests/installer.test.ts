@@ -114,6 +114,19 @@ describe("agent installer workflow", () => {
     expect(gemini?.detected).toBeFalsy();
   });
 
+  it("detects the base Agents directory without a contradictory reason", async () => {
+    const homeDir = await mkTmpDir("cg-install-detect-agents-base-");
+    await fsp.mkdir(path.join(homeDir, ".agents"), { recursive: true });
+
+    const detections = await detectInstallTargets({ homeDir });
+    const agentsSkillDir = normalizeExpectedPath(path.join(homeDir, ".agents", "skills", "codegraph"));
+    const agents = detections.find((target) => target.skillTargetDir === agentsSkillDir);
+
+    expect(agents?.detected).toBe(true);
+    expect(agents?.reason).toContain("base directory exists");
+    expect(agents?.reason).not.toMatch(/not detected/i);
+  });
+
   it("auto-detect installs detected Cursor target without shifting past missing Claude", async () => {
     const homeDir = await mkTmpDir("cg-install-detect-cursor-");
     await fsp.mkdir(path.join(homeDir, ".codex"), { recursive: true });
@@ -137,6 +150,16 @@ describe("agent installer workflow", () => {
     expect(result.stdout).toContain("[mcp_servers.codegraph]");
     expect(result.stdout).toContain('command = "codegraph"');
     expect(result.stdout).toContain('["mcp", "serve", "--root", ".", "--stdio"]');
+  });
+
+  it("prints a non-conflicting Agents skill install command from the CLI", async () => {
+    const result = await captureCli(["install", "--print-config", "agents"]);
+
+    expect(result.exitCode).toBeUndefined();
+    expect(result.stderr).toBe("");
+    expect(result.stdout.trim()).toMatch(/^codegraph skill install\b/);
+    expect(result.stdout).toContain("--agent agents");
+    expect(result.stdout).not.toContain("--target");
   });
 
   it("rejects --print-config combined with target selection or action flags", async () => {
@@ -192,6 +215,22 @@ describe("agent installer workflow", () => {
       expect(result.stdout, testCase.name).toBe("");
       expect(result.stderr, testCase.name).toContain("Use either --target or a positional target");
       expect(result.stderr, testCase.name).not.toContain("Error:");
+    }
+  });
+
+  it("includes --detect in install and uninstall positional usage errors", async () => {
+    const cases = [
+      { name: "install", args: ["install", "codex", "cursor"], usage: "Usage: codegraph install" },
+      { name: "uninstall", args: ["uninstall", "codex", "cursor"], usage: "Usage: codegraph uninstall" },
+    ];
+
+    for (const testCase of cases) {
+      const result = await captureCli(testCase.args);
+
+      expect(result.exitCode, testCase.name).toBe(2);
+      expect(result.stdout, testCase.name).toBe("");
+      expect(result.stderr, testCase.name).toContain(testCase.usage);
+      expect(result.stderr, testCase.name).toContain("--detect");
     }
   });
 

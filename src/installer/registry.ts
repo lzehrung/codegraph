@@ -232,9 +232,10 @@ function detectTarget(definition: TargetDefinition, options: InstallOptions): Ta
       skillTargetDir: normalizePathForDisplay(skillTargetDir),
     };
   }
+  const baseSkillDirExists = definition.kind === "skill-only" && pathExists(path.dirname(path.dirname(skillTargetDir)));
   return {
-    detected: definition.kind === "skill-only" && pathExists(path.dirname(path.dirname(skillTargetDir))),
-    reason: `${definition.label} was not detected`,
+    detected: baseSkillDirExists,
+    reason: baseSkillDirExists ? `${definition.label} base directory exists` : `${definition.label} was not detected`,
     ...(configPath !== undefined ? { configPath: normalizePathForDisplay(configPath) } : {}),
     skillTargetDir: normalizePathForDisplay(skillTargetDir),
   };
@@ -404,7 +405,7 @@ function printTargetConfig(definition: TargetDefinition, options: PrintConfigOpt
     return renderJsonConfig({ mcp: { codegraph: codegraphJsonServer(definition) } });
   }
   if (definition.kind === "skill-only") {
-    return `codegraph skill install --agent ${definition.id} --target ${normalizePathForDisplay(skillTargetDir)}\n`;
+    return `codegraph skill install --agent ${definition.id}\n`;
   }
   return renderJsonConfig({ mcpServers: { codegraph: codegraphJsonServer(definition) } });
 }

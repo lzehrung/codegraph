@@ -366,7 +366,8 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     commandSchema(["--detect", "--dry-run", "--yes"], ["--print-config", "--target"], {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph install [target] [--target <ids>] [--yes | --dry-run] [--print-config <target>]",
+      usage:
+        "Usage: codegraph install [target] [--target <ids>] [--detect] [--yes | --dry-run] [--print-config <target>]",
     }),
   ],
   [
@@ -374,7 +375,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     commandSchema(["--detect", "--dry-run", "--yes"], ["--target"], {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph uninstall [target] [--target <ids>] [--yes | --dry-run]",
+      usage: "Usage: codegraph uninstall [target] [--target <ids>] [--detect] [--yes | --dry-run]",
     }),
   ],
   [
