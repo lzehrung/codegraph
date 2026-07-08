@@ -1,6 +1,6 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   codegraphLifecycleManifestPath,
   getCodegraphLifecycleStatus,
@@ -193,6 +193,46 @@ describe("project lifecycle commands", () => {
 
     expect(driftedAgain.configChanged).toBeTruthy();
     expect(driftedAgain.suggestedNextCommand).toBe("codegraph sync");
+  });
+
+  it("init tolerates an unreadable config file: warns via hashConfig but still returns a hash-backed manifest", async () => {
+    const root = await mkTmpDir("cg-life-config-unreadable-");
+    await writeFile(root, "src/main.ts", "export const main = 1;\n");
+    await writeFile(root, "package.json", `${JSON.stringify({ name: "fixture" })}\n`);
+    await writeFile(root, ".gitignore", "node_modules/\n");
+    const gitignorePath = path.join(root, ".gitignore");
+    // Revoke read permission so computeConfigHash's per-file fsp.readFile throws (EACCES) for this
+    // one config-hash input while package.json still hashes successfully. .gitignore is deliberately
+    // chosen: it's one of computeConfigHash's matched config files (`**/.gitignore`), but unlike
+    // package.json/package-lock.json/codegraph.config.json it is never part of the discovered project
+    // file set (DEFAULT_PROJECT_PATTERNS) or read unconditionally elsewhere (loadGitignoreRules
+    // already swallows its own read failures) - so this isolates hashConfig's
+    // `if (result.error) logWithLevel(logLevel, "warn", ...)` branch without mocking fs or tripping
+    // an unrelated unguarded read.
+    await fsp.chmod(gitignorePath, 0o000);
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const result = await initCodegraphLifecycle(root);
+
+      // computeConfigHash is also consulted by the indexer's own disk-cache build/manifest layers
+      // (each logging their own generic "Warning: ..." message), so assert on the lifecycle-specific
+      // wording rather than an exact call count.
+      expect(warnSpy).toHaveBeenCalled();
+      const lifecycleWarnCall = warnSpy.mock.calls.find(
+        (call) => typeof call[0] === "string" && call[0].includes("Codegraph lifecycle config drift check"),
+      );
+      expect(lifecycleWarnCall).toBeDefined();
+      expect(lifecycleWarnCall?.[0]).toEqual(expect.stringContaining(".gitignore"));
+
+      // The command completes successfully (no throw) and still produces a hash-backed manifest,
+      // computed from whichever config files it *could* read (here, package.json).
+      expect(result.manifest.configHash).toMatch(/^[0-9a-f]{40}$/);
+      expect(await readManifest(root)).toEqual(result.manifest);
+    } finally {
+      warnSpy.mockRestore();
+      await fsp.chmod(gitignorePath, 0o644);
+    }
   });
 
   it("status detects lifecycle-relevant build option drift", async () => {
