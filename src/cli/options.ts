@@ -115,6 +115,10 @@ const SHARED_BUILD_OPTIONS = [
   "--ignore-glob",
   "--resolution-hint",
 ];
+// Lifecycle commands (init/status/sync) always warm/read the disk cache and never honor an
+// explicit --cache override, so --cache is intentionally excluded here to keep the CLI
+// contract truthful.
+const LIFECYCLE_BUILD_OPTIONS = SHARED_BUILD_OPTIONS.filter((option) => option !== "--cache");
 const JSON_OUTPUT_FLAGS = ["--json", "--pretty"];
 const REPORT_FLAGS = ["--report"];
 const REPORT_OPTIONS = ["--report-file"];
@@ -363,7 +367,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ["index", graphCommandSchema({ kind: "any" })],
   [
     "init",
-    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--force"], SHARED_BUILD_OPTIONS, {
+    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--force"], LIFECYCLE_BUILD_OPTIONS, {
       kind: "max",
       max: 1,
       usage: "Usage: codegraph init [path] [--force] [--json] OR codegraph init --root <path> [--force] [--json]",
@@ -491,7 +495,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ],
   [
     "status",
-    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], SHARED_BUILD_OPTIONS, {
+    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], LIFECYCLE_BUILD_OPTIONS, {
       kind: "max",
       max: 1,
       usage: "Usage: codegraph status [path] [--json] OR codegraph status --root <path> [--json]",
@@ -499,7 +503,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ],
   [
     "sync",
-    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--init"], SHARED_BUILD_OPTIONS, {
+    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--init"], LIFECYCLE_BUILD_OPTIONS, {
       kind: "max",
       max: 1,
       usage: "Usage: codegraph sync [path] [--init] [--json] OR codegraph sync --root <path> [--init] [--json]",

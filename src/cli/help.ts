@@ -207,7 +207,7 @@ Output:
   JSON is the default. Use --pretty for concise model-readable sections.
 
 Index options:
-  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+  Supports shared --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options. init/sync always warm the disk cache and do not accept --cache.
 `;
 
 export const SEARCH_HELP_TEXT = `codegraph search - Ranked agent search across project context

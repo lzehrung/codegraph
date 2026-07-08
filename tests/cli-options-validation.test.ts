@@ -67,4 +67,26 @@ describe("CLI command option validation", () => {
       expect(() => validateCliArgs(command, parsed)).toThrow(`Unknown option for ${command}: --json`);
     }
   });
+
+  it("rejects --cache for lifecycle commands (init/status/sync) since buildLifecycleManifest always forces disk cache", () => {
+    for (const command of ["init", "status", "sync"]) {
+      const parsed = parseCliArgs(command, ["--cache", "off"]);
+
+      expect(() => validateCliArgs(command, parsed)).toThrow(`Unknown option for ${command}: --cache`);
+    }
+  });
+
+  it("still rejects --cache for uninit, which never accepted it", () => {
+    const parsed = parseCliArgs("uninit", ["--cache", "off"]);
+
+    expect(() => validateCliArgs("uninit", parsed)).toThrow("Unknown option for uninit: --cache");
+  });
+
+  it("still accepts --cache for commands that legitimately support an explicit cache override", () => {
+    for (const command of ["orient", "search"]) {
+      const parsed = parseCliArgs(command, ["--cache", "off"]);
+
+      expect(() => validateCliArgs(command, parsed)).not.toThrow();
+    }
+  });
 });

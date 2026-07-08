@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   codegraphLifecycleManifestPath,
+  CodegraphLifecycleUserError,
   getCodegraphLifecycleStatus,
   initCodegraphLifecycle,
   stableStringify,
@@ -707,5 +708,39 @@ describe("project lifecycle commands", () => {
 
     const entries = await fsp.readdir(path.join(root, ".codegraph"));
     expect(entries.some((name) => name.endsWith(".tmp"))).toBe(false);
+  });
+
+  it("surfaces a non-ENOENT manifest read failure as CodegraphLifecycleUserError, not a raw Error", async () => {
+    const root = await mkTmpDir("cg-life-read-failure-");
+    await writeFile(root, "src/main.ts", "export const main = 1;\n");
+    await initCodegraphLifecycle(root);
+
+    const manifestPath = codegraphLifecycleManifestPath(root);
+    const originalReadFile = fsp.readFile.bind(fsp);
+    const eaccesError = Object.assign(new Error(`EACCES: permission denied, open '${manifestPath}'`), {
+      code: "EACCES",
+    });
+    const readFileSpy = vi.spyOn(fsp, "readFile").mockImplementation(async (filePath, options) => {
+      if (filePath === manifestPath) {
+        throw eaccesError;
+      }
+      return await originalReadFile(filePath, options as never);
+    });
+
+    try {
+      // A generic Error subclass would slip past cli.ts's lifecycle dispatch and print a raw
+      // stack trace instead of a clean "message to stderr, exit code 1" error render, so this
+      // must be the dedicated CodegraphLifecycleUserError, not merely `instanceof Error`.
+      await expect(getCodegraphLifecycleStatus(root)).rejects.toBeInstanceOf(CodegraphLifecycleUserError);
+      await expect(getCodegraphLifecycleStatus(root)).rejects.toThrow(/Unable to read Codegraph lifecycle manifest/);
+    } finally {
+      readFileSpy.mockRestore();
+    }
+
+    // ENOENT (no manifest at all) must remain unaffected: readLifecycleManifest still resolves
+    // to null rather than throwing, once the mocked permission failure is no longer in play.
+    await fsp.rm(manifestPath, { force: true });
+    const statusAfterRemoval = await getCodegraphLifecycleStatus(root);
+    expect(statusAfterRemoval.initialized).toBe(false);
   });
 });

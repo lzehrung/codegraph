@@ -241,7 +241,9 @@ async function readLifecycleManifest(
     raw = await fsp.readFile(manifestPath, "utf8");
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
-    throw new Error(`Unable to read Codegraph lifecycle manifest at ${manifestPath}: ${stringifyError(error)}`);
+    throw new CodegraphLifecycleUserError(
+      `Unable to read Codegraph lifecycle manifest at ${manifestPath}: ${stringifyError(error)}`,
+    );
   }
   try {
     const parsed: unknown = JSON.parse(raw);
