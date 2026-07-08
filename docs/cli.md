@@ -157,13 +157,14 @@ codegraph mcp serve --root . --stdio --allow-build
 codegraph mcp serve --root . --port 7331
 codegraph mcp serve --root . --stdio --warmup
 codegraph mcp serve --root . --port 7331 --warmup-symbols
+codegraph mcp --help
 
 # Install or preview agent client integration
 codegraph install --target codex,claude --dry-run
 codegraph install --target codex,claude --yes
 codegraph install --print-config codex
 codegraph uninstall --target codex --yes
-codegraph mcp --help
+codegraph install --help
 
 # Chunk a file for LLM processing
 codegraph chunk src/utils.js

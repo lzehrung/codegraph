@@ -397,9 +397,7 @@ function removeCodegraphConfig(definition: TargetDefinition, existing: string, c
   return renderJsonConfig(parsed);
 }
 
-function printTargetConfig(definition: TargetDefinition, options: PrintConfigOptions): string {
-  const settings = installerSettings(options);
-  const skillTargetDir = getSkillTargetDirForAgent(definition.id, settings.homeDir, settings.env);
+function printTargetConfig(definition: TargetDefinition, _options: PrintConfigOptions): string {
   if (definition.kind === "toml-block") return codexTomlSnippet();
   if (definition.kind === "json-opencode-mcp") {
     return renderJsonConfig({ mcp: { codegraph: codegraphJsonServer(definition) } });
