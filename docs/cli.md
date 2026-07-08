@@ -171,13 +171,14 @@ codegraph mcp serve --root . --stdio --allow-build
 codegraph mcp serve --root . --port 7331
 codegraph mcp serve --root . --stdio --warmup
 codegraph mcp serve --root . --port 7331 --warmup-symbols
+codegraph mcp --help
 
 # Install or preview agent client integration
 codegraph install --target codex,claude --dry-run
 codegraph install --target codex,claude --yes
 codegraph install --print-config codex
 codegraph uninstall --target codex --yes
-codegraph mcp --help
+codegraph install --help
 
 # Chunk a file for LLM processing
 codegraph chunk src/utils.js
@@ -272,7 +273,7 @@ Short JSON shape:
 
 `search` is deterministic and vectorless. Hybrid search is code-first by default: source symbols and implementation files outrank docs unless `--mode text` is explicit or docs are the strongest remaining evidence. Search JSON now includes top-level `analysis` metadata plus per-result `provenance` so mixed or reduced runs stay visible. `explain` resolves file paths, symbol names, SQL object names, and search handles into bounded packets with symbols, graph context, references, snippets, duplicate context, SQL facts, review tasks, candidate tests, analysis metadata, limits, omissions, and follow-ups. Use `--max-duplicates` to tune duplicate context in `explain` and `packet get`; duplicate context also uses an internal pair budget and reports skipped duplicate work through omission counts.
 
-`explore` is a facade over existing primitives, not a second search engine. It returns `schemaVersion: 1`, the original query, `analysis`, summary bullets, anchors, packets, dependency paths, blast radius, candidate tests, follow-ups, flat limits, and omission counts.
+`explore` is a facade over existing primitives, not a second search engine. It returns `schemaVersion: 1`, the original query, `analysis`, summary bullets, anchors, packets, dependency paths, blast radius with per-entry omitted lower bounds, candidate tests, follow-ups, flat limits, and omission counts; path and blast-radius omissions may be lower bounds after bounded scans reach their caps.
 
 For SQL, prefer handles or schema-qualified names when basenames may be ambiguous. Reference and snippet omission counts are lower bounds after bounded navigation reaches its cap.
 
@@ -286,10 +287,10 @@ For SQL, prefer handles or schema-qualified names when basenames may be ambiguou
 
 #### Agent client installer
 
-- `install` configures Codegraph-owned MCP entries and marker files for supported local agent clients: `codex`, `claude`, `cursor`, `gemini`, `opencode`, and `agents`.
-- Writes require `--yes`; use `--dry-run` to preview exact file changes or `--print-config <target>` to print a copyable MCP snippet without writing.
-- `uninstall` removes only Codegraph-owned marker blocks, marker files, or MCP entries whose command is `codegraph`.
-- `skill install` remains the lower-level primitive for copying the bundled skill directly.
+- `install` configures Codegraph-owned MCP entries, bundled skill payloads, and marker files for supported local agent clients: `codex`, `claude`, `cursor`, `gemini`, `opencode`, and `agents`.
+- Writes require `--yes`; use `--detect` to list discovered targets, `--dry-run` to preview changed file paths and actions, or `--print-config <target>` to print a copyable MCP snippet without writing.
+- `uninstall` removes only Codegraph-owned marker blocks, marker files, exact bundled skill payloads, or exact installer-owned MCP entries.
+- `skill install` remains the lower-level primitive when you only want to copy the bundled skill directly without MCP config.
 
 #### MCP server
 
@@ -300,7 +301,7 @@ For SQL, prefer handles or schema-qualified names when basenames may be ambiguou
 - Use `refresh_index` to force a rebuild, reset SQLite artifact state, or recover after stale change bursts.
 - HTTP serves `/mcp`, validates Host headers, and binds to `127.0.0.1` unless `--host <host>` is passed.
 - MCP file and artifact paths are confined to `--root` after realpath resolution.
-- MCP tools are read-only by default; `--allow-build` enables artifact output only.
+- MCP tools are read-only by default; `--allow-build` enables artifact output only when the MCP index is fresh or auto-refreshed.
 - `query_sqlite` is row- and byte-bounded, returns freshness metadata, rejects synthetic payload functions, and refuses stale artifact rows it cannot refresh safely.
 
 See [docs/mcp.md](./mcp.md) for client configuration examples.

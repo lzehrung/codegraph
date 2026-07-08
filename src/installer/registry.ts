@@ -2,7 +2,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { getSkillTargetDirForAgent, type SkillInstallAgent } from "../cli/skill.js";
-import { normalizePathForDisplay, pathExists } from "../cli/packageInfo.js";
+import { getCodegraphPackageRoot, normalizePathForDisplay, pathExists } from "../cli/packageInfo.js";
 
 export type InstallTargetId = SkillInstallAgent;
 
@@ -104,8 +104,7 @@ const TARGET_DEFINITIONS: TargetDefinition[] = [
     id: "opencode",
     label: "OpenCode",
     kind: "json-opencode-mcp",
-    configPath: ({ env, homeDir }) =>
-      path.join(env.XDG_CONFIG_HOME ?? path.join(homeDir, ".config"), "opencode", "opencode.json"),
+    configPath: (settings) => path.join(opencodeConfigHome(settings), "opencode", "opencode.json"),
   },
   {
     id: "agents",
@@ -197,20 +196,20 @@ async function resolveRequestedTargets(options: InstallOptions): Promise<Install
   if (options.targetIds?.length) {
     return options.targetIds.map((id) => createInstallTarget(definitionForTarget(id)));
   }
-  const detections = await detectInstallTargets(options);
-  const detectedIds = detections
-    .filter((detection) => detection.detected)
-    .map((detection, index) => {
-      const definition = TARGET_DEFINITIONS[index]!;
-      return definition.id;
-    });
-  return detectedIds.map((id) => createInstallTarget(definitionForTarget(id)));
+  const targets = listInstallTargets();
+  const detections = await Promise.all(targets.map(async (target) => await target.detect(options)));
+  const detectedTargets: InstallTarget[] = [];
+  for (const [index, target] of targets.entries()) {
+    const detection = detections[index];
+    if (detection?.detected) detectedTargets.push(target);
+  }
+  return detectedTargets;
 }
 
 function assertWriteAllowed(options: InstallOptions): void {
   if (options.dryRun) return;
   if (options.yes) return;
-  throw new Error("Install writes require --yes. Use --dry-run or --print-config to inspect changes first.");
+  throw new Error("Writes require --yes. Use --dry-run to inspect changes first.");
 }
 
 function detectTarget(definition: TargetDefinition, options: InstallOptions): TargetDetection {
@@ -233,9 +232,10 @@ function detectTarget(definition: TargetDefinition, options: InstallOptions): Ta
       skillTargetDir: normalizePathForDisplay(skillTargetDir),
     };
   }
+  const baseSkillDirExists = definition.kind === "skill-only" && pathExists(path.dirname(path.dirname(skillTargetDir)));
   return {
-    detected: definition.kind === "skill-only" && pathExists(path.dirname(path.dirname(skillTargetDir))),
-    reason: `${definition.label} was not detected`,
+    detected: baseSkillDirExists,
+    reason: baseSkillDirExists ? `${definition.label} base directory exists` : `${definition.label} was not detected`,
     ...(configPath !== undefined ? { configPath: normalizePathForDisplay(configPath) } : {}),
     skillTargetDir: normalizePathForDisplay(skillTargetDir),
   };
@@ -246,6 +246,7 @@ async function installTarget(definition: TargetDefinition, options: InstallOptio
   const dryRun = options.dryRun ?? false;
   const changes: InstallChange[] = [];
   const skillTargetDir = getSkillTargetDirForAgent(definition.id, settings.homeDir, settings.env);
+  changes.push(await upsertSkillPayload(definition, skillTargetDir, dryRun));
   changes.push(await upsertSkillPointer(definition, skillTargetDir, dryRun));
   if (definition.kind !== "skill-only") {
     const configPath = requireConfigPath(definition, settings);
@@ -259,12 +260,30 @@ async function uninstallTarget(definition: TargetDefinition, options: UninstallO
   const dryRun = options.dryRun ?? false;
   const changes: InstallChange[] = [];
   const skillTargetDir = getSkillTargetDirForAgent(definition.id, settings.homeDir, settings.env);
+  changes.push(await removeSkillPayload(definition, skillTargetDir, dryRun));
   changes.push(await removeSkillPointer(definition, skillTargetDir, dryRun));
   if (definition.kind !== "skill-only") {
     const configPath = requireConfigPath(definition, settings);
     changes.push(await removeConfig(definition, configPath, dryRun));
   }
   return { uninstalled: true, dryRun, targets: [definition.id], changes };
+}
+
+async function upsertSkillPayload(
+  definition: TargetDefinition,
+  skillTargetDir: string,
+  dryRun: boolean,
+): Promise<InstallChange> {
+  const bundledSkillPath = bundledSkillFilePath();
+  const targetSkillPath = path.join(skillTargetDir, "SKILL.md");
+  const bundledSkill = await fsp.readFile(bundledSkillPath, "utf8");
+  const existing = await readOptionalFile(targetSkillPath);
+  if (existing === bundledSkill) return change(definition.id, "unchanged", targetSkillPath, dryRun);
+  if (!dryRun) {
+    await fsp.mkdir(skillTargetDir, { recursive: true });
+    await fsp.writeFile(targetSkillPath, bundledSkill, "utf8");
+  }
+  return change(definition.id, existing === null ? "create" : "update", targetSkillPath, dryRun);
 }
 
 async function upsertSkillPointer(
@@ -283,13 +302,31 @@ async function upsertSkillPointer(
   return change(definition.id, existing === null ? "create" : "update", markerPath, dryRun);
 }
 
+async function removeSkillPayload(
+  definition: TargetDefinition,
+  skillTargetDir: string,
+  dryRun: boolean,
+): Promise<InstallChange> {
+  const markerPath = path.join(skillTargetDir, "CODEGRAPH_INSTALLED");
+  const targetSkillPath = path.join(skillTargetDir, "SKILL.md");
+  const markerExists = await pathExistsUnlessMissing(markerPath);
+  if (!markerExists) return change(definition.id, "unchanged", targetSkillPath, dryRun);
+  const existing = await readOptionalFile(targetSkillPath);
+  if (existing === null) return change(definition.id, "unchanged", targetSkillPath, dryRun);
+  const bundledSkill = await fsp.readFile(bundledSkillFilePath(), "utf8");
+  if (existing !== bundledSkill) return change(definition.id, "unchanged", targetSkillPath, dryRun);
+  if (!dryRun) await fsp.rm(targetSkillPath, { force: true });
+  return change(definition.id, "delete", targetSkillPath, dryRun);
+}
+
 async function removeSkillPointer(
   definition: TargetDefinition,
   skillTargetDir: string,
   dryRun: boolean,
 ): Promise<InstallChange> {
   const markerPath = path.join(skillTargetDir, "CODEGRAPH_INSTALLED");
-  if (!pathExists(markerPath)) return change(definition.id, "unchanged", markerPath, dryRun);
+  const markerExists = await pathExistsUnlessMissing(markerPath);
+  if (!markerExists) return change(definition.id, "unchanged", markerPath, dryRun);
   if (!dryRun) await fsp.rm(markerPath, { force: true });
   return change(definition.id, "delete", markerPath, dryRun);
 }
@@ -327,23 +364,19 @@ function renderConfigWithCodegraph(definition: TargetDefinition, existing: strin
   }
   const parsed = parseConfigJson(existing, configPath);
   if (definition.kind === "json-opencode-mcp") {
-    parsed.mcp = mergeRecord(readRecordProperty(parsed, "mcp"), {
-      codegraph: {
-        type: "local",
-        enabled: true,
-        command: ["codegraph", "mcp", "serve", "--root", ".", "--stdio"],
-      },
-    });
+    const mcp = readRecordProperty(parsed, "mcp");
+    const desiredServer = codegraphJsonServer(definition);
+    if (shouldPreserveExistingServer(mcp, desiredServer)) return existing ?? renderJsonConfig(parsed);
+    mcp.codegraph = desiredServer;
+    parsed.mcp = mcp;
   } else {
-    parsed.mcpServers = mergeRecord(readRecordProperty(parsed, "mcpServers"), {
-      codegraph: {
-        type: "stdio",
-        command: "codegraph",
-        args: ["mcp", "serve", "--root", ".", "--stdio"],
-      },
-    });
+    const mcpServers = readRecordProperty(parsed, "mcpServers");
+    const desiredServer = codegraphJsonServer(definition);
+    if (shouldPreserveExistingServer(mcpServers, desiredServer)) return existing ?? renderJsonConfig(parsed);
+    mcpServers.codegraph = desiredServer;
+    parsed.mcpServers = mcpServers;
   }
-  return `${JSON.stringify(parsed, null, 2)}\n`;
+  return renderJsonConfig(parsed);
 }
 
 function removeCodegraphConfig(definition: TargetDefinition, existing: string, configPath: string): string {
@@ -354,27 +387,25 @@ function removeCodegraphConfig(definition: TargetDefinition, existing: string, c
   const property = definition.kind === "json-opencode-mcp" ? "mcp" : "mcpServers";
   const servers = readRecordProperty(parsed, property);
   const server = servers.codegraph;
-  if (!isCodegraphJsonServer(server)) return existing;
+  if (!isInstallerOwnedJsonServer(definition, server)) return existing;
   delete servers.codegraph;
   if (Object.keys(servers).length) {
     parsed[property] = servers;
   } else {
     delete parsed[property];
   }
-  return `${JSON.stringify(parsed, null, 2)}\n`;
+  return renderJsonConfig(parsed);
 }
 
-function printTargetConfig(definition: TargetDefinition, options: PrintConfigOptions): string {
-  const settings = installerSettings(options);
-  const skillTargetDir = getSkillTargetDirForAgent(definition.id, settings.homeDir, settings.env);
+function printTargetConfig(definition: TargetDefinition, _options: PrintConfigOptions): string {
   if (definition.kind === "toml-block") return codexTomlSnippet();
   if (definition.kind === "json-opencode-mcp") {
-    return `${JSON.stringify({ mcp: { codegraph: { type: "local", enabled: true, command: ["codegraph", "mcp", "serve", "--root", ".", "--stdio"] } } }, null, 2)}\n`;
+    return renderJsonConfig({ mcp: { codegraph: codegraphJsonServer(definition) } });
   }
   if (definition.kind === "skill-only") {
-    return `codegraph skill install --agent ${definition.id} --target ${normalizePathForDisplay(skillTargetDir)}\n`;
+    return `codegraph skill install --agent ${definition.id}\n`;
   }
-  return `${JSON.stringify({ mcpServers: { codegraph: { type: "stdio", command: "codegraph", args: ["mcp", "serve", "--root", ".", "--stdio"] } } }, null, 2)}\n`;
+  return renderJsonConfig({ mcpServers: { codegraph: codegraphJsonServer(definition) } });
 }
 
 function codexTomlSnippet(): string {
@@ -402,7 +433,7 @@ function parseConfigJson(existing: string | null, configPath: string): JsonRecor
     if (isJsonRecord(parsed)) return parsed;
   } catch (error) {
     throw new Error(
-      `Unable to parse ${normalizePathForDisplay(configPath)} as JSON. Fix the file before running codegraph install.`,
+      `Unable to parse ${normalizePathForDisplay(configPath)} as JSON. Fix the file before running the installer.`,
       {
         cause: error,
       },
@@ -415,19 +446,62 @@ function readRecordProperty(record: JsonRecord, property: string): JsonRecord {
   const value = record[property];
   if (value === undefined) return {};
   if (isJsonRecord(value)) return value;
-  throw new Error(`Existing ${property} config must be a JSON object before codegraph can merge into it.`);
+  throw new Error(`Existing ${property} config must be a JSON object before codegraph can update it.`);
 }
 
-function mergeRecord(left: JsonRecord, right: JsonRecord): JsonRecord {
-  return { ...left, ...right };
+function renderJsonConfig(record: JsonRecord): string {
+  if (!Object.keys(record).length) return "";
+  return `${JSON.stringify(record, null, 2)}\n`;
 }
 
-function isCodegraphJsonServer(value: unknown): boolean {
-  if (!isJsonRecord(value)) return false;
-  const command = value.command;
-  if (command === "codegraph") return true;
-  if (Array.isArray(command) && command[0] === "codegraph") return true;
-  return false;
+function opencodeConfigHome(settings: InstallerSettings): string {
+  const configHome = settings.env.XDG_CONFIG_HOME?.trim();
+  return configHome || path.join(settings.homeDir, ".config");
+}
+
+function codegraphJsonServer(definition: TargetDefinition): JsonRecord {
+  if (definition.kind === "json-opencode-mcp") {
+    return {
+      type: "local",
+      enabled: true,
+      command: ["codegraph", "mcp", "serve", "--root", ".", "--stdio"],
+    };
+  }
+  return {
+    type: "stdio",
+    command: "codegraph",
+    args: ["mcp", "serve", "--root", ".", "--stdio"],
+  };
+}
+
+function shouldPreserveExistingServer(servers: JsonRecord, desiredServer: JsonRecord): boolean {
+  const existingServer = servers.codegraph;
+  if (existingServer === undefined) return false;
+  return !jsonValueEquals(existingServer, desiredServer);
+}
+
+function isInstallerOwnedJsonServer(definition: TargetDefinition, value: unknown): boolean {
+  return jsonValueEquals(value, codegraphJsonServer(definition));
+}
+
+function jsonValueEquals(left: unknown, right: unknown): boolean {
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right)) return false;
+    if (left.length !== right.length) return false;
+    return left.every((value, index) => jsonValueEquals(value, right[index]));
+  }
+  if (isJsonRecord(left) || isJsonRecord(right)) {
+    if (!isJsonRecord(left) || !isJsonRecord(right)) return false;
+    const leftKeys = Object.keys(left);
+    const rightKeys = Object.keys(right);
+    if (leftKeys.length !== rightKeys.length) return false;
+    for (const key of rightKeys) {
+      if (!Object.prototype.hasOwnProperty.call(left, key)) return false;
+      if (!jsonValueEquals(left[key], right[key])) return false;
+    }
+    return true;
+  }
+  return left === right;
 }
 
 function isJsonRecord(value: unknown): value is JsonRecord {
@@ -447,6 +521,20 @@ function requireConfigPath(definition: TargetDefinition, settings: InstallerSett
     throw new Error(`${definition.label} does not have an MCP config file target.`);
   }
   return configPath;
+}
+
+function bundledSkillFilePath(): string {
+  return path.join(getCodegraphPackageRoot(), "codegraph-skill", "codegraph", "SKILL.md");
+}
+
+async function pathExistsUnlessMissing(filePath: string): Promise<boolean> {
+  try {
+    await fsp.stat(filePath);
+    return true;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 function definitionForTarget(id: InstallTargetId): TargetDefinition {

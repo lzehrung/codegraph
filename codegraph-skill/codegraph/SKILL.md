@@ -47,7 +47,7 @@ Then choose the smallest useful follow-up:
 
 Use `--root` to define the project boundary for config lookup, cache scope, path confinement, and output normalization.
 For `orient`, `drift`, and positional graph commands, positional paths are include roots inside that project.
-Use `codegraph install --target <ids> --yes` to configure supported local agent clients. Use `--dry-run` or `--print-config <target>` first; uninstall removes only Codegraph-owned marker blocks, marker files, or MCP entries whose command is `codegraph`.
+Use `codegraph install --target <ids> --yes` to configure supported local agent clients with MCP entries, bundled skill payloads, and marker files. Use `--dry-run` or `--print-config <target>` first; uninstall removes only Codegraph-owned marker blocks, marker files, exact bundled skill payloads, or exact installer-owned MCP entries.
 Lifecycle commands own only `.codegraph/manifest.json` metadata. `init` and `sync` may warm or update `.codegraph-cache/index-v1/`; other commands do not depend on the manifest. Use `uninit` to remove recognized lifecycle state.
 Lifecycle commands accept either a positional project path or `--root <path>`; never combine both.
 
@@ -60,7 +60,7 @@ Hybrid search is code-first by default, and search/explain packets include analy
 
 Current high-value surfaces:
 
-- `explore --pretty`: one-call question answer with anchors, packets, paths, blast radius, candidate tests, and follow-ups
+- `explore --pretty`: one-call question answer with anchors, packets, paths, blast radius with omitted lower bounds, candidate tests, limits, lower-bound omissions, and follow-ups
 - `orient --pretty`: ranked first-turn focus targets with copyable follow-ups
 - `impact --pretty`: ranked "what could this break?" map
 - `review --summary`: compact reviewer handoff
@@ -74,6 +74,7 @@ Treat duplicate leads and call-compatibility hints as review leads, not proof.
 If MCP tools are available, prefer them over repeated CLI invocations.
 Use MCP `explore`, `orient`, `search`, `packet_get`, `goto`, `refs`, `deps`, `rdeps`, `path`, `impact`, `review`, and `query_sqlite` first.
 After edits, check MCP response `freshness`: `refreshed` means Codegraph rebuilt before answering, and `stale` includes a reason plus bounded changed-file metadata before indexed context is trusted.
+Run `refresh_index` before `artifact_build` when MCP reports a stale index; artifact writes refuse stale snapshots.
 Fall back to CLI when MCP is unavailable.
 
 ## Discovery

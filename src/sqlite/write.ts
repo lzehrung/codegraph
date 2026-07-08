@@ -26,7 +26,6 @@ async function collectSqliteArtifactFileSignatures(files: Iterable<string>): Pro
   signatures.sort((left, right) => left.path.localeCompare(right.path));
   return signatures;
 }
-
 function normalizeSqliteArtifactFileSignatures(
   signatures: Iterable<SqliteArtifactFileSignature>,
 ): SqliteArtifactFileSignature[] {
@@ -351,6 +350,7 @@ export async function updateGraphSqlite(options: SqliteGraphUpdateOptions): Prom
       }
 
       deleteUnreferencedExternalFiles(db);
+      clearArtifactFileSignatures(db);
 
       recordGraphSnapshot(db, {
         mode: "incremental",

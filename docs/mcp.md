@@ -51,7 +51,7 @@ The server exposes the same bounded primitives as the CLI and library session la
 
 MCP keeps one Codegraph session warm for the configured root. That makes follow-up calls cheaper than separate CLI invocations. Startup is lazy unless `--warmup` or `--warmup-symbols` is passed.
 Before index-backed tool calls, MCP checks whether discovered files changed since the warm snapshot. Small changes refresh the session automatically, and responses include `freshness.state` as `fresh`, `refreshed`, or `stale`; stale responses also include `changedFileCount`, `omittedChangedFileCount`, and a bounded changed-file sample.
-Use `refresh_index` when you need to force a rebuild, reset SQLite artifact state, or refresh after a change burst that exceeds the automatic refresh limits. `query_sqlite` refreshes Codegraph-owned SQLite artifacts after small edits when write access is enabled; otherwise it refuses to serve stale artifact rows.
+Use `refresh_index` when you need to force a rebuild, reset SQLite artifact state, or refresh after a change burst that exceeds the automatic refresh limits. `query_sqlite` refreshes Codegraph-owned SQLite artifacts after small edits when write access is enabled; otherwise it refuses to serve stale artifact rows. `artifact_build` refuses to write outputs from a stale MCP index; run `refresh_index` first after large change bursts.
 Tool schemas are flat JSON objects for broad client compatibility; argument combinations such as `refs` handle-vs-position mode are validated by the server.
 
 ## Safety
@@ -59,7 +59,7 @@ Tool schemas are flat JSON objects for broad client compatibility; argument comb
 - File and artifact paths are confined to `--root` after realpath resolution.
 - Tool calls do not accept per-request root overrides.
 - Tools are read-only by default.
-- `artifact_build` requires `--allow-build`.
+- `artifact_build` requires `--allow-build` and a fresh or auto-refreshed MCP index.
 - `query_sqlite` rejects mutating SQL, recursive queries, synthetic payload functions, and stale artifact queries it cannot refresh safely.
 - SQLite responses are row- and byte-bounded.
 
@@ -73,7 +73,7 @@ codegraph install --target codex,claude --yes
 codegraph install --print-config codex
 ```
 
-The installer writes only Codegraph-owned marker blocks, marker files, or `codegraph` MCP entries. `codegraph uninstall --target <ids> --yes` removes only those owned entries.
+The installer writes only Codegraph-owned marker blocks, marker files, bundled skill payloads, or exact installer-owned MCP entries. `codegraph uninstall --target <ids> --yes` removes only those owned entries.
 
 ## Client Configuration Examples
 

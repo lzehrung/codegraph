@@ -583,7 +583,6 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     }
     return;
   }
-
   if (cmd === "explore") {
     await handleExploreCommand({
       positionals: parsed.positionals,

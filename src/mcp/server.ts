@@ -29,6 +29,7 @@ import { SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY, queryGraphSqliteRaw, type
 import { isPlainRecord } from "../util/guards.js";
 import { toProjectDisplayPath } from "../util/paths.js";
 import { createAgentSession, listAgentSessionFiles } from "../agent/session.js";
+import { mapLimit } from "../util/concurrency.js";
 import type { AgentFreshnessResult, AgentProjectSnapshot, AgentSession } from "../agent/session.js";
 import type { BuildOptions, GoToResult } from "../indexer/types.js";
 import {
@@ -192,6 +193,7 @@ type SqliteArtifactFileSignature = {
 };
 
 const MAX_MCP_FRESHNESS_CHANGED_FILES = 25;
+const SQLITE_ARTIFACT_STAT_CONCURRENCY = 64;
 
 function assertMcpSessionOptions(options: CodegraphMcpHandlerOptions): void {
   if (options.session !== undefined && options.buildOptions !== undefined) {
@@ -279,7 +281,7 @@ function createCodegraphMcpHandlersForSession(
   };
   const checkMcpFreshness = async (): Promise<AgentFreshnessResult> => {
     if (session.checkFreshness) return await session.checkFreshness();
-    return staleFreshness([], "freshness check unavailable");
+    return { state: "fresh" };
   };
   const withFreshness = async <T extends object>(
     run: () => Promise<T>,
@@ -296,7 +298,14 @@ function createCodegraphMcpHandlersForSession(
       freshness.state === "stale" && freshness.omittedChangedFileCount
         ? ` Omitted changed files: ${freshness.omittedChangedFileCount}.`
         : "";
-    return `SQLite artifact is stale; run artifact_build before query_sqlite. ${reason}.${changed}${omitted}`;
+    let action = "run artifact_build";
+    if (readOnly) {
+      action = "rebuild the artifact with write access enabled";
+    }
+    if (freshness.state === "stale") {
+      action = `run refresh_index, then ${action}`;
+    }
+    return `SQLite artifact is stale; ${action} before query_sqlite. ${reason}.${changed}${omitted}`;
   };
   const canRefreshSqliteArtifact = (): boolean => {
     if (!sqlitePath || !sqliteOutDir || readOnly || !sqliteCanRefresh) return false;
@@ -345,7 +354,12 @@ function createCodegraphMcpHandlersForSession(
     );
     const rawValue = result.rows[0]?.[0];
     if (typeof rawValue !== "string") return null;
-    const parsed: unknown = JSON.parse(rawValue);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawValue);
+    } catch {
+      return null;
+    }
     if (!Array.isArray(parsed)) return null;
     const signatures: SqliteArtifactFileSignature[] = [];
     for (const value of parsed) {
@@ -383,20 +397,18 @@ function createCodegraphMcpHandlersForSession(
       (file) => !outputDirectories.some((directory) => isFileInsideDirectory(file, directory)),
     );
     const signatures = new Map<string, SqliteArtifactFileSignature>();
-    await Promise.all(
-      currentFiles.map(async (file) => {
-        try {
-          const stat = await fs.stat(file);
-          if (!stat.isFile()) return;
-          signatures.set(relative(file), { path: file, size: stat.size, mtimeMs: stat.mtimeMs });
-        } catch (error) {
-          if (error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR")) {
-            return;
-          }
-          throw error;
+    await mapLimit(currentFiles, SQLITE_ARTIFACT_STAT_CONCURRENCY, async (file) => {
+      try {
+        const stat = await fs.stat(file);
+        if (!stat.isFile()) return;
+        signatures.set(relative(file), { path: file, size: stat.size, mtimeMs: stat.mtimeMs });
+      } catch (error) {
+        if (error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR")) {
+          return;
         }
-      }),
-    );
+        throw error;
+      }
+    });
     return signatures;
   };
   const checkSqliteArtifactFreshness = async (realSqlitePath: string): Promise<AgentFreshnessResult> => {
@@ -498,24 +510,26 @@ function createCodegraphMcpHandlersForSession(
           }),
       ),
 
-    get_file: async (request) =>
-      await withFreshness(async () => {
-        const resolvedFile = await resolveReadableFile(await realRoot, root, request.file);
-        const maxBytes = boundedLimit(request.maxBytes, DEFAULT_FILE_BYTES, MAX_FILE_BYTES);
-        const read = await readFilePrefix(resolvedFile.realPath, maxBytes);
-        return {
-          file: resolvedFile.displayPath,
-          text: read.text,
-          truncated: read.truncated,
-        };
-      }),
+    get_file: async (request) => {
+      // get_file returns live bytes read directly from disk and never consults the indexed
+      // session, so it must not trigger a workspace-wide freshness scan or rebuild. The bytes
+      // are always current, so report fresh without re-stating the project.
+      const resolvedFile = await resolveReadableFile(await realRoot, root, request.file);
+      const maxBytes = boundedLimit(request.maxBytes, DEFAULT_FILE_BYTES, MAX_FILE_BYTES);
+      const read = await readFilePrefix(resolvedFile.realPath, maxBytes);
+      return {
+        file: resolvedFile.displayPath,
+        text: read.text,
+        truncated: read.truncated,
+        freshness: { state: "fresh" },
+      };
+    },
 
     get_symbol: async (request) =>
       await withFreshness(async () => {
         const explanation = await explainCodegraphTargetWithSession(session, { root, target: request.handle });
         return explanation.target;
       }),
-
     goto: async (request) =>
       await withFreshness(async () => {
         const snapshot = await session.loadProject({ symbolGraph: "skip" });
@@ -627,18 +641,24 @@ function createCodegraphMcpHandlersForSession(
         throw new Error("No SQLite artifact is available. Run artifact_build first or pass artifactPath.");
       }
       assertMcpSqliteQueryResourceBounded(request.query);
-      let freshness = await checkMcpFreshness();
-      freshness = await refreshSqliteArtifactForQuery(freshness);
+      // The artifact's own baseline decides whether the query can be served; session freshness
+      // only decides whether an automatic rebuild is safe. A fresh artifact is served even when
+      // the in-memory session snapshot is stale, and an unsafe session refresh burst blocks the
+      // automatic rebuild instead of silently rebuilding from stale in-memory state.
       let realSqlitePath = await assertRealPathCandidateWithinRoot(await realRoot, sqlitePath, "SQLite artifact");
-      const artifactFreshness = await checkSqliteArtifactFreshness(realSqlitePath);
+      let artifactFreshness = await checkSqliteArtifactFreshness(realSqlitePath);
       if (artifactFreshness.state !== "fresh") {
-        freshness = await refreshSqliteArtifactForQuery(artifactFreshness, { allowStaleRebuild: true });
+        const sessionFreshness = await checkMcpFreshness();
+        if (sessionFreshness.state === "stale") {
+          throw new Error(formatSqliteFreshnessError(sessionFreshness));
+        }
+        artifactFreshness = await refreshSqliteArtifactForQuery(artifactFreshness, { allowStaleRebuild: true });
         realSqlitePath = await assertRealPathCandidateWithinRoot(await realRoot, sqlitePath, "SQLite artifact");
       }
       const result = await queryGraphSqliteRaw(realSqlitePath, request.query, request.params ?? [], {
         maxRows: normalizeSqliteRowLimit(request.limit),
       });
-      return { ...boundRawSqlResult(result, DEFAULT_SQLITE_BYTE_LIMIT), freshness };
+      return { ...boundRawSqlResult(result, DEFAULT_SQLITE_BYTE_LIMIT), freshness: artifactFreshness };
     },
 
     refresh_index: async (request) => {
@@ -651,38 +671,47 @@ function createCodegraphMcpHandlersForSession(
       return { refreshed: true, warmup };
     },
 
-    artifact_build: async (request) =>
-      await withFreshness(async () => {
-        if (readOnly) {
-          throw new Error("artifact_build is disabled in read-only MCP mode.");
-        }
-        const outDir =
-          request.outDir !== undefined
-            ? await assertWritableDirectoryRealPathWithinRoot(
-                await realRoot,
-                root,
-                request.outDir,
-                "Artifact output directory",
-              )
-            : undefined;
-        const result = await buildCodegraphArtifactWithSession(session, {
-          root,
-          ...(outDir !== undefined ? { outDir } : {}),
-          ...(request.outDir !== undefined ? { filterOutDir: request.outDir } : {}),
-          ...(request.sqlite !== undefined ? { sqlite: request.sqlite } : {}),
-          ...(request.graphJson !== undefined ? { graphJson: request.graphJson } : {}),
-          ...(request.report !== undefined ? { report: request.report } : {}),
-          ...(request.questions !== undefined ? { questions: request.questions } : {}),
-          ...(request.force !== undefined ? { force: request.force } : {}),
-        });
-        const sqliteArtifact = result.artifacts.sqlite;
-        if (sqliteArtifact) {
-          sqlitePath = path.join(result.outDir, sqliteArtifact);
-          sqliteOutDir = result.outDir;
-          sqliteCanRefresh = true;
-        }
-        return result;
-      }),
+    artifact_build: async (request) => {
+      if (readOnly) {
+        throw new Error("artifact_build is disabled in read-only MCP mode.");
+      }
+      const freshness = await checkMcpFreshness();
+      if (freshness.state === "stale") {
+        const changed = freshness.changedFiles.length ? ` Changed files: ${freshness.changedFiles.join(", ")}.` : "";
+        const omitted = freshness.omittedChangedFileCount
+          ? ` Omitted changed files: ${freshness.omittedChangedFileCount}.`
+          : "";
+        throw new Error(
+          `Cannot build artifacts from a stale MCP index; run refresh_index first. ${freshness.reason}.${changed}${omitted}`,
+        );
+      }
+      const outDir =
+        request.outDir !== undefined
+          ? await assertWritableDirectoryRealPathWithinRoot(
+              await realRoot,
+              root,
+              request.outDir,
+              "Artifact output directory",
+            )
+          : undefined;
+      const result = await buildCodegraphArtifactWithSession(session, {
+        root,
+        ...(outDir !== undefined ? { outDir } : {}),
+        ...(request.outDir !== undefined ? { filterOutDir: request.outDir } : {}),
+        ...(request.sqlite !== undefined ? { sqlite: request.sqlite } : {}),
+        ...(request.graphJson !== undefined ? { graphJson: request.graphJson } : {}),
+        ...(request.report !== undefined ? { report: request.report } : {}),
+        ...(request.questions !== undefined ? { questions: request.questions } : {}),
+        ...(request.force !== undefined ? { force: request.force } : {}),
+      });
+      const sqliteArtifact = result.artifacts.sqlite;
+      if (sqliteArtifact) {
+        sqlitePath = path.join(result.outDir, sqliteArtifact);
+        sqliteOutDir = result.outDir;
+        sqliteCanRefresh = true;
+      }
+      return { ...result, freshness };
+    },
   };
 }
 
@@ -974,9 +1003,9 @@ const searchSchema = z.object({
 
 const exploreSchema = z.object({
   query: z.string(),
-  limit: z.number().int().nonnegative().optional(),
-  maxPackets: z.number().int().nonnegative().optional(),
-  maxPaths: z.number().int().nonnegative().optional(),
+  limit: z.number().int().nonnegative().max(50).optional(),
+  maxPackets: z.number().int().nonnegative().max(10).optional(),
+  maxPaths: z.number().int().nonnegative().max(10).optional(),
   includeSource: z.boolean().optional(),
 });
 

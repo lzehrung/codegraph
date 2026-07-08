@@ -1,7 +1,7 @@
 import { exploreCodegraph, formatAgentExploreResponse } from "../agent/explore.js";
 import type { CliAgentCommandContext } from "./context.js";
 import { EXPLORE_HELP_TEXT } from "./help.js";
-import { parsePositiveIntegerOption } from "./options.js";
+import { parseNonNegativeIntegerOption } from "./options.js";
 
 export type ExploreCommandContext = CliAgentCommandContext;
 
@@ -16,9 +16,9 @@ export async function handleExploreCommand(context: ExploreCommandContext): Prom
     root: context.root,
     query,
     ...(context.buildOptions ? { buildOptions: context.buildOptions } : {}),
-    limit: parsePositiveIntegerOption(context.getOpt("--limit"), "--limit", 5),
-    maxPackets: parsePositiveIntegerOption(context.getOpt("--max-packets"), "--max-packets", 3),
-    maxPaths: parsePositiveIntegerOption(context.getOpt("--max-paths"), "--max-paths", 3),
+    limit: parseNonNegativeIntegerOption(context.getOpt("--limit"), "--limit", 5),
+    maxPackets: parseNonNegativeIntegerOption(context.getOpt("--max-packets"), "--max-packets", 3),
+    maxPaths: parseNonNegativeIntegerOption(context.getOpt("--max-paths"), "--max-paths", 3),
     includeSource: !context.hasFlag("--no-source"),
   });
 

@@ -21,6 +21,13 @@ const dbQuery = (db: DatabaseSync, sql: string): string[] => {
   return rows.map((row) => String(row[0]));
 };
 
+const artifactFreshnessMetadataRows = async (dbPath: string): Promise<Array<Array<unknown>>> => {
+  const result = await queryGraphSqliteRaw(dbPath, "SELECT value FROM graph_metadata WHERE key = ?;", [
+    SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY,
+  ]);
+  return result.rows;
+};
+
 describe("SQLite graph export", () => {
   it("writes tables, indexes, and supports basic queries", async () => {
     const root = await mkTmpDir("dg-sqlite-");
@@ -85,20 +92,41 @@ export function run() { helper(); new Widget(); }
       outputPath: dbPath,
       fileSignatures: [{ path: mainPath, size: stat.size, mtimeMs: stat.mtimeMs }],
     });
-    let db = new DatabaseSync(dbPath);
-    expect(dbQuery(db, "SELECT value FROM graph_metadata WHERE key = 'artifact_file_signatures_v1';")).toHaveLength(1);
-    db.close();
+    expect(await artifactFreshnessMetadataRows(dbPath)).toHaveLength(1);
 
     await writeGraphSqlite({
       fileGraph: index.graph,
       symbolGraph: sgraph,
       outputPath: dbPath,
     });
-    db = new DatabaseSync(dbPath);
-    expect(
-      dbQuery(db, `SELECT value FROM graph_metadata WHERE key = '${SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY}';`),
-    ).toHaveLength(0);
-    db.close();
+    expect(await artifactFreshnessMetadataRows(dbPath)).toHaveLength(0);
+  });
+
+  it("clears artifact freshness metadata on incremental updates", async () => {
+    const root = await mkTmpDir("dg-sqlite-freshness-update-");
+    const mainPath = path.join(root, "main.ts");
+    await fsp.writeFile(mainPath, "export const one = 1;\n", "utf8");
+    let index = await buildProjectIndex(root);
+    let sgraph = await buildSymbolGraphDetailed(index);
+    const dbPath = path.join(root, "graph.sqlite");
+    const stat = await fsp.stat(mainPath);
+    await writeGraphSqlite({
+      fileGraph: index.graph,
+      symbolGraph: sgraph,
+      outputPath: dbPath,
+      fileSignatures: [{ path: mainPath, size: stat.size, mtimeMs: stat.mtimeMs }],
+    });
+    expect(await artifactFreshnessMetadataRows(dbPath)).toHaveLength(1);
+    await fsp.writeFile(mainPath, "export const two = 2;\n", "utf8");
+    index = await buildProjectIndex(root);
+    sgraph = await buildSymbolGraphDetailed(index);
+    await updateGraphSqlite({
+      fileGraph: index.graph,
+      symbolGraph: sgraph,
+      outputPath: dbPath,
+      changedFiles: [normalizeTestPath(mainPath)],
+    });
+    expect(await artifactFreshnessMetadataRows(dbPath)).toHaveLength(0);
   });
 
   it("keeps full SQLite exports idempotent across repeated writes", async () => {

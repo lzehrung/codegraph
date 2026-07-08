@@ -62,8 +62,8 @@ Build Options:
   --cache-verify            Re-stat cached files before trusting disk cache entries
   --progress                Show progress tracking during indexing
 
-Output Options:
-  --json                    Output as JSON (default)
+Analysis Output Options:
+  --json                    Output analysis commands as JSON (default where supported)
   --mermaid                 Output as Mermaid diagram
   --dot                     Output as DOT graph
   --sqlite <path>           Write to SQLite database
@@ -78,6 +78,7 @@ Recommended review commands:
   codegraph explain src/auth.ts --json
 
 Unfamiliar repo:
+  codegraph explore "how does auth reach db?" --root . --pretty
   codegraph orient --root . --budget small --pretty
   codegraph explore "how does auth reach db?" --root . --pretty
 
@@ -181,7 +182,7 @@ State:
 
 export const INSTALL_HELP_TEXT = `codegraph install - Configure Codegraph for supported agent clients
 
-Usage: codegraph install [target] [--target <codex,claude,cursor,gemini,opencode,agents>] [--yes | --dry-run] [--print-config <target>] [--detect] [--json]
+Usage: codegraph install [target] [--target <codex,claude,cursor,gemini,opencode,agents>] [--yes | --dry-run] [--print-config <target>] [--detect]
 
 Targets:
   codex, claude, cursor, gemini, opencode, agents
@@ -192,10 +193,10 @@ Safety:
 
 export const UNINSTALL_HELP_TEXT = `codegraph uninstall - Remove Codegraph-owned installer configuration
 
-Usage: codegraph uninstall [target] [--target <codex,claude,cursor,gemini,opencode,agents>] [--yes | --dry-run] [--detect] [--json]
+Usage: codegraph uninstall [target] [--target <codex,claude,cursor,gemini,opencode,agents>] [--yes | --dry-run] [--detect]
 
 Safety:
-  Removes only Codegraph-owned marker blocks, marker files, or MCP entries whose command is codegraph.
+  Removes only Codegraph-owned marker blocks, marker files, exact bundled skill payloads, or exact installer-owned MCP entries.
 `;
 
 export const EXPLORE_HELP_TEXT = `codegraph explore - Answer a broad repo question with bounded repo context
@@ -411,6 +412,7 @@ Options:
 `;
 
 export function helpTextForCommand(command: string, positionals: readonly string[]): string | undefined {
+  if (command === "explore") return EXPLORE_HELP_TEXT;
   if (command === "search") return SEARCH_HELP_TEXT;
   if (command === "orient") return ORIENT_HELP_TEXT;
   if (command === "packet") return PACKET_HELP_TEXT;

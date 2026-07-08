@@ -12,6 +12,7 @@ import {
   type CodegraphMcpHandlers,
 } from "../src/mcp/server.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
+import { SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY } from "../src/sqlite.js";
 import { countingSession } from "./helpers/agent.js";
 import { createArtifactOutputWithStaleFile, createLinkedTempRoot, isSymlinkUnavailable } from "./helpers/filesystem.js";
 
@@ -141,6 +142,100 @@ describe("codegraph MCP handlers", () => {
       expect(toolNames).toContain("packet_get");
       expect(toolNames).toContain("query_sqlite");
       expect(toolNames).toContain("refresh_index");
+    } finally {
+      await httpServer.close();
+    }
+  });
+
+  it("rejects explore calls above the published MCP schema maximums over Streamable HTTP", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-explore-schema-max-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser() { return true; }\n", "utf8");
+    const counted = countingSession(createAgentSession({ root }));
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      host: "127.0.0.1",
+      port: 0,
+      session: counted.session,
+    });
+
+    try {
+      const initialize = await postMcpJson(httpServer.url, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "codegraph-test", version: "1.0.0" },
+        },
+      });
+      expect(initialize.response.status).toBe(200);
+      const sessionId = initialize.response.headers.get("mcp-session-id");
+      expect(sessionId).toBeTruthy();
+      if (sessionId === null) {
+        throw new Error("MCP initialize response did not include a session id.");
+      }
+
+      const toolsList = await postMcpJson(
+        httpServer.url,
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/list",
+          params: {},
+        },
+        sessionId,
+      );
+      expect(toolsList.response.status).toBe(200);
+      const toolsResult = readObject(toolsList.payload.result);
+      const tools = toolsResult.tools;
+      expect(Array.isArray(tools)).toBeTruthy();
+      const exploreTool = (tools as Array<{ name?: unknown; inputSchema?: unknown }>).find(
+        (tool) => tool.name === "explore",
+      );
+      expect(exploreTool).toBeTruthy();
+      if (exploreTool === undefined) {
+        throw new Error("MCP tools/list did not include the explore tool.");
+      }
+      const exploreSchema = readObject(exploreTool.inputSchema);
+      const exploreProperties = readObject(exploreSchema.properties);
+      const maxFields = [
+        { name: "limit", maximum: 50 },
+        { name: "maxPackets", maximum: 10 },
+        { name: "maxPaths", maximum: 10 },
+      ] as const;
+
+      for (const [index, field] of maxFields.entries()) {
+        const fieldSchema = readObject(exploreProperties[field.name]);
+        expect(fieldSchema.maximum).toBe(field.maximum);
+
+        const toolCall = await postMcpJson(
+          httpServer.url,
+          {
+            jsonrpc: "2.0",
+            id: 3 + index,
+            method: "tools/call",
+            params: {
+              name: "explore",
+              arguments: { query: "auth", [field.name]: field.maximum + 1 },
+            },
+          },
+          sessionId,
+        );
+        expect(toolCall.response.status).toBe(200);
+        expect(toolCall.payload.result).toBeUndefined();
+        const error = readObject(toolCall.payload.error);
+        expect(error.code).toEqual(expect.any(Number));
+        expect(error.message).toEqual(expect.any(String));
+        const serializedError = JSON.stringify(error);
+        if (serializedError === undefined) {
+          throw new Error("MCP validation error was not JSON serializable.");
+        }
+        expect(serializedError).toContain(field.name);
+        expect(serializedError).toContain(String(field.maximum));
+        expect(serializedError).toMatch(/too_big|maximum|max|less than or equal|at most/i);
+      }
+      expect(counted.loads()).toBe(0);
     } finally {
       await httpServer.close();
     }
@@ -430,7 +525,37 @@ describe("codegraph MCP handlers", () => {
     expect(result.freshness).toEqual({ state: "refreshed", changedFiles: ["one.ts", "remove.ts"] });
   });
 
-  it("refuses stale configured SQLite artifacts in read-only mode", async () => {
+  it("guides stale SQLite rebuilds through refresh_index before artifact_build when the session is stale", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-stale-session-guidance-"));
+    const outDir = path.join(root, "out");
+    const removedFile = path.join(root, "remove.ts");
+    await fs.writeFile(path.join(root, "keep.ts"), "export const keep = 1;\n");
+    await fs.writeFile(removedFile, `export const payload = "${"x".repeat(64)}";\n`);
+    const session = createAgentSession({ root, freshness: { policy: "auto", maxAutoRefreshBytes: 16 } });
+    const handlers = createCodegraphMcpHandlers({ root, session, readOnly: false });
+    await handlers.artifact_build({ outDir, sqlite: true });
+
+    await fs.unlink(removedFile);
+    let caught: unknown;
+    try {
+      await handlers.query_sqlite({ query: "SELECT path FROM files ORDER BY path;" });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    if (!(caught instanceof Error)) {
+      throw new Error("query_sqlite should reject stale SQLite rebuilds with an Error");
+    }
+    expect(caught.message).toMatch(/SQLite artifact is stale/);
+    expect(caught.message).toMatch(/refresh_index[\s\S]*artifact_build[\s\S]*query_sqlite/);
+    expect(caught.message).toMatch(/changed byte count exceeds 16/);
+    expect(caught.message).toMatch(/remove\.ts/);
+    expect(caught.message.indexOf("refresh_index")).toBeLessThan(caught.message.indexOf("artifact_build"));
+    expect(caught.message.indexOf("artifact_build")).toBeLessThan(caught.message.indexOf("query_sqlite"));
+  });
+
+  it("guides read-only stale SQLite artifacts to rebuild with write access enabled", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-stale-artifact-"));
     const outDir = path.join(root, "out");
     await fs.writeFile(path.join(root, "one.ts"), "export const one = 1;\n");
@@ -438,11 +563,55 @@ describe("codegraph MCP handlers", () => {
     await buildHandlers.artifact_build({ outDir, sqlite: true });
 
     await fs.writeFile(path.join(root, "two.ts"), "export const two = 2;\n");
-    const readHandlers = createCodegraphMcpHandlers({ root, artifactPath: outDir });
+    const readHandlers = createCodegraphMcpHandlers({ root, artifactPath: outDir, readOnly: true });
+    let caught: unknown;
+    try {
+      await readHandlers.query_sqlite({ query: "SELECT path FROM files ORDER BY path;" });
+    } catch (error) {
+      caught = error;
+    }
 
-    await expect(readHandlers.query_sqlite({ query: "SELECT path FROM files ORDER BY path;" })).rejects.toThrow(
-      /SQLite artifact is stale[\s\S]*two\.ts/,
-    );
+    expect(caught).toBeInstanceOf(Error);
+    if (!(caught instanceof Error)) {
+      throw new Error("query_sqlite should reject stale SQLite artifacts with an Error");
+    }
+    expect(caught.message).toMatch(/SQLite artifact is stale/);
+    expect(caught.message).toMatch(/rebuild[\s\S]*write access enabled/i);
+    expect(caught.message).toMatch(/two\.ts/);
+    expect(caught.message).not.toMatch(/artifact_build before query_sqlite/i);
+  });
+
+  it("guides read-only stale SQLite rebuilds through refresh_index when the session is stale", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-readonly-stale-session-"));
+    const outDir = path.join(root, "out");
+    const removedFile = path.join(root, "remove.ts");
+    await fs.writeFile(path.join(root, "keep.ts"), "export const keep = 1;\n");
+    await fs.writeFile(removedFile, `export const payload = "${"x".repeat(64)}";\n`);
+    const session = createAgentSession({ root, freshness: { policy: "auto", maxAutoRefreshBytes: 16 } });
+    const buildHandlers = createCodegraphMcpHandlers({ root, session, readOnly: false });
+    await buildHandlers.artifact_build({ outDir, sqlite: true });
+
+    await fs.unlink(removedFile);
+    const readHandlers = createCodegraphMcpHandlers({ root, artifactPath: outDir, readOnly: true, session });
+    let caught: unknown;
+    try {
+      await readHandlers.query_sqlite({ query: "SELECT path FROM files ORDER BY path;" });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    if (!(caught instanceof Error)) {
+      throw new Error("query_sqlite should reject stale read-only rebuilds with an Error");
+    }
+    expect(caught.message).toMatch(/SQLite artifact is stale/);
+    expect(caught.message).toMatch(/refresh_index/i);
+    expect(caught.message).toMatch(/rebuild[\s\S]*write access enabled/i);
+    expect(caught.message).toMatch(/changed byte count exceeds 16/);
+    expect(caught.message).toMatch(/remove\.ts/);
+    const writeAccessIndex = caught.message.toLowerCase().indexOf("write access enabled");
+    expect(caught.message.indexOf("refresh_index")).toBeLessThan(writeAccessIndex);
+    expect(caught.message).not.toMatch(/artifact_build before query_sqlite/i);
   });
 
   it("refuses older SQLite artifacts without freshness metadata in read-only mode", async () => {
@@ -453,7 +622,7 @@ describe("codegraph MCP handlers", () => {
     await buildHandlers.artifact_build({ outDir, sqlite: true });
     const db = new DatabaseSync(path.join(outDir, "codegraph.sqlite"));
     try {
-      db.exec("DELETE FROM graph_metadata WHERE key = 'artifact_file_signatures_v1';");
+      db.prepare("DELETE FROM graph_metadata WHERE key = ?;").run(SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY);
     } finally {
       db.close();
     }
@@ -472,7 +641,7 @@ describe("codegraph MCP handlers", () => {
     await buildHandlers.artifact_build({ outDir, sqlite: true });
     const db = new DatabaseSync(path.join(outDir, "codegraph.sqlite"));
     try {
-      db.exec("DELETE FROM graph_metadata WHERE key = 'artifact_file_signatures_v1';");
+      db.prepare("DELETE FROM graph_metadata WHERE key = ?;").run(SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY);
     } finally {
       db.close();
     }
@@ -549,6 +718,30 @@ describe("codegraph MCP handlers", () => {
     );
   });
 
+  it("serves a fresh SQLite artifact without checking session freshness", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-fresh-artifact-no-session-check-"));
+    await fs.writeFile(path.join(root, "one.ts"), "export const one = 1;\n");
+    const outDir = path.join(root, "out");
+    const buildHandlers = createCodegraphMcpHandlers({ root, readOnly: false });
+    await buildHandlers.artifact_build({ outDir, sqlite: true });
+
+    const backingSession = createAgentSession({ root });
+    let freshnessChecks = 0;
+    const session: AgentSession = {
+      ...backingSession,
+      checkFreshness: async () => {
+        freshnessChecks += 1;
+        throw new Error("query_sqlite should inspect fresh SQLite artifact metadata before session freshness");
+      },
+    };
+    const readHandlers = createCodegraphMcpHandlers({ root, artifactPath: outDir, session });
+
+    const result = await readHandlers.query_sqlite({ query: "SELECT path FROM files ORDER BY path;" });
+
+    expect(result.rows.map((row) => normalizeSqlitePath(row[0])).some((file) => file.endsWith("one.ts"))).toBe(true);
+    expect(result.freshness).toEqual({ state: "fresh" });
+    expect(freshnessChecks).toBe(0);
+  });
   it("bounds query_sqlite bytes for MCP responses", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-bytes-"));
     await fs.writeFile(path.join(root, "one.ts"), "export const one = 1;\n");
@@ -600,19 +793,24 @@ describe("codegraph MCP handlers", () => {
     ).resolves.toEqual(expect.objectContaining({ rows: [[1]] }));
   });
 
-  it("disables artifact builds by default and in explicit read-only mode", async () => {
+  it("disables artifact builds in read-only mode before checking freshness", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-readonly-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
+    const backingSession = createAgentSession({ root });
+    let freshnessChecks = 0;
+    const session: AgentSession = {
+      ...backingSession,
+      checkFreshness: async () => {
+        freshnessChecks += 1;
+        throw new Error("checkFreshness should not run before read-only artifact_build rejection");
+      },
+    };
 
-    const defaultHandlers = createCodegraphMcpHandlers({ root });
-    await expect(defaultHandlers.artifact_build({ outDir: path.join(root, "out"), sqlite: true })).rejects.toThrow(
-      /read-only/i,
-    );
-
-    const readOnlyHandlers = createCodegraphMcpHandlers({ root, readOnly: true });
+    const readOnlyHandlers = createCodegraphMcpHandlers({ root, readOnly: true, session });
     await expect(readOnlyHandlers.artifact_build({ outDir: path.join(root, "out"), sqlite: true })).rejects.toThrow(
-      /read-only/i,
+      /artifact_build is disabled in read-only MCP mode/i,
     );
+    expect(freshnessChecks).toBe(0);
   });
 
   it("rejects artifact paths outside the root", async () => {
@@ -991,7 +1189,7 @@ describe("codegraph MCP handlers", () => {
       file: "auth.ts",
       text: "export function readAfter() { return 'new bytes'; }\n",
       truncated: false,
-      freshness: { state: "refreshed", changedFiles: ["auth.ts"] },
+      freshness: { state: "fresh" },
     });
   });
 
@@ -1082,7 +1280,7 @@ describe("codegraph MCP handlers", () => {
     }
   });
 
-  it("uses the MCP session snapshot when artifact_build is enabled", async () => {
+  it("refuses artifact_build when the MCP session snapshot is stale before creating output", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-artifact-session-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
     const counted = countingSession(createAgentSession({ root }));
@@ -1090,12 +1288,12 @@ describe("codegraph MCP handlers", () => {
 
     await handlers.search({ query: "validate user", limit: 5 });
     await fs.writeFile(path.join(root, "late.ts"), "export const late = 1;\n");
-    await handlers.artifact_build({ outDir: path.join(root, "out"), graphJson: true });
+    const outDir = path.join(root, "out");
 
-    const graph = JSON.parse(await fs.readFile(path.join(root, "out", "graph.json"), "utf8")) as {
-      graph: { files: string[] };
-    };
-    expect(graph.graph.files.some((file) => file.endsWith("late.ts"))).toBe(false);
+    await expect(handlers.artifact_build({ outDir, graphJson: true })).rejects.toThrow(
+      /Cannot build artifacts from a stale MCP index[\s\S]*late\.ts/,
+    );
+    await expect(fs.readdir(outDir)).rejects.toMatchObject({ code: "ENOENT" });
     expect(counted.loads()).toBe(1);
   });
 
@@ -1170,6 +1368,59 @@ describe("codegraph MCP handlers", () => {
 
     expect(paths.some((file) => file.endsWith("auth.ts"))).toBeTruthy();
     expect(paths.some((file) => file.includes("/out/") || file.endsWith("/out/old.ts"))).toBe(false);
+  });
+
+  it("query_sqlite treats corrupted SQLite freshness metadata as a missing baseline", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-corrupt-metadata-"));
+    const outDir = path.join(root, "out");
+    await fs.writeFile(path.join(root, "one.ts"), "export const one = 1;\n");
+    const buildHandlers = createCodegraphMcpHandlers({ root, readOnly: false });
+    await buildHandlers.artifact_build({ outDir, sqlite: true });
+
+    const db = new DatabaseSync(path.join(outDir, "codegraph.sqlite"));
+    try {
+      const updated = db
+        .prepare("UPDATE graph_metadata SET value = ? WHERE key = ?;")
+        .run("this-is-not-json", SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY);
+      if (Number(updated.changes) === 0) {
+        db.prepare("INSERT OR REPLACE INTO graph_metadata (key, value) VALUES (?, ?);").run(
+          SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY,
+          "this-is-not-json",
+        );
+      }
+    } finally {
+      db.close();
+    }
+
+    const readHandlers = createCodegraphMcpHandlers({ root, artifactPath: outDir });
+
+    await expect(readHandlers.query_sqlite({ query: "SELECT path FROM files ORDER BY path;" })).rejects.toThrow(
+      /no freshness baseline/i,
+    );
+
+    let caught: unknown;
+    try {
+      await readHandlers.query_sqlite({ query: "SELECT path FROM files ORDER BY path;" });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).not.toMatch(/JSON|Unexpected token/i);
+  });
+
+  it("reports fresh when a prebuilt MCP session has no freshness check", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-session-no-freshness-check-"));
+    await fs.writeFile(path.join(root, "one.ts"), "export function lonelySymbol() { return 1; }\n");
+    const backingSession = createAgentSession({ root });
+    const session: AgentSession = {
+      loadProject: backingSession.loadProject,
+      invalidate: backingSession.invalidate,
+    };
+    const handlers = createCodegraphMcpHandlers({ root, session });
+
+    const result = await handlers.search({ query: "lonelySymbol", mode: "symbol", limit: 5 });
+
+    expect(result.freshness).toEqual({ state: "fresh" });
   });
 });
 

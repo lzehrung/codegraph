@@ -109,7 +109,7 @@ codegraph install --target codex,claude --yes
 codegraph uninstall --target codex --yes
 ```
 
-Writes require `--yes`, and `--print-config <target>` prints the MCP snippet without touching disk. `uninstall` removes only Codegraph-owned marker blocks, marker files, or MCP entries whose command is `codegraph`.
+Writes require `--yes`, and `--print-config <target>` prints the MCP snippet without touching disk. `uninstall` removes only Codegraph-owned marker blocks, marker files, exact bundled skill payloads, or exact installer-owned MCP entries.
 
 ## MCP server
 

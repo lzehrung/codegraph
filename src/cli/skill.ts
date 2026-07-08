@@ -43,7 +43,8 @@ export function getSkillTargetDirForAgent(
     return path.join(homeDir, ".gemini", "skills", "codegraph");
   }
   if (agent === "opencode") {
-    return path.join(homeDir, ".config", "opencode", "skills", "codegraph");
+    const configHome = env.XDG_CONFIG_HOME?.trim() || path.join(homeDir, ".config");
+    return path.join(configHome, "opencode", "skills", "codegraph");
   }
   const codexHome = env.CODEX_HOME?.trim();
   if (codexHome) {

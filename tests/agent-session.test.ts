@@ -157,12 +157,14 @@ describe("agent session", () => {
     expect(files).not.toContain(ignoredFile.replace(/\\/g, "/"));
   });
 
-  it("reports stale file edits in check policy without invalidating cached project state", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-session-check-fresh-"));
-    const filePath = path.join(root, "auth.ts");
+  it("reports stale file edits as normalized project display paths without invalidating cached project state", async () => {
+    const absoluteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-session-check-fresh-"));
+    const relativeRoot = path.relative(process.cwd(), absoluteRoot);
+    const filePath = path.join(absoluteRoot, "src", "auth.ts");
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, "export function oldSymbol() { return 1; }\n", "utf8");
     const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
-    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    const session = createAgentSession({ root: relativeRoot, useConfig: false, freshness: { policy: "check" } });
     const cached = await session.loadProject({ symbolGraph: "skip" });
     if (!session.checkFreshness) {
       throw new Error("agent session should expose freshness checks");
@@ -174,10 +176,36 @@ describe("agent session", () => {
 
     expect(freshness).toEqual({
       state: "stale",
-      changedFiles: ["auth.ts"],
+      changedFiles: ["src/auth.ts"],
       changedFileCount: 1,
       omittedChangedFileCount: 0,
       reason: "session snapshot is older than files on disk",
+    });
+    expect(afterCheck).toBe(cached);
+    expect(buildSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts deleted file bytes against auto-refresh limits", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-session-delete-bytes-"));
+    const removedFile = path.join(root, "large.ts");
+    await fs.writeFile(removedFile, `export const payload = "${"x".repeat(64)}";\n`, "utf8");
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+    const session = createAgentSession({ root, freshness: { policy: "auto", maxAutoRefreshBytes: 16 } });
+    const cached = await session.loadProject({ symbolGraph: "skip" });
+    if (!session.checkFreshness) {
+      throw new Error("agent session should expose freshness checks");
+    }
+
+    await fs.unlink(removedFile);
+    const freshness = await session.checkFreshness();
+    const afterCheck = await session.loadProject({ symbolGraph: "skip" });
+
+    expect(freshness).toEqual({
+      state: "stale",
+      changedFiles: ["large.ts"],
+      changedFileCount: 1,
+      omittedChangedFileCount: 0,
+      reason: "changed byte count exceeds 16",
     });
     expect(afterCheck).toBe(cached);
     expect(buildSpy).toHaveBeenCalledTimes(1);
