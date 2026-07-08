@@ -447,7 +447,7 @@ function readRecordProperty(record: JsonRecord, property: string): JsonRecord {
   const value = record[property];
   if (value === undefined) return {};
   if (isJsonRecord(value)) return value;
-  throw new Error(`Existing ${property} config must be a JSON object before codegraph can merge into it.`);
+  throw new Error(`Existing ${property} config must be a JSON object before codegraph can update it.`);
 }
 
 function renderJsonConfig(record: JsonRecord): string {

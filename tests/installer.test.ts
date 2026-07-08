@@ -18,7 +18,11 @@ async function readFile(filePath: string): Promise<string> {
 const BUNDLED_SKILL_PATH = path.join(process.cwd(), "codegraph-skill", "codegraph", "SKILL.md");
 
 function expectInstallerChange(changes: InstallChange[], expected: InstallChange): void {
-  expect(changes).toContainEqual(expected);
+  expect(changes).toContainEqual({ ...expected, path: normalizeExpectedPath(expected.path) });
+}
+
+function normalizeExpectedPath(filePath: string): string {
+  return filePath.split(path.sep).join("/");
 }
 
 const CURSOR_INSTALLER_SERVER = {
