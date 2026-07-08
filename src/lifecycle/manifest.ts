@@ -3,6 +3,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { createAgentSession, listAgentSessionFiles } from "../agent/session.js";
 import { computeConfigHash } from "../indexer/build-cache/manifest.js";
+import { logWithLevel } from "../logging.js";
 import {
   normalizeGraphOptions,
   summarizeBuildOptions,
@@ -136,7 +137,7 @@ export async function getCodegraphLifecycleStatus(
 ): Promise<CodegraphLifecycleStatus> {
   const manifestPath = codegraphLifecycleManifestPath(root);
   const manifest = await readLifecycleManifest(root);
-  const configHash = await hashConfig(root);
+  const configHash = await hashConfig(root, options.buildOptions?.logLevel);
   const buildOptionsHash = hashBuildOptions(options.buildOptions);
   const files = await listAgentSessionFiles({
     root,
@@ -220,7 +221,7 @@ async function buildLifecycleManifest(
     root: ".",
     createdAt: existing?.createdAt ?? now,
     lastSyncAt: now,
-    configHash: await hashConfig(root),
+    configHash: await hashConfig(root, buildOptions?.logLevel),
     buildOptionsHash: hashBuildOptions(buildOptions),
     fileCount: snapshot.files.length,
     fileSignatureHash: await hashDiscoveredFiles(snapshot.files, root),
@@ -261,8 +262,11 @@ async function writeLifecycleManifest(root: string, manifest: CodegraphLifecycle
   await fsp.rename(tempPath, manifestPath);
 }
 
-async function hashConfig(root: string): Promise<string> {
-  const result = await computeConfigHash(root);
+async function hashConfig(root: string, logLevel: BuildOptions["logLevel"]): Promise<string> {
+  const result = await computeConfigHash(root, logLevel);
+  if (result.error) {
+    logWithLevel(logLevel, "warn", `Warning: Codegraph lifecycle config drift check: ${result.error}`);
+  }
   return result.hash;
 }
 

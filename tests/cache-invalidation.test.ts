@@ -1165,6 +1165,38 @@ describe("Cache invalidation and strict hashing", () => {
     expect(report.manifest?.reason).toBeUndefined();
   });
 
+  it("invalidates the disk manifest cache when codegraph.config.json content changes", async () => {
+    const root = await mkTmpDir("dg-config-json-hash-");
+    const entryFile = path.join(root, "entry.ts");
+    const configPath = path.join(root, "codegraph.config.json");
+
+    await fsp.writeFile(entryFile, "export const value = 1;\n", "utf8");
+    await fsp.writeFile(configPath, JSON.stringify({ discovery: { ignoreGlobs: ["dist/**"] } }), "utf8");
+
+    await buildProjectIndex(root, { cache: "disk" });
+
+    const manifestPath = path.join(root, ".codegraph-cache", "index-v1", "manifest.json");
+    const manifestBefore = JSON.parse(await fsp.readFile(manifestPath, "utf8")) as { configHash?: unknown };
+    expect(typeof manifestBefore.configHash).toBe("string");
+
+    await fsp.writeFile(configPath, JSON.stringify({ discovery: { ignoreGlobs: ["build/**"] } }), "utf8");
+
+    const report: BuildReport = { timings: {} };
+    await buildProjectIndexIncremental(root, {
+      cache: "disk",
+      logLevel: "silent",
+      report,
+    });
+
+    expect(report.manifest?.used).toBe(true);
+    expect(report.manifest?.reused).toBe(false);
+    expect(report.manifest?.reason).toBe("graphOptionsMismatch");
+
+    const manifestAfter = JSON.parse(await fsp.readFile(manifestPath, "utf8")) as { configHash?: unknown };
+    expect(typeof manifestAfter.configHash).toBe("string");
+    expect(manifestAfter.configHash).not.toBe(manifestBefore.configHash);
+  });
+
   it("preserves stable config caches when clearing import resolution state", async () => {
     const root = await mkTmpDir("dg-import-cache-preserve-");
     const srcDir = path.join(root, "src");
