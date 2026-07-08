@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { createAgentSession, listAgentSessionFiles } from "../agent/session.js";
+import { CODEGRAPH_CONFIG_FILE } from "../config.js";
 import { computeConfigHash } from "../indexer/build-cache/manifest.js";
 import {
   normalizeGraphOptions,
@@ -20,6 +21,8 @@ export type CodegraphLifecycleManifest = {
   buildOptionsHash: string;
   fileCount: number;
   fileSignatureHash: string;
+  /** Sorted, root-relative file paths as of the last sync. Absent on manifests written before this field existed. */
+  files?: string[];
   analysis: AnalysisSummary;
 };
 
@@ -124,11 +127,7 @@ export async function syncCodegraphLifecycle(
     initialized: true,
     manifestPath: codegraphLifecycleManifestPath(root),
     manifest,
-    changedFiles: {
-      added: Math.max(0, totalDelta),
-      removed: Math.max(0, -totalDelta),
-      totalDelta,
-    },
+    changedFiles: diffLifecycleFileCounts(existing?.files, manifest.files, totalDelta),
   };
 }
 
@@ -226,6 +225,7 @@ async function buildLifecycleManifest(
     buildOptionsHash: hashBuildOptions(buildOptions),
     fileCount: snapshot.files.length,
     fileSignatureHash: await hashDiscoveredFiles(snapshot.files, root),
+    files: discoveredFileRelativePaths(snapshot.files, root),
     analysis: snapshot.analysis,
   };
 }
@@ -264,7 +264,40 @@ async function writeLifecycleManifest(root: string, manifest: CodegraphLifecycle
 
 async function hashConfig(root: string): Promise<string> {
   const result = await computeConfigHash(root);
-  return result.hash;
+  const codegraphConfig = await readOptionalConfigContent(path.join(root, CODEGRAPH_CONFIG_FILE));
+  if (codegraphConfig === null) return result.hash;
+  return sha256(`${result.hash}\0${codegraphConfig}`);
+}
+
+async function readOptionalConfigContent(filePath: string): Promise<string | null> {
+  try {
+    return await fsp.readFile(filePath, "utf8");
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function discoveredFileRelativePaths(files: readonly string[], root: string): string[] {
+  return [...files]
+    .map((file) => path.relative(root, file).replace(/\\/g, "/"))
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function diffLifecycleFileCounts(
+  previous: readonly string[] | undefined,
+  current: readonly string[] | undefined,
+  totalDelta: number,
+): { added: number; removed: number; totalDelta: number } {
+  if (previous === undefined || current === undefined) {
+    // Legacy manifest predates per-file tracking; approximate from the net file-count delta.
+    return { added: Math.max(0, totalDelta), removed: Math.max(0, -totalDelta), totalDelta };
+  }
+  const previousSet = new Set(previous);
+  const currentSet = new Set(current);
+  const added = current.filter((file) => !previousSet.has(file)).length;
+  const removed = previous.filter((file) => !currentSet.has(file)).length;
+  return { added, removed, totalDelta };
 }
 
 async function hashDiscoveredFiles(files: readonly string[], root: string): Promise<string> {
@@ -338,7 +371,13 @@ function isLifecycleManifest(value: unknown): value is CodegraphLifecycleManifes
     typeof record.buildOptionsHash === "string" &&
     typeof record.fileCount === "number" &&
     typeof record.fileSignatureHash === "string" &&
+    isOptionalStringArray(record.files) &&
     typeof record.analysis === "object" &&
     record.analysis !== null
   );
+}
+
+function isOptionalStringArray(value: unknown): value is string[] | undefined {
+  if (value === undefined) return true;
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }

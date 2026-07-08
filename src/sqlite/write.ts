@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import { type SymbolGraph, type SymbolNode } from "../graphs/symbol-graph.js";
 import type { Graph } from "../types.js";
 import type { SqliteDatabase } from "../sqlite-driver.js";
@@ -14,18 +13,6 @@ type SqliteArtifactFileSignature = {
   mtimeMs: number;
 };
 
-async function collectSqliteArtifactFileSignatures(files: Iterable<string>): Promise<SqliteArtifactFileSignature[]> {
-  const signatures: SqliteArtifactFileSignature[] = [];
-  await Promise.all(
-    [...files].map(async (file) => {
-      const stat = await fs.stat(file);
-      if (!stat.isFile()) return;
-      signatures.push({ path: file, size: stat.size, mtimeMs: stat.mtimeMs });
-    }),
-  );
-  signatures.sort((left, right) => left.path.localeCompare(right.path));
-  return signatures;
-}
 function normalizeSqliteArtifactFileSignatures(
   signatures: Iterable<SqliteArtifactFileSignature>,
 ): SqliteArtifactFileSignature[] {

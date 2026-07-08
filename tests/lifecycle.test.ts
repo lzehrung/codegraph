@@ -15,6 +15,7 @@ import {
 import type { BuildOptions } from "../src/indexer/types.js";
 import { captureCli } from "./helpers/cli.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
+import { CODEGRAPH_CONFIG_FILE } from "../src/config.js";
 
 async function writeFile(root: string, relativePath: string, content: string): Promise<void> {
   const filePath = path.join(root, relativePath);
@@ -162,6 +163,22 @@ describe("project lifecycle commands", () => {
     expect(status.suggestedNextCommand).toBe("codegraph sync");
   });
 
+  it("status detects codegraph.config.json content changes", async () => {
+    const root = await mkTmpDir("cg-life-config-json-");
+    await writeFile(root, "src/main.ts", "export const main = 1;\n");
+    await initCodegraphLifecycle(root);
+
+    const before = await getCodegraphLifecycleStatus(root);
+    expect(before.configChanged).toBeFalsy();
+
+    await writeFile(root, CODEGRAPH_CONFIG_FILE, `${JSON.stringify({ discovery: { ignoreGlobs: ["dist/**"] } })}\n`);
+
+    const after = await getCodegraphLifecycleStatus(root);
+
+    expect(after.configChanged).toBeTruthy();
+    expect(after.suggestedNextCommand).toBe("codegraph sync");
+  });
+
   it("status detects lifecycle-relevant build option drift", async () => {
     const cases: { name: string; initial: BuildOptions; current: BuildOptions }[] = [
       {
@@ -260,6 +277,46 @@ describe("project lifecycle commands", () => {
     expect(result.manifest.fileCount).toBe(2);
     expect(result.changedFiles.added).toBe(1);
     expect(await readCodegraphEntries(root)).toEqual(["manifest.json"]);
+  });
+
+  it("sync independently tracks added and removed files when one is added and a different one is removed", async () => {
+    const root = await mkTmpDir("cg-life-sync-add-remove-");
+    await writeFile(root, "src/a.ts", "export const a = 1;\n");
+    await writeFile(root, "src/b.ts", "export const b = 2;\n");
+    await initCodegraphLifecycle(root);
+
+    await fsp.rm(path.join(root, "src/a.ts"));
+    await writeFile(root, "src/c.ts", "export const c = 3;\n");
+
+    const result = await syncCodegraphLifecycle(root);
+
+    expect(result.manifest.fileCount).toBe(2);
+    expect(result.manifest.files).toEqual(["src/b.ts", "src/c.ts"]);
+    expect(result.changedFiles.totalDelta).toBe(0);
+    expect(result.changedFiles.added).toBe(1);
+    expect(result.changedFiles.removed).toBe(1);
+  });
+
+  it("sync falls back to net-delta approximation when the previous manifest predates per-file tracking", async () => {
+    const root = await mkTmpDir("cg-life-sync-legacy-manifest-");
+    await writeFile(root, "src/main.ts", "export const main = 1;\n");
+    await initCodegraphLifecycle(root);
+
+    const manifestPath = codegraphLifecycleManifestPath(root);
+    const legacyManifest = await readManifest(root);
+    delete legacyManifest.files;
+    await fsp.writeFile(manifestPath, `${JSON.stringify(legacyManifest, null, 2)}\n`, "utf8");
+
+    await writeFile(root, "src/extra.ts", "export const extra = 2;\n");
+
+    const result = await syncCodegraphLifecycle(root);
+
+    expect(result.changedFiles.added).toBeGreaterThanOrEqual(0);
+    expect(result.changedFiles.removed).toBeGreaterThanOrEqual(0);
+    expect(result.changedFiles.added).toBe(1);
+    expect(result.changedFiles.removed).toBe(0);
+    expect(result.manifest.fileCount).toBe(2);
+    expect(result.manifest.files).toEqual(["src/extra.ts", "src/main.ts"]);
   });
 
   it("init and sync keep lifecycle metadata separate from the disk index cache", async () => {
@@ -384,6 +441,63 @@ describe("project lifecycle commands", () => {
       expect(result.stderr).toContain("--root");
       expect(result.stderr).toMatch(/positional/i);
     }
+  });
+
+  it("CLI lifecycle mutating commands honor --root without a positional path", async () => {
+    const commands = ["init", "sync", "uninit"] as const;
+
+    for (const command of commands) {
+      const cwd = await mkTmpDir(`cg-life-cli-root-success-${command}-cwd-`);
+      const flagRoot = await mkTmpDir(`cg-life-cli-root-success-${command}-root-`);
+      await writeFile(flagRoot, "src/main.ts", "export const main = 1;\n");
+      if (command === "uninit") {
+        await initCodegraphLifecycle(flagRoot);
+        expect(await readCodegraphEntries(flagRoot)).toEqual(["manifest.json"]);
+      }
+
+      const args = [command, "--root", flagRoot, "--json"];
+      if (command === "sync") args.push("--init");
+      if (command === "uninit") args.push("--force");
+
+      const result = await captureCli(args, { cwd });
+
+      expect(result.exitCode, `${command} --root should succeed`).toBeUndefined();
+      expect(result.stderr, command).toBe("");
+
+      if (command === "uninit") {
+        const payload = JSON.parse(result.stdout) as CodegraphLifecycleUninitResult;
+        expect(payload.root, command).toBe(flagRoot);
+        expect(payload.removed, command).toBeTruthy();
+        await expect(fsp.stat(path.join(flagRoot, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        const payload = JSON.parse(result.stdout) as CodegraphLifecycleSyncResult;
+        expect(payload.root, command).toBe(flagRoot);
+        expect(payload.initialized, command).toBeTruthy();
+        expect(payload.manifest.fileCount, command).toBe(1);
+        expect(await readCodegraphEntries(flagRoot)).toEqual(["manifest.json"]);
+      }
+
+      await expect(fsp.stat(path.join(cwd, ".codegraph")), `${command} must not touch cwd`).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    }
+  });
+
+  it("CLI status --root reports the flag root's lifecycle state regardless of cwd", async () => {
+    const cwd = await mkTmpDir("cg-life-cli-root-success-status-cwd-");
+    const flagRoot = await mkTmpDir("cg-life-cli-root-success-status-root-");
+    await writeFile(flagRoot, "src/main.ts", "export const main = 1;\n");
+    await initCodegraphLifecycle(flagRoot);
+
+    const result = await captureCli(["status", "--root", flagRoot, "--json"], { cwd });
+
+    expect(result.exitCode).toBeUndefined();
+    expect(result.stderr).toBe("");
+    const payload = JSON.parse(result.stdout) as CodegraphLifecycleStatus;
+    expect(payload.root).toBe(flagRoot);
+    expect(payload.initialized).toBeTruthy();
+    expect(payload.fileCount).toEqual({ then: 1, current: 1 });
+    expect(payload.suggestedNextCommand).toBe("codegraph status");
   });
 
   it("CLI status --json reports initialized and uninitialized lifecycle state", async () => {
