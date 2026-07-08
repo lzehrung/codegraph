@@ -63,6 +63,18 @@ Tool schemas are flat JSON objects for broad client compatibility; argument comb
 - `query_sqlite` rejects mutating SQL, recursive queries, synthetic payload functions, and stale artifact queries it cannot refresh safely.
 - SQLite responses are row- and byte-bounded.
 
+## Installer
+
+Use `codegraph install` to configure supported local clients without manually editing MCP config files:
+
+```bash
+codegraph install --target codex,claude --dry-run
+codegraph install --target codex,claude --yes
+codegraph install --print-config codex
+```
+
+The installer writes only Codegraph-owned marker blocks, marker files, bundled skill payloads, or exact installer-owned MCP entries. `codegraph uninstall --target <ids> --yes` removes only those owned entries.
+
 ## Client Configuration Examples
 
 Use `command: "codegraph"` when the CLI is on `PATH`. Use the full executable path when the client runs with a narrower environment.

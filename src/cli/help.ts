@@ -31,6 +31,8 @@ Commands:
   sql           Query a SQLite graph export read-only
   chunk         Chunk file for embeddings
   doctor        Inspect backend/runtime state and local graph artifacts
+  install       Configure Codegraph MCP and skill integration for agent clients
+  uninstall     Remove Codegraph-owned installer configuration
   skill         Install or inspect the bundled agent skill
   version       Print the installed codegraph version
 
@@ -56,8 +58,8 @@ Build Options:
   --cache-verify            Re-stat cached files before trusting disk cache entries
   --progress                Show progress tracking during indexing
 
-Output Options:
-  --json                    Output as JSON (default)
+Analysis Output Options:
+  --json                    Output analysis commands as JSON (default where supported)
   --mermaid                 Output as Mermaid diagram
   --dot                     Output as DOT graph
   --sqlite <path>           Write to SQLite database
@@ -85,6 +87,9 @@ Examples:
   codegraph packet get file:src%2Fcli.ts --json
   codegraph artifact build --root . --out codegraph-out --json
   codegraph mcp serve --root . --stdio
+  codegraph install --target codex,claude --yes
+  codegraph install --print-config codex
+  codegraph uninstall --target codex --yes
   codegraph inspect ./src --limit 20
   codegraph duplicates ./src --min-confidence medium
   codegraph graph ./src
@@ -124,6 +129,7 @@ const knownCliCommands = new Set([
   "hotspots",
   "impact",
   "index",
+  "install",
   "inspect",
   "mcp",
   "orient",
@@ -137,11 +143,31 @@ const knownCliCommands = new Set([
   "sql",
   "unresolved",
   "version",
+  "uninstall",
 ]);
 
 export function isKnownCliCommand(command: string): boolean {
   return knownCliCommands.has(command);
 }
+
+export const INSTALL_HELP_TEXT = `codegraph install - Configure Codegraph for supported agent clients
+
+Usage: codegraph install [target] [--target <codex,claude,cursor,gemini,opencode,agents>] [--yes | --dry-run] [--print-config <target>] [--detect]
+
+Targets:
+  codex, claude, cursor, gemini, opencode, agents
+
+Safety:
+  Writes require --yes. Use --dry-run to preview changed files or --print-config <target> to print the MCP snippet.
+`;
+
+export const UNINSTALL_HELP_TEXT = `codegraph uninstall - Remove Codegraph-owned installer configuration
+
+Usage: codegraph uninstall [target] [--target <codex,claude,cursor,gemini,opencode,agents>] [--yes | --dry-run] [--detect]
+
+Safety:
+  Removes only Codegraph-owned marker blocks, marker files, exact bundled skill payloads, or exact installer-owned MCP entries.
+`;
 
 export const EXPLORE_HELP_TEXT = `codegraph explore - Answer a broad repo question with bounded repo context
 
@@ -361,6 +387,8 @@ export function helpTextForCommand(command: string, positionals: readonly string
   if (command === "orient") return ORIENT_HELP_TEXT;
   if (command === "packet") return PACKET_HELP_TEXT;
   if (command === "explain") return EXPLAIN_HELP_TEXT;
+  if (command === "install") return INSTALL_HELP_TEXT;
+  if (command === "uninstall") return UNINSTALL_HELP_TEXT;
   if (command === "drift") return DRIFT_HELP_TEXT;
   if (command === "duplicates") return DUPLICATES_HELP_TEXT;
   if (command === "artifact") return ARTIFACT_HELP_TEXT;

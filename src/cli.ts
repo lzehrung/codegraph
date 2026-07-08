@@ -37,6 +37,7 @@ import { handleGraphQueryCommand } from "./cli/graphQueries.js";
 import { handleGrepCommand } from "./cli/grep.js";
 import { CLI_HELP_TEXT, helpTextForCommand, isKnownCliCommand } from "./cli/help.js";
 import { handleImpactCommand } from "./cli/impact.js";
+import { handleInstallerCommand } from "./cli/install.js";
 import { handleIndexCommand } from "./cli/index.js";
 import { handleHotspotsCommand, handleInspectCommand } from "./cli/inspect.js";
 import { handleOrientCommand } from "./cli/orient.js";
@@ -274,6 +275,20 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
 
   if (cmd === "skill") {
     await handleSkillCommand({
+      positionals: parsed.positionals,
+      getOpt,
+      hasFlag,
+      writeJSONLine,
+      writeStdoutLine,
+      writeStderrLine,
+      exit: exitCli,
+    });
+    return;
+  }
+
+  if (cmd === "install" || cmd === "uninstall") {
+    await handleInstallerCommand({
+      command: cmd,
       positionals: parsed.positionals,
       getOpt,
       hasFlag,

@@ -5,6 +5,7 @@ import {
   parseNonNegativeIntegerOption,
   parseRefContextOption,
   parseSymbolGraphScopeOption,
+  validateCliArgs,
 } from "../src/cli/options.js";
 
 describe("parseIntegerOptionValue strictness", () => {
@@ -55,5 +56,15 @@ describe("parseCliArgs value-option guard", () => {
   it("allows negative decimal values for integer options", () => {
     const parsed = parseCliArgs("hotspots", ["--limit", "-1"]);
     expect(parsed.options.get("--limit")).toEqual(["-1"]);
+  });
+});
+
+describe("CLI command option validation", () => {
+  it("rejects installer --json flags because installer output is already structured JSON", () => {
+    for (const command of ["install", "uninstall"]) {
+      const parsed = parseCliArgs(command, ["--json"]);
+
+      expect(() => validateCliArgs(command, parsed)).toThrow(`Unknown option for ${command}: --json`);
+    }
   });
 });

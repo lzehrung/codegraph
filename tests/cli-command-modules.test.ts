@@ -245,7 +245,7 @@ describe("CLI command modules", () => {
   test("lists cache verification and progress as build options in CLI help", () => {
     const buildOptions = CLI_HELP_TEXT.slice(
       CLI_HELP_TEXT.indexOf("Build Options:"),
-      CLI_HELP_TEXT.indexOf("Output Options:"),
+      CLI_HELP_TEXT.indexOf("Analysis Output Options:"),
     );
 
     expect(buildOptions).toContain("--cache-strict");
@@ -301,6 +301,42 @@ describe("CLI command modules", () => {
     expect(PACKET_HELP_TEXT).toContain("file paths, symbol names, SQL object names");
     expect(PACKET_HELP_TEXT).toContain("file:/symbol:/chunk:/sql:/graph: handles");
     expect(PACKET_HELP_TEXT).not.toContain("CLI orient returns file handles");
+  });
+
+  test("install and uninstall help omit --json because output is always structured", async () => {
+    for (const command of ["install", "uninstall"]) {
+      const result = await captureCli([command, "--help"]);
+
+      expect(result.exitCode, command).toBeUndefined();
+      expect(result.stderr, command).toBe("");
+      expect(result.stdout, command).toContain(`Usage: codegraph ${command}`);
+      expect(result.stdout, command).not.toContain("--json");
+    }
+  });
+
+  test("top-level help scopes output options to analysis commands", async () => {
+    const result = await captureCli(["--help"]);
+
+    expect(result.exitCode).toBeUndefined();
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toMatch(/^Analysis Output Options:$/m);
+    expect(result.stdout).not.toMatch(/^Output Options:$/m);
+
+    const outputSectionStart = result.stdout.indexOf("Analysis Output Options:");
+    const examplesStart = result.stdout.indexOf("Examples:", outputSectionStart);
+    expect(outputSectionStart).toBeGreaterThanOrEqual(0);
+    expect(examplesStart).toBeGreaterThan(outputSectionStart);
+
+    const outputSection = result.stdout.slice(outputSectionStart, examplesStart);
+    expect(outputSection).toContain("--json");
+    expect(outputSection).toContain("Output analysis commands as JSON");
+    expect(outputSection).not.toContain("Output as JSON (default)");
+
+    const installerLines = result.stdout
+      .split("\n")
+      .filter((line) => /\bcodegraph (?:install|uninstall)\b|\b(?:install|uninstall)\s{2,}/.test(line));
+    expect(installerLines.length).toBeGreaterThan(0);
+    expect(installerLines.join("\n")).not.toContain("--json");
   });
 
   test("search command prints usage before running without a query", async () => {

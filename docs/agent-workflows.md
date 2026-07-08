@@ -99,6 +99,18 @@ codegraph drift ./src --base origin/main --head HEAD --compact-json
 
 Drift compares structural signals over time: dependency cycles, hotspots, unresolved imports, API surface changes, duplicate group counts, and graph edges. It is review and CI evidence, not runtime validation or compiler diagnostics. Use compact JSON for CI or agent handoff, and use graph-edge/API filters to keep human review output bounded.
 
+## Agent client installer
+
+Use `install` when setting up Codegraph for supported local agent clients:
+
+```bash
+codegraph install --target codex,claude --dry-run
+codegraph install --target codex,claude --yes
+codegraph uninstall --target codex --yes
+```
+
+Writes require `--yes`, and `--print-config <target>` prints the MCP snippet without touching disk. `uninstall` removes only Codegraph-owned marker blocks, marker files, exact bundled skill payloads, or exact installer-owned MCP entries.
+
 ## MCP server
 
 Use `codegraph mcp serve --root . --stdio` when an agent can spawn and own a stdio MCP subprocess.
