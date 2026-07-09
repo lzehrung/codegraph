@@ -388,7 +388,7 @@ async function readCodegraphDirEntries(dir: string): Promise<string[]> {
     return await fsp.readdir(dir);
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
-    throw error;
+    throw new CodegraphLifecycleUserError(`Unable to read ${dir}: ${stringifyError(error)}`);
   }
 }
 
@@ -398,7 +398,7 @@ async function removeDirIfEmpty(dir: string): Promise<void> {
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOTEMPTY") return;
     if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
-    throw error;
+    throw new CodegraphLifecycleUserError(`Unable to remove ${dir}: ${stringifyError(error)}`);
   }
 }
 

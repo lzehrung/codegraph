@@ -89,4 +89,26 @@ describe("CLI command option validation", () => {
       expect(() => validateCliArgs(command, parsed)).not.toThrow();
     }
   });
+
+  it("rejects --pretty for lifecycle commands (init/status/sync) since the lifecycle handler only branches on --json and always prints human-readable text otherwise", () => {
+    for (const command of ["init", "status", "sync"]) {
+      const parsed = parseCliArgs(command, ["--pretty"]);
+
+      expect(() => validateCliArgs(command, parsed)).toThrow(`Unknown option for ${command}: --pretty`);
+    }
+  });
+
+  it("still rejects --pretty for uninit, which never accepted it", () => {
+    const parsed = parseCliArgs("uninit", ["--pretty"]);
+
+    expect(() => validateCliArgs("uninit", parsed)).toThrow("Unknown option for uninit: --pretty");
+  });
+
+  it("still accepts --pretty for commands that legitimately support the full JSON output flag set", () => {
+    for (const command of ["orient", "search"]) {
+      const parsed = parseCliArgs(command, ["--pretty"]);
+
+      expect(() => validateCliArgs(command, parsed)).not.toThrow();
+    }
+  });
 });

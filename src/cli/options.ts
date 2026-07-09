@@ -367,7 +367,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ["index", graphCommandSchema({ kind: "any" })],
   [
     "init",
-    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--force"], LIFECYCLE_BUILD_OPTIONS, {
+    commandSchema([...SHARED_BUILD_FLAGS, "--json", "--force"], LIFECYCLE_BUILD_OPTIONS, {
       kind: "max",
       max: 1,
       usage: "Usage: codegraph init [path] [--force] [--json] OR codegraph init --root <path> [--force] [--json]",
@@ -495,7 +495,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ],
   [
     "status",
-    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], LIFECYCLE_BUILD_OPTIONS, {
+    commandSchema([...SHARED_BUILD_FLAGS, "--json"], LIFECYCLE_BUILD_OPTIONS, {
       kind: "max",
       max: 1,
       usage: "Usage: codegraph status [path] [--json] OR codegraph status --root <path> [--json]",
@@ -503,7 +503,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ],
   [
     "sync",
-    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--init"], LIFECYCLE_BUILD_OPTIONS, {
+    commandSchema([...SHARED_BUILD_FLAGS, "--json", "--init"], LIFECYCLE_BUILD_OPTIONS, {
       kind: "max",
       max: 1,
       usage: "Usage: codegraph sync [path] [--init] [--json] OR codegraph sync --root <path> [--init] [--json]",

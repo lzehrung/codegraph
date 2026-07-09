@@ -209,15 +209,25 @@ describe("project lifecycle commands", () => {
     await writeFile(root, "package.json", `${JSON.stringify({ name: "fixture" })}\n`);
     await writeFile(root, ".gitignore", "node_modules/\n");
     const gitignorePath = path.join(root, ".gitignore");
-    // Revoke read permission so computeConfigHash's per-file fsp.readFile throws (EACCES) for this
-    // one config-hash input while package.json still hashes successfully. .gitignore is deliberately
-    // chosen: it's one of computeConfigHash's matched config files (`**/.gitignore`), but unlike
-    // package.json/package-lock.json/codegraph.config.json it is never part of the discovered project
-    // file set (DEFAULT_PROJECT_PATTERNS) or read unconditionally elsewhere (loadGitignoreRules
-    // already swallows its own read failures) - so this isolates hashConfig's
-    // `if (result.error) logWithLevel(logLevel, "warn", ...)` branch without mocking fs or tripping
-    // an unrelated unguarded read.
-    await fsp.chmod(gitignorePath, 0o000);
+    // Mock fsp.readFile to fail (EACCES) only for .gitignore, so computeConfigHash's per-file read
+    // throws for this one config-hash input while package.json still hashes successfully. .gitignore
+    // is deliberately chosen: it's one of computeConfigHash's matched config files (`**/.gitignore`),
+    // but unlike package.json/package-lock.json/codegraph.config.json it is never part of the
+    // discovered project file set (DEFAULT_PROJECT_PATTERNS) or read unconditionally elsewhere
+    // (loadGitignoreRules already swallows its own read failures) - so this isolates hashConfig's
+    // `if (result.error) logWithLevel(logLevel, "warn", ...)` branch without tripping an unrelated
+    // unguarded read. A readFile mock (rather than chmod) keeps this deterministic across platforms
+    // where chmod may not reliably block reads (e.g. Windows, or CI running as root).
+    const originalReadFile = fsp.readFile.bind(fsp);
+    const eaccesError = Object.assign(new Error(`EACCES: permission denied, open '${gitignorePath}'`), {
+      code: "EACCES",
+    });
+    const readFileSpy = vi.spyOn(fsp, "readFile").mockImplementation(async (filePath, options) => {
+      if (filePath === gitignorePath) {
+        throw eaccesError;
+      }
+      return await originalReadFile(filePath, options as never);
+    });
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
@@ -239,7 +249,7 @@ describe("project lifecycle commands", () => {
       expect(await readManifest(root)).toEqual(result.manifest);
     } finally {
       warnSpy.mockRestore();
-      await fsp.chmod(gitignorePath, 0o644);
+      readFileSpy.mockRestore();
     }
   });
 
@@ -766,5 +776,80 @@ describe("project lifecycle commands", () => {
     await fsp.rm(manifestPath, { force: true });
     const statusAfterRemoval = await getCodegraphLifecycleStatus(root);
     expect(statusAfterRemoval.initialized).toBe(false);
+  });
+
+  it("surfaces a non-ENOENT uninit directory-listing failure as CodegraphLifecycleUserError, not a raw Error", async () => {
+    const root = await mkTmpDir("cg-life-uninit-readdir-failure-");
+    await writeFile(root, "src/main.ts", "export const main = 1;\n");
+    await initCodegraphLifecycle(root);
+
+    const dirPath = path.join(root, ".codegraph");
+    const originalReaddir = fsp.readdir.bind(fsp);
+    const eaccesError = Object.assign(new Error(`EACCES: permission denied, scandir '${dirPath}'`), {
+      code: "EACCES",
+    });
+    const readdirSpy = vi.spyOn(fsp, "readdir").mockImplementation(async (dir, options) => {
+      if (dir === dirPath) {
+        throw eaccesError;
+      }
+      return await originalReaddir(dir, options as never);
+    });
+
+    try {
+      const uninitPromise = uninitCodegraphLifecycle(root);
+      // A generic Error subclass would slip past cli.ts's lifecycle dispatch and print a raw
+      // stack trace instead of a clean "message to stderr, exit code 1" error render, so this
+      // must be the dedicated CodegraphLifecycleUserError, not merely `instanceof Error`.
+      await expect(uninitPromise).rejects.toBeInstanceOf(CodegraphLifecycleUserError);
+      await expect(uninitPromise).rejects.toThrow(`Unable to read ${dirPath}`);
+    } finally {
+      readdirSpy.mockRestore();
+    }
+
+    // Real readdir must remain unaffected once the mocked permission failure is no longer in
+    // play: an unrelated project's non-force uninit still lists and removes its manifest.
+    const baselineRoot = await mkTmpDir("cg-life-uninit-readdir-baseline-");
+    await writeFile(baselineRoot, "src/main.ts", "export const main = 1;\n");
+    await initCodegraphLifecycle(baselineRoot);
+    const baselineResult = await uninitCodegraphLifecycle(baselineRoot);
+    expect(baselineResult.removed).toBe(true);
+    await expect(fsp.stat(path.join(baselineRoot, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("surfaces a non-ENOTEMPTY/non-ENOENT uninit directory-removal failure as CodegraphLifecycleUserError, not a raw Error", async () => {
+    const root = await mkTmpDir("cg-life-uninit-rmdir-failure-");
+    await writeFile(root, "src/main.ts", "export const main = 1;\n");
+    await initCodegraphLifecycle(root);
+
+    const dirPath = path.join(root, ".codegraph");
+    const originalRmdir = fsp.rmdir.bind(fsp);
+    const eaccesError = Object.assign(new Error(`EACCES: permission denied, rmdir '${dirPath}'`), {
+      code: "EACCES",
+    });
+    const rmdirSpy = vi.spyOn(fsp, "rmdir").mockImplementation(async (dir, options) => {
+      if (dir === dirPath) {
+        throw eaccesError;
+      }
+      return await originalRmdir(dir, options as never);
+    });
+
+    try {
+      // Without --force, uninit removes the manifest file for real and then hands the now-empty
+      // .codegraph directory to removeDirIfEmpty, which is where the mocked rmdir failure bites.
+      const uninitPromise = uninitCodegraphLifecycle(root);
+      await expect(uninitPromise).rejects.toBeInstanceOf(CodegraphLifecycleUserError);
+      await expect(uninitPromise).rejects.toThrow(`Unable to remove ${dirPath}`);
+    } finally {
+      rmdirSpy.mockRestore();
+    }
+
+    // Real rmdir must remain unaffected once the mocked permission failure is no longer in play:
+    // an unrelated project's non-force uninit still removes its now-empty directory.
+    const baselineRoot = await mkTmpDir("cg-life-uninit-rmdir-baseline-");
+    await writeFile(baselineRoot, "src/main.ts", "export const main = 1;\n");
+    await initCodegraphLifecycle(baselineRoot);
+    const baselineResult = await uninitCodegraphLifecycle(baselineRoot);
+    expect(baselineResult.removed).toBe(true);
+    await expect(fsp.stat(path.join(baselineRoot, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
