@@ -371,6 +371,37 @@ describe("project lifecycle commands", () => {
     expect(result.changedFiles.removed).toBe(1);
   });
 
+  it("sync derives totalDelta from the actual file lists even when a manifest's fileCount has drifted from files.length", async () => {
+    const root = await mkTmpDir("cg-life-sync-desynced-manifest-");
+    await writeFile(root, "src/a.ts", "export const a = 1;\n");
+    await writeFile(root, "src/b.ts", "export const b = 2;\n");
+    await initCodegraphLifecycle(root);
+
+    const manifestPath = codegraphLifecycleManifestPath(root);
+    const priorManifest = await readManifest(root);
+    const previousFiles = priorManifest.files ?? [];
+    expect(previousFiles).toEqual(["src/a.ts", "src/b.ts"]);
+
+    // Hand-desync fileCount from the files array it is supposed to describe (e.g. a hand edit or
+    // partial corruption). If totalDelta were still trusting fileCount, it would come out as
+    // 2 - 99 = -97 instead of matching the real file-list churn asserted below.
+    const desyncedManifest: CodegraphLifecycleManifest = { ...priorManifest, fileCount: 99 };
+    await fsp.writeFile(manifestPath, `${JSON.stringify(desyncedManifest, null, 2)}\n`, "utf8");
+
+    await fsp.rm(path.join(root, "src/a.ts"));
+    await writeFile(root, "src/c.ts", "export const c = 3;\n");
+
+    const result = await syncCodegraphLifecycle(root);
+    const currentFiles = result.manifest.files ?? [];
+
+    expect(currentFiles).toEqual(["src/b.ts", "src/c.ts"]);
+    expect(result.changedFiles.added).toBe(1);
+    expect(result.changedFiles.removed).toBe(1);
+    expect(result.changedFiles.totalDelta).toBe(currentFiles.length - previousFiles.length);
+    expect(result.changedFiles.totalDelta).toBe(0);
+    expect(result.changedFiles.totalDelta).toBe(result.changedFiles.added - result.changedFiles.removed);
+  });
+
   it("sync falls back to net-delta approximation when the previous manifest predates per-file tracking", async () => {
     const root = await mkTmpDir("cg-life-sync-legacy-manifest-");
     await writeFile(root, "src/main.ts", "export const main = 1;\n");
@@ -851,5 +882,203 @@ describe("project lifecycle commands", () => {
     const baselineResult = await uninitCodegraphLifecycle(baselineRoot);
     expect(baselineResult.removed).toBe(true);
     await expect(fsp.stat(path.join(baselineRoot, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("surfaces a non-ENOENT manifest write (rename) failure as CodegraphLifecycleUserError, not a raw Error", async () => {
+    const root = await mkTmpDir("cg-life-write-eacces-");
+    await writeFile(root, "src/main.ts", "export const main = 1;\n");
+
+    const manifestPath = codegraphLifecycleManifestPath(root);
+    const originalRename = fsp.rename.bind(fsp);
+    const eaccesError = Object.assign(new Error(`EACCES: permission denied, rename to '${manifestPath}'`), {
+      code: "EACCES",
+    });
+    const renameSpy = vi.spyOn(fsp, "rename").mockImplementation(async (oldPath, newPath) => {
+      if (newPath === manifestPath) {
+        throw eaccesError;
+      }
+      return await originalRename(oldPath, newPath as never);
+    });
+
+    try {
+      // A generic Error subclass would slip past cli.ts's lifecycle dispatch and print a raw
+      // stack trace instead of a clean "message to stderr, exit code 1" error render, so this
+      // must be the dedicated CodegraphLifecycleUserError, not merely `instanceof Error`.
+      const initPromise = initCodegraphLifecycle(root);
+      await expect(initPromise).rejects.toBeInstanceOf(CodegraphLifecycleUserError);
+      await expect(initPromise).rejects.toThrow(/Unable to write Codegraph lifecycle manifest/);
+    } finally {
+      renameSpy.mockRestore();
+    }
+
+    // Real rename must remain unaffected once the mocked permission failure is no longer in
+    // play: an unrelated project's init still succeeds and produces a manifest.
+    const baselineRoot = await mkTmpDir("cg-life-write-eacces-baseline-");
+    await writeFile(baselineRoot, "src/main.ts", "export const main = 1;\n");
+    const baselineResult = await initCodegraphLifecycle(baselineRoot);
+    expect(baselineResult.manifest.fileCount).toBe(1);
+  });
+
+  it("surfaces a non-ENOENT/non-ENOTDIR file-signature stat failure as CodegraphLifecycleUserError, not a raw Error", async () => {
+    const root = await mkTmpDir("cg-life-stat-failure-");
+    await writeFile(root, "src/main.ts", "export const main = 1;\n");
+    await writeFile(root, "src/other.ts", "export const other = 2;\n");
+    await initCodegraphLifecycle(root);
+
+    const targetPath = path.join(root, "src/other.ts");
+    const originalStat = fsp.stat.bind(fsp);
+    const eaccesError = Object.assign(new Error(`EACCES: permission denied, stat '${targetPath}'`), {
+      code: "EACCES",
+    });
+    const statSpy = vi.spyOn(fsp, "stat").mockImplementation(async (filePath, options) => {
+      if (filePath === targetPath) {
+        throw eaccesError;
+      }
+      return await originalStat(filePath, options as never);
+    });
+
+    try {
+      // A generic Error subclass would slip past cli.ts's lifecycle dispatch and print a raw
+      // stack trace instead of a clean "message to stderr, exit code 1" error render, so this
+      // must be the dedicated CodegraphLifecycleUserError, not merely `instanceof Error`.
+      const statusPromise = getCodegraphLifecycleStatus(root);
+      await expect(statusPromise).rejects.toBeInstanceOf(CodegraphLifecycleUserError);
+      await expect(statusPromise).rejects.toThrow(/Unable to verify file signature/);
+    } finally {
+      statSpy.mockRestore();
+    }
+
+    // Real stat must remain unaffected once the mocked permission failure is no longer in play:
+    // status for the same project resolves normally with no changes detected.
+    const status = await getCodegraphLifecycleStatus(root);
+    expect(status.filesChanged).toBeFalsy();
+  });
+
+  it("surfaces a non-ENOENT --force uninit removal failure as CodegraphLifecycleUserError, not a raw Error", async () => {
+    const root = await mkTmpDir("cg-life-uninit-force-rm-failure-");
+    await writeFile(root, "src/main.ts", "export const main = 1;\n");
+    await initCodegraphLifecycle(root);
+
+    const dirPath = path.join(root, ".codegraph");
+    const originalRm = fsp.rm.bind(fsp);
+    const eaccesError = Object.assign(new Error(`EACCES: permission denied, rm '${dirPath}'`), {
+      code: "EACCES",
+    });
+    const rmSpy = vi.spyOn(fsp, "rm").mockImplementation(async (target, options) => {
+      if (target === dirPath) {
+        throw eaccesError;
+      }
+      return await originalRm(target, options as never);
+    });
+
+    try {
+      // A generic Error subclass would slip past cli.ts's lifecycle dispatch and print a raw
+      // stack trace instead of a clean "message to stderr, exit code 1" error render, so this
+      // must be the dedicated CodegraphLifecycleUserError, not merely `instanceof Error`.
+      const uninitPromise = uninitCodegraphLifecycle(root, { force: true });
+      await expect(uninitPromise).rejects.toBeInstanceOf(CodegraphLifecycleUserError);
+      await expect(uninitPromise).rejects.toThrow(`Unable to remove ${dirPath}`);
+    } finally {
+      rmSpy.mockRestore();
+    }
+
+    // Real rm must remain unaffected once the mocked permission failure is no longer in play: an
+    // unrelated project's --force uninit still removes the whole .codegraph directory.
+    const baselineRoot = await mkTmpDir("cg-life-uninit-force-rm-baseline-");
+    await writeFile(baselineRoot, "src/main.ts", "export const main = 1;\n");
+    await initCodegraphLifecycle(baselineRoot);
+    const baselineResult = await uninitCodegraphLifecycle(baselineRoot, { force: true });
+    expect(baselineResult.removed).toBe(true);
+    await expect(fsp.stat(path.join(baselineRoot, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("surfaces a non-ENOENT non-force uninit manifest-removal failure as CodegraphLifecycleUserError, not a raw Error", async () => {
+    const root = await mkTmpDir("cg-life-uninit-manifest-rm-failure-");
+    await writeFile(root, "src/main.ts", "export const main = 1;\n");
+    await initCodegraphLifecycle(root);
+
+    const manifestPath = codegraphLifecycleManifestPath(root);
+    const originalRm = fsp.rm.bind(fsp);
+    const eaccesError = Object.assign(new Error(`EACCES: permission denied, rm '${manifestPath}'`), {
+      code: "EACCES",
+    });
+    const rmSpy = vi.spyOn(fsp, "rm").mockImplementation(async (target, options) => {
+      if (target === manifestPath) {
+        throw eaccesError;
+      }
+      return await originalRm(target, options as never);
+    });
+
+    try {
+      // A generic Error subclass would slip past cli.ts's lifecycle dispatch and print a raw
+      // stack trace instead of a clean "message to stderr, exit code 1" error render, so this
+      // must be the dedicated CodegraphLifecycleUserError, not merely `instanceof Error`.
+      const uninitPromise = uninitCodegraphLifecycle(root);
+      await expect(uninitPromise).rejects.toBeInstanceOf(CodegraphLifecycleUserError);
+      await expect(uninitPromise).rejects.toThrow(`Unable to remove ${manifestPath}`);
+    } finally {
+      rmSpy.mockRestore();
+    }
+
+    // Real rm must remain unaffected once the mocked permission failure is no longer in play: an
+    // unrelated project's non-force uninit still removes its manifest file.
+    const baselineRoot = await mkTmpDir("cg-life-uninit-manifest-rm-baseline-");
+    await writeFile(baselineRoot, "src/main.ts", "export const main = 1;\n");
+    await initCodegraphLifecycle(baselineRoot);
+    const baselineResult = await uninitCodegraphLifecycle(baselineRoot);
+    expect(baselineResult.removed).toBe(true);
+  });
+
+  it("CLI status without --json prints a 'Files changed' line reflecting file drift", async () => {
+    const root = await mkTmpDir("cg-life-cli-status-pretty-files-changed-");
+    const relativePath = "src/main.ts";
+    const content = "export const main = 1;\n";
+    await writeFile(root, relativePath, content);
+    await initCodegraphLifecycle(root);
+
+    const unchangedResult = await captureCli(["status", root]);
+
+    expect(unchangedResult.exitCode).toBeUndefined();
+    expect(unchangedResult.stderr).toBe("");
+    expect(unchangedResult.stdout).toContain("Files changed: no\n");
+
+    // mtime-only rewrite: byte-identical content but a fresh mtime still counts as drift, matching
+    // the "status treats an mtime-only rewrite as a file change" fixture above.
+    const filePath = path.join(root, relativePath);
+    const originalStat = await fsp.stat(filePath);
+    const futureDate = new Date(originalStat.mtime.getTime() + 60_000);
+    await fsp.writeFile(filePath, content, "utf8");
+    await fsp.utimes(filePath, futureDate, futureDate);
+
+    const changedResult = await captureCli(["status", root]);
+
+    expect(changedResult.exitCode).toBeUndefined();
+    expect(changedResult.stderr).toBe("");
+    expect(changedResult.stdout).toContain("Files changed: yes\n");
+  });
+
+  it("CLI sync without --json prints explicit +added/-removed counts and omits the label when nothing changed", async () => {
+    const root = await mkTmpDir("cg-life-cli-sync-pretty-delta-");
+    await writeFile(root, "src/a.ts", "export const a = 1;\n");
+    await writeFile(root, "src/b.ts", "export const b = 2;\n");
+    await initCodegraphLifecycle(root);
+    const manifestPath = codegraphLifecycleManifestPath(root);
+
+    const unchangedResult = await captureCli(["sync", root]);
+
+    expect(unchangedResult.exitCode).toBeUndefined();
+    expect(unchangedResult.stderr).toBe("");
+    expect(unchangedResult.stdout).toContain(`Synced Codegraph at ${root}: 2 files. Manifest: ${manifestPath}\n`);
+    expect(unchangedResult.stdout).not.toContain("+0/-0");
+
+    // Equal adds and removes net to a totalDelta of 0, which must not silently hide real churn.
+    await fsp.rm(path.join(root, "src/a.ts"));
+    await writeFile(root, "src/c.ts", "export const c = 3;\n");
+
+    const churnedResult = await captureCli(["sync", root]);
+
+    expect(churnedResult.exitCode).toBeUndefined();
+    expect(churnedResult.stderr).toBe("");
+    expect(churnedResult.stdout).toContain(`Synced Codegraph at ${root}: 2 files, +1/-1. Manifest: ${manifestPath}\n`);
   });
 });

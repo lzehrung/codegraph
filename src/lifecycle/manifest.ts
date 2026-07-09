@@ -121,14 +121,14 @@ export async function syncCodegraphLifecycle(
   );
   await writeLifecycleManifest(root, manifest);
   const thenCount = existing?.fileCount ?? 0;
-  const totalDelta = manifest.fileCount - thenCount;
+  const fallbackTotalDelta = manifest.fileCount - thenCount;
   return {
     schemaVersion: MANIFEST_SCHEMA_VERSION,
     root,
     initialized: true,
     manifestPath: codegraphLifecycleManifestPath(root),
     manifest,
-    changedFiles: diffLifecycleFileCounts(existing?.files, manifest.files, totalDelta),
+    changedFiles: diffLifecycleFileCounts(existing?.files, manifest.files, fallbackTotalDelta),
   };
 }
 
@@ -196,9 +196,9 @@ export async function uninitCodegraphLifecycle(
     );
   }
   if (options.force) {
-    await fsp.rm(dir, { recursive: true, force: true });
+    await removeCodegraphPath(dir, { recursive: true });
   } else {
-    await fsp.rm(manifestPath, { force: true });
+    await removeCodegraphPath(manifestPath, {});
     await removeDirIfEmpty(dir);
   }
   return { schemaVersion: MANIFEST_SCHEMA_VERSION, root, removed: true, manifestPath };
@@ -274,7 +274,9 @@ async function writeLifecycleManifest(root: string, manifest: CodegraphLifecycle
     await fsp.rm(tempPath, { force: true }).catch(() => {
       // Cleanup is best-effort; surfacing the original error matters more.
     });
-    throw error;
+    throw new CodegraphLifecycleUserError(
+      `Unable to write Codegraph lifecycle manifest at ${manifestPath}: ${stringifyError(error)}`,
+    );
   }
 }
 
@@ -295,17 +297,24 @@ function discoveredFileRelativePaths(files: readonly string[], root: string): st
 function diffLifecycleFileCounts(
   previous: readonly string[] | undefined,
   current: readonly string[] | undefined,
-  totalDelta: number,
+  fallbackTotalDelta: number,
 ): { added: number; removed: number; totalDelta: number } {
   if (previous === undefined || current === undefined) {
     // Legacy manifest predates per-file tracking; approximate from the net file-count delta.
-    return { added: Math.max(0, totalDelta), removed: Math.max(0, -totalDelta), totalDelta };
+    return {
+      added: Math.max(0, fallbackTotalDelta),
+      removed: Math.max(0, -fallbackTotalDelta),
+      totalDelta: fallbackTotalDelta,
+    };
   }
   const previousSet = new Set(previous);
   const currentSet = new Set(current);
   const added = current.filter((file) => !previousSet.has(file)).length;
   const removed = previous.filter((file) => !currentSet.has(file)).length;
-  return { added, removed, totalDelta };
+  // Derive totalDelta from the file lists themselves (not the caller-supplied fileCount delta) so
+  // it can never disagree with added/removed, even if a manifest's fileCount and files.length have
+  // diverged (hand edits, partial/corrupt manifests, legacy migration edge cases).
+  return { added, removed, totalDelta: current.length - previous.length };
 }
 
 const FILE_SIGNATURE_STAT_CONCURRENCY = 64;
@@ -325,7 +334,7 @@ async function hashDiscoveredFiles(files: readonly string[], root: string): Prom
       signatures.set(file, { size: stat.size, mtimeMs: stat.mtimeMs });
     } catch (error) {
       if (isMissingStatRace(error)) return;
-      throw error;
+      throw new CodegraphLifecycleUserError(`Unable to verify file signature for ${file}: ${stringifyError(error)}`);
     }
   });
   const hash = createHash("sha256");
@@ -383,6 +392,14 @@ function sha256(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
+async function removeCodegraphPath(target: string, options: { recursive?: boolean }): Promise<void> {
+  try {
+    await fsp.rm(target, { ...(options.recursive ? { recursive: true } : {}), force: true });
+  } catch (error) {
+    throw new CodegraphLifecycleUserError(`Unable to remove ${target}: ${stringifyError(error)}`);
+  }
+}
+
 async function readCodegraphDirEntries(dir: string): Promise<string[]> {
   try {
     return await fsp.readdir(dir);
@@ -405,6 +422,8 @@ async function removeDirIfEmpty(dir: string): Promise<void> {
 function isLifecycleManifest(value: unknown): value is CodegraphLifecycleManifest {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
+  const fileCount = record.fileCount;
+  const files = record.files;
   return (
     record.schemaVersion === MANIFEST_SCHEMA_VERSION &&
     record.root === "." &&
@@ -412,9 +431,11 @@ function isLifecycleManifest(value: unknown): value is CodegraphLifecycleManifes
     typeof record.lastSyncAt === "string" &&
     typeof record.configHash === "string" &&
     typeof record.buildOptionsHash === "string" &&
-    typeof record.fileCount === "number" &&
+    typeof fileCount === "number" &&
+    Number.isInteger(fileCount) &&
+    fileCount >= 0 &&
     typeof record.fileSignatureHash === "string" &&
-    isOptionalStringArray(record.files) &&
+    isOptionalStringArray(files) &&
     typeof record.analysis === "object" &&
     record.analysis !== null
   );

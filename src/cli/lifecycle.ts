@@ -62,9 +62,11 @@ function writeLifecycleResult(
 }
 
 function formatSyncResult(label: string, result: CodegraphLifecycleSyncResult): string {
-  const delta = result.changedFiles.totalDelta;
-  const deltaLabel = delta ? `, delta ${delta}` : "";
-  return `${label} Codegraph at ${result.root}: ${result.manifest.fileCount} files${deltaLabel}. Manifest: ${result.manifestPath}`;
+  const { added, removed } = result.changedFiles;
+  // Report added/removed explicitly rather than the net delta alone: equal adds and removes
+  // cancel out to a delta of 0, which would otherwise hide real file churn.
+  const changeLabel = added || removed ? `, +${added}/-${removed}` : "";
+  return `${label} Codegraph at ${result.root}: ${result.manifest.fileCount} files${changeLabel}. Manifest: ${result.manifestPath}`;
 }
 
 function formatUninitResult(result: CodegraphLifecycleUninitResult): string {
@@ -77,6 +79,7 @@ function formatStatus(status: CodegraphLifecycleStatus): string {
     return `Codegraph is not initialized at ${status.root}. Next: ${status.suggestedNextCommand}`;
   }
   const fileCount = status.fileCount ? `${status.fileCount.then} then, ${status.fileCount.current} current` : "unknown";
+  const filesChanged = status.filesChanged ? "yes" : "no";
   const configChanged = status.configChanged ? "yes" : "no";
   const buildOptionsChanged = status.buildOptionsChanged ? "yes" : "no";
   const analysis = status.analysis?.label ?? "unknown";
@@ -84,6 +87,7 @@ function formatStatus(status: CodegraphLifecycleStatus): string {
     `Codegraph initialized at ${status.root}.`,
     `Last sync: ${status.lastSyncAt ?? "unknown"}`,
     `Files: ${fileCount}`,
+    `Files changed: ${filesChanged}`,
     `Config changed: ${configChanged}`,
     `Build options changed: ${buildOptionsChanged}`,
     `Analysis: ${analysis}`,

@@ -111,4 +111,31 @@ describe("CLI command option validation", () => {
       expect(() => validateCliArgs(command, parsed)).not.toThrow();
     }
   });
+
+  it("rejects --cache-verify, --progress, and --workers flags for status, which never calls createAgentSession/loadProject", () => {
+    for (const flag of ["--cache-verify", "--progress", "--workers"]) {
+      const parsed = parseCliArgs("status", [flag]);
+
+      expect(() => validateCliArgs("status", parsed)).toThrow(`Unknown option for status: ${flag}`);
+    }
+  });
+
+  it("rejects --threads for status, which never builds and so has no use for a concurrency option", () => {
+    const parsed = parseCliArgs("status", ["--threads", "4"]);
+
+    expect(() => validateCliArgs("status", parsed)).toThrow("Unknown option for status: --threads");
+  });
+
+  it("still accepts --cache-verify, --progress, --workers, and --threads for init/sync, which do call session.loadProject", () => {
+    for (const command of ["init", "sync"]) {
+      for (const flag of ["--cache-verify", "--progress", "--workers"]) {
+        const parsed = parseCliArgs(command, [flag]);
+
+        expect(() => validateCliArgs(command, parsed)).not.toThrow();
+      }
+
+      const parsedThreads = parseCliArgs(command, ["--threads", "4"]);
+      expect(() => validateCliArgs(command, parsedThreads)).not.toThrow();
+    }
+  });
 });

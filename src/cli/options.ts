@@ -119,6 +119,14 @@ const SHARED_BUILD_OPTIONS = [
 // explicit --cache override, so --cache is intentionally excluded here to keep the CLI
 // contract truthful.
 const LIFECYCLE_BUILD_OPTIONS = SHARED_BUILD_OPTIONS.filter((option) => option !== "--cache");
+// `status` never calls createAgentSession/loadProject (it only hashes config, hashes build
+// options, and lists project files for signature hashing), so --cache-verify, --progress, and
+// --workers have no observable effect there, unlike for init/sync which do a full build.
+const STATUS_BUILD_FLAGS = SHARED_BUILD_FLAGS.filter(
+  (flag) => flag !== "--cache-verify" && flag !== "--progress" && flag !== "--workers",
+);
+// --threads only matters for the concurrency of an actual build (init/sync); status never builds.
+const STATUS_BUILD_OPTIONS = LIFECYCLE_BUILD_OPTIONS.filter((option) => option !== "--threads");
 const JSON_OUTPUT_FLAGS = ["--json", "--pretty"];
 const REPORT_FLAGS = ["--report"];
 const REPORT_OPTIONS = ["--report-file"];
@@ -495,7 +503,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ],
   [
     "status",
-    commandSchema([...SHARED_BUILD_FLAGS, "--json"], LIFECYCLE_BUILD_OPTIONS, {
+    commandSchema([...STATUS_BUILD_FLAGS, "--json"], STATUS_BUILD_OPTIONS, {
       kind: "max",
       max: 1,
       usage: "Usage: codegraph status [path] [--json] OR codegraph status --root <path> [--json]",
