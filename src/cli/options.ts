@@ -115,6 +115,18 @@ const SHARED_BUILD_OPTIONS = [
   "--ignore-glob",
   "--resolution-hint",
 ];
+// Lifecycle commands (init/status/sync) always warm/read the disk cache and never honor an
+// explicit --cache override, so --cache is intentionally excluded here to keep the CLI
+// contract truthful.
+const LIFECYCLE_BUILD_OPTIONS = SHARED_BUILD_OPTIONS.filter((option) => option !== "--cache");
+// `status` never calls createAgentSession/loadProject (it only hashes config, hashes build
+// options, and lists project files for signature hashing), so --cache-verify, --progress, and
+// --workers have no observable effect there, unlike for init/sync which do a full build.
+const STATUS_BUILD_FLAGS = SHARED_BUILD_FLAGS.filter(
+  (flag) => flag !== "--cache-verify" && flag !== "--progress" && flag !== "--workers",
+);
+// --threads only matters for the concurrency of an actual build (init/sync); status never builds.
+const STATUS_BUILD_OPTIONS = LIFECYCLE_BUILD_OPTIONS.filter((option) => option !== "--threads");
 const JSON_OUTPUT_FLAGS = ["--json", "--pretty"];
 const REPORT_FLAGS = ["--report"];
 const REPORT_OPTIONS = ["--report-file"];
@@ -362,6 +374,14 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ],
   ["index", graphCommandSchema({ kind: "any" })],
   [
+    "init",
+    commandSchema([...SHARED_BUILD_FLAGS, "--json", "--force"], LIFECYCLE_BUILD_OPTIONS, {
+      kind: "max",
+      max: 1,
+      usage: "Usage: codegraph init [path] [--force] [--json] OR codegraph init --root <path> [--force] [--json]",
+    }),
+  ],
+  [
     "install",
     commandSchema(["--detect", "--dry-run", "--yes"], ["--print-config", "--target"], {
       kind: "max",
@@ -482,10 +502,34 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     }),
   ],
   [
+    "status",
+    commandSchema([...STATUS_BUILD_FLAGS, "--json"], STATUS_BUILD_OPTIONS, {
+      kind: "max",
+      max: 1,
+      usage: "Usage: codegraph status [path] [--json] OR codegraph status --root <path> [--json]",
+    }),
+  ],
+  [
+    "sync",
+    commandSchema([...SHARED_BUILD_FLAGS, "--json", "--init"], LIFECYCLE_BUILD_OPTIONS, {
+      kind: "max",
+      max: 1,
+      usage: "Usage: codegraph sync [path] [--init] [--json] OR codegraph sync --root <path> [--init] [--json]",
+    }),
+  ],
+  [
     "sql",
     commandSchema(["--json"], ["--db", "--query", "--sqlite"], {
       kind: "none",
       usage: 'Usage: codegraph sql --db <sqlite path> --query "SELECT ..."',
+    }),
+  ],
+  [
+    "uninit",
+    commandSchema(["--force", "--json"], ["--root"], {
+      kind: "max",
+      max: 1,
+      usage: "Usage: codegraph uninit [path] [--force] [--json] OR codegraph uninit --root <path> [--force] [--json]",
     }),
   ],
   [

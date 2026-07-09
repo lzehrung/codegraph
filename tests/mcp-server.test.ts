@@ -742,7 +742,6 @@ describe("codegraph MCP handlers", () => {
     expect(result.freshness).toEqual({ state: "fresh" });
     expect(freshnessChecks).toBe(0);
   });
-
   it("bounds query_sqlite bytes for MCP responses", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sqlite-bytes-"));
     await fs.writeFile(path.join(root, "one.ts"), "export const one = 1;\n");

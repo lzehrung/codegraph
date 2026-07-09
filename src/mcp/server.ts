@@ -530,7 +530,6 @@ function createCodegraphMcpHandlersForSession(
         const explanation = await explainCodegraphTargetWithSession(session, { root, target: request.handle });
         return explanation.target;
       }),
-
     goto: async (request) =>
       await withFreshness(async () => {
         const snapshot = await session.loadProject({ symbolGraph: "skip" });

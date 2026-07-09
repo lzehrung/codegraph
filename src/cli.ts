@@ -38,6 +38,8 @@ import { handleGrepCommand } from "./cli/grep.js";
 import { CLI_HELP_TEXT, helpTextForCommand, isKnownCliCommand } from "./cli/help.js";
 import { handleImpactCommand } from "./cli/impact.js";
 import { handleInstallerCommand } from "./cli/install.js";
+import { handleLifecycleCommand } from "./cli/lifecycle.js";
+import { CodegraphLifecycleUserError } from "./lifecycle/manifest.js";
 import { handleIndexCommand } from "./cli/index.js";
 import { handleHotspotsCommand, handleInspectCommand } from "./cli/inspect.js";
 import { handleOrientCommand } from "./cli/orient.js";
@@ -78,6 +80,10 @@ function isExistingDirectory(filePath: string): boolean {
   } catch {
     return false;
   }
+}
+
+function isLifecycleCommand(command: string): command is "init" | "status" | "sync" | "uninit" {
+  return command === "init" || command === "status" || command === "sync" || command === "uninit";
 }
 
 function assertValidIncludeRoots(command: string, baseRoot: string, includeRoots: readonly string[]): void {
@@ -213,6 +219,25 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   const firstPositionalRoot = parsed.positionals.length === 1 ? resolveAbs(parsed.positionals[0]!) : undefined;
+  if (isLifecycleCommand(cmd) && rootOpt && parsed.positionals.length) {
+    writeStderrLine(
+      `Invalid ${cmd} path "${parsed.positionals[0]!}". Positional paths cannot be combined with --root for lifecycle commands.`,
+    );
+    exitCli(2);
+    return;
+  }
+  if (
+    isLifecycleCommand(cmd) &&
+    !rootOpt &&
+    firstPositionalRoot !== undefined &&
+    !isExistingDirectory(firstPositionalRoot)
+  ) {
+    writeStderrLine(
+      `Invalid ${cmd} path "${parsed.positionals[0]!}". Expected an existing directory or use --root <path>.`,
+    );
+    exitCli(2);
+    return;
+  }
   const defaultProjectRoot =
     (cmd === "graph" ||
       cmd === "graph-delta" ||
@@ -221,7 +246,8 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       cmd === "hotspots" ||
       cmd === "inspect" ||
       cmd === "duplicates" ||
-      cmd === "impact") &&
+      cmd === "impact" ||
+      isLifecycleCommand(cmd)) &&
     !rootOpt &&
     firstPositionalRoot !== undefined &&
     isExistingDirectory(firstPositionalRoot)
@@ -538,6 +564,25 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     return await resolveFilesFromRoots();
   };
 
+  if (isLifecycleCommand(cmd)) {
+    try {
+      await handleLifecycleCommand({
+        command: cmd,
+        root: projectRootFs,
+        buildOptions: buildAgentOptions(),
+        hasFlag,
+        writeJSONLine,
+        writeStdoutLine,
+      });
+    } catch (error) {
+      if (error instanceof CodegraphLifecycleUserError) {
+        writeStderrLine(error.message);
+        exitCli(1);
+      }
+      throw error;
+    }
+    return;
+  }
   if (cmd === "explore") {
     await handleExploreCommand({
       positionals: parsed.positionals,

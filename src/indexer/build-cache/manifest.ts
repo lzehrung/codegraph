@@ -4,6 +4,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import fg from "fast-glob";
 import type { GraphCacheEntry, GraphBuildOptions } from "../../graphs/types.js";
+import { CODEGRAPH_CONFIG_FILE } from "../../config.js";
 import { logWithLevel, type LogLevel } from "../../logging.js";
 import type { Edge } from "../../types.js";
 import {
@@ -120,7 +121,7 @@ export function sanitizeManifestEntriesForRoot(
 
 export async function computeConfigHash(projectRoot: string, logLevel?: LogLevel): Promise<ConfigHashResult> {
   try {
-    const configFiles = await fg([...DEFAULT_PROJECT_MANIFESTS, "**/.gitignore"], {
+    const configFiles = await fg([...DEFAULT_PROJECT_MANIFESTS, CODEGRAPH_CONFIG_FILE, "**/.gitignore"], {
       cwd: projectRoot,
       absolute: true,
       dot: true,

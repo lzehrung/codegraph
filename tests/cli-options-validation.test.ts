@@ -67,4 +67,75 @@ describe("CLI command option validation", () => {
       expect(() => validateCliArgs(command, parsed)).toThrow(`Unknown option for ${command}: --json`);
     }
   });
+
+  it("rejects --cache for lifecycle commands (init/status/sync) since buildLifecycleManifest always forces disk cache", () => {
+    for (const command of ["init", "status", "sync"]) {
+      const parsed = parseCliArgs(command, ["--cache", "off"]);
+
+      expect(() => validateCliArgs(command, parsed)).toThrow(`Unknown option for ${command}: --cache`);
+    }
+  });
+
+  it("still rejects --cache for uninit, which never accepted it", () => {
+    const parsed = parseCliArgs("uninit", ["--cache", "off"]);
+
+    expect(() => validateCliArgs("uninit", parsed)).toThrow("Unknown option for uninit: --cache");
+  });
+
+  it("still accepts --cache for commands that legitimately support an explicit cache override", () => {
+    for (const command of ["orient", "search"]) {
+      const parsed = parseCliArgs(command, ["--cache", "off"]);
+
+      expect(() => validateCliArgs(command, parsed)).not.toThrow();
+    }
+  });
+
+  it("rejects --pretty for lifecycle commands (init/status/sync) since the lifecycle handler only branches on --json and always prints human-readable text otherwise", () => {
+    for (const command of ["init", "status", "sync"]) {
+      const parsed = parseCliArgs(command, ["--pretty"]);
+
+      expect(() => validateCliArgs(command, parsed)).toThrow(`Unknown option for ${command}: --pretty`);
+    }
+  });
+
+  it("still rejects --pretty for uninit, which never accepted it", () => {
+    const parsed = parseCliArgs("uninit", ["--pretty"]);
+
+    expect(() => validateCliArgs("uninit", parsed)).toThrow("Unknown option for uninit: --pretty");
+  });
+
+  it("still accepts --pretty for commands that legitimately support the full JSON output flag set", () => {
+    for (const command of ["orient", "search"]) {
+      const parsed = parseCliArgs(command, ["--pretty"]);
+
+      expect(() => validateCliArgs(command, parsed)).not.toThrow();
+    }
+  });
+
+  it("rejects --cache-verify, --progress, and --workers flags for status, which never calls createAgentSession/loadProject", () => {
+    for (const flag of ["--cache-verify", "--progress", "--workers"]) {
+      const parsed = parseCliArgs("status", [flag]);
+
+      expect(() => validateCliArgs("status", parsed)).toThrow(`Unknown option for status: ${flag}`);
+    }
+  });
+
+  it("rejects --threads for status, which never builds and so has no use for a concurrency option", () => {
+    const parsed = parseCliArgs("status", ["--threads", "4"]);
+
+    expect(() => validateCliArgs("status", parsed)).toThrow("Unknown option for status: --threads");
+  });
+
+  it("still accepts --cache-verify, --progress, --workers, and --threads for init/sync, which do call session.loadProject", () => {
+    for (const command of ["init", "sync"]) {
+      for (const flag of ["--cache-verify", "--progress", "--workers"]) {
+        const parsed = parseCliArgs(command, [flag]);
+
+        expect(() => validateCliArgs(command, parsed)).not.toThrow();
+      }
+
+      const parsedThreads = parseCliArgs(command, ["--threads", "4"]);
+      expect(() => validateCliArgs(command, parsedThreads)).not.toThrow();
+    }
+  });
 });
