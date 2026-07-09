@@ -56,7 +56,7 @@ function normalizeDiscoveryOptions(discovery?: ProjectFileDiscoveryOptions): Man
 function normalizeLanguageExtensions(extensions?: Record<string, string>): Record<string, string> | undefined {
   const entries = Object.entries(extensions ?? {})
     .map(([key, value]) => [key.trim().toLowerCase(), value.trim()] as const)
-    .filter(([key, value]) => key && value)
+    .filter(([key, value]) => key.startsWith(".") && value)
     .sort((left, right) => left[0].localeCompare(right[0]));
   if (!entries.length) return undefined;
   return Object.fromEntries(entries);

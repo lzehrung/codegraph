@@ -11,6 +11,7 @@ import {
   type BuildReport,
   type GoToResult,
   type IncrementalBuildOptions,
+  type LanguageExtensionMap,
   type Reference,
   type SymbolDef,
 } from "./indexer/types.js";
@@ -73,6 +74,10 @@ function normalizeStringArray(values?: string[]): string[] | undefined {
   if (!values?.length) return undefined;
   return [...values].sort();
 }
+function normalizeLanguageExtensionsMap(extensions?: LanguageExtensionMap): LanguageExtensionMap | undefined {
+  if (!extensions) return undefined;
+  return Object.keys(extensions).length ? { ...extensions } : undefined;
+}
 
 function normalizeBuildOptions(options?: BuildOptions): Record<string, unknown> | undefined {
   if (!options) return undefined;
@@ -110,7 +115,7 @@ function normalizeBuildOptions(options?: BuildOptions): Record<string, unknown> 
           gitignoreRoot: options.discovery.gitignoreRoot ? path.resolve(options.discovery.gitignoreRoot) : undefined,
         }
       : undefined,
-    languageExtensions: options.languageExtensions ? { ...options.languageExtensions } : undefined,
+    languageExtensions: normalizeLanguageExtensionsMap(options.languageExtensions),
   };
 }
 
@@ -243,7 +248,8 @@ export class CodeReviewSession implements ICodeReviewSession {
     const config = await loadCodegraphConfig(this.root);
     const discovery = mergeDiscoveryOptions(config.discovery, this.buildOptions?.discovery);
     const hasDiscovery = hasDiscoveryOptions(discovery);
-    const languageExtensions = this.buildOptions?.languageExtensions ?? config.languages?.extensions;
+    const languageExtensions =
+      normalizeLanguageExtensionsMap(this.buildOptions?.languageExtensions) ?? config.languages?.extensions;
     if (!hasDiscovery && !languageExtensions) {
       return this.buildOptions;
     }

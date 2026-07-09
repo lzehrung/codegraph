@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions } from "../src/config.js";
 import { searchCodegraph } from "../src/agent/search.js";
 import { buildProjectIndex } from "../src/indexer/build-index.js";
+import { diffBuildOptions, summarizeBuildOptions } from "../src/indexer/build-cache.js";
+import { supportForFile } from "../src/languages.js";
 
 async function mkRepo(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-config-"));
@@ -256,6 +258,25 @@ describe("codegraph config", () => {
     const phpIndex = await buildWithProjectConfig(root);
 
     expect(localExportNames(phpIndex, root, "src/cached.tpl")).toContain("cached_template");
+  });
+
+  it("ignores non-dot-prefixed extension keys passed directly to supportForFile", () => {
+    expect(supportForFile("widget.tpl", { tpl: "html" })).toBeUndefined();
+    expect(supportForFile("widget.tpl", { ".tpl": "html" })?.id).toBe("html");
+  });
+
+  it("ignores non-dot-prefixed languageExtensions keys when comparing manifest build options", () => {
+    const dotOnly = summarizeBuildOptions({
+      languageExtensions: { ".tpl": "html" },
+    });
+    const withNonDotKey = summarizeBuildOptions({
+      languageExtensions: { ".tpl": "html", tpl: "html" },
+    });
+
+    expect(withNonDotKey).toEqual(dotOnly);
+    expect(diffBuildOptions(dotOnly, { languageExtensions: { ".tpl": "html", tpl: "html" } })).not.toContain(
+      "languageExtensions",
+    );
   });
 
   it("rejects language extension keys that do not start with a dot", async () => {

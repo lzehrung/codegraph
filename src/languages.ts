@@ -81,7 +81,7 @@ function mappedSupportForFile(
 ): LanguageSupport | undefined {
   const mappings = Object.entries(extensionMap ?? {})
     .map(([extension, languageId]) => [extension.trim().toLowerCase(), languageId.trim()] as const)
-    .filter(([extension, languageId]) => extension && languageId)
+    .filter(([extension, languageId]) => extension.startsWith(".") && languageId)
     .sort((left, right) => right[0].length - left[0].length || left[0].localeCompare(right[0]));
   const lowerFilename = filename.toLowerCase();
   for (const [extension, languageId] of mappings) {
