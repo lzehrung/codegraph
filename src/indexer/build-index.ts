@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -45,6 +46,7 @@ import {
   loadManifest,
   normalizeGraphOptions,
   normalizeIndexedFileInputs,
+  normalizeLanguageExtensions,
   projectSnapshotFilesSignature,
   recordConfigHashResult,
   recordFileFailure,
@@ -330,13 +332,17 @@ function graphEdgeKey(edge: Edge): string {
 
 async function moduleCacheSignatureForFile(file: string, sigInfo: FileSignature, opts?: BuildOptions): Promise<string> {
   const baseSignature = await cacheSignatureForFile(file, sigInfo);
-  const languageExtensions = opts?.languageExtensions;
-  if (!languageExtensions || !Object.keys(languageExtensions).length) return baseSignature;
-  const normalizedExtensions = Object.entries(languageExtensions)
-    .map(([key, value]) => [key.trim().toLowerCase(), value.trim()] as const)
-    .filter(([key, value]) => key && value)
-    .sort((left, right) => left[0].localeCompare(right[0]));
-  return `${baseSignature}\0languageExtensions:${JSON.stringify(normalizedExtensions)}`;
+  const normalizedExtensions = normalizeLanguageExtensions(opts?.languageExtensions);
+  if (!normalizedExtensions) return baseSignature;
+  // Combine via a hash rather than raw concatenation: the disk cache stores this string in a
+  // SQLite TEXT column, and node:sqlite's DatabaseSync silently truncates TEXT bind parameters
+  // at embedded NUL bytes, so a raw separator character risks the stored and freshly-computed
+  // signatures never matching (permanent cache miss) if either baseSignature or the serialized
+  // extensions ever contained one.
+  const hash = crypto.createHash("sha1");
+  hash.update(baseSignature);
+  hash.update(JSON.stringify(Object.entries(normalizedExtensions)));
+  return hash.digest("hex");
 }
 
 function projectPatternsForLanguageExtensions(opts?: BuildOptions): string[] | undefined {

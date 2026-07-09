@@ -53,7 +53,7 @@ function normalizeDiscoveryOptions(discovery?: ProjectFileDiscoveryOptions): Man
   };
 }
 
-function normalizeLanguageExtensions(extensions?: Record<string, string>): Record<string, string> | undefined {
+export function normalizeLanguageExtensions(extensions?: Record<string, string>): Record<string, string> | undefined {
   const entries = Object.entries(extensions ?? {})
     .map(([key, value]) => [key.trim().toLowerCase(), value.trim()] as const)
     .filter(([key, value]) => key.startsWith(".") && value)

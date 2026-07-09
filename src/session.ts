@@ -11,11 +11,11 @@ import {
   type BuildReport,
   type GoToResult,
   type IncrementalBuildOptions,
-  type LanguageExtensionMap,
   type Reference,
   type SymbolDef,
 } from "./indexer/types.js";
 import { buildProjectIndex, buildProjectIndexIncremental } from "./indexer/build-index.js";
+import { normalizeLanguageExtensions } from "./indexer/build-cache.js";
 import { findReferences, goToDefinition } from "./indexer/navigation.js";
 import {
   analyzeImpactFromDiff,
@@ -74,10 +74,6 @@ function normalizeStringArray(values?: string[]): string[] | undefined {
   if (!values?.length) return undefined;
   return [...values].sort();
 }
-function normalizeLanguageExtensionsMap(extensions?: LanguageExtensionMap): LanguageExtensionMap | undefined {
-  if (!extensions) return undefined;
-  return Object.keys(extensions).length ? { ...extensions } : undefined;
-}
 
 function normalizeBuildOptions(options?: BuildOptions): Record<string, unknown> | undefined {
   if (!options) return undefined;
@@ -115,7 +111,7 @@ function normalizeBuildOptions(options?: BuildOptions): Record<string, unknown> 
           gitignoreRoot: options.discovery.gitignoreRoot ? path.resolve(options.discovery.gitignoreRoot) : undefined,
         }
       : undefined,
-    languageExtensions: normalizeLanguageExtensionsMap(options.languageExtensions),
+    languageExtensions: normalizeLanguageExtensions(options.languageExtensions),
   };
 }
 
@@ -249,7 +245,7 @@ export class CodeReviewSession implements ICodeReviewSession {
     const discovery = mergeDiscoveryOptions(config.discovery, this.buildOptions?.discovery);
     const hasDiscovery = hasDiscoveryOptions(discovery);
     const languageExtensions =
-      normalizeLanguageExtensionsMap(this.buildOptions?.languageExtensions) ?? config.languages?.extensions;
+      normalizeLanguageExtensions(this.buildOptions?.languageExtensions) ?? config.languages?.extensions;
     if (!hasDiscovery && !languageExtensions) {
       return this.buildOptions;
     }

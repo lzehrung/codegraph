@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions } from "../src/config.js";
 import { searchCodegraph } from "../src/agent/search.js";
-import { buildProjectIndex } from "../src/indexer/build-index.js";
+import { buildProjectIndex, type BuildReport } from "../src/indexer/build-index.js";
 import { diffBuildOptions, summarizeBuildOptions } from "../src/indexer/build-cache.js";
 import { supportForFile } from "../src/languages.js";
 
@@ -258,6 +258,35 @@ describe("codegraph config", () => {
     const phpIndex = await buildWithProjectConfig(root);
 
     expect(localExportNames(phpIndex, root, "src/cached.tpl")).toContain("cached_template");
+  });
+
+  it("does not invalidate the per-file module cache when languageExtensions has a redundant non-dot key", async () => {
+    const root = await mkRepo();
+    await fs.writeFile(
+      path.join(root, "src", "cached.tpl"),
+      "<?php function cached_template() { return 1; }\n",
+      "utf8",
+    );
+
+    const firstReport: BuildReport = { timings: {} };
+    await buildProjectIndex(root, {
+      cache: "memory",
+      languageExtensions: { ".tpl": "html" },
+      report: firstReport,
+    });
+
+    const secondReport: BuildReport = { timings: {} };
+    await buildProjectIndex(root, {
+      cache: "memory",
+      languageExtensions: { ".tpl": "html", tpl: "html" },
+      report: secondReport,
+    });
+
+    expect(firstReport.files?.total).toBeGreaterThan(0);
+    expect(secondReport.files?.total).toBe(firstReport.files?.total);
+    expect(secondReport.files?.cached).toBe(secondReport.files?.total);
+    expect(secondReport.cache?.hits).toBe(secondReport.files?.total);
+    expect(secondReport.cache?.misses ?? 0).toBe(0);
   });
 
   it("ignores non-dot-prefixed extension keys passed directly to supportForFile", () => {

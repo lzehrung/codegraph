@@ -1410,6 +1410,20 @@ describe("SessionManager", () => {
     expect(session2).toBe(session1);
   });
 
+  test("should reuse a session when languageExtensions has a redundant non-dot key", async () => {
+    const session1 = await manager.getOrCreateSession("shared", {
+      root: sampleRoot,
+      buildOptions: sampleBuildOptions({ languageExtensions: { ".tpl": "html" } }),
+    });
+
+    const session2 = await manager.getOrCreateSession("shared", {
+      root: sampleRoot,
+      buildOptions: sampleBuildOptions({ languageExtensions: { ".tpl": "html", tpl: "html" } }),
+    });
+
+    expect(session2).toBe(session1);
+  });
+
   test("should reject reusing a session id when graph options drift", async () => {
     await manager.getOrCreateSession("shared", {
       root: sampleRoot,

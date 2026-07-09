@@ -101,6 +101,31 @@ describe("disk cache uses sqlite backend", () => {
     expect((report2.cache?.hits ?? 0) > 0).toBe(true);
   });
 
+  it("reuses disk cache entries across builds when languageExtensions is configured", async () => {
+    const root = await mkTmpDir("dg-disk-cache-language-extensions-");
+    await fsp.writeFile(path.join(root, "template.tpl"), "<?php function cached_template() { return 1; }\n", "utf8");
+
+    const report1: BuildReport = {};
+    await buildProjectIndex(root, {
+      cache: "disk",
+      keepParsed: false,
+      languageExtensions: { ".tpl": "php" },
+      report: report1,
+      threads: 1,
+    });
+
+    const report2: BuildReport = {};
+    await buildProjectIndex(root, {
+      cache: "disk",
+      keepParsed: false,
+      languageExtensions: { ".tpl": "php" },
+      report: report2,
+      threads: 1,
+    });
+
+    expect((report2.cache?.hits ?? 0) > 0).toBe(true);
+  });
+
   it("migrates an older module cache sqlite schema", async () => {
     const root = await mkTmpDir("dg-disk-cache-old-module-");
     await fsp.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
