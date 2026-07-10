@@ -349,7 +349,6 @@ export async function listProjectFiles(
       cwd: root,
       absolute: true,
       dot: true,
-      caseSensitiveMatch: false,
       followSymbolicLinks: false,
       ignore: fastGlobIgnoreGlobs,
     });
@@ -428,7 +427,6 @@ async function listEntriesFromSafeSymlinkDirectories(
           cwd: directory,
           absolute: true,
           dot: true,
-          caseSensitiveMatch: false,
           followSymbolicLinks: false,
           ignore: locationIndependentIgnores,
           ...(options.onlyFiles !== undefined ? { onlyFiles: options.onlyFiles } : {}),

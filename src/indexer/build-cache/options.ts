@@ -1,5 +1,5 @@
 import path from "node:path";
-import { normalizeLanguageExtensions } from "../../languages.js";
+import { normalizeLanguageExtensions, type LanguageExtensionMap } from "../../languages.js";
 import type { GraphBuildOptions } from "../../graphs/types.js";
 import { normalizePath, normalizeResolutionHints } from "../../util/paths.js";
 import type { ProjectFileDiscoveryOptions } from "../../util/projectFiles.js";
@@ -18,7 +18,7 @@ export type ManifestBuildOptions = {
     gitignoreRoot?: string;
     useGitignore: boolean;
   };
-  languageExtensions?: Record<string, string>;
+  languageExtensions?: LanguageExtensionMap;
 };
 
 function normalizeManifestBuildOptions(opts?: ManifestBuildOptions): ManifestBuildOptions {

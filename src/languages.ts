@@ -100,8 +100,13 @@ export function normalizeLanguageExtensions(
   return Object.fromEntries(entries);
 }
 
+function caseInsensitiveExtensionPattern(extension: string): string {
+  const suffix = extension.replace(/[a-z]/g, (letter) => `[${letter}${letter.toUpperCase()}]`);
+  return `**/*${suffix}`;
+}
+
 export function languageExtensionPatterns(extensions: LanguageExtensionMap | undefined): string[] {
-  return Object.keys(normalizeLanguageExtensions(extensions) ?? {}).map((extension) => `**/*${extension}`);
+  return Object.keys(normalizeLanguageExtensions(extensions) ?? {}).map(caseInsensitiveExtensionPattern);
 }
 
 function mappedSupportForFile(
