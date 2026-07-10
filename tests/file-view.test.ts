@@ -163,6 +163,43 @@ describe("agent file view", () => {
     expect(JSON.stringify(redacted)).not.toContain(secretValue);
   });
 
+  it("keeps a key-material symlink alias metadata-only when its target is a sensitive text config", async () => {
+    const root = await makeTempDir("cg-file-view-key-alias-");
+    const targetFile = path.join(root, ".env");
+    const linkedFile = path.join(root, "id_rsa");
+    const secretValue = "key-alias-target-secret";
+    const payload = `API_TOKEN=${secretValue}\n`;
+    await fs.writeFile(targetFile, payload, "utf8");
+
+    try {
+      await fs.symlink(targetFile, linkedFile, "file");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    const openSpy = vi.spyOn(fs, "open");
+    const readFileSpy = vi.spyOn(fs, "readFile");
+
+    try {
+      const redacted = await getCodegraphFileView({ root, file: "id_rsa", limit: 10, maxBytes: 100 });
+
+      expect(redacted).toMatchObject({
+        file: "id_rsa",
+        totalLines: 2,
+        text: `Sensitive key material omitted.\nSize: ${Buffer.byteLength(payload)} bytes.`,
+        content: `1\tSensitive key material omitted.\n2\tSize: ${Buffer.byteLength(payload)} bytes.`,
+        sensitive: { kind: "key-material", redacted: true, allowSensitiveRequired: true },
+      });
+      expect(JSON.stringify(redacted)).not.toContain(secretValue);
+      expect(openSpy).not.toHaveBeenCalled();
+      expect(readFileSpy).not.toHaveBeenCalled();
+    } finally {
+      openSpy.mockRestore();
+      readFileSpy.mockRestore();
+    }
+  });
+
   it("keeps graph context opt-in and reports only the target's direct importer", async () => {
     const root = await makeTempDir("cg-file-view-graph-");
     await writeFile(root, "src/auth.ts", "export function validateUser() { return true; }\n");

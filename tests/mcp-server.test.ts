@@ -6,12 +6,6 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
 import {
-  DEFAULT_FILE_VIEW_BYTES,
-  DEFAULT_FILE_VIEW_LINES,
-  MAX_FILE_VIEW_BYTES,
-  MAX_FILE_VIEW_LINES,
-} from "../src/agent/fileView.js";
-import {
   createCodegraphMcpHandlers,
   listCodegraphMcpTools,
   startCodegraphMcpHttpServer,
@@ -450,14 +444,14 @@ describe("codegraph MCP handlers", () => {
     expect(readObject(getFileProperties.limit)).toEqual({
       type: "integer",
       minimum: 1,
-      maximum: MAX_FILE_VIEW_LINES,
-      default: DEFAULT_FILE_VIEW_LINES,
+      maximum: 10_000,
+      default: 2_000,
     });
     expect(readObject(getFileProperties.maxBytes)).toEqual({
       type: "integer",
       minimum: 1,
-      maximum: MAX_FILE_VIEW_BYTES,
-      default: DEFAULT_FILE_VIEW_BYTES,
+      maximum: 500_000,
+      default: 80_000,
     });
     expect(readObject(getFileProperties.includeGraphContext)).toEqual({ type: "boolean", default: false });
     expect(readObject(getFileProperties.allowSensitive)).toEqual({ type: "boolean", default: false });

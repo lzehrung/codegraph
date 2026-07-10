@@ -139,7 +139,10 @@ export async function getCodegraphFileViewWithSession(
   const limit = boundedPositiveInteger(request.limit, DEFAULT_FILE_VIEW_LINES, MAX_FILE_VIEW_LINES);
   const maxBytes = boundedPositiveInteger(request.maxBytes, DEFAULT_FILE_VIEW_BYTES, MAX_FILE_VIEW_BYTES);
   const displaySensitiveKind = classifySensitiveFile(resolvedFile.displayPath);
-  const sensitiveKind = classifySensitiveFile(resolvedFile.realPath) ?? displaySensitiveKind;
+  let sensitiveKind = classifySensitiveFile(resolvedFile.realPath);
+  const keyMaterialAlias = displaySensitiveKind === "key-material" || sensitiveKind === "key-material";
+  if (keyMaterialAlias) sensitiveKind = "key-material";
+  else if (!sensitiveKind) sensitiveKind = displaySensitiveKind;
 
   let page: FilePage;
   let truncated: boolean;
