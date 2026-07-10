@@ -11,6 +11,7 @@ import {
 import { createAgentSession, type AgentSession } from "../src/agent/session.js";
 import { isSymlinkUnavailable } from "./helpers/filesystem.js";
 
+const FILE_VIEW_INPUT_LIMIT_BYTES = 16 * 1024 * 1024;
 const tempPaths = new Set<string>();
 
 async function makeTempDir(prefix: string): Promise<string> {
@@ -23,6 +24,13 @@ async function writeFile(root: string, relativePath: string, contents: string | 
   const filePath = path.join(root, relativePath);
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, contents);
+}
+async function writeSparseFile(root: string, relativePath: string, size: number): Promise<string> {
+  const filePath = path.join(root, relativePath);
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, "");
+  await fs.truncate(filePath, size);
+  return filePath;
 }
 
 afterEach(async () => {
@@ -65,6 +73,25 @@ describe("agent file view", () => {
       truncated: false,
     });
     expect(finalEmptyLine.page).toBeUndefined();
+  });
+
+  it("returns an explicit empty page when the requested offset is beyond EOF", async () => {
+    const root = await makeTempDir("cg-file-view-beyond-eof-");
+    await writeFile(root, "notes.txt", "alpha\nbeta\ngamma\n");
+
+    const beyondEnd = await getCodegraphFileView({
+      root,
+      file: "notes.txt",
+      offset: 10,
+      limit: 2,
+      maxBytes: 100,
+    });
+
+    expect(beyondEnd.content).toBe("");
+    expect(beyondEnd.text).toBe("");
+    expect(beyondEnd.totalLines).toBe(4);
+    expect(beyondEnd.page).toBeUndefined();
+    expect(formatAgentFileViewResponse(beyondEnd)).toBe("File: notes.txt\nLines: none at offset 10 of 4");
   });
 
   it("continues at the next whole line after byte truncation and reads beyond the first byte window", async () => {
@@ -345,6 +372,54 @@ describe("agent file view", () => {
     );
   });
 
+  it.each([
+    { name: "ordinary text", file: "oversized.txt" },
+    { name: "recognized sensitive config", file: "credentials.json" },
+  ])("rejects a $name file above the bounded file-view input limit", async ({ file }) => {
+    const root = await makeTempDir("cg-file-view-input-limit-");
+    const filePath = await writeSparseFile(root, file, FILE_VIEW_INPUT_LIMIT_BYTES + 1);
+
+    await expect(getCodegraphFileView({ root, file, limit: 1, maxBytes: 1 })).rejects.toThrow(
+      `File exceeds the 16777216-byte file view input limit: ${filePath}`,
+    );
+  });
+
+  it("enforces the input limit when a text file grows after its initial size check", async () => {
+    const root = await makeTempDir("cg-file-view-growth-limit-");
+    const filePath = path.join(root, "growth-race.txt");
+    await writeFile(root, "growth-race.txt", "initial\n");
+    const originalOpen = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, "open");
+    let grewFile = false;
+
+    openSpy.mockImplementation(async (target, flags) => {
+      if (!grewFile && target === filePath && flags === "r") {
+        grewFile = true;
+        const growthHandle = await originalOpen(filePath, "w");
+        const chunk = Buffer.alloc(64 * 1024, 0x61);
+        let remainingBytes = FILE_VIEW_INPUT_LIMIT_BYTES + 1;
+        try {
+          while (remainingBytes) {
+            const bytesToWrite = Math.min(chunk.length, remainingBytes);
+            const { bytesWritten } = await growthHandle.write(chunk, 0, bytesToWrite, null);
+            remainingBytes -= bytesWritten;
+          }
+        } finally {
+          await growthHandle.close();
+        }
+      }
+      return await originalOpen(target, flags);
+    });
+
+    try {
+      await expect(
+        getCodegraphFileView({ root, file: "growth-race.txt", limit: 1, maxBytes: 1 }),
+      ).rejects.toThrow(`File exceeds the 16777216-byte file view input limit: ${filePath}`);
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
   const sensitiveConfigFixtures = [
     {
       file: ".npmrc",
@@ -505,6 +580,38 @@ describe("agent file view", () => {
       });
       expect(openSpy).toHaveBeenCalledTimes(1);
       expect(openSpy).toHaveBeenCalledWith(path.join(root, "signing.key"), "r");
+      expect(readFileSpy).not.toHaveBeenCalled();
+    } finally {
+      openSpy.mockRestore();
+      readFileSpy.mockRestore();
+    }
+  });
+
+  it("keeps oversized key material metadata-only but caps explicit raw access", async () => {
+    const root = await makeTempDir("cg-file-view-large-key-");
+    const file = "oversized-signing.key";
+    const oversizedBytes = FILE_VIEW_INPUT_LIMIT_BYTES + 1;
+    const filePath = await writeSparseFile(root, file, oversizedBytes);
+    const openSpy = vi.spyOn(fs, "open");
+    const readFileSpy = vi.spyOn(fs, "readFile");
+
+    try {
+      const redacted = await getCodegraphFileView({ root, file, limit: 10, maxBytes: 100 });
+
+      expect(redacted).toMatchObject({
+        file,
+        totalLines: 2,
+        text: `Sensitive key material omitted.\nSize: ${oversizedBytes} bytes.`,
+        content: `1\tSensitive key material omitted.\n2\tSize: ${oversizedBytes} bytes.`,
+        sensitive: { kind: "key-material", redacted: true, allowSensitiveRequired: true },
+      });
+      expect(openSpy).not.toHaveBeenCalled();
+      expect(readFileSpy).not.toHaveBeenCalled();
+
+      await expect(
+        getCodegraphFileView({ root, file, limit: 10, maxBytes: 100, allowSensitive: true }),
+      ).rejects.toThrow(`File exceeds the 16777216-byte file view input limit: ${filePath}`);
+      expect(openSpy).not.toHaveBeenCalled();
       expect(readFileSpy).not.toHaveBeenCalled();
     } finally {
       openSpy.mockRestore();

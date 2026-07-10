@@ -73,18 +73,18 @@ Treat duplicate leads and call-compatibility hints as review leads, not proof.
 
 ## Live File Views
 
-Use `codegraph file <path>` for current disk content; use `--pretty` for a readable view or the default JSON for exact fields. `--offset` is a 1-based line, `--limit` defaults to 2000 lines, and `--max-bytes` defaults to 80000 unnumbered text bytes; follow `page.nextOffset` because `totalLines` always counts the complete file.
+Use `codegraph file <path>` for current disk content; use `--pretty` for a readable view or the default JSON for exact fields. Returned pages use a 1-based `--offset`, a `--limit` default/cap of 2000/10000 lines, and a `--max-bytes` default/cap of 80000/500000 unnumbered text bytes. A separate 16 MiB hard input-size limit rejects larger raw reads and structural text-config summaries before unbounded I/O, bounding complete-stream binary/UTF-8 validation and total-line counting.
 
 ```bash
 codegraph file src/auth.ts --offset 201 --limit 200 --max-bytes 80000
 codegraph file src/auth.ts --include-graph-context --pretty
 ```
 
-`content` is exact `number<TAB>line` text with no line-number padding, while `text` omits number prefixes. A trailing newline becomes a final numbered empty line. Ordinary reads validate the full raw stream for exact `totalLines`, rejecting known binary extensions, NUL bytes, and malformed or incomplete UTF-8 while keeping returned `content` and `text` page-bounded.
+`content` is exact `number<TAB>line` text with no line-number padding, while `text` omits number prefixes. A trailing newline becomes a final numbered empty line. Follow `page.nextOffset`; beyond EOF, JSON `content` and `text` are empty and pretty output says `Lines: none at offset <offset> of <totalLines>`.
 
 Graph context is never automatic. Add `--include-graph-context` only when direct `usedBy` paths, imports, and symbols are worth an index/freshness check; ordinary file bytes stay live and independent of index freshness.
 
-Recognized environment, authentication, and credential text configs return structural summaries by default after the full raw stream is validated. Key material instead returns a metadata-only summary without reading raw secret bytes. Use `--allow-sensitive` only for deliberate raw access; it does not bypass binary, NUL, or UTF-8 guards, so `.p12` and `.pfx` bundles summarize by default and reject raw access.
+Within the 16 MiB input limit, recognized environment, authentication, and credential text configs return structural summaries after the full raw stream is validated. Default key-material summaries use metadata, may report size, and do not read raw secret bytes. Use `--allow-sensitive` only for deliberate raw access; it does not bypass the input-size, binary, NUL, or UTF-8 guards, so `.p12` and `.pfx` bundles summarize by default and reject raw access.
 
 An exact project-relative file-path query such as `codegraph explore src/auth.ts --json` adds the same response as `fileView`; `--no-source` suppresses it. `--include-graph-context` and `--allow-sensitive` pass through only when explicitly present.
 

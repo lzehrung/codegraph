@@ -57,7 +57,7 @@ Tool schemas are flat JSON objects for broad client compatibility; argument comb
 
 ### `get_file`
 
-Call `get_file` with a project-relative `file`. `offset` is the 1-based first line, `limit` is the maximum returned lines, and `maxBytes` bounds unnumbered raw page text including its line separators; defaults are `1`, `2000`, and `80000`, with hard caps of `10000` lines and `500000` bytes.
+Call `get_file` with a project-relative `file`. `offset` is the 1-based first line, `limit` is the maximum returned lines, and `maxBytes` bounds unnumbered raw page text including its line separators; defaults are `1`, `2000`, and `80000`, with output-page caps of `10000` lines and `500000` bytes. A separate 16 MiB hard input-size limit rejects larger raw reads and structural text-config summaries before unbounded I/O, bounding complete-stream binary/UTF-8 validation and total-line counting rather than returned page size.
 
 ```json
 {
@@ -94,7 +94,7 @@ For raw pages, `maxBytes` can end a page before `limit`; `truncated` is true whe
 
 `includeGraphContext` defaults to `false` to avoid an index build, unnecessary repository disclosure, and stale graph data on ordinary reads. When true, `graphContext` contains at most 100 sorted direct `usedBy` paths, resolved or external `imports`, and `{ name, kind, line }` symbols; `freshness` applies to this context, never to the live file page.
 
-Ordinary reads and structural summaries for recognized environment, authentication-config, and credential-config text files validate the full raw stream before returning bounded content or extracting bounded keys; known binary extensions, NUL bytes, and malformed or incomplete UTF-8 are rejected. Default key-material summaries use file metadata without reading raw secret bytes and mark `sensitive.redacted: true`; `allowSensitive: true` requests raw values but does not bypass those guards, so `.p12` and `.pfx` bundles summarize by default and reject raw access. For text-config summaries, `truncated` reports an incomplete bounded structural scan.
+Within the 16 MiB input limit, ordinary reads and structural summaries for recognized environment, authentication-config, and credential-config text files validate the full raw stream before returning bounded content or extracting bounded keys; known binary extensions, NUL bytes, and malformed or incomplete UTF-8 are rejected. Default key-material summaries use file metadata, may report size, and do not read raw secret bytes while marking `sensitive.redacted: true`; `allowSensitive: true` requests raw values but does not bypass the input-size, binary, NUL, or UTF-8 guards, so `.p12` and `.pfx` bundles summarize by default and reject raw access. For text-config summaries, `truncated` reports an incomplete bounded structural scan.
 
 ### Exact-path `explore`
 
@@ -111,7 +111,7 @@ An MCP `explore` request whose entire query resolves to an indexed project-relat
 - Tools are read-only by default.
 - `artifact_build` requires `--allow-build` and a fresh or auto-refreshed MCP index.
 - `query_sqlite` rejects mutating SQL, recursive queries, synthetic payload functions, and stale artifact queries it cannot refresh safely.
-- `get_file` reads are byte- and line-bounded with `maxBytes`, `offset`, and `limit`; binary input is rejected, and sensitive formats require `allowSensitive: true` for raw values.
+- `get_file` rejects raw reads and structural text-config summaries over the 16 MiB input limit. Accepted reads use separate output-page bounds from `maxBytes`, `offset`, and `limit`; binary input is rejected, and sensitive formats require `allowSensitive: true` for raw values.
 - SQLite responses are row- and byte-bounded.
 
 ## Installer

@@ -33,6 +33,7 @@ Defaults and caps:
 - `offset`: 1-based, default `1`
 - `limit`: default `2000` lines, cap `10000`
 - `maxBytes`: default `80000`, cap `500000`, applied to unnumbered raw page text including line separators
+- input size: hard 16 MiB for raw reads and structural text-config summaries, separate from `maxBytes`; larger inputs reject before unbounded I/O
 - `includeGraphContext`: `false`
 - `allowSensitive`: `false`
 
@@ -66,7 +67,7 @@ type AgentFileViewResponse = {
 };
 ```
 
-`totalLines` is counted across the complete live file even when only one page is returned. `page.nextOffset` is present when another line remains, and a file-ending newline contributes a final empty line.
+For accepted raw reads, `totalLines` is counted across the complete live file even when only one page is returned. The 16 MiB input limit bounds that counting and the complete-stream binary/UTF-8 validation used for raw reads and structural text-config summaries. `page.nextOffset` is present when another line remains, and a file-ending newline contributes a final empty line.
 
 `content` is exact unpadded decimal line number, one tab, then source line; `text` is the same selected source without prefixes. For raw pages, the byte budget applies to `text`, so numbered `content` can be larger and a byte boundary can return fewer than `limit` lines.
 
@@ -78,6 +79,8 @@ Lines 41-42 of 126
 Next page: codegraph file src/auth.ts --offset 43 --limit 2 --pretty
 ```
 
+At an offset beyond EOF, JSON `content` and `text` are empty, while pretty output says `Lines: none at offset <offset> of <totalLines>`.
+
 `graphContext` appears only when requested and available in the index. It contains at most 100 sorted direct importers, imports, and symbols; `freshness` describes that indexed context separately from the always-live file page.
 
 An `explore` query consisting only of an indexed project-relative path, or a uniquely matching basename, adds the same response under `fileView`. Disabling source with `includeSource: false` or `--no-source` suppresses it; CLI and library callers pass graph/sensitive options through only when explicit.
@@ -85,8 +88,8 @@ An `explore` query consisting only of an indexed project-relative path, or a uni
 ## Safety
 
 - Constrain paths to `root` or `--root` after final realpath resolution.
-- For ordinary reads and structural summaries of recognized environment, authentication, and credential text configs, validate the full raw stream and reject known binary extensions, NUL bytes, and malformed or incomplete UTF-8 before returning bounded content or extracting bounded keys.
-- For default key-material reads, return file metadata without reading raw secret bytes. Explicit `allowSensitive: true` or `--allow-sensitive` raw access remains subject to the binary, NUL, and UTF-8 guards, so `.p12` and `.pfx` bundles summarize by default and reject raw access.
+- Reject raw reads and structural text-config summaries over the separate 16 MiB hard input-size limit. Within it, validate the complete stream and reject known binary extensions, NUL bytes, and malformed or incomplete UTF-8 before returning a bounded page or extracting bounded keys.
+- For default key-material reads, return metadata that may report file size without reading raw secret bytes. Explicit `allowSensitive: true` or `--allow-sensitive` raw access remains subject to the input-size, binary, NUL, and UTF-8 guards, so `.p12` and `.pfx` bundles summarize by default and reject raw access.
 - Read live bytes without requiring fresh index state; check freshness only for requested graph context.
 
 ## Implementation surface
@@ -102,6 +105,8 @@ An `explore` query consisting only of an indexed project-relative path, or a uni
 
 - Exact `1\ttext` number-tab-line format and unnumbered `text`.
 - 1-based offset, line limit, byte limit, exact whole-file `totalLines`, and `nextOffset` pagination beyond the former prefix.
+- 16 MiB input rejection independently of the 500000-byte output-page cap.
+- Beyond-EOF offsets return empty JSON content/text and explicit pretty no-lines output.
 - Stable trailing empty line for a file-ending newline.
 - Root confinement, binary rejection, text-config structural summaries, key-material metadata summaries, and guarded explicit raw-sensitive access.
 - Live disk changes remain visible independently of stale index state.

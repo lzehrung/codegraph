@@ -81,6 +81,7 @@ type Utf8ValidationState = {
 const READ_BUFFER_BYTES = 64 * 1024;
 const SENSITIVE_SCAN_BYTES = 64 * 1024;
 const SENSITIVE_KEY_LIMIT = 100;
+const MAX_FILE_VIEW_SOURCE_BYTES = 16 * 1024 * 1024;
 const BINARY_EXTENSIONS = new Set([
   ".7z",
   ".avi",
@@ -204,11 +205,12 @@ export function formatAgentFileViewResponse(response: AgentFileViewResponse): st
   }
 
   const returnedLineCount = response.content ? response.content.split("\n").length : 0;
-  let endLine = response.offset - 1;
   if (returnedLineCount) {
-    endLine = Math.min(response.totalLines, response.offset + returnedLineCount - 1);
+    const endLine = Math.min(response.totalLines, response.offset + returnedLineCount - 1);
+    lines.push(`Lines ${response.offset}-${endLine} of ${response.totalLines}`);
+  } else {
+    lines.push(`Lines: none at offset ${response.offset} of ${response.totalLines}`);
   }
-  lines.push(`Lines ${response.offset}-${endLine} of ${response.totalLines}`);
   if (response.content) lines.push(response.content);
   if (response.truncated) {
     lines.push(`Content was truncated by the ${MAX_FILE_VIEW_BYTES}-byte hard limit or a smaller requested maxBytes.`);
@@ -275,7 +277,7 @@ function buildResponse(args: {
 }
 
 async function readTextFilePage(filePath: string, offset: number, limit: number, maxBytes: number): Promise<FilePage> {
-  assertTextFileExtension(filePath);
+  await assertReadableTextFile(filePath);
 
   const handle = await fs.open(filePath, "r");
   const selectedLines: string[] = [];
@@ -289,6 +291,7 @@ async function readTextFilePage(filePath: string, offset: number, limit: number,
   let currentLineChunks: Buffer[] = [];
   let lastReturnedLine: number | undefined;
   const utf8State = createUtf8ValidationState();
+  let totalBytes = 0;
 
   const initializeLine = (): void => {
     if (currentLineInitialized) return;
@@ -338,6 +341,8 @@ async function readTextFilePage(filePath: string, offset: number, limit: number,
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
       if (!bytesRead) break;
       const chunk = buffer.subarray(0, bytesRead);
+      totalBytes += bytesRead;
+      assertFileViewSourceBytes(totalBytes, filePath);
       if (chunk.includes(0)) {
         throw new Error(`Binary files are not supported: ${filePath}`);
       }
@@ -516,7 +521,7 @@ async function scanTextFilePrefix(
   filePath: string,
   prefixLimit: number,
 ): Promise<{ prefix: Buffer; totalBytes: number }> {
-  assertTextFileExtension(filePath);
+  await assertReadableTextFile(filePath);
   const handle = await fs.open(filePath, "r");
   const prefixChunks: Buffer[] = [];
   let prefixBytes = 0;
@@ -538,6 +543,7 @@ async function scanTextFilePrefix(
         prefixBytes += bytesToKeep;
       }
       totalBytes += chunk.length;
+      assertFileViewSourceBytes(totalBytes, filePath);
     }
     assertUtf8Complete(utf8State, filePath);
   } finally {
@@ -547,6 +553,18 @@ async function scanTextFilePrefix(
     prefix: prefixChunks.length === 1 ? prefixChunks[0]! : Buffer.concat(prefixChunks),
     totalBytes,
   };
+}
+
+async function assertReadableTextFile(filePath: string): Promise<void> {
+  assertTextFileExtension(filePath);
+  const stat = await fs.stat(filePath);
+  if (!stat.isFile()) throw new Error(`File view target is not a file: ${filePath}`);
+  assertFileViewSourceBytes(stat.size, filePath);
+}
+
+function assertFileViewSourceBytes(totalBytes: number, filePath: string): void {
+  if (totalBytes <= MAX_FILE_VIEW_SOURCE_BYTES) return;
+  throw new Error(`File exceeds the ${MAX_FILE_VIEW_SOURCE_BYTES}-byte file view input limit: ${filePath}`);
 }
 
 function assertTextFileExtension(filePath: string): void {
