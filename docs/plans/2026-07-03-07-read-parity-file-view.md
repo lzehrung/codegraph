@@ -85,7 +85,7 @@ An `explore` query consisting only of an indexed project-relative path, or a uni
 ## Safety
 
 - Constrain paths to `root` or `--root` after final realpath resolution.
-- Reject known binary extensions, NUL-containing input, and non-UTF-8 selected content.
+- Reject known binary extensions, NUL-containing input, and malformed or incomplete UTF-8 anywhere in the file; the full byte stream is scanned for exact `totalLines`, while returned `content` and `text` remain page-bounded.
 - Return bounded structural key or key-material summaries for known secret-prone formats unless `allowSensitive: true` or `--allow-sensitive` is explicit; summary `truncated` reports an incomplete bounded scan.
 - Read live bytes without requiring fresh index state; check freshness only for requested graph context.
 

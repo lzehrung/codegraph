@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { findNearestExistingPath } from "../util/confinedFile.js";
 import { isFilePathWithinRoot, normalizePath } from "../util/paths.js";
 
 export function resolveArtifactSqlitePathCandidate(root: string, artifactPath: string): string {
@@ -18,7 +19,7 @@ export async function assertWritableDirectoryRealPathWithinRoot(
   label: string,
 ): Promise<string> {
   const lexicalPath = path.isAbsolute(requestedPath) ? requestedPath : path.resolve(root, requestedPath);
-  const existingPath = await nearestExistingPath(lexicalPath);
+  const existingPath = await findNearestExistingPath(lexicalPath);
   const realExistingPath = await fs.realpath(existingPath);
   const relativeSuffix = path.relative(existingPath, lexicalPath);
   const realTargetPath = path.resolve(realExistingPath, relativeSuffix);
@@ -28,22 +29,4 @@ export async function assertWritableDirectoryRealPathWithinRoot(
     );
   }
   return normalizePath(realTargetPath);
-}
-
-async function nearestExistingPath(filePath: string): Promise<string> {
-  let current = filePath;
-  while (current !== path.dirname(current)) {
-    try {
-      await fs.stat(current);
-      return current;
-    } catch (error) {
-      if (!isMissingPathError(error)) throw error;
-      current = path.dirname(current);
-    }
-  }
-  return current;
-}
-
-function isMissingPathError(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "ENOENT";
 }

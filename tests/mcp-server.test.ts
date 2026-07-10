@@ -944,6 +944,39 @@ describe("codegraph MCP handlers", () => {
     });
   });
 
+  it("honors requested freshness and project loading while sensitive content stays redacted", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sensitive-context-"));
+    const rawSecret = "freshness-secret-value";
+    await fs.writeFile(path.join(root, ".env.test"), `API_TOKEN=${rawSecret}\nUSER=alice\n`, "utf8");
+    const backingSession = createAgentSession({ root });
+    let freshnessChecks = 0;
+    let projectLoads = 0;
+    const session: AgentSession = {
+      ...backingSession,
+      checkFreshness: async () => {
+        freshnessChecks += 1;
+        return { state: "refreshed", changedFiles: [".env.test"] };
+      },
+      loadProject: async (options) => {
+        projectLoads += 1;
+        return await backingSession.loadProject(options);
+      },
+    };
+    const handlers = createCodegraphMcpHandlers({ root, session });
+
+    const redacted = await handlers.get_file({ file: ".env.test", includeGraphContext: true });
+
+    expect(JSON.stringify(redacted)).not.toContain(rawSecret);
+    expect(redacted).toMatchObject({
+      text: "Sensitive environment values omitted.\nKeys: API_TOKEN, USER",
+      content: "1\tSensitive environment values omitted.\n2\tKeys: API_TOKEN, USER",
+      freshness: { state: "refreshed", changedFiles: [".env.test"] },
+      sensitive: { kind: "environment", redacted: true, allowSensitiveRequired: true },
+    });
+    expect(freshnessChecks).toBe(1);
+    expect(projectLoads).toBe(1);
+  });
+
   it("keeps plain get_file index-free and opts into freshness and direct graph context", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-file-graph-"));
     await fs.mkdir(path.join(root, "src"), { recursive: true });
@@ -990,17 +1023,22 @@ describe("codegraph MCP handlers", () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-file-graph-cap-"));
     const targetFile = path.join(root, "target.ts");
     await fs.writeFile(targetFile, "export const target = true;\n", "utf8");
-    const usedByFiles = Array.from({ length: 101 }, (_, index) =>
+    const unsortedIndexes = Array.from({ length: 101 }, (_, position) => {
+      const offset = Math.floor(position / 2);
+      if (position % 2) return offset;
+      return 100 - offset;
+    });
+    const usedByFiles = unsortedIndexes.map((index) =>
       path.join(root, `consumer-${String(index).padStart(3, "0")}.ts`),
     );
     const moduleIndex: ModuleIndex = {
       file: targetFile,
       exports: [],
-      imports: Array.from({ length: 101 }, (_, index) => ({
+      imports: unsortedIndexes.map((index) => ({
         kind: "star",
         from: `package-${String(index).padStart(3, "0")}`,
       })),
-      locals: Array.from({ length: 101 }, (_, index) => ({
+      locals: unsortedIndexes.map((index) => ({
         file: targetFile,
         localName: `symbol-${String(index).padStart(3, "0")}`,
         kind: SymbolKind.Function,
@@ -1047,13 +1085,22 @@ describe("codegraph MCP handlers", () => {
     const result = await handlers.get_file({ file: "target.ts", includeGraphContext: true });
 
     expect(result.graphContext?.usedBy).toHaveLength(100);
-    expect(result.graphContext?.usedBy.at(-1)).toBe("consumer-099.ts");
+    expect(result.graphContext?.usedBy.slice(0, 2)).toEqual(["consumer-000.ts", "consumer-001.ts"]);
+    expect(result.graphContext?.usedBy.slice(-2)).toEqual(["consumer-098.ts", "consumer-099.ts"]);
     expect(result.graphContext?.usedBy).not.toContain("consumer-100.ts");
     expect(result.graphContext?.imports).toHaveLength(100);
-    expect(result.graphContext?.imports.at(-1)).toBe("package-099");
+    expect(result.graphContext?.imports.slice(0, 2)).toEqual(["package-000", "package-001"]);
+    expect(result.graphContext?.imports.slice(-2)).toEqual(["package-098", "package-099"]);
     expect(result.graphContext?.imports).not.toContain("package-100");
     expect(result.graphContext?.symbols).toHaveLength(100);
-    expect(result.graphContext?.symbols.at(-1)?.name).toBe("symbol-099");
+    expect(result.graphContext?.symbols.slice(0, 2)).toEqual([
+      { name: "symbol-000", kind: SymbolKind.Function, line: 1 },
+      { name: "symbol-001", kind: SymbolKind.Function, line: 2 },
+    ]);
+    expect(result.graphContext?.symbols.slice(-2)).toEqual([
+      { name: "symbol-098", kind: SymbolKind.Function, line: 99 },
+      { name: "symbol-099", kind: SymbolKind.Function, line: 100 },
+    ]);
     expect(result.graphContext?.symbols.some((symbol) => symbol.name === "symbol-100")).toBe(false);
   });
 

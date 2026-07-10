@@ -94,7 +94,7 @@ For raw pages, `maxBytes` can end a page before `limit`; `truncated` is true whe
 
 `includeGraphContext` defaults to `false` to avoid an index build, unnecessary repository disclosure, and stale graph data on ordinary reads. When true, `graphContext` contains at most 100 sorted direct `usedBy` paths, resolved or external `imports`, and `{ name, kind, line }` symbols; `freshness` applies to this context, never to the live file page.
 
-Known environment, authentication-config, credential-config, and key-material files return a structural summary by default and mark `sensitive.redacted: true`; their `truncated` flag reports an incomplete bounded structural scan. Set `allowSensitive: true` only to request raw values; binary extensions, NUL-containing input, and non-UTF-8 page content are rejected.
+Known environment, authentication-config, credential-config, and key-material files return a structural summary by default and mark `sensitive.redacted: true`; their `truncated` flag reports an incomplete bounded structural scan. Set `allowSensitive: true` only to request raw values; known binary extensions, NUL-containing input, and malformed or incomplete UTF-8 anywhere in the file are rejected because the full byte stream is scanned for exact `totalLines`, while returned `content` and `text` remain page-bounded.
 
 ### Exact-path `explore`
 

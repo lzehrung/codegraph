@@ -130,7 +130,7 @@ The numbered format is exactly unpadded decimal line number, tab, source line. A
 
 Graph context defaults off, so a plain call neither creates nor consults an index and its live bytes are independent of session freshness. Set `includeGraphContext: true` to request at most 100 direct `usedBy` files, imports, and `{ name, kind, line }` symbols; only this indexed context is governed by `freshness`.
 
-Binary or non-UTF-8 page content is rejected. Recognized environment, authentication, credential, and key-material paths return a structural summary and `sensitive.redacted: true`; its `truncated` flag reports an incomplete bounded structural scan unless the caller deliberately sets `allowSensitive: true` for raw values.
+Known binary extensions, NUL-containing input, and malformed or incomplete UTF-8 anywhere in the file are rejected because the full byte stream is scanned for exact `totalLines`, while returned `content` and `text` remain page-bounded. Recognized environment, authentication, credential, and key-material paths return a structural summary and `sensitive.redacted: true`; its `truncated` flag reports an incomplete bounded structural scan unless the caller deliberately sets `allowSensitive: true` for raw values.
 
 The root package and `@lzehrung/codegraph/agent` export these functions, constants, `AgentFileViewRequest`, `AgentFileViewResponse`, `AgentFileGraphContext`, `AgentFileViewSensitiveInfo`, and `AgentFileViewSensitiveKind`.
 

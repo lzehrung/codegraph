@@ -138,21 +138,22 @@ export async function getCodegraphFileViewWithSession(
   const maxBytes = boundedPositiveInteger(request.maxBytes, DEFAULT_FILE_VIEW_BYTES, MAX_FILE_VIEW_BYTES);
   const sensitiveKind = classifySensitiveFile(resolvedFile.displayPath);
 
+  let page: FilePage;
+  let truncated: boolean;
+  let sensitive: AgentFileViewSensitiveInfo | undefined;
   if (sensitiveKind && !request.allowSensitive) {
     const summary = await buildSensitiveSummary(resolvedFile.realPath, sensitiveKind);
-    const page = paginateText(summary.text, offset, limit);
-    return buildResponse({
-      file: resolvedFile.displayPath,
-      offset,
-      limit,
-      page,
-      truncated: summary.scanTruncated,
-      freshness: { state: "fresh" },
-      sensitive: { kind: sensitiveKind, redacted: true, allowSensitiveRequired: true },
-    });
+    page = paginateText(summary.text, offset, limit);
+    truncated = summary.scanTruncated;
+    sensitive = { kind: sensitiveKind, redacted: true, allowSensitiveRequired: true };
+  } else {
+    page = await readTextFilePage(resolvedFile.realPath, offset, limit, maxBytes);
+    truncated = page.truncated;
+    if (sensitiveKind) {
+      sensitive = { kind: sensitiveKind, redacted: false, allowSensitiveRequired: true };
+    }
   }
 
-  const page = await readTextFilePage(resolvedFile.realPath, offset, limit, maxBytes);
   let freshness: AgentFreshnessResult = { state: "fresh" };
   let graphContext: AgentFileGraphContext | undefined;
   if (request.includeGraphContext) {
@@ -175,12 +176,10 @@ export async function getCodegraphFileViewWithSession(
     offset,
     limit,
     page,
-    truncated: page.truncated,
+    truncated,
     freshness,
     ...(graphContext ? { graphContext } : {}),
-    ...(sensitiveKind
-      ? { sensitive: { kind: sensitiveKind, redacted: false, allowSensitiveRequired: true } as const }
-      : {}),
+    ...(sensitive ? { sensitive } : {}),
   });
 }
 

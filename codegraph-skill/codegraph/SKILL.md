@@ -80,7 +80,7 @@ codegraph file src/auth.ts --offset 201 --limit 200 --max-bytes 80000
 codegraph file src/auth.ts --include-graph-context --pretty
 ```
 
-`content` is exact `number<TAB>line` text with no line-number padding, while `text` omits number prefixes. A trailing newline becomes a final numbered empty line; binary/non-UTF-8 page content is rejected.
+`content` is exact `number<TAB>line` text with no line-number padding, while `text` omits number prefixes. A trailing newline becomes a final numbered empty line. Known binary extensions, NUL-containing input, and malformed or incomplete UTF-8 anywhere in the file are rejected because the full byte stream is scanned for exact `totalLines`, while returned `content` and `text` remain page-bounded.
 
 Graph context is never automatic. Add `--include-graph-context` only when direct `usedBy` paths, imports, and symbols are worth an index/freshness check; ordinary file bytes stay live and independent of index freshness.
 

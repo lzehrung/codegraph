@@ -232,11 +232,7 @@ describe("agent file view", () => {
     const selectedLine = Buffer.from("selected\n", "utf8");
     const readBufferBytes = 64 * 1024;
     const padding = Buffer.alloc(readBufferBytes - selectedLine.length - 1, 0x61);
-    await writeFile(
-      root,
-      "boundary.txt",
-      Buffer.concat([selectedLine, padding, Buffer.from([0xc3, 0x28])]),
-    );
+    await writeFile(root, "boundary.txt", Buffer.concat([selectedLine, padding, Buffer.from([0xc3, 0x28])]));
 
     await expect(
       getCodegraphFileView({ root, file: "boundary.txt", offset: 1, limit: 1, maxBytes: 8 }),

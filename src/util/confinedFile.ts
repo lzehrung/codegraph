@@ -30,7 +30,7 @@ export async function assertRealPathCandidateWithinRoot(
   filePath: string,
   label: string,
 ): Promise<string> {
-  const existingPath = await nearestExistingPath(filePath);
+  const existingPath = await findNearestExistingPath(filePath);
   const realExistingPath = await fs.realpath(existingPath);
   const relativeSuffix = path.relative(existingPath, filePath);
   const realTargetPath = path.resolve(realExistingPath, relativeSuffix);
@@ -46,7 +46,7 @@ export async function assertRealPathCandidateWithinRoot(
   return finalRealPath;
 }
 
-async function nearestExistingPath(filePath: string): Promise<string> {
+export async function findNearestExistingPath(filePath: string): Promise<string> {
   let current = filePath;
   while (current !== path.dirname(current)) {
     try {
