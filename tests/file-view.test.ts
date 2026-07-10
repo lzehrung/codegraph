@@ -137,6 +137,32 @@ describe("agent file view", () => {
     );
   });
 
+  it("redacts a sensitive in-root symlink target even when the requested filename is benign", async () => {
+    const root = await makeTempDir("cg-file-view-sensitive-symlink-");
+    const targetFile = path.join(root, ".env");
+    const linkedFile = path.join(root, "project-notes.txt");
+    const secretValue = "symlink-target-secret";
+    await fs.writeFile(targetFile, `API_TOKEN=${secretValue}\n`, "utf8");
+
+    try {
+      await fs.symlink(targetFile, linkedFile, "file");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    const redacted = await getCodegraphFileView({ root, file: "project-notes.txt", limit: 10, maxBytes: 100 });
+
+    expect(redacted).toMatchObject({
+      file: "project-notes.txt",
+      totalLines: 2,
+      text: "Sensitive environment values omitted.\nKeys: API_TOKEN",
+      content: "1\tSensitive environment values omitted.\n2\tKeys: API_TOKEN",
+      sensitive: { kind: "environment", redacted: true, allowSensitiveRequired: true },
+    });
+    expect(JSON.stringify(redacted)).not.toContain(secretValue);
+  });
+
   it("keeps graph context opt-in and reports only the target's direct importer", async () => {
     const root = await makeTempDir("cg-file-view-graph-");
     await writeFile(root, "src/auth.ts", "export function validateUser() { return true; }\n");
@@ -281,6 +307,94 @@ describe("agent file view", () => {
       expectedError,
     );
   });
+
+  const sensitiveConfigFixtures = [
+    {
+      file: ".npmrc",
+      kind: "authentication-config",
+      raw: "_authToken=npm-token-value\n",
+      expectedKeys: "_authToken",
+      secretValues: ["npm-token-value"],
+    },
+    {
+      file: ".pypirc",
+      kind: "authentication-config",
+      raw: "[pypi]\nusername=release-user\npassword=pypi-password-value\n",
+      expectedKeys: "password, username",
+      secretValues: ["release-user", "pypi-password-value"],
+    },
+    {
+      file: ".netrc",
+      kind: "authentication-config",
+      raw: "machine registry.example.test login ci-user password netrc-password-value\n",
+      expectedKeys: "login, machine, password",
+      secretValues: ["registry.example.test", "ci-user", "netrc-password-value"],
+    },
+    {
+      file: "credentials.json",
+      kind: "credential-config",
+      raw: '{\n  "client_id": "build-client",\n  "client_secret": "json-secret-value"\n}\n',
+      expectedKeys: "client_id, client_secret",
+      secretValues: ["build-client", "json-secret-value"],
+    },
+    {
+      file: "secrets.production.yaml",
+      kind: "credential-config",
+      raw: "account: deploy-user\npassword: yaml-secret-value\n",
+      expectedKeys: "account, password",
+      secretValues: ["deploy-user", "yaml-secret-value"],
+    },
+    {
+      file: "service-account.toml",
+      kind: "credential-config",
+      raw: 'project_id = "service-project"\nprivate_key = "toml-secret-value"\n',
+      expectedKeys: "private_key, project_id",
+      secretValues: ["service-project", "toml-secret-value"],
+    },
+    {
+      file: "credential.ini",
+      kind: "credential-config",
+      raw: "[default]\naccess_key=ini-access-value\nsecret_key=ini-secret-value\n",
+      expectedKeys: "access_key, secret_key",
+      secretValues: ["ini-access-value", "ini-secret-value"],
+    },
+  ] as const;
+
+  it.each(sensitiveConfigFixtures)(
+    "redacts $kind values in $file by default and returns exact raw text only when allowed",
+    async ({ file, kind, raw, expectedKeys, secretValues }) => {
+      const root = await makeTempDir("cg-file-view-sensitive-config-");
+      await writeFile(root, file, raw);
+
+      const redacted = await getCodegraphFileView({ root, file, limit: 20, maxBytes: 1024 });
+      const expectedSummary = `Sensitive ${kind} values omitted.\nKeys: ${expectedKeys}`;
+
+      expect(redacted).toMatchObject({
+        file,
+        totalLines: 2,
+        text: expectedSummary,
+        content: `1\tSensitive ${kind} values omitted.\n2\tKeys: ${expectedKeys}`,
+        sensitive: { kind, redacted: true, allowSensitiveRequired: true },
+      });
+      for (const secretValue of secretValues) {
+        expect(JSON.stringify(redacted)).not.toContain(secretValue);
+      }
+
+      const allowed = await getCodegraphFileView({
+        root,
+        file,
+        limit: 20,
+        maxBytes: 1024,
+        allowSensitive: true,
+      });
+
+      expect(allowed.text).toBe(raw);
+      expect(allowed).toMatchObject({
+        file,
+        sensitive: { kind, redacted: false, allowSensitiveRequired: true },
+      });
+    },
+  );
 
   const keyBundleFixtures = [
     { file: "client-identity.p12", marker: "p12-private-key-secret" },

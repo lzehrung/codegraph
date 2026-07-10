@@ -222,7 +222,7 @@ Output:
   A file-ending newline is represented as a final numbered empty line. Follow page.nextOffset or the pretty next-page command for more lines.
 
 Safety:
-  Paths are confined to --root after realpath resolution. Binary files are rejected. Known sensitive config and key files return a structural summary unless --allow-sensitive is passed.
+  Paths are confined to --root after realpath resolution. Binary files are rejected. Known sensitive text configs return structural key summaries; key material returns metadata only. Use --allow-sensitive for raw access subject to binary and UTF-8 guards.
 `;
 
 export const SEARCH_HELP_TEXT = `codegraph search - Ranked agent search across project context

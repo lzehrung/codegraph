@@ -138,7 +138,8 @@ export async function getCodegraphFileViewWithSession(
   const offset = boundedPositiveInteger(request.offset, 1, Number.MAX_SAFE_INTEGER);
   const limit = boundedPositiveInteger(request.limit, DEFAULT_FILE_VIEW_LINES, MAX_FILE_VIEW_LINES);
   const maxBytes = boundedPositiveInteger(request.maxBytes, DEFAULT_FILE_VIEW_BYTES, MAX_FILE_VIEW_BYTES);
-  const sensitiveKind = classifySensitiveFile(resolvedFile.displayPath);
+  const displaySensitiveKind = classifySensitiveFile(resolvedFile.displayPath);
+  const sensitiveKind = classifySensitiveFile(resolvedFile.realPath) ?? displaySensitiveKind;
 
   let page: FilePage;
   let truncated: boolean;

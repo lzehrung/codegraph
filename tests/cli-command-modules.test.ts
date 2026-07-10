@@ -3,6 +3,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
+import { MAX_FILE_VIEW_BYTES, MAX_FILE_VIEW_LINES } from "../src/agent/fileView.js";
 import { handleChunkCommand, type ChunkCommandContext } from "../src/cli/chunk.js";
 import type { CliAgentCommandContext } from "../src/cli/context.js";
 import { buildDoctorReport } from "../src/cli/doctor.js";
@@ -1088,6 +1089,20 @@ describe("CLI command modules", () => {
     } finally {
       await fsp.rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  test.each([
+    { option: "--limit", maximum: MAX_FILE_VIEW_LINES },
+    { option: "--max-bytes", maximum: MAX_FILE_VIEW_BYTES },
+  ])("rejects $option values above the file view bound", async ({ option, maximum }) => {
+    const excessiveValue = maximum + 1;
+    const result = await captureCli(["file", "util.ts", option, String(excessiveValue)]);
+
+    expect(result).toEqual({
+      stdout: "",
+      stderr: `Invalid ${option} value "${excessiveValue}". Expected an integer from 1 to ${maximum}.\n`,
+      exitCode: 1,
+    });
   });
 
   test("redacts environment files through the CLI dispatcher unless sensitive access is explicit", async () => {

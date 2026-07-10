@@ -117,15 +117,16 @@ export async function exploreCodegraphWithSession(
   const packetTargets = includeSource ? collectPacketTargets(anchors, effectivePacketLimit) : [];
   const packets = await collectPackets(session, request.root, packetTargets);
   const exactFile = includeSource ? resolveExactFileTarget(snapshot, request.query) : undefined;
-  const fileView = exactFile
-    ? await getCodegraphFileViewWithSession(session, {
-        root: request.root,
-        file: toProjectDisplayPath(snapshot.root, exactFile),
-        ...(request.includeGraphContext !== undefined ? { includeGraphContext: request.includeGraphContext } : {}),
-        ...(request.allowSensitive !== undefined ? { allowSensitive: request.allowSensitive } : {}),
-        ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
-      })
-    : undefined;
+  let fileView: AgentFileViewResponse | undefined;
+  if (exactFile) {
+    fileView = await getCodegraphFileViewWithSession(session, {
+      root: request.root,
+      file: toProjectDisplayPath(snapshot.root, exactFile),
+      ...(request.includeGraphContext !== undefined ? { includeGraphContext: request.includeGraphContext } : {}),
+      ...(request.allowSensitive !== undefined ? { allowSensitive: request.allowSensitive } : {}),
+      ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
+    });
+  }
   const pathResult = collectDependencyPaths(snapshot, request.query, anchorFiles, maxPaths);
   const paths = pathResult.items;
   const blastRadius = collectBlastRadius(

@@ -6,6 +6,12 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
 import {
+  DEFAULT_FILE_VIEW_BYTES,
+  DEFAULT_FILE_VIEW_LINES,
+  MAX_FILE_VIEW_BYTES,
+  MAX_FILE_VIEW_LINES,
+} from "../src/agent/fileView.js";
+import {
   createCodegraphMcpHandlers,
   listCodegraphMcpTools,
   startCodegraphMcpHttpServer,
@@ -417,6 +423,44 @@ describe("codegraph MCP handlers", () => {
     expect(packetProperties.root).toBeUndefined();
     expect(packetProperties.maxDuplicates).toBeTruthy();
     expect(packetProperties.target).toBeTruthy();
+  });
+
+  it("advertises get_file with the exact bounded file-view schema", () => {
+    const getFileTool = listCodegraphMcpTools().find((tool) => tool.name === "get_file");
+    expect(getFileTool).toBeTruthy();
+    if (getFileTool === undefined) {
+      throw new Error("MCP tools/list did not include the get_file tool.");
+    }
+
+    const getFileSchema = readObject(getFileTool.inputSchema);
+    const getFileProperties = readObject(getFileSchema.properties);
+
+    expect(getFileSchema.type).toBe("object");
+    expect(getFileSchema.required).toEqual(["file"]);
+    expect(Object.keys(getFileProperties).sort()).toEqual([
+      "allowSensitive",
+      "file",
+      "includeGraphContext",
+      "limit",
+      "maxBytes",
+      "offset",
+    ]);
+    expect(readObject(getFileProperties.file)).toEqual({ type: "string" });
+    expect(readObject(getFileProperties.offset)).toEqual({ type: "integer", minimum: 1, default: 1 });
+    expect(readObject(getFileProperties.limit)).toEqual({
+      type: "integer",
+      minimum: 1,
+      maximum: MAX_FILE_VIEW_LINES,
+      default: DEFAULT_FILE_VIEW_LINES,
+    });
+    expect(readObject(getFileProperties.maxBytes)).toEqual({
+      type: "integer",
+      minimum: 1,
+      maximum: MAX_FILE_VIEW_BYTES,
+      default: DEFAULT_FILE_VIEW_BYTES,
+    });
+    expect(readObject(getFileProperties.includeGraphContext)).toEqual({ type: "boolean", default: false });
+    expect(readObject(getFileProperties.allowSensitive)).toEqual({ type: "boolean", default: false });
   });
 
   it("bounds refs by handle with the refs limit", async () => {

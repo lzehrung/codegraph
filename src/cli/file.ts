@@ -1,12 +1,14 @@
 import {
   DEFAULT_FILE_VIEW_BYTES,
   DEFAULT_FILE_VIEW_LINES,
+  MAX_FILE_VIEW_BYTES,
+  MAX_FILE_VIEW_LINES,
   formatAgentFileViewResponse,
   getCodegraphFileView,
 } from "../agent/fileView.js";
 import type { CliAgentCommandContext } from "./context.js";
 import { FILE_HELP_TEXT } from "./help.js";
-import { parsePositiveIntegerOption } from "./options.js";
+import { parseBoundedIntegerOption, parsePositiveIntegerOption } from "./options.js";
 
 export type FileCommandContext = CliAgentCommandContext;
 
@@ -26,12 +28,24 @@ export async function handleFileCommand(context: FileCommandContext): Promise<vo
         : {}),
       ...(context.getOpt("--limit") !== undefined
         ? {
-            limit: parsePositiveIntegerOption(context.getOpt("--limit"), "--limit", DEFAULT_FILE_VIEW_LINES),
+            limit: parseBoundedIntegerOption(
+              context.getOpt("--limit"),
+              "--limit",
+              DEFAULT_FILE_VIEW_LINES,
+              1,
+              MAX_FILE_VIEW_LINES,
+            ),
           }
         : {}),
       ...(context.getOpt("--max-bytes") !== undefined
         ? {
-            maxBytes: parsePositiveIntegerOption(context.getOpt("--max-bytes"), "--max-bytes", DEFAULT_FILE_VIEW_BYTES),
+            maxBytes: parseBoundedIntegerOption(
+              context.getOpt("--max-bytes"),
+              "--max-bytes",
+              DEFAULT_FILE_VIEW_BYTES,
+              1,
+              MAX_FILE_VIEW_BYTES,
+            ),
           }
         : {}),
       includeGraphContext: context.hasFlag("--include-graph-context"),

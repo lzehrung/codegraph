@@ -1,6 +1,11 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 
-import { DEFAULT_FILE_VIEW_LINES, MAX_FILE_VIEW_BYTES, MAX_FILE_VIEW_LINES } from "../agent/fileView.js";
+import {
+  DEFAULT_FILE_VIEW_BYTES,
+  DEFAULT_FILE_VIEW_LINES,
+  MAX_FILE_VIEW_BYTES,
+  MAX_FILE_VIEW_LINES,
+} from "../agent/fileView.js";
 
 import { DEFAULT_SQLITE_ROW_LIMIT, MAX_SQLITE_ROW_LIMIT } from "./sqliteGuard.js";
 
@@ -90,7 +95,7 @@ export const MCP_TOOLS: Tool[] = [
         file: stringProperty,
         offset: { type: "integer", minimum: 1, default: 1 },
         limit: { type: "integer", minimum: 1, maximum: MAX_FILE_VIEW_LINES, default: DEFAULT_FILE_VIEW_LINES },
-        maxBytes: { type: "integer", minimum: 1, maximum: MAX_FILE_VIEW_BYTES },
+        maxBytes: { type: "integer", minimum: 1, maximum: MAX_FILE_VIEW_BYTES, default: DEFAULT_FILE_VIEW_BYTES },
         includeGraphContext: { type: "boolean", default: false },
         allowSensitive: { type: "boolean", default: false },
       },
