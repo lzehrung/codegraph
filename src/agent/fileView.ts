@@ -72,6 +72,12 @@ type SensitiveSummary = {
   scanTruncated: boolean;
 };
 
+type Utf8ValidationState = {
+  remainingContinuationBytes: number;
+  nextByteMin: number;
+  nextByteMax: number;
+};
+
 const READ_BUFFER_BYTES = 64 * 1024;
 const SENSITIVE_SCAN_BYTES = 64 * 1024;
 const SENSITIVE_KEY_LIMIT = 100;
@@ -279,6 +285,11 @@ async function readTextFilePage(filePath: string, offset: number, limit: number,
   let currentLineTruncated = false;
   let currentLineChunks: Buffer[] = [];
   let lastReturnedLine: number | undefined;
+  const utf8State: Utf8ValidationState = {
+    remainingContinuationBytes: 0,
+    nextByteMin: 0x80,
+    nextByteMax: 0xbf,
+  };
 
   const initializeLine = (): void => {
     if (currentLineInitialized) return;
@@ -331,6 +342,7 @@ async function readTextFilePage(filePath: string, offset: number, limit: number,
       if (chunk.includes(0)) {
         throw new Error(`Binary files are not supported: ${filePath}`);
       }
+      validateUtf8Chunk(chunk, utf8State, filePath);
       let segmentStart = 0;
       for (let index = 0; index < chunk.length; index += 1) {
         if (chunk[index] !== 0x0a) continue;
@@ -341,6 +353,7 @@ async function readTextFilePage(filePath: string, offset: number, limit: number,
       }
       consumeSegment(chunk.subarray(segmentStart));
     }
+    assertUtf8Complete(utf8State, filePath);
     finishLine();
   } finally {
     await handle.close();
@@ -357,6 +370,61 @@ async function readTextFilePage(filePath: string, offset: number, limit: number,
     truncated: pageTruncated,
     ...(nextOffset !== undefined ? { nextOffset } : {}),
   };
+}
+
+function validateUtf8Chunk(buffer: Buffer, state: Utf8ValidationState, filePath: string): void {
+  for (const byte of buffer) {
+    if (state.remainingContinuationBytes) {
+      if (byte < state.nextByteMin || byte > state.nextByteMax) {
+        throw new Error(`Binary or non-UTF-8 files are not supported: ${filePath}`);
+      }
+      state.remainingContinuationBytes -= 1;
+      state.nextByteMin = 0x80;
+      state.nextByteMax = 0xbf;
+      continue;
+    }
+    if (byte <= 0x7f) continue;
+    if (byte >= 0xc2 && byte <= 0xdf) {
+      startUtf8Sequence(state, 1, 0x80, 0xbf);
+      continue;
+    }
+    if (byte === 0xe0) {
+      startUtf8Sequence(state, 2, 0xa0, 0xbf);
+      continue;
+    }
+    if ((byte >= 0xe1 && byte <= 0xec) || (byte >= 0xee && byte <= 0xef)) {
+      startUtf8Sequence(state, 2, 0x80, 0xbf);
+      continue;
+    }
+    if (byte === 0xed) {
+      startUtf8Sequence(state, 2, 0x80, 0x9f);
+      continue;
+    }
+    if (byte === 0xf0) {
+      startUtf8Sequence(state, 3, 0x90, 0xbf);
+      continue;
+    }
+    if (byte >= 0xf1 && byte <= 0xf3) {
+      startUtf8Sequence(state, 3, 0x80, 0xbf);
+      continue;
+    }
+    if (byte === 0xf4) {
+      startUtf8Sequence(state, 3, 0x80, 0x8f);
+      continue;
+    }
+    throw new Error(`Binary or non-UTF-8 files are not supported: ${filePath}`);
+  }
+}
+
+function startUtf8Sequence(state: Utf8ValidationState, continuationBytes: number, min: number, max: number): void {
+  state.remainingContinuationBytes = continuationBytes;
+  state.nextByteMin = min;
+  state.nextByteMax = max;
+}
+
+function assertUtf8Complete(state: Utf8ValidationState, filePath: string): void {
+  if (!state.remainingContinuationBytes) return;
+  throw new Error(`Binary or non-UTF-8 files are not supported: ${filePath}`);
 }
 
 function decodeLineBuffer(buffer: Buffer, truncated: boolean, filePath: string): string {

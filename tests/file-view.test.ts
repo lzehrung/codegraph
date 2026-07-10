@@ -214,6 +214,31 @@ describe("agent file view", () => {
     );
   });
 
+  it("rejects malformed UTF-8 on an unselected later line outside the returned byte window", async () => {
+    const root = await makeTempDir("cg-file-view-invalid-later-utf8-");
+    await writeFile(
+      root,
+      "later-line.txt",
+      Buffer.concat([Buffer.from("selected\nvalid but unselected\n", "utf8"), Buffer.from([0xff]), Buffer.from("\n")]),
+    );
+
+    await expect(
+      getCodegraphFileView({ root, file: "later-line.txt", offset: 1, limit: 1, maxBytes: 4 }),
+    ).rejects.toThrow(/Binary or non-UTF-8 files are not supported:/);
+  });
+
+  it.each([
+    { name: "invalid continuation", file: "invalid-continuation.ts", bytes: [0xc3, 0x28] },
+    { name: "incomplete final sequence", file: "incomplete-sequence.md", bytes: [0xe2, 0x82] },
+  ])("rejects $name bytes in text-looking files", async ({ file, bytes }) => {
+    const root = await makeTempDir("cg-file-view-invalid-utf8-");
+    await writeFile(root, file, Buffer.concat([Buffer.from("valid prefix\n", "utf8"), Buffer.from(bytes)]));
+
+    await expect(getCodegraphFileView({ root, file, limit: 10, maxBytes: 100 })).rejects.toThrow(
+      /Binary or non-UTF-8 files are not supported:/,
+    );
+  });
+
   it("redacts sensitive values into a key-only summary unless raw access is explicit", async () => {
     const root = await makeTempDir("cg-file-view-sensitive-");
     await writeFile(root, ".env", "API_TOKEN=super-secret\nUSER=alice\n");

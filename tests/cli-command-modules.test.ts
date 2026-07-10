@@ -1090,6 +1090,38 @@ describe("CLI command modules", () => {
     }
   });
 
+  test("redacts environment files through the CLI dispatcher unless sensitive access is explicit", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-sensitive-file-view-"));
+    const sensitiveText = "API_TOKEN=dispatcher-secret\nUSER=alice\n";
+    await fsp.writeFile(path.join(tempDir, ".env.local"), sensitiveText, "utf8");
+
+    try {
+      const redactedResult = await captureCli(["file", ".env.local", "--root", tempDir, "--json"]);
+      const redactedView = readJsonRecord(JSON.parse(redactedResult.stdout));
+
+      expect(redactedResult).toMatchObject({ stderr: "", exitCode: undefined });
+      expect(redactedResult.stdout).not.toContain("dispatcher-secret");
+      expect(redactedView).toMatchObject({
+        file: ".env.local",
+        text: "Sensitive environment values omitted.\nKeys: API_TOKEN, USER",
+        content: "1\tSensitive environment values omitted.\n2\tKeys: API_TOKEN, USER",
+        sensitive: { kind: "environment", redacted: true, allowSensitiveRequired: true },
+      });
+
+      const allowedResult = await captureCli(["file", ".env.local", "--root", tempDir, "--allow-sensitive", "--json"]);
+      const allowedView = readJsonRecord(JSON.parse(allowedResult.stdout));
+
+      expect(allowedResult).toMatchObject({ stderr: "", exitCode: undefined });
+      expect(allowedView).toMatchObject({
+        text: sensitiveText,
+        content: "1\tAPI_TOKEN=dispatcher-secret\n2\tUSER=alice\n3\t",
+        sensitive: { kind: "environment", redacted: false, allowSensitiveRequired: true },
+      });
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   test("runs graph exploration commands through the main CLI dispatcher", async () => {
     const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-explore-"));
     await fsp.writeFile(path.join(tempDir, "util.ts"), "export function helper() { return 1; }\n", "utf8");

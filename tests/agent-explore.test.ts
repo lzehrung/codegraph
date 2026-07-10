@@ -156,6 +156,7 @@ describe("agent explore", () => {
       "codegraph file src/db.ts --pretty",
       "codegraph file src/routes.ts --pretty",
     ]);
+    expect(response.fileView).toBeUndefined();
   });
 
   it("matches basename-only file mentions case-insensitively", async () => {
@@ -241,11 +242,12 @@ describe("agent explore", () => {
     expect(anchors.some((anchor) => textOf(anchor).includes("validateUser"))).toBeTruthy();
     expect(anchors.some((anchor) => textOf(anchor).includes("src/auth.ts"))).toBeTruthy();
     expect(packets.some((packet) => textOf(packet).includes("validateUser"))).toBeTruthy();
+    expect(response.fileView).toBeUndefined();
   });
 
   it("disables packet limits and packet omissions when source packets are excluded", async () => {
     const root = await mkExploreRepo();
-    const query = "validateUser";
+    const query = "src/auth.ts";
 
     const response = expectExploreEnvelope(await exploreCodegraph({ root, query, includeSource: false }), query);
     const limits = readRecord(response.limits, "limits");
@@ -254,6 +256,7 @@ describe("agent explore", () => {
     expect(readArray(response.packets, "packets")).toHaveLength(0);
     expect(limits.packets).toBe(0);
     expect(omittedCounts.packets).toBe(0);
+    expect(response.fileView).toBeUndefined();
   });
 
   it("pretty output distinguishes empty relevant source reasons", async () => {

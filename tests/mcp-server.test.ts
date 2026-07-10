@@ -919,6 +919,31 @@ describe("codegraph MCP handlers", () => {
     expect(finalPage.page).toBeUndefined();
   });
 
+  it("redacts environment files through get_file unless allowSensitive is true", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sensitive-file-"));
+    const sensitiveText = "API_TOKEN=mcp-secret\nUSER=alice\n";
+    await fs.writeFile(path.join(root, ".env.test"), sensitiveText, "utf8");
+    const handlers = createCodegraphMcpHandlers({ root });
+
+    const redacted = await handlers.get_file({ file: ".env.test" });
+
+    expect(JSON.stringify(redacted)).not.toContain("mcp-secret");
+    expect(redacted).toMatchObject({
+      file: ".env.test",
+      text: "Sensitive environment values omitted.\nKeys: API_TOKEN, USER",
+      content: "1\tSensitive environment values omitted.\n2\tKeys: API_TOKEN, USER",
+      sensitive: { kind: "environment", redacted: true, allowSensitiveRequired: true },
+    });
+
+    const allowed = await handlers.get_file({ file: ".env.test", allowSensitive: true });
+
+    expect(allowed).toMatchObject({
+      text: sensitiveText,
+      content: "1\tAPI_TOKEN=mcp-secret\n2\tUSER=alice\n3\t",
+      sensitive: { kind: "environment", redacted: false, allowSensitiveRequired: true },
+    });
+  });
+
   it("keeps plain get_file index-free and opts into freshness and direct graph context", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-file-graph-"));
     await fs.mkdir(path.join(root, "src"), { recursive: true });
