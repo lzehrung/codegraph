@@ -251,6 +251,37 @@ describe("agent file view", () => {
     );
   });
 
+  it.each([
+    {
+      name: "NUL in an environment file",
+      file: ".env",
+      invalidBytes: [0x00],
+      expectedError: /Binary files are not supported:/,
+    },
+    {
+      name: "malformed UTF-8 in a credential config",
+      file: "credentials.json",
+      invalidBytes: [0xff],
+      expectedError: /Binary or non-UTF-8 files are not supported:/,
+    },
+    {
+      name: "incomplete trailing UTF-8 in an environment file",
+      file: ".env.production",
+      invalidBytes: [0xe2, 0x82],
+      expectedError: /Binary or non-UTF-8 files are not supported:/,
+    },
+  ])("rejects $name beyond the bounded sensitive-summary prefix", async ({ file, invalidBytes, expectedError }) => {
+    const root = await makeTempDir("cg-file-view-sensitive-invalid-");
+    const structuralScanBytes = 64 * 1024;
+    const keyAndValue = Buffer.from("API_TOKEN=summary-prefix-secret\n", "utf8");
+    const padding = Buffer.alloc(structuralScanBytes - keyAndValue.length, 0x61);
+    await writeFile(root, file, Buffer.concat([keyAndValue, padding, Buffer.from(invalidBytes)]));
+
+    await expect(getCodegraphFileView({ root, file, offset: 1, limit: 1, maxBytes: 16 })).rejects.toThrow(
+      expectedError,
+    );
+  });
+
   it("redacts sensitive values into a key-only summary unless raw access is explicit", async () => {
     const root = await makeTempDir("cg-file-view-sensitive-");
     await writeFile(root, ".env", "API_TOKEN=super-secret\nUSER=alice\n");

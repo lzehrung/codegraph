@@ -102,6 +102,8 @@ const BINARY_EXTENSIONS = new Set([
   ".o",
   ".otf",
   ".pdf",
+  ".p12",
+  ".pfx",
   ".png",
   ".so",
   ".tar",
@@ -269,9 +271,7 @@ function buildResponse(args: {
 }
 
 async function readTextFilePage(filePath: string, offset: number, limit: number, maxBytes: number): Promise<FilePage> {
-  if (BINARY_EXTENSIONS.has(path.extname(filePath).toLowerCase())) {
-    throw new Error(`Binary files are not supported: ${filePath}`);
-  }
+  assertTextFileExtension(filePath);
 
   const handle = await fs.open(filePath, "r");
   const selectedLines: string[] = [];
@@ -284,11 +284,7 @@ async function readTextFilePage(filePath: string, offset: number, limit: number,
   let currentLineTruncated = false;
   let currentLineChunks: Buffer[] = [];
   let lastReturnedLine: number | undefined;
-  const utf8State: Utf8ValidationState = {
-    remainingContinuationBytes: 0,
-    nextByteMin: 0x80,
-    nextByteMax: 0xbf,
-  };
+  const utf8State = createUtf8ValidationState();
 
   const initializeLine = (): void => {
     if (currentLineInitialized) return;
@@ -486,36 +482,78 @@ function classifySensitiveFile(filePath: string): AgentFileViewSensitiveKind | u
   if (/^(?:credentials?|secrets?|service-account)(?:\.[^.]+)*\.(?:json|ya?ml|toml|ini)$/i.test(basename)) {
     return "credential-config";
   }
-  if (/\.(?:key|pem|p12|pfx)$/i.test(basename) || /^(?:id_rsa|id_dsa|id_ecdsa|id_ed25519)$/i.test(basename)) {
+  if (/\.(?:key|pem)$/i.test(basename) || /^(?:id_rsa|id_dsa|id_ecdsa|id_ed25519)$/i.test(basename)) {
     return "key-material";
   }
   return undefined;
 }
 
 async function buildSensitiveSummary(filePath: string, kind: AgentFileViewSensitiveKind): Promise<SensitiveSummary> {
-  const stat = await fs.stat(filePath);
+  const scan = await scanTextFilePrefix(filePath, SENSITIVE_SCAN_BYTES);
   if (kind === "key-material") {
     return {
-      text: `Sensitive key material omitted.\nSize: ${stat.size} bytes.`,
+      text: `Sensitive key material omitted.\nSize: ${scan.totalBytes} bytes.`,
       scanTruncated: false,
     };
   }
 
+  const text = UTF8_DECODER.decode(trimToUtf8Boundary(scan.prefix));
+  const keys = extractSensitiveKeys(text).slice(0, SENSITIVE_KEY_LIMIT);
+  const keySummary = keys.length ? keys.join(", ") : "No keys detected in bounded structural scan.";
+  return {
+    text: `Sensitive ${kind} values omitted.\nKeys: ${keySummary}`,
+    scanTruncated: scan.totalBytes > scan.prefix.length || keys.length >= SENSITIVE_KEY_LIMIT,
+  };
+}
+
+async function scanTextFilePrefix(
+  filePath: string,
+  prefixLimit: number,
+): Promise<{ prefix: Buffer; totalBytes: number }> {
+  assertTextFileExtension(filePath);
   const handle = await fs.open(filePath, "r");
+  const prefixChunks: Buffer[] = [];
+  let prefixBytes = 0;
+  let totalBytes = 0;
+  const utf8State = createUtf8ValidationState();
   try {
-    const bytesToRead = Math.min(SENSITIVE_SCAN_BYTES, stat.size);
-    const buffer = Buffer.alloc(bytesToRead);
-    const { bytesRead } = await handle.read(buffer, 0, bytesToRead, 0);
-    const text = buffer.subarray(0, bytesRead).toString("utf8");
-    const keys = extractSensitiveKeys(text).slice(0, SENSITIVE_KEY_LIMIT);
-    const keySummary = keys.length ? keys.join(", ") : "No keys detected in bounded structural scan.";
-    return {
-      text: `Sensitive ${kind} values omitted.\nKeys: ${keySummary}`,
-      scanTruncated: stat.size > bytesRead || keys.length >= SENSITIVE_KEY_LIMIT,
-    };
+    const buffer = Buffer.allocUnsafe(READ_BUFFER_BYTES);
+    while (true) {
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+      if (!bytesRead) break;
+      const chunk = buffer.subarray(0, bytesRead);
+      if (chunk.includes(0)) {
+        throw new Error(`Binary files are not supported: ${filePath}`);
+      }
+      validateUtf8Chunk(chunk, utf8State, filePath);
+      if (prefixBytes < prefixLimit) {
+        const bytesToKeep = Math.min(chunk.length, prefixLimit - prefixBytes);
+        prefixChunks.push(Buffer.from(chunk.subarray(0, bytesToKeep)));
+        prefixBytes += bytesToKeep;
+      }
+      totalBytes += chunk.length;
+    }
+    assertUtf8Complete(utf8State, filePath);
   } finally {
     await handle.close();
   }
+  return {
+    prefix: prefixChunks.length === 1 ? prefixChunks[0]! : Buffer.concat(prefixChunks),
+    totalBytes,
+  };
+}
+
+function assertTextFileExtension(filePath: string): void {
+  if (!BINARY_EXTENSIONS.has(path.extname(filePath).toLowerCase())) return;
+  throw new Error(`Binary files are not supported: ${filePath}`);
+}
+
+function createUtf8ValidationState(): Utf8ValidationState {
+  return {
+    remainingContinuationBytes: 0,
+    nextByteMin: 0x80,
+    nextByteMax: 0xbf,
+  };
 }
 
 function extractSensitiveKeys(text: string): string[] {
