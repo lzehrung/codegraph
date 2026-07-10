@@ -491,6 +491,7 @@ function classifySensitiveFile(filePath: string): AgentFileViewSensitiveKind | u
 async function buildSensitiveSummary(filePath: string, kind: AgentFileViewSensitiveKind): Promise<SensitiveSummary> {
   if (kind === "key-material") {
     const stat = await fs.stat(filePath);
+    if (!stat.isFile()) throw new Error(`File view target is not a file: ${filePath}`);
     return {
       text: `Sensitive key material omitted.\nSize: ${stat.size} bytes.`,
       scanTruncated: false,
