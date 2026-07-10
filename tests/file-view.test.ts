@@ -227,6 +227,22 @@ describe("agent file view", () => {
     ).rejects.toThrow(/Binary or non-UTF-8 files are not supported:/);
   });
 
+  it("rejects an invalid UTF-8 continuation crossing the 64 KiB read boundary outside the selected page", async () => {
+    const root = await makeTempDir("cg-file-view-invalid-boundary-utf8-");
+    const selectedLine = Buffer.from("selected\n", "utf8");
+    const readBufferBytes = 64 * 1024;
+    const padding = Buffer.alloc(readBufferBytes - selectedLine.length - 1, 0x61);
+    await writeFile(
+      root,
+      "boundary.txt",
+      Buffer.concat([selectedLine, padding, Buffer.from([0xc3, 0x28])]),
+    );
+
+    await expect(
+      getCodegraphFileView({ root, file: "boundary.txt", offset: 1, limit: 1, maxBytes: 8 }),
+    ).rejects.toThrow(/Binary or non-UTF-8 files are not supported:/);
+  });
+
   it.each([
     { name: "invalid continuation", file: "invalid-continuation.ts", bytes: [0xc3, 0x28] },
     { name: "incomplete final sequence", file: "incomplete-sequence.md", bytes: [0xe2, 0x82] },
