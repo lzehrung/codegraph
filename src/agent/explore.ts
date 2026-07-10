@@ -335,12 +335,13 @@ function extractFileMentions(snapshot: AgentProjectSnapshot, query: string): str
 
 function resolveExactFileTarget(snapshot: AgentProjectSnapshot, query: string): string | undefined {
   const normalizedQuery = normalizeQueryPathText(query.trim());
-  if (!normalizedQuery || /\s/.test(normalizedQuery)) return undefined;
+  if (!normalizedQuery) return undefined;
+  const containsWhitespace = /\s/.test(normalizedQuery);
   const basenameMatches: string[] = [];
   for (const file of snapshot.fileGraph.nodes) {
     const relative = normalizeQueryPathText(toProjectDisplayPath(snapshot.root, file));
     if (relative === normalizedQuery) return file;
-    if (path.basename(relative).toLowerCase() === normalizedQuery) basenameMatches.push(file);
+    if (!containsWhitespace && path.basename(relative).toLowerCase() === normalizedQuery) basenameMatches.push(file);
   }
   return basenameMatches.length === 1 ? basenameMatches[0] : undefined;
 }

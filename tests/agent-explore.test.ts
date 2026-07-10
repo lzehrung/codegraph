@@ -61,6 +61,18 @@ async function mkExploreRepo(): Promise<string> {
   return root;
 }
 
+const spacedExplorePath = "src/live reports/audit-report.ts";
+const spacedExploreText = [
+  "export function renderAuditReport(total: number) {",
+  "  return `audited:${total}`;",
+  "}",
+  "",
+].join("\n");
+
+async function writeSpacedExploreFixture(root: string): Promise<void> {
+  await writeFile(root, spacedExplorePath, spacedExploreText);
+}
+
 function readRecord(value: unknown, label: string): JsonRecord {
   expect(value, label).toBeTypeOf("object");
   expect(value, label).not.toBeNull();
@@ -153,6 +165,52 @@ describe("agent explore", () => {
       lineFormat: "number-tab-line",
     });
     expect(fileView.graphContext).toBeUndefined();
+  });
+
+  it("attaches the live file view for exact indexed project paths containing spaces in library and CLI explore", async () => {
+    const root = await mkExploreRepo();
+    await writeSpacedExploreFixture(root);
+
+    const libraryResponse = expectExploreEnvelope(
+      await exploreCodegraph({ root, query: spacedExplorePath }),
+      spacedExplorePath,
+    );
+    const libraryView = readRecord(libraryResponse.fileView, "library explore fileView");
+    expect(libraryView).toMatchObject({
+      file: spacedExplorePath,
+      totalLines: 4,
+      text: spacedExploreText,
+      content: [
+        "1\texport function renderAuditReport(total: number) {",
+        "2\t  return `audited:${total}`;",
+        "3\t}",
+        "4\t",
+      ].join("\n"),
+      lineFormat: "number-tab-line",
+    });
+
+    const exploreResult = await captureCli(["explore", spacedExplorePath, "--root", root, "--json"]);
+    const fileResult = await captureCli(["file", spacedExplorePath, "--root", root, "--json"]);
+
+    expect(exploreResult).toMatchObject({ stderr: "", exitCode: undefined });
+    expect(fileResult).toMatchObject({ stderr: "", exitCode: undefined });
+    const cliExploreResponse = readRecord(JSON.parse(exploreResult.stdout) as unknown, "CLI explore response");
+    const cliExploreView = readRecord(cliExploreResponse.fileView, "CLI explore fileView");
+    const cliFileView = readRecord(JSON.parse(fileResult.stdout) as unknown, "CLI file response");
+    const expectedLiveFields = readComparableLiveFileFields(libraryView, "library explore fileView");
+    expect(readComparableLiveFileFields(cliExploreView, "CLI explore fileView")).toEqual(expectedLiveFields);
+    expect(readComparableLiveFileFields(cliFileView, "CLI file response")).toEqual(expectedLiveFields);
+  });
+
+  it("does not attach a file view to a natural-language whitespace query containing a unique basename", async () => {
+    const root = await mkExploreRepo();
+    await writeSpacedExploreFixture(root);
+    const query = "please inspect audit-report.ts for recent failures";
+
+    const response = expectExploreEnvelope(await exploreCodegraph({ root, query }), query);
+
+    expect(textOf(response.blastRadius)).toContain(spacedExplorePath);
+    expect(response).not.toHaveProperty("fileView");
   });
 
   it("orders anchor-file derived outputs by project path for multi-file mentions", async () => {

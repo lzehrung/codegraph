@@ -491,9 +491,8 @@ function classifySensitiveFile(filePath: string): AgentFileViewSensitiveKind | u
   if (/^(?:credentials?|secrets?|service-account)(?:\.[^.]+)*\.(?:json|ya?ml|toml|ini)$/i.test(basename)) {
     return "credential-config";
   }
-  if (/\.(?:key|pem|p12|pfx)$/i.test(basename) || /^(?:id_rsa|id_dsa|id_ecdsa|id_ed25519)$/i.test(basename)) {
-    return "key-material";
-  }
+  const customSshKey = /^id_[a-z0-9_-]+$/i.test(basename);
+  if (/\.(?:key|pem|p12|pfx)$/i.test(basename) || customSshKey) return "key-material";
   return undefined;
 }
 

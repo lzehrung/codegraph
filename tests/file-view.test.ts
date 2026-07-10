@@ -607,6 +607,76 @@ describe("agent file view", () => {
     },
   );
 
+  const customSshPrivateKeyFixtures = [
+    { file: "id_ci", marker: "ci-private-key-marker" },
+    { file: "id_github", marker: "github-private-key-marker" },
+  ] as const;
+
+  it.each(customSshPrivateKeyFixtures)(
+    "keeps custom SSH private key $file metadata-only until sensitive access is allowed",
+    async ({ file, marker }) => {
+      const root = await makeTempDir("cg-file-view-custom-ssh-key-");
+      const raw = `-----BEGIN OPENSSH PRIVATE KEY-----\n${marker}\n-----END OPENSSH PRIVATE KEY-----\n`;
+      await writeFile(root, file, raw);
+      const openSpy = vi.spyOn(fs, "open");
+      const readFileSpy = vi.spyOn(fs, "readFile");
+
+      try {
+        const redacted = await getCodegraphFileView({ root, file, limit: 10, maxBytes: 1024 });
+
+        expect(redacted).toMatchObject({
+          file,
+          totalLines: 2,
+          text: `Sensitive key material omitted.\nSize: ${Buffer.byteLength(raw)} bytes.`,
+          content: `1\tSensitive key material omitted.\n2\tSize: ${Buffer.byteLength(raw)} bytes.`,
+          sensitive: { kind: "key-material", redacted: true, allowSensitiveRequired: true },
+        });
+        expect(JSON.stringify(redacted)).not.toContain(marker);
+        expect(openSpy).not.toHaveBeenCalled();
+        expect(readFileSpy).not.toHaveBeenCalled();
+
+        const allowed = await getCodegraphFileView({
+          root,
+          file,
+          limit: 10,
+          maxBytes: 1024,
+          allowSensitive: true,
+        });
+
+        expect(allowed).toMatchObject({
+          file,
+          totalLines: 4,
+          text: raw,
+          content: `1\t-----BEGIN OPENSSH PRIVATE KEY-----\n2\t${marker}\n3\t-----END OPENSSH PRIVATE KEY-----\n4\t`,
+          sensitive: { kind: "key-material", redacted: false, allowSensitiveRequired: true },
+        });
+        expect(openSpy).toHaveBeenCalledTimes(1);
+        expect(openSpy).toHaveBeenCalledWith(path.join(root, file), "r");
+        expect(readFileSpy).not.toHaveBeenCalled();
+      } finally {
+        openSpy.mockRestore();
+        readFileSpy.mockRestore();
+      }
+    },
+  );
+
+  it("returns an id_-prefixed OpenSSH public key as ordinary raw text without sensitive access", async () => {
+    const root = await makeTempDir("cg-file-view-custom-ssh-public-key-");
+    const file = "id_ci.pub";
+    const raw = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICI-public-key ci@example.test\n";
+    await writeFile(root, file, raw);
+
+    const result = await getCodegraphFileView({ root, file, limit: 10, maxBytes: 1024 });
+
+    expect(result).toMatchObject({
+      file,
+      totalLines: 2,
+      text: raw,
+      content: `1\t${raw.trimEnd()}\n2\t`,
+    });
+    expect(result.sensitive).toBeUndefined();
+  });
+
   it("returns key-material metadata without opening target bytes and opens the ordinary raw path only when allowed", async () => {
     const root = await makeTempDir("cg-file-view-key-metadata-only-");
     const keyFiles = [
