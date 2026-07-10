@@ -52,8 +52,57 @@ The server exposes the same bounded primitives as the CLI and library session la
 MCP keeps one Codegraph session warm for the configured root. That makes follow-up calls cheaper than separate CLI invocations. Startup is lazy unless `--warmup` or `--warmup-symbols` is passed.
 Before index-backed tool calls, MCP checks whether discovered files changed since the warm snapshot. Small changes refresh the session automatically, and responses include `freshness.state` as `fresh`, `refreshed`, or `stale`; stale responses also include `changedFileCount`, `omittedChangedFileCount`, and a bounded changed-file sample.
 Use `refresh_index` when you need to force a rebuild, reset SQLite artifact state, or refresh after a change burst that exceeds the automatic refresh limits. `query_sqlite` refreshes Codegraph-owned SQLite artifacts after small edits when write access is enabled; otherwise it refuses to serve stale artifact rows. `artifact_build` refuses to write outputs from a stale MCP index; run `refresh_index` first after large change bursts.
-`get_file` reads live bytes from disk after path confinement. Its `content` field uses `lineFormat: "number-tab-line"`: no padding, decimal line number, tab, then source line; a file-ending newline produces a final numbered empty line. Set `includeGraphContext: true` to opt into freshness checking and direct graph context for indexed files, capped at 100 importers, imports, and symbols each.
+`get_file` reads live bytes from disk after path confinement. It does not require a fresh index; only an explicit `includeGraphContext: true` checks indexed freshness and adds direct graph context, so returned file bytes and `totalLines` remain live even when `freshness` reports stale context.
 Tool schemas are flat JSON objects for broad client compatibility; argument combinations such as `refs` handle-vs-position mode are validated by the server.
+
+### `get_file`
+
+Call `get_file` with a project-relative `file`. `offset` is the 1-based first line, `limit` is the maximum returned lines, and `maxBytes` bounds unnumbered raw page text including its line separators; defaults are `1`, `2000`, and `80000`, with hard caps of `10000` lines and `500000` bytes.
+
+```json
+{
+  "file": "src/auth.ts",
+  "offset": 41,
+  "limit": 2,
+  "maxBytes": 80000,
+  "includeGraphContext": false,
+  "allowSensitive": false
+}
+```
+
+The response always has `schemaVersion`, `file`, effective `offset` and `limit`, exact whole-file `totalLines`, numbered `content`, `lineFormat`, unnumbered `text`, `truncated`, and `freshness`. It adds `page: { nextOffset }` when more lines remain, `graphContext: { usedBy, imports, symbols }` when requested and indexed, and `sensitive: { kind, redacted, allowSensitiveRequired }` for recognized sensitive paths.
+
+```json
+{
+  "schemaVersion": 1,
+  "file": "src/auth.ts",
+  "offset": 41,
+  "limit": 2,
+  "totalLines": 126,
+  "content": "41\texport function authenticate(request) {\n42\t  return verify(request);",
+  "lineFormat": "number-tab-line",
+  "text": "export function authenticate(request) {\n  return verify(request);",
+  "truncated": false,
+  "freshness": { "state": "fresh" },
+  "page": { "nextOffset": 43 }
+}
+```
+
+Each `content` row is an unpadded decimal line number, one tab, and the source line. A file-ending newline is a final numbered empty line, `totalLines` counts it, and clients should continue at `page.nextOffset` rather than deriving the next page from byte length.
+
+For raw pages, `maxBytes` can end a page before `limit`; `truncated` is true when the byte boundary cuts the selected line. Number prefixes are not part of that raw-text byte budget, so bounded `text` and formatted `content` have different byte sizes.
+
+`includeGraphContext` defaults to `false` to avoid an index build, unnecessary repository disclosure, and stale graph data on ordinary reads. When true, `graphContext` contains at most 100 sorted direct `usedBy` paths, resolved or external `imports`, and `{ name, kind, line }` symbols; `freshness` applies to this context, never to the live file page.
+
+Known environment, authentication-config, credential-config, and key-material files return a structural summary by default and mark `sensitive.redacted: true`; their `truncated` flag reports an incomplete bounded structural scan. Set `allowSensitive: true` only to request raw values; binary extensions, NUL-containing input, and non-UTF-8 page content are rejected.
+
+### Exact-path `explore`
+
+An MCP `explore` request whose entire query resolves to an indexed project-relative file path, or one uniquely matching basename, includes the same live response under `fileView`. Set `includeSource: false` to suppress it; use `get_file` when pagination, graph context, or an intentional raw sensitive read needs explicit controls.
+
+```json
+{ "query": "src/auth.ts", "includeSource": true }
+```
 
 ## Safety
 
@@ -62,7 +111,7 @@ Tool schemas are flat JSON objects for broad client compatibility; argument comb
 - Tools are read-only by default.
 - `artifact_build` requires `--allow-build` and a fresh or auto-refreshed MCP index.
 - `query_sqlite` rejects mutating SQL, recursive queries, synthetic payload functions, and stale artifact queries it cannot refresh safely.
-- `get_file` reads are byte- and line-bounded with `maxBytes`, `offset`, and `limit`.
+- `get_file` reads are byte- and line-bounded with `maxBytes`, `offset`, and `limit`; binary input is rejected, and sensitive formats require `allowSensitive: true` for raw values.
 - SQLite responses are row- and byte-bounded.
 
 ## Installer

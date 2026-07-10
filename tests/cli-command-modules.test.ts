@@ -1008,6 +1008,88 @@ describe("CLI command modules", () => {
     expect(stderrLines[0]).toContain("missing.ts");
   });
 
+  test("runs bounded JSON and pretty file views through the main CLI dispatcher", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-file-view-"));
+    await fsp.writeFile(path.join(tempDir, "util.ts"), "export const first = 1;\nexport const second = 2;\n", "utf8");
+    await fsp.writeFile(
+      path.join(tempDir, "main.ts"),
+      "import { second } from './util';\nexport const result = second;\n",
+      "utf8",
+    );
+
+    try {
+      const jsonResult = await captureCli([
+        "file",
+        "util.ts",
+        "--root",
+        tempDir,
+        "--offset",
+        "2",
+        "--limit",
+        "1",
+        "--max-bytes",
+        "8",
+      ]);
+      const jsonView = readJsonRecord(JSON.parse(jsonResult.stdout));
+
+      expect(jsonResult).toMatchObject({ stderr: "", exitCode: undefined });
+      expect(jsonView).toMatchObject({
+        file: "util.ts",
+        offset: 2,
+        limit: 1,
+        totalLines: 3,
+        content: "2\texport c",
+        text: "export c",
+        truncated: true,
+        page: { nextOffset: 3 },
+      });
+      expect(jsonView.graphContext).toBeUndefined();
+
+      const prettyResult = await captureCli([
+        "file",
+        "util.ts",
+        "--root",
+        tempDir,
+        "--offset",
+        "2",
+        "--limit",
+        "1",
+        "--max-bytes",
+        "100",
+        "--pretty",
+      ]);
+      expect(prettyResult).toEqual({
+        stdout: [
+          "File: util.ts",
+          "Lines 2-2 of 3",
+          "2\texport const second = 2;",
+          "Next page: codegraph file util.ts --offset 3 --limit 1 --pretty",
+          "",
+        ].join("\n"),
+        stderr: "",
+        exitCode: undefined,
+      });
+
+      const contextualResult = await captureCli([
+        "file",
+        "util.ts",
+        "--root",
+        tempDir,
+        "--limit",
+        "1",
+        "--max-bytes",
+        "100",
+        "--include-graph-context",
+        "--json",
+      ]);
+      const contextualView = readJsonRecord(JSON.parse(contextualResult.stdout));
+      const graphContext = readJsonRecord(contextualView.graphContext);
+      expect(graphContext.usedBy).toEqual(["main.ts"]);
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   test("runs graph exploration commands through the main CLI dispatcher", async () => {
     const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-explore-"));
     await fsp.writeFile(path.join(tempDir, "util.ts"), "export function helper() { return 1; }\n", "utf8");

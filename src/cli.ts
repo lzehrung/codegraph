@@ -32,6 +32,7 @@ import { handleDriftCommand } from "./cli/drift.js";
 import { handleDuplicatesCommand } from "./cli/duplicates.js";
 import { handleExplainCommand } from "./cli/explain.js";
 import { handleExploreCommand } from "./cli/explore.js";
+import { handleFileCommand } from "./cli/file.js";
 import { handleGraphDeltaCommand } from "./cli/graphDelta.js";
 import { handleGraphQueryCommand } from "./cli/graphQueries.js";
 import { handleGrepCommand } from "./cli/grep.js";
@@ -585,6 +586,20 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
   if (cmd === "explore") {
     await handleExploreCommand({
+      positionals: parsed.positionals,
+      root: projectRootFs,
+      buildOptions: buildAgentOptions(),
+      getOpt,
+      hasFlag,
+      writeJSONLine,
+      writeStdoutLine,
+      writeStderrLine,
+      exit: exitCli,
+    });
+    return;
+  }
+  if (cmd === "file") {
+    await handleFileCommand({
       positionals: parsed.positionals,
       root: projectRootFs,
       buildOptions: buildAgentOptions(),

@@ -1,0 +1,246 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+
+import {
+  formatAgentFileViewResponse,
+  getCodegraphFileView,
+  getCodegraphFileViewWithSession,
+} from "../src/agent/fileView.js";
+import { createAgentSession, type AgentSession } from "../src/agent/session.js";
+import { isSymlinkUnavailable } from "./helpers/filesystem.js";
+
+const tempPaths = new Set<string>();
+
+async function makeTempDir(prefix: string): Promise<string> {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  tempPaths.add(tempDir);
+  return tempDir;
+}
+
+async function writeFile(root: string, relativePath: string, contents: string | Buffer): Promise<void> {
+  const filePath = path.join(root, relativePath);
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, contents);
+}
+
+afterEach(async () => {
+  await Promise.all(Array.from(tempPaths, async (tempPath) => await fs.rm(tempPath, { recursive: true, force: true })));
+  tempPaths.clear();
+});
+
+describe("agent file view", () => {
+  it("numbers the requested line range while retaining the full-file line count and final empty line", async () => {
+    const root = await makeTempDir("cg-file-view-lines-");
+    await writeFile(root, "notes.txt", "alpha\nbeta\ngamma\n");
+
+    const middle = await getCodegraphFileView({ root, file: "notes.txt", offset: 2, limit: 2, maxBytes: 100 });
+
+    expect(middle).toMatchObject({
+      file: "notes.txt",
+      offset: 2,
+      limit: 2,
+      totalLines: 4,
+      content: "2\tbeta\n3\tgamma",
+      lineFormat: "number-tab-line",
+      text: "beta\ngamma",
+      truncated: false,
+      page: { nextOffset: 4 },
+    });
+
+    const finalEmptyLine = await getCodegraphFileView({
+      root,
+      file: "notes.txt",
+      offset: 4,
+      limit: 2,
+      maxBytes: 100,
+    });
+
+    expect(finalEmptyLine).toMatchObject({
+      offset: 4,
+      totalLines: 4,
+      content: "4\t",
+      text: "",
+      truncated: false,
+    });
+    expect(finalEmptyLine.page).toBeUndefined();
+  });
+
+  it("continues at the next whole line after byte truncation and reads beyond the first byte window", async () => {
+    const root = await makeTempDir("cg-file-view-pages-");
+    await writeFile(root, "paged notes.txt", "alphabet\nsecond\nthird");
+
+    const firstPage = await getCodegraphFileView({
+      root,
+      file: "paged notes.txt",
+      offset: 1,
+      limit: 2,
+      maxBytes: 3,
+    });
+
+    expect(firstPage).toMatchObject({
+      totalLines: 3,
+      content: "1\talp",
+      text: "alp",
+      truncated: true,
+      page: { nextOffset: 2 },
+    });
+    expect(formatAgentFileViewResponse(firstPage)).toBe(
+      [
+        "File: paged notes.txt",
+        "Lines 1-1 of 3",
+        "1\talp",
+        "Content was truncated by the 500000-byte hard limit or a smaller requested maxBytes.",
+        "Next page: codegraph file 'paged notes.txt' --offset 2 --limit 2 --pretty",
+      ].join("\n"),
+    );
+
+    const nextPage = await getCodegraphFileView({
+      root,
+      file: "paged notes.txt",
+      offset: 2,
+      limit: 2,
+      maxBytes: 12,
+    });
+
+    expect(nextPage).toMatchObject({
+      offset: 2,
+      totalLines: 3,
+      content: "2\tsecond\n3\tthird",
+      text: "second\nthird",
+      truncated: false,
+    });
+    expect(nextPage.page).toBeUndefined();
+  });
+
+  it("rejects lexical and symlink escapes after resolving real paths", async () => {
+    const root = await makeTempDir("cg-file-view-root-");
+    const outside = await makeTempDir("cg-file-view-outside-");
+    const outsideFile = path.join(outside, "secret.txt");
+    await fs.writeFile(outsideFile, "outside\n", "utf8");
+
+    await expect(getCodegraphFileView({ root, file: outsideFile, limit: 1, maxBytes: 100 })).rejects.toThrow(
+      /File is outside project root:/,
+    );
+
+    const linkedFile = path.join(root, "linked-secret.txt");
+    try {
+      await fs.symlink(outsideFile, linkedFile, "file");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    await expect(getCodegraphFileView({ root, file: "linked-secret.txt", limit: 1, maxBytes: 100 })).rejects.toThrow(
+      /File is outside project root:/,
+    );
+  });
+
+  it("keeps graph context opt-in and reports only the target's direct importer", async () => {
+    const root = await makeTempDir("cg-file-view-graph-");
+    await writeFile(root, "src/auth.ts", "export function validateUser() { return true; }\n");
+    await writeFile(
+      root,
+      "src/server.ts",
+      "import { validateUser } from './auth';\nexport const allowed = validateUser();\n",
+    );
+    await writeFile(root, "src/api.ts", "import { allowed } from './server';\nexport const response = allowed;\n");
+
+    const plain = await getCodegraphFileView({ root, file: "src/auth.ts", limit: 1, maxBytes: 100 });
+    expect(plain.content).toBe("1\texport function validateUser() { return true; }");
+    expect(plain.graphContext).toBeUndefined();
+
+    const contextual = await getCodegraphFileView({
+      root,
+      file: "src/auth.ts",
+      limit: 1,
+      maxBytes: 100,
+      includeGraphContext: true,
+    });
+
+    expect(contextual.graphContext?.usedBy).toEqual(["src/server.ts"]);
+    expect(contextual.graphContext?.symbols).toContainEqual({ name: "validateUser", kind: "function", line: 1 });
+  });
+
+  it("does not perform freshness or project-index work for a plain session read", async () => {
+    const root = await makeTempDir("cg-file-view-index-free-");
+    await writeFile(root, "plain.txt", "live bytes\n");
+    const forbiddenSessionWork = async (): Promise<never> => {
+      throw new Error("plain file reads must not touch the project session");
+    };
+    const session: AgentSession = {
+      root,
+      checkFreshness: forbiddenSessionWork,
+      loadProject: forbiddenSessionWork,
+      invalidate: () => undefined,
+    };
+
+    const response = await getCodegraphFileViewWithSession(session, {
+      root,
+      file: "plain.txt",
+      limit: 1,
+      maxBytes: 100,
+    });
+
+    expect(response.content).toBe("1\tlive bytes");
+    expect(response.graphContext).toBeUndefined();
+  });
+
+  it("returns current disk bytes even when the supplied session snapshot is stale", async () => {
+    const root = await makeTempDir("cg-file-view-stale-");
+    await writeFile(root, "state.ts", "export const state = 'old';\n");
+    const session = createAgentSession({ root });
+    await session.loadProject({ symbolGraph: "skip" });
+    await writeFile(root, "state.ts", "export const state = 'live';\n");
+
+    const response = await getCodegraphFileViewWithSession(session, {
+      root,
+      file: "state.ts",
+      limit: 1,
+      maxBytes: 100,
+    });
+
+    expect(response.content).toBe("1\texport const state = 'live';");
+    expect(response.text).toBe("export const state = 'live';");
+  });
+
+  it("rejects NUL-bearing content even when its extension looks textual", async () => {
+    const root = await makeTempDir("cg-file-view-binary-");
+    await writeFile(root, "payload.txt", Buffer.from([0x61, 0x62, 0x00, 0x63]));
+
+    await expect(getCodegraphFileView({ root, file: "payload.txt", limit: 10, maxBytes: 100 })).rejects.toThrow(
+      /Binary files are not supported:/,
+    );
+  });
+
+  it("redacts sensitive values into a key-only summary unless raw access is explicit", async () => {
+    const root = await makeTempDir("cg-file-view-sensitive-");
+    await writeFile(root, ".env", "API_TOKEN=super-secret\nUSER=alice\n");
+
+    const redacted = await getCodegraphFileView({ root, file: ".env", limit: 10, maxBytes: 100 });
+
+    expect(redacted).toMatchObject({
+      file: ".env",
+      totalLines: 2,
+      text: "Sensitive environment values omitted.\nKeys: API_TOKEN, USER",
+      content: "1\tSensitive environment values omitted.\n2\tKeys: API_TOKEN, USER",
+      sensitive: { kind: "environment", redacted: true, allowSensitiveRequired: true },
+    });
+
+    const allowed = await getCodegraphFileView({
+      root,
+      file: ".env",
+      limit: 10,
+      maxBytes: 100,
+      allowSensitive: true,
+    });
+
+    expect(allowed).toMatchObject({
+      totalLines: 3,
+      text: "API_TOKEN=super-secret\nUSER=alice\n",
+      content: "1\tAPI_TOKEN=super-secret\n2\tUSER=alice\n3\t",
+      sensitive: { kind: "environment", redacted: false, allowSensitiveRequired: true },
+    });
+  });
+});

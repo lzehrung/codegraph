@@ -118,10 +118,26 @@ describe("agent explore", () => {
     const response = expectExploreEnvelope(await exploreCodegraph({ root, query }), query);
     const packets = readArray(response.packets, "packets");
     const blastRadius = readArray(response.blastRadius, "blastRadius");
+    const fileView = readRecord(response.fileView, "fileView");
 
     expect(packets.some((packet) => textOf(packet).includes("src/auth.ts"))).toBeTruthy();
     expect(blastRadius.some((entry) => textOf(entry).includes("src/routes.ts"))).toBeTruthy();
     expect(readArray(response.followUps, "followUps").length).toBeGreaterThan(0);
+    expect(fileView).toMatchObject({
+      file: "src/auth.ts",
+      totalLines: 7,
+      content: [
+        "1\timport { readUser } from './db';",
+        "2\t",
+        "3\texport function validateUser(userId: string) {",
+        "4\t  const user = readUser(userId);",
+        "5\t  return user.active;",
+        "6\t}",
+        "7\t",
+      ].join("\n"),
+      lineFormat: "number-tab-line",
+    });
+    expect(fileView.graphContext).toBeUndefined();
   });
 
   it("orders anchor-file derived outputs by project path for multi-file mentions", async () => {
@@ -136,9 +152,9 @@ describe("agent explore", () => {
 
     expect(blastRadiusFiles.slice(0, 3)).toEqual(["src/auth.ts", "src/db.ts", "src/routes.ts"]);
     expect(followUps.slice(0, 3)).toEqual([
-      "codegraph packet get src/auth.ts --pretty",
-      "codegraph packet get src/db.ts --pretty",
-      "codegraph packet get src/routes.ts --pretty",
+      "codegraph file src/auth.ts --pretty",
+      "codegraph file src/db.ts --pretty",
+      "codegraph file src/routes.ts --pretty",
     ]);
   });
 

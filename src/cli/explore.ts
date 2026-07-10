@@ -20,6 +20,8 @@ export async function handleExploreCommand(context: ExploreCommandContext): Prom
     maxPackets: parseNonNegativeIntegerOption(context.getOpt("--max-packets"), "--max-packets", 3),
     maxPaths: parseNonNegativeIntegerOption(context.getOpt("--max-paths"), "--max-paths", 3),
     includeSource: !context.hasFlag("--no-source"),
+    includeGraphContext: context.hasFlag("--include-graph-context"),
+    allowSensitive: context.hasFlag("--allow-sensitive"),
   });
 
   if (context.hasFlag("--json") || !context.hasFlag("--pretty")) {

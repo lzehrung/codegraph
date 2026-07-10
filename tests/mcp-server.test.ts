@@ -894,20 +894,29 @@ describe("codegraph MCP handlers", () => {
     });
   });
 
-  it("omits pagination when a truncated byte window has no more available lines", async () => {
+  it("paginates complete lines beyond the initial byte window without hiding the full-file line count", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-file-window-page-"));
     await fs.writeFile(path.join(root, "notes.txt"), "one\ntwo\nthree\n", "utf8");
     const handlers = createCodegraphMcpHandlers({ root });
 
-    const result = await handlers.get_file({ file: "notes.txt", maxBytes: 7, limit: 2 });
+    const firstPage = await handlers.get_file({ file: "notes.txt", maxBytes: 7, limit: 2 });
 
-    expect(result).toMatchObject({
+    expect(firstPage).toMatchObject({
       text: "one\ntwo",
       content: "1\tone\n2\ttwo",
-      totalLines: 2,
-      truncated: true,
+      totalLines: 4,
+      truncated: false,
+      page: { nextOffset: 3 },
     });
-    expect(result.page).toBeUndefined();
+
+    const finalPage = await handlers.get_file({ file: "notes.txt", offset: 3, maxBytes: 7, limit: 2 });
+    expect(finalPage).toMatchObject({
+      text: "three\n",
+      content: "3\tthree\n4\t",
+      totalLines: 4,
+      truncated: false,
+    });
+    expect(finalPage.page).toBeUndefined();
   });
 
   it("keeps plain get_file index-free and opts into freshness and direct graph context", async () => {

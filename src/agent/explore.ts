@@ -3,6 +3,11 @@ import type { AnalysisSummary } from "../analysisSummary.js";
 import { getReverseDependencies, getShortestPath, type DependencyNode } from "../graphs/traversal.js";
 import type { BuildOptions } from "../indexer/types.js";
 import { toProjectDisplayPath } from "../util/paths.js";
+import {
+  formatAgentFileViewResponse,
+  getCodegraphFileViewWithSession,
+  type AgentFileViewResponse,
+} from "./fileView.js";
 import { getCodegraphPacketWithSession, type AgentPacketResponse } from "./packet.js";
 import { searchCodegraphWithSession, type AgentSearchResponse, type AgentSearchResult } from "./search.js";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "./session.js";
@@ -16,6 +21,8 @@ export type AgentExploreRequest = {
   maxPackets?: number;
   maxPaths?: number;
   includeSource?: boolean;
+  includeGraphContext?: boolean;
+  allowSensitive?: boolean;
 };
 
 export type AgentExplorePacketSummary = AgentPacketResponse;
@@ -57,6 +64,7 @@ export type AgentExploreResponse = {
   summary: string[];
   anchors: AgentSearchResult[];
   packets: AgentExplorePacketSummary[];
+  fileView?: AgentFileViewResponse;
   paths: AgentExploreDependencyPathSummary[];
   blastRadius: AgentExploreBlastRadiusSummary[];
   candidateTests: string[];
@@ -108,6 +116,16 @@ export async function exploreCodegraphWithSession(
   const anchorFiles = collectAnchorFiles(snapshot, request.query, anchors);
   const packetTargets = includeSource ? collectPacketTargets(anchors, effectivePacketLimit) : [];
   const packets = await collectPackets(session, request.root, packetTargets);
+  const exactFile = includeSource ? resolveExactFileTarget(snapshot, request.query) : undefined;
+  const fileView = exactFile
+    ? await getCodegraphFileViewWithSession(session, {
+        root: request.root,
+        file: toProjectDisplayPath(snapshot.root, exactFile),
+        ...(request.includeGraphContext !== undefined ? { includeGraphContext: request.includeGraphContext } : {}),
+        ...(request.allowSensitive !== undefined ? { allowSensitive: request.allowSensitive } : {}),
+        ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
+      })
+    : undefined;
   const pathResult = collectDependencyPaths(snapshot, request.query, anchorFiles, maxPaths);
   const paths = pathResult.items;
   const blastRadius = collectBlastRadius(
@@ -124,9 +142,10 @@ export async function exploreCodegraphWithSession(
     schemaVersion: 1,
     query: request.query,
     analysis: search.analysis,
-    summary: buildSummary(search, packets, paths, blastRadius, candidateTests),
+    summary: buildSummary(search, packets, paths, blastRadius, candidateTests, fileView),
     anchors,
     packets,
+    ...(fileView ? { fileView } : {}),
     paths,
     blastRadius,
     candidateTests,
@@ -167,6 +186,10 @@ export function formatAgentExploreResponse(response: AgentExploreResponse): stri
     }
   } else {
     lines.push("- No anchors found.");
+  }
+
+  if (response.fileView) {
+    lines.push("", "File view", formatAgentFileViewResponse(response.fileView));
   }
 
   lines.push("", "Relevant source");
@@ -307,6 +330,18 @@ function extractFileMentions(snapshot: AgentProjectSnapshot, query: string): str
     }
   }
   return uniqueFiles(explicitFiles);
+}
+
+function resolveExactFileTarget(snapshot: AgentProjectSnapshot, query: string): string | undefined {
+  const normalizedQuery = normalizeQueryPathText(query.trim());
+  if (!normalizedQuery || /\s/.test(normalizedQuery)) return undefined;
+  const basenameMatches: string[] = [];
+  for (const file of snapshot.fileGraph.nodes) {
+    const relative = normalizeQueryPathText(toProjectDisplayPath(snapshot.root, file));
+    if (relative === normalizedQuery) return file;
+    if (path.basename(relative).toLowerCase() === normalizedQuery) basenameMatches.push(file);
+  }
+  return basenameMatches.length === 1 ? basenameMatches[0] : undefined;
 }
 
 function normalizeQueryPathText(input: string): string {
@@ -472,6 +507,10 @@ function collectFollowUps(
   const followUps: string[] = [];
   for (const file of anchorFiles.slice(0, 3)) {
     const relative = toProjectDisplayPath(root, file);
+    followUps.push(`codegraph file ${quoteShellArg(relative)} --pretty`);
+  }
+  for (const file of anchorFiles.slice(0, 3)) {
+    const relative = toProjectDisplayPath(root, file);
     followUps.push(`codegraph packet get ${quoteShellArg(relative)} --pretty`);
   }
   for (const anchor of anchors) {
@@ -511,11 +550,15 @@ function buildSummary(
   paths: readonly AgentExploreDependencyPathSummary[],
   blastRadius: readonly AgentExploreBlastRadiusSummary[],
   candidateTests: readonly string[],
+  fileView: AgentFileViewResponse | undefined,
 ): string[] {
   if (!search.results.length) {
     return [`No anchors matched "${search.query}".`, "Use follow-ups to broaden the search or orient the repository."];
   }
   const summary = [`Found ${search.results.length} anchor(s) for "${search.query}".`];
+  if (fileView) {
+    summary.push(`Included live file view for ${fileView.file}.`);
+  }
   if (packets.length) {
     summary.push(`Included ${packets.length} bounded source packet(s).`);
   }
