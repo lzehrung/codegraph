@@ -154,12 +154,12 @@ describe("codegraph config", () => {
     expect(ignored.results).toEqual([]);
   });
 
-  it("loads language extension mappings from codegraph.config.json", async () => {
+  it("normalizes extension keys and language IDs from codegraph.config.json", async () => {
     const root = await mkRepo();
     await writeConfig(root, {
       languages: {
         extensions: {
-          ".TPL": "php",
+          ".TPL": "PHP",
         },
       },
     });
@@ -330,11 +330,11 @@ describe("codegraph config", () => {
     );
   });
 
-  it("drops unknown language IDs while normalizing programmatic extension mappings", () => {
+  it("drops unknown language IDs while trimming and lowercasing programmatic extension mappings", () => {
     const normalized = normalizeLanguageExtensions({
-      ".TPL": " html ",
+      ".TPL": " HTML ",
       ".unknown": "wat",
-      ".PHP": " php ",
+      ".PHP": " PHP ",
     });
 
     expect(Object.entries(normalized ?? {})).toEqual([
@@ -343,10 +343,10 @@ describe("codegraph config", () => {
     ]);
   });
 
-  it("continues to a valid shorter mapping after ignoring an unknown language ID", () => {
+  it("uses an uppercase valid shorter mapping after ignoring an unknown language ID", () => {
     const support = supportForFile("widget.component.tpl", {
       ".component.tpl": "wat",
-      ".tpl": "html",
+      ".tpl": "HTML",
     });
 
     expect(support?.id).toBe("html");

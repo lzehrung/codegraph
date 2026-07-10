@@ -102,7 +102,7 @@ function normalizeConfigLanguageExtensions(
   if (!extensions) return undefined;
   for (const [rawKey, rawLanguageId] of Object.entries(extensions)) {
     const key = rawKey.trim().toLowerCase();
-    const languageId = rawLanguageId.trim();
+    const languageId = rawLanguageId.trim().toLowerCase();
     if (!key.startsWith(".")) {
       throw new Error(`Invalid ${CODEGRAPH_CONFIG_FILE}: languages.extensions key "${rawKey}" must start with ".".`);
     }

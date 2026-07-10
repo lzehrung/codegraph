@@ -90,7 +90,7 @@ export function normalizeLanguageExtensions(
   extensions: LanguageExtensionMap | undefined,
 ): LanguageExtensionMap | undefined {
   const entries = Object.entries(extensions ?? {})
-    .map(([extension, languageId]) => [extension.trim().toLowerCase(), languageId.trim()] as const)
+    .map(([extension, languageId]) => [extension.trim().toLowerCase(), languageId.trim().toLowerCase()] as const)
     .filter(
       ([extension, languageId]) =>
         isLiteralLanguageExtension(extension) && isRemappableLanguageExtension(extension) && !!supportById(languageId),
