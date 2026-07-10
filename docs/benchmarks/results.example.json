@@ -1,0 +1,418 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-10T17:51:31.958Z",
+  "command": [
+    "node",
+    "scripts/benchmarks/run-scenario.mjs",
+    "--scenario-file",
+    "docs/benchmarks/scenarios.json",
+    "--runs",
+    "3",
+    "--output",
+    ".tmp/public-docs-benchmark-results.json",
+    "--require-complete"
+  ],
+  "environment": {
+    "nodeVersion": "v24.15.0",
+    "platform": "linux",
+    "arch": "x64",
+    "cpuModel": "Intel(R) Core(TM) i9-14900K",
+    "logicalCpus": 32,
+    "totalMemoryBytes": 67280605184
+  },
+  "scenarioFile": "docs/benchmarks/scenarios.json",
+  "scenarioDigest": "sha256:7d1d6583adf2f3cbaf904cae40837c8e25ca1d540cd1b5a28e444d3fc4db67fa",
+  "scenarioIds": [
+    "repo-orientation-small-ts",
+    "python-import-reference",
+    "sql-migration-application-review",
+    "mixed-docs-source-graph"
+  ],
+  "runsPerVariant": 3,
+  "runs": [
+    {
+      "scenarioId": "repo-orientation-small-ts",
+      "variant": "baseline",
+      "run": 1,
+      "metrics": {
+        "toolCalls": 3,
+        "fileReads": 3,
+        "wallTimeMs": 88.527
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "repo-orientation-small-ts",
+      "variant": "baseline",
+      "run": 2,
+      "metrics": {
+        "toolCalls": 3,
+        "fileReads": 3,
+        "wallTimeMs": 60.458
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "repo-orientation-small-ts",
+      "variant": "baseline",
+      "run": 3,
+      "metrics": {
+        "toolCalls": 3,
+        "fileReads": 3,
+        "wallTimeMs": 44.596
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "repo-orientation-small-ts",
+      "variant": "codegraph",
+      "run": 1,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 3725.869
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "repo-orientation-small-ts",
+      "variant": "codegraph",
+      "run": 2,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 3762.148
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "repo-orientation-small-ts",
+      "variant": "codegraph",
+      "run": 3,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 3768.807
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "python-import-reference",
+      "variant": "baseline",
+      "run": 1,
+      "metrics": {
+        "toolCalls": 3,
+        "fileReads": 3,
+        "wallTimeMs": 28.868
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "python-import-reference",
+      "variant": "baseline",
+      "run": 2,
+      "metrics": {
+        "toolCalls": 3,
+        "fileReads": 3,
+        "wallTimeMs": 27.293
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "python-import-reference",
+      "variant": "baseline",
+      "run": 3,
+      "metrics": {
+        "toolCalls": 3,
+        "fileReads": 3,
+        "wallTimeMs": 21.963
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "python-import-reference",
+      "variant": "codegraph",
+      "run": 1,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 2,
+        "wallTimeMs": 3474.61
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "python-import-reference",
+      "variant": "codegraph",
+      "run": 2,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 2,
+        "wallTimeMs": 3620.385
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "python-import-reference",
+      "variant": "codegraph",
+      "run": 3,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 2,
+        "wallTimeMs": 3934.762
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "sql-migration-application-review",
+      "variant": "baseline",
+      "run": 1,
+      "metrics": {
+        "toolCalls": 3,
+        "fileReads": 3,
+        "wallTimeMs": 37.275
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "sql-migration-application-review",
+      "variant": "baseline",
+      "run": 2,
+      "metrics": {
+        "toolCalls": 3,
+        "fileReads": 3,
+        "wallTimeMs": 40.696
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "sql-migration-application-review",
+      "variant": "baseline",
+      "run": 3,
+      "metrics": {
+        "toolCalls": 3,
+        "fileReads": 3,
+        "wallTimeMs": 39.783
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "sql-migration-application-review",
+      "variant": "codegraph",
+      "run": 1,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 3569.998
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "sql-migration-application-review",
+      "variant": "codegraph",
+      "run": 2,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 3544.761
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "sql-migration-application-review",
+      "variant": "codegraph",
+      "run": 3,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 3721.044
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "mixed-docs-source-graph",
+      "variant": "baseline",
+      "run": 1,
+      "metrics": {
+        "toolCalls": 3,
+        "fileReads": 3,
+        "wallTimeMs": 39.589
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "mixed-docs-source-graph",
+      "variant": "baseline",
+      "run": 2,
+      "metrics": {
+        "toolCalls": 3,
+        "fileReads": 3,
+        "wallTimeMs": 40.26
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "mixed-docs-source-graph",
+      "variant": "baseline",
+      "run": 3,
+      "metrics": {
+        "toolCalls": 3,
+        "fileReads": 3,
+        "wallTimeMs": 39.422
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "mixed-docs-source-graph",
+      "variant": "codegraph",
+      "run": 1,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 3946.935
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "mixed-docs-source-graph",
+      "variant": "codegraph",
+      "run": 2,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 3437.486
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "mixed-docs-source-graph",
+      "variant": "codegraph",
+      "run": 3,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 3410.832
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    }
+  ]
+}

@@ -4,6 +4,8 @@ Runtime behavior, performance characteristics, architecture, extension points, a
 
 ## Performance
 
+For controlled evidence about agent-oriented source discovery, see the [documentation benchmark methodology and checked results](./benchmarks/README.md). Its cold, cache-off local fixtures are narrower than the large-repository tuning guidance below and do not establish general performance.
+
 ### Quick start for large repos
 
 - Graph only: `codegraph graph --fast-graph --threads 8 --mermaid > graph.mmd`
@@ -168,5 +170,6 @@ Recommended strategy:
 - [docs/cli.md](./cli.md)
 - [docs/library-api.md](./library-api.md)
 - [docs/agent-workflows.md](./agent-workflows.md)
+- [docs/benchmarks/README.md](./benchmarks/README.md)
 - [docs/language-parity.md](./language-parity.md)
 - [docs/scenario-catalog.md](./scenario-catalog.md)

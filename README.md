@@ -459,6 +459,7 @@ For the full capability matrix, limitations, and fixture coverage, see [docs/lan
 - [docs/agent-workflows.md](./docs/agent-workflows.md): explore, orientation packets, search anchors, MCP, sessions, streaming, tool wrappers, review bundles, and agent-oriented review recipes
 - [docs/mcp.md](./docs/mcp.md): MCP server setup, tool list, safety model, and client configuration examples
 - [docs/how-it-works.md](./docs/how-it-works.md): performance, caching, native runtime behavior, architecture, and testing guidance
+- [docs/benchmarks/README.md](./docs/benchmarks/README.md): reproducible local benchmark methodology, checked evidence, metric semantics, and limitations
 - [docs/language-parity.md](./docs/language-parity.md): per-language capability matrix
 - [docs/scenario-catalog.md](./docs/scenario-catalog.md): scenario and fixture coverage
 - [docs/coverage/README.md](./docs/coverage/README.md): committed Markdown coverage summaries
