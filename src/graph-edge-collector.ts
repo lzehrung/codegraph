@@ -1,30 +1,28 @@
-import path from "node:path";
-import { type ParserLanguage } from "./parserBackend.js";
+import type { ParserLanguage } from "./parserBackend.js";
 import { prepareSourceInput } from "./languages/filePrep.js";
-import { type LanguageSupport } from "./languages.js";
+import { supportForFile, type LanguageExtensionMap, type LanguageSupport } from "./languages.js";
 import type { Edge } from "./types.js";
 import { loadNearestTsconfigFor } from "./util/resolution.js";
-import { type WorkspaceConfig } from "./util/workspace.js";
+import type { WorkspaceConfig } from "./util/workspace.js";
 import { extractJsTsDynamicSpecifiers } from "./util/specifiers.js";
-import { logWithLevel, type LogLevel } from "./logging.js";
+import { logWithLevel } from "./logging.js";
+import type { LogLevel } from "./logging.js";
 import {
   graphOnlyLanguageSupportsImportAliases,
   graphOnlySpecifierNeedsResolutionConfig,
   isGraphOnlyLanguage,
 } from "./documentLinks.js";
-import {
-  getCompactImportsExecution,
-  type NativeRuntimeMode,
-  type CompactQueryResults,
-  type NativeQueryResults,
-} from "./native/treeSitterNative.js";
+import { getCompactImportsExecution } from "./native/treeSitterNative.js";
+import type { NativeRuntimeMode, CompactQueryResults, NativeQueryResults } from "./native/treeSitterNative.js";
 import { recordNativeExecutionOutcome } from "./native/nativeBackendReport.js";
-import { collectModuleSpecifiersFromSource, type FallbackImportExtractionEvent } from "./graphs/specifiers.js";
+import { collectModuleSpecifiersFromSource } from "./graphs/specifiers.js";
+import type { FallbackImportExtractionEvent } from "./graphs/specifiers.js";
 import { collectPhpComposerImplicitEdges, resolveModuleSpecifierEdges } from "./graphs/edgeResolution.js";
 import type { GraphCacheEntry } from "./graphs/types.js";
 import type { BuildReport } from "./indexer/types.js";
 import type { SyntaxTreeLike } from "./languages/types.js";
-import { collectSqlEdgesForFile, type SqlFactCache } from "./sql/sourceGraph.js";
+import { collectSqlEdgesForFile } from "./sql/sourceGraph.js";
+import type { SqlFactCache } from "./sql/sourceGraph.js";
 
 const cloneEdge = (edge: Edge): Edge => ({
   ...edge,
@@ -52,6 +50,7 @@ export async function collectEdgesForFile(
     fileSignature?: { sig: string; gitSig?: string; cacheSig?: string };
     sqlCorpusSig?: string;
     cachedFileEdges?: GraphCacheEntry;
+    languageExtensions?: LanguageExtensionMap;
     onFileEdges?: (file: string, entry: GraphCacheEntry) => void;
     onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
     report?: BuildReport;
@@ -64,7 +63,7 @@ export async function collectEdgesForFile(
   const sigEntry = opts.fileSignature;
   const sig = sigEntry?.sig;
   const gitSig = sigEntry?.gitSig;
-  const sqlFile = path.extname(normalizedFile).toLowerCase() === ".sql";
+  const sqlFile = supportForFile(normalizedFile, opts.languageExtensions)?.id === "sql";
 
   const emitCacheEntry = (edges: Edge[]) => {
     if (!sig || !opts.onFileEdges) return;
@@ -96,7 +95,7 @@ export async function collectEdgesForFile(
   let compactNativeImports: CompactQueryResults | null = null;
   let graphOnlyLanguage = sup ? isGraphOnlyLanguage(sup.id) : false;
   if (!sup || src === undefined) {
-    const prep = await prepareSourceInput(file);
+    const prep = await prepareSourceInput(file, { languageExtensions: opts.languageExtensions });
     sup = prep.sup;
     src = prep.source;
     graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
@@ -118,7 +117,7 @@ export async function collectEdgesForFile(
 
   if (sup.id === "sql") {
     const allFiles = opts.allFiles ?? [normalizedFile];
-    const sqlEdges = await collectSqlEdgesForFile(normalizedFile, allFiles, opts.sqlFactCache);
+    const sqlEdges = await collectSqlEdgesForFile(normalizedFile, allFiles, opts.sqlFactCache, opts.languageExtensions);
     emitCacheEntry(sqlEdges);
     return sqlEdges;
   }

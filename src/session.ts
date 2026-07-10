@@ -15,6 +15,7 @@ import {
   type SymbolDef,
 } from "./indexer/types.js";
 import { buildProjectIndex, buildProjectIndexIncremental } from "./indexer/build-index.js";
+import { normalizeLanguageExtensions } from "./indexer/build-cache.js";
 import { findReferences, goToDefinition } from "./indexer/navigation.js";
 import {
   analyzeImpactFromDiff,
@@ -110,6 +111,7 @@ function normalizeBuildOptions(options?: BuildOptions): Record<string, unknown> 
           gitignoreRoot: options.discovery.gitignoreRoot ? path.resolve(options.discovery.gitignoreRoot) : undefined,
         }
       : undefined,
+    languageExtensions: normalizeLanguageExtensions(options.languageExtensions),
   };
 }
 
@@ -241,10 +243,17 @@ export class CodeReviewSession implements ICodeReviewSession {
   private async currentBuildOptions(): Promise<BuildOptions | undefined> {
     const config = await loadCodegraphConfig(this.root);
     const discovery = mergeDiscoveryOptions(config.discovery, this.buildOptions?.discovery);
-    if (!hasDiscoveryOptions(discovery)) {
+    const hasDiscovery = hasDiscoveryOptions(discovery);
+    const languageExtensions =
+      normalizeLanguageExtensions(this.buildOptions?.languageExtensions) ?? config.languages?.extensions;
+    if (!hasDiscovery && !languageExtensions) {
       return this.buildOptions;
     }
-    return { ...this.buildOptions, discovery };
+    return {
+      ...this.buildOptions,
+      ...(hasDiscovery ? { discovery } : {}),
+      ...(languageExtensions ? { languageExtensions } : {}),
+    };
   }
 
   private async buildIndex(options: { forceFull?: boolean } = {}): Promise<{

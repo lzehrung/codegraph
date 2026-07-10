@@ -126,10 +126,10 @@ export async function prepareFileContextForBuild(
           });
         }
       }
-      prepared = await prepareFileForIndexing(file, opts?.native);
+      prepared = await prepareFileForIndexing(file, opts?.native, opts?.languageExtensions);
     }
   } else {
-    prepared = await prepareFileForIndexing(file, opts?.native);
+    prepared = await prepareFileForIndexing(file, opts?.native, opts?.languageExtensions);
   }
   if (isGraphOnlyLanguage(prepared.sup.id)) {
     return prepared;

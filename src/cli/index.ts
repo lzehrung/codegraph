@@ -26,6 +26,7 @@ export type IndexCommandContext = {
   discoveryOptions: ProjectFileDiscoveryOptions;
   nativeMode: NativeRuntimeMode;
   workerOpts: { useNativeWorkers: true } | Record<string, never>;
+  languageExtensions: BuildOptions["languageExtensions"];
   progressHandler: ((update: { current: number; total: number }) => void) | undefined;
   graphOptions: GraphBuildOptions | undefined;
   reportEnabled: boolean;
@@ -66,6 +67,7 @@ export async function handleIndexCommand(context: IndexCommandContext): Promise<
     threads,
     discovery: context.discoveryOptions,
     ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
+    ...(context.languageExtensions ? { languageExtensions: context.languageExtensions } : {}),
     ...context.workerOpts,
     ...(cache !== undefined ? { cache } : {}),
     cacheStrict,

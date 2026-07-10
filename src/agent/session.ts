@@ -5,8 +5,9 @@ import type { BuildOptions, BuildReport, ProjectIndex } from "../indexer/types.j
 import { buildSymbolGraphDetailed } from "../graphs/symbol-graph-detailed.js";
 import { type SymbolGraph } from "../graphs/symbol-graph.js";
 import type { Graph } from "../types.js";
-import { listProjectFiles, type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
+import { DEFAULT_PROJECT_PATTERNS, listProjectFiles, type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions } from "../config.js";
+import { languageExtensionPatterns, normalizeLanguageExtensions } from "../languages.js";
 import { createAgentFileLookup } from "./normalize.js";
 import { summarizeAnalysis, type AnalysisSummary } from "../analysisSummary.js";
 
@@ -81,6 +82,7 @@ export type AgentFileSignature = {
 
 type AgentDiscoverySettings = {
   discoveryOptions?: ProjectFileDiscoveryOptions;
+  languageExtensions?: BuildOptions["languageExtensions"];
 };
 
 type AgentFreshnessDiff = {
@@ -96,12 +98,19 @@ async function resolveAgentDiscoverySettings(options: AgentSessionOptions): Prom
   const discoveryOptions = hasDiscoveryOptions(discovery)
     ? { ...discovery, globRoot: discovery.globRoot ?? options.root }
     : undefined;
-  return discoveryOptions ? { discoveryOptions } : {};
+  const languageExtensions =
+    normalizeLanguageExtensions(options.buildOptions?.languageExtensions) ?? config.languages?.extensions;
+  return {
+    ...(discoveryOptions ? { discoveryOptions } : {}),
+    ...(languageExtensions ? { languageExtensions } : {}),
+  };
 }
 
 export async function listAgentSessionFiles(options: AgentSessionOptions): Promise<string[]> {
-  const { discoveryOptions } = await resolveAgentDiscoverySettings(options);
-  return await listProjectFiles(options.root, undefined, discoveryOptions);
+  const { discoveryOptions, languageExtensions } = await resolveAgentDiscoverySettings(options);
+  const customPatterns = languageExtensionPatterns(languageExtensions);
+  const patterns = customPatterns.length ? [...DEFAULT_PROJECT_PATTERNS, ...customPatterns] : undefined;
+  return await listProjectFiles(options.root, patterns, discoveryOptions);
 }
 
 function isMissingStatRace(error: unknown): boolean {
@@ -200,7 +209,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
   const loadBase = async (): Promise<AgentProjectBaseSnapshot> => {
     if (cachedBase) return cachedBase;
     const loadPromise = (async () => {
-      const { discoveryOptions } = await resolveAgentDiscoverySettings(options);
+      const { discoveryOptions, languageExtensions } = await resolveAgentDiscoverySettings(options);
       const files = await loadFiles();
       cachedFileSignatures = await collectAgentFileSignatures(files);
       const buildOptions: BuildOptions & { files: string[] } = {
@@ -209,6 +218,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
         keepParsed: options.buildOptions?.keepParsed ?? true,
         files,
         ...(discoveryOptions ? { discovery: discoveryOptions } : {}),
+        ...(languageExtensions ? { languageExtensions } : {}),
       };
       if (
         options.buildOptions?.useNativeWorkers === undefined &&

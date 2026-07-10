@@ -127,6 +127,19 @@ describe("project file discovery", () => {
     }
   });
 
+  it.skipIf(os.platform() === "win32")("keeps ordinary ignore globs case-sensitive on POSIX", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-ignore-case-"));
+    const keptFile = path.join(tempDir, "Tests", "kept.ts");
+    await createFile(keptFile, "export const kept = 1;\n");
+
+    const discovered = await listProjectFiles(tempDir, ["**/*.ts"], {
+      ignoreGlobs: ["tests/**"],
+      useGitignore: false,
+    });
+
+    expect(discovered.map(normalize)).toContain(normalize(keptFile));
+  });
+
   it("filters discovered files whose realpath escapes the project root", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-link-root-"));
     const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-link-outside-"));
@@ -197,6 +210,31 @@ describe("project file discovery", () => {
     expect(discoveredSet.has(normalize(path.join(packageDir, "src", "index.ts")))).toBe(true);
     expect(discoveredSet.has(normalize(path.join(linkedPackage, "src", "index.ts")))).toBe(false);
   });
+
+  it.skipIf(os.platform() === "win32")(
+    "keeps ordinary ignore globs case-sensitive while crawling safe symlink directories on POSIX",
+    async () => {
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-link-ignore-case-"));
+      const packageDir = path.join(tempDir, "packages", "core");
+      const linkedPackage = path.join(tempDir, "Tests");
+      const linkedFile = path.join(linkedPackage, "kept.ts");
+      await createFile(path.join(packageDir, "kept.ts"), "export const kept = 1;\n");
+
+      try {
+        await fs.symlink(packageDir, linkedPackage, "junction");
+      } catch (error) {
+        if (isSymlinkUnavailable(error)) return;
+        throw error;
+      }
+
+      const discovered = await listProjectFiles(tempDir, ["**/*.ts"], {
+        ignoreGlobs: ["tests/**"],
+        useGitignore: false,
+      });
+
+      expect(discovered.map(normalize)).toContain(normalize(linkedFile));
+    },
+  );
 
   it("does not apply project-root ignore globs relative to safe symlink directory targets", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-link-root-ignore-"));

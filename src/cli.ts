@@ -52,6 +52,7 @@ import { handleReviewCommand } from "./cli/review.js";
 import { handleSearchCommand } from "./cli/search.js";
 import { handleSkillCommand } from "./cli/skill.js";
 import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions } from "./config.js";
+import { languageExtensionPatterns } from "./languages.js";
 import { listChangedFiles } from "./util/git.js";
 import { DEFAULT_PROJECT_PATTERNS, listProjectFiles, type ProjectFileDiscoveryOptions } from "./util/projectFiles.js";
 import { normalizePath, resolveFilePathFromRoot, toProjectDisplayPath } from "./util/paths.js";
@@ -191,6 +192,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     return {
       ...(progressHandler ? { onProgress: progressHandler } : {}),
       discovery: discoveryOptions,
+      ...(config.languages?.extensions ? { languageExtensions: config.languages.extensions } : {}),
       ...(cache !== undefined ? { cache } : {}),
       ...(hasFlag("--cache-strict") ? { cacheStrict: true } : {}),
       ...(hasFlag("--cache-verify") ? { cacheVerify: true } : {}),
@@ -438,7 +440,11 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   };
 
   const resolveFilesFromRoots = async (): Promise<string[]> => {
-    const patterns = cmd === "duplicates" ? DUPLICATE_PROJECT_PATTERNS : undefined;
+    const basePatterns = cmd === "duplicates" ? DUPLICATE_PROJECT_PATTERNS : undefined;
+    const customPatterns = languageExtensionPatterns(config.languages?.extensions);
+    const patterns = customPatterns.length
+      ? [...(basePatterns ?? DEFAULT_PROJECT_PATTERNS), ...customPatterns]
+      : basePatterns;
     if (!includeRootsAbs.length) {
       const diagnosticFiles = await listProjectFiles(projectRootFs, patterns, {
         ...diagnosticDiscoveryOptions,
@@ -700,6 +706,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     await handleGraphDeltaCommand({
       projectRootFs,
       files,
+      languageExtensions: config.languages?.extensions,
       getOpt,
       hasFlag,
       cwd: getCwd,
@@ -756,6 +763,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       discoveryOptions,
       nativeMode,
       workerOpts,
+      languageExtensions: config.languages?.extensions,
       progressHandler,
       graphOptions: hasGraphOverrides ? buildGraphOptions() : undefined,
       reportEnabled,
@@ -785,6 +793,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
         onProgress: progressHandler,
         discovery: discoveryOptions,
         ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
+        ...(config.languages?.extensions ? { languageExtensions: config.languages.extensions } : {}),
         ...workerOpts,
       },
       writeJSONLine,
@@ -807,6 +816,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
         discovery: discoveryOptions,
         ...(hasGraphOverrides ? { graph: buildGraphOptions() } : {}),
         ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
+        ...(config.languages?.extensions ? { languageExtensions: config.languages.extensions } : {}),
         ...workerOpts,
       },
       writeJSONLine,
@@ -956,6 +966,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     discovery: discoveryOptions,
     ...(graphOptions ? { graph: graphOptions } : {}),
     ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
+    ...(config.languages?.extensions ? { languageExtensions: config.languages.extensions } : {}),
     ...workerOpts,
   });
 
@@ -1008,6 +1019,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       projectRootFs,
       includeRootsAbs,
       discoveryOptions,
+      languageExtensions: config.languages?.extensions,
       graphOptions: hasGraphOverrides || nativeMode !== "auto" ? buildGraphOptions() : undefined,
       nativeMode,
       workerOpts,
@@ -1027,6 +1039,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       projectRootFs,
       includeRootsAbs,
       discoveryOptions,
+      languageExtensions: config.languages?.extensions,
       graphOptions: hasGraphOverrides || nativeMode !== "auto" ? buildGraphOptions() : undefined,
       nativeMode,
       workerOpts,
@@ -1058,6 +1071,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
         onProgress: progressHandler,
         discovery: discoveryOptions,
         ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
+        ...(config.languages?.extensions ? { languageExtensions: config.languages.extensions } : {}),
         ...workerOpts,
       },
     });
