@@ -482,9 +482,9 @@ describe("agent file view", () => {
     });
 
     try {
-      await expect(
-        getCodegraphFileView({ root, file: "growth-race.txt", limit: 1, maxBytes: 1 }),
-      ).rejects.toThrow(`File exceeds the 16777216-byte file view input limit: ${filePath}`);
+      await expect(getCodegraphFileView({ root, file: "growth-race.txt", limit: 1, maxBytes: 1 })).rejects.toThrow(
+        `File exceeds the 16777216-byte file view input limit: ${filePath}`,
+      );
     } finally {
       openSpy.mockRestore();
     }

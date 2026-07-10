@@ -627,14 +627,7 @@ describe("agent explore", () => {
       "--include-graph-context",
       "--json",
     ]);
-    const contextualFileResult = await captureCli([
-      "file",
-      query,
-      "--root",
-      root,
-      "--include-graph-context",
-      "--json",
-    ]);
+    const contextualFileResult = await captureCli(["file", query, "--root", root, "--include-graph-context", "--json"]);
 
     expect(contextualExploreResult).toMatchObject({ stderr: "", exitCode: undefined });
     expect(contextualFileResult).toMatchObject({ stderr: "", exitCode: undefined });
@@ -663,13 +656,9 @@ describe("agent explore", () => {
   it("passes explicit sensitive access from exact-file CLI explore to its live file view", async () => {
     const root = await mkExploreRepo();
     const query = "src/credentials.json";
-    const sensitiveText = [
-      "{",
-      '  "apiToken": "explore-dispatcher-secret",',
-      '  "username": "alice"',
-      "}",
-      "",
-    ].join("\n");
+    const sensitiveText = ["{", '  "apiToken": "explore-dispatcher-secret",', '  "username": "alice"', "}", ""].join(
+      "\n",
+    );
     await writeFile(root, query, sensitiveText);
     await writeFile(
       root,

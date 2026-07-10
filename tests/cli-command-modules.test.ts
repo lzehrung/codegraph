@@ -569,9 +569,7 @@ describe("CLI command modules", () => {
     expect(helpUsage).toBe(expectedUsage);
     expect(result.exitCode).toBe(2);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toBe(
-      `Unexpected positional argument for file: src/second.ts\n${expectedUsage}\n`,
-    );
+    expect(result.stderr).toBe(`Unexpected positional argument for file: src/second.ts\n${expectedUsage}\n`);
   });
 
   test("rejects unexpected positionals for commands without include roots", async () => {
