@@ -5,6 +5,7 @@ Usage: codegraph <command> [options] [path]
 Commands:
   orient        Build a compact first-turn packet for agent repo context
   explore       Answer a broad repo question with search, packets, paths, and blast radius
+  file          Read a live project file with bounded line pagination
   review        Generate code review report
   packet        Retrieve bounded evidence packets by file path or stable target
   search        Ranked agent search across files, symbols, chunks, SQL, and graph context
@@ -86,6 +87,7 @@ Examples:
   codegraph orient ./src --budget small --pretty
   codegraph search "auth user" --json
   codegraph explore "how does auth reach db?" --pretty
+  codegraph file src/auth.ts --pretty
   codegraph explain src/auth.ts --json
   codegraph impact --provider git --base HEAD --head WORKTREE
   codegraph init --root .
@@ -130,6 +132,7 @@ const knownCliCommands = new Set([
   "dumpmod",
   "explain",
   "explore",
+  "file",
   "goto",
   "graph",
   "graph-delta",
@@ -200,14 +203,26 @@ Safety:
 
 export const EXPLORE_HELP_TEXT = `codegraph explore - Answer a broad repo question with bounded repo context
 
-Usage: codegraph explore "<query>" [--root <path>] [--limit <n>] [--max-packets <n>] [--max-paths <n>] [--no-source] [--json | --pretty]
+Usage: codegraph explore "<query>" [--root <path>] [--limit <n>] [--max-packets <n>] [--max-paths <n>] [--no-source] [--include-graph-context] [--allow-sensitive] [--json | --pretty]
 
 Output:
-  Explore orchestrates search, packet retrieval, dependency paths, reverse dependencies, candidate tests, and follow-up commands.
-  JSON is the default. Use --pretty for concise model-readable sections.
+  Explore orchestrates search, packet retrieval, dependency paths, reverse dependencies, candidate tests, and follow-up commands. An exact file-path query also includes the live bounded file view.
+  JSON is the default. Use --pretty for concise model-readable sections. Graph context and raw sensitive values require explicit flags.
 
 Index options:
   Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+`;
+
+export const FILE_HELP_TEXT = `codegraph file - Read a live project file with bounded line pagination
+
+Usage: codegraph file <path> [--root <path>] [--offset <line>] [--limit <lines>] [--max-bytes <bytes>] [--include-graph-context] [--allow-sensitive] [--json | --pretty]
+
+Output:
+  JSON is the default. Pretty output uses exact number<TAB>line source lines plus bounded graph context when requested.
+  A file-ending newline is represented as a final numbered empty line. Follow page.nextOffset or the pretty next-page command for more lines.
+
+Safety:
+  Paths are confined to --root after realpath resolution. Binary files are rejected. Known sensitive text configs return structural key summaries; key material returns metadata only. Use --allow-sensitive for raw access subject to binary and UTF-8 guards.
 `;
 
 export const SEARCH_HELP_TEXT = `codegraph search - Ranked agent search across project context
@@ -412,6 +427,7 @@ Options:
 
 export function helpTextForCommand(command: string, positionals: readonly string[]): string | undefined {
   if (command === "explore") return EXPLORE_HELP_TEXT;
+  if (command === "file") return FILE_HELP_TEXT;
   if (command === "search") return SEARCH_HELP_TEXT;
   if (command === "orient") return ORIENT_HELP_TEXT;
   if (command === "packet") return PACKET_HELP_TEXT;

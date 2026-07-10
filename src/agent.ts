@@ -1,3 +1,20 @@
+export {
+  DEFAULT_FILE_VIEW_BYTES,
+  DEFAULT_FILE_VIEW_LINES,
+  FILE_VIEW_GRAPH_CONTEXT_LIMIT,
+  formatAgentFileViewResponse,
+  getCodegraphFileView,
+  getCodegraphFileViewWithSession,
+  MAX_FILE_VIEW_BYTES,
+  MAX_FILE_VIEW_LINES,
+} from "./agent/fileView.js";
+export type {
+  AgentFileGraphContext,
+  AgentFileViewRequest,
+  AgentFileViewResponse,
+  AgentFileViewSensitiveInfo,
+  AgentFileViewSensitiveKind,
+} from "./agent/fileView.js";
 export { createAgentSession } from "./agent/session.js";
 export type {
   AgentFreshnessPolicy,

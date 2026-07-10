@@ -148,6 +148,13 @@ codegraph explore src/auth.ts --json
 codegraph search "build review report" --json
 codegraph explain src/review.ts --json
 codegraph packet get src/cli.ts --pretty
+# Read a live file; JSON is the default
+codegraph file src/cli.ts
+codegraph file src/cli.ts --offset 201 --limit 100 --max-bytes 40000 --pretty
+
+# Add direct importers, imports, and symbols only when needed
+codegraph file src/cli.ts --include-graph-context --json
+
 codegraph search "public users" --mode sql --json
 codegraph search "handle login" --from src/auth.ts --mode graph --depth 1 --json
 codegraph search --help
@@ -270,6 +277,39 @@ Short JSON shape:
 - Small orientation budgets default to `--health skip`. Medium and large default to `--health summary`, which counts cycles and unresolved imports while omitting duplicate health; use `--health full` when exhaustive duplicate counts matter.
 - Use `packet get` with file paths, symbol names, SQL object names, file/symbol/chunk/SQL/graph handles, or review handles to retrieve bounded evidence plus follow-up commands.
 - Agent commands reuse the incremental index path and default to disk cache. Use shared index flags such as `--cache`, `--cache-strict`, `--cache-verify`, `--threads`, `--native`, `--workers`, `--include-glob`, `--ignore-glob`, and `--no-gitignore` when the packet should match a specific scan mode.
+
+#### Live file views
+
+`file <path>` reads the current file bytes from disk, independent of index freshness. JSON is the default; pass `--pretty` for a header, optional graph summary, exact numbered lines, and a copyable next-page command.
+
+- `--offset <line>` is the 1-based first line and defaults to `1`. `--limit <lines>` is the maximum line count, defaults to `2000`, and is capped at `10000`.
+- For raw file pages, `--max-bytes <bytes>` bounds unnumbered text including line separators before numbering; it defaults to `80000` and is capped at `500000`. A raw page can therefore end before `--limit`, and `truncated` is true when the boundary cuts a selected line.
+- A separate 16 MiB hard input-size limit rejects larger raw reads and structural text-config summaries before unbounded I/O. It bounds complete-stream binary/UTF-8 validation and total-line counting, not the returned page size.
+- `totalLines` counts the complete live file, not only the returned prefix. Follow `page.nextOffset` when present; an offset beyond the end returns empty `content` and `text` while retaining the exact total, and pretty output says `Lines: none at offset <offset> of <totalLines>`.
+- `content` uses `lineFormat: "number-tab-line"`: an unpadded decimal line number, one tab, then the source line. `text` contains the same selected source lines without number prefixes.
+- A trailing newline creates a final numbered empty line. For example, `alpha\nbeta\n` has `totalLines: 3`, and its last `content` line is `3\t`.
+- `--include-graph-context` is explicit opt-in and adds up to 100 direct `usedBy` paths, imports, and symbols. Plain file reads do not build or consult the index; `freshness` describes indexed context separately and never changes the live bytes returned.
+- Within the 16 MiB input limit, ordinary file reads and structural summaries for recognized environment, authentication, and credential text configs validate the full raw stream, rejecting known binary extensions, NUL bytes, and malformed or incomplete UTF-8 before returning bounded content or extracting bounded keys. Default key-material summaries instead use file metadata, may report size, and do not read raw secret bytes; `--allow-sensitive` requests raw values but does not bypass the input-size, binary, NUL, or UTF-8 guards, so `.p12` and `.pfx` bundles summarize by default and reject raw access. For text-config summaries, `truncated` reports an incomplete bounded structural scan.
+
+The JSON response fields are `schemaVersion`, `file`, effective `offset` and `limit`, exact `totalLines`, numbered `content`, `lineFormat`, unnumbered `text`, `truncated`, and `freshness`. Optional fields are `page: { nextOffset }`, `graphContext: { usedBy, imports, symbols }`, and `sensitive: { kind, redacted, allowSensitiveRequired }`.
+
+```json
+{
+  "schemaVersion": 1,
+  "file": "src/cli.ts",
+  "offset": 201,
+  "limit": 2,
+  "totalLines": 487,
+  "content": "201\texport function run(): void {\n202\t  return;",
+  "lineFormat": "number-tab-line",
+  "text": "export function run(): void {\n  return;",
+  "truncated": false,
+  "freshness": { "state": "fresh" },
+  "page": { "nextOffset": 203 }
+}
+```
+
+An `explore` query that is only an indexed project-relative file path, such as `codegraph explore src/auth.ts --json`, adds this same live response as top-level `fileView`. A uniquely matching basename also resolves; `--no-source` suppresses the file view, while `--include-graph-context` and `--allow-sensitive` pass through explicitly.
 
 `search` is deterministic and vectorless. Hybrid search is code-first by default: source symbols and implementation files outrank docs unless `--mode text` is explicit or docs are the strongest remaining evidence. Search JSON now includes top-level `analysis` metadata plus per-result `provenance` so mixed or reduced runs stay visible. `explain` resolves file paths, symbol names, SQL object names, and search handles into bounded packets with symbols, graph context, references, snippets, duplicate context, SQL facts, review tasks, candidate tests, analysis metadata, limits, omissions, and follow-ups. Use `--max-duplicates` to tune duplicate context in `explain` and `packet get`; duplicate context also uses an internal pair budget and reports skipped duplicate work through omission counts.
 

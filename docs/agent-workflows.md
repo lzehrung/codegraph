@@ -55,6 +55,29 @@ codegraph explore src/auth.ts --json --limit 5 --max-packets 3
 Explore orchestrates existing search, packet, path, reverse-dependency, and candidate-test surfaces. It returns `schemaVersion: 1`, the query, analysis metadata, summary bullets, anchors, bounded packets, dependency paths, blast radius, candidate tests, follow-ups, flat limits, and omission counts.
 Use `--no-source` when the caller only needs anchors, paths, and follow-up commands.
 
+## Live file reads
+
+Use `file` when the target path is known and the agent needs current source rather than an indexed explanation packet. Its JSON default is best for tool chaining; `--pretty` keeps the exact `number<TAB>line` source format while adding a readable header and next-page command.
+
+```bash
+codegraph file src/auth.ts --offset 1 --limit 200 --pretty
+codegraph file src/auth.ts --offset 201 --limit 200 --max-bytes 80000
+codegraph file src/auth.ts --include-graph-context --json
+```
+
+The live bytes, exact whole-file `totalLines`, and `page.nextOffset` do not depend on a fresh index. Graph context is never automatic: opt in with `--include-graph-context`, then treat `freshness` as the state of that indexed context rather than the file content.
+
+The 16 MiB hard input-size limit is separate from the `--max-bytes` output-page cap. It rejects larger raw reads and structural text-config summaries before unbounded I/O, bounding complete-stream binary/UTF-8 validation and total-line counting. At an offset beyond EOF, JSON `content` and `text` are empty; pretty output says `Lines: none at offset <offset> of <totalLines>`.
+
+If the `explore` query is only an exact indexed file path, JSON adds `fileView` with the same file-read contract and pretty output renders a `File view` section. An agent can continue from `fileView.page.nextOffset`; `--no-source` disables it.
+
+```bash
+codegraph explore src/auth.ts --json
+codegraph explore src/auth.ts --include-graph-context --pretty
+```
+
+Secret-prone text configs return structural keys instead of raw values unless `--allow-sensitive` is passed intentionally; key material defaults to metadata, may report file size, and does not read raw secret bytes. Intentional raw access remains subject to the 16 MiB input limit and still rejects known binary extensions, NUL bytes, and malformed or incomplete UTF-8, so `.p12` and `.pfx` bundles remain metadata-only in practice. See [CLI reference](./cli.md#live-file-views) for exact fields, limits, trailing-newline behavior, and sensitive kinds.
+
 ## Orientation packets
 
 Start with `orient` when an agent needs compact repo context without flooding the first prompt:

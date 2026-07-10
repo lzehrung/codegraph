@@ -1,6 +1,6 @@
 # Library API
 
-Programmatic APIs for indexing, graph building, agent search/explain/artifacts, MCP handlers, chunking, SQL artifact facts, read-only SQLite inspection, and impact analysis.
+Programmatic APIs for indexing, graph building, live file views, agent search/explain/artifacts, MCP handlers, chunking, SQL artifact facts, read-only SQLite inspection, and impact analysis.
 
 For sessions, streaming workflows, tool wrappers, and review-oriented recipes, see [docs/agent-workflows.md](./agent-workflows.md).
 
@@ -45,8 +45,8 @@ const index = await buildProjectIndex(root, {
 The npm package exposes these supported entry points:
 
 - `@lzehrung/codegraph` for the compatibility root surface.
-- `@lzehrung/codegraph/agent` for agent sessions, orient/search/explain,
-  artifacts, and MCP handler helpers.
+- `@lzehrung/codegraph/agent` for agent sessions, live file views,
+  orient/search/explain, artifacts, and MCP handler helpers.
 - `@lzehrung/codegraph/graphs` for graph builders, graph queries, renderers,
   symbol graphs, grep, hotspots, cycles, and unresolved-import helpers.
 - `@lzehrung/codegraph/indexer` for project indexing, navigation, references,
@@ -66,7 +66,7 @@ as three groups:
   navigation (`buildProjectIndex`, `buildProjectIndexIncremental`,
   `goToDefinition`, `findReferences`, symbol handles, graph builders and
   renderers), impact and review reports, sessions, agent search/explain/artifact
-  helpers, MCP handlers, SQLite helpers, SQL artifact APIs, chunking, config,
+  and file-view helpers, MCP handlers, SQLite helpers, SQL artifact APIs, chunking, config,
   language metadata, and native runtime capability checks.
 - Public-legacy APIs remain exported for existing callers but are lower-level
   building blocks. This includes parser-facing helpers such as `parseFile`,
@@ -82,6 +82,57 @@ as three groups:
 Future API narrowing should happen by first documenting replacements on these
 subpath facades, then adding deprecation notes before removing root
 compatibility exports.
+
+## Live file views
+
+`getCodegraphFileView()` reads a confined project file directly from disk. `getCodegraphFileViewWithSession()` accepts an existing `AgentSession` for optional graph reuse, and `formatAgentFileViewResponse()` renders the same response as stable pretty text.
+
+```ts
+import {
+  createAgentSession,
+  formatAgentFileViewResponse,
+  getCodegraphFileView,
+  getCodegraphFileViewWithSession,
+} from "@lzehrung/codegraph";
+
+const page = await getCodegraphFileView({
+  root: process.cwd(),
+  file: "src/auth.ts",
+  offset: 1,
+  limit: 200,
+  maxBytes: 80_000,
+});
+
+if (page.page?.nextOffset) {
+  const next = await getCodegraphFileView({
+    root: process.cwd(),
+    file: page.file,
+    offset: page.page.nextOffset,
+    limit: page.limit,
+  });
+  console.log(next.content);
+}
+
+const session = createAgentSession({ root: process.cwd() });
+const contextual = await getCodegraphFileViewWithSession(session, {
+  root: process.cwd(),
+  file: "src/auth.ts",
+  includeGraphContext: true,
+});
+console.log(formatAgentFileViewResponse(contextual));
+```
+
+`AgentFileViewRequest` has `root`, `file`, optional 1-based `offset`, `limit`, `maxBytes`, `includeGraphContext`, `allowSensitive`, and `buildOptions`. Line and output-page byte defaults are `2000` and `80000`, capped at `10000` and `500000`; the page byte budget applies to unnumbered raw text, including line separators. A separate 16 MiB hard input-size limit rejects larger raw reads and structural text-config summaries before unbounded I/O, bounding complete-stream binary/UTF-8 validation and total-line counting.
+
+`AgentFileViewResponse` always has `schemaVersion`, normalized project-relative `file`, effective `offset` and `limit`, exact whole-file `totalLines`, numbered `content`, `lineFormat: "number-tab-line"`, unnumbered `text`, `truncated`, and `freshness`. Optional `page.nextOffset`, `graphContext`, and `sensitive` fields describe remaining lines, requested indexed context, and sensitive-file handling respectively.
+
+The numbered format is exactly unpadded decimal line number, tab, source line. A trailing newline contributes a final empty line, and pagination should resume from `page.nextOffset`; for raw pages, `maxBytes` may return fewer than `limit` lines and sets `truncated` when it cuts a selected line. An offset beyond EOF returns empty `content` and `text`, while `formatAgentFileViewResponse()` says `Lines: none at offset <offset> of <totalLines>`.
+
+Graph context defaults off, so a plain call neither creates nor consults an index and its live bytes are independent of session freshness. Set `includeGraphContext: true` to request at most 100 direct `usedBy` files, imports, and `{ name, kind, line }` symbols; only this indexed context is governed by `freshness`.
+
+Within the 16 MiB input limit, ordinary reads and structural summaries for recognized environment, authentication, and credential text configs validate the full raw stream before returning bounded content or extracting bounded keys; known binary extensions, NUL bytes, and malformed or incomplete UTF-8 are rejected. Default key-material summaries use file metadata, may report size, and do not read raw secret bytes; `allowSensitive: true` requests raw values but does not bypass the input-size, binary, NUL, or UTF-8 guards, so `.p12` and `.pfx` bundles summarize by default and reject raw access. For text-config summaries, `truncated` reports an incomplete bounded structural scan.
+
+The root package and `@lzehrung/codegraph/agent` export these functions, constants, `AgentFileViewRequest`, `AgentFileViewResponse`, `AgentFileGraphContext`, `AgentFileViewSensitiveInfo`, and `AgentFileViewSensitiveKind`.
 
 ## Agent packets
 
@@ -136,9 +187,17 @@ const explored = await exploreCodegraph({
 });
 
 console.log(explored.summary, explored.paths, explored.followUps);
+
+const exactFile = await exploreCodegraph({
+  root: process.cwd(),
+  query: "src/auth.ts",
+  includeGraphContext: false,
+});
+console.log(exactFile.fileView?.content, exactFile.fileView?.page?.nextOffset);
 ```
 
 Use `exploreCodegraph()` when the caller has a broad question and needs one bounded response over the existing search, packet, path, reverse-dependency, and candidate-test surfaces. The response has `schemaVersion: 1`, the original query, `analysis`, summary bullets, anchors, packets, paths, blast radius with per-entry omitted lower bounds, candidate tests, follow-ups, flat limits, and omission counts. Path and blast-radius omissions may be lower bounds after bounded scans reach their caps.
+When the entire query resolves to an indexed project-relative file path, or to one uniquely matching basename, the response also includes the live `fileView` described above. `includeSource: false` suppresses it; `includeGraphContext` and `allowSensitive` remain explicit request options and are never enabled automatically.
 
 Use `mode: "sql"` for SQL objects, or pass `from` plus `depth` with `mode: "graph"` to boost matches near a file path, file/chunk/graph handle, symbol handle, SQL handle, or symbol name.
 

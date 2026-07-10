@@ -419,6 +419,44 @@ describe("codegraph MCP handlers", () => {
     expect(packetProperties.target).toBeTruthy();
   });
 
+  it("advertises get_file with the exact bounded file-view schema", () => {
+    const getFileTool = listCodegraphMcpTools().find((tool) => tool.name === "get_file");
+    expect(getFileTool).toBeTruthy();
+    if (getFileTool === undefined) {
+      throw new Error("MCP tools/list did not include the get_file tool.");
+    }
+
+    const getFileSchema = readObject(getFileTool.inputSchema);
+    const getFileProperties = readObject(getFileSchema.properties);
+
+    expect(getFileSchema.type).toBe("object");
+    expect(getFileSchema.required).toEqual(["file"]);
+    expect(Object.keys(getFileProperties).sort()).toEqual([
+      "allowSensitive",
+      "file",
+      "includeGraphContext",
+      "limit",
+      "maxBytes",
+      "offset",
+    ]);
+    expect(readObject(getFileProperties.file)).toEqual({ type: "string" });
+    expect(readObject(getFileProperties.offset)).toEqual({ type: "integer", minimum: 1, default: 1 });
+    expect(readObject(getFileProperties.limit)).toEqual({
+      type: "integer",
+      minimum: 1,
+      maximum: 10_000,
+      default: 2_000,
+    });
+    expect(readObject(getFileProperties.maxBytes)).toEqual({
+      type: "integer",
+      minimum: 1,
+      maximum: 500_000,
+      default: 80_000,
+    });
+    expect(readObject(getFileProperties.includeGraphContext)).toEqual({ type: "boolean", default: false });
+    expect(readObject(getFileProperties.allowSensitive)).toEqual({ type: "boolean", default: false });
+  });
+
   it("bounds refs by handle with the refs limit", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-refs-limit-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
@@ -894,20 +932,87 @@ describe("codegraph MCP handlers", () => {
     });
   });
 
-  it("omits pagination when a truncated byte window has no more available lines", async () => {
+  it("paginates complete lines beyond the initial byte window without hiding the full-file line count", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-file-window-page-"));
     await fs.writeFile(path.join(root, "notes.txt"), "one\ntwo\nthree\n", "utf8");
     const handlers = createCodegraphMcpHandlers({ root });
 
-    const result = await handlers.get_file({ file: "notes.txt", maxBytes: 7, limit: 2 });
+    const firstPage = await handlers.get_file({ file: "notes.txt", maxBytes: 7, limit: 2 });
 
-    expect(result).toMatchObject({
+    expect(firstPage).toMatchObject({
       text: "one\ntwo",
       content: "1\tone\n2\ttwo",
-      totalLines: 2,
-      truncated: true,
+      totalLines: 4,
+      truncated: false,
+      page: { nextOffset: 3 },
     });
-    expect(result.page).toBeUndefined();
+
+    const finalPage = await handlers.get_file({ file: "notes.txt", offset: 3, maxBytes: 7, limit: 2 });
+    expect(finalPage).toMatchObject({
+      text: "three\n",
+      content: "3\tthree\n4\t",
+      totalLines: 4,
+      truncated: false,
+    });
+    expect(finalPage.page).toBeUndefined();
+  });
+
+  it("redacts environment files through get_file unless allowSensitive is true", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sensitive-file-"));
+    const sensitiveText = "API_TOKEN=mcp-secret\nUSER=alice\n";
+    await fs.writeFile(path.join(root, ".env.test"), sensitiveText, "utf8");
+    const handlers = createCodegraphMcpHandlers({ root });
+
+    const redacted = await handlers.get_file({ file: ".env.test" });
+
+    expect(JSON.stringify(redacted)).not.toContain("mcp-secret");
+    expect(redacted).toMatchObject({
+      file: ".env.test",
+      text: "Sensitive environment values omitted.\nKeys: API_TOKEN, USER",
+      content: "1\tSensitive environment values omitted.\n2\tKeys: API_TOKEN, USER",
+      sensitive: { kind: "environment", redacted: true, allowSensitiveRequired: true },
+    });
+
+    const allowed = await handlers.get_file({ file: ".env.test", allowSensitive: true });
+
+    expect(allowed).toMatchObject({
+      text: sensitiveText,
+      content: "1\tAPI_TOKEN=mcp-secret\n2\tUSER=alice\n3\t",
+      sensitive: { kind: "environment", redacted: false, allowSensitiveRequired: true },
+    });
+  });
+
+  it("honors requested freshness and project loading while sensitive content stays redacted", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-sensitive-context-"));
+    const rawSecret = "freshness-secret-value";
+    await fs.writeFile(path.join(root, ".env.test"), `API_TOKEN=${rawSecret}\nUSER=alice\n`, "utf8");
+    const backingSession = createAgentSession({ root });
+    let freshnessChecks = 0;
+    let projectLoads = 0;
+    const session: AgentSession = {
+      ...backingSession,
+      checkFreshness: async () => {
+        freshnessChecks += 1;
+        return { state: "refreshed", changedFiles: [".env.test"] };
+      },
+      loadProject: async (options) => {
+        projectLoads += 1;
+        return await backingSession.loadProject(options);
+      },
+    };
+    const handlers = createCodegraphMcpHandlers({ root, session });
+
+    const redacted = await handlers.get_file({ file: ".env.test", includeGraphContext: true });
+
+    expect(JSON.stringify(redacted)).not.toContain(rawSecret);
+    expect(redacted).toMatchObject({
+      text: "Sensitive environment values omitted.\nKeys: API_TOKEN, USER",
+      content: "1\tSensitive environment values omitted.\n2\tKeys: API_TOKEN, USER",
+      freshness: { state: "refreshed", changedFiles: [".env.test"] },
+      sensitive: { kind: "environment", redacted: true, allowSensitiveRequired: true },
+    });
+    expect(freshnessChecks).toBe(1);
+    expect(projectLoads).toBe(1);
   });
 
   it("keeps plain get_file index-free and opts into freshness and direct graph context", async () => {
@@ -956,17 +1061,22 @@ describe("codegraph MCP handlers", () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-file-graph-cap-"));
     const targetFile = path.join(root, "target.ts");
     await fs.writeFile(targetFile, "export const target = true;\n", "utf8");
-    const usedByFiles = Array.from({ length: 101 }, (_, index) =>
+    const unsortedIndexes = Array.from({ length: 101 }, (_, position) => {
+      const offset = Math.floor(position / 2);
+      if (position % 2) return offset;
+      return 100 - offset;
+    });
+    const usedByFiles = unsortedIndexes.map((index) =>
       path.join(root, `consumer-${String(index).padStart(3, "0")}.ts`),
     );
     const moduleIndex: ModuleIndex = {
       file: targetFile,
       exports: [],
-      imports: Array.from({ length: 101 }, (_, index) => ({
+      imports: unsortedIndexes.map((index) => ({
         kind: "star",
         from: `package-${String(index).padStart(3, "0")}`,
       })),
-      locals: Array.from({ length: 101 }, (_, index) => ({
+      locals: unsortedIndexes.map((index) => ({
         file: targetFile,
         localName: `symbol-${String(index).padStart(3, "0")}`,
         kind: SymbolKind.Function,
@@ -1013,13 +1123,22 @@ describe("codegraph MCP handlers", () => {
     const result = await handlers.get_file({ file: "target.ts", includeGraphContext: true });
 
     expect(result.graphContext?.usedBy).toHaveLength(100);
-    expect(result.graphContext?.usedBy.at(-1)).toBe("consumer-099.ts");
+    expect(result.graphContext?.usedBy.slice(0, 2)).toEqual(["consumer-000.ts", "consumer-001.ts"]);
+    expect(result.graphContext?.usedBy.slice(-2)).toEqual(["consumer-098.ts", "consumer-099.ts"]);
     expect(result.graphContext?.usedBy).not.toContain("consumer-100.ts");
     expect(result.graphContext?.imports).toHaveLength(100);
-    expect(result.graphContext?.imports.at(-1)).toBe("package-099");
+    expect(result.graphContext?.imports.slice(0, 2)).toEqual(["package-000", "package-001"]);
+    expect(result.graphContext?.imports.slice(-2)).toEqual(["package-098", "package-099"]);
     expect(result.graphContext?.imports).not.toContain("package-100");
     expect(result.graphContext?.symbols).toHaveLength(100);
-    expect(result.graphContext?.symbols.at(-1)?.name).toBe("symbol-099");
+    expect(result.graphContext?.symbols.slice(0, 2)).toEqual([
+      { name: "symbol-000", kind: SymbolKind.Function, line: 1 },
+      { name: "symbol-001", kind: SymbolKind.Function, line: 2 },
+    ]);
+    expect(result.graphContext?.symbols.slice(-2)).toEqual([
+      { name: "symbol-098", kind: SymbolKind.Function, line: 99 },
+      { name: "symbol-099", kind: SymbolKind.Function, line: 100 },
+    ]);
     expect(result.graphContext?.symbols.some((symbol) => symbol.name === "symbol-100")).toBe(false);
   });
 

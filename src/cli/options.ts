@@ -83,6 +83,8 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--artifact",
   "--host",
   "--port",
+  "--offset",
+  "--max-bytes",
 ]);
 
 type CliPositionalPolicy =
@@ -295,9 +297,22 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   [
     "explore",
     commandSchema(
-      [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--no-source"],
+      [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--no-source", "--include-graph-context", "--allow-sensitive"],
       [...SHARED_BUILD_OPTIONS, "--limit", "--max-packets", "--max-paths"],
       { kind: "any" },
+    ),
+  ],
+  [
+    "file",
+    commandSchema(
+      [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--include-graph-context", "--allow-sensitive"],
+      [...SHARED_BUILD_OPTIONS, "--offset", "--limit", "--max-bytes"],
+      {
+        kind: "max",
+        max: 1,
+        usage:
+          "Usage: codegraph file <path> [--root <path>] [--offset <line>] [--limit <lines>] [--max-bytes <bytes>] [--include-graph-context] [--allow-sensitive] [--json | --pretty]",
+      },
     ),
   ],
   [

@@ -3,13 +3,14 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
+import { MAX_FILE_VIEW_BYTES, MAX_FILE_VIEW_LINES } from "../src/agent/fileView.js";
 import { handleChunkCommand, type ChunkCommandContext } from "../src/cli/chunk.js";
 import type { CliAgentCommandContext } from "../src/cli/context.js";
 import { buildDoctorReport } from "../src/cli/doctor.js";
 import { handleGraphCommand, type GraphCommandContext } from "../src/cli/graph.js";
 import { handleGraphDeltaCommand } from "../src/cli/graphDelta.js";
 import { handleGraphQueryCommand, type GraphQueryCommandContext } from "../src/cli/graphQueries.js";
-import { CLI_HELP_TEXT, MCP_SERVE_HELP_TEXT, PACKET_HELP_TEXT } from "../src/cli/help.js";
+import { CLI_HELP_TEXT, FILE_HELP_TEXT, MCP_SERVE_HELP_TEXT, PACKET_HELP_TEXT } from "../src/cli/help.js";
 import { handleImpactCommand, type ImpactCommandContext } from "../src/cli/impact.js";
 import { handleGotoCommand, type NavigationCommandContext } from "../src/cli/navigation.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "../src/cli/packageInfo.js";
@@ -435,6 +436,11 @@ describe("CLI command modules", () => {
         heading: "codegraph explain",
         usage: "Usage: codegraph explain <file|symbol|sql-object|handle>",
       },
+      {
+        args: ["file", "--help"],
+        heading: "codegraph file",
+        usage: "Usage: codegraph file <path>",
+      },
       { args: ["artifact", "--help"], heading: "codegraph artifact", usage: "Usage: codegraph artifact build" },
       { args: ["drift", "--help"], heading: "codegraph drift", usage: "Usage: codegraph drift [roots...]" },
       { args: ["mcp", "--help"], heading: "codegraph mcp", usage: "Usage: codegraph mcp serve" },
@@ -448,6 +454,17 @@ describe("CLI command modules", () => {
       expect(result.stdout).toContain(entry.heading);
       expect(result.stdout).toContain(entry.usage);
       expect(result.stdout).not.toContain("Graph Options:");
+    }
+  });
+
+  test("file help documents live-view bounds and opt-in context", async () => {
+    const result = await captureCli(["file", "--help"]);
+
+    expect(result.exitCode).toBeUndefined();
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe(`${FILE_HELP_TEXT.trimEnd()}\n`);
+    for (const option of ["--offset", "--limit", "--max-bytes", "--include-graph-context", "--allow-sensitive"]) {
+      expect(result.stdout, option).toContain(option);
     }
   });
 
@@ -541,6 +558,18 @@ describe("CLI command modules", () => {
     expect(result.exitCode).toBe(2);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("Unknown option for search: -z");
+  });
+
+  test("file positional validation prints the complete help usage", async () => {
+    const expectedUsage =
+      "Usage: codegraph file <path> [--root <path>] [--offset <line>] [--limit <lines>] [--max-bytes <bytes>] [--include-graph-context] [--allow-sensitive] [--json | --pretty]";
+    const helpUsage = FILE_HELP_TEXT.split("\n").find((line) => line.startsWith("Usage: "));
+    const result = await captureCli(["file", "src/first.ts", "src/second.ts"]);
+
+    expect(helpUsage).toBe(expectedUsage);
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe(`Unexpected positional argument for file: src/second.ts\n${expectedUsage}\n`);
   });
 
   test("rejects unexpected positionals for commands without include roots", async () => {
@@ -1006,6 +1035,134 @@ describe("CLI command modules", () => {
 
     expect(stderrLines[0]).toContain("Chunking failed:");
     expect(stderrLines[0]).toContain("missing.ts");
+  });
+
+  test("runs bounded JSON and pretty file views through the main CLI dispatcher", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-file-view-"));
+    await fsp.writeFile(path.join(tempDir, "util.ts"), "export const first = 1;\nexport const second = 2;\n", "utf8");
+    await fsp.writeFile(
+      path.join(tempDir, "main.ts"),
+      "import { second } from './util';\nexport const result = second;\n",
+      "utf8",
+    );
+
+    try {
+      const jsonResult = await captureCli([
+        "file",
+        "util.ts",
+        "--root",
+        tempDir,
+        "--offset",
+        "2",
+        "--limit",
+        "1",
+        "--max-bytes",
+        "8",
+      ]);
+      const jsonView = readJsonRecord(JSON.parse(jsonResult.stdout));
+
+      expect(jsonResult).toMatchObject({ stderr: "", exitCode: undefined });
+      expect(jsonView).toMatchObject({
+        file: "util.ts",
+        offset: 2,
+        limit: 1,
+        totalLines: 3,
+        content: "2\texport c",
+        text: "export c",
+        truncated: true,
+        page: { nextOffset: 3 },
+      });
+      expect(jsonView.graphContext).toBeUndefined();
+
+      const prettyResult = await captureCli([
+        "file",
+        "util.ts",
+        "--root",
+        tempDir,
+        "--offset",
+        "2",
+        "--limit",
+        "1",
+        "--max-bytes",
+        "100",
+        "--pretty",
+      ]);
+      expect(prettyResult).toEqual({
+        stdout: [
+          "File: util.ts",
+          "Lines 2-2 of 3",
+          "2\texport const second = 2;",
+          "Next page: codegraph file util.ts --offset 3 --limit 1 --pretty",
+          "",
+        ].join("\n"),
+        stderr: "",
+        exitCode: undefined,
+      });
+
+      const contextualResult = await captureCli([
+        "file",
+        "util.ts",
+        "--root",
+        tempDir,
+        "--limit",
+        "1",
+        "--max-bytes",
+        "100",
+        "--include-graph-context",
+        "--json",
+      ]);
+      const contextualView = readJsonRecord(JSON.parse(contextualResult.stdout));
+      const graphContext = readJsonRecord(contextualView.graphContext);
+      expect(graphContext.usedBy).toEqual(["main.ts"]);
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    { option: "--limit", maximum: MAX_FILE_VIEW_LINES },
+    { option: "--max-bytes", maximum: MAX_FILE_VIEW_BYTES },
+  ])("rejects $option values above the file view bound", async ({ option, maximum }) => {
+    const excessiveValue = maximum + 1;
+    const result = await captureCli(["file", "util.ts", option, String(excessiveValue)]);
+
+    expect(result).toEqual({
+      stdout: "",
+      stderr: `Invalid ${option} value "${excessiveValue}". Expected an integer from 1 to ${maximum}.\n`,
+      exitCode: 1,
+    });
+  });
+
+  test("redacts environment files through the CLI dispatcher unless sensitive access is explicit", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-sensitive-file-view-"));
+    const sensitiveText = "API_TOKEN=dispatcher-secret\nUSER=alice\n";
+    await fsp.writeFile(path.join(tempDir, ".env.local"), sensitiveText, "utf8");
+
+    try {
+      const redactedResult = await captureCli(["file", ".env.local", "--root", tempDir, "--json"]);
+      const redactedView = readJsonRecord(JSON.parse(redactedResult.stdout));
+
+      expect(redactedResult).toMatchObject({ stderr: "", exitCode: undefined });
+      expect(redactedResult.stdout).not.toContain("dispatcher-secret");
+      expect(redactedView).toMatchObject({
+        file: ".env.local",
+        text: "Sensitive environment values omitted.\nKeys: API_TOKEN, USER",
+        content: "1\tSensitive environment values omitted.\n2\tKeys: API_TOKEN, USER",
+        sensitive: { kind: "environment", redacted: true, allowSensitiveRequired: true },
+      });
+
+      const allowedResult = await captureCli(["file", ".env.local", "--root", tempDir, "--allow-sensitive", "--json"]);
+      const allowedView = readJsonRecord(JSON.parse(allowedResult.stdout));
+
+      expect(allowedResult).toMatchObject({ stderr: "", exitCode: undefined });
+      expect(allowedView).toMatchObject({
+        text: sensitiveText,
+        content: "1\tAPI_TOKEN=dispatcher-secret\n2\tUSER=alice\n3\t",
+        sensitive: { kind: "environment", redacted: false, allowSensitiveRequired: true },
+      });
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   test("runs graph exploration commands through the main CLI dispatcher", async () => {
