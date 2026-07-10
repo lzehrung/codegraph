@@ -310,7 +310,8 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       {
         kind: "max",
         max: 1,
-        usage: "Usage: codegraph file <path> [--root <path>] [--offset <line>] [--limit <lines>] [--json | --pretty]",
+        usage:
+          "Usage: codegraph file <path> [--root <path>] [--offset <line>] [--limit <lines>] [--max-bytes <bytes>] [--include-graph-context] [--allow-sensitive] [--json | --pretty]",
       },
     ),
   ],

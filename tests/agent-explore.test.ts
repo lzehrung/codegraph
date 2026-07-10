@@ -85,6 +85,21 @@ function textOf(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function readComparableLiveFileFields(value: unknown, label: string): JsonRecord {
+  const view = readRecord(value, label);
+  return {
+    file: view.file,
+    totalLines: view.totalLines,
+    content: view.content,
+    lineFormat: view.lineFormat,
+    text: view.text,
+    truncated: view.truncated,
+    ...(view.graphContext !== undefined ? { graphContext: view.graphContext } : {}),
+    ...(view.sensitive !== undefined ? { sensitive: view.sensitive } : {}),
+    ...(view.page !== undefined ? { page: view.page } : {}),
+  };
+}
+
 function expectExploreEnvelope(response: unknown, query: string): JsonRecord {
   const record = readRecord(response, "explore response");
   expect(record.schemaVersion).toBe(1);
@@ -515,6 +530,147 @@ describe("agent explore", () => {
     expect(result.exitCode).toBeUndefined();
     expect(result.stderr).toBe("");
     expectExploreEnvelope(JSON.parse(result.stdout) as unknown, query);
+  });
+
+  it("keeps exact-file CLI explore content in parity with CLI file, including graph context", async () => {
+    const root = await mkExploreRepo();
+    const query = "src/auth.ts";
+
+    const exploreResult = await captureCli(["explore", query, "--root", root, "--json"]);
+    const fileResult = await captureCli(["file", query, "--root", root, "--json"]);
+
+    expect(exploreResult).toMatchObject({ stderr: "", exitCode: undefined });
+    expect(fileResult).toMatchObject({ stderr: "", exitCode: undefined });
+    const exploreResponse = readRecord(JSON.parse(exploreResult.stdout) as unknown, "explore response");
+    const exploreView = readRecord(exploreResponse.fileView, "explore fileView");
+    const fileView = readRecord(JSON.parse(fileResult.stdout) as unknown, "file response");
+    expect(readComparableLiveFileFields(exploreView, "explore fileView")).toEqual(
+      readComparableLiveFileFields(fileView, "file response"),
+    );
+    expect(exploreView).toMatchObject({
+      file: query,
+      totalLines: 7,
+      text: [
+        "import { readUser } from './db';",
+        "",
+        "export function validateUser(userId: string) {",
+        "  const user = readUser(userId);",
+        "  return user.active;",
+        "}",
+        "",
+      ].join("\n"),
+    });
+
+    const contextualExploreResult = await captureCli([
+      "explore",
+      query,
+      "--root",
+      root,
+      "--include-graph-context",
+      "--json",
+    ]);
+    const contextualFileResult = await captureCli([
+      "file",
+      query,
+      "--root",
+      root,
+      "--include-graph-context",
+      "--json",
+    ]);
+
+    expect(contextualExploreResult).toMatchObject({ stderr: "", exitCode: undefined });
+    expect(contextualFileResult).toMatchObject({ stderr: "", exitCode: undefined });
+    const contextualExploreResponse = readRecord(
+      JSON.parse(contextualExploreResult.stdout) as unknown,
+      "contextual explore response",
+    );
+    const contextualExploreView = readRecord(contextualExploreResponse.fileView, "contextual explore fileView");
+    const contextualFileView = readRecord(
+      JSON.parse(contextualFileResult.stdout) as unknown,
+      "contextual file response",
+    );
+    expect(readComparableLiveFileFields(contextualExploreView, "contextual explore fileView")).toEqual(
+      readComparableLiveFileFields(contextualFileView, "contextual file response"),
+    );
+    const graphContext = readRecord(contextualExploreView.graphContext, "explore graphContext");
+    expect(graphContext.usedBy).toEqual(["src/routes.ts"]);
+    expect(graphContext.imports).toEqual(["src/db.ts"]);
+    expect(readArray(graphContext.symbols, "explore graphContext symbols")).toContainEqual({
+      name: "validateUser",
+      kind: "function",
+      line: 3,
+    });
+  });
+
+  it("passes explicit sensitive access from exact-file CLI explore to its live file view", async () => {
+    const root = await mkExploreRepo();
+    const query = "src/credentials.json";
+    const sensitiveText = [
+      "{",
+      '  "apiToken": "explore-dispatcher-secret",',
+      '  "username": "alice"',
+      "}",
+      "",
+    ].join("\n");
+    await writeFile(root, query, sensitiveText);
+    await writeFile(
+      root,
+      "src/credentials-reader.ts",
+      [
+        "import credentials from './credentials.json';",
+        "",
+        "export const deploymentUser = credentials.username;",
+        "",
+      ].join("\n"),
+    );
+
+    const exploreResult = await captureCli([
+      "explore",
+      query,
+      "--root",
+      root,
+      "--allow-sensitive",
+      "--max-packets",
+      "0",
+      "--limit",
+      "0",
+      "--json",
+    ]);
+    const fileResult = await captureCli(["file", query, "--root", root, "--allow-sensitive", "--json"]);
+
+    expect(exploreResult).toMatchObject({ stderr: "", exitCode: undefined });
+    expect(fileResult).toMatchObject({ stderr: "", exitCode: undefined });
+    const exploreResponse = readRecord(JSON.parse(exploreResult.stdout) as unknown, "sensitive explore response");
+    const exploreView = readRecord(exploreResponse.fileView, "sensitive explore fileView");
+    const fileView = readRecord(JSON.parse(fileResult.stdout) as unknown, "sensitive file response");
+    expect(readComparableLiveFileFields(exploreView, "sensitive explore fileView")).toEqual(
+      readComparableLiveFileFields(fileView, "sensitive file response"),
+    );
+    expect(exploreView).toMatchObject({
+      file: query,
+      text: sensitiveText,
+      content: [
+        "1\t{",
+        '2\t  "apiToken": "explore-dispatcher-secret",',
+        '3\t  "username": "alice"',
+        "4\t}",
+        "5\t",
+      ].join("\n"),
+      sensitive: { kind: "credential-config", redacted: false, allowSensitiveRequired: true },
+    });
+  });
+
+  it("suppresses the exact-file CLI explore file view when source is disabled", async () => {
+    const root = await mkExploreRepo();
+    const query = "src/auth.ts";
+
+    const result = await captureCli(["explore", query, "--root", root, "--no-source", "--json"]);
+
+    expect(result).toMatchObject({ stderr: "", exitCode: undefined });
+    const response = readRecord(JSON.parse(result.stdout) as unknown, "no-source explore response");
+    expect(response).not.toHaveProperty("fileView");
+    expect(response.packets).toEqual([]);
+    expect(result.stdout).not.toContain("const user = readUser(userId)");
   });
 
   it("advertises a flat MCP explore schema and invokes the facade", async () => {

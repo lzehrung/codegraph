@@ -10,7 +10,7 @@ import { buildDoctorReport } from "../src/cli/doctor.js";
 import { handleGraphCommand, type GraphCommandContext } from "../src/cli/graph.js";
 import { handleGraphDeltaCommand } from "../src/cli/graphDelta.js";
 import { handleGraphQueryCommand, type GraphQueryCommandContext } from "../src/cli/graphQueries.js";
-import { CLI_HELP_TEXT, MCP_SERVE_HELP_TEXT, PACKET_HELP_TEXT } from "../src/cli/help.js";
+import { CLI_HELP_TEXT, FILE_HELP_TEXT, MCP_SERVE_HELP_TEXT, PACKET_HELP_TEXT } from "../src/cli/help.js";
 import { handleImpactCommand, type ImpactCommandContext } from "../src/cli/impact.js";
 import { handleGotoCommand, type NavigationCommandContext } from "../src/cli/navigation.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "../src/cli/packageInfo.js";
@@ -436,6 +436,11 @@ describe("CLI command modules", () => {
         heading: "codegraph explain",
         usage: "Usage: codegraph explain <file|symbol|sql-object|handle>",
       },
+      {
+        args: ["file", "--help"],
+        heading: "codegraph file",
+        usage: "Usage: codegraph file <path>",
+      },
       { args: ["artifact", "--help"], heading: "codegraph artifact", usage: "Usage: codegraph artifact build" },
       { args: ["drift", "--help"], heading: "codegraph drift", usage: "Usage: codegraph drift [roots...]" },
       { args: ["mcp", "--help"], heading: "codegraph mcp", usage: "Usage: codegraph mcp serve" },
@@ -449,6 +454,17 @@ describe("CLI command modules", () => {
       expect(result.stdout).toContain(entry.heading);
       expect(result.stdout).toContain(entry.usage);
       expect(result.stdout).not.toContain("Graph Options:");
+    }
+  });
+
+  test("file help documents live-view bounds and opt-in context", async () => {
+    const result = await captureCli(["file", "--help"]);
+
+    expect(result.exitCode).toBeUndefined();
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe(`${FILE_HELP_TEXT.trimEnd()}\n`);
+    for (const option of ["--offset", "--limit", "--max-bytes", "--include-graph-context", "--allow-sensitive"]) {
+      expect(result.stdout, option).toContain(option);
     }
   });
 
@@ -542,6 +558,20 @@ describe("CLI command modules", () => {
     expect(result.exitCode).toBe(2);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("Unknown option for search: -z");
+  });
+
+  test("file positional validation prints the complete help usage", async () => {
+    const expectedUsage =
+      "Usage: codegraph file <path> [--root <path>] [--offset <line>] [--limit <lines>] [--max-bytes <bytes>] [--include-graph-context] [--allow-sensitive] [--json | --pretty]";
+    const helpUsage = FILE_HELP_TEXT.split("\n").find((line) => line.startsWith("Usage: "));
+    const result = await captureCli(["file", "src/first.ts", "src/second.ts"]);
+
+    expect(helpUsage).toBe(expectedUsage);
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe(
+      `Unexpected positional argument for file: src/second.ts\n${expectedUsage}\n`,
+    );
   });
 
   test("rejects unexpected positionals for commands without include roots", async () => {

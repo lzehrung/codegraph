@@ -3,13 +3,28 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import {
-  formatAgentFileViewResponse,
-  getCodegraphFileView,
-  getCodegraphFileViewWithSession,
-} from "../src/agent/fileView.js";
-import { createAgentSession, type AgentSession } from "../src/agent/session.js";
+import * as agentFacade from "../src/agent.js";
+import { type AgentSession } from "../src/agent/session.js";
+import * as rootFacade from "../src/index.js";
 import { isSymlinkUnavailable } from "./helpers/filesystem.js";
+
+const { createAgentSession, formatAgentFileViewResponse, getCodegraphFileView, getCodegraphFileViewWithSession } =
+  rootFacade;
+
+const publicFileViewFacades = [
+  {
+    name: "package root",
+    formatAgentFileViewResponse: rootFacade.formatAgentFileViewResponse,
+    getCodegraphFileView: rootFacade.getCodegraphFileView,
+    getCodegraphFileViewWithSession: rootFacade.getCodegraphFileViewWithSession,
+  },
+  {
+    name: "agent",
+    formatAgentFileViewResponse: agentFacade.formatAgentFileViewResponse,
+    getCodegraphFileView: agentFacade.getCodegraphFileView,
+    getCodegraphFileViewWithSession: agentFacade.getCodegraphFileViewWithSession,
+  },
+] as const;
 
 const FILE_VIEW_INPUT_LIMIT_BYTES = 16 * 1024 * 1024;
 const tempPaths = new Set<string>();
@@ -39,6 +54,61 @@ afterEach(async () => {
 });
 
 describe("agent file view", () => {
+  it.each(publicFileViewFacades)(
+    "executes file reads, session reads, and response formatting through the $name facade",
+    async ({
+      formatAgentFileViewResponse: formatResponse,
+      getCodegraphFileView: readFileView,
+      getCodegraphFileViewWithSession: readFileViewWithSession,
+    }) => {
+      const root = await makeTempDir("cg-file-view-public-facade-");
+      await writeFile(root, "facade.txt", "alpha\nbeta\n");
+      const session: AgentSession = {
+        root,
+        checkFreshness: async () => {
+          throw new Error("plain public file reads must not check session freshness");
+        },
+        loadProject: async () => {
+          throw new Error("plain public file reads must not load a project index");
+        },
+        invalidate: () => undefined,
+      };
+
+      const direct = await readFileView({ root, file: "facade.txt", offset: 2, limit: 1, maxBytes: 100 });
+      const withSession = await readFileViewWithSession(session, {
+        root,
+        file: "facade.txt",
+        offset: 1,
+        limit: 3,
+        maxBytes: 100,
+      });
+
+      expect(direct).toMatchObject({
+        file: "facade.txt",
+        offset: 2,
+        totalLines: 3,
+        content: "2\tbeta",
+        text: "beta",
+        page: { nextOffset: 3 },
+      });
+      expect(withSession).toMatchObject({
+        file: "facade.txt",
+        offset: 1,
+        totalLines: 3,
+        content: "1\talpha\n2\tbeta\n3\t",
+        text: "alpha\nbeta\n",
+      });
+      expect(formatResponse(direct)).toBe(
+        [
+          "File: facade.txt",
+          "Lines 2-2 of 3",
+          "2\tbeta",
+          "Next page: codegraph file facade.txt --offset 3 --limit 1 --pretty",
+        ].join("\n"),
+      );
+    },
+  );
+
   it("numbers the requested line range while retaining the full-file line count and final empty line", async () => {
     const root = await makeTempDir("cg-file-view-lines-");
     await writeFile(root, "notes.txt", "alpha\nbeta\ngamma\n");
