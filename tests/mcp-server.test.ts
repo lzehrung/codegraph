@@ -4,13 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
-import { createAgentSession, type AgentSession } from "../src/agent/session.js";
+import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
 import {
   createCodegraphMcpHandlers,
   listCodegraphMcpTools,
   startCodegraphMcpHttpServer,
   type CodegraphMcpHandlers,
 } from "../src/mcp/server.js";
+import { SymbolKind, type ModuleIndex, type ProjectIndex } from "../src/indexer/types.js";
+import type { Graph } from "../src/types.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import { SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY } from "../src/sqlite.js";
 import { countingSession } from "./helpers/agent.js";
@@ -892,7 +894,23 @@ describe("codegraph MCP handlers", () => {
     });
   });
 
-  it("includes direct graph context for indexed source files", async () => {
+  it("omits pagination when a truncated byte window has no more available lines", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-file-window-page-"));
+    await fs.writeFile(path.join(root, "notes.txt"), "one\ntwo\nthree\n", "utf8");
+    const handlers = createCodegraphMcpHandlers({ root });
+
+    const result = await handlers.get_file({ file: "notes.txt", maxBytes: 7, limit: 2 });
+
+    expect(result).toMatchObject({
+      text: "one\ntwo",
+      content: "1\tone\n2\ttwo",
+      totalLines: 2,
+      truncated: true,
+    });
+    expect(result.page).toBeUndefined();
+  });
+
+  it("keeps plain get_file index-free and opts into freshness and direct graph context", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-file-graph-"));
     await fs.mkdir(path.join(root, "src"), { recursive: true });
     await fs.writeFile(path.join(root, "src", "auth.ts"), "export function validateUser() { return true; }\n", "utf8");
@@ -901,15 +919,108 @@ describe("codegraph MCP handlers", () => {
       "import { validateUser } from './auth';\nexport const ok = validateUser();\n",
       "utf8",
     );
-    const handlers = createCodegraphMcpHandlers({ root });
+    const backingSession = createAgentSession({ root });
+    let freshnessChecks = 0;
+    let projectLoads = 0;
+    const session: AgentSession = {
+      ...backingSession,
+      checkFreshness: async () => {
+        freshnessChecks += 1;
+        return { state: "fresh" };
+      },
+      loadProject: async (options) => {
+        projectLoads += 1;
+        return await backingSession.loadProject(options);
+      },
+    };
+    const handlers = createCodegraphMcpHandlers({ root, session });
 
-    const result = await handlers.get_file({ file: "src/auth.ts", limit: 1 });
+    const plain = await handlers.get_file({ file: "src/auth.ts", limit: 1 });
 
-    expect(result.content).toBe("1\texport function validateUser() { return true; }");
-    expect(result.graphContext?.usedBy).toContain("src/server.ts");
-    expect(result.graphContext?.symbols).toContainEqual(
+    expect(plain.content).toBe("1\texport function validateUser() { return true; }");
+    expect(plain.graphContext).toBeUndefined();
+    expect(freshnessChecks).toBe(0);
+    expect(projectLoads).toBe(0);
+
+    const contextual = await handlers.get_file({ file: "src/auth.ts", limit: 1, includeGraphContext: true });
+
+    expect(contextual.graphContext?.usedBy).toContain("src/server.ts");
+    expect(contextual.graphContext?.symbols).toContainEqual(
       expect.objectContaining({ name: "validateUser", kind: "function", line: 1 }),
     );
+    expect(freshnessChecks).toBe(1);
+    expect(projectLoads).toBe(1);
+  });
+
+  it("caps each get_file graph-context collection at 100 entries", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-file-graph-cap-"));
+    const targetFile = path.join(root, "target.ts");
+    await fs.writeFile(targetFile, "export const target = true;\n", "utf8");
+    const usedByFiles = Array.from({ length: 101 }, (_, index) =>
+      path.join(root, `consumer-${String(index).padStart(3, "0")}.ts`),
+    );
+    const moduleIndex: ModuleIndex = {
+      file: targetFile,
+      exports: [],
+      imports: Array.from({ length: 101 }, (_, index) => ({
+        kind: "star",
+        from: `package-${String(index).padStart(3, "0")}`,
+      })),
+      locals: Array.from({ length: 101 }, (_, index) => ({
+        file: targetFile,
+        localName: `symbol-${String(index).padStart(3, "0")}`,
+        kind: SymbolKind.Function,
+        range: {
+          start: { line: index + 1, column: 1 },
+          end: { line: index + 1, column: 2 },
+        },
+      })),
+    };
+    const fileGraph: Graph = {
+      nodes: new Set([targetFile, ...usedByFiles]),
+      edges: usedByFiles.map((file) => ({ from: file, to: { type: "file", path: targetFile }, raw: "./target" })),
+    };
+    const index: ProjectIndex = {
+      graph: fileGraph,
+      modules: new Map([[targetFile, moduleIndex]]),
+      byFile: new Map([[targetFile, moduleIndex]]),
+      exportCache: new Map(),
+      scopeCache: new Map(),
+    };
+    const snapshot: AgentProjectSnapshot = {
+      root,
+      files: [targetFile],
+      index,
+      fileGraph,
+      symbolGraph: { nodes: new Map(), edges: [] },
+      analysis: {
+        mode: "semantic",
+        backend: "unknown",
+        parserDegradedFiles: 0,
+        fallbackImportExtractionFiles: 0,
+        nativeFilesUsed: 0,
+        nativeFilesFellBack: 0,
+        label: "semantic",
+      },
+    };
+    const session: AgentSession = {
+      root,
+      loadProject: async () => snapshot,
+      invalidate: () => undefined,
+    };
+    const handlers = createCodegraphMcpHandlers({ root, session });
+
+    const result = await handlers.get_file({ file: "target.ts", includeGraphContext: true });
+
+    expect(result.graphContext?.usedBy).toHaveLength(100);
+    expect(result.graphContext?.usedBy.at(-1)).toBe("consumer-099.ts");
+    expect(result.graphContext?.usedBy).not.toContain("consumer-100.ts");
+    expect(result.graphContext?.imports).toHaveLength(100);
+    expect(result.graphContext?.imports.at(-1)).toBe("package-099");
+    expect(result.graphContext?.imports).not.toContain("package-100");
+    expect(result.graphContext?.symbols).toHaveLength(100);
+    expect(result.graphContext?.symbols.at(-1)?.name).toBe("symbol-099");
+    expect(result.graphContext?.symbols.some((symbol) => symbol.name === "symbol-100")).toBe(false);
   });
 
   it("does not split multi-byte UTF-8 characters in bounded get_file reads", async () => {

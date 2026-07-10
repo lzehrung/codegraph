@@ -93,7 +93,7 @@ export const MCP_TOOLS: Tool[] = [
         offset: { type: "integer", minimum: 1, default: 1 },
         limit: { type: "integer", minimum: 1, maximum: MAX_FILE_LINES, default: DEFAULT_FILE_LINES },
         maxBytes: { type: "integer", minimum: 1, maximum: MAX_FILE_BYTES },
-        includeGraphContext: { type: "boolean" },
+        includeGraphContext: { type: "boolean", default: false },
       },
       ["file"],
     ),

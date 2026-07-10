@@ -82,6 +82,8 @@ type CodegraphMcpFileGraphContext = {
   symbols: Array<{ name: string; kind: string; line: number }>;
 };
 
+const FILE_GRAPH_CONTEXT_LIMIT = DEFAULT_MCP_COLLECTION_LIMIT;
+
 type CodegraphMcpFileViewResponse = {
   schemaVersion: 1;
   file: string;
@@ -124,7 +126,7 @@ function buildFileGraphContext(
     snapshot.fileGraph.edges
       .filter((edge) => edge.to.type === "file" && edge.to.path === file)
       .map((edge) => relative(edge.from)),
-  );
+  ).slice(0, FILE_GRAPH_CONTEXT_LIMIT);
   const imports = uniqueSorted(
     moduleIndex.imports.map((importBinding) => {
       const resolved = importBinding.resolved;
@@ -132,10 +134,11 @@ function buildFileGraphContext(
       if (resolved) return resolved.external;
       return importBinding.from;
     }),
-  );
+  ).slice(0, FILE_GRAPH_CONTEXT_LIMIT);
   const symbols = moduleIndex.locals
     .map((symbol) => ({ name: symbol.localName, kind: symbol.kind, line: symbol.range.start.line }))
-    .sort((left, right) => left.line - right.line || left.name.localeCompare(right.name));
+    .sort((left, right) => left.line - right.line || left.name.localeCompare(right.name))
+    .slice(0, FILE_GRAPH_CONTEXT_LIMIT);
 
   return { usedBy, imports, symbols };
 }
@@ -153,8 +156,6 @@ function buildFileView(args: {
   let nextOffset: number | undefined;
   if (start + args.limit < lines.length) {
     nextOffset = start + args.limit + 1;
-  } else if (args.truncated) {
-    nextOffset = lines.length + 1;
   }
   return {
     schemaVersion: 1,
