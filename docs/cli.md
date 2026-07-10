@@ -67,10 +67,10 @@ codegraph graph ./
 # Default graph output to stdout
 codegraph graph ./ --stdout
 
-# Fast graph-only overview
+# Opt-in text specifier shortcut for plain .js and .ts files
 codegraph graph ./src --fast-graph
 
-# Full AST-based graph
+# Default extraction (Tree-sitter for supported source languages)
 codegraph graph ./src
 
 # Build a dependency graph from multiple roots
@@ -667,7 +667,7 @@ Important review-bundle details:
   - `standard`: symbol snippets plus up to 2 callsites, `maxCandidates=25`
   - `deep`: symbol snippets plus up to 10 callsites, `maxCandidates=50`
 - Explicit flags like `--include-symbol-details`, `--max-callsites`, `--max-tests`, or `--fast-graph` override preset defaults.
-- For review accuracy, keep full parsing enabled unless you intentionally want a faster, less complete pass.
+- For review accuracy, keep the default Tree-sitter import extraction unless you intentionally accept less complete JavaScript or TypeScript edges.
 - `--incremental-strict` disables fast graph extraction for changed files while still using incremental file selection.
 - `--cache-verify` validates the manifest before reuse and falls back to a full rebuild if mismatches are detected.
 
@@ -712,7 +712,7 @@ Format notes:
 - Use `--mermaid` for a Mermaid flowchart.
 - Use `--dot` for Graphviz DOT.
 - In DOT output, type-only edges are dotted and external nodes are dashed ellipses.
-- Use `--fast-graph` for faster JS and TS specifier extraction.
+- `--fast-graph` bypasses native import queries only for plain `.js` and `.ts` files, using lightweight text extraction that may miss multiline or complex patterns. TSX and other languages keep their normal extraction path.
 
 When using `--symbols`:
 

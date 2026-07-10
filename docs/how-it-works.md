@@ -1,172 +1,103 @@
 # How It Works
 
-Runtime behavior, performance characteristics, architecture, extension points, and testing notes.
+## Short version
 
-## Performance
+Codegraph turns source files into a resolved dependency graph and a semantic index:
 
-### Quick start for large repos
+1. Discover files under the selected roots.
+2. Parse supported source languages with Tree-sitter and run language queries for imports, exports, definitions, and bindings.
+3. Resolve each module specifier to a project file or an external dependency, then assemble forward and reverse graph indexes.
+4. Use the same indexed symbols, scopes, and edges for navigation, impact analysis, review, and agent queries.
+5. Reuse compatible parsed files and graph edges when caching or a long-lived session is enabled.
 
-- Graph only: `codegraph graph --fast-graph --threads 8 --mermaid > graph.mmd`
-- Full index: `codegraph index --workers --threads 8 --cache disk`
-- Detailed symbols, pruned: `codegraph graph --root . ./src --symbols-detailed --symbols-detailed-scope imported --symbols-detailed-members-only --symbols-detailed-max-edges 5000 --mermaid > graph.symbols.pruned.mmd`
+The normal supported-language path is Tree-sitter. The native addon accelerates the shared parse and query path; it is not a separate analysis model. `--fast-graph` is a narrower, opt-in shortcut for plain `.js` and `.ts` import specifiers, not a switch that disables all AST work.
 
-### Fast graph
+## Discovery
 
-- Regex-based specifier extraction is available for JS and TS only.
-- It covers common `import`, `export ... from`, `require()`, and `import()` patterns and ignores commented imports.
-- If the output looks off, rerun without `--fast-graph`.
-- Programmatic callers can set `graph.fastRegexDisabledLanguages` to opt specific languages out of regex fast paths.
+Commands start from the project root and any selected scan roots. Codegraph walks those roots, applies supported-extension filtering, honors `.gitignore` by default, and then applies configured and command-line include or ignore globs. Excluding generated, vendored, and fixture trees here avoids reading or parsing them later.
 
-### Scan scope
+Each discovered file is mapped to a language definition. First-class source languages feed the shared Tree-sitter pipeline. Graph-first formats such as documentation and templates use their dedicated link or specifier extractors where the [language parity matrix](./language-parity.md) says graph support is available.
 
-- Keep large fixtures, generated trees, and vendored code out of default scans with `codegraph.config.json`.
-- `discovery.ignoreGlobs` reduces the file set before indexing, search text reads, unresolved-import checks, graphing, impact, and review work.
-- CLI `--include-glob` and `--ignore-glob` are additive one-off scan-root-relative filters. `--no-gitignore` disables gitignore filtering for that command.
+See [CLI scan and root behavior](./cli.md#project-config) for the distinction between project configuration and one-off command flags.
 
-### Caching
+## Extraction
 
-- Modes: `off` (default), `memory` (per-process), `disk` (persist across runs under `.codegraph-cache/index-v1`)
-- Content-hash caching is the default: parsed-module cache keys use content SHA1 for reliability.
-- `cacheStrict` defaults to true. Set `cacheStrict: false` only when mtime and size checks are an acceptable speed tradeoff.
-- Per-file parsed caches are versioned; version mismatches trigger a rebuild of that file's cached outputs.
-- Persistent SQLite caches record table schema versions. Older compatible tables are migrated in place, while corrupt or unsupported schema metadata causes that cache table to be rebuilt.
-- Bloom filters are built automatically during indexing for faster reference scanning. Disable them with `useBloomFilters: false` if needed.
-- `.codegraph-cache/index-v1/manifest.json` stores the last indexed commit, graph options, and per-file signatures plus resolved edges.
-- Incremental runs treat the manifest as a cached base graph: unchanged files keep their edges, while changed files are reparsed and their edges replaced.
-- `codegraph hotspots` and `codegraph inspect` reuse the disk index cache when the manifest is present and log the manifest path, timestamp, and last commit hash to stderr.
-- Agent tool wrappers and agent sessions default to incremental warm-cache reuse so repeated local and MCP queries pay the cold build cost once, then reuse compatible manifests and parsed state.
-- Remove the manifest, clear `.codegraph-cache/index-v1`, or rerun with different graph flags to force a full graph rebuild.
+### Default: Tree-sitter queries
 
-### Read paths
+For supported source languages, language definitions provide a Tree-sitter grammar plus queries and classification rules. The indexer parses each file and normalizes query captures into common records for module specifiers, exports, local definitions, import bindings, and scopes. Later stages therefore consume the same shapes across languages.
 
-- `ProjectIndex` builds derived forward and reverse file-adjacency maps for common dependency reads.
-- `deps`, `rdeps`, and `path` use adjacency traversal instead of scanning every edge at each BFS step.
-- CLI graph queries use the indexed graph path when no direct graph collector is injected, so manifest-backed builds can serve repeated reads without changing command output.
-- High-level SQLite dependency-chain and affected-function questions walk `file_edges` through indexed neighbor lookups instead of loading all file edges into memory.
+In the normal `auto` runtime mode, the native addon performs this Tree-sitter parse and query work when available. TypeScript code owns discovery, normalization, resolution, graph assembly, semantic operations, and output formatting, so native acceleration does not change the public result contract.
 
-### Threads
+### Opt-in: `--fast-graph`
 
-- Use `--threads` to increase concurrency.
-- A typical sweet spot is CPU cores or cores times two.
-- Very high values may become I/O-bound; 8-32 is a good SSD-era range.
+`--fast-graph` bypasses native import queries only for plain `.js` and `.ts` files and extracts their module specifiers with a lightweight text matcher instead. TSX and other parser-backed languages keep their normal extraction path, and other analysis work can still require parsed syntax.
 
-### Native Tree-sitter acceleration
+The shortcut recognizes common `import`, `export ... from`, `require()`, and `import()` forms. It can miss multiline or complex patterns, so use it for a quick dependency overview when that accuracy tradeoff is acceptable. Rerun without it when edges from `.js` or `.ts` files look incomplete or when review accuracy matters.
 
-- `npm run build` requires the local native workspace build to succeed when Cargo is available.
-- Use `npm run build:native` when you want native-only rebuilds or a hard failure if Rust is missing.
-- When the addon is present, Codegraph runs supported Tree-sitter parse and query work in Rust.
-- If native mode is `auto` or `off` and native is unavailable, Codegraph drops to reduced graph-only and regex recovery mode.
-- If native mode is `on`, a missing native addon is a hard error.
-- `--workers` uses a Piscina worker pool to offload per-file Rust extraction across CPU cores.
-- Vue, Svelte, and Astro files stay on the main thread because they need source preprocessing before extraction.
-- Falls back silently to single-threaded extraction if Piscina is unavailable or pool creation fails.
-- Use `--report` to inspect `workerPool` statistics.
+### Recovery when parsing is unavailable
 
-### Monorepo resolution
+Recovery is separate from `--fast-graph`. If the native addon is unavailable in `auto` mode, Codegraph continues in a reduced graph-only mode and uses the available regex or graph-first recovery extractors. It does not load a second JavaScript grammar backend. Semantic features that need definitions, scopes, or precise syntax may be unavailable or less complete in this mode.
 
-- Workspace detection precedence: `package.json` workspaces, then `pnpm-workspace.yaml`, then `lerna.json`
-- `pnpm-workspace.yaml` supports `packages:` include globs and `!` exclude globs.
-- Bare-specifier resolution precedence:
-  - nearest TypeScript `paths` and `baseUrl`
-  - workspace packages
-  - `node_modules` only when `--resolve-node-modules` is enabled
-- Package subpaths are resolved via `exports` and `main` heuristics.
+A failed or empty import query can also trigger a language-specific recovery extractor for that file. This is resilience behavior, not the normal architecture. Use `--report` or `codegraph doctor` when you need to confirm which backend ran. `--native on` makes a missing native addon an error; `--native off` explicitly selects reduced behavior.
 
-### Troubleshooting
+## Resolution and graph construction
 
-- Missing JS or TS edges: disable `--fast-graph`.
-- Dynamic JS or TS specifiers or bare imports from custom roots: use `--dynamic-import-heuristics` or `--resolution-hint <dir>` only when needed because they can introduce false positives.
-- Stale results after non-strict cache runs: rerun with default strict caching or clear `.codegraph-cache`.
-- Windows path separators are normalized to `/` where relevant.
+Extraction produces raw module specifiers. Resolution then turns them into graph targets:
 
-## Architecture
+- Relative and absolute-like paths are matched to discovered files with supported extension and index-file rules.
+- TypeScript path aliases and `baseUrl`, workspace packages, and package metadata participate where configured.
+- `node_modules` resolution is opt-in with `--resolve-node-modules`.
+- Resolution hints and dynamic-import heuristics are opt-in because guesses can create false positives.
+- A specifier that cannot be mapped to a project file remains an `external` node instead of disappearing.
 
-### 1. Language adapters
+The resulting file nodes and typed edges are stored with forward and reverse adjacency indexes. That graph powers `graph`, `deps`, `rdeps`, `path`, `cycles`, unresolved-import checks, and the dependency portion of higher-level analysis. Mermaid, DOT, JSON, and SQLite are output views of the same graph model.
 
-Language adapters expose:
+## Semantic navigation and impact
 
-- file extensions
-- the Tree-sitter grammar
-- a few node-type helpers
-- four small query groups for imports, exports, locals, and import bindings
-- definition classification and scope behavior
+The semantic index connects definitions, scopes, exports, and import bindings to graph edges. `goto` resolves local definitions and imported bindings, including supported namespace-member cases. `refs` follows local and imported references through the same model.
 
-### 2. Indexing
+Impact analysis maps diff hunks to changed symbols, follows resolved references and reverse dependencies, and ranks the affected files. Review and agent-facing commands build on that evidence, adding bounded snippets or related findings as requested. Call compatibility is deliberately narrower than type checking: it reports high-confidence arity mismatches for resolved callable changes, not overload, dispatch, macro, or data-flow conclusions.
 
-- TypeScript owns the shared indexing pipeline, resolution logic, and output shapes.
-- `src/indexer.ts` stays as the stable public facade while the implementation is split across focused modules under `src/indexer/` for parsing, imports, symbols, navigation, and build orchestration.
-- The parser and query hot path stays on Tree-sitter for every supported language.
-- When available, the addon inside `@lzehrung/codegraph-native` runs those Tree-sitter parses and queries natively, then returns plain capture data to TypeScript.
+Precise semantic navigation depends on successful parsing and queries. Reduced recovery can preserve useful file edges without claiming equivalent symbol or scope analysis. Current per-language capabilities are listed in the [language parity matrix](./language-parity.md).
 
-### 3. Graph building
+## Cache and session behavior
 
-- For each file, Codegraph collects module specifiers and resolves them.
-- Path-like specifiers resolve to best-effort file targets.
-- Unresolved targets become `external` nodes instead of being discarded.
+Caching avoids repeating work; it does not change extraction or resolution semantics.
 
-### 4. Navigation
+- `off` is useful for a deliberately cold run.
+- `memory` reuses parsed work inside one process.
+- `disk` persists compatible parsed-file entries and an incremental graph manifest under `.codegraph-cache/index-v1` for later commands.
+- Strict content hashes favor reliable reuse. Non-strict metadata checks are an explicit speed tradeoff.
 
-- `goToDefinition` checks local scope first, then imported bindings, and understands namespace-member access.
-- `findReferences` builds per-file scope, seeds imports as bindings, records occurrences, and resolves through imports and namespace members.
+An incremental graph starts from a compatible manifest, keeps edges for unchanged files, and replaces edges for changed files. Changes to file signatures, discovery configuration, graph options, cache schema, or relevant build options invalidate the affected reuse boundary. Corrupt or unsupported cache data is rebuilt rather than treated as current analysis.
 
-### 5. Impact and Call Compatibility
+Long-lived agent and review sessions retain compatible index state so repeated questions avoid the cold build. They check relevant file, configuration, and project freshness signals before reuse and refresh when drift is detected. Clear the disk cache or run cache-off when you specifically need a cold rebuild.
 
-- Impact maps diff hunks to changed symbols, then scans resolved references and dependency edges to rank affected files.
-- Duplicate detection compares indexed symbols and chunks with exact hashes, normalized token hashes, token fingerprints, and AST shape hashes when parser context is available.
-- Pretty impact and review summaries add a small duplicate-lead pass over scoped files only; git copy or rename similarity metadata can boost those leads when both files exist in the indexed snapshot. JSON callers use `findDuplicates()` for the full grouped contract.
-- Signature-change detection uses Tree-sitter byte ranges so body-only edits do not look like parameter-list edits.
-- Call compatibility runs only for changed callable signatures with provider-backed signature extraction and high-confidence callsite argument counts.
-- Hints compare arity only. They do not perform type checking, overload resolution, data-flow analysis, macro expansion, or dynamic dispatch.
-- Existing impact filters apply before hints are emitted, so ignored files and tests excluded by default stay out of call compatibility results.
-- Long-lived `CodeReviewSession` instances keep cheap freshness baselines for config files and project-directory mtimes. Navigation also checks the requested file signature, while impact calls add an interval-throttled tracked-file scan before reuse. When those signals show drift, the session refreshes before serving results, and `getStats()` exposes stale/refresh metadata for callers that want to surface it.
+## Performance choices
 
-### 6. AST grep
+Choose the least lossy option that solves the actual bottleneck:
 
-AST grep runs any Tree-sitter query across matched files and prints hits as `file:line:col: @capture: snippet`.
+1. **Narrow discovery first.** Scan only the roots you need and ignore generated or vendored trees. Work avoided here benefits every later stage.
+2. **Use disk cache for repeated CLI or agent work.** Use memory cache for repeated operations in one process and cache-off for controlled cold runs.
+3. **Use `--threads N` for file-level indexing and I/O concurrency.** Start near the available CPU count, then measure; excessive concurrency can become I/O-bound.
+4. **Use `--workers` for CPU-parallel native extraction on larger index-building workloads.** It requires the native addon; direct file-only graph output does not use this pool. Single-threaded extraction remains the fallback if a worker pool cannot start, and preprocessed single-file component formats stay on the main thread.
+5. **Use `--fast-graph` only for a quick plain-JavaScript or plain-TypeScript dependency pass.** It trades import-specifier completeness for less native query work on `.js` and `.ts` files; TSX and other languages keep their normal extraction path.
 
-### Design tradeoffs
+Use `--report` to inspect cache, backend, and worker-pool behavior instead of assuming a tuning flag helped. For controlled evidence about agent-oriented discovery, see the [benchmark methodology and checked results](./benchmarks/README.md); those fixtures do not establish universal speedups.
 
-- Native parse and query work, TypeScript indexing and reporting: Rust handles the syntax-tree hot path when the native addon is available, while TypeScript keeps graph assembly, resolution, review logic, CLI behavior, and SQLite export in one shared implementation. That keeps the performance-critical layer small and lets native and non-native modes share output contracts and tests.
-- Read-only SQLite inspection: `codegraph sql` and `queryGraphSqliteRaw()` treat the SQLite export as a query artifact, not a writable application database. Keeping that surface read-only makes CI and agent workflows safer, avoids accidental artifact corruption, and preserves reproducible graph output.
-- Stable symbol handles for automation: cursor-based navigation is convenient for editor-style entrypoints, but serialized handles are a better contract for review bundles, repeated agent calls, and cross-step automation. They let downstream tools refer back to definitions and import aliases without depending on the exact cursor that found them originally.
+## Extension and testing
 
-## Extending to other languages
+New source-language support should extend the shared definition, native grammar, extraction, resolution, semantic, and fixture conventions rather than introduce a parallel parser architecture. Graph-first languages should state their narrower contract explicitly.
 
-Codegraph uses one unified language-definition system that powers both dependency graph extraction and semantic chunking.
+- [Adding language support](./adding-language-support.md) gives the implementation and review checklist.
+- [Language parity](./language-parity.md) records the public capability matrix.
+- [Scenario catalog](./scenario-catalog.md) links claimed behavior to fixtures and regression coverage.
 
-For the full checklist, see [docs/adding-language-support.md](./adding-language-support.md).
-
-The short version:
-
-1. Add a definition file in `src/languages/definitions/<language>.ts`.
-2. Register it in `src/languages.ts` and `src/bootstrap/treeSitterLanguages.ts`.
-3. Add the nearest language sample and regression coverage in `tests/languages`.
-
-Do not stop at "80/20" support unless the parity docs and scenario catalog explicitly mark the limitation and the tests prove it.
-
-## Testing
-
-The core stays intentionally pure and test-friendly. Good seams to target directly include:
-
-- `collectLocalsAndExportsFromSource(file, source, support, lang)`
-- `collectModuleSpecifiersFromSource(support, lang, source)`
-- `buildScopeIndexFromSource(file, source, support, lang, imports)`
-- `resolveExport(index, file, exportedName)`
-- `goToDefinition(index, req)`
-- `findReferences(index, req)`
-
-Recommended strategy:
-
-- Feed inline strings as source and assert on JSON-serializable structures.
-- For end-to-end tests, create a small temp directory with a few files and run the CLI with `tsx`.
-- Use `npm run test:native:required` for JS suites that must fail when the native addon is unavailable.
-- Use `npm run test:native:fallback` for reduced-mode fallback coverage on hosts without native support.
-- `npm run test:native` runs Rust native tests, native-required JS suites, and reduced-mode fallback suites together.
+Test the smallest layer that owns a change, then add a small end-to-end fixture when discovery, resolution, or CLI output is part of the contract. Native-required suites verify the normal Tree-sitter path; native-fallback suites verify reduced recovery without presenting it as parity.
 
 ## Related docs
 
-- [docs/cli.md](./cli.md)
-- [docs/library-api.md](./library-api.md)
-- [docs/agent-workflows.md](./agent-workflows.md)
-- [docs/language-parity.md](./language-parity.md)
-- [docs/scenario-catalog.md](./scenario-catalog.md)
+- [CLI reference](./cli.md)
+- [Library API](./library-api.md)
+- [Agent workflows](./agent-workflows.md)
+- [Benchmark methodology and results](./benchmarks/README.md)

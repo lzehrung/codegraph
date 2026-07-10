@@ -42,10 +42,9 @@ Commands:
   version       Print the installed codegraph version
 
 Graph Options:
-  --fast-graph                Skip AST parsing, use regex for imports.
-                              5-10x faster but may miss dynamic imports,
-                              re-exports, and complex patterns. Best for
-                              quick overviews of large codebases.
+  --fast-graph                Use text import extraction for plain .js and .ts
+                              files. May miss multiline or complex patterns;
+                              TSX and other languages keep normal extraction.
   --resolve-node-modules      Include node_modules in resolution
   --dynamic-import-heuristics Attempt to resolve dynamic imports
   --resolution-hint <hint>    Custom resolution hint (e.g., tsconfig:path)

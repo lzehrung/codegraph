@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 1,
+  "scenarios": [
+    {
+      "id": "repo-orientation-small-ts",
+      "repo": "tests/samples/benchmarks/typescript-service",
+      "task": "Trace how serveRequest sends an incoming request through dispatchRequest to the getHealth handler, and identify each file in the request path.",
+      "expectedAnchors": ["src/server.ts", "src/routes.ts", "src/handlers/health.ts"],
+      "metrics": ["toolCalls", "fileReads", "wallTimeMs"],
+      "variants": {
+        "baseline": [
+          {
+            "type": "read",
+            "path": "src/server.ts"
+          },
+          {
+            "type": "read",
+            "path": "src/routes.ts"
+          },
+          {
+            "type": "read",
+            "path": "src/handlers/health.ts"
+          }
+        ],
+        "codegraph": [
+          {
+            "type": "codegraph",
+            "command": "explore",
+            "query": "Trace serveRequest from src/server.ts through dispatchRequest in src/routes.ts to getHealth in src/handlers/health.ts."
+          }
+        ]
+      }
+    },
+    {
+      "id": "python-import-reference",
+      "repo": "tests/samples/python",
+      "task": "Trace the local imports used by main.py, including helper_function, UtilityClass, and another_helper, to the modules that define them.",
+      "expectedAnchors": ["main.py", "utils.py", "helpers.py"],
+      "metrics": ["toolCalls", "fileReads", "wallTimeMs"],
+      "variants": {
+        "baseline": [
+          {
+            "type": "read",
+            "path": "main.py"
+          },
+          {
+            "type": "read",
+            "path": "utils.py"
+          },
+          {
+            "type": "read",
+            "path": "helpers.py"
+          }
+        ],
+        "codegraph": [
+          {
+            "type": "codegraph",
+            "command": "explore",
+            "query": "Trace the imports in main.py for helper_function, UtilityClass, and another_helper to their definitions in utils.py and helpers.py."
+          }
+        ]
+      }
+    },
+    {
+      "id": "sql-migration-application-review",
+      "repo": "tests/samples/benchmarks/sql-application-review",
+      "task": "Locate the coupling between the accounts schema, the migration that introduces status, and the TypeScript query that reads active accounts; do not assume a persistent source-to-SQL graph edge.",
+      "expectedAnchors": ["schema.sql", "migrations/001_add_account_status.sql", "src/list-active-accounts.ts"],
+      "metrics": ["toolCalls", "fileReads", "wallTimeMs"],
+      "variants": {
+        "baseline": [
+          {
+            "type": "read",
+            "path": "schema.sql"
+          },
+          {
+            "type": "read",
+            "path": "migrations/001_add_account_status.sql"
+          },
+          {
+            "type": "read",
+            "path": "src/list-active-accounts.ts"
+          }
+        ],
+        "codegraph": [
+          {
+            "type": "codegraph",
+            "command": "explore",
+            "query": "Locate how the accounts definition in schema.sql, the status addition in migrations/001_add_account_status.sql, and the active-account query in src/list-active-accounts.ts are coupled by table and column usage."
+          }
+        ]
+      }
+    },
+    {
+      "id": "mixed-docs-source-graph",
+      "repo": "tests/samples/benchmarks/mixed-docs-source",
+      "task": "Follow the local request-flow guide into sendRequest, then trace the source import to formatRequest.",
+      "expectedAnchors": ["docs/request-flow.md", "src/client.ts", "src/transport.ts"],
+      "metrics": ["toolCalls", "fileReads", "wallTimeMs"],
+      "variants": {
+        "baseline": [
+          {
+            "type": "read",
+            "path": "docs/request-flow.md"
+          },
+          {
+            "type": "read",
+            "path": "src/client.ts"
+          },
+          {
+            "type": "read",
+            "path": "src/transport.ts"
+          }
+        ],
+        "codegraph": [
+          {
+            "type": "codegraph",
+            "command": "explore",
+            "query": "Follow docs/request-flow.md to sendRequest in src/client.ts, then trace its import and call to formatRequest in src/transport.ts."
+          }
+        ]
+      }
+    }
+  ]
+}
