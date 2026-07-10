@@ -4,7 +4,7 @@
 
 On these tiny local fixtures, with Codegraph caching disabled and a fresh process for each sample:
 
-- Direct reads are far faster: their median wall times are tens of milliseconds, while the Codegraph runs take several seconds.
+- Direct reads are far faster in the checked WSL2 run: their median wall times are tens of milliseconds, while the Codegraph runs take several seconds.
 - Codegraph reduces each declared workflow from three calls to one `explore` call.
 - Every expected evidence anchor is present in every checked run.
 
@@ -53,6 +53,34 @@ Medians are calculated independently for each scenario and variant. Tool calls a
 <!-- benchmark-results:end -->
 
 The checked result document records Node, platform, architecture, CPU, logical CPU count, and memory so reruns can be compared in context.
+
+## Where the checked latency comes from
+
+The checked artifact was produced from a WSL2 checkout on the Windows-mounted `/mnt/e` filesystem. A follow-up diagnostic on the same host found that most of the Codegraph time was Node startup and module loading on that filesystem, not parsing or graph queries.
+
+| Diagnostic probe                          | `/mnt/e` checkout | Native WSL `/tmp` copy |
+| ----------------------------------------- | ----------------: | ---------------------: |
+| `node ./dist/cli.js --version`            |          3,423 ms |                 135 ms |
+| One-shot TypeScript `explore --cache off` |          3,808 ms |                 248 ms |
+| Import agent modules in-process           |          2,797 ms |                  92 ms |
+| Standalone `explore` after import         |            672 ms |                 114 ms |
+| First `explore` on a persistent session   |            408 ms |                  34 ms |
+| Repeated `explore` on the same session    |             23 ms |                  11 ms |
+
+Values are rounded medians where repeated samples were collected; the `/mnt/e` in-process row is one diagnostic sample. The native addon was available in both locations. These measurements diagnose this host and checkout placement; they are not additional generated benchmark rows.
+
+Node's built-in CPU profiler and trace events explain the startup gap. Profiling the otherwise no-work `--version` command on `/mnt/e` produced a 3.22-second profile dominated by module-resolution filesystem work. The matching trace recorded 537 synchronous `lstat` calls, 437 `open`/`read`/`close` groups, and 345 `fstat` calls; the traced synchronous filesystem spans alone totaled 1.38 seconds.
+
+```bash
+node --cpu-prof --cpu-prof-dir=.tmp/profiles ./dist/cli.js --version
+node --trace-event-categories node,node.fs.sync \
+  --trace-event-file-pattern=.tmp/profiles/version-trace.json \
+  ./dist/cli.js --version
+```
+
+Across all four scenarios, fresh `explore` medians on `/mnt/e` were 3.81-4.41 seconds, while the CLI startup floor was 3.42 seconds. Startup therefore accounted for roughly 78-90% of those one-shot measurements before attributing any remaining time to discovery, indexing, search, packet construction, or JSON output.
+
+The comparison is intentionally end-to-end but not process-symmetric: baseline reads execute inside the already-running harness, while Codegraph launches a fresh Node process. The table is valid evidence for cold CLI workflow latency, but it should not be read as an intrinsic parser or graph-engine comparison. Persistent MCP/server sessions amortize module loading and index construction, as the repeated-session probe demonstrates.
 
 ## Limitations and variability
 
