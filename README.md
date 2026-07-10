@@ -66,7 +66,9 @@ This repo keeps test fixtures out of default Codegraph scans with `codegraph.con
 }
 ```
 
-Use discovery globs in other repos when large fixture, generated, or vendored trees should not participate in search, unresolved-import checks, graphing, indexing, inspect, impact, or review runs. Config globs are project-root-relative, while CLI `--include-glob` and `--ignore-glob` stay relative to each active scan root. `languages.extensions` maps additional or built-in file suffixes to supported language IDs; longer suffixes win, and built-ins remain active unless explicitly remapped.
+Use discovery globs in other repos when large fixture, generated, or vendored trees should not participate in search, unresolved-import checks, graphing, indexing, inspect, impact, or review runs. Config globs are project-root-relative, while CLI `--include-glob` and `--ignore-glob` stay relative to each active scan root.
+
+`languages.extensions` maps additional or built-in literal file suffixes to supported language IDs; longer suffixes win, and built-ins remain active unless explicitly remapped. Suffixes may contain letters, digits, `.`, `_`, `+`, and `-`. The `.vue` and `.svelte` suffixes are always handled as single-file components and cannot be remapped.
 
 ## Quick start
 

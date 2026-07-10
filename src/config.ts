@@ -1,8 +1,13 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
-import { supportById } from "./languages.js";
-import type { LanguageExtensionMap } from "./indexer/types.js";
+import {
+  isLiteralLanguageExtension,
+  isRemappableLanguageExtension,
+  normalizeLanguageExtensions,
+  supportById,
+} from "./languages.js";
+import type { LanguageExtensionMap } from "./languages.js";
 import type { ProjectFileDiscoveryOptions } from "./util/projectFiles.js";
 
 export const CODEGRAPH_CONFIG_FILE = "codegraph.config.json";
@@ -91,31 +96,31 @@ function normalizeDiscoveryConfig(
   return hasDiscoveryOptions(normalized) ? normalized : undefined;
 }
 
-function normalizeLanguageExtensions(extensions: Record<string, string> | undefined): LanguageExtensionMap | undefined {
+function normalizeConfigLanguageExtensions(
+  extensions: Record<string, string> | undefined,
+): LanguageExtensionMap | undefined {
   if (!extensions) return undefined;
-  const normalized: LanguageExtensionMap = {};
   for (const [rawKey, rawLanguageId] of Object.entries(extensions)) {
     const key = rawKey.trim().toLowerCase();
     const languageId = rawLanguageId.trim();
     if (!key.startsWith(".")) {
       throw new Error(`Invalid ${CODEGRAPH_CONFIG_FILE}: languages.extensions key "${rawKey}" must start with ".".`);
     }
+    if (!isLiteralLanguageExtension(key)) {
+      throw new Error(
+        `Invalid ${CODEGRAPH_CONFIG_FILE}: languages.extensions key "${rawKey}" must be a literal suffix containing only letters, digits, ".", "_", "+", or "-".`,
+      );
+    }
+    if (!isRemappableLanguageExtension(key)) {
+      throw new Error(`Invalid ${CODEGRAPH_CONFIG_FILE}: languages.extensions key "${rawKey}" cannot be remapped.`);
+    }
     if (!supportById(languageId)) {
       throw new Error(
         `Invalid ${CODEGRAPH_CONFIG_FILE}: languages.extensions["${rawKey}"] references unknown language "${languageId}".`,
       );
     }
-    normalized[key] = languageId;
   }
-  return Object.keys(normalized).length ? normalized : undefined;
-}
-
-function languageExtensionIncludeGlobs(languageExtensions: LanguageExtensionMap | undefined): string[] {
-  return Object.keys(languageExtensions ?? {})
-    .map((extension) => extension.trim().toLowerCase())
-    .filter((extension) => extension.startsWith("."))
-    .sort()
-    .map((extension) => `**/*${extension}`);
+  return normalizeLanguageExtensions(extensions);
 }
 
 export async function loadCodegraphConfig(projectRoot: string): Promise<CodegraphConfig> {
@@ -142,13 +147,10 @@ export async function loadCodegraphConfig(projectRoot: string): Promise<Codegrap
   if (!parsed.success) {
     throw new Error(`Invalid ${CODEGRAPH_CONFIG_FILE}: ${z.prettifyError(parsed.error)}`);
   }
-  const languageExtensions = normalizeLanguageExtensions(parsed.data.languages?.extensions);
-  const languageDiscovery = languageExtensions
-    ? { includeGlobs: languageExtensionIncludeGlobs(languageExtensions) }
-    : undefined;
-  const discovery = mergeDiscoveryOptions(normalizeDiscoveryConfig(parsed.data.discovery), languageDiscovery);
+  const languageExtensions = normalizeConfigLanguageExtensions(parsed.data.languages?.extensions);
+  const discovery = normalizeDiscoveryConfig(parsed.data.discovery);
   return {
-    ...(hasDiscoveryOptions(discovery) ? { discovery } : {}),
+    ...(discovery ? { discovery } : {}),
     ...(languageExtensions ? { languages: { extensions: languageExtensions } } : {}),
   };
 }

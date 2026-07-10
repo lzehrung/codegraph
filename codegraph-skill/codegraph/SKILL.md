@@ -81,7 +81,7 @@ Fall back to CLI when MCP is unavailable.
 ## Discovery
 
 Durable repo-local ignores and custom language suffixes belong in `codegraph.config.json`.
-Use `languages.extensions` for suffix-to-language mappings such as `.tpl` to `php`; keys start with `.`, values are supported language IDs, and the longest suffix wins.
+Use `languages.extensions` for literal suffix-to-language mappings such as `.tpl` to `php`; keys start with `.`, may contain letters, digits, `.`, `_`, `+`, and `-`, and values are supported language IDs. The longest suffix wins; `.vue` and `.svelte` are always handled as single-file components and cannot be remapped.
 One-off CLI filters use scan-root-relative `--include-glob` and `--ignore-glob`.
 Use `--no-gitignore` only when ignored files are intentionally in scope.
 

@@ -49,8 +49,8 @@ Commands that scan a project read `codegraph.config.json` from `--root` when it 
 
 - `discovery.includeGlobs` and `discovery.ignoreGlobs` are project-root-relative, even when a command scans child include roots.
 - `discovery.ignoreGlobs` is for large fixture, generated, or vendored folders that should not be indexed.
-- `languages.extensions` maps additional or built-in suffixes to supported language IDs; keys must start with `.`, values must name a supported language, and the longest suffix wins.
-- Built-in suffixes remain active unless explicitly remapped by `languages.extensions`.
+- `languages.extensions` maps additional or built-in literal suffixes to supported language IDs; keys must start with `.` and may contain letters, digits, `.`, `_`, `+`, and `-`, values must name a supported language, and the longest suffix wins.
+- Built-in suffixes remain active unless explicitly remapped by `languages.extensions`; `.vue` and `.svelte` are always handled as single-file components and cannot be remapped.
 - CLI `--include-glob` and `--ignore-glob` values are one-off additions relative to each scanned root.
 - `inspect` follow-up commands preserve the selected `--root` and include roots.
 - `--no-gitignore` overrides `useGitignore`.

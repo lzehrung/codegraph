@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizeLanguageExtensions } from "../../languages.js";
 import type { GraphBuildOptions } from "../../graphs/types.js";
 import { normalizePath, normalizeResolutionHints } from "../../util/paths.js";
 import type { ProjectFileDiscoveryOptions } from "../../util/projectFiles.js";
@@ -53,14 +54,7 @@ function normalizeDiscoveryOptions(discovery?: ProjectFileDiscoveryOptions): Man
   };
 }
 
-export function normalizeLanguageExtensions(extensions?: Record<string, string>): Record<string, string> | undefined {
-  const entries = Object.entries(extensions ?? {})
-    .map(([key, value]) => [key.trim().toLowerCase(), value.trim()] as const)
-    .filter(([key, value]) => key.startsWith(".") && value)
-    .sort((left, right) => left[0].localeCompare(right[0]));
-  if (!entries.length) return undefined;
-  return Object.fromEntries(entries);
-}
+export { normalizeLanguageExtensions } from "../../languages.js";
 
 function normalizeBuildOptions(opts?: BuildOptions): ManifestBuildOptions {
   const discovery = normalizeDiscoveryOptions(opts?.discovery);

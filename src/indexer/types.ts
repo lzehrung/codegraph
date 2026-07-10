@@ -128,7 +128,7 @@ export type ProjectIndex = {
  * optional `discovery` globs, and a `report` object when the caller wants
  * timings/backend diagnostics alongside the resulting index.
  */
-export type LanguageExtensionMap = Record<string, string>;
+export type LanguageExtensionMap = import("../languages.js").LanguageExtensionMap;
 
 export type BuildOptions = {
   onProgress?: ((progress: ProgressUpdate) => void) | undefined;

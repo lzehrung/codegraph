@@ -1,7 +1,6 @@
-import path from "node:path";
 import type { ParserLanguage } from "./parserBackend.js";
 import { prepareSourceInput } from "./languages/filePrep.js";
-import type { LanguageExtensionMap, LanguageSupport } from "./languages.js";
+import { supportForFile, type LanguageExtensionMap, type LanguageSupport } from "./languages.js";
 import type { Edge } from "./types.js";
 import { loadNearestTsconfigFor } from "./util/resolution.js";
 import type { WorkspaceConfig } from "./util/workspace.js";
@@ -64,7 +63,7 @@ export async function collectEdgesForFile(
   const sigEntry = opts.fileSignature;
   const sig = sigEntry?.sig;
   const gitSig = sigEntry?.gitSig;
-  const sqlFile = path.extname(normalizedFile).toLowerCase() === ".sql";
+  const sqlFile = supportForFile(normalizedFile, opts.languageExtensions)?.id === "sql";
 
   const emitCacheEntry = (edges: Edge[]) => {
     if (!sig || !opts.onFileEdges) return;
@@ -118,7 +117,7 @@ export async function collectEdgesForFile(
 
   if (sup.id === "sql") {
     const allFiles = opts.allFiles ?? [normalizedFile];
-    const sqlEdges = await collectSqlEdgesForFile(normalizedFile, allFiles, opts.sqlFactCache);
+    const sqlEdges = await collectSqlEdgesForFile(normalizedFile, allFiles, opts.sqlFactCache, opts.languageExtensions);
     emitCacheEntry(sqlEdges);
     return sqlEdges;
   }

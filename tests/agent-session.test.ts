@@ -92,6 +92,48 @@ describe("agent session", () => {
     expect(buildOptions?.useBloomFilters).toBe(false);
   });
 
+  it("discovers built-in and configured custom files and forwards the normalized mapping", async () => {
+    const root = await mkRepo();
+    const customPath = path.join(root, "feature.custom");
+    await fs.writeFile(customPath, "export const customFeature = 1;\n");
+    await fs.writeFile(
+      path.join(root, "codegraph.config.json"),
+      JSON.stringify({ languages: { extensions: { ".CUSTOM": " ts " } } }),
+    );
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+
+    const snapshot = await createAgentSession({ root }).loadProject({ symbolGraph: "skip" });
+
+    expect(snapshot.files.map((file) => path.basename(file)).sort()).toEqual([
+      "feature.custom",
+      "main.ts",
+      "schema.sql",
+      "util.ts",
+    ]);
+    expect(snapshot.index.byFile.get(customPath.replace(/\\/g, "/"))?.locals.map((local) => local.localName)).toContain(
+      "customFeature",
+    );
+    expect(buildSpy.mock.calls[0]?.[1]?.languageExtensions).toEqual({ ".custom": "ts" });
+  });
+
+  it("uses programmatic language extensions when listing agent session files", async () => {
+    const root = await mkRepo();
+    await fs.writeFile(path.join(root, "feature.custom"), "export const customFeature = 1;\n");
+
+    const files = await createAgentSession({
+      root,
+      useConfig: false,
+      buildOptions: { languageExtensions: { ".CUSTOM": " ts " } },
+    }).listFiles?.();
+
+    expect(files?.map((file) => path.basename(file)).sort()).toEqual([
+      "feature.custom",
+      "main.ts",
+      "schema.sql",
+      "util.ts",
+    ]);
+  });
+
   it("auto-enables native workers for large agent builds unless explicitly disabled", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-session-large-"));
     for (let index = 0; index < 260; index += 1) {

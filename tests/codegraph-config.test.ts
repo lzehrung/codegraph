@@ -6,7 +6,7 @@ import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions } from 
 import { searchCodegraph } from "../src/agent/search.js";
 import { buildProjectIndex, type BuildReport } from "../src/indexer/build-index.js";
 import { diffBuildOptions, summarizeBuildOptions } from "../src/indexer/build-cache.js";
-import { supportForFile } from "../src/languages.js";
+import { normalizeLanguageExtensions, supportForFile } from "../src/languages.js";
 
 async function mkRepo(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-config-"));
@@ -29,6 +29,7 @@ async function buildWithProjectConfig(root: string) {
   const config = await loadCodegraphConfig(root);
   return await buildProjectIndex(root, {
     cache: "disk",
+    ...(config.discovery ? { discovery: config.discovery } : {}),
     ...(config.languages?.extensions ? { languageExtensions: config.languages.extensions } : {}),
   });
 }
@@ -166,27 +167,27 @@ describe("codegraph config", () => {
     const config = await loadCodegraphConfig(root);
 
     expect(config.languages?.extensions).toEqual({ ".tpl": "php" });
-    expect(config.discovery?.includeGlobs).toEqual(["**/*.tpl"]);
   });
 
-  it("indexes configured nonstandard extensions with the mapped language", async () => {
+  it("discovers uppercase custom suffixes from normalized config mappings without narrowing built-ins", async () => {
     const root = await mkRepo();
     await fs.writeFile(
-      path.join(root, "src", "template.tpl"),
+      path.join(root, "src", "template.TPL"),
       "<?php function mapped_template() { return 1; }\n",
       "utf8",
     );
     await writeConfig(root, {
       languages: {
         extensions: {
-          ".tpl": "php",
+          ".TPL": "php",
         },
       },
     });
 
     const index = await buildWithProjectConfig(root);
 
-    expect(localExportNames(index, root, "src/template.tpl")).toContain("mapped_template");
+    expect(localExportNames(index, root, "src/kept.ts")).toEqual(["keptAlpha"]);
+    expect(localExportNames(index, root, "src/template.TPL")).toEqual(["mapped_template"]);
   });
 
   it("uses the longest configured extension match before shorter remaps", async () => {
@@ -308,6 +309,87 @@ describe("codegraph config", () => {
     );
   });
 
+  it("ignores glob metacharacter suffixes in programmatic support and cache options", () => {
+    const validMapping = { ".tpl": "html" };
+    const withMetacharacter = { ...validMapping, ".foo[bar]": "php" };
+
+    expect(supportForFile("widget.foo[bar]", withMetacharacter)).toBeUndefined();
+    expect(summarizeBuildOptions({ languageExtensions: withMetacharacter })).toEqual(
+      summarizeBuildOptions({ languageExtensions: validMapping }),
+    );
+  });
+
+  it("keeps Vue and Svelte built-in support and cache options when programmatic remaps are attempted", () => {
+    const validMapping = { ".tpl": "html" };
+    const withSfcRemaps = { ...validMapping, ".vue": "php", ".svelte": "php" };
+
+    expect(supportForFile("Component.vue", withSfcRemaps)?.id).toBe("vue");
+    expect(supportForFile("Component.svelte", withSfcRemaps)?.id).toBe("svelte");
+    expect(summarizeBuildOptions({ languageExtensions: withSfcRemaps })).toEqual(
+      summarizeBuildOptions({ languageExtensions: validMapping }),
+    );
+  });
+
+  it("drops unknown language IDs while normalizing programmatic extension mappings", () => {
+    const normalized = normalizeLanguageExtensions({
+      ".TPL": " html ",
+      ".unknown": "wat",
+      ".PHP": " php ",
+    });
+
+    expect(Object.entries(normalized ?? {})).toEqual([
+      [".php", "php"],
+      [".tpl", "html"],
+    ]);
+  });
+
+  it("continues to a valid shorter mapping after ignoring an unknown language ID", () => {
+    const support = supportForFile("widget.component.tpl", {
+      ".component.tpl": "wat",
+      ".tpl": "html",
+    });
+
+    expect(support?.id).toBe("html");
+  });
+
+  it("does not discover files solely because an unknown language ID maps their extension", async () => {
+    const root = await mkRepo();
+    await fs.writeFile(
+      path.join(root, "src", "template.tpl"),
+      "<?php function programmatic_template() { return 1; }\n",
+      "utf8",
+    );
+    await fs.writeFile(path.join(root, "src", "ignored.unknown"), "ignored contents\n", "utf8");
+
+    const index = await buildProjectIndex(root, {
+      cache: "off",
+      languageExtensions: {
+        ".unknown": "wat",
+        ".tpl": "php",
+      },
+    });
+
+    expect(localExportNames(index, root, "src/template.tpl")).toContain("programmatic_template");
+    expect(index.byFile.has(normalizedFile(root, "src/ignored.unknown"))).toBe(false);
+  });
+
+  it("ignores unknown language IDs when comparing manifest build options", () => {
+    const validOnly = summarizeBuildOptions({
+      languageExtensions: { ".tpl": "html" },
+    });
+    const withUnknownLanguage = summarizeBuildOptions({
+      languageExtensions: { ".tpl": "html", ".unknown": "wat" },
+    });
+
+    expect(withUnknownLanguage).toEqual(validOnly);
+    expect(
+      diffBuildOptions(
+        { languageExtensions: { ".tpl": "html", ".unknown": "wat" } },
+        { languageExtensions: { ".tpl": "html" } },
+      ),
+    ).not.toContain("languageExtensions");
+  });
+
   it("rejects language extension keys that do not start with a dot", async () => {
     const root = await mkRepo();
     await writeConfig(root, {
@@ -319,6 +401,36 @@ describe("codegraph config", () => {
     });
 
     await expect(loadCodegraphConfig(root)).rejects.toThrow('languages.extensions key "tpl" must start with "."');
+  });
+
+  it("rejects glob metacharacters in configured extension suffixes", async () => {
+    const root = await mkRepo();
+    await writeConfig(root, {
+      languages: {
+        extensions: {
+          ".foo[bar]": "php",
+        },
+      },
+    });
+
+    await expect(loadCodegraphConfig(root)).rejects.toThrow(
+      'languages.extensions key ".foo[bar]" must be a literal suffix containing only letters, digits, ".", "_", "+", or "-"',
+    );
+  });
+
+  it.each([".vue", ".svelte"])("rejects configured remapping of the built-in %s suffix", async (extension) => {
+    const root = await mkRepo();
+    await writeConfig(root, {
+      languages: {
+        extensions: {
+          [extension]: "php",
+        },
+      },
+    });
+
+    await expect(loadCodegraphConfig(root)).rejects.toThrow(
+      `languages.extensions key "${extension}" cannot be remapped`,
+    );
   });
 
   it("rejects language extension mappings to unknown languages", async () => {

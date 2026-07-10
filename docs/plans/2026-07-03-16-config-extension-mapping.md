@@ -35,10 +35,10 @@ type CodegraphConfig = {
 
 Rules:
 
-- Extension keys must start with `.`.
+- Extension keys must be literal suffixes starting with `.` and containing only letters, digits, `.`, `_`, `+`, or `-`.
 - Values must be supported language ids.
 - Longer extension keys win first, so `.inc.php` beats `.php`.
-- Built-in extensions remain unless explicitly remapped.
+- Built-in extensions remain unless explicitly remapped; `.vue` and `.svelte` remain single-file components and cannot be remapped.
 - Invalid mappings fail config validation with actionable errors.
 
 ## Integration

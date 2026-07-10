@@ -75,14 +75,42 @@ export const LANGUAGE_SUPPORTS: LanguageSupport[] = getAllLanguages().map(adaptD
 
 export type LanguageExtensionMap = Record<string, string>;
 
+const LANGUAGE_EXTENSION_KEY_PATTERN = /^\.[a-z0-9][a-z0-9._+-]*$/;
+const NON_REMAPPABLE_EXTENSIONS = new Set([".vue", ".svelte"]);
+
+export function isLiteralLanguageExtension(extension: string): boolean {
+  return LANGUAGE_EXTENSION_KEY_PATTERN.test(extension.trim().toLowerCase());
+}
+
+export function isRemappableLanguageExtension(extension: string): boolean {
+  return !NON_REMAPPABLE_EXTENSIONS.has(extension.trim().toLowerCase());
+}
+
+export function normalizeLanguageExtensions(
+  extensions: LanguageExtensionMap | undefined,
+): LanguageExtensionMap | undefined {
+  const entries = Object.entries(extensions ?? {})
+    .map(([extension, languageId]) => [extension.trim().toLowerCase(), languageId.trim()] as const)
+    .filter(
+      ([extension, languageId]) =>
+        isLiteralLanguageExtension(extension) && isRemappableLanguageExtension(extension) && !!supportById(languageId),
+    )
+    .sort((left, right) => left[0].localeCompare(right[0]));
+  if (!entries.length) return undefined;
+  return Object.fromEntries(entries);
+}
+
+export function languageExtensionPatterns(extensions: LanguageExtensionMap | undefined): string[] {
+  return Object.keys(normalizeLanguageExtensions(extensions) ?? {}).map((extension) => `**/*${extension}`);
+}
+
 function mappedSupportForFile(
   filename: string,
   extensionMap: LanguageExtensionMap | undefined,
 ): LanguageSupport | undefined {
-  const mappings = Object.entries(extensionMap ?? {})
-    .map(([extension, languageId]) => [extension.trim().toLowerCase(), languageId.trim()] as const)
-    .filter(([extension, languageId]) => extension.startsWith(".") && languageId)
-    .sort((left, right) => right[0].length - left[0].length || left[0].localeCompare(right[0]));
+  const mappings = Object.entries(normalizeLanguageExtensions(extensionMap) ?? {}).sort(
+    (left, right) => right[0].length - left[0].length || left[0].localeCompare(right[0]),
+  );
   const lowerFilename = filename.toLowerCase();
   for (const [extension, languageId] of mappings) {
     if (!lowerFilename.endsWith(extension)) continue;
