@@ -1000,17 +1000,20 @@ describe("CLI command modules", () => {
     }
   });
 
-  test("writes graph delta output through the extracted graph-delta command handler", async () => {
+  test("forwards custom language mappings through the graph-delta command handler", async () => {
     const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-delta-module-"));
     const outputPath = path.join(tempDir, "delta.json");
-    const sourcePath = path.join(tempDir, "main.ts");
+    const sourcePath = path.join(tempDir, "main.tpl");
+    const helperPath = path.join(tempDir, "helper.ts");
     await fsp.writeFile(sourcePath, "import { helper } from './helper';\nhelper();\n", "utf8");
-    await fsp.writeFile(path.join(tempDir, "helper.ts"), "export function helper() { return 1; }\n", "utf8");
+    await fsp.writeFile(helperPath, "export function helper() { return 1; }\n", "utf8");
+    const languageExtensions = { ".tpl": "ts" };
+    const expectedEdge = { from: "main.tpl", to: { type: "file", path: "helper.ts" }, raw: "./helper" };
 
     try {
       await handleGraphDeltaCommand({
         projectRootFs: tempDir,
-        files: [sourcePath],
+        files: [sourcePath, helperPath],
         getOpt: (name) => {
           if (name === "--output") return outputPath;
           return undefined;
@@ -1020,6 +1023,7 @@ describe("CLI command modules", () => {
         nativeMode: "auto",
         workerOpts: {},
         graphOptions: undefined,
+        languageExtensions,
         gitBase: undefined,
         gitHead: undefined,
         changedSince: undefined,
@@ -1032,7 +1036,9 @@ describe("CLI command modules", () => {
       });
 
       const report = readJsonRecord(JSON.parse(await fsp.readFile(outputPath, "utf8")));
-      expect(report.changedFiles).toEqual(["main.ts"]);
+      expect(report.changedFiles).toEqual(["helper.ts", "main.tpl"]);
+      expect(report.added).toEqual([expectedEdge]);
+      expect(report.removed).toEqual([]);
     } finally {
       await fsp.rm(tempDir, { recursive: true, force: true });
     }
@@ -1149,6 +1155,7 @@ describe("CLI command modules", () => {
         nativeMode: "auto",
         workerOpts: {},
         graphOptions: undefined,
+        languageExtensions: undefined,
         gitBase: undefined,
         gitHead: undefined,
         changedSince: undefined,

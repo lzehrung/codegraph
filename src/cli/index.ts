@@ -70,6 +70,7 @@ export async function handleIndexCommand(context: IndexCommandContext): Promise<
     threads,
     discovery: context.discoveryOptions,
     ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
+    ...(context.languageExtensions ? { languageExtensions: context.languageExtensions } : {}),
     ...context.workerOpts,
     cache: cache ?? "disk",
     cacheStrict,

@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from "vitest";
 import type { ICodeReviewSession } from "../src/index.js";
-import type { BuildOptions, BuildReport } from "../src/indexer/types.js";
+import type { BuildOptions, BuildReport, LanguageExtensionMap } from "../src/indexer/types.js";
 import { CodeReviewSession, SessionManager, createCodeReviewSession } from "../src/session.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
 import path from "node:path";
@@ -102,6 +102,35 @@ describe("CodeReviewSession", () => {
       expect(session.getStatus()).toBe("ready");
       expect(requestedReport?.timings).toBeDefined();
       expect(buildSpy).toHaveBeenCalledTimes(1);
+      session.dispose();
+    } finally {
+      buildSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("should apply codegraph.config.json language extension mappings when buildOptions.languageExtensions is explicitly empty", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-lang-ext-empty-"));
+    await fsp.writeFile(path.join(root, "main.ts"), "export const value = 1;\n", "utf8");
+    await fsp.writeFile(
+      path.join(root, "codegraph.config.json"),
+      JSON.stringify({ languages: { extensions: { ".tpl": "html" } } }),
+      "utf8",
+    );
+    const originalBuild = indexerBuild.buildProjectIndexIncremental;
+    let requestedLanguageExtensions: LanguageExtensionMap | undefined;
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+      requestedLanguageExtensions = args[1]?.languageExtensions;
+      return await originalBuild(...args);
+    });
+
+    try {
+      const session = await createCodeReviewSession({
+        root,
+        buildOptions: { cache: "memory", useBloomFilters: true, languageExtensions: {} },
+      });
+
+      expect(requestedLanguageExtensions).toEqual({ ".tpl": "html" });
       session.dispose();
     } finally {
       buildSpy.mockRestore();
@@ -1366,6 +1395,34 @@ describe("SessionManager", () => {
         buildOptions: sampleBuildOptions({ cache: "disk" }),
       }),
     ).rejects.toThrow(/different configuration/);
+  });
+
+  test("should reuse a session when languageExtensions is empty instead of omitted", async () => {
+    const session1 = await manager.getOrCreateSession("shared", {
+      root: sampleRoot,
+      buildOptions: sampleBuildOptions(),
+    });
+
+    const session2 = await manager.getOrCreateSession("shared", {
+      root: sampleRoot,
+      buildOptions: sampleBuildOptions({ languageExtensions: {} }),
+    });
+
+    expect(session2).toBe(session1);
+  });
+
+  test("should reuse a session when languageExtensions has a redundant non-dot key", async () => {
+    const session1 = await manager.getOrCreateSession("shared", {
+      root: sampleRoot,
+      buildOptions: sampleBuildOptions({ languageExtensions: { ".tpl": "html" } }),
+    });
+
+    const session2 = await manager.getOrCreateSession("shared", {
+      root: sampleRoot,
+      buildOptions: sampleBuildOptions({ languageExtensions: { ".tpl": "html", tpl: "html" } }),
+    });
+
+    expect(session2).toBe(session1);
   });
 
   test("should reject reusing a session id when graph options drift", async () => {

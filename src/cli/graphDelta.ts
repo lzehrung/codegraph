@@ -16,6 +16,7 @@ export type GraphDeltaCommandContext = {
   nativeMode: NativeRuntimeMode;
   workerOpts: { useNativeWorkers: true } | Record<string, never>;
   graphOptions: GraphBuildOptions | undefined;
+  languageExtensions: IncrementalBuildOptions["languageExtensions"];
   gitBase: string | undefined;
   gitHead: string | undefined;
   changedSince: string | undefined;
@@ -40,6 +41,7 @@ export async function handleGraphDeltaCommand(context: GraphDeltaCommandContext)
     files: context.files,
     ...(context.progressHandler ? { onProgress: context.progressHandler } : {}),
   };
+  if (context.languageExtensions) deltaOptions.languageExtensions = context.languageExtensions;
   if (context.nativeMode !== "auto") deltaOptions.native = context.nativeMode;
   if (cache !== undefined) deltaOptions.cache = cache;
   if (context.gitBase) deltaOptions.gitBase = context.gitBase;

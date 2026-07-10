@@ -315,6 +315,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
             }
           : {}),
         ...(discoveryOptions ? { discovery: discoveryOptions } : {}),
+        ...(languageExtensions ? { languageExtensions } : {}),
       };
       if (options.buildOptions?.useNativeWorkers === undefined && files.length >= NATIVE_WORKER_AUTO_FILE_THRESHOLD) {
         buildOptions.useNativeWorkers = true;

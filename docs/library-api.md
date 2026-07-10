@@ -28,7 +28,7 @@ For repeated calls, prefer one warm session instead of rebuilding indexes ad hoc
 - `createCodeReviewSession()` for repeated navigation and impact work in library code
 - `createAgentSession()` or MCP for repeated orient/search/explain/packet work in agent hosts
 
-CLI commands and agent sessions read `codegraph.config.json` from the project root when it exists. Core indexing APIs keep discovery explicit, so pass `discovery` options directly when you want the same scan scope in custom code:
+CLI commands and agent sessions read `codegraph.config.json` from the project root when it exists. Core indexing APIs keep discovery and language mappings explicit, so pass both options directly when you want the same behavior in custom code:
 
 ```ts
 import { buildProjectIndex, loadCodegraphConfig } from "@lzehrung/codegraph";
@@ -40,6 +40,8 @@ const index = await buildProjectIndex(root, {
   ...(config.graph ? { graph: config.graph } : {}),
 });
 ```
+
+`languageExtensions` uses normalized literal suffixes beginning with `.`, supported language IDs, and longest-suffix matching. Suffixes may contain letters, digits, `.`, `_`, `+`, and `-`; `.vue` and `.svelte` remain single-file components and cannot be remapped.
 
 ## Public API Boundary
 

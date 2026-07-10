@@ -1,4 +1,5 @@
 import { isGraphOnlyLanguage } from "../documentLinks.js";
+import type { LanguageExtensionMap } from "../languages.js";
 import { prepareSourceInput } from "../languages/filePrep.js";
 import {
   getNativeQueryExecution,
@@ -115,8 +116,12 @@ export function parsePreparedFileContext(context: PreparedFileContext): ParsedFi
   throw new Error(`Failed to reconstruct syntax tree for ${context.file}`);
 }
 
-export async function prepareFileForIndexing(file: string, native?: NativeRuntimeMode): Promise<PreparedFileContext> {
-  const prep = await prepareSourceInput(file);
+export async function prepareFileForIndexing(
+  file: string,
+  native?: NativeRuntimeMode,
+  languageExtensions?: LanguageExtensionMap,
+): Promise<PreparedFileContext> {
+  const prep = await prepareSourceInput(file, { languageExtensions });
   if (isGraphOnlyLanguage(prep.sup.id)) {
     return {
       file,

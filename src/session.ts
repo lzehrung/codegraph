@@ -15,6 +15,7 @@ import {
   type SymbolDef,
 } from "./indexer/types.js";
 import { buildProjectIndex, buildProjectIndexIncremental } from "./indexer/build-index.js";
+import { normalizeLanguageExtensions } from "./indexer/build-cache.js";
 import { findReferences, goToDefinition } from "./indexer/navigation.js";
 import {
   analyzeImpactFromDiff,
@@ -110,6 +111,7 @@ function normalizeBuildOptions(options?: BuildOptions): Record<string, unknown> 
           gitignoreRoot: options.discovery.gitignoreRoot ? path.resolve(options.discovery.gitignoreRoot) : undefined,
         }
       : undefined,
+    languageExtensions: normalizeLanguageExtensions(options.languageExtensions),
   };
 }
 

@@ -36,6 +36,7 @@ export {
   diffBuildOptions,
   graphOptionsEqual,
   normalizeGraphOptions,
+  normalizeLanguageExtensions,
   summarizeBuildOptions,
   type ManifestBuildOptions,
 } from "./build-cache/options.js";
