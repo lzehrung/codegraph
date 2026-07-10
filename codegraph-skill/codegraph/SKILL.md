@@ -72,7 +72,8 @@ Treat duplicate leads and call-compatibility hints as review leads, not proof.
 ## MCP
 
 If MCP tools are available, prefer them over repeated CLI invocations.
-Use MCP `explore`, `orient`, `search`, `packet_get`, `goto`, `refs`, `deps`, `rdeps`, `path`, `impact`, `review`, and `query_sqlite` first.
+Use MCP `explore`, `orient`, `search`, `get_file`, `packet_get`, `goto`, `refs`, `deps`, `rdeps`, `path`, `impact`, `review`, and `query_sqlite` first.
+Use `get_file` for bounded live file reads; its content uses exact `number<TAB>line` formatting. Set `includeGraphContext: true` to opt into direct graph context capped at 100 importers, imports, and symbols each.
 After edits, check MCP response `freshness`: `refreshed` means Codegraph rebuilt before answering, and `stale` includes a reason plus bounded changed-file metadata before indexed context is trusted.
 Run `refresh_index` before `artifact_build` when MCP reports a stale index; artifact writes refuse stale snapshots.
 Fall back to CLI when MCP is unavailable.
