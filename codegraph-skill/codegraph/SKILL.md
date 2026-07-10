@@ -80,11 +80,11 @@ codegraph file src/auth.ts --offset 201 --limit 200 --max-bytes 80000
 codegraph file src/auth.ts --include-graph-context --pretty
 ```
 
-`content` is exact `number<TAB>line` text with no line-number padding, while `text` omits number prefixes. A trailing newline becomes a final numbered empty line. Known binary extensions, NUL-containing input, and malformed or incomplete UTF-8 anywhere in the file are rejected because the full byte stream is scanned for exact `totalLines`, while returned `content` and `text` remain page-bounded.
+`content` is exact `number<TAB>line` text with no line-number padding, while `text` omits number prefixes. A trailing newline becomes a final numbered empty line. Ordinary reads validate the full raw stream for exact `totalLines`, rejecting known binary extensions, NUL bytes, and malformed or incomplete UTF-8 while keeping returned `content` and `text` page-bounded.
 
 Graph context is never automatic. Add `--include-graph-context` only when direct `usedBy` paths, imports, and symbols are worth an index/freshness check; ordinary file bytes stay live and independent of index freshness.
 
-Known environment, authentication, credential, and key-material paths return structural summaries by default. Use `--allow-sensitive` only when raw values are deliberately required.
+Recognized environment, authentication, and credential text configs return structural summaries by default after the full raw stream is validated. Key material instead returns a metadata-only summary without reading raw secret bytes. Use `--allow-sensitive` only for deliberate raw access; it does not bypass binary, NUL, or UTF-8 guards, so `.p12` and `.pfx` bundles summarize by default and reject raw access.
 
 An exact project-relative file-path query such as `codegraph explore src/auth.ts --json` adds the same response as `fileView`; `--no-source` suppresses it. `--include-graph-context` and `--allow-sensitive` pass through only when explicitly present.
 

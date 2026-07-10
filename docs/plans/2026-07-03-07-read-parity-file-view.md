@@ -85,8 +85,8 @@ An `explore` query consisting only of an indexed project-relative path, or a uni
 ## Safety
 
 - Constrain paths to `root` or `--root` after final realpath resolution.
-- Reject known binary extensions, NUL-containing input, and malformed or incomplete UTF-8 anywhere in the file; the full byte stream is scanned for exact `totalLines`, while returned `content` and `text` remain page-bounded.
-- Return bounded structural key or key-material summaries for known secret-prone formats unless `allowSensitive: true` or `--allow-sensitive` is explicit; summary `truncated` reports an incomplete bounded scan.
+- For ordinary reads and structural summaries of recognized environment, authentication, and credential text configs, validate the full raw stream and reject known binary extensions, NUL bytes, and malformed or incomplete UTF-8 before returning bounded content or extracting bounded keys.
+- For default key-material reads, return file metadata without reading raw secret bytes. Explicit `allowSensitive: true` or `--allow-sensitive` raw access remains subject to the binary, NUL, and UTF-8 guards, so `.p12` and `.pfx` bundles summarize by default and reject raw access.
 - Read live bytes without requiring fresh index state; check freshness only for requested graph context.
 
 ## Implementation surface
@@ -103,7 +103,7 @@ An `explore` query consisting only of an indexed project-relative path, or a uni
 - Exact `1\ttext` number-tab-line format and unnumbered `text`.
 - 1-based offset, line limit, byte limit, exact whole-file `totalLines`, and `nextOffset` pagination beyond the former prefix.
 - Stable trailing empty line for a file-ending newline.
-- Root confinement, binary rejection, sensitive structural summaries, and explicit raw-sensitive override.
+- Root confinement, binary rejection, text-config structural summaries, key-material metadata summaries, and guarded explicit raw-sensitive access.
 - Live disk changes remain visible independently of stale index state.
 - Graph context is absent by default and bounded when explicitly requested.
 - Exact file-path explore responses include `fileView`; broad queries and no-source mode do not.

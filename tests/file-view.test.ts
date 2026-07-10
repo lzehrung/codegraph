@@ -282,6 +282,53 @@ describe("agent file view", () => {
     );
   });
 
+  it.each([
+    { file: "client-identity.p12", marker: "p12-private-key-secret" },
+    { file: "client-identity.pfx", marker: "pfx-private-key-secret" },
+  ])("redacts binary $file as key-material metadata unless raw access is requested", async ({ file, marker }) => {
+    const root = await makeTempDir("cg-file-view-key-bundle-");
+    const payload = Buffer.concat([Buffer.from(marker, "utf8"), Buffer.from([0x00, 0xff, 0x01])]);
+    await writeFile(root, file, payload);
+
+    const redacted = await getCodegraphFileView({ root, file, limit: 10, maxBytes: 100 });
+
+    expect(redacted).toMatchObject({
+      file,
+      totalLines: 2,
+      text: `Sensitive key material omitted.\nSize: ${payload.length} bytes.`,
+      content: `1\tSensitive key material omitted.\n2\tSize: ${payload.length} bytes.`,
+      sensitive: { kind: "key-material", redacted: true, allowSensitiveRequired: true },
+    });
+    expect(JSON.stringify(redacted)).not.toContain(marker);
+
+    await expect(getCodegraphFileView({ root, file, limit: 10, maxBytes: 100, allowSensitive: true })).rejects.toThrow(
+      /Binary files are not supported:/,
+    );
+  });
+
+  it("returns metadata for a NUL-bearing .key file but validates and rejects explicit raw access", async () => {
+    const root = await makeTempDir("cg-file-view-key-file-");
+    const file = "signing.key";
+    const marker = "private-key-secret";
+    const payload = Buffer.concat([Buffer.from(marker, "utf8"), Buffer.from([0x00, 0xff])]);
+    await writeFile(root, file, payload);
+
+    const redacted = await getCodegraphFileView({ root, file, limit: 10, maxBytes: 100 });
+
+    expect(redacted).toMatchObject({
+      file,
+      totalLines: 2,
+      text: `Sensitive key material omitted.\nSize: ${payload.length} bytes.`,
+      content: `1\tSensitive key material omitted.\n2\tSize: ${payload.length} bytes.`,
+      sensitive: { kind: "key-material", redacted: true, allowSensitiveRequired: true },
+    });
+    expect(JSON.stringify(redacted)).not.toContain(marker);
+
+    await expect(getCodegraphFileView({ root, file, limit: 10, maxBytes: 100, allowSensitive: true })).rejects.toThrow(
+      /Binary files are not supported:/,
+    );
+  });
+
   it("redacts sensitive values into a key-only summary unless raw access is explicit", async () => {
     const root = await makeTempDir("cg-file-view-sensitive-");
     await writeFile(root, ".env", "API_TOKEN=super-secret\nUSER=alice\n");

@@ -482,20 +482,21 @@ function classifySensitiveFile(filePath: string): AgentFileViewSensitiveKind | u
   if (/^(?:credentials?|secrets?|service-account)(?:\.[^.]+)*\.(?:json|ya?ml|toml|ini)$/i.test(basename)) {
     return "credential-config";
   }
-  if (/\.(?:key|pem)$/i.test(basename) || /^(?:id_rsa|id_dsa|id_ecdsa|id_ed25519)$/i.test(basename)) {
+  if (/\.(?:key|pem|p12|pfx)$/i.test(basename) || /^(?:id_rsa|id_dsa|id_ecdsa|id_ed25519)$/i.test(basename)) {
     return "key-material";
   }
   return undefined;
 }
 
 async function buildSensitiveSummary(filePath: string, kind: AgentFileViewSensitiveKind): Promise<SensitiveSummary> {
-  const scan = await scanTextFilePrefix(filePath, SENSITIVE_SCAN_BYTES);
   if (kind === "key-material") {
+    const stat = await fs.stat(filePath);
     return {
-      text: `Sensitive key material omitted.\nSize: ${scan.totalBytes} bytes.`,
+      text: `Sensitive key material omitted.\nSize: ${stat.size} bytes.`,
       scanTruncated: false,
     };
   }
+  const scan = await scanTextFilePrefix(filePath, SENSITIVE_SCAN_BYTES);
 
   const text = UTF8_DECODER.decode(trimToUtf8Boundary(scan.prefix));
   const keys = extractSensitiveKeys(text).slice(0, SENSITIVE_KEY_LIMIT);

@@ -74,7 +74,7 @@ codegraph explore src/auth.ts --json
 codegraph explore src/auth.ts --include-graph-context --pretty
 ```
 
-Binary files are rejected. Secret-prone formats return structural keys or key-material metadata instead of raw values unless `--allow-sensitive` is passed intentionally; see [CLI reference](./cli.md#live-file-views) for exact fields, limits, trailing-newline behavior, and sensitive kinds.
+Secret-prone text configs return structural keys instead of raw values unless `--allow-sensitive` is passed intentionally; key material defaults to metadata without reading raw secret bytes. Raw access still rejects known binary extensions, NUL bytes, and malformed or incomplete UTF-8, so `.p12` and `.pfx` bundles remain metadata-only in practice. See [CLI reference](./cli.md#live-file-views) for exact fields, limits, trailing-newline behavior, and sensitive kinds.
 
 ## Orientation packets
 
