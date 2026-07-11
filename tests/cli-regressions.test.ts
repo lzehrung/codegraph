@@ -905,18 +905,7 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
       hotspots: Array<{ file: string; fanIn: number; fanOut: number; score: number }>;
       unresolved: { total: number; top: Array<{ name: string; importerCount: number }> };
       cycles: { total: number; top: Array<{ files: string[]; priorityScore: number; size: number }> };
-      duplicates: {
-        total: number;
-        omitted: number;
-        minConfidence: string;
-        top: Array<{
-          confidence: string;
-          cloneType: string;
-          left: { file: string; startLine: number; endLine: number; tokenCount: number; name?: string };
-          right: { file: string; startLine: number; endLine: number; tokenCount: number; name?: string };
-          rawPairCount: number;
-        }>;
-      };
+      duplicates: { enabled: false };
       recommendedCommands: string[];
     };
 
@@ -932,16 +921,35 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     expect(report.unresolved.top).toEqual([]);
     expect(report.cycles.total).toBe(0);
     expect(report.cycles.top).toEqual([]);
-    expect(report.duplicates.total).toBeGreaterThan(0);
-    expect(report.duplicates.omitted).toBeGreaterThanOrEqual(0);
-    expect(report.duplicates.minConfidence).toBe("high");
-    expect(report.duplicates.top).toHaveLength(1);
-    expect(report.duplicates.top[0]?.confidence).toBe("high");
-    expect(report.duplicates.top[0]?.cloneType).toBe("exact");
-    expect(report.duplicates.top[0]?.left.file).toBe("src/c.ts");
-    expect(report.duplicates.top[0]?.right.file).toBe("src/d.ts");
-    expect(report.duplicates.top[0]?.left.tokenCount).toBeGreaterThan(40);
-    expect(report.duplicates.top[0]?.rawPairCount).toBeGreaterThan(0);
+    expect(report.duplicates).toEqual({ enabled: false });
+
+    const duplicatesStdout = await runCliCommand(["inspect", "--duplicates", "--root", tmpDir, srcDir, "--limit", "1"]);
+    const duplicatesReport = JSON.parse(duplicatesStdout) as {
+      duplicates: {
+        enabled: true;
+        total: number;
+        omitted: number;
+        minConfidence: string;
+        top: Array<{
+          confidence: string;
+          cloneType: string;
+          left: { file: string; startLine: number; endLine: number; tokenCount: number; name?: string };
+          right: { file: string; startLine: number; endLine: number; tokenCount: number; name?: string };
+          rawPairCount: number;
+        }>;
+      };
+    };
+    expect(duplicatesReport.duplicates.enabled).toBe(true);
+    expect(duplicatesReport.duplicates.total).toBeGreaterThan(0);
+    expect(duplicatesReport.duplicates.omitted).toBeGreaterThanOrEqual(0);
+    expect(duplicatesReport.duplicates.minConfidence).toBe("high");
+    expect(duplicatesReport.duplicates.top).toHaveLength(1);
+    expect(duplicatesReport.duplicates.top[0]?.confidence).toBe("high");
+    expect(duplicatesReport.duplicates.top[0]?.cloneType).toBe("exact");
+    expect(duplicatesReport.duplicates.top[0]?.left.file).toBe("src/c.ts");
+    expect(duplicatesReport.duplicates.top[0]?.right.file).toBe("src/d.ts");
+    expect(duplicatesReport.duplicates.top[0]?.left.tokenCount).toBeGreaterThan(40);
+    expect(duplicatesReport.duplicates.top[0]?.rawPairCount).toBeGreaterThan(0);
     expect(report.recommendedCommands).toContain(
       `codegraph hotspots --root "${normalize(tmpDir)}" "${normalize(srcDir)}" --limit 20 --json`,
     );

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { NATIVE_WORKER_AUTO_FILE_THRESHOLD } from "../agent/session.js";
 import { findDuplicates, type DuplicateConfidence, type DuplicateGroup } from "../duplicates.js";
 import { collectGraph } from "../graph-builder.js";
 import { findDetailedCycles, getUnresolvedImports } from "../graphs/queries.js";
@@ -63,12 +64,15 @@ type InspectReport = {
       size: number;
     }>;
   };
-  duplicates: {
-    total: number;
-    omitted: number;
-    minConfidence: DuplicateConfidence;
-    top: DuplicateOpportunitySummary[];
-  };
+  duplicates:
+    | { enabled: false }
+    | {
+        enabled: true;
+        total: number;
+        omitted: number;
+        minConfidence: DuplicateConfidence;
+        top: DuplicateOpportunitySummary[];
+      };
   recommendedCommands: string[];
 };
 
@@ -253,6 +257,7 @@ async function buildInspectReport(
   workerOpts: { useNativeWorkers: true } | Record<string, never>,
   progressHandler: ((update: { current: number; total: number }) => void) | undefined,
   limit: number,
+  includeDuplicates: boolean,
   writeStderrLine: (message: string) => void,
 ): Promise<InspectReport> {
   const useDiskCache = cache === "disk" || cache === undefined;
@@ -260,29 +265,43 @@ async function buildInspectReport(
   if (indexCache) {
     writeStderrLine(formatIndexCacheMetadata(indexCache));
   }
+  const useNativeWorkers = "useNativeWorkers" in workerOpts || files.length >= NATIVE_WORKER_AUTO_FILE_THRESHOLD;
   const index = await buildProjectIndexIncremental(projectRoot, {
     files,
     cache: cache ?? "disk",
     discovery,
     ...(progressHandler ? { onProgress: progressHandler } : {}),
     ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
-    ...workerOpts,
+    ...(useNativeWorkers ? { useNativeWorkers: true } : {}),
     ...(graphOptions ? { graph: graphOptions } : {}),
   });
   const graph = restrictGraphToIncludeRoots(index.graph, includeRoots, normalizePathForDisplay);
   const hotspots = getHotspots(graph, { limit });
   const unresolved = getUnresolvedImports(graph, { projectRoot });
   const cycles = findDetailedCycles(graph);
-  const duplicateMinConfidence: DuplicateConfidence = "high";
-  const duplicateResult = await findDuplicates(index, {
-    projectRoot,
-    files,
-    includeSameFile: true,
-    minConfidence: duplicateMinConfidence,
-    minTokens: INSPECT_DUPLICATE_MIN_TOKENS,
-    maxPairs: INSPECT_DUPLICATE_MAX_PAIRS,
-    limit,
-  });
+  let duplicates: InspectReport["duplicates"] = { enabled: false };
+  if (includeDuplicates) {
+    const minConfidence: DuplicateConfidence = "high";
+    const duplicateResult = await findDuplicates(index, {
+      projectRoot,
+      files,
+      includeSameFile: true,
+      minConfidence,
+      minTokens: INSPECT_DUPLICATE_MIN_TOKENS,
+      maxPairs: INSPECT_DUPLICATE_MAX_PAIRS,
+      limit,
+    });
+    duplicates = {
+      enabled: true,
+      total:
+        duplicateResult.groups.length +
+        duplicateResult.omittedCounts.groups +
+        duplicateResult.omittedCounts.candidatePairs,
+      omitted: duplicateResult.omittedCounts.groups + duplicateResult.omittedCounts.candidatePairs,
+      minConfidence,
+      top: duplicateResult.groups.map(summarizeDuplicateGroup),
+    };
+  }
   const loadError = getNativeTreeSitterLoadError(nativeMode);
   return {
     root: normalizePathForDisplay(projectRoot),
@@ -315,15 +334,7 @@ async function buildInspectReport(
         size: cycle.files.length,
       })),
     },
-    duplicates: {
-      total:
-        duplicateResult.groups.length +
-        duplicateResult.omittedCounts.groups +
-        duplicateResult.omittedCounts.candidatePairs,
-      omitted: duplicateResult.omittedCounts.groups + duplicateResult.omittedCounts.candidatePairs,
-      minConfidence: duplicateMinConfidence,
-      top: duplicateResult.groups.map(summarizeDuplicateGroup),
-    },
+    duplicates,
     recommendedCommands: buildRecommendedInspectCommands(
       projectRoot,
       includeRoots,
@@ -348,6 +359,7 @@ export async function handleInspectCommand(context: InspectCommandContext): Prom
     context.workerOpts,
     context.progressHandler,
     limit,
+    context.hasFlag("--duplicates"),
     context.writeStderrLine,
   );
   context.writeJSONLine(report);
