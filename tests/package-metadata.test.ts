@@ -767,6 +767,7 @@ void onImpactItemStreaming;
       "docs/library-api.md",
       "docs/agent-workflows.md",
       "docs/how-it-works.md",
+      "docs/search.md",
       "codegraph-skill/codegraph/SKILL.md",
     ];
 

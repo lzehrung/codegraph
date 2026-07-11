@@ -5,122 +5,157 @@ description: "Use for repo structure, symbol navigation, dependency analysis, du
 
 # Codegraph
 
-Use Codegraph for structure-aware repo questions:
+Use Codegraph when a repository question depends on structure rather than exact text:
 
-- repo overview, hotspots, cycles, unresolved imports, and public API surface
-- symbol navigation with definitions, references, dependencies, and paths
-- PR or worktree impact review with candidate tests and risk signals
+- architecture, hotspots, cycles, unresolved imports, and public API surface
+- definitions, references, dependencies, reverse dependencies, and paths
+- PR or worktree impact, candidate tests, and risk signals
 - duplicate cleanup and refactor-risk triage
-- bounded agent context through explore, orientation, search, packets, explain, and MCP
+- bounded context for agents through explore, orientation, search, packets, explain, and MCP
 
-Prefer plain text search for raw strings, logs, config keys, secrets, and exact literals.
-Do not use Codegraph as the only evidence for runtime behavior; pair it with tests or execution.
+Use plain text search for exact strings, logs, config keys, secrets, and prose. Do not treat Codegraph as runtime proof; verify behavior with focused tests or execution.
 
-## First Move
+## Choose the First Command
 
-For PR, worktree, or sweeping review tasks, start with the compact reviewer handoff:
+| Task                                                      | Start here                                                      |
+| --------------------------------------------------------- | --------------------------------------------------------------- |
+| Review staged and unstaged work                           | `codegraph review --base HEAD --head WORKTREE --summary`        |
+| Review a branch against main                              | `codegraph review --base origin/main --head HEAD --summary`     |
+| Map the wider blast radius of a change                    | `codegraph impact --base HEAD --head WORKTREE --pretty`         |
+| Answer a concrete question about an unfamiliar repo       | `codegraph explore "how does auth reach db?" --root . --pretty` |
+| Map a repo before you know the question                   | `codegraph orient --root . --budget small --pretty`             |
+| Diagnose installation, native runtime, or artifact health | `codegraph doctor`                                              |
 
-```bash
-codegraph review --base HEAD --head WORKTREE --summary
-```
+Prefer `review` before `impact`: review is the compact reviewer handoff; impact is the broader "what could this break?" map. Prefer `explore` before `orient` when you already have a concrete question.
 
-Use `codegraph impact --base HEAD --head WORKTREE --pretty` when you need the broader blast-radius map. For unfamiliar repos without a diff, start bounded with `codegraph explore "how does auth reach db?" --root . --pretty` or `codegraph orient --root . --budget small --pretty` when no concrete question exists.
-Use `doctor` only when install, native-runtime, or artifact health is the task.
-Then choose the smallest useful follow-up:
+## Keep the Project Boundary Explicit
 
-- explore: `codegraph explore "how does auth reach db?" --pretty`
-- live file: `codegraph file <path> --offset 1 --limit 200 --pretty`
-- packet: `codegraph packet get <file|symbol|sql-object|handle> --pretty`
-- search: `codegraph search "auth user" --json`
-- explain: `codegraph explain <file|symbol|sql-object|handle>`
-- architecture: `codegraph inspect ./src --limit 20` (`--duplicates` adds the slower duplicate summary)
-- dependencies: `codegraph deps <file>` or `codegraph rdeps <file>`
-- path: `codegraph path <from> <to>`
-- cycles: `codegraph cycles --sort priority`
-- navigation: `codegraph goto <file> <line> <column>`
+Use `--root` to define the boundary for config lookup, cache scope, path confinement, and output normalization.
+
+- Positional paths are include roots inside the project boundary for `orient`, `drift`, and positional graph commands.
+- `codegraph.config.json` discovery globs are project-root-relative.
+- CLI `--include-glob` and `--ignore-glob` values are one-off filters relative to each active scan root.
+- Use `--no-gitignore` only when ignored files are intentionally in scope.
+
+## Choose the Smallest Follow-up
+
+### Understand
+
+- answer a question with bounded evidence: `codegraph explore "how does auth reach db?" --root . --pretty`
+- find a ranked anchor: `codegraph search "auth user" --json`
+- explain a known target: `codegraph explain <file|symbol|sql-object|handle>`
+- retrieve bounded indexed context: `codegraph packet get <file|symbol|sql-object|handle> --pretty`
+- read current disk content: `codegraph file <path> --offset 1 --limit 200 --pretty`
+
+`explore` returns ranked anchors, bounded packets, dependency paths, blast radius, candidate tests, explicit limits, omission counts, and copyable follow-ups. Hybrid search is code-first by default; search, explain, explore, and review output preserve analysis labels so reduced or mixed runs remain visible.
+
+### Navigate
+
+- dependencies: `codegraph deps <file>`
+- reverse dependencies: `codegraph rdeps <file>`
+- shortest path: `codegraph path <from> <to>`
+- definition: `codegraph goto <file> <line> <column>`
 - references: `codegraph refs --file <file> --line <line> --col <column> --pretty`
-- duplicates: `codegraph duplicates --root . ./src --profile cleanup`
-- impact: `codegraph impact --base HEAD --head WORKTREE --pretty`
-- review: `codegraph review --base HEAD --head WORKTREE --summary`
-- drift: `codegraph drift ./src --base origin/main --head HEAD --pretty --graph-edges summary --public-api removals`
-- installer: `codegraph install --target codex,claude --dry-run`
-- lifecycle: `codegraph init --root .`, `codegraph status --root . --json`, `codegraph sync --root .`
 
-Use `--root` to define the project boundary for config lookup, cache scope, path confinement, and output normalization.
-For `orient`, `drift`, and positional graph commands, positional paths are include roots inside that project.
-Use `codegraph install --target <ids> --yes` to configure supported local agent clients with MCP entries, bundled skill payloads, and marker files. Use `--dry-run` or `--print-config <target>` first; uninstall removes only Codegraph-owned marker blocks, marker files, exact bundled skill payloads, or exact installer-owned MCP entries.
-Lifecycle commands own only `.codegraph/manifest.json` metadata. `init` and `sync` may warm or update `.codegraph-cache/index-v1/`; other commands do not depend on the manifest. Use `uninit` to remove recognized lifecycle state.
-Lifecycle commands accept either a positional project path or `--root <path>`; never combine both.
+### Review and Inspect
 
-## Output Choice
+- compact review handoff: `codegraph review --base HEAD --head WORKTREE --summary`
+- broader change impact: `codegraph impact --base HEAD --head WORKTREE --pretty`
+- architecture drift: `codegraph drift ./src --base origin/main --head HEAD --pretty --graph-edges summary --public-api removals`
+- architecture summary: `codegraph inspect ./src --limit 20`
+- prioritized cycles: `codegraph cycles --sort priority`
+- duplicate cleanup: `codegraph duplicates --root . ./src --profile cleanup`
+- full duplicate groups: `codegraph duplicates --root . ./src --json`
 
-Use readable output when a human or model will read the result.
-Use JSON when the next step needs exact fields, counts, or filtering.
+`inspect --duplicates` adds the slower bounded duplicate summary. Treat duplicate matches, candidate tests, and call-compatibility hints as review leads, not proof.
 
-Hybrid search is code-first by default, and search/explain packets include analysis labels plus per-result provenance so reduced or mixed runs stay visible.
+## Choose Output by Consumer
 
-Current high-value surfaces:
+- Human or model reading one result: use `--pretty` or `--summary`.
+- Tool chaining, filtering, stable handles, exact ranges, or schema fields: use `--json`.
+- Repeated agent queries over one repo snapshot: prefer MCP so the index stays warm.
+- Durable graph handoff: use `codegraph graph --root . ./src --compact-json --output codegraph.json` rather than parsing display text.
 
-- `explore --pretty`: one-call question answer with anchors, packets, paths, blast radius with omitted lower bounds, candidate tests, limits, lower-bound omissions, and follow-ups
-- `orient --pretty`: ranked first-turn focus targets with copyable follow-ups
-- `impact --pretty`: ranked "what could this break?" map
-- `review --summary`: compact reviewer handoff
-- `duplicates --profile cleanup`: refactor ROI ordering
-- `duplicates --json`: full grouped duplicate data
-- `file`: live bounded file bytes with JSON default, exact numbered lines, and explicit pagination
+Do not parse pretty output to recover fields already available in structured output.
 
-Treat duplicate leads and call-compatibility hints as review leads, not proof.
+## Live Reads and Sensitive Files
 
-## Live File Views
-
-Use `codegraph file <path>` for current disk content; use `--pretty` for a readable view or the default JSON for exact fields. Returned pages use a 1-based `--offset`, a `--limit` default/cap of 2000/10000 lines, and a `--max-bytes` default/cap of 80000/500000 unnumbered text bytes. A separate 16 MiB hard input-size limit rejects larger raw reads and structural text-config summaries before unbounded I/O, bounding complete-stream binary/UTF-8 validation and total-line counting.
+Use `codegraph file <path>` for current disk content. The default is JSON; add `--pretty` for readable numbered lines.
 
 ```bash
 codegraph file src/auth.ts --offset 201 --limit 200 --max-bytes 80000
 codegraph file src/auth.ts --include-graph-context --pretty
 ```
 
-`content` is exact `number<TAB>line` text with no line-number padding, while `text` omits number prefixes. A trailing newline becomes a final numbered empty line. Follow `page.nextOffset`; beyond EOF, JSON `content` and `text` are empty and pretty output says `Lines: none at offset <offset> of <totalLines>`.
+Pagination and byte contracts:
 
-Graph context is never automatic. Add `--include-graph-context` only when direct `usedBy` paths, imports, and symbols are worth an index/freshness check; ordinary file bytes stay live and independent of index freshness.
+- `--offset` is 1-based.
+- `--limit` defaults to 2000 lines and is capped at 10000.
+- `--max-bytes` defaults to 80000 unnumbered text bytes and is capped at 500000.
+- A separate 16 MiB input limit rejects larger raw reads and structural text-config summaries before unbounded I/O.
+- `content` is exact `number<TAB>line` text; `text` omits line-number prefixes.
+- Follow `page.nextOffset`. Beyond EOF, JSON fields are empty and pretty output reports that no lines remain.
 
-Within the 16 MiB input limit, recognized environment, authentication, and credential text configs return structural summaries after the full raw stream is validated. Default key-material summaries use metadata, may report size, and do not read raw secret bytes. Use `--allow-sensitive` only for deliberate raw access; it does not bypass the input-size, binary, NUL, or UTF-8 guards, so `.p12` and `.pfx` bundles summarize by default and reject raw access.
+Live bytes and indexed context have different freshness rules:
 
-An exact project-relative file-path query such as `codegraph explore src/auth.ts --json` adds the same response as `fileView`; `--no-source` suppresses it. `--include-graph-context` and `--allow-sensitive` pass through only when explicitly present.
+- Plain file bytes come from disk and do not depend on index freshness.
+- `--include-graph-context` opts into indexed `usedBy` paths, imports, and symbols.
+- An exact project-relative query such as `codegraph explore src/auth.ts --json` adds `fileView` with the same live-read contract as `codegraph file`; `--no-source` suppresses it.
 
-## MCP
+Sensitive-file rules:
 
-If MCP tools are available, prefer them over repeated CLI invocations.
-Use MCP `explore`, `orient`, `search`, `get_file`, `packet_get`, `goto`, `refs`, `deps`, `rdeps`, `path`, `impact`, `review`, and `query_sqlite` first.
-Use `get_file` for bounded live reads with `offset`, `limit`, and `maxBytes`; continue at `page.nextOffset`, and set `allowSensitive: true` only for intentional raw sensitive reads. Set `includeGraphContext: true` to opt into freshness-backed direct context capped at 100 importers, imports, and symbols each.
-For plain `get_file` reads, `freshness` does not gate the live bytes. After indexed calls or graph-context reads, check it before trusting indexed data: `refreshed` means Codegraph rebuilt, and `stale` includes a reason plus bounded changed-file metadata.
-Run `refresh_index` before `artifact_build` when MCP reports a stale index; artifact writes refuse stale snapshots.
-Fall back to CLI when MCP is unavailable.
+- Recognized environment, authentication, and credential text configs return structural summaries by default.
+- Key material defaults to metadata and may report file size without reading raw secret bytes.
+- Use `--allow-sensitive` only for deliberate raw access.
+- `--allow-sensitive` never bypasses input-size, binary, NUL, or UTF-8 guards; `.p12` and `.pfx` remain metadata-only in practice.
 
-## Discovery
+## MCP and Freshness
 
-Durable repo-local ignores belong in `codegraph.config.json`.
-One-off CLI filters use scan-root-relative `--include-glob` and `--ignore-glob`.
-Use `--no-gitignore` only when ignored files are intentionally in scope.
+If MCP tools are available, prefer them over repeated CLI invocations. Use `explore`, `orient`, `search`, `get_file`, `packet_get`, `goto`, `refs`, `deps`, `rdeps`, `path`, `impact`, `review`, and `query_sqlite`; fall back to the CLI when MCP is unavailable.
 
-## Installation Notes
+Keep live and indexed evidence distinct:
 
-Use the scoped packages only:
+- `get_file` returns bounded live bytes with `offset`, `limit`, and `maxBytes`; continue at `page.nextOffset`.
+- Set `allowSensitive: true` only for intentional sensitive reads.
+- Set `includeGraphContext: true` only when freshness-backed context is needed; importers, imports, and symbols are each capped at 100.
+- Plain `get_file` freshness does not gate live bytes.
+- After indexed calls, check `freshness` before trusting graph or semantic context. `refreshed` means Codegraph rebuilt; `stale` includes a reason and bounded changed-file metadata.
+- Run `refresh_index` before `artifact_build` when the index is stale. Artifact writes refuse stale snapshots.
 
-- package: `@lzehrung/codegraph`
-- native backend: `@lzehrung/codegraph-native`
+## Agent Setup and Project Lifecycle
 
-Registry:
+Preview agent-client setup before writing configuration:
+
+```bash
+codegraph install --target codex,claude --dry-run
+codegraph install --print-config codex
+codegraph install --target codex,claude --yes
+```
+
+The installer manages Codegraph-owned MCP entries, skill payloads, and marker files. Uninstall removes only recognized Codegraph-owned content.
+
+Lifecycle commands manage `.codegraph/manifest.json`; other commands do not require that manifest:
+
+```bash
+codegraph init --root .
+codegraph status --root . --json
+codegraph sync --root .
+codegraph uninit --root .
+```
+
+`init` and `sync` may warm or update `.codegraph-cache/index-v1/`. Lifecycle commands accept either one positional project path or `--root <path>`, never both.
+
+## Installation
+
+Codegraph requires Node.js 24.10 or newer. Use only the scoped packages:
+
+- CLI and library: `@lzehrung/codegraph`
+- optional native runtime: `@lzehrung/codegraph-native`
 
 ```bash
 npm config set "@lzehrung:registry" "https://npm.pkg.github.com"
-```
-
-Install:
-
-```bash
 npm install -g @lzehrung/codegraph
+codegraph doctor
 ```
 
-Do not suggest the unscoped `codegraph` package.
-Codegraph requires Node.js 24.10 or newer.
+Do not suggest the unscoped `codegraph` package. Published installs resolve the optional native runtime when a compatible artifact exists; otherwise Codegraph reports reduced graph-only and regex recovery behavior rather than semantic parity.
