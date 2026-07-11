@@ -1,15 +1,17 @@
 # Codegraph
 
-**Ask structural questions about a codebase. Get grounded answers with files, symbols, dependency paths, and likely tests.**
+**Give your coding agent a map of the repository, not a pile of search results.**
 
-Codegraph is a local CLI and TypeScript library for understanding unfamiliar repositories and reviewing changes. It builds one multi-language model of a repo, then uses it for exploration, semantic navigation, dependency analysis, architecture checks, and PR impact reports - without requiring an editor or language-server setup.
+Codegraph is a local CLI and TypeScript library that turns a source tree into a resolved model of files, symbols, references, and dependencies. Agents and humans can ask where an implementation lives, how components connect, what a change can break, and which tests are likely relevant - then get bounded source evidence and copyable next steps.
+
+Without structural context, an agent spends early turns listing directories, guessing search terms, opening candidate files, and reconstructing relationships in its prompt. Codegraph performs that deterministic discovery once so more of the context window can go toward understanding and changing the code.
 
 ```bash
 codegraph explore "how does auth reach the database?" --root . --pretty
 codegraph review --base HEAD --head WORKTREE --summary
 ```
 
-Codegraph is most useful when a file search is too shallow, a full IDE is impractical, or an agent needs bounded evidence instead of a source-tree dump.
+Use Codegraph alongside text search and compilers: text search finds exact strings, compilers prove language behavior, and Codegraph supplies the cross-file repository map between them.
 
 ## Table of contents
 
@@ -173,25 +175,25 @@ Structured output carries the underlying changed files, symbols, graph edges, re
 
 ## Why Codegraph
 
-### One index, several workflows
+### Spend context on the problem, not repository discovery
 
-The dependency graph and semantic index are shared by navigation, search, exploration, review, impact, and architecture commands. A follow-up can reuse the same file, symbol, SQL object, or stable handle instead of rebuilding context around a new text search.
+One bounded `explore` response can combine ranked anchors, relevant source, dependency paths, blast radius, candidate tests, and next commands. The agent gets an evidence-backed starting point without first dumping the tree or repeatedly guessing which files to open.
 
-### Built for bounded handoffs
+### Ground the next action
 
-Agent-facing commands return ranked evidence, explicit limits, omission counts, and suggested next commands. That makes Codegraph useful in prompts and tool loops where dumping the whole repository is slow, expensive, and usually less informative.
+Results carry source paths, symbol ranges, stable handles, rank reasons, graph relationships, confidence, and omission counts. An agent can inspect why something ranked, jump to the definition or references, and continue from an exact target instead of treating a fuzzy match as an answer.
 
-### Works outside an IDE
+### Reuse one map from discovery through review
 
-Codegraph provides cross-file structural analysis from a CLI, library, or MCP server. It is useful in CI, review automation, scripts, and coding-agent sessions where standing up every language server would be costly or brittle.
+Search, navigation, dependency analysis, impact, and review share the same graph and semantic index. The target found during discovery can flow directly into `explain`, `refs`, `deps`, impact analysis, and candidate-test selection.
 
-### Mixed repositories are a first-class case
+### Work across the repository an agent actually has
 
-Source code, SQL, workspace packages, documentation links, stylesheets, templates, and single-file components can participate in the same repository graph. Capability claims remain language-specific; graph support is not presented as full semantic parity.
+Source code, SQL, workspace packages, documentation links, stylesheets, templates, and single-file components can participate in one repository model. Capability claims remain language-specific, so graph support is not presented as full compiler or language-server parity.
 
-### Outputs are reusable
+### Keep the evidence local and reusable
 
-Pretty output is for people. JSON and SQLite are for programs; Mermaid and DOT are for visualization; the TypeScript API and MCP server are for long-lived integrations.
+Codegraph runs locally through a CLI, library, or MCP server. People can read pretty output; agents and programs can keep structured JSON, stable handles, warm sessions, SQLite data, or graph exports without parsing display text.
 
 ## Why not just grep or an LSP?
 
@@ -294,6 +296,7 @@ README is the landing page. The detailed contracts live here:
 
 - [Installation](./docs/installation.md): install paths, requirements, native artifacts, and reduced mode
 - [CLI reference](./docs/cli.md): commands, flags, output formats, graph export, and SQLite schema
+- [Vectorless search](./docs/search.md): lexical ranking, symbol and graph context, modes, strengths, and limits
 - [Agent workflows](./docs/agent-workflows.md): explore, orient, packets, sessions, streaming, and review loops
 - [MCP](./docs/mcp.md): server setup, clients, tools, and safety model
 - [Library API](./docs/library-api.md): exports, types, sessions, streaming, and programmatic analysis

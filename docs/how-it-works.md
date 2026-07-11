@@ -100,4 +100,5 @@ Test the smallest layer that owns a change, then add a small end-to-end fixture 
 - [CLI reference](./cli.md)
 - [Library API](./library-api.md)
 - [Agent workflows](./agent-workflows.md)
+- [Vectorless search](./search.md)
 - [Benchmark methodology and results](./benchmarks/README.md)
