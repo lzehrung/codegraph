@@ -169,17 +169,19 @@ export function isKnownCliCommand(command: string): boolean {
 export const LIFECYCLE_HELP_TEXT = `codegraph init/status/sync/uninit - Initialize, inspect, refresh, or remove project-local Codegraph state
 
 Usage:
-  codegraph init [path] [--force] [--json]
-  codegraph init --root <path> [--force] [--json]
+  codegraph init [path] [--force] [--no-update-gitignore] [--json]
+  codegraph init --root <path> [--force] [--no-update-gitignore] [--json]
   codegraph status [path] [--json]
   codegraph status --root <path> [--json]
-  codegraph sync [path] [--init] [--json]
-  codegraph sync --root <path> [--init] [--json]
+  codegraph sync [path] [--init] [--no-update-gitignore] [--json]
+  codegraph sync --root <path> [--init] [--no-update-gitignore] [--json]
   codegraph uninit [path] [--force] [--json]
   codegraph uninit --root <path> [--force] [--json]
 
 State:
-  Lifecycle commands own only .codegraph/manifest.json metadata. Init and sync may warm or update the disk cache under .codegraph-cache/index-v1/. Other commands do not depend on the manifest.
+  Lifecycle commands own only .codegraph/manifest.json metadata. In a Git worktree, init and sync --init ensure it is effectively ignored, appending .codegraph/ to the resolved root's .gitignore only when needed; opt out with --no-update-gitignore.
+  A tracked manifest is left tracked with a warning. Uninit removes lifecycle state but leaves the root .gitignore rule; ordinary sync never changes ignore policy.
+  Init and sync may warm or update the disk cache under .codegraph-cache/index-v1/. Other commands do not depend on the manifest.
   Positional paths and --root are alternatives for lifecycle commands; do not combine them.
 `;
 

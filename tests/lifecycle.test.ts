@@ -1,5 +1,7 @@
+import { execFile } from "node:child_process";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   codegraphLifecycleManifestPath,
@@ -20,6 +22,14 @@ import type { BuildOptions } from "../src/indexer/types.js";
 import { captureCli } from "./helpers/cli.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 import { CODEGRAPH_CONFIG_FILE } from "../src/config.js";
+
+const execFileAsync = promisify(execFile);
+
+async function initializeGitRepository(root: string): Promise<void> {
+  await execFileAsync("git", ["init", "--quiet"], { cwd: root });
+  await execFileAsync("git", ["config", "user.email", "codegraph-tests@example.com"], { cwd: root });
+  await execFileAsync("git", ["config", "user.name", "Codegraph Tests"], { cwd: root });
+}
 
 async function writeFile(root: string, relativePath: string, content: string): Promise<void> {
   const filePath = path.join(root, relativePath);
@@ -60,6 +70,216 @@ describe("project lifecycle commands", () => {
     expect(second.changedFiles.totalDelta).toBe(0);
     expect(await readManifest(root)).toEqual(first.manifest);
     expect(await readCodegraphEntries(root)).toEqual(["manifest.json"]);
+  });
+
+  it("init appends one root Git ignore rule while preserving file bytes, newline style, and permissions", async () => {
+    const cases = [
+      { name: "missing", initial: null, expected: ".codegraph/\n" },
+      { name: "LF", initial: "node_modules/\n", expected: "node_modules/\n.codegraph/\n" },
+      { name: "no-final-newline", initial: "node_modules/", expected: "node_modules/\n.codegraph/\n" },
+      { name: "CRLF", initial: "node_modules/\r\n", expected: "node_modules/\r\n.codegraph/\r\n" },
+    ] as const;
+
+    for (const testCase of cases) {
+      const root = await mkTmpDir(`cg-life-gitignore-${testCase.name}-`);
+      await initializeGitRepository(root);
+      await writeFile(root, "src/main.ts", "export const main = 1;\n");
+      if (testCase.initial !== null) {
+        await writeFile(root, ".gitignore", testCase.initial);
+        await fsp.chmod(path.join(root, ".gitignore"), 0o640);
+      }
+
+      const first = await initCodegraphLifecycle(root);
+      const second = await initCodegraphLifecycle(root);
+
+      expect(first.gitignore).toEqual({ status: "added", path: ".gitignore" });
+      expect(second.gitignore).toEqual({ status: "already-ignored", path: ".gitignore" });
+      expect(await fsp.readFile(path.join(root, ".gitignore"), "utf8")).toBe(testCase.expected);
+      if (testCase.initial !== null) {
+        expect((await fsp.stat(path.join(root, ".gitignore"))).mode & 0o777).toBe(0o640);
+      }
+      expect(await readCodegraphEntries(root)).toEqual(["manifest.json"]);
+    }
+  });
+
+  it("init honors exact, broader, and repository-external effective Git ignore rules", async () => {
+    const cases = [
+      { name: "exact", policyPath: ".gitignore", policy: ".codegraph/manifest.json\n" },
+      { name: "broader", policyPath: ".gitignore", policy: ".codegraph/\n" },
+      { name: "info-exclude", policyPath: ".git/info/exclude", policy: ".codegraph/\n" },
+    ] as const;
+
+    for (const testCase of cases) {
+      const root = await mkTmpDir(`cg-life-effective-ignore-${testCase.name}-`);
+      await initializeGitRepository(root);
+      await writeFile(root, "src/main.ts", "export const main = 1;\n");
+      await writeFile(root, testCase.policyPath, testCase.policy);
+
+      const result = await initCodegraphLifecycle(root);
+
+      expect(result.gitignore).toEqual({ status: "already-ignored", path: ".gitignore" });
+      if (testCase.policyPath !== ".gitignore") {
+        await expect(fsp.stat(path.join(root, ".gitignore"))).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        expect(await fsp.readFile(path.join(root, ".gitignore"), "utf8")).toBe(testCase.policy);
+      }
+    }
+  });
+
+  it("init appends after an effective negation and refreshes a previously current unignored manifest", async () => {
+    const root = await mkTmpDir("cg-life-gitignore-negation-");
+    await initializeGitRepository(root);
+    await writeFile(root, "src/main.ts", "export const main = 1;\n");
+    const negatedPolicy = ".codegraph/\n!.codegraph/\n!.codegraph/manifest.json\n";
+    await writeFile(root, ".gitignore", negatedPolicy);
+    const before = await initCodegraphLifecycle(root, { updateGitignore: false });
+    expect((await getCodegraphLifecycleStatus(root)).configChanged).toBeFalsy();
+
+    const refreshed = await initCodegraphLifecycle(root);
+    const status = await getCodegraphLifecycleStatus(root);
+
+    expect(refreshed.gitignore).toEqual({ status: "added", path: ".gitignore" });
+    expect(refreshed.manifest.configHash).not.toBe(before.manifest.configHash);
+    expect(await fsp.readFile(path.join(root, ".gitignore"), "utf8")).toBe(`${negatedPolicy}.codegraph/\n`);
+    expect(status.configChanged).toBeFalsy();
+    expect(status.suggestedNextCommand).toBe("codegraph status");
+  });
+
+  it("init is non-fatal outside Git and supports an explicit ignore-policy opt-out", async () => {
+    const nonGitRoot = await mkTmpDir("cg-life-gitignore-non-git-");
+    await writeFile(nonGitRoot, "src/main.ts", "export const main = 1;\n");
+    const nonGit = await initCodegraphLifecycle(nonGitRoot);
+    expect(nonGit.gitignore).toEqual({ status: "not-git", path: ".gitignore" });
+    await expect(fsp.stat(path.join(nonGitRoot, ".gitignore"))).rejects.toMatchObject({ code: "ENOENT" });
+
+    const disabledRoot = await mkTmpDir("cg-life-gitignore-disabled-");
+    await initializeGitRepository(disabledRoot);
+    await writeFile(disabledRoot, "src/main.ts", "export const main = 1;\n");
+    const disabled = await initCodegraphLifecycle(disabledRoot, { updateGitignore: false });
+    expect(disabled.gitignore).toEqual({ status: "disabled", path: ".gitignore" });
+    await expect(fsp.stat(path.join(disabledRoot, ".gitignore"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("sync --init prepares ignore policy once, while ordinary sync never changes it", async () => {
+    const initializedRoot = await mkTmpDir("cg-life-sync-init-gitignore-");
+    await initializeGitRepository(initializedRoot);
+    await writeFile(initializedRoot, "src/main.ts", "export const main = 1;\n");
+    const initialized = await syncCodegraphLifecycle(initializedRoot, { init: true });
+    expect(initialized.gitignore).toEqual({ status: "added", path: ".gitignore" });
+    expect(await fsp.readFile(path.join(initializedRoot, ".gitignore"), "utf8")).toBe(".codegraph/\n");
+
+    const disabledRoot = await mkTmpDir("cg-life-sync-init-gitignore-disabled-");
+    await initializeGitRepository(disabledRoot);
+    await writeFile(disabledRoot, "src/main.ts", "export const main = 1;\n");
+    const disabled = await syncCodegraphLifecycle(disabledRoot, { init: true, updateGitignore: false });
+    expect(disabled.gitignore).toEqual({ status: "disabled", path: ".gitignore" });
+    await writeFile(disabledRoot, ".gitignore", "operator-policy\n");
+
+    const ordinary = await syncCodegraphLifecycle(disabledRoot, { updateGitignore: true });
+    expect(ordinary.gitignore).toBeUndefined();
+    expect(await fsp.readFile(path.join(disabledRoot, ".gitignore"), "utf8")).toBe("operator-policy\n");
+  });
+
+  it("leaves a tracked lifecycle manifest and Git policy unchanged", async () => {
+    const root = await mkTmpDir("cg-life-gitignore-tracked-");
+    await initializeGitRepository(root);
+    await writeFile(root, "src/main.ts", "export const main = 1;\n");
+    await initCodegraphLifecycle(root, { updateGitignore: false });
+    await execFileAsync("git", ["add", "--", ".codegraph/manifest.json"], { cwd: root });
+
+    const result = await initCodegraphLifecycle(root);
+
+    expect(result.gitignore).toEqual({ status: "tracked", path: ".gitignore" });
+    await expect(fsp.stat(path.join(root, ".gitignore"))).rejects.toMatchObject({ code: "ENOENT" });
+    const { stdout } = await execFileAsync("git", ["ls-files", "--", ".codegraph/manifest.json"], { cwd: root });
+    expect(stdout.trim()).toBe(".codegraph/manifest.json");
+  });
+
+  it("rejects directory and symlink .gitignore paths before creating a manifest", async () => {
+    for (const kind of ["directory", "symbolic link"] as const) {
+      const root = await mkTmpDir(`cg-life-gitignore-${kind.replace(" ", "-")}-`);
+      await initializeGitRepository(root);
+      await writeFile(root, "src/main.ts", "export const main = 1;\n");
+      const gitignorePath = path.join(root, ".gitignore");
+      if (kind === "directory") {
+        await fsp.mkdir(gitignorePath);
+      } else {
+        await writeFile(root, "ignore-target", "operator policy\n");
+        await fsp.symlink("ignore-target", gitignorePath);
+      }
+
+      await expect(initCodegraphLifecycle(root)).rejects.toThrow(CodegraphLifecycleUserError);
+      await expect(initCodegraphLifecycle(root)).rejects.toThrow(kind);
+      await expect(fsp.stat(codegraphLifecycleManifestPath(root))).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  });
+
+  it("wraps .gitignore read failures as actionable lifecycle errors before manifest creation", async () => {
+    const root = await mkTmpDir("cg-life-gitignore-read-error-");
+    await initializeGitRepository(root);
+    await writeFile(root, "src/main.ts", "export const main = 1;\n");
+    await writeFile(root, ".gitignore", "operator-policy\n");
+    const gitignorePath = path.join(root, ".gitignore");
+    const originalReadFile = fsp.readFile.bind(fsp);
+    vi.spyOn(fsp, "readFile").mockImplementation(async (filePath, options) => {
+      if (filePath === gitignorePath) {
+        throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      }
+      return await originalReadFile(filePath, options as never);
+    });
+
+    await expect(initCodegraphLifecycle(root)).rejects.toThrow(CodegraphLifecycleUserError);
+    await expect(initCodegraphLifecycle(root)).rejects.toThrow(
+      `Unable to read ${gitignorePath}: permission denied. Check file permissions or rerun with --no-update-gitignore.`,
+    );
+    await expect(fsp.stat(codegraphLifecycleManifestPath(root))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("wraps .gitignore write failures as actionable lifecycle errors before manifest creation", async () => {
+    const root = await mkTmpDir("cg-life-gitignore-write-error-");
+    await initializeGitRepository(root);
+    await writeFile(root, "src/main.ts", "export const main = 1;\n");
+    const gitignorePath = path.join(root, ".gitignore");
+    vi.spyOn(fsp, "appendFile").mockImplementation(async (filePath) => {
+      if (filePath === gitignorePath) {
+        throw Object.assign(new Error("read-only filesystem"), { code: "EROFS" });
+      }
+    });
+
+    await expect(initCodegraphLifecycle(root)).rejects.toThrow(CodegraphLifecycleUserError);
+    await expect(initCodegraphLifecycle(root)).rejects.toThrow(
+      `Unable to update ${gitignorePath}: read-only filesystem. Check file permissions or rerun with --no-update-gitignore.`,
+    );
+    await expect(fsp.stat(codegraphLifecycleManifestPath(root))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("uninit removes lifecycle state but leaves the appended root ignore rule", async () => {
+    const root = await mkTmpDir("cg-life-uninit-gitignore-");
+    await initializeGitRepository(root);
+    await writeFile(root, "src/main.ts", "export const main = 1;\n");
+    const first = await initCodegraphLifecycle(root);
+    const status = await getCodegraphLifecycleStatus(root);
+    const repeated = await initCodegraphLifecycle(root);
+    const { stdout: gitStatus } = await execFileAsync("git", ["status", "--short", "--untracked-files=all"], {
+      cwd: root,
+    });
+    const rules = (await fsp.readFile(path.join(root, ".gitignore"), "utf8"))
+      .split(/\r?\n/u)
+      .filter((line) => line === ".codegraph/");
+
+    expect(first.gitignore?.status).toBe("added");
+    expect(repeated.gitignore?.status).toBe("already-ignored");
+    expect(rules).toHaveLength(1);
+    expect(gitStatus).not.toContain(".codegraph/");
+    expect(status.configChanged).toBeFalsy();
+    expect(status.buildOptionsChanged).toBeFalsy();
+    expect(status.filesChanged).toBeFalsy();
+    expect(status.suggestedNextCommand).toBe("codegraph status");
+
+    await uninitCodegraphLifecycle(root);
+
+    expect(await fsp.readFile(path.join(root, ".gitignore"), "utf8")).toBe(".codegraph/\n");
+    await expect(fsp.stat(path.join(root, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("init --force refreshes lastSyncAt when project files and options are current", async () => {
@@ -522,6 +742,45 @@ describe("project lifecycle commands", () => {
     expect(uninitPayload.root).toBe(syncRoot);
     expect(uninitPayload.removed).toBeTruthy();
     await expect(fsp.stat(path.join(syncRoot, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("CLI JSON and pretty output expose only initializing ignore-policy outcomes", async () => {
+    const jsonRoot = await mkTmpDir("cg-life-cli-gitignore-json-");
+    await initializeGitRepository(jsonRoot);
+    await writeFile(jsonRoot, "src/main.ts", "export const main = 1;\n");
+
+    const jsonResult = await captureCli(["init", jsonRoot, "--json"]);
+
+    expect(jsonResult.exitCode).toBeUndefined();
+    expect(jsonResult.stderr).toBe("");
+    const payload = JSON.parse(jsonResult.stdout) as CodegraphLifecycleSyncResult;
+    expect(payload.gitignore).toEqual({ status: "added", path: ".gitignore" });
+    expect(jsonResult.stdout.trim().startsWith("{")).toBeTruthy();
+    expect(jsonResult.stdout.trim().endsWith("}")).toBeTruthy();
+
+    const prettyRoot = await mkTmpDir("cg-life-cli-gitignore-pretty-");
+    await initializeGitRepository(prettyRoot);
+    await writeFile(prettyRoot, "src/main.ts", "export const main = 1;\n");
+    const prettyResult = await captureCli(["init", prettyRoot]);
+    expect(prettyResult.stderr).toBe("");
+    expect(prettyResult.stdout).toContain(`Updated Git ignore policy at ${path.join(prettyRoot, ".gitignore")}`);
+    expect(prettyResult.stdout).toContain("added .codegraph/");
+
+    const trackedRoot = await mkTmpDir("cg-life-cli-gitignore-tracked-");
+    await initializeGitRepository(trackedRoot);
+    await writeFile(trackedRoot, "src/main.ts", "export const main = 1;\n");
+    await initCodegraphLifecycle(trackedRoot, { updateGitignore: false });
+    await execFileAsync("git", ["add", "--", ".codegraph/manifest.json"], { cwd: trackedRoot });
+    const trackedResult = await captureCli(["init", trackedRoot]);
+    expect(trackedResult.stderr).toBe("");
+    expect(trackedResult.stdout).toContain("Warning: .codegraph/manifest.json is tracked by Git");
+
+    const ordinary = await captureCli(["sync", jsonRoot, "--json"]);
+    expect((JSON.parse(ordinary.stdout) as CodegraphLifecycleSyncResult).gitignore).toBeUndefined();
+
+    const help = await captureCli(["init", "--help"]);
+    expect(help.stdout).toContain("--no-update-gitignore");
+    expect(help.stdout).toContain("sync --init");
   });
 
   it("CLI lifecycle commands reject positional roots when --root is supplied", async () => {

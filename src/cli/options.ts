@@ -88,7 +88,9 @@ const CLI_VALUE_OPTIONS = new Set<string>([
 ]);
 
 type CliPositionalPolicy =
-  { kind: "any" } | { kind: "max"; max: number; usage: string } | { kind: "none"; usage: string };
+  | { kind: "any" }
+  | { kind: "max"; max: number; usage: string }
+  | { kind: "none"; usage: string };
 
 type CliCommandSchema = {
   flags?: readonly string[];
@@ -388,10 +390,11 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ["index", graphCommandSchema({ kind: "any" })],
   [
     "init",
-    commandSchema([...SHARED_BUILD_FLAGS, "--json", "--force"], LIFECYCLE_BUILD_OPTIONS, {
+    commandSchema([...SHARED_BUILD_FLAGS, "--json", "--force", "--no-update-gitignore"], LIFECYCLE_BUILD_OPTIONS, {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph init [path] [--force] [--json] OR codegraph init --root <path> [--force] [--json]",
+      usage:
+        "Usage: codegraph init [path] [--force] [--no-update-gitignore] [--json] OR codegraph init --root <path> [--force] [--no-update-gitignore] [--json]",
     }),
   ],
   [
@@ -526,10 +529,11 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ],
   [
     "sync",
-    commandSchema([...SHARED_BUILD_FLAGS, "--json", "--init"], LIFECYCLE_BUILD_OPTIONS, {
+    commandSchema([...SHARED_BUILD_FLAGS, "--json", "--init", "--no-update-gitignore"], LIFECYCLE_BUILD_OPTIONS, {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph sync [path] [--init] [--json] OR codegraph sync --root <path> [--init] [--json]",
+      usage:
+        "Usage: codegraph sync [path] [--init] [--no-update-gitignore] [--json] OR codegraph sync --root <path> [--init] [--no-update-gitignore] [--json]",
     }),
   ],
   [
@@ -587,6 +591,10 @@ export function validateCliArgs(command: string, parsed: ParsedCliArgs): void {
     if (!allowedOptions.has(option)) {
       throw new Error(`Unknown option for ${command}: ${option}`);
     }
+  }
+
+  if (command === "sync" && parsed.flags.has("--no-update-gitignore") && !parsed.flags.has("--init")) {
+    throw new Error("--no-update-gitignore for sync requires --init.");
   }
 
   if (schema.positionals.kind === "none" && parsed.positionals.length) {
