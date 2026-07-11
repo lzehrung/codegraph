@@ -120,10 +120,13 @@ Graph, index, and review reports include `backend.native.byLanguage` so native u
 ### Project lifecycle
 
 - `init` creates `.codegraph/manifest.json`, warms the existing disk cache through the index build path, and is idempotent when the manifest is current. Use `--force` to rebuild and overwrite the manifest metadata.
+- In a Git worktree, `init` first checks Git's effective ignore policy for `.codegraph/manifest.json`. If the manifest is untracked and not already ignored by root/parent rules, negations, `.git/info/exclude`, or global excludes, it appends exactly `.codegraph/` to the resolved project root's `.gitignore`; use `--no-update-gitignore` to opt out.
+- A tracked manifest is left tracked and the ignore policy is unchanged. Non-Git projects remain supported without creating `.gitignore`, and directory or symlink `.gitignore` paths fail before manifest creation with guidance to replace the path or opt out.
 - `status` reports whether lifecycle metadata exists, last sync time, then/current file counts, per-file content drift (files changed even when counts match, e.g. edits in place or N files swapped for N others), config/build-option drift, analysis label, and the suggested next command. Use `--json` for `schemaVersion: 1`.
-- `sync` refreshes the manifest after edits and requires an initialized project unless `--init` is passed.
-- `uninit` removes only recognized lifecycle state by default. It refuses unknown `.codegraph/` entries unless `--force` is passed.
-- Lifecycle commands accept either a positional project path or `--root <path>`. They reject using both together because lifecycle manifests always describe one project boundary, not include-root subsets.
+- `sync` refreshes the manifest after edits and requires an initialized project unless `--init` is passed. `sync --init` performs the same ignore preparation and accepts `--no-update-gitignore`; ordinary `sync` never changes ignore policy.
+- Initializing JSON results add an optional `gitignore` object with `.gitignore` path and `added`, `already-ignored`, `tracked`, `not-git`, or `disabled` status. The lifecycle manifest schema remains unchanged.
+- `uninit` removes only recognized lifecycle state by default and leaves any root `.gitignore` rule in place. It refuses unknown `.codegraph/` entries unless `--force` is passed.
+- Lifecycle commands accept either a positional project path or `--root <path>`. They reject using both together because lifecycle manifests and automatic ignore updates always use one resolved project boundary, not include-root subsets.
 
 ### Symbols, navigation, grep, and chunking
 

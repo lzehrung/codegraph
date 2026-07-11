@@ -12,6 +12,8 @@ import {
 } from "../indexer/build-cache/options.js";
 import type { BuildOptions } from "../indexer/types.js";
 import type { AnalysisSummary } from "../analysisSummary.js";
+import { CodegraphLifecycleUserError } from "./errors.js";
+import { prepareCodegraphLifecycleGitignore, type CodegraphLifecycleGitignoreResult } from "./gitignore.js";
 
 export type CodegraphLifecycleManifest = {
   schemaVersion: 1;
@@ -44,6 +46,9 @@ export type CodegraphLifecycleStatus = {
   suggestedNextCommand: string;
 };
 
+export type { CodegraphLifecycleGitignoreResult } from "./gitignore.js";
+export { CodegraphLifecycleUserError } from "./errors.js";
+
 export type CodegraphLifecycleSyncResult = {
   schemaVersion: 1;
   root: string;
@@ -55,6 +60,7 @@ export type CodegraphLifecycleSyncResult = {
     removed: number;
     totalDelta: number;
   };
+  gitignore?: CodegraphLifecycleGitignoreResult;
 };
 
 export type CodegraphLifecycleUninitResult = {
@@ -74,18 +80,17 @@ type LifecycleBuildOptionsSummary = ManifestBuildOptions & {
 };
 const KNOWN_CODEGRAPH_FILES = new Set([MANIFEST_FILE]);
 
-export class CodegraphLifecycleUserError extends Error {
-  override name = "CodegraphLifecycleUserError";
-}
-
 export function codegraphLifecycleManifestPath(root: string): string {
   return path.join(root, CODEGRAPH_DIR, MANIFEST_FILE);
 }
 
 export async function initCodegraphLifecycle(
   root: string,
-  options: { buildOptions?: BuildOptions; force?: boolean } = {},
+  options: { buildOptions?: BuildOptions; force?: boolean; updateGitignore?: boolean } = {},
 ): Promise<CodegraphLifecycleSyncResult> {
+  const gitignore = await prepareCodegraphLifecycleGitignore(root, {
+    updateGitignore: options.updateGitignore ?? true,
+  });
   const existing = await readLifecycleManifest(root, options.force ? { allowInvalid: true } : {});
   if (existing && !options.force) {
     const status = await getCodegraphLifecycleStatus(root, options);
@@ -97,17 +102,32 @@ export async function initCodegraphLifecycle(
         manifestPath: codegraphLifecycleManifestPath(root),
         manifest: existing,
         changedFiles: { added: 0, removed: 0, totalDelta: 0 },
+        gitignore,
       };
     }
   }
-  return await syncCodegraphLifecycle(root, { ...options, init: true });
+  return await syncCodegraphLifecycleCore(root, { ...options, init: true }, existing, gitignore);
 }
 
 export async function syncCodegraphLifecycle(
   root: string,
-  options: { buildOptions?: BuildOptions; init?: boolean; force?: boolean } = {},
+  options: { buildOptions?: BuildOptions; init?: boolean; force?: boolean; updateGitignore?: boolean } = {},
 ): Promise<CodegraphLifecycleSyncResult> {
+  const gitignore = options.init
+    ? await prepareCodegraphLifecycleGitignore(root, {
+        updateGitignore: options.updateGitignore ?? true,
+      })
+    : undefined;
   const existing = await readLifecycleManifest(root, { allowInvalid: Boolean(options.init && options.force) });
+  return await syncCodegraphLifecycleCore(root, options, existing, gitignore);
+}
+
+async function syncCodegraphLifecycleCore(
+  root: string,
+  options: { buildOptions?: BuildOptions; init?: boolean; force?: boolean },
+  existing: CodegraphLifecycleManifest | null,
+  gitignore?: CodegraphLifecycleGitignoreResult,
+): Promise<CodegraphLifecycleSyncResult> {
   if (!existing && !options.init) {
     throw new CodegraphLifecycleUserError(
       "Codegraph is not initialized for this project. Run codegraph init or codegraph sync --init.",
@@ -129,6 +149,7 @@ export async function syncCodegraphLifecycle(
     manifestPath: codegraphLifecycleManifestPath(root),
     manifest,
     changedFiles: diffLifecycleFileCounts(existing?.files, manifest.files, fallbackTotalDelta),
+    ...(gitignore ? { gitignore } : {}),
   };
 }
 

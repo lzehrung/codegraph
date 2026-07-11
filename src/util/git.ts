@@ -62,6 +62,27 @@ export async function isGitRepo(projectRoot: string): Promise<boolean> {
   }
 }
 
+export async function isGitPathTracked(projectRoot: string, file: string): Promise<boolean> {
+  return await runGitPathPredicate(projectRoot, ["ls-files", "--error-unmatch", "--", normalizePath(file)]);
+}
+
+export async function isGitPathIgnored(projectRoot: string, file: string): Promise<boolean> {
+  return await runGitPathPredicate(projectRoot, ["check-ignore", "--quiet", "--no-index", "--", normalizePath(file)]);
+}
+
+async function runGitPathPredicate(projectRoot: string, args: string[]): Promise<boolean> {
+  try {
+    await execFileAsync("git", args, {
+      cwd: projectRoot,
+      env: process.env,
+    });
+    return true;
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === 1) return false;
+    throw createGitError(projectRoot, args, error);
+  }
+}
+
 export async function getGitBlobHash(
   projectRoot: string,
   file: string,
@@ -200,7 +221,7 @@ export async function listChangedFiles(
     }
     return Array.from(new Set(out));
   } catch (error) {
-    throw createGitDiffError(projectRoot, args, error);
+    throw createGitError(projectRoot, args, error);
   }
 }
 
@@ -235,11 +256,11 @@ export async function getUnifiedDiff(
     });
     return stdout;
   } catch (error) {
-    throw createGitDiffError(projectRoot, args, error);
+    throw createGitError(projectRoot, args, error);
   }
 }
 
-function createGitDiffError(projectRoot: string, args: string[], error: unknown): Error {
+function createGitError(projectRoot: string, args: string[], error: unknown): Error {
   let detail = stringifyUnknown(error);
   if (
     typeof error === "object" &&

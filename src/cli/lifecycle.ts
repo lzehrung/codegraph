@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { BuildOptions } from "../indexer/types.js";
 import {
   getCodegraphLifecycleStatus,
@@ -23,6 +24,7 @@ export async function handleLifecycleCommand(context: LifecycleCommandContext): 
     const result = await initCodegraphLifecycle(context.root, {
       ...(context.buildOptions ? { buildOptions: context.buildOptions } : {}),
       force: context.hasFlag("--force"),
+      updateGitignore: !context.hasFlag("--no-update-gitignore"),
     });
     writeLifecycleResult(context, result, formatSyncResult("Initialized", result));
     return;
@@ -32,6 +34,7 @@ export async function handleLifecycleCommand(context: LifecycleCommandContext): 
     const result = await syncCodegraphLifecycle(context.root, {
       ...(context.buildOptions ? { buildOptions: context.buildOptions } : {}),
       init: context.hasFlag("--init"),
+      updateGitignore: !context.hasFlag("--no-update-gitignore"),
     });
     writeLifecycleResult(context, result, formatSyncResult("Synced", result));
     return;
@@ -66,7 +69,15 @@ function formatSyncResult(label: string, result: CodegraphLifecycleSyncResult): 
   // Report added/removed explicitly rather than the net delta alone: equal adds and removes
   // cancel out to a delta of 0, which would otherwise hide real file churn.
   const changeLabel = added || removed ? `, +${added}/-${removed}` : "";
-  return `${label} Codegraph at ${result.root}: ${result.manifest.fileCount} files${changeLabel}. Manifest: ${result.manifestPath}`;
+  const summary = `${label} Codegraph at ${result.root}: ${result.manifest.fileCount} files${changeLabel}. Manifest: ${result.manifestPath}`;
+  if (result.gitignore?.status === "added") {
+    const gitignorePath = path.join(result.root, result.gitignore.path);
+    return `${summary}\nUpdated Git ignore policy at ${gitignorePath}: added .codegraph/.`;
+  }
+  if (result.gitignore?.status === "tracked") {
+    return `${summary}\nWarning: .codegraph/manifest.json is tracked by Git; the ignore policy was not changed.`;
+  }
+  return summary;
 }
 
 function formatUninitResult(result: CodegraphLifecycleUninitResult): string {

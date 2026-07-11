@@ -138,4 +138,16 @@ describe("CLI command option validation", () => {
       expect(() => validateCliArgs(command, parsedThreads)).not.toThrow();
     }
   });
+  it("accepts --no-update-gitignore only for init and initializing sync", () => {
+    expect(() => validateCliArgs("init", parseCliArgs("init", ["--no-update-gitignore"]))).not.toThrow();
+    expect(() => validateCliArgs("sync", parseCliArgs("sync", ["--init", "--no-update-gitignore"]))).not.toThrow();
+    expect(() => validateCliArgs("sync", parseCliArgs("sync", ["--no-update-gitignore"]))).toThrow(
+      "--no-update-gitignore for sync requires --init",
+    );
+
+    for (const command of ["status", "uninit"]) {
+      const parsed = parseCliArgs(command, ["--no-update-gitignore"]);
+      expect(() => validateCliArgs(command, parsed)).toThrow(`Unknown option for ${command}: --no-update-gitignore`);
+    }
+  });
 });
