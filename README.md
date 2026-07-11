@@ -2,7 +2,7 @@
 
 **Give your coding agent a map of the repository, not a pile of search results.**
 
-Codegraph is a local CLI and TypeScript library that turns a source tree into a resolved model of files, symbols, references, and dependencies. Agents and humans can ask where an implementation lives, how components connect, what a change can break, and which tests are likely relevant - then get bounded source evidence and copyable next steps.
+Codegraph is a local CLI **and TypeScript library** that turns a source tree into a resolved model of files, symbols, references, and dependencies. Agents and humans can ask where an implementation lives, how components connect, what a change can break, and which tests are likely relevant - then get bounded source evidence and copyable next steps.
 
 Without structural context, an agent spends early turns listing directories, guessing search terms, opening candidate files, and reconstructing relationships in its prompt. Codegraph performs that deterministic discovery once so more of the context window can go toward understanding and changing the code.
 
