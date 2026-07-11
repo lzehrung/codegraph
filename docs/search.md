@@ -82,8 +82,6 @@ codegraph search "validate user" --json
 
 ## Strengths and limits
 
-Vectorless search is local, deterministic, explainable, and cheap to invalidate when the repository changes. Exact identifiers, source locations, and graph relationships remain first-class evidence rather than metadata attached after retrieval.
+Vectorless search is local, deterministic, explainable, and does not require embedding regeneration when the repository changes. Exact identifiers, source locations, and graph relationships remain first-class evidence rather than metadata attached after retrieval.
 
 The tradeoff is conceptual recall. If a query and implementation share no words, docstrings, paths, SQL names, or graph bridge, Codegraph may miss a synonym that embedding search would connect. Use repository terminology, add a structural `--from` anchor, or start with `explore` when the question needs several retrieval steps.
-
-Vectorless search is local, deterministic, explainable, and does not require embedding regeneration when the repository changes. Exact identifiers, source locations, and graph relationships remain first-class evidence rather than metadata attached after retrieval.

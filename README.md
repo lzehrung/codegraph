@@ -61,7 +61,7 @@ node ./dist/cli.js doctor
 node ./dist/cli.js orient --root . --budget small --pretty
 ```
 
-Use `node ./dist/cli.js` in place of `codegraph` for the rest of this README.
+Continue with `node ./dist/cli.js <command>` from the checkout. To use the bare `codegraph` examples below unchanged, run `npm install -g .` after the build.
 
 ### From GitHub Packages
 
@@ -215,7 +215,7 @@ codegraph install --target codex,claude --yes
 codegraph install --print-config codex
 ```
 
-Supported targets are Codex, Claude Code, Cursor, Gemini, OpenCode, and universal agent skills. Writes require `--yes`; `--dry-run` previews every change, and uninstall removes only Codegraph-owned content.
+Supported `--target` ids are `codex`, `claude`, `cursor`, `gemini`, `opencode`, and `agents` (universal agent skills). Writes require `--yes`; `--dry-run` previews every change, and uninstall removes only Codegraph-owned content.
 
 For a skill without MCP configuration:
 
