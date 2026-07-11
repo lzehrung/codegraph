@@ -33,7 +33,7 @@ Then choose the smallest useful follow-up:
 - packet: `codegraph packet get <file|symbol|sql-object|handle> --pretty`
 - search: `codegraph search "auth user" --json`
 - explain: `codegraph explain <file|symbol|sql-object|handle>`
-- architecture: `codegraph inspect ./src --limit 20`
+- architecture: `codegraph inspect ./src --limit 20` (`--duplicates` adds the slower duplicate summary)
 - dependencies: `codegraph deps <file>` or `codegraph rdeps <file>`
 - path: `codegraph path <from> <to>`
 - cycles: `codegraph cycles --sort priority`

@@ -64,6 +64,7 @@ Build Options:
 
 Analysis Output Options:
   --json                    Output analysis commands as JSON (default where supported)
+  --duplicates              Include duplicate summary in inspect (off by default)
   --mermaid                 Output as Mermaid diagram
   --dot                     Output as DOT graph
   --sqlite <path>           Write to SQLite database
@@ -100,6 +101,7 @@ Examples:
   codegraph install --print-config codex
   codegraph uninstall --target codex --yes
   codegraph inspect ./src --limit 20
+  codegraph inspect ./src --limit 20 --duplicates
   codegraph duplicates ./src --min-confidence medium
   codegraph graph ./src
   codegraph graph --fast-graph --mermaid ./src

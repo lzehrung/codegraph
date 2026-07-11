@@ -12,6 +12,7 @@ import { handleGraphDeltaCommand } from "../src/cli/graphDelta.js";
 import { handleGraphQueryCommand, type GraphQueryCommandContext } from "../src/cli/graphQueries.js";
 import { CLI_HELP_TEXT, FILE_HELP_TEXT, MCP_SERVE_HELP_TEXT, PACKET_HELP_TEXT } from "../src/cli/help.js";
 import { handleImpactCommand, type ImpactCommandContext } from "../src/cli/impact.js";
+import { handleInspectCommand, type InspectCommandContext } from "../src/cli/inspect.js";
 import { handleGotoCommand, type NavigationCommandContext } from "../src/cli/navigation.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "../src/cli/packageInfo.js";
 import { handlePacketCommand } from "../src/cli/packet.js";
@@ -107,6 +108,26 @@ function createNavigationContext(overrides: Partial<NavigationCommandContext>): 
     exit: (code) => {
       throw new Error(`navigation exit ${code}`);
     },
+    ...overrides,
+  };
+}
+
+function createInspectContext(overrides: Partial<InspectCommandContext>): InspectCommandContext {
+  const projectRoot = path.join(os.tmpdir(), "codegraph-inspect-context").replace(/\\/g, "/");
+  return {
+    projectRootFs: projectRoot,
+    includeRootsAbs: [projectRoot],
+    discoveryOptions: {},
+    graphOptions: undefined,
+    nativeMode: "auto",
+    workerOpts: {},
+    progressHandler: undefined,
+    getOpt: (name) => (name === "--cache" ? "off" : undefined),
+    hasFlag: () => false,
+    resolveFilesFromRoots: async () => [],
+    writeJSONLine: () => undefined,
+    writeStdoutLine: () => undefined,
+    writeStderrLine: () => undefined,
     ...overrides,
   };
 }
@@ -826,6 +847,29 @@ describe("CLI command modules", () => {
       expect(report.changedFiles).toEqual(["main.ts"]);
     } finally {
       await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("inspect auto-enables native workers at the agent-session file threshold", async () => {
+    const emptyIndex: ProjectIndex = {
+      graph: { nodes: new Set<string>(), edges: [] },
+      modules: new Map(),
+      byFile: new Map(),
+      exportCache: new Map(),
+      scopeCache: new Map(),
+    };
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockResolvedValue(emptyIndex);
+    const largeFiles = Array.from({ length: 250 }, (_, index) => `file-${index}.ts`);
+    const smallFiles = largeFiles.slice(1);
+
+    try {
+      await handleInspectCommand(createInspectContext({ resolveFilesFromRoots: async () => smallFiles }));
+      await handleInspectCommand(createInspectContext({ resolveFilesFromRoots: async () => largeFiles }));
+
+      expect(buildSpy.mock.calls[0]?.[1]?.useNativeWorkers).toBeUndefined();
+      expect(buildSpy.mock.calls[1]?.[1]?.useNativeWorkers).toBe(true);
+    } finally {
+      buildSpy.mockRestore();
     }
   });
 

@@ -4,8 +4,8 @@
 
 On these tiny local fixtures, with Codegraph caching disabled and a fresh process for each sample:
 
-- Direct reads are far faster: their median wall times are tens of milliseconds, while the Codegraph runs take several seconds.
-- Codegraph reduces each declared workflow from three calls to one `explore` call.
+- The preselected-read baseline completes in the low single-digit milliseconds. It is a filesystem floor with known paths, not a competing repository-discovery workflow.
+- Codegraph uses one declared `explore` step while the baseline uses three declared read steps. This count does not represent equivalent work, agent round trips, or tool quality.
 - Every expected evidence anchor is present in every checked run.
 
 These findings describe only the declared workflows and checked fixtures below. Completeness means that expected path anchors appear in captured evidence. It does not measure answer quality, reasoning, relevance, correctness, or whether an agent could produce a good final answer. The benchmark also does not show that either workflow is generally faster, cheaper, or better at repository discovery.
@@ -18,7 +18,7 @@ From the repository root, run:
 npm run bench:docs
 ```
 
-This command rebuilds stale `dist` output when needed, runs every scenario and both variants serially, requires complete anchor evidence, writes `.tmp/public-docs-benchmark-results.json`, and prints the median table. The fixtures are local and the run makes no network requests.
+This command rebuilds stale `dist` output when needed, runs every scenario and both variants serially, requires complete anchor evidence, rewrites `results.example.json` and the generated table below, and prints the median table. The fixtures are local and the run makes no network requests.
 
 ## Workflows and metrics
 
@@ -41,18 +41,28 @@ Medians are calculated independently for each scenario and variant. Tool calls a
 
 | Scenario                         | Variant   | Samples | Median tool calls | Median file reads | Median wall time (ms) | Complete runs | Minimum completeness |
 | -------------------------------- | --------- | ------: | ----------------: | ----------------: | --------------------: | ------------: | -------------------: |
-| repo-orientation-small-ts        | baseline  |       3 |                 3 |                 3 |                60.458 |             3 |                 100% |
-| repo-orientation-small-ts        | codegraph |       3 |                 1 |                 3 |              3762.148 |             3 |                 100% |
-| python-import-reference          | baseline  |       3 |                 3 |                 3 |                27.293 |             3 |                 100% |
-| python-import-reference          | codegraph |       3 |                 1 |                 2 |              3620.385 |             3 |                 100% |
-| sql-migration-application-review | baseline  |       3 |                 3 |                 3 |                39.783 |             3 |                 100% |
-| sql-migration-application-review | codegraph |       3 |                 1 |                 3 |              3569.998 |             3 |                 100% |
-| mixed-docs-source-graph          | baseline  |       3 |                 3 |                 3 |                39.589 |             3 |                 100% |
-| mixed-docs-source-graph          | codegraph |       3 |                 1 |                 3 |              3437.486 |             3 |                 100% |
+| repo-orientation-small-ts        | baseline  |       3 |                 3 |                 3 |                 2.571 |             3 |                 100% |
+| repo-orientation-small-ts        | codegraph |       3 |                 1 |                 3 |               490.863 |             3 |                 100% |
+| python-import-reference          | baseline  |       3 |                 3 |                 3 |                 2.068 |             3 |                 100% |
+| python-import-reference          | codegraph |       3 |                 1 |                 2 |               480.674 |             3 |                 100% |
+| sql-migration-application-review | baseline  |       3 |                 3 |                 3 |                  2.09 |             3 |                 100% |
+| sql-migration-application-review | codegraph |       3 |                 1 |                 3 |               522.643 |             3 |                 100% |
+| mixed-docs-source-graph          | baseline  |       3 |                 3 |                 3 |                 2.164 |             3 |                 100% |
+| mixed-docs-source-graph          | codegraph |       3 |                 1 |                 3 |               461.371 |             3 |                 100% |
 
 <!-- benchmark-results:end -->
 
 The checked result document records Node, platform, architecture, CPU, logical CPU count, and memory so reruns can be compared in context.
+
+## Where the checked latency comes from
+
+The checked artifact was produced from a Windows checkout. Its environment metadata is recorded in `results.example.json`, and the generated table above is the source of its measured values.
+
+The comparison is intentionally end-to-end but not process-symmetric. Baseline reads execute inside the already-running harness and read three preselected files; Codegraph launches a fresh Node process, discovers files, builds a cold index, searches, constructs evidence packets, and serializes JSON. The table measures workflow latency and call count, not equivalent-operation throughput or native parser speed.
+
+Read the Codegraph wall-time rows as absolute cold CLI latency. Do not divide them by the baseline rows to estimate a slowdown; use an equal-work engine benchmark for parser or index throughput comparisons.
+
+Persistent MCP/server sessions amortize process startup and project loading. Measure those warm workflows separately before using this cold CLI table to set interactive latency targets.
 
 ## Limitations and variability
 

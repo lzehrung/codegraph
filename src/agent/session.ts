@@ -68,7 +68,7 @@ const EMPTY_SYMBOL_GRAPH: SymbolGraph = {
   nodes: new Map(),
   edges: [],
 };
-const AGENT_NATIVE_WORKER_AUTO_FILE_THRESHOLD = 250;
+export const NATIVE_WORKER_AUTO_FILE_THRESHOLD = 250;
 const DEFAULT_MAX_AUTO_REFRESH_FILES = 50;
 const DEFAULT_MAX_AUTO_REFRESH_BYTES = 2_000_000;
 const DEFAULT_MAX_FRESHNESS_CHANGED_FILES = 25;
@@ -213,10 +213,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
         files,
         ...(discoveryOptions ? { discovery: discoveryOptions } : {}),
       };
-      if (
-        options.buildOptions?.useNativeWorkers === undefined &&
-        files.length >= AGENT_NATIVE_WORKER_AUTO_FILE_THRESHOLD
-      ) {
+      if (options.buildOptions?.useNativeWorkers === undefined && files.length >= NATIVE_WORKER_AUTO_FILE_THRESHOLD) {
         buildOptions.useNativeWorkers = true;
       }
       const buildReport: BuildReport = { timings: {} };

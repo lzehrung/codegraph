@@ -88,9 +88,7 @@ const CLI_VALUE_OPTIONS = new Set<string>([
 ]);
 
 type CliPositionalPolicy =
-  | { kind: "any" }
-  | { kind: "max"; max: number; usage: string }
-  | { kind: "none"; usage: string };
+  { kind: "any" } | { kind: "max"; max: number; usage: string } | { kind: "none"; usage: string };
 
 type CliCommandSchema = {
   flags?: readonly string[];
@@ -415,7 +413,9 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ],
   [
     "inspect",
-    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], [...SHARED_BUILD_OPTIONS, "--limit"], { kind: "any" }),
+    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--duplicates"], [...SHARED_BUILD_OPTIONS, "--limit"], {
+      kind: "any",
+    }),
   ],
   [
     "mcp",
@@ -602,6 +602,7 @@ export function validateCliArgs(command: string, parsed: ParsedCliArgs): void {
 
 export function isCliValueOption(command: string, key: string, positionals: readonly string[]): boolean {
   if (command === "artifact" && key === "--sqlite" && positionals[0] === "build") return false;
+  if (command === "inspect" && key === "--duplicates") return false;
   return CLI_VALUE_OPTIONS.has(key);
 }
 
