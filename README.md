@@ -18,6 +18,7 @@ Codegraph is most useful when a file search is too shallow, a full IDE is imprac
 - [A useful first five minutes](#a-useful-first-five-minutes)
 - [What the output looks like](#what-the-output-looks-like)
 - [Why Codegraph](#why-codegraph)
+- [Why not just grep or an LSP?](#why-not-just-grep-or-an-lsp)
 - [Agent setup](#agent-setup)
 - [Language support](#language-support)
 - [Using as a library](#using-as-a-library)
@@ -30,7 +31,7 @@ Codegraph is most useful when a file search is too shallow, a full IDE is imprac
 
 | Question                                | Start here                                                              | What comes back                                                                   |
 | --------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| "Where should I start in this repo?"    | `codegraph orient --root . --budget small --pretty`                     | Central modules, a bounded tree, health signals, and copyable follow-ups          |
+| "Where should I start in this repo?"    | `codegraph orient --root . --budget small --pretty`                     | Central modules, a bounded tree, and copyable follow-ups                          |
 | "How does this feature work?"           | `codegraph explore "<question>" --root . --pretty`                      | Ranked anchors, source packets, dependency paths, blast radius, and likely tests  |
 | "What could this change break?"         | `codegraph review --base HEAD --head WORKTREE --summary`                | Changed symbols, risk signals, candidate tests, duplicate leads, and review tasks |
 | "What depends on this file?"            | `codegraph rdeps src/file.ts --json`                                    | Reverse dependencies from the resolved project graph                              |
