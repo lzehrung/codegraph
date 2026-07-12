@@ -29,6 +29,10 @@ type SqliteParameterInput = SqliteValue | readonly SqliteValue[];
 type ReadonlyAuthorizerDatabase = DatabaseSync & {
   setAuthorizer?: (callback: (actionCode: number) => number) => void;
 };
+type NodeSqliteStatement = StatementSync & {
+  columns: () => StatementColumnMetadata[];
+  setReturnArrays: (enabled: boolean) => void;
+};
 
 const requireNodeModule = createRequire(import.meta.url);
 let sqliteModule: NodeSqliteModule | undefined;
@@ -69,7 +73,7 @@ const normalizeParams = (params: readonly SqliteParameterInput[]): SqliteValue[]
 
 export class SqliteStatement {
   constructor(
-    private readonly statement: StatementSync,
+    private readonly statement: NodeSqliteStatement,
     private readonly returnArrays = false,
   ) {
     this.statement.setReturnArrays(returnArrays);
@@ -126,7 +130,7 @@ export class SqliteDatabase {
   }
 
   prepare(sql: string): SqliteStatement {
-    return new SqliteStatement(this.db.prepare(sql));
+    return new SqliteStatement(this.db.prepare(sql) as NodeSqliteStatement);
   }
 
   transaction<T>(fn: () => T): () => T {

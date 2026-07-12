@@ -154,7 +154,7 @@ Lifecycle commands accept either one positional project path or `--root <path>`,
 
 ## Installation
 
-Codegraph requires Node.js 24.10 or newer. Use only the scoped packages:
+Codegraph requires Node.js 22.16 or newer. Use only the scoped packages:
 
 - CLI and library: `@lzehrung/codegraph`
 - optional native runtime: `@lzehrung/codegraph-native`
