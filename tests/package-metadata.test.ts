@@ -242,11 +242,11 @@ describe("package metadata", () => {
     expect(bin.codegraph).toBe("dist/cli.js");
   });
 
-  it("requires a Node runtime with built-in SQLite authorizers", () => {
+  it("requires a Node runtime with the built-in SQLite statement metadata APIs", () => {
     const rootPackage = readJson("package.json");
     const engines = readStringRecord(rootPackage.engines);
 
-    expect(engines.node).toBe(">=24.10");
+    expect(engines.node).toBe(">=22.16");
   });
 
   it("keeps the root package description aligned with the multi-language surface", () => {

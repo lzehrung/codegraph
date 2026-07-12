@@ -46,7 +46,7 @@ Human-readable output uses `--pretty` or `--summary`. JSON, MCP tools, and libra
 
 ## Try it
 
-**Requirement:** Node.js 24.10 or newer.
+**Requirement:** Node.js 22.16 or newer.
 
 ### From a source checkout
 

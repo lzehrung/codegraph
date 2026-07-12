@@ -4,7 +4,7 @@ Requirements and install paths for local source checkouts, published packages, r
 
 ## Requirements
 
-- Node.js 24.10+
+- Node.js 22.16+
 - Published installs do not require Rust or a manual native setup step on supported targets.
 - Local source checkouts do not require Rust just to build `dist/`, but the native workspace addon only builds when Cargo is available.
 - If no compatible native artifact is available, Codegraph drops to reduced graph-only and regex recovery mode instead of loading JS grammars.
