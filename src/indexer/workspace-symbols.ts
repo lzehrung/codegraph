@@ -1,0 +1,239 @@
+import picomatch from "picomatch";
+import type { Range } from "../types.js";
+import { toProjectDisplayPath } from "../util/paths.js";
+import { ensureParsedContext } from "./parse-context.js";
+import { getCachedScope } from "./navigation-references.js";
+import { defNodeId } from "../graphs/symbol-graph.js";
+import type { ProjectIndex, SymbolDef, SymbolKind } from "./types.js";
+
+export const DEFAULT_WORKSPACE_SYMBOL_LIMIT = 50;
+export const MAX_WORKSPACE_SYMBOL_LIMIT = 500;
+
+export type WorkspaceSymbolsRequest = {
+  query: string;
+  kinds?: SymbolKind[];
+  exportedOnly?: boolean;
+  includeImports?: boolean;
+  fileGlob?: string;
+  limit?: number;
+};
+
+export type WorkspaceSymbolMatch = {
+  id: string;
+  def?: SymbolDef;
+  file: string;
+  name: string;
+  localName: string;
+  qualifiedName?: string;
+  kind: SymbolKind | "import" | "namespaceImport";
+  range: Range;
+  exported: boolean;
+  imported: boolean;
+};
+
+export type WorkspaceSymbolsResult = {
+  query: string;
+  symbols: WorkspaceSymbolMatch[];
+  totalCandidates: number;
+  omitted: number;
+  limit: number;
+};
+
+type LocalCandidate = {
+  def: SymbolDef;
+  exportedNames: string[];
+};
+
+type WorkspaceSymbolLookup = {
+  locals: LocalCandidate[];
+  imports?: Promise<WorkspaceSymbolMatch[]>;
+};
+
+type RankedCandidate = {
+  candidate: WorkspaceSymbolMatch;
+  rank: number;
+  exactImportAlias: boolean;
+};
+
+const LOOKUP_CACHE = new WeakMap<ProjectIndex, WorkspaceSymbolLookup>();
+
+export async function workspaceSymbols(
+  index: ProjectIndex,
+  request: WorkspaceSymbolsRequest,
+): Promise<WorkspaceSymbolsResult> {
+  const query = request.query.trim();
+  if (!query && !request.fileGlob && !request.kinds?.length) {
+    throw new Error("Workspace symbol lookup requires a query, file glob, or symbol kind filter.");
+  }
+
+  const limit = normalizeLimit(request.limit);
+  const lookup = getWorkspaceSymbolLookup(index);
+  const candidates = lookup.locals.map((candidate) => toLocalMatch(candidate, index.projectRoot));
+  if (request.includeImports) {
+    lookup.imports ??= buildImportCandidates(index);
+    candidates.push(...(await lookup.imports));
+  }
+
+  const kindFilter = request.kinds?.length ? new Set(request.kinds) : undefined;
+  const fileMatches = request.fileGlob ? picomatch(request.fileGlob, { dot: true }) : undefined;
+  const ranked: RankedCandidate[] = [];
+  for (const candidate of candidates) {
+    if (request.exportedOnly && !candidate.exported) continue;
+    if (kindFilter && !kindFilter.has(candidate.kind as SymbolKind)) continue;
+    if (fileMatches && !fileMatches(candidate.file)) continue;
+    const match = rankCandidate(candidate, query);
+    if (match) ranked.push(match);
+  }
+
+  ranked.sort(compareRankedCandidates);
+  const symbols = ranked.slice(0, limit).map(({ candidate }) => candidate);
+  return {
+    query,
+    symbols,
+    totalCandidates: ranked.length,
+    omitted: Math.max(0, ranked.length - symbols.length),
+    limit,
+  };
+}
+
+function getWorkspaceSymbolLookup(index: ProjectIndex): WorkspaceSymbolLookup {
+  const cached = LOOKUP_CACHE.get(index);
+  if (cached) return cached;
+
+  const exportedNamesById = new Map<string, Set<string>>();
+  for (const moduleIndex of index.byFile.values()) {
+    for (const entry of moduleIndex.exports) {
+      if (entry.type !== "local") continue;
+      const id = defNodeId(entry.target);
+      const names = exportedNamesById.get(id) ?? new Set<string>();
+      names.add(entry.exportedAs);
+      exportedNamesById.set(id, names);
+    }
+  }
+
+  const locals: LocalCandidate[] = [];
+  for (const moduleIndex of index.byFile.values()) {
+    for (const def of moduleIndex.locals) {
+      locals.push({
+        def,
+        exportedNames: [...(exportedNamesById.get(defNodeId(def)) ?? [])].sort(),
+      });
+    }
+  }
+  const created = { locals };
+  LOOKUP_CACHE.set(index, created);
+  return created;
+}
+
+function toLocalMatch(candidate: LocalCandidate, projectRoot: string | undefined): WorkspaceSymbolMatch {
+  const { def, exportedNames } = candidate;
+  const name = exportedNames[0] ?? def.localName;
+  const file = toProjectDisplayPath(projectRoot, def.file);
+  return {
+    id: defNodeId(def),
+    def,
+    file,
+    name,
+    localName: def.localName,
+    qualifiedName: `${file}::${name}`,
+    kind: def.kind,
+    range: def.range,
+    exported: Boolean(exportedNames.length),
+    imported: false,
+  };
+}
+
+async function buildImportCandidates(index: ProjectIndex): Promise<WorkspaceSymbolMatch[]> {
+  const imports: WorkspaceSymbolMatch[] = [];
+  for (const [file, moduleIndex] of index.byFile) {
+    if (!moduleIndex.imports.length) continue;
+    try {
+      const parsed = await ensureParsedContext(file, index.parsed?.get(file));
+      const scope = getCachedScope(index, file, moduleIndex, parsed);
+      for (const binding of scope.all) {
+        if (!binding.import) continue;
+        const range = binding.def ?? binding.occurrences[0];
+        if (!range) continue;
+        const kind = binding.import.kind === "namespace" ? "namespaceImport" : "import";
+        const displayFile = toProjectDisplayPath(index.projectRoot, file);
+        imports.push({
+          id: `${file}::${binding.name}::import`,
+          file: displayFile,
+          name: binding.name,
+          localName: binding.name,
+          qualifiedName: `${displayFile}::${binding.name}`,
+          kind,
+          range,
+          exported: false,
+          imported: true,
+        });
+      }
+    } catch {
+      continue;
+    }
+  }
+  return imports;
+}
+
+function rankCandidate(candidate: WorkspaceSymbolMatch, query: string): RankedCandidate | null {
+  if (!query) return { candidate, rank: 6, exactImportAlias: false };
+  const qualifiedName = candidate.qualifiedName ?? "";
+  const names = [candidate.name, candidate.localName];
+  if (qualifiedName === query) return { candidate, rank: 0, exactImportAlias: candidate.imported };
+  if (names.includes(query)) return { candidate, rank: 1, exactImportAlias: candidate.imported };
+
+  const normalizedQuery = query.toLocaleLowerCase();
+  const normalizedNames = names.map((name) => name.toLocaleLowerCase());
+  if (qualifiedName.toLocaleLowerCase() === normalizedQuery || normalizedNames.includes(normalizedQuery)) {
+    return { candidate, rank: 2, exactImportAlias: candidate.imported };
+  }
+  if (normalizedNames.some((name) => name.startsWith(normalizedQuery))) {
+    return { candidate, rank: 3, exactImportAlias: false };
+  }
+
+  const queryTokens = identifierTokens(query);
+  const candidateTokens = new Set(identifierTokens(names.join(" ")));
+  if (queryTokens.length && queryTokens.every((token) => candidateTokens.has(token))) {
+    return { candidate, rank: 4, exactImportAlias: false };
+  }
+  if (normalizedNames.some((name) => name.includes(normalizedQuery))) {
+    return { candidate, rank: 5, exactImportAlias: false };
+  }
+  return null;
+}
+
+function identifierTokens(value: string): string[] {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .split(/[^A-Za-z0-9]+/)
+    .map((token) => token.toLocaleLowerCase())
+    .filter(Boolean);
+}
+
+function compareRankedCandidates(left: RankedCandidate, right: RankedCandidate): number {
+  if (left.rank !== right.rank) return left.rank - right.rank;
+  if (left.exactImportAlias !== right.exactImportAlias) return left.exactImportAlias ? -1 : 1;
+  if (left.candidate.exported !== right.candidate.exported) return left.candidate.exported ? -1 : 1;
+  const surfaceOrder = fileSurfaceRank(left.candidate.file) - fileSurfaceRank(right.candidate.file);
+  if (surfaceOrder) return surfaceOrder;
+  const fileOrder = left.candidate.file.localeCompare(right.candidate.file);
+  if (fileOrder) return fileOrder;
+  const lineOrder = left.candidate.range.start.line - right.candidate.range.start.line;
+  if (lineOrder) return lineOrder;
+  const columnOrder = left.candidate.range.start.column - right.candidate.range.start.column;
+  if (columnOrder) return columnOrder;
+  return left.candidate.id.localeCompare(right.candidate.id);
+}
+
+function fileSurfaceRank(file: string): number {
+  const normalized = `/${file.toLocaleLowerCase()}/`;
+  if (/\/(?:test|tests|__tests__|spec|specs)\//.test(normalized)) return 1;
+  if (/\/(?:doc|docs)\//.test(normalized)) return 2;
+  return 0;
+}
+
+function normalizeLimit(limit: number | undefined): number {
+  if (limit === undefined) return DEFAULT_WORKSPACE_SYMBOL_LIMIT;
+  if (!Number.isInteger(limit) || limit < 0) throw new Error("Workspace symbol limit must be a non-negative integer.");
+  return Math.min(limit, MAX_WORKSPACE_SYMBOL_LIMIT);
+}

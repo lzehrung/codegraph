@@ -149,6 +149,8 @@ codegraph orient --root . ./src --budget medium --json
 codegraph explore "how does auth reach db?" --root . --pretty
 codegraph explore src/auth.ts --json
 codegraph search "build review report" --json
+codegraph symbols "CodeReviewSession" --root . --pretty
+codegraph symbols "review report" --kind class,function --exported --limit 50 --json
 codegraph explain src/review.ts --json
 codegraph packet get src/cli.ts --pretty
 # Read a live file; JSON is the default
@@ -161,6 +163,12 @@ codegraph file src/cli.ts --include-graph-context --json
 codegraph search "public users" --mode sql --json
 codegraph search "handle login" --from src/auth.ts --mode graph --depth 1 --json
 codegraph search --help
+
+`symbols` performs deterministic symbol-identity lookup, unlike hybrid `search`, which also ranks paths, prose, SQL, snippets, and graph evidence. Exact qualified names such as `src/session.ts::CodeReviewSession` rank before exact local/export names, prefixes, identifier tokens, and substrings.
+
+Use `--kind <kind,...>`, `--exported`, `--include-imports`, `--file-glob <project-relative-glob>`, and `--limit <0-500>` to compose filters. Imports are excluded by default, the default limit is 50, and an empty query requires `--kind` or `--file-glob`; JSON is the default and `--pretty` uses a concise renderer.
+
+Structured results include `schemaVersion`, root and analysis metadata, freshness, effective limits, omission counts, the normalized query, total candidates, and deterministic project-relative symbols. Each symbol has a portable handle, exact location, kind, exported status, and provenance.
 
 # Explain a file, symbol, SQL object, or search result handle
 codegraph explain src/auth.ts --json

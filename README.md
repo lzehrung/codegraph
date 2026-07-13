@@ -38,6 +38,7 @@ Use Codegraph alongside text search and compilers: text search finds exact strin
 | "What could this change break?"         | `codegraph review --base HEAD --head WORKTREE --summary`                | Changed symbols, risk signals, candidate tests, duplicate leads, and review tasks |
 | "What depends on this file?"            | `codegraph rdeps src/file.ts --json`                                    | Reverse dependencies from the resolved project graph                              |
 | "Where is this symbol defined or used?" | `codegraph goto <file> <line> <column>` and `codegraph refs ...`        | Semantic definitions and references across supported languages                    |
+| "Which declaration matches this name?" | `codegraph symbols "CodeReviewSession" --root . --pretty`                | Ranked symbols with portable handles, exact ranges, provenance, and omissions     |
 | "Is the architecture drifting?"         | `codegraph drift ./src --base origin/main --head HEAD --pretty`         | New cycles, hotspot changes, unresolved imports, API changes, and graph deltas    |
 | "Where is code duplicated?"             | `codegraph duplicates ./src --min-confidence medium`                    | Ranked exact and near-duplicate groups with locations and confidence              |
 | "Can another tool consume the graph?"   | `codegraph graph --root . ./src --compact-json --output codegraph.json` | JSON, Mermaid, DOT, or SQLite output                                              |

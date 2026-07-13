@@ -107,6 +107,15 @@ export type {
 } from "./indexer/types.js";
 
 export {
+  DEFAULT_WORKSPACE_SYMBOL_LIMIT,
+  MAX_WORKSPACE_SYMBOL_LIMIT,
+  workspaceSymbols,
+  type WorkspaceSymbolMatch,
+  type WorkspaceSymbolsRequest,
+  type WorkspaceSymbolsResult,
+} from "./indexer/workspace-symbols.js";
+
+export {
   buildGraphDelta,
   buildProjectIndex,
   buildProjectIndexFromFiles,

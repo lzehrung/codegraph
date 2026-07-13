@@ -43,11 +43,14 @@ Use `--root` to define the boundary for config lookup, cache scope, path confine
 
 - answer a question with bounded evidence: `codegraph explore "how does auth reach db?" --root . --pretty`
 - find a ranked anchor: `codegraph search "auth user" --json`
+- resolve a known symbol identity: `codegraph symbols "CodeReviewSession" --root . --pretty`
 - explain a known target: `codegraph explain <file|symbol|sql-object|handle>`
 - retrieve bounded indexed context: `codegraph packet get <file|symbol|sql-object|handle> --pretty`
 - read current disk content: `codegraph file <path> --offset 1 --limit 200 --pretty`
 
 `explore` returns ranked anchors, bounded packets, dependency paths, blast radius, candidate tests, explicit limits, omission counts, and copyable follow-ups. Hybrid search is code-first by default; search, explain, explore, and review output preserve analysis labels so reduced or mixed runs remain visible.
+
+Use `symbols` instead of hybrid `search` when only declarations should compete. It supports `--kind <kind,...>`, `--exported`, `--include-imports`, project-relative `--file-glob`, and `--limit <0-500>`; imports default off and the default limit is 50.
 
 ### Navigate
 
@@ -111,7 +114,8 @@ Sensitive-file rules:
 
 ## MCP and Freshness
 
-If MCP tools are available, prefer them over repeated CLI invocations. Use `explore`, `orient`, `search`, `get_file`, `packet_get`, `goto`, `refs`, `deps`, `rdeps`, `path`, `impact`, `review`, and `query_sqlite`; fall back to the CLI when MCP is unavailable.
+If MCP tools are available, prefer them over repeated CLI invocations. Use `explore`, `orient`, `workspace_symbols`, `search`, `get_file`, `packet_get`, `goto`, `refs`, `deps`, `rdeps`, `path`, `impact`, `review`, and `query_sqlite`; fall back to the CLI when MCP is unavailable.
+Use `workspace_symbols` for deterministic symbol identities and exact ranges; use `search` when paths, prose, SQL, snippets, or graph evidence should participate.
 
 Keep live and indexed evidence distinct:
 

@@ -6,6 +6,11 @@ import {
   MAX_FILE_VIEW_BYTES,
   MAX_FILE_VIEW_LINES,
 } from "../agent/fileView.js";
+import {
+  DEFAULT_WORKSPACE_SYMBOL_LIMIT,
+  MAX_WORKSPACE_SYMBOL_LIMIT,
+} from "../indexer/workspace-symbols.js";
+import { SymbolKind } from "../indexer/types.js";
 
 import { DEFAULT_SQLITE_ROW_LIMIT, MAX_SQLITE_ROW_LIMIT } from "./sqliteGuard.js";
 
@@ -47,6 +52,27 @@ export const MCP_TOOLS: Tool[] = [
         from: stringProperty,
         depth: { type: "integer", minimum: 0, default: 1, description: "Graph neighborhood depth." },
         limit: { type: "integer", minimum: 0, maximum: 100, default: 20 },
+      },
+      ["query"],
+    ),
+  },
+  {
+    name: "workspace_symbols",
+    description:
+      "Deterministic symbol-identity lookup with exact locations and filters. Use hybrid search instead for paths, prose, SQL, snippets, or graph evidence.",
+    inputSchema: objectSchema(
+      {
+        query: stringProperty,
+        kinds: { type: "array", items: { type: "string", enum: Object.values(SymbolKind) } },
+        exportedOnly: booleanProperty,
+        includeImports: booleanProperty,
+        fileGlob: stringProperty,
+        limit: {
+          type: "integer",
+          minimum: 0,
+          maximum: MAX_WORKSPACE_SYMBOL_LIMIT,
+          default: DEFAULT_WORKSPACE_SYMBOL_LIMIT,
+        },
       },
       ["query"],
     ),

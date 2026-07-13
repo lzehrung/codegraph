@@ -39,6 +39,7 @@ The server exposes the same bounded primitives as the CLI and library session la
 - `orient`: compact first-turn repo context.
 - `packet_get`: bounded evidence packet by file path, symbol name, SQL object name, or stable target.
 - `search`: deterministic ranked search across paths, symbols, chunks, SQL objects, and graph context.
+- `workspace_symbols`: deterministic symbol-identity lookup with exact locations and composable filters; use `search` for hybrid path, prose, SQL, snippet, or graph evidence.
 - `get_file`: bounded project file read with `offset`/`limit` line pagination, exact `number<TAB>line` content, and optional direct graph context.
 - `get_symbol`: resolve a stable search or explain handle.
 - `goto`: definition lookup by file position.
@@ -54,6 +55,12 @@ Before index-backed tool calls, MCP checks whether discovered files changed sinc
 Use `refresh_index` when you need to force a rebuild, reset SQLite artifact state, or refresh after a change burst that exceeds the automatic refresh limits. `query_sqlite` refreshes Codegraph-owned SQLite artifacts after small edits when write access is enabled; otherwise it refuses to serve stale artifact rows. `artifact_build` refuses to write outputs from a stale MCP index; run `refresh_index` first after large change bursts.
 `get_file` reads live bytes from disk after path confinement. It does not require a fresh index; only an explicit `includeGraphContext: true` checks indexed freshness and adds direct graph context, so returned file bytes and `totalLines` remain live even when `freshness` reports stale context.
 Tool schemas are flat JSON objects for broad client compatibility; argument combinations such as `refs` handle-vs-position mode are validated by the server.
+
+### `workspace_symbols`
+
+Call `workspace_symbols` with flat fields `query`, optional `kinds`, `exportedOnly`, `includeImports`, `fileGlob`, and `limit`. Imports are excluded by default; `fileGlob` matches project-relative paths, the default limit is 50, and both the schema and handler enforce a maximum of 500.
+
+Exact qualified identities such as `src/session.ts::CodeReviewSession` rank before exact names, prefixes, identifier tokens, and substrings. Responses include analysis and freshness metadata, effective limits, omission counts, total candidates, and deterministic symbols with portable handles, exact ranges, exported status, and provenance.
 
 ### `get_file`
 

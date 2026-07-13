@@ -9,6 +9,7 @@ Commands:
   review        Generate code review report
   packet        Retrieve bounded evidence packets by file path or stable target
   search        Ranked agent search across files, symbols, chunks, SQL, and graph context
+  symbols       Deterministic workspace-symbol lookup with exact locations
   explain       Explain a file, symbol, SQL object, or search handle
   impact        Analyze PR impact
   inspect       Summarize repo structure and recommend next commands
@@ -117,6 +118,7 @@ Examples:
   codegraph impact --provider git --base main --head HEAD --pretty --duplicates off
   codegraph refs --file src/index.ts --line 42 --col 10
   codegraph doctor
+  codegraph symbols "CodeReviewSession" --root . --pretty
   codegraph version
   codegraph -v
 `;
@@ -152,6 +154,7 @@ const knownCliCommands = new Set([
   "refs",
   "review",
   "search",
+  "symbols",
   "skill",
   "status",
   "sync",
@@ -243,6 +246,21 @@ Search Modes:
 Output:
   Results include top-level analysis metadata plus stable handles, rank reasons, provenance, evidence, graph neighbors, follow-up commands, limits, and omission counts.
   Hybrid search is code-first by default: source files and symbols outrank docs unless you use text mode or the docs are the strongest remaining evidence.
+
+Index options:
+  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+`;
+
+export const SYMBOLS_HELP_TEXT = `codegraph symbols - Deterministic workspace-symbol lookup
+
+Usage: codegraph symbols [query] [--root <path>] [--kind <kind,...>] [--exported] [--include-imports] [--file-glob <glob>] [--limit <0-500>] [--json | --pretty]
+
+Matching:
+  Exact and qualified symbol identities rank ahead of prefix, token, and substring matches. Imports are excluded by default; use --include-imports to include aliases.
+  A query is required unless --kind or --file-glob narrows the lookup. --kind accepts function, class, variable, interface, type, default, table, view, index, constraint, or routine.
+
+Output:
+  JSON includes portable handles, exact declaration ranges, provenance, limits, and omission counts. Pretty output is concise and intended for direct reading.
 
 Index options:
   Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
@@ -432,6 +450,7 @@ export function helpTextForCommand(command: string, positionals: readonly string
   if (command === "explore") return EXPLORE_HELP_TEXT;
   if (command === "file") return FILE_HELP_TEXT;
   if (command === "search") return SEARCH_HELP_TEXT;
+  if (command === "symbols") return SYMBOLS_HELP_TEXT;
   if (command === "orient") return ORIENT_HELP_TEXT;
   if (command === "packet") return PACKET_HELP_TEXT;
   if (command === "explain") return EXPLAIN_HELP_TEXT;

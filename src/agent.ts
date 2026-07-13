@@ -75,3 +75,20 @@ export { buildCodegraphArtifact, buildCodegraphArtifactWithSession } from "./age
 export type { CodegraphArtifactBuildRequest, CodegraphArtifactBuildResult } from "./agent/artifact.js";
 export { createCodegraphMcpHandlers, listCodegraphMcpTools, serveCodegraphMcp } from "./mcp/server.js";
 export type { CodegraphMcpHandlers, CodegraphMcpServerOptions } from "./mcp/server.js";
+export {
+  formatWorkspaceSymbolsResponse,
+  workspaceSymbols,
+  workspaceSymbolsInSnapshot,
+  workspaceSymbolsWithSession,
+} from "./agent/workspaceSymbols.js";
+export type {
+  AgentWorkspaceSymbolsRequest,
+  WorkspaceSymbolsResponse,
+} from "./agent/workspaceSymbols.js";
+export type {
+  SemanticLocation,
+  SemanticOmittedCounts,
+  SemanticProvenance,
+  SemanticResponseEnvelope,
+  SemanticSymbol,
+} from "./agent/semantic.js";

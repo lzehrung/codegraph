@@ -93,6 +93,18 @@ Orientation returns summary bullets, ranked `focus` targets, a bounded tree, bud
 Use `orient --pretty` or MCP `orient` for compact model-readable triage and `orient --json` when follow-up tools need exact focus reasons, limits, or omission counts.
 Small orientation packets default to cheap health analysis; use larger budgets only when cycle, unresolved-import, or duplicate counts matter.
 
+## Workspace-symbol identities
+
+Use `symbols` when the question is "which declaration has this identity?" and follow with the returned portable handle. It is deterministic and filterable; use hybrid `search` instead when paths, prose, SQL, snippets, or graph evidence should participate.
+
+```bash
+codegraph symbols "CodeReviewSession" --root . --pretty
+codegraph symbols "src/session.ts::CodeReviewSession" --json
+codegraph explain "<handle-from-symbols>" --json
+```
+
+Imports are excluded unless `--include-imports` is explicit. Compose `--kind`, `--exported`, and project-relative `--file-glob` filters to narrow large workspaces; the limit defaults to 50 and caps at 500.
+
 ## Search anchors
 
 Use `search` when an agent has a query but no file target or search handle and needs a compact starting point before calling `goto`, `refs`, `deps`, `rdeps`, `chunk`, or later explanation tooling:

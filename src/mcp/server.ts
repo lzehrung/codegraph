@@ -28,6 +28,10 @@ import { orientCodegraphWithSession, type AgentOrientBudget, type AgentOrientRes
 import { getCodegraphPacketWithSession, type AgentPacketResponse } from "../agent/packet.js";
 import { searchCodegraphWithSession } from "../agent/search.js";
 import type { AgentSearchMode, AgentSearchResponse } from "../agent/search.js";
+import {
+  workspaceSymbolsWithSession,
+  type WorkspaceSymbolsResponse,
+} from "../agent/workspaceSymbols.js";
 import { getDependencies, getReverseDependencies, getShortestPath, type DependencyNode } from "../graphs/queries.js";
 import { findReferences, goToDefinition } from "../indexer/navigation.js";
 import { buildReviewReport, type ReviewDepth, type ReviewReport } from "../review.js";
@@ -38,6 +42,11 @@ import { createAgentSession, listAgentSessionFiles } from "../agent/session.js";
 import { mapLimit } from "../util/concurrency.js";
 import { assertRealPathCandidateWithinRoot, resolveProjectFile } from "../util/confinedFile.js";
 import type { AgentFreshnessResult, AgentProjectSnapshot, AgentSession } from "../agent/session.js";
+import { SymbolKind } from "../indexer/types.js";
+import {
+  DEFAULT_WORKSPACE_SYMBOL_LIMIT,
+  MAX_WORKSPACE_SYMBOL_LIMIT,
+} from "../indexer/workspace-symbols.js";
 import type { BuildOptions, GoToResult } from "../indexer/types.js";
 import {
   assertMcpSqliteQueryResourceBounded,
@@ -104,6 +113,14 @@ export type CodegraphMcpHandlers = {
     depth?: number | undefined;
     limit?: number | undefined;
   }) => Promise<CodegraphMcpFreshResult<AgentSearchResponse>>;
+  workspace_symbols: (request: {
+    query: string;
+    kinds?: SymbolKind[] | undefined;
+    exportedOnly?: boolean | undefined;
+    includeImports?: boolean | undefined;
+    fileGlob?: string | undefined;
+    limit?: number | undefined;
+  }) => Promise<WorkspaceSymbolsResponse>;
   explore: (request: {
     query: string;
     limit?: number | undefined;
@@ -471,6 +488,17 @@ function createCodegraphMcpHandlersForSession(
             ...(request.limit !== undefined ? { limit: request.limit } : {}),
           }),
       ),
+
+    workspace_symbols: async (request) =>
+      await workspaceSymbolsWithSession(session, {
+        root,
+        query: request.query,
+        ...(request.kinds !== undefined ? { kinds: request.kinds } : {}),
+        ...(request.exportedOnly !== undefined ? { exportedOnly: request.exportedOnly } : {}),
+        ...(request.includeImports !== undefined ? { includeImports: request.includeImports } : {}),
+        ...(request.fileGlob !== undefined ? { fileGlob: request.fileGlob } : {}),
+        limit: boundedLimit(request.limit, DEFAULT_WORKSPACE_SYMBOL_LIMIT, MAX_WORKSPACE_SYMBOL_LIMIT),
+      }),
 
     explore: async (request) =>
       await withFreshness(
@@ -919,6 +947,8 @@ async function callMcpTool(handlers: CodegraphMcpHandlers, name: string, input: 
   switch (name) {
     case "search":
       return await handlers.search(searchSchema.parse(input));
+    case "workspace_symbols":
+      return await handlers.workspace_symbols(workspaceSymbolsSchema.parse(input));
     case "explore":
       return await handlers.explore(exploreSchema.parse(input));
     case "orient":
@@ -993,6 +1023,15 @@ const searchSchema = z.object({
   from: z.string().optional(),
   depth: z.number().int().nonnegative().optional(),
   limit: z.number().int().nonnegative().optional(),
+});
+
+const workspaceSymbolsSchema = z.object({
+  query: z.string(),
+  kinds: z.array(z.nativeEnum(SymbolKind)).optional(),
+  exportedOnly: z.boolean().optional(),
+  includeImports: z.boolean().optional(),
+  fileGlob: z.string().optional(),
+  limit: z.number().int().nonnegative().max(MAX_WORKSPACE_SYMBOL_LIMIT).optional(),
 });
 
 const exploreSchema = z.object({

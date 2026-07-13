@@ -120,6 +120,13 @@ export {
   type GraphDeltaReport,
   type FindReferencesResult,
   type Reference,
+  DEFAULT_WORKSPACE_SYMBOL_LIMIT,
+  MAX_WORKSPACE_SYMBOL_LIMIT,
+  workspaceSymbols as queryWorkspaceSymbols,
+  type WorkspaceSymbolMatch,
+  type WorkspaceSymbolsRequest,
+  type WorkspaceSymbolsResult,
+
   parseFile,
   collectLocalsAndExportsFromSource,
   collectImportsForFile,
@@ -284,6 +291,25 @@ export type {
 export { getCodegraphPacket } from "./agent/packet.js";
 export type { AgentPacketKind, AgentPacketPayload, AgentPacketRequest, AgentPacketResponse } from "./agent/packet.js";
 
+/** Deterministic workspace-symbol lookup with portable handles and exact locations. */
+export {
+  formatWorkspaceSymbolsResponse,
+  workspaceSymbols,
+  workspaceSymbolsInSnapshot,
+  workspaceSymbolsWithSession,
+} from "./agent/workspaceSymbols.js";
+export type {
+  AgentWorkspaceSymbolsRequest,
+  WorkspaceSymbolsResponse,
+} from "./agent/workspaceSymbols.js";
+export type {
+  SemanticLocation,
+  SemanticOmittedCounts,
+  SemanticProvenance,
+  SemanticResponseEnvelope,
+  SemanticSymbol,
+} from "./agent/semantic.js";
+
 /** Agent-facing deterministic search over symbols, files, chunks, SQL objects, and graph neighborhoods. */
 export { formatAgentSearchResponse, searchCodegraph, searchCodegraphWithSession } from "./agent/search.js";
 export type {
@@ -331,6 +357,7 @@ export {
   tool_getReverseDependencies,
   tool_getHotspots,
   tool_goToDefinition,
+  tool_workspaceSymbols,
   tool_findReferences,
   type ToolFileOverview,
   type ToolFileOverviewImport,
@@ -339,6 +366,7 @@ export {
   type ToolSymbolMatch,
   type ToolDependencyEntry,
   type ToolHotspotEntry,
+  type ToolWorkspaceSymbolsRuntimeOptions,
 } from "./agent-tools.js";
 
 /** SQLite graph persistence and query helpers. */

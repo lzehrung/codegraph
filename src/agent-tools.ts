@@ -2,6 +2,7 @@ import { buildProjectIndexIncremental } from "./indexer/build-index.js";
 import { listSymbols, symbolId } from "./indexer/symbols.js";
 import { goToDefinition, findReferences } from "./indexer/navigation.js";
 import type {
+  BuildOptions,
   ImportBinding,
   ProjectIndex,
   Reference,
@@ -21,6 +22,13 @@ import { isFilePathWithinRoot, normalizePath, resolveFilePathFromRoot } from "./
 import { listProjectFiles } from "./util/projectFiles.js";
 import { boundAgentList, defaultAgentLimit, normalizeAgentLimit } from "./agent/bounds.js";
 import { normalizeAgentOutputPath } from "./agent/normalize.js";
+import type { AgentSession } from "./agent/session.js";
+import {
+  workspaceSymbols,
+  workspaceSymbolsWithSession,
+  type WorkspaceSymbolsResponse,
+} from "./agent/workspaceSymbols.js";
+import type { WorkspaceSymbolsRequest } from "./indexer/workspace-symbols.js";
 
 type ToolRuntimeOptions = {
   index?: ProjectIndex;
@@ -245,6 +253,36 @@ export async function tool_getFileOverview(
       error: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+/** Optional warm-session or build configuration for `tool_workspaceSymbols`. */
+export type ToolWorkspaceSymbolsRuntimeOptions = {
+  session?: AgentSession;
+  buildOptions?: BuildOptions;
+};
+
+/**
+ * Looks up workspace symbols with deterministic ranking and portable output.
+ *
+ * Pass a shared `session` for repeated calls over the same project snapshot.
+ */
+export async function tool_workspaceSymbols(
+  root: string,
+  request: WorkspaceSymbolsRequest,
+  runtimeOptions: ToolWorkspaceSymbolsRuntimeOptions = {},
+): Promise<WorkspaceSymbolsResponse> {
+  if (runtimeOptions.session && runtimeOptions.buildOptions) {
+    throw new Error("Workspace symbol tool options cannot combine a prebuilt session with buildOptions.");
+  }
+  const agentRequest = {
+    root,
+    ...request,
+    ...(runtimeOptions.buildOptions ? { buildOptions: runtimeOptions.buildOptions } : {}),
+  };
+  if (runtimeOptions.session) {
+    return await workspaceSymbolsWithSession(runtimeOptions.session, agentRequest);
+  }
+  return await workspaceSymbols(agentRequest);
 }
 
 /**

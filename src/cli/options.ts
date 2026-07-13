@@ -29,6 +29,8 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--pattern",
   "--regex",
   "--glob",
+  "--file-glob",
+  "--kind",
   "--provider",
   "--base",
   "--head",
@@ -508,6 +510,14 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     commandSchema(
       [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--no-snippets"],
       [...SHARED_BUILD_OPTIONS, "--depth", "--from", "--limit", "--mode"],
+      { kind: "any" },
+    ),
+  ],
+  [
+    "symbols",
+    commandSchema(
+      [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--exported", "--include-imports"],
+      [...SHARED_BUILD_OPTIONS, "--file-glob", "--kind", "--limit"],
       { kind: "any" },
     ),
   ],
