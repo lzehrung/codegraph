@@ -86,9 +86,7 @@ export function findCallHierarchy(
   for (let cursor = 0; cursor < queue.length; cursor += 1) {
     const current = queue[cursor]!;
     if (current.depth >= depthLimit) continue;
-    const relationships = [...(adjacency.get(current.id) ?? [])].sort((left, right) =>
-      compareCallRelationships(graph, left, right),
-    );
+    const relationships = adjacency.get(current.id) ?? [];
     for (const relationship of relationships) {
       const edgeKey = `${relationship.caller}->${relationship.callee}`;
       if (reportedEdges.has(edgeKey)) continue;
@@ -175,6 +173,12 @@ function getCallHierarchyIndex(graph: SymbolGraph): CallHierarchyIndex {
     relationship.sites.sort(compareCallsites);
     appendRelationship(outgoingByCaller, relationship.caller, relationship);
     appendRelationship(incomingByCallee, relationship.callee, relationship);
+  }
+  for (const relationships of outgoingByCaller.values()) {
+    relationships.sort((left, right) => compareCallRelationships(graph, left, right));
+  }
+  for (const relationships of incomingByCallee.values()) {
+    relationships.sort((left, right) => compareCallRelationships(graph, left, right));
   }
   const created = { outgoingByCaller, incomingByCallee };
   CALL_HIERARCHY_CACHE.set(graph, created);
