@@ -50,7 +50,7 @@ Use `--root` to define the boundary for config lookup, cache scope, path confine
 
 `explore` returns ranked anchors, bounded packets, dependency paths, blast radius, candidate tests, explicit limits, omission counts, and copyable follow-ups. Hybrid search is code-first by default; search, explain, explore, and review output preserve analysis labels so reduced or mixed runs remain visible.
 
-Use `symbols` instead of hybrid `search` when only declarations should compete. It supports `--kind <kind,...>`, `--exported`, `--include-imports`, project-relative `--file-glob`, and `--limit <0-500>`; imports default off and the default limit is 50.
+Use `symbols` instead of hybrid `search` when only declarations should compete. It supports `--kind <kind,...>`, `--exported`, `--include-imports`, project-relative `--file-glob`, and `--limit <0-500>`; imports default off, and only named/default aliases that resolve to concrete declarations are returned.
 
 Use the portable callable handle from `symbols` with `codegraph callers <handle>` or `codegraph callees <handle>`. Depth defaults to 1 and caps at 5, the symbol limit defaults to 100 and caps at 500, JSON is the default, and `--pretty` prints grouped exact callsites.
 

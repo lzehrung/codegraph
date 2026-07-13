@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { buildSymbolGraphDetailed } from "../src/graphs/symbol-graph-detailed.js";
 import { buildProjectIndex } from "../src/indexer/build-index.js";
+import { findImplementations } from "../src/indexer/type-hierarchy.js";
 import * as nativeRuntime from "../src/native/treeSitterNative.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 
@@ -22,10 +23,12 @@ type ProvenRelation = {
 const PROVEN_RELATIONS: ProvenRelation[] = [
   { from: "TsWorker", to: "TsBase", relation: "extends" },
   { from: "TsWorker", to: "TsService", relation: "implements" },
+  { from: "TsConcrete", to: "TsAbstract", relation: "extends" },
   { from: "JavaWorker", to: "JavaService", relation: "implements" },
   { from: "JavaSpecialized", to: "JavaWorker", relation: "extends" },
   { from: "CsWorker", to: "CsService", relation: "implements" },
   { from: "CsSpecialized", to: "CsWorker", relation: "extends" },
+  { from: "CsConcrete", to: "CsAbstract", relation: "extends" },
   { from: "RustWorker", to: "RustService", relation: "implements" },
   { from: "SwiftWorker", to: "SwiftService", relation: "implements" },
   { from: "SwiftSpecialized", to: "SwiftWorker", relation: "extends" },
@@ -45,6 +48,8 @@ nativeDescribe("type hierarchy language parity", () => {
         "class TsBase {}",
         "class TsWorker extends TsBase implements TsService { run(): void {} }",
         "class TsUnrelated { run(): void {} }",
+        "abstract class TsAbstract { abstract execute(): void }",
+        "class TsConcrete extends TsAbstract { execute(): void {} }",
       ].join("\n"),
       "Types.java": [
         "interface JavaService { void run(); }",
@@ -55,6 +60,8 @@ nativeDescribe("type hierarchy language parity", () => {
         "interface CsService { void Run(); }",
         "class CsWorker : CsService { public void Run() {} }",
         "class CsSpecialized : CsWorker {}",
+        "abstract class CsAbstract { public abstract void Execute(); }",
+        "class CsConcrete : CsAbstract { public override void Execute() {} }",
       ].join("\n"),
       "types.rs": [
         "trait RustService { fn run(&self); }",
@@ -95,5 +102,25 @@ nativeDescribe("type hierarchy language parity", () => {
       expect(actualRelations).toContain(`${expected.from}:${expected.relation}:${expected.to}`);
     }
     expect(actualRelations).not.toContain("TsUnrelated:implements:TsService");
+    for (const [ownerName, implementationName, memberName] of [
+      ["TsAbstract", "TsConcrete", "execute"],
+      ["CsAbstract", "CsConcrete", "Execute"],
+    ] as const) {
+      const ownerId = nodesByName.get(ownerName);
+      expect(ownerId, `${ownerName} was not indexed`).toBeDefined();
+      const memberId = graph.edges
+        .filter((edge) => edge.to === ownerId && edge.label === "member_of")
+        .map((edge) => edge.from)
+        .find((id) => graph.nodes.get(id)?.name === memberName);
+      expect(memberId, `${ownerName}.${memberName} was not indexed`).toBeDefined();
+      const result = findImplementations(index, graph, memberId!);
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") continue;
+      expect(
+        result.implementations.map((entry) =>
+          entry.implementingTypeId ? graph.nodes.get(entry.implementingTypeId)?.name : undefined,
+        ),
+      ).toEqual([implementationName]);
+    }
   });
 });

@@ -65,7 +65,7 @@ Tool schemas are flat JSON objects for broad client compatibility; argument comb
 
 Call `workspace_symbols` with flat fields `query`, optional `kinds`, `exportedOnly`, `includeImports`, `fileGlob`, and `limit`. Imports are excluded by default; `fileGlob` matches project-relative paths, the default limit is 50, and both the schema and handler enforce a maximum of 500.
 
-Exact qualified identities such as `src/session.ts::CodeReviewSession` rank before exact names, prefixes, identifier tokens, and substrings. Responses include analysis and freshness metadata, effective limits, omission counts, total candidates, and deterministic symbols with portable handles, exact ranges, exported status, and provenance.
+Exact qualified identities such as `src/session.ts::CodeReviewSession` rank before exact names, prefixes, identifier tokens, and substrings. Responses include deterministic portable symbols plus analysis, freshness, limits, and omissions; only named/default import aliases that resolve to a concrete declaration are returned, while namespace/star and unresolved aliases are counted as omissions.
 
 ### Rename preview
 

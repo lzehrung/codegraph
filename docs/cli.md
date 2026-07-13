@@ -175,7 +175,7 @@ codegraph search --help
 
 Use `--kind <kind,...>`, `--exported`, `--include-imports`, `--file-glob <project-relative-glob>`, and `--limit <0-500>` to compose filters. Imports are excluded by default, the default limit is 50, and an empty query requires `--kind` or `--file-glob`; JSON is the default and `--pretty` uses a concise renderer.
 
-Structured results include `schemaVersion`, root and analysis metadata, freshness, effective limits, omission counts, the normalized query, total candidates, and deterministic project-relative symbols. Import aliases keep their binding location but carry a handle for the resolved declaration; unresolved aliases and failed import scans are reported under `omittedCounts`.
+Structured results include `schemaVersion`, root and analysis metadata, freshness, effective limits, omission counts, the normalized query, total candidates, and deterministic project-relative symbols. Resolvable named/default import aliases keep their binding location but carry a handle for the declaration; namespace/star aliases, unresolved aliases, and failed import scans are reported under `omittedCounts`.
 
 `callers` and `callees` accept one portable function or callable-member handle from `symbols`. Depth defaults to 1 and caps at 5; the symbol limit defaults to 100 and caps at 500, while callsites are grouped under each related symbol and bounded separately.
 

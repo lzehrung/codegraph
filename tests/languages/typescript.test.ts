@@ -26,6 +26,16 @@ const definition: LanguageTestDefinition = {
         to: { type: "file", path: "helpers.ts" },
       },
     ],
+    symbols: [
+      {
+        file: "abstract-implementation.ts",
+        includes: [
+          { name: "AbstractJob", kind: "class" },
+          { name: "execute", kind: "function" },
+          { name: "ConcreteJob", kind: "class" },
+        ],
+      },
+    ],
   },
 };
 

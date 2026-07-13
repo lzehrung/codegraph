@@ -258,6 +258,7 @@ Do not use vector search. Do not let ordinary prose tokens outrank an exact symb
 - Reuse or extend `buildSymbolLookup()`; do not rebuild independent symbol maps on every query.
 - If the lookup is expensive, cache it on `AgentProjectSnapshot` or session state and invalidate with the snapshot.
 - Exclude graph-only nodes that cannot resolve to a real `SymbolDef` from symbol handles.
+- Namespace/star aliases without a real `SymbolDef` remain excluded and contribute explicit import omissions rather than receiving incompatible handles.
 
 ### Acceptance tests
 

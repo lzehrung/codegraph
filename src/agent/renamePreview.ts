@@ -191,16 +191,58 @@ export async function previewRenameInSnapshot(
   let omittedImplementations = implementationResult.status === "ok" ? implementationResult.omitted : 0;
   let missingImplementationDefinitions = 0;
   let implementationAmbiguityReason: string | undefined;
+  const implementationUnsafeSites: RenameUnsafeSite[] = [];
   if (implementationResult.status === "ok") {
-    if (implementationResult.ambiguous) {
-      implementationAmbiguityReason =
-        "One or more implementing types have multiple same-named members and signature identity is unavailable.";
-    }
     const lookup = buildSymbolLookup(snapshot);
+    for (const unresolved of implementationResult.unresolved) {
+      const unresolvedDef = lookup.defById.get(unresolved.symbolId);
+      const evidenceSite =
+        unresolved.site ?? (unresolvedDef ? { file: unresolvedDef.file, range: unresolvedDef.range } : undefined);
+      implementationUnsafeSites.push({
+        location: evidenceSite
+          ? {
+              file: normalizeAgentFilePath(snapshot.root, evidenceSite.file),
+              range: evidenceSite.range,
+            }
+          : {
+              file: normalizeAgentFilePath(snapshot.root, resolved.def.file),
+              range: resolved.def.range,
+            },
+        text: unresolvedDef?.localName ?? resolved.def.localName,
+        reason: "ambiguous_target",
+        provenance: {
+          ...provenance,
+          confidence: "low",
+          reason: `Implementation identity could not be proven for ${unresolved.symbolId}.`,
+        },
+      });
+    }
     for (const implementation of implementationResult.implementations) {
       if (!implementation.implementingTypeId) continue;
       const memberDef = lookup.defById.get(implementation.symbolId);
       if (!memberDef) {
+        const implementingType = lookup.defById.get(implementation.implementingTypeId);
+        const evidenceSite =
+          implementation.site ??
+          (implementingType ? { file: implementingType.file, range: implementingType.range } : undefined);
+        implementationUnsafeSites.push({
+          location: evidenceSite
+            ? {
+                file: normalizeAgentFilePath(snapshot.root, evidenceSite.file),
+                range: evidenceSite.range,
+              }
+            : {
+                file: normalizeAgentFilePath(snapshot.root, resolved.def.file),
+                range: resolved.def.range,
+              },
+          text: implementingType?.localName ?? resolved.def.localName,
+          reason: "unresolved_reference",
+          provenance: {
+            ...provenance,
+            confidence: "low",
+            reason: `Proven implementation ${implementation.symbolId} could not be resolved.`,
+          },
+        });
         missingImplementationDefinitions += 1;
         continue;
       }
@@ -223,6 +265,7 @@ export async function previewRenameInSnapshot(
   omittedImplementations += missingImplementationDefinitions;
   const edits: RenameEdit[] = [];
   const unsafeSites: RenameUnsafeSite[] = [];
+  unsafeSites.push(...implementationUnsafeSites);
   const loadedFiles = new Map<string, Promise<LoadedRenameFile | null>>();
   const realRoot = await fs.realpath(snapshot.root);
   const loadSource: RenameSourceLoader = async (file) => {
@@ -252,21 +295,6 @@ export async function previewRenameInSnapshot(
         ...provenance,
         confidence: "low",
         reason: implementationAmbiguityReason,
-      },
-    });
-  }
-  if (missingImplementationDefinitions) {
-    unsafeSites.push({
-      location: {
-        file: normalizeAgentFilePath(snapshot.root, resolved.def.file),
-        range: resolved.def.range,
-      },
-      text: resolved.def.localName,
-      reason: "unresolved_reference",
-      provenance: {
-        ...provenance,
-        confidence: "low",
-        reason: `${missingImplementationDefinitions} proven implementation definition(s) could not be resolved.`,
       },
     });
   }

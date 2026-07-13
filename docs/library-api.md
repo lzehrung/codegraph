@@ -104,7 +104,7 @@ const result = await workspaceSymbolsWithSession(session, {
 
 Requests accept `query`, `kinds`, `exportedOnly`, `includeImports`, `fileGlob`, and `limit`; standalone agent calls also require `root` and accept `buildOptions`. Imports default off, limits default to 50 and cap at 500, and an empty query requires a kind or file-glob filter.
 
-`WorkspaceSymbolsResponse` includes the shared semantic envelope, query, symbols, and total candidates. Symbols are deterministic and project-relative; import aliases keep their binding location but use a portable handle for the resolved declaration, while unresolved aliases and failed import scans contribute explicit omission counts.
+`WorkspaceSymbolsResponse` includes the shared semantic envelope, query, symbols, and total candidates. Symbols are deterministic and project-relative; resolvable named/default import aliases keep their binding location but use a portable handle for the declaration, while namespace/star aliases, unresolved aliases, and failed import scans contribute explicit omission counts.
 
 For tool hosts, `tool_workspaceSymbols(root, request, runtimeOptions)` accepts an optional warm `AgentSession` or build options, but not both. Shared semantic location, provenance, omission, symbol, and response-envelope types are exported from the root and agent entry points.
 

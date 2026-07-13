@@ -26,6 +26,8 @@ async function hierarchyFixture() {
       "export class IncompatibleJob extends AbstractJob { execute(value: string): void {} }",
       "export interface Overloaded { run(value: string): void; run(value: number): void }",
       "export class OverloadedWorker implements Overloaded { run(value: string | number): void {} }",
+      "export interface DistinctOverloaded { run(): void; run(value: string): void }",
+      "export class ZeroWorker implements DistinctOverloaded { run(): void {} }",
     ].join("\n"),
   );
   const index = await buildProjectIndex(root);
@@ -146,8 +148,10 @@ describe("type hierarchy", () => {
     const { index, graph, byName } = await hierarchyFixture();
     const overloaded = byName.get("Overloaded");
     const base = byName.get("Base");
+    const distinct = byName.get("DistinctOverloaded");
     expect(overloaded).toBeDefined();
     expect(base).toBeDefined();
+    expect(distinct).toBeDefined();
     const overloadedMemberIds = graph.edges
       .filter((edge) => edge.to === overloaded!.id && edge.label === "member_of")
       .map((edge) => edge.from)
@@ -158,6 +162,22 @@ describe("type hierarchy", () => {
     expect(memberResult).toMatchObject({ status: "unsupported_target" });
     if (memberResult.status === "unsupported_target") {
       expect(memberResult.reason).toMatch(/ambiguous|overload/i);
+    }
+    const distinctMemberIds = graph.edges
+      .filter((edge) => edge.to === distinct!.id && edge.label === "member_of")
+      .map((edge) => edge.from)
+      .filter((id) => graph.nodes.get(id)?.name === "run");
+    const zeroArityMember = distinctMemberIds.find((id) => graph.nodes.get(id)?.memberArity === 0);
+    expect(zeroArityMember).toBeDefined();
+    const distinctResult = findImplementations(index, graph, zeroArityMember!);
+    expect(distinctResult.status).toBe("ok");
+    if (distinctResult.status === "ok") {
+      expect(
+        distinctResult.implementations.map((entry) =>
+          entry.implementingTypeId ? graph.nodes.get(entry.implementingTypeId)?.name : undefined,
+        ),
+      ).toEqual(["ZeroWorker"]);
+      expect(distinctResult.ambiguous).toBe(0);
     }
     expect(findImplementations(index, graph, base!.id)).toMatchObject({
       status: "unsupported_target",

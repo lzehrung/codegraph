@@ -56,13 +56,14 @@ describe("Project Indexing", () => {
     it("should index all TypeScript files", async () => {
       const index = await createTestIndex("typescript");
 
-      expectModuleCount(index, 5);
+      expectModuleCount(index, 6);
 
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
       expectFileInIndex(index, path.join(samplePath, "main.ts").replace(/\\/g, "/"));
       expectFileInIndex(index, path.join(samplePath, "utils.ts").replace(/\\/g, "/"));
       expectFileInIndex(index, path.join(samplePath, "helpers.ts").replace(/\\/g, "/"));
       expectFileInIndex(index, path.join(samplePath, "dynamic-import.ts").replace(/\\/g, "/"));
+      expectFileInIndex(index, path.join(samplePath, "abstract-implementation.ts").replace(/\\/g, "/"));
       expectFileInIndex(index, path.join(samplePath, "tsconfig.json").replace(/\\/g, "/"));
     });
 

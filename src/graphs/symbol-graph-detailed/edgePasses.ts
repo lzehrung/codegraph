@@ -480,12 +480,14 @@ export function emitMemberImplementationEdges(
     for (const parentMemberId of parentMembers) {
       const parentMember = graph.nodes.get(parentMemberId);
       if (!parentMember) continue;
-      const parentNameMatches = parentMembers.filter(
-        (memberId) => graph.nodes.get(memberId)?.name === parentMember.name,
-      );
-      if (parentNameMatches.length !== 1) continue;
+      if (parentMember.memberArity === undefined) continue;
+      const parentIdentityMatches = parentMembers.filter((memberId) => {
+        const candidate = graph.nodes.get(memberId);
+        return candidate?.name === parentMember.name && candidate.memberArity === parentMember.memberArity;
+      });
+      if (parentIdentityMatches.length !== 1) continue;
       const isContractMember = hierarchyEdge.label !== "extends" || parentMember.implementationTarget;
-      if (!isContractMember || parentMember.memberArity === undefined) continue;
+      if (!isContractMember) continue;
       const compatibleMembers = childMembers.filter((memberId) => {
         const childMember = graph.nodes.get(memberId);
         return childMember?.name === parentMember.name && childMember.memberArity === parentMember.memberArity;

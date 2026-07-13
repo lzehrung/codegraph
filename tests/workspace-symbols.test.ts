@@ -34,6 +34,9 @@ beforeAll(async () => {
   const serviceFile = path.join(sourceDir, "service.ts");
   const otherFile = path.join(sourceDir, "other.ts");
   const importerFile = path.join(sourceDir, "importer.ts");
+  const namespaceFile = path.join(sourceDir, "namespace.ts");
+  const shadowFile = path.join(sourceDir, "shadow.ts");
+  const sqlFile = path.join(root, "schema.sql");
   const testFile = path.join(testDir, "service.test.ts");
   await fs.writeFile(
     serviceFile,
@@ -54,8 +57,23 @@ beforeAll(async () => {
     importerFile,
     "import { Service as LocalService } from './service.js';\nexport function useService() { return LocalService; }\n",
   );
+  await fs.writeFile(namespaceFile, "import * as ServiceAPI from './service.js';\nexport { ServiceAPI };\n");
+  await fs.writeFile(
+    shadowFile,
+    [
+      "export function outer() {",
+      "  const scopedValue = 1;",
+      "  function inner() {",
+      "    const scopedValue = 2;",
+      "    return scopedValue;",
+      "  }",
+      "  return scopedValue + inner();",
+      "}",
+    ].join("\n"),
+  );
+  await fs.writeFile(sqlFile, "CREATE TABLE workspace_audit (id INTEGER PRIMARY KEY);\n");
   await fs.writeFile(testFile, "export class ServiceTest {}\n");
-  files = [serviceFile, otherFile, importerFile, testFile];
+  files = [serviceFile, otherFile, importerFile, namespaceFile, shadowFile, sqlFile, testFile];
   index = await buildProjectIndexFromFiles(root, files, { cache: "off", keepParsed: true });
   snapshot = {
     root,
@@ -92,6 +110,26 @@ describe("workspace symbol lookup", () => {
     const withImports = await workspaceSymbols(index, { query: "LocalService", includeImports: true });
     expect(withImports.symbols).toHaveLength(1);
     expect(withImports.symbols[0]).toMatchObject({ name: "LocalService", imported: true, exported: false });
+  });
+  it("reports namespace imports as unsupported omissions rather than returning stale handles", async () => {
+    const result = await workspaceSymbols(index, { query: "ServiceAPI", includeImports: true });
+    expect(result.symbols).toEqual([]);
+    expect(result.omittedImports).toBeGreaterThan(0);
+  });
+
+  it("keeps shadowed locals distinct and exposes only SQL objects modeled as SymbolDef", async () => {
+    const shadowed = await workspaceSymbolsInSnapshot(snapshot, { query: "scopedValue" });
+    expect(shadowed.symbols).toHaveLength(2);
+    expect(new Set(shadowed.symbols.map((symbol) => symbol.handle)).size).toBe(2);
+    expect(shadowed.symbols.map((symbol) => symbol.location.range.start.line)).toEqual([2, 4]);
+
+    const sql = await workspaceSymbolsInSnapshot(snapshot, { query: "workspace_audit" });
+    expect(sql.symbols).toHaveLength(1);
+    expect(sql.symbols[0]).toMatchObject({ name: "workspace_audit", kind: "table" });
+    expect(resolveSemanticSymbol(snapshot, sql.symbols[0]!.handle)?.def).toMatchObject({
+      localName: "workspace_audit",
+      kind: "table",
+    });
   });
   it("returns import aliases at their binding location with handles for the imported definition", async () => {
     const response = await workspaceSymbolsInSnapshot(snapshot, {

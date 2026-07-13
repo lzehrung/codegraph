@@ -29,6 +29,11 @@ export type ImplementationMatch = {
   relation: TypeHierarchyRelationKind;
   site?: SymbolEdge["site"];
 };
+export type UnresolvedImplementationMatch = {
+  symbolId: string;
+  implementingTypeId: string;
+  site?: SymbolEdge["site"];
+};
 
 export type ImplementationsResult =
   | {
@@ -37,6 +42,7 @@ export type ImplementationsResult =
       implementations: ImplementationMatch[];
       omitted: number;
       ambiguous: number;
+      unresolved: UnresolvedImplementationMatch[];
       limit: number;
     }
   | { status: "not_found" | "invalid_target" | "unsupported_target"; reason: string };
@@ -137,6 +143,7 @@ export function findImplementations(
       implementations: matches.slice(0, limit),
       omitted: Math.max(0, matches.length - limit),
       ambiguous: 0,
+      unresolved: [],
       limit,
     };
   }
@@ -155,10 +162,14 @@ export function findImplementations(
     .filter((edge) => edge.to === ownerId && edge.label === "member_of")
     .map((edge) => edge.from)
     .filter((id) => graph.nodes.get(id)?.name === targetDef.localName);
-  if (sameNameMembers.length > 1) {
+  const sameIdentityMembers =
+    targetNode.memberArity === undefined
+      ? sameNameMembers
+      : sameNameMembers.filter((id) => graph.nodes.get(id)?.memberArity === targetNode.memberArity);
+  if (sameIdentityMembers.length > 1) {
     return {
       status: "unsupported_target",
-      reason: "Member implementation lookup is ambiguous for overloaded members because signatures are unavailable.",
+      reason: "Member implementation lookup is ambiguous because compatible overload identity is unavailable.",
     };
   }
 
@@ -191,12 +202,21 @@ export function findImplementations(
       ...(proof.site ? { site: proof.site } : {}),
     });
   }
+  const unresolved: UnresolvedImplementationMatch[] = [];
   let ambiguous = 0;
   for (const typeMatch of typeMatches) {
     const unresolvedMembers = graph.edges
       .filter((edge) => edge.to === typeMatch.symbolId && edge.label === "member_of")
       .map((edge) => edge.from)
       .filter((id) => graph.nodes.get(id)?.name === targetDef.localName && !memberMatches.has(id));
+    for (const symbolId of unresolvedMembers) {
+      const unresolvedDef = resolveSymbolId(index, symbolId);
+      unresolved.push({
+        symbolId,
+        implementingTypeId: typeMatch.symbolId,
+        ...(unresolvedDef ? { site: { file: unresolvedDef.file, range: unresolvedDef.range } } : {}),
+      });
+    }
     ambiguous += unresolvedMembers.length;
   }
   const matches = [...memberMatches.values()].sort((left, right) => compareImplementationMatches(graph, left, right));
@@ -207,6 +227,7 @@ export function findImplementations(
     implementations: matches.slice(0, limit),
     omitted: truncated + ambiguous,
     ambiguous,
+    unresolved: unresolved.sort((left, right) => left.symbolId.localeCompare(right.symbolId)),
     limit,
   };
 }

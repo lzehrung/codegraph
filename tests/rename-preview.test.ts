@@ -112,8 +112,48 @@ describe("rename preview", () => {
     });
 
     expect(result.safe).toBe(false);
-    expect(result.unsafeSites).toContainEqual(expect.objectContaining({ reason: "unresolved_reference" }));
+    expect(result.unsafeSites).toContainEqual(
+      expect.objectContaining({
+        location: expect.objectContaining({ file: "types.ts" }),
+        text: "Worker",
+        reason: "unresolved_reference",
+      }),
+    );
     expect(result.omittedCounts.edits).toBeGreaterThan(0);
+  });
+  it("reports the exact incompatible implementation site that blocks rename safety", async () => {
+    const root = await mkTmpDir("cg-rename-ambiguous-implementation-");
+    await fsp.writeFile(
+      path.join(root, "types.ts"),
+      [
+        "export abstract class Contract { abstract run(): void }",
+        "export class Worker extends Contract { run(): void {} }",
+        "export class Incompatible extends Contract { run(value: string): void {} }",
+      ].join("\n"),
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    const snapshot = await session.loadProject();
+    const symbols = await workspaceSymbolsInSnapshot(snapshot, { query: "run" });
+    const target = symbols.symbols.find((symbol) => symbol.location.range.start.line === 1);
+    expect(target).toBeDefined();
+
+    const result = await previewRenameInSnapshot(snapshot, {
+      root,
+      handle: target!.handle,
+      newName: "execute",
+    });
+
+    expect(result.safe).toBe(false);
+    expect(result.unsafeSites).toContainEqual(
+      expect.objectContaining({
+        location: expect.objectContaining({
+          file: "types.ts",
+          range: expect.objectContaining({ start: expect.objectContaining({ line: 3 }) }),
+        }),
+        text: "run",
+        reason: "ambiguous_target",
+      }),
+    );
   });
 
   it("marks collisions and case-only renames unsafe", async () => {

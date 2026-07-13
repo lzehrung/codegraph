@@ -26,7 +26,7 @@ export type WorkspaceSymbolMatch = {
   name: string;
   localName: string;
   qualifiedName?: string;
-  kind: SymbolKind | "import" | "namespaceImport";
+  kind: SymbolKind | "import";
   range: Range;
   exported: boolean;
   imported: boolean;
@@ -176,7 +176,6 @@ async function buildImportCandidates(index: ProjectIndex): Promise<ImportCandida
           omitted += 1;
           continue;
         }
-        const kind = binding.import.kind === "namespace" ? "namespaceImport" : "import";
         const displayFile = toProjectDisplayPath(index.projectRoot, file);
         symbols.push({
           id: `${file}::${binding.name}::import`,
@@ -185,7 +184,7 @@ async function buildImportCandidates(index: ProjectIndex): Promise<ImportCandida
           name: binding.name,
           localName: binding.name,
           qualifiedName: `${displayFile}::${binding.name}`,
-          kind,
+          kind: "import",
           range,
           exported: false,
           imported: true,
