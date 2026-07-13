@@ -104,6 +104,25 @@ describe("symbols CLI", () => {
         location: { file: "src/consumer.ts", range: expect.any(Object) },
       }),
     ]);
+
+    const mismatchedImports = await captureCli([
+      "symbols",
+      "LocalService",
+      "--root",
+      root,
+      "--include-imports",
+      "--kind",
+      "function",
+      "--cache",
+      "off",
+      "--json",
+    ]);
+    const mismatchedImportsJson: unknown = JSON.parse(mismatchedImports.stdout);
+    expect(isPlainRecord(mismatchedImportsJson)).toBe(true);
+    if (!isPlainRecord(mismatchedImportsJson)) {
+      throw new Error("mismatched import symbols response was not an object");
+    }
+    expect(mismatchedImportsJson.symbols).toEqual([]);
   });
 
   it("rejects limits above the public maximum before indexing", async () => {

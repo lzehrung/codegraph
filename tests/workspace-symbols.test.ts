@@ -121,6 +121,12 @@ describe("workspace symbol lookup", () => {
       kind: SymbolKind.Class,
       imported: true,
     });
+    const mismatchedKind = await workspaceSymbols(index, {
+      query: "LocalService",
+      kinds: [SymbolKind.Function],
+      includeImports: true,
+    });
+    expect(mismatchedKind.symbols).toEqual([]);
   });
 
   it("reports namespace imports as unsupported omissions rather than returning stale handles", async () => {

@@ -172,7 +172,9 @@ describe("type hierarchy", () => {
       .map((edge) => edge.from)
       .filter((id) => graph.nodes.get(id)?.name === "run");
     const zeroArityMember = distinctMemberIds.find((id) => graph.nodes.get(id)?.memberArity === 0);
+    const oneArityMember = distinctMemberIds.find((id) => graph.nodes.get(id)?.memberArity === 1);
     expect(zeroArityMember).toBeDefined();
+    expect(oneArityMember).toBeDefined();
     const distinctResult = findImplementations(index, graph, zeroArityMember!);
     expect(distinctResult.status).toBe("ok");
     if (distinctResult.status === "ok") {
@@ -181,8 +183,17 @@ describe("type hierarchy", () => {
           entry.implementingTypeId ? graph.nodes.get(entry.implementingTypeId)?.name : undefined,
         ),
       ).toEqual(["ZeroWorker"]);
+      expect(graph.nodes.get(distinctResult.implementations[0]!.symbolId)?.memberArity).toBe(0);
       expect(distinctResult.ambiguous).toBe(0);
       expect(distinctResult.unresolved).toEqual([]);
+    }
+    const oneArityResult = findImplementations(index, graph, oneArityMember!);
+    expect(oneArityResult.status).toBe("ok");
+    if (oneArityResult.status === "ok") {
+      expect(oneArityResult.implementations).toHaveLength(1);
+      expect(graph.nodes.get(oneArityResult.implementations[0]!.symbolId)?.memberArity).toBe(1);
+      expect(oneArityResult.ambiguous).toBe(0);
+      expect(oneArityResult.unresolved).toEqual([]);
     }
     expect(findImplementations(index, graph, base!.id)).toMatchObject({
       status: "unsupported_target",
