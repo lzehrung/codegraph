@@ -111,7 +111,7 @@ export type {
   RenameUnsafeSite,
 } from "./agent/renamePreview.js";
 export { buildRefactorPlan, buildRefactorPlanInSnapshot, buildRefactorPlanWithSession } from "./agent/refactorPlan.js";
-export type { RefactorPlanRequest, RefactorPlanResponse } from "./agent/refactorPlan.js";
+export type { RefactorPlanRequest, RefactorPlanResponse, RefactorPlanSectionIssue } from "./agent/refactorPlan.js";
 
 export type {
   SemanticLocation,

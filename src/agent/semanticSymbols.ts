@@ -13,9 +13,6 @@ export type ResolvedSemanticSymbol = {
 
 export function resolveSemanticSymbol(snapshot: AgentProjectSnapshot, handle: string): ResolvedSemanticSymbol | null {
   const lookup = buildSymbolLookup(snapshot);
-  const indexedDefinition = lookup.defById.get(handle);
-  if (indexedDefinition) return { id: handle, def: indexedDefinition };
-
   const parsed = parseAgentSymbolHandle(handle);
   if (!parsed) return null;
   const file = resolveAgentSnapshotFile(snapshot, parsed.file);

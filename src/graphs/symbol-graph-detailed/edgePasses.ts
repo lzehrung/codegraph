@@ -30,6 +30,38 @@ function ensureNode(context: EdgePassContext, def: SymbolDef): string {
   if (!context.nodes.has(id)) context.nodes.set(id, nodeForDef(def));
   return id;
 }
+function markImplementationTarget(
+  context: EdgePassContext,
+  id: string,
+  declarationNode: SyntaxNodeLike,
+  def: SymbolDef,
+): void {
+  const declaration = sliceText(declarationNode, context.source);
+  const nameIndex = declaration.indexOf(def.localName);
+  const prefix = nameIndex >= 0 ? declaration.slice(0, nameIndex) : declaration;
+  if (!/\b(?:abstract|virtual|override)\b/.test(prefix)) return;
+  const node = context.nodes.get(id);
+  if (node) node.implementationTarget = true;
+}
+function markMemberArity(context: EdgePassContext, id: string, declarationNode: SyntaxNodeLike): void {
+  let parameters = declarationNode.childForFieldName("parameters");
+  if (!parameters) {
+    for (const type of [
+      "formal_parameters",
+      "parameter_list",
+      "parameters",
+      "method_parameters",
+      "function_parameter_clause",
+    ]) {
+      parameters = findFirstNodeByType(declarationNode, type);
+      if (parameters) break;
+    }
+  }
+  if (!parameters) return;
+  const arity = (parameters.namedChildren ?? []).filter((child) => child.type !== "comment").length;
+  const node = context.nodes.get(id);
+  if (node) node.memberArity = arity;
+}
 
 function recordDefEdge(
   context: EdgePassContext,
@@ -161,7 +193,10 @@ export function emitMemberOwnershipEdges(
       .sort((left, right) => left.node.endIndex - left.node.startIndex - (right.node.endIndex - right.node.startIndex));
     const owner = owners[0];
     if (!owner) continue;
-    recordDefEdge(context, ensureNode(context, fn.def), owner.def, "member_of");
+    const memberId = ensureNode(context, fn.def);
+    markImplementationTarget(context, memberId, fn.node, fn.def);
+    markMemberArity(context, memberId, fn.node);
+    recordDefEdge(context, memberId, owner.def, "member_of");
   }
 }
 
@@ -320,6 +355,7 @@ export function emitClassInheritanceEdges(context: EdgePassContext, classNodes: 
 
   for (const cls of classNodes) {
     const fromId = ensureNode(context, cls.def);
+    markImplementationTarget(context, fromId, cls.node, cls.def);
     if (context.sup.id === "java") {
       const superClass = findFirstNodeByType(cls.node, "superclass");
       const superNode = superClass?.childForFieldName("name") ?? superClass?.namedChildren?.[0] ?? null;
@@ -331,7 +367,7 @@ export function emitClassInheritanceEdges(context: EdgePassContext, classNodes: 
         collectIdentifiers(interfaces, context.sup, context.source, names);
         for (const name of names) {
           const target = context.resolveIdentifier(name);
-          if (target) recordDefEdge(context, fromId, target, "implements");
+          if (target) recordDefEdge(context, fromId, target, "implements", interfaces);
         }
       }
       continue;
@@ -391,7 +427,7 @@ export function emitClassInheritanceEdges(context: EdgePassContext, classNodes: 
       collectIdentifiers(clause, context.sup, context.source, names);
       for (const name of names) {
         const target = context.resolveIdentifier(name);
-        if (target) recordDefEdge(context, fromId, target, "implements");
+        if (target) recordDefEdge(context, fromId, target, "implements", clause);
       }
     }
   }
@@ -410,11 +446,57 @@ export function emitRustImplEdges(context: EdgePassContext, rootNode: SyntaxNode
         const traitDef = context.resolveIdentifier(traitName);
         if (typeDef && traitDef) {
           const fromId = ensureNode(context, typeDef);
-          recordDefEdge(context, fromId, traitDef, "implements");
+          recordDefEdge(context, fromId, traitDef, "implements", node);
         }
       }
     }
     for (const child of node.namedChildren ?? []) walkImpls(child);
   };
   walkImpls(rootNode);
+}
+
+export function emitMemberImplementationEdges(
+  graph: SymbolGraph,
+  recordEdge: (fromId: string, toId: string, label?: string, site?: SymbolGraph["edges"][number]["site"]) => boolean,
+): void {
+  const membersByOwner = new Map<string, string[]>();
+  for (const edge of graph.edges) {
+    if (edge.label !== "member_of") continue;
+    const members = membersByOwner.get(edge.to) ?? [];
+    members.push(edge.from);
+    membersByOwner.set(edge.to, members);
+  }
+  const hierarchyByKey = new Map<string, SymbolGraph["edges"][number]>();
+  for (const edge of graph.edges) {
+    if (edge.label !== "extends" && edge.label !== "implements" && edge.label !== "trait") continue;
+    const key = `${edge.from}->${edge.to}::${edge.label}`;
+    const existing = hierarchyByKey.get(key);
+    if (!existing || (!existing.site && edge.site)) hierarchyByKey.set(key, edge);
+  }
+  const hierarchyEdges = [...hierarchyByKey.values()];
+  for (const hierarchyEdge of hierarchyEdges) {
+    const parentMembers = membersByOwner.get(hierarchyEdge.to) ?? [];
+    const childMembers = membersByOwner.get(hierarchyEdge.from) ?? [];
+    for (const parentMemberId of parentMembers) {
+      const parentMember = graph.nodes.get(parentMemberId);
+      if (!parentMember) continue;
+      const parentNameMatches = parentMembers.filter(
+        (memberId) => graph.nodes.get(memberId)?.name === parentMember.name,
+      );
+      if (parentNameMatches.length !== 1) continue;
+      const isContractMember = hierarchyEdge.label !== "extends" || parentMember.implementationTarget;
+      if (!isContractMember || parentMember.memberArity === undefined) continue;
+      const compatibleMembers = childMembers.filter((memberId) => {
+        const childMember = graph.nodes.get(memberId);
+        return childMember?.name === parentMember.name && childMember.memberArity === parentMember.memberArity;
+      });
+      if (compatibleMembers.length !== 1) continue;
+      recordEdge(
+        compatibleMembers[0]!,
+        parentMemberId,
+        hierarchyEdge.label === "extends" ? "overrides" : "implements_member",
+        hierarchyEdge.site,
+      );
+    }
+  }
 }

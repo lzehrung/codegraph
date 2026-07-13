@@ -16,6 +16,7 @@ import {
   emitClassInheritanceEdges,
   emitFunctionBodyEdges,
   emitMemberOwnershipEdges,
+  emitMemberImplementationEdges,
   emitPythonDecoratorEdges,
   emitRustImplEdges,
 } from "./symbol-graph-detailed/edgePasses.js";
@@ -290,6 +291,7 @@ export async function buildSymbolGraphDetailed(
       logWithLevel(opts?.logLevel, "warn", `Warning: Failed to build detailed symbol edges for ${file}:`, error);
     }
   }
+  emitMemberImplementationEdges({ nodes, edges }, recordEdge);
 
   if (skippedSyntaxTreeFiles > 0) {
     logWithLevel(

@@ -482,7 +482,6 @@ Reject ordinary concrete symbols with a clear target-kind error rather than retu
 ```ts
 type ImplementationEntry = {
   symbol: WorkspaceSymbolItem;
-  implementedMember?: WorkspaceSymbolItem;
   relationSite?: SemanticLocation;
   provenance: SemanticProvenance;
 };

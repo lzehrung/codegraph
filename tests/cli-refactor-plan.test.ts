@@ -65,6 +65,12 @@ describe("refactor plan CLI", () => {
         safe: false,
         conflicts: [expect.objectContaining({ reason: "invalid_identifier" })],
       },
+      sectionIssues: [
+        expect.objectContaining({
+          section: "implementations",
+          status: "unsupported_target",
+        }),
+      ],
     });
     if (!isPlainRecord(parsed) || !isPlainRecord(parsed.omittedCounts)) {
       throw new Error("Refactor CLI response was invalid");
@@ -96,6 +102,7 @@ describe("refactor plan CLI", () => {
     expect(result.stdout).toContain("Rename safe: yes");
     expect(result.stdout).toContain("Rename conflicts: 0");
     expect(result.stdout).toContain("Omissions: references");
+    expect(result.stdout).toContain("Section issues:\n  implementations [unsupported_target]:");
     expect(result.stdout).toContain("Follow-ups:\n  codegraph refs --file service.ts --line 2 --col 17 --pretty");
     expect(result.stdout).not.toContain('"schemaVersion"');
   });

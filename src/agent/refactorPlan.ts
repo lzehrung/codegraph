@@ -14,7 +14,7 @@ import { previewRenameInSnapshot, type RenameCandidateTest, type RenamePreviewRe
 import type { CallHierarchyEntry } from "./callHierarchy.js";
 import type { ImplementationEntry, TypeHierarchyRelation } from "./typeHierarchy.js";
 import type { SemanticLocation, SemanticProvenance, SemanticResponseEnvelope, SemanticSymbol } from "./semantic.js";
-import { resolveSemanticSymbol, semanticSymbolFromDef } from "./semanticSymbols.js";
+import { resolveSemanticSymbol, semanticSymbolFromDef, type ResolvedSemanticSymbol } from "./semanticSymbols.js";
 import {
   createAgentSession,
   type AgentFreshnessResult,
@@ -35,6 +35,12 @@ export type RefactorPlanRequest = {
   buildOptions?: BuildOptions;
 };
 
+export type RefactorPlanSectionIssue = {
+  section: "implementations";
+  status: "not_found" | "invalid_target" | "unsupported_target";
+  reason: string;
+};
+
 export type RefactorPlanResponse = SemanticResponseEnvelope & {
   target: SemanticSymbol;
   definition: SemanticLocation;
@@ -44,6 +50,7 @@ export type RefactorPlanResponse = SemanticResponseEnvelope & {
   supertypes: TypeHierarchyRelation[];
   subtypes: TypeHierarchyRelation[];
   implementations: ImplementationEntry[];
+  sectionIssues: RefactorPlanSectionIssue[];
   rename?: RenamePreviewResponse;
   candidateTests: RenameCandidateTest[];
   followUps: string[];
@@ -75,7 +82,7 @@ export async function buildRefactorPlanInSnapshot(
   request: Omit<RefactorPlanRequest, "buildOptions">,
   freshness: AgentFreshnessResult = { state: "fresh" },
 ): Promise<RefactorPlanResponse> {
-  const resolved = resolveSemanticSymbol(snapshot, request.handle);
+  const resolved = resolveRefactorPlanTarget(snapshot, request.handle);
   if (!resolved) throw new Error("Symbol handle is stale or missing. Run workspace symbol lookup to resolve it again.");
   const referenceLimit = boundedSectionLimit(request.maxReferences, DEFAULT_REFACTOR_REFERENCE_LIMIT, "maxReferences");
   const callerLimit = boundedSectionLimit(request.maxCallers, DEFAULT_REFACTOR_RELATION_LIMIT, "maxCallers");
@@ -128,21 +135,32 @@ export async function buildRefactorPlanInSnapshot(
   const implementationResult = queryImplementations(snapshot.index, snapshot.symbolGraph, resolved.id, {
     limit: hierarchyLimit,
   });
-  const implementations =
-    implementationResult.status === "ok"
-      ? implementationResult.implementations.flatMap((entry): ImplementationEntry[] => {
-          const def = lookup.defById.get(entry.symbolId);
-          if (!def) return [];
-          const member = entry.implementedMemberId ? lookup.defById.get(entry.implementedMemberId) : undefined;
-          return [
-            {
-              symbol: semanticSymbolFromDef(snapshot, def),
-              ...(member ? { implementedMember: semanticSymbolFromDef(snapshot, member) } : {}),
-              provenance,
-            },
-          ];
-        })
-      : [];
+  const implementations: ImplementationEntry[] = [];
+  const sectionIssues: RefactorPlanSectionIssue[] = [];
+  if (implementationResult.status === "ok") {
+    for (const entry of implementationResult.implementations) {
+      const def = lookup.defById.get(entry.symbolId);
+      if (!def) continue;
+      implementations.push({
+        symbol: semanticSymbolFromDef(snapshot, def),
+        ...(entry.site
+          ? {
+              relationSite: {
+                file: normalizeAgentFilePath(snapshot.root, entry.site.file),
+                range: entry.site.range,
+              },
+            }
+          : {}),
+        provenance,
+      });
+    }
+  } else {
+    sectionIssues.push({
+      section: "implementations",
+      status: implementationResult.status,
+      reason: implementationResult.reason,
+    });
+  }
 
   const allCandidateTests = listCandidateTestFiles(snapshot.index, [resolved.def.file], [resolved.id], {
     maxCandidates: 101,
@@ -156,18 +174,18 @@ export async function buildRefactorPlanInSnapshot(
       reason: candidate.reason,
     }),
   );
+  const target = semanticSymbolFromDef(snapshot, resolved.def);
   const rename = request.renameTo
     ? await previewRenameInSnapshot(
         snapshot,
         {
           root: request.root,
-          handle: request.handle,
+          handle: target.handle,
           newName: request.renameTo,
         },
         freshness,
       )
     : undefined;
-  const target = semanticSymbolFromDef(snapshot, resolved.def);
   const followUps = [
     `codegraph refs --file ${quoteShellArg(target.location.file)} --line ${target.location.range.start.line} --col ${target.location.range.start.column} --pretty`,
     `codegraph callers ${quoteShellArg(target.handle)} --depth 1 --json`,
@@ -196,7 +214,7 @@ export async function buildRefactorPlanInSnapshot(
       callees: callOmitted(calleesResult),
       supertypes: hierarchyOmitted(supertypesResult),
       subtypes: hierarchyOmitted(subtypesResult),
-      implementations: implementationResult.status === "ok" ? implementationResult.omitted : 0,
+      implementations: implementationResult.status === "ok" ? implementationResult.omitted : 1,
       candidateTests: omittedCandidateTests,
     },
     target,
@@ -207,6 +225,7 @@ export async function buildRefactorPlanInSnapshot(
     supertypes,
     subtypes,
     implementations,
+    sectionIssues,
     ...(rename ? { rename } : {}),
     candidateTests,
     followUps,
@@ -253,11 +272,26 @@ function normalizeHierarchySection(
       {
         type: semanticSymbolFromDef(snapshot, def),
         relation: relation.relation,
+        ...(relation.site
+          ? {
+              declarationSite: {
+                file: normalizeAgentFilePath(snapshot.root, relation.site.file),
+                range: relation.site.range,
+              },
+            }
+          : {}),
         depth: relation.depth,
         provenance,
       },
     ];
   });
+}
+
+function resolveRefactorPlanTarget(snapshot: AgentProjectSnapshot, handle: string): ResolvedSemanticSymbol | null {
+  const portable = resolveSemanticSymbol(snapshot, handle);
+  if (portable) return portable;
+  const reviewDef = buildSymbolLookup(snapshot).defById.get(handle);
+  return reviewDef ? { id: handle, def: reviewDef } : null;
 }
 
 function callOmitted(result: CallHierarchyResult): number {

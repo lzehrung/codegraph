@@ -77,7 +77,7 @@ Responses contain exact project-relative edits, conflicts, unsafe sites, filenam
 
 Call `refactor_plan` with flat fields `handle`, optional `renameTo`, independent optional `maxReferences`, `maxCallers`, and `maxHierarchy` values from 0 to 500, and optional `includeSource`. The configured MCP root is reused and cannot be overridden per request.
 
-The tool composes references, direct callers and callees, type relationships, implementations, candidate tests, omissions, and follow-ups from one session snapshot. Exact internal review or impact symbol handles are accepted, while the returned target and commands use a portable handle; when `renameTo` is present, nested `rename.safe` is authoritative and no source write or apply tool exists.
+The tool composes references, direct callers and callees, type relationships, implementations, section issues, candidate tests, omissions, and follow-ups from one session snapshot. Unsupported implementation sections contribute an omission and appear in `sectionIssues`; exact internal review or impact symbol handles are accepted, returned targets and commands use portable handles, and nested `rename.safe` remains authoritative when `renameTo` is present.
 
 ### Call hierarchy
 
@@ -91,9 +91,9 @@ Only resolved semantic `calls` edges are currently returned. `includeHeuristic` 
 
 Call `supertypes` or `subtypes` with flat fields `handle`, optional `depth`, and optional `limit`. Depth defaults to 1 and caps at 10; the result limit defaults to 100 and caps at 500.
 
-Call `implementations` with `handle` and optional `limit`; it has no depth field. All three tools reuse the server's one session and freshness gate, return exact project-relative symbol locations plus provenance and omissions, and reject stale handles, non-type hierarchy targets, or unsupported member targets with actionable errors.
+Call `implementations` with `handle` and optional `limit`; it has no depth field. All three tools reuse the server's one session and freshness gate, return exact project-relative symbol locations plus provenance and omissions, and reject stale handles, non-type hierarchy targets, or unsupported targets with actionable errors.
 
-Only resolved, indexed `extends` and `implements` relationships are returned. Member implementations require an interface or trait owner with a proven implementer; same-name methods, dynamic or structural conformance, and unresolved external bases are not inferred.
+Only resolved, indexed `extends` and `implements` relationships are returned. Implementation targets are limited to interfaces, traits, abstract types, and members with proven implementation or override relationships; exact implementing declarations are returned, inherited declarations are deduplicated, and overloads, dynamic or structural conformance, and unresolved external bases are not guessed.
 
 ### `get_file`
 

@@ -5,7 +5,7 @@ import { previewRenameInSnapshot, previewRenameWithSession } from "../src/agent/
 import { createAgentSession, type AgentProjectSnapshot } from "../src/agent/session.js";
 import { workspaceSymbolsInSnapshot, workspaceSymbolsWithSession } from "../src/agent/workspaceSymbols.js";
 import { buildProjectIndexFromFiles } from "../src/indexer/build-index.js";
-import { mkTmpDir } from "./helpers/filesystem.js";
+import { isSymlinkUnavailable, mkTmpDir } from "./helpers/filesystem.js";
 
 async function renameFixture() {
   const root = await mkTmpDir("cg-rename-preview-");
@@ -52,6 +52,16 @@ async function renameSnapshotForFiles(root: string, files: string[]): Promise<Ag
   };
 }
 
+async function tryCreateFileSymlink(target: string, linkPath: string): Promise<boolean> {
+  try {
+    await fsp.symlink(target, linkPath);
+    return true;
+  } catch (error) {
+    if (isSymlinkUnavailable(error)) return false;
+    throw error;
+  }
+}
+
 describe("rename preview", () => {
   it("returns exact semantic edits without writing files or touching shadowed locals", async () => {
     const { root, serviceFile, consumerFile, session, target } = await renameFixture();
@@ -74,6 +84,36 @@ describe("rename preview", () => {
     expect(result.edits.some((edit) => edit.range.start.line === 4 || edit.range.start.line === 5)).toBe(false);
     expect(await fsp.readFile(serviceFile, "utf8")).toBe(beforeService);
     expect(await fsp.readFile(consumerFile, "utf8")).toBe(beforeConsumer);
+  });
+  it("marks a proven implementation that cannot resolve back to a definition unsafe", async () => {
+    const root = await mkTmpDir("cg-rename-missing-implementation-");
+    const file = path.join(root, "types.ts");
+    await fsp.writeFile(
+      file,
+      ["export interface Contract { run(): void }", "export class Worker implements Contract { run(): void {} }"].join(
+        "\n",
+      ),
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    const snapshot = await session.loadProject();
+    const symbols = await workspaceSymbolsInSnapshot(snapshot, { query: "run" });
+    const target = symbols.symbols.find((symbol) => symbol.location.range.start.line === 1);
+    expect(target).toBeDefined();
+    const moduleIndex = snapshot.index.byFile.get(file.replace(/\\/g, "/"));
+    expect(moduleIndex).toBeDefined();
+    moduleIndex!.locals = moduleIndex!.locals.filter(
+      (definition) => definition.localName !== "run" || definition.range.start.line !== 2,
+    );
+
+    const result = await previewRenameInSnapshot(snapshot, {
+      root,
+      handle: target!.handle,
+      newName: "execute",
+    });
+
+    expect(result.safe).toBe(false);
+    expect(result.unsafeSites).toContainEqual(expect.objectContaining({ reason: "unresolved_reference" }));
+    expect(result.omittedCounts.edits).toBeGreaterThan(0);
   });
 
   it("marks collisions and case-only renames unsafe", async () => {
@@ -251,6 +291,31 @@ describe("rename preview", () => {
       ["service.ts", "service", "definition"],
     ]);
   });
+  it("reports a duplicate export when the requested name is already re-exported", async () => {
+    const root = await mkTmpDir("cg-rename-duplicate-reexport-");
+    await fsp.writeFile(path.join(root, "other.ts"), "export function other(): number { return 2; }\n");
+    await fsp.writeFile(
+      path.join(root, "service.ts"),
+      ["export function service(): number { return 1; }", 'export { other as renamedService } from "./other.js";'].join(
+        "\n",
+      ),
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    const symbols = await workspaceSymbolsWithSession(session, { root, query: "service" });
+    const target = symbols.symbols.find((symbol) => symbol.location.file === "service.ts");
+    expect(target).toBeDefined();
+
+    const result = await previewRenameWithSession(session, {
+      root,
+      handle: target!.handle,
+      newName: "renamedService",
+    });
+
+    expect(result.safe).toBe(false);
+    expect(result.conflicts).toContainEqual(
+      expect.objectContaining({ file: "service.ts", reason: "duplicate_export" }),
+    );
+  });
 
   it("preserves explicit re-export aliases while renaming the proven source name", async () => {
     const root = await mkTmpDir("cg-rename-reexport-alias-");
@@ -377,13 +442,16 @@ describe("rename preview", () => {
     expect(deleted.unsafeSites.some((site) => site.reason === "unresolved_reference")).toBe(true);
   });
 
-  it("refuses source symlinks that resolve outside the project root", async () => {
+  it("refuses source symlinks that resolve outside the project root", async (context) => {
     const root = await mkTmpDir("cg-rename-root-");
     const outsideRoot = await mkTmpDir("cg-rename-outside-");
     const outsideFile = path.join(outsideRoot, "service.ts");
     await fsp.writeFile(outsideFile, "export function service(): number { return 1; }\n");
     const aliasFile = path.join(root, "service.ts");
-    await fsp.symlink(outsideFile, aliasFile);
+    if (!(await tryCreateFileSymlink(outsideFile, aliasFile))) {
+      context.skip();
+      return;
+    }
     const snapshot = await renameSnapshotForFiles(root, [aliasFile]);
     const symbols = await workspaceSymbolsInSnapshot(snapshot, { query: "service" });
     expect(symbols.symbols[0]).toBeDefined();
@@ -399,12 +467,15 @@ describe("rename preview", () => {
     expect(result.unsafeSites).toContainEqual(expect.objectContaining({ reason: "outside_root" }));
   });
 
-  it("refuses source aliases whose real path is sensitive key material", async () => {
+  it("refuses source aliases whose real path is sensitive key material", async (context) => {
     const root = await mkTmpDir("cg-rename-sensitive-");
     const sensitiveFile = path.join(root, "service.pem");
     await fsp.writeFile(sensitiveFile, "export function service(): number { return 1; }\n");
     const aliasFile = path.join(root, "service.ts");
-    await fsp.symlink(sensitiveFile, aliasFile);
+    if (!(await tryCreateFileSymlink(sensitiveFile, aliasFile))) {
+      context.skip();
+      return;
+    }
     const snapshot = await renameSnapshotForFiles(root, [aliasFile]);
     const symbols = await workspaceSymbolsInSnapshot(snapshot, { query: "service" });
     expect(symbols.symbols[0]).toBeDefined();
@@ -420,14 +491,17 @@ describe("rename preview", () => {
     expect(result.unsafeSites).toContainEqual(expect.objectContaining({ reason: "sensitive_file" }));
   });
 
-  it("refuses source aliases whose real path is generated output", async () => {
+  it("refuses source aliases whose real path is generated output", async (context) => {
     const root = await mkTmpDir("cg-rename-generated-alias-");
     const generatedDirectory = path.join(root, "generated");
     const generatedFile = path.join(generatedDirectory, "service.ts");
     await fsp.mkdir(generatedDirectory);
     await fsp.writeFile(generatedFile, "export function service(): number { return 1; }\n");
     const aliasFile = path.join(root, "service.ts");
-    await fsp.symlink(generatedFile, aliasFile);
+    if (!(await tryCreateFileSymlink(generatedFile, aliasFile))) {
+      context.skip();
+      return;
+    }
     const snapshot = await renameSnapshotForFiles(root, [aliasFile]);
     const symbols = await workspaceSymbolsInSnapshot(snapshot, { query: "service" });
     expect(symbols.symbols[0]).toBeDefined();

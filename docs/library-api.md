@@ -104,7 +104,7 @@ const result = await workspaceSymbolsWithSession(session, {
 
 Requests accept `query`, `kinds`, `exportedOnly`, `includeImports`, `fileGlob`, and `limit`; standalone agent calls also require `root` and accept `buildOptions`. Imports default off, limits default to 50 and cap at 500, and an empty query requires a kind or file-glob filter.
 
-`WorkspaceSymbolsResponse` includes the shared semantic envelope, query, symbols, and total candidates. Symbols are deterministic and project-relative with a portable handle, exact location, kind, exported status, and provenance; `formatWorkspaceSymbolsResponse()` renders concise text.
+`WorkspaceSymbolsResponse` includes the shared semantic envelope, query, symbols, and total candidates. Symbols are deterministic and project-relative; import aliases keep their binding location but use a portable handle for the resolved declaration, while unresolved aliases and failed import scans contribute explicit omission counts.
 
 For tool hosts, `tool_workspaceSymbols(root, request, runtimeOptions)` accepts an optional warm `AgentSession` or build options, but not both. Shared semantic location, provenance, omission, symbol, and response-envelope types are exported from the root and agent entry points.
 
@@ -151,11 +151,11 @@ if (service) {
 }
 ```
 
-Hierarchy depth defaults to 1 and caps at 10; hierarchy and implementation results default to 100 and cap at 500. Responses use the shared semantic envelope with exact project-relative symbols, provenance, effective limits, and omission counts.
+Hierarchy depth defaults to 1 and caps at 10; hierarchy and implementation results default to 100 and cap at 500. Responses use the shared semantic envelope with exact project-relative symbols, declaration or relation sites when extraction provides them, provenance, effective limits, and omission counts.
 
 The root aliases index-core functions as `queryTypeHierarchy(graph, id, direction, options)` and `queryImplementations(index, graph, id, options)`; `@lzehrung/codegraph/indexer` exports them as `findTypeHierarchy` and `findImplementations`. Tool hosts can use `tool_findSupertypes`, `tool_findSubtypes`, and `tool_findImplementations` with either a warm session or build options, but not both.
 
-Only proven indexed `extends` and `implements` relationships participate. Member implementation lookup requires a member owned by an interface or trait with proven implementers and never infers unrelated same-name methods.
+Only proven indexed `extends` and `implements` relationships participate. Implementation targets are limited to interfaces, traits, abstract types, and members with proven implementation or override relationships; results identify exact implementing declarations, deduplicate inherited declarations, and reject unresolved overload identity instead of inferring same-name matches.
 
 ## Rename preview
 
@@ -180,7 +180,7 @@ const preview = await previewRenameWithSession(session, {
 
 ## Refactor evidence plans
 
-The root and `@lzehrung/codegraph/agent` entry points export `buildRefactorPlan`, `buildRefactorPlanWithSession`, and `buildRefactorPlanInSnapshot`, plus `RefactorPlanRequest` and `RefactorPlanResponse`. A request accepts `root`, a portable search or workspace-symbol handle or exact internal review/impact symbol handle, optional `renameTo`, independent `maxReferences`, `maxCallers`, and `maxHierarchy` bounds from 0 to 500, optional `includeSource`, and optional standalone `buildOptions`.
+The root and `@lzehrung/codegraph/agent` entry points export `buildRefactorPlan`, `buildRefactorPlanWithSession`, and `buildRefactorPlanInSnapshot`, plus `RefactorPlanRequest`, `RefactorPlanResponse`, and `RefactorPlanSectionIssue`. A request accepts `root`, a portable search or workspace-symbol handle or exact internal review/impact symbol handle, optional `renameTo`, independent `maxReferences`, `maxCallers`, and `maxHierarchy` bounds from 0 to 500, optional `includeSource`, and optional standalone `buildOptions`.
 
 ```ts
 import { buildRefactorPlanWithSession, createAgentSession } from "@lzehrung/codegraph";
@@ -197,7 +197,7 @@ const plan = await buildRefactorPlanWithSession(session, {
 });
 ```
 
-One session load and freshness decision feed the target, definition, references, callers, callees, supertypes, subtypes, implementations, candidate tests, and follow-ups. Internal input handles are normalized to a portable target handle; when present, nested `plan.rename.safe` remains the authoritative read-only rename decision.
+One session load and freshness decision feed the target, definition, references, callers, callees, supertypes, subtypes, implementations, candidate tests, and follow-ups. Unsupported implementation sections appear in `plan.sectionIssues` and contribute an omission instead of silently looking complete; internal input handles are normalized to a portable target handle, and nested `plan.rename.safe` remains authoritative when present.
 
 `tool_buildRefactorPlan(root, request, runtimeOptions)` accepts either a shared `AgentSession` or build options, but not both. Every entry point returns evidence only, never writes source, and exposes no apply API.
 

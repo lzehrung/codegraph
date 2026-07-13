@@ -3,8 +3,9 @@ import type { Range } from "../types.js";
 import { toProjectDisplayPath } from "../util/paths.js";
 import { ensureParsedContext } from "./parse-context.js";
 import { getCachedScope } from "./navigation-references.js";
+import { resolveImported } from "./navigation-resolve.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
-import type { ProjectIndex, SymbolDef, SymbolKind } from "./types.js";
+import type { ImportBinding, ProjectIndex, SymbolDef, SymbolKind } from "./types.js";
 
 export const DEFAULT_WORKSPACE_SYMBOL_LIMIT = 50;
 export const MAX_WORKSPACE_SYMBOL_LIMIT = 500;
@@ -20,7 +21,7 @@ export type WorkspaceSymbolsRequest = {
 
 export type WorkspaceSymbolMatch = {
   id: string;
-  def?: SymbolDef;
+  def: SymbolDef;
   file: string;
   name: string;
   localName: string;
@@ -37,6 +38,8 @@ export type WorkspaceSymbolsResult = {
   totalCandidates: number;
   omitted: number;
   limit: number;
+  omittedImports: number;
+  importScanFailures: number;
 };
 
 type LocalCandidate = {
@@ -44,9 +47,15 @@ type LocalCandidate = {
   exportedNames: string[];
 };
 
+type ImportCandidateBuild = {
+  symbols: WorkspaceSymbolMatch[];
+  omitted: number;
+  failedFiles: number;
+};
+
 type WorkspaceSymbolLookup = {
   locals: LocalCandidate[];
-  imports?: Promise<WorkspaceSymbolMatch[]>;
+  imports?: Promise<ImportCandidateBuild>;
 };
 
 type RankedCandidate = {
@@ -69,9 +78,14 @@ export async function workspaceSymbols(
   const limit = normalizeLimit(request.limit);
   const lookup = getWorkspaceSymbolLookup(index);
   const candidates = lookup.locals.map((candidate) => toLocalMatch(candidate, index.projectRoot));
+  let omittedImports = 0;
+  let importScanFailures = 0;
   if (request.includeImports) {
     lookup.imports ??= buildImportCandidates(index);
-    candidates.push(...(await lookup.imports));
+    const importBuild = await lookup.imports;
+    candidates.push(...importBuild.symbols);
+    omittedImports = importBuild.omitted;
+    importScanFailures = importBuild.failedFiles;
   }
 
   const kindFilter = request.kinds?.length ? new Set(request.kinds) : undefined;
@@ -93,6 +107,8 @@ export async function workspaceSymbols(
     totalCandidates: ranked.length,
     omitted: Math.max(0, ranked.length - symbols.length),
     limit,
+    omittedImports,
+    importScanFailures,
   };
 }
 
@@ -143,8 +159,10 @@ function toLocalMatch(candidate: LocalCandidate, projectRoot: string | undefined
   };
 }
 
-async function buildImportCandidates(index: ProjectIndex): Promise<WorkspaceSymbolMatch[]> {
-  const imports: WorkspaceSymbolMatch[] = [];
+async function buildImportCandidates(index: ProjectIndex): Promise<ImportCandidateBuild> {
+  const symbols: WorkspaceSymbolMatch[] = [];
+  let omitted = 0;
+  let failedFiles = 0;
   for (const [file, moduleIndex] of index.byFile) {
     if (!moduleIndex.imports.length) continue;
     try {
@@ -153,11 +171,16 @@ async function buildImportCandidates(index: ProjectIndex): Promise<WorkspaceSymb
       for (const binding of scope.all) {
         if (!binding.import) continue;
         const range = binding.def ?? binding.occurrences[0];
-        if (!range) continue;
+        const target = resolveImportDefinition(index, binding.import);
+        if (!range || !target) {
+          omitted += 1;
+          continue;
+        }
         const kind = binding.import.kind === "namespace" ? "namespaceImport" : "import";
         const displayFile = toProjectDisplayPath(index.projectRoot, file);
-        imports.push({
+        symbols.push({
           id: `${file}::${binding.name}::import`,
+          def: target,
           file: displayFile,
           name: binding.name,
           localName: binding.name,
@@ -169,10 +192,19 @@ async function buildImportCandidates(index: ProjectIndex): Promise<WorkspaceSymb
         });
       }
     } catch {
-      continue;
+      failedFiles += 1;
+      omitted += moduleIndex.imports.length;
     }
   }
-  return imports;
+  return { symbols, omitted, failedFiles };
+}
+
+function resolveImportDefinition(index: ProjectIndex, binding: ImportBinding): SymbolDef | null {
+  if (binding.kind === "namespace" || binding.kind === "star") return null;
+  const exportedName = binding.kind === "named" ? binding.imported : "default";
+  const resolved = resolveImported(index, binding, exportedName);
+  if (!resolved || "namespace" in resolved) return null;
+  return resolved;
 }
 
 function rankCandidate(candidate: WorkspaceSymbolMatch, query: string): RankedCandidate | null {

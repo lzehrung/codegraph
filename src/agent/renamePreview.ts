@@ -185,29 +185,26 @@ export async function previewRenameInSnapshot(
     referenceFailure = error instanceof Error ? error.message : String(error);
   }
   const semanticDefinitions = new Map<string, SymbolDef>([[resolved.id, resolved.def]]);
-  const ambiguousImplementationIds = new Set<string>();
   const implementationResult = queryImplementations(snapshot.index, snapshot.symbolGraph, resolved.id, {
     limit: 500,
   });
-  const omittedImplementations = implementationResult.status === "ok" ? implementationResult.omitted : 0;
+  let omittedImplementations = implementationResult.status === "ok" ? implementationResult.omitted : 0;
+  let missingImplementationDefinitions = 0;
+  let implementationAmbiguityReason: string | undefined;
   if (implementationResult.status === "ok") {
-    const lookup = buildSymbolLookup(snapshot);
-    const membersByOwner = new Map<string, string[]>();
-    for (const implementation of implementationResult.implementations) {
-      if (!implementation.implementedMemberId) continue;
-      const memberIds = membersByOwner.get(implementation.symbolId) ?? [];
-      memberIds.push(implementation.implementedMemberId);
-      membersByOwner.set(implementation.symbolId, memberIds);
+    if (implementationResult.ambiguous) {
+      implementationAmbiguityReason =
+        "One or more implementing types have multiple same-named members and signature identity is unavailable.";
     }
-    for (const [ownerId, memberIds] of membersByOwner) {
-      if (memberIds.length > 1) {
-        ambiguousImplementationIds.add(ownerId);
+    const lookup = buildSymbolLookup(snapshot);
+    for (const implementation of implementationResult.implementations) {
+      if (!implementation.implementingTypeId) continue;
+      const memberDef = lookup.defById.get(implementation.symbolId);
+      if (!memberDef) {
+        missingImplementationDefinitions += 1;
         continue;
       }
-      const memberId = memberIds[0];
-      const memberDef = memberId ? lookup.defById.get(memberId) : undefined;
-      if (!memberId || !memberDef) continue;
-      semanticDefinitions.set(memberId, memberDef);
+      semanticDefinitions.set(implementation.symbolId, memberDef);
       try {
         const memberReferences = await findReferences(
           snapshot.index,
@@ -220,7 +217,10 @@ export async function previewRenameInSnapshot(
         referenceFailure ??= error instanceof Error ? error.message : String(error);
       }
     }
+  } else if (/\b(?:ambiguous|overload)\b/i.test(implementationResult.reason)) {
+    implementationAmbiguityReason = implementationResult.reason;
   }
+  omittedImplementations += missingImplementationDefinitions;
   const edits: RenameEdit[] = [];
   const unsafeSites: RenameUnsafeSite[] = [];
   const loadedFiles = new Map<string, Promise<LoadedRenameFile | null>>();
@@ -238,6 +238,36 @@ export async function previewRenameInSnapshot(
       text: resolved.def.localName,
       reason: "unresolved_reference",
       provenance: { ...provenance, confidence: "low", reason: referenceFailure },
+    });
+  }
+  if (implementationAmbiguityReason) {
+    unsafeSites.push({
+      location: {
+        file: normalizeAgentFilePath(snapshot.root, resolved.def.file),
+        range: resolved.def.range,
+      },
+      text: resolved.def.localName,
+      reason: "ambiguous_target",
+      provenance: {
+        ...provenance,
+        confidence: "low",
+        reason: implementationAmbiguityReason,
+      },
+    });
+  }
+  if (missingImplementationDefinitions) {
+    unsafeSites.push({
+      location: {
+        file: normalizeAgentFilePath(snapshot.root, resolved.def.file),
+        range: resolved.def.range,
+      },
+      text: resolved.def.localName,
+      reason: "unresolved_reference",
+      provenance: {
+        ...provenance,
+        confidence: "low",
+        reason: `${missingImplementationDefinitions} proven implementation definition(s) could not be resolved.`,
+      },
     });
   }
   const definitionCandidates = [...semanticDefinitions.values()].map(
@@ -271,24 +301,6 @@ export async function previewRenameInSnapshot(
   const candidateLimitExceeded = allCandidates.length > maxEdits;
   const candidates = allCandidates.slice(0, maxEdits);
   await addScopeConflicts(snapshot, resolved.def, request.newName, selectedReferences, conflicts);
-  for (const ownerId of ambiguousImplementationIds) {
-    const owner = snapshot.symbolGraph.nodes.get(ownerId);
-    unsafeSites.push({
-      location: {
-        file: owner
-          ? normalizeAgentFilePath(snapshot.root, owner.file)
-          : normalizeAgentFilePath(snapshot.root, resolved.def.file),
-        range: resolved.def.range,
-      },
-      text: resolved.def.localName,
-      reason: "ambiguous_target",
-      provenance: {
-        ...provenance,
-        confidence: "low",
-        reason: "The implementing type has multiple same-named members and signature identity is unavailable.",
-      },
-    });
-  }
 
   for (const reference of importDeclarations.missing) {
     unsafeSites.push({
@@ -548,15 +560,18 @@ async function addScopeConflicts(
     });
   }
 
-  const duplicateExport = moduleIndex.exports.find(
-    (entry) => entry.type === "local" && entry.target !== target && entry.exportedAs === newName,
-  );
-  if (duplicateExport?.type === "local") {
+  const duplicateExport = moduleIndex.exports.find((entry) => {
+    if (!("exportedAs" in entry) || entry.exportedAs !== newName) return false;
+    if (entry.type !== "local") return true;
+    return defNodeId(entry.target) !== targetId;
+  });
+  if (duplicateExport) {
+    const duplicateDef = duplicateExport.type === "local" ? duplicateExport.target : undefined;
     conflicts.push({
       file,
-      location: { file, range: duplicateExport.target.range },
+      ...(duplicateDef ? { location: { file, range: duplicateDef.range } } : {}),
       reason: "duplicate_export",
-      existingHandle: semanticSymbolFromDef(snapshot, duplicateExport.target).handle,
+      ...(duplicateDef ? { existingHandle: semanticSymbolFromDef(snapshot, duplicateDef).handle } : {}),
       message: `The target module already exports "${newName}".`,
     });
   }

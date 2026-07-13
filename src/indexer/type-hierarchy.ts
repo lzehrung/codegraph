@@ -9,6 +9,7 @@ export type TypeHierarchyRelationMatch = {
   targetId: string;
   relation: TypeHierarchyRelationKind;
   depth: number;
+  site?: SymbolEdge["site"];
 };
 
 export type TypeHierarchyResult =
@@ -24,18 +25,27 @@ export type TypeHierarchyResult =
 
 export type ImplementationMatch = {
   symbolId: string;
-  implementedMemberId?: string;
+  implementingTypeId?: string;
   relation: TypeHierarchyRelationKind;
+  site?: SymbolEdge["site"];
 };
 
 export type ImplementationsResult =
-  | { status: "ok"; targetId: string; implementations: ImplementationMatch[]; omitted: number; limit: number }
+  | {
+      status: "ok";
+      targetId: string;
+      implementations: ImplementationMatch[];
+      omitted: number;
+      ambiguous: number;
+      limit: number;
+    }
   | { status: "not_found" | "invalid_target" | "unsupported_target"; reason: string };
 
 type HierarchyEdge = {
   from: string;
   to: string;
   relation: TypeHierarchyRelationKind;
+  site?: SymbolEdge["site"];
 };
 
 type TypeHierarchyIndex = {
@@ -79,7 +89,12 @@ export function findTypeHierarchy(
       if (visited.has(nextId)) continue;
       visited.add(nextId);
       const depth = current.depth + 1;
-      relations.push({ targetId: nextId, relation: edge.relation, depth });
+      relations.push({
+        targetId: nextId,
+        relation: edge.relation,
+        depth,
+        ...(edge.site ? { site: edge.site } : {}),
+      });
       queue.push({ id: nextId, depth });
     }
   }
@@ -108,57 +123,90 @@ export function findImplementations(
   const hierarchy = getTypeHierarchyIndex(graph);
 
   if (isTypeNode(targetNode)) {
-    const matches = collectTypeImplementations(graph, hierarchy, targetId);
+    const rootRelations = implementationRootRelations(hierarchy, targetId, targetNode);
+    if (!rootRelations.size) {
+      return {
+        status: "unsupported_target",
+        reason: "Implementation lookup requires an interface, trait, or abstract type.",
+      };
+    }
+    const matches = collectTypeImplementations(graph, hierarchy, targetId, rootRelations);
     return {
       status: "ok",
       targetId,
       implementations: matches.slice(0, limit),
       omitted: Math.max(0, matches.length - limit),
+      ambiguous: 0,
       limit,
     };
   }
 
   const ownerEdge = graph.edges.find((edge) => edge.from === targetId && edge.label === "member_of");
   const ownerId = ownerEdge?.to;
-  const owner = ownerId ? resolveSymbolId(index, ownerId) : null;
-  if (!owner || !ownerId) {
+  const ownerNode = ownerId ? graph.nodes.get(ownerId) : undefined;
+  const ownerDef = ownerId ? resolveSymbolId(index, ownerId) : null;
+  if (!ownerId || !ownerNode || !ownerDef) {
     return {
       status: "unsupported_target",
       reason: "Implementation lookup requires an interface, trait, abstract type, or member owned by one.",
     };
   }
-  const hasProvenImplementers = (hierarchy.incoming.get(ownerId) ?? []).some(
-    (edge) => edge.relation === "implements" || edge.relation === "trait",
-  );
-  if (!hasProvenImplementers) {
+  const sameNameMembers = graph.edges
+    .filter((edge) => edge.to === ownerId && edge.label === "member_of")
+    .map((edge) => edge.from)
+    .filter((id) => graph.nodes.get(id)?.name === targetDef.localName);
+  if (sameNameMembers.length > 1) {
     return {
       status: "unsupported_target",
-      reason: "Member implementation lookup requires a proven interface or trait relationship.",
+      reason: "Member implementation lookup is ambiguous for overloaded members because signatures are unavailable.",
     };
   }
 
-  const typeMatches = collectTypeImplementations(graph, hierarchy, ownerId);
-  const memberMatches: ImplementationMatch[] = [];
+  const rootRelations = implementationRootRelations(hierarchy, ownerId, ownerNode);
+  if (targetNode.implementationTarget) rootRelations.add("extends");
+  if (!rootRelations.size) {
+    return {
+      status: "unsupported_target",
+      reason: "Member implementation lookup requires a proven interface, trait, or abstract override relationship.",
+    };
+  }
+
+  const typeMatches = collectTypeImplementations(graph, hierarchy, ownerId, rootRelations);
+  const proofEdges = graph.edges.filter(
+    (edge) => edge.to === targetId && (edge.label === "implements_member" || edge.label === "overrides"),
+  );
+  const memberMatches = new Map<string, ImplementationMatch>();
+  for (const proof of proofEdges) {
+    const implementingTypeId = graph.edges.find((edge) => edge.from === proof.from && edge.label === "member_of")?.to;
+    if (!implementingTypeId) continue;
+    const relation =
+      proof.label === "overrides"
+        ? "extends"
+        : (hierarchy.outgoing.get(implementingTypeId) ?? []).find((edge) => edge.to === ownerId)?.relation;
+    if (!relation) continue;
+    memberMatches.set(proof.from, {
+      symbolId: proof.from,
+      implementingTypeId,
+      relation,
+      ...(proof.site ? { site: proof.site } : {}),
+    });
+  }
+  let ambiguous = 0;
   for (const typeMatch of typeMatches) {
-    const memberIds = graph.edges
+    const unresolvedMembers = graph.edges
       .filter((edge) => edge.to === typeMatch.symbolId && edge.label === "member_of")
       .map((edge) => edge.from)
-      .filter((id) => graph.nodes.get(id)?.name === targetDef.localName)
-      .sort();
-    for (const memberId of memberIds) {
-      memberMatches.push({
-        symbolId: typeMatch.symbolId,
-        implementedMemberId: memberId,
-        relation: typeMatch.relation,
-      });
-    }
+      .filter((id) => graph.nodes.get(id)?.name === targetDef.localName && !memberMatches.has(id));
+    ambiguous += unresolvedMembers.length;
   }
-  memberMatches.sort((left, right) => compareImplementationMatches(graph, left, right));
+  const matches = [...memberMatches.values()].sort((left, right) => compareImplementationMatches(graph, left, right));
+  const truncated = Math.max(0, matches.length - limit);
   return {
     status: "ok",
     targetId,
-    implementations: memberMatches.slice(0, limit),
-    omitted: Math.max(0, memberMatches.length - limit),
+    implementations: matches.slice(0, limit),
+    omitted: truncated + ambiguous,
+    ambiguous,
     limit,
   };
 }
@@ -171,7 +219,12 @@ function getTypeHierarchyIndex(graph: SymbolGraph): TypeHierarchyIndex {
   for (const edge of graph.edges) {
     const relation = hierarchyRelation(edge);
     if (!relation) continue;
-    const hierarchyEdge = { from: edge.from, to: edge.to, relation };
+    const hierarchyEdge = {
+      from: edge.from,
+      to: edge.to,
+      relation,
+      ...(edge.site ? { site: edge.site } : {}),
+    };
     appendEdge(outgoing, edge.from, hierarchyEdge);
     appendEdge(incoming, edge.to, hierarchyEdge);
   }
@@ -190,32 +243,69 @@ function hierarchyRelation(edge: SymbolEdge): TypeHierarchyRelationKind | null {
 
 function appendEdge(map: Map<string, HierarchyEdge[]>, key: string, edge: HierarchyEdge): void {
   const edges = map.get(key);
-  if (edges) edges.push(edge);
-  else map.set(key, [edge]);
+  if (!edges) {
+    map.set(key, [edge]);
+    return;
+  }
+  const existingIndex = edges.findIndex(
+    (candidate) => candidate.from === edge.from && candidate.to === edge.to && candidate.relation === edge.relation,
+  );
+  if (existingIndex < 0) {
+    edges.push(edge);
+    return;
+  }
+  const existing = edges[existingIndex]!;
+  if (!existing.site && edge.site) edges[existingIndex] = edge;
 }
 
 function collectTypeImplementations(
   graph: SymbolGraph,
   hierarchy: TypeHierarchyIndex,
   targetId: string,
+  acceptedRootRelations: ReadonlySet<TypeHierarchyRelationKind>,
 ): ImplementationMatch[] {
   const direct = hierarchy.incoming.get(targetId) ?? [];
-  const implementationRoots = direct.filter((edge) => edge.relation === "implements" || edge.relation === "trait");
+  const implementationRoots = direct.filter((edge) => acceptedRootRelations.has(edge.relation));
   const matches = new Map<string, ImplementationMatch>();
   const queue: string[] = [];
   for (const edge of implementationRoots) {
-    matches.set(edge.from, { symbolId: edge.from, relation: edge.relation });
+    matches.set(edge.from, {
+      symbolId: edge.from,
+      relation: edge.relation,
+      ...(edge.site ? { site: edge.site } : {}),
+    });
     queue.push(edge.from);
   }
   for (let cursor = 0; cursor < queue.length; cursor += 1) {
     const current = queue[cursor]!;
     for (const edge of hierarchy.incoming.get(current) ?? []) {
       if (matches.has(edge.from)) continue;
-      matches.set(edge.from, { symbolId: edge.from, relation: edge.relation });
+      matches.set(edge.from, {
+        symbolId: edge.from,
+        relation: edge.relation,
+        ...(edge.site ? { site: edge.site } : {}),
+      });
       queue.push(edge.from);
     }
   }
   return [...matches.values()].sort((left, right) => compareImplementationMatches(graph, left, right));
+}
+
+function implementationRootRelations(
+  hierarchy: TypeHierarchyIndex,
+  targetId: string,
+  targetNode: SymbolNode,
+): Set<TypeHierarchyRelationKind> {
+  const incoming = hierarchy.incoming.get(targetId) ?? [];
+  const relations = new Set<TypeHierarchyRelationKind>();
+  if (targetNode.kind === "interface" || incoming.some((edge) => edge.relation === "implements")) {
+    relations.add("implements");
+  }
+  if (targetNode.kind === "type" || incoming.some((edge) => edge.relation === "trait")) {
+    relations.add("trait");
+  }
+  if (targetNode.implementationTarget) relations.add("extends");
+  return relations;
 }
 
 function isTypeNode(node: SymbolNode): boolean {

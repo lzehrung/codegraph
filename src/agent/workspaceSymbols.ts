@@ -52,12 +52,14 @@ export async function workspaceSymbolsInSnapshot(
   const symbols = result.symbols.map((symbol): SemanticSymbol => {
     const file = normalizeAgentFilePath(snapshot.root, symbol.file);
     const range = symbol.range;
+    const handleFile = normalizeAgentFilePath(snapshot.root, symbol.def.file);
+    const handleRange = symbol.def.range;
     return {
       handle: formatAgentSymbolHandle({
-        file,
-        name: symbol.localName,
-        line: range.start.line,
-        column: range.start.column,
+        file: handleFile,
+        name: symbol.def.localName,
+        line: handleRange.start.line,
+        column: handleRange.start.column,
       }),
       name: symbol.name,
       localName: symbol.localName,
@@ -80,7 +82,11 @@ export async function workspaceSymbolsInSnapshot(
     analysis: snapshot.analysis,
     freshness,
     limits: { symbols: result.limit },
-    omittedCounts: { symbols: result.omitted },
+    omittedCounts: {
+      symbols: result.omitted,
+      imports: result.omittedImports,
+      importScanFailures: result.importScanFailures,
+    },
     query: result.query,
     symbols,
     totalCandidates: result.totalCandidates,

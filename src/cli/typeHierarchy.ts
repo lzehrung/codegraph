@@ -91,9 +91,7 @@ function formatTypeHierarchyResponse(response: TypeHierarchyResponse): string {
 function formatImplementationsResponse(response: ImplementationsResponse): string {
   const lines = [`Target: ${formatSymbol(response.target)}`, `Implementations: ${response.implementations.length}`];
   for (const entry of response.implementations) {
-    let line = formatSymbol(entry.symbol);
-    if (entry.implementedMember) line += ` -> ${formatSymbol(entry.implementedMember)}`;
-    lines.push(line);
+    lines.push(formatSymbol(entry.symbol));
   }
   appendOmitted(lines, response.omittedCounts.relations);
   return lines.join("\n");

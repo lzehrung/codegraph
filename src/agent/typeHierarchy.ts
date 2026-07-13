@@ -5,6 +5,7 @@ import {
   type TypeHierarchyDirection,
   type TypeHierarchyRelationKind,
 } from "../indexer/type-hierarchy.js";
+import { normalizeAgentFilePath } from "./normalize.js";
 import type { SemanticLocation, SemanticProvenance, SemanticResponseEnvelope, SemanticSymbol } from "./semantic.js";
 import { resolveSemanticSymbol, semanticSymbolFromDef } from "./semanticSymbols.js";
 import {
@@ -39,7 +40,6 @@ export type TypeHierarchyResponse = SemanticResponseEnvelope & {
 
 export type ImplementationEntry = {
   symbol: SemanticSymbol;
-  implementedMember?: SemanticSymbol;
   relationSite?: SemanticLocation;
   provenance: SemanticProvenance;
 };
@@ -91,11 +91,17 @@ export async function findImplementationsWithSession(
   const implementations = result.implementations.flatMap((match): ImplementationEntry[] => {
     const def = lookup.defById.get(match.symbolId);
     if (!def) return [];
-    const memberDef = match.implementedMemberId ? lookup.defById.get(match.implementedMemberId) : undefined;
     return [
       {
         symbol: semanticSymbolFromDef(snapshot, def),
-        ...(memberDef ? { implementedMember: semanticSymbolFromDef(snapshot, memberDef) } : {}),
+        ...(match.site
+          ? {
+              relationSite: {
+                file: normalizeAgentFilePath(snapshot.root, match.site.file),
+                range: match.site.range,
+              },
+            }
+          : {}),
         provenance,
       },
     ];
@@ -129,6 +135,14 @@ async function runTypeHierarchy(
       {
         type: semanticSymbolFromDef(snapshot, def),
         relation: match.relation,
+        ...(match.site
+          ? {
+              declarationSite: {
+                file: normalizeAgentFilePath(snapshot.root, match.site.file),
+                range: match.site.range,
+              },
+            }
+          : {}),
         depth: match.depth,
         provenance,
       },

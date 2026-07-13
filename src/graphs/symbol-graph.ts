@@ -27,6 +27,8 @@ export type SymbolNode = {
   lineSpan?: number;
   complexity?: number;
   visibility?: SymbolVisibility;
+  implementationTarget?: boolean;
+  memberArity?: number;
 };
 
 export type SymbolEdge = {

@@ -16,6 +16,16 @@ async function hierarchyFixture() {
       "export class Worker extends Base implements Service { run(): void {} }",
       "export class SpecializedWorker extends Worker {}",
       "export class Unrelated { run(): void {} }",
+      "export abstract class AbstractJob {",
+      "  abstract execute(): void;",
+      "}",
+      "export class ConcreteJob extends AbstractJob {",
+      "  execute(): void {}",
+      "}",
+      "export class InheritedJob extends ConcreteJob {}",
+      "export class IncompatibleJob extends AbstractJob { execute(value: string): void {} }",
+      "export interface Overloaded { run(value: string): void; run(value: number): void }",
+      "export class OverloadedWorker implements Overloaded { run(value: string | number): void {} }",
     ].join("\n"),
   );
   const index = await buildProjectIndex(root);
@@ -45,6 +55,7 @@ describe("type hierarchy", () => {
       ["Service", "implements", 2],
     ]);
     expect(result.omitted).toBe(0);
+    expect(result.relations.every((relation) => relation.site?.file.endsWith("types.ts"))).toBe(true);
   });
 
   it("bounds cycles and records post-ranking omissions", () => {
@@ -87,13 +98,70 @@ describe("type hierarchy", () => {
     const memberResult = findImplementations(index, graph, memberNode!.id);
     expect(memberResult.status).toBe("ok");
     if (memberResult.status !== "ok") return;
-    const implementationNames = memberResult.implementations.map((entry) =>
-      entry.implementedMemberId ? graph.nodes.get(entry.implementedMemberId)?.name : undefined,
-    );
-    expect(implementationNames).toEqual(["run"]);
-    expect(memberResult.implementations.map((entry) => graph.nodes.get(entry.symbolId)?.name)).toEqual(["Worker"]);
-    expect(memberResult.implementations.some((entry) => graph.nodes.get(entry.symbolId)?.name === "Unrelated")).toBe(
-      false,
-    );
+    expect(memberResult.implementations.map((entry) => graph.nodes.get(entry.symbolId)?.name)).toEqual(["run"]);
+    expect(
+      memberResult.implementations.map((entry) =>
+        entry.implementingTypeId ? graph.nodes.get(entry.implementingTypeId)?.name : undefined,
+      ),
+    ).toEqual(["Worker"]);
+    expect(memberResult.implementations[0]?.site?.file.endsWith("types.ts")).toBe(true);
+    expect(
+      memberResult.implementations.some(
+        (entry) => graph.nodes.get(entry.implementingTypeId ?? "")?.name === "Unrelated",
+      ),
+    ).toBe(false);
+  });
+  it("finds abstract overrides once and excludes inherited declarations without overrides", async () => {
+    const { index, graph, byName } = await hierarchyFixture();
+    const abstractJob = byName.get("AbstractJob");
+    expect(abstractJob).toBeDefined();
+    const typeResult = findImplementations(index, graph, abstractJob!.id, { limit: 1 });
+    expect(typeResult.status).toBe("ok");
+    if (typeResult.status !== "ok") return;
+    expect(typeResult.implementations.map((entry) => graph.nodes.get(entry.symbolId)?.name)).toEqual(["ConcreteJob"]);
+    expect(typeResult.omitted).toBe(2);
+    expect(typeResult.implementations[0]?.site?.file.endsWith("types.ts")).toBe(true);
+
+    const executeId = graph.edges
+      .filter((edge) => edge.to === abstractJob!.id && edge.label === "member_of")
+      .map((edge) => edge.from)
+      .find((id) => graph.nodes.get(id)?.name === "execute");
+    expect(executeId).toBeDefined();
+
+    const result = findImplementations(index, graph, executeId!);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.implementations.map((entry) => graph.nodes.get(entry.symbolId)?.name)).toEqual(["execute"]);
+    expect(
+      result.implementations.map((entry) =>
+        entry.implementingTypeId ? graph.nodes.get(entry.implementingTypeId)?.name : undefined,
+      ),
+    ).toEqual(["ConcreteJob"]);
+    expect(result.implementations[0]?.site?.file.endsWith("types.ts")).toBe(true);
+    expect(result.omitted).toBe(1);
+    expect(result.ambiguous).toBe(1);
+  });
+
+  it("rejects overloaded members and ordinary concrete types instead of guessing", async () => {
+    const { index, graph, byName } = await hierarchyFixture();
+    const overloaded = byName.get("Overloaded");
+    const base = byName.get("Base");
+    expect(overloaded).toBeDefined();
+    expect(base).toBeDefined();
+    const overloadedMemberIds = graph.edges
+      .filter((edge) => edge.to === overloaded!.id && edge.label === "member_of")
+      .map((edge) => edge.from)
+      .filter((id) => graph.nodes.get(id)?.name === "run");
+    expect(overloadedMemberIds.length).toBeGreaterThan(1);
+
+    const memberResult = findImplementations(index, graph, overloadedMemberIds[0]!);
+    expect(memberResult).toMatchObject({ status: "unsupported_target" });
+    if (memberResult.status === "unsupported_target") {
+      expect(memberResult.reason).toMatch(/ambiguous|overload/i);
+    }
+    expect(findImplementations(index, graph, base!.id)).toMatchObject({
+      status: "unsupported_target",
+      reason: expect.stringContaining("abstract"),
+    });
   });
 });

@@ -161,7 +161,7 @@ describe("type hierarchy CLI", () => {
     const unsupportedMember = await captureCli(["implementations", unrelatedRun, "--root", root, "--cache", "off"]);
     expect(unsupportedMember).toMatchObject({ stdout: "", exitCode: 1 });
     expect(unsupportedMember.stderr).toContain(
-      "Member implementation lookup requires a proven interface or trait relationship.",
+      "Member implementation lookup requires a proven interface, trait, or abstract override relationship.",
     );
   });
 });

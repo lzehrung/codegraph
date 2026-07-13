@@ -70,6 +70,48 @@ describe("call hierarchy", () => {
     expect(result.entries[0]).toMatchObject({ symbolId: recursive!.id, depth: 1 });
     expect(result.entries[0]?.callsites).toHaveLength(1);
   });
+  it("disambiguates same-named namespace members and excludes unresolved dynamic calls", async () => {
+    const root = await mkTmpDir("cg-call-receivers-");
+    await fsp.writeFile(path.join(root, "alpha.ts"), "export function run(): number { return 1; }\n");
+    await fsp.writeFile(path.join(root, "beta.ts"), "export function run(): number { return 2; }\n");
+    await fsp.writeFile(
+      path.join(root, "receivers.ts"),
+      [
+        'import * as alpha from "./alpha.js";',
+        'import * as beta from "./beta.js";',
+        "export function callAlpha(): number { return alpha.run(); }",
+        "export function callDynamic(value: { run(): number }): number { return value.run(); }",
+        "export function callBeta(): number { return beta.run(); }",
+      ].join("\n"),
+    );
+    const index = await buildProjectIndex(root);
+    const graph = await buildSymbolGraphDetailed(index);
+    const node = (name: string) => [...graph.nodes.values()].find((candidate) => candidate.name === name);
+    const callAlpha = node("callAlpha");
+    const callDynamic = node("callDynamic");
+    const alphaRun = [...graph.nodes.values()].find(
+      (candidate) => candidate.name === "run" && candidate.file.endsWith(`${path.sep}alpha.ts`),
+    );
+    const betaRun = [...graph.nodes.values()].find(
+      (candidate) => candidate.name === "run" && candidate.file.endsWith(`${path.sep}beta.ts`),
+    );
+    expect(callAlpha).toBeDefined();
+    expect(callDynamic).toBeDefined();
+    expect(alphaRun).toBeDefined();
+    expect(betaRun).toBeDefined();
+
+    const resolved = findCallHierarchy(graph, callAlpha!.id, "outgoing");
+    expect(resolved.status).toBe("ok");
+    if (resolved.status !== "ok") return;
+    expect(resolved.entries.map((entry) => entry.symbolId)).toContain(alphaRun!.id);
+    expect(resolved.entries.map((entry) => entry.symbolId)).not.toContain(betaRun!.id);
+
+    const dynamic = findCallHierarchy(graph, callDynamic!.id, "outgoing");
+    expect(dynamic.status).toBe("ok");
+    if (dynamic.status !== "ok") return;
+    expect(dynamic.entries.map((entry) => entry.symbolId)).not.toContain(alphaRun!.id);
+    expect(dynamic.entries.map((entry) => entry.symbolId)).not.toContain(betaRun!.id);
+  });
 
   it("bounds deterministic transitive traversal and separates symbol and callsite omissions", () => {
     const site = (line: number) => ({

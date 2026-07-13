@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { workspaceSymbolsInSnapshot } from "../src/agent/workspaceSymbols.js";
+import { resolveSemanticSymbol } from "../src/agent/semanticSymbols.js";
 import { tool_workspaceSymbols } from "../src/agent-tools.js";
 import { buildProjectIndexFromFiles } from "../src/indexer/build-index.js";
 import { workspaceSymbols } from "../src/indexer/workspace-symbols.js";
@@ -91,6 +92,53 @@ describe("workspace symbol lookup", () => {
     const withImports = await workspaceSymbols(index, { query: "LocalService", includeImports: true });
     expect(withImports.symbols).toHaveLength(1);
     expect(withImports.symbols[0]).toMatchObject({ name: "LocalService", imported: true, exported: false });
+  });
+  it("returns import aliases at their binding location with handles for the imported definition", async () => {
+    const response = await workspaceSymbolsInSnapshot(snapshot, {
+      query: "LocalService",
+      includeImports: true,
+    });
+    expect(response.symbols).toHaveLength(1);
+    const alias = response.symbols[0]!;
+    expect(alias).toMatchObject({
+      name: "LocalService",
+      location: { file: "src/importer.ts" },
+    });
+    const resolved = resolveSemanticSymbol(snapshot, alias.handle);
+    expect(resolved?.def.localName).toBe("Service");
+    expect(resolved?.def.file.replace(/\\/g, "/")).toMatch(/\/src\/service\.ts$/);
+  });
+
+  it("reports failed import scans and omitted aliases instead of silently dropping them", async () => {
+    const importerEntry = [...index.byFile.entries()].find(([file]) =>
+      file.endsWith(`${path.sep}src${path.sep}importer.ts`),
+    );
+    expect(importerEntry).toBeDefined();
+    const missingFile = path.join(root, "src", "missing.ts");
+    const byFile = new Map(index.byFile);
+    byFile.set(missingFile, importerEntry![1]);
+    const failingIndex: ProjectIndex = {
+      ...index,
+      modules: new Map(byFile),
+      byFile,
+      parsed: new Map(index.parsed),
+      exportCache: new Map(),
+      scopeCache: new Map(),
+    };
+
+    const result = await workspaceSymbols(failingIndex, { query: "LocalService", includeImports: true });
+    expect(result.importScanFailures).toBe(1);
+    expect(result.omittedImports).toBeGreaterThan(0);
+
+    const response = await workspaceSymbolsInSnapshot(
+      { ...snapshot, index: failingIndex },
+      { query: "LocalService", includeImports: true },
+    );
+    expect(response.omittedCounts).toMatchObject({
+      imports: expect.any(Number),
+      importScanFailures: 1,
+    });
+    expect(response.omittedCounts.imports).toBeGreaterThan(0);
   });
 
   it("composes exported, kind, and file-glob filters", async () => {

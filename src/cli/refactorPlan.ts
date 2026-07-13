@@ -66,6 +66,12 @@ export function formatRefactorPlanResponse(response: RefactorPlanResponse): stri
     lines.push(`Rename unsafe sites: ${response.rename.unsafeSites.length}`);
   }
   appendOmissions(lines, response.omittedCounts);
+  if (response.sectionIssues.length) {
+    lines.push("Section issues:");
+    for (const issue of response.sectionIssues) {
+      lines.push(`  ${issue.section} [${issue.status}]: ${issue.reason}`);
+    }
+  }
   if (response.followUps.length) {
     lines.push("Follow-ups:");
     for (const command of response.followUps) lines.push(`  ${command}`);

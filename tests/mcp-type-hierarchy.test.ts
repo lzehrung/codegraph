@@ -11,6 +11,7 @@ import { countingSession } from "./helpers/agent.js";
 let root = "";
 let snapshot: AgentProjectSnapshot;
 let baseHandle = "";
+let serviceHandle = "";
 let specializedHandle = "";
 
 beforeAll(async () => {
@@ -27,10 +28,13 @@ beforeAll(async () => {
   const session = createAgentSession({ root, buildOptions: { cache: "off" }, freshness: { policy: "manual" } });
   snapshot = await session.loadProject();
   const bases = await workspaceSymbolsInSnapshot(snapshot, { query: "Base" });
+  const services = await workspaceSymbolsInSnapshot(snapshot, { query: "Service" });
   const specialized = await workspaceSymbolsInSnapshot(snapshot, { query: "Specialized" });
   baseHandle = bases.symbols.find((symbol) => symbol.localName === "Base")?.handle ?? "";
+  serviceHandle = services.symbols.find((symbol) => symbol.localName === "Service")?.handle ?? "";
   specializedHandle = specialized.symbols.find((symbol) => symbol.localName === "Specialized")?.handle ?? "";
-  if (!baseHandle || !specializedHandle) throw new Error("Hierarchy fixture handles were not indexed");
+  if (!baseHandle || !serviceHandle || !specializedHandle)
+    throw new Error("Hierarchy fixture handles were not indexed");
 });
 
 afterAll(async () => {
@@ -88,8 +92,41 @@ describe("type hierarchy MCP tools", () => {
     expect(response).toMatchObject({
       limits: { relations: 1 },
       omittedCounts: { relations: 1 },
-      relations: [{ type: { name: "Worker", location: { file: "types.ts" } }, depth: 1 }],
+      relations: [
+        {
+          type: { name: "Worker", location: { file: "types.ts" } },
+          declarationSite: { file: "types.ts" },
+          depth: 1,
+        },
+      ],
     });
+  });
+  it("runs implementation queries through the supplied session and rejects concrete targets", async () => {
+    const checkFreshness = vi.fn(async () => ({ state: "fresh" as const }));
+    const loadProject = vi.fn(async () => snapshot);
+    const session: AgentSession = {
+      root,
+      loadProject,
+      checkFreshness,
+      invalidate: () => undefined,
+    };
+    const handlers = createCodegraphMcpHandlers({ root, session });
+
+    const response = await handlers.implementations({ handle: serviceHandle, limit: 1 });
+
+    expect(checkFreshness).toHaveBeenCalledTimes(1);
+    expect(loadProject).toHaveBeenCalledTimes(1);
+    expect(response).toMatchObject({
+      limits: { relations: 1 },
+      omittedCounts: { relations: 1 },
+      implementations: [
+        {
+          symbol: { name: "Specialized", location: { file: "types.ts" } },
+          relationSite: { file: "types.ts" },
+        },
+      ],
+    });
+    await expect(handlers.implementations({ handle: baseHandle })).rejects.toThrow(/interface|abstract/i);
   });
 
   it("reuses one warm session across repeated hierarchy handlers", async () => {

@@ -346,7 +346,7 @@ export type {
 } from "./agent/renamePreview.js";
 /** Read-only refactor evidence packet composed from one semantic snapshot. */
 export { buildRefactorPlan, buildRefactorPlanInSnapshot, buildRefactorPlanWithSession } from "./agent/refactorPlan.js";
-export type { RefactorPlanRequest, RefactorPlanResponse } from "./agent/refactorPlan.js";
+export type { RefactorPlanRequest, RefactorPlanResponse, RefactorPlanSectionIssue } from "./agent/refactorPlan.js";
 
 export type {
   SemanticLocation,

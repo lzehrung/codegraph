@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { defNodeId } from "../src/graphs/symbol-graph.js";
 import { buildRefactorPlanWithSession } from "../src/agent/refactorPlan.js";
-import { semanticSymbolFromDef } from "../src/agent/semanticSymbols.js";
+import { resolveSemanticSymbol, semanticSymbolFromDef } from "../src/agent/semanticSymbols.js";
 import { createAgentSession, type AgentSession } from "../src/agent/session.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 
@@ -56,9 +56,42 @@ describe("refactor evidence plan", () => {
     expect(result.callers.map((entry) => entry.symbol.name)).toEqual(["caller"]);
     expect(result.callees.map((entry) => entry.symbol.name)).toEqual(["helper"]);
     expect(result.candidateTests).toContainEqual(expect.objectContaining({ file: "service.test.ts" }));
+    expect(result.sectionIssues).toContainEqual({
+      section: "implementations",
+      status: "unsupported_target",
+      reason: expect.stringContaining("Implementation lookup requires"),
+    });
+    expect(result.omittedCounts.implementations).toBe(1);
     expect(result.followUps).toContain(`codegraph refs --file service.ts --line 2 --col 17 --pretty`);
     expect(result.followUps.some((followUp) => followUp.includes(`callers ${handle}`))).toBe(true);
     expect(result.rename).toBeUndefined();
+  });
+  it("composes supported implementations with independent limits and no section issue", async () => {
+    const root = await mkTmpDir("cg-refactor-plan-implementations-");
+    await fsp.writeFile(
+      path.join(root, "types.ts"),
+      ["export interface Contract { run(): void }", "export class Worker implements Contract { run(): void {} }"].join(
+        "\n",
+      ),
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    const snapshot = await session.loadProject();
+    const contract = [...snapshot.index.byFile.values()]
+      .flatMap((moduleIndex) => moduleIndex.locals)
+      .find((definition) => definition.localName === "Contract");
+    expect(contract).toBeDefined();
+    const handle = semanticSymbolFromDef(snapshot, contract!).handle;
+
+    const result = await buildRefactorPlanWithSession(session, { root, handle, maxHierarchy: 10 });
+    expect(result.implementations.map((entry) => entry.symbol.name)).toEqual(["Worker"]);
+    expect(result.implementations[0]?.relationSite?.file).toBe("types.ts");
+    expect(result.sectionIssues).toEqual([]);
+    expect(result.omittedCounts.implementations).toBe(0);
+
+    const limited = await buildRefactorPlanWithSession(session, { root, handle, maxHierarchy: 0 });
+    expect(limited.implementations).toEqual([]);
+    expect(limited.sectionIssues).toEqual([]);
+    expect(limited.omittedCounts.implementations).toBe(1);
   });
 
   it("includes source context only when requested", async () => {
@@ -76,6 +109,8 @@ describe("refactor evidence plan", () => {
 
   it("accepts an exact review or impact symbol handle and returns portable output", async () => {
     const { root, backing, reviewHandle } = await refactorFixture();
+    const snapshot = await backing.loadProject();
+    expect(resolveSemanticSymbol(snapshot, reviewHandle)).toBeNull();
     const result = await buildRefactorPlanWithSession(backing, {
       root,
       handle: reviewHandle,

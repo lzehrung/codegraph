@@ -46,6 +46,7 @@ export function collectDetailedDeclarations(
     "method_declaration",
     "method_definition",
     "method_signature",
+    "abstract_method_signature",
     "constructor_declaration",
     "function_item",
     "function_signature_item",
@@ -54,6 +55,7 @@ export function collectDetailedDeclarations(
   ]);
   const typeNodeTypes = new Set([
     "class_declaration",
+    "abstract_class_declaration",
     "class_definition",
     "class",
     "interface_declaration",
