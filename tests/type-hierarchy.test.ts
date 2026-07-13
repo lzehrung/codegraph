@@ -191,6 +191,11 @@ describe("type hierarchy", () => {
     expect(oneArityResult.status).toBe("ok");
     if (oneArityResult.status === "ok") {
       expect(oneArityResult.implementations).toHaveLength(1);
+      expect(
+        oneArityResult.implementations.map((entry) =>
+          entry.implementingTypeId ? graph.nodes.get(entry.implementingTypeId)?.name : undefined,
+        ),
+      ).toEqual(["ZeroWorker"]);
       expect(graph.nodes.get(oneArityResult.implementations[0]!.symbolId)?.memberArity).toBe(1);
       expect(oneArityResult.ambiguous).toBe(0);
       expect(oneArityResult.unresolved).toEqual([]);
