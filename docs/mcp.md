@@ -39,6 +39,12 @@ The server exposes the same bounded primitives as the CLI and library session la
 - `orient`: compact first-turn repo context.
 - `packet_get`: bounded evidence packet by file path, symbol name, SQL object name, or stable target.
 - `search`: deterministic ranked search across paths, symbols, chunks, SQL objects, and graph context.
+- `workspace_symbols`: deterministic symbol-identity lookup with exact locations and composable filters; use `search` for hybrid path, prose, SQL, snippet, or graph evidence.
+- `rename_preview`: read-only semantic rename planning by portable symbol handle; filename results are suggestions only and no apply tool exists.
+- `refactor_plan`: one-snapshot refactor evidence packet by search, workspace-symbol, review, or impact handle; optional rename evidence stays read-only and authoritative.
+- `callers`, `callees`: grouped semantic callers or callees plus exact callsites by portable symbol handle; use `refs` for all references and `deps` for file dependencies.
+- `supertypes`, `subtypes`: proven type relationships by portable symbol handle, with bounded traversal depth.
+- `implementations`: proven type or supported interface/trait-member implementations without same-name inference.
 - `get_file`: bounded project file read with `offset`/`limit` line pagination, exact `number<TAB>line` content, and optional direct graph context.
 - `get_symbol`: resolve a stable search or explain handle.
 - `goto`: definition lookup by file position.
@@ -54,6 +60,40 @@ Before index-backed tool calls, MCP checks whether discovered files changed sinc
 Use `refresh_index` when you need to force a rebuild, reset SQLite artifact state, or refresh after a change burst that exceeds the automatic refresh limits. `query_sqlite` refreshes Codegraph-owned SQLite artifacts after small edits when write access is enabled; otherwise it refuses to serve stale artifact rows. `artifact_build` refuses to write outputs from a stale MCP index; run `refresh_index` first after large change bursts.
 `get_file` reads live bytes from disk after path confinement. It does not require a fresh index; only an explicit `includeGraphContext: true` checks indexed freshness and adds direct graph context, so returned file bytes and `totalLines` remain live even when `freshness` reports stale context.
 Tool schemas are flat JSON objects for broad client compatibility; argument combinations such as `refs` handle-vs-position mode are validated by the server.
+
+### `workspace_symbols`
+
+Call `workspace_symbols` with flat fields `query`, optional `kinds`, `exportedOnly`, `includeImports`, `fileGlob`, and `limit`. Imports are excluded by default; `fileGlob` matches project-relative paths, the default limit is 50, and both the schema and handler enforce a maximum of 500.
+
+Exact qualified identities such as `src/session.ts::CodeReviewSession` rank before exact names, prefixes, identifier tokens, and substrings. Responses include deterministic portable symbols plus analysis, freshness, limits, and omissions; only named/default import aliases that resolve to a concrete declaration are returned, while namespace/star and unresolved aliases are counted as omissions.
+
+### Rename preview
+
+Call `rename_preview` with flat fields `handle`, `newName`, and optional `includeComments`, `includeStrings`, `includeFilenames`, and `maxEdits`. The edit limit defaults to 5000 and caps at 10000; comment and string candidates are opt-in, while filename suggestions require an eligible exported class, interface, or type whose filename matches its name.
+
+Responses contain exact project-relative edits, conflicts, unsafe sites, filename suggestions, candidate tests, provenance, freshness, and omissions. The tool reuses the server session, remains available in read-only mode, never changes files, and has no apply counterpart.
+
+### Refactor plan
+
+Call `refactor_plan` with flat fields `handle`, optional `renameTo`, independent optional `maxReferences`, `maxCallers`, and `maxHierarchy` values from 0 to 500, and optional `includeSource`. The configured MCP root is reused and cannot be overridden per request.
+
+The tool composes references, direct callers and callees, type relationships, implementations, section issues, candidate tests, omissions, and follow-ups from one session snapshot. Unsupported implementation sections contribute an omission and appear in `sectionIssues`; exact internal review or impact symbol handles are accepted, returned targets and commands use portable handles, and nested `rename.safe` remains authoritative when `renameTo` is present.
+
+### Call hierarchy
+
+Call `callers` or `callees` with flat fields `handle`, optional `depth`, optional `limit`, and optional `includeHeuristic`. Depth defaults to 1 and caps at 5; the symbol limit defaults to 100 and caps at 500.
+
+Both tools reuse the server session and freshness gate. Responses group exact project-relative callsites under each related symbol, sort deterministically, and report separate symbol, callsite, and unresolved-site omissions.
+
+Only resolved semantic `calls` edges are currently returned. `includeHeuristic` is accepted for forward compatibility but does not enable guessed dynamic dispatch; imports, arbitrary references, and file dependency edges remain outside call hierarchy.
+
+### Type hierarchy and implementations
+
+Call `supertypes` or `subtypes` with flat fields `handle`, optional `depth`, and optional `limit`. Depth defaults to 1 and caps at 10; the result limit defaults to 100 and caps at 500.
+
+Call `implementations` with `handle` and optional `limit`; it has no depth field. All three tools reuse the server's one session and freshness gate, return exact project-relative symbol locations plus provenance and omissions, and reject stale handles, non-type hierarchy targets, or unsupported targets with actionable errors.
+
+Only resolved, indexed `extends` and `implements` relationships are returned. Implementation targets are limited to interfaces, traits, abstract types, and members with proven implementation or override relationships; exact implementing declarations are returned, inherited declarations are deduplicated, and overloads, dynamic or structural conformance, and unresolved external bases are not guessed.
 
 ### `get_file`
 

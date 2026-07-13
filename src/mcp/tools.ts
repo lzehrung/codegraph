@@ -6,11 +6,22 @@ import {
   MAX_FILE_VIEW_BYTES,
   MAX_FILE_VIEW_LINES,
 } from "../agent/fileView.js";
+import { DEFAULT_WORKSPACE_SYMBOL_LIMIT, MAX_WORKSPACE_SYMBOL_LIMIT } from "../indexer/workspace-symbols.js";
+import { SymbolKind } from "../indexer/types.js";
 
 import { DEFAULT_SQLITE_ROW_LIMIT, MAX_SQLITE_ROW_LIMIT } from "./sqliteGuard.js";
 
 export const DEFAULT_MCP_COLLECTION_LIMIT = 100;
+export const DEFAULT_RENAME_PREVIEW_EDITS = 5_000;
+export const MAX_RENAME_PREVIEW_EDITS = 10_000;
 export const MAX_MCP_COLLECTION_LIMIT = 500;
+export const MAX_REFACTOR_PLAN_LIMIT = 500;
+export const DEFAULT_TYPE_HIERARCHY_LIMIT = 100;
+export const MAX_TYPE_HIERARCHY_LIMIT = 500;
+export const MAX_TYPE_HIERARCHY_DEPTH = 10;
+export const DEFAULT_CALL_HIERARCHY_LIMIT = 100;
+export const MAX_CALL_HIERARCHY_LIMIT = 500;
+export const MAX_CALL_HIERARCHY_DEPTH = 5;
 
 function objectSchema(properties: Record<string, object>, required: string[] = []): Tool["inputSchema"] {
   return required.length ? { type: "object", properties, required } : { type: "object", properties };
@@ -36,6 +47,39 @@ function dependencyInputSchema(): Tool["inputSchema"] {
   );
 }
 
+function typeHierarchyInputSchema(): Tool["inputSchema"] {
+  return objectSchema(
+    {
+      handle: stringProperty,
+      depth: { type: "integer", minimum: 1, maximum: MAX_TYPE_HIERARCHY_DEPTH, default: 1 },
+      limit: {
+        type: "integer",
+        minimum: 0,
+        maximum: MAX_TYPE_HIERARCHY_LIMIT,
+        default: DEFAULT_TYPE_HIERARCHY_LIMIT,
+      },
+    },
+    ["handle"],
+  );
+}
+
+function callHierarchyInputSchema(): Tool["inputSchema"] {
+  return objectSchema(
+    {
+      handle: stringProperty,
+      depth: { type: "integer", minimum: 1, maximum: MAX_CALL_HIERARCHY_DEPTH, default: 1 },
+      limit: {
+        type: "integer",
+        minimum: 0,
+        maximum: MAX_CALL_HIERARCHY_LIMIT,
+        default: DEFAULT_CALL_HIERARCHY_LIMIT,
+      },
+      includeHeuristic: booleanProperty,
+    },
+    ["handle"],
+  );
+}
+
 export const MCP_TOOLS: Tool[] = [
   {
     name: "search",
@@ -49,6 +93,105 @@ export const MCP_TOOLS: Tool[] = [
         limit: { type: "integer", minimum: 0, maximum: 100, default: 20 },
       },
       ["query"],
+    ),
+  },
+  {
+    name: "workspace_symbols",
+    description:
+      "Deterministic symbol-identity lookup with exact locations and filters. Use hybrid search instead for paths, prose, SQL, snippets, or graph evidence.",
+    inputSchema: objectSchema(
+      {
+        query: stringProperty,
+        kinds: { type: "array", items: { type: "string", enum: Object.values(SymbolKind) } },
+        exportedOnly: booleanProperty,
+        includeImports: booleanProperty,
+        fileGlob: stringProperty,
+        limit: {
+          type: "integer",
+          minimum: 0,
+          maximum: MAX_WORKSPACE_SYMBOL_LIMIT,
+          default: DEFAULT_WORKSPACE_SYMBOL_LIMIT,
+        },
+      },
+      ["query"],
+    ),
+  },
+  {
+    name: "rename_preview",
+    description:
+      "Preview a semantic rename by portable symbol handle without changing files. Filename results are suggestions only; no apply tool exists.",
+    inputSchema: objectSchema(
+      {
+        handle: stringProperty,
+        newName: stringProperty,
+        includeComments: booleanProperty,
+        includeStrings: booleanProperty,
+        includeFilenames: booleanProperty,
+        maxEdits: {
+          type: "integer",
+          minimum: 1,
+          maximum: MAX_RENAME_PREVIEW_EDITS,
+          default: DEFAULT_RENAME_PREVIEW_EDITS,
+        },
+      },
+      ["handle", "newName"],
+    ),
+  },
+  {
+    name: "refactor_plan",
+    description:
+      "Build a read-only refactor evidence packet by symbol handle from one snapshot. Optional rename evidence is authoritative and no apply tool exists.",
+    inputSchema: objectSchema(
+      {
+        handle: stringProperty,
+        renameTo: stringProperty,
+        maxReferences: { type: "integer", minimum: 0, maximum: MAX_REFACTOR_PLAN_LIMIT },
+        maxCallers: { type: "integer", minimum: 0, maximum: MAX_REFACTOR_PLAN_LIMIT },
+        maxHierarchy: { type: "integer", minimum: 0, maximum: MAX_REFACTOR_PLAN_LIMIT },
+        includeSource: booleanProperty,
+      },
+      ["handle"],
+    ),
+  },
+  {
+    name: "callers",
+    description:
+      "Find proven semantic callers and exact grouped callsites for a portable symbol handle. Use refs for every symbol reference and deps for file-level dependencies.",
+    inputSchema: callHierarchyInputSchema(),
+  },
+  {
+    name: "callees",
+    description:
+      "Find proven semantic callees and exact grouped callsites for a portable symbol handle. Use refs for every symbol reference and deps for file-level dependencies.",
+    inputSchema: callHierarchyInputSchema(),
+  },
+  {
+    name: "supertypes",
+    description:
+      "Find proven direct or transitive supertypes for a portable symbol handle. Returns currently extracted extends and implements relationships only.",
+    inputSchema: typeHierarchyInputSchema(),
+  },
+  {
+    name: "subtypes",
+    description:
+      "Find proven direct or transitive subtypes for a portable symbol handle. Returns currently extracted extends and implements relationships only.",
+    inputSchema: typeHierarchyInputSchema(),
+  },
+  {
+    name: "implementations",
+    description:
+      "Find proven implementations for a type or supported interface/trait member handle without name-only inference.",
+    inputSchema: objectSchema(
+      {
+        handle: stringProperty,
+        limit: {
+          type: "integer",
+          minimum: 0,
+          maximum: MAX_TYPE_HIERARCHY_LIMIT,
+          default: DEFAULT_TYPE_HIERARCHY_LIMIT,
+        },
+      },
+      ["handle"],
     ),
   },
   {

@@ -149,6 +149,15 @@ codegraph orient --root . ./src --budget medium --json
 codegraph explore "how does auth reach db?" --root . --pretty
 codegraph explore src/auth.ts --json
 codegraph search "build review report" --json
+codegraph symbols "CodeReviewSession" --root . --pretty
+codegraph symbols "review report" --kind class,function --exported --limit 50 --json
+codegraph callers 'symbol:src/service.ts:run:5:3' --depth 2 --limit 100 --json
+codegraph callees 'symbol:src/worker.ts:process:12:14' --depth 3 --pretty
+codegraph supertypes 'symbol:src/worker.ts:Worker:12:14' --depth 3 --pretty
+codegraph subtypes 'symbol:src/service.ts:Service:4:18' --depth 3 --limit 100 --json
+codegraph implementations 'symbol:src/service.ts:run:5:3' --limit 100 --json
+codegraph rename-preview 'symbol:src/Service.ts:Service:1:14' RenamedService --include-filenames --json
+codegraph refactor-plan 'symbol:src/Service.ts:Service:1:14' --rename RenamedService --max-references 200 --pretty
 codegraph explain src/review.ts --json
 codegraph packet get src/cli.ts --pretty
 # Read a live file; JSON is the default
@@ -161,6 +170,28 @@ codegraph file src/cli.ts --include-graph-context --json
 codegraph search "public users" --mode sql --json
 codegraph search "handle login" --from src/auth.ts --mode graph --depth 1 --json
 codegraph search --help
+
+`symbols` performs deterministic symbol-identity lookup, unlike hybrid `search`, which also ranks paths, prose, SQL, snippets, and graph evidence. Exact qualified names such as `src/session.ts::CodeReviewSession` rank before exact local/export names, prefixes, identifier tokens, and substrings.
+
+Use `--kind <kind,...>`, `--exported`, `--include-imports`, `--file-glob <project-relative-glob>`, and `--limit <0-500>` to compose filters. Imports are excluded by default, the default limit is 50, and an empty query requires `--kind` or `--file-glob`; JSON is the default and `--pretty` uses a concise renderer.
+
+Structured results include `schemaVersion`, root and analysis metadata, freshness, effective limits, omission counts, the normalized query, total candidates, and deterministic project-relative symbols. Resolvable named/default import aliases keep their binding location but carry a handle for the declaration; namespace/star aliases, unresolved aliases, and failed import scans are reported under `omittedCounts`.
+
+`callers` and `callees` accept one portable function or callable-member handle from `symbols`. Depth defaults to 1 and caps at 5; the symbol limit defaults to 100 and caps at 500, while callsites are grouped under each related symbol and bounded separately.
+
+JSON is the default and reports exact project-relative callsites, provenance, freshness, and separate symbol, callsite, and unresolved-site omissions. `--pretty` renders concise symbol and callsite rows; `--include-heuristic` is accepted, but current results remain limited to resolved semantic `calls` edges rather than guessed dynamic calls, file dependencies, imports, or references.
+
+`supertypes` and `subtypes` accept one portable symbol handle from `symbols`, default to depth 1 and 100 results, cap depth at 10 and results at 500, and return only proven indexed `extends` and `implements` relationships. `implementations` uses the same 100/500 result bounds without `--depth`; supported targets are interfaces, traits, abstract types, and members with proven implementation or override relationships.
+
+Implementation entries identify the exact implementing declaration, inherited declarations are deduplicated, and unresolved overload identity is reported as unsupported instead of guessed. JSON includes the shared semantic envelope, exact project-relative symbol and available relation-site locations, provenance, effective limits, and omission counts; `--pretty` prints concise relationship rows and actionable errors.
+
+`rename-preview` accepts a portable symbol handle and new identifier. Optional `--include-comments` and `--include-strings` add low-confidence textual edits; `--include-filenames` requests a suggestion for an eligible exported class, interface, or type whose filename matches its name, and `--max-edits <1-10000>` bounds returned edits.
+
+JSON is the default and reports exact project-relative edits, conflicts, unsafe sites, candidate tests, freshness, provenance, and omissions. A limited or conflicting result has `safe: false`; filename results are suggestions only, the command never changes files, and no apply command exists.
+
+`refactor-plan` accepts a portable handle from `symbols` or `search`, or an exact internal changed-symbol handle from review or impact output. It composes the target definition, references, direct callers and callees, type relationships, implementations, section issues, candidate tests, omissions, and copyable follow-ups from one snapshot; `--include-source` opts reference context into JSON.
+
+Use optional `--rename <new-name>` to include the authoritative nested rename preview. `--max-references`, `--max-callers`, and `--max-hierarchy` are independent `0-500` bounds; JSON is the default, `--pretty` summarizes counts, safety, and section issues, and neither mode changes source or exposes an apply command.
 
 # Explain a file, symbol, SQL object, or search result handle
 codegraph explain src/auth.ts --json
@@ -337,7 +368,7 @@ For SQL, prefer handles or schema-qualified names when basenames may be ambiguou
 
 #### MCP server
 
-- `mcp serve` exposes explore, navigation, search, impact, review, SQLite query, session refresh, and artifact-build tools.
+- `mcp serve` exposes explore, navigation, search, read-only rename preview, impact, review, SQLite query, session refresh, and artifact-build tools.
 - MCP uses stdio by default or Streamable HTTP with `--port <number>`.
 - Startup is lazy by default; `--warmup` builds the base session cache before serving requests, and `--warmup-symbols` also builds the detailed symbol graph.
 - Index-backed responses include `freshness`; small file changes auto-refresh, while stale responses include a reason, total changed-file count, and a bounded changed-file sample.

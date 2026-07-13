@@ -15,6 +15,8 @@ import { collectDetailedDeclarations } from "./symbol-graph-detailed/ast.js";
 import {
   emitClassInheritanceEdges,
   emitFunctionBodyEdges,
+  emitMemberOwnershipEdges,
+  emitMemberImplementationEdges,
   emitPythonDecoratorEdges,
   emitRustImplEdges,
 } from "./symbol-graph-detailed/edgePasses.js";
@@ -59,17 +61,23 @@ export async function buildSymbolGraphDetailed(
   }
 
   let edgeCount = edges.length;
-  const maybePushEdge = (fromId: string, toId: string, label?: string) => {
+  const maybePushEdge = (fromId: string, toId: string, label?: string, site?: SymbolGraph["edges"][number]["site"]) => {
     if (edgeCount >= maxEdges) return false;
-    edges.push(label ? { from: fromId, to: toId, label } : { from: fromId, to: toId });
+    edges.push({
+      from: fromId,
+      to: toId,
+      ...(label ? { label } : {}),
+      ...(site ? { site } : {}),
+    });
     edgeCount++;
     return true;
   };
-  const recordEdge = (fromId: string, toId: string, label?: string) => {
-    const key = `${fromId}->${toId}::${label ?? ""}`;
+  const recordEdge = (fromId: string, toId: string, label?: string, site?: SymbolGraph["edges"][number]["site"]) => {
+    const siteKey = site ? `${site.file}:${site.range.start.index ?? ""}:${site.range.end.index ?? ""}` : "";
+    const key = `${fromId}->${toId}::${label ?? ""}::${siteKey}`;
     if (added.has(key)) return true;
     added.add(key);
-    return maybePushEdge(fromId, toId, label);
+    return maybePushEdge(fromId, toId, label, site);
   };
 
   const resolveExportNamespace = (
@@ -270,6 +278,7 @@ export async function buildSymbolGraphDetailed(
       };
       emitPythonDecoratorEdges(edgePassContext, tree.rootNode);
       emitFunctionBodyEdges(edgePassContext, functionNodes);
+      emitMemberOwnershipEdges(edgePassContext, functionNodes, classNodes);
       emitClassInheritanceEdges(edgePassContext, classNodes);
       emitRustImplEdges(edgePassContext, tree.rootNode);
     } catch (error) {
@@ -282,6 +291,7 @@ export async function buildSymbolGraphDetailed(
       logWithLevel(opts?.logLevel, "warn", `Warning: Failed to build detailed symbol edges for ${file}:`, error);
     }
   }
+  emitMemberImplementationEdges({ nodes, edges }, recordEdge);
 
   if (skippedSyntaxTreeFiles > 0) {
     logWithLevel(

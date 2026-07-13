@@ -6,12 +6,16 @@ export type SymbolLookup = {
   defById: Map<string, SymbolDef>;
   exportedIds: Set<string>;
 };
+const SYMBOL_LOOKUP_CACHE = new WeakMap<AgentProjectSnapshot, SymbolLookup>();
 
 /**
  * Build a lookup of every local symbol definition keyed by stable node id, plus the set of ids
  * that are exported. Shared by the agent explain and search entrypoints.
  */
 export function buildSymbolLookup(snapshot: AgentProjectSnapshot): SymbolLookup {
+  const cached = SYMBOL_LOOKUP_CACHE.get(snapshot);
+  if (cached) return cached;
+
   const defById = new Map<string, SymbolDef>();
   const exportedIds = new Set<string>();
 
@@ -24,5 +28,7 @@ export function buildSymbolLookup(snapshot: AgentProjectSnapshot): SymbolLookup 
     }
   }
 
-  return { defById, exportedIds };
+  const lookup = { defById, exportedIds };
+  SYMBOL_LOOKUP_CACHE.set(snapshot, lookup);
+  return lookup;
 }

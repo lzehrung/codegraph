@@ -224,6 +224,7 @@ const SYMBOL_DECLARATION_RANGE_TYPES = new Set([
   "singleton_method",
   "function_item",
   "class_declaration",
+  "abstract_class_declaration",
   "class_definition",
   "class",
   "class_specifier",

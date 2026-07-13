@@ -93,6 +93,46 @@ Orientation returns summary bullets, ranked `focus` targets, a bounded tree, bud
 Use `orient --pretty` or MCP `orient` for compact model-readable triage and `orient --json` when follow-up tools need exact focus reasons, limits, or omission counts.
 Small orientation packets default to cheap health analysis; use larger budgets only when cycle, unresolved-import, or duplicate counts matter.
 
+## Workspace-symbol identities
+
+Use `symbols` when the question is "which declaration has this identity?" and follow with the returned portable handle. It is deterministic and filterable; use hybrid `search` instead when paths, prose, SQL, snippets, or graph evidence should participate.
+
+```bash
+codegraph symbols "CodeReviewSession" --root . --pretty
+codegraph symbols "src/session.ts::CodeReviewSession" --json
+codegraph explain "<handle-from-symbols>" --json
+```
+
+Imports are excluded unless `--include-imports` is explicit. Compose `--kind`, `--exported`, and project-relative `--file-glob` filters to narrow large workspaces; the limit defaults to 50 and caps at 500.
+
+## Read-only rename planning
+
+Resolve the declaration with `symbols`, then pass its portable handle to rename preview:
+
+```bash
+codegraph rename-preview "<type-handle-from-symbols>" RenamedService --include-filenames --json
+```
+
+Treat `safe: false`, conflicts, unsafe sites, and omitted edits as blockers rather than silently applying a partial plan. Comment and string edits are opt-in low-confidence candidates; eligible exported type filename results are suggestions only, Codegraph never changes files, and no apply command or tool exists.
+
+Repeated library calls should use `previewRenameWithSession` or `tool_previewRename` with one caller-owned `AgentSession`. MCP hosts should use `rename_preview`, which stays available in read-only mode and reuses the server session.
+
+## Search or review handoff to a refactor plan
+
+Keep the exact symbol handle returned by search or the changed-symbol handle returned by review or impact, then pass it directly to `refactor-plan`:
+
+```bash
+codegraph search "service dispatch" --mode symbol --json
+codegraph refactor-plan "<exact-handle-from-search>" --max-references 200 --pretty
+
+codegraph review --base HEAD --head WORKTREE --json
+codegraph refactor-plan "<exact-changed-symbol-handle-from-review>" --rename RenamedService --json
+```
+
+The packet reuses one snapshot and freshness decision for references, direct calls, hierarchy, implementations, candidate tests, and follow-ups. Review and impact may expose internal symbol handles, but the packet returns a portable target handle and uses it in copyable commands.
+
+Treat nested `rename.safe` as authoritative when `--rename` is present. Limits are independent, omissions remain explicit, source context is opt-in with `--include-source`, and refactor planning never writes or exposes an apply action.
+
 ## Search anchors
 
 Use `search` when an agent has a query but no file target or search handle and needs a compact starting point before calling `goto`, `refs`, `deps`, `rdeps`, `chunk`, or later explanation tooling:

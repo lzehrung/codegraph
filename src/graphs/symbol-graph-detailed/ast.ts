@@ -40,28 +40,65 @@ export function collectDetailedDeclarations(
   const constStringOf = new Map<string, string>();
   const memberExpressionType = memberExpressionTypeFor(sup);
   const propertyIdentifierTypes = memberPropertyIdentifierTypes(sup);
+  const functionNodeTypes = new Set([
+    "function_declaration",
+    "function_definition",
+    "method_declaration",
+    "method_definition",
+    "method_signature",
+    "abstract_method_signature",
+    "constructor_declaration",
+    "function_item",
+    "function_signature_item",
+    "method",
+    "singleton_method",
+  ]);
+  const typeNodeTypes = new Set([
+    "class_declaration",
+    "abstract_class_declaration",
+    "class_definition",
+    "class",
+    "interface_declaration",
+    "protocol_declaration",
+    "trait_item",
+    "struct_item",
+    "struct_declaration",
+    "class_specifier",
+    "struct_specifier",
+  ]);
+
+  const findDefinition = (name: string, nameNode: SyntaxNodeLike): SymbolDef | undefined => {
+    const candidates = locals.filter((local) => local.localName === name);
+    const exact = candidates.find((local) => local.range.start.index === nameNode.startIndex);
+    if (exact) return exact;
+    const containing = candidates
+      .filter(
+        (local) =>
+          (local.range.start.index ?? Number.POSITIVE_INFINITY) <= nameNode.startIndex &&
+          (local.range.end.index ?? Number.NEGATIVE_INFINITY) >= nameNode.endIndex,
+      )
+      .sort(
+        (left, right) =>
+          (left.range.end.index ?? 0) -
+          (left.range.start.index ?? 0) -
+          ((right.range.end.index ?? 0) - (right.range.start.index ?? 0)),
+      );
+    return containing[0] ?? candidates[0];
+  };
 
   const walk = (node: SyntaxNodeLike): void => {
-    if (
-      node.type === "function_declaration" ||
-      node.type === "function_definition" ||
-      node.type === "method_declaration" ||
-      node.type === "constructor_declaration" ||
-      node.type === "function_item" ||
-      node.type === "method" ||
-      node.type === "singleton_method"
-    ) {
+    if (functionNodeTypes.has(node.type)) {
       const nameNode = node.childForFieldName("name") ?? node.childForFieldName("type");
       const name = nameNode ? sliceText(nameNode, source) : undefined;
       if (name) {
-        const def = locals.find((local) => local.localName === name);
+        const def = findDefinition(name, nameNode!);
         if (def) functionNodes.push({ name, node, def });
       }
-    } else if (node.type === "class_declaration" || node.type === "class_definition" || node.type === "class") {
+    } else if (typeNodeTypes.has(node.type)) {
       const nameNode = node.childForFieldName("name");
       const name = nameNode ? sliceText(nameNode, source) : undefined;
       if (name) {
-        const def = locals.find((local) => local.localName === name);
+        const def = findDefinition(name, nameNode!);
         if (def) classNodes.push({ name, node, def });
       }
     } else if (node.type === "variable_declarator") {
@@ -76,7 +113,7 @@ export function collectDetailedDeclarations(
         const valueType = String(valueNode.type || "");
         if (/arrow_function|function/.test(valueType)) {
           const name = sliceText(nameNode, source);
-          const def = locals.find((local) => local.localName === name);
+          const def = findDefinition(name, nameNode);
           if (def) functionNodes.push({ name, node: valueNode, def });
         }
       }
@@ -94,7 +131,7 @@ export function collectDetailedDeclarations(
             name = sliceText(left, source);
           }
           if (name) {
-            const def = locals.find((local) => local.localName === name);
+            const def = findDefinition(name, left);
             if (def) functionNodes.push({ name, node: right, def });
           }
         }

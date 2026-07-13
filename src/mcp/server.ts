@@ -28,6 +28,17 @@ import { orientCodegraphWithSession, type AgentOrientBudget, type AgentOrientRes
 import { getCodegraphPacketWithSession, type AgentPacketResponse } from "../agent/packet.js";
 import { searchCodegraphWithSession } from "../agent/search.js";
 import type { AgentSearchMode, AgentSearchResponse } from "../agent/search.js";
+import { workspaceSymbolsWithSession, type WorkspaceSymbolsResponse } from "../agent/workspaceSymbols.js";
+import {
+  findImplementationsWithSession,
+  findSubtypesWithSession,
+  findSupertypesWithSession,
+  type ImplementationsResponse,
+  type TypeHierarchyResponse,
+} from "../agent/typeHierarchy.js";
+import { findCalleesWithSession, findCallersWithSession, type CallHierarchyResponse } from "../agent/callHierarchy.js";
+import { previewRenameWithSession, type RenamePreviewResponse } from "../agent/renamePreview.js";
+import { buildRefactorPlanWithSession, type RefactorPlanResponse } from "../agent/refactorPlan.js";
 import { getDependencies, getReverseDependencies, getShortestPath, type DependencyNode } from "../graphs/queries.js";
 import { findReferences, goToDefinition } from "../indexer/navigation.js";
 import { buildReviewReport, type ReviewDepth, type ReviewReport } from "../review.js";
@@ -38,6 +49,8 @@ import { createAgentSession, listAgentSessionFiles } from "../agent/session.js";
 import { mapLimit } from "../util/concurrency.js";
 import { assertRealPathCandidateWithinRoot, resolveProjectFile } from "../util/confinedFile.js";
 import type { AgentFreshnessResult, AgentProjectSnapshot, AgentSession } from "../agent/session.js";
+import { SymbolKind } from "../indexer/types.js";
+import { DEFAULT_WORKSPACE_SYMBOL_LIMIT, MAX_WORKSPACE_SYMBOL_LIMIT } from "../indexer/workspace-symbols.js";
 import type { BuildOptions, GoToResult } from "../indexer/types.js";
 import {
   assertMcpSqliteQueryResourceBounded,
@@ -45,7 +58,14 @@ import {
   DEFAULT_SQLITE_BYTE_LIMIT,
   normalizeSqliteRowLimit,
 } from "./sqliteGuard.js";
-import { DEFAULT_MCP_COLLECTION_LIMIT, listCodegraphMcpTools, MAX_MCP_COLLECTION_LIMIT, MCP_TOOLS } from "./tools.js";
+import {
+  DEFAULT_MCP_COLLECTION_LIMIT,
+  listCodegraphMcpTools,
+  MAX_MCP_COLLECTION_LIMIT,
+  MAX_RENAME_PREVIEW_EDITS,
+  MCP_TOOLS,
+  MAX_REFACTOR_PLAN_LIMIT,
+} from "./tools.js";
 import {
   buildAllowedHostHeaders,
   closeHttpServer,
@@ -104,6 +124,53 @@ export type CodegraphMcpHandlers = {
     depth?: number | undefined;
     limit?: number | undefined;
   }) => Promise<CodegraphMcpFreshResult<AgentSearchResponse>>;
+  workspace_symbols: (request: {
+    query: string;
+    kinds?: SymbolKind[] | undefined;
+    exportedOnly?: boolean | undefined;
+    includeImports?: boolean | undefined;
+    fileGlob?: string | undefined;
+    limit?: number | undefined;
+  }) => Promise<WorkspaceSymbolsResponse>;
+  rename_preview: (request: {
+    handle: string;
+    newName: string;
+    includeComments?: boolean | undefined;
+    includeStrings?: boolean | undefined;
+    includeFilenames?: boolean | undefined;
+    maxEdits?: number | undefined;
+  }) => Promise<RenamePreviewResponse>;
+  refactor_plan: (request: {
+    handle: string;
+    renameTo?: string | undefined;
+    maxReferences?: number | undefined;
+    maxCallers?: number | undefined;
+    maxHierarchy?: number | undefined;
+    includeSource?: boolean | undefined;
+  }) => Promise<RefactorPlanResponse>;
+  callers: (request: {
+    handle: string;
+    depth?: number | undefined;
+    limit?: number | undefined;
+    includeHeuristic?: boolean | undefined;
+  }) => Promise<CallHierarchyResponse>;
+  callees: (request: {
+    handle: string;
+    depth?: number | undefined;
+    limit?: number | undefined;
+    includeHeuristic?: boolean | undefined;
+  }) => Promise<CallHierarchyResponse>;
+  supertypes: (request: {
+    handle: string;
+    depth?: number | undefined;
+    limit?: number | undefined;
+  }) => Promise<TypeHierarchyResponse>;
+  subtypes: (request: {
+    handle: string;
+    depth?: number | undefined;
+    limit?: number | undefined;
+  }) => Promise<TypeHierarchyResponse>;
+  implementations: (request: { handle: string; limit?: number | undefined }) => Promise<ImplementationsResponse>;
   explore: (request: {
     query: string;
     limit?: number | undefined;
@@ -471,6 +538,80 @@ function createCodegraphMcpHandlersForSession(
             ...(request.limit !== undefined ? { limit: request.limit } : {}),
           }),
       ),
+
+    workspace_symbols: async (request) =>
+      await workspaceSymbolsWithSession(session, {
+        root,
+        query: request.query,
+        ...(request.kinds !== undefined ? { kinds: request.kinds } : {}),
+        ...(request.exportedOnly !== undefined ? { exportedOnly: request.exportedOnly } : {}),
+        ...(request.includeImports !== undefined ? { includeImports: request.includeImports } : {}),
+        ...(request.fileGlob !== undefined ? { fileGlob: request.fileGlob } : {}),
+        limit: boundedLimit(request.limit, DEFAULT_WORKSPACE_SYMBOL_LIMIT, MAX_WORKSPACE_SYMBOL_LIMIT),
+      }),
+
+    rename_preview: async (request) =>
+      await previewRenameWithSession(session, {
+        root,
+        handle: request.handle,
+        newName: request.newName,
+        ...(request.includeComments !== undefined ? { includeComments: request.includeComments } : {}),
+        ...(request.includeStrings !== undefined ? { includeStrings: request.includeStrings } : {}),
+        ...(request.includeFilenames !== undefined ? { includeFilenames: request.includeFilenames } : {}),
+        ...(request.maxEdits !== undefined ? { maxEdits: request.maxEdits } : {}),
+      }),
+
+    refactor_plan: async (request) =>
+      await buildRefactorPlanWithSession(session, {
+        root,
+        handle: request.handle,
+        ...(request.renameTo !== undefined ? { renameTo: request.renameTo } : {}),
+        ...(request.maxReferences !== undefined ? { maxReferences: request.maxReferences } : {}),
+        ...(request.maxCallers !== undefined ? { maxCallers: request.maxCallers } : {}),
+        ...(request.maxHierarchy !== undefined ? { maxHierarchy: request.maxHierarchy } : {}),
+        ...(request.includeSource !== undefined ? { includeSource: request.includeSource } : {}),
+      }),
+
+    callers: async (request) =>
+      await findCallersWithSession(session, {
+        root,
+        handle: request.handle,
+        ...(request.depth !== undefined ? { depth: request.depth } : {}),
+        ...(request.limit !== undefined ? { limit: request.limit } : {}),
+        ...(request.includeHeuristic !== undefined ? { includeHeuristic: request.includeHeuristic } : {}),
+      }),
+
+    callees: async (request) =>
+      await findCalleesWithSession(session, {
+        root,
+        handle: request.handle,
+        ...(request.depth !== undefined ? { depth: request.depth } : {}),
+        ...(request.limit !== undefined ? { limit: request.limit } : {}),
+        ...(request.includeHeuristic !== undefined ? { includeHeuristic: request.includeHeuristic } : {}),
+      }),
+
+    supertypes: async (request) =>
+      await findSupertypesWithSession(session, {
+        root,
+        handle: request.handle,
+        ...(request.depth !== undefined ? { depth: request.depth } : {}),
+        ...(request.limit !== undefined ? { limit: request.limit } : {}),
+      }),
+
+    subtypes: async (request) =>
+      await findSubtypesWithSession(session, {
+        root,
+        handle: request.handle,
+        ...(request.depth !== undefined ? { depth: request.depth } : {}),
+        ...(request.limit !== undefined ? { limit: request.limit } : {}),
+      }),
+
+    implementations: async (request) =>
+      await findImplementationsWithSession(session, {
+        root,
+        handle: request.handle,
+        ...(request.limit !== undefined ? { limit: request.limit } : {}),
+      }),
 
     explore: async (request) =>
       await withFreshness(
@@ -919,6 +1060,22 @@ async function callMcpTool(handlers: CodegraphMcpHandlers, name: string, input: 
   switch (name) {
     case "search":
       return await handlers.search(searchSchema.parse(input));
+    case "workspace_symbols":
+      return await handlers.workspace_symbols(workspaceSymbolsSchema.parse(input));
+    case "rename_preview":
+      return await handlers.rename_preview(renamePreviewSchema.parse(input));
+    case "refactor_plan":
+      return await handlers.refactor_plan(refactorPlanSchema.parse(input));
+    case "callers":
+      return await handlers.callers(callHierarchySchema.parse(input));
+    case "callees":
+      return await handlers.callees(callHierarchySchema.parse(input));
+    case "supertypes":
+      return await handlers.supertypes(typeHierarchySchema.parse(input));
+    case "subtypes":
+      return await handlers.subtypes(typeHierarchySchema.parse(input));
+    case "implementations":
+      return await handlers.implementations(implementationsSchema.parse(input));
     case "explore":
       return await handlers.explore(exploreSchema.parse(input));
     case "orient":
@@ -993,6 +1150,51 @@ const searchSchema = z.object({
   from: z.string().optional(),
   depth: z.number().int().nonnegative().optional(),
   limit: z.number().int().nonnegative().optional(),
+});
+
+const workspaceSymbolsSchema = z.object({
+  query: z.string(),
+  kinds: z.array(z.nativeEnum(SymbolKind)).optional(),
+  exportedOnly: z.boolean().optional(),
+  includeImports: z.boolean().optional(),
+  fileGlob: z.string().optional(),
+  limit: z.number().int().nonnegative().max(MAX_WORKSPACE_SYMBOL_LIMIT).optional(),
+});
+
+const renamePreviewSchema = z.object({
+  handle: z.string(),
+  newName: z.string(),
+  includeComments: z.boolean().optional(),
+  includeStrings: z.boolean().optional(),
+  includeFilenames: z.boolean().optional(),
+  maxEdits: z.number().int().min(1).max(MAX_RENAME_PREVIEW_EDITS).optional(),
+});
+
+const refactorPlanSchema = z.object({
+  handle: z.string(),
+  renameTo: z.string().optional(),
+  maxReferences: z.number().int().nonnegative().max(MAX_REFACTOR_PLAN_LIMIT).optional(),
+  maxCallers: z.number().int().nonnegative().max(MAX_REFACTOR_PLAN_LIMIT).optional(),
+  maxHierarchy: z.number().int().nonnegative().max(MAX_REFACTOR_PLAN_LIMIT).optional(),
+  includeSource: z.boolean().optional(),
+});
+
+const callHierarchySchema = z.object({
+  handle: z.string(),
+  depth: z.number().int().min(1).max(5).optional(),
+  limit: z.number().int().nonnegative().max(500).optional(),
+  includeHeuristic: z.boolean().optional(),
+});
+
+const typeHierarchySchema = z.object({
+  handle: z.string(),
+  depth: z.number().int().min(1).max(10).optional(),
+  limit: z.number().int().nonnegative().max(500).optional(),
+});
+
+const implementationsSchema = z.object({
+  handle: z.string(),
+  limit: z.number().int().nonnegative().max(500).optional(),
 });
 
 const exploreSchema = z.object({

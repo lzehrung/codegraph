@@ -46,11 +46,11 @@ The npm package exposes these supported entry points:
 
 - `@lzehrung/codegraph` for the compatibility root surface.
 - `@lzehrung/codegraph/agent` for agent sessions, live file views,
-  orient/search/explain, artifacts, and MCP handler helpers.
+  workspace-symbol lookup, orient/search/explain, artifacts, and MCP handler helpers.
 - `@lzehrung/codegraph/graphs` for graph builders, graph queries, renderers,
   symbol graphs, grep, hotspots, cycles, and unresolved-import helpers.
-- `@lzehrung/codegraph/indexer` for project indexing, navigation, references,
-  symbols, and API-surface analysis.
+- `@lzehrung/codegraph/indexer` for project indexing, workspace-symbol lookup,
+  navigation, references, symbols, and API-surface analysis.
 - `@lzehrung/codegraph/impact` for diff impact analysis, streaming impact
   reports, impact context, and candidate test helpers.
 - `@lzehrung/codegraph/languages` for language-support metadata.
@@ -82,6 +82,124 @@ as three groups:
 Future API narrowing should happen by first documenting replacements on these
 subpath facades, then adding deprecation notes before removing root
 compatibility exports.
+
+## Workspace-symbol lookup
+
+The root package exports agent-level `workspaceSymbols(request)` and `workspaceSymbolsWithSession(session, request)`. It aliases the index-level function as `queryWorkspaceSymbols(index, request)` to avoid ambiguity; `@lzehrung/codegraph/indexer` exports that core function as `workspaceSymbols`.
+
+```ts
+import { createAgentSession, SymbolKind, workspaceSymbolsWithSession } from "@lzehrung/codegraph";
+
+const root = process.cwd();
+const session = createAgentSession({ root });
+const result = await workspaceSymbolsWithSession(session, {
+  root,
+  query: "CodeReviewSession",
+  kinds: [SymbolKind.Class],
+  exportedOnly: true,
+  fileGlob: "src/**/*.ts",
+  limit: 50,
+});
+```
+
+Requests accept `query`, `kinds`, `exportedOnly`, `includeImports`, `fileGlob`, and `limit`; standalone agent calls also require `root` and accept `buildOptions`. Imports default off, limits default to 50 and cap at 500, and an empty query requires a kind or file-glob filter.
+
+`WorkspaceSymbolsResponse` includes the shared semantic envelope, query, symbols, and total candidates. Symbols are deterministic and project-relative; resolvable named/default import aliases keep their binding location but use a portable handle for the declaration, while namespace/star aliases, unresolved aliases, and failed import scans contribute explicit omission counts.
+
+For tool hosts, `tool_workspaceSymbols(root, request, runtimeOptions)` accepts an optional warm `AgentSession` or build options, but not both. Shared semantic location, provenance, omission, symbol, and response-envelope types are exported from the root and agent entry points.
+
+## Call hierarchy
+
+The root and `@lzehrung/codegraph/agent` entry points export `findCallers`, `findCallees`, and their `WithSession` variants. Requests use `root`, a portable callable `handle`, optional `depth` from 1 to 5, optional `limit` from 0 to 500, optional `includeHeuristic`, and optional standalone `buildOptions`.
+
+```ts
+import { createAgentSession, findCallersWithSession } from "@lzehrung/codegraph";
+
+const root = process.cwd();
+const session = createAgentSession({ root });
+const result = await findCallersWithSession(session, {
+  root,
+  handle: "symbol:src/service.ts:run:5:3",
+  depth: 2,
+  limit: 100,
+});
+```
+
+Responses group exact project-relative callsites under deterministic related symbols and report freshness, provenance, effective limits, and separate symbol, callsite, and unresolved-site omissions. Current extraction returns resolved semantic `calls` edges only; `includeHeuristic` is accepted but does not infer dynamic dispatch or promote imports, references, or file dependencies into calls.
+
+The root exposes the index-core operation as `queryCallHierarchy(graph, id, direction, options)`; `@lzehrung/codegraph/indexer` exports it as `findCallHierarchy`. Tool hosts can use `tool_findCallers` and `tool_findCallees` with either a warm session or build options, but not both.
+
+## Type hierarchy and implementations
+
+The root and `@lzehrung/codegraph/agent` entry points export `findSupertypes`, `findSubtypes`, `findImplementations`, and their `WithSession` variants. Requests use `root`, a portable symbol `handle`, optional `limit`, optional hierarchy `depth`, and optional standalone `buildOptions`.
+
+```ts
+import { createAgentSession, findSubtypesWithSession, workspaceSymbolsWithSession } from "@lzehrung/codegraph";
+
+const root = process.cwd();
+const session = createAgentSession({ root });
+const matches = await workspaceSymbolsWithSession(session, { root, query: "Service" });
+const service = matches.symbols[0];
+if (service) {
+  const result = await findSubtypesWithSession(session, {
+    root,
+    handle: service.handle,
+    depth: 3,
+    limit: 100,
+  });
+  console.log(result.relations);
+}
+```
+
+Hierarchy depth defaults to 1 and caps at 10; hierarchy and implementation results default to 100 and cap at 500. Responses use the shared semantic envelope with exact project-relative symbols, declaration or relation sites when extraction provides them, provenance, effective limits, and omission counts.
+
+The root aliases index-core functions as `queryTypeHierarchy(graph, id, direction, options)` and `queryImplementations(index, graph, id, options)`; `@lzehrung/codegraph/indexer` exports them as `findTypeHierarchy` and `findImplementations`. Tool hosts can use `tool_findSupertypes`, `tool_findSubtypes`, and `tool_findImplementations` with either a warm session or build options, but not both.
+
+Only proven indexed `extends` and `implements` relationships participate. Implementation targets are limited to interfaces, traits, abstract types, and members with proven implementation or override relationships; results identify exact implementing declarations, deduplicate inherited declarations, and reject unresolved overload identity instead of inferring same-name matches.
+
+## Rename preview
+
+The root and `@lzehrung/codegraph/agent` entry points export `previewRename`, `previewRenameWithSession`, and `previewRenameInSnapshot`. `RenamePreviewRequest` uses `root`, a portable symbol `handle`, `newName`, optional comment, string, and filename inclusion flags, optional `maxEdits`, and optional standalone `buildOptions`.
+
+```ts
+import { createAgentSession, previewRenameWithSession } from "@lzehrung/codegraph";
+
+const root = process.cwd();
+const session = createAgentSession({ root });
+const preview = await previewRenameWithSession(session, {
+  root,
+  handle: "symbol:src/Service.ts:Service:1:14",
+  newName: "RenamedService",
+  includeFilenames: true,
+});
+```
+
+`RenamePreviewResponse` returns the target, proposed name, `safe`, exact project-relative edits, conflicts, unsafe sites, filename suggestions, candidate tests, provenance, freshness, limits, and omissions. Exported concrete types include `RenameEdit`, `RenameEditKind`, `RenameConflict`, `RenameUnsafeSite`, `RenameFilenameSuggestion`, and `RenameCandidateTest`.
+
+`tool_previewRename(root, request, runtimeOptions)` accepts either a shared `AgentSession` or build options, but not both, and returns the shared response unchanged. All rename-preview entry points are read-only: eligible exported class, interface, and type filenames produce suggestions only, project files are never changed, and no apply API exists.
+
+## Refactor evidence plans
+
+The root and `@lzehrung/codegraph/agent` entry points export `buildRefactorPlan`, `buildRefactorPlanWithSession`, and `buildRefactorPlanInSnapshot`, plus `RefactorPlanRequest`, `RefactorPlanResponse`, and `RefactorPlanSectionIssue`. A request accepts `root`, a portable search or workspace-symbol handle or exact internal review/impact symbol handle, optional `renameTo`, independent `maxReferences`, `maxCallers`, and `maxHierarchy` bounds from 0 to 500, optional `includeSource`, and optional standalone `buildOptions`.
+
+```ts
+import { buildRefactorPlanWithSession, createAgentSession } from "@lzehrung/codegraph";
+
+const root = process.cwd();
+const session = createAgentSession({ root });
+const plan = await buildRefactorPlanWithSession(session, {
+  root,
+  handle: "symbol:src/Service.ts:Service:1:14",
+  renameTo: "RenamedService",
+  maxReferences: 200,
+  maxCallers: 100,
+  maxHierarchy: 100,
+});
+```
+
+One session load and freshness decision feed the target, definition, references, callers, callees, supertypes, subtypes, implementations, candidate tests, and follow-ups. Unsupported implementation sections appear in `plan.sectionIssues` and contribute an omission instead of silently looking complete; internal input handles are normalized to a portable target handle, and nested `plan.rename.safe` remains authoritative when present.
+
+`tool_buildRefactorPlan(root, request, runtimeOptions)` accepts either a shared `AgentSession` or build options, but not both. Every entry point returns evidence only, never writes source, and exposes no apply API.
 
 ## Live file views
 

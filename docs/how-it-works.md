@@ -56,6 +56,26 @@ The resulting file nodes and typed edges are stored with forward and reverse adj
 
 The semantic index connects definitions, scopes, exports, and import bindings to graph edges. `goto` resolves local definitions and imported bindings, including supported namespace-member cases. `refs` follows local and imported references through the same model.
 
+Workspace-symbol lookup builds a cached candidate view from indexed definitions and only materializes import aliases when requested. It applies kind, exported, and project-relative file-glob filters before deterministic ranking: qualified and exact names lead, followed by case-insensitive exact, prefix, identifier-token, and substring matches.
+
+Call hierarchy reads resolved `calls` edges from the detailed symbol graph. It builds incoming and outgoing adjacency once per symbol-graph snapshot, attributes nested calls to the nearest indexed callable, groups multiple exact callsites by symbol pair, and traverses breadth-first with deterministic depth and result bounds.
+
+Agent, CLI, and MCP callers reuse the project snapshot and cached adjacency. Results do not reparse source, treat file dependencies or arbitrary references as calls, or guess unresolved dynamic dispatch; reduced graph-only recovery therefore does not claim equivalent call hierarchy coverage.
+
+Type hierarchy extraction adds resolved `extends` and `implements` edges to the detailed symbol graph. Breadth-first supertype and subtype queries deduplicate cycles, sort deterministically by depth and symbol identity, and apply limits after traversal so omission counts remain exact.
+
+Implementation lookup follows the same proven edges. Interface or trait member lookup also requires a proven implementing type and an indexed same-name member inside that type; it does not infer structural conformance, dynamic dispatch, unrelated same-name methods, or unresolved external bases.
+
+Rename preview resolves the target handle through the same semantic index, collects proven definitions, references, imports, exports, and supported interface-member implementations, then validates scope collisions and source freshness. Optional comment and string scans are marked low confidence, edit limits produce explicit omissions and `safe: false`, and every output path is normalized to the project root.
+
+The operation only returns a plan. Filename matches are suggestions, and the library, CLI, agent-tool, and MCP surfaces never write or expose an apply command.
+
+Refactor planning resolves either a portable search/workspace-symbol handle or an exact internal review/impact symbol handle, then composes references, direct calls, hierarchy, implementations, candidate tests, and follow-ups from one loaded snapshot and freshness decision. Each section is bounded independently, omissions remain explicit, and internal input identities are normalized to portable target handles in output.
+
+An optional rename uses the same snapshot and preserves the nested rename preview without weakening `rename.safe`. Refactor planning is evidence composition rather than compiler-grade transformation: unsupported dispatch, unresolved external symbols, stale evidence, conflicts, and truncation remain limitations or safety blockers.
+
+The result limit is applied after ranking, so omission counts describe matching candidates rather than pre-filter truncation. Agent, CLI, and MCP surfaces then normalize paths and qualified names to the project root and attach portable handles, exact locations, analysis, freshness, and provenance.
+
 Impact analysis maps diff hunks to changed symbols, follows resolved references and reverse dependencies, and ranks the affected files. Review and agent-facing commands build on that evidence, adding bounded snippets or related findings as requested. Call compatibility is deliberately narrower than type checking: it reports high-confidence arity mismatches for resolved callable changes, not overload, dispatch, macro, or data-flow conclusions.
 
 Precise semantic navigation depends on successful parsing and queries. Reduced recovery can preserve useful file edges without claiming equivalent symbol or scope analysis. Current per-language capabilities are listed in the [language parity matrix](./language-parity.md).

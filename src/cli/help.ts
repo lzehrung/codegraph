@@ -9,6 +9,14 @@ Commands:
   review        Generate code review report
   packet        Retrieve bounded evidence packets by file path or stable target
   search        Ranked agent search across files, symbols, chunks, SQL, and graph context
+  symbols       Deterministic workspace-symbol lookup with exact locations
+  callers       Find proven semantic callers by symbol handle
+  callees       Find proven semantic callees by symbol handle
+  supertypes    Find proven direct or transitive supertypes by symbol handle
+  subtypes      Find proven direct or transitive subtypes by symbol handle
+  implementations Find proven type or interface-member implementations
+  rename-preview Read-only semantic rename planning by symbol handle
+  refactor-plan Build a read-only refactor evidence packet by symbol handle
   explain       Explain a file, symbol, SQL object, or search handle
   impact        Analyze PR impact
   inspect       Summarize repo structure and recommend next commands
@@ -117,6 +125,9 @@ Examples:
   codegraph impact --provider git --base main --head HEAD --pretty --duplicates off
   codegraph refs --file src/index.ts --line 42 --col 10
   codegraph doctor
+  codegraph symbols "CodeReviewSession" --root . --pretty
+  codegraph rename-preview "symbol:src/Service.ts:Service:1:14" RenamedService --include-filenames --json
+  codegraph refactor-plan "symbol:src/Service.ts:Service:1:14" --rename RenamedService --pretty
   codegraph version
   codegraph -v
 `;
@@ -137,6 +148,8 @@ const knownCliCommands = new Set([
   "goto",
   "graph",
   "graph-delta",
+  "callees",
+  "callers",
   "grep",
   "hotspots",
   "impact",
@@ -145,13 +158,19 @@ const knownCliCommands = new Set([
   "install",
   "inspect",
   "mcp",
+  "implementations",
   "orient",
   "packet",
   "path",
   "rdeps",
   "refs",
   "review",
+  "rename-preview",
+  "refactor-plan",
   "search",
+  "symbols",
+  "subtypes",
+  "supertypes",
   "skill",
   "status",
   "sync",
@@ -243,6 +262,95 @@ Search Modes:
 Output:
   Results include top-level analysis metadata plus stable handles, rank reasons, provenance, evidence, graph neighbors, follow-up commands, limits, and omission counts.
   Hybrid search is code-first by default: source files and symbols outrank docs unless you use text mode or the docs are the strongest remaining evidence.
+
+Index options:
+  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+`;
+
+export const SYMBOLS_HELP_TEXT = `codegraph symbols - Deterministic workspace-symbol lookup
+
+Usage: codegraph symbols [query] [--root <path>] [--kind <kind,...>] [--exported] [--include-imports] [--file-glob <glob>] [--limit <0-500>] [--json | --pretty]
+
+Matching:
+  Exact and qualified symbol identities rank ahead of prefix, token, and substring matches. Imports are excluded by default; use --include-imports to include aliases.
+  A query is required unless --kind or --file-glob narrows the lookup. --kind accepts function, class, variable, interface, type, default, table, view, index, constraint, or routine.
+
+Output:
+  JSON includes portable handles, exact declaration ranges, provenance, limits, and omission counts. Pretty output is concise and intended for direct reading.
+
+Index options:
+  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+`;
+
+export const CALLERS_HELP_TEXT = `codegraph callers - Find proven semantic callers
+
+Usage: codegraph callers <symbol-handle> [--root <path>] [--depth <1-5>] [--limit <0-500>] [--include-heuristic] [--json | --pretty]
+
+Returns grouped caller symbols and exact project-relative callsites from resolved calls edges. --include-heuristic is accepted for forward compatibility, but current results remain limited to proven semantic edges.
+
+Index options:
+  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+`;
+
+export const CALLEES_HELP_TEXT = `codegraph callees - Find proven semantic callees
+
+Usage: codegraph callees <symbol-handle> [--root <path>] [--depth <1-5>] [--limit <0-500>] [--include-heuristic] [--json | --pretty]
+
+Returns grouped callee symbols and exact project-relative callsites from resolved calls edges. --include-heuristic is accepted for forward compatibility, but current results remain limited to proven semantic edges.
+
+Index options:
+  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+`;
+
+export const SUPERTYPES_HELP_TEXT = `codegraph supertypes - Find proven supertypes
+
+Usage: codegraph supertypes <symbol-handle> [--root <path>] [--depth <1-10>] [--limit <0-500>] [--json | --pretty]
+
+Returns only currently extracted extends and implements relationships. Results include exact locations, relation depth, provenance, limits, and omissions.
+
+Index options:
+  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+`;
+
+export const SUBTYPES_HELP_TEXT = `codegraph subtypes - Find proven subtypes
+
+Usage: codegraph subtypes <symbol-handle> [--root <path>] [--depth <1-10>] [--limit <0-500>] [--json | --pretty]
+
+Returns only currently extracted extends and implements relationships. Results include exact locations, relation depth, provenance, limits, and omissions.
+
+Index options:
+  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+`;
+
+export const IMPLEMENTATIONS_HELP_TEXT = `codegraph implementations - Find proven implementations
+
+Usage: codegraph implementations <symbol-handle> [--root <path>] [--limit <0-500>] [--json | --pretty]
+
+Type lookup follows extracted hierarchy relationships. Member lookup is supported only for members owned by an interface or trait with proven implementers; unrelated same-name members are never inferred.
+
+Index options:
+  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+`;
+
+export const RENAME_PREVIEW_HELP_TEXT = `codegraph rename-preview - Preview a semantic rename without changing files
+
+Usage: codegraph rename-preview <symbol-handle> <new-name> [--include-comments] [--include-strings] [--include-filenames] [--max-edits N] [--json | --pretty]
+
+Returns exact project-relative edits, conflicts, unsafe sites, candidate tests, provenance, limits, and omissions. Comment and string matches are low-confidence opt-in edits; --max-edits accepts integers from 1 to 10000.
+
+--include-filenames requests suggestions for eligible exported class, interface, or type filenames only. Rename preview is read-only and no apply command exists.
+
+Index options:
+  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+`;
+
+export const REFACTOR_PLAN_HELP_TEXT = `codegraph refactor-plan - Build a read-only refactor evidence packet
+
+Usage: codegraph refactor-plan <symbol-handle> [--rename <new-name>] [--max-references <0-500>] [--max-callers <0-500>] [--max-hierarchy <0-500>] [--include-source] [--json | --pretty]
+
+Returns a target definition, references, callers, callees, type hierarchy, implementations, candidate tests, omissions, and copyable follow-ups from one semantic snapshot. Each max option accepts an independent integer from 0 to 500; --include-source opts reference context into the response.
+
+--rename adds the authoritative read-only rename preview. Nested rename.safe is the safety decision; Codegraph does not expose an apply command and never changes source files.
 
 Index options:
   Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
@@ -432,6 +540,14 @@ export function helpTextForCommand(command: string, positionals: readonly string
   if (command === "explore") return EXPLORE_HELP_TEXT;
   if (command === "file") return FILE_HELP_TEXT;
   if (command === "search") return SEARCH_HELP_TEXT;
+  if (command === "symbols") return SYMBOLS_HELP_TEXT;
+  if (command === "callers") return CALLERS_HELP_TEXT;
+  if (command === "callees") return CALLEES_HELP_TEXT;
+  if (command === "supertypes") return SUPERTYPES_HELP_TEXT;
+  if (command === "subtypes") return SUBTYPES_HELP_TEXT;
+  if (command === "implementations") return IMPLEMENTATIONS_HELP_TEXT;
+  if (command === "rename-preview") return RENAME_PREVIEW_HELP_TEXT;
+  if (command === "refactor-plan") return REFACTOR_PLAN_HELP_TEXT;
   if (command === "orient") return ORIENT_HELP_TEXT;
   if (command === "packet") return PACKET_HELP_TEXT;
   if (command === "explain") return EXPLAIN_HELP_TEXT;

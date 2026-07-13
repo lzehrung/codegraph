@@ -29,6 +29,8 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--pattern",
   "--regex",
   "--glob",
+  "--file-glob",
+  "--kind",
   "--provider",
   "--base",
   "--head",
@@ -85,6 +87,11 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--port",
   "--offset",
   "--max-bytes",
+  "--max-edits",
+  "--rename",
+  "--max-references",
+  "--max-callers",
+  "--max-hierarchy",
 ]);
 
 type CliPositionalPolicy =
@@ -387,6 +394,14 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       },
     ),
   ],
+  [
+    "implementations",
+    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], [...SHARED_BUILD_OPTIONS, "--limit"], {
+      kind: "max",
+      max: 1,
+      usage: "Usage: codegraph implementations <symbol-handle> [--root <path>] [--limit <0-500>] [--json | --pretty]",
+    }),
+  ],
   ["index", graphCommandSchema({ kind: "any" })],
   [
     "init",
@@ -504,12 +519,91 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     ),
   ],
   [
+    "rename-preview",
+    commandSchema(
+      [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--include-comments", "--include-strings", "--include-filenames"],
+      [...SHARED_BUILD_OPTIONS, "--max-edits"],
+      {
+        kind: "max",
+        max: 2,
+        usage:
+          "Usage: codegraph rename-preview <symbol-handle> <new-name> [--include-comments] [--include-strings] [--include-filenames] [--max-edits N] [--json | --pretty]",
+      },
+    ),
+  ],
+  [
+    "refactor-plan",
+    commandSchema(
+      [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--include-source"],
+      [...SHARED_BUILD_OPTIONS, "--rename", "--max-references", "--max-callers", "--max-hierarchy"],
+      {
+        kind: "max",
+        max: 1,
+        usage:
+          "Usage: codegraph refactor-plan <symbol-handle> [--rename <new-name>] [--max-references <0-500>] [--max-callers <0-500>] [--max-hierarchy <0-500>] [--include-source] [--json | --pretty]",
+      },
+    ),
+  ],
+
+  [
     "search",
     commandSchema(
       [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--no-snippets"],
       [...SHARED_BUILD_OPTIONS, "--depth", "--from", "--limit", "--mode"],
       { kind: "any" },
     ),
+  ],
+  [
+    "symbols",
+    commandSchema(
+      [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--exported", "--include-imports"],
+      [...SHARED_BUILD_OPTIONS, "--file-glob", "--kind", "--limit"],
+      { kind: "any" },
+    ),
+  ],
+  [
+    "callees",
+    commandSchema(
+      [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--include-heuristic"],
+      [...SHARED_BUILD_OPTIONS, "--depth", "--limit"],
+      {
+        kind: "max",
+        max: 1,
+        usage:
+          "Usage: codegraph callees <symbol-handle> [--root <path>] [--depth <1-5>] [--limit <0-500>] [--include-heuristic] [--json | --pretty]",
+      },
+    ),
+  ],
+  [
+    "callers",
+    commandSchema(
+      [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--include-heuristic"],
+      [...SHARED_BUILD_OPTIONS, "--depth", "--limit"],
+      {
+        kind: "max",
+        max: 1,
+        usage:
+          "Usage: codegraph callers <symbol-handle> [--root <path>] [--depth <1-5>] [--limit <0-500>] [--include-heuristic] [--json | --pretty]",
+      },
+    ),
+  ],
+  [
+    "subtypes",
+    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], [...SHARED_BUILD_OPTIONS, "--depth", "--limit"], {
+      kind: "max",
+      max: 1,
+      usage:
+        "Usage: codegraph subtypes <symbol-handle> [--root <path>] [--depth <1-10>] [--limit <0-500>] [--json | --pretty]",
+    }),
+  ],
+  [
+    "supertypes",
+    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], [...SHARED_BUILD_OPTIONS, "--depth", "--limit"], {
+      kind: "max",
+      max: 1,
+      usage:
+        "Usage: codegraph supertypes <symbol-handle> [--root <path>] [--depth <1-10>] [--limit <0-500>] [--json | --pretty]",
+    }),
   ],
   [
     "skill",

@@ -87,6 +87,7 @@ const BASE_GRAPH = {
     (export_statement declaration: (function_declaration name: (identifier) @name)) @stmt
     (export_statement declaration: (generator_function_declaration name: (identifier) @name)) @stmt
     (export_statement declaration: (class_declaration name: (type_identifier) @name)) @stmt
+    (export_statement declaration: (abstract_class_declaration name: (type_identifier) @name)) @stmt
     (export_statement declaration: (enum_declaration name: [ (identifier) (type_identifier) ] @name)) @stmt
     (export_statement declaration: (function_declaration) @anon_default) @stmt
     (export_statement declaration: (generator_function_declaration) @anon_default) @stmt
@@ -94,9 +95,9 @@ const BASE_GRAPH = {
     (export_statement declaration: (abstract_class_declaration) @anon_default) @stmt
     (export_statement declaration: (lexical_declaration (variable_declarator name: (identifier) @name))) @stmt
     (export_statement (export_clause (export_specifier name: (identifier) @src alias: (identifier) @alias)) (string) @from) @stmt
-    (export_statement (export_clause (export_specifier name: (identifier) @src)) (string) @from) @stmt
+    (export_statement (export_clause (export_specifier name: (identifier) @src !alias)) (string) @from) @stmt
     (export_statement (export_clause (export_specifier name: (identifier) @src alias: (identifier) @alias))) @stmt
-    (export_statement (export_clause (export_specifier name: (identifier) @src))) @stmt
+    (export_statement (export_clause (export_specifier name: (identifier) @src !alias))) @stmt
     (export_statement (string) @from) @stmt
     (export_assignment (identifier) @ts_export_assign)
   `,
@@ -107,6 +108,7 @@ const BASE_GRAPH = {
     (method_signature name: (property_identifier) @name)
     (abstract_method_signature name: (property_identifier) @name)
     (class_declaration name: (type_identifier) @name)
+    (abstract_class_declaration name: (type_identifier) @name)
     (variable_declarator name: (identifier) @name)
     (interface_declaration name: (type_identifier) @name)
     (type_alias_declaration name: (type_identifier) @name)
@@ -138,6 +140,7 @@ const BASE_HELPERS = {
     if (t === "method_signature") return "function";
     if (t === "abstract_method_signature") return "function";
     if (t === "class_declaration") return "class";
+    if (t === "abstract_class_declaration") return "class";
     if (t === "interface_declaration") return "interface";
     if (t === "type_alias_declaration") return "type";
     if (t === "enum_declaration") return "type";
@@ -151,6 +154,7 @@ const BASE_HELPERS = {
         "generator_function_declaration",
         "function_declaration",
         "class_declaration",
+        "abstract_class_declaration",
         "variable_declarator",
         "interface_declaration",
         "type_alias_declaration",

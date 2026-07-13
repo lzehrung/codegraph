@@ -107,6 +107,34 @@ export type {
 } from "./indexer/types.js";
 
 export {
+  DEFAULT_WORKSPACE_SYMBOL_LIMIT,
+  MAX_WORKSPACE_SYMBOL_LIMIT,
+  workspaceSymbols,
+  type WorkspaceSymbolMatch,
+  type WorkspaceSymbolsRequest,
+  type WorkspaceSymbolsResult,
+} from "./indexer/workspace-symbols.js";
+
+export {
+  findImplementations,
+  findTypeHierarchy,
+  type ImplementationMatch,
+  type ImplementationsResult,
+  type TypeHierarchyDirection,
+  type TypeHierarchyRelationKind,
+  type TypeHierarchyRelationMatch,
+  type TypeHierarchyResult,
+} from "./indexer/type-hierarchy.js";
+
+export {
+  findCallHierarchy,
+  type CallHierarchyDirection,
+  type CallHierarchyMatch,
+  type CallHierarchyResult,
+  type CallHierarchySite,
+} from "./indexer/call-hierarchy.js";
+
+export {
   buildGraphDelta,
   buildProjectIndex,
   buildProjectIndexFromFiles,

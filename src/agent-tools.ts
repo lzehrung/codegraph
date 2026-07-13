@@ -2,6 +2,7 @@ import { buildProjectIndexIncremental } from "./indexer/build-index.js";
 import { listSymbols, symbolId } from "./indexer/symbols.js";
 import { goToDefinition, findReferences } from "./indexer/navigation.js";
 import type {
+  BuildOptions,
   ImportBinding,
   ProjectIndex,
   Reference,
@@ -21,6 +22,44 @@ import { isFilePathWithinRoot, normalizePath, resolveFilePathFromRoot } from "./
 import { listProjectFiles } from "./util/projectFiles.js";
 import { boundAgentList, defaultAgentLimit, normalizeAgentLimit } from "./agent/bounds.js";
 import { normalizeAgentOutputPath } from "./agent/normalize.js";
+import type { AgentSession } from "./agent/session.js";
+import {
+  workspaceSymbols,
+  workspaceSymbolsWithSession,
+  type WorkspaceSymbolsResponse,
+} from "./agent/workspaceSymbols.js";
+import type { WorkspaceSymbolsRequest } from "./indexer/workspace-symbols.js";
+import {
+  findImplementations as findAgentImplementations,
+  findImplementationsWithSession,
+  findSubtypes,
+  findSubtypesWithSession,
+  findSupertypes,
+  findSupertypesWithSession,
+  type ImplementationsResponse,
+  type TypeHierarchyRequest,
+  type TypeHierarchyResponse,
+} from "./agent/typeHierarchy.js";
+import {
+  findCallees,
+  findCalleesWithSession,
+  findCallers,
+  findCallersWithSession,
+  type CallHierarchyRequest,
+  type CallHierarchyResponse,
+} from "./agent/callHierarchy.js";
+import {
+  previewRename,
+  previewRenameWithSession,
+  type RenamePreviewRequest,
+  type RenamePreviewResponse,
+} from "./agent/renamePreview.js";
+import {
+  buildRefactorPlan,
+  buildRefactorPlanWithSession,
+  type RefactorPlanRequest,
+  type RefactorPlanResponse,
+} from "./agent/refactorPlan.js";
 
 type ToolRuntimeOptions = {
   index?: ProjectIndex;
@@ -245,6 +284,200 @@ export async function tool_getFileOverview(
       error: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+/** Optional warm-session or build configuration for `tool_workspaceSymbols`. */
+export type ToolWorkspaceSymbolsRuntimeOptions = {
+  session?: AgentSession;
+  buildOptions?: BuildOptions;
+};
+
+/**
+ * Looks up workspace symbols with deterministic ranking and portable output.
+ *
+ * Pass a shared `session` for repeated calls over the same project snapshot.
+ */
+export async function tool_workspaceSymbols(
+  root: string,
+  request: WorkspaceSymbolsRequest,
+  runtimeOptions: ToolWorkspaceSymbolsRuntimeOptions = {},
+): Promise<WorkspaceSymbolsResponse> {
+  if (runtimeOptions.session && runtimeOptions.buildOptions) {
+    throw new Error("Workspace symbol tool options cannot combine a prebuilt session with buildOptions.");
+  }
+  const agentRequest = {
+    root,
+    ...request,
+    ...(runtimeOptions.buildOptions ? { buildOptions: runtimeOptions.buildOptions } : {}),
+  };
+  if (runtimeOptions.session) {
+    return await workspaceSymbolsWithSession(runtimeOptions.session, agentRequest);
+  }
+  return await workspaceSymbols(agentRequest);
+}
+
+/** Optional warm-session or build configuration for type hierarchy tools. */
+export type ToolTypeHierarchyRuntimeOptions = {
+  session?: AgentSession;
+  buildOptions?: BuildOptions;
+};
+
+/** Finds proven supertypes for a portable symbol handle. */
+export async function tool_findSupertypes(
+  root: string,
+  request: Omit<TypeHierarchyRequest, "root" | "buildOptions">,
+  runtimeOptions: ToolTypeHierarchyRuntimeOptions = {},
+): Promise<TypeHierarchyResponse> {
+  assertTypeHierarchyToolOptions(runtimeOptions);
+  const agentRequest = typeHierarchyAgentRequest(root, request, runtimeOptions);
+  if (runtimeOptions.session) return await findSupertypesWithSession(runtimeOptions.session, agentRequest);
+  return await findSupertypes(agentRequest);
+}
+
+/** Finds proven subtypes for a portable symbol handle. */
+export async function tool_findSubtypes(
+  root: string,
+  request: Omit<TypeHierarchyRequest, "root" | "buildOptions">,
+  runtimeOptions: ToolTypeHierarchyRuntimeOptions = {},
+): Promise<TypeHierarchyResponse> {
+  assertTypeHierarchyToolOptions(runtimeOptions);
+  const agentRequest = typeHierarchyAgentRequest(root, request, runtimeOptions);
+  if (runtimeOptions.session) return await findSubtypesWithSession(runtimeOptions.session, agentRequest);
+  return await findSubtypes(agentRequest);
+}
+
+/** Finds proven type or interface-member implementations for a portable symbol handle. */
+export async function tool_findImplementations(
+  root: string,
+  request: Omit<TypeHierarchyRequest, "root" | "buildOptions" | "depth">,
+  runtimeOptions: ToolTypeHierarchyRuntimeOptions = {},
+): Promise<ImplementationsResponse> {
+  assertTypeHierarchyToolOptions(runtimeOptions);
+  const agentRequest = typeHierarchyAgentRequest(root, request, runtimeOptions);
+  if (runtimeOptions.session) return await findImplementationsWithSession(runtimeOptions.session, agentRequest);
+  return await findAgentImplementations(agentRequest);
+}
+
+function assertTypeHierarchyToolOptions(runtimeOptions: ToolTypeHierarchyRuntimeOptions): void {
+  if (runtimeOptions.session && runtimeOptions.buildOptions) {
+    throw new Error("Type hierarchy tool options cannot combine a prebuilt session with buildOptions.");
+  }
+}
+
+function typeHierarchyAgentRequest(
+  root: string,
+  request: Omit<TypeHierarchyRequest, "root" | "buildOptions">,
+  runtimeOptions: ToolTypeHierarchyRuntimeOptions,
+): TypeHierarchyRequest {
+  return {
+    root,
+    ...request,
+    ...(runtimeOptions.buildOptions ? { buildOptions: runtimeOptions.buildOptions } : {}),
+  };
+}
+
+/** Optional warm-session or build configuration for call hierarchy tools. */
+export type ToolCallHierarchyRuntimeOptions = {
+  session?: AgentSession;
+  buildOptions?: BuildOptions;
+};
+
+/** Finds proven semantic callers for a portable symbol handle. */
+export async function tool_findCallers(
+  root: string,
+  request: Omit<CallHierarchyRequest, "root" | "buildOptions">,
+  runtimeOptions: ToolCallHierarchyRuntimeOptions = {},
+): Promise<CallHierarchyResponse> {
+  assertCallHierarchyToolOptions(runtimeOptions);
+  const agentRequest = callHierarchyAgentRequest(root, request, runtimeOptions);
+  if (runtimeOptions.session) return await findCallersWithSession(runtimeOptions.session, agentRequest);
+  return await findCallers(agentRequest);
+}
+
+/** Finds proven semantic callees for a portable symbol handle. */
+export async function tool_findCallees(
+  root: string,
+  request: Omit<CallHierarchyRequest, "root" | "buildOptions">,
+  runtimeOptions: ToolCallHierarchyRuntimeOptions = {},
+): Promise<CallHierarchyResponse> {
+  assertCallHierarchyToolOptions(runtimeOptions);
+  const agentRequest = callHierarchyAgentRequest(root, request, runtimeOptions);
+  if (runtimeOptions.session) return await findCalleesWithSession(runtimeOptions.session, agentRequest);
+  return await findCallees(agentRequest);
+}
+
+function assertCallHierarchyToolOptions(runtimeOptions: ToolCallHierarchyRuntimeOptions): void {
+  if (runtimeOptions.session && runtimeOptions.buildOptions) {
+    throw new Error("Call hierarchy tool options cannot combine a prebuilt session with buildOptions.");
+  }
+}
+
+function callHierarchyAgentRequest(
+  root: string,
+  request: Omit<CallHierarchyRequest, "root" | "buildOptions">,
+  runtimeOptions: ToolCallHierarchyRuntimeOptions,
+): CallHierarchyRequest {
+  return {
+    root,
+    ...request,
+    ...(runtimeOptions.buildOptions ? { buildOptions: runtimeOptions.buildOptions } : {}),
+  };
+}
+
+/** Optional warm-session or build configuration for `tool_previewRename`. */
+export type ToolRenamePreviewRuntimeOptions = {
+  session?: AgentSession;
+  buildOptions?: BuildOptions;
+};
+
+/**
+ * Previews a semantic rename without changing project files.
+ *
+ * Pass a shared `session` to reuse the caller's loaded project snapshot.
+ */
+export async function tool_previewRename(
+  root: string,
+  request: Omit<RenamePreviewRequest, "root" | "buildOptions">,
+  runtimeOptions: ToolRenamePreviewRuntimeOptions = {},
+): Promise<RenamePreviewResponse> {
+  if (runtimeOptions.session && runtimeOptions.buildOptions) {
+    throw new Error("Rename preview tool options cannot combine a prebuilt session with buildOptions.");
+  }
+  const agentRequest: RenamePreviewRequest = {
+    root,
+    ...request,
+    ...(runtimeOptions.buildOptions ? { buildOptions: runtimeOptions.buildOptions } : {}),
+  };
+  if (runtimeOptions.session) return await previewRenameWithSession(runtimeOptions.session, agentRequest);
+  return await previewRename(agentRequest);
+}
+
+/** Optional warm-session or build configuration for `tool_buildRefactorPlan`. */
+export type ToolRefactorPlanRuntimeOptions = {
+  session?: AgentSession;
+  buildOptions?: BuildOptions;
+};
+
+/**
+ * Builds a read-only refactor evidence packet without changing project files.
+ *
+ * Pass a shared `session` to reuse the caller's loaded project snapshot.
+ */
+export async function tool_buildRefactorPlan(
+  root: string,
+  request: Omit<RefactorPlanRequest, "root" | "buildOptions">,
+  runtimeOptions: ToolRefactorPlanRuntimeOptions = {},
+): Promise<RefactorPlanResponse> {
+  if (runtimeOptions.session && runtimeOptions.buildOptions) {
+    throw new Error("Refactor plan tool options cannot combine a prebuilt session with buildOptions.");
+  }
+  const agentRequest: RefactorPlanRequest = {
+    root,
+    ...request,
+    ...(runtimeOptions.buildOptions ? { buildOptions: runtimeOptions.buildOptions } : {}),
+  };
+  if (runtimeOptions.session) return await buildRefactorPlanWithSession(runtimeOptions.session, agentRequest);
+  return await buildRefactorPlan(agentRequest);
 }
 
 /**

@@ -120,6 +120,25 @@ export {
   type GraphDeltaReport,
   type FindReferencesResult,
   type Reference,
+  DEFAULT_WORKSPACE_SYMBOL_LIMIT,
+  MAX_WORKSPACE_SYMBOL_LIMIT,
+  workspaceSymbols as queryWorkspaceSymbols,
+  type WorkspaceSymbolMatch,
+  type WorkspaceSymbolsRequest,
+  type WorkspaceSymbolsResult,
+  findImplementations as queryImplementations,
+  findTypeHierarchy as queryTypeHierarchy,
+  type ImplementationMatch,
+  type ImplementationsResult as IndexImplementationsResult,
+  type TypeHierarchyDirection,
+  type TypeHierarchyRelationKind,
+  type TypeHierarchyRelationMatch,
+  type TypeHierarchyResult as IndexTypeHierarchyResult,
+  findCallHierarchy as queryCallHierarchy,
+  type CallHierarchyDirection,
+  type CallHierarchyMatch,
+  type CallHierarchyResult as IndexCallHierarchyResult,
+  type CallHierarchySite,
   parseFile,
   collectLocalsAndExportsFromSource,
   collectImportsForFile,
@@ -284,6 +303,59 @@ export type {
 export { getCodegraphPacket } from "./agent/packet.js";
 export type { AgentPacketKind, AgentPacketPayload, AgentPacketRequest, AgentPacketResponse } from "./agent/packet.js";
 
+/** Deterministic workspace-symbol lookup with portable handles and exact locations. */
+export {
+  formatWorkspaceSymbolsResponse,
+  workspaceSymbols,
+  workspaceSymbolsInSnapshot,
+  workspaceSymbolsWithSession,
+} from "./agent/workspaceSymbols.js";
+export type { AgentWorkspaceSymbolsRequest, WorkspaceSymbolsResponse } from "./agent/workspaceSymbols.js";
+
+/** Proven type hierarchy and implementation lookup by portable symbol handle. */
+export {
+  findImplementations,
+  findImplementationsWithSession,
+  findSubtypes,
+  findSubtypesWithSession,
+  findSupertypes,
+  findSupertypesWithSession,
+} from "./agent/typeHierarchy.js";
+export type {
+  ImplementationEntry,
+  ImplementationsResponse,
+  TypeHierarchyRelation,
+  TypeHierarchyRequest,
+  TypeHierarchyResponse,
+} from "./agent/typeHierarchy.js";
+
+/** Proven caller and callee lookup by portable symbol handle. */
+export { findCallees, findCalleesWithSession, findCallers, findCallersWithSession } from "./agent/callHierarchy.js";
+export type { CallHierarchyEntry, CallHierarchyRequest, CallHierarchyResponse } from "./agent/callHierarchy.js";
+/** Read-only semantic rename planning by portable symbol handle. */
+export { previewRename, previewRenameInSnapshot, previewRenameWithSession } from "./agent/renamePreview.js";
+export type {
+  RenameCandidateTest,
+  RenameConflict,
+  RenameEdit,
+  RenameEditKind,
+  RenameFilenameSuggestion,
+  RenamePreviewRequest,
+  RenamePreviewResponse,
+  RenameUnsafeSite,
+} from "./agent/renamePreview.js";
+/** Read-only refactor evidence packet composed from one semantic snapshot. */
+export { buildRefactorPlan, buildRefactorPlanInSnapshot, buildRefactorPlanWithSession } from "./agent/refactorPlan.js";
+export type { RefactorPlanRequest, RefactorPlanResponse, RefactorPlanSectionIssue } from "./agent/refactorPlan.js";
+
+export type {
+  SemanticLocation,
+  SemanticOmittedCounts,
+  SemanticProvenance,
+  SemanticResponseEnvelope,
+  SemanticSymbol,
+} from "./agent/semantic.js";
+
 /** Agent-facing deterministic search over symbols, files, chunks, SQL objects, and graph neighborhoods. */
 export { formatAgentSearchResponse, searchCodegraph, searchCodegraphWithSession } from "./agent/search.js";
 export type {
@@ -331,7 +403,15 @@ export {
   tool_getReverseDependencies,
   tool_getHotspots,
   tool_goToDefinition,
+  tool_workspaceSymbols,
+  tool_findImplementations,
+  tool_findSubtypes,
+  tool_findSupertypes,
   tool_findReferences,
+  tool_findCallees,
+  tool_findCallers,
+  tool_previewRename,
+  tool_buildRefactorPlan,
   type ToolFileOverview,
   type ToolFileOverviewImport,
   type ToolFileOverviewDefinition,
@@ -339,6 +419,11 @@ export {
   type ToolSymbolMatch,
   type ToolDependencyEntry,
   type ToolHotspotEntry,
+  type ToolWorkspaceSymbolsRuntimeOptions,
+  type ToolTypeHierarchyRuntimeOptions,
+  type ToolCallHierarchyRuntimeOptions,
+  type ToolRenamePreviewRuntimeOptions,
+  type ToolRefactorPlanRuntimeOptions,
 } from "./agent-tools.js";
 
 /** SQLite graph persistence and query helpers. */

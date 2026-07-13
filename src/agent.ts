@@ -75,3 +75,48 @@ export { buildCodegraphArtifact, buildCodegraphArtifactWithSession } from "./age
 export type { CodegraphArtifactBuildRequest, CodegraphArtifactBuildResult } from "./agent/artifact.js";
 export { createCodegraphMcpHandlers, listCodegraphMcpTools, serveCodegraphMcp } from "./mcp/server.js";
 export type { CodegraphMcpHandlers, CodegraphMcpServerOptions } from "./mcp/server.js";
+export {
+  formatWorkspaceSymbolsResponse,
+  workspaceSymbols,
+  workspaceSymbolsInSnapshot,
+  workspaceSymbolsWithSession,
+} from "./agent/workspaceSymbols.js";
+export type { AgentWorkspaceSymbolsRequest, WorkspaceSymbolsResponse } from "./agent/workspaceSymbols.js";
+export {
+  findImplementations,
+  findImplementationsWithSession,
+  findSubtypes,
+  findSubtypesWithSession,
+  findSupertypes,
+  findSupertypesWithSession,
+} from "./agent/typeHierarchy.js";
+export type {
+  ImplementationEntry,
+  ImplementationsResponse,
+  TypeHierarchyRelation,
+  TypeHierarchyRequest,
+  TypeHierarchyResponse,
+} from "./agent/typeHierarchy.js";
+export { findCallees, findCalleesWithSession, findCallers, findCallersWithSession } from "./agent/callHierarchy.js";
+export type { CallHierarchyEntry, CallHierarchyRequest, CallHierarchyResponse } from "./agent/callHierarchy.js";
+export { previewRename, previewRenameInSnapshot, previewRenameWithSession } from "./agent/renamePreview.js";
+export type {
+  RenameCandidateTest,
+  RenameConflict,
+  RenameEdit,
+  RenameEditKind,
+  RenameFilenameSuggestion,
+  RenamePreviewRequest,
+  RenamePreviewResponse,
+  RenameUnsafeSite,
+} from "./agent/renamePreview.js";
+export { buildRefactorPlan, buildRefactorPlanInSnapshot, buildRefactorPlanWithSession } from "./agent/refactorPlan.js";
+export type { RefactorPlanRequest, RefactorPlanResponse, RefactorPlanSectionIssue } from "./agent/refactorPlan.js";
+
+export type {
+  SemanticLocation,
+  SemanticOmittedCounts,
+  SemanticProvenance,
+  SemanticResponseEnvelope,
+  SemanticSymbol,
+} from "./agent/semantic.js";

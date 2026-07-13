@@ -43,11 +43,30 @@ Use `--root` to define the boundary for config lookup, cache scope, path confine
 
 - answer a question with bounded evidence: `codegraph explore "how does auth reach db?" --root . --pretty`
 - find a ranked anchor: `codegraph search "auth user" --json`
+- resolve a known symbol identity: `codegraph symbols "CodeReviewSession" --root . --pretty`
 - explain a known target: `codegraph explain <file|symbol|sql-object|handle>`
 - retrieve bounded indexed context: `codegraph packet get <file|symbol|sql-object|handle> --pretty`
 - read current disk content: `codegraph file <path> --offset 1 --limit 200 --pretty`
 
 `explore` returns ranked anchors, bounded packets, dependency paths, blast radius, candidate tests, explicit limits, omission counts, and copyable follow-ups. Hybrid search is code-first by default; search, explain, explore, and review output preserve analysis labels so reduced or mixed runs remain visible.
+
+Use `symbols` instead of hybrid `search` when only declarations should compete. It supports `--kind <kind,...>`, `--exported`, `--include-imports`, project-relative `--file-glob`, and `--limit <0-500>`; imports default off, and only named/default aliases that resolve to concrete declarations are returned.
+
+Use the portable callable handle from `symbols` with `codegraph callers <handle>` or `codegraph callees <handle>`. Depth defaults to 1 and caps at 5, the symbol limit defaults to 100 and caps at 500, JSON is the default, and `--pretty` prints grouped exact callsites.
+
+Call hierarchy contains resolved semantic `calls` edges only. `--include-heuristic` is accepted but currently adds no guessed dynamic calls; use `refs` for all references and `deps` or `rdeps` for file relationships.
+
+Use the portable handle from `symbols` with `codegraph supertypes <handle>`, `codegraph subtypes <handle>`, or `codegraph implementations <handle>`. Hierarchy depth defaults to 1 and caps at 10; all result limits default to 100 and cap at 500, and `--pretty` is the concise human-readable form.
+
+Hierarchy results contain only proven indexed `extends` and `implements` relationships. Implementation targets are interfaces, traits, abstract types, and members with proven implementation or override relationships; exact declarations are returned, while overloads, dynamic or structural conformance, unrelated same-name methods, and unresolved external bases are not guessed.
+
+Use `codegraph rename-preview <handle> <new-name> --json` to plan a semantic rename without changing files. Add `--include-comments`, `--include-strings`, or `--include-filenames` only when needed, and use `--max-edits <1-10000>` to bound the plan.
+
+Treat `safe: false`, conflicts, unsafe sites, and omissions as blockers. Eligible exported class, interface, and type filename results are suggestions only; Codegraph has no apply command or tool.
+
+Use `codegraph refactor-plan <handle> --pretty` to compose references, direct callers and callees, hierarchy, implementations, section issues, candidate tests, omissions, and copyable follow-ups from one snapshot. It accepts portable search or workspace-symbol handles and exact internal review or impact symbol handles; add `--rename <new-name>` only when the packet should include the authoritative nested rename preview.
+
+The independent `--max-references`, `--max-callers`, and `--max-hierarchy` bounds accept 0 to 500, and `--include-source` opts reference context into output. Treat `sectionIssues`, omissions, and nested `rename.safe` as authoritative; the packet is read-only and has no apply action.
 
 ### Navigate
 
@@ -111,7 +130,12 @@ Sensitive-file rules:
 
 ## MCP and Freshness
 
-If MCP tools are available, prefer them over repeated CLI invocations. Use `explore`, `orient`, `search`, `get_file`, `packet_get`, `goto`, `refs`, `deps`, `rdeps`, `path`, `impact`, `review`, and `query_sqlite`; fall back to the CLI when MCP is unavailable.
+If MCP tools are available, prefer them over repeated CLI invocations. Use `explore`, `orient`, `workspace_symbols`, `search`, `get_file`, `packet_get`, `goto`, `refs`, `rename_preview`, `refactor_plan`, `callers`, `callees`, `deps`, `rdeps`, `path`, `impact`, `review`, and `query_sqlite`; fall back to the CLI when MCP is unavailable.
+Use `refactor_plan` with flat `handle`, optional `renameTo`, independent optional `maxReferences`, `maxCallers`, and `maxHierarchy` bounds from 0 to 500, and optional `includeSource`. It reuses the configured server root and one session snapshot, returns portable targets and follow-ups even for exact internal review handles, exposes unsupported implementation sections in `sectionIssues`, preserves nested `rename.safe`, and never writes.
+Use `workspace_symbols` for deterministic symbol identities and exact ranges; use `search` when paths, prose, SQL, snippets, or graph evidence should participate.
+Use `supertypes`, `subtypes`, and `implementations` with portable symbol handles for repeated hierarchy queries; their schemas are flat and use the same 10-depth and 500-result caps as the CLI.
+Use `callers` and `callees` with portable callable handles for repeated call hierarchy queries. Their flat schemas accept `handle`, `depth`, `limit`, and `includeHeuristic`, reuse the MCP freshness gate, and cap depth at 5 and symbols at 500; current results remain semantic-only.
+Use `rename_preview` with `handle`, `newName`, optional boolean inclusion fields, and optional `maxEdits`. It remains available in read-only mode, reuses the MCP session, never changes files, and has no apply counterpart.
 
 Keep live and indexed evidence distinct:
 

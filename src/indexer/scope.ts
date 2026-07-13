@@ -191,6 +191,7 @@ export function buildScopeIndexFromSource(
     }
     if (
       node.type === "class_declaration" ||
+      node.type === "abstract_class_declaration" ||
       node.type === "class_definition" ||
       node.type === "class" ||
       node.type === "module" ||
@@ -344,6 +345,7 @@ export function buildScopeIndexFromSource(
             type === "function_item" ||
             type === "func_literal" ||
             type === "class_declaration" ||
+            type === "abstract_class_declaration" ||
             type === "class_definition" ||
             type === "class" ||
             type === "module" ||
