@@ -28,9 +28,13 @@ let snapshot: AgentProjectSnapshot;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-workspace-symbols-"));
   const sourceDir = path.join(root, "src");
+  const surfaceSourceDir = path.join(root, "zsrc");
   const testDir = path.join(root, "tests");
+  const uppercaseTestDir = path.join(root, "TESTS");
   await fs.mkdir(sourceDir, { recursive: true });
+  await fs.mkdir(surfaceSourceDir, { recursive: true });
   await fs.mkdir(testDir, { recursive: true });
+  await fs.mkdir(uppercaseTestDir, { recursive: true });
   const serviceFile = path.join(sourceDir, "service.ts");
   const otherFile = path.join(sourceDir, "other.ts");
   const importerFile = path.join(sourceDir, "importer.ts");
@@ -38,11 +42,16 @@ beforeAll(async () => {
   const shadowFile = path.join(sourceDir, "shadow.ts");
   const sqlFile = path.join(root, "schema.sql");
   const testFile = path.join(testDir, "service.test.ts");
+  const surfaceFile = path.join(surfaceSourceDir, "surface.ts");
+  const uppercaseTestFile = path.join(uppercaseTestDir, "surface.ts");
+  const unicodeFirstFile = path.join(sourceDir, "\u00e4.ts");
+  const unicodeSecondFile = path.join(sourceDir, "\u00e5.ts");
   await fs.writeFile(
     serviceFile,
     [
       "export class Service {}",
       "export function buildReviewReport() { return 'report'; }",
+      "export function IndexSummary() { return 'index'; }",
       "export const reviewReportText = 'review report';",
       "function internalHelper() { return 1; }",
       "export interface ReviewContract { run(): void; }",
@@ -71,9 +80,25 @@ beforeAll(async () => {
       "}",
     ].join("\n"),
   );
+  await fs.writeFile(surfaceFile, "export function SurfaceTie() { return 'source'; }\n");
+  await fs.writeFile(uppercaseTestFile, "export function SurfaceTie() { return 'test'; }\n");
+  await fs.writeFile(unicodeFirstFile, "export function UnicodeTie() { return 'first'; }\n");
+  await fs.writeFile(unicodeSecondFile, "export function UnicodeTie() { return 'second'; }\n");
   await fs.writeFile(sqlFile, "CREATE TABLE workspace_audit (id INTEGER PRIMARY KEY);\n");
-  await fs.writeFile(testFile, "export class ServiceTest {}\n");
-  files = [serviceFile, otherFile, importerFile, namespaceFile, shadowFile, sqlFile, testFile];
+  await fs.writeFile(testFile, "export class ServiceTest {}\nexport function IndexSummary() { return 'test'; }\n");
+  files = [
+    serviceFile,
+    otherFile,
+    importerFile,
+    namespaceFile,
+    shadowFile,
+    sqlFile,
+    testFile,
+    surfaceFile,
+    uppercaseTestFile,
+    unicodeFirstFile,
+    unicodeSecondFile,
+  ];
   index = await buildProjectIndexFromFiles(root, files, { cache: "off", keepParsed: true });
   snapshot = {
     root,
@@ -101,6 +126,57 @@ describe("workspace symbol lookup", () => {
 
     const tokenized = await workspaceSymbols(index, { query: "review report" });
     expect(tokenized.symbols[0]?.name).toBe("buildReviewReport");
+  });
+
+  it("keeps matching and ranking stable when the host locale has different casing rules", async () => {
+    const originalToLocaleLowerCase = String.prototype.toLocaleLowerCase;
+    const localeSpy = vi.spyOn(String.prototype, "toLocaleLowerCase").mockImplementation(function (this: string) {
+      return originalToLocaleLowerCase.call(this, "tr");
+    });
+    try {
+      const insensitive = await workspaceSymbols(index, { query: "indexsummary" });
+      expect(insensitive.symbols.map((symbol) => symbol.file)).toEqual([
+        "src/service.ts",
+        "tests/service.test.ts",
+      ]);
+
+      const tokenized = await workspaceSymbols(index, { query: "index summary" });
+      expect(tokenized.symbols.map((symbol) => symbol.file)).toEqual([
+        "src/service.ts",
+        "tests/service.test.ts",
+      ]);
+    } finally {
+      localeSpy.mockRestore();
+    }
+  });
+
+  it("classifies file surfaces independently of locale-sensitive casing", async () => {
+    const localeSpy = vi.spyOn(String.prototype, "toLocaleLowerCase").mockImplementation(function (this: string) {
+      return this.toString();
+    });
+    try {
+      const result = await workspaceSymbols(index, { query: "SurfaceTie" });
+      expect(result.symbols.map((symbol) => symbol.file)).toEqual(["zsrc/surface.ts", "TESTS/surface.ts"]);
+    } finally {
+      localeSpy.mockRestore();
+    }
+  });
+
+  it("orders tied Unicode file paths by deterministic code units", async () => {
+    const localeCompareSpy = vi
+      .spyOn(String.prototype, "localeCompare")
+      .mockImplementation(function (this: string, other: string) {
+        const left = this.toString();
+        if (left < other) return 1;
+        if (left > other) return -1;
+        return 0;
+      });
+    try {
+      const result = await workspaceSymbols(index, { query: "UnicodeTie" });
+      expect(result.symbols.map((symbol) => symbol.file)).toEqual(["src/\u00e4.ts", "src/\u00e5.ts"]);
+    } finally {
+      localeCompareSpy.mockRestore();
+    }
   });
 
   it("excludes import aliases by default and includes them explicitly", async () => {
@@ -166,9 +242,7 @@ describe("workspace symbol lookup", () => {
   });
 
   it("reports failed import scans and omitted aliases instead of silently dropping them", async () => {
-    const importerEntry = [...index.byFile.entries()].find(([file]) =>
-      file.endsWith(`${path.sep}src${path.sep}importer.ts`),
-    );
+    const importerEntry = [...index.byFile.entries()].find(([file]) => file.endsWith("/src/importer.ts"));
     expect(importerEntry).toBeDefined();
     const missingFile = path.join(root, "src", "missing.ts");
     const byFile = new Map(index.byFile);

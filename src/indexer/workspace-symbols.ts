@@ -213,9 +213,9 @@ function rankCandidate(candidate: WorkspaceSymbolMatch, query: string): RankedCa
   if (qualifiedName === query) return { candidate, rank: 0, exactImportAlias: candidate.imported };
   if (names.includes(query)) return { candidate, rank: 1, exactImportAlias: candidate.imported };
 
-  const normalizedQuery = query.toLocaleLowerCase();
-  const normalizedNames = names.map((name) => name.toLocaleLowerCase());
-  if (qualifiedName.toLocaleLowerCase() === normalizedQuery || normalizedNames.includes(normalizedQuery)) {
+  const normalizedQuery = query.toLowerCase();
+  const normalizedNames = names.map((name) => name.toLowerCase());
+  if (qualifiedName.toLowerCase() === normalizedQuery || normalizedNames.includes(normalizedQuery)) {
     return { candidate, rank: 2, exactImportAlias: candidate.imported };
   }
   if (normalizedNames.some((name) => name.startsWith(normalizedQuery))) {
@@ -237,7 +237,7 @@ function identifierTokens(value: string): string[] {
   return value
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
     .split(/[^A-Za-z0-9]+/)
-    .map((token) => token.toLocaleLowerCase())
+    .map((token) => token.toLowerCase())
     .filter(Boolean);
 }
 
@@ -247,17 +247,23 @@ function compareRankedCandidates(left: RankedCandidate, right: RankedCandidate):
   if (left.candidate.exported !== right.candidate.exported) return left.candidate.exported ? -1 : 1;
   const surfaceOrder = fileSurfaceRank(left.candidate.file) - fileSurfaceRank(right.candidate.file);
   if (surfaceOrder) return surfaceOrder;
-  const fileOrder = left.candidate.file.localeCompare(right.candidate.file);
+  const fileOrder = compareCodeUnits(left.candidate.file, right.candidate.file);
   if (fileOrder) return fileOrder;
   const lineOrder = left.candidate.range.start.line - right.candidate.range.start.line;
   if (lineOrder) return lineOrder;
   const columnOrder = left.candidate.range.start.column - right.candidate.range.start.column;
   if (columnOrder) return columnOrder;
-  return left.candidate.id.localeCompare(right.candidate.id);
+  return compareCodeUnits(left.candidate.id, right.candidate.id);
+}
+
+function compareCodeUnits(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
 }
 
 function fileSurfaceRank(file: string): number {
-  const normalized = `/${file.toLocaleLowerCase()}/`;
+  const normalized = `/${file.toLowerCase()}/`;
   if (/\/(?:test|tests|__tests__|spec|specs)\//.test(normalized)) return 1;
   if (/\/(?:doc|docs)\//.test(normalized)) return 2;
   return 0;
