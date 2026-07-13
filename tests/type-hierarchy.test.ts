@@ -24,10 +24,12 @@ async function hierarchyFixture() {
       "}",
       "export class InheritedJob extends ConcreteJob {}",
       "export class IncompatibleJob extends AbstractJob { execute(value: string): void {} }",
+      "export class NumberIncompatibleJob extends AbstractJob { execute(value: number): void {} }",
+      "export class ThirdIncompatibleJob extends AbstractJob { execute(value: boolean): void {} }",
       "export interface Overloaded { run(value: string): void; run(value: number): void }",
       "export class OverloadedWorker implements Overloaded { run(value: string | number): void {} }",
       "export interface DistinctOverloaded { run(): void; run(value: string): void }",
-      "export class ZeroWorker implements DistinctOverloaded { run(): void {} }",
+      "export class ZeroWorker implements DistinctOverloaded { run(): void {}; run(value: string): void {} }",
     ].join("\n"),
   );
   const index = await buildProjectIndex(root);
@@ -121,7 +123,7 @@ describe("type hierarchy", () => {
     expect(typeResult.status).toBe("ok");
     if (typeResult.status !== "ok") return;
     expect(typeResult.implementations.map((entry) => graph.nodes.get(entry.symbolId)?.name)).toEqual(["ConcreteJob"]);
-    expect(typeResult.omitted).toBe(2);
+    expect(typeResult.omitted).toBe(4);
     expect(typeResult.implementations[0]?.site?.file.endsWith("types.ts")).toBe(true);
 
     const executeId = graph.edges
@@ -130,7 +132,7 @@ describe("type hierarchy", () => {
       .find((id) => graph.nodes.get(id)?.name === "execute");
     expect(executeId).toBeDefined();
 
-    const result = findImplementations(index, graph, executeId!);
+    const result = findImplementations(index, graph, executeId!, { limit: 1 });
     expect(result.status).toBe("ok");
     if (result.status !== "ok") return;
     expect(result.implementations.map((entry) => graph.nodes.get(entry.symbolId)?.name)).toEqual(["execute"]);
@@ -140,8 +142,10 @@ describe("type hierarchy", () => {
       ),
     ).toEqual(["ConcreteJob"]);
     expect(result.implementations[0]?.site?.file.endsWith("types.ts")).toBe(true);
-    expect(result.omitted).toBe(1);
-    expect(result.ambiguous).toBe(1);
+    expect(result.omitted).toBe(3);
+    expect(result.ambiguous).toBe(3);
+    expect(result.unresolved).toHaveLength(1);
+    expect(result.unresolved[0]?.site?.file.endsWith("types.ts")).toBe(true);
   });
 
   it("rejects overloaded members and ordinary concrete types instead of guessing", async () => {
@@ -178,6 +182,7 @@ describe("type hierarchy", () => {
         ),
       ).toEqual(["ZeroWorker"]);
       expect(distinctResult.ambiguous).toBe(0);
+      expect(distinctResult.unresolved).toEqual([]);
     }
     expect(findImplementations(index, graph, base!.id)).toMatchObject({
       status: "unsupported_target",

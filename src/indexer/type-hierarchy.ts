@@ -202,13 +202,21 @@ export function findImplementations(
       ...(proof.site ? { site: proof.site } : {}),
     });
   }
+  const provenImplementingTypeIds = new Set<string>();
+  for (const match of memberMatches.values()) {
+    if (match.implementingTypeId) provenImplementingTypeIds.add(match.implementingTypeId);
+  }
   const unresolved: UnresolvedImplementationMatch[] = [];
   let ambiguous = 0;
   for (const typeMatch of typeMatches) {
+    const hasProvenImplementation = provenImplementingTypeIds.has(typeMatch.symbolId);
     const unresolvedMembers = graph.edges
       .filter((edge) => edge.to === typeMatch.symbolId && edge.label === "member_of")
       .map((edge) => edge.from)
-      .filter((id) => graph.nodes.get(id)?.name === targetDef.localName && !memberMatches.has(id));
+      .filter((id) => {
+        const candidate = graph.nodes.get(id);
+        return candidate?.name === targetDef.localName && !hasProvenImplementation && !memberMatches.has(id);
+      });
     for (const symbolId of unresolvedMembers) {
       const unresolvedDef = resolveSymbolId(index, symbolId);
       unresolved.push({
@@ -219,6 +227,7 @@ export function findImplementations(
     }
     ambiguous += unresolvedMembers.length;
   }
+  const sortedUnresolved = unresolved.sort((left, right) => left.symbolId.localeCompare(right.symbolId));
   const matches = [...memberMatches.values()].sort((left, right) => compareImplementationMatches(graph, left, right));
   const truncated = Math.max(0, matches.length - limit);
   return {
@@ -227,7 +236,7 @@ export function findImplementations(
     implementations: matches.slice(0, limit),
     omitted: truncated + ambiguous,
     ambiguous,
-    unresolved: unresolved.sort((left, right) => left.symbolId.localeCompare(right.symbolId)),
+    unresolved: sortedUnresolved.slice(0, limit),
     limit,
   };
 }

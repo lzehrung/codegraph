@@ -110,7 +110,19 @@ describe("workspace symbol lookup", () => {
     const withImports = await workspaceSymbols(index, { query: "LocalService", includeImports: true });
     expect(withImports.symbols).toHaveLength(1);
     expect(withImports.symbols[0]).toMatchObject({ name: "LocalService", imported: true, exported: false });
+    const withKindFilter = await workspaceSymbols(index, {
+      query: "LocalService",
+      kinds: [SymbolKind.Class],
+      includeImports: true,
+    });
+    expect(withKindFilter.symbols).toHaveLength(1);
+    expect(withKindFilter.symbols[0]).toMatchObject({
+      name: "LocalService",
+      kind: SymbolKind.Class,
+      imported: true,
+    });
   });
+
   it("reports namespace imports as unsupported omissions rather than returning stale handles", async () => {
     const result = await workspaceSymbols(index, { query: "ServiceAPI", includeImports: true });
     expect(result.symbols).toEqual([]);

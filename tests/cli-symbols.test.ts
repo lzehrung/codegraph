@@ -88,6 +88,8 @@ describe("symbols CLI", () => {
       "--root",
       root,
       "--include-imports",
+      "--kind",
+      "class",
       "--cache",
       "off",
       "--json",
@@ -98,7 +100,7 @@ describe("symbols CLI", () => {
     expect(importsJson.symbols).toEqual([
       expect.objectContaining({
         name: "LocalService",
-        kind: "import",
+        kind: "class",
         location: { file: "src/consumer.ts", range: expect.any(Object) },
       }),
     ]);

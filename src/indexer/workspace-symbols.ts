@@ -26,7 +26,7 @@ export type WorkspaceSymbolMatch = {
   name: string;
   localName: string;
   qualifiedName?: string;
-  kind: SymbolKind | "import";
+  kind: SymbolKind;
   range: Range;
   exported: boolean;
   imported: boolean;
@@ -184,7 +184,7 @@ async function buildImportCandidates(index: ProjectIndex): Promise<ImportCandida
           name: binding.name,
           localName: binding.name,
           qualifiedName: `${displayFile}::${binding.name}`,
-          kind: "import",
+          kind: target.kind,
           range,
           exported: false,
           imported: true,
