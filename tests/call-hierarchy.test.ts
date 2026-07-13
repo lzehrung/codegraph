@@ -148,4 +148,32 @@ describe("call hierarchy", () => {
     expect(result.omittedSymbols).toBe(2);
     expect(result.omittedCallsites).toBe(1);
   });
+
+  it("orders nodes and callsites by locale-independent code units", () => {
+    const site = (file: string, line: number) => ({
+      file,
+      range: {
+        start: { line, column: 1, index: line * 10 },
+        end: { line, column: 2, index: line * 10 + 1 },
+      },
+    });
+    const graph = {
+      nodes: new Map([
+        ["root", { id: "root", file: "root.ts", name: "root", kind: "function" as const }],
+        ["upper", { id: "upper", file: "Z.ts", name: "upper", kind: "function" as const }],
+        ["lower", { id: "lower", file: "a.ts", name: "lower", kind: "function" as const }],
+      ]),
+      edges: [
+        { from: "root", to: "lower", label: "calls", site: site("a.ts", 3) },
+        { from: "root", to: "upper", label: "calls", site: site("a.ts", 2) },
+        { from: "root", to: "upper", label: "calls", site: site("Z.ts", 1) },
+      ],
+    };
+
+    const result = findCallHierarchy(graph, "root", "outgoing");
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.entries.map((entry) => entry.symbolId)).toEqual(["upper", "lower"]);
+    expect(result.entries[0]?.callsites.map((callsite) => callsite.file)).toEqual(["Z.ts", "a.ts"]);
+  });
 });

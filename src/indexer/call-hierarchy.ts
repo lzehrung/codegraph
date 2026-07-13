@@ -209,16 +209,26 @@ function compareNodes(left: SymbolNode | undefined, right: SymbolNode | undefine
   if (!left && !right) return 0;
   if (!left) return 1;
   if (!right) return -1;
-  return left.file.localeCompare(right.file) || left.name.localeCompare(right.name) || left.id.localeCompare(right.id);
+  return (
+    compareCodeUnits(left.file, right.file) ||
+    compareCodeUnits(left.name, right.name) ||
+    compareCodeUnits(left.id, right.id)
+  );
 }
 
 function compareCallsites(left: CallHierarchySite, right: CallHierarchySite): number {
   return (
-    left.file.localeCompare(right.file) ||
+    compareCodeUnits(left.file, right.file) ||
     left.range.start.line - right.range.start.line ||
     left.range.start.column - right.range.start.column ||
     (left.range.start.index ?? 0) - (right.range.start.index ?? 0)
   );
+}
+
+function compareCodeUnits(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
 }
 
 function callsiteKey(site: CallHierarchySite): string {
