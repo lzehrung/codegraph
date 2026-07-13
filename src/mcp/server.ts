@@ -39,6 +39,11 @@ import {
   type ImplementationsResponse,
   type TypeHierarchyResponse,
 } from "../agent/typeHierarchy.js";
+import {
+  findCalleesWithSession,
+  findCallersWithSession,
+  type CallHierarchyResponse,
+} from "../agent/callHierarchy.js";
 import { getDependencies, getReverseDependencies, getShortestPath, type DependencyNode } from "../graphs/queries.js";
 import { findReferences, goToDefinition } from "../indexer/navigation.js";
 import { buildReviewReport, type ReviewDepth, type ReviewReport } from "../review.js";
@@ -128,6 +133,18 @@ export type CodegraphMcpHandlers = {
     fileGlob?: string | undefined;
     limit?: number | undefined;
   }) => Promise<WorkspaceSymbolsResponse>;
+  callers: (request: {
+    handle: string;
+    depth?: number | undefined;
+    limit?: number | undefined;
+    includeHeuristic?: boolean | undefined;
+  }) => Promise<CallHierarchyResponse>;
+  callees: (request: {
+    handle: string;
+    depth?: number | undefined;
+    limit?: number | undefined;
+    includeHeuristic?: boolean | undefined;
+  }) => Promise<CallHierarchyResponse>;
   supertypes: (request: {
     handle: string;
     depth?: number | undefined;
@@ -519,6 +536,24 @@ function createCodegraphMcpHandlersForSession(
         ...(request.includeImports !== undefined ? { includeImports: request.includeImports } : {}),
         ...(request.fileGlob !== undefined ? { fileGlob: request.fileGlob } : {}),
         limit: boundedLimit(request.limit, DEFAULT_WORKSPACE_SYMBOL_LIMIT, MAX_WORKSPACE_SYMBOL_LIMIT),
+      }),
+
+    callers: async (request) =>
+      await findCallersWithSession(session, {
+        root,
+        handle: request.handle,
+        ...(request.depth !== undefined ? { depth: request.depth } : {}),
+        ...(request.limit !== undefined ? { limit: request.limit } : {}),
+        ...(request.includeHeuristic !== undefined ? { includeHeuristic: request.includeHeuristic } : {}),
+      }),
+
+    callees: async (request) =>
+      await findCalleesWithSession(session, {
+        root,
+        handle: request.handle,
+        ...(request.depth !== undefined ? { depth: request.depth } : {}),
+        ...(request.limit !== undefined ? { limit: request.limit } : {}),
+        ...(request.includeHeuristic !== undefined ? { includeHeuristic: request.includeHeuristic } : {}),
       }),
 
     supertypes: async (request) =>
@@ -993,6 +1028,10 @@ async function callMcpTool(handlers: CodegraphMcpHandlers, name: string, input: 
       return await handlers.search(searchSchema.parse(input));
     case "workspace_symbols":
       return await handlers.workspace_symbols(workspaceSymbolsSchema.parse(input));
+    case "callers":
+      return await handlers.callers(callHierarchySchema.parse(input));
+    case "callees":
+      return await handlers.callees(callHierarchySchema.parse(input));
     case "supertypes":
       return await handlers.supertypes(typeHierarchySchema.parse(input));
     case "subtypes":
@@ -1082,6 +1121,13 @@ const workspaceSymbolsSchema = z.object({
   includeImports: z.boolean().optional(),
   fileGlob: z.string().optional(),
   limit: z.number().int().nonnegative().max(MAX_WORKSPACE_SYMBOL_LIMIT).optional(),
+});
+
+const callHierarchySchema = z.object({
+  handle: z.string(),
+  depth: z.number().int().min(1).max(5).optional(),
+  limit: z.number().int().nonnegative().max(500).optional(),
+  includeHeuristic: z.boolean().optional(),
 });
 
 const typeHierarchySchema = z.object({

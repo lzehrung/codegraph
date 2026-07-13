@@ -58,6 +58,10 @@ The semantic index connects definitions, scopes, exports, and import bindings to
 
 Workspace-symbol lookup builds a cached candidate view from indexed definitions and only materializes import aliases when requested. It applies kind, exported, and project-relative file-glob filters before deterministic ranking: qualified and exact names lead, followed by case-insensitive exact, prefix, identifier-token, and substring matches.
 
+Call hierarchy reads resolved `calls` edges from the detailed symbol graph. It builds incoming and outgoing adjacency once per symbol-graph snapshot, attributes nested calls to the nearest indexed callable, groups multiple exact callsites by symbol pair, and traverses breadth-first with deterministic depth and result bounds.
+
+Agent, CLI, and MCP callers reuse the project snapshot and cached adjacency. Results do not reparse source, treat file dependencies or arbitrary references as calls, or guess unresolved dynamic dispatch; reduced graph-only recovery therefore does not claim equivalent call hierarchy coverage.
+
 Type hierarchy extraction adds resolved `extends` and `implements` edges to the detailed symbol graph. Breadth-first supertype and subtype queries deduplicate cycles, sort deterministically by depth and symbol identity, and apply limits after traversal so omission counts remain exact.
 
 Implementation lookup follows the same proven edges. Interface or trait member lookup also requires a proven implementing type and an indexed same-name member inside that type; it does not infer structural conformance, dynamic dispatch, unrelated same-name methods, or unresolved external bases.

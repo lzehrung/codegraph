@@ -134,6 +134,11 @@ export {
   type TypeHierarchyRelationKind,
   type TypeHierarchyRelationMatch,
   type TypeHierarchyResult as IndexTypeHierarchyResult,
+  findCallHierarchy as queryCallHierarchy,
+  type CallHierarchyDirection,
+  type CallHierarchyMatch,
+  type CallHierarchyResult as IndexCallHierarchyResult,
+  type CallHierarchySite,
 
   parseFile,
   collectLocalsAndExportsFromSource,
@@ -327,6 +332,19 @@ export type {
   TypeHierarchyRequest,
   TypeHierarchyResponse,
 } from "./agent/typeHierarchy.js";
+
+/** Proven caller and callee lookup by portable symbol handle. */
+export {
+  findCallees,
+  findCalleesWithSession,
+  findCallers,
+  findCallersWithSession,
+} from "./agent/callHierarchy.js";
+export type {
+  CallHierarchyEntry,
+  CallHierarchyRequest,
+  CallHierarchyResponse,
+} from "./agent/callHierarchy.js";
 export type {
   SemanticLocation,
   SemanticOmittedCounts,
@@ -387,6 +405,8 @@ export {
   tool_findSubtypes,
   tool_findSupertypes,
   tool_findReferences,
+  tool_findCallees,
+  tool_findCallers,
   type ToolFileOverview,
   type ToolFileOverviewImport,
   type ToolFileOverviewDefinition,
@@ -396,6 +416,7 @@ export {
   type ToolHotspotEntry,
   type ToolWorkspaceSymbolsRuntimeOptions,
   type ToolTypeHierarchyRuntimeOptions,
+  type ToolCallHierarchyRuntimeOptions,
 } from "./agent-tools.js";
 
 /** SQLite graph persistence and query helpers. */

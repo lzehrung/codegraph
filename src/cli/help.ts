@@ -10,6 +10,8 @@ Commands:
   packet        Retrieve bounded evidence packets by file path or stable target
   search        Ranked agent search across files, symbols, chunks, SQL, and graph context
   symbols       Deterministic workspace-symbol lookup with exact locations
+  callers       Find proven semantic callers by symbol handle
+  callees       Find proven semantic callees by symbol handle
   supertypes    Find proven direct or transitive supertypes by symbol handle
   subtypes      Find proven direct or transitive subtypes by symbol handle
   implementations Find proven type or interface-member implementations
@@ -142,6 +144,8 @@ const knownCliCommands = new Set([
   "goto",
   "graph",
   "graph-delta",
+  "callees",
+  "callers",
   "grep",
   "hotspots",
   "impact",
@@ -267,6 +271,26 @@ Matching:
 
 Output:
   JSON includes portable handles, exact declaration ranges, provenance, limits, and omission counts. Pretty output is concise and intended for direct reading.
+
+Index options:
+  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+`;
+
+export const CALLERS_HELP_TEXT = `codegraph callers - Find proven semantic callers
+
+Usage: codegraph callers <symbol-handle> [--root <path>] [--depth <1-5>] [--limit <0-500>] [--include-heuristic] [--json | --pretty]
+
+Returns grouped caller symbols and exact project-relative callsites from resolved calls edges. --include-heuristic is accepted for forward compatibility, but current results remain limited to proven semantic edges.
+
+Index options:
+  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+`;
+
+export const CALLEES_HELP_TEXT = `codegraph callees - Find proven semantic callees
+
+Usage: codegraph callees <symbol-handle> [--root <path>] [--depth <1-5>] [--limit <0-500>] [--include-heuristic] [--json | --pretty]
+
+Returns grouped callee symbols and exact project-relative callsites from resolved calls edges. --include-heuristic is accepted for forward compatibility, but current results remain limited to proven semantic edges.
 
 Index options:
   Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
@@ -487,6 +511,8 @@ export function helpTextForCommand(command: string, positionals: readonly string
   if (command === "file") return FILE_HELP_TEXT;
   if (command === "search") return SEARCH_HELP_TEXT;
   if (command === "symbols") return SYMBOLS_HELP_TEXT;
+  if (command === "callers") return CALLERS_HELP_TEXT;
+  if (command === "callees") return CALLEES_HELP_TEXT;
   if (command === "supertypes") return SUPERTYPES_HELP_TEXT;
   if (command === "subtypes") return SUBTYPES_HELP_TEXT;
   if (command === "implementations") return IMPLEMENTATIONS_HELP_TEXT;

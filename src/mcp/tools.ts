@@ -19,6 +19,9 @@ export const MAX_MCP_COLLECTION_LIMIT = 500;
 export const DEFAULT_TYPE_HIERARCHY_LIMIT = 100;
 export const MAX_TYPE_HIERARCHY_LIMIT = 500;
 export const MAX_TYPE_HIERARCHY_DEPTH = 10;
+export const DEFAULT_CALL_HIERARCHY_LIMIT = 100;
+export const MAX_CALL_HIERARCHY_LIMIT = 500;
+export const MAX_CALL_HIERARCHY_DEPTH = 5;
 
 function objectSchema(properties: Record<string, object>, required: string[] = []): Tool["inputSchema"] {
   return required.length ? { type: "object", properties, required } : { type: "object", properties };
@@ -60,6 +63,23 @@ function typeHierarchyInputSchema(): Tool["inputSchema"] {
   );
 }
 
+function callHierarchyInputSchema(): Tool["inputSchema"] {
+  return objectSchema(
+    {
+      handle: stringProperty,
+      depth: { type: "integer", minimum: 1, maximum: MAX_CALL_HIERARCHY_DEPTH, default: 1 },
+      limit: {
+        type: "integer",
+        minimum: 0,
+        maximum: MAX_CALL_HIERARCHY_LIMIT,
+        default: DEFAULT_CALL_HIERARCHY_LIMIT,
+      },
+      includeHeuristic: booleanProperty,
+    },
+    ["handle"],
+  );
+}
+
 export const MCP_TOOLS: Tool[] = [
   {
     name: "search",
@@ -95,6 +115,18 @@ export const MCP_TOOLS: Tool[] = [
       },
       ["query"],
     ),
+  },
+  {
+    name: "callers",
+    description:
+      "Find proven semantic callers and exact grouped callsites for a portable symbol handle. Use refs for every symbol reference and deps for file-level dependencies.",
+    inputSchema: callHierarchyInputSchema(),
+  },
+  {
+    name: "callees",
+    description:
+      "Find proven semantic callees and exact grouped callsites for a portable symbol handle. Use refs for every symbol reference and deps for file-level dependencies.",
+    inputSchema: callHierarchyInputSchema(),
   },
   {
     name: "supertypes",

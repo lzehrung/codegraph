@@ -108,6 +108,27 @@ Requests accept `query`, `kinds`, `exportedOnly`, `includeImports`, `fileGlob`, 
 
 For tool hosts, `tool_workspaceSymbols(root, request, runtimeOptions)` accepts an optional warm `AgentSession` or build options, but not both. Shared semantic location, provenance, omission, symbol, and response-envelope types are exported from the root and agent entry points.
 
+## Call hierarchy
+
+The root and `@lzehrung/codegraph/agent` entry points export `findCallers`, `findCallees`, and their `WithSession` variants. Requests use `root`, a portable callable `handle`, optional `depth` from 1 to 5, optional `limit` from 0 to 500, optional `includeHeuristic`, and optional standalone `buildOptions`.
+
+```ts
+import { createAgentSession, findCallersWithSession } from "@lzehrung/codegraph";
+
+const root = process.cwd();
+const session = createAgentSession({ root });
+const result = await findCallersWithSession(session, {
+  root,
+  handle: "symbol:src/service.ts:run:5:3",
+  depth: 2,
+  limit: 100,
+});
+```
+
+Responses group exact project-relative callsites under deterministic related symbols and report freshness, provenance, effective limits, and separate symbol, callsite, and unresolved-site omissions. Current extraction returns resolved semantic `calls` edges only; `includeHeuristic` is accepted but does not infer dynamic dispatch or promote imports, references, or file dependencies into calls.
+
+The root exposes the index-core operation as `queryCallHierarchy(graph, id, direction, options)`; `@lzehrung/codegraph/indexer` exports it as `findCallHierarchy`. Tool hosts can use `tool_findCallers` and `tool_findCallees` with either a warm session or build options, but not both.
+
 ## Type hierarchy and implementations
 
 The root and `@lzehrung/codegraph/agent` entry points export `findSupertypes`, `findSubtypes`, `findImplementations`, and their `WithSession` variants. Requests use `root`, a portable symbol `handle`, optional `limit`, optional hierarchy `depth`, and optional standalone `buildOptions`.

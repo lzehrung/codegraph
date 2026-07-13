@@ -127,6 +127,14 @@ export {
 } from "./indexer/type-hierarchy.js";
 
 export {
+  findCallHierarchy,
+  type CallHierarchyDirection,
+  type CallHierarchyMatch,
+  type CallHierarchyResult,
+  type CallHierarchySite,
+} from "./indexer/call-hierarchy.js";
+
+export {
   buildGraphDelta,
   buildProjectIndex,
   buildProjectIndexFromFiles,

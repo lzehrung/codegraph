@@ -40,6 +40,7 @@ The server exposes the same bounded primitives as the CLI and library session la
 - `packet_get`: bounded evidence packet by file path, symbol name, SQL object name, or stable target.
 - `search`: deterministic ranked search across paths, symbols, chunks, SQL objects, and graph context.
 - `workspace_symbols`: deterministic symbol-identity lookup with exact locations and composable filters; use `search` for hybrid path, prose, SQL, snippet, or graph evidence.
+- `callers`, `callees`: grouped semantic callers or callees plus exact callsites by portable symbol handle; use `refs` for all references and `deps` for file dependencies.
 - `supertypes`, `subtypes`: proven type relationships by portable symbol handle, with bounded traversal depth.
 - `implementations`: proven type or supported interface/trait-member implementations without same-name inference.
 - `get_file`: bounded project file read with `offset`/`limit` line pagination, exact `number<TAB>line` content, and optional direct graph context.
@@ -63,6 +64,14 @@ Tool schemas are flat JSON objects for broad client compatibility; argument comb
 Call `workspace_symbols` with flat fields `query`, optional `kinds`, `exportedOnly`, `includeImports`, `fileGlob`, and `limit`. Imports are excluded by default; `fileGlob` matches project-relative paths, the default limit is 50, and both the schema and handler enforce a maximum of 500.
 
 Exact qualified identities such as `src/session.ts::CodeReviewSession` rank before exact names, prefixes, identifier tokens, and substrings. Responses include analysis and freshness metadata, effective limits, omission counts, total candidates, and deterministic symbols with portable handles, exact ranges, exported status, and provenance.
+
+### Call hierarchy
+
+Call `callers` or `callees` with flat fields `handle`, optional `depth`, optional `limit`, and optional `includeHeuristic`. Depth defaults to 1 and caps at 5; the symbol limit defaults to 100 and caps at 500.
+
+Both tools reuse the server session and freshness gate. Responses group exact project-relative callsites under each related symbol, sort deterministically, and report separate symbol, callsite, and unresolved-site omissions.
+
+Only resolved semantic `calls` edges are currently returned. `includeHeuristic` is accepted for forward compatibility but does not enable guessed dynamic dispatch; imports, arbitrary references, and file dependency edges remain outside call hierarchy.
 
 ### Type hierarchy and implementations
 

@@ -530,6 +530,32 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     ),
   ],
   [
+    "callees",
+    commandSchema(
+      [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--include-heuristic"],
+      [...SHARED_BUILD_OPTIONS, "--depth", "--limit"],
+      {
+        kind: "max",
+        max: 1,
+        usage:
+          "Usage: codegraph callees <symbol-handle> [--root <path>] [--depth <1-5>] [--limit <0-500>] [--include-heuristic] [--json | --pretty]",
+      },
+    ),
+  ],
+  [
+    "callers",
+    commandSchema(
+      [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--include-heuristic"],
+      [...SHARED_BUILD_OPTIONS, "--depth", "--limit"],
+      {
+        kind: "max",
+        max: 1,
+        usage:
+          "Usage: codegraph callers <symbol-handle> [--root <path>] [--depth <1-5>] [--limit <0-500>] [--include-heuristic] [--json | --pretty]",
+      },
+    ),
+  ],
+  [
     "subtypes",
     commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], [...SHARED_BUILD_OPTIONS, "--depth", "--limit"], {
       kind: "max",

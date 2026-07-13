@@ -52,6 +52,10 @@ Use `--root` to define the boundary for config lookup, cache scope, path confine
 
 Use `symbols` instead of hybrid `search` when only declarations should compete. It supports `--kind <kind,...>`, `--exported`, `--include-imports`, project-relative `--file-glob`, and `--limit <0-500>`; imports default off and the default limit is 50.
 
+Use the portable callable handle from `symbols` with `codegraph callers <handle>` or `codegraph callees <handle>`. Depth defaults to 1 and caps at 5, the symbol limit defaults to 100 and caps at 500, JSON is the default, and `--pretty` prints grouped exact callsites.
+
+Call hierarchy contains resolved semantic `calls` edges only. `--include-heuristic` is accepted but currently adds no guessed dynamic calls; use `refs` for all references and `deps` or `rdeps` for file relationships.
+
 Use the portable handle from `symbols` with `codegraph supertypes <handle>`, `codegraph subtypes <handle>`, or `codegraph implementations <handle>`. Hierarchy depth defaults to 1 and caps at 10; all result limits default to 100 and cap at 500, and `--pretty` is the concise human-readable form.
 
 Hierarchy results contain only proven indexed `extends` and `implements` relationships. Member implementations require an interface or trait owner with proven implementers; Codegraph does not infer unrelated same-name methods, dynamic or structural conformance, or unresolved external bases.
@@ -118,9 +122,10 @@ Sensitive-file rules:
 
 ## MCP and Freshness
 
-If MCP tools are available, prefer them over repeated CLI invocations. Use `explore`, `orient`, `workspace_symbols`, `search`, `get_file`, `packet_get`, `goto`, `refs`, `deps`, `rdeps`, `path`, `impact`, `review`, and `query_sqlite`; fall back to the CLI when MCP is unavailable.
+If MCP tools are available, prefer them over repeated CLI invocations. Use `explore`, `orient`, `workspace_symbols`, `search`, `get_file`, `packet_get`, `goto`, `refs`, `callers`, `callees`, `deps`, `rdeps`, `path`, `impact`, `review`, and `query_sqlite`; fall back to the CLI when MCP is unavailable.
 Use `workspace_symbols` for deterministic symbol identities and exact ranges; use `search` when paths, prose, SQL, snippets, or graph evidence should participate.
 Use `supertypes`, `subtypes`, and `implementations` with portable symbol handles for repeated hierarchy queries; their schemas are flat and use the same 10-depth and 500-result caps as the CLI.
+Use `callers` and `callees` with portable callable handles for repeated call hierarchy queries. Their flat schemas accept `handle`, `depth`, `limit`, and `includeHeuristic`, reuse the MCP freshness gate, and cap depth at 5 and symbols at 500; current results remain semantic-only.
 
 Keep live and indexed evidence distinct:
 

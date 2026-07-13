@@ -40,6 +40,14 @@ import {
   type TypeHierarchyRequest,
   type TypeHierarchyResponse,
 } from "./agent/typeHierarchy.js";
+import {
+  findCallees,
+  findCalleesWithSession,
+  findCallers,
+  findCallersWithSession,
+  type CallHierarchyRequest,
+  type CallHierarchyResponse,
+} from "./agent/callHierarchy.js";
 
 type ToolRuntimeOptions = {
   index?: ProjectIndex;
@@ -349,6 +357,54 @@ function typeHierarchyAgentRequest(
   request: Omit<TypeHierarchyRequest, "root" | "buildOptions">,
   runtimeOptions: ToolTypeHierarchyRuntimeOptions,
 ): TypeHierarchyRequest {
+  return {
+    root,
+    ...request,
+    ...(runtimeOptions.buildOptions ? { buildOptions: runtimeOptions.buildOptions } : {}),
+  };
+}
+
+/** Optional warm-session or build configuration for call hierarchy tools. */
+export type ToolCallHierarchyRuntimeOptions = {
+  session?: AgentSession;
+  buildOptions?: BuildOptions;
+};
+
+/** Finds proven semantic callers for a portable symbol handle. */
+export async function tool_findCallers(
+  root: string,
+  request: Omit<CallHierarchyRequest, "root" | "buildOptions">,
+  runtimeOptions: ToolCallHierarchyRuntimeOptions = {},
+): Promise<CallHierarchyResponse> {
+  assertCallHierarchyToolOptions(runtimeOptions);
+  const agentRequest = callHierarchyAgentRequest(root, request, runtimeOptions);
+  if (runtimeOptions.session) return await findCallersWithSession(runtimeOptions.session, agentRequest);
+  return await findCallers(agentRequest);
+}
+
+/** Finds proven semantic callees for a portable symbol handle. */
+export async function tool_findCallees(
+  root: string,
+  request: Omit<CallHierarchyRequest, "root" | "buildOptions">,
+  runtimeOptions: ToolCallHierarchyRuntimeOptions = {},
+): Promise<CallHierarchyResponse> {
+  assertCallHierarchyToolOptions(runtimeOptions);
+  const agentRequest = callHierarchyAgentRequest(root, request, runtimeOptions);
+  if (runtimeOptions.session) return await findCalleesWithSession(runtimeOptions.session, agentRequest);
+  return await findCallees(agentRequest);
+}
+
+function assertCallHierarchyToolOptions(runtimeOptions: ToolCallHierarchyRuntimeOptions): void {
+  if (runtimeOptions.session && runtimeOptions.buildOptions) {
+    throw new Error("Call hierarchy tool options cannot combine a prebuilt session with buildOptions.");
+  }
+}
+
+function callHierarchyAgentRequest(
+  root: string,
+  request: Omit<CallHierarchyRequest, "root" | "buildOptions">,
+  runtimeOptions: ToolCallHierarchyRuntimeOptions,
+): CallHierarchyRequest {
   return {
     root,
     ...request,

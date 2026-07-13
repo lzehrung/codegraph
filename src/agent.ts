@@ -100,6 +100,17 @@ export type {
   TypeHierarchyRequest,
   TypeHierarchyResponse,
 } from "./agent/typeHierarchy.js";
+export {
+  findCallees,
+  findCalleesWithSession,
+  findCallers,
+  findCallersWithSession,
+} from "./agent/callHierarchy.js";
+export type {
+  CallHierarchyEntry,
+  CallHierarchyRequest,
+  CallHierarchyResponse,
+} from "./agent/callHierarchy.js";
 export type {
   SemanticLocation,
   SemanticOmittedCounts,
