@@ -121,12 +121,14 @@ export function findCallHierarchy(
 
   const allEntries = [...matches.values()].sort((left, right) => compareMatches(graph, left, right));
   const selected = allEntries.slice(0, limit);
-  const entries = selected.map((match): CallHierarchyMatch => ({
-    symbolId: match.symbolId,
-    callsites: match.callsites.sort(compareCallsites),
-    depth: match.depth,
-    omittedCallsites: Math.max(0, match.totalCallsites - match.callsites.length),
-  }));
+  const entries = selected.map(
+    (match): CallHierarchyMatch => ({
+      symbolId: match.symbolId,
+      callsites: match.callsites.sort(compareCallsites),
+      depth: match.depth,
+      omittedCallsites: Math.max(0, match.totalCallsites - match.callsites.length),
+    }),
+  );
   return {
     status: "ok",
     targetId,
@@ -179,11 +181,7 @@ function getCallHierarchyIndex(graph: SymbolGraph): CallHierarchyIndex {
   return created;
 }
 
-function appendRelationship(
-  map: Map<string, CallRelationship[]>,
-  key: string,
-  relationship: CallRelationship,
-): void {
+function appendRelationship(map: Map<string, CallRelationship[]>, key: string, relationship: CallRelationship): void {
   const relationships = map.get(key);
   if (relationships) relationships.push(relationship);
   else map.set(key, [relationship]);
@@ -193,11 +191,7 @@ function isCallable(node: SymbolNode): boolean {
   return node.kind === "function";
 }
 
-function compareCallRelationships(
-  graph: SymbolGraph,
-  left: CallRelationship,
-  right: CallRelationship,
-): number {
+function compareCallRelationships(graph: SymbolGraph, left: CallRelationship, right: CallRelationship): number {
   const callerOrder = compareNodes(graph.nodes.get(left.caller), graph.nodes.get(right.caller));
   if (callerOrder) return callerOrder;
   return compareNodes(graph.nodes.get(left.callee), graph.nodes.get(right.callee));

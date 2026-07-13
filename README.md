@@ -31,17 +31,18 @@ Use Codegraph alongside text search and compilers: text search finds exact strin
 
 ## What you can do
 
-| Question                                | Start here                                                              | What comes back                                                                   |
-| --------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| "Where should I start in this repo?"    | `codegraph orient --root . --budget small --pretty`                     | Central modules, a bounded tree, and copyable follow-ups                          |
-| "How does this feature work?"           | `codegraph explore "<question>" --root . --pretty`                      | Ranked anchors, source packets, dependency paths, blast radius, and likely tests  |
-| "What could this change break?"         | `codegraph review --base HEAD --head WORKTREE --summary`                | Changed symbols, risk signals, candidate tests, duplicate leads, and review tasks |
-| "What depends on this file?"            | `codegraph rdeps src/file.ts --json`                                    | Reverse dependencies from the resolved project graph                              |
-| "Where is this symbol defined or used?" | `codegraph goto <file> <line> <column>` and `codegraph refs ...`        | Semantic definitions and references across supported languages                    |
-| "Which declaration matches this name?" | `codegraph symbols "CodeReviewSession" --root . --pretty`                | Ranked symbols with portable handles, exact ranges, provenance, and omissions     |
-| "Is the architecture drifting?"         | `codegraph drift ./src --base origin/main --head HEAD --pretty`         | New cycles, hotspot changes, unresolved imports, API changes, and graph deltas    |
-| "Where is code duplicated?"             | `codegraph duplicates ./src --min-confidence medium`                    | Ranked exact and near-duplicate groups with locations and confidence              |
-| "Can another tool consume the graph?"   | `codegraph graph --root . ./src --compact-json --output codegraph.json` | JSON, Mermaid, DOT, or SQLite output                                              |
+| Question                                     | Start here                                                              | What comes back                                                                              |
+| -------------------------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| "Where should I start in this repo?"         | `codegraph orient --root . --budget small --pretty`                     | Central modules, a bounded tree, and copyable follow-ups                                     |
+| "How does this feature work?"                | `codegraph explore "<question>" --root . --pretty`                      | Ranked anchors, source packets, dependency paths, blast radius, and likely tests             |
+| "What could this change break?"              | `codegraph review --base HEAD --head WORKTREE --summary`                | Changed symbols, risk signals, candidate tests, duplicate leads, and review tasks            |
+| "What depends on this file?"                 | `codegraph rdeps src/file.ts --json`                                    | Reverse dependencies from the resolved project graph                                         |
+| "Where is this symbol defined or used?"      | `codegraph goto <file> <line> <column>` and `codegraph refs ...`        | Semantic definitions and references across supported languages                               |
+| "Which declaration matches this name?"       | `codegraph symbols "CodeReviewSession" --root . --pretty`               | Ranked symbols with portable handles, exact ranges, provenance, and omissions                |
+| "What evidence do I need before a refactor?" | `codegraph refactor-plan <symbol-handle> --pretty`                      | References, call and type relationships, candidate tests, omissions, and copyable follow-ups |
+| "Is the architecture drifting?"              | `codegraph drift ./src --base origin/main --head HEAD --pretty`         | New cycles, hotspot changes, unresolved imports, API changes, and graph deltas               |
+| "Where is code duplicated?"                  | `codegraph duplicates ./src --min-confidence medium`                    | Ranked exact and near-duplicate groups with locations and confidence                         |
+| "Can another tool consume the graph?"        | `codegraph graph --root . ./src --compact-json --output codegraph.json` | JSON, Mermaid, DOT, or SQLite output                                                         |
 
 Human-readable output uses `--pretty` or `--summary`. JSON, MCP tools, and library APIs preserve stable fields, ranges, handles, reasons, confidence, and omission counts for automation.
 

@@ -22,12 +22,7 @@ type EdgePassContext = {
   resolveIdentifier: (name: string) => SymbolDef | null;
   resolveExportFrom: (file: string, exportedName: string) => SymbolDef | null;
   resolveMemberChainTarget: (chainNode: SyntaxNodeLike) => SymbolDef | null;
-  recordEdge: (
-    fromId: string,
-    toId: string,
-    label?: string,
-    site?: SymbolGraph["edges"][number]["site"],
-  ) => boolean;
+  recordEdge: (fromId: string, toId: string, label?: string, site?: SymbolGraph["edges"][number]["site"]) => boolean;
 };
 
 function ensureNode(context: EdgePassContext, def: SymbolDef): string {
@@ -161,16 +156,9 @@ export function emitMemberOwnershipEdges(
   for (const fn of functionNodes) {
     const owners = classNodes
       .filter(
-        (candidate) =>
-          candidate.node.startIndex <= fn.node.startIndex &&
-          candidate.node.endIndex >= fn.node.endIndex,
+        (candidate) => candidate.node.startIndex <= fn.node.startIndex && candidate.node.endIndex >= fn.node.endIndex,
       )
-      .sort(
-        (left, right) =>
-          left.node.endIndex -
-          left.node.startIndex -
-          (right.node.endIndex - right.node.startIndex),
-      );
+      .sort((left, right) => left.node.endIndex - left.node.startIndex - (right.node.endIndex - right.node.startIndex));
     const owner = owners[0];
     if (!owner) continue;
     recordDefEdge(context, ensureNode(context, fn.def), owner.def, "member_of");
@@ -199,7 +187,6 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
         )
         .map((candidate) => candidate.node),
     );
-
 
     const recordAliasUse = (node: SyntaxNodeLike): void => {
       if (context.membersOnly || !isIdentifierType(context.sup, node.type)) return;

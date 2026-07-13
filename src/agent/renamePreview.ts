@@ -6,7 +6,7 @@ import { findReferences } from "../indexer/navigation.js";
 import { resolveExport } from "../indexer/navigation-resolve.js";
 import { getCachedScope } from "../indexer/navigation-references.js";
 import { findImplementations as queryImplementations } from "../indexer/type-hierarchy.js";
-import { SymbolKind, type BuildOptions, type Reference, type SymbolDef } from "../indexer/types.js";
+import { SymbolKind, type BuildOptions, type ProjectIndex, type Reference, type SymbolDef } from "../indexer/types.js";
 import { supportForFile } from "../languages.js";
 import type { Range } from "../types.js";
 import { ensureParsedContext } from "../indexer/parse-context.js";
@@ -15,7 +15,12 @@ import { classifySensitiveFile } from "./fileView.js";
 import { normalizeAgentFilePath } from "./normalize.js";
 import type { SemanticLocation, SemanticProvenance, SemanticResponseEnvelope, SemanticSymbol } from "./semantic.js";
 import { resolveSemanticSymbol, semanticSymbolFromDef } from "./semanticSymbols.js";
-import { createAgentSession, type AgentFreshnessResult, type AgentProjectSnapshot, type AgentSession } from "./session.js";
+import {
+  createAgentSession,
+  type AgentFreshnessResult,
+  type AgentProjectSnapshot,
+  type AgentSession,
+} from "./session.js";
 import { buildSymbolLookup } from "./symbolLookup.js";
 
 export type RenamePreviewRequest = {
@@ -104,6 +109,14 @@ type ExportDeclarationScan = {
   missingFiles: string[];
 };
 
+type IndexedExportDeclaration = {
+  file: string;
+  sourceName: string;
+  exportedName: string;
+  moduleSpecifier?: string;
+  required: boolean;
+};
+
 type RenameSourceLoader = (file: string) => Promise<string | null>;
 
 type LoadedRenameFile = {
@@ -126,9 +139,10 @@ type TextualRenameScanInput = {
   semanticProvenance: SemanticProvenance;
 };
 
-
 const DEFAULT_MAX_RENAME_EDITS = 5_000;
 const MAX_RENAME_EDITS = 10_000;
+const renameExportIndexCache = new WeakMap<ProjectIndex, ReadonlyMap<string, readonly IndexedExportDeclaration[]>>();
+const strictUtf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
 export async function previewRename(request: RenamePreviewRequest): Promise<RenamePreviewResponse> {
   const session = createAgentSession({
@@ -175,6 +189,7 @@ export async function previewRenameInSnapshot(
   const implementationResult = queryImplementations(snapshot.index, snapshot.symbolGraph, resolved.id, {
     limit: 500,
   });
+  const omittedImplementations = implementationResult.status === "ok" ? implementationResult.omitted : 0;
   if (implementationResult.status === "ok") {
     const lookup = buildSymbolLookup(snapshot);
     const membersByOwner = new Map<string, string[]>();
@@ -244,12 +259,14 @@ export async function previewRenameInSnapshot(
     ...definitionCandidates,
     ...importDeclarations.candidates,
     ...exportDeclarations.candidates,
-    ...selectedReferences.map((reference): CandidateEdit => ({
-      file: reference.file,
-      range: reference.range,
-      kind: "reference",
-      reference,
-    })),
+    ...selectedReferences.map(
+      (reference): CandidateEdit => ({
+        file: reference.file,
+        range: reference.range,
+        kind: "reference",
+        reference,
+      }),
+    ),
   ];
   const candidateLimitExceeded = allCandidates.length > maxEdits;
   const candidates = allCandidates.slice(0, maxEdits);
@@ -258,7 +275,9 @@ export async function previewRenameInSnapshot(
     const owner = snapshot.symbolGraph.nodes.get(ownerId);
     unsafeSites.push({
       location: {
-        file: owner ? normalizeAgentFilePath(snapshot.root, owner.file) : normalizeAgentFilePath(snapshot.root, resolved.def.file),
+        file: owner
+          ? normalizeAgentFilePath(snapshot.root, owner.file)
+          : normalizeAgentFilePath(snapshot.root, resolved.def.file),
         range: resolved.def.range,
       },
       text: resolved.def.localName,
@@ -292,12 +311,14 @@ export async function previewRenameInSnapshot(
     });
   }
 
-
   for (const candidate of candidates) {
     const loaded = await loadRenameFile(snapshot, realRoot, candidate.file, loadedFiles, unsafeSites, provenance);
     if (!loaded) continue;
     const oldText = textAtRange(loaded.source, candidate.range);
-    if (candidate.reference?.via?.import && isPreservedImportAlias(candidate.reference, oldText, resolved.def.localName)) {
+    if (
+      candidate.reference?.via?.import &&
+      isPreservedImportAlias(candidate.reference, oldText, resolved.def.localName)
+    ) {
       continue;
     }
     if (oldText !== resolved.def.localName) {
@@ -336,14 +357,14 @@ export async function previewRenameInSnapshot(
     textualOmitted = textual.omitted;
   }
 
-
   const verifiedFiles = await verifyFilesUnchanged(loadedFiles, unsafeSites, provenance);
   const normalizedEdits = normalizeEdits(edits, unsafeSites, provenance);
   let limitReason = "Textual candidate scan exceeded the requested edit limit.";
-  if (candidateLimitExceeded) limitReason = "Combined semantic edits exceeded the requested edit limit.";
+  if (omittedImplementations) limitReason = "Implementation lookup exceeded its response limit.";
+  else if (candidateLimitExceeded) limitReason = "Combined semantic edits exceeded the requested edit limit.";
   else if (referenceLimitExceeded) limitReason = "Reference scan exceeded the requested edit limit.";
 
-  if (referenceLimitExceeded || candidateLimitExceeded || textualOmitted) {
+  if (omittedImplementations || referenceLimitExceeded || candidateLimitExceeded || textualOmitted) {
     const targetFile = normalizeAgentFilePath(snapshot.root, resolved.def.file);
     unsafeSites.push({
       location: { file: targetFile, range: resolved.def.range },
@@ -369,14 +390,33 @@ export async function previewRenameInSnapshot(
   }
 
   const editedFiles = [...new Set(normalizedEdits.map((edit) => edit.file))];
-  const candidateTests = listCandidateTestFiles(snapshot.index, editedFiles, [...semanticDefinitions.keys()], {
-    maxCandidates: 100,
+  const allCandidateTests = listCandidateTestFiles(snapshot.index, editedFiles, [...semanticDefinitions.keys()], {
+    maxCandidates: 101,
     projectRoot: snapshot.root,
-  }).map((candidate): RenameCandidateTest => ({
-    file: normalizeAgentFilePath(snapshot.root, candidate.file),
-    confidence: candidate.confidence,
-    reason: candidate.reason,
-  }));
+  });
+  const omittedCandidateTests = Math.max(0, allCandidateTests.length - 100);
+  const candidateTests = allCandidateTests.slice(0, 100).map(
+    (candidate): RenameCandidateTest => ({
+      file: normalizeAgentFilePath(snapshot.root, candidate.file),
+      confidence: candidate.confidence,
+      reason: candidate.reason,
+    }),
+  );
+  if (omittedCandidateTests) {
+    unsafeSites.push({
+      location: {
+        file: normalizeAgentFilePath(snapshot.root, resolved.def.file),
+        range: resolved.def.range,
+      },
+      text: resolved.def.localName,
+      reason: "limit_exceeded",
+      provenance: {
+        ...provenance,
+        confidence: "low",
+        reason: "Candidate test scan exceeded the response limit.",
+      },
+    });
+  }
   const filenameSuggestions = request.includeFilenames
     ? buildFilenameSuggestions(snapshot, resolved.def, request.newName)
     : [];
@@ -386,6 +426,7 @@ export async function previewRenameInSnapshot(
     verifiedFiles &&
     !referenceLimitExceeded &&
     !candidateLimitExceeded &&
+    !omittedImplementations &&
     snapshot.analysis.mode === "semantic" &&
     !unsafeSites.length &&
     !conflicts.length;
@@ -401,8 +442,10 @@ export async function previewRenameInSnapshot(
         Math.max(
           Math.max(0, semanticReferences.length - selectedReferences.length),
           Math.max(0, allCandidates.length - candidates.length),
-        ) + textualOmitted,
-      candidateTests: 0,
+        ) +
+        textualOmitted +
+        omittedImplementations,
+      candidateTests: omittedCandidateTests,
     },
     target: semanticSymbolFromDef(snapshot, resolved.def),
     newName: request.newName,
@@ -422,7 +465,7 @@ function validateNewName(snapshot: AgentProjectSnapshot, def: SymbolDef, newName
   const support = supportForFile(def.file);
   const allowsDollar = support?.id === "js" || support?.id === "ts" || support?.id === "tsx";
   const identifierPattern = allowsDollar
-    ? /^[$_\p{ID_Start}][$\u200c\u200d_\p{ID_Continue}]*$/u
+    ? /^[$_\p{ID_Start}](?:[$_\p{ID_Continue}]|\u200c|\u200d)*$/u
     : /^[_\p{ID_Start}][_\p{ID_Continue}]*$/u;
   if (!newName || invalidPathCharacters || !identifierPattern.test(newName)) {
     conflicts.push({
@@ -470,14 +513,11 @@ async function addScopeConflicts(
     if (collisionBinding?.def) {
       localCollision = moduleIndex.locals.find(
         (candidate) =>
-          candidate.localName === newName &&
-          candidate.range.start.index === collisionBinding.def?.start.index,
+          candidate.localName === newName && candidate.range.start.index === collisionBinding.def?.start.index,
       );
     }
   } catch {
-    localCollision = moduleIndex.locals.find(
-      (candidate) => candidate !== target && candidate.localName === newName,
-    );
+    localCollision = moduleIndex.locals.find((candidate) => candidate !== target && candidate.localName === newName);
   }
   if (localCollision) {
     conflicts.push({
@@ -490,9 +530,7 @@ async function addScopeConflicts(
   }
 
   const targetId = defNodeId(target);
-  const ownerId = snapshot.symbolGraph.edges.find(
-    (edge) => edge.from === targetId && edge.label === "member_of",
-  )?.to;
+  const ownerId = snapshot.symbolGraph.edges.find((edge) => edge.from === targetId && edge.label === "member_of")?.to;
   const memberCollisionId = ownerId
     ? snapshot.symbolGraph.edges
         .filter((edge) => edge.to === ownerId && edge.label === "member_of" && edge.from !== targetId)
@@ -526,9 +564,7 @@ async function addScopeConflicts(
   const seenImportFiles = new Set<string>();
   for (const reference of references) {
     const activeImport = reference.via?.import;
-    const localImportWillChange =
-      activeImport?.kind === "named" &&
-      activeImport.local === target.localName;
+    const localImportWillChange = activeImport?.kind === "named" && activeImport.local === target.localName;
     if (!activeImport || !localImportWillChange || seenImportFiles.has(reference.file)) continue;
     seenImportFiles.add(reference.file);
     const consumer = snapshot.index.byFile.get(reference.file);
@@ -576,8 +612,7 @@ async function loadRenameFile(
   const load = (async (): Promise<LoadedRenameFile | null> => {
     try {
       const resolved = await resolveReadableFile(realRoot, snapshot.root, file);
-      const sensitiveKind =
-        classifySensitiveFile(resolved.displayPath) ?? classifySensitiveFile(resolved.realPath);
+      const sensitiveKind = classifySensitiveFile(resolved.displayPath) ?? classifySensitiveFile(resolved.realPath);
       if (sensitiveKind) {
         unsafeSites.push({
           location: { file: resolved.displayPath, range: zeroRange() },
@@ -591,10 +626,7 @@ async function loadRenameFile(
         });
         return null;
       }
-      if (
-        /(?:^|\/)(?:dist|build|generated|vendor)\//i.test(resolved.displayPath) ||
-        /(?:^|\.)generated\.[^/]+$/i.test(resolved.displayPath)
-      ) {
+      if (isGeneratedRenameFile(resolved.displayPath) || isGeneratedRenameFile(resolved.realPath)) {
         unsafeSites.push({
           location: { file: resolved.displayPath, range: zeroRange() },
           text: "",
@@ -609,10 +641,7 @@ async function loadRenameFile(
       }
       const before = await fs.stat(resolved.realPath);
       const indexedSignature = snapshot.fileSignatures?.get(file) ?? snapshot.fileSignatures?.get(resolved.realPath);
-      if (
-        indexedSignature &&
-        (indexedSignature.size !== before.size || indexedSignature.mtimeMs !== before.mtimeMs)
-      ) {
+      if (indexedSignature && (indexedSignature.size !== before.size || indexedSignature.mtimeMs !== before.mtimeMs)) {
         unsafeSites.push({
           location: { file: resolved.displayPath, range: zeroRange() },
           text: "",
@@ -621,25 +650,42 @@ async function loadRenameFile(
         });
         return null;
       }
+      const bytes = await fs.readFile(resolved.realPath);
+      if (bytes.includes(0)) throw new Error("Binary source contains NUL bytes.");
+      let source: string;
+      try {
+        source = strictUtf8Decoder.decode(bytes);
+      } catch {
+        throw new Error("Malformed UTF-8 source cannot be renamed safely.");
+      }
       return {
         displayPath: resolved.displayPath,
         realPath: resolved.realPath,
-        source: await fs.readFile(resolved.realPath, "utf8"),
+        source,
         beforeSize: before.size,
         beforeMtimeMs: before.mtimeMs,
       };
     } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      let reason: RenameUnsafeSite["reason"] = "unresolved_reference";
+      if (/outside project root/i.test(message)) reason = "outside_root";
+      else if (/binary source|malformed UTF-8/i.test(message)) reason = "unsupported_syntax";
       unsafeSites.push({
         location: { file: normalizeAgentFilePath(snapshot.root, file), range: zeroRange() },
         text: "",
-        reason: error instanceof Error && /outside project root/i.test(error.message) ? "outside_root" : "unresolved_reference",
-        provenance: { ...provenance, confidence: "low", reason: error instanceof Error ? error.message : String(error) },
+        reason,
+        provenance: { ...provenance, confidence: "low", reason: message },
       });
       return null;
     }
   })();
   cache.set(file, load);
   return await load;
+}
+
+function isGeneratedRenameFile(filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, "/");
+  return /(?:^|\/)(?:dist|build|generated|vendor)\//i.test(normalized) || /(?:^|\.)generated\.[^/]+$/i.test(normalized);
 }
 
 async function verifyFilesUnchanged(
@@ -670,7 +716,11 @@ async function verifyFilesUnchanged(
         location: { file: file.displayPath, range: zeroRange() },
         text: "",
         reason: "unresolved_reference",
-        provenance: { ...provenance, confidence: "low", reason: error instanceof Error ? error.message : String(error) },
+        provenance: {
+          ...provenance,
+          confidence: "low",
+          reason: error instanceof Error ? error.message : String(error),
+        },
       });
     }
   }
@@ -716,9 +766,7 @@ async function collectTextualRenameEdits(
     for (const startIndex of wholeIdentifierOffsets(loaded.source, input.oldName)) {
       const endIndex = startIndex + input.oldName.length;
       const kind = classifyTextualOccurrence(parsed.tree.rootNode.descendantForIndex(startIndex, endIndex));
-      const included =
-        (kind === "comment" && input.includeComments) ||
-        (kind === "string" && input.includeStrings);
+      const included = (kind === "comment" && input.includeComments) || (kind === "string" && input.includeStrings);
       if (!included || !kind) continue;
       if (edits.length >= input.remaining) {
         omitted += 1;
@@ -753,9 +801,9 @@ function wholeIdentifierOffsets(source: string, identifier: string): number[] {
 
 function classifyTextualOccurrence(node: {
   type: string;
-  parent: { type: string; parent: typeof node["parent"] } | null;
+  parent: { type: string; parent: (typeof node)["parent"] } | null;
 }): "comment" | "string" | null {
-  let current: { type: string; parent: typeof node["parent"] } | null = node;
+  let current: { type: string; parent: (typeof node)["parent"] } | null = node;
   let stringLike = false;
   while (current) {
     const type = current.type.toLocaleLowerCase();
@@ -763,12 +811,7 @@ function classifyTextualOccurrence(node: {
     if (type.includes("import") || type === "use_declaration") {
       return null;
     }
-    if (
-      type.includes("string") ||
-      type.includes("template") ||
-      type.includes("quoted") ||
-      type === "char_literal"
-    ) {
+    if (type.includes("string") || type.includes("template") || type.includes("quoted") || type === "char_literal") {
       stringLike = true;
     }
     current = current.parent;
@@ -807,42 +850,61 @@ async function collectExportDeclarationCandidates(
   const candidates: CandidateEdit[] = [];
   const missingFiles: string[] = [];
   const seenRanges = new Set<string>();
-  for (const moduleIndex of snapshot.index.byFile.values()) {
-    for (const entry of moduleIndex.exports) {
-      if (entry.type === "local") {
-        if (defNodeId(entry.target) !== defNodeId(target)) continue;
-        const source = await loadSource(moduleIndex.file);
-        if (!source) continue;
-        const range = findExportDeclarationRange(source, target.localName, entry.exportedAs);
-        if (range) pushExportCandidate(candidates, seenRanges, moduleIndex.file, range);
-        continue;
-      }
-      if (entry.type !== "reexport") continue;
-      const resolved = resolveExport(snapshot.index, moduleIndex.file, entry.exportedAs, {
-        allowLocalFallback: false,
-      });
-      if (resolved?.kind !== "resolved" || defNodeId(resolved.def) !== defNodeId(target)) continue;
-      const source = await loadSource(moduleIndex.file);
-      if (!source) continue;
-      const range = findExportDeclarationRange(
-        source,
-        entry.sourceSpecifier,
-        entry.exportedAs,
-        entry.moduleSpecifier ?? entry.fromModule,
-      );
-      if (range) pushExportCandidate(candidates, seenRanges, moduleIndex.file, range);
-      else missingFiles.push(moduleIndex.file);
-    }
+  const declarations = getRenameExportIndex(snapshot.index).get(defNodeId(target)) ?? [];
+  for (const declaration of declarations) {
+    const source = await loadSource(declaration.file);
+    if (!source) continue;
+    const range = findExportDeclarationRange(
+      source,
+      declaration.sourceName,
+      declaration.exportedName,
+      declaration.moduleSpecifier,
+    );
+    if (range) pushExportCandidate(candidates, seenRanges, declaration.file, range);
+    else if (declaration.required) missingFiles.push(declaration.file);
   }
   return { candidates, missingFiles: [...new Set(missingFiles)] };
 }
 
-function pushExportCandidate(
-  candidates: CandidateEdit[],
-  seenRanges: Set<string>,
-  file: string,
-  range: Range,
-): void {
+function getRenameExportIndex(index: ProjectIndex): ReadonlyMap<string, readonly IndexedExportDeclaration[]> {
+  const cached = renameExportIndexCache.get(index);
+  if (cached) return cached;
+  const byTarget = new Map<string, IndexedExportDeclaration[]>();
+  const add = (targetId: string, declaration: IndexedExportDeclaration): void => {
+    const declarations = byTarget.get(targetId) ?? [];
+    declarations.push(declaration);
+    byTarget.set(targetId, declarations);
+  };
+  for (const moduleIndex of index.byFile.values()) {
+    for (const entry of moduleIndex.exports) {
+      if (entry.type === "local") {
+        add(defNodeId(entry.target), {
+          file: moduleIndex.file,
+          sourceName: entry.target.localName,
+          exportedName: entry.exportedAs,
+          required: false,
+        });
+        continue;
+      }
+      if (entry.type !== "reexport") continue;
+      const resolved = resolveExport(index, moduleIndex.file, entry.exportedAs, {
+        allowLocalFallback: false,
+      });
+      if (resolved?.kind !== "resolved") continue;
+      add(defNodeId(resolved.def), {
+        file: moduleIndex.file,
+        sourceName: entry.sourceSpecifier,
+        exportedName: entry.exportedAs,
+        moduleSpecifier: entry.moduleSpecifier ?? entry.fromModule,
+        required: true,
+      });
+    }
+  }
+  renameExportIndexCache.set(index, byTarget);
+  return byTarget;
+}
+
+function pushExportCandidate(candidates: CandidateEdit[], seenRanges: Set<string>, file: string, range: Range): void {
   const key = `${file}:${range.start.index ?? ""}:${range.end.index ?? ""}`;
   if (seenRanges.has(key)) return;
   seenRanges.add(key);
@@ -1038,9 +1100,7 @@ function buildFilenameSuggestions(
   newName: string,
 ): RenameFilenameSuggestion[] {
   const isPublicType =
-    def.kind === SymbolKind.Class ||
-    def.kind === SymbolKind.Interface ||
-    def.kind === SymbolKind.TypeAlias;
+    def.kind === SymbolKind.Class || def.kind === SymbolKind.Interface || def.kind === SymbolKind.TypeAlias;
   const isExported = snapshot.index.byFile
     .get(def.file)
     ?.exports.some((entry) => entry.type === "local" && defNodeId(entry.target) === defNodeId(def));
@@ -1048,11 +1108,13 @@ function buildFilenameSuggestions(
   const parsed = path.parse(normalizeAgentFilePath(snapshot.root, def.file));
   if (parsed.name !== def.localName) return [];
   const to = path.posix.join(parsed.dir.replace(/\\/g, "/"), `${newName}${parsed.ext}`);
-  return [{
-    from: normalizeAgentFilePath(snapshot.root, def.file),
-    to,
-    caseOnlyRisk: parsed.name !== newName && parsed.name.toLocaleLowerCase() === newName.toLocaleLowerCase(),
-  }];
+  return [
+    {
+      from: normalizeAgentFilePath(snapshot.root, def.file),
+      to,
+      caseOnlyRisk: parsed.name !== newName && parsed.name.toLocaleLowerCase() === newName.toLocaleLowerCase(),
+    },
+  ];
 }
 
 function semanticRenameProvenance(snapshot: AgentProjectSnapshot): SemanticProvenance {
@@ -1100,7 +1162,11 @@ function compareUnsafeSites(left: RenameUnsafeSite, right: RenameUnsafeSite): nu
 }
 
 function compareConflicts(left: RenameConflict, right: RenameConflict): number {
-  return left.file.localeCompare(right.file) || left.reason.localeCompare(right.reason) || left.message.localeCompare(right.message);
+  return (
+    left.file.localeCompare(right.file) ||
+    left.reason.localeCompare(right.reason) ||
+    left.message.localeCompare(right.message)
+  );
 }
 
 function zeroRange(): Range {

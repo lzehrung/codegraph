@@ -55,6 +55,7 @@ import { handleSymbolsCommand } from "./cli/symbols.js";
 import { handleTypeHierarchyCommand } from "./cli/typeHierarchy.js";
 import { handleCallHierarchyCommand } from "./cli/callHierarchy.js";
 import { handleRenamePreviewCommand } from "./cli/renamePreview.js";
+import { handleRefactorPlanCommand } from "./cli/refactorPlan.js";
 import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions } from "./config.js";
 import { listChangedFiles } from "./util/git.js";
 import { DEFAULT_PROJECT_PATTERNS, listProjectFiles, type ProjectFileDiscoveryOptions } from "./util/projectFiles.js";
@@ -634,6 +635,21 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
 
   if (cmd === "symbols") {
     await handleSymbolsCommand({
+      positionals: parsed.positionals,
+      root: projectRootFs,
+      buildOptions: buildAgentOptions(),
+      getOpt,
+      hasFlag,
+      writeJSONLine,
+      writeStdoutLine,
+      writeStderrLine,
+      exit: exitCli,
+    });
+    return;
+  }
+
+  if (cmd === "refactor-plan") {
+    await handleRefactorPlanCommand({
       positionals: parsed.positionals,
       root: projectRootFs,
       buildOptions: buildAgentOptions(),

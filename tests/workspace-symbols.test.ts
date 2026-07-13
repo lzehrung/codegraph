@@ -45,7 +45,10 @@ beforeAll(async () => {
       "",
     ].join("\n"),
   );
-  await fs.writeFile(otherFile, "export class Service {}\nexport function serviceFactory() { return new Service(); }\n");
+  await fs.writeFile(
+    otherFile,
+    "export class Service {}\nexport function serviceFactory() { return new Service(); }\n",
+  );
   await fs.writeFile(
     importerFile,
     "import { Service as LocalService } from './service.js';\nexport function useService() { return LocalService; }\n",

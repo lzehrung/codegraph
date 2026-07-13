@@ -3,7 +3,12 @@ import type { BuildOptions } from "../indexer/types.js";
 import { normalizeAgentFilePath } from "./normalize.js";
 import type { SemanticLocation, SemanticProvenance, SemanticResponseEnvelope, SemanticSymbol } from "./semantic.js";
 import { resolveSemanticSymbol, semanticSymbolFromDef } from "./semanticSymbols.js";
-import { createAgentSession, type AgentFreshnessResult, type AgentProjectSnapshot, type AgentSession } from "./session.js";
+import {
+  createAgentSession,
+  type AgentFreshnessResult,
+  type AgentProjectSnapshot,
+  type AgentSession,
+} from "./session.js";
 import { buildSymbolLookup } from "./symbolLookup.js";
 
 export type CallHierarchyRequest = {

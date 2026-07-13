@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "referenceCount": 1000,
+  "warmIterations": 10,
+  "environmentFields": ["platform", "arch", "node", "cpuModel", "cpuCount", "totalMemoryBytes"],
+  "operationNames": [
+    "workspace-symbol-exact",
+    "direct-callers",
+    "direct-callees",
+    "depth-3-callers",
+    "depth-3-callees",
+    "subtypes",
+    "implementations",
+    "rename-10",
+    "rename-100",
+    "rename-1000",
+    "warm-refactor-plan"
+  ],
+  "ceilings": {
+    "operationMs": 30000,
+    "totalMs": 120000,
+    "hierarchyPeakRssDeltaBytes": 1073741824
+  }
+}

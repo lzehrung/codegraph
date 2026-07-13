@@ -88,6 +88,10 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--offset",
   "--max-bytes",
   "--max-edits",
+  "--rename",
+  "--max-references",
+  "--max-callers",
+  "--max-hierarchy",
 ]);
 
 type CliPositionalPolicy =
@@ -517,19 +521,26 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   [
     "rename-preview",
     commandSchema(
-      [
-        ...SHARED_BUILD_FLAGS,
-        ...JSON_OUTPUT_FLAGS,
-        "--include-comments",
-        "--include-strings",
-        "--include-filenames",
-      ],
+      [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--include-comments", "--include-strings", "--include-filenames"],
       [...SHARED_BUILD_OPTIONS, "--max-edits"],
       {
         kind: "max",
         max: 2,
         usage:
           "Usage: codegraph rename-preview <symbol-handle> <new-name> [--include-comments] [--include-strings] [--include-filenames] [--max-edits N] [--json | --pretty]",
+      },
+    ),
+  ],
+  [
+    "refactor-plan",
+    commandSchema(
+      [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--include-source"],
+      [...SHARED_BUILD_OPTIONS, "--rename", "--max-references", "--max-callers", "--max-hierarchy"],
+      {
+        kind: "max",
+        max: 1,
+        usage:
+          "Usage: codegraph refactor-plan <symbol-handle> [--rename <new-name>] [--max-references <0-500>] [--max-callers <0-500>] [--max-hierarchy <0-500>] [--include-source] [--json | --pretty]",
       },
     ),
   ],
@@ -581,7 +592,8 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], [...SHARED_BUILD_OPTIONS, "--depth", "--limit"], {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph subtypes <symbol-handle> [--root <path>] [--depth <1-10>] [--limit <0-500>] [--json | --pretty]",
+      usage:
+        "Usage: codegraph subtypes <symbol-handle> [--root <path>] [--depth <1-10>] [--limit <0-500>] [--json | --pretty]",
     }),
   ],
   [
@@ -589,7 +601,8 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], [...SHARED_BUILD_OPTIONS, "--depth", "--limit"], {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph supertypes <symbol-handle> [--root <path>] [--depth <1-10>] [--limit <0-500>] [--json | --pretty]",
+      usage:
+        "Usage: codegraph supertypes <symbol-handle> [--root <path>] [--depth <1-10>] [--limit <0-500>] [--json | --pretty]",
     }),
   ],
   [

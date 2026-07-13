@@ -71,7 +71,9 @@ export function findTypeHierarchy(
   for (let cursor = 0; cursor < queue.length; cursor += 1) {
     const current = queue[cursor]!;
     if (current.depth >= depthLimit) continue;
-    const edges = [...(adjacency.get(current.id) ?? [])].sort((left, right) => compareHierarchyEdges(graph, left, right));
+    const edges = [...(adjacency.get(current.id) ?? [])].sort((left, right) =>
+      compareHierarchyEdges(graph, left, right),
+    );
     for (const edge of edges) {
       const nextId = direction === "super" ? edge.to : edge.from;
       if (visited.has(nextId)) continue;
@@ -216,12 +218,9 @@ function collectTypeImplementations(
   return [...matches.values()].sort((left, right) => compareImplementationMatches(graph, left, right));
 }
 
-
-
 function isTypeNode(node: SymbolNode): boolean {
   return node.kind === "class" || node.kind === "interface" || node.kind === "type";
 }
-
 
 function compareHierarchyEdges(graph: SymbolGraph, left: HierarchyEdge, right: HierarchyEdge): number {
   const leftNode = graph.nodes.get(left.to) ?? graph.nodes.get(left.from);
@@ -237,7 +236,11 @@ function compareRelations(
   return left.depth - right.depth || compareNodes(graph.nodes.get(left.targetId), graph.nodes.get(right.targetId));
 }
 
-function compareImplementationMatches(graph: SymbolGraph, left: ImplementationMatch, right: ImplementationMatch): number {
+function compareImplementationMatches(
+  graph: SymbolGraph,
+  left: ImplementationMatch,
+  right: ImplementationMatch,
+): number {
   return compareNodes(graph.nodes.get(left.symbolId), graph.nodes.get(right.symbolId));
 }
 

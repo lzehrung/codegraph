@@ -71,12 +71,7 @@ export async function buildSymbolGraphDetailed(
     edgeCount++;
     return true;
   };
-  const recordEdge = (
-    fromId: string,
-    toId: string,
-    label?: string,
-    site?: SymbolGraph["edges"][number]["site"],
-  ) => {
+  const recordEdge = (fromId: string, toId: string, label?: string, site?: SymbolGraph["edges"][number]["site"]) => {
     const siteKey = site ? `${site.file}:${site.range.start.index ?? ""}:${site.range.end.index ?? ""}` : "";
     const key = `${fromId}->${toId}::${label ?? ""}::${siteKey}`;
     if (added.has(key)) return true;

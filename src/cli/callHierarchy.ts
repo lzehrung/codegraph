@@ -1,8 +1,4 @@
-import {
-  findCallees,
-  findCallers,
-  type CallHierarchyResponse,
-} from "../agent/callHierarchy.js";
+import { findCallees, findCallers, type CallHierarchyResponse } from "../agent/callHierarchy.js";
 import type { SemanticLocation, SemanticSymbol } from "../agent/semantic.js";
 import type { CliAgentCommandContext } from "./context.js";
 import { CALLEES_HELP_TEXT, CALLERS_HELP_TEXT } from "./help.js";

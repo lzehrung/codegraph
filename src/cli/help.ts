@@ -16,6 +16,7 @@ Commands:
   subtypes      Find proven direct or transitive subtypes by symbol handle
   implementations Find proven type or interface-member implementations
   rename-preview Read-only semantic rename planning by symbol handle
+  refactor-plan Build a read-only refactor evidence packet by symbol handle
   explain       Explain a file, symbol, SQL object, or search handle
   impact        Analyze PR impact
   inspect       Summarize repo structure and recommend next commands
@@ -126,6 +127,7 @@ Examples:
   codegraph doctor
   codegraph symbols "CodeReviewSession" --root . --pretty
   codegraph rename-preview "symbol:src/Service.ts:Service:1:14" RenamedService --include-filenames --json
+  codegraph refactor-plan "symbol:src/Service.ts:Service:1:14" --rename RenamedService --pretty
   codegraph version
   codegraph -v
 `;
@@ -164,6 +166,7 @@ const knownCliCommands = new Set([
   "refs",
   "review",
   "rename-preview",
+  "refactor-plan",
   "search",
   "symbols",
   "subtypes",
@@ -336,6 +339,18 @@ Usage: codegraph rename-preview <symbol-handle> <new-name> [--include-comments] 
 Returns exact project-relative edits, conflicts, unsafe sites, candidate tests, provenance, limits, and omissions. Comment and string matches are low-confidence opt-in edits; --max-edits accepts integers from 1 to 10000.
 
 --include-filenames requests suggestions for eligible exported class, interface, or type filenames only. Rename preview is read-only and no apply command exists.
+
+Index options:
+  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+`;
+
+export const REFACTOR_PLAN_HELP_TEXT = `codegraph refactor-plan - Build a read-only refactor evidence packet
+
+Usage: codegraph refactor-plan <symbol-handle> [--rename <new-name>] [--max-references <0-500>] [--max-callers <0-500>] [--max-hierarchy <0-500>] [--include-source] [--json | --pretty]
+
+Returns a target definition, references, callers, callees, type hierarchy, implementations, candidate tests, omissions, and copyable follow-ups from one semantic snapshot. Each max option accepts an independent integer from 0 to 500; --include-source opts reference context into the response.
+
+--rename adds the authoritative read-only rename preview. Nested rename.safe is the safety decision; Codegraph does not expose an apply command and never changes source files.
 
 Index options:
   Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
@@ -532,6 +547,7 @@ export function helpTextForCommand(command: string, positionals: readonly string
   if (command === "subtypes") return SUBTYPES_HELP_TEXT;
   if (command === "implementations") return IMPLEMENTATIONS_HELP_TEXT;
   if (command === "rename-preview") return RENAME_PREVIEW_HELP_TEXT;
+  if (command === "refactor-plan") return REFACTOR_PLAN_HELP_TEXT;
   if (command === "orient") return ORIENT_HELP_TEXT;
   if (command === "packet") return PACKET_HELP_TEXT;
   if (command === "explain") return EXPLAIN_HELP_TEXT;

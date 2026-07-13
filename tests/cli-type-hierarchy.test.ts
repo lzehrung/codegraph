@@ -158,14 +158,7 @@ describe("type hierarchy CLI", () => {
     expect(invalidType.stderr).toContain("Type hierarchy requires a class, interface, or type symbol.");
 
     const unrelatedRun = await symbolHandle("run", 5);
-    const unsupportedMember = await captureCli([
-      "implementations",
-      unrelatedRun,
-      "--root",
-      root,
-      "--cache",
-      "off",
-    ]);
+    const unsupportedMember = await captureCli(["implementations", unrelatedRun, "--root", root, "--cache", "off"]);
     expect(unsupportedMember).toMatchObject({ stdout: "", exitCode: 1 });
     expect(unsupportedMember.stderr).toContain(
       "Member implementation lookup requires a proven interface or trait relationship.",

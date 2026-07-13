@@ -157,6 +157,7 @@ codegraph supertypes 'symbol:src/worker.ts:Worker:12:14' --depth 3 --pretty
 codegraph subtypes 'symbol:src/service.ts:Service:4:18' --depth 3 --limit 100 --json
 codegraph implementations 'symbol:src/service.ts:run:5:3' --limit 100 --json
 codegraph rename-preview 'symbol:src/Service.ts:Service:1:14' RenamedService --include-filenames --json
+codegraph refactor-plan 'symbol:src/Service.ts:Service:1:14' --rename RenamedService --max-references 200 --pretty
 codegraph explain src/review.ts --json
 codegraph packet get src/cli.ts --pretty
 # Read a live file; JSON is the default
@@ -187,6 +188,10 @@ JSON is the default and includes the shared semantic envelope, exact project-rel
 `rename-preview` accepts a portable symbol handle and new identifier. Optional `--include-comments` and `--include-strings` add low-confidence textual edits; `--include-filenames` requests a suggestion for an eligible exported class, interface, or type whose filename matches its name, and `--max-edits <1-10000>` bounds returned edits.
 
 JSON is the default and reports exact project-relative edits, conflicts, unsafe sites, candidate tests, freshness, provenance, and omissions. A limited or conflicting result has `safe: false`; filename results are suggestions only, the command never changes files, and no apply command exists.
+
+`refactor-plan` accepts a portable handle from `symbols` or `search`, or an exact internal changed-symbol handle from review or impact output. It composes the target definition, references, direct callers and callees, type relationships, implementations, candidate tests, omissions, and copyable follow-ups from one snapshot; `--include-source` opts reference context into JSON.
+
+Use optional `--rename <new-name>` to include the authoritative nested rename preview. `--max-references`, `--max-callers`, and `--max-hierarchy` are independent `0-500` bounds; JSON is the default, `--pretty` summarizes counts and safety, and neither mode changes source or exposes an apply command.
 
 # Explain a file, symbol, SQL object, or search result handle
 codegraph explain src/auth.ts --json

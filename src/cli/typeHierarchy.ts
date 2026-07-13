@@ -7,11 +7,7 @@ import {
 } from "../agent/typeHierarchy.js";
 import type { SemanticSymbol } from "../agent/semantic.js";
 import type { CliAgentCommandContext } from "./context.js";
-import {
-  IMPLEMENTATIONS_HELP_TEXT,
-  SUBTYPES_HELP_TEXT,
-  SUPERTYPES_HELP_TEXT,
-} from "./help.js";
+import { IMPLEMENTATIONS_HELP_TEXT, SUBTYPES_HELP_TEXT, SUPERTYPES_HELP_TEXT } from "./help.js";
 import { parseBoundedIntegerOption } from "./options.js";
 
 export type TypeHierarchyCommandContext = CliAgentCommandContext;
@@ -74,11 +70,7 @@ export async function handleTypeHierarchyCommand(
   }
 }
 
-function writeResponse<T>(
-  context: TypeHierarchyCommandContext,
-  response: T,
-  format: (value: T) => string,
-): void {
+function writeResponse<T>(context: TypeHierarchyCommandContext, response: T, format: (value: T) => string): void {
   if (context.hasFlag("--json") || !context.hasFlag("--pretty")) {
     context.writeJSONLine(response);
     return;

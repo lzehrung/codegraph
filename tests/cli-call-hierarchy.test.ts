@@ -76,17 +76,7 @@ describe("call hierarchy CLI", () => {
 
   it("renders concise pretty transitive callees and recursive calls", async () => {
     const outer = await symbolHandle("outer");
-    const callees = await captureCli([
-      "callees",
-      outer,
-      "--root",
-      root,
-      "--cache",
-      "off",
-      "--depth",
-      "2",
-      "--pretty",
-    ]);
+    const callees = await captureCli(["callees", outer, "--root", root, "--cache", "off", "--depth", "2", "--pretty"]);
     expect(callees).toMatchObject({ stderr: "", exitCode: undefined });
     expect(callees.stdout).toContain("Target: outer [function] calls.ts:3:");
     expect(callees.stdout).toContain("Callees: 2");

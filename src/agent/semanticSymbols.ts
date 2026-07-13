@@ -11,15 +11,15 @@ export type ResolvedSemanticSymbol = {
   def: SymbolDef;
 };
 
-export function resolveSemanticSymbol(
-  snapshot: AgentProjectSnapshot,
-  handle: string,
-): ResolvedSemanticSymbol | null {
+export function resolveSemanticSymbol(snapshot: AgentProjectSnapshot, handle: string): ResolvedSemanticSymbol | null {
+  const lookup = buildSymbolLookup(snapshot);
+  const indexedDefinition = lookup.defById.get(handle);
+  if (indexedDefinition) return { id: handle, def: indexedDefinition };
+
   const parsed = parseAgentSymbolHandle(handle);
   if (!parsed) return null;
   const file = resolveAgentSnapshotFile(snapshot, parsed.file);
   if (!file) return null;
-  const lookup = buildSymbolLookup(snapshot);
   for (const [id, def] of lookup.defById) {
     if (def.file.replace(/\\/g, "/") !== file) continue;
     if (def.localName !== parsed.name) continue;

@@ -35,38 +35,14 @@ nativeDescribe("call hierarchy language parity", () => {
     const root = await mkTmpDir("cg-call-parity-");
     roots.push(root);
     const fixtures: Record<string, string> = {
-      "calls.ts": [
-        "function tsCallee(): void {}",
-        "function tsCaller(): void { tsCallee(); }",
-      ].join("\n"),
-      "Calls.java": [
-        "class Calls {",
-        "  void javaCallee() {}",
-        "  void javaCaller() { javaCallee(); }",
-        "}",
-      ].join("\n"),
-      "Calls.cs": [
-        "class Calls {",
-        "  void CsCallee() {}",
-        "  void CsCaller() { CsCallee(); }",
-        "}",
-      ].join("\n"),
-      "calls.go": [
-        "package calls",
-        "func goCallee() {}",
-        "func goCaller() { goCallee() }",
-      ].join("\n"),
-      "calls.rs": [
-        "fn rust_callee() {}",
-        "fn rust_caller() { rust_callee(); }",
-      ].join("\n"),
-      "calls.rb": [
-        "def ruby_callee",
-        "end",
-        "def ruby_caller",
-        "  ruby_callee()",
-        "end",
-      ].join("\n"),
+      "calls.ts": ["function tsCallee(): void {}", "function tsCaller(): void { tsCallee(); }"].join("\n"),
+      "Calls.java": ["class Calls {", "  void javaCallee() {}", "  void javaCaller() { javaCallee(); }", "}"].join(
+        "\n",
+      ),
+      "Calls.cs": ["class Calls {", "  void CsCallee() {}", "  void CsCaller() { CsCallee(); }", "}"].join("\n"),
+      "calls.go": ["package calls", "func goCallee() {}", "func goCaller() { goCallee() }"].join("\n"),
+      "calls.rs": ["fn rust_callee() {}", "fn rust_caller() { rust_callee(); }"].join("\n"),
+      "calls.rb": ["def ruby_callee", "end", "def ruby_caller", "  ruby_callee()", "end"].join("\n"),
       "Calls.svelte": [
         "<script>",
         "function svelteCallee() {}",

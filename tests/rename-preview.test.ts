@@ -195,8 +195,7 @@ describe("rename preview", () => {
     });
     expect(result.safe).toBe(true);
     expect(result.edits.filter((edit) => edit.kind === "definition").map((edit) => edit.range.start.line)).toEqual([
-      1,
-      2,
+      1, 2,
     ]);
     expect(result.edits.some((edit) => edit.range.start.line === 3)).toBe(false);
   });
@@ -211,6 +210,20 @@ describe("rename preview", () => {
     expect(result.safe).toBe(false);
     expect(result.conflicts).toContainEqual(expect.objectContaining({ reason: "invalid_identifier" }));
   });
+
+  it("accepts a valid non-ASCII identifier without weakening exact edit checks", async () => {
+    const { root, session, target } = await renameFixture();
+    const result = await previewRenameWithSession(session, {
+      root,
+      handle: target.handle,
+      newName: "servicio\u00c9",
+    });
+
+    expect(result.safe).toBe(true);
+    expect(result.conflicts).toEqual([]);
+    expect(result.edits.every((edit) => edit.newText === "servicio\u00c9")).toBe(true);
+  });
+
   it("renames proven re-export sites and downstream imports", async () => {
     const root = await mkTmpDir("cg-rename-reexport-");
     await fsp.writeFile(path.join(root, "service.ts"), "export function service(): number { return 1; }\n");
@@ -407,15 +420,35 @@ describe("rename preview", () => {
     expect(result.unsafeSites).toContainEqual(expect.objectContaining({ reason: "sensitive_file" }));
   });
 
+  it("refuses source aliases whose real path is generated output", async () => {
+    const root = await mkTmpDir("cg-rename-generated-alias-");
+    const generatedDirectory = path.join(root, "generated");
+    const generatedFile = path.join(generatedDirectory, "service.ts");
+    await fsp.mkdir(generatedDirectory);
+    await fsp.writeFile(generatedFile, "export function service(): number { return 1; }\n");
+    const aliasFile = path.join(root, "service.ts");
+    await fsp.symlink(generatedFile, aliasFile);
+    const snapshot = await renameSnapshotForFiles(root, [aliasFile]);
+    const symbols = await workspaceSymbolsInSnapshot(snapshot, { query: "service" });
+    expect(symbols.symbols[0]).toBeDefined();
+
+    const result = await previewRenameInSnapshot(snapshot, {
+      root,
+      handle: symbols.symbols[0]!.handle,
+      newName: "renamedService",
+    });
+
+    expect(result.safe).toBe(false);
+    expect(result.edits).toEqual([]);
+    expect(result.unsafeSites).toContainEqual(expect.objectContaining({ reason: "generated_file" }));
+  });
+
   it("handles malformed UTF-8 source without throwing or escaping project-relative output", async () => {
     const root = await mkTmpDir("cg-rename-utf8-");
     const file = path.join(root, "service.ts");
     await fsp.writeFile(
       file,
-      Buffer.concat([
-        Buffer.from("export function service(): number { return 1; }\n"),
-        Buffer.from([0xc3, 0x28]),
-      ]),
+      Buffer.concat([Buffer.from("export function service(): number { return 1; }\n"), Buffer.from([0xc3, 0x28])]),
     );
     const session = createAgentSession({ root, freshness: { policy: "check" } });
     const symbols = await workspaceSymbolsWithSession(session, { root, query: "service" });
@@ -429,5 +462,58 @@ describe("rename preview", () => {
 
     expect(result.target.location.file).toBe("service.ts");
     expect(result.edits.every((edit) => !path.isAbsolute(edit.file))).toBe(true);
+    expect(result.safe).toBe(false);
+    expect(result.edits).toEqual([]);
+    expect(result.unsafeSites).toContainEqual(expect.objectContaining({ reason: "unsupported_syntax" }));
+  });
+
+  it("treats NUL-containing source as binary and never returns editable ranges", async () => {
+    const root = await mkTmpDir("cg-rename-binary-");
+    const file = path.join(root, "service.ts");
+    await fsp.writeFile(
+      file,
+      Buffer.concat([Buffer.from("export function service(): number { return 1; }\n"), Buffer.from([0])]),
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    const symbols = await workspaceSymbolsWithSession(session, { root, query: "service" });
+    expect(symbols.symbols[0]).toBeDefined();
+
+    const result = await previewRenameWithSession(session, {
+      root,
+      handle: symbols.symbols[0]!.handle,
+      newName: "renamedService",
+    });
+
+    expect(result.safe).toBe(false);
+    expect(result.edits).toEqual([]);
+    expect(result.unsafeSites).toContainEqual(expect.objectContaining({ reason: "unsupported_syntax" }));
+  });
+
+  it("marks candidate-test truncation unsafe and reports the omission", async () => {
+    const root = await mkTmpDir("cg-rename-test-limit-");
+    await fsp.writeFile(path.join(root, "service.ts"), "export function service(): number { return 1; }\n");
+    await Promise.all(
+      Array.from({ length: 105 }, async (_, index) => {
+        const suffix = String(index).padStart(3, "0");
+        await fsp.writeFile(
+          path.join(root, `candidate-${suffix}.test.ts`),
+          'import { service } from "./service.js";\nservice();\n',
+        );
+      }),
+    );
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    const symbols = await workspaceSymbolsWithSession(session, { root, query: "service", exportedOnly: true });
+    expect(symbols.symbols[0]).toBeDefined();
+
+    const result = await previewRenameWithSession(session, {
+      root,
+      handle: symbols.symbols[0]!.handle,
+      newName: "renamedService",
+    });
+
+    expect(result.safe).toBe(false);
+    expect(result.candidateTests).toHaveLength(100);
+    expect(result.omittedCounts.candidateTests).toBeGreaterThan(0);
+    expect(result.unsafeSites).toContainEqual(expect.objectContaining({ reason: "limit_exceeded" }));
   });
 });

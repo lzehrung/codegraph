@@ -2,11 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  tool_findImplementations,
-  tool_findSubtypes,
-  tool_findSupertypes,
-} from "../src/agent-tools.js";
+import { tool_findImplementations, tool_findSubtypes, tool_findSupertypes } from "../src/agent-tools.js";
 import { createAgentSession } from "../src/agent/session.js";
 import { workspaceSymbolsInSnapshot } from "../src/agent/workspaceSymbols.js";
 
@@ -42,7 +38,11 @@ describe("type hierarchy agent tools", () => {
     const session = createAgentSession({ root, buildOptions: { cache: "off" }, freshness: { policy: "manual" } });
 
     const subtypes = await tool_findSubtypes(root, { handle: baseHandle }, { session });
-    const supertypes = await tool_findSupertypes(root, { handle: subtypes.relations[0]!.type.handle, depth: 2 }, { session });
+    const supertypes = await tool_findSupertypes(
+      root,
+      { handle: subtypes.relations[0]!.type.handle, depth: 2 },
+      { session },
+    );
     const implementations = await tool_findImplementations(root, { handle: serviceHandle }, { session });
 
     expect(subtypes.relations.map((entry) => entry.type.name)).toEqual(["Worker"]);

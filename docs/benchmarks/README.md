@@ -20,6 +20,12 @@ npm run bench:docs
 
 This command rebuilds stale `dist` output when needed, runs every scenario and both variants serially, requires complete anchor evidence, rewrites `results.example.json` and the generated table below, and prints the median table. The fixtures are local and the run makes no network requests.
 
+### Focused semantic regression fixture
+
+`tests/refactor-plan-performance.test.ts` uses the deterministic TypeScript fixture under `tests/fixtures/refactor-plan-performance`. It records runtime metadata, operation samples for exact workspace lookup, direct and depth-3 calls, hierarchy and implementations, rename preview at 10, 100, and 1000 references, repeated warm plans, and hierarchy-index peak RSS.
+
+The test asserts result structure, one-session and adjacency-cache behavior, plus deliberately generous environment-scoped time and memory ceilings. It is a regression guard, is not part of the checked comparison table below, and does not establish universal latency or scale claims.
+
 ## Workflows and metrics
 
 Each checked scenario in [`scenarios.json`](./scenarios.json) defines a local fixture, a task, ordered expected anchors, and the exact steps for both variants. The scenarios cover TypeScript request paths, Python imports, SQL migration and application coupling, and Markdown-to-TypeScript request paths.

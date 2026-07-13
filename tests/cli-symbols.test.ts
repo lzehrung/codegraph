@@ -75,7 +75,11 @@ describe("symbols CLI", () => {
     if (!isPlainRecord(filteredJson)) throw new Error("filtered symbols response was not an object");
     expect(filteredJson).toMatchObject({ limits: { symbols: 1 }, omittedCounts: { symbols: 0 } });
     expect(filteredJson.symbols).toEqual([
-      expect.objectContaining({ name: "Service", kind: "class", location: { file: "src/service.ts", range: expect.any(Object) } }),
+      expect.objectContaining({
+        name: "Service",
+        kind: "class",
+        location: { file: "src/service.ts", range: expect.any(Object) },
+      }),
     ]);
 
     const imports = await captureCli([
@@ -92,7 +96,11 @@ describe("symbols CLI", () => {
     expect(isPlainRecord(importsJson)).toBe(true);
     if (!isPlainRecord(importsJson)) throw new Error("import symbols response was not an object");
     expect(importsJson.symbols).toEqual([
-      expect.objectContaining({ name: "LocalService", kind: "import", location: { file: "src/consumer.ts", range: expect.any(Object) } }),
+      expect.objectContaining({
+        name: "LocalService",
+        kind: "import",
+        location: { file: "src/consumer.ts", range: expect.any(Object) },
+      }),
     ]);
   });
 

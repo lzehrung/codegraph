@@ -81,10 +81,7 @@ export {
   workspaceSymbolsInSnapshot,
   workspaceSymbolsWithSession,
 } from "./agent/workspaceSymbols.js";
-export type {
-  AgentWorkspaceSymbolsRequest,
-  WorkspaceSymbolsResponse,
-} from "./agent/workspaceSymbols.js";
+export type { AgentWorkspaceSymbolsRequest, WorkspaceSymbolsResponse } from "./agent/workspaceSymbols.js";
 export {
   findImplementations,
   findImplementationsWithSession,
@@ -100,22 +97,9 @@ export type {
   TypeHierarchyRequest,
   TypeHierarchyResponse,
 } from "./agent/typeHierarchy.js";
-export {
-  findCallees,
-  findCalleesWithSession,
-  findCallers,
-  findCallersWithSession,
-} from "./agent/callHierarchy.js";
-export type {
-  CallHierarchyEntry,
-  CallHierarchyRequest,
-  CallHierarchyResponse,
-} from "./agent/callHierarchy.js";
-export {
-  previewRename,
-  previewRenameInSnapshot,
-  previewRenameWithSession,
-} from "./agent/renamePreview.js";
+export { findCallees, findCalleesWithSession, findCallers, findCallersWithSession } from "./agent/callHierarchy.js";
+export type { CallHierarchyEntry, CallHierarchyRequest, CallHierarchyResponse } from "./agent/callHierarchy.js";
+export { previewRename, previewRenameInSnapshot, previewRenameWithSession } from "./agent/renamePreview.js";
 export type {
   RenameCandidateTest,
   RenameConflict,
@@ -126,6 +110,8 @@ export type {
   RenamePreviewResponse,
   RenameUnsafeSite,
 } from "./agent/renamePreview.js";
+export { buildRefactorPlan, buildRefactorPlanInSnapshot, buildRefactorPlanWithSession } from "./agent/refactorPlan.js";
+export type { RefactorPlanRequest, RefactorPlanResponse } from "./agent/refactorPlan.js";
 
 export type {
   SemanticLocation,

@@ -21,6 +21,7 @@ describe("Circular re-exports resolution", () => {
     const index = await buildProjectIndex(root);
     const Cfile = C.replace(/\\/g, "/");
     const hit = resolveExport(index, Cfile, "foo2");
+    expect(resolveExport(index, Cfile, "foo")).toBeNull();
     expect(hit).not.toBeNull();
     if (hit) {
       expect(hit.def.file.replace(/\\/g, "/")).toBe(A.replace(/\\/g, "/"));

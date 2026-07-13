@@ -139,7 +139,6 @@ export {
   type CallHierarchyMatch,
   type CallHierarchyResult as IndexCallHierarchyResult,
   type CallHierarchySite,
-
   parseFile,
   collectLocalsAndExportsFromSource,
   collectImportsForFile,
@@ -311,10 +310,7 @@ export {
   workspaceSymbolsInSnapshot,
   workspaceSymbolsWithSession,
 } from "./agent/workspaceSymbols.js";
-export type {
-  AgentWorkspaceSymbolsRequest,
-  WorkspaceSymbolsResponse,
-} from "./agent/workspaceSymbols.js";
+export type { AgentWorkspaceSymbolsRequest, WorkspaceSymbolsResponse } from "./agent/workspaceSymbols.js";
 
 /** Proven type hierarchy and implementation lookup by portable symbol handle. */
 export {
@@ -334,23 +330,10 @@ export type {
 } from "./agent/typeHierarchy.js";
 
 /** Proven caller and callee lookup by portable symbol handle. */
-export {
-  findCallees,
-  findCalleesWithSession,
-  findCallers,
-  findCallersWithSession,
-} from "./agent/callHierarchy.js";
-export type {
-  CallHierarchyEntry,
-  CallHierarchyRequest,
-  CallHierarchyResponse,
-} from "./agent/callHierarchy.js";
+export { findCallees, findCalleesWithSession, findCallers, findCallersWithSession } from "./agent/callHierarchy.js";
+export type { CallHierarchyEntry, CallHierarchyRequest, CallHierarchyResponse } from "./agent/callHierarchy.js";
 /** Read-only semantic rename planning by portable symbol handle. */
-export {
-  previewRename,
-  previewRenameInSnapshot,
-  previewRenameWithSession,
-} from "./agent/renamePreview.js";
+export { previewRename, previewRenameInSnapshot, previewRenameWithSession } from "./agent/renamePreview.js";
 export type {
   RenameCandidateTest,
   RenameConflict,
@@ -361,6 +344,9 @@ export type {
   RenamePreviewResponse,
   RenameUnsafeSite,
 } from "./agent/renamePreview.js";
+/** Read-only refactor evidence packet composed from one semantic snapshot. */
+export { buildRefactorPlan, buildRefactorPlanInSnapshot, buildRefactorPlanWithSession } from "./agent/refactorPlan.js";
+export type { RefactorPlanRequest, RefactorPlanResponse } from "./agent/refactorPlan.js";
 
 export type {
   SemanticLocation,
@@ -425,6 +411,7 @@ export {
   tool_findCallees,
   tool_findCallers,
   tool_previewRename,
+  tool_buildRefactorPlan,
   type ToolFileOverview,
   type ToolFileOverviewImport,
   type ToolFileOverviewDefinition,
@@ -436,6 +423,7 @@ export {
   type ToolTypeHierarchyRuntimeOptions,
   type ToolCallHierarchyRuntimeOptions,
   type ToolRenamePreviewRuntimeOptions,
+  type ToolRefactorPlanRuntimeOptions,
 } from "./agent-tools.js";
 
 /** SQLite graph persistence and query helpers. */

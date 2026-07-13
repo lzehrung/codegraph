@@ -54,6 +54,12 @@ import {
   type RenamePreviewRequest,
   type RenamePreviewResponse,
 } from "./agent/renamePreview.js";
+import {
+  buildRefactorPlan,
+  buildRefactorPlanWithSession,
+  type RefactorPlanRequest,
+  type RefactorPlanResponse,
+} from "./agent/refactorPlan.js";
 
 type ToolRuntimeOptions = {
   index?: ProjectIndex;
@@ -444,6 +450,34 @@ export async function tool_previewRename(
   };
   if (runtimeOptions.session) return await previewRenameWithSession(runtimeOptions.session, agentRequest);
   return await previewRename(agentRequest);
+}
+
+/** Optional warm-session or build configuration for `tool_buildRefactorPlan`. */
+export type ToolRefactorPlanRuntimeOptions = {
+  session?: AgentSession;
+  buildOptions?: BuildOptions;
+};
+
+/**
+ * Builds a read-only refactor evidence packet without changing project files.
+ *
+ * Pass a shared `session` to reuse the caller's loaded project snapshot.
+ */
+export async function tool_buildRefactorPlan(
+  root: string,
+  request: Omit<RefactorPlanRequest, "root" | "buildOptions">,
+  runtimeOptions: ToolRefactorPlanRuntimeOptions = {},
+): Promise<RefactorPlanResponse> {
+  if (runtimeOptions.session && runtimeOptions.buildOptions) {
+    throw new Error("Refactor plan tool options cannot combine a prebuilt session with buildOptions.");
+  }
+  const agentRequest: RefactorPlanRequest = {
+    root,
+    ...request,
+    ...(runtimeOptions.buildOptions ? { buildOptions: runtimeOptions.buildOptions } : {}),
+  };
+  if (runtimeOptions.session) return await buildRefactorPlanWithSession(runtimeOptions.session, agentRequest);
+  return await buildRefactorPlan(agentRequest);
 }
 
 /**

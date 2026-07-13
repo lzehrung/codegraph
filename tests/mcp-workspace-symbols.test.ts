@@ -4,11 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createAgentSession, type AgentSession } from "../src/agent/session.js";
 import { SymbolKind } from "../src/indexer/types.js";
-import {
-  createCodegraphMcpHandlers,
-  listCodegraphMcpTools,
-  startCodegraphMcpHttpServer,
-} from "../src/mcp/server.js";
+import { createCodegraphMcpHandlers, listCodegraphMcpTools, startCodegraphMcpHttpServer } from "../src/mcp/server.js";
 import { isPlainRecord } from "../src/util/guards.js";
 import { countingSession } from "./helpers/agent.js";
 
@@ -88,7 +84,11 @@ describe("workspace_symbols MCP tool", () => {
     expect(response.freshness).toEqual({ state: "refreshed", changedFiles: ["src/service.ts"] });
     expect(response.limits.symbols).toBe(500);
     expect(response.symbols).toEqual([
-      expect.objectContaining({ name: "Service", kind: "class", location: { file: "src/service.ts", range: expect.any(Object) } }),
+      expect.objectContaining({
+        name: "Service",
+        kind: "class",
+        location: { file: "src/service.ts", range: expect.any(Object) },
+      }),
     ]);
   });
 

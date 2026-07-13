@@ -6,10 +6,7 @@ import {
   MAX_FILE_VIEW_BYTES,
   MAX_FILE_VIEW_LINES,
 } from "../agent/fileView.js";
-import {
-  DEFAULT_WORKSPACE_SYMBOL_LIMIT,
-  MAX_WORKSPACE_SYMBOL_LIMIT,
-} from "../indexer/workspace-symbols.js";
+import { DEFAULT_WORKSPACE_SYMBOL_LIMIT, MAX_WORKSPACE_SYMBOL_LIMIT } from "../indexer/workspace-symbols.js";
 import { SymbolKind } from "../indexer/types.js";
 
 import { DEFAULT_SQLITE_ROW_LIMIT, MAX_SQLITE_ROW_LIMIT } from "./sqliteGuard.js";
@@ -18,6 +15,7 @@ export const DEFAULT_MCP_COLLECTION_LIMIT = 100;
 export const DEFAULT_RENAME_PREVIEW_EDITS = 5_000;
 export const MAX_RENAME_PREVIEW_EDITS = 10_000;
 export const MAX_MCP_COLLECTION_LIMIT = 500;
+export const MAX_REFACTOR_PLAN_LIMIT = 500;
 export const DEFAULT_TYPE_HIERARCHY_LIMIT = 100;
 export const MAX_TYPE_HIERARCHY_LIMIT = 500;
 export const MAX_TYPE_HIERARCHY_DEPTH = 10;
@@ -137,6 +135,22 @@ export const MCP_TOOLS: Tool[] = [
         },
       },
       ["handle", "newName"],
+    ),
+  },
+  {
+    name: "refactor_plan",
+    description:
+      "Build a read-only refactor evidence packet by symbol handle from one snapshot. Optional rename evidence is authoritative and no apply tool exists.",
+    inputSchema: objectSchema(
+      {
+        handle: stringProperty,
+        renameTo: stringProperty,
+        maxReferences: { type: "integer", minimum: 0, maximum: MAX_REFACTOR_PLAN_LIMIT },
+        maxCallers: { type: "integer", minimum: 0, maximum: MAX_REFACTOR_PLAN_LIMIT },
+        maxHierarchy: { type: "integer", minimum: 0, maximum: MAX_REFACTOR_PLAN_LIMIT },
+        includeSource: booleanProperty,
+      },
+      ["handle"],
     ),
   },
   {

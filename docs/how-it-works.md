@@ -70,6 +70,10 @@ Rename preview resolves the target handle through the same semantic index, colle
 
 The operation only returns a plan. Filename matches are suggestions, and the library, CLI, agent-tool, and MCP surfaces never write or expose an apply command.
 
+Refactor planning resolves either a portable search/workspace-symbol handle or an exact internal review/impact symbol handle, then composes references, direct calls, hierarchy, implementations, candidate tests, and follow-ups from one loaded snapshot and freshness decision. Each section is bounded independently, omissions remain explicit, and internal input identities are normalized to portable target handles in output.
+
+An optional rename uses the same snapshot and preserves the nested rename preview without weakening `rename.safe`. Refactor planning is evidence composition rather than compiler-grade transformation: unsupported dispatch, unresolved external symbols, stale evidence, conflicts, and truncation remain limitations or safety blockers.
+
 The result limit is applied after ranking, so omission counts describe matching candidates rather than pre-filter truncation. Agent, CLI, and MCP surfaces then normalize paths and qualified names to the project root and attach portable handles, exact locations, analysis, freshness, and provenance.
 
 Impact analysis maps diff hunks to changed symbols, follows resolved references and reverse dependencies, and ranks the affected files. Review and agent-facing commands build on that evidence, adding bounded snippets or related findings as requested. Call compatibility is deliberately narrower than type checking: it reports high-confidence arity mismatches for resolved callable changes, not overload, dispatch, macro, or data-flow conclusions.

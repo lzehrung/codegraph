@@ -33,7 +33,13 @@ describe("type hierarchy", () => {
     const result = findTypeHierarchy(graph, specialized!.id, "super", { depth: 3, limit: 10 });
     expect(result.status).toBe("ok");
     if (result.status !== "ok") return;
-    expect(result.relations.map((relation) => [byName.get(graph.nodes.get(relation.targetId)!.name)?.name, relation.relation, relation.depth])).toEqual([
+    expect(
+      result.relations.map((relation) => [
+        byName.get(graph.nodes.get(relation.targetId)!.name)?.name,
+        relation.relation,
+        relation.depth,
+      ]),
+    ).toEqual([
       ["Worker", "extends", 1],
       ["Base", "extends", 2],
       ["Service", "implements", 2],
@@ -86,6 +92,8 @@ describe("type hierarchy", () => {
     );
     expect(implementationNames).toEqual(["run"]);
     expect(memberResult.implementations.map((entry) => graph.nodes.get(entry.symbolId)?.name)).toEqual(["Worker"]);
-    expect(memberResult.implementations.some((entry) => graph.nodes.get(entry.symbolId)?.name === "Unrelated")).toBe(false);
+    expect(memberResult.implementations.some((entry) => graph.nodes.get(entry.symbolId)?.name === "Unrelated")).toBe(
+      false,
+    );
   });
 });

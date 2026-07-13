@@ -1,7 +1,4 @@
-import {
-  formatWorkspaceSymbolsResponse,
-  workspaceSymbols,
-} from "../agent/workspaceSymbols.js";
+import { formatWorkspaceSymbolsResponse, workspaceSymbols } from "../agent/workspaceSymbols.js";
 import { SymbolKind } from "../indexer/types.js";
 import type { CliAgentCommandContext } from "./context.js";
 import { SYMBOLS_HELP_TEXT } from "./help.js";
@@ -10,9 +7,10 @@ import { parseBoundedIntegerOption } from "./options.js";
 export type SymbolsCommandContext = CliAgentCommandContext;
 
 const WORKSPACE_SYMBOL_KIND_VALUES: SymbolKind[] = Object.values(SymbolKind);
+const WORKSPACE_SYMBOL_KIND_VALUE_SET: ReadonlySet<string> = new Set(WORKSPACE_SYMBOL_KIND_VALUES);
 
 function isWorkspaceSymbolKind(value: string): value is SymbolKind {
-  return WORKSPACE_SYMBOL_KIND_VALUES.some((kind) => kind === value);
+  return WORKSPACE_SYMBOL_KIND_VALUE_SET.has(value);
 }
 
 function parseWorkspaceSymbolKinds(rawValue: string | undefined): SymbolKind[] | undefined {

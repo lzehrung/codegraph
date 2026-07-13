@@ -84,7 +84,6 @@ export function collectDetailedDeclarations(
     return containing[0] ?? candidates[0];
   };
 
-
   const walk = (node: SyntaxNodeLike): void => {
     if (functionNodeTypes.has(node.type)) {
       const nameNode = node.childForFieldName("name") ?? node.childForFieldName("type");

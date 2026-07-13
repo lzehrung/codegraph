@@ -178,6 +178,29 @@ const preview = await previewRenameWithSession(session, {
 
 `tool_previewRename(root, request, runtimeOptions)` accepts either a shared `AgentSession` or build options, but not both, and returns the shared response unchanged. All rename-preview entry points are read-only: eligible exported class, interface, and type filenames produce suggestions only, project files are never changed, and no apply API exists.
 
+## Refactor evidence plans
+
+The root and `@lzehrung/codegraph/agent` entry points export `buildRefactorPlan`, `buildRefactorPlanWithSession`, and `buildRefactorPlanInSnapshot`, plus `RefactorPlanRequest` and `RefactorPlanResponse`. A request accepts `root`, a portable search or workspace-symbol handle or exact internal review/impact symbol handle, optional `renameTo`, independent `maxReferences`, `maxCallers`, and `maxHierarchy` bounds from 0 to 500, optional `includeSource`, and optional standalone `buildOptions`.
+
+```ts
+import { buildRefactorPlanWithSession, createAgentSession } from "@lzehrung/codegraph";
+
+const root = process.cwd();
+const session = createAgentSession({ root });
+const plan = await buildRefactorPlanWithSession(session, {
+  root,
+  handle: "symbol:src/Service.ts:Service:1:14",
+  renameTo: "RenamedService",
+  maxReferences: 200,
+  maxCallers: 100,
+  maxHierarchy: 100,
+});
+```
+
+One session load and freshness decision feed the target, definition, references, callers, callees, supertypes, subtypes, implementations, candidate tests, and follow-ups. Internal input handles are normalized to a portable target handle; when present, nested `plan.rename.safe` remains the authoritative read-only rename decision.
+
+`tool_buildRefactorPlan(root, request, runtimeOptions)` accepts either a shared `AgentSession` or build options, but not both. Every entry point returns evidence only, never writes source, and exposes no apply API.
+
 ## Live file views
 
 `getCodegraphFileView()` reads a confined project file directly from disk. `getCodegraphFileViewWithSession()` accepts an existing `AgentSession` for optional graph reuse, and `formatAgentFileViewResponse()` renders the same response as stable pretty text.

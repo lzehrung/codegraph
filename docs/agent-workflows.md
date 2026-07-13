@@ -117,6 +117,21 @@ Treat `safe: false`, conflicts, unsafe sites, and omitted edits as blockers rath
 
 Repeated library calls should use `previewRenameWithSession` or `tool_previewRename` with one caller-owned `AgentSession`. MCP hosts should use `rename_preview`, which stays available in read-only mode and reuses the server session.
 
+## Search or review handoff to a refactor plan
+
+Keep the exact symbol handle returned by search or the changed-symbol handle returned by review or impact, then pass it directly to `refactor-plan`:
+
+```bash
+codegraph search "service dispatch" --mode symbol --json
+codegraph refactor-plan "<exact-handle-from-search>" --max-references 200 --pretty
+
+codegraph review --base HEAD --head WORKTREE --json
+codegraph refactor-plan "<exact-changed-symbol-handle-from-review>" --rename RenamedService --json
+```
+
+The packet reuses one snapshot and freshness decision for references, direct calls, hierarchy, implementations, candidate tests, and follow-ups. Review and impact may expose internal symbol handles, but the packet returns a portable target handle and uses it in copyable commands.
+
+Treat nested `rename.safe` as authoritative when `--rename` is present. Limits are independent, omissions remain explicit, source context is opt-in with `--include-source`, and refactor planning never writes or exposes an apply action.
 
 ## Search anchors
 

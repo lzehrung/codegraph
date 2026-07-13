@@ -41,6 +41,7 @@ The server exposes the same bounded primitives as the CLI and library session la
 - `search`: deterministic ranked search across paths, symbols, chunks, SQL objects, and graph context.
 - `workspace_symbols`: deterministic symbol-identity lookup with exact locations and composable filters; use `search` for hybrid path, prose, SQL, snippet, or graph evidence.
 - `rename_preview`: read-only semantic rename planning by portable symbol handle; filename results are suggestions only and no apply tool exists.
+- `refactor_plan`: one-snapshot refactor evidence packet by search, workspace-symbol, review, or impact handle; optional rename evidence stays read-only and authoritative.
 - `callers`, `callees`: grouped semantic callers or callees plus exact callsites by portable symbol handle; use `refs` for all references and `deps` for file dependencies.
 - `supertypes`, `subtypes`: proven type relationships by portable symbol handle, with bounded traversal depth.
 - `implementations`: proven type or supported interface/trait-member implementations without same-name inference.
@@ -71,6 +72,12 @@ Exact qualified identities such as `src/session.ts::CodeReviewSession` rank befo
 Call `rename_preview` with flat fields `handle`, `newName`, and optional `includeComments`, `includeStrings`, `includeFilenames`, and `maxEdits`. The edit limit defaults to 5000 and caps at 10000; comment and string candidates are opt-in, while filename suggestions require an eligible exported class, interface, or type whose filename matches its name.
 
 Responses contain exact project-relative edits, conflicts, unsafe sites, filename suggestions, candidate tests, provenance, freshness, and omissions. The tool reuses the server session, remains available in read-only mode, never changes files, and has no apply counterpart.
+
+### Refactor plan
+
+Call `refactor_plan` with flat fields `handle`, optional `renameTo`, independent optional `maxReferences`, `maxCallers`, and `maxHierarchy` values from 0 to 500, and optional `includeSource`. The configured MCP root is reused and cannot be overridden per request.
+
+The tool composes references, direct callers and callees, type relationships, implementations, candidate tests, omissions, and follow-ups from one session snapshot. Exact internal review or impact symbol handles are accepted, while the returned target and commands use a portable handle; when `renameTo` is present, nested `rename.safe` is authoritative and no source write or apply tool exists.
 
 ### Call hierarchy
 

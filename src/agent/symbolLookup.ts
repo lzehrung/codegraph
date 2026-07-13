@@ -8,7 +8,6 @@ export type SymbolLookup = {
 };
 const SYMBOL_LOOKUP_CACHE = new WeakMap<AgentProjectSnapshot, SymbolLookup>();
 
-
 /**
  * Build a lookup of every local symbol definition keyed by stable node id, plus the set of ids
  * that are exported. Shared by the agent explain and search entrypoints.
