@@ -10,6 +10,9 @@ Commands:
   packet        Retrieve bounded evidence packets by file path or stable target
   search        Ranked agent search across files, symbols, chunks, SQL, and graph context
   symbols       Deterministic workspace-symbol lookup with exact locations
+  supertypes    Find proven direct or transitive supertypes by symbol handle
+  subtypes      Find proven direct or transitive subtypes by symbol handle
+  implementations Find proven type or interface-member implementations
   explain       Explain a file, symbol, SQL object, or search handle
   impact        Analyze PR impact
   inspect       Summarize repo structure and recommend next commands
@@ -147,6 +150,7 @@ const knownCliCommands = new Set([
   "install",
   "inspect",
   "mcp",
+  "implementations",
   "orient",
   "packet",
   "path",
@@ -155,6 +159,8 @@ const knownCliCommands = new Set([
   "review",
   "search",
   "symbols",
+  "subtypes",
+  "supertypes",
   "skill",
   "status",
   "sync",
@@ -261,6 +267,36 @@ Matching:
 
 Output:
   JSON includes portable handles, exact declaration ranges, provenance, limits, and omission counts. Pretty output is concise and intended for direct reading.
+
+Index options:
+  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+`;
+
+export const SUPERTYPES_HELP_TEXT = `codegraph supertypes - Find proven supertypes
+
+Usage: codegraph supertypes <symbol-handle> [--root <path>] [--depth <1-10>] [--limit <0-500>] [--json | --pretty]
+
+Returns only currently extracted extends and implements relationships. Results include exact locations, relation depth, provenance, limits, and omissions.
+
+Index options:
+  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+`;
+
+export const SUBTYPES_HELP_TEXT = `codegraph subtypes - Find proven subtypes
+
+Usage: codegraph subtypes <symbol-handle> [--root <path>] [--depth <1-10>] [--limit <0-500>] [--json | --pretty]
+
+Returns only currently extracted extends and implements relationships. Results include exact locations, relation depth, provenance, limits, and omissions.
+
+Index options:
+  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+`;
+
+export const IMPLEMENTATIONS_HELP_TEXT = `codegraph implementations - Find proven implementations
+
+Usage: codegraph implementations <symbol-handle> [--root <path>] [--limit <0-500>] [--json | --pretty]
+
+Type lookup follows extracted hierarchy relationships. Member lookup is supported only for members owned by an interface or trait with proven implementers; unrelated same-name members are never inferred.
 
 Index options:
   Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
@@ -451,6 +487,9 @@ export function helpTextForCommand(command: string, positionals: readonly string
   if (command === "file") return FILE_HELP_TEXT;
   if (command === "search") return SEARCH_HELP_TEXT;
   if (command === "symbols") return SYMBOLS_HELP_TEXT;
+  if (command === "supertypes") return SUPERTYPES_HELP_TEXT;
+  if (command === "subtypes") return SUBTYPES_HELP_TEXT;
+  if (command === "implementations") return IMPLEMENTATIONS_HELP_TEXT;
   if (command === "orient") return ORIENT_HELP_TEXT;
   if (command === "packet") return PACKET_HELP_TEXT;
   if (command === "explain") return EXPLAIN_HELP_TEXT;

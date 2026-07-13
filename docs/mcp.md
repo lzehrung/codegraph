@@ -40,6 +40,8 @@ The server exposes the same bounded primitives as the CLI and library session la
 - `packet_get`: bounded evidence packet by file path, symbol name, SQL object name, or stable target.
 - `search`: deterministic ranked search across paths, symbols, chunks, SQL objects, and graph context.
 - `workspace_symbols`: deterministic symbol-identity lookup with exact locations and composable filters; use `search` for hybrid path, prose, SQL, snippet, or graph evidence.
+- `supertypes`, `subtypes`: proven type relationships by portable symbol handle, with bounded traversal depth.
+- `implementations`: proven type or supported interface/trait-member implementations without same-name inference.
 - `get_file`: bounded project file read with `offset`/`limit` line pagination, exact `number<TAB>line` content, and optional direct graph context.
 - `get_symbol`: resolve a stable search or explain handle.
 - `goto`: definition lookup by file position.
@@ -61,6 +63,14 @@ Tool schemas are flat JSON objects for broad client compatibility; argument comb
 Call `workspace_symbols` with flat fields `query`, optional `kinds`, `exportedOnly`, `includeImports`, `fileGlob`, and `limit`. Imports are excluded by default; `fileGlob` matches project-relative paths, the default limit is 50, and both the schema and handler enforce a maximum of 500.
 
 Exact qualified identities such as `src/session.ts::CodeReviewSession` rank before exact names, prefixes, identifier tokens, and substrings. Responses include analysis and freshness metadata, effective limits, omission counts, total candidates, and deterministic symbols with portable handles, exact ranges, exported status, and provenance.
+
+### Type hierarchy and implementations
+
+Call `supertypes` or `subtypes` with flat fields `handle`, optional `depth`, and optional `limit`. Depth defaults to 1 and caps at 10; the result limit defaults to 100 and caps at 500.
+
+Call `implementations` with `handle` and optional `limit`; it has no depth field. All three tools reuse the server's one session and freshness gate, return exact project-relative symbol locations plus provenance and omissions, and reject stale handles, non-type hierarchy targets, or unsupported member targets with actionable errors.
+
+Only resolved, indexed `extends` and `implements` relationships are returned. Member implementations require an interface or trait owner with a proven implementer; same-name methods, dynamic or structural conformance, and unresolved external bases are not inferred.
 
 ### `get_file`
 

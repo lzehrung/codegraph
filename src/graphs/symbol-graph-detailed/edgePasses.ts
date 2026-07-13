@@ -1,7 +1,7 @@
 import type { ModuleIndex, ProjectIndex, SymbolDef } from "../../indexer/types.js";
 import type { LanguageSupport } from "../../languages.js";
 import type { SyntaxNodeLike } from "../../languages/types.js";
-import { sliceText } from "../../util/ast.js";
+import { sliceText, toRange } from "../../util/ast.js";
 import { getMemberAccessParts } from "../../util/memberAccess.js";
 import { defNodeId, nodeForDef, type SymbolGraph } from "../symbol-graph.js";
 import type { DetailedClassNode, DetailedFunctionNode } from "./ast.js";
@@ -22,7 +22,12 @@ type EdgePassContext = {
   resolveIdentifier: (name: string) => SymbolDef | null;
   resolveExportFrom: (file: string, exportedName: string) => SymbolDef | null;
   resolveMemberChainTarget: (chainNode: SyntaxNodeLike) => SymbolDef | null;
-  recordEdge: (fromId: string, toId: string, label?: string) => boolean;
+  recordEdge: (
+    fromId: string,
+    toId: string,
+    label?: string,
+    site?: SymbolGraph["edges"][number]["site"],
+  ) => boolean;
 };
 
 function ensureNode(context: EdgePassContext, def: SymbolDef): string {
@@ -31,15 +36,26 @@ function ensureNode(context: EdgePassContext, def: SymbolDef): string {
   return id;
 }
 
-function recordDefEdge(context: EdgePassContext, fromId: string, target: SymbolDef, label: string): boolean {
+function recordDefEdge(
+  context: EdgePassContext,
+  fromId: string,
+  target: SymbolDef,
+  label: string,
+  siteNode?: SyntaxNodeLike,
+): boolean {
   const toId = ensureNode(context, target);
-  return context.recordEdge(fromId, toId, label);
+  return context.recordEdge(
+    fromId,
+    toId,
+    label,
+    siteNode ? { file: context.moduleEntry.file, range: toRange(siteNode) } : undefined,
+  );
 }
 
 function tryResolveChain(context: EdgePassContext, node: SyntaxNodeLike, fromId?: string, label = "uses"): boolean {
   const targetDef = context.resolveMemberChainTarget(node);
   if (targetDef && fromId) {
-    recordDefEdge(context, fromId, targetDef, label);
+    recordDefEdge(context, fromId, targetDef, label, node);
     return true;
   }
   return !!targetDef;
@@ -50,7 +66,7 @@ function tryResolveNode(context: EdgePassContext, node: SyntaxNodeLike, fromId: 
     const name = sliceText(node, context.source);
     const target = context.resolveIdentifier(name);
     if (target) {
-      recordDefEdge(context, fromId, target, label);
+      recordDefEdge(context, fromId, target, label, node);
       return;
     }
   }
@@ -137,6 +153,30 @@ export function emitPythonDecoratorEdges(context: EdgePassContext, rootNode: Syn
   addDecoratorUses(rootNode);
 }
 
+export function emitMemberOwnershipEdges(
+  context: EdgePassContext,
+  functionNodes: DetailedFunctionNode[],
+  classNodes: DetailedClassNode[],
+): void {
+  for (const fn of functionNodes) {
+    const owners = classNodes
+      .filter(
+        (candidate) =>
+          candidate.node.startIndex <= fn.node.startIndex &&
+          candidate.node.endIndex >= fn.node.endIndex,
+      )
+      .sort(
+        (left, right) =>
+          left.node.endIndex -
+          left.node.startIndex -
+          (right.node.endIndex - right.node.startIndex),
+      );
+    const owner = owners[0];
+    if (!owner) continue;
+    recordDefEdge(context, ensureNode(context, fn.def), owner.def, "member_of");
+  }
+}
+
 export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: DetailedFunctionNode[]): void {
   const callNodeTypes = new Set<string>(["call_expression", "call", "method_invocation", "invocation_expression"]);
   const newNodeTypes = new Set<string>([
@@ -149,6 +189,17 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
   for (const fn of functionNodes) {
     const fromId = ensureNode(context, fn.def);
     const seenAliases = new Set<string>();
+    const nestedFunctions = new Set(
+      functionNodes
+        .filter(
+          (candidate) =>
+            candidate.node !== fn.node &&
+            candidate.node.startIndex >= fn.node.startIndex &&
+            candidate.node.endIndex <= fn.node.endIndex,
+        )
+        .map((candidate) => candidate.node),
+    );
+
 
     const recordAliasUse = (node: SyntaxNodeLike): void => {
       if (context.membersOnly || !isIdentifierType(context.sup, node.type)) return;
@@ -230,6 +281,7 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
     };
 
     const walkFunctionBody = (node: SyntaxNodeLike, allowCallProcessing: boolean): void => {
+      if (node !== fn.node && nestedFunctions.has(node)) return;
       recordAliasUse(node);
       recordMemberUse(node);
       const allowChildCallProcessing = allowCallProcessing ? recordCallOrInstantiation(node) : false;
@@ -240,7 +292,45 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
   }
 }
 
+function recordIdentifierRelations(
+  context: EdgePassContext,
+  fromId: string,
+  container: SyntaxNodeLike,
+  relationForTarget: (target: SymbolDef, index: number) => "extends" | "implements",
+): void {
+  const identifiers: SyntaxNodeLike[] = [];
+  const collect = (node: SyntaxNodeLike): void => {
+    if (isIdentifierType(context.sup, node.type) || node.type === "type_identifier") {
+      identifiers.push(node);
+      return;
+    }
+    for (const child of node.namedChildren ?? []) collect(child);
+  };
+  collect(container);
+  const seen = new Set<string>();
+  for (const [index, identifier] of identifiers.entries()) {
+    const target = context.resolveIdentifier(sliceText(identifier, context.source));
+    if (!target) continue;
+    const targetId = defNodeId(target);
+    if (seen.has(targetId)) continue;
+    seen.add(targetId);
+    recordDefEdge(context, fromId, target, relationForTarget(target, index), identifier);
+  }
+}
+
 export function emitClassInheritanceEdges(context: EdgePassContext, classNodes: DetailedClassNode[]): void {
+  const interfaceIds = new Set(
+    classNodes
+      .filter(
+        (candidate) =>
+          candidate.node.type === "interface_declaration" ||
+          candidate.node.type === "protocol_declaration" ||
+          candidate.node.type === "trait_item" ||
+          /^(?:interface|protocol|trait)\b/.test(sliceText(candidate.node, context.source).trimStart()),
+      )
+      .map((candidate) => defNodeId(candidate.def)),
+  );
+
   for (const cls of classNodes) {
     const fromId = ensureNode(context, cls.def);
     if (context.sup.id === "java") {
@@ -263,13 +353,42 @@ export function emitClassInheritanceEdges(context: EdgePassContext, classNodes: 
     if (context.sup.id === "csharp") {
       const baseList = findFirstNodeByType(cls.node, "base_list");
       if (baseList) {
-        const names: string[] = [];
-        collectIdentifiers(baseList, context.sup, context.source, names);
-        names.forEach((name, indexWithinList) => {
-          const target = context.resolveIdentifier(name);
-          if (!target) return;
-          recordDefEdge(context, fromId, target, indexWithinList === 0 ? "extends" : "implements");
-        });
+        recordIdentifierRelations(context, fromId, baseList, (target, index) =>
+          interfaceIds.has(defNodeId(target)) || index > 0 ? "implements" : "extends",
+        );
+      }
+      continue;
+    }
+
+    if (context.sup.id === "python") {
+      const bases = cls.node.childForFieldName("superclasses") ?? findFirstNodeByType(cls.node, "argument_list");
+      if (bases) recordIdentifierRelations(context, fromId, bases, () => "extends");
+      continue;
+    }
+
+    if (context.sup.id === "cpp") {
+      const bases = findFirstNodeByType(cls.node, "base_class_clause");
+      if (bases) recordIdentifierRelations(context, fromId, bases, () => "extends");
+      continue;
+    }
+
+    if (context.sup.id === "kotlin") {
+      const bases = findFirstNodeByType(cls.node, "delegation_specifiers");
+      if (bases) {
+        recordIdentifierRelations(context, fromId, bases, (target, index) =>
+          interfaceIds.has(defNodeId(target)) || index > 0 ? "implements" : "extends",
+        );
+      }
+      continue;
+    }
+
+    if (context.sup.id === "swift") {
+      const bases: SyntaxNodeLike[] = [];
+      collectNodesByType(cls.node, "inheritance_specifier", bases);
+      for (const [index, base] of bases.entries()) {
+        recordIdentifierRelations(context, fromId, base, (target) =>
+          interfaceIds.has(defNodeId(target)) || index > 0 ? "implements" : "extends",
+        );
       }
       continue;
     }

@@ -108,6 +108,34 @@ Requests accept `query`, `kinds`, `exportedOnly`, `includeImports`, `fileGlob`, 
 
 For tool hosts, `tool_workspaceSymbols(root, request, runtimeOptions)` accepts an optional warm `AgentSession` or build options, but not both. Shared semantic location, provenance, omission, symbol, and response-envelope types are exported from the root and agent entry points.
 
+## Type hierarchy and implementations
+
+The root and `@lzehrung/codegraph/agent` entry points export `findSupertypes`, `findSubtypes`, `findImplementations`, and their `WithSession` variants. Requests use `root`, a portable symbol `handle`, optional `limit`, optional hierarchy `depth`, and optional standalone `buildOptions`.
+
+```ts
+import { createAgentSession, findSubtypesWithSession, workspaceSymbolsWithSession } from "@lzehrung/codegraph";
+
+const root = process.cwd();
+const session = createAgentSession({ root });
+const matches = await workspaceSymbolsWithSession(session, { root, query: "Service" });
+const service = matches.symbols[0];
+if (service) {
+  const result = await findSubtypesWithSession(session, {
+    root,
+    handle: service.handle,
+    depth: 3,
+    limit: 100,
+  });
+  console.log(result.relations);
+}
+```
+
+Hierarchy depth defaults to 1 and caps at 10; hierarchy and implementation results default to 100 and cap at 500. Responses use the shared semantic envelope with exact project-relative symbols, provenance, effective limits, and omission counts.
+
+The root aliases index-core functions as `queryTypeHierarchy(graph, id, direction, options)` and `queryImplementations(index, graph, id, options)`; `@lzehrung/codegraph/indexer` exports them as `findTypeHierarchy` and `findImplementations`. Tool hosts can use `tool_findSupertypes`, `tool_findSubtypes`, and `tool_findImplementations` with either a warm session or build options, but not both.
+
+Only proven indexed `extends` and `implements` relationships participate. Member implementation lookup requires a member owned by an interface or trait with proven implementers and never infers unrelated same-name methods.
+
 ## Live file views
 
 `getCodegraphFileView()` reads a confined project file directly from disk. `getCodegraphFileViewWithSession()` accepts an existing `AgentSession` for optional graph reuse, and `formatAgentFileViewResponse()` renders the same response as stable pretty text.

@@ -1,5 +1,5 @@
 import type { ProjectIndex } from "../indexer/types.js";
-import type { FileId } from "../types.js";
+import type { FileId, Range } from "../types.js";
 
 export type SymbolNodeKind =
   | "function"
@@ -29,7 +29,12 @@ export type SymbolNode = {
   visibility?: SymbolVisibility;
 };
 
-export type SymbolEdge = { from: string; to: string; label?: string };
+export type SymbolEdge = {
+  from: string;
+  to: string;
+  label?: string;
+  site?: { file: FileId; range: Range };
+};
 
 export type SymbolGraph = {
   nodes: Map<string, SymbolNode>;

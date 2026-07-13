@@ -126,6 +126,14 @@ export {
   type WorkspaceSymbolMatch,
   type WorkspaceSymbolsRequest,
   type WorkspaceSymbolsResult,
+  findImplementations as queryImplementations,
+  findTypeHierarchy as queryTypeHierarchy,
+  type ImplementationMatch,
+  type ImplementationsResult as IndexImplementationsResult,
+  type TypeHierarchyDirection,
+  type TypeHierarchyRelationKind,
+  type TypeHierarchyRelationMatch,
+  type TypeHierarchyResult as IndexTypeHierarchyResult,
 
   parseFile,
   collectLocalsAndExportsFromSource,
@@ -302,6 +310,23 @@ export type {
   AgentWorkspaceSymbolsRequest,
   WorkspaceSymbolsResponse,
 } from "./agent/workspaceSymbols.js";
+
+/** Proven type hierarchy and implementation lookup by portable symbol handle. */
+export {
+  findImplementations,
+  findImplementationsWithSession,
+  findSubtypes,
+  findSubtypesWithSession,
+  findSupertypes,
+  findSupertypesWithSession,
+} from "./agent/typeHierarchy.js";
+export type {
+  ImplementationEntry,
+  ImplementationsResponse,
+  TypeHierarchyRelation,
+  TypeHierarchyRequest,
+  TypeHierarchyResponse,
+} from "./agent/typeHierarchy.js";
 export type {
   SemanticLocation,
   SemanticOmittedCounts,
@@ -358,6 +383,9 @@ export {
   tool_getHotspots,
   tool_goToDefinition,
   tool_workspaceSymbols,
+  tool_findImplementations,
+  tool_findSubtypes,
+  tool_findSupertypes,
   tool_findReferences,
   type ToolFileOverview,
   type ToolFileOverviewImport,
@@ -367,6 +395,7 @@ export {
   type ToolDependencyEntry,
   type ToolHotspotEntry,
   type ToolWorkspaceSymbolsRuntimeOptions,
+  type ToolTypeHierarchyRuntimeOptions,
 } from "./agent-tools.js";
 
 /** SQLite graph persistence and query helpers. */

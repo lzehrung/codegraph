@@ -85,6 +85,21 @@ export type {
   AgentWorkspaceSymbolsRequest,
   WorkspaceSymbolsResponse,
 } from "./agent/workspaceSymbols.js";
+export {
+  findImplementations,
+  findImplementationsWithSession,
+  findSubtypes,
+  findSubtypesWithSession,
+  findSupertypes,
+  findSupertypesWithSession,
+} from "./agent/typeHierarchy.js";
+export type {
+  ImplementationEntry,
+  ImplementationsResponse,
+  TypeHierarchyRelation,
+  TypeHierarchyRequest,
+  TypeHierarchyResponse,
+} from "./agent/typeHierarchy.js";
 export type {
   SemanticLocation,
   SemanticOmittedCounts,

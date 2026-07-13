@@ -389,6 +389,14 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       },
     ),
   ],
+  [
+    "implementations",
+    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], [...SHARED_BUILD_OPTIONS, "--limit"], {
+      kind: "max",
+      max: 1,
+      usage: "Usage: codegraph implementations <symbol-handle> [--root <path>] [--limit <0-500>] [--json | --pretty]",
+    }),
+  ],
   ["index", graphCommandSchema({ kind: "any" })],
   [
     "init",
@@ -520,6 +528,22 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       [...SHARED_BUILD_OPTIONS, "--file-glob", "--kind", "--limit"],
       { kind: "any" },
     ),
+  ],
+  [
+    "subtypes",
+    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], [...SHARED_BUILD_OPTIONS, "--depth", "--limit"], {
+      kind: "max",
+      max: 1,
+      usage: "Usage: codegraph subtypes <symbol-handle> [--root <path>] [--depth <1-10>] [--limit <0-500>] [--json | --pretty]",
+    }),
+  ],
+  [
+    "supertypes",
+    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], [...SHARED_BUILD_OPTIONS, "--depth", "--limit"], {
+      kind: "max",
+      max: 1,
+      usage: "Usage: codegraph supertypes <symbol-handle> [--root <path>] [--depth <1-10>] [--limit <0-500>] [--json | --pretty]",
+    }),
   ],
   [
     "skill",

@@ -29,6 +29,17 @@ import {
   type WorkspaceSymbolsResponse,
 } from "./agent/workspaceSymbols.js";
 import type { WorkspaceSymbolsRequest } from "./indexer/workspace-symbols.js";
+import {
+  findImplementations as findAgentImplementations,
+  findImplementationsWithSession,
+  findSubtypes,
+  findSubtypesWithSession,
+  findSupertypes,
+  findSupertypesWithSession,
+  type ImplementationsResponse,
+  type TypeHierarchyRequest,
+  type TypeHierarchyResponse,
+} from "./agent/typeHierarchy.js";
 
 type ToolRuntimeOptions = {
   index?: ProjectIndex;
@@ -283,6 +294,66 @@ export async function tool_workspaceSymbols(
     return await workspaceSymbolsWithSession(runtimeOptions.session, agentRequest);
   }
   return await workspaceSymbols(agentRequest);
+}
+
+/** Optional warm-session or build configuration for type hierarchy tools. */
+export type ToolTypeHierarchyRuntimeOptions = {
+  session?: AgentSession;
+  buildOptions?: BuildOptions;
+};
+
+/** Finds proven supertypes for a portable symbol handle. */
+export async function tool_findSupertypes(
+  root: string,
+  request: Omit<TypeHierarchyRequest, "root" | "buildOptions">,
+  runtimeOptions: ToolTypeHierarchyRuntimeOptions = {},
+): Promise<TypeHierarchyResponse> {
+  assertTypeHierarchyToolOptions(runtimeOptions);
+  const agentRequest = typeHierarchyAgentRequest(root, request, runtimeOptions);
+  if (runtimeOptions.session) return await findSupertypesWithSession(runtimeOptions.session, agentRequest);
+  return await findSupertypes(agentRequest);
+}
+
+/** Finds proven subtypes for a portable symbol handle. */
+export async function tool_findSubtypes(
+  root: string,
+  request: Omit<TypeHierarchyRequest, "root" | "buildOptions">,
+  runtimeOptions: ToolTypeHierarchyRuntimeOptions = {},
+): Promise<TypeHierarchyResponse> {
+  assertTypeHierarchyToolOptions(runtimeOptions);
+  const agentRequest = typeHierarchyAgentRequest(root, request, runtimeOptions);
+  if (runtimeOptions.session) return await findSubtypesWithSession(runtimeOptions.session, agentRequest);
+  return await findSubtypes(agentRequest);
+}
+
+/** Finds proven type or interface-member implementations for a portable symbol handle. */
+export async function tool_findImplementations(
+  root: string,
+  request: Omit<TypeHierarchyRequest, "root" | "buildOptions" | "depth">,
+  runtimeOptions: ToolTypeHierarchyRuntimeOptions = {},
+): Promise<ImplementationsResponse> {
+  assertTypeHierarchyToolOptions(runtimeOptions);
+  const agentRequest = typeHierarchyAgentRequest(root, request, runtimeOptions);
+  if (runtimeOptions.session) return await findImplementationsWithSession(runtimeOptions.session, agentRequest);
+  return await findAgentImplementations(agentRequest);
+}
+
+function assertTypeHierarchyToolOptions(runtimeOptions: ToolTypeHierarchyRuntimeOptions): void {
+  if (runtimeOptions.session && runtimeOptions.buildOptions) {
+    throw new Error("Type hierarchy tool options cannot combine a prebuilt session with buildOptions.");
+  }
+}
+
+function typeHierarchyAgentRequest(
+  root: string,
+  request: Omit<TypeHierarchyRequest, "root" | "buildOptions">,
+  runtimeOptions: ToolTypeHierarchyRuntimeOptions,
+): TypeHierarchyRequest {
+  return {
+    root,
+    ...request,
+    ...(runtimeOptions.buildOptions ? { buildOptions: runtimeOptions.buildOptions } : {}),
+  };
 }
 
 /**

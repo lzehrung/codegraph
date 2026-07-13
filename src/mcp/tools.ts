@@ -16,6 +16,9 @@ import { DEFAULT_SQLITE_ROW_LIMIT, MAX_SQLITE_ROW_LIMIT } from "./sqliteGuard.js
 
 export const DEFAULT_MCP_COLLECTION_LIMIT = 100;
 export const MAX_MCP_COLLECTION_LIMIT = 500;
+export const DEFAULT_TYPE_HIERARCHY_LIMIT = 100;
+export const MAX_TYPE_HIERARCHY_LIMIT = 500;
+export const MAX_TYPE_HIERARCHY_DEPTH = 10;
 
 function objectSchema(properties: Record<string, object>, required: string[] = []): Tool["inputSchema"] {
   return required.length ? { type: "object", properties, required } : { type: "object", properties };
@@ -38,6 +41,22 @@ function dependencyInputSchema(): Tool["inputSchema"] {
       },
     },
     ["file"],
+  );
+}
+
+function typeHierarchyInputSchema(): Tool["inputSchema"] {
+  return objectSchema(
+    {
+      handle: stringProperty,
+      depth: { type: "integer", minimum: 1, maximum: MAX_TYPE_HIERARCHY_DEPTH, default: 1 },
+      limit: {
+        type: "integer",
+        minimum: 0,
+        maximum: MAX_TYPE_HIERARCHY_LIMIT,
+        default: DEFAULT_TYPE_HIERARCHY_LIMIT,
+      },
+    },
+    ["handle"],
   );
 }
 
@@ -75,6 +94,35 @@ export const MCP_TOOLS: Tool[] = [
         },
       },
       ["query"],
+    ),
+  },
+  {
+    name: "supertypes",
+    description:
+      "Find proven direct or transitive supertypes for a portable symbol handle. Returns currently extracted extends and implements relationships only.",
+    inputSchema: typeHierarchyInputSchema(),
+  },
+  {
+    name: "subtypes",
+    description:
+      "Find proven direct or transitive subtypes for a portable symbol handle. Returns currently extracted extends and implements relationships only.",
+    inputSchema: typeHierarchyInputSchema(),
+  },
+  {
+    name: "implementations",
+    description:
+      "Find proven implementations for a type or supported interface/trait member handle without name-only inference.",
+    inputSchema: objectSchema(
+      {
+        handle: stringProperty,
+        limit: {
+          type: "integer",
+          minimum: 0,
+          maximum: MAX_TYPE_HIERARCHY_LIMIT,
+          default: DEFAULT_TYPE_HIERARCHY_LIMIT,
+        },
+      },
+      ["handle"],
     ),
   },
   {

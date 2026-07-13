@@ -151,6 +151,9 @@ codegraph explore src/auth.ts --json
 codegraph search "build review report" --json
 codegraph symbols "CodeReviewSession" --root . --pretty
 codegraph symbols "review report" --kind class,function --exported --limit 50 --json
+codegraph supertypes 'symbol:src/worker.ts:Worker:12:14' --depth 3 --pretty
+codegraph subtypes 'symbol:src/service.ts:Service:4:18' --depth 3 --limit 100 --json
+codegraph implementations 'symbol:src/service.ts:run:5:3' --limit 100 --json
 codegraph explain src/review.ts --json
 codegraph packet get src/cli.ts --pretty
 # Read a live file; JSON is the default
@@ -169,6 +172,10 @@ codegraph search --help
 Use `--kind <kind,...>`, `--exported`, `--include-imports`, `--file-glob <project-relative-glob>`, and `--limit <0-500>` to compose filters. Imports are excluded by default, the default limit is 50, and an empty query requires `--kind` or `--file-glob`; JSON is the default and `--pretty` uses a concise renderer.
 
 Structured results include `schemaVersion`, root and analysis metadata, freshness, effective limits, omission counts, the normalized query, total candidates, and deterministic project-relative symbols. Each symbol has a portable handle, exact location, kind, exported status, and provenance.
+
+`supertypes` and `subtypes` accept one portable symbol handle from `symbols`, default to depth 1 and 100 results, cap depth at 10 and results at 500, and return only proven indexed `extends` and `implements` relationships. `implementations` uses the same 100/500 result bounds without `--depth`; member targets are supported only when owned by an interface or trait with a proven implementer.
+
+JSON is the default and includes the shared semantic envelope, exact project-relative symbol locations, provenance, effective limits, and omission counts. `--pretty` prints only the target and concise relationship rows; stale handles, non-type hierarchy targets, and unsupported member targets return actionable errors.
 
 # Explain a file, symbol, SQL object, or search result handle
 codegraph explain src/auth.ts --json

@@ -58,6 +58,10 @@ The semantic index connects definitions, scopes, exports, and import bindings to
 
 Workspace-symbol lookup builds a cached candidate view from indexed definitions and only materializes import aliases when requested. It applies kind, exported, and project-relative file-glob filters before deterministic ranking: qualified and exact names lead, followed by case-insensitive exact, prefix, identifier-token, and substring matches.
 
+Type hierarchy extraction adds resolved `extends` and `implements` edges to the detailed symbol graph. Breadth-first supertype and subtype queries deduplicate cycles, sort deterministically by depth and symbol identity, and apply limits after traversal so omission counts remain exact.
+
+Implementation lookup follows the same proven edges. Interface or trait member lookup also requires a proven implementing type and an indexed same-name member inside that type; it does not infer structural conformance, dynamic dispatch, unrelated same-name methods, or unresolved external bases.
+
 The result limit is applied after ranking, so omission counts describe matching candidates rather than pre-filter truncation. Agent, CLI, and MCP surfaces then normalize paths and qualified names to the project root and attach portable handles, exact locations, analysis, freshness, and provenance.
 
 Impact analysis maps diff hunks to changed symbols, follows resolved references and reverse dependencies, and ranks the affected files. Review and agent-facing commands build on that evidence, adding bounded snippets or related findings as requested. Call compatibility is deliberately narrower than type checking: it reports high-confidence arity mismatches for resolved callable changes, not overload, dispatch, macro, or data-flow conclusions.

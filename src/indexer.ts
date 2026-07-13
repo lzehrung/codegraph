@@ -116,6 +116,17 @@ export {
 } from "./indexer/workspace-symbols.js";
 
 export {
+  findImplementations,
+  findTypeHierarchy,
+  type ImplementationMatch,
+  type ImplementationsResult,
+  type TypeHierarchyDirection,
+  type TypeHierarchyRelationKind,
+  type TypeHierarchyRelationMatch,
+  type TypeHierarchyResult,
+} from "./indexer/type-hierarchy.js";
+
+export {
   buildGraphDelta,
   buildProjectIndex,
   buildProjectIndexFromFiles,
