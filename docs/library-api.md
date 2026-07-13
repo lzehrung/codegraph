@@ -157,6 +157,27 @@ The root aliases index-core functions as `queryTypeHierarchy(graph, id, directio
 
 Only proven indexed `extends` and `implements` relationships participate. Member implementation lookup requires a member owned by an interface or trait with proven implementers and never infers unrelated same-name methods.
 
+## Rename preview
+
+The root and `@lzehrung/codegraph/agent` entry points export `previewRename`, `previewRenameWithSession`, and `previewRenameInSnapshot`. `RenamePreviewRequest` uses `root`, a portable symbol `handle`, `newName`, optional comment, string, and filename inclusion flags, optional `maxEdits`, and optional standalone `buildOptions`.
+
+```ts
+import { createAgentSession, previewRenameWithSession } from "@lzehrung/codegraph";
+
+const root = process.cwd();
+const session = createAgentSession({ root });
+const preview = await previewRenameWithSession(session, {
+  root,
+  handle: "symbol:src/Service.ts:Service:1:14",
+  newName: "RenamedService",
+  includeFilenames: true,
+});
+```
+
+`RenamePreviewResponse` returns the target, proposed name, `safe`, exact project-relative edits, conflicts, unsafe sites, filename suggestions, candidate tests, provenance, freshness, limits, and omissions. Exported concrete types include `RenameEdit`, `RenameEditKind`, `RenameConflict`, `RenameUnsafeSite`, `RenameFilenameSuggestion`, and `RenameCandidateTest`.
+
+`tool_previewRename(root, request, runtimeOptions)` accepts either a shared `AgentSession` or build options, but not both, and returns the shared response unchanged. All rename-preview entry points are read-only: eligible exported class, interface, and type filenames produce suggestions only, project files are never changed, and no apply API exists.
+
 ## Live file views
 
 `getCodegraphFileView()` reads a confined project file directly from disk. `getCodegraphFileViewWithSession()` accepts an existing `AgentSession` for optional graph reuse, and `formatAgentFileViewResponse()` renders the same response as stable pretty text.

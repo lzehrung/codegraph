@@ -44,6 +44,10 @@ import {
   findCallersWithSession,
   type CallHierarchyResponse,
 } from "../agent/callHierarchy.js";
+import {
+  previewRenameWithSession,
+  type RenamePreviewResponse,
+} from "../agent/renamePreview.js";
 import { getDependencies, getReverseDependencies, getShortestPath, type DependencyNode } from "../graphs/queries.js";
 import { findReferences, goToDefinition } from "../indexer/navigation.js";
 import { buildReviewReport, type ReviewDepth, type ReviewReport } from "../review.js";
@@ -66,7 +70,13 @@ import {
   DEFAULT_SQLITE_BYTE_LIMIT,
   normalizeSqliteRowLimit,
 } from "./sqliteGuard.js";
-import { DEFAULT_MCP_COLLECTION_LIMIT, listCodegraphMcpTools, MAX_MCP_COLLECTION_LIMIT, MCP_TOOLS } from "./tools.js";
+import {
+  DEFAULT_MCP_COLLECTION_LIMIT,
+  listCodegraphMcpTools,
+  MAX_MCP_COLLECTION_LIMIT,
+  MAX_RENAME_PREVIEW_EDITS,
+  MCP_TOOLS,
+} from "./tools.js";
 import {
   buildAllowedHostHeaders,
   closeHttpServer,
@@ -133,6 +143,14 @@ export type CodegraphMcpHandlers = {
     fileGlob?: string | undefined;
     limit?: number | undefined;
   }) => Promise<WorkspaceSymbolsResponse>;
+  rename_preview: (request: {
+    handle: string;
+    newName: string;
+    includeComments?: boolean | undefined;
+    includeStrings?: boolean | undefined;
+    includeFilenames?: boolean | undefined;
+    maxEdits?: number | undefined;
+  }) => Promise<RenamePreviewResponse>;
   callers: (request: {
     handle: string;
     depth?: number | undefined;
@@ -536,6 +554,17 @@ function createCodegraphMcpHandlersForSession(
         ...(request.includeImports !== undefined ? { includeImports: request.includeImports } : {}),
         ...(request.fileGlob !== undefined ? { fileGlob: request.fileGlob } : {}),
         limit: boundedLimit(request.limit, DEFAULT_WORKSPACE_SYMBOL_LIMIT, MAX_WORKSPACE_SYMBOL_LIMIT),
+      }),
+
+    rename_preview: async (request) =>
+      await previewRenameWithSession(session, {
+        root,
+        handle: request.handle,
+        newName: request.newName,
+        ...(request.includeComments !== undefined ? { includeComments: request.includeComments } : {}),
+        ...(request.includeStrings !== undefined ? { includeStrings: request.includeStrings } : {}),
+        ...(request.includeFilenames !== undefined ? { includeFilenames: request.includeFilenames } : {}),
+        ...(request.maxEdits !== undefined ? { maxEdits: request.maxEdits } : {}),
       }),
 
     callers: async (request) =>
@@ -1028,6 +1057,8 @@ async function callMcpTool(handlers: CodegraphMcpHandlers, name: string, input: 
       return await handlers.search(searchSchema.parse(input));
     case "workspace_symbols":
       return await handlers.workspace_symbols(workspaceSymbolsSchema.parse(input));
+    case "rename_preview":
+      return await handlers.rename_preview(renamePreviewSchema.parse(input));
     case "callers":
       return await handlers.callers(callHierarchySchema.parse(input));
     case "callees":
@@ -1121,6 +1152,15 @@ const workspaceSymbolsSchema = z.object({
   includeImports: z.boolean().optional(),
   fileGlob: z.string().optional(),
   limit: z.number().int().nonnegative().max(MAX_WORKSPACE_SYMBOL_LIMIT).optional(),
+});
+
+const renamePreviewSchema = z.object({
+  handle: z.string(),
+  newName: z.string(),
+  includeComments: z.boolean().optional(),
+  includeStrings: z.boolean().optional(),
+  includeFilenames: z.boolean().optional(),
+  maxEdits: z.number().int().min(1).max(MAX_RENAME_PREVIEW_EDITS).optional(),
 });
 
 const callHierarchySchema = z.object({

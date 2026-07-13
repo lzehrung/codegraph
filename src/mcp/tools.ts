@@ -15,6 +15,8 @@ import { SymbolKind } from "../indexer/types.js";
 import { DEFAULT_SQLITE_ROW_LIMIT, MAX_SQLITE_ROW_LIMIT } from "./sqliteGuard.js";
 
 export const DEFAULT_MCP_COLLECTION_LIMIT = 100;
+export const DEFAULT_RENAME_PREVIEW_EDITS = 5_000;
+export const MAX_RENAME_PREVIEW_EDITS = 10_000;
 export const MAX_MCP_COLLECTION_LIMIT = 500;
 export const DEFAULT_TYPE_HIERARCHY_LIMIT = 100;
 export const MAX_TYPE_HIERARCHY_LIMIT = 500;
@@ -114,6 +116,27 @@ export const MCP_TOOLS: Tool[] = [
         },
       },
       ["query"],
+    ),
+  },
+  {
+    name: "rename_preview",
+    description:
+      "Preview a semantic rename by portable symbol handle without changing files. Filename results are suggestions only; no apply tool exists.",
+    inputSchema: objectSchema(
+      {
+        handle: stringProperty,
+        newName: stringProperty,
+        includeComments: booleanProperty,
+        includeStrings: booleanProperty,
+        includeFilenames: booleanProperty,
+        maxEdits: {
+          type: "integer",
+          minimum: 1,
+          maximum: MAX_RENAME_PREVIEW_EDITS,
+          default: DEFAULT_RENAME_PREVIEW_EDITS,
+        },
+      },
+      ["handle", "newName"],
     ),
   },
   {

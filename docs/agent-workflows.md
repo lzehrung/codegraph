@@ -105,6 +105,19 @@ codegraph explain "<handle-from-symbols>" --json
 
 Imports are excluded unless `--include-imports` is explicit. Compose `--kind`, `--exported`, and project-relative `--file-glob` filters to narrow large workspaces; the limit defaults to 50 and caps at 500.
 
+## Read-only rename planning
+
+Resolve the declaration with `symbols`, then pass its portable handle to rename preview:
+
+```bash
+codegraph rename-preview "<type-handle-from-symbols>" RenamedService --include-filenames --json
+```
+
+Treat `safe: false`, conflicts, unsafe sites, and omitted edits as blockers rather than silently applying a partial plan. Comment and string edits are opt-in low-confidence candidates; eligible exported type filename results are suggestions only, Codegraph never changes files, and no apply command or tool exists.
+
+Repeated library calls should use `previewRenameWithSession` or `tool_previewRename` with one caller-owned `AgentSession`. MCP hosts should use `rename_preview`, which stays available in read-only mode and reuses the server session.
+
+
 ## Search anchors
 
 Use `search` when an agent has a query but no file target or search handle and needs a compact starting point before calling `goto`, `refs`, `deps`, `rdeps`, `chunk`, or later explanation tooling:

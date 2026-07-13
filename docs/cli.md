@@ -156,6 +156,7 @@ codegraph callees 'symbol:src/worker.ts:process:12:14' --depth 3 --pretty
 codegraph supertypes 'symbol:src/worker.ts:Worker:12:14' --depth 3 --pretty
 codegraph subtypes 'symbol:src/service.ts:Service:4:18' --depth 3 --limit 100 --json
 codegraph implementations 'symbol:src/service.ts:run:5:3' --limit 100 --json
+codegraph rename-preview 'symbol:src/Service.ts:Service:1:14' RenamedService --include-filenames --json
 codegraph explain src/review.ts --json
 codegraph packet get src/cli.ts --pretty
 # Read a live file; JSON is the default
@@ -182,6 +183,10 @@ JSON is the default and reports exact project-relative callsites, provenance, fr
 `supertypes` and `subtypes` accept one portable symbol handle from `symbols`, default to depth 1 and 100 results, cap depth at 10 and results at 500, and return only proven indexed `extends` and `implements` relationships. `implementations` uses the same 100/500 result bounds without `--depth`; member targets are supported only when owned by an interface or trait with a proven implementer.
 
 JSON is the default and includes the shared semantic envelope, exact project-relative symbol locations, provenance, effective limits, and omission counts. `--pretty` prints only the target and concise relationship rows; stale handles, non-type hierarchy targets, and unsupported member targets return actionable errors.
+
+`rename-preview` accepts a portable symbol handle and new identifier. Optional `--include-comments` and `--include-strings` add low-confidence textual edits; `--include-filenames` requests a suggestion for an eligible exported class, interface, or type whose filename matches its name, and `--max-edits <1-10000>` bounds returned edits.
+
+JSON is the default and reports exact project-relative edits, conflicts, unsafe sites, candidate tests, freshness, provenance, and omissions. A limited or conflicting result has `safe: false`; filename results are suggestions only, the command never changes files, and no apply command exists.
 
 # Explain a file, symbol, SQL object, or search result handle
 codegraph explain src/auth.ts --json
@@ -358,7 +363,7 @@ For SQL, prefer handles or schema-qualified names when basenames may be ambiguou
 
 #### MCP server
 
-- `mcp serve` exposes explore, navigation, search, impact, review, SQLite query, session refresh, and artifact-build tools.
+- `mcp serve` exposes explore, navigation, search, read-only rename preview, impact, review, SQLite query, session refresh, and artifact-build tools.
 - MCP uses stdio by default or Streamable HTTP with `--port <number>`.
 - Startup is lazy by default; `--warmup` builds the base session cache before serving requests, and `--warmup-symbols` also builds the detailed symbol graph.
 - Index-backed responses include `freshness`; small file changes auto-refresh, while stale responses include a reason, total changed-file count, and a bounded changed-file sample.

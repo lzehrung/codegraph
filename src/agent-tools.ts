@@ -48,6 +48,12 @@ import {
   type CallHierarchyRequest,
   type CallHierarchyResponse,
 } from "./agent/callHierarchy.js";
+import {
+  previewRename,
+  previewRenameWithSession,
+  type RenamePreviewRequest,
+  type RenamePreviewResponse,
+} from "./agent/renamePreview.js";
 
 type ToolRuntimeOptions = {
   index?: ProjectIndex;
@@ -410,6 +416,34 @@ function callHierarchyAgentRequest(
     ...request,
     ...(runtimeOptions.buildOptions ? { buildOptions: runtimeOptions.buildOptions } : {}),
   };
+}
+
+/** Optional warm-session or build configuration for `tool_previewRename`. */
+export type ToolRenamePreviewRuntimeOptions = {
+  session?: AgentSession;
+  buildOptions?: BuildOptions;
+};
+
+/**
+ * Previews a semantic rename without changing project files.
+ *
+ * Pass a shared `session` to reuse the caller's loaded project snapshot.
+ */
+export async function tool_previewRename(
+  root: string,
+  request: Omit<RenamePreviewRequest, "root" | "buildOptions">,
+  runtimeOptions: ToolRenamePreviewRuntimeOptions = {},
+): Promise<RenamePreviewResponse> {
+  if (runtimeOptions.session && runtimeOptions.buildOptions) {
+    throw new Error("Rename preview tool options cannot combine a prebuilt session with buildOptions.");
+  }
+  const agentRequest: RenamePreviewRequest = {
+    root,
+    ...request,
+    ...(runtimeOptions.buildOptions ? { buildOptions: runtimeOptions.buildOptions } : {}),
+  };
+  if (runtimeOptions.session) return await previewRenameWithSession(runtimeOptions.session, agentRequest);
+  return await previewRename(agentRequest);
 }
 
 /**

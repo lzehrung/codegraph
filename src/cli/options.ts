@@ -87,6 +87,7 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--port",
   "--offset",
   "--max-bytes",
+  "--max-edits",
 ]);
 
 type CliPositionalPolicy =
@@ -513,6 +514,26 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       },
     ),
   ],
+  [
+    "rename-preview",
+    commandSchema(
+      [
+        ...SHARED_BUILD_FLAGS,
+        ...JSON_OUTPUT_FLAGS,
+        "--include-comments",
+        "--include-strings",
+        "--include-filenames",
+      ],
+      [...SHARED_BUILD_OPTIONS, "--max-edits"],
+      {
+        kind: "max",
+        max: 2,
+        usage:
+          "Usage: codegraph rename-preview <symbol-handle> <new-name> [--include-comments] [--include-strings] [--include-filenames] [--max-edits N] [--json | --pretty]",
+      },
+    ),
+  ],
+
   [
     "search",
     commandSchema(

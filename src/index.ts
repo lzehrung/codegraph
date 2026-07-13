@@ -345,6 +345,23 @@ export type {
   CallHierarchyRequest,
   CallHierarchyResponse,
 } from "./agent/callHierarchy.js";
+/** Read-only semantic rename planning by portable symbol handle. */
+export {
+  previewRename,
+  previewRenameInSnapshot,
+  previewRenameWithSession,
+} from "./agent/renamePreview.js";
+export type {
+  RenameCandidateTest,
+  RenameConflict,
+  RenameEdit,
+  RenameEditKind,
+  RenameFilenameSuggestion,
+  RenamePreviewRequest,
+  RenamePreviewResponse,
+  RenameUnsafeSite,
+} from "./agent/renamePreview.js";
+
 export type {
   SemanticLocation,
   SemanticOmittedCounts,
@@ -407,6 +424,7 @@ export {
   tool_findReferences,
   tool_findCallees,
   tool_findCallers,
+  tool_previewRename,
   type ToolFileOverview,
   type ToolFileOverviewImport,
   type ToolFileOverviewDefinition,
@@ -417,6 +435,7 @@ export {
   type ToolWorkspaceSymbolsRuntimeOptions,
   type ToolTypeHierarchyRuntimeOptions,
   type ToolCallHierarchyRuntimeOptions,
+  type ToolRenamePreviewRuntimeOptions,
 } from "./agent-tools.js";
 
 /** SQLite graph persistence and query helpers. */

@@ -111,6 +111,22 @@ export type {
   CallHierarchyRequest,
   CallHierarchyResponse,
 } from "./agent/callHierarchy.js";
+export {
+  previewRename,
+  previewRenameInSnapshot,
+  previewRenameWithSession,
+} from "./agent/renamePreview.js";
+export type {
+  RenameCandidateTest,
+  RenameConflict,
+  RenameEdit,
+  RenameEditKind,
+  RenameFilenameSuggestion,
+  RenamePreviewRequest,
+  RenamePreviewResponse,
+  RenameUnsafeSite,
+} from "./agent/renamePreview.js";
+
 export type {
   SemanticLocation,
   SemanticOmittedCounts,

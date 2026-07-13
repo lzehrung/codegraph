@@ -66,6 +66,10 @@ Type hierarchy extraction adds resolved `extends` and `implements` edges to the 
 
 Implementation lookup follows the same proven edges. Interface or trait member lookup also requires a proven implementing type and an indexed same-name member inside that type; it does not infer structural conformance, dynamic dispatch, unrelated same-name methods, or unresolved external bases.
 
+Rename preview resolves the target handle through the same semantic index, collects proven definitions, references, imports, exports, and supported interface-member implementations, then validates scope collisions and source freshness. Optional comment and string scans are marked low confidence, edit limits produce explicit omissions and `safe: false`, and every output path is normalized to the project root.
+
+The operation only returns a plan. Filename matches are suggestions, and the library, CLI, agent-tool, and MCP surfaces never write or expose an apply command.
+
 The result limit is applied after ranking, so omission counts describe matching candidates rather than pre-filter truncation. Agent, CLI, and MCP surfaces then normalize paths and qualified names to the project root and attach portable handles, exact locations, analysis, freshness, and provenance.
 
 Impact analysis maps diff hunks to changed symbols, follows resolved references and reverse dependencies, and ranks the affected files. Review and agent-facing commands build on that evidence, adding bounded snippets or related findings as requested. Call compatibility is deliberately narrower than type checking: it reports high-confidence arity mismatches for resolved callable changes, not overload, dispatch, macro, or data-flow conclusions.

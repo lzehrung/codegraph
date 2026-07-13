@@ -482,7 +482,7 @@ function paginateText(text: string, offset: number, limit: number): FilePage {
   };
 }
 
-function classifySensitiveFile(filePath: string): AgentFileViewSensitiveKind | undefined {
+export function classifySensitiveFile(filePath: string): AgentFileViewSensitiveKind | undefined {
   const basename = path.basename(filePath).toLowerCase();
   if (basename === ".env" || basename.startsWith(".env.")) return "environment";
   if (basename === ".npmrc" || basename === ".pypirc" || basename === ".netrc") {

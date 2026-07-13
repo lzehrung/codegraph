@@ -15,6 +15,7 @@ Commands:
   supertypes    Find proven direct or transitive supertypes by symbol handle
   subtypes      Find proven direct or transitive subtypes by symbol handle
   implementations Find proven type or interface-member implementations
+  rename-preview Read-only semantic rename planning by symbol handle
   explain       Explain a file, symbol, SQL object, or search handle
   impact        Analyze PR impact
   inspect       Summarize repo structure and recommend next commands
@@ -124,6 +125,7 @@ Examples:
   codegraph refs --file src/index.ts --line 42 --col 10
   codegraph doctor
   codegraph symbols "CodeReviewSession" --root . --pretty
+  codegraph rename-preview "symbol:src/Service.ts:Service:1:14" RenamedService --include-filenames --json
   codegraph version
   codegraph -v
 `;
@@ -161,6 +163,7 @@ const knownCliCommands = new Set([
   "rdeps",
   "refs",
   "review",
+  "rename-preview",
   "search",
   "symbols",
   "subtypes",
@@ -321,6 +324,18 @@ export const IMPLEMENTATIONS_HELP_TEXT = `codegraph implementations - Find prove
 Usage: codegraph implementations <symbol-handle> [--root <path>] [--limit <0-500>] [--json | --pretty]
 
 Type lookup follows extracted hierarchy relationships. Member lookup is supported only for members owned by an interface or trait with proven implementers; unrelated same-name members are never inferred.
+
+Index options:
+  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+`;
+
+export const RENAME_PREVIEW_HELP_TEXT = `codegraph rename-preview - Preview a semantic rename without changing files
+
+Usage: codegraph rename-preview <symbol-handle> <new-name> [--include-comments] [--include-strings] [--include-filenames] [--max-edits N] [--json | --pretty]
+
+Returns exact project-relative edits, conflicts, unsafe sites, candidate tests, provenance, limits, and omissions. Comment and string matches are low-confidence opt-in edits; --max-edits accepts integers from 1 to 10000.
+
+--include-filenames requests suggestions for eligible exported class, interface, or type filenames only. Rename preview is read-only and no apply command exists.
 
 Index options:
   Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
@@ -516,6 +531,7 @@ export function helpTextForCommand(command: string, positionals: readonly string
   if (command === "supertypes") return SUPERTYPES_HELP_TEXT;
   if (command === "subtypes") return SUBTYPES_HELP_TEXT;
   if (command === "implementations") return IMPLEMENTATIONS_HELP_TEXT;
+  if (command === "rename-preview") return RENAME_PREVIEW_HELP_TEXT;
   if (command === "orient") return ORIENT_HELP_TEXT;
   if (command === "packet") return PACKET_HELP_TEXT;
   if (command === "explain") return EXPLAIN_HELP_TEXT;
