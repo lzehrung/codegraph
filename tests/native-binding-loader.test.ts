@@ -12,7 +12,7 @@ import {
   loadNativeBinding,
   nativeTargetSuffixFor,
 } from "../src/native/bindingLoader.js";
-import { hashFileStreaming } from "../src/native/runtimeCache.js";
+import { hashFileStreaming, prepareNativeRuntimeCache } from "../src/native/runtimeCache.js";
 
 const tempDirs: string[] = [];
 const execFile = promisify(execFileCallback);
@@ -363,6 +363,40 @@ describe("native binding loader", () => {
     expect(parsed.every((result) => result.status === "cached" || result.status === "reused")).toBeTruthy();
     await expect(fs.readFile(parsed[0]?.loadedPath ?? "", "utf8")).resolves.toBe("native-binary");
   }, 20_000);
+  it("preserves a valid winner published after an initial cache miss", async () => {
+    const fixture = await makeInstalledNativeFixture();
+    const source = hashFileStreaming(fixture.binaryPath);
+    const target = "win32-x64-msvc";
+    const entryPath = path.join(fixture.cacheRoot, target, `1.8.72-${source.sha256}`);
+    const finalPath = path.join(entryPath, path.basename(fixture.binaryPath));
+    const originalExistsSync = fsSync.existsSync;
+    let winnerPublished = false;
+    const existsSync = vi.spyOn(fsSync, "existsSync").mockImplementation((candidate) => {
+      if (!winnerPublished && path.resolve(String(candidate)) === path.resolve(finalPath)) {
+        fsSync.copyFileSync(fixture.binaryPath, finalPath);
+        winnerPublished = true;
+      }
+      return originalExistsSync(candidate);
+    });
+
+    try {
+      const result = prepareNativeRuntimeCache({
+        sourcePath: fixture.binaryPath,
+        cacheRoot: fixture.cacheRoot,
+        packageName: "@lzehrung/codegraph-native-win32-x64-msvc",
+        packageVersion: "1.8.72",
+        target,
+      });
+      const entryNames = await fs.readdir(entryPath);
+
+      expect(result).toMatchObject({ status: "reused", loadedPath: finalPath });
+      expect(entryNames.some((name) => name.includes(".corrupt."))).toBe(false);
+      await expect(fs.readFile(finalPath, "utf8")).resolves.toBe("native-binary");
+    } finally {
+      existsSync.mockRestore();
+    }
+  });
+
   it("never loads corrupt final bytes and repairs the immutable name", async () => {
     const fixture = await makeInstalledNativeFixture();
     const localPackageRoot = path.join(await makeTempDir(), "workspace-native");

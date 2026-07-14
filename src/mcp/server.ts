@@ -82,7 +82,7 @@ import {
   writeJsonRpcError,
   type AllowedHostHeaderRules,
 } from "./http.js";
-import { getLoadedNativeBindingOrigin } from "../native/runtime.js";
+import { getCurrentNativeBindingOrigin } from "../native/runtime.js";
 import {
   captureCodegraphRuntimeIdentity,
   createInstalledVersionChecker,
@@ -859,7 +859,7 @@ function createCodegraphMcpHandlersForSession(
 
 export function createCodegraphMcpProtocolServer(
   handlers: CodegraphMcpHandlers,
-  runtimeIdentity: CodegraphRuntimeIdentity = captureCodegraphRuntimeIdentity(getLoadedNativeBindingOrigin()),
+  runtimeIdentity: CodegraphRuntimeIdentity = captureCodegraphRuntimeIdentity(getCurrentNativeBindingOrigin()),
 ): McpServer {
   const installedVersion = createInstalledVersionChecker(runtimeIdentity);
   const server = new McpServer(
@@ -902,7 +902,7 @@ export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Pro
   }
 
   const handlers = await createWarmedCodegraphMcpHandlers(options);
-  const runtimeIdentity = options.runtimeIdentity ?? captureCodegraphRuntimeIdentity(getLoadedNativeBindingOrigin());
+  const runtimeIdentity = options.runtimeIdentity ?? captureCodegraphRuntimeIdentity(getCurrentNativeBindingOrigin());
   const server = createCodegraphMcpProtocolServer(handlers, runtimeIdentity);
   await server.connect(new StdioServerTransport());
 }
@@ -912,7 +912,7 @@ export async function startCodegraphMcpHttpServer(
 ): Promise<CodegraphMcpHttpServer> {
   const host = options.host ?? "127.0.0.1";
   const handlers = await createWarmedCodegraphMcpHandlers(options);
-  const runtimeIdentity = options.runtimeIdentity ?? captureCodegraphRuntimeIdentity(getLoadedNativeBindingOrigin());
+  const runtimeIdentity = options.runtimeIdentity ?? captureCodegraphRuntimeIdentity(getCurrentNativeBindingOrigin());
   const sessions = new Map<string, { server: McpServer; transport: StreamableHTTPServerTransport }>();
   let allowedHostHeaders = emptyAllowedHostHeaderRules();
 

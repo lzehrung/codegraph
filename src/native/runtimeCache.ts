@@ -247,8 +247,9 @@ export function prepareNativeRuntimeCache(request: PrepareNativeRuntimeCacheRequ
     const sourceFileName = path.basename(sourceRealPath);
     const finalPath = path.join(entryPath, sourceFileName);
     let status: "cached" | "reused" = "reused";
-    if (!verifyFile(finalPath, source)) {
-      if (fs.existsSync(finalPath)) recoverCorruptFinal(finalPath);
+    const finalExists = fs.existsSync(finalPath);
+    if (!finalExists || !verifyFile(finalPath, source)) {
+      if (finalExists) recoverCorruptFinal(finalPath);
       status = populateBinary(sourceRealPath, finalPath, source) ? "cached" : "reused";
       if (!verifyFile(finalPath, source)) {
         throw new Error("native cache winner failed integrity verification");

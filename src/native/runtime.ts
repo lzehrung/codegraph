@@ -90,7 +90,7 @@ export function getNativeBindingOrigin(): NativeBindingOrigin | undefined {
   return resolveNativeBindingState().origin;
 }
 
-export function getLoadedNativeBindingOrigin(): NativeBindingOrigin | undefined {
+export function getCurrentNativeBindingOrigin(): NativeBindingOrigin | undefined {
   return bindingState?.origin;
 }
 
