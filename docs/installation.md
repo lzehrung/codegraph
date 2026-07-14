@@ -67,6 +67,16 @@ Important: the tarball alone does not bundle the native addon. To analyze source
 
 Without the native runtime package, the CLI and library still install, but supported source languages run in reduced graph-only and regex recovery mode.
 
+## Updating
+
+Use `codegraph upgrade --check` to compare the installed version with the latest GitHub release. Bare `codegraph upgrade` prints channel-specific instructions after a successful lookup, while `codegraph upgrade X.Y.Z` skips that lookup; neither runs Git or npm.
+
+- Source checkout: follow the printed `git pull`, `npm install`, and `npm run build` steps from the checkout.
+- npm install: keep the `@lzehrung` scope on `https://npm.pkg.github.com`, then run the printed `npm install -g @lzehrung/codegraph@X.Y.Z` command.
+- Unknown channel: a successful bare or explicit-version instruction request reports that upgrade instructions are unavailable; reinstall through one of the source or npm paths above.
+
+On Windows, a release that still loads the package-owned addon directly requires the [one-time transition below](#updating-on-windows).
+
 ## Updating on Windows
 
 Installed Windows releases copy the resolved native addon to `%LOCALAPPDATA%\codegraph\native-cache\v1` and load the verified cached copy. Cache entries are content-addressed and immutable, so an existing MCP process can keep using its old entry while npm replaces package-owned files.

@@ -46,6 +46,7 @@ Commands:
   doctor        Inspect backend/runtime state and local graph artifacts
   install       Configure Codegraph MCP and skill integration for agent clients
   uninstall     Remove Codegraph-owned installer configuration
+  upgrade       Check for updates or print channel-specific upgrade instructions
   skill         Install or inspect the bundled agent skill
   version       Print the installed codegraph version
 
@@ -108,6 +109,9 @@ Examples:
   codegraph install --target codex,claude --yes
   codegraph install --print-config codex
   codegraph uninstall --target codex --yes
+  codegraph upgrade --check
+  codegraph upgrade
+  codegraph upgrade 1.2.3
   codegraph inspect ./src --limit 20
   codegraph inspect ./src --limit 20 --duplicates
   codegraph duplicates ./src --min-confidence medium
@@ -178,12 +182,27 @@ const knownCliCommands = new Set([
   "unresolved",
   "uninit",
   "version",
+  "upgrade",
   "uninstall",
 ]);
 
 export function isKnownCliCommand(command: string): boolean {
   return knownCliCommands.has(command);
 }
+
+export const UPGRADE_HELP_TEXT = `codegraph upgrade - Check for updates or print install instructions
+
+Usage: codegraph upgrade [version] [--check] [--json]
+
+Options:
+  --check  Report whether a newer stable release is available without printing an upgrade command
+  --json   Emit a machine-readable upgrade report
+
+Examples:
+  codegraph upgrade --check
+  codegraph upgrade
+  codegraph upgrade 1.2.3
+`;
 
 export const LIFECYCLE_HELP_TEXT = `codegraph init/status/sync/uninit - Initialize, inspect, refresh, or remove project-local Codegraph state
 
@@ -537,6 +556,7 @@ Options:
 `;
 
 export function helpTextForCommand(command: string, positionals: readonly string[]): string | undefined {
+  if (command === "upgrade") return UPGRADE_HELP_TEXT;
   if (command === "explore") return EXPLORE_HELP_TEXT;
   if (command === "file") return FILE_HELP_TEXT;
   if (command === "search") return SEARCH_HELP_TEXT;

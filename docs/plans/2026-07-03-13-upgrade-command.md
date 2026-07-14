@@ -1,5 +1,7 @@
 # Upgrade command
 
+Status: Implemented
+
 ## Goal
 
 Add a user-facing command that checks for newer releases and prints safe upgrade instructions for the user's install channel.
@@ -14,15 +16,14 @@ codegraph upgrade 1.9.0
 
 ## Design
 
-Start with a conservative implementation that detects install channel and prints exact commands. Do not self-modify global installs in the first PR unless the channel is a self-contained bundle installed by our own installer.
+The implementation is conservative: it detects the install channel and prints exact commands without modifying installs.
 
-This command depends on the immutable Windows native runtime cache and runtime-version diagnostics in [`2026-07-12-windows-native-runtime-cache-updates.md`](./2026-07-12-windows-native-runtime-cache-updates.md). For npm installs it may report readiness and invoke npm only with explicit consent; it must not kill MCP hosts or replace npm as install authority.
+This command depends on the immutable Windows native runtime cache and runtime-version diagnostics in [`2026-07-12-windows-native-runtime-cache-updates.md`](./2026-07-12-windows-native-runtime-cache-updates.md). For npm installs it prints the scoped registry and exact global install command, but does not kill MCP hosts or replace npm as install authority.
 
 Install channels:
 
 - source checkout
 - npm package
-- release tarball/bundle
 - unknown
 
 ## Behavior
@@ -30,9 +31,9 @@ Install channels:
 ### --check
 
 - Read current version from package metadata.
-- Query GitHub releases or package metadata with a short timeout.
-- Print current/latest and whether update is available.
-- In CI or offline, fail softly with actionable message unless `--json` requested.
+- Query the latest GitHub release with a three-second timeout.
+- After a successful lookup, print current/latest and whether update is available.
+- In CI or offline, return a non-crashing actionable error in text or JSON; text reports current/channel/error without establishing release availability.
 
 ### upgrade
 
@@ -44,13 +45,7 @@ For source checkout:
 For npm install:
 
 - Print exact npm command using the documented scoped package and registry.
-- Do not run package manager by default.
-- Support `--apply` later if desired, but not in this PR.
-
-For self-contained bundle:
-
-- If the installer records install metadata, download and replace atomically.
-- Otherwise print installer command.
+- Do not run package manager commands.
 
 ## JSON output
 
@@ -62,8 +57,11 @@ type UpgradeReport = {
   updateAvailable: boolean;
   channel: "source" | "npm" | "bundle" | "unknown";
   command?: string;
+  error?: string;
 };
 ```
+
+`bundle` is reserved in schema v1. It is never detected until an owned installer records bundle metadata, and this implementation provides no bundle instructions.
 
 ## Files likely touched
 
@@ -90,7 +88,6 @@ type UpgradeReport = {
 
 - Users can discover whether they are outdated.
 - The command never corrupts source checkouts or package-manager installs.
-- Any auto-apply path is limited to install formats this project owns end to end.
 
 ## Review pass
 

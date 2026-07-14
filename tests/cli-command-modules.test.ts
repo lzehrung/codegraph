@@ -290,6 +290,46 @@ describe("CLI command modules", () => {
     }
   });
 
+  test("registers upgrade help and schema", async () => {
+    const commands = CLI_HELP_TEXT.slice(CLI_HELP_TEXT.indexOf("Commands:"), CLI_HELP_TEXT.indexOf("Graph Options:"));
+    expect(commands).toContain("  upgrade");
+
+    const help = await captureCli(["upgrade", "--help"]);
+    expect(help.exitCode).toBeUndefined();
+    expect(help.stderr).toBe("");
+    expect(help.stdout).toContain("codegraph upgrade");
+    expect(help.stdout).toContain("Usage: codegraph upgrade [version] [--check] [--json]");
+    expect(help.stdout).toContain("codegraph upgrade --check");
+    expect(help.stdout).toContain("codegraph upgrade\n");
+    expect(help.stdout).toContain("codegraph upgrade 1.2.3");
+    expect(help.stdout).not.toContain("Graph Options:");
+
+    const unknownFlag = await captureCli(["upgrade", "--apply"]);
+    expect(unknownFlag.exitCode).toBe(2);
+    expect(unknownFlag.stdout).toBe("");
+    expect(unknownFlag.stderr).toContain("Unknown option for upgrade: --apply");
+
+    const extraPositional = await captureCli(["upgrade", "1.2.3", "2.0.0"]);
+    expect(extraPositional.exitCode).toBe(2);
+    expect(extraPositional.stdout).toBe("");
+    expect(extraPositional.stderr).toContain("Unexpected positional argument for upgrade: 2.0.0");
+  });
+
+  test("dispatches upgrade before project setup", async () => {
+    const result = await captureCli(["upgrade", "9.9.9", "--json"]);
+
+    expect(result.exitCode).toBeUndefined();
+    expect(result.stderr).toBe("");
+    expect(readJsonRecord(JSON.parse(result.stdout))).toMatchObject({
+      schemaVersion: 1,
+      currentVersion: getCodegraphVersion(),
+      latestVersion: "9.9.9",
+      updateAvailable: true,
+      channel: "source",
+      command: "git pull\nnpm install\nnpm run build",
+    });
+  });
+
   test("lists explore before orient in unfamiliar repo guidance", () => {
     const unfamiliarRepoStart = CLI_HELP_TEXT.indexOf("Unfamiliar repo:");
     const examplesStart = CLI_HELP_TEXT.indexOf("Examples:", unfamiliarRepoStart);

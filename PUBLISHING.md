@@ -121,6 +121,17 @@ npm publish
 
 The root package should be published last so its optional native dependency points at the final native meta version.
 
+## Upgrade Command Validation
+
+After building the release candidate, exercise the built CLI:
+
+```powershell
+node ./dist/cli.js upgrade --check --json
+node ./dist/cli.js upgrade 999.999.999 --json
+```
+
+The check must return a schema-versioned report from the latest GitHub release lookup. Run the explicit-version command with outbound network access disabled and confirm it still returns immediately with `latestVersion` set to `999.999.999`; neither command may execute Git or npm.
+
 ## Windows Native Cache Validation
 
 Before publishing a cache-enabled release:

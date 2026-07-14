@@ -176,6 +176,19 @@ Use `--no-update-gitignore` to opt out during `init` or `sync --init`; ordinary 
 
 Lifecycle commands accept either one positional project path or `--root <path>`, never both. Automatic ignore updates are bound to that same resolved project root.
 
+## Upgrade Checks
+
+```bash
+codegraph upgrade --check
+codegraph upgrade --check --json
+codegraph upgrade
+codegraph upgrade X.Y.Z
+```
+
+`--check` fetches the latest GitHub release with a three-second timeout without printing an upgrade command, while an explicit stable version skips the network lookup. Add `--json` for schema-versioned output; lookup failures return a non-crashing report with `error`.
+
+After a successful lookup, bare `upgrade` prints source or scoped GitHub Packages npm instructions without running Git or npm. An unknown install channel receives unavailable guidance instead.
+
 ## Installation
 
 Codegraph requires Node.js 22.16 or newer. Use only the scoped packages:

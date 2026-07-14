@@ -128,6 +128,55 @@ Graph, index, and review reports include `backend.native.byLanguage` so native u
 - `uninit` removes only recognized lifecycle state by default and leaves any root `.gitignore` rule in place. It refuses unknown `.codegraph/` entries unless `--force` is passed.
 - Lifecycle commands accept either a positional project path or `--root <path>`. They reject using both together because lifecycle manifests and automatic ignore updates always use one resolved project boundary, not include-root subsets.
 
+### Upgrade checks and instructions
+
+```text
+Usage: codegraph upgrade [version] [--check] [--json]
+```
+
+- `--check` reports whether a newer stable release exists without printing upgrade instructions.
+- `--json` emits the versioned report below.
+- `version` must be a stable `X.Y.Z` and cannot be combined with `--check`.
+
+Bare `upgrade` and `upgrade --check` query the latest GitHub release with a three-second timeout. An explicit version skips the network lookup.
+
+A `.git` entry at the package root is detected as `source`; a root ending in `node_modules/.../@lzehrung/codegraph` is detected as `npm`. Other roots are `unknown`.
+
+After a successful lookup or with an explicit target, text output reports the current version, latest version, update availability, and detected `source`, `npm`, or `unknown` channel. After a successful lookup, bare `upgrade` prints instructions but never runs Git or npm.
+
+For a source checkout, the instructions are:
+
+```bash
+git pull
+npm install
+npm run build
+```
+
+For an npm install, the instructions keep the package scoped to GitHub Packages:
+
+```bash
+npm config set "@lzehrung:registry" "https://npm.pkg.github.com"
+npm install -g @lzehrung/codegraph@X.Y.Z
+```
+
+For a successful bare or explicit-version instruction request on an unknown channel, text output ends with `Upgrade instructions unavailable: install channel could not be determined.`
+
+```ts
+type UpgradeReport = {
+  schemaVersion: 1;
+  currentVersion: string;
+  latestVersion?: string;
+  updateAvailable: boolean;
+  channel: "source" | "npm" | "bundle" | "unknown";
+  command?: string;
+  error?: string;
+};
+```
+
+`bundle` is reserved in schema v1. The current detector never returns it because no owned installer records bundle metadata, so no bundle instructions are available.
+
+Release lookup failures do not crash the command: JSON retains schema-required `updateAvailable: false`, includes `error` to distinguish unknown availability, and omits `latestVersion` and `command`; text prints the current version, channel, and error. Invalid arguments and invalid target versions remain usage errors and exit with status 2.
+
 ### Symbols, navigation, grep, and chunking
 
 ```bash

@@ -56,6 +56,7 @@ import { handleTypeHierarchyCommand } from "./cli/typeHierarchy.js";
 import { handleCallHierarchyCommand } from "./cli/callHierarchy.js";
 import { handleRenamePreviewCommand } from "./cli/renamePreview.js";
 import { handleRefactorPlanCommand } from "./cli/refactorPlan.js";
+import { handleUpgradeCommand } from "./cli/upgrade.js";
 import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions } from "./config.js";
 import { listChangedFiles } from "./util/git.js";
 import { DEFAULT_PROJECT_PATTERNS, listProjectFiles, type ProjectFileDiscoveryOptions } from "./util/projectFiles.js";
@@ -350,6 +351,19 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       getOpt,
       hasFlag,
       cwd: getCwd,
+      writeJSONLine,
+      writeStderrLine,
+      exit: exitCli,
+    });
+    return;
+  }
+
+  if (cmd === "upgrade") {
+    await handleUpgradeCommand({
+      positionals: parsed.positionals,
+      checkOnly: hasFlag("--check"),
+      json: hasFlag("--json"),
+      writeStdoutLine,
       writeJSONLine,
       writeStderrLine,
       exit: exitCli,

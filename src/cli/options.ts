@@ -646,6 +646,14 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     }),
   ],
   [
+    "upgrade",
+    commandSchema(["--check", "--json"], [], {
+      kind: "max",
+      max: 1,
+      usage: "Usage: codegraph upgrade [version] [--check] [--json]",
+    }),
+  ],
+  [
     "unresolved",
     commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--verbose"], SHARED_BUILD_OPTIONS, {
       kind: "none",
