@@ -39,9 +39,11 @@ export async function assertRealPathCandidateWithinRoot(
       `${label} is outside project root: ${normalizePath(realTargetPath)} (root: ${normalizePath(realRoot)})`,
     );
   }
-  const finalRealPath = normalizePath(await fs.realpath(filePath));
+  const finalRealPath = await fs.realpath(filePath);
   if (!isFilePathWithinRoot(realRoot, finalRealPath)) {
-    throw new Error(`${label} is outside project root: ${finalRealPath} (root: ${normalizePath(realRoot)})`);
+    throw new Error(
+      `${label} is outside project root: ${normalizePath(finalRealPath)} (root: ${normalizePath(realRoot)})`,
+    );
   }
   return finalRealPath;
 }

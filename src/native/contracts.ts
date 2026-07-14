@@ -117,6 +117,23 @@ export type NativeBinding = {
   supportedLanguageIds: () => string[];
 };
 
+export type NativeBindingOrigin = {
+  mode: "workspace" | "package" | "cache";
+  packageName: string;
+  packageVersion?: string;
+  target?: string;
+  sourcePath?: string;
+  loadedPath?: string;
+  cacheKey?: string;
+  sha256?: string;
+  cacheError?: string;
+};
+
 export type NativeBindingState =
-  | { loaded: true; binding: NativeBinding; supportedLanguageIds: Set<string> }
-  | { loaded: false; error?: unknown };
+  | {
+      loaded: true;
+      binding: NativeBinding;
+      supportedLanguageIds: Set<string>;
+      origin: NativeBindingOrigin;
+    }
+  | { loaded: false; error?: unknown; origin?: NativeBindingOrigin };

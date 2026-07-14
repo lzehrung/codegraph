@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { stringifyUnknown } from "../util/ast.js";
 import { loadNativeBinding } from "./bindingLoader.js";
-import type { NativeBinding, NativeBindingState, NativeRuntimeMode } from "./contracts.js";
+import type { NativeBinding, NativeBindingOrigin, NativeBindingState, NativeRuntimeMode } from "./contracts.js";
 
 const require = createRequire(import.meta.url);
 const localNativePackageRoot = path.resolve(
@@ -45,10 +45,15 @@ export function loadBinding(): NativeBindingState {
       loaded: true,
       binding: loaded.binding,
       supportedLanguageIds: new Set(loaded.binding.supportedLanguageIds()),
+      origin: loaded.origin,
     };
     return bindingState;
   }
-  bindingState = { loaded: false, error: loaded.error };
+  bindingState = {
+    loaded: false,
+    error: loaded.error,
+    ...(loaded.origin ? { origin: loaded.origin } : {}),
+  };
   return bindingState;
 }
 
@@ -79,6 +84,14 @@ export function isNativeTreeSitterAvailable(mode?: NativeRuntimeMode): boolean {
 export function getNativeTreeSitterLoadError(mode?: NativeRuntimeMode): unknown {
   const state = resolveNativeBindingState(mode);
   return state.loaded ? undefined : state.error;
+}
+
+export function getNativeBindingOrigin(): NativeBindingOrigin | undefined {
+  return resolveNativeBindingState().origin;
+}
+
+export function getCurrentNativeBindingOrigin(): NativeBindingOrigin | undefined {
+  return bindingState?.origin;
 }
 
 export function getNativeTreeSitterSupportedLanguageIds(mode?: NativeRuntimeMode): string[] {

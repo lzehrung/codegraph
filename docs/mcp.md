@@ -31,6 +31,14 @@ The shared HTTP endpoint is `http://127.0.0.1:7331/mcp`. HTTP binds to `127.0.0.
 
 Use stdio for a client-owned subprocess. Use HTTP for one long-running Codegraph process per repository, then point every MCP-capable IDE, terminal, or agent client at the same local URL. Exact config keys vary by client, but the MCP settings should use HTTP/Streamable HTTP transport plus the `/mcp` URL instead of a `command`/`args` stdio launch.
 
+## Runtime identity and updates
+
+The MCP initialize response advertises the Codegraph package version captured when the server starts. The server checks its captured package metadata path at most once every 30 seconds during tool calls; a changed or temporarily unavailable installation produces a deduplicated stderr warning but does not fail the request or terminate the server.
+
+On Windows, installed-package servers map the verified native addon from `%LOCALAPPDATA%\codegraph\native-cache\v1`, not from npm's package directory. An old server may therefore remain healthy after npm installs a new release, but it must be restarted to use the new JavaScript runtime and cache identity.
+
+Run `codegraph doctor` in the installed release to inspect `native.origin`, `native.update`, and any stale npm retirement siblings. `updateSafeForCurrentProcess` describes only the process running doctor; it does not prove that no other process or filesystem service holds a package file.
+
 ## Tools
 
 The server exposes the same bounded primitives as the CLI and library session layer:

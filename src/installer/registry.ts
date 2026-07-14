@@ -532,8 +532,28 @@ async function pathExistsUnlessMissing(filePath: string): Promise<boolean> {
     await fsp.stat(filePath);
     return true;
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return await confirmMissingPathHasDirectoryAncestors(filePath);
+    }
     throw error;
+  }
+}
+
+async function confirmMissingPathHasDirectoryAncestors(filePath: string): Promise<false> {
+  let current = path.dirname(filePath);
+  while (true) {
+    try {
+      const stats = await fsp.lstat(current);
+      if (!stats.isDirectory()) {
+        throw Object.assign(new Error(`ENOTDIR: not a directory, stat '${filePath}'`), { code: "ENOTDIR" });
+      }
+      return false;
+    } catch (error) {
+      if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") throw error;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return false;
+    current = parent;
   }
 }
 

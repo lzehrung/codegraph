@@ -2,7 +2,7 @@ import path from "node:path";
 import type { AnalysisSummary } from "../analysisSummary.js";
 import { getReverseDependencies, getShortestPath, type DependencyNode } from "../graphs/traversal.js";
 import type { BuildOptions } from "../indexer/types.js";
-import { toProjectDisplayPath } from "../util/paths.js";
+import { normalizePath, toProjectDisplayPath } from "../util/paths.js";
 import {
   formatAgentFileViewResponse,
   getCodegraphFileViewWithSession,
@@ -297,7 +297,7 @@ function collectAnchorFiles(
     files.add(file);
   }
   for (const anchor of anchors) {
-    const absolute = path.resolve(snapshot.root, anchor.file);
+    const absolute = normalizePath(path.resolve(snapshot.root, anchor.file));
     if (snapshot.fileGraph.nodes.has(absolute)) {
       files.add(absolute);
     }

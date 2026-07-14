@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   isNativeTreeSitterAvailable,
+  getNativeBindingOrigin,
   getNativeTreeSitterLoadError,
   getNativeTreeSitterSupportedLanguageIds,
 } from "../native/treeSitterNative.js";
@@ -12,6 +13,8 @@ import {
   type CodegraphPackageIdentity,
 } from "./packageInfo.js";
 import { isPlainRecord } from "../util/guards.js";
+import type { NativeBindingOrigin } from "../native/contracts.js";
+import { captureCodegraphRuntimeIdentity, createInstalledVersionChecker } from "../runtimeIdentity.js";
 
 type IndexedArtifactReport = {
   type: "jsonGraph" | "sqliteGraph" | "diskCache" | "artifactBundle" | "unknown";
@@ -20,12 +23,26 @@ type IndexedArtifactReport = {
   details?: Record<string, string | number | boolean>;
 };
 
+export type DoctorNativeOriginReport = NativeBindingOrigin & {
+  updateSafeForCurrentProcess: boolean;
+};
+
+export type DoctorNativeUpdateReport = {
+  staleRetirementPaths: string[];
+  restartRequired: boolean;
+  runningVersion?: string;
+  installedVersion?: string;
+  reason?: string;
+};
+
 export type DoctorReport = {
   package: CodegraphPackageIdentity;
   native: {
     available: boolean;
     loadError?: string;
     supportedLanguageIds: string[];
+    origin?: DoctorNativeOriginReport;
+    update?: DoctorNativeUpdateReport;
   };
   indexArtifact?: IndexedArtifactReport;
 };
@@ -130,14 +147,52 @@ function artifactPresent(dirPath: string, fileName: string | undefined): boolean
   return pathExists(artifactPath);
 }
 
+export function findStaleNpmRetirementPaths(packageRoot: string, limit = 20): string[] {
+  const resolvedPackageRoot = path.resolve(packageRoot);
+  const scopeDirectory = path.dirname(resolvedPackageRoot);
+  if (path.basename(resolvedPackageRoot) !== "codegraph" || path.basename(scopeDirectory) !== "@lzehrung") return [];
+
+  try {
+    return fs
+      .readdirSync(scopeDirectory, { withFileTypes: true })
+      .filter(
+        (entry) => /^\.codegraph-[A-Za-z0-9_-]+$/.test(entry.name) && (entry.isDirectory() || entry.isSymbolicLink()),
+      )
+      .map((entry) => normalizePathForDisplay(path.join(scopeDirectory, entry.name)))
+      .sort()
+      .slice(0, Math.max(0, limit));
+  } catch {
+    return [];
+  }
+}
+
 export function buildDoctorReport(indexPath?: string): DoctorReport {
+  const packageIdentity = getCodegraphPackageIdentity();
   const loadError = getNativeTreeSitterLoadError();
+  const origin = getNativeBindingOrigin();
+  const runtimeIdentity = captureCodegraphRuntimeIdentity(origin);
+  const update = createInstalledVersionChecker(runtimeIdentity, { warn: () => undefined }).check(true);
   return {
-    package: getCodegraphPackageIdentity(),
+    package: packageIdentity,
     native: {
       available: isNativeTreeSitterAvailable(),
       ...(loadError ? { loadError: String(loadError) } : {}),
       supportedLanguageIds: getNativeTreeSitterSupportedLanguageIds(),
+      ...(origin
+        ? {
+            origin: {
+              ...origin,
+              updateSafeForCurrentProcess: origin.mode !== "package",
+            },
+          }
+        : {}),
+      update: {
+        staleRetirementPaths: findStaleNpmRetirementPaths(packageIdentity.packageRoot),
+        restartRequired: update.restartRequired,
+        runningVersion: update.runningVersion,
+        ...(update.installedVersion ? { installedVersion: update.installedVersion } : {}),
+        ...(update.reason ? { reason: update.reason } : {}),
+      },
     },
     ...(indexPath ? { indexArtifact: buildIndexedArtifactReport(indexPath) } : {}),
   };

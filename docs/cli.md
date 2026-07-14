@@ -579,6 +579,10 @@ codegraph skill doctor
 
 `codegraph skill install --agent <name>` supports `agents`, `codex`, `claude`, `cursor`, `gemini`, and `opencode`. Skill install targets must end with `skills/codegraph`; when that safe target shape is satisfied, the installer creates the directory as needed. Cursor CLI now supports native skills directories too, so `.cursor/skills/codegraph` works alongside the universal `~/.agents/skills/codegraph` location. `codegraph -v`, `codegraph version --json`, and `codegraph doctor` include or identify the installed package version so local tarball or source-checkout installs can confirm which build the `codegraph` command is actually running. `doctor` also reports backend/runtime state and optional artifact details, including `artifactBundle` details for directories with a Codegraph `manifest.json`.
 
+`doctor.native.origin` reports `workspace`, `package`, or `cache`, plus normalized source and loaded paths when known. Cache origins include the target, package version, cache key, SHA-256, and `updateSafeForCurrentProcess`; a package fallback retains `cacheError` instead of treating cache preparation failure as native unavailability.
+
+`doctor.native.update` reports bounded, normalized `staleRetirementPaths`, `runningVersion`, `installedVersion`, `restartRequired`, and an optional reason. Doctor never deletes retirement paths, cache entries, or running processes.
+
 ## Incremental git-scoped runs
 
 Use `--changed-since <ref>` or `--git-base <ref> [--git-head <ref>]` with `graph` and `index` to limit processing to the files reported by `git diff`.

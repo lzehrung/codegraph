@@ -3,7 +3,7 @@ import path from "node:path";
 
 import type { BuildOptions } from "../indexer/types.js";
 import { resolveProjectFile, resolveReadableFile } from "../util/confinedFile.js";
-import { toProjectDisplayPath } from "../util/paths.js";
+import { normalizePath, toProjectDisplayPath } from "../util/paths.js";
 import {
   createAgentSession,
   type AgentFreshnessResult,
@@ -225,12 +225,20 @@ export function formatAgentFileViewResponse(response: AgentFileViewResponse): st
 }
 
 export function buildFileGraphContext(snapshot: AgentProjectSnapshot, file: string): AgentFileGraphContext | undefined {
-  const moduleIndex = snapshot.index.byFile.get(file);
+  const normalizedFile = normalizePath(file);
+  let moduleIndex = snapshot.index.byFile.get(file) ?? snapshot.index.byFile.get(normalizedFile);
+  if (!moduleIndex) {
+    for (const [candidate, candidateIndex] of snapshot.index.byFile) {
+      if (normalizePath(candidate) !== normalizedFile) continue;
+      moduleIndex = candidateIndex;
+      break;
+    }
+  }
   if (!moduleIndex) return undefined;
 
   const usedBy = uniqueSorted(
     snapshot.fileGraph.edges
-      .filter((edge) => edge.to.type === "file" && edge.to.path === file)
+      .filter((edge) => edge.to.type === "file" && normalizePath(edge.to.path) === normalizedFile)
       .map((edge) => toProjectDisplayPath(snapshot.root, edge.from)),
   ).slice(0, FILE_VIEW_GRAPH_CONTEXT_LIMIT);
   const imports = uniqueSorted(

@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveNativeWorkerPath } from "../src/worker/nativeWorkerPool.js";
+import { __resetNativeTreeSitterBindingForTests, loadBinding } from "../src/native/runtime.js";
+import { loadProductionBinding } from "../src/worker/nativeExtractWorker.js";
 
 describe("native worker path resolution", () => {
   it("does not probe dist workers under the caller cwd", () => {
@@ -23,5 +25,16 @@ describe("native worker path resolution", () => {
       process.chdir(originalCwd);
       existsSync.mockRestore();
     }
+  });
+
+  it("uses the same native origin in the main process and extraction worker boundary", () => {
+    __resetNativeTreeSitterBindingForTests();
+    const main = loadBinding();
+    const worker = loadProductionBinding();
+
+    expect(main.loaded).toBeTruthy();
+    expect(worker.binding).not.toBeNull();
+    if (!main.loaded || !worker.binding) return;
+    expect(worker.origin).toEqual(main.origin);
   });
 });

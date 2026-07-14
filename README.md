@@ -77,6 +77,8 @@ codegraph doctor
 
 Published installs resolve the optional native runtime automatically when a compatible artifact exists. See [Installation](./docs/installation.md) for registry setup, release tarballs, local global installs, and native runtime modes.
 
+On Windows, installed releases load the native addon from a verified per-user cache so long-running MCP servers do not keep npm's package copy mapped. The first upgrade from an older direct-loading release still requires one stop-update-restart cycle; see [Updating on Windows](./docs/installation.md#updating-on-windows).
+
 ## A useful first five minutes
 
 Do not begin by generating every possible report. Start with the question you actually have.
