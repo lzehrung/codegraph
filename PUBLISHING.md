@@ -121,8 +121,22 @@ npm publish
 
 The root package should be published last so its optional native dependency points at the final native meta version.
 
+## Windows Native Cache Validation
+
+Before publishing a cache-enabled release:
+
+- package both `win32-x64-msvc` and `win32-arm64-msvc` target artifacts;
+- run `npm run test:native` on Windows, including the live-process source-rename integration test;
+- install the packed root package into a synthetic or disposable prefix and confirm `codegraph doctor` reports `native.origin.mode` as `cache`;
+- verify a cache-loaded process remains healthy while its synthetic package source is renamed;
+- verify a global update succeeds while a cache-enabled MCP process remains alive;
+- verify the old process reports restart required and a new process reports the new version and cache key;
+- state the one-time stop-update-restart requirement in the first cache-enabled release notes.
+
+Do not claim updates are universally lock-free. The supported claim is that Codegraph no longer maps the npm-owned native addon; antivirus, backup tools, and stale npm retirement paths can still cause `EBUSY`.
+
 ## Release Notes
 
 - `@lzehrung/codegraph` and `@lzehrung/codegraph-native` version independently.
-- `src/native/treeSitterNative.ts` prefers the installed `@lzehrung/codegraph-native` package and falls back to the local workspace package for development.
-- If a native binary or query is unavailable at runtime, Codegraph degrades to reduced graph-only and regex recovery mode.
+- `src/native/bindingLoader.ts` loads a local workspace binary directly, caches installed Windows binaries, and uses the installed native package directly on other platforms or as a safe fallback.
+- If the cache is unavailable, Codegraph records the cache error and preserves the existing native package fallback; if native loading or a query remains unavailable, it degrades to reduced graph-only and regex recovery mode.

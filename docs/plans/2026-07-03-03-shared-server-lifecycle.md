@@ -18,6 +18,8 @@ codegraph server stop --root .
 
 Keep `codegraph mcp serve` as the low-level primitive. `server start` is a convenience wrapper around it.
 
+Shared servers use the immutable Windows native cache described in [`2026-07-12-windows-native-runtime-cache-updates.md`](./2026-07-12-windows-native-runtime-cache-updates.md). Their registry and health output must preserve the version captured at server start, surface installed-version drift, and require an explicit restart rather than replacing mapped runtime files or terminating clients automatically.
+
 ## Server registry
 
 Store only process metadata:

@@ -16,6 +16,8 @@ codegraph upgrade 1.9.0
 
 Start with a conservative implementation that detects install channel and prints exact commands. Do not self-modify global installs in the first PR unless the channel is a self-contained bundle installed by our own installer.
 
+This command depends on the immutable Windows native runtime cache and runtime-version diagnostics in [`2026-07-12-windows-native-runtime-cache-updates.md`](./2026-07-12-windows-native-runtime-cache-updates.md). For npm installs it may report readiness and invoke npm only with explicit consent; it must not kill MCP hosts or replace npm as install authority.
+
 Install channels:
 
 - source checkout

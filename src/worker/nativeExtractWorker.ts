@@ -46,7 +46,7 @@ type NativeExtractorDeps = {
 
 export type NativeExtractor = (task: NativeExtractTask) => Promise<NativeExtractResult>;
 
-function loadProductionBinding(): NativeBindingLoadResult<NativeBinding> {
+export function loadProductionBinding(): NativeBindingLoadResult<NativeBinding> {
   return loadNativeBinding<NativeBinding>({
     packageName: "@lzehrung/codegraph-native",
     localPackageRoot: localNativePackageRoot,

@@ -67,6 +67,22 @@ Important: the tarball alone does not bundle the native addon. To analyze source
 
 Without the native runtime package, the CLI and library still install, but supported source languages run in reduced graph-only and regex recovery mode.
 
+## Updating on Windows
+
+Installed Windows releases copy the resolved native addon to `%LOCALAPPDATA%\codegraph\native-cache\v1` and load the verified cached copy. Cache entries are content-addressed and immutable, so an existing MCP process can keep using its old entry while npm replaces package-owned files.
+
+The first upgrade from a release that loaded the addon directly requires one transition:
+
+1. Close or disconnect Codegraph MCP clients.
+2. Run `npm install -g @lzehrung/codegraph@latest`.
+3. Restart the clients and run `codegraph doctor`.
+
+Later upgrades should not be blocked solely because Codegraph mapped npm's native addon. Antivirus, backup software, or stale npm retirement directories can still cause `EBUSY`; `codegraph doctor` reports matching `.codegraph-*` siblings without deleting them.
+
+An MCP server that survives an update continues running its captured version and warns when the installed version differs. Restart that client or shared server to use the new JavaScript runtime and native cache identity.
+
+Old cache entries are inert after every process using them has stopped. Cleanup must be explicit: close Codegraph clients first, then remove only obsolete version/hash directories under the fixed `v1` cache root; never overwrite or delete a mapped entry in place.
+
 ## Native runtime modes
 
 The runtime defaults to `native: "auto"`.

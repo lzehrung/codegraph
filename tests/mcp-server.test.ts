@@ -17,6 +17,7 @@ import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import { SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY } from "../src/sqlite.js";
 import { countingSession } from "./helpers/agent.js";
 import { createArtifactOutputWithStaleFile, createLinkedTempRoot, isSymlinkUnavailable } from "./helpers/filesystem.js";
+import { getCodegraphVersion } from "../src/cli/packageInfo.js";
 
 type JsonRpcObject = {
   jsonrpc?: unknown;
@@ -123,6 +124,7 @@ describe("codegraph MCP handlers", () => {
       const initializeResult = readObject(initialize.payload.result);
       const serverInfo = readObject(initializeResult.serverInfo);
       expect(serverInfo.name).toBe("codegraph");
+      expect(serverInfo.version).toBe(getCodegraphVersion());
 
       const toolsList = await postMcpJson(
         httpServer.url,
@@ -149,6 +151,53 @@ describe("codegraph MCP handlers", () => {
     }
   });
 
+  it("keeps tool calls available when installed package metadata disappears", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-runtime-drift-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      host: "127.0.0.1",
+      port: 0,
+      runtimeIdentity: {
+        startedAt: "2026-07-14T00:00:00.000Z",
+        runningVersion: "1.8.93",
+        packageRoot: root.replace(/\\/g, "/"),
+        packageJsonPath: path.join(root, "missing-package.json"),
+      },
+    });
+
+    try {
+      const initialize = await postMcpJson(httpServer.url, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "codegraph-test", version: "1.0.0" },
+        },
+      });
+      const sessionId = initialize.response.headers.get("mcp-session-id");
+      expect(sessionId).toBeTruthy();
+
+      const toolCall = await postMcpJson(
+        httpServer.url,
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: { name: "get_file", arguments: { file: "auth.ts" } },
+        },
+        sessionId ?? undefined,
+      );
+
+      expect(toolCall.response.status).toBe(200);
+      expect(toolCall.payload.error).toBeUndefined();
+      expect(readObject(toolCall.payload.result).isError).not.toBeTruthy();
+    } finally {
+      await httpServer.close();
+    }
+  });
   it("rejects explore calls above the published MCP schema maximums over Streamable HTTP", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-explore-schema-max-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser() { return true; }\n", "utf8");

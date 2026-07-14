@@ -6,7 +6,7 @@ import { describe, expect, test, vi } from "vitest";
 import { MAX_FILE_VIEW_BYTES, MAX_FILE_VIEW_LINES } from "../src/agent/fileView.js";
 import { handleChunkCommand, type ChunkCommandContext } from "../src/cli/chunk.js";
 import type { CliAgentCommandContext } from "../src/cli/context.js";
-import { buildDoctorReport } from "../src/cli/doctor.js";
+import { buildDoctorReport, findStaleNpmRetirementPaths } from "../src/cli/doctor.js";
 import { handleGraphCommand, type GraphCommandContext } from "../src/cli/graph.js";
 import { handleGraphDeltaCommand } from "../src/cli/graphDelta.js";
 import { handleGraphQueryCommand, type GraphQueryCommandContext } from "../src/cli/graphQueries.js";
@@ -677,6 +677,14 @@ describe("CLI command modules", () => {
 
       expect(report.package.name).toBe("@lzehrung/codegraph");
       expect(report.native.supportedLanguageIds.length).toBeGreaterThan(0);
+      expect(report.native.origin).toBeDefined();
+      expect(report.native.origin?.updateSafeForCurrentProcess).toBe(report.native.origin?.mode !== "package");
+      expect(report.native.update).toMatchObject({
+        restartRequired: false,
+        runningVersion: report.package.version,
+        installedVersion: report.package.version,
+        staleRetirementPaths: [],
+      });
       expect(report.indexArtifact?.type).toBe("jsonGraph");
       expect(report.indexArtifact?.exists).toBeTruthy();
     } finally {
@@ -684,6 +692,25 @@ describe("CLI command modules", () => {
     }
   });
 
+  test("bounds and normalizes stale npm retirement sibling diagnostics", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-doctor-retirement-"));
+    const scopeRoot = path.join(root, "node_modules", "@lzehrung");
+    const packageRoot = path.join(scopeRoot, "codegraph");
+    await Promise.all([
+      fsp.mkdir(packageRoot, { recursive: true }),
+      fsp.mkdir(path.join(scopeRoot, ".codegraph-z"), { recursive: true }),
+      fsp.mkdir(path.join(scopeRoot, ".codegraph-a"), { recursive: true }),
+      fsp.mkdir(path.join(scopeRoot, "unrelated"), { recursive: true }),
+    ]);
+
+    try {
+      expect(findStaleNpmRetirementPaths(packageRoot, 1)).toEqual([
+        path.join(scopeRoot, ".codegraph-a").replace(/\\/g, "/"),
+      ]);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
   test("builds doctor reports for agent artifact bundle directories", async () => {
     const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-doctor-artifact-bundle-"));
     const tempDir = path.join(tempRoot, "bundle");

@@ -95,7 +95,7 @@ describe("project lifecycle commands", () => {
       expect(first.gitignore).toEqual({ status: "added", path: ".gitignore" });
       expect(second.gitignore).toEqual({ status: "already-ignored", path: ".gitignore" });
       expect(await fsp.readFile(path.join(root, ".gitignore"), "utf8")).toBe(testCase.expected);
-      if (testCase.initial !== null) {
+      if (testCase.initial !== null && process.platform !== "win32") {
         expect((await fsp.stat(path.join(root, ".gitignore"))).mode & 0o777).toBe(0o640);
       }
       expect(await readCodegraphEntries(root)).toEqual(["manifest.json"]);
@@ -205,7 +205,14 @@ describe("project lifecycle commands", () => {
         await fsp.mkdir(gitignorePath);
       } else {
         await writeFile(root, "ignore-target", "operator policy\n");
-        await fsp.symlink("ignore-target", gitignorePath);
+        try {
+          await fsp.symlink("ignore-target", gitignorePath);
+        } catch (error) {
+          if (process.platform === "win32" && error instanceof Error && "code" in error && error.code === "EPERM") {
+            continue;
+          }
+          throw error;
+        }
       }
 
       await expect(initCodegraphLifecycle(root)).rejects.toThrow(CodegraphLifecycleUserError);
@@ -443,7 +450,7 @@ describe("project lifecycle commands", () => {
       code: "EACCES",
     });
     const readFileSpy = vi.spyOn(fsp, "readFile").mockImplementation(async (filePath, options) => {
-      if (filePath === gitignorePath) {
+      if (path.resolve(String(filePath)) === path.resolve(gitignorePath)) {
         throw eaccesError;
       }
       return await originalReadFile(filePath, options as never);
@@ -1190,7 +1197,7 @@ describe("project lifecycle commands", () => {
       code: "EACCES",
     });
     const statSpy = vi.spyOn(fsp, "stat").mockImplementation(async (filePath, options) => {
-      if (filePath === targetPath) {
+      if (path.resolve(String(filePath)) === path.resolve(targetPath)) {
         throw eaccesError;
       }
       return await originalStat(filePath, options as never);

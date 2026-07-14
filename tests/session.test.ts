@@ -8,6 +8,7 @@ import os from "node:os";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { resolveFilePathFromRoot } from "../src/util.js";
+import { normalizePath } from "../src/util/paths.js";
 
 const sampleRoot = path.resolve("tests/samples/typescript");
 let sessionCacheDir: string | undefined;
@@ -579,7 +580,7 @@ index 1234567..abcdef0 100644
 
         expect(result.status).toBe("ok");
         if (result.status === "ok") {
-          expect(result.definition.file).toBe(path.resolve(latePath));
+          expect(result.definition.file).toBe(normalizePath(path.resolve(latePath)));
           expect(result.definition.localName).toBe("late");
         }
         expect(session.getStats().lastRefreshReason).toBe("stale_check");
@@ -620,7 +621,7 @@ index 1234567..abcdef0 100644
 
         expect(result.status).toBe("ok");
         if (result.status === "ok") {
-          expect(result.definition.file).toBe(path.resolve(latePath));
+          expect(result.definition.file).toBe(normalizePath(path.resolve(latePath)));
           expect(result.definition.localName).toBe("late");
         }
         expect(session.getStats().lastRefreshReason).toBe("stale_check");

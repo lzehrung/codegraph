@@ -82,6 +82,12 @@ import {
   writeJsonRpcError,
   type AllowedHostHeaderRules,
 } from "./http.js";
+import { getLoadedNativeBindingOrigin } from "../native/runtime.js";
+import {
+  captureCodegraphRuntimeIdentity,
+  createInstalledVersionChecker,
+  type CodegraphRuntimeIdentity,
+} from "../runtimeIdentity.js";
 
 export { listCodegraphMcpTools } from "./tools.js";
 import { assertWritableDirectoryRealPathWithinRoot, resolveArtifactSqlitePathCandidate } from "./security.js";
@@ -101,6 +107,7 @@ export type CodegraphMcpServerOptions = CodegraphMcpHandlerOptions & {
   host?: string;
   port?: number;
   onHttpListen?: ((info: CodegraphMcpHttpServerInfo) => void) | undefined;
+  runtimeIdentity?: CodegraphRuntimeIdentity;
 };
 
 export type CodegraphMcpHttpServerInfo = {
@@ -850,11 +857,15 @@ function createCodegraphMcpHandlersForSession(
   };
 }
 
-function createCodegraphMcpProtocolServer(handlers: CodegraphMcpHandlers): McpServer {
+export function createCodegraphMcpProtocolServer(
+  handlers: CodegraphMcpHandlers,
+  runtimeIdentity: CodegraphRuntimeIdentity = captureCodegraphRuntimeIdentity(getLoadedNativeBindingOrigin()),
+): McpServer {
+  const installedVersion = createInstalledVersionChecker(runtimeIdentity);
   const server = new McpServer(
     {
       name: "codegraph",
-      version: "1.0.0",
+      version: runtimeIdentity.runningVersion,
     },
     {
       capabilities: { tools: {} },
@@ -863,6 +874,13 @@ function createCodegraphMcpProtocolServer(handlers: CodegraphMcpHandlers): McpSe
 
   server.server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: MCP_TOOLS }));
   server.server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
+    try {
+      installedVersion.check();
+    } catch (error) {
+      console.error(
+        `[codegraph] installed-version check failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     const result = await callMcpTool(handlers, request.params.name, request.params.arguments ?? {});
     return toToolResult(result);
   });
@@ -884,7 +902,8 @@ export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Pro
   }
 
   const handlers = await createWarmedCodegraphMcpHandlers(options);
-  const server = createCodegraphMcpProtocolServer(handlers);
+  const runtimeIdentity = options.runtimeIdentity ?? captureCodegraphRuntimeIdentity(getLoadedNativeBindingOrigin());
+  const server = createCodegraphMcpProtocolServer(handlers, runtimeIdentity);
   await server.connect(new StdioServerTransport());
 }
 
@@ -893,11 +912,12 @@ export async function startCodegraphMcpHttpServer(
 ): Promise<CodegraphMcpHttpServer> {
   const host = options.host ?? "127.0.0.1";
   const handlers = await createWarmedCodegraphMcpHandlers(options);
+  const runtimeIdentity = options.runtimeIdentity ?? captureCodegraphRuntimeIdentity(getLoadedNativeBindingOrigin());
   const sessions = new Map<string, { server: McpServer; transport: StreamableHTTPServerTransport }>();
   let allowedHostHeaders = emptyAllowedHostHeaderRules();
 
   const server = createServer((request, response) => {
-    void handleMcpHttpRequest(request, response, handlers, sessions, () => allowedHostHeaders);
+    void handleMcpHttpRequest(request, response, handlers, sessions, () => allowedHostHeaders, runtimeIdentity);
   });
 
   server.on("close", () => {
@@ -935,6 +955,7 @@ async function handleMcpHttpRequest(
   handlers: CodegraphMcpHandlers,
   sessions: Map<string, { server: McpServer; transport: StreamableHTTPServerTransport }>,
   getAllowedHostHeaders: () => AllowedHostHeaderRules,
+  runtimeIdentity: CodegraphRuntimeIdentity,
 ): Promise<void> {
   const requestPath = getRequestPath(request);
   if (requestPath !== MCP_HTTP_PATH) {
@@ -958,7 +979,7 @@ async function handleMcpHttpRequest(
         writeJsonRpcError(response, 400, "Invalid JSON request body");
         return;
       }
-      await handleMcpHttpPost(request, response, parsedBody.body, handlers, sessions);
+      await handleMcpHttpPost(request, response, parsedBody.body, handlers, sessions, runtimeIdentity);
       return;
     }
 
@@ -981,6 +1002,7 @@ async function handleMcpHttpPost(
   body: unknown,
   handlers: CodegraphMcpHandlers,
   sessions: Map<string, { server: McpServer; transport: StreamableHTTPServerTransport }>,
+  runtimeIdentity: CodegraphRuntimeIdentity,
 ): Promise<void> {
   const sessionId = getHeaderValue(request.headers["mcp-session-id"]);
   if (sessionId !== undefined) {
@@ -998,7 +1020,7 @@ async function handleMcpHttpPost(
     return;
   }
 
-  const protocolServer = createCodegraphMcpProtocolServer(handlers);
+  const protocolServer = createCodegraphMcpProtocolServer(handlers, runtimeIdentity);
   let initializedSessionId: string | undefined;
   const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
     enableJsonResponse: true,

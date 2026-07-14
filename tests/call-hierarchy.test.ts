@@ -90,10 +90,10 @@ describe("call hierarchy", () => {
     const callAlpha = node("callAlpha");
     const callDynamic = node("callDynamic");
     const alphaRun = [...graph.nodes.values()].find(
-      (candidate) => candidate.name === "run" && candidate.file.endsWith(`${path.sep}alpha.ts`),
+      (candidate) => candidate.name === "run" && candidate.file.endsWith("/alpha.ts"),
     );
     const betaRun = [...graph.nodes.values()].find(
-      (candidate) => candidate.name === "run" && candidate.file.endsWith(`${path.sep}beta.ts`),
+      (candidate) => candidate.name === "run" && candidate.file.endsWith("/beta.ts"),
     );
     expect(callAlpha).toBeDefined();
     expect(callDynamic).toBeDefined();

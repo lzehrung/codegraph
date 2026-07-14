@@ -13,6 +13,7 @@ const nativeRequiredSuites = [
   "tests/native-query-scope.test.ts",
   "tests/native-worker-parity.test.ts",
   "tests/detailed-symbol-native-only.test.ts",
+  "tests/native-cache-windows.test.ts",
 ];
 
 function run(command, args) {

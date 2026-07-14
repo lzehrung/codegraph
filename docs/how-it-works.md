@@ -28,6 +28,12 @@ For supported source languages, language definitions provide a Tree-sitter gramm
 
 In the normal `auto` runtime mode, the native addon performs this Tree-sitter parse and query work when available. TypeScript code owns discovery, normalization, resolution, graph assembly, semantic operations, and output formatting, so native acceleration does not change the public result contract.
 
+### Windows installed-runtime cache
+
+On Windows, an installed Codegraph package resolves the platform `.node` file without loading it, hashes it with a bounded streaming buffer, and publishes the verified bytes to `%LOCALAPPDATA%\codegraph\native-cache\v1`. Each cache entry is keyed by platform target, package version, and SHA-256; concurrent processes converge on one immutable final file without overwriting mapped binaries.
+
+The loader requires the cached path and records both the package-owned source and loaded origin. Local workspace builds bypass this cache so rebuilding `packages/codegraph-native` still takes effect immediately, while non-Windows installed packages keep their existing package loader.
+
 ### Opt-in: `--fast-graph`
 
 `--fast-graph` bypasses native import queries only for plain `.js` and `.ts` files and extracts their module specifiers with a lightweight text matcher instead. TSX and other parser-backed languages keep their normal extraction path, and other analysis work can still require parsed syntax.

@@ -44,7 +44,7 @@ describe("agent orient", () => {
     expect(response.focus[0]?.followUps[0]).toBe("codegraph packet get ./-entry.ts --pretty");
   });
 
-  it("disambiguates handle-like file targets in follow-up commands", async () => {
+  it.skipIf(process.platform === "win32")("disambiguates handle-like file targets in follow-up commands", async () => {
     const root = await mkTmpDir("cg-agent-orient-handle-like-file-");
     await writeFile(root, "file:entry.ts", "export const value = 1;\n");
 
