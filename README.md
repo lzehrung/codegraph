@@ -294,24 +294,7 @@ The honest boundaries matter:
 
 Run `codegraph doctor` to confirm the active runtime. Use `--report` on graph, index, or review commands when backend and cache behavior need to be auditable.
 
-## Documentation
-
-README is the landing page. The detailed contracts live here:
-
-- [Installation](./docs/installation.md): install paths, requirements, native artifacts, and reduced mode
-- [CLI reference](./docs/cli.md): commands, flags, output formats, graph export, and SQLite schema
-- [Vectorless search](./docs/search.md): lexical ranking, symbol and graph context, modes, strengths, and limits
-- [Agent workflows](./docs/agent-workflows.md): explore, orient, packets, sessions, streaming, and review loops
-- [MCP](./docs/mcp.md): server setup, clients, tools, and safety model
-- [Library API](./docs/library-api.md): exports, types, sessions, streaming, and programmatic analysis
-- [How it works](./docs/how-it-works.md): discovery, parsing, resolution, caching, and performance
-- [Language parity](./docs/language-parity.md): per-language capability matrix and limitations
-- [Scenario catalog](./docs/scenario-catalog.md): fixtures and regression coverage for language claims
-- [Benchmarks](./docs/benchmarks/README.md): reproducible methodology, checked results, and limitations
-- [Adding language support](./docs/adding-language-support.md): implementation and review checklist
-- [Publishing](./PUBLISHING.md): release and native artifact workflow
-
-## Contributing
+## Development
 
 ```bash
 npm install
