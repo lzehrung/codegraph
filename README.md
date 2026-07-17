@@ -26,7 +26,7 @@ Use Codegraph alongside text search and compilers: text search finds exact strin
 - [Using as a library](#using-as-a-library)
 - [How it works](#how-it-works)
 - [Limits and tradeoffs](#limits-and-tradeoffs)
-- [Documentation](#documentation)
+- [Documentation](./docs)
   - [CLI](./docs/cli.md)
   - [Publishing](./PUBLISHING.md)
 - [Contributing](#contributing)
