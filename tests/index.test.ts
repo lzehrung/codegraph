@@ -57,7 +57,7 @@ describe("Project Indexing", () => {
       });
 
       expect(updates.map((update) => update.phase)).toEqual(["start", "update", "complete"]);
-      expect(updates[0]).toMatchObject({ mode: "build", current: 0, total: 0 });
+      expect(updates[0]).toMatchObject({ mode: "build", current: 0, total: 1 });
       expect(updates[1]).toMatchObject({ mode: "build", current: 1, total: 1 });
       expect(updates[2]).toMatchObject({ mode: "build", current: 1, total: 1 });
       expect(updates[2]?.elapsedMs).toBeTypeOf("number");
@@ -75,12 +75,31 @@ describe("Project Indexing", () => {
     try {
       await buildProjectIndex(root, buildOptions);
 
+      const fullCacheUpdates: ProgressUpdate[] = [];
+      await buildProjectIndex(root, {
+        ...buildOptions,
+        onProgress: (update) => fullCacheUpdates.push(update),
+      });
+      expect(fullCacheUpdates).toEqual([]);
+
       const cachedUpdates: ProgressUpdate[] = [];
       await buildProjectIndexIncremental(root, {
         ...buildOptions,
+        files: [file],
         onProgress: (update) => cachedUpdates.push(update),
       });
       expect(cachedUpdates).toEqual([]);
+
+      await fsp.rm(path.join(root, ".codegraph-cache", "index-v1", "project-index-snapshot.json"), {
+        force: true,
+      });
+      const moduleCacheUpdates: ProgressUpdate[] = [];
+      await buildProjectIndexIncremental(root, {
+        ...buildOptions,
+        files: [file],
+        onProgress: (update) => moduleCacheUpdates.push(update),
+      });
+      expect(moduleCacheUpdates).toEqual([]);
 
       await fsp.writeFile(file, "export const value = 2;\n", "utf8");
       const staleUpdates: ProgressUpdate[] = [];

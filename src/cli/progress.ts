@@ -24,7 +24,9 @@ export function resolveCliProgressPresentation(input: {
   terminalSupportsControlSequences: boolean;
 }): CliProgressPresentation {
   if (input.policy === "never") return "off";
-  if (input.stderrIsTTY && input.terminalSupportsControlSequences) return "interactive";
+  if (input.stderrIsTTY) {
+    return input.terminalSupportsControlSequences ? "interactive" : "log";
+  }
   if (input.policy === "always") return "log";
   return "off";
 }
@@ -100,7 +102,10 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void): CliPr
         complete(update);
         return;
       }
-      if (!active) start(update);
+      if (!active) {
+        if (update.phase === "update") return;
+        start(update);
+      }
       current = update.current;
       total = update.total;
       mode = update.mode ?? mode;
@@ -135,7 +140,10 @@ function createLogProgressDisplay(write: (chunk: string) => void): CliProgressDi
         write(`[Progress] ${verb} project index: ${update.total} files${elapsed}.\n`);
         return;
       }
-      if (!active) active = true;
+      if (!active) {
+        if (update.phase === "update") return;
+        active = true;
+      }
       const isComplete = update.current >= update.total;
       if (update.current === 1 || isComplete || update.current % 100 === 0) {
         write(`[Progress] ${update.current}/${update.total} files processed.\n`);
