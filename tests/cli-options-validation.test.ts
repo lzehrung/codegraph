@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { parseCliArgs } from "../src/cli/context.js";
 import {
-  cliCommandStartsWithProjectIndex,
   parseImpactScopeOption,
   parseNonNegativeIntegerOption,
   parseRefContextOption,
   parseSymbolGraphScopeOption,
   validateCliArgs,
 } from "../src/cli/options.js";
+import { cliInvocationStartsWithProjectIndex } from "../src/cli/progress.js";
 
 describe("parseIntegerOptionValue strictness", () => {
   it("rejects hex, scientific, and empty integer strings", () => {
@@ -142,21 +142,16 @@ describe("CLI command option validation", () => {
   it("starts preparation for every index-backed command", () => {
     const indexBackedCommands = [
       "apisurface",
-      "artifact",
       "callees",
       "callers",
-      "cycles",
       "deps",
       "drift",
       "dumpmod",
       "duplicates",
       "explain",
       "explore",
-      "file",
       "goto",
-      "graph",
       "graph-delta",
-      "hotspots",
       "impact",
       "implementations",
       "index",
@@ -178,13 +173,17 @@ describe("CLI command option validation", () => {
       "unresolved",
     ];
     for (const command of indexBackedCommands) {
-      expect(cliCommandStartsWithProjectIndex(command, parseCliArgs(command, [])), command).toBe(true);
+      expect(cliInvocationStartsWithProjectIndex(command, parseCliArgs(command, [])), command).toBe(true);
     }
 
     const nonIndexCommands = [
       "chunk",
+      "cycles",
       "doctor",
       "grep",
+      "file",
+      "graph",
+      "hotspots",
       "install",
       "skill",
       "sql",
@@ -194,11 +193,20 @@ describe("CLI command option validation", () => {
       "version",
     ];
     for (const command of nonIndexCommands) {
-      expect(cliCommandStartsWithProjectIndex(command, parseCliArgs(command, [])), command).toBe(false);
+      expect(cliInvocationStartsWithProjectIndex(command, parseCliArgs(command, [])), command).toBe(false);
     }
 
-    expect(cliCommandStartsWithProjectIndex("mcp", parseCliArgs("mcp", ["serve"]))).toBe(false);
-    expect(cliCommandStartsWithProjectIndex("mcp", parseCliArgs("mcp", ["serve", "--warmup"]))).toBe(true);
+    expect(cliInvocationStartsWithProjectIndex("artifact", parseCliArgs("artifact", ["build"]))).toBe(true);
+    expect(cliInvocationStartsWithProjectIndex("file", parseCliArgs("file", ["main.ts"]))).toBe(false);
+    expect(
+      cliInvocationStartsWithProjectIndex("file", parseCliArgs("file", ["main.ts", "--include-graph-context"])),
+    ).toBe(true);
+    expect(cliInvocationStartsWithProjectIndex("graph", parseCliArgs("graph", ["--json"]))).toBe(false);
+    expect(cliInvocationStartsWithProjectIndex("graph", parseCliArgs("graph", ["--symbols"]))).toBe(true);
+    expect(cliInvocationStartsWithProjectIndex("graph", parseCliArgs("graph", ["--sqlite", "graph.db"]))).toBe(true);
+    expect(cliInvocationStartsWithProjectIndex("mcp", parseCliArgs("mcp", ["serve"]))).toBe(false);
+    expect(cliInvocationStartsWithProjectIndex("mcp", parseCliArgs("mcp", ["serve", "--warmup"]))).toBe(true);
+    expect(cliInvocationStartsWithProjectIndex("mcp", parseCliArgs("mcp", ["serve", "--warmup-symbols"]))).toBe(true);
   });
 
   it("rejects conflicting progress flags", () => {

@@ -670,13 +670,6 @@ function allowedOptionsForSchema(schema: CliCommandSchema): Set<string> {
   return new Set(schema.options ?? []);
 }
 
-export function cliCommandStartsWithProjectIndex(command: string, parsed: ParsedCliArgs): boolean {
-  if (command === "mcp") {
-    return parsed.flags.has("--warmup") || parsed.flags.has("--warmup-symbols");
-  }
-  return CLI_COMMAND_SCHEMAS.get(command)?.flags?.includes("--progress") ?? false;
-}
-
 export function validateCliArgs(command: string, parsed: ParsedCliArgs): void {
   const schema = CLI_COMMAND_SCHEMAS.get(command);
   if (!schema) return;

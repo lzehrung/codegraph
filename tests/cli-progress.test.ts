@@ -38,6 +38,16 @@ describe("CLI index progress", () => {
       expect(slowChunks).toEqual([]);
       vi.advanceTimersByTime(1);
       expect(slowChunks.join("")).toBe("Preparing project index...\n");
+
+      const logChunks: string[] = [];
+      const logDisplay = createCliProgressDisplay({
+        presentation: "log",
+        write: (chunk) => logChunks.push(chunk),
+        preparationDelayMs: 0,
+      });
+      logDisplay.prepare();
+      expect(logChunks.join("")).toBe("[Progress] Preparing project index.\n");
+      logDisplay.dispose();
       slowDisplay.dispose();
 
       const fastChunks: string[] = [];
@@ -190,23 +200,41 @@ describe("CLI index progress", () => {
     }
   });
 
-  it("shows preparation before a delayed non-orient cold start", async () => {
+  it("shows deterministic preparation for non-orient cold starts and honors progress policy", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-preparation-"));
-    await Promise.all(
-      Array.from({ length: 4_000 }, async (_, index) => {
-        await fsp.writeFile(path.join(root, `module-${index}.ts`), `export const value${index} = ${index};\n`, "utf8");
-      }),
-    );
+    await fsp.writeFile(path.join(root, "main.ts"), "export const value = 1;\n", "utf8");
 
     try {
-      const result = await captureCli(["index", "--root", root, "--cache", "off"], {
+      const interactive = await captureCli(["index", "--root", root, "--cache", "off"], {
         stderrIsTTY: true,
         terminalSupportsControlSequences: true,
+        progressPreparationDelayMs: 0,
       });
-      const preparingAt = result.stderr.indexOf("Preparing project index");
-      const buildingAt = result.stderr.indexOf("Building project index");
+      const preparingAt = interactive.stderr.indexOf("Preparing project index");
+      const buildingAt = interactive.stderr.indexOf("Building project index");
       expect(preparingAt).toBeGreaterThanOrEqual(0);
       expect(buildingAt).toBeGreaterThan(preparingAt);
+
+      const forced = await captureCli(["index", "--root", root, "--cache", "off", "--progress"], {
+        progressPreparationDelayMs: 0,
+      });
+      expect(forced.stderr).toContain("[Progress] Preparing project index.");
+      expect(forced.stderr).toContain("[Progress] Building project index.");
+
+      const suppressed = await captureCli(["index", "--root", root, "--cache", "off", "--no-progress"], {
+        stderrIsTTY: true,
+        terminalSupportsControlSequences: true,
+        progressPreparationDelayMs: 0,
+      });
+      expect(suppressed.stderr).toBe("");
+
+      const directGraph = await captureCli(["graph", "--root", root, "--json"], {
+        stderrIsTTY: true,
+        terminalSupportsControlSequences: true,
+        progressPreparationDelayMs: 0,
+      });
+      expect(directGraph.stderr).not.toContain("Preparing project index");
+      expect(() => JSON.parse(directGraph.stdout)).not.toThrow();
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

@@ -1,4 +1,5 @@
 import type { ProgressUpdate } from "../types.js";
+import type { ParsedCliArgs } from "./options.js";
 
 export type CliProgressPolicy = "auto" | "always" | "never";
 export type CliProgressPresentation = "interactive" | "log" | "off";
@@ -13,12 +14,63 @@ export type CliProgressDisplay = {
 type CreateCliProgressDisplayOptions = {
   presentation: Exclude<CliProgressPresentation, "off">;
   write: (chunk: string) => void;
+  preparationDelayMs?: number;
 };
 
 const REFRESH_INTERVAL_MS = 100;
 const PREPARATION_DELAY_MS = 100;
 const CLEAR_LINE = "\r\u001b[2K";
 const SPINNER_FRAMES = ["-", "\\", "|", "/"] as const;
+const ALWAYS_INDEX_START_COMMANDS: Readonly<Record<string, true>> = {
+  apisurface: true,
+  callees: true,
+  callers: true,
+  deps: true,
+  drift: true,
+  dumpmod: true,
+  duplicates: true,
+  explain: true,
+  explore: true,
+  goto: true,
+  "graph-delta": true,
+  impact: true,
+  implementations: true,
+  index: true,
+  init: true,
+  inspect: true,
+  orient: true,
+  packet: true,
+  path: true,
+  rdeps: true,
+  "refactor-plan": true,
+  refs: true,
+  "rename-preview": true,
+  review: true,
+  search: true,
+  subtypes: true,
+  supertypes: true,
+  symbols: true,
+  sync: true,
+  unresolved: true,
+};
+
+export function cliInvocationStartsWithProjectIndex(command: string, parsed: ParsedCliArgs): boolean {
+  if (command === "artifact") return parsed.positionals[0] === "build";
+  if (command === "file") return parsed.flags.has("--include-graph-context");
+  if (command === "graph") {
+    return (
+      parsed.options.has("--sqlite") ||
+      parsed.options.has("--db") ||
+      parsed.flags.has("--symbols") ||
+      parsed.flags.has("--symbols-only") ||
+      parsed.flags.has("--symbols-detailed")
+    );
+  }
+  if (command === "mcp") {
+    return parsed.flags.has("--warmup") || parsed.flags.has("--warmup-symbols");
+  }
+  return !!ALWAYS_INDEX_START_COMMANDS[command];
+}
 
 export function resolveCliProgressPresentation(input: {
   policy: CliProgressPolicy;
@@ -34,11 +86,15 @@ export function resolveCliProgressPresentation(input: {
 }
 
 export function createCliProgressDisplay(options: CreateCliProgressDisplayOptions): CliProgressDisplay {
-  if (options.presentation === "log") return createLogProgressDisplay(options.write);
-  return createInteractiveProgressDisplay(options.write);
+  const preparationDelayMs = options.preparationDelayMs ?? PREPARATION_DELAY_MS;
+  if (options.presentation === "log") return createLogProgressDisplay(options.write, preparationDelayMs);
+  return createInteractiveProgressDisplay(options.write, preparationDelayMs);
 }
 
-function createInteractiveProgressDisplay(write: (chunk: string) => void): CliProgressDisplay {
+function createInteractiveProgressDisplay(
+  write: (chunk: string) => void,
+  preparationDelayMs: number,
+): CliProgressDisplay {
   let active = false;
   let rendered = false;
   let frameIndex = 0;
@@ -47,6 +103,7 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void): CliPr
   let mode: NonNullable<ProgressUpdate["mode"]> = "build";
   let interval: NodeJS.Timeout | undefined;
   let preparationTimer: NodeJS.Timeout | undefined;
+  let preparationRequested = false;
 
   const cancelPreparation = (): void => {
     if (preparationTimer === undefined) return;
@@ -55,11 +112,16 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void): CliPr
   };
 
   const prepare = (): void => {
-    if (preparationTimer !== undefined || active) return;
+    if (preparationRequested || active) return;
+    preparationRequested = true;
+    if (preparationDelayMs <= 0) {
+      write("Preparing project index...\n");
+      return;
+    }
     preparationTimer = setTimeout(() => {
       preparationTimer = undefined;
       write("Preparing project index...\n");
-    }, PREPARATION_DELAY_MS);
+    }, preparationDelayMs);
     preparationTimer.unref();
   };
 
@@ -140,10 +202,11 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void): CliPr
   };
 }
 
-function createLogProgressDisplay(write: (chunk: string) => void): CliProgressDisplay {
+function createLogProgressDisplay(write: (chunk: string) => void, preparationDelayMs: number): CliProgressDisplay {
   let active = false;
   let mode: NonNullable<ProgressUpdate["mode"]> = "build";
   let preparationTimer: NodeJS.Timeout | undefined;
+  let preparationRequested = false;
 
   const cancelPreparation = (): void => {
     if (preparationTimer === undefined) return;
@@ -152,11 +215,16 @@ function createLogProgressDisplay(write: (chunk: string) => void): CliProgressDi
   };
 
   const prepare = (): void => {
-    if (preparationTimer !== undefined || active) return;
+    if (preparationRequested || active) return;
+    preparationRequested = true;
+    if (preparationDelayMs <= 0) {
+      write("[Progress] Preparing project index.\n");
+      return;
+    }
     preparationTimer = setTimeout(() => {
       preparationTimer = undefined;
       write("[Progress] Preparing project index.\n");
-    }, PREPARATION_DELAY_MS);
+    }, preparationDelayMs);
     preparationTimer.unref();
   };
 
