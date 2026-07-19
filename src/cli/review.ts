@@ -3,7 +3,7 @@ import path from "node:path";
 import { buildReviewReport, type ReviewBuildReport, type ReviewDepth, type ReviewReport } from "../review.js";
 import type { CandidateTestFile } from "../impact/context.js";
 import { formatRequiredArgumentCount } from "../impact/reportShared.js";
-import type { BuildReport, ProjectIndex } from "../indexer/types.js";
+import type { BuildOptions, BuildReport, ProjectIndex } from "../indexer/types.js";
 import { type GraphBuildOptions } from "../graphs/types.js";
 import {
   appendDuplicateLeadSummary,
@@ -47,6 +47,7 @@ export type ReviewCommandContext = {
   nativeMode: NativeRuntimeMode;
   useNativeWorkers: boolean;
   graphOptions: GraphBuildOptions | undefined;
+  progressHandler: BuildOptions["onProgress"];
   writeJSONLine: (value: unknown) => void;
   writeStdoutLine: (message: string) => void;
   writeStderrLine: (message: string) => void;
@@ -305,6 +306,7 @@ export async function handleReviewCommand(context: ReviewCommandContext): Promis
   if (cacheVerify) reviewOpts.cacheVerify = true;
   if (incrementalStrict) reviewOpts.incrementalStrict = true;
   if (context.graphOptions) reviewOpts.graph = context.graphOptions;
+  if (context.progressHandler) reviewOpts.onProgress = context.progressHandler;
   if (includeSymbolDetails) {
     reviewOpts.includeSymbolDetails = includeSymbolDetails;
   }

@@ -26,7 +26,7 @@ export type IndexCommandContext = {
   discoveryOptions: ProjectFileDiscoveryOptions;
   nativeMode: NativeRuntimeMode;
   workerOpts: { useNativeWorkers: true } | Record<string, never>;
-  progressHandler: ((update: { current: number; total: number }) => void) | undefined;
+  progressHandler: BuildOptions["onProgress"];
   graphOptions: GraphBuildOptions | undefined;
   reportEnabled: boolean;
   reportFile: string | undefined;

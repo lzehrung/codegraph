@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { buildProjectIndexFromFiles } from "../src/index.js";
+import { buildProjectIndex, buildProjectIndexFromFiles, buildProjectIndexIncremental } from "../src/index.js";
+import type { ProgressUpdate } from "../src/types.js";
 import { createTestIndex, expectFileInIndex, expectModuleCount } from "./test-utils.js";
 
 describe("Project Indexing", () => {
@@ -41,6 +42,77 @@ describe("Project Indexing", () => {
           edge.to.path === libManifest.replace(/\\/g, "/"),
       ),
     ).toBe(false);
+  });
+
+  it("reports full-build lifecycle before file progress", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-index-progress-"));
+    const file = path.join(root, "main.ts");
+    const updates: ProgressUpdate[] = [];
+    await fsp.writeFile(file, "export const value = 1;\n", "utf8");
+
+    try {
+      await buildProjectIndexFromFiles(root, [file], {
+        cache: "off",
+        onProgress: (update) => updates.push(update),
+      });
+
+      expect(updates.map((update) => update.phase)).toEqual(["start", "update", "complete"]);
+      expect(updates[0]).toMatchObject({ mode: "build", current: 0, total: 1 });
+      expect(updates[1]).toMatchObject({ mode: "build", current: 1, total: 1 });
+      expect(updates[2]).toMatchObject({ mode: "build", current: 1, total: 1 });
+      expect(updates[2]?.elapsedMs).toBeTypeOf("number");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps snapshot hits quiet and reports stale-index updates", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-incremental-progress-"));
+    const file = path.join(root, "main.ts");
+    const buildOptions = { cache: "disk" as const, cacheStrict: true };
+    await fsp.writeFile(file, "export const value = 1;\n", "utf8");
+
+    try {
+      await buildProjectIndex(root, buildOptions);
+
+      const fullCacheUpdates: ProgressUpdate[] = [];
+      await buildProjectIndex(root, {
+        ...buildOptions,
+        onProgress: (update) => fullCacheUpdates.push(update),
+      });
+      expect(fullCacheUpdates).toEqual([]);
+
+      const cachedUpdates: ProgressUpdate[] = [];
+      await buildProjectIndexIncremental(root, {
+        ...buildOptions,
+        files: [file],
+        onProgress: (update) => cachedUpdates.push(update),
+      });
+      expect(cachedUpdates).toEqual([]);
+
+      await fsp.rm(path.join(root, ".codegraph-cache", "index-v1", "project-index-snapshot.json"), {
+        force: true,
+      });
+      const moduleCacheUpdates: ProgressUpdate[] = [];
+      await buildProjectIndexIncremental(root, {
+        ...buildOptions,
+        files: [file],
+        onProgress: (update) => moduleCacheUpdates.push(update),
+      });
+      expect(moduleCacheUpdates).toEqual([]);
+
+      await fsp.writeFile(file, "export const value = 2;\n", "utf8");
+      const staleUpdates: ProgressUpdate[] = [];
+      await buildProjectIndexIncremental(root, {
+        ...buildOptions,
+        onProgress: (update) => staleUpdates.push(update),
+      });
+
+      expect(staleUpdates[0]).toMatchObject({ phase: "start", mode: "update", current: 0, total: 1 });
+      expect(staleUpdates.at(-1)).toMatchObject({ phase: "complete", mode: "update", current: 1, total: 1 });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("rejects explicit file-list inputs outside the project root", async () => {

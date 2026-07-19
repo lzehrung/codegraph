@@ -18,6 +18,9 @@ export type ProgressUpdate = {
   message: string;
   current: number;
   total: number;
+  phase?: "start" | "update" | "complete";
+  mode?: "build" | "update";
+  elapsedMs?: number;
 };
 
 export type Graph = { nodes: Set<FileId>; edges: Edge[] };

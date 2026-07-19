@@ -68,7 +68,8 @@ Build Options:
   --limit N                 Result limit for hotspots/inspect summaries
   --cache-strict            Force strict content-hash cache validation
   --cache-verify            Re-stat cached files before trusting disk cache entries
-  --progress                Show progress tracking during indexing
+  --progress                Force progress output when stderr is redirected
+  --no-progress             Suppress automatic index progress feedback
 
 Analysis Output Options:
   --json                    Output analysis commands as JSON (default where supported)
@@ -223,6 +224,10 @@ Safety:
   Removes only Codegraph-owned marker blocks, marker files, exact bundled skill payloads, or exact installer-owned MCP entries.
 `;
 
+const SHARED_INDEX_OPTIONS_HELP = `Index options:
+  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+  Index builds report progress automatically on an interactive stderr terminal. Use --progress to force redirected progress logs or --no-progress to suppress feedback.`;
+
 export const EXPLORE_HELP_TEXT = `codegraph explore - Answer a broad repo question with bounded repo context
 
 Usage: codegraph explore "<query>" [--root <path>] [--limit <n>] [--max-packets <n>] [--max-paths <n>] [--no-source] [--include-graph-context] [--allow-sensitive] [--json | --pretty]
@@ -231,8 +236,7 @@ Output:
   Explore orchestrates search, packet retrieval, dependency paths, reverse dependencies, candidate tests, and follow-up commands. An exact file-path query also includes the live bounded file view.
   JSON is the default. Use --pretty for concise model-readable sections. Graph context and raw sensitive values require explicit flags.
 
-Index options:
-  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+${SHARED_INDEX_OPTIONS_HELP}
 `;
 
 export const FILE_HELP_TEXT = `codegraph file - Read a live project file with bounded line pagination
@@ -263,8 +267,7 @@ Output:
   Results include top-level analysis metadata plus stable handles, rank reasons, provenance, evidence, graph neighbors, follow-up commands, limits, and omission counts.
   Hybrid search is code-first by default: source files and symbols outrank docs unless you use text mode or the docs are the strongest remaining evidence.
 
-Index options:
-  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+${SHARED_INDEX_OPTIONS_HELP}
 `;
 
 export const SYMBOLS_HELP_TEXT = `codegraph symbols - Deterministic workspace-symbol lookup
@@ -278,8 +281,7 @@ Matching:
 Output:
   JSON includes portable handles, exact declaration ranges, provenance, limits, and omission counts. Pretty output is concise and intended for direct reading.
 
-Index options:
-  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+${SHARED_INDEX_OPTIONS_HELP}
 `;
 
 export const CALLERS_HELP_TEXT = `codegraph callers - Find proven semantic callers
@@ -288,8 +290,7 @@ Usage: codegraph callers <symbol-handle> [--root <path>] [--depth <1-5>] [--limi
 
 Returns grouped caller symbols and exact project-relative callsites from resolved calls edges. --include-heuristic is accepted for forward compatibility, but current results remain limited to proven semantic edges.
 
-Index options:
-  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+${SHARED_INDEX_OPTIONS_HELP}
 `;
 
 export const CALLEES_HELP_TEXT = `codegraph callees - Find proven semantic callees
@@ -298,8 +299,7 @@ Usage: codegraph callees <symbol-handle> [--root <path>] [--depth <1-5>] [--limi
 
 Returns grouped callee symbols and exact project-relative callsites from resolved calls edges. --include-heuristic is accepted for forward compatibility, but current results remain limited to proven semantic edges.
 
-Index options:
-  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+${SHARED_INDEX_OPTIONS_HELP}
 `;
 
 export const SUPERTYPES_HELP_TEXT = `codegraph supertypes - Find proven supertypes
@@ -308,8 +308,7 @@ Usage: codegraph supertypes <symbol-handle> [--root <path>] [--depth <1-10>] [--
 
 Returns only currently extracted extends and implements relationships. Results include exact locations, relation depth, provenance, limits, and omissions.
 
-Index options:
-  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+${SHARED_INDEX_OPTIONS_HELP}
 `;
 
 export const SUBTYPES_HELP_TEXT = `codegraph subtypes - Find proven subtypes
@@ -318,8 +317,7 @@ Usage: codegraph subtypes <symbol-handle> [--root <path>] [--depth <1-10>] [--li
 
 Returns only currently extracted extends and implements relationships. Results include exact locations, relation depth, provenance, limits, and omissions.
 
-Index options:
-  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+${SHARED_INDEX_OPTIONS_HELP}
 `;
 
 export const IMPLEMENTATIONS_HELP_TEXT = `codegraph implementations - Find proven implementations
@@ -328,8 +326,7 @@ Usage: codegraph implementations <symbol-handle> [--root <path>] [--limit <0-500
 
 Type lookup follows extracted hierarchy relationships. Member lookup is supported only for members owned by an interface or trait with proven implementers; unrelated same-name members are never inferred.
 
-Index options:
-  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+${SHARED_INDEX_OPTIONS_HELP}
 `;
 
 export const RENAME_PREVIEW_HELP_TEXT = `codegraph rename-preview - Preview a semantic rename without changing files
@@ -340,8 +337,7 @@ Returns exact project-relative edits, conflicts, unsafe sites, candidate tests, 
 
 --include-filenames requests suggestions for eligible exported class, interface, or type filenames only. Rename preview is read-only and no apply command exists.
 
-Index options:
-  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+${SHARED_INDEX_OPTIONS_HELP}
 `;
 
 export const REFACTOR_PLAN_HELP_TEXT = `codegraph refactor-plan - Build a read-only refactor evidence packet
@@ -352,8 +348,7 @@ Returns a target definition, references, callers, callees, type hierarchy, imple
 
 --rename adds the authoritative read-only rename preview. Nested rename.safe is the safety decision; Codegraph does not expose an apply command and never changes source files.
 
-Index options:
-  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+${SHARED_INDEX_OPTIONS_HELP}
 `;
 
 export const ORIENT_HELP_TEXT = `codegraph orient - Build a compact first-turn packet for agent repo context
@@ -364,8 +359,7 @@ Output:
   Orientation includes summary bullets, ranked focus targets with follow-up commands, a bounded project tree, budgeted health counts, and omission counts.
   Use --pretty for model-readable triage and --json when tooling needs exact focus reasons, limits, or omissions. Small budget defaults to --health skip. Medium and large default to --health summary, which counts cycles and unresolved imports without duplicate detection.
 
-Index options:
-  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+${SHARED_INDEX_OPTIONS_HELP}
 `;
 
 export const PACKET_HELP_TEXT = `codegraph packet - Retrieve bounded evidence packets by file path or stable target
@@ -375,8 +369,7 @@ Usage: codegraph packet get <target> [--root <path>] [--json | --pretty] [--max-
 Targets:
   Accepts file paths, symbol names, SQL object names, file:/symbol:/chunk:/sql:/graph: handles from search or explain output, and quoted review packet targets like 'review:base=<encoded-ref>;head=<encoded-ref>'.
 
-Index options:
-  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+${SHARED_INDEX_OPTIONS_HELP}
 `;
 
 export const EXPLAIN_HELP_TEXT = `codegraph explain - Explain a file, symbol, SQL object, or search handle
@@ -389,8 +382,7 @@ Targets:
 Output:
   Explanations include bounded symbols, dependencies, reverse dependencies, references, snippets, duplicate context, SQL facts, follow-up commands, limits, and omission counts.
 
-Index options:
-  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+${SHARED_INDEX_OPTIONS_HELP}
 `;
 
 export const ARTIFACT_HELP_TEXT = `codegraph artifact - Build an agent-ready handoff bundle
@@ -408,8 +400,7 @@ Defaults:
   With no artifact selector flags, all artifacts are written.
   --force removes recognizable stale artifact files while preserving unrelated operator files.
 
-Index options:
-  Supports shared --cache, --cache-strict, --cache-verify, --threads, --native, --workers, --include-glob, --ignore-glob, and --no-gitignore options.
+${SHARED_INDEX_OPTIONS_HELP}
 `;
 
 export const MCP_HELP_TEXT = `codegraph mcp - Serve MCP tools for agent graph navigation
@@ -426,6 +417,8 @@ Index Options:
   --cache <mode>     Session cache mode: disk, memory, off
   --cache-strict     Force strict content-hash cache validation
   --cache-verify     Re-stat cached files before trusting disk cache entries
+  --progress         Force progress output when stderr is redirected
+  --no-progress      Suppress automatic index progress feedback
   --threads N        Number of worker threads (default: auto)
   --native <mode>    Native runtime mode: auto, on, off
   --workers          Use Piscina worker threads for native extraction
@@ -461,6 +454,8 @@ Index Options:
   --cache <mode>     Session cache mode: disk, memory, off
   --cache-strict     Force strict content-hash cache validation
   --cache-verify     Re-stat cached files before trusting disk cache entries
+  --progress         Force progress output when stderr is redirected
+  --no-progress      Suppress automatic index progress feedback
   --threads N        Number of worker threads (default: auto)
   --native <mode>    Native runtime mode: auto, on, off
   --workers          Use Piscina worker threads for native extraction

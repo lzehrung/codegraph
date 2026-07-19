@@ -18,6 +18,7 @@ export type GraphDeltaCommandContext = {
   gitBase: string | undefined;
   gitHead: string | undefined;
   changedSince: string | undefined;
+  progressHandler: IncrementalBuildOptions["onProgress"];
   writeJSONLine: (value: unknown) => void;
 };
 
@@ -35,6 +36,7 @@ export async function handleGraphDeltaCommand(context: GraphDeltaCommandContext)
     cacheVerify,
     incrementalStrict,
     files: context.files,
+    ...(context.progressHandler ? { onProgress: context.progressHandler } : {}),
   };
   if (context.nativeMode !== "auto") deltaOptions.native = context.nativeMode;
   if (cache !== undefined) deltaOptions.cache = cache;

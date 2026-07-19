@@ -47,6 +47,7 @@ import { handleOrientCommand } from "./cli/orient.js";
 import { handleDumpmodCommand, handleGotoCommand, handleRefsCommand } from "./cli/navigation.js";
 import { parseCacheModeOption, parseOptionalNonNegativeIntegerOption, validateCliArgs } from "./cli/options.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
+import type { CliProgressPolicy } from "./cli/progress.js";
 import { handlePacketCommand } from "./cli/packet.js";
 import { handleReviewCommand } from "./cli/review.js";
 import { handleSearchCommand } from "./cli/search.js";
@@ -170,8 +171,14 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   const nativeMode = parseNativeRuntimeMode(getOpt("--native"));
   const useNativeWorkers = hasFlag("--workers");
   const workerOpts = useNativeWorkers ? ({ useNativeWorkers: true } as const) : ({} as const);
-  const showProgress = hasFlag("--progress");
-  const progressHandler = createCliProgressHandler(showProgress);
+  let progressPolicy: CliProgressPolicy = "auto";
+  if (hasFlag("--no-progress")) {
+    progressPolicy = "never";
+  } else if (hasFlag("--progress")) {
+    progressPolicy = "always";
+  }
+  const showBuildDiagnostics = hasFlag("--progress");
+  const progressHandler = createCliProgressHandler(progressPolicy);
   const graphFlags = {
     fast: hasFlag("--fast-graph"),
     resolveNodeModules: hasFlag("--resolve-node-modules"),
@@ -802,6 +809,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       gitBase,
       gitHead,
       changedSince,
+      progressHandler,
       writeJSONLine,
     });
     return;
@@ -826,7 +834,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       changedSince,
       reportEnabled,
       reportFile,
-      showProgress,
+      showProgress: showBuildDiagnostics,
       getOpt,
       hasFlag,
       cwd: getCwd,
@@ -860,7 +868,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       writeStderrLine,
       writeCommandReport,
       maybeWriteNativeBackendStatus,
-      showProgress,
+      showProgress: showBuildDiagnostics,
     });
     return;
   }
@@ -1018,6 +1026,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       nativeMode,
       useNativeWorkers,
       graphOptions: hasGraphOverrides ? buildGraphOptions() : undefined,
+      progressHandler,
       writeJSONLine,
       writeStdoutLine,
       writeStderrLine,

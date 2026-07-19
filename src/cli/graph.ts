@@ -13,7 +13,7 @@ import {
   graphToMermaidSymbolsWithFiles,
 } from "../graphs/symbol-render.js";
 import { buildProjectIndexFromFiles, buildProjectIndexIncremental } from "../indexer/build-index.js";
-import { type BuildReport } from "../indexer/types.js";
+import { type BuildOptions, type BuildReport } from "../indexer/types.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import { updateGraphSqlite, writeGraphSqlite } from "../sqlite.js";
 import { buildSqlArtifactGraphFromFiles } from "../sql/index.js";
@@ -65,7 +65,7 @@ export type GraphCommandContext = {
   discoveryOptions: ProjectFileDiscoveryOptions;
   nativeMode: NativeRuntimeMode;
   workerOpts: { useNativeWorkers: true } | Record<string, never>;
-  progressHandler: ((update: { current: number; total: number }) => void) | undefined;
+  progressHandler: BuildOptions["onProgress"];
   graphFlags: {
     fast: boolean;
     resolveNodeModules: boolean;

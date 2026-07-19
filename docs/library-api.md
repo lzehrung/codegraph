@@ -553,6 +553,8 @@ const incremental = await buildProjectIndexIncremental(root, {
 
 `changedSince` follows `git diff <rev>` semantics, while `gitBase` and `gitHead` use an explicit `<base>..<head>` range for normal revisions. `gitHead` also accepts `WORKTREE` for staged and unstaged tracked-file changes, or `STAGED`/`INDEX` for the current index.
 
+`BuildOptions.onProgress` reports index lifecycle and file progress. A rebuild emits `phase: "start"` with `mode: "build"` or `"update"`, zero or more `phase: "update"` events, and `phase: "complete"` with `elapsedMs`; a reusable snapshot emits no progress events.
+
 ## Project file discovery and graph building
 
 `listProjectFiles` defaults to source files plus common project manifests and lockfiles across supported languages, for example `package.json`, `requirements.txt`, `pyproject.toml`, and `Cargo.toml`.
