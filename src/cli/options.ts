@@ -141,6 +141,37 @@ const JSON_OUTPUT_FLAGS = ["--json", "--pretty"];
 const REPORT_FLAGS = ["--report"];
 const REPORT_OPTIONS = ["--report-file"];
 const GIT_RANGE_OPTIONS = ["--base", "--head", "--changed-since"];
+const ALWAYS_INDEX_START_COMMANDS: Readonly<Record<string, true>> = {
+  apisurface: true,
+  callees: true,
+  callers: true,
+  deps: true,
+  drift: true,
+  dumpmod: true,
+  duplicates: true,
+  explain: true,
+  explore: true,
+  goto: true,
+  "graph-delta": true,
+  impact: true,
+  implementations: true,
+  index: true,
+  init: true,
+  inspect: true,
+  orient: true,
+  packet: true,
+  path: true,
+  rdeps: true,
+  "refactor-plan": true,
+  refs: true,
+  "rename-preview": true,
+  review: true,
+  subtypes: true,
+  supertypes: true,
+  symbols: true,
+  sync: true,
+  unresolved: true,
+};
 
 function commandSchema(flags: readonly string[], options: readonly string[], positionals: CliPositionalPolicy) {
   return { flags, options, positionals } satisfies CliCommandSchema;
@@ -668,6 +699,28 @@ function allowedFlagsForSchema(schema: CliCommandSchema): Set<string> {
 
 function allowedOptionsForSchema(schema: CliCommandSchema): Set<string> {
   return new Set(schema.options ?? []);
+}
+
+export function cliInvocationStartsWithProjectIndex(command: string, parsed: ParsedCliArgs): boolean {
+  if (command === "artifact") return parsed.positionals[0] === "build";
+  if (command === "file") return parsed.flags.has("--include-graph-context");
+  if (command === "graph") {
+    return (
+      parsed.options.has("--sqlite") ||
+      parsed.options.has("--db") ||
+      parsed.flags.has("--symbols") ||
+      parsed.flags.has("--symbols-only") ||
+      parsed.flags.has("--symbols-detailed")
+    );
+  }
+  if (command === "mcp") {
+    return parsed.flags.has("--warmup") || parsed.flags.has("--warmup-symbols");
+  }
+  if (command === "search") {
+    const mode = parsed.options.get("--mode")?.at(-1);
+    return mode !== "path" || parsed.options.has("--from");
+  }
+  return !!ALWAYS_INDEX_START_COMMANDS[command];
 }
 
 export function validateCliArgs(command: string, parsed: ParsedCliArgs): void {

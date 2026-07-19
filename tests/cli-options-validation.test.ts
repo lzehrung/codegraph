@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { parseCliArgs } from "../src/cli/context.js";
 import {
+  cliInvocationStartsWithProjectIndex,
   parseImpactScopeOption,
   parseNonNegativeIntegerOption,
   parseRefContextOption,
   parseSymbolGraphScopeOption,
   validateCliArgs,
 } from "../src/cli/options.js";
-import { cliInvocationStartsWithProjectIndex } from "../src/cli/progress.js";
 
 describe("parseIntegerOptionValue strictness", () => {
   it("rejects hex, scientific, and empty integer strings", () => {
@@ -196,6 +196,7 @@ describe("CLI command option validation", () => {
       expect(cliInvocationStartsWithProjectIndex(command, parseCliArgs(command, [])), command).toBe(false);
     }
 
+    expect(cliInvocationStartsWithProjectIndex("artifact", parseCliArgs("artifact", []))).toBe(false);
     expect(cliInvocationStartsWithProjectIndex("artifact", parseCliArgs("artifact", ["build"]))).toBe(true);
     expect(cliInvocationStartsWithProjectIndex("file", parseCliArgs("file", ["main.ts"]))).toBe(false);
     expect(
@@ -207,6 +208,18 @@ describe("CLI command option validation", () => {
     expect(cliInvocationStartsWithProjectIndex("mcp", parseCliArgs("mcp", ["serve"]))).toBe(false);
     expect(cliInvocationStartsWithProjectIndex("mcp", parseCliArgs("mcp", ["serve", "--warmup"]))).toBe(true);
     expect(cliInvocationStartsWithProjectIndex("mcp", parseCliArgs("mcp", ["serve", "--warmup-symbols"]))).toBe(true);
+    expect(cliInvocationStartsWithProjectIndex("search", parseCliArgs("search", ["auth", "--mode", "path"]))).toBe(
+      false,
+    );
+    expect(
+      cliInvocationStartsWithProjectIndex(
+        "search",
+        parseCliArgs("search", ["auth", "--mode", "path", "--from", "src"]),
+      ),
+    ).toBe(true);
+    expect(cliInvocationStartsWithProjectIndex("search", parseCliArgs("search", ["auth", "--mode", "text"]))).toBe(
+      true,
+    );
   });
 
   it("rejects conflicting progress flags", () => {

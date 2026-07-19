@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createCliProgressHandler, runWithCliRuntime } from "../src/cli/context.js";
 import { createCliProgressDisplay, resolveCliProgressPresentation } from "../src/cli/progress.js";
 import { buildProjectIndex } from "../src/index.js";
+import * as configModule from "../src/config.js";
 import { captureCli } from "./helpers/cli.js";
 
 describe("CLI index progress", () => {
@@ -200,6 +201,45 @@ describe("CLI index progress", () => {
     }
   });
 
+  it("shows preparation while project config loading is delayed", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-config-preparation-"));
+    await fsp.writeFile(path.join(root, "main.ts"), "export const value = 1;\n", "utf8");
+    const enteredConfigLoad = Promise.withResolvers<void>();
+    const releaseConfigLoad = Promise.withResolvers<void>();
+    const loadCodegraphConfig = configModule.loadCodegraphConfig;
+    const configSpy = vi.spyOn(configModule, "loadCodegraphConfig").mockImplementation(async (projectRoot) => {
+      enteredConfigLoad.resolve();
+      await releaseConfigLoad.promise;
+      return await loadCodegraphConfig(projectRoot);
+    });
+    let liveStderr = "";
+    vi.useFakeTimers();
+
+    try {
+      const resultPromise = captureCli(["index", "--root", root, "--cache", "off"], {
+        stderrIsTTY: true,
+        terminalSupportsControlSequences: true,
+        onStderr: (chunk) => {
+          liveStderr += chunk;
+        },
+      });
+      await enteredConfigLoad.promise;
+      await vi.advanceTimersByTimeAsync(100);
+      expect(liveStderr).toContain("Preparing project index");
+      expect(liveStderr).not.toContain("Building project index");
+
+      vi.useRealTimers();
+      releaseConfigLoad.resolve();
+      const result = await resultPromise;
+      expect(result.stderr).toContain("Building project index");
+    } finally {
+      releaseConfigLoad.resolve();
+      vi.useRealTimers();
+      configSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("shows deterministic preparation for non-orient cold starts and honors progress policy", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-preparation-"));
     await fsp.writeFile(path.join(root, "main.ts"), "export const value = 1;\n", "utf8");
@@ -235,6 +275,49 @@ describe("CLI index progress", () => {
       });
       expect(directGraph.stderr).not.toContain("Preparing project index");
       expect(() => JSON.parse(directGraph.stdout)).not.toThrow();
+
+      const symbolGraph = await captureCli(["graph", "--root", root, "--json", "--symbols"], {
+        stderrIsTTY: true,
+        terminalSupportsControlSequences: true,
+        progressPreparationDelayMs: 0,
+      });
+      expect(symbolGraph.stderr).toContain("Preparing project index");
+      expect(() => JSON.parse(symbolGraph.stdout)).not.toThrow();
+
+      const plainFile = await captureCli(["file", "main.ts", "--root", root, "--json"], {
+        stderrIsTTY: true,
+        terminalSupportsControlSequences: true,
+        progressPreparationDelayMs: 0,
+      });
+      expect(plainFile.stderr).not.toContain("Preparing project index");
+      expect(() => JSON.parse(plainFile.stdout)).not.toThrow();
+
+      const graphFile = await captureCli(
+        ["file", "main.ts", "--root", root, "--json", "--include-graph-context", "--cache", "off"],
+        {
+          stderrIsTTY: true,
+          terminalSupportsControlSequences: true,
+          progressPreparationDelayMs: 0,
+        },
+      );
+      expect(graphFile.stderr).toContain("Preparing project index");
+      expect(() => JSON.parse(graphFile.stdout)).not.toThrow();
+
+      const pathSearch = await captureCli(["search", "main", "--root", root, "--mode", "path", "--json"], {
+        stderrIsTTY: true,
+        terminalSupportsControlSequences: true,
+        progressPreparationDelayMs: 0,
+      });
+      expect(pathSearch.stderr).not.toContain("Preparing project index");
+      expect(() => JSON.parse(pathSearch.stdout)).not.toThrow();
+
+      const textSearch = await captureCli(["search", "value", "--root", root, "--mode", "text", "--json"], {
+        stderrIsTTY: true,
+        terminalSupportsControlSequences: true,
+        progressPreparationDelayMs: 0,
+      });
+      expect(textSearch.stderr).toContain("Preparing project index");
+      expect(() => JSON.parse(textSearch.stdout)).not.toThrow();
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
