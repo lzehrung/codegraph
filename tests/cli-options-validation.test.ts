@@ -205,6 +205,7 @@ describe("CLI command option validation", () => {
     expect(cliInvocationStartsWithProjectIndex("graph", parseCliArgs("graph", ["--json"]))).toBe(false);
     expect(cliInvocationStartsWithProjectIndex("graph", parseCliArgs("graph", ["--symbols"]))).toBe(true);
     expect(cliInvocationStartsWithProjectIndex("graph", parseCliArgs("graph", ["--sqlite", "graph.db"]))).toBe(true);
+    expect(cliInvocationStartsWithProjectIndex("graph", parseCliArgs("graph", ["--db", "graph.db"]))).toBe(false);
     expect(cliInvocationStartsWithProjectIndex("mcp", parseCliArgs("mcp", ["serve"]))).toBe(false);
     expect(cliInvocationStartsWithProjectIndex("mcp", parseCliArgs("mcp", ["serve", "--warmup"]))).toBe(true);
     expect(cliInvocationStartsWithProjectIndex("mcp", parseCliArgs("mcp", ["serve", "--warmup-symbols"]))).toBe(true);

@@ -707,7 +707,6 @@ export function cliInvocationStartsWithProjectIndex(command: string, parsed: Par
   if (command === "graph") {
     return (
       parsed.options.has("--sqlite") ||
-      parsed.options.has("--db") ||
       parsed.flags.has("--symbols") ||
       parsed.flags.has("--symbols-only") ||
       parsed.flags.has("--symbols-detailed")

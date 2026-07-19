@@ -6,6 +6,7 @@ import { createCliProgressHandler, runWithCliRuntime } from "../src/cli/context.
 import { createCliProgressDisplay, resolveCliProgressPresentation } from "../src/cli/progress.js";
 import { buildProjectIndex } from "../src/index.js";
 import * as configModule from "../src/config.js";
+import * as mcpServer from "../src/mcp/server.js";
 import { captureCli } from "./helpers/cli.js";
 
 describe("CLI index progress", () => {
@@ -319,6 +320,47 @@ describe("CLI index progress", () => {
       expect(textSearch.stderr).toContain("Preparing project index");
       expect(() => JSON.parse(textSearch.stdout)).not.toThrow();
     } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("prepares MCP startup only when warmup is requested", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-mcp-preparation-"));
+    const serveSpy = vi.spyOn(mcpServer, "serveCodegraphMcp").mockResolvedValue();
+
+    try {
+      const captureOptions = {
+        stderrIsTTY: true,
+        terminalSupportsControlSequences: true,
+        progressPreparationDelayMs: 0,
+      };
+      const lazy = await captureCli(["mcp", "serve", "--root", root], captureOptions);
+      const baseWarmup = await captureCli(["mcp", "serve", "--root", root, "--warmup"], captureOptions);
+      const symbolWarmup = await captureCli(["mcp", "serve", "--root", root, "--warmup-symbols"], captureOptions);
+
+      expect(lazy.stderr).not.toContain("Preparing project index");
+      expect(baseWarmup.stderr).toContain("Preparing project index");
+      expect(symbolWarmup.stderr).toContain("Preparing project index");
+      expect(serveSpy).toHaveBeenNthCalledWith(1, expect.objectContaining({ root }));
+      expect(serveSpy.mock.calls[0]?.[0].warmup).toBeUndefined();
+      expect(serveSpy).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          root,
+          warmup: "base",
+          buildOptions: expect.objectContaining({ onProgress: expect.any(Function) }),
+        }),
+      );
+      expect(serveSpy).toHaveBeenNthCalledWith(
+        3,
+        expect.objectContaining({
+          root,
+          warmup: "symbols",
+          buildOptions: expect.objectContaining({ onProgress: expect.any(Function) }),
+        }),
+      );
+    } finally {
+      serveSpy.mockRestore();
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
