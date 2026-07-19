@@ -112,8 +112,8 @@ describe("CLI command option validation", () => {
     }
   });
 
-  it("rejects --cache-verify, --progress, and --workers flags for status, which never calls createAgentSession/loadProject", () => {
-    for (const flag of ["--cache-verify", "--progress", "--workers"]) {
+  it("rejects build-only flags for status, which never calls createAgentSession/loadProject", () => {
+    for (const flag of ["--cache-verify", "--progress", "--no-progress", "--workers"]) {
       const parsed = parseCliArgs("status", [flag]);
 
       expect(() => validateCliArgs("status", parsed)).toThrow(`Unknown option for status: ${flag}`);
@@ -126,9 +126,9 @@ describe("CLI command option validation", () => {
     expect(() => validateCliArgs("status", parsed)).toThrow("Unknown option for status: --threads");
   });
 
-  it("still accepts --cache-verify, --progress, --workers, and --threads for init/sync, which do call session.loadProject", () => {
+  it("accepts build flags for init and sync, which do call session.loadProject", () => {
     for (const command of ["init", "sync"]) {
-      for (const flag of ["--cache-verify", "--progress", "--workers"]) {
+      for (const flag of ["--cache-verify", "--progress", "--no-progress", "--workers"]) {
         const parsed = parseCliArgs(command, [flag]);
 
         expect(() => validateCliArgs(command, parsed)).not.toThrow();
@@ -137,6 +137,11 @@ describe("CLI command option validation", () => {
       const parsedThreads = parseCliArgs(command, ["--threads", "4"]);
       expect(() => validateCliArgs(command, parsedThreads)).not.toThrow();
     }
+  });
+  it("rejects conflicting progress flags", () => {
+    const parsed = parseCliArgs("orient", ["--progress", "--no-progress"]);
+
+    expect(() => validateCliArgs("orient", parsed)).toThrow("--progress and --no-progress cannot be used together.");
   });
   it("accepts --no-update-gitignore only for init and initializing sync", () => {
     expect(() => validateCliArgs("init", parseCliArgs("init", ["--no-update-gitignore"]))).not.toThrow();

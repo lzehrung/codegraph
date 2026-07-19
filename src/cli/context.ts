@@ -9,6 +9,12 @@ import { normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
 import { matchesDiscoveryGlob, type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { isRelativePathInside } from "../util/projectFiles.js";
 import { isCliValueOption, type ParsedCliArgs } from "./options.js";
+import {
+  createCliProgressDisplay,
+  resolveCliProgressPresentation,
+  type CliProgressDisplay,
+  type CliProgressPolicy,
+} from "./progress.js";
 
 function toJSON(obj: unknown): string {
   return JSON.stringify(obj, null, 2);
@@ -116,6 +122,8 @@ export type CliRuntime = {
   exit: (code: number) => never;
   cwd: () => string;
   readStdin: () => Promise<string>;
+  stderrIsTTY: () => boolean;
+  terminalSupportsControlSequences: () => boolean;
 };
 
 export type CliPositionalsContext = {
@@ -164,6 +172,7 @@ export type CliAgentCommandContext = {
 type CliContext = {
   runtime: CliRuntime;
   stderrFilePath: string | undefined;
+  progressDisplay: CliProgressDisplay | undefined;
 };
 
 function createDefaultCliRuntime(): CliRuntime {
@@ -172,6 +181,8 @@ function createDefaultCliRuntime(): CliRuntime {
     stderr: (chunk) => process.stderr.write(chunk),
     exit: (code) => process.exit(code),
     cwd: () => process.cwd(),
+    stderrIsTTY: () => !!process.stderr.isTTY,
+    terminalSupportsControlSequences: () => !!process.stderr.isTTY && process.env.TERM !== "dumb",
     readStdin: async () =>
       await new Promise<string>((resolve, reject) => {
         let data = "";
@@ -206,6 +217,7 @@ function createDefaultCliRuntime(): CliRuntime {
 const defaultCliContext: CliContext = {
   runtime: createDefaultCliRuntime(),
   stderrFilePath: undefined,
+  progressDisplay: undefined,
 };
 const cliContextStorage = new AsyncLocalStorage<CliContext>();
 
@@ -213,6 +225,7 @@ function createCliContext(runtime: Partial<CliRuntime> = {}): CliContext {
   return {
     runtime: { ...createDefaultCliRuntime(), ...runtime },
     stderrFilePath: undefined,
+    progressDisplay: undefined,
   };
 }
 
@@ -222,7 +235,13 @@ function getCliContext(): CliContext {
 
 export async function runWithCliRuntime<T>(runtime: Partial<CliRuntime>, callback: () => Promise<T>): Promise<T> {
   const context = createCliContext(runtime);
-  return await cliContextStorage.run(context, callback);
+  return await cliContextStorage.run(context, async () => {
+    try {
+      return await callback();
+    } finally {
+      context.progressDisplay?.dispose();
+    }
+  });
 }
 
 export function getCwd(): string {
@@ -237,16 +256,14 @@ export function exitCli(code: number): never {
   return getCliContext().runtime.exit(code);
 }
 
-function writeStderrChunk(message: string): void {
-  getCliContext().runtime.stderr(message);
-}
-
 export function setCliStderrFilePath(filePath: string | undefined): void {
   getCliContext().stderrFilePath = filePath;
 }
 
 export function writeStdoutLine(message: string): void {
-  getCliContext().runtime.stdout(`${message}\n`);
+  const context = getCliContext();
+  context.progressDisplay?.clear();
+  context.runtime.stdout(`${message}\n`);
 }
 
 export function writeJSONLine(value: unknown): void {
@@ -255,6 +272,7 @@ export function writeJSONLine(value: unknown): void {
 
 export function writeStderrLine(message: string): void {
   const context = getCliContext();
+  context.progressDisplay?.clear();
   context.runtime.stderr(`${message}\n`);
   try {
     if (context.stderrFilePath) {
@@ -334,28 +352,22 @@ export function maybeWriteNativeBackendStatus(report: BuildReport | undefined, s
   if (parserSummary) writeStderrLine(parserSummary);
 }
 
-export function createCliProgressHandler(
-  showProgress: boolean,
-): ((update: { current: number; total: number }) => void) | undefined {
-  if (!showProgress) return undefined;
-  let lastProgressUpdate = 0;
-  return (update) => {
-    const now = Date.now();
-    const isComplete = update.current === update.total;
-    const shouldUpdate = isComplete || now - lastProgressUpdate > 100;
+export function createCliProgressHandler(policy: CliProgressPolicy): BuildOptions["onProgress"] {
+  const context = getCliContext();
+  const presentation = resolveCliProgressPresentation({
+    policy,
+    stderrIsTTY: context.runtime.stderrIsTTY(),
+    terminalSupportsControlSequences: context.runtime.terminalSupportsControlSequences(),
+  });
+  if (presentation === "off") return undefined;
 
-    if (shouldUpdate) {
-      if (process.stderr.isTTY) {
-        writeStderrChunk(`\r[Progress] ${update.current}/${update.total} files processed...`);
-        if (isComplete) {
-          writeStderrChunk("\n");
-        }
-      } else if (update.current === 1 || isComplete || update.current % 100 === 0) {
-        writeStderrChunk(`[Progress] ${update.current}/${update.total} files processed.\n`);
-      }
-      lastProgressUpdate = now;
-    }
-  };
+  context.progressDisplay?.dispose();
+  const display = createCliProgressDisplay({
+    presentation,
+    write: context.runtime.stderr,
+  });
+  context.progressDisplay = display;
+  return display.update;
 }
 
 type CommandTimingReport = {

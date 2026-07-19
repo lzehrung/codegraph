@@ -429,6 +429,41 @@ function createIndexBuildRunState(
     onFallbackImportExtraction: createFallbackImportExtractionHandler(report, opts),
   };
 }
+type IndexProgressMode = "build" | "update";
+
+function emitIndexLifecycleProgress(
+  opts: BuildOptions | undefined,
+  phase: "start" | "complete",
+  mode: IndexProgressMode,
+  total: number,
+  elapsedMs?: number,
+): void {
+  let message = "Index ready";
+  if (phase === "start") {
+    const action = mode === "build" ? "Building" : "Updating";
+    message = `${action} project index`;
+  }
+  opts?.onProgress?.({
+    type: "progress",
+    phase,
+    mode,
+    message,
+    current: phase === "complete" ? total : 0,
+    total,
+    ...(elapsedMs !== undefined ? { elapsedMs } : {}),
+  });
+}
+
+async function runFullIndexBuild(
+  opts: BuildOptions | undefined,
+  build: () => Promise<ProjectIndex>,
+): Promise<ProjectIndex> {
+  const startedAt = performance.now();
+  emitIndexLifecycleProgress(opts, "start", "build", 0);
+  const index = await build();
+  emitIndexLifecycleProgress(opts, "complete", "build", index.byFile.size, performance.now() - startedAt);
+  return index;
+}
 
 function buildConcurrency(opts: BuildOptions | undefined): number {
   return Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
@@ -674,6 +709,8 @@ async function buildIndexFromFileListShared(
         if (opts?.onProgress) {
           opts.onProgress({
             type: "progress",
+            phase: "update",
+            mode: "build",
             message: `Indexed ${file}`,
             current: ++processedFiles,
             total: totalFiles,
@@ -748,28 +785,30 @@ async function buildProjectIndexWithManifestOptions(
   opts?: BuildOptions,
   helperOpts?: Pick<BuildIndexHelperOptions, "ignoreExistingManifest">,
 ): Promise<ProjectIndex> {
-  try {
-    const [files, projectFiles] = await Promise.all([
-      listProjectFiles(projectRoot, undefined, {
-        ...opts?.discovery,
-        ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
-      }),
-      discoverProjectFiles(projectRoot, {
-        ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
-      }),
-    ]);
-    return buildIndexFromFileListShared(projectRoot, files, opts, {
-      manifestMode: "read-write",
-      warnNoFilesMessage: `Warning: No files found in project root: ${projectRoot}`,
-      ...(helperOpts?.ignoreExistingManifest ? { ignoreExistingManifest: true } : {}),
-      projectFiles,
-    });
-  } finally {
-    if ((opts?.cache ?? "off") === "disk") {
-      closeDiskCacheDatabase(projectRoot, opts);
-      closeDuplicateUnitCacheDatabase(projectRoot, opts);
+  return await runFullIndexBuild(opts, async () => {
+    try {
+      const [files, projectFiles] = await Promise.all([
+        listProjectFiles(projectRoot, undefined, {
+          ...opts?.discovery,
+          ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+        }),
+        discoverProjectFiles(projectRoot, {
+          ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+        }),
+      ]);
+      return await buildIndexFromFileListShared(projectRoot, files, opts, {
+        manifestMode: "read-write",
+        warnNoFilesMessage: `Warning: No files found in project root: ${projectRoot}`,
+        ...(helperOpts?.ignoreExistingManifest ? { ignoreExistingManifest: true } : {}),
+        projectFiles,
+      });
+    } finally {
+      if ((opts?.cache ?? "off") === "disk") {
+        closeDiskCacheDatabase(projectRoot, opts);
+        closeDuplicateUnitCacheDatabase(projectRoot, opts);
+      }
     }
-  }
+  });
 }
 
 /**
@@ -796,17 +835,19 @@ export async function buildProjectIndexFromFiles(
   inputFiles: string[],
   opts?: BuildOptions,
 ): Promise<ProjectIndex> {
-  try {
-    return buildIndexFromFileListShared(projectRoot, inputFiles, opts, {
-      manifestMode: "read-only",
-      warnNoFilesMessage: `Warning: No files provided for indexing in ${projectRoot}`,
-    });
-  } finally {
-    if ((opts?.cache ?? "off") === "disk") {
-      closeDiskCacheDatabase(projectRoot, opts);
-      closeDuplicateUnitCacheDatabase(projectRoot, opts);
+  return await runFullIndexBuild(opts, async () => {
+    try {
+      return await buildIndexFromFileListShared(projectRoot, inputFiles, opts, {
+        manifestMode: "read-only",
+        warnNoFilesMessage: `Warning: No files provided for indexing in ${projectRoot}`,
+      });
+    } finally {
+      if ((opts?.cache ?? "off") === "disk") {
+        closeDiskCacheDatabase(projectRoot, opts);
+        closeDuplicateUnitCacheDatabase(projectRoot, opts);
+      }
     }
-  }
+  });
 }
 
 /**
@@ -1059,6 +1100,8 @@ export async function buildProjectIndexIncremental(
       }
       invalidateCachedDependents();
       const changedList = Array.from(changedFiles);
+      const updateStartedAt = performance.now();
+      emitIndexLifecycleProgress(opts, "start", "update", changedList.length);
       if (fileReport) fileReport.changed = changedList.length;
       if (changedList.length) {
         const parseStart = performance.now();
@@ -1099,6 +1142,8 @@ export async function buildProjectIndexIncremental(
             if (opts?.onProgress) {
               opts.onProgress({
                 type: "progress",
+                phase: "update",
+                mode: "update",
                 message: `Indexed ${file}`,
                 current: ++processedFiles,
                 total: totalFiles,
@@ -1182,6 +1227,7 @@ export async function buildProjectIndexIncremental(
         buildReport: report,
       });
       await writeProjectIndexSnapshot(projectRoot, opts, index, projectSnapshotFilesSignature(manifestEntries));
+      emitIndexLifecycleProgress(opts, "complete", "update", index.byFile.size, performance.now() - updateStartedAt);
       return index;
     } finally {
       await teardownWorkerPool(workerSetup, report);

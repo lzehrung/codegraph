@@ -36,6 +36,7 @@ Use `--root` to define the boundary for config lookup, cache scope, path confine
 - `codegraph.config.json` discovery globs are project-root-relative.
 - CLI `--include-glob` and `--ignore-glob` values are one-off filters relative to each active scan root.
 - Use `--no-gitignore` only when ignored files are intentionally in scope.
+- Index builds and updates report progress automatically on interactive stderr while reusable cache hits stay quiet. Use `--progress` for redirected progress logs or `--no-progress` to suppress feedback; JSON stdout is unchanged.
 
 ## Choose the Smallest Follow-up
 

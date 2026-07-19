@@ -109,6 +109,7 @@ const SHARED_BUILD_FLAGS = [
   "--cache-strict",
   "--cache-verify",
   "--progress",
+  "--no-progress",
   "--workers",
   "--no-gitignore",
   "--fast-graph",
@@ -129,10 +130,10 @@ const SHARED_BUILD_OPTIONS = [
 // contract truthful.
 const LIFECYCLE_BUILD_OPTIONS = SHARED_BUILD_OPTIONS.filter((option) => option !== "--cache");
 // `status` never calls createAgentSession/loadProject (it only hashes config, hashes build
-// options, and lists project files for signature hashing), so --cache-verify, --progress, and
-// --workers have no observable effect there, unlike for init/sync which do a full build.
+// options, and lists project files for signature hashing), so progress, cache verification,
+// and workers have no observable effect there, unlike for init/sync which do a full build.
 const STATUS_BUILD_FLAGS = SHARED_BUILD_FLAGS.filter(
-  (flag) => flag !== "--cache-verify" && flag !== "--progress" && flag !== "--workers",
+  (flag) => flag !== "--cache-verify" && flag !== "--progress" && flag !== "--no-progress" && flag !== "--workers",
 );
 // --threads only matters for the concurrency of an actual build (init/sync); status never builds.
 const STATUS_BUILD_OPTIONS = LIFECYCLE_BUILD_OPTIONS.filter((option) => option !== "--threads");
@@ -685,6 +686,9 @@ export function validateCliArgs(command: string, parsed: ParsedCliArgs): void {
     if (!allowedOptions.has(option)) {
       throw new Error(`Unknown option for ${command}: ${option}`);
     }
+  }
+  if (parsed.flags.has("--progress") && parsed.flags.has("--no-progress")) {
+    throw new Error("--progress and --no-progress cannot be used together.");
   }
 
   if (command === "sync" && parsed.flags.has("--no-update-gitignore") && !parsed.flags.has("--init")) {

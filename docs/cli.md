@@ -307,10 +307,11 @@ Short JSON shape:
 
 - Use `explore --pretty` for a one-call repo question that combines search anchors, bounded packets, dependency paths, reverse dependencies, candidate tests, limits, omissions, and follow-ups. Use `--limit`, `--max-packets`, `--max-paths`, or `--no-source` to keep output small.
 - Use `orient --pretty` as the compact first-turn reading surface for people or models; it prints the ranked `focus` targets and their follow-up commands before the scope sketch.
-- Use `orient --json` when follow-up tools need exact focus reasons, limits, and omitted counts. Orient suppresses index rebuild warnings so stdout stays parseable.
+- Use `orient --json` when follow-up tools need exact focus reasons, limits, and omitted counts. Index feedback is stderr-only, so stdout remains parseable.
 - Small orientation budgets default to `--health skip`. Medium and large default to `--health summary`, which counts cycles and unresolved imports while omitting duplicate health; use `--health full` when exhaustive duplicate counts matter.
 - Use `packet get` with file paths, symbol names, SQL object names, file/symbol/chunk/SQL/graph handles, or review handles to retrieve bounded evidence plus follow-up commands.
 - Agent commands reuse the incremental index path and default to disk cache. Use shared index flags such as `--cache`, `--cache-strict`, `--cache-verify`, `--threads`, `--native`, `--workers`, `--include-glob`, `--ignore-glob`, and `--no-gitignore` when the packet should match a specific scan mode.
+- When an index must be built or updated, interactive terminals immediately show progress on stderr; cache and snapshot hits stay quiet. Use `--progress` to force newline-delimited updates when stderr is redirected, or `--no-progress` to suppress feedback.
 
 #### Live file views
 

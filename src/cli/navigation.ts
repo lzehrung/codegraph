@@ -1,5 +1,6 @@
 import { buildProjectIndex } from "../indexer/build-index.js";
 import { findReferences, goToDefinition } from "../indexer/navigation.js";
+import type { BuildOptions } from "../indexer/types.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import { toProjectDisplayPath } from "../util/paths.js";
 import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
@@ -14,7 +15,7 @@ export type NavigationCommandContext = {
   hasFlag: (name: string) => boolean;
   nativeMode: NativeRuntimeMode;
   workerOpts: { useNativeWorkers: true } | Record<string, never>;
-  progressHandler: ((update: { current: number; total: number }) => void) | undefined;
+  progressHandler: BuildOptions["onProgress"];
   writeJSONLine: (value: unknown) => void;
   writeStdoutLine: (message: string) => void;
   writeStderrLine: (message: string) => void;

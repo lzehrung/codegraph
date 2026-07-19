@@ -7,7 +7,7 @@ import { findDetailedCycles, getUnresolvedImports } from "../graphs/queries.js";
 import { getHotspots } from "../graphs/hotspots.js";
 import { type GraphBuildOptions } from "../graphs/types.js";
 import { buildProjectIndexIncremental } from "../indexer/build-index.js";
-import { type BuildReport } from "../indexer/types.js";
+import { type BuildOptions, type BuildReport } from "../indexer/types.js";
 import {
   getNativeTreeSitterLoadError,
   getNativeTreeSitterSupportedLanguageIds,
@@ -101,7 +101,7 @@ export type InspectCommandContext = {
   graphOptions: GraphBuildOptions | undefined;
   nativeMode: NativeRuntimeMode;
   workerOpts: { useNativeWorkers: true } | Record<string, never>;
-  progressHandler: ((update: { current: number; total: number }) => void) | undefined;
+  progressHandler: BuildOptions["onProgress"];
   getOpt: (name: string) => string | undefined;
   hasFlag: (name: string) => boolean;
   resolveFilesFromRoots: () => Promise<string[]>;
@@ -156,7 +156,7 @@ async function buildScopedReportGraph(
     graphOptions?: GraphBuildOptions;
     nativeMode?: NativeRuntimeMode;
     workerOpts?: { useNativeWorkers: true } | Record<string, never>;
-    progressHandler?: ((update: { current: number; total: number }) => void) | undefined;
+    progressHandler?: BuildOptions["onProgress"];
     report?: BuildReport;
     writeStderrLine: (message: string) => void;
   },
@@ -255,7 +255,7 @@ async function buildInspectReport(
   cache: CacheMode | undefined,
   nativeMode: NativeRuntimeMode,
   workerOpts: { useNativeWorkers: true } | Record<string, never>,
-  progressHandler: ((update: { current: number; total: number }) => void) | undefined,
+  progressHandler: BuildOptions["onProgress"],
   limit: number,
   includeDuplicates: boolean,
   writeStderrLine: (message: string) => void,

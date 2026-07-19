@@ -54,7 +54,7 @@ export type ImpactCommandContext = {
   nativeMode: NativeRuntimeMode;
   workerOpts: { useNativeWorkers: true } | Record<string, never>;
   graphOptions: GraphBuildOptions | undefined;
-  progressHandler: ((update: { current: number; total: number }) => void) | undefined;
+  progressHandler: BuildOptions["onProgress"];
   readStdin: () => Promise<string>;
   writeJSONLine: (value: unknown) => void;
   writeStdoutLine: (message: string) => void;
