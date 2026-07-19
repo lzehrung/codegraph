@@ -5,6 +5,7 @@ export type CliProgressPresentation = "interactive" | "log" | "off";
 
 export type CliProgressDisplay = {
   update: (update: ProgressUpdate) => void;
+  prepare: () => void;
   clear: () => void;
   dispose: () => void;
 };
@@ -15,6 +16,7 @@ type CreateCliProgressDisplayOptions = {
 };
 
 const REFRESH_INTERVAL_MS = 100;
+const PREPARATION_DELAY_MS = 100;
 const CLEAR_LINE = "\r\u001b[2K";
 const SPINNER_FRAMES = ["-", "\\", "|", "/"] as const;
 
@@ -44,6 +46,22 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void): CliPr
   let total = 0;
   let mode: NonNullable<ProgressUpdate["mode"]> = "build";
   let interval: NodeJS.Timeout | undefined;
+  let preparationTimer: NodeJS.Timeout | undefined;
+
+  const cancelPreparation = (): void => {
+    if (preparationTimer === undefined) return;
+    clearTimeout(preparationTimer);
+    preparationTimer = undefined;
+  };
+
+  const prepare = (): void => {
+    if (preparationTimer !== undefined || active) return;
+    preparationTimer = setTimeout(() => {
+      preparationTimer = undefined;
+      write("Preparing project index...\n");
+    }, PREPARATION_DELAY_MS);
+    preparationTimer.unref();
+  };
 
   const clear = (): void => {
     if (!rendered) return;
@@ -68,6 +86,7 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void): CliPr
   };
 
   const start = (update: ProgressUpdate): void => {
+    cancelPreparation();
     stopInterval();
     clear();
     active = true;
@@ -93,6 +112,7 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void): CliPr
   };
 
   return {
+    prepare,
     update: (update) => {
       if (update.phase === "start") {
         start(update);
@@ -114,6 +134,7 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void): CliPr
     dispose: () => {
       active = false;
       stopInterval();
+      cancelPreparation();
       clear();
     },
   };
@@ -122,9 +143,27 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void): CliPr
 function createLogProgressDisplay(write: (chunk: string) => void): CliProgressDisplay {
   let active = false;
   let mode: NonNullable<ProgressUpdate["mode"]> = "build";
+  let preparationTimer: NodeJS.Timeout | undefined;
+
+  const cancelPreparation = (): void => {
+    if (preparationTimer === undefined) return;
+    clearTimeout(preparationTimer);
+    preparationTimer = undefined;
+  };
+
+  const prepare = (): void => {
+    if (preparationTimer !== undefined || active) return;
+    preparationTimer = setTimeout(() => {
+      preparationTimer = undefined;
+      write("[Progress] Preparing project index.\n");
+    }, PREPARATION_DELAY_MS);
+    preparationTimer.unref();
+  };
 
   return {
+    prepare,
     update: (update) => {
+      cancelPreparation();
       if (update.phase === "start") {
         active = true;
         mode = update.mode ?? "build";
@@ -151,6 +190,7 @@ function createLogProgressDisplay(write: (chunk: string) => void): CliProgressDi
     },
     clear: () => {},
     dispose: () => {
+      cancelPreparation();
       active = false;
     },
   };

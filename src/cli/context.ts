@@ -369,6 +369,9 @@ export function createCliProgressHandler(policy: CliProgressPolicy): BuildOption
   context.progressDisplay = display;
   return display.update;
 }
+export function prepareCliIndexProgress(): void {
+  getCliContext().progressDisplay?.prepare();
+}
 
 type CommandTimingReport = {
   totalMs?: number;

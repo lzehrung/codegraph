@@ -16,6 +16,7 @@ import {
   getCwd,
   maybeWriteNativeBackendStatus,
   parseCliArgs,
+  prepareCliIndexProgress,
   readCliStdin,
   runWithCliRuntime,
   setCliStderrFilePath,
@@ -45,7 +46,12 @@ import { handleIndexCommand } from "./cli/index.js";
 import { handleHotspotsCommand, handleInspectCommand } from "./cli/inspect.js";
 import { handleOrientCommand } from "./cli/orient.js";
 import { handleDumpmodCommand, handleGotoCommand, handleRefsCommand } from "./cli/navigation.js";
-import { parseCacheModeOption, parseOptionalNonNegativeIntegerOption, validateCliArgs } from "./cli/options.js";
+import {
+  cliCommandStartsWithProjectIndex,
+  parseCacheModeOption,
+  parseOptionalNonNegativeIntegerOption,
+  validateCliArgs,
+} from "./cli/options.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
 import type { CliProgressPolicy } from "./cli/progress.js";
 import { handlePacketCommand } from "./cli/packet.js";
@@ -179,6 +185,9 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
   const showBuildDiagnostics = hasFlag("--progress");
   const progressHandler = createCliProgressHandler(progressPolicy);
+  if (cliCommandStartsWithProjectIndex(cmd, parsed)) {
+    prepareCliIndexProgress();
+  }
   const graphFlags = {
     fast: hasFlag("--fast-graph"),
     resolveNodeModules: hasFlag("--resolve-node-modules"),

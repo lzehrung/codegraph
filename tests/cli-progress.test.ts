@@ -1,7 +1,7 @@
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createCliProgressHandler, runWithCliRuntime } from "../src/cli/context.js";
 import { createCliProgressDisplay, resolveCliProgressPresentation } from "../src/cli/progress.js";
 import { buildProjectIndex } from "../src/index.js";
@@ -23,6 +23,35 @@ describe("CLI index progress", () => {
         terminalSupportsControlSequences: controlSequences,
       }),
     ).toBe(expected);
+  });
+
+  it("reports slow preparation while fast cache checks stay quiet", () => {
+    vi.useFakeTimers();
+    try {
+      const slowChunks: string[] = [];
+      const slowDisplay = createCliProgressDisplay({
+        presentation: "interactive",
+        write: (chunk) => slowChunks.push(chunk),
+      });
+      slowDisplay.prepare();
+      vi.advanceTimersByTime(99);
+      expect(slowChunks).toEqual([]);
+      vi.advanceTimersByTime(1);
+      expect(slowChunks.join("")).toBe("Preparing project index...\n");
+      slowDisplay.dispose();
+
+      const fastChunks: string[] = [];
+      const fastDisplay = createCliProgressDisplay({
+        presentation: "interactive",
+        write: (chunk) => fastChunks.push(chunk),
+      });
+      fastDisplay.prepare();
+      fastDisplay.dispose();
+      vi.advanceTimersByTime(100);
+      expect(fastChunks).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("renders and completes an interactive build without writing file paths", () => {
@@ -156,6 +185,28 @@ describe("CLI index progress", () => {
         terminalSupportsControlSequences: true,
       });
       expect(suppressed.stderr).toBe("");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("shows preparation before a delayed non-orient cold start", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-preparation-"));
+    await Promise.all(
+      Array.from({ length: 4_000 }, async (_, index) => {
+        await fsp.writeFile(path.join(root, `module-${index}.ts`), `export const value${index} = ${index};\n`, "utf8");
+      }),
+    );
+
+    try {
+      const result = await captureCli(["index", "--root", root, "--cache", "off"], {
+        stderrIsTTY: true,
+        terminalSupportsControlSequences: true,
+      });
+      const preparingAt = result.stderr.indexOf("Preparing project index");
+      const buildingAt = result.stderr.indexOf("Building project index");
+      expect(preparingAt).toBeGreaterThanOrEqual(0);
+      expect(buildingAt).toBeGreaterThan(preparingAt);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseCliArgs } from "../src/cli/context.js";
 import {
+  cliCommandStartsWithProjectIndex,
   parseImpactScopeOption,
   parseNonNegativeIntegerOption,
   parseRefContextOption,
@@ -138,6 +139,68 @@ describe("CLI command option validation", () => {
       expect(() => validateCliArgs(command, parsedThreads)).not.toThrow();
     }
   });
+  it("starts preparation for every index-backed command", () => {
+    const indexBackedCommands = [
+      "apisurface",
+      "artifact",
+      "callees",
+      "callers",
+      "cycles",
+      "deps",
+      "drift",
+      "dumpmod",
+      "duplicates",
+      "explain",
+      "explore",
+      "file",
+      "goto",
+      "graph",
+      "graph-delta",
+      "hotspots",
+      "impact",
+      "implementations",
+      "index",
+      "init",
+      "inspect",
+      "orient",
+      "packet",
+      "path",
+      "rdeps",
+      "refactor-plan",
+      "refs",
+      "rename-preview",
+      "review",
+      "search",
+      "subtypes",
+      "supertypes",
+      "symbols",
+      "sync",
+      "unresolved",
+    ];
+    for (const command of indexBackedCommands) {
+      expect(cliCommandStartsWithProjectIndex(command, parseCliArgs(command, [])), command).toBe(true);
+    }
+
+    const nonIndexCommands = [
+      "chunk",
+      "doctor",
+      "grep",
+      "install",
+      "skill",
+      "sql",
+      "status",
+      "uninit",
+      "uninstall",
+      "version",
+    ];
+    for (const command of nonIndexCommands) {
+      expect(cliCommandStartsWithProjectIndex(command, parseCliArgs(command, [])), command).toBe(false);
+    }
+
+    expect(cliCommandStartsWithProjectIndex("mcp", parseCliArgs("mcp", ["serve"]))).toBe(false);
+    expect(cliCommandStartsWithProjectIndex("mcp", parseCliArgs("mcp", ["serve", "--warmup"]))).toBe(true);
+  });
+
   it("rejects conflicting progress flags", () => {
     const parsed = parseCliArgs("orient", ["--progress", "--no-progress"]);
 
