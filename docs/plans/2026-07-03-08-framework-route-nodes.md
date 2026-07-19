@@ -29,7 +29,7 @@ type RouteNode = {
   id: string;
   kind: "route";
   file: string;
-  name: string;        // GET /users/:id
+  name: string; // GET /users/:id
   method?: string;
   pathPattern: string;
   range: SourceRange;

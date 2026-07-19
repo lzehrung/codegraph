@@ -47,6 +47,7 @@ Measured from the local `dist` CLI on 2026-07-03:
 ### Task 1: Add Timing Reports for `search`
 
 **Files:**
+
 - Modify: `src/cli/search.ts`
 - Modify: `src/cli.ts`
 - Test: `tests/cli-command-modules.test.ts`
@@ -182,6 +183,7 @@ git commit -m "feat: add search timing report"
 ### Task 2: Add Timing Reports for `inspect`
 
 **Files:**
+
 - Modify: `src/cli/inspect.ts`
 - Modify: `src/cli.ts`
 - Test: `tests/cli-command-modules.test.ts`
@@ -288,6 +290,7 @@ git commit -m "feat: add inspect timing report"
 ### Task 3: Make `inspect` Duplicate Detection Opt-In
 
 **Files:**
+
 - Modify: `src/cli/inspect.ts`
 - Modify: `src/cli/help.ts`
 - Modify: `docs/cli.md`
@@ -362,18 +365,18 @@ In `src/cli/inspect.ts`, change `InspectReport["duplicates"]` to a union:
 In `buildInspectReport`, add `includeDuplicates: boolean` and wrap duplicate detection:
 
 ```ts
-  const duplicates: InspectReport["duplicates"] = includeDuplicates
-    ? {
-        enabled: true,
-        total:
-          duplicateResult.groups.length +
-          duplicateResult.omittedCounts.groups +
-          duplicateResult.omittedCounts.candidatePairs,
-        omitted: duplicateResult.omittedCounts.groups + duplicateResult.omittedCounts.candidatePairs,
-        minConfidence: duplicateMinConfidence,
-        top: duplicateResult.groups.map(summarizeDuplicateGroup),
-      }
-    : { enabled: false };
+const duplicates: InspectReport["duplicates"] = includeDuplicates
+  ? {
+      enabled: true,
+      total:
+        duplicateResult.groups.length +
+        duplicateResult.omittedCounts.groups +
+        duplicateResult.omittedCounts.candidatePairs,
+      omitted: duplicateResult.omittedCounts.groups + duplicateResult.omittedCounts.candidatePairs,
+      minConfidence: duplicateMinConfidence,
+      top: duplicateResult.groups.map(summarizeDuplicateGroup),
+    }
+  : { enabled: false };
 ```
 
 Use `if` blocks instead of a nested ternary if the expression grows.
@@ -413,6 +416,7 @@ git commit -m "perf: make inspect duplicates opt-in"
 ### Task 4: Add Safe Bloom Prefilter for Text Search
 
 **Files:**
+
 - Modify: `src/agent/search.ts`
 - Test: `tests/agent-search.test.ts`
 
@@ -536,6 +540,7 @@ git commit -m "perf: prefilter identifier text search"
 ### Task 5: Add Agent Session File Fingerprints
 
 **Files:**
+
 - Modify: `src/agent/session.ts`
 - Test: `tests/agent-session.test.ts`
 
@@ -590,7 +595,7 @@ Use this helper in both `loadFiles` and `loadBase`.
 Extend the type:
 
 ```ts
-  fileFingerprint: () => Promise<string>;
+fileFingerprint: () => Promise<string>;
 ```
 
 Implement it with fresh discovery:
@@ -599,7 +604,10 @@ Implement it with fresh discovery:
 const fileFingerprint = async (): Promise<string> => {
   const discoveryOptions = await resolveAgentDiscovery(options);
   const files = await listProjectFiles(options.root, undefined, discoveryOptions);
-  return files.map((file) => normalizePath(file)).sort().join("\n");
+  return files
+    .map((file) => normalizePath(file))
+    .sort()
+    .join("\n");
 };
 ```
 
@@ -627,6 +635,7 @@ git commit -m "feat: expose agent session file fingerprint"
 ### Task 6: Add MCP Cache Sync Controller
 
 **Files:**
+
 - Create: `src/mcp/cacheSync.ts`
 - Modify: `src/mcp/server.ts`
 - Test: `tests/mcp-server.test.ts`
@@ -790,6 +799,7 @@ git commit -m "feat: add mcp cache sync controller"
 ### Task 7: Add MCP Cache Sync CLI Flags and Docs
 
 **Files:**
+
 - Modify: `src/cli/mcp.ts`
 - Modify: `src/cli/help.ts`
 - Modify: `docs/cli.md`
@@ -907,6 +917,7 @@ git commit -m "feat: expose mcp cache sync flags"
 ### Task 8: Add Lifecycle Sync for HTTP Session Initialize
 
 **Files:**
+
 - Modify: `src/mcp/server.ts`
 - Test: `tests/mcp-server.test.ts`
 
@@ -1003,6 +1014,7 @@ git commit -m "feat: sync mcp cache on lifecycle"
 ### Task 9: Final Verification and Timing Evidence
 
 **Files:**
+
 - Modify: `docs/plans/2026-06-06-performance-and-cache-opportunities.md` only if status boxes need updating.
 - No production code changes.
 
