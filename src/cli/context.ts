@@ -124,6 +124,7 @@ export type CliRuntime = {
   readStdin: () => Promise<string>;
   stderrIsTTY: () => boolean;
   terminalSupportsControlSequences: () => boolean;
+  progressPreparationDelayMs: () => number;
 };
 
 export type CliPositionalsContext = {
@@ -183,6 +184,7 @@ function createDefaultCliRuntime(): CliRuntime {
     cwd: () => process.cwd(),
     stderrIsTTY: () => !!process.stderr.isTTY,
     terminalSupportsControlSequences: () => !!process.stderr.isTTY && process.env.TERM !== "dumb",
+    progressPreparationDelayMs: () => 100,
     readStdin: async () =>
       await new Promise<string>((resolve, reject) => {
         let data = "";
@@ -365,9 +367,13 @@ export function createCliProgressHandler(policy: CliProgressPolicy): BuildOption
   const display = createCliProgressDisplay({
     presentation,
     write: context.runtime.stderr,
+    preparationDelayMs: context.runtime.progressPreparationDelayMs(),
   });
   context.progressDisplay = display;
   return display.update;
+}
+export function prepareCliIndexProgress(): void {
+  getCliContext().progressDisplay?.prepare();
 }
 
 type CommandTimingReport = {

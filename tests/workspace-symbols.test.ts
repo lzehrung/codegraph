@@ -135,16 +135,10 @@ describe("workspace symbol lookup", () => {
     });
     try {
       const insensitive = await workspaceSymbols(index, { query: "indexsummary" });
-      expect(insensitive.symbols.map((symbol) => symbol.file)).toEqual([
-        "src/service.ts",
-        "tests/service.test.ts",
-      ]);
+      expect(insensitive.symbols.map((symbol) => symbol.file)).toEqual(["src/service.ts", "tests/service.test.ts"]);
 
       const tokenized = await workspaceSymbols(index, { query: "index summary" });
-      expect(tokenized.symbols.map((symbol) => symbol.file)).toEqual([
-        "src/service.ts",
-        "tests/service.test.ts",
-      ]);
+      expect(tokenized.symbols.map((symbol) => symbol.file)).toEqual(["src/service.ts", "tests/service.test.ts"]);
     } finally {
       localeSpy.mockRestore();
     }
@@ -163,14 +157,15 @@ describe("workspace symbol lookup", () => {
   });
 
   it("orders tied Unicode file paths by deterministic code units", async () => {
-    const localeCompareSpy = vi
-      .spyOn(String.prototype, "localeCompare")
-      .mockImplementation(function (this: string, other: string) {
-        const left = this.toString();
-        if (left < other) return 1;
-        if (left > other) return -1;
-        return 0;
-      });
+    const localeCompareSpy = vi.spyOn(String.prototype, "localeCompare").mockImplementation(function (
+      this: string,
+      other: string,
+    ) {
+      const left = this.toString();
+      if (left < other) return 1;
+      if (left > other) return -1;
+      return 0;
+    });
     try {
       const result = await workspaceSymbols(index, { query: "UnicodeTie" });
       expect(result.symbols.map((symbol) => symbol.file)).toEqual(["src/\u00e4.ts", "src/\u00e5.ts"]);

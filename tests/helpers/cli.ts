@@ -18,6 +18,8 @@ export type CliCaptureOptions = {
   stdin?: string | (() => string | Promise<string>) | undefined;
   stderrIsTTY?: boolean | undefined;
   terminalSupportsControlSequences?: boolean | undefined;
+  progressPreparationDelayMs?: number | undefined;
+  onStderr?: (chunk: string) => void;
 };
 export type TsxScriptCaptureOptions = {
   cwd?: string | undefined;
@@ -44,10 +46,12 @@ export async function captureCli(args: string[], options: CliCaptureOptions = {}
     },
     stderr: (chunk) => {
       stderr += chunk;
+      options.onStderr?.(chunk);
     },
     readStdin: async () => await readCliStdin(options.stdin),
     stderrIsTTY: () => options.stderrIsTTY ?? false,
     terminalSupportsControlSequences: () => options.terminalSupportsControlSequences ?? options.stderrIsTTY ?? false,
+    progressPreparationDelayMs: () => options.progressPreparationDelayMs ?? 100,
     exit: (code) => {
       exitCode = code;
       throw new Error(`${cliExitPrefix} ${code}`);
