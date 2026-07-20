@@ -311,7 +311,7 @@ Short JSON shape:
 - Small orientation budgets default to `--health skip`. Medium and large default to `--health summary`, which counts cycles and unresolved imports while omitting duplicate health; use `--health full` when exhaustive duplicate counts matter.
 - Use `packet get` with file paths, symbol names, SQL object names, file/symbol/chunk/SQL/graph handles, or review handles to retrieve bounded evidence plus follow-up commands.
 - Agent commands reuse the incremental index path and default to disk cache. Use shared index flags such as `--cache`, `--cache-strict`, `--cache-verify`, `--threads`, `--native`, `--workers`, `--include-glob`, `--ignore-glob`, and `--no-gitignore` when the packet should match a specific scan mode.
-- Every command that starts by loading the project index shows `Preparing project index...` on stderr when startup checks exceed a brief threshold, then transitions to build or update progress when work is required. Fast cache and snapshot hits stay quiet; use `--progress` for redirected progress logs or `--no-progress` to suppress feedback.
+- Every command that starts by loading the project index reports a preparation progress message on stderr when startup checks exceed a brief threshold, then transitions to build or update progress when work is required. Fast cache and snapshot hits stay quiet; use `--progress` for redirected progress logs or `--no-progress` to suppress feedback.
 
 #### Live file views
 
