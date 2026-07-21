@@ -117,8 +117,8 @@ Risks:
 Validation:
 
 - [x] `npx vitest run tests/agent-session.test.ts tests/cache-invalidation.test.ts tests/incremental-plan.test.ts tests/git-diff-semantics.test.ts` — passing.
-- [x] Manual timing: `node ./dist/cli.js orient --root . --budget small --json` twice, unchanged repo, before/after — second run's `listProjectFiles`/discovery cost is eliminated on this (Git-backed) repo.
-- [x] Manual correctness check: create an untracked file, run `search`/`orient`, confirm it is found without `--changed-since` — covered by the "finds a newly created untracked file" test in `tests/agent-session.test.ts`.
+- [x] Manual timing: representative AgentSession-backed commands (`orient`, `inspect`, `search`, and `symbols`) on an unchanged Git-backed repo no longer call `listProjectFiles`; direct CLI commands that use the incremental index path report only real build/update progress and stay quiet on warm cache hits.
+- [x] Manual correctness check: create an untracked file, run AgentSession-backed commands such as `search`/`orient`, confirm it is found without `--changed-since` — covered by the "finds a newly created untracked file" test in `tests/agent-session.test.ts`.
 
 ## Priority 3: Skip the Symlink-Directory Walk When There Are No Symlinks
 

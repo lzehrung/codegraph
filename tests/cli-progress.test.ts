@@ -27,45 +27,6 @@ describe("CLI index progress", () => {
     ).toBe(expected);
   });
 
-  it("reports slow preparation while fast cache checks stay quiet", () => {
-    vi.useFakeTimers();
-    try {
-      const slowChunks: string[] = [];
-      const slowDisplay = createCliProgressDisplay({
-        presentation: "interactive",
-        write: (chunk) => slowChunks.push(chunk),
-      });
-      slowDisplay.prepare();
-      vi.advanceTimersByTime(99);
-      expect(slowChunks).toEqual([]);
-      vi.advanceTimersByTime(1);
-      expect(slowChunks.join("")).toBe("Preparing project index...\n");
-
-      const logChunks: string[] = [];
-      const logDisplay = createCliProgressDisplay({
-        presentation: "log",
-        write: (chunk) => logChunks.push(chunk),
-        preparationDelayMs: 0,
-      });
-      logDisplay.prepare();
-      expect(logChunks.join("")).toBe("[Progress] Preparing project index.\n");
-      logDisplay.dispose();
-      slowDisplay.dispose();
-
-      const fastChunks: string[] = [];
-      const fastDisplay = createCliProgressDisplay({
-        presentation: "interactive",
-        write: (chunk) => fastChunks.push(chunk),
-      });
-      fastDisplay.prepare();
-      fastDisplay.dispose();
-      vi.advanceTimersByTime(100);
-      expect(fastChunks).toEqual([]);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("renders and completes an interactive build without writing file paths", () => {
     const chunks: string[] = [];
     const display = createCliProgressDisplay({ presentation: "interactive", write: (chunk) => chunks.push(chunk) });
@@ -202,8 +163,8 @@ describe("CLI index progress", () => {
     }
   });
 
-  it("shows preparation while project config loading is delayed", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-config-preparation-"));
+  it("waits for real index progress instead of speculative preparation", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-config-progress-"));
     await fsp.writeFile(path.join(root, "main.ts"), "export const value = 1;\n", "utf8");
     const enteredConfigLoad = Promise.withResolvers<void>();
     const releaseConfigLoad = Promise.withResolvers<void>();
@@ -226,7 +187,7 @@ describe("CLI index progress", () => {
       });
       await enteredConfigLoad.promise;
       await vi.advanceTimersByTimeAsync(100);
-      expect(liveStderr).toContain("Preparing project index");
+      expect(liveStderr).not.toContain("Preparing project index");
       expect(liveStderr).not.toContain("Building project index");
 
       vi.useRealTimers();
@@ -241,8 +202,8 @@ describe("CLI index progress", () => {
     }
   });
 
-  it("shows deterministic preparation for non-orient cold starts and honors progress policy", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-preparation-"));
+  it("reports real index work and honors progress policy", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-real-progress-"));
     await fsp.writeFile(path.join(root, "main.ts"), "export const value = 1;\n", "utf8");
 
     try {
@@ -251,10 +212,9 @@ describe("CLI index progress", () => {
         terminalSupportsControlSequences: true,
         progressPreparationDelayMs: 0,
       });
-      const preparingAt = interactive.stderr.indexOf("Preparing project index");
-      const buildingAt = interactive.stderr.indexOf("Building project index");
-      expect(preparingAt).toBeGreaterThanOrEqual(0);
-      expect(buildingAt).toBeGreaterThan(preparingAt);
+      expect(interactive.stderr).not.toContain("Preparing project index");
+      expect(interactive.stderr).toContain("Building project index");
+      expect(interactive.stderr).toContain("Built project index");
 
       // The prior `interactive` call against this same root already wrote a manifest,
       // so this second index build reuses it via the incremental path (an "update" pass)
@@ -264,7 +224,7 @@ describe("CLI index progress", () => {
       const forced = await captureCli(["index", "--root", root, "--cache", "off", "--progress"], {
         progressPreparationDelayMs: 0,
       });
-      expect(forced.stderr).toContain("[Progress] Preparing project index.");
+      expect(forced.stderr).not.toContain("Preparing project index");
       expect(forced.stderr).toContain("[Progress] Updating project index.");
 
       const suppressed = await captureCli(["index", "--root", root, "--cache", "off", "--no-progress"], {
@@ -279,23 +239,15 @@ describe("CLI index progress", () => {
         terminalSupportsControlSequences: true,
         progressPreparationDelayMs: 0,
       });
-      expect(directGraph.stderr).not.toContain("Preparing project index");
+      expect(directGraph.stderr).not.toContain("project index");
       expect(() => JSON.parse(directGraph.stdout)).not.toThrow();
-
-      const symbolGraph = await captureCli(["graph", "--root", root, "--json", "--symbols"], {
-        stderrIsTTY: true,
-        terminalSupportsControlSequences: true,
-        progressPreparationDelayMs: 0,
-      });
-      expect(symbolGraph.stderr).toContain("Preparing project index");
-      expect(() => JSON.parse(symbolGraph.stdout)).not.toThrow();
 
       const plainFile = await captureCli(["file", "main.ts", "--root", root, "--json"], {
         stderrIsTTY: true,
         terminalSupportsControlSequences: true,
         progressPreparationDelayMs: 0,
       });
-      expect(plainFile.stderr).not.toContain("Preparing project index");
+      expect(plainFile.stderr).not.toContain("project index");
       expect(() => JSON.parse(plainFile.stdout)).not.toThrow();
 
       const graphFile = await captureCli(
@@ -306,7 +258,8 @@ describe("CLI index progress", () => {
           progressPreparationDelayMs: 0,
         },
       );
-      expect(graphFile.stderr).toContain("Preparing project index");
+      expect(graphFile.stderr).not.toContain("Preparing project index");
+      expect(graphFile.stderr).toContain("Updating project index");
       expect(() => JSON.parse(graphFile.stdout)).not.toThrow();
 
       const pathSearch = await captureCli(["search", "main", "--root", root, "--mode", "path", "--json"], {
@@ -314,7 +267,7 @@ describe("CLI index progress", () => {
         terminalSupportsControlSequences: true,
         progressPreparationDelayMs: 0,
       });
-      expect(pathSearch.stderr).not.toContain("Preparing project index");
+      expect(pathSearch.stderr).not.toContain("project index");
       expect(() => JSON.parse(pathSearch.stdout)).not.toThrow();
 
       const textSearch = await captureCli(["search", "value", "--root", root, "--mode", "text", "--json"], {
@@ -322,14 +275,14 @@ describe("CLI index progress", () => {
         terminalSupportsControlSequences: true,
         progressPreparationDelayMs: 0,
       });
-      expect(textSearch.stderr).toContain("Preparing project index");
+      expect(textSearch.stderr).not.toContain("Preparing project index");
       expect(() => JSON.parse(textSearch.stdout)).not.toThrow();
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
 
-  it("prepares MCP startup only when warmup is requested", async () => {
+  it("keeps MCP startup quiet unless warmup performs real index work", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-mcp-preparation-"));
     const serveSpy = vi.spyOn(mcpServer, "serveCodegraphMcp").mockResolvedValue();
 
@@ -343,9 +296,9 @@ describe("CLI index progress", () => {
       const baseWarmup = await captureCli(["mcp", "serve", "--root", root, "--warmup"], captureOptions);
       const symbolWarmup = await captureCli(["mcp", "serve", "--root", root, "--warmup-symbols"], captureOptions);
 
-      expect(lazy.stderr).not.toContain("Preparing project index");
-      expect(baseWarmup.stderr).toContain("Preparing project index");
-      expect(symbolWarmup.stderr).toContain("Preparing project index");
+      expect(lazy.stderr).not.toContain("project index");
+      expect(baseWarmup.stderr).not.toContain("Preparing project index");
+      expect(symbolWarmup.stderr).not.toContain("Preparing project index");
       expect(serveSpy).toHaveBeenNthCalledWith(1, expect.objectContaining({ root }));
       expect(serveSpy.mock.calls[0]?.[0].warmup).toBeUndefined();
       expect(serveSpy).toHaveBeenNthCalledWith(
@@ -370,6 +323,36 @@ describe("CLI index progress", () => {
     }
   });
 
+  it("keeps warm cache hits quiet for representative index-backed commands", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-warm-progress-"));
+    const file = path.join(root, "main.ts");
+    await fsp.writeFile(file, "export const value = 1;\n", "utf8");
+
+    try {
+      await captureCli(["orient", "--root", root, "--cache", "disk", "--json"], {
+        stderrIsTTY: true,
+        terminalSupportsControlSequences: true,
+      });
+
+      const commands = [
+        ["orient", "--root", root, "--cache", "disk", "--json", "--progress"],
+        ["inspect", "--root", root, "--cache", "disk", "--json", "--progress"],
+        ["search", "value", "--root", root, "--cache", "disk", "--mode", "text", "--json", "--progress"],
+        ["symbols", "value", "--root", root, "--cache", "disk", "--json", "--progress"],
+      ];
+
+      for (const command of commands) {
+        const cached = await captureCli(command, { progressPreparationDelayMs: 0 });
+        expect(() => JSON.parse(cached.stdout)).not.toThrow();
+        expect(cached.stderr, command.join(" ")).not.toContain("Preparing project index");
+        expect(cached.stderr, command.join(" ")).not.toContain("Updating project index");
+        expect(cached.stderr, command.join(" ")).not.toContain("Building project index");
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps a CLI cache hit quiet and reports a stale-index update", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-update-progress-"));
     const file = path.join(root, "main.ts");
@@ -379,9 +362,7 @@ describe("CLI index progress", () => {
     try {
       await buildProjectIndex(root, { cache: "disk" });
 
-      // A generous, explicit preparation delay keeps this assertion about a genuinely
-      // fast cache hit staying quiet, rather than racing the production 100ms default
-      // against unrelated CPU contention from the rest of a large parallel test run.
+      // A warm cache hit should not emit progress until the indexer has real work to report.
       const cached = await captureCli(command, {
         stderrIsTTY: true,
         terminalSupportsControlSequences: true,

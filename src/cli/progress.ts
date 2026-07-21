@@ -5,7 +5,6 @@ export type CliProgressPresentation = "interactive" | "log" | "off";
 
 export type CliProgressDisplay = {
   update: (update: ProgressUpdate) => void;
-  prepare: () => void;
   clear: () => void;
   dispose: () => void;
 };
@@ -13,11 +12,9 @@ export type CliProgressDisplay = {
 type CreateCliProgressDisplayOptions = {
   presentation: Exclude<CliProgressPresentation, "off">;
   write: (chunk: string) => void;
-  preparationDelayMs?: number;
 };
 
 const REFRESH_INTERVAL_MS = 100;
-const PREPARATION_DELAY_MS = 100;
 const CLEAR_LINE = "\r\u001b[2K";
 const SPINNER_FRAMES = ["-", "\\", "|", "/"] as const;
 
@@ -35,15 +32,11 @@ export function resolveCliProgressPresentation(input: {
 }
 
 export function createCliProgressDisplay(options: CreateCliProgressDisplayOptions): CliProgressDisplay {
-  const preparationDelayMs = options.preparationDelayMs ?? PREPARATION_DELAY_MS;
-  if (options.presentation === "log") return createLogProgressDisplay(options.write, preparationDelayMs);
-  return createInteractiveProgressDisplay(options.write, preparationDelayMs);
+  if (options.presentation === "log") return createLogProgressDisplay(options.write);
+  return createInteractiveProgressDisplay(options.write);
 }
 
-function createInteractiveProgressDisplay(
-  write: (chunk: string) => void,
-  preparationDelayMs: number,
-): CliProgressDisplay {
+function createInteractiveProgressDisplay(write: (chunk: string) => void): CliProgressDisplay {
   let active = false;
   let rendered = false;
   let frameIndex = 0;
@@ -51,29 +44,6 @@ function createInteractiveProgressDisplay(
   let total = 0;
   let mode: NonNullable<ProgressUpdate["mode"]> = "build";
   let interval: NodeJS.Timeout | undefined;
-  let preparationTimer: NodeJS.Timeout | undefined;
-  let preparationRequested = false;
-
-  const cancelPreparation = (): void => {
-    if (preparationTimer === undefined) return;
-    clearTimeout(preparationTimer);
-    preparationTimer = undefined;
-  };
-
-  const prepare = (): void => {
-    if (preparationRequested || active) return;
-    preparationRequested = true;
-    if (preparationDelayMs <= 0) {
-      write("Preparing project index...\n");
-      return;
-    }
-    preparationTimer = setTimeout(() => {
-      preparationTimer = undefined;
-      write("Preparing project index...\n");
-    }, preparationDelayMs);
-    preparationTimer.unref();
-  };
-
   const clear = (): void => {
     if (!rendered) return;
     write(CLEAR_LINE);
@@ -97,7 +67,6 @@ function createInteractiveProgressDisplay(
   };
 
   const start = (update: ProgressUpdate): void => {
-    cancelPreparation();
     stopInterval();
     clear();
     active = true;
@@ -123,7 +92,6 @@ function createInteractiveProgressDisplay(
   };
 
   return {
-    prepare,
     update: (update) => {
       if (update.phase === "start") {
         start(update);
@@ -145,42 +113,16 @@ function createInteractiveProgressDisplay(
     dispose: () => {
       active = false;
       stopInterval();
-      cancelPreparation();
       clear();
     },
   };
 }
 
-function createLogProgressDisplay(write: (chunk: string) => void, preparationDelayMs: number): CliProgressDisplay {
+function createLogProgressDisplay(write: (chunk: string) => void): CliProgressDisplay {
   let active = false;
   let mode: NonNullable<ProgressUpdate["mode"]> = "build";
-  let preparationTimer: NodeJS.Timeout | undefined;
-  let preparationRequested = false;
-
-  const cancelPreparation = (): void => {
-    if (preparationTimer === undefined) return;
-    clearTimeout(preparationTimer);
-    preparationTimer = undefined;
-  };
-
-  const prepare = (): void => {
-    if (preparationRequested || active) return;
-    preparationRequested = true;
-    if (preparationDelayMs <= 0) {
-      write("[Progress] Preparing project index.\n");
-      return;
-    }
-    preparationTimer = setTimeout(() => {
-      preparationTimer = undefined;
-      write("[Progress] Preparing project index.\n");
-    }, preparationDelayMs);
-    preparationTimer.unref();
-  };
-
   return {
-    prepare,
     update: (update) => {
-      cancelPreparation();
       if (update.phase === "start") {
         active = true;
         mode = update.mode ?? "build";
@@ -207,7 +149,6 @@ function createLogProgressDisplay(write: (chunk: string) => void, preparationDel
     },
     clear: () => {},
     dispose: () => {
-      cancelPreparation();
       active = false;
     },
   };

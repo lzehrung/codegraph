@@ -651,6 +651,41 @@ describe("Cache invalidation and strict hashing", () => {
     }
   });
 
+  it("reuses unchanged project-scope file lists with reports without reparsing or rediscovering", async () => {
+    const root = await mkTmpDir("dg-incremental-project-scope-report-");
+    const firstPath = path.join(root, "first.ts");
+    const secondPath = path.join(root, "second.ts");
+    await fsp.writeFile(firstPath, "export const first = 1;\n", "utf8");
+    await fsp.writeFile(secondPath, "export const second = 2;\n", "utf8");
+
+    await buildProjectIndex(root, { cache: "disk", threads: 2 });
+
+    const report: BuildReport = { timings: {} };
+    const prepSpy = vi.spyOn(filePrep, "prepareSourceInput");
+    const discoverSpy = vi.spyOn(projectFilesModule, "discoverProjectFiles");
+    try {
+      const incremental = await buildProjectIndexIncremental(root, {
+        cache: "disk",
+        threads: 2,
+        report,
+        files: [firstPath, secondPath],
+        filesAreProjectScope: true,
+      });
+
+      expect(prepSpy).not.toHaveBeenCalled();
+      expect(discoverSpy).not.toHaveBeenCalled();
+      expect(report.files?.total).toBe(2);
+      expect(report.files?.changed).toBe(0);
+      expect(report.files?.cached).toBe(2);
+      expect(incremental.byFile.has(normalize(firstPath))).toBe(true);
+      expect(incremental.byFile.has(normalize(secondPath))).toBe(true);
+    } finally {
+      prepSpy.mockRestore();
+      discoverSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("falls back when the project snapshot payload is malformed", async () => {
     const root = await mkTmpDir("dg-incremental-bad-project-snapshot-");
     const filePath = path.join(root, "foo.ts");

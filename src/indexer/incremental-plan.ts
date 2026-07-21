@@ -6,7 +6,7 @@ import {
   type ManifestFileEntry,
 } from "./build-cache.js";
 import type { BuildOptions, IncrementalBuildOptions } from "./types.js";
-import { isGitRepo, listChangedFiles, listUntrackedFiles } from "../util/git.js";
+import { listChangedFiles, listUntrackedFiles } from "../util/git.js";
 import {
   createDiscoveredFileMatcher,
   DEFAULT_PROJECT_PATTERNS,
@@ -176,8 +176,7 @@ export async function resolveIncrementalFileList(
   if (!manifest.buildOptions) return null;
   if (diffBuildOptions(manifest.buildOptions, opts).includes("discovery")) return null;
 
-  const gitAvailable = await isGitRepo(projectRoot);
-  if (!canUseIncrementalDiscoveryFastPath(gitAvailable, opts?.cacheStrict)) return null;
+  if (opts?.cacheStrict) return null;
 
   try {
     const trackedEntries = sanitizeManifestEntriesForRoot(projectRoot, manifest.files);
@@ -193,7 +192,7 @@ export async function resolveIncrementalFileList(
     const workingTreeDiffFiles = manifest.lastCommit
       ? await listChangedFiles(projectRoot, { base: manifest.lastCommit, head: "WORKTREE" })
       : [];
-    const untrackedFiles = await listUntrackedProjectFiles(projectRoot, opts?.discovery, gitAvailable);
+    const untrackedFiles = await listUntrackedProjectFiles(projectRoot, opts?.discovery, true);
 
     const files = new Set<string>(trackedFiles);
     for (const file of workingTreeDiffFiles) if (fs.existsSync(file)) files.add(file);

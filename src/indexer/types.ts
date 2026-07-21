@@ -157,6 +157,8 @@ export type BuildOptions = {
  */
 export type IncrementalBuildOptions = BuildOptions & {
   files?: string[];
+  /** @internal Treat `files` as the current project scope, not as caller-selected changed files. */
+  filesAreProjectScope?: boolean;
   changedSince?: string;
   gitBase?: string;
   gitHead?: string;

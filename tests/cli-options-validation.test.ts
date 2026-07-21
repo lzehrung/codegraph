@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseCliArgs } from "../src/cli/context.js";
 import {
-  cliInvocationStartsWithProjectIndex,
   parseImpactScopeOption,
   parseNonNegativeIntegerOption,
   parseRefContextOption,
@@ -139,90 +138,6 @@ describe("CLI command option validation", () => {
       expect(() => validateCliArgs(command, parsedThreads)).not.toThrow();
     }
   });
-  it("starts preparation for every index-backed command", () => {
-    const indexBackedCommands = [
-      "apisurface",
-      "callees",
-      "callers",
-      "deps",
-      "drift",
-      "dumpmod",
-      "duplicates",
-      "explain",
-      "explore",
-      "goto",
-      "graph-delta",
-      "impact",
-      "implementations",
-      "index",
-      "init",
-      "inspect",
-      "orient",
-      "packet",
-      "path",
-      "rdeps",
-      "refactor-plan",
-      "refs",
-      "rename-preview",
-      "review",
-      "search",
-      "subtypes",
-      "supertypes",
-      "symbols",
-      "sync",
-      "unresolved",
-    ];
-    for (const command of indexBackedCommands) {
-      expect(cliInvocationStartsWithProjectIndex(command, parseCliArgs(command, [])), command).toBe(true);
-    }
-
-    const nonIndexCommands = [
-      "chunk",
-      "cycles",
-      "doctor",
-      "grep",
-      "file",
-      "graph",
-      "hotspots",
-      "install",
-      "skill",
-      "sql",
-      "status",
-      "uninit",
-      "uninstall",
-      "version",
-    ];
-    for (const command of nonIndexCommands) {
-      expect(cliInvocationStartsWithProjectIndex(command, parseCliArgs(command, [])), command).toBe(false);
-    }
-
-    expect(cliInvocationStartsWithProjectIndex("artifact", parseCliArgs("artifact", []))).toBe(false);
-    expect(cliInvocationStartsWithProjectIndex("artifact", parseCliArgs("artifact", ["build"]))).toBe(true);
-    expect(cliInvocationStartsWithProjectIndex("file", parseCliArgs("file", ["main.ts"]))).toBe(false);
-    expect(
-      cliInvocationStartsWithProjectIndex("file", parseCliArgs("file", ["main.ts", "--include-graph-context"])),
-    ).toBe(true);
-    expect(cliInvocationStartsWithProjectIndex("graph", parseCliArgs("graph", ["--json"]))).toBe(false);
-    expect(cliInvocationStartsWithProjectIndex("graph", parseCliArgs("graph", ["--symbols"]))).toBe(true);
-    expect(cliInvocationStartsWithProjectIndex("graph", parseCliArgs("graph", ["--sqlite", "graph.db"]))).toBe(true);
-    expect(cliInvocationStartsWithProjectIndex("graph", parseCliArgs("graph", ["--db", "graph.db"]))).toBe(false);
-    expect(cliInvocationStartsWithProjectIndex("mcp", parseCliArgs("mcp", ["serve"]))).toBe(false);
-    expect(cliInvocationStartsWithProjectIndex("mcp", parseCliArgs("mcp", ["serve", "--warmup"]))).toBe(true);
-    expect(cliInvocationStartsWithProjectIndex("mcp", parseCliArgs("mcp", ["serve", "--warmup-symbols"]))).toBe(true);
-    expect(cliInvocationStartsWithProjectIndex("search", parseCliArgs("search", ["auth", "--mode", "path"]))).toBe(
-      false,
-    );
-    expect(
-      cliInvocationStartsWithProjectIndex(
-        "search",
-        parseCliArgs("search", ["auth", "--mode", "path", "--from", "src"]),
-      ),
-    ).toBe(true);
-    expect(cliInvocationStartsWithProjectIndex("search", parseCliArgs("search", ["auth", "--mode", "text"]))).toBe(
-      true,
-    );
-  });
-
   it("rejects conflicting progress flags", () => {
     const parsed = parseCliArgs("orient", ["--progress", "--no-progress"]);
 
