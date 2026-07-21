@@ -210,4 +210,35 @@ describe("resolveIncrementalFileList", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("resolves a newly staged (git add, not committed) file without a full recursive scan", async () => {
+    const root = await mkTmpDir("codegraph-resolve-incremental-staged-");
+    try {
+      git(root, ["init"]);
+      git(root, ["config", "user.email", "tests@example.com"]);
+      git(root, ["config", "user.name", "Tests"]);
+      await fs.writeFile(path.join(root, "tracked.ts"), "export const tracked = 1;\n", "utf8");
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "base"]);
+      await buildProjectIndex(root, { cache: "disk" });
+
+      // A staged-but-uncommitted file is neither a tracked manifest entry nor reported by
+      // `git ls-files --others` (staging removes it from "untracked"), so only a diff
+      // against the working tree (not just the commit) can find it while HEAD is unmoved.
+      const stagedPath = path.join(root, "staged.ts");
+      await fs.writeFile(stagedPath, "export const staged = 1;\n", "utf8");
+      git(root, ["add", "staged.ts"]);
+
+      const scanSpy = vi.spyOn(projectFilesModule, "listProjectFiles");
+      const files = await resolveIncrementalFileList(root, { cache: "disk" });
+
+      expect(files).not.toBeNull();
+      const normalized = (files ?? []).map((file) => file.replace(/\\/g, "/"));
+      expect(normalized.some((file) => file.endsWith("/tracked.ts"))).toBe(true);
+      expect(normalized.some((file) => file.endsWith("/staged.ts"))).toBe(true);
+      expect(scanSpy).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });

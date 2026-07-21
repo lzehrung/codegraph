@@ -6,7 +6,7 @@ import {
   type ManifestFileEntry,
 } from "./build-cache.js";
 import type { BuildOptions, IncrementalBuildOptions } from "./types.js";
-import { getGitHead, isGitRepo, listChangedFiles, listUntrackedFiles } from "../util/git.js";
+import { isGitRepo, listChangedFiles, listUntrackedFiles } from "../util/git.js";
 import {
   createDiscoveredFileMatcher,
   DEFAULT_PROJECT_PATTERNS,
@@ -30,6 +30,10 @@ export function isMissingGitRevisionError(error: unknown): boolean {
   return (
     message.includes("Invalid revision range") ||
     message.includes("bad revision") ||
+    // A single-revision diff against WORKTREE (git diff --end-of-options <base>) reports
+    // a missing base commit as "bad object", not "bad revision" (that phrasing is
+    // specific to two-dot/three-dot range syntax); both mean the same thing here.
+    message.includes("bad object") ||
     message.includes("unknown revision") ||
     message.includes("ambiguous argument")
   );
@@ -170,15 +174,20 @@ export async function resolveIncrementalFileList(
     const trackedEntries = sanitizeManifestEntriesForRoot(projectRoot, manifest.files);
     const { trackedFiles } = partitionTrackedManifestFiles(trackedEntries);
 
-    const currentHead = await getGitHead(projectRoot);
-    let manifestDiffFiles: string[] = [];
-    if (manifest.lastCommit && currentHead && manifest.lastCommit !== currentHead) {
-      manifestDiffFiles = await listChangedFiles(projectRoot, { base: manifest.lastCommit, head: currentHead });
-    }
+    // Diff against the working tree, not just the current commit: a file that was
+    // `git add`ed but never committed is neither in the manifest (not yet indexed) nor
+    // reported by `git ls-files --others` (it is no longer "untracked" once staged), so
+    // a commit-only diff would miss it entirely whenever HEAD hasn't moved. Diffing the
+    // last-indexed commit against WORKTREE catches staged and unstaged tracked-file
+    // changes together, including new commits made since (working tree reflects those
+    // too when clean), so this replaces the narrower commit-to-commit comparison.
+    const workingTreeDiffFiles = manifest.lastCommit
+      ? await listChangedFiles(projectRoot, { base: manifest.lastCommit, head: "WORKTREE" })
+      : [];
     const untrackedFiles = await listUntrackedProjectFiles(projectRoot, opts?.discovery, gitAvailable);
 
     const files = new Set<string>(trackedFiles);
-    for (const file of manifestDiffFiles) if (fs.existsSync(file)) files.add(file);
+    for (const file of workingTreeDiffFiles) if (fs.existsSync(file)) files.add(file);
     for (const file of untrackedFiles) if (fs.existsSync(file)) files.add(file);
     return Array.from(files).sort();
   } catch {
