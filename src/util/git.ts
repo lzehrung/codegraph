@@ -232,9 +232,9 @@ export async function listChangedFiles(
  * directory scan: combined with tracked manifest entries and a commit-range
  * diff, it lets incremental builds stay correct without re-walking the tree.
  * `respectGitignore` mirrors Git's own `--exclude-standard`; pass `false` only
- * when the caller intentionally wants gitignored files included (in which case
- * prefer a full scan instead of this helper, since gitignore-aware filtering
- * for untracked paths is not replicated here).
+ * when the caller intentionally wants gitignored files included. Callers still
+ * need to apply their own project-pattern, ignore, and realpath confinement
+ * checks before treating these paths as indexable project files.
  */
 export async function listUntrackedFiles(
   projectRoot: string,
@@ -252,10 +252,7 @@ export async function listUntrackedFiles(
     // git ls-files -z NUL-delimits entries; the trailing split segment is always an
     // empty string, not a filename, so filter it out without trimming (a leading or
     // trailing whitespace character can be a legitimate part of a real filename).
-    const relFiles = stdout
-      .toString()
-      .split("\0")
-      .filter(Boolean);
+    const relFiles = stdout.toString().split("\0").filter(Boolean);
     const out: string[] = [];
     for (const rel of relFiles) {
       const abs = normalizePath(path.resolve(projectRoot, rel));

@@ -31,6 +31,7 @@ function indexOptions(context: NavigationCommandContext): IncrementalBuildOption
     discovery: context.discoveryOptions,
     cache: parseCacheModeOption(context.getOpt("--cache")) ?? "disk",
     ...(context.hasFlag("--cache-strict") ? { cacheStrict: true } : {}),
+    ...(context.hasFlag("--cache-verify") ? { cacheVerify: true } : {}),
     ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
     ...context.workerOpts,
   };

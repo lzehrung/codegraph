@@ -43,6 +43,7 @@ type ImpactOptionsBuilder = Partial<ImpactOptions> & {
   threads?: number;
   cache?: BuildOptions["cache"];
   cacheStrict?: boolean;
+  cacheVerify?: boolean;
 };
 
 export type ImpactCommandContext = {
@@ -337,6 +338,7 @@ function applyAnalysisOptions(context: ImpactCommandContext, options: ImpactOpti
   if (cache !== undefined) options.cache = cache;
 
   if (context.hasFlag("--cache-strict")) options.cacheStrict = true;
+  if (context.hasFlag("--cache-verify")) options.cacheVerify = true;
   if (context.hasFlag("--compact") || context.hasFlag("--compact-json")) options.compact = true;
 
   const maxRefs = context.getOpt("--max-refs");
@@ -409,6 +411,7 @@ function buildIndexOptions(
     ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
     ...context.workerOpts,
     ...(options.cacheStrict ? { cacheStrict: true } : {}),
+    ...(options.cacheVerify ? { cacheVerify: true } : {}),
   };
   if (context.graphOptions) {
     indexOpts.graph = context.graphOptions;

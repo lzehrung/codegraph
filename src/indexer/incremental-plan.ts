@@ -10,6 +10,7 @@ import { isGitRepo, listChangedFiles, listUntrackedFiles } from "../util/git.js"
 import {
   createDiscoveredFileMatcher,
   DEFAULT_PROJECT_PATTERNS,
+  filterRealPathsWithinRoot,
   type ProjectFileDiscoveryOptions,
 } from "../util/projectFiles.js";
 
@@ -139,7 +140,10 @@ export async function listUntrackedProjectFiles(
   if (!candidates.length) return [];
   const globRoot = discovery?.globRoot ?? projectRoot;
   const isDiscoveredFile = createDiscoveredFileMatcher(projectRoot, globRoot, DEFAULT_PROJECT_PATTERNS, discovery);
-  return candidates.filter(isDiscoveredFile);
+  const matchingCandidates = candidates.filter(isDiscoveredFile);
+  if (!matchingCandidates.length) return [];
+  const realRoot = await fs.promises.realpath(projectRoot);
+  return filterRealPathsWithinRoot(matchingCandidates, realRoot);
 }
 
 /**
@@ -150,10 +154,7 @@ export async function listUntrackedProjectFiles(
  * `listUntrackedProjectFiles()` drops `--exclude-standard` in that mode instead of
  * giving up, so it stays correct either way.
  */
-export function canUseIncrementalDiscoveryFastPath(
-  gitAvailable: boolean,
-  cacheStrict: boolean | undefined,
-): boolean {
+export function canUseIncrementalDiscoveryFastPath(gitAvailable: boolean, cacheStrict: boolean | undefined): boolean {
   return gitAvailable && !cacheStrict;
 }
 

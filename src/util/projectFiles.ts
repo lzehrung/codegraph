@@ -548,7 +548,7 @@ async function filterRealPathsWithinRootEntries(paths: string[], realRoot: strin
   return filtered.filter((entry): entry is RootSafePath => entry !== null);
 }
 
-async function filterRealPathsWithinRoot(paths: string[], realRoot: string): Promise<string[]> {
+export async function filterRealPathsWithinRoot(paths: string[], realRoot: string): Promise<string[]> {
   const entries = await filterRealPathsWithinRootEntries(paths, realRoot);
   return entries.map((entry) => entry.path);
 }

@@ -12,7 +12,7 @@ import type { ManifestFileEntry } from "../src/indexer/build-cache.js";
 import { buildProjectIndex } from "../src/indexer/build-index.js";
 import type { Edge } from "../src/types.js";
 import * as projectFilesModule from "../src/util/projectFiles.js";
-import { mkTmpDir } from "./helpers/filesystem.js";
+import { isSymlinkUnavailable, mkTmpDir } from "./helpers/filesystem.js";
 import { runGit as git } from "./helpers/git.js";
 
 function fileEdge(from: string, to: string): Edge {
@@ -111,6 +111,36 @@ describe("listUntrackedProjectFiles", () => {
       expect(normalized.some((file) => file.endsWith("/ignored.ts"))).toBe(true);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("excludes untracked symlinks whose realpath escapes the project root", async () => {
+    const root = await mkTmpDir("codegraph-untracked-project-files-symlink-root-");
+    const outside = await mkTmpDir("codegraph-untracked-project-files-symlink-outside-");
+    try {
+      git(root, ["init"]);
+      git(root, ["config", "user.email", "tests@example.com"]);
+      git(root, ["config", "user.name", "Tests"]);
+      await fs.writeFile(path.join(root, "tracked.ts"), "export const tracked = 1;\n", "utf8");
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "base"]);
+
+      const outsideFile = path.join(outside, "secret.ts");
+      const linkedFile = path.join(root, "linked-secret.ts");
+      await fs.writeFile(outsideFile, "export const secret = 1;\n", "utf8");
+      try {
+        await fs.symlink(outsideFile, linkedFile, "file");
+      } catch (error) {
+        if (isSymlinkUnavailable(error)) return;
+        throw error;
+      }
+
+      const files = await listUntrackedProjectFiles(root, undefined, true);
+      const normalized = files.map((file) => file.replace(/\\/g, "/"));
+      expect(normalized.some((file) => file.endsWith("/linked-secret.ts"))).toBe(false);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+      await fs.rm(outside, { recursive: true, force: true });
     }
   });
 });

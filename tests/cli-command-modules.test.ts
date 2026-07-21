@@ -417,6 +417,33 @@ describe("CLI command modules", () => {
     expect(stderr).toEqual(["Usage: goto <file> <line> <column>"]);
   });
 
+  test("navigation commands forward --cache-verify to incremental index builds", async () => {
+    const emptyIndex: ProjectIndex = {
+      graph: { nodes: new Set<string>(), edges: [] },
+      modules: new Map(),
+      byFile: new Map(),
+      exportCache: new Map(),
+      scopeCache: new Map(),
+    };
+    const root = await mkTmpDir("codegraph-navigation-cache-verify-");
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockResolvedValue(emptyIndex);
+    try {
+      await handleGotoCommand(
+        createNavigationContext({
+          projectRootFs: root,
+          positionals: [path.join(root, "main.ts"), "1", "1"],
+          hasFlag: (name) => name === "--cache-verify",
+          writeJSONLine: () => undefined,
+        }),
+      );
+
+      expect(buildSpy.mock.calls[0]?.[1]?.cacheVerify).toBe(true);
+    } finally {
+      buildSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("goto command reuses the on-disk manifest on a second invocation without a full recursive scan", async () => {
     const root = await mkTmpDir("codegraph-goto-manifest-reuse-");
     const filePath = path.join(root, "main.ts");
@@ -1067,9 +1094,16 @@ describe("CLI command modules", () => {
           },
         }),
       );
+      await handleImpactCommand(
+        createImpactContext({
+          ...baseContext,
+          hasFlag: (name) => name === "--cache-verify",
+        }),
+      );
 
       expect(capturedIndexOptions[0]?.keepParsed).toBeUndefined();
       expect(capturedIndexOptions[1]?.keepParsed).toBe(true);
+      expect(capturedIndexOptions[2]?.cacheVerify).toBe(true);
     } finally {
       buildSpy.mockRestore();
       await fsp.rm(tempDir, { recursive: true, force: true });
