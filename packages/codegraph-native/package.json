@@ -1,6 +1,6 @@
 {
   "name": "@lzehrung/codegraph-native",
-  "version": "1.8.75",
+  "version": "1.8.76",
   "type": "module",
   "main": "./index.js",
   "types": "./index.d.ts",
