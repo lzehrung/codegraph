@@ -46,12 +46,10 @@ describe("incremental-plan dependents", () => {
 });
 
 describe("canUseIncrementalDiscoveryFastPath", () => {
-  it("requires a Git repo, gitignore-aware discovery, and no --cache-strict", () => {
-    expect(canUseIncrementalDiscoveryFastPath(true, undefined, undefined)).toBe(true);
-    expect(canUseIncrementalDiscoveryFastPath(false, undefined, undefined)).toBe(false);
-    expect(canUseIncrementalDiscoveryFastPath(true, { useGitignore: false }, undefined)).toBe(false);
-    expect(canUseIncrementalDiscoveryFastPath(true, { useGitignore: true }, undefined)).toBe(true);
-    expect(canUseIncrementalDiscoveryFastPath(true, undefined, true)).toBe(false);
+  it("requires a Git repo and no --cache-strict", () => {
+    expect(canUseIncrementalDiscoveryFastPath(true, undefined)).toBe(true);
+    expect(canUseIncrementalDiscoveryFastPath(false, undefined)).toBe(false);
+    expect(canUseIncrementalDiscoveryFastPath(true, true)).toBe(false);
   });
 });
 
@@ -83,11 +81,34 @@ describe("listUntrackedProjectFiles", () => {
     }
   });
 
-  it("returns an empty list when Git is unavailable or gitignore-aware discovery is disabled", async () => {
+  it("returns an empty list when Git is unavailable", async () => {
     const root = await mkTmpDir("codegraph-untracked-project-files-disabled-");
     try {
       expect(await listUntrackedProjectFiles(root, undefined, false)).toEqual([]);
-      expect(await listUntrackedProjectFiles(root, { useGitignore: false }, true)).toEqual([]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("includes gitignored untracked files when useGitignore is false, instead of giving up", async () => {
+    const root = await mkTmpDir("codegraph-untracked-project-files-no-gitignore-");
+    try {
+      git(root, ["init"]);
+      git(root, ["config", "user.email", "tests@example.com"]);
+      git(root, ["config", "user.name", "Tests"]);
+      await fs.writeFile(path.join(root, ".gitignore"), "ignored.ts\n", "utf8");
+      await fs.writeFile(path.join(root, "tracked.ts"), "export const tracked = 1;\n", "utf8");
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "base"]);
+
+      await fs.writeFile(path.join(root, "ignored.ts"), "export const ignored = 1;\n", "utf8");
+
+      const respectingGitignore = await listUntrackedProjectFiles(root, undefined, true);
+      expect(respectingGitignore.some((file) => file.endsWith("/ignored.ts"))).toBe(false);
+
+      const includingGitignored = await listUntrackedProjectFiles(root, { useGitignore: false }, true);
+      const normalized = includingGitignored.map((file) => file.replace(/\\/g, "/"));
+      expect(normalized.some((file) => file.endsWith("/ignored.ts"))).toBe(true);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

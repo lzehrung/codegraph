@@ -121,14 +121,21 @@ export function collectTrackedFileDependents(
  * staged has no tracked entry and no diff record. Errors are not swallowed here;
  * callers decide whether a failure should fall back to a full scan or be treated as a
  * best-effort miss.
+ *
+ * When `discovery.useGitignore` is `false`, Git's `--exclude-standard` is dropped too:
+ * that mode explicitly wants gitignored files included, so filtering untracked
+ * candidates through `.gitignore` here would be exactly backwards. The default
+ * project-file ignores (`node_modules`, `.git`, build output, ...) still apply via
+ * `createDiscoveredFileMatcher()` below regardless of this setting.
  */
 export async function listUntrackedProjectFiles(
   projectRoot: string,
   discovery: ProjectFileDiscoveryOptions | undefined,
   gitAvailable: boolean,
 ): Promise<string[]> {
-  if (!gitAvailable || discovery?.useGitignore === false) return [];
-  const candidates = await listUntrackedFiles(projectRoot, { gitAvailable, respectGitignore: true });
+  if (!gitAvailable) return [];
+  const respectGitignore = discovery?.useGitignore !== false;
+  const candidates = await listUntrackedFiles(projectRoot, { gitAvailable, respectGitignore });
   if (!candidates.length) return [];
   const globRoot = discovery?.globRoot ?? projectRoot;
   const isDiscoveredFile = createDiscoveredFileMatcher(projectRoot, globRoot, DEFAULT_PROJECT_PATTERNS, discovery);
@@ -138,16 +145,16 @@ export async function listUntrackedProjectFiles(
 /**
  * Whether the cheap manifest-plus-git discovery path can stand in for a full recursive
  * scan. Requires a Git repository (the only source of untracked-file detection this
- * fast path has), a discovery config that still wants gitignore-aware filtering (Git's
- * own `--exclude-standard` is the only gitignore handling this path performs), and no
- * `--cache-strict` request (an explicit ask for maximum certainty over speed).
+ * fast path has) and no `--cache-strict` request (an explicit ask for maximum
+ * certainty over speed). `useGitignore: false` no longer disqualifies the fast path:
+ * `listUntrackedProjectFiles()` drops `--exclude-standard` in that mode instead of
+ * giving up, so it stays correct either way.
  */
 export function canUseIncrementalDiscoveryFastPath(
   gitAvailable: boolean,
-  discovery: ProjectFileDiscoveryOptions | undefined,
   cacheStrict: boolean | undefined,
 ): boolean {
-  return gitAvailable && discovery?.useGitignore !== false && !cacheStrict;
+  return gitAvailable && !cacheStrict;
 }
 
 /**
@@ -168,7 +175,7 @@ export async function resolveIncrementalFileList(
   if (diffBuildOptions(manifest.buildOptions, opts).includes("discovery")) return null;
 
   const gitAvailable = await isGitRepo(projectRoot);
-  if (!canUseIncrementalDiscoveryFastPath(gitAvailable, opts?.discovery, opts?.cacheStrict)) return null;
+  if (!canUseIncrementalDiscoveryFastPath(gitAvailable, opts?.cacheStrict)) return null;
 
   try {
     const trackedEntries = sanitizeManifestEntriesForRoot(projectRoot, manifest.files);

@@ -993,7 +993,7 @@ export async function buildProjectIndexIncremental(
     // silently produce an incomplete index, so it falls back to a full rebuild instead,
     // the same way a stale manifest commit does above.
     let untrackedFiles: string[] = [];
-    if (canUseIncrementalDiscoveryFastPath(gitAvailable, opts?.discovery, opts?.cacheStrict)) {
+    if (canUseIncrementalDiscoveryFastPath(gitAvailable, opts?.cacheStrict)) {
       try {
         untrackedFiles = await listUntrackedProjectFiles(projectRoot, opts?.discovery, gitAvailable);
       } catch (error) {
