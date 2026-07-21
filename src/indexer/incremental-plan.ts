@@ -173,6 +173,7 @@ export async function resolveIncrementalFileList(
 ): Promise<string[] | null> {
   const manifest = await loadManifest(projectRoot, opts);
   if (!manifest) return null;
+  if (!manifest.buildOptions) return null;
   if (diffBuildOptions(manifest.buildOptions, opts).includes("discovery")) return null;
 
   const gitAvailable = await isGitRepo(projectRoot);

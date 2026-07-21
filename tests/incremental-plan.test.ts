@@ -23,6 +23,10 @@ function entry(edges: Edge[]): ManifestFileEntry {
   return { sig: "sig", edges };
 }
 
+function manifestPathFor(root: string): string {
+  return path.join(root, ".codegraph-cache", "index-v1", "manifest.json");
+}
+
 describe("incremental-plan dependents", () => {
   it("collects transitive dependents of changed files", () => {
     const trackedEntries: Record<string, ManifestFileEntry> = {
@@ -154,6 +158,28 @@ describe("resolveIncrementalFileList", () => {
     const root = await mkTmpDir("codegraph-resolve-incremental-no-manifest-");
     try {
       await fs.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
+      expect(await resolveIncrementalFileList(root, { cache: "disk" })).toBeNull();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns null for older manifests that do not record build options", async () => {
+    const root = await mkTmpDir("codegraph-resolve-incremental-missing-build-options-");
+    try {
+      git(root, ["init"]);
+      git(root, ["config", "user.email", "tests@example.com"]);
+      git(root, ["config", "user.name", "Tests"]);
+      await fs.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "base"]);
+      await buildProjectIndex(root, { cache: "disk" });
+
+      const manifestPath = manifestPathFor(root);
+      const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as { buildOptions?: unknown };
+      delete manifest.buildOptions;
+      await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
+
       expect(await resolveIncrementalFileList(root, { cache: "disk" })).toBeNull();
     } finally {
       await fs.rm(root, { recursive: true, force: true });
