@@ -370,6 +370,30 @@ describe("CLI index progress", () => {
     }
   });
 
+  it("keeps a warm orient cache hit quiet", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-orient-warm-progress-"));
+    const file = path.join(root, "main.ts");
+    await fsp.writeFile(file, "export const value = 1;\n", "utf8");
+
+    try {
+      await captureCli(["orient", "--root", root, "--cache", "disk", "--json"], {
+        stderrIsTTY: true,
+        terminalSupportsControlSequences: true,
+      });
+
+      const cached = await captureCli(["orient", "--root", root, "--cache", "disk", "--json", "--progress"], {
+        progressPreparationDelayMs: 0,
+      });
+
+      expect(() => JSON.parse(cached.stdout)).not.toThrow();
+      expect(cached.stderr).not.toContain("Preparing project index");
+      expect(cached.stderr).not.toContain("Updating project index");
+      expect(cached.stderr).not.toContain("Building project index");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps a CLI cache hit quiet and reports a stale-index update", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-update-progress-"));
     const file = path.join(root, "main.ts");

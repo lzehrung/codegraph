@@ -2,7 +2,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { buildProjectIndexIncremental } from "../indexer/build-index.js";
 import { resolveIncrementalFileList } from "../indexer/incremental-plan.js";
-import type { BuildOptions, BuildReport, ProjectIndex } from "../indexer/types.js";
+import type { BuildOptions, BuildReport, IncrementalBuildOptions, ProjectIndex } from "../indexer/types.js";
 import { buildSymbolGraphDetailed } from "../graphs/symbol-graph-detailed.js";
 import { type SymbolGraph } from "../graphs/symbol-graph.js";
 import type { Graph } from "../types.js";
@@ -216,12 +216,15 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     const loadPromise = (async () => {
       const { discoveryOptions } = await resolveAgentDiscoverySettings(options);
       const files = await loadFiles();
-      cachedFileSignatures = await collectAgentFileSignatures(files);
-      const buildOptions: BuildOptions & { files: string[] } = {
+      if (options.freshness?.policy !== "manual") {
+        cachedFileSignatures = await collectAgentFileSignatures(files);
+      }
+      const buildOptions: IncrementalBuildOptions = {
         ...options.buildOptions,
         cache: options.buildOptions?.cache ?? "disk",
         keepParsed: options.buildOptions?.keepParsed ?? true,
         files,
+        filesAreProjectScope: true,
         ...(discoveryOptions ? { discovery: discoveryOptions } : {}),
       };
       if (options.buildOptions?.useNativeWorkers === undefined && files.length >= NATIVE_WORKER_AUTO_FILE_THRESHOLD) {
@@ -238,7 +241,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
         fileLookup: createAgentFileLookup(files),
         index,
         fileGraph,
-        fileSignatures: cachedFileSignatures,
+        ...(cachedFileSignatures ? { fileSignatures: cachedFileSignatures } : {}),
         buildReport,
         analysis: summarizeAnalysis({ index, report: buildReport }),
       };

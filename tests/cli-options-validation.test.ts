@@ -157,7 +157,6 @@ describe("CLI command option validation", () => {
       "index",
       "init",
       "inspect",
-      "orient",
       "packet",
       "path",
       "rdeps",
@@ -196,6 +195,7 @@ describe("CLI command option validation", () => {
       expect(cliInvocationStartsWithProjectIndex(command, parseCliArgs(command, [])), command).toBe(false);
     }
 
+    expect(cliInvocationStartsWithProjectIndex("orient", parseCliArgs("orient", []))).toBe(false);
     expect(cliInvocationStartsWithProjectIndex("artifact", parseCliArgs("artifact", []))).toBe(false);
     expect(cliInvocationStartsWithProjectIndex("artifact", parseCliArgs("artifact", ["build"]))).toBe(true);
     expect(cliInvocationStartsWithProjectIndex("file", parseCliArgs("file", ["main.ts"]))).toBe(false);

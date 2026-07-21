@@ -116,6 +116,7 @@ export async function orientCodegraph(request: AgentOrientRequest): Promise<Agen
   const session = createAgentSession({
     root,
     ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
+    freshness: { policy: "manual" },
   });
   return await orientCodegraphWithSession(session, { ...request, root });
 }

@@ -158,7 +158,6 @@ const ALWAYS_INDEX_START_COMMANDS: Readonly<Record<string, true>> = {
   index: true,
   init: true,
   inspect: true,
-  orient: true,
   packet: true,
   path: true,
   rdeps: true,

@@ -1068,7 +1068,8 @@ export async function buildProjectIndexIncremental(
       const explicitFileSet = new Set(explicitFiles);
       const explicitFilesCoverAllFiles =
         explicitFileSet.size === allFiles.size && [...allFiles].every((file) => explicitFileSet.has(file));
-      if (explicitFileSet.size && (!explicitFilesCoverAllFiles || report)) {
+      const explicitFilesAreChangeInputs = !opts?.filesAreProjectScope;
+      if (explicitFileSet.size && explicitFilesAreChangeInputs && (!explicitFilesCoverAllFiles || report)) {
         explicitFileSet.forEach(markAsChanged);
       }
       manifestDiffFiles.forEach(markAsChanged);
@@ -1104,7 +1105,7 @@ export async function buildProjectIndexIncremental(
         const snapshotLoad = await tryLoadProjectIndexSnapshot(projectRoot, opts, filesSignature);
         if (snapshotLoad) {
           const snapshot = snapshotLoad.index;
-          snapshot.projectFiles = await discoverProjectFiles(projectRoot, {
+          snapshot.projectFiles ??= await discoverProjectFiles(projectRoot, {
             ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
           });
           snapshot.manifestEntries = projectIndexManifestEntries(Object.entries(trackedEntries));
