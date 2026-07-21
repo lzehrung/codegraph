@@ -2,6 +2,8 @@
 
 This plan captures remaining high-impact opportunities from a broad repo audit focused on MCP startup, cache behavior, search, references, impact/review, and duplicate detection performance. It is self-contained so another agent can implement items without the original conversation.
 
+Follow-up: `2026-07-21-warm-run-discovery-avoidance.md` continues Priority 7/8 below with a deeper finding that full recursive directory discovery, not just graph reconstruction, still runs on most warm/unchanged commands. Read that plan before picking up Priority 7's remaining validation items.
+
 Existing unrelated worktree context when this plan was written:
 
 - `src/cli/help.ts`, `tests/cli-command-modules.test.ts`, `src/review.ts`, and `tests/review.test.ts` had small fixes for CLI help and review `head` metadata.
@@ -280,6 +282,7 @@ Validation:
 - [x] Old-cache migration or fallback test.
 - [ ] Warm-cache parity test comparing current incremental output and snapshot output.
 - [ ] `node ./dist/cli.js orient --root . --budget small --json` before/after timing.
+- Note: these two remaining items and the discovery-scan gap they did not cover are tracked together in `2026-07-21-warm-run-discovery-avoidance.md`.
 
 ## Priority 8: Stop Hashing Every File on Warm Git-Backed Cache Runs
 
