@@ -804,12 +804,9 @@ async function buildProjectIndexWithManifestOptions(
       helperOpts?.ignoreExistingManifest || wantsMaxSymlinkCorrectness ? null : await loadManifest(projectRoot, opts);
     const knownSymlinkDirectories = symlinkHintManifest?.symlinkDirectories;
     let discoveredSymlinkDirectories = knownSymlinkDirectories;
-    const onSymlinkDirectoriesDiscovered =
-      knownSymlinkDirectories === undefined
-        ? (directories: readonly string[]) => {
-            discoveredSymlinkDirectories = Array.from(directories);
-          }
-        : undefined;
+    const onSymlinkDirectoriesDiscovered = (directories: readonly string[]) => {
+      discoveredSymlinkDirectories = Array.from(directories);
+    };
     // When the hint is unknown, listProjectFiles() and discoverProjectFiles() must run
     // sequentially rather than in Promise.all: both would otherwise start their own
     // full-tree symlink probe concurrently, since the callback only reports back after
@@ -822,7 +819,7 @@ async function buildProjectIndexWithManifestOptions(
       ...opts?.discovery,
       ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
       ...(knownSymlinkDirectories !== undefined ? { knownSymlinkDirectories } : {}),
-      ...(onSymlinkDirectoriesDiscovered ? { onSymlinkDirectoriesDiscovered } : {}),
+      onSymlinkDirectoriesDiscovered,
     });
     const projectFiles = await discoverProjectFiles(projectRoot, {
       ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),

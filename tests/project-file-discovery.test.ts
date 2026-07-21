@@ -716,10 +716,11 @@ describe("project file discovery", () => {
     const discoveredSet = new Set(discovered.map(normalize));
 
     expect(discoveredSet.has(normalize(path.join(linkedPackage, "src", "index.ts")))).toBe(true);
-    // The fast path re-verifies known entries directly; it never runs the full-tree
-    // probe, so onSymlinkDirectoriesDiscovered (only invoked by the probing path) must
-    // not fire.
-    expect(discoveredCallback).not.toHaveBeenCalled();
+    // The fast path re-verifies known entries directly and reports the verified list
+    // back so callers can refresh stale manifest hints without probing.
+    expect(discoveredCallback).toHaveBeenCalledTimes(1);
+    const reported = (discoveredCallback.mock.calls[0]?.[0] as string[]).map(normalize);
+    expect(reported).toEqual([normalize(linkedPackage)]);
   });
 
   it("drops a known symlink directory that no longer resolves to a directory inside the root", async () => {
@@ -734,6 +735,48 @@ describe("project file discovery", () => {
     // The recorded symlink path no longer exists on disk; the fast path must silently
     // drop it instead of throwing or returning phantom files.
     expect(discovered).toEqual([]);
+  });
+
+  it("drops known symlink-directory hints that are real directories rather than symlinks", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-link-real-dir-known-"));
+    const packageDir = path.join(tempDir, "packages", "core");
+    const sourceFile = path.join(packageDir, "src", "index.ts");
+    await createFile(sourceFile, "export const core = 1;\n");
+
+    const discovered = await listProjectFiles(tempDir, ["**/*.ts"], {
+      ignoreGlobs: [],
+      knownSymlinkDirectories: [packageDir],
+    });
+    const matching = discovered.map(normalize).filter((file) => file === normalize(sourceFile));
+
+    expect(matching).toHaveLength(1);
+  });
+
+  it("drops known symlink-directory hints whose link path is outside the project root", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-link-outside-known-root-"));
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-link-outside-known-link-"));
+    const packageDir = path.join(tempDir, "packages", "core");
+    const outsideLink = path.join(outsideDir, "outside-linked-core");
+    await createFile(path.join(packageDir, "src", "index.ts"), "export const core = 1;\n");
+
+    try {
+      await fs.symlink(packageDir, outsideLink, "junction");
+    } catch (error) {
+      if (isSymlinkUnavailable(error)) return;
+      throw error;
+    }
+
+    const discoveredCallback = vi.fn();
+    const discovered = await listProjectFiles(tempDir, ["**/*.ts"], {
+      ignoreGlobs: [],
+      knownSymlinkDirectories: [outsideLink],
+      onSymlinkDirectoriesDiscovered: discoveredCallback,
+    });
+    const discoveredSet = new Set(discovered.map(normalize));
+
+    expect(discoveredSet.has(normalize(path.join(packageDir, "src", "index.ts")))).toBe(true);
+    expect(discoveredSet.has(normalize(path.join(outsideLink, "src", "index.ts")))).toBe(false);
+    expect(discoveredCallback).toHaveBeenCalledWith([]);
   });
 
   it("reports the discovered symlink directories through onSymlinkDirectoriesDiscovered on a probing run", async () => {

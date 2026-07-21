@@ -1391,6 +1391,31 @@ describe("Cache invalidation and strict hashing", () => {
     expect((manifest.symlinkDirectories ?? []).map(normalize)).toContain(normalize(linkedPackage));
   });
 
+  it("prunes stale symlink directory hints from the manifest after warm re-verification", async () => {
+    const root = await mkTmpDir("dg-manifest-symlink-prune-stale-");
+    const packageDir = path.join(root, "packages", "core");
+    const linkedPackage = path.join(root, "linked-core");
+    await fsp.mkdir(path.join(packageDir, "src"), { recursive: true });
+    await fsp.writeFile(path.join(packageDir, "src", "index.ts"), "export const core = 1;\n", "utf8");
+
+    try {
+      await fsp.symlink(packageDir, linkedPackage, "junction");
+    } catch (error) {
+      if (error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "EPERM") return;
+      throw error;
+    }
+
+    await buildProjectIndex(root, { cache: "disk" });
+    const staleManifest = await readManifest(root);
+    expect((staleManifest.symlinkDirectories ?? []).map(normalize)).toContain(normalize(linkedPackage));
+
+    await fsp.rm(linkedPackage, { recursive: true, force: true });
+    await buildProjectIndex(root, { cache: "disk" });
+    const refreshedManifest = await readManifest(root);
+
+    expect(refreshedManifest.symlinkDirectories).toEqual([]);
+  });
+
   it("re-probes for symlinks under --cache-strict even when the manifest hint says none exist", async () => {
     const root = await mkTmpDir("dg-manifest-symlink-force-reprobe-");
     await fsp.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");

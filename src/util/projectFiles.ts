@@ -439,10 +439,16 @@ export function createDiscoveredFileMatcher(
   };
 }
 
-async function isSafeSymlinkDirectory(linkPath: string, realRoot: string): Promise<boolean> {
+async function isSafeSymlinkDirectory(root: string, linkPath: string, realRoot: string): Promise<boolean> {
   try {
-    const [realPath, stats] = await Promise.all([fsp.realpath(linkPath), fsp.stat(linkPath)]);
-    if (!stats.isDirectory()) return false;
+    if (!isFilePathWithinRoot(root, linkPath)) return false;
+    const [linkStats, realPath, targetStats] = await Promise.all([
+      fsp.lstat(linkPath),
+      fsp.realpath(linkPath),
+      fsp.stat(linkPath),
+    ]);
+    if (!linkStats.isSymbolicLink()) return false;
+    if (!targetStats.isDirectory()) return false;
     if (!isFilePathWithinRoot(realRoot, realPath)) return false;
     return normalizePath(realPath) !== normalizePath(realRoot);
   } catch {
@@ -467,11 +473,13 @@ async function resolveSafeSymlinkDirectories(
 ): Promise<string[]> {
   if (options.knownSymlinkDirectories !== undefined) {
     const verified = await mapLimitSemaphore(
-      Array.from(options.knownSymlinkDirectories),
+      Array.from(new Set(options.knownSymlinkDirectories)),
       REALPATH_FILTER_CONCURRENCY,
-      async (linkPath) => ((await isSafeSymlinkDirectory(linkPath, realRoot)) ? linkPath : null),
+      async (linkPath) => ((await isSafeSymlinkDirectory(root, linkPath, realRoot)) ? linkPath : null),
     );
-    return verified.filter((entry): entry is string => entry !== null);
+    const resolved = verified.filter((entry): entry is string => entry !== null);
+    options.onSymlinkDirectoriesDiscovered?.(resolved);
+    return resolved;
   }
   const entries = (await fg(["**/*"], {
     cwd: root,
@@ -485,7 +493,7 @@ async function resolveSafeSymlinkDirectories(
   const candidates = await mapLimitSemaphore(
     entries.filter((entry) => entry.dirent.isSymbolicLink()).map((entry) => entry.path),
     REALPATH_FILTER_CONCURRENCY,
-    async (linkPath) => ((await isSafeSymlinkDirectory(linkPath, realRoot)) ? linkPath : null),
+    async (linkPath) => ((await isSafeSymlinkDirectory(root, linkPath, realRoot)) ? linkPath : null),
   );
   const discovered = candidates.filter((entry): entry is string => entry !== null);
   options.onSymlinkDirectoriesDiscovered?.(discovered);
