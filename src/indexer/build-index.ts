@@ -755,7 +755,7 @@ async function buildIndexFromFileListShared(
         files: manifestEntries,
         timings,
         manifestReport: report?.manifest,
-        ...(helperOpts?.symlinkDirectories ? { symlinkDirectories: helperOpts.symlinkDirectories } : {}),
+        ...(helperOpts?.symlinkDirectories !== undefined ? { symlinkDirectories: helperOpts.symlinkDirectories } : {}),
       });
     }
     const index = await finalizeProjectIndex({
@@ -804,18 +804,24 @@ async function buildProjectIndexWithManifestOptions(
             discoveredSymlinkDirectories = Array.from(directories);
           }
         : undefined;
-    const [files, projectFiles] = await Promise.all([
-      listProjectFiles(projectRoot, undefined, {
-        ...opts?.discovery,
-        ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
-        ...(knownSymlinkDirectories !== undefined ? { knownSymlinkDirectories } : {}),
-        ...(onSymlinkDirectoriesDiscovered ? { onSymlinkDirectoriesDiscovered } : {}),
-      }),
-      discoverProjectFiles(projectRoot, {
-        ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
-        ...(knownSymlinkDirectories !== undefined ? { knownSymlinkDirectories } : {}),
-      }),
-    ]);
+    // When the hint is unknown, listProjectFiles() and discoverProjectFiles() must run
+    // sequentially rather than in Promise.all: both would otherwise start their own
+    // full-tree symlink probe concurrently, since the callback only reports back after
+    // listProjectFiles() resolves, too late to inform a probe discoverProjectFiles()
+    // already started on its own. Sequencing costs a little parallelism on that one
+    // cold-start case, but avoids paying for two full-tree walks instead of one. Once a
+    // hint is known (the common warm case), both calls skip probing entirely, so running
+    // them sequentially here costs no meaningful time either way.
+    const files = await listProjectFiles(projectRoot, undefined, {
+      ...opts?.discovery,
+      ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+      ...(knownSymlinkDirectories !== undefined ? { knownSymlinkDirectories } : {}),
+      ...(onSymlinkDirectoriesDiscovered ? { onSymlinkDirectoriesDiscovered } : {}),
+    });
+    const projectFiles = await discoverProjectFiles(projectRoot, {
+      ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+      ...(discoveredSymlinkDirectories !== undefined ? { knownSymlinkDirectories: discoveredSymlinkDirectories } : {}),
+    });
     return await buildIndexFromFileListShared(projectRoot, files, opts, {
       manifestMode: "read-write",
       warnNoFilesMessage: `Warning: No files found in project root: ${projectRoot}`,
@@ -1001,7 +1007,7 @@ export async function buildProjectIndexIncremental(
         timings,
         manifestReport,
         allowEmpty: true,
-        ...(manifest.symlinkDirectories ? { symlinkDirectories: manifest.symlinkDirectories } : {}),
+        ...(manifest.symlinkDirectories !== undefined ? { symlinkDirectories: manifest.symlinkDirectories } : {}),
       });
       return {
         graph: { nodes: new Set(), edges: [] },
@@ -1098,7 +1104,7 @@ export async function buildProjectIndexIncremental(
             files: new Map(Object.entries(trackedEntries)),
             timings,
             manifestReport,
-            ...(manifest.symlinkDirectories ? { symlinkDirectories: manifest.symlinkDirectories } : {}),
+            ...(manifest.symlinkDirectories !== undefined ? { symlinkDirectories: manifest.symlinkDirectories } : {}),
           });
           if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
           if (report) {
@@ -1250,7 +1256,7 @@ export async function buildProjectIndexIncremental(
         files: manifestEntries,
         timings,
         manifestReport,
-        ...(manifest.symlinkDirectories ? { symlinkDirectories: manifest.symlinkDirectories } : {}),
+        ...(manifest.symlinkDirectories !== undefined ? { symlinkDirectories: manifest.symlinkDirectories } : {}),
       });
       const index = await finalizeProjectIndex({
         projectRoot,

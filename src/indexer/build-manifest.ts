@@ -48,7 +48,7 @@ export async function writeIndexManifestSnapshot(args: {
     graphOptions: args.graphOptions,
     buildOptions: summarizeBuildOptions(args.opts),
     files,
-    ...(args.symlinkDirectories ? { symlinkDirectories: args.symlinkDirectories } : {}),
+    ...(args.symlinkDirectories !== undefined ? { symlinkDirectories: args.symlinkDirectories } : {}),
   };
   await writeManifest(args.projectRoot, args.opts, manifestData);
   if (args.timings) {

@@ -249,10 +249,12 @@ export async function listUntrackedFiles(
       cwd: projectRoot,
       env: process.env,
     });
+    // git ls-files -z NUL-delimits entries; the trailing split segment is always an
+    // empty string, not a filename, so filter it out without trimming (a leading or
+    // trailing whitespace character can be a legitimate part of a real filename).
     const relFiles = stdout
       .toString()
       .split("\0")
-      .map((line) => line.trim())
       .filter(Boolean);
     const out: string[] = [];
     for (const rel of relFiles) {

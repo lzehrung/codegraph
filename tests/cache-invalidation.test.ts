@@ -1298,14 +1298,17 @@ describe("Cache invalidation and strict hashing", () => {
     // through the src/util.js barrel, so the spy must target that module to actually
     // intercept the call this test is asserting against.
     const scanSpy = vi.spyOn(projectFilesModule, "listProjectFiles");
+    try {
+      // No explicit `files` override: the incremental builder must discover the new
+      // untracked file itself via Git rather than requiring a caller-supplied file list.
+      const rebuilt = await buildProjectIndexIncremental(root, { cache: "disk" });
 
-    // No explicit `files` override: the incremental builder must discover the new
-    // untracked file itself via Git rather than requiring a caller-supplied file list.
-    const rebuilt = await buildProjectIndexIncremental(root, { cache: "disk" });
-
-    expect(rebuilt.byFile.has(normalize(trackedPath))).toBe(true);
-    expect(rebuilt.byFile.has(normalize(freshPath))).toBe(true);
-    expect(scanSpy).not.toHaveBeenCalled();
+      expect(rebuilt.byFile.has(normalize(trackedPath))).toBe(true);
+      expect(rebuilt.byFile.has(normalize(freshPath))).toBe(true);
+      expect(scanSpy).not.toHaveBeenCalled();
+    } finally {
+      scanSpy.mockRestore();
+    }
   });
 
   it("persists discovered symlink directories in the manifest for reuse on the next full build", async () => {
