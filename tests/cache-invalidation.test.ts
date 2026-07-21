@@ -24,6 +24,8 @@ import {
   clearResolutionCaches,
 } from "../src/util.js";
 import * as util from "../src/util.js";
+import * as projectFilesModule from "../src/util/projectFiles.js";
+import * as incrementalPlan from "../src/indexer/incremental-plan.js";
 import * as filePrep from "../src/languages/filePrep.js";
 import { runGit } from "./helpers/git.js";
 import { createTempProjectRoot, mkTmpDir } from "./helpers/filesystem.js";
@@ -1278,5 +1280,196 @@ describe("Cache invalidation and strict hashing", () => {
 
     expect(rebuilt.byFile.has(normalize(trackedPath))).toBe(true);
     expect(rebuilt.byFile.has(normalize(generatedPath))).toBe(false);
+  });
+
+  it("picks up a newly created untracked file on an incremental build without an explicit file list", async () => {
+    const root = await mkTmpDir("dg-incremental-untracked-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "tests@example.com"]);
+    runGit(root, ["config", "user.name", "Tests"]);
+    const trackedPath = path.join(root, "tracked.ts");
+    await fsp.writeFile(trackedPath, "export const tracked = 1;\n", "utf8");
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "base"]);
+    await buildProjectIndex(root, { cache: "disk" });
+
+    const freshPath = path.join(root, "fresh.ts");
+    await fsp.writeFile(freshPath, "export const fresh = 1;\n", "utf8");
+    // build-index.ts imports listProjectFiles directly from util/projectFiles.js, not
+    // through the src/util.js barrel, so the spy must target that module to actually
+    // intercept the call this test is asserting against.
+    const scanSpy = vi.spyOn(projectFilesModule, "listProjectFiles");
+    try {
+      // No explicit `files` override: the incremental builder must discover the new
+      // untracked file itself via Git rather than requiring a caller-supplied file list.
+      const rebuilt = await buildProjectIndexIncremental(root, { cache: "disk" });
+
+      expect(rebuilt.byFile.has(normalize(trackedPath))).toBe(true);
+      expect(rebuilt.byFile.has(normalize(freshPath))).toBe(true);
+      expect(scanSpy).not.toHaveBeenCalled();
+    } finally {
+      scanSpy.mockRestore();
+    }
+  });
+
+  it("picks up a newly staged (git add, not committed) file on an incremental build", async () => {
+    const root = await mkTmpDir("dg-incremental-staged-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "tests@example.com"]);
+    runGit(root, ["config", "user.name", "Tests"]);
+    const trackedPath = path.join(root, "tracked.ts");
+    await fsp.writeFile(trackedPath, "export const tracked = 1;\n", "utf8");
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "base"]);
+    await buildProjectIndex(root, { cache: "disk" });
+
+    // Staging a new file removes it from `git ls-files --others` (it is no longer
+    // "untracked"), and it has no manifest entry either, so only a diff against the
+    // working tree (not just the last commit) can find it while HEAD is unmoved.
+    const stagedPath = path.join(root, "staged.ts");
+    await fsp.writeFile(stagedPath, "export const staged = 1;\n", "utf8");
+    runGit(root, ["add", "staged.ts"]);
+    const scanSpy = vi.spyOn(projectFilesModule, "listProjectFiles");
+    try {
+      const rebuilt = await buildProjectIndexIncremental(root, { cache: "disk" });
+
+      expect(rebuilt.byFile.has(normalize(trackedPath))).toBe(true);
+      expect(rebuilt.byFile.has(normalize(stagedPath))).toBe(true);
+      expect(scanSpy).not.toHaveBeenCalled();
+    } finally {
+      scanSpy.mockRestore();
+    }
+  });
+
+  it("falls back to a full rebuild instead of an incomplete index when listing untracked files fails", async () => {
+    const root = await mkTmpDir("dg-incremental-untracked-failure-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "tests@example.com"]);
+    runGit(root, ["config", "user.name", "Tests"]);
+    const trackedPath = path.join(root, "tracked.ts");
+    await fsp.writeFile(trackedPath, "export const tracked = 1;\n", "utf8");
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "base"]);
+    await buildProjectIndex(root, { cache: "disk" });
+
+    const freshPath = path.join(root, "fresh.ts");
+    await fsp.writeFile(freshPath, "export const fresh = 1;\n", "utf8");
+    const untrackedSpy = vi
+      .spyOn(incrementalPlan, "listUntrackedProjectFiles")
+      .mockRejectedValue(new Error("simulated git failure"));
+    try {
+      // A failure discovering untracked files must not silently produce an index that is
+      // missing a real project file; it must fall back to a full rebuild instead, which
+      // reaches `fresh.ts` through the ordinary full-scan path.
+      const rebuilt = await buildProjectIndexIncremental(root, { cache: "disk" });
+
+      expect(rebuilt.byFile.has(normalize(trackedPath))).toBe(true);
+      expect(rebuilt.byFile.has(normalize(freshPath))).toBe(true);
+    } finally {
+      untrackedSpy.mockRestore();
+    }
+  });
+
+  it("persists discovered symlink directories in the manifest for reuse on the next full build", async () => {
+    const root = await mkTmpDir("dg-manifest-symlink-persist-");
+    const packageDir = path.join(root, "packages", "core");
+    const linkedPackage = path.join(root, "linked-core");
+    await fsp.mkdir(path.join(packageDir, "src"), { recursive: true });
+    await fsp.writeFile(path.join(packageDir, "src", "index.ts"), "export const core = 1;\n", "utf8");
+
+    try {
+      await fsp.symlink(packageDir, linkedPackage, "junction");
+    } catch (error) {
+      if (error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "EPERM") return;
+      throw error;
+    }
+
+    await buildProjectIndex(root, { cache: "disk" });
+    const manifest = await readManifest(root);
+
+    expect(manifest.symlinkDirectories).toBeDefined();
+    expect((manifest.symlinkDirectories ?? []).map(normalize)).toContain(normalize(linkedPackage));
+  });
+
+  it("prunes stale symlink directory hints from the manifest after warm re-verification", async () => {
+    const root = await mkTmpDir("dg-manifest-symlink-prune-stale-");
+    const packageDir = path.join(root, "packages", "core");
+    const linkedPackage = path.join(root, "linked-core");
+    await fsp.mkdir(path.join(packageDir, "src"), { recursive: true });
+    await fsp.writeFile(path.join(packageDir, "src", "index.ts"), "export const core = 1;\n", "utf8");
+
+    try {
+      await fsp.symlink(packageDir, linkedPackage, "junction");
+    } catch (error) {
+      if (error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "EPERM") return;
+      throw error;
+    }
+
+    await buildProjectIndex(root, { cache: "disk" });
+    const staleManifest = await readManifest(root);
+    expect((staleManifest.symlinkDirectories ?? []).map(normalize)).toContain(normalize(linkedPackage));
+
+    await fsp.rm(linkedPackage, { recursive: true, force: true });
+    await buildProjectIndex(root, { cache: "disk" });
+    const refreshedManifest = await readManifest(root);
+
+    expect(refreshedManifest.symlinkDirectories).toEqual([]);
+  });
+
+  it("re-probes for symlinks under --cache-strict even when the manifest hint says none exist", async () => {
+    const root = await mkTmpDir("dg-manifest-symlink-force-reprobe-");
+    await fsp.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
+
+    await buildProjectIndex(root, { cache: "disk" });
+    const staleManifest = await readManifest(root);
+    expect(staleManifest.symlinkDirectories).toEqual([]);
+
+    // A symlinked directory created after the "no symlinks" hint was recorded (e.g. an
+    // `npm link`) must still be discovered on the next full build when the user asks for
+    // maximum correctness, rather than being silently skipped because the stale hint
+    // disables probing entirely.
+    const packageDir = path.join(root, "packages", "core");
+    const linkedPackage = path.join(root, "linked-core");
+    await fsp.mkdir(path.join(packageDir, "src"), { recursive: true });
+    await fsp.writeFile(path.join(packageDir, "src", "index.ts"), "export const core = 1;\n", "utf8");
+    try {
+      await fsp.symlink(packageDir, linkedPackage, "junction");
+    } catch (error) {
+      if (error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "EPERM") return;
+      throw error;
+    }
+
+    const rebuilt = await buildProjectIndex(root, { cache: "disk", cacheStrict: true });
+
+    expect(rebuilt.byFile.has(normalize(path.join(linkedPackage, "src", "index.ts")))).toBe(true);
+    const refreshedManifest = await readManifest(root);
+    expect((refreshedManifest.symlinkDirectories ?? []).map(normalize)).toContain(normalize(linkedPackage));
+  });
+
+  it("persists an empty symlinkDirectories list for projects without symlinks", async () => {
+    const root = await mkTmpDir("dg-manifest-symlink-empty-");
+    await fsp.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
+
+    await buildProjectIndex(root, { cache: "disk" });
+    const manifest = await readManifest(root);
+
+    expect(manifest.symlinkDirectories).toEqual([]);
+  });
+
+  it("rebuilds successfully from a pre-existing manifest that predates the symlinkDirectories field", async () => {
+    const root = await mkTmpDir("dg-manifest-symlink-migration-");
+    await fsp.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
+    await fsp.mkdir(path.join(root, ".codegraph-cache", "index-v1"), { recursive: true });
+    const oldSchemaManifest = createManifest(root);
+    expect("symlinkDirectories" in oldSchemaManifest).toBe(false);
+    await fsp.writeFile(manifestPathFor(root), JSON.stringify(oldSchemaManifest, null, 2), "utf8");
+
+    // graphOptions mismatch (missing on the fixture manifest) forces a full rebuild path,
+    // exercising exactly the branch that reads a possibly-absent symlinkDirectories hint.
+    const rebuilt = await buildProjectIndexIncremental(root, { cache: "disk" });
+    expect(rebuilt.byFile.has(normalize(path.join(root, "a.ts")))).toBe(true);
+
+    const backfilledManifest = await readManifest(root);
+    expect(backfilledManifest.symlinkDirectories).toEqual([]);
   });
 });

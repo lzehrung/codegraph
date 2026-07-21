@@ -110,6 +110,15 @@ export type ProjectFileDiscoveryOptions = {
   useGitignore?: boolean;
   gitignoreRoot?: string;
   logLevel?: LogLevel;
+  /**
+   * Previously discovered symlinked directories under the project root. When provided
+   * (including an empty array), discovery skips the full-tree symlink-directory probe
+   * and instead re-verifies each entry directly, avoiding a second full recursive walk
+   * on warm runs. Omit when the symlink-directory set is not yet known; discovery then
+   * probes once and reports what it found via `onSymlinkDirectoriesDiscovered`.
+   */
+  knownSymlinkDirectories?: readonly string[];
+  onSymlinkDirectoriesDiscovered?: (directories: readonly string[]) => void;
 };
 
 type GitignoreRule = {
@@ -131,6 +140,8 @@ type SafeSymlinkDirectoryCrawlOptions = {
   filterIgnoreGlobs?: string[];
   onlyFiles?: boolean;
   markDirectories?: boolean;
+  knownSymlinkDirectories?: readonly string[];
+  onSymlinkDirectoriesDiscovered?: (directories: readonly string[]) => void;
 };
 
 type RootSafePath = {
@@ -355,6 +366,12 @@ export async function listProjectFiles(
     const linkedFiles = await listEntriesFromSafeSymlinkDirectories(root, realRoot, patterns, fastGlobIgnoreGlobs, {
       globRoot,
       filterIgnoreGlobs: [...DEFAULT_PROJECT_FILE_IGNORES, ...userIgnoreGlobs],
+      ...(options?.knownSymlinkDirectories !== undefined
+        ? { knownSymlinkDirectories: options.knownSymlinkDirectories }
+        : {}),
+      ...(options?.onSymlinkDirectoriesDiscovered
+        ? { onSymlinkDirectoriesDiscovered: options.onSymlinkDirectoriesDiscovered }
+        : {}),
     });
     const rootSafeFiles = await filterRealPathsWithinRootEntries([...files, ...linkedFiles], realRoot);
     return rootSafeFiles
@@ -378,6 +395,111 @@ export async function listProjectFiles(
   }
 }
 
+/**
+ * Build a predicate that answers "does this absolute path belong in the project file
+ * set" without walking the filesystem. Mirrors the pattern/ignore-glob filtering that
+ * `listProjectFiles()` applies during its scan, so it can be reused to test candidate
+ * paths sourced elsewhere (e.g. `git ls-files --others`) against the same discovery
+ * rules. Does not evaluate `.gitignore`; callers sourcing candidates from Git already
+ * get gitignore-aware filtering for free and should not reuse this for arbitrary,
+ * non-Git-sourced candidate paths without also checking gitignore separately.
+ */
+export function createDiscoveredFileMatcher(
+  root: string,
+  globRoot: string,
+  patterns: readonly string[],
+  options?: ProjectFileDiscoveryOptions,
+): (absolutePath: string) => boolean {
+  const patternMatchers = patterns.map((pattern) => picomatch(normalizeGlobPattern(pattern), { dot: true }));
+  const defaultIgnoreMatchers = DEFAULT_PROJECT_FILE_IGNORES.map((pattern) =>
+    picomatch(normalizeGlobPattern(pattern), { dot: true }),
+  );
+  const includeMatchers = (options?.includeGlobs ?? [])
+    .map(normalizeGlobPattern)
+    .filter(Boolean)
+    .map((pattern) => picomatch(pattern, { dot: true }));
+  const userIgnoreMatchers = (options?.ignoreGlobs ?? [])
+    .map(normalizeGlobPattern)
+    .filter(Boolean)
+    .map((pattern) => picomatch(pattern, { dot: true }));
+
+  return (absolutePath: string): boolean => {
+    const rootRelative = path.relative(root, absolutePath);
+    if (!isRelativePathInside(rootRelative)) return false;
+    const normalizedRootRelative = normalizePath(rootRelative);
+    if (!patternMatchers.some((matcher) => matcher(normalizedRootRelative))) return false;
+    if (defaultIgnoreMatchers.some((matcher) => matcher(normalizedRootRelative))) return false;
+    if (
+      includeMatchers.length &&
+      !includeMatchers.some((matcher) => matchesDiscoveryGlob(absolutePath, globRoot, matcher))
+    ) {
+      return false;
+    }
+    return !userIgnoreMatchers.some((matcher) => matchesDiscoveryGlob(absolutePath, globRoot, matcher));
+  };
+}
+
+async function isSafeSymlinkDirectory(root: string, linkPath: string, realRoot: string): Promise<boolean> {
+  try {
+    if (!isFilePathWithinRoot(root, linkPath)) return false;
+    const [linkStats, realPath, targetStats] = await Promise.all([
+      fsp.lstat(linkPath),
+      fsp.realpath(linkPath),
+      fsp.stat(linkPath),
+    ]);
+    if (!linkStats.isSymbolicLink()) return false;
+    if (!targetStats.isDirectory()) return false;
+    if (!isFilePathWithinRoot(realRoot, realPath)) return false;
+    return normalizePath(realPath) !== normalizePath(realRoot);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve the symlinked directories under `root` that are safe to crawl.
+ *
+ * When `knownSymlinkDirectories` is provided, this re-verifies each previously
+ * discovered path directly (stat + realpath per entry) instead of walking the
+ * whole tree again. Otherwise it probes once via a full `fg(["**\/*"])` walk
+ * and, if `onSymlinkDirectoriesDiscovered` is set, reports what it found so a
+ * caller can persist the result for future warm runs.
+ */
+async function resolveSafeSymlinkDirectories(
+  root: string,
+  realRoot: string,
+  ignore: string[],
+  options: SafeSymlinkDirectoryCrawlOptions,
+): Promise<string[]> {
+  if (options.knownSymlinkDirectories !== undefined) {
+    const verified = await mapLimitSemaphore(
+      Array.from(new Set(options.knownSymlinkDirectories)),
+      REALPATH_FILTER_CONCURRENCY,
+      async (linkPath) => ((await isSafeSymlinkDirectory(root, linkPath, realRoot)) ? linkPath : null),
+    );
+    const resolved = verified.filter((entry): entry is string => entry !== null);
+    options.onSymlinkDirectoriesDiscovered?.(resolved);
+    return resolved;
+  }
+  const entries = (await fg(["**/*"], {
+    cwd: root,
+    absolute: true,
+    dot: true,
+    onlyFiles: false,
+    followSymbolicLinks: false,
+    objectMode: true,
+    ignore,
+  })) as FastGlobEntry[];
+  const candidates = await mapLimitSemaphore(
+    entries.filter((entry) => entry.dirent.isSymbolicLink()).map((entry) => entry.path),
+    REALPATH_FILTER_CONCURRENCY,
+    async (linkPath) => ((await isSafeSymlinkDirectory(root, linkPath, realRoot)) ? linkPath : null),
+  );
+  const discovered = candidates.filter((entry): entry is string => entry !== null);
+  options.onSymlinkDirectoriesDiscovered?.(discovered);
+  return discovered;
+}
+
 async function listEntriesFromSafeSymlinkDirectories(
   root: string,
   realRoot: string,
@@ -392,31 +514,8 @@ async function listEntriesFromSafeSymlinkDirectories(
     .filter(Boolean)
     .map((globPattern) => picomatch(globPattern, { dot: true }));
   const locationIndependentIgnores = ignore.map(normalizeGlobPattern).filter(isLocationIndependentGlob);
-  const entries = (await fg(["**/*"], {
-    cwd: root,
-    absolute: true,
-    dot: true,
-    onlyFiles: false,
-    followSymbolicLinks: false,
-    objectMode: true,
-    ignore,
-  })) as FastGlobEntry[];
-  const symlinkDirectories = await mapLimitSemaphore(
-    entries.filter((entry) => entry.dirent.isSymbolicLink()).map((entry) => entry.path),
-    REALPATH_FILTER_CONCURRENCY,
-    async (linkPath) => {
-      try {
-        const [realPath, stats] = await Promise.all([fsp.realpath(linkPath), fsp.stat(linkPath)]);
-        if (!stats.isDirectory()) return null;
-        if (!isFilePathWithinRoot(realRoot, realPath)) return null;
-        if (normalizePath(realPath) === normalizePath(realRoot)) return null;
-        return linkPath;
-      } catch {
-        return null;
-      }
-    },
-  );
-  const safeSymlinkDirectories = symlinkDirectories.filter((entry): entry is string => entry !== null);
+  const safeSymlinkDirectories = await resolveSafeSymlinkDirectories(root, realRoot, ignore, options);
+  if (!safeSymlinkDirectories.length) return [];
   const filesByPath = new Map<string, string>();
   const filesByDirectory = await mapLimitSemaphore(
     safeSymlinkDirectories,
@@ -457,7 +556,7 @@ async function filterRealPathsWithinRootEntries(paths: string[], realRoot: strin
   return filtered.filter((entry): entry is RootSafePath => entry !== null);
 }
 
-async function filterRealPathsWithinRoot(paths: string[], realRoot: string): Promise<string[]> {
+export async function filterRealPathsWithinRoot(paths: string[], realRoot: string): Promise<string[]> {
   const entries = await filterRealPathsWithinRootEntries(paths, realRoot);
   return entries.map((entry) => entry.path);
 }
@@ -497,7 +596,11 @@ async function buildProjectFileInfo(def: ProjectFileDefinition, filePath: string
 
 export async function discoverProjectFiles(
   projectRoot: string,
-  options?: { logLevel?: LogLevel },
+  options?: {
+    logLevel?: LogLevel;
+    knownSymlinkDirectories?: readonly string[];
+    onSymlinkDirectoriesDiscovered?: (directories: readonly string[]) => void;
+  },
 ): Promise<ProjectFileInfo[]> {
   const root = await ensureDirectoryReadable(projectRoot, "Project root");
   try {
@@ -517,7 +620,16 @@ export async function discoverProjectFiles(
       realRoot,
       allPatterns,
       DEFAULT_PROJECT_FILE_IGNORES,
-      { markDirectories: true, onlyFiles: false },
+      {
+        markDirectories: true,
+        onlyFiles: false,
+        ...(options?.knownSymlinkDirectories !== undefined
+          ? { knownSymlinkDirectories: options.knownSymlinkDirectories }
+          : {}),
+        ...(options?.onSymlinkDirectoriesDiscovered
+          ? { onSymlinkDirectoriesDiscovered: options.onSymlinkDirectoriesDiscovered }
+          : {}),
+      },
     );
     const rootSafeMatches = await filterRealPathsWithinRoot(
       [...matches, ...linkedMatches].map((match) => (match.endsWith("/") ? match.slice(0, -1) : match)),

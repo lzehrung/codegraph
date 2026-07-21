@@ -1,10 +1,10 @@
-import { buildProjectIndex } from "../indexer/build-index.js";
+import { buildProjectIndexIncremental } from "../indexer/build-index.js";
 import { findReferences, goToDefinition } from "../indexer/navigation.js";
-import type { BuildOptions } from "../indexer/types.js";
+import type { BuildOptions, IncrementalBuildOptions } from "../indexer/types.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import { toProjectDisplayPath } from "../util/paths.js";
 import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
-import { parsePositiveIntegerOption } from "./options.js";
+import { parseCacheModeOption, parsePositiveIntegerOption } from "./options.js";
 import { resolveCliProjectFile, writeCliProjectFileError } from "./projectFile.js";
 
 export type NavigationCommandContext = {
@@ -22,10 +22,16 @@ export type NavigationCommandContext = {
   exit: (code: number) => never;
 };
 
-function indexOptions(context: NavigationCommandContext) {
+// Reuse the on-disk manifest and incremental discovery path by default, matching
+// search/orient/inspect/review, instead of always rebuilding the full project index
+// from scratch. Pass --cache off to opt out of caching for a single invocation.
+function indexOptions(context: NavigationCommandContext): IncrementalBuildOptions {
   return {
     onProgress: context.progressHandler,
     discovery: context.discoveryOptions,
+    cache: parseCacheModeOption(context.getOpt("--cache")) ?? "disk",
+    ...(context.hasFlag("--cache-strict") ? { cacheStrict: true } : {}),
+    ...(context.hasFlag("--cache-verify") ? { cacheVerify: true } : {}),
     ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
     ...context.workerOpts,
   };
@@ -43,7 +49,7 @@ export async function handleDumpmodCommand(context: NavigationCommandContext): P
     return;
   }
   const file = resolvedFile.file;
-  const index = await buildProjectIndex(context.projectRootFs, indexOptions(context));
+  const index = await buildProjectIndexIncremental(context.projectRootFs, indexOptions(context));
   const mod = index.byFile.get(file);
   if (!mod) {
     context.writeJSONLine({
@@ -90,7 +96,7 @@ export async function handleGotoCommand(context: NavigationCommandContext): Prom
   }
   const line = parsePositiveIntegerOption(lineArg, "line", 1);
   const column = parsePositiveIntegerOption(colArg, "column", 1);
-  const index = await buildProjectIndex(context.projectRootFs, indexOptions(context));
+  const index = await buildProjectIndexIncremental(context.projectRootFs, indexOptions(context));
   const res = await goToDefinition(index, { file: resolvedFile.file, line, column });
   context.writeJSONLine(res);
 }
@@ -111,7 +117,7 @@ export async function handleRefsCommand(context: NavigationCommandContext): Prom
     writeCliProjectFileError(context, resolvedFile, pretty ? "text" : "json");
     return;
   }
-  const index = await buildProjectIndex(context.projectRootFs, indexOptions(context));
+  const index = await buildProjectIndexIncremental(context.projectRootFs, indexOptions(context));
   const res = await findReferences(index, { file: resolvedFile.file, line, column });
   if (!pretty) {
     context.writeJSONLine(res);

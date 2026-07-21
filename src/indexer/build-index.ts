@@ -80,9 +80,11 @@ import {
 } from "./build-workers.js";
 import {
   buildIncrementalGitDiffOptions,
+  canUseIncrementalDiscoveryFastPath,
   collectDeletedTrackedFileDependents,
   collectTrackedFileDependents,
   isMissingGitRevisionError,
+  listUntrackedProjectFiles,
   partitionTrackedManifestFiles,
 } from "./incremental-plan.js";
 import { parsedCacheMaxEntries, setParsedCacheEntry } from "./parsed-cache.js";
@@ -397,6 +399,7 @@ type BuildIndexHelperOptions = {
   warnNoFilesMessage?: string;
   ignoreExistingManifest?: boolean;
   projectFiles?: ProjectFileInfo[] | Promise<ProjectFileInfo[]>;
+  symlinkDirectories?: string[];
 };
 
 type IndexBuildRunState = {
@@ -752,6 +755,7 @@ async function buildIndexFromFileListShared(
         files: manifestEntries,
         timings,
         manifestReport: report?.manifest,
+        ...(helperOpts?.symlinkDirectories !== undefined ? { symlinkDirectories: helperOpts.symlinkDirectories } : {}),
       });
     }
     const index = await finalizeProjectIndex({
@@ -786,20 +790,47 @@ async function buildProjectIndexWithManifestOptions(
   helperOpts?: Pick<BuildIndexHelperOptions, "ignoreExistingManifest">,
 ): Promise<ProjectIndex> {
   try {
-    const [files, projectFiles] = await Promise.all([
-      listProjectFiles(projectRoot, undefined, {
-        ...opts?.discovery,
-        ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
-      }),
-      discoverProjectFiles(projectRoot, {
-        ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
-      }),
-    ]);
+    // Reuse the previous full scan's symlinked-directory list, when available, so the
+    // file-discovery and project-file walks below can skip their own full-tree symlink
+    // probe. This is a best-effort hint read independently of the manifest gate used
+    // for parse/graph caching further down; a missing or unusable manifest just means
+    // discovery falls back to probing once, exactly as it always has. A symlink hint
+    // never expires on its own: `knownSymlinkDirectories` disables probing entirely, so
+    // a directory symlinked in after the hint was recorded (e.g. `npm link`) would
+    // otherwise never be discovered. `--cache-strict`/`--cache-verify` are explicit asks
+    // for maximum correctness over speed, so both force a fresh probe here too.
+    const wantsMaxSymlinkCorrectness = !!opts?.cacheStrict || !!opts?.cacheVerify;
+    const symlinkHintManifest =
+      helperOpts?.ignoreExistingManifest || wantsMaxSymlinkCorrectness ? null : await loadManifest(projectRoot, opts);
+    const knownSymlinkDirectories = symlinkHintManifest?.symlinkDirectories;
+    let discoveredSymlinkDirectories = knownSymlinkDirectories;
+    const onSymlinkDirectoriesDiscovered = (directories: readonly string[]) => {
+      discoveredSymlinkDirectories = Array.from(directories);
+    };
+    // When the hint is unknown, listProjectFiles() and discoverProjectFiles() must run
+    // sequentially rather than in Promise.all: both would otherwise start their own
+    // full-tree symlink probe concurrently, since the callback only reports back after
+    // listProjectFiles() resolves, too late to inform a probe discoverProjectFiles()
+    // already started on its own. Sequencing costs a little parallelism on that one
+    // cold-start case, but avoids paying for two full-tree walks instead of one. Once a
+    // hint is known (the common warm case), both calls skip probing entirely, so running
+    // them sequentially here costs no meaningful time either way.
+    const files = await listProjectFiles(projectRoot, undefined, {
+      ...opts?.discovery,
+      ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+      ...(knownSymlinkDirectories !== undefined ? { knownSymlinkDirectories } : {}),
+      onSymlinkDirectoriesDiscovered,
+    });
+    const projectFiles = await discoverProjectFiles(projectRoot, {
+      ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+      ...(discoveredSymlinkDirectories !== undefined ? { knownSymlinkDirectories: discoveredSymlinkDirectories } : {}),
+    });
     return await buildIndexFromFileListShared(projectRoot, files, opts, {
       manifestMode: "read-write",
       warnNoFilesMessage: `Warning: No files found in project root: ${projectRoot}`,
       ...(helperOpts?.ignoreExistingManifest ? { ignoreExistingManifest: true } : {}),
       projectFiles,
+      ...(discoveredSymlinkDirectories !== undefined ? { symlinkDirectories: discoveredSymlinkDirectories } : {}),
     });
   } finally {
     if ((opts?.cache ?? "off") === "disk") {
@@ -897,16 +928,20 @@ export async function buildProjectIndexIncremental(
       return await buildProjectIndexFromExport(projectRoot, opts, { ignoreExistingManifest: true });
     }
     const gitAvailable = await isGitRepo(projectRoot);
-    const currentHead = gitAvailable ? await getGitHead(projectRoot) : null;
     const hasExplicitGitRange = !!opts?.gitBase || !!opts?.gitHead;
-    const manifestCommitMismatch =
-      !hasExplicitGitRange && !!manifest.lastCommit && !!currentHead && manifest.lastCommit !== currentHead;
+    // Diff against the working tree, not just the last-indexed commit: a file that was
+    // `git add`ed but never committed is neither a tracked manifest entry nor reported
+    // by `git ls-files --others` (it stops being "untracked" once staged), so comparing
+    // only committed history would miss it whenever HEAD has not moved. Diffing against
+    // WORKTREE captures staged and unstaged tracked-file changes together, and still
+    // covers ordinary new-commit history when the working tree is clean at the new HEAD.
+    const shouldDiffAgainstWorkingTree = !hasExplicitGitRange && gitAvailable && !!manifest.lastCommit;
     let manifestDiffFiles: string[] = [];
-    if (manifestCommitMismatch) {
+    if (shouldDiffAgainstWorkingTree) {
       try {
         manifestDiffFiles = await listChangedFiles(projectRoot, {
           base: manifest.lastCommit,
-          head: currentHead,
+          head: "WORKTREE",
         });
       } catch (error) {
         if (!isMissingGitRevisionError(error)) throw error;
@@ -946,11 +981,38 @@ export async function buildProjectIndexIncremental(
     const explicitFiles = normalizeIndexedFileInputs(projectRoot, opts?.files ?? [], "Incremental file");
     const needsGitScan = !!opts?.gitBase || !!opts?.changedSince;
     const gitFiles = needsGitScan ? await listChangedFiles(projectRoot, buildIncrementalGitDiffOptions(opts)) : [];
+    // New files that were never committed, staged, or passed explicitly have no tracked
+    // manifest entry and no working-tree-diff record, so they would otherwise stay
+    // invisible to an incremental build until the next full rebuild. Detecting them via
+    // `git ls-files --others` is far cheaper than a full recursive directory scan and
+    // keeps this path correct without requiring callers to pre-scan the project
+    // themselves. A failure here cannot be treated as "no untracked files": that would
+    // silently produce an incomplete index, so it falls back to a full rebuild instead,
+    // the same way a stale manifest commit does above.
+    let untrackedFiles: string[] = [];
+    if (canUseIncrementalDiscoveryFastPath(gitAvailable, opts?.cacheStrict)) {
+      try {
+        untrackedFiles = await listUntrackedProjectFiles(projectRoot, opts?.discovery, gitAvailable);
+      } catch (error) {
+        if (manifestReport) {
+          manifestReport.reason = "gitUntrackedScanFailed";
+          manifestReport.reused = false;
+        }
+        logWithLevel(
+          opts?.logLevel,
+          "warn",
+          "Warning: Failed to list untracked project files via Git; rebuilding full index.",
+          error,
+        );
+        return await buildProjectIndexFromExport(projectRoot, opts, { ignoreExistingManifest: true });
+      }
+    }
     const allFiles = new Set<string>([
       ...trackedFiles,
       ...explicitFiles.filter((file) => fs.existsSync(file)),
       ...manifestDiffFiles.filter((file) => fs.existsSync(file)),
       ...gitFiles.filter((file) => fs.existsSync(file)),
+      ...untrackedFiles.filter((file) => fs.existsSync(file)),
     ]);
     if (fileReport) fileReport.total = allFiles.size;
     const workspaceConfig = await loadWorkspaceConfig(projectRoot);
@@ -964,6 +1026,7 @@ export async function buildProjectIndexIncremental(
         timings,
         manifestReport,
         allowEmpty: true,
+        ...(manifest.symlinkDirectories !== undefined ? { symlinkDirectories: manifest.symlinkDirectories } : {}),
       });
       return {
         graph: { nodes: new Set(), edges: [] },
@@ -1060,6 +1123,7 @@ export async function buildProjectIndexIncremental(
             files: new Map(Object.entries(trackedEntries)),
             timings,
             manifestReport,
+            ...(manifest.symlinkDirectories !== undefined ? { symlinkDirectories: manifest.symlinkDirectories } : {}),
           });
           if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
           if (report) {
@@ -1211,6 +1275,7 @@ export async function buildProjectIndexIncremental(
         files: manifestEntries,
         timings,
         manifestReport,
+        ...(manifest.symlinkDirectories !== undefined ? { symlinkDirectories: manifest.symlinkDirectories } : {}),
       });
       const index = await finalizeProjectIndex({
         projectRoot,

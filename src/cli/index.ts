@@ -1,5 +1,5 @@
 import { performance } from "node:perf_hooks";
-import { buildProjectIndex, buildProjectIndexFromFiles } from "../indexer/build-index.js";
+import { buildProjectIndexFromFiles, buildProjectIndexIncremental } from "../indexer/build-index.js";
 import { type BuildOptions, type BuildReport } from "../indexer/types.js";
 import { type GraphBuildOptions } from "../graphs/types.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
@@ -61,20 +61,26 @@ export async function handleIndexCommand(context: IndexCommandContext): Promise<
   if (commandReport && indexReport) {
     commandReport.index = indexReport;
   }
+  // Defaults to the on-disk incremental cache, matching search/orient/inspect/review;
+  // pass --cache off to opt out for a single invocation.
   const baseIndexOptions: BuildOptions = {
     onProgress: context.progressHandler,
     threads,
     discovery: context.discoveryOptions,
     ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
     ...context.workerOpts,
-    ...(cache !== undefined ? { cache } : {}),
+    cache: cache ?? "disk",
     cacheStrict,
     cacheVerify,
     ...(context.graphOptions ? { graph: context.graphOptions } : {}),
     ...(indexReport ? { report: indexReport } : {}),
   };
+  // Whole-project runs reuse the on-disk manifest and Git-backed incremental discovery
+  // instead of a full recursive scan; scoped include roots or an explicit git range keep
+  // using the already-resolved file list, since manifest-based reconciliation is scoped
+  // to the whole project root and cannot safely stand in for a root subset.
   const index = shouldWriteManifest
-    ? await buildProjectIndex(context.projectRootFs, baseIndexOptions)
+    ? await buildProjectIndexIncremental(context.projectRootFs, baseIndexOptions)
     : await buildProjectIndexFromFiles(context.projectRootFs, files, baseIndexOptions);
   context.maybeWriteNativeBackendStatus(indexReport, context.showProgress);
   if (full) {

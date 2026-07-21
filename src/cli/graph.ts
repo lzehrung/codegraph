@@ -310,7 +310,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
       dynamicImportHeuristics,
       ...(resolutionHints.length ? { resolutionHints } : {}),
     };
-    const sqliteCacheMode = cache ?? (changedSet ? "disk" : undefined);
+    const sqliteCacheMode = cache ?? "disk";
     const index = changedSet
       ? await buildProjectIndexIncremental(context.projectRootFs, {
           onProgress: context.progressHandler,
@@ -380,7 +380,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
       discovery: context.discoveryOptions,
       ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
       ...context.workerOpts,
-      ...(cache !== undefined ? { cache } : {}),
+      cache: cache ?? "disk",
       cacheStrict,
       graph: {
         fast,

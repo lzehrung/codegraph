@@ -13,7 +13,7 @@ import { handleGraphQueryCommand, type GraphQueryCommandContext } from "../src/c
 import { CLI_HELP_TEXT, FILE_HELP_TEXT, MCP_SERVE_HELP_TEXT, PACKET_HELP_TEXT } from "../src/cli/help.js";
 import { handleImpactCommand, type ImpactCommandContext } from "../src/cli/impact.js";
 import { handleInspectCommand, type InspectCommandContext } from "../src/cli/inspect.js";
-import { handleGotoCommand, type NavigationCommandContext } from "../src/cli/navigation.js";
+import { handleGotoCommand, handleRefsCommand, type NavigationCommandContext } from "../src/cli/navigation.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "../src/cli/packageInfo.js";
 import { handlePacketCommand } from "../src/cli/packet.js";
 import { handleSearchCommand } from "../src/cli/search.js";
@@ -27,6 +27,7 @@ import type { BuildOptions } from "../src/indexer/types.js";
 import type { Graph } from "../src/types.js";
 import { runGit } from "./helpers/git.js";
 import { createTwoCommitCycleProject, mkTmpDir } from "./helpers/filesystem.js";
+import * as projectFilesModule from "../src/util/projectFiles.js";
 
 function readJsonRecord(value: unknown): Record<string, unknown> {
   expect(value).toBeTypeOf("object");
@@ -414,6 +415,135 @@ describe("CLI command modules", () => {
     ).rejects.toThrow("navigation exit 2");
 
     expect(stderr).toEqual(["Usage: goto <file> <line> <column>"]);
+  });
+
+  test("navigation commands forward --cache-verify to incremental index builds", async () => {
+    const emptyIndex: ProjectIndex = {
+      graph: { nodes: new Set<string>(), edges: [] },
+      modules: new Map(),
+      byFile: new Map(),
+      exportCache: new Map(),
+      scopeCache: new Map(),
+    };
+    const root = await mkTmpDir("codegraph-navigation-cache-verify-");
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockResolvedValue(emptyIndex);
+    try {
+      await handleGotoCommand(
+        createNavigationContext({
+          projectRootFs: root,
+          positionals: [path.join(root, "main.ts"), "1", "1"],
+          hasFlag: (name) => name === "--cache-verify",
+          writeJSONLine: () => undefined,
+        }),
+      );
+
+      expect(buildSpy.mock.calls[0]?.[1]?.cacheVerify).toBe(true);
+    } finally {
+      buildSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("goto command reuses the on-disk manifest on a second invocation without a full recursive scan", async () => {
+    const root = await mkTmpDir("codegraph-goto-manifest-reuse-");
+    const filePath = path.join(root, "main.ts");
+    await fsp.writeFile(filePath, "export const value = 1;\n", "utf8");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "tests@example.com"]);
+    runGit(root, ["config", "user.name", "Tests"]);
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "base"]);
+
+    const results: unknown[] = [];
+    const context = createNavigationContext({
+      projectRootFs: root,
+      positionals: [filePath, "1", "14"],
+      writeJSONLine: (value) => results.push(value),
+    });
+
+    await handleGotoCommand(context);
+    const scanSpy = vi.spyOn(projectFilesModule, "listProjectFiles");
+    try {
+      await handleGotoCommand(context);
+
+      expect(results).toHaveLength(2);
+      expect(scanSpy).not.toHaveBeenCalled();
+    } finally {
+      scanSpy.mockRestore();
+    }
+  });
+
+  test("refs command reuses the on-disk manifest on a second invocation without a full recursive scan", async () => {
+    const root = await mkTmpDir("codegraph-refs-manifest-reuse-");
+    const filePath = path.join(root, "main.ts");
+    await fsp.writeFile(filePath, "export const value = 1;\n", "utf8");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "tests@example.com"]);
+    runGit(root, ["config", "user.name", "Tests"]);
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "base"]);
+
+    const results: unknown[] = [];
+    const context = createNavigationContext({
+      projectRootFs: root,
+      getOpt: (name) => {
+        if (name === "--file") return filePath;
+        if (name === "--line") return "1";
+        if (name === "--col") return "14";
+        return undefined;
+      },
+      writeJSONLine: (value) => results.push(value),
+    });
+
+    await handleRefsCommand(context);
+    const scanSpy = vi.spyOn(projectFilesModule, "listProjectFiles");
+    try {
+      await handleRefsCommand(context);
+
+      expect(results).toHaveLength(2);
+      expect(scanSpy).not.toHaveBeenCalled();
+    } finally {
+      scanSpy.mockRestore();
+    }
+  });
+
+  test("impact command reuses the on-disk manifest on a second invocation without a full recursive scan", async () => {
+    const root = await mkTmpDir("codegraph-impact-manifest-reuse-");
+    const sourcePath = path.join(root, "feature.ts");
+    await fsp.writeFile(sourcePath, "export function feature() {\n  return 2;\n}\n", "utf8");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "tests@example.com"]);
+    runGit(root, ["config", "user.name", "Tests"]);
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "base"]);
+    const diffText = [
+      "diff --git a/feature.ts b/feature.ts",
+      "index 1111111..2222222 100644",
+      "--- a/feature.ts",
+      "+++ b/feature.ts",
+      "@@ -1,3 +1,3 @@",
+      " export function feature() {",
+      "-  return 1;",
+      "+  return 2;",
+      " }",
+      "",
+    ].join("\n");
+
+    const context = createImpactContext({
+      projectRootFs: root,
+      readStdin: async () => diffText,
+      writeJSONLine: () => undefined,
+    });
+
+    await handleImpactCommand(context);
+    const scanSpy = vi.spyOn(projectFilesModule, "listProjectFiles");
+    try {
+      await handleImpactCommand(context);
+
+      expect(scanSpy).not.toHaveBeenCalled();
+    } finally {
+      scanSpy.mockRestore();
+    }
   });
 
   test("graph command can write compact JSON to stdout without default files", async () => {
@@ -937,11 +1067,13 @@ describe("CLI command modules", () => {
       "",
     ].join("\n");
     const capturedIndexOptions: BuildOptions[] = [];
-    const originalBuildProjectIndex = indexerBuild.buildProjectIndex;
-    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndex").mockImplementation(async (projectRoot, opts) => {
-      if (opts) capturedIndexOptions.push(opts);
-      return await originalBuildProjectIndex(projectRoot, opts);
-    });
+    const originalBuildProjectIndexIncremental = indexerBuild.buildProjectIndexIncremental;
+    const buildSpy = vi
+      .spyOn(indexerBuild, "buildProjectIndexIncremental")
+      .mockImplementation(async (projectRoot, opts) => {
+        if (opts) capturedIndexOptions.push(opts);
+        return await originalBuildProjectIndexIncremental(projectRoot, opts);
+      });
 
     try {
       await fsp.writeFile(sourcePath, "export function feature() {\n  return 2;\n}\n", "utf8");
@@ -962,9 +1094,16 @@ describe("CLI command modules", () => {
           },
         }),
       );
+      await handleImpactCommand(
+        createImpactContext({
+          ...baseContext,
+          hasFlag: (name) => name === "--cache-verify",
+        }),
+      );
 
       expect(capturedIndexOptions[0]?.keepParsed).toBeUndefined();
       expect(capturedIndexOptions[1]?.keepParsed).toBe(true);
+      expect(capturedIndexOptions[2]?.cacheVerify).toBe(true);
     } finally {
       buildSpy.mockRestore();
       await fsp.rm(tempDir, { recursive: true, force: true });

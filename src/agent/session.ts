@@ -1,6 +1,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { buildProjectIndexIncremental } from "../indexer/build-index.js";
+import { resolveIncrementalFileList } from "../indexer/incremental-plan.js";
 import type { BuildOptions, BuildReport, ProjectIndex } from "../indexer/types.js";
 import { buildSymbolGraphDetailed } from "../graphs/symbol-graph-detailed.js";
 import { type SymbolGraph } from "../graphs/symbol-graph.js";
@@ -103,6 +104,16 @@ async function resolveAgentDiscoverySettings(options: AgentSessionOptions): Prom
 
 export async function listAgentSessionFiles(options: AgentSessionOptions): Promise<string[]> {
   const { discoveryOptions } = await resolveAgentDiscoverySettings(options);
+  // Prefer the manifest-plus-Git reconciliation over a full recursive scan whenever it
+  // can be trusted (see resolveIncrementalFileList's fallback conditions). This is what
+  // lets every agent/MCP command built on this session skip walking the whole project
+  // tree on warm, unchanged, Git-backed runs.
+  const incrementalOptions: BuildOptions = {
+    ...options.buildOptions,
+    ...(discoveryOptions ? { discovery: discoveryOptions } : {}),
+  };
+  const incrementalFiles = await resolveIncrementalFileList(options.root, incrementalOptions);
+  if (incrementalFiles) return incrementalFiles;
   return await listProjectFiles(options.root, undefined, discoveryOptions);
 }
 
@@ -278,8 +289,9 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     if (!cachedBase || !cachedFileSignatures) return { state: "fresh" };
     await cachedBase;
 
-    const { discoveryOptions } = await resolveAgentDiscoverySettings(options);
-    const currentFiles = await listProjectFiles(options.root, undefined, discoveryOptions);
+    // Reuse the same fast-path-aware resolution loadFiles()/discoverFiles() use, instead
+    // of an independent full scan, so freshness checks stay cheap on unchanged repos too.
+    const currentFiles = await listAgentSessionFiles(options);
     const currentSignatures = await collectAgentFileSignatures(currentFiles);
     const diff = diffAgentFileSignatures(cachedFileSignatures, currentSignatures);
     if (!diff.changedFiles.length) return { state: "fresh" };

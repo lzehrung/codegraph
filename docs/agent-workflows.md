@@ -148,7 +148,7 @@ Search results include top-level `analysis` metadata plus stable handles, per-re
 `explain` accepts those handles plus file paths, symbol names, and SQL object names, then returns bounded dependencies, references, snippets, duplicate context, SQL relation facts, review context, and follow-ups.
 Generated command strings quote dynamic arguments, SQL handles avoid ambiguous basenames, and omission counts stay explicit when packets hit limits.
 
-Agent CLI commands use the incremental index path and default to disk cache.
+Agent CLI commands, `goto`, `refs`, `impact`, and a whole-project `graph` or `index` run all use the incremental index path and default to disk cache.
 Hybrid search is code-first by default. Use `mode: "text"` when you specifically want documentation or prose-heavy matches to outrank implementation symbols.
 Pure path/text searches skip detailed symbol graph construction; hybrid, symbol, SQL, and graph searches keep symbol-aware ranking and neighbors.
 Pass shared index flags only when an agent pass must mirror a specific scan mode; see [docs/cli.md](./cli.md#agent-orientation-and-packets) for the canonical flag list.
