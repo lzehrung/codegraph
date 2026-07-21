@@ -2,16 +2,28 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createAgentSession } from "../src/agent/session.js";
+import { createAgentSession, listAgentSessionFiles } from "../src/agent/session.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
 import type { ProjectIndex } from "../src/indexer/types.js";
+import * as projectFilesModule from "../src/util/projectFiles.js";
+import { runGit as git } from "./helpers/git.js";
 
 async function mkRepo(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-session-"));
   await fs.writeFile(path.join(root, "util.ts"), "export function add(a: number, b: number) { return a + b; }\n");
   await fs.writeFile(path.join(root, "main.ts"), "import { add } from './util';\nexport const total = add(1, 2);\n");
   await fs.writeFile(path.join(root, "schema.sql"), "CREATE TABLE public.users (id int primary key);\n");
+  return root;
+}
+
+async function mkGitRepo(): Promise<string> {
+  const root = await mkRepo();
+  git(root, ["init"]);
+  git(root, ["config", "user.email", "tests@example.com"]);
+  git(root, ["config", "user.name", "Tests"]);
+  git(root, ["add", "."]);
+  git(root, ["commit", "-m", "base"]);
   return root;
 }
 
@@ -209,5 +221,81 @@ describe("agent session", () => {
     });
     expect(afterCheck).toBe(cached);
     expect(buildSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("discovers files in a Git-backed project without a full recursive scan once a manifest exists", async () => {
+    const root = await mkGitRepo();
+    // Prime the manifest via a real build, matching how loadProject() itself would.
+    await createAgentSession({ root }).loadProject({ symbolGraph: "skip" });
+
+    const scanSpy = vi.spyOn(projectFilesModule, "listProjectFiles");
+    const files = (await listAgentSessionFiles({ root })).map((file) => file.replace(/\\/g, "/"));
+
+    expect(files.some((file) => file.endsWith("/main.ts"))).toBe(true);
+    expect(scanSpy).not.toHaveBeenCalled();
+  });
+
+  it("finds a newly created untracked file in a Git-backed project without a full recursive scan", async () => {
+    const root = await mkGitRepo();
+    await createAgentSession({ root }).loadProject({ symbolGraph: "skip" });
+
+    await fs.writeFile(path.join(root, "fresh.ts"), "export const fresh = 1;\n", "utf8");
+    const scanSpy = vi.spyOn(projectFilesModule, "listProjectFiles");
+    const files = (await listAgentSessionFiles({ root })).map((file) => file.replace(/\\/g, "/"));
+
+    expect(files.some((file) => file.endsWith("/fresh.ts"))).toBe(true);
+    expect(scanSpy).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a full scan for non-Git projects", async () => {
+    const root = await mkRepo();
+    await createAgentSession({ root }).loadProject({ symbolGraph: "skip" });
+
+    const scanSpy = vi.spyOn(projectFilesModule, "listProjectFiles");
+    const files = await listAgentSessionFiles({ root });
+
+    expect(files.some((file) => file.endsWith("main.ts"))).toBe(true);
+    expect(scanSpy).toHaveBeenCalled();
+  });
+
+  it("falls back to a full scan when --cache-strict is requested", async () => {
+    const root = await mkGitRepo();
+    await createAgentSession({ root }).loadProject({ symbolGraph: "skip" });
+
+    const scanSpy = vi.spyOn(projectFilesModule, "listProjectFiles");
+    const files = await listAgentSessionFiles({ root, buildOptions: { cacheStrict: true } });
+
+    expect(files.some((file) => file.endsWith("main.ts"))).toBe(true);
+    expect(scanSpy).toHaveBeenCalled();
+  });
+
+  it("falls back to a full scan when discovery options changed since the manifest was written", async () => {
+    const root = await mkGitRepo();
+    await createAgentSession({ root }).loadProject({ symbolGraph: "skip" });
+
+    const scanSpy = vi.spyOn(projectFilesModule, "listProjectFiles");
+    const files = await listAgentSessionFiles({
+      root,
+      useConfig: false,
+      discovery: { ignoreGlobs: ["**/*.spec.ts"] },
+    });
+
+    expect(files.some((file) => file.endsWith("main.ts"))).toBe(true);
+    expect(scanSpy).toHaveBeenCalled();
+  });
+
+  it("reuses the fast discovery path for checkFreshness on an unchanged Git-backed project", async () => {
+    const root = await mkGitRepo();
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    await session.loadProject({ symbolGraph: "skip" });
+    if (!session.checkFreshness) {
+      throw new Error("agent session should expose freshness checks");
+    }
+
+    const scanSpy = vi.spyOn(projectFilesModule, "listProjectFiles");
+    const freshness = await session.checkFreshness();
+
+    expect(freshness).toEqual({ state: "fresh" });
+    expect(scanSpy).not.toHaveBeenCalled();
   });
 });

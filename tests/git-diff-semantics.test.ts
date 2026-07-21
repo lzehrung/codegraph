@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { listChangedFiles, getUnifiedDiff } from "../src/util.js";
+import { listChangedFiles, listUntrackedFiles, getUnifiedDiff } from "../src/util.js";
 import { runGit as git } from "./helpers/git.js";
 
 function makeGitTempDir(prefix: string): Promise<string> {
@@ -147,6 +147,76 @@ describe("git diff semantics", () => {
       await expect(getUnifiedDiff(root, { base: "definitely-not-a-ref", head: "HEAD" })).rejects.toThrow(
         /definitely-not-a-ref/,
       );
+    } finally {
+      await removeGitTempDir(root);
+    }
+  });
+});
+
+describe("listUntrackedFiles", () => {
+  it("lists new files Git has not been told to track", async () => {
+    const root = await makeGitTempDir("codegraph-git-untracked-");
+    try {
+      git(root, ["init"]);
+      git(root, ["config", "user.email", "tests@example.com"]);
+      git(root, ["config", "user.name", "Tests"]);
+
+      const trackedFile = path.join(root, "tracked.ts");
+      await fs.writeFile(trackedFile, "export const tracked = 1;\n", "utf8");
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "base"]);
+
+      const untrackedFile = path.join(root, "fresh.ts");
+      await fs.writeFile(untrackedFile, "export const fresh = 1;\n", "utf8");
+
+      const untracked = await listUntrackedFiles(root);
+      expect(untracked.some((entry) => entry.endsWith("/fresh.ts"))).toBe(true);
+      expect(untracked.some((entry) => entry.endsWith("/tracked.ts"))).toBe(false);
+    } finally {
+      await removeGitTempDir(root);
+    }
+  });
+
+  it("excludes gitignored untracked files by default and includes them when respectGitignore is false", async () => {
+    const root = await makeGitTempDir("codegraph-git-untracked-ignore-");
+    try {
+      git(root, ["init"]);
+      git(root, ["config", "user.email", "tests@example.com"]);
+      git(root, ["config", "user.name", "Tests"]);
+      await fs.writeFile(path.join(root, ".gitignore"), "ignored.ts\n", "utf8");
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "base"]);
+
+      await fs.writeFile(path.join(root, "ignored.ts"), "export const ignored = 1;\n", "utf8");
+      await fs.writeFile(path.join(root, "kept.ts"), "export const kept = 1;\n", "utf8");
+
+      const respectingGitignore = await listUntrackedFiles(root);
+      expect(respectingGitignore.some((entry) => entry.endsWith("/kept.ts"))).toBe(true);
+      expect(respectingGitignore.some((entry) => entry.endsWith("/ignored.ts"))).toBe(false);
+
+      const allUntracked = await listUntrackedFiles(root, { respectGitignore: false });
+      expect(allUntracked.some((entry) => entry.endsWith("/ignored.ts"))).toBe(true);
+    } finally {
+      await removeGitTempDir(root);
+    }
+  });
+
+  it("returns an empty list without invoking Git when gitAvailable is false", async () => {
+    const root = await makeGitTempDir("codegraph-git-untracked-unavailable-");
+    try {
+      // No `git init`: any accidental git invocation here would throw, not return [].
+      const untracked = await listUntrackedFiles(root, { gitAvailable: false });
+      expect(untracked).toEqual([]);
+    } finally {
+      await removeGitTempDir(root);
+    }
+  });
+
+  it("surfaces Git failures instead of silently returning an empty list", async () => {
+    const root = await makeGitTempDir("codegraph-git-untracked-not-a-repo-");
+    try {
+      // No `git init`, so `git ls-files` fails; callers decide their own fallback policy.
+      await expect(listUntrackedFiles(root)).rejects.toThrow();
     } finally {
       await removeGitTempDir(root);
     }

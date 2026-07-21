@@ -226,6 +226,46 @@ export async function listChangedFiles(
 }
 
 /**
+ * List files in the working tree that Git does not track (new, uncommitted files).
+ *
+ * Used to cheaply detect newly created project files without a full recursive
+ * directory scan: combined with tracked manifest entries and a commit-range
+ * diff, it lets incremental builds stay correct without re-walking the tree.
+ * `respectGitignore` mirrors Git's own `--exclude-standard`; pass `false` only
+ * when the caller intentionally wants gitignored files included (in which case
+ * prefer a full scan instead of this helper, since gitignore-aware filtering
+ * for untracked paths is not replicated here).
+ */
+export async function listUntrackedFiles(
+  projectRoot: string,
+  opts?: { gitAvailable?: boolean; respectGitignore?: boolean },
+): Promise<string[]> {
+  const gitAvailable = opts?.gitAvailable ?? true;
+  if (!gitAvailable) return [];
+  const args = ["ls-files", "--others", "-z"];
+  if (opts?.respectGitignore ?? true) args.push("--exclude-standard");
+  try {
+    const { stdout } = await execFileAsync("git", args, {
+      cwd: projectRoot,
+      env: process.env,
+    });
+    const relFiles = stdout
+      .toString()
+      .split("\0")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const out: string[] = [];
+    for (const rel of relFiles) {
+      const abs = normalizePath(path.resolve(projectRoot, rel));
+      if (abs) out.push(abs);
+    }
+    return Array.from(new Set(out));
+  } catch (error) {
+    throw createGitError(projectRoot, args, error);
+  }
+}
+
+/**
  * Get unified diff text from Git.
  * - base/head: compares commits in the explicit range `${base}..${head ?? "HEAD"}`.
  *   WORKTREE compares base to the working tree, and STAGED/INDEX compares base to the index.

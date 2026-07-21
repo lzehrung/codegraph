@@ -260,6 +260,8 @@ codegraph grep --query '(function_declaration name: (identifier) @name)'
 codegraph grep --pattern 'eval\(' --ignore-case
 ```
 
+`goto`, `refs`, and `dumpmod` default to the on-disk incremental cache and reuse the existing manifest on repeat invocations against an unchanged project, the same as agent commands. Pass `--cache off` to force a full rebuild for a single invocation.
+
 `duplicates` emits one-line triage summaries by default, or grouped exact, renamed, near, and weak clone candidates as JSON with `--json`.
 
 - It combines indexed symbols, semantic chunks, text chunks, token fingerprints, and AST shape hashes when parser context is available.
@@ -310,7 +312,7 @@ Short JSON shape:
 - Use `orient --json` when follow-up tools need exact focus reasons, limits, and omitted counts. Index feedback is stderr-only, so stdout remains parseable.
 - Small orientation budgets default to `--health skip`. Medium and large default to `--health summary`, which counts cycles and unresolved imports while omitting duplicate health; use `--health full` when exhaustive duplicate counts matter.
 - Use `packet get` with file paths, symbol names, SQL object names, file/symbol/chunk/SQL/graph handles, or review handles to retrieve bounded evidence plus follow-up commands.
-- Agent commands reuse the incremental index path and default to disk cache. Use shared index flags such as `--cache`, `--cache-strict`, `--cache-verify`, `--threads`, `--native`, `--workers`, `--include-glob`, `--ignore-glob`, and `--no-gitignore` when the packet should match a specific scan mode.
+- Agent commands, `goto`, `refs`, `impact`, and a whole-project `graph` or `index` run all reuse the incremental index path and default to disk cache. Use shared index flags such as `--cache`, `--cache-strict`, `--cache-verify`, `--threads`, `--native`, `--workers`, `--include-glob`, `--ignore-glob`, and `--no-gitignore` when the packet should match a specific scan mode.
 - Every command that starts by loading the project index reports a preparation progress message on stderr when startup checks exceed a brief threshold, then transitions to build or update progress when work is required. Fast cache and snapshot hits stay quiet; use `--progress` for redirected progress logs or `--no-progress` to suppress feedback.
 
 #### Live file views
@@ -415,6 +417,8 @@ Cycle detection reports source dependency cycles. Document-only link loops, such
 Dependency read commands keep the same output contracts while using the indexed graph path and derived adjacency maps internally when available. This makes repeated `deps`, `rdeps`, and `path` reads cheaper on warm manifest-backed projects.
 
 ### Impact, review, and graph delta
+
+`impact` defaults to the on-disk incremental cache, matching `search`/`orient`/`inspect`/`review`; pass `--cache off` to force a full rebuild for a single invocation.
 
 ```bash
 # Analyze PR impact from git history

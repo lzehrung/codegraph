@@ -1,5 +1,7 @@
 # Warm-Run Discovery Avoidance Plan
 
+**Status: Priorities 1-4 implemented.** Priority 5 remains an unstarted stretch item, as originally scoped. See per-priority checklists below for what shipped, including a few places implementation diverged from or narrowed the original text (each noted inline).
+
 This plan targets one specific, verified gap left by `2026-06-06-performance-and-cache-opportunities.md`: even on a fully warm, unchanged repo, most commands still pay for a full recursive directory scan before any cache or manifest logic gets a chance to short-circuit. Priority 7 of that plan ("Persist a Ready-to-Load Project Index Snapshot") made graph reconstruction skippable once files are known unchanged, but it did not remove the discovery scan that determines "unchanged" in the first place. This plan closes that gap and fixes a related default-cache inconsistency across CLI commands.
 
 It is self-contained so another agent can implement items without the original conversation. It complements, and in one place extends, `2026-06-06-performance-and-cache-opportunities.md`; see the cross-reference added there.
@@ -36,7 +38,7 @@ Inside `buildProjectIndexIncremental()`, the "0 changed files" branch (build-ind
 
 ### F6: No cheap way to detect new untracked files exists yet
 
-`src/util/git.ts` has `listChangedFiles()`, which shells out to `git diff --name-only`. `git diff` never reports untracked files, by design, regardless of `--diff-filter`. There is no `git status`/`git ls-files --others` helper anywhere in the codebase. This absence is *why* F1's blanket full scan exists: it is currently the only reliable way to catch a file the user just created that is not yet committed or staged.
+`src/util/git.ts` has `listChangedFiles()`, which shells out to `git diff --name-only`. `git diff` never reports untracked files, by design, regardless of `--diff-filter`. There is no `git status`/`git ls-files --others` helper anywhere in the codebase. This absence is _why_ F1's blanket full scan exists: it is currently the only reliable way to catch a file the user just created that is not yet committed or staged.
 
 ## Priority 1: Route `goto`/`refs`/`impact`/default `graph`/`index` Through the Incremental Path
 
@@ -49,13 +51,13 @@ Why this matters:
 
 Implementation checklist:
 
-- [ ] Change `src/cli/navigation.ts` (`goto`, `refs`, `dumpmod`) to call `buildProjectIndexIncremental()` instead of `buildProjectIndex()`.
-- [ ] Change `src/cli/impact.ts`'s default (non-`--changed-since`) build to call `buildProjectIndexIncremental()`.
-- [ ] Default `cache` to `"disk"` for these commands unless the user passes `--cache off`/`--cache memory`, matching `inspect`'s existing default (`src/cli/inspect.ts:271`).
-- [ ] Audit `src/cli/graph.ts` and `src/cli/index.ts` non-incremental branches (the `else` branch at `graph.ts:330` and the `full` branch in `index.ts:76-78`) for the same fix; keep `--changed-since`/`--git-base` behavior unchanged since those already use the incremental path.
-- [ ] Confirm `dumpmod` (undocumented/internal) does not have a reason to want a forced full rebuild; if it does, keep it on `buildProjectIndex()` explicitly with a comment explaining why.
-- [ ] Add a regression test proving a second `goto`/`refs`/`impact` invocation against an unchanged repo reuses the manifest (spy on `listProjectFiles` call count, or assert `report.manifest.reused === true` when `--report` is used).
-- [ ] Update `docs/cli.md` to remove the "Agent commands... default to disk cache" wording if plain navigation/impact commands now default to disk cache too; state the actual scope precisely instead of implying an intentional exclusion that no longer holds.
+- [x] Change `src/cli/navigation.ts` (`goto`, `refs`, `dumpmod`) to call `buildProjectIndexIncremental()` instead of `buildProjectIndex()`.
+- [x] Change `src/cli/impact.ts`'s default (non-`--changed-since`) build to call `buildProjectIndexIncremental()`.
+- [x] Default `cache` to `"disk"` for these commands unless the user passes `--cache off`/`--cache memory`, matching `inspect`'s existing default (`src/cli/inspect.ts:271`).
+- [x] Audit `src/cli/graph.ts` and `src/cli/index.ts` non-incremental branches for the same fix; keep `--changed-since`/`--git-base` behavior unchanged since those already use the incremental path. Shipped narrower than originally scoped: `index.ts`'s whole-project branch (`shouldWriteManifest`) now uses `buildProjectIndexIncremental()`; its scoped-include-root branch and all of `graph.ts`'s `buildProjectIndexFromFiles()` call sites keep the explicit, already-resolved file list (multi-root scans are not safely reconcilable against a whole-project-scoped manifest) but now default `cache` to `"disk"` for per-file parse-cache reuse. `graph.ts`'s default (no `--symbols`/`--sqlite`) output path uses `collectGraph()` directly, a different function family outside this plan's scope; left unchanged.
+- [x] Confirm `dumpmod` does not have a reason to want a forced full rebuild — it shares `indexOptions()` with `goto`/`refs`, no distinct requirement found; moved to `buildProjectIndexIncremental()` too.
+- [x] Add a regression test proving a second `goto`/`refs`/`impact` invocation against an unchanged repo reuses the manifest: `tests/cli-command-modules.test.ts` spies on `listProjectFiles` and asserts zero calls on the second invocation of each command.
+- [x] Update `docs/cli.md` (and `docs/agent-workflows.md`, which made the same narrower claim) to state that `goto`/`refs`/`impact` and a whole-project `graph`/`index` run now default to the incremental disk cache too, alongside agent commands.
 
 Likely files:
 
@@ -75,9 +77,9 @@ Risks:
 
 Validation:
 
-- [ ] `npx vitest run tests/cli-command-modules.test.ts tests/impact-analyzer.test.ts`
-- [ ] `node ./dist/cli.js goto <file> <line> <column>` timed twice back-to-back; second run should be markedly faster on this repo.
-- [ ] `node ./dist/cli.js impact --base HEAD --head WORKTREE --json` timed twice back-to-back.
+- [x] `npx vitest run tests/cli-command-modules.test.ts tests/impact-analyzer.test.ts` — passing.
+- [x] `node ./dist/cli.js goto <file> <line> <column>` timed twice back-to-back; second run reuses the manifest instead of rebuilding.
+- [x] `node ./dist/cli.js impact --base HEAD --head WORKTREE --json` timed twice back-to-back.
 
 ## Priority 2: Cheap Git-Status Reconciliation for `AgentSession` Discovery
 
@@ -90,12 +92,13 @@ Why this matters:
 
 Implementation checklist:
 
-- [ ] Add a `listGitWorkingTreeStatus()` helper to `src/util/git.ts` combining `git diff --name-only --diff-filter=ACDMRTUXB <lastCommit>` (modified/deleted tracked files since the manifest's `lastCommit`) with `git ls-files --others --exclude-standard -z` (new untracked files), returning added/modified/deleted sets.
-- [ ] In `AgentSession.loadFiles()` (session.ts), add a fast path: when `gitAvailable`, a valid manifest exists, discovery config is unchanged since the manifest was written, and `--cache-strict` is not set, reconcile `trackedEntries.keys()` with the git-status delta instead of calling `listProjectFiles()`.
-- [ ] Apply codegraph's own include/ignore glob filtering only to the (small) delta set of newly-added/untracked paths, not to the full baseline (the baseline was already filtered when it entered the manifest).
-- [ ] Fall back to the current full `listProjectFiles()` scan when: no git repo, no manifest yet, discovery options changed, the git command fails for any reason, or `--cache-strict` is set.
-- [ ] Keep `discoverFiles()` (the public `AgentSession.discoverFiles` method some callers use for an always-fresh list) on the full-scan path unchanged, since its contract is "authoritative fresh list," not "fast path."
-- [ ] Add tests: new untracked file appears in next session load without a full scan; deleted tracked file disappears; renamed file handled as delete+add; non-git project still works via full-scan fallback; discovery-config change forces full-scan fallback.
+- [x] Add a `listUntrackedFiles()` helper to `src/util/git.ts` (`git ls-files --others [--exclude-standard] -z`). Shipped narrower than the originally-scoped combined helper: modified/deleted tracked files since the manifest's `lastCommit` already have a correctness path via the existing `listChangedFiles()` commit-diff plus `buildProjectIndexIncremental()`'s existing per-file signature comparison (both pre-dating this plan); only new untracked files had no detection path at all, so only that primitive was net-new.
+- [x] `src/indexer/incremental-plan.ts` gained `listUntrackedProjectFiles()` (Git-sourced candidates filtered through project discovery patterns), `canUseIncrementalDiscoveryFastPath()` (the shared disqualification predicate below), and `resolveIncrementalFileList()`, a manifest-plus-Git resolver used by `AgentSession.loadFiles()`/`discoverFiles()`/`checkFreshness()` that returns `null` to signal "fall back to a full scan" rather than reconciling inline in `session.ts`, so the same resolver is independently unit-testable and reusable.
+- [x] `AgentSession.loadFiles()` (`listAgentSessionFiles()` in session.ts) tries `resolveIncrementalFileList()` first and falls back to `listProjectFiles()` when it returns `null`.
+- [x] Untracked-candidate filtering reuses a new shared `createDiscoveredFileMatcher()` (`src/util/projectFiles.ts`) against the small candidate set only; the existing manifest-tracked baseline is not re-filtered (it was already filtered when it entered the manifest).
+- [x] Fall back to a full scan when: no manifest yet, discovery options changed since the manifest was written (via `diffBuildOptions(...).includes("discovery")`), no Git repo, `useGitignore === false` (this fast path does not replicate gitignore-rule matching, unlike Git's own `--exclude-standard`), `--cache-strict` is set, or any Git command in the resolution fails.
+- [x] `discoverFiles()` intentionally now shares the same fast-path-aware `listAgentSessionFiles()` rather than staying full-scan-only: the fast path is a strictly-correct-or-null substitute (never returns a wrong answer, only `null` on any doubt), so there is no accuracy downside, and its one caller (`mcp/server.ts`'s SQLite-artifact freshness check) benefits from the same scan avoidance.
+- [x] Tests added: new untracked file found without a scan; modified/deleted tracked files after a new commit found without a scan (`resolveIncrementalFileList` in `tests/incremental-plan.test.ts`); non-Git fallback, `--cache-strict` fallback, and discovery-option-change fallback (`tests/agent-session.test.ts`). Rename-as-delete+add is covered implicitly (Git reports a delete and an add for an unstaged rename with no `--find-renames` tracking at the porcelain level used here) rather than as a dedicated named case.
 
 Likely files:
 
@@ -113,9 +116,9 @@ Risks:
 
 Validation:
 
-- [ ] `npx vitest run tests/agent-session.test.ts tests/cache-invalidation.test.ts`
-- [ ] Manual timing: `node ./dist/cli.js orient --root . --budget small --json` twice, unchanged repo, before/after.
-- [ ] Manual correctness check: create an untracked file, run `search`/`orient`, confirm it is found without `--changed-since`.
+- [x] `npx vitest run tests/agent-session.test.ts tests/cache-invalidation.test.ts tests/incremental-plan.test.ts tests/git-diff-semantics.test.ts` — passing.
+- [x] Manual timing: `node ./dist/cli.js orient --root . --budget small --json` twice, unchanged repo, before/after — second run's `listProjectFiles`/discovery cost is eliminated on this (Git-backed) repo.
+- [x] Manual correctness check: create an untracked file, run `search`/`orient`, confirm it is found without `--changed-since` — covered by the "finds a newly created untracked file" test in `tests/agent-session.test.ts`.
 
 ## Priority 3: Skip the Symlink-Directory Walk When There Are No Symlinks
 
@@ -127,10 +130,10 @@ Why this matters:
 
 Implementation checklist:
 
-- [ ] Record a `hasSymlinkDirectories: boolean` flag in the manifest (or project-index snapshot) the next time a full scan runs and actually enumerates entries.
-- [ ] In `listProjectFiles()`, skip `listEntriesFromSafeSymlinkDirectories()` when the flag is known `false`; run it (and refresh the flag) when the flag is `true` or unknown (first run, or manifest absent).
-- [ ] Per `AGENTS.md`'s persistent-storage-schema rule: this is a manifest schema change, so add a migration/backfill path for existing on-disk manifests missing the field (treat missing as "unknown", i.e. run the walk once to populate it) and a regression test loading an old-schema manifest.
-- [ ] Add a test proving a project with a symlinked directory still gets that directory's files, both on first scan and after the flag is cached `true`.
+- [x] Record `symlinkDirectories: string[]` in the manifest (shipped as the actual path list rather than a boolean flag: an empty array means "known, none," and a populated array lets the fast path re-verify each entry directly instead of re-deriving the set from a fresh probe) the next time a full scan runs and actually enumerates entries.
+- [x] `listProjectFiles()` and `discoverProjectFiles()` both accept `knownSymlinkDirectories`/`onSymlinkDirectoriesDiscovered` (`ProjectFileDiscoveryOptions`, `src/util/projectFiles.ts`); when a known list is provided, `resolveSafeSymlinkDirectories()` re-verifies each entry directly (stat + realpath) instead of running the full `fg(["**/*"])` probe. `buildProjectIndexWithManifestOptions()` (`src/indexer/build-index.ts`) peeks the manifest for the hint before its full-scan `Promise.all`, passes it to both discovery calls, and threads whatever was discovered/reused back into the manifest write.
+- [x] Missing field on an old-schema manifest is `undefined`, which both call sites treat identically to "unknown, probe once" — a JSON-optional-field default, not a code migration step. A regression test loads a manifest fixture built via `createManifest()` (pre-dating this field) and confirms a rebuild completes and backfills `symlinkDirectories`.
+- [x] Tests proving a symlinked directory's files are still found via both the probing path and the fast (known-list) path, plus a stale-known-entry (removed symlink) case and a no-symlinks case, added to `tests/project-file-discovery.test.ts`; manifest persistence (populated and empty) and old-schema migration added to `tests/cache-invalidation.test.ts`.
 
 Likely files:
 
@@ -141,8 +144,8 @@ Likely files:
 
 Validation:
 
-- [ ] `npx vitest run tests/cache-invalidation.test.ts` plus the project-files symlink tests.
-- [ ] Confirm a project with an intentional symlinked source directory still indexes those files correctly, cold and warm.
+- [x] `npx vitest run tests/cache-invalidation.test.ts tests/project-file-discovery.test.ts` — passing (symlink tests skip gracefully via `isSymlinkUnavailable()` on platforms/permission levels that cannot create symlinks).
+- [x] Confirmed a project with an intentional symlinked source directory still indexes those files correctly, both cold (probing) and warm (known-list fast path).
 
 ## Priority 4: Make Freshness Checks Reuse the Cheap Path
 
@@ -152,9 +155,9 @@ Why this matters:
 
 Implementation checklist:
 
-- [ ] Reuse the Priority 2 helper inside `checkFreshness()` (session.ts:275-315) instead of calling `listProjectFiles()` directly.
-- [ ] Keep the existing size/mtime signature diff logic (`collectAgentFileSignatures`/`diffAgentFileSignatures`) for files identified by the reconciliation as candidates; do not stat every file in the repo, only the delta plus previously-known files needed for byte-count budgeting.
-- [ ] Preserve `policy: "manual"` (skip check) and the `maxAutoRefreshFiles`/`maxAutoRefreshBytes` auto-refresh gates unchanged.
+- [x] `checkFreshness()` now calls `listAgentSessionFiles(options)` (the same fast-path-aware resolver `loadFiles()`/`discoverFiles()` use) instead of calling `listProjectFiles()` directly.
+- [x] `collectAgentFileSignatures`/`diffAgentFileSignatures` are unchanged and still run over the resolved file list. Shipped narrower than originally scoped: the resolved list itself is the full current file set (from the fast path or the full-scan fallback), not a pre-narrowed delta; stat-collection over that full list is unchanged from before this plan, and the discovery-scan cost specifically (the actual target of this plan) is what's eliminated. Narrowing `collectAgentFileSignatures` itself to stat only a Git-reported delta is a separate, smaller optimization not required to fix the discovery-scan problem and is left as a follow-up.
+- [x] `policy: "manual"` and the `maxAutoRefreshFiles`/`maxAutoRefreshBytes` auto-refresh gates are untouched.
 
 Likely files:
 
@@ -164,8 +167,8 @@ Likely files:
 
 Validation:
 
-- [ ] `npx vitest run tests/mcp-server.test.ts tests/agent-session.test.ts`
-- [ ] Long-running MCP session smoke test: several tool calls with `freshness.policy: "auto"` against an unchanged repo; confirm no full scan per call (spy count).
+- [x] `npx vitest run tests/mcp-server.test.ts tests/agent-session.test.ts` — passing.
+- [x] `tests/agent-session.test.ts` adds a direct spy-count assertion: `checkFreshness()` on an unchanged Git-backed project calls `listProjectFiles` zero times.
 
 ## Priority 5 (Stretch): Directory-Mtime Fallback Discovery for Non-Git Projects
 
@@ -186,7 +189,8 @@ Notes for whoever picks this up:
 
 - Priorities 3 and 5 both touch persistent manifest state. Per `AGENTS.md`, any schema change needs an explicit migration/backfill path and a regression test that starts from the older schema, not just `CREATE TABLE IF NOT EXISTS` or an added-but-unvalidated JSON field.
 - Priority 2's git-status fast path must never silently under-report changes. Keep `--cache-verify` as an unconditional trapdoor back to the full scan, and keep the existing manifest-mismatch / config-hash / graph-options-mismatch full-rebuild triggers untouched.
-- `docs/cli.md` and `codegraph-skill/codegraph/SKILL.md` both currently assert "every command that starts by loading the project index... default[s] to disk cache" or similar. Priority 1 makes that statement true for `goto`/`refs`/`impact`; until then, update the docs to describe the actual, narrower current behavior rather than leaving an inaccurate blanket claim in place.
+- `docs/cli.md` and `docs/agent-workflows.md` previously scoped the disk-cache-by-default claim to "agent commands" only. Priority 1 makes that statement true for `goto`/`refs`/`impact`/whole-project `graph`/`index` too; both docs are updated in this change to state that broader scope precisely. `codegraph-skill/codegraph/SKILL.md` did not make this claim in the first place (checked; no correction needed there).
+- The manifest schema change for `symlinkDirectories` (Priority 3) did not need an explicit migration function: it is a plain optional JSON field, and a missing field on an older manifest is indistinguishable in code from "not yet known," which is exactly the fallback both call sites already needed to handle. A regression test still proves an old-schema manifest loads and rebuilds correctly, per the spirit of `AGENTS.md`'s schema-migration rule even though the SQLite `ALTER TABLE` mechanism it describes does not apply to a JSON manifest file.
 
 ## Other Opportunities Observed (Not Scoped Into a Priority Above)
 
@@ -197,21 +201,24 @@ Noted during this investigation; each needs its own scoping/benchmark before bec
 - **No visibility into which cache tier actually served a given run.** Add a field to `--report`/`status --json` (or a new `doctor` line) showing whether a run used the git-status fast path, the full scan, or the project-index snapshot skip. This would make future "why is this still slow" reports self-diagnosing instead of requiring code archaeology like this investigation.
 - **`buildProjectIndexWithManifestOptions()` runs `listProjectFiles()` and `discoverProjectFiles()` as two independent tree walks in parallel** (build-index.ts:789-797). `discoverProjectFiles()` matches a narrow lockfile/manifest pattern set, so it is likely cheap relative to the main walk, but this has not been measured. Worth a quick benchmark before assuming it needs its own fix; if it is cheap, leave it alone rather than adding complexity for no measured win.
 - **Close out the two unchecked validation items in Priority 7 of `2026-06-06-performance-and-cache-opportunities.md`** (warm-cache parity test, before/after `orient` timing) while working in this area, since they are directly adjacent and currently unverified despite the rest of that priority being marked complete.
+- **`AgentSession.loadBase()` unconditionally sets `opts.report` on every `buildProjectIndexIncremental()` call** (`src/agent/session.ts:230-231`, pre-existing, not part of this plan). Inside `buildProjectIndexIncremental()`, `if (explicitFileSet.size && (!explicitFilesCoverAllFiles || report)) { explicitFileSet.forEach(markAsChanged); }` (build-index.ts) means that whenever a `report` is present, every file in the explicit file list is marked "changed" and reprocessed, regardless of whether its content actually changed. This is likely intentional (a report needs accurate per-file cached-vs-parsed categorization, which a skipped snapshot load cannot provide), but it means the "0 changed files -> reuse snapshot" fast path (2026-06-06 Priority 7) can never engage for `orient`/`search`/`explore`/any other `AgentSession`-backed command, only for callers that omit `report`. Confirmed by direct measurement on this repo: `goto` (migrated in this plan's Priority 1, no `report`) went from 2.8s cold to 0.775s warm; `orient` (via `AgentSession`, always sets `report`) stayed around 10s warm because it re-parses every tracked file on every run regardless of this plan's changes. This plan's scan-avoidance work is unaffected and independently verified (see the "no full scan" spy assertions throughout the test files touched here), but the *content re-parse* cost for `AgentSession`-backed commands specifically remains a separate, larger, pre-existing ceiling worth its own investigation: either make report generation compatible with the snapshot fast path (e.g., derive per-file categorization from the snapshot's own manifest-entry diff instead of forcing a real reprocess), or make `report` optional/lazy for `AgentSession` callers that do not actually consume it.
 
 ## Suggested Execution Order
 
-- [ ] Priority 3 first: smallest, safest, no cross-cutting risk, immediately reduces every discovery call's cost by roughly half.
-- [ ] Priority 1 next: reuses existing, already-tested incremental infrastructure; fixes the most visibly broken commands (`goto`, `refs`, `impact` never benefiting from their own manifest writes).
-- [ ] Priority 2 after Priority 1 lands and its tests are stable: the higher-effort, higher-payoff git-status fast path, now benefiting all commands including the ones just fixed in Priority 1.
-- [ ] Priority 4 immediately follows Priority 2, since it is a small reuse of the same helper.
-- [ ] Priority 5 only if Priority 2's real-world coverage (git-repo share of usage) leaves a meaningful non-git gap.
+- [x] Priority 3 first: smallest, safest, no cross-cutting risk, immediately reduces every discovery call's cost by roughly half.
+- [x] Priority 2's `buildProjectIndexIncremental()`-side untracked-file detection shipped before Priority 1's CLI migration, not after: routing `goto`/`refs`/`impact` onto `buildProjectIndexIncremental()` (Priority 1) only became safe once that function could discover new untracked files on its own (previously guaranteed only by callers like `AgentSession` pre-scanning and passing an explicit `files` list, which `goto`/`refs`/`impact` never did). This reordering was discovered during implementation, not anticipated in the original plan text above.
+- [x] Priority 1 next: reuses existing, already-tested incremental infrastructure; fixes the most visibly broken commands (`goto`, `refs`, `impact` never benefiting from their own manifest writes).
+- [x] Priority 2's `AgentSession`-side fast path (`resolveIncrementalFileList()` wired into `listAgentSessionFiles()`) followed, now benefiting all commands including the ones just fixed in Priority 1.
+- [x] Priority 4 immediately followed, reusing the same resolver.
+- [ ] Priority 5 not started: Priority 2's real-world git-repo coverage should be observed before deciding whether the non-git gap is worth the added manifest-schema complexity.
 
 ## Validation Checklist
 
-- [ ] `npx vitest run tests/agent-session.test.ts tests/mcp-server.test.ts tests/cache-invalidation.test.ts`
-- [ ] `npx vitest run tests/cli-command-modules.test.ts tests/impact-analyzer.test.ts`
-- [ ] `node ./dist/cli.js doctor`
-- [ ] `node ./dist/cli.js orient --root . --budget small --json` (timed, warm, before/after)
-- [ ] `node ./dist/cli.js goto <file> <line> <column>` (timed, warm, before/after)
-- [ ] `node ./dist/cli.js impact --base HEAD --head WORKTREE --json` (timed, warm, before/after)
-- [ ] `npm run check` before concluding major work
+- [x] `npx vitest run tests/agent-session.test.ts tests/mcp-server.test.ts tests/cache-invalidation.test.ts`
+- [x] `npx vitest run tests/cli-command-modules.test.ts tests/impact-analyzer.test.ts`
+- [x] `npx vitest run tests/incremental-plan.test.ts tests/git-diff-semantics.test.ts tests/project-file-discovery.test.ts`
+- [x] `node ./dist/cli.js doctor`
+- [x] `node ./dist/cli.js orient --root . --budget small --json` (timed, warm, before/after)
+- [x] `node ./dist/cli.js goto <file> <line> <column>` (timed, warm, before/after)
+- [x] `node ./dist/cli.js impact --base HEAD --head WORKTREE --json` (timed, warm, before/after)
+- [x] `npm run check` before concluding major work

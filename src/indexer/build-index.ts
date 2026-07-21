@@ -80,9 +80,11 @@ import {
 } from "./build-workers.js";
 import {
   buildIncrementalGitDiffOptions,
+  canUseIncrementalDiscoveryFastPath,
   collectDeletedTrackedFileDependents,
   collectTrackedFileDependents,
   isMissingGitRevisionError,
+  listUntrackedProjectFiles,
   partitionTrackedManifestFiles,
 } from "./incremental-plan.js";
 import { parsedCacheMaxEntries, setParsedCacheEntry } from "./parsed-cache.js";
@@ -397,6 +399,7 @@ type BuildIndexHelperOptions = {
   warnNoFilesMessage?: string;
   ignoreExistingManifest?: boolean;
   projectFiles?: ProjectFileInfo[] | Promise<ProjectFileInfo[]>;
+  symlinkDirectories?: string[];
 };
 
 type IndexBuildRunState = {
@@ -752,6 +755,7 @@ async function buildIndexFromFileListShared(
         files: manifestEntries,
         timings,
         manifestReport: report?.manifest,
+        ...(helperOpts?.symlinkDirectories ? { symlinkDirectories: helperOpts.symlinkDirectories } : {}),
       });
     }
     const index = await finalizeProjectIndex({
@@ -786,13 +790,30 @@ async function buildProjectIndexWithManifestOptions(
   helperOpts?: Pick<BuildIndexHelperOptions, "ignoreExistingManifest">,
 ): Promise<ProjectIndex> {
   try {
+    // Reuse the previous full scan's symlinked-directory list, when available, so the
+    // file-discovery and project-file walks below can skip their own full-tree symlink
+    // probe. This is a best-effort hint read independently of the manifest gate used
+    // for parse/graph caching further down; a missing or unusable manifest just means
+    // discovery falls back to probing once, exactly as it always has.
+    const symlinkHintManifest = helperOpts?.ignoreExistingManifest ? null : await loadManifest(projectRoot, opts);
+    const knownSymlinkDirectories = symlinkHintManifest?.symlinkDirectories;
+    let discoveredSymlinkDirectories = knownSymlinkDirectories;
+    const onSymlinkDirectoriesDiscovered =
+      knownSymlinkDirectories === undefined
+        ? (directories: readonly string[]) => {
+            discoveredSymlinkDirectories = Array.from(directories);
+          }
+        : undefined;
     const [files, projectFiles] = await Promise.all([
       listProjectFiles(projectRoot, undefined, {
         ...opts?.discovery,
         ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+        ...(knownSymlinkDirectories !== undefined ? { knownSymlinkDirectories } : {}),
+        ...(onSymlinkDirectoriesDiscovered ? { onSymlinkDirectoriesDiscovered } : {}),
       }),
       discoverProjectFiles(projectRoot, {
         ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+        ...(knownSymlinkDirectories !== undefined ? { knownSymlinkDirectories } : {}),
       }),
     ]);
     return await buildIndexFromFileListShared(projectRoot, files, opts, {
@@ -800,6 +821,7 @@ async function buildProjectIndexWithManifestOptions(
       warnNoFilesMessage: `Warning: No files found in project root: ${projectRoot}`,
       ...(helperOpts?.ignoreExistingManifest ? { ignoreExistingManifest: true } : {}),
       projectFiles,
+      ...(discoveredSymlinkDirectories !== undefined ? { symlinkDirectories: discoveredSymlinkDirectories } : {}),
     });
   } finally {
     if ((opts?.cache ?? "off") === "disk") {
@@ -946,11 +968,26 @@ export async function buildProjectIndexIncremental(
     const explicitFiles = normalizeIndexedFileInputs(projectRoot, opts?.files ?? [], "Incremental file");
     const needsGitScan = !!opts?.gitBase || !!opts?.changedSince;
     const gitFiles = needsGitScan ? await listChangedFiles(projectRoot, buildIncrementalGitDiffOptions(opts)) : [];
+    // New files that were never committed, staged, or passed explicitly have no tracked
+    // manifest entry and no commit-diff record, so they would otherwise stay invisible
+    // to an incremental build until the next full rebuild. Detecting them via `git
+    // ls-files --others` is far cheaper than a full recursive directory scan and keeps
+    // this path correct without requiring callers to pre-scan the project themselves.
+    // Failures here are non-fatal: they fall back to the existing manifest-only view
+    // rather than forcing a full rebuild, matching this function's overall stance of
+    // preferring a fast, best-effort incremental result over a conservative full scan.
+    const untrackedFiles = canUseIncrementalDiscoveryFastPath(gitAvailable, opts?.discovery, opts?.cacheStrict)
+      ? await listUntrackedProjectFiles(projectRoot, opts?.discovery, gitAvailable).catch((error: unknown) => {
+          logWithLevel(opts?.logLevel, "debug", "Warning: Failed to list untracked project files:", error);
+          return [] as string[];
+        })
+      : [];
     const allFiles = new Set<string>([
       ...trackedFiles,
       ...explicitFiles.filter((file) => fs.existsSync(file)),
       ...manifestDiffFiles.filter((file) => fs.existsSync(file)),
       ...gitFiles.filter((file) => fs.existsSync(file)),
+      ...untrackedFiles.filter((file) => fs.existsSync(file)),
     ]);
     if (fileReport) fileReport.total = allFiles.size;
     const workspaceConfig = await loadWorkspaceConfig(projectRoot);
@@ -964,6 +1001,7 @@ export async function buildProjectIndexIncremental(
         timings,
         manifestReport,
         allowEmpty: true,
+        ...(manifest.symlinkDirectories ? { symlinkDirectories: manifest.symlinkDirectories } : {}),
       });
       return {
         graph: { nodes: new Set(), edges: [] },
@@ -1060,6 +1098,7 @@ export async function buildProjectIndexIncremental(
             files: new Map(Object.entries(trackedEntries)),
             timings,
             manifestReport,
+            ...(manifest.symlinkDirectories ? { symlinkDirectories: manifest.symlinkDirectories } : {}),
           });
           if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
           if (report) {
@@ -1211,6 +1250,7 @@ export async function buildProjectIndexIncremental(
         files: manifestEntries,
         timings,
         manifestReport,
+        ...(manifest.symlinkDirectories ? { symlinkDirectories: manifest.symlinkDirectories } : {}),
       });
       const index = await finalizeProjectIndex({
         projectRoot,

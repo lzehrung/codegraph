@@ -1,5 +1,5 @@
-import { buildProjectIndex } from "../indexer/build-index.js";
-import type { BuildOptions, BuildReport, ProjectIndex } from "../indexer/types.js";
+import { buildProjectIndexIncremental } from "../indexer/build-index.js";
+import type { BuildOptions, BuildReport, IncrementalBuildOptions, ProjectIndex } from "../indexer/types.js";
 import {
   analyzeImpactFromDiff,
   type ChangedSymbol,
@@ -389,23 +389,25 @@ function applyAnalysisOptions(context: ImpactCommandContext, options: ImpactOpti
   options.membersOnly = context.hasFlag("--members-only");
 }
 
+// Defaults to the on-disk incremental cache, matching search/orient/inspect/review;
+// pass --cache off to opt out for a single invocation.
 function buildIndexOptions(
   context: ImpactCommandContext,
   options: ImpactOptionsBuilder,
   analysisOptions: { keepParsedForDuplicates?: boolean } = {},
-): BuildOptions {
+): IncrementalBuildOptions {
   const cacheMode =
-    options.cache === "off" || options.cache === "memory" || options.cache === "disk" ? options.cache : undefined;
+    options.cache === "off" || options.cache === "memory" || options.cache === "disk" ? options.cache : "disk";
   const keepParsedForDuplicates = analysisOptions.keepParsedForDuplicates ?? false;
   const keepParsed = options.refContext !== undefined || keepParsedForDuplicates;
-  const indexOpts: BuildOptions = {
+  const indexOpts: IncrementalBuildOptions = {
     threads: options.threads ?? 0,
     discovery: context.discoveryOptions,
     onProgress: context.progressHandler,
+    cache: cacheMode,
     ...(keepParsed ? { keepParsed } : {}),
     ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
     ...context.workerOpts,
-    ...(cacheMode !== undefined ? { cache: cacheMode } : {}),
     ...(options.cacheStrict ? { cacheStrict: true } : {}),
   };
   if (context.graphOptions) {
@@ -485,7 +487,7 @@ export async function handleImpactCommand(context: ImpactCommandContext): Promis
     const buildReport: BuildReport = { timings: {} };
     const indexOptions = buildIndexOptions(context, options, { keepParsedForDuplicates: duplicateScope !== "off" });
     indexOptions.report = buildReport;
-    const index = await buildProjectIndex(context.projectRootFs, indexOptions);
+    const index = await buildProjectIndexIncremental(context.projectRootFs, indexOptions);
     const report = await analyzeImpactFromDiff(context.projectRootFs, index, options as ImpactOptions, { buildReport });
     const impactReport = ensureImpactReport(report);
 

@@ -17,6 +17,7 @@ export {
   isGitRepo,
   isGitWorktreeSentinel,
   listChangedFiles,
+  listUntrackedFiles,
 } from "./util/git.js";
 export {
   assertFilePathWithinRoot,

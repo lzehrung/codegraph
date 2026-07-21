@@ -96,6 +96,14 @@ export type IndexManifest = {
   graphOptions?: GraphBuildOptions;
   buildOptions?: ManifestBuildOptions;
   files: Record<string, ManifestFileEntry>;
+  /**
+   * Symlinked directories discovered under the project root as of the last full scan.
+   * Absent on manifests written before this field existed, or whenever the set is not
+   * yet known; discovery then probes the tree once and backfills it on the next write.
+   * An empty array is meaningful (no symlinked directories) and lets discovery skip its
+   * second full-tree walk entirely.
+   */
+  symlinkDirectories?: string[];
 };
 
 type ConfigHashResult = {

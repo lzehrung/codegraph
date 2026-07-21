@@ -256,11 +256,16 @@ describe("CLI index progress", () => {
       expect(preparingAt).toBeGreaterThanOrEqual(0);
       expect(buildingAt).toBeGreaterThan(preparingAt);
 
+      // The prior `interactive` call against this same root already wrote a manifest,
+      // so this second index build reuses it via the incremental path (an "update" pass)
+      // instead of rebuilding from scratch (a "build" pass). `--cache off` still forces
+      // the one tracked file to be reprocessed, since disabled caching means no cached
+      // parse result can be trusted as unchanged.
       const forced = await captureCli(["index", "--root", root, "--cache", "off", "--progress"], {
         progressPreparationDelayMs: 0,
       });
       expect(forced.stderr).toContain("[Progress] Preparing project index.");
-      expect(forced.stderr).toContain("[Progress] Building project index.");
+      expect(forced.stderr).toContain("[Progress] Updating project index.");
 
       const suppressed = await captureCli(["index", "--root", root, "--cache", "off", "--no-progress"], {
         stderrIsTTY: true,
@@ -374,9 +379,13 @@ describe("CLI index progress", () => {
     try {
       await buildProjectIndex(root, { cache: "disk" });
 
+      // A generous, explicit preparation delay keeps this assertion about a genuinely
+      // fast cache hit staying quiet, rather than racing the production 100ms default
+      // against unrelated CPU contention from the rest of a large parallel test run.
       const cached = await captureCli(command, {
         stderrIsTTY: true,
         terminalSupportsControlSequences: true,
+        progressPreparationDelayMs: 2000,
       });
       expect(() => JSON.parse(cached.stdout)).not.toThrow();
       expect(cached.stderr).not.toContain("project index");
