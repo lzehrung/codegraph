@@ -445,6 +445,7 @@ async function isDetailedSymbolGraphCompatibleWithProject(
   }
 
   const base = await buildSymbolGraph(index);
+  if (graph.nodes.size !== base.nodes.size) return false;
   for (const [id, expected] of base.nodes) {
     const actual = graph.nodes.get(id);
     if (

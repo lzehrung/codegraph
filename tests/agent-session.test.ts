@@ -183,6 +183,14 @@ describe("agent session", () => {
         baseNode.name = "tampered";
       },
       (sidecar) => {
+        const node = sidecar.graph.nodes[0]!;
+        sidecar.graph.nodes.push({
+          ...node,
+          id: `${node.file}::bogus-extra-node::0`,
+          name: "bogus-extra-node",
+        });
+      },
+      (sidecar) => {
         sidecar.graph.edges[0]!.site = {
           file: sidecar.graph.nodes[0]!.file,
           range: {
