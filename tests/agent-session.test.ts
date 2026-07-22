@@ -7,6 +7,7 @@ import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
 import type { ProjectIndex } from "../src/indexer/types.js";
 import * as projectFilesModule from "../src/util/projectFiles.js";
+import * as gitModule from "../src/util/git.js";
 import { runGit as git } from "./helpers/git.js";
 
 async function mkRepo(): Promise<string> {
@@ -282,6 +283,19 @@ describe("agent session", () => {
 
     expect(files.some((file) => file.endsWith("main.ts"))).toBe(true);
     expect(scanSpy).toHaveBeenCalled();
+  });
+
+  it("reuses one Git reconciliation for warm AgentSession indexing", async () => {
+    const root = await mkGitRepo();
+    await createAgentSession({ root, freshness: { policy: "manual" } }).loadProject({ symbolGraph: "skip" });
+
+    const diffSpy = vi.spyOn(gitModule, "listChangedFiles");
+    const untrackedSpy = vi.spyOn(gitModule, "listUntrackedFiles");
+    const session = createAgentSession({ root, freshness: { policy: "manual" } });
+    await session.loadProject({ symbolGraph: "skip" });
+
+    expect(diffSpy).toHaveBeenCalledTimes(1);
+    expect(untrackedSpy).toHaveBeenCalledTimes(1);
   });
 
   it("reuses the fast discovery path for checkFreshness on an unchanged Git-backed project", async () => {

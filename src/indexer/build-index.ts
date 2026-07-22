@@ -963,13 +963,16 @@ export async function buildProjectIndexIncremental(
     // WORKTREE captures staged and unstaged tracked-file changes together, and still
     // covers ordinary new-commit history when the working tree is clean at the new HEAD.
     const shouldDiffAgainstWorkingTree = !hasExplicitGitRange && gitAvailable && !!manifest.lastCommit;
+    const canReuseReconciliation = opts?.reconciledManifestUpdatedAt === manifest.updatedAt;
     let manifestDiffFiles: string[] = [];
     if (shouldDiffAgainstWorkingTree) {
       try {
-        manifestDiffFiles = await listChangedFiles(projectRoot, {
-          base: manifest.lastCommit,
-          head: "WORKTREE",
-        });
+        manifestDiffFiles =
+          (canReuseReconciliation ? opts?.reconciledWorkingTreeDiffFiles : undefined) ??
+          (await listChangedFiles(projectRoot, {
+            base: manifest.lastCommit,
+            head: "WORKTREE",
+          }));
       } catch (error) {
         if (!isMissingGitRevisionError(error)) throw error;
         if (manifestReport) {
@@ -1002,6 +1005,11 @@ export async function buildProjectIndexIncremental(
       }
     }
     const trackedEntries = sanitizeManifestEntriesForRoot(projectRoot, manifest.files);
+    const manifestFileKeys = Object.keys(manifest.files);
+    const trackedEntryKeys = Object.keys(trackedEntries);
+    const manifestRequiresSanitization =
+      manifestFileKeys.length !== trackedEntryKeys.length ||
+      manifestFileKeys.some((file) => !Object.hasOwn(trackedEntries, file));
     const { trackedFiles, deletedTrackedFiles } = partitionTrackedManifestFiles(trackedEntries);
     const fileReport = initFileReport(report);
     if (fileReport) fileReport.total = trackedFiles.size;
@@ -1019,7 +1027,9 @@ export async function buildProjectIndexIncremental(
     let untrackedFiles: string[] = [];
     if (canUseIncrementalDiscoveryFastPath(gitAvailable, opts?.cacheStrict)) {
       try {
-        untrackedFiles = await listUntrackedProjectFiles(projectRoot, opts?.discovery, gitAvailable);
+        untrackedFiles =
+          (canReuseReconciliation ? opts?.reconciledUntrackedFiles : undefined) ??
+          (await listUntrackedProjectFiles(projectRoot, opts?.discovery, gitAvailable));
       } catch (error) {
         if (manifestReport) {
           manifestReport.reason = "gitUntrackedScanFailed";
@@ -1042,7 +1052,6 @@ export async function buildProjectIndexIncremental(
       ...untrackedFiles.filter((file) => fs.existsSync(file)),
     ]);
     if (fileReport) fileReport.total = allFiles.size;
-    const workspaceConfig = await loadWorkspaceConfig(projectRoot);
     const dependentFilesOfDeletedTracked = collectDeletedTrackedFileDependents(trackedEntries, deletedTrackedFiles);
     if (allFiles.size === 0) {
       completeCheckProgress(0);
@@ -1068,6 +1077,59 @@ export async function buildProjectIndexIncremental(
         parsed: new Map(),
       };
     }
+    const changedFiles = new Set<string>();
+    const markAsChanged = (file: string): void => {
+      if (fs.existsSync(file)) changedFiles.add(file);
+    };
+    const explicitFileSet = new Set(explicitFiles);
+    const explicitFilesCoverAllFiles =
+      explicitFileSet.size === allFiles.size && [...allFiles].every((file) => explicitFileSet.has(file));
+    const explicitFilesAreChangeInputs = !opts?.filesAreProjectScope;
+    if (explicitFileSet.size && explicitFilesAreChangeInputs && (!explicitFilesCoverAllFiles || report)) {
+      explicitFileSet.forEach(markAsChanged);
+    }
+    manifestDiffFiles.forEach(markAsChanged);
+    gitFiles.forEach(markAsChanged);
+    dependentFilesOfDeletedTracked.forEach(markAsChanged);
+    if (fileReport) fileReport.changed = changedFiles.size;
+
+    const reuseUnchangedSnapshot = async (): Promise<ProjectIndex | null> => {
+      if (changedFiles.size || deletedTrackedFiles.size || manifestRequiresSanitization) return null;
+      const filesSignature = projectSnapshotFilesSignature(new Map(Object.entries(trackedEntries)));
+      const snapshotLoad = await tryLoadProjectIndexSnapshot(projectRoot, opts, filesSignature);
+      if (!snapshotLoad) return null;
+
+      const snapshot = snapshotLoad.index;
+      snapshot.projectFiles ??= await discoverProjectFiles(projectRoot, {
+        ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+      });
+      snapshot.manifestEntries = projectIndexManifestEntries(Object.entries(trackedEntries));
+      if (opts?.cache) {
+        snapshot.cacheMode = opts.cache;
+        snapshot.cacheRootDir = cacheRoot(projectRoot, opts);
+      }
+      if (fileReport) fileReport.cached = allFiles.size;
+      if (timings) timings.graphMs = 0;
+      if (report) {
+        if (snapshotLoad.analysisReport?.backend) report.backend = snapshotLoad.analysisReport.backend;
+        if (snapshotLoad.analysisReport?.graph) report.graph = snapshotLoad.analysisReport.graph;
+        if (!report.backend) initNativeBackendReport(report);
+        snapshot.buildReport = report;
+      }
+      return snapshot;
+    };
+
+    const canSkipFileValidation = gitAvailable && !opts?.cacheStrict && !untrackedFiles.length;
+    if (canSkipFileValidation) {
+      const snapshot = await reuseUnchangedSnapshot();
+      if (snapshot) {
+        if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
+        completeCheckProgress(allFiles.size);
+        return snapshot;
+      }
+    }
+
+    const workspaceConfig = await loadWorkspaceConfig(projectRoot);
     const conc = buildConcurrency(opts);
     const workerSetup = await setupWorkerPool(opts);
     try {
@@ -1082,7 +1144,6 @@ export async function buildProjectIndexIncremental(
         cacheEnabled,
         concurrency: conc,
       });
-      const changedFiles = new Set<string>();
       const modules = new Map<FileId, ModuleIndex>();
       const parsedMap = new Map<string, ParsedFileContext>();
       const jsonDependencies = new Set<string>();
@@ -1090,20 +1151,6 @@ export async function buildProjectIndexIncremental(
       const bloomFilterCache = useBloomFilters
         ? new (await import("../util/bloomFilter.js")).BloomFilterCache()
         : undefined;
-      const markAsChanged = (file: string) => {
-        if (fs.existsSync(file)) changedFiles.add(file);
-      };
-      const explicitFileSet = new Set(explicitFiles);
-      const explicitFilesCoverAllFiles =
-        explicitFileSet.size === allFiles.size && [...allFiles].every((file) => explicitFileSet.has(file));
-      const explicitFilesAreChangeInputs = !opts?.filesAreProjectScope;
-      if (explicitFileSet.size && explicitFilesAreChangeInputs && (!explicitFilesCoverAllFiles || report)) {
-        explicitFileSet.forEach(markAsChanged);
-      }
-      manifestDiffFiles.forEach(markAsChanged);
-      gitFiles.forEach(markAsChanged);
-      dependentFilesOfDeletedTracked.forEach(markAsChanged);
-      if (fileReport) fileReport.changed = changedFiles.size;
       for (const file of allFiles) {
         const sigInfo = fileSignatures.get(file);
         if (!sigInfo) continue;
@@ -1128,48 +1175,11 @@ export async function buildProjectIndexIncremental(
       };
       invalidateCachedDependents();
       if (fileReport) fileReport.changed = changedFiles.size;
-      if (!changedFiles.size && !deletedTrackedFiles.size) {
-        const filesSignature = projectSnapshotFilesSignature(new Map(Object.entries(trackedEntries)));
-        const snapshotLoad = await tryLoadProjectIndexSnapshot(projectRoot, opts, filesSignature);
-        if (snapshotLoad) {
-          const snapshot = snapshotLoad.index;
-          snapshot.projectFiles ??= await discoverProjectFiles(projectRoot, {
-            ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
-          });
-          snapshot.manifestEntries = projectIndexManifestEntries(Object.entries(trackedEntries));
-          if (opts?.cache) {
-            snapshot.cacheMode = opts.cache;
-            snapshot.cacheRootDir = cacheRoot(projectRoot, opts);
-          }
-          if (fileReport) {
-            fileReport.cached = allFiles.size;
-          }
-          if (timings) timings.graphMs = 0;
-          await writeIndexManifestSnapshot({
-            projectRoot,
-            opts,
-            graphOptions,
-            files: new Map(Object.entries(trackedEntries)),
-            timings,
-            manifestReport,
-            ...(manifest.symlinkDirectories !== undefined ? { symlinkDirectories: manifest.symlinkDirectories } : {}),
-          });
-          if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
-          completeCheckProgress(allFiles.size);
-          if (report) {
-            if (snapshotLoad.analysisReport?.backend) {
-              report.backend = snapshotLoad.analysisReport.backend;
-            }
-            if (snapshotLoad.analysisReport?.graph) {
-              report.graph = snapshotLoad.analysisReport.graph;
-            }
-            if (!report.backend) {
-              initNativeBackendReport(report);
-            }
-            snapshot.buildReport = report;
-          }
-          return snapshot;
-        }
+      const unchangedSnapshot = await reuseUnchangedSnapshot();
+      if (unchangedSnapshot) {
+        if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
+        completeCheckProgress(allFiles.size);
+        return unchangedSnapshot;
       }
       for (const file of allFiles) {
         if (changedFiles.has(file)) continue;

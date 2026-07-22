@@ -34,7 +34,7 @@ Net effect: `codegraph goto`, `codegraph refs`, and `codegraph impact` fully red
 
 ### F5: The existing snapshot fast path is real but discovery-gated
 
-Inside `buildProjectIndexIncremental()`, the "0 changed files" branch (build-index.ts:1039-1078) correctly skips graph reconstruction via `tryLoadProjectIndexSnapshot()`. This is Priority 7 from the prior plan and it works. But it only runs after `allFiles` has already been assembled from `opts.files` (the pre-scanned list from F1) unioned with manifest/git-diff data. The snapshot optimization saves graph-build time; it does not and cannot save discovery time, because discovery already happened one layer up.
+Inside `buildProjectIndexIncremental()`, the "0 changed files" branch correctly skips graph reconstruction via `tryLoadProjectIndexSnapshot()`. The warm Git-backed path now reaches that snapshot before worker setup, all-file content hashing, and manifest rewriting; `--cache-strict`, non-Git projects, untracked candidates, malformed snapshots, and manifests requiring path sanitization retain the exhaustive path. AgentSession also passes its manifest/Git reconciliation evidence into the indexer so one command does not run the same working-tree and untracked-file checks twice.
 
 ### F6: No cheap way to detect new untracked files exists yet
 
@@ -117,7 +117,7 @@ Risks:
 Validation:
 
 - [x] `npx vitest run tests/agent-session.test.ts tests/cache-invalidation.test.ts tests/incremental-plan.test.ts tests/git-diff-semantics.test.ts` — passing.
-- [x] Manual timing: representative AgentSession-backed commands (`orient`, `inspect`, `search`, and `symbols`) on an unchanged Git-backed repo no longer call `listProjectFiles`; direct CLI commands that use the incremental index path report cache validation first, then report build/update progress only when work is required.
+- [x] Manual timing: representative AgentSession-backed commands (`orient`, `inspect`, `search`, and `symbols`) on an unchanged Git-backed repo no longer call `listProjectFiles`; direct CLI commands that use the incremental index path report cache validation first, then report build/update progress only when work is required. Unchanged snapshot hits also skip all-file signature generation and do not rewrite the manifest.
 - [x] Manual correctness check: create an untracked file, run AgentSession-backed commands such as `search`/`orient`, confirm it is found without `--changed-since` — covered by the "finds a newly created untracked file" test in `tests/agent-session.test.ts`.
 
 ## Priority 3: Skip the Symlink-Directory Walk When There Are No Symlinks
