@@ -52,7 +52,7 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void): CliPr
 
   const render = (): void => {
     if (!active) return;
-    const action = mode === "build" ? "Building" : "Updating";
+    const action = progressAction(mode);
     const frame = SPINNER_FRAMES[frameIndex % SPINNER_FRAMES.length]!;
     frameIndex += 1;
     const count = total > 0 ? ` ${current}/${total} files` : "";
@@ -84,7 +84,7 @@ function createInteractiveProgressDisplay(write: (chunk: string) => void): CliPr
     active = false;
     stopInterval();
     clear();
-    const verb = mode === "build" ? "Built" : "Updated";
+    const verb = progressCompleteVerb(mode);
     const fileCount = update.total;
     const files = fileCount === 1 ? "file" : "files";
     const elapsed = update.elapsedMs === undefined ? "" : ` in ${formatDuration(update.elapsedMs)}`;
@@ -126,14 +126,14 @@ function createLogProgressDisplay(write: (chunk: string) => void): CliProgressDi
       if (update.phase === "start") {
         active = true;
         mode = update.mode ?? "build";
-        const action = mode === "build" ? "Building" : "Updating";
+        const action = progressAction(mode);
         write(`[Progress] ${action} project index.\n`);
         return;
       }
       if (update.phase === "complete") {
         if (!active) return;
         active = false;
-        const verb = mode === "build" ? "Built" : "Updated";
+        const verb = progressCompleteVerb(mode);
         const elapsed = update.elapsedMs === undefined ? "" : ` in ${formatDuration(update.elapsedMs)}`;
         write(`[Progress] ${verb} project index: ${update.total} files${elapsed}.\n`);
         return;
@@ -152,6 +152,18 @@ function createLogProgressDisplay(write: (chunk: string) => void): CliProgressDi
       active = false;
     },
   };
+}
+
+function progressAction(mode: NonNullable<ProgressUpdate["mode"]>): string {
+  if (mode === "build") return "Building";
+  if (mode === "update") return "Updating";
+  return "Checking";
+}
+
+function progressCompleteVerb(mode: NonNullable<ProgressUpdate["mode"]>): string {
+  if (mode === "build") return "Built";
+  if (mode === "update") return "Updated";
+  return "Checked";
 }
 
 function formatDuration(elapsedMs: number): string {

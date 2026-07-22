@@ -894,7 +894,34 @@ export async function buildProjectIndexIncremental(
   if (strictIncremental && graphOptions.fast) graphOptions.fast = false;
   const { normalizedProjectRoot, report, timings, totalStart, cacheMode, cacheEnabled, onFallbackImportExtraction } =
     createIndexBuildRunState(projectRoot, opts, graphOptions);
+  let checkProgressActive = false;
+  const startCheckProgress = (): void => {
+    if (checkProgressActive) return;
+    checkProgressActive = true;
+    opts?.onProgress?.({
+      type: "progress",
+      phase: "start",
+      mode: "check",
+      message: "Checking project index",
+      current: 0,
+      total: 0,
+    });
+  };
+  const completeCheckProgress = (total: number): void => {
+    if (!checkProgressActive) return;
+    checkProgressActive = false;
+    opts?.onProgress?.({
+      type: "progress",
+      phase: "complete",
+      mode: "check",
+      message: "Checked project index",
+      current: total,
+      total,
+      elapsedMs: performance.now() - totalStart,
+    });
+  };
   try {
+    startCheckProgress();
     const manifestStart = performance.now();
     const manifest = await loadManifest(projectRoot, opts);
     if (timings) timings.manifestMs = Math.round(performance.now() - manifestStart);
@@ -1018,6 +1045,7 @@ export async function buildProjectIndexIncremental(
     const workspaceConfig = await loadWorkspaceConfig(projectRoot);
     const dependentFilesOfDeletedTracked = collectDeletedTrackedFileDependents(trackedEntries, deletedTrackedFiles);
     if (allFiles.size === 0) {
+      completeCheckProgress(0);
       await writeIndexManifestSnapshot({
         projectRoot,
         opts,
@@ -1127,6 +1155,7 @@ export async function buildProjectIndexIncremental(
             ...(manifest.symlinkDirectories !== undefined ? { symlinkDirectories: manifest.symlinkDirectories } : {}),
           });
           if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
+          completeCheckProgress(allFiles.size);
           if (report) {
             if (snapshotLoad.analysisReport?.backend) {
               report.backend = snapshotLoad.analysisReport.backend;
@@ -1294,6 +1323,8 @@ export async function buildProjectIndexIncremental(
       await writeProjectIndexSnapshot(projectRoot, opts, index, projectSnapshotFilesSignature(manifestEntries));
       if (updateStartedAt !== undefined) {
         emitIndexLifecycleProgress(opts, "complete", "update", index.byFile.size, performance.now() - updateStartedAt);
+      } else {
+        completeCheckProgress(allFiles.size);
       }
       return index;
     } finally {

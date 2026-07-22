@@ -102,6 +102,33 @@ describe("CLI index progress", () => {
     expect(output).not.toContain("\r");
   });
 
+  it("renders truthful index-check progress for warm cache validation", () => {
+    const chunks: string[] = [];
+    const display = createCliProgressDisplay({ presentation: "log", write: (chunk) => chunks.push(chunk) });
+
+    display.update({
+      type: "progress",
+      phase: "start",
+      mode: "check",
+      message: "Checking project index",
+      current: 0,
+      total: 0,
+    });
+    display.update({
+      type: "progress",
+      phase: "complete",
+      mode: "check",
+      message: "Checked project index",
+      current: 2,
+      total: 2,
+      elapsedMs: 125,
+    });
+
+    expect(chunks.join("")).toBe(
+      "[Progress] Checking project index.\n[Progress] Checked project index: 2 files in 125ms.\n",
+    );
+  });
+
   it("clears an active interactive display when the CLI runtime fails", async () => {
     const chunks: string[] = [];
 
@@ -163,7 +190,7 @@ describe("CLI index progress", () => {
     }
   });
 
-  it("waits for real index progress instead of speculative preparation", async () => {
+  it("does not claim index work while project config loading is delayed", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-config-progress-"));
     await fsp.writeFile(path.join(root, "main.ts"), "export const value = 1;\n", "utf8");
     const enteredConfigLoad = Promise.withResolvers<void>();
@@ -323,7 +350,7 @@ describe("CLI index progress", () => {
     }
   });
 
-  it("keeps warm cache hits quiet for representative index-backed commands", async () => {
+  it("reports index checks without build/update progress for representative warm cache hits", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-warm-progress-"));
     const file = path.join(root, "main.ts");
     await fsp.writeFile(file, "export const value = 1;\n", "utf8");
@@ -344,6 +371,8 @@ describe("CLI index progress", () => {
       for (const command of commands) {
         const cached = await captureCli(command, { progressPreparationDelayMs: 0 });
         expect(() => JSON.parse(cached.stdout)).not.toThrow();
+        expect(cached.stderr, command.join(" ")).toContain("Checking project index");
+        expect(cached.stderr, command.join(" ")).toContain("Checked project index");
         expect(cached.stderr, command.join(" ")).not.toContain("Preparing project index");
         expect(cached.stderr, command.join(" ")).not.toContain("Updating project index");
         expect(cached.stderr, command.join(" ")).not.toContain("Building project index");
@@ -353,7 +382,7 @@ describe("CLI index progress", () => {
     }
   });
 
-  it("keeps a CLI cache hit quiet and reports a stale-index update", async () => {
+  it("reports a warm cache check and a stale-index update", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-update-progress-"));
     const file = path.join(root, "main.ts");
     const command = ["inspect", "--root", root, "--cache", "disk"];
@@ -362,14 +391,17 @@ describe("CLI index progress", () => {
     try {
       await buildProjectIndex(root, { cache: "disk" });
 
-      // A warm cache hit should not emit progress until the indexer has real work to report.
+      // A warm cache hit reports cache validation without claiming build/update work.
       const cached = await captureCli(command, {
         stderrIsTTY: true,
         terminalSupportsControlSequences: true,
         progressPreparationDelayMs: 2000,
       });
       expect(() => JSON.parse(cached.stdout)).not.toThrow();
-      expect(cached.stderr).not.toContain("project index");
+      expect(cached.stderr).toContain("Checking project index");
+      expect(cached.stderr).toContain("Checked project index");
+      expect(cached.stderr).not.toContain("Building project index");
+      expect(cached.stderr).not.toContain("Updating project index");
 
       await fsp.writeFile(file, "export const changedValue = 22;\n", "utf8");
       const stale = await captureCli(command, {

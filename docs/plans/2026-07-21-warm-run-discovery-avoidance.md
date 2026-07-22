@@ -117,7 +117,7 @@ Risks:
 Validation:
 
 - [x] `npx vitest run tests/agent-session.test.ts tests/cache-invalidation.test.ts tests/incremental-plan.test.ts tests/git-diff-semantics.test.ts` — passing.
-- [x] Manual timing: representative AgentSession-backed commands (`orient`, `inspect`, `search`, and `symbols`) on an unchanged Git-backed repo no longer call `listProjectFiles`; direct CLI commands that use the incremental index path report only real build/update progress and stay quiet on warm cache hits.
+- [x] Manual timing: representative AgentSession-backed commands (`orient`, `inspect`, `search`, and `symbols`) on an unchanged Git-backed repo no longer call `listProjectFiles`; direct CLI commands that use the incremental index path report cache validation first, then report build/update progress only when work is required.
 - [x] Manual correctness check: create an untracked file, run AgentSession-backed commands such as `search`/`orient`, confirm it is found without `--changed-since` — covered by the "finds a newly created untracked file" test in `tests/agent-session.test.ts`.
 
 ## Priority 3: Skip the Symlink-Directory Walk When There Are No Symlinks
