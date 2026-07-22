@@ -167,10 +167,17 @@ export function canUseIncrementalDiscoveryFastPath(gitAvailable: boolean, cacheS
  * after a rebase or shallow-clone gc). Callers must fall back to a full
  * `listProjectFiles()` scan when this returns `null`.
  */
-export async function resolveIncrementalFileList(
+export type IncrementalFilePlan = {
+  files: string[];
+  manifestUpdatedAt: number;
+  workingTreeDiffFiles: string[];
+  untrackedFiles: string[];
+};
+
+export async function resolveIncrementalFilePlan(
   projectRoot: string,
   opts: BuildOptions | undefined,
-): Promise<string[] | null> {
+): Promise<IncrementalFilePlan | null> {
   const manifest = await loadManifest(projectRoot, opts);
   if (!manifest) return null;
   if (!manifest.buildOptions) return null;
@@ -197,11 +204,23 @@ export async function resolveIncrementalFileList(
     const files = new Set<string>(trackedFiles);
     for (const file of workingTreeDiffFiles) if (fs.existsSync(file)) files.add(file);
     for (const file of untrackedFiles) if (fs.existsSync(file)) files.add(file);
-    return Array.from(files).sort();
+    return {
+      files: Array.from(files).sort(),
+      manifestUpdatedAt: manifest.updatedAt,
+      workingTreeDiffFiles,
+      untrackedFiles,
+    };
   } catch {
     // Any failure here (stale/missing manifest commit, transient Git error, ...) means
     // the fast path cannot be trusted. Fall back to a full scan rather than risk an
     // incomplete or stale file list.
     return null;
   }
+}
+export async function resolveIncrementalFileList(
+  projectRoot: string,
+  opts: BuildOptions | undefined,
+): Promise<string[] | null> {
+  const plan = await resolveIncrementalFilePlan(projectRoot, opts);
+  return plan?.files ?? null;
 }

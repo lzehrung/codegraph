@@ -66,7 +66,7 @@ describe("Project Indexing", () => {
     }
   });
 
-  it("keeps snapshot hits quiet and reports stale-index updates", async () => {
+  it("reports snapshot checks and stale-index updates", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-incremental-progress-"));
     const file = path.join(root, "main.ts");
     const buildOptions = { cache: "disk" as const, cacheStrict: true };
@@ -88,7 +88,9 @@ describe("Project Indexing", () => {
         files: [file],
         onProgress: (update) => cachedUpdates.push(update),
       });
-      expect(cachedUpdates).toEqual([]);
+      expect(cachedUpdates).toHaveLength(2);
+      expect(cachedUpdates[0]).toMatchObject({ phase: "start", mode: "check", current: 0, total: 0 });
+      expect(cachedUpdates[1]).toMatchObject({ phase: "complete", mode: "check", current: 1, total: 1 });
 
       await fsp.rm(path.join(root, ".codegraph-cache", "index-v1", "project-index-snapshot.json"), {
         force: true,
@@ -99,7 +101,9 @@ describe("Project Indexing", () => {
         files: [file],
         onProgress: (update) => moduleCacheUpdates.push(update),
       });
-      expect(moduleCacheUpdates).toEqual([]);
+      expect(moduleCacheUpdates).toHaveLength(2);
+      expect(moduleCacheUpdates[0]).toMatchObject({ phase: "start", mode: "check", current: 0, total: 0 });
+      expect(moduleCacheUpdates[1]).toMatchObject({ phase: "complete", mode: "check", current: 1, total: 1 });
 
       await fsp.writeFile(file, "export const value = 2;\n", "utf8");
       const staleUpdates: ProgressUpdate[] = [];
@@ -108,7 +112,8 @@ describe("Project Indexing", () => {
         onProgress: (update) => staleUpdates.push(update),
       });
 
-      expect(staleUpdates[0]).toMatchObject({ phase: "start", mode: "update", current: 0, total: 1 });
+      expect(staleUpdates[0]).toMatchObject({ phase: "start", mode: "check", current: 0, total: 0 });
+      expect(staleUpdates.some((update) => update.phase === "start" && update.mode === "update")).toBe(true);
       expect(staleUpdates.at(-1)).toMatchObject({ phase: "complete", mode: "update", current: 1, total: 1 });
     } finally {
       await fsp.rm(root, { recursive: true, force: true });

@@ -19,7 +19,7 @@ export type ProgressUpdate = {
   current: number;
   total: number;
   phase?: "start" | "update" | "complete";
-  mode?: "build" | "update";
+  mode?: "build" | "update" | "check";
   elapsedMs?: number;
 };
 

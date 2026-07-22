@@ -159,6 +159,12 @@ export type IncrementalBuildOptions = BuildOptions & {
   files?: string[];
   /** @internal Treat `files` as the current project scope, not as caller-selected changed files. */
   filesAreProjectScope?: boolean;
+  /** @internal Manifest identity associated with precomputed reconciliation. */
+  reconciledManifestUpdatedAt?: number;
+  /** @internal Reuse working-tree reconciliation already performed for `files`. */
+  reconciledWorkingTreeDiffFiles?: string[];
+  /** @internal Reuse untracked-file reconciliation already performed for `files`. */
+  reconciledUntrackedFiles?: string[];
   changedSince?: string;
   gitBase?: string;
   gitHead?: string;

@@ -564,7 +564,7 @@ describe("Cache invalidation and strict hashing", () => {
     expect(report.files?.cached).toBe(2);
     expect(report.timings?.manifestMs).toEqual(expect.any(Number));
     expect(report.timings?.graphMs).toEqual(expect.any(Number));
-    expect(report.timings?.writeManifestMs).toEqual(expect.any(Number));
+    expect(report.timings?.writeManifestMs).toBeUndefined();
     expect(report.timings?.totalMs).toEqual(expect.any(Number));
   });
 
@@ -572,6 +572,9 @@ describe("Cache invalidation and strict hashing", () => {
     const root = await mkTmpDir("dg-incremental-project-snapshot-");
     const filePath = path.join(root, "foo.ts");
     await fsp.writeFile(filePath, `export const snap = 1;\n`, "utf8");
+    runGit(root, ["init"]);
+    runGit(root, ["add", "foo.ts"]);
+    runGit(root, ["commit", "-m", "initial"]);
 
     await buildProjectIndex(root, { threads: 2, cache: "disk" });
     await expect(fsp.stat(projectSnapshotPathFor(root))).resolves.toBeTruthy();
@@ -583,7 +586,9 @@ describe("Cache invalidation and strict hashing", () => {
       db.close();
     }
 
+    const manifestBefore = await fsp.readFile(manifestPathFor(root), "utf8");
     const prepSpy = vi.spyOn(filePrep, "prepareSourceInput");
+    const signatureSpy = vi.spyOn(buildCache, "fileSignature");
     try {
       const incremental = await buildProjectIndexIncremental(root, {
         threads: 2,
@@ -591,10 +596,13 @@ describe("Cache invalidation and strict hashing", () => {
       });
 
       expect(prepSpy).not.toHaveBeenCalled();
+      expect(signatureSpy).not.toHaveBeenCalled();
+      expect(await fsp.readFile(manifestPathFor(root), "utf8")).toBe(manifestBefore);
       const moduleIndex = incremental.byFile.get(normalize(filePath));
       expect(moduleIndex?.locals.some((local) => local.localName === "snap")).toBe(true);
     } finally {
       prepSpy.mockRestore();
+      signatureSpy.mockRestore();
     }
   });
 

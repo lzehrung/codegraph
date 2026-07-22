@@ -1,7 +1,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { buildProjectIndexIncremental } from "../indexer/build-index.js";
-import { resolveIncrementalFileList } from "../indexer/incremental-plan.js";
+import { resolveIncrementalFilePlan, type IncrementalFilePlan } from "../indexer/incremental-plan.js";
 import type { BuildOptions, BuildReport, IncrementalBuildOptions, ProjectIndex } from "../indexer/types.js";
 import { buildSymbolGraphDetailed } from "../graphs/symbol-graph-detailed.js";
 import { type SymbolGraph } from "../graphs/symbol-graph.js";
@@ -86,6 +86,11 @@ type AgentDiscoverySettings = {
   discoveryOptions?: ProjectFileDiscoveryOptions;
 };
 
+type AgentSessionFilePlan = AgentDiscoverySettings & {
+  files: string[];
+  incrementalPlan?: IncrementalFilePlan;
+};
+
 type AgentFreshnessDiff = {
   changedFiles: string[];
   changedBytes: number;
@@ -102,19 +107,29 @@ async function resolveAgentDiscoverySettings(options: AgentSessionOptions): Prom
   return discoveryOptions ? { discoveryOptions } : {};
 }
 
-export async function listAgentSessionFiles(options: AgentSessionOptions): Promise<string[]> {
+async function resolveAgentSessionFilePlan(options: AgentSessionOptions): Promise<AgentSessionFilePlan> {
   const { discoveryOptions } = await resolveAgentDiscoverySettings(options);
   // Prefer the manifest-plus-Git reconciliation over a full recursive scan whenever it
-  // can be trusted (see resolveIncrementalFileList's fallback conditions). This is what
-  // lets every agent/MCP command built on this session skip walking the whole project
-  // tree on warm, unchanged, Git-backed runs.
+  // can be trusted. Preserve its changed/untracked evidence so the indexer does not
+  // repeat the same Git subprocesses immediately afterward.
   const incrementalOptions: BuildOptions = {
     ...options.buildOptions,
     ...(discoveryOptions ? { discovery: discoveryOptions } : {}),
   };
-  const incrementalFiles = await resolveIncrementalFileList(options.root, incrementalOptions);
-  if (incrementalFiles) return incrementalFiles;
-  return await listProjectFiles(options.root, undefined, discoveryOptions);
+  const incrementalPlan = await resolveIncrementalFilePlan(options.root, incrementalOptions);
+  if (incrementalPlan) {
+    return {
+      files: incrementalPlan.files,
+      incrementalPlan,
+      ...(discoveryOptions ? { discoveryOptions } : {}),
+    };
+  }
+  const files = await listProjectFiles(options.root, undefined, discoveryOptions);
+  return { files, ...(discoveryOptions ? { discoveryOptions } : {}) };
+}
+
+export async function listAgentSessionFiles(options: AgentSessionOptions): Promise<string[]> {
+  return (await resolveAgentSessionFilePlan(options)).files;
 }
 
 function isMissingStatRace(error: unknown): boolean {
@@ -185,6 +200,7 @@ function diffAgentFileSignatures(
 }
 
 export function createAgentSession(options: AgentSessionOptions): AgentSession {
+  let cachedFilePlan: Promise<AgentSessionFilePlan> | undefined;
   let cachedFiles: Promise<string[]> | undefined;
   let cachedBase: Promise<AgentProjectBaseSnapshot> | undefined;
   let cachedSymbolGraph: Promise<SymbolGraph> | undefined;
@@ -193,6 +209,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
   let cachedFileSignatures: Map<string, AgentFileSignature> | undefined;
 
   const invalidate = (): void => {
+    cachedFilePlan = undefined;
     cachedFiles = undefined;
     cachedBase = undefined;
     cachedSymbolGraph = undefined;
@@ -201,9 +218,19 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     cachedFileSignatures = undefined;
   };
 
+  const loadFilePlan = async (): Promise<AgentSessionFilePlan> => {
+    if (cachedFilePlan) return cachedFilePlan;
+    const loadPromise = resolveAgentSessionFilePlan(options);
+    cachedFilePlan = loadPromise;
+    loadPromise.catch(() => {
+      if (cachedFilePlan === loadPromise) cachedFilePlan = undefined;
+    });
+    return loadPromise;
+  };
+
   const loadFiles = async (): Promise<string[]> => {
     if (cachedFiles) return cachedFiles;
-    const loadPromise = listAgentSessionFiles(options);
+    const loadPromise = loadFilePlan().then((plan) => plan.files);
     cachedFiles = loadPromise;
     loadPromise.catch(() => {
       if (cachedFiles === loadPromise) cachedFiles = undefined;
@@ -214,8 +241,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
   const loadBase = async (): Promise<AgentProjectBaseSnapshot> => {
     if (cachedBase) return cachedBase;
     const loadPromise = (async () => {
-      const { discoveryOptions } = await resolveAgentDiscoverySettings(options);
-      const files = await loadFiles();
+      const { files, discoveryOptions, incrementalPlan } = await loadFilePlan();
       if (options.freshness?.policy !== "manual") {
         cachedFileSignatures = await collectAgentFileSignatures(files);
       }
@@ -225,6 +251,13 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
         keepParsed: options.buildOptions?.keepParsed ?? true,
         files,
         filesAreProjectScope: true,
+        ...(incrementalPlan
+          ? {
+              reconciledManifestUpdatedAt: incrementalPlan.manifestUpdatedAt,
+              reconciledWorkingTreeDiffFiles: incrementalPlan.workingTreeDiffFiles,
+              reconciledUntrackedFiles: incrementalPlan.untrackedFiles,
+            }
+          : {}),
         ...(discoveryOptions ? { discovery: discoveryOptions } : {}),
       };
       if (options.buildOptions?.useNativeWorkers === undefined && files.length >= NATIVE_WORKER_AUTO_FILE_THRESHOLD) {

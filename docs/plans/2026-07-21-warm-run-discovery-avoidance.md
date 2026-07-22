@@ -34,7 +34,7 @@ Net effect: `codegraph goto`, `codegraph refs`, and `codegraph impact` fully red
 
 ### F5: The existing snapshot fast path is real but discovery-gated
 
-Inside `buildProjectIndexIncremental()`, the "0 changed files" branch (build-index.ts:1039-1078) correctly skips graph reconstruction via `tryLoadProjectIndexSnapshot()`. This is Priority 7 from the prior plan and it works. But it only runs after `allFiles` has already been assembled from `opts.files` (the pre-scanned list from F1) unioned with manifest/git-diff data. The snapshot optimization saves graph-build time; it does not and cannot save discovery time, because discovery already happened one layer up.
+Inside `buildProjectIndexIncremental()`, the "0 changed files" branch correctly skips graph reconstruction via `tryLoadProjectIndexSnapshot()`. The warm Git-backed path now reaches that snapshot before worker setup, all-file content hashing, and manifest rewriting; `--cache-strict`, non-Git projects, untracked candidates, malformed snapshots, and manifests requiring path sanitization retain the exhaustive path. AgentSession also passes its manifest/Git reconciliation evidence into the indexer so one command does not run the same working-tree and untracked-file checks twice.
 
 ### F6: No cheap way to detect new untracked files exists yet
 
@@ -117,7 +117,7 @@ Risks:
 Validation:
 
 - [x] `npx vitest run tests/agent-session.test.ts tests/cache-invalidation.test.ts tests/incremental-plan.test.ts tests/git-diff-semantics.test.ts` — passing.
-- [x] Manual timing: representative AgentSession-backed commands (`orient`, `inspect`, `search`, and `symbols`) on an unchanged Git-backed repo no longer call `listProjectFiles`; direct CLI commands that use the incremental index path report only real build/update progress and stay quiet on warm cache hits.
+- [x] Manual timing: representative AgentSession-backed commands (`orient`, `inspect`, `search`, and `symbols`) on an unchanged Git-backed repo no longer call `listProjectFiles`; direct CLI commands that use the incremental index path report cache validation first, then report build/update progress only when work is required. Unchanged snapshot hits also skip all-file signature generation and do not rewrite the manifest.
 - [x] Manual correctness check: create an untracked file, run AgentSession-backed commands such as `search`/`orient`, confirm it is found without `--changed-since` — covered by the "finds a newly created untracked file" test in `tests/agent-session.test.ts`.
 
 ## Priority 3: Skip the Symlink-Directory Walk When There Are No Symlinks
@@ -192,16 +192,75 @@ Notes for whoever picks this up:
 - `docs/cli.md` and `docs/agent-workflows.md` previously scoped the disk-cache-by-default claim to "agent commands" only. Priority 1 makes that statement true for `goto`/`refs`/`impact`/whole-project `graph`/`index` too; both docs are updated in this change to state that broader scope precisely. `codegraph-skill/codegraph/SKILL.md` did not make this claim in the first place (checked; no correction needed there).
 - The manifest schema change for `symlinkDirectories` (Priority 3) did not need an explicit migration function: it is a plain optional JSON field, and a missing field on an older manifest is indistinguishable in code from "not yet known," which is exactly the fallback both call sites already needed to handle. A regression test still proves an old-schema manifest loads and rebuilds correctly, per the spirit of `AGENTS.md`'s schema-migration rule even though the SQLite `ALTER TABLE` mechanism it describes does not apply to a JSON manifest file.
 
-## Other Opportunities Observed (Not Scoped Into a Priority Above)
+## Follow-up Whole-Repository Performance Audit
 
-Noted during this investigation; each needs its own scoping/benchmark before becoming a priority.
+Measured on this repository after the warm-run fixes above, using the built CLI on Windows. Exact wall time varies with cache state, but the phase reports and repeated-process comparisons identify the same dominant work.
 
-- **`getGitBlobHashes()` still reads every tracked file's content on every incremental run** (`src/util/git.ts:113-182`, via `git hash-object --stdin-paths`). It is native and batched (Priority 8 from the prior plan is accurate about that), but it is still O(files) content reads per run. A stat-based pre-filter (compare mtime/size against the git index before falling back to `hash-object` for files that look unchanged) could shrink this further on large repos — worth a benchmark before committing to it.
-- **`checkFreshness()`'s `"check"` policy is mtime+size only, not content-hash.** A file rewritten with identical size and mtime (e.g. via `touch -r` after an external tool restores content) would not be detected as stale. This is a reasonable tradeoff for a fast check, but should be called out explicitly in `docs/mcp.md`/`docs/agent-workflows.md` as a known limitation rather than left implicit.
-- **No visibility into which cache tier actually served a given run.** Add a field to `--report`/`status --json` (or a new `doctor` line) showing whether a run used the git-status fast path, the full scan, or the project-index snapshot skip. This would make future "why is this still slow" reports self-diagnosing instead of requiring code archaeology like this investigation.
-- **`buildProjectIndexWithManifestOptions()` runs `listProjectFiles()` and `discoverProjectFiles()` as two independent tree walks in parallel** (build-index.ts:789-797). `discoverProjectFiles()` matches a narrow lockfile/manifest pattern set, so it is likely cheap relative to the main walk, but this has not been measured. Worth a quick benchmark before assuming it needs its own fix; if it is cheap, leave it alone rather than adding complexity for no measured win.
-- **Close out the two unchecked validation items in Priority 7 of `2026-06-06-performance-and-cache-opportunities.md`** (warm-cache parity test, before/after `orient` timing) while working in this area, since they are directly adjacent and currently unverified despite the rest of that priority being marked complete.
-- **`AgentSession.loadBase()` unconditionally sets `opts.report` on every `buildProjectIndexIncremental()` call** (`src/agent/session.ts:230-231`, pre-existing, not part of this plan). Inside `buildProjectIndexIncremental()`, `if (explicitFileSet.size && (!explicitFilesCoverAllFiles || report)) { explicitFileSet.forEach(markAsChanged); }` (build-index.ts) means that whenever a `report` is present, every file in the explicit file list is marked "changed" and reprocessed, regardless of whether its content actually changed. This is likely intentional (a report needs accurate per-file cached-vs-parsed categorization, which a skipped snapshot load cannot provide), but it means the "0 changed files -> reuse snapshot" fast path (2026-06-06 Priority 7) can never engage for `orient`/`search`/`explore`/any other `AgentSession`-backed command, only for callers that omit `report`. Confirmed by direct measurement on this repo: `goto` (migrated in this plan's Priority 1, no `report`) went from 2.8s cold to 0.775s warm; `orient` (via `AgentSession`, always sets `report`) stayed around 10s warm because it re-parses every tracked file on every run regardless of this plan's changes. This plan's scan-avoidance work is unaffected and independently verified (see the "no full scan" spy assertions throughout the test files touched here), but the _content re-parse_ cost for `AgentSession`-backed commands specifically remains a separate, larger, pre-existing ceiling worth its own investigation: either make report generation compatible with the snapshot fast path (e.g., derive per-file categorization from the snapshot's own manifest-entry diff instead of forcing a real reprocess), or make `report` optional/lazy for `AgentSession` callers that do not actually consume it.
+### Rank 1: Stop Review Ranges from Re-invalidating the Current Index
+
+Evidence:
+
+- Repeating `review --base HEAD~1 --head HEAD --summary --json` took 43.6s with the current default. Its report attributed 15.2s to indexing and showed all 662 project files parsed again.
+- Adding `--cache disk` reduced the repeat to 19.8s, but indexing still took 11.6s and reparsed 349 files. The reviewed range touched central files, so transitive dependent expansion made the explicit range much larger than the actual diff.
+- The remaining reported review work was dominated by targeted duplicate-context collection. A second CLI-only duplicate summary added about 1.8s after `buildReviewReport()` returned.
+
+Recommended change:
+
+- Default the CLI `review` command to disk cache, matching the other index-backed agent commands.
+- Keep review diff selection separate from current-index freshness. `gitBase`, `gitHead`, `changedSince`, and review-selected `files` choose report contents; they should not be forwarded as incremental index invalidation inputs after `collectReviewChanges()` has already consumed them.
+- Reuse one collected duplicate-unit/bucket set for review tasks and the human duplicate summary instead of preparing duplicate candidates twice.
+
+Risk and proof:
+
+- Small-to-medium change, high payoff. Add a Git-backed regression that runs the same review twice and proves the second index report parses zero files while returning the same changed-file, symbol, graph-delta, candidate-test, and duplicate-task results.
+
+### Rank 2: Mark Inspect and Hotspot File Lists as Scope, Not Changes
+
+Evidence:
+
+- Warm `inspect --root . ./src --limit 20 --json` without `--duplicates` took 11-13s.
+- `buildScopedReportGraph()` passes the resolved 345-file scope through `files`, so the incremental builder treats those files as caller-selected changes. A direct run against the same warm manifest reported 988 changed and parsed files and took 16.3s.
+- Passing the same list as `filesAreProjectScope: true` reused the snapshot in 0.29s in the direct index measurement.
+
+Recommended change:
+
+- Set `filesAreProjectScope: true` in the disk-cache branch of `buildScopedReportGraph()`. Keep `restrictGraphToIncludeRoots()` as the output boundary.
+- Cover both `inspect` and `hotspots`, including child include roots, deleted tracked files, untracked additions, and cache/report mode.
+
+Risk and proof:
+
+- Small, low-risk change with a roughly 10s warm-run gain on this repo. Existing inspect progress tests already exercise warm and stale paths; add an option-shape assertion plus a real warm child-root regression.
+
+### Rank 3: Persist the Detailed Symbol Graph for One-Shot Navigation
+
+Evidence:
+
+- A warm base-index load completed in roughly 0.4-0.5s inside one process, but adding eager detailed-symbol loading cost about 7.4s.
+- One-shot `search --mode symbol` and hybrid search took about 7-8s, while text-only search was much cheaper. `buildSymbolGraphDetailed()` rereads and reparses supported source files because the project-index snapshot stores module indexes and the file graph, not detailed body/member edges.
+
+Recommended change:
+
+- Add a versioned detailed-symbol-graph sidecar keyed by the same project snapshot identity and graph/native options. Write atomically and load only for commands that require detailed edges.
+- Prefer immutable snapshot replacement over serializing syntax trees. Invalidate the sidecar whenever the project snapshot signature changes.
+
+Risk and proof:
+
+- Medium effort and schema/compatibility risk, but the largest remaining one-shot search/navigation gain. Prove cold/warm parity for goto, refs, symbol search, hybrid search, and inheritance/member edges before enabling it by default.
+
+### Lower-Priority Opportunities
+
+- `checkFreshness()` still stats the resolved file list under automatic freshness policies. The measured full-list signature pass was tens of milliseconds, so narrowing it to Git deltas is not currently worth extra state complexity.
+- `getGitBlobHashes()` remains O(files) on exhaustive rebuild/verification paths, but the clean Git fast path now returns before it. Optimize this only with a benchmark dominated by hash time.
+- Non-Git directory-mtime discovery remains Priority 5. It needs a periodic verification fallback and a manifest migration; do not trade correctness for a speculative warm-run win.
+- Add report fields naming the path used: snapshot hit, Git reconciliation, exhaustive scan, module-cache hits, and detailed-graph cache hit. This is low runtime risk and would make future regressions self-diagnosing.
+- `buildProjectIndexWithManifestOptions()` still starts project-file and metadata discovery separately on cold/full builds. Measure those walks independently before combining them.
+
+### Explicitly Deprioritized After Measurement
+
+- Manifest JSON parsing: about 3-7ms on the current multi-megabyte manifest.
+- Manifest/snapshot writing: about 45-120ms when a write is actually required; clean warm runs now skip it.
+- Bloom-filter creation in synthetic 300- and 500-file builds: no repeatable material wall-time difference. Persistence remains useful only if a source-reread profile proves otherwise.
+- CLI import dispatch: a minimal Node child process and `codegraph --version` both measured around 0.37-0.40s on this workstation, so the observed floor is process launch rather than Codegraph command-module loading.
 
 ## Suggested Execution Order
 
