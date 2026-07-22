@@ -8,6 +8,7 @@ import { buildProjectIndex } from "../src/index.js";
 import * as configModule from "../src/config.js";
 import * as mcpServer from "../src/mcp/server.js";
 import { captureCli } from "./helpers/cli.js";
+import { runGit } from "./helpers/git.js";
 
 describe("CLI index progress", () => {
   it.each([
@@ -381,6 +382,107 @@ describe("CLI index progress", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  it.each(["inspect", "hotspots"] as const)(
+    "%s reuses a Git-backed child-root snapshot across unchanged and native-runtime checks",
+    async (command) => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), `codegraph-cli-${command}-child-snapshot-`));
+      const srcDir = path.join(root, "src");
+      const sourceFile = path.join(srcDir, "a.ts");
+      await fsp.mkdir(srcDir, { recursive: true });
+      await fsp.writeFile(sourceFile, "import { b } from './b';\nexport const a = b;\n", "utf8");
+      await fsp.writeFile(path.join(srcDir, "b.ts"), "export const b = 1;\n", "utf8");
+      await fsp.writeFile(
+        path.join(root, "outside.ts"),
+        "import { a } from './src/a';\nexport const outside = a;\n",
+        "utf8",
+      );
+      runGit(root, ["init"]);
+      runGit(root, ["add", "."]);
+      runGit(root, ["commit", "-m", "initial"]);
+
+      const commandArgs = (cache: "off" | "disk", progress: boolean, nativeMode?: "off"): string[] => {
+        const args = [command, "--root", root, srcDir, "--limit", "10", "--cache", cache, "--json"];
+        if (progress) args.push("--progress");
+        if (nativeMode) args.push("--native", nativeMode);
+        return args;
+      };
+      const readScopedResult = (stdout: string): unknown => {
+        if (command === "hotspots") {
+          return JSON.parse(stdout) as Array<{ file: string; fanIn: number; fanOut: number; score: number }>;
+        }
+        const report = JSON.parse(stdout) as {
+          files: { total: number; byLanguage: Record<string, number> };
+          hotspots: Array<{ file: string; fanIn: number; fanOut: number; score: number }>;
+          unresolved: { total: number; top: Array<{ name: string; importerCount: number }> };
+          cycles: { total: number; top: Array<{ files: string[]; priorityScore: number; size: number }> };
+        };
+        return {
+          files: report.files,
+          hotspots: report.hotspots,
+          unresolved: report.unresolved,
+          cycles: report.cycles,
+        };
+      };
+      const expectSnapshotOnlyProgress = (stderr: string): void => {
+        expect(stderr).toContain("Checking project index");
+        expect(stderr).toContain("Checked project index");
+        expect(stderr).not.toContain("files processed");
+        expect(stderr).not.toContain("Updating project index");
+        expect(stderr).not.toContain("Building project index");
+      };
+
+      try {
+        await buildProjectIndex(root, { cache: "disk" });
+        const cold = await captureCli(commandArgs("off", false));
+        await buildProjectIndex(root, { cache: "disk" });
+
+        const firstWarm = await captureCli(commandArgs("disk", true), { progressPreparationDelayMs: 0 });
+        const secondWarm = await captureCli(commandArgs("disk", true), { progressPreparationDelayMs: 0 });
+        expectSnapshotOnlyProgress(firstWarm.stderr);
+        expectSnapshotOnlyProgress(secondWarm.stderr);
+
+        const coldScoped = readScopedResult(cold.stdout);
+        const warmScoped = readScopedResult(firstWarm.stdout);
+        expect(warmScoped).toEqual(coldScoped);
+        expect(readScopedResult(secondWarm.stdout)).toEqual(warmScoped);
+        const manifestPath = path.join(root, ".codegraph-cache", "index-v1", "manifest.json");
+        const legacyManifest = JSON.parse(await fsp.readFile(manifestPath, "utf8")) as {
+          buildOptions?: { nativeRuntimeFingerprint?: string };
+        };
+        if (!legacyManifest.buildOptions) throw new Error("Expected persisted build options");
+        delete legacyManifest.buildOptions.nativeRuntimeFingerprint;
+        await fsp.writeFile(manifestPath, JSON.stringify(legacyManifest), "utf8");
+        const migrated = await captureCli(commandArgs("disk", true), { progressPreparationDelayMs: 0 });
+        expect(migrated.stderr).toContain("Building project index");
+        expect(migrated.stderr).toContain("Built project index");
+        expect(readScopedResult(migrated.stdout)).toEqual(warmScoped);
+
+        const switched = await captureCli(commandArgs("disk", true, "off"), { progressPreparationDelayMs: 0 });
+        expect(switched.stderr).toContain("Building project index");
+        expect(switched.stderr).toContain("Built project index");
+        const switchedScoped = readScopedResult(switched.stdout);
+        const nativeOffCold = await captureCli(commandArgs("off", false, "off"));
+        expect(switchedScoped).toEqual(readScopedResult(nativeOffCold.stdout));
+        await buildProjectIndex(root, { cache: "disk", native: "off" });
+        const secondNativeOff = await captureCli(commandArgs("disk", true, "off"), { progressPreparationDelayMs: 0 });
+        expectSnapshotOnlyProgress(secondNativeOff.stderr);
+        expect(readScopedResult(secondNativeOff.stdout)).toEqual(switchedScoped);
+
+        await fsp.writeFile(sourceFile, "export const a = 2;\n", "utf8");
+        const stale = await captureCli(commandArgs("disk", true, "off"), { progressPreparationDelayMs: 0 });
+        expect(stale.stderr).toContain("Updating project index");
+        expect(stale.stderr).toContain("Updated project index");
+        const staleScoped = readScopedResult(stale.stdout);
+        expect(staleScoped).not.toEqual(switchedScoped);
+
+        const changedCold = await captureCli(commandArgs("off", false, "off"));
+        expect(staleScoped).toEqual(readScopedResult(changedCold.stdout));
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("reports a warm cache check and a stale-index update", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-update-progress-"));

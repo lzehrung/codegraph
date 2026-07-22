@@ -14,9 +14,19 @@ const localNativePackageRoot = path.resolve(
 const NATIVE_REQUIRED_ERROR_PREFIX = "native tree-sitter required by explicit option but unavailable";
 
 let bindingState: NativeBindingState | undefined;
+let loadedRuntimeFingerprint:
+  | {
+      state: NativeBindingState;
+      requestedMode: NativeRuntimeMode;
+      envDisabled: boolean;
+      value: string;
+    }
+  | undefined;
+const disabledRuntimeFingerprints = new Map<string, string>();
 
 export function __resetNativeTreeSitterBindingForTests(): void {
   bindingState = undefined;
+  loadedRuntimeFingerprint = undefined;
 }
 
 export function isNativeTreeSitterDisabledByEnv(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -75,6 +85,65 @@ export function resolveNativeBindingState(
     };
   }
   return loadBinding();
+}
+function serializeNativeRuntimeFingerprint(
+  requestedMode: NativeRuntimeMode,
+  envDisabled: boolean,
+  state: NativeBindingState,
+): string {
+  const supportedLanguageIds = state.loaded ? Array.from(state.supportedLanguageIds).sort() : [];
+  const origin = state.origin;
+  return JSON.stringify({
+    version: 1,
+    requestedMode,
+    envDisabled,
+    available: state.loaded,
+    supportedLanguageIds,
+    ...(origin
+      ? {
+          origin: {
+            mode: origin.mode,
+            packageName: origin.packageName,
+            ...(origin.packageVersion ? { packageVersion: origin.packageVersion } : {}),
+            ...(origin.target ? { target: origin.target } : {}),
+            ...(origin.sourcePath ? { sourcePath: origin.sourcePath } : {}),
+            ...(origin.loadedPath ? { loadedPath: origin.loadedPath } : {}),
+            ...(origin.cacheKey ? { cacheKey: origin.cacheKey } : {}),
+            ...(origin.sha256 ? { sha256: origin.sha256 } : {}),
+          },
+        }
+      : {}),
+  });
+}
+
+export function getNativeRuntimeFingerprint(mode?: NativeRuntimeMode, env: NodeJS.ProcessEnv = process.env): string {
+  const requestedMode = normalizeNativeRuntimeMode(mode);
+  const envDisabled = isNativeTreeSitterDisabledByEnv(env);
+  const runtimeDisabled = requestedMode === "off" || (requestedMode === "auto" && envDisabled);
+  if (runtimeDisabled) {
+    const key = `${requestedMode}:${envDisabled}`;
+    const cached = disabledRuntimeFingerprints.get(key);
+    if (cached) return cached;
+    const fingerprint = serializeNativeRuntimeFingerprint(
+      requestedMode,
+      envDisabled,
+      resolveNativeBindingState(mode, env),
+    );
+    disabledRuntimeFingerprints.set(key, fingerprint);
+    return fingerprint;
+  }
+
+  const state = loadBinding();
+  if (
+    loadedRuntimeFingerprint?.state === state &&
+    loadedRuntimeFingerprint.requestedMode === requestedMode &&
+    loadedRuntimeFingerprint.envDisabled === envDisabled
+  ) {
+    return loadedRuntimeFingerprint.value;
+  }
+  const value = serializeNativeRuntimeFingerprint(requestedMode, envDisabled, state);
+  loadedRuntimeFingerprint = { state, requestedMode, envDisabled, value };
+  return value;
 }
 
 export function isNativeTreeSitterAvailable(mode?: NativeRuntimeMode): boolean {

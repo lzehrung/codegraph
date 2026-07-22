@@ -89,6 +89,8 @@ The independent `--max-references`, `--max-callers`, and `--max-hierarchy` bound
 
 `inspect --duplicates` adds the slower bounded duplicate summary. Treat duplicate matches, candidate tests, and call-compatibility hints as review leads, not proof.
 
+`review` defaults to the disk cache while `--cache off|memory|disk` remains explicit. Its diff range selects review changes independently from the complete current-project index, so repeated unchanged ranges can reuse a warm manifest without narrowing graph, symbol, candidate-test, or duplicate context.
+
 ## Choose Output by Consumer
 
 - Human or model reading one result: use `--pretty` or `--summary`.

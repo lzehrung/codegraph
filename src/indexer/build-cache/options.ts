@@ -2,6 +2,7 @@ import path from "node:path";
 import type { GraphBuildOptions } from "../../graphs/types.js";
 import { normalizePath, normalizeResolutionHints } from "../../util/paths.js";
 import { type ProjectFileDiscoveryOptions } from "../../util/projectFiles.js";
+import { getNativeRuntimeFingerprint } from "../../native/treeSitterNative.js";
 import type { BuildOptions } from "../types.js";
 
 export type ManifestBuildOptions = {
@@ -10,6 +11,7 @@ export type ManifestBuildOptions = {
   useBloomFilters?: boolean;
   preset?: BuildOptions["preset"];
   incrementalStrict?: boolean;
+  nativeRuntimeFingerprint?: string;
   discovery?: {
     includeGlobs?: string[];
     ignoreGlobs?: string[];
@@ -26,6 +28,7 @@ function normalizeManifestBuildOptions(opts?: ManifestBuildOptions): ManifestBui
     useBloomFilters: opts?.useBloomFilters ?? true,
     preset: opts?.preset,
     incrementalStrict: opts?.incrementalStrict ?? false,
+    ...(opts?.nativeRuntimeFingerprint ? { nativeRuntimeFingerprint: opts.nativeRuntimeFingerprint } : {}),
     ...(opts?.discovery ? { discovery: opts.discovery } : {}),
   };
 }
@@ -58,6 +61,7 @@ function normalizeBuildOptions(opts?: BuildOptions): ManifestBuildOptions {
     useBloomFilters: opts?.useBloomFilters ?? true,
     preset: opts?.preset,
     incrementalStrict: opts?.incrementalStrict ?? false,
+    nativeRuntimeFingerprint: getNativeRuntimeFingerprint(opts?.native),
     ...(discovery ? { discovery } : {}),
   };
 }
@@ -105,7 +109,7 @@ export function diffBuildOptions(
   manifestOpts: ManifestBuildOptions | undefined,
   currentOpts: BuildOptions | undefined,
 ): string[] {
-  if (!manifestOpts) return [];
+  if (!manifestOpts) return ["native"];
   const normalizedManifest = normalizeManifestBuildOptions(manifestOpts);
   const normalizedCurrent = normalizeBuildOptions(currentOpts);
   const diffs: string[] = [];
@@ -119,6 +123,9 @@ export function diffBuildOptions(
   if (normalizedManifest.preset !== normalizedCurrent.preset) diffs.push("preset");
   if (normalizedManifest.incrementalStrict !== normalizedCurrent.incrementalStrict) {
     diffs.push("incrementalStrict");
+  }
+  if (normalizedManifest.nativeRuntimeFingerprint !== normalizedCurrent.nativeRuntimeFingerprint) {
+    diffs.push("native");
   }
   if (!normalizedDiscoveryOptionsEqual(normalizedManifest.discovery, normalizedCurrent.discovery)) {
     diffs.push("discovery");

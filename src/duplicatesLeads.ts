@@ -1,7 +1,9 @@
 import {
   findDuplicates,
+  findDuplicatesWithPreparedAnalysis,
   type DuplicateCloneType,
   type DuplicateGroup,
+  type DuplicatePreparedAnalysis,
   type DuplicateSimilarityHint,
 } from "./duplicates.js";
 import type { ProjectIndex } from "./indexer/types.js";
@@ -74,6 +76,7 @@ export async function collectDuplicateLeadSummary(input: {
   limit?: number;
   maxPairs?: number;
   similarityHints?: readonly DuplicateSimilarityHint[];
+  preparedAnalysis?: DuplicatePreparedAnalysis;
 }): Promise<DuplicateLeadSummary | undefined> {
   const limit = input.limit ?? DEFAULT_DUPLICATE_LEAD_LIMIT;
   const maxPairs = input.maxPairs ?? DEFAULT_DUPLICATE_LEAD_MAX_PAIRS;
@@ -82,14 +85,17 @@ export async function collectDuplicateLeadSummary(input: {
     return undefined;
   }
 
-  const result = await findDuplicates(input.index, {
+  const detectionOptions = {
     projectRoot: input.projectRoot,
     ...(scopedFiles ? { files: scopedFiles } : {}),
     ...(input.similarityHints !== undefined ? { similarityHints: input.similarityHints } : {}),
-    minConfidence: "medium",
+    minConfidence: "medium" as const,
     maxPairs,
     limit: limit * 4,
-  });
+  };
+  const result = input.preparedAnalysis
+    ? await findDuplicatesWithPreparedAnalysis(input.preparedAnalysis, detectionOptions)
+    : await findDuplicates(input.index, detectionOptions);
   const visibleGroups = result.groups.filter(
     (group) => group.confidence === "high" && REVIEW_CLONE_TYPES.has(group.cloneType),
   );

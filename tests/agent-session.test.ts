@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAgentSession, listAgentSessionFiles } from "../src/agent/session.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
+import { createProjectSnapshotIdentity } from "../src/indexer/build-cache.js";
 import type { ProjectIndex } from "../src/indexer/types.js";
 import * as projectFilesModule from "../src/util/projectFiles.js";
 import * as gitModule from "../src/util/git.js";
@@ -26,6 +28,40 @@ async function mkGitRepo(): Promise<string> {
   git(root, ["add", "."]);
   git(root, ["commit", "-m", "base"]);
   return root;
+}
+function detailedSymbolGraphSnapshotPath(root: string): string {
+  return path.join(root, ".codegraph-cache", "index-v1", "detailed-symbol-graph.json");
+}
+type MutableDetailedSymbolGraphSidecar = {
+  version: number;
+  projectSnapshotIdentity: string;
+  graphHash: string;
+  graph: {
+    nodes: Array<{
+      id: string;
+      file: string;
+      name: string;
+      complexity?: number;
+    }>;
+    edges: Array<{
+      from: string;
+      to: string;
+      site?: {
+        file: string;
+        range: {
+          start: { line: number; column: number; index?: number };
+          end: { line: number; column: number; index?: number };
+        };
+      };
+    }>;
+  };
+};
+function refreshDetailedSidecarHash(sidecar: MutableDetailedSymbolGraphSidecar): void {
+  const hash = createHash("sha256");
+  hash.update(sidecar.projectSnapshotIdentity);
+  hash.update("\0");
+  hash.update(JSON.stringify(sidecar.graph));
+  sidecar.graphHash = hash.digest("hex");
 }
 
 describe("agent session", () => {
@@ -63,6 +99,209 @@ describe("agent session", () => {
 
     expect(symbolSnapshot.symbolGraph.nodes.size).toBeGreaterThan(0);
     expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("persists detailed symbols and lazily reuses them in a new session without source parsing", async () => {
+    const root = await mkGitRepo();
+    await fs.writeFile(
+      path.join(root, "hierarchy.ts"),
+      [
+        "export class BaseService {",
+        "  run() { return 1; }",
+        "}",
+        "export class DerivedService extends BaseService {",
+        "  run() { return super.run(); }",
+        "}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+    const cold = await createAgentSession({ root }).loadProject();
+    const sidecarPath = detailedSymbolGraphSnapshotPath(root);
+    const sidecar = JSON.parse(await fs.readFile(sidecarPath, "utf8")) as {
+      version: number;
+      projectSnapshotIdentity: string;
+      graph: { nodes: unknown[]; edges: unknown[] };
+    };
+
+    expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
+    expect(sidecar.version).toBe(1);
+    expect(sidecar.projectSnapshotIdentity).toBe(cold.index.projectSnapshotIdentity);
+    expect(Object.keys(sidecar).sort()).toEqual(["graph", "graphHash", "projectSnapshotIdentity", "version"]);
+    expect(Object.keys(sidecar.graph).sort()).toEqual(["edges", "nodes"]);
+
+    symbolGraphSpy.mockClear();
+    const warmSession = createAgentSession({ root });
+    const skipped = await warmSession.loadProject({ symbolGraph: "skip" });
+    expect(skipped.symbolGraph.nodes.size).toBe(0);
+    expect(symbolGraphSpy).not.toHaveBeenCalled();
+
+    const warm = await warmSession.loadProject();
+    expect(symbolGraphSpy).not.toHaveBeenCalled();
+    expect([...warm.symbolGraph.nodes]).toEqual([...cold.symbolGraph.nodes]);
+    expect(warm.symbolGraph.edges).toEqual(cold.symbolGraph.edges);
+    expect(cold.symbolGraph.edges.some((edge) => edge.label === "extends")).toBe(true);
+    expect(cold.symbolGraph.edges.some((edge) => edge.label === "member_of")).toBe(true);
+  });
+
+  it("rebuilds and refreshes malformed detailed symbol graph sidecars", async () => {
+    const root = await mkGitRepo();
+    await createAgentSession({ root }).loadProject();
+    await fs.writeFile(detailedSymbolGraphSnapshotPath(root), "{not-json", "utf8");
+    const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+
+    const rebuilt = await createAgentSession({ root }).loadProject();
+    const refreshed = JSON.parse(await fs.readFile(detailedSymbolGraphSnapshotPath(root), "utf8")) as {
+      version: number;
+    };
+
+    expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
+    expect(rebuilt.symbolGraph.nodes.size).toBeGreaterThan(0);
+    expect(refreshed.version).toBe(1);
+  });
+  it("rejects well-typed sidecar tampering against the current project index", async () => {
+    const root = await mkGitRepo();
+    await createAgentSession({ root }).loadProject();
+    const sidecarPath = detailedSymbolGraphSnapshotPath(root);
+    const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+    const tamperers: Array<(sidecar: MutableDetailedSymbolGraphSidecar) => void> = [
+      (sidecar) => {
+        sidecar.graph.edges[0]!.to = "missing-node";
+      },
+      (sidecar) => {
+        const node = sidecar.graph.nodes[0]!;
+        node.file = path.resolve(root, "..", "escaped.ts").replace(/\\/g, "/");
+        node.id = `${node.file}::escaped::0`;
+      },
+      (sidecar) => {
+        sidecar.graph.nodes[0]!.complexity = -1;
+      },
+      (sidecar) => {
+        const baseNode = sidecar.graph.nodes.find((node) => node.name === "add");
+        if (!baseNode) throw new Error("expected persisted add node");
+        baseNode.name = "tampered";
+      },
+      (sidecar) => {
+        sidecar.graph.edges[0]!.site = {
+          file: sidecar.graph.nodes[0]!.file,
+          range: {
+            start: { line: -1, column: 0, index: 0 },
+            end: { line: 0, column: 1, index: 1 },
+          },
+        };
+      },
+    ];
+
+    for (const tamper of tamperers) {
+      const sidecar = JSON.parse(await fs.readFile(sidecarPath, "utf8")) as MutableDetailedSymbolGraphSidecar;
+      tamper(sidecar);
+      refreshDetailedSidecarHash(sidecar);
+      await fs.writeFile(sidecarPath, JSON.stringify(sidecar), "utf8");
+      symbolGraphSpy.mockClear();
+
+      const rebuilt = await createAgentSession({ root }).loadProject();
+
+      expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
+      expect(rebuilt.symbolGraph.nodes.size).toBeGreaterThan(0);
+    }
+  });
+
+  it("rebuilds and upgrades older detailed symbol graph sidecars", async () => {
+    const root = await mkGitRepo();
+    await createAgentSession({ root }).loadProject();
+    const sidecarPath = detailedSymbolGraphSnapshotPath(root);
+    const legacy = JSON.parse(await fs.readFile(sidecarPath, "utf8")) as {
+      version: number;
+      projectSnapshotIdentity: string;
+      graph: unknown;
+    };
+    legacy.version = 0;
+    await fs.writeFile(sidecarPath, JSON.stringify(legacy), "utf8");
+    const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+
+    await createAgentSession({ root }).loadProject();
+    const refreshed = JSON.parse(await fs.readFile(sidecarPath, "utf8")) as { version: number };
+
+    expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
+    expect(refreshed.version).toBe(1);
+  });
+
+  it("invalidates the detailed sidecar after a tracked edit", async () => {
+    const root = await mkGitRepo();
+    const initial = await createAgentSession({ root }).loadProject();
+    await fs.appendFile(path.join(root, "util.ts"), "export class AddedAfterSnapshot {}\n", "utf8");
+    const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+
+    const rebuilt = await createAgentSession({ root }).loadProject();
+
+    expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
+    expect(rebuilt.index.projectSnapshotIdentity).not.toBe(initial.index.projectSnapshotIdentity);
+    expect([...rebuilt.symbolGraph.nodes.values()].some((node) => node.name === "AddedAfterSnapshot")).toBe(true);
+  });
+
+  it("invalidates detailed sidecar compatibility when semantic graph or native options change", async () => {
+    const root = await mkGitRepo();
+    const initial = await createAgentSession({ root }).loadProject();
+    const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+
+    const rebuilt = await createAgentSession({
+      root,
+      buildOptions: { graph: { dynamicImportHeuristics: true } },
+    }).loadProject();
+
+    expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
+    expect(rebuilt.index.projectSnapshotIdentity).not.toBe(initial.index.projectSnapshotIdentity);
+    expect(createProjectSnapshotIdentity("same-files", { graph: { dynamicImportHeuristics: true } })).not.toBe(
+      createProjectSnapshotIdentity("same-files", { graph: { dynamicImportHeuristics: false } }),
+    );
+    expect(createProjectSnapshotIdentity("same-files", { native: "on" })).not.toBe(
+      createProjectSnapshotIdentity("same-files", { native: "off" }),
+    );
+    const previousDisableNative = process.env.CODEGRAPH_DISABLE_NATIVE;
+    let enabledRuntimeIdentity = "";
+    let disabledRuntimeIdentity = "";
+    try {
+      delete process.env.CODEGRAPH_DISABLE_NATIVE;
+      enabledRuntimeIdentity = createProjectSnapshotIdentity("same-files", { native: "auto" });
+      process.env.CODEGRAPH_DISABLE_NATIVE = "1";
+      disabledRuntimeIdentity = createProjectSnapshotIdentity("same-files", { native: "auto" });
+    } finally {
+      if (previousDisableNative === undefined) {
+        delete process.env.CODEGRAPH_DISABLE_NATIVE;
+      } else {
+        process.env.CODEGRAPH_DISABLE_NATIVE = previousDisableNative;
+      }
+    }
+    expect(disabledRuntimeIdentity).not.toBe(enabledRuntimeIdentity);
+  });
+
+  it("rebuilds the detailed sidecar when the effective native runtime changes", async () => {
+    const root = await mkGitRepo();
+    const previousDisableNative = process.env.CODEGRAPH_DISABLE_NATIVE;
+    let initialIdentity = "";
+    let transitionedIdentity = "";
+    let detailedBuildCount = 0;
+    try {
+      delete process.env.CODEGRAPH_DISABLE_NATIVE;
+      const initial = await createAgentSession({ root }).loadProject();
+      initialIdentity = initial.index.projectSnapshotIdentity ?? "";
+      const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+
+      process.env.CODEGRAPH_DISABLE_NATIVE = "1";
+      const transitioned = await createAgentSession({ root }).loadProject();
+      transitionedIdentity = transitioned.index.projectSnapshotIdentity ?? "";
+      detailedBuildCount = symbolGraphSpy.mock.calls.length;
+    } finally {
+      if (previousDisableNative === undefined) {
+        delete process.env.CODEGRAPH_DISABLE_NATIVE;
+      } else {
+        process.env.CODEGRAPH_DISABLE_NATIVE = previousDisableNative;
+      }
+    }
+
+    expect(transitionedIdentity).not.toBe(initialIdentity);
+    expect(detailedBuildCount).toBe(1);
   });
 
   it("builds agent snapshots through incremental disk cache by default", async () => {

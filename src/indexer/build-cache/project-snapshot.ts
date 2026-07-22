@@ -1,5 +1,5 @@
 import fsp from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import type { Edge, EdgeTo, Graph, Pos, Range } from "../../types.js";
 import { buildGraphAdjacency } from "../../graphs/adjacency.js";
@@ -8,6 +8,8 @@ import type { ProjectFileInfo } from "../../util/projectFiles.js";
 import { BloomFilter, BloomFilterCache } from "../../util/bloomFilter.js";
 import { summarizeAnalysis } from "../../analysisSummary.js";
 import type { AnalysisSummary } from "../../analysisSummary.js";
+import { isFilePathWithinRoot, normalizePath } from "../../util/paths.js";
+import { getNativeRuntimeFingerprint } from "../../native/treeSitterNative.js";
 import { SymbolKind } from "../types.js";
 import type {
   BackendReport,
@@ -19,15 +21,36 @@ import type {
   ProjectIndex,
   SymbolDef,
 } from "../types.js";
+import {
+  buildSymbolGraph,
+  type SymbolEdge,
+  type SymbolGraph,
+  type SymbolNode,
+  type SymbolNodeKind,
+  type SymbolVisibility,
+} from "../../graphs/symbol-graph.js";
+import { normalizeGraphOptions } from "./options.js";
 import { cacheRoot } from "./module-cache.js";
 import type { ManifestFileEntry } from "./manifest.js";
 
 const SNAPSHOT_SYMBOL_KINDS = new Set<SymbolKind>(Object.values(SymbolKind));
-const PROJECT_SNAPSHOT_VERSION = 2;
+const PROJECT_SNAPSHOT_VERSION = 3;
 const BLOOM_FILTER_MIN_SIZE = 1_000;
 const BLOOM_FILTER_MAX_SIZE = 1_000_000;
 const BLOOM_FILTER_MIN_HASH_COUNT = 1;
 const BLOOM_FILTER_MAX_HASH_COUNT = 10;
+const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 1;
+const DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME = "detailed-symbol-graph.json";
+
+type DetailedSymbolGraphSnapshotPayload = {
+  version: number;
+  projectSnapshotIdentity: string;
+  graph: {
+    nodes: SymbolNode[];
+    edges: SymbolEdge[];
+  };
+  graphHash: string;
+};
 
 type SerializedBloomFilter = {
   size: number;
@@ -55,6 +78,7 @@ type ProjectIndexSnapshotPayload = {
   modules: ModuleIndex[];
   projectRoot?: string;
   nativeMode?: ProjectIndex["nativeMode"];
+  nativeRuntimeFingerprint: string;
   projectFiles?: ProjectFileInfo[];
   bloomFilters?: Record<string, SerializedBloomFilter>;
   analysis?: AnalysisSummary;
@@ -75,6 +99,17 @@ export function projectSnapshotFilesSignature(entries: ReadonlyMap<string, Manif
   }
   return hash.digest("hex");
 }
+export function createProjectSnapshotIdentity(filesSignature: string, opts: BuildOptions | undefined): string {
+  const hash = createHash("sha256");
+  hash.update("project-index-snapshot-identity-v1");
+  hash.update("\0");
+  hash.update(filesSignature);
+  hash.update("\0");
+  hash.update(JSON.stringify(normalizeGraphOptions(opts?.graph)));
+  hash.update("\0");
+  hash.update(getNativeRuntimeFingerprint(opts?.native));
+  return hash.digest("hex");
+}
 
 function compareSnapshotPath(left: string, right: string): number {
   if (left < right) return -1;
@@ -90,10 +125,12 @@ export async function tryLoadProjectIndexSnapshot(
   if ((opts?.cache ?? "off") !== "disk") return null;
   try {
     const payload = JSON.parse(await fsp.readFile(projectSnapshotPath(projectRoot, opts), "utf8")) as unknown;
+    const nativeRuntimeFingerprint = getNativeRuntimeFingerprint(opts?.native);
     if (
       !isProjectIndexSnapshotPayload(payload) ||
       payload.filesSignature !== filesSignature ||
-      payload.nativeMode !== normalizedSnapshotNativeMode(opts?.native)
+      payload.nativeMode !== normalizedSnapshotNativeMode(opts?.native) ||
+      payload.nativeRuntimeFingerprint !== nativeRuntimeFingerprint
     ) {
       return null;
     }
@@ -118,6 +155,7 @@ export async function tryLoadProjectIndexSnapshot(
       ...(payload.projectFiles ? { projectFiles: payload.projectFiles } : {}),
       referenceCandidates: buildReferenceCandidateIndex(modules),
       ...(opts?.cache ? { cacheMode: opts.cache, cacheRootDir: cacheRoot(projectRoot, opts) } : {}),
+      projectSnapshotIdentity: createProjectSnapshotIdentity(filesSignature, opts),
     };
     return {
       index: {
@@ -138,6 +176,7 @@ export async function writeProjectIndexSnapshot(
   filesSignature: string,
 ): Promise<void> {
   if ((opts?.cache ?? "off") !== "disk") return;
+  index.projectSnapshotIdentity = createProjectSnapshotIdentity(filesSignature, opts);
   const serializedBloomFilters = index.bloomFilters
     ? serializeBloomFilterCache(index.bloomFilters, index.byFile.keys())
     : undefined;
@@ -146,6 +185,7 @@ export async function writeProjectIndexSnapshot(
   const payload: ProjectIndexSnapshotPayload = {
     version: PROJECT_SNAPSHOT_VERSION,
     filesSignature,
+    nativeRuntimeFingerprint: getNativeRuntimeFingerprint(opts?.native),
     graph: {
       nodes: [...index.graph.nodes],
       edges: index.graph.edges,
@@ -171,6 +211,256 @@ export async function writeProjectIndexSnapshot(
 
 function projectSnapshotPath(projectRoot: string, opts: BuildOptions | undefined): string {
   return path.join(cacheRoot(projectRoot, opts), "project-index-snapshot.json");
+}
+
+export async function tryLoadDetailedSymbolGraphSnapshot(
+  projectRoot: string,
+  opts: BuildOptions | undefined,
+  index: ProjectIndex,
+): Promise<SymbolGraph | null> {
+  if ((opts?.cache ?? "off") !== "disk" || !index.projectSnapshotIdentity) return null;
+  try {
+    const snapshotPath = detailedSymbolGraphSnapshotPath(projectRoot, opts);
+    const payload = JSON.parse(await fsp.readFile(snapshotPath, "utf8")) as unknown;
+    if (
+      !isDetailedSymbolGraphSnapshotPayload(payload) ||
+      payload.projectSnapshotIdentity !== index.projectSnapshotIdentity
+    ) {
+      return null;
+    }
+    const graph: SymbolGraph = {
+      nodes: new Map(payload.graph.nodes.map((node) => [node.id, node])),
+      edges: payload.graph.edges,
+    };
+    if (!(await isDetailedSymbolGraphCompatibleWithProject(projectRoot, index, graph))) {
+      return null;
+    }
+    return graph;
+  } catch {
+    return null;
+  }
+}
+
+export async function writeDetailedSymbolGraphSnapshot(
+  projectRoot: string,
+  opts: BuildOptions | undefined,
+  index: ProjectIndex,
+  graph: SymbolGraph,
+): Promise<void> {
+  if ((opts?.cache ?? "off") !== "disk" || !index.projectSnapshotIdentity) return;
+  const payload: DetailedSymbolGraphSnapshotPayload = {
+    version: DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION,
+    graphHash: detailedSymbolGraphContentHash(index.projectSnapshotIdentity, graph),
+    projectSnapshotIdentity: index.projectSnapshotIdentity,
+    graph: {
+      nodes: [...graph.nodes.values()],
+      edges: graph.edges,
+    },
+  };
+  let tempPath: string | undefined;
+  try {
+    const snapshotPath = detailedSymbolGraphSnapshotPath(projectRoot, opts);
+    await fsp.mkdir(path.dirname(snapshotPath), { recursive: true });
+    tempPath = path.join(
+      path.dirname(snapshotPath),
+      `.${path.basename(snapshotPath)}.${process.pid}.${randomUUID()}.tmp`,
+    );
+    await fsp.writeFile(tempPath, JSON.stringify(payload), { encoding: "utf8", flag: "wx" });
+    await fsp.rename(tempPath, snapshotPath);
+    tempPath = undefined;
+  } catch {
+    // Detailed graph persistence is an optimization; source parsing remains authoritative.
+  } finally {
+    if (tempPath) {
+      await fsp.rm(tempPath, { force: true }).catch(() => undefined);
+    }
+  }
+}
+
+function detailedSymbolGraphSnapshotPath(projectRoot: string, opts: BuildOptions | undefined): string {
+  const root = path.resolve(cacheRoot(projectRoot, opts));
+  const snapshotPath = path.resolve(root, DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME);
+  if (!isFilePathWithinRoot(root, snapshotPath)) {
+    throw new Error(`Detailed symbol graph snapshot escaped cache root: ${snapshotPath}`);
+  }
+  return snapshotPath;
+}
+
+function detailedSymbolGraphContentHash(projectSnapshotIdentity: string, graph: SymbolGraph): string {
+  const hash = createHash("sha256");
+  hash.update(projectSnapshotIdentity);
+  hash.update("\0");
+  hash.update(
+    JSON.stringify({
+      nodes: [...graph.nodes.values()],
+      edges: graph.edges,
+    }),
+  );
+  return hash.digest("hex");
+}
+
+function isDetailedSymbolGraphSnapshotPayload(value: unknown): value is DetailedSymbolGraphSnapshotPayload {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const payload = value as Partial<DetailedSymbolGraphSnapshotPayload>;
+  if (
+    payload.version !== DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION ||
+    typeof payload.projectSnapshotIdentity !== "string" ||
+    !/^[a-f0-9]{64}$/.test(payload.projectSnapshotIdentity) ||
+    typeof payload.graphHash !== "string" ||
+    !/^[a-f0-9]{64}$/.test(payload.graphHash) ||
+    !payload.graph ||
+    !Array.isArray(payload.graph.nodes) ||
+    !payload.graph.nodes.every(isSymbolNode) ||
+    !Array.isArray(payload.graph.edges) ||
+    !payload.graph.edges.every(isSymbolEdge)
+  ) {
+    return false;
+  }
+  const graph: SymbolGraph = {
+    nodes: new Map(payload.graph.nodes.map((node) => [node.id, node])),
+    edges: payload.graph.edges,
+  };
+  if (payload.graphHash !== detailedSymbolGraphContentHash(payload.projectSnapshotIdentity, graph)) {
+    return false;
+  }
+  return new Set(payload.graph.nodes.map((node) => node.id)).size === payload.graph.nodes.length;
+}
+
+function isSymbolNode(value: unknown): value is SymbolNode {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const node = value as Partial<SymbolNode>;
+  return (
+    typeof node.id === "string" &&
+    !!node.id &&
+    typeof node.file === "string" &&
+    !!node.file &&
+    typeof node.name === "string" &&
+    !!node.name &&
+    isSymbolNodeKind(node.kind) &&
+    (node.docstring === undefined || typeof node.docstring === "string") &&
+    isOptionalNonnegativeInteger(node.lineSpan) &&
+    isOptionalNonnegativeFiniteNumber(node.complexity) &&
+    (node.visibility === undefined || isSymbolVisibility(node.visibility)) &&
+    (node.implementationTarget === undefined || typeof node.implementationTarget === "boolean") &&
+    isOptionalNonnegativeInteger(node.memberArity)
+  );
+}
+
+function isSymbolNodeKind(value: unknown): value is SymbolNodeKind {
+  return (
+    value === "function" ||
+    value === "class" ||
+    value === "variable" ||
+    value === "interface" ||
+    value === "type" ||
+    value === "default" ||
+    value === "table" ||
+    value === "view" ||
+    value === "index" ||
+    value === "constraint" ||
+    value === "routine" ||
+    value === "import" ||
+    value === "namespaceImport"
+  );
+}
+
+function isSymbolVisibility(value: unknown): value is SymbolVisibility {
+  return value === "public" || value === "private" || value === "protected" || value === "internal";
+}
+
+function isOptionalNonnegativeInteger(value: unknown): boolean {
+  return value === undefined || (typeof value === "number" && Number.isInteger(value) && value >= 0);
+}
+
+function isOptionalNonnegativeFiniteNumber(value: unknown): boolean {
+  return value === undefined || (typeof value === "number" && Number.isFinite(value) && value >= 0);
+}
+
+function isDetailedRange(value: unknown): value is Range {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const range = value as Partial<Range>;
+  if (!isDetailedPosition(range.start) || !isDetailedPosition(range.end)) return false;
+  if (range.start.index !== undefined && range.end.index !== undefined) {
+    return range.start.index <= range.end.index;
+  }
+  if (range.start.line !== range.end.line) return range.start.line <= range.end.line;
+  return range.start.column <= range.end.column;
+}
+
+function isDetailedPosition(value: unknown): value is Pos {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const position = value as Partial<Pos>;
+  return (
+    typeof position.line === "number" &&
+    Number.isInteger(position.line) &&
+    position.line >= 0 &&
+    typeof position.column === "number" &&
+    Number.isInteger(position.column) &&
+    position.column >= 0 &&
+    (position.index === undefined ||
+      (typeof position.index === "number" && Number.isInteger(position.index) && position.index >= 0))
+  );
+}
+
+function isSymbolEdge(value: unknown): value is SymbolEdge {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const edge = value as Partial<SymbolEdge>;
+  return (
+    typeof edge.from === "string" &&
+    typeof edge.to === "string" &&
+    (edge.label === undefined || typeof edge.label === "string") &&
+    (edge.site === undefined ||
+      (!!edge.site &&
+        typeof edge.site === "object" &&
+        typeof edge.site.file === "string" &&
+        !!edge.site.file &&
+        isDetailedRange(edge.site.range)))
+  );
+}
+async function isDetailedSymbolGraphCompatibleWithProject(
+  projectRoot: string,
+  index: ProjectIndex,
+  graph: SymbolGraph,
+): Promise<boolean> {
+  const normalizedRoot = path.resolve(projectRoot);
+  const indexedFiles = new Set([...index.byFile.keys()].map(normalizePath));
+  for (const node of graph.nodes.values()) {
+    const normalizedFile = normalizePath(node.file);
+    if (
+      !indexedFiles.has(normalizedFile) ||
+      !isFilePathWithinRoot(normalizedRoot, normalizedFile) ||
+      !node.id.startsWith(`${normalizedFile}::`)
+    ) {
+      return false;
+    }
+  }
+  for (const edge of graph.edges) {
+    if (!graph.nodes.has(edge.from) || !graph.nodes.has(edge.to)) return false;
+    if (edge.site) {
+      const normalizedSiteFile = normalizePath(edge.site.file);
+      if (!indexedFiles.has(normalizedSiteFile) || !isFilePathWithinRoot(normalizedRoot, normalizedSiteFile)) {
+        return false;
+      }
+    }
+  }
+
+  const base = await buildSymbolGraph(index);
+  for (const [id, expected] of base.nodes) {
+    const actual = graph.nodes.get(id);
+    if (
+      !actual ||
+      actual.file !== expected.file ||
+      actual.name !== expected.name ||
+      actual.kind !== expected.kind ||
+      actual.docstring !== expected.docstring ||
+      actual.lineSpan !== expected.lineSpan ||
+      actual.complexity !== expected.complexity
+    ) {
+      return false;
+    }
+  }
+  const edgeKeys = new Set(graph.edges.map((edge) => `${edge.from}\0${edge.to}\0${edge.label ?? ""}`));
+  return base.edges.every((edge) => edgeKeys.has(`${edge.from}\0${edge.to}\0${edge.label ?? ""}`));
 }
 
 function normalizedSnapshotNativeMode(
@@ -225,6 +515,7 @@ function isProjectIndexSnapshotPayload(value: unknown): value is ProjectIndexSna
   return (
     payload.version === PROJECT_SNAPSHOT_VERSION &&
     typeof payload.filesSignature === "string" &&
+    typeof payload.nativeRuntimeFingerprint === "string" &&
     !!payload.graph &&
     Array.isArray(payload.graph.nodes) &&
     payload.graph.nodes.every((node) => typeof node === "string") &&

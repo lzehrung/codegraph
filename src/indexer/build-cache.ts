@@ -5,6 +5,7 @@ export {
   loadManifest,
   normalizeIndexedFileInputs,
   sanitizeManifestEntriesForRoot,
+  sanitizeManifestTransientFilesForRoot,
   verifyManifestEntries,
   writeManifest,
   type IndexManifest,
@@ -22,8 +23,11 @@ export {
   type FileSignature,
 } from "./build-cache/module-cache.js";
 export {
+  createProjectSnapshotIdentity,
   projectSnapshotFilesSignature,
+  tryLoadDetailedSymbolGraphSnapshot,
   tryLoadProjectIndexSnapshot,
+  writeDetailedSymbolGraphSnapshot,
   writeProjectIndexSnapshot,
 } from "./build-cache/project-snapshot.js";
 export {

@@ -3,6 +3,7 @@ import path from "node:path";
 import { buildProjectIndexIncremental } from "../indexer/build-index.js";
 import { resolveIncrementalFilePlan, type IncrementalFilePlan } from "../indexer/incremental-plan.js";
 import type { BuildOptions, BuildReport, IncrementalBuildOptions, ProjectIndex } from "../indexer/types.js";
+import { tryLoadDetailedSymbolGraphSnapshot, writeDetailedSymbolGraphSnapshot } from "../indexer/build-cache.js";
 import { buildSymbolGraphDetailed } from "../graphs/symbol-graph-detailed.js";
 import { type SymbolGraph } from "../graphs/symbol-graph.js";
 import type { Graph } from "../types.js";
@@ -289,7 +290,17 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
 
   const loadSymbolGraph = async (base: AgentProjectBaseSnapshot): Promise<SymbolGraph> => {
     if (cachedSymbolGraph) return cachedSymbolGraph;
-    const loadPromise = buildSymbolGraphDetailed(base.index);
+    const cacheOptions: BuildOptions = {
+      ...options.buildOptions,
+      cache: options.buildOptions?.cache ?? "disk",
+    };
+    const loadPromise = (async () => {
+      const persisted = await tryLoadDetailedSymbolGraphSnapshot(options.root, cacheOptions, base.index);
+      if (persisted) return persisted;
+      const built = await buildSymbolGraphDetailed(base.index);
+      await writeDetailedSymbolGraphSnapshot(options.root, cacheOptions, base.index, built);
+      return built;
+    })();
     cachedSymbolGraph = loadPromise;
     loadPromise.catch(() => {
       if (cachedSymbolGraph === loadPromise) cachedSymbolGraph = undefined;

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { supportForFile } from "../../languages.js";
+import { getNativeRuntimeFingerprint } from "../../native/treeSitterNative.js";
 import { logWithLevel } from "../../logging.js";
 import { SqliteDatabase } from "../../sqlite-driver.js";
 import { buildBloomFilterFromSource } from "../../util/bloomFilter.js";
@@ -38,6 +39,8 @@ type ModuleCacheEntry = {
 
 const MAX_MEMORY_CACHE_ENTRIES = 5000;
 const memoryCache = new Map<string, ModuleCacheEntry>();
+let cachedRuntimeFingerprint: string | undefined;
+let cachedRuntimeHash: string | undefined;
 
 function memoryCacheKey(projectRoot: string, file: string): string {
   return `${normalizePath(projectRoot)}::${file}`;
@@ -198,12 +201,23 @@ export async function fileSignature(
   return { sig, cacheSig, ...(contentHash ? { contentHash } : {}) };
 }
 
-export async function cacheSignatureForFile(file: string, sigInfo: FileSignature): Promise<string> {
-  if (sigInfo.gitSig) return sigInfo.gitSig;
-  if (sigInfo.contentHash) return sigInfo.contentHash;
-  const contentHash = await fileContentHash(file);
-  sigInfo.contentHash = contentHash;
-  return contentHash;
+export async function cacheSignatureForFile(
+  file: string,
+  sigInfo: FileSignature,
+  opts?: BuildOptions,
+): Promise<string> {
+  let contentSignature = sigInfo.gitSig ?? sigInfo.contentHash;
+  if (!contentSignature) {
+    contentSignature = await fileContentHash(file);
+    sigInfo.contentHash = contentSignature;
+  }
+  const runtimeFingerprint = getNativeRuntimeFingerprint(opts?.native);
+  if (runtimeFingerprint !== cachedRuntimeFingerprint || !cachedRuntimeHash) {
+    cachedRuntimeFingerprint = runtimeFingerprint;
+    cachedRuntimeHash = crypto.createHash("sha256").update(runtimeFingerprint).digest("hex");
+  }
+  const runtimeHash = cachedRuntimeHash;
+  return `${contentSignature}:${runtimeHash}`;
 }
 
 export async function buildBloomFilterForFile(

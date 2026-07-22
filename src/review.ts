@@ -1,5 +1,11 @@
 import { performance } from "node:perf_hooks";
-import { findDuplicateContexts, type DuplicateGroup, type DuplicateUnitRef } from "./duplicates.js";
+import {
+  findDuplicateContextsWithPreparedAnalysis,
+  prepareDuplicateAnalysis,
+  type DuplicateGroup,
+  type DuplicatePreparedAnalysis,
+  type DuplicateUnitRef,
+} from "./duplicates.js";
 import type { FileId } from "./types.js";
 import { buildProjectIndexIncremental } from "./indexer/build-index.js";
 import { summarizeAnalysis } from "./analysisSummary.js";
@@ -133,8 +139,6 @@ async function buildReviewIndex(input: {
   changedFileList: string[];
   diffKindsByFile: ReadonlyMap<string, string>;
   diffChangesByFile: ReadonlyMap<string, FileChange>;
-  includeSymbolDetails: boolean;
-  maxCallsites: number;
   reviewReport?: ReviewBuildReport;
   reviewTimings?: ReviewTimingReport;
 }): Promise<ReviewIndexStage> {
@@ -144,8 +148,6 @@ async function buildReviewIndex(input: {
     changedFileList,
     diffKindsByFile,
     diffChangesByFile,
-    includeSymbolDetails,
-    maxCallsites,
     reviewReport,
     reviewTimings,
   } = input;
@@ -158,8 +160,6 @@ async function buildReviewIndex(input: {
     })),
   );
   const existenceByFile = new Map(existenceChecks.map((entry) => [entry.file, entry.exists] as const));
-  const filesToIndex = existenceChecks.filter((entry) => entry.exists).map((entry) => entry.file);
-  const hasUnavailableChangedFiles = existenceChecks.some((entry) => !entry.exists);
   const deletedFiles = changedFileList.filter((file) => diffKindsByFile.get(file) === "deleted");
   const deletedSnapshots = await buildDeletedFileSnapshots(projectRoot, deletedFiles, {
     ...((appliedOptions.gitBase ?? appliedOptions.changedSince)
@@ -175,14 +175,20 @@ async function buildReviewIndex(input: {
     reviewReport.indexReport = indexReport;
   }
   const indexOpts: IncrementalBuildOptions = {
-    ...(appliedOptions ?? {}),
+    ...appliedOptions,
     graph: graphOptions,
     keepParsed: true,
     ...(indexReport ? { report: indexReport } : {}),
   };
-  if (!hasUnavailableChangedFiles) {
-    indexOpts.files = filesToIndex;
+  if (appliedOptions.files?.length) {
+    indexOpts.additionalFiles = appliedOptions.files;
   }
+  // Review range selection describes the diff, not the freshness scope of the
+  // current-project index. Let incremental indexing reconcile the whole project.
+  delete indexOpts.files;
+  delete indexOpts.changedSince;
+  delete indexOpts.gitBase;
+  delete indexOpts.gitHead;
   const index = await buildProjectIndexIncremental(projectRoot, indexOpts);
   if (reviewReport) {
     Object.defineProperty(reviewReport, "index", {
@@ -280,8 +286,6 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
     changedFileList,
     diffKindsByFile,
     diffChangesByFile,
-    includeSymbolDetails,
-    maxCallsites,
     ...(reviewReport ? { reviewReport } : {}),
     ...(reviewTimings ? { reviewTimings } : {}),
   });
@@ -342,15 +346,21 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
     riskRelevantParseFailures,
     exportedChangedCount,
   });
-  report.reviewTasks.push(
-    ...(await collectReviewDuplicateTasks({
-      projectRoot,
-      index,
-      summaries,
-      changedSymbolIds,
-      diffHunksByFile,
-    })),
-  );
+  const duplicateReview = await collectReviewDuplicateTasks({
+    projectRoot,
+    index,
+    summaries,
+    changedSymbolIds,
+    diffHunksByFile,
+  });
+  report.reviewTasks.push(...duplicateReview.tasks);
+  if (reviewReport && duplicateReview.preparedAnalysis) {
+    Object.defineProperty(reviewReport, "duplicateAnalysis", {
+      value: duplicateReview.preparedAnalysis,
+      enumerable: false,
+      configurable: true,
+    });
+  }
   if (reviewTimings) reviewTimings.totalMs = Math.round(performance.now() - totalStart);
   return report;
 }
@@ -453,7 +463,7 @@ async function collectReviewDuplicateTasks(input: {
   summaries: readonly ReviewFileSummary[];
   changedSymbolIds: readonly string[];
   diffHunksByFile: ReadonlyMap<string, Hunk[]>;
-}): Promise<ReviewTask[]> {
+}): Promise<{ tasks: ReviewTask[]; preparedAnalysis?: DuplicatePreparedAnalysis }> {
   const diffHunksByDisplayFile = new Map(
     Array.from(input.diffHunksByFile, ([file, hunks]) => [relativeReviewPath(input.projectRoot, file), hunks]),
   );
@@ -483,9 +493,12 @@ async function collectReviewDuplicateTasks(input: {
     if (!uncoveredChangedLines.length) continue;
     targets.push(...compactChangedLineTargets(summary.file, uncoveredChangedLines));
   }
-  if (!targets.length) return [];
+  if (!targets.length) return { tasks: [] };
 
-  const contexts = await findDuplicateContexts(input.index, targets, {
+  const preparedAnalysis = await prepareDuplicateAnalysis(input.index, {
+    projectRoot: input.projectRoot,
+  });
+  const contexts = await findDuplicateContextsWithPreparedAnalysis(preparedAnalysis, targets, {
     projectRoot: input.projectRoot,
     minConfidence: "high",
     includeSameFile: true,
@@ -495,10 +508,12 @@ async function collectReviewDuplicateTasks(input: {
   const tasks = new Map<string, ReviewTask>();
   for (const context of contexts) {
     for (const group of context.groups) {
-      if (tasks.size >= REVIEW_DUPLICATE_TASK_LIMIT) return [...tasks.values()];
+      if (tasks.size >= REVIEW_DUPLICATE_TASK_LIMIT) {
+        return { tasks: [...tasks.values()], preparedAnalysis };
+      }
       const task = duplicateReviewTask(group, context.target);
       if (!tasks.has(task.id)) tasks.set(task.id, task);
     }
   }
-  return [...tasks.values()];
+  return { tasks: [...tasks.values()], preparedAnalysis };
 }

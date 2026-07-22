@@ -2110,6 +2110,31 @@ index 1111111..2222222 100644
     expect(report.head).toBe("WORKTREE");
   });
 
+  it("review CLI defaults to disk cache while preserving explicit cache off", async () => {
+    const root = await mkTmpDir("dg-review-cache-default-");
+    initGitRepo(root);
+    await fsp.writeFile(path.join(root, "main.ts"), "export function value() { return 1; }\n", "utf8");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "initial"]);
+    await fsp.writeFile(path.join(root, "main.ts"), "export function value() { return 2; }\n", "utf8");
+    const reportDir = await mkTmpDir("dg-review-cache-report-");
+    const diskReportPath = path.join(reportDir, "disk.json");
+    const offReportPath = path.join(reportDir, "off.json");
+    const args = ["review", "--root", root, "--base", "HEAD", "--head", "WORKTREE", "--report", "--report-file"];
+
+    await runCliCommand([...args, diskReportPath]);
+    const diskReport = JSON.parse(await fsp.readFile(diskReportPath, "utf8")) as {
+      review?: { indexReport?: { cache?: { mode: string }; files?: { parsed?: number } } };
+    };
+    await runCliCommand([...args, offReportPath, "--cache", "off"]);
+    const offReport = JSON.parse(await fsp.readFile(offReportPath, "utf8")) as {
+      review?: { indexReport?: { cache?: { mode: string }; files?: { parsed?: number } } };
+    };
+
+    expect(diskReport.review?.indexReport?.cache?.mode).toBe("disk");
+    expect(offReport.review?.indexReport?.files?.parsed ?? 0).toBeGreaterThan(0);
+  });
+
   it("review CLI applies codegraph.config.json discovery ignores to git changed files", async () => {
     const root = await mkTmpDir("dg-review-config-ignore-");
     initGitRepo(root);
@@ -2168,6 +2193,45 @@ index 1111111..2222222 100644
     expect(stdout).toContain("Review tasks:");
     expect(stdout).toContain("review-summary");
     expect(stdout).not.toContain('"projectFiles"');
+  });
+
+  it("review CLI keeps structured duplicate tasks and duplicate summary leads aligned", async () => {
+    const root = await mkTmpDir("dg-review-summary-duplicates-");
+    initGitRepo(root);
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    const source = [
+      "export function normalizeRows(rows: Array<{ amount: number; tax: number }>) {",
+      "  const totals: number[] = [];",
+      "  const labels: string[] = [];",
+      "  for (const row of rows) {",
+      "    const subtotal = row.amount + row.tax;",
+      "    const rounded = Math.round(subtotal * 100) / 100;",
+      '    const label = rounded > 100 ? "large" : "small";',
+      "    labels.push(label);",
+      "    totals.push(rounded);",
+      "  }",
+      '  return totals.map((value, index) => labels[index] + ":" + value.toFixed(2)).join(",");',
+      "}",
+      "",
+    ].join("\n");
+    await fsp.writeFile(path.join(srcDir, "a.ts"), source, "utf8");
+    await fsp.writeFile(path.join(srcDir, "b.ts"), source, "utf8");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "initial"]);
+    await fsp.writeFile(path.join(srcDir, "a.ts"), source.replace("large", "huge"), "utf8");
+    const reviewArgs = ["review", "--root", root, "--base", "HEAD", "--head", "WORKTREE"];
+
+    const structured = JSON.parse(await runCliCommand(reviewArgs)) as {
+      reviewTasks: Array<{ reason: string }>;
+    };
+    const summary = await runCliCommand([...reviewArgs, "--summary", "--duplicates", "all"]);
+
+    expect(structured.reviewTasks.some((task) => task.reason === "duplicate-sibling")).toBe(true);
+    expect(summary).toContain("duplicate-sibling");
+    expect(summary).toContain("Duplicate leads:");
+    expect(summary).toContain("src/a.ts");
+    expect(summary).toContain("src/b.ts");
   });
 
   it("review CLI summary prints call compatibility hints without symbol details", async () => {
