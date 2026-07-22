@@ -260,7 +260,7 @@ codegraph grep --query '(function_declaration name: (identifier) @name)'
 codegraph grep --pattern 'eval\(' --ignore-case
 ```
 
-`goto`, `refs`, and `dumpmod` default to the on-disk incremental cache and reuse the existing manifest on repeat invocations against an unchanged project, the same as agent commands. Pass `--cache off` to force a full rebuild for a single invocation.
+`review`, `goto`, `refs`, and `dumpmod` default to the on-disk incremental cache and reuse the current-project manifest on repeat invocations. Review diff selectors (`--base`, `--head`, and `--changed-since`) choose changed files but do not narrow index freshness; pass `--cache off` for an exhaustive uncached rebuild, or `--cache memory|disk` to select a cache explicitly.
 
 `duplicates` emits one-line triage summaries by default, or grouped exact, renamed, near, and weak clone candidates as JSON with `--json`.
 

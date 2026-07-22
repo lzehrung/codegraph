@@ -251,6 +251,7 @@ async function collectReviewDuplicateSummary(input: {
   report: ReviewReport;
   duplicateScope: Exclude<DuplicateLeadScope, "off">;
   index: ProjectIndex;
+  preparedAnalysis?: ReviewBuildReport["duplicateAnalysis"];
 }): Promise<DuplicateLeadSummary | undefined> {
   const scopedFiles = duplicateScopeFilesForReview(input.report, input.duplicateScope);
   const indexedScopedFiles = filterIndexedScopeFiles({
@@ -265,6 +266,7 @@ async function collectReviewDuplicateSummary(input: {
     ...(indexedScopedFiles !== undefined ? { scopedFiles: indexedScopedFiles } : {}),
     similarityHints: duplicateSimilarityHintsFromReview(input.report),
     ...(input.report.projectFiles?.length !== undefined ? { allScopeFileCount: input.report.projectFiles.length } : {}),
+    ...(input.preparedAnalysis ? { preparedAnalysis: input.preparedAnalysis } : {}),
   });
 }
 
@@ -297,9 +299,7 @@ export async function handleReviewCommand(context: ReviewCommandContext): Promis
   if (head !== undefined) reviewOpts.gitHead = head;
   if (changedSince !== undefined) reviewOpts.changedSince = changedSince;
   if (threads !== undefined) reviewOpts.threads = threads;
-  if (cache === "off" || cache === "memory" || cache === "disk") {
-    reviewOpts.cache = cache;
-  }
+  reviewOpts.cache = cache ?? "disk";
   if (context.nativeMode !== "auto") reviewOpts.native = context.nativeMode;
   if (context.useNativeWorkers) reviewOpts.useNativeWorkers = true;
   if (cacheStrict) reviewOpts.cacheStrict = true;
@@ -335,6 +335,7 @@ export async function handleReviewCommand(context: ReviewCommandContext): Promis
           report,
           duplicateScope,
           index: reviewIndex,
+          ...(reviewBuildReport?.duplicateAnalysis ? { preparedAnalysis: reviewBuildReport.duplicateAnalysis } : {}),
         });
       }
     }

@@ -2,6 +2,7 @@ import type { CandidateTestFile } from "../impact/context.js";
 import type { AnalysisSummary } from "../analysisSummary.js";
 import type { CallCompatibilityHint, FileChange } from "../impact/types.js";
 import type { BuildReport, IncrementalBuildOptions, ProjectIndex } from "../indexer/types.js";
+import type { DuplicatePreparedAnalysis } from "../duplicates.js";
 import type { SqlReviewContext } from "../sql/review.js";
 import type { Edge, Range } from "../types.js";
 import type { ProjectFileInfo } from "../util/projectFiles.js";
@@ -109,6 +110,7 @@ export type ReviewBuildReport = {
   timings: ReviewTimingReport;
   indexReport?: BuildReport;
   index?: ProjectIndex;
+  duplicateAnalysis?: DuplicatePreparedAnalysis;
 };
 
 export type ReviewDiffMetadata = Pick<ReviewFileSummary, "oldFile" | "similarityIndex">;

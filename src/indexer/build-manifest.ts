@@ -31,6 +31,7 @@ export async function writeIndexManifestSnapshot(args: {
   timings: BuildReport["timings"] | undefined;
   manifestReport: ManifestReport | undefined;
   allowEmpty?: boolean;
+  transientFiles?: string[];
   symlinkDirectories?: string[];
 }): Promise<void> {
   const files = args.files instanceof Map ? Object.fromEntries(args.files) : args.files;
@@ -48,6 +49,7 @@ export async function writeIndexManifestSnapshot(args: {
     graphOptions: args.graphOptions,
     buildOptions: summarizeBuildOptions(args.opts),
     files,
+    transientFiles: args.transientFiles ?? [],
     ...(args.symlinkDirectories !== undefined ? { symlinkDirectories: args.symlinkDirectories } : {}),
   };
   await writeManifest(args.projectRoot, args.opts, manifestData);

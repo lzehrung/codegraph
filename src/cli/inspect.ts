@@ -167,6 +167,7 @@ async function buildScopedReportGraph(
     opts.writeStderrLine(formatIndexCacheMetadata(indexCache));
     const index = await buildProjectIndexIncremental(projectRoot, {
       files,
+      filesAreProjectScope: true,
       cache: "disk",
       ...(opts.discovery ? { discovery: opts.discovery } : {}),
       ...(opts.progressHandler ? { onProgress: opts.progressHandler } : {}),
@@ -268,6 +269,7 @@ async function buildInspectReport(
   const useNativeWorkers = "useNativeWorkers" in workerOpts || files.length >= NATIVE_WORKER_AUTO_FILE_THRESHOLD;
   const index = await buildProjectIndexIncremental(projectRoot, {
     files,
+    filesAreProjectScope: true,
     cache: cache ?? "disk",
     discovery,
     ...(progressHandler ? { onProgress: progressHandler } : {}),

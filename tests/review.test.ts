@@ -3,11 +3,19 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import fsp from "node:fs/promises";
-import { buildProjectIndex, buildProjectIndexFromFiles, buildReviewReport } from "../src/index.js";
+import {
+  buildProjectIndex,
+  buildProjectIndexFromFiles,
+  buildReviewReport,
+  type ReviewBuildReport,
+  type ReviewReport,
+} from "../src/index.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
 import * as indexerNavigation from "../src/indexer/navigation.js";
 import type { BuildReport, IncrementalBuildOptions, SymbolDef } from "../src/indexer/types.js";
 import * as impactMap from "../src/impact/map.js";
+import { collectDuplicateLeadSummary } from "../src/duplicatesLeads.js";
+import { findDuplicates, findDuplicatesWithPreparedAnalysis, prepareDuplicateAnalysis } from "../src/duplicates.js";
 import { runGit } from "./helpers/git.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
@@ -417,6 +425,97 @@ describe("Review report", () => {
     expect(report.head).toBe("HEAD");
   });
 
+  it("reuses a complete disk-cached project index for an unchanged git review range", async () => {
+    const root = await mkTmpDir("dg-review-git-disk-warm-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "test@git.local"]);
+    runGit(root, ["config", "user.name", "Codegraph Bot"]);
+    const srcDir = path.join(root, "src");
+    const testsDir = path.join(root, "tests");
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.mkdir(testsDir, { recursive: true });
+    await fsp.writeFile(path.join(srcDir, "helper-a.ts"), "export const helperA = () => 1;\n", "utf8");
+    await fsp.writeFile(path.join(srcDir, "helper-b.ts"), "export const helperB = () => 2;\n", "utf8");
+    await fsp.writeFile(
+      path.join(srcDir, "service.ts"),
+      "import { helperA } from './helper-a';\nexport const service = () => helperA();\n",
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(testsDir, "service.test.ts"),
+      "import { service } from '../src/service';\nservice();\n",
+      "utf8",
+    );
+    const duplicateSource = [
+      "export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }>) {",
+      "  const totals: number[] = [];",
+      "  const labels: string[] = [];",
+      "  for (const row of rows) {",
+      "    const subtotal = row.amount + row.tax;",
+      "    const rounded = Math.round(subtotal * 100) / 100;",
+      '    const label = rounded > 100 ? "large" : "small";',
+      "    labels.push(label);",
+      "    totals.push(rounded);",
+      "  }",
+      '  return totals.map((value, index) => labels[index] + ":" + value.toFixed(2)).join(",");',
+      "}",
+      "",
+    ].join("\n");
+    await fsp.writeFile(path.join(srcDir, "duplicate-a.ts"), duplicateSource, "utf8");
+    await fsp.writeFile(path.join(srcDir, "duplicate-b.ts"), duplicateSource, "utf8");
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "initial"]);
+
+    await fsp.writeFile(
+      path.join(srcDir, "service.ts"),
+      "import { helperB } from './helper-b';\nexport const service = () => helperB();\n",
+      "utf8",
+    );
+    await fsp.writeFile(path.join(srcDir, "duplicate-a.ts"), duplicateSource.replace("large", "huge"), "utf8");
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "review range"]);
+    const base = runGit(root, ["rev-parse", "HEAD^"]);
+
+    const coldIndexReport: BuildReport = { timings: {} };
+    const cold = await buildReviewReport(root, {
+      gitBase: base,
+      gitHead: "HEAD",
+      cache: "disk",
+      report: { timings: {}, indexReport: coldIndexReport },
+    });
+    const warmIndexReport: BuildReport = { timings: {} };
+    const warm = await buildReviewReport(root, {
+      gitBase: base,
+      gitHead: "HEAD",
+      cache: "disk",
+      report: { timings: {}, indexReport: warmIndexReport },
+    });
+    const uncachedIndexReport: BuildReport = { timings: {} };
+    const uncached = await buildReviewReport(root, {
+      gitBase: base,
+      gitHead: "HEAD",
+      cache: "off",
+      report: { timings: {}, indexReport: uncachedIndexReport },
+    });
+    const parityView = (report: ReviewReport) => ({
+      changedFiles: report.changedFiles,
+      changedSymbols: report.changedFiles.flatMap((file) => file.symbols),
+      graphDelta: report.graphDelta,
+      candidateTests: report.candidateTests,
+      duplicateTasks: report.reviewTasks.filter((task) => task.reason === "duplicate-sibling"),
+    });
+
+    expect(coldIndexReport.files?.parsed ?? 0).toBeGreaterThan(0);
+    expect(warmIndexReport.files?.parsed ?? 0).toBe(0);
+    expect(parityView(warm)).toEqual(parityView(cold));
+    expect(parityView(uncached)).toEqual(parityView(cold));
+    expect(uncachedIndexReport.files?.cached ?? 0).toBe(0);
+    expect(uncachedIndexReport.files?.parsed ?? 0).toBe(uncachedIndexReport.files?.total);
+    expect(cold.graphDelta.length).toBeGreaterThan(0);
+    expect(cold.candidateTests.some((candidate) => candidate.file === "tests/service.test.ts")).toBe(true);
+    expect(cold.reviewTasks.some((task) => task.reason === "duplicate-sibling")).toBe(true);
+  });
+
   it("reports the default git head when a git comparison has no changes", async () => {
     const root = await mkTmpDir("dg-review-git-no-changes-");
     runGit(root, ["init"]);
@@ -515,26 +614,95 @@ describe("Review report", () => {
     expect(report.changedFiles.some((changedFile) => changedFile.file === ".github/workflows/ci.yml")).toBe(true);
   });
 
-  it("keeps explicitly requested files outside discovery include globs", async () => {
+  it("refreshes and retires ignored untracked files explicitly reviewed through a warm disk cache", async () => {
+    const root = await mkTmpDir("dg-review-ignored-untracked-warm-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "test@git.local"]);
+    runGit(root, ["config", "user.name", "Codegraph Bot"]);
+    await fsp.writeFile(path.join(root, ".gitignore"), "extras/\n", "utf8");
+    await fsp.writeFile(
+      path.join(root, "main.ts"),
+      'import { firstIgnoredValue } from "./extras/ignored";\nexport const main = firstIgnoredValue;\n',
+      "utf8",
+    );
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "initial"]);
+
+    const ignoredFile = path.join(root, "extras", "ignored.ts");
+    await fsp.mkdir(path.dirname(ignoredFile), { recursive: true });
+    await fsp.writeFile(ignoredFile, "export const firstIgnoredValue = 1;\n", "utf8");
+    const firstReport = await buildReviewReport(root, { cache: "disk", files: [ignoredFile] });
+    expect(firstReport.changedFiles[0]?.symbols.some((symbol) => symbol.name === "firstIgnoredValue")).toBe(true);
+
+    await fsp.writeFile(ignoredFile, "export const secondIgnoredValue = 22;\n", "utf8");
+    const secondBuildReport: ReviewBuildReport = { timings: {}, indexReport: { timings: {} } };
+    const secondReport = await buildReviewReport(root, {
+      cache: "disk",
+      files: [ignoredFile],
+      report: secondBuildReport,
+    });
+    expect(secondReport.changedFiles[0]?.symbols.some((symbol) => symbol.name === "secondIgnoredValue")).toBe(true);
+    expect(secondReport.changedFiles[0]?.symbols.some((symbol) => symbol.name === "firstIgnoredValue")).toBe(false);
+    expect(secondBuildReport.indexReport?.files?.parsed ?? 0).toBeGreaterThan(0);
+
+    const ordinaryIndex = await indexerBuild.buildProjectIndexIncremental(root, { cache: "disk" });
+    const normalizedIgnoredFile = normalize(ignoredFile);
+    expect(ordinaryIndex.byFile.has(normalizedIgnoredFile)).toBe(false);
+    expect(ordinaryIndex.graph.edges.some((edge) => edge.from === normalizedIgnoredFile)).toBe(false);
+    const coldIndex = await buildProjectIndex(root, { cache: "off" });
+    expect([...ordinaryIndex.graph.nodes].sort()).toEqual([...coldIndex.graph.nodes].sort());
+    expect(ordinaryIndex.graph.edges).toEqual(coldIndex.graph.edges);
+    const manifest = JSON.parse(
+      await fsp.readFile(path.join(root, ".codegraph-cache", "index-v1", "manifest.json"), "utf8"),
+    ) as { transientFiles?: string[] };
+    expect(manifest.transientFiles).toEqual([]);
+  });
+
+  it("unions explicitly reviewed files outside discovery globs into the complete project index", async () => {
     const root = await mkTmpDir("dg-review-git-explicit-discovery-");
     runGit(root, ["init"]);
     runGit(root, ["config", "user.email", "test@git.local"]);
     runGit(root, ["config", "user.name", "Codegraph Bot"]);
-    const packageFile = path.join(root, "package.json");
-    await fsp.writeFile(packageFile, `{"name":"demo"}\n`, "utf8");
+    const includedFile = path.join(root, "src", "included.ts");
+    const explicitFile = path.join(root, "extras", "explicit.ts");
+    await fsp.mkdir(path.dirname(includedFile), { recursive: true });
+    await fsp.mkdir(path.dirname(explicitFile), { recursive: true });
+    await fsp.writeFile(includedFile, "export const included = 1;\n", "utf8");
+    await fsp.writeFile(explicitFile, "export const explicitValue = 1;\n", "utf8");
     runGit(root, ["add", "."]);
     runGit(root, ["commit", "-m", "initial"]);
-    await fsp.writeFile(packageFile, `{"name":"demo","version":"1.0.0"}\n`, "utf8");
+    await fsp.writeFile(explicitFile, "export const explicitValue = 2;\n", "utf8");
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "change explicit"]);
+    const base = runGit(root, ["rev-parse", "HEAD^"]);
+    const firstIndexReport: BuildReport = { timings: {} };
+    const reviewBuildReport: ReviewBuildReport = { timings: {}, indexReport: firstIndexReport };
 
     const report = await buildReviewReport(root, {
-      files: [packageFile],
-      gitBase: "HEAD",
-      gitHead: "WORKTREE",
+      files: [explicitFile],
+      gitBase: base,
+      gitHead: "HEAD",
+      cache: "disk",
       discovery: { includeGlobs: ["src/**"], globRoot: root },
+      report: reviewBuildReport,
+    });
+    const warmIndexReport: BuildReport = { timings: {} };
+    const warmReport = await buildReviewReport(root, {
+      files: [explicitFile],
+      gitBase: base,
+      gitHead: "HEAD",
+      cache: "disk",
+      discovery: { includeGlobs: ["src/**"], globRoot: root },
+      report: { timings: {}, indexReport: warmIndexReport },
     });
 
     expect(report.status).toBe("ok");
-    expect(report.changedFiles.some((changedFile) => changedFile.file === "package.json")).toBe(true);
+    expect(report.changedFiles.map((changedFile) => changedFile.file)).toEqual(["extras/explicit.ts"]);
+    expect(report.changedFiles[0]?.symbols.some((symbol) => symbol.name === "explicitValue")).toBe(true);
+    expect(reviewBuildReport.index?.byFile.has(normalize(includedFile))).toBe(true);
+    expect(reviewBuildReport.index?.byFile.has(normalize(explicitFile))).toBe(true);
+    expect(warmReport.changedFiles).toEqual(report.changedFiles);
+    expect(warmIndexReport.files?.parsed ?? 0).toBe(0);
   });
 
   it("reports renames from inside discovery include globs", async () => {
@@ -1853,13 +2021,35 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
 
     await fsp.writeFile(path.join(root, "src/a.ts"), source.replace("large", "huge"), "utf8");
 
-    const report = await buildReviewReport(root, { gitBase: "HEAD", gitHead: "WORKTREE" });
+    const reviewBuildReport: ReviewBuildReport = { timings: {} };
+    const report = await buildReviewReport(root, {
+      gitBase: "HEAD",
+      gitHead: "WORKTREE",
+      report: reviewBuildReport,
+    });
     const task = report.reviewTasks.find((entry) => entry.reason === "duplicate-sibling");
+    const index = reviewBuildReport.index;
+    const preparedAnalysis = reviewBuildReport.duplicateAnalysis;
+    if (!index || !preparedAnalysis) throw new Error("Review duplicate preparation was not retained");
+    const unpreparedSummary = await collectDuplicateLeadSummary({
+      index,
+      projectRoot: root,
+      scope: "all",
+    });
+    const preparedSummary = await collectDuplicateLeadSummary({
+      index,
+      projectRoot: root,
+      scope: "all",
+      preparedAnalysis,
+    });
 
     expect(task).toBeDefined();
     expect(task?.title).toBe("Check related duplicate implementation");
     expect(task?.description).toContain("src/b.ts");
     expect(task?.priority).toBe("high");
+    expect(preparedSummary).toEqual(unpreparedSummary);
+    expect(preparedSummary?.leads.length ?? 0).toBeGreaterThan(0);
+    expect(Object.keys(reviewBuildReport)).not.toContain("duplicateAnalysis");
   });
 
   it("keeps duplicate sibling tasks for symbol-free changed regions in files with changed symbols", async () => {
@@ -1893,6 +2083,50 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     );
 
     expect(task).toBeDefined();
+  });
+  it("applies scoped bucket-size limits identically to prepared and direct duplicate analysis", async () => {
+    const root = await mkTmpDir("dg-review-duplicate-scoped-buckets-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    const source = [
+      '["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta"]',
+      "  .map((value, index) => value.toUpperCase() + String(index))",
+      "  .filter((value) => value.length > 3)",
+      '  .reduce((result, value) => result + ":" + value, "");',
+      "",
+    ].join("\n");
+    const files = Array.from({ length: 4 }, (_, index) => path.join(srcDir, `copy-${index}.ts`));
+    await Promise.all(files.map(async (file) => await fsp.writeFile(file, source, "utf8")));
+    const index = await buildProjectIndex(root, { cache: "off" });
+    const preparationOptions = {
+      projectRoot: root,
+      includeSmall: true,
+      minTokens: 1,
+    };
+    const prepared = await prepareDuplicateAnalysis(index, preparationOptions);
+    const scopedFiles = files.slice(0, 2);
+    const atBoundaryOptions = {
+      ...preparationOptions,
+      files: scopedFiles,
+      minConfidence: "high" as const,
+      maxBucketSize: 2,
+      limit: 10,
+    };
+    const overBoundaryOptions = {
+      ...atBoundaryOptions,
+      maxBucketSize: 1,
+    };
+
+    const directAtBoundary = await findDuplicates(index, atBoundaryOptions);
+    const preparedAtBoundary = await findDuplicatesWithPreparedAnalysis(prepared, atBoundaryOptions);
+    const directOverBoundary = await findDuplicates(index, overBoundaryOptions);
+    const preparedOverBoundary = await findDuplicatesWithPreparedAnalysis(prepared, overBoundaryOptions);
+
+    expect(preparedAtBoundary).toEqual(directAtBoundary);
+    expect(directAtBoundary.groups.length).toBeGreaterThan(0);
+    expect(preparedOverBoundary).toEqual(directOverBoundary);
+    expect(directOverBoundary.groups).toEqual([]);
+    expect(directOverBoundary.omittedCounts.oversizedBuckets).toBeGreaterThan(0);
   });
 });
 

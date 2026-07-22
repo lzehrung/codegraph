@@ -97,6 +97,11 @@ export type IndexManifest = {
   buildOptions?: ManifestBuildOptions;
   files: Record<string, ManifestFileEntry>;
   /**
+   * Files added only for a caller-scoped build. Missing on older manifests and treated
+   * as empty; incremental builds prune entries once callers stop supplying them.
+   */
+  transientFiles?: string[];
+  /**
    * Symlinked directories discovered under the project root as of the last full scan.
    * Absent on manifests written before this field existed, or whenever the set is not
    * yet known; discovery then probes the tree once and backfills it on the next write.
@@ -125,6 +130,17 @@ export function sanitizeManifestEntriesForRoot(
     sanitizedEntries[file] = entry;
   }
   return sanitizedEntries;
+}
+
+export function sanitizeManifestTransientFilesForRoot(projectRoot: string, files: unknown): string[] {
+  if (!Array.isArray(files)) return [];
+  const sanitizedFiles = new Set<string>();
+  for (const value of files) {
+    if (typeof value !== "string") continue;
+    const file = path.resolve(projectRoot, value).replace(/\\/g, "/");
+    if (isFilePathWithinRoot(projectRoot, file)) sanitizedFiles.add(file);
+  }
+  return [...sanitizedFiles];
 }
 
 export async function computeConfigHash(projectRoot: string, logLevel?: LogLevel): Promise<ConfigHashResult> {

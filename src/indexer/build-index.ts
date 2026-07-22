@@ -44,6 +44,7 @@ import {
   recordConfigHashResult,
   recordFileFailure,
   sanitizeManifestEntriesForRoot,
+  sanitizeManifestTransientFilesForRoot,
   tryLoadFromCache,
   tryLoadProjectIndexSnapshot,
   verifyManifestEntries,
@@ -270,7 +271,7 @@ async function buildIndexedModuleForFile(args: {
 
   const sigInfo = args.fileSignatures.get(args.file);
   if (sigInfo) {
-    const cacheSig = args.cacheEnabled ? await cacheSignatureForFile(args.file, sigInfo) : sigInfo.cacheSig;
+    const cacheSig = args.cacheEnabled ? await cacheSignatureForFile(args.file, sigInfo, args.opts) : sigInfo.cacheSig;
     writeToCache(args.projectRoot, args.file, cacheSig, mod, args.opts);
   }
 
@@ -399,6 +400,7 @@ type BuildIndexHelperOptions = {
   warnNoFilesMessage?: string;
   ignoreExistingManifest?: boolean;
   projectFiles?: ProjectFileInfo[] | Promise<ProjectFileInfo[]>;
+  transientFiles?: string[];
   symlinkDirectories?: string[];
 };
 
@@ -477,9 +479,11 @@ async function prepareFileSignatures(args: {
   return new Map(entries);
 }
 
+type FullDiscoveryBuildOptions = BuildOptions & Pick<IncrementalBuildOptions, "additionalFiles">;
+
 async function buildProjectIndexFromExport(
   projectRoot: string,
-  opts?: BuildOptions,
+  opts?: FullDiscoveryBuildOptions,
   helperOpts?: Pick<BuildIndexHelperOptions, "ignoreExistingManifest">,
 ): Promise<ProjectIndex> {
   return buildProjectIndexWithManifestOptions(projectRoot, opts, helperOpts);
@@ -609,7 +613,7 @@ async function buildIndexFromFileListShared(
           fileSignatures.set(file, sigInfo);
         }
         manifestEntriesForIndex.set(file, toProjectIndexManifestEntry(sigInfo));
-        const cacheSig = cacheEnabled ? await cacheSignatureForFile(file, sigInfo) : sigInfo.cacheSig;
+        const cacheSig = cacheEnabled ? await cacheSignatureForFile(file, sigInfo, opts) : sigInfo.cacheSig;
         let mod: ModuleIndex | null = cacheEnabled ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report) : null;
         if (mod && fileReport) {
           fileReport.cached = (fileReport.cached ?? 0) + 1;
@@ -755,6 +759,7 @@ async function buildIndexFromFileListShared(
         files: manifestEntries,
         timings,
         manifestReport: report?.manifest,
+        ...(helperOpts?.transientFiles !== undefined ? { transientFiles: helperOpts.transientFiles } : {}),
         ...(helperOpts?.symlinkDirectories !== undefined ? { symlinkDirectories: helperOpts.symlinkDirectories } : {}),
       });
     }
@@ -786,7 +791,7 @@ async function buildIndexFromFileListShared(
 
 async function buildProjectIndexWithManifestOptions(
   projectRoot: string,
-  opts?: BuildOptions,
+  opts?: FullDiscoveryBuildOptions,
   helperOpts?: Pick<BuildIndexHelperOptions, "ignoreExistingManifest">,
 ): Promise<ProjectIndex> {
   try {
@@ -815,12 +820,20 @@ async function buildProjectIndexWithManifestOptions(
     // cold-start case, but avoids paying for two full-tree walks instead of one. Once a
     // hint is known (the common warm case), both calls skip probing entirely, so running
     // them sequentially here costs no meaningful time either way.
-    const files = await listProjectFiles(projectRoot, undefined, {
+    const discoveredFiles = await listProjectFiles(projectRoot, undefined, {
       ...opts?.discovery,
       ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
       ...(knownSymlinkDirectories !== undefined ? { knownSymlinkDirectories } : {}),
       onSymlinkDirectoriesDiscovered,
     });
+    const additionalFiles = normalizeIndexedFileInputs(
+      projectRoot,
+      opts?.additionalFiles ?? [],
+      "Additional index file",
+    ).filter((file) => fs.existsSync(file));
+    const discoveredFileSet = new Set(discoveredFiles);
+    const files = Array.from(new Set([...discoveredFiles, ...additionalFiles]));
+    const transientFiles = additionalFiles.filter((file) => !discoveredFileSet.has(file));
     const projectFiles = await discoverProjectFiles(projectRoot, {
       ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
       ...(discoveredSymlinkDirectories !== undefined ? { knownSymlinkDirectories: discoveredSymlinkDirectories } : {}),
@@ -830,6 +843,7 @@ async function buildProjectIndexWithManifestOptions(
       warnNoFilesMessage: `Warning: No files found in project root: ${projectRoot}`,
       ...(helperOpts?.ignoreExistingManifest ? { ignoreExistingManifest: true } : {}),
       projectFiles,
+      transientFiles,
       ...(discoveredSymlinkDirectories !== undefined ? { symlinkDirectories: discoveredSymlinkDirectories } : {}),
     });
   } finally {
@@ -943,7 +957,7 @@ export async function buildProjectIndexIncremental(
     const currentConfigHashResult = await computeConfigHash(projectRoot, opts?.logLevel);
     const currentConfigHash = recordConfigHashResult(manifestReport, currentConfigHashResult, opts?.logLevel);
     const configChanged = !!currentConfigHash && (!manifest?.configHash || currentConfigHash !== manifest.configHash);
-    const requiresFullRebuild = optionDiffs.includes("discovery");
+    const requiresFullRebuild = optionDiffs.includes("discovery") || optionDiffs.includes("native");
     if (!manifest || !graphOptionsEqual(manifest.graphOptions, graphOptions) || configChanged || requiresFullRebuild) {
       if (configChanged) {
         logWithLevel(opts?.logLevel, "warn", "Configuration changed, rebuilding index...");
@@ -1007,13 +1021,33 @@ export async function buildProjectIndexIncremental(
     const trackedEntries = sanitizeManifestEntriesForRoot(projectRoot, manifest.files);
     const manifestFileKeys = Object.keys(manifest.files);
     const trackedEntryKeys = Object.keys(trackedEntries);
-    const manifestRequiresSanitization =
+    let manifestRequiresSanitization =
       manifestFileKeys.length !== trackedEntryKeys.length ||
       manifestFileKeys.some((file) => !Object.hasOwn(trackedEntries, file));
+    const explicitFiles = normalizeIndexedFileInputs(projectRoot, opts?.files ?? [], "Incremental file");
+    const additionalFiles = normalizeIndexedFileInputs(
+      projectRoot,
+      opts?.additionalFiles ?? [],
+      "Additional index file",
+    );
+    const previousTransientFiles = sanitizeManifestTransientFilesForRoot(projectRoot, manifest.transientFiles).filter(
+      (file) => Object.hasOwn(trackedEntries, file),
+    );
+    const previousTransientFileSet = new Set(previousTransientFiles);
+    const additionalFileSet = new Set(additionalFiles.filter((file) => fs.existsSync(file)));
+    const transientFiles = [...additionalFileSet].filter(
+      (file) => previousTransientFileSet.has(file) || !Object.hasOwn(trackedEntries, file),
+    );
+    const retiredTransientFiles = previousTransientFiles.filter((file) => !additionalFileSet.has(file));
     const { trackedFiles, deletedTrackedFiles } = partitionTrackedManifestFiles(trackedEntries);
+    for (const file of retiredTransientFiles) {
+      trackedFiles.delete(file);
+      deletedTrackedFiles.add(file);
+      delete trackedEntries[file];
+    }
+    if (retiredTransientFiles.length) manifestRequiresSanitization = true;
     const fileReport = initFileReport(report);
     if (fileReport) fileReport.total = trackedFiles.size;
-    const explicitFiles = normalizeIndexedFileInputs(projectRoot, opts?.files ?? [], "Incremental file");
     const needsGitScan = !!opts?.gitBase || !!opts?.changedSince;
     const gitFiles = needsGitScan ? await listChangedFiles(projectRoot, buildIncrementalGitDiffOptions(opts)) : [];
     // New files that were never committed, staged, or passed explicitly have no tracked
@@ -1047,6 +1081,7 @@ export async function buildProjectIndexIncremental(
     const allFiles = new Set<string>([
       ...trackedFiles,
       ...explicitFiles.filter((file) => fs.existsSync(file)),
+      ...additionalFiles.filter((file) => fs.existsSync(file)),
       ...manifestDiffFiles.filter((file) => fs.existsSync(file)),
       ...gitFiles.filter((file) => fs.existsSync(file)),
       ...untrackedFiles.filter((file) => fs.existsSync(file)),
@@ -1063,6 +1098,7 @@ export async function buildProjectIndexIncremental(
         timings,
         manifestReport,
         allowEmpty: true,
+        transientFiles,
         ...(manifest.symlinkDirectories !== undefined ? { symlinkDirectories: manifest.symlinkDirectories } : {}),
       });
       return {
@@ -1119,7 +1155,8 @@ export async function buildProjectIndexIncremental(
       return snapshot;
     };
 
-    const canSkipFileValidation = gitAvailable && !opts?.cacheStrict && !untrackedFiles.length;
+    const canSkipFileValidation =
+      gitAvailable && !opts?.cacheStrict && !untrackedFiles.length && !additionalFiles.length;
     if (canSkipFileValidation) {
       const snapshot = await reuseUnchangedSnapshot();
       if (snapshot) {
@@ -1184,7 +1221,7 @@ export async function buildProjectIndexIncremental(
       for (const file of allFiles) {
         if (changedFiles.has(file)) continue;
         const sigInfo = fileSignatures.get(file)!;
-        const cacheSig = cacheEnabled ? await cacheSignatureForFile(file, sigInfo) : sigInfo.cacheSig;
+        const cacheSig = cacheEnabled ? await cacheSignatureForFile(file, sigInfo, opts) : sigInfo.cacheSig;
         const cached = cacheEnabled ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report) : null;
         if (cached) {
           if (fileReport) fileReport.cached = (fileReport.cached ?? 0) + 1;
@@ -1315,6 +1352,7 @@ export async function buildProjectIndexIncremental(
         files: manifestEntries,
         timings,
         manifestReport,
+        transientFiles,
         ...(manifest.symlinkDirectories !== undefined ? { symlinkDirectories: manifest.symlinkDirectories } : {}),
       });
       const index = await finalizeProjectIndex({
@@ -1357,6 +1395,11 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
   const explicitFiles = normalizeIndexedFileInputs(projectRoot, opts?.files ?? [], "Graph delta file").filter((file) =>
     fs.existsSync(file),
   );
+  const additionalFiles = normalizeIndexedFileInputs(
+    projectRoot,
+    opts?.additionalFiles ?? [],
+    "Additional graph delta file",
+  ).filter((file) => fs.existsSync(file));
   const needsGitScan = !!opts?.gitBase || !!opts?.changedSince;
   const gitFiles = needsGitScan ? await listChangedFiles(projectRoot, buildIncrementalGitDiffOptions(opts)) : [];
   const { trackedFiles } = partitionTrackedManifestFiles(trackedEntries);
@@ -1385,6 +1428,7 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
   const allFiles = new Set<string>([
     ...trackedFiles,
     ...explicitFiles,
+    ...additionalFiles,
     ...manifestDiffFiles.filter((file) => fs.existsSync(file)),
     ...gitFiles.filter((file) => fs.existsSync(file)),
   ]);

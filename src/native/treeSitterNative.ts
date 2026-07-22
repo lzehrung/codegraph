@@ -25,6 +25,7 @@ export {
   assertNativeRequiredAvailable,
   getNativeTreeSitterLoadError,
   getNativeBindingOrigin,
+  getNativeRuntimeFingerprint,
   getNativeTreeSitterSupportedLanguageIds,
   isNativeBindingLoadedForLanguage,
   isNativeRequiredUnavailableError,

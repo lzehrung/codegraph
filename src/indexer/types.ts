@@ -119,6 +119,8 @@ export type ProjectIndex = {
   buildReport?: BuildReport;
   analysis?: CachedAnalysisSummary;
   cacheRootDir?: string;
+  /** Internal identity for disk artifacts derived from this exact reusable snapshot. */
+  projectSnapshotIdentity?: string;
 };
 
 /**
@@ -157,6 +159,8 @@ export type BuildOptions = {
  */
 export type IncrementalBuildOptions = BuildOptions & {
   files?: string[];
+  /** @internal Union these files into full discovery without treating them as caller-selected changes. */
+  additionalFiles?: string[];
   /** @internal Treat `files` as the current project scope, not as caller-selected changed files. */
   filesAreProjectScope?: boolean;
   /** @internal Manifest identity associated with precomputed reconciliation. */

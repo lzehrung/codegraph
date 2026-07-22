@@ -239,10 +239,36 @@ type PreparedDuplicateBuckets = {
 
 type DuplicateAstContextCache = Map<string, DuplicateAstContext | null>;
 
+type DuplicateUnitCollectionOptions = Required<
+  Pick<DuplicateDetectionOptions, "includeSmall" | "minTokens" | "maxTokens" | "shingleSize" | "windowSize">
+> & {
+  projectRoot: string | undefined;
+  files: readonly string[] | undefined;
+};
+
 type CollectedDuplicateUnits = {
   units: DuplicateInternalUnit[];
   belowThresholdUnits: number;
+  belowThresholdUnitsByFile: Map<string, number>;
 };
+
+type DuplicatePreparedAnalysisData = {
+  index: ProjectIndex;
+  collectionOptions: Omit<DuplicateUnitCollectionOptions, "files">;
+  collectedUnits: CollectedDuplicateUnits;
+  preparedBuckets: PreparedDuplicateBuckets;
+};
+
+export type DuplicatePreparedAnalysis = {
+  readonly preparedAnalysisId: symbol;
+};
+
+export type DuplicatePreparationOptions = Pick<
+  DuplicateDetectionOptions,
+  "projectRoot" | "includeSmall" | "minTokens" | "maxTokens" | "shingleSize" | "windowSize"
+>;
+
+const duplicatePreparedAnalyses = new WeakMap<DuplicatePreparedAnalysis, DuplicatePreparedAnalysisData>();
 const DUPLICATE_UNIT_CACHE_VERSION = 2;
 const DUPLICATE_UNIT_CACHE_SCHEMA_VERSION = 1;
 const DUPLICATE_UNIT_CACHE_TABLE = "duplicate_unit_cache";
@@ -1354,10 +1380,8 @@ function metricsForPair(evidence: PairEvidence): DuplicateMetrics {
 /** Reads files and creates comparable symbol and chunk units. */
 async function collectDuplicateUnits(
   index: ProjectIndex,
-  options: Required<
-    Pick<DuplicateDetectionOptions, "includeSmall" | "minTokens" | "maxTokens" | "shingleSize" | "windowSize">
-  > & { projectRoot: string | undefined; files: readonly string[] | undefined },
-): Promise<{ units: DuplicateInternalUnit[]; belowThresholdUnits: number }> {
+  options: DuplicateUnitCollectionOptions,
+): Promise<CollectedDuplicateUnits> {
   const files = options.files ?? Array.from(index.byFile.keys());
   const normalizedFiles = Array.from(
     new Set(files.map((file) => normalizeDetectionFile(file, options.projectRoot))),
@@ -1372,6 +1396,7 @@ async function collectDuplicateUnits(
     options.windowSize,
   );
   let belowThresholdUnits = 0;
+  const belowThresholdUnitsByFile = new Map<string, number>();
 
   for (const file of normalizedFiles) {
     const cachedUnits = tryLoadDuplicateUnitsFromCache(index, file, variant);
@@ -1393,6 +1418,7 @@ async function collectDuplicateUnits(
     for (const unit of fileUnits) {
       if (!shouldKeepUnit(unit, options.includeSmall, options.minTokens)) {
         belowThresholdUnits++;
+        belowThresholdUnitsByFile.set(file, (belowThresholdUnitsByFile.get(file) ?? 0) + 1);
         continue;
       }
       units.push(unit);
@@ -1406,7 +1432,7 @@ async function collectDuplicateUnits(
     if (lineCompare) return lineCompare;
     return (left.name ?? "").localeCompare(right.name ?? "");
   });
-  return { units, belowThresholdUnits };
+  return { units, belowThresholdUnits, belowThresholdUnitsByFile };
 }
 
 function addToBucket(buckets: Map<string, DuplicateInternalUnit[]>, key: string, unit: DuplicateInternalUnit): void {
@@ -1437,6 +1463,31 @@ function prepareDuplicateCandidateBuckets(units: readonly DuplicateInternalUnit[
     normalizedHashBuckets,
     astShapeBuckets,
     signatureBuckets,
+  };
+}
+
+function filterPreparedDuplicateBucketMap(
+  buckets: ReadonlyMap<string, DuplicateInternalUnit[]>,
+  unitFilter: UnitFilter,
+): Map<string, DuplicateInternalUnit[]> {
+  const filteredBuckets = new Map<string, DuplicateInternalUnit[]>();
+  for (const [key, bucket] of buckets) {
+    const filteredBucket = bucket.filter(unitFilter);
+    if (filteredBucket.length) filteredBuckets.set(key, filteredBucket);
+  }
+  return filteredBuckets;
+}
+
+function filterPreparedDuplicateBuckets(
+  preparedBuckets: PreparedDuplicateBuckets,
+  unitFilter: UnitFilter,
+): PreparedDuplicateBuckets {
+  return {
+    units: preparedBuckets.units.filter(unitFilter),
+    rawHashBuckets: filterPreparedDuplicateBucketMap(preparedBuckets.rawHashBuckets, unitFilter),
+    normalizedHashBuckets: filterPreparedDuplicateBucketMap(preparedBuckets.normalizedHashBuckets, unitFilter),
+    astShapeBuckets: filterPreparedDuplicateBucketMap(preparedBuckets.astShapeBuckets, unitFilter),
+    signatureBuckets: filterPreparedDuplicateBucketMap(preparedBuckets.signatureBuckets, unitFilter),
   };
 }
 
@@ -2391,36 +2442,38 @@ export async function findDuplicates(
 async function findDuplicatesWithOpenDuplicateUnitCache(
   index: ProjectIndex,
   options: DuplicateDetectionOptions = {},
+  preparedData?: DuplicatePreparedAnalysisData,
 ): Promise<DuplicateDetectionResult> {
-  const projectRoot = options.projectRoot ?? index.projectRoot;
-  const minTokens = normalizePositiveIntegerOption(options.minTokens, "minTokens", DEFAULT_MIN_TOKENS);
-  const maxTokens = normalizePositiveIntegerOption(options.maxTokens, "maxTokens", DEFAULT_MAX_TOKENS);
+  const collectionOptions = duplicateUnitCollectionOptions(index, options);
+  const projectRoot = collectionOptions.projectRoot;
   const maxBucketSize = normalizePositiveIntegerOption(options.maxBucketSize, "maxBucketSize", DEFAULT_MAX_BUCKET_SIZE);
   const maxPairs =
     options.maxPairs === undefined
       ? Number.POSITIVE_INFINITY
       : normalizeNonNegativeIntegerOption(options.maxPairs, "maxPairs", DEFAULT_LIMIT);
-  const shingleSize = normalizePositiveIntegerOption(options.shingleSize, "shingleSize", DEFAULT_SHINGLE_SIZE);
-  const windowSize = normalizePositiveIntegerOption(options.windowSize, "windowSize", DEFAULT_WINDOW_SIZE);
-  const includeSmall = options.includeSmall ?? false;
   const crossFileOnly = options.crossFileOnly ?? !(options.includeSameFile ?? false);
   const minConfidence = normalizeConfidence(options.minConfidence);
   const limit = normalizeNonNegativeIntegerOption(options.limit, "limit", DEFAULT_LIMIT);
-
-  if (maxTokens < minTokens) {
-    throw new Error(`Invalid maxTokens value "${maxTokens}". Expected a value greater than or equal to minTokens.`);
+  const collectedUnits = preparedData?.collectedUnits ?? (await collectDuplicateUnits(index, collectionOptions));
+  let units = collectedUnits.units;
+  let belowThresholdUnits = collectedUnits.belowThresholdUnits;
+  let candidateBuckets = preparedData?.preparedBuckets;
+  if (candidateBuckets && collectionOptions.files !== undefined) {
+    const scopedFiles = new Set(
+      collectionOptions.files.map((file) => normalizeDetectionFile(file, collectionOptions.projectRoot)),
+    );
+    const scopedUnitFilter: UnitFilter = (unit) => scopedFiles.has(unit.absoluteFile);
+    candidateBuckets = filterPreparedDuplicateBuckets(candidateBuckets, scopedUnitFilter);
+    units = [...candidateBuckets.units];
+    belowThresholdUnits = 0;
+    for (const file of scopedFiles) {
+      belowThresholdUnits += collectedUnits.belowThresholdUnitsByFile.get(file) ?? 0;
+    }
   }
-
-  const { units, belowThresholdUnits } = await collectDuplicateUnits(index, {
-    projectRoot,
-    files: options.files,
-    includeSmall,
-    minTokens,
-    maxTokens,
-    shingleSize,
-    windowSize,
-  });
-  const { pairs, oversizedBuckets } = buildCandidatePairs(units, maxBucketSize, options.similarityHints, projectRoot);
+  const candidateResult = candidateBuckets
+    ? buildCandidatePairsFromPreparedBuckets(candidateBuckets, maxBucketSize, options.similarityHints, projectRoot)
+    : buildCandidatePairs(units, maxBucketSize, options.similarityHints, projectRoot);
+  const { pairs, oversizedBuckets } = candidateResult;
   const suggestions: DuplicateSuggestion[] = [];
   let overlappingPairs = 0;
   let comparedPairs = 0;
@@ -2582,10 +2635,10 @@ function duplicateContextFromResult(
   return context;
 }
 
-async function collectDuplicateUnitsForOptions(
+function duplicateUnitCollectionOptions(
   index: ProjectIndex,
   options: DuplicateDetectionOptions,
-): Promise<CollectedDuplicateUnits> {
+): DuplicateUnitCollectionOptions {
   const projectRoot = options.projectRoot ?? index.projectRoot;
   const minTokens = normalizePositiveIntegerOption(options.minTokens, "minTokens", DEFAULT_MIN_TOKENS);
   const maxTokens = normalizePositiveIntegerOption(options.maxTokens, "maxTokens", DEFAULT_MAX_TOKENS);
@@ -2597,7 +2650,7 @@ async function collectDuplicateUnitsForOptions(
     throw new Error(`Invalid maxTokens value "${maxTokens}". Expected a value greater than or equal to minTokens.`);
   }
 
-  return await collectDuplicateUnits(index, {
+  return {
     projectRoot,
     files: options.files,
     includeSmall,
@@ -2605,7 +2658,78 @@ async function collectDuplicateUnitsForOptions(
     maxTokens,
     shingleSize,
     windowSize,
-  });
+  };
+}
+
+async function collectDuplicateUnitsForOptions(
+  index: ProjectIndex,
+  options: DuplicateDetectionOptions,
+): Promise<CollectedDuplicateUnits> {
+  return await collectDuplicateUnits(index, duplicateUnitCollectionOptions(index, options));
+}
+
+function preparedDuplicateAnalysisData(analysis: DuplicatePreparedAnalysis): DuplicatePreparedAnalysisData {
+  const data = duplicatePreparedAnalyses.get(analysis);
+  if (!data) {
+    throw new Error("Invalid duplicate prepared analysis.");
+  }
+  return data;
+}
+
+function assertPreparedDuplicateOptions(data: DuplicatePreparedAnalysisData, options: DuplicateDetectionOptions): void {
+  const normalized = duplicateUnitCollectionOptions(data.index, options);
+  const expected = data.collectionOptions;
+  const sameProjectRoot = normalizePath(normalized.projectRoot ?? "") === normalizePath(expected.projectRoot ?? "");
+  if (
+    !sameProjectRoot ||
+    normalized.includeSmall !== expected.includeSmall ||
+    normalized.minTokens !== expected.minTokens ||
+    normalized.maxTokens !== expected.maxTokens ||
+    normalized.shingleSize !== expected.shingleSize ||
+    normalized.windowSize !== expected.windowSize
+  ) {
+    throw new Error("Duplicate query options do not match the prepared analysis.");
+  }
+}
+
+/** Collects duplicate units and candidate buckets once for multiple review queries. */
+export async function prepareDuplicateAnalysis(
+  index: ProjectIndex,
+  options: DuplicatePreparationOptions = {},
+): Promise<DuplicatePreparedAnalysis> {
+  const collectionOptions = duplicateUnitCollectionOptions(index, options);
+  const releaseDuplicateUnitCache = leaseDuplicateUnitCacheForIndex(index);
+  try {
+    const collectedUnits = await collectDuplicateUnits(index, collectionOptions);
+    const analysis = Object.freeze({ preparedAnalysisId: Symbol("duplicate-prepared-analysis") });
+    duplicatePreparedAnalyses.set(analysis, {
+      index,
+      collectionOptions: {
+        projectRoot: collectionOptions.projectRoot,
+        includeSmall: collectionOptions.includeSmall,
+        minTokens: collectionOptions.minTokens,
+        maxTokens: collectionOptions.maxTokens,
+        shingleSize: collectionOptions.shingleSize,
+        windowSize: collectionOptions.windowSize,
+      },
+      collectedUnits,
+      preparedBuckets: prepareDuplicateCandidateBuckets(collectedUnits.units),
+    });
+    return analysis;
+  } finally {
+    closeDuplicateUnitCacheForIndex(index);
+    releaseDuplicateUnitCache();
+  }
+}
+
+/** Scores duplicate groups from a previously collected and bucketed analysis. */
+export async function findDuplicatesWithPreparedAnalysis(
+  analysis: DuplicatePreparedAnalysis,
+  options: DuplicateDetectionOptions = {},
+): Promise<DuplicateDetectionResult> {
+  const data = preparedDuplicateAnalysisData(analysis);
+  assertPreparedDuplicateOptions(data, options);
+  return await findDuplicatesWithOpenDuplicateUnitCache(data.index, options, data);
 }
 
 async function findDuplicatesTouchingTargets(
@@ -2740,13 +2864,14 @@ async function findDuplicateContextsWithOpenDuplicateUnitCache(
   index: ProjectIndex,
   targets: readonly DuplicateTarget[],
   options: DuplicateDetectionOptions = {},
+  preparedData?: DuplicatePreparedAnalysisData,
 ): Promise<DuplicateContextResult[]> {
   if (!targets.length) return [];
   const limit = normalizeNonNegativeIntegerOption(options.limit, "limit", DEFAULT_LIMIT);
   const includeRawPairs = options.includeRawPairs ?? false;
   const projectRoot = options.projectRoot ?? index.projectRoot;
-  const sharedUnits = await collectDuplicateUnitsForOptions(index, options);
-  const preparedBuckets = prepareDuplicateCandidateBuckets(sharedUnits.units);
+  const sharedUnits = preparedData?.collectedUnits ?? (await collectDuplicateUnitsForOptions(index, options));
+  const preparedBuckets = preparedData?.preparedBuckets ?? prepareDuplicateCandidateBuckets(sharedUnits.units);
   const result = await findDuplicatesTouchingTargets(
     index,
     targets,
@@ -2758,6 +2883,17 @@ async function findDuplicateContextsWithOpenDuplicateUnitCache(
     preparedBuckets,
   );
   return targets.map((target) => duplicateContextFromResult(result, target, { projectRoot, limit, includeRawPairs }));
+}
+
+/** Finds targeted duplicate contexts from a previously collected and bucketed analysis. */
+export async function findDuplicateContextsWithPreparedAnalysis(
+  analysis: DuplicatePreparedAnalysis,
+  targets: readonly DuplicateTarget[],
+  options: DuplicateDetectionOptions = {},
+): Promise<DuplicateContextResult[]> {
+  const data = preparedDuplicateAnalysisData(analysis);
+  assertPreparedDuplicateOptions(data, options);
+  return await findDuplicateContextsWithOpenDuplicateUnitCache(data.index, targets, options, data);
 }
 
 export async function findDuplicateContext(

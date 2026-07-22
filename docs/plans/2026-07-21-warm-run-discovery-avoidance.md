@@ -1,6 +1,6 @@
 # Warm-Run Discovery Avoidance Plan
 
-**Status: Priorities 1-4 implemented.** Priority 5 remains an unstarted stretch item, as originally scoped. See per-priority checklists below for what shipped, including a few places implementation diverged from or narrowed the original text (each noted inline).
+**Status: Priorities 1-4 implemented.** Priority 5 remains an unstarted stretch item, as originally scoped. Follow-up audit ranks 1-3 are also implemented; the lower-priority candidates remain measurement-gated.
 
 This plan targets one specific, verified gap left by `2026-06-06-performance-and-cache-opportunities.md`: even on a fully warm, unchanged repo, most commands still pay for a full recursive directory scan before any cache or manifest logic gets a chance to short-circuit. Priority 7 of that plan ("Persist a Ready-to-Load Project Index Snapshot") made graph reconstruction skippable once files are known unchanged, but it did not remove the discovery scan that determines "unchanged" in the first place. This plan closes that gap and fixes a related default-cache inconsistency across CLI commands.
 
@@ -194,6 +194,8 @@ Notes for whoever picks this up:
 
 ## Follow-up Whole-Repository Performance Audit
 
+**Status: Ranks 1-3 implemented.** The lower-priority items below remain measurement-gated.
+
 Measured on this repository after the warm-run fixes above, using the built CLI on Windows. Exact wall time varies with cache state, but the phase reports and repeated-process comparisons identify the same dominant work.
 
 ### Rank 1: Stop Review Ranges from Re-invalidating the Current Index
@@ -212,7 +214,7 @@ Recommended change:
 
 Risk and proof:
 
-- Small-to-medium change, high payoff. Add a Git-backed regression that runs the same review twice and proves the second index report parses zero files while returning the same changed-file, symbol, graph-delta, candidate-test, and duplicate-task results.
+- Implemented with Git-backed cold/warm parity coverage, prepared duplicate-analysis reuse, and transient explicit-file provenance. A repeated no-change review now completes in about 0.39s on this repository; review ranges still scale with their actual changed-symbol work.
 
 ### Rank 2: Mark Inspect and Hotspot File Lists as Scope, Not Changes
 
@@ -229,7 +231,7 @@ Recommended change:
 
 Risk and proof:
 
-- Small, low-risk change with a roughly 10s warm-run gain on this repo. Existing inspect progress tests already exercise warm and stale paths; add an option-shape assertion plus a real warm child-root regression.
+- Implemented with option-shape, child-root, stale-file, native-mode, and progress regressions. Repeated scoped inspect fell from 11-13s to about 0.59s on this repository.
 
 ### Rank 3: Persist the Detailed Symbol Graph for One-Shot Navigation
 
@@ -245,7 +247,7 @@ Recommended change:
 
 Risk and proof:
 
-- Medium effort and schema/compatibility risk, but the largest remaining one-shot search/navigation gain. Prove cold/warm parity for goto, refs, symbol search, hybrid search, and inheritance/member edges before enabling it by default.
+- Implemented as an atomic, versioned, identity-bound sidecar with malformed/stale cache fallback and semantic graph validation. Repeated one-shot symbol search fell from about 7-8s to about 1.1s on this repository, with navigation and member/inheritance parity covered.
 
 ### Lower-Priority Opportunities
 

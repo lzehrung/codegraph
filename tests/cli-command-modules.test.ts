@@ -12,7 +12,7 @@ import { handleGraphDeltaCommand } from "../src/cli/graphDelta.js";
 import { handleGraphQueryCommand, type GraphQueryCommandContext } from "../src/cli/graphQueries.js";
 import { CLI_HELP_TEXT, FILE_HELP_TEXT, MCP_SERVE_HELP_TEXT, PACKET_HELP_TEXT } from "../src/cli/help.js";
 import { handleImpactCommand, type ImpactCommandContext } from "../src/cli/impact.js";
-import { handleInspectCommand, type InspectCommandContext } from "../src/cli/inspect.js";
+import { handleHotspotsCommand, handleInspectCommand, type InspectCommandContext } from "../src/cli/inspect.js";
 import { handleGotoCommand, handleRefsCommand, type NavigationCommandContext } from "../src/cli/navigation.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "../src/cli/packageInfo.js";
 import { handlePacketCommand } from "../src/cli/packet.js";
@@ -22,8 +22,10 @@ import { handleSqlCommand } from "../src/cli/sql.js";
 import { runCli } from "../src/cli.js";
 import { captureCli } from "./helpers/cli.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
+import { diffBuildOptions, summarizeBuildOptions } from "../src/indexer/build-cache.js";
 import type { ProjectIndex } from "../src/indexer.js";
 import type { BuildOptions } from "../src/indexer/types.js";
+import { getNativeRuntimeFingerprint } from "../src/native/treeSitterNative.js";
 import type { Graph } from "../src/types.js";
 import { runGit } from "./helpers/git.js";
 import { createTwoCommitCycleProject, mkTmpDir } from "./helpers/filesystem.js";
@@ -1028,6 +1030,83 @@ describe("CLI command modules", () => {
     } finally {
       buildSpy.mockRestore();
     }
+  });
+
+  test("passes resolved hotspot files as the current project scope", async () => {
+    const root = await mkTmpDir("codegraph-hotspots-scope-options-");
+    const cacheDir = path.join(root, ".codegraph-cache", "index-v1");
+    const files = [path.join(root, "src", "main.ts")];
+    const emptyIndex: ProjectIndex = {
+      graph: { nodes: new Set<string>(), edges: [] },
+      modules: new Map(),
+      byFile: new Map(),
+      exportCache: new Map(),
+      scopeCache: new Map(),
+    };
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockResolvedValue(emptyIndex);
+
+    try {
+      await fsp.mkdir(cacheDir, { recursive: true });
+      await fsp.writeFile(
+        path.join(cacheDir, "manifest.json"),
+        JSON.stringify({ updatedAt: Date.now(), lastCommit: "test-commit" }),
+        "utf8",
+      );
+      await handleHotspotsCommand(
+        createInspectContext({
+          projectRootFs: root,
+          includeRootsAbs: [path.join(root, "src")],
+          resolveFilesFromRoots: async () => files,
+          getOpt: () => undefined,
+          hasFlag: (name) => name === "--json",
+        }),
+      );
+
+      expect(buildSpy).toHaveBeenCalledWith(
+        root,
+        expect.objectContaining({
+          files,
+          filesAreProjectScope: true,
+          cache: "disk",
+        }),
+      );
+    } finally {
+      buildSpy.mockRestore();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("invalidates persisted build options when the effective native runtime changes", () => {
+    const autoOptions = summarizeBuildOptions({ native: "auto" });
+    const offOptions = summarizeBuildOptions({ native: "off" });
+    expect(diffBuildOptions(offOptions, { native: "auto" })).toContain("native");
+
+    const enabledFingerprint = getNativeRuntimeFingerprint("auto", {});
+    const disabledFingerprint = getNativeRuntimeFingerprint("auto", { CODEGRAPH_DISABLE_NATIVE: "1" });
+    expect(enabledFingerprint).not.toBe(disabledFingerprint);
+    expect(JSON.parse(disabledFingerprint)).toMatchObject({
+      requestedMode: "auto",
+      envDisabled: true,
+      available: false,
+      supportedLanguageIds: [],
+    });
+
+    const currentFingerprint = autoOptions.nativeRuntimeFingerprint;
+    const staleFingerprint = currentFingerprint === enabledFingerprint ? disabledFingerprint : enabledFingerprint;
+    expect(
+      diffBuildOptions(
+        {
+          ...autoOptions,
+          nativeRuntimeFingerprint: staleFingerprint,
+        },
+        { native: "auto" },
+      ),
+    ).toContain("native");
+
+    const legacyOptions = { ...autoOptions };
+    delete legacyOptions.nativeRuntimeFingerprint;
+    expect(diffBuildOptions(legacyOptions, { native: "auto" })).toContain("native");
+    expect(diffBuildOptions(undefined, { native: "auto" })).toContain("native");
   });
 
   test("uses shared cache-mode validation in the extracted graph-delta command handler", async () => {

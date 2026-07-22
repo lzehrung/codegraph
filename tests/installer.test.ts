@@ -387,13 +387,13 @@ describe("agent installer workflow", () => {
     const userFilePath = path.join(skillDir, "notes.md");
     const userFile = "# Keep my Codex notes\n";
 
-    await installCodegraphTargets({ homeDir, targetIds: ["codex"], yes: true });
+    await installCodegraphTargets({ homeDir, env: {}, targetIds: ["codex"], yes: true });
     await fsp.writeFile(userFilePath, userFile, "utf8");
 
     expect(await readFile(installedSkillPath)).toBe(await readFile(BUNDLED_SKILL_PATH));
     expect(await readFile(markerPath)).toContain("Codex CLI");
 
-    const result = await uninstallCodegraphTargets({ homeDir, targetIds: ["codex"], yes: true });
+    const result = await uninstallCodegraphTargets({ homeDir, env: {}, targetIds: ["codex"], yes: true });
 
     expectInstallerChange(result.changes, {
       target: "codex",

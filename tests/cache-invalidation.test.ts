@@ -1122,12 +1122,14 @@ describe("Cache invalidation and strict hashing", () => {
     const rewrittenSnapshot = JSON.parse(await fsp.readFile(snapshotPath, "utf8")) as {
       version: number;
       bloomFilters?: Record<string, unknown>;
+      nativeRuntimeFingerprint?: string;
     };
 
     expect(initial.byFile.has(normalize(entryPath))).toBe(true);
     expect(rebuilt.byFile.has(normalize(entryPath))).toBe(true);
     expect(rebuilt.bloomFilters?.get(normalize(entryPath))?.mightContain("versioned")).toBe(true);
-    expect(rewrittenSnapshot.version).toBe(2);
+    expect(rewrittenSnapshot.version).toBe(3);
+    expect(rewrittenSnapshot.nativeRuntimeFingerprint).toBeTypeOf("string");
     expect(rewrittenSnapshot.bloomFilters?.[normalize(entryPath)]).toBeDefined();
   });
 
@@ -1505,6 +1507,7 @@ describe("Cache invalidation and strict hashing", () => {
     await fsp.mkdir(path.join(root, ".codegraph-cache", "index-v1"), { recursive: true });
     const oldSchemaManifest = createManifest(root);
     expect("symlinkDirectories" in oldSchemaManifest).toBe(false);
+    expect("transientFiles" in oldSchemaManifest).toBe(false);
     await fsp.writeFile(manifestPathFor(root), JSON.stringify(oldSchemaManifest, null, 2), "utf8");
 
     // graphOptions mismatch (missing on the fixture manifest) forces a full rebuild path,
@@ -1514,5 +1517,6 @@ describe("Cache invalidation and strict hashing", () => {
 
     const backfilledManifest = await readManifest(root);
     expect(backfilledManifest.symlinkDirectories).toEqual([]);
+    expect(backfilledManifest.transientFiles).toEqual([]);
   });
 });
