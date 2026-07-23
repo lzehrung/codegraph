@@ -26,7 +26,7 @@ Use plain text search for exact strings, logs, config keys, secrets, and prose. 
 | Map a repo before you know the question                   | `codegraph orient --root . --budget small --pretty`             |
 | Diagnose installation, native runtime, or artifact health | `codegraph doctor`                                              |
 
-Prefer `review` before `impact`: review is the compact reviewer handoff; impact is the broader "what could this break?" map. Prefer `explore` before `orient` when you already have a concrete question.
+Prefer `review` before `impact`: review is the compact reviewer handoff; impact is the broader "what could this break?" map. Both are safe bounded accelerants for another agent's own review workflow (`impact --pretty`, `review --summary --duplicates off`); they do not own reviewer lanes, packets, or finding ledgers. Prefer `explore` before `orient` when you already have a concrete question.
 
 ## Keep the Project Boundary Explicit
 

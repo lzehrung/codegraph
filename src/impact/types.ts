@@ -230,6 +230,22 @@ export type ImpactDiagnostics = {
   refsDroppedByMaxRefs: number;
   fallbackSeededFiles: number;
   fallbackSeededDependents: number;
+  /** Total changed symbols discovered before request-wide symbol budgets. */
+  changedSymbolsTotal: number;
+  /** Changed symbols that received precise reference analysis. */
+  changedSymbolsAnalyzed: number;
+  /** Changed symbols skipped by maxChangedSymbols / deadline ranking. */
+  changedSymbolsOmitted: number;
+  /** findReferences / call-compat lookups that were started. */
+  referenceLookupsStarted: number;
+  /** Lookups skipped because maxReferenceLookups was exhausted. */
+  referenceLookupsOmitted: number;
+  /** Reference sites retained in the report across the whole request. */
+  referencesRetained: number;
+  /** Reference sites dropped by request-wide maxTotalReferences. */
+  referencesOmitted: number;
+  /** True when analysis returned early because timeBudgetMs elapsed. */
+  deadlineExceeded: boolean;
   callCompatibility?: {
     supportedLanguages: string[];
     unsupportedLanguages: string[];
@@ -468,6 +484,14 @@ export const DEFAULT_SEVERITY_WEIGHTS: SeverityWeights = {
 export type ImpactOptions = DiffProviderOptions & {
   scope?: "all" | "imported";
   maxRefs?: number;
+  /** Maximum changed symbols that receive precise reference analysis. Undefined = unlimited. */
+  maxChangedSymbols?: number;
+  /** Maximum findReferences / call-compat lookups for the whole request. Undefined = unlimited. */
+  maxReferenceLookups?: number;
+  /** Maximum retained reference sites across the whole request. Undefined = unlimited. */
+  maxTotalReferences?: number;
+  /** Soft post-index analysis deadline in milliseconds. Undefined = no deadline. */
+  timeBudgetMs?: number;
   depth?: number;
   includeTests?: boolean;
   membersOnly?: boolean;

@@ -5,6 +5,16 @@ import { Semaphore } from "../util/concurrency.js";
 import type { ChangedSymbol, ImpactItem, ImpactOptions, ImpactReason } from "./types.js";
 import type { ReferenceLookupCache } from "./referenceCache.js";
 import { calculateSeverity, selectStrongerImpactReason } from "./severity.js";
+import {
+  canStartReferenceLookup,
+  recordReferenceLookupOmitted,
+  recordReferenceLookupStarted,
+  recordReferencesOmitted,
+  recordReferencesRetained,
+  remainingReferenceRetainBudget,
+  syncBudgetDiagnostics,
+  type ImpactWorkBudget,
+} from "./budgets.js";
 
 type ImpactEmitter = (item: ImpactItem, phase: "partial" | "final") => void;
 
@@ -15,6 +25,7 @@ export type DirectImpactOptions = Pick<
   maxRefs: number;
   includeTests: boolean;
   referenceCache?: ReferenceLookupCache;
+  workBudget?: ImpactWorkBudget;
 };
 
 export type DirectImpactContext = {
@@ -36,15 +47,23 @@ function referenceScanLimitForKeptRefs(maxRefs: number): number {
 export async function analyzeDirectReferences(context: DirectImpactContext): Promise<void> {
   const semaphore = new Semaphore(8);
   const tasks: Array<Promise<void>> = [];
+  const workBudget = context.options.workBudget;
 
   for (const changedSymbol of context.changedSymbols) {
     if (context.processedSymbols.has(changedSymbol.id)) continue;
+    if (workBudget && !canStartReferenceLookup(workBudget)) {
+      recordReferenceLookupOmitted(workBudget, 1);
+      continue;
+    }
     context.processedSymbols.add(changedSymbol.id);
 
     tasks.push(semaphore.withPermit(async () => analyzeChangedSymbolReferences(context, changedSymbol)));
   }
 
   await Promise.all(tasks);
+  if (workBudget) {
+    syncBudgetDiagnostics(context.options.diagnostics, workBudget);
+  }
 }
 
 async function analyzeChangedSymbolReferences(
@@ -52,12 +71,23 @@ async function analyzeChangedSymbolReferences(
   changedSymbol: ChangedSymbol,
 ): Promise<void> {
   const { index, options } = context;
+  const workBudget = options.workBudget;
+  if (workBudget && !canStartReferenceLookup(workBudget)) {
+    recordReferenceLookupOmitted(workBudget, 1);
+    syncBudgetDiagnostics(options.diagnostics, workBudget);
+    return;
+  }
+  if (workBudget) {
+    recordReferenceLookupStarted(workBudget);
+  }
+
   const def: SymbolDef = {
     file: changedSymbol.file,
     localName: changedSymbol.name,
     kind: changedSymbol.kind,
     range: changedSymbol.range,
   };
+
   const referenceOptions = options.refContext
     ? {
         context: options.refContext,
@@ -74,7 +104,10 @@ async function analyzeChangedSymbolReferences(
     ? await options.referenceCache.get(index, def, referenceOptions)
     : await findReferences(index, { def }, referenceOptions);
 
-  if (refs.status !== "ok") return;
+  if (refs.status !== "ok") {
+    syncBudgetDiagnostics(options.diagnostics, workBudget);
+    return;
+  }
 
   let keptRefs = 0;
   for (let refIndex = 0; refIndex < refs.references.length; refIndex += 1) {
@@ -90,12 +123,18 @@ async function analyzeChangedSymbolReferences(
       continue;
     }
     if (keptRefs >= options.maxRefs) {
-      if (diagnostics) {
-        diagnostics.refsDroppedByMaxRefs += refs.references.length - refIndex;
-      }
-      break;
+      if (diagnostics) diagnostics.refsDroppedByMaxRefs += 1;
+      if (workBudget) recordReferencesOmitted(workBudget, 1);
+      continue;
+    }
+    if (workBudget && remainingReferenceRetainBudget(workBudget) === 0) {
+      recordReferencesOmitted(workBudget, 1);
+      continue;
     }
     keptRefs += 1;
+    if (workBudget) {
+      recordReferencesRetained(workBudget, 1);
+    }
 
     let reason: ImpactReason = "directRef";
     if (ref.via?.namespaceMember) {
@@ -151,4 +190,6 @@ async function analyzeChangedSymbolReferences(
     context.impacted.set(ref.file, impactItem);
     context.emitImpactItem(impactItem, "partial");
   }
+
+  syncBudgetDiagnostics(options.diagnostics, workBudget);
 }

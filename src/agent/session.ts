@@ -10,7 +10,7 @@ import type { Graph } from "../types.js";
 import { listProjectFiles, type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { mapLimit } from "../util/concurrency.js";
 import { normalizePath, toProjectDisplayPath } from "../util/paths.js";
-import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions } from "../config.js";
+import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions, mergeGraphOptions } from "../config.js";
 import { createAgentFileLookup } from "./normalize.js";
 import { summarizeAnalysis, type AnalysisSummary } from "../analysisSummary.js";
 
@@ -85,6 +85,7 @@ export type AgentFileSignature = {
 
 type AgentDiscoverySettings = {
   discoveryOptions?: ProjectFileDiscoveryOptions;
+  graphOptions?: BuildOptions["graph"];
 };
 
 type AgentSessionFilePlan = AgentDiscoverySettings & {
@@ -102,20 +103,26 @@ async function resolveAgentDiscoverySettings(options: AgentSessionOptions): Prom
   const config = useConfig ? await loadCodegraphConfig(options.root) : {};
   const optionDiscovery = mergeDiscoveryOptions(options.buildOptions?.discovery, options.discovery);
   const discovery = mergeDiscoveryOptions(config.discovery, optionDiscovery);
+  const graph = mergeGraphOptions(config.graph, options.buildOptions?.graph);
+  const graphOptions = config.graph || options.buildOptions?.graph ? graph : undefined;
   const discoveryOptions = hasDiscoveryOptions(discovery)
     ? { ...discovery, globRoot: discovery.globRoot ?? options.root }
     : undefined;
-  return discoveryOptions ? { discoveryOptions } : {};
+  return {
+    ...(discoveryOptions ? { discoveryOptions } : {}),
+    ...(graphOptions ? { graphOptions } : {}),
+  };
 }
 
 async function resolveAgentSessionFilePlan(options: AgentSessionOptions): Promise<AgentSessionFilePlan> {
-  const { discoveryOptions } = await resolveAgentDiscoverySettings(options);
+  const { discoveryOptions, graphOptions } = await resolveAgentDiscoverySettings(options);
   // Prefer the manifest-plus-Git reconciliation over a full recursive scan whenever it
   // can be trusted. Preserve its changed/untracked evidence so the indexer does not
   // repeat the same Git subprocesses immediately afterward.
   const incrementalOptions: BuildOptions = {
     ...options.buildOptions,
     ...(discoveryOptions ? { discovery: discoveryOptions } : {}),
+    ...(graphOptions ? { graph: graphOptions } : {}),
   };
   const incrementalPlan = await resolveIncrementalFilePlan(options.root, incrementalOptions);
   if (incrementalPlan) {
@@ -123,10 +130,15 @@ async function resolveAgentSessionFilePlan(options: AgentSessionOptions): Promis
       files: incrementalPlan.files,
       incrementalPlan,
       ...(discoveryOptions ? { discoveryOptions } : {}),
+      ...(graphOptions ? { graphOptions } : {}),
     };
   }
   const files = await listProjectFiles(options.root, undefined, discoveryOptions);
-  return { files, ...(discoveryOptions ? { discoveryOptions } : {}) };
+  return {
+    files,
+    ...(discoveryOptions ? { discoveryOptions } : {}),
+    ...(graphOptions ? { graphOptions } : {}),
+  };
 }
 
 export async function listAgentSessionFiles(options: AgentSessionOptions): Promise<string[]> {
@@ -242,12 +254,13 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
   const loadBase = async (): Promise<AgentProjectBaseSnapshot> => {
     if (cachedBase) return cachedBase;
     const loadPromise = (async () => {
-      const { files, discoveryOptions, incrementalPlan } = await loadFilePlan();
+      const { files, discoveryOptions, graphOptions, incrementalPlan } = await loadFilePlan();
       if (options.freshness?.policy !== "manual") {
         cachedFileSignatures = await collectAgentFileSignatures(files);
       }
       const buildOptions: IncrementalBuildOptions = {
         ...options.buildOptions,
+        ...(graphOptions ? { graph: graphOptions } : {}),
         cache: options.buildOptions?.cache ?? "disk",
         keepParsed: options.buildOptions?.keepParsed ?? true,
         files,
@@ -290,11 +303,13 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
 
   const loadSymbolGraph = async (base: AgentProjectBaseSnapshot): Promise<SymbolGraph> => {
     if (cachedSymbolGraph) return cachedSymbolGraph;
-    const cacheOptions: BuildOptions = {
-      ...options.buildOptions,
-      cache: options.buildOptions?.cache ?? "disk",
-    };
     const loadPromise = (async () => {
+      const { graphOptions } = await loadFilePlan();
+      const cacheOptions: BuildOptions = {
+        ...options.buildOptions,
+        ...(graphOptions ? { graph: graphOptions } : {}),
+        cache: options.buildOptions?.cache ?? "disk",
+      };
       const persisted = await tryLoadDetailedSymbolGraphSnapshot(options.root, cacheOptions, base.index);
       if (persisted) return persisted;
       const built = await buildSymbolGraphDetailed(base.index);

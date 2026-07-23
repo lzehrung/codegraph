@@ -2,8 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions } from "../src/config.js";
+import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions, mergeGraphOptions } from "../src/config.js";
 import { searchCodegraph } from "../src/agent/search.js";
+import { runTsxScriptOrThrow } from "./helpers/cli.js";
 
 async function mkRepo(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-config-"));
@@ -99,6 +100,77 @@ describe("codegraph config", () => {
     expect(hasDiscoveryOptions({ globRoot: "repo-root" })).toBe(true);
     expect(hasDiscoveryOptions({ gitignoreRoot: "repo-root" })).toBe(true);
     expect(hasDiscoveryOptions({ logLevel: "silent" })).toBe(true);
+  });
+
+  it("loads and merges normalized graph resolution hints", async () => {
+    const root = await mkRepo();
+    await fs.writeFile(
+      path.join(root, "codegraph.config.json"),
+      JSON.stringify({
+        graph: {
+          resolutionHints: [" Source\\Gunship\\Private ", "Source/Gunship/Private"],
+        },
+      }),
+      "utf8",
+    );
+
+    const config = await loadCodegraphConfig(root);
+    expect(config.graph?.resolutionHints).toEqual(["Source/Gunship/Private"]);
+    expect(
+      mergeGraphOptions(config.graph, {
+        fast: true,
+        resolutionHints: ["Source/Gunship/Public", "Source\\Gunship\\Private"],
+      }),
+    ).toEqual({
+      fast: true,
+      resolutionHints: ["Source/Gunship/Private", "Source/Gunship/Public"],
+    });
+  });
+
+  it("rejects unknown graph config properties", async () => {
+    const root = await mkRepo();
+    await fs.writeFile(
+      path.join(root, "codegraph.config.json"),
+      JSON.stringify({
+        graph: {
+          resolutionHints: ["src"],
+          resolveNodeModules: true,
+        },
+      }),
+      "utf8",
+    );
+
+    await expect(loadCodegraphConfig(root)).rejects.toThrow(/Invalid codegraph\.config\.json/);
+  });
+
+  it("applies configured resolution hints through the CLI graph build", async () => {
+    const root = await mkRepo();
+    const main = path.join(root, "src", "main.ts");
+    const button = path.join(root, "src", "components", "button.ts");
+    await fs.mkdir(path.dirname(button), { recursive: true });
+    await fs.writeFile(main, 'import Button from "components/button";\nexport { Button };\n', "utf8");
+    await fs.writeFile(button, "export default function Button() {}\n", "utf8");
+    await fs.writeFile(
+      path.join(root, "codegraph.config.json"),
+      JSON.stringify({ graph: { resolutionHints: ["src"] } }),
+      "utf8",
+    );
+
+    const result = await runTsxScriptOrThrow(
+      path.resolve("src", "cli.ts"),
+      ["graph", "--root", root, "--json", "--stdout"],
+      { cwd: root },
+      "codegraph CLI",
+    );
+    const graph = JSON.parse(result.stdout) as {
+      edges: Array<{ from: string; to: { type: string; path?: string }; raw?: string }>;
+    };
+    expect(graph.edges).toContainEqual(
+      expect.objectContaining({
+        raw: "components/button",
+        to: expect.objectContaining({ type: "file", path: button.replace(/\\/g, "/") }),
+      }),
+    );
   });
 
   it("search honors configured discovery ignores", async () => {

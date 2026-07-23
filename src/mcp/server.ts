@@ -41,6 +41,8 @@ import { previewRenameWithSession, type RenamePreviewResponse } from "../agent/r
 import { buildRefactorPlanWithSession, type RefactorPlanResponse } from "../agent/refactorPlan.js";
 import { getDependencies, getReverseDependencies, getShortestPath, type DependencyNode } from "../graphs/queries.js";
 import { findReferences, goToDefinition } from "../indexer/navigation.js";
+import { analyzeImpactFromDiff, type CompactImpactReport } from "../impact/index.js";
+import { DEFAULT_BOUNDED_IMPACT_BUDGETS } from "../impact/budgets.js";
 import { buildReviewReport, type ReviewDepth, type ReviewReport } from "../review.js";
 import { SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY, queryGraphSqliteRaw, type RawSqlResult } from "../sqlite.js";
 import { isPlainRecord } from "../util/guards.js";
@@ -221,7 +223,7 @@ export type CodegraphMcpHandlers = {
     limit?: number | undefined;
   }) => Promise<CodegraphMcpFreshResult<{ reverseDependencies: Array<{ file: string; depth: number }> }>>;
   path: (request: { from: string; to: string }) => Promise<CodegraphMcpFreshResult<{ path: string[] | null }>>;
-  impact: (request: { base: string; head: string }) => Promise<CodegraphMcpFreshResult<ReviewReport>>;
+  impact: (request: { base: string; head: string }) => Promise<CodegraphMcpFreshResult<CompactImpactReport>>;
   review: (request: {
     base: string;
     head: string;
@@ -757,15 +759,20 @@ function createCodegraphMcpHandlersForSession(
       }),
 
     impact: async (request) =>
-      await withFreshness(
-        async () =>
-          await buildReviewReport(root, {
-            ...options.buildOptions,
-            gitBase: request.base,
-            gitHead: request.head,
-            reviewDepth: "minimal",
-          }),
-      ),
+      await withFreshness(async () => {
+        const snapshot = await session.loadProject({ symbolGraph: "skip" });
+        return (await analyzeImpactFromDiff(root, snapshot.index, {
+          ...options.buildOptions,
+          provider: "git",
+          base: request.base,
+          head: request.head,
+          cwd: root,
+          compact: true,
+          depth: 2,
+          maxRefs: 200,
+          ...DEFAULT_BOUNDED_IMPACT_BUDGETS,
+        })) as CompactImpactReport;
+      }),
 
     review: async (request) =>
       await withFreshness(

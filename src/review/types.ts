@@ -69,6 +69,8 @@ export type ReviewOptions = IncrementalBuildOptions & {
   diffText?: string;
   testPatterns?: string[];
   referenceConcurrency?: number;
+  /** When false, skip prepareDuplicateAnalysis / duplicate review tasks entirely. Default true. */
+  duplicateTasks?: boolean;
   report?: ReviewBuildReport;
 };
 
@@ -104,6 +106,7 @@ export type ReviewTimingReport = {
   indexMs?: number;
   referencesMs?: number;
   candidatesMs?: number;
+  duplicateAnalysisMs?: number;
 };
 
 export type ReviewBuildReport = {

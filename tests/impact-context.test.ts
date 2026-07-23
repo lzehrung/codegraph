@@ -281,8 +281,8 @@ describe("Impact Context Collection", () => {
 
         expect(candidates).toContainEqual({
           file: normalizePath(verifyFile),
-          confidence: "medium",
-          reason: "dependsOnChanged",
+          confidence: "high",
+          reason: "importsChanged",
         });
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
@@ -308,6 +308,28 @@ describe("Impact Context Collection", () => {
 
         expect(candidates).toContainEqual({
           file: normalizePath(verifyFile),
+          confidence: "high",
+          reason: "importsChanged",
+        });
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+    it("keeps indirect test dependency links at medium confidence", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-context-indirect-"));
+      try {
+        const libFile = path.join(root, "lib.ts");
+        const facadeFile = path.join(root, "facade.ts");
+        const testFile = path.join(root, "facade.test.ts");
+        await fsp.writeFile(libFile, "export const value = 1;\n", "utf8");
+        await fsp.writeFile(facadeFile, "export { value } from './lib';\n", "utf8");
+        await fsp.writeFile(testFile, "import { value } from './facade';\nvalue;\n", "utf8");
+
+        const index = await buildProjectIndexFromFiles(root, [libFile, facadeFile, testFile], {
+          cache: "memory",
+        });
+        expect(listCandidateTestFiles(index, [libFile], [])).toContainEqual({
+          file: normalizePath(testFile),
           confidence: "medium",
           reason: "dependsOnChanged",
         });

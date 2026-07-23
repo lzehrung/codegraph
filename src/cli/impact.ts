@@ -32,6 +32,7 @@ import {
   parsePositiveIntegerOption,
 } from "./options.js";
 import { changedFilesWithSimilaritySources, duplicateSimilarityHintsFromChanges } from "./duplicateSimilarity.js";
+import { DEFAULT_BOUNDED_IMPACT_BUDGETS } from "../impact/budgets.js";
 
 type ImpactOptionsBuilder = Partial<ImpactOptions> & {
   base?: string;
@@ -345,6 +346,39 @@ function applyAnalysisOptions(context: ImpactCommandContext, options: ImpactOpti
   const parsedMaxRefs = parseOptionalNonNegativeIntegerOption(maxRefs, "--max-refs");
   if (parsedMaxRefs !== undefined) options.maxRefs = parsedMaxRefs;
 
+  const maxChangedSymbols = context.getOpt("--max-changed-symbols");
+  const parsedMaxChangedSymbols = parseOptionalNonNegativeIntegerOption(maxChangedSymbols, "--max-changed-symbols");
+  if (parsedMaxChangedSymbols !== undefined) options.maxChangedSymbols = parsedMaxChangedSymbols;
+
+  const maxReferenceLookups = context.getOpt("--max-reference-lookups");
+  const parsedMaxReferenceLookups = parseOptionalNonNegativeIntegerOption(
+    maxReferenceLookups,
+    "--max-reference-lookups",
+  );
+  if (parsedMaxReferenceLookups !== undefined) options.maxReferenceLookups = parsedMaxReferenceLookups;
+
+  const maxTotalReferences = context.getOpt("--max-total-references");
+  const parsedMaxTotalReferences = parseOptionalNonNegativeIntegerOption(maxTotalReferences, "--max-total-references");
+  if (parsedMaxTotalReferences !== undefined) options.maxTotalReferences = parsedMaxTotalReferences;
+
+  const timeBudgetMs = context.getOpt("--time-budget-ms");
+  const parsedTimeBudgetMs = parseOptionalNonNegativeIntegerOption(timeBudgetMs, "--time-budget-ms");
+  if (parsedTimeBudgetMs !== undefined) options.timeBudgetMs = parsedTimeBudgetMs;
+
+  // Bounded defaults for the common orchestrator accelerant path (--pretty/--compact)
+  // without changing unlimited library behavior when callers omit budgets.
+  const wantsBoundedDefaults =
+    context.hasFlag("--pretty") || context.hasFlag("--compact") || context.hasFlag("--compact-json");
+  if (wantsBoundedDefaults) {
+    if (options.maxChangedSymbols === undefined)
+      options.maxChangedSymbols = DEFAULT_BOUNDED_IMPACT_BUDGETS.maxChangedSymbols;
+    if (options.maxReferenceLookups === undefined)
+      options.maxReferenceLookups = DEFAULT_BOUNDED_IMPACT_BUDGETS.maxReferenceLookups;
+    if (options.maxTotalReferences === undefined)
+      options.maxTotalReferences = DEFAULT_BOUNDED_IMPACT_BUDGETS.maxTotalReferences;
+    if (options.timeBudgetMs === undefined) options.timeBudgetMs = DEFAULT_BOUNDED_IMPACT_BUDGETS.timeBudgetMs;
+  }
+
   const depth = context.getOpt("--depth");
   const parsedDepth = parseOptionalNonNegativeIntegerOption(depth, "--depth");
   if (parsedDepth !== undefined) options.depth = parsedDepth;
@@ -433,6 +467,15 @@ function formatPrettyImpactReport(impactReport: ImpactReport, duplicateSummary?:
   lines.push(`Changed files: ${impactReport.changedFiles.length}`);
   lines.push(`Changed symbols: ${impactReport.changedSymbols.length}`);
   lines.push(`Impacted items: ${impactReport.impacted.length}`);
+  if (impactReport.diagnostics) {
+    const diagnostics = impactReport.diagnostics;
+    lines.push(
+      `Bounds: changed symbols ${diagnostics.changedSymbolsAnalyzed}/${diagnostics.changedSymbolsTotal} analyzed (${diagnostics.changedSymbolsOmitted} omitted); ` +
+        `reference lookups ${diagnostics.referenceLookupsStarted} started (${diagnostics.referenceLookupsOmitted} omitted); ` +
+        `references ${diagnostics.referencesRetained} retained (${diagnostics.referencesOmitted} omitted); ` +
+        `deadline exceeded: ${diagnostics.deadlineExceeded ? "yes" : "no"}`,
+    );
+  }
   lines.push("");
   for (const item of impactReport.impacted.slice(0, 10)) {
     const reasonLabel = formatImpactReasonLabel(item);

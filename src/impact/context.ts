@@ -9,7 +9,7 @@ import { compileTestPatterns, createIndexTestFileMatcher } from "./testPatterns.
 export interface CandidateTestFile {
   file: FileId;
   confidence: "high" | "medium" | "low";
-  reason: "importsChanged" | "dependsOnChanged" | "pattern";
+  reason: "changedTest" | "importsChanged" | "symbolReference" | "dependsOnChanged" | "pattern";
 }
 
 export interface ImpactContext {
@@ -240,6 +240,20 @@ async function collectSymbolNeighbors(
  * Find test files that might be affected by changes.
  * Uses reverse dependencies and optional pattern matching.
  */
+function candidateConfidenceRank(confidence: CandidateTestFile["confidence"]): number {
+  if (confidence === "high") return 3;
+  if (confidence === "medium") return 2;
+  return 1;
+}
+
+function compareCandidateTests(left: CandidateTestFile, right: CandidateTestFile): number {
+  const confidenceCompare = candidateConfidenceRank(right.confidence) - candidateConfidenceRank(left.confidence);
+  if (confidenceCompare !== 0) return confidenceCompare;
+  const fileCompare = left.file.localeCompare(right.file);
+  if (fileCompare !== 0) return fileCompare;
+  return left.reason.localeCompare(right.reason);
+}
+
 export function listCandidateTestFiles(
   index: ProjectIndex,
   changedFiles: FileId[],
@@ -262,6 +276,24 @@ export function listCandidateTestFiles(
   const allPatterns = compileTestPatterns(testPatterns);
   const isIndexTestFile = createIndexTestFileMatcher(index, allPatterns, projectRoot, resolvedChangedFiles);
 
+  const upsertCandidate = (candidate: CandidateTestFile): void => {
+    const existing = candidates.get(candidate.file);
+    if (!existing || candidateConfidenceRank(candidate.confidence) > candidateConfidenceRank(existing.confidence)) {
+      candidates.set(candidate.file, candidate);
+    }
+  };
+
+  // Changed tests are always focused regression inputs, even when no graph edge resolves.
+  for (const changedFile of resolvedChangedFiles) {
+    if (isIndexTestFile(changedFile)) {
+      upsertCandidate({
+        file: changedFile,
+        confidence: "high",
+        reason: "changedTest",
+      });
+    }
+  }
+
   // Find test files that import changed symbols directly
   const symbolFiles = new Set<FileId>();
   for (const symbolId of changedSymbolIds) {
@@ -274,7 +306,7 @@ export function listCandidateTestFiles(
     const dependents = getReverseNeighbors(adjacency, file);
     for (const dependent of dependents) {
       if (isIndexTestFile(dependent)) {
-        candidates.set(dependent, {
+        upsertCandidate({
           file: dependent,
           confidence: "high",
           reason: "importsChanged",
@@ -283,33 +315,56 @@ export function listCandidateTestFiles(
     }
   }
 
-  // Find test files that depend on changed files (lower confidence)
+  // The navigation candidate index can retain proven resolved-import links that are
+  // absent from a sparse file graph. Treat those symbol-owner reverse links as high confidence.
+  for (const file of symbolFiles) {
+    for (const dependent of index.referenceCandidates?.byTargetFile.get(file) ?? []) {
+      if (isIndexTestFile(dependent) && !candidates.has(dependent)) {
+        upsertCandidate({
+          file: dependent,
+          confidence: "high",
+          reason: "symbolReference",
+        });
+      }
+    }
+  }
+
+  // Direct file reverse edges are proven imports and therefore high confidence.
+  // One additional bounded reverse hop remains a medium-confidence dependency link.
   for (const changedFile of resolvedChangedFiles) {
     const dependents = getReverseNeighbors(adjacency, changedFile);
     for (const dependent of dependents) {
-      if (isIndexTestFile(dependent) && !candidates.has(dependent)) {
-        candidates.set(dependent, {
+      if (isIndexTestFile(dependent)) {
+        upsertCandidate({
           file: dependent,
-          confidence: "medium",
-          reason: "dependsOnChanged",
+          confidence: "high",
+          reason: "importsChanged",
         });
+        continue;
+      }
+      for (const indirectDependent of getReverseNeighbors(adjacency, dependent)) {
+        if (isIndexTestFile(indirectDependent)) {
+          upsertCandidate({
+            file: indirectDependent,
+            confidence: "medium",
+            reason: "dependsOnChanged",
+          });
+        }
       }
     }
   }
 
-  // Find test files by pattern in the entire codebase (lowest confidence)
-  if (candidates.size < maxCandidates) {
-    for (const [file] of index.byFile) {
-      if (candidates.size >= maxCandidates) break;
-      if (!candidates.has(file) && isIndexTestFile(file)) {
-        candidates.set(file, {
-          file,
-          confidence: "low",
-          reason: "pattern",
-        });
-      }
+  // Pattern matches are low-confidence fill-in only. Collect all matches so the
+  // deterministic rank/path ordering is applied before the result limit.
+  for (const [file] of index.byFile) {
+    if (!candidates.has(file) && isIndexTestFile(file)) {
+      upsertCandidate({
+        file,
+        confidence: "low",
+        reason: "pattern",
+      });
     }
   }
 
-  return Array.from(candidates.values()).slice(0, maxCandidates);
+  return Array.from(candidates.values()).sort(compareCandidateTests).slice(0, maxCandidates);
 }

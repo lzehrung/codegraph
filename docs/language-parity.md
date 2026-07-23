@@ -99,3 +99,7 @@ Monorepo and diagnostic behavior:
 - Project file traversal stops at the nearest manifest boundary, so scoped scans do not inherit unrelated parent projects.
 - `inspect` and `unresolved` use supported dependency manifests to suppress declared third-party packages from unresolved-import diagnostics.
 - Graph-only document and template link edges still appear in graph output. They are excluded from unresolved-import diagnostics by default, so source import health is not mixed with documentation link checking.
+
+## C/C++ resolution hints
+
+Configure repo-local include roots with `graph.resolutionHints` in `codegraph.config.json` or CLI `--resolution-hint`. Hints are root-confined, participate in cache identity, and improve candidate-test linkage for layouts such as Unreal-style `Private/.../Tests` includes.

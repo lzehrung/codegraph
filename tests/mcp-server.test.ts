@@ -18,6 +18,7 @@ import { SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY } from "../src/sqlite.js";
 import { countingSession } from "./helpers/agent.js";
 import { createArtifactOutputWithStaleFile, createLinkedTempRoot, isSymlinkUnavailable } from "./helpers/filesystem.js";
 import { getCodegraphVersion } from "../src/cli/packageInfo.js";
+import { runGit } from "./helpers/git.js";
 
 type JsonRpcObject = {
   jsonrpc?: unknown;
@@ -149,6 +150,34 @@ describe("codegraph MCP handlers", () => {
     } finally {
       await httpServer.close();
     }
+  });
+
+  it("returns compact impact data while review keeps review-specific fields", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-impact-schema-"));
+    runGit(root, ["init"]);
+    await fs.writeFile(path.join(root, "auth.ts"), "export function authorize() { return false; }\n", "utf8");
+    await fs.writeFile(
+      path.join(root, "api.ts"),
+      'import { authorize } from "./auth";\nexport const handle = () => authorize();\n',
+      "utf8",
+    );
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "base"]);
+    const base = runGit(root, ["rev-parse", "HEAD"]);
+    await fs.writeFile(path.join(root, "auth.ts"), "export function authorize() { return true; }\n", "utf8");
+    runGit(root, ["add", "auth.ts"]);
+    runGit(root, ["commit", "-m", "change"]);
+
+    const handlers = createCodegraphMcpHandlers({ root });
+    const impact = await handlers.impact({ base, head: "HEAD" });
+    const review = await handlers.review({ base, head: "HEAD" });
+
+    expect(impact.format).toBe("compact");
+    expect(impact.impacted).toBeDefined();
+    expect(impact).not.toHaveProperty("riskSummary");
+    expect(impact).not.toHaveProperty("reviewTasks");
+    expect(review).toHaveProperty("riskSummary");
+    expect(review).toHaveProperty("reviewTasks");
   });
 
   it("keeps tool calls available when installed package metadata disappears", async () => {

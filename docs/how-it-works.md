@@ -60,6 +60,8 @@ The resulting file nodes and typed edges are stored with forward and reverse adj
 
 ## Semantic navigation and impact
 
+Impact and review commands can apply request-wide work budgets so large diffs return ranked partial evidence with exact omit counts instead of hanging. External review orchestrators should treat `impact --provider git --pretty` and `review --summary` as bounded accelerants, not as an owned review workflow or packet protocol.
+
 The semantic index connects definitions, scopes, exports, and import bindings to graph edges. `goto` resolves local definitions and imported bindings, including supported namespace-member cases. `refs` follows local and imported references through the same model.
 
 Workspace-symbol lookup builds a cached candidate view from indexed definitions and only materializes import aliases when requested. It applies kind, exported, and project-relative file-glob filters before deterministic ranking: qualified and exact names lead, followed by case-insensitive exact, prefix, identifier-token, and substring matches.

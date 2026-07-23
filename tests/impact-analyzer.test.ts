@@ -6,6 +6,8 @@ import { analyzeImpactFromDiff } from "../src/index.js";
 import { analyzeImpact, seedTransitiveFromFiles, calculateSeverity } from "../src/impact/analyzer.js";
 import { DEFAULT_SEVERITY_WEIGHTS } from "../src/impact/types.js";
 import { createReferenceLookupCache } from "../src/impact/referenceCache.js";
+import { createImpactDiagnostics } from "../src/impact/collect.js";
+import { rankChangedSymbolsForBudget } from "../src/impact/budgets.js";
 import { buildProjectIndex, buildProjectIndexFromFiles, SymbolKind } from "../src/indexer.js";
 import type { ProjectIndex } from "../src/indexer.js";
 import { normalizePath } from "../src/util/paths.js";
@@ -1548,5 +1550,258 @@ describe("Impact Analyzer Edge Cases", () => {
         await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }
     });
+    it("bounds reference scheduling across many changed symbols", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-work-budget-"));
+      try {
+        await fsp.mkdir(path.join(root, "src"), { recursive: true });
+        const declarations = Array.from(
+          { length: 12 },
+          (_, index) => `export function symbol${index}(): number { return ${index}; }`,
+        );
+        const imports = Array.from({ length: 12 }, (_, index) => `symbol${index}`).join(", ");
+        const calls = Array.from({ length: 12 }, (_, index) => `symbol${index}()`).join(" + ");
+        await fsp.writeFile(path.join(root, "src/api.ts"), `${declarations.join("\n")}\n`, "utf8");
+        await fsp.writeFile(
+          path.join(root, "src/consumer.ts"),
+          `import { ${imports} } from "./api";\nexport const result = ${calls};\n`,
+          "utf8",
+        );
+        const index = await buildProjectIndex(root, { cache: "memory" });
+        const apiFile = normalizePath(path.join(root, "src/api.ts"));
+        const changedSymbols = (index.byFile.get(apiFile)?.locals ?? [])
+          .filter((symbol) => symbol.localName.startsWith("symbol"))
+          .map((symbol) => ({
+            id: `${symbol.file}::${symbol.localName}::${symbol.range.start.index ?? 0}`,
+            file: symbol.file,
+            name: symbol.localName,
+            kind: symbol.kind,
+            exported: true,
+            range: symbol.range,
+          }));
+        const diagnostics = createImpactDiagnostics(1, 0);
+
+        await analyzeImpact(index, changedSymbols, [], {
+          membersOnly: true,
+          maxReferenceLookups: 3,
+          maxTotalReferences: 2,
+          diagnostics,
+        });
+
+        expect(diagnostics.referenceLookupsStarted).toBe(3);
+        expect(diagnostics.referenceLookupsOmitted).toBe(changedSymbols.length - 3);
+        expect(diagnostics.changedSymbolsTotal).toBe(changedSymbols.length);
+        expect(diagnostics.referencesRetained).toBe(2);
+        expect(diagnostics.referencesOmitted).toBe(4);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
+    it("ranks changed-symbol budget selection deterministically", async () => {
+      const index = await createTestIndex("typescript");
+      const baseRange = { start: { line: 1, column: 0 }, end: { line: 1, column: 10 } };
+      const symbols = [
+        {
+          id: "local",
+          file: "src/z.ts",
+          name: "local",
+          kind: SymbolKind.Variable,
+          exported: false,
+          range: baseRange,
+        },
+        {
+          id: "public",
+          file: "src/y.ts",
+          name: "public",
+          kind: SymbolKind.Variable,
+          exported: true,
+          range: baseRange,
+        },
+        {
+          id: "signature",
+          file: "src/x.ts",
+          name: "signature",
+          kind: SymbolKind.Function,
+          exported: false,
+          range: baseRange,
+          signatureChanged: true,
+        },
+      ];
+
+      const forward = rankChangedSymbolsForBudget(symbols, index).map((symbol) => symbol.id);
+      const reversed = rankChangedSymbolsForBudget([...symbols].reverse(), index).map((symbol) => symbol.id);
+
+      expect(forward).toEqual(["signature", "public", "local"]);
+      expect(reversed).toEqual(forward);
+    });
+
+    it("returns exact partial diagnostics when the analysis deadline is already exhausted", async () => {
+      const index = await createTestIndex("typescript");
+      const file = Array.from(index.byFile.keys())[0]!;
+      const locals = index.byFile.get(file)?.locals ?? [];
+      const changedSymbols = locals.map((symbol) => ({
+        id: `${symbol.file}::${symbol.localName}::${symbol.range.start.index ?? 0}`,
+        file: symbol.file,
+        name: symbol.localName,
+        kind: symbol.kind,
+        exported: false,
+        range: symbol.range,
+      }));
+      const diagnostics = createImpactDiagnostics(1, 0);
+
+      const result = await analyzeImpact(index, changedSymbols, [], {
+        membersOnly: true,
+        timeBudgetMs: 0,
+        diagnostics,
+      });
+
+      expect(result).toEqual([]);
+      expect(diagnostics.deadlineExceeded).toBe(true);
+      expect(diagnostics.changedSymbolsTotal).toBe(changedSymbols.length);
+      expect(diagnostics.changedSymbolsAnalyzed).toBe(0);
+      expect(diagnostics.changedSymbolsOmitted).toBe(changedSymbols.length);
+      expect(diagnostics.referenceLookupsStarted).toBe(0);
+      expect(diagnostics.referenceLookupsOmitted).toBe(changedSymbols.length);
+    });
+  });
+});
+
+describe("impact request-wide budgets", () => {
+  it("ranks and limits changed symbols before reference lookups", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-impact-budget-symbols-"));
+    try {
+      const src = path.join(root, "src");
+      await fsp.mkdir(src, { recursive: true });
+      const imports: string[] = [];
+      const calls: string[] = [];
+      for (let i = 0; i < 30; i += 1) {
+        const name = `fn${i}`;
+        await fsp.writeFile(path.join(src, `mod${i}.ts`), `export function ${name}() { return ${i}; }\n`, "utf8");
+        imports.push(`import { ${name} } from "./mod${i}";`);
+        calls.push(`${name}()`);
+      }
+      await fsp.writeFile(
+        path.join(src, "consumer.ts"),
+        `${imports.join("\n")}\nexport const all = [${calls.join(", ")}];\n`,
+        "utf8",
+      );
+
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const hunks = Array.from({ length: 30 }, (_, i) => {
+        return `diff --git a/src/mod${i}.ts b/src/mod${i}.ts
+index 1111111..2222222 100644
+--- a/src/mod${i}.ts
++++ b/src/mod${i}.ts
+@@ -1,1 +1,1 @@
+-export function fn${i}() { return ${i}; }
++export function fn${i}(x = 0) { return ${i} + x; }
+`;
+      }).join("");
+
+      const report = await analyzeImpactFromDiff(root, index, {
+        provider: "raw",
+        diffText: hunks,
+        maxChangedSymbols: 5,
+        maxReferenceLookups: 5,
+        maxTotalReferences: 50,
+        maxRefs: 10,
+      });
+
+      expect(report.diagnostics?.changedSymbolsTotal).toBeGreaterThan(5);
+      expect(report.diagnostics?.changedSymbolsAnalyzed).toBe(5);
+      expect(report.diagnostics?.changedSymbolsOmitted).toBe((report.diagnostics?.changedSymbolsTotal ?? 0) - 5);
+      expect(report.diagnostics?.referenceLookupsStarted ?? 0).toBeLessThanOrEqual(5);
+      expect(
+        (report.diagnostics?.referenceLookupsOmitted ?? 0) + (report.diagnostics?.referenceLookupsStarted ?? 0),
+      ).toBeGreaterThan(0);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns deterministic selected symbols for identical budgeted inputs", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-impact-budget-deterministic-"));
+    try {
+      const src = path.join(root, "src");
+      await fsp.mkdir(src, { recursive: true });
+      await fsp.writeFile(path.join(src, "a.ts"), "export function alpha() { return 1; }\n", "utf8");
+      await fsp.writeFile(path.join(src, "b.ts"), "export function beta() { return 2; }\n", "utf8");
+      await fsp.writeFile(path.join(src, "c.ts"), "export const gamma = 3;\n", "utf8");
+      await fsp.writeFile(
+        path.join(src, "consumer.ts"),
+        'import { alpha } from "./a";\nimport { beta } from "./b";\nimport { gamma } from "./c";\nexport const all = [alpha(), beta(), gamma];\n',
+        "utf8",
+      );
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const diffText = `diff --git a/src/a.ts b/src/a.ts
+index 1111111..2222222 100644
+--- a/src/a.ts
++++ b/src/a.ts
+@@ -1,1 +1,1 @@
+-export function alpha() { return 1; }
++export function alpha(x = 0) { return 1 + x; }
+diff --git a/src/b.ts b/src/b.ts
+index 1111111..2222222 100644
+--- a/src/b.ts
++++ b/src/b.ts
+@@ -1,1 +1,1 @@
+-export function beta() { return 2; }
++export function beta(x = 0) { return 2 + x; }
+diff --git a/src/c.ts b/src/c.ts
+index 1111111..2222222 100644
+--- a/src/c.ts
++++ b/src/c.ts
+@@ -1,1 +1,1 @@
+-export const gamma = 3;
++export const gamma = 4;
+`;
+      const opts = {
+        provider: "raw" as const,
+        diffText,
+        maxChangedSymbols: 2,
+        maxReferenceLookups: 2,
+        maxRefs: 10,
+      };
+      const first = await analyzeImpactFromDiff(root, index, opts);
+      const second = await analyzeImpactFromDiff(root, index, opts);
+      expect(first.changedSymbols.map((symbol) => symbol.id)).toEqual(second.changedSymbols.map((symbol) => symbol.id));
+      expect(first.diagnostics?.changedSymbolsOmitted).toBe(second.diagnostics?.changedSymbolsOmitted);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("marks deadlineExceeded and returns a valid partial report", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-impact-budget-deadline-"));
+    try {
+      const src = path.join(root, "src");
+      await fsp.mkdir(src, { recursive: true });
+      const parts: string[] = [];
+      for (let i = 0; i < 20; i += 1) {
+        await fsp.writeFile(path.join(src, `mod${i}.ts`), `export function fn${i}() { return ${i}; }\n`, "utf8");
+        parts.push(`diff --git a/src/mod${i}.ts b/src/mod${i}.ts
+index 1111111..2222222 100644
+--- a/src/mod${i}.ts
++++ b/src/mod${i}.ts
+@@ -1,1 +1,1 @@
+-export function fn${i}() { return ${i}; }
++export function fn${i}(x = 0) { return ${i} + x; }
+`);
+      }
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const report = await analyzeImpactFromDiff(root, index, {
+        provider: "raw",
+        diffText: parts.join(""),
+        timeBudgetMs: 0,
+        maxChangedSymbols: 20,
+        maxReferenceLookups: 20,
+        maxRefs: 5,
+      });
+      expect(report.diagnostics?.deadlineExceeded).toBe(true);
+      expect(Array.isArray(report.impacted)).toBe(true);
+      expect(report.schemaVersion).toBeTypeOf("number");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });

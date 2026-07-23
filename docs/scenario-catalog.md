@@ -293,3 +293,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | Namespace member access  | `tests/samples/zig/main.zig`, `tests/samples/zig/helpers.zig`         | Go-to-definition and references resolve function members through aliases created by `const alias = @import("./module.zig")`.            | Internal regression fixture | 2026-05-02 |
 | Type alias members       | `tests/samples/zig/main.zig`, `tests/samples/zig/math.zig`            | Symbol extraction classifies type-valued `pub const` declarations as types, and navigation/references resolve `module.TypeName` usages. | Internal regression fixture | 2026-05-02 |
 | Native semantic coverage | `tests/languages/zig.test.ts`, `tests/native-semantic-parity.test.ts` | Native graph edges, symbol presence, go-to-definition, and find-references coverage stay stable for Zig fixtures.                       | Internal regression test    | 2026-05-02 |
+
+## C/C++ resolution hints
+
+Configure repo-local include roots with `graph.resolutionHints` in `codegraph.config.json` or CLI `--resolution-hint`. Hints are root-confined, participate in cache identity, and improve candidate-test linkage for layouts such as Unreal-style `Private/.../Tests` includes.
