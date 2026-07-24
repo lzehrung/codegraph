@@ -249,9 +249,11 @@ function candidateConfidenceRank(confidence: CandidateTestFile["confidence"]): n
 function compareCandidateTests(left: CandidateTestFile, right: CandidateTestFile): number {
   const confidenceCompare = candidateConfidenceRank(right.confidence) - candidateConfidenceRank(left.confidence);
   if (confidenceCompare !== 0) return confidenceCompare;
-  const fileCompare = left.file.localeCompare(right.file);
-  if (fileCompare !== 0) return fileCompare;
-  return left.reason.localeCompare(right.reason);
+  if (left.file < right.file) return -1;
+  if (left.file > right.file) return 1;
+  if (left.reason < right.reason) return -1;
+  if (left.reason > right.reason) return 1;
+  return 0;
 }
 
 export function listCandidateTestFiles(

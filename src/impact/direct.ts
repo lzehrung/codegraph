@@ -123,13 +123,14 @@ async function analyzeChangedSymbolReferences(
       continue;
     }
     if (keptRefs >= options.maxRefs) {
-      if (diagnostics) diagnostics.refsDroppedByMaxRefs += 1;
-      if (workBudget) recordReferencesOmitted(workBudget, 1);
-      continue;
+      const remaining = refs.references.length - refIndex;
+      if (diagnostics) diagnostics.refsDroppedByMaxRefs += remaining;
+      if (workBudget) recordReferencesOmitted(workBudget, remaining);
+      break;
     }
     if (workBudget && remainingReferenceRetainBudget(workBudget) === 0) {
-      recordReferencesOmitted(workBudget, 1);
-      continue;
+      recordReferencesOmitted(workBudget, refs.references.length - refIndex);
+      break;
     }
     keptRefs += 1;
     if (workBudget) {

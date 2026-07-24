@@ -238,7 +238,7 @@ export type ImpactDiagnostics = {
   changedSymbolsOmitted: number;
   /** findReferences / call-compat lookups that were started. */
   referenceLookupsStarted: number;
-  /** Lookups skipped because maxReferenceLookups was exhausted. */
+  /** Lookups skipped by request-wide budgets (maxReferenceLookups, maxChangedSymbols selection, or deadline). */
   referenceLookupsOmitted: number;
   /** Reference sites retained in the report across the whole request. */
   referencesRetained: number;
