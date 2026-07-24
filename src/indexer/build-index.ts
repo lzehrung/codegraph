@@ -1117,6 +1117,15 @@ export async function buildProjectIndexIncremental(
     const markAsChanged = (file: string): void => {
       if (fs.existsSync(file)) changedFiles.add(file);
     };
+    // Git working-tree diffs are change *candidates*, not proof the indexed bytes are
+    // stale. `lastCommit...WORKTREE` stays dirty across warm runs after we index the
+    // dirty tree, so force-marking these files caused perpetual "Updated N files"
+    // reparses even when signatures already matched the on-disk content. Keep them in
+    // `allFiles` above so signature validation can decide; only skip the early snapshot
+    // fast-path while candidates exist.
+    const gitChangeCandidates = new Set<string>();
+    for (const file of manifestDiffFiles) if (fs.existsSync(file)) gitChangeCandidates.add(file);
+    for (const file of gitFiles) if (fs.existsSync(file)) gitChangeCandidates.add(file);
     const explicitFileSet = new Set(explicitFiles);
     const explicitFilesCoverAllFiles =
       explicitFileSet.size === allFiles.size && [...allFiles].every((file) => explicitFileSet.has(file));
@@ -1124,8 +1133,6 @@ export async function buildProjectIndexIncremental(
     if (explicitFileSet.size && explicitFilesAreChangeInputs && (!explicitFilesCoverAllFiles || report)) {
       explicitFileSet.forEach(markAsChanged);
     }
-    manifestDiffFiles.forEach(markAsChanged);
-    gitFiles.forEach(markAsChanged);
     dependentFilesOfDeletedTracked.forEach(markAsChanged);
     if (fileReport) fileReport.changed = changedFiles.size;
 
@@ -1156,7 +1163,11 @@ export async function buildProjectIndexIncremental(
     };
 
     const canSkipFileValidation =
-      gitAvailable && !opts?.cacheStrict && !untrackedFiles.length && !additionalFiles.length;
+      gitAvailable &&
+      !opts?.cacheStrict &&
+      !untrackedFiles.length &&
+      !additionalFiles.length &&
+      !gitChangeCandidates.size;
     if (canSkipFileValidation) {
       const snapshot = await reuseUnchangedSnapshot();
       if (snapshot) {

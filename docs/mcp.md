@@ -58,7 +58,8 @@ The server exposes the same bounded primitives as the CLI and library session la
 - `goto`: definition lookup by file position.
 - `refs`: references by handle or file position.
 - `deps`, `rdeps`, `path`: dependency navigation.
-- `impact`, `review`: git-range risk and review context.
+- `impact`: compact git-range impact analysis (`format: "compact"`, `impacted`, diagnostics). Bounded by default.
+- `review`: git-range review report (`riskSummary`, `reviewTasks`, candidate tests).
 - `query_sqlite`: bounded read-only SQLite artifact query with freshness metadata.
 - `refresh_index`: invalidate the in-memory session and optionally rebuild the base or symbol snapshot.
 - `artifact_build`: artifact creation, available only with write access enabled.

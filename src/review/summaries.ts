@@ -406,10 +406,18 @@ export async function summarizeChangedFiles(input: {
         if (isMissingExplicitInput) {
           diagnostics.missingFiles.push(relativePath(projectRoot, file));
         }
+        // Existing non-indexed files (scripts, docs, extensionless) are still updates.
+        // Only report deleted when the diff/disk evidence says the path is gone.
+        let status: ReviewFileSummary["status"] = "updated";
+        if (isMissingExplicitInput) {
+          status = "missing";
+        } else if (isDeletedByDiff || !fileExistsOnDisk) {
+          status = "deleted";
+        }
         return {
           summary: {
             file: relativePath(projectRoot, file),
-            status: isMissingExplicitInput ? "missing" : "deleted",
+            status,
             ...diffMetadata,
             symbols: [],
           } satisfies ReviewFileSummary,

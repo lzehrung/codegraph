@@ -243,15 +243,19 @@ describe("agent search", () => {
     expect(second.results.map((result) => result.handle)).toEqual(first.results.map((result) => result.handle));
   });
 
-  it("skips detailed symbol graph work for path-only, text-only, and sql-only searches", async () => {
+  it("skips detailed symbol graph work for path, text, sql, hybrid, symbol, and graph searches", async () => {
     const root = await mkRepo();
     const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
 
     await searchCodegraph({ root, query: "auth", mode: "path", limit: 5 });
     await searchCodegraph({ root, query: "active users", mode: "text", limit: 5 });
     await searchCodegraph({ root, query: "public users", mode: "sql", limit: 5 });
+    const hybrid = await searchCodegraph({ root, query: "callCompatibility", mode: "hybrid", limit: 5 });
+    await searchCodegraph({ root, query: "callCompatibility", mode: "symbol", limit: 5 });
+    await searchCodegraph({ root, query: "auth", mode: "graph", limit: 5 });
 
     expect(symbolGraphSpy).not.toHaveBeenCalled();
+    expect(hybrid.results.some((result) => result.kind === "symbol" && result.label === "callCompatibility")).toBeTruthy();
   });
 
   it("keeps implementation results ahead of documentation phrases in hybrid mode", async () => {

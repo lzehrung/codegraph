@@ -2,7 +2,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { GRAPH_ONLY_RESOLUTION_EXTENSIONS } from "./graphOnlyExtensions.js";
-import { normalizePath, normalizeResolutionHints } from "./paths.js";
+import { isFilePathWithinRoot, normalizePath, normalizeResolutionHints } from "./paths.js";
 import { DEFAULT_RESOLUTION_EXTENSIONS, getResolutionExtensions } from "./resolutionCandidates.js";
 import {
   clearWorkspaceCaches,
@@ -293,9 +293,11 @@ export async function resolveSpecifier(
   if (resolutionHints.length) {
     for (const hint of resolutionHints) {
       const baseDir = path.isAbsolute(hint) ? hint : path.resolve(projectRoot, hint);
+      if (!isFilePathWithinRoot(projectRoot, baseDir)) continue;
       const base = path.resolve(baseDir, spec);
+      if (!isFilePathWithinRoot(projectRoot, base)) continue;
       const hit = await findFirstExistingResolutionCandidate(base, resolutionExtensions);
-      if (hit) {
+      if (hit && isFilePathWithinRoot(projectRoot, hit)) {
         setResolveSpecifierCacheEntry(cacheKey, hit);
         return hit;
       }

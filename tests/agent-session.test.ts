@@ -101,6 +101,23 @@ describe("agent session", () => {
     expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("loads a basic in-memory symbol graph without detailed sidecar work", async () => {
+    const root = await mkRepo();
+    const detailedSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+    const session = createAgentSession({ root });
+
+    const basic = await session.loadProject({ symbolGraph: "basic" });
+    const basicAgain = await session.loadProject({ symbolGraph: "basic" });
+
+    expect(basicAgain).toBe(basic);
+    expect(basic.symbolGraph.nodes.size).toBeGreaterThan(0);
+    expect(detailedSpy).not.toHaveBeenCalled();
+
+    const eager = await session.loadProject();
+    expect(eager.symbolGraph.nodes.size).toBeGreaterThan(0);
+    expect(detailedSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("persists detailed symbols and lazily reuses them in a new session without source parsing", async () => {
     const root = await mkGitRepo();
     await fs.writeFile(

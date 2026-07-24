@@ -313,6 +313,10 @@ export async function handleReviewCommand(context: ReviewCommandContext): Promis
   if (maxCallsites !== undefined) reviewOpts.maxCallsites = maxCallsites;
   if (maxTests !== undefined) reviewOpts.maxCandidates = maxTests;
   const wantsHumanSummary = context.hasFlag("--summary") || context.hasFlag("--pretty");
+  const duplicateScope = parseDuplicateLeadScope(context.getOpt("--duplicates"), "impacted");
+  if (duplicateScope === "off") {
+    reviewOpts.duplicateTasks = false;
+  }
   const needsReviewBuildReport = Boolean(context.commandReport) || wantsHumanSummary;
   let reviewBuildReport: ReviewBuildReport | undefined;
   if (needsReviewBuildReport) {
@@ -325,7 +329,6 @@ export async function handleReviewCommand(context: ReviewCommandContext): Promis
   }
   const report = await buildReviewReport(context.projectRootFs, reviewOpts);
   if (wantsHumanSummary) {
-    const duplicateScope = parseDuplicateLeadScope(context.getOpt("--duplicates"), "impacted");
     let duplicateSummary: DuplicateLeadSummary | undefined;
     if (duplicateScope !== "off") {
       const reviewIndex = reviewBuildReport?.index;

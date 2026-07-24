@@ -25,6 +25,12 @@ export type {
 export const DEFAULT_PROJECT_FILE_IGNORES = [
   "**/node_modules/**",
   "**/.git/**",
+  // Never treat Codegraph's own on-disk state as project input. `.codegraph/` is the
+  // lifecycle manifest root; `.codegraph-cache/` is the indexer disk cache. Either can
+  // contain JSON/markdown/source-looking files that would otherwise match discovery
+  // patterns and create perpetual "new untracked file" / reindex churn.
+  "**/.codegraph/**",
+  "**/.codegraph-cache/**",
   "**/dist/**",
   "**/build/**",
   "**/target/**",

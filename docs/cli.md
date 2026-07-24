@@ -120,7 +120,7 @@ Graph, index, and review reports include `backend.native.byLanguage` so native u
 ### Project lifecycle
 
 - `init` creates `.codegraph/manifest.json`, warms the existing disk cache through the index build path, and is idempotent when the manifest is current. Use `--force` to rebuild and overwrite the manifest metadata.
-- In a Git worktree, `init` first checks Git's effective ignore policy for `.codegraph/manifest.json`. If the manifest is untracked and not already ignored by root/parent rules, negations, `.git/info/exclude`, or global excludes, it appends exactly `.codegraph/` to the resolved project root's `.gitignore`; use `--no-update-gitignore` to opt out.
+- In a Git worktree, `init` first checks Git's effective ignore policy for `.codegraph/manifest.json` and `.codegraph-cache/`. If either is untracked and not already ignored by root/parent rules, negations, `.git/info/exclude`, or global excludes, it appends the missing `.codegraph/` and/or `.codegraph-cache/` rules to the resolved project root's `.gitignore`; use `--no-update-gitignore` to opt out.
 - A tracked manifest is left tracked and the ignore policy is unchanged. Non-Git projects remain supported without creating `.gitignore`, and directory or symlink `.gitignore` paths fail before manifest creation with guidance to replace the path or opt out.
 - `status` reports whether lifecycle metadata exists, last sync time, then/current file counts, per-file content drift (files changed even when counts match, e.g. edits in place or N files swapped for N others), config/build-option drift, analysis label, and the suggested next command. Use `--json` for `schemaVersion: 1`.
 - `sync` refreshes the manifest after edits and requires an initialized project unless `--init` is passed. `sync --init` performs the same ignore preparation and accepts `--no-update-gitignore`; ordinary `sync` never changes ignore policy.
@@ -420,6 +420,8 @@ Dependency read commands keep the same output contracts while using the indexed 
 
 `impact` defaults to the on-disk incremental cache, matching `search`/`orient`/`inspect`/`review`; pass `--cache off` to force a full rebuild for a single invocation.
 
+`impact --pretty` / `--compact` and MCP `impact` apply request-wide analysis budgets by default so large diffs stay useful accelerants instead of timing out. Prefer ranking-aware partial results with exact omit counts in `diagnostics` over unbounded compute. Library callers leave budgets unset for unlimited analysis unless they opt in.
+
 ```bash
 # Analyze PR impact from git history
 codegraph impact --provider git --base main --head HEAD
@@ -448,6 +450,11 @@ codegraph impact --base main --head feature --compact-json
 
 # Limit analysis depth and reference count
 codegraph impact --base main --head feature --depth 2 --max-refs 1000
+
+# Bound whole-request analysis work (symbols, lookups, retained refs, soft deadline)
+codegraph impact --base main --head feature --pretty \
+  --max-changed-symbols 250 --max-reference-lookups 250 \
+  --max-total-references 5000 --time-budget-ms 25000
 
 # Exported-only scope
 codegraph impact --base main --head feature --scope imported
@@ -513,6 +520,7 @@ Pretty impact and review summaries also show high-confidence exact or renamed du
 - `impact --pretty` defaults to `--duplicates changed`.
 - `review --summary` defaults to `--duplicates impacted`.
 - Use `--duplicates off|changed|impacted|all` to control duplicate-lead scope.
+- For `review`, `--duplicates off` is parsed before report construction and skips `prepareDuplicateAnalysis` / duplicate review tasks entirely, not just the human summary.
 - Git copy or rename `similarityIndex` metadata of 80 or higher can boost scoped duplicate leads when both old and new files exist in the indexed snapshot.
 - Structured review JSON also adds bounded `duplicate-sibling` review tasks when changed files or symbols overlap high-confidence duplicate groups. Treat these as "check the sibling implementation" prompts, not semantic-equivalence claims.
 - JSON output keeps the existing impact and review contracts; use `codegraph duplicates --json` for full grouped duplicate JSON.
@@ -533,6 +541,10 @@ Call compatibility appears only after Codegraph detects a changed callable signa
 - Inspect `callsiteFile`, `callsiteRange`, `expected`, and `actual` before treating a hint as a defect.
 - Expect skipped output for overload sets, spread arguments, dynamic dispatch, unresolved callsites, and unsupported syntax.
 - Use `docs/language-parity.md` for the current language support matrix and known limitations.
+
+Changed non-indexed tracked files such as scripts, Markdown, and extensionless project files report `status: "updated"` when they still exist; `deleted` is reserved for diff/disk deletion evidence.
+
+`codegraph.config.json` may include `graph.resolutionHints` for repo-local include roots (especially C/C++). CLI `--resolution-hint` values merge on top of config hints and participate in cache/manifest identity.
 
 `codegraph review --summary` prints the changed-file count, changed-symbol count, risk summary, review tasks, and suggested tests without emitting the full `projectFiles` and symbol-detail JSON payload. High- and medium-confidence candidate tests are listed directly; low-confidence pattern matches are summarized as breadth hints and remain available in the full JSON bundle. Use plain `review` output when a downstream tool needs the complete structured bundle.
 

@@ -425,6 +425,35 @@ describe("Review report", () => {
     expect(report.head).toBe("HEAD");
   });
 
+  it("reports modified tracked non-indexed files as updated", async () => {
+    const root = await mkTmpDir("dg-review-git-non-indexed-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "test@git.local"]);
+    runGit(root, ["config", "user.name", "Codegraph Bot"]);
+    const files: Record<string, string> = {
+      "build.ps1": "Write-Output 'base'\n",
+      "README.md": "# Base\n",
+      justfile: "build:\n  echo base\n",
+    };
+    await Promise.all(
+      Object.entries(files).map(async ([file, source]) => await fsp.writeFile(path.join(root, file), source, "utf8")),
+    );
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "initial"]);
+    await Promise.all(
+      Object.entries(files).map(
+        async ([file, source]) => await fsp.writeFile(path.join(root, file), `${source}# changed\n`, "utf8"),
+      ),
+    );
+
+    const report = await buildReviewReport(root, { gitBase: "HEAD", gitHead: "WORKTREE" });
+    const summaries = new Map(report.changedFiles.map((changedFile) => [changedFile.file, changedFile]));
+
+    for (const file of Object.keys(files)) {
+      expect(summaries.get(file)).toMatchObject({ status: "updated" });
+    }
+  });
+
   it("reuses a complete disk-cached project index for an unchanged git review range", async () => {
     const root = await mkTmpDir("dg-review-git-disk-warm-");
     runGit(root, ["init"]);
@@ -2128,6 +2157,29 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     expect(directOverBoundary.groups).toEqual([]);
     expect(directOverBoundary.omittedCounts.oversizedBuckets).toBeGreaterThan(0);
   });
+  it("keeps a changed test ahead of low-confidence pattern fill-ins before limiting", async () => {
+    const root = await mkTmpDir("dg-review-changed-test-");
+    const changedTest = path.join(root, "z-changed.test.ts");
+    const patternTest = path.join(root, "a-pattern.test.ts");
+    await fsp.writeFile(changedTest, "export const changed = 1;\n", "utf8");
+    await fsp.writeFile(patternTest, "export const pattern = 1;\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk" });
+    await fsp.writeFile(changedTest, "export const changed = 2;\n", "utf8");
+
+    const report = await buildReviewReport(root, {
+      cache: "disk",
+      files: [changedTest],
+      maxCandidates: 1,
+    });
+
+    expect(report.candidateTests).toEqual([
+      {
+        file: "z-changed.test.ts",
+        confidence: "high",
+        reason: "changedTest",
+      },
+    ]);
+  });
 });
 
 describe("Indexing helper", () => {
@@ -2190,5 +2242,96 @@ describe("Indexing helper", () => {
 
     expect(hasToolNamespaceImport(fullMainModule?.imports ?? [])).toBe(true);
     expect(hasToolNamespaceImport(incrementalMainModule?.imports ?? [])).toBe(true);
+  });
+});
+
+describe("review duplicate and candidate budget gates", () => {
+  it("duplicateTasks: false skips duplicate analysis work", async () => {
+    const root = await mkTmpDir("dg-review-duplicates-off-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "test@git.local"]);
+    runGit(root, ["config", "user.name", "Codegraph Bot"]);
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    const duplicateSource = [
+      "export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }>) {",
+      "  const totals: number[] = [];",
+      "  const labels: string[] = [];",
+      "  for (const row of rows) {",
+      "    const subtotal = row.amount + row.tax;",
+      "    const rounded = Math.round(subtotal * 100) / 100;",
+      '    const label = rounded > 100 ? "large" : "small";',
+      "    labels.push(label);",
+      "    totals.push(rounded);",
+      "  }",
+      '  return totals.map((value, index) => labels[index] + ":" + value.toFixed(2)).join(",");',
+      "}",
+      "",
+    ].join("\n");
+    await fsp.writeFile(path.join(srcDir, "duplicate-a.ts"), duplicateSource, "utf8");
+    await fsp.writeFile(path.join(srcDir, "duplicate-b.ts"), duplicateSource, "utf8");
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "initial"]);
+    await fsp.writeFile(path.join(srcDir, "duplicate-a.ts"), duplicateSource.replace("large", "huge"), "utf8");
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "change"]);
+    const base = runGit(root, ["rev-parse", "HEAD^"]);
+
+    const enabledReport: ReviewBuildReport = { timings: {} };
+    const enabled = await buildReviewReport(root, {
+      gitBase: base,
+      gitHead: "HEAD",
+      report: enabledReport,
+    });
+    const disabledReport: ReviewBuildReport = { timings: {} };
+    const disabled = await buildReviewReport(root, {
+      gitBase: base,
+      gitHead: "HEAD",
+      duplicateTasks: false,
+      report: disabledReport,
+    });
+
+    expect(enabled.reviewTasks.some((task) => task.reason === "duplicate-sibling")).toBe(true);
+    expect(disabled.reviewTasks.some((task) => task.reason === "duplicate-sibling")).toBe(false);
+    expect(disabledReport.duplicateAnalysis).toBeUndefined();
+    expect(disabledReport.timings.duplicateAnalysisMs).toBe(0);
+  });
+
+  it("marks changed test files as high-confidence changedTest candidates", async () => {
+    const root = await mkTmpDir("dg-review-changed-test-candidate-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "test@git.local"]);
+    runGit(root, ["config", "user.name", "Codegraph Bot"]);
+    const srcDir = path.join(root, "src");
+    const testsDir = path.join(root, "tests");
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.mkdir(testsDir, { recursive: true });
+    await fsp.writeFile(path.join(srcDir, "math.ts"), "export const add = (a: number, b: number) => a + b;\n", "utf8");
+    await fsp.writeFile(
+      path.join(testsDir, "math.test.ts"),
+      "import { add } from '../src/math';\nadd(1, 2);\n",
+      "utf8",
+    );
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "initial"]);
+    await fsp.writeFile(
+      path.join(testsDir, "math.test.ts"),
+      "import { add } from '../src/math';\nadd(2, 2);\n",
+      "utf8",
+    );
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "test change"]);
+    const base = runGit(root, ["rev-parse", "HEAD^"]);
+
+    const report = await buildReviewReport(root, { gitBase: base, gitHead: "HEAD" });
+    expect(report.candidateTests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          file: "tests/math.test.ts",
+          confidence: "high",
+          reason: "changedTest",
+        }),
+      ]),
+    );
   });
 });

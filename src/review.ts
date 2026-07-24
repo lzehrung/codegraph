@@ -222,6 +222,10 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
   const appliedOptions = applyReviewPresetOptions(opts);
   const reviewReport = appliedOptions.report;
   const reviewTimings = reviewReport?.timings;
+  if (reviewTimings) reviewTimings.duplicateAnalysisMs = 0;
+  if (reviewReport && appliedOptions.duplicateTasks === false) {
+    delete reviewReport.duplicateAnalysis;
+  }
   const totalStart = performance.now();
   const { changedFiles, explicitFiles, diffHunksByFile, diffKindsByFile, diffChangesByFile } =
     await collectReviewChanges(projectRoot, appliedOptions, reviewTimings);
@@ -346,20 +350,26 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
     riskRelevantParseFailures,
     exportedChangedCount,
   });
-  const duplicateReview = await collectReviewDuplicateTasks({
-    projectRoot,
-    index,
-    summaries,
-    changedSymbolIds,
-    diffHunksByFile,
-  });
-  report.reviewTasks.push(...duplicateReview.tasks);
-  if (reviewReport && duplicateReview.preparedAnalysis) {
-    Object.defineProperty(reviewReport, "duplicateAnalysis", {
-      value: duplicateReview.preparedAnalysis,
-      enumerable: false,
-      configurable: true,
+  const duplicateAnalysisStart = performance.now();
+  if (appliedOptions.duplicateTasks !== false) {
+    const duplicateReview = await collectReviewDuplicateTasks({
+      projectRoot,
+      index,
+      summaries,
+      changedSymbolIds,
+      diffHunksByFile,
     });
+    report.reviewTasks.push(...duplicateReview.tasks);
+    if (reviewReport && duplicateReview.preparedAnalysis) {
+      Object.defineProperty(reviewReport, "duplicateAnalysis", {
+        value: duplicateReview.preparedAnalysis,
+        enumerable: false,
+        configurable: true,
+      });
+    }
+  }
+  if (reviewTimings && appliedOptions.duplicateTasks !== false) {
+    reviewTimings.duplicateAnalysisMs = Math.round(performance.now() - duplicateAnalysisStart);
   }
   if (reviewTimings) reviewTimings.totalMs = Math.round(performance.now() - totalStart);
   return report;
@@ -451,7 +461,9 @@ function duplicateReviewTask(group: DuplicateGroup, target: ReviewDuplicateTarge
   return {
     id: `duplicate-sibling-check:${group.id}`,
     title: "Check related duplicate implementation",
-    description: `${targetLabel} overlaps a ${group.confidence}-confidence ${group.cloneType} duplicate group. Check sibling ${siblingLabel} for drift before changing only one side.`,
+    description:
+      `${targetLabel} overlaps a ${group.confidence}-confidence ${group.cloneType} duplicate group. ` +
+      `Check sibling ${siblingLabel} for drift before changing only one side.`,
     priority: group.confidence === "high" ? "high" : "medium",
     reason: "duplicate-sibling",
   };

@@ -60,7 +60,12 @@ import { handleRefactorPlanCommand } from "./cli/refactorPlan.js";
 import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions } from "./config.js";
 import { listChangedFiles } from "./util/git.js";
 import { DEFAULT_PROJECT_PATTERNS, listProjectFiles, type ProjectFileDiscoveryOptions } from "./util/projectFiles.js";
-import { normalizePath, resolveFilePathFromRoot, toProjectDisplayPath } from "./util/paths.js";
+import {
+  normalizePath,
+  normalizeResolutionHints,
+  resolveFilePathFromRoot,
+  toProjectDisplayPath,
+} from "./util/paths.js";
 
 export { isCliDiscoveryRelativePathInside } from "./cli/context.js";
 
@@ -185,7 +190,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     dynamicImportHeuristics: hasFlag("--dynamic-import-heuristics"),
     resolutionHints: parsed.options.get("--resolution-hint") ?? [],
   };
-  const hasGraphOverrides =
+  let hasGraphOverrides =
     graphFlags.fast ||
     graphFlags.resolveNodeModules ||
     graphFlags.dynamicImportHeuristics ||
@@ -365,6 +370,15 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   const config = await loadCodegraphConfig(projectRootFs);
+  graphFlags.resolutionHints = normalizeResolutionHints([
+    ...(config.graph?.resolutionHints ?? []),
+    ...graphFlags.resolutionHints,
+  ]);
+  hasGraphOverrides =
+    graphFlags.fast ||
+    graphFlags.resolveNodeModules ||
+    graphFlags.dynamicImportHeuristics ||
+    !!graphFlags.resolutionHints.length;
   const baseDiscoveryOptions = mergeDiscoveryOptions(config.discovery, cliGitignoreDiscoveryOptions);
   const mergedDiscoveryOptions = mergeDiscoveryOptions(config.discovery, explicitDiscoveryOptions);
   const rootFilteredDiscoveryOptions = mergeDiscoveryOptions(baseDiscoveryOptions, activeCliRootGlobDiscoveryOptions);

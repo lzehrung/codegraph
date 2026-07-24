@@ -201,7 +201,8 @@ export async function searchCodegraphWithSession(
   }
 
   const snapshot = await session.loadProject({
-    symbolGraph: searchNeedsSymbolGraph(request) ? "eager" : "skip",
+    // Hybrid/symbol/graph need symbol nodes, but not the detailed sidecar.
+    symbolGraph: searchNeedsSymbolGraph(request) ? "basic" : "skip",
   });
   return await searchSnapshot(snapshot, request);
 }

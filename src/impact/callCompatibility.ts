@@ -25,6 +25,12 @@ import {
   findFirstDescendantOfTypes,
 } from "./signature-node-utils.js";
 import type { CallCompatibilityHint, ChangedSymbol, ImpactDiagnostics } from "./types.js";
+import {
+  canStartReferenceLookup,
+  recordReferenceLookupOmitted,
+  recordReferenceLookupStarted,
+  type ImpactWorkBudget,
+} from "./budgets.js";
 
 export type {
   CallableSignature,
@@ -1477,6 +1483,7 @@ export async function attachCallCompatibilityHints(
     diagnostics?: ImpactDiagnostics;
     shouldIncludeReference?: (file: string) => boolean;
     referenceCache?: ReferenceLookupCache;
+    workBudget?: ImpactWorkBudget;
   },
 ): Promise<void> {
   resetCallCompatibilityHints(changedSymbols);
@@ -1495,6 +1502,10 @@ export async function attachCallCompatibilityHints(
       if (changedSymbol.signatureChanged) {
         incrementSkippedReason(diagnostics, "not_callable");
       }
+      continue;
+    }
+    if (options.workBudget && !canStartReferenceLookup(options.workBudget)) {
+      recordReferenceLookupOmitted(options.workBudget, 1);
       continue;
     }
 
@@ -1543,6 +1554,9 @@ export async function attachCallCompatibilityHints(
       kind: changedSymbol.kind,
       range: changedSymbol.range,
     };
+    if (options.workBudget) {
+      recordReferenceLookupStarted(options.workBudget);
+    }
     const referenceResult = await (options.referenceCache
       ? options.referenceCache.get(index, referenceDef, { maxReferences: referenceScanLimit })
       : findReferences(index, { def: referenceDef }, { maxReferences: referenceScanLimit }));

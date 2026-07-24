@@ -37,6 +37,7 @@ const root = process.cwd();
 const config = await loadCodegraphConfig(root);
 const index = await buildProjectIndex(root, {
   ...(config.discovery ? { discovery: config.discovery } : {}),
+  ...(config.graph ? { graph: config.graph } : {}),
 });
 ```
 
@@ -682,6 +683,15 @@ if (handle) {
 ## Impact analysis from code
 
 ```ts
+
+Optional request-wide budgets on `ImpactOptions` constrain computation before work is scheduled:
+
+- `maxChangedSymbols`, `maxReferenceLookups`, `maxTotalReferences`, `timeBudgetMs`
+- Diagnostics report `changedSymbolsTotal/Analyzed/Omitted`, `referenceLookupsStarted/Omitted`, `referencesRetained/Omitted`, and `deadlineExceeded`
+- Leaving budgets unset preserves unlimited library behavior
+
+`ReviewOptions.duplicateTasks: false` skips duplicate analysis entirely.
+
 import { buildProjectIndex, analyzeImpactFromDiff } from "@lzehrung/codegraph";
 
 const root = process.cwd();

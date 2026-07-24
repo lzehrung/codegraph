@@ -58,4 +58,5 @@ export async function analyzeImpactFromDiff(
 
 // Re-export functions for testing and advanced usage
 export { seedTransitiveFromFiles, calculateSeverity } from "./analyzer.js";
+export { rankChangedSymbolsForBudget } from "./budgets.js";
 export { collectImpactContext, listCandidateTestFiles, type ImpactContext, type CandidateTestFile } from "./context.js";

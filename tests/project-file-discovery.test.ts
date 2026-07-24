@@ -825,6 +825,9 @@ describe("createDiscoveredFileMatcher", () => {
     expect(isDiscovered(`${root}/src/index.ts`)).toBe(true);
     expect(isDiscovered(`${root}/notes.txt`)).toBe(false);
     expect(isDiscovered(`${root}/node_modules/pkg/index.ts`)).toBe(false);
+    expect(isDiscovered(`${root}/.codegraph/manifest.json`)).toBe(false);
+    expect(isDiscovered(`${root}/.codegraph-cache/index-v1/manifest.json`)).toBe(false);
+    expect(isDiscovered(`${root}/.codegraph-cache/index-v1/notes.md`)).toBe(false);
     expect(isDiscovered(`/outside/index.ts`)).toBe(false);
   });
 

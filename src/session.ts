@@ -25,7 +25,7 @@ import {
 } from "./impact/index.js";
 import { analyzeImpactStreaming, type ImpactStreamChunk } from "./impact/streaming.js";
 import { getSessionPreset, mergePreset, type PresetName } from "./presets.js";
-import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions } from "./config.js";
+import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions, mergeGraphOptions } from "./config.js";
 import { normalizePath, resolveFilePathWithinRoot } from "./util/paths.js";
 import { listProjectFiles } from "./util/projectFiles.js";
 
@@ -241,10 +241,15 @@ export class CodeReviewSession implements ICodeReviewSession {
   private async currentBuildOptions(): Promise<BuildOptions | undefined> {
     const config = await loadCodegraphConfig(this.root);
     const discovery = mergeDiscoveryOptions(config.discovery, this.buildOptions?.discovery);
-    if (!hasDiscoveryOptions(discovery)) {
+    const graph = mergeGraphOptions(config.graph, this.buildOptions?.graph);
+    if (!hasDiscoveryOptions(discovery) && !config.graph && !this.buildOptions?.graph) {
       return this.buildOptions;
     }
-    return { ...this.buildOptions, discovery };
+    return {
+      ...this.buildOptions,
+      ...(hasDiscoveryOptions(discovery) ? { discovery } : {}),
+      ...(config.graph || this.buildOptions?.graph ? { graph } : {}),
+    };
   }
 
   private async buildIndex(options: { forceFull?: boolean } = {}): Promise<{

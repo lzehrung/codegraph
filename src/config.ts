@@ -1,6 +1,8 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
+import type { GraphBuildOptions } from "./graphs/types.js";
+import { normalizeResolutionHints } from "./util/paths.js";
 import { type ProjectFileDiscoveryOptions } from "./util/projectFiles.js";
 
 export const CODEGRAPH_CONFIG_FILE = "codegraph.config.json";
@@ -17,6 +19,12 @@ const codegraphConfigSchema = z
       })
       .strict()
       .optional(),
+    graph: z
+      .object({
+        resolutionHints: stringArraySchema.optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -24,6 +32,9 @@ type ParsedCodegraphConfig = z.infer<typeof codegraphConfigSchema>;
 
 export type CodegraphConfig = {
   discovery?: ProjectFileDiscoveryOptions;
+  graph?: {
+    resolutionHints?: string[];
+  };
 };
 
 function uniq(values: readonly string[]): string[] {
@@ -65,6 +76,19 @@ export function mergeDiscoveryOptions(
     ...(logLevel !== undefined ? { logLevel } : {}),
   };
 }
+export function mergeGraphOptions(
+  base: CodegraphConfig["graph"] | undefined,
+  override: GraphBuildOptions | undefined,
+): GraphBuildOptions {
+  const resolutionHints = normalizeResolutionHints([
+    ...(base?.resolutionHints ?? []),
+    ...(override?.resolutionHints ?? []),
+  ]);
+  return {
+    ...override,
+    ...(resolutionHints.length ? { resolutionHints } : {}),
+  };
+}
 
 function normalizeDiscoveryConfig(
   discovery: ParsedCodegraphConfig["discovery"],
@@ -103,7 +127,10 @@ export async function loadCodegraphConfig(projectRoot: string): Promise<Codegrap
     throw new Error(`Invalid ${CODEGRAPH_CONFIG_FILE}: ${z.prettifyError(parsed.error)}`);
   }
   const discovery = normalizeDiscoveryConfig(parsed.data.discovery);
+  const resolutionHints = normalizeResolutionHints(parsed.data.graph?.resolutionHints);
+  const graph = resolutionHints.length ? { resolutionHints } : undefined;
   return {
     ...(discovery ? { discovery } : {}),
+    ...(graph ? { graph } : {}),
   };
 }
