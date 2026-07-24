@@ -199,7 +199,7 @@ Usage:
   codegraph uninit --root <path> [--force] [--json]
 
 State:
-  Lifecycle commands own only .codegraph/manifest.json metadata. In a Git worktree, init and sync --init ensure it is effectively ignored, appending .codegraph/ to the resolved root's .gitignore only when needed; opt out with --no-update-gitignore.
+  Lifecycle commands own only .codegraph/manifest.json metadata. In a Git worktree, init and sync --init ensure it is effectively ignored, appending .codegraph/ and .codegraph-cache/ to the resolved root's .gitignore only when needed; opt out with --no-update-gitignore.
   A tracked manifest is left tracked with a warning. Uninit removes lifecycle state but leaves the root .gitignore rule; ordinary sync never changes ignore policy.
   Init and sync may warm or update the disk cache under .codegraph-cache/index-v1/. Other commands do not depend on the manifest.
   Positional paths and --root are alternatives for lifecycle commands; do not combine them.

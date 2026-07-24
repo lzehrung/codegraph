@@ -400,6 +400,56 @@ describe("Cache invalidation and strict hashing", () => {
     expect(graph.edges[0]?.from).toBe(normalize(trackedPath));
   });
 
+  it("does not reparse dirty worktree files once their signatures already match the cache", async () => {
+    const root = await mkTmpDir("dg-dirty-worktree-settle-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "cache@test.local"]);
+    runGit(root, ["config", "user.name", "Cache Test"]);
+
+    const mainPath = path.join(root, "main.ts");
+    const helperPath = path.join(root, "helper.ts");
+    await fsp.writeFile(mainPath, `import { helper } from "./helper";\nexport const main = helper;\n`, "utf8");
+    await fsp.writeFile(helperPath, `export const helper = 1;\n`, "utf8");
+    runGit(root, ["add", "main.ts", "helper.ts"]);
+    runGit(root, ["commit", "-m", "init"]);
+
+    await buildProjectIndex(root, { threads: 2, cache: "disk" });
+
+    await fsp.writeFile(helperPath, `export const helper = 2;\n`, "utf8");
+    const firstDirtyReport: BuildReport = { timings: {} };
+    await buildProjectIndexIncremental(root, {
+      threads: 2,
+      cache: "disk",
+      report: firstDirtyReport,
+    });
+    expect((firstDirtyReport.files?.parsed ?? 0) > 0).toBe(true);
+
+    const secondDirtyReport: BuildReport = { timings: {} };
+    await buildProjectIndexIncremental(root, {
+      threads: 2,
+      cache: "disk",
+      report: secondDirtyReport,
+    });
+    expect(secondDirtyReport.files?.parsed ?? 0).toBe(0);
+    expect(secondDirtyReport.files?.changed ?? 0).toBe(0);
+  });
+
+  it("ignores Codegraph cache and lifecycle paths during discovery even with broad includes", async () => {
+    const root = await mkTmpDir("dg-ignore-codegraph-cache-");
+    await fsp.mkdir(path.join(root, "src"), { recursive: true });
+    await fsp.mkdir(path.join(root, ".codegraph-cache", "index-v1"), { recursive: true });
+    await fsp.mkdir(path.join(root, ".codegraph"), { recursive: true });
+    await fsp.writeFile(path.join(root, "src", "app.ts"), "export const app = 1;\n", "utf8");
+    await fsp.writeFile(path.join(root, ".codegraph-cache", "index-v1", "stale.ts"), "export const stale = 1;\n", "utf8");
+    await fsp.writeFile(path.join(root, ".codegraph", "note.md"), "# note\n", "utf8");
+
+    const discovered = await listProjectFiles(root, ["**/*.{ts,md}"], { ignoreGlobs: [] });
+    const normalized = discovered.map(normalize);
+    expect(normalized.some((file) => file.endsWith("/src/app.ts"))).toBe(true);
+    expect(normalized.some((file) => file.includes("/.codegraph-cache/"))).toBe(false);
+    expect(normalized.some((file) => file.includes("/.codegraph/"))).toBe(false);
+  });
+
   it("rebuilds when cache verification detects manifest mismatches", async () => {
     const root = await mkTmpDir("dg-cache-verify-");
     const filePath = path.join(root, "verify.ts");

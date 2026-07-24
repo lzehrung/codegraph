@@ -72,7 +72,10 @@ function formatSyncResult(label: string, result: CodegraphLifecycleSyncResult): 
   const summary = `${label} Codegraph at ${result.root}: ${result.manifest.fileCount} files${changeLabel}. Manifest: ${result.manifestPath}`;
   if (result.gitignore?.status === "added") {
     const gitignorePath = path.join(result.root, result.gitignore.path);
-    return `${summary}\nUpdated Git ignore policy at ${gitignorePath}: added .codegraph/.`;
+    const rules = result.gitignore.rules?.length
+      ? result.gitignore.rules.join(", ")
+      : ".codegraph/, .codegraph-cache/";
+    return `${summary}\nUpdated Git ignore policy at ${gitignorePath}: added ${rules}.`;
   }
   if (result.gitignore?.status === "tracked") {
     return `${summary}\nWarning: .codegraph/manifest.json is tracked by Git; the ignore policy was not changed.`;

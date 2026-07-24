@@ -72,12 +72,12 @@ describe("project lifecycle commands", () => {
     expect(await readCodegraphEntries(root)).toEqual(["manifest.json"]);
   });
 
-  it("init appends one root Git ignore rule while preserving file bytes, newline style, and permissions", async () => {
+  it("init appends Codegraph ignore rules while preserving file bytes, newline style, and permissions", async () => {
     const cases = [
-      { name: "missing", initial: null, expected: ".codegraph/\n" },
-      { name: "LF", initial: "node_modules/\n", expected: "node_modules/\n.codegraph/\n" },
-      { name: "no-final-newline", initial: "node_modules/", expected: "node_modules/\n.codegraph/\n" },
-      { name: "CRLF", initial: "node_modules/\r\n", expected: "node_modules/\r\n.codegraph/\r\n" },
+      { name: "missing", initial: null, expected: ".codegraph/\n.codegraph-cache/\n" },
+      { name: "LF", initial: "node_modules/\n", expected: "node_modules/\n.codegraph/\n.codegraph-cache/\n" },
+      { name: "no-final-newline", initial: "node_modules/", expected: "node_modules/\n.codegraph/\n.codegraph-cache/\n" },
+      { name: "CRLF", initial: "node_modules/\r\n", expected: "node_modules/\r\n.codegraph/\r\n.codegraph-cache/\r\n" },
     ] as const;
 
     for (const testCase of cases) {
@@ -92,8 +92,16 @@ describe("project lifecycle commands", () => {
       const first = await initCodegraphLifecycle(root);
       const second = await initCodegraphLifecycle(root);
 
-      expect(first.gitignore).toEqual({ status: "added", path: ".gitignore" });
-      expect(second.gitignore).toEqual({ status: "already-ignored", path: ".gitignore" });
+      expect(first.gitignore).toEqual({
+        status: "added",
+        path: ".gitignore",
+        rules: [".codegraph/", ".codegraph-cache/"],
+      });
+      expect(second.gitignore).toEqual({
+        status: "already-ignored",
+        path: ".gitignore",
+        rules: [".codegraph/", ".codegraph-cache/"],
+      });
       expect(await fsp.readFile(path.join(root, ".gitignore"), "utf8")).toBe(testCase.expected);
       if (testCase.initial !== null && process.platform !== "win32") {
         expect((await fsp.stat(path.join(root, ".gitignore"))).mode & 0o777).toBe(0o640);
@@ -102,11 +110,37 @@ describe("project lifecycle commands", () => {
     }
   });
 
-  it("init honors exact, broader, and repository-external effective Git ignore rules", async () => {
+  it("init honors effective lifecycle ignores and still adds a missing disk-cache rule", async () => {
     const cases = [
-      { name: "exact", policyPath: ".gitignore", policy: ".codegraph/manifest.json\n" },
-      { name: "broader", policyPath: ".gitignore", policy: ".codegraph/\n" },
-      { name: "info-exclude", policyPath: ".git/info/exclude", policy: ".codegraph/\n" },
+      {
+        name: "exact",
+        policyPath: ".gitignore",
+        policy: ".codegraph/manifest.json\n",
+        expectedGitignore: ".codegraph/manifest.json\n.codegraph-cache/\n",
+        createsRootGitignore: true,
+      },
+      {
+        name: "broader",
+        policyPath: ".gitignore",
+        policy: ".codegraph/\n",
+        expectedGitignore: ".codegraph/\n.codegraph-cache/\n",
+        createsRootGitignore: true,
+      },
+      {
+        name: "info-exclude",
+        policyPath: ".git/info/exclude",
+        policy: ".codegraph/\n",
+        expectedGitignore: ".codegraph-cache/\n",
+        createsRootGitignore: true,
+      },
+      {
+        name: "both-root",
+        policyPath: ".gitignore",
+        policy: ".codegraph/\n.codegraph-cache/\n",
+        expectedGitignore: ".codegraph/\n.codegraph-cache/\n",
+        createsRootGitignore: true,
+        alreadyIgnored: true,
+      },
     ] as const;
 
     for (const testCase of cases) {
@@ -117,12 +151,20 @@ describe("project lifecycle commands", () => {
 
       const result = await initCodegraphLifecycle(root);
 
-      expect(result.gitignore).toEqual({ status: "already-ignored", path: ".gitignore" });
-      if (testCase.policyPath !== ".gitignore") {
-        await expect(fsp.stat(path.join(root, ".gitignore"))).rejects.toMatchObject({ code: "ENOENT" });
+      if ("alreadyIgnored" in testCase && testCase.alreadyIgnored) {
+        expect(result.gitignore).toEqual({
+          status: "already-ignored",
+          path: ".gitignore",
+          rules: [".codegraph/", ".codegraph-cache/"],
+        });
       } else {
-        expect(await fsp.readFile(path.join(root, ".gitignore"), "utf8")).toBe(testCase.policy);
+        expect(result.gitignore).toEqual({
+          status: "added",
+          path: ".gitignore",
+          rules: [".codegraph-cache/"],
+        });
       }
+      expect(await fsp.readFile(path.join(root, ".gitignore"), "utf8")).toBe(testCase.expectedGitignore);
     }
   });
 
@@ -138,9 +180,15 @@ describe("project lifecycle commands", () => {
     const refreshed = await initCodegraphLifecycle(root);
     const status = await getCodegraphLifecycleStatus(root);
 
-    expect(refreshed.gitignore).toEqual({ status: "added", path: ".gitignore" });
+    expect(refreshed.gitignore).toEqual({
+      status: "added",
+      path: ".gitignore",
+      rules: [".codegraph/", ".codegraph-cache/"],
+    });
     expect(refreshed.manifest.configHash).not.toBe(before.manifest.configHash);
-    expect(await fsp.readFile(path.join(root, ".gitignore"), "utf8")).toBe(`${negatedPolicy}.codegraph/\n`);
+    expect(await fsp.readFile(path.join(root, ".gitignore"), "utf8")).toBe(
+      `${negatedPolicy}.codegraph/\n.codegraph-cache/\n`,
+    );
     expect(status.configChanged).toBeFalsy();
     expect(status.suggestedNextCommand).toBe("codegraph status");
   });
@@ -165,8 +213,12 @@ describe("project lifecycle commands", () => {
     await initializeGitRepository(initializedRoot);
     await writeFile(initializedRoot, "src/main.ts", "export const main = 1;\n");
     const initialized = await syncCodegraphLifecycle(initializedRoot, { init: true });
-    expect(initialized.gitignore).toEqual({ status: "added", path: ".gitignore" });
-    expect(await fsp.readFile(path.join(initializedRoot, ".gitignore"), "utf8")).toBe(".codegraph/\n");
+    expect(initialized.gitignore).toEqual({
+      status: "added",
+      path: ".gitignore",
+      rules: [".codegraph/", ".codegraph-cache/"],
+    });
+    expect(await fsp.readFile(path.join(initializedRoot, ".gitignore"), "utf8")).toBe(".codegraph/\n.codegraph-cache/\n");
 
     const disabledRoot = await mkTmpDir("cg-life-sync-init-gitignore-disabled-");
     await initializeGitRepository(disabledRoot);
@@ -285,7 +337,7 @@ describe("project lifecycle commands", () => {
 
     await uninitCodegraphLifecycle(root);
 
-    expect(await fsp.readFile(path.join(root, ".gitignore"), "utf8")).toBe(".codegraph/\n");
+    expect(await fsp.readFile(path.join(root, ".gitignore"), "utf8")).toBe(".codegraph/\n.codegraph-cache/\n");
     await expect(fsp.stat(path.join(root, ".codegraph"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
@@ -761,7 +813,11 @@ describe("project lifecycle commands", () => {
     expect(jsonResult.exitCode).toBeUndefined();
     expect(jsonResult.stderr).toBe("");
     const payload = JSON.parse(jsonResult.stdout) as CodegraphLifecycleSyncResult;
-    expect(payload.gitignore).toEqual({ status: "added", path: ".gitignore" });
+    expect(payload.gitignore).toEqual({
+      status: "added",
+      path: ".gitignore",
+      rules: [".codegraph/", ".codegraph-cache/"],
+    });
     expect(jsonResult.stdout.trim().startsWith("{")).toBeTruthy();
     expect(jsonResult.stdout.trim().endsWith("}")).toBeTruthy();
 
@@ -771,7 +827,7 @@ describe("project lifecycle commands", () => {
     const prettyResult = await captureCli(["init", prettyRoot]);
     expect(prettyResult.stderr).toBe("");
     expect(prettyResult.stdout).toContain(`Updated Git ignore policy at ${path.join(prettyRoot, ".gitignore")}`);
-    expect(prettyResult.stdout).toContain("added .codegraph/");
+    expect(prettyResult.stdout).toContain("added .codegraph/, .codegraph-cache/");
 
     const trackedRoot = await mkTmpDir("cg-life-cli-gitignore-tracked-");
     await initializeGitRepository(trackedRoot);
