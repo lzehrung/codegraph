@@ -1,6 +1,6 @@
 # Cold-start and explore latency opportunities
 
-Status: Research notes (follow-up to freshness fixes on `fix/bounded-impact-review-candidate-tests`)
+Status: Slice 1 implemented on `fix/bounded-impact-review-candidate-tests` (basic symbol graph for hybrid search/explore)
 Date: 2026-07-23
 
 ## Context
@@ -50,6 +50,6 @@ Long-lived MCP already amortizes (1)/(2)/(4) across tools after warmup.
 
 ## Suggested next implementation slice
 
-1. Make hybrid `search` load the detailed symbol graph lazily (and teach `explore` not to force it up front).
+1. ~~Make hybrid `search` load the detailed symbol graph lazily (and teach `explore` not to force it up front).~~ **Done:** `loadProject({ symbolGraph: "basic" })` builds an in-memory `buildSymbolGraph` from the loaded index; hybrid/symbol/graph search uses it and no longer loads the detailed sidecar. Explore already followed search with `skip`.
 2. Add a microbench: warm `search`/`explore` before/after on sheetflare + code-review-agent.
 3. Only then consider snapshot format changes.

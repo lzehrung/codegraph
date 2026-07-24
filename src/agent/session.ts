@@ -5,7 +5,7 @@ import { resolveIncrementalFilePlan, type IncrementalFilePlan } from "../indexer
 import type { BuildOptions, BuildReport, IncrementalBuildOptions, ProjectIndex } from "../indexer/types.js";
 import { tryLoadDetailedSymbolGraphSnapshot, writeDetailedSymbolGraphSnapshot } from "../indexer/build-cache.js";
 import { buildSymbolGraphDetailed } from "../graphs/symbol-graph-detailed.js";
-import { type SymbolGraph } from "../graphs/symbol-graph.js";
+import { buildSymbolGraph, type SymbolGraph } from "../graphs/symbol-graph.js";
 import type { Graph } from "../types.js";
 import { listProjectFiles, type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { mapLimit } from "../util/concurrency.js";
@@ -27,7 +27,12 @@ export type AgentProjectSnapshot = {
 };
 
 export type AgentLoadProjectOptions = {
-  symbolGraph?: "eager" | "skip";
+  /**
+   * - `eager` (default): detailed symbol graph (sidecar or buildSymbolGraphDetailed)
+   * - `basic`: in-memory buildSymbolGraph from the loaded index (no detailed sidecar)
+   * - `skip`: empty symbol graph
+   */
+  symbolGraph?: "eager" | "basic" | "skip";
 };
 
 export type AgentFreshnessPolicy = "manual" | "check" | "auto";
@@ -217,7 +222,9 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
   let cachedFiles: Promise<string[]> | undefined;
   let cachedBase: Promise<AgentProjectBaseSnapshot> | undefined;
   let cachedSymbolGraph: Promise<SymbolGraph> | undefined;
+  let cachedBasicSymbolGraph: Promise<SymbolGraph> | undefined;
   let cachedEagerSnapshot: Promise<AgentProjectSnapshot> | undefined;
+  let cachedBasicSnapshot: Promise<AgentProjectSnapshot> | undefined;
   let cachedSkippedSnapshot: Promise<AgentProjectSnapshot> | undefined;
   let cachedFileSignatures: Map<string, AgentFileSignature> | undefined;
 
@@ -226,7 +233,9 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     cachedFiles = undefined;
     cachedBase = undefined;
     cachedSymbolGraph = undefined;
+    cachedBasicSymbolGraph = undefined;
     cachedEagerSnapshot = undefined;
+    cachedBasicSnapshot = undefined;
     cachedSkippedSnapshot = undefined;
     cachedFileSignatures = undefined;
   };
@@ -323,6 +332,18 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     return loadPromise;
   };
 
+  const loadBasicSymbolGraph = async (base: AgentProjectBaseSnapshot): Promise<SymbolGraph> => {
+    // Prefer an already-loaded detailed graph (superset) when present.
+    if (cachedSymbolGraph) return cachedSymbolGraph;
+    if (cachedBasicSymbolGraph) return cachedBasicSymbolGraph;
+    const loadPromise = buildSymbolGraph(base.index);
+    cachedBasicSymbolGraph = loadPromise;
+    loadPromise.catch(() => {
+      if (cachedBasicSymbolGraph === loadPromise) cachedBasicSymbolGraph = undefined;
+    });
+    return loadPromise;
+  };
+
   const loadProject = async (loadOptions?: AgentLoadProjectOptions): Promise<AgentProjectSnapshot> => {
     if (loadOptions?.symbolGraph === "skip") {
       cachedSkippedSnapshot ??= loadBase().then((base) => ({
@@ -333,6 +354,19 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
         cachedSkippedSnapshot = undefined;
       });
       return await cachedSkippedSnapshot;
+    }
+
+    if (loadOptions?.symbolGraph === "basic") {
+      // If detailed was already loaded in this session, reuse it.
+      if (cachedEagerSnapshot) return await cachedEagerSnapshot;
+      cachedBasicSnapshot ??= loadBase().then(async (base) => ({
+        ...base,
+        symbolGraph: await loadBasicSymbolGraph(base),
+      }));
+      cachedBasicSnapshot.catch(() => {
+        cachedBasicSnapshot = undefined;
+      });
+      return await cachedBasicSnapshot;
     }
 
     cachedEagerSnapshot ??= loadBase().then(async (base) => ({
