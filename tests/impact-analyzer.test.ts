@@ -1635,6 +1635,48 @@ describe("Impact Analyzer Edge Cases", () => {
       expect(reversed).toEqual(forward);
     });
 
+    it("treats missing incoming-edge map entries as false for budget ranking", () => {
+      const baseRange = { start: { line: 1, column: 0 }, end: { line: 1, column: 10 } };
+      const index = {
+        graph: {
+          nodes: [],
+          edges: [
+            {
+              from: { type: "file", path: "src/dep.ts" },
+              to: { type: "file", path: "src/with-incoming.ts" },
+              type: "imports",
+            },
+          ],
+        },
+        modules: new Map(),
+        byFile: new Map(),
+      } as unknown as ProjectIndex;
+      const symbols = [
+        {
+          id: "lonely",
+          file: "src/lonely.ts",
+          name: "lonely",
+          kind: SymbolKind.Function,
+          exported: true,
+          range: baseRange,
+        },
+        {
+          id: "referenced",
+          file: "src/with-incoming.ts",
+          name: "referenced",
+          kind: SymbolKind.Function,
+          exported: true,
+          range: baseRange,
+        },
+      ];
+
+      const forward = rankChangedSymbolsForBudget(symbols, index).map((symbol) => symbol.id);
+      const reversed = rankChangedSymbolsForBudget([...symbols].reverse(), index).map((symbol) => symbol.id);
+
+      expect(forward).toEqual(["referenced", "lonely"]);
+      expect(reversed).toEqual(forward);
+    });
+
     it("returns exact partial diagnostics when the analysis deadline is already exhausted", async () => {
       const index = await createTestIndex("typescript");
       const file = Array.from(index.byFile.keys())[0]!;
