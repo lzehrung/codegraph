@@ -232,9 +232,9 @@ export type ImpactDiagnostics = {
   fallbackSeededDependents: number;
   /** Total changed symbols discovered before request-wide symbol budgets. */
   changedSymbolsTotal: number;
-  /** Changed symbols that received precise reference analysis. */
+  /** Changed symbols selected into the analysis queue after maxChangedSymbols ranking (reduced if deadline aborts remaining batches). Does not decrease for maxReferenceLookups skips — use referenceLookups* for that. */
   changedSymbolsAnalyzed: number;
-  /** Changed symbols skipped by maxChangedSymbols / deadline ranking. */
+  /** Changed symbols skipped by maxChangedSymbols selection, or remaining selected symbols abandoned when deadline is exceeded. */
   changedSymbolsOmitted: number;
   /** findReferences / call-compat lookups that were started. */
   referenceLookupsStarted: number;
@@ -242,7 +242,7 @@ export type ImpactDiagnostics = {
   referenceLookupsOmitted: number;
   /** Reference sites retained in the report across the whole request. */
   referencesRetained: number;
-  /** Reference sites dropped by request-wide maxTotalReferences. */
+  /** Reference sites omitted from retention by request-wide maxTotalReferences or per-symbol maxRefs truncation. */
   referencesOmitted: number;
   /** True when analysis returned early because timeBudgetMs elapsed. */
   deadlineExceeded: boolean;
