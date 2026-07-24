@@ -232,7 +232,11 @@ export type ImpactDiagnostics = {
   fallbackSeededDependents: number;
   /** Total changed symbols discovered before request-wide symbol budgets. */
   changedSymbolsTotal: number;
-  /** Changed symbols selected into the analysis queue after maxChangedSymbols ranking (reduced if deadline aborts remaining batches). Does not decrease for maxReferenceLookups skips — use referenceLookups* for that. */
+  /**
+   * Changed symbols selected into the analysis queue after maxChangedSymbols ranking
+   * (reduced if deadline aborts remaining batches). Does not decrease for maxReferenceLookups
+   * skips — use referenceLookups* for that.
+   */
   changedSymbolsAnalyzed: number;
   /** Changed symbols skipped by maxChangedSymbols selection, or remaining selected symbols abandoned when deadline is exceeded. */
   changedSymbolsOmitted: number;
