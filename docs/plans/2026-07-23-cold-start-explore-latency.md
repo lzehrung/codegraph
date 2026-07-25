@@ -1,15 +1,20 @@
 # Cold-start and explore latency opportunities
 
-Status: Slice 1 implemented on `fix/bounded-impact-review-candidate-tests` (basic symbol graph for hybrid search/explore)
+Status: Slice 1 implemented and merged (basic symbol graph for hybrid search/explore, PR #165).
+Remaining ranks are superseded by the measured plans listed below.
 Date: 2026-07-23
+
+**Superseded by** [2026-07-25-performance-program-index.md](2026-07-25-performance-program-index.md)
+and its four implementation plans. This note's ranked follow-ups were written from partial data;
+the replacement plans carry measured per-layer costs and cite exact source locations.
 
 ## Context
 
 PR #165 bounded `impact`/`review` only. Measured `orient`/`explore`/`search`/`refs` on sibling repos showed:
 
-- Cold CLI: 4–11s on ~150–650 file repos
+- Cold CLI: 4-11s on ~150-650 file repos
 - Warm `orient`: ~0.5s when the index settles
-- Warm `search`/`explore`: still 1–3.5s
+- Warm `search`/`explore`: still 1-3.5s
 - Sheetflare looked "warm-broken" with perpetual `Updated project index: 14 files`
 
 Two freshness bugs fixed alongside this note:
@@ -21,9 +26,9 @@ Sheetflare warm `orient` now settles (~0.49s/run, no perpetual update).
 
 ## Where the remaining time goes
 
-CLI one-shot path (`createAgentSession` → `loadProject`):
+CLI one-shot path (`createAgentSession` -> `loadProject`):
 
-1. Node process floor (~0.35–0.40s)
+1. Node process floor (~0.35-0.40s)
 2. Native `.node` load (Windows also hashes/copies via runtime cache)
 3. Incremental index open: manifest + git reconcile + snapshot JSON hydrate
 4. For default hybrid `search` / `explore`: eager detailed symbol-graph load/build
@@ -34,13 +39,13 @@ Long-lived MCP already amortizes (1)/(2)/(4) across tools after warmup.
 
 ## Ranked follow-ups
 
-| Rank | Opportunity | Effort | Expected win | Notes |
-|------|-------------|--------|--------------|-------|
-| 1 | Defer detailed symbol graph for hybrid `search` / `explore` until a result actually needs it | Medium | High on warm CLI explore/search (often 0.5–2s) | Today `searchNeedsSymbolGraph` only skips for `path`/`text`/`sql`; explore always starts hybrid search |
-| 2 | Shrink / speed project-index-snapshot hydrate (binary or chunked sidecar) | Medium–High | Medium warm open | Large JSON snapshot parse shows up even when nothing changed |
-| 3 | Prefer MCP / shared daemon for agent loops instead of one-shot CLI | Low (workflow) / High (daemon) | High for repeated ops | MCP session already solves process+native+in-memory reuse |
-| 4 | Avoid git reconcile work when signatures prove clean without candidate fan-out | Low–Medium | Low–Medium | Freshness fix removed perpetual reparses; further skip of dependent work possible |
-| 5 | Non-git discovery fast path for clean trees | Medium | Low–Medium cold | Full `listProjectFiles` still expensive when git fast path unavailable |
+| Rank | Opportunity                                                                                  | Effort                         | Expected win                                   | Notes                                                                                                  |
+| ---- | -------------------------------------------------------------------------------------------- | ------------------------------ | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| 1    | Defer detailed symbol graph for hybrid `search` / `explore` until a result actually needs it | Medium                         | High on warm CLI explore/search (often 0.5-2s) | Today `searchNeedsSymbolGraph` only skips for `path`/`text`/`sql`; explore always starts hybrid search |
+| 2    | Shrink / speed project-index-snapshot hydrate (binary or chunked sidecar)                    | Medium-High                    | Medium warm open                               | Large JSON snapshot parse shows up even when nothing changed                                           |
+| 3    | Prefer MCP / shared daemon for agent loops instead of one-shot CLI                           | Low (workflow) / High (daemon) | High for repeated ops                          | MCP session already solves process+native+in-memory reuse                                              |
+| 4    | Avoid git reconcile work when signatures prove clean without candidate fan-out               | Low-Medium                     | Low-Medium                                     | Freshness fix removed perpetual reparses; further skip of dependent work possible                      |
+| 5    | Non-git discovery fast path for clean trees                                                  | Medium                         | Low-Medium cold                                | Full `listProjectFiles` still expensive when git fast path unavailable                                 |
 
 ## Non-goals / already covered
 
