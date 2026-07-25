@@ -125,24 +125,44 @@ Measured and confirmed cheap. Do not spend effort here:
 - Snapshot validation predicates over all 673 modules: 2 ms.
 - `projectSnapshotFilesSignature` over 667 entries: 0.9 to 2.0 ms.
 
-## Priority 0: Hydrate bloom filters instead of rebuilding them
+## Priority 0: Hydrate bloom filters instead of rebuilding them -- IMPLEMENTED (`5dc3ecb7`)
 
-- [ ] Hydrate `bloomFilterCache` from the snapshot's persisted `payload.bloomFilters` before the
-      per-file loop, reusing the existing `deserializeBloomFilterCache`
-      (`project-snapshot.ts:653-660`) and its `isSerializedBloomFilter` validation (`:665-687`).
-- [ ] Call `buildBloomFilterForFile` only for files in `changedFiles`.
-- [ ] Apply the same fix to the full-build path at `src/indexer/build-index.ts:649-652`.
-- [ ] Add a regression asserting that a warm run with zero changed files performs zero
-      `buildBloomFilterForFile` calls, and that the resulting filters equal the rebuilt ones.
+- [x] Add `tryLoadPersistedBloomFilters(projectRoot, opts)` in `project-snapshot.ts`, reusing
+      the existing `deserializeBloomFilterCache` and `isSerializedBloomFilterRecord`/
+      `isProjectIndexSnapshotPayload` validation, but deliberately _not_ requiring the whole
+      snapshot's `filesSignature`/`nativeRuntimeFingerprint` to match: a bloom filter is a pure
+      function of file text, so a filter persisted for a specific file is safe to reuse for
+      that file whenever the caller has independently proven (via its own cache-hit signature
+      comparison) the file's content is unchanged -- exactly the same trust model that already
+      lets a cache-hit reuse that file's `ModuleIndex`.
+- [x] Call `buildBloomFilterForFile` only when the file is missing from the persisted map,
+      in both the incremental cache-hit loop and the full-build cache-hit loop
+      (`src/indexer/build-index.ts`, both loops).
+- [x] Correction from the original write-up: the "warm run with zero changed files" case
+      described below was **already** hydrating bloom filters correctly before this fix, via
+      the pre-existing `reuseUnchangedSnapshot()` whole-snapshot early return (confirmed by a
+      pre-existing passing test, `tests/cache-invalidation.test.ts`, predating this session).
+      The real gap this priority closes is a **genuine partial incremental update** -- some
+      files changed, most did not -- where the whole-snapshot early return cannot fire
+      (`changedFiles.size > 0`), so control used to fall into the per-file cache-hit loop and
+      rebuild every _unchanged_ file's bloom filter from source anyway.
+- [x] Added a regression exercising exactly that gap: 3 files, only 1 modified between builds,
+      asserting `buildBloomFilterForFile` is never called (the 2 unchanged files reuse the
+      persisted filter; the 1 changed file gets its filter from the in-memory source during
+      fresh parsing, not from this function at all). Verified the test fails on the prior code
+      with a call count of exactly 2, matching the 2 unchanged files.
 
 Likely files: `src/indexer/build-index.ts`, `src/indexer/build-cache/project-snapshot.ts`,
-`tests/cache-invalidation.test.ts`.
+`src/indexer/build-cache.ts`, `tests/cache-invalidation.test.ts`.
 
 Acceptance:
 
-- [ ] Warm no-change run on this repository drops about 400 ms.
-- [ ] Bloom-filter-dependent behavior (reference candidate prefiltering) is unchanged, proven by
-      existing reference and navigation suites.
+- [x] A genuine partial incremental update (some files changed, most unchanged) performs zero
+      `buildBloomFilterForFile` calls for the unchanged files. Measured on a 20-file fixture
+      with 1 changed file: 0 rebuilds, 19 reused (was 19 rebuilds, 0 reused).
+- [x] Bloom-filter-dependent behavior (reference candidate prefiltering) is unchanged, proven by
+      existing reference and navigation suites plus a search-correctness smoke test across both
+      the reused and freshly-changed files.
 
 ## Priority 1: Make sidecar validation cheap and memoized
 

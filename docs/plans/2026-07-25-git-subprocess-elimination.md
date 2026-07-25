@@ -136,28 +136,43 @@ Both make git walk the identical tree diff twice.
 `getGitBlobHash` (`src/util/git.ts:86`) spawns twice per single file, at `:98` and `:102`. It has
 no caller in `src/` other than a re-export at `src/util.ts:10`, and one test reference.
 
-## Priority 0: Restore the snapshot fast path
+## Priority 0: Restore the snapshot fast path -- IMPLEMENTED (`5dc3ecb7`)
 
 Single highest-leverage change in the whole performance program, because it also removes most of
 the [hydrate plan's](2026-07-25-warm-index-hydrate-costs.md) costs on clean trees.
 
-- [ ] Change the `untrackedFiles` term at `src/indexer/build-index.ts:1165-1170` so only
-      genuinely new untracked files defeat the fast path, for example
-      `!untrackedFiles.some((file) => !Object.hasOwn(trackedEntries, file))`.
-- [ ] Apply the same treatment to `additionalFiles`, which has the same discovery-versus-
-      staleness confusion.
-- [ ] Add a regression: index a repository, create an untracked file, index again, and assert
-      the fast path is taken and the untracked file is still indexed correctly.
-- [ ] Add the inverse regression: a genuinely new untracked file must defeat the fast path and
-      be picked up.
+- [x] Change the `untrackedFiles` term at `src/indexer/build-index.ts` so only files that block
+      genuine proof of freshness defeat the fast path. The naive form sketched during planning
+      (`!untrackedFiles.some((file) => !Object.hasOwn(trackedEntries, file))`, "already in the
+      manifest") turned out to be unsafe: Git has no diff history for untracked files, so mere
+      presence in the manifest does not prove the file is still current the way a clean `git
+diff` proves it for tracked files. The shipped fix instead does a single cheap `stat()`
+      per already-known untracked file and compares `${mtimeMs}:${size}` against the prefix of
+      the file's persisted `entry.sig` (format confirmed from the on-disk manifest: always
+      `${mtimeMs}:${size}:${contentHash}`). Unseen files and stat-mismatched files still block
+      the fast path exactly as before.
+- [x] Left `additionalFiles` untouched. Per PR #164, transient/explicit files are intentionally
+      forced through full validation every time -- that is by-design correctness for provenance
+      tracking of files outside discovery, not the same discovery-versus-staleness confusion
+      `untrackedFiles` had. Treating it the same way the plan originally proposed would have
+      regressed that guarantee.
+- [x] Added a regression: index a repository, create an untracked file, index again with nothing
+      changed, and assert `getGitBlobHashes` (the cheapest reliable signal that the _early_
+      fast-path branch specifically was skipped -- `tryLoadFromCache` and even `changedFiles`
+      staying empty can be reached by a _different_, unrelated post-validation short-circuit that
+      exists independently of this gate) is never called.
+- [x] Added the safety-net regression the naive fix would have failed: modify an already-known
+      untracked file's content and assert the change is still picked up on the next build.
 
 Likely files: `src/indexer/build-index.ts`, `tests/cache-invalidation.test.ts`.
 
 Acceptance:
 
-- [ ] With scratch files present and no tracked changes, a warm command takes the fast path.
-- [ ] 3 of 7 git spawns disappear from warm `orient`.
-- [ ] A new untracked source file is still indexed on the next run.
+- [x] With scratch files present and no tracked changes, a warm command takes the fast path.
+      Measured end-to-end (not spawn-counted in isolation, since the fast path also skips the
+      git-signature step targeted by Priority 2): warm `orient` on this repository with one
+      routine untracked file went from ~905ms to ~734ms.
+- [x] A new untracked source file is still indexed on the next run.
 
 ## Priority 1: Fix the argv limit and stop swallowing spawn errors
 
