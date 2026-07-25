@@ -144,7 +144,7 @@ Lazy dispatch alone helps the unbundled path. Bundling alone helps cold start. T
 if the bundle uses `splitting: true` so dynamic imports become separate chunks. Land lazy
 dispatch first so the bundle has real split points to work with.
 
-## Priority 1: Ship a bundled CLI entry -- IMPLEMENTED (`<pending commit>`)
+## Priority 1: Ship a bundled CLI entry -- IMPLEMENTED (`a7115e40`)
 
 Add a bundling step to the build that emits a split ESM bundle, and point the `codegraph` bin at
 it. Keep the unbundled `dist/` output intact for tests and for library consumers importing
