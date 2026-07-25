@@ -1180,13 +1180,15 @@ export async function runCli(
   await runWithCliRuntime(runtime, async () => await runCliWithActiveRuntime(rawArgs));
 }
 
+export async function main(rawArgs: string[] = process.argv.slice(2)): Promise<void> {
+  try {
+    await runCli(rawArgs);
+  } catch (error) {
+    writeError(error);
+    exitCli(1);
+  }
+}
+
 if (isDirectCliExecution(import.meta.url)) {
-  void runWithCliRuntime({}, async () => {
-    try {
-      await runCliWithActiveRuntime(process.argv.slice(2));
-    } catch (error) {
-      writeError(error);
-      exitCli(1);
-    }
-  });
+  void main();
 }

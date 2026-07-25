@@ -10,7 +10,8 @@ const defaultRootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 export function getBundlePaths(rootDir = defaultRootDir) {
   return {
     rootDir,
-    entryPoint: path.join(rootDir, "dist", "cli.js"),
+    entryPoint: path.join(rootDir, "dist", "cliBootstrap.js"),
+    unbundledCli: path.join(rootDir, "dist", "cli.js"),
     outdir: path.join(rootDir, "dist", "bin"),
     bundledEntry: path.join(rootDir, "dist", "bin", "cli.js"),
   };
@@ -42,6 +43,7 @@ export async function bundleCli({ rootDir = defaultRootDir, logLevel = "warning"
     format: "esm",
     splitting: true,
     outdir: paths.outdir,
+    entryNames: "cli",
     external: ["node:*", "@lzehrung/codegraph-native"],
     banner: {
       js: createRequireBanner(),
@@ -72,7 +74,7 @@ function runNode(entry, args, { cwd = defaultRootDir } = {}) {
 }
 
 export async function verifyBundledCli({ rootDir = defaultRootDir } = {}) {
-  const { bundledEntry, entryPoint } = getBundlePaths(rootDir);
+  const { bundledEntry, unbundledCli } = getBundlePaths(rootDir);
   if (!fs.existsSync(bundledEntry)) {
     throw new Error(`Bundled CLI entry missing: ${bundledEntry}`);
   }
@@ -82,7 +84,7 @@ export async function verifyBundledCli({ rootDir = defaultRootDir } = {}) {
     throw new Error(`Bundled --version failed:\n${version.stderr || version.stdout}`);
   }
 
-  const unbundledVersion = runNode(entryPoint, ["--version"], { cwd: rootDir });
+  const unbundledVersion = runNode(unbundledCli, ["--version"], { cwd: rootDir });
   if (unbundledVersion.status !== 0) {
     throw new Error(`Unbundled --version failed:\n${unbundledVersion.stderr || unbundledVersion.stdout}`);
   }
@@ -108,7 +110,7 @@ export async function verifyBundledCli({ rootDir = defaultRootDir } = {}) {
     }
 
     const unbundledOrient = runNode(
-      entryPoint,
+      unbundledCli,
       ["orient", "--root", fixtureRoot, "--budget", "small", "--json"],
       { cwd: rootDir },
     );

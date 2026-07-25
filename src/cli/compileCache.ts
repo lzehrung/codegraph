@@ -1,0 +1,83 @@
+import fs from "node:fs";
+import module from "node:module";
+import os from "node:os";
+import path from "node:path";
+
+export type CompileCacheEnableResult = {
+  status: number;
+  message?: string;
+  directory?: string;
+};
+
+type EnableCompileCacheFn = {
+  (directory?: string): CompileCacheEnableResult;
+  (options: { directory?: string; portable?: boolean }): CompileCacheEnableResult;
+};
+
+/**
+ * Per-user codegraph cache root (not project-local `.codegraph/` /
+ * `.codegraph-cache/`), so V8 compile cache never enters discovery.
+ */
+export function resolveCodegraphUserCacheRoot(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: string = os.homedir(),
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform === "win32") {
+    const localAppData = env.LOCALAPPDATA?.trim();
+    if (localAppData) {
+      return path.join(localAppData, "codegraph");
+    }
+    return path.join(homedir, "AppData", "Local", "codegraph");
+  }
+
+  const xdgCacheHome = env.XDG_CACHE_HOME?.trim();
+  if (xdgCacheHome) {
+    return path.join(xdgCacheHome, "codegraph");
+  }
+  return path.join(homedir, ".cache", "codegraph");
+}
+
+export function resolveCliCompileCacheDirectory(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: string = os.homedir(),
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const override = env.NODE_COMPILE_CACHE?.trim();
+  if (override) {
+    return override;
+  }
+  return path.join(resolveCodegraphUserCacheRoot(env, homedir, platform), "compile-cache");
+}
+
+/**
+ * Enable Node's module compile cache as early as possible. Failures are
+ * non-fatal: the CLI must still run when the cache directory is unusable.
+ */
+export function enableCliCompileCache(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: string = os.homedir(),
+  platform: NodeJS.Platform = process.platform,
+): CompileCacheEnableResult | null {
+  try {
+    const enableCompileCache = module.enableCompileCache as EnableCompileCacheFn | undefined;
+    if (typeof enableCompileCache !== "function") {
+      return null;
+    }
+
+    if (env.NODE_DISABLE_COMPILE_CACHE === "1") {
+      return enableCompileCache();
+    }
+
+    const directory = resolveCliCompileCacheDirectory(env, homedir, platform);
+    if (!env.NODE_COMPILE_CACHE?.trim()) {
+      fs.mkdirSync(directory, { recursive: true });
+    }
+
+    // Node >=22.12 accepts `{ directory, portable }`; @types/node may still only
+    // declare the older string form, so call through a widened local signature.
+    return enableCompileCache({ directory, portable: true });
+  } catch {
+    return null;
+  }
+}

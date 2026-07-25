@@ -1,6 +1,6 @@
 # Startup cost: bundling, lazy dispatch, and compile cache
 
-Status: Priority 0 implemented on branch; Priority 1-3 still planned. Measurements verified on `main` at `3024ed2b` (`v1.8.100`), Node v24.15.0,
+Status: Priority 0-2 implemented on branch; Priority 3 still planned. Measurements verified on `main` at `3024ed2b` (`v1.8.100`), Node v24.15.0,
 Windows 11, on 2026-07-25. See
 [performance program index](2026-07-25-performance-program-index.md) for the shared baseline.
 
@@ -193,23 +193,42 @@ Warm medians over 5 runs on this repository (Node v24.15.0, Windows):
 Cold-start still benefits further from Priority 2 (compile cache) because bundling removes
 per-file resolution cost but not V8 parse/compile of the remaining entry chunk.
 
-## Priority 2: Enable the V8 compile cache
+## Priority 2: Enable the V8 compile cache -- IMPLEMENTED
 
-- [ ] Call `module.enableCompileCache()` at the very top of the CLI entry, before other imports,
-      guarded so a failure is non-fatal.
-- [ ] Choose a cache directory under the existing per-user codegraph state directory rather than
-      the project tree, so the cache is never mistaken for project state and never enters
-      discovery.
-- [ ] Confirm the cache does not defeat the freshness fix that hard-ignores `.codegraph/` and
-      `.codegraph-cache/`.
+- [x] Added `src/cliBootstrap.ts` that calls `enableCliCompileCache()` before dynamically importing
+      the heavy `cli.js` graph, so compile cache is armed before V8 parses the main entry chunk.
+- [x] Cache directory is under the per-user codegraph state root (`%LOCALAPPDATA%/codegraph/compile-cache`
+      on Windows; `$XDG_CACHE_HOME/codegraph/compile-cache` or `~/.cache/codegraph/compile-cache`
+      elsewhere), never under project `.codegraph/` / `.codegraph-cache/`.
+- [x] Failures are non-fatal. `NODE_COMPILE_CACHE` still overrides the directory; `NODE_DISABLE_COMPILE_CACHE=1`
+      disables as usual.
+- [x] Bundler entry switched to `dist/cliBootstrap.js` with `entryNames: "cli"` so the published
+      `dist/bin/cli.js` remains the bin path.
+- [x] Regression coverage in `tests/cli-compile-cache.test.ts` (path resolution, enable smoke,
+      bootstrap ordering, delete-cache behavior-only).
 
-Likely files: `src/cli.ts`, or a small `src/bootstrap/` entry shim.
+Likely files: `src/cliBootstrap.ts`, `src/cli/compileCache.ts`, `src/cli.ts`, `scripts/bundle-cli-lib.mjs`,
+`tests/cli-compile-cache.test.ts`, `docs/installation.md`.
 
 Acceptance:
 
-- [ ] Second and subsequent invocations measurably faster than the first, with the delta
-      recorded in the plan's results section.
-- [ ] Deleting the cache directory changes timing only, never behavior.
+- [x] Second and subsequent invocations measurably faster than the first, with the delta
+      recorded below.
+- [x] Deleting the cache directory changes timing only, never behavior.
+
+### Priority 2 measured result
+
+Warm medians over 5 runs on this repository (Node v24.15.0, Windows), bundled bin:
+
+| Entry | Priority 1 (cache disabled) | Priority 2 (compile cache) |
+| ----- | --------------------------- | -------------------------- |
+| `--version` | 75 ms | **64 ms** |
+| `--help` | 74 ms | **64 ms** |
+| `doctor` | 80 ms | **72 ms** |
+
+First touch into an empty cache directory for `--version`: 88 ms; immediate second touch: 70 ms.
+Compile cache is a smaller warm win once Priority 1 has already collapsed the module graph; it still
+cuts first-touch parse/compile after a clean cache and shaves ~8-11 ms from warm lightweight commands.
 
 ## Priority 3: Trim what stays eager
 

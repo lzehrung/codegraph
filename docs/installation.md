@@ -35,6 +35,8 @@ The `prepare` script reuses an existing `dist/` build during global installs bec
 
 The `codegraph` bin points at the split ESM bundle under `dist/bin/`. Unbundled `dist/` modules remain available for tests and library imports.
 
+The published bin enables Node's module compile cache under the per-user codegraph cache root (`%LOCALAPPDATA%\codegraph\compile-cache` on Windows; `$XDG_CACHE_HOME/codegraph/compile-cache` or `~/.cache/codegraph/compile-cache` elsewhere). That directory is outside the project tree, so it never enters discovery. Deleting it changes startup timing only, never command output.
+
 ## Option 2: Install from the `@lzehrung` registry
 
 Configure the scoped registry if you have not already:
