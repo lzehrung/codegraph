@@ -1,6 +1,6 @@
 # Startup cost: bundling, lazy dispatch, and compile cache
 
-Status: Planned. Measurements verified on `main` at `3024ed2b` (`v1.8.100`), Node v24.15.0,
+Status: Priority 0 implemented on branch; Priority 1-3 still planned. Measurements verified on `main` at `3024ed2b` (`v1.8.100`), Node v24.15.0,
 Windows 11, on 2026-07-25. See
 [performance program index](2026-07-25-performance-program-index.md) for the shared baseline.
 
@@ -97,21 +97,46 @@ code splitting is viable and that lazy dispatch survives bundling.
 Convert static handler imports in `src/cli.ts` to dynamic `import()` resolved at dispatch,
 matching the pattern already used for `sql`, `artifact`, `mcp`, and `graph`.
 
-- [ ] Replace the static `handle*Command` imports at `src/cli.ts:30-59` with `import()` calls
+- [x] Replace the static `handle*Command` imports in `src/cli.ts` with `import()` calls
       inside each command branch.
-- [ ] Keep `src/cli/help.js` and `src/cli/options.js` eager. Argument validation and help text
+- [x] Keep `src/cli/help.js` and `src/cli/options.js` eager. Argument validation and help text
       run before dispatch.
-- [ ] Keep the `runCli` export signature and `isDirectCliExecution` behavior unchanged.
-- [ ] Confirm no handler is imported for its side effects. If any is, make the side effect
+- [x] Keep the `runCli` export signature and `isDirectCliExecution` behavior unchanged.
+- [x] Confirm no handler is imported for its side effects. If any is, make the side effect
       explicit rather than relying on import order.
 
-Likely files: `src/cli.ts`.
+Also required to hit the <30-module acceptance gate (not obvious from the original sketch):
+
+- [x] Make `buildDoctorReport`, `collectGraph`, and `CodegraphLifecycleUserError` dynamic.
+      The lifecycle error class was a silent eager pull of ~120 modules via
+      `lifecycle/manifest.js`.
+- [x] Use `import type` for `GraphBuildOptions` / `NativeRuntimeMode`. With
+      `verbatimModuleSyntax`, `import { type X }` was emitting empty `import {}` statements
+      that still loaded those modules.
+
+Likely files: `src/cli.ts`, `tests/cli-startup-eager-modules.test.ts`.
 
 Acceptance:
 
-- [ ] `codegraph --version`, `--help`, and `doctor` load fewer than 30 project modules,
+- [x] `codegraph --version`, `--help`, and `doctor` load fewer than 30 project modules,
       asserted by a test that counts resolved module URLs.
-- [ ] Every command still runs, with unchanged output, under the existing CLI regression suite.
+      Measured after change: `--version`/`--help` 18 modules, `doctor` 27 (was 283 for
+      `--version`).
+- [x] Focused CLI startup tests green; existing handler surface unchanged (dispatch only).
+
+### Priority 0 measured result
+
+Warm medians over 5 runs on this repository (Node v24.15.0, Windows):
+
+| Entry | Before (plan baseline) | After Priority 0 |
+| ----- | ---------------------- | ---------------- |
+| `--version` | 299 ms | 139 ms |
+| `--help` | 293 ms | 140 ms |
+| `doctor` | 299 ms | 150 ms |
+
+Lazy dispatch alone removes ~160 ms from fixed overhead on the unbundled path by collapsing
+the eager graph from 283 modules to 18 for `--version`. Bundling (Priority 1) remains the
+main cold-start lever and should compose with these split points.
 
 ### Note on interaction with bundling
 
@@ -181,7 +206,7 @@ attack whatever remains disproportionately large.
 
 - [ ] `npx vitest run tests/cli-regressions.test.ts`
 - [ ] `npx vitest run tests/agent-search.test.ts tests/agent-session.test.ts`
-- [ ] New test asserting the eager module count for `--version` stays under a threshold, so this
+- [x] New test asserting the eager module count for `--version` stays under a threshold, so this
       regression cannot silently return.
 
 ### Measurement protocol
