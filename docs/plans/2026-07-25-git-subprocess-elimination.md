@@ -174,22 +174,32 @@ Acceptance:
       routine untracked file went from ~905ms to ~734ms.
 - [x] A new untracked source file is still indexed on the next run.
 
-## Priority 1: Fix the argv limit and stop swallowing spawn errors
+## Priority 1: Fix the argv limit and stop swallowing spawn errors -- IMPLEMENTED (`<pending commit>`)
 
-- [ ] Replace the path-argument form at `src/util/git.ts:129` with a single `git ls-files -z`
-      and intersect the tracked set against `relFiles` in memory.
-- [ ] Stop returning an empty Map for every failure at `src/util/git.ts:179-181`. Distinguish
-      "not a git repository", which is a normal empty result, from "git invocation failed",
-      which should be reported to diagnostics.
-- [ ] Add a test that exercises the function with more than 1,200 files and asserts git
-      signatures are still returned.
+- [x] Replace the path-argument form at `src/util/git.ts` with a plain `git ls-files -z` (no
+      path arguments) and intersect the tracked set against the requested files in memory via
+      a `Set`. Eliminates the ENAMETOOLONG failure mode at any repository size.
+- [x] Stop returning an empty Map for every failure silently. The early `!gitAvailable` return
+      stays a normal, unlogged empty result (the caller already knows there is no git repo);
+      the `catch` block and the hash-count-mismatch branch now both call `logWithLevel` with
+      `"warn"` severity before returning empty, so a genuine invocation failure is visible
+      instead of silently degrading into full content hashing.
+- [x] Added a regression using a padded subdirectory name (not just file count) to reliably
+      cross the real ~32,767-character Windows argv limit at 700 files -- an earlier attempt
+      with 1,300 short flat filenames stayed under the limit (~14,500 characters) and passed
+      even without the fix, so it proved nothing. Confirmed against the actual failure: fails
+      with `hashes.size === 0` on the pre-fix code, passes after.
+- [x] Added a second regression forcing a genuine git invocation failure (a directory with no
+      `.git` at all, `gitAvailable: true` passed anyway) and asserting `console.warn` fires.
 
-Likely files: `src/util/git.ts`, `tests/cache-invalidation.test.ts`.
+Likely files: `src/util/git.ts`, `src/indexer/build-index.ts` (three call sites now thread
+`opts?.logLevel` through), `tests/cache-invalidation.test.ts`.
 
 Acceptance:
 
-- [ ] A synthetic repository above the argv threshold still produces git signatures.
-- [ ] A genuine git failure surfaces in diagnostics rather than degrading silently.
+- [x] A synthetic repository above the argv threshold still produces git signatures for every
+      file (verified at 700 files / ~36,300 argv characters under the old form).
+- [x] A genuine git failure surfaces via `console.warn` rather than degrading silently.
 
 ## Priority 2: Memoize and parallelize
 
