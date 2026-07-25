@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { supportForFile, type LanguageSupport } from "../languages.js";
@@ -46,6 +47,7 @@ import {
   sanitizeManifestEntriesForRoot,
   sanitizeManifestTransientFilesForRoot,
   tryLoadFromCache,
+  tryLoadPersistedBloomFilters,
   tryLoadProjectIndexSnapshot,
   verifyManifestEntries,
   writeProjectIndexSnapshot,
@@ -584,6 +586,7 @@ async function buildIndexFromFileListShared(
     const bloomFilterCache = useBloomFilters
       ? new (await import("../util/bloomFilter.js")).BloomFilterCache()
       : undefined;
+    const persistedBloomFilters = bloomFilterCache ? await tryLoadPersistedBloomFilters(projectRoot, opts) : null;
     const parsedMap = new Map<string, ParsedFileContext>();
     const workspaceConfig = await loadWorkspaceConfig(projectRoot);
     const parseStart = performance.now();
@@ -647,8 +650,13 @@ async function buildIndexFromFileListShared(
             ...(sqlFactCache ? { sqlFactCache } : {}),
           });
           if (bloomFilterCache) {
-            const filter = await buildBloomFilterForFile(file);
-            if (filter) bloomFilterCache.set(file, filter);
+            const persistedFilter = persistedBloomFilters?.get(file);
+            if (persistedFilter) {
+              bloomFilterCache.set(file, persistedFilter);
+            } else {
+              const filter = await buildBloomFilterForFile(file);
+              if (filter) bloomFilterCache.set(file, filter);
+            }
           }
           return [file, mod, edges] as const;
         }
@@ -1162,10 +1170,40 @@ export async function buildProjectIndexIncremental(
       return snapshot;
     };
 
+    // A file can only hide from the incremental scan by being genuinely unseen: absent from
+    // both the manifest and any git diff signal. An untracked file that already has a
+    // manifest entry (a build artifact or scratch file indexed once and never committed, for
+    // example) is not automatically "unknown" -- but unlike a tracked file, git has no diff
+    // history for it, so its manifest signature cannot be trusted without independent proof
+    // it is still current. `entry.sig` always starts with `${mtimeMs}:${size}` (see
+    // `fileStatSignature` in build-cache/module-cache.ts), so a single cheap `stat()` per
+    // already-known untracked file proves freshness without reading its content. Unseen files
+    // (no manifest entry) and files whose stat no longer matches both still block the fast
+    // path, exactly as before; only "already indexed and provably unchanged" now qualifies.
+    const hasStaleOrUnseenUntrackedFile = untrackedFiles.length
+      ? (
+          await Promise.all(
+            untrackedFiles.map(async (file) => {
+              const entry = trackedEntries[file];
+              if (!entry?.sig) return true;
+              try {
+                const stat = await fsp.stat(file);
+                // Non-strict signatures are `${mtimeMs}:${size}`; strict ones append
+                // `:${contentHash}`. Match either form so the fast path works when
+                // `cacheStrict: false` (where this gate itself only runs).
+                const prefix = `${stat.mtimeMs}:${stat.size}`;
+                return !(entry.sig === prefix || entry.sig.startsWith(`${prefix}:`));
+              } catch {
+                return true;
+              }
+            }),
+          )
+        ).some(Boolean)
+      : false;
     const canSkipFileValidation =
       gitAvailable &&
       !opts?.cacheStrict &&
-      !untrackedFiles.length &&
+      !hasStaleOrUnseenUntrackedFile &&
       !additionalFiles.length &&
       !gitChangeCandidates.size;
     if (canSkipFileValidation) {
@@ -1229,6 +1267,7 @@ export async function buildProjectIndexIncremental(
         completeCheckProgress(allFiles.size);
         return unchangedSnapshot;
       }
+      const persistedBloomFilters = bloomFilterCache ? await tryLoadPersistedBloomFilters(projectRoot, opts) : null;
       for (const file of allFiles) {
         if (changedFiles.has(file)) continue;
         const sigInfo = fileSignatures.get(file)!;
@@ -1239,8 +1278,13 @@ export async function buildProjectIndexIncremental(
           modules.set(file, cached);
           collectJsonDependencies(cached.imports, jsonDependencies);
           if (bloomFilterCache) {
-            const filter = await buildBloomFilterForFile(file);
-            if (filter) bloomFilterCache.set(file, filter);
+            const persistedFilter = persistedBloomFilters?.get(file);
+            if (persistedFilter) {
+              bloomFilterCache.set(file, persistedFilter);
+            } else {
+              const filter = await buildBloomFilterForFile(file);
+              if (filter) bloomFilterCache.set(file, filter);
+            }
           }
         } else {
           changedFiles.add(file);

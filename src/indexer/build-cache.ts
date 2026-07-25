@@ -26,6 +26,7 @@ export {
   createProjectSnapshotIdentity,
   projectSnapshotFilesSignature,
   tryLoadDetailedSymbolGraphSnapshot,
+  tryLoadPersistedBloomFilters,
   tryLoadProjectIndexSnapshot,
   writeDetailedSymbolGraphSnapshot,
   writeProjectIndexSnapshot,
