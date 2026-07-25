@@ -25,6 +25,7 @@ import {
 } from "../src/util.js";
 import * as util from "../src/util.js";
 import * as projectFilesModule from "../src/util/projectFiles.js";
+import * as gitModule from "../src/util/git.js";
 import * as incrementalPlan from "../src/indexer/incremental-plan.js";
 import * as filePrep from "../src/languages/filePrep.js";
 import { runGit } from "./helpers/git.js";
@@ -1085,6 +1086,45 @@ describe("Cache invalidation and strict hashing", () => {
     bloomSpy.mockRestore();
   });
 
+  it("reuses persisted bloom filters for unchanged files during a genuine incremental rebuild", async () => {
+    const root = await mkTmpDir("dg-snapshot-bloom-partial-reuse-");
+    const alphaPath = path.join(root, "alpha.ts");
+    const betaPath = path.join(root, "beta.ts");
+    const gammaPath = path.join(root, "gamma.ts");
+    await fsp.writeFile(alphaPath, "export const alphaValue = 1;\n", "utf8");
+    await fsp.writeFile(betaPath, "export const betaValue = 2;\n", "utf8");
+    await fsp.writeFile(gammaPath, "export const gammaValue = 3;\n", "utf8");
+
+    await buildProjectIndex(root, { threads: 2, cache: "disk", useBloomFilters: true });
+
+    // Modify only gamma.ts: alpha.ts and beta.ts stay genuine, provable cache hits, but the
+    // snapshot as a whole can no longer be reused wholesale (`changedFiles.size` is nonzero),
+    // so the incremental builder must fall through to the per-file cache-hit loop -- exactly
+    // the path that used to rebuild every unchanged file's bloom filter from source even
+    // though the persisted snapshot already had it.
+    await fsp.writeFile(gammaPath, "export const gammaValue = 999;\n", "utf8");
+
+    const bloomSpy = vi.spyOn(buildCache, "buildBloomFilterForFile");
+
+    const incremental = await buildProjectIndexIncremental(root, {
+      threads: 2,
+      cache: "disk",
+      useBloomFilters: true,
+    });
+
+    // alpha.ts and beta.ts are unchanged cache hits: their filters come from the persisted
+    // snapshot. gamma.ts is reparsed fresh and gets its filter from the in-memory source
+    // during parsing, not from `buildBloomFilterForFile`. Neither path re-reads any file
+    // from disk just to rebuild a filter it already has.
+    expect(bloomSpy).not.toHaveBeenCalled();
+    expect(incremental.bloomFilters?.size()).toBe(3);
+    expect(incremental.bloomFilters?.get(normalize(alphaPath))?.mightContain("alphaValue")).toBe(true);
+    expect(incremental.bloomFilters?.get(normalize(betaPath))?.mightContain("betaValue")).toBe(true);
+    expect(incremental.bloomFilters?.get(normalize(gammaPath))?.mightContain("gammaValue")).toBe(true);
+
+    bloomSpy.mockRestore();
+  });
+
   it("does not hydrate persisted bloom filters when bloom filters are disabled", async () => {
     const root = await mkTmpDir("dg-snapshot-bloom-disabled-");
     const entryPath = path.join(root, "entry.ts");
@@ -1405,6 +1445,64 @@ describe("Cache invalidation and strict hashing", () => {
     } finally {
       scanSpy.mockRestore();
     }
+  });
+
+  it("skips full signature validation on a warm run when an already-indexed untracked file is unchanged", async () => {
+    const root = await mkTmpDir("dg-incremental-untracked-warm-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "tests@example.com"]);
+    runGit(root, ["config", "user.name", "Tests"]);
+    const trackedPath = path.join(root, "tracked.ts");
+    await fsp.writeFile(trackedPath, "export const tracked = 1;\n", "utf8");
+    runGit(root, ["add", "tracked.ts"]);
+    runGit(root, ["commit", "-m", "base"]);
+    // A file that is untracked from Git's perspective (never added or committed) but has
+    // already been indexed once, mirroring a routine build artifact or scratch file that
+    // stays untracked forever. Its mere presence must not permanently disable the snapshot
+    // fast path on every later run.
+    const scratchPath = path.join(root, "scratch.ts");
+    await fsp.writeFile(scratchPath, "export const scratch = 1;\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk" });
+
+    // `getGitBlobHashes` is only reached once the whole-snapshot fast path is skipped, and
+    // (unlike `tryLoadFromCache`) it runs before the later full-validation pass can also
+    // find nothing changed and short-circuit on its own -- so it is a reliable signal that
+    // the *early* snapshot fast path, gated on untracked-file presence, was actually taken.
+    const gitSigSpy = vi.spyOn(gitModule, "getGitBlobHashes");
+    try {
+      const rebuilt = await buildProjectIndexIncremental(root, { cache: "disk" });
+
+      expect(gitSigSpy).not.toHaveBeenCalled();
+      expect(rebuilt.byFile.has(normalize(trackedPath))).toBe(true);
+      expect(rebuilt.byFile.has(normalize(scratchPath))).toBe(true);
+    } finally {
+      gitSigSpy.mockRestore();
+    }
+  });
+
+  it("still detects a content change to an already-indexed untracked file", async () => {
+    const root = await mkTmpDir("dg-incremental-untracked-stale-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "tests@example.com"]);
+    runGit(root, ["config", "user.name", "Tests"]);
+    const trackedPath = path.join(root, "tracked.ts");
+    await fsp.writeFile(trackedPath, "export const tracked = 1;\n", "utf8");
+    runGit(root, ["add", "tracked.ts"]);
+    runGit(root, ["commit", "-m", "base"]);
+    const scratchPath = path.join(root, "scratch.ts");
+    await fsp.writeFile(scratchPath, "export const scratchOriginal = 1;\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk" });
+
+    // Git has no diff history for an untracked file, so nothing short of re-checking this
+    // specific file's own signature can prove it is still current. An already-known
+    // untracked file must therefore stay eligible for the fast path only while its content
+    // provably has not changed -- never unconditionally once it is merely "seen before".
+    await fsp.writeFile(scratchPath, "export const scratchUpdated = 2;\n", "utf8");
+    const rebuilt = await buildProjectIndexIncremental(root, { cache: "disk" });
+
+    const scratchModule = rebuilt.byFile.get(normalize(scratchPath));
+    expect(scratchModule?.locals.some((local) => local.localName === "scratchUpdated")).toBe(true);
+    expect(scratchModule?.locals.some((local) => local.localName === "scratchOriginal")).toBe(false);
   });
 
   it("picks up a newly staged (git add, not committed) file on an incremental build", async () => {
