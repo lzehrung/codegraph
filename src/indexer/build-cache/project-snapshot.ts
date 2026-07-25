@@ -175,10 +175,10 @@ export async function tryLoadProjectIndexSnapshot(
  * Bloom filters are a pure function of a file's text, so a filter persisted for a given file
  * is safe to reuse for that file whenever the caller has independently proven -- via its own
  * cache-hit signature comparison -- that the file's content has not changed, exactly like
- * reusing that file's cached `ModuleIndex`. Structural validation still runs (through
- * `isProjectIndexSnapshotPayload`), so a corrupt or foreign-format snapshot is rejected; only
- * the identity match that whole-snapshot reuse requires is skipped. Returns `null` when disk
- * caching is off, `useBloomFilters` is disabled, or no valid snapshot with bloom data exists.
+ * reusing that file's cached `ModuleIndex`. Only the bloom section is validated (version +
+ * serialized filter shape), so a corrupt bloom payload is rejected without walking
+ * `graph.edges` / `modules`. Returns `null` when disk caching is off, `useBloomFilters` is
+ * disabled, or no valid snapshot with bloom data exists.
  */
 export async function tryLoadPersistedBloomFilters(
   projectRoot: string,
@@ -187,11 +187,23 @@ export async function tryLoadPersistedBloomFilters(
   if ((opts?.cache ?? "off") !== "disk" || (opts?.useBloomFilters ?? true) === false) return null;
   try {
     const payload = JSON.parse(await fsp.readFile(projectSnapshotPath(projectRoot, opts), "utf8")) as unknown;
-    if (!isProjectIndexSnapshotPayload(payload) || !payload.bloomFilters) return null;
-    return deserializeBloomFilterCache(payload.bloomFilters);
+    const bloomFilters = persistedBloomFiltersFromSnapshot(payload);
+    if (!bloomFilters) return null;
+    return deserializeBloomFilterCache(bloomFilters);
   } catch {
     return null;
   }
+}
+
+/** Light validation for bloom hydrate: snapshot version + bloom section only. */
+function persistedBloomFiltersFromSnapshot(
+  value: unknown,
+): Record<string, SerializedBloomFilter> | null {
+  if (!value || typeof value !== "object") return null;
+  const payload = value as Partial<ProjectIndexSnapshotPayload>;
+  if (payload.version !== PROJECT_SNAPSHOT_VERSION) return null;
+  if (!isSerializedBloomFilterRecord(payload.bloomFilters)) return null;
+  return payload.bloomFilters;
 }
 
 export async function writeProjectIndexSnapshot(

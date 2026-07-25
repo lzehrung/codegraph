@@ -1462,7 +1462,10 @@ describe("Cache invalidation and strict hashing", () => {
     // fast path on every later run.
     const scratchPath = path.join(root, "scratch.ts");
     await fsp.writeFile(scratchPath, "export const scratch = 1;\n", "utf8");
-    await buildProjectIndex(root, { cache: "disk" });
+    // Explicit cacheStrict:false writes non-strict `${mtimeMs}:${size}` signatures (no
+    // trailing :hash). The untracked freshness gate must accept that form, not only the
+    // strict `${mtimeMs}:${size}:${hash}` shape.
+    await buildProjectIndex(root, { cache: "disk", cacheStrict: false });
 
     // `getGitBlobHashes` is only reached once the whole-snapshot fast path is skipped, and
     // (unlike `tryLoadFromCache`) it runs before the later full-validation pass can also
@@ -1470,7 +1473,7 @@ describe("Cache invalidation and strict hashing", () => {
     // the *early* snapshot fast path, gated on untracked-file presence, was actually taken.
     const gitSigSpy = vi.spyOn(gitModule, "getGitBlobHashes");
     try {
-      const rebuilt = await buildProjectIndexIncremental(root, { cache: "disk" });
+      const rebuilt = await buildProjectIndexIncremental(root, { cache: "disk", cacheStrict: false });
 
       expect(gitSigSpy).not.toHaveBeenCalled();
       expect(rebuilt.byFile.has(normalize(trackedPath))).toBe(true);

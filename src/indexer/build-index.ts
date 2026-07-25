@@ -1188,7 +1188,11 @@ export async function buildProjectIndexIncremental(
               if (!entry?.sig) return true;
               try {
                 const stat = await fsp.stat(file);
-                return !entry.sig.startsWith(`${stat.mtimeMs}:${stat.size}:`);
+                // Non-strict signatures are `${mtimeMs}:${size}`; strict ones append
+                // `:${contentHash}`. Match either form so the fast path works when
+                // `cacheStrict: false` (where this gate itself only runs).
+                const prefix = `${stat.mtimeMs}:${stat.size}`;
+                return !(entry.sig === prefix || entry.sig.startsWith(`${prefix}:`));
               } catch {
                 return true;
               }
