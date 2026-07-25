@@ -239,7 +239,7 @@ describe("package metadata", () => {
     const rootPackage = readJson("package.json");
     const bin = readStringRecord(rootPackage.bin);
 
-    expect(bin.codegraph).toBe("dist/cli.js");
+    expect(bin.codegraph).toBe("dist/bin/cli.js");
   });
 
   it("requires a Node runtime with the built-in SQLite statement metadata APIs", () => {

@@ -2,7 +2,7 @@
 
 Assume the CLI is available as `codegraph`.
 
-For a source checkout of this repo, replace `codegraph` with `node ./dist/cli.js`.
+For a source checkout of this repo, replace `codegraph` with `node ./dist/bin/cli.js` (or `node ./dist/cli.js` for the unbundled entry used by tests).
 
 If the CLI is not installed yet, use the install paths in [docs/installation.md](./installation.md). Do not use the unscoped `codegraph` package name.
 

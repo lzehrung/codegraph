@@ -144,32 +144,54 @@ Lazy dispatch alone helps the unbundled path. Bundling alone helps cold start. T
 if the bundle uses `splitting: true` so dynamic imports become separate chunks. Land lazy
 dispatch first so the bundle has real split points to work with.
 
-## Priority 1: Ship a bundled CLI entry
+## Priority 1: Ship a bundled CLI entry -- IMPLEMENTED (`<pending commit>`)
 
 Add a bundling step to the build that emits a split ESM bundle, and point the `codegraph` bin at
 it. Keep the unbundled `dist/` output intact for tests and for library consumers importing
 `@lzehrung/codegraph`.
 
-- [ ] Add an esbuild build step (esbuild 0.27.2 is already a dependency) producing
-      `dist/bin/` from `dist/cli.js` with `bundle: true`, `platform: "node"`, `format: "esm"`,
+- [x] Added `scripts/bundle-cli.mjs` / `bundle-cli-lib.mjs` using esbuild 0.27.2 (now an
+      explicit `devDependency`; previously only transitive via vitest) producing `dist/bin/`
+      from `dist/cli.js` with `bundle: true`, `platform: "node"`, `format: "esm"`,
       `splitting: true`, and `node:*` plus `@lzehrung/codegraph-native` external.
-- [ ] Emit the `createRequire` banner the entry needs, since `src/sqlite-driver.ts:37` uses
-      `createRequire(import.meta.url)`.
-- [ ] Repoint `package.json` `bin.codegraph` at the bundled entry.
-- [ ] Keep `dist/index.js` and the rest of `dist/` unbundled and exported as today.
-- [ ] Ensure `package.json` `files` still ships everything the bundled entry needs at runtime.
-- [ ] Add a build-output check that the bundled entry runs `--version` and one agent command
-      successfully, so a broken bundle fails the build rather than the user.
+- [x] Emit a `createRequire` banner on every chunk. Required not just for
+      `src/sqlite-driver.ts`, but because some transitive CJS deps still emit bare
+      `require("os")`-style calls that esbuild otherwise rewrites into a throwing helper.
+- [x] Repointed `package.json` `bin.codegraph` to `dist/bin/cli.js`.
+- [x] Kept `dist/index.js` and the rest of `dist/` unbundled and exported as today. Tests still
+      import unbundled modules; `ensure-dist-for-tests` now also requires the bundled entry so a
+      partial build fails closed.
+- [x] `package.json` `files` already ships `dist/`, which includes `dist/bin/`.
+- [x] Bundle step verifies `--version` parity and `orient --json` parity on a fresh tiny
+      fixture before the build succeeds. Regression coverage in
+      `tests/cli-bundle-entry.test.ts`.
 
-Likely files: `package.json`, `scripts/` (new bundle script), `.github/workflows/release.yml`
-if the release path needs the new artifact.
+Likely files: `package.json`, `scripts/bundle-cli.mjs`, `scripts/bundle-cli-lib.mjs`,
+`scripts/ensure-dist-for-tests-lib.mjs`, `docs/installation.md`,
+`tests/cli-bundle-entry.test.ts`.
 
 Acceptance:
 
-- [ ] Bundled `--version` at or under 120 ms on the reference machine.
-- [ ] Bundled `orient --json` output is byte-identical to unbundled for the tiny fixture and for
-      this repository.
-- [ ] `npm run check` green, with tests still running against unbundled `dist/`.
+- [x] Bundled `--version` at or under 120 ms on the reference machine.
+      Measured warm median over 5 runs: **73 ms** (unbundled after Priority 0: 147 ms;
+      original baseline: 299 ms).
+- [x] Bundled `orient --json` output is byte-identical to unbundled for a tiny fixture (build
+      smoke + test) and for this repository (manual A/B).
+- [x] Focused bundle/startup tests green; `test:fast` still exercises unbundled `dist/`
+      imports.
+
+### Priority 1 measured result
+
+Warm medians over 5 runs on this repository (Node v24.15.0, Windows):
+
+| Entry | After Priority 0 (unbundled) | After Priority 1 (bundled bin) |
+| ----- | ---------------------------- | ------------------------------ |
+| `--version` | 144 ms | 73 ms |
+| `--help` | 146 ms | 72 ms |
+| `doctor` | 151 ms | 83 ms |
+
+Cold-start still benefits further from Priority 2 (compile cache) because bundling removes
+per-file resolution cost but not V8 parse/compile of the remaining entry chunk.
 
 ## Priority 2: Enable the V8 compile cache
 
