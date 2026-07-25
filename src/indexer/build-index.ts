@@ -550,7 +550,10 @@ async function buildIndexFromFileListShared(
   const gitAvailable = await isGitRepo(projectRoot);
   const useGitSignatures = gitAvailable && (cacheMode !== "off" || opts?.cacheStrict);
   const gitSigMap = useGitSignatures
-    ? await getGitBlobHashes(projectRoot, normalizedFiles, { gitAvailable })
+    ? await getGitBlobHashes(projectRoot, normalizedFiles, {
+        gitAvailable,
+        ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+      })
     : new Map<string, string>();
   const conc = buildConcurrency(opts);
   const sqlFiles = normalizedFiles
@@ -1217,7 +1220,10 @@ export async function buildProjectIndexIncremental(
     try {
       const useGitSignatures = gitAvailable;
       const gitSigMap = useGitSignatures
-        ? await getGitBlobHashes(projectRoot, Array.from(allFiles), { gitAvailable })
+        ? await getGitBlobHashes(projectRoot, Array.from(allFiles), {
+            gitAvailable,
+            ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+          })
         : new Map<string, string>();
       const fileSignatures = await prepareFileSignatures({
         files: Array.from(allFiles),
@@ -1492,7 +1498,10 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
   }
   if (manifest && graphOptionsEqual(manifest.graphOptions, graphOptions)) {
     const gitSigMap = gitAvailable
-      ? await getGitBlobHashes(projectRoot, Array.from(allFiles), { gitAvailable })
+      ? await getGitBlobHashes(projectRoot, Array.from(allFiles), {
+          gitAvailable,
+          ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+        })
       : new Map<string, string>();
     for (const file of allFiles) {
       const sigInfo = await fileSignature(file, opts?.cacheStrict, gitSigMap.get(file));

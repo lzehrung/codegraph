@@ -3,6 +3,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { stringifyUnknown } from "./ast.js";
 import { normalizePath } from "./paths.js";
+import { logWithLevel, type LogLevel } from "../logging.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -113,20 +114,23 @@ export async function getGitBlobHash(
 export async function getGitBlobHashes(
   projectRoot: string,
   files: string[],
-  opts?: { gitAvailable?: boolean },
+  opts?: { gitAvailable?: boolean; logLevel?: LogLevel },
 ): Promise<Map<string, string>> {
   const gitAvailable = opts?.gitAvailable ?? true;
   if (!gitAvailable) return new Map();
-  const relFiles = Array.from(
-    new Set(
-      files
-        .map((file) => normalizePath(path.relative(projectRoot, file)))
-        .filter((rel) => rel && !rel.startsWith("..") && !path.isAbsolute(rel) && rel !== "."),
-    ),
+  const relFileSet = new Set(
+    files
+      .map((file) => normalizePath(path.relative(projectRoot, file)))
+      .filter((rel) => rel && !rel.startsWith("..") && !path.isAbsolute(rel) && rel !== "."),
   );
-  if (!relFiles.length) return new Map();
+  if (!relFileSet.size) return new Map();
   try {
-    const { stdout: trackedStdout } = await execFileAsync("git", ["ls-files", "-z", "--", ...relFiles], {
+    // Deliberately no path arguments here: passing one argv entry per requested file hits
+    // Windows' ~32,767-character command-line limit past roughly 1,100 files, failing the
+    // whole call with ENAMETOOLONG and silently discarding every git signature for the
+    // build. Listing every tracked file and intersecting against the requested set in
+    // memory costs a little extra parsing but stays correct at any repo size.
+    const { stdout: trackedStdout } = await execFileAsync("git", ["ls-files", "-z"], {
       cwd: projectRoot,
       env: process.env,
     });
@@ -134,7 +138,7 @@ export async function getGitBlobHashes(
       .toString()
       .split("\0")
       .map((line) => line.trim())
-      .filter(Boolean);
+      .filter((rel) => rel && relFileSet.has(rel));
     if (!trackedRel.length) return new Map();
     const hashes = await new Promise<string[]>((resolve, reject) => {
       const child = spawn("git", ["hash-object", "--stdin-paths"], {
@@ -166,7 +170,15 @@ export async function getGitBlobHashes(
       child.stdin.write(trackedRel.join("\n"));
       child.stdin.end();
     });
-    if (hashes.length !== trackedRel.length) return new Map();
+    if (hashes.length !== trackedRel.length) {
+      logWithLevel(
+        opts?.logLevel,
+        "warn",
+        `Warning: git hash-object returned ${hashes.length} hash(es) for ${trackedRel.length} ` +
+          "requested file(s); discarding Git signatures for this build.",
+      );
+      return new Map();
+    }
     const out = new Map<string, string>();
     for (let i = 0; i < trackedRel.length; i += 1) {
       const rel = trackedRel[i]!;
@@ -176,7 +188,17 @@ export async function getGitBlobHashes(
       out.set(abs, hash);
     }
     return out;
-  } catch {
+  } catch (error) {
+    // A genuine git invocation failure, not "no git repository" (already handled above by
+    // the early `gitAvailable` return). Losing Git signatures means every file falls back to
+    // full content hashing, an easy-to-miss O(repo) regression, so surface it instead of
+    // failing silently.
+    logWithLevel(
+      opts?.logLevel,
+      "warn",
+      "Warning: Failed to read Git blob hashes; falling back to content hashing.",
+      error,
+    );
     return new Map();
   }
 }

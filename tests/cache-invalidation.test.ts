@@ -401,6 +401,62 @@ describe("Cache invalidation and strict hashing", () => {
     expect(graph.edges[0]?.from).toBe(normalize(trackedPath));
   });
 
+  it("returns git signatures for every file even past the Windows command-line argv limit", async () => {
+    const root = await mkTmpDir("dg-git-sig-argv-limit-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "cache@test.local"]);
+    runGit(root, ["config", "user.name", "Cache Test"]);
+
+    // Windows caps a single process's command line around 32,767 characters. Passing one
+    // argv entry per requested file used to fail the whole `git ls-files` call with
+    // ENAMETOOLONG, silently discarding every git signature and falling back to full
+    // content hashing for the entire project. A subdirectory name pads each relative path
+    // enough that 700 files reliably crosses the threshold (~36,000 argv characters using
+    // the old one-argument-per-file form) without needing thousands of files.
+    const subdir = "padding-directory-for-argv-length-testing";
+    await fsp.mkdir(path.join(root, subdir), { recursive: true });
+    const fileCount = 700;
+    const fileNames = Array.from({ length: fileCount }, (_, i) => `${subdir}/f${i}.ts`);
+    await Promise.all(
+      fileNames.map((name, i) => fsp.writeFile(path.join(root, name), `export const v${i} = ${i};\n`, "utf8")),
+    );
+    runGit(root, ["add", "-A"]);
+    runGit(root, ["commit", "-m", "bulk"]);
+
+    const filePaths = fileNames.map((name) => path.join(root, name));
+    const hashes = await gitModule.getGitBlobHashes(root, filePaths);
+
+    expect(hashes.size).toBe(fileCount);
+    for (const filePath of filePaths) {
+      const hash = hashes.get(normalize(filePath));
+      expect(typeof hash).toBe("string");
+      expect(hash?.length).toBe(40);
+    }
+  });
+
+  it("surfaces a genuine git invocation failure instead of silently discarding signatures", async () => {
+    const root = await mkTmpDir("dg-git-sig-invocation-failure-");
+    // No `git init`: the directory is not a repository, so `git ls-files` genuinely fails
+    // (non-zero exit), distinct from the caller-known "no git repo" case that already
+    // short-circuits before any command runs. This exercises the catch block, which used
+    // to return an empty Map with no signal at all.
+    const scratchPath = path.join(root, "scratch.ts");
+    await fsp.writeFile(scratchPath, "export const scratch = 1;\n", "utf8");
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const hashes = await gitModule.getGitBlobHashes(root, [scratchPath], { gitAvailable: true });
+
+      expect(hashes.size).toBe(0);
+      expect(warnSpy).toHaveBeenCalled();
+      expect(warnSpy.mock.calls.some((call) => String(call[0]).includes("Failed to read Git blob hashes"))).toBe(
+        true,
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it("does not reparse dirty worktree files once their signatures already match the cache", async () => {
     const root = await mkTmpDir("dg-dirty-worktree-settle-");
     runGit(root, ["init"]);
