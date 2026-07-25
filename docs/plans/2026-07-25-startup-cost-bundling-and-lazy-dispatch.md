@@ -193,7 +193,7 @@ Warm medians over 5 runs on this repository (Node v24.15.0, Windows):
 Cold-start still benefits further from Priority 2 (compile cache) because bundling removes
 per-file resolution cost but not V8 parse/compile of the remaining entry chunk.
 
-## Priority 2: Enable the V8 compile cache -- IMPLEMENTED
+## Priority 2: Enable the V8 compile cache -- IMPLEMENTED (`69d3ec77`)
 
 - [x] Added `src/cliBootstrap.ts` that calls `enableCliCompileCache()` before dynamically importing
       the heavy `cli.js` graph, so compile cache is armed before V8 parses the main entry chunk.
