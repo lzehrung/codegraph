@@ -67,7 +67,7 @@ Order is chosen so that each step is independently shippable and independently m
    contained blast radius.
 3. **Startup plan** (lazy dispatch shipped in Priority 0; bundle shipped in Priority 1; compile
    cache still open). Largest cold win remaining is compile cache + native fingerprint avoidance. Priority 0 (lazy dispatch) is implemented;
-   Priority 1+ still open.
+   Priority 2+ still open.
 4. **Native plan**. Depends on nothing, but its win is smaller on developer checkouts than on
    installed users, so it validates last.
 5. **Git plan, Priority 1 and 2** (memoization, batching, zero-git fast path).
