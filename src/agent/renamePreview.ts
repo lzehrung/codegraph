@@ -14,7 +14,7 @@ import { resolveReadableFile } from "../util/confinedFile.js";
 import { classifySensitiveFile } from "./fileView.js";
 import { normalizeAgentFilePath } from "./normalize.js";
 import type { SemanticLocation, SemanticProvenance, SemanticResponseEnvelope, SemanticSymbol } from "./semantic.js";
-import { resolveSemanticSymbol, semanticSymbolFromDef } from "./semanticSymbols.js";
+import { requireSemanticSymbol, semanticSymbolFromDef } from "./semanticSymbols.js";
 import {
   createAgentSession,
   type AgentFreshnessResult,
@@ -166,8 +166,7 @@ export async function previewRenameInSnapshot(
   request: Omit<RenamePreviewRequest, "buildOptions">,
   freshness: AgentFreshnessResult = { state: "fresh" },
 ): Promise<RenamePreviewResponse> {
-  const resolved = resolveSemanticSymbol(snapshot, request.handle);
-  if (!resolved) throw new Error("Symbol handle is stale or missing. Run workspace symbol lookup to resolve it again.");
+  const resolved = requireSemanticSymbol(snapshot, request.handle);
   const maxEdits = normalizeMaxEdits(request.maxEdits);
   const provenance = semanticRenameProvenance(snapshot);
   const conflicts = validateNewName(snapshot, resolved.def, request.newName);

@@ -487,7 +487,7 @@ describe("CLI index progress", () => {
   it("reports a warm cache check and a stale-index update", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-update-progress-"));
     const file = path.join(root, "main.ts");
-    const command = ["inspect", "--root", root, "--cache", "disk"];
+    const command = ["inspect", "--root", root, "--cache", "disk", "--json"];
     await fsp.writeFile(file, "export const value = 1;\n", "utf8");
 
     try {

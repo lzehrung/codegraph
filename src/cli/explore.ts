@@ -24,7 +24,7 @@ export async function handleExploreCommand(context: ExploreCommandContext): Prom
     allowSensitive: context.hasFlag("--allow-sensitive"),
   });
 
-  if (context.hasFlag("--json") || !context.hasFlag("--pretty")) {
+  if (context.hasFlag("--json")) {
     context.writeJSONLine(response);
   } else {
     context.writeStdoutLine(formatAgentExploreResponse(response));

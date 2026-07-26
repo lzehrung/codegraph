@@ -27,7 +27,7 @@ function parseAgentOrientHealthMode(rawValue: string | undefined): AgentOrientHe
 
 export async function handleOrientCommand(context: OrientCommandContext): Promise<void> {
   const healthMode = parseAgentOrientHealthMode(context.getOpt("--health"));
-  const writesJson = context.hasFlag("--json") || !context.hasFlag("--pretty");
+  const writesJson = context.hasFlag("--json");
   const buildOptions: BuildOptions = { ...(context.buildOptions ?? {}), logLevel: "silent" };
   const response = await orientCodegraph({
     root: context.root,

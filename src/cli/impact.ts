@@ -300,15 +300,8 @@ function buildDiffProviderOptions(context: ImpactCommandContext): ImpactOptionsB
 
 async function hydrateDiffProviderOptions(context: ImpactCommandContext, options: ImpactOptionsBuilder): Promise<void> {
   if (options.provider === "git") {
-    const base = context.getOpt("--base");
-    const head = context.getOpt("--head");
-    if (!base || !head) {
-      throw new Error(
-        "Impact provider 'git' requires --base and --head. Example: codegraph impact --provider git --base main --head HEAD",
-      );
-    }
-    options.base = base;
-    options.head = head;
+    options.base = context.getOpt("--base") ?? "HEAD";
+    options.head = context.getOpt("--head") ?? "WORKTREE";
     options.cwd = context.projectRootFs;
     return;
   }
@@ -368,7 +361,7 @@ function applyAnalysisOptions(context: ImpactCommandContext, options: ImpactOpti
   // Bounded defaults for the common orchestrator accelerant path (--pretty/--compact)
   // without changing unlimited library behavior when callers omit budgets.
   const wantsBoundedDefaults =
-    context.hasFlag("--pretty") || context.hasFlag("--compact") || context.hasFlag("--compact-json");
+    !context.hasFlag("--json") || context.hasFlag("--compact") || context.hasFlag("--compact-json");
   if (wantsBoundedDefaults) {
     if (options.maxChangedSymbols === undefined)
       options.maxChangedSymbols = DEFAULT_BOUNDED_IMPACT_BUDGETS.maxChangedSymbols;
@@ -525,8 +518,10 @@ export async function handleImpactCommand(context: ImpactCommandContext): Promis
   await hydrateDiffProviderOptions(context, options);
   applyAnalysisOptions(context, options);
 
-  const pretty = context.hasFlag("--pretty");
   const mermaid = context.hasFlag("--mermaid");
+  const json = context.hasFlag("--json");
+  const compactJson = context.hasFlag("--compact") || context.hasFlag("--compact-json");
+  const pretty = !json && !mermaid && (context.hasFlag("--pretty") || !compactJson);
   try {
     const duplicateScope =
       pretty && !mermaid ? parseDuplicateLeadScope(context.getOpt("--duplicates"), "changed") : "off";

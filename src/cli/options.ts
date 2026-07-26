@@ -192,8 +192,9 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   [
     "apisurface",
     commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], SHARED_BUILD_OPTIONS, {
-      kind: "none",
-      usage: "Usage: codegraph apisurface [--root <path>] [--json]",
+      kind: "max",
+      max: 1,
+      usage: "Usage: codegraph apisurface [project-root] [--root <path>] [--json]",
     }),
   ],
   [
@@ -204,7 +205,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       {
         kind: "max",
         max: 1,
-        usage: "Usage: codegraph artifact build [--root <path>] [--out <dir>] [--json]",
+        usage: "Usage: codegraph artifact [build] [--root <path>] [--out <dir>] [--json]",
       },
     ),
   ],
@@ -331,7 +332,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], SHARED_BUILD_OPTIONS, {
       kind: "max",
       max: 3,
-      usage: "Usage: codegraph goto <file> [line] [column] [--root <path>] [--json]",
+      usage: "Usage: codegraph goto <file>[:line[:column]] [line] [column] [--root <path>] [--json]",
     }),
   ],
   ["graph", graphCommandSchema({ kind: "any" })],
@@ -341,8 +342,9 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       [...SHARED_BUILD_FLAGS, "--incremental-strict"],
       [...SHARED_BUILD_OPTIONS, "--changed-since", "--git-base", "--git-head", "--output"],
       {
-        kind: "none",
-        usage: "Usage: codegraph graph-delta [--root <path>] [--git-base <ref> | --changed-since <ref>]",
+        kind: "max",
+        max: 1,
+        usage: "Usage: codegraph graph-delta [project-root] [--root <path>] [--git-base <ref> | --changed-since <ref>]",
       },
     ),
   ],
@@ -352,8 +354,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       ["--ignore-case", "--json", "-i", "--no-gitignore"],
       ["--glob", "--ignore-glob", "--include-glob", "--max-hits", "--pattern", "--query", "--regex", "--root"],
       {
-        kind: "none",
-        usage: "Usage: codegraph grep [--root <dir>] (--query <query> | --pattern <regex>)",
+        kind: "any",
       },
     ),
   ],
@@ -407,7 +408,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], [...SHARED_BUILD_OPTIONS, "--limit"], {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph implementations <symbol-handle> [--root <path>] [--limit <0-500>] [--json | --pretty]",
+      usage: "Usage: codegraph implementations <symbol-target> [--root <path>] [--limit <0-500>] [--json | --pretty]",
     }),
   ],
   ["index", graphCommandSchema({ kind: "any" })],
@@ -451,7 +452,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       {
         kind: "max",
         max: 1,
-        usage: "Usage: codegraph mcp serve [--root <path>] [--stdio | --port <number>]",
+        usage: "Usage: codegraph mcp [serve] [--root <path>] [--stdio | --port <number>]",
       },
     ),
   ],
@@ -469,7 +470,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       {
         kind: "max",
         max: 2,
-        usage: "Usage: codegraph packet get <target> [--root <path>] [--json | --pretty]",
+        usage: "Usage: codegraph packet [get] <target> [--root <path>] [--json | --pretty]",
       },
     ),
   ],
@@ -495,8 +496,9 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS],
       [...SHARED_BUILD_OPTIONS, "--col", "--column", "--file", "--line"],
       {
-        kind: "none",
-        usage: "Usage: codegraph refs --file <file> --line <line> --col <column> [--root <path>]",
+        kind: "max",
+        max: 3,
+        usage: "Usage: codegraph refs <file>[:line[:column]] [line] [column] [--root <path>] [--pretty]",
       },
     ),
   ],
@@ -521,8 +523,10 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
         "--review-depth",
       ],
       {
-        kind: "none",
-        usage: "Usage: codegraph review [--root <path>] [--base <ref> --head <ref>] [--json | --summary]",
+        kind: "max",
+        max: 1,
+        usage:
+          "Usage: codegraph review [project-root] [--root <path>] [--base <ref> --head <ref>] [--json | --summary]",
       },
     ),
   ],
@@ -535,7 +539,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
         kind: "max",
         max: 2,
         usage:
-          "Usage: codegraph rename-preview <symbol-handle> <new-name> [--include-comments] [--include-strings] [--include-filenames] [--max-edits N] [--json | --pretty]",
+          "Usage: codegraph rename-preview <symbol-target> <new-name> [--include-comments] [--include-strings] [--include-filenames] [--max-edits N] [--json | --pretty]",
       },
     ),
   ],
@@ -548,7 +552,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
         kind: "max",
         max: 1,
         usage:
-          "Usage: codegraph refactor-plan <symbol-handle> [--rename <new-name>] [--max-references <0-500>] [--max-callers <0-500>] [--max-hierarchy <0-500>] [--include-source] [--json | --pretty]",
+          "Usage: codegraph refactor-plan <symbol-target> [--rename <new-name>] [--max-references <0-500>] [--max-callers <0-500>] [--max-hierarchy <0-500>] [--include-source] [--json | --pretty]",
       },
     ),
   ],
@@ -578,7 +582,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
         kind: "max",
         max: 1,
         usage:
-          "Usage: codegraph callees <symbol-handle> [--root <path>] [--depth <1-5>] [--limit <0-500>] [--include-heuristic] [--json | --pretty]",
+          "Usage: codegraph callees <symbol-target> [--root <path>] [--depth <1-5>] [--limit <0-500>] [--include-heuristic] [--json | --pretty]",
       },
     ),
   ],
@@ -591,7 +595,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
         kind: "max",
         max: 1,
         usage:
-          "Usage: codegraph callers <symbol-handle> [--root <path>] [--depth <1-5>] [--limit <0-500>] [--include-heuristic] [--json | --pretty]",
+          "Usage: codegraph callers <symbol-target> [--root <path>] [--depth <1-5>] [--limit <0-500>] [--include-heuristic] [--json | --pretty]",
       },
     ),
   ],
@@ -601,7 +605,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       kind: "max",
       max: 1,
       usage:
-        "Usage: codegraph subtypes <symbol-handle> [--root <path>] [--depth <1-10>] [--limit <0-500>] [--json | --pretty]",
+        "Usage: codegraph subtypes <symbol-target> [--root <path>] [--depth <1-10>] [--limit <0-500>] [--json | --pretty]",
     }),
   ],
   [
@@ -610,7 +614,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       kind: "max",
       max: 1,
       usage:
-        "Usage: codegraph supertypes <symbol-handle> [--root <path>] [--depth <1-10>] [--limit <0-500>] [--json | --pretty]",
+        "Usage: codegraph supertypes <symbol-target> [--root <path>] [--depth <1-10>] [--limit <0-500>] [--json | --pretty]",
     }),
   ],
   [
@@ -641,8 +645,9 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   [
     "sql",
     commandSchema(["--json"], ["--db", "--query", "--sqlite"], {
-      kind: "none",
-      usage: 'Usage: codegraph sql --db <sqlite path> --query "SELECT ..."',
+      kind: "max",
+      max: 2,
+      usage: 'Usage: codegraph sql <sqlite-path> "SELECT ..." OR codegraph sql --db <sqlite path> --query "SELECT ..."',
     }),
   ],
   [
@@ -656,8 +661,9 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   [
     "unresolved",
     commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--verbose"], SHARED_BUILD_OPTIONS, {
-      kind: "none",
-      usage: "Usage: codegraph unresolved [--root <path>] [--json]",
+      kind: "max",
+      max: 1,
+      usage: "Usage: codegraph unresolved [project-root] [--root <path>] [--json]",
     }),
   ],
   [
@@ -670,7 +676,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
 ]);
 
 function allowedFlagsForSchema(schema: CliCommandSchema): Set<string> {
-  return new Set(["--help", "-h", "--version", "-v", ...(schema.flags ?? [])]);
+  return new Set(["--help", "-h", "--version", "-v", "--json", "--pretty", ...(schema.flags ?? [])]);
 }
 
 function allowedOptionsForSchema(schema: CliCommandSchema): Set<string> {

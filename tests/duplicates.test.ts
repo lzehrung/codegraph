@@ -1624,7 +1624,7 @@ export function summarizeOrders(rows: number[]) {
     expect(result.stderr).toContain("Invalid flag combination: --profile cleanup is not supported with --raw-pairs.");
   });
 
-  test("duplicates CLI rejects --json with --pretty", async () => {
+  test("duplicates CLI gives --json precedence over --pretty", async () => {
     const root = await makeTempProject();
     const source = `
 export function summarizeOrders(rows: number[]) {
@@ -1639,8 +1639,9 @@ export function summarizeOrders(rows: number[]) {
 
     const result = await captureCli(["duplicates", "--root", ".", "src", "--json", "--pretty"], { cwd: root });
 
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("Invalid flag combination: choose either --json or --pretty.");
+    expect(result.exitCode).toBeUndefined();
+    expect(result.stderr).toBe("");
+    expect(() => JSON.parse(result.stdout)).not.toThrow();
   });
   test("duplicates CLI rejects --sort actionability with --raw-pairs", async () => {
     const root = await makeTempProject();

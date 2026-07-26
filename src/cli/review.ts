@@ -312,7 +312,7 @@ export async function handleReviewCommand(context: ReviewCommandContext): Promis
   }
   if (maxCallsites !== undefined) reviewOpts.maxCallsites = maxCallsites;
   if (maxTests !== undefined) reviewOpts.maxCandidates = maxTests;
-  const wantsHumanSummary = context.hasFlag("--summary") || context.hasFlag("--pretty");
+  const wantsHumanSummary = !context.hasFlag("--json");
   const duplicateScope = parseDuplicateLeadScope(context.getOpt("--duplicates"), "impacted");
   if (duplicateScope === "off") {
     reviewOpts.duplicateTasks = false;

@@ -60,11 +60,11 @@ describe("parseCliArgs value-option guard", () => {
 });
 
 describe("CLI command option validation", () => {
-  it("rejects installer --json flags because installer output is already structured JSON", () => {
+  it("accepts explicit JSON output for installer commands", () => {
     for (const command of ["install", "uninstall"]) {
       const parsed = parseCliArgs(command, ["--json"]);
 
-      expect(() => validateCliArgs(command, parsed)).toThrow(`Unknown option for ${command}: --json`);
+      expect(() => validateCliArgs(command, parsed)).not.toThrow();
     }
   });
 
@@ -90,23 +90,17 @@ describe("CLI command option validation", () => {
     }
   });
 
-  it("rejects --pretty for lifecycle commands (init/status/sync) since the lifecycle handler only branches on --json and always prints human-readable text otherwise", () => {
-    for (const command of ["init", "status", "sync"]) {
+  it("accepts explicit pretty output for every lifecycle command", () => {
+    for (const command of ["init", "status", "sync", "uninit"]) {
       const parsed = parseCliArgs(command, ["--pretty"]);
 
-      expect(() => validateCliArgs(command, parsed)).toThrow(`Unknown option for ${command}: --pretty`);
+      expect(() => validateCliArgs(command, parsed)).not.toThrow();
     }
   });
 
-  it("still rejects --pretty for uninit, which never accepted it", () => {
-    const parsed = parseCliArgs("uninit", ["--pretty"]);
-
-    expect(() => validateCliArgs("uninit", parsed)).toThrow("Unknown option for uninit: --pretty");
-  });
-
-  it("still accepts --pretty for commands that legitimately support the full JSON output flag set", () => {
-    for (const command of ["orient", "search"]) {
-      const parsed = parseCliArgs(command, ["--pretty"]);
+  it("accepts JSON and pretty together so JSON can take precedence", () => {
+    for (const command of ["doctor", "orient", "install"]) {
+      const parsed = parseCliArgs(command, ["--json", "--pretty"]);
 
       expect(() => validateCliArgs(command, parsed)).not.toThrow();
     }

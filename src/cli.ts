@@ -25,6 +25,7 @@ import {
 import { CLI_HELP_TEXT, helpTextForCommand, isKnownCliCommand } from "./cli/help.js";
 import { parseCacheModeOption, parseOptionalNonNegativeIntegerOption, validateCliArgs } from "./cli/options.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
+import { writeCliOutput } from "./cli/pretty.js";
 import type { CliProgressPolicy } from "./cli/progress.js";
 import type { ProjectFileDiscoveryOptions } from "./util/projectFiles.js";
 import {
@@ -103,6 +104,10 @@ function isExistingDirectory(filePath: string): boolean {
 
 function isLifecycleCommand(command: string): command is "init" | "status" | "sync" | "uninit" {
   return command === "init" || command === "status" || command === "sync" || command === "uninit";
+}
+
+function acceptsOptionalProjectRoot(command: string): boolean {
+  return command === "apisurface" || command === "graph-delta" || command === "review" || command === "unresolved";
 }
 
 function assertValidIncludeRoots(command: string, baseRoot: string, includeRoots: readonly string[]): void {
@@ -263,15 +268,32 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     exitCli(2);
     return;
   }
+  if (acceptsOptionalProjectRoot(cmd) && rootOpt && parsed.positionals.length) {
+    writeStderrLine(`Positional project root cannot be combined with --root for ${cmd}.`);
+    exitCli(2);
+    return;
+  }
+  if (
+    acceptsOptionalProjectRoot(cmd) &&
+    !rootOpt &&
+    firstPositionalRoot !== undefined &&
+    !isExistingDirectory(firstPositionalRoot)
+  ) {
+    writeStderrLine(`Invalid ${cmd} project root "${parsed.positionals[0]!}". Expected an existing directory.`);
+    exitCli(2);
+    return;
+  }
   const defaultProjectRoot =
     (cmd === "graph" ||
       cmd === "graph-delta" ||
       cmd === "index" ||
-      cmd === "grep" ||
       cmd === "hotspots" ||
       cmd === "inspect" ||
       cmd === "duplicates" ||
       cmd === "impact" ||
+      cmd === "review" ||
+      cmd === "apisurface" ||
+      cmd === "unresolved" ||
       isLifecycleCommand(cmd)) &&
     !rootOpt &&
     firstPositionalRoot !== undefined &&
@@ -320,7 +342,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
 
   if (cmd === "doctor") {
     const { buildDoctorReport } = await import("./cli/doctor.js");
-    writeJSONLine(buildDoctorReport(parsed.positionals.at(-1)));
+    writeCliOutput({ hasFlag, writeJSONLine, writeStdoutLine }, buildDoctorReport(parsed.positionals.at(-1)));
     return;
   }
 
@@ -356,9 +378,12 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   if (cmd === "sql") {
     const { handleSqlCommand } = await import("./cli/sql.js");
     await handleSqlCommand({
+      positionals: parsed.positionals,
       getOpt,
+      hasFlag,
       cwd: getCwd,
       writeJSONLine,
+      writeStdoutLine,
       writeStderrLine,
       exit: exitCli,
     });
@@ -373,17 +398,14 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       hasFlag,
       cwd: getCwd,
       writeJSONLine,
+      writeStdoutLine,
       writeStderrLine,
       exit: exitCli,
     });
     return;
   }
 
-  const {
-    hasDiscoveryOptions,
-    loadCodegraphConfig,
-    mergeDiscoveryOptions,
-  } = await loadConfigHelpers();
+  const { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions } = await loadConfigHelpers();
   const explicitDiscoveryOptions = mergeDiscoveryOptions(cliGlobDiscoveryOptions, cliGitignoreDiscoveryOptions);
   const config = await loadCodegraphConfig(projectRootFs);
   graphFlags.resolutionHints = normalizeResolutionHints([
@@ -861,6 +883,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       changedSince,
       progressHandler,
       writeJSONLine,
+      writeStdoutLine,
     });
     return;
   }
@@ -916,6 +939,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       hasFlag,
       resolveFiles,
       writeJSONLine,
+      writeStdoutLine,
       writeStderrLine,
       writeCommandReport,
       maybeWriteNativeBackendStatus,
@@ -1031,12 +1055,14 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   if (cmd === "grep") {
     const { handleGrepCommand } = await import("./cli/grep.js");
     await handleGrepCommand({
+      positionals: parsed.positionals,
       projectRootFs,
       discoveryOptions,
       parsedOptions: parsed.options,
       getOpt,
       hasFlag,
       writeJSONLine,
+      writeStdoutLine,
       writeStderrLine,
       exit: exitCli,
     });
@@ -1127,8 +1153,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   if (cmd === "path" || cmd === "cycles" || cmd === "unresolved") {
     const graphOptions = hasGraphOverrides || nativeMode !== "auto" ? buildGraphOptions() : undefined;
     const { handleGraphQueryCommand } = await import("./cli/graphQueries.js");
-    const collectGraph =
-      cmd === "cycles" ? (await import("./graph-builder.js")).collectGraph : undefined;
+    const collectGraph = cmd === "cycles" ? (await import("./graph-builder.js")).collectGraph : undefined;
     await handleGraphQueryCommand({
       command: cmd,
       positionals: parsed.positionals,

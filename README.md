@@ -41,12 +41,12 @@ Use Codegraph alongside text search and compilers: text search finds exact strin
 | "What depends on this file?"                 | `codegraph rdeps src/file.ts --json`                                    | Reverse dependencies from the resolved project graph                                         |
 | "Where is this symbol defined or used?"      | `codegraph goto <file> <line> <column>` and `codegraph refs ...`        | Semantic definitions and references across supported languages                               |
 | "Which declaration matches this name?"       | `codegraph symbols "CodeReviewSession" --root . --pretty`               | Ranked symbols with portable handles, exact ranges, provenance, and omissions                |
-| "What evidence do I need before a refactor?" | `codegraph refactor-plan <symbol-handle> --pretty`                      | References, call and type relationships, candidate tests, omissions, and copyable follow-ups |
+| "What evidence do I need before a refactor?" | `codegraph refactor-plan <symbol-target> --pretty`                      | References, call and type relationships, candidate tests, omissions, and copyable follow-ups |
 | "Is the architecture drifting?"              | `codegraph drift ./src --base origin/main --head HEAD --pretty`         | New cycles, hotspot changes, unresolved imports, API changes, and graph deltas               |
 | "Where is code duplicated?"                  | `codegraph duplicates ./src --min-confidence medium`                    | Ranked exact and near-duplicate groups with locations and confidence                         |
 | "Can another tool consume the graph?"        | `codegraph graph --root . ./src --compact-json --output codegraph.json` | JSON, Mermaid, DOT, or SQLite output                                                         |
 
-Human-readable output uses `--pretty` or `--summary`. JSON, MCP tools, and library APIs preserve stable fields, ranges, handles, reasons, confidence, and omission counts for automation.
+Human-readable output is the CLI default; `--pretty` remains an explicit equivalent and `--summary` selects compact report output where supported. Use `--json` for stable fields, ranges, handles, reasons, confidence, and omission counts in automation.
 
 ## Try it
 
@@ -97,7 +97,7 @@ codegraph orient --root . --budget small --pretty
 # Follow an anchor returned by either command
 codegraph explain src/review.ts
 codegraph deps src/review.ts --json
-codegraph refs --file src/review.ts --line 215 --col 23 --pretty
+codegraph refs src/review.ts:215:23 --pretty
 ```
 
 ### Review local changes
@@ -156,7 +156,7 @@ Candidate tests
 
 Follow-ups
 - codegraph file src/review.ts --pretty
-- codegraph refs --file src/review.ts --line 215 --col 23 --pretty
+- codegraph refs src/review.ts:215:23 --pretty
 
 Limits
 - anchors, packets, paths, blast radius, reverse dependencies, and candidate tests

@@ -56,6 +56,7 @@ describe("symbols CLI", () => {
   it("composes kind, exported, file-glob, import, and limit options", async () => {
     const filtered = await captureCli([
       "symbols",
+      "--json",
       "",
       "--root",
       root,
@@ -126,7 +127,7 @@ describe("symbols CLI", () => {
   });
 
   it("rejects limits above the public maximum before indexing", async () => {
-    const result = await captureCli(["symbols", "Service", "--root", root, "--limit", "501"]);
+    const result = await captureCli(["symbols", "--json", "Service", "--root", root, "--limit", "501"]);
 
     expect(result).toEqual({
       stdout: "",

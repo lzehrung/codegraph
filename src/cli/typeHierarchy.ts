@@ -71,7 +71,7 @@ export async function handleTypeHierarchyCommand(
 }
 
 function writeResponse<T>(context: TypeHierarchyCommandContext, response: T, format: (value: T) => string): void {
-  if (context.hasFlag("--json") || !context.hasFlag("--pretty")) {
+  if (context.hasFlag("--json")) {
     context.writeJSONLine(response);
     return;
   }

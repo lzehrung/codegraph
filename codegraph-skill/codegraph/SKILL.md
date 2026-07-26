@@ -53,19 +53,19 @@ Use `--root` to define the boundary for config lookup, cache scope, path confine
 
 Use `symbols` instead of hybrid `search` when only declarations should compete. It supports `--kind <kind,...>`, `--exported`, `--include-imports`, project-relative `--file-glob`, and `--limit <0-500>`; imports default off, and only named/default aliases that resolve to concrete declarations are returned.
 
-Use the portable callable handle from `symbols` with `codegraph callers <handle>` or `codegraph callees <handle>`. Depth defaults to 1 and caps at 5, the symbol limit defaults to 100 and caps at 500, JSON is the default, and `--pretty` prints grouped exact callsites.
+Use the portable callable handle from `symbols` with `codegraph callers <handle>` or `codegraph callees <handle>`. Depth defaults to 1 and caps at 5, the symbol limit defaults to 100 and caps at 500, pretty grouped callsites are the default, and `--json` returns the structured envelope.
 
 Call hierarchy contains resolved semantic `calls` edges only. `--include-heuristic` is accepted but currently adds no guessed dynamic calls; use `refs` for all references and `deps` or `rdeps` for file relationships.
 
-Use the portable handle from `symbols` with `codegraph supertypes <handle>`, `codegraph subtypes <handle>`, or `codegraph implementations <handle>`. Hierarchy depth defaults to 1 and caps at 10; all result limits default to 100 and cap at 500, and `--pretty` is the concise human-readable form.
+Use a portable handle, unique exact symbol name, single-definition file, or source location with `codegraph supertypes <target>`, `codegraph subtypes <target>`, or `codegraph implementations <target>`. Hierarchy depth defaults to 1 and caps at 10; all result limits default to 100 and cap at 500, and `--pretty` is the concise human-readable form.
 
 Hierarchy results contain only proven indexed `extends` and `implements` relationships. Implementation targets are interfaces, traits, abstract types, and members with proven implementation or override relationships; exact declarations are returned, while overloads, dynamic or structural conformance, unrelated same-name methods, and unresolved external bases are not guessed.
 
-Use `codegraph rename-preview <handle> <new-name> --json` to plan a semantic rename without changing files. Add `--include-comments`, `--include-strings`, or `--include-filenames` only when needed, and use `--max-edits <1-10000>` to bound the plan.
+Use `codegraph rename-preview <target> <new-name> --json` to plan a semantic rename without changing files. Add `--include-comments`, `--include-strings`, or `--include-filenames` only when needed, and use `--max-edits <1-10000>` to bound the plan.
 
 Treat `safe: false`, conflicts, unsafe sites, and omissions as blockers. Eligible exported class, interface, and type filename results are suggestions only; Codegraph has no apply command or tool.
 
-Use `codegraph refactor-plan <handle> --pretty` to compose references, direct callers and callees, hierarchy, implementations, section issues, candidate tests, omissions, and copyable follow-ups from one snapshot. It accepts portable search or workspace-symbol handles and exact internal review or impact symbol handles; add `--rename <new-name>` only when the packet should include the authoritative nested rename preview.
+Use `codegraph refactor-plan <target> --pretty` to compose references, direct callers and callees, hierarchy, implementations, section issues, candidate tests, omissions, and copyable follow-ups from one snapshot. It accepts portable search or workspace-symbol handles and exact internal review or impact symbol handles; add `--rename <new-name>` only when the packet should include the authoritative nested rename preview.
 
 The independent `--max-references`, `--max-callers`, and `--max-hierarchy` bounds accept 0 to 500, and `--include-source` opts reference context into output. Treat `sectionIssues`, omissions, and nested `rename.safe` as authoritative; the packet is read-only and has no apply action.
 
@@ -74,10 +74,15 @@ The independent `--max-references`, `--max-callers`, and `--max-hierarchy` bound
 - dependencies: `codegraph deps <file>`
 - reverse dependencies: `codegraph rdeps <file>`
 - shortest path: `codegraph path <from> <to>`
-- definition: `codegraph goto <file> <line> <column>`
-- references: `codegraph refs --file <file> --line <line> --col <column> --pretty`
+- definition: `codegraph goto <file>:<line>:<column>`
+- references at a location: `codegraph refs <file>:<line>:<column> --pretty`
+- references for every definition in a file: `codegraph refs <file> --pretty`
+
+File targets accept locations copied from search output. Semantic relationship/refactor commands accept a portable handle, unique exact symbol name, single-definition file, or `file:line[:column]`; ambiguous targets return handle choices instead of guessing.
 
 ### Review and Inspect
+
+Safe shorthand: `impact` and git-backed `drift` default to `HEAD..WORKTREE`; `artifact`, `packet`, and `mcp` infer `build`, `get`, and `serve`. `grep <regex>` and `sql <db> "SELECT ..."` accept positional forms. Explicit options remain valid.
 
 - compact review handoff: `codegraph review --base HEAD --head WORKTREE --summary`
 - broader change impact: `codegraph impact --base HEAD --head WORKTREE --pretty`
@@ -93,8 +98,8 @@ The independent `--max-references`, `--max-callers`, and `--max-hierarchy` bound
 
 ## Choose Output by Consumer
 
-- Human or model reading one result: use `--pretty` or `--summary`.
-- Tool chaining, filtering, stable handles, exact ranges, or schema fields: use `--json`.
+- Human or model reading one result: use the human-readable default; `--pretty` remains an explicit equivalent and `--summary` selects compact report output where supported.
+- Tool chaining, filtering, stable handles, exact ranges, or schema fields: use `--json`. If `--json` and `--pretty` are both present, `--json` wins.
 - Repeated agent queries over one repo snapshot: prefer MCP so the index stays warm.
 - Durable graph handoff: use `codegraph graph --root . ./src --compact-json --output codegraph.json` rather than parsing display text.
 
@@ -102,7 +107,7 @@ Do not parse pretty output to recover fields already available in structured out
 
 ## Live Reads and Sensitive Files
 
-Use `codegraph file <path>` for current disk content. The default is JSON; add `--pretty` for readable numbered lines.
+Use `codegraph file <path>` for current disk content. Readable numbered lines are the default; add `--json` for structured pagination fields.
 
 ```bash
 codegraph file src/auth.ts --offset 201 --limit 200 --max-bytes 80000

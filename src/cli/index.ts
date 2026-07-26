@@ -5,6 +5,7 @@ import { type GraphBuildOptions } from "../graphs/types.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import type { ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { parseCacheModeOption, parseNonNegativeIntegerOption } from "./options.js";
+import { writeCliOutput } from "./pretty.js";
 
 type CommandTimingReport = {
   totalMs?: number;
@@ -34,6 +35,7 @@ export type IndexCommandContext = {
   hasFlag: (name: string) => boolean;
   resolveFiles: () => Promise<string[]>;
   writeJSONLine: (value: unknown) => void;
+  writeStdoutLine: (message: string) => void;
   writeStderrLine: (message: string) => void;
   writeCommandReport: (report: IndexCommandReport, reportFile: string | undefined) => Promise<void>;
   maybeWriteNativeBackendStatus: (report: BuildReport | undefined, showProgress: boolean) => void;
@@ -94,13 +96,13 @@ export async function handleIndexCommand(context: IndexCommandContext): Promise<
       exports: m.exports,
       imports: m.imports,
     }));
-    context.writeJSONLine({
+    writeCliOutput(context, {
       files: modules.length,
       edges: index.graph.edges.length,
       modules,
     });
   } else {
-    context.writeJSONLine({
+    writeCliOutput(context, {
       files: [...index.byFile.keys()].length,
       edges: index.graph.edges.length,
     });

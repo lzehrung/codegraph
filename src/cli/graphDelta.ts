@@ -5,6 +5,7 @@ import { type GraphBuildOptions } from "../graphs/types.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import { normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
 import { parseCacheModeOption, parseNonNegativeIntegerOption } from "./options.js";
+import { formatPrettyValue, writeCliOutput } from "./pretty.js";
 
 export type GraphDeltaCommandContext = {
   projectRootFs: string;
@@ -20,6 +21,7 @@ export type GraphDeltaCommandContext = {
   changedSince: string | undefined;
   progressHandler: IncrementalBuildOptions["onProgress"];
   writeJSONLine: (value: unknown) => void;
+  writeStdoutLine: (message: string) => void;
 };
 
 export async function handleGraphDeltaCommand(context: GraphDeltaCommandContext): Promise<void> {
@@ -48,8 +50,9 @@ export async function handleGraphDeltaCommand(context: GraphDeltaCommandContext)
   const delta = await buildGraphDelta(context.projectRootFs, deltaOptions);
   const outputFile = outputArg ? normalizePath(resolveFilePathFromRoot(context.cwd(), outputArg)) : undefined;
   if (outputFile) {
-    await fsp.writeFile(outputFile, `${JSON.stringify(delta, null, 2)}\n`, "utf8");
+    const output = context.hasFlag("--json") ? JSON.stringify(delta, null, 2) : formatPrettyValue(delta);
+    await fsp.writeFile(outputFile, `${output}\n`, "utf8");
   } else {
-    context.writeJSONLine(delta);
+    writeCliOutput(context, delta);
   }
 }

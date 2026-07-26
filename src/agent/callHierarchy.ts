@@ -2,7 +2,7 @@ import { findCallHierarchy, type CallHierarchyDirection } from "../indexer/call-
 import type { BuildOptions } from "../indexer/types.js";
 import { normalizeAgentFilePath } from "./normalize.js";
 import type { SemanticLocation, SemanticProvenance, SemanticResponseEnvelope, SemanticSymbol } from "./semantic.js";
-import { resolveSemanticSymbol, semanticSymbolFromDef } from "./semanticSymbols.js";
+import { requireSemanticSymbol, semanticSymbolFromDef } from "./semanticSymbols.js";
 import {
   createAgentSession,
   type AgentFreshnessResult,
@@ -62,8 +62,7 @@ async function runCallHierarchy(
 ): Promise<CallHierarchyResponse> {
   const freshness = session.checkFreshness ? await session.checkFreshness() : { state: "fresh" as const };
   const snapshot = await session.loadProject();
-  const resolved = resolveSemanticSymbol(snapshot, request.handle);
-  if (!resolved) throw new Error("Symbol handle is stale or missing. Run workspace symbol lookup to resolve it again.");
+  const resolved = requireSemanticSymbol(snapshot, request.handle);
   const result = findCallHierarchy(snapshot.symbolGraph, resolved.id, direction, {
     ...(request.depth !== undefined ? { depth: request.depth } : {}),
     ...(request.limit !== undefined ? { limit: request.limit } : {}),

@@ -523,7 +523,7 @@ function collectFollowUps(
   }
   for (const file of anchorFiles.slice(0, 3)) {
     const relative = toProjectDisplayPath(root, file);
-    followUps.push(`codegraph refs --file ${quoteShellArg(relative)} --line 1 --col 0 --pretty`);
+    followUps.push(`codegraph refs ${quoteShellArg(`${relative}:1:0`)} --pretty`);
   }
   if (!includeSource) {
     followUps.push(`codegraph explore ${quoteShellArg(query)} --pretty`);

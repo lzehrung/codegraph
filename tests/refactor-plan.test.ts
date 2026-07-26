@@ -62,7 +62,7 @@ describe("refactor evidence plan", () => {
       reason: expect.stringContaining("Implementation lookup requires"),
     });
     expect(result.omittedCounts.implementations).toBe(1);
-    expect(result.followUps).toContain(`codegraph refs --file service.ts --line 2 --col 17 --pretty`);
+    expect(result.followUps).toContain(`codegraph refs service.ts:2:17 --pretty`);
     expect(result.followUps.some((followUp) => followUp.includes(`callers ${handle}`))).toBe(true);
     expect(result.rename).toBeUndefined();
   });

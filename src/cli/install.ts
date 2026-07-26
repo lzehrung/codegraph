@@ -7,6 +7,7 @@ import {
   uninstallCodegraphTargets,
   type InstallTargetId,
 } from "../installer/registry.js";
+import { writeCliOutput } from "./pretty.js";
 
 export type InstallerCommandContext = {
   command: "install" | "uninstall";
@@ -37,16 +38,16 @@ export async function handleInstallerCommand(context: InstallerCommandContext): 
   };
 
   if (context.hasFlag("--detect")) {
-    context.writeJSONLine({ targets: await detectInstallTargets(options) });
+    writeCliOutput(context, { targets: await detectInstallTargets(options) });
     return;
   }
 
   if (context.command === "install") {
-    context.writeJSONLine(await installCodegraphTargets(options));
+    writeCliOutput(context, await installCodegraphTargets(options));
     return;
   }
 
-  context.writeJSONLine(await uninstallCodegraphTargets(options));
+  writeCliOutput(context, await uninstallCodegraphTargets(options));
 }
 
 function parseInstallerTargets(context: InstallerCommandContext): InstallTargetId[] | undefined {

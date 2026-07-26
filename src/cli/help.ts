@@ -10,13 +10,13 @@ Commands:
   packet        Retrieve bounded evidence packets by file path or stable target
   search        Ranked agent search across files, symbols, chunks, SQL, and graph context
   symbols       Deterministic workspace-symbol lookup with exact locations
-  callers       Find proven semantic callers by symbol handle
-  callees       Find proven semantic callees by symbol handle
-  supertypes    Find proven direct or transitive supertypes by symbol handle
-  subtypes      Find proven direct or transitive subtypes by symbol handle
+  callers       Find proven semantic callers by symbol target
+  callees       Find proven semantic callees by symbol target
+  supertypes    Find proven direct or transitive supertypes by symbol target
+  subtypes      Find proven direct or transitive subtypes by symbol target
   implementations Find proven type or interface-member implementations
-  rename-preview Read-only semantic rename planning by symbol handle
-  refactor-plan Build a read-only refactor evidence packet by symbol handle
+  rename-preview Read-only semantic rename planning by symbol target
+  refactor-plan Build a read-only refactor evidence packet by symbol target
   explain       Explain a file, symbol, SQL object, or search handle
   impact        Analyze PR impact
   inspect       Summarize repo structure and recommend next commands
@@ -72,18 +72,26 @@ Build Options:
   --no-progress             Suppress automatic index progress feedback
 
 Analysis Output Options:
-  --json                    Output analysis commands as JSON (default where supported)
+  --pretty                  Human-readable output (default)
+  --json                    Structured JSON output for automation
   --duplicates              Include duplicate summary in inspect (off by default)
   --mermaid                 Output as Mermaid diagram
   --dot                     Output as DOT graph
   --sqlite <path>           Write to SQLite database
   --sql-artifacts           Include isolated SQL artifact facts in JSON graph output
   --output <path>           Write to file instead of stdout
-  --stdout                  Write default graph output to stdout
+  --stdout                  Write graph output to stdout (default)
+
+Forgiving inputs:
+  File arguments accept file:line[:column] locations from search output.
+  Symbol commands accept a portable handle, unique exact name, file, or file:line[:column].
+  refs accepts a file alone and returns references for every symbol defined in that file.
+  impact and drift default to HEAD..WORKTREE; artifact, packet, and mcp infer their only subcommand.
+  Read-only project commands accept an existing project-root positional where unambiguous.
 
 Recommended review commands:
-  codegraph review --base HEAD --head WORKTREE --summary
-  codegraph impact --base HEAD --head WORKTREE --pretty  (optional blast-radius follow-up)
+  codegraph review --summary
+  codegraph impact --pretty  (defaults to HEAD..WORKTREE)
   codegraph search "auth user" --json
   codegraph explain src/auth.ts --json
 
@@ -103,9 +111,9 @@ Examples:
   codegraph status --root . --json
   codegraph sync --root .
   codegraph uninit --root . --force
-  codegraph packet get file:src%2Fcli.ts --json
-  codegraph artifact build --root . --out codegraph-out --json
-  codegraph mcp serve --root . --stdio
+  codegraph packet file:src%2Fcli.ts --json
+  codegraph artifact --root . --out codegraph-out --json
+  codegraph mcp --root . --stdio
   codegraph install --target codex,claude --yes
   codegraph install --print-config codex
   codegraph uninstall --target codex --yes
@@ -124,11 +132,11 @@ Examples:
   codegraph skill install --target ~/.codex/skills/codegraph --force
   codegraph skill doctor
   codegraph impact --provider git --base main --head HEAD --pretty --duplicates off
-  codegraph refs --file src/index.ts --line 42 --col 10
+  codegraph refs src/index.ts:42:10 --pretty
   codegraph doctor
   codegraph symbols "CodeReviewSession" --root . --pretty
-  codegraph rename-preview "symbol:src/Service.ts:Service:1:14" RenamedService --include-filenames --json
-  codegraph refactor-plan "symbol:src/Service.ts:Service:1:14" --rename RenamedService --pretty
+  codegraph rename-preview Service RenamedService --include-filenames --json
+  codegraph refactor-plan Service --rename RenamedService --pretty
   codegraph version
   codegraph -v
 `;
@@ -234,7 +242,7 @@ Usage: codegraph explore "<query>" [--root <path>] [--limit <n>] [--max-packets 
 
 Output:
   Explore orchestrates search, packet retrieval, dependency paths, reverse dependencies, candidate tests, and follow-up commands. An exact file-path query also includes the live bounded file view.
-  JSON is the default. Use --pretty for concise model-readable sections. Graph context and raw sensitive values require explicit flags.
+  Pretty model-readable sections are the default. Use --json for structured fields. Graph context and raw sensitive values require explicit flags.
 
 ${SHARED_INDEX_OPTIONS_HELP}
 `;
@@ -244,7 +252,7 @@ export const FILE_HELP_TEXT = `codegraph file - Read a live project file with bo
 Usage: codegraph file <path> [--root <path>] [--offset <line>] [--limit <lines>] [--max-bytes <bytes>] [--include-graph-context] [--allow-sensitive] [--json | --pretty]
 
 Output:
-  JSON is the default. Pretty output uses exact number<TAB>line source lines plus bounded graph context when requested.
+  Pretty output is the default and uses exact number<TAB>line source lines plus bounded graph context when requested. Use --json for structured fields.
   A file-ending newline is represented as a final numbered empty line. Follow page.nextOffset or the pretty next-page command for more lines.
 
 Safety:
@@ -270,6 +278,39 @@ Output:
 ${SHARED_INDEX_OPTIONS_HELP}
 `;
 
+export const GOTO_HELP_TEXT = `codegraph goto - Go to a definition
+
+Usage: codegraph goto <file>[:line[:column]] [line] [column] [--root <path>] [--json]
+
+A file-only target succeeds when the file defines one symbol; otherwise JSON returns bounded candidates. Search-result locations and portable symbol handles can be pasted directly.
+
+${SHARED_INDEX_OPTIONS_HELP}
+`;
+
+export const REFS_HELP_TEXT = `codegraph refs - Find semantic references
+
+Usage: codegraph refs <file>[:line[:column]] [line] [column] [--root <path>] [--json | --pretty]
+       codegraph refs --file <file> [--line <line> --col <column>] [--root <path>] [--json | --pretty]
+
+A file-only target finds references for every symbol defined in that file. Search-result locations and portable symbol handles can be pasted directly.
+
+${SHARED_INDEX_OPTIONS_HELP}
+`;
+
+export const GREP_HELP_TEXT = `codegraph grep - Search source text or syntax trees
+
+Usage: codegraph grep <regex> [--root <path>] [--ignore-case] [--max-hits <n>]
+       codegraph grep --query <tree-sitter-query> [--root <path>]
+
+A bare positional is a text regex. Use --query explicitly for Tree-sitter queries.
+`;
+
+export const SQL_HELP_TEXT = `codegraph sql - Query a graph SQLite export read-only
+
+Usage: codegraph sql <sqlite-path> "SELECT ..."
+       codegraph sql --db <sqlite-path> --query "SELECT ..."
+`;
+
 export const SYMBOLS_HELP_TEXT = `codegraph symbols - Deterministic workspace-symbol lookup
 
 Usage: codegraph symbols [query] [--root <path>] [--kind <kind,...>] [--exported] [--include-imports] [--file-glob <glob>] [--limit <0-500>] [--json | --pretty]
@@ -286,7 +327,7 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const CALLERS_HELP_TEXT = `codegraph callers - Find proven semantic callers
 
-Usage: codegraph callers <symbol-handle> [--root <path>] [--depth <1-5>] [--limit <0-500>] [--include-heuristic] [--json | --pretty]
+Usage: codegraph callers <symbol-target> [--root <path>] [--depth <1-5>] [--limit <0-500>] [--include-heuristic] [--json | --pretty]
 
 Returns grouped caller symbols and exact project-relative callsites from resolved calls edges. --include-heuristic is accepted for forward compatibility, but current results remain limited to proven semantic edges.
 
@@ -295,7 +336,7 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const CALLEES_HELP_TEXT = `codegraph callees - Find proven semantic callees
 
-Usage: codegraph callees <symbol-handle> [--root <path>] [--depth <1-5>] [--limit <0-500>] [--include-heuristic] [--json | --pretty]
+Usage: codegraph callees <symbol-target> [--root <path>] [--depth <1-5>] [--limit <0-500>] [--include-heuristic] [--json | --pretty]
 
 Returns grouped callee symbols and exact project-relative callsites from resolved calls edges. --include-heuristic is accepted for forward compatibility, but current results remain limited to proven semantic edges.
 
@@ -304,7 +345,7 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const SUPERTYPES_HELP_TEXT = `codegraph supertypes - Find proven supertypes
 
-Usage: codegraph supertypes <symbol-handle> [--root <path>] [--depth <1-10>] [--limit <0-500>] [--json | --pretty]
+Usage: codegraph supertypes <symbol-target> [--root <path>] [--depth <1-10>] [--limit <0-500>] [--json | --pretty]
 
 Returns only currently extracted extends and implements relationships. Results include exact locations, relation depth, provenance, limits, and omissions.
 
@@ -313,7 +354,7 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const SUBTYPES_HELP_TEXT = `codegraph subtypes - Find proven subtypes
 
-Usage: codegraph subtypes <symbol-handle> [--root <path>] [--depth <1-10>] [--limit <0-500>] [--json | --pretty]
+Usage: codegraph subtypes <symbol-target> [--root <path>] [--depth <1-10>] [--limit <0-500>] [--json | --pretty]
 
 Returns only currently extracted extends and implements relationships. Results include exact locations, relation depth, provenance, limits, and omissions.
 
@@ -322,7 +363,7 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const IMPLEMENTATIONS_HELP_TEXT = `codegraph implementations - Find proven implementations
 
-Usage: codegraph implementations <symbol-handle> [--root <path>] [--limit <0-500>] [--json | --pretty]
+Usage: codegraph implementations <symbol-target> [--root <path>] [--limit <0-500>] [--json | --pretty]
 
 Type lookup follows extracted hierarchy relationships. Member lookup is supported only for members owned by an interface or trait with proven implementers; unrelated same-name members are never inferred.
 
@@ -331,7 +372,7 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const RENAME_PREVIEW_HELP_TEXT = `codegraph rename-preview - Preview a semantic rename without changing files
 
-Usage: codegraph rename-preview <symbol-handle> <new-name> [--include-comments] [--include-strings] [--include-filenames] [--max-edits N] [--json | --pretty]
+Usage: codegraph rename-preview <symbol-target> <new-name> [--include-comments] [--include-strings] [--include-filenames] [--max-edits N] [--json | --pretty]
 
 Returns exact project-relative edits, conflicts, unsafe sites, candidate tests, provenance, limits, and omissions. Comment and string matches are low-confidence opt-in edits; --max-edits accepts integers from 1 to 10000.
 
@@ -342,7 +383,7 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const REFACTOR_PLAN_HELP_TEXT = `codegraph refactor-plan - Build a read-only refactor evidence packet
 
-Usage: codegraph refactor-plan <symbol-handle> [--rename <new-name>] [--max-references <0-500>] [--max-callers <0-500>] [--max-hierarchy <0-500>] [--include-source] [--json | --pretty]
+Usage: codegraph refactor-plan <symbol-target> [--rename <new-name>] [--max-references <0-500>] [--max-callers <0-500>] [--max-hierarchy <0-500>] [--include-source] [--json | --pretty]
 
 Returns a target definition, references, callers, callees, type hierarchy, implementations, candidate tests, omissions, and copyable follow-ups from one semantic snapshot. Each max option accepts an independent integer from 0 to 500; --include-source opts reference context into the response.
 
@@ -357,14 +398,14 @@ Usage: codegraph orient [roots...] [--root <path>] [--budget small|medium|large]
 
 Output:
   Orientation includes summary bullets, ranked focus targets with follow-up commands, a bounded project tree, budgeted health counts, and omission counts.
-  Use --pretty for model-readable triage and --json when tooling needs exact focus reasons, limits, or omissions. Small budget defaults to --health skip. Medium and large default to --health summary, which counts cycles and unresolved imports without duplicate detection.
+  Model-readable triage is the default; --pretty remains accepted explicitly. Use --json when tooling needs exact focus reasons, limits, or omissions. Small budget defaults to --health skip. Medium and large default to --health summary, which counts cycles and unresolved imports without duplicate detection.
 
 ${SHARED_INDEX_OPTIONS_HELP}
 `;
 
 export const PACKET_HELP_TEXT = `codegraph packet - Retrieve bounded evidence packets by file path or stable target
 
-Usage: codegraph packet get <target> [--root <path>] [--json | --pretty] [--max-symbols <n>] [--max-snippets <n>] [--max-duplicates <n>]
+Usage: codegraph packet [get] <target> [--root <path>] [--json | --pretty] [--max-symbols <n>] [--max-snippets <n>] [--max-duplicates <n>]
 
 Targets:
   Accepts file paths, symbol names, SQL object names, file:/symbol:/chunk:/sql:/graph: handles from search or explain output, and quoted review packet targets like 'review:base=<encoded-ref>;head=<encoded-ref>'.
@@ -387,7 +428,7 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const ARTIFACT_HELP_TEXT = `codegraph artifact - Build an agent-ready handoff bundle
 
-Usage: codegraph artifact build [--root <path>] [--out <dir>] [--sqlite] [--graph-json] [--report] [--questions] [--force] [--json]
+Usage: codegraph artifact [build] [--root <path>] [--out <dir>] [--sqlite] [--graph-json] [--report] [--questions] [--force] [--json]
 
 Artifacts:
   codegraph.sqlite       Read-only SQLite graph artifact
@@ -405,7 +446,7 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const MCP_HELP_TEXT = `codegraph mcp - Serve MCP tools for agent graph navigation
 
-Usage: codegraph mcp serve [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--allow-build] [--warmup | --warmup-symbols]
+Usage: codegraph mcp [serve] [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--allow-build] [--warmup | --warmup-symbols]
 
 Transports:
   --stdio          Serve MCP over stdio (default)
@@ -431,7 +472,7 @@ Tools are read-only unless --allow-build is passed.
 
 export const MCP_SERVE_HELP_TEXT = `codegraph mcp serve - MCP server for agent graph navigation
 
-Usage: codegraph mcp serve [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--allow-build] [--warmup | --warmup-symbols]
+Usage: codegraph mcp [serve] [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--allow-build] [--warmup | --warmup-symbols]
 
 Tools:
   orient          Build a compact first-turn repo packet
@@ -535,6 +576,10 @@ export function helpTextForCommand(command: string, positionals: readonly string
   if (command === "explore") return EXPLORE_HELP_TEXT;
   if (command === "file") return FILE_HELP_TEXT;
   if (command === "search") return SEARCH_HELP_TEXT;
+  if (command === "goto") return GOTO_HELP_TEXT;
+  if (command === "refs") return REFS_HELP_TEXT;
+  if (command === "grep") return GREP_HELP_TEXT;
+  if (command === "sql") return SQL_HELP_TEXT;
   if (command === "symbols") return SYMBOLS_HELP_TEXT;
   if (command === "callers") return CALLERS_HELP_TEXT;
   if (command === "callees") return CALLEES_HELP_TEXT;
@@ -554,7 +599,7 @@ export function helpTextForCommand(command: string, positionals: readonly string
   if (command === "duplicates") return DUPLICATES_HELP_TEXT;
   if (command === "artifact") return ARTIFACT_HELP_TEXT;
   if (command === "mcp") {
-    return positionals[0] === "serve" ? MCP_SERVE_HELP_TEXT : MCP_HELP_TEXT;
+    return positionals[0] === undefined || positionals[0] === "serve" ? MCP_SERVE_HELP_TEXT : MCP_HELP_TEXT;
   }
   return undefined;
 }

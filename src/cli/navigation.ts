@@ -1,11 +1,14 @@
 import { buildProjectIndexIncremental } from "../indexer/build-index.js";
 import { findReferences, goToDefinition } from "../indexer/navigation.js";
-import type { BuildOptions, IncrementalBuildOptions } from "../indexer/types.js";
+import { parseAgentSymbolHandle } from "../agent/handles.js";
+import type { BuildOptions, FindReferencesResult, IncrementalBuildOptions, SymbolDef } from "../indexer/types.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import { toProjectDisplayPath } from "../util/paths.js";
 import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
-import { parseCacheModeOption, parsePositiveIntegerOption } from "./options.js";
+import { parseCacheModeOption, parseNonNegativeIntegerOption, parsePositiveIntegerOption } from "./options.js";
+import { parseCliSourceLocation } from "./location.js";
 import { resolveCliProjectFile, writeCliProjectFileError } from "./projectFile.js";
+import { writeCliOutput } from "./pretty.js";
 
 export type NavigationCommandContext = {
   projectRootFs: string;
@@ -52,14 +55,14 @@ export async function handleDumpmodCommand(context: NavigationCommandContext): P
   const index = await buildProjectIndexIncremental(context.projectRootFs, indexOptions(context));
   const mod = index.byFile.get(file);
   if (!mod) {
-    context.writeJSONLine({
+    writeCliOutput(context, {
       status: "not_found",
       reason: "Module not indexed",
       file,
     });
     return;
   }
-  context.writeJSONLine({
+  writeCliOutput(context, {
     file,
     locals: mod.locals.map((l) => ({
       name: l.localName,
@@ -83,53 +86,165 @@ export async function handleDumpmodCommand(context: NavigationCommandContext): P
   });
 }
 
+type ResolvedNavigationInput = {
+  file: string;
+  line?: number;
+  column?: number;
+};
+
+function parseNavigationInput(
+  context: NavigationCommandContext,
+  namedOptions: boolean,
+): ResolvedNavigationInput | null {
+  const fileOption = namedOptions ? context.getOpt("--file") : undefined;
+  const positional = context.positionals[0];
+  const target = fileOption ?? positional ?? "";
+  const symbolHandle = parseAgentSymbolHandle(target);
+  const location = symbolHandle
+    ? { file: symbolHandle.file, line: symbolHandle.line, column: symbolHandle.column }
+    : parseCliSourceLocation(target);
+  if (!location.file) return null;
+
+  let lineValue: string | undefined;
+  let columnValue: string | undefined;
+  if (fileOption) {
+    lineValue = context.getOpt("--line") ?? context.positionals[0];
+    columnValue = context.getOpt("--col") ?? context.getOpt("--column") ?? context.positionals[1];
+  } else {
+    lineValue = context.getOpt("--line") ?? context.positionals[1];
+    columnValue = context.getOpt("--col") ?? context.getOpt("--column") ?? context.positionals[2];
+  }
+
+  const line = lineValue !== undefined ? parsePositiveIntegerOption(lineValue, "line", 1) : location.line;
+  const column = columnValue !== undefined ? parseNonNegativeIntegerOption(columnValue, "column", 1) : location.column;
+  return {
+    file: location.file,
+    ...(line !== undefined ? { line } : {}),
+    ...(column !== undefined ? { column } : {}),
+  };
+}
+
+function sortDefinitions(definitions: readonly SymbolDef[]): SymbolDef[] {
+  return [...definitions].sort((left, right) => {
+    const lineDelta = left.range.start.line - right.range.start.line;
+    if (lineDelta) return lineDelta;
+    const columnDelta = left.range.start.column - right.range.start.column;
+    if (columnDelta) return columnDelta;
+    return left.localName.localeCompare(right.localName);
+  });
+}
+
+function writePrettyReferences(context: NavigationCommandContext, result: FindReferencesResult): void {
+  if (result.status !== "ok") {
+    context.writeStdoutLine(`not_found: ${result.reason}`);
+    return;
+  }
+  for (const reference of result.references) {
+    const rel = toProjectDisplayPath(context.projectRootFs, reference.file);
+    const { line, column } = reference.range.start;
+    context.writeStdoutLine(`${rel}:${line}:${column}`);
+  }
+}
+
 export async function handleGotoCommand(context: NavigationCommandContext): Promise<void> {
-  const [fileArg, lineArg, colArg] = context.positionals;
-  if (!fileArg || !lineArg || !colArg) {
-    context.writeStderrLine("Usage: goto <file> <line> <column>");
+  const input = parseNavigationInput(context, false);
+  if (!input) {
+    context.writeStderrLine("Usage: goto <file>[:line[:column]] [line] [column]");
     context.exit(2);
   }
-  const resolvedFile = resolveCliProjectFile(context.projectRootFs, fileArg, "File");
+  const resolvedFile = resolveCliProjectFile(context.projectRootFs, input.file, "File");
   if (resolvedFile.status === "error") {
     writeCliProjectFileError(context, resolvedFile);
     return;
   }
-  const line = parsePositiveIntegerOption(lineArg, "line", 1);
-  const column = parsePositiveIntegerOption(colArg, "column", 1);
   const index = await buildProjectIndexIncremental(context.projectRootFs, indexOptions(context));
-  const res = await goToDefinition(index, { file: resolvedFile.file, line, column });
-  context.writeJSONLine(res);
+  if (input.line === undefined) {
+    const definitions = sortDefinitions(index.byFile.get(resolvedFile.file)?.locals ?? []);
+    if (definitions.length === 1) {
+      writeCliOutput(context, { status: "ok", definition: definitions[0] });
+      return;
+    }
+    if (!definitions.length) {
+      writeCliOutput(context, { status: "not_found", reason: `No indexed symbols in ${input.file}` });
+      return;
+    }
+    writeCliOutput(context, {
+      status: "ambiguous",
+      reason: `Multiple symbols in ${input.file}; pass one of the candidate locations.`,
+      candidates: definitions.map((definition) => ({
+        name: definition.localName,
+        kind: definition.kind,
+        range: definition.range,
+      })),
+    });
+    return;
+  }
+  const res = await goToDefinition(index, {
+    file: resolvedFile.file,
+    line: input.line,
+    column: input.column ?? 1,
+  });
+  writeCliOutput(context, res);
 }
 
 export async function handleRefsCommand(context: NavigationCommandContext): Promise<void> {
-  const fileArg = context.getOpt("--file");
-  const lineArg = context.getOpt("--line");
-  const colArg = context.getOpt("--col") ?? context.getOpt("--column");
-  if (!fileArg || !lineArg || !colArg) {
-    context.writeStderrLine("Usage: refs --file <file> --line <line> --col <column>");
+  const input = parseNavigationInput(context, true);
+  if (!input) {
+    context.writeStderrLine(
+      "Usage: refs <file>[:line[:column]] [line] [column] OR refs --file <file> [--line <line> --col <column>]",
+    );
     context.exit(2);
   }
-  const line = parsePositiveIntegerOption(lineArg, "--line", 1);
-  const column = parsePositiveIntegerOption(colArg, "--col", 1);
-  const pretty = context.hasFlag("--pretty");
-  const resolvedFile = resolveCliProjectFile(context.projectRootFs, fileArg, "File");
+  const pretty = !context.hasFlag("--json");
+  const resolvedFile = resolveCliProjectFile(context.projectRootFs, input.file, "File");
   if (resolvedFile.status === "error") {
     writeCliProjectFileError(context, resolvedFile, pretty ? "text" : "json");
     return;
   }
   const index = await buildProjectIndexIncremental(context.projectRootFs, indexOptions(context));
-  const res = await findReferences(index, { file: resolvedFile.file, line, column });
-  if (!pretty) {
-    context.writeJSONLine(res);
-    return;
-  }
-  if (res.status === "ok") {
-    for (const r of res.references) {
-      const rel = toProjectDisplayPath(context.projectRootFs, r.file);
-      const { line: refLine, column: refColumn } = r.range.start;
-      context.writeStdoutLine(`${rel}:${refLine}:${refColumn}`);
+
+  if (input.line !== undefined) {
+    const result = await findReferences(index, {
+      file: resolvedFile.file,
+      line: input.line,
+      column: input.column ?? 1,
+    });
+    if (pretty) {
+      writePrettyReferences(context, result);
+    } else {
+      context.writeJSONLine(result);
     }
     return;
   }
-  context.writeStdoutLine(`not_found: ${res.reason}`);
+
+  const definitions = sortDefinitions(index.byFile.get(resolvedFile.file)?.locals ?? []);
+  if (!definitions.length) {
+    const result = { status: "not_found" as const, reason: `No indexed symbols in ${input.file}` };
+    if (pretty) {
+      context.writeStdoutLine(`not_found: ${result.reason}`);
+    } else {
+      context.writeJSONLine(result);
+    }
+    return;
+  }
+
+  const symbols: Array<{ definition: SymbolDef; references: FindReferencesResult }> = [];
+  for (const definition of definitions) {
+    symbols.push({ definition, references: await findReferences(index, { def: definition }) });
+  }
+  if (!pretty) {
+    context.writeJSONLine({ status: "ok", file: resolvedFile.file, symbols });
+    return;
+  }
+  for (const symbol of symbols) {
+    const { line, column } = symbol.definition.range.start;
+    context.writeStdoutLine(
+      `${symbol.definition.localName} [${symbol.definition.kind}] ${input.file}:${line}:${column}`,
+    );
+    if (symbol.references.status === "ok" && symbol.references.references.length) {
+      writePrettyReferences(context, symbol.references);
+    } else {
+      context.writeStdoutLine("  (no references)");
+    }
+  }
 }

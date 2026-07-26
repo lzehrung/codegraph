@@ -56,7 +56,7 @@ export async function handleSymbolsCommand(context: SymbolsCommandContext): Prom
       limit: parseBoundedIntegerOption(context.getOpt("--limit"), "--limit", 50, 0, 500),
     });
 
-    if (context.hasFlag("--json") || !context.hasFlag("--pretty")) {
+    if (context.hasFlag("--json")) {
       context.writeJSONLine(response);
     } else {
       context.writeStdoutLine(formatWorkspaceSymbolsResponse(response));

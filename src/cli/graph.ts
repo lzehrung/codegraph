@@ -243,22 +243,18 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
   }
   const hasExplicitSymbolFlag =
     context.hasFlag("--symbols") || context.hasFlag("--symbols-only") || context.hasFlag("--symbols-detailed");
-  const hasExplicitFormatFlag = context.hasFlag("--mermaid") || context.hasFlag("--dot") || context.hasFlag("--json");
   const outputArg = context.getOpt("--output");
   const sqliteArg = context.getOpt("--sqlite");
   const stderrArg = context.getOpt("--stderr-file");
-  const stdoutMode = context.hasFlag("--stdout");
-  const defaultGraphMode = !hasExplicitSymbolFlag && !hasExplicitFormatFlag;
-
   const wantSymbols = hasExplicitSymbolFlag;
   const detailedSymbols = context.hasFlag("--symbols-detailed");
   const threads = parseNonNegativeIntegerOption(context.getOpt("--threads"), "--threads", 0);
   const cache = parseCacheModeOption(context.getOpt("--cache"));
   const cacheStrict = context.hasFlag("--cache-strict");
   const stable = context.hasFlag("--stable");
-  let format: "mermaid" | "dot" | "json" = "json";
-  if (context.hasFlag("--mermaid")) {
-    format = "mermaid";
+  let format: "mermaid" | "dot" | "json" = "mermaid";
+  if (context.hasFlag("--json") || context.hasFlag("--compact-json")) {
+    format = "json";
   } else if (context.hasFlag("--dot")) {
     format = "dot";
   }
@@ -266,19 +262,12 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
   const resolveNodeModules = context.graphFlags.resolveNodeModules;
   const dynamicImportHeuristics = context.graphFlags.dynamicImportHeuristics;
   const resolutionHints = context.graphFlags.resolutionHints;
-  const compact = defaultGraphMode || context.hasFlag("--compact-json");
+  const compact = context.hasFlag("--compact-json");
   const includeSqlArtifacts = context.hasFlag("--sql-artifacts");
-  let outputFile: string | undefined;
-  if (outputArg) {
-    outputFile = normalizePath(resolveFilePathFromRoot(context.cwd(), outputArg));
-  } else if (defaultGraphMode && !stdoutMode) {
-    outputFile = path.resolve(context.cwd(), "codegraph.json").replace(/\\/g, "/");
-  }
+  const outputFile = outputArg ? normalizePath(resolveFilePathFromRoot(context.cwd(), outputArg)) : undefined;
   const sqliteFile = sqliteArg ? normalizePath(resolveFilePathFromRoot(context.cwd(), sqliteArg)) : undefined;
   if (stderrArg) {
     context.setStderrFilePath(normalizePath(resolveFilePathFromRoot(context.cwd(), stderrArg)));
-  } else if (defaultGraphMode) {
-    context.setStderrFilePath(path.resolve(context.cwd(), "codegraph.err").replace(/\\/g, "/"));
   } else {
     context.setStderrFilePath(undefined);
   }

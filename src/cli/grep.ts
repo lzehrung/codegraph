@@ -1,11 +1,19 @@
 import { astGrep, textGrep } from "../graphs/grep.js";
 import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
-import type { CliJsonWriterContext, CliOptionContext, CliStderrExitContext } from "./context.js";
+import type {
+  CliJsonWriterContext,
+  CliOptionContext,
+  CliStderrExitContext,
+  CliStdoutWriterContext,
+} from "./context.js";
 import { parseOptionalPositiveIntegerOption } from "./options.js";
+import { writeCliOutput } from "./pretty.js";
 
 export type GrepCommandContext = CliOptionContext &
   CliJsonWriterContext &
+  CliStdoutWriterContext &
   CliStderrExitContext & {
+    positionals: string[];
     projectRootFs: string;
     discoveryOptions: ProjectFileDiscoveryOptions;
     parsedOptions: ReadonlyMap<string, readonly string[]>;
@@ -13,20 +21,19 @@ export type GrepCommandContext = CliOptionContext &
 
 export async function handleGrepCommand(context: GrepCommandContext): Promise<void> {
   const querySource = context.getOpt("--query");
-  const patternSource = context.getOpt("--pattern") ?? context.getOpt("--regex");
+  const positionalPattern = context.positionals.join(" ").trim();
+  const patternSource = context.getOpt("--pattern") ?? context.getOpt("--regex") ?? (positionalPattern || undefined);
   const globs = context.parsedOptions.get("--glob") ?? [];
   const patterns = globs.length ? [...globs] : undefined;
 
   if ((querySource ? 1 : 0) + (patternSource ? 1 : 0) !== 1) {
-    context.writeStderrLine(
-      "Usage: grep [--root <dir>] (--query '<treesitter query>' | --pattern '<regex>') [--glob '<glob>'] [--ignore-case] [--max-hits N]",
-    );
+    context.writeStderrLine("Usage: grep <regex> [--root <dir>] OR grep --query '<tree-sitter query>' [--root <dir>]");
     context.exit(2);
   }
 
   if (querySource) {
     const hits = await astGrep(context.projectRootFs, querySource, patterns, context.discoveryOptions);
-    context.writeJSONLine(hits);
+    writeCliOutput(context, hits);
     return;
   }
 
@@ -38,5 +45,5 @@ export async function handleGrepCommand(context: GrepCommandContext): Promise<vo
     ...(maxHits !== undefined ? { maxHits } : {}),
     ...context.discoveryOptions,
   });
-  context.writeJSONLine(hits);
+  writeCliOutput(context, hits);
 }

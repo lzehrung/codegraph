@@ -33,10 +33,11 @@ afterAll(async () => {
 });
 
 describe("refactor plan CLI", () => {
-  it("uses JSON by default, keeps limits independent, opts into source, and never writes", async () => {
+  it("emits JSON when requested, keeps limits independent, opts into source, and never writes", async () => {
     const before = await fs.readFile(sourceFile, "utf8");
     const result = await captureCli([
       "refactor-plan",
+      "--json",
       handle,
       "--root",
       root,
@@ -93,7 +94,6 @@ describe("refactor plan CLI", () => {
       "renamedService",
       "--max-references",
       "0",
-      "--pretty",
     ]);
 
     expect(result).toMatchObject({ stderr: "", exitCode: undefined });
@@ -103,18 +103,18 @@ describe("refactor plan CLI", () => {
     expect(result.stdout).toContain("Rename conflicts: 0");
     expect(result.stdout).toContain("Omissions: references");
     expect(result.stdout).toContain("Section issues:\n  implementations [unsupported_target]:");
-    expect(result.stdout).toContain("Follow-ups:\n  codegraph refs --file service.ts --line 2 --col 17 --pretty");
+    expect(result.stdout).toContain("Follow-ups:\n  codegraph refs service.ts:2:17 --pretty");
     expect(result.stdout).not.toContain('"schemaVersion"');
   });
 
   it("registers help and validates every public limit before indexing", async () => {
-    const help = await captureCli(["refactor-plan", "--help"]);
+    const help = await captureCli(["refactor-plan", "--json", "--help"]);
     expect(help).toMatchObject({ stderr: "", exitCode: undefined });
     expect(help.stdout).toContain("--max-hierarchy <0-500>");
     expect(help.stdout).toContain("Nested rename.safe is the safety decision");
 
     for (const option of ["--max-references", "--max-callers", "--max-hierarchy"]) {
-      const invalid = await captureCli(["refactor-plan", handle, option, "501"]);
+      const invalid = await captureCli(["refactor-plan", "--json", handle, option, "501"]);
       expect(invalid).toEqual({
         stdout: "",
         stderr: `Invalid ${option} value "501". Expected an integer from 0 to 500.\n`,
