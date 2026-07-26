@@ -65,8 +65,10 @@ export function enableCliCompileCache(
       return null;
     }
 
+    // Explicit opt-out: do not call enableCompileCache() at all. Passing no
+    // directory can still arm Node's default temp cache.
     if (env.NODE_DISABLE_COMPILE_CACHE === "1") {
-      return enableCompileCache();
+      return null;
     }
 
     const directory = resolveCliCompileCacheDirectory(env, homedir, platform);
