@@ -6,6 +6,9 @@ import picomatch from "picomatch";
 import { logWithLevel, type LogLevel } from "../logging.js";
 import { stringifyUnknown } from "./ast.js";
 import { isFilePathWithinRoot, normalizePath } from "./paths.js";
+import { isRelativePathInside, matchesDiscoveryGlob } from "./discoveryPath.js";
+
+export { isRelativePathInside, matchesDiscoveryGlob } from "./discoveryPath.js";
 import {
   PROJECT_FILE_DEFINITIONS,
   type ProjectFileDefinition,
@@ -167,18 +170,6 @@ function isLocationIndependentGlob(globPattern: string): boolean {
   return globPattern.startsWith("**/");
 }
 
-export function isRelativePathInside(relativePath: string): boolean {
-  const normalized = normalizePath(relativePath);
-  return (
-    !!normalized &&
-    normalized !== ".." &&
-    !normalized.startsWith("../") &&
-    !path.isAbsolute(relativePath) &&
-    !path.win32.isAbsolute(relativePath) &&
-    !path.posix.isAbsolute(relativePath)
-  );
-}
-
 export function translateGlobRootIgnoreGlobsForScanRoot(
   scanRoot: string,
   globRoot: string,
@@ -290,18 +281,6 @@ async function loadGitignoreRulesForRootAliases(projectRoot: string): Promise<Gi
     rules.push(...(await loadGitignoreRules(root)));
   }
   return rules;
-}
-
-export function matchesDiscoveryGlob(
-  absolutePath: string,
-  projectRoot: string,
-  matcher: (relativePath: string) => boolean,
-): boolean {
-  const relativePath = path.relative(projectRoot, absolutePath);
-  if (!isRelativePathInside(relativePath)) {
-    return false;
-  }
-  return matcher(normalizePath(relativePath));
 }
 
 function isIgnoredByGitignore(absolutePath: string, rules: GitignoreRule[]): boolean {

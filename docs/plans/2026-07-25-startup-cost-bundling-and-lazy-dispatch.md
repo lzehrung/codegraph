@@ -1,6 +1,6 @@
 # Startup cost: bundling, lazy dispatch, and compile cache
 
-Status: Priority 0-2 implemented on branch; Priority 3 still planned. Measurements verified on `main` at `3024ed2b` (`v1.8.100`), Node v24.15.0,
+Status: Priority 0-3 implemented on branch. Measurements verified on `main` at `3024ed2b` (`v1.8.100`), Node v24.15.0,
 Windows 11, on 2026-07-25. See
 [performance program index](2026-07-25-performance-program-index.md) for the shared baseline.
 
@@ -230,16 +230,45 @@ First touch into an empty cache directory for `--version`: 88 ms; immediate seco
 Compile cache is a smaller warm win once Priority 1 has already collapsed the module graph; it still
 cuts first-touch parse/compile after a clean cache and shaves ~8-11 ms from warm lightweight commands.
 
-## Priority 3: Trim what stays eager
+## Priority 3: Trim what stays eager -- IMPLEMENTED (`1a527e87`)
 
-Even bundled, V8 must parse what is in the entry chunk. After Priority 0 lands, re-measure and
-attack whatever remains disproportionately large.
+Even after Priority 0–2, the unbundled `dist/cli.js` entry still pulled discovery/config/git
+helpers into the lightweight `--version` / `--help` / `doctor` graph via static imports from
+`src/cli.ts` and `src/cli/context.ts`.
 
-- [ ] Re-run the static graph walk and confirm the eager set is close to the `doctor` closure
-      (12 modules) rather than 283.
-- [ ] Investigate `os.cpus()` at module scope, visible as 2 ms of startup self time; move it
-      behind the worker-pool sizing call that actually needs it.
-- [ ] Verify `duplicates.js` (91 KB, the single largest module) is no longer in the eager set.
+- [x] Re-ran the static module-load walk for `--version`, `--help`, and `doctor`. After this
+      cut, each stays under the existing `<30` dist-module gate and no longer loads
+      `projectFiles.js`, `config.js`, `git.js`, or `duplicates.js`.
+- [x] Confirmed `os.cpus()` already lives inside `resolveThreadCount()` in
+      `src/worker/nativeWorkerPool.ts` (not at module scope); locked that with a regression.
+- [x] Moved CLI discovery-glob helpers out of eager `cli/context.ts` into
+      `cli/discoveryGlobs.ts`, extracted path match helpers into lightweight
+      `util/discoveryPath.ts`, and lazy-loaded `config`, `projectFiles`, `git`,
+      `includeRoots`, and discovery globs from `cli.ts` only after the lightweight early
+      returns (and after `doctor` returns).
+- [x] `duplicates.js` is not in the eager set for `--version` / `--help` / `doctor`.
+
+Likely files: `src/cli.ts`, `src/cli/context.ts`, `src/cli/discoveryGlobs.ts`,
+`src/util/discoveryPath.ts`, `src/util/projectFiles.ts`,
+`tests/cli-startup-eager-modules.test.ts`.
+
+Acceptance:
+
+- [x] Eager dist-module count for `--version` / `--help` / `doctor` stays under 30.
+- [x] Those lightweight entrypoints do not load `duplicates.js` or `projectFiles.js`.
+- [x] Measured warm medians recorded below.
+
+### Priority 3 measured result
+
+Warm medians over 5 runs on this repository (Node v24.15.0, Windows), bundled bin after Priority 3:
+
+| Entry | Priority 2 | Priority 3 |
+| ----- | ---------- | ---------- |
+| `--version` | 64 ms | **41 ms** |
+| `--help` | 64 ms | **42 ms** |
+| `doctor` | 72 ms | **48 ms** |
+
+Unbundled `dist/cli.js` eager dist-module counts after Priority 3: `--version`/`--help` **8**, `doctor` **19** (still under the `<30` gate; none load `duplicates.js`, `projectFiles.js`, `config.js`, or `git.js`).
 
 ## Validation checklist
 
@@ -254,7 +283,7 @@ attack whatever remains disproportionately large.
 
 Record medians of 5 runs, warm, on this repository, before and after each priority:
 
-- [ ] `--version`
+- [x] `--version`
 - [ ] `orient --root . --budget small --json`
 - [ ] `search <symbol> --root . --limit 3`
 - [ ] First-touch cold `import` of the CLI entry, measured after a clean rebuild.

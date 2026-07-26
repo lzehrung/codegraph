@@ -60,4 +60,11 @@ describe("bundled CLI entry", () => {
     const entry = fs.readFileSync(bundledCli, "utf8");
     expect(entry).toMatch(/import\(/);
   });
+
+  it("keeps a leading shebang so package managers can exec the bin directly", () => {
+    // `node entry.js` ignores a missing shebang; npm/pnpm bin links do not.
+    // Guard against the createRequire banner (or future banners) displacing it.
+    const firstLine = fs.readFileSync(bundledCli, "utf8").split(/\r?\n/, 1)[0] ?? "";
+    expect(firstLine).toBe("#!/usr/bin/env node");
+  });
 });

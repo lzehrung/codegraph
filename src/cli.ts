@@ -2,15 +2,12 @@
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
-import { isPathUnderIncludeRoots } from "./util/includeRoots.js";
 import type { BuildOptions } from "./indexer/types.js";
 import type { GraphBuildOptions } from "./graphs/types.js";
 import type { NativeRuntimeMode } from "./native/treeSitterNative.js";
 import {
   createCliProgressHandler,
-  diagnoseCliDiscoveryGlobs,
   exitCli,
-  filterFilesByCliDiscoveryGlobs,
   getCwd,
   maybeWriteNativeBackendStatus,
   parseCliArgs,
@@ -29,9 +26,7 @@ import { CLI_HELP_TEXT, helpTextForCommand, isKnownCliCommand } from "./cli/help
 import { parseCacheModeOption, parseOptionalNonNegativeIntegerOption, validateCliArgs } from "./cli/options.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
 import type { CliProgressPolicy } from "./cli/progress.js";
-import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions } from "./config.js";
-import { listChangedFiles } from "./util/git.js";
-import { DEFAULT_PROJECT_PATTERNS, listProjectFiles, type ProjectFileDiscoveryOptions } from "./util/projectFiles.js";
+import type { ProjectFileDiscoveryOptions } from "./util/projectFiles.js";
 import {
   normalizePath,
   normalizeResolutionHints,
@@ -39,9 +34,49 @@ import {
   toProjectDisplayPath,
 } from "./util/paths.js";
 
-export { isCliDiscoveryRelativePathInside } from "./cli/context.js";
+export { isRelativePathInside as isCliDiscoveryRelativePathInside } from "./util/discoveryPath.js";
 
-const DUPLICATE_PROJECT_PATTERNS = [...DEFAULT_PROJECT_PATTERNS, "**/*.{json,jsonc,toml,txt,yaml,yml}"];
+async function getDuplicateProjectPatterns(): Promise<string[]> {
+  const { DEFAULT_PROJECT_PATTERNS } = await loadProjectFilesHelpers();
+  return [...DEFAULT_PROJECT_PATTERNS, "**/*.{json,jsonc,toml,txt,yaml,yml}"];
+}
+
+type DiscoveryGlobHelpers = typeof import("./cli/discoveryGlobs.js");
+type ConfigHelpers = typeof import("./config.js");
+type ProjectFilesHelpers = typeof import("./util/projectFiles.js");
+type GitHelpers = typeof import("./util/git.js");
+type IncludeRootsHelpers = typeof import("./util/includeRoots.js");
+
+let discoveryGlobHelpersPromise: Promise<DiscoveryGlobHelpers> | undefined;
+let configHelpersPromise: Promise<ConfigHelpers> | undefined;
+let projectFilesHelpersPromise: Promise<ProjectFilesHelpers> | undefined;
+let gitHelpersPromise: Promise<GitHelpers> | undefined;
+let includeRootsHelpersPromise: Promise<IncludeRootsHelpers> | undefined;
+
+function loadDiscoveryGlobHelpers(): Promise<DiscoveryGlobHelpers> {
+  discoveryGlobHelpersPromise ??= import("./cli/discoveryGlobs.js");
+  return discoveryGlobHelpersPromise;
+}
+
+function loadConfigHelpers(): Promise<ConfigHelpers> {
+  configHelpersPromise ??= import("./config.js");
+  return configHelpersPromise;
+}
+
+function loadProjectFilesHelpers(): Promise<ProjectFilesHelpers> {
+  projectFilesHelpersPromise ??= import("./util/projectFiles.js");
+  return projectFilesHelpersPromise;
+}
+
+function loadGitHelpers(): Promise<GitHelpers> {
+  gitHelpersPromise ??= import("./util/git.js");
+  return gitHelpersPromise;
+}
+
+function loadIncludeRootsHelpers(): Promise<IncludeRootsHelpers> {
+  includeRootsHelpersPromise ??= import("./util/includeRoots.js");
+  return includeRootsHelpersPromise;
+}
 
 function normalizeEntrypointPath(filePath: string): string {
   const resolvedPath = path.resolve(filePath);
@@ -267,7 +302,6 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   const cliGitignoreDiscoveryOptions: ProjectFileDiscoveryOptions = {
     ...(hasFlag("--no-gitignore") ? { useGitignore: false } : {}),
   };
-  const explicitDiscoveryOptions = mergeDiscoveryOptions(cliGlobDiscoveryOptions, cliGitignoreDiscoveryOptions);
   const hasCliDiscoveryGlobs = Boolean(
     includeGlobs.length ||
     scanIgnoreGlobs.length ||
@@ -345,6 +379,12 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     return;
   }
 
+  const {
+    hasDiscoveryOptions,
+    loadCodegraphConfig,
+    mergeDiscoveryOptions,
+  } = await loadConfigHelpers();
+  const explicitDiscoveryOptions = mergeDiscoveryOptions(cliGlobDiscoveryOptions, cliGitignoreDiscoveryOptions);
   const config = await loadCodegraphConfig(projectRootFs);
   graphFlags.resolutionHints = normalizeResolutionHints([
     ...(config.graph?.resolutionHints ?? []),
@@ -398,6 +438,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   assertValidIncludeRoots(cmd, projectRootFs, includeRoots);
   const includeRootsAbs = includeRoots.map((r) => normalizePath(resolveFilePathFromRoot(projectRootFs, r)));
 
+  const { isPathUnderIncludeRoots } = await loadIncludeRootsHelpers();
   const isUnderIncludeRoots = (filePath: string): boolean => {
     return isPathUnderIncludeRoots(filePath.replace(/\\/g, "/"), includeRootsAbs);
   };
@@ -407,6 +448,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     return relative;
   };
 
+  const { diagnoseCliDiscoveryGlobs, filterFilesByCliDiscoveryGlobs } = await loadDiscoveryGlobHelpers();
   const recordCliGlobDiagnostics = (files: readonly string[], scanRoot: string): void => {
     for (const diagnostic of diagnoseCliDiscoveryGlobs(files, scanRoot, projectRootFs, cliGlobDiscoveryOptions)) {
       const optionName = diagnostic.kind === "include" ? "--include-glob" : "--ignore-glob";
@@ -440,7 +482,8 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   };
 
   const resolveFilesFromRoots = async (): Promise<string[]> => {
-    const patterns = cmd === "duplicates" ? DUPLICATE_PROJECT_PATTERNS : undefined;
+    const { listProjectFiles } = await loadProjectFilesHelpers();
+    const patterns = cmd === "duplicates" ? await getDuplicateProjectPatterns() : undefined;
     if (!includeRootsAbs.length) {
       const diagnosticFiles = await listProjectFiles(projectRootFs, patterns, {
         ...diagnosticDiscoveryOptions,
@@ -472,6 +515,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   };
 
   const listProjectFilesForScan = async (scanRoot: string): Promise<string[]> => {
+    const { listProjectFiles } = await loadProjectFilesHelpers();
     if (scanRoot === projectRootFs) {
       return await listProjectFiles(scanRoot, undefined, discoveryOptions);
     }
@@ -483,6 +527,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   };
 
   const resolveChangedFiles = async (): Promise<string[] | null> => {
+    const { listChangedFiles } = await loadGitHelpers();
     if (gitBase) {
       const diffOpts: { base: string; head?: string } = { base: gitBase };
       if (gitHead) diffOpts.head = gitHead;
@@ -507,11 +552,12 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
 
   const emitCliGlobDiagnosticsForChangedFiles = async (files: readonly string[]): Promise<void> => {
     if (!cliGlobDiscoveryOptions.includeGlobs?.length && !cliGlobDiscoveryOptions.ignoreGlobs?.length) return;
-    const patterns = cmd === "duplicates" ? DUPLICATE_PROJECT_PATTERNS : undefined;
+    const patterns = cmd === "duplicates" ? await getDuplicateProjectPatterns() : undefined;
     const deletedFiles = files.filter((filePath) => !fs.existsSync(filePath));
     const scanRoots = includeRootsAbs.length ? includeRootsAbs : [projectRootFs];
     await Promise.all(
       scanRoots.map(async (scanRoot) => {
+        const { listProjectFiles } = await loadProjectFilesHelpers();
         const currentFiles = fs.existsSync(scanRoot)
           ? await listProjectFiles(scanRoot, patterns, {
               ...diagnosticDiscoveryOptions,
