@@ -230,7 +230,7 @@ First touch into an empty cache directory for `--version`: 88 ms; immediate seco
 Compile cache is a smaller warm win once Priority 1 has already collapsed the module graph; it still
 cuts first-touch parse/compile after a clean cache and shaves ~8-11 ms from warm lightweight commands.
 
-## Priority 3: Trim what stays eager -- IMPLEMENTED (`<pending commit>`)
+## Priority 3: Trim what stays eager -- IMPLEMENTED (`1a527e87`)
 
 Even after Priority 0–2, the unbundled `dist/cli.js` entry still pulled discovery/config/git
 helpers into the lightweight `--version` / `--help` / `doctor` graph via static imports from
