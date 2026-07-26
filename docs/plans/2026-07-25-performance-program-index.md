@@ -65,9 +65,9 @@ Order is chosen so that each step is independently shippable and independently m
    clean trees. Do this first because it changes which code paths the other plans run on.
 2. **Hydrate plan, Priority 0 and 1** (bloom rehydrate, sidecar memoization). Largest warm win,
    contained blast radius.
-3. **Startup plan** (lazy dispatch shipped in Priority 0; bundle shipped in Priority 1; compile
-   cache still open). Largest cold win remaining is compile cache + native fingerprint avoidance. Priority 0 (lazy dispatch) is implemented;
-   Priority 1+ still open.
+3. **Startup plan** (lazy dispatch, bundle, compile cache, and eager-trim shipped through
+   Priority 3). Remaining cold win is mainly native fingerprint avoidance from the native plan.
+   Priority 0–3 are implemented; further startup cuts should re-measure before more work.
 4. **Native plan**. Depends on nothing, but its win is smaller on developer checkouts than on
    installed users, so it validates last.
 5. **Git plan, Priority 1 and 2** (memoization, batching, zero-git fast path).
