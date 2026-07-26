@@ -74,9 +74,14 @@ export function enableCliCompileCache(
       fs.mkdirSync(directory, { recursive: true });
     }
 
-    // Node >=22.12 accepts `{ directory, portable }`; @types/node may still only
-    // declare the older string form, so call through a widened local signature.
-    return enableCompileCache({ directory, portable: true });
+    // Node 24+ accepts `{ directory, portable }` (path-independent cache keys).
+    // Node 22 (engines minimum) only accepts a string cacheDir and throws
+    // "cacheDir should be a string" for the options object — fall back.
+    try {
+      return enableCompileCache({ directory, portable: true });
+    } catch {
+      return enableCompileCache(directory);
+    }
   } catch {
     return null;
   }
