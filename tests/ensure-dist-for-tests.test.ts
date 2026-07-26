@@ -50,6 +50,8 @@ describe("inspectDistForTests", () => {
       await setFreshnessInputsTimestamp(root, distTime);
       await setFileMtime(path.join(root, "dist", "index.js"), distTime, "export {};\n");
       await setFileMtime(path.join(root, "dist", "cli.js"), distTime, "export {};\n");
+      await fsp.mkdir(path.join(root, "dist", "bin"), { recursive: true });
+      await setFileMtime(path.join(root, "dist", "bin", "cli.js"), distTime, "export {};\n");
       await setFileMtime(path.join(root, "src", "index.ts"), srcTime);
 
       expect(inspectDistForTests(root)).toMatchObject({
@@ -71,6 +73,8 @@ describe("inspectDistForTests", () => {
       await setFreshnessInputsTimestamp(root, srcTime);
       await setFileMtime(path.join(root, "dist", "index.js"), distTime, "export {};\n");
       await setFileMtime(path.join(root, "dist", "cli.js"), distTime, "export {};\n");
+      await fsp.mkdir(path.join(root, "dist", "bin"), { recursive: true });
+      await setFileMtime(path.join(root, "dist", "bin", "cli.js"), distTime, "export {};\n");
 
       expect(inspectDistForTests(root)).toMatchObject({
         needsBuild: false,

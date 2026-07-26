@@ -37,7 +37,7 @@
     }
   },
   "bin": {
-    "codegraph": "dist/cli.js"
+    "codegraph": "dist/bin/cli.js"
   },
   "files": [
     "dist",
@@ -47,7 +47,7 @@
   "scripts": {
     "clean": "node -e \"import('node:fs').then(({ rmSync }) => rmSync('dist', { recursive: true, force: true }))\"",
     "check": "npm run lint && npm run format && npm run build && npm run test",
-    "build": "npm run clean && tsc -p tsconfig.json && node ./scripts/build-native-if-available.mjs",
+    "build": "npm run clean && tsc -p tsconfig.json && node ./scripts/bundle-cli.mjs && node ./scripts/build-native-if-available.mjs",
     "generate:duplicate-keywords": "node ./scripts/generate-duplicate-keywords.mjs",
     "format": "prettier --write . --ignore-unknown",
     "lint": "npx eslint \"src/**/*.ts\" \"tests/**/*.ts\"",
@@ -100,7 +100,8 @@
     "native:stage-local": "node ./scripts/stage-native-package.mjs",
     "native:sync-meta": "node ./scripts/sync-native-meta.mjs",
     "publish:native:targets": "node ./scripts/publish-native-targets.mjs",
-    "publish:native:meta": "npm publish --workspace=@lzehrung/codegraph-native"
+    "publish:native:meta": "npm publish --workspace=@lzehrung/codegraph-native",
+    "bundle:cli": "node ./scripts/bundle-cli.mjs"
   },
   "repository": {
     "type": "git",
@@ -139,6 +140,7 @@
     "@types/picomatch": "^4.0.2",
     "@vitest/coverage-v8": "^4.1.8",
     "@vitest/ui": "^4.1.8",
+    "esbuild": "^0.27.2",
     "eslint": "^9.39.2",
     "graphology": "^0.26.0",
     "graphology-layout-forceatlas2": "^0.10.1",
