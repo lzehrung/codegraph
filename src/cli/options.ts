@@ -498,7 +498,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       {
         kind: "max",
         max: 3,
-        usage: "Usage: codegraph refs <file>[:line[:column]] [line] [column] [--root <path>] [--pretty]",
+        usage: "Usage: codegraph refs <file>[:line[:column]] [line] [column] [--root <path>] [--json | --pretty]",
       },
     ),
   ],

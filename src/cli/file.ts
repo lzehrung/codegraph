@@ -23,9 +23,11 @@ export async function handleFileCommand(context: FileCommandContext): Promise<vo
   try {
     const location = parseSourceLocationInput(fileInput);
     const offset = context.getOpt("--offset");
-    let resolvedOffset = location.line;
+    let resolvedOffset: number | undefined;
     if (offset !== undefined) {
       resolvedOffset = parsePositiveIntegerOption(offset, "--offset", 1);
+    } else if (location.line !== undefined) {
+      resolvedOffset = parsePositiveIntegerOption(String(location.line), "--offset", 1);
     }
     const response = await getCodegraphFileView({
       root: context.root,

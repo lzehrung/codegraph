@@ -81,6 +81,16 @@ describe("forgiving CLI inputs", () => {
     expect(fileView.content).toContain("caller");
   });
 
+  test("rejects zero embedded line numbers", async () => {
+    for (const args of [
+      ["goto", "main.ts:0"],
+      ["refs", "main.ts:0"],
+      ["file", "main.ts:0"],
+    ]) {
+      await expect(runCliOrThrow([...args, "--root", root])).rejects.toThrow("Expected a positive integer.");
+    }
+  });
+
   test("resolves unique exact symbol names for semantic commands", async () => {
     const output = await runCliOrThrow(["callers", "target", "--root", root, "--json"]);
     const result = jsonRecord(output.stdout);

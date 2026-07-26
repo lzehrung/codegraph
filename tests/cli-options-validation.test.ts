@@ -106,6 +106,12 @@ describe("CLI command option validation", () => {
     }
   });
 
+  it("lists both refs output modes in usage errors", () => {
+    const parsed = parseCliArgs("refs", ["main.ts", "1", "2", "extra"]);
+
+    expect(() => validateCliArgs("refs", parsed)).toThrow("[--json | --pretty]");
+  });
+
   it("rejects build-only flags for status, which never calls createAgentSession/loadProject", () => {
     for (const flag of ["--cache-verify", "--progress", "--no-progress", "--workers"]) {
       const parsed = parseCliArgs("status", [flag]);

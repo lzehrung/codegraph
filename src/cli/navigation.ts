@@ -115,8 +115,18 @@ function parseNavigationInput(
     columnValue = context.getOpt("--col") ?? context.getOpt("--column") ?? context.positionals[2];
   }
 
-  const line = lineValue !== undefined ? parsePositiveIntegerOption(lineValue, "line", 1) : location.line;
-  const column = columnValue !== undefined ? parseNonNegativeIntegerOption(columnValue, "column", 1) : location.column;
+  let line = location.line;
+  if (lineValue !== undefined) {
+    line = parsePositiveIntegerOption(lineValue, "line", 1);
+  } else if (line !== undefined) {
+    line = parsePositiveIntegerOption(String(line), "line", 1);
+  }
+  let column = location.column;
+  if (columnValue !== undefined) {
+    column = parseNonNegativeIntegerOption(columnValue, "column", 1);
+  } else if (column !== undefined) {
+    column = parseNonNegativeIntegerOption(String(column), "column", 1);
+  }
   return {
     file: location.file,
     ...(line !== undefined ? { line } : {}),
