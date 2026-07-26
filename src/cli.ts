@@ -1181,12 +1181,16 @@ export async function runCli(
 }
 
 export async function main(rawArgs: string[] = process.argv.slice(2)): Promise<void> {
-  try {
-    await runCli(rawArgs);
-  } catch (error) {
-    writeError(error);
-    exitCli(1);
-  }
+  // Keep the failure path inside the ALS CLI context so --stderr-file (and other
+  // context-local state) remains visible to writeError/writeStderrLine.
+  await runWithCliRuntime({}, async () => {
+    try {
+      await runCliWithActiveRuntime(rawArgs);
+    } catch (error) {
+      writeError(error);
+      exitCli(1);
+    }
+  });
 }
 
 if (isDirectCliExecution(import.meta.url)) {
