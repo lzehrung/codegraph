@@ -44,22 +44,23 @@ export function requireSemanticSymbol(snapshot: AgentProjectSnapshot, input: str
     throw new Error("Symbol handle is stale or missing. Run workspace symbol lookup to resolve it again.");
   }
 
-  const lookup = buildSymbolLookup(snapshot);
-  const internal = lookup.defById.get(input);
-  if (internal) return { id: input, def: internal };
-
   const location = parseSourceLocationInput(input);
   const file = resolveAgentSnapshotFile(snapshot, location.file);
   const candidates: ResolvedSemanticSymbol[] = [];
-  for (const [id, def] of lookup.defById) {
-    if (file) {
-      if (def.file.replace(/\\/g, "/") !== file) continue;
+  if (file) {
+    for (const def of snapshot.index.byFile.get(file)?.locals ?? []) {
       if (location.line !== undefined && def.range.start.line !== location.line) continue;
       if (location.column !== undefined && def.range.start.column !== location.column) continue;
-    } else if (def.localName !== input) {
-      continue;
+      candidates.push({ id: defNodeId(def), def });
     }
-    candidates.push({ id, def });
+  } else {
+    const lookup = buildSymbolLookup(snapshot);
+    const internal = lookup.defById.get(input);
+    if (internal) return { id: input, def: internal };
+    for (const [id, def] of lookup.defById) {
+      if (def.localName !== input) continue;
+      candidates.push({ id, def });
+    }
   }
 
   if (candidates.length === 1) return candidates[0]!;
