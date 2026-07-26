@@ -5,14 +5,17 @@ import { chunkFile } from "../chunking/chunkFile.js";
 import { chunkSFCFile } from "../chunking/chunkSFC.js";
 import { chunkTextFile } from "../chunking/chunkTextFile.js";
 import { supportForFile } from "../languages.js";
+import { parseSourceLocationInput } from "../util/sourceLocation.js";
 import type {
   CliCwdContext,
   CliJsonWriterContext,
   CliOptionContext,
   CliPositionalsContext,
   CliStderrExitContext,
+  CliStdoutWriterContext,
 } from "./context.js";
 import { parsePositiveIntegerOption } from "./options.js";
+import { writeCliOutput } from "./pretty.js";
 
 const chunkLanguageAliases: Record<string, string> = {
   js: "javascript",
@@ -37,6 +40,7 @@ export type ChunkCommandContext = CliPositionalsContext &
   CliOptionContext &
   CliCwdContext &
   CliJsonWriterContext &
+  CliStdoutWriterContext &
   CliStderrExitContext;
 
 export async function handleChunkCommand(context: ChunkCommandContext): Promise<void> {
@@ -52,7 +56,7 @@ export async function handleChunkCommand(context: ChunkCommandContext): Promise<
   }
 
   try {
-    const filePath = path.resolve(context.cwd(), inputFilePath);
+    const filePath = path.resolve(context.cwd(), parseSourceLocationInput(inputFilePath).file);
     const source = await fsp.readFile(filePath, "utf8");
     const ext = path.extname(filePath).toLowerCase();
 
@@ -77,7 +81,8 @@ export async function handleChunkCommand(context: ChunkCommandContext): Promise<
 
     const isSFC = languageId === "vue" || languageId === "svelte";
     if (forceText || (!isSFC && !LANG_CONFIGS[languageId])) {
-      context.writeJSONLine(
+      writeCliOutput(
+        context,
         chunkTextFile({
           source,
           filePath,
@@ -90,7 +95,8 @@ export async function handleChunkCommand(context: ChunkCommandContext): Promise<
     }
 
     if (isSFC) {
-      context.writeJSONLine(
+      writeCliOutput(
+        context,
         chunkSFCFile({
           source,
           filePath,
@@ -107,7 +113,8 @@ export async function handleChunkCommand(context: ChunkCommandContext): Promise<
       context.writeStderrLine(`Unsupported language: ${languageId}`);
       context.exit(1);
     }
-    context.writeJSONLine(
+    writeCliOutput(
+      context,
       chunkFile({
         language: langConfig,
         source,

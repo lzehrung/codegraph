@@ -2,6 +2,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { getCodegraphPackageRoot, normalizePathForDisplay, pathExists } from "./packageInfo.js";
+import { writeCliOutput } from "./pretty.js";
 
 export type SkillInstallAgent = "agents" | "claude" | "codex" | "cursor" | "gemini" | "opencode";
 
@@ -184,7 +185,7 @@ export async function handleSkillCommand(context: SkillCommandContext): Promise<
   }
 
   if (subcommand === "doctor") {
-    context.writeJSONLine(buildSkillDoctorReport(targetOpt, agentOpt));
+    writeCliOutput(context, buildSkillDoctorReport(targetOpt, agentOpt));
     return;
   }
 
@@ -197,7 +198,7 @@ export async function handleSkillCommand(context: SkillCommandContext): Promise<
     const resolvedTarget = resolveSkillInstallTarget(targetOpt, agentOpt);
     const targetDir = resolvedTarget.targetDir;
     await copyDirectoryRecursive(bundledSkillDir, targetDir, overwrite);
-    context.writeJSONLine({
+    writeCliOutput(context, {
       ...(resolvedTarget.agent
         ? {
             agent: resolvedTarget.agent,

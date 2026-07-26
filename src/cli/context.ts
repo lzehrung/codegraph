@@ -54,6 +54,10 @@ export type CliJsonWriterContext = {
   writeJSONLine: (value: unknown) => void;
 };
 
+export type CliStdoutWriterContext = {
+  writeStdoutLine: (message: string) => void;
+};
+
 export type CliStderrExitContext = {
   writeStderrLine: (message: string) => void;
   exit: (code: number) => never;

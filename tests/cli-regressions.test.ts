@@ -76,8 +76,11 @@ describe("CLI regressions", () => {
     expect(isCliDiscoveryRelativePathInside("D:/outside/file.ts")).toBe(false);
   });
 
-  it("graph --root + include root only scans include subtree", async () => {
-    const stdout = await runCliCommand(["graph", "--stdout", "--root", samplesRoot, tsRoot]);
+  it("graph defaults to Mermaid and --json returns the structured graph", async () => {
+    const pretty = await runCliCommand(["graph", "--root", samplesRoot, tsRoot]);
+    const stdout = await runCliCommand(["graph", "--json", "--root", samplesRoot, tsRoot]);
+
+    expect(pretty).toMatch(/^flowchart LR/m);
     const graph = JSON.parse(stdout) as { nodes: string[]; edges: unknown[] };
     expect(Array.isArray(graph.nodes)).toBe(true);
     expect(Array.isArray(graph.edges)).toBe(true);
@@ -161,7 +164,7 @@ describe("CLI regressions", () => {
   it("graph supports -o/--output to write JSON to a file", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-out-"));
     const outPath = path.join(tmpDir, "graph.json");
-    await runCliCommand(["graph", "--root", tsRoot, "-o", outPath]);
+    await runCliCommand(["graph", "--json", "--root", tsRoot, "-o", outPath]);
     const raw = await fsp.readFile(outPath, "utf8");
     const graph = JSON.parse(raw);
     expect(graph.nodes).toBeInstanceOf(Array);
@@ -224,7 +227,7 @@ describe("CLI regressions", () => {
   });
 
   it("graph --stable produces sorted deterministic JSON", async () => {
-    const args = ["graph", "--stdout", "--stable", tsRoot];
+    const args = ["graph", "--json", "--stable", tsRoot];
     const out1 = await runCliCommand(args);
     const out2 = await runCliCommand(args);
     expect(out1).toBe(out2);
@@ -238,7 +241,7 @@ describe("CLI regressions", () => {
     const filePath = path.join(tmpDir, "main.zig");
     await fsp.writeFile(filePath, "pub fn helper() void {}\n", "utf8");
 
-    const stdout = await runCliCommand(["chunk", filePath, "--min-tokens", "1", "--max-tokens", "50"]);
+    const stdout = await runCliCommand(["chunk", "--json", filePath, "--min-tokens", "1", "--max-tokens", "50"]);
     const chunks = JSON.parse(stdout) as Array<{ languageId?: string; filePath?: string }>;
 
     expect(chunks.length).toBeGreaterThan(0);
@@ -251,7 +254,7 @@ describe("CLI regressions", () => {
     const filePath = path.join(tmpDir, "main.go");
     await fsp.writeFile(filePath, 'package main\n\nfunc helper() string {\n\treturn "ok"\n}\n', "utf8");
 
-    const stdout = await runCliCommand(["chunk", filePath, "--min-tokens", "1", "--max-tokens", "50"]);
+    const stdout = await runCliCommand(["chunk", "--json", filePath, "--min-tokens", "1", "--max-tokens", "50"]);
     const chunks = JSON.parse(stdout) as Array<{ languageId?: string; type?: string; name?: string }>;
 
     expect(
@@ -266,7 +269,7 @@ describe("CLI regressions", () => {
     await fsp.writeFile(filePath, "export function helper() { return 1; }\n", "utf8");
 
     const stdout = await runCliCommandDetailed(
-      ["chunk", filePath, "--min-tokens", "1", "--max-tokens", "50"],
+      ["chunk", "--json", filePath, "--min-tokens", "1", "--max-tokens", "50"],
       undefined,
       tmpDir,
     );
@@ -564,7 +567,15 @@ describe("CLI regressions", () => {
   it("graph --report writes native backend counters to the report file", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-report-"));
     const reportPath = path.join(tmpDir, "graph-report.json");
-    const result = await runCliCommandDetailed(["graph", "--stdout", "--report", "--report-file", reportPath, tsRoot]);
+    const result = await runCliCommandDetailed([
+      "graph",
+      "--json",
+      "--stdout",
+      "--report",
+      "--report-file",
+      reportPath,
+      tsRoot,
+    ]);
 
     const graph = JSON.parse(result.stdout) as { nodes: string[]; edges: unknown[] };
     expect(graph.nodes.length).toBeGreaterThan(0);
@@ -590,7 +601,7 @@ describe("CLI regressions", () => {
   it("rejects out-of-root file navigation inputs explicitly", async () => {
     const outsideFile = path.resolve(process.cwd(), "README.md");
 
-    const dumpmod = JSON.parse(await runCliCommand(["dumpmod", outsideFile, "--root", tsRoot])) as {
+    const dumpmod = JSON.parse(await runCliCommand(["dumpmod", "--json", outsideFile, "--root", tsRoot])) as {
       status: string;
       reason?: string;
       error?: string;
@@ -599,7 +610,7 @@ describe("CLI regressions", () => {
     expect(dumpmod.reason).toBe("outside_project_root");
     expect(dumpmod.error).toContain("outside project root");
 
-    const goto = JSON.parse(await runCliCommand(["goto", outsideFile, "1", "1", "--root", tsRoot])) as {
+    const goto = JSON.parse(await runCliCommand(["goto", "--json", outsideFile, "1", "1", "--root", tsRoot])) as {
       status: string;
       reason?: string;
       error?: string;
@@ -608,7 +619,7 @@ describe("CLI regressions", () => {
     expect(goto.reason).toBe("outside_project_root");
 
     const refs = JSON.parse(
-      await runCliCommand(["refs", "--file", outsideFile, "--line", "1", "--col", "1", "--root", tsRoot]),
+      await runCliCommand(["refs", "--json", "--file", outsideFile, "--line", "1", "--col", "1", "--root", tsRoot]),
     ) as {
       status: string;
       reason?: string;
@@ -641,6 +652,7 @@ describe("CLI regressions", () => {
     const reportPath = path.join(tmpDir, "graph-report.json");
     await runCliCommandDetailed([
       "graph",
+      "--json",
       "--stdout",
       "--native",
       "off",
@@ -672,9 +684,17 @@ describe("CLI regressions", () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-sql-"));
     await fsp.writeFile(path.join(tmpDir, "main.ts"), "export function helper() { return 1; }\n", "utf8");
     const dbPath = path.join(tmpDir, "graph.sqlite");
-    await runCliCommand(["graph", "--root", tmpDir, "--sqlite", dbPath]);
+    await runCliCommand(["graph", "--json", "--root", tmpDir, "--sqlite", dbPath]);
+    const pretty = await runCliCommand([
+      "sql",
+      "--db",
+      dbPath,
+      "--query",
+      "SELECT name FROM symbols WHERE kind = 'function';",
+    ]);
     const stdout = await runCliCommand([
       "sql",
+      "--json",
       "--db",
       dbPath,
       "--query",
@@ -684,6 +704,7 @@ describe("CLI regressions", () => {
       columns: string[];
       rows: Array<Array<unknown>>;
     };
+    expect(pretty).toContain('name\n"helper"');
     expect(result.columns).toEqual(["name"]);
     const names = result.rows.map((row) => String(row[0]));
     expect(names).toContain("helper");
@@ -695,10 +716,10 @@ describe("CLI regressions", () => {
     await fsp.writeFile(path.join(projectDir, "main.ts"), "export function helper() { return 1; }\n", "utf8");
     await fsp.writeFile(path.join(cwdDir, "codegraph.config.json"), "{ not valid json", "utf8");
     const dbPath = path.join(projectDir, "graph.sqlite");
-    await runCliCommand(["graph", "--root", projectDir, "--sqlite", dbPath]);
+    await runCliCommand(["graph", "--json", "--root", projectDir, "--sqlite", dbPath]);
 
     const stdout = await runCliCommandDetailed(
-      ["sql", "--db", dbPath, "--query", "SELECT COUNT(*) AS count FROM symbols;"],
+      ["sql", "--json", "--db", dbPath, "--query", "SELECT COUNT(*) AS count FROM symbols;"],
       undefined,
       cwdDir,
     );
@@ -715,13 +736,20 @@ describe("CLI regressions", () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-sql-readonly-"));
     await fsp.writeFile(path.join(tmpDir, "main.ts"), "export function helper() { return 1; }\n", "utf8");
     const dbPath = path.join(tmpDir, "graph.sqlite");
-    await runCliCommand(["graph", "--root", tmpDir, "--sqlite", dbPath]);
+    await runCliCommand(["graph", "--json", "--root", tmpDir, "--sqlite", dbPath]);
 
     await expect(
-      runCliCommandDetailed(["sql", "--db", dbPath, "--query", "DELETE FROM symbols RETURNING name;"]),
+      runCliCommandDetailed(["sql", "--json", "--db", dbPath, "--query", "DELETE FROM symbols RETURNING name;"]),
     ).rejects.toThrow(/read-only result-producing statements/);
 
-    const stdout = await runCliCommand(["sql", "--db", dbPath, "--query", "SELECT COUNT(*) AS count FROM symbols;"]);
+    const stdout = await runCliCommand([
+      "sql",
+      "--json",
+      "--db",
+      dbPath,
+      "--query",
+      "SELECT COUNT(*) AS count FROM symbols;",
+    ]);
     const result = JSON.parse(stdout) as {
       columns: string[];
       rows: Array<Array<unknown>>;
@@ -731,7 +759,7 @@ describe("CLI regressions", () => {
   });
 
   it("skill print-path returns the bundled raw skill directory", async () => {
-    const stdout = await runCliCommand(["skill", "print-path"]);
+    const stdout = await runCliCommand(["skill", "--json", "print-path"]);
     const skillPath = stdout.trim();
     expect(normalize(skillPath)).toMatch(/codegraph-skill\/codegraph$/);
   });
@@ -739,7 +767,7 @@ describe("CLI regressions", () => {
   it("skill doctor reports the requested target and current install status", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-skill-doctor-"));
     const targetDir = skillInstallTarget(tmpDir);
-    const stdout = await runCliCommand(["skill", "doctor", "--target", targetDir]);
+    const stdout = await runCliCommand(["skill", "--json", "doctor", "--target", targetDir]);
     const report = JSON.parse(stdout) as {
       bundledSkillDir: string | null;
       bundledArchivePath?: string | null;
@@ -760,7 +788,7 @@ describe("CLI regressions", () => {
   });
 
   it("doctor reports package identity and backend state when no artifact path is provided", async () => {
-    const stdout = await runCliCommand(["doctor"]);
+    const stdout = await runCliCommand(["doctor", "--json"]);
     const report = JSON.parse(stdout) as {
       package: { name: string; version: string; packageRoot: string };
       native: { available: boolean; supportedLanguageIds: string[] };
@@ -784,7 +812,7 @@ describe("CLI regressions", () => {
     await fsp.writeFile(path.join(tmpDir, "codegraph.json"), "{}\n", "utf8");
 
     const cachePath = path.join(tmpDir, ".codegraph-cache", "index-v1");
-    const result = await runCliCommandDetailed(["doctor", cachePath], undefined, tmpDir);
+    const result = await runCliCommandDetailed(["doctor", "--json", cachePath], undefined, tmpDir);
     const report = JSON.parse(result.stdout) as {
       native: { available: boolean; supportedLanguageIds: string[] };
       indexArtifact: {
@@ -844,7 +872,7 @@ describe("CLI regressions", () => {
     ]);
     expect(coldResult.stderr).not.toContain("Index cache: manifest=");
 
-    await runCliCommand(["index", "--root", tmpDir]);
+    await runCliCommand(["index", "--json", "--root", tmpDir]);
     const result = await runCliCommandDetailed(["hotspots", "--root", tmpDir, srcDir, "--limit", "1", "--json"]);
 
     const hotspots = JSON.parse(result.stdout) as Array<{
@@ -888,7 +916,7 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     await fsp.writeFile(path.join(srcDir, "c.ts"), duplicateSource, "utf8");
     await fsp.writeFile(path.join(srcDir, "d.ts"), duplicateSource, "utf8");
 
-    const stdout = await runCliCommand(["inspect", "--root", tmpDir, srcDir, "--limit", "1"]);
+    const stdout = await runCliCommand(["inspect", "--json", "--root", tmpDir, srcDir, "--limit", "1"]);
     const report = JSON.parse(stdout) as {
       root: string;
       includeRoots: string[];
@@ -923,7 +951,16 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     expect(report.cycles.top).toEqual([]);
     expect(report.duplicates).toEqual({ enabled: false });
 
-    const duplicatesStdout = await runCliCommand(["inspect", "--duplicates", "--root", tmpDir, srcDir, "--limit", "1"]);
+    const duplicatesStdout = await runCliCommand([
+      "inspect",
+      "--json",
+      "--duplicates",
+      "--root",
+      tmpDir,
+      srcDir,
+      "--limit",
+      "1",
+    ]);
     const duplicatesReport = JSON.parse(duplicatesStdout) as {
       duplicates: {
         enabled: true;
@@ -982,7 +1019,7 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     await fsp.writeFile(path.join(srcDir, "ignored.ts"), "export const ignored = 1;\n", "utf8");
 
     const { stdout } = await runCliCommandDetailed(
-      ["inspect", "--root", ".", "./src", "--limit", "5"],
+      ["inspect", "--json", "--root", ".", "./src", "--limit", "5"],
       undefined,
       tmpDir,
     );
@@ -1063,14 +1100,14 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
       expect(report.cycles.top[0]?.size).toBe(2);
     };
 
-    const coldResult = await runCliCommandDetailed(["inspect", "--root", tmpDir, srcDir, "--limit", "5"]);
+    const coldResult = await runCliCommandDetailed(["inspect", "--json", "--root", tmpDir, srcDir, "--limit", "5"]);
     const coldReport = readReport(coldResult.stdout);
     expectScopedReport(coldReport);
     expect(coldReport.indexCache).toBeUndefined();
     expect(coldResult.stderr).not.toContain("Index cache: manifest=");
 
-    await runCliCommand(["index", "--root", tmpDir]);
-    const warmResult = await runCliCommandDetailed(["inspect", "--root", tmpDir, srcDir, "--limit", "5"]);
+    await runCliCommand(["index", "--json", "--root", tmpDir]);
+    const warmResult = await runCliCommandDetailed(["inspect", "--json", "--root", tmpDir, srcDir, "--limit", "5"]);
     const warmReport = readReport(warmResult.stdout);
     expectScopedReport(warmReport);
     expect(warmReport.indexCache?.manifestPath).toBe(
@@ -1111,13 +1148,13 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
   });
 
   it("graph rejects invalid integer options", async () => {
-    await expect(runCliCommand(["graph", "--stdout", "--root", tsRoot, "--threads", "1.5"])).rejects.toThrow(
+    await expect(runCliCommand(["graph", "--json", "--stdout", "--root", tsRoot, "--threads", "1.5"])).rejects.toThrow(
       /Invalid --threads value "1.5"/i,
     );
   });
 
   it("inspect rejects invalid --cache values", async () => {
-    await expect(runCliCommand(["inspect", "--root", tsRoot, "--cache", "banana"])).rejects.toThrow(
+    await expect(runCliCommand(["inspect", "--json", "--root", tsRoot, "--cache", "banana"])).rejects.toThrow(
       /Invalid --cache value "banana"/i,
     );
   });
@@ -1126,10 +1163,10 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     await expect(runCliCommand(["search", "hello", "--root", tsRoot, "--cache", "banana"])).rejects.toThrow(
       /Invalid --cache value "banana"/i,
     );
-    await expect(runCliCommand(["orient", "--root", tsRoot, "--threads", "1.5"])).rejects.toThrow(
+    await expect(runCliCommand(["orient", "--json", "--root", tsRoot, "--threads", "1.5"])).rejects.toThrow(
       /Invalid --threads value "1.5"/i,
     );
-    await expect(runCliCommand(["orient", "--root", tsRoot, "--health", "deep"])).rejects.toThrow(
+    await expect(runCliCommand(["orient", "--json", "--root", tsRoot, "--health", "deep"])).rejects.toThrow(
       /Invalid --health value "deep"/i,
     );
   });
@@ -1138,7 +1175,7 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-skill-install-"));
     const targetDir = skillInstallTarget(tmpDir);
     await fsp.mkdir(path.dirname(targetDir), { recursive: true });
-    const stdout = await runCliCommand(["skill", "install", "--target", targetDir]);
+    const stdout = await runCliCommand(["skill", "--json", "install", "--target", targetDir]);
     const result = JSON.parse(stdout) as {
       installed: boolean;
       skillFilePath: string;
@@ -1156,7 +1193,7 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-skill-parent-"));
     const targetDir = skillInstallTarget(tmpDir);
 
-    const stdout = await runCliCommand(["skill", "install", "--target", targetDir]);
+    const stdout = await runCliCommand(["skill", "--json", "install", "--target", targetDir]);
     const payload = JSON.parse(stdout) as {
       installed: boolean;
       skillFilePath: string;
@@ -1181,7 +1218,7 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     };
 
     const result = await runCliCommandDetailed(
-      ["skill", "install", "--agent", "claude"],
+      ["skill", "--json", "install", "--agent", "claude"],
       undefined,
       process.cwd(),
       env,
@@ -1212,7 +1249,7 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     };
 
     const result = await runCliCommandDetailed(
-      ["skill", "install", "--agent", "agents"],
+      ["skill", "--json", "install", "--agent", "agents"],
       undefined,
       process.cwd(),
       env,
@@ -1259,7 +1296,11 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     const targetDir = path.join(skillsDir, "codegraph");
 
     await fsp.mkdir(skillsDir, { recursive: true });
-    const result = await runCliCommandDetailed(["skill", "install", "--target", targetDir], undefined, tmpDir);
+    const result = await runCliCommandDetailed(
+      ["skill", "--json", "install", "--target", targetDir],
+      undefined,
+      tmpDir,
+    );
     const payload = JSON.parse(result.stdout) as {
       installed: boolean;
       skillFilePath: string;
@@ -1285,7 +1326,7 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
 
     await fsp.mkdir(path.dirname(targetDir), { recursive: true });
     const result = await runCliCommandDetailed(
-      ["skill", "doctor", "--agent", "opencode"],
+      ["skill", "--json", "doctor", "--agent", "opencode"],
       undefined,
       process.cwd(),
       env,
@@ -1309,7 +1350,7 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     await fsp.mkdir(targetDir, { recursive: true });
     await fsp.writeFile(path.join(targetDir, "stale.txt"), "old\n", "utf8");
 
-    await runCliCommand(["skill", "install", "--target", targetDir, "--force"]);
+    await runCliCommand(["skill", "--json", "install", "--target", targetDir, "--force"]);
 
     await expect(fsp.stat(path.join(targetDir, "stale.txt"))).rejects.toThrow();
     const installedSkill = await fsp.readFile(path.join(targetDir, "SKILL.md"), "utf8");
@@ -1318,7 +1359,7 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
 
   it("skill install rejects unsafe target directories", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-skill-unsafe-"));
-    await expect(runCliCommand(["skill", "install", "--target", tmpDir, "--force"])).rejects.toThrow(
+    await expect(runCliCommand(["skill", "--json", "install", "--target", tmpDir, "--force"])).rejects.toThrow(
       /target directory must end with/i,
     );
   });
@@ -1326,6 +1367,7 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
   it("grep supports plain-text regex mode via --pattern (and --glob)", async () => {
     const stdout = await runCliCommand([
       "grep",
+      "--json",
       "--root",
       tsRoot,
       "--pattern",
@@ -1348,7 +1390,7 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
 
   it("grep rejects invalid --max-hits values", async () => {
     await expect(
-      runCliCommand(["grep", "--root", tsRoot, "--pattern", "helperFunction", "--max-hits", "0"]),
+      runCliCommand(["grep", "--json", "--root", tsRoot, "--pattern", "helperFunction", "--max-hits", "0"]),
     ).rejects.toThrow(/Invalid --max-hits value "0"/i);
   });
 
@@ -1368,6 +1410,7 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
 
     const stdout = await runCliCommand([
       "grep",
+      "--json",
       "--root",
       tmpDir,
       "--pattern",
@@ -1384,7 +1427,7 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
 
   it("grep rejects ambiguous usage (both --query and --pattern)", async () => {
     await expect(
-      runCliCommand(["grep", "--root", tsRoot, "--query", "(identifier) @id", "--pattern", "foo"]),
+      runCliCommand(["grep", "--json", "--root", tsRoot, "--query", "(identifier) @id", "--pattern", "foo"]),
     ).rejects.toThrow(/Usage: grep/i);
   });
 
@@ -1493,7 +1536,7 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
   it("packet get reports unresolved file targets", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-packet-invalid-"));
 
-    await expect(runCliCommandDetailed(["packet", "get", "bogus:thing", "--root", root])).rejects.toThrow(
+    await expect(runCliCommandDetailed(["packet", "--json", "get", "bogus:thing", "--root", root])).rejects.toThrow(
       "Packet target did not resolve: bogus:thing",
     );
   });
@@ -1583,7 +1626,7 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     }
   });
 
-  it("drift defaults to JSON output when no explicit output flag is passed", async () => {
+  it("drift emits JSON output when explicitly requested", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-drift-cli-default-json-"));
     try {
       await fsp.mkdir(path.join(root, "src"), { recursive: true });
@@ -1592,7 +1635,17 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
       git(root, ["add", "."]);
       git(root, ["commit", "-m", "base"]);
 
-      const stdout = await runCliCommand(["drift", "src", "--root", root, "--base", "HEAD", "--head", "WORKTREE"]);
+      const stdout = await runCliCommand([
+        "drift",
+        "--json",
+        "src",
+        "--root",
+        root,
+        "--base",
+        "HEAD",
+        "--head",
+        "WORKTREE",
+      ]);
 
       expect(JSON.parse(stdout)).toMatchObject({ schemaVersion: 1 });
     } finally {
@@ -1642,10 +1695,11 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
   });
 
   it("drift usage includes compact JSON output mode", async () => {
-    const result = await runCliWithExit(["drift"], process.cwd());
+    const result = await runCliWithExit(["drift", "--help"], process.cwd());
 
-    expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("--json | --pretty | --compact-json");
+    expect(result.exitCode).toBeUndefined();
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("--json | --pretty | --compact-json");
   });
 
   it("drift compact json summarizes graph edges and suppresses API additions by default", async () => {
@@ -1719,6 +1773,7 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
       const summary = JSON.parse(
         await runCliCommand([
           "drift",
+          "--json",
           "src",
           "--root",
           root,
@@ -1733,6 +1788,7 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
       const off = JSON.parse(
         await runCliCommand([
           "drift",
+          "--json",
           "src",
           "--root",
           root,
@@ -1769,6 +1825,7 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
       const removals = JSON.parse(
         await runCliCommand([
           "drift",
+          "--json",
           "src",
           "--root",
           root,
@@ -1783,6 +1840,7 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
       const off = JSON.parse(
         await runCliCommand([
           "drift",
+          "--json",
           "src",
           "--root",
           root,
@@ -1969,8 +2027,8 @@ function initGitRepo(root: string): void {
 describe("CLI flows", () => {
   const sampleRoot = normalize(path.resolve(process.cwd(), "tests", "samples", "typescript"));
 
-  it("emits a file graph by default", async () => {
-    const stdout = await runCliCommand(["graph", "--stdout", "--fast-graph", sampleRoot]);
+  it("emits a structured file graph with --json", async () => {
+    const stdout = await runCliCommand(["graph", "--json", "--stdout", "--fast-graph", sampleRoot]);
     const graph = JSON.parse(stdout);
 
     expect(graph.nodes).toBeInstanceOf(Array);
@@ -1987,7 +2045,7 @@ describe("CLI flows", () => {
     await fsp.writeFile(path.join(rustDir, "main.rs"), "fn main() {}", "utf8");
     await fsp.writeFile(path.join(javaDir, "main.java"), "public class Main {}", "utf8");
 
-    const stdout = await runCliCommand(["impact", root, "--provider", "raw"], multiLanguageDiff);
+    const stdout = await runCliCommand(["impact", "--json", root, "--provider", "raw"], multiLanguageDiff);
     const report = JSON.parse(stdout);
 
     expect(report.changedFiles.length).toBeGreaterThanOrEqual(2);
@@ -2010,7 +2068,7 @@ index 1111111..2222222 100644
 +export function helper() { return 1; }
 `;
 
-    const stdout = await runCliCommand(["impact", root, "--provider", "raw"], diffText);
+    const stdout = await runCliCommand(["impact", "--json", root, "--provider", "raw"], diffText);
     const report = JSON.parse(stdout) as {
       changedFiles: Array<{ file: string }>;
       changedSymbols: Array<{ file: string; name: string }>;
@@ -2036,7 +2094,17 @@ index 1111111..2222222 100644
 
     await fsp.writeFile(path.join(root, "main.ts"), "export const value = 2;\n", "utf8");
 
-    const stdout = await runCliCommand(["impact", root, "--provider", "git", "--base", "HEAD", "--head", "WORKTREE"]);
+    const stdout = await runCliCommand([
+      "impact",
+      "--json",
+      root,
+      "--provider",
+      "git",
+      "--base",
+      "HEAD",
+      "--head",
+      "WORKTREE",
+    ]);
     const report = JSON.parse(stdout) as {
       changedFiles: Array<{ file: string }>;
       schemaVersion?: number;
@@ -2077,7 +2145,7 @@ index 1111111..2222222 100644
       "",
     ].join("\n");
 
-    const stdout = await runCliCommand(["impact", root, "--provider", "raw"], diffText);
+    const stdout = await runCliCommand(["impact", "--json", root, "--provider", "raw"], diffText);
     const report = JSON.parse(stdout) as {
       changedFiles: Array<{ file: string }>;
       diagnostics?: { changedFilesIgnored?: number };
@@ -2096,7 +2164,7 @@ index 1111111..2222222 100644
 
     await fsp.writeFile(path.join(root, "main.ts"), "export function value() { return 2; }\n", "utf8");
 
-    const stdout = await runCliCommand(["review", "--root", root, "--base", "HEAD", "--head", "WORKTREE"]);
+    const stdout = await runCliCommand(["review", "--json", "--root", root, "--base", "HEAD", "--head", "WORKTREE"]);
     const report = JSON.parse(stdout) as {
       status?: string;
       changedFiles: Array<{ file: string }>;
@@ -2161,7 +2229,7 @@ index 1111111..2222222 100644
       "utf8",
     );
 
-    const stdout = await runCliCommand(["review", "--root", root, "--base", "HEAD", "--head", "WORKTREE"]);
+    const stdout = await runCliCommand(["review", "--json", "--root", root, "--base", "HEAD", "--head", "WORKTREE"]);
     const report = JSON.parse(stdout) as {
       status?: string;
       changedFiles: Array<{ file: string }>;
@@ -2222,7 +2290,7 @@ index 1111111..2222222 100644
     await fsp.writeFile(path.join(srcDir, "a.ts"), source.replace("large", "huge"), "utf8");
     const reviewArgs = ["review", "--root", root, "--base", "HEAD", "--head", "WORKTREE"];
 
-    const structured = JSON.parse(await runCliCommand(reviewArgs)) as {
+    const structured = JSON.parse(await runCliCommand([...reviewArgs, "--json"])) as {
       reviewTasks: Array<{ reason: string }>;
     };
     const summary = await runCliCommand([...reviewArgs, "--summary", "--duplicates", "all"]);
@@ -2291,6 +2359,7 @@ index 1111111..2222222 100644
 
     const stdout = await runCliCommand([
       "review",
+      "--json",
       "--root",
       root,
       "--base",
@@ -2321,7 +2390,18 @@ index 1111111..2222222 100644
     await fsp.writeFile(path.join(root, "main.ts"), "export function value() { return 2; }\n", "utf8");
 
     await expect(
-      runCliCommand(["review", "--root", root, "--base", "HEAD", "--head", "WORKTREE", "--max-tests", "nope"]),
+      runCliCommand([
+        "review",
+        "--json",
+        "--root",
+        root,
+        "--base",
+        "HEAD",
+        "--head",
+        "WORKTREE",
+        "--max-tests",
+        "nope",
+      ]),
     ).rejects.toThrow(/Invalid --max-tests value "nope"/i);
   });
 

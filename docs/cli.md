@@ -6,7 +6,9 @@ For a source checkout of this repo, replace `codegraph` with `node ./dist/cli.js
 
 If the CLI is not installed yet, use the install paths in [docs/installation.md](./installation.md). Do not use the unscoped `codegraph` package name.
 
-Bare `codegraph graph` writes `codegraph.json` and `codegraph.err` in the current directory. Use `--stdout`, `--output <path>`, or an explicit format flag such as `--json` when scripting.
+CLI commands default to human-readable stdout; `--pretty` remains an explicit equivalent. Use `--json` for structured automation output, or a format-specific option such as `--compact-json`, `--mermaid`, `--dot`, or `--sqlite` where supported. If `--json` and `--pretty` are both present, `--json` wins.
+
+Bare `codegraph graph` writes Mermaid to stdout. Use `--json`, `--compact-json`, `--dot`, `--sqlite <path>`, or `--output <path>` for explicit graph artifacts.
 
 Numeric options such as `--limit`, `--threads`, `--depth`, `--max-refs`, and token bounds must be integers in their documented ranges; invalid numeric values fail instead of being silently clamped or ignored.
 
@@ -50,6 +52,19 @@ Cache and manifest reuse is rooted at `--root`. Reusing a project root lets comm
 
 ## Core commands
 
+### Forgiving inputs and safe defaults
+
+The CLI accepts the shortest unambiguous form across command families; explicit flags remain supported:
+
+- Project commands default to the current directory. `apisurface`, `graph-delta`, `review`, and `unresolved` also accept an existing project directory positionally; scan commands already accept positional roots.
+- File targets accept `file:line[:column]` locations copied from search output. `file` uses the line as its default offset; `chunk`, `deps`, `rdeps`, `path`, `dumpmod`, `packet`, and `explain` ignore the location suffix when they only need a file.
+- `goto` and `refs` accept `file:line:column`, separate positional coordinates, portable symbol handles, or the legacy named `refs --file/--line/--col` form. With only a file, `refs` returns references for every definition; `goto` resolves a single-definition file or returns candidate locations instead of guessing.
+- `callers`, `callees`, `supertypes`, `subtypes`, `implementations`, `rename-preview`, and `refactor-plan` accept a portable handle, a unique exact symbol name, a single-definition file, or `file:line[:column]`. Ambiguous names return copyable handle choices.
+- `grep <regex>` defaults to text regex search; Tree-sitter queries remain explicit with `--query`. `sql <db> "SELECT ..."` is equivalent to `--db/--query`.
+- `artifact`, `packet`, and `mcp` infer their only subcommand (`build`, `get`, and `serve`). `impact` and git-backed `drift` default to `HEAD..WORKTREE` while accepting explicit ranges.
+
+These defaults never approve writes: installer changes still require `--yes`, rename/refactor commands remain read-only, and ambiguous semantic targets are never selected silently.
+
 ### Dependency graphs
 
 ```bash
@@ -61,11 +76,11 @@ codegraph impact --base HEAD --head WORKTREE --pretty
 codegraph orient --root . --budget small --pretty
 codegraph inspect ./src --limit 20
 
-# Whole-repo graph
+# Whole-repo Mermaid graph on stdout (the default)
 codegraph graph ./
 
-# Default graph output to stdout
-codegraph graph ./ --stdout
+# Explicit structured graph output
+codegraph graph ./ --json
 
 # Opt-in text specifier shortcut for plain .js and .ts files
 codegraph graph ./src --fast-graph
@@ -160,7 +175,7 @@ codegraph rename-preview 'symbol:src/Service.ts:Service:1:14' RenamedService --i
 codegraph refactor-plan 'symbol:src/Service.ts:Service:1:14' --rename RenamedService --max-references 200 --pretty
 codegraph explain src/review.ts --json
 codegraph packet get src/cli.ts --pretty
-# Read a live file; JSON is the default
+# Read a live file; readable numbered lines are the default
 codegraph file src/cli.ts
 codegraph file src/cli.ts --offset 201 --limit 100 --max-bytes 40000 --pretty
 
@@ -173,13 +188,13 @@ codegraph search --help
 
 `symbols` performs deterministic symbol-identity lookup, unlike hybrid `search`, which also ranks paths, prose, SQL, snippets, and graph evidence. Exact qualified names such as `src/session.ts::CodeReviewSession` rank before exact local/export names, prefixes, identifier tokens, and substrings.
 
-Use `--kind <kind,...>`, `--exported`, `--include-imports`, `--file-glob <project-relative-glob>`, and `--limit <0-500>` to compose filters. Imports are excluded by default, the default limit is 50, and an empty query requires `--kind` or `--file-glob`; JSON is the default and `--pretty` uses a concise renderer.
+Use `--kind <kind,...>`, `--exported`, `--include-imports`, `--file-glob <project-relative-glob>`, and `--limit <0-500>` to compose filters. Imports are excluded by default, the default limit is 50, and an empty query requires `--kind` or `--file-glob`; concise pretty output is the default and `--json` returns the structured envelope.
 
 Structured results include `schemaVersion`, root and analysis metadata, freshness, effective limits, omission counts, the normalized query, total candidates, and deterministic project-relative symbols. Resolvable named/default import aliases keep their binding location but carry a handle for the declaration; namespace/star aliases, unresolved aliases, and failed import scans are reported under `omittedCounts`.
 
 `callers` and `callees` accept one portable function or callable-member handle from `symbols`. Depth defaults to 1 and caps at 5; the symbol limit defaults to 100 and caps at 500, while callsites are grouped under each related symbol and bounded separately.
 
-JSON is the default and reports exact project-relative callsites, provenance, freshness, and separate symbol, callsite, and unresolved-site omissions. `--pretty` renders concise symbol and callsite rows; `--include-heuristic` is accepted, but current results remain limited to resolved semantic `calls` edges rather than guessed dynamic calls, file dependencies, imports, or references.
+Pretty symbol and callsite rows are the default. `--json` reports exact project-relative callsites, provenance, freshness, and separate symbol, callsite, and unresolved-site omissions; `--include-heuristic` is accepted, but current results remain limited to resolved semantic `calls` edges rather than guessed dynamic calls, file dependencies, imports, or references.
 
 `supertypes` and `subtypes` accept one portable symbol handle from `symbols`, default to depth 1 and 100 results, cap depth at 10 and results at 500, and return only proven indexed `extends` and `implements` relationships. `implementations` uses the same 100/500 result bounds without `--depth`; supported targets are interfaces, traits, abstract types, and members with proven implementation or override relationships.
 
@@ -187,11 +202,11 @@ Implementation entries identify the exact implementing declaration, inherited de
 
 `rename-preview` accepts a portable symbol handle and new identifier. Optional `--include-comments` and `--include-strings` add low-confidence textual edits; `--include-filenames` requests a suggestion for an eligible exported class, interface, or type whose filename matches its name, and `--max-edits <1-10000>` bounds returned edits.
 
-JSON is the default and reports exact project-relative edits, conflicts, unsafe sites, candidate tests, freshness, provenance, and omissions. A limited or conflicting result has `safe: false`; filename results are suggestions only, the command never changes files, and no apply command exists.
+Pretty rename summaries are the default. `--json` reports exact project-relative edits, conflicts, unsafe sites, candidate tests, freshness, provenance, and omissions. A limited or conflicting result has `safe: false`; filename results are suggestions only, the command never changes files, and no apply command exists.
 
 `refactor-plan` accepts a portable handle from `symbols` or `search`, or an exact internal changed-symbol handle from review or impact output. It composes the target definition, references, direct callers and callees, type relationships, implementations, section issues, candidate tests, omissions, and copyable follow-ups from one snapshot; `--include-source` opts reference context into JSON.
 
-Use optional `--rename <new-name>` to include the authoritative nested rename preview. `--max-references`, `--max-callers`, and `--max-hierarchy` are independent `0-500` bounds; JSON is the default, `--pretty` summarizes counts, safety, and section issues, and neither mode changes source or exposes an apply command.
+Use optional `--rename <new-name>` to include the authoritative nested rename preview. `--max-references`, `--max-callers`, and `--max-hierarchy` are independent `0-500` bounds; pretty output summarizes counts, safety, and section issues by default; `--json` returns the complete structured packet, and neither mode changes source or exposes an apply command.
 
 # Explain a file, symbol, SQL object, or search result handle
 codegraph explain src/auth.ts --json
@@ -201,17 +216,17 @@ codegraph explain src/large-file.ts --max-symbols 25 --json
 codegraph explain --help
 
 # Build an agent-ready artifact bundle
-codegraph artifact build --root . --out codegraph-out --json
-codegraph artifact build --root . --out codegraph-out --sqlite --graph-json --report --questions --force --json
+codegraph artifact --root . --out codegraph-out --json
+codegraph artifact --root . --out codegraph-out --sqlite --graph-json --report --questions --force --json
 codegraph artifact --help
 
 # Serve MCP tools over the same search, navigation, artifact, and review layer
-codegraph mcp serve --root . --stdio
-codegraph mcp serve --root . --artifact codegraph-out --stdio
-codegraph mcp serve --root . --stdio --allow-build
-codegraph mcp serve --root . --port 7331
-codegraph mcp serve --root . --stdio --warmup
-codegraph mcp serve --root . --port 7331 --warmup-symbols
+codegraph mcp --root . --stdio
+codegraph mcp --root . --artifact codegraph-out --stdio
+codegraph mcp --root . --stdio --allow-build
+codegraph mcp --root . --port 7331
+codegraph mcp --root . --stdio --warmup
+codegraph mcp --root . --port 7331 --warmup-symbols
 codegraph mcp --help
 
 # Install or preview agent client integration
@@ -247,17 +262,17 @@ codegraph drift ./src --base origin/main --head HEAD --fail-on new-cycle,public-
 codegraph drift --base-artifact ./baseline/codegraph-out --head . --json
 
 # Go to definition
-codegraph goto <file> <line> <column>
+codegraph goto <file>:<line>:<column>
 
 # Find references
-codegraph refs --file <file> --line <line> --col <column>
-codegraph refs --file <file> --line <line> --col <column> --pretty
+codegraph refs <file>  # all symbols in the file
+codegraph refs <file>:<line>:<column> --pretty
 
 # Run a Tree-sitter query across the repo
 codegraph grep --query '(function_declaration name: (identifier) @name)'
 
 # Run a plain-text regex grep across the repo
-codegraph grep --pattern 'eval\(' --ignore-case
+codegraph grep 'eval\(' --ignore-case
 ```
 
 `review`, `goto`, `refs`, and `dumpmod` default to the on-disk incremental cache and reuse the current-project manifest on repeat invocations. Review diff selectors (`--base`, `--head`, and `--changed-since`) choose changed files but do not narrow index freshness; pass `--cache off` for an exhaustive uncached rebuild, or `--cache memory|disk` to select a cache explicitly.
@@ -317,7 +332,7 @@ Short JSON shape:
 
 #### Live file views
 
-`file <path>` reads the current file bytes from disk, independent of index freshness. JSON is the default; pass `--pretty` for a header, optional graph summary, exact numbered lines, and a copyable next-page command.
+`file <path>` reads the current file bytes from disk, independent of index freshness. The default human-readable view has a header, optional graph summary, exact numbered lines, and a copyable next-page command; pass `--json` for the structured pagination contract.
 
 - `--offset <line>` is the 1-based first line and defaults to `1`. `--limit <lines>` is the maximum line count, defaults to `2000`, and is capped at `10000`.
 - For raw file pages, `--max-bytes <bytes>` bounds unnumbered text including line separators before numbering; it defaults to `80000` and is capped at `500000`. A raw page can therefore end before `--limit`, and `truncated` is true when the boundary cuts a selected line.
@@ -427,7 +442,7 @@ Dependency read commands keep the same output contracts while using the indexed 
 codegraph impact --provider git --base main --head HEAD
 
 # Analyze current staged and unstaged worktree changes against HEAD
-codegraph impact --provider git --base HEAD --head WORKTREE
+codegraph impact
 
 # Analyze the current index against HEAD
 codegraph impact --provider git --base HEAD --head STAGED
@@ -647,7 +662,7 @@ WHERE to_path = 'src/auth.ts' AND to_type = 'file';
 Raw SQL access is intentionally read-only:
 
 ```bash
-codegraph sql --db ./codegraph.sqlite --query "SELECT name, file FROM symbols WHERE kind = 'function' LIMIT 5;"
+codegraph sql ./codegraph.sqlite "SELECT name, file FROM symbols WHERE kind = 'function' LIMIT 5;"
 ```
 
 It accepts result-producing statements such as `SELECT` and `PRAGMA` and rejects mutating SQL.
@@ -740,7 +755,7 @@ npx tsx src/cli.ts goto <file> <line> <column>
 
 `--pretty` and `--summary` are presentation modes for compact reading by people or models. They may omit low-confidence or verbose context that remains available in structured JSON and TypeScript return values. Integrators that compose deterministic review packs should use the exported TypeScript functions or JSON output.
 
-Plain `graph` output is a file dependency graph only. In default graph mode, output goes to `codegraph.json` unless `--stdout` or `--output <path>` is passed.
+Plain `graph` output is a Mermaid file dependency graph on stdout. `graph --json` returns the structured file graph shown below; add `--output <path>` to write any selected format to a file.
 
 ```json
 {

@@ -39,7 +39,7 @@ export async function handleRenamePreviewCommand(context: RenamePreviewCommandCo
       ...(maxEdits !== undefined ? { maxEdits } : {}),
       ...(context.buildOptions ? { buildOptions: context.buildOptions } : {}),
     });
-    if (context.hasFlag("--json") || !context.hasFlag("--pretty")) {
+    if (context.hasFlag("--json")) {
       context.writeJSONLine(response);
       return;
     }

@@ -989,7 +989,7 @@ function collectFollowUps(
   if (resolved.kind === "file") {
     for (const symbol of symbols.slice(0, AGENT_EXPLAIN_FILE_SYMBOL_REF_LIMIT)) {
       followUps.add(
-        `codegraph refs --file ${quoteShellArg(relFile)} --line ${symbol.range.start.line} --col ${symbol.range.start.column} --pretty`,
+        `codegraph refs ${quoteShellArg(`${relFile}:${symbol.range.start.line}:${symbol.range.start.column}`)} --pretty`,
       );
     }
   } else {

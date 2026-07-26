@@ -20,6 +20,7 @@ import { supportForFile } from "../languages.js";
 import { toProjectDisplayPath } from "../util/paths.js";
 import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { parseCacheModeOption, parsePositiveIntegerOption } from "./options.js";
+import { writeCliOutput } from "./pretty.js";
 
 type CacheMode = "off" | "memory" | "disk";
 const INSPECT_DUPLICATE_MIN_TOKENS = 60;
@@ -364,7 +365,7 @@ export async function handleInspectCommand(context: InspectCommandContext): Prom
     context.hasFlag("--duplicates"),
     context.writeStderrLine,
   );
-  context.writeJSONLine(report);
+  writeCliOutput(context, report);
 }
 
 export async function handleHotspotsCommand(context: InspectCommandContext): Promise<void> {

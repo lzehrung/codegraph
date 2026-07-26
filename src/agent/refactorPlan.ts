@@ -14,7 +14,7 @@ import { previewRenameInSnapshot, type RenameCandidateTest, type RenamePreviewRe
 import type { CallHierarchyEntry } from "./callHierarchy.js";
 import type { ImplementationEntry, TypeHierarchyRelation } from "./typeHierarchy.js";
 import type { SemanticLocation, SemanticProvenance, SemanticResponseEnvelope, SemanticSymbol } from "./semantic.js";
-import { resolveSemanticSymbol, semanticSymbolFromDef, type ResolvedSemanticSymbol } from "./semanticSymbols.js";
+import { requireSemanticSymbol, semanticSymbolFromDef } from "./semanticSymbols.js";
 import {
   createAgentSession,
   type AgentFreshnessResult,
@@ -82,8 +82,7 @@ export async function buildRefactorPlanInSnapshot(
   request: Omit<RefactorPlanRequest, "buildOptions">,
   freshness: AgentFreshnessResult = { state: "fresh" },
 ): Promise<RefactorPlanResponse> {
-  const resolved = resolveRefactorPlanTarget(snapshot, request.handle);
-  if (!resolved) throw new Error("Symbol handle is stale or missing. Run workspace symbol lookup to resolve it again.");
+  const resolved = requireSemanticSymbol(snapshot, request.handle);
   const referenceLimit = boundedSectionLimit(request.maxReferences, DEFAULT_REFACTOR_REFERENCE_LIMIT, "maxReferences");
   const callerLimit = boundedSectionLimit(request.maxCallers, DEFAULT_REFACTOR_RELATION_LIMIT, "maxCallers");
   const hierarchyLimit = boundedSectionLimit(request.maxHierarchy, DEFAULT_REFACTOR_RELATION_LIMIT, "maxHierarchy");
@@ -187,7 +186,7 @@ export async function buildRefactorPlanInSnapshot(
       )
     : undefined;
   const followUps = [
-    `codegraph refs --file ${quoteShellArg(target.location.file)} --line ${target.location.range.start.line} --col ${target.location.range.start.column} --pretty`,
+    `codegraph refs ${quoteShellArg(`${target.location.file}:${target.location.range.start.line}:${target.location.range.start.column}`)} --pretty`,
     `codegraph callers ${quoteShellArg(target.handle)} --depth 1 --json`,
     `codegraph callees ${quoteShellArg(target.handle)} --depth 1 --json`,
     `codegraph implementations ${quoteShellArg(target.handle)} --json`,
@@ -285,13 +284,6 @@ function normalizeHierarchySection(
       },
     ];
   });
-}
-
-function resolveRefactorPlanTarget(snapshot: AgentProjectSnapshot, handle: string): ResolvedSemanticSymbol | null {
-  const portable = resolveSemanticSymbol(snapshot, handle);
-  if (portable) return portable;
-  const reviewDef = buildSymbolLookup(snapshot).defById.get(handle);
-  return reviewDef ? { id: handle, def: reviewDef } : null;
 }
 
 function callOmitted(result: CallHierarchyResult): number {

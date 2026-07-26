@@ -3,12 +3,14 @@ import { getCodegraphPacket } from "../agent/packet.js";
 import type { CliAgentCommandContext } from "./context.js";
 import { PACKET_HELP_TEXT } from "./help.js";
 import { parsePositiveIntegerOption } from "./options.js";
+import { formatPrettyValue } from "./pretty.js";
 
 export type PacketCommandContext = CliAgentCommandContext;
 
 export async function handlePacketCommand(context: PacketCommandContext): Promise<void> {
-  const subcommand = context.positionals[0];
-  const target = context.positionals[1];
+  const [first, second] = context.positionals;
+  const subcommand = second === undefined && first !== "get" ? "get" : first;
+  const target = subcommand === "get" && first !== "get" ? first : second;
   if (subcommand !== "get" || target === undefined) {
     context.writeStderrLine(PACKET_HELP_TEXT.trimEnd());
     context.exit(2);
@@ -30,12 +32,12 @@ export async function handlePacketCommand(context: PacketCommandContext): Promis
         : {}),
     });
 
-    if (context.hasFlag("--json") || !context.hasFlag("--pretty")) {
+    if (context.hasFlag("--json")) {
       context.writeJSONLine(response);
     } else if (isAgentExplanation(response.packet)) {
       context.writeStdoutLine(formatAgentExplanation(response.packet));
     } else {
-      context.writeJSONLine(response);
+      context.writeStdoutLine(formatPrettyValue(response));
     }
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);

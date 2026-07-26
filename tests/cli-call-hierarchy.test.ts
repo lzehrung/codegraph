@@ -76,7 +76,7 @@ describe("call hierarchy CLI", () => {
 
   it("renders concise pretty transitive callees and recursive calls", async () => {
     const outer = await symbolHandle("outer");
-    const callees = await captureCli(["callees", outer, "--root", root, "--cache", "off", "--depth", "2", "--pretty"]);
+    const callees = await captureCli(["callees", outer, "--root", root, "--cache", "off", "--depth", "2"]);
     expect(callees).toMatchObject({ stderr: "", exitCode: undefined });
     expect(callees.stdout).toContain("Target: outer [function] calls.ts:3:");
     expect(callees.stdout).toContain("Callees: 2");
@@ -92,24 +92,24 @@ describe("call hierarchy CLI", () => {
   });
 
   it("registers command help, validates public bounds, and rejects non-callable targets", async () => {
-    const help = await captureCli(["callers", "--help"]);
+    const help = await captureCli(["callers", "--json", "--help"]);
     expect(help).toMatchObject({ stderr: "", exitCode: undefined });
     expect(help.stdout).toContain(
-      "Usage: codegraph callers <symbol-handle> [--root <path>] [--depth <1-5>] [--limit <0-500>]",
+      "Usage: codegraph callers <symbol-target> [--root <path>] [--depth <1-5>] [--limit <0-500>]",
     );
 
-    const missing = await captureCli(["callees"]);
+    const missing = await captureCli(["callees", "--json"]);
     expect(missing.exitCode).toBe(2);
-    expect(missing.stderr).toContain("Usage: codegraph callees <symbol-handle>");
+    expect(missing.stderr).toContain("Usage: codegraph callees <symbol-target>");
 
-    const highDepth = await captureCli(["callers", "cg:symbol:unused", "--depth", "6"]);
+    const highDepth = await captureCli(["callers", "--json", "cg:symbol:unused", "--depth", "6"]);
     expect(highDepth).toEqual({
       stdout: "",
       stderr: 'Invalid --depth value "6". Expected an integer from 1 to 5.\n',
       exitCode: 1,
     });
 
-    const highLimit = await captureCli(["callees", "cg:symbol:unused", "--limit", "501"]);
+    const highLimit = await captureCli(["callees", "--json", "cg:symbol:unused", "--limit", "501"]);
     expect(highLimit).toEqual({
       stdout: "",
       stderr: 'Invalid --limit value "501". Expected an integer from 0 to 500.\n',
@@ -117,7 +117,7 @@ describe("call hierarchy CLI", () => {
     });
 
     const invalidHandle = await symbolHandle("NotCallable");
-    const invalid = await captureCli(["callers", invalidHandle, "--root", root, "--cache", "off"]);
+    const invalid = await captureCli(["callers", "--json", invalidHandle, "--root", root, "--cache", "off"]);
     expect(invalid).toMatchObject({ stdout: "", exitCode: 1 });
     expect(invalid.stderr).toContain("Call hierarchy requires a function or callable member symbol.");
   });
@@ -125,6 +125,7 @@ describe("call hierarchy CLI", () => {
   it("leaves refs as the complete reference surface", async () => {
     const refs = await captureCli([
       "refs",
+      "--json",
       "--file",
       "calls.ts",
       "--line",

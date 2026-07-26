@@ -5,7 +5,7 @@ import { ARTIFACT_HELP_TEXT } from "./help.js";
 export type ArtifactCommandContext = CliAgentCommandContext;
 
 export async function handleArtifactCommand(context: ArtifactCommandContext): Promise<void> {
-  const artifactCommand = context.positionals[0];
+  const artifactCommand = context.positionals[0] ?? "build";
   if (artifactCommand !== "build") {
     context.writeStderrLine(ARTIFACT_HELP_TEXT.trimEnd());
     context.exit(2);

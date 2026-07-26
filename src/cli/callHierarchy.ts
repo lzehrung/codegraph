@@ -47,7 +47,7 @@ export async function handleCallHierarchyCommand(
       includeHeuristic: context.hasFlag("--include-heuristic"),
     };
     const response = command === "callers" ? await findCallers(request) : await findCallees(request);
-    if (context.hasFlag("--json") || !context.hasFlag("--pretty")) {
+    if (context.hasFlag("--json")) {
       context.writeJSONLine(response);
       return;
     }

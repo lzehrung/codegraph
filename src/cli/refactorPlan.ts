@@ -45,7 +45,7 @@ export async function handleRefactorPlanCommand(context: RefactorPlanCommandCont
       includeSource: context.hasFlag("--include-source"),
       ...(context.buildOptions ? { buildOptions: context.buildOptions } : {}),
     });
-    if (context.hasFlag("--json") || !context.hasFlag("--pretty")) {
+    if (context.hasFlag("--json")) {
       context.writeJSONLine(response);
       return;
     }

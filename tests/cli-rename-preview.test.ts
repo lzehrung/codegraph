@@ -119,24 +119,37 @@ describe("rename preview CLI", () => {
   });
 
   it("validates boolean flags, the public max-edits bound, and positional arity before indexing", async () => {
-    const valuedBoolean = await captureCli(["rename-preview", handle, "RenamedService", "--include-comments=false"]);
+    const valuedBoolean = await captureCli([
+      "rename-preview",
+      "--json",
+      handle,
+      "RenamedService",
+      "--include-comments=false",
+    ]);
     expect(valuedBoolean).toMatchObject({ stdout: "", exitCode: 2 });
     expect(valuedBoolean.stderr).toContain("Unknown option for rename-preview: --include-comments");
 
-    const aboveMaximum = await captureCli(["rename-preview", handle, "RenamedService", "--max-edits", "10001"]);
+    const aboveMaximum = await captureCli([
+      "rename-preview",
+      "--json",
+      handle,
+      "RenamedService",
+      "--max-edits",
+      "10001",
+    ]);
     expect(aboveMaximum).toEqual({
       stdout: "",
       stderr: 'Invalid --max-edits value "10001". Expected an integer from 1 to 10000.\n',
       exitCode: 1,
     });
 
-    const extra = await captureCli(["rename-preview", handle, "RenamedService", "extra"]);
+    const extra = await captureCli(["rename-preview", "--json", handle, "RenamedService", "extra"]);
     expect(extra).toMatchObject({ stdout: "", exitCode: 2 });
-    expect(extra.stderr).toContain("Usage: codegraph rename-preview <symbol-handle> <new-name>");
+    expect(extra.stderr).toContain("Usage: codegraph rename-preview <symbol-target> <new-name>");
   });
 
   it("registers command help and renders explicit read-only pretty output", async () => {
-    const help = await captureCli(["rename-preview", "--help"]);
+    const help = await captureCli(["rename-preview", "--json", "--help"]);
     expect(help).toMatchObject({ stderr: "", exitCode: undefined });
     expect(help.stdout).toContain("--max-edits N");
     expect(help.stdout).toContain("no apply command exists");
@@ -150,7 +163,6 @@ describe("rename preview CLI", () => {
       "--cache",
       "off",
       "--include-filenames",
-      "--pretty",
     ]);
     expect(pretty).toMatchObject({ stderr: "", exitCode: undefined });
     expect(pretty.stdout).toContain("Safe: yes");

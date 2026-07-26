@@ -80,17 +80,7 @@ describe("type hierarchy CLI", () => {
 
   it("renders concise pretty hierarchy and implementation output", async () => {
     const specialized = await symbolHandle("Specialized");
-    const supertypes = await captureCli([
-      "supertypes",
-      specialized,
-      "--root",
-      root,
-      "--cache",
-      "off",
-      "--depth",
-      "3",
-      "--pretty",
-    ]);
+    const supertypes = await captureCli(["supertypes", specialized, "--root", root, "--cache", "off", "--depth", "3"]);
     expect(supertypes).toMatchObject({ stderr: "", exitCode: undefined });
     expect(supertypes.stdout).toContain("Target: Specialized [class] types.ts:4:");
     expect(supertypes.stdout).toContain("Supertypes: 3");
@@ -98,15 +88,7 @@ describe("type hierarchy CLI", () => {
     expect(supertypes.stdout).not.toContain('"schemaVersion"');
 
     const service = await symbolHandle("Service");
-    const implementations = await captureCli([
-      "implementations",
-      service,
-      "--root",
-      root,
-      "--cache",
-      "off",
-      "--pretty",
-    ]);
+    const implementations = await captureCli(["implementations", service, "--root", root, "--cache", "off"]);
     expect(implementations).toMatchObject({ stderr: "", exitCode: undefined });
     expect(implementations.stdout).toContain("Implementations: 2");
     expect(implementations.stdout).toContain("Worker [class] types.ts:3:");
@@ -114,36 +96,42 @@ describe("type hierarchy CLI", () => {
   });
 
   it("registers command-specific help and option schemas", async () => {
-    const help = await captureCli(["subtypes", "--help"]);
+    const help = await captureCli(["subtypes", "--json", "--help"]);
     expect(help).toMatchObject({ stderr: "", exitCode: undefined });
     expect(help.stdout).toContain(
-      "Usage: codegraph subtypes <symbol-handle> [--root <path>] [--depth <1-10>] [--limit <0-500>]",
+      "Usage: codegraph subtypes <symbol-target> [--root <path>] [--depth <1-10>] [--limit <0-500>]",
     );
 
-    const unsupportedDepth = await captureCli(["implementations", "symbol:types.ts:Service:1:18", "--depth", "2"]);
+    const unsupportedDepth = await captureCli([
+      "implementations",
+      "--json",
+      "symbol:types.ts:Service:1:18",
+      "--depth",
+      "2",
+    ]);
     expect(unsupportedDepth.stdout).toBe("");
     expect(unsupportedDepth.exitCode).toBe(2);
     expect(unsupportedDepth.stderr).toContain("Unknown option for implementations: --depth");
 
-    const extraHandle = await captureCli(["supertypes", "first", "second"]);
+    const extraHandle = await captureCli(["supertypes", "--json", "first", "second"]);
     expect(extraHandle.stdout).toBe("");
     expect(extraHandle.exitCode).toBe(2);
-    expect(extraHandle.stderr).toContain("Usage: codegraph supertypes <symbol-handle>");
+    expect(extraHandle.stderr).toContain("Usage: codegraph supertypes <symbol-target>");
   });
 
   it("validates required handles and public numeric bounds before indexing", async () => {
-    const missing = await captureCli(["supertypes"]);
+    const missing = await captureCli(["supertypes", "--json"]);
     expect(missing.exitCode).toBe(2);
-    expect(missing.stderr).toContain("Usage: codegraph supertypes <symbol-handle>");
+    expect(missing.stderr).toContain("Usage: codegraph supertypes <symbol-target>");
 
-    const highDepth = await captureCli(["supertypes", "cg:symbol:unused", "--depth", "11"]);
+    const highDepth = await captureCli(["supertypes", "--json", "cg:symbol:unused", "--depth", "11"]);
     expect(highDepth).toEqual({
       stdout: "",
       stderr: 'Invalid --depth value "11". Expected an integer from 1 to 10.\n',
       exitCode: 1,
     });
 
-    const highLimit = await captureCli(["implementations", "cg:symbol:unused", "--limit", "501"]);
+    const highLimit = await captureCli(["implementations", "--json", "cg:symbol:unused", "--limit", "501"]);
     expect(highLimit).toEqual({
       stdout: "",
       stderr: 'Invalid --limit value "501". Expected an integer from 0 to 500.\n',
@@ -153,12 +141,20 @@ describe("type hierarchy CLI", () => {
 
   it("returns actionable errors for invalid type and unsupported member targets", async () => {
     const helper = await symbolHandle("helper");
-    const invalidType = await captureCli(["supertypes", helper, "--root", root, "--cache", "off"]);
+    const invalidType = await captureCli(["supertypes", "--json", helper, "--root", root, "--cache", "off"]);
     expect(invalidType).toMatchObject({ stdout: "", exitCode: 1 });
     expect(invalidType.stderr).toContain("Type hierarchy requires a class, interface, or type symbol.");
 
     const unrelatedRun = await symbolHandle("run", 5);
-    const unsupportedMember = await captureCli(["implementations", unrelatedRun, "--root", root, "--cache", "off"]);
+    const unsupportedMember = await captureCli([
+      "implementations",
+      "--json",
+      unrelatedRun,
+      "--root",
+      root,
+      "--cache",
+      "off",
+    ]);
     expect(unsupportedMember).toMatchObject({ stdout: "", exitCode: 1 });
     expect(unsupportedMember.stderr).toContain(
       "Member implementation lookup requires a proven interface, trait, or abstract override relationship.",

@@ -7,7 +7,7 @@ import {
 } from "../indexer/type-hierarchy.js";
 import { normalizeAgentFilePath } from "./normalize.js";
 import type { SemanticLocation, SemanticProvenance, SemanticResponseEnvelope, SemanticSymbol } from "./semantic.js";
-import { resolveSemanticSymbol, semanticSymbolFromDef } from "./semanticSymbols.js";
+import { requireSemanticSymbol, semanticSymbolFromDef } from "./semanticSymbols.js";
 import {
   createAgentSession,
   type AgentFreshnessResult,
@@ -81,7 +81,7 @@ export async function findImplementationsWithSession(
 ): Promise<ImplementationsResponse> {
   const freshness = await checkFreshness(session);
   const snapshot = await session.loadProject();
-  const resolved = requireSemanticTarget(snapshot, request.handle);
+  const resolved = requireSemanticSymbol(snapshot, request.handle);
   const result = queryImplementations(snapshot.index, snapshot.symbolGraph, resolved.id, {
     ...(request.limit !== undefined ? { limit: request.limit } : {}),
   });
@@ -120,7 +120,7 @@ async function runTypeHierarchy(
 ): Promise<TypeHierarchyResponse> {
   const freshness = await checkFreshness(session);
   const snapshot = await session.loadProject();
-  const resolved = requireSemanticTarget(snapshot, request.handle);
+  const resolved = requireSemanticSymbol(snapshot, request.handle);
   const result = findTypeHierarchy(snapshot.symbolGraph, resolved.id, direction, {
     ...(request.depth !== undefined ? { depth: request.depth } : {}),
     ...(request.limit !== undefined ? { limit: request.limit } : {}),
@@ -161,12 +161,6 @@ function createSession(request: TypeHierarchyRequest): AgentSession {
     root: request.root,
     ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
   });
-}
-
-function requireSemanticTarget(snapshot: AgentProjectSnapshot, handle: string) {
-  const resolved = resolveSemanticSymbol(snapshot, handle);
-  if (!resolved) throw new Error("Symbol handle is stale or missing. Run workspace symbol lookup to resolve it again.");
-  return resolved;
 }
 
 async function checkFreshness(session: AgentSession): Promise<AgentFreshnessResult> {

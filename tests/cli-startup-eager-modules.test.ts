@@ -142,7 +142,7 @@ describe("CLI startup eager module loading", () => {
     expect(help.modules.some((url) => modulePathEndsWith(url, "/duplicates.js"))).toBe(false);
     expect(help.modules.some((url) => modulePathEndsWith(url, "/projectFiles.js"))).toBe(false);
 
-    const doctor = countDistModulesLoaded(["doctor"]);
+    const doctor = countDistModulesLoaded(["doctor", "--json"]);
     expect(doctor.status).toBe(0);
     expect(doctor.stdout).toContain('"package"');
     expect(doctor.count).toBeLessThan(30);

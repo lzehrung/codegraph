@@ -282,7 +282,7 @@ describe("agent explore", () => {
     expect(blastRadiusFiles).not.toContain("src/auth.ts");
     expect(followUps).toContain("codegraph packet get src/auth.tsx --pretty");
     expect(followUps).not.toContain("codegraph packet get src/auth.ts --pretty");
-    expect(followUps).not.toContain("codegraph refs --file src/auth.ts --line 1 --col 0 --pretty");
+    expect(followUps).not.toContain("codegraph refs src/auth.ts:1:0 --pretty");
   });
 
   it("matches explicit full-path file mentions with trailing question punctuation", async () => {
@@ -569,7 +569,7 @@ describe("agent explore", () => {
   });
 
   it("prints explore-specific help for codegraph explore --help", async () => {
-    const result = await captureCli(["explore", "--help"]);
+    const result = await captureCli(["explore", "--json", "--help"]);
 
     expect(result.exitCode).toBeUndefined();
     expect(result.stderr).toBe("");

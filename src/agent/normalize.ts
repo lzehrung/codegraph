@@ -1,5 +1,6 @@
 import path from "node:path";
 import { normalizePath, toProjectDisplayPath, toProjectRelativePath } from "../util/paths.js";
+import { parseSourceLocationInput } from "../util/sourceLocation.js";
 import { quoteShellArg } from "./shell.js";
 
 export type AgentFileSnapshot = {
@@ -24,10 +25,16 @@ export function createAgentFileLookup(files: readonly string[]): Map<string, str
 
 export function resolveAgentSnapshotFile(snapshot: AgentFileSnapshot, candidate: string): string | null {
   const normalizedFiles = snapshot.fileLookup ?? createAgentFileLookup(snapshot.files);
-  const absoluteCandidate = path.isAbsolute(candidate)
-    ? normalizePath(candidate)
-    : normalizePath(path.resolve(snapshot.root, candidate));
-  return normalizedFiles.get(absoluteCandidate) ?? null;
+  const resolveCandidate = (value: string): string | null => {
+    const absoluteCandidate = path.isAbsolute(value)
+      ? normalizePath(value)
+      : normalizePath(path.resolve(snapshot.root, value));
+    return normalizedFiles.get(absoluteCandidate) ?? null;
+  };
+  const direct = resolveCandidate(candidate);
+  if (direct) return direct;
+  const location = parseSourceLocationInput(candidate);
+  return location.file === candidate ? null : resolveCandidate(location.file);
 }
 
 export function isAgentSqlFile(file: string): boolean {
@@ -51,8 +58,6 @@ export function collectFileFollowUps(file: string): string[] {
 }
 
 export function collectDefinitionFollowUps(file: string, line: number, column: number): string[] {
-  return [
-    `codegraph goto ${quoteShellArg(file)} ${line} ${column}`,
-    `codegraph refs --file ${quoteShellArg(file)} --line ${line} --col ${column} --pretty`,
-  ];
+  const location = `${file}:${line}:${column}`;
+  return [`codegraph goto ${quoteShellArg(location)}`, `codegraph refs ${quoteShellArg(location)} --pretty`];
 }

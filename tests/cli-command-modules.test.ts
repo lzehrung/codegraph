@@ -50,10 +50,13 @@ function createChunkContext(overrides: Partial<ChunkCommandContext>): ChunkComma
   return {
     positionals: [],
     getOpt: () => undefined,
-    hasFlag: () => false,
+    hasFlag: (name) => name === "--json",
     cwd: () => process.cwd(),
     writeJSONLine: () => {
       throw new Error("unexpected json output");
+    },
+    writeStdoutLine: () => {
+      throw new Error("unexpected stdout");
     },
     writeStderrLine: () => {
       throw new Error("unexpected stderr");
@@ -71,7 +74,7 @@ function createAgentCommandContext(overrides: Partial<CliAgentCommandContext>): 
     positionals: [],
     root,
     getOpt: () => undefined,
-    hasFlag: () => false,
+    hasFlag: (name) => name === "--json",
     writeJSONLine: () => {
       throw new Error("unexpected json output");
     },
@@ -95,7 +98,7 @@ function createNavigationContext(overrides: Partial<NavigationCommandContext>): 
     discoveryOptions: {},
     positionals: [],
     getOpt: () => undefined,
-    hasFlag: () => false,
+    hasFlag: (name) => name === "--json",
     nativeMode: "auto",
     workerOpts: {},
     progressHandler: undefined,
@@ -126,7 +129,7 @@ function createInspectContext(overrides: Partial<InspectCommandContext>): Inspec
     workerOpts: {},
     progressHandler: undefined,
     getOpt: (name) => (name === "--cache" ? "off" : undefined),
-    hasFlag: () => false,
+    hasFlag: (name) => name === "--json",
     resolveFilesFromRoots: async () => [],
     writeJSONLine: () => undefined,
     writeStdoutLine: () => undefined,
@@ -156,7 +159,7 @@ function createGraphContext(overrides: Partial<GraphCommandContext>): GraphComma
     reportFile: undefined,
     showProgress: false,
     getOpt: () => undefined,
-    hasFlag: () => false,
+    hasFlag: (name) => name === "--json",
     cwd: () => projectRoot,
     resolveFiles: async () => [],
     resolveChangedFilesWithDeletes: async () => null,
@@ -227,7 +230,7 @@ function createImpactContext(overrides: Partial<ImpactCommandContext>): ImpactCo
     projectRootFs: projectRoot,
     discoveryOptions: {},
     getOpt: (name) => (name === "--provider" ? "raw" : undefined),
-    hasFlag: () => false,
+    hasFlag: (name) => name === "--json",
     parsedOptions: new Map(),
     nativeMode: "auto",
     workerOpts: {},
@@ -339,7 +342,7 @@ describe("CLI command modules", () => {
     }
   });
 
-  test("top-level help scopes output options to analysis commands", async () => {
+  test("top-level help documents human defaults and JSON opt-in", async () => {
     const result = await captureCli(["--help"]);
 
     expect(result.exitCode).toBeUndefined();
@@ -353,15 +356,11 @@ describe("CLI command modules", () => {
     expect(examplesStart).toBeGreaterThan(outputSectionStart);
 
     const outputSection = result.stdout.slice(outputSectionStart, examplesStart);
+    expect(outputSection).toContain("--pretty");
+    expect(outputSection).toContain("Human-readable output (default)");
     expect(outputSection).toContain("--json");
-    expect(outputSection).toContain("Output analysis commands as JSON");
-    expect(outputSection).not.toContain("Output as JSON (default)");
-
-    const installerLines = result.stdout
-      .split("\n")
-      .filter((line) => /\bcodegraph (?:install|uninstall)\b|\b(?:install|uninstall)\s{2,}/.test(line));
-    expect(installerLines.length).toBeGreaterThan(0);
-    expect(installerLines.join("\n")).not.toContain("--json");
+    expect(outputSection).toContain("Structured JSON output for automation");
+    expect(outputSection).not.toContain("JSON (default)");
   });
 
   test("search command prints usage before running without a query", async () => {
@@ -395,28 +394,28 @@ describe("CLI command modules", () => {
     await expect(
       handlePacketCommand(
         createAgentCommandContext({
-          positionals: ["show"],
+          positionals: ["show", "target"],
           writeStderrLine: (message) => stderr.push(message),
         }),
       ),
     ).rejects.toThrow("agent command exit 2");
 
-    expect(stderr.join("\n")).toContain("Usage: codegraph packet get <target>");
+    expect(stderr.join("\n")).toContain("Usage: codegraph packet [get] <target>");
   });
 
-  test("goto command validates positional shape before indexing", async () => {
+  test("goto command validates a missing target before indexing", async () => {
     const stderr: string[] = [];
 
     await expect(
       handleGotoCommand(
         createNavigationContext({
-          positionals: ["src/index.ts"],
+          positionals: [],
           writeStderrLine: (message) => stderr.push(message),
         }),
       ),
     ).rejects.toThrow("navigation exit 2");
 
-    expect(stderr).toEqual(["Usage: goto <file> <line> <column>"]);
+    expect(stderr).toEqual(["Usage: goto <file>[:line[:column]] [line] [column]"]);
   });
 
   test("navigation commands forward --cache-verify to incremental index builds", async () => {
@@ -434,7 +433,7 @@ describe("CLI command modules", () => {
         createNavigationContext({
           projectRootFs: root,
           positionals: [path.join(root, "main.ts"), "1", "1"],
-          hasFlag: (name) => name === "--cache-verify",
+          hasFlag: (name) => name === "--json" || name === "--cache-verify",
           writeJSONLine: () => undefined,
         }),
       );
@@ -582,7 +581,7 @@ describe("CLI command modules", () => {
       {
         args: ["packet", "--help"],
         heading: "codegraph packet",
-        usage: "Usage: codegraph packet get <target>",
+        usage: "Usage: codegraph packet [get] <target>",
       },
       {
         args: ["explain", "--help"],
@@ -594,9 +593,9 @@ describe("CLI command modules", () => {
         heading: "codegraph file",
         usage: "Usage: codegraph file <path>",
       },
-      { args: ["artifact", "--help"], heading: "codegraph artifact", usage: "Usage: codegraph artifact build" },
+      { args: ["artifact", "--help"], heading: "codegraph artifact", usage: "Usage: codegraph artifact [build]" },
       { args: ["drift", "--help"], heading: "codegraph drift", usage: "Usage: codegraph drift [roots...]" },
-      { args: ["mcp", "--help"], heading: "codegraph mcp", usage: "Usage: codegraph mcp serve" },
+      { args: ["mcp", "--help"], heading: "codegraph mcp", usage: "Usage: codegraph mcp [serve]" },
     ];
 
     for (const entry of cases) {
@@ -611,7 +610,7 @@ describe("CLI command modules", () => {
   });
 
   test("file help documents live-view bounds and opt-in context", async () => {
-    const result = await captureCli(["file", "--help"]);
+    const result = await captureCli(["file", "--json", "--help"]);
 
     expect(result.exitCode).toBeUndefined();
     expect(result.stderr).toBe("");
@@ -622,7 +621,7 @@ describe("CLI command modules", () => {
   });
 
   test("documents drift-specific flags and head semantics in drift help", async () => {
-    const result = await captureCli(["drift", "--help"]);
+    const result = await captureCli(["drift", "--json", "--help"]);
 
     expect(result.stdout).toContain("--limit");
     expect(result.stdout).toContain("--hotspot-jump-threshold");
@@ -658,13 +657,23 @@ describe("CLI command modules", () => {
   });
 
   test("runs doctor command in process with captured JSON output", async () => {
-    const result = await captureCli(["doctor"]);
+    const result = await captureCli(["doctor", "--json"]);
 
     expect(result.exitCode).toBeUndefined();
     expect(result.stderr).toBe("");
     const report = readJsonRecord(JSON.parse(result.stdout));
     expect(report.package).toMatchObject({ name: "@lzehrung/codegraph" });
     expect(report.native).toBeTypeOf("object");
+  });
+
+  test("defaults command output to pretty and gives --json precedence", async () => {
+    const pretty = await captureCli(["doctor"]);
+    const json = await captureCli(["doctor", "--pretty", "--json"]);
+
+    expect(pretty).toMatchObject({ stderr: "", exitCode: undefined });
+    expect(pretty.stdout).toContain("Package:\n  Name: @lzehrung/codegraph");
+    expect(pretty.stdout).not.toContain('"package"');
+    expect(readJsonRecord(JSON.parse(json.stdout)).package).toMatchObject({ name: "@lzehrung/codegraph" });
   });
 
   test("captures CLI usage exits in process", async () => {
@@ -717,7 +726,7 @@ describe("CLI command modules", () => {
     const expectedUsage =
       "Usage: codegraph file <path> [--root <path>] [--offset <line>] [--limit <lines>] [--max-bytes <bytes>] [--include-graph-context] [--allow-sensitive] [--json | --pretty]";
     const helpUsage = FILE_HELP_TEXT.split("\n").find((line) => line.startsWith("Usage: "));
-    const result = await captureCli(["file", "src/first.ts", "src/second.ts"]);
+    const result = await captureCli(["file", "--json", "src/first.ts", "src/second.ts"]);
 
     expect(helpUsage).toBe(expectedUsage);
     expect(result.exitCode).toBe(2);
@@ -733,7 +742,7 @@ describe("CLI command modules", () => {
       },
       {
         args: ["graph-delta", "stray-position"],
-        expected: "Unexpected positional argument for graph-delta: stray-position",
+        expected: 'Invalid graph-delta project root "stray-position"',
       },
     ];
 
@@ -769,13 +778,13 @@ describe("CLI command modules", () => {
 
     try {
       await Promise.all([
-        runCli(["graph"], {
+        runCli(["graph", "--json", "--output", "codegraph.json"], {
           cwd: () => firstRoot,
           stdout: () => {
             throw new Error("unexpected first stdout");
           },
         }),
-        runCli(["graph"], {
+        runCli(["graph", "--json", "--output", "codegraph.json"], {
           cwd: () => secondRoot,
           stdout: () => {
             throw new Error("unexpected second stdout");
@@ -894,18 +903,23 @@ describe("CLI command modules", () => {
     const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-sql-module-"));
     const dbPath = path.join(tempDir, "graph.sqlite");
     await fsp.writeFile(path.join(tempDir, "main.ts"), "export function helper() { return 1; }\n", "utf8");
-    await captureCli(["graph", "--root", tempDir, "--sqlite", dbPath]);
+    await captureCli(["graph", "--json", "--root", tempDir, "--sqlite", dbPath]);
     const jsonLines: unknown[] = [];
 
     try {
       await handleSqlCommand({
+        positionals: [],
         getOpt: (name) => {
           if (name === "--db") return dbPath;
           if (name === "--query") return "SELECT name FROM symbols WHERE kind = 'function';";
           return undefined;
         },
+        hasFlag: (name) => name === "--json",
         cwd: () => process.cwd(),
         writeJSONLine: (value) => jsonLines.push(value),
+        writeStdoutLine: () => {
+          throw new Error("unexpected stdout");
+        },
         writeStderrLine: () => {
           throw new Error("unexpected stderr");
         },
@@ -927,10 +941,15 @@ describe("CLI command modules", () => {
 
     await expect(
       handleSqlCommand({
+        positionals: [],
         getOpt: () => undefined,
+        hasFlag: () => false,
         cwd: () => process.cwd(),
         writeJSONLine: () => {
           throw new Error("unexpected json output");
+        },
+        writeStdoutLine: () => {
+          throw new Error("unexpected stdout");
         },
         writeStderrLine: (message) => stderrLines.push(message),
         exit: (code) => {
@@ -939,25 +958,32 @@ describe("CLI command modules", () => {
       }),
     ).rejects.toThrow("sql exit 1");
 
-    expect(stderrLines).toEqual(['Usage: sql --db <sqlite path> --query "SELECT ..."']);
+    expect(stderrLines).toEqual([
+      'Usage: sql <sqlite-path> "SELECT ..." OR sql --db <sqlite-path> --query "SELECT ..."',
+    ]);
   });
 
   test("resolves relative SQL database paths against the injected runtime cwd", async () => {
     const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-sql-relative-"));
     const dbPath = path.join(tempDir, "graph.sqlite");
     await fsp.writeFile(path.join(tempDir, "main.ts"), "export const answer = 42;\n", "utf8");
-    await captureCli(["graph", "--root", tempDir, "--sqlite", dbPath]);
+    await captureCli(["graph", "--json", "--root", tempDir, "--sqlite", dbPath]);
     const jsonLines: unknown[] = [];
 
     try {
       await handleSqlCommand({
+        positionals: [],
         getOpt: (name) => {
           if (name === "--sqlite") return "graph.sqlite";
           if (name === "--query") return "SELECT path FROM files ORDER BY path;";
           return undefined;
         },
+        hasFlag: (name) => name === "--json",
         cwd: () => tempDir,
         writeJSONLine: (value) => jsonLines.push(value),
+        writeStdoutLine: () => {
+          throw new Error("unexpected stdout");
+        },
         writeStderrLine: () => {
           throw new Error("unexpected stderr");
         },
@@ -989,7 +1015,7 @@ describe("CLI command modules", () => {
           if (name === "--output") return outputPath;
           return undefined;
         },
-        hasFlag: () => false,
+        hasFlag: (name) => name === "--json",
         cwd: () => process.cwd(),
         nativeMode: "auto",
         workerOpts: {},
@@ -999,6 +1025,9 @@ describe("CLI command modules", () => {
         changedSince: undefined,
         writeJSONLine: () => {
           throw new Error("unexpected json stdout");
+        },
+        writeStdoutLine: () => {
+          throw new Error("unexpected stdout");
         },
       });
 
@@ -1176,7 +1205,7 @@ describe("CLI command modules", () => {
       await handleImpactCommand(
         createImpactContext({
           ...baseContext,
-          hasFlag: (name) => name === "--cache-verify",
+          hasFlag: (name) => name === "--json" || name === "--cache-verify",
         }),
       );
 
@@ -1200,9 +1229,12 @@ describe("CLI command modules", () => {
       await handleChunkCommand({
         positionals: [filePath],
         getOpt: () => undefined,
-        hasFlag: () => false,
+        hasFlag: (name) => name === "--json",
         cwd: () => process.cwd(),
         writeJSONLine: (value) => jsonLines.push(value),
+        writeStdoutLine: () => {
+          throw new Error("unexpected stdout");
+        },
         writeStderrLine: (message) => stderrLines.push(message),
         exit: (code) => {
           throw new Error(`unexpected exit ${code}`);
@@ -1225,10 +1257,16 @@ describe("CLI command modules", () => {
     await fsp.writeFile(filePath, "export function beta() {\n  return 2;\n}\n", "utf8");
 
     try {
-      const result = await captureCli(["chunk", "sample.ts", "--min-tokens", "1", "--max-tokens", "50"], {
+      const pretty = await captureCli(["chunk", "sample.ts", "--min-tokens", "1", "--max-tokens", "50"], {
+        cwd: tempDir,
+      });
+      const result = await captureCli(["chunk", "--json", "sample.ts", "--min-tokens", "1", "--max-tokens", "50"], {
         cwd: tempDir,
       });
 
+      expect(pretty).toMatchObject({ stderr: "", exitCode: undefined });
+      expect(pretty.stdout).toContain("- Id:");
+      expect(pretty.stdout).toContain(`  File path: ${filePath}`);
       expect(result.exitCode).toBeUndefined();
       expect(result.stderr).toBe("");
       const chunks = JSON.parse(result.stdout) as Array<Record<string, unknown>>;
@@ -1295,7 +1333,7 @@ describe("CLI command modules", () => {
         createChunkContext({
           positionals: ["sample.json"],
           cwd: () => tempDir,
-          hasFlag: (name) => name === "--text",
+          hasFlag: (name) => name === "--json" || name === "--text",
           writeJSONLine: (value) => jsonLines.push(value),
         }),
       );
@@ -1338,6 +1376,7 @@ describe("CLI command modules", () => {
     try {
       const jsonResult = await captureCli([
         "file",
+        "--json",
         "util.ts",
         "--root",
         tempDir,
@@ -1374,7 +1413,6 @@ describe("CLI command modules", () => {
         "1",
         "--max-bytes",
         "100",
-        "--pretty",
       ]);
       expect(prettyResult).toEqual({
         stdout: [
@@ -1413,7 +1451,7 @@ describe("CLI command modules", () => {
     { option: "--max-bytes", maximum: MAX_FILE_VIEW_BYTES },
   ])("rejects $option values above the file view bound", async ({ option, maximum }) => {
     const excessiveValue = maximum + 1;
-    const result = await captureCli(["file", "util.ts", option, String(excessiveValue)]);
+    const result = await captureCli(["file", "--json", "util.ts", option, String(excessiveValue)]);
 
     expect(result).toEqual({
       stdout: "",
@@ -1501,6 +1539,7 @@ describe("CLI command modules", () => {
       ]);
       const noFail = await captureCli([
         "drift",
+        "--json",
         "src",
         "--root",
         tempDir,
@@ -1513,6 +1552,7 @@ describe("CLI command modules", () => {
       ]);
       const fail = await captureCli([
         "drift",
+        "--json",
         "src",
         "--root",
         tempDir,
@@ -1827,7 +1867,7 @@ describe("CLI command modules", () => {
       await handleSkillCommand({
         positionals: [],
         getOpt: (name) => (name === "--target" ? targetDir : undefined),
-        hasFlag: () => false,
+        hasFlag: (name) => name === "--json",
         writeJSONLine: (value) => jsonLines.push(value),
         writeStdoutLine: () => {
           throw new Error("unexpected stdout");

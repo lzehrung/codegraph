@@ -31,12 +31,12 @@ For PR, worktree, or sweeping review tasks, prefer `review` first; use `impact` 
 
 Use `doctor` only when package/runtime state or an existing artifact path is the question.
 Use `explore` when the agent has a broad question and needs search anchors, packets, paths, blast radius, candidate tests, and follow-ups in one bounded response. Use `search` when it only needs anchors, `explain` when it already knows a file/symbol/SQL object/handle, and `inspect` for a human-readable architecture summary.
-Use `artifact build` for durable handoff directories and `mcp serve` when repeated follow-up calls should share one warm repo session.
+Use `artifact` for durable handoff directories and `mcp` when repeated follow-up calls should share one warm repo session; `build` and `serve` remain accepted but are optional. Search locations can be pasted directly into `goto`, `refs`, `file`, `packet`, or `explain`, and semantic commands accept unique exact names when an agent does not yet have a portable handle.
 
 Choose output by the next consumer:
 
-- Use `--pretty` or `--summary` when the next consumer is a person or language model reading the result.
-- Use `--json`, MCP tools, or library APIs when the next step needs exact fields, ranges, schema fields, or filtering.
+- The CLI defaults to human-readable output; `--pretty` remains an explicit equivalent and `--summary` selects compact report output where supported.
+- Use `--json`, MCP tools, or library APIs when the next step needs exact fields, ranges, schema fields, or filtering. If `--json` and `--pretty` are both present, `--json` wins.
 - Do not parse pretty text to recover fields already present in structured output.
 
 For durable repo-local scan scope, add `codegraph.config.json` at the project root. `discovery.ignoreGlobs` keeps large fixture, generated, or vendored folders out of agent search, MCP sessions, graphing, unresolved-import checks, impact, and review unless a command explicitly changes scan scope.
@@ -57,7 +57,7 @@ Use `--no-source` when the caller only needs anchors, paths, and follow-up comma
 
 ## Live file reads
 
-Use `file` when the target path is known and the agent needs current source rather than an indexed explanation packet. Its JSON default is best for tool chaining; `--pretty` keeps the exact `number<TAB>line` source format while adding a readable header and next-page command.
+Use `file` when the target path is known and the agent needs current source rather than an indexed explanation packet. Its default keeps the exact `number<TAB>line` source format with a readable header and next-page command; use `--json` for tool chaining.
 
 ```bash
 codegraph file src/auth.ts --offset 1 --limit 200 --pretty
@@ -90,7 +90,7 @@ codegraph packet get <file-from-orient> --max-symbols 25 --json
 ```
 
 Orientation returns summary bullets, ranked `focus` targets, a bounded tree, budgeted health counts, omitted counts, and recommended next commands.
-Use `orient --pretty` or MCP `orient` for compact model-readable triage and `orient --json` when follow-up tools need exact focus reasons, limits, or omission counts.
+Bare `orient`, explicit `orient --pretty`, or MCP `orient` provide compact model-readable triage; use `orient --json` when follow-up tools need exact focus reasons, limits, or omission counts.
 Small orientation packets default to cheap health analysis; use larger budgets only when cycle, unresolved-import, or duplicate counts matter.
 
 ## Workspace-symbol identities

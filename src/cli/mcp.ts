@@ -12,7 +12,7 @@ export type McpServeCommandContext = CliPositionalsContext &
   };
 
 export async function handleMcpServeCommand(context: McpServeCommandContext): Promise<void> {
-  const mcpCommand = context.positionals[0];
+  const mcpCommand = context.positionals[0] ?? "serve";
   if (mcpCommand !== "serve") {
     context.writeStderrLine(MCP_HELP_TEXT.trimEnd());
     context.exit(2);

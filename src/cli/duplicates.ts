@@ -408,16 +408,13 @@ export async function handleDuplicatesCommand(context: DuplicatesCommandContext)
     const prettyOutput = context.hasFlag("--pretty");
     const rawPairsOutput = context.hasFlag("--raw-pairs");
     const profile = parseProfileOption(context.getOpt("--profile"));
-    if (jsonOutput && prettyOutput) {
-      throw new Error("Invalid flag combination: choose either --json or --pretty.");
-    }
-    if (prettyOutput && rawPairsOutput) {
+    if (prettyOutput && !jsonOutput && rawPairsOutput) {
       throw new Error("Invalid flag combination: --raw-pairs is only supported with similarity-ranked JSON output.");
     }
     if (profile === "cleanup" && rawPairsOutput) {
       throw new Error("Invalid flag combination: --profile cleanup is not supported with --raw-pairs.");
     }
-    const renderPretty = prettyOutput || (!jsonOutput && !rawPairsOutput);
+    const renderPretty = !jsonOutput && !rawPairsOutput;
 
     let defaultSort: DuplicateSortMode = "similarity";
     if (renderPretty) {

@@ -82,28 +82,21 @@ export async function handleDriftCommand(context: DriftCommandContext): Promise<
     context.exit(2);
   }
 
-  const base = context.getOpt("--base");
+  let base = context.getOpt("--base");
   const baseArtifact = context.getOpt("--base-artifact");
+  if (!base && !baseArtifact) base = "HEAD";
   if (base && baseArtifact) {
     context.writeStderrLine("Provide either --base or --base-artifact, but not both.");
     context.exit(2);
   }
-  if (!base && !baseArtifact) {
-    context.writeStderrLine(
-      "Usage: codegraph drift [roots...] [--root <path>] (--base <ref> | --base-artifact <dir>) [--head <ref>] [--json | --pretty | --compact-json]",
-    );
-    context.writeStderrLine("Provide either --base or --base-artifact.");
-    context.exit(2);
-  }
-
   const json = context.hasFlag("--json");
   const compactJson = context.hasFlag("--compact-json");
-  const pretty = context.hasFlag("--pretty");
-  const prettyOutput = pretty && !json && !compactJson;
+  const prettyOutput = !json && !compactJson;
   const effectiveGraphEdges = graphEdges ?? (prettyOutput ? "summary" : undefined);
   const effectivePublicApi = publicApi ?? (prettyOutput || compactJson ? "removals" : undefined);
 
-  const head = context.getOpt("--head");
+  let head = context.getOpt("--head");
+  if (!head && !baseArtifact) head = "WORKTREE";
   let report: Awaited<ReturnType<typeof analyzeArchitectureDrift>>;
   try {
     report = await analyzeArchitectureDrift(context.projectRootFs, {

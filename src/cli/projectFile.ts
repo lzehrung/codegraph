@@ -1,4 +1,5 @@
 import { resolveFilePathWithinRoot, type FilePathWithinRootResult } from "../util/paths.js";
+import { parseSourceLocationInput } from "../util/sourceLocation.js";
 
 export type CliProjectFileInput = FilePathWithinRootResult;
 
@@ -10,7 +11,11 @@ export type CliProjectFileErrorContext = {
 };
 
 export function resolveCliProjectFile(projectRoot: string, fileArg: string, label: string): CliProjectFileInput {
-  return resolveFilePathWithinRoot(projectRoot, fileArg, label);
+  const direct = resolveFilePathWithinRoot(projectRoot, fileArg, label);
+  if (direct.status === "ok") return direct;
+  const location = parseSourceLocationInput(fileArg);
+  if (location.file === fileArg) return direct;
+  return resolveFilePathWithinRoot(projectRoot, location.file, label);
 }
 
 export function writeCliProjectFileError(

@@ -95,9 +95,9 @@ describe("impact CLI output", () => {
   }
 
   it(
-    "prints JSON by default",
+    "prints JSON when requested",
     async () => {
-      const stdout = await runImpactCliSubprocess(["impact", sampleRoot, "--provider", "raw"]);
+      const stdout = await runImpactCliSubprocess(["impact", sampleRoot, "--provider", "raw", "--json"]);
       const report = JSON.parse(stdout);
       expect(report.analysis?.label).toBeTruthy();
       expect(report.changedFiles).toHaveLength(1);
@@ -135,7 +135,7 @@ describe("impact CLI output", () => {
     async () => {
       const { root, diffText } = await createCallCompatibilityFixture();
       try {
-        const stdout = await runImpactCli(["impact", "--root", root, "--provider", "raw"], {
+        const stdout = await runImpactCli(["impact", "--root", root, "--provider", "raw", "--json"], {
           cwd: root,
           stdin: diffText,
         });
@@ -285,7 +285,7 @@ export function summarizeSourceOrders(rows: Array<{ amount: number; tax: number 
           "",
         ].join("\n");
 
-        const jsonStdout = await runImpactCli(["impact", "--root", root, "--provider", "raw"], {
+        const jsonStdout = await runImpactCli(["impact", "--root", root, "--provider", "raw", "--json"], {
           cwd: root,
           stdin: diffText,
         });

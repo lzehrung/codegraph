@@ -8,24 +8,31 @@ import {
 } from "../agent/fileView.js";
 import type { CliAgentCommandContext } from "./context.js";
 import { FILE_HELP_TEXT } from "./help.js";
+import { parseSourceLocationInput } from "../util/sourceLocation.js";
 import { parseBoundedIntegerOption, parsePositiveIntegerOption } from "./options.js";
 
 export type FileCommandContext = CliAgentCommandContext;
 
 export async function handleFileCommand(context: FileCommandContext): Promise<void> {
-  const file = context.positionals[0];
-  if (file === undefined) {
+  const fileInput = context.positionals[0];
+  if (fileInput === undefined) {
     context.writeStderrLine(FILE_HELP_TEXT.trimEnd());
     context.exit(2);
   }
 
   try {
+    const location = parseSourceLocationInput(fileInput);
+    const offset = context.getOpt("--offset");
+    let resolvedOffset: number | undefined;
+    if (offset !== undefined) {
+      resolvedOffset = parsePositiveIntegerOption(offset, "--offset", 1);
+    } else if (location.line !== undefined) {
+      resolvedOffset = parsePositiveIntegerOption(String(location.line), "--offset", 1);
+    }
     const response = await getCodegraphFileView({
       root: context.root,
-      file,
-      ...(context.getOpt("--offset") !== undefined
-        ? { offset: parsePositiveIntegerOption(context.getOpt("--offset"), "--offset", 1) }
-        : {}),
+      file: location.file,
+      ...(resolvedOffset !== undefined ? { offset: resolvedOffset } : {}),
       ...(context.getOpt("--limit") !== undefined
         ? {
             limit: parseBoundedIntegerOption(
@@ -53,7 +60,7 @@ export async function handleFileCommand(context: FileCommandContext): Promise<vo
       ...(context.buildOptions ? { buildOptions: context.buildOptions } : {}),
     });
 
-    if (context.hasFlag("--json") || !context.hasFlag("--pretty")) {
+    if (context.hasFlag("--json")) {
       context.writeJSONLine(response);
     } else {
       context.writeStdoutLine(formatAgentFileViewResponse(response));
