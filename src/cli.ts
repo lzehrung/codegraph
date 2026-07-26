@@ -2,12 +2,10 @@
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
-import { collectGraph } from "./graph-builder.js";
 import { isPathUnderIncludeRoots } from "./util/includeRoots.js";
 import type { BuildOptions } from "./indexer/types.js";
-import { type GraphBuildOptions } from "./graphs/types.js";
-import { type NativeRuntimeMode } from "./native/treeSitterNative.js";
-import { handleChunkCommand } from "./cli/chunk.js";
+import type { GraphBuildOptions } from "./graphs/types.js";
+import type { NativeRuntimeMode } from "./native/treeSitterNative.js";
 import {
   createCliProgressHandler,
   diagnoseCliDiscoveryGlobs,
@@ -27,36 +25,10 @@ import {
   type CliRuntime,
   type CommandReport,
 } from "./cli/context.js";
-import { buildDoctorReport } from "./cli/doctor.js";
-import { handleDriftCommand } from "./cli/drift.js";
-import { handleDuplicatesCommand } from "./cli/duplicates.js";
-import { handleExplainCommand } from "./cli/explain.js";
-import { handleExploreCommand } from "./cli/explore.js";
-import { handleFileCommand } from "./cli/file.js";
-import { handleGraphDeltaCommand } from "./cli/graphDelta.js";
-import { handleGraphQueryCommand } from "./cli/graphQueries.js";
-import { handleGrepCommand } from "./cli/grep.js";
 import { CLI_HELP_TEXT, helpTextForCommand, isKnownCliCommand } from "./cli/help.js";
-import { handleImpactCommand } from "./cli/impact.js";
-import { handleInstallerCommand } from "./cli/install.js";
-import { handleLifecycleCommand } from "./cli/lifecycle.js";
-import { CodegraphLifecycleUserError } from "./lifecycle/manifest.js";
-import { handleIndexCommand } from "./cli/index.js";
-import { handleHotspotsCommand, handleInspectCommand } from "./cli/inspect.js";
-import { handleOrientCommand } from "./cli/orient.js";
-import { handleDumpmodCommand, handleGotoCommand, handleRefsCommand } from "./cli/navigation.js";
 import { parseCacheModeOption, parseOptionalNonNegativeIntegerOption, validateCliArgs } from "./cli/options.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
 import type { CliProgressPolicy } from "./cli/progress.js";
-import { handlePacketCommand } from "./cli/packet.js";
-import { handleReviewCommand } from "./cli/review.js";
-import { handleSearchCommand } from "./cli/search.js";
-import { handleSkillCommand } from "./cli/skill.js";
-import { handleSymbolsCommand } from "./cli/symbols.js";
-import { handleTypeHierarchyCommand } from "./cli/typeHierarchy.js";
-import { handleCallHierarchyCommand } from "./cli/callHierarchy.js";
-import { handleRenamePreviewCommand } from "./cli/renamePreview.js";
-import { handleRefactorPlanCommand } from "./cli/refactorPlan.js";
 import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions } from "./config.js";
 import { listChangedFiles } from "./util/git.js";
 import { DEFAULT_PROJECT_PATTERNS, listProjectFiles, type ProjectFileDiscoveryOptions } from "./util/projectFiles.js";
@@ -313,11 +285,13 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "doctor") {
+    const { buildDoctorReport } = await import("./cli/doctor.js");
     writeJSONLine(buildDoctorReport(parsed.positionals.at(-1)));
     return;
   }
 
   if (cmd === "skill") {
+    const { handleSkillCommand } = await import("./cli/skill.js");
     await handleSkillCommand({
       positionals: parsed.positionals,
       getOpt,
@@ -331,6 +305,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "install" || cmd === "uninstall") {
+    const { handleInstallerCommand } = await import("./cli/install.js");
     await handleInstallerCommand({
       command: cmd,
       positionals: parsed.positionals,
@@ -357,6 +332,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "chunk") {
+    const { handleChunkCommand } = await import("./cli/chunk.js");
     await handleChunkCommand({
       positionals: parsed.positionals,
       getOpt,
@@ -593,6 +569,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
 
   if (isLifecycleCommand(cmd)) {
     try {
+      const { handleLifecycleCommand } = await import("./cli/lifecycle.js");
       await handleLifecycleCommand({
         command: cmd,
         root: projectRootFs,
@@ -602,6 +579,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
         writeStdoutLine,
       });
     } catch (error) {
+      const { CodegraphLifecycleUserError } = await import("./lifecycle/manifest.js");
       if (error instanceof CodegraphLifecycleUserError) {
         writeStderrLine(error.message);
         exitCli(1);
@@ -611,6 +589,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     return;
   }
   if (cmd === "explore") {
+    const { handleExploreCommand } = await import("./cli/explore.js");
     await handleExploreCommand({
       positionals: parsed.positionals,
       root: projectRootFs,
@@ -625,6 +604,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     return;
   }
   if (cmd === "file") {
+    const { handleFileCommand } = await import("./cli/file.js");
     await handleFileCommand({
       positionals: parsed.positionals,
       root: projectRootFs,
@@ -640,6 +620,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "search") {
+    const { handleSearchCommand } = await import("./cli/search.js");
     await handleSearchCommand({
       positionals: parsed.positionals,
       root: projectRootFs,
@@ -655,6 +636,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "symbols") {
+    const { handleSymbolsCommand } = await import("./cli/symbols.js");
     await handleSymbolsCommand({
       positionals: parsed.positionals,
       root: projectRootFs,
@@ -670,6 +652,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "refactor-plan") {
+    const { handleRefactorPlanCommand } = await import("./cli/refactorPlan.js");
     await handleRefactorPlanCommand({
       positionals: parsed.positionals,
       root: projectRootFs,
@@ -685,6 +668,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "rename-preview") {
+    const { handleRenamePreviewCommand } = await import("./cli/renamePreview.js");
     await handleRenamePreviewCommand({
       positionals: parsed.positionals,
       root: projectRootFs,
@@ -700,6 +684,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "callers" || cmd === "callees") {
+    const { handleCallHierarchyCommand } = await import("./cli/callHierarchy.js");
     await handleCallHierarchyCommand(cmd, {
       positionals: parsed.positionals,
       root: projectRootFs,
@@ -715,6 +700,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "supertypes" || cmd === "subtypes" || cmd === "implementations") {
+    const { handleTypeHierarchyCommand } = await import("./cli/typeHierarchy.js");
     await handleTypeHierarchyCommand(cmd, {
       positionals: parsed.positionals,
       root: projectRootFs,
@@ -730,6 +716,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "explain") {
+    const { handleExplainCommand } = await import("./cli/explain.js");
     await handleExplainCommand({
       positionals: parsed.positionals,
       root: projectRootFs,
@@ -745,6 +732,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "orient") {
+    const { handleOrientCommand } = await import("./cli/orient.js");
     await handleOrientCommand({
       positionals: includeRoots,
       root: projectRootFs,
@@ -760,6 +748,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "packet") {
+    const { handlePacketCommand } = await import("./cli/packet.js");
     await handlePacketCommand({
       positionals: parsed.positionals,
       root: projectRootFs,
@@ -811,6 +800,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       );
     }
     const files = await resolveFiles();
+    const { handleGraphDeltaCommand } = await import("./cli/graphDelta.js");
     await handleGraphDeltaCommand({
       projectRootFs,
       files,
@@ -863,6 +853,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "index") {
+    const { handleIndexCommand } = await import("./cli/index.js");
     await handleIndexCommand({
       projectRootFs,
       includeRootsAbs,
@@ -889,6 +880,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
 
   if (cmd === "drift") {
     const driftGraphOptions = hasGraphOverrides || nativeMode !== "auto" ? buildGraphOptions() : undefined;
+    const { handleDriftCommand } = await import("./cli/drift.js");
     await handleDriftCommand({
       projectRootFs,
       positionals: includeRoots,
@@ -912,6 +904,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
 
   if (cmd === "duplicates") {
     const files = await resolveFiles();
+    const { handleDuplicatesCommand } = await import("./cli/duplicates.js");
     await handleDuplicatesCommand({
       projectRootFs,
       files,
@@ -933,6 +926,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "dumpmod") {
+    const { handleDumpmodCommand } = await import("./cli/navigation.js");
     await handleDumpmodCommand({
       projectRootFs,
       discoveryOptions,
@@ -951,6 +945,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "goto") {
+    const { handleGotoCommand } = await import("./cli/navigation.js");
     await handleGotoCommand({
       projectRootFs,
       discoveryOptions,
@@ -969,6 +964,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "refs") {
+    const { handleRefsCommand } = await import("./cli/navigation.js");
     await handleRefsCommand({
       projectRootFs,
       discoveryOptions,
@@ -987,6 +983,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "grep") {
+    const { handleGrepCommand } = await import("./cli/grep.js");
     await handleGrepCommand({
       projectRootFs,
       discoveryOptions,
@@ -1001,6 +998,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "impact") {
+    const { handleImpactCommand } = await import("./cli/impact.js");
     await handleImpactCommand({
       projectRootFs,
       discoveryOptions,
@@ -1030,6 +1028,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   // Review entry point: CLI workflow for review reports.
   if (cmd === "review") {
     const commandReport: CommandReport | undefined = reportEnabled ? { command: "review", timings: {} } : undefined;
+    const { handleReviewCommand } = await import("./cli/review.js");
     await handleReviewCommand({
       projectRootFs,
       discoveryOptions,
@@ -1060,6 +1059,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
 
   if (cmd === "deps" || cmd === "rdeps") {
     const graphOptions = hasGraphOverrides || nativeMode !== "auto" ? buildGraphOptions() : undefined;
+    const { handleGraphQueryCommand } = await import("./cli/graphQueries.js");
     await handleGraphQueryCommand({
       command: cmd,
       positionals: parsed.positionals,
@@ -1080,6 +1080,9 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
 
   if (cmd === "path" || cmd === "cycles" || cmd === "unresolved") {
     const graphOptions = hasGraphOverrides || nativeMode !== "auto" ? buildGraphOptions() : undefined;
+    const { handleGraphQueryCommand } = await import("./cli/graphQueries.js");
+    const collectGraph =
+      cmd === "cycles" ? (await import("./graph-builder.js")).collectGraph : undefined;
     await handleGraphQueryCommand({
       command: cmd,
       positionals: parsed.positionals,
@@ -1095,7 +1098,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
         if (cmd === "cycles") return await resolveFilesFromRoots();
         return await listProjectFilesForScan(projectRootFs);
       },
-      ...(cmd === "cycles" ? { collectGraph } : {}),
+      ...(collectGraph ? { collectGraph } : {}),
       ...(graphOptions ? { graphOptions } : {}),
       indexOptions: buildGraphQueryIndexOptions(graphOptions),
     });
@@ -1103,6 +1106,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "inspect") {
+    const { handleInspectCommand } = await import("./cli/inspect.js");
     await handleInspectCommand({
       projectRootFs,
       includeRootsAbs,
@@ -1122,6 +1126,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "hotspots") {
+    const { handleHotspotsCommand } = await import("./cli/inspect.js");
     await handleHotspotsCommand({
       projectRootFs,
       includeRootsAbs,
@@ -1141,6 +1146,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "apisurface") {
+    const { handleGraphQueryCommand } = await import("./cli/graphQueries.js");
     await handleGraphQueryCommand({
       command: cmd,
       positionals: parsed.positionals,
