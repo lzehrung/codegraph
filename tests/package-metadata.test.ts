@@ -320,8 +320,11 @@ describe("package metadata", () => {
   it("routes prepare through the install-aware prepare script", () => {
     const rootPackage = readJson("package.json");
     const scripts = readStringRecord(rootPackage.scripts);
+    const prepareScript = readText("scripts/prepare-package.mjs");
 
     expect(scripts.prepare).toBe("node ./scripts/prepare-package.mjs");
+    // Published bin is dist/bin/cli.js; prepare must not treat a tsc-only dist/ as ready.
+    expect(prepareScript).toContain('("../dist/bin/cli.js", import.meta.url)');
   });
 
   it("keeps npm test on the fast suite and benchmark coverage opt-in", () => {
