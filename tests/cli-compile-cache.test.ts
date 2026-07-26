@@ -13,6 +13,13 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const bundledCli = path.join(rootDir, "dist", "bin", "cli.js");
 const bootstrapSource = path.join(rootDir, "src", "cliBootstrap.ts");
 
+function envWithoutDisableCompileCache(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const env = { ...process.env, ...overrides };
+  // `spawn` stringifies undefined values; delete so the var is truly absent.
+  delete env.NODE_DISABLE_COMPILE_CACHE;
+  return env;
+}
+
 describe("CLI compile cache", () => {
   it("resolves under the per-user codegraph cache, never project .codegraph dirs", () => {
     const win = resolveCodegraphUserCacheRoot(
@@ -94,7 +101,7 @@ console.log(JSON.stringify({ status: result.status, directory: result.directory 
     try {
       const result = spawnSync(process.execPath, [probe], {
         encoding: "utf8",
-        env: { ...process.env, NODE_COMPILE_CACHE: dir, NODE_DISABLE_COMPILE_CACHE: undefined },
+        env: envWithoutDisableCompileCache({ NODE_COMPILE_CACHE: dir }),
       });
       expect(result.status, result.stderr).toBe(0);
       const payload = JSON.parse(result.stdout.trim());
@@ -118,7 +125,7 @@ console.log(JSON.stringify({ status: result.status, directory: result.directory 
     try {
       const withCache = spawnSync(process.execPath, [bundledCli, "--version"], {
         encoding: "utf8",
-        env: { ...process.env, NODE_COMPILE_CACHE: cacheDir, NODE_DISABLE_COMPILE_CACHE: undefined },
+        env: envWithoutDisableCompileCache({ NODE_COMPILE_CACHE: cacheDir }),
       });
       expect(withCache.status).toBe(0);
       expect(withCache.stdout.trim().length).toBeGreaterThan(0);
@@ -128,7 +135,7 @@ console.log(JSON.stringify({ status: result.status, directory: result.directory 
 
       const afterDelete = spawnSync(process.execPath, [bundledCli, "--version"], {
         encoding: "utf8",
-        env: { ...process.env, NODE_COMPILE_CACHE: cacheDir, NODE_DISABLE_COMPILE_CACHE: undefined },
+        env: envWithoutDisableCompileCache({ NODE_COMPILE_CACHE: cacheDir }),
       });
       expect(afterDelete.status).toBe(0);
       expect(afterDelete.stdout).toBe(withCache.stdout);
