@@ -164,7 +164,7 @@ Acceptance:
       existing reference and navigation suites plus a search-correctness smoke test across both
       the reused and freshly-changed files.
 
-## Priority 1: Make sidecar validation cheap -- PARTIALLY IMPLEMENTED (`<pending commit>`)
+## Priority 1: Make sidecar validation cheap -- PARTIALLY IMPLEMENTED (PR #167)
 
 Shipped one of the three sketched cuts; the other two turned out to be unsafe or unproven as
 written and are corrected below rather than silently dropped.

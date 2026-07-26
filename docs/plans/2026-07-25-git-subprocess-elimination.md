@@ -174,7 +174,7 @@ Acceptance:
       routine untracked file went from ~905ms to ~734ms.
 - [x] A new untracked source file is still indexed on the next run.
 
-## Priority 1: Fix the argv limit and stop swallowing spawn errors -- IMPLEMENTED (`<pending commit>`)
+## Priority 1: Fix the argv limit and stop swallowing spawn errors -- IMPLEMENTED (PR #167)
 
 - [x] Replace the path-argument form at `src/util/git.ts` with a plain `git ls-files -z` (no
       path arguments) and intersect the tracked set against the requested files in memory via

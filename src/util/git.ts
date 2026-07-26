@@ -130,9 +130,12 @@ export async function getGitBlobHashes(
     // whole call with ENAMETOOLONG and silently discarding every git signature for the
     // build. Listing every tracked file and intersecting against the requested set in
     // memory costs a little extra parsing but stays correct at any repo size.
+    // Full-repo NUL listings can exceed Node's default 1 MiB execFile maxBuffer on large
+    // trees; raising it keeps the argv-limit fix from regressing into a silent maxBuffer miss.
     const { stdout: trackedStdout } = await execFileAsync("git", ["ls-files", "-z"], {
       cwd: projectRoot,
       env: process.env,
+      maxBuffer: 64 * 1024 * 1024,
     });
     const trackedRel = trackedStdout
       .toString()

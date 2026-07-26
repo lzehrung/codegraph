@@ -417,6 +417,13 @@ describe("Cache invalidation and strict hashing", () => {
     await fsp.mkdir(path.join(root, subdir), { recursive: true });
     const fileCount = 700;
     const fileNames = Array.from({ length: fileCount }, (_, i) => `${subdir}/f${i}.ts`);
+    // Sanity-check the fixture still exceeds Windows' ~32,767-character argv limit under the
+    // old one-path-per-argv form, so a later shrink of fileCount/subdir cannot silently
+    // stop exercising the bug (CI runs on Linux and would not otherwise notice).
+    const WINDOWS_ARGV_LIMIT = 32_767;
+    const estimatedOldArgvChars =
+      "ls-files".length + 1 + fileNames.reduce((sum, name) => sum + 1 + name.length, 0);
+    expect(estimatedOldArgvChars).toBeGreaterThan(WINDOWS_ARGV_LIMIT);
     await Promise.all(
       fileNames.map((name, i) => fsp.writeFile(path.join(root, name), `export const v${i} = ${i};\n`, "utf8")),
     );
