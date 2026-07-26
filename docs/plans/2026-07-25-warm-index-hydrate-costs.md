@@ -164,33 +164,62 @@ Acceptance:
       existing reference and navigation suites plus a search-correctness smoke test across both
       the reused and freshly-changed files.
 
-## Priority 1: Make sidecar validation cheap and memoized
+## Priority 1: Make sidecar validation cheap -- PARTIALLY IMPLEMENTED (PR #167)
 
-Three independent cuts, each shippable alone.
+Shipped one of the three sketched cuts; the other two turned out to be unsafe or unproven as
+written and are corrected below rather than silently dropped.
 
-- [ ] Remove the re-`stringify` plus SHA-256 self-hash at `project-snapshot.ts:289-301` and
-      `:323`. Replace with a node and edge count check plus the existing
-      `projectSnapshotIdentity` guard. The sidecar is written atomically, so a torn file is not
-      the failure mode this hash defends against.
-- [ ] Remove the `await buildSymbolGraph(index)` rebuild and subsequent node/edge comparison at
-      `project-snapshot.ts:447-464`. `projectSnapshotIdentity` already encodes files signature,
-      graph options, and native fingerprint. Keep the cheap structural checks at `:427-445`,
-      which validate that the sidecar refers only to indexed, in-root files.
-- [ ] Memoize the loaded detailed graph in a module-level Map keyed by
-      (sidecar path, `projectSnapshotIdentity`) so repeat loads in one process are free. This
-      matters most for MCP, where the same session answers many tools.
-- [ ] Add a test that a corrupted or identity-mismatched sidecar is still rejected, so the
-      cheaper validation does not weaken invalidation.
+- [x] Remove the re-`stringify` plus SHA-256 self-hash in `isDetailedSymbolGraphSnapshotPayload`
+      (`project-snapshot.ts`). `graphHash` is still computed and written at snapshot-write
+      time (unaffected -- that cost is folded into the multi-second detailed-graph rebuild it
+      is part of); only the load-time recompute-and-compare is removed. Measured on this
+      repository with a stable native fingerprint (identical cache, patched compiled output
+      for a true A/B, since a source rebuild changes the native fingerprint and invalidates
+      the cache): **216.6ms to 181.4ms median, a 35.2ms cut**, matching the original 36ms
+      estimate almost exactly.
+- [ ] **Not implemented -- corrected from the original plan.** Removing the
+      `await buildSymbolGraph(index)` rebuild and node/edge comparison
+      (`isDetailedSymbolGraphCompatibleWithProject`) is unsafe as originally proposed. The
+      plan's premise -- "`projectSnapshotIdentity` already encodes files signature, graph
+      options, and native fingerprint, so a matching identity implies an identical index" --
+      does not hold for the specific thing this comparison catches. `projectSnapshotIdentity`
+      proves the sidecar was written _for_ a semantically-compatible index state; it proves
+      nothing about whether the sidecar's _bytes_ still match that state afterward. The
+      existing test `tests/agent-session.test.ts` > "rejects well-typed sidecar tampering
+      against the current project index" has 6 tamper scenarios; 2 of them (a node's
+      `complexity` set to `-1`, a node's `name` silently changed) are **only** caught by this
+      comparison -- not by the structural checks, not by identity, not by node/edge counts.
+      Removing it breaks real, already-shipped tampering protection. Left unchanged.
+- [ ] **Not implemented -- corrected from the original plan.** A naive module-level memo keyed
+      by `(sidecarPath, projectSnapshotIdentity)` is unsafe: `projectSnapshotIdentity` does not
+      change when only the _sidecar file on disk_ changes (for example, an external tamper, or
+      a rebuild that rewrites the sidecar for the same already-unchanged index). The same
+      tampering test creates a fresh session per tamper iteration against an unchanged
+      `projectSnapshotIdentity`; a naive memo would serve the first (valid) session's cached
+      graph for every later iteration and never re-read the (now tampered) file, silently
+      defeating both the test and the real protection it stands for. A safe version needs the
+      memo invalidated by the sidecar file's own mtime/size (or content signature), not by
+      identity alone -- deferred rather than risking a subtle correctness bug under this
+      slice's time budget.
+- [x] Added a regression documenting the shipped behavior change: a sidecar with a
+      deliberately wrong `graphHash` but otherwise untouched, valid `graph` content now loads
+      without triggering a rebuild (`tests/agent-session.test.ts` > "loads a valid sidecar from
+      disk without re-verifying its self-reported graphHash"). Confirmed it fails on pre-fix
+      code with `buildSymbolGraphDetailed` called once instead of zero times.
 
-Likely files: `src/indexer/build-cache/project-snapshot.ts`, `src/agent/session.ts`,
-`tests/cache-invalidation.test.ts`, `tests/detailed-symbol-native-only.test.ts`.
+Likely files: `src/indexer/build-cache/project-snapshot.ts`, `tests/agent-session.test.ts`.
 
 Acceptance:
 
-- [ ] `explain`, `callHierarchy`, `typeHierarchy`, `refactorPlan`, and `renamePreview` each drop
-      roughly 180 to 200 ms warm.
-- [ ] A second call in the same process pays approximately 0 ms for the sidecar.
-- [ ] A tampered sidecar, a stale identity, and an out-of-root node are all still rejected.
+- [x] `explain` (and by extension `callHierarchy`, `typeHierarchy`, `refactorPlan`,
+      `renamePreview`, which share the same load path) drops ~35ms warm from the hash-removal
+      cut alone, not the originally hoped-for 180-200ms -- the remainder is the
+      `buildSymbolGraph` rebuild and structural walk, which are staying for correctness.
+- [ ] A second call in the same process pays approximately 0ms for the sidecar -- not shipped;
+      see the memoization note above.
+- [x] A tampered sidecar, a stale identity, and an out-of-root node are all still rejected,
+      verified by the full existing `tests/agent-session.test.ts` suite (24 tests, unchanged
+      pass rate) plus the new graphHash-specific test.
 
 ## Priority 2: Remove the duplicate snapshot parse
 

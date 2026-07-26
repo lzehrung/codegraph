@@ -232,6 +232,31 @@ describe("agent session", () => {
     }
   });
 
+  it("loads a valid sidecar from disk without re-verifying its self-reported graphHash", async () => {
+    const root = await mkGitRepo();
+    const cold = await createAgentSession({ root }).loadProject();
+    const sidecarPath = detailedSymbolGraphSnapshotPath(root);
+
+    // Corrupt only `graphHash`, leaving `graph` untouched: recomputing and comparing this
+    // field required re-stringifying and re-hashing the whole graph on every load (~36ms
+    // measured on an 11MB sidecar) purely to prove this file's own bytes are
+    // self-consistent, a guarantee the atomic write already provides. A stale or wrong hash
+    // must therefore no longer force a rebuild; correctness against the current project is
+    // proven by the structural and semantic checks in
+    // `isDetailedSymbolGraphCompatibleWithProject` instead, exercised separately by "rejects
+    // well-typed sidecar tampering against the current project index" above.
+    const sidecar = JSON.parse(await fs.readFile(sidecarPath, "utf8")) as MutableDetailedSymbolGraphSidecar;
+    sidecar.graphHash = "f".repeat(64);
+    await fs.writeFile(sidecarPath, JSON.stringify(sidecar), "utf8");
+
+    const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+    const warm = await createAgentSession({ root }).loadProject();
+
+    expect(symbolGraphSpy).not.toHaveBeenCalled();
+    expect([...warm.symbolGraph.nodes]).toEqual([...cold.symbolGraph.nodes]);
+    expect(warm.symbolGraph.edges).toEqual(cold.symbolGraph.edges);
+  });
+
   it("rebuilds and upgrades older detailed symbol graph sidecars", async () => {
     const root = await mkGitRepo();
     await createAgentSession({ root }).loadProject();
