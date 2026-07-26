@@ -3,7 +3,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { runCliOrThrow } from "./helpers/cli.js";
+import { captureCli, runCliOrThrow } from "./helpers/cli.js";
 
 function git(root: string, args: string[]): void {
   execFileSync("git", args, { cwd: root, stdio: "ignore" });
@@ -79,6 +79,15 @@ describe("forgiving CLI inputs", () => {
     );
     expect(fileView.offset).toBe(2);
     expect(fileView.content).toContain("caller");
+  });
+
+  test("formats goto file errors for the selected output mode", async () => {
+    const outsideRoot = path.join(root, "..", "outside.ts");
+    const pretty = await captureCli(["goto", outsideRoot, "--root", root]);
+    expect(pretty.stdout).toMatch(/^error: /);
+
+    const json = await captureCli(["goto", outsideRoot, "--root", root, "--json"]);
+    expect(jsonRecord(json.stdout).status).toBe("error");
   });
 
   test("rejects zero embedded line numbers", async () => {

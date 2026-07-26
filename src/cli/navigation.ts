@@ -164,7 +164,7 @@ export async function handleGotoCommand(context: NavigationCommandContext): Prom
   }
   const resolvedFile = resolveCliProjectFile(context.projectRootFs, input.file, "File");
   if (resolvedFile.status === "error") {
-    writeCliProjectFileError(context, resolvedFile);
+    writeCliProjectFileError(context, resolvedFile, context.hasFlag("--json") ? "json" : "text");
     return;
   }
   const index = await buildProjectIndexIncremental(context.projectRootFs, indexOptions(context));
