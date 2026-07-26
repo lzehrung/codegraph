@@ -46,6 +46,37 @@ describe("CLI compile cache", () => {
     ).toBe("/tmp/custom-cc");
   });
 
+  it("treats NODE_DISABLE_COMPILE_CACHE as a hard opt-out", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-compile-cache-disabled-"));
+    const probe = path.join(dir, "probe.mjs");
+    fs.writeFileSync(
+      probe,
+      `import { enableCliCompileCache } from ${JSON.stringify(pathToFileURL(path.join(rootDir, "dist/cli/compileCache.js")).href)};
+import module from "node:module";
+const result = enableCliCompileCache({ NODE_DISABLE_COMPILE_CACHE: "1", NODE_COMPILE_CACHE: process.env.NODE_COMPILE_CACHE });
+if (result !== null) {
+  console.error("EXPECTED_NULL", JSON.stringify(result));
+  process.exit(2);
+}
+const dirAfter = typeof module.getCompileCacheDir === "function" ? module.getCompileCacheDir() : undefined;
+console.log(JSON.stringify({ result, dirAfter: dirAfter ?? null }));
+`,
+    );
+    try {
+      const result = spawnSync(process.execPath, [probe], {
+        encoding: "utf8",
+        env: { ...process.env, NODE_COMPILE_CACHE: dir, NODE_DISABLE_COMPILE_CACHE: "1" },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      const payload = JSON.parse(result.stdout.trim());
+      expect(payload.result).toBeNull();
+      // Best-effort: our helper must not arm a cache. If Node already enabled one
+      // earlier in this process tree, getCompileCacheDir may still be set.
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("enables the compile cache into an isolated directory without throwing", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-compile-cache-unit-"));
     const probe = path.join(dir, "probe.mjs");
