@@ -91,20 +91,20 @@ Forgiving inputs:
 
 Recommended review commands:
   codegraph review --summary
-  codegraph impact --pretty  (defaults to HEAD..WORKTREE)
+  codegraph impact (defaults to HEAD..WORKTREE)
   codegraph search "auth user" --json
   codegraph explain src/auth.ts --json
 
 Unfamiliar repo:
-  codegraph explore "how does auth reach db?" --root . --pretty
-  codegraph orient --root . --budget small --pretty
+  codegraph explore "how does auth reach db?" --root .
+  codegraph orient --root . --budget small
 
 Examples:
   codegraph review --base HEAD --head WORKTREE --summary
-  codegraph orient ./src --budget small --pretty
+  codegraph orient ./src --budget small
   codegraph search "auth user" --json
-  codegraph explore "how does auth reach db?" --pretty
-  codegraph file src/auth.ts --pretty
+  codegraph explore "how does auth reach db?"
+  codegraph file src/auth.ts
   codegraph explain src/auth.ts --json
   codegraph impact --provider git --base HEAD --head WORKTREE
   codegraph init --root .
@@ -131,12 +131,12 @@ Examples:
   codegraph skill install --agent opencode
   codegraph skill install --target ~/.codex/skills/codegraph --force
   codegraph skill doctor
-  codegraph impact --provider git --base main --head HEAD --pretty --duplicates off
-  codegraph refs src/index.ts:42:10 --pretty
+  codegraph impact --provider git --base main --head HEAD --duplicates off
+  codegraph refs src/index.ts:42:10
   codegraph doctor
-  codegraph symbols "CodeReviewSession" --root . --pretty
+  codegraph symbols "CodeReviewSession" --root .
   codegraph rename-preview Service RenamedService --include-filenames --json
-  codegraph refactor-plan Service --rename RenamedService --pretty
+  codegraph refactor-plan Service --rename RenamedService
   codegraph version
   codegraph -v
 `;

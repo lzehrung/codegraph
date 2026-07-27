@@ -41,7 +41,7 @@ describe("agent orient", () => {
     const response = await orientCodegraph({ root, includeRoots: ["."], budget: "small" });
 
     expect(response.focus[0]?.file).toBe("-entry.ts");
-    expect(response.focus[0]?.followUps[0]).toBe("codegraph packet get ./-entry.ts --pretty");
+    expect(response.focus[0]?.followUps[0]).toBe("codegraph packet get ./-entry.ts");
   });
 
   it.skipIf(process.platform === "win32")("disambiguates handle-like file targets in follow-up commands", async () => {
@@ -51,7 +51,7 @@ describe("agent orient", () => {
     const response = await orientCodegraph({ root, includeRoots: ["."], budget: "small" });
 
     expect(response.focus[0]?.file).toBe("file:entry.ts");
-    expect(response.focus[0]?.followUps[0]).toBe("codegraph packet get ./file:entry.ts --pretty");
+    expect(response.focus[0]?.followUps[0]).toBe("codegraph packet get ./file:entry.ts");
   });
 
   it("does not build the detailed symbol graph for orientation", async () => {
@@ -103,7 +103,7 @@ describe("agent orient", () => {
     expect(response.omittedCounts.focusTargets).toBe(0);
     expect(response.recommendedNext.some((next) => next.command === "codegraph hotspots . --limit 20")).toBe(true);
     expect(
-      response.recommendedNext.some((next) => next.command === "codegraph impact --base HEAD --head WORKTREE --pretty"),
+      response.recommendedNext.some((next) => next.command === "codegraph impact --base HEAD --head WORKTREE"),
     ).toBe(false);
     expect(
       response.recommendedNext.some(
@@ -120,7 +120,7 @@ describe("agent orient", () => {
     const response = await orientCodegraph({ root, includeRoots: ["."], budget: "small" });
 
     expect(
-      response.recommendedNext.some((next) => next.command === "codegraph impact --base HEAD --head WORKTREE --pretty"),
+      response.recommendedNext.some((next) => next.command === "codegraph impact --base HEAD --head WORKTREE"),
     ).toBe(true);
     expect(
       response.recommendedNext.some(

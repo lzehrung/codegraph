@@ -358,7 +358,7 @@ function applyAnalysisOptions(context: ImpactCommandContext, options: ImpactOpti
   const parsedTimeBudgetMs = parseOptionalNonNegativeIntegerOption(timeBudgetMs, "--time-budget-ms");
   if (parsedTimeBudgetMs !== undefined) options.timeBudgetMs = parsedTimeBudgetMs;
 
-  // Bounded defaults for the common orchestrator accelerant path (--pretty/--compact)
+  // Bounded defaults for the common orchestrator accelerant path (human-readable/--compact)
   // without changing unlimited library behavior when callers omit budgets.
   const wantsBoundedDefaults =
     !context.hasFlag("--json") || context.hasFlag("--compact") || context.hasFlag("--compact-json");

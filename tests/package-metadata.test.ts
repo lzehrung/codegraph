@@ -639,7 +639,7 @@ void onImpactItemStreaming;
     ]);
     const sharedExamples = [
       {
-        command: "codegraph orient --root . --budget small --pretty",
+        command: "codegraph orient --root . --budget small",
         files: ["README.md", "docs/cli.md", "docs/agent-workflows.md", "codegraph-skill/codegraph/SKILL.md"],
       },
       {
@@ -647,8 +647,7 @@ void onImpactItemStreaming;
         files: ["README.md", "docs/cli.md", "docs/agent-workflows.md", "codegraph-skill/codegraph/SKILL.md"],
       },
       {
-        command:
-          "codegraph drift ./src --base origin/main --head HEAD --pretty --graph-edges summary --public-api removals",
+        command: "codegraph drift ./src --base origin/main --head HEAD --graph-edges summary --public-api removals",
         files: ["README.md", "docs/cli.md", "docs/agent-workflows.md", "codegraph-skill/codegraph/SKILL.md"],
       },
     ];

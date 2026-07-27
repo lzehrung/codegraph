@@ -76,7 +76,7 @@ Graph mode performs a bounded traversal from `--from` and boosts closer matches.
 Use `explore` for a concrete repository question and `search` when you only need the best starting targets.
 
 ```bash
-codegraph explore "how does auth reach the database?" --root . --pretty
+codegraph explore "how does auth reach the database?" --root .
 codegraph search "validate user" --json
 ```
 

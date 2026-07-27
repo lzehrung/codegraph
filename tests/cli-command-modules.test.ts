@@ -305,7 +305,7 @@ describe("CLI command modules", () => {
 
     const unfamiliarRepoGuidance = CLI_HELP_TEXT.slice(unfamiliarRepoStart, examplesStart);
     const exploreIndex = unfamiliarRepoGuidance.indexOf('codegraph explore "how does auth reach db?"');
-    const orientIndex = unfamiliarRepoGuidance.indexOf("codegraph orient --root . --budget small --pretty");
+    const orientIndex = unfamiliarRepoGuidance.indexOf("codegraph orient --root . --budget small");
 
     expect(exploreIndex).toBeGreaterThanOrEqual(0);
     expect(orientIndex).toBeGreaterThanOrEqual(0);
@@ -1419,7 +1419,7 @@ describe("CLI command modules", () => {
           "File: util.ts",
           "Lines 2-2 of 3",
           "2\texport const second = 2;",
-          "Next page: codegraph file util.ts --offset 3 --limit 1 --pretty",
+          "Next page: codegraph file util.ts --offset 3 --limit 1",
           "",
         ].join("\n"),
         stderr: "",
