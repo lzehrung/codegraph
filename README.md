@@ -7,7 +7,7 @@ Codegraph is a local CLI **and TypeScript library** that turns a source tree int
 Without structural context, an agent spends early turns listing directories, guessing search terms, opening candidate files, and reconstructing relationships in its prompt. Codegraph performs that deterministic discovery once so more of the context window can go toward understanding and changing the code.
 
 ```bash
-codegraph explore "how does auth reach the database?" --root . --pretty
+codegraph explore "how does auth reach the database?" --root .
 codegraph review --base HEAD --head WORKTREE --summary
 ```
 
@@ -35,14 +35,14 @@ Use Codegraph alongside text search and compilers: text search finds exact strin
 
 | Question                                     | Start here                                                              | What comes back                                                                              |
 | -------------------------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| "Where should I start in this repo?"         | `codegraph orient --root . --budget small --pretty`                     | Central modules, a bounded tree, and copyable follow-ups                                     |
-| "How does this feature work?"                | `codegraph explore "<question>" --root . --pretty`                      | Ranked anchors, source packets, dependency paths, blast radius, and likely tests             |
+| "Where should I start in this repo?"         | `codegraph orient --root . --budget small`                              | Central modules, a bounded tree, and copyable follow-ups                                     |
+| "How does this feature work?"                | `codegraph explore "<question>" --root .`                               | Ranked anchors, source packets, dependency paths, blast radius, and likely tests             |
 | "What could this change break?"              | `codegraph review --base HEAD --head WORKTREE --summary`                | Changed symbols, risk signals, candidate tests, duplicate leads, and review tasks            |
 | "What depends on this file?"                 | `codegraph rdeps src/file.ts --json`                                    | Reverse dependencies from the resolved project graph                                         |
 | "Where is this symbol defined or used?"      | `codegraph goto <file> <line> <column>` and `codegraph refs ...`        | Semantic definitions and references across supported languages                               |
-| "Which declaration matches this name?"       | `codegraph symbols "CodeReviewSession" --root . --pretty`               | Ranked symbols with portable handles, exact ranges, provenance, and omissions                |
-| "What evidence do I need before a refactor?" | `codegraph refactor-plan <symbol-target> --pretty`                      | References, call and type relationships, candidate tests, omissions, and copyable follow-ups |
-| "Is the architecture drifting?"              | `codegraph drift ./src --base origin/main --head HEAD --pretty`         | New cycles, hotspot changes, unresolved imports, API changes, and graph deltas               |
+| "Which declaration matches this name?"       | `codegraph symbols "CodeReviewSession" --root .`                        | Ranked symbols with portable handles, exact ranges, provenance, and omissions                |
+| "What evidence do I need before a refactor?" | `codegraph refactor-plan <symbol-target>`                               | References, call and type relationships, candidate tests, omissions, and copyable follow-ups |
+| "Is the architecture drifting?"              | `codegraph drift ./src --base origin/main --head HEAD`                  | New cycles, hotspot changes, unresolved imports, API changes, and graph deltas               |
 | "Where is code duplicated?"                  | `codegraph duplicates ./src --min-confidence medium`                    | Ranked exact and near-duplicate groups with locations and confidence                         |
 | "Can another tool consume the graph?"        | `codegraph graph --root . ./src --compact-json --output codegraph.json` | JSON, Mermaid, DOT, or SQLite output                                                         |
 
@@ -62,7 +62,7 @@ cd codegraph
 npm install
 npm run build
 node ./dist/cli.js doctor
-node ./dist/cli.js orient --root . --budget small --pretty
+node ./dist/cli.js orient --root . --budget small
 ```
 
 Continue with `node ./dist/cli.js <command>` from the checkout. To use the bare `codegraph` examples below unchanged, run `npm install -g .` after the build.
@@ -89,15 +89,15 @@ Do not begin by generating every possible report. Start with the question you ac
 
 ```bash
 # Ask one concrete architecture question
-codegraph explore "how does the CLI reach review analysis?" --root . --pretty
+codegraph explore "how does the CLI reach review analysis?" --root .
 
 # If you do not know the question yet, get a bounded map
-codegraph orient --root . --budget small --pretty
+codegraph orient --root . --budget small
 
 # Follow an anchor returned by either command
 codegraph explain src/review.ts
 codegraph deps src/review.ts --json
-codegraph refs src/review.ts:215:23 --pretty
+codegraph refs src/review.ts:215:23
 ```
 
 ### Review local changes
@@ -107,7 +107,7 @@ codegraph refs src/review.ts:215:23 --pretty
 codegraph review --base HEAD --head WORKTREE --summary
 
 # Broader blast-radius map when the summary needs expansion
-codegraph impact --base HEAD --head WORKTREE --pretty
+codegraph impact --base HEAD --head WORKTREE
 ```
 
 Use `--head STAGED` to compare `HEAD` with the index, or use refs such as `--base origin/main --head HEAD` for a branch review.
@@ -120,7 +120,7 @@ codegraph cycles --sort priority
 codegraph unresolved
 codegraph apisurface
 codegraph duplicates ./src --min-confidence medium --limit 20
-codegraph drift ./src --base origin/main --head HEAD --pretty --graph-edges summary --public-api removals
+codegraph drift ./src --base origin/main --head HEAD --graph-edges summary --public-api removals
 ```
 
 ### Export the model
@@ -155,8 +155,8 @@ Candidate tests
 - tests/agent-packet.test.ts
 
 Follow-ups
-- codegraph file src/review.ts --pretty
-- codegraph refs src/review.ts:215:23 --pretty
+- codegraph file src/review.ts
+- codegraph refs src/review.ts:215:23
 
 Limits
 - anchors, packets, paths, blast radius, reverse dependencies, and candidate tests

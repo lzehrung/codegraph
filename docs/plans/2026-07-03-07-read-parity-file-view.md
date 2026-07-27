@@ -76,7 +76,7 @@ File: src/auth.ts
 Lines 41-42 of 126
 41	export function authenticate(request) {
 42	  return verify(request);
-Next page: codegraph file src/auth.ts --offset 43 --limit 2 --pretty
+Next page: codegraph file src/auth.ts --offset 43 --limit 2
 ```
 
 At an offset beyond EOF, JSON `content` and `text` are empty, while pretty output says `Lines: none at offset <offset> of <totalLines>`.

@@ -225,9 +225,9 @@ describe("agent explore", () => {
 
     expect(blastRadiusFiles.slice(0, 3)).toEqual(["src/auth.ts", "src/db.ts", "src/routes.ts"]);
     expect(followUps.slice(0, 3)).toEqual([
-      "codegraph file src/auth.ts --pretty",
-      "codegraph file src/db.ts --pretty",
-      "codegraph file src/routes.ts --pretty",
+      "codegraph file src/auth.ts",
+      "codegraph file src/db.ts",
+      "codegraph file src/routes.ts",
     ]);
     expect(response.fileView).toBeUndefined();
   });
@@ -254,7 +254,7 @@ describe("agent explore", () => {
       const followUps = readArray(response.followUps, "followUps");
 
       expect(textOf(blastRadius), query).toContain("src/routes.ts");
-      expect(followUps, query).toContain("codegraph packet get src/auth.ts --pretty");
+      expect(followUps, query).toContain("codegraph packet get src/auth.ts");
     }
   });
 
@@ -280,9 +280,9 @@ describe("agent explore", () => {
     expect(packetTargets).not.toContain("src/auth.ts");
     expect(blastRadiusFiles).toContain("src/auth.tsx");
     expect(blastRadiusFiles).not.toContain("src/auth.ts");
-    expect(followUps).toContain("codegraph packet get src/auth.tsx --pretty");
-    expect(followUps).not.toContain("codegraph packet get src/auth.ts --pretty");
-    expect(followUps).not.toContain("codegraph refs src/auth.ts:1:0 --pretty");
+    expect(followUps).toContain("codegraph packet get src/auth.tsx");
+    expect(followUps).not.toContain("codegraph packet get src/auth.ts");
+    expect(followUps).not.toContain("codegraph refs src/auth.ts:1:0");
   });
 
   it("matches explicit full-path file mentions with trailing question punctuation", async () => {
@@ -301,7 +301,7 @@ describe("agent explore", () => {
     expect(packetTargets).toContain("src/auth.ts");
     expect(blastRadiusFiles).toContain("src/auth.ts");
     expect(textOf(response.blastRadius)).toContain("src/routes.ts");
-    expect(followUps).toContain("codegraph packet get src/auth.ts --pretty");
+    expect(followUps).toContain("codegraph packet get src/auth.ts");
   });
 
   it("returns symbol anchors and evidence packets for a symbol query", async () => {
@@ -359,7 +359,7 @@ describe("agent explore", () => {
     }
   });
 
-  it("includes pretty refs commands in explore follow-ups", async () => {
+  it("uses default-format refs commands in explore follow-ups", async () => {
     const root = await mkExploreRepo();
     const query = "src/auth.ts";
 
@@ -369,7 +369,9 @@ describe("agent explore", () => {
     );
 
     expect(refsFollowUps.length).toBeGreaterThan(0);
-    expect(refsFollowUps.every((followUp) => followUp.includes(" --pretty"))).toBeTruthy();
+    expect(
+      refsFollowUps.every((followUp) => !followUp.includes(" --json") && !followUp.includes(" --pretty")),
+    ).toBeTruthy();
   });
 
   it("includes the dependency path for a flow-style query between connected files", async () => {
@@ -450,9 +452,9 @@ describe("agent explore", () => {
     const followUps = readArray(response.followUps, "followUps");
     const followUpText = followUps.join("\n");
 
-    expect(followUps).toContain(`codegraph explore ${query} --pretty`);
+    expect(followUps).toContain(`codegraph explore ${query}`);
     expect(followUps).toContain(`codegraph search ${query} --json`);
-    expect(followUps).toContain("codegraph orient --budget small --pretty");
+    expect(followUps).toContain("codegraph orient --budget small");
     expect(followUpText).not.toContain(root);
     expect(followUpText).not.toContain(" --root ");
   });

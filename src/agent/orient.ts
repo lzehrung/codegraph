@@ -255,7 +255,7 @@ function buildReviewFocus(base: string, head: string): AgentOrientationFocus {
     why: "review range requested by the caller",
     followUps: [
       `codegraph review --base ${quoteShellArg(base)} --head ${quoteShellArg(head)} --summary`,
-      `codegraph impact --base ${quoteShellArg(base)} --head ${quoteShellArg(head)} --pretty`,
+      `codegraph impact --base ${quoteShellArg(base)} --head ${quoteShellArg(head)}`,
     ],
   };
 }
@@ -395,7 +395,7 @@ function buildRecommendedNext(
   if (hasGitRepo) {
     commands.push({
       label: "Map current worktree impact",
-      command: "codegraph impact --base HEAD --head WORKTREE --pretty",
+      command: "codegraph impact --base HEAD --head WORKTREE",
     });
     commands.push({
       label: "Review current worktree",
@@ -410,7 +410,7 @@ function buildRecommendedNext(
 }
 
 function formatPacketCommand(file: string): string {
-  return `codegraph packet get ${formatFileTargetCommandArg(file)} --pretty`;
+  return `codegraph packet get ${formatFileTargetCommandArg(file)}`;
 }
 
 function formatFileTargetCommandArg(file: string): string {

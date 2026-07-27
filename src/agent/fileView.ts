@@ -218,7 +218,7 @@ export function formatAgentFileViewResponse(response: AgentFileViewResponse): st
   const nextOffset = response.page?.nextOffset;
   if (nextOffset !== undefined) {
     lines.push(
-      `Next page: codegraph file ${quoteShellArg(response.file)} --offset ${nextOffset} --limit ${response.limit} --pretty`,
+      `Next page: codegraph file ${quoteShellArg(response.file)} --offset ${nextOffset} --limit ${response.limit}`,
     );
   }
   return lines.join("\n");

@@ -103,7 +103,7 @@ describe("refactor plan CLI", () => {
     expect(result.stdout).toContain("Rename conflicts: 0");
     expect(result.stdout).toContain("Omissions: references");
     expect(result.stdout).toContain("Section issues:\n  implementations [unsupported_target]:");
-    expect(result.stdout).toContain("Follow-ups:\n  codegraph refs service.ts:2:17 --pretty");
+    expect(result.stdout).toContain("Follow-ups:\n  codegraph refs service.ts:2:17");
     expect(result.stdout).not.toContain('"schemaVersion"');
   });
 

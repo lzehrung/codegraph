@@ -509,11 +509,11 @@ function collectFollowUps(
   const followUps: string[] = [];
   for (const file of anchorFiles.slice(0, 3)) {
     const relative = toProjectDisplayPath(root, file);
-    followUps.push(`codegraph file ${quoteShellArg(relative)} --pretty`);
+    followUps.push(`codegraph file ${quoteShellArg(relative)}`);
   }
   for (const file of anchorFiles.slice(0, 3)) {
     const relative = toProjectDisplayPath(root, file);
-    followUps.push(`codegraph packet get ${quoteShellArg(relative)} --pretty`);
+    followUps.push(`codegraph packet get ${quoteShellArg(relative)}`);
   }
   for (const anchor of anchors) {
     followUps.push(...anchor.followUps);
@@ -523,14 +523,14 @@ function collectFollowUps(
   }
   for (const file of anchorFiles.slice(0, 3)) {
     const relative = toProjectDisplayPath(root, file);
-    followUps.push(`codegraph refs ${quoteShellArg(`${relative}:1:0`)} --pretty`);
+    followUps.push(`codegraph refs ${quoteShellArg(`${relative}:1:0`)}`);
   }
   if (!includeSource) {
-    followUps.push(`codegraph explore ${quoteShellArg(query)} --pretty`);
+    followUps.push(`codegraph explore ${quoteShellArg(query)}`);
   }
   if (!anchors.length) {
     followUps.push(`codegraph search ${quoteShellArg(query)} --json`);
-    followUps.push("codegraph orient --budget small --pretty");
+    followUps.push("codegraph orient --budget small");
   }
   return dedupeStrings(followUps).slice(0, 12);
 }

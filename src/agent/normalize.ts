@@ -59,5 +59,5 @@ export function collectFileFollowUps(file: string): string[] {
 
 export function collectDefinitionFollowUps(file: string, line: number, column: number): string[] {
   const location = `${file}:${line}:${column}`;
-  return [`codegraph goto ${quoteShellArg(location)}`, `codegraph refs ${quoteShellArg(location)} --pretty`];
+  return [`codegraph goto ${quoteShellArg(location)}`, `codegraph refs ${quoteShellArg(location)}`];
 }
