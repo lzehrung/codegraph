@@ -167,7 +167,7 @@ CLI:
 
 ```bash
 codegraph symbols "CodeReviewSession" --root . --json
-codegraph symbols "review report" --kind class,function --exported --limit 50 --pretty
+codegraph symbols "review report" --kind class,function --exported --limit 50
 ```
 
 MCP:
@@ -281,7 +281,7 @@ CLI:
 
 ```bash
 codegraph callers <symbol-handle> --depth 1 --limit 100 --json
-codegraph callees <symbol-handle> --depth 2 --limit 100 --pretty
+codegraph callees <symbol-handle> --depth 2 --limit 100
 ```
 
 MCP:
@@ -391,7 +391,7 @@ CLI:
 
 ```bash
 codegraph supertypes <symbol-handle> --json
-codegraph subtypes <symbol-handle> --depth 2 --limit 100 --pretty
+codegraph subtypes <symbol-handle> --depth 2 --limit 100
 ```
 
 MCP:
@@ -520,7 +520,7 @@ CLI:
 
 ```bash
 codegraph rename-preview <symbol-handle> <new-name> --json
-codegraph rename-preview <symbol-handle> <new-name> --include-comments --pretty
+codegraph rename-preview <symbol-handle> <new-name> --include-comments
 ```
 
 MCP:

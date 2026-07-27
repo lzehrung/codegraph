@@ -186,7 +186,7 @@ export async function buildRefactorPlanInSnapshot(
       )
     : undefined;
   const followUps = [
-    `codegraph refs ${quoteShellArg(`${target.location.file}:${target.location.range.start.line}:${target.location.range.start.column}`)} --pretty`,
+    `codegraph refs ${quoteShellArg(`${target.location.file}:${target.location.range.start.line}:${target.location.range.start.column}`)}`,
     `codegraph callers ${quoteShellArg(target.handle)} --depth 1 --json`,
     `codegraph callees ${quoteShellArg(target.handle)} --depth 1 --json`,
     `codegraph implementations ${quoteShellArg(target.handle)} --json`,

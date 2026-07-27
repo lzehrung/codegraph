@@ -15,14 +15,14 @@ codegraph review --base HEAD --head WORKTREE --summary
 Add `impact` only when you need a wider blast-radius map:
 
 ```bash
-codegraph impact --base HEAD --head WORKTREE --pretty
+codegraph impact --base HEAD --head WORKTREE
 ```
 
 For an unfamiliar repo, keep the first loop bounded and actionable:
 
 ```bash
-codegraph explore "how does auth reach db?" --root . --pretty
-codegraph orient --root . --budget small --pretty
+codegraph explore "how does auth reach db?" --root .
+codegraph orient --root . --budget small
 codegraph search "auth user" --json
 codegraph explain <file-from-search-or-orient> --json
 ```
@@ -48,7 +48,7 @@ For raw command flags and output contracts, see [docs/cli.md](./cli.md). For lib
 Start with `explore` when an agent can ask a concrete repo question:
 
 ```bash
-codegraph explore "how does auth reach db?" --root . --pretty
+codegraph explore "how does auth reach db?" --root .
 codegraph explore src/auth.ts --json --limit 5 --max-packets 3
 ```
 
@@ -60,7 +60,7 @@ Use `--no-source` when the caller only needs anchors, paths, and follow-up comma
 Use `file` when the target path is known and the agent needs current source rather than an indexed explanation packet. Its default keeps the exact `number<TAB>line` source format with a readable header and next-page command; use `--json` for tool chaining.
 
 ```bash
-codegraph file src/auth.ts --offset 1 --limit 200 --pretty
+codegraph file src/auth.ts --offset 1 --limit 200
 codegraph file src/auth.ts --offset 201 --limit 200 --max-bytes 80000
 codegraph file src/auth.ts --include-graph-context --json
 ```
@@ -73,7 +73,7 @@ If the `explore` query is only an exact indexed file path, JSON adds `fileView` 
 
 ```bash
 codegraph explore src/auth.ts --json
-codegraph explore src/auth.ts --include-graph-context --pretty
+codegraph explore src/auth.ts --include-graph-context
 ```
 
 Secret-prone text configs return structural keys instead of raw values unless `--allow-sensitive` is passed intentionally; key material defaults to metadata, may report file size, and does not read raw secret bytes. Intentional raw access remains subject to the 16 MiB input limit and still rejects known binary extensions, NUL bytes, and malformed or incomplete UTF-8, so `.p12` and `.pfx` bundles remain metadata-only in practice. See [CLI reference](./cli.md#live-file-views) for exact fields, limits, trailing-newline behavior, and sensitive kinds.
@@ -83,14 +83,14 @@ Secret-prone text configs return structural keys instead of raw values unless `-
 Start with `orient` when an agent needs compact repo context without flooding the first prompt:
 
 ```bash
-codegraph orient --root . --budget small --pretty
+codegraph orient --root . --budget small
 codegraph orient --root . ./src --budget medium --json
-codegraph packet get src/cli.ts --pretty
+codegraph packet get src/cli.ts
 codegraph packet get <file-from-orient> --max-symbols 25 --json
 ```
 
 Orientation returns summary bullets, ranked `focus` targets, a bounded tree, budgeted health counts, omitted counts, and recommended next commands.
-Bare `orient`, explicit `orient --pretty`, or MCP `orient` provide compact model-readable triage; use `orient --json` when follow-up tools need exact focus reasons, limits, or omission counts.
+Bare CLI or MCP `orient` provide compact model-readable triage; use `orient --json` when follow-up tools need exact focus reasons, limits, or omission counts.
 Small orientation packets default to cheap health analysis; use larger budgets only when cycle, unresolved-import, or duplicate counts matter.
 
 ## Workspace-symbol identities
@@ -98,7 +98,7 @@ Small orientation packets default to cheap health analysis; use larger budgets o
 Use `symbols` when the question is "which declaration has this identity?" and follow with the returned portable handle. It is deterministic and filterable; use hybrid `search` instead when paths, prose, SQL, snippets, or graph evidence should participate.
 
 ```bash
-codegraph symbols "CodeReviewSession" --root . --pretty
+codegraph symbols "CodeReviewSession" --root .
 codegraph symbols "src/session.ts::CodeReviewSession" --json
 codegraph explain "<handle-from-symbols>" --json
 ```
@@ -123,7 +123,7 @@ Keep the exact symbol handle returned by search or the changed-symbol handle ret
 
 ```bash
 codegraph search "service dispatch" --mode symbol --json
-codegraph refactor-plan "<exact-handle-from-search>" --max-references 200 --pretty
+codegraph refactor-plan "<exact-handle-from-search>" --max-references 200
 
 codegraph review --base HEAD --head WORKTREE --json
 codegraph refactor-plan "<exact-changed-symbol-handle-from-review>" --rename RenamedService --json
@@ -157,7 +157,7 @@ For the retrieval model, ranking signals, search modes, and vectorless tradeoffs
 Use `drift` when the agent needs one architecture-regression report for a base/head range:
 
 ```bash
-codegraph drift ./src --base origin/main --head HEAD --pretty --graph-edges summary --public-api removals
+codegraph drift ./src --base origin/main --head HEAD --graph-edges summary --public-api removals
 codegraph drift ./src --base origin/main --head HEAD --compact-json
 ```
 
@@ -463,12 +463,12 @@ codegraph review --base HEAD --head WORKTREE --summary
 Add a ranked blast-radius map only when needed:
 
 ```bash
-codegraph impact --base HEAD --head WORKTREE --pretty
+codegraph impact --base HEAD --head WORKTREE
 ```
 
 Use `--head STAGED` instead of `WORKTREE` when the review should cover only the index. Keep the full JSON review bundle for scripts or agent steps that need `projectFiles`, `graphDelta`, or detailed symbol handles.
 
-For function-call integrations, keep the JSON object as the handoff. Do not parse `review --summary` or `impact --pretty` text to recover fields that are already present in the TypeScript return values.
+For function-call integrations, keep the JSON object as the handoff. Do not parse `review --summary` or human-readable `impact` text to recover fields that are already present in the TypeScript return values.
 
 In summary mode, high-confidence direct import matches are the first regression targets and medium matches are likely file-level coverage. Low-confidence pattern matches are summarized as breadth hints; use the full JSON bundle only when you need to inspect those fallback candidates.
 
@@ -484,7 +484,7 @@ When `callCompatibility` is present, start with hints where `status` is `likely_
 
 Pretty impact and review summaries include scoped duplicate leads by default:
 
-- `impact --pretty`: high-confidence exact or renamed clones within changed files.
+- human-readable `impact`: high-confidence exact or renamed clones within changed files.
 - `review --summary`: high-confidence exact or renamed clones within changed plus graph-impacted files.
 - `--duplicates off|changed|impacted|all`: override the human-summary scope.
 - Git copy or rename similarity metadata can boost duplicate leads when both source and destination are present in the indexed snapshot.

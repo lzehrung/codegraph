@@ -15,9 +15,9 @@ Numeric options such as `--limit`, `--threads`, `--depth`, `--max-refs`, and tok
 Default workflow:
 
 - code review: `codegraph review --base HEAD --head WORKTREE --summary`
-- blast-radius follow-up: `codegraph impact --base HEAD --head WORKTREE --pretty`
-- unfamiliar repo: `codegraph explore "how does auth reach db?" --root . --pretty`
-- first-turn map: `codegraph orient --root . --budget small --pretty`
+- blast-radius follow-up: `codegraph impact --base HEAD --head WORKTREE`
+- unfamiliar repo: `codegraph explore "how does auth reach db?" --root .`
+- first-turn map: `codegraph orient --root . --budget small`
 - targeted follow-up: `codegraph search "<query>" --json` then `codegraph explain <handle|file|symbol>`
 
 ## Runtime selection
@@ -70,10 +70,10 @@ These defaults never approve writes: installer changes still require `--yes`, re
 ```bash
 # Fast code-review handoff for current local edits
 codegraph review --base HEAD --head WORKTREE --summary
-codegraph impact --base HEAD --head WORKTREE --pretty
+codegraph impact --base HEAD --head WORKTREE
 
 # First-pass repo summary and next-step suggestions
-codegraph orient --root . --budget small --pretty
+codegraph orient --root . --budget small
 codegraph inspect ./src --limit 20
 
 # Whole-repo Mermaid graph on stdout (the default)
@@ -159,25 +159,25 @@ codegraph index --threads 8 --cache disk
 codegraph index --workers --threads 8 --cache disk
 
 # Search for agent-ready anchors across symbols, paths, chunks, SQL objects, and graph context
-codegraph orient --root . --budget small --pretty
+codegraph orient --root . --budget small
 codegraph orient --root . ./src --budget medium --json
-codegraph explore "how does auth reach db?" --root . --pretty
+codegraph explore "how does auth reach db?" --root .
 codegraph explore src/auth.ts --json
 codegraph search "build review report" --json
-codegraph symbols "CodeReviewSession" --root . --pretty
+codegraph symbols "CodeReviewSession" --root .
 codegraph symbols "review report" --kind class,function --exported --limit 50 --json
 codegraph callers 'symbol:src/service.ts:run:5:3' --depth 2 --limit 100 --json
-codegraph callees 'symbol:src/worker.ts:process:12:14' --depth 3 --pretty
-codegraph supertypes 'symbol:src/worker.ts:Worker:12:14' --depth 3 --pretty
+codegraph callees 'symbol:src/worker.ts:process:12:14' --depth 3
+codegraph supertypes 'symbol:src/worker.ts:Worker:12:14' --depth 3
 codegraph subtypes 'symbol:src/service.ts:Service:4:18' --depth 3 --limit 100 --json
 codegraph implementations 'symbol:src/service.ts:run:5:3' --limit 100 --json
 codegraph rename-preview 'symbol:src/Service.ts:Service:1:14' RenamedService --include-filenames --json
-codegraph refactor-plan 'symbol:src/Service.ts:Service:1:14' --rename RenamedService --max-references 200 --pretty
+codegraph refactor-plan 'symbol:src/Service.ts:Service:1:14' --rename RenamedService --max-references 200
 codegraph explain src/review.ts --json
-codegraph packet get src/cli.ts --pretty
+codegraph packet get src/cli.ts
 # Read a live file; readable numbered lines are the default
 codegraph file src/cli.ts
-codegraph file src/cli.ts --offset 201 --limit 100 --max-bytes 40000 --pretty
+codegraph file src/cli.ts --offset 201 --limit 100 --max-bytes 40000
 
 # Add direct importers, imports, and symbols only when needed
 codegraph file src/cli.ts --include-graph-context --json
@@ -255,7 +255,7 @@ codegraph duplicates ./src --json --raw-pairs
 codegraph duplicates --help
 
 # Compare architecture drift between git refs
-codegraph drift ./src --base origin/main --head HEAD --pretty --graph-edges summary --public-api removals
+codegraph drift ./src --base origin/main --head HEAD --graph-edges summary --public-api removals
 codegraph drift ./src --base origin/main --head HEAD --json
 codegraph drift ./src --base origin/main --head HEAD --compact-json
 codegraph drift ./src --base origin/main --head HEAD --fail-on new-cycle,public-api-removal
@@ -266,7 +266,7 @@ codegraph goto <file>:<line>:<column>
 
 # Find references
 codegraph refs <file>  # all symbols in the file
-codegraph refs <file>:<line>:<column> --pretty
+codegraph refs <file>:<line>:<column>
 
 # Run a Tree-sitter query across the repo
 codegraph grep --query '(function_declaration name: (identifier) @name)'
@@ -322,8 +322,8 @@ Short JSON shape:
 
 #### Agent orientation and packets
 
-- Use `explore --pretty` for a one-call repo question that combines search anchors, bounded packets, dependency paths, reverse dependencies, candidate tests, limits, omissions, and follow-ups. Use `--limit`, `--max-packets`, `--max-paths`, or `--no-source` to keep output small.
-- Use `orient --pretty` as the compact first-turn reading surface for people or models; it prints the ranked `focus` targets and their follow-up commands before the scope sketch.
+- Use `explore` for a one-call repo question that combines search anchors, bounded packets, dependency paths, reverse dependencies, candidate tests, limits, omissions, and follow-ups. Use `--limit`, `--max-packets`, `--max-paths`, or `--no-source` to keep output small.
+- Use `orient` as the compact first-turn reading surface for people or models; it prints the ranked `focus` targets and their follow-up commands before the scope sketch.
 - Use `orient --json` when follow-up tools need exact focus reasons, limits, and omitted counts. Index feedback is stderr-only, so stdout remains parseable.
 - Small orientation budgets default to `--health skip`. Medium and large default to `--health summary`, which counts cycles and unresolved imports while omitting duplicate health; use `--health full` when exhaustive duplicate counts matter.
 - Use `packet get` with file paths, symbol names, SQL object names, file/symbol/chunk/SQL/graph handles, or review handles to retrieve bounded evidence plus follow-up commands.
@@ -435,7 +435,7 @@ Dependency read commands keep the same output contracts while using the indexed 
 
 `impact` defaults to the on-disk incremental cache, matching `search`/`orient`/`inspect`/`review`; pass `--cache off` to force a full rebuild for a single invocation.
 
-`impact --pretty` / `--compact` and MCP `impact` apply request-wide analysis budgets by default so large diffs stay useful accelerants instead of timing out. Prefer ranking-aware partial results with exact omit counts in `diagnostics` over unbounded compute. Library callers leave budgets unset for unlimited analysis unless they opt in.
+Human-readable `impact`, `--compact`, and MCP `impact` apply request-wide analysis budgets by default so large diffs stay useful accelerants instead of timing out. Prefer ranking-aware partial results with exact omit counts in `diagnostics` over unbounded compute. Library callers leave budgets unset for unlimited analysis unless they opt in.
 
 ```bash
 # Analyze PR impact from git history
@@ -453,12 +453,12 @@ codegraph impact --provider github --repo owner/name --pr 123
 # Analyze raw diff text from stdin
 cat diff.txt | codegraph impact --provider raw
 
-# Pretty summary with severity scores
-codegraph impact --base main --head feature --pretty
+# Human-readable summary with severity scores
+codegraph impact --base main --head feature
 
-# Control duplicate leads in pretty summaries
-codegraph impact --base main --head feature --pretty --duplicates changed
-codegraph impact --base main --head feature --pretty --duplicates off
+# Control duplicate leads in human-readable summaries
+codegraph impact --base main --head feature --duplicates changed
+codegraph impact --base main --head feature --duplicates off
 
 # Compact JSON using impact's graph-style alias
 codegraph impact --base main --head feature --compact-json
@@ -467,7 +467,7 @@ codegraph impact --base main --head feature --compact-json
 codegraph impact --base main --head feature --depth 2 --max-refs 1000
 
 # Bound whole-request analysis work (symbols, lookups, retained refs, soft deadline)
-codegraph impact --base main --head feature --pretty \
+codegraph impact --base main --head feature \
   --max-changed-symbols 250 --max-reference-lookups 250 \
   --max-total-references 5000 --time-budget-ms 25000
 
@@ -511,7 +511,7 @@ codegraph graph-delta --git-base origin/main --git-head HEAD > graph-delta.json
 
 ```bash
 # Architecture drift with CI policy gates
-codegraph drift ./src --base origin/main --head HEAD --pretty --graph-edges summary --public-api removals
+codegraph drift ./src --base origin/main --head HEAD --graph-edges summary --public-api removals
 codegraph drift ./src --base origin/main --head HEAD --compact-json
 codegraph drift ./src --base origin/main --head HEAD --fail-on new-cycle,unresolved-import,public-api-removal
 codegraph drift --base-artifact ./baseline/codegraph-out --head . --json
@@ -532,7 +532,7 @@ Impact JSON responses include `schemaVersion` plus `format: "full" | "compact"` 
 
 Pretty impact and review summaries also show high-confidence exact or renamed duplicate leads by default:
 
-- `impact --pretty` defaults to `--duplicates changed`.
+- Human-readable `impact` defaults to `--duplicates changed`.
 - `review --summary` defaults to `--duplicates impacted`.
 - Use `--duplicates off|changed|impacted|all` to control duplicate-lead scope.
 - For `review`, `--duplicates off` is parsed before report construction and skips `prepareDuplicateAnalysis` / duplicate review tasks entirely, not just the human summary.
@@ -545,7 +545,7 @@ Pretty impact and review summaries also show high-confidence exact or renamed du
 Run impact or review normally; no extra flag is required:
 
 ```bash
-codegraph impact --base main --head feature --pretty
+codegraph impact --base main --head feature
 codegraph impact --base main --head feature --json
 codegraph review --base main --head feature --summary
 codegraph review --base main --head feature > review.json

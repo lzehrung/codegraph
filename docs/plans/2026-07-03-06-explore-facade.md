@@ -7,7 +7,7 @@ Add one high-level query surface that returns enough structured context for an a
 Commands/tools:
 
 ```bash
-codegraph explore "how does auth reach db?" --root . --pretty
+codegraph explore "how does auth reach db?" --root .
 codegraph explore "src/auth.ts" --json
 ```
 

@@ -103,7 +103,7 @@ describe("agent file view", () => {
           "File: facade.txt",
           "Lines 2-2 of 3",
           "2\tbeta",
-          "Next page: codegraph file facade.txt --offset 3 --limit 1 --pretty",
+          "Next page: codegraph file facade.txt --offset 3 --limit 1",
         ].join("\n"),
       );
     },
@@ -189,7 +189,7 @@ describe("agent file view", () => {
         "Lines 1-1 of 3",
         "1\talp",
         "Content was truncated by the 500000-byte hard limit or a smaller requested maxBytes.",
-        "Next page: codegraph file 'paged notes.txt' --offset 2 --limit 2 --pretty",
+        "Next page: codegraph file 'paged notes.txt' --offset 2 --limit 2",
       ].join("\n"),
     );
 

@@ -126,7 +126,7 @@ async function buildReviewPacket(request: AgentPacketRequest): Promise<AgentPack
       reviewTasks: 0,
     },
     followUps: [
-      `codegraph impact --provider git --base ${quoteShellArg(range.base)} --head ${quoteShellArg(range.head)} --pretty`,
+      `codegraph impact --provider git --base ${quoteShellArg(range.base)} --head ${quoteShellArg(range.head)}`,
       `codegraph review --base ${quoteShellArg(range.base)} --head ${quoteShellArg(range.head)} --summary`,
     ],
   };

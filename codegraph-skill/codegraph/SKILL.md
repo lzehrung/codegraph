@@ -17,16 +17,16 @@ Use plain text search for exact strings, logs, config keys, secrets, and prose. 
 
 ## Choose the First Command
 
-| Task                                                      | Start here                                                      |
-| --------------------------------------------------------- | --------------------------------------------------------------- |
-| Review staged and unstaged work                           | `codegraph review --base HEAD --head WORKTREE --summary`        |
-| Review a branch against main                              | `codegraph review --base origin/main --head HEAD --summary`     |
-| Map the wider blast radius of a change                    | `codegraph impact --base HEAD --head WORKTREE --pretty`         |
-| Answer a concrete question about an unfamiliar repo       | `codegraph explore "how does auth reach db?" --root . --pretty` |
-| Map a repo before you know the question                   | `codegraph orient --root . --budget small --pretty`             |
-| Diagnose installation, native runtime, or artifact health | `codegraph doctor`                                              |
+| Task                                                      | Start here                                                  |
+| --------------------------------------------------------- | ----------------------------------------------------------- |
+| Review staged and unstaged work                           | `codegraph review --base HEAD --head WORKTREE --summary`    |
+| Review a branch against main                              | `codegraph review --base origin/main --head HEAD --summary` |
+| Map the wider blast radius of a change                    | `codegraph impact --base HEAD --head WORKTREE`              |
+| Answer a concrete question about an unfamiliar repo       | `codegraph explore "how does auth reach db?" --root .`      |
+| Map a repo before you know the question                   | `codegraph orient --root . --budget small`                  |
+| Diagnose installation, native runtime, or artifact health | `codegraph doctor`                                          |
 
-Prefer `review` before `impact`: review is the compact reviewer handoff; impact is the broader "what could this break?" map. Both are safe bounded accelerants for another agent's own review workflow (`impact --pretty`, `review --summary --duplicates off`); they do not own reviewer lanes, packets, or finding ledgers. Prefer `explore` before `orient` when you already have a concrete question.
+Prefer `review` before `impact`: review is the compact reviewer handoff; impact is the broader "what could this break?" map. Both are safe bounded accelerants for another agent's own review workflow (human-readable `impact`, `review --summary --duplicates off`); they do not own reviewer lanes, packets, or finding ledgers. Prefer `explore` before `orient` when you already have a concrete question.
 
 ## Keep the Project Boundary Explicit
 
@@ -42,12 +42,12 @@ Use `--root` to define the boundary for config lookup, cache scope, path confine
 
 ### Understand
 
-- answer a question with bounded evidence: `codegraph explore "how does auth reach db?" --root . --pretty`
+- answer a question with bounded evidence: `codegraph explore "how does auth reach db?" --root .`
 - find a ranked anchor: `codegraph search "auth user" --json`
-- resolve a known symbol identity: `codegraph symbols "CodeReviewSession" --root . --pretty`
+- resolve a known symbol identity: `codegraph symbols "CodeReviewSession" --root .`
 - explain a known target: `codegraph explain <file|symbol|sql-object|handle>`
-- retrieve bounded indexed context: `codegraph packet get <file|symbol|sql-object|handle> --pretty`
-- read current disk content: `codegraph file <path> --offset 1 --limit 200 --pretty`
+- retrieve bounded indexed context: `codegraph packet get <file|symbol|sql-object|handle>`
+- read current disk content: `codegraph file <path> --offset 1 --limit 200`
 
 `explore` returns ranked anchors, bounded packets, dependency paths, blast radius, candidate tests, explicit limits, omission counts, and copyable follow-ups. Hybrid search is code-first by default; search, explain, explore, and review output preserve analysis labels so reduced or mixed runs remain visible.
 
@@ -57,7 +57,7 @@ Use the portable callable handle from `symbols` with `codegraph callers <handle>
 
 Call hierarchy contains resolved semantic `calls` edges only. `--include-heuristic` is accepted but currently adds no guessed dynamic calls; use `refs` for all references and `deps` or `rdeps` for file relationships.
 
-Use a portable handle, unique exact symbol name, single-definition file, or source location with `codegraph supertypes <target>`, `codegraph subtypes <target>`, or `codegraph implementations <target>`. Hierarchy depth defaults to 1 and caps at 10; all result limits default to 100 and cap at 500, and `--pretty` is the concise human-readable form.
+Use a portable handle, unique exact symbol name, single-definition file, or source location with `codegraph supertypes <target>`, `codegraph subtypes <target>`, or `codegraph implementations <target>`. Hierarchy depth defaults to 1 and caps at 10; all result limits default to 100 and cap at 500, and the default output is the concise human-readable form.
 
 Hierarchy results contain only proven indexed `extends` and `implements` relationships. Implementation targets are interfaces, traits, abstract types, and members with proven implementation or override relationships; exact declarations are returned, while overloads, dynamic or structural conformance, unrelated same-name methods, and unresolved external bases are not guessed.
 
@@ -65,7 +65,7 @@ Use `codegraph rename-preview <target> <new-name> --json` to plan a semantic ren
 
 Treat `safe: false`, conflicts, unsafe sites, and omissions as blockers. Eligible exported class, interface, and type filename results are suggestions only; Codegraph has no apply command or tool.
 
-Use `codegraph refactor-plan <target> --pretty` to compose references, direct callers and callees, hierarchy, implementations, section issues, candidate tests, omissions, and copyable follow-ups from one snapshot. It accepts portable search or workspace-symbol handles and exact internal review or impact symbol handles; add `--rename <new-name>` only when the packet should include the authoritative nested rename preview.
+Use `codegraph refactor-plan <target>` to compose references, direct callers and callees, hierarchy, implementations, section issues, candidate tests, omissions, and copyable follow-ups from one snapshot. It accepts portable search or workspace-symbol handles and exact internal review or impact symbol handles; add `--rename <new-name>` only when the packet should include the authoritative nested rename preview.
 
 The independent `--max-references`, `--max-callers`, and `--max-hierarchy` bounds accept 0 to 500, and `--include-source` opts reference context into output. Treat `sectionIssues`, omissions, and nested `rename.safe` as authoritative; the packet is read-only and has no apply action.
 
@@ -75,8 +75,8 @@ The independent `--max-references`, `--max-callers`, and `--max-hierarchy` bound
 - reverse dependencies: `codegraph rdeps <file>`
 - shortest path: `codegraph path <from> <to>`
 - definition: `codegraph goto <file>:<line>:<column>`
-- references at a location: `codegraph refs <file>:<line>:<column> --pretty`
-- references for every definition in a file: `codegraph refs <file> --pretty`
+- references at a location: `codegraph refs <file>:<line>:<column>`
+- references for every definition in a file: `codegraph refs <file>`
 
 File targets accept locations copied from search output. Semantic relationship/refactor commands accept a portable handle, unique exact symbol name, single-definition file, or `file:line[:column]`; ambiguous targets return handle choices instead of guessing.
 
@@ -85,8 +85,8 @@ File targets accept locations copied from search output. Semantic relationship/r
 Safe shorthand: `impact` and git-backed `drift` default to `HEAD..WORKTREE`; `artifact`, `packet`, and `mcp` infer `build`, `get`, and `serve`. `grep <regex>` and `sql <db> "SELECT ..."` accept positional forms. Explicit options remain valid.
 
 - compact review handoff: `codegraph review --base HEAD --head WORKTREE --summary`
-- broader change impact: `codegraph impact --base HEAD --head WORKTREE --pretty`
-- architecture drift: `codegraph drift ./src --base origin/main --head HEAD --pretty --graph-edges summary --public-api removals`
+- broader change impact: `codegraph impact --base HEAD --head WORKTREE`
+- architecture drift: `codegraph drift ./src --base origin/main --head HEAD --graph-edges summary --public-api removals`
 - architecture summary: `codegraph inspect ./src --limit 20`
 - prioritized cycles: `codegraph cycles --sort priority`
 - duplicate cleanup: `codegraph duplicates --root . ./src --profile cleanup`
@@ -111,7 +111,7 @@ Use `codegraph file <path>` for current disk content. Readable numbered lines ar
 
 ```bash
 codegraph file src/auth.ts --offset 201 --limit 200 --max-bytes 80000
-codegraph file src/auth.ts --include-graph-context --pretty
+codegraph file src/auth.ts --include-graph-context
 ```
 
 Pagination and byte contracts:
