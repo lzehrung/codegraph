@@ -99,6 +99,12 @@ Caching avoids repeating work; it does not change extraction or resolution seman
 
 An incremental graph starts from a compatible manifest, keeps edges for unchanged files, and replaces edges for changed files. Changes to file signatures, discovery configuration, graph options, cache schema, or relevant build options invalidate the affected reuse boundary. Corrupt or unsupported cache data is rebuilt rather than treated as current analysis.
 
+Disk-backed text and hybrid search also maintain `search-v1.sqlite` beside the existing manifest under `.codegraph-cache/index-v1`. Its file and chunk rows derive from the loaded snapshot's manifest signatures; SQLite FTS5 only selects candidates, while the existing exact matcher and ranker remain authoritative.
+
+The sidecar is populated lazily and updates only added, changed, deleted, or retired files through a bounded worker pool. Readers verify the project snapshot identity inside one SQLite transaction; writer contention, unavailable storage, future schemas, or corruption fall back to in-memory source scanning instead of returning mixed-snapshot results.
+
+`search-v1.sqlite` contains normalized source and chunk text, so treat the project cache as sensitive local derived data. Cache-off does not create it; deleting `.codegraph-cache` after Codegraph processes stop removes it with the other project-local caches.
+
 Long-lived agent and review sessions retain compatible index state so repeated questions avoid the cold build. They check relevant file, configuration, and project freshness signals before reuse and refresh when drift is detected. Clear the disk cache or run cache-off when you specifically need a cold rebuild.
 
 ## Performance choices

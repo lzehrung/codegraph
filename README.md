@@ -281,7 +281,7 @@ Codegraph follows a single analysis pipeline:
 4. Build forward and reverse dependency indexes plus a semantic symbol index.
 5. Reuse those indexes for navigation, exploration, impact, review, and exports.
 
-The native addon accelerates the normal Tree-sitter path; it is not a separate analysis model. Compatible disk caches and long-lived sessions avoid repeating unchanged work. [How it works](./docs/how-it-works.md) covers discovery, resolution, caching, recovery, and performance choices in detail.
+The native addon accelerates the normal Tree-sitter path; it is not a separate analysis model. Compatible disk caches and long-lived sessions avoid repeating unchanged work, including repository-wide source reads on an exact warm text-search hit. [How it works](./docs/how-it-works.md) covers discovery, resolution, caching, recovery, and performance choices in detail.
 
 ## Limits and tradeoffs
 

@@ -1,8 +1,5 @@
 import fs from "node:fs/promises";
-import { LANG_CONFIGS } from "../bootstrap/treeSitterLanguages.js";
 import { type AnalysisBackend, type AnalysisMode, type AnalysisSummary } from "../analysisSummary.js";
-import { supportForFile } from "../languages.js";
-import { chunkFile } from "../chunking/chunkFile.js";
 import { SymbolKind, type BuildOptions, type SymbolDef } from "../indexer/types.js";
 import type { Range } from "../types.js";
 import { type SymbolNode } from "../graphs/symbol-graph.js";
@@ -38,6 +35,16 @@ import {
 } from "./normalize.js";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "./session.js";
 import { quoteShellArg } from "./shell.js";
+import {
+  buildQueryTextChunks,
+  detectQueryIndexSurface,
+  normalizeQuerySearchText,
+  QUERY_INDEX_NORMALIZER_VERSION,
+  type QueryTextChunk,
+} from "./query-index/content.js";
+import { findQueryIndexChunkCandidates, QUERY_INDEX_CANDIDATE_VERSION } from "./query-index/candidates.js";
+import { registerSessionInvalidationHook } from "./sessionLifecycle.js";
+import type { QueryIndexHandle } from "./query-index/update.js";
 
 export type AgentSearchMode = "hybrid" | "symbol" | "path" | "text" | "graph" | "sql";
 
@@ -158,13 +165,7 @@ type TokenMatch = {
   proximity: boolean;
 };
 
-type SearchTextChunk = {
-  name?: string;
-  text: string;
-  normalizedText: string;
-  startLine: number;
-  endLine: number;
-};
+type SearchTextChunk = QueryTextChunk;
 
 type SearchCache = {
   fileText: Map<string, Promise<string | null>>;
@@ -177,18 +178,20 @@ const MAX_TEXT_BYTES = 300_000;
 const MAX_GRAPH_DEPTH = 5;
 const DOCS_EXACT_PHRASE_BOOST = 18;
 const DOCS_PROXIMITY_BOOST = 6;
-const CHUNK_LANGUAGE_ALIASES: Record<string, string> = {
-  js: "javascript",
-  ts: "typescript",
-};
 const SEARCH_CACHES = new WeakMap<AgentProjectSnapshot, SearchCache>();
+const SEARCH_RESULT_CACHES = new WeakMap<AgentSession, Map<string, Promise<AgentSearchResponse>>>();
+const SEARCH_RANKING_VERSION = 1;
 
 export async function searchCodegraph(request: AgentSearchRequest): Promise<AgentSearchResponse> {
   const session = createAgentSession({
     root: request.root,
     ...(request.buildOptions ? { buildOptions: request.buildOptions } : {}),
   });
-  return await searchCodegraphWithSession(session, request);
+  try {
+    return await searchCodegraphWithSession(session, request);
+  } finally {
+    session.invalidate();
+  }
 }
 
 export async function searchCodegraphWithSession(
@@ -204,7 +207,22 @@ export async function searchCodegraphWithSession(
     // Hybrid/symbol/graph need symbol nodes, but not the detailed sidecar.
     symbolGraph: searchNeedsSymbolGraph(request) ? "basic" : "skip",
   });
-  return await searchSnapshot(snapshot, request);
+  const resultCache = getSessionSearchResultCache(session);
+  const cacheKey = searchResultCacheKey(snapshot, request);
+  const existing = resultCache.get(cacheKey);
+  if (existing) return await existing;
+  const mode = request.mode ?? "hybrid";
+  let queryIndex: QueryIndexHandle | undefined;
+  if (mode === "hybrid" || mode === "text") {
+    const { ensureSessionQueryIndex } = await import("./query-index/sessionStore.js");
+    queryIndex = await ensureSessionQueryIndex(session, snapshot);
+  }
+  const search = searchSnapshot(snapshot, request, queryIndex);
+  resultCache.set(cacheKey, search);
+  search.catch(() => {
+    if (resultCache.get(cacheKey) === search) resultCache.delete(cacheKey);
+  });
+  return await search;
 }
 
 export function formatAgentSearchResponse(response: AgentSearchResponse): string {
@@ -228,6 +246,7 @@ export function formatAgentSearchResponse(response: AgentSearchResponse): string
 async function searchSnapshot(
   snapshot: AgentProjectSnapshot,
   request: AgentSearchRequest,
+  queryIndex?: QueryIndexHandle,
 ): Promise<AgentSearchResponse> {
   const mode = request.mode ?? "hybrid";
   const query = buildQueryTerms(request.query);
@@ -250,7 +269,7 @@ async function searchSnapshot(
       addPathResults(snapshot, resultMap, getFileNeighborIndex(), query);
     }
     if (mode === "hybrid" || mode === "text") {
-      await addTextResults(snapshot, resultMap, query, request.includeSnippets ?? true, mode);
+      await addTextResults(snapshot, resultMap, query, request.includeSnippets ?? true, mode, queryIndex);
     }
   }
 
@@ -294,6 +313,29 @@ function canUsePathFastPath(request: AgentSearchRequest): boolean {
   return (request.mode ?? "hybrid") === "path" && request.from === undefined;
 }
 
+function getSessionSearchResultCache(session: AgentSession): Map<string, Promise<AgentSearchResponse>> {
+  const existing = SEARCH_RESULT_CACHES.get(session);
+  if (existing) return existing;
+  const created = new Map<string, Promise<AgentSearchResponse>>();
+  SEARCH_RESULT_CACHES.set(session, created);
+  registerSessionInvalidationHook(session, () => SEARCH_RESULT_CACHES.delete(session));
+  return created;
+}
+
+function searchResultCacheKey(snapshot: AgentProjectSnapshot, request: AgentSearchRequest): string {
+  return JSON.stringify({
+    projectSnapshotIdentity: snapshot.index.projectSnapshotIdentity ?? "",
+    query: normalizeQuerySearchText(request.query),
+    mode: request.mode ?? "hybrid",
+    limit: defaultAgentLimit(request.limit, DEFAULT_LIMIT, AGENT_SEARCH_RESULT_LIMIT),
+    depth: normalizeDepth(request.depth),
+    from: request.from ?? "",
+    includeSnippets: request.includeSnippets ?? true,
+    normalizerVersion: QUERY_INDEX_NORMALIZER_VERSION,
+    rankingVersion: SEARCH_RANKING_VERSION,
+    candidateVersion: QUERY_INDEX_CANDIDATE_VERSION,
+  });
+}
 function searchPathOnly(root: string, files: readonly string[], request: AgentSearchRequest): AgentSearchResponse {
   const query = buildQueryTerms(request.query);
   const resultMap = new Map<string, MutableSearchResult>();
@@ -376,14 +418,7 @@ function buildQueryTerms(input: string): SearchQueryTerms {
 }
 
 function normalizeSearchText(input: string): string {
-  return splitCamelCase(input)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
-
-function splitCamelCase(input: string): string {
-  return input.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
+  return normalizeQuerySearchText(input);
 }
 
 function isIdentifierLikeQuery(input: string): boolean {
@@ -600,43 +635,83 @@ async function addTextResults(
   query: SearchQueryTerms,
   includeSnippets: boolean,
   mode: AgentSearchMode,
+  queryIndex?: QueryIndexHandle,
 ): Promise<void> {
+  const projectSnapshotIdentity = snapshot.index.projectSnapshotIdentity;
+  const store = queryIndex?.store;
+  const diagnostics = queryIndex?.diagnostics;
+  if (store && diagnostics && projectSnapshotIdentity) {
+    try {
+      store.withReadSnapshot(projectSnapshotIdentity, () => {
+        const candidateStarted = performance.now();
+        const candidateChunks = findQueryIndexChunkCandidates(store, query.tokens);
+        diagnostics.candidateMs += performance.now() - candidateStarted;
+        diagnostics.fileCandidates += new Set(candidateChunks.map((chunk) => chunk.path)).size;
+        diagnostics.chunkCandidates += candidateChunks.length;
+        const allowedPaths = new Set(snapshot.files.map((file) => normalizeAgentFilePath(snapshot.root, file)));
+        const scoringStarted = performance.now();
+        for (const chunk of candidateChunks) {
+          if (!allowedPaths.has(chunk.path)) {
+            throw new Error(`Query index returned an out-of-snapshot path: ${chunk.path}`);
+          }
+          addTextFileResults(snapshot, resultMap, query, includeSnippets, mode, chunk.path, [chunk]);
+        }
+        diagnostics.scoringMs += performance.now() - scoringStarted;
+      });
+      return;
+    } catch (error) {
+      diagnostics.sidecarState = "unavailable";
+      diagnostics.fallbackReason = error instanceof Error ? error.message : String(error);
+    }
+  }
+
   const cache = getSearchCache(snapshot);
   for (const file of snapshot.files) {
     const normalizedText = await getCachedNormalizedText(cache, file);
-    if (!normalizedText) continue;
-    if (!textCouldMatchNormalized(normalizedText, query.tokens)) continue;
+    if (!normalizedText || !textCouldMatchNormalized(normalizedText, query.tokens)) continue;
     const relFile = normalizeAgentFilePath(snapshot.root, file);
-    const documentationFile = isDocumentationFile(relFile);
     const chunks = await getCachedTextChunks(cache, file);
-    for (const chunk of chunks) {
-      const match = matchTokenScoreFromNormalized(chunk.normalizedText, query);
-      if (match.score <= 0) continue;
+    addTextFileResults(snapshot, resultMap, query, includeSnippets, mode, relFile, chunks);
+  }
+}
 
-      const handle = formatAgentChunkHandle({ file: relFile, line: chunk.startLine });
-      const result = upsertResult(resultMap, {
-        handle,
-        kind: "chunk",
-        label: chunk.name ? `${chunk.name} (${relFile})` : `${relFile}:${chunk.startLine}`,
-        file: relFile,
-        range: {
-          start: { line: chunk.startLine, column: 0 },
-          end: { line: chunk.endLine, column: 0 },
-        },
-        provenance: createSearchProvenance(relFile, "text", documentationFile ? "medium" : "high", snapshot.analysis),
-      });
-      result.score += match.score + textResultBoost(match, documentationFile, query, mode);
-      addReason(result, `text token match: ${match.matched.join(", ")}`);
-      addPhraseReasons(result, match, documentationFile ? "docs text" : "text");
-      addEvidence(result, {
-        source: "chunk",
-        label: result.label,
-        file: relFile,
-        line: chunk.startLine,
-        ...(includeSnippets ? { snippet: makeSnippet(chunk.text, query) } : {}),
-      });
-      addFileFollowUps(result, relFile);
-    }
+function addTextFileResults(
+  snapshot: AgentProjectSnapshot,
+  resultMap: Map<string, MutableSearchResult>,
+  query: SearchQueryTerms,
+  includeSnippets: boolean,
+  mode: AgentSearchMode,
+  relFile: string,
+  chunks: readonly SearchTextChunk[],
+): void {
+  const documentationFile = isDocumentationFile(relFile);
+  for (const chunk of chunks) {
+    const match = matchTokenScoreFromNormalized(chunk.normalizedText, query);
+    if (match.score <= 0) continue;
+
+    const handle = formatAgentChunkHandle({ file: relFile, line: chunk.startLine });
+    const result = upsertResult(resultMap, {
+      handle,
+      kind: "chunk",
+      label: chunk.name ? `${chunk.name} (${relFile})` : `${relFile}:${chunk.startLine}`,
+      file: relFile,
+      range: {
+        start: { line: chunk.startLine, column: 0 },
+        end: { line: chunk.endLine, column: 0 },
+      },
+      provenance: createSearchProvenance(relFile, "text", documentationFile ? "medium" : "high", snapshot.analysis),
+    });
+    result.score += match.score + textResultBoost(match, documentationFile, query, mode);
+    addReason(result, `text token match: ${match.matched.join(", ")}`);
+    addPhraseReasons(result, match, documentationFile ? "docs text" : "text");
+    addEvidence(result, {
+      source: "chunk",
+      label: result.label,
+      file: relFile,
+      line: chunk.startLine,
+      ...(includeSnippets ? { snippet: makeSnippet(chunk.text, query) } : {}),
+    });
+    addFileFollowUps(result, relFile);
   }
 }
 
@@ -855,38 +930,7 @@ async function readSearchableFile(file: string): Promise<string | null> {
 }
 
 function buildTextChunks(file: string, text: string): SearchTextChunk[] {
-  const support = supportForFile(file);
-  const languageId = support ? (CHUNK_LANGUAGE_ALIASES[support.id] ?? support.id) : undefined;
-  const language = languageId ? LANG_CONFIGS[languageId] : undefined;
-  if (language) {
-    try {
-      const chunks = chunkFile({
-        language,
-        source: text,
-        filePath: file,
-        minTokens: 1,
-        maxTokens: 120,
-      });
-      if (chunks.length) {
-        return chunks.map((chunk) => ({
-          ...(chunk.name ? { name: chunk.name } : {}),
-          text: chunk.text,
-          normalizedText: normalizeSearchText([chunk.name, chunk.text].filter(Boolean).join(" ")),
-          startLine: chunk.startLine,
-          endLine: chunk.endLine,
-        }));
-      }
-    } catch {
-      // Fall through to line chunks when semantic chunking is unavailable.
-    }
-  }
-
-  return text.split(/\r?\n/).map((line, index) => ({
-    text: line,
-    normalizedText: normalizeSearchText(line),
-    startLine: index + 1,
-    endLine: index + 1,
-  }));
+  return buildQueryTextChunks(file, text);
 }
 
 function makeSnippet(text: string, query: SearchQueryTerms): string {
@@ -1128,21 +1172,5 @@ function createSearchProvenance(
 }
 
 function detectSearchSurface(relFile: string): "code" | "docs" | "config" {
-  const lower = relFile.toLowerCase();
-  if (isDocumentationFile(lower)) {
-    return "docs";
-  }
-  if (
-    lower.endsWith(".json") ||
-    lower.endsWith(".yaml") ||
-    lower.endsWith(".yml") ||
-    lower.endsWith(".toml") ||
-    lower.endsWith(".ini") ||
-    lower.endsWith(".env") ||
-    lower === "dockerfile" ||
-    lower.startsWith(".github/")
-  ) {
-    return "config";
-  }
-  return "code";
+  return detectQueryIndexSurface(relFile);
 }

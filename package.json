@@ -77,6 +77,7 @@
     "bench:docs:check": "node ./scripts/benchmarks/summarize-results.mjs --input docs/benchmarks/results.example.json --scenario-file docs/benchmarks/scenarios.json --readme docs/benchmarks/README.md --check",
     "bench:semantic": "node ./scripts/benchmarks/run-semantic-corpus.mjs",
     "bench:semantic:summarize": "node ./scripts/benchmarks/summarize-semantic-corpus.mjs",
+    "bench:query": "node ./scripts/benchmarks/measure-query-substrate.mjs",
     "test:ui": "node ./scripts/ensure-dist-for-tests.mjs && vitest --ui",
     "test:run": "node ./scripts/ensure-dist-for-tests.mjs && vitest run",
     "test:bench": "node ./scripts/ensure-dist-for-tests.mjs && vitest tests/bench-harness.test.ts tests/native-query-scope.test.ts",

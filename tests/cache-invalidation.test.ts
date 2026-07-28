@@ -421,8 +421,7 @@ describe("Cache invalidation and strict hashing", () => {
     // old one-path-per-argv form, so a later shrink of fileCount/subdir cannot silently
     // stop exercising the bug (CI runs on Linux and would not otherwise notice).
     const WINDOWS_ARGV_LIMIT = 32_767;
-    const estimatedOldArgvChars =
-      "ls-files".length + 1 + fileNames.reduce((sum, name) => sum + 1 + name.length, 0);
+    const estimatedOldArgvChars = "ls-files".length + 1 + fileNames.reduce((sum, name) => sum + 1 + name.length, 0);
     expect(estimatedOldArgvChars).toBeGreaterThan(WINDOWS_ARGV_LIMIT);
     await Promise.all(
       fileNames.map((name, i) => fsp.writeFile(path.join(root, name), `export const v${i} = ${i};\n`, "utf8")),
@@ -456,9 +455,7 @@ describe("Cache invalidation and strict hashing", () => {
 
       expect(hashes.size).toBe(0);
       expect(warnSpy).toHaveBeenCalled();
-      expect(warnSpy.mock.calls.some((call) => String(call[0]).includes("Failed to read Git blob hashes"))).toBe(
-        true,
-      );
+      expect(warnSpy.mock.calls.some((call) => String(call[0]).includes("Failed to read Git blob hashes"))).toBe(true);
     } finally {
       warnSpy.mockRestore();
     }
@@ -504,7 +501,11 @@ describe("Cache invalidation and strict hashing", () => {
     await fsp.mkdir(path.join(root, ".codegraph-cache", "index-v1"), { recursive: true });
     await fsp.mkdir(path.join(root, ".codegraph"), { recursive: true });
     await fsp.writeFile(path.join(root, "src", "app.ts"), "export const app = 1;\n", "utf8");
-    await fsp.writeFile(path.join(root, ".codegraph-cache", "index-v1", "stale.ts"), "export const stale = 1;\n", "utf8");
+    await fsp.writeFile(
+      path.join(root, ".codegraph-cache", "index-v1", "stale.ts"),
+      "export const stale = 1;\n",
+      "utf8",
+    );
     await fsp.writeFile(path.join(root, ".codegraph", "note.md"), "# note\n", "utf8");
 
     const discovered = await listProjectFiles(root, ["**/*.{ts,md}"], { ignoreGlobs: [] });
@@ -690,7 +691,7 @@ describe("Cache invalidation and strict hashing", () => {
     runGit(root, ["add", "foo.ts"]);
     runGit(root, ["commit", "-m", "initial"]);
 
-    await buildProjectIndex(root, { threads: 2, cache: "disk" });
+    const initial = await buildProjectIndex(root, { threads: 2, cache: "disk" });
     await expect(fsp.stat(projectSnapshotPathFor(root))).resolves.toBeTruthy();
 
     const db = new DatabaseSync(diskCacheDbPathFor(root));
@@ -714,6 +715,9 @@ describe("Cache invalidation and strict hashing", () => {
       expect(await fsp.readFile(manifestPathFor(root), "utf8")).toBe(manifestBefore);
       const moduleIndex = incremental.byFile.get(normalize(filePath));
       expect(moduleIndex?.locals.some((local) => local.localName === "snap")).toBe(true);
+      expect([...(incremental.manifestEntries?.entries() ?? [])]).toEqual([
+        ...(initial.manifestEntries?.entries() ?? []),
+      ]);
     } finally {
       prepSpy.mockRestore();
       signatureSpy.mockRestore();

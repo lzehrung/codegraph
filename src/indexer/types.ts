@@ -280,6 +280,21 @@ export type WorkerPoolReport = {
   wallClockMs?: number;
 };
 
+export type QueryIndexDiagnostics = {
+  sidecarState: "hit" | "created" | "updated" | "unavailable" | "writer-busy" | "rebuilt-corrupt";
+  filesRead: number;
+  filesAdded: number;
+  filesUpdated: number;
+  filesDeleted: number;
+  fileCandidates: number;
+  chunkCandidates: number;
+  openMs: number;
+  updateMs: number;
+  candidateMs: number;
+  scoringMs: number;
+  fallbackReason?: string;
+};
+
 export type BuildReport = {
   timings: BuildTimingReport;
   cache?: CacheReport;
@@ -288,6 +303,7 @@ export type BuildReport = {
   manifest?: ManifestReport;
   backend?: BackendReport;
   workerPool?: WorkerPoolReport;
+  queryIndex?: QueryIndexDiagnostics;
 };
 
 export type GraphDeltaReport = {

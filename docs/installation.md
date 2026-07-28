@@ -37,6 +37,10 @@ The `codegraph` bin points at the split ESM bundle under `dist/bin/`. Unbundled 
 
 The published bin enables Node's module compile cache under the per-user codegraph cache root (`%LOCALAPPDATA%\codegraph\compile-cache` on Windows; `$XDG_CACHE_HOME/codegraph/compile-cache` or `~/.cache/codegraph/compile-cache` elsewhere). That directory is outside the project tree, so it never enters discovery. Deleting it changes startup timing only, never command output.
 
+With disk caching enabled, each project can also contain `.codegraph-cache/index-v1/search-v1.sqlite`. It stores normalized source and chunk text for repeated text and hybrid search, follows the existing project cache boundary, and is not created by cache-off runs.
+
+Treat that project-local cache as sensitive derived source data. Stop Codegraph processes before deleting `.codegraph-cache`; `uninit` does not broaden its deletion behavior to remove caches implicitly.
+
 ## Option 2: Install from the `@lzehrung` registry
 
 Configure the scoped registry if you have not already:

@@ -26,6 +26,19 @@ This command rebuilds stale `dist` output when needed, runs every scenario and b
 
 The test asserts result structure, one-session and adjacency-cache behavior, plus deliberately generous environment-scoped time and memory ceilings. It is a regression guard, is not part of the checked comparison table below, and does not establish universal latency or scale claims.
 
+## Persistent query substrate
+
+`scripts/benchmarks/measure-query-substrate.mjs` measures fresh-process warm CLI search in `hybrid`, `text`, `symbol`, `path`, and `graph` modes plus repeated search calls through one MCP handler. Run it after a build:
+
+```bash
+npm run build
+npm run bench:query -- --root . --cli-samples 5 --mcp-samples 10
+```
+
+Pass `--include-baseline` to add same-machine cache-off rows. CLI timing includes process startup, project snapshot validation, search, and JSON serialization; MCP timing discards one warmup and reports the following calls.
+
+The structural regression suite separately asserts exact response parity, zero query-index source reads on a warm hit, and bounded file reads for incremental updates. Do not infer universal latency from one workstation; compare the same root, revision, query, Node version, and machine state.
+
 ## Semantic correctness corpus
 
 The [`SemanticCorpusV1` manifest](./semantic-corpus.json) measures library-level definition, reference, dependency, and candidate-test behavior. It is separate from the `explore` comparison above: `scenarios.json` measures evidence-anchor presence for two workflows, while the semantic corpus compares structured API observations with reviewed goldens.
