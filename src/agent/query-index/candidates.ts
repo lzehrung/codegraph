@@ -16,6 +16,8 @@ export function findQueryIndexChunkCandidates(
 ): StoredQueryIndexChunk[] {
   const directCandidates = new Map<string, StoredQueryIndexChunk>();
   const terms = normalizedTerms.filter((term) => term.length);
+  const eligiblePaths = store.eligibleFilePaths(terms);
+  const eligiblePathSet = new Set(eligiblePaths);
   for (const term of terms) {
     let chunks: StoredQueryIndexChunk[];
     if (codePointLength(term) >= 3) {
@@ -23,10 +25,11 @@ export function findQueryIndexChunkCandidates(
     } else {
       chunks = store.substringChunkCandidates(term);
     }
-    for (const chunk of chunks) directCandidates.set(`${chunk.path}\0${chunk.ordinal}`, chunk);
+    for (const chunk of chunks) {
+      if (eligiblePathSet.has(chunk.path)) directCandidates.set(`${chunk.path}\0${chunk.ordinal}`, chunk);
+    }
   }
 
-  const eligiblePaths = [...new Set([...directCandidates.values()].map((chunk) => chunk.path))];
   for (const term of terms) {
     for (const chunk of store.compactChunkCandidates(term, eligiblePaths)) {
       directCandidates.set(`${chunk.path}\0${chunk.ordinal}`, chunk);

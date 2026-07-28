@@ -91,6 +91,7 @@ function storedCandidateChunkFromRow(row: Record<string, unknown>): StoredQueryI
 export class QueryIndexStore {
   private readonly db: SqliteDatabase;
   private closed = false;
+  private normalizedFiles: Map<string, string> | undefined;
 
   constructor(readonly filePath: string) {
     const db = new SqliteDatabase(filePath, { timeout: QUERY_INDEX_BUSY_TIMEOUT_MS });
@@ -126,6 +127,26 @@ export class QueryIndexStore {
     }
     return identities;
   }
+  eligibleFilePaths(normalizedTerms: readonly string[]): string[] {
+    if (!normalizedTerms.length) return [];
+    if (!this.normalizedFiles) {
+      const rows = this.db.prepare("SELECT path, normalized_text FROM files ORDER BY path").all() as Array<{
+        path?: unknown;
+        normalized_text?: unknown;
+      }>;
+      const normalizedFiles = new Map<string, string>();
+      for (const row of rows) {
+        if (typeof row.path !== "string" || !(row.normalized_text instanceof Uint8Array)) {
+          throw new Error("Invalid query index file normalization.");
+        }
+        normalizedFiles.set(row.path, brotliDecompressSync(row.normalized_text).toString("utf8"));
+      }
+      this.normalizedFiles = normalizedFiles;
+    }
+    return [...this.normalizedFiles]
+      .filter(([, normalizedText]) => normalizedTerms.some((term) => normalizedText.includes(term)))
+      .map(([file]) => file);
+  }
 
   replaceFiles(
     files: readonly PreparedQueryIndexFile[],
@@ -152,8 +173,8 @@ export class QueryIndexStore {
       for (const file of files) deleteFile.run(file.path);
 
       const insertFile = this.db.prepare(`
-        INSERT INTO files(path, source_identity, surface, language, byte_length, line_count)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO files(path, source_identity, surface, language, normalized_text, byte_length, line_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
       `);
       const insertChunk = this.db.prepare(`
         INSERT INTO chunks(file_id, ordinal, kind, name, start_line, end_line, text, normalized_text)
@@ -165,6 +186,7 @@ export class QueryIndexStore {
           file.sourceIdentity,
           file.surface,
           file.language ?? null,
+          file.normalizedText,
           file.byteLength,
           file.lineCount,
         );
@@ -189,6 +211,7 @@ export class QueryIndexStore {
       `);
       for (const [key, value] of Object.entries(metadata)) upsertMetadata.run(key, value);
       this.db.exec("COMMIT;");
+      this.normalizedFiles = undefined;
       return "committed";
     } catch (error) {
       try {

@@ -392,9 +392,9 @@ Reviewed targets on the current repository and workstation class:
 
 The hybrid absolute target was calibrated from 1.0s to 1.2s after measurement exposed the fixed fresh-process startup and snapshot-validation floor. The text target was calibrated from 0.8s to 0.9s after review required compact cross-word candidate recovery within files admitted by the existing full-file prefilter; both keep the 2.5x improvement requirement without rewarding semantic shortcuts or weakening parity.
 
-Final implementation measurement on Windows 11 and Node.js 24.15.0 used five fresh CLI samples and ten warmed MCP samples on 2026-07-28. Hybrid p50 was 1.172s versus the recorded 2.98s pre-implementation baseline, text p50 was 0.841s versus 2.26s, and warmed MCP p50/p95 were 137/195ms.
+Final implementation measurement on Windows 11 and Node.js 24.15.0 used five fresh CLI samples and ten warmed MCP samples on 2026-07-28. Hybrid p50 was 1.189s versus the recorded 2.98s pre-implementation baseline, text p50 was 0.863s versus 2.26s, and warmed MCP p50/p95 were 166/174ms.
 
-The same-revision sidecar-disabled comparison measured symbol, path, and graph p50 at 0.957s, 0.336s, and 0.971s. Sidecar-enabled values were 0.962s, 0.336s, and 0.970s, so the modes outside the optimized text path did not regress.
+The same-revision sidecar-disabled comparison measured symbol, path, and graph p50 at 0.961s, 0.334s, and 0.967s. Sidecar-enabled values were 0.964s, 0.337s, and 0.974s, so the modes outside the optimized text path stayed within the regression target.
 
 Treat absolute timings as environment-specific. CI should gate relative regressions and structural counters; local benchmark documentation may report absolute values with environment metadata.
 

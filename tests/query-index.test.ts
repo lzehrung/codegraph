@@ -137,7 +137,13 @@ describe("persistent query index", () => {
       | { bytes?: unknown }
       | undefined;
     const storedRow = database
-      .prepare("SELECT sum(length(text) + length(normalized_text)) AS bytes FROM chunks")
+      .prepare(
+        `
+        SELECT
+          (SELECT sum(length(normalized_text)) FROM files) +
+          (SELECT sum(length(text) + length(normalized_text)) FROM chunks) AS bytes
+      `,
+      )
       .get() as { bytes?: unknown } | undefined;
     database.close();
     expect(typeof sourceRow?.bytes).toBe("number");
@@ -422,7 +428,7 @@ describe("persistent query index", () => {
     expect(row?.user_version).toBe(999);
   });
 
-  it("migrates v1 sidecars by rebuilding derived rows into the compact schema", async () => {
+  it("migrates v1 sidecars by rebuilding derived rows into the current compact schema", async () => {
     const root = await createRepo();
     const databasePath = path.join(root, "query-v1.sqlite");
     const v1 = new SqliteDatabase(databasePath);
@@ -480,9 +486,56 @@ describe("persistent query index", () => {
       type?: unknown;
     }>;
     inspected.close();
-    expect(version?.user_version).toBe(2);
-    expect(fileColumns.map((column) => column.name)).not.toContain("normalized_text");
+    expect(version?.user_version).toBe(3);
+    expect(fileColumns).toContainEqual(expect.objectContaining({ name: "normalized_text", type: "BLOB" }));
     expect(chunkColumns).toContainEqual(expect.objectContaining({ name: "text", type: "BLOB" }));
+  });
+
+  it("migrates v2 sidecars by rebuilding file eligibility data", async () => {
+    const root = await createRepo();
+    const databasePath = path.join(root, "query-v2.sqlite");
+    const v2 = new SqliteDatabase(databasePath);
+    v2.exec(`
+      CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+      CREATE TABLE files(
+        file_id INTEGER PRIMARY KEY,
+        path TEXT NOT NULL UNIQUE,
+        source_identity TEXT NOT NULL,
+        surface TEXT NOT NULL,
+        language TEXT,
+        byte_length INTEGER NOT NULL,
+        line_count INTEGER NOT NULL
+      ) STRICT;
+      CREATE TABLE chunks(
+        chunk_id INTEGER PRIMARY KEY,
+        file_id INTEGER NOT NULL REFERENCES files(file_id) ON DELETE CASCADE,
+        ordinal INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        name TEXT,
+        start_line INTEGER NOT NULL,
+        end_line INTEGER NOT NULL,
+        text BLOB NOT NULL,
+        normalized_text TEXT NOT NULL,
+        UNIQUE(file_id, ordinal)
+      ) STRICT;
+      CREATE VIRTUAL TABLE chunk_search USING fts5(
+        normalized_text, content='chunks', content_rowid='chunk_id', tokenize='trigram'
+      );
+      PRAGMA user_version = 2;
+    `);
+    v2.close();
+
+    const migrated = new QueryIndexStore(databasePath);
+    migrated.close();
+    const inspected = new SqliteDatabase(databasePath, { readonly: true });
+    const version = inspected.prepare("PRAGMA user_version").get() as { user_version?: unknown } | undefined;
+    const fileColumns = inspected.prepare("PRAGMA table_info(files)").all() as Array<{
+      name?: unknown;
+      type?: unknown;
+    }>;
+    inspected.close();
+    expect(version?.user_version).toBe(3);
+    expect(fileColumns).toContainEqual(expect.objectContaining({ name: "normalized_text", type: "BLOB" }));
   });
 
   it("rejects absolute and traversing paths from persisted rows", async () => {

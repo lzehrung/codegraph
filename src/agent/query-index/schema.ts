@@ -1,7 +1,7 @@
 import { SqliteDatabase } from "../../sqlite-driver.js";
 import { QUERY_INDEX_CHUNKER_VERSION, QUERY_INDEX_NORMALIZER_VERSION } from "./content.js";
 
-export const QUERY_INDEX_SCHEMA_VERSION = 2;
+export const QUERY_INDEX_SCHEMA_VERSION = 3;
 
 export type QueryIndexMetadata = {
   schemaVersion: string;
@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS files (
   source_identity TEXT NOT NULL,
   surface TEXT NOT NULL,
   language TEXT,
+  normalized_text BLOB NOT NULL,
   byte_length INTEGER NOT NULL,
   line_count INTEGER NOT NULL
 ) STRICT;
@@ -103,7 +104,7 @@ function existingQueryTables(db: SqliteDatabase): Set<string> {
   return new Set(rows.flatMap((row) => (typeof row.name === "string" ? [row.name] : [])));
 }
 
-function migrateQueryIndexV1ToV2(db: SqliteDatabase): void {
+function rebuildDerivedQueryIndexSchema(db: SqliteDatabase): void {
   db.transaction(() => {
     db.exec("DROP TRIGGER IF EXISTS files_ai;");
     db.exec("DROP TRIGGER IF EXISTS files_ad;");
@@ -116,7 +117,7 @@ function migrateQueryIndexV1ToV2(db: SqliteDatabase): void {
     db.exec("DROP TABLE IF EXISTS chunks;");
     db.exec("DROP TABLE IF EXISTS files;");
     db.exec(QUERY_INDEX_SCHEMA_SQL);
-    db.pragma("user_version = 2");
+    db.pragma(`user_version = ${QUERY_INDEX_SCHEMA_VERSION}`);
   })();
 }
 
@@ -132,8 +133,8 @@ export function ensureQueryIndexSchema(db: SqliteDatabase): void {
     db.pragma(`user_version = ${QUERY_INDEX_SCHEMA_VERSION}`);
     return;
   }
-  if (version === 1) {
-    migrateQueryIndexV1ToV2(db);
+  if (version === 1 || version === 2) {
+    rebuildDerivedQueryIndexSchema(db);
   } else if (version < QUERY_INDEX_SCHEMA_VERSION) {
     throw new QueryIndexSchemaError(`Query index schema version ${version} has no supported migration.`);
   }

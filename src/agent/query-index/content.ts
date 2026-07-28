@@ -12,6 +12,11 @@ const CHUNK_LANGUAGE_ALIASES: Record<string, string> = {
   js: "javascript",
   ts: "typescript",
 };
+function compressQueryText(text: string): Uint8Array {
+  return brotliCompressSync(text, {
+    params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 },
+  });
+}
 
 export type QueryTextChunk = {
   ordinal: number;
@@ -40,6 +45,7 @@ export type PreparedQueryIndexFile = {
   language?: string;
   byteLength: number;
   lineCount: number;
+  normalizedText: Uint8Array;
   chunks: PreparedQueryTextChunk[];
   sourceRead: boolean;
 };
@@ -132,6 +138,7 @@ export async function prepareQueryIndexFile(input: QueryIndexFileInput): Promise
         ...(support ? { language: support.id } : {}),
         byteLength: stat.size,
         lineCount: 0,
+        normalizedText: compressQueryText(""),
         chunks: [],
         sourceRead: false,
       };
@@ -145,11 +152,10 @@ export async function prepareQueryIndexFile(input: QueryIndexFileInput): Promise
       ...(support ? { language: support.id } : {}),
       byteLength: stat.size,
       lineCount: text ? text.split(/\r?\n/).length : 0,
+      normalizedText: compressQueryText(normalizeQuerySearchText(text)),
       chunks: buildQueryTextChunks(input.absolutePath, text).map((chunk) => ({
         ...chunk,
-        text: brotliCompressSync(chunk.text, {
-          params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 },
-        }),
+        text: compressQueryText(chunk.text),
       })),
       sourceRead: true,
     };
