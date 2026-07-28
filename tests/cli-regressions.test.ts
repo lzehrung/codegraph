@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fsp from "node:fs/promises";
@@ -9,9 +9,28 @@ import { getSkillTargetDirForAgent, type SkillInstallAgent } from "../src/cli/sk
 import packageJson from "../package.json" with { type: "json" };
 import { runGit as git } from "./helpers/git.js";
 import { captureCli, runCliOrThrow, runTsxScriptOrThrow } from "./helpers/cli.js";
-import { createTwoCommitCycleProject } from "./helpers/filesystem.js";
+import { copyFixtureSubset, createTwoCommitCycleProject, readOnlySamplePath } from "./helpers/filesystem.js";
 
 const sourceCliPath = path.resolve(process.cwd(), "src", "cli.ts");
+
+let samplesRoot = "";
+let tsRoot = "";
+let sampleRoot = "";
+
+beforeAll(async () => {
+  samplesRoot = await mkTmpDir("dg-cli-samples-");
+  await copyFixtureSubset(readOnlySamplePath(), samplesRoot, { subset: ["typescript"] });
+  tsRoot = normalize(path.join(samplesRoot, "typescript"));
+  sampleRoot = tsRoot;
+});
+
+afterAll(async () => {
+  if (process.env.CODEGRAPH_KEEP_FIXTURE_TEMP === "1") {
+    console.error(`Retained fixture copy: ${samplesRoot}`);
+  } else {
+    await fsp.rm(samplesRoot, { recursive: true, force: true });
+  }
+});
 
 async function runCliCommand(args: string[], input?: string): Promise<string> {
   const result = await runCliCommandDetailed(args, input);
@@ -66,8 +85,7 @@ function skillInstallTarget(rootDir: string): string {
 }
 
 describe("CLI regressions", () => {
-  const samplesRoot = normalize(path.resolve(process.cwd(), "tests", "samples"));
-  const tsRoot = normalize(path.resolve(samplesRoot, "typescript"));
+  // Read-only source samples are copied once because CLI commands default to disk caching.
 
   it("treats Windows cross-drive relative paths as outside CLI discovery roots", () => {
     expect(isCliDiscoveryRelativePathInside("src/app.ts")).toBe(true);
@@ -1968,7 +1986,7 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
 
 describe("textGrep API", () => {
   it("returns normalized relative paths and match locations", async () => {
-    const root = path.resolve(process.cwd(), "tests", "samples", "typescript");
+    const root = readOnlySamplePath("typescript");
     const hits = await textGrep(root, "helperFunction", ["**/*.ts"], {
       maxHits: 50,
     });
@@ -2025,8 +2043,6 @@ function initGitRepo(root: string): void {
 }
 
 describe("CLI flows", () => {
-  const sampleRoot = normalize(path.resolve(process.cwd(), "tests", "samples", "typescript"));
-
   it("emits a structured file graph with --json", async () => {
     const stdout = await runCliCommand(["graph", "--json", "--stdout", "--fast-graph", sampleRoot]);
     const graph = JSON.parse(stdout);

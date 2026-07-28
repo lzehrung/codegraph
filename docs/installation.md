@@ -106,6 +106,14 @@ Explicit CLI, library, and tool `native` options take precedence over `CODEGRAPH
 
 Reduced mode preserves graph-only and regex-backed recovery where available; it does not provide a non-native Tree-sitter parser.
 
+## Certification evidence
+
+A certification report distinguishes the bytes it inspected from the host behavior it executed. `runtime` means the packed root and matching native packages loaded and completed their smoke on that target; `emulated`, `structural`, and `unsupported` remain separate states, and a structural archive check is not a runtime claim.
+
+Semantic reports make the same distinction with `packageMode`. `packed` means the corpus runner loaded the installed candidate package, while `checkout` identifies a source-build trend run; native and reduced results are never combined.
+
+The initial [semantic corpus](./benchmarks/README.md#semantic-correctness-corpus) is informational and does not create an absolute accuracy threshold. Consult the release's machine-readable report before treating a package version or target as certified.
+
 ## Agent client setup
 
 After installing the CLI, `codegraph install` can configure Codegraph-owned MCP entries, bundled skill payloads, and marker files for supported agent clients:

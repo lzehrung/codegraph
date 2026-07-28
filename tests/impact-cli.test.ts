@@ -1,11 +1,23 @@
-import { describe, it, expect } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import path from "node:path";
 import { runCliOrThrow, runCliStdout, runTsxScriptOrThrow } from "./helpers/cli.js";
 import os from "node:os";
 import fsp from "node:fs/promises";
 import { runGit } from "./helpers/git.js";
+import { copyFixtureSubset, readOnlySamplePath } from "./helpers/filesystem.js";
 
-const sampleRoot = path.resolve(process.cwd(), "tests", "samples", "typescript");
+let sampleRoot = "";
+beforeAll(async () => {
+  sampleRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-cli-sample-"));
+  await copyFixtureSubset(readOnlySamplePath("typescript"), sampleRoot);
+});
+afterAll(async () => {
+  if (process.env.CODEGRAPH_KEEP_FIXTURE_TEMP === "1") {
+    console.error(`Retained fixture copy: ${sampleRoot}`);
+  } else {
+    await fsp.rm(sampleRoot, { recursive: true, force: true });
+  }
+});
 const slowCliTimeoutMs = 30000;
 const impactDiff = `diff --git a/utils.ts b/utils.ts
 index 1234567..abcdef0 100644

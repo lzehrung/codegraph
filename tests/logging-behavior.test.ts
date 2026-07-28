@@ -60,6 +60,7 @@ describe("logging behavior", () => {
     try {
       const report: BuildReport = { timings: {} };
       await buildProjectIndex(root, {
+        cache: "disk",
         logLevel: "silent",
         report,
       });

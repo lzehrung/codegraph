@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
@@ -16,13 +16,25 @@ import {
   tool_impactJSON,
   tool_impactFromDiffText,
 } from "../src/agent-tools.js";
+import { copyFixtureSubset, readOnlySamplePath } from "./helpers/filesystem.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
 }
 
 describe("Agent Tools", () => {
-  const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
+  let samplePath = "";
+  beforeAll(async () => {
+    samplePath = await mkTmpDir("dg-agent-tools-fixture-");
+    await copyFixtureSubset(readOnlySamplePath("typescript"), samplePath);
+  });
+  afterAll(async () => {
+    if (process.env.CODEGRAPH_KEEP_FIXTURE_TEMP === "1") {
+      console.error(`Retained fixture copy: ${samplePath}`);
+    } else {
+      await fsp.rm(samplePath, { recursive: true, force: true });
+    }
+  });
 
   it("tool_listProjectFiles should list files", async () => {
     const result = await tool_listProjectFiles(samplePath);

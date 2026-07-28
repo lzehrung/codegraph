@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import { collectGraph, buildProjectIndex } from "../src/index.js";
 import type { ImportBinding } from "../src/index.js";
+import { readOnlySamplePath } from "./helpers/filesystem.js";
 
 function expectNamespaceImport(binding: ImportBinding | undefined, localNS: string): void {
   expect(binding).toBeDefined();
@@ -13,7 +14,7 @@ function expectNamespaceImport(binding: ImportBinding | undefined, localNS: stri
 }
 
 describe("Complex Monorepo Scenarios", () => {
-  const root = path.join(process.cwd(), "tests", "samples", "complex-monorepo");
+  const root = readOnlySamplePath("complex-monorepo");
 
   it("resolves path aliases from tsconfig.json", async () => {
     const mainFile = path.join(root, "packages/web-app/src/main.ts").replace(/\\/g, "/");
@@ -49,7 +50,7 @@ describe("Complex Monorepo Scenarios", () => {
 
   it("handles barrel circularity and local cycles", async () => {
     const internalFile = path.join(root, "packages/core-logic/src/internal.ts").replace(/\\/g, "/");
-    const index = await buildProjectIndex(root);
+    const index = await buildProjectIndex(root, { cache: "off" });
 
     // Verify that internal.ts can resolve 'login' which is exported by the barrel it imports from
     const fileIndex = index.byFile.get(internalFile);
@@ -84,7 +85,7 @@ describe("Complex Monorepo Scenarios", () => {
 
   it("handles type-only imports in TS files", async () => {
     const mainFile = path.join(root, "packages/web-app/src/main.ts").replace(/\\/g, "/");
-    const index = await buildProjectIndex(root);
+    const index = await buildProjectIndex(root, { cache: "off" });
     const fileIndex = index.byFile.get(mainFile);
 
     const typeImport = fileIndex?.imports.find((i) => i.from === "@complex/shared-types");
@@ -96,7 +97,7 @@ describe("Complex Monorepo Scenarios", () => {
 
   it("handles type-only imports in TSX files", async () => {
     const tsxFile = path.join(root, "packages/web-app/src/UserProfile.tsx").replace(/\\/g, "/");
-    const index = await buildProjectIndex(root);
+    const index = await buildProjectIndex(root, { cache: "off" });
     const fileIndex = index.byFile.get(tsxFile);
 
     const typeImport = fileIndex?.imports.find((i) => i.from === "@complex/shared-types");
@@ -143,8 +144,7 @@ describe("Complex Monorepo Scenarios", () => {
   });
 
   it("identifies impact from ambient global type changes", async () => {
-    const index = await buildProjectIndex(root);
-    const globalsFile = path.join(root, "packages/shared-types/src/globals.d.ts").replace(/\\/g, "/");
+    const index = await buildProjectIndex(root, { cache: "off" });
     const authFile = path.join(root, "packages/core-logic/src/auth.ts").replace(/\\/g, "/");
 
     // The auth.ts file uses App.GlobalConfig from globals.d.ts
@@ -159,7 +159,7 @@ describe("Complex Monorepo Scenarios", () => {
 
   it("handles Go grouped and aliased imports", async () => {
     const goFile = path.join(root, "packages/go-lib/lib.go").replace(/\\/g, "/");
-    const index = await buildProjectIndex(root);
+    const index = await buildProjectIndex(root, { cache: "off" });
     const fileIndex = index.byFile.get(goFile);
 
     expect(fileIndex).toBeDefined();
@@ -175,7 +175,7 @@ describe("Complex Monorepo Scenarios", () => {
 
   it("handles Rust mod items", async () => {
     const rustFile = path.join(root, "packages/rust-lib/src/lib.rs").replace(/\\/g, "/");
-    const index = await buildProjectIndex(root);
+    const index = await buildProjectIndex(root, { cache: "off" });
     const fileIndex = index.byFile.get(rustFile);
 
     expect(fileIndex).toBeDefined();
@@ -188,7 +188,7 @@ describe("Complex Monorepo Scenarios", () => {
 
   it("handles Rust nested use blocks and re-exports", async () => {
     const rustFile = path.join(root, "packages/rust-lib/src/lib.rs").replace(/\\/g, "/");
-    const index = await buildProjectIndex(root);
+    const index = await buildProjectIndex(root, { cache: "off" });
 
     // Check for 'use utils::helper;' (captured by re-export in our current query)
     const helperExport = index.byFile.get(rustFile)?.exports.find((e) => e.exportedAs === "helper");

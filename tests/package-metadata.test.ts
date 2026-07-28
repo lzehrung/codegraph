@@ -368,6 +368,7 @@ describe("package metadata", () => {
     );
     expect(scripts["native:check-artifacts"]).toBe("node ./scripts/check-native-artifacts.mjs");
     expect(scripts["native:stage-local"]).toBe("node ./scripts/stage-native-package.mjs");
+    expect(scripts["certify:packages"]).toBe("node ./scripts/certification/run-package-smoke.mjs");
     expect(devDependencies["@vitest/coverage-v8"]).toBeDefined();
     expect(vitestConfig).toContain('provider: "v8"');
     expect(vitestConfig).toContain('include: ["src/**/*.{ts,tsx}"]');
@@ -678,23 +679,11 @@ void onImpactItemStreaming;
     expect(skillDoc).not.toContain("compatibility shim");
   });
 
-  it("keeps the release workflow publishing only the root and native packages", () => {
+  it("keeps the release workflow on the certified package path", () => {
     const workflow = readText(".github/workflows/release.yml");
     const runCommands = workflowRunCommands(workflow);
     const buildCommand = runCommands.find((command) => command.includes("cli.js build --platform"));
     const artifactsCommand = runCommands.find((command) => command.includes("cli.js artifacts"));
-    const installIndex = workflow.indexOf("npm ci --ignore-scripts");
-    const publishInstallIndex = workflow.lastIndexOf("npm ci --ignore-scripts");
-    const publishRebuildIndex = workflow.lastIndexOf("npm rebuild");
-    const patchIndex = workflow.indexOf("patch-tree-sitter-node24");
-    const rerunGuardIndex = workflow.indexOf("Refuse reruns on an already-tagged release commit");
-    const versionIndex = workflow.indexOf("node ./scripts/set-native-package-version.mjs");
-    const createDirsIndex = workflow.indexOf("npm run native:create-npm-dirs");
-    const cleanupArtifactsIndex = workflow.indexOf("rm -rf native-artifacts");
-    const publishIndex = workflow.indexOf(
-      "npm run publish:${{ inputs.release_type }} -- --package root --package native",
-    );
-    const releaseIndex = workflow.indexOf("Create or update GitHub Release");
     const nativePackage = readJson("packages/codegraph-native/package.json");
     const targets =
       nativePackage.napi &&
@@ -709,40 +698,20 @@ void onImpactItemStreaming;
     }
     expect(buildCommand).toBeDefined();
     expect(artifactsCommand).toBeDefined();
-    expect(workflow).toContain("macos-15-intel");
     expect(commandOptionValue(buildCommand ?? "", "--output-dir")).toBe("./artifacts");
     expect(commandOptionValue(artifactsCommand ?? "", "--output-dir")).toBe("./artifacts");
     expect(commandOptionValue(artifactsCommand ?? "", "--npm-dir")).toBe("./npm");
-    expect(workflow).toContain("plan-release:");
-    expect(workflow).toContain("Configure Linux musl linker search path");
-    expect(workflow).toContain("musl-tools libgcc-s1");
-    expect(workflow).toContain('test -e "/lib/${host_triplet}/libgcc_s.so.1"');
-    expect(workflow).toContain("LIBRARY_PATH=/usr/lib/${host_triplet}:/lib/${host_triplet}:${LIBRARY_PATH:-}");
-    expect(workflow).toContain("RUSTFLAGS=-C link-arg=-L/usr/lib/${host_triplet}");
-    expect(workflow).toContain('bumpVersion(rootPackage.version, "${{ inputs.release_type }}")');
-    expect(workflow).toContain('bumpVersion(nativePackage.version, "${{ inputs.release_type }}")');
-    expect(workflow).toContain("needs.plan-release.outputs.native_version");
-    expect(workflow).toContain('hasTagForPackageVersion("@lzehrung/codegraph", version, tagNames)');
-    expect(workflow).toContain("NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN || secrets.GITHUB_TOKEN }}");
-    expect(workflow).toContain('root_tag="v$root_version"');
-    expect(workflow).toContain('root_package_tag="@lzehrung/codegraph@$root_version"');
-    expect(workflow).toContain('native_tag="@lzehrung/codegraph-native@$native_version"');
-    expect(workflow).toContain(
-      'gh release create "$root_tag" "$tarball" --title "$root_tag" --notes-file "$release_notes"',
-    );
-    expect(workflow).toContain('gh release edit "$root_tag" --title "$root_tag" --notes-file "$release_notes"');
-    expect(installIndex).toBeGreaterThan(-1);
-    expect(rerunGuardIndex).toBeGreaterThan(versionIndex);
-    expect(publishInstallIndex).toBeGreaterThan(rerunGuardIndex);
-    expect(publishRebuildIndex).toBe(-1);
-    expect(patchIndex).toBe(-1);
-    expect(versionIndex).toBeGreaterThan(installIndex);
-    expect(createDirsIndex).toBeGreaterThan(versionIndex);
-    expect(cleanupArtifactsIndex).toBeGreaterThan(createDirsIndex);
-    expect(workflow).not.toContain("native:stage-local");
-    expect(publishIndex).toBeGreaterThan(cleanupArtifactsIndex);
-    expect(releaseIndex).toBeGreaterThan(publishIndex);
-    expect(workflow).toContain("npm run publish:${{ inputs.release_type }} -- --package root --package native");
+    expect(workflow).toContain("assemble-release-candidates:");
+    expect(workflow).toContain("package-smoke:");
+    expect(workflow).toContain("certification-report:");
+    expect(workflow).toContain("publish-certified:");
+    expect(workflow).toContain("win32-arm64-msvc");
+    expect(workflow).toContain("mode: structural");
+    expect(workflow).toContain("node:24-alpine");
+    expect(workflow).toContain("publish-release-candidates.mjs");
+    expect(workflow).toContain("certification-report-v1.json");
+    expect(workflow).not.toContain("npm run publish:${{ inputs.release_type }}");
+    expect(workflow).not.toContain("npm pack");
     expect(workflow).not.toContain("js-fallback");
     expect(workflow).not.toContain("@lzehrung/codegraph-js-fallback");
   });

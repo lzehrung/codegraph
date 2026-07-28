@@ -551,7 +551,7 @@ index 1234567..abcdef0 100644
       setSessionClock();
       const session = await createCodeReviewSession({
         root,
-        buildOptions: { cache: "memory", useBloomFilters: true },
+        buildOptions: { cache: "disk", useBloomFilters: true },
       });
       advancePastStaleInterval();
 
@@ -603,7 +603,7 @@ index 1234567..abcdef0 100644
       setSessionClock();
       const session = await createCodeReviewSession({
         root,
-        buildOptions: { cache: "memory", useBloomFilters: true },
+        buildOptions: { cache: "disk", useBloomFilters: true },
       });
 
       advancePastStaleInterval();

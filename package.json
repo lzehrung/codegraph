@@ -46,13 +46,16 @@
   ],
   "scripts": {
     "clean": "node -e \"import('node:fs').then(({ rmSync }) => rmSync('dist', { recursive: true, force: true }))\"",
-    "check": "npm run lint && npm run format && npm run build && npm run test",
+    "check": "npm run security:production && npm run lint && npm run format && npm run build && npm run test && npm run fixtures:check-clean",
     "build": "npm run clean && tsc -p tsconfig.json && node ./scripts/bundle-cli.mjs && node ./scripts/build-native-if-available.mjs",
     "generate:duplicate-keywords": "node ./scripts/generate-duplicate-keywords.mjs",
     "format": "prettier --write . --ignore-unknown",
     "lint": "npx eslint \"src/**/*.ts\" \"tests/**/*.ts\"",
     "lint:fix": "npx eslint \"src/**/*.ts\" \"tests/**/*.ts\" --fix",
     "prepare": "node ./scripts/prepare-package.mjs",
+    "security:production": "node ./scripts/check-production-audit.mjs",
+    "fixtures:check-clean": "node ./scripts/check-fixture-cleanliness.mjs",
+    "certify:packages": "node ./scripts/certification/run-package-smoke.mjs",
     "test": "npm run test:fast",
     "test:all": "npm run test:native && npm run test:ci",
     "test:fast": "node ./scripts/ensure-dist-for-tests.mjs && vitest run --exclude tests/bench-harness.test.ts --exclude tests/cli-regressions.test.ts --exclude tests/impact-cli.test.ts --exclude tests/esm-language-loading.test.ts --exclude tests/native-fallback-reporting.test.ts --exclude tests/native-fallback-contract.test.ts --exclude tests/native-tree-sitter.test.ts --exclude tests/native-parse-tree.test.ts --exclude tests/native-semantic-parity.test.ts --exclude tests/native-query-ownership-parity.test.ts --exclude tests/native-query-scope.test.ts --exclude tests/native-worker-parity.test.ts --exclude tests/native-parser-ownership.test.ts --exclude tests/detailed-symbol-native-only.test.ts",
@@ -72,6 +75,8 @@
     "bench:native:full": "node ./scripts/bench-native.mjs --runs 1 --fixtures typescript,python,go,rust,mixed --workloads full,graph --temperatures cold",
     "bench:docs": "node ./scripts/ensure-dist-for-tests.mjs && node ./scripts/benchmarks/run-scenario.mjs --output docs/benchmarks/results.example.json --require-complete && node ./scripts/benchmarks/summarize-results.mjs --input docs/benchmarks/results.example.json --scenario-file docs/benchmarks/scenarios.json --readme docs/benchmarks/README.md --write",
     "bench:docs:check": "node ./scripts/benchmarks/summarize-results.mjs --input docs/benchmarks/results.example.json --scenario-file docs/benchmarks/scenarios.json --readme docs/benchmarks/README.md --check",
+    "bench:semantic": "node ./scripts/benchmarks/run-semantic-corpus.mjs",
+    "bench:semantic:summarize": "node ./scripts/benchmarks/summarize-semantic-corpus.mjs",
     "test:ui": "node ./scripts/ensure-dist-for-tests.mjs && vitest --ui",
     "test:run": "node ./scripts/ensure-dist-for-tests.mjs && vitest run",
     "test:bench": "node ./scripts/ensure-dist-for-tests.mjs && vitest tests/bench-harness.test.ts tests/native-query-scope.test.ts",
@@ -153,7 +158,7 @@
     "vitest": "^4.1.8"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "fast-glob": "^3.3.3",
     "picomatch": "^4.0.3",
     "piscina": "^4.5.1",
@@ -161,7 +166,9 @@
     "zod": "^4.4.3"
   },
   "overrides": {
-    "node-addon-api": "^8.5.0"
+    "@hono/node-server": "2.0.12",
+    "body-parser": "2.3.0",
+    "fast-uri": "4.1.1"
   },
   "optionalDependencies": {
     "@lzehrung/codegraph-native": "^1.8.82"

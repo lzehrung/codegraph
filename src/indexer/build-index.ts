@@ -806,18 +806,21 @@ async function buildProjectIndexWithManifestOptions(
   helperOpts?: Pick<BuildIndexHelperOptions, "ignoreExistingManifest">,
 ): Promise<ProjectIndex> {
   try {
-    // Reuse the previous full scan's symlinked-directory list, when available, so the
-    // file-discovery and project-file walks below can skip their own full-tree symlink
-    // probe. This is a best-effort hint read independently of the manifest gate used
-    // for parse/graph caching further down; a missing or unusable manifest just means
-    // discovery falls back to probing once, exactly as it always has. A symlink hint
-    // never expires on its own: `knownSymlinkDirectories` disables probing entirely, so
+    const useDiskCache = (opts?.cache ?? "off") === "disk";
+    // With disk caching enabled, reuse the previous full scan's symlinked-directory
+    // list so the file-discovery and project-file walks below can skip their own
+    // full-tree symlink probe. Off and memory modes never read or write this disk
+    // manifest, keeping read-only builds from mutating the project root. A missing or
+    // unusable manifest falls back to probing once.
+    // A symlink hint never expires on its own: `knownSymlinkDirectories` disables probing entirely, so
     // a directory symlinked in after the hint was recorded (e.g. `npm link`) would
     // otherwise never be discovered. `--cache-strict`/`--cache-verify` are explicit asks
     // for maximum correctness over speed, so both force a fresh probe here too.
     const wantsMaxSymlinkCorrectness = !!opts?.cacheStrict || !!opts?.cacheVerify;
     const symlinkHintManifest =
-      helperOpts?.ignoreExistingManifest || wantsMaxSymlinkCorrectness ? null : await loadManifest(projectRoot, opts);
+      helperOpts?.ignoreExistingManifest || wantsMaxSymlinkCorrectness || !useDiskCache
+        ? null
+        : await loadManifest(projectRoot, opts);
     const knownSymlinkDirectories = symlinkHintManifest?.symlinkDirectories;
     let discoveredSymlinkDirectories = knownSymlinkDirectories;
     const onSymlinkDirectoriesDiscovered = (directories: readonly string[]) => {
@@ -850,7 +853,7 @@ async function buildProjectIndexWithManifestOptions(
       ...(discoveredSymlinkDirectories !== undefined ? { knownSymlinkDirectories: discoveredSymlinkDirectories } : {}),
     });
     return await buildIndexFromFileListShared(projectRoot, files, opts, {
-      manifestMode: "read-write",
+      manifestMode: useDiskCache ? "read-write" : "off",
       warnNoFilesMessage: `Warning: No files found in project root: ${projectRoot}`,
       ...(helperOpts?.ignoreExistingManifest ? { ignoreExistingManifest: true } : {}),
       projectFiles,
@@ -890,8 +893,9 @@ export async function buildProjectIndexFromFiles(
   opts?: BuildOptions,
 ): Promise<ProjectIndex> {
   try {
+    const useDiskCache = (opts?.cache ?? "off") === "disk";
     return await buildIndexFromFileListShared(projectRoot, inputFiles, opts, {
-      manifestMode: "read-only",
+      manifestMode: useDiskCache ? "read-only" : "off",
       warnNoFilesMessage: `Warning: No files provided for indexing in ${projectRoot}`,
     });
   } finally {
@@ -946,6 +950,9 @@ export async function buildProjectIndexIncremental(
     });
   };
   try {
+    if (cacheMode !== "disk") {
+      return await buildProjectIndexFromExport(projectRoot, opts, { ignoreExistingManifest: true });
+    }
     startCheckProgress();
     const manifestStart = performance.now();
     const manifest = await loadManifest(projectRoot, opts);

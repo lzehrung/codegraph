@@ -10,16 +10,17 @@ import {
   defFromSymbolId,
   tool_findSymbol,
 } from "../src/index.js";
+import { readOnlySamplePath } from "./helpers/filesystem.js";
 
 const norm = (p: string) => p.replace(/\\/g, "/");
 
 describe("Agent-friendly symbol handles", () => {
-  const root = path.join(process.cwd(), "tests", "samples", "monorepo");
+  const root = readOnlySamplePath("monorepo");
   const pkga = norm(path.join(root, "packages", "pkg-a", "src", "index.ts"));
   const pkgb = norm(path.join(root, "packages", "pkg-b", "src", "index.js"));
 
   it("listSymbols returns import alias handles and goToDefinitionById resolves named import", async () => {
-    const index = await buildProjectIndex(root);
+    const index = await buildProjectIndex(root, { cache: "off" });
     const items = listSymbols(index, { file: pkgb, includeImports: true });
     const alias = items.find((i) => i.name === "aHelper");
     expect(alias).toBeTruthy();
@@ -32,7 +33,7 @@ describe("Agent-friendly symbol handles", () => {
   });
 
   it("goToDefinitionById resolves default import alias to default export", async () => {
-    const index = await buildProjectIndex(root);
+    const index = await buildProjectIndex(root, { cache: "off" });
     const items = listSymbols(index, { file: pkgb, includeImports: true });
     const alias = items.find((i) => i.name === "defA");
     expect(alias).toBeTruthy();
@@ -46,7 +47,7 @@ describe("Agent-friendly symbol handles", () => {
   });
 
   it("goToDefinitionById resolves namespace import alias to a first exported symbol", async () => {
-    const index = await buildProjectIndex(root);
+    const index = await buildProjectIndex(root, { cache: "off" });
     const items = listSymbols(index, { file: pkgb, includeImports: true });
     const alias = items.find((i) => i.kind === "namespaceImport" && i.name === "a");
     expect(alias).toBeTruthy();
@@ -60,7 +61,7 @@ describe("Agent-friendly symbol handles", () => {
   });
 
   it("symbolId round-trips via defFromSymbolId", async () => {
-    const index = await buildProjectIndex(root);
+    const index = await buildProjectIndex(root, { cache: "off" });
     const modA = index.byFile.get(pkga)!;
     const classDef = modA.locals.find((d) => d.localName === "AClass")!;
     const id = symbolId(classDef);
@@ -71,7 +72,7 @@ describe("Agent-friendly symbol handles", () => {
   });
 
   it("findReferencesById works for import alias handle", async () => {
-    const index = await buildProjectIndex(root);
+    const index = await buildProjectIndex(root, { cache: "off" });
     const items = listSymbols(index, { file: pkgb, includeImports: true });
     const alias = items.find((i) => i.name === "aHelper");
     expect(alias).toBeTruthy();
@@ -85,7 +86,7 @@ describe("Agent-friendly symbol handles", () => {
   });
 
   it("tool_findSymbol exposes stable handles that round-trip through goToDefinitionById", async () => {
-    const index = await buildProjectIndex(root);
+    const index = await buildProjectIndex(root, { cache: "off" });
     const result = await tool_findSymbol(root, "aHelper", { index });
     expect(result.status).toBe("ok");
     if (result.status !== "ok") {

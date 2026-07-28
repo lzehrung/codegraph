@@ -1,0 +1,49 @@
+name: Semantic corpus trends
+
+"on":
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  representative:
+    name: Representative corpus (informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.10.0
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build checkout
+        run: npm run build
+
+      - name: Run representative semantic corpus
+        run: npm run bench:semantic -- --tier representative --mode native --mode reduced --package-mode checkout --output semantic-representative-results.json
+
+      - name: Validate informational result
+        run: npm run bench:semantic:summarize -- --input semantic-representative-results.json --corpus docs/benchmarks/semantic-corpus.json --json
+
+      - name: Upload representative result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: semantic-corpus-representative-${{ github.run_id }}
+          path: semantic-representative-results.json
+          if-no-files-found: warn
+          retention-days: 30

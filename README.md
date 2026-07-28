@@ -292,7 +292,8 @@ The honest boundaries matter:
 - Call-compatibility findings are conservative review leads, not compiler diagnostics.
 - Duplicate matches and candidate tests are ranked leads that still require human or agent judgment.
 - `--fast-graph` is an explicit speed/accuracy tradeoff for plain JavaScript and TypeScript import extraction.
-- The checked benchmark fixtures demonstrate bounded evidence retrieval, not universal speed, cost, or quality advantages. See [Benchmark methodology](./docs/benchmarks/README.md).
+- The checked `explore` benchmark demonstrates bounded evidence retrieval, not universal speed, cost, or quality advantages.
+- The separate [semantic corpus](./docs/benchmarks/README.md#semantic-correctness-corpus) reports reviewed definition, reference, dependency, and candidate-test results by runtime mode with an explicit support denominator. Its initial baseline is informational.
 
 Run `codegraph doctor` to confirm the active runtime. Use `--report` on graph, index, or review commands when backend and cache behavior need to be auditable.
 

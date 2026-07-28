@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "exceptions": [
+    {
+      "target": "win32-arm64-msvc",
+      "certificationClass": "structural",
+      "owner": "@lzehrung",
+      "expires": "2027-01-31",
+      "reason": "No matching GitHub-hosted Windows ARM64 runner is available; validate archive structure and package metadata without loading the addon."
+    }
+  ]
+}
