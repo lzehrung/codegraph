@@ -301,7 +301,7 @@ describe("CLI regressions", () => {
     await fsp.writeFile(path.join(tmpDir, "codegraph.config.json"), "{ not valid json", "utf8");
 
     await expect(runCliCommandDetailed(["not-a-codegraph-command"], undefined, tmpDir)).rejects.toThrow(
-      /Unknown command: not-a-codegraph-command/,
+      /Unknown command "not-a-codegraph-command"\./,
     );
   });
 

@@ -635,7 +635,8 @@ describe("standalone bootstrap scripts", () => {
     const cliVersion = options.cliVersion ?? version;
     const nativeAvailable = options.nativeAvailable ?? true;
     const nativeTarget = options.nativeTarget ?? definition.nativeSuffix;
-    const nativePackageName = options.nativePackageName ?? "@lzehrung/codegraph-native";
+    const nativePackageName = options.nativePackageName ?? `@lzehrung/codegraph-native-${definition.nativeSuffix}`;
+    const nativePackageVersion = manifestVersion;
     const releaseDir = path.join(root, "release");
     const bundleName = `codegraph-${target}`;
     const bundle = path.join(releaseDir, bundleName);
@@ -647,6 +648,7 @@ describe("standalone bootstrap scripts", () => {
         available: nativeAvailable,
         origin: {
           packageName: nativePackageName,
+          packageVersion: nativePackageVersion,
           target: nativeTarget,
         },
       },
@@ -654,15 +656,38 @@ describe("standalone bootstrap scripts", () => {
     const cliSource = [
       "const args = process.argv.slice(2);",
       `if (args[0] === "version") console.log(${JSON.stringify(cliVersion)});`,
-      `else if (args[0] === "doctor" && args[1] === "--json") console.log(${JSON.stringify(doctor)});`,
+      `else if (args[0] === "doctor" && args[1] === "--json") console.log(${JSON.stringify(JSON.stringify(doctor))});`,
       "else process.exitCode = 1;",
     ].join("\n");
 
     await fsp.mkdir(path.dirname(cli), { recursive: true });
     await fsp.writeFile(cli, cliSource, "utf8");
     await writePosixExecutable(node, `#!/bin/sh\nexec ${quoteForPosixShell(process.execPath)} "$@"\n`);
+    const nativePackagePath = path.join(
+      bundle,
+      "node_modules",
+      ...`@lzehrung/codegraph-native-${definition.nativeSuffix}`.split("/"),
+      "package.json",
+    );
+    await fsp.mkdir(path.dirname(nativePackagePath), { recursive: true });
+    await fsp.writeFile(
+      nativePackagePath,
+      `${JSON.stringify(
+        {
+          name: `@lzehrung/codegraph-native-${definition.nativeSuffix}`,
+          version: nativePackageVersion,
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
     const files = [];
-    for (const relative of ["node", "dist/cli.js"]) {
+    for (const relative of [
+      "node",
+      "dist/cli.js",
+      `node_modules/@lzehrung/codegraph-native-${definition.nativeSuffix}/package.json`,
+    ]) {
       const absolute = path.join(bundle, ...relative.split("/"));
       files.push({ path: relative, size: (await fsp.stat(absolute)).size, sha256: await sha256(absolute) });
     }
@@ -936,7 +961,7 @@ describe("standalone bootstrap scripts", () => {
       ]);
 
       for (const result of results) {
-        expect(result.code).toBe(0);
+        expect(result.code, `${result.stdout}\n${result.stderr}`).toBe(0);
       }
       const versionRoot = path.join(installBase, release.version);
       expect((await fsp.stat(path.join(versionRoot, "node"))).isFile()).toBe(true);
@@ -966,7 +991,7 @@ describe("standalone bootstrap scripts", () => {
 
     const result = runPosixBootstrap(["--yes"], environment);
 
-    expect(result.status).toBe(0);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(fs.existsSync(path.join(installBase, ".install.lock"))).toBe(false);
   });
 
@@ -982,7 +1007,7 @@ describe("standalone bootstrap scripts", () => {
       await writeReleaseCurl(mockBin);
       const result = runPosixBootstrap(["--yes"], bootstrapEnvironment(release, installBase, binDir, mockBin));
 
-      expect(result.status).toBe(0);
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
       const launcher = path.join(binDir, "codegraph");
       const launcherText = await fsp.readFile(launcher, "utf8");
       expect(launcherText).toContain(`'"'"'`);

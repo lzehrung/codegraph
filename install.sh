@@ -56,7 +56,7 @@ if [ "$SYSTEM" = Linux ]; then
   done
 fi
 DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
-INSTALL_BASE="$DATA_HOME/codegraph"
+INSTALL_BASE="${CODEGRAPH_INSTALL_BASE:-$DATA_HOME/codegraph}"
 BIN_DIR="${CODEGRAPH_BIN_DIR:-$HOME/.local/bin}"
 if [ "$YES" -ne 1 ]; then
   if [ ! -t 2 ] || [ ! -r /dev/tty ]; then
@@ -370,12 +370,16 @@ function fail(message) {
   throw new Error(`Bundled Codegraph doctor verification failed: ${message}`);
 }
 let manifest;
-let doctor;
 try {
   manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+} catch {
+  fail("bundle manifest JSON is invalid");
+}
+let doctor;
+try {
   doctor = JSON.parse(fs.readFileSync(doctorPath, "utf8"));
 } catch {
-  fail("invalid JSON output");
+  fail("doctor JSON output is invalid");
 }
 let nativePackage;
 try {
