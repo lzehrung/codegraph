@@ -2,10 +2,11 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import { collectGraph } from "../src/index.js";
 import { graphEdgeKey } from "./helpers/graph.js";
+import { readOnlySamplePath } from "./helpers/filesystem.js";
 
 describe("Monorepo fast graph parity", () => {
   it("fast mode matches normal mode in monorepo sample", async () => {
-    const root = path.join(process.cwd(), "tests", "samples", "monorepo");
+    const root = readOnlySamplePath("monorepo");
     const files = [
       path.join(root, "packages", "pkg-a", "src", "index.ts").replace(/\\/g, "/"),
       path.join(root, "packages", "pkg-b", "src", "index.js").replace(/\\/g, "/"),

@@ -6,6 +6,78 @@ export async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
 }
 
+const defaultFixtureCopyExcludes: Record<string, true> = {
+  ".codegraph": true,
+  ".codegraph-cache": true,
+};
+
+export type CopyFixtureSubsetOptions = {
+  subset?: readonly string[];
+  additionalExcludedNames?: readonly string[];
+};
+
+export type WithCopiedFixtureOptions = CopyFixtureSubsetOptions & {
+  prefix?: string;
+};
+
+function normalizeFixtureSubsetPath(relativePath: string): string {
+  const normalized = path.normalize(relativePath);
+  if (path.isAbsolute(relativePath) || normalized === ".." || normalized.startsWith(`..${path.sep}`)) {
+    throw new Error(`Fixture subset path must stay inside the fixture root: ${relativePath}`);
+  }
+  return normalized;
+}
+
+export async function copyFixtureSubset(
+  sourceRoot: string,
+  destinationRoot: string,
+  options: CopyFixtureSubsetOptions = {},
+): Promise<void> {
+  const resolvedSourceRoot = path.resolve(sourceRoot);
+  const excludedNames = new Set(Object.keys(defaultFixtureCopyExcludes));
+  for (const name of options.additionalExcludedNames ?? []) excludedNames.add(name);
+
+  const shouldCopy = (sourcePath: string): boolean => {
+    const relativePath = path.relative(resolvedSourceRoot, sourcePath);
+    if (!relativePath) return true;
+    return !relativePath.split(path.sep).some((segment) => excludedNames.has(segment));
+  };
+
+  const subset = options.subset ?? ["."];
+  for (const relativePath of subset) {
+    const normalized = normalizeFixtureSubsetPath(relativePath);
+    const sourcePath = path.join(resolvedSourceRoot, normalized);
+    const destinationPath = path.join(destinationRoot, normalized);
+    await fsp.mkdir(path.dirname(destinationPath), { recursive: true });
+    await fsp.cp(sourcePath, destinationPath, {
+      recursive: true,
+      filter: shouldCopy,
+    });
+  }
+}
+
+export async function withCopiedFixture<T>(
+  sourceRoot: string,
+  action: (fixtureRoot: string) => T | Promise<T>,
+  options: WithCopiedFixtureOptions = {},
+): Promise<T> {
+  const fixtureRoot = await mkTmpDir(options.prefix ?? "codegraph-fixture-");
+  try {
+    await copyFixtureSubset(sourceRoot, fixtureRoot, options);
+    return await action(fixtureRoot);
+  } finally {
+    if (process.env.CODEGRAPH_KEEP_FIXTURE_TEMP === "1") {
+      console.error(`Retained fixture copy: ${fixtureRoot}`);
+    } else {
+      await fsp.rm(fixtureRoot, { recursive: true, force: true });
+    }
+  }
+}
+
+export function readOnlySamplePath(...relativePath: string[]): string {
+  return path.resolve(process.cwd(), "tests", "samples", ...relativePath);
+}
+
 export function isSymlinkUnavailable(error: unknown): boolean {
   return (
     error instanceof Error &&

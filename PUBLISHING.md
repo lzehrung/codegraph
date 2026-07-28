@@ -7,9 +7,9 @@ Codegraph publishes as two standalone packages:
 
 The main package depends on the native package optionally, so installs still succeed when no matching native binary exists. When native is unavailable, Codegraph degrades to reduced graph-only and regex recovery mode; there is no separate JavaScript parser fallback package.
 
-## Fast Path
+## Local Release Commands
 
-The root release scripts now use independent package versioning:
+The local release scripts remain available for package-scoped maintenance and recovery:
 
 ```powershell
 npm run release:patch
@@ -23,33 +23,52 @@ npm run publish:major
 npm run publish:resume
 ```
 
-`release:*` detects changed packages, bumps only those packages, refreshes the lockfile, requires the native addon to build or load for the current platform, runs tests/builds, commits, creates package-scoped tags, and pushes.
+`release:*` detects changed packages, updates versions and the lockfile, runs the local release checks, commits, tags, and pushes. `publish:*` also publishes from the local checkout.
 
-`publish:*` does the same work and also publishes:
+These commands do not provide the full cross-platform certification evidence chain. Use the GitHub `release` workflow for a normal public release; use local publishing only for deliberate recovery with all target artifacts already collected.
 
-- staged native target packages plus the `@lzehrung/codegraph-native` meta package when `@lzehrung/codegraph-native` is selected
-- the root `@lzehrung/codegraph` package when it changed
-
-When a publish includes `@lzehrung/codegraph-native`, the script verifies the complete supported native target set before running the full test suite. A local WSL/macOS/Windows shell can only build its own target, so use the `release` GitHub Actions workflow or manually collect every target artifact before running a native publish locally.
-
-You can force a package-scoped release with `--package`:
+You can force a package-scoped local release with `--package`:
 
 ```powershell
 npm run publish:patch -- --package root
 npm run release:minor -- --package @lzehrung/codegraph-native
 ```
 
-## GitHub Release Workflows
+## GitHub Release Workflow
 
-Use the `release` GitHub Actions workflow when you want GitHub to cut a complete release.
+Use the manually triggered `release` GitHub Actions workflow for a certified public release. Select `release_type=patch|minor|major`.
 
-- Trigger it manually with `release_type=patch|minor|major`.
-- The workflow builds every target declared in `packages/codegraph-native/package.json` `napi.targets`.
-- It collects the per-target npm package artifacts, then runs `npm run publish:<release_type> -- --package root --package native`.
-- The publish step verifies that every supported native target artifact is present before publishing target packages, the native meta package, and the root package.
-- On success it pushes all package tags, creates or updates the overall `vX.Y.Z` GitHub Release for the root package version, and uploads the root `.tgz` asset.
-- The workflow refuses reruns from a commit that is already tagged for the current root version. A fresh Actions runner cannot reconstruct the dirty local resume state that `publish:resume` expects.
-- By default the workflow uses `GITHUB_TOKEN` for GitHub Packages. If an existing package is not linked to this repository or does not grant this repository write access, create a `PACKAGE_PUBLISH_TOKEN` Actions secret from a classic PAT that can write the `@lzehrung` packages; the workflow will use it for npm publishing.
+The workflow uses this immutable byte flow:
+
+1. Plan the source revision and root/native versions.
+2. Build all native target directories.
+3. Build the root package, then run `npm pack` exactly once for each target package, the native meta package, and the root package.
+4. Store those tarballs under `temp/release-candidates/packages/`.
+5. Record every relative path, package identity, target, SHA-256 digest, and size in `release-candidate-manifest.json`; write the matching `SHA256SUMS`.
+6. Run production security, fixture hermeticity, package smoke, reduced-mode, and checked-in release semantic gates.
+7. Merge the gate outputs into `CertificationReportV1`.
+8. Revalidate every candidate checksum and required report row before the first registry write.
+9. Publish the tarball paths from the manifest, without rebuilding or repacking.
+10. Attach the same tarballs, manifest, checksums, package summary, and certification report to the GitHub Release.
+
+The package smoke runner installs local candidate tarballs into a fresh temporary directory outside the checkout. Runtime rows verify installed identities and bytes, root/native imports, `version`, `doctor`, a native symbol parse, and a stdio MCP initialize/list-tools/search exchange.
+
+Linux musl rows execute inside matching-architecture Alpine containers. A separate reduced row installs the root tarball with optional dependencies omitted and proves the packed CLI starts without native code.
+
+### Native certification classes
+
+- Runtime: `win32-x64-msvc`, `linux-x64-gnu`, `linux-arm64-gnu`, `linux-x64-musl`, `linux-arm64-musl`, `darwin-x64`, and `darwin-arm64`.
+- Structural: `win32-arm64-msvc`.
+
+`win32-arm64-msvc` is inspected but never loaded by the current workflow. Its reviewed exception is owned and expiry-bounded in `scripts/certification/native-target-exceptions.json`; when it expires, certification fails until a matching runtime host is added or the exception is reviewed again.
+
+A structural result proves archive checksum, package identity, target naming, and required files only. It must never be described as runtime-certified.
+
+### Publish authorization
+
+Publishing waits for every required package row plus security, semantics, and hermeticity. Missing, failed, stale-revision, wrong-version, expired-exception, size, or checksum evidence stops the job before `npm publish` is invoked.
+
+By default the workflow uses `GITHUB_TOKEN` for GitHub Packages. If an existing package is not linked to this repository or does not grant write access, create a `PACKAGE_PUBLISH_TOKEN` Actions secret from a classic PAT that can write the `@lzehrung` packages.
 
 ## Package Roles
 
@@ -64,6 +83,8 @@ Use the `release` GitHub Actions workflow when you want GitHub to cut a complete
 ## Manual Native Staging
 
 Use these when you need to inspect or customize the native publish flow manually.
+
+These steps do not produce `CertificationReportV1` and do not establish that published bytes equal certified candidates. Do not use direct manual publishing as the normal release path.
 
 1. Build the JS package and the local native workspace addon:
 

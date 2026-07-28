@@ -908,12 +908,12 @@ describe("Review report", () => {
     await fsp.writeFile(libFile, `export const gone = 1;\n`, "utf8");
     await fsp.writeFile(testFile, `import { gone } from '../src/lib';\nexport const seen = gone;\n`, "utf8");
 
-    await buildProjectIndex(root, { cache: "memory" });
+    await buildProjectIndex(root, { cache: "disk" });
     await fsp.unlink(libFile);
 
     const report = await buildReviewReport(root, {
       files: [libFile],
-      cache: "memory",
+      cache: "disk",
       includeSymbolDetails: true,
       diffText: [
         "diff --git a/src/lib.ts b/src/lib.ts",
@@ -954,12 +954,12 @@ describe("Review report", () => {
     await fsp.writeFile(libFile, `export const gone = 1;\n`, "utf8");
     await fsp.writeFile(verifyFile, `import { gone } from '../src/lib';\nexport const seen = gone;\n`, "utf8");
 
-    await buildProjectIndex(root, { cache: "memory" });
+    await buildProjectIndex(root, { cache: "disk" });
     await fsp.unlink(libFile);
 
     const report = await buildReviewReport(root, {
       files: [libFile],
-      cache: "memory",
+      cache: "disk",
       testPatterns: ["^checks/.*\\.verify\\.ts$"],
       diffText: [
         "diff --git a/src/lib.ts b/src/lib.ts",
@@ -1007,12 +1007,12 @@ describe("Review report", () => {
     await fsp.writeFile(libFile, `export const gone = 1;\n`, "utf8");
     await fsp.writeFile(testFile, `import { gone } from '@lib';\nexport const seen = gone;\n`, "utf8");
 
-    await buildProjectIndex(root, { cache: "memory" });
+    await buildProjectIndex(root, { cache: "disk" });
     await fsp.unlink(libFile);
 
     const report = await buildReviewReport(root, {
       files: [libFile],
-      cache: "memory",
+      cache: "disk",
       diffText: [
         "diff --git a/src/lib.ts b/src/lib.ts",
         "deleted file mode 100644",
@@ -1055,12 +1055,12 @@ describe("Review report", () => {
     await fsp.writeFile(libFile, `export const gone = 1;\n`, "utf8");
     await fsp.writeFile(testFile, `import { gone } from '@repo/lib';\nexport const seen = gone;\n`, "utf8");
 
-    await buildProjectIndex(root, { cache: "memory" });
+    await buildProjectIndex(root, { cache: "disk" });
     await fsp.unlink(libFile);
 
     const report = await buildReviewReport(root, {
       files: [libFile],
-      cache: "memory",
+      cache: "disk",
       diffText: [
         "diff --git a/packages/lib/src/index.ts b/packages/lib/src/index.ts",
         "deleted file mode 100644",
@@ -1096,12 +1096,12 @@ describe("Review report", () => {
     await fsp.writeFile(viewFile, `export function View() { return null; }\n`, "utf8");
     await fsp.writeFile(testFile, `import { View } from '../src/view.jsx';\nexport const seen = View;\n`, "utf8");
 
-    await buildProjectIndex(root, { cache: "memory" });
+    await buildProjectIndex(root, { cache: "disk" });
     await fsp.unlink(viewFile);
 
     const report = await buildReviewReport(root, {
       files: [viewFile],
-      cache: "memory",
+      cache: "disk",
       diffText: [
         "diff --git a/src/view.tsx b/src/view.tsx",
         "deleted file mode 100644",
@@ -1751,13 +1751,14 @@ describe("Review report", () => {
     await fsp.writeFile(featureFile, `export function helper() { return 1; }\n`, "utf8");
     await fsp.writeFile(testFile, `import { helper } from '../src/feature';\nhelper();\n`, "utf8");
 
-    await buildProjectIndex(root);
+    await buildProjectIndex(root, { cache: "disk" });
     const manifestPath = path.join(root, ".codegraph-cache", "index-v1", "manifest.json");
     expect(fs.existsSync(manifestPath)).toBe(true);
 
     await fsp.writeFile(featureFile, `export function helper() { return 2; }\n`, "utf8");
     const report = await buildReviewReport(root, {
       files: [featureFile],
+      cache: "disk",
       maxCandidates: 5,
     });
 

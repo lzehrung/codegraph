@@ -244,16 +244,13 @@ describe("CLI index progress", () => {
       expect(interactive.stderr).toContain("Building project index");
       expect(interactive.stderr).toContain("Built project index");
 
-      // The prior `interactive` call against this same root already wrote a manifest,
-      // so this second index build reuses it via the incremental path (an "update" pass)
-      // instead of rebuilding from scratch (a "build" pass). `--cache off` still forces
-      // the one tracked file to be reprocessed, since disabled caching means no cached
-      // parse result can be trusted as unchanged.
+      // Cache-off builds are hermetic: the prior call did not persist a manifest,
+      // so every invocation reports a fresh build.
       const forced = await captureCli(["index", "--root", root, "--cache", "off", "--progress"], {
         progressPreparationDelayMs: 0,
       });
       expect(forced.stderr).not.toContain("Preparing project index");
-      expect(forced.stderr).toContain("[Progress] Updating project index.");
+      expect(forced.stderr).toContain("[Progress] Building project index.");
 
       const suppressed = await captureCli(["index", "--root", root, "--cache", "off", "--no-progress"], {
         stderrIsTTY: true,
@@ -287,7 +284,7 @@ describe("CLI index progress", () => {
         },
       );
       expect(graphFile.stderr).not.toContain("Preparing project index");
-      expect(graphFile.stderr).toContain("Updating project index");
+      expect(graphFile.stderr).toContain("Building project index");
       expect(() => JSON.parse(graphFile.stdout)).not.toThrow();
 
       const pathSearch = await captureCli(["search", "main", "--root", root, "--mode", "path", "--json"], {

@@ -1,1 +1,4 @@
 tests/samples/**
+
+# Canonical semantic certification results must match serializeSemanticResults byte-for-byte.
+docs/benchmarks/semantic-results.example.json

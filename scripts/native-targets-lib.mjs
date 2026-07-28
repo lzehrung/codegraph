@@ -5,16 +5,36 @@ export function readJsonFile(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
+export const nativeTargetMetadata = Object.freeze(
+  [
+    ["x86_64-pc-windows-msvc", "win32-x64-msvc", "runtime"],
+    ["aarch64-pc-windows-msvc", "win32-arm64-msvc", "structural"],
+    ["x86_64-apple-darwin", "darwin-x64", "runtime"],
+    ["aarch64-apple-darwin", "darwin-arm64", "runtime"],
+    ["x86_64-unknown-linux-gnu", "linux-x64-gnu", "runtime"],
+    ["aarch64-unknown-linux-gnu", "linux-arm64-gnu", "runtime"],
+    ["x86_64-unknown-linux-musl", "linux-x64-musl", "runtime"],
+    ["aarch64-unknown-linux-musl", "linux-arm64-musl", "runtime"],
+  ].map(([rustTarget, suffix, certificationClass]) => Object.freeze({ rustTarget, suffix, certificationClass })),
+);
+
+const nativeTargetByRustTarget = new Map(nativeTargetMetadata.map((target) => [target.rustTarget, target]));
+const nativeTargetBySuffix = new Map(nativeTargetMetadata.map((target) => [target.suffix, target]));
+
 function toPackageTargetSuffix(target) {
-  if (target === "x86_64-pc-windows-msvc") return "win32-x64-msvc";
-  if (target === "aarch64-pc-windows-msvc") return "win32-arm64-msvc";
-  if (target === "x86_64-apple-darwin") return "darwin-x64";
-  if (target === "aarch64-apple-darwin") return "darwin-arm64";
-  if (target === "x86_64-unknown-linux-gnu") return "linux-x64-gnu";
-  if (target === "aarch64-unknown-linux-gnu") return "linux-arm64-gnu";
-  if (target === "x86_64-unknown-linux-musl") return "linux-x64-musl";
-  if (target === "aarch64-unknown-linux-musl") return "linux-arm64-musl";
-  throw new Error(`Unsupported native target in package manifest: ${target}`);
+  const metadata = nativeTargetByRustTarget.get(target);
+  if (!metadata) {
+    throw new Error(`Unsupported native target in package manifest: ${target}`);
+  }
+  return metadata.suffix;
+}
+
+export function getNativeTargetMetadata(suffix) {
+  const metadata = nativeTargetBySuffix.get(suffix);
+  if (!metadata) {
+    throw new Error(`Unsupported native target suffix: ${suffix}`);
+  }
+  return metadata;
 }
 
 export function getSupportedNativeTargetSuffixes(nativePackage) {
@@ -25,18 +45,23 @@ export function getSupportedNativeTargetSuffixes(nativePackage) {
   return targets.map(toPackageTargetSuffix).sort((left, right) => left.localeCompare(right));
 }
 
+export function getSupportedNativeTargetMetadata(nativePackage) {
+  return getSupportedNativeTargetSuffixes(nativePackage).map((suffix) => getNativeTargetMetadata(suffix));
+}
+
 export function getSupportedNativeTargetPackageNames(nativePackage) {
   return getSupportedNativeTargetSuffixes(nativePackage).map((suffix) => `@lzehrung/codegraph-native-${suffix}`);
 }
 
 export function readNativeTargetPackage(nativeRoot, suffix) {
+  const { certificationClass } = getNativeTargetMetadata(suffix);
   const packagePath = path.join(nativeRoot, "npm", suffix, "package.json");
   if (!fs.existsSync(packagePath)) {
-    return { suffix, packagePath, packageJson: null, mainFile: null };
+    return { suffix, certificationClass, packagePath, packageJson: null, mainFile: null };
   }
   const packageJson = readJsonFile(packagePath);
   const mainFile = typeof packageJson.main === "string" ? path.join(nativeRoot, "npm", suffix, packageJson.main) : null;
-  return { suffix, packagePath, packageJson, mainFile };
+  return { suffix, certificationClass, packagePath, packageJson, mainFile };
 }
 
 export function collectNativeTargetPackages(nativeRoot, nativePackage) {

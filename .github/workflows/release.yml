@@ -26,13 +26,14 @@ jobs:
     name: Plan release
     runs-on: ubuntu-latest
     outputs:
+      source_revision: ${{ steps.version.outputs.source_revision }}
       root_version: ${{ steps.version.outputs.root_version }}
       native_version: ${{ steps.version.outputs.native_version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Compute release versions
+      - name: Compute release identity
         id: version
         shell: bash
         run: |
@@ -42,6 +43,7 @@ jobs:
 
           const rootPackage = JSON.parse(fs.readFileSync("package.json", "utf8"));
           const nativePackage = JSON.parse(fs.readFileSync("packages/codegraph-native/package.json", "utf8"));
+          console.log(`source_revision=${process.env.GITHUB_SHA}`);
           console.log(`root_version=${bumpVersion(rootPackage.version, "${{ inputs.release_type }}")}`);
           console.log(`native_version=${bumpVersion(nativePackage.version, "${{ inputs.release_type }}")}`);
           NODE
@@ -59,30 +61,40 @@ jobs:
           - os: windows-latest
             rust-target: x86_64-pc-windows-msvc
             suffix: win32-x64-msvc
+            certification-class: runtime
           - os: windows-latest
             rust-target: aarch64-pc-windows-msvc
             suffix: win32-arm64-msvc
+            certification-class: structural
           - os: ubuntu-latest
             rust-target: x86_64-unknown-linux-gnu
             suffix: linux-x64-gnu
+            certification-class: runtime
           - os: ubuntu-24.04-arm
             rust-target: aarch64-unknown-linux-gnu
             suffix: linux-arm64-gnu
+            certification-class: runtime
           - os: ubuntu-latest
             rust-target: x86_64-unknown-linux-musl
             suffix: linux-x64-musl
+            certification-class: runtime
           - os: ubuntu-24.04-arm
             rust-target: aarch64-unknown-linux-musl
             suffix: linux-arm64-musl
+            certification-class: runtime
           - os: macos-15-intel
             rust-target: x86_64-apple-darwin
             suffix: darwin-x64
+            certification-class: runtime
           - os: macos-14
             rust-target: aarch64-apple-darwin
             suffix: darwin-arm64
+            certification-class: runtime
     steps:
-      - name: Checkout
+      - name: Checkout planned source
         uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.plan-release.outputs.source_revision }}
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -110,6 +122,7 @@ jobs:
 
       - name: Install dependencies
         run: npm ci --ignore-scripts
+
       - name: Apply native package release version
         run: node ./scripts/set-native-package-version.mjs ${{ needs.plan-release.outputs.native_version }}
 
@@ -122,31 +135,30 @@ jobs:
       - name: Stage native target
         run: node ./node_modules/@napi-rs/cli/dist/cli.js artifacts --cwd packages/codegraph-native --output-dir ./artifacts --npm-dir ./npm
 
-      - name: Pack native target artifact
+      - name: Bundle staged native directory
         shell: bash
         run: |
           mkdir -p native-artifacts
           tar -czf "native-artifacts/${{ matrix.suffix }}.tgz" -C packages/codegraph-native/npm "${{ matrix.suffix }}"
 
-      - name: Upload native target artifact
+      - name: Upload staged native directory
         uses: actions/upload-artifact@v7
         with:
           name: native-${{ matrix.suffix }}
           path: native-artifacts/${{ matrix.suffix }}.tgz
           if-no-files-found: error
 
-  publish-packages:
-    name: Publish release packages
+  assemble-release-candidates:
+    name: Assemble release candidate tarballs once
     needs:
       - plan-release
       - build-native-artifacts
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout planned source
         uses: actions/checkout@v6
         with:
-          fetch-depth: 0
-          ref: ${{ github.ref_name }}
+          ref: ${{ needs.plan-release.outputs.source_revision }}
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -156,6 +168,397 @@ jobs:
         with:
           node-version: 24.10.0
           cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build root package
+        run: npm run build
+
+      - name: Download staged native directories
+        uses: actions/download-artifact@v8
+        with:
+          pattern: native-*
+          path: native-artifacts
+          merge-multiple: true
+
+      - name: Restore staged native directories
+        shell: bash
+        run: |
+          mkdir -p packages/codegraph-native/npm
+          for archive in native-artifacts/*.tgz; do
+            tar -xzf "$archive" -C packages/codegraph-native/npm
+          done
+
+      - name: Pack immutable release candidates
+        run: >-
+          node ./scripts/certification/assemble-release-candidates.mjs
+          --source-revision ${{ needs.plan-release.outputs.source_revision }}
+          --root-version ${{ needs.plan-release.outputs.root_version }}
+          --native-version ${{ needs.plan-release.outputs.native_version }}
+          --output temp/release-candidates
+
+      - name: Upload immutable release candidates
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-candidates
+          path: temp/release-candidates
+          if-no-files-found: error
+          retention-days: 14
+
+  security-production:
+    name: Certify production dependency security
+    needs:
+      - plan-release
+      - assemble-release-candidates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout planned source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.plan-release.outputs.source_revision }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.10.0
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Run security:production
+        shell: bash
+        run: |
+          mkdir -p temp/certification
+          node ./scripts/check-production-audit.mjs --json > temp/certification/security.json
+
+      - name: Upload security report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: security-production
+          path: temp/certification/security.json
+          if-no-files-found: error
+
+  fixture-hermeticity:
+    name: Certify fixture hermeticity
+    needs:
+      - plan-release
+      - assemble-release-candidates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout planned source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.plan-release.outputs.source_revision }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.10.0
+
+      - name: Run fixtures:check-clean
+        shell: bash
+        run: |
+          mkdir -p temp/certification
+          node ./scripts/check-fixture-cleanliness.mjs --json > temp/certification/hermeticity.json
+
+      - name: Upload hermeticity report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fixture-hermeticity
+          path: temp/certification/hermeticity.json
+          if-no-files-found: error
+
+  package-smoke:
+    name: Package smoke ${{ matrix.target }} (${{ matrix.mode }})
+    needs:
+      - plan-release
+      - assemble-release-candidates
+      - security-production
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: win32-x64-msvc
+            mode: runtime
+            alpine: false
+          - os: windows-latest
+            target: win32-arm64-msvc
+            mode: structural
+            alpine: false
+          - os: ubuntu-latest
+            target: linux-x64-gnu
+            mode: runtime
+            alpine: false
+          - os: ubuntu-24.04-arm
+            target: linux-arm64-gnu
+            mode: runtime
+            alpine: false
+          - os: ubuntu-latest
+            target: linux-x64-musl
+            mode: runtime
+            alpine: true
+          - os: ubuntu-24.04-arm
+            target: linux-arm64-musl
+            mode: runtime
+            alpine: true
+          - os: macos-15-intel
+            target: darwin-x64
+            mode: runtime
+            alpine: false
+          - os: macos-14
+            target: darwin-arm64
+            mode: runtime
+            alpine: false
+    steps:
+      - name: Checkout planned source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.plan-release.outputs.source_revision }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.10.0
+
+      - name: Download release candidates
+        uses: actions/download-artifact@v8
+        with:
+          name: release-candidates
+          path: temp/release-candidates
+
+      - name: Run host package smoke
+        if: ${{ !matrix.alpine }}
+        shell: bash
+        run: >-
+          node ./scripts/certification/run-package-smoke.mjs
+          --manifest temp/release-candidates/release-candidate-manifest.json
+          --target ${{ matrix.target }}
+          --mode ${{ matrix.mode }}
+          --output temp/certification/package-smoke-${{ matrix.target }}.json
+
+      - name: Run matching Alpine package smoke
+        if: ${{ matrix.alpine }}
+        shell: bash
+        run: >-
+          docker run --rm -e HOME=/tmp -v "$PWD:/workspace" -w /workspace node:24-alpine
+          node ./scripts/certification/run-package-smoke.mjs
+          --manifest temp/release-candidates/release-candidate-manifest.json
+          --target ${{ matrix.target }}
+          --mode runtime
+          --output temp/certification/package-smoke-${{ matrix.target }}.json
+
+      - name: Upload package smoke report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: package-smoke-${{ matrix.target }}
+          path: temp/certification/package-smoke-${{ matrix.target }}.json
+          if-no-files-found: error
+
+  package-smoke-reduced:
+    name: Package smoke reduced mode without native package
+    needs:
+      - plan-release
+      - assemble-release-candidates
+      - security-production
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout planned source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.plan-release.outputs.source_revision }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.10.0
+
+      - name: Download release candidates
+        uses: actions/download-artifact@v8
+        with:
+          name: release-candidates
+          path: temp/release-candidates
+
+      - name: Run reduced package smoke
+        run: >-
+          node ./scripts/certification/run-package-smoke.mjs
+          --manifest temp/release-candidates/release-candidate-manifest.json
+          --mode reduced
+          --output temp/certification/package-smoke-reduced.json
+
+      - name: Upload reduced package smoke report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: package-smoke-reduced
+          path: temp/certification/package-smoke-reduced.json
+          if-no-files-found: error
+
+  semantic-release:
+    name: Run packed release semantic corpus
+    needs:
+      - plan-release
+      - assemble-release-candidates
+      - security-production
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout planned source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.plan-release.outputs.source_revision }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.10.0
+
+      - name: Download release candidates
+        uses: actions/download-artifact@v8
+        with:
+          name: release-candidates
+          path: temp/release-candidates
+
+      - name: Install and certify packed semantic host packages
+        shell: bash
+        run: >-
+          node ./scripts/certification/run-package-smoke.mjs
+          --manifest temp/release-candidates/release-candidate-manifest.json
+          --target linux-x64-gnu
+          --mode runtime
+          --install-dir "$RUNNER_TEMP/codegraph-semantic-install"
+          --output temp/certification/semantic-host-package-smoke.json
+
+      - name: Run checked-in release semantic corpus
+        shell: bash
+        run: >-
+          node ./scripts/benchmarks/run-semantic-corpus.mjs
+          --tier release
+          --mode native
+          --mode reduced
+          --package-mode packed
+          --package-root "$RUNNER_TEMP/codegraph-semantic-install/node_modules/@lzehrung/codegraph"
+          --output temp/certification/semantic-results.json
+
+      - name: Upload semantic report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: semantic-release
+          path: |
+            temp/certification/semantic-results.json
+            temp/certification/semantic-host-package-smoke.json
+          if-no-files-found: error
+
+  certification-report:
+    name: Assemble CertificationReportV1
+    needs:
+      - plan-release
+      - assemble-release-candidates
+      - security-production
+      - fixture-hermeticity
+      - package-smoke
+      - package-smoke-reduced
+      - semantic-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout planned source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.plan-release.outputs.source_revision }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.10.0
+
+      - name: Download release candidates
+        uses: actions/download-artifact@v8
+        with:
+          name: release-candidates
+          path: temp/release-candidates
+
+      - name: Download package smoke reports
+        uses: actions/download-artifact@v8
+        with:
+          pattern: package-smoke-*
+          path: temp/package-smoke-reports
+          merge-multiple: true
+
+      - name: Download security report
+        uses: actions/download-artifact@v8
+        with:
+          name: security-production
+          path: temp/sections/security
+
+      - name: Download hermeticity report
+        uses: actions/download-artifact@v8
+        with:
+          name: fixture-hermeticity
+          path: temp/sections/hermeticity
+
+      - name: Download semantic report
+        uses: actions/download-artifact@v8
+        with:
+          name: semantic-release
+          path: temp/sections/semantics
+
+      - name: Require every package certification row
+        run: >-
+          node ./scripts/certification/run-package-smoke.mjs
+          --manifest temp/release-candidates/release-candidate-manifest.json
+          --verify-reports temp/package-smoke-reports
+          --require-reduced
+          --expected-source-revision ${{ needs.plan-release.outputs.source_revision }}
+          --expected-root-version ${{ needs.plan-release.outputs.root_version }}
+          --expected-native-version ${{ needs.plan-release.outputs.native_version }}
+          --output temp/certification/package-smoke-summary.json
+
+      - name: Assemble final certification envelope
+        run: >-
+          node ./scripts/certification/assemble-certification-report.mjs
+          --manifest temp/release-candidates/release-candidate-manifest.json
+          --package-reports temp/package-smoke-reports
+          --security temp/sections/security/security.json
+          --semantics temp/sections/semantics/semantic-results.json
+          --hermeticity temp/sections/hermeticity/hermeticity.json
+          --exceptions scripts/certification/native-target-exceptions.json
+          --repository https://github.com/${{ github.repository }}
+          --revision ${{ needs.plan-release.outputs.source_revision }}
+          --output temp/certification/certification-report-v1.json
+
+      - name: Upload final certification envelope
+        uses: actions/upload-artifact@v7
+        with:
+          name: certification-report
+          path: |
+            temp/certification/certification-report-v1.json
+            temp/certification/package-smoke-summary.json
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-certified:
+    name: Publish certified candidate bytes
+    needs:
+      - plan-release
+      - certification-report
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout planned source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.plan-release.outputs.source_revision }}
+
+      - name: Setup Node for GitHub Packages
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.10.0
           registry-url: https://npm.pkg.github.com
           scope: "@lzehrung"
 
@@ -164,78 +567,135 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Refuse reruns on an already-tagged release commit
+      - name: Download certified release candidates
+        uses: actions/download-artifact@v8
+        with:
+          name: release-candidates
+          path: temp/release-candidates
+
+      - name: Download certification envelope
+        uses: actions/download-artifact@v8
+        with:
+          name: certification-report
+          path: temp/certification
+
+      - name: Refuse a stale source branch before registry writes
+        env:
+          SOURCE_REVISION: ${{ needs.plan-release.outputs.source_revision }}
+          SOURCE_BRANCH: ${{ github.ref_name }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { execFileSync } from "node:child_process";
+
+          const head = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+          const remote = execFileSync(
+            "git",
+            ["ls-remote", "origin", `refs/heads/${process.env.SOURCE_BRANCH}`],
+            { encoding: "utf8" },
+          ).trim().split(/\s+/)[0];
+          if (head !== process.env.SOURCE_REVISION || remote !== process.env.SOURCE_REVISION) {
+            throw new Error(`Release source moved: planned=${process.env.SOURCE_REVISION} head=${head} remote=${remote}`);
+          }
+          NODE
+
+      - name: Require passing certification envelope before registry writes
+        env:
+          SOURCE_REVISION: ${{ needs.plan-release.outputs.source_revision }}
+          ROOT_VERSION: ${{ needs.plan-release.outputs.root_version }}
+          NATIVE_VERSION: ${{ needs.plan-release.outputs.native_version }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+
+          const report = JSON.parse(fs.readFileSync("temp/certification/certification-report-v1.json", "utf8"));
+          const valid =
+            report.schemaVersion === 1 &&
+            report.summary?.status === "pass" &&
+            report.source?.revision === process.env.SOURCE_REVISION &&
+            report.source?.dirty === false &&
+            report.versions?.root === process.env.ROOT_VERSION &&
+            report.versions?.native === process.env.NATIVE_VERSION;
+          if (!valid) throw new Error("CertificationReportV1 is incomplete or does not match the planned release.");
+          NODE
+
+      - name: Publish only certified tarballs
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN || secrets.GITHUB_TOKEN }}
+        run: >-
+          node ./scripts/certification/publish-release-candidates.mjs
+          --manifest temp/release-candidates/release-candidate-manifest.json
+          --expected-source-revision ${{ needs.plan-release.outputs.source_revision }}
+          --expected-root-version ${{ needs.plan-release.outputs.root_version }}
+          --expected-native-version ${{ needs.plan-release.outputs.native_version }}
+
+      - name: Create release version commit and tags
+        env:
+          ROOT_VERSION: ${{ needs.plan-release.outputs.root_version }}
+          NATIVE_VERSION: ${{ needs.plan-release.outputs.native_version }}
         shell: bash
         run: |
           node --input-type=module <<'NODE'
           import fs from "node:fs";
-          import { execFileSync } from "node:child_process";
-          import { hasTagForPackageVersion } from "./scripts/release-lib.mjs";
+          import {
+            restoreNativePackageManifest,
+            restoreRootPackageManifest,
+          } from "./scripts/release-lib.mjs";
 
-          const version = JSON.parse(fs.readFileSync("package.json", "utf8")).version;
-          const tagOutput = execFileSync("git", ["tag", "--points-at", "HEAD"], { encoding: "utf8" }).trim();
-          const tagNames = tagOutput ? tagOutput.split("\n").filter(Boolean) : [];
-
-          if (!hasTagForPackageVersion("@lzehrung/codegraph", version, tagNames)) {
-            process.exit(0);
-          }
-
-          console.error(
-            [
-              `HEAD already carries the root release tag for version ${version}.`,
-              "This workflow runs from a fresh runner and cannot resume a partially completed publish.",
-              "Recover the release locally with publish:resume if needed, or trigger a new release from a new commit.",
-            ].join(" "),
+          const rootPath = "package.json";
+          const nativePath = "packages/codegraph-native/package.json";
+          const rootPackage = JSON.parse(fs.readFileSync(rootPath, "utf8"));
+          const nativePackage = JSON.parse(fs.readFileSync(nativePath, "utf8"));
+          fs.writeFileSync(
+            rootPath,
+            `${JSON.stringify(restoreRootPackageManifest(rootPackage, process.env.ROOT_VERSION, process.env.NATIVE_VERSION), null, 2)}\n`,
           );
-          process.exit(1);
+          fs.writeFileSync(
+            nativePath,
+            `${JSON.stringify(restoreNativePackageManifest(nativePackage, process.env.NATIVE_VERSION), null, 2)}\n`,
+          );
           NODE
+          npm install --package-lock-only --ignore-scripts
+          git add package.json package-lock.json packages/codegraph-native/package.json
+          git commit -m "release: @lzehrung/codegraph@${ROOT_VERSION}, @lzehrung/codegraph-native@${NATIVE_VERSION}"
+          node --input-type=module <<'NODE'
+          import { execFileSync } from "node:child_process";
+          import { tagNamesForPackageVersion } from "./scripts/release-lib.mjs";
 
-      - name: Install dependencies
-        run: npm ci --ignore-scripts
+          const releases = [
+            ["@lzehrung/codegraph", process.env.ROOT_VERSION],
+            ["@lzehrung/codegraph-native", process.env.NATIVE_VERSION],
+          ];
+          for (const [packageName, version] of releases) {
+            for (const tag of tagNamesForPackageVersion(packageName, version)) {
+              execFileSync("git", ["tag", "-a", tag, "-m", tag]);
+            }
+          }
+          NODE
+          git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}" --follow-tags
 
-      - name: Download native artifacts
-        uses: actions/download-artifact@v8
-        with:
-          pattern: native-*
-          path: native-artifacts
-          merge-multiple: true
-
-      - name: Unpack native artifacts
-        shell: bash
-        run: |
-          mkdir -p packages/codegraph-native/npm
-          for archive in native-artifacts/*.tgz; do
-            tar -xzf "$archive" -C packages/codegraph-native/npm
-          done
-          rm -rf native-artifacts
-
-      - name: Publish release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN || secrets.GITHUB_TOKEN }}
-        run: npm run publish:${{ inputs.release_type }} -- --package root --package native
-
-      - name: Create or update GitHub Release
+      - name: Create GitHub Release from certified assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ROOT_VERSION: ${{ needs.plan-release.outputs.root_version }}
+          NATIVE_VERSION: ${{ needs.plan-release.outputs.native_version }}
         shell: bash
         run: |
-          root_version="${{ needs.plan-release.outputs.root_version }}"
-          root_tag="v$root_version"
-          root_package_tag="@lzehrung/codegraph@$root_version"
-          native_version="${{ needs.plan-release.outputs.native_version }}"
-          native_tag="@lzehrung/codegraph-native@$native_version"
-          tarball=$(npm pack --ignore-scripts --json | jq -r '.[0].filename')
+          root_tag="v$ROOT_VERSION"
           release_notes=$(mktemp)
           {
-            echo "Published packages:"
+            echo "Published certified packages:"
             echo ""
-            echo "- \`$root_package_tag\`"
-            echo "- \`$native_tag\`"
+            echo "- \`@lzehrung/codegraph@$ROOT_VERSION\`"
+            echo "- \`@lzehrung/codegraph-native@$NATIVE_VERSION\`"
+            echo ""
+            echo "All attached tarballs are the exact bytes recorded in SHA256SUMS and CertificationReportV1."
           } > "$release_notes"
-          if gh release view "$root_tag" >/dev/null 2>&1; then
-            gh release edit "$root_tag" --title "$root_tag" --notes-file "$release_notes"
-            gh release upload "$root_tag" "$tarball" --clobber
-          else
-            gh release create "$root_tag" "$tarball" --title "$root_tag" --notes-file "$release_notes"
-          fi
+          gh release create "$root_tag" \
+            temp/release-candidates/packages/*.tgz \
+            temp/release-candidates/SHA256SUMS \
+            temp/release-candidates/release-candidate-manifest.json \
+            temp/certification/certification-report-v1.json \
+            temp/certification/package-smoke-summary.json \
+            --verify-tag \
+            --title "$root_tag" \
+            --notes-file "$release_notes"

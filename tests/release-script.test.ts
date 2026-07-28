@@ -225,6 +225,11 @@ describe("release script helpers", () => {
     expect(
       detectChangedReleasePackages([
         ".github/workflows/release.yml",
+        "PUBLISHING.md",
+        "scripts/certification/assemble-release-candidates.mjs",
+        "scripts/certification/package-contract-lib.mjs",
+        "scripts/certification/run-package-smoke.mjs",
+        "tests/certification-release-workflow.test.ts",
         "scripts/release.mjs",
         "scripts/release-lib.mjs",
         "tests/release-script.test.ts",

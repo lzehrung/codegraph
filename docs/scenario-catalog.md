@@ -27,6 +27,19 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | ---------------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ | ---------- |
 | AST-shape duplicate evidence | `tests/duplicates.test.ts` | Same-language source units with matching parser-backed AST shapes report `astShapeEqual` metrics and `matching AST shape` reasons for renamed clones. | Internal regression test | 2026-06-04 |
 
+## Semantic certification corpus
+
+[`docs/benchmarks/semantic-corpus.json`](./benchmarks/semantic-corpus.json) is the machine-readable release-tier catalog. Each golden has a source-review rationale and is scored separately in native and reduced runtime modes.
+
+| Scenario                          | Sample                                                                      | Expected behavior                                                                                                                       | Source                    | Date added |
+| --------------------------------- | --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- | ---------- |
+| Go navigation and graph           | `tests/samples/go/{main,utils,helpers}.go` plus alias and interface samples | Reviewed UtilityClass definition and reference ranges resolve, and the main-to-utils dependency tuple is present.                       | Release corpus golden     | 2026-07-27 |
+| Python imports and aliases        | `tests/samples/python/{main,utils,helpers,relative-imports}.py`             | Reviewed direct, namespace, alias, and relative-import calls resolve to the utils declaration; package edges remain explicitly allowed. | Release corpus golden     | 2026-07-27 |
+| TypeScript navigation and graph   | `tests/samples/typescript/{main,utils,helpers}.ts`                          | Reviewed direct, namespace, and alias references resolve, and the main-to-utils dependency tuple is present.                            | Release corpus golden     | 2026-07-27 |
+| Candidate-test ordering           | `tests/samples/chunking/{sample-code.js,integration-example.test.ts}`       | A changed test ranks itself first, and the reviewed explicit pattern ranks the integration test for the runtime-read sample.            | Release corpus golden     | 2026-07-27 |
+| Graph-first navigation limitation | `tests/samples/benchmarks/mixed-docs-source`                                | Markdown-to-source graph edges remain covered without claiming Markdown go-to-definition support.                                       | Release corpus limitation | 2026-07-27 |
+| Representative tier stub          | `.github/workflows/semantic-corpus.yml`                                     | A scheduled, non-blocking job emits an informational result; no external repository cases are pinned yet.                               | Scheduled corpus stub     | 2026-07-27 |
+
 ## Native grammar coverage
 
 | Scenario                                      | Sample                                                                                                                                                                                           | Expected behavior                                                                                                                                                                                                                                                                                                                                                                                                                           | Source                   | Date added |

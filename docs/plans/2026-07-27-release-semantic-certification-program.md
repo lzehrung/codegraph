@@ -1,6 +1,6 @@
 # Release and semantic certification program
 
-Status: Planned
+Status: Implemented
 
 Parent review: [Project improvement review](./2026-07-27-project-improvement-review.md)
 
@@ -523,14 +523,14 @@ Hosted runners vary. Use repeated samples, compare to a same-job baseline where 
 
 ## Definition of done
 
-- [ ] No unexcepted production advisory remains.
-- [ ] Exact candidate tarballs are assembled once and checksummed.
-- [ ] Published bytes equal certified bytes.
-- [ ] Every published native target has an explicit runtime/emulated/structural state.
-- [ ] Required runtime rows pass library, CLI, native parse, and MCP smoke tests.
-- [ ] Release and representative semantic corpus tiers exist with reviewed goldens.
-- [ ] Precision, recall, support, and latency are reported by operation and runtime mode.
-- [ ] Checked-in fixtures remain unchanged after repeated and concurrent suites.
-- [ ] Release workflow blocks incomplete certification.
-- [ ] Public docs state the scope and limits of every claim.
-- [ ] `npm run check` passes.
+- [x] No unexcepted production advisory remains.
+- [x] Exact candidate tarballs are assembled once and checksummed.
+- [x] Published bytes equal certified bytes.
+- [x] Every published native target has an explicit runtime/emulated/structural state.
+- [x] Required runtime rows pass library, CLI, native parse, and MCP smoke tests.
+- [x] Release and representative semantic corpus tiers exist with reviewed goldens.
+- [x] Precision, recall, support, and latency are reported by operation and runtime mode.
+- [x] Checked-in fixtures remain unchanged after repeated and concurrent suites.
+- [x] Release workflow blocks incomplete certification.
+- [x] Public docs state the scope and limits of every claim.
+- [x] `npm run check` passes.
