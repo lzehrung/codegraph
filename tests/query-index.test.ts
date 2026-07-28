@@ -104,6 +104,8 @@ describe("persistent query index", () => {
     const cases = [
       { query: "validateUser", mode: "text" as const },
       { query: "va", mode: "text" as const },
+      { query: "validateuser", mode: "text" as const },
+      { query: "alpha validateuser", mode: "text" as const },
       { query: "security guide", mode: "hybrid" as const },
       { query: 'validate" OR token', mode: "text" as const },
       { query: "---", mode: "hybrid" as const },
@@ -113,6 +115,8 @@ describe("persistent query index", () => {
       const oracle = await search(oracleSession, root, testCase.query, testCase.mode);
       expect(comparable(indexed)).toEqual(comparable(oracle));
     }
+    const crossWord = await search(warmSession, root, "alpha validateuser");
+    expect(crossWord.results.some((result) => result.label.startsWith("validateUser"))).toBe(true);
   });
 
   it("keeps compressed indexed text below the amplification target", async () => {

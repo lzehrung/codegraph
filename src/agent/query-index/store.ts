@@ -256,6 +256,32 @@ export class QueryIndexStore {
       return chunk ? [chunk] : [];
     });
   }
+  compactChunkCandidates(query: string, paths: readonly string[]): StoredQueryIndexChunk[] {
+    const candidates: StoredQueryIndexChunk[] = [];
+    const batchSize = 500;
+    for (let offset = 0; offset < paths.length; offset += batchSize) {
+      const batch = paths.slice(offset, offset + batchSize);
+      const placeholders = batch.map(() => "?").join(", ");
+      const rows = this.db
+        .prepare(
+          `
+          SELECT files.path AS path, chunks.ordinal, chunks.kind, chunks.name,
+                 chunks.start_line, chunks.end_line, chunks.text, chunks.normalized_text
+          FROM chunks
+          JOIN files ON files.file_id = chunks.file_id
+          WHERE files.path IN (${placeholders})
+            AND instr(replace(chunks.normalized_text, ' ', ''), ?) > 0
+          ORDER BY files.path, chunks.ordinal
+        `,
+        )
+        .all(...batch, query) as Array<Record<string, unknown>>;
+      for (const row of rows) {
+        const chunk = storedCandidateChunkFromRow(row);
+        if (chunk) candidates.push(chunk);
+      }
+    }
+    return candidates;
+  }
 
   checkpoint(): void {
     this.db.pragma("wal_checkpoint(TRUNCATE)");

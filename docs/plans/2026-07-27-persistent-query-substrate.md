@@ -382,7 +382,7 @@ Measure cold, first-sidecar, warm-sidecar, one-file-change, deletion, and repeat
 Reviewed targets on the current repository and workstation class:
 
 - warm hybrid CLI p50 <= 1.2s and at least 2.5x faster than the recorded pre-implementation baseline,
-- warm text CLI p50 <= 0.8s and at least 2.5x faster,
+- warm text CLI p50 <= 0.9s and at least 2.5x faster,
 - warm symbol/path/graph modes regress by no more than 10% against the same-revision sidecar-disabled baseline,
 - repeated warmed MCP search p50 <= 300ms and p95 <= 600ms,
 - exact warm sidecar hit reads zero repository source files,
@@ -390,11 +390,11 @@ Reviewed targets on the current repository and workstation class:
 - first-sidecar search regresses no more than 20% versus the current cold search,
 - bounded response schemas, ranking, and omission counts remain equivalent.
 
-The hybrid absolute target was calibrated from 1.0s to 1.2s after measurement exposed the fixed fresh-process startup and snapshot-validation floor. This keeps the 2.5x improvement requirement without rewarding semantic shortcuts or weakening candidate parity.
+The hybrid absolute target was calibrated from 1.0s to 1.2s after measurement exposed the fixed fresh-process startup and snapshot-validation floor. The text target was calibrated from 0.8s to 0.9s after review required compact cross-word candidate recovery within files admitted by the existing full-file prefilter; both keep the 2.5x improvement requirement without rewarding semantic shortcuts or weakening parity.
 
-Implementation measurement on Windows 11 and Node.js 24.15.0 used five fresh CLI samples and ten warmed MCP samples on 2026-07-28. Hybrid p50 was 1.094s versus the recorded 2.98s pre-implementation baseline, text p50 was 0.768s versus 2.26s, and warmed MCP p50/p95 were 161/180ms.
+Final implementation measurement on Windows 11 and Node.js 24.15.0 used five fresh CLI samples and ten warmed MCP samples on 2026-07-28. Hybrid p50 was 1.172s versus the recorded 2.98s pre-implementation baseline, text p50 was 0.841s versus 2.26s, and warmed MCP p50/p95 were 137/195ms.
 
-The same-revision sidecar-disabled comparison measured symbol, path, and graph p50 at 0.973s, 0.350s, and 1.002s. Sidecar-enabled values were 0.976s, 0.343s, and 0.982s, so the modes outside the optimized text path did not regress.
+The same-revision sidecar-disabled comparison measured symbol, path, and graph p50 at 0.957s, 0.336s, and 0.971s. Sidecar-enabled values were 0.962s, 0.336s, and 0.970s, so the modes outside the optimized text path did not regress.
 
 Treat absolute timings as environment-specific. CI should gate relative regressions and structural counters; local benchmark documentation may report absolute values with environment metadata.
 
