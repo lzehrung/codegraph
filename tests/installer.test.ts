@@ -260,6 +260,43 @@ describe("agent installer workflow", () => {
     expect(cursorConfig.mcpServers?.codegraph?.command).toBe("codegraph");
   });
 
+  it("preserves a pre-existing user-owned Codex Codegraph MCP table", async () => {
+    const homeDir = await mkTmpDir("cg-install-codex-existing-");
+    const configPath = path.join(homeDir, ".codex", "config.toml");
+    const existingConfig =
+      '[mcp_servers.codegraph]\ncommand = "codegraph"\nargs = ["mcp", "serve", "--root", ".", "--stdio"]\n';
+    await fsp.mkdir(path.dirname(configPath), { recursive: true });
+    await fsp.writeFile(configPath, existingConfig, "utf8");
+
+    await installCodegraphTargets({ homeDir, targetIds: ["codex"], yes: true });
+
+    expect(await readFile(configPath)).toBe(existingConfig);
+  });
+
+  it("rejects or repairs ambiguous existing Codex Codegraph MCP blocks", async () => {
+    const incompleteHomeDir = await mkTmpDir("cg-install-codex-incomplete-");
+    const incompleteConfigPath = path.join(incompleteHomeDir, ".codex", "config.toml");
+    const incompleteConfig = '# >>> codegraph mcp >>>\n[mcp_servers.codegraph]\ncommand = "codegraph"\n';
+    await fsp.mkdir(path.dirname(incompleteConfigPath), { recursive: true });
+    await fsp.writeFile(incompleteConfigPath, incompleteConfig, "utf8");
+
+    await expect(
+      installCodegraphTargets({ homeDir: incompleteHomeDir, targetIds: ["codex"], yes: true }),
+    ).rejects.toThrow(/# >>> codegraph mcp >>>.*# <<< codegraph mcp <<</);
+    expect(await readFile(incompleteConfigPath)).toBe(incompleteConfig);
+
+    const duplicateHomeDir = await mkTmpDir("cg-install-codex-duplicate-");
+    const duplicateConfigPath = path.join(duplicateHomeDir, ".codex", "config.toml");
+    const userOwnedConfig = '[mcp_servers.codegraph]\ncommand = "custom-codegraph"\n';
+    const duplicateConfig = `${userOwnedConfig}\n# >>> codegraph mcp >>>\n[mcp_servers.codegraph]\ncommand = "codegraph"\n# <<< codegraph mcp <<<\n`;
+    await fsp.mkdir(path.dirname(duplicateConfigPath), { recursive: true });
+    await fsp.writeFile(duplicateConfigPath, duplicateConfig, "utf8");
+
+    await installCodegraphTargets({ homeDir: duplicateHomeDir, targetIds: ["codex"], yes: true });
+
+    expect(await readFile(duplicateConfigPath)).toBe(userOwnedConfig);
+  });
+
   it("uses XDG_CONFIG_HOME for OpenCode config and installed marker on install and uninstall", async () => {
     const homeDir = await mkTmpDir("cg-install-opencode-home-");
     const xdgConfigHome = await mkTmpDir("cg-install-opencode-xdg-");

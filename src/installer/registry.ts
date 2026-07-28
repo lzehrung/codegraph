@@ -413,10 +413,25 @@ function codexTomlSnippet(): string {
 }
 
 function upsertMarkedTomlBlock(existing: string, snippet: string): string {
+  const hasBeginMarker = existing.includes(CODEGRAPH_TOML_MARKER_BEGIN);
+  const hasEndMarker = existing.includes(CODEGRAPH_TOML_MARKER_END);
+  if (hasBeginMarker !== hasEndMarker) {
+    throw new Error(
+      `Codex config contains an incomplete Codegraph installer marker block. Expected both ${CODEGRAPH_TOML_MARKER_BEGIN} and ${CODEGRAPH_TOML_MARKER_END}.`,
+    );
+  }
   const block = `${CODEGRAPH_TOML_MARKER_BEGIN}\n${snippet.trimEnd()}\n${CODEGRAPH_TOML_MARKER_END}`;
   const withoutBlock = removeMarkedTomlBlock(existing).trimEnd();
+  if (hasCodegraphTomlTable(withoutBlock)) {
+    if (!hasBeginMarker) return existing;
+    return `${withoutBlock}\n`;
+  }
   if (!withoutBlock) return `${block}\n`;
   return `${withoutBlock}\n\n${block}\n`;
+}
+
+function hasCodegraphTomlTable(existing: string): boolean {
+  return /^\s*\[\s*mcp_servers\s*\.\s*(?:codegraph|"codegraph"|'codegraph')\s*\]\s*(?:#.*)?$/m.test(existing);
 }
 
 function removeMarkedTomlBlock(existing: string): string {
