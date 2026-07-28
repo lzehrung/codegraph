@@ -2,14 +2,28 @@ import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import { hostname } from "node:os";
+import { performance } from "node:perf_hooks";
 import path from "node:path";
 import { validateArchiveEntries } from "../standalone/standalone-lib.mjs";
 
 const INSTALL_MANIFEST_NAME = "install-manifest.json";
 const LAUNCHER_MARKER = "codegraph standalone installer";
+const INSTALL_LOCK_NAME = ".install-lock";
+const INSTALL_LOCK_OWNER_NAME = "owner.json";
+const WINDOWS_LAUNCHER_SCRIPT_NAME = "codegraph-launcher.ps1";
+const INSTALL_LOCK_TIMEOUT_MS = 30_000;
+const INSTALL_LOCK_INITIAL_RETRY_MS = 50;
+const INSTALL_LOCK_MAX_RETRY_MS = 500;
+const INSTALL_LOCK_UNOWNED_STALE_MS = 120_000;
+const LOCAL_HOSTNAME = hostname();
 
 export async function verifyStandaloneBundle(bundleRoot) {
   const root = path.resolve(bundleRoot);
+  const rootStat = await fsp.lstat(root);
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+    throw new Error("Standalone bundle root must be a real directory.");
+  }
   const manifestPath = path.join(root, "manifest.json");
   const manifest = JSON.parse(await fsp.readFile(manifestPath, "utf8"));
   if (manifest.schemaVersion !== 1 || manifest.channel !== "standalone-preview") {
@@ -96,41 +110,64 @@ export async function installStandaloneBundle(options) {
   const installBase = path.resolve(options.installBase);
   const binDir = path.resolve(options.binDir);
   const manifest = await verifyStandaloneBundle(bundleRoot);
-  const versionRoot = confinedPath(installBase, manifest.version);
+  const versionRoot = standaloneVersionRoot(installBase, manifest.version);
   const stagingRoot = confinedPath(installBase, `.installing-${manifest.version}-${randomUUID()}`);
   await fsp.mkdir(installBase, { recursive: true });
   await fsp.rm(stagingRoot, { recursive: true, force: true });
   try {
     await fsp.cp(bundleRoot, stagingRoot, { recursive: true, errorOnExist: true, force: false });
-    await (options.smoke ?? smokeStandaloneRoot)(stagingRoot, manifest.target);
-    if (!fs.existsSync(versionRoot)) {
-      await fsp.rename(stagingRoot, versionRoot);
-    } else {
-      const installedManifest = await verifyStandaloneBundle(versionRoot);
-      assertMatchingStandaloneProvenance(manifest, installedManifest);
-      await fsp.rm(stagingRoot, { recursive: true, force: true });
-    }
-    const previous = await readInstallManifest(installBase);
-    await fsp.mkdir(binDir, { recursive: true });
-    const launchers = await writeInstalledLaunchers(binDir, versionRoot, manifest.target);
-    const installManifest = {
-      schemaVersion: 1,
-      channel: "standalone-preview",
-      currentVersion: manifest.version,
-      previousVersion: previous?.currentVersion ?? null,
-      target: manifest.target,
-      versionRoot,
-      launchers,
-      releaseUrl: options.releaseUrl ?? null,
-      archiveSha256: options.archiveSha256 ?? null,
-      verification: options.verification ?? "bundle-manifest-sha256",
-      installedAt: new Date().toISOString(),
-    };
-    await writeJsonAtomic(path.join(installBase, INSTALL_MANIFEST_NAME), installManifest);
-    return installManifest;
-  } catch (error) {
+    const stagedManifest = await verifyStandaloneBundle(stagingRoot);
+    assertMatchingStandaloneProvenance(manifest, stagedManifest);
+    await (options.smoke ?? smokeStandaloneRoot)(stagingRoot, manifest.target, manifest);
+    return await withInstallLock(installBase, async () => {
+      const launcherPaths = installedLauncherPaths(binDir, manifest.target);
+      const installerState = await snapshotInstallerState(
+        [...launcherPaths, path.join(installBase, INSTALL_MANIFEST_NAME)],
+        binDir,
+      );
+      const previous = await readInstallManifest(installBase);
+      let mustRollback = false;
+      try {
+        const versionRootExists = await isRealDirectory(versionRoot, "Standalone version root");
+        if (versionRootExists) {
+          const installedManifest = await verifyStandaloneBundle(versionRoot);
+          assertMatchingStandaloneProvenance(manifest, installedManifest);
+        } else {
+          mustRollback = true;
+          await fsp.rename(stagingRoot, versionRoot);
+        }
+        mustRollback = true;
+        await fsp.mkdir(binDir, { recursive: true });
+        const launchers = await writeInstalledLaunchers(binDir, versionRoot, manifest.target);
+        const installManifest = {
+          schemaVersion: 1,
+          channel: "standalone-preview",
+          currentVersion: manifest.version,
+          previousVersion: previous?.currentVersion ?? null,
+          target: manifest.target,
+          versionRoot,
+          launchers,
+          releaseUrl: options.releaseUrl ?? null,
+          archiveSha256: options.archiveSha256 ?? null,
+          verification: options.verification ?? "bundle-manifest-sha256",
+          installedAt: new Date().toISOString(),
+        };
+        await writeJsonAtomic(path.join(installBase, INSTALL_MANIFEST_NAME), installManifest);
+        return installManifest;
+      } catch (error) {
+        if (mustRollback) {
+          try {
+            await restoreInstallerState(installerState);
+          } catch (rollbackError) {
+            const detail = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
+            throw new Error(`Standalone installation failed and state rollback failed: ${detail}`, { cause: error });
+          }
+        }
+        throw error;
+      }
+    });
+  } finally {
     await fsp.rm(stagingRoot, { recursive: true, force: true });
-    throw error;
   }
 }
 
@@ -149,38 +186,352 @@ export async function uninstallStandaloneBundle(options) {
       removed.push(absolute);
     }
   }
-  const versionRoot = confinedPath(installBase, manifest.currentVersion);
+  const versionRoot = standaloneVersionRoot(installBase, manifest.currentVersion);
   await fsp.rm(versionRoot, { recursive: true, force: true });
   removed.push(versionRoot);
   await fsp.rm(path.join(installBase, INSTALL_MANIFEST_NAME), { force: true });
   return { uninstalled: true, removed };
 }
 
-async function smokeStandaloneRoot(root, target) {
+async function smokeStandaloneRoot(root, target, manifest) {
   const windows = String(target).startsWith("win32-");
   const node = path.join(root, windows ? "node.exe" : "node");
   const cli = path.join(root, "dist", "cli.js");
-  for (const args of [["version"], ["doctor", "--json"]]) {
-    const result = spawnSync(node, [cli, ...args], { cwd: root, encoding: "utf8", env: { ...process.env, PATH: "" } });
-    if (result.status !== 0) {
-      throw new Error(`Standalone ${args[0]} smoke failed (${result.status}): ${result.stderr || result.stdout}`);
-    }
+  const versionReport = parseSmokeJson(runStandaloneSmokeCommand(node, cli, ["version", "--json"], root), "version");
+  assertSmokePackageIdentity(versionReport, manifest, root, "version");
+  const doctorReport = parseSmokeJson(runStandaloneSmokeCommand(node, cli, ["doctor", "--json"], root), "doctor");
+  const doctorPackage = recordValue(doctorReport.package);
+  if (!doctorPackage) throw new Error("Standalone doctor smoke did not report its package identity.");
+  assertSmokePackageIdentity(doctorPackage, manifest, root, "doctor");
+  const native = recordValue(doctorReport.native);
+  if (!native || typeof native.available !== "boolean" || !native.available) {
+    throw new Error("Standalone doctor smoke did not report an available native runtime.");
   }
+  const origin = recordValue(native.origin);
+  if (!origin || origin.target !== manifest.nativeSuffix) {
+    throw new Error("Standalone doctor smoke native origin target does not match the bundle manifest.");
+  }
+  const expectedTargetPackage = `@lzehrung/codegraph-native-${manifest.nativeSuffix}`;
+  const nativePackagePath = path.join(
+    root,
+    "node_modules",
+    "@lzehrung",
+    `codegraph-native-${manifest.nativeSuffix}`,
+    "package.json",
+  );
+  let nativePackage;
+  try {
+    nativePackage = JSON.parse(fs.readFileSync(nativePackagePath, "utf8"));
+  } catch {
+    throw new Error("Standalone doctor smoke could not read target native package metadata.");
+  }
+  if (nativePackage.name !== expectedTargetPackage || typeof nativePackage.version !== "string") {
+    throw new Error("Standalone doctor smoke found invalid target native package metadata.");
+  }
+  if (origin.packageName !== expectedTargetPackage || origin.packageVersion !== nativePackage.version) {
+    throw new Error("Standalone doctor smoke native origin package does not match bundled target metadata.");
+  }
+}
+
+function runStandaloneSmokeCommand(node, cli, args, root) {
+  const result = spawnSync(node, [cli, ...args], {
+    cwd: root,
+    encoding: "utf8",
+    env: { ...process.env, PATH: "" },
+  });
+  if (result.error || result.status !== 0) {
+    const details = result.stderr || result.stdout || result.error?.message || "no output";
+    throw new Error(`Standalone ${args[0]} smoke failed (${result.status ?? "unknown"}): ${details}`);
+  }
+  return result.stdout ?? "";
+}
+
+function parseSmokeJson(output, command) {
+  try {
+    const parsed = JSON.parse(output);
+    const report = recordValue(parsed);
+    if (!report) throw new Error("not an object");
+    return report;
+  } catch {
+    throw new Error(`Standalone ${command} smoke returned invalid JSON.`);
+  }
+}
+
+function assertSmokePackageIdentity(report, manifest, root, command) {
+  const packageRootMatches = typeof report.packageRoot === "string" && sameFilesystemPath(report.packageRoot, root);
+  if (report.name !== "@lzehrung/codegraph" || report.version !== manifest.version || !packageRootMatches) {
+    throw new Error(`Standalone ${command} smoke package identity does not match the bundle manifest.`);
+  }
+}
+
+function sameFilesystemPath(left, right) {
+  let normalizedLeft = path.resolve(left);
+  let normalizedRight = path.resolve(right);
+  if (process.platform === "win32") {
+    normalizedLeft = normalizedLeft.toLowerCase();
+    normalizedRight = normalizedRight.toLowerCase();
+  }
+  return normalizedLeft === normalizedRight;
+}
+
+function recordValue(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  return value;
+}
+
+function installedLauncherPaths(binDir, target) {
+  if (String(target).startsWith("win32-")) {
+    return [path.join(binDir, "codegraph.cmd"), path.join(binDir, WINDOWS_LAUNCHER_SCRIPT_NAME)];
+  }
+  return [path.join(binDir, "codegraph")];
 }
 
 async function writeInstalledLaunchers(binDir, versionRoot, target) {
   const windows = String(target).startsWith("win32-");
+  const launchers = installedLauncherPaths(binDir, target);
+  const [launcher] = launchers;
+  if (!launcher) throw new Error("Standalone launcher path is missing.");
   if (windows) {
-    const launcher = path.join(binDir, "codegraph.cmd");
-    const content = `@echo off\r\nrem ${LAUNCHER_MARKER}\r\n"${path.join(versionRoot, "node.exe")}" "${path.join(versionRoot, "dist", "cli.js")}" %*\r\n`;
-    await writeTextAtomic(launcher, content);
-    return [launcher];
+    const script = launchers[1];
+    if (!script) throw new Error("Standalone Windows launcher script path is missing.");
+    const commandContent = `@echo off\r\nrem ${LAUNCHER_MARKER}\r\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0${WINDOWS_LAUNCHER_SCRIPT_NAME}" %*\r\n`;
+    const scriptContent = [
+      `# ${LAUNCHER_MARKER}`,
+      '$ErrorActionPreference = "Stop"',
+      `& ${quotePowerShell(path.join(versionRoot, "node.exe"))} ${quotePowerShell(path.join(versionRoot, "dist", "cli.js"))} @args`,
+      "exit $LASTEXITCODE",
+      "",
+    ].join("\r\n");
+    await writeTextAtomic(launcher, commandContent);
+    await writeBinaryAtomic(
+      script,
+      Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(scriptContent, "utf8")]),
+    );
+    return launchers;
   }
-  const launcher = path.join(binDir, "codegraph");
-  const content = `#!/bin/sh\n# ${LAUNCHER_MARKER}\nexec "${path.join(versionRoot, "node")}" "${path.join(versionRoot, "dist", "cli.js")}" "$@"\n`;
+  const content = `#!/bin/sh\n# ${LAUNCHER_MARKER}\nexec ${quotePosixShell(path.join(versionRoot, "node"))} ${quotePosixShell(path.join(versionRoot, "dist", "cli.js"))} "$@"\n`;
   await writeTextAtomic(launcher, content);
   await fsp.chmod(launcher, 0o755);
-  return [launcher];
+  return launchers;
+}
+
+function quotePosixShell(value) {
+  return `'${value.replaceAll("'", "'\"'\"'")}'`;
+}
+
+function quotePowerShell(value) {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+async function snapshotInstallerState(filePaths, binDir) {
+  return {
+    files: await Promise.all(filePaths.map(async (filePath) => await snapshotFile(filePath))),
+    binDir,
+    binDirExisted: await isRealDirectory(binDir, "Standalone launcher directory"),
+  };
+}
+
+async function snapshotFile(filePath) {
+  try {
+    const stat = await fsp.lstat(filePath);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw new Error(`Standalone installer state contains an unsafe path: ${filePath}`);
+    }
+    return {
+      filePath,
+      exists: true,
+      contents: await fsp.readFile(filePath),
+      mode: stat.mode & 0o7777,
+    };
+  } catch (error) {
+    if (isCode(error, "ENOENT")) return { filePath, exists: false };
+    throw error;
+  }
+}
+
+async function restoreInstallerState(snapshot) {
+  const failures = [];
+  for (const file of snapshot.files) {
+    try {
+      await restoreFileSnapshot(file);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (!snapshot.binDirExisted) {
+    try {
+      await fsp.rmdir(snapshot.binDir);
+    } catch (error) {
+      if (!isCode(error, "ENOENT") && !isCode(error, "ENOTEMPTY")) failures.push(error);
+    }
+  }
+  if (failures.length) throw new AggregateError(failures, "Unable to restore standalone installer state.");
+}
+
+async function restoreFileSnapshot(snapshot) {
+  if (!snapshot.exists) {
+    await fsp.rm(snapshot.filePath, { force: true });
+    return;
+  }
+  await writeBinaryAtomic(snapshot.filePath, snapshot.contents);
+  await fsp.chmod(snapshot.filePath, snapshot.mode);
+}
+
+async function isRealDirectory(directory, label) {
+  try {
+    const stat = await fsp.lstat(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw new Error(`${label} must be a real directory: ${directory}`);
+    }
+    return true;
+  } catch (error) {
+    if (isCode(error, "ENOENT")) return false;
+    throw error;
+  }
+}
+
+async function withInstallLock(installBase, operation) {
+  const lock = await acquireInstallLock(installBase);
+  try {
+    return await operation();
+  } finally {
+    await releaseInstallLock(lock);
+  }
+}
+
+async function acquireInstallLock(installBase) {
+  const lockPath = confinedPath(installBase, INSTALL_LOCK_NAME);
+  const startedAt = performance.now();
+  let retryMs = INSTALL_LOCK_INITIAL_RETRY_MS;
+  for (;;) {
+    try {
+      await fsp.mkdir(lockPath);
+    } catch (error) {
+      if (!isCode(error, "EEXIST")) throw error;
+      if (await reclaimStaleInstallLock(lockPath)) continue;
+      if (performance.now() - startedAt >= INSTALL_LOCK_TIMEOUT_MS) {
+        throw new Error(`Timed out waiting for standalone installation lock: ${lockPath}`);
+      }
+      await waitForInstallLock(retryMs);
+      retryMs = Math.min(INSTALL_LOCK_MAX_RETRY_MS, retryMs * 2);
+      continue;
+    }
+    const token = randomUUID();
+    try {
+      await fsp.writeFile(
+        path.join(lockPath, INSTALL_LOCK_OWNER_NAME),
+        `${JSON.stringify({
+          schemaVersion: 1,
+          token,
+          pid: process.pid,
+          host: LOCAL_HOSTNAME,
+          createdAt: new Date().toISOString(),
+        })}\n`,
+        { encoding: "utf8", flag: "wx" },
+      );
+    } catch (error) {
+      await fsp.rm(lockPath, { recursive: true, force: true }).catch(() => undefined);
+      throw error;
+    }
+    return { lockPath, token };
+  }
+}
+
+function waitForInstallLock(milliseconds) {
+  const { promise, resolve } = Promise.withResolvers();
+  setTimeout(resolve, milliseconds);
+  return promise;
+}
+
+async function reclaimStaleInstallLock(lockPath) {
+  let lockStat;
+  try {
+    lockStat = await fsp.lstat(lockPath);
+  } catch (error) {
+    if (isCode(error, "ENOENT")) return true;
+    throw error;
+  }
+  if (!lockStat.isDirectory() || lockStat.isSymbolicLink()) {
+    throw new Error(`Standalone install lock is unsafe: ${lockPath}`);
+  }
+  const owner = await readInstallLockOwner(lockPath);
+  if (owner && owner.host === LOCAL_HOSTNAME && !isProcessRunning(owner.pid)) {
+    return await removeStaleInstallLock(lockPath);
+  }
+  if (!owner && Date.now() - lockStat.mtimeMs >= INSTALL_LOCK_UNOWNED_STALE_MS) {
+    return await removeStaleInstallLock(lockPath);
+  }
+  return false;
+}
+
+async function readInstallLockOwner(lockPath) {
+  const ownerPath = path.join(lockPath, INSTALL_LOCK_OWNER_NAME);
+  let ownerStat;
+  try {
+    ownerStat = await fsp.lstat(ownerPath);
+  } catch (error) {
+    if (isCode(error, "ENOENT")) return null;
+    throw error;
+  }
+  if (!ownerStat.isFile() || ownerStat.isSymbolicLink()) {
+    throw new Error(`Standalone install lock owner is unsafe: ${ownerPath}`);
+  }
+  let raw;
+  try {
+    raw = await fsp.readFile(ownerPath, "utf8");
+  } catch (error) {
+    if (isCode(error, "ENOENT")) return null;
+    throw error;
+  }
+  try {
+    const parsed = recordValue(JSON.parse(raw));
+    if (
+      !parsed ||
+      parsed.schemaVersion !== 1 ||
+      typeof parsed.token !== "string" ||
+      !parsed.token ||
+      !Number.isSafeInteger(parsed.pid) ||
+      parsed.pid <= 0 ||
+      typeof parsed.host !== "string" ||
+      !parsed.host ||
+      typeof parsed.createdAt !== "string"
+    ) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function isProcessRunning(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return !isCode(error, "ESRCH");
+  }
+}
+
+async function removeStaleInstallLock(lockPath) {
+  const stalePath = confinedPath(path.dirname(lockPath), `${path.basename(lockPath)}.stale-${randomUUID()}`);
+  try {
+    await fsp.rename(lockPath, stalePath);
+  } catch (error) {
+    if (isCode(error, "ENOENT")) return true;
+    if (isCode(error, "EEXIST")) return false;
+    throw error;
+  }
+  await fsp.rm(stalePath, { recursive: true, force: true });
+  return true;
+}
+
+async function releaseInstallLock(lock) {
+  const owner = await readInstallLockOwner(lock.lockPath);
+  if (!owner || owner.token !== lock.token) {
+    throw new Error(`Standalone installation lock ownership was lost: ${lock.lockPath}`);
+  }
+  await fsp.rm(lock.lockPath, { recursive: true, force: true });
 }
 
 async function readInstallManifest(installBase) {
@@ -218,14 +569,39 @@ function confinedPath(root, relative) {
   return resolved;
 }
 
+function standaloneVersionRoot(installBase, version) {
+  if (
+    typeof version !== "string" ||
+    !version ||
+    version === "." ||
+    version === ".." ||
+    version.includes("/") ||
+    version.includes("\\") ||
+    version === INSTALL_MANIFEST_NAME ||
+    version.startsWith(".installing-") ||
+    version.startsWith(".install-lock")
+  ) {
+    throw new Error(`Standalone version is not a safe install path: ${String(version)}`);
+  }
+  return confinedPath(installBase, version);
+}
+
 async function writeJsonAtomic(filePath, value) {
   await writeTextAtomic(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 async function writeTextAtomic(filePath, content) {
+  await writeAtomic(filePath, content);
+}
+
+async function writeBinaryAtomic(filePath, content) {
+  await writeAtomic(filePath, content);
+}
+
+async function writeAtomic(filePath, content) {
   await fsp.mkdir(path.dirname(filePath), { recursive: true });
   const temporary = `${filePath}.tmp-${process.pid}-${randomUUID()}`;
-  await fsp.writeFile(temporary, content, { encoding: "utf8", flag: "wx" });
+  await fsp.writeFile(temporary, content, { flag: "wx" });
   try {
     await fsp.rename(temporary, filePath);
   } catch (error) {

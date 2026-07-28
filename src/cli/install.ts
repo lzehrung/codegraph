@@ -119,7 +119,7 @@ export async function handleInstallerCommand(context: InstallerCommandContext): 
   }
 
   const result = await runInstallerOperation(context.command, { targetIds, yes: !dryRun, dryRun });
-  const guidance = completionGuidance(context.command, targetIds);
+  const guidance = dryRun ? [] : completionGuidance(context.command, targetIds);
   const health = context.command === "install" && !dryRun ? await collectInstallerHealth() : undefined;
   const output: InstallerOutput = {
     ...result,

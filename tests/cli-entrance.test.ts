@@ -33,6 +33,13 @@ describe("lightweight CLI entrance", () => {
     expect(command).toMatchObject({ stderr: "", exitCode: undefined });
     expect(command.stdout).toContain('Usage: codegraph explore "<query>"');
   });
+  it("documents interactive and noninteractive installer consent", async () => {
+    const result = await captureCli(["install", "--help"]);
+
+    expect(result).toMatchObject({ stderr: "", exitCode: undefined });
+    expect(result.stdout).toContain("Interactive terminals preview changes and ask for confirmation.");
+    expect(result.stdout).toContain("Noninteractive writes require --yes");
+  });
 
   it("prints deterministic typo suggestions without executing a command", async () => {
     const close = await captureCli(["serach"]);

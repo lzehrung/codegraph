@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -358,7 +360,13 @@ describe("agent installer workflow", () => {
       homeDir,
       async () => await captureCli(["install", "--target", "cursor", "--dry-run", "--json"]),
     );
-    expect(JSON.parse(preview.stdout)).toMatchObject({ dryRun: true, verified: false });
+    const previewOutput = JSON.parse(preview.stdout) as {
+      dryRun?: boolean;
+      guidance?: string[];
+      verified?: boolean;
+    };
+    expect(previewOutput).toMatchObject({ dryRun: true, verified: false });
+    expect(previewOutput.guidance).toBeUndefined();
     await expect(fsp.stat(path.join(homeDir, ".cursor", "mcp.json"))).rejects.toMatchObject({ code: "ENOENT" });
 
     const applied = await withCliHome(
@@ -394,6 +402,204 @@ describe("agent installer workflow", () => {
       mcpServers?: { codegraph?: { command?: string } };
     };
     expect(cursorConfig.mcpServers?.codegraph?.command).toBe("codegraph");
+  });
+
+  it("rejects an unowned Codex table without writing installer files", async () => {
+    const homeDir = await mkTmpDir("cg-install-codex-unowned-");
+    const configPath = path.join(homeDir, ".codex", "config.toml");
+    const original = Buffer.from(
+      '[mcp_servers.codegraph]\r\ncommand = "user-codegraph"\r\nargs = ["mcp", "serve"]\r\n',
+      "utf8",
+    );
+    await fsp.mkdir(path.dirname(configPath), { recursive: true });
+    await fsp.writeFile(configPath, original);
+
+    await expect(installCodegraphTargets({ homeDir, targetIds: ["codex"], yes: true })).rejects.toThrow(
+      /User-owned Codegraph MCP table already exists/u,
+    );
+
+    await expect(fsp.readFile(configPath)).resolves.toEqual(original);
+    await expect(fsp.stat(path.join(homeDir, ".codex", "skills", "codegraph", "SKILL.md"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it.each([
+    ["a missing end marker", "# >>> codegraph mcp >>>\n[mcp_servers.codegraph]\n"],
+    ["a missing begin marker", "[mcp_servers.codegraph]\n# <<< codegraph mcp <<<\n"],
+    [
+      "duplicate owned marker blocks",
+      "# >>> codegraph mcp >>>\n[mcp_servers.codegraph]\n# <<< codegraph mcp <<<\n# >>> codegraph mcp >>>\n[mcp_servers.codegraph]\n# <<< codegraph mcp <<<\n",
+    ],
+  ])("rejects Codex configs with %s before writing", async (_description, original) => {
+    const homeDir = await mkTmpDir("cg-install-codex-marker-");
+    const configPath = path.join(homeDir, ".codex", "config.toml");
+    await fsp.mkdir(path.dirname(configPath), { recursive: true });
+    await fsp.writeFile(configPath, original, "utf8");
+
+    await expect(installCodegraphTargets({ homeDir, targetIds: ["codex"], yes: true })).rejects.toThrow(
+      /incomplete or malformed Codegraph installer marker block/u,
+    );
+
+    await expect(readFile(configPath)).resolves.toBe(original);
+    await expect(fsp.stat(path.join(homeDir, ".codex", "skills", "codegraph", "SKILL.md"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("preflights a later collision before changing an earlier target", async () => {
+    const homeDir = await mkTmpDir("cg-install-preflight-all-");
+    const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
+    const originalCodexConfig = Buffer.from("# Preserve exact Codex bytes\r\n", "utf8");
+    const cursorConfigPath = path.join(homeDir, ".cursor", "mcp.json");
+    await fsp.mkdir(path.dirname(codexConfigPath), { recursive: true });
+    await fsp.writeFile(codexConfigPath, originalCodexConfig);
+    await fsp.mkdir(path.dirname(cursorConfigPath), { recursive: true });
+    await fsp.writeFile(
+      cursorConfigPath,
+      `${JSON.stringify({ mcpServers: { codegraph: { command: "user-codegraph" } } }, null, 2)}\n`,
+      "utf8",
+    );
+
+    await expect(installCodegraphTargets({ homeDir, targetIds: ["codex", "cursor"], yes: true })).rejects.toThrow(
+      /User-owned Codegraph MCP entry already exists/u,
+    );
+
+    await expect(fsp.readFile(codexConfigPath)).resolves.toEqual(originalCodexConfig);
+    await expect(fsp.stat(path.join(homeDir, ".codex", "skills", "codegraph", "SKILL.md"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(
+      fsp.stat(path.join(homeDir, ".codex", "skills", "codegraph", "CODEGRAPH_INSTALLED")),
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("rolls back every earlier target after an injected later write failure", async () => {
+    const homeDir = await mkTmpDir("cg-install-rollback-write-");
+    const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
+    const cursorConfigPath = path.join(homeDir, ".cursor", "mcp.json");
+    const originalCodexConfig = Buffer.from("# Preserve exact Codex bytes\r\n", "utf8");
+    await fsp.mkdir(path.dirname(codexConfigPath), { recursive: true });
+    await fsp.writeFile(codexConfigPath, originalCodexConfig, { mode: 0o640 });
+
+    const originalRename = fsp.rename.bind(fsp);
+    const rename = vi.spyOn(fsp, "rename").mockImplementation(async (source, target) => {
+      if (path.resolve(String(target)) === path.resolve(cursorConfigPath)) {
+        throw Object.assign(new Error("injected later-target failure"), { code: "EIO" });
+      }
+      await originalRename(source, target);
+    });
+    try {
+      await expect(installCodegraphTargets({ homeDir, targetIds: ["codex", "cursor"], yes: true })).rejects.toThrow(
+        /injected later-target failure/u,
+      );
+    } finally {
+      rename.mockRestore();
+    }
+
+    await expect(fsp.readFile(codexConfigPath)).resolves.toEqual(originalCodexConfig);
+    if (process.platform !== "win32") {
+      expect((await fsp.stat(codexConfigPath)).mode & 0o777).toBe(0o640);
+    }
+    for (const targetPath of [
+      path.join(homeDir, ".codex", "skills", "codegraph", "SKILL.md"),
+      path.join(homeDir, ".codex", "skills", "codegraph", "CODEGRAPH_INSTALLED"),
+      path.join(homeDir, ".cursor", "skills", "codegraph", "SKILL.md"),
+      path.join(homeDir, ".cursor", "skills", "codegraph", "CODEGRAPH_INSTALLED"),
+      cursorConfigPath,
+    ]) {
+      await expect(fsp.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  });
+
+  it.each([
+    { name: "config", destinationForHome: (homeDir: string) => path.join(homeDir, ".cursor", "mcp.json") },
+    {
+      name: "skill",
+      destinationForHome: (homeDir: string) => path.join(homeDir, ".cursor", "skills", "codegraph", "SKILL.md"),
+    },
+    {
+      name: "marker",
+      destinationForHome: (homeDir: string) =>
+        path.join(homeDir, ".cursor", "skills", "codegraph", "CODEGRAPH_INSTALLED"),
+    },
+  ])("rejects a symlinked Cursor $name path", async ({ destinationForHome }) => {
+    const homeDir = await mkTmpDir("cg-install-symlink-");
+    const linkedPath = destinationForHome(homeDir);
+    const linkedTarget = path.join(homeDir, "linked-target");
+    await fsp.writeFile(linkedTarget, "user-owned target\n", "utf8");
+    await fsp.mkdir(path.dirname(linkedPath), { recursive: true });
+    await fsp.symlink(linkedTarget, linkedPath, "file");
+
+    await expect(installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true })).rejects.toThrow(
+      normalizeExpectedPath(linkedPath),
+    );
+
+    expect((await fsp.lstat(linkedPath)).isSymbolicLink()).toBe(true);
+    await expect(readFile(linkedTarget)).resolves.toBe("user-owned target\n");
+  });
+
+  it("reclaims an abandoned transaction lock held by a dead PID", async () => {
+    const homeDir = await mkTmpDir("cg-install-stale-lock-");
+    const scope = path.resolve(homeDir);
+    const lockPath = path.join(
+      os.tmpdir(),
+      `codegraph-installer-${createHash("sha256").update(scope).digest("hex")}.lock`,
+    );
+    await fsp.writeFile(
+      lockPath,
+      `${JSON.stringify({
+        owner: "abandoned-owner",
+        pid: 999_999,
+        leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+      })}\n`,
+      "utf8",
+    );
+    try {
+      await expect(installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true })).resolves.toMatchObject({
+        installed: true,
+        verified: true,
+      });
+    } finally {
+      await fsp.rm(lockPath, { force: true });
+    }
+    await expect(fsp.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("records owner, PID, and lease metadata while an install holds transaction and file locks", async () => {
+    const homeDir = await mkTmpDir("cg-install-lock-metadata-");
+    const scope = path.resolve(homeDir);
+    const transactionLockPath = path.join(
+      os.tmpdir(),
+      `codegraph-installer-${createHash("sha256").update(scope).digest("hex")}.lock`,
+    );
+    const skillPath = path.join(homeDir, ".cursor", "skills", "codegraph", "SKILL.md");
+    const fileLockPath = `${skillPath}.codegraph-lock`;
+    const originalRename = fsp.rename.bind(fsp);
+    let observedTransactionLock = "";
+    let observedFileLock = "";
+    const rename = vi.spyOn(fsp, "rename").mockImplementation(async (source, target) => {
+      if (path.resolve(String(target)) === path.resolve(skillPath)) {
+        observedTransactionLock = await readFile(transactionLockPath);
+        observedFileLock = await readFile(fileLockPath);
+      }
+      await originalRename(source, target);
+    });
+    try {
+      await installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true });
+    } finally {
+      rename.mockRestore();
+    }
+
+    for (const lock of [observedTransactionLock, observedFileLock]) {
+      expect(lock).toContain('"owner"');
+      expect(lock).toContain(`"pid":${process.pid}`);
+      expect(lock).toContain('"leaseExpiresAt"');
+    }
+    await expect(fsp.stat(transactionLockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fsp.stat(fileLockPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("keeps concurrent installer attempts atomic and verified", async () => {
@@ -794,6 +1000,25 @@ describe("agent installer workflow", () => {
     expect(message).not.toMatch(/before running codegraph install\b/);
   });
 
+  it("preflights every uninstall target before mutating earlier targets", async () => {
+    const homeDir = await mkTmpDir("cg-uninstall-transaction-");
+    await installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true });
+    const cursorConfigPath = path.join(homeDir, ".cursor", "mcp.json");
+    const cursorSkillPath = path.join(homeDir, ".cursor", "skills", "codegraph", "SKILL.md");
+    const cursorConfigBefore = await fsp.readFile(cursorConfigPath);
+    const cursorSkillBefore = await fsp.readFile(cursorSkillPath);
+    const claudeConfigPath = path.join(homeDir, ".claude", "mcp.json");
+    await fsp.mkdir(path.dirname(claudeConfigPath), { recursive: true });
+    await fsp.writeFile(claudeConfigPath, "{ not json", "utf8");
+
+    await expect(uninstallCodegraphTargets({ homeDir, targetIds: ["cursor", "claude"], yes: true })).rejects.toThrow(
+      /Unable to parse .*\.claude.*mcp\.json as JSON/,
+    );
+
+    expect(await fsp.readFile(cursorConfigPath)).toEqual(cursorConfigBefore);
+    expect(await fsp.readFile(cursorSkillPath)).toEqual(cursorSkillBefore);
+  });
+
   it("reports permission failures with the exact user-owned path", async () => {
     const homeDir = await mkTmpDir("cg-install-permission-");
     const rename = vi
@@ -823,10 +1048,17 @@ describe("agent installer workflow", () => {
   it("fails when post-write owned-state verification detects drift", async () => {
     const homeDir = await mkTmpDir("cg-install-verify-failure-");
     const configPath = path.join(homeDir, ".cursor", "mcp.json");
+    const originalConfig = Buffer.from('{"mcpServers":{"other":{"command":"other-tool"}}}\r\n', "utf8");
+    await fsp.mkdir(path.dirname(configPath), { recursive: true });
+    await fsp.writeFile(configPath, originalConfig);
     const originalRename = fsp.rename.bind(fsp);
+    let injectedDrift = false;
     const rename = vi.spyOn(fsp, "rename").mockImplementation(async (source, target) => {
       await originalRename(source, target);
-      if (path.resolve(String(target)) === path.resolve(configPath)) await fsp.writeFile(configPath, "{}\n", "utf8");
+      if (!injectedDrift && path.resolve(String(target)) === path.resolve(configPath)) {
+        injectedDrift = true;
+        await fsp.writeFile(configPath, "{}\n", "utf8");
+      }
     });
     try {
       await expect(installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true })).rejects.toThrow(
@@ -834,6 +1066,13 @@ describe("agent installer workflow", () => {
       );
     } finally {
       rename.mockRestore();
+    }
+    await expect(fsp.readFile(configPath)).resolves.toEqual(originalConfig);
+    for (const targetPath of [
+      path.join(homeDir, ".cursor", "skills", "codegraph", "SKILL.md"),
+      path.join(homeDir, ".cursor", "skills", "codegraph", "CODEGRAPH_INSTALLED"),
+    ]) {
+      await expect(fsp.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
     }
   });
 

@@ -12,7 +12,7 @@ Windows PowerShell:
 irm https://github.com/lzehrung/codegraph/releases/latest/download/install.ps1 | iex
 ```
 
-macOS or Linux:
+macOS or glibc-based Linux:
 
 ```bash
 curl -fsSL https://github.com/lzehrung/codegraph/releases/latest/download/install.sh | sh

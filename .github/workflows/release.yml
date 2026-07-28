@@ -493,12 +493,80 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  standalone-funnel:
+    name: Standalone funnel ${{ matrix.target }}
+    needs:
+      - plan-release
+      - build-standalone-archives
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            arch: x64
+            target: win32-x64
+            extension: zip
+          - os: ubuntu-latest
+            arch: x64
+            target: linux-x64
+            extension: tar.gz
+          - os: ubuntu-24.04-arm
+            arch: arm64
+            target: linux-arm64
+            extension: tar.gz
+          - os: macos-15-intel
+            arch: x64
+            target: darwin-x64
+            extension: tar.gz
+          - os: macos-14
+            arch: arm64
+            target: darwin-arm64
+            extension: tar.gz
+    steps:
+      - name: Checkout planned source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.plan-release.outputs.source_revision }}
+
+      - name: Setup funnel host Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.10.0
+          architecture: ${{ matrix.arch }}
+
+      - name: Download immutable standalone candidate archive
+        uses: actions/download-artifact@v8
+        with:
+          name: standalone-candidate-${{ matrix.target }}
+          path: temp/standalone-candidate
+
+      - name: Run exact standalone installer funnel
+        shell: bash
+        run: >-
+          node ./scripts/onboarding/run-funnel-smoke.mjs
+          --channel standalone
+          --root "$PWD"
+          --artifact temp/standalone-candidate/codegraph-${{ matrix.target }}.${{ matrix.extension }}
+          --target ${{ matrix.target }}
+          --output temp/certification/funnel-standalone-${{ matrix.target }}.json
+
+      - name: Upload standalone FunnelResultV1
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: standalone-funnel-${{ matrix.target }}
+          path: temp/certification/funnel-standalone-${{ matrix.target }}.json
+          if-no-files-found: error
+          retention-days: 14
+
   assemble-standalone-release-assets:
     name: Aggregate smoked standalone release assets
     needs:
       - plan-release
       - assemble-release-candidates
       - smoke-standalone-archives
+      - standalone-funnel
     runs-on: ubuntu-latest
     steps:
       - name: Checkout planned source
@@ -698,6 +766,94 @@ jobs:
           path: temp/certification/package-smoke-${{ matrix.target }}.json
           if-no-files-found: error
 
+  package-funnel:
+    name: Package funnel ${{ matrix.native-target }}
+    needs:
+      - plan-release
+      - assemble-release-candidates
+      - security-production
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: win32-x64
+            native-target: win32-x64-msvc
+            alpine: false
+          - os: ubuntu-latest
+            target: linux-x64
+            native-target: linux-x64-gnu
+            alpine: false
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
+            native-target: linux-arm64-gnu
+            alpine: false
+          - os: ubuntu-latest
+            target: linux-x64
+            native-target: linux-x64-musl
+            alpine: true
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
+            native-target: linux-arm64-musl
+            alpine: true
+          - os: macos-15-intel
+            target: darwin-x64
+            native-target: darwin-x64
+            alpine: false
+          - os: macos-14
+            target: darwin-arm64
+            native-target: darwin-arm64
+            alpine: false
+    steps:
+      - name: Checkout planned source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.plan-release.outputs.source_revision }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.10.0
+
+      - name: Download immutable release candidates
+        uses: actions/download-artifact@v8
+        with:
+          name: release-candidates
+          path: temp/release-candidates
+
+      - name: Run host package funnel
+        if: ${{ !matrix.alpine }}
+        shell: bash
+        run: >-
+          node ./scripts/onboarding/run-funnel-smoke.mjs
+          --channel package
+          --root "$PWD"
+          --artifact temp/release-candidates/release-candidate-manifest.json
+          --target ${{ matrix.target }}
+          --output temp/certification/funnel-package-${{ matrix.native-target }}.json
+
+      - name: Run matching Alpine package funnel
+        if: ${{ matrix.alpine }}
+        shell: bash
+        run: >-
+          docker run --rm -e HOME=/tmp -v "$PWD:/workspace" -w /workspace node:24-alpine
+          node ./scripts/onboarding/run-funnel-smoke.mjs
+          --channel package
+          --root /workspace
+          --artifact /workspace/temp/release-candidates/release-candidate-manifest.json
+          --target ${{ matrix.target }}
+          --output /workspace/temp/certification/funnel-package-${{ matrix.native-target }}.json
+
+      - name: Upload package FunnelResultV1
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: package-funnel-${{ matrix.native-target }}
+          path: temp/certification/funnel-package-${{ matrix.native-target }}.json
+          if-no-files-found: error
+          retention-days: 14
+
   package-smoke-reduced:
     name: Package smoke reduced mode without native package
     needs:
@@ -802,6 +958,8 @@ jobs:
       - package-smoke
       - package-smoke-reduced
       - semantic-release
+      - package-funnel
+      - standalone-funnel
     runs-on: ubuntu-latest
     steps:
       - name: Checkout planned source

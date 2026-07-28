@@ -158,52 +158,64 @@ export function loadNativeBinding<T>(options: BindingLoaderOptions): NativeBindi
   let installedPackageVersion: string | undefined;
   let cacheError: string | undefined;
 
-  if (platform === "win32" && target && options.resolveFn) {
+  if (target && options.resolveFn) {
     try {
       const platformPackage = readPlatformPackage(options.packageName, target, options.resolveFn);
       installedSourcePath = platformPackage.sourcePath;
       installedPackageVersion = platformPackage.packageVersion;
-      const cached = prepareNativeRuntimeCache({
-        sourcePath: platformPackage.sourcePath,
-        packageName: `${options.packageName}-${target}`,
-        packageVersion: platformPackage.packageVersion,
-        target,
-        cacheRoot: options.cacheRoot,
-      });
-      if (cached.status === "unavailable") {
-        cacheError = cached.error.message;
-      } else {
-        try {
-          return {
-            binding: options.requireFn(cached.loadedPath) as T,
-            origin: {
-              mode: "cache",
-              packageName: `${options.packageName}-${target}`,
-              packageVersion: platformPackage.packageVersion,
-              target,
-              sourcePath: normalizePathForDisplay(cached.sourcePath),
-              loadedPath: normalizePathForDisplay(cached.loadedPath),
-              cacheKey: cached.cacheKey,
-              sha256: cached.sha256,
-            },
-          };
-        } catch (error) {
-          cacheError = `cached native addon failed to load: ${error instanceof Error ? error.message : String(error)}`;
-          lastError = error;
-        }
-      }
     } catch (error) {
-      cacheError = error instanceof Error ? error.message : String(error);
+      if (platform === "win32") {
+        cacheError = error instanceof Error ? error.message : String(error);
+      }
     }
+  }
+
+  if (platform === "win32" && target && installedSourcePath && installedPackageVersion) {
+    const cached = prepareNativeRuntimeCache({
+      sourcePath: installedSourcePath,
+      packageName: `${options.packageName}-${target}`,
+      packageVersion: installedPackageVersion,
+      target,
+      cacheRoot: options.cacheRoot,
+    });
+    if (cached.status === "unavailable") {
+      cacheError = cached.error.message;
+    } else {
+      try {
+        return {
+          binding: options.requireFn(cached.loadedPath) as T,
+          origin: {
+            mode: "cache",
+            packageName: `${options.packageName}-${target}`,
+            packageVersion: installedPackageVersion,
+            target,
+            sourcePath: normalizePathForDisplay(cached.sourcePath),
+            loadedPath: normalizePathForDisplay(cached.loadedPath),
+            cacheKey: cached.cacheKey,
+            sha256: cached.sha256,
+          },
+        };
+      } catch (error) {
+        cacheError = `cached native addon failed to load: ${error instanceof Error ? error.message : String(error)}`;
+        lastError = error;
+      }
+    }
+  }
+
+  let originPackageName = options.packageName;
+  let originLoadedPath = packageEntry;
+  if (target && installedSourcePath && installedPackageVersion) {
+    originPackageName = `${options.packageName}-${target}`;
+    originLoadedPath = installedSourcePath;
   }
 
   const packageOrigin: NativeBindingOrigin = {
     mode: "package",
-    packageName: options.packageName,
+    packageName: originPackageName,
     ...(installedPackageVersion ? { packageVersion: installedPackageVersion } : {}),
     ...(target ? { target } : {}),
     ...(installedSourcePath ? { sourcePath: normalizePathForDisplay(installedSourcePath) } : {}),
-    ...(packageEntry ? { loadedPath: normalizePathForDisplay(packageEntry) } : {}),
+    ...(originLoadedPath ? { loadedPath: normalizePathForDisplay(originLoadedPath) } : {}),
     ...(cacheError ? { cacheError } : {}),
   };
   try {

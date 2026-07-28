@@ -146,7 +146,7 @@ Targets:
   codex, claude, cursor, gemini, opencode, agents
 
 Safety:
-  Writes require --yes. Use --dry-run to preview changed files or --print-config <target> to print the MCP snippet.
+  Interactive terminals preview changes and ask for confirmation. Noninteractive writes require --yes; use --dry-run to preview changed files or --print-config <target> to print the MCP snippet.
 `;
 
 export const UNINSTALL_HELP_TEXT = `codegraph uninstall - Remove Codegraph-owned installer configuration

@@ -68,6 +68,7 @@ SHA256SUMS
 ```
 
 Each archive contains a target-matching Node.js runtime, the built CLI, production dependencies, matching native packages, the bundled skill, licenses/notices, relative launchers, and `manifest.json`. The manifest records `schemaVersion: 1`, `channel: "standalone-preview"`, version, target, native suffix, Node version, source revision, and per-file SHA-256 records.
+The Linux standalone archives bundle glibc Node and GNU native targets. The bootstrap rejects musl hosts; musl remains supported through the certified package channel, not these standalone assets.
 
 The matrix assembles archives from the immutable package candidates plus a target-matching Node runtime. Five targets run versioned installation plus `version` and `doctor`; `win32-arm64` receives structural bundle verification only and must not be described as runtime-certified.
 

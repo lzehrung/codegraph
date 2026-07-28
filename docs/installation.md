@@ -26,7 +26,7 @@ POSIX shell:
 curl -fsSL https://github.com/lzehrung/codegraph/releases/latest/download/install.sh | sh
 ```
 
-Supported target ids are `win32-x64`, `win32-arm64`, `darwin-x64`, `darwin-arm64`, `linux-x64`, and `linux-arm64`. Windows assets are `.zip`; macOS and Linux assets are `.tar.gz`. `win32-arm64` currently has structural certification only, not a runtime-host certification claim.
+Supported target ids are `win32-x64`, `win32-arm64`, `darwin-x64`, `darwin-arm64`, `linux-x64`, and `linux-arm64`. Windows assets are `.zip`; macOS and glibc-based Linux assets are `.tar.gz`. The POSIX bootstrap rejects musl Linux hosts; use the package or source path there. `win32-arm64` currently has structural certification only, not a runtime-host certification claim.
 
 The bootstrap downloads `codegraph-<target>.<archive>` and `SHA256SUMS` from the selected HTTPS release, verifies SHA-256 before extraction, rejects unsafe archive paths and entry types, then runs the bundled `version` and `doctor`. Checksums establish integrity only after the GitHub release download is trusted; the preview channel is not described as signed.
 Before downloading or writing, the bootstrap previews the target, version selector, install root, and launcher path, then defaults to no. Noninteractive runs require `-Yes` on PowerShell or `--yes` on POSIX.
@@ -114,7 +114,7 @@ npm config set "@lzehrung:registry" "https://npm.pkg.github.com"
 Use your GitHub username and the token as the password. Then install the main package:
 
 ```bash
-npm install @lzehrung/codegraph
+npm install -g @lzehrung/codegraph
 ```
 
 The published path is native-first: `@lzehrung/codegraph` optionally resolves the matching native artifact automatically when a published binary exists for the current platform. Unsupported hosts use reduced graph-only mode. No separate grammar package is required.

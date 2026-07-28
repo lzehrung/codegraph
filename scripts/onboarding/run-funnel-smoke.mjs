@@ -25,8 +25,19 @@ import {
 import { currentNativeTargetSuffix } from "../certification/package-smoke-lib.mjs";
 
 export const DEFAULT_FUNNEL_TIMEOUT_MS = 120_000;
+export const FUNNEL_DOCTOR_INSTALL_BUDGET_MS = 120_000;
+export const FUNNEL_FIRST_QUERY_BUDGET_MS = 300_000;
 export const FUNNEL_INSTALL_TARGET = "cursor";
-export const FUNNEL_EXPLORE_QUERY = "src/auth.ts";
+export const FUNNEL_EXPLORE_QUERY = "where does authentication reach storage?";
+export const MAX_FUNNEL_FOLLOW_UPS = 12;
+
+const NATIVE_META_PACKAGE_NAME = "@lzehrung/codegraph-native";
+const FUNNEL_COMMAND_BUDGETS_MS = Object.freeze({
+  doctor: FUNNEL_DOCTOR_INSTALL_BUDGET_MS,
+  "first-query": FUNNEL_FIRST_QUERY_BUDGET_MS,
+  "install-apply": FUNNEL_DOCTOR_INSTALL_BUDGET_MS,
+  "install-preview": FUNNEL_DOCTOR_INSTALL_BUDGET_MS,
+});
 
 class FunnelStepError extends Error {
   constructor(message) {
@@ -87,8 +98,9 @@ export async function runFunnelSmoke(options = {}) {
   const channel = options.channel ?? "source";
   const target = options.target ?? currentFunnelTarget();
   const root = path.resolve(options.root ?? process.cwd());
+  const now = options.now ?? (() => performance.now());
   const result = createFunnelResultV1({ channel, target });
-  const startedAt = performance.now();
+  const startedAt = now();
   const ownsWorkspace = options.workspace === undefined;
   const workspace = path.resolve(options.workspace ?? (await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-funnel-"))));
   const context = {
@@ -96,6 +108,8 @@ export async function runFunnelSmoke(options = {}) {
     channel,
     mcpRunner: options.mcpRunner ?? runConfiguredMcpExchange,
     commandRunner: options.commandRunner ?? runFunnelCommand,
+    firstQueryTimeoutMs: options.timeoutMs ?? FUNNEL_FIRST_QUERY_BUDGET_MS,
+    now,
     result,
     root,
     target,
@@ -131,19 +145,19 @@ export async function runFunnelSmoke(options = {}) {
     }
   } finally {
     if (ownsWorkspace && !options.keepWorkspace) {
-      const cleanupStartedAt = performance.now();
+      const cleanupStartedAt = now();
       try {
         await fsp.rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
         addFunnelCheck(result, {
           name: "workspace-cleanup",
           status: "pass",
-          durationMs: elapsed(cleanupStartedAt),
+          durationMs: elapsed(cleanupStartedAt, now),
         });
       } catch (error) {
         addFunnelCheck(result, {
           name: "workspace-cleanup",
           status: "fail",
-          durationMs: elapsed(cleanupStartedAt),
+          durationMs: elapsed(cleanupStartedAt, now),
         });
         addFunnelDiagnostic(result, {
           code: "workspace-cleanup-failed",
@@ -151,11 +165,11 @@ export async function runFunnelSmoke(options = {}) {
           step: "workspace-cleanup",
         });
       }
-      addFunnelTiming(result, "workspace-cleanup", elapsed(cleanupStartedAt));
+      addFunnelTiming(result, "workspace-cleanup", elapsed(cleanupStartedAt, now));
     }
   }
 
-  return finalizeFunnelResultV1(result, elapsed(startedAt));
+  return finalizeFunnelResultV1(result, elapsed(startedAt, now));
 }
 
 export function runFunnelCommand(command, args, options = {}) {
@@ -254,7 +268,8 @@ export async function createFunnelRepository(workspace) {
     [
       'import { storeAuthenticatedSession } from "./storage.js";',
       "",
-      "export function authenticateUser(token: string) {",
+      "// Authentication reaches storage through the authenticated session write.",
+      "export function authenticationReachesStorage(token: string) {",
       "  return storeAuthenticatedSession(token);",
       "}",
       "",
@@ -264,6 +279,7 @@ export async function createFunnelRepository(workspace) {
   await fsp.writeFile(
     path.join(root, "src", "storage.ts"),
     [
+      "// Storage receives the authenticated session from the authentication flow.",
       "export function storeAuthenticatedSession(token: string) {",
       '  return { storage: "session-store", token };',
       "}",
@@ -289,17 +305,27 @@ async function prepareRuntime(context) {
     runtime = await prepareStandaloneRuntime(context);
   }
   await runManualCheck(context, "configured-command", "configured-command-unavailable", async () => {
-    await createConfiguredCommandLauncher(context.isolation, runtime);
+    await configureRuntimeCommand(context.isolation, runtime);
   });
   return runtime;
 }
 
 async function prepareSourceRuntime(context) {
   const cliPath = path.join(context.root, "dist", "cli.js");
+  const nativeTarget = nativeTargetForFunnelTarget(context.target);
   await runManualCheck(context, "source-cli-layout", "source-cli-not-found", async () => {
     await requireFile(cliPath, "Source CLI");
   });
-  return { cliPath, nodePath: process.execPath, packageRoot: context.root };
+  return {
+    cliPath,
+    expectedNative: {
+      mode: "workspace",
+      packageName: NATIVE_META_PACKAGE_NAME,
+      target: nativeTarget,
+    },
+    nodePath: process.execPath,
+    packageRoot: context.root,
+  };
 }
 
 async function preparePackageRuntime(context) {
@@ -316,15 +342,24 @@ async function preparePackageRuntime(context) {
   ]);
   const packageRoot = path.join(context.isolation.paths.npmPrefix, "node_modules", "@lzehrung", "codegraph");
   const cliPath = path.join(packageRoot, "dist", "bin", "cli.js");
+  const launcherDirectory = path.join(context.isolation.paths.npmPrefix, "node_modules", ".bin");
+  const launcherPath = path.join(launcherDirectory, launcherFileName(context.target));
   await runManualCheck(context, "package-isolation", "package-not-isolated", async () => {
     await requireFile(cliPath, "Installed package CLI");
+    await requireFile(launcherPath, "Installed package launcher");
     const realPackageRoot = await fsp.realpath(packageRoot);
     const realPrefix = await fsp.realpath(context.isolation.paths.npmPrefix);
     if (!isPathWithin(realPrefix, realPackageRoot)) {
       throw new Error("Installed package resolved outside the isolated npm prefix.");
     }
   });
-  return { cliPath, nodePath: process.execPath, packageRoot };
+  return {
+    cliPath,
+    expectedNative: packageArtifacts.nativeIdentity,
+    launcher: { directory: launcherDirectory, path: launcherPath },
+    nodePath: process.execPath,
+    packageRoot,
+  };
 }
 
 async function resolvePackageArtifacts(context, artifact) {
@@ -336,6 +371,11 @@ async function resolvePackageArtifacts(context, artifact) {
     const selection = selectReleaseCandidatePackages(manifest, nativeTarget);
     const manifestDirectory = path.dirname(artifact);
     return {
+      nativeIdentity: {
+        packageName: selection.nativeTarget.package,
+        packageVersion: manifest.nativeVersion,
+        target: selection.nativeTarget.target,
+      },
       paths: [selection.root, selection.native, selection.nativeTarget].map((entry) => {
         return path.resolve(manifestDirectory, entry.file);
       }),
@@ -363,23 +403,23 @@ async function prepareStandaloneRuntime(context) {
   const extractRoot = path.join(context.workspace, "standalone");
   await fsp.mkdir(extractRoot, { recursive: true });
   await runCommandCheck(context, "standalone-extract", archiveCommand, archiveExtractArgs(artifact, extractRoot));
-  const bundleRoot = await runManualCheck(
-    context,
-    "standalone-bundle-layout",
-    "standalone-bundle-not-found",
-    async () => {
-      const root = await findStandaloneBundleRoot(extractRoot);
-      const manifest = await verifyStandaloneBundle(root);
-      if (manifest.target !== context.target) {
-        throw new Error(`Standalone bundle target ${String(manifest.target)} does not match ${context.target}.`);
-      }
-      return root;
-    },
-  );
+  const bundle = await runManualCheck(context, "standalone-bundle-layout", "standalone-bundle-not-found", async () => {
+    const root = await findStandaloneBundleRoot(extractRoot);
+    const manifest = await verifyStandaloneBundle(root);
+    if (manifest.target !== context.target) {
+      throw new Error(`Standalone bundle target ${String(manifest.target)} does not match ${context.target}.`);
+    }
+    const nativeTarget = nativeTargetForFunnelTarget(context.target);
+    if (manifest.nativeSuffix !== nativeTarget) {
+      throw new Error(`Standalone native suffix ${String(manifest.nativeSuffix)} does not match ${nativeTarget}.`);
+    }
+    return { manifest, root };
+  });
+  const binDir = path.join(context.workspace, "standalone-bin");
   const installManifest = await runManualCheck(context, "standalone-install", "standalone-install-failed", async () => {
     return await installStandaloneBundle({
-      binDir: path.join(context.workspace, "standalone-bin"),
-      bundleRoot,
+      binDir,
+      bundleRoot: bundle.root,
       installBase: path.join(context.workspace, "standalone-install"),
     });
   });
@@ -387,11 +427,23 @@ async function prepareStandaloneRuntime(context) {
   const nodeName = context.target.startsWith("win32-") ? "node.exe" : "node";
   const nodePath = path.join(installedRoot, nodeName);
   const cliPath = path.join(installedRoot, "dist", "cli.js");
+  const expectedNative = await runManualCheck(
+    context,
+    "standalone-native-identity",
+    "standalone-native-identity-invalid",
+    async () => await readStandaloneNativeIdentity(installedRoot, bundle.manifest.nativeSuffix),
+  );
+  const launcher = await runManualCheck(
+    context,
+    "standalone-launcher",
+    "standalone-launcher-invalid",
+    async () => await resolveStandaloneLauncher(installManifest, binDir, context.target),
+  );
   await runManualCheck(context, "standalone-runtime-layout", "standalone-runtime-not-found", async () => {
     await requireFile(nodePath, "Standalone Node runtime");
     await requireFile(cliPath, "Standalone CLI");
   });
-  return { cliPath, nodePath, packageRoot: installedRoot };
+  return { cliPath, expectedNative, launcher, nodePath, packageRoot: installedRoot };
 }
 
 async function runProductChecks(context, runtime) {
@@ -432,10 +484,11 @@ async function runProductChecks(context, runtime) {
     "--json",
   ]);
   const doctor = await parseJsonCheck(context, "doctor-json", "doctor-invalid-json", doctorResult, "Doctor command");
-  await runManualCheck(context, "doctor-native", "doctor-native-unavailable", async () => {
+  await runManualCheck(context, "doctor-native", "doctor-native-origin-invalid", async () => {
     if (!isRecord(doctor) || !isRecord(doctor.native) || !doctor.native.available) {
       throw new Error("Doctor did not confirm the target-matching native runtime.");
     }
+    assertExpectedNativeOrigin(doctor.native.origin, runtime.expectedNative);
   });
 
   const previewBefore = await fsp.readFile(context.isolation.cursorConfigPath, "utf8");
@@ -496,7 +549,9 @@ async function runProductChecks(context, runtime) {
     return await createFunnelRepository(context.workspace);
   });
   const exploreArgs = [runtime.cliPath, "explore", FUNNEL_EXPLORE_QUERY, "--root", fixtureRoot, "--json"];
-  const exploreResult = await runCommandCheck(context, "first-query", runtime.nodePath, exploreArgs);
+  const exploreResult = await runCommandCheck(context, "first-query", runtime.nodePath, exploreArgs, {
+    timeoutMs: context.firstQueryTimeoutMs,
+  });
   const explore = await parseJsonCheck(
     context,
     "first-query-json",
@@ -505,12 +560,7 @@ async function runProductChecks(context, runtime) {
     "First explore query",
   );
   await runManualCheck(context, "first-query-contract", "first-query-invalid-response", async () => {
-    if (!isRecord(explore) || explore.schemaVersion !== 1 || explore.query !== FUNNEL_EXPLORE_QUERY) {
-      throw new Error("First explore query did not return its schema version and query.");
-    }
-    if (!Array.isArray(explore.anchors) || !explore.anchors.length) {
-      throw new Error("First explore query returned no source anchors.");
-    }
+    assertFirstFunnelQueryResponse(explore);
   });
   const warmExploreResult = await runCommandCheck(context, "warm-query", runtime.nodePath, exploreArgs);
   const warmExplore = await parseJsonCheck(
@@ -521,8 +571,14 @@ async function runProductChecks(context, runtime) {
     "Warm explore query",
   );
   await runManualCheck(context, "warm-query-contract", "warm-query-invalid-response", async () => {
-    if (!isRecord(warmExplore) || !Array.isArray(warmExplore.anchors) || !warmExplore.anchors.length) {
-      throw new Error("Warm explore query returned no source anchors.");
+    if (
+      !isRecord(warmExplore) ||
+      warmExplore.schemaVersion !== 1 ||
+      warmExplore.query !== FUNNEL_EXPLORE_QUERY ||
+      !Array.isArray(warmExplore.anchors) ||
+      !warmExplore.anchors.length
+    ) {
+      throw new Error("Warm explore query did not return a matching source anchor.");
     }
   });
   await runManualCheck(context, "mcp-handshake", "mcp-handshake-failed", async () => {
@@ -559,6 +615,90 @@ async function runProductChecks(context, runtime) {
     const uninstalledCursorConfig = await readCursorConfig(context.isolation.cursorConfigPath);
     assertCursorConfigRestored(originalCursorConfig, uninstalledCursorConfig);
   });
+}
+function assertExpectedNativeOrigin(origin, expectedNative) {
+  if (!expectedNative) return;
+  if (!isRecord(origin)) throw new Error("Doctor did not report native runtime origin.");
+  if (expectedNative.mode && origin.mode !== expectedNative.mode) {
+    throw new Error(`Doctor native origin mode ${String(origin.mode)} does not match expected ${expectedNative.mode}.`);
+  }
+  if (origin.target !== expectedNative.target) {
+    throw new Error(
+      `Doctor native origin target ${String(origin.target)} does not match expected ${expectedNative.target}.`,
+    );
+  }
+  if (origin.packageName !== expectedNative.packageName) {
+    const actualPackageName = String(origin.packageName);
+    throw new Error(
+      `Doctor native origin package ${actualPackageName} does not match expected ${expectedNative.packageName}.`,
+    );
+  }
+  if (expectedNative.packageVersion && origin.packageVersion !== expectedNative.packageVersion) {
+    const actualPackageVersion = String(origin.packageVersion);
+    throw new Error(
+      `Doctor native origin version ${actualPackageVersion} does not match expected ${expectedNative.packageVersion}.`,
+    );
+  }
+}
+
+function assertFirstFunnelQueryResponse(explore) {
+  if (!isRecord(explore) || explore.schemaVersion !== 1 || explore.query !== FUNNEL_EXPLORE_QUERY) {
+    throw new Error("First explore query did not return its schema version and query.");
+  }
+  if (!Array.isArray(explore.anchors) || !explore.anchors.length) {
+    throw new Error("First explore query returned no source anchors.");
+  }
+  const evidenceFiles = new Set();
+  for (const anchor of explore.anchors) {
+    if (isRecord(anchor) && typeof anchor.file === "string") {
+      evidenceFiles.add(normalizeFunnelEvidencePath(anchor.file));
+    }
+  }
+  if (Array.isArray(explore.paths)) {
+    for (const dependencyPath of explore.paths) {
+      if (!isRecord(dependencyPath)) continue;
+      for (const field of ["from", "to"]) {
+        if (typeof dependencyPath[field] === "string") {
+          evidenceFiles.add(normalizeFunnelEvidencePath(dependencyPath[field]));
+        }
+      }
+      if (Array.isArray(dependencyPath.path)) {
+        for (const entry of dependencyPath.path) {
+          if (typeof entry === "string") evidenceFiles.add(normalizeFunnelEvidencePath(entry));
+        }
+      }
+    }
+  }
+  const expectedFiles = ["src/auth.ts", "src/storage.ts"];
+  if (!expectedFiles.every((file) => evidenceFiles.has(file))) {
+    throw new Error("First explore query did not return evidence spanning src/auth.ts and src/storage.ts.");
+  }
+  const spansAuthenticationToStorage = Array.isArray(explore.paths)
+    ? explore.paths.some((dependencyPath) => {
+        if (!isRecord(dependencyPath) || !Array.isArray(dependencyPath.path)) return false;
+        const files = dependencyPath.path
+          .filter((entry) => typeof entry === "string")
+          .map((entry) => normalizeFunnelEvidencePath(entry));
+        return expectedFiles.every((file) => files.includes(file));
+      })
+    : false;
+  if (!spansAuthenticationToStorage) {
+    throw new Error("First explore query did not return an authentication-to-storage dependency path.");
+  }
+  if (
+    !Array.isArray(explore.followUps) ||
+    !explore.followUps.length ||
+    explore.followUps.length > MAX_FUNNEL_FOLLOW_UPS ||
+    !explore.followUps.some(
+      (followUp) => typeof followUp === "string" && followUp.length <= 512 && followUp.startsWith("codegraph "),
+    )
+  ) {
+    throw new Error("First explore query did not return a bounded Codegraph follow-up command.");
+  }
+}
+
+function normalizeFunnelEvidencePath(filePath) {
+  return filePath.replaceAll("\\", "/").replace(/^\.\//u, "").toLowerCase();
 }
 
 function assertCursorInstallerResult(result, resultKey, dryRun, isolation) {
@@ -676,6 +816,60 @@ function jsonValuesEqual(left, right) {
   return false;
 }
 
+async function configureRuntimeCommand(isolation, runtime) {
+  if (!runtime.launcher) {
+    await createConfiguredCommandLauncher(isolation, runtime);
+    return;
+  }
+  await requireFile(runtime.launcher.path, "Configured channel launcher");
+  prependEnvironmentPath(isolation.env, runtime.launcher.directory);
+}
+
+function launcherFileName(target) {
+  return target.startsWith("win32-") ? "codegraph.cmd" : "codegraph";
+}
+
+async function readStandaloneNativeIdentity(installedRoot, nativeSuffix) {
+  const packageName = `${NATIVE_META_PACKAGE_NAME}-${nativeSuffix}`;
+  const packageJsonPath = path.join(
+    installedRoot,
+    "node_modules",
+    "@lzehrung",
+    `codegraph-native-${nativeSuffix}`,
+    "package.json",
+  );
+  let metadata;
+  try {
+    metadata = JSON.parse(await fsp.readFile(packageJsonPath, "utf8"));
+  } catch {
+    throw new Error(`Installed standalone target package metadata is unreadable: ${packageJsonPath}`);
+  }
+  if (
+    !isRecord(metadata) ||
+    metadata.name !== packageName ||
+    typeof metadata.version !== "string" ||
+    !metadata.version
+  ) {
+    throw new Error(`Installed standalone target package metadata is invalid: ${packageJsonPath}`);
+  }
+  return { packageName, packageVersion: metadata.version, target: nativeSuffix };
+}
+
+async function resolveStandaloneLauncher(installManifest, binDir, target) {
+  const launcherPath = path.join(binDir, launcherFileName(target));
+  if (
+    !isRecord(installManifest) ||
+    !Array.isArray(installManifest.launchers) ||
+    !installManifest.launchers.some(
+      (launcher) => typeof launcher === "string" && pathKey(launcher) === pathKey(launcherPath),
+    )
+  ) {
+    throw new Error(`Standalone installer did not publish its expected launcher: ${launcherPath}`);
+  }
+  await requireFile(launcherPath, "Standalone installed launcher");
+  return { directory: binDir, path: launcherPath };
+}
+
 async function createConfiguredCommandLauncher(isolation, runtime) {
   const commandPath = path.join(isolation.paths.runner, "codegraph");
   if (process.platform === "win32") {
@@ -757,9 +951,8 @@ async function runConfiguredMcpExchange({
       name: "search",
       arguments: { query: "CertifiedPackageSymbol", mode: "symbol", limit: 5 },
     });
-    if (search.error || !JSON.stringify(search.result).includes("CertifiedPackageSymbol")) {
-      throw new Error("Configured MCP search did not return the known symbol.");
-    }
+    if (search.error) throw new Error("Configured MCP search returned an error.");
+    assertMcpSearchToolResult(search.result);
     return { exitCode: 0, tools: toolNames };
   } finally {
     await stopConfiguredMcpProcess(child);
@@ -782,6 +975,31 @@ function quoteWindowsCommandArgument(value) {
 function requireMcpRecord(value, message) {
   if (!isRecord(value)) throw new Error(message);
   return value;
+}
+
+export function assertMcpSearchToolResult(value) {
+  const toolResult = requireMcpRecord(value, "Configured MCP search omitted a tool result.");
+  if (!Array.isArray(toolResult.content)) {
+    throw new Error("Configured MCP search omitted text content.");
+  }
+  for (const content of toolResult.content) {
+    if (!isRecord(content) || content.type !== "text" || typeof content.text !== "string") continue;
+    let response;
+    try {
+      response = JSON.parse(content.text);
+    } catch {
+      continue;
+    }
+    if (
+      isRecord(response) &&
+      Array.isArray(response.results) &&
+      response.results.length &&
+      response.results.some((result) => isRecord(result) && result.label === "CertifiedPackageSymbol")
+    ) {
+      return;
+    }
+  }
+  throw new Error("Configured MCP search did not return CertifiedPackageSymbol in a nonempty text JSON results entry.");
 }
 
 function createMcpLineClient(child, timeoutMs) {
@@ -897,7 +1115,7 @@ async function requireArtifact(context, channel) {
 }
 
 async function runCommandCheck(context, name, command, args, options = {}) {
-  const startedAt = performance.now();
+  const startedAt = context.now();
   let output;
   try {
     output = normalizeCommandResult(
@@ -909,13 +1127,13 @@ async function runCommandCheck(context, name, command, args, options = {}) {
       }),
     );
   } catch (error) {
-    const durationMs = elapsed(startedAt);
+    const durationMs = elapsed(startedAt, context.now);
     recordFailure(context, name, `${name}-command-failed`, errorMessage(error), durationMs, {
       command: commandDisplay(command, args),
     });
     throw new FunnelStepError(`${name} command threw.`);
   }
-  const durationMs = elapsed(startedAt);
+  const durationMs = elapsed(startedAt, context.now);
   if (output.exitCode !== 0 || output.error) {
     recordFailure(context, name, `${name}-command-failed`, `${name} command exited unsuccessfully.`, durationMs, {
       command: commandDisplay(command, args),
@@ -925,21 +1143,33 @@ async function runCommandCheck(context, name, command, args, options = {}) {
     });
     throw new FunnelStepError(`${name} command failed.`);
   }
+  const budgetMs = FUNNEL_COMMAND_BUDGETS_MS[name];
+  if (budgetMs !== undefined && durationMs > budgetMs) {
+    recordFailure(
+      context,
+      name,
+      `${name}-duration-budget-exceeded`,
+      `${name} exceeded its ${budgetMs}ms funnel duration budget (${durationMs}ms).`,
+      durationMs,
+      { command: commandDisplay(command, args), exitCode: output.exitCode },
+    );
+    throw new FunnelStepError(`${name} command exceeded its duration budget.`);
+  }
   addFunnelCheck(context.result, { name, status: "pass", durationMs, exitCode: output.exitCode });
   addFunnelTiming(context.result, name, durationMs);
   return output;
 }
 
 async function runManualCheck(context, name, code, operation) {
-  const startedAt = performance.now();
+  const startedAt = context.now();
   try {
     const value = await operation();
-    const durationMs = elapsed(startedAt);
+    const durationMs = elapsed(startedAt, context.now);
     addFunnelCheck(context.result, { name, status: "pass", durationMs });
     addFunnelTiming(context.result, name, durationMs);
     return value;
   } catch (error) {
-    const durationMs = elapsed(startedAt);
+    const durationMs = elapsed(startedAt, context.now);
     recordFailure(context, name, code, errorMessage(error), durationMs);
     throw new FunnelStepError(`${name} check failed.`);
   }
@@ -1088,8 +1318,8 @@ function redactDiagnosticOutput(value) {
     .replace(/(https?:\/\/)[^/@\s]+@/g, "$1[REDACTED]@");
 }
 
-function elapsed(startedAt) {
-  return Math.max(0, Math.round(performance.now() - startedAt));
+function elapsed(startedAt, now = () => performance.now()) {
+  return Math.max(0, Math.round(now() - startedAt));
 }
 
 function errorMessage(error) {

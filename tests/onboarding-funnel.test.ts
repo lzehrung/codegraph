@@ -1,10 +1,16 @@
+import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { describeCandidateFile } from "../scripts/certification/package-contract-lib.mjs";
 import { currentNativeTargetSuffix } from "../scripts/certification/package-smoke-lib.mjs";
-import { assertFunnelResultV1 } from "../scripts/onboarding/funnel-contract-lib.mjs";
-import { FUNNEL_EXPLORE_QUERY, runFunnelSmoke } from "../scripts/onboarding/run-funnel-smoke.mjs";
+import { assertFunnelResultV1, currentFunnelTarget } from "../scripts/onboarding/funnel-contract-lib.mjs";
+import {
+  assertMcpSearchToolResult,
+  FUNNEL_DOCTOR_INSTALL_BUDGET_MS,
+  FUNNEL_EXPLORE_QUERY,
+  runFunnelSmoke,
+} from "../scripts/onboarding/run-funnel-smoke.mjs";
 import { mkTmpDir } from "./helpers/filesystem.js";
 
 type CommandResult = {
@@ -36,6 +42,7 @@ type McpInvocation = {
 
 type RunnerBehavior = {
   corruptUnrelatedConfigOnApply?: boolean;
+  doctorOrigin?: Record<string, unknown>;
 };
 
 type ReleaseCandidate = {
@@ -50,11 +57,32 @@ type CandidateInput = {
   target?: string;
 };
 
+type StandaloneFixture = {
+  archiveEntries: string[];
+  archivePath: string;
+  bundleRoot: string;
+  target: string;
+};
+
 async function createSourceCheckout(parent: string): Promise<string> {
   const root = path.join(parent, "source-checkout");
   await fsp.mkdir(path.join(root, "dist"), { recursive: true });
   await fsp.writeFile(path.join(root, "dist", "cli.js"), "export {};\n", "utf8");
   return root;
+}
+
+function requiredNativeTarget(): string {
+  const target = currentNativeTargetSuffix();
+  if (!target) throw new Error("Current host has no supported native target.");
+  return target;
+}
+
+function defaultDoctorOrigin(): Record<string, unknown> {
+  return {
+    mode: "workspace",
+    packageName: "@lzehrung/codegraph-native",
+    target: requiredNativeTarget(),
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -122,8 +150,16 @@ function successfulRunner(packageRoot: string, calls: CommandCall[], behavior: R
       const prefix = args[prefixIndex + 1];
       if (!prefix) throw new Error("Expected npm --prefix.");
       const installedCliPath = path.join(prefix, "node_modules", "@lzehrung", "codegraph", "dist", "bin", "cli.js");
+      const launcherPath = path.join(
+        prefix,
+        "node_modules",
+        ".bin",
+        process.platform === "win32" ? "codegraph.cmd" : "codegraph",
+      );
       await fsp.mkdir(path.dirname(installedCliPath), { recursive: true });
+      await fsp.mkdir(path.dirname(launcherPath), { recursive: true });
       await fsp.writeFile(installedCliPath, "export {};\n", "utf8");
+      await fsp.writeFile(launcherPath, "launcher\n", "utf8");
       return { exitCode: 0, stdout: "", stderr: "" };
     }
 
@@ -136,7 +172,14 @@ function successfulRunner(packageRoot: string, calls: CommandCall[], behavior: R
       };
     }
     if (operation === "doctor") {
-      return { exitCode: 0, stdout: JSON.stringify({ schemaVersion: 1, native: { available: true } }), stderr: "" };
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          schemaVersion: 1,
+          native: { available: true, origin: behavior.doctorOrigin ?? defaultDoctorOrigin() },
+        }),
+        stderr: "",
+      };
     }
     if (operation === "install") {
       if (args.includes("--yes")) {
@@ -184,7 +227,9 @@ function successfulRunner(packageRoot: string, calls: CommandCall[], behavior: R
         stdout: JSON.stringify({
           schemaVersion: 1,
           query: FUNNEL_EXPLORE_QUERY,
-          anchors: [{ file: "src/auth.ts" }],
+          anchors: [{ file: "src/auth.ts" }, { file: "src/storage.ts" }],
+          paths: [{ from: "src/auth.ts", to: "src/storage.ts", path: ["src/auth.ts", "src/storage.ts"] }],
+          followUps: ['codegraph file "src/auth.ts"'],
         }),
         stderr: "",
       };
@@ -244,6 +289,112 @@ async function createReleaseCandidate(parent: string): Promise<ReleaseCandidate>
   };
 }
 
+async function standaloneFileRecord(root: string, relativePath: string) {
+  const content = await fsp.readFile(path.join(root, relativePath));
+  return {
+    path: relativePath.replaceAll("\\", "/"),
+    sha256: createHash("sha256").update(content).digest("hex"),
+    size: content.byteLength,
+  };
+}
+
+async function createStandaloneFixture(parent: string): Promise<StandaloneFixture> {
+  const target = currentFunnelTarget();
+  const nativeTarget = requiredNativeTarget();
+  const bundleName = `codegraph-${target}`;
+  const bundleRoot = path.join(parent, bundleName);
+  const nodeName = target.startsWith("win32-") ? "node.exe" : "node";
+  const nativePackage = `@lzehrung/codegraph-native-${nativeTarget}`;
+  const nativePackageJson = path.join(
+    bundleRoot,
+    "node_modules",
+    "@lzehrung",
+    `codegraph-native-${nativeTarget}`,
+    "package.json",
+  );
+  await fsp.mkdir(path.dirname(nativePackageJson), { recursive: true });
+  await fsp.mkdir(path.join(bundleRoot, "dist"), { recursive: true });
+  await fsp.copyFile(process.execPath, path.join(bundleRoot, nodeName));
+  if (process.platform !== "win32") await fsp.chmod(path.join(bundleRoot, nodeName), 0o755);
+  await fsp.writeFile(
+    path.join(bundleRoot, "dist", "cli.js"),
+    [
+      "const command = process.argv[2];",
+      'const report = { name: "@lzehrung/codegraph", version: "9.8.7", packageRoot: process.cwd() };',
+      `const origin = { packageName: ${JSON.stringify(nativePackage)}, packageVersion: "9.8.7", target: ${JSON.stringify(nativeTarget)} };`,
+      'if (command === "version") process.stdout.write(`${JSON.stringify(report)}\\n`);',
+      'else if (command === "doctor") process.stdout.write(`${JSON.stringify({ package: report, native: { available: true, origin } })}\\n`);',
+      "else process.exitCode = 1;",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  await fsp.writeFile(
+    nativePackageJson,
+    `${JSON.stringify({ name: nativePackage, version: "9.8.7" }, null, 2)}\n`,
+    "utf8",
+  );
+  const files = await Promise.all(
+    [
+      nodeName,
+      "dist/cli.js",
+      path.join("node_modules", "@lzehrung", `codegraph-native-${nativeTarget}`, "package.json"),
+    ].map(async (relativePath) => await standaloneFileRecord(bundleRoot, relativePath)),
+  );
+  await fsp.writeFile(
+    path.join(bundleRoot, "manifest.json"),
+    `${JSON.stringify(
+      {
+        channel: "standalone-preview",
+        files,
+        nativeSuffix: nativeTarget,
+        nodeVersion: process.version,
+        schemaVersion: 1,
+        sourceRevision: null,
+        target,
+        version: "9.8.7",
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  const archivePath = path.join(parent, `${bundleName}.tar.gz`);
+  await fsp.writeFile(archivePath, "fixture archive", "utf8");
+  return {
+    archiveEntries: [
+      `${bundleName}/${nodeName}`,
+      `${bundleName}/dist/cli.js`,
+      `${bundleName}/node_modules/@lzehrung/codegraph-native-${nativeTarget}/package.json`,
+      `${bundleName}/manifest.json`,
+    ],
+    archivePath,
+    bundleRoot,
+    target,
+  };
+}
+
+function standaloneArchiveRunner(
+  fixture: StandaloneFixture,
+  packageRoot: string,
+  calls: CommandCall[],
+  behavior: RunnerBehavior,
+) {
+  const delegate = successfulRunner(packageRoot, calls, behavior);
+  return async (command: string, args: string[], options: CommandOptions): Promise<CommandResult> => {
+    if (command === "tar") {
+      calls.push({ command, args, options });
+      if (args[0] === "-tzf") return { exitCode: 0, stderr: "", stdout: `${fixture.archiveEntries.join("\n")}\n` };
+      const destinationIndex = args.indexOf("-C");
+      const destination = args[destinationIndex + 1];
+      if (args[0] !== "-xzf" || !destination) throw new Error("Expected standalone archive extraction.");
+      await fsp.cp(fixture.bundleRoot, path.join(destination, path.basename(fixture.bundleRoot)), { recursive: true });
+      return { exitCode: 0, stderr: "", stdout: "" };
+    }
+    return await delegate(command, args, options);
+  };
+}
+
 describe("onboarding funnel smoke", () => {
   it("applies and removes only isolated Cursor state, then invokes the configured MCP entry", async () => {
     const parent = await mkTmpDir("codegraph-funnel-schema-");
@@ -285,6 +436,9 @@ describe("onboarding funnel smoke", () => {
         "explore",
         "uninstall",
       ]);
+      expect(calls.find((call) => call.args[1] === "explore")?.args[2]).toBe(
+        "where does authentication reach storage?",
+      );
       expect(mcpCalls).toEqual([
         expect.objectContaining({
           args: ["mcp", "serve", "--root", ".", "--stdio"],
@@ -292,6 +446,13 @@ describe("onboarding funnel smoke", () => {
           rootVersion: "9.8.7",
         }),
       ]);
+      const sourceLauncher = path.join(
+        workspace,
+        "runner",
+        process.platform === "win32" ? "codegraph.cmd" : "codegraph",
+      );
+      expect((await fsp.stat(sourceLauncher)).isFile()).toBe(true);
+      expect(mcpCalls[0]?.env.PATH?.split(path.delimiter)[0]).toBe(path.join(workspace, "runner"));
       await expect(fsp.readFile(path.join(workspace, "home", ".cursor", "mcp.json"), "utf8")).resolves.toBe(
         `${JSON.stringify(
           {
@@ -309,19 +470,30 @@ describe("onboarding funnel smoke", () => {
     }
   });
 
-  it("selects and installs the root, native meta, and current target tarballs from a release-candidate manifest", async () => {
+  it("selects package-native identity and runs the npm-created launcher", async () => {
     const parent = await mkTmpDir("codegraph-funnel-package-");
     const workspace = path.join(parent, "workspace");
+    const nativeTarget = requiredNativeTarget();
     const candidates = await createReleaseCandidate(parent);
     const packageRoot = path.join(workspace, "npm-prefix", "node_modules", "@lzehrung", "codegraph");
     const calls: CommandCall[] = [];
+    const mcpCalls: McpInvocation[] = [];
     try {
       const result = await runFunnelSmoke({
         artifact: candidates.manifestPath,
         channel: "package",
         workspace,
-        commandRunner: successfulRunner(packageRoot, calls),
-        mcpRunner: async () => ({ exitCode: 0 }),
+        commandRunner: successfulRunner(packageRoot, calls, {
+          doctorOrigin: {
+            packageName: `@lzehrung/codegraph-native-${nativeTarget}`,
+            packageVersion: "9.8.7",
+            target: nativeTarget,
+          },
+        }),
+        mcpRunner: async (entry: McpInvocation) => {
+          mcpCalls.push(entry);
+          return { exitCode: 0 };
+        },
       });
 
       expect(result.status).toBe("pass");
@@ -337,6 +509,133 @@ describe("onboarding funnel smoke", () => {
         ...candidates.paths,
       ]);
       expect(result.checks).toContainEqual(expect.objectContaining({ name: "package-candidate", status: "pass" }));
+      const packageLauncher = path.join(
+        workspace,
+        "npm-prefix",
+        "node_modules",
+        ".bin",
+        process.platform === "win32" ? "codegraph.cmd" : "codegraph",
+      );
+      expect((await fsp.stat(packageLauncher)).isFile()).toBe(true);
+      expect(mcpCalls[0]).toEqual(expect.objectContaining({ command: "codegraph" }));
+      expect(mcpCalls[0]?.env.PATH?.split(path.delimiter)[0]).toBe(path.dirname(packageLauncher));
+    } finally {
+      await fsp.rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a package doctor origin that does not match the selected native candidate", async () => {
+    const parent = await mkTmpDir("codegraph-funnel-native-origin-");
+    const workspace = path.join(parent, "workspace");
+    const nativeTarget = requiredNativeTarget();
+    const candidates = await createReleaseCandidate(parent);
+    const packageRoot = path.join(workspace, "npm-prefix", "node_modules", "@lzehrung", "codegraph");
+    try {
+      const result = await runFunnelSmoke({
+        artifact: candidates.manifestPath,
+        channel: "package",
+        workspace,
+        commandRunner: successfulRunner(packageRoot, [], {
+          doctorOrigin: {
+            packageName: "@lzehrung/codegraph-native-wrong",
+            packageVersion: "9.8.7",
+            target: nativeTarget,
+          },
+        }),
+      });
+
+      expect(result.status).toBe("fail");
+      expect(result.checks).toContainEqual(expect.objectContaining({ name: "doctor-native", status: "fail" }));
+      expect(result.diagnostics).toContainEqual(
+        expect.objectContaining({
+          code: "doctor-native-origin-invalid",
+          step: "doctor-native",
+        }),
+      );
+    } finally {
+      await fsp.rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("runs the standalone installer launcher and binds installed native package metadata", async () => {
+    const parent = await mkTmpDir("codegraph-funnel-standalone-");
+    const workspace = path.join(parent, "workspace");
+    const fixture = await createStandaloneFixture(parent);
+    const nativeTarget = requiredNativeTarget();
+    const packageRoot = path.join(workspace, "standalone-install", "9.8.7");
+    const calls: CommandCall[] = [];
+    const mcpCalls: McpInvocation[] = [];
+    try {
+      const result = await runFunnelSmoke({
+        artifact: fixture.archivePath,
+        channel: "standalone",
+        target: fixture.target,
+        workspace,
+        commandRunner: standaloneArchiveRunner(fixture, packageRoot, calls, {
+          doctorOrigin: {
+            packageName: `@lzehrung/codegraph-native-${nativeTarget}`,
+            packageVersion: "9.8.7",
+            target: nativeTarget,
+          },
+        }),
+        mcpRunner: async (entry: McpInvocation) => {
+          mcpCalls.push(entry);
+          return { exitCode: 0 };
+        },
+      });
+
+      expect(result.status).toBe("pass");
+      const standaloneLauncher = path.join(
+        workspace,
+        "standalone-bin",
+        fixture.target.startsWith("win32-") ? "codegraph.cmd" : "codegraph",
+      );
+      expect((await fsp.stat(standaloneLauncher)).isFile()).toBe(true);
+      expect(mcpCalls[0]).toEqual(expect.objectContaining({ command: "codegraph" }));
+      expect(mcpCalls[0]?.env.PATH?.split(path.delimiter)[0]).toBe(path.dirname(standaloneLauncher));
+      expect(calls.map((call) => call.command)).toContain("tar");
+    } finally {
+      await fsp.rm(parent, { recursive: true, force: true });
+    }
+  });
+  it("rejects a top-level MCP query string when text JSON results are empty", () => {
+    expect(() =>
+      assertMcpSearchToolResult({
+        content: [{ text: JSON.stringify({ results: [{ label: "CertifiedPackageSymbol" }] }), type: "text" }],
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertMcpSearchToolResult({
+        content: [{ text: JSON.stringify({ query: "CertifiedPackageSymbol", results: [] }), type: "text" }],
+      }),
+    ).toThrow("nonempty text JSON results entry");
+  });
+
+  it("fails the FunnelResult when doctor exceeds its documented duration budget", async () => {
+    const parent = await mkTmpDir("codegraph-funnel-doctor-budget-");
+    const workspace = path.join(parent, "workspace");
+    const sourceRoot = await createSourceCheckout(parent);
+    let now = 0;
+    const runner = successfulRunner(sourceRoot, []);
+    try {
+      const result = await runFunnelSmoke({
+        channel: "source",
+        root: sourceRoot,
+        workspace,
+        now: () => now,
+        commandRunner: async (command: string, args: string[], options: CommandOptions) => {
+          if (args[1] === "doctor") now = FUNNEL_DOCTOR_INSTALL_BUDGET_MS + 1;
+          return await runner(command, args, options);
+        },
+      });
+
+      expect(result.status).toBe("fail");
+      expect(result.diagnostics).toContainEqual(
+        expect.objectContaining({
+          code: "doctor-duration-budget-exceeded",
+          step: "doctor",
+        }),
+      );
     } finally {
       await fsp.rm(parent, { recursive: true, force: true });
     }
