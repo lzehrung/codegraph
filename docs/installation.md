@@ -1,15 +1,72 @@
 # Installation
 
-Requirements and install paths for local source checkouts, published packages, release tarballs, and runtime selection.
+Requirements, standalone and package channels, source checkouts, verification, rollback, caches, and runtime selection.
 
 ## Requirements
 
-- Node.js 22.16+
+- Package and source installs require Node.js 22.16+.
+- Standalone archives bundle Node.js, production dependencies, the matching native runtime, and the Codegraph skill.
 - Published installs do not require Rust or a manual native setup step on supported targets.
 - Local source checkouts do not require Rust just to build `dist/`, but the native workspace addon only builds when Cargo is available.
-- If no compatible native artifact is available, Codegraph drops to reduced graph-only and regex recovery mode instead of loading JS grammars.
+- If no compatible native artifact is available, package installs drop to reduced graph-only and regex recovery mode instead of loading JS grammars.
 
-## Option 1: Local source checkout
+## Option 1: Standalone release (preview)
+
+The standalone channel does not require npm, a system Node.js installation, or registry configuration. It currently identifies itself as `standalone-preview`.
+
+PowerShell:
+
+```powershell
+irm https://github.com/lzehrung/codegraph/releases/latest/download/install.ps1 | iex
+```
+
+POSIX shell:
+
+```bash
+curl -fsSL https://github.com/lzehrung/codegraph/releases/latest/download/install.sh | sh
+```
+
+Supported target ids are `win32-x64`, `win32-arm64`, `darwin-x64`, `darwin-arm64`, `linux-x64`, and `linux-arm64`. Windows assets are `.zip`; macOS and Linux assets are `.tar.gz`. `win32-arm64` currently has structural certification only, not a runtime-host certification claim.
+
+The bootstrap downloads `codegraph-<target>.<archive>` and `SHA256SUMS` from the selected HTTPS release, verifies SHA-256 before extraction, rejects unsafe archive paths and entry types, then runs the bundled `version` and `doctor`. Checksums establish integrity only after the GitHub release download is trusted; the preview channel is not described as signed.
+Before downloading or writing, the bootstrap previews the target, version selector, install root, and launcher path, then defaults to no. Noninteractive runs require `-Yes` on PowerShell or `--yes` on POSIX.
+
+To inspect a script before running it:
+
+```powershell
+Invoke-WebRequest https://github.com/lzehrung/codegraph/releases/latest/download/install.ps1 -OutFile ./install.ps1
+Get-Content ./install.ps1
+./install.ps1 -Latest
+```
+
+```bash
+curl -fsSL https://github.com/lzehrung/codegraph/releases/latest/download/install.sh -o ./install.sh
+cat ./install.sh
+sh ./install.sh --latest
+```
+
+For reviewed noninteractive automation, use `./install.ps1 -Latest -Yes` or `sh ./install.sh --latest --yes`.
+
+Pin or roll back by running the same script with an explicit release version:
+
+```powershell
+./install.ps1 -Version VERSION
+```
+
+```bash
+sh ./install.sh --version VERSION
+```
+
+The installer keeps immutable version roots, verifies an existing version before reusing it, and atomically repoints the user launcher. It records `currentVersion`, `previousVersion`, target, release URL, archive hash, and verification method in `install-manifest.json`; a failed launcher or manifest switch restores the prior state, and reinstalling the prior version is an explicit rollback rather than an in-place overwrite.
+
+Default roots:
+
+- Windows versions: `%LOCALAPPDATA%\Programs\codegraph\<version>`; launcher: `%LOCALAPPDATA%\Programs\codegraph\bin\codegraph.cmd`
+- macOS/Linux versions: `${XDG_DATA_HOME:-~/.local/share}/codegraph/<version>`; launcher: `${CODEGRAPH_BIN_DIR:-~/.local/bin}/codegraph`
+
+Add the reported launcher directory to `PATH` if it is not already present. After installation, run `codegraph install`, then restart or reload the configured client.
+
+## Option 2: Local source checkout
 
 Use this path when you are developing on Codegraph itself or want the least ambiguous first run.
 
@@ -41,9 +98,11 @@ The published bin stores Node's module compile cache outside the project root: `
 
 With disk caching enabled, Codegraph creates `.codegraph-cache/index-v1/search-v1.sqlite` in each project. It contains normalized source and chunk text, so treat it as sensitive derived source data. Cache-off runs create no sidecar.
 
+The first index-backed query may create or update this cache and report progress on stderr. Later queries reuse compatible state when `--root`, discovery configuration, graph options, and relevant build options match; use `--cache off` for a deliberate cold run.
+
 To remove it safely, stop Codegraph processes and delete `.codegraph-cache`. `uninit` leaves caches alone. [How it works](./how-it-works.md#cache-and-session-behavior) explains the cache mechanics.
 
-## Option 2: Install from the `@lzehrung` registry
+## Option 3: Install from the `@lzehrung` registry
 
 Configure the scoped registry if you have not already:
 
@@ -59,9 +118,9 @@ npm install @lzehrung/codegraph
 
 The published path is native-first: `@lzehrung/codegraph` optionally resolves the matching native artifact automatically when a published binary exists for the current platform. Unsupported hosts use reduced graph-only mode. No separate grammar package is required.
 
-## Option 3: Install from a release tarball
+## Option 4: Install from an npm release tarball
 
-Download and install the root package tarball directly from a GitHub release:
+Download and install the root npm package tarball directly from a GitHub release:
 
 ```bash
 npm install https://github.com/lzehrung/codegraph/releases/download/vVERSION/lzehrung-codegraph-VERSION.tgz
@@ -120,16 +179,18 @@ The initial [semantic corpus](./benchmarks/README.md#semantic-correctness-corpus
 
 ## Agent client setup
 
-After installing the CLI, `codegraph install` can configure Codegraph-owned MCP entries, bundled skill payloads, and marker files for supported agent clients:
+After installing the CLI, run `codegraph install` on an interactive terminal. It detects supported clients, previews the exact Codegraph-owned changes, and asks once before writing:
 
 ```bash
+codegraph install
 codegraph install --target codex,claude --dry-run
 codegraph install --target codex,claude --yes
 codegraph install --print-config codex
 ```
 
-Supported targets are `codex`, `claude`, `cursor`, `gemini`, `opencode`, and `agents`. Writes require `--yes`; `--dry-run` reports the files that would change, and `uninstall` removes only Codegraph-owned marker blocks, marker files, exact bundled skill payloads, or exact installer-owned MCP entries.
-The lower-level `codegraph skill install --agent <name>` command remains available when you only want to copy the bundled skill.
+Supported targets are `codex`, `claude`, `cursor`, `gemini`, `opencode`, and `agents`. Interactive confirmation accepts only `y` or `yes` and defaults to no; noninteractive writes require `--yes`. `uninstall` removes only Codegraph-owned marker blocks, marker files, exact bundled skill payloads, or exact installer-owned MCP entries.
+
+The lower-level `codegraph skill install --agent <name>` command remains available when you only want to copy the bundled skill. Restart or reload configured MCP clients after installation.
 
 ## Next steps
 

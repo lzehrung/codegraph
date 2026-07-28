@@ -520,12 +520,18 @@ async function stopPackedMcpProcess(child) {
   }
 }
 
-export async function runPackedMcpExchange({ cliPath, fixtureDirectory, rootVersion }) {
+export async function runPackedMcpExchange({
+  cliPath,
+  fixtureDirectory,
+  rootVersion,
+  nodePath = process.execPath,
+  env = process.env,
+}) {
   const startedAt = performance.now();
   const child = spawn(
-    process.execPath,
+    nodePath,
     [cliPath, "mcp", "serve", "--root", fixtureDirectory, "--stdio", "--native", "on", "--cache", "off"],
-    { cwd: fixtureDirectory, stdio: ["pipe", "pipe", "pipe"], shell: false },
+    { cwd: fixtureDirectory, env, stdio: ["pipe", "pipe", "pipe"], shell: false },
   );
   const client = createMcpLineClient(child, MCP_TIMEOUT_MS);
   try {

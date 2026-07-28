@@ -1,6 +1,6 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   detectInstallTargets,
   installCodegraphTargets,
@@ -23,6 +23,27 @@ function expectInstallerChange(changes: InstallChange[], expected: InstallChange
 
 function normalizeExpectedPath(filePath: string): string {
   return filePath.split(path.sep).join("/");
+}
+
+async function withCliHome<T>(homeDir: string, run: () => Promise<T>): Promise<T> {
+  const previous = {
+    HOME: process.env.HOME,
+    CODEX_HOME: process.env.CODEX_HOME,
+    USERPROFILE: process.env.USERPROFILE,
+    XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+  };
+  process.env.HOME = homeDir;
+  process.env.USERPROFILE = homeDir;
+  delete process.env.XDG_CONFIG_HOME;
+  delete process.env.CODEX_HOME;
+  try {
+    return await run();
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 }
 
 const CURSOR_INSTALLER_SERVER = {
@@ -234,6 +255,119 @@ describe("agent installer workflow", () => {
     }
   });
 
+  it("makes no-target detection explicit and actionable", async () => {
+    const homeDir = await mkTmpDir("cg-install-no-targets-");
+    const result = await withCliHome(homeDir, async () => await captureCli(["install", "--json"]));
+    const output = JSON.parse(result.stdout) as {
+      detected?: unknown[];
+      installed?: boolean;
+      reason?: string;
+      supportedTargets?: string[];
+      guidance?: string[];
+    };
+
+    expect(result).toMatchObject({ stderr: "", exitCode: undefined });
+    expect(output).toMatchObject({ detected: [], installed: false, reason: "no-targets-detected" });
+    expect(output.supportedTargets).toContain("cursor");
+    expect(output.guidance).toContain("codegraph install --target <name> --dry-run");
+  });
+
+  it("requires --yes for noninteractive writes and prints copyable commands", async () => {
+    const homeDir = await mkTmpDir("cg-install-noninteractive-");
+    const result = await withCliHome(homeDir, async () => await captureCli(["install", "--target", "cursor"]));
+
+    expect(result).toMatchObject({ stdout: "", exitCode: 2 });
+    expect(result.stderr).toContain("Non-interactive install requires --yes.");
+    expect(result.stderr).toContain("codegraph install --target cursor --dry-run");
+    expect(result.stderr).toContain("codegraph install --target cursor --yes");
+    await expect(fsp.stat(path.join(homeDir, ".cursor", "mcp.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each([
+    { name: "no", input: "n\n" },
+    { name: "blank", input: "\n" },
+    { name: "EOF", input: "" },
+  ])("previews and declines interactive install on $name", async ({ input }) => {
+    const homeDir = await mkTmpDir("cg-install-decline-");
+    const result = await withCliHome(
+      homeDir,
+      async () =>
+        await captureCli(["install", "--target", "cursor"], {
+          stdin: input,
+          stdinIsTTY: true,
+          stderrIsTTY: true,
+        }),
+    );
+
+    expect(result).toMatchObject({ stdout: "No changes applied.\n", exitCode: undefined });
+    expect(result.stderr).toContain("Proposed changes:");
+    expect(result.stderr).toContain("Configure Codegraph for 1 target(s)? [y/N]");
+    await expect(fsp.stat(path.join(homeDir, ".cursor", "mcp.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("treats an interrupted interactive prompt as decline", async () => {
+    const homeDir = await mkTmpDir("cg-install-interrupt-");
+    const result = await withCliHome(
+      homeDir,
+      async () =>
+        await captureCli(["install", "--target", "cursor"], {
+          stdin: () => {
+            throw new Error("interrupt");
+          },
+          stdinIsTTY: true,
+          stderrIsTTY: true,
+        }),
+    );
+
+    expect(result).toMatchObject({ stdout: "No changes applied.\n", exitCode: undefined });
+    await expect(fsp.stat(path.join(homeDir, ".cursor", "mcp.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("confirms, verifies, and reports bounded health and completion guidance", async () => {
+    const homeDir = await mkTmpDir("cg-install-confirm-");
+    const result = await withCliHome(
+      homeDir,
+      async () =>
+        await captureCli(["install", "--target", "cursor", "--json"], {
+          stdin: "YES\n",
+          stdinIsTTY: true,
+          stderrIsTTY: true,
+        }),
+    );
+    const output = JSON.parse(result.stdout) as {
+      installed?: boolean;
+      verified?: boolean;
+      health?: { version?: string; nativeAvailable?: boolean };
+      guidance?: string[];
+    };
+
+    expect(result.exitCode).toBeUndefined();
+    expect(result.stderr).toContain("Proposed changes:");
+    expect(output).toMatchObject({ installed: true, verified: true });
+    expect(output.health?.version).toMatch(/^\d+\.\d+\.\d+/u);
+    expect(output.guidance?.join("\n")).toContain("Restart or reload cursor");
+    expect(output.guidance?.join("\n")).not.toContain("connected");
+    expect(JSON.parse(await readFile(path.join(homeDir, ".cursor", "mcp.json")))).toMatchObject({
+      mcpServers: { codegraph: CURSOR_INSTALLER_SERVER },
+    });
+  });
+
+  it("preserves explicit --yes and --dry-run automation", async () => {
+    const homeDir = await mkTmpDir("cg-install-automation-");
+    const preview = await withCliHome(
+      homeDir,
+      async () => await captureCli(["install", "--target", "cursor", "--dry-run", "--json"]),
+    );
+    expect(JSON.parse(preview.stdout)).toMatchObject({ dryRun: true, verified: false });
+    await expect(fsp.stat(path.join(homeDir, ".cursor", "mcp.json"))).rejects.toMatchObject({ code: "ENOENT" });
+
+    const applied = await withCliHome(
+      homeDir,
+      async () => await captureCli(["install", "--target", "cursor", "--yes", "--json"]),
+    );
+    expect(JSON.parse(applied.stdout)).toMatchObject({ dryRun: false, verified: true });
+  });
+
   it("previews install changes without writing files", async () => {
     const homeDir = await mkTmpDir("cg-install-dry-run-");
     const configPath = path.join(homeDir, ".codex", "config.toml");
@@ -253,11 +387,31 @@ describe("agent installer workflow", () => {
 
     expect(first.installed).toBeTruthy();
     expect(second.changes.every((change) => change.action === "unchanged")).toBeTruthy();
+    expect(first.verified).toBe(true);
+    expect(second.verified).toBe(true);
     expect(await readFile(path.join(homeDir, ".codex", "config.toml"))).toContain("# >>> codegraph mcp >>>");
     const cursorConfig = JSON.parse(await readFile(path.join(homeDir, ".cursor", "mcp.json"))) as {
       mcpServers?: { codegraph?: { command?: string } };
     };
     expect(cursorConfig.mcpServers?.codegraph?.command).toBe("codegraph");
+  });
+
+  it("keeps concurrent installer attempts atomic and verified", async () => {
+    const homeDir = await mkTmpDir("cg-install-concurrent-");
+
+    const [left, right] = await Promise.all([
+      installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true }),
+      installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true }),
+    ]);
+
+    expect(left.verified).toBe(true);
+    expect(right.verified).toBe(true);
+    const configDir = path.join(homeDir, ".cursor");
+    const config = JSON.parse(await readFile(path.join(configDir, "mcp.json"))) as {
+      mcpServers?: { codegraph?: { command?: string } };
+    };
+    expect(config.mcpServers?.codegraph?.command).toBe("codegraph");
+    expect((await fsp.readdir(configDir)).filter((entry) => entry.includes(".codegraph-tmp-"))).toEqual([]);
   });
 
   it("uses XDG_CONFIG_HOME for OpenCode config and installed marker on install and uninstall", async () => {
@@ -611,6 +765,37 @@ describe("agent installer workflow", () => {
 
     expect(message).toMatch(/Unable to parse .*mcp\.json as JSON/);
     expect(message).not.toMatch(/before running codegraph install\b/);
+  });
+
+  it("reports permission failures with the exact user-owned path", async () => {
+    const homeDir = await mkTmpDir("cg-install-permission-");
+    const rename = vi
+      .spyOn(fsp, "rename")
+      .mockRejectedValueOnce(Object.assign(new Error("denied"), { code: "EACCES" }));
+    try {
+      await expect(installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true })).rejects.toThrow(
+        normalizeExpectedPath(path.join(homeDir, ".cursor", "skills", "codegraph", "SKILL.md")),
+      );
+    } finally {
+      rename.mockRestore();
+    }
+  });
+
+  it("fails when post-write owned-state verification detects drift", async () => {
+    const homeDir = await mkTmpDir("cg-install-verify-failure-");
+    const configPath = path.join(homeDir, ".cursor", "mcp.json");
+    const originalRename = fsp.rename.bind(fsp);
+    const rename = vi.spyOn(fsp, "rename").mockImplementation(async (source, target) => {
+      await originalRename(source, target);
+      if (path.resolve(String(target)) === path.resolve(configPath)) await fsp.writeFile(configPath, "{}\n", "utf8");
+    });
+    try {
+      await expect(installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true })).rejects.toThrow(
+        /installer config verification failed/u,
+      );
+    } finally {
+      rename.mockRestore();
+    }
   });
 
   it("prints direct config snippets through the library helper", async () => {

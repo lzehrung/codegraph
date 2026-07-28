@@ -858,7 +858,7 @@ async function buildProjectIndexWithManifestOptions(
     });
     return await buildIndexFromFileListShared(projectRoot, files, opts, {
       manifestMode: useDiskCache ? "read-write" : "off",
-      warnNoFilesMessage: `Warning: No files found in project root: ${projectRoot}`,
+      warnNoFilesMessage: `Warning: No files found in project root: ${projectRoot}. Check codegraph.config.json globs and CLI --include-glob/--ignore-glob filters. Diagnostic: codegraph doctor`,
       ...(helperOpts?.ignoreExistingManifest ? { ignoreExistingManifest: true } : {}),
       projectFiles,
       transientFiles,
@@ -900,7 +900,7 @@ export async function buildProjectIndexFromFiles(
     const useDiskCache = (opts?.cache ?? "off") === "disk";
     return await buildIndexFromFileListShared(projectRoot, inputFiles, opts, {
       manifestMode: useDiskCache ? "read-only" : "off",
-      warnNoFilesMessage: `Warning: No files provided for indexing in ${projectRoot}`,
+      warnNoFilesMessage: `Warning: No files provided for indexing in ${projectRoot}. Check the explicit file list and include/ignore filters. Diagnostic: codegraph doctor`,
     });
   } finally {
     if ((opts?.cache ?? "off") === "disk") {

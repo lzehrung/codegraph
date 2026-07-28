@@ -16,6 +16,7 @@ export type SuccessfulCliResult = {
 export type CliCaptureOptions = {
   cwd?: string | undefined;
   stdin?: string | (() => string | Promise<string>) | undefined;
+  stdinIsTTY?: boolean | undefined;
   stderrIsTTY?: boolean | undefined;
   terminalSupportsControlSequences?: boolean | undefined;
   progressPreparationDelayMs?: number | undefined;
@@ -49,9 +50,13 @@ export async function captureCli(args: string[], options: CliCaptureOptions = {}
       options.onStderr?.(chunk);
     },
     readStdin: async () => await readCliStdin(options.stdin),
+    promptLine: async (question) => {
+      stderr += question;
+      return (await readCliStdin(options.stdin)).split(/\r?\n/, 1)[0] ?? "";
+    },
+    stdinIsTTY: () => options.stdinIsTTY ?? options.stderrIsTTY ?? false,
     stderrIsTTY: () => options.stderrIsTTY ?? false,
     terminalSupportsControlSequences: () => options.terminalSupportsControlSequences ?? options.stderrIsTTY ?? false,
-    progressPreparationDelayMs: () => options.progressPreparationDelayMs ?? 100,
     exit: (code) => {
       exitCode = code;
       throw new Error(`${cliExitPrefix} ${code}`);

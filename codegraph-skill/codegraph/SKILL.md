@@ -17,6 +17,8 @@ Use plain text search for exact strings, logs, config keys, secrets, and prose. 
 
 ## Choose the First Command
 
+Bare `codegraph` prints five task-first routes without scanning the project. Use `codegraph --help` for the full command catalog and `codegraph help <command>` for command help; unknown commands suggest but never execute alternatives.
+
 | Task                                                      | Start here                                                  |
 | --------------------------------------------------------- | ----------------------------------------------------------- |
 | Review staged and unstaged work                           | `codegraph review --base HEAD --head WORKTREE --summary`    |
@@ -49,7 +51,7 @@ Use `--root` to define the boundary for config lookup, cache scope, path confine
 - retrieve bounded indexed context: `codegraph packet get <file|symbol|sql-object|handle>`
 - read current disk content: `codegraph file <path> --offset 1 --limit 200`
 
-`explore` returns ranked anchors, bounded packets, dependency paths, blast radius, candidate tests, explicit limits, omission counts, and copyable follow-ups. Hybrid search is code-first by default; search, explain, explore, and review output preserve analysis labels so reduced or mixed runs remain visible.
+`explore` returns ranked anchors, bounded packets, dependency paths, blast radius, candidate tests, explicit limits, omission counts, and copyable follow-ups. Human-readable output ends with `Recommended next:` using the first bounded follow-up; JSON keeps the stable `schemaVersion: 1` fields and `followUps` array. Hybrid search is code-first by default, and search, explain, explore, and review preserve analysis labels so reduced or mixed runs remain visible.
 
 Use `symbols` instead of hybrid `search` when only declarations should compete. It supports `--kind <kind,...>`, `--exported`, `--include-imports`, project-relative `--file-glob`, and `--limit <0-500>`; imports default off, and only named/default aliases that resolve to concrete declarations are returned.
 
@@ -153,18 +155,20 @@ Keep live and indexed evidence distinct:
 - Plain `get_file` freshness does not gate live bytes.
 - After indexed calls, check `freshness` before trusting graph or semantic context. `refreshed` means Codegraph rebuilt; `stale` includes a reason and bounded changed-file metadata.
 - Run `refresh_index` before `artifact_build` when the index is stale. Artifact writes refuse stale snapshots.
+- After an install or Codegraph update, restart or reload the owning MCP client. `codegraph doctor --json` diagnoses package/native version identity; `refresh_index` refreshes repository state only and does not reload MCP code or tools.
 
 ## Agent Setup and Project Lifecycle
 
-Preview agent-client setup before writing configuration:
+Run the guided installer interactively to detect clients, preview exact actions, and confirm once:
 
 ```bash
+codegraph install
 codegraph install --target codex,claude --dry-run
 codegraph install --print-config codex
 codegraph install --target codex,claude --yes
 ```
 
-The installer manages Codegraph-owned MCP entries, skill payloads, and marker files. Uninstall removes only recognized Codegraph-owned content.
+Interactive confirmation accepts only `y` or `yes` and defaults to no. Noninteractive writes require `--yes`. The installer manages Codegraph-owned MCP entries, skill payloads, and marker files; uninstall removes only recognized Codegraph-owned content.
 
 Lifecycle commands manage `.codegraph/manifest.json`; other commands do not require that manifest:
 
@@ -186,7 +190,21 @@ Lifecycle commands accept either one positional project path or `--root <path>`,
 
 ## Installation
 
-Codegraph requires Node.js 22.16 or newer. Use only the scoped packages:
+Package and source installs require Node.js 22.16 or newer; standalone archives bundle Node.js.
+
+For the preview standalone channel, use the release bootstrap appropriate to the host:
+
+```powershell
+irm https://github.com/lzehrung/codegraph/releases/latest/download/install.ps1 | iex
+```
+
+```bash
+curl -fsSL https://github.com/lzehrung/codegraph/releases/latest/download/install.sh | sh
+```
+
+The bootstrap verifies the selected archive against release `SHA256SUMS`, rejects unsafe archive entries, installs under a versioned user-owned root, and records the prior version. Pin or roll back with `./install.ps1 -Version VERSION` or `sh ./install.sh --version VERSION`; this channel is checksummed preview content, not a signed release claim.
+
+For package installs, use only the scoped packages:
 
 - CLI and library: `@lzehrung/codegraph`
 - optional native runtime: `@lzehrung/codegraph-native`

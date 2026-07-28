@@ -1,53 +1,31 @@
+import { renderCliCommandList } from "./commandCatalog.js";
+
+export { isKnownCliCommand } from "./commandCatalog.js";
+
+export const CLI_TASK_HELP_TEXT = `codegraph - Ask structural questions about a repository
+
+Start here:
+  Understand a repository   codegraph explore "how does auth reach the database?" --root .
+  Review local changes      codegraph review --base HEAD --head WORKTREE --summary
+  Find a symbol or file     codegraph search "SessionManager" --json
+  Configure an agent        codegraph install
+  Check runtime health      codegraph doctor
+
+Run codegraph --help for all commands.`;
+
 export const CLI_HELP_TEXT = `codegraph - Code analysis and dependency graph tool
+
+Start here:
+  Understand a repository   codegraph explore "how does auth reach the database?" --root .
+  Review local changes      codegraph review --base HEAD --head WORKTREE --summary
+  Find a symbol or file     codegraph search "SessionManager" --json
+  Configure an agent        codegraph install
+  Check runtime health      codegraph doctor
 
 Usage: codegraph <command> [options] [path]
 
 Commands:
-  orient        Build a compact first-turn packet for agent repo context
-  explore       Answer a broad repo question with search, packets, paths, and blast radius
-  file          Read a live project file with bounded line pagination
-  review        Generate code review report
-  packet        Retrieve bounded evidence packets by file path or stable target
-  search        Ranked agent search across files, symbols, chunks, SQL, and graph context
-  symbols       Deterministic workspace-symbol lookup with exact locations
-  callers       Find proven semantic callers by symbol target
-  callees       Find proven semantic callees by symbol target
-  supertypes    Find proven direct or transitive supertypes by symbol target
-  subtypes      Find proven direct or transitive subtypes by symbol target
-  implementations Find proven type or interface-member implementations
-  rename-preview Read-only semantic rename planning by symbol target
-  refactor-plan Build a read-only refactor evidence packet by symbol target
-  explain       Explain a file, symbol, SQL object, or search handle
-  impact        Analyze PR impact
-  inspect       Summarize repo structure and recommend next commands
-  graph         Build dependency graph (default)
-  artifact      Build an agent-ready SQLite/graph/report/question bundle
-  drift        Compare architecture health between refs or artifacts
-  mcp           Serve MCP tools for agent graph navigation
-  index         Build the project symbol index
-  init          Initialize project-local Codegraph lifecycle metadata
-  status        Inspect project-local Codegraph lifecycle metadata
-  sync          Refresh project-local Codegraph lifecycle metadata
-  uninit        Remove project-local Codegraph lifecycle metadata
-  goto          Go to definition
-  refs          Find references
-  deps          List dependencies
-  rdeps         List reverse dependencies
-  path          Find the shortest dependency path between files
-  cycles        Detect dependency cycles (use --sort priority|size|fanin)
-  hotspots      Find high-complexity files
-  duplicates    Detect duplicate and near-duplicate code units
-  unresolved    List unresolved project imports
-  apisurface    Summarize exported API symbols
-  grep          Run Tree-sitter query or text regex search
-  graph-delta   Report file-level graph changes
-  sql           Query a SQLite graph export read-only
-  chunk         Chunk file for embeddings
-  doctor        Inspect backend/runtime state and local graph artifacts
-  install       Configure Codegraph MCP and skill integration for agent clients
-  uninstall     Remove Codegraph-owned installer configuration
-  skill         Install or inspect the bundled agent skill
-  version       Print the installed codegraph version
+${renderCliCommandList()}
 
 Graph Options:
   --fast-graph                Use text import extraction for plain .js and .ts
@@ -140,59 +118,6 @@ Examples:
   codegraph version
   codegraph -v
 `;
-
-const knownCliCommands = new Set([
-  "apisurface",
-  "artifact",
-  "chunk",
-  "drift",
-  "cycles",
-  "deps",
-  "doctor",
-  "duplicates",
-  "dumpmod",
-  "explain",
-  "explore",
-  "file",
-  "goto",
-  "graph",
-  "graph-delta",
-  "callees",
-  "callers",
-  "grep",
-  "hotspots",
-  "impact",
-  "index",
-  "init",
-  "install",
-  "inspect",
-  "mcp",
-  "implementations",
-  "orient",
-  "packet",
-  "path",
-  "rdeps",
-  "refs",
-  "review",
-  "rename-preview",
-  "refactor-plan",
-  "search",
-  "symbols",
-  "subtypes",
-  "supertypes",
-  "skill",
-  "status",
-  "sync",
-  "sql",
-  "unresolved",
-  "uninit",
-  "version",
-  "uninstall",
-]);
-
-export function isKnownCliCommand(command: string): boolean {
-  return knownCliCommands.has(command);
-}
 
 export const LIFECYCLE_HELP_TEXT = `codegraph init/status/sync/uninit - Initialize, inspect, refresh, or remove project-local Codegraph state
 

@@ -42,6 +42,7 @@
   "files": [
     "dist",
     "codegraph-skill",
+    "THIRD_PARTY_NOTICES",
     "docs/mcp.md"
   ],
   "scripts": {
@@ -78,6 +79,8 @@
     "bench:semantic": "node ./scripts/benchmarks/run-semantic-corpus.mjs",
     "bench:semantic:summarize": "node ./scripts/benchmarks/summarize-semantic-corpus.mjs",
     "bench:query": "node ./scripts/benchmarks/measure-query-substrate.mjs",
+    "build:standalone": "node ./scripts/standalone/build-standalone.mjs",
+    "smoke:onboarding": "node ./scripts/onboarding/run-funnel-smoke.mjs",
     "test:ui": "node ./scripts/ensure-dist-for-tests.mjs && vitest --ui",
     "test:run": "node ./scripts/ensure-dist-for-tests.mjs && vitest run",
     "test:bench": "node ./scripts/ensure-dist-for-tests.mjs && vitest tests/bench-harness.test.ts tests/native-query-scope.test.ts",

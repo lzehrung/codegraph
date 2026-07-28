@@ -681,7 +681,7 @@ describe("CLI command modules", () => {
 
     expect(result.exitCode).toBe(1);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("Unknown command: missing-command");
+    expect(result.stderr).toContain('Unknown command "missing-command".');
   });
 
   test("rejects unknown command options before execution", async () => {

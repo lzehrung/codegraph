@@ -45,9 +45,7 @@ process.on("exit", () => {
     const stderr = result.stderr ?? "";
     const match = /MODULE_COUNT=(\d+)/.exec(stderr);
     if (!match) {
-      throw new Error(
-        `Failed to count modules for ${args.join(" ")}. status=${result.status} stderr=${result.stderr}`,
-      );
+      throw new Error(`Failed to count modules for ${args.join(" ")}. status=${result.status} stderr=${result.stderr}`);
     }
     const modules = [...stderr.matchAll(/^MODULE=(.+)$/gm)].map((entry) => entry[1]!);
     return { count: Number(match[1]), modules, stdout: result.stdout ?? "", status: result.status };
@@ -125,7 +123,14 @@ describe("CLI startup eager module loading", () => {
     expect(moduleScope).not.toContain("os.cpus()");
   });
 
-  it("loads fewer than 30 dist modules for --version, --help, and doctor", () => {
+  it("loads fewer than 30 dist modules for no args, --version, --help, and doctor", () => {
+    const noArgs = countDistModulesLoaded([]);
+    expect(noArgs.status).toBe(0);
+    expect(noArgs.stdout).toContain("Start here:");
+    expect(noArgs.count).toBeLessThan(30);
+    expect(noArgs.modules.some((url) => modulePathEndsWith(url, "/projectFiles.js"))).toBe(false);
+    expect(noArgs.modules.some((url) => modulePathEndsWith(url, "/config.js"))).toBe(false);
+
     const version = countDistModulesLoaded(["--version"]);
     expect(version.status).toBe(0);
     expect(version.stdout.trim().length).toBeGreaterThan(0);

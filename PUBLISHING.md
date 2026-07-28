@@ -1,6 +1,6 @@
 # Publishing Guide
 
-Codegraph publishes as two standalone packages:
+Codegraph publishes two top-level npm packages:
 
 - `@lzehrung/codegraph`: the main JS package and CLI
 - `@lzehrung/codegraph-native`: the optional native Tree-sitter meta package plus per-platform binary packages
@@ -50,6 +50,34 @@ The workflow uses this immutable byte flow:
 8. Revalidate every candidate checksum and required report row before the first registry write.
 9. Publish the tarball paths from the manifest, without rebuilding or repacking.
 10. Attach the same tarballs, manifest, checksums, package summary, and certification report to the GitHub Release.
+
+### Standalone release assets
+
+The release also publishes these self-contained preview assets:
+
+```text
+codegraph-win32-x64.zip
+codegraph-win32-arm64.zip
+codegraph-darwin-x64.tar.gz
+codegraph-darwin-arm64.tar.gz
+codegraph-linux-x64.tar.gz
+codegraph-linux-arm64.tar.gz
+install.ps1
+install.sh
+SHA256SUMS
+```
+
+Each archive contains a target-matching Node.js runtime, the built CLI, production dependencies, matching native packages, the bundled skill, licenses/notices, relative launchers, and `manifest.json`. The manifest records `schemaVersion: 1`, `channel: "standalone-preview"`, version, target, native suffix, Node version, source revision, and per-file SHA-256 records.
+
+The matrix assembles archives from the immutable package candidates plus a target-matching Node runtime. Five targets run versioned installation plus `version` and `doctor`; `win32-arm64` receives structural bundle verification only and must not be described as runtime-certified.
+
+Only archives that pass their matrix gate are uploaded as `standalone-smoked-*`. The aggregation job copies those exact archives without rebuilding, adds `install.sh` and `install.ps1` from the planned source revision, and generates one combined `SHA256SUMS`.
+
+The publish job downloads that post-smoke artifact and attaches the same archive and installer bytes to the GitHub Release. It does not rebuild or repackage standalone assets after smoke.
+
+The bootstrap scripts preview their target and user-owned paths, confirm interactively or require explicit `-Yes`/`--yes`, verify the selected archive against `SHA256SUMS`, reject unsafe archive entries, and run bundled `version` and `doctor`. They install under a versioned root, atomically replace the launcher and manifest with rollback, retain the previous version, and record channel, target, release URL, archive hash, verification method, and previous/current versions.
+
+Checksums prove integrity only after the release download is trusted. Until signing or attestation is wired into this channel, retain the `standalone-preview` label and do not describe the assets as signed.
 
 The package smoke runner installs local candidate tarballs into a fresh temporary directory outside the checkout. Runtime rows verify installed identities and bytes, root/native imports, `version`, `doctor`, a native symbol parse, and a stdio MCP initialize/list-tools/search exchange.
 

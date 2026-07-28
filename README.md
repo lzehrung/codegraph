@@ -7,11 +7,13 @@ Codegraph is a local CLI **and TypeScript library** that turns a source tree int
 Without structural context, an agent spends early turns listing directories, guessing search terms, opening candidate files, and reconstructing relationships in its prompt. Codegraph performs that deterministic discovery once so more of the context window can go toward understanding and changing the code.
 
 ```bash
+npm config set "@lzehrung:registry" "https://npm.pkg.github.com"
+npm install -g @lzehrung/codegraph
+codegraph install
 codegraph explore "how does auth reach the database?" --root .
-codegraph review --base HEAD --head WORKTREE --summary
 ```
 
-Use Codegraph alongside text search and compilers: text search finds exact strings, compilers prove language behavior, and Codegraph supplies the cross-file repository map between them.
+Use Codegraph alongside text search and compilers: text search finds exact strings, compilers prove language behavior, and Codegraph supplies the cross-file repository map between them. See [Installation](./docs/installation.md) for standalone, package, and source-checkout paths.
 
 ## Table of contents
 
@@ -50,7 +52,23 @@ Human-readable output is the CLI default; `--pretty` remains an explicit equival
 
 ## Try it
 
-**Requirement:** Node.js 22.16 or newer.
+**Requirement:** Package and source installs require Node.js 22.16 or newer. Standalone archives bundle Node.js.
+
+### Standalone archive
+
+The preview standalone channel bundles Node.js, the CLI, production dependencies, the matching native runtime, and the Codegraph skill. Its bootstrap verifies the selected archive against the release `SHA256SUMS` before extraction:
+
+```powershell
+irm https://github.com/lzehrung/codegraph/releases/latest/download/install.ps1 | iex
+```
+
+```bash
+curl -fsSL https://github.com/lzehrung/codegraph/releases/latest/download/install.sh | sh
+```
+
+Both commands preview the target and user-owned install paths, then default to no. Noninteractive automation must download the script and pass `-Yes` on PowerShell or `--yes` on POSIX.
+
+See [Installation](./docs/installation.md#option-1-standalone-release-preview) for supported targets, inspect-before-run commands, version pinning, install roots, and rollback.
 
 ### From a source checkout
 
@@ -77,7 +95,7 @@ npm install -g @lzehrung/codegraph
 codegraph doctor
 ```
 
-Published installs resolve the optional native runtime automatically when a compatible artifact exists. See [Installation](./docs/installation.md) for registry setup, release tarballs, local global installs, and native runtime modes.
+Published package installs resolve the optional native runtime automatically when a compatible artifact exists. See [Installation](./docs/installation.md) for registry setup, npm tarballs, standalone releases, local global installs, and native runtime modes.
 
 On Windows, installed releases load the native addon from a verified per-user cache so long-running MCP servers do not keep npm's package copy mapped. The first upgrade from an older direct-loading release still requires one stop-update-restart cycle; see [Updating on Windows](./docs/installation.md#updating-on-windows).
 
@@ -160,6 +178,8 @@ Follow-ups
 
 Limits
 - anchors, packets, paths, blast radius, reverse dependencies, and candidate tests
+
+Recommended next: codegraph file src/review.ts
 ```
 
 Real output includes counts, copyable follow-ups, explicit limits, and omission counts. It does not pretend omitted context was analyzed.
@@ -213,15 +233,16 @@ The useful distinction is evidence shape, not a claim that one tool replaces eve
 
 ## Agent setup
 
-The installer can configure Codegraph-owned MCP entries, bundled skills, and marker files while preserving unrelated client configuration:
+Run `codegraph install` on an interactive terminal to detect supported clients, preview exact Codegraph-owned changes, and confirm once:
 
 ```bash
+codegraph install
 codegraph install --target codex,claude --dry-run
 codegraph install --target codex,claude --yes
 codegraph install --print-config codex
 ```
 
-Supported `--target` ids are `codex`, `claude`, `cursor`, `gemini`, `opencode`, and `agents` (universal agent skills). Writes require `--yes`; `--dry-run` previews every change, and uninstall removes only Codegraph-owned content.
+Supported target ids are `codex`, `claude`, `cursor`, `gemini`, `opencode`, and `agents` (universal agent skills). Interactive writes default to no; noninteractive writes require `--yes`, and uninstall removes only Codegraph-owned content.
 
 For a skill without MCP configuration:
 

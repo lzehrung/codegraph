@@ -1,4 +1,5 @@
-import fsp from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import fsp, { type FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { getSkillTargetDirForAgent, type SkillInstallAgent } from "../cli/skill.js";
@@ -38,6 +39,7 @@ export type InstallChange = {
 
 export type InstallResult = {
   installed: boolean;
+  verified: boolean;
   dryRun: boolean;
   targets: InstallTargetId[];
   changes: InstallChange[];
@@ -157,8 +159,10 @@ export async function installCodegraphTargets(options: InstallOptions = {}): Pro
     const result = await target.install(options);
     changes.push(...result.changes);
   }
+  const verified = options.dryRun ? false : await verifyInstalledTargets(targets, options);
   return {
     installed: changes.some((change) => change.action === "create" || change.action === "update"),
+    verified,
     dryRun: options.dryRun ?? false,
     targets: targets.map((target) => target.id),
     changes,
@@ -252,7 +256,7 @@ async function installTarget(definition: TargetDefinition, options: InstallOptio
     const configPath = requireConfigPath(definition, settings);
     changes.push(await upsertConfig(definition, configPath, dryRun));
   }
-  return { installed: true, dryRun, targets: [definition.id], changes };
+  return { installed: true, verified: false, dryRun, targets: [definition.id], changes };
 }
 
 async function uninstallTarget(definition: TargetDefinition, options: UninstallOptions): Promise<UninstallResult> {
@@ -281,7 +285,7 @@ async function upsertSkillPayload(
   if (existing === bundledSkill) return change(definition.id, "unchanged", targetSkillPath, dryRun);
   if (!dryRun) {
     await fsp.mkdir(skillTargetDir, { recursive: true });
-    await fsp.writeFile(targetSkillPath, bundledSkill, "utf8");
+    await writeTextFileAtomic(targetSkillPath, bundledSkill);
   }
   return change(definition.id, existing === null ? "create" : "update", targetSkillPath, dryRun);
 }
@@ -297,7 +301,7 @@ async function upsertSkillPointer(
   if (existing === content) return change(definition.id, "unchanged", markerPath, dryRun);
   if (!dryRun) {
     await fsp.mkdir(skillTargetDir, { recursive: true });
-    await fsp.writeFile(markerPath, content, "utf8");
+    await writeTextFileAtomic(markerPath, content);
   }
   return change(definition.id, existing === null ? "create" : "update", markerPath, dryRun);
 }
@@ -337,7 +341,7 @@ async function upsertConfig(definition: TargetDefinition, configPath: string, dr
   if (existing === next) return change(definition.id, "unchanged", configPath, dryRun);
   if (!dryRun) {
     await fsp.mkdir(path.dirname(configPath), { recursive: true });
-    await fsp.writeFile(configPath, next, "utf8");
+    await writeTextFileAtomic(configPath, next);
   }
   return change(definition.id, existing === null ? "create" : "update", configPath, dryRun);
 }
@@ -352,7 +356,7 @@ async function removeConfig(definition: TargetDefinition, configPath: string, dr
     if (action === "delete") {
       await fsp.rm(configPath, { force: true });
     } else {
-      await fsp.writeFile(configPath, next, "utf8");
+      await writeTextFileAtomic(configPath, next);
     }
   }
   return change(definition.id, action, configPath, dryRun);
@@ -588,6 +592,95 @@ async function readOptionalFile(filePath: string): Promise<string | null> {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
     throw error;
   }
+}
+
+async function verifyInstalledTargets(targets: readonly InstallTarget[], options: InstallOptions): Promise<boolean> {
+  const settings = installerSettings(options);
+  const bundledSkill = await fsp.readFile(bundledSkillFilePath(), "utf8");
+  for (const target of targets) {
+    const definition = definitionForTarget(target.id);
+    const skillTargetDir = getSkillTargetDirForAgent(definition.id, settings.homeDir, settings.env);
+    const installedSkillPath = path.join(skillTargetDir, "SKILL.md");
+    const markerPath = path.join(skillTargetDir, "CODEGRAPH_INSTALLED");
+    const installedSkill = await fsp.readFile(installedSkillPath, "utf8");
+    const marker = await fsp.readFile(markerPath, "utf8");
+    if (installedSkill !== bundledSkill) {
+      throw new Error(`Codegraph installer verification failed for ${normalizePathForDisplay(installedSkillPath)}.`);
+    }
+    if (!marker.startsWith("Installed by codegraph install")) {
+      throw new Error(`Codegraph installer marker verification failed for ${normalizePathForDisplay(markerPath)}.`);
+    }
+    if (definition.kind === "skill-only") continue;
+    const configPath = requireConfigPath(definition, settings);
+    const config = await fsp.readFile(configPath, "utf8");
+    if (renderConfigWithCodegraph(definition, config, configPath) !== config) {
+      throw new Error(`Codegraph installer config verification failed for ${normalizePathForDisplay(configPath)}.`);
+    }
+  }
+  return true;
+}
+
+async function writeTextFileAtomic(filePath: string, content: string): Promise<void> {
+  await fsp.mkdir(path.dirname(filePath), { recursive: true });
+  await withInstallerFileLock(filePath, async () => {
+    const nonce = `${process.pid}-${randomUUID()}`;
+    const temporaryPath = `${filePath}.codegraph-tmp-${nonce}`;
+    const backupPath = `${filePath}.codegraph-backup-${nonce}`;
+    let movedExisting = false;
+    try {
+      await fsp.writeFile(temporaryPath, content, { encoding: "utf8", flag: "wx" });
+      if (await pathExistsUnlessMissing(filePath)) {
+        await fsp.rename(filePath, backupPath);
+        movedExisting = true;
+      }
+      try {
+        await fsp.rename(temporaryPath, filePath);
+      } catch (error) {
+        if (movedExisting) await fsp.rename(backupPath, filePath).catch(() => undefined);
+        throw error;
+      }
+      if (movedExisting) await fsp.rm(backupPath, { force: true });
+    } catch (error) {
+      if (isFileSystemErrorCode(error, "EACCES") || isFileSystemErrorCode(error, "EPERM")) {
+        throw new Error(
+          `Permission denied while updating user-owned path ${normalizePathForDisplay(filePath)}. Check its ownership and permissions, then retry without administrator mode.`,
+          { cause: error },
+        );
+      }
+      throw error;
+    } finally {
+      await fsp.rm(temporaryPath, { force: true }).catch(() => undefined);
+      await fsp.rm(backupPath, { force: true }).catch(() => undefined);
+    }
+  });
+}
+
+async function withInstallerFileLock<T>(filePath: string, operation: () => Promise<T>): Promise<T> {
+  const lockPath = `${filePath}.codegraph-lock`;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    let lock: FileHandle | undefined;
+    try {
+      lock = await fsp.open(lockPath, "wx");
+      return await operation();
+    } catch (error) {
+      if (!isFileSystemErrorCode(error, "EEXIST")) throw error;
+      await waitForInstallerLockRetry();
+    } finally {
+      await lock?.close().catch(() => undefined);
+      if (lock) await fsp.rm(lockPath, { force: true }).catch(() => undefined);
+    }
+  }
+  throw new Error(`Another Codegraph installer is still updating ${normalizePathForDisplay(filePath)}.`);
+}
+
+function waitForInstallerLockRetry(): Promise<void> {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  setTimeout(resolve, 20);
+  return promise;
+}
+
+function isFileSystemErrorCode(error: unknown, code: string): boolean {
+  return error instanceof Error && "code" in error && String(error.code) === code;
 }
 
 function escapeRegExp(value: string): string {

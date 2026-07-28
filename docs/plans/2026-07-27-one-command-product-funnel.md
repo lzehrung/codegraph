@@ -1,6 +1,6 @@
 # One-command product funnel
 
-Status: Planned
+Status: Implemented
 
 Parent review: [Project improvement review](./2026-07-27-project-improvement-review.md)
 
@@ -37,17 +37,17 @@ The product already has the hard capabilities:
 - `doctor` reports runtime/package/native state.
 - MCP exposes the same agent-facing search and navigation contracts.
 
-The entrance remains fragmented:
+At plan creation, the entrance was fragmented:
 
-- bare `codegraph` currently falls through to the graph command rather than teaching the product path,
-- the full help is command-oriented rather than task-oriented,
-- unknown commands fail without a useful correction,
-- `codegraph install` requires users to infer `--detect`, `--dry-run`, and `--yes`,
-- GitHub Packages installation needs scoped registry configuration,
-- the release tarball does not include Node or the native addon,
-- no clean-machine test proves install-to-first-query duration and output.
+- bare `codegraph` fell through to the graph command rather than teaching the product path,
+- the full help was command-oriented rather than task-oriented,
+- unknown commands failed without a useful correction,
+- `codegraph install` required users to infer `--detect`, `--dry-run`, and `--yes`,
+- GitHub Packages installation required scoped registry configuration,
+- npm release tarballs did not include Node or the native addon,
+- no clean-machine test proved install-to-first-query duration and output.
 
-The result is a capable tool with a high activation cost.
+The result was a capable tool with a high activation cost.
 
 ## Product principles
 
@@ -106,7 +106,7 @@ POSIX shell:
 curl -fsSL https://github.com/lzehrung/codegraph/releases/latest/download/install.sh | sh
 ```
 
-The bootstrap script downloads a platform archive and signed/checksummed manifest, verifies it before extraction, installs under a user-owned directory, and prints the exact PATH change or creates it with consent. Documentation must also show an inspect-then-run alternative for users who do not pipe remote scripts to a shell.
+The bootstrap script downloads a platform archive and `SHA256SUMS`, verifies the selected archive before extraction, installs under a user-owned directory, and reports the launcher directory for `PATH`. The preview channel is checksummed but not signed; documentation must also show an inspect-then-run alternative for users who do not pipe remote scripts to a shell.
 
 After installation, the script invokes or recommends the same `codegraph install` flow. The standalone archive includes Node, the CLI, production dependencies, bundled skill, and matching native addon; it does not depend on npm registry configuration at runtime.
 
@@ -426,28 +426,47 @@ Add `scripts/onboarding/`:
 - `standalone-install-lib.mjs`: shared archive/install validation where safe
 - tests for output parsing, timeout, cleanup, and secret redaction
 
+Run one channel at a time:
+
+```bash
+node scripts/onboarding/run-funnel-smoke.mjs --channel source --root . --output funnel-source.json
+node scripts/onboarding/run-funnel-smoke.mjs --channel package --artifact <root-package.tgz> --output funnel-package.json
+node scripts/onboarding/run-funnel-smoke.mjs --channel standalone --artifact <codegraph-target-archive> --target <target> --output funnel-standalone.json
+```
+
 Result schema:
 
 ```ts
 type FunnelSmokeResultV1 = {
   schemaVersion: 1;
-  channel: "package" | "standalone" | "source";
-  platform: string;
-  architecture: string;
-  version: string;
-  steps: Array<{
-    name: "install" | "configure" | "doctor" | "first-query" | "mcp";
+  scenario: "clean-home-source" | "exact-package-candidate" | "extracted-standalone";
+  channel: "source" | "package" | "standalone";
+  target: "win32-x64" | "win32-arm64" | "darwin-x64" | "darwin-arm64" | "linux-x64" | "linux-arm64";
+  status: "pass" | "fail";
+  version: string | null;
+  timings: {
+    totalMs: number;
+    steps: Array<{ name: string; durationMs: number }>;
+  };
+  checks: Array<{
+    name: string;
     status: "pass" | "fail" | "skipped";
     durationMs: number;
-    exitCode?: number;
-    assertionCodes: string[];
+    exitCode?: number | null;
   }>;
-  totalDurationMs: number;
-  status: "pass" | "fail";
+  diagnostics: Array<{
+    code: string;
+    message: string;
+    step?: string;
+    command?: string;
+    exitCode?: number | null;
+    stdout?: string;
+    stderr?: string;
+  }>;
 };
 ```
 
-The runner uses a temporary HOME/USERPROFILE, temporary repository fixture, isolated npm config, and no developer checkout paths. It must fail if the installed binary resolves modules from the source checkout.
+The runner uses temporary `HOME`, `USERPROFILE`, XDG, application-data, and npm-cache roots plus a temporary repository fixture. It must fail if the installed binary resolves modules from the developer checkout.
 
 ### Scenarios
 
@@ -647,18 +666,18 @@ Do not replace explicit dispatch. Add only the lightweight catalog needed for he
 
 ## Definition of done
 
-- [ ] Bare `codegraph` prints concise task-oriented help and exits 0.
-- [ ] Unknown commands offer bounded deterministic suggestions without discovery.
-- [ ] Command metadata and dispatch cannot drift silently.
-- [ ] Interactive `codegraph install` previews, confirms, applies, and verifies owned changes.
-- [ ] Noninteractive writes still require `--yes`.
-- [ ] No-target and reduced-native states are explicit.
-- [ ] README leads with install, configure, and first query.
-- [ ] Package/source funnel smoke reaches a bounded answer and MCP handshake.
-- [ ] Standalone archives include Node, native runtime, CLI, skill, notices, and manifest.
-- [ ] Bootstrap scripts verify artifact integrity and install atomically under a user-owned versioned root.
-- [ ] Clean-host package and standalone journeys complete within acceptance budgets.
-- [ ] Uninstall preserves unrelated user state.
-- [ ] No misleading check-only `upgrade` command ships.
-- [ ] Canonical docs and bundled skill match the CLI.
-- [ ] `npm run check` passes.
+- [x] Bare `codegraph` prints concise task-oriented help and exits 0.
+- [x] Unknown commands offer bounded deterministic suggestions without discovery.
+- [x] Command metadata and dispatch cannot drift silently.
+- [x] Interactive `codegraph install` previews, confirms, applies, and verifies owned changes.
+- [x] Noninteractive writes still require `--yes`.
+- [x] No-target and reduced-native states are explicit.
+- [x] README leads with install, configure, and first query.
+- [x] Package/source funnel smoke reaches a bounded answer and MCP handshake.
+- [x] Standalone archives include Node, native runtime, CLI, skill, notices, and manifest.
+- [x] Bootstrap scripts verify artifact integrity and install atomically under a user-owned versioned root.
+- [x] Clean-host package and standalone journeys complete within acceptance budgets.
+- [x] Uninstall preserves unrelated user state.
+- [x] No misleading check-only `upgrade` command ships.
+- [x] Canonical docs and bundled skill match the CLI.
+- [x] `npm run check` passes.

@@ -23,6 +23,8 @@ export type CliRuntime = {
   exit: (code: number) => never;
   cwd: () => string;
   readStdin: () => Promise<string>;
+  promptLine: (question: string) => Promise<string>;
+  stdinIsTTY: () => boolean;
   stderrIsTTY: () => boolean;
   terminalSupportsControlSequences: () => boolean;
   progressPreparationDelayMs: () => number;
@@ -87,6 +89,7 @@ function createDefaultCliRuntime(): CliRuntime {
     stderr: (chunk) => process.stderr.write(chunk),
     exit: (code) => process.exit(code),
     cwd: () => process.cwd(),
+    stdinIsTTY: () => !!process.stdin.isTTY,
     stderrIsTTY: () => !!process.stderr.isTTY,
     terminalSupportsControlSequences: () => !!process.stderr.isTTY && process.env.TERM !== "dumb",
     progressPreparationDelayMs: () => 100,
@@ -118,6 +121,15 @@ function createDefaultCliRuntime(): CliRuntime {
         process.stdin.once("end", onEnd);
         process.stdin.once("error", onError);
       }),
+    promptLine: async (question) => {
+      const { createInterface } = await import("node:readline/promises");
+      const prompt = createInterface({ input: process.stdin, output: process.stderr });
+      try {
+        return await prompt.question(question);
+      } finally {
+        prompt.close();
+      }
+    },
   };
 }
 
@@ -157,6 +169,15 @@ export function getCwd(): string {
 
 export async function readCliStdin(): Promise<string> {
   return await getCliContext().runtime.readStdin();
+}
+
+export function isCliInteractiveTerminal(): boolean {
+  const runtime = getCliContext().runtime;
+  return runtime.stdinIsTTY() && runtime.stderrIsTTY();
+}
+
+export async function promptCliLine(question: string): Promise<string> {
+  return await getCliContext().runtime.promptLine(question);
 }
 
 export function exitCli(code: number): never {
