@@ -629,6 +629,20 @@ function addPathResults(
   }
 }
 
+function mergeSearchResults(
+  targetMap: Map<string, MutableSearchResult>,
+  sourceMap: ReadonlyMap<string, MutableSearchResult>,
+): void {
+  for (const source of sourceMap.values()) {
+    const target = upsertResult(targetMap, source);
+    target.score += source.score;
+    for (const reason of source.rankReasons) target.rankReasons.add(reason);
+    for (const evidence of source.evidence) addEvidence(target, evidence);
+    for (const [key, neighbor] of source.neighbors) target.neighbors.set(key, neighbor);
+    for (const followUp of source.followUps) target.followUps.add(followUp);
+  }
+}
+
 async function addTextResults(
   snapshot: AgentProjectSnapshot,
   resultMap: Map<string, MutableSearchResult>,
@@ -641,6 +655,7 @@ async function addTextResults(
   const store = queryIndex?.store;
   const diagnostics = queryIndex?.diagnostics;
   if (store && diagnostics && projectSnapshotIdentity) {
+    const candidateResultMap = new Map<string, MutableSearchResult>();
     try {
       store.withReadSnapshot(projectSnapshotIdentity, () => {
         const candidateStarted = performance.now();
@@ -654,10 +669,11 @@ async function addTextResults(
           if (!allowedPaths.has(chunk.path)) {
             throw new Error(`Query index returned an out-of-snapshot path: ${chunk.path}`);
           }
-          addTextFileResults(snapshot, resultMap, query, includeSnippets, mode, chunk.path, [chunk]);
+          addTextFileResults(snapshot, candidateResultMap, query, includeSnippets, mode, chunk.path, [chunk]);
         }
         diagnostics.scoringMs += performance.now() - scoringStarted;
       });
+      mergeSearchResults(resultMap, candidateResultMap);
       return;
     } catch (error) {
       diagnostics.sidecarState = "unavailable";

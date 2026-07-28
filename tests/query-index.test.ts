@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { searchCodegraphWithSession, type AgentSearchResponse } from "../src/agent/search.js";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
 import { disposeSessionQueryIndex } from "../src/agent/query-index/sessionStore.js";
@@ -10,6 +10,7 @@ import { probeQueryIndexSqliteSupport } from "../src/agent/query-index/schema.js
 import { SqliteDatabase } from "../src/sqlite-driver.js";
 import { ensureQueryIndex } from "../src/agent/query-index/update.js";
 import { QueryIndexStore } from "../src/agent/query-index/store.js";
+import * as queryIndexWorkerPool from "../src/agent/query-index/workerPool.js";
 import { buildProjectIndexIncremental } from "../src/indexer/build-index.js";
 import { isSymlinkUnavailable } from "./helpers/filesystem.js";
 import { createCodegraphMcpHandlers } from "../src/mcp/server.js";
@@ -68,6 +69,7 @@ function comparable(response: AgentSearchResponse): object {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const session of sessions.splice(0)) disposeSessionQueryIndex(session);
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
@@ -342,6 +344,51 @@ describe("persistent query index", () => {
       lock.exec("ROLLBACK;");
       lock.close();
     }
+  });
+
+  it("falls back to memory when worker preparation rejects", async () => {
+    const root = await createRepo();
+    vi.spyOn(queryIndexWorkerPool, "prepareQueryIndexFilesInWorker").mockRejectedValue(
+      new Error("forced worker failure"),
+    );
+
+    const session = createSession(root);
+    const response = await search(session, root, "validate user");
+    const snapshot = await session.loadProject();
+    expect(snapshot.buildReport?.queryIndex).toMatchObject({
+      sidecarState: "unavailable",
+      fallbackReason: "forced worker failure",
+    });
+    expect(response.results.some((result) => result.file === "src/auth.ts")).toBe(true);
+  });
+
+  it("discards staged sidecar scores before memory fallback", async () => {
+    const root = await createRepo();
+    const initialSession = createSession(root);
+    await search(initialSession, root, "validate user");
+    disposeSessionQueryIndex(initialSession);
+
+    const oracleSession = createSession(root, "off");
+    const oracle = await search(oracleSession, root, "validate user");
+    const originalWithReadSnapshot = QueryIndexStore.prototype.withReadSnapshot;
+    vi.spyOn(QueryIndexStore.prototype, "withReadSnapshot").mockImplementation(function <T>(
+      this: QueryIndexStore,
+      projectSnapshotIdentity: string,
+      read: () => T,
+    ): T {
+      return originalWithReadSnapshot.call(this, projectSnapshotIdentity, () => {
+        read();
+        throw new Error("forced post-read failure");
+      });
+    });
+
+    const fallbackSession = createSession(root);
+    const fallback = await search(fallbackSession, root, "validate user");
+    expect(comparable(fallback)).toEqual(comparable(oracle));
+    expect((await fallbackSession.loadProject()).buildReport?.queryIndex).toMatchObject({
+      sidecarState: "unavailable",
+      fallbackReason: "forced post-read failure",
+    });
   });
 
   it("does not mutate a sidecar created by a future schema", async () => {

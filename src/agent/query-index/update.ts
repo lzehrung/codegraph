@@ -130,15 +130,21 @@ function buildMetadata(current: QueryIndexCurrentState): QueryIndexMetadata {
 async function prepareFiles(
   projectRoot: string,
   files: readonly CurrentQueryFile[],
+  diagnostics: QueryIndexDiagnostics,
 ): Promise<PreparedQueryIndexFile[] | null> {
-  const { prepareQueryIndexFilesInWorker } = await import("./workerPool.js");
-  return await prepareQueryIndexFilesInWorker(
-    projectRoot,
-    files.map((file) => ({
-      relativePath: file.path,
-      sourceIdentity: file.sourceIdentity,
-    })),
-  );
+  try {
+    const { prepareQueryIndexFilesInWorker } = await import("./workerPool.js");
+    return await prepareQueryIndexFilesInWorker(
+      projectRoot,
+      files.map((file) => ({
+        relativePath: file.path,
+        sourceIdentity: file.sourceIdentity,
+      })),
+    );
+  } catch (error) {
+    diagnostics.fallbackReason = errorMessage(error);
+    return null;
+  }
 }
 
 async function pathIsSymlink(filePath: string): Promise<boolean> {
@@ -264,7 +270,7 @@ export async function ensureQueryIndex(snapshot: AgentProjectSnapshot): Promise<
       return { store: null, diagnostics };
     }
 
-    const prepared = await prepareFiles(snapshot.root, current.files);
+    const prepared = await prepareFiles(snapshot.root, current.files, diagnostics);
     if (!prepared) return { store: null, diagnostics };
     diagnostics.filesRead = prepared.filter((file) => file.sourceRead).length;
     diagnostics.filesAdded = prepared.length;
@@ -285,7 +291,7 @@ export async function ensureQueryIndex(snapshot: AgentProjectSnapshot): Promise<
     assertStoredPaths(snapshot, storedIdentities);
   } catch {
     safeClose(store);
-    const prepared = await prepareFiles(snapshot.root, current.files);
+    const prepared = await prepareFiles(snapshot.root, current.files, diagnostics);
     if (!prepared) return { store: null, diagnostics };
     diagnostics.filesRead = prepared.filter((file) => file.sourceRead).length;
     diagnostics.filesAdded = prepared.length;
@@ -322,7 +328,7 @@ export async function ensureQueryIndex(snapshot: AgentProjectSnapshot): Promise<
   const deleted = contentVersionsMatch
     ? [...storedIdentities.keys()].filter((file) => !current.identities.has(file))
     : [...storedIdentities.keys()];
-  const prepared = await prepareFiles(snapshot.root, changed);
+  const prepared = await prepareFiles(snapshot.root, changed, diagnostics);
   if (!prepared) {
     store.close();
     return { store: null, diagnostics };
