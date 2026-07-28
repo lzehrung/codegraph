@@ -15,11 +15,35 @@ export async function verifyStandaloneBundle(bundleRoot) {
   if (manifest.schemaVersion !== 1 || manifest.channel !== "standalone-preview") {
     throw new Error("Unsupported standalone bundle manifest.");
   }
-  if (typeof manifest.version !== "string" || !manifest.version || !Array.isArray(manifest.files)) {
+  if (
+    typeof manifest.version !== "string" ||
+    !manifest.version ||
+    typeof manifest.target !== "string" ||
+    !manifest.target ||
+    typeof manifest.nativeSuffix !== "string" ||
+    !manifest.nativeSuffix ||
+    typeof manifest.nodeVersion !== "string" ||
+    !manifest.nodeVersion ||
+    (manifest.sourceRevision !== null && typeof manifest.sourceRevision !== "string") ||
+    !Array.isArray(manifest.files)
+  ) {
     throw new Error("Standalone bundle manifest is incomplete.");
   }
   validateArchiveEntries(manifest.files);
-  const expected = new Map(manifest.files.map((entry) => [entry.path, entry]));
+  const expected = new Map();
+  for (const entry of manifest.files) {
+    if (
+      typeof entry?.path !== "string" ||
+      !Number.isSafeInteger(entry.size) ||
+      entry.size < 0 ||
+      typeof entry.sha256 !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(entry.sha256) ||
+      expected.has(entry.path)
+    ) {
+      throw new Error("Standalone bundle manifest has an invalid file record.");
+    }
+    expected.set(entry.path, entry);
+  }
   const actual = await collectBundleFiles(root);
   const files = actual.filter((file) => file !== "manifest.json");
   await forEachConcurrent(files, 16, async (file) => {
@@ -34,6 +58,24 @@ export async function verifyStandaloneBundle(bundleRoot) {
   });
   if (expected.size) throw new Error(`Standalone bundle is missing manifest file: ${expected.keys().next().value}`);
   return manifest;
+}
+
+function assertMatchingStandaloneProvenance(incoming, installed) {
+  for (const field of ["version", "target", "nativeSuffix", "sourceRevision", "nodeVersion"]) {
+    if (incoming[field] !== installed[field]) {
+      throw new Error(`Existing standalone installation provenance mismatch: ${field}.`);
+    }
+  }
+  if (incoming.files.length !== installed.files.length) {
+    throw new Error("Existing standalone installation provenance mismatch: files.");
+  }
+  const installedFiles = new Map(installed.files.map((entry) => [entry.path, entry]));
+  for (const incomingFile of incoming.files) {
+    const installedFile = installedFiles.get(incomingFile.path);
+    if (!installedFile || incomingFile.size !== installedFile.size || incomingFile.sha256 !== installedFile.sha256) {
+      throw new Error(`Existing standalone installation provenance mismatch: ${incomingFile.path}.`);
+    }
+  }
 }
 async function forEachConcurrent(items, concurrency, operation) {
   let nextIndex = 0;
@@ -64,7 +106,8 @@ export async function installStandaloneBundle(options) {
     if (!fs.existsSync(versionRoot)) {
       await fsp.rename(stagingRoot, versionRoot);
     } else {
-      await verifyStandaloneBundle(versionRoot);
+      const installedManifest = await verifyStandaloneBundle(versionRoot);
+      assertMatchingStandaloneProvenance(manifest, installedManifest);
       await fsp.rm(stagingRoot, { recursive: true, force: true });
     }
     const previous = await readInstallManifest(installBase);

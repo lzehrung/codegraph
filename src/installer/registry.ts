@@ -250,6 +250,9 @@ async function installTarget(definition: TargetDefinition, options: InstallOptio
   const dryRun = options.dryRun ?? false;
   const changes: InstallChange[] = [];
   const skillTargetDir = getSkillTargetDirForAgent(definition.id, settings.homeDir, settings.env);
+  if (definition.kind !== "skill-only") {
+    await assertNoConfigCollision(definition, requireConfigPath(definition, settings));
+  }
   changes.push(await upsertSkillPayload(definition, skillTargetDir, dryRun));
   changes.push(await upsertSkillPointer(definition, skillTargetDir, dryRun));
   if (definition.kind !== "skill-only") {
@@ -360,6 +363,30 @@ async function removeConfig(definition: TargetDefinition, configPath: string, dr
     }
   }
   return change(definition.id, action, configPath, dryRun);
+}
+
+async function assertNoConfigCollision(definition: TargetDefinition, configPath: string): Promise<void> {
+  if (definition.kind === "toml-block" || definition.kind === "skill-only") return;
+  const existing = await readOptionalFile(configPath);
+  if (existing === null) return;
+  const parsed = parseConfigJson(existing, configPath);
+  const property = definition.kind === "json-opencode-mcp" ? "mcp" : "mcpServers";
+  const servers = readRecordProperty(parsed, property);
+  const existingServer = servers.codegraph;
+  if (existingServer === undefined || isInstallerOwnedJsonServer(definition, existingServer)) return;
+  throw new Error(
+    `User-owned Codegraph MCP entry already exists at ${normalizePathForDisplay(configPath)}. It was preserved; remove or rename that entry before retrying.`,
+  );
+}
+
+function configContainsInstallerServer(definition: TargetDefinition, config: string, configPath: string): boolean {
+  if (definition.kind === "toml-block") {
+    return renderConfigWithCodegraph(definition, config, configPath) === config;
+  }
+  if (definition.kind === "skill-only") return true;
+  const parsed = parseConfigJson(config, configPath);
+  const property = definition.kind === "json-opencode-mcp" ? "mcp" : "mcpServers";
+  return isInstallerOwnedJsonServer(definition, readRecordProperty(parsed, property).codegraph);
 }
 
 function renderConfigWithCodegraph(definition: TargetDefinition, existing: string | null, configPath: string): string {
@@ -613,7 +640,7 @@ async function verifyInstalledTargets(targets: readonly InstallTarget[], options
     if (definition.kind === "skill-only") continue;
     const configPath = requireConfigPath(definition, settings);
     const config = await fsp.readFile(configPath, "utf8");
-    if (renderConfigWithCodegraph(definition, config, configPath) !== config) {
+    if (!configContainsInstallerServer(definition, config, configPath)) {
       throw new Error(`Codegraph installer config verification failed for ${normalizePathForDisplay(configPath)}.`);
     }
   }
@@ -625,21 +652,16 @@ async function writeTextFileAtomic(filePath: string, content: string): Promise<v
   await withInstallerFileLock(filePath, async () => {
     const nonce = `${process.pid}-${randomUUID()}`;
     const temporaryPath = `${filePath}.codegraph-tmp-${nonce}`;
-    const backupPath = `${filePath}.codegraph-backup-${nonce}`;
-    let movedExisting = false;
     try {
-      await fsp.writeFile(temporaryPath, content, { encoding: "utf8", flag: "wx" });
-      if (await pathExistsUnlessMissing(filePath)) {
-        await fsp.rename(filePath, backupPath);
-        movedExisting = true;
-      }
+      let mode = 0o600;
       try {
-        await fsp.rename(temporaryPath, filePath);
+        const existing = await fsp.stat(filePath);
+        mode = existing.mode & 0o777;
       } catch (error) {
-        if (movedExisting) await fsp.rename(backupPath, filePath).catch(() => undefined);
-        throw error;
+        if (!isFileSystemErrorCode(error, "ENOENT")) throw error;
       }
-      if (movedExisting) await fsp.rm(backupPath, { force: true });
+      await fsp.writeFile(temporaryPath, content, { encoding: "utf8", flag: "wx", mode });
+      await renameTemporaryFile(temporaryPath, filePath);
     } catch (error) {
       if (isFileSystemErrorCode(error, "EACCES") || isFileSystemErrorCode(error, "EPERM")) {
         throw new Error(
@@ -650,9 +672,20 @@ async function writeTextFileAtomic(filePath: string, content: string): Promise<v
       throw error;
     } finally {
       await fsp.rm(temporaryPath, { force: true }).catch(() => undefined);
-      await fsp.rm(backupPath, { force: true }).catch(() => undefined);
     }
   });
+}
+
+async function renameTemporaryFile(temporaryPath: string, filePath: string): Promise<void> {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await fsp.rename(temporaryPath, filePath);
+      return;
+    } catch (error) {
+      if (!isFileSystemErrorCode(error, "EPERM") || attempt === 4) throw error;
+      await waitForInstallerLockRetry();
+    }
+  }
 }
 
 async function withInstallerFileLock<T>(filePath: string, operation: () => Promise<T>): Promise<T> {

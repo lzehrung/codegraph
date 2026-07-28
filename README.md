@@ -6,9 +6,21 @@ Codegraph is a local CLI **and TypeScript library** that turns a source tree int
 
 Without structural context, an agent spends early turns listing directories, guessing search terms, opening candidate files, and reconstructing relationships in its prompt. Codegraph performs that deterministic discovery once so more of the context window can go toward understanding and changing the code.
 
+Windows PowerShell:
+
+```powershell
+irm https://github.com/lzehrung/codegraph/releases/latest/download/install.ps1 | iex
+```
+
+macOS or Linux:
+
 ```bash
-npm config set "@lzehrung:registry" "https://npm.pkg.github.com"
-npm install -g @lzehrung/codegraph
+curl -fsSL https://github.com/lzehrung/codegraph/releases/latest/download/install.sh | sh
+```
+
+Then configure an agent and ask the first question:
+
+```bash
 codegraph install
 codegraph explore "how does auth reach the database?" --root .
 ```
@@ -87,9 +99,10 @@ Continue with `node ./dist/cli.js <command>` from the checkout. To use the bare 
 
 ### From GitHub Packages
 
-If access to the `@lzehrung` GitHub Packages registry is configured:
+After authenticating to GitHub Packages with a classic token that has `read:packages` ([setup](./docs/installation.md#option-3-install-from-the-lzehrung-registry)):
 
 ```bash
+npm login --scope=@lzehrung --auth-type=legacy --registry=https://npm.pkg.github.com
 npm config set "@lzehrung:registry" "https://npm.pkg.github.com"
 npm install -g @lzehrung/codegraph
 codegraph doctor

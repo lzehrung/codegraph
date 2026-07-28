@@ -24,12 +24,24 @@ async function sha256(filePath: string): Promise<string> {
     .digest("hex");
 }
 
-async function createFakeBundle(root: string, version: string): Promise<string> {
+type FakeBundleOptions = {
+  label?: string;
+  cliContents?: string;
+  sourceRevision?: string | null;
+};
+
+async function createFakeBundle(root: string, version: string, options: FakeBundleOptions = {}): Promise<string> {
   const target = resolveStandaloneTarget();
   if (!target) throw new Error("Current host is not a supported standalone target.");
-  const bundle = path.join(root, `codegraph-${target}-${version}`);
+  const definition = assertStandaloneTarget(target);
+  const bundleName = options.label
+    ? `codegraph-${target}-${version}-${options.label}`
+    : `codegraph-${target}-${version}`;
+  const bundle = path.join(root, bundleName);
+  const cliContents = options.cliContents ?? `console.log(${JSON.stringify(version)});\n`;
+  const sourceRevision = options.sourceRevision === undefined ? "test-revision" : options.sourceRevision;
   await fsp.mkdir(path.join(bundle, "dist"), { recursive: true });
-  await fsp.writeFile(path.join(bundle, "dist", "cli.js"), `console.log(${JSON.stringify(version)});\n`, "utf8");
+  await fsp.writeFile(path.join(bundle, "dist", "cli.js"), cliContents, "utf8");
   await fsp.writeFile(path.join(bundle, process.platform === "win32" ? "node.exe" : "node"), "fake node", "utf8");
   const files = [];
   for (const relative of ["dist/cli.js", process.platform === "win32" ? "node.exe" : "node"]) {
@@ -38,7 +50,20 @@ async function createFakeBundle(root: string, version: string): Promise<string> 
   }
   await fsp.writeFile(
     path.join(bundle, "manifest.json"),
-    `${JSON.stringify({ schemaVersion: 1, channel: "standalone-preview", version, target, files }, null, 2)}\n`,
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        channel: "standalone-preview",
+        version,
+        target,
+        nativeSuffix: definition.nativeSuffix,
+        nodeVersion: process.version,
+        sourceRevision,
+        files,
+      },
+      null,
+      2,
+    )}\n`,
     "utf8",
   );
   return bundle;
@@ -162,6 +187,66 @@ describe("standalone distribution", () => {
     expect(await fsp.readFile(unrelated, "utf8")).toBe("keep");
     expect(fs.existsSync(path.join(installBase, "1.0.0"))).toBe(true);
     expect(fs.existsSync(path.join(installBase, "1.1.0"))).toBe(false);
+  });
+
+  it("reuses only identical same-version provenance and preserves installer state on mismatch", async () => {
+    const root = await mkTmpDir("cg-standalone-provenance-");
+    const installBase = path.join(root, "install");
+    const binDir = path.join(root, "bin");
+    const version = "1.0.0";
+    const original = await createFakeBundle(root, version, {
+      label: "original",
+      cliContents: "console.log('original');\n",
+      sourceRevision: "source-a",
+    });
+    const first = await installStandaloneBundle({
+      bundleRoot: original,
+      installBase,
+      binDir,
+      smoke: async () => {},
+    });
+    const identical = await createFakeBundle(root, version, {
+      label: "identical",
+      cliContents: "console.log('original');\n",
+      sourceRevision: "source-a",
+    });
+    const reused = await installStandaloneBundle({
+      bundleRoot: identical,
+      installBase,
+      binDir,
+      smoke: async () => {},
+    });
+    expect(reused).toMatchObject({ currentVersion: version, previousVersion: version });
+    expect((await fsp.readdir(installBase)).filter((entry) => entry.startsWith(".installing-"))).toEqual([]);
+
+    const launcherBefore = await fsp.readFile(first.launchers[0]);
+    const installManifestPath = path.join(installBase, "install-manifest.json");
+    const installManifestBefore = await fsp.readFile(installManifestPath);
+    const mismatchedBundles = [
+      await createFakeBundle(root, version, {
+        label: "different-bytes",
+        cliContents: "console.log('different');\n",
+        sourceRevision: "source-a",
+      }),
+      await createFakeBundle(root, version, {
+        label: "different-source",
+        cliContents: "console.log('original');\n",
+        sourceRevision: "source-b",
+      }),
+    ];
+    for (const bundle of mismatchedBundles) {
+      await expect(
+        installStandaloneBundle({
+          bundleRoot: bundle,
+          installBase,
+          binDir,
+          smoke: async () => {},
+        }),
+      ).rejects.toThrow(/provenance mismatch/u);
+      expect(await fsp.readFile(first.launchers[0])).toEqual(launcherBefore);
+      expect(await fsp.readFile(installManifestPath)).toEqual(installManifestBefore);
+    }
+    expect((await fsp.readdir(installBase)).filter((entry) => entry.startsWith(".installing-"))).toEqual([]);
   });
 
   it("requires explicit consent for noninteractive bootstrap writes", () => {

@@ -202,7 +202,7 @@ irm https://github.com/lzehrung/codegraph/releases/latest/download/install.ps1 |
 curl -fsSL https://github.com/lzehrung/codegraph/releases/latest/download/install.sh | sh
 ```
 
-The bootstrap verifies the selected archive against release `SHA256SUMS`, rejects unsafe archive entries, installs under a versioned user-owned root, and records the prior version. Pin or roll back with `./install.ps1 -Version VERSION` or `sh ./install.sh --version VERSION`; this channel is checksummed preview content, not a signed release claim.
+The bootstrap previews its target and paths, then confirms interactively or requires `-Yes`/`--yes` for noninteractive writes. It verifies the selected archive against release `SHA256SUMS`, rejects unsafe entries, installs under a versioned user-owned root, and records the prior version; pin or roll back with `./install.ps1 -Version VERSION` or `sh ./install.sh --version VERSION`. This channel is checksummed preview content, not a signed release claim.
 
 For package installs, use only the scoped packages:
 
@@ -210,10 +210,13 @@ For package installs, use only the scoped packages:
 - optional native runtime: `@lzehrung/codegraph-native`
 
 ```bash
+npm login --scope=@lzehrung --auth-type=legacy --registry=https://npm.pkg.github.com
 npm config set "@lzehrung:registry" "https://npm.pkg.github.com"
 npm install -g @lzehrung/codegraph
 codegraph doctor
 ```
+
+GitHub Packages requires a classic token with `read:packages`, including for public packages. Use the GitHub username and token during `npm login`.
 
 Do not suggest the unscoped `codegraph` package. Published installs resolve the optional native runtime when a compatible artifact exists; otherwise Codegraph reports reduced graph-only and regex recovery behavior rather than semantic parity.
 

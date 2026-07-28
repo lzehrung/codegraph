@@ -85,6 +85,7 @@ Success: `npm install`, `npm run build`, then `node ./dist/cli.js ...` with the 
 ### Published package path
 
 ```bash
+npm login --scope=@lzehrung --auth-type=legacy --registry=https://npm.pkg.github.com
 npm config set "@lzehrung:registry" "https://npm.pkg.github.com"
 npm install -g @lzehrung/codegraph
 codegraph install
@@ -430,7 +431,7 @@ Run one channel at a time:
 
 ```bash
 node scripts/onboarding/run-funnel-smoke.mjs --channel source --root . --output funnel-source.json
-node scripts/onboarding/run-funnel-smoke.mjs --channel package --artifact <root-package.tgz> --output funnel-package.json
+node scripts/onboarding/run-funnel-smoke.mjs --channel package --artifact <release-candidate-manifest.json> --output funnel-package.json
 node scripts/onboarding/run-funnel-smoke.mjs --channel standalone --artifact <codegraph-target-archive> --target <target> --output funnel-standalone.json
 ```
 

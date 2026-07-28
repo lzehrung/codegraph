@@ -57,7 +57,7 @@ Pin or roll back by running the same script with an explicit release version:
 sh ./install.sh --version VERSION
 ```
 
-The installer keeps immutable version roots, verifies an existing version before reusing it, and atomically repoints the user launcher. It records `currentVersion`, `previousVersion`, target, release URL, archive hash, and verification method in `install-manifest.json`; a failed launcher or manifest switch restores the prior state, and reinstalling the prior version is an explicit rollback rather than an in-place overwrite.
+The installer keeps immutable version roots and reuses an existing root only when the incoming and installed manifests match exactly on target, native suffix, source revision, Node version, and every file path, size, and SHA-256 record. It atomically repoints the user launcher and records `currentVersion`, `previousVersion`, target, release URL, archive hash, and verification method in `install-manifest.json`; a failed launcher or manifest switch restores the prior state, and reinstalling the prior version is an explicit rollback rather than an in-place overwrite.
 
 Default roots:
 
@@ -104,13 +104,14 @@ To remove it safely, stop Codegraph processes and delete `.codegraph-cache`. `un
 
 ## Option 3: Install from the `@lzehrung` registry
 
-Configure the scoped registry if you have not already:
+GitHub Packages requires authentication, including for public packages. Create a classic personal access token with `read:packages`, then authenticate and configure the scope:
 
 ```bash
+npm login --scope=@lzehrung --auth-type=legacy --registry=https://npm.pkg.github.com
 npm config set "@lzehrung:registry" "https://npm.pkg.github.com"
 ```
 
-Install the main package:
+Use your GitHub username and the token as the password. Then install the main package:
 
 ```bash
 npm install @lzehrung/codegraph

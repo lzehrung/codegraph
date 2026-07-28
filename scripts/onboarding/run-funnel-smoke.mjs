@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
@@ -15,9 +16,13 @@ import {
   currentFunnelTarget,
   finalizeFunnelResultV1,
 } from "./funnel-contract-lib.mjs";
-import { verifyStandaloneBundle } from "./standalone-install-lib.mjs";
+import { installStandaloneBundle, verifyStandaloneBundle } from "./standalone-install-lib.mjs";
 import { validateArchiveEntries } from "../standalone/standalone-lib.mjs";
-import { runPackedMcpExchange } from "../certification/package-smoke-lib.mjs";
+import {
+  readReleaseCandidateManifest,
+  selectReleaseCandidatePackages,
+} from "../certification/package-contract-lib.mjs";
+import { currentNativeTargetSuffix } from "../certification/package-smoke-lib.mjs";
 
 export const DEFAULT_FUNNEL_TIMEOUT_MS = 120_000;
 export const FUNNEL_INSTALL_TARGET = "cursor";
@@ -72,7 +77,7 @@ export function funnelSmokeUsage() {
     "",
     "Options:",
     "  --root <path>      Source checkout used by the source channel and isolation checks.",
-    "  --artifact <path>  Exact package tarball or standalone archive for its channel.",
+    "  --artifact <path>  Release-candidate manifest for package, root .tgz only as non-release fallback, or standalone archive.",
     "  --target <id>      win32-x64, win32-arm64, darwin-x64, darwin-arm64, linux-x64, or linux-arm64.",
     "  --output <path>    Write the FunnelResultV1 JSON document to this path.",
   ].join("\n");
@@ -89,7 +94,7 @@ export async function runFunnelSmoke(options = {}) {
   const context = {
     artifact: options.artifact ? path.resolve(options.artifact) : undefined,
     channel,
-    mcpRunner: options.mcpRunner ?? runPackedMcpExchange,
+    mcpRunner: options.mcpRunner ?? runConfiguredMcpExchange,
     commandRunner: options.commandRunner ?? runFunnelCommand,
     result,
     root,
@@ -128,7 +133,7 @@ export async function runFunnelSmoke(options = {}) {
     if (ownsWorkspace && !options.keepWorkspace) {
       const cleanupStartedAt = performance.now();
       try {
-        await fsp.rm(workspace, { recursive: true, force: true });
+        await fsp.rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
         addFunnelCheck(result, {
           name: "workspace-cleanup",
           status: "pass",
@@ -192,7 +197,16 @@ export async function createFunnelIsolation(workspace, baseEnv = process.env) {
   const npmUserConfig = path.join(paths.config, "npmrc");
   const npmGlobalConfig = path.join(paths.config, "npm-globalrc");
   const cursorConfigPath = path.join(paths.home, ".cursor", "mcp.json");
-  const cursorConfig = '{"mcpServers":{}}\n';
+  const cursorConfig = `${JSON.stringify(
+    {
+      cursorSettings: { theme: "retain" },
+      mcpServers: {
+        unrelated: { args: ["--stdio"], command: "unrelated-mcp" },
+      },
+    },
+    null,
+    2,
+  )}\n`;
   await fsp.writeFile(
     npmUserConfig,
     "audit=false\nfund=false\nupdate-notifier=false\n@lzehrung:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}\n",
@@ -266,9 +280,18 @@ export async function createFunnelRepository(workspace) {
 }
 
 async function prepareRuntime(context) {
-  if (context.channel === "source") return await prepareSourceRuntime(context);
-  if (context.channel === "package") return await preparePackageRuntime(context);
-  return await prepareStandaloneRuntime(context);
+  let runtime;
+  if (context.channel === "source") {
+    runtime = await prepareSourceRuntime(context);
+  } else if (context.channel === "package") {
+    runtime = await preparePackageRuntime(context);
+  } else {
+    runtime = await prepareStandaloneRuntime(context);
+  }
+  await runManualCheck(context, "configured-command", "configured-command-unavailable", async () => {
+    await createConfiguredCommandLauncher(context.isolation, runtime);
+  });
+  return runtime;
 }
 
 async function prepareSourceRuntime(context) {
@@ -281,6 +304,7 @@ async function prepareSourceRuntime(context) {
 
 async function preparePackageRuntime(context) {
   const artifact = await requireArtifact(context, "package");
+  const packageArtifacts = await resolvePackageArtifacts(context, artifact);
   await runCommandCheck(context, "package-install", "npm", [
     "install",
     "--prefix",
@@ -288,7 +312,7 @@ async function preparePackageRuntime(context) {
     "--no-save",
     "--audit=false",
     "--fund=false",
-    artifact,
+    ...packageArtifacts.paths,
   ]);
   const packageRoot = path.join(context.isolation.paths.npmPrefix, "node_modules", "@lzehrung", "codegraph");
   const cliPath = path.join(packageRoot, "dist", "bin", "cli.js");
@@ -301,6 +325,22 @@ async function preparePackageRuntime(context) {
     }
   });
   return { cliPath, nodePath: process.execPath, packageRoot };
+}
+
+async function resolvePackageArtifacts(context, artifact) {
+  return await runManualCheck(context, "package-candidate", "package-candidate-invalid", async () => {
+    const isNonReleaseRootTarball = artifact.toLowerCase().endsWith(".tgz");
+    if (isNonReleaseRootTarball) return { paths: [artifact] };
+    const manifest = await readReleaseCandidateManifest(artifact, { verifyFiles: true });
+    const nativeTarget = nativeTargetForFunnelTarget(context.target);
+    const selection = selectReleaseCandidatePackages(manifest, nativeTarget);
+    const manifestDirectory = path.dirname(artifact);
+    return {
+      paths: [selection.root, selection.native, selection.nativeTarget].map((entry) => {
+        return path.resolve(manifestDirectory, entry.file);
+      }),
+    };
+  });
 }
 
 async function prepareStandaloneRuntime(context) {
@@ -336,14 +376,22 @@ async function prepareStandaloneRuntime(context) {
       return root;
     },
   );
+  const installManifest = await runManualCheck(context, "standalone-install", "standalone-install-failed", async () => {
+    return await installStandaloneBundle({
+      binDir: path.join(context.workspace, "standalone-bin"),
+      bundleRoot,
+      installBase: path.join(context.workspace, "standalone-install"),
+    });
+  });
+  const installedRoot = installManifest.versionRoot;
   const nodeName = context.target.startsWith("win32-") ? "node.exe" : "node";
-  const nodePath = path.join(bundleRoot, nodeName);
-  const cliPath = path.join(bundleRoot, "dist", "cli.js");
+  const nodePath = path.join(installedRoot, nodeName);
+  const cliPath = path.join(installedRoot, "dist", "cli.js");
   await runManualCheck(context, "standalone-runtime-layout", "standalone-runtime-not-found", async () => {
     await requireFile(nodePath, "Standalone Node runtime");
     await requireFile(cliPath, "Standalone CLI");
   });
-  return { cliPath, nodePath, packageRoot: bundleRoot };
+  return { cliPath, nodePath, packageRoot: installedRoot };
 }
 
 async function runProductChecks(context, runtime) {
@@ -383,9 +431,15 @@ async function runProductChecks(context, runtime) {
     "doctor",
     "--json",
   ]);
-  await parseJsonCheck(context, "doctor-json", "doctor-invalid-json", doctorResult, "Doctor command");
+  const doctor = await parseJsonCheck(context, "doctor-json", "doctor-invalid-json", doctorResult, "Doctor command");
+  await runManualCheck(context, "doctor-native", "doctor-native-unavailable", async () => {
+    if (!isRecord(doctor) || !isRecord(doctor.native) || !doctor.native.available) {
+      throw new Error("Doctor did not confirm the target-matching native runtime.");
+    }
+  });
 
   const previewBefore = await fsp.readFile(context.isolation.cursorConfigPath, "utf8");
+  const originalCursorConfig = parseCursorConfig(previewBefore, context.isolation.cursorConfigPath);
   const previewResult = await runCommandCheck(context, "install-preview", runtime.nodePath, [
     runtime.cliPath,
     "install",
@@ -402,18 +456,41 @@ async function runProductChecks(context, runtime) {
     "Install preview",
   );
   await runManualCheck(context, "install-preview-contract", "install-preview-invalid", async () => {
-    const changesArePreviews =
-      Array.isArray(preview?.changes) &&
-      preview.changes.length &&
-      preview.changes.every((change) => isRecord(change) && change.dryRun);
-    if (!isRecord(preview) || !preview.dryRun || !changesArePreviews) {
-      throw new Error("Install preview did not report dry-run-only changes.");
-    }
+    assertCursorInstallerResult(preview, "installed", true, context.isolation);
     const previewAfter = await fsp.readFile(context.isolation.cursorConfigPath, "utf8");
     if (previewAfter !== previewBefore || previewAfter !== context.isolation.cursorConfig) {
       throw new Error("Install preview changed isolated client configuration.");
     }
   });
+
+  const installResult = await runCommandCheck(context, "install-apply", runtime.nodePath, [
+    runtime.cliPath,
+    "install",
+    "--target",
+    FUNNEL_INSTALL_TARGET,
+    "--yes",
+    "--json",
+  ]);
+  const install = await parseJsonCheck(
+    context,
+    "install-apply-json",
+    "install-apply-invalid-json",
+    installResult,
+    "Install apply",
+  );
+  await runManualCheck(context, "install-apply-contract", "install-apply-invalid", async () => {
+    assertCursorInstallerResult(install, "installed", false, context.isolation);
+  });
+  const configuredMcp = await runManualCheck(
+    context,
+    "cursor-config-apply",
+    "cursor-config-apply-invalid",
+    async () => {
+      const appliedCursorConfig = await readCursorConfig(context.isolation.cursorConfigPath);
+      assertCursorConfigPreservesUnrelated(originalCursorConfig, appliedCursorConfig);
+      return parseConfiguredCursorMcpEntry(appliedCursorConfig);
+    },
+  );
 
   const fixtureRoot = await runManualCheck(context, "first-query-fixture", "first-query-fixture-failed", async () => {
     return await createFunnelRepository(context.workspace);
@@ -451,13 +528,363 @@ async function runProductChecks(context, runtime) {
   await runManualCheck(context, "mcp-handshake", "mcp-handshake-failed", async () => {
     if (!context.result.version) throw new Error("MCP handshake requires a verified package version.");
     await context.mcpRunner({
-      cliPath: runtime.cliPath,
+      args: configuredMcp.args,
+      command: configuredMcp.command,
+      env: context.isolation.env,
       fixtureDirectory: fixtureRoot,
       rootVersion: context.result.version,
-      nodePath: runtime.nodePath,
-      env: context.isolation.env,
+      timeoutMs: context.timeoutMs,
     });
   });
+
+  const uninstallResult = await runCommandCheck(context, "uninstall", runtime.nodePath, [
+    runtime.cliPath,
+    "uninstall",
+    "--target",
+    FUNNEL_INSTALL_TARGET,
+    "--yes",
+    "--json",
+  ]);
+  const uninstall = await parseJsonCheck(
+    context,
+    "uninstall-json",
+    "uninstall-invalid-json",
+    uninstallResult,
+    "Uninstall",
+  );
+  await runManualCheck(context, "uninstall-contract", "uninstall-invalid", async () => {
+    assertCursorInstallerResult(uninstall, "uninstalled", false, context.isolation);
+  });
+  await runManualCheck(context, "cursor-config-uninstall", "cursor-config-uninstall-invalid", async () => {
+    const uninstalledCursorConfig = await readCursorConfig(context.isolation.cursorConfigPath);
+    assertCursorConfigRestored(originalCursorConfig, uninstalledCursorConfig);
+  });
+}
+
+function assertCursorInstallerResult(result, resultKey, dryRun, isolation) {
+  if (!isRecord(result) || result[resultKey] !== true || result.dryRun !== dryRun) {
+    throw new Error(`Cursor ${resultKey} result did not report the expected write state.`);
+  }
+  if (!Array.isArray(result.targets) || result.targets.length !== 1 || result.targets[0] !== FUNNEL_INSTALL_TARGET) {
+    throw new Error("Cursor installer result targeted more than the isolated Cursor client.");
+  }
+  if (!Array.isArray(result.changes) || !result.changes.length) {
+    throw new Error("Cursor installer result did not report owned changes.");
+  }
+  const allowedPaths = new Set(cursorOwnedPaths(isolation).map(pathKey));
+  let configChanged = false;
+  for (const change of result.changes) {
+    if (!isRecord(change) || change.target !== FUNNEL_INSTALL_TARGET || change.dryRun !== dryRun) {
+      throw new Error("Cursor installer result reported a non-Cursor change.");
+    }
+    if (typeof change.path !== "string" || !allowedPaths.has(pathKey(change.path))) {
+      throw new Error("Cursor installer result changed a path outside isolated Cursor-owned state.");
+    }
+    if (pathKey(change.path) === pathKey(isolation.cursorConfigPath) && change.action !== "unchanged") {
+      configChanged = true;
+    }
+  }
+  if (!configChanged) {
+    throw new Error("Cursor installer result did not change the isolated Cursor configuration.");
+  }
+}
+
+function cursorOwnedPaths(isolation) {
+  const skillRoot = path.join(isolation.paths.home, ".cursor", "skills", "codegraph");
+  return [isolation.cursorConfigPath, path.join(skillRoot, "CODEGRAPH_INSTALLED"), path.join(skillRoot, "SKILL.md")];
+}
+
+function parseCursorConfig(content, configPath) {
+  let parsed;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    throw new Error(`Cursor configuration is not valid JSON: ${configPath}`);
+  }
+  if (!isRecord(parsed)) throw new Error(`Cursor configuration is not a JSON object: ${configPath}`);
+  return parsed;
+}
+
+async function readCursorConfig(configPath) {
+  return parseCursorConfig(await fsp.readFile(configPath, "utf8"), configPath);
+}
+
+function parseConfiguredCursorMcpEntry(config) {
+  const servers = config.mcpServers;
+  if (!isRecord(servers)) throw new Error("Cursor configuration omitted the mcpServers object.");
+  const codegraph = servers.codegraph;
+  if (!isRecord(codegraph)) throw new Error("Cursor configuration omitted mcpServers.codegraph.");
+  if (typeof codegraph.command !== "string" || !codegraph.command.trim()) {
+    throw new Error("Cursor mcpServers.codegraph omitted its command.");
+  }
+  if (codegraph.command !== "codegraph") {
+    throw new Error("Cursor mcpServers.codegraph command did not use the installed launcher.");
+  }
+  const expectedArgs = ["mcp", "serve", "--root", ".", "--stdio"];
+  if (
+    !Array.isArray(codegraph.args) ||
+    codegraph.args.length !== expectedArgs.length ||
+    !codegraph.args.every((argument, index) => argument === expectedArgs[index])
+  ) {
+    throw new Error("Cursor mcpServers.codegraph args did not select configured MCP stdio mode.");
+  }
+  return { args: [...codegraph.args], command: codegraph.command };
+}
+
+function assertCursorConfigPreservesUnrelated(original, applied) {
+  if (!jsonValuesEqual(cursorConfigWithoutCodegraph(original), cursorConfigWithoutCodegraph(applied))) {
+    throw new Error("Cursor install changed unrelated isolated configuration.");
+  }
+}
+
+function assertCursorConfigRestored(original, current) {
+  const currentServers = current.mcpServers;
+  if (isRecord(currentServers) && Object.hasOwn(currentServers, "codegraph")) {
+    throw new Error("Cursor uninstall retained mcpServers.codegraph.");
+  }
+  if (!jsonValuesEqual(original, current)) {
+    throw new Error("Cursor uninstall did not preserve unrelated isolated configuration.");
+  }
+}
+
+function cursorConfigWithoutCodegraph(config) {
+  const withoutCodegraph = { ...config };
+  if (!isRecord(config.mcpServers)) return withoutCodegraph;
+  const servers = { ...config.mcpServers };
+  delete servers.codegraph;
+  if (Object.keys(servers).length) {
+    withoutCodegraph.mcpServers = servers;
+  } else {
+    delete withoutCodegraph.mcpServers;
+  }
+  return withoutCodegraph;
+}
+
+function jsonValuesEqual(left, right) {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    return left.every((value, index) => jsonValuesEqual(value, right[index]));
+  }
+  if (isRecord(left) || isRecord(right)) {
+    if (!isRecord(left) || !isRecord(right)) return false;
+    const leftKeys = Object.keys(left);
+    const rightKeys = Object.keys(right);
+    if (leftKeys.length !== rightKeys.length) return false;
+    return leftKeys.every((key) => Object.hasOwn(right, key) && jsonValuesEqual(left[key], right[key]));
+  }
+  return false;
+}
+
+async function createConfiguredCommandLauncher(isolation, runtime) {
+  const commandPath = path.join(isolation.paths.runner, "codegraph");
+  if (process.platform === "win32") {
+    await fsp.writeFile(`${commandPath}.cmd`, createWindowsCommandLauncher(runtime), "utf8");
+  } else {
+    await fsp.writeFile(commandPath, createPosixCommandLauncher(runtime), "utf8");
+    await fsp.chmod(commandPath, 0o755);
+  }
+  prependEnvironmentPath(isolation.env, isolation.paths.runner);
+}
+
+function createPosixCommandLauncher(runtime) {
+  const nodePath = quotePosixShellArgument(runtime.nodePath);
+  const cliPath = quotePosixShellArgument(runtime.cliPath);
+  return ["#!/bin/sh", `exec ${nodePath} ${cliPath} "$@"`, ""].join("\n");
+}
+
+function quotePosixShellArgument(value) {
+  const escaped = String(value).replaceAll("'", "'\"'\"'");
+  return `'${escaped}'`;
+}
+
+function createWindowsCommandLauncher(runtime) {
+  return `@echo off\r\n${quoteWindowsCommandArgument(runtime.nodePath)} ${quoteWindowsCommandArgument(runtime.cliPath)} %*\r\n`;
+}
+
+function prependEnvironmentPath(env, entry) {
+  let previous = "";
+  for (const key of Object.keys(env)) {
+    if (key.toUpperCase() !== "PATH") continue;
+    if (!previous && typeof env[key] === "string") previous = env[key];
+    if (key !== "PATH") delete env[key];
+  }
+  env.PATH = previous ? `${entry}${path.delimiter}${previous}` : entry;
+}
+
+function nativeTargetForFunnelTarget(target) {
+  const nativeTarget = currentNativeTargetSuffix();
+  if (!nativeTarget) throw new Error(`No native package target is available for funnel target ${target}.`);
+  const targetParts = nativeTarget.split("-");
+  const platformTarget = `${targetParts[0]}-${targetParts[1]}`;
+  if (platformTarget !== target) {
+    throw new Error(`Native package target ${nativeTarget} does not match funnel target ${target}.`);
+  }
+  return nativeTarget;
+}
+
+async function runConfiguredMcpExchange({
+  args,
+  command,
+  fixtureDirectory,
+  rootVersion,
+  env = process.env,
+  timeoutMs = DEFAULT_FUNNEL_TIMEOUT_MS,
+}) {
+  const child = spawnConfiguredMcpProcess(command, args, { cwd: fixtureDirectory, env });
+  const client = createMcpLineClient(child, timeoutMs);
+  try {
+    const initialize = await client.request(1, "initialize", {
+      protocolVersion: "2025-11-25",
+      capabilities: {},
+      clientInfo: { name: "codegraph-funnel-smoke", version: "1.0.0" },
+    });
+    if (initialize.error) throw new Error("Configured MCP initialize returned an error.");
+    const initializeResult = requireMcpRecord(initialize.result, "Configured MCP initialize omitted a result.");
+    const serverInfo = requireMcpRecord(initializeResult.serverInfo, "Configured MCP initialize omitted serverInfo.");
+    if (serverInfo.version !== rootVersion) {
+      throw new Error(`Configured MCP server version ${String(serverInfo.version)} does not match ${rootVersion}.`);
+    }
+    client.send({ jsonrpc: "2.0", method: "notifications/initialized", params: {} });
+    const tools = await client.request(2, "tools/list", {});
+    const toolsResult = requireMcpRecord(tools.result, "Configured MCP tools/list omitted a result.");
+    if (!Array.isArray(toolsResult.tools)) throw new Error("Configured MCP tools/list omitted tools.");
+    const toolNames = toolsResult.tools
+      .map((tool) => (isRecord(tool) && typeof tool.name === "string" ? tool.name : ""))
+      .filter(Boolean);
+    if (!toolNames.includes("search")) throw new Error("Configured MCP server did not expose search.");
+    const search = await client.request(3, "tools/call", {
+      name: "search",
+      arguments: { query: "CertifiedPackageSymbol", mode: "symbol", limit: 5 },
+    });
+    if (search.error || !JSON.stringify(search.result).includes("CertifiedPackageSymbol")) {
+      throw new Error("Configured MCP search did not return the known symbol.");
+    }
+    return { exitCode: 0, tools: toolNames };
+  } finally {
+    await stopConfiguredMcpProcess(child);
+  }
+}
+
+function spawnConfiguredMcpProcess(command, args, options) {
+  const spawnOptions = { cwd: options.cwd, env: options.env, shell: false, stdio: ["pipe", "pipe", "pipe"] };
+  if (process.platform !== "win32") return spawn(command, args, spawnOptions);
+  const commandProcessor =
+    options.env.ComSpec ?? options.env.COMSPEC ?? process.env.ComSpec ?? process.env.COMSPEC ?? "cmd.exe";
+  const commandLine = [command, ...args].join(" ");
+  return spawn(commandProcessor, ["/d", "/s", "/c", commandLine], spawnOptions);
+}
+
+function quoteWindowsCommandArgument(value) {
+  return `"${String(value).replaceAll('"', '""')}"`;
+}
+
+function requireMcpRecord(value, message) {
+  if (!isRecord(value)) throw new Error(message);
+  return value;
+}
+
+function createMcpLineClient(child, timeoutMs) {
+  const pending = new Map();
+  let stderr = "";
+  let stdout = "";
+  let buffer = "";
+  let exited = false;
+
+  function rejectPending(message) {
+    const output = boundedDiagnosticOutput(`${stdout}\n${stderr}`.trim());
+    for (const waiter of pending.values()) {
+      clearTimeout(waiter.timer);
+      waiter.reject(new Error(output ? `${message}\n${output}` : message));
+    }
+    pending.clear();
+  }
+
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => {
+    stdout = boundedDiagnosticOutput(`${stdout}${chunk}`);
+    buffer += chunk;
+    while (buffer.includes("\n")) {
+      const newline = buffer.indexOf("\n");
+      const line = buffer.slice(0, newline).replace(/\r$/, "");
+      buffer = buffer.slice(newline + 1);
+      if (!line.trim()) continue;
+      let message;
+      try {
+        message = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (!isRecord(message) || (typeof message.id !== "number" && typeof message.id !== "string")) continue;
+      const waiter = pending.get(String(message.id));
+      if (!waiter) continue;
+      pending.delete(String(message.id));
+      clearTimeout(waiter.timer);
+      waiter.resolve(message);
+    }
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr = boundedDiagnosticOutput(`${stderr}${chunk}`);
+  });
+  child.on("exit", () => {
+    exited = true;
+    rejectPending("Configured MCP server exited before responding.");
+  });
+  child.on("error", (error) => {
+    exited = true;
+    rejectPending(`Could not start configured MCP server: ${error.message}`);
+  });
+
+  function send(message) {
+    if (exited || !child.stdin.writable) throw new Error("Configured MCP server stdin is unavailable.");
+    child.stdin.write(`${JSON.stringify(message)}\n`);
+  }
+
+  function request(id, method, params) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(String(id));
+        reject(new Error(`Configured MCP server timed out during ${method}.`));
+      }, timeoutMs);
+      pending.set(String(id), { reject, resolve, timer });
+      try {
+        send({ jsonrpc: "2.0", id, method, params });
+      } catch (error) {
+        clearTimeout(timer);
+        pending.delete(String(id));
+        reject(error);
+      }
+    });
+  }
+
+  return { request, send };
+}
+
+async function stopConfiguredMcpProcess(child) {
+  if (child.stdin.writable) child.stdin.end();
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const exited = once(child, "exit", { signal: AbortSignal.timeout(5_000) });
+  if (process.platform === "win32" && child.pid !== undefined) {
+    const killed = spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    if (killed.status === 0) {
+      await exited;
+      return;
+    }
+  }
+  child.kill();
+  try {
+    await exited;
+    return;
+  } catch {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+  }
+  const forcedExit = once(child, "exit", { signal: AbortSignal.timeout(5_000) });
+  child.kill("SIGKILL");
+  await forcedExit;
 }
 
 async function requireArtifact(context, channel) {
@@ -608,6 +1035,12 @@ function assertFunnelIsolation(isolation, workspace) {
 function isPathWithin(root, candidate) {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));
   return !relative || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+}
+
+function pathKey(filePath) {
+  const normalized = path.resolve(filePath).replaceAll("\\", "/");
+  if (process.platform === "win32") return normalized.toLowerCase();
+  return normalized;
 }
 
 function normalizeCommandResult(value) {

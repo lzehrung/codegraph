@@ -413,6 +413,35 @@ describe("agent installer workflow", () => {
     expect(config.mcpServers?.codegraph?.command).toBe("codegraph");
     expect((await fsp.readdir(configDir)).filter((entry) => entry.includes(".codegraph-tmp-"))).toEqual([]);
   });
+  it("keeps an existing config path present until atomic replacement", async () => {
+    const homeDir = await mkTmpDir("cg-install-atomic-existing-");
+    const configPath = path.join(homeDir, ".cursor", "mcp.json");
+    await fsp.mkdir(path.dirname(configPath), { recursive: true });
+    await fsp.writeFile(configPath, '{"mcpServers":{"other":{"command":"other-tool"}}}\n', "utf8");
+    const originalRename = fsp.rename.bind(fsp);
+    const rename = vi.spyOn(fsp, "rename").mockImplementation(async (source, target) => {
+      if (path.resolve(String(target)) === path.resolve(configPath)) {
+        expect((await fsp.stat(configPath)).isFile()).toBe(true);
+      }
+      await originalRename(source, target);
+    });
+    try {
+      await installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true });
+    } finally {
+      rename.mockRestore();
+    }
+  });
+
+  it.runIf(process.platform !== "win32")("preserves restrictive existing config permissions", async () => {
+    const homeDir = await mkTmpDir("cg-install-mode-");
+    const configPath = path.join(homeDir, ".cursor", "mcp.json");
+    await fsp.mkdir(path.dirname(configPath), { recursive: true });
+    await fsp.writeFile(configPath, '{"mcpServers":{"other":{"command":"other-tool"}}}\n', { mode: 0o600 });
+
+    await installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true });
+
+    expect((await fsp.stat(configPath)).mode & 0o777).toBe(0o600);
+  });
 
   it("uses XDG_CONFIG_HOME for OpenCode config and installed marker on install and uninstall", async () => {
     const homeDir = await mkTmpDir("cg-install-opencode-home-");
@@ -674,7 +703,7 @@ describe("agent installer workflow", () => {
     },
   );
 
-  it("preserves a pre-existing non-Codegraph-owned mcpServers.codegraph entry on JSON install", async () => {
+  it("rejects a pre-existing non-Codegraph-owned mcpServers.codegraph entry before writing", async () => {
     const homeDir = await mkTmpDir("cg-install-json-owned-");
     const cursorConfigPath = path.join(homeDir, ".cursor", "mcp.json");
     const existingCodegraphEntry = {
@@ -683,24 +712,22 @@ describe("agent installer workflow", () => {
       args: ["serve"],
       env: { TOKEN: "keep" },
     };
+    const originalConfig = `${JSON.stringify(
+      { mcpServers: { codegraph: existingCodegraphEntry, other: { command: "other-tool" } } },
+      null,
+      2,
+    )}\n`;
     await fsp.mkdir(path.dirname(cursorConfigPath), { recursive: true });
-    await fsp.writeFile(
-      cursorConfigPath,
-      `${JSON.stringify(
-        { mcpServers: { codegraph: existingCodegraphEntry, other: { command: "other-tool" } } },
-        null,
-        2,
-      )}\n`,
-      "utf8",
+    await fsp.writeFile(cursorConfigPath, originalConfig, "utf8");
+
+    await expect(installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true })).rejects.toThrow(
+      /User-owned Codegraph MCP entry already exists/u,
     );
 
-    await installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true });
-
-    const cursorConfig = JSON.parse(await readFile(cursorConfigPath)) as {
-      mcpServers?: { codegraph?: typeof existingCodegraphEntry; other?: { command?: string } };
-    };
-    expect(cursorConfig.mcpServers?.codegraph).toEqual(existingCodegraphEntry);
-    expect(cursorConfig.mcpServers?.other?.command).toBe("other-tool");
+    await expect(readFile(cursorConfigPath)).resolves.toBe(originalConfig);
+    await expect(fsp.stat(path.join(homeDir, ".cursor", "skills", "codegraph", "SKILL.md"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("deletes a JSON config file when uninstall removes its only Codegraph entry", async () => {
@@ -776,6 +803,18 @@ describe("agent installer workflow", () => {
       await expect(installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true })).rejects.toThrow(
         normalizeExpectedPath(path.join(homeDir, ".cursor", "skills", "codegraph", "SKILL.md")),
       );
+    } finally {
+      rename.mockRestore();
+    }
+  });
+  it("retries a transient atomic replace failure", async () => {
+    const homeDir = await mkTmpDir("cg-install-transient-rename-");
+    const rename = vi.spyOn(fsp, "rename").mockRejectedValueOnce(Object.assign(new Error("busy"), { code: "EPERM" }));
+    try {
+      await expect(installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true })).resolves.toMatchObject({
+        installed: true,
+        verified: true,
+      });
     } finally {
       rename.mockRestore();
     }

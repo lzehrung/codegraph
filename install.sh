@@ -73,23 +73,155 @@ case "$INSTALLED_VERSION" in
   ''|*[!0-9A-Za-z._-]*) echo "Bundled Codegraph returned an unsafe version: $INSTALLED_VERSION" >&2; exit 1 ;;
 esac
 "$BUNDLE/node" "$BUNDLE/dist/cli.js" doctor --json >/dev/null
+
+verify_matching_standalone_provenance() {
+  "$BUNDLE/node" --input-type=module - "$BUNDLE" "$VERSION_ROOT" <<'NODE'
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+
+const [incomingRoot, installedRoot] = process.argv.slice(2);
+
+function fail(message) {
+  throw new Error(`Existing standalone installation provenance mismatch: ${message}`);
+}
+
+function sha256File(filePath) {
+  const hash = createHash("sha256");
+  const descriptor = fs.openSync(filePath, "r");
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  try {
+    for (;;) {
+      const bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, null);
+      if (!bytesRead) break;
+      hash.update(buffer.subarray(0, bytesRead));
+    }
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  return hash.digest("hex");
+}
+
+function collectFiles(root) {
+  const rootStat = fs.lstatSync(root);
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) fail(`unsafe root: ${root}`);
+  const files = [];
+  function visit(directory) {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const absolute = path.join(directory, entry.name);
+      const relative = path.relative(root, absolute).replaceAll("\\", "/");
+      if (entry.isSymbolicLink()) fail(`unsafe symlink: ${relative}`);
+      if (entry.isDirectory()) visit(absolute);
+      else if (entry.isFile()) files.push(relative);
+      else fail(`unsafe file type: ${relative}`);
+    }
+  }
+  visit(root);
+  return files.sort();
+}
+
+function readManifest(root) {
+  const manifestPath = path.join(root, "manifest.json");
+  let manifest;
+  try {
+    if (!fs.lstatSync(manifestPath).isFile()) fail(`invalid manifest: ${root}`);
+    manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  } catch {
+    fail(`invalid manifest: ${root}`);
+  }
+  if (
+    manifest.schemaVersion !== 1 ||
+    manifest.channel !== "standalone-preview" ||
+    typeof manifest.version !== "string" ||
+    !manifest.version ||
+    typeof manifest.target !== "string" ||
+    !manifest.target ||
+    typeof manifest.nativeSuffix !== "string" ||
+    !manifest.nativeSuffix ||
+    typeof manifest.nodeVersion !== "string" ||
+    !manifest.nodeVersion ||
+    (manifest.sourceRevision !== null && typeof manifest.sourceRevision !== "string") ||
+    !Array.isArray(manifest.files)
+  ) {
+    fail(`invalid manifest: ${root}`);
+  }
+  const expected = new Map();
+  for (const entry of manifest.files) {
+    if (
+      !entry ||
+      typeof entry !== "object" ||
+      typeof entry.path !== "string" ||
+      !Number.isSafeInteger(entry.size) ||
+      entry.size < 0 ||
+      typeof entry.sha256 !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(entry.sha256)
+    ) {
+      fail(`invalid file record: ${root}`);
+    }
+    const normalized = entry.path.replaceAll("\\", "/");
+    if (
+      normalized !== entry.path ||
+      !normalized ||
+      normalized.startsWith("/") ||
+      /^[A-Za-z]:\//u.test(normalized) ||
+      normalized.split("/").includes("..") ||
+      expected.has(entry.path)
+    ) {
+      fail(`invalid manifest path: ${entry.path}`);
+    }
+    expected.set(entry.path, entry);
+  }
+  for (const relative of collectFiles(root)) {
+    if (relative === "manifest.json") continue;
+    const entry = expected.get(relative);
+    if (!entry) fail(`unmanifested file: ${relative}`);
+    const absolute = path.resolve(root, relative);
+    const rootRelative = path.relative(root, absolute);
+    if (!rootRelative || rootRelative.startsWith("..") || path.isAbsolute(rootRelative)) {
+      fail(`unsafe file path: ${relative}`);
+    }
+    const stat = fs.statSync(absolute);
+    if (stat.size !== entry.size || sha256File(absolute) !== entry.sha256) {
+      fail(`file mismatch: ${relative}`);
+    }
+    expected.delete(relative);
+  }
+  if (expected.size) fail(`missing file: ${expected.keys().next().value}`);
+  return manifest;
+}
+
+const incoming = readManifest(incomingRoot);
+const installed = readManifest(installedRoot);
+for (const field of ["version", "target", "nativeSuffix", "sourceRevision", "nodeVersion"]) {
+  if (incoming[field] !== installed[field]) fail(field);
+}
+if (incoming.files.length !== installed.files.length) fail("files");
+const installedFiles = new Map(installed.files.map((entry) => [entry.path, entry]));
+for (const incomingFile of incoming.files) {
+  const installedFile = installedFiles.get(incomingFile.path);
+  if (
+    !installedFile ||
+    incomingFile.size !== installedFile.size ||
+    incomingFile.sha256 !== installedFile.sha256
+  ) {
+    fail(incomingFile.path);
+  }
+}
+NODE
+}
 VERSION_ROOT="$INSTALL_BASE/$INSTALLED_VERSION"
 
 mkdir -p "$INSTALL_BASE" "$BIN_DIR"
 if [ ! -e "$VERSION_ROOT" ]; then
   STAGING="$INSTALL_BASE/.installing-$INSTALLED_VERSION-$$"
   rm -rf "$STAGING"
-  mv "$BUNDLE" "$STAGING"
-  mv "$STAGING" "$VERSION_ROOT"
+  if ! mv "$BUNDLE" "$STAGING" || ! mv "$STAGING" "$VERSION_ROOT"; then
+    rm -rf "$STAGING"
+    echo "Unable to stage Codegraph $INSTALLED_VERSION." >&2
+    exit 1
+  fi
 else
-  [ -x "$VERSION_ROOT/node" ] && [ -f "$VERSION_ROOT/dist/cli.js" ] || {
-    echo "Existing Codegraph $INSTALLED_VERSION installation is incomplete: $VERSION_ROOT" >&2; exit 1;
-  }
-  EXISTING_VERSION=$("$VERSION_ROOT/node" "$VERSION_ROOT/dist/cli.js" version)
-  [ "$EXISTING_VERSION" = "$INSTALLED_VERSION" ] || {
-    echo "Existing Codegraph installation failed version verification: $EXISTING_VERSION" >&2; exit 1;
-  }
-  "$VERSION_ROOT/node" "$VERSION_ROOT/dist/cli.js" doctor --json >/dev/null
+  verify_matching_standalone_provenance
 fi
 LAUNCHER_TMP="$BIN_DIR/.codegraph.tmp.$$"
 cat > "$LAUNCHER_TMP" <<EOF

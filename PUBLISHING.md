@@ -75,7 +75,7 @@ Only archives that pass their matrix gate are uploaded as `standalone-smoked-*`.
 
 The publish job downloads that post-smoke artifact and attaches the same archive and installer bytes to the GitHub Release. It does not rebuild or repackage standalone assets after smoke.
 
-The bootstrap scripts preview their target and user-owned paths, confirm interactively or require explicit `-Yes`/`--yes`, verify the selected archive against `SHA256SUMS`, reject unsafe archive entries, and run bundled `version` and `doctor`. They install under a versioned root, atomically replace the launcher and manifest with rollback, retain the previous version, and record channel, target, release URL, archive hash, verification method, and previous/current versions.
+The bootstrap scripts preview their target and user-owned paths, confirm interactively or require explicit `-Yes`/`--yes`, verify the selected archive against `SHA256SUMS`, reject unsafe archive entries, and run bundled `version` and `doctor`. For a same-version root, bundled Node verifies both roots and requires exact target, native suffix, source revision, Node version, and per-file path, size, and SHA-256 manifest matches before reuse; a mismatch leaves the launcher and install manifest unchanged. They install under a versioned root, atomically replace the launcher and manifest with rollback, retain the previous version, and record channel, target, release URL, archive hash, verification method, and previous/current versions.
 
 Checksums prove integrity only after the release download is trusted. Until signing or attestation is wired into this channel, retain the `standalone-preview` label and do not describe the assets as signed.
 
