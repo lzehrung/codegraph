@@ -255,7 +255,9 @@ describe("agent search", () => {
     await searchCodegraph({ root, query: "auth", mode: "graph", limit: 5 });
 
     expect(symbolGraphSpy).not.toHaveBeenCalled();
-    expect(hybrid.results.some((result) => result.kind === "symbol" && result.label === "callCompatibility")).toBeTruthy();
+    expect(
+      hybrid.results.some((result) => result.kind === "symbol" && result.label === "callCompatibility"),
+    ).toBeTruthy();
   });
 
   it("keeps implementation results ahead of documentation phrases in hybrid mode", async () => {

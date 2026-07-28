@@ -151,6 +151,9 @@ Generated command strings quote dynamic arguments, SQL handles avoid ambiguous b
 Agent CLI commands, `goto`, `refs`, `impact`, and a whole-project `graph` or `index` run all use the incremental index path and default to disk cache.
 Hybrid search is code-first by default. Use `mode: "text"` when you specifically want documentation or prose-heavy matches to outrank implementation symbols.
 Pure path/text searches skip detailed symbol graph construction; hybrid, symbol, SQL, and graph searches keep symbol-aware ranking and neighbors.
+
+Disk cache speeds repeated text and hybrid searches. MCP reuses prepared state until it refreshes a changed repository. See [How it works](./how-it-works.md#cache-and-session-behavior) for cache mechanics and [MCP](./mcp.md#session-lifecycle) for server lifecycle.
+
 Pass shared index flags only when an agent pass must mirror a specific scan mode; see [docs/cli.md](./cli.md#agent-orientation-and-packets) for the canonical flag list.
 For the retrieval model, ranking signals, search modes, and vectorless tradeoffs, see [Vectorless search](./search.md).
 

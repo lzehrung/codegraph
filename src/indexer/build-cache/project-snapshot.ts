@@ -117,11 +117,26 @@ function compareSnapshotPath(left: string, right: string): number {
   return 0;
 }
 
+function projectIndexManifestEntries(
+  entries: ReadonlyMap<string, ManifestFileEntry>,
+): Map<string, { sig: string; gitSig?: string }> {
+  return new Map(
+    Array.from(entries, ([file, entry]) => [
+      file,
+      {
+        sig: entry.sig,
+        ...(entry.gitSig ? { gitSig: entry.gitSig } : {}),
+      },
+    ]),
+  );
+}
+
 export async function tryLoadProjectIndexSnapshot(
   projectRoot: string,
   opts: BuildOptions | undefined,
-  filesSignature: string,
+  manifestEntries: ReadonlyMap<string, ManifestFileEntry>,
 ): Promise<LoadedProjectIndexSnapshot | null> {
+  const filesSignature = projectSnapshotFilesSignature(manifestEntries);
   if ((opts?.cache ?? "off") !== "disk") return null;
   try {
     const payload = JSON.parse(await fsp.readFile(projectSnapshotPath(projectRoot, opts), "utf8")) as unknown;
@@ -155,6 +170,7 @@ export async function tryLoadProjectIndexSnapshot(
       ...(payload.projectFiles ? { projectFiles: payload.projectFiles } : {}),
       referenceCandidates: buildReferenceCandidateIndex(modules),
       ...(opts?.cache ? { cacheMode: opts.cache, cacheRootDir: cacheRoot(projectRoot, opts) } : {}),
+      manifestEntries: projectIndexManifestEntries(manifestEntries),
       projectSnapshotIdentity: createProjectSnapshotIdentity(filesSignature, opts),
     };
     return {
@@ -196,9 +212,7 @@ export async function tryLoadPersistedBloomFilters(
 }
 
 /** Light validation for bloom hydrate: snapshot version + bloom section only. */
-function persistedBloomFiltersFromSnapshot(
-  value: unknown,
-): Record<string, SerializedBloomFilter> | null {
+function persistedBloomFiltersFromSnapshot(value: unknown): Record<string, SerializedBloomFilter> | null {
   if (!value || typeof value !== "object") return null;
   const payload = value as Partial<ProjectIndexSnapshotPayload>;
   if (payload.version !== PROJECT_SNAPSHOT_VERSION) return null;

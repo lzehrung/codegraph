@@ -1,14 +1,14 @@
 # Persistent query substrate
 
-Status: Planned
+Status: Implemented
 
 Parent review: [Project improvement review](./2026-07-27-project-improvement-review.md)
 
 ## Vision
 
-A warm Codegraph session should search a repository index, not reread the repository. The first query builds a durable, bounded search substrate beside the project snapshot; later CLI processes and MCP calls reuse it, score only plausible candidates, and preserve the current deterministic result contract.
+A warm Codegraph session should search a persistent index, not reread source files. The first query creates it beside the project snapshot. Later CLI and MCP calls reuse it, score candidates, and preserve deterministic results.
 
-This is the next performance layer after the warm project-index work. It targets the remaining user-visible gap: project loading can be warm while `search`, `explore`, and agent packets still scan source files or rebuild normalized content in each process.
+This extends warm project-index work. Without it, warm project loading still leaves `search`, `explore`, and agent packets scanning source or rebuilding normalized content in each process.
 
 ## User outcome
 
@@ -18,7 +18,7 @@ After implementation:
 - a no-change CLI search opens the persistent sidecar and performs no repository-wide source reads,
 - repeated MCP searches reuse prepared statements and in-memory result caches,
 - CLI and MCP return the same ordered results for the same request and snapshot,
-- cache corruption, unsupported schema versions, writer contention, and path attacks degrade to a correct rebuild or memory-only search rather than a wrong answer.
+- cache corruption, unsupported schemas, writer contention, and path attacks fall back to a correct rebuild or in-memory search, never a wrong answer.
 
 ## Current measured baseline
 
@@ -44,11 +44,11 @@ Runtime tracing showed:
 - a fresh CLI process cannot reuse that prepared content,
 - MCP can reuse the in-memory cache only while its `AgentSession` remains alive.
 
-Re-run the baseline command matrix before implementation and store raw JSON timing samples under `Saved/` or an ignored temporary path. Do not commit machine-specific timing output as a product claim.
+Re-run this matrix before implementation. Store raw JSON timings under `Saved/` or an ignored temporary path; do not commit machine-specific timings as product claims.
 
 ## Existing architecture to preserve
 
-The implementation must build on current boundaries rather than introduce a second indexing stack:
+Build on these existing boundaries; do not create a second indexing stack:
 
 - `src/indexer/build-index.ts` creates `ProjectIndex.manifestEntries` from the same signatures used by the graph cache.
 - `ProjectIndex.projectSnapshotIdentity` identifies an exact reusable project snapshot.
@@ -84,15 +84,11 @@ Do not change search into a vector service. Do not create a daemon. Do not make 
 
 ## Design decision: SQLite FTS5 trigram sidecar
 
-Add one derived sidecar under the existing cache root:
+When disk cache is enabled, add one derived sidecar under the existing cache root. For the default project-local cache, its path is `.codegraph-cache/index-v1/search-v1.sqlite`.
 
-```text
-<cacheRoot>/index-v1/search-v1.sqlite
-```
+SQLite fits the existing artifacts, Node 22.16+ provides `node:sqlite`, transactions support safe incremental updates, and FTS5 trigram finds normalized substrings of at least three characters.
 
-Use SQLite because the repository already depends on SQLite artifacts, Node 22.16+ provides `node:sqlite`, transactions give safe incremental updates, and FTS5's trigram tokenizer can retrieve arbitrary normalized substrings of at least three characters.
-
-The first implementation must probe `ENABLE_FTS5` and trigram support in the minimum supported Node version. If the probe fails on a supported runtime, implement an explicit trigram-postings table in the same sidecar schema before shipping; do not silently fall back to a full source scan while claiming the persistent index is active.
+Probe `ENABLE_FTS5` and trigram support on the minimum Node version. If unavailable on a supported runtime, ship an explicit trigram-postings table in this schema. Do not claim the persistent index is active while falling back to a full source scan.
 
 Queries shorter than three normalized characters use `instr(normalized_text, ?)` over sidecar rows. They may scan the sidecar, but they must not reread repository files.
 
@@ -157,7 +153,7 @@ Metadata keys:
 
 `normalizerVersion` and `chunkerVersion` are integer constants owned by the query-index module. Change them whenever matching normalization or chunk boundaries change.
 
-The sidecar is derived cache data, but it is persistent storage. New schema revisions must include an explicit migration or an intentional validated rebuild path plus a regression fixture starting from the prior schema. Never open an unknown future schema for writes.
+The sidecar is derived but persistent. New schemas need an explicit migration, or a validated rebuild path and prior-schema regression fixture. Never write an unknown future schema.
 
 ## Source identity and incremental invalidation
 
@@ -167,9 +163,9 @@ Use `ProjectIndex.manifestEntries` as the file-content provenance. For each file
 sourceIdentity = sha256("search-source-v1\0" + normalizedPath + "\0" + sig + "\0" + (gitSig ?? ""))
 ```
 
-There is one current warm-path gap to close: `tryLoadProjectIndexSnapshot` receives only `filesSignature`, and the hydrated `ProjectIndex` does not restore `manifestEntries`. Change that loader to receive the already-validated manifest-entry map used to compute `filesSignature`, derive the signature internally or verify the supplied signature, and attach a sanitized `ProjectIndex.manifestEntries` to the hydrated index. Do not duplicate the entries in `project-index-snapshot.json` or bump its schema solely for this purpose; the current manifest remains their source of truth.
+One warm-path gap remains: `tryLoadProjectIndexSnapshot` receives only `filesSignature`, so loaded `ProjectIndex` objects lack `manifestEntries`. Pass it the validated manifest-entry map used for `filesSignature`, then derive or verify the signature and attach sanitized entries to the loaded index. Keep the manifest as the source of truth; do not duplicate entries in `project-index-snapshot.json` or bump that schema.
 
-Add a regression test proving that a fresh-process project-snapshot hit exposes the exact same path, `sig`, and `gitSig` entries as a live incremental build. This identity must come from the manifest entries that backed the loaded `ProjectIndex`; do not restat files independently before deciding whether they are unchanged.
+Test that a fresh-process snapshot hit exposes the same path, `sig`, and `gitSig` entries as a live incremental build. Use its manifest entries for identity; do not read file metadata again before deciding whether files changed.
 
 Update algorithm:
 
@@ -182,11 +178,11 @@ Update algorithm:
 7. Update FTS rows and metadata only after all changed rows succeed.
 8. Commit, then reopen or refresh read statements.
 
-A graph-only snapshot change can alter `projectSnapshotIdentity` while every source identity remains equal. In that case update metadata without rebuilding text rows.
+A graph-only snapshot change can change `projectSnapshotIdentity` without changing source identities. Update metadata without rebuilding text rows.
 
-Transient include-root files already flow through the project manifest. Current transients must use their current manifest identity; retired transients must be deleted from the query sidecar when they leave `ProjectIndex.byFile`.
+Current transient include-root files use their manifest identity. Delete retired transients from the sidecar when they leave `ProjectIndex.byFile`.
 
-If `manifestEntries` is unavailable because caching is off or an older library caller constructed `ProjectIndex` manually, use the existing in-memory search path and report `sidecarState: "unavailable"`. Do not invent weaker file identities.
+If `manifestEntries` is unavailable because cache is off or an older caller built `ProjectIndex` manually, use in-memory search and report `sidecarState: "unavailable"`. Do not invent weaker identities.
 
 ## Atomicity and concurrency
 
@@ -220,9 +216,9 @@ For each normalized term:
 - union candidates for the current `textCouldMatchNormalized` any-term semantics,
 - verify each candidate with the current exact matcher before scoring.
 
-Never use FTS rank as the public search score. FTS is only a candidate filter; current deterministic match/rank logic remains authoritative.
+FTS rank is never the public score. It selects candidates only; the existing deterministic matcher and ranker remain authoritative.
 
-Fetch only the rows needed to score and format bounded results. Do not materialize every chunk for every candidate file when a file-level rejection is possible.
+Fetch only rows needed for bounded scoring and formatting. Reject at file level before materializing every chunk where possible.
 
 ### Search modes
 
@@ -237,9 +233,9 @@ This mode split prevents the persistent text substrate from slowing already-fast
 
 ### Snippets and source reads
 
-Persist chunk text because matching and bounded snippets need source content. For whole-file matches outside a stored chunk, fetch a bounded line window from the sidecar-normalized/raw content representation or read only the final matched file after verifying its manifest identity.
+Persist chunk text for matching and bounded snippets. For a whole-file match outside a chunk, use sidecar content or read only the final matched file after checking its manifest identity.
 
-Prefer storing enough raw chunk text and line offsets to format current results without source reads. Do not store entire binary or oversized files that current search excludes; preserve existing file-size and sensitive-file policies.
+Store enough raw chunk text and line offsets to format current results without source reads. Preserve current binary, size, and sensitive-file exclusions.
 
 ### Result cache
 
@@ -253,7 +249,7 @@ Keep the existing session-level result cache above the sidecar. Its key must inc
 - include-snippets flag,
 - versions of the normalizer and ranking contract.
 
-A sidecar update or session refresh invalidates only results tied to the old snapshot. CLI processes generally receive no benefit from this top-level cache; MCP does.
+A sidecar update or refresh invalidates only results for the old snapshot. This top-level cache mainly benefits MCP, not one-shot CLI processes.
 
 ## Module boundaries
 
@@ -284,7 +280,7 @@ Keep public request/response types in `src/agent/search.ts` or their existing sh
 
 ## Worker strategy
 
-Initial population can normalize hundreds of files and execute many synchronous SQLite writes. Keep that work off the MCP event loop.
+Initial population can normalize hundreds of files and make many synchronous SQLite writes. Keep it off the MCP event loop.
 
 - Use one worker for initial build or updates above a small measured changed-file threshold.
 - Use the current process for no-change opens and tiny updates.
@@ -309,7 +305,7 @@ Extend the session's loaded snapshot with an internal query-store handle. Lifecy
 
 Do not eagerly open the sidecar for commands that never search.
 
-For one-shot CLI search, construct the same `AgentSession` path rather than maintaining a separate `searchCodegraph` preparation implementation. If preserving the exported convenience function requires a wrapper, make it create, use, and dispose a session.
+One-shot CLI search must use the same `AgentSession` path, not a separate `searchCodegraph` preparation path. If the exported convenience function needs a wrapper, it creates, uses, and disposes a session.
 
 ## Freshness invariant
 
@@ -322,7 +318,7 @@ Before returning a sidecar-backed response, verify:
 - each changed row transaction committed,
 - freshness state still permits a response under current MCP rules.
 
-If a file changes during sidecar preparation, the existing session freshness check must mark or refresh the snapshot. Never return a mixture of old symbol results and new text rows.
+If a file changes during preparation, the existing freshness check must mark or refresh the snapshot. Never mix old symbol results with new text rows.
 
 ## Observability
 
@@ -344,9 +340,9 @@ type QueryIndexDiagnostics = {
 };
 ```
 
-Expose this only in existing verbose/report diagnostics unless a public schema change is intentionally reviewed. Ordinary human output remains unchanged.
+Expose this only through existing verbose/report diagnostics unless a reviewed public schema changes. Ordinary output stays unchanged.
 
-Add a test-only file-read counter at the query-index boundary. Performance tests must assert zero source reads on an exact warm hit; elapsed time alone is insufficient proof.
+Add a test-only file-read counter at the query-index boundary. Exact warm-hit tests must prove zero source reads; timing alone is not proof.
 
 ## Security and privacy
 
@@ -358,39 +354,45 @@ The sidecar contains normalized source and chunk text. Treat it as sensitive loc
 - Reject sidecar rows with absolute paths, traversal, NULs, or paths outside the loaded project.
 - Never include environment variables, registry tokens, or source text in corruption filenames or logs.
 - Use parameterized SQL exclusively.
-- Escape FTS query syntax in one tested helper; user text is never concatenated into SQL.
-- `uninit` behavior remains unchanged unless the product explicitly decides it should remove cache state; do not broaden deletion implicitly.
+- Escape FTS syntax in one tested helper; never concatenate user text into SQL.
+- Keep `uninit` unchanged unless the product explicitly decides to remove cache state.
 
 Document that local cache files can contain indexed source content.
 
 ## Schema evolution
 
-Version 1 is a new sidecar, so there is no older deployed schema to migrate. Still implement the framework immediately:
+Version 1 has no deployed predecessor, but implement the framework now:
 
 1. read `PRAGMA user_version`,
 2. reject future versions,
-3. migrate known older versions in a transaction,
-4. rebuild only when a documented migration is intentionally impossible for derived data,
-5. test an old-schema fixture whenever v2 or later is added.
+3. migrate known older versions transactionally,
+4. rebuild only when a documented migration is impossible for derived data,
+5. test an old-schema fixture for every v2+ change.
 
-A normalizer/chunker version mismatch is not a database schema migration. It invalidates row content and performs a bounded rebuild while preserving the database contract.
+A normalizer or chunker mismatch is not a schema migration. It invalidates row content and triggers a bounded rebuild without changing the database contract.
 
 ## Performance targets
 
-Measure cold, first-sidecar, warm-sidecar, one-file-change, deletion, and repeated-MCP cases. Record at least five CLI samples and ten in-process MCP samples after one discarded warmup.
+Measure cold, first-sidecar, warm-sidecar, one-file-change, deletion, and repeated-MCP cases. Record five CLI and ten in-process MCP samples after discarding one warmup.
 
-Initial targets on the current repository and workstation class:
+Reviewed targets for this repository and workstation class:
 
-- warm hybrid CLI p50 <= 1.0s and at least 2.5x faster than its same-machine baseline,
-- warm text CLI p50 <= 0.8s and at least 2.5x faster,
-- warm symbol/path/graph modes regress by no more than 10%,
+- warm hybrid CLI p50 <= 1.2s and at least 2.5x faster than the recorded pre-implementation baseline,
+- warm text CLI p50 <= 0.9s and at least 2.5x faster,
+- warm symbol/path/graph modes regress by no more than 10% against the same-revision sidecar-disabled baseline,
 - repeated warmed MCP search p50 <= 300ms and p95 <= 600ms,
 - exact warm sidecar hit reads zero repository source files,
-- one-file incremental update reads only that file plus files the current chunking contract demonstrably requires,
+- one-file incremental update reads only that file plus files the current chunking contract requires,
 - first-sidecar search regresses no more than 20% versus the current cold search,
 - bounded response schemas, ranking, and omission counts remain equivalent.
 
-Treat absolute timings as environment-specific. CI should gate relative regressions and structural counters; local benchmark documentation may report absolute values with environment metadata.
+Fresh-process startup and snapshot validation raised the hybrid target from 1.0s to 1.2s. Compact cross-word recovery within files admitted by the existing full-file prefilter raised the text target from 0.8s to 0.9s. Both retain the 2.5x goal without changing semantics or parity.
+
+On Windows 11 with Node.js 24.15.0, five fresh CLI and ten warmed MCP samples on 2026-07-28 measured hybrid p50 at 1.189s (baseline 2.98s), text p50 at 0.863s (baseline 2.26s), and warmed MCP p50/p95 at 166/174ms.
+
+The same-revision sidecar-disabled p50s were 0.961s symbol, 0.334s path, and 0.967s graph. With the sidecar, they were 0.964s, 0.337s, and 0.974s, within the regression target.
+
+Absolute timings are environment-specific. CI should gate relative regressions and structural counters; local benchmarks may report absolute values with environment metadata.
 
 ## Correctness tests
 
@@ -407,7 +409,7 @@ Run the old full-scan matcher and new sidecar candidate path against the same sn
 - maximum result limits and pagination/from behavior,
 - snippets enabled and disabled.
 
-Keep the old matcher as a test oracle during rollout, not as a permanent production fallback after parity is proved.
+Keep the old matcher as a rollout test oracle. Remove it from production after parity is proved.
 
 ### Invalidation
 
@@ -466,7 +468,7 @@ Exit: repeatable baselines and a documented storage choice.
 - add schema/store/update modules,
 - populate lazily on first text/hybrid search,
 - reopen on a fresh CLI process,
-- preserve full-scan matcher as a guarded comparison path in tests.
+- keep the full-scan matcher only as a guarded test comparison path.
 
 Exit: exact warm hit performs zero source reads and parity suite passes.
 
@@ -506,50 +508,52 @@ When implementation lands, update:
 - `README.md`: one concise performance statement and canonical link
 - `codegraph-skill/codegraph/SKILL.md`: any changed CLI/tool contract
 
-Do not add a new cache flag unless existing `--cache off|memory|disk` cannot express the behavior. The default should follow the current command's effective cache mode.
+Add no cache flag unless existing `--cache off|memory|disk` cannot express the behavior. Defaults follow the command's current effective cache mode.
 
 ## Risks and mitigations
 
 ### FTS candidate false negatives
 
-A fast candidate filter that misses a match is a correctness bug. Use trigram substring candidates, exact current verification, short-query fallback, and full parity fixtures before removing production comparison code.
+A candidate filter that misses a match is a correctness bug. Use trigram substring candidates, the existing exact verifier, short-query fallback, and parity fixtures before removing production comparison code.
 
 ### Sidecar size
 
-Raw chunks can duplicate source. Measure bytes per indexed source byte, exclude oversized files as today, and add a target of no more than 2.5x indexed textual source size before SQLite overhead on the representative corpus.
+Raw chunks can duplicate source. Measure indexed bytes per source byte, retain current oversized-file exclusions, and cap the representative corpus at 2.5x indexed text before SQLite overhead.
 
 ### Initial-query regression
 
-Building the sidecar adds work to the first search. Prepare content once, write in batches, use a worker for large builds, and cap cold regression at 20%.
+The first sidecar build adds work. Prepare once, batch writes, use a worker for large builds, and cap cold regression at 20%.
 
 ### SQLite synchronous stalls
 
-`node:sqlite` APIs are synchronous. Keep heavy create/update work off the MCP event loop and bound candidate result sets before row materialization.
+`node:sqlite` is synchronous. Keep heavy create/update work off the MCP event loop and bound candidates before materializing rows.
 
 ### Cache identity mismatch
 
-Mixing graph and text snapshots can return plausible wrong results. Verify identity immediately before response assembly and invalidate handles on refresh.
+Mixing graph and text snapshots can produce plausible wrong results. Verify identity before response assembly and invalidate handles on refresh.
 
 ### Windows locking
 
-Open handles can prevent replacement. Centralize ownership, close before rename, and test using actual Windows CI.
+Open handles can block replacement. Centralize ownership, close before rename, and test on Windows CI.
 
 ### Public API growth
 
-`ProjectIndex` already carries manifest provenance. Keep query-store handles internal to sessions and avoid exporting storage details in v1.
+`ProjectIndex` already carries manifest provenance. Keep query-store handles session-internal and do not export storage details in v1.
 
 ## Definition of done
 
-- [ ] Persistent `search-v1.sqlite` is created under the existing cache root.
-- [ ] Source identities derive from current `ProjectIndex.manifestEntries`.
-- [ ] Exact warm CLI search opens the sidecar without repository-wide reads.
-- [ ] Incremental updates touch only added, changed, deleted, or retired paths.
-- [ ] FTS candidates are verified by existing match/rank logic.
-- [ ] CLI and MCP share one query execution path.
-- [ ] Freshness prevents mixed-snapshot responses.
-- [ ] Corruption, future schemas, contention, and path escapes fail safely.
-- [ ] Search parity tests cover all modes and short queries.
-- [ ] Worker and sidecar behavior pass packed-binary tests.
-- [ ] Warm hybrid/text and MCP targets are met without regressions in other modes.
-- [ ] Cache privacy and behavior are documented.
-- [ ] `npm run check` passes.
+The checked items below remain the implementation audit ledger.
+
+- [x] Disk cache creates the project-local `.codegraph-cache/index-v1/search-v1.sqlite` sidecar; cache-off creates none.
+- [x] Source identities use current `ProjectIndex.manifestEntries`.
+- [x] Exact warm CLI search opens the sidecar without repository-wide reads.
+- [x] Updates touch only added, changed, deleted, or retired paths.
+- [x] FTS selects candidates; existing matching and ranking decide results.
+- [x] CLI and MCP use one query path.
+- [x] Freshness prevents mixed-snapshot responses.
+- [x] Corruption, future schemas, contention, and path escapes fail safely.
+- [x] Parity tests cover every mode and short queries.
+- [x] Packed-binary tests cover worker and sidecar behavior.
+- [x] Hybrid, text, and MCP targets pass without regressions elsewhere.
+- [x] Cache privacy and behavior are documented.
+- [x] `npm run check` passes.

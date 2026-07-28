@@ -11,9 +11,11 @@ export function getBundlePaths(rootDir = defaultRootDir) {
   return {
     rootDir,
     entryPoint: path.join(rootDir, "dist", "cliBootstrap.js"),
+    workerEntryPoint: path.join(rootDir, "dist", "agent", "query-index", "queryIndexWorker.js"),
     unbundledCli: path.join(rootDir, "dist", "cli.js"),
     outdir: path.join(rootDir, "dist", "bin"),
     bundledEntry: path.join(rootDir, "dist", "bin", "cli.js"),
+    bundledWorker: path.join(rootDir, "dist", "bin", "queryIndexWorker.js"),
   };
 }
 
@@ -32,18 +34,21 @@ export async function bundleCli({ rootDir = defaultRootDir, logLevel = "warning"
   if (!fs.existsSync(paths.entryPoint)) {
     throw new Error(`Missing CLI build input: ${paths.entryPoint}. Run tsc before bundling.`);
   }
+  if (!fs.existsSync(paths.workerEntryPoint)) {
+    throw new Error(`Missing query worker build input: ${paths.workerEntryPoint}. Run tsc before bundling.`);
+  }
 
   fs.rmSync(paths.outdir, { recursive: true, force: true });
   fs.mkdirSync(paths.outdir, { recursive: true });
 
   const result = await esbuild.build({
-    entryPoints: [paths.entryPoint],
+    entryPoints: { cli: paths.entryPoint, queryIndexWorker: paths.workerEntryPoint },
     bundle: true,
     platform: "node",
     format: "esm",
     splitting: true,
     outdir: paths.outdir,
-    entryNames: "cli",
+    entryNames: "[name]",
     external: ["node:*", "@lzehrung/codegraph-native"],
     banner: {
       js: createRequireBanner(),
@@ -55,6 +60,9 @@ export async function bundleCli({ rootDir = defaultRootDir, logLevel = "warning"
 
   if (!fs.existsSync(paths.bundledEntry)) {
     throw new Error(`Bundled CLI entry was not written to ${paths.bundledEntry}`);
+  }
+  if (!fs.existsSync(paths.bundledWorker)) {
+    throw new Error(`Bundled query worker was not written to ${paths.bundledWorker}`);
   }
 
   return {
@@ -100,20 +108,16 @@ export async function verifyBundledCli({ rootDir = defaultRootDir } = {}) {
     fs.mkdirSync(path.join(fixtureRoot, "src"), { recursive: true });
     fs.writeFileSync(path.join(fixtureRoot, "src", "index.ts"), "export const value = 1;\n");
 
-    const bundledOrient = runNode(
-      bundledEntry,
-      ["orient", "--root", fixtureRoot, "--budget", "small", "--json"],
-      { cwd: rootDir },
-    );
+    const bundledOrient = runNode(bundledEntry, ["orient", "--root", fixtureRoot, "--budget", "small", "--json"], {
+      cwd: rootDir,
+    });
     if (bundledOrient.status !== 0) {
       throw new Error(`Bundled orient smoke failed:\n${bundledOrient.stderr || bundledOrient.stdout}`);
     }
 
-    const unbundledOrient = runNode(
-      unbundledCli,
-      ["orient", "--root", fixtureRoot, "--budget", "small", "--json"],
-      { cwd: rootDir },
-    );
+    const unbundledOrient = runNode(unbundledCli, ["orient", "--root", fixtureRoot, "--budget", "small", "--json"], {
+      cwd: rootDir,
+    });
     if (unbundledOrient.status !== 0) {
       throw new Error(`Unbundled orient smoke failed:\n${unbundledOrient.stderr || unbundledOrient.stdout}`);
     }

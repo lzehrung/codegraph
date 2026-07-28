@@ -107,11 +107,11 @@ export class SqliteStatement {
 export class SqliteDatabase {
   private readonly db: ReadonlyAuthorizerDatabase;
 
-  constructor(filePath: PathLike, options?: { readonly?: boolean }) {
+  constructor(filePath: PathLike, options?: { readonly?: boolean; timeout?: number }) {
     const sqlite = loadNodeSqlite();
     this.db = new sqlite.DatabaseSync(filePath, {
       readOnly: options?.readonly,
-      timeout: 5000,
+      timeout: options?.timeout ?? 5000,
     });
     if (options?.readonly) {
       const { constants } = sqlite;

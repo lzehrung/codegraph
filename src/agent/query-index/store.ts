@@ -1,0 +1,318 @@
+import type { PreparedQueryIndexFile, QueryTextChunk } from "./content.js";
+import { SqliteDatabase } from "../../sqlite-driver.js";
+import { brotliDecompressSync } from "node:zlib";
+import {
+  ensureQueryIndexSchema,
+  expectedQueryIndexVersionMetadata,
+  readQueryIndexMetadata,
+  type QueryIndexMetadata,
+} from "./schema.js";
+
+export const QUERY_INDEX_BUSY_TIMEOUT_MS = 250;
+
+export type StoredQueryIndexChunk = QueryTextChunk & {
+  path: string;
+};
+
+export class QueryIndexStaleError extends Error {
+  constructor() {
+    super("Query index identity does not match the loaded project snapshot.");
+    this.name = "QueryIndexStaleError";
+  }
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== "object" || !("code" in error)) return undefined;
+  const code = error.code;
+  return typeof code === "string" ? code : undefined;
+}
+
+export function isSqliteBusyError(error: unknown): boolean {
+  const code = errorCode(error);
+  if (code === "SQLITE_BUSY" || code === "SQLITE_LOCKED") return true;
+  return error instanceof Error && /database is (?:busy|locked)/iu.test(error.message);
+}
+
+export function isSqliteCorruptionError(error: unknown): boolean {
+  const code = errorCode(error);
+  if (code === "SQLITE_CORRUPT" || code === "SQLITE_NOTADB") return true;
+  return (
+    error instanceof Error && /(?:malformed|not a database|database disk image is malformed)/iu.test(error.message)
+  );
+}
+
+function numericId(value: number | bigint): number {
+  const numeric = typeof value === "bigint" ? Number(value) : value;
+  if (!Number.isSafeInteger(numeric) || numeric <= 0) throw new Error(`Invalid SQLite row id: ${String(value)}`);
+  return numeric;
+}
+
+function chunkFromRow(row: Record<string, unknown>): QueryTextChunk | null {
+  const ordinal = row.ordinal;
+  const kind = row.kind;
+  const name = row.name;
+  const text = row.text;
+  const normalizedText = row.normalized_text;
+  const startLine = row.start_line;
+  const endLine = row.end_line;
+  if (
+    typeof ordinal !== "number" ||
+    typeof kind !== "string" ||
+    (name !== null && typeof name !== "string") ||
+    typeof text !== "string" ||
+    typeof normalizedText !== "string" ||
+    typeof startLine !== "number" ||
+    typeof endLine !== "number"
+  ) {
+    return null;
+  }
+  return {
+    ordinal,
+    kind,
+    ...(typeof name === "string" ? { name } : {}),
+    text,
+    normalizedText,
+    startLine,
+    endLine,
+  };
+}
+
+function storedCandidateChunkFromRow(row: Record<string, unknown>): StoredQueryIndexChunk | null {
+  if (typeof row.path !== "string" || !(row.text instanceof Uint8Array)) return null;
+  try {
+    const text = brotliDecompressSync(row.text).toString("utf8");
+    const chunk = chunkFromRow({ ...row, text });
+    return chunk ? { ...chunk, path: row.path } : null;
+  } catch {
+    return null;
+  }
+}
+
+export class QueryIndexStore {
+  private readonly db: SqliteDatabase;
+  private closed = false;
+  private normalizedFiles: Map<string, string> | undefined;
+
+  constructor(readonly filePath: string) {
+    const db = new SqliteDatabase(filePath, { timeout: QUERY_INDEX_BUSY_TIMEOUT_MS });
+    this.db = db;
+    try {
+      ensureQueryIndexSchema(db);
+      db.pragma("journal_mode = WAL");
+      db.pragma("foreign_keys = ON");
+    } catch (error) {
+      db.close();
+      throw error;
+    }
+  }
+
+  metadata(): Partial<QueryIndexMetadata> {
+    return readQueryIndexMetadata(this.db);
+  }
+
+  assertReadable(): void {
+    this.db.prepare("SELECT count(*) AS count FROM chunk_search").get();
+  }
+
+  sourceIdentities(): Map<string, string> {
+    const rows = this.db.prepare("SELECT path, source_identity FROM files ORDER BY path").all() as Array<{
+      path?: unknown;
+      source_identity?: unknown;
+    }>;
+    const identities = new Map<string, string>();
+    for (const row of rows) {
+      if (typeof row.path === "string" && typeof row.source_identity === "string") {
+        identities.set(row.path, row.source_identity);
+      }
+    }
+    return identities;
+  }
+  eligibleFilePaths(normalizedTerms: readonly string[]): string[] {
+    if (!normalizedTerms.length) return [];
+    if (!this.normalizedFiles) {
+      const rows = this.db.prepare("SELECT path, normalized_text FROM files ORDER BY path").all() as Array<{
+        path?: unknown;
+        normalized_text?: unknown;
+      }>;
+      const normalizedFiles = new Map<string, string>();
+      for (const row of rows) {
+        if (typeof row.path !== "string" || !(row.normalized_text instanceof Uint8Array)) {
+          throw new Error("Invalid query index file normalization.");
+        }
+        normalizedFiles.set(row.path, brotliDecompressSync(row.normalized_text).toString("utf8"));
+      }
+      this.normalizedFiles = normalizedFiles;
+    }
+    return [...this.normalizedFiles]
+      .filter(([, normalizedText]) => normalizedTerms.some((term) => normalizedText.includes(term)))
+      .map(([file]) => file);
+  }
+
+  replaceFiles(
+    files: readonly PreparedQueryIndexFile[],
+    deletedPaths: readonly string[],
+    metadata: QueryIndexMetadata,
+  ): "committed" | "already-current" {
+    this.db.exec("BEGIN IMMEDIATE;");
+    try {
+      const current = readQueryIndexMetadata(this.db);
+      const expectedVersions = expectedQueryIndexVersionMetadata();
+      if (
+        current.projectSnapshotIdentity === metadata.projectSnapshotIdentity &&
+        current.projectRootIdentity === metadata.projectRootIdentity &&
+        current.schemaVersion === expectedVersions.schemaVersion &&
+        current.normalizerVersion === expectedVersions.normalizerVersion &&
+        current.chunkerVersion === expectedVersions.chunkerVersion
+      ) {
+        this.db.exec("ROLLBACK;");
+        return "already-current";
+      }
+
+      const deleteFile = this.db.prepare("DELETE FROM files WHERE path = ?");
+      for (const relativePath of deletedPaths) deleteFile.run(relativePath);
+      for (const file of files) deleteFile.run(file.path);
+
+      const insertFile = this.db.prepare(`
+        INSERT INTO files(path, source_identity, surface, language, normalized_text, byte_length, line_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `);
+      const insertChunk = this.db.prepare(`
+        INSERT INTO chunks(file_id, ordinal, kind, name, start_line, end_line, text, normalized_text)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const file of files) {
+        const inserted = insertFile.run(
+          file.path,
+          file.sourceIdentity,
+          file.surface,
+          file.language ?? null,
+          file.normalizedText,
+          file.byteLength,
+          file.lineCount,
+        );
+        const fileId = numericId(inserted.lastInsertRowid);
+        for (const chunk of file.chunks) {
+          insertChunk.run(
+            fileId,
+            chunk.ordinal,
+            chunk.kind,
+            chunk.name ?? null,
+            chunk.startLine,
+            chunk.endLine,
+            chunk.text,
+            chunk.normalizedText,
+          );
+        }
+      }
+
+      const upsertMetadata = this.db.prepare(`
+        INSERT INTO metadata(key, value) VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+      `);
+      for (const [key, value] of Object.entries(metadata)) upsertMetadata.run(key, value);
+      this.db.exec("COMMIT;");
+      this.normalizedFiles = undefined;
+      return "committed";
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK;");
+      } catch {
+        // Preserve the original write failure.
+      }
+      throw error;
+    }
+  }
+
+  withReadSnapshot<T>(projectSnapshotIdentity: string, read: () => T): T {
+    this.db.exec("BEGIN;");
+    try {
+      if (this.metadata().projectSnapshotIdentity !== projectSnapshotIdentity) throw new QueryIndexStaleError();
+      const result = read();
+      if (this.metadata().projectSnapshotIdentity !== projectSnapshotIdentity) throw new QueryIndexStaleError();
+      this.db.exec("COMMIT;");
+      return result;
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK;");
+      } catch {
+        // Preserve the original read failure.
+      }
+      throw error;
+    }
+  }
+
+  ftsChunkCandidates(query: string): StoredQueryIndexChunk[] {
+    const rows = this.db
+      .prepare(
+        `
+        SELECT files.path AS path, chunks.ordinal, chunks.kind, chunks.name,
+               chunks.start_line, chunks.end_line, chunks.text, chunks.normalized_text
+        FROM chunk_search
+        JOIN chunks ON chunks.chunk_id = chunk_search.rowid
+        JOIN files ON files.file_id = chunks.file_id
+        WHERE chunk_search MATCH ?
+        ORDER BY files.path, chunks.ordinal
+      `,
+      )
+      .all(query) as Array<Record<string, unknown>>;
+    return rows.flatMap((row) => {
+      const chunk = storedCandidateChunkFromRow(row);
+      return chunk ? [chunk] : [];
+    });
+  }
+
+  substringChunkCandidates(query: string): StoredQueryIndexChunk[] {
+    const rows = this.db
+      .prepare(
+        `
+        SELECT files.path AS path, chunks.ordinal, chunks.kind, chunks.name,
+               chunks.start_line, chunks.end_line, chunks.text, chunks.normalized_text
+        FROM chunks
+        JOIN files ON files.file_id = chunks.file_id
+        WHERE instr(chunks.normalized_text, ?) > 0
+        ORDER BY files.path, chunks.ordinal
+      `,
+      )
+      .all(query) as Array<Record<string, unknown>>;
+    return rows.flatMap((row) => {
+      const chunk = storedCandidateChunkFromRow(row);
+      return chunk ? [chunk] : [];
+    });
+  }
+  compactChunkCandidates(query: string, paths: readonly string[]): StoredQueryIndexChunk[] {
+    const candidates: StoredQueryIndexChunk[] = [];
+    const batchSize = 500;
+    for (let offset = 0; offset < paths.length; offset += batchSize) {
+      const batch = paths.slice(offset, offset + batchSize);
+      const placeholders = batch.map(() => "?").join(", ");
+      const rows = this.db
+        .prepare(
+          `
+          SELECT files.path AS path, chunks.ordinal, chunks.kind, chunks.name,
+                 chunks.start_line, chunks.end_line, chunks.text, chunks.normalized_text
+          FROM chunks
+          JOIN files ON files.file_id = chunks.file_id
+          WHERE files.path IN (${placeholders})
+            AND instr(replace(chunks.normalized_text, ' ', ''), ?) > 0
+          ORDER BY files.path, chunks.ordinal
+        `,
+        )
+        .all(...batch, query) as Array<Record<string, unknown>>;
+      for (const row of rows) {
+        const chunk = storedCandidateChunkFromRow(row);
+        if (chunk) candidates.push(chunk);
+      }
+    }
+    return candidates;
+  }
+
+  checkpoint(): void {
+    this.db.pragma("wal_checkpoint(TRUNCATE)");
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.db.close();
+  }
+}

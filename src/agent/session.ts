@@ -13,6 +13,7 @@ import { normalizePath, toProjectDisplayPath } from "../util/paths.js";
 import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions, mergeGraphOptions } from "../config.js";
 import { createAgentFileLookup } from "./normalize.js";
 import { summarizeAnalysis, type AnalysisSummary } from "../analysisSummary.js";
+import { runSessionInvalidationHooks } from "./sessionLifecycle.js";
 
 export type AgentProjectSnapshot = {
   root: string;
@@ -229,6 +230,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
   let cachedFileSignatures: Map<string, AgentFileSignature> | undefined;
 
   const invalidate = (): void => {
+    runSessionInvalidationHooks(session);
     cachedFilePlan = undefined;
     cachedFiles = undefined;
     cachedBase = undefined;
@@ -422,7 +424,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     return { state: "refreshed", changedFiles };
   };
 
-  return {
+  const session: AgentSession = {
     root: options.root,
     discoverFiles: () => listAgentSessionFiles(options),
     listFiles: loadFiles,
@@ -430,4 +432,5 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     checkFreshness,
     invalidate,
   };
+  return session;
 }

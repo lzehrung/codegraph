@@ -619,6 +619,10 @@ async function buildIndexFromFileListShared(
           fileSignatures.set(file, sigInfo);
         }
         manifestEntriesForIndex.set(file, toProjectIndexManifestEntry(sigInfo));
+        if (manifestEntries) {
+          const initialManifestEntry = toManifestFileEntry({ ...sigInfo, edges: [] });
+          if (initialManifestEntry) manifestEntries.set(file, initialManifestEntry);
+        }
         const cacheSig = cacheEnabled ? await cacheSignatureForFile(file, sigInfo, opts) : sigInfo.cacheSig;
         let mod: ModuleIndex | null = cacheEnabled ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report) : null;
         if (mod && fileReport) {
@@ -1156,15 +1160,14 @@ export async function buildProjectIndexIncremental(
 
     const reuseUnchangedSnapshot = async (): Promise<ProjectIndex | null> => {
       if (changedFiles.size || deletedTrackedFiles.size || manifestRequiresSanitization) return null;
-      const filesSignature = projectSnapshotFilesSignature(new Map(Object.entries(trackedEntries)));
-      const snapshotLoad = await tryLoadProjectIndexSnapshot(projectRoot, opts, filesSignature);
+      const manifestEntryMap = new Map(Object.entries(trackedEntries));
+      const snapshotLoad = await tryLoadProjectIndexSnapshot(projectRoot, opts, manifestEntryMap);
       if (!snapshotLoad) return null;
 
       const snapshot = snapshotLoad.index;
       snapshot.projectFiles ??= await discoverProjectFiles(projectRoot, {
         ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
       });
-      snapshot.manifestEntries = projectIndexManifestEntries(Object.entries(trackedEntries));
       if (opts?.cache) {
         snapshot.cacheMode = opts.cache;
         snapshot.cacheRootDir = cacheRoot(projectRoot, opts);
