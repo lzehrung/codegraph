@@ -547,6 +547,25 @@ describe("persistent query index", () => {
     );
   });
 
+  it("rebuilds a sidecar containing a traversing persisted path", async () => {
+    const root = await createRepo();
+    const initialSession = createSession(root);
+    await search(initialSession, root, "validate user");
+    const initialSnapshot = await initialSession.loadProject();
+    const sidecar = resolveQueryIndexPaths(initialSnapshot.index.cacheRootDir!).sidecar;
+    disposeSessionQueryIndex(initialSession);
+
+    const corrupted = new SqliteDatabase(sidecar);
+    corrupted.prepare("UPDATE files SET path = ? WHERE path = ?").run("src/..", "src/auth.ts");
+    corrupted.close();
+
+    const recoveredSession = createSession(root);
+    const response = await search(recoveredSession, root, "validate user");
+    const recoveredSnapshot = await recoveredSession.loadProject();
+    expect(recoveredSnapshot.buildReport?.queryIndex?.sidecarState).toBe("rebuilt-corrupt");
+    expect(response.results.some((result) => result.file === "src/auth.ts")).toBe(true);
+  });
+
   it("refuses a sidecar symlink that escapes the cache directory", async () => {
     const root = await createRepo();
     const initialSession = createSession(root);
