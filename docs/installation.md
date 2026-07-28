@@ -35,11 +35,13 @@ The `prepare` script reuses an existing `dist/` build during global installs bec
 
 The `codegraph` bin points at the split ESM bundle under `dist/bin/`. Unbundled `dist/` modules remain available for tests and library imports.
 
-The published bin enables Node's module compile cache under the per-user codegraph cache root (`%LOCALAPPDATA%\codegraph\compile-cache` on Windows; `$XDG_CACHE_HOME/codegraph/compile-cache` or `~/.cache/codegraph/compile-cache` elsewhere). That directory is outside the project tree, so it never enters discovery. Deleting it changes startup timing only, never command output.
+## Local caches
 
-With disk caching enabled, each project can also contain `.codegraph-cache/index-v1/search-v1.sqlite`. It stores normalized source and chunk text for repeated text and hybrid search, follows the existing project cache boundary, and is not created by cache-off runs.
+The published bin stores Node's module compile cache outside the project root: `%LOCALAPPDATA%\codegraph\compile-cache` on Windows, or `$XDG_CACHE_HOME/codegraph/compile-cache` (falling back to `~/.cache/codegraph/compile-cache`) elsewhere. You can remove it at any time; the next startup may be slower, but command output is unchanged.
 
-Treat that project-local cache as sensitive derived source data. Stop Codegraph processes before deleting `.codegraph-cache`; `uninit` does not broaden its deletion behavior to remove caches implicitly.
+With disk caching enabled, Codegraph creates `.codegraph-cache/index-v1/search-v1.sqlite` in each project. It contains normalized source and chunk text, so treat it as sensitive derived source data. Cache-off runs create no sidecar.
+
+To remove it safely, stop Codegraph processes and delete `.codegraph-cache`. `uninit` leaves caches alone. [How it works](./how-it-works.md#cache-and-session-behavior) explains the cache mechanics.
 
 ## Option 2: Install from the `@lzehrung` registry
 
@@ -55,9 +57,7 @@ Install the main package:
 npm install @lzehrung/codegraph
 ```
 
-That is the simplest published path for the native Tree-sitter runtime. `@lzehrung/codegraph` depends on `@lzehrung/codegraph-native` optionally, and that package resolves the matching native artifact automatically when a published binary exists for the current platform.
-
-There is no separate grammar package to install. The published path is native-first: `@lzehrung/codegraph` optionally resolves `@lzehrung/codegraph-native` for the current platform, and unsupported hosts degrade to reduced graph-only mode.
+The published path is native-first: `@lzehrung/codegraph` optionally resolves the matching native artifact automatically when a published binary exists for the current platform. Unsupported hosts use reduced graph-only mode. No separate grammar package is required.
 
 ## Option 3: Install from a release tarball
 

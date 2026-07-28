@@ -36,10 +36,11 @@ export function resolveQueryIndexSourcePath(projectRoot: string, relativePath: s
     throw new Error(`Invalid query index relative path: ${relativePath}`);
   }
   const normalized = normalizePath(relativePath);
-  if (!normalized || normalized === "." || normalized.startsWith("../") || normalized.includes("/../")) {
+  const segments = normalized.split("/");
+  if (!normalized || normalized === "." || isAbsoluteFilePath(normalized) || segments.includes("..")) {
     throw new Error(`Invalid query index relative path: ${relativePath}`);
   }
-  return assertFilePathWithinRoot(projectRoot, path.resolve(projectRoot, ...normalized.split("/")), "Query index row");
+  return assertFilePathWithinRoot(projectRoot, path.resolve(projectRoot, ...segments), "Query index row");
 }
 
 export function createProjectRootIdentity(projectRoot: string): string {

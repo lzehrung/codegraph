@@ -99,13 +99,15 @@ Caching avoids repeating work; it does not change extraction or resolution seman
 
 An incremental graph starts from a compatible manifest, keeps edges for unchanged files, and replaces edges for changed files. Changes to file signatures, discovery configuration, graph options, cache schema, or relevant build options invalidate the affected reuse boundary. Corrupt or unsupported cache data is rebuilt rather than treated as current analysis.
 
-Disk-backed text and hybrid search also maintain `search-v1.sqlite` beside the existing manifest under `.codegraph-cache/index-v1`. Its file and chunk rows derive from the loaded snapshot's manifest signatures; SQLite FTS5 only selects candidates, while the existing exact matcher and ranker remain authoritative.
+Disk-backed text and hybrid search lazily maintain `.codegraph-cache/index-v1/search-v1.sqlite`. Its file and chunk rows come from the loaded snapshot's manifest signatures. SQLite FTS5 selects candidates only; the existing exact matcher and ranker remain authoritative.
 
-The sidecar is populated lazily and updates only added, changed, deleted, or retired files through a bounded worker pool. Readers verify the project snapshot identity inside one SQLite transaction; writer contention, unavailable storage, future schemas, or corruption fall back to in-memory source scanning instead of returning mixed-snapshot results.
+A bounded worker pool updates added, changed, deleted, and retired files. One SQLite transaction commits the affected rows and metadata.
 
-`search-v1.sqlite` contains normalized source and chunk text, so treat the project cache as sensitive local derived data. Cache-off does not create it; deleting `.codegraph-cache` after Codegraph processes stop removes it with the other project-local caches.
+Readers use the sidecar only when its project snapshot identity matches the loaded snapshot. On a mismatch, Codegraph updates and revalidates the sidecar; it falls back to in-memory source scanning only if that update cannot be used. Writer contention, unavailable storage, future schemas, or corruption also use in-memory source scanning. Codegraph never returns mixed-snapshot results.
 
-Long-lived agent and review sessions retain compatible index state so repeated questions avoid the cold build. They check relevant file, configuration, and project freshness signals before reuse and refresh when drift is detected. Clear the disk cache or run cache-off when you specifically need a cold rebuild.
+The sidecar stores normalized source and chunk text. [Installation](./installation.md#local-caches) covers sensitive-data handling, cache-off behavior, and safe deletion.
+
+Long-lived agent and review sessions reuse only compatible index state. They refresh it when relevant file, configuration, or project signals drift.
 
 ## Performance choices
 

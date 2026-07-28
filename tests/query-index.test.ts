@@ -541,6 +541,7 @@ describe("persistent query index", () => {
   it("rejects absolute and traversing paths from persisted rows", async () => {
     const root = await createRepo();
     expect(() => resolveQueryIndexSourcePath(root, "../outside.ts")).toThrow(/Invalid query index relative path/u);
+    expect(() => resolveQueryIndexSourcePath(root, "src/..")).toThrow(/Invalid query index relative path/u);
     expect(() => resolveQueryIndexSourcePath(root, path.resolve(root, "src", "auth.ts"))).toThrow(
       /Invalid query index relative path/u,
     );
