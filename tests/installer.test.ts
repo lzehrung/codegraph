@@ -260,6 +260,19 @@ describe("agent installer workflow", () => {
     expect(cursorConfig.mcpServers?.codegraph?.command).toBe("codegraph");
   });
 
+  it("preserves a pre-existing user-owned Codex Codegraph MCP table", async () => {
+    const homeDir = await mkTmpDir("cg-install-codex-existing-");
+    const configPath = path.join(homeDir, ".codex", "config.toml");
+    const existingConfig =
+      '[mcp_servers.codegraph]\ncommand = "codegraph"\nargs = ["mcp", "serve", "--root", ".", "--stdio"]\n';
+    await fsp.mkdir(path.dirname(configPath), { recursive: true });
+    await fsp.writeFile(configPath, existingConfig, "utf8");
+
+    await installCodegraphTargets({ homeDir, targetIds: ["codex"], yes: true });
+
+    expect(await readFile(configPath)).toBe(existingConfig);
+  });
+
   it("uses XDG_CONFIG_HOME for OpenCode config and installed marker on install and uninstall", async () => {
     const homeDir = await mkTmpDir("cg-install-opencode-home-");
     const xdgConfigHome = await mkTmpDir("cg-install-opencode-xdg-");
