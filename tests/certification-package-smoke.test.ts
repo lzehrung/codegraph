@@ -172,7 +172,6 @@ function createMockCommandRunner(
 } {
   const calls: string[][] = [];
   const byTarball = new Map(packages.map((pkg) => [path.resolve(pkg.tarballPath), pkg]));
-  const byName = new Map(packages.map((pkg) => [pkg.name, pkg]));
 
   async function run(command: string, args: string[], commandOptions: CommandOptions = {}): Promise<CommandResult> {
     calls.push([command, ...args]);
@@ -192,19 +191,13 @@ function createMockCommandRunner(
       }
       return success("installed local tarballs");
     }
-    if (args[0] === "pack" && args.includes("--pack-destination")) {
-      const installedDirectory = args[1];
-      if (!installedDirectory) throw new Error("Mocked repack omitted package directory");
-      const installedManifest = JSON.parse(fs.readFileSync(path.join(installedDirectory, "package.json"), "utf8")) as {
-        name: string;
-      };
-      const pkg = byName.get(installedManifest.name);
-      if (!pkg) throw new Error(`Unexpected installed package ${installedManifest.name}`);
-      const destinationIndex = args.indexOf("--pack-destination") + 1;
-      const destination = args[destinationIndex];
-      if (!destination) throw new Error("Mocked repack omitted destination");
-      fs.copyFileSync(pkg.tarballPath, path.join(destination, pkg.pack.filename));
-      return success([pkg.pack]);
+    if (command === "tar" && args[0] === "-xzf") {
+      const pkg = byTarball.get(path.resolve(commandOptions.cwd ?? "", args[1] ?? ""));
+      if (!pkg) throw new Error(`Unexpected archive extraction ${String(args[1])}`);
+      const destination = args[args.indexOf("-C") + 1];
+      if (!destination) throw new Error("Mocked archive extraction omitted destination");
+      fs.cpSync(pkg.sourceDirectory, path.join(destination, "package"), { recursive: true });
+      return success("extracted certified package");
     }
     if (args.includes("--eval")) {
       const source = args[args.indexOf("--eval") + 1] ?? "";
@@ -301,6 +294,8 @@ describe("package smoke modes", () => {
     );
     expect(mcpCalls).toEqual(["initialize", "tools/list", "tools/call:search"]);
     expect(commandRunner.calls.some((call) => call[1] === "install")).toBe(true);
+    expect(commandRunner.calls.filter((call) => call[0] === "tar")).toHaveLength(3);
+    expect(commandRunner.calls.some((call) => call.includes("--pack-destination"))).toBe(false);
   });
 
   it("fails with target-mismatch when archive identity names another target", async () => {

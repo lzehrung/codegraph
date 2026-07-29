@@ -287,36 +287,71 @@ function readInstalledIdentity(installDirectory, entry, expectedVersion) {
   return { package: manifest.name, version: manifest.version, packageDirectory };
 }
 
-async function verifyInstalledPackageBytes({ installDirectory, entry, commandRunner }) {
+async function verifyInstalledPackageBytes({ installDirectory, manifestDirectory, entry, commandRunner }) {
   const packageDirectory = packageInstallPath(installDirectory, entry.package);
-  const repackDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-package-repack-"));
+  const extractionDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-package-contents-"));
   try {
-    const result = await commandRunner(
-      npmExecutable(),
-      ["pack", packageDirectory, "--json", "--ignore-scripts", "--pack-destination", repackDirectory],
-      { cwd: installDirectory },
-    );
-    const parsed = parseJsonOutput(result, "installed-bytes-mismatch", `Installed package repack for ${entry.package}`);
-    const pack = Array.isArray(parsed) ? parsed[0] : null;
-    if (!pack || typeof pack.filename !== "string") {
-      throw new PackageCertificationError(
-        "installed-bytes-mismatch",
-        `Installed package repack omitted a filename for ${entry.package}.`,
-      );
-    }
-    const repackedPath = path.join(repackDirectory, pack.filename);
-    const actualSha256 = await computeFileSha256(repackedPath);
-    if (actualSha256 !== entry.sha256) {
+    const tarballPath = entry.file.replaceAll("\\", "/");
+    const result = await commandRunner("tar", ["-xzf", tarballPath, "-C", extractionDirectory], {
+      cwd: manifestDirectory,
+    });
+    requireSuccessfulCommand(result, "installed-bytes-mismatch", `Extracting certified tarball ${entry.file} failed.`);
+    const expected = await collectPackageFileRecords(path.join(extractionDirectory, "package"));
+    const actual = await collectPackageFileRecords(packageDirectory);
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+      const mismatchedPath = [...new Set([...expected.map((file) => file.path), ...actual.map((file) => file.path)])]
+        .sort()
+        .find((filePath) => {
+          const expectedFile = expected.find((file) => file.path === filePath);
+          const actualFile = actual.find((file) => file.path === filePath);
+          return JSON.stringify(actualFile) !== JSON.stringify(expectedFile);
+        });
       throw new PackageCertificationError(
         "installed-bytes-mismatch",
         `Installed package files differ from certified tarball ${entry.file}.`,
-        { package: entry.package, expected: entry.sha256, actual: actualSha256 },
+        {
+          package: entry.package,
+          path: mismatchedPath,
+          expected: expected.find((file) => file.path === mismatchedPath),
+          actual: actual.find((file) => file.path === mismatchedPath),
+        },
       );
     }
     return result;
   } finally {
-    fs.rmSync(repackDirectory, { recursive: true, force: true });
+    fs.rmSync(extractionDirectory, { recursive: true, force: true });
   }
+}
+
+async function collectPackageFileRecords(rootDirectory) {
+  const records = [];
+  const pending = [rootDirectory];
+  while (pending.length) {
+    const directory = pending.pop();
+    const entries = fs
+      .readdirSync(directory, { withFileTypes: true })
+      .sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      const filePath = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        pending.push(filePath);
+        continue;
+      }
+      if (!entry.isFile()) {
+        throw new PackageCertificationError(
+          "installed-bytes-mismatch",
+          `Package contents include unsupported entry type: ${filePath}.`,
+        );
+      }
+      const stats = fs.statSync(filePath);
+      records.push({
+        path: path.relative(rootDirectory, filePath).replaceAll("\\", "/"),
+        size: stats.size,
+        sha256: await computeFileSha256(filePath),
+      });
+    }
+  }
+  return records.sort((left, right) => left.path.localeCompare(right.path));
 }
 
 function packedCliPath(installDirectory) {
@@ -881,6 +916,7 @@ export async function runPackageSmoke(options) {
       const identity = readInstalledIdentity(install.installDirectory, entry, expectedVersionForEntry(manifest, entry));
       const repackResult = await verifyInstalledPackageBytes({
         installDirectory: install.installDirectory,
+        manifestDirectory,
         entry,
         commandRunner,
       });

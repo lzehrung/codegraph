@@ -1,0 +1,572 @@
+name: standalone-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing certified package release tag
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: standalone-release-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  plan-standalone:
+    name: Resolve existing package release
+    runs-on: ubuntu-latest
+    outputs:
+      source_revision: ${{ steps.release.outputs.source_revision }}
+      root_version: ${{ steps.release.outputs.root_version }}
+      native_version: ${{ steps.release.outputs.native_version }}
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.release_tag }}
+
+      - name: Read release identity
+        id: release
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
+          import { execFileSync } from "node:child_process";
+          import fs from "node:fs";
+
+          const rootPackage = JSON.parse(fs.readFileSync("package.json", "utf8"));
+          const nativePackage = JSON.parse(fs.readFileSync("packages/codegraph-native/package.json", "utf8"));
+          console.log(`source_revision=${execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim()}`);
+          console.log(`root_version=${rootPackage.version}`);
+          console.log(`native_version=${nativePackage.version}`);
+          NODE
+
+  download-release-candidates:
+    name: Download certified package release
+    needs: plan-standalone
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.plan-standalone.outputs.source_revision }}
+
+      - name: Download immutable package candidates
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          EXPECTED_SOURCE_REVISION: ${{ needs.plan-standalone.outputs.source_revision }}
+        shell: bash
+        run: |
+          mkdir -p temp/release-candidates/packages
+          gh release download "$RELEASE_TAG" --pattern "*.tgz" --dir temp/release-candidates/packages
+          gh release download "$RELEASE_TAG" --pattern "release-candidate-manifest.json" --dir temp/release-candidates
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import path from "node:path";
+          import { readReleaseCandidateManifest } from "./scripts/certification/package-contract-lib.mjs";
+
+          const manifest = await readReleaseCandidateManifest(
+            path.resolve("temp/release-candidates/release-candidate-manifest.json"),
+            { verifyFiles: true },
+          );
+          if (manifest.sourceRevision !== process.env.EXPECTED_SOURCE_REVISION) {
+            throw new Error("Release candidate manifest does not match the selected release tag.");
+          }
+          const checksums = manifest.files
+            .map((entry) => `${entry.sha256}  ${entry.file}`)
+            .sort((left, right) => left.localeCompare(right));
+          fs.writeFileSync("temp/release-candidates/SHA256SUMS", `${checksums.join("\n")}\n`, "utf8");
+          NODE
+
+      - name: Upload immutable release candidates
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-candidates
+          path: temp/release-candidates
+          if-no-files-found: error
+          retention-days: 14
+
+  build-standalone-archives:
+    name: Build standalone ${{ matrix.target }}
+    needs:
+      - plan-standalone
+      - download-release-candidates
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            arch: x64
+            target: win32-x64
+            native-target: win32-x64-msvc
+            extension: zip
+          - os: windows-latest
+            arch: x64
+            target: win32-arm64
+            native-target: win32-arm64-msvc
+            extension: zip
+          - os: ubuntu-latest
+            arch: x64
+            target: linux-x64
+            native-target: linux-x64-gnu
+            extension: tar.gz
+          - os: ubuntu-24.04-arm
+            arch: arm64
+            target: linux-arm64
+            native-target: linux-arm64-gnu
+            extension: tar.gz
+          - os: macos-15-intel
+            arch: x64
+            target: darwin-x64
+            native-target: darwin-x64
+            extension: tar.gz
+          - os: macos-14
+            arch: arm64
+            target: darwin-arm64
+            native-target: darwin-arm64
+            extension: tar.gz
+    steps:
+      - name: Checkout planned source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.plan-standalone.outputs.source_revision }}
+
+      - name: Setup target-matching Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.10.0
+          architecture: ${{ matrix.arch }}
+
+      - name: Download immutable release candidates
+        uses: actions/download-artifact@v8
+        with:
+          name: release-candidates
+          path: temp/release-candidates
+
+      - name: Resolve target package inputs
+        id: packages
+        shell: bash
+        env:
+          NATIVE_TARGET: ${{ matrix.native-target }}
+        run: |
+          node --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
+          import path from "node:path";
+          import {
+            readReleaseCandidateManifest,
+            selectReleaseCandidatePackages,
+          } from "./scripts/certification/package-contract-lib.mjs";
+
+          const manifestPath = path.resolve("temp/release-candidates/release-candidate-manifest.json");
+          const manifest = await readReleaseCandidateManifest(manifestPath, { verifyFiles: true });
+          const selected = selectReleaseCandidatePackages(manifest, process.env.NATIVE_TARGET);
+          for (const [name, candidate] of Object.entries(selected)) {
+            const candidatePath = path.resolve(path.dirname(manifestPath), candidate.file).replaceAll("\\", "/");
+            console.log(`${name}=${candidatePath}`);
+          }
+          NODE
+
+      - name: Install already-built package bytes
+        shell: bash
+        run: |
+          package_root="$RUNNER_TEMP/standalone-package"
+          mkdir -p "$package_root"
+          node -e 'require("node:fs").writeFileSync(process.argv[1], "{\"private\":true}\n")' "$package_root/package.json"
+          npm install \
+            --prefix "$package_root" \
+            --ignore-scripts \
+            ${{ matrix.target == 'win32-arm64' && '--force' || '' }} \
+            --omit=dev \
+            --no-audit \
+            --no-fund \
+            --no-package-lock \
+            "${{ steps.packages.outputs.root }}" \
+            "${{ steps.packages.outputs.native }}" \
+            "${{ steps.packages.outputs.nativeTarget }}"
+
+      - name: Stage the target-matching Node runtime
+        id: runtime
+        shell: bash
+        env:
+          STANDALONE_TARGET: ${{ matrix.target }}
+        run: |
+          node --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
+          import { execFileSync } from "node:child_process";
+          import { createHash } from "node:crypto";
+          import fs from "node:fs";
+          import path from "node:path";
+
+          const runtimeDirectory = path.join(process.env.RUNNER_TEMP, "standalone-node-runtime");
+          fs.mkdirSync(runtimeDirectory, { recursive: true });
+          const executableName = process.platform === "win32" ? "node.exe" : "node";
+          const executable = path.join(runtimeDirectory, executableName);
+          if (process.env.STANDALONE_TARGET === "win32-arm64") {
+            const nodeVersion = "24.10.0";
+            const archiveName = `node-v${nodeVersion}-win-arm64.zip`;
+            const baseUrl = `https://nodejs.org/dist/v${nodeVersion}`;
+            const archive = Buffer.from(await (await fetch(`${baseUrl}/${archiveName}`)).arrayBuffer());
+            const checksums = await (await fetch(`${baseUrl}/SHASUMS256.txt`)).text();
+            const expected = checksums
+              .split(/\r?\n/u)
+              .find((line) => line.endsWith(`  ${archiveName}`))
+              ?.split(/\s+/u)[0];
+            const actual = createHash("sha256").update(archive).digest("hex");
+            if (!expected || actual !== expected) throw new Error(`Node ${nodeVersion} ARM64 checksum verification failed.`);
+            const archivePath = path.join(runtimeDirectory, archiveName);
+            fs.writeFileSync(archivePath, archive);
+            const windowsDirectory = process.env.WINDIR ?? "C:\\Windows";
+            execFileSync(path.join(windowsDirectory, "System32", "tar.exe"), ["-xf", archivePath, "-C", runtimeDirectory]);
+            const extractedRoot = path.join(runtimeDirectory, `node-v${nodeVersion}-win-arm64`);
+            fs.copyFileSync(path.join(extractedRoot, "node.exe"), executable);
+            fs.copyFileSync(path.join(extractedRoot, "LICENSE"), path.join(runtimeDirectory, "LICENSE"));
+          } else {
+            fs.copyFileSync(process.execPath, executable);
+            const searchDirectories = [path.dirname(process.execPath), path.resolve(path.dirname(process.execPath), "..")];
+            const licenseNames = ["LICENSE", "LICENSE.txt", "LICENSES.txt"];
+            const license = searchDirectories
+              .flatMap((directory) => licenseNames.map((name) => path.join(directory, name)))
+              .find((candidate) => fs.existsSync(candidate));
+            if (!license) throw new Error(`Unable to find the license for ${process.execPath}.`);
+            fs.copyFileSync(license, path.join(runtimeDirectory, "LICENSE"));
+          }
+          console.log(`executable=${executable.replaceAll("\\", "/")}`);
+          NODE
+
+      - name: Assemble standalone archive from immutable inputs
+        shell: bash
+        run: >-
+          npm run build:standalone --
+          --target ${{ matrix.target }}
+          --package-root "$RUNNER_TEMP/standalone-package/node_modules/@lzehrung/codegraph"
+          --source-root "$PWD"
+          --output temp/standalone
+          --node "${{ steps.runtime.outputs.executable }}"
+          --version ${{ needs.plan-standalone.outputs.root_version }}
+          --source-revision ${{ needs.plan-standalone.outputs.source_revision }}
+          --allow-cross-target ${{ matrix.target == 'win32-arm64' }}
+
+      - name: Upload standalone candidate archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: standalone-candidate-${{ matrix.target }}
+          path: |
+            temp/standalone/codegraph-${{ matrix.target }}.${{ matrix.extension }}
+            temp/standalone/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+
+  smoke-standalone-archives:
+    name: Smoke standalone ${{ matrix.target }} (${{ matrix.mode }})
+    needs:
+      - plan-standalone
+      - build-standalone-archives
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            arch: x64
+            target: win32-x64
+            mode: runtime
+            extension: zip
+          - os: windows-latest
+            arch: x64
+            target: win32-arm64
+            mode: structural
+            extension: zip
+          - os: ubuntu-latest
+            arch: x64
+            target: linux-x64
+            mode: runtime
+            extension: tar.gz
+          - os: ubuntu-24.04-arm
+            arch: arm64
+            target: linux-arm64
+            mode: runtime
+            extension: tar.gz
+          - os: macos-15-intel
+            arch: x64
+            target: darwin-x64
+            mode: runtime
+            extension: tar.gz
+          - os: macos-14
+            arch: arm64
+            target: darwin-arm64
+            mode: runtime
+            extension: tar.gz
+    steps:
+      - name: Checkout planned source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.plan-standalone.outputs.source_revision }}
+
+      - name: Setup smoke host Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.10.0
+          architecture: ${{ matrix.arch }}
+
+      - name: Download standalone candidate archive
+        uses: actions/download-artifact@v8
+        with:
+          name: standalone-candidate-${{ matrix.target }}
+          path: temp/standalone-candidate
+
+      - name: Extract exact candidate archive
+        shell: bash
+        env:
+          ARCHIVE_EXTENSION: ${{ matrix.extension }}
+          STANDALONE_TARGET: ${{ matrix.target }}
+        run: |
+          mkdir -p temp/standalone-extracted
+          if [ "$ARCHIVE_EXTENSION" = "zip" ]; then
+            node --input-type=module --eval '
+              import { execFileSync } from "node:child_process";
+              import path from "node:path";
+              const windowsDirectory = process.env.WINDIR ?? "C:\\Windows";
+              const archive = path.resolve("temp/standalone-candidate", `codegraph-${process.env.STANDALONE_TARGET}.zip`);
+              execFileSync(path.join(windowsDirectory, "System32", "tar.exe"), ["-xf", archive, "-C", path.resolve("temp/standalone-extracted")]);
+            '
+          else
+            tar -xf "temp/standalone-candidate/codegraph-$STANDALONE_TARGET.$ARCHIVE_EXTENSION" \
+              -C temp/standalone-extracted
+          fi
+
+      - name: Smoke exact standalone candidate
+        shell: bash
+        env:
+          EXPECTED_SOURCE_REVISION: ${{ needs.plan-standalone.outputs.source_revision }}
+          EXPECTED_VERSION: ${{ needs.plan-standalone.outputs.root_version }}
+          STANDALONE_MODE: ${{ matrix.mode }}
+          STANDALONE_TARGET: ${{ matrix.target }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from "node:fs/promises";
+          import path from "node:path";
+          import {
+            installStandaloneBundle,
+            verifyStandaloneBundle,
+          } from "./scripts/onboarding/standalone-install-lib.mjs";
+
+          const bundleRoot = path.resolve("temp/standalone-extracted", `codegraph-${process.env.STANDALONE_TARGET}`);
+          const manifest = JSON.parse(await fs.readFile(path.join(bundleRoot, "manifest.json"), "utf8"));
+          const matchesRelease =
+            manifest.target === process.env.STANDALONE_TARGET &&
+            manifest.version === process.env.EXPECTED_VERSION &&
+            manifest.sourceRevision === process.env.EXPECTED_SOURCE_REVISION;
+          if (!matchesRelease) throw new Error("Standalone archive identity does not match the planned release.");
+          if (process.env.STANDALONE_MODE === "structural") {
+            await verifyStandaloneBundle(bundleRoot);
+          } else {
+            await installStandaloneBundle({
+              bundleRoot,
+              installBase: path.join(process.env.RUNNER_TEMP, "codegraph-standalone-install"),
+              binDir: path.join(process.env.RUNNER_TEMP, "codegraph-standalone-bin"),
+            });
+          }
+          NODE
+
+      - name: Upload only the successfully smoked archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: standalone-smoked-${{ matrix.target }}
+          path: temp/standalone-candidate/codegraph-${{ matrix.target }}.${{ matrix.extension }}
+          if-no-files-found: error
+          retention-days: 14
+
+  standalone-funnel:
+    name: Standalone funnel ${{ matrix.target }}
+    needs:
+      - plan-standalone
+      - build-standalone-archives
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            arch: x64
+            target: win32-x64
+            extension: zip
+          - os: ubuntu-latest
+            arch: x64
+            target: linux-x64
+            extension: tar.gz
+          - os: ubuntu-24.04-arm
+            arch: arm64
+            target: linux-arm64
+            extension: tar.gz
+          - os: macos-15-intel
+            arch: x64
+            target: darwin-x64
+            extension: tar.gz
+          - os: macos-14
+            arch: arm64
+            target: darwin-arm64
+            extension: tar.gz
+    steps:
+      - name: Checkout planned source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.plan-standalone.outputs.source_revision }}
+
+      - name: Setup funnel host Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.10.0
+          architecture: ${{ matrix.arch }}
+
+      - name: Download immutable standalone candidate archive
+        uses: actions/download-artifact@v8
+        with:
+          name: standalone-candidate-${{ matrix.target }}
+          path: temp/standalone-candidate
+
+      - name: Run published POSIX bootstrap
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          CODEGRAPH_RELEASE_BASE_URL: http://127.0.0.1:8123
+          CODEGRAPH_INSTALL_BASE: ${{ runner.temp }}/codegraph-bootstrap-install
+          CODEGRAPH_BIN_DIR: ${{ runner.temp }}/codegraph-bootstrap-bin
+        run: |
+          python -m http.server 8123 --bind 127.0.0.1 --directory temp/standalone-candidate \
+            > "$RUNNER_TEMP/codegraph-bootstrap-server.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"' EXIT
+          for attempt in 1 2 3 4 5; do
+            if curl -fsS "$CODEGRAPH_RELEASE_BASE_URL/SHA256SUMS" > /dev/null; then break; fi
+            sleep 1
+          done
+          curl -fsS "$CODEGRAPH_RELEASE_BASE_URL/SHA256SUMS" > /dev/null
+          sh ./install.sh --yes
+          "$CODEGRAPH_BIN_DIR/codegraph" version
+
+      - name: Run published PowerShell bootstrap
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          CODEGRAPH_RELEASE_BASE_URL: http://127.0.0.1:8123
+          CODEGRAPH_INSTALL_BASE: ${{ runner.temp }}\codegraph-bootstrap-install
+          CODEGRAPH_BIN_DIR: ${{ runner.temp }}\codegraph-bootstrap-bin
+        run: |
+          $Server = Start-Process python -ArgumentList @(
+            "-m", "http.server", "8123", "--bind", "127.0.0.1",
+            "--directory", "temp/standalone-candidate"
+          ) -PassThru -WindowStyle Hidden
+          try {
+            for ($Attempt = 1; $Attempt -le 5; $Attempt += 1) {
+              try {
+                Invoke-WebRequest "$env:CODEGRAPH_RELEASE_BASE_URL/SHA256SUMS" -UseBasicParsing | Out-Null
+                break
+              } catch {
+                Start-Sleep -Seconds 1
+              }
+            }
+            Invoke-WebRequest "$env:CODEGRAPH_RELEASE_BASE_URL/SHA256SUMS" -UseBasicParsing | Out-Null
+            ./install.ps1 -Yes
+            & "$env:CODEGRAPH_BIN_DIR\codegraph.cmd" version
+          } finally {
+            Stop-Process -Id $Server.Id -ErrorAction SilentlyContinue
+          }
+
+      - name: Run exact standalone installer funnel
+        shell: bash
+        run: >-
+          node ./scripts/onboarding/run-funnel-smoke.mjs
+          --channel standalone
+          --root "$PWD"
+          --artifact temp/standalone-candidate/codegraph-${{ matrix.target }}.${{ matrix.extension }}
+          --target ${{ matrix.target }}
+          --output temp/certification/funnel-standalone-${{ matrix.target }}.json
+
+      - name: Upload standalone FunnelResultV1
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: standalone-funnel-${{ matrix.target }}
+          path: temp/certification/funnel-standalone-${{ matrix.target }}.json
+          if-no-files-found: error
+          retention-days: 14
+
+  assemble-standalone-release-assets:
+    name: Aggregate smoked standalone release assets
+    needs:
+      - plan-standalone
+      - download-release-candidates
+      - smoke-standalone-archives
+      - standalone-funnel
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout planned source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.plan-standalone.outputs.source_revision }}
+
+      - name: Download immutable release candidates
+        uses: actions/download-artifact@v8
+        with:
+          name: release-candidates
+          path: temp/release-candidates
+
+      - name: Download successfully smoked standalone archives
+        uses: actions/download-artifact@v8
+        with:
+          pattern: standalone-smoked-*
+          path: temp/standalone-smoked
+          merge-multiple: true
+
+      - name: Aggregate release checksums without rebuilding
+        shell: bash
+        run: |
+          mkdir -p temp/standalone-release-assets
+          cp temp/standalone-smoked/codegraph-* temp/standalone-release-assets/
+          cp install.sh install.ps1 temp/standalone-release-assets/
+          cp temp/release-candidates/SHA256SUMS temp/standalone-release-assets/SHA256SUMS
+          (
+            cd temp/standalone-release-assets
+            sha256sum codegraph-* install.sh install.ps1 | sort -k 2 >> SHA256SUMS
+          )
+
+      - name: Upload exact standalone release assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: standalone-release-assets
+          path: |
+            temp/standalone-release-assets/codegraph-*
+            temp/standalone-release-assets/install.sh
+            temp/standalone-release-assets/install.ps1
+            temp/standalone-release-assets/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-standalone-assets:
+    name: Attach verified standalone assets
+    needs:
+      - plan-standalone
+      - assemble-standalone-release-assets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download verified standalone assets
+        uses: actions/download-artifact@v8
+        with:
+          name: standalone-release-assets
+          path: temp/standalone-release-assets
+
+      - name: Attach exact post-smoke assets to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: >-
+          gh release upload "$RELEASE_TAG"
+          temp/standalone-release-assets/codegraph-*
+          temp/standalone-release-assets/SHA256SUMS
+          temp/standalone-release-assets/install.sh
+          temp/standalone-release-assets/install.ps1
+          --clobber

@@ -69,6 +69,7 @@ Human-readable output is the CLI default; `--pretty` remains an explicit equival
 ### Standalone archive
 
 The preview standalone channel bundles Node.js, the CLI, production dependencies, the matching native runtime, and the Codegraph skill. Its bootstrap verifies the selected archive against the release `SHA256SUMS` before extraction:
+Standalone assets are attached by a separate post-release workflow, so use a release that lists the archive and installer assets.
 
 ```powershell
 irm https://github.com/lzehrung/codegraph/releases/latest/download/install.ps1 | iex

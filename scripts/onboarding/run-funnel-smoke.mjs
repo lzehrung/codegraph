@@ -471,8 +471,9 @@ async function runProductChecks(context, runtime) {
     if (typeof identity.packageRoot !== "string" || !identity.packageRoot) {
       throw new Error("Version command did not report its package root.");
     }
-    const declaredPackageRoot = path.resolve(identity.packageRoot);
-    if (!isPathWithin(runtime.packageRoot, declaredPackageRoot)) {
+    const declaredPackageRoot = await fsp.realpath(identity.packageRoot);
+    const selectedPackageRoot = await fsp.realpath(runtime.packageRoot);
+    if (!isPathWithin(selectedPackageRoot, declaredPackageRoot)) {
       throw new Error("Running CLI resolved its package root outside the selected channel.");
     }
     context.result.version = identity.version;

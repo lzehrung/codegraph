@@ -13,6 +13,7 @@ Requirements, standalone and package channels, source checkouts, verification, r
 ## Option 1: Standalone release (preview)
 
 The standalone channel does not require npm, a system Node.js installation, or registry configuration. It currently identifies itself as `standalone-preview`.
+Standalone assets are attached after package publication by a separate release workflow. Use a release that lists the matching archive, installer, and `SHA256SUMS` assets.
 
 PowerShell:
 

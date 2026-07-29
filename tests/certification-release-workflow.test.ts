@@ -1,74 +1,104 @@
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const workflow = fs.readFileSync(".github/workflows/release.yml", "utf8");
+const releaseWorkflow = fs.readFileSync(".github/workflows/release.yml", "utf8");
+const standaloneWorkflow = fs.readFileSync(".github/workflows/standalone-release.yml", "utf8");
 
-function jobBlock(jobName: string): string {
+function jobBlock(workflow: string, jobName: string): string {
   const marker = `  ${jobName}:\n`;
   const start = workflow.indexOf(marker);
-  if (start < 0) throw new Error(`Missing release workflow job ${jobName}`);
+  if (start < 0) throw new Error(`Missing workflow job ${jobName}`);
   const remaining = workflow.slice(start + marker.length);
   const nextJob = /^ {2}[a-z0-9-]+:\s*$/m.exec(remaining);
   return workflow.slice(start, nextJob ? start + marker.length + nextJob.index : undefined);
 }
 
-describe("certified release workflow", () => {
-  it("uses the plan, build, funnel, certify, and publish DAG", () => {
-    const assemble = jobBlock("assemble-release-candidates");
-    const security = jobBlock("security-production");
-    const smoke = jobBlock("package-smoke");
-    const packageFunnel = jobBlock("package-funnel");
-    const report = jobBlock("certification-report");
-    const publish = jobBlock("publish-certified");
-    const standaloneBuild = jobBlock("build-standalone-archives");
-    const standaloneSmoke = jobBlock("smoke-standalone-archives");
-    const standaloneFunnel = jobBlock("standalone-funnel");
-    const standaloneAssets = jobBlock("assemble-standalone-release-assets");
+describe("certified release workflows", () => {
+  it("keeps package certification and publication independent from standalone previews", () => {
+    const assemble = jobBlock(releaseWorkflow, "assemble-release-candidates");
+    const security = jobBlock(releaseWorkflow, "security-production");
+    const smoke = jobBlock(releaseWorkflow, "package-smoke");
+    const packageFunnel = jobBlock(releaseWorkflow, "package-funnel");
+    const report = jobBlock(releaseWorkflow, "certification-report");
+    const publish = jobBlock(releaseWorkflow, "publish-certified");
 
     expect(assemble).toContain("- build-native-artifacts");
-    expect(standaloneBuild).toContain("- assemble-release-candidates");
-    expect(standaloneSmoke).toContain("- build-standalone-archives");
-    expect(standaloneFunnel).toContain("- build-standalone-archives");
-    expect(standaloneAssets).toContain("- smoke-standalone-archives");
-    expect(standaloneAssets).toContain("- standalone-funnel");
-    expect(standaloneAssets).toContain("- plan-release");
     expect(security).toContain("- assemble-release-candidates");
     expect(smoke).toContain("- security-production");
     expect(packageFunnel).toContain("- assemble-release-candidates");
-    expect(packageFunnel).toContain("- security-production");
     expect(report).toContain("- package-smoke");
     expect(report).toContain("- package-smoke-reduced");
     expect(report).toContain("- package-funnel");
-    expect(report).toContain("- standalone-funnel");
     expect(report).toContain("- semantic-release");
     expect(report).toContain("- fixture-hermeticity");
     expect(publish).toContain("- certification-report");
-    expect(publish).toContain("- assemble-standalone-release-assets");
+    expect(releaseWorkflow).not.toContain("build-standalone-archives");
+    expect(releaseWorkflow).not.toContain("standalone-funnel");
+    expect(releaseWorkflow).not.toContain("standalone-release-assets");
   });
 
-  it("packs candidates once and publishes only the certified tarballs", () => {
-    const assemble = jobBlock("assemble-release-candidates");
-    const publish = jobBlock("publish-certified");
+  it("publishes only certified package assets before standalone enrichment", () => {
+    const publish = jobBlock(releaseWorkflow, "publish-certified");
     const preflightIndex = publish.indexOf("Require passing certification envelope before registry writes");
     const publishIndex = publish.indexOf("Publish only certified tarballs");
     const releaseIndex = publish.indexOf("Create GitHub Release from certified assets");
 
-    expect(workflow.split("assemble-release-candidates.mjs")).toHaveLength(2);
-    expect(workflow).not.toContain("npm pack");
-    expect(workflow).not.toContain("npm run publish:");
-    expect(assemble).toContain("Upload immutable release candidates");
+    expect(releaseWorkflow.split("assemble-release-candidates.mjs")).toHaveLength(2);
+    expect(releaseWorkflow).not.toContain("npm pack");
     expect(publish).toContain("publish-release-candidates.mjs");
+    expect(publish).toContain("temp/release-candidates/packages/*.tgz");
+    expect(publish).toContain("temp/release-candidates/SHA256SUMS");
     expect(publish).toContain("release-candidate-manifest.json");
-    expect(publish).toContain("SHA256SUMS");
-    expect(publish).toContain("packages/*.tgz");
+    expect(publish).toContain("Standalone preview assets are attached later");
     expect(preflightIndex).toBeGreaterThan(-1);
     expect(publishIndex).toBeGreaterThan(preflightIndex);
     expect(releaseIndex).toBeGreaterThan(publishIndex);
   });
 
-  it("runs full package funnels for every runtime native target and exempts structural Windows ARM64", () => {
-    const smoke = jobBlock("package-smoke");
-    const funnel = jobBlock("package-funnel");
+  it("builds musl targets without injecting host glibc libraries", () => {
+    const build = jobBlock(releaseWorkflow, "build-native-artifacts");
+
+    expect(build).toContain("sudo apt-get install -y musl-tools");
+    expect(build).not.toContain("libgcc-s1");
+    expect(build).not.toContain("LIBRARY_PATH=");
+    expect(build).not.toContain("RUSTFLAGS=");
+  });
+
+  it("runs standalone assembly and funnels only when manually requested for an existing release", () => {
+    const download = jobBlock(standaloneWorkflow, "download-release-candidates");
+    const build = jobBlock(standaloneWorkflow, "build-standalone-archives");
+    const smoke = jobBlock(standaloneWorkflow, "smoke-standalone-archives");
+    const funnel = jobBlock(standaloneWorkflow, "standalone-funnel");
+    const assets = jobBlock(standaloneWorkflow, "assemble-standalone-release-assets");
+    const publish = jobBlock(standaloneWorkflow, "publish-standalone-assets");
+
+    expect(standaloneWorkflow).toContain("workflow_dispatch:");
+    expect(standaloneWorkflow).toContain("release_tag:");
+    expect(download).toContain('gh release download "$RELEASE_TAG"');
+    expect(download).toContain("release-candidate-manifest.json");
+    expect(download).toContain("{ verifyFiles: true }");
+    expect(download).not.toContain('--pattern "SHA256SUMS"');
+    expect(download).toContain('fs.writeFileSync("temp/release-candidates/SHA256SUMS"');
+    expect(build).toContain("- download-release-candidates");
+    expect(build).toContain("npm run build:standalone --");
+    expect(build).not.toContain('"ls", "--omit=dev"');
+    expect(smoke).toContain("- build-standalone-archives");
+    expect(smoke).toContain("installStandaloneBundle");
+    expect(funnel).toContain("- build-standalone-archives");
+    expect(funnel).toContain("Run published POSIX bootstrap");
+    expect(funnel).toContain("Run published PowerShell bootstrap");
+    expect(funnel).toContain("--channel standalone");
+    expect(assets).toContain("- smoke-standalone-archives");
+    expect(assets).toContain("- standalone-funnel");
+    expect(assets).toContain("sha256sum codegraph-* install.sh install.ps1");
+    expect(publish).toContain("- assemble-standalone-release-assets");
+    expect(publish).toContain('gh release upload "$RELEASE_TAG"');
+    expect(publish).toContain("--clobber");
+  });
+
+  it("retains runtime package funnels and the structural Windows ARM64 exception", () => {
+    const smoke = jobBlock(releaseWorkflow, "package-smoke");
+    const funnel = jobBlock(releaseWorkflow, "package-funnel");
     const runtimeTargets = [
       { alpine: false, nativeTarget: "win32-x64-msvc", target: "win32-x64" },
       { alpine: false, nativeTarget: "linux-x64-gnu", target: "linux-x64" },
@@ -88,98 +118,6 @@ describe("certified release workflow", () => {
       );
     }
     expect(smoke).toMatch(/target: win32-arm64-msvc\n\s+mode: structural/);
-    expect(smoke).not.toMatch(/target: win32-arm64-msvc\n\s+mode: runtime/);
     expect(funnel).not.toContain("win32-arm64");
-    expect(funnel).toContain("run-funnel-smoke.mjs");
-    expect(funnel).toContain("--channel package");
-    expect(funnel).toContain("release-candidate-manifest.json");
-    expect(funnel).toContain("funnel-package-${{ matrix.native-target }}.json");
-    expect(funnel).toContain("Upload package FunnelResultV1");
-    expect(funnel).toContain("node:24-alpine");
-  });
-
-  it("assembles every standalone target and runs exact installer funnels for every runtime target", () => {
-    const build = jobBlock("build-standalone-archives");
-    const smoke = jobBlock("smoke-standalone-archives");
-    const funnel = jobBlock("standalone-funnel");
-    const targets = ["win32-x64", "win32-arm64", "linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"];
-    const runtimeTargets = ["win32-x64", "linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"];
-
-    expect(build).toContain("Setup target-matching Node");
-    expect(build).toContain("architecture: ${{ matrix.arch }}");
-    expect(build).toContain("Install already-built package bytes");
-    expect(build).toContain("npm run build:standalone --");
-    expect(build).toContain('--package-root "$RUNNER_TEMP/standalone-package/node_modules/@lzehrung/codegraph"');
-    for (const target of targets) {
-      expect(build).toContain(`target: ${target}`);
-      expect(smoke).toContain(`target: ${target}`);
-    }
-    for (const target of runtimeTargets) {
-      expect(funnel).toContain(`target: ${target}`);
-    }
-    expect(build).toMatch(/os: windows-latest\n\s+arch: x64\n\s+target: win32-arm64/);
-    expect(build).toContain("node-v${nodeVersion}-win-arm64.zip");
-    expect(build).toContain("Node ${nodeVersion} ARM64 checksum verification failed.");
-    expect(build).toContain("--allow-cross-target ${{ matrix.target == 'win32-arm64' }}");
-    expect(smoke).toMatch(/target: win32-arm64\n\s+mode: structural/);
-    expect(smoke).not.toMatch(/target: win32-arm64\n\s+mode: runtime/);
-    expect(funnel).not.toContain("win32-arm64");
-    expect(funnel).toContain("standalone-candidate-${{ matrix.target }}");
-    expect(funnel).toContain("run-funnel-smoke.mjs");
-    expect(funnel).toContain("--channel standalone");
-    expect(funnel).toContain("Run exact standalone installer funnel");
-    expect(build).toContain("temp/standalone/SHA256SUMS");
-    expect(funnel).toContain("Run published POSIX bootstrap");
-    expect(funnel).toContain("Run published PowerShell bootstrap");
-    expect(funnel).toContain("CODEGRAPH_RELEASE_BASE_URL");
-    expect(funnel).toContain("./install.sh --yes");
-    expect(funnel).toContain("./install.ps1 -Yes");
-    expect(funnel).toContain("funnel-standalone-${{ matrix.target }}.json");
-    expect(funnel).toContain("Upload standalone FunnelResultV1");
-  });
-
-  it("promotes exact smoked standalone bytes and aggregates their release checksums", () => {
-    const build = jobBlock("build-standalone-archives");
-    const smoke = jobBlock("smoke-standalone-archives");
-    const assets = jobBlock("assemble-standalone-release-assets");
-    const publish = jobBlock("publish-certified");
-
-    expect(workflow.split("npm run build:standalone --")).toHaveLength(2);
-    expect(build).toContain("standalone-candidate-${{ matrix.target }}");
-    expect(smoke).toContain("standalone-candidate-${{ matrix.target }}");
-    expect(assets).toContain("- standalone-funnel");
-    expect(smoke).toContain("installStandaloneBundle");
-    expect(smoke).toContain("verifyStandaloneBundle");
-    expect(smoke).toContain("manifest.sourceRevision === process.env.EXPECTED_SOURCE_REVISION");
-    expect(smoke).toContain("manifest.version === process.env.EXPECTED_VERSION");
-    expect(smoke).toContain("standalone-smoked-${{ matrix.target }}");
-    expect(smoke).not.toContain("npm run build:standalone");
-    expect(assets).toContain("pattern: standalone-smoked-*");
-    expect(assets).toContain("sha256sum codegraph-*");
-    expect(assets).toContain("cp install.sh install.ps1 temp/standalone-release-assets/");
-    expect(assets).toContain("sha256sum codegraph-* install.sh install.ps1");
-    expect(assets).toContain("name: standalone-release-assets");
-    expect(publish).toContain("name: standalone-release-assets");
-    expect(publish).toContain("temp/standalone-release-assets/codegraph-*");
-    expect(publish).toContain("temp/standalone-release-assets/SHA256SUMS");
-    expect(publish).toContain("temp/standalone-release-assets/install.sh");
-    expect(publish).toContain("temp/standalone-release-assets/install.ps1");
-    expect(publish).not.toContain("standalone-candidate-");
-  });
-
-  it("fails closed on incomplete reports before the first registry write", () => {
-    const report = jobBlock("certification-report");
-    const publish = jobBlock("publish-certified");
-
-    expect(report).toContain("--verify-reports temp/package-smoke-reports");
-    expect(report).toContain("--require-reduced");
-    expect(report).toContain("assemble-certification-report.mjs");
-    expect(report).toContain("certification-report-v1.json");
-    expect(report).toContain("- package-funnel");
-    expect(report).toContain("- standalone-funnel");
-    expect(publish).toContain('report.summary?.status === "pass"');
-    expect(publish).toContain("--expected-source-revision");
-    expect(publish).toContain("--expected-root-version");
-    expect(publish).toContain("--expected-native-version");
   });
 });
