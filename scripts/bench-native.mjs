@@ -271,14 +271,21 @@ function summarizeRuns(runs) {
   const elapsedValues = runs.map((entry) => entry.elapsedMs);
   const totalElapsed = elapsedValues.reduce((sum, value) => sum + value, 0);
   const averageElapsedMs = totalElapsed / runs.length;
-  const fastestElapsedMs = Math.min(...elapsedValues);
-  const slowestElapsedMs = Math.max(...elapsedValues);
+  elapsedValues.sort((left, right) => left - right);
+  const medianIndex = Math.floor(elapsedValues.length / 2);
+  let medianElapsedMs = elapsedValues[medianIndex];
+  if (elapsedValues.length % 2 === 0) {
+    medianElapsedMs = (elapsedValues[medianIndex - 1] + elapsedValues[medianIndex]) / 2;
+  }
+  const fastestElapsedMs = elapsedValues[0];
+  const slowestElapsedMs = elapsedValues[elapsedValues.length - 1];
   const sample = runs[0];
   if (!sample) {
     throw new Error("Cannot summarize empty benchmark run set");
   }
   return {
     averageElapsedMs,
+    medianElapsedMs,
     fastestElapsedMs,
     slowestElapsedMs,
     filesIndexed: sample.filesIndexed,
@@ -497,13 +504,13 @@ async function runParentBenchmark(options) {
               `Benchmark mismatch for ${result.fixture}/${workload}/${temperature}: native indexed ${nativeSummary.filesIndexed} files but JS indexed ${jsSummary.filesIndexed}`,
             );
           }
-          if (jsSummary.averageElapsedMs <= 0) {
+          if (jsSummary.medianElapsedMs <= 0) {
             continue;
           }
-          const slowdown = nativeSummary.averageElapsedMs / jsSummary.averageElapsedMs;
+          const slowdown = nativeSummary.medianElapsedMs / jsSummary.medianElapsedMs;
           if (slowdown > options.maxSlowdown) {
             throw new Error(
-              `Benchmark slowdown for ${result.fixture}/${workload}/${temperature}: native ${nativeSummary.averageElapsedMs.toFixed(2)}ms vs JS ${jsSummary.averageElapsedMs.toFixed(2)}ms exceeds max slowdown ${options.maxSlowdown}x`,
+              `Benchmark slowdown for ${result.fixture}/${workload}/${temperature}: native median ${nativeSummary.medianElapsedMs.toFixed(2)}ms vs JS median ${jsSummary.medianElapsedMs.toFixed(2)}ms exceeds max slowdown ${options.maxSlowdown}x`,
             );
           }
         }
