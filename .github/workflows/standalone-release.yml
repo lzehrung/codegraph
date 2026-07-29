@@ -570,4 +570,5 @@ jobs:
           temp/standalone-release-assets/SHA256SUMS
           temp/standalone-release-assets/install.sh
           temp/standalone-release-assets/install.ps1
+          --repo "$GITHUB_REPOSITORY"
           --clobber

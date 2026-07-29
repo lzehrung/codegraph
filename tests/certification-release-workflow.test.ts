@@ -107,6 +107,7 @@ describe("certified release workflows", () => {
     expect(assets).toContain("- smoke-standalone-archives");
     expect(assets).toContain("- standalone-funnel");
     expect(assets).toContain("sha256sum codegraph-* install.sh install.ps1");
+    expect(publish).toContain('--repo "$GITHUB_REPOSITORY"');
     expect(publish).toContain("- assemble-standalone-release-assets");
     expect(publish).toContain('gh release upload "$RELEASE_TAG"');
     expect(publish).toContain("--clobber");
