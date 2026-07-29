@@ -411,10 +411,10 @@ jobs:
             target: darwin-arm64
             extension: tar.gz
     steps:
-      - name: Checkout planned source
+      - name: Checkout workflow source
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.plan-standalone.outputs.source_revision }}
+          ref: ${{ github.workflow_sha }}
 
       - name: Setup funnel host Node
         uses: actions/setup-node@v6

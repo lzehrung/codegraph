@@ -100,6 +100,7 @@ describe("certified release workflows", () => {
     expect(smoke).toContain("- build-standalone-archives");
     expect(smoke).toContain("installStandaloneBundle");
     expect(funnel).toContain("- build-standalone-archives");
+    expect(funnel).toContain("ref: ${{ github.workflow_sha }}");
     expect(funnel).toContain("Run published POSIX bootstrap");
     expect(funnel).toContain("Run published PowerShell bootstrap");
     expect(funnel).toContain("--channel standalone");
