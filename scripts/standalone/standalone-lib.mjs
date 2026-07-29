@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -69,7 +70,7 @@ export async function assembleStandaloneArchive(options) {
   await fsp.cp(path.join(packageRoot, "codegraph-skill"), path.join(bundleRoot, "codegraph-skill"), {
     recursive: true,
   });
-  await copyProductionNodeModules(packageRoot, bundleRoot);
+  await copyProductionNodeModules(packageRoot, bundleRoot, target);
   await copyRequiredFile(path.join(packageRoot, "LICENSE"), path.join(bundleRoot, "LICENSE"));
   const noticesPath = options.noticesPath ?? path.join(options.sourceRoot ?? packageRoot, "THIRD_PARTY_NOTICES");
   await copyRequiredFile(noticesPath, path.join(bundleRoot, "THIRD_PARTY_NOTICES"));
@@ -106,19 +107,12 @@ export async function assembleStandaloneArchive(options) {
   return { archivePath, archiveName, archiveSha256, manifest, target: options.target };
 }
 
-async function copyProductionNodeModules(packageRoot, bundleRoot) {
+async function copyProductionNodeModules(packageRoot, bundleRoot, target) {
   const installRoot = findInstallRoot(packageRoot);
   const destinationRoot = path.join(bundleRoot, "node_modules");
   const npmCli =
     process.env.npm_execpath ?? path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
-  const output = execFileSync(process.execPath, [npmCli, "ls", "--omit=dev", "--parseable", "--all"], {
-    cwd: installRoot,
-    encoding: "utf8",
-  });
-  const dependencyRoots = output
-    .split(/\r?\n/u)
-    .map((entry) => entry.trim())
-    .filter((entry) => entry && path.resolve(entry) !== path.resolve(installRoot));
+  const dependencyRoots = await collectProductionDependencyRoots(packageRoot, target);
   for (const dependencyRoot of dependencyRoots) {
     const realDependencyRoot = await fsp.realpath(dependencyRoot);
     const relative = path.relative(path.join(installRoot, "node_modules"), realDependencyRoot);
@@ -141,6 +135,70 @@ async function copyProductionNodeModules(packageRoot, bundleRoot) {
     }
   }
   await fsp.rm(path.join(destinationRoot, "@lzehrung", "codegraph"), { recursive: true, force: true });
+}
+
+async function collectProductionDependencyRoots(packageRoot, target) {
+  const pending = [packageRoot];
+  const visited = new Set();
+  const dependencies = [];
+  while (pending.length) {
+    const currentRoot = pending.pop();
+    const realRoot = await fsp.realpath(currentRoot);
+    if (visited.has(realRoot)) continue;
+    visited.add(realRoot);
+    const manifest = JSON.parse(await fsp.readFile(path.join(realRoot, "package.json"), "utf8"));
+    const requiredNames = new Set([
+      ...Object.keys(manifest.dependencies ?? {}),
+      ...Object.keys(manifest.peerDependencies ?? {}).filter(
+        (name) => !manifest.peerDependenciesMeta?.[name]?.optional,
+      ),
+    ]);
+    const optionalNames = new Set([
+      ...Object.keys(manifest.optionalDependencies ?? {}),
+      ...Object.keys(manifest.peerDependencies ?? {}).filter((name) => manifest.peerDependenciesMeta?.[name]?.optional),
+    ]);
+    for (const name of [...requiredNames, ...optionalNames].sort()) {
+      if (!matchesStandaloneNativeTarget(name, target)) continue;
+      const dependencyRoot = resolveInstalledPackageRoot(realRoot, name);
+      if (!dependencyRoot) {
+        if (optionalNames.has(name)) continue;
+        throw new Error(`Production dependency is not installed: ${name} (required by ${manifest.name ?? realRoot})`);
+      }
+      dependencies.push(dependencyRoot);
+      pending.push(dependencyRoot);
+    }
+  }
+  return dependencies;
+}
+
+function matchesStandaloneNativeTarget(packageName, target) {
+  const prefix = "@lzehrung/codegraph-native-";
+  return !packageName.startsWith(prefix) || packageName === `${prefix}${target.nativeSuffix}`;
+}
+
+function resolveInstalledPackageRoot(packageRoot, packageName) {
+  const require = createRequire(path.join(packageRoot, "package.json"));
+  let resolved;
+  try {
+    resolved = require.resolve(`${packageName}/package.json`);
+  } catch {
+    try {
+      resolved = require.resolve(packageName);
+    } catch {
+      return null;
+    }
+  }
+  let current = path.dirname(resolved);
+  while (true) {
+    const manifestPath = path.join(current, "package.json");
+    if (fs.existsSync(manifestPath)) {
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      if (manifest.name === packageName) return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
 }
 
 async function copyPublishedPackageFiles(packageRoot, destinationRoot, npmCli) {

@@ -119,7 +119,10 @@ async function createFakePackageRoot(root: string, target: string): Promise<{ pa
   await fsp.mkdir(path.join(packageRoot, "node_modules", "@lzehrung", "codegraph-native"), { recursive: true });
   await fsp.writeFile(path.join(packageRoot, "dist", "cli.js"), "console.log('fake');\n", "utf8");
   await fsp.writeFile(path.join(packageRoot, "codegraph-skill", "codegraph", "SKILL.md"), "# Skill\n", "utf8");
-  await fsp.writeFile(path.join(packageRoot, "package.json"), '{"name":"@lzehrung/codegraph","version":"9.8.7"}\n');
+  await fsp.writeFile(
+    path.join(packageRoot, "package.json"),
+    '{"name":"@lzehrung/codegraph","version":"9.8.7","optionalDependencies":{"@lzehrung/codegraph-native":"9.8.7"}}\n',
+  );
   await fsp.writeFile(path.join(packageRoot, "LICENSE"), "MIT\n");
   await fsp.writeFile(path.join(packageRoot, "THIRD_PARTY_NOTICES"), "Notices\n");
   const nativeRoot = path.join(packageRoot, "node_modules", "@lzehrung", "codegraph-native");
@@ -128,6 +131,12 @@ async function createFakePackageRoot(root: string, target: string): Promise<{ pa
     '{"name":"@lzehrung/codegraph-native","version":"9.8.7"}\n',
   );
   await fsp.writeFile(path.join(nativeRoot, `index.${definition.nativeSuffix}.node`), "native");
+  const unrelatedNativeRoot = path.join(packageRoot, "node_modules", "@lzehrung", "codegraph-native-unused");
+  await fsp.mkdir(unrelatedNativeRoot, { recursive: true });
+  await fsp.writeFile(
+    path.join(unrelatedNativeRoot, "package.json"),
+    '{"name":"@lzehrung/codegraph-native-unused","version":"9.8.7"}\n',
+  );
   const runtimeRoot = path.join(root, "runtime");
   await fsp.mkdir(runtimeRoot, { recursive: true });
   const node = path.join(runtimeRoot, process.platform === "win32" ? "node.exe" : "node");
@@ -260,6 +269,7 @@ describe("standalone distribution", () => {
     expect(entries).toContain(
       `codegraph-${target}/node_modules/@lzehrung/codegraph-native-${result.manifest.nativeSuffix}/`,
     );
+    expect(entries).not.toContain(`codegraph-${target}/node_modules/@lzehrung/codegraph-native-unused/`);
   });
 
   it("preserves staging work owned by another standalone build", async () => {
