@@ -6,9 +6,15 @@ For a source checkout of this repo, replace `codegraph` with `node ./dist/cli.js
 
 If the CLI is not installed yet, use the install paths in [docs/installation.md](./installation.md). Do not use the unscoped `codegraph` package name.
 
+## Entry and help
+
+Bare `codegraph` prints concise task-oriented help and exits without reading project config or building an index. Use `codegraph --help` or `codegraph help` for the full command catalog, and `codegraph help <command>` or `codegraph <command> --help` for command help.
+
+Unknown commands exit with status 1, print up to three deterministic suggestions, and may print one task route; they never guess and execute a command. Invalid command arguments and noninteractive installer writes without `--yes` exit with status 2.
+
 CLI commands default to human-readable stdout; `--pretty` remains an explicit equivalent. Use `--json` for structured automation output, or a format-specific option such as `--compact-json`, `--mermaid`, `--dot`, or `--sqlite` where supported. If `--json` and `--pretty` are both present, `--json` wins.
 
-Bare `codegraph graph` writes Mermaid to stdout. Use `--json`, `--compact-json`, `--dot`, `--sqlite <path>`, or `--output <path>` for explicit graph artifacts.
+The `graph` command without output-format flags writes Mermaid to stdout. Use `--json`, `--compact-json`, `--dot`, `--sqlite <path>`, or `--output <path>` for explicit graph artifacts.
 
 Numeric options such as `--limit`, `--threads`, `--depth`, `--max-refs`, and token bounds must be integers in their documented ranges; invalid numeric values fail instead of being silently clamped or ignored.
 
@@ -26,6 +32,14 @@ The CLI defaults to `--native auto`, which uses the native Tree-sitter path when
 
 - `--native on`: require native explicitly and fail if it is unavailable
 - `--native off`: disable native explicitly and run reduced graph-only and regex recovery mode
+
+## Index and cache guidance
+
+The first index-backed query for a project may build the index; interactive progress is written to stderr, leaving JSON stdout parseable. Later commands with the same `--root`, discovery configuration, graph options, and compatible build options reuse disk state under `.codegraph-cache/index-v1`.
+
+Use `--cache disk` for reuse across CLI processes, `--cache memory` for reuse within one process, and `--cache off` for a deliberate cold run. `codegraph init` is optional lifecycle metadata plus cache warmup; query commands do not require `.codegraph/manifest.json`.
+
+Keep `--root` stable for repeat queries. Use `--progress` to force redirected progress logs, `--no-progress` to suppress them, and `codegraph doctor` or `--report` when backend or cache behavior needs diagnosis.
 
 ## Project config
 
@@ -63,7 +77,7 @@ The CLI accepts the shortest unambiguous form across command families; explicit 
 - `grep <regex>` defaults to text regex search; Tree-sitter queries remain explicit with `--query`. `sql <db> "SELECT ..."` is equivalent to `--db/--query`.
 - `artifact`, `packet`, and `mcp` infer their only subcommand (`build`, `get`, and `serve`). `impact` and git-backed `drift` default to `HEAD..WORKTREE` while accepting explicit ranges.
 
-These defaults never approve writes: installer changes still require `--yes`, rename/refactor commands remain read-only, and ambiguous semantic targets are never selected silently.
+These defaults never approve writes silently: interactive installer changes require a preview and confirmation, noninteractive changes require `--yes`, rename/refactor commands remain read-only, and ambiguous semantic targets are never selected automatically.
 
 ### Dependency graphs
 
@@ -322,8 +336,9 @@ Short JSON shape:
 
 #### Agent orientation and packets
 
-- Use `explore` for a one-call repo question that combines search anchors, bounded packets, dependency paths, reverse dependencies, candidate tests, limits, omissions, and follow-ups. Use `--limit`, `--max-packets`, `--max-paths`, or `--no-source` to keep output small.
-- Use `orient` as the compact first-turn reading surface for people or models; it prints the ranked `focus` targets and their follow-up commands before the scope sketch.
+- Use `explore` first for a concrete repository question. It combines search anchors, bounded packets, dependency paths, reverse dependencies, candidate tests, limits, omissions, and follow-ups; use `--limit`, `--max-packets`, `--max-paths`, or `--no-source` to keep output small.
+- Human-readable `explore` output ends with `Recommended next: <command>`, selected from the first bounded follow-up. JSON keeps the existing `schemaVersion: 1` response and `followUps` array without adding display prose.
+- Use `orient` as the compact first-turn reading surface when no concrete question is available; it prints ranked `focus` targets and their follow-up commands before the scope sketch.
 - Use `orient --json` when follow-up tools need exact focus reasons, limits, and omitted counts. Index feedback is stderr-only, so stdout remains parseable.
 - Small orientation budgets default to `--health skip`. Medium and large default to `--health summary`, which counts cycles and unresolved imports while omitting duplicate health; use `--health full` when exhaustive duplicate counts matter.
 - Use `packet get` with file paths, symbol names, SQL object names, file/symbol/chunk/SQL/graph handles, or review handles to retrieve bounded evidence plus follow-up commands.
@@ -380,8 +395,11 @@ For SQL, prefer handles or schema-qualified names when basenames may be ambiguou
 #### Agent client installer
 
 - `install` configures Codegraph-owned MCP entries, bundled skill payloads, and marker files for supported local agent clients: `codex`, `claude`, `cursor`, `gemini`, `opencode`, and `agents`.
-- Writes require `--yes`; use `--detect` to list discovered targets, `--dry-run` to preview changed file paths and actions, or `--print-config <target>` to print a copyable MCP snippet without writing.
-- `uninstall` removes only Codegraph-owned marker blocks, marker files, exact bundled skill payloads, or exact installer-owned MCP entries.
+- With neither `--yes` nor `--dry-run`, an interactive install detects targets, prints proposed actions and paths, and accepts only `y` or `yes`; blank input, EOF, interrupt, and every other answer decline without writing.
+- Noninteractive writes require `--yes`. Use `--detect` to list discovered targets, `--dry-run` to preview actions, or `--print-config <target>` to print a copyable MCP snippet without writing.
+- If no target is detected, output lists supported targets, checked paths, and copyable preview/apply commands; JSON includes `installed: false` and `reason: "no-targets-detected"`.
+- After a confirmed install, Codegraph verifies owned state, reports bounded doctor health, and prints restart/reload plus first-query guidance. It does not claim the client connected.
+- `uninstall` follows the same preview/confirmation rules and removes only Codegraph-owned marker blocks, marker files, exact bundled skill payloads, or exact installer-owned MCP entries.
 - `skill install` remains the lower-level primitive when you only want to copy the bundled skill directly without MCP config.
 
 #### MCP server
@@ -396,7 +414,8 @@ For SQL, prefer handles or schema-qualified names when basenames may be ambiguou
 - MCP tools are read-only by default; `--allow-build` enables artifact output only when the MCP index is fresh or auto-refreshed.
 - `query_sqlite` is row- and byte-bounded, returns freshness metadata, rejects synthetic payload functions, and refuses stale artifact rows it cannot refresh safely.
 
-See [docs/mcp.md](./mcp.md) for client configuration examples.
+- Restart or reload the owning MCP client after installation or a Codegraph update. A running server keeps the version and tool surface captured at startup; use `codegraph doctor` from the same environment to diagnose running-versus-installed version and native state.
+  See [docs/mcp.md](./mcp.md) for client configuration examples.
 
 #### Chunking
 
@@ -614,6 +633,8 @@ codegraph skill doctor
 `doctor.native.origin` reports `workspace`, `package`, or `cache`, plus normalized source and loaded paths when known. Cache origins include the target, package version, cache key, SHA-256, and `updateSafeForCurrentProcess`; a package fallback retains `cacheError` instead of treating cache preparation failure as native unavailability.
 
 `doctor.native.update` reports bounded, normalized `staleRetirementPaths`, `runningVersion`, `installedVersion`, `restartRequired`, and an optional reason. Doctor never deletes retirement paths, cache entries, or running processes.
+
+After installing or updating Codegraph, restart or reload each MCP client so it launches the current package and tool catalog. If behavior still looks stale, run `codegraph doctor --json` from the same shell or configured executable path, compare running and installed identity, then use MCP `refresh_index` only for repository snapshot freshness.
 
 ## Incremental git-scoped runs
 

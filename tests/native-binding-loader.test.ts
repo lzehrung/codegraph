@@ -186,6 +186,30 @@ describe("native binding loader", () => {
     expect(requireFn).toHaveBeenCalledTimes(1);
     expect(requireFn).toHaveBeenCalledWith("@lzehrung/codegraph-native");
   });
+  it("reports the resolved target package identity outside Windows cache mode", async () => {
+    const fixture = await makeInstalledNativeFixture("1.8.82", "darwin-native", "darwin-x64");
+    const localPackageRoot = path.join(await makeTempDir(), "workspace-native");
+    await fs.mkdir(localPackageRoot);
+
+    const loaded = loadNativeBinding<{ specifier: string }>({
+      packageName: "@lzehrung/codegraph-native",
+      localPackageRoot,
+      platform: "darwin",
+      arch: "x64",
+      requireFn: (specifier) => ({ specifier }),
+      resolveFn: fixture.resolveFn,
+    });
+
+    expect(loaded.binding).toEqual({ specifier: "@lzehrung/codegraph-native" });
+    expect(loaded.origin).toMatchObject({
+      mode: "package",
+      packageName: "@lzehrung/codegraph-native-darwin-x64",
+      packageVersion: "1.8.82",
+      target: "darwin-x64",
+      sourcePath: fixture.binaryPath.replace(/\\/g, "/"),
+      loadedPath: fixture.binaryPath.replace(/\\/g, "/"),
+    });
+  });
 
   it("returns the package load error when installed package loading fails", async () => {
     const dir = await makeTempDir();

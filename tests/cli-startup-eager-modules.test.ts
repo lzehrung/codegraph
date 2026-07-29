@@ -45,15 +45,30 @@ process.on("exit", () => {
     const stderr = result.stderr ?? "";
     const match = /MODULE_COUNT=(\d+)/.exec(stderr);
     if (!match) {
-      throw new Error(
-        `Failed to count modules for ${args.join(" ")}. status=${result.status} stderr=${result.stderr}`,
-      );
+      throw new Error(`Failed to count modules for ${args.join(" ")}. status=${result.status} stderr=${result.stderr}`);
     }
     const modules = [...stderr.matchAll(/^MODULE=(.+)$/gm)].map((entry) => entry[1]!);
     return { count: Number(match[1]), modules, stdout: result.stdout ?? "", status: result.status };
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+}
+
+function measureCliStartup(args: string[]): number {
+  const startedAt = performance.now();
+  const result = spawnSync(process.execPath, [cliPath, ...args], {
+    encoding: "utf8",
+    env: { ...process.env, NODE_OPTIONS: "" },
+  });
+  if (result.status !== 0) {
+    throw new Error(`CLI startup failed for ${args.join(" ")}: ${result.stderr}`);
+  }
+  return performance.now() - startedAt;
+}
+
+function median(values: number[]): number {
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[Math.floor(sorted.length / 2)]!;
 }
 
 function modulePathEndsWith(moduleUrl: string, suffix: string): boolean {
@@ -125,7 +140,14 @@ describe("CLI startup eager module loading", () => {
     expect(moduleScope).not.toContain("os.cpus()");
   });
 
-  it("loads fewer than 30 dist modules for --version, --help, and doctor", () => {
+  it("loads fewer than 30 dist modules for no args, --version, --help, and doctor", () => {
+    const noArgs = countDistModulesLoaded([]);
+    expect(noArgs.status).toBe(0);
+    expect(noArgs.stdout).toContain("Start here:");
+    expect(noArgs.count).toBeLessThan(30);
+    expect(noArgs.modules.some((url) => modulePathEndsWith(url, "/projectFiles.js"))).toBe(false);
+    expect(noArgs.modules.some((url) => modulePathEndsWith(url, "/config.js"))).toBe(false);
+
     const version = countDistModulesLoaded(["--version"]);
     expect(version.status).toBe(0);
     expect(version.stdout.trim().length).toBeGreaterThan(0);
@@ -149,5 +171,22 @@ describe("CLI startup eager module loading", () => {
     expect(doctor.modules.some((url) => modulePathEndsWith(url, "/duplicates.js"))).toBe(false);
     expect(doctor.modules.some((url) => modulePathEndsWith(url, "/projectFiles.js"))).toBe(false);
     expect(doctor.modules.some((url) => modulePathEndsWith(url, "/config.js"))).toBe(false);
+  });
+  it("keeps no-argument median startup within 10% of --version", () => {
+    measureCliStartup([]);
+    measureCliStartup(["--version"]);
+    const noArgsSamples: number[] = [];
+    const versionSamples: number[] = [];
+    for (let sample = 0; sample < 11; sample += 1) {
+      if (sample % 2) {
+        noArgsSamples.push(measureCliStartup([]));
+        versionSamples.push(measureCliStartup(["--version"]));
+      } else {
+        versionSamples.push(measureCliStartup(["--version"]));
+        noArgsSamples.push(measureCliStartup([]));
+      }
+    }
+
+    expect(median(noArgsSamples) / median(versionSamples)).toBeLessThanOrEqual(1.1);
   });
 });

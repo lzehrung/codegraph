@@ -359,6 +359,16 @@ describe("agent explore", () => {
     }
   });
 
+  it("ends human-readable output with one recommended next command", async () => {
+    const root = await mkExploreRepo();
+    const response = await exploreCodegraph({ root, query: "validateUser" });
+    const pretty = formatAgentExploreResponse(response);
+
+    expect(response.followUps.length).toBeGreaterThan(0);
+    expect(pretty.trimEnd().split("\n").at(-1)).toBe(`Recommended next: ${response.followUps[0]!}`);
+    expect(pretty.match(/^Recommended next:/gmu)).toHaveLength(1);
+  });
+
   it("uses default-format refs commands in explore follow-ups", async () => {
     const root = await mkExploreRepo();
     const query = "src/auth.ts";

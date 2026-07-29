@@ -243,6 +243,8 @@ export function formatAgentExploreResponse(response: AgentExploreResponse): stri
   for (const [name, value] of Object.entries(response.limits)) {
     lines.push(`- ${name}: ${value}`);
   }
+  const recommended = response.followUps[0] ?? "codegraph orient --root . --budget small";
+  lines.push("", `Recommended next: ${recommended}`);
   return lines.join("\n");
 }
 
@@ -555,9 +557,19 @@ function buildSummary(
   fileView: AgentFileViewResponse | undefined,
 ): string[] {
   if (!search.results.length) {
-    return [`No anchors matched "${search.query}".`, "Use follow-ups to broaden the search or orient the repository."];
+    const summary = [
+      `No anchors matched "${search.query}".`,
+      "Use follow-ups to broaden the search or orient the repository.",
+    ];
+    if (search.analysis.mode !== "semantic") {
+      summary.push(`Backend: ${search.analysis.label}. Run codegraph doctor for runtime diagnostics.`);
+    }
+    return summary;
   }
   const summary = [`Found ${search.results.length} anchor(s) for "${search.query}".`];
+  if (search.analysis.mode !== "semantic") {
+    summary.push(`Backend: ${search.analysis.label}. Run codegraph doctor for runtime diagnostics.`);
+  }
   if (fileView) {
     summary.push(`Included live file view for ${fileView.file}.`);
   }

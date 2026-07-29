@@ -172,15 +172,18 @@ An MCP `explore` request whose entire query resolves to an indexed project-relat
 
 ## Installer
 
-Use `codegraph install` to configure supported local clients without manually editing MCP config files:
+Run `codegraph install` interactively to detect supported local clients, preview exact proposed changes, and confirm once:
 
 ```bash
+codegraph install
 codegraph install --target codex,claude --dry-run
 codegraph install --target codex,claude --yes
 codegraph install --print-config codex
 ```
 
-The installer writes only Codegraph-owned marker blocks, marker files, bundled skill payloads, or exact installer-owned MCP entries. `codegraph uninstall --target <ids> --yes` removes only those owned entries.
+Interactive confirmation defaults to no, and noninteractive writes require `--yes`. The installer writes only Codegraph-owned marker blocks, marker files, bundled skill payloads, or exact installer-owned MCP entries; `codegraph uninstall --target <ids> --yes` removes only those owned entries.
+
+Restart or reload configured clients after applying changes. The installer prints restart and first-query guidance but does not claim an MCP connection until a handshake occurs.
 
 ## Client Configuration Examples
 
@@ -308,6 +311,16 @@ OpenCode uses the `mcp` object in `opencode.json`:
   }
 }
 ```
+
+## Troubleshooting
+
+1. After `codegraph install` or an update, restart or reload the owning MCP client. A running server keeps the package version and tool catalog captured at startup.
+2. Run `codegraph doctor --json` through the same executable path and environment the client uses. Inspect package identity, `native.origin`, and `native.update`; an installed-versus-running mismatch requires a server restart, not `refresh_index`.
+3. If indexed responses report `stale`, call MCP `refresh_index`. This refreshes the repository snapshot and SQLite state, but it does not reload the CLI package or MCP tool definitions.
+4. If a stdio client cannot start Codegraph, verify that its configured `command` resolves in the client's environment or use an absolute executable path. `codegraph install --print-config <target>` prints the current manual snippet without writing.
+5. For HTTP, verify the client uses Streamable HTTP at `http://127.0.0.1:7331/mcp`. A non-loopback host requires an explicit server `--host`.
+
+Do not delete native cache entries or npm retirement paths while Codegraph or an owning IDE may still use them. Stop the processes first; `doctor` reports state but never performs cleanup.
 
 ## Operating Pattern
 

@@ -12,6 +12,8 @@ Codegraph turns source files into a resolved dependency graph and a semantic ind
 
 The normal supported-language path is Tree-sitter. The native addon accelerates the shared parse and query path; it is not a separate analysis model. `--fast-graph` is a narrower, opt-in shortcut for plain `.js` and `.ts` import specifiers, not a switch that disables all AST work.
 
+The first index-backed question, such as `codegraph explore "..." --root .`, may discover, parse, resolve, and persist a cold index. Interactive progress goes to stderr; later compatible queries reuse the project-root cache and only rebuild or update work invalidated by file, configuration, or option changes.
+
 ## Discovery
 
 Commands start from the project root and any selected scan roots. Codegraph walks those roots, applies supported-extension filtering, honors `.gitignore` by default, and then applies configured and command-line include or ignore globs. Excluding generated, vendored, and fixture trees here avoids reading or parsing them later.
@@ -108,6 +110,8 @@ Readers use the sidecar only when its project snapshot identity matches the load
 The sidecar stores normalized source and chunk text. [Installation](./installation.md#local-caches) covers sensitive-data handling, cache-off behavior, and safe deletion.
 
 Long-lived agent and review sessions reuse only compatible index state. They refresh it when relevant file, configuration, or project signals drift.
+
+Project lifecycle state is optional. `codegraph init` creates `.codegraph/manifest.json` and warms the disk cache, but index-backed queries build and reuse `.codegraph-cache/index-v1` without requiring lifecycle initialization.
 
 ## Performance choices
 

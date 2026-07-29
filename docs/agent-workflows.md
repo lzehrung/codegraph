@@ -6,6 +6,8 @@ Use Codegraph for structural repo questions: architecture, dependency direction,
 
 ## Start here
 
+At a terminal, bare `codegraph` shows the five task-first routes without scanning the project. Use `codegraph --help` for the full catalog.
+
 For code reviews, start with `review`; it is the compact handoff with changed files, changed symbols, candidate tests, risks, duplicate leads, and analysis labels.
 
 ```bash
@@ -53,7 +55,8 @@ codegraph explore src/auth.ts --json --limit 5 --max-packets 3
 ```
 
 Explore orchestrates existing search, packet, path, reverse-dependency, and candidate-test surfaces. It returns `schemaVersion: 1`, the query, analysis metadata, summary bullets, anchors, bounded packets, dependency paths, blast radius, candidate tests, follow-ups, flat limits, and omission counts.
-Use `--no-source` when the caller only needs anchors, paths, and follow-up commands.
+
+Human-readable output ends with one `Recommended next:` command selected from the first bounded follow-up. Use `--no-source` when the caller only needs anchors, paths, and follow-up commands.
 
 ## Live file reads
 
@@ -148,8 +151,9 @@ Search results include top-level `analysis` metadata plus stable handles, per-re
 `explain` accepts those handles plus file paths, symbol names, and SQL object names, then returns bounded dependencies, references, snippets, duplicate context, SQL relation facts, review context, and follow-ups.
 Generated command strings quote dynamic arguments, SQL handles avoid ambiguous basenames, and omission counts stay explicit when packets hit limits.
 
-Agent CLI commands, `goto`, `refs`, `impact`, and a whole-project `graph` or `index` run all use the incremental index path and default to disk cache.
-Hybrid search is code-first by default. Use `mode: "text"` when you specifically want documentation or prose-heavy matches to outrank implementation symbols.
+Agent CLI commands, `goto`, `refs`, `impact`, and whole-project `graph` or `index` runs use the incremental index path and default to disk cache. The first query may build the index and report progress on stderr; later queries with the same root and compatible options reuse it.
+
+Hybrid search is code-first by default. Use `mode: "text"` when documentation or prose-heavy matches should outrank implementation symbols.
 Pure path/text searches skip detailed symbol graph construction; hybrid, symbol, SQL, and graph searches keep symbol-aware ranking and neighbors.
 
 Disk cache speeds repeated text and hybrid searches. MCP reuses prepared state until it refreshes a changed repository. See [How it works](./how-it-works.md#cache-and-session-behavior) for cache mechanics and [MCP](./mcp.md#session-lifecycle) for server lifecycle.
@@ -168,15 +172,16 @@ Drift compares structural signals over time: dependency cycles, hotspots, unreso
 
 ## Agent client installer
 
-Use `install` when setting up Codegraph for supported local agent clients:
+Run `codegraph install` interactively to detect local clients, preview exact proposed actions and paths, and confirm once:
 
 ```bash
+codegraph install
 codegraph install --target codex,claude --dry-run
 codegraph install --target codex,claude --yes
 codegraph uninstall --target codex --yes
 ```
 
-Writes require `--yes`, and `--print-config <target>` prints the MCP snippet without touching disk. `uninstall` removes only Codegraph-owned marker blocks, marker files, exact bundled skill payloads, or exact installer-owned MCP entries.
+Interactive confirmation accepts only `y` or `yes` and defaults to no. Noninteractive writes require `--yes`; `--print-config <target>` prints an MCP snippet without touching disk, and uninstall removes only Codegraph-owned content.
 
 ## MCP server
 
@@ -184,7 +189,9 @@ Use `codegraph mcp serve --root . --stdio` when an agent can spawn and own a std
 Use `codegraph mcp serve --root /path/to/repo --port 7331 --warmup` for one shared repo-local Streamable HTTP server, then point clients at `http://127.0.0.1:7331/mcp`.
 MCP is an ergonomics and performance layer over the same analysis engine; it keeps warm session state, returns bounded resources, confines paths to the project root, and keeps tools read-only unless the server is started with `--allow-build`.
 
-See [MCP server](./mcp.md) for client configuration examples.
+Restart or reload the owning client after `codegraph install` or a Codegraph update. A running MCP server keeps the version and tool catalog captured at startup; `codegraph doctor --json` diagnoses package/native identity, while MCP `refresh_index` only refreshes repository analysis state.
+
+See [MCP server](./mcp.md) for client configuration and troubleshooting.
 
 ## Session management
 

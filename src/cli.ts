@@ -9,9 +9,11 @@ import {
   createCliProgressHandler,
   exitCli,
   getCwd,
+  isCliInteractiveTerminal,
   maybeWriteNativeBackendStatus,
   parseCliArgs,
   readCliStdin,
+  promptCliLine,
   runWithCliRuntime,
   setCliStderrFilePath,
   writeCommandReport,
@@ -22,7 +24,8 @@ import {
   type CliRuntime,
   type CommandReport,
 } from "./cli/context.js";
-import { CLI_HELP_TEXT, helpTextForCommand, isKnownCliCommand } from "./cli/help.js";
+import { CLI_HELP_TEXT, CLI_TASK_HELP_TEXT, helpTextForCommand, isKnownCliCommand } from "./cli/help.js";
+import { routeForCliIntent, suggestCliCommands } from "./cli/commandCatalog.js";
 import { parseCacheModeOption, parseOptionalNonNegativeIntegerOption, validateCliArgs } from "./cli/options.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
 import { writeCliOutput } from "./cli/pretty.js";
@@ -36,6 +39,54 @@ import {
 } from "./util/paths.js";
 
 export { isRelativePathInside as isCliDiscoveryRelativePathInside } from "./util/discoveryPath.js";
+export const CLI_DISPATCHABLE_COMMANDS = [
+  "apisurface",
+  "artifact",
+  "callees",
+  "callers",
+  "chunk",
+  "cycles",
+  "deps",
+  "doctor",
+  "drift",
+  "dumpmod",
+  "duplicates",
+  "explain",
+  "explore",
+  "file",
+  "goto",
+  "graph",
+  "graph-delta",
+  "grep",
+  "hotspots",
+  "impact",
+  "implementations",
+  "index",
+  "init",
+  "inspect",
+  "install",
+  "mcp",
+  "orient",
+  "packet",
+  "path",
+  "rdeps",
+  "refactor-plan",
+  "refs",
+  "rename-preview",
+  "review",
+  "search",
+  "skill",
+  "sql",
+  "status",
+  "subtypes",
+  "supertypes",
+  "symbols",
+  "sync",
+  "uninit",
+  "uninstall",
+  "unresolved",
+  "version",
+] as const;
 
 async function getDuplicateProjectPatterns(): Promise<string[]> {
   const { DEFAULT_PROJECT_PATTERNS } = await loadProjectFilesHelpers();
@@ -139,6 +190,19 @@ function parseNativeRuntimeMode(value: string | undefined): NativeRuntimeMode {
 }
 
 async function runCliWithActiveRuntime(rawArgs: string[]) {
+  if (!rawArgs.length) {
+    writeStdoutLine(CLI_TASK_HELP_TEXT);
+    return;
+  }
+
+  if (rawArgs[0] === "help") {
+    const command = rawArgs[1];
+    writeStdoutLine(
+      (command ? helpTextForCommand(command, rawArgs.slice(2)) : CLI_HELP_TEXT)?.trimEnd() ?? CLI_HELP_TEXT,
+    );
+    return;
+  }
+
   const cmd = rawArgs[0] && !rawArgs[0].startsWith("-") ? rawArgs[0] : "graph";
   const argTokens = rawArgs[0] && !rawArgs[0].startsWith("-") ? rawArgs.slice(1) : rawArgs;
 
@@ -155,7 +219,6 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     return v?.length ? v[v.length - 1] : undefined;
   };
 
-  // Handle help flag
   if (hasFlag("--help") || hasFlag("-h")) {
     const commandHelp = helpTextForCommand(cmd, parsed.positionals);
     writeStdoutLine((commandHelp ?? CLI_HELP_TEXT).trimEnd());
@@ -172,7 +235,11 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (!isKnownCliCommand(cmd)) {
-    writeStderrLine(`Unknown command: ${cmd}`);
+    writeStderrLine(`Unknown command "${cmd}".`);
+    const suggestions = suggestCliCommands(cmd);
+    if (suggestions.length) writeStderrLine(`Did you mean: ${suggestions.join(", ")}?`);
+    const route = routeForCliIntent(cmd);
+    if (route) writeStderrLine(`Try: ${route}`);
     exitCli(1);
     return;
   }
@@ -370,6 +437,8 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       writeJSONLine,
       writeStdoutLine,
       writeStderrLine,
+      interactive: isCliInteractiveTerminal,
+      promptLine: promptCliLine,
       exit: exitCli,
     });
     return;
