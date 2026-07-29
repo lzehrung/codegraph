@@ -560,7 +560,7 @@ jobs:
             sleep 1
           done
           curl -fsS "$CODEGRAPH_RELEASE_BASE_URL/SHA256SUMS" > /dev/null
-          ./install.sh --yes
+          sh ./install.sh --yes
           "$CODEGRAPH_BIN_DIR/codegraph" version
 
       - name: Run published PowerShell bootstrap

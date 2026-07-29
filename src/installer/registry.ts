@@ -1027,28 +1027,32 @@ async function withInstallerLeaseLock<T>(
 }
 
 async function acquireInstallerLeaseLock(lockPath: string, resourceName: string): Promise<InstallerLeaseLock> {
-  const legacyClaimPath = `${lockPath}.reclaim`;
+  const claimPath = `${lockPath}.reclaim`;
   for (let attempt = 0; attempt < INSTALLER_LOCK_RETRIES; attempt += 1) {
-    if (await installerPathExists(legacyClaimPath)) {
+    if (await installerPathExists(claimPath)) {
       await waitForInstallerLockRetry();
       continue;
     }
-    let createdLockDirectory = false;
+    const acquisitionPath = `${lockPath}.acquire-${randomUUID()}`;
+    let published = false;
     let file: FileHandle | undefined;
     try {
-      await fsp.mkdir(lockPath, { mode: 0o700 });
-      createdLockDirectory = true;
-      if (await installerPathExists(legacyClaimPath)) {
-        await fsp.rm(lockPath, { recursive: true, force: true });
-        createdLockDirectory = false;
+      await fsp.mkdir(acquisitionPath, { mode: 0o700 });
+      const owner = randomUUID();
+      file = await fsp.open(path.join(acquisitionPath, "owner.json"), "wx", 0o600);
+      await writeInstallerLeaseMetadata(file, owner);
+      await file.close();
+      file = undefined;
+      if (await installerPathExists(claimPath)) {
+        await fsp.rm(acquisitionPath, { recursive: true, force: true });
         await waitForInstallerLockRetry();
         continue;
       }
+      await fsp.rename(acquisitionPath, lockPath);
+      published = true;
       const metadataPath = path.join(lockPath, "owner.json");
-      file = await fsp.open(metadataPath, "wx", 0o600);
+      file = await fsp.open(metadataPath, "r+");
       const lockFile = file;
-      const owner = randomUUID();
-      await writeInstallerLeaseMetadata(lockFile, owner);
       const renewalTimer = setInterval(
         () => {
           void writeInstallerLeaseMetadata(lockFile, owner).catch(() => undefined);
@@ -1059,9 +1063,13 @@ async function acquireInstallerLeaseLock(lockPath: string, resourceName: string)
       return { file: lockFile, lockPath, metadataPath, owner, renewalTimer };
     } catch (error) {
       await file?.close().catch(() => undefined);
-      if (createdLockDirectory) await fsp.rm(lockPath, { recursive: true, force: true }).catch(() => undefined);
-      if (!isFileSystemErrorCode(error, "EEXIST")) throw error;
-      if (await reclaimExpiredInstallerLease(lockPath, legacyClaimPath)) continue;
+      await fsp.rm(acquisitionPath, { recursive: true, force: true }).catch(() => undefined);
+      if (published) await fsp.rm(lockPath, { recursive: true, force: true }).catch(() => undefined);
+      const windowsLockExists = isFileSystemErrorCode(error, "EPERM") && (await installerPathExists(lockPath));
+      const lockExists =
+        isFileSystemErrorCode(error, "EEXIST") || isFileSystemErrorCode(error, "ENOTEMPTY") || windowsLockExists;
+      if (!lockExists) throw error;
+      if (await reclaimExpiredInstallerLease(lockPath, claimPath)) continue;
       await waitForInstallerLockRetry();
     }
   }
@@ -1097,12 +1105,12 @@ function installerLeaseExpired(content: string, mtimeMs: number): boolean {
   return metadata === null || !isInstallerProcessRunning(metadata.pid);
 }
 
-async function reclaimExpiredInstallerLease(lockPath: string, legacyClaimPath: string): Promise<boolean> {
+async function reclaimExpiredInstallerLease(lockPath: string, claimPath: string): Promise<boolean> {
   try {
     const stats = await fsp.lstat(lockPath);
     if (stats.isSymbolicLink()) throw unsafeSymbolicLinkError(lockPath);
-    if (stats.isDirectory()) return await reclaimExpiredInstallerLeaseDirectory(lockPath, stats.mtimeMs);
-    if (stats.isFile()) return await reclaimLegacyInstallerLeaseFile(lockPath, legacyClaimPath, stats.mtimeMs);
+    if (stats.isDirectory()) return await reclaimExpiredInstallerLeaseDirectory(lockPath, claimPath, stats.mtimeMs);
+    if (stats.isFile()) return await reclaimLegacyInstallerLeaseFile(lockPath, claimPath, stats.mtimeMs);
     throw new Error(`Installer lock path has an unsupported type: ${normalizePathForDisplay(lockPath)}.`);
   } catch (error) {
     if (isFileSystemErrorCode(error, "ENOENT")) return true;
@@ -1110,7 +1118,11 @@ async function reclaimExpiredInstallerLease(lockPath: string, legacyClaimPath: s
   }
 }
 
-async function reclaimExpiredInstallerLeaseDirectory(lockPath: string, mtimeMs: number): Promise<boolean> {
+async function reclaimExpiredInstallerLeaseDirectory(
+  lockPath: string,
+  claimPath: string,
+  mtimeMs: number,
+): Promise<boolean> {
   const metadataPath = path.join(lockPath, "owner.json");
   let observedContent = "";
   try {
@@ -1120,15 +1132,14 @@ async function reclaimExpiredInstallerLeaseDirectory(lockPath: string, mtimeMs: 
   }
   if (!installerLeaseExpired(observedContent, mtimeMs)) return false;
 
-  const claimPath = path.join(lockPath, ".reclaim");
   let claim: FileHandle | undefined;
   try {
     claim = await fsp.open(claimPath, "wx", 0o600);
   } catch (error) {
     if (isFileSystemErrorCode(error, "EEXIST")) return false;
-    if (isFileSystemErrorCode(error, "ENOENT")) return true;
     throw error;
   }
+  const quarantinePath = `${lockPath}.stale-${randomUUID()}`;
   try {
     let currentContent = "";
     try {
@@ -1137,11 +1148,16 @@ async function reclaimExpiredInstallerLeaseDirectory(lockPath: string, mtimeMs: 
       if (!isFileSystemErrorCode(error, "ENOENT")) throw error;
     }
     if (currentContent !== observedContent || !installerLeaseExpired(currentContent, mtimeMs)) return false;
-    await fsp.rm(lockPath, { recursive: true, force: true });
+    await fsp.rename(lockPath, quarantinePath);
+    await fsp.rm(quarantinePath, { recursive: true, force: true });
     return true;
+  } catch (error) {
+    if (isFileSystemErrorCode(error, "ENOENT")) return true;
+    throw error;
   } finally {
     await claim.close().catch(() => undefined);
     await fsp.rm(claimPath, { force: true }).catch(() => undefined);
+    await fsp.rm(quarantinePath, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 

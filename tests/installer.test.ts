@@ -1102,9 +1102,14 @@ describe("agent installer workflow", () => {
 
   it("reports permission failures with the exact user-owned path", async () => {
     const homeDir = await mkTmpDir("cg-install-permission-");
-    const rename = vi
-      .spyOn(fsp, "rename")
-      .mockRejectedValueOnce(Object.assign(new Error("denied"), { code: "EACCES" }));
+    const skillPath = path.join(homeDir, ".cursor", "skills", "codegraph", "SKILL.md");
+    const originalRename = fsp.rename.bind(fsp);
+    const rename = vi.spyOn(fsp, "rename").mockImplementation(async (source, target) => {
+      if (path.resolve(String(target)) === path.resolve(skillPath)) {
+        throw Object.assign(new Error("denied"), { code: "EACCES" });
+      }
+      await originalRename(source, target);
+    });
     try {
       await expect(installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true })).rejects.toThrow(
         normalizeExpectedPath(path.join(homeDir, ".cursor", "skills", "codegraph", "SKILL.md")),
@@ -1115,7 +1120,16 @@ describe("agent installer workflow", () => {
   });
   it("retries a transient atomic replace failure", async () => {
     const homeDir = await mkTmpDir("cg-install-transient-rename-");
-    const rename = vi.spyOn(fsp, "rename").mockRejectedValueOnce(Object.assign(new Error("busy"), { code: "EPERM" }));
+    const skillPath = path.join(homeDir, ".cursor", "skills", "codegraph", "SKILL.md");
+    const originalRename = fsp.rename.bind(fsp);
+    let rejected = false;
+    const rename = vi.spyOn(fsp, "rename").mockImplementation(async (source, target) => {
+      if (!rejected && path.resolve(String(target)) === path.resolve(skillPath)) {
+        rejected = true;
+        throw Object.assign(new Error("busy"), { code: "EPERM" });
+      }
+      await originalRename(source, target);
+    });
     try {
       await expect(installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true })).resolves.toMatchObject({
         installed: true,
