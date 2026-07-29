@@ -54,6 +54,8 @@ describe("bench-native harness", () => {
       expect(result.workloads.graph.cold).toBeDefined();
       expect(result.workloads.graph.cold.native.averageElapsedMs).toBeGreaterThan(0);
       expect(result.workloads.graph.cold.js.averageElapsedMs).toBeGreaterThan(0);
+      expect(result.workloads.graph.cold.native.medianElapsedMs).toBeGreaterThan(0);
+      expect(result.workloads.graph.cold.js.medianElapsedMs).toBeGreaterThan(0);
     },
     longBenchTimeoutMs,
   );

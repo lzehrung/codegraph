@@ -72,7 +72,7 @@
     "test:native:required": "node ./scripts/run-native-required-tests.mjs",
     "test:native:fallback": "node ./scripts/ensure-dist-for-tests.mjs && vitest run tests/native-fallback-reporting.test.ts tests/native-fallback-contract.test.ts",
     "bench:native": "node ./scripts/bench-native.mjs",
-    "bench:native:smoke": "node ./scripts/bench-native.mjs --runs 1 --fixtures typescript,python,go,rust,mixed --workloads full --temperatures cold --max-slowdown 4",
+    "bench:native:smoke": "node ./scripts/bench-native.mjs --runs 3 --fixtures typescript,python,go,rust,mixed --workloads full --temperatures cold --max-slowdown 4",
     "bench:native:full": "node ./scripts/bench-native.mjs --runs 1 --fixtures typescript,python,go,rust,mixed --workloads full,graph --temperatures cold",
     "bench:docs": "node ./scripts/ensure-dist-for-tests.mjs && node ./scripts/benchmarks/run-scenario.mjs --output docs/benchmarks/results.example.json --require-complete && node ./scripts/benchmarks/summarize-results.mjs --input docs/benchmarks/results.example.json --scenario-file docs/benchmarks/scenarios.json --readme docs/benchmarks/README.md --write",
     "bench:docs:check": "node ./scripts/benchmarks/summarize-results.mjs --input docs/benchmarks/results.example.json --scenario-file docs/benchmarks/scenarios.json --readme docs/benchmarks/README.md --check",
