@@ -619,6 +619,33 @@ describe("agent installer workflow", () => {
     await expect(fsp.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("reclaims a legacy abandoned file lease", async () => {
+    const homeDir = await mkTmpDir("cg-install-legacy-lock-");
+    const scope = path.resolve(homeDir);
+    const lockPath = path.join(
+      os.tmpdir(),
+      `codegraph-installer-${createHash("sha256").update(scope).digest("hex")}.lock`,
+    );
+    await fsp.writeFile(
+      lockPath,
+      `${JSON.stringify({
+        owner: "legacy-abandoned-owner",
+        pid: findDeadProcessId(),
+        leaseExpiresAt: new Date(Date.now() - 60_000).toISOString(),
+      })}\n`,
+      "utf8",
+    );
+    try {
+      await expect(installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true })).resolves.toMatchObject({
+        installed: true,
+        verified: true,
+      });
+    } finally {
+      await fsp.rm(lockPath, { recursive: true, force: true });
+    }
+    await expect(fsp.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("serializes concurrent installers while reclaiming an abandoned lease", async () => {
     const homeDir = await mkTmpDir("cg-install-stale-lock-concurrent-");
     const scope = path.resolve(homeDir);

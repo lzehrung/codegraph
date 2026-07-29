@@ -1027,12 +1027,7 @@ async function withInstallerLeaseLock<T>(
 }
 
 async function acquireInstallerLeaseLock(lockPath: string, resourceName: string): Promise<InstallerLeaseLock> {
-  const claimPath = `${lockPath}.reclaim`;
   for (let attempt = 0; attempt < INSTALLER_LOCK_RETRIES; attempt += 1) {
-    if (await installerPathExists(claimPath)) {
-      await waitForInstallerLockRetry();
-      continue;
-    }
     const acquisitionPath = `${lockPath}.acquire-${randomUUID()}`;
     let published = false;
     let file: FileHandle | undefined;
@@ -1043,11 +1038,6 @@ async function acquireInstallerLeaseLock(lockPath: string, resourceName: string)
       await writeInstallerLeaseMetadata(file, owner);
       await file.close();
       file = undefined;
-      if (await installerPathExists(claimPath)) {
-        await fsp.rm(acquisitionPath, { recursive: true, force: true });
-        await waitForInstallerLockRetry();
-        continue;
-      }
       await fsp.rename(acquisitionPath, lockPath);
       published = true;
       const metadataPath = path.join(lockPath, "owner.json");
@@ -1065,25 +1055,33 @@ async function acquireInstallerLeaseLock(lockPath: string, resourceName: string)
       await file?.close().catch(() => undefined);
       await fsp.rm(acquisitionPath, { recursive: true, force: true }).catch(() => undefined);
       if (published) await fsp.rm(lockPath, { recursive: true, force: true }).catch(() => undefined);
-      const windowsLockExists = isFileSystemErrorCode(error, "EPERM") && (await installerPathExists(lockPath));
-      const lockExists =
-        isFileSystemErrorCode(error, "EEXIST") || isFileSystemErrorCode(error, "ENOTEMPTY") || windowsLockExists;
-      if (!lockExists) throw error;
-      if (await reclaimExpiredInstallerLease(lockPath, claimPath)) continue;
+      if (!isInstallerLockPublishConflict(error, lockPath)) throw error;
+      if (await reclaimExpiredInstallerLease(lockPath)) continue;
       await waitForInstallerLockRetry();
     }
   }
   throw new Error(`Another Codegraph installer is still updating ${resourceName}.`);
 }
 
-async function installerPathExists(filePath: string): Promise<boolean> {
-  try {
-    await fsp.lstat(filePath);
+function isInstallerLockPublishConflict(error: unknown, lockPath: string): boolean {
+  if (
+    isFileSystemErrorCode(error, "EEXIST") ||
+    isFileSystemErrorCode(error, "ENOTEMPTY") ||
+    isFileSystemErrorCode(error, "ENOTDIR") ||
+    isFileSystemErrorCode(error, "EISDIR")
+  ) {
     return true;
-  } catch (error) {
-    if (isFileSystemErrorCode(error, "ENOENT")) return false;
-    throw error;
   }
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    error.code === "EPERM" &&
+    "syscall" in error &&
+    error.syscall === "rename" &&
+    "dest" in error &&
+    typeof error.dest === "string" &&
+    path.resolve(error.dest) === path.resolve(lockPath)
+  );
 }
 
 async function writeInstallerLeaseMetadata(file: FileHandle, owner: string): Promise<void> {
@@ -1105,12 +1103,12 @@ function installerLeaseExpired(content: string, mtimeMs: number): boolean {
   return metadata === null || !isInstallerProcessRunning(metadata.pid);
 }
 
-async function reclaimExpiredInstallerLease(lockPath: string, claimPath: string): Promise<boolean> {
+async function reclaimExpiredInstallerLease(lockPath: string): Promise<boolean> {
   try {
     const stats = await fsp.lstat(lockPath);
     if (stats.isSymbolicLink()) throw unsafeSymbolicLinkError(lockPath);
-    if (stats.isDirectory()) return await reclaimExpiredInstallerLeaseDirectory(lockPath, claimPath, stats.mtimeMs);
-    if (stats.isFile()) return await reclaimLegacyInstallerLeaseFile(lockPath, claimPath, stats.mtimeMs);
+    if (stats.isDirectory()) return await reclaimExpiredInstallerLeaseDirectory(lockPath, stats.mtimeMs);
+    if (stats.isFile()) return await reclaimLegacyInstallerLeaseFile(lockPath, stats.mtimeMs);
     throw new Error(`Installer lock path has an unsupported type: ${normalizePathForDisplay(lockPath)}.`);
   } catch (error) {
     if (isFileSystemErrorCode(error, "ENOENT")) return true;
@@ -1118,11 +1116,7 @@ async function reclaimExpiredInstallerLease(lockPath: string, claimPath: string)
   }
 }
 
-async function reclaimExpiredInstallerLeaseDirectory(
-  lockPath: string,
-  claimPath: string,
-  mtimeMs: number,
-): Promise<boolean> {
+async function reclaimExpiredInstallerLeaseDirectory(lockPath: string, mtimeMs: number): Promise<boolean> {
   const metadataPath = path.join(lockPath, "owner.json");
   let observedContent = "";
   try {
@@ -1132,13 +1126,6 @@ async function reclaimExpiredInstallerLeaseDirectory(
   }
   if (!installerLeaseExpired(observedContent, mtimeMs)) return false;
 
-  let claim: FileHandle | undefined;
-  try {
-    claim = await fsp.open(claimPath, "wx", 0o600);
-  } catch (error) {
-    if (isFileSystemErrorCode(error, "EEXIST")) return false;
-    throw error;
-  }
   const quarantinePath = `${lockPath}.stale-${randomUUID()}`;
   try {
     let currentContent = "";
@@ -1155,22 +1142,13 @@ async function reclaimExpiredInstallerLeaseDirectory(
     if (isFileSystemErrorCode(error, "ENOENT")) return true;
     throw error;
   } finally {
-    await claim.close().catch(() => undefined);
-    await fsp.rm(claimPath, { force: true }).catch(() => undefined);
     await fsp.rm(quarantinePath, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
-async function reclaimLegacyInstallerLeaseFile(lockPath: string, claimPath: string, mtimeMs: number): Promise<boolean> {
+async function reclaimLegacyInstallerLeaseFile(lockPath: string, mtimeMs: number): Promise<boolean> {
   const observedContent = await fsp.readFile(lockPath, "utf8");
   if (!installerLeaseExpired(observedContent, mtimeMs)) return false;
-  let claim: FileHandle | undefined;
-  try {
-    claim = await fsp.open(claimPath, "wx", 0o600);
-  } catch (error) {
-    if (isFileSystemErrorCode(error, "EEXIST")) return false;
-    throw error;
-  }
   const quarantinePath = `${lockPath}.stale-${randomUUID()}`;
   try {
     const currentContent = await fsp.readFile(lockPath, "utf8");
@@ -1182,8 +1160,6 @@ async function reclaimLegacyInstallerLeaseFile(lockPath: string, claimPath: stri
     if (isFileSystemErrorCode(error, "ENOENT")) return true;
     throw error;
   } finally {
-    await claim.close().catch(() => undefined);
-    await fsp.rm(claimPath, { force: true }).catch(() => undefined);
     await fsp.rm(quarantinePath, { force: true }).catch(() => undefined);
   }
 }
