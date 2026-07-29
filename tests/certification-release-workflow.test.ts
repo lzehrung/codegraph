@@ -77,6 +77,7 @@ describe("certified release workflows", () => {
   });
 
   it("runs standalone assembly and funnels only when manually requested for an existing release", () => {
+    const plan = jobBlock(standaloneWorkflow, "plan-standalone");
     const download = jobBlock(standaloneWorkflow, "download-release-candidates");
     const build = jobBlock(standaloneWorkflow, "build-standalone-archives");
     const smoke = jobBlock(standaloneWorkflow, "smoke-standalone-archives");
@@ -87,6 +88,7 @@ describe("certified release workflows", () => {
     expect(standaloneWorkflow).toContain("workflow_dispatch:");
     expect(standaloneWorkflow).toContain("release_tag:");
     expect(standaloneWorkflow).toContain('["rev-parse", "HEAD^"]');
+    expect(plan).toContain("fetch-depth: 2");
     expect(download).toContain('gh release download "$RELEASE_TAG"');
     expect(download).toContain("release-candidate-manifest.json");
     expect(download).toContain("{ verifyFiles: true }");
