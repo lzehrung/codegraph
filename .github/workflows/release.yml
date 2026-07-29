@@ -727,7 +727,7 @@ jobs:
 
       - name: Publish only certified tarballs
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN || secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ github.token }}
         run: >-
           node ./scripts/certification/publish-release-candidates.mjs
           --manifest temp/release-candidates/release-candidate-manifest.json
