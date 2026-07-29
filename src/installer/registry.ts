@@ -1028,6 +1028,7 @@ async function withInstallerLeaseLock<T>(
 
 async function acquireInstallerLeaseLock(lockPath: string, resourceName: string): Promise<InstallerLeaseLock> {
   for (let attempt = 0; attempt < INSTALLER_LOCK_RETRIES; attempt += 1) {
+    await clearInstallerLeaseQuarantine(lockPath);
     const acquisitionPath = `${lockPath}.acquire-${randomUUID()}`;
     let published = false;
     let file: FileHandle | undefined;
@@ -1097,10 +1098,23 @@ async function writeInstallerLeaseMetadata(file: FileHandle, owner: string): Pro
 
 function installerLeaseExpired(content: string, mtimeMs: number): boolean {
   const metadata = parseInstallerLeaseMetadata(content);
-  const expiration = metadata === null ? mtimeMs + INSTALLER_LOCK_LEASE_MS : Date.parse(metadata.leaseExpiresAt);
+  if (metadata === null) return false;
+  const expiration = Date.parse(metadata.leaseExpiresAt);
   const leaseDeadline = Number.isFinite(expiration) ? expiration : mtimeMs + INSTALLER_LOCK_LEASE_MS;
   if (leaseDeadline > Date.now()) return false;
-  return metadata === null || !isInstallerProcessRunning(metadata.pid);
+  return !isInstallerProcessRunning(metadata.pid);
+}
+
+async function clearInstallerLeaseQuarantine(lockPath: string): Promise<void> {
+  const quarantinePath = `${lockPath}.stale`;
+  const cleanupPath = `${quarantinePath}.cleanup-${randomUUID()}`;
+  try {
+    await fsp.rename(quarantinePath, cleanupPath);
+  } catch (error) {
+    if (isFileSystemErrorCode(error, "ENOENT")) return;
+    throw error;
+  }
+  await fsp.rm(cleanupPath, { recursive: true, force: true });
 }
 
 async function reclaimExpiredInstallerLease(lockPath: string): Promise<boolean> {
@@ -1126,7 +1140,7 @@ async function reclaimExpiredInstallerLeaseDirectory(lockPath: string, mtimeMs: 
   }
   if (!installerLeaseExpired(observedContent, mtimeMs)) return false;
 
-  const quarantinePath = `${lockPath}.stale-${randomUUID()}`;
+  const quarantinePath = `${lockPath}.stale`;
   try {
     let currentContent = "";
     try {
@@ -1136,31 +1150,27 @@ async function reclaimExpiredInstallerLeaseDirectory(lockPath: string, mtimeMs: 
     }
     if (currentContent !== observedContent || !installerLeaseExpired(currentContent, mtimeMs)) return false;
     await fsp.rename(lockPath, quarantinePath);
-    await fsp.rm(quarantinePath, { recursive: true, force: true });
     return true;
   } catch (error) {
     if (isFileSystemErrorCode(error, "ENOENT")) return true;
+    if (isInstallerLockPublishConflict(error, quarantinePath)) return false;
     throw error;
-  } finally {
-    await fsp.rm(quarantinePath, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
 async function reclaimLegacyInstallerLeaseFile(lockPath: string, mtimeMs: number): Promise<boolean> {
   const observedContent = await fsp.readFile(lockPath, "utf8");
   if (!installerLeaseExpired(observedContent, mtimeMs)) return false;
-  const quarantinePath = `${lockPath}.stale-${randomUUID()}`;
+  const quarantinePath = `${lockPath}.stale`;
   try {
     const currentContent = await fsp.readFile(lockPath, "utf8");
     if (currentContent !== observedContent || !installerLeaseExpired(currentContent, mtimeMs)) return false;
     await fsp.rename(lockPath, quarantinePath);
-    await fsp.rm(quarantinePath, { force: true });
     return true;
   } catch (error) {
     if (isFileSystemErrorCode(error, "ENOENT")) return true;
+    if (isInstallerLockPublishConflict(error, quarantinePath)) return false;
     throw error;
-  } finally {
-    await fsp.rm(quarantinePath, { force: true }).catch(() => undefined);
   }
 }
 
