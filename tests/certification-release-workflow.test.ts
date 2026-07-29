@@ -96,6 +96,10 @@ describe("certified release workflows", () => {
     expect(download).toContain("{ verifyFiles: true }");
     expect(download).not.toContain('--pattern "SHA256SUMS"');
     expect(download).toContain('fs.writeFileSync("temp/release-candidates/SHA256SUMS"');
+    expect(download).toContain("name: standalone-release-candidates");
+    expect(build).toContain("name: standalone-release-candidates");
+    expect(assets).toContain("name: standalone-release-candidates");
+    expect(standaloneWorkflow).not.toContain("name: release-candidates");
     expect(build).toContain("- download-release-candidates");
     expect(build).toContain("npm run build:standalone --");
     expect(build).not.toContain('"ls", "--omit=dev"');
