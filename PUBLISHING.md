@@ -97,7 +97,7 @@ A structural result proves archive checksum, package identity, target naming, an
 
 Publishing waits for every required package row plus security, semantics, and hermeticity. Missing, failed, stale-revision, wrong-version, expired-exception, size, or checksum evidence stops the job before `npm publish` is invoked.
 
-By default the workflow uses `GITHUB_TOKEN` for GitHub Packages. If an existing package is not linked to this repository or does not grant write access, create a `PACKAGE_PUBLISH_TOKEN` Actions secret from a classic PAT that can write the `@lzehrung` packages.
+The workflow uses the `CODEGRAPH_PACKAGES_TOKEN` Actions secret, which must contain a classic PAT that can write the `@lzehrung` packages.
 
 ## Package Roles
 
