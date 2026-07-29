@@ -86,6 +86,7 @@ describe("certified release workflows", () => {
 
     expect(standaloneWorkflow).toContain("workflow_dispatch:");
     expect(standaloneWorkflow).toContain("release_tag:");
+    expect(standaloneWorkflow).toContain('["rev-parse", "HEAD^"]');
     expect(download).toContain('gh release download "$RELEASE_TAG"');
     expect(download).toContain("release-candidate-manifest.json");
     expect(download).toContain("{ verifyFiles: true }");

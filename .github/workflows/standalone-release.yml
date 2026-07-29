@@ -39,7 +39,7 @@ jobs:
 
           const rootPackage = JSON.parse(fs.readFileSync("package.json", "utf8"));
           const nativePackage = JSON.parse(fs.readFileSync("packages/codegraph-native/package.json", "utf8"));
-          console.log(`source_revision=${execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim()}`);
+          console.log(`source_revision=${execFileSync("git", ["rev-parse", "HEAD^"], { encoding: "utf8" }).trim()}`);
           console.log(`root_version=${rootPackage.version}`);
           console.log(`native_version=${nativePackage.version}`);
           NODE
