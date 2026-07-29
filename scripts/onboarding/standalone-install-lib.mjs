@@ -265,8 +265,8 @@ function assertSmokePackageIdentity(report, manifest, root, command) {
 }
 
 function sameFilesystemPath(left, right) {
-  let normalizedLeft = path.resolve(left);
-  let normalizedRight = path.resolve(right);
+  let normalizedLeft = fs.realpathSync.native(path.resolve(left));
+  let normalizedRight = fs.realpathSync.native(path.resolve(right));
   if (process.platform === "win32") {
     normalizedLeft = normalizedLeft.toLowerCase();
     normalizedRight = normalizedRight.toLowerCase();

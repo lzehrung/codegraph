@@ -147,6 +147,7 @@ async function createFakePackageRoot(root: string, target: string): Promise<{ pa
 
 type SmokeReportOptions = {
   nativeAvailable?: boolean;
+  canonicalPackageRoot?: boolean;
   nativePackageName?: string;
   nativePackageVersion?: string;
   nativeTarget?: string;
@@ -156,6 +157,7 @@ type SmokeReportOptions = {
 
 function createSmokeCli(details: FakeBundleDetails, options: SmokeReportOptions = {}): string {
   let packageRootExpression = "process.cwd()";
+  if (options.canonicalPackageRoot) packageRootExpression = 'require("node:fs").realpathSync(process.cwd())';
   if (options.packageRoot !== undefined) packageRootExpression = JSON.stringify(options.packageRoot);
   const reportedVersion = options.version ?? details.version;
   const nativeAvailable = options.nativeAvailable ?? true;
@@ -412,6 +414,26 @@ describe("standalone distribution", () => {
     ).rejects.toThrow(/package identity does not match/u);
     expect(fs.existsSync(path.join(installBase, "1.0.0"))).toBe(false);
     await expectNoInstallTransientPaths(installBase);
+  });
+
+  it("accepts a canonical package root reached through a filesystem alias", async () => {
+    const root = await mkTmpDir("cg-standalone-smoke-alias-");
+    const realInstallBase = path.join(root, "real-install");
+    const installBase = path.join(root, "install-alias");
+    await fsp.mkdir(realInstallBase, { recursive: true });
+    await fsp.symlink(realInstallBase, installBase, process.platform === "win32" ? "junction" : "dir");
+    const bundle = await createFakeBundle(root, "1.0.0", {
+      runtimeNode: true,
+      cliFactory: (details) => createSmokeCli(details, { canonicalPackageRoot: true }),
+    });
+
+    const installed = await installStandaloneBundle({
+      bundleRoot: bundle,
+      installBase,
+      binDir: path.join(root, "bin"),
+    });
+
+    expect(installed.currentVersion).toBe("1.0.0");
   });
 
   it.each([
