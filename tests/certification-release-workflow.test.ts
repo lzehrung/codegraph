@@ -14,7 +14,7 @@ function jobBlock(workflow: string, jobName: string): string {
 }
 
 describe("certified release workflows", () => {
-  it("keeps package certification and publication independent from standalone previews", () => {
+  it("keeps package certification and publication ahead of standalone previews", () => {
     const assemble = jobBlock(releaseWorkflow, "assemble-release-candidates");
     const security = jobBlock(releaseWorkflow, "security-production");
     const smoke = jobBlock(releaseWorkflow, "package-smoke");
@@ -37,7 +37,7 @@ describe("certified release workflows", () => {
     expect(releaseWorkflow).not.toContain("standalone-release-assets");
   });
 
-  it("publishes only certified package assets before standalone enrichment", () => {
+  it("publishes only certified package assets before automatic standalone enrichment", () => {
     const publish = jobBlock(releaseWorkflow, "publish-certified");
     const preflightIndex = publish.indexOf("Require passing certification envelope before registry writes");
     const publishIndex = publish.indexOf("Publish only certified tarballs");
@@ -51,7 +51,7 @@ describe("certified release workflows", () => {
     expect(publish).toContain("temp/release-candidates/packages/*.tgz");
     expect(publish).toContain("temp/release-candidates/SHA256SUMS");
     expect(publish).toContain("release-candidate-manifest.json");
-    expect(publish).toContain("Standalone preview assets are attached later");
+    expect(publish).toContain("Standalone preview assets are attached automatically");
     expect(preflightIndex).toBeGreaterThan(-1);
     expect(publishIndex).toBeGreaterThan(preflightIndex);
     expect(releaseIndex).toBeGreaterThan(publishIndex);
@@ -76,7 +76,7 @@ describe("certified release workflows", () => {
     expect(build).not.toContain("RUSTFLAGS=");
   });
 
-  it("runs standalone assembly and funnels only when manually requested for an existing release", () => {
+  it("supports automatic standalone enrichment and manual retries for an existing release", () => {
     const plan = jobBlock(standaloneWorkflow, "plan-standalone");
     const download = jobBlock(standaloneWorkflow, "download-release-candidates");
     const build = jobBlock(standaloneWorkflow, "build-standalone-archives");
@@ -84,8 +84,10 @@ describe("certified release workflows", () => {
     const funnel = jobBlock(standaloneWorkflow, "standalone-funnel");
     const assets = jobBlock(standaloneWorkflow, "assemble-standalone-release-assets");
     const publish = jobBlock(standaloneWorkflow, "publish-standalone-assets");
+    const chained = jobBlock(releaseWorkflow, "standalone-assets");
 
     expect(standaloneWorkflow).toContain("workflow_dispatch:");
+    expect(standaloneWorkflow).toContain("workflow_call:");
     expect(standaloneWorkflow).toContain("release_tag:");
     expect(standaloneWorkflow).toContain('["rev-parse", "HEAD^"]');
     expect(plan).toContain("fetch-depth: 2");
@@ -111,6 +113,10 @@ describe("certified release workflows", () => {
     expect(publish).toContain("- assemble-standalone-release-assets");
     expect(publish).toContain('gh release upload "$RELEASE_TAG"');
     expect(publish).toContain("--clobber");
+    expect(chained).toContain("- publish-certified");
+    expect(chained).toContain("uses: ./.github/workflows/standalone-release.yml");
+    expect(chained).toContain("release_tag: ${{ format('v{0}', needs.plan-release.outputs.root_version) }}");
+    expect(chained).toContain("secrets: inherit");
   });
 
   it("retains runtime package funnels and the structural Windows ARM64 exception", () => {
