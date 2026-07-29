@@ -591,89 +591,34 @@ describe("agent installer workflow", () => {
     await expect(readFile(linkedTarget)).resolves.toBe("user-owned target\n");
   });
 
-  it("reclaims an abandoned transaction lock held by a dead PID", async () => {
-    const homeDir = await mkTmpDir("cg-install-stale-lock-");
+  it.each(["directory", "legacy file"] as const)("retains an abandoned %s lock", async (lockKind) => {
+    const homeDir = await mkTmpDir("cg-install-abandoned-lock-");
     const scope = path.resolve(homeDir);
     const lockPath = path.join(
       os.tmpdir(),
       `codegraph-installer-${createHash("sha256").update(scope).digest("hex")}.lock`,
     );
-    await fsp.mkdir(lockPath);
-    await fsp.writeFile(
-      path.join(lockPath, "owner.json"),
-      `${JSON.stringify({
-        owner: "abandoned-owner",
-        pid: findDeadProcessId(),
-        leaseExpiresAt: new Date(Date.now() - 60_000).toISOString(),
-      })}\n`,
-      "utf8",
-    );
+    const metadata = `${JSON.stringify({
+      owner: "abandoned-owner",
+      pid: findDeadProcessId(),
+      leaseExpiresAt: new Date(Date.now() - 60_000).toISOString(),
+    })}\n`;
+    if (lockKind === "directory") {
+      await fsp.mkdir(lockPath);
+      await fsp.writeFile(path.join(lockPath, "owner.json"), metadata, "utf8");
+    } else {
+      await fsp.writeFile(lockPath, metadata, "utf8");
+    }
+
     try {
-      await expect(installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true })).resolves.toMatchObject({
-        installed: true,
-        verified: true,
-      });
+      await expect(installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true })).rejects.toThrow(
+        "Another Codegraph installer is still updating",
+      );
+      const stats = await fsp.lstat(lockPath);
+      expect(lockKind === "directory" ? stats.isDirectory() : stats.isFile()).toBe(true);
     } finally {
       await fsp.rm(lockPath, { recursive: true, force: true });
     }
-    await expect(fsp.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("reclaims a legacy abandoned file lease", async () => {
-    const homeDir = await mkTmpDir("cg-install-legacy-lock-");
-    const scope = path.resolve(homeDir);
-    const lockPath = path.join(
-      os.tmpdir(),
-      `codegraph-installer-${createHash("sha256").update(scope).digest("hex")}.lock`,
-    );
-    await fsp.writeFile(
-      lockPath,
-      `${JSON.stringify({
-        owner: "legacy-abandoned-owner",
-        pid: findDeadProcessId(),
-        leaseExpiresAt: new Date(Date.now() - 60_000).toISOString(),
-      })}\n`,
-      "utf8",
-    );
-    try {
-      await expect(installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true })).resolves.toMatchObject({
-        installed: true,
-        verified: true,
-      });
-    } finally {
-      await fsp.rm(lockPath, { recursive: true, force: true });
-    }
-    await expect(fsp.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("serializes concurrent installers while reclaiming an abandoned lease", async () => {
-    const homeDir = await mkTmpDir("cg-install-stale-lock-concurrent-");
-    const scope = path.resolve(homeDir);
-    const lockPath = path.join(
-      os.tmpdir(),
-      `codegraph-installer-${createHash("sha256").update(scope).digest("hex")}.lock`,
-    );
-    await fsp.mkdir(lockPath);
-    await fsp.writeFile(
-      path.join(lockPath, "owner.json"),
-      `${JSON.stringify({
-        owner: "abandoned-owner",
-        pid: findDeadProcessId(),
-        leaseExpiresAt: new Date(Date.now() - 60_000).toISOString(),
-      })}\n`,
-      "utf8",
-    );
-
-    try {
-      const results = await Promise.all([
-        installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true }),
-        installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true }),
-      ]);
-      expect(results.every((result) => result.verified)).toBe(true);
-    } finally {
-      await fsp.rm(lockPath, { recursive: true, force: true });
-    }
-    await expect(fsp.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("records owner, PID, and lease metadata while an install holds transaction and file locks", async () => {
@@ -690,8 +635,8 @@ describe("agent installer workflow", () => {
     let observedFileLock = "";
     const rename = vi.spyOn(fsp, "rename").mockImplementation(async (source, target) => {
       if (path.resolve(String(target)) === path.resolve(skillPath)) {
-        observedTransactionLock = await readFile(path.join(transactionLockPath, "owner.json"));
-        observedFileLock = await readFile(path.join(fileLockPath, "owner.json"));
+        observedTransactionLock = await readFile(transactionLockPath);
+        observedFileLock = await readFile(fileLockPath);
       }
       await originalRename(source, target);
     });
