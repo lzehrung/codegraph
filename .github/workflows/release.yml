@@ -78,7 +78,7 @@ jobs:
             rust-target: x86_64-unknown-linux-musl
             suffix: linux-x64-musl
             certification-class: runtime
-          - os: ubuntu-24.04-arm
+          - os: ubuntu-latest
             rust-target: aarch64-unknown-linux-musl
             suffix: linux-arm64-musl
             certification-class: runtime
@@ -101,9 +101,19 @@ jobs:
         with:
           targets: ${{ matrix.rust-target }}
 
-      - name: Setup Linux musl tools
+      - name: Setup Zig for musl targets
         if: contains(matrix.rust-target, 'musl')
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Install cargo-zigbuild for musl targets
+        if: contains(matrix.rust-target, 'musl')
+        uses: taiki-e/install-action@v2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          tool: cargo-zigbuild
 
       - name: Setup Node
         uses: actions/setup-node@v6
@@ -121,10 +131,27 @@ jobs:
         run: npm run native:create-npm-dirs
 
       - name: Build native target
+        if: ${{ !contains(matrix.rust-target, 'musl') }}
         run: node ./node_modules/@napi-rs/cli/dist/cli.js build --platform --release --cwd packages/codegraph-native --output-dir ./artifacts --no-js --dts index.d.ts --target ${{ matrix.rust-target }}
+
+      - name: Build native musl target with Zig
+        if: contains(matrix.rust-target, 'musl')
+        run: node ./node_modules/@napi-rs/cli/dist/cli.js build --platform --release --cwd packages/codegraph-native --output-dir ./artifacts --no-js --dts index.d.ts --target ${{ matrix.rust-target }} -x
 
       - name: Stage native target
         run: node ./node_modules/@napi-rs/cli/dist/cli.js artifacts --cwd packages/codegraph-native --output-dir ./artifacts --npm-dir ./npm
+
+      - name: Reject glibc-linked musl artifacts
+        if: contains(matrix.rust-target, 'musl')
+        shell: bash
+        run: |
+          binary="packages/codegraph-native/npm/${{ matrix.suffix }}/index.${{ matrix.suffix }}.node"
+          dependencies="$(readelf -d "$binary")"
+          echo "$dependencies"
+          if [[ "$dependencies" =~ libgcc_s\.so|libc\.so\.6|ld-linux ]]; then
+            echo "Musl artifact contains glibc runtime dependencies." >&2
+            exit 1
+          fi
 
       - name: Bundle staged native directory
         shell: bash

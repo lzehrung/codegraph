@@ -55,10 +55,20 @@ describe("certified release workflows", () => {
     expect(releaseIndex).toBeGreaterThan(publishIndex);
   });
 
-  it("builds musl targets without injecting host glibc libraries", () => {
+  it("builds both musl targets through Zig instead of host glibc tools", () => {
     const build = jobBlock(releaseWorkflow, "build-native-artifacts");
 
-    expect(build).toContain("sudo apt-get install -y musl-tools");
+    expect(build).toContain("- os: ubuntu-latest\n            rust-target: aarch64-unknown-linux-musl");
+    expect(build).toContain("uses: mlugg/setup-zig@v2");
+    expect(build).toContain("version: 0.15.2");
+    expect(build).toContain("uses: taiki-e/install-action@v2");
+    expect(build).toContain("tool: cargo-zigbuild");
+    expect(build).toContain("Build native musl target with Zig");
+    expect(build).toContain("${{ matrix.rust-target }} -x");
+    expect(build).toContain("Reject glibc-linked musl artifacts");
+    expect(build).toContain("readelf -d");
+    expect(build).toContain("libgcc_s\\.so|libc\\.so\\.6|ld-linux");
+    expect(build).not.toContain("musl-tools");
     expect(build).not.toContain("libgcc-s1");
     expect(build).not.toContain("LIBRARY_PATH=");
     expect(build).not.toContain("RUSTFLAGS=");
