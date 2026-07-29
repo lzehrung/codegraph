@@ -63,7 +63,7 @@ export async function assembleStandaloneArchive(options) {
   const bundleName = `codegraph-${options.target}`;
   const stagingRoot = path.join(outputDir, ".staging", `${bundleName}-${process.pid}`);
   const bundleRoot = path.join(stagingRoot, bundleName);
-  await fsp.rm(path.join(outputDir, ".staging"), { recursive: true, force: true });
+  await fsp.rm(stagingRoot, { recursive: true, force: true });
   await fsp.mkdir(path.join(bundleRoot, "bin"), { recursive: true });
   await fsp.cp(path.join(packageRoot, "dist"), path.join(bundleRoot, "dist"), { recursive: true });
   await fsp.cp(path.join(packageRoot, "codegraph-skill"), path.join(bundleRoot, "codegraph-skill"), {

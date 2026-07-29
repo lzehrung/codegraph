@@ -27,6 +27,18 @@ function normalizeExpectedPath(filePath: string): string {
   return filePath.split(path.sep).join("/");
 }
 
+function findDeadProcessId(): number {
+  for (let pid = Math.max(process.pid + 10_000, 100_000); pid < 2_147_483_647; pid += 9_973) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if (error instanceof Error && "code" in error && String(error.code) === "ESRCH") return pid;
+      throw error;
+    }
+  }
+  throw new Error("Unable to find an unused process ID for the stale-lock test.");
+}
+
 async function withCliHome<T>(homeDir: string, run: () => Promise<T>): Promise<T> {
   const previous = {
     HOME: process.env.HOME,
@@ -274,6 +286,22 @@ describe("agent installer workflow", () => {
     expect(output.guidance).toContain("codegraph install --target <name> --dry-run");
   });
 
+  it("uses the uninstall result shape and commands when no targets are detected", async () => {
+    const homeDir = await mkTmpDir("cg-uninstall-no-targets-");
+    const result = await withCliHome(homeDir, async () => await captureCli(["uninstall", "--json"]));
+    const output = JSON.parse(result.stdout) as {
+      installed?: boolean;
+      uninstalled?: boolean;
+      guidance?: string[];
+    };
+
+    expect(result).toMatchObject({ stderr: "", exitCode: undefined });
+    expect(output.uninstalled).toBe(false);
+    expect(output).not.toHaveProperty("installed");
+    expect(output.guidance).toContain("codegraph uninstall --target <name> --dry-run");
+    expect(output.guidance).toContain("codegraph uninstall --target <name> --yes");
+  });
+
   it("requires --yes for noninteractive writes and prints copyable commands", async () => {
     const homeDir = await mkTmpDir("cg-install-noninteractive-");
     const result = await withCliHome(homeDir, async () => await captureCli(["install", "--target", "cursor"]));
@@ -305,6 +333,23 @@ describe("agent installer workflow", () => {
     expect(result.stderr).toContain("Proposed changes:");
     expect(result.stderr).toContain("Configure Codegraph for 1 target(s)? [y/N]");
     await expect(fsp.stat(path.join(homeDir, ".cursor", "mcp.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each(["install", "uninstall"] as const)("keeps declined %s JSON command-specific", async (command) => {
+    const homeDir = await mkTmpDir(`cg-${command}-decline-json-`);
+    const result = await withCliHome(
+      homeDir,
+      async () =>
+        await captureCli([command, "--target", "cursor", "--json"], {
+          stdin: "n\n",
+          stdinIsTTY: true,
+          stderrIsTTY: true,
+        }),
+    );
+    const output = JSON.parse(result.stdout) as { installed?: boolean; uninstalled?: boolean };
+
+    expect(output[command === "install" ? "installed" : "uninstalled"]).toBe(false);
+    expect(output).not.toHaveProperty(command === "install" ? "uninstalled" : "installed");
   });
 
   it("treats an interrupted interactive prompt as decline", async () => {
@@ -531,7 +576,12 @@ describe("agent installer workflow", () => {
     const linkedTarget = path.join(homeDir, "linked-target");
     await fsp.writeFile(linkedTarget, "user-owned target\n", "utf8");
     await fsp.mkdir(path.dirname(linkedPath), { recursive: true });
-    await fsp.symlink(linkedTarget, linkedPath, "file");
+    try {
+      await fsp.symlink(linkedTarget, linkedPath, "file");
+    } catch (error) {
+      if (error instanceof Error && "code" in error && String(error.code) === "EPERM") return;
+      throw error;
+    }
 
     await expect(installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true })).rejects.toThrow(
       normalizeExpectedPath(linkedPath),
@@ -548,12 +598,13 @@ describe("agent installer workflow", () => {
       os.tmpdir(),
       `codegraph-installer-${createHash("sha256").update(scope).digest("hex")}.lock`,
     );
+    await fsp.mkdir(lockPath);
     await fsp.writeFile(
-      lockPath,
+      path.join(lockPath, "owner.json"),
       `${JSON.stringify({
         owner: "abandoned-owner",
-        pid: 999_999,
-        leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+        pid: findDeadProcessId(),
+        leaseExpiresAt: new Date(Date.now() - 60_000).toISOString(),
       })}\n`,
       "utf8",
     );
@@ -563,7 +614,37 @@ describe("agent installer workflow", () => {
         verified: true,
       });
     } finally {
-      await fsp.rm(lockPath, { force: true });
+      await fsp.rm(lockPath, { recursive: true, force: true });
+    }
+    await expect(fsp.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("serializes concurrent installers while reclaiming an abandoned lease", async () => {
+    const homeDir = await mkTmpDir("cg-install-stale-lock-concurrent-");
+    const scope = path.resolve(homeDir);
+    const lockPath = path.join(
+      os.tmpdir(),
+      `codegraph-installer-${createHash("sha256").update(scope).digest("hex")}.lock`,
+    );
+    await fsp.mkdir(lockPath);
+    await fsp.writeFile(
+      path.join(lockPath, "owner.json"),
+      `${JSON.stringify({
+        owner: "abandoned-owner",
+        pid: findDeadProcessId(),
+        leaseExpiresAt: new Date(Date.now() - 60_000).toISOString(),
+      })}\n`,
+      "utf8",
+    );
+
+    try {
+      const results = await Promise.all([
+        installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true }),
+        installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true }),
+      ]);
+      expect(results.every((result) => result.verified)).toBe(true);
+    } finally {
+      await fsp.rm(lockPath, { recursive: true, force: true });
     }
     await expect(fsp.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
@@ -582,8 +663,8 @@ describe("agent installer workflow", () => {
     let observedFileLock = "";
     const rename = vi.spyOn(fsp, "rename").mockImplementation(async (source, target) => {
       if (path.resolve(String(target)) === path.resolve(skillPath)) {
-        observedTransactionLock = await readFile(transactionLockPath);
-        observedFileLock = await readFile(fileLockPath);
+        observedTransactionLock = await readFile(path.join(transactionLockPath, "owner.json"));
+        observedFileLock = await readFile(path.join(fileLockPath, "owner.json"));
       }
       await originalRename(source, target);
     });

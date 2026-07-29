@@ -369,7 +369,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: standalone-candidate-${{ matrix.target }}
-          path: temp/standalone/codegraph-${{ matrix.target }}.${{ matrix.extension }}
+          path: |
+            temp/standalone/codegraph-${{ matrix.target }}.${{ matrix.extension }}
+            temp/standalone/SHA256SUMS
           if-no-files-found: error
           retention-days: 14
 
@@ -540,6 +542,54 @@ jobs:
         with:
           name: standalone-candidate-${{ matrix.target }}
           path: temp/standalone-candidate
+
+      - name: Run published POSIX bootstrap
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          CODEGRAPH_RELEASE_BASE_URL: http://127.0.0.1:8123
+          CODEGRAPH_INSTALL_BASE: ${{ runner.temp }}/codegraph-bootstrap-install
+          CODEGRAPH_BIN_DIR: ${{ runner.temp }}/codegraph-bootstrap-bin
+        run: |
+          python -m http.server 8123 --bind 127.0.0.1 --directory temp/standalone-candidate \
+            > "$RUNNER_TEMP/codegraph-bootstrap-server.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"' EXIT
+          for attempt in 1 2 3 4 5; do
+            if curl -fsS "$CODEGRAPH_RELEASE_BASE_URL/SHA256SUMS" > /dev/null; then break; fi
+            sleep 1
+          done
+          curl -fsS "$CODEGRAPH_RELEASE_BASE_URL/SHA256SUMS" > /dev/null
+          ./install.sh --yes
+          "$CODEGRAPH_BIN_DIR/codegraph" version
+
+      - name: Run published PowerShell bootstrap
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          CODEGRAPH_RELEASE_BASE_URL: http://127.0.0.1:8123
+          CODEGRAPH_INSTALL_BASE: ${{ runner.temp }}\codegraph-bootstrap-install
+          CODEGRAPH_BIN_DIR: ${{ runner.temp }}\codegraph-bootstrap-bin
+        run: |
+          $Server = Start-Process python -ArgumentList @(
+            "-m", "http.server", "8123", "--bind", "127.0.0.1",
+            "--directory", "temp/standalone-candidate"
+          ) -PassThru -WindowStyle Hidden
+          try {
+            for ($Attempt = 1; $Attempt -le 5; $Attempt += 1) {
+              try {
+                Invoke-WebRequest "$env:CODEGRAPH_RELEASE_BASE_URL/SHA256SUMS" -UseBasicParsing | Out-Null
+                break
+              } catch {
+                Start-Sleep -Seconds 1
+              }
+            }
+            Invoke-WebRequest "$env:CODEGRAPH_RELEASE_BASE_URL/SHA256SUMS" -UseBasicParsing | Out-Null
+            ./install.ps1 -Yes
+            & "$env:CODEGRAPH_BIN_DIR\codegraph.cmd" version
+          } finally {
+            Stop-Process -Id $Server.Id -ErrorAction SilentlyContinue
+          }
 
       - name: Run exact standalone installer funnel
         shell: bash

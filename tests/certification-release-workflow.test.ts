@@ -128,6 +128,12 @@ describe("certified release workflow", () => {
     expect(funnel).toContain("run-funnel-smoke.mjs");
     expect(funnel).toContain("--channel standalone");
     expect(funnel).toContain("Run exact standalone installer funnel");
+    expect(build).toContain("temp/standalone/SHA256SUMS");
+    expect(funnel).toContain("Run published POSIX bootstrap");
+    expect(funnel).toContain("Run published PowerShell bootstrap");
+    expect(funnel).toContain("CODEGRAPH_RELEASE_BASE_URL");
+    expect(funnel).toContain("./install.sh --yes");
+    expect(funnel).toContain("./install.ps1 -Yes");
     expect(funnel).toContain("funnel-standalone-${{ matrix.target }}.json");
     expect(funnel).toContain("Upload standalone FunnelResultV1");
   });

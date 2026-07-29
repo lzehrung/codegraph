@@ -118,7 +118,7 @@ lock_owner_is_live() {
   [ -f "$LOCK_DIR/owner" ] && [ ! -L "$LOCK_DIR/owner" ] || return 1
   IFS=' ' read -r LOCK_PID LOCK_STARTED LOCK_ID < "$LOCK_DIR/owner" || return 1
   case "$LOCK_PID" in ''|*[!0-9]*) return 1 ;; esac
-  kill -0 "$LOCK_PID" 2>/dev/null
+  ps -p "$LOCK_PID" >/dev/null 2>&1
 }
 
 reclaim_stale_install_lock() {

@@ -262,6 +262,26 @@ describe("standalone distribution", () => {
     );
   });
 
+  it("preserves staging work owned by another standalone build", async () => {
+    const root = await mkTmpDir("cg-standalone-staging-");
+    const target = resolveStandaloneTarget()!;
+    const fixture = await createFakePackageRoot(root, target);
+    const outputDir = path.join(root, "output");
+    const siblingMarker = path.join(outputDir, ".staging", "other-build", "marker");
+    await fsp.mkdir(path.dirname(siblingMarker), { recursive: true });
+    await fsp.writeFile(siblingMarker, "active", "utf8");
+
+    await assembleStandaloneArchive({
+      target,
+      packageRoot: fixture.packageRoot,
+      outputDir,
+      nodeExecutable: fixture.node,
+      noticesPath: path.join(fixture.packageRoot, "THIRD_PARTY_NOTICES"),
+    });
+
+    await expect(fsp.readFile(siblingMarker, "utf8")).resolves.toBe("active");
+  });
+
   it("verifies, installs, updates, and uninstalls only owned standalone state", async () => {
     const root = await mkTmpDir("cg-standalone-install-");
     const installBase = path.join(root, "install");
@@ -993,6 +1013,30 @@ describe("standalone bootstrap scripts", () => {
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(fs.existsSync(path.join(installBase, ".install.lock"))).toBe(false);
+  });
+
+  it.skipIf(process.platform === "win32")("retains a stale-looking POSIX lock when its PID is visible", async () => {
+    const root = await mkTmpDir("cg-bootstrap-live-lock-");
+    const mockBin = path.join(root, "mock-bin");
+    const release = await createPosixBootstrapRelease(root);
+    const installBase = path.join(root, "install");
+    const lockPath = path.join(installBase, ".install.lock");
+    await fsp.mkdir(lockPath, { recursive: true });
+    await fsp.writeFile(path.join(lockPath, "owner"), "99999999 0 live\n", "utf8");
+    await fsp.mkdir(mockBin, { recursive: true });
+    await writeReleaseCurl(mockBin);
+    await writePosixExecutable(path.join(mockBin, "ps"), "#!/bin/sh\nexit 0\n");
+    const environment = {
+      ...bootstrapEnvironment(release, installBase, path.join(root, "bin"), mockBin),
+      CODEGRAPH_INSTALL_LOCK_STALE_SECONDS: "1",
+      CODEGRAPH_INSTALL_LOCK_WAIT_SECONDS: "1",
+    };
+
+    const result = runPosixBootstrap(["--yes"], environment);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Timed out waiting for the Codegraph installer lock");
+    expect(fs.existsSync(lockPath)).toBe(true);
   });
 
   it.skipIf(process.platform === "win32")(

@@ -66,17 +66,21 @@ export async function handleInstallerCommand(context: InstallerCommandContext): 
     const checkedPaths = detections.flatMap((detection) =>
       [detection.configPath, detection.skillTargetDir].filter((value): value is string => value !== undefined),
     );
+    const dryRun = context.hasFlag("--dry-run");
+    const result: InstallResult | UninstallResult =
+      context.command === "install"
+        ? { installed: false, verified: false, dryRun, targets: [], changes: [] }
+        : { uninstalled: false, dryRun, targets: [], changes: [] };
     const output: InstallerOutput = {
-      installed: false,
-      verified: false,
-      dryRun: context.hasFlag("--dry-run"),
-      targets: [],
-      changes: [],
+      ...result,
       detected: [],
       reason: "no-targets-detected",
       checkedPaths,
       supportedTargets: catalog.map((target) => target.id),
-      guidance: ["codegraph install --target <name> --dry-run", "codegraph install --target <name> --yes"],
+      guidance: [
+        `codegraph ${context.command} --target <name> --dry-run`,
+        `codegraph ${context.command} --target <name> --yes`,
+      ],
     };
     writeCliOutput(context, output, formatInstallerOutput);
     return;
@@ -107,8 +111,7 @@ export async function handleInstallerCommand(context: InstallerCommandContext): 
     if (confirmed !== "y" && confirmed !== "yes") {
       const output: InstallerOutput = {
         ...preview,
-        installed: false,
-        uninstalled: false,
+        ...(context.command === "install" ? { installed: false } : { uninstalled: false }),
         dryRun: false,
         detected,
         reason: "declined",
@@ -172,11 +175,12 @@ function completionGuidance(
 
 function formatInstallerOutput(output: InstallerOutput): string {
   if (output.reason === "no-targets-detected") {
+    const command = "uninstalled" in output ? "uninstall" : "install";
     return [
       "No supported agent target was detected.",
       `Supported targets: ${output.supportedTargets?.join(", ") ?? "(none)"}`,
-      "Preview: codegraph install --target <name> --dry-run",
-      "Apply: codegraph install --target <name> --yes",
+      `Preview: codegraph ${command} --target <name> --dry-run`,
+      `Apply: codegraph ${command} --target <name> --yes`,
       ...(output.checkedPaths?.length ? ["Checked paths:", ...output.checkedPaths.map((value) => `  ${value}`)] : []),
     ].join("\n");
   }

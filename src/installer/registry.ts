@@ -107,6 +107,7 @@ type InstallerLeaseMetadata = {
 type InstallerLeaseLock = {
   file: FileHandle;
   lockPath: string;
+  metadataPath: string;
   owner: string;
   renewalTimer: NodeJS.Timeout;
 };
@@ -402,7 +403,7 @@ function sameInstallPath(left: string, right: string): boolean {
   const normalizedLeft = path.resolve(left);
   const normalizedRight = path.resolve(right);
   return process.platform === "win32"
-    ? normalizedLeft.toLocaleLowerCase() === normalizedRight.toLocaleLowerCase()
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
     : normalizedLeft === normalizedRight;
 }
 
@@ -1026,10 +1027,25 @@ async function withInstallerLeaseLock<T>(
 }
 
 async function acquireInstallerLeaseLock(lockPath: string, resourceName: string): Promise<InstallerLeaseLock> {
+  const legacyClaimPath = `${lockPath}.reclaim`;
   for (let attempt = 0; attempt < INSTALLER_LOCK_RETRIES; attempt += 1) {
+    if (await installerPathExists(legacyClaimPath)) {
+      await waitForInstallerLockRetry();
+      continue;
+    }
+    let createdLockDirectory = false;
     let file: FileHandle | undefined;
     try {
-      file = await fsp.open(lockPath, "wx", 0o600);
+      await fsp.mkdir(lockPath, { mode: 0o700 });
+      createdLockDirectory = true;
+      if (await installerPathExists(legacyClaimPath)) {
+        await fsp.rm(lockPath, { recursive: true, force: true });
+        createdLockDirectory = false;
+        await waitForInstallerLockRetry();
+        continue;
+      }
+      const metadataPath = path.join(lockPath, "owner.json");
+      file = await fsp.open(metadataPath, "wx", 0o600);
       const lockFile = file;
       const owner = randomUUID();
       await writeInstallerLeaseMetadata(lockFile, owner);
@@ -1040,16 +1056,26 @@ async function acquireInstallerLeaseLock(lockPath: string, resourceName: string)
         Math.floor(INSTALLER_LOCK_LEASE_MS / 2),
       );
       renewalTimer.unref();
-      return { file: lockFile, lockPath, owner, renewalTimer };
+      return { file: lockFile, lockPath, metadataPath, owner, renewalTimer };
     } catch (error) {
       await file?.close().catch(() => undefined);
-      if (file) await fsp.rm(lockPath, { force: true }).catch(() => undefined);
+      if (createdLockDirectory) await fsp.rm(lockPath, { recursive: true, force: true }).catch(() => undefined);
       if (!isFileSystemErrorCode(error, "EEXIST")) throw error;
-      if (await reclaimExpiredInstallerLease(lockPath)) continue;
+      if (await reclaimExpiredInstallerLease(lockPath, legacyClaimPath)) continue;
       await waitForInstallerLockRetry();
     }
   }
   throw new Error(`Another Codegraph installer is still updating ${resourceName}.`);
+}
+
+async function installerPathExists(filePath: string): Promise<boolean> {
+  try {
+    await fsp.lstat(filePath);
+    return true;
+  } catch (error) {
+    if (isFileSystemErrorCode(error, "ENOENT")) return false;
+    throw error;
+  }
 }
 
 async function writeInstallerLeaseMetadata(file: FileHandle, owner: string): Promise<void> {
@@ -1063,27 +1089,86 @@ async function writeInstallerLeaseMetadata(file: FileHandle, owner: string): Pro
   await file.truncate(Buffer.byteLength(content));
 }
 
-async function reclaimExpiredInstallerLease(lockPath: string): Promise<boolean> {
+function installerLeaseExpired(content: string, mtimeMs: number): boolean {
+  const metadata = parseInstallerLeaseMetadata(content);
+  const expiration = metadata === null ? mtimeMs + INSTALLER_LOCK_LEASE_MS : Date.parse(metadata.leaseExpiresAt);
+  const leaseDeadline = Number.isFinite(expiration) ? expiration : mtimeMs + INSTALLER_LOCK_LEASE_MS;
+  if (leaseDeadline > Date.now()) return false;
+  return metadata === null || !isInstallerProcessRunning(metadata.pid);
+}
+
+async function reclaimExpiredInstallerLease(lockPath: string, legacyClaimPath: string): Promise<boolean> {
   try {
     const stats = await fsp.lstat(lockPath);
     if (stats.isSymbolicLink()) throw unsafeSymbolicLinkError(lockPath);
-    if (!stats.isFile()) {
-      throw new Error(`Installer lock path is not a regular file: ${normalizePathForDisplay(lockPath)}.`);
+    if (stats.isDirectory()) return await reclaimExpiredInstallerLeaseDirectory(lockPath, stats.mtimeMs);
+    if (stats.isFile()) return await reclaimLegacyInstallerLeaseFile(lockPath, legacyClaimPath, stats.mtimeMs);
+    throw new Error(`Installer lock path has an unsupported type: ${normalizePathForDisplay(lockPath)}.`);
+  } catch (error) {
+    if (isFileSystemErrorCode(error, "ENOENT")) return true;
+    throw error;
+  }
+}
+
+async function reclaimExpiredInstallerLeaseDirectory(lockPath: string, mtimeMs: number): Promise<boolean> {
+  const metadataPath = path.join(lockPath, "owner.json");
+  let observedContent = "";
+  try {
+    observedContent = await fsp.readFile(metadataPath, "utf8");
+  } catch (error) {
+    if (!isFileSystemErrorCode(error, "ENOENT")) throw error;
+  }
+  if (!installerLeaseExpired(observedContent, mtimeMs)) return false;
+
+  const claimPath = path.join(lockPath, ".reclaim");
+  let claim: FileHandle | undefined;
+  try {
+    claim = await fsp.open(claimPath, "wx", 0o600);
+  } catch (error) {
+    if (isFileSystemErrorCode(error, "EEXIST")) return false;
+    if (isFileSystemErrorCode(error, "ENOENT")) return true;
+    throw error;
+  }
+  try {
+    let currentContent = "";
+    try {
+      currentContent = await fsp.readFile(metadataPath, "utf8");
+    } catch (error) {
+      if (!isFileSystemErrorCode(error, "ENOENT")) throw error;
     }
-    const observedContent = await fsp.readFile(lockPath, "utf8");
-    const metadata = parseInstallerLeaseMetadata(observedContent);
-    const expiration =
-      metadata === null ? stats.mtimeMs + INSTALLER_LOCK_LEASE_MS : Date.parse(metadata.leaseExpiresAt);
-    const leaseDeadline = Number.isFinite(expiration) ? expiration : stats.mtimeMs + INSTALLER_LOCK_LEASE_MS;
-    const now = Date.now();
-    if (metadata === null && leaseDeadline > now) return false;
-    if (metadata !== null && isInstallerProcessRunning(metadata.pid)) return false;
-    if ((await fsp.readFile(lockPath, "utf8")) !== observedContent) return false;
-    await fsp.rm(lockPath, { force: true });
+    if (currentContent !== observedContent || !installerLeaseExpired(currentContent, mtimeMs)) return false;
+    await fsp.rm(lockPath, { recursive: true, force: true });
+    return true;
+  } finally {
+    await claim.close().catch(() => undefined);
+    await fsp.rm(claimPath, { force: true }).catch(() => undefined);
+  }
+}
+
+async function reclaimLegacyInstallerLeaseFile(lockPath: string, claimPath: string, mtimeMs: number): Promise<boolean> {
+  const observedContent = await fsp.readFile(lockPath, "utf8");
+  if (!installerLeaseExpired(observedContent, mtimeMs)) return false;
+  let claim: FileHandle | undefined;
+  try {
+    claim = await fsp.open(claimPath, "wx", 0o600);
+  } catch (error) {
+    if (isFileSystemErrorCode(error, "EEXIST")) return false;
+    throw error;
+  }
+  const quarantinePath = `${lockPath}.stale-${randomUUID()}`;
+  try {
+    const currentContent = await fsp.readFile(lockPath, "utf8");
+    if (currentContent !== observedContent || !installerLeaseExpired(currentContent, mtimeMs)) return false;
+    await fsp.rename(lockPath, quarantinePath);
+    await fsp.rm(quarantinePath, { force: true });
     return true;
   } catch (error) {
     if (isFileSystemErrorCode(error, "ENOENT")) return true;
     throw error;
+  } finally {
+    await claim.close().catch(() => undefined);
+    await fsp.rm(claimPath, { force: true }).catch(() => undefined);
+    await fsp.rm(quarantinePath, { force: true }).catch(() => undefined);
   }
 }
 
@@ -1123,8 +1208,8 @@ async function releaseInstallerLeaseLock(lock: InstallerLeaseLock): Promise<void
   clearInterval(lock.renewalTimer);
   await lock.file.close().catch(() => undefined);
   try {
-    const metadata = parseInstallerLeaseMetadata(await fsp.readFile(lock.lockPath, "utf8"));
-    if (metadata?.owner === lock.owner) await fsp.rm(lock.lockPath, { force: true });
+    const metadata = parseInstallerLeaseMetadata(await fsp.readFile(lock.metadataPath, "utf8"));
+    if (metadata?.owner === lock.owner) await fsp.rm(lock.lockPath, { recursive: true, force: true });
   } catch (error) {
     if (!isFileSystemErrorCode(error, "ENOENT")) throw error;
   }

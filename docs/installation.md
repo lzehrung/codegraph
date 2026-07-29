@@ -34,7 +34,7 @@ Before downloading or writing, the bootstrap previews the target, version select
 To inspect a script before running it:
 
 ```powershell
-Invoke-WebRequest https://github.com/lzehrung/codegraph/releases/latest/download/install.ps1 -OutFile ./install.ps1
+Invoke-WebRequest https://github.com/lzehrung/codegraph/releases/latest/download/install.ps1 -OutFile ./install.ps1 -UseBasicParsing
 Get-Content ./install.ps1
 ./install.ps1 -Latest
 ```
