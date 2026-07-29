@@ -97,7 +97,7 @@ A structural result proves archive checksum, package identity, target naming, an
 
 Publishing waits for every required package row plus security, semantics, and hermeticity. Missing, failed, stale-revision, wrong-version, expired-exception, size, or checksum evidence stops the job before `npm publish` is invoked.
 
-The workflow uses the `CODEGRAPH_PACKAGES_TOKEN` Actions secret, which must contain a classic PAT that can write the `@lzehrung` packages.
+The workflow uses the `CODEGRAPH_PACKAGES_TOKEN_B64` Actions secret, which must contain a base64-encoded classic PAT that can write the `@lzehrung` packages.
 
 ## Package Roles
 

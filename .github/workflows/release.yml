@@ -727,13 +727,16 @@ jobs:
 
       - name: Publish only certified tarballs
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.CODEGRAPH_PACKAGES_TOKEN }}
-        run: >-
-          node ./scripts/certification/publish-release-candidates.mjs
-          --manifest temp/release-candidates/release-candidate-manifest.json
-          --expected-source-revision ${{ needs.plan-release.outputs.source_revision }}
-          --expected-root-version ${{ needs.plan-release.outputs.root_version }}
-          --expected-native-version ${{ needs.plan-release.outputs.native_version }}
+          CODEGRAPH_PACKAGES_TOKEN_B64: ${{ secrets.CODEGRAPH_PACKAGES_TOKEN_B64 }}
+        shell: bash
+        run: |
+          export NODE_AUTH_TOKEN="$(printf '%s' "$CODEGRAPH_PACKAGES_TOKEN_B64" | base64 --decode)"
+          echo "::add-mask::$NODE_AUTH_TOKEN"
+          node ./scripts/certification/publish-release-candidates.mjs \
+            --manifest temp/release-candidates/release-candidate-manifest.json \
+            --expected-source-revision ${{ needs.plan-release.outputs.source_revision }} \
+            --expected-root-version ${{ needs.plan-release.outputs.root_version }} \
+            --expected-native-version ${{ needs.plan-release.outputs.native_version }}
 
       - name: Create release version commit and tags
         env:
