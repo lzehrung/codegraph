@@ -32,7 +32,7 @@ The product already has the hard capabilities:
 
 - `explore` provides a broad first answer with bounded packets and follow-ups.
 - `orient` provides a deterministic first-turn map.
-- `install` detects Codex, Claude, Cursor, Gemini, OpenCode, and generic agent skill directories.
+- `install` detects Codex, Claude, Cursor, Gemini, OpenCode, OMP, Kilo Code, and generic agent skill directories.
 - installer writes are owned and reversible.
 - `doctor` reports runtime/package/native state.
 - MCP exposes the same agent-facing search and navigation contracts.
@@ -262,6 +262,7 @@ Never claim the agent has connected until an MCP handshake was observed.
 ### Recommended first command
 
 Use `explore`, not `orient`, as the primary human onboarding command because it answers a concrete question. Keep `orient` as the fallback when the user does not yet know what to ask.
+Ranking and composition corrections for that first answer are specified in the [Explore first-query ranking tuning plan](./2026-07-28-explore-first-query-ranking-tuning.md).
 
 Primary:
 

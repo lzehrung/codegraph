@@ -4,7 +4,7 @@ import path from "node:path";
 import { getCodegraphPackageRoot, normalizePathForDisplay, pathExists } from "./packageInfo.js";
 import { writeCliOutput } from "./pretty.js";
 
-export type SkillInstallAgent = "agents" | "claude" | "codex" | "cursor" | "gemini" | "opencode";
+export type SkillInstallAgent = "agents" | "claude" | "codex" | "cursor" | "gemini" | "opencode" | "omp" | "kilo";
 
 type SkillDoctorReport = {
   packageRoot: string;
@@ -47,6 +47,12 @@ export function getSkillTargetDirForAgent(
     const configHome = env.XDG_CONFIG_HOME?.trim() || path.join(homeDir, ".config");
     return path.join(configHome, "opencode", "skills", "codegraph");
   }
+  if (agent === "omp") {
+    return path.join(homeDir, ".omp", "agent", "managed-skills", "codegraph");
+  }
+  if (agent === "kilo") {
+    return path.join(homeDir, ".kilocode", "skills", "codegraph");
+  }
   const codexHome = env.CODEX_HOME?.trim();
   if (codexHome) {
     return path.join(codexHome, "skills", "codegraph");
@@ -63,7 +69,11 @@ function parseSkillInstallAgent(value: string | undefined): SkillInstallAgent | 
   if (normalized === "cursor" || normalized === "cursor-cli") return "cursor";
   if (normalized === "gemini" || normalized === "gemini-cli") return "gemini";
   if (normalized === "opencode" || normalized === "open-code") return "opencode";
-  throw new Error(`Invalid --agent value "${value}". Expected agents, claude, codex, cursor, gemini, or opencode.`);
+  if (normalized === "omp" || normalized === "oh-my-pi") return "omp";
+  if (normalized === "kilo" || normalized === "kilo-code") return "kilo";
+  throw new Error(
+    `Invalid --agent value "${value}". Expected agents, claude, codex, cursor, gemini, opencode, omp, or kilo.`,
+  );
 }
 
 function isCommandAvailableOnPath(command: string): boolean {
@@ -101,13 +111,14 @@ function normalizePathSegmentForComparison(segment: string): string {
   return process.platform === "win32" ? segment.toLowerCase() : segment;
 }
 
-function assertSafeSkillInstallTarget(targetDir: string): string {
+function assertSafeSkillInstallTarget(targetDir: string, agent?: SkillInstallAgent): string {
   const resolvedTarget = path.resolve(targetDir);
   const targetName = normalizePathSegmentForComparison(path.basename(resolvedTarget));
   const parentName = normalizePathSegmentForComparison(path.basename(path.dirname(resolvedTarget)));
-  if (targetName !== "codegraph" || parentName !== "skills") {
+  const expectedParent = normalizePathSegmentForComparison(agent === "omp" ? "managed-skills" : "skills");
+  if (targetName !== "codegraph" || parentName !== expectedParent) {
     throw new Error(
-      `Skill install target directory must end with "${path.join("skills", "codegraph")}". ` +
+      `Skill install target directory must end with "${path.join(expectedParent, "codegraph")}". ` +
         `Received: ${normalizePathForDisplay(resolvedTarget)}`,
     );
   }
@@ -122,7 +133,7 @@ function resolveSkillInstallTarget(requestedTargetDir: string | undefined, reque
   const targetDir = requestedTargetDir ? requestedTargetDir : getSkillTargetDirForAgent(agent ?? "codex");
   return {
     agent,
-    targetDir: assertSafeSkillInstallTarget(targetDir),
+    targetDir: assertSafeSkillInstallTarget(targetDir, agent),
   };
 }
 

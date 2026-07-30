@@ -2,6 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import fsp, { type FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { applyEdits, modify, parse as parseJsonc, type ParseError } from "jsonc-parser";
+import { parse as parseToml } from "smol-toml";
 import { getSkillTargetDirForAgent, type SkillInstallAgent } from "../cli/skill.js";
 import { getCodegraphPackageRoot, normalizePathForDisplay, pathExists } from "../cli/packageInfo.js";
 
@@ -37,6 +39,33 @@ export type InstallChange = {
   dryRun: boolean;
 };
 
+export type InstallerCollisionKind = "user-owned-codegraph-entry" | "user-owned-codegraph-table";
+
+export type InstallerCollision = {
+  target: InstallTargetId;
+  path: string;
+  kind: InstallerCollisionKind;
+};
+
+export class InstallerCollisionError extends Error {
+  readonly code = "installer-config-collision";
+  readonly conflicts: readonly InstallerCollision[];
+
+  constructor(conflicts: readonly InstallerCollision[]) {
+    let message =
+      `Codegraph installer found ${conflicts.length} user-owned configuration collisions. ` +
+      "Resolve or rename the existing Codegraph entries before retrying.";
+    const conflict = conflicts.length === 1 ? conflicts[0] : undefined;
+    if (conflict) {
+      const entryType = conflict.kind === "user-owned-codegraph-table" ? "table" : "entry";
+      message = `User-owned Codegraph MCP ${entryType} already exists. Remove or rename that entry before retrying.`;
+    }
+    super(message);
+    this.name = "InstallerCollisionError";
+    this.conflicts = conflicts;
+  }
+}
+
 export type InstallResult = {
   installed: boolean;
   verified: boolean;
@@ -61,7 +90,13 @@ export type InstallTarget = {
   uninstall(options?: UninstallOptions): Promise<UninstallResult>;
 };
 
-type ConfigKind = "toml-block" | "json-mcp-servers" | "json-opencode-mcp" | "skill-only";
+type ConfigKind =
+  | "toml-block"
+  | "json-mcp-servers"
+  | "json-mcp-servers-no-type"
+  | "json-opencode-mcp"
+  | "json-kilo-mcp"
+  | "skill-only";
 
 type TargetDefinition = {
   id: InstallTargetId;
@@ -146,6 +181,18 @@ const TARGET_DEFINITIONS: TargetDefinition[] = [
     label: "OpenCode",
     kind: "json-opencode-mcp",
     configPath: (settings) => path.join(opencodeConfigHome(settings), "opencode", "opencode.json"),
+  },
+  {
+    id: "omp",
+    label: "Oh My Pi",
+    kind: "json-mcp-servers-no-type",
+    configPath: ({ homeDir }) => path.join(homeDir, ".omp", "agent", "mcp.json"),
+  },
+  {
+    id: "kilo",
+    label: "Kilo Code",
+    kind: "json-kilo-mcp",
+    configPath: (settings) => path.join(opencodeConfigHome(settings), "kilo", "kilo.jsonc"),
   },
   {
     id: "agents",
@@ -304,6 +351,7 @@ async function prepareInstallPlan(
 ): Promise<InstallPlan> {
   const bundledSkill = await fsp.readFile(bundledSkillFilePath());
   const files: PlannedInstallFile[] = [];
+  const conflicts: InstallerCollision[] = [];
   for (const definition of definitions) {
     const skillTargetDir = getSkillTargetDirForAgent(definition.id, settings.homeDir, settings.env);
     const skillRoot = skillInstallRoot(definition, settings);
@@ -341,16 +389,21 @@ async function prepareInstallPlan(
 
     if (definition.kind === "skill-only") continue;
     const configPath = requireConfigPath(definition, settings);
-    const configRoot = definition.id === "opencode" ? opencodeConfigHome(settings) : settings.homeDir;
+    const configRoot = configInstallRoot(definition, settings);
     const configSnapshot = await snapshotInstallFile(configPath, configRoot);
     const existingConfig = configSnapshot.bytes?.toString("utf8") ?? null;
-    assertNoConfigCollision(definition, configPath, existingConfig);
+    const collision = findConfigCollision(definition, configPath, existingConfig);
+    if (collision) {
+      conflicts.push(collision);
+      continue;
+    }
     const configContent = Buffer.from(renderConfigWithCodegraph(definition, existingConfig, configPath), "utf8");
     addPlannedInstallFile(
       files,
       createPlannedInstallFile(definition, "config", configPath, configRoot, configContent, configSnapshot, dryRun),
     );
   }
+  if (conflicts.length) throw new InstallerCollisionError(conflicts);
   return {
     files,
     changes: files.map((file) => file.change),
@@ -360,6 +413,11 @@ async function prepareInstallPlan(
 function skillInstallRoot(definition: TargetDefinition, settings: InstallerSettings): string {
   if (definition.id === "opencode") return opencodeConfigHome(settings);
   if (definition.id === "codex") return settings.env.CODEX_HOME?.trim() || settings.homeDir;
+  return settings.homeDir;
+}
+
+function configInstallRoot(definition: TargetDefinition, settings: InstallerSettings): string {
+  if (definition.id === "opencode" || definition.id === "kilo") return opencodeConfigHome(settings);
   return settings.homeDir;
 }
 
@@ -537,7 +595,7 @@ async function prepareUninstallPlan(
 
     if (definition.kind === "skill-only") continue;
     const configPath = requireConfigPath(definition, settings);
-    const configRoot = definition.id === "opencode" ? opencodeConfigHome(settings) : settings.homeDir;
+    const configRoot = configInstallRoot(definition, settings);
     const configSnapshot = await snapshotInstallFile(configPath, configRoot);
     let configContent = configSnapshot.bytes;
     if (configSnapshot.bytes !== null) {
@@ -556,49 +614,58 @@ async function prepareUninstallPlan(
   };
 }
 
-function assertNoConfigCollision(definition: TargetDefinition, configPath: string, existing: string | null): void {
-  if (definition.kind === "skill-only") return;
+function findConfigCollision(
+  definition: TargetDefinition,
+  configPath: string,
+  existing: string | null,
+): InstallerCollision | undefined {
+  if (definition.kind === "skill-only") return undefined;
   if (definition.kind === "toml-block") {
     inspectCodexTomlOwnership(existing ?? "", configPath);
-    return;
+    const hasUnmarkedTable = findCodegraphTomlTableIndexes(existing ?? "").length;
+    if (!hasUnmarkedTable || isInstallCompatibleCodexTomlTable(existing ?? "")) return undefined;
+    return {
+      target: definition.id,
+      path: normalizePathForDisplay(configPath),
+      kind: "user-owned-codegraph-table",
+    };
   }
-  if (existing === null) return;
-  const parsed = parseConfigJson(existing, configPath);
-  const property = definition.kind === "json-opencode-mcp" ? "mcp" : "mcpServers";
-  const servers = readRecordProperty(parsed, property);
-  const existingServer = servers.codegraph;
-  if (existingServer === undefined || isInstallerOwnedJsonServer(definition, existingServer)) return;
-  throw new Error(
-    `User-owned Codegraph MCP entry already exists at ${normalizePathForDisplay(configPath)}. Remove or rename that entry before retrying.`,
-  );
+  if (existing === null) return undefined;
+  const parsed = parseTargetConfig(definition, existing, configPath);
+  const property = mcpConfigProperty(definition);
+  const existingServer = readRecordProperty(parsed, property).codegraph;
+  if (existingServer === undefined || isInstallCompatibleJsonServer(definition, existingServer)) return undefined;
+  return {
+    target: definition.id,
+    path: normalizePathForDisplay(configPath),
+    kind: "user-owned-codegraph-entry",
+  };
 }
 
 function configContainsInstallerServer(definition: TargetDefinition, config: string, configPath: string): boolean {
-  if (definition.kind === "toml-block") return hasExactlyOneCompleteCodexTomlBlock(config, configPath);
+  if (definition.kind === "toml-block") {
+    return hasExactlyOneCompleteCodexTomlBlock(config, configPath) || isInstallCompatibleCodexTomlTable(config);
+  }
   if (definition.kind === "skill-only") return true;
-  const parsed = parseConfigJson(config, configPath);
-  const property = definition.kind === "json-opencode-mcp" ? "mcp" : "mcpServers";
-  return isInstallerOwnedJsonServer(definition, readRecordProperty(parsed, property).codegraph);
+  const parsed = parseTargetConfig(definition, config, configPath);
+  const property = mcpConfigProperty(definition);
+  return isInstallCompatibleJsonServer(definition, readRecordProperty(parsed, property).codegraph);
 }
 
 function renderConfigWithCodegraph(definition: TargetDefinition, existing: string | null, configPath: string): string {
   if (definition.kind === "toml-block") {
+    if (existing !== null && isInstallCompatibleCodexTomlTable(existing)) return existing;
     return upsertMarkedTomlBlock(existing ?? "", codexTomlSnippet(), configPath);
   }
-  const parsed = parseConfigJson(existing, configPath);
-  if (definition.kind === "json-opencode-mcp") {
-    const mcp = readRecordProperty(parsed, "mcp");
-    const desiredServer = codegraphJsonServer(definition);
-    if (shouldPreserveExistingServer(mcp, desiredServer)) return existing ?? renderJsonConfig(parsed);
-    mcp.codegraph = desiredServer;
-    parsed.mcp = mcp;
-  } else {
-    const mcpServers = readRecordProperty(parsed, "mcpServers");
-    const desiredServer = codegraphJsonServer(definition);
-    if (shouldPreserveExistingServer(mcpServers, desiredServer)) return existing ?? renderJsonConfig(parsed);
-    mcpServers.codegraph = desiredServer;
-    parsed.mcpServers = mcpServers;
+  const parsed = parseTargetConfig(definition, existing, configPath);
+  const property = mcpConfigProperty(definition);
+  const servers = readRecordProperty(parsed, property);
+  if (isInstallCompatibleJsonServer(definition, servers.codegraph)) return existing ?? renderJsonConfig(parsed);
+  if (definition.kind === "json-kilo-mcp") {
+    return modifyJsoncConfig(existing, [property, "codegraph"], codegraphJsonServer(definition));
   }
+  servers.codegraph = codegraphJsonServer(definition);
+  parsed[property] = servers;
   return renderJsonConfig(parsed);
 }
 
@@ -606,11 +673,15 @@ function removeCodegraphConfig(definition: TargetDefinition, existing: string, c
   if (definition.kind === "toml-block") {
     return removeMarkedTomlBlock(existing, configPath);
   }
-  const parsed = parseConfigJson(existing, configPath);
-  const property = definition.kind === "json-opencode-mcp" ? "mcp" : "mcpServers";
+  const parsed = parseTargetConfig(definition, existing, configPath);
+  const property = mcpConfigProperty(definition);
   const servers = readRecordProperty(parsed, property);
   const server = servers.codegraph;
   if (!isInstallerOwnedJsonServer(definition, server)) return existing;
+  if (definition.kind === "json-kilo-mcp") {
+    const targetPath = Object.keys(servers).length === 1 ? [property] : [property, "codegraph"];
+    return modifyJsoncConfig(existing, targetPath, undefined);
+  }
   delete servers.codegraph;
   if (Object.keys(servers).length) {
     parsed[property] = servers;
@@ -622,13 +693,15 @@ function removeCodegraphConfig(definition: TargetDefinition, existing: string, c
 
 function printTargetConfig(definition: TargetDefinition, _options: PrintConfigOptions): string {
   if (definition.kind === "toml-block") return codexTomlSnippet();
-  if (definition.kind === "json-opencode-mcp") {
-    return renderJsonConfig({ mcp: { codegraph: codegraphJsonServer(definition) } });
-  }
   if (definition.kind === "skill-only") {
     return `codegraph skill install --agent ${definition.id}\n`;
   }
-  return renderJsonConfig({ mcpServers: { codegraph: codegraphJsonServer(definition) } });
+  return renderJsonConfig({ [mcpConfigProperty(definition)]: { codegraph: codegraphJsonServer(definition) } });
+}
+
+function mcpConfigProperty(definition: TargetDefinition): "mcp" | "mcpServers" {
+  if (definition.kind === "json-opencode-mcp" || definition.kind === "json-kilo-mcp") return "mcp";
+  return "mcpServers";
 }
 
 function codexTomlSnippet(): string {
@@ -664,14 +737,7 @@ function inspectCodexTomlOwnership(existing: string, configPath: string): CodexT
   const beginIndexes = findTokenIndexes(existing, CODEGRAPH_TOML_MARKER_BEGIN);
   const endIndexes = findTokenIndexes(existing, CODEGRAPH_TOML_MARKER_END);
   const tableIndexes = findCodegraphTomlTableIndexes(existing);
-  if (!beginIndexes.length && !endIndexes.length) {
-    if (tableIndexes.length) {
-      throw new Error(
-        `User-owned Codegraph MCP table already exists at ${normalizePathForDisplay(configPath)}. Remove or migrate it before retrying.`,
-      );
-    }
-    return null;
-  }
+  if (!beginIndexes.length && !endIndexes.length) return null;
   if (
     beginIndexes.length !== 1 ||
     endIndexes.length !== 1 ||
@@ -712,6 +778,65 @@ function findCodegraphTomlTableIndexes(content: string): number[] {
     if (match.index !== undefined) indexes.push(match.index);
   }
   return indexes;
+}
+
+function isInstallCompatibleCodexTomlTable(config: string): boolean {
+  if (findCodegraphTomlTableIndexes(config).length !== 1) return false;
+  try {
+    const parsed = parseToml(config);
+    if (!isJsonRecord(parsed)) return false;
+    const mcpServers = readRecordProperty(parsed, "mcp_servers");
+    if (mcpServers === undefined) return false;
+    const codegraph = readRecordProperty(mcpServers, "codegraph");
+    if (codegraph === undefined) return false;
+    return jsonValueEquals(codegraph, {
+      command: "codegraph",
+      args: ["mcp", "serve", "--root", ".", "--stdio"],
+      startup_timeout_ms: 20_000,
+    });
+  } catch {
+    return false;
+  }
+}
+
+function parseTargetConfig(definition: TargetDefinition, existing: string | null, configPath: string): JsonRecord {
+  if (definition.kind === "json-kilo-mcp") return parseConfigJsonc(existing, configPath);
+  return parseConfigJson(existing, configPath);
+}
+
+function parseConfigJsonc(existing: string | null, configPath: string): JsonRecord {
+  if (existing === null || !existing.trim()) return {};
+  const errors: ParseError[] = [];
+  const parsed = parseJsonc(existing, errors, { allowTrailingComma: true }) as unknown;
+  if (errors.length) {
+    throw new Error(
+      `Unable to parse ${normalizePathForDisplay(configPath)} as JSONC. Fix the file before running the installer.`,
+    );
+  }
+  if (isJsonRecord(parsed)) return parsed;
+  throw new Error(`${normalizePathForDisplay(configPath)} must contain a JSON object.`);
+}
+
+function modifyJsoncConfig(existing: string | null, targetPath: string[], value: unknown): string {
+  const source = existing?.trim() ? existing : "{}";
+  const formattingOptions = jsoncFormattingOptions(source);
+  const edits = modify(source, targetPath, value, { formattingOptions });
+  const updated = applyEdits(source, edits);
+  return updated.endsWith(formattingOptions.eol) ? updated : `${updated}${formattingOptions.eol}`;
+}
+
+function jsoncFormattingOptions(source: string): { insertSpaces: boolean; tabSize: number; eol: string } {
+  const eol = source.includes("\r\n") ? "\r\n" : "\n";
+  const indentation = source.match(/\r?\n([ \t]+)\S/u)?.[1];
+  let insertSpaces = true;
+  let tabSize = 2;
+  if (indentation?.startsWith("\t")) {
+    insertSpaces = false;
+    tabSize = 1;
+  } else if (indentation) {
+    tabSize = indentation.length;
+  }
+  return { insertSpaces, tabSize, eol };
 }
 
 function parseConfigJson(existing: string | null, configPath: string): JsonRecord {
@@ -755,6 +880,18 @@ function codegraphJsonServer(definition: TargetDefinition): JsonRecord {
       command: ["codegraph", "mcp", "serve", "--root", ".", "--stdio"],
     };
   }
+  if (definition.kind === "json-kilo-mcp") {
+    return {
+      type: "local",
+      command: ["codegraph", "mcp", "serve", "--root", ".", "--stdio"],
+    };
+  }
+  if (definition.kind === "json-mcp-servers-no-type") {
+    return {
+      command: "codegraph",
+      args: ["mcp", "serve", "--root", ".", "--stdio"],
+    };
+  }
   return {
     type: "stdio",
     command: "codegraph",
@@ -762,10 +899,16 @@ function codegraphJsonServer(definition: TargetDefinition): JsonRecord {
   };
 }
 
-function shouldPreserveExistingServer(servers: JsonRecord, desiredServer: JsonRecord): boolean {
-  const existingServer = servers.codegraph;
-  if (existingServer === undefined) return false;
-  return !jsonValueEquals(existingServer, desiredServer);
+function isInstallCompatibleJsonServer(definition: TargetDefinition, value: unknown): boolean {
+  if (isInstallerOwnedJsonServer(definition, value)) return true;
+  const usesMcpServers = definition.kind === "json-mcp-servers" || definition.kind === "json-mcp-servers-no-type";
+  if (!usesMcpServers || !isJsonRecord(value)) return false;
+  const withoutType = {
+    command: "codegraph",
+    args: ["mcp", "serve", "--root", ".", "--stdio"],
+  };
+  const withType = { type: "stdio", ...withoutType };
+  return jsonValueEquals(value, withoutType) || jsonValueEquals(value, withType);
 }
 
 function isInstallerOwnedJsonServer(definition: TargetDefinition, value: unknown): boolean {
@@ -797,9 +940,11 @@ function isJsonRecord(value: unknown): value is JsonRecord {
 }
 
 function installerSettings(options: { homeDir?: string; env?: Record<string, string | undefined> }): InstallerSettings {
+  let env = options.env;
+  if (env === undefined) env = options.homeDir === undefined ? process.env : {};
   return {
     homeDir: options.homeDir ?? os.homedir(),
-    env: options.env ?? process.env,
+    env,
   };
 }
 

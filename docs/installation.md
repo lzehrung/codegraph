@@ -87,6 +87,8 @@ To install the current source checkout globally for local testing, build first, 
 ```bash
 npm run build
 npm install -g .
+codegraph doctor
+codegraph install --all --dry-run
 ```
 
 The `prepare` script reuses an existing `dist/` build during global installs because npm does not allow workspace builds in global package lifecycle scripts. If `dist/cli.js` or the published bin entry `dist/bin/cli.js` is missing, run `npm run build` before `npm install -g .`.
@@ -118,6 +120,16 @@ Use your GitHub username and the token as the password. Then install the main pa
 npm install -g @lzehrung/codegraph
 ```
 
+Then use Codegraph-owned guidance to verify and configure clients:
+
+```bash
+codegraph doctor
+codegraph install --all --dry-run
+codegraph install --all --yes
+```
+
+npm cannot print package-authored completion guidance without lifecycle scripts, so run the explicit Codegraph commands above after a global install or update.
+
 The published path is native-first: `@lzehrung/codegraph` optionally resolves the matching native artifact automatically when a published binary exists for the current platform. Unsupported hosts use reduced graph-only mode. No separate grammar package is required.
 
 ## Option 4: Install from an npm release tarball
@@ -145,6 +157,7 @@ The first upgrade from a release that loaded the addon directly requires one tra
 1. Close or disconnect Codegraph MCP clients.
 2. Run `npm install -g @lzehrung/codegraph@latest`.
 3. Restart the clients and run `codegraph doctor`.
+4. Run `codegraph install --all --dry-run`, then `codegraph install --all --yes` if the preview is correct.
 
 Later upgrades should not be blocked solely because Codegraph mapped npm's native addon. Antivirus, backup software, or stale npm retirement directories can still cause `EBUSY`; `codegraph doctor` reports matching `.codegraph-*` siblings without deleting them.
 
@@ -187,10 +200,14 @@ After installing the CLI, run `codegraph install` on an interactive terminal. It
 codegraph install
 codegraph install --target codex,claude --dry-run
 codegraph install --target codex,claude --yes
+codegraph install --all --dry-run
+codegraph install --all --yes
 codegraph install --print-config codex
 ```
 
-Supported targets are `codex`, `claude`, `cursor`, `gemini`, `opencode`, and `agents`. Interactive confirmation accepts only `y` or `yes` and defaults to no; noninteractive writes require `--yes`. `uninstall` removes only Codegraph-owned marker blocks, marker files, exact bundled skill payloads, or exact installer-owned MCP entries.
+Supported targets are `codex`, `claude`, `cursor`, `gemini`, `opencode`, `omp`, `kilo`, and `agents`. `--all` selects that full catalog in order without detection and cannot be combined with a target, `--detect`, or `--print-config`. OMP installs the managed skill under `.omp/agent/managed-skills/codegraph`; Kilo installs its skill under `.kilocode/skills/codegraph` and updates `.config/kilo/kilo.jsonc` without discarding comments.
+
+Interactive confirmation accepts only `y` or `yes` and defaults to no; noninteractive writes require `--yes`. Existing compatible MCP entries and equivalent unmarked Codex tables are preserved byte-for-byte; divergent Codegraph entries are reported as collisions without writing config. `uninstall` removes only Codegraph-owned entries and leaves compatible pre-existing entries untouched.
 
 The lower-level `codegraph skill install --agent <name>` command remains available when you only want to copy the bundled skill. Restart or reload configured MCP clients after installation.
 

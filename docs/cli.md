@@ -246,6 +246,8 @@ codegraph mcp --help
 # Install or preview agent client integration
 codegraph install --target codex,claude --dry-run
 codegraph install --target codex,claude --yes
+codegraph install --all --dry-run
+codegraph install --all --yes
 codegraph install --print-config codex
 codegraph uninstall --target codex --yes
 codegraph install --help
@@ -394,10 +396,12 @@ For SQL, prefer handles or schema-qualified names when basenames may be ambiguou
 
 #### Agent client installer
 
-- `install` configures Codegraph-owned MCP entries, bundled skill payloads, and marker files for supported local agent clients: `codex`, `claude`, `cursor`, `gemini`, `opencode`, and `agents`.
+- `install` configures Codegraph-owned MCP entries, bundled skill payloads, and marker files for supported local agent clients: `codex`, `claude`, `cursor`, `gemini`, `opencode`, `omp`, `kilo`, and `agents`.
 - With neither `--yes` nor `--dry-run`, an interactive install detects targets, prints proposed actions and paths, and accepts only `y` or `yes`; blank input, EOF, interrupt, and every other answer decline without writing.
-- Noninteractive writes require `--yes`. Use `--detect` to list discovered targets, `--dry-run` to preview actions, or `--print-config <target>` to print a copyable MCP snippet without writing.
-- If no target is detected, output lists supported targets, checked paths, and copyable preview/apply commands; JSON includes `installed: false` and `reason: "no-targets-detected"`.
+- `--all` selects the complete catalog in listed order without detection. It is install-only and conflicts with target selection, `--detect`, and `--print-config`.
+- Noninteractive writes require `--yes`. Use `--detect` to list discovered targets, `--dry-run` to preview actions, or `--print-config <target>` to print a copyable MCP snippet without writing. JSON selection, confirmation, and collision failures return one structured stdout document without a stack trace.
+- Compatible canonical JSON MCP entries, the generic stdio form that omits only `type`, and equivalent unmarked Codex tables are preserved byte-for-byte. Kilo JSONC updates preserve comments and unrelated settings. Divergent Codegraph entries are reported together as secret-free collisions without writing config; uninstall recognizes only strict installer-owned entries.
+- If no target is detected, output lists supported targets, checked paths, and copyable `--all` preview/apply commands; JSON includes `installed: false` and `reason: "no-targets-detected"`.
 - After a confirmed install, Codegraph verifies owned state, reports bounded doctor health, and prints restart/reload plus first-query guidance. It does not claim the client connected.
 - `uninstall` follows the same preview/confirmation rules and removes only Codegraph-owned marker blocks, marker files, exact bundled skill payloads, or exact installer-owned MCP entries.
 - `skill install` remains the lower-level primitive when you only want to copy the bundled skill directly without MCP config.
@@ -620,6 +624,10 @@ codegraph skill install --agent gemini
 
 codegraph skill install --agent opencode
 
+codegraph skill install --agent omp
+
+codegraph skill install --agent kilo
+
 # Install the bundled skill into an explicit target directory
 # The target must end with /skills/codegraph.
 codegraph skill install --target ~/.codex/skills/codegraph --force
@@ -628,7 +636,7 @@ codegraph skill install --target ~/.codex/skills/codegraph --force
 codegraph skill doctor
 ```
 
-`codegraph skill install --agent <name>` supports `agents`, `codex`, `claude`, `cursor`, `gemini`, and `opencode`. Skill install targets must end with `skills/codegraph`; when that safe target shape is satisfied, the installer creates the directory as needed. Cursor CLI now supports native skills directories too, so `.cursor/skills/codegraph` works alongside the universal `~/.agents/skills/codegraph` location. `codegraph -v`, `codegraph version --json`, and `codegraph doctor` include or identify the installed package version so local tarball or source-checkout installs can confirm which build the `codegraph` command is actually running. `doctor` also reports backend/runtime state and optional artifact details, including `artifactBundle` details for directories with a Codegraph `manifest.json`.
+`codegraph skill install --agent <name>` supports `agents`, `codex`, `claude`, `cursor`, `gemini`, `opencode`, `omp`, and `kilo`. Skill install targets must end with `skills/codegraph`, except OMP's managed target ending with `managed-skills/codegraph`; when that safe target shape is satisfied, the installer creates the directory as needed. Cursor CLI now supports native skills directories too, so `.cursor/skills/codegraph` works alongside the universal `~/.agents/skills/codegraph` location. `codegraph -v`, `codegraph version --json`, and `codegraph doctor` include or identify the installed package version.
 
 `doctor.native.origin` reports `workspace`, `package`, or `cache`, plus normalized source and loaded paths when known. Cache origins include the target, package version, cache key, SHA-256, and `updateSafeForCurrentProcess`; a package fallback retains `cacheError` instead of treating cache preparation failure as native unavailability.
 
