@@ -56,8 +56,9 @@ describe("certified release workflows", () => {
     expect(releaseWorkflow.split("assemble-release-candidates.mjs")).toHaveLength(2);
     expect(releaseWorkflow).not.toContain("npm pack");
     expect(publish).toContain("publish-release-candidates.mjs");
-    expect(publish).toContain("CODEGRAPH_PACKAGES_TOKEN_B64: ${{ secrets.CODEGRAPH_PACKAGES_TOKEN_B64 }}");
-    expect(publish).toContain("base64 --decode");
+    expect(publish).toContain("NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN || secrets.GITHUB_TOKEN }}");
+    expect(publish).not.toContain("CODEGRAPH_PACKAGES_TOKEN_B64");
+    expect(publish).not.toContain("base64 --decode");
     expect(publish).toContain("temp/release-candidates/packages/*.tgz");
     expect(publish).toContain("temp/release-candidates/SHA256SUMS");
     expect(publish).toContain("release-candidate-manifest.json");
