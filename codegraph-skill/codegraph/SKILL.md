@@ -159,16 +159,22 @@ Keep live and indexed evidence distinct:
 
 ## Agent Setup and Project Lifecycle
 
-Run the guided installer interactively to detect clients, preview exact actions, and confirm once:
+Run the guided installer interactively to detect clients, preview exact actions, and confirm once. Use `--all` to configure the complete current catalog without detection:
 
 ```bash
 codegraph install
 codegraph install --target codex,claude --dry-run
 codegraph install --print-config codex
 codegraph install --target codex,claude --yes
+codegraph install --all --dry-run
+codegraph install --all --yes
 ```
 
-Interactive confirmation accepts only `y` or `yes` and defaults to no. Noninteractive writes require `--yes`. The installer manages Codegraph-owned MCP entries, skill payloads, and marker files; uninstall removes only recognized Codegraph-owned content.
+Interactive confirmation accepts only `y` or `yes` and defaults to no. Noninteractive writes require `--yes`. `--all` is install-only, configures `codex`, `claude`, `cursor`, `gemini`, `opencode`, `omp`, `kilo`, and `agents`, and cannot be combined with target selection, `--detect`, or `--print-config`.
+
+Compatible JSON MCP entries and equivalent unmarked Codex tables are preserved byte-for-byte. Kilo JSONC comments and unrelated settings remain intact. Divergent Codegraph entries are collision-reported without exposing configuration values.
+
+The installer manages Codegraph-owned MCP entries, skill payloads, and marker files; uninstall removes only recognized Codegraph-owned content.
 
 Lifecycle commands manage `.codegraph/manifest.json`; other commands do not require that manifest:
 
@@ -216,6 +222,8 @@ npm login --scope=@lzehrung --auth-type=legacy --registry=https://npm.pkg.github
 npm config set "@lzehrung:registry" "https://npm.pkg.github.com"
 npm install -g @lzehrung/codegraph
 codegraph doctor
+codegraph install --all --dry-run
+codegraph install --all --yes
 ```
 
 GitHub Packages requires a classic token with `read:packages`, including for public packages. Use the GitHub username and token during `npm login`.

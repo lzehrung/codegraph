@@ -1296,6 +1296,8 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
       { agent: "cursor", targetDir: path.join(tmpDir, ".cursor", "skills", "codegraph") },
       { agent: "gemini", targetDir: path.join(tmpDir, ".gemini", "skills", "codegraph") },
       { agent: "opencode", targetDir: path.join(tmpDir, ".config", "opencode", "skills", "codegraph") },
+      { agent: "omp", targetDir: path.join(tmpDir, ".omp", "agent", "managed-skills", "codegraph") },
+      { agent: "kilo", targetDir: path.join(tmpDir, ".kilocode", "skills", "codegraph") },
     ];
 
     for (const entry of cases) {
@@ -1330,6 +1332,36 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     expect(normalize(payload.skillFilePath)).toBe(normalize(path.join(targetDir, "SKILL.md")));
     const skill = await fsp.readFile(path.join(targetDir, "SKILL.md"), "utf8");
     expect(skill).toContain("name: codegraph");
+  });
+
+  it("skill install accepts an explicit OMP managed skill target", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-skill-omp-target-"));
+    const targetDir = path.join(tmpDir, ".omp", "agent", "managed-skills", "codegraph");
+
+    const result = await runCliCommandDetailed(
+      ["skill", "--json", "install", "--target", targetDir],
+      undefined,
+      tmpDir,
+    );
+    const payload = JSON.parse(result.stdout) as {
+      installed: boolean;
+      skillFilePath: string;
+      targetDir: string;
+    };
+
+    expect(payload.installed).toBe(true);
+    expect(normalize(payload.targetDir)).toBe(normalize(targetDir));
+    expect(normalize(payload.skillFilePath)).toBe(normalize(path.join(targetDir, "SKILL.md")));
+    await expect(fsp.readFile(path.join(targetDir, "SKILL.md"), "utf8")).resolves.toContain("name: codegraph");
+  });
+
+  it.runIf(process.platform === "win32")("accepts case-insensitive Windows skill target segments", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-skill-windows-case-"));
+    const targetDir = path.join(tmpDir, ".codex", "Skills", "Codegraph");
+
+    await runCliCommandDetailed(["skill", "--json", "install", "--target", targetDir], undefined, tmpDir);
+
+    await expect(fsp.readFile(path.join(targetDir, "SKILL.md"), "utf8")).resolves.toContain("name: codegraph");
   });
 
   it("skill doctor reports an agent-specific default target", async () => {

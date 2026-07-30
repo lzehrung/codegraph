@@ -5,22 +5,22 @@ export { isKnownCliCommand } from "./commandCatalog.js";
 export const CLI_TASK_HELP_TEXT = `codegraph - Ask structural questions about a repository
 
 Start here:
-  Understand a repository   codegraph explore "how does auth reach the database?" --root .
-  Review local changes      codegraph review --base HEAD --head WORKTREE --summary
-  Find a symbol or file     codegraph search "SessionManager" --json
-  Configure an agent        codegraph install
-  Check runtime health      codegraph doctor
+  Configure every supported agent  codegraph install --all --dry-run
+  Understand a repository          codegraph explore "how does auth reach the database?" --root .
+  Review local changes             codegraph review --base HEAD --head WORKTREE --summary
+  Find a symbol or file            codegraph search "SessionManager" --json
+  Check runtime health             codegraph doctor
 
 Run codegraph --help for all commands.`;
 
 export const CLI_HELP_TEXT = `codegraph - Code analysis and dependency graph tool
 
 Start here:
-  Understand a repository   codegraph explore "how does auth reach the database?" --root .
-  Review local changes      codegraph review --base HEAD --head WORKTREE --summary
-  Find a symbol or file     codegraph search "SessionManager" --json
-  Configure an agent        codegraph install
-  Check runtime health      codegraph doctor
+  Configure every supported agent  codegraph install --all --dry-run
+  Understand a repository          codegraph explore "how does auth reach the database?" --root .
+  Review local changes             codegraph review --base HEAD --head WORKTREE --summary
+  Find a symbol or file            codegraph search "SessionManager" --json
+  Check runtime health             codegraph doctor
 
 Usage: codegraph <command> [options] [path]
 
@@ -92,6 +92,8 @@ Examples:
   codegraph packet file:src%2Fcli.ts --json
   codegraph artifact --root . --out codegraph-out --json
   codegraph mcp --root . --stdio
+  codegraph install --all --dry-run
+  codegraph install --all --yes
   codegraph install --target codex,claude --yes
   codegraph install --print-config codex
   codegraph uninstall --target codex --yes
@@ -107,6 +109,8 @@ Examples:
   codegraph skill install --agent cursor
   codegraph skill install --agent gemini
   codegraph skill install --agent opencode
+  codegraph skill install --agent omp
+  codegraph skill install --agent kilo
   codegraph skill install --target ~/.codex/skills/codegraph --force
   codegraph skill doctor
   codegraph impact --provider git --base main --head HEAD --duplicates off
@@ -140,18 +144,20 @@ State:
 
 export const INSTALL_HELP_TEXT = `codegraph install - Configure Codegraph for supported agent clients
 
-Usage: codegraph install [target] [--target <codex,claude,cursor,gemini,opencode,agents>] [--yes | --dry-run] [--print-config <target>] [--detect]
+Usage: codegraph install [target] [--target <codex,claude,cursor,gemini,opencode,omp,kilo,agents> | --all] [--yes | --dry-run] [--print-config <target>] [--detect]
 
 Targets:
-  codex, claude, cursor, gemini, opencode, agents
+  codex, claude, cursor, gemini, opencode, omp, kilo, agents
+  --all selects the full catalog in the listed order without detection.
 
 Safety:
   Interactive terminals preview changes and ask for confirmation. Noninteractive writes require --yes; use --dry-run to preview changed files or --print-config <target> to print the MCP snippet.
+  --all cannot be combined with a target, --detect, or --print-config.
 `;
 
 export const UNINSTALL_HELP_TEXT = `codegraph uninstall - Remove Codegraph-owned installer configuration
 
-Usage: codegraph uninstall [target] [--target <codex,claude,cursor,gemini,opencode,agents>] [--yes | --dry-run] [--detect]
+Usage: codegraph uninstall [target] [--target <codex,claude,cursor,gemini,opencode,omp,kilo,agents>] [--yes | --dry-run] [--detect]
 
 Safety:
   Removes only Codegraph-owned marker blocks, marker files, exact bundled skill payloads, or exact installer-owned MCP entries.

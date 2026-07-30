@@ -96,7 +96,7 @@ node ./dist/cli.js doctor
 node ./dist/cli.js orient --root . --budget small
 ```
 
-Continue with `node ./dist/cli.js <command>` from the checkout. To use the bare `codegraph` examples below unchanged, run `npm install -g .` after the build.
+Continue with `node ./dist/cli.js <command>` from the checkout. To use the bare `codegraph` examples below unchanged, run `npm install -g .` after the build, then `codegraph doctor` and `codegraph install --all --dry-run`.
 
 ### From GitHub Packages
 
@@ -107,6 +107,8 @@ npm login --scope=@lzehrung --auth-type=legacy --registry=https://npm.pkg.github
 npm config set "@lzehrung:registry" "https://npm.pkg.github.com"
 npm install -g @lzehrung/codegraph
 codegraph doctor
+codegraph install --all --dry-run
+codegraph install --all --yes
 ```
 
 Published package installs resolve the optional native runtime automatically when a compatible artifact exists. See [Installation](./docs/installation.md) for registry setup, npm tarballs, standalone releases, local global installs, and native runtime modes.
@@ -247,16 +249,18 @@ The useful distinction is evidence shape, not a claim that one tool replaces eve
 
 ## Agent setup
 
-Run `codegraph install` on an interactive terminal to detect supported clients, preview exact Codegraph-owned changes, and confirm once:
+Run `codegraph install` on an interactive terminal to detect supported clients, preview exact Codegraph-owned changes, and confirm once. Use `--all` when you intentionally want the complete current catalog without detection:
 
 ```bash
 codegraph install
 codegraph install --target codex,claude --dry-run
 codegraph install --target codex,claude --yes
+codegraph install --all --dry-run
+codegraph install --all --yes
 codegraph install --print-config codex
 ```
 
-Supported target ids are `codex`, `claude`, `cursor`, `gemini`, `opencode`, and `agents` (universal agent skills). Interactive writes default to no; noninteractive writes require `--yes`, and uninstall removes only Codegraph-owned content.
+Supported target ids are `codex`, `claude`, `cursor`, `gemini`, `opencode`, `omp`, `kilo`, and `agents` (universal agent skills). OMP uses `.omp/agent/managed-skills/codegraph`; Kilo uses `.kilocode/skills/codegraph` plus its comment-preserving JSONC MCP config. Interactive writes default to no; noninteractive writes require `--yes`, and uninstall removes only Codegraph-owned content. `--all` cannot be combined with target selection, `--detect`, or `--print-config`.
 
 For a skill without MCP configuration:
 
