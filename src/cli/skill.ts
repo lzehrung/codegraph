@@ -115,10 +115,19 @@ function assertSafeSkillInstallTarget(targetDir: string, agent?: SkillInstallAge
   const resolvedTarget = path.resolve(targetDir);
   const targetName = normalizePathSegmentForComparison(path.basename(resolvedTarget));
   const parentName = normalizePathSegmentForComparison(path.basename(path.dirname(resolvedTarget)));
-  const expectedParent = normalizePathSegmentForComparison(agent === "omp" ? "managed-skills" : "skills");
-  if (targetName !== "codegraph" || parentName !== expectedParent) {
+  let allowedParents: string[];
+  if (!agent) {
+    allowedParents = ["skills", "managed-skills"];
+  } else if (agent === "omp") {
+    allowedParents = ["managed-skills"];
+  } else {
+    allowedParents = ["skills"];
+  }
+  const normalizedAllowedParents = allowedParents.map(normalizePathSegmentForComparison);
+  if (targetName !== "codegraph" || !normalizedAllowedParents.includes(parentName)) {
+    const expectedSuffixes = allowedParents.map((parent) => `"${path.join(parent, "codegraph")}"`).join(" or ");
     throw new Error(
-      `Skill install target directory must end with "${path.join(expectedParent, "codegraph")}". ` +
+      `Skill install target directory must end with ${expectedSuffixes}. ` +
         `Received: ${normalizePathForDisplay(resolvedTarget)}`,
     );
   }

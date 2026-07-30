@@ -1334,6 +1334,27 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     expect(skill).toContain("name: codegraph");
   });
 
+  it("skill install accepts an explicit OMP managed skill target", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-skill-omp-target-"));
+    const targetDir = path.join(tmpDir, ".omp", "agent", "managed-skills", "codegraph");
+
+    const result = await runCliCommandDetailed(
+      ["skill", "--json", "install", "--target", targetDir],
+      undefined,
+      tmpDir,
+    );
+    const payload = JSON.parse(result.stdout) as {
+      installed: boolean;
+      skillFilePath: string;
+      targetDir: string;
+    };
+
+    expect(payload.installed).toBe(true);
+    expect(normalize(payload.targetDir)).toBe(normalize(targetDir));
+    expect(normalize(payload.skillFilePath)).toBe(normalize(path.join(targetDir, "SKILL.md")));
+    await expect(fsp.readFile(path.join(targetDir, "SKILL.md"), "utf8")).resolves.toContain("name: codegraph");
+  });
+
   it.runIf(process.platform === "win32")("accepts case-insensitive Windows skill target segments", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-skill-windows-case-"));
     const targetDir = path.join(tmpDir, ".codex", "Skills", "Codegraph");
