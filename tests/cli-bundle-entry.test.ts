@@ -9,11 +9,11 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const bundledCli = path.join(rootDir, "dist", "bin", "cli.js");
 const unbundledCli = path.join(rootDir, "dist", "cli.js");
 
-function run(entry: string, args: string[], cwd: string = rootDir) {
+function run(entry: string, args: string[], cwd: string = rootDir, env: NodeJS.ProcessEnv = process.env) {
   return spawnSync(process.execPath, [entry, ...args], {
     cwd,
     encoding: "utf8",
-    env: process.env,
+    env,
     maxBuffer: 32 * 1024 * 1024,
   });
 }
@@ -47,6 +47,27 @@ describe("bundled CLI entry", () => {
       expect(bundled.stdout.length).toBeGreaterThan(20);
     } finally {
       fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("loads externalized installer dependencies from the bundled entry", () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-bundle-install-"));
+    try {
+      const env = {
+        ...process.env,
+        HOME: homeDir,
+        USERPROFILE: homeDir,
+        XDG_CONFIG_HOME: path.join(homeDir, ".config"),
+      };
+      const bundled = run(bundledCli, ["install", "--target", "cursor", "--dry-run", "--json"], rootDir, env);
+
+      expect(bundled.status, bundled.stderr).toBe(0);
+      expect(JSON.parse(bundled.stdout)).toMatchObject({
+        dryRun: true,
+        targets: ["cursor"],
+      });
+    } finally {
+      fs.rmSync(homeDir, { recursive: true, force: true });
     }
   });
 

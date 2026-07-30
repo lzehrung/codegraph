@@ -49,7 +49,7 @@ export async function bundleCli({ rootDir = defaultRootDir, logLevel = "warning"
     splitting: true,
     outdir: paths.outdir,
     entryNames: "[name]",
-    external: ["node:*", "@lzehrung/codegraph-native"],
+    external: ["node:*", "@lzehrung/codegraph-native", "jsonc-parser"],
     banner: {
       js: createRequireBanner(),
     },
@@ -72,11 +72,11 @@ export async function bundleCli({ rootDir = defaultRootDir, logLevel = "warning"
   };
 }
 
-function runNode(entry, args, { cwd = defaultRootDir } = {}) {
+function runNode(entry, args, { cwd = defaultRootDir, env = process.env } = {}) {
   return spawnSync(process.execPath, [entry, ...args], {
     cwd,
     encoding: "utf8",
-    env: process.env,
+    env,
     maxBuffer: 32 * 1024 * 1024,
   });
 }
@@ -123,6 +123,24 @@ export async function verifyBundledCli({ rootDir = defaultRootDir } = {}) {
     }
     if (bundledOrient.stdout !== unbundledOrient.stdout) {
       throw new Error("Bundled orient --json output differed from unbundled for the smoke fixture.");
+    }
+
+    const installEnv = {
+      ...process.env,
+      HOME: fixtureRoot,
+      USERPROFILE: fixtureRoot,
+      XDG_CONFIG_HOME: path.join(fixtureRoot, ".config"),
+    };
+    const bundledInstall = runNode(bundledEntry, ["install", "--target", "cursor", "--dry-run", "--json"], {
+      cwd: rootDir,
+      env: installEnv,
+    });
+    if (bundledInstall.status !== 0) {
+      throw new Error(`Bundled install smoke failed:\n${bundledInstall.stderr || bundledInstall.stdout}`);
+    }
+    const installResult = JSON.parse(bundledInstall.stdout);
+    if (!installResult.dryRun || !installResult.targets?.includes("cursor")) {
+      throw new Error("Bundled install smoke returned an invalid dry-run result.");
     }
   } finally {
     fs.rmSync(fixtureRoot, { recursive: true, force: true });
