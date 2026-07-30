@@ -9,6 +9,7 @@ import {
   assertMcpSearchToolResult,
   FUNNEL_DOCTOR_INSTALL_BUDGET_MS,
   FUNNEL_EXPLORE_QUERY,
+  FUNNEL_PACKAGE_SETUP_TIMEOUT_MS,
   runFunnelSmoke,
 } from "../scripts/onboarding/run-funnel-smoke.mjs";
 import { mkTmpDir } from "./helpers/filesystem.js";
@@ -506,8 +507,10 @@ describe("onboarding funnel smoke", () => {
         "--no-save",
         "--audit=false",
         "--fund=false",
+        "--loglevel=verbose",
         ...candidates.paths,
       ]);
+      expect(npmInstall?.options.timeoutMs).toBe(FUNNEL_PACKAGE_SETUP_TIMEOUT_MS);
       expect(result.checks).toContainEqual(expect.objectContaining({ name: "package-candidate", status: "pass" }));
       const packageLauncher = path.join(
         workspace,
