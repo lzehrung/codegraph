@@ -36,7 +36,7 @@ npm run release:minor -- --package @lzehrung/codegraph-native
 
 ## GitHub Release Workflow
 
-Use the manually triggered `release` GitHub Actions workflow for a certified package release. Select `release_type=patch|minor|major`; standalone previews do not block this workflow.
+Use the manually triggered `release` GitHub Actions workflow for a complete certified release. Select `release_type=patch|minor|major`; the workflow publishes the certified packages, then builds, smokes, and attaches the standalone preview assets.
 
 The workflow uses this immutable byte flow:
 
@@ -53,7 +53,9 @@ The workflow uses this immutable byte flow:
 
 ### Standalone release assets
 
-After the package release succeeds, manually trigger the separate `standalone-release` workflow with its existing `v<version>` tag. It downloads the certified package assets from that release, then builds and verifies these self-contained preview assets:
+The `release` workflow invokes `standalone-release` automatically after the certified package release and `v<version>` GitHub Release exist. `standalone-release` remains manually dispatchable with an existing release tag for deliberate recovery or reruns.
+
+It downloads the certified package assets from that release, then builds and verifies these self-contained preview assets:
 
 ```text
 codegraph-win32-x64.zip
@@ -74,7 +76,7 @@ The standalone matrix assembles archives from the released immutable package can
 
 Only archives that pass their matrix gate are uploaded as `standalone-smoked-*`. The aggregation job copies those exact archives without rebuilding, adds `install.sh` and `install.ps1` from the tagged source revision, and generates one combined `SHA256SUMS`.
 
-The standalone publish job attaches that post-smoke artifact to the existing GitHub Release. It does not rebuild or repackage standalone assets after smoke, and a standalone failure cannot prevent package publication.
+The standalone publish job attaches that post-smoke artifact to the existing GitHub Release. It does not rebuild or repackage standalone assets after smoke. Package publication happens first; if standalone assembly fails, the published packages remain available while the overall `release` workflow reports the standalone failure.
 
 The bootstrap scripts preview their target and user-owned paths, confirm interactively or require explicit `-Yes`/`--yes`, verify the selected archive against `SHA256SUMS`, reject unsafe archive entries, and run bundled `version` and `doctor`. For a same-version root, bundled Node verifies both roots and requires exact target, native suffix, source revision, Node version, and per-file path, size, and SHA-256 manifest matches before reuse; a mismatch leaves the launcher and install manifest unchanged. They install under a versioned root, atomically replace the launcher and manifest with rollback, retain the previous version, and record channel, target, release URL, archive hash, verification method, and previous/current versions.
 
