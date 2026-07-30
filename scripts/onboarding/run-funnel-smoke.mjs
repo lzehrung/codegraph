@@ -27,6 +27,7 @@ import { currentNativeTargetSuffix } from "../certification/package-smoke-lib.mj
 export const DEFAULT_FUNNEL_TIMEOUT_MS = 120_000;
 export const FUNNEL_DOCTOR_INSTALL_BUDGET_MS = 120_000;
 export const FUNNEL_FIRST_QUERY_BUDGET_MS = 300_000;
+export const FUNNEL_PACKAGE_SETUP_TIMEOUT_MS = 300_000;
 export const FUNNEL_INSTALL_TARGET = "cursor";
 export const FUNNEL_EXPLORE_QUERY = "where does authentication reach storage?";
 export const MAX_FUNNEL_FOLLOW_UPS = 12;
@@ -331,15 +332,22 @@ async function prepareSourceRuntime(context) {
 async function preparePackageRuntime(context) {
   const artifact = await requireArtifact(context, "package");
   const packageArtifacts = await resolvePackageArtifacts(context, artifact);
-  await runCommandCheck(context, "package-install", "npm", [
-    "install",
-    "--prefix",
-    context.isolation.paths.npmPrefix,
-    "--no-save",
-    "--audit=false",
-    "--fund=false",
-    ...packageArtifacts.paths,
-  ]);
+  await runCommandCheck(
+    context,
+    "package-install",
+    "npm",
+    [
+      "install",
+      "--prefix",
+      context.isolation.paths.npmPrefix,
+      "--no-save",
+      "--audit=false",
+      "--fund=false",
+      "--loglevel=verbose",
+      ...packageArtifacts.paths,
+    ],
+    { timeoutMs: FUNNEL_PACKAGE_SETUP_TIMEOUT_MS },
+  );
   const packageRoot = path.join(context.isolation.paths.npmPrefix, "node_modules", "@lzehrung", "codegraph");
   const cliPath = path.join(packageRoot, "dist", "bin", "cli.js");
   const launcherDirectory = path.join(context.isolation.paths.npmPrefix, "node_modules", ".bin");
