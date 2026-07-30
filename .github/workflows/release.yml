@@ -798,7 +798,7 @@ jobs:
             echo "- \`@lzehrung/codegraph@$ROOT_VERSION\`"
             echo "- \`@lzehrung/codegraph-native@$NATIVE_VERSION\`"
             echo ""
-            echo "Package tarballs are the certified bytes recorded in CertificationReportV1. Standalone preview assets are attached later by the separately triggered standalone release workflow."
+            echo "Standalone preview assets are built, smoked, and attached by the final release job."
           } > "$release_notes"
           gh release create "$root_tag" \
             temp/release-candidates/packages/*.tgz \
@@ -809,3 +809,12 @@ jobs:
             --verify-tag \
             --title "$root_tag" \
             --notes-file "$release_notes"
+
+  standalone-release:
+    name: Build and attach standalone release assets
+    needs:
+      - plan-release
+      - publish-certified
+    uses: ./.github/workflows/standalone-release.yml
+    with:
+      release_tag: v${{ needs.plan-release.outputs.root_version }}

@@ -14,7 +14,7 @@ function jobBlock(workflow: string, jobName: string): string {
 }
 
 describe("certified release workflows", () => {
-  it("keeps package certification and publication independent from standalone previews", () => {
+  it("finishes package certification and publication before standalone previews", () => {
     const assemble = jobBlock(releaseWorkflow, "assemble-release-candidates");
     const security = jobBlock(releaseWorkflow, "security-production");
     const smoke = jobBlock(releaseWorkflow, "package-smoke");
@@ -37,6 +37,16 @@ describe("certified release workflows", () => {
     expect(releaseWorkflow).not.toContain("standalone-release-assets");
   });
 
+  it("chains the reusable standalone workflow after certified publication", () => {
+    const standalone = jobBlock(releaseWorkflow, "standalone-release");
+
+    expect(standalone).toContain("- plan-release");
+    expect(standalone).toContain("- publish-certified");
+    expect(standalone).toContain("uses: ./.github/workflows/standalone-release.yml");
+    expect(standalone).toContain("release_tag: v${{ needs.plan-release.outputs.root_version }}");
+    expect(standaloneWorkflow).toContain("workflow_call:");
+  });
+
   it("publishes only certified package assets before standalone enrichment", () => {
     const publish = jobBlock(releaseWorkflow, "publish-certified");
     const preflightIndex = publish.indexOf("Require passing certification envelope before registry writes");
@@ -51,7 +61,7 @@ describe("certified release workflows", () => {
     expect(publish).toContain("temp/release-candidates/packages/*.tgz");
     expect(publish).toContain("temp/release-candidates/SHA256SUMS");
     expect(publish).toContain("release-candidate-manifest.json");
-    expect(publish).toContain("Standalone preview assets are attached later");
+    expect(publish).toContain("Standalone preview assets are built, smoked, and attached by the final release job.");
     expect(preflightIndex).toBeGreaterThan(-1);
     expect(publishIndex).toBeGreaterThan(preflightIndex);
     expect(releaseIndex).toBeGreaterThan(publishIndex);
@@ -76,7 +86,7 @@ describe("certified release workflows", () => {
     expect(build).not.toContain("RUSTFLAGS=");
   });
 
-  it("runs standalone assembly and funnels only when manually requested for an existing release", () => {
+  it("supports reusable and manual standalone assembly for an existing release", () => {
     const plan = jobBlock(standaloneWorkflow, "plan-standalone");
     const download = jobBlock(standaloneWorkflow, "download-release-candidates");
     const build = jobBlock(standaloneWorkflow, "build-standalone-archives");
@@ -85,6 +95,7 @@ describe("certified release workflows", () => {
     const assets = jobBlock(standaloneWorkflow, "assemble-standalone-release-assets");
     const publish = jobBlock(standaloneWorkflow, "publish-standalone-assets");
 
+    expect(standaloneWorkflow).toContain("workflow_call:");
     expect(standaloneWorkflow).toContain("workflow_dispatch:");
     expect(standaloneWorkflow).toContain("release_tag:");
     expect(standaloneWorkflow).toContain('["rev-parse", "HEAD^"]');
