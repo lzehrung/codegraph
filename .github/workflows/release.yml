@@ -727,11 +727,9 @@ jobs:
 
       - name: Publish only certified tarballs
         env:
-          CODEGRAPH_PACKAGES_TOKEN_B64: ${{ secrets.CODEGRAPH_PACKAGES_TOKEN_B64 }}
+          NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN || secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          export NODE_AUTH_TOKEN="$(printf '%s' "$CODEGRAPH_PACKAGES_TOKEN_B64" | base64 --decode)"
-          echo "::add-mask::$NODE_AUTH_TOKEN"
           node ./scripts/certification/publish-release-candidates.mjs \
             --manifest temp/release-candidates/release-candidate-manifest.json \
             --expected-source-revision ${{ needs.plan-release.outputs.source_revision }} \
