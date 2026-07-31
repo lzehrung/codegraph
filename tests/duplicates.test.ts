@@ -1364,6 +1364,10 @@ export function formatUsage(value: string) {
     const result = await captureCli(["duplicates", "--root", ".", "src/app/[slug]", "--json", "--include-small"], {
       cwd: root,
     });
+    const warmResult = await captureCli(
+      ["duplicates", "--root", ".", "src/app/[slug]", "--json", "--include-small", "--progress"],
+      { cwd: root },
+    );
     const parsed = JSON.parse(result.stdout) as {
       groups?: Array<{ primaryLeft?: { file?: string }; primaryRight?: { file?: string } }>;
     };
@@ -1372,6 +1376,8 @@ export function formatUsage(value: string) {
     expect(parsed.groups?.length).toBeGreaterThan(0);
     expect(parsed.groups?.[0]?.primaryLeft?.file?.startsWith("src/app/[slug]/")).toBeTruthy();
     expect(parsed.groups?.[0]?.primaryRight?.file?.startsWith("src/app/[slug]/")).toBeTruthy();
+    expect(warmResult.stderr).toContain("Checked project index");
+    expect(warmResult.stderr).not.toContain("Building project index");
   });
 
   test("duplicates CLI cleanup profile defaults to reduced-lines and summary output", async () => {

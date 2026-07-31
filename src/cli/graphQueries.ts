@@ -1,4 +1,4 @@
-import { buildProjectIndex as defaultBuildProjectIndex } from "../indexer/build-index.js";
+import { buildProjectIndexIncremental as defaultBuildProjectIndex } from "../indexer/build-index.js";
 import { getApiSurface } from "../indexer/symbols.js";
 import { type BuildOptions, type ProjectIndex } from "../indexer/types.js";
 import type { GraphAdjacencyIndex } from "../graphs/adjacency.js";

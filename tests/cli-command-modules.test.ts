@@ -1503,21 +1503,30 @@ describe("CLI command modules", () => {
 
     try {
       const deps = await captureCli(["deps", "main.ts", "--root", tempDir, "--json"]);
+      const warmDeps = await captureCli(["deps", "main.ts", "--root", tempDir, "--json", "--progress"]);
       const rdeps = await captureCli(["rdeps", "util.ts", "--root", tempDir]);
       const graphPath = await captureCli(["path", "main.ts", "util.ts", "--root", tempDir]);
-      const cycles = await captureCli(["cycles", "--root", tempDir]);
+      const cycles = await captureCli(["cycles", "--root", tempDir, "--progress"]);
       const unresolved = await captureCli(["unresolved", "--root", tempDir, "--verbose"]);
-      const apiSurface = await captureCli(["apisurface", "--root", tempDir]);
+      const apiSurface = await captureCli(["apisurface", "--root", tempDir, "--progress"]);
 
       expect(JSON.stringify(JSON.parse(deps.stdout))).toContain("util.ts");
+      expect(warmDeps.stderr).toContain("Checking project index");
+      expect(warmDeps.stderr).toContain("Checked project index");
+      expect(warmDeps.stderr).not.toContain("Building project index");
+      expect(warmDeps.stderr).not.toContain("files processed");
       expect(rdeps.stdout).toContain("Reverse dependencies for util.ts:");
       expect(graphPath.stdout).toContain("main.ts");
       expect(graphPath.stdout).toContain("util.ts");
       expect(cycles.stdout).toContain("No dependency cycles found.");
+      expect(cycles.stderr).toContain("Checked project index");
+      expect(cycles.stderr).not.toContain("Building project index");
       expect(unresolved.stdout).toContain("missing-pkg");
       expect(unresolved.stdout).toContain('as "missing-pkg"');
       expect(apiSurface.stdout).toContain("API Surface");
       expect(apiSurface.stdout).toContain("run");
+      expect(apiSurface.stderr).toContain("Checked project index");
+      expect(apiSurface.stderr).not.toContain("Building project index");
     } finally {
       await fsp.rm(tempDir, { recursive: true, force: true });
     }
