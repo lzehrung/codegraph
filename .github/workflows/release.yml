@@ -50,9 +50,28 @@ jobs:
           )
           echo "$version" >> "$GITHUB_OUTPUT"
 
+  registry-auth-preflight:
+    name: Verify GitHub Packages authentication
+    needs: plan-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Node for GitHub Packages
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.10.0
+          registry-url: https://npm.pkg.github.com
+          scope: "@lzehrung"
+
+      - name: Authenticate with the workflow token
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm whoami --registry=https://npm.pkg.github.com
+
   build-native-artifacts:
     name: Build ${{ matrix.suffix }}
-    needs: plan-release
+    needs:
+      - plan-release
+      - registry-auth-preflight
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -727,7 +746,7 @@ jobs:
 
       - name: Publish only certified tarballs
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN || secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           node ./scripts/certification/publish-release-candidates.mjs \
