@@ -99,7 +99,7 @@ A structural result proves archive checksum, package identity, target naming, an
 
 Publishing waits for every required package row plus security, semantics, and hermeticity. Missing, failed, stale-revision, wrong-version, expired-exception, size, or checksum evidence stops the job before `npm publish` is invoked.
 
-The workflow uses `PACKAGE_PUBLISH_TOKEN` when configured and otherwise uses the workflow-scoped `GITHUB_TOKEN`. The job has `packages: write`; a custom token is only needed when the repository's workflow token cannot write an existing package.
+The workflow uses its repository-scoped `GITHUB_TOKEN` with `packages: write`; it does not prefer long-lived package secrets. A registry authentication preflight runs before native builds so invalid workflow access fails before the certification matrix starts.
 
 ## Package Roles
 

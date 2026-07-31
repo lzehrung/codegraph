@@ -16,12 +16,17 @@ function jobBlock(workflow: string, jobName: string): string {
 describe("certified release workflows", () => {
   it("finishes package certification and publication before standalone previews", () => {
     const assemble = jobBlock(releaseWorkflow, "assemble-release-candidates");
+    const authPreflight = jobBlock(releaseWorkflow, "registry-auth-preflight");
+    const buildNative = jobBlock(releaseWorkflow, "build-native-artifacts");
     const security = jobBlock(releaseWorkflow, "security-production");
     const smoke = jobBlock(releaseWorkflow, "package-smoke");
     const packageFunnel = jobBlock(releaseWorkflow, "package-funnel");
     const report = jobBlock(releaseWorkflow, "certification-report");
     const publish = jobBlock(releaseWorkflow, "publish-certified");
 
+    expect(authPreflight).toContain("npm whoami --registry=https://npm.pkg.github.com");
+    expect(authPreflight).toContain("NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}");
+    expect(buildNative).toContain("- registry-auth-preflight");
     expect(assemble).toContain("- build-native-artifacts");
     expect(security).toContain("- assemble-release-candidates");
     expect(smoke).toContain("- security-production");
@@ -56,7 +61,8 @@ describe("certified release workflows", () => {
     expect(releaseWorkflow.split("assemble-release-candidates.mjs")).toHaveLength(2);
     expect(releaseWorkflow).not.toContain("npm pack");
     expect(publish).toContain("publish-release-candidates.mjs");
-    expect(publish).toContain("NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN || secrets.GITHUB_TOKEN }}");
+    expect(publish).toContain("NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}");
+    expect(publish).not.toContain("PACKAGE_PUBLISH_TOKEN");
     expect(publish).not.toContain("CODEGRAPH_PACKAGES_TOKEN_B64");
     expect(publish).not.toContain("base64 --decode");
     expect(publish).toContain("temp/release-candidates/packages/*.tgz");
