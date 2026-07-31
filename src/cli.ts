@@ -1043,19 +1043,15 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
 
   if (cmd === "duplicates") {
     const files = await resolveFiles();
+    const duplicateIndexOptions = buildAgentOptions();
+    duplicateIndexOptions.cache ??= "disk";
     const { handleDuplicatesCommand } = await import("./cli/duplicates.js");
     await handleDuplicatesCommand({
       projectRootFs,
       files,
       getOpt,
       hasFlag,
-      indexOptions: {
-        onProgress: progressHandler,
-        discovery: discoveryOptions,
-        ...(hasGraphOverrides ? { graph: buildGraphOptions() } : {}),
-        ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
-        ...workerOpts,
-      },
+      indexOptions: duplicateIndexOptions,
       writeJSONLine,
       writeStdoutLine,
       writeStderrLine,

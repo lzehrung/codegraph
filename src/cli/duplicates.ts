@@ -1,4 +1,4 @@
-import { buildProjectIndexFromFiles } from "../indexer/build-index.js";
+import { buildProjectIndexIncremental } from "../indexer/build-index.js";
 import {
   findDuplicates,
   type DuplicateCleanupLabel,
@@ -441,7 +441,11 @@ export async function handleDuplicatesCommand(context: DuplicatesCommandContext)
       options.limit = boundedLimit;
     }
 
-    const index = await buildProjectIndexFromFiles(context.projectRootFs, context.files, context.indexOptions);
+    const index = await buildProjectIndexIncremental(context.projectRootFs, {
+      ...context.indexOptions,
+      files: context.files,
+      filesAreProjectScope: true,
+    });
     const result = await findDuplicates(index, options);
     const sorted = sortedResult(result, sortMode, requestedLimit, profile);
     if (!renderPretty) {
