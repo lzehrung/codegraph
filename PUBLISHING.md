@@ -99,7 +99,7 @@ A structural result proves archive checksum, package identity, target naming, an
 
 Publishing waits for every required package row plus security, semantics, and hermeticity. Missing, failed, stale-revision, wrong-version, expired-exception, size, or checksum evidence stops the job before `npm publish` is invoked.
 
-The workflow uses the `PACKAGE_PUBLISH_TOKEN` Actions secret in both the registry preflight and publication job. It must contain a current classic personal access token with `read:packages` and `write:packages`; GitHub Packages does not support fine-grained personal access tokens for this purpose.
+The workflow exposes the `PACKAGE_PUBLISH_TOKEN` Actions secret as both `NODE_AUTH_TOKEN` for `actions/setup-node` and `GITHUB_TOKEN` for the repository `.npmrc` in the registry preflight and publication job. It must contain a current classic personal access token with `read:packages` and `write:packages`; GitHub Packages does not support fine-grained personal access tokens for this purpose.
 
 ## Package Roles
 

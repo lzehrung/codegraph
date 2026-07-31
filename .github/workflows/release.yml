@@ -65,6 +65,7 @@ jobs:
       - name: Authenticate classic package token
         env:
           NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}
         run: npm whoami --registry=https://npm.pkg.github.com
 
   build-native-artifacts:
@@ -747,6 +748,7 @@ jobs:
       - name: Publish only certified tarballs
         env:
           NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}
         shell: bash
         run: |
           node ./scripts/certification/publish-release-candidates.mjs \
