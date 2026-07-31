@@ -1221,7 +1221,8 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   if (cmd === "path" || cmd === "cycles" || cmd === "unresolved") {
     const graphOptions = hasGraphOverrides || nativeMode !== "auto" ? buildGraphOptions() : undefined;
     const { handleGraphQueryCommand } = await import("./cli/graphQueries.js");
-    const collectGraph = cmd === "cycles" ? (await import("./graph-builder.js")).collectGraph : undefined;
+    const collectGraph =
+      cmd === "cycles" && includeRootsAbs.length ? (await import("./graph-builder.js")).collectGraph : undefined;
     await handleGraphQueryCommand({
       command: cmd,
       positionals: parsed.positionals,
@@ -1298,12 +1299,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       writeStderrLine,
       exit: exitCli,
       listProjectFilesForScan: async () => await listProjectFilesForScan(projectRootFs),
-      indexOptions: {
-        onProgress: progressHandler,
-        discovery: discoveryOptions,
-        ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
-        ...workerOpts,
-      },
+      indexOptions: buildGraphQueryIndexOptions(undefined),
     });
     return;
   }
