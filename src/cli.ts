@@ -1190,13 +1190,12 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     return;
   }
 
-  const buildGraphQueryIndexOptions = (graphOptions: GraphBuildOptions | undefined): BuildOptions => ({
-    onProgress: progressHandler,
-    discovery: discoveryOptions,
-    ...(graphOptions ? { graph: graphOptions } : {}),
-    ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
-    ...workerOpts,
-  });
+  const buildGraphQueryIndexOptions = (graphOptions: GraphBuildOptions | undefined): BuildOptions => {
+    const options = buildAgentOptions();
+    options.cache ??= "disk";
+    if (graphOptions) options.graph = graphOptions;
+    return options;
+  };
 
   if (cmd === "deps" || cmd === "rdeps") {
     const graphOptions = hasGraphOverrides || nativeMode !== "auto" ? buildGraphOptions() : undefined;

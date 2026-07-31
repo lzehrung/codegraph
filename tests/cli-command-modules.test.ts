@@ -1503,6 +1503,7 @@ describe("CLI command modules", () => {
 
     try {
       const deps = await captureCli(["deps", "main.ts", "--root", tempDir, "--json"]);
+      const warmDeps = await captureCli(["deps", "main.ts", "--root", tempDir, "--json", "--progress"]);
       const rdeps = await captureCli(["rdeps", "util.ts", "--root", tempDir]);
       const graphPath = await captureCli(["path", "main.ts", "util.ts", "--root", tempDir]);
       const cycles = await captureCli(["cycles", "--root", tempDir]);
@@ -1510,6 +1511,10 @@ describe("CLI command modules", () => {
       const apiSurface = await captureCli(["apisurface", "--root", tempDir]);
 
       expect(JSON.stringify(JSON.parse(deps.stdout))).toContain("util.ts");
+      expect(warmDeps.stderr).toContain("Checking project index");
+      expect(warmDeps.stderr).toContain("Checked project index");
+      expect(warmDeps.stderr).not.toContain("Building project index");
+      expect(warmDeps.stderr).not.toContain("files processed");
       expect(rdeps.stdout).toContain("Reverse dependencies for util.ts:");
       expect(graphPath.stdout).toContain("main.ts");
       expect(graphPath.stdout).toContain("util.ts");
