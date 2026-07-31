@@ -25,7 +25,7 @@ describe("certified release workflows", () => {
     const publish = jobBlock(releaseWorkflow, "publish-certified");
 
     expect(authPreflight).toContain("npm whoami --registry=https://npm.pkg.github.com");
-    expect(authPreflight).toContain("NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}");
+    expect(authPreflight).toContain("NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}");
     expect(buildNative).toContain("- registry-auth-preflight");
     expect(assemble).toContain("- build-native-artifacts");
     expect(security).toContain("- assemble-release-candidates");
@@ -61,8 +61,7 @@ describe("certified release workflows", () => {
     expect(releaseWorkflow.split("assemble-release-candidates.mjs")).toHaveLength(2);
     expect(releaseWorkflow).not.toContain("npm pack");
     expect(publish).toContain("publish-release-candidates.mjs");
-    expect(publish).toContain("NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}");
-    expect(publish).not.toContain("PACKAGE_PUBLISH_TOKEN");
+    expect(publish).toContain("NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}");
     expect(publish).not.toContain("CODEGRAPH_PACKAGES_TOKEN_B64");
     expect(publish).not.toContain("base64 --decode");
     expect(publish).toContain("temp/release-candidates/packages/*.tgz");

@@ -51,7 +51,7 @@ jobs:
           echo "$version" >> "$GITHUB_OUTPUT"
 
   registry-auth-preflight:
-    name: Verify GitHub Packages authentication
+    name: Verify classic package token
     needs: plan-release
     runs-on: ubuntu-latest
     steps:
@@ -62,9 +62,9 @@ jobs:
           registry-url: https://npm.pkg.github.com
           scope: "@lzehrung"
 
-      - name: Authenticate with the workflow token
+      - name: Authenticate classic package token
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}
         run: npm whoami --registry=https://npm.pkg.github.com
 
   build-native-artifacts:
@@ -746,7 +746,7 @@ jobs:
 
       - name: Publish only certified tarballs
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}
         shell: bash
         run: |
           node ./scripts/certification/publish-release-candidates.mjs \
