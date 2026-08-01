@@ -26,14 +26,14 @@ Warm, this repository:
 
 Where a warm command spends time:
 
-| Layer                                         | Measured cost             | Plan                                                             |
-| --------------------------------------------- | ------------------------- | ---------------------------------------------------------------- |
-| Process start + ESM module graph              | 262 ms                    | [startup](2026-07-25-startup-cost-bundling-and-lazy-dispatch.md) |
-| Git subprocesses (7 spawns, serialized)       | ~200 ms                   | [git](2026-07-25-git-subprocess-elimination.md)                  |
-| Bloom filter rebuild over 668 unchanged files | 404 ms                    | [hydrate](2026-07-25-warm-index-hydrate-costs.md)                |
-| Detailed symbol-graph sidecar validation      | 215-240 ms                | [hydrate](2026-07-25-warm-index-hydrate-costs.md)                |
-| Native fingerprint (forces addon load)        | 35 ms warm / ~300 ms cold | [native](2026-07-25-native-runtime-startup.md)                   |
-| Project snapshot read + parse (8.97 MB)       | 42 ms, sometimes twice    | [hydrate](2026-07-25-warm-index-hydrate-costs.md)                |
+| Layer                                         | Measured cost             | Plan                                              |
+| --------------------------------------------- | ------------------------- | ------------------------------------------------- |
+| Process start + ESM module graph              | 262 ms                    | Implemented                                       |
+| Git subprocesses (7 spawns, serialized)       | ~200 ms                   | [git](2026-07-25-git-subprocess-elimination.md)   |
+| Bloom filter rebuild over 668 unchanged files | 404 ms                    | [hydrate](2026-07-25-warm-index-hydrate-costs.md) |
+| Detailed symbol-graph sidecar validation      | 215-240 ms                | [hydrate](2026-07-25-warm-index-hydrate-costs.md) |
+| Native fingerprint (forces addon load)        | 35 ms warm / ~300 ms cold | [native](2026-07-25-native-runtime-startup.md)    |
+| Project snapshot read + parse (8.97 MB)       | 42 ms, sometimes twice    | [hydrate](2026-07-25-warm-index-hydrate-costs.md) |
 
 Cold start, measured once on first touch after a build:
 
@@ -44,16 +44,16 @@ Cold start, measured once on first touch after a build:
 The cold penalty is per-file overhead multiplied across the module graph (open, stat, resolve,
 read, and on Windows antivirus inspection). It is the single largest cold-start term.
 
-## The four plans
+## Remaining plans and completed startup slice
 
-1. [Startup cost: bundling, lazy dispatch, compile cache](2026-07-25-startup-cost-bundling-and-lazy-dispatch.md)
-   - Removes a measured 185-210 ms from every invocation and is the primary cold-start fix.
-2. [Warm index hydrate costs](2026-07-25-warm-index-hydrate-costs.md)
+The startup work shipped lazy dispatch, a bundled CLI entry, the V8 compile cache, and eager-import trimming. Further startup cuts must be re-measured before adding work.
+
+1. [Warm index hydrate costs](2026-07-25-warm-index-hydrate-costs.md)
    - Removes recomputation of data that is already persisted. Largest warm win.
-3. [Git subprocess elimination](2026-07-25-git-subprocess-elimination.md)
+2. [Git subprocess elimination](2026-07-25-git-subprocess-elimination.md)
    - Takes warm read-only queries from 6-7 git spawns toward zero, and fixes a latent
      `ENAMETOOLONG` correctness bug.
-4. [Native runtime and worker startup](2026-07-25-native-runtime-startup.md)
+3. [Native runtime and worker startup](2026-07-25-native-runtime-startup.md)
    - Stops loading and hashing a 29 MB addon for commands that never parse a file.
 
 ## Recommended implementation order
@@ -74,7 +74,7 @@ Order is chosen so that each step is independently shippable and independently m
 
 ## Program-level acceptance
 
-Measured on this repository, warm, after all four plans:
+Measured on this repository, warm, after the program:
 
 - [ ] `codegraph --version` at or under 100 ms (from 299 ms).
 - [ ] Warm `orient --budget small` at or under 450 ms (from 1256 ms).
@@ -94,6 +94,4 @@ Measured on this repository, warm, after all four plans:
 
 ## Supersedes
 
-`2026-07-23-cold-start-explore-latency.md` proposed ranked follow-ups from partial data. Its
-Slice 1 shipped (basic symbol graph for hybrid search and explore). Its remaining ranks are
-replaced by the measured findings in these four plans.
+An earlier cold-start exploration proposed ranked follow-ups from partial data. Its basic symbol-graph slice shipped; its remaining ranks were replaced by the measured findings in this program.
