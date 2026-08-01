@@ -138,8 +138,8 @@ no caller in `src/` other than a re-export at `src/util.ts:10`, and one test ref
 
 ## Priority 0: Restore the snapshot fast path -- IMPLEMENTED (`5dc3ecb7`)
 
-Single highest-leverage change in the whole performance program, because it also removes most of
-the [hydrate plan's](2026-07-25-warm-index-hydrate-costs.md) costs on clean trees.
+Single highest-leverage change in the whole performance program, because it also skips most
+warm-hydration validation on clean trees.
 
 - [x] Change the `untrackedFiles` term at `src/indexer/build-index.ts` so only files that block
       genuine proof of freshness defeat the fast path. The naive form sketched during planning
