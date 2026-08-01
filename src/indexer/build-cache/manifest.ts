@@ -245,13 +245,15 @@ export async function writeManifest(
   projectRoot: string,
   opts: BuildOptions | undefined,
   manifest: IndexManifest,
-): Promise<void> {
+): Promise<boolean> {
   try {
     const manifestPath = manifestFilePath(projectRoot, opts);
     await fsp.mkdir(path.dirname(manifestPath), { recursive: true });
     await writeManifestAtomically(manifestPath, JSON.stringify(manifest, null, 2));
+    return true;
   } catch (error) {
     logWithLevel(opts?.logLevel, "warn", "Warning: Failed to write manifest:", error);
+    return false;
   }
 }
 

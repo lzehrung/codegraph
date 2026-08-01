@@ -1142,12 +1142,20 @@ describe("Cache invalidation and strict hashing", () => {
     });
 
     const first = await buildCache.tryLoadProjectIndexSnapshot(root, { cache: "disk" }, entries);
+    const firstModule = first?.index.byFile.get(normalize(path.join(root, "main.ts")));
+    if (!firstModule) throw new Error("Expected cached module.");
+    firstModule.locals.length = 0;
     const second = await buildCache.tryLoadProjectIndexSnapshot(root, { cache: "disk" }, entries);
+    const beforeRewrite = await fsp.stat(snapshotPath);
+    const unchangedText = await originalReadFile(snapshotPath, "utf8");
+    await fsp.writeFile(snapshotPath, unchangedText, "utf8");
+    await fsp.utimes(snapshotPath, beforeRewrite.atime, beforeRewrite.mtime);
+    const third = await buildCache.tryLoadProjectIndexSnapshot(root, { cache: "disk" }, entries);
     readSpy.mockRestore();
 
-    expect(first?.index.byFile.size).toBe(1);
-    expect(second?.index.byFile.size).toBe(1);
-    expect(snapshotReads).toBe(1);
+    expect(second?.index.byFile.get(normalize(path.join(root, "main.ts")))?.locals.length).toBeGreaterThan(0);
+    expect(third?.index.byFile.size).toBe(1);
+    expect(snapshotReads).toBe(2);
   });
 
   it("does not read unchanged tracked source files for partial cache validation", async () => {

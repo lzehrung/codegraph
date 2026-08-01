@@ -211,7 +211,7 @@ async function collectBuiltAgentFileSignatures(
   const missing: string[] = [];
   for (const file of files) {
     const resolvedFile = normalizePath(path.resolve(file));
-    const entry = index.manifestEntries?.get(resolvedFile);
+    const entry = index.manifestSignaturesFresh ? index.manifestEntries?.get(resolvedFile) : undefined;
     const signature = entry ? agentFileSignatureFromManifest(resolvedFile, entry.sig) : undefined;
     if (signature) {
       signatures.set(resolvedFile, signature);

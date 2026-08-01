@@ -1281,6 +1281,10 @@ export async function buildProjectIndexIncremental(
       if (fileReport) fileReport.changed = changedFiles.size;
       const unchangedSnapshot = await reuseUnchangedSnapshot();
       if (unchangedSnapshot) {
+        unchangedSnapshot.manifestEntries = new Map(
+          Array.from(fileSignatures, ([file, signature]) => [file, toProjectIndexManifestEntry(signature)]),
+        );
+        unchangedSnapshot.manifestSignaturesFresh = true;
         if (timings) timings.totalMs = Math.round(performance.now() - totalStart);
         completeCheckProgress(allFiles.size);
         return unchangedSnapshot;

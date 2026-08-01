@@ -46,10 +46,13 @@ function readTableColumns(dbPath: string, table: string): string[] {
   }
 }
 
-function readRowCount(dbPath: string, sql: string, param: string): number {
+function readRowCount(dbPath: string, sql: string, param?: string): number {
   const db = new DatabaseSync(dbPath);
   try {
-    const row = db.prepare(sql).get(param) as { count?: unknown } | undefined;
+    const statement = db.prepare(sql);
+    let row: { count?: unknown } | undefined;
+    if (param === undefined) row = statement.get() as { count?: unknown } | undefined;
+    else row = statement.get(param) as { count?: unknown } | undefined;
     return typeof row?.count === "number" ? row.count : 0;
   } finally {
     db.close();
@@ -116,6 +119,7 @@ describe("disk cache uses sqlite backend", () => {
     await buildProjectIndex(root, { cache: "disk", threads: 1 });
 
     const sql = prepareSpy.mock.calls.map(([statement]) => statement);
+    prepareSpy.mockRestore();
     expect(
       sql.filter((statement) => statement.startsWith("SELECT sig, version, payload FROM module_cache")),
     ).toHaveLength(1);
@@ -147,6 +151,29 @@ describe("disk cache uses sqlite backend", () => {
         normalizePathForSql(deletedPath),
       ),
     ).toBe(0);
+  });
+
+  it("preserves module cache rows when manifest persistence fails", async () => {
+    const root = await mkTmpDir("dg-disk-cache-prune-failed-manifest-");
+    const deletedPath = path.join(root, "deleted.ts");
+    await fsp.writeFile(path.join(root, "retained.ts"), "export const retained = 1;\n", "utf8");
+    await fsp.writeFile(deletedPath, "export const deleted = 1;\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    await fsp.rm(deletedPath);
+    const renameSpy = vi
+      .spyOn(fsp, "rename")
+      .mockRejectedValueOnce(Object.assign(new Error("disk full"), { code: "ENOSPC" }));
+
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    renameSpy.mockRestore();
+
+    expect(
+      readRowCount(
+        moduleCacheDbPath(root),
+        "SELECT COUNT(*) AS count FROM module_cache WHERE file = ?",
+        normalizePathForSql(deletedPath),
+      ),
+    ).toBe(1);
   });
 
   it("migrates an older module cache sqlite schema", async () => {
@@ -264,6 +291,22 @@ describe("disk cache uses sqlite backend", () => {
     expect(readTableColumns(duplicateCacheDbPath(root), "duplicate_unit_cache")).toContain("updated_at");
   });
 
+  it("prepares duplicate cache hot-path statements once per analysis", async () => {
+    const root = await mkTmpDir("dg-disk-cache-prepared-duplicates-");
+    await writeDuplicateProject(root);
+    const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const prepareSpy = vi.spyOn(SqliteDatabase.prototype, "prepare");
+
+    await findDuplicates(index, { minConfidence: "high", limit: 5 });
+
+    const sql = prepareSpy.mock.calls.map(([statement]) => statement);
+    prepareSpy.mockRestore();
+    expect(
+      sql.filter((statement) => statement.startsWith("SELECT sig, version, payload FROM duplicate_unit_cache")),
+    ).toHaveLength(1);
+    expect(sql.filter((statement) => statement.startsWith("INSERT INTO duplicate_unit_cache"))).toHaveLength(1);
+  });
+
   it("prunes expired duplicate cache variants when duplicate analysis opens the cache", async () => {
     const root = await mkTmpDir("dg-disk-cache-prune-duplicates-");
     await writeDuplicateProject(root);
@@ -287,5 +330,42 @@ describe("disk cache uses sqlite backend", () => {
         "expired",
       ),
     ).toBe(0);
+  });
+
+  it("enforces the duplicate cache row cap after analysis writes", async () => {
+    const root = await mkTmpDir("dg-disk-cache-cap-duplicates-");
+    await writeDuplicateProject(root);
+    const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    await findDuplicates(index, { minConfidence: "high", limit: 5 });
+    closeDuplicateUnitCacheDatabase(root, { cacheDir: cacheDir(root) });
+    const db = new DatabaseSync(duplicateCacheDbPath(root));
+    const insert = db.prepare(
+      `INSERT INTO duplicate_unit_cache(file, variant, sig, version, payload, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    db.exec("BEGIN");
+    for (let row = 0; row < 5_001; row++) {
+      insert.run(
+        normalizePathForSql(path.join(root, "src", "a.ts")),
+        `seed-${row}`,
+        "current",
+        2,
+        "[]",
+        Date.now() + row,
+      );
+    }
+    db.exec("COMMIT");
+    db.close();
+
+    await findDuplicates(index, { minConfidence: "high", limit: 5 });
+
+    expect(readRowCount(duplicateCacheDbPath(root), "SELECT COUNT(*) AS count FROM duplicate_unit_cache")).toBe(5_000);
+    expect(
+      readRowCount(
+        duplicateCacheDbPath(root),
+        "SELECT COUNT(*) AS count FROM duplicate_unit_cache WHERE variant = ?",
+        "seed-5000",
+      ),
+    ).toBe(1);
   });
 });

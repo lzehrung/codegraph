@@ -22,6 +22,7 @@ import { attemptParsePreparedFileContext, type ParsedFileContext } from "./index
 import { SymbolKind, type BuildOptions, type ProjectIndex, type SymbolDef } from "./indexer/types.js";
 import { prepareSourceInput } from "./languages/filePrep.js";
 import { SqliteDatabase, type SqliteStatement } from "./sqlite-driver.js";
+import { logWithLevel } from "./logging.js";
 import { cacheDatabasePath } from "./indexer/build-cache/module-cache.js";
 import { appendToArrayMap } from "./util/collections.js";
 import { maskJsLikeCommentsStringsAndRegex } from "./util/comments.js";
@@ -305,9 +306,6 @@ const duplicateUnitMemoryCache = new Map<string, DuplicateUnitCacheEntry>();
 type DuplicateUnitDiskStatements = {
   load: SqliteStatement;
   write: SqliteStatement;
-  clearLiveFiles: SqliteStatement;
-  insertLiveFile: SqliteStatement;
-  pruneMissingFiles: SqliteStatement;
   pruneExpired: SqliteStatement;
   pruneOverflow: SqliteStatement;
 };
@@ -317,7 +315,6 @@ type DuplicateUnitDiskDatabaseEntry = {
   statements?: DuplicateUnitDiskStatements;
   leases: number;
   closeRequested: boolean;
-  lastPrunedIndex?: ProjectIndex;
 };
 const duplicateUnitDiskDatabases = new Map<string, DuplicateUnitDiskDatabaseEntry>();
 const DEFAULT_MIN_TOKENS = 40;
@@ -643,7 +640,6 @@ function ensureDuplicateUnitCacheSchema(db: SqliteDatabase): void {
 }
 
 function createDuplicateUnitDiskStatements(db: SqliteDatabase): DuplicateUnitDiskStatements {
-  db.exec("CREATE TEMP TABLE IF NOT EXISTS live_duplicate_unit_files(file TEXT PRIMARY KEY) WITHOUT ROWID;");
   return {
     load: db.prepare("SELECT sig, version, payload FROM duplicate_unit_cache WHERE file = ? AND variant = ?"),
     write: db.prepare(
@@ -655,11 +651,6 @@ function createDuplicateUnitDiskStatements(db: SqliteDatabase): DuplicateUnitDis
          payload = excluded.payload,
          updated_at = excluded.updated_at`,
     ),
-    clearLiveFiles: db.prepare("DELETE FROM live_duplicate_unit_files"),
-    insertLiveFile: db.prepare("INSERT OR IGNORE INTO live_duplicate_unit_files(file) VALUES (?)"),
-    pruneMissingFiles: db.prepare(
-      "DELETE FROM duplicate_unit_cache WHERE NOT EXISTS (SELECT 1 FROM live_duplicate_unit_files WHERE file = duplicate_unit_cache.file)",
-    ),
     pruneExpired: db.prepare("DELETE FROM duplicate_unit_cache WHERE updated_at < ?"),
     pruneOverflow: db.prepare(
       "DELETE FROM duplicate_unit_cache WHERE rowid IN (SELECT rowid FROM duplicate_unit_cache ORDER BY updated_at DESC LIMIT -1 OFFSET ?)",
@@ -667,20 +658,20 @@ function createDuplicateUnitDiskStatements(db: SqliteDatabase): DuplicateUnitDis
   };
 }
 
-function pruneDuplicateUnitDiskCache(entry: DuplicateUnitDiskDatabaseEntry, index: ProjectIndex): void {
-  if (!entry.db || !entry.statements || entry.lastPrunedIndex === index) return;
+function maintainDuplicateUnitDiskCache(index: ProjectIndex): void {
+  if (index.cacheMode !== "disk" || !index.cacheRootDir) return;
+  const dbPath = duplicateUnitCacheDatabasePath(index.projectRoot ?? "", { cacheDir: index.cacheRootDir });
+  const entry = duplicateUnitDiskDatabases.get(dbPath);
+  if (!entry?.db || !entry.statements) return;
   const { db, statements } = entry;
-  const deleted = db.transaction(() => {
-    statements.clearLiveFiles.run();
-    for (const file of index.byFile.keys()) statements.insertLiveFile.run(file);
-    let changes = Number(statements.pruneMissingFiles.run().changes);
-    changes += Number(statements.pruneExpired.run(Date.now() - DUPLICATE_UNIT_CACHE_MAX_AGE_MS).changes);
-    changes += Number(statements.pruneOverflow.run(DUPLICATE_UNIT_CACHE_MAX_ROWS).changes);
-    statements.clearLiveFiles.run();
-    return changes;
-  })();
-  entry.lastPrunedIndex = index;
-  if (deleted >= 100) db.exec("VACUUM;");
+  try {
+    db.transaction(() => {
+      statements.pruneExpired.run(Date.now() - DUPLICATE_UNIT_CACHE_MAX_AGE_MS);
+      statements.pruneOverflow.run(DUPLICATE_UNIT_CACHE_MAX_ROWS);
+    })();
+  } catch (error) {
+    logWithLevel(undefined, "warn", `Warning: Failed to prune duplicate cache ${dbPath}:`, error);
+  }
 }
 
 function duplicateUnitDiskCache(index: ProjectIndex): DuplicateUnitDiskDatabaseEntry | null {
@@ -700,7 +691,6 @@ function duplicateUnitDiskCache(index: ProjectIndex): DuplicateUnitDiskDatabaseE
     entry.db = db;
     entry.statements = createDuplicateUnitDiskStatements(db);
   }
-  pruneDuplicateUnitDiskCache(entry, index);
   return entry;
 }
 
@@ -2481,6 +2471,7 @@ export async function findDuplicates(
   try {
     return await findDuplicatesWithOpenDuplicateUnitCache(index, options);
   } finally {
+    maintainDuplicateUnitDiskCache(index);
     closeDuplicateUnitCacheForIndex(index);
     releaseDuplicateUnitCache();
   }
@@ -2765,6 +2756,7 @@ export async function prepareDuplicateAnalysis(
     });
     return analysis;
   } finally {
+    maintainDuplicateUnitDiskCache(index);
     closeDuplicateUnitCacheForIndex(index);
     releaseDuplicateUnitCache();
   }
@@ -2903,6 +2895,7 @@ export async function findDuplicateContexts(
   try {
     return await findDuplicateContextsWithOpenDuplicateUnitCache(index, targets, options);
   } finally {
+    maintainDuplicateUnitDiskCache(index);
     closeDuplicateUnitCacheForIndex(index);
     releaseDuplicateUnitCache();
   }

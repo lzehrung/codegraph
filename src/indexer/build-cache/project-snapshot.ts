@@ -58,7 +58,7 @@ type ParsedSnapshotCacheEntry = {
 type DetailedSymbolGraphCacheEntry = {
   identity: SnapshotFileIdentity;
   projectSnapshotIdentity: string;
-  graph: SymbolGraph;
+  graph: DetailedSymbolGraphSnapshotPayload["graph"];
 };
 
 const parsedSnapshotCache = new Map<string, ParsedSnapshotCacheEntry>();
@@ -162,6 +162,14 @@ function setBoundedSnapshotCache<K, V>(cache: Map<K, V>, key: K, value: V): void
   }
 }
 
+function materializeDetailedSymbolGraph(payload: DetailedSymbolGraphSnapshotPayload["graph"]): SymbolGraph {
+  const graph = structuredClone(payload);
+  return {
+    nodes: new Map(graph.nodes.map((node) => [node.id, node])),
+    edges: graph.edges,
+  };
+}
+
 async function readParsedSnapshot(snapshotPath: string): Promise<ParsedSnapshotCacheEntry> {
   const before = await snapshotFileIdentity(snapshotPath);
   const cached = parsedSnapshotCache.get(snapshotPath);
@@ -171,7 +179,7 @@ async function readParsedSnapshot(snapshotPath: string): Promise<ParsedSnapshotC
   }
   const payload = JSON.parse(await fsp.readFile(snapshotPath, "utf8")) as unknown;
   const after = await snapshotFileIdentity(snapshotPath);
-  const entry = { identity: after, payload };
+  const entry = { identity: before, payload };
   if (sameSnapshotFileIdentity(before, after)) {
     setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, entry);
   } else {
@@ -202,16 +210,17 @@ export async function tryLoadProjectIndexSnapshot(
   const filesSignature = projectSnapshotFilesSignature(manifestEntries);
   if ((opts?.cache ?? "off") !== "disk") return null;
   try {
-    const payload = (await readParsedSnapshot(projectSnapshotPath(projectRoot, opts))).payload;
+    const rawPayload = (await readParsedSnapshot(projectSnapshotPath(projectRoot, opts))).payload;
     const nativeRuntimeFingerprint = getNativeRuntimeFingerprint(opts?.native);
     if (
-      !isProjectIndexSnapshotPayload(payload) ||
-      payload.filesSignature !== filesSignature ||
-      payload.nativeMode !== normalizedSnapshotNativeMode(opts?.native) ||
-      payload.nativeRuntimeFingerprint !== nativeRuntimeFingerprint
+      !isProjectIndexSnapshotPayload(rawPayload) ||
+      rawPayload.filesSignature !== filesSignature ||
+      rawPayload.nativeMode !== normalizedSnapshotNativeMode(opts?.native) ||
+      rawPayload.nativeRuntimeFingerprint !== nativeRuntimeFingerprint
     ) {
       return null;
     }
+    const payload = structuredClone(rawPayload);
     const graph: Graph = {
       nodes: new Set(payload.graph.nodes),
       edges: payload.graph.edges,
@@ -319,7 +328,7 @@ export async function writeProjectIndexSnapshot(
     await fsp.mkdir(path.dirname(snapshotPath), { recursive: true });
     await fsp.writeFile(snapshotPath, JSON.stringify(payload), "utf8");
     const identity = await snapshotFileIdentity(snapshotPath);
-    setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, payload });
+    setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, payload: structuredClone(payload) });
   } catch {
     // Snapshot writes are an optimization; cache write failures must not fail indexing.
   }
@@ -337,34 +346,34 @@ export async function tryLoadDetailedSymbolGraphSnapshot(
   if ((opts?.cache ?? "off") !== "disk" || !index.projectSnapshotIdentity) return null;
   try {
     const snapshotPath = detailedSymbolGraphSnapshotPath(projectRoot, opts);
-    const identity = await snapshotFileIdentity(snapshotPath);
+    const observedIdentity = await snapshotFileIdentity(snapshotPath);
     const cached = detailedSymbolGraphCache.get(snapshotPath);
     if (
       cached &&
       cached.projectSnapshotIdentity === index.projectSnapshotIdentity &&
-      sameSnapshotFileIdentity(cached.identity, identity)
+      sameSnapshotFileIdentity(cached.identity, observedIdentity)
     ) {
       setBoundedSnapshotCache(detailedSymbolGraphCache, snapshotPath, cached);
-      return cached.graph;
+      return materializeDetailedSymbolGraph(cached.graph);
     }
-    const payload = (await readParsedSnapshot(snapshotPath)).payload;
+    const parsed = await readParsedSnapshot(snapshotPath);
+    const payload = parsed.payload;
     if (
       !isDetailedSymbolGraphSnapshotPayload(payload) ||
       payload.projectSnapshotIdentity !== index.projectSnapshotIdentity
     ) {
       return null;
     }
-    const graph: SymbolGraph = {
-      nodes: new Map(payload.graph.nodes.map((node) => [node.id, node])),
-      edges: payload.graph.edges,
-    };
+    const graph = materializeDetailedSymbolGraph(payload.graph);
     if (!(await isDetailedSymbolGraphCompatibleWithProject(projectRoot, index, graph))) {
       return null;
     }
+    const identity = await snapshotFileIdentity(snapshotPath);
+    if (!sameSnapshotFileIdentity(parsed.identity, identity)) return null;
     setBoundedSnapshotCache(detailedSymbolGraphCache, snapshotPath, {
-      identity: await snapshotFileIdentity(snapshotPath),
+      identity,
       projectSnapshotIdentity: index.projectSnapshotIdentity,
-      graph,
+      graph: payload.graph,
     });
     return graph;
   } catch {
@@ -401,11 +410,12 @@ export async function writeDetailedSymbolGraphSnapshot(
     await fsp.writeFile(tempPath, JSON.stringify(payload), { encoding: "utf8", flag: "wx" });
     await fsp.rename(tempPath, snapshotPath);
     const identity = await snapshotFileIdentity(snapshotPath);
-    setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, payload });
+    const cachedPayload = structuredClone(payload);
+    setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, payload: cachedPayload });
     setBoundedSnapshotCache(detailedSymbolGraphCache, snapshotPath, {
       identity,
       projectSnapshotIdentity: index.projectSnapshotIdentity,
-      graph,
+      graph: cachedPayload.graph,
     });
     tempPath = undefined;
   } catch {
