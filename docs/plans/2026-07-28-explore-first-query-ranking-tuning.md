@@ -2,7 +2,7 @@
 
 Status: Proposed
 
-Parent plan: [One-command product funnel](./2026-07-27-one-command-product-funnel.md)
+Origin: follow-up to the completed one-command product funnel.
 
 ## Vision
 

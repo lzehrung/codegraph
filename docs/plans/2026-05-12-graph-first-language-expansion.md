@@ -5,7 +5,7 @@
 
 ## Context
 
-The repo has an established language-support workflow: define support surface, add a language definition, wire native grammars and reduced-mode behavior, add fixtures/tests, then update parity/scenario docs and the agent skill surface. Follow [docs/adding-language-support.md](../../adding-language-support.md) exactly.
+The repo has an established language-support workflow: define support surface, add a language definition, wire native grammars and reduced-mode behavior, add fixtures/tests, then update parity/scenario docs and the agent skill surface. Follow [docs/adding-language-support.md](../adding-language-support.md) exactly.
 
 This plan intentionally targets graph-first support. Each language should provide parsing, chunking, top-level symbol extraction, and static dependency edges. It should not claim full cross-file semantic navigation until shared `goto`, `references`, and native semantic parity tests prove that behavior.
 
@@ -578,9 +578,9 @@ git commit -m "docs: finalize graph-first language support"
 
 ## References
 
-- [Language support checklist](../../adding-language-support.md)
-- [Language parity matrix](../../language-parity.md)
-- [Scenario catalog](../../scenario-catalog.md)
+- [Language support checklist](../adding-language-support.md)
+- [Language parity matrix](../language-parity.md)
+- [Scenario catalog](../scenario-catalog.md)
 - [`tree-sitter-scala` on npm](https://www.npmjs.com/package/tree-sitter-scala)
 - [`tree-sitter-lua` on npm](https://www.npmjs.com/package/tree-sitter-lua)
 - [`tree-sitter-powershell` on npm](https://www.npmjs.com/package/tree-sitter-powershell)
