@@ -88,6 +88,7 @@ const CLI_VALUE_OPTIONS = new Set<string>([
   "--max-paths",
   "--artifact",
   "--host",
+  "--graph",
   "--port",
   "--offset",
   "--max-bytes",
@@ -656,6 +657,14 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       kind: "max",
       max: 1,
       usage: "Usage: codegraph uninit [path] [--force] [--json] OR codegraph uninit --root <path> [--force] [--json]",
+    }),
+  ],
+  [
+    "viewer",
+    commandSchema(["--open", "--print-url"], ["--root", "--graph", "--host", "--port"], {
+      kind: "none",
+      usage:
+        "Usage: codegraph viewer [--root <path>] [--graph <root-confined-json>] [--host <host>] [--port <0-65535>] [--open] [--print-url]",
     }),
   ],
   [

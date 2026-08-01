@@ -798,6 +798,35 @@ loadDefaultButton.addEventListener("click", async () => {
   }
 });
 
+async function loadGraphFromQuery() {
+  const graph = new URLSearchParams(window.location.search).get("graph");
+  if (!graph) return;
+
+  try {
+    const graphUrl = new URL(graph, window.location.href);
+    if (
+      graphUrl.origin !== window.location.origin ||
+      graphUrl.pathname !== "/graph.json" ||
+      graphUrl.search ||
+      graphUrl.hash
+    ) {
+      setStatus("Ignoring an unsafe graph URL.");
+      return;
+    }
+
+    const response = await fetch(graphUrl.pathname);
+    if (!response.ok) {
+      throw new Error(`Request failed with status ${response.status}`);
+    }
+    await loadGraphFromText(await response.text());
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    setStatus(`Failed to load graph: ${message}`);
+  }
+}
+
+void loadGraphFromQuery();
+
 resetCameraButton.addEventListener("click", () => {
   sigma?.getCamera().animatedReset();
 });

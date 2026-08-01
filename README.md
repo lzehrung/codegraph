@@ -32,6 +32,7 @@ Use Codegraph alongside text search and compilers: text search finds exact strin
 - [What you can do](#what-you-can-do)
 - [Try it](#try-it)
 - [A useful first five minutes](#a-useful-first-five-minutes)
+- [Visualize a graph](#visualize-a-graph)
 - [What the output looks like](#what-the-output-looks-like)
 - [Why Codegraph](#why-codegraph)
 - [Why not just grep or an LSP?](#why-not-just-grep-or-an-lsp)
@@ -165,6 +166,19 @@ codegraph graph --root . ./src --mermaid --output graph.mmd
 codegraph graph --root . ./src --dot --output graph.dot
 codegraph graph --root . ./src --sqlite codegraph.sqlite
 ```
+
+## Visualize a graph
+
+The packaged viewer is a human-facing graph UI; agents should use graph JSON, SQLite, MCP, or `--json` instead. Its command is `codegraph viewer --root <root> [--graph <root-confined-json>] [--host <host>] [--port <0-65535>] [--open] [--print-url]`.
+
+```bash
+codegraph viewer --root . --graph codegraph-out/graph.json --open
+codegraph viewer --root . --port 4173 --print-url
+```
+
+The default host is `127.0.0.1` and the default port is `4173`. `--print-url` is preview-only: it prints the deterministic URL and exits without starting a server, rejects `--open`, and rejects port `0`. The viewer auto-loads the `graph` query parameter when present while retaining manual upload and default behavior.
+
+The UI imports Sigma from `esm.sh`, so it requires network access to that CDN and is not offline or self-contained.
 
 ## What the output looks like
 

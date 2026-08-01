@@ -13,6 +13,33 @@ function readText(relativePath: string): string {
   return fs.readFileSync(path.resolve(process.cwd(), relativePath), "utf8");
 }
 
+function readPackedPaths(): Set<string> {
+  const npmArgs = ["pack", "--dry-run", "--json", "--ignore-scripts"];
+  let command = "npm";
+  let args = npmArgs;
+  if (process.platform === "win32") {
+    const candidates = [
+      process.env.npm_execpath,
+      path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"),
+      path.resolve(path.dirname(process.execPath), "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"),
+    ];
+    const npmCliPath = candidates.find((candidate) => candidate && fs.existsSync(candidate));
+    if (!npmCliPath) throw new Error("Unable to locate npm-cli.js for package inspection.");
+    command = process.execPath;
+    args = [npmCliPath, ...npmArgs];
+  }
+
+  const result = spawnSync(command, args, {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+
+  const pack = JSON.parse(result.stdout) as Array<{ files: Array<{ path: string }> }>;
+  return new Set(pack[0]?.files.map((file) => file.path) ?? []);
+}
+
 function declarationHasOwnJsDoc(declarationText: string, symbol: string): boolean {
   const declarationMatch = new RegExp(`export declare function ${symbol}\\b`).exec(declarationText);
   if (!declarationMatch) {
@@ -222,6 +249,27 @@ describe("package metadata", () => {
 
     expect(files).toContain("codegraph-skill");
     expect(files).not.toContain("codegraph.skill");
+  });
+
+  it("ships the static graph viewer assets with the package", () => {
+    const rootPackage = readJson("package.json");
+    const files =
+      Array.isArray(rootPackage.files) && rootPackage.files.every((entry) => typeof entry === "string")
+        ? rootPackage.files
+        : [];
+    const viewerAssets = [
+      "app.js",
+      "file-tree-filters.js",
+      "file-tree-model.js",
+      "graph-builder.js",
+      "index.html",
+      "styles.css",
+    ];
+
+    expect(files).toContain("docs/graph-visualization");
+    const packedPaths = readPackedPaths();
+
+    expect(viewerAssets.every((asset) => packedPaths.has(`docs/graph-visualization/${asset}`))).toBe(true);
   });
 
   it("keeps bundled skill frontmatter safe for Codex YAML parsing", () => {

@@ -70,6 +70,11 @@ export async function assembleStandaloneArchive(options) {
   await fsp.cp(path.join(packageRoot, "codegraph-skill"), path.join(bundleRoot, "codegraph-skill"), {
     recursive: true,
   });
+  await fsp.cp(
+    path.join(packageRoot, "docs", "graph-visualization"),
+    path.join(bundleRoot, "docs", "graph-visualization"),
+    { recursive: true },
+  );
   await copyProductionNodeModules(packageRoot, bundleRoot, target);
   await copyRequiredFile(path.join(packageRoot, "LICENSE"), path.join(bundleRoot, "LICENSE"));
   const noticesPath = options.noticesPath ?? path.join(options.sourceRoot ?? packageRoot, "THIRD_PARTY_NOTICES");
