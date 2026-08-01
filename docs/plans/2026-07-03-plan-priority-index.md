@@ -21,7 +21,6 @@ These plans describe current, executable work:
 
 These plans are unimplemented and remain distinct product outcomes:
 
-- `2026-05-14-packaged-graph-viewer.md`
 - `2026-05-27-agent-test-plan-generation.md`
 - `2026-07-03-03-shared-server-lifecycle.md`
 - `2026-07-03-08-framework-route-nodes.md`
