@@ -29,13 +29,17 @@ import {
 
 // Graph JSON output is always index-based: repeated file paths and symbol ids are
 // replaced with integer offsets into `files[]`/`symbolIdIndex[]` so large graphs don't
-// duplicate the same strings across every node/edge.
-type CompactEdgeTo = { type: "file"; path: number } | { type: "external"; name: string };
-type CompactFileEdge = Omit<Edge, "from" | "to"> & { from: number; to: CompactEdgeTo };
-type CompactSymbolEdge = Omit<SymbolEdge, "from" | "to"> & { from: number; to: number };
-type CompactSymbolNode = Omit<SymbolNode, "id" | "file"> & { id: number; file: number };
-type CompactFileProjection = { files: string[]; fileEdges: CompactFileEdge[] };
-type CompactSymbolProjection = {
+// duplicate the same strings across every node/edge. Index assignment is always sorted
+// (independent of `stable`) because `fgraph.nodes`/`sgraph.nodes` insertion order can vary
+// run to run under concurrent extraction, which would otherwise change what an index means
+// even when the underlying graph is identical; `stable` only additionally sorts the
+// fileEdges/symbolEdges arrays for byte-identical output across runs.
+export type CompactEdgeTo = { type: "file"; path: number } | { type: "external"; name: string };
+export type CompactFileEdge = Omit<Edge, "from" | "to"> & { from: number; to: CompactEdgeTo };
+export type CompactSymbolEdge = Omit<SymbolEdge, "from" | "to"> & { from: number; to: number };
+export type CompactSymbolNode = Omit<SymbolNode, "id" | "file"> & { id: number; file: number };
+export type CompactFileProjection = { files: string[]; fileEdges: CompactFileEdge[] };
+export type CompactSymbolProjection = {
   files: string[];
   symbols: CompactSymbolNode[];
   symbolEdges: CompactSymbolEdge[];
@@ -91,8 +95,7 @@ function toJSON(obj: unknown): string {
 }
 
 export function compactFileGraph(fgraph: Graph, stable = false): CompactFileProjection {
-  const files = [...fgraph.nodes];
-  if (stable) files.sort();
+  const files = [...fgraph.nodes].sort();
   const fileIndex = new Map<string, number>();
   for (let i = 0; i < files.length; i++) fileIndex.set(files[i]!, i);
 
@@ -141,13 +144,11 @@ export function buildCompactSymbolProjection(
   sgraph: SymbolGraph,
   stable = false,
 ): CompactSymbolProjection {
-  const files = [...allFiles];
-  if (stable) files.sort();
+  const files = [...allFiles].sort();
   const fileIndex = new Map<string, number>();
   for (let i = 0; i < files.length; i++) fileIndex.set(files[i]!, i);
 
-  const symbolIds = [...sgraph.nodes.keys()];
-  if (stable) symbolIds.sort();
+  const symbolIds = [...sgraph.nodes.keys()].sort();
   const symbolIndex = new Map<string, number>();
   for (let i = 0; i < symbolIds.length; i++) symbolIndex.set(symbolIds[i]!, i);
 
@@ -247,7 +248,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
   const cacheStrict = context.hasFlag("--cache-strict");
   const stable = context.hasFlag("--stable");
   let format: "mermaid" | "dot" | "json" = "mermaid";
-  if (context.hasFlag("--json") || context.hasFlag("--compact-json")) {
+  if (context.hasFlag("--json")) {
     format = "json";
   } else if (context.hasFlag("--dot")) {
     format = "dot";

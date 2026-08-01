@@ -103,7 +103,7 @@ Safe shorthand: `impact` and git-backed `drift` default to `HEAD..WORKTREE`; `ar
 - Human or model reading one result: use the human-readable default; `--pretty` remains an explicit equivalent and `--summary` selects compact report output where supported.
 - Tool chaining, filtering, stable handles, exact ranges, or schema fields: use `--json`. If `--json` and `--pretty` are both present, `--json` wins.
 - Repeated agent queries over one repo snapshot: prefer MCP so the index stays warm.
-- Durable graph handoff: use `codegraph graph --root . ./src --json --output codegraph.json` rather than parsing display text. JSON graph output is always compact (index-based).
+- Durable graph handoff: use `codegraph graph --root . ./src --json --output codegraph.json` rather than parsing display text.
 
 Do not parse pretty output to recover fields already available in structured output.
 

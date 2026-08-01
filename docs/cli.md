@@ -14,7 +14,7 @@ Unknown commands exit with status 1, print up to three deterministic suggestions
 
 CLI commands default to human-readable stdout; `--pretty` remains an explicit equivalent. Use `--json` for structured automation output, or a format-specific option such as `--compact-json`, `--mermaid`, `--dot`, or `--sqlite` where supported. If `--json` and `--pretty` are both present, `--json` wins.
 
-The `graph` command without output-format flags writes Mermaid to stdout. Use `--json`, `--dot`, `--sqlite <path>`, or `--output <path>` for explicit graph artifacts. `graph --json` output is always compact (index-based); `--compact-json` is accepted as a deprecated alias.
+The `graph` command without output-format flags writes Mermaid to stdout. Use `--json`, `--dot`, `--sqlite <path>`, or `--output <path>` for explicit graph artifacts.
 
 Numeric options such as `--limit`, `--threads`, `--depth`, `--max-refs`, and token bounds must be integers in their documented ranges; invalid numeric values fail instead of being silently clamped or ignored.
 
@@ -834,8 +834,6 @@ With `--symbols` or `--symbols-detailed`, the same JSON also carries `symbols` (
 ```bash
 codegraph graph --root . ./src --symbols-detailed --json --output graph.json
 ```
-
-`--compact-json` is accepted as a deprecated alias for `--json` on `graph`: JSON output has no denormalized form to opt out of, so both flags produce identical results.
 
 When targeting a different repo, pass it with `--root` rather than as an extra positional path:
 

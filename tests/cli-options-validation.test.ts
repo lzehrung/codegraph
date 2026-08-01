@@ -60,6 +60,12 @@ describe("parseCliArgs value-option guard", () => {
 });
 
 describe("CLI command option validation", () => {
+  it("rejects the removed --compact-json flag for graph: JSON output is always compact now", () => {
+    const parsed = parseCliArgs("graph", ["--json", "--compact-json"]);
+
+    expect(() => validateCliArgs("graph", parsed)).toThrow("Unknown option for graph: --compact-json");
+  });
+
   it("accepts explicit JSON output for installer commands", () => {
     for (const command of ["install", "uninstall"]) {
       const parsed = parseCliArgs(command, ["--json"]);

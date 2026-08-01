@@ -109,12 +109,10 @@ describe("CLI regressions", () => {
     }
   });
 
-  it("graph --json is compact by default and --compact-json is a no-op alias", async () => {
-    const withoutFlag = await runCliCommand(["graph", "--json", "--root", samplesRoot, tsRoot]);
-    const withFlag = await runCliCommand(["graph", "--json", "--compact-json", "--root", samplesRoot, tsRoot]);
-    expect(withFlag).toBe(withoutFlag);
+  it("graph --json is compact (index-based) by default with no flag needed", async () => {
+    const stdout = await runCliCommand(["graph", "--json", "--root", samplesRoot, tsRoot]);
 
-    const graph = JSON.parse(withoutFlag) as {
+    const graph = JSON.parse(stdout) as {
       files: string[];
       fileEdges: Array<{ from: number; to: { type: string; path?: number } }>;
     };
@@ -123,6 +121,12 @@ describe("CLI regressions", () => {
     expect(fileEdge).toBeDefined();
     expect(typeof fileEdge?.from).toBe("number");
     expect(typeof fileEdge?.to.path).toBe("number");
+  });
+
+  it("graph rejects the removed --compact-json flag", async () => {
+    await expect(
+      runCliCommandDetailed(["graph", "--json", "--compact-json", "--root", samplesRoot, tsRoot]),
+    ).rejects.toThrow("Unknown option for graph: --compact-json");
   });
 
   it("graph JSON can include isolated SQL artifacts", async () => {
@@ -216,7 +220,6 @@ describe("CLI regressions", () => {
       "--json",
       "--symbols-detailed",
       "--progress",
-      "--compact-json",
       "--output",
       outPath,
     ]);

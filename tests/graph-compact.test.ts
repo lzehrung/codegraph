@@ -77,17 +77,34 @@ describe("compactFileGraph", () => {
     }
   });
 
-  it("sorts files and edges deterministically when stable is true", () => {
-    const graph: Graph = {
+  it("sorts files regardless of stable, so index assignment does not depend on Set insertion order", () => {
+    // fgraph.nodes insertion order can vary run to run under concurrent extraction (files
+    // finish parsing in different orders across worker threads); index assignment must not
+    // depend on it, or two runs over an unchanged repo could disagree on what index N means.
+    const insertedOutOfOrder: Graph = {
       nodes: new Set(["/root/b.ts", "/root/a.ts"]),
+      edges: [{ from: "/root/b.ts", to: { type: "file", path: "/root/a.ts" }, raw: "./a" }],
+    };
+    const unstable = compactFileGraph(insertedOutOfOrder, false);
+    const stable = compactFileGraph(insertedOutOfOrder, true);
+    expect(unstable.files).toEqual(["/root/a.ts", "/root/b.ts"]);
+    expect(stable.files).toEqual(unstable.files);
+  });
+
+  it("only sorts the fileEdges array order when stable is true", () => {
+    const graph: Graph = {
+      nodes: new Set(["/root/a.ts", "/root/b.ts"]),
       edges: [
         { from: "/root/b.ts", to: { type: "file", path: "/root/a.ts" }, raw: "./a" },
         { from: "/root/a.ts", to: { type: "external", name: "zeta" }, raw: "zeta" },
       ],
     };
-    const { files, fileEdges } = compactFileGraph(graph, true);
-    expect(files).toEqual(["/root/a.ts", "/root/b.ts"]);
-    expect(fileEdges[0]?.from).toBe(0);
+    const unstable = compactFileGraph(graph, false);
+    const stable = compactFileGraph(graph, true);
+    // Insertion order preserved when not stable: the b->a edge came first in the source graph.
+    expect(unstable.fileEdges[0]?.from).toBe(unstable.files.indexOf("/root/b.ts"));
+    // Sorted by from-index when stable: the a->zeta edge (from index 0) comes first.
+    expect(stable.fileEdges[0]?.from).toBe(0);
   });
 });
 

@@ -1,17 +1,14 @@
-export type CompactEdgeTo = { type: "file"; path: number } | { type: "external"; name: string };
-export type CompactFileEdge = {
-  from: number;
-  to: CompactEdgeTo;
-  raw: string;
-  typeOnly?: boolean;
-};
-export type CompactFileGraphPayload = {
-  files: string[];
-  fileEdges: CompactFileEdge[];
-};
+import type { CompactEdgeTo, CompactFileProjection } from "../../src/cli/graph.js";
+import type { Edge, EdgeTo } from "../../src/types.js";
 
-export type DenormalizedEdgeTo = { type: "file"; path: string } | { type: "external"; name: string };
-export type DenormalizedEdge = { from: string; to: DenormalizedEdgeTo; raw: string; typeOnly?: boolean };
+// Re-exported under the payload-shaped name tests read from `graph --json`; kept as an
+// alias of the real compact projection type (rather than a hand-rolled copy) so this helper
+// can't silently drift from the CLI's actual output schema.
+export type CompactFileGraphPayload = CompactFileProjection;
+
+function resolveEdgeTo(to: CompactEdgeTo, nodes: string[]): EdgeTo {
+  return to.type === "file" ? { type: "file", path: nodes[to.path]! } : to;
+}
 
 /**
  * Resolves the `graph --json` compact payload (numeric indices into `files[]`) back to
@@ -19,16 +16,13 @@ export type DenormalizedEdge = { from: string; to: DenormalizedEdgeTo; raw: stri
  */
 export function decompactFileGraph(payload: CompactFileGraphPayload): {
   nodes: string[];
-  edges: DenormalizedEdge[];
+  edges: Edge[];
 } {
   const nodes = payload.files;
-  const edges = payload.fileEdges.map((edge) => ({
+  const edges: Edge[] = payload.fileEdges.map((edge) => ({
     ...edge,
     from: nodes[edge.from]!,
-    to:
-      edge.to.type === "file"
-        ? { type: "file" as const, path: nodes[edge.to.path]! }
-        : { type: "external" as const, name: edge.to.name },
+    to: resolveEdgeTo(edge.to, nodes),
   }));
   return { nodes, edges };
 }

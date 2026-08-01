@@ -155,7 +155,6 @@ function graphCommandSchema(positionals: CliPositionalPolicy): CliCommandSchema 
       ...SHARED_BUILD_FLAGS,
       ...JSON_OUTPUT_FLAGS,
       ...REPORT_FLAGS,
-      "--compact-json",
       "--dot",
       "--full",
       "--mermaid",
