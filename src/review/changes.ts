@@ -3,7 +3,7 @@ import { createImpactIgnoreMatcher, createImpactIncludeMatcher } from "../impact
 import { parseUnifiedDiff } from "../impact/parse.js";
 import type { FileChange, Hunk } from "../impact/types.js";
 import { assertFilePathWithinRoot } from "../util/paths.js";
-import { getUnifiedDiff, listChangedFiles } from "../util/git.js";
+import { getUnifiedDiff } from "../util/git.js";
 import type { ReviewOptions, ReviewTimingReport } from "./types.js";
 
 export type ReviewChangeCollection = {
@@ -37,34 +37,12 @@ export async function collectReviewChanges(
     explicitFiles.add(normalized);
   }
 
-  if (appliedOptions.gitBase || appliedOptions.changedSince) {
-    const gitDiffOpts: {
-      base?: string | undefined;
-      head?: string | undefined;
-      changedSince?: string | undefined;
-    } = {
-      base: appliedOptions.gitBase,
-      head: appliedOptions.gitHead,
-    };
-    if (!appliedOptions.gitBase && appliedOptions.changedSince) {
-      gitDiffOpts.changedSince = appliedOptions.changedSince;
-    }
-    const gitList = await listChangedFiles(projectRoot, gitDiffOpts);
-    for (const file of gitList) {
-      if (isIncludedReviewFile(file) && !isIgnoredReviewFile(file)) changedFiles.add(file);
-    }
-  }
   if (reviewTimings) {
     reviewTimings.changesMs = Math.round(performance.now() - changesStart);
   }
 
   const diffStart = performance.now();
-  const shouldLoadGitDiff = Boolean(
-    (appliedOptions.gitBase || appliedOptions.changedSince) &&
-    (changedFiles.size ||
-      appliedOptions.discovery?.includeGlobs?.length ||
-      appliedOptions.discovery?.ignoreGlobs?.length),
-  );
+  const shouldLoadGitDiff = Boolean(appliedOptions.gitBase || appliedOptions.changedSince);
   const diffText =
     appliedOptions.diffText ??
     (shouldLoadGitDiff

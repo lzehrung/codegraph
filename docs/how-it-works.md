@@ -101,6 +101,8 @@ Caching avoids repeating work; it does not change extraction or resolution seman
 
 An incremental graph starts from a compatible manifest, keeps edges for unchanged files, and replaces edges for changed files. Changes to file signatures, discovery configuration, graph options, cache schema, or relevant build options invalidate the affected reuse boundary. Corrupt or unsupported cache data is rebuilt rather than treated as current analysis.
 
+On disk-backed incremental loads, Codegraph consults Git only for repository state that the persisted manifest cannot prove by itself: tracked working-tree changes, newly untracked files, and the current revision. Repository detection is memoized per root within a process, independent Git probes run concurrently, and impact/review reuse their parsed unified diff instead of walking the same diff twice. Strict cache verification still hashes content; non-strict cache mode uses the documented metadata tradeoff.
+
 Disk-backed text and hybrid search lazily maintain `.codegraph-cache/index-v1/search-v1.sqlite`. Its file and chunk rows come from the loaded snapshot's manifest signatures. SQLite FTS5 selects candidates only; the existing exact matcher and ranker remain authoritative.
 
 A bounded worker pool updates added, changed, deleted, and retired files. One SQLite transaction commits the affected rows and metadata.

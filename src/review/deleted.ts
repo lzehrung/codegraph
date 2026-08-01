@@ -1,7 +1,6 @@
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { promisify } from "node:util";
 import type { CandidateTestFile } from "../impact/context.js";
 import { compileTestPatterns, createIndexTestFileMatcher } from "../impact/testPatterns.js";
 import type { FileChange } from "../impact/types.js";
@@ -18,9 +17,8 @@ import {
   type WorkspaceConfig,
 } from "../util/workspace.js";
 import { normalizePath } from "../util/paths.js";
+import { assertSafeRevision } from "../util/git.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
-
-const execFileAsync = promisify(execFile);
 
 export type DeletedFileSnapshot = {
   source: string;
@@ -176,18 +174,61 @@ export async function listDirectDeletedFileTestImporters(
   return Array.from(candidates.values());
 }
 
-async function readGitFileAtRevision(projectRoot: string, revision: string, file: string): Promise<string | null> {
-  const relativeFile = normalizePath(path.relative(projectRoot, file));
-  if (!relativeFile || relativeFile.startsWith("..")) return null;
+async function readGitFilesAtRevision(
+  projectRoot: string,
+  revision: string,
+  files: readonly string[],
+): Promise<Map<string, string>> {
+  const safeRevision = assertSafeRevision(revision, "revision");
+  const requests: { file: string; object: string }[] = [];
+  for (const file of files) {
+    const relativeFile = normalizePath(path.relative(projectRoot, file));
+    if (!relativeFile || relativeFile.startsWith("..") || relativeFile.includes("\n")) continue;
+    requests.push({ file, object: `${safeRevision}:${relativeFile}` });
+  }
+  if (!requests.length) return new Map();
+
   try {
-    const { stdout } = await execFileAsync("git", ["show", `${revision}:${relativeFile}`], {
-      cwd: projectRoot,
-      encoding: "utf8",
-      maxBuffer: 16 * 1024 * 1024,
+    const child = spawn("git", ["cat-file", "--batch"], { cwd: projectRoot });
+    const stdoutChunks: Buffer[] = [];
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
     });
-    return stdout;
+    const { promise, resolve, reject } = Promise.withResolvers<Buffer>();
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code !== 0) {
+        reject(new Error(`git cat-file failed with code ${code}: ${stderr}`));
+        return;
+      }
+      resolve(Buffer.concat(stdoutChunks));
+    });
+    child.stdin.end(`${requests.map((request) => request.object).join("\n")}\n`);
+    const output = await promise;
+
+    const sources = new Map<string, string>();
+    let cursor = 0;
+    for (const request of requests) {
+      const headerEnd = output.indexOf(0x0a, cursor);
+      if (headerEnd < 0) return new Map();
+      const header = output.subarray(cursor, headerEnd).toString("utf8").replace(/\r$/, "");
+      cursor = headerEnd + 1;
+      if (header.endsWith(" missing")) continue;
+      const sizeMatch = header.match(/^[0-9a-f]+ blob ([0-9]+)$/);
+      if (!sizeMatch) return new Map();
+      const size = Number(sizeMatch[1]);
+      const contentEnd = cursor + size;
+      if (contentEnd > output.length) return new Map();
+      sources.set(request.file, output.subarray(cursor, contentEnd).toString("utf8"));
+      cursor = contentEnd;
+      if (output[cursor] === 0x0a) cursor++;
+    }
+    return sources;
   } catch {
-    return null;
+    return new Map();
   }
 }
 
@@ -202,13 +243,14 @@ export async function buildDeletedFileSnapshots(
 ): Promise<Map<FileId, DeletedFileSnapshot>> {
   const snapshots = new Map<FileId, DeletedFileSnapshot>();
   if (!deletedFiles.length) return snapshots;
+  const revisionSources = opts.revision
+    ? await readGitFilesAtRevision(projectRoot, opts.revision, deletedFiles)
+    : new Map<string, string>();
 
   for (const file of deletedFiles) {
     const support = supportForFile(file);
     if (!support) continue;
-    const source =
-      (opts.revision ? await readGitFileAtRevision(projectRoot, opts.revision, file) : null) ??
-      reconstructDeletedSourceFromDiff(opts.diffChangesByFile?.get(file));
+    const source = revisionSources.get(file) ?? reconstructDeletedSourceFromDiff(opts.diffChangesByFile?.get(file));
     if (source === null) continue;
     const normalizedFile = normalizePath(file);
     const imports = await collectImportsForFile(normalizedFile, projectRoot, {

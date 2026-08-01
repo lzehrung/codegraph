@@ -15,7 +15,7 @@ import {
 } from "../src/indexer/build-cache.js";
 import { collectGraph } from "../src/graphs.js";
 import {
-  getGitBlobHash,
+  getGitBlobHashes,
   listProjectFiles,
   resolveSpecifier,
   loadNearestTsconfigFor,
@@ -363,7 +363,7 @@ describe("Cache invalidation and strict hashing", () => {
     expect(typeof trackedEntry.gitSig).toBe("string");
     expect(untrackedEntry.gitSig).toBeUndefined();
 
-    const gitSig = await getGitBlobHash(root, trackedPath);
+    const gitSig = (await getGitBlobHashes(root, [trackedPath])).get(normalize(trackedPath));
     expect(typeof gitSig).toBe("string");
 
     const cachedEdges = [

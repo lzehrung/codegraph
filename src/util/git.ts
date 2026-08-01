@@ -7,6 +7,8 @@ import { logWithLevel, type LogLevel } from "../logging.js";
 
 const execFileAsync = promisify(execFile);
 
+const gitRepositoryChecks = new Map<string, Promise<boolean>>();
+
 export function isGitWorktreeSentinel(value: string): boolean {
   return value.toUpperCase() === "WORKTREE";
 }
@@ -52,15 +54,22 @@ export async function getGitHead(projectRoot: string): Promise<string | null> {
 }
 
 export async function isGitRepo(projectRoot: string): Promise<boolean> {
-  try {
-    const { stdout } = await execFileAsync("git", ["rev-parse", "--is-inside-work-tree"], {
-      cwd: projectRoot,
-      env: process.env,
-    });
-    return stdout?.toString().trim() === "true";
-  } catch {
-    return false;
-  }
+  const resolvedRoot = path.resolve(projectRoot);
+  const cached = gitRepositoryChecks.get(resolvedRoot);
+  if (cached) return await cached;
+  const check = (async () => {
+    try {
+      const { stdout } = await execFileAsync("git", ["rev-parse", "--is-inside-work-tree"], {
+        cwd: resolvedRoot,
+        env: process.env,
+      });
+      return stdout?.toString().trim() === "true";
+    } catch {
+      return false;
+    }
+  })();
+  gitRepositoryChecks.set(resolvedRoot, check);
+  return await check;
 }
 
 export async function isGitPathTracked(projectRoot: string, file: string): Promise<boolean> {
@@ -81,33 +90,6 @@ async function runGitPathPredicate(projectRoot: string, args: string[]): Promise
   } catch (error) {
     if (typeof error === "object" && error !== null && "code" in error && error.code === 1) return false;
     throw createGitError(projectRoot, args, error);
-  }
-}
-
-export async function getGitBlobHash(
-  projectRoot: string,
-  file: string,
-  opts?: { gitAvailable?: boolean },
-): Promise<string | null> {
-  try {
-    const gitAvailable = opts?.gitAvailable ?? true;
-    if (!gitAvailable) return null;
-    const relPath = normalizePath(path.relative(projectRoot, file));
-    if (!relPath || relPath.startsWith("..") || path.isAbsolute(relPath)) {
-      return null;
-    }
-    await execFileAsync("git", ["ls-files", "--error-unmatch", relPath], {
-      cwd: projectRoot,
-      env: process.env,
-    });
-    const { stdout } = await execFileAsync("git", ["hash-object", relPath], {
-      cwd: projectRoot,
-      env: process.env,
-    });
-    const hash = stdout?.toString().trim();
-    return hash || null;
-  } catch {
-    return null;
   }
 }
 
