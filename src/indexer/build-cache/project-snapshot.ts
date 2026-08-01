@@ -42,6 +42,28 @@ const BLOOM_FILTER_MAX_HASH_COUNT = 10;
 const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 1;
 const DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME = "detailed-symbol-graph.json";
 
+const MAX_SNAPSHOT_CACHE_ENTRIES = 32;
+
+type SnapshotFileIdentity = {
+  size: number;
+  mtimeMs: number;
+  ctimeMs: number;
+};
+
+type ParsedSnapshotCacheEntry = {
+  identity: SnapshotFileIdentity;
+  payload: unknown;
+};
+
+type DetailedSymbolGraphCacheEntry = {
+  identity: SnapshotFileIdentity;
+  projectSnapshotIdentity: string;
+  graph: SymbolGraph;
+};
+
+const parsedSnapshotCache = new Map<string, ParsedSnapshotCacheEntry>();
+const detailedSymbolGraphCache = new Map<string, DetailedSymbolGraphCacheEntry>();
+
 type DetailedSymbolGraphSnapshotPayload = {
   version: number;
   projectSnapshotIdentity: string;
@@ -117,6 +139,47 @@ function compareSnapshotPath(left: string, right: string): number {
   return 0;
 }
 
+function sameSnapshotFileIdentity(left: SnapshotFileIdentity, right: SnapshotFileIdentity): boolean {
+  return left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
+}
+
+async function snapshotFileIdentity(snapshotPath: string): Promise<SnapshotFileIdentity> {
+  const stat = await fsp.stat(snapshotPath);
+  return {
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+    ctimeMs: stat.ctimeMs,
+  };
+}
+
+function setBoundedSnapshotCache<K, V>(cache: Map<K, V>, key: K, value: V): void {
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > MAX_SNAPSHOT_CACHE_ENTRIES) {
+    const oldestKey = cache.keys().next().value as K | undefined;
+    if (oldestKey === undefined) break;
+    cache.delete(oldestKey);
+  }
+}
+
+async function readParsedSnapshot(snapshotPath: string): Promise<ParsedSnapshotCacheEntry> {
+  const before = await snapshotFileIdentity(snapshotPath);
+  const cached = parsedSnapshotCache.get(snapshotPath);
+  if (cached && sameSnapshotFileIdentity(cached.identity, before)) {
+    setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, cached);
+    return cached;
+  }
+  const payload = JSON.parse(await fsp.readFile(snapshotPath, "utf8")) as unknown;
+  const after = await snapshotFileIdentity(snapshotPath);
+  const entry = { identity: after, payload };
+  if (sameSnapshotFileIdentity(before, after)) {
+    setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, entry);
+  } else {
+    parsedSnapshotCache.delete(snapshotPath);
+  }
+  return entry;
+}
+
 function projectIndexManifestEntries(
   entries: ReadonlyMap<string, ManifestFileEntry>,
 ): Map<string, { sig: string; gitSig?: string }> {
@@ -139,7 +202,7 @@ export async function tryLoadProjectIndexSnapshot(
   const filesSignature = projectSnapshotFilesSignature(manifestEntries);
   if ((opts?.cache ?? "off") !== "disk") return null;
   try {
-    const payload = JSON.parse(await fsp.readFile(projectSnapshotPath(projectRoot, opts), "utf8")) as unknown;
+    const payload = (await readParsedSnapshot(projectSnapshotPath(projectRoot, opts))).payload;
     const nativeRuntimeFingerprint = getNativeRuntimeFingerprint(opts?.native);
     if (
       !isProjectIndexSnapshotPayload(payload) ||
@@ -202,7 +265,7 @@ export async function tryLoadPersistedBloomFilters(
 ): Promise<BloomFilterCache | null> {
   if ((opts?.cache ?? "off") !== "disk" || (opts?.useBloomFilters ?? true) === false) return null;
   try {
-    const payload = JSON.parse(await fsp.readFile(projectSnapshotPath(projectRoot, opts), "utf8")) as unknown;
+    const payload = (await readParsedSnapshot(projectSnapshotPath(projectRoot, opts))).payload;
     const bloomFilters = persistedBloomFiltersFromSnapshot(payload);
     if (!bloomFilters) return null;
     return deserializeBloomFilterCache(bloomFilters);
@@ -255,6 +318,8 @@ export async function writeProjectIndexSnapshot(
     const snapshotPath = projectSnapshotPath(projectRoot, opts);
     await fsp.mkdir(path.dirname(snapshotPath), { recursive: true });
     await fsp.writeFile(snapshotPath, JSON.stringify(payload), "utf8");
+    const identity = await snapshotFileIdentity(snapshotPath);
+    setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, payload });
   } catch {
     // Snapshot writes are an optimization; cache write failures must not fail indexing.
   }
@@ -272,7 +337,17 @@ export async function tryLoadDetailedSymbolGraphSnapshot(
   if ((opts?.cache ?? "off") !== "disk" || !index.projectSnapshotIdentity) return null;
   try {
     const snapshotPath = detailedSymbolGraphSnapshotPath(projectRoot, opts);
-    const payload = JSON.parse(await fsp.readFile(snapshotPath, "utf8")) as unknown;
+    const identity = await snapshotFileIdentity(snapshotPath);
+    const cached = detailedSymbolGraphCache.get(snapshotPath);
+    if (
+      cached &&
+      cached.projectSnapshotIdentity === index.projectSnapshotIdentity &&
+      sameSnapshotFileIdentity(cached.identity, identity)
+    ) {
+      setBoundedSnapshotCache(detailedSymbolGraphCache, snapshotPath, cached);
+      return cached.graph;
+    }
+    const payload = (await readParsedSnapshot(snapshotPath)).payload;
     if (
       !isDetailedSymbolGraphSnapshotPayload(payload) ||
       payload.projectSnapshotIdentity !== index.projectSnapshotIdentity
@@ -286,6 +361,11 @@ export async function tryLoadDetailedSymbolGraphSnapshot(
     if (!(await isDetailedSymbolGraphCompatibleWithProject(projectRoot, index, graph))) {
       return null;
     }
+    setBoundedSnapshotCache(detailedSymbolGraphCache, snapshotPath, {
+      identity: await snapshotFileIdentity(snapshotPath),
+      projectSnapshotIdentity: index.projectSnapshotIdentity,
+      graph,
+    });
     return graph;
   } catch {
     return null;
@@ -311,6 +391,8 @@ export async function writeDetailedSymbolGraphSnapshot(
   let tempPath: string | undefined;
   try {
     const snapshotPath = detailedSymbolGraphSnapshotPath(projectRoot, opts);
+    parsedSnapshotCache.delete(snapshotPath);
+    detailedSymbolGraphCache.delete(snapshotPath);
     await fsp.mkdir(path.dirname(snapshotPath), { recursive: true });
     tempPath = path.join(
       path.dirname(snapshotPath),
@@ -318,6 +400,13 @@ export async function writeDetailedSymbolGraphSnapshot(
     );
     await fsp.writeFile(tempPath, JSON.stringify(payload), { encoding: "utf8", flag: "wx" });
     await fsp.rename(tempPath, snapshotPath);
+    const identity = await snapshotFileIdentity(snapshotPath);
+    setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, payload });
+    setBoundedSnapshotCache(detailedSymbolGraphCache, snapshotPath, {
+      identity,
+      projectSnapshotIdentity: index.projectSnapshotIdentity,
+      graph,
+    });
     tempPath = undefined;
   } catch {
     // Detailed graph persistence is an optimization; source parsing remains authoritative.

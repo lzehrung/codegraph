@@ -1,9 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import path from "node:path";
 import fsp from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 
 import { buildProjectIndex, findDuplicates, type BuildReport } from "../src/index.js";
+import { closeDuplicateUnitCacheDatabase } from "../src/duplicates.js";
+import { SqliteDatabase } from "../src/sqlite-driver.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 
 function cacheDir(root: string): string {
@@ -16,6 +18,10 @@ function moduleCacheDbPath(root: string): string {
 
 function duplicateCacheDbPath(root: string): string {
   return path.join(cacheDir(root), "duplicate-unit-cache.sqlite");
+}
+
+function normalizePathForSql(file: string): string {
+  return path.resolve(file).replace(/\\/g, "/");
 }
 
 function readSqliteMetadata(dbPath: string, key: string): string | undefined {
@@ -99,6 +105,48 @@ describe("disk cache uses sqlite backend", () => {
     const hashedJsonEntries = entries.filter((name) => /^[a-f0-9]{40}\.json$/.test(name));
     expect(hashedJsonEntries.length).toBe(0);
     expect((report2.cache?.hits ?? 0) > 0).toBe(true);
+  });
+
+  it("prepares module cache hot-path statements once per database", async () => {
+    const root = await mkTmpDir("dg-disk-cache-prepared-");
+    await fsp.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
+    await fsp.writeFile(path.join(root, "b.ts"), "export const b = 2;\n", "utf8");
+    const prepareSpy = vi.spyOn(SqliteDatabase.prototype, "prepare");
+
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+
+    const sql = prepareSpy.mock.calls.map(([statement]) => statement);
+    expect(
+      sql.filter((statement) => statement.startsWith("SELECT sig, version, payload FROM module_cache")),
+    ).toHaveLength(1);
+    expect(sql.filter((statement) => statement.startsWith("INSERT INTO module_cache"))).toHaveLength(1);
+  });
+
+  it("prunes module cache rows for files outside the successful manifest", async () => {
+    const root = await mkTmpDir("dg-disk-cache-prune-");
+    const retainedPath = path.join(root, "retained.ts");
+    const deletedPath = path.join(root, "deleted.ts");
+    await fsp.writeFile(retainedPath, "export const retained = 1;\n", "utf8");
+    await fsp.writeFile(deletedPath, "export const deleted = 1;\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+
+    await fsp.rm(deletedPath);
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+
+    expect(
+      readRowCount(
+        moduleCacheDbPath(root),
+        "SELECT COUNT(*) AS count FROM module_cache WHERE file = ?",
+        normalizePathForSql(retainedPath),
+      ),
+    ).toBe(1);
+    expect(
+      readRowCount(
+        moduleCacheDbPath(root),
+        "SELECT COUNT(*) AS count FROM module_cache WHERE file = ?",
+        normalizePathForSql(deletedPath),
+      ),
+    ).toBe(0);
   });
 
   it("migrates an older module cache sqlite schema", async () => {
@@ -214,5 +262,30 @@ describe("disk cache uses sqlite backend", () => {
       ),
     ).toBe(0);
     expect(readTableColumns(duplicateCacheDbPath(root), "duplicate_unit_cache")).toContain("updated_at");
+  });
+
+  it("prunes expired duplicate cache variants when duplicate analysis opens the cache", async () => {
+    const root = await mkTmpDir("dg-disk-cache-prune-duplicates-");
+    await writeDuplicateProject(root);
+    const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    await findDuplicates(index, { minConfidence: "high", limit: 5 });
+    closeDuplicateUnitCacheDatabase(root, { cacheDir: cacheDir(root) });
+    const db = new DatabaseSync(duplicateCacheDbPath(root));
+    db.prepare(
+      `INSERT INTO duplicate_unit_cache(file, variant, sig, version, payload, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(normalizePathForSql(path.join(root, "src", "a.ts")), "expired", "old", 2, "[]", 0);
+    db.close();
+
+    const reopenedIndex = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    await findDuplicates(reopenedIndex, { minConfidence: "high", limit: 5 });
+
+    expect(
+      readRowCount(
+        duplicateCacheDbPath(root),
+        "SELECT COUNT(*) AS count FROM duplicate_unit_cache WHERE variant = ?",
+        "expired",
+      ),
+    ).toBe(0);
   });
 });

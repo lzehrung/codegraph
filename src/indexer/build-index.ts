@@ -473,8 +473,9 @@ async function prepareFileSignatures(args: {
   concurrency: number;
 }): Promise<Map<string, FileSignature>> {
   const entries = await mapLimit(args.files, args.concurrency, async (file) => {
-    const sigInfo = await fileSignature(file, args.opts?.cacheStrict, args.gitSigMap.get(file), {
-      forceContentHash: args.cacheEnabled,
+    const gitSig = args.gitSigMap.get(file);
+    const sigInfo = await fileSignature(file, args.opts?.cacheStrict, gitSig, {
+      forceContentHash: args.cacheEnabled && !gitSig,
     });
     return [file, sigInfo] as const;
   });
@@ -613,8 +614,9 @@ async function buildIndexFromFileListShared(
       try {
         let sigInfo = fileSignatures.get(file);
         if (!sigInfo) {
-          sigInfo = await fileSignature(file, opts?.cacheStrict, gitSigMap.get(file), {
-            forceContentHash: cacheEnabled,
+          const gitSig = gitSigMap.get(file);
+          sigInfo = await fileSignature(file, opts?.cacheStrict, gitSig, {
+            forceContentHash: cacheEnabled && !gitSig,
           });
           fileSignatures.set(file, sigInfo);
         }

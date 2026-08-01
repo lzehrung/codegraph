@@ -5,7 +5,7 @@ import path from "node:path";
 import { supportForFile } from "../../languages.js";
 import { getNativeRuntimeFingerprint } from "../../native/treeSitterNative.js";
 import { logWithLevel } from "../../logging.js";
-import { SqliteDatabase } from "../../sqlite-driver.js";
+import { SqliteDatabase, type SqliteStatement } from "../../sqlite-driver.js";
 import { buildBloomFilterFromSource } from "../../util/bloomFilter.js";
 import {
   createSqliteTableIfMissing,
@@ -42,6 +42,15 @@ const memoryCache = new Map<string, ModuleCacheEntry>();
 let cachedRuntimeFingerprint: string | undefined;
 let cachedRuntimeHash: string | undefined;
 
+type DiskModuleCache = {
+  db: SqliteDatabase;
+  load: SqliteStatement;
+  write: SqliteStatement;
+  clearLiveFiles: SqliteStatement;
+  insertLiveFile: SqliteStatement;
+  pruneStaleFiles: SqliteStatement;
+};
+
 function memoryCacheKey(projectRoot: string, file: string): string {
   return `${normalizePath(projectRoot)}::${file}`;
 }
@@ -58,7 +67,7 @@ function clearMemoryCacheForProject(projectRoot: string): void {
     }
   }
 }
-const diskCacheDatabases = new Map<string, SqliteDatabase>();
+const diskModuleCaches = new Map<string, DiskModuleCache>();
 
 export function cacheRoot(projectRoot: string, opts?: BuildOptions): string {
   return opts?.cacheDir || path.join(projectRoot, ".codegraph-cache", "index-v1");
@@ -108,34 +117,74 @@ function ensureModuleCacheSchema(db: SqliteDatabase): void {
   db.exec("CREATE INDEX IF NOT EXISTS idx_module_cache_sig ON module_cache(sig);");
 }
 
-function getDiskCacheDatabase(projectRoot: string, opts?: BuildOptions): SqliteDatabase {
+function getDiskModuleCache(projectRoot: string, opts?: BuildOptions): DiskModuleCache {
   const dbPath = diskCacheDatabasePath(projectRoot, opts);
-  const existing = diskCacheDatabases.get(dbPath);
+  const existing = diskModuleCaches.get(dbPath);
   if (existing) return existing;
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new SqliteDatabase(dbPath);
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = NORMAL");
   ensureModuleCacheSchema(db);
-  diskCacheDatabases.set(dbPath, db);
-  return db;
+  db.exec("CREATE TEMP TABLE IF NOT EXISTS live_module_cache_files(file TEXT PRIMARY KEY) WITHOUT ROWID;");
+  const cache: DiskModuleCache = {
+    db,
+    load: db.prepare("SELECT sig, version, payload FROM module_cache WHERE file = ?"),
+    write: db.prepare(
+      `INSERT INTO module_cache (file, sig, version, payload, updated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(file) DO UPDATE SET
+         sig = excluded.sig,
+         version = excluded.version,
+         payload = excluded.payload,
+         updated_at = excluded.updated_at`,
+    ),
+    clearLiveFiles: db.prepare("DELETE FROM live_module_cache_files"),
+    insertLiveFile: db.prepare("INSERT OR IGNORE INTO live_module_cache_files(file) VALUES (?)"),
+    pruneStaleFiles: db.prepare(
+      "DELETE FROM module_cache WHERE NOT EXISTS (SELECT 1 FROM live_module_cache_files WHERE file = module_cache.file)",
+    ),
+  };
+  diskModuleCaches.set(dbPath, cache);
+  return cache;
 }
 
 export function closeDiskCacheDatabase(projectRoot: string, opts?: BuildOptions): void {
   clearMemoryCacheForProject(projectRoot);
   const dbPath = diskCacheDatabasePath(projectRoot, opts);
-  const db = diskCacheDatabases.get(dbPath);
-  if (!db) return;
+  const cache = diskModuleCaches.get(dbPath);
+  if (!cache) return;
   try {
-    db.pragma("wal_checkpoint(TRUNCATE)");
+    cache.db.pragma("wal_checkpoint(TRUNCATE)");
   } catch {
     // checkpoint best-effort
   }
   try {
-    db.close();
-    diskCacheDatabases.delete(dbPath);
+    cache.db.close();
+    diskModuleCaches.delete(dbPath);
   } catch {
     // Keep handle for later retry if close fails.
+  }
+}
+
+export function pruneDiskModuleCache(projectRoot: string, liveFiles: Iterable<string>, opts?: BuildOptions): number {
+  if ((opts?.cache ?? "off") !== "disk") return 0;
+  try {
+    const cache = getDiskModuleCache(projectRoot, opts);
+    const deleted = cache.db.transaction(() => {
+      cache.clearLiveFiles.run();
+      for (const file of liveFiles) cache.insertLiveFile.run(file);
+      const result = cache.pruneStaleFiles.run();
+      cache.clearLiveFiles.run();
+      return Number(result.changes);
+    })();
+    if (deleted >= 100) {
+      cache.db.exec("VACUUM;");
+    }
+    return deleted;
+  } catch (error) {
+    logWithLevel(opts?.logLevel, "warn", "Warning: Failed to prune module cache:", error);
+    return 0;
   }
 }
 
@@ -186,9 +235,11 @@ export async function fileSignature(
   gitSig?: string,
   opts?: { forceContentHash?: boolean },
 ): Promise<FileSignature> {
-  const includeContentHash = !!opts?.forceContentHash;
+  const hasGitSignature = !!gitSig;
+  const includeContentHash = !hasGitSignature && !!opts?.forceContentHash;
   const statOpts = includeContentHash ? { includeContentHash: true } : undefined;
-  const { sig, contentHash } = await fileStatSignature(file, strict, statOpts);
+  const signatureStrict = hasGitSignature ? strict === true : strict;
+  const { sig, contentHash } = await fileStatSignature(file, signatureStrict, statOpts);
   const cacheSig = gitSig ?? contentHash ?? sig;
   if (gitSig) {
     return {
@@ -275,10 +326,8 @@ export function tryLoadFromCache(
   }
   if (mode === "disk") {
     try {
-      const db = getDiskCacheDatabase(projectRoot, opts);
-      const row = db.prepare("SELECT sig, version, payload FROM module_cache WHERE file = ?").get(file) as
-        | { sig: string; version: number; payload: string }
-        | undefined;
+      const cache = getDiskModuleCache(projectRoot, opts);
+      const row = cache.load.get(file) as { sig: string; version: number; payload: string } | undefined;
       if (row && row.sig === sig && row.version === PARSED_CACHE_VERSION) {
         const parsed: unknown = JSON.parse(row.payload);
         if (isModuleIndex(parsed)) {
@@ -311,16 +360,8 @@ export function writeToCache(
     );
   } else if (mode === "disk") {
     try {
-      const db = getDiskCacheDatabase(projectRoot, opts);
-      db.prepare(
-        `INSERT INTO module_cache (file, sig, version, payload, updated_at)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(file) DO UPDATE SET
-           sig = excluded.sig,
-           version = excluded.version,
-           payload = excluded.payload,
-           updated_at = excluded.updated_at`,
-      ).run(file, sig, PARSED_CACHE_VERSION, JSON.stringify(mod), Date.now());
+      const cache = getDiskModuleCache(projectRoot, opts);
+      cache.write.run(file, sig, PARSED_CACHE_VERSION, JSON.stringify(mod), Date.now());
     } catch (error) {
       logWithLevel(opts?.logLevel, "warn", "Warning: Failed to write to cache:", error);
     }

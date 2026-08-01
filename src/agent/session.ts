@@ -192,6 +192,40 @@ async function collectAgentFileSignatures(files: readonly string[]): Promise<Map
   return signatures;
 }
 
+function agentFileSignatureFromManifest(file: string, signature: string): AgentFileSignature | undefined {
+  const firstSeparator = signature.indexOf(":");
+  if (firstSeparator < 1) return undefined;
+  const secondSeparator = signature.indexOf(":", firstSeparator + 1);
+  const sizeEnd = secondSeparator < 0 ? signature.length : secondSeparator;
+  const mtimeMs = Number(signature.slice(0, firstSeparator));
+  const size = Number(signature.slice(firstSeparator + 1, sizeEnd));
+  if (!Number.isFinite(mtimeMs) || !Number.isFinite(size) || mtimeMs < 0 || size < 0) return undefined;
+  return { file, size, mtimeMs };
+}
+
+async function collectBuiltAgentFileSignatures(
+  files: readonly string[],
+  index: ProjectIndex,
+): Promise<Map<string, AgentFileSignature>> {
+  const signatures = new Map<string, AgentFileSignature>();
+  const missing: string[] = [];
+  for (const file of files) {
+    const resolvedFile = normalizePath(path.resolve(file));
+    const entry = index.manifestEntries?.get(resolvedFile);
+    const signature = entry ? agentFileSignatureFromManifest(resolvedFile, entry.sig) : undefined;
+    if (signature) {
+      signatures.set(resolvedFile, signature);
+    } else {
+      missing.push(resolvedFile);
+    }
+  }
+  if (missing.length) {
+    const fallback = await collectAgentFileSignatures(missing);
+    for (const [file, signature] of fallback) signatures.set(file, signature);
+  }
+  return signatures;
+}
+
 function diffAgentFileSignatures(
   previous: ReadonlyMap<string, AgentFileSignature>,
   current: ReadonlyMap<string, AgentFileSignature>,
@@ -266,9 +300,6 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     if (cachedBase) return cachedBase;
     const loadPromise = (async () => {
       const { files, discoveryOptions, graphOptions, incrementalPlan } = await loadFilePlan();
-      if (options.freshness?.policy !== "manual") {
-        cachedFileSignatures = await collectAgentFileSignatures(files);
-      }
       const buildOptions: IncrementalBuildOptions = {
         ...options.buildOptions,
         ...(graphOptions ? { graph: graphOptions } : {}),
@@ -291,6 +322,9 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
       const buildReport: BuildReport = { timings: {} };
       buildOptions.report = buildReport;
       const index = await buildProjectIndexIncremental(options.root, buildOptions);
+      if (options.freshness?.policy !== "manual") {
+        cachedFileSignatures = await collectBuiltAgentFileSignatures(files, index);
+      }
       const fileGraph = index.graph;
 
       return {
