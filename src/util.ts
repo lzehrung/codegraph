@@ -7,7 +7,6 @@ export {
   stripPythonCommentsAndStrings,
 } from "./util/comments.js";
 export {
-  getGitBlobHash,
   getGitBlobHashes,
   getGitHead,
   getUnifiedDiff,

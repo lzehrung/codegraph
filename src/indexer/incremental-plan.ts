@@ -196,10 +196,10 @@ export async function resolveIncrementalFilePlan(
     // last-indexed commit against WORKTREE catches staged and unstaged tracked-file
     // changes together, including new commits made since (working tree reflects those
     // too when clean), so this replaces the narrower commit-to-commit comparison.
-    const workingTreeDiffFiles = manifest.lastCommit
-      ? await listChangedFiles(projectRoot, { base: manifest.lastCommit, head: "WORKTREE" })
-      : [];
-    const untrackedFiles = await listUntrackedProjectFiles(projectRoot, opts?.discovery, true);
+    const [workingTreeDiffFiles, untrackedFiles] = await Promise.all([
+      manifest.lastCommit ? listChangedFiles(projectRoot, { base: manifest.lastCommit, head: "WORKTREE" }) : [],
+      listUntrackedProjectFiles(projectRoot, opts?.discovery, true),
+    ]);
 
     const files = new Set<string>(trackedFiles);
     for (const file of workingTreeDiffFiles) if (fs.existsSync(file)) files.add(file);

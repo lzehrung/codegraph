@@ -31,8 +31,13 @@ describe("Impact Circuit Breaker & Warning Propagation", () => {
     };
   };
 
-  const setupMocks = (statOutput: string, diffContent = "") => {
-    mockSpawn.mockReturnValueOnce(setupSpawnCall(statOutput)).mockReturnValueOnce(setupSpawnCall(diffContent));
+  const diffContent = (insertions: number, deletions: number) =>
+    `diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,${deletions} +1,${insertions} @@\n${"-a\n".repeat(
+      deletions,
+    )}${"+b\n".repeat(insertions)}`;
+
+  const setupDiff = (insertions: number, deletions: number) => {
+    mockSpawn.mockReturnValueOnce(setupSpawnCall(diffContent(insertions, deletions)));
   };
 
   const index: ProjectIndex = {
@@ -42,7 +47,7 @@ describe("Impact Circuit Breaker & Warning Propagation", () => {
   };
 
   it("should trigger warning at exactly 50,001 lines", async () => {
-    setupMocks(" 1 file changed, 25001 insertions(+), 25000 deletions(-)");
+    setupDiff(25_001, 25_000);
 
     const result = await analyzeImpactFromDiff(".", index, {
       provider: "git",
@@ -52,10 +57,11 @@ describe("Impact Circuit Breaker & Warning Propagation", () => {
 
     expect(result.warning).toContain("Large diff detected");
     expect(result.warning).toContain("50,001 lines");
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
   });
 
   it("should NOT trigger warning at exactly 50,000 lines", async () => {
-    setupMocks(" 1 file changed, 25000 insertions(+), 25000 deletions(-)");
+    setupDiff(25_000, 25_000);
 
     const result = await analyzeImpactFromDiff(".", index, {
       provider: "git",
@@ -66,8 +72,8 @@ describe("Impact Circuit Breaker & Warning Propagation", () => {
     expect(result.warning).toBeUndefined();
   });
 
-  it("should handle stat output with only insertions", async () => {
-    setupMocks(" 1 file changed, 60000 insertions(+)");
+  it("should handle diffs with only insertions", async () => {
+    setupDiff(60_000, 0);
 
     const result = await analyzeImpactFromDiff(".", index, {
       provider: "git",
@@ -78,8 +84,8 @@ describe("Impact Circuit Breaker & Warning Propagation", () => {
     expect(result.warning).toContain("60,000 lines");
   });
 
-  it("should handle stat output with only deletions", async () => {
-    setupMocks(" 1 file changed, 60000 deletions(-)");
+  it("should handle diffs with only deletions", async () => {
+    setupDiff(0, 60_000);
 
     const result = await analyzeImpactFromDiff(".", index, {
       provider: "git",
@@ -88,25 +94,10 @@ describe("Impact Circuit Breaker & Warning Propagation", () => {
     });
 
     expect(result.warning).toContain("60,000 lines");
-  });
-
-  it("should fallback gracefully if shortstat fails", async () => {
-    mockSpawn
-      .mockReturnValueOnce(setupSpawnCall("", 1))
-      .mockReturnValueOnce(setupSpawnCall("diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-a\n+b\n"));
-
-    const result = await analyzeImpactFromDiff(".", index, {
-      provider: "git",
-      base: "A",
-      head: "B",
-    });
-
-    expect(result.warning).toBeUndefined();
-    expect(result.changedFiles).toHaveLength(1);
   });
 
   it("should propagate warning to compact report", async () => {
-    setupMocks(" 1 file changed, 60000 insertions(+)", "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-a\n+b\n");
+    setupDiff(60_000, 0);
 
     const result = await analyzeImpactFromDiff(".", index, {
       provider: "git",
@@ -120,17 +111,14 @@ describe("Impact Circuit Breaker & Warning Propagation", () => {
   });
 
   it("recovers after a large diff and clears warning on smaller follow-up diff", async () => {
-    setupMocks(" 1 file changed, 60000 insertions(+)", "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-a\n+b\n");
+    setupDiff(60_000, 0);
     const first = await analyzeImpactFromDiff(".", index, {
       provider: "git",
       base: "A",
       head: "B",
     });
 
-    setupMocks(
-      " 1 file changed, 1 insertion(+), 1 deletion(-)",
-      "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-a\n+b\n",
-    );
+    setupDiff(1, 1);
     const second = await analyzeImpactFromDiff(".", index, {
       provider: "git",
       base: "A",

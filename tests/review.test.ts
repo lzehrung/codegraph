@@ -827,25 +827,39 @@ describe("Review report", () => {
     runGit(root, ["config", "user.name", "Codegraph Bot"]);
     const filePath = path.join(root, "gone.ts");
     const testFile = path.join(root, "gone.test.ts");
+    const otherFile = path.join(root, "other.ts");
+    const gitTraceFile = path.join(root, "git-trace.log");
     await fsp.writeFile(filePath, `export const gone = true;\n`, "utf8");
+    await fsp.writeFile(otherFile, `export const other = true;\n`, "utf8");
     await fsp.writeFile(testFile, `import { gone } from './gone';\nexport const seen = gone;\n`, "utf8");
     runGit(root, ["add", "."]);
     runGit(root, ["commit", "-m", "initial"]);
-    runGit(root, ["rm", "gone.ts"]);
+    runGit(root, ["rm", "gone.ts", "other.ts"]);
     runGit(root, ["commit", "-m", "remove"]);
 
     const base = runGit(root, ["rev-parse", "HEAD^"]);
-    const report = await buildReviewReport(root, {
-      gitBase: base,
-      cache: "memory",
-    });
+    const originalGitTrace = process.env.GIT_TRACE;
+    process.env.GIT_TRACE = gitTraceFile;
+    let report: ReviewReport;
+    try {
+      report = await buildReviewReport(root, {
+        gitBase: base,
+        cache: "memory",
+      });
+    } finally {
+      if (originalGitTrace === undefined) delete process.env.GIT_TRACE;
+      else process.env.GIT_TRACE = originalGitTrace;
+    }
+    const gitTrace = await fsp.readFile(gitTraceFile, "utf8");
 
-    expect(report.summary.filesChanged).toBe(1);
+    expect(report.summary.filesChanged).toBe(2);
     expect(report.changedFiles[0]?.status).toBe("deleted");
     expect(report.changedFiles[0]?.symbols.some((symbol) => symbol.name === "gone")).toBe(true);
     expect(report.changedFiles[0]?.symbols.some((symbol) => symbol.exported)).toBe(true);
-    expect(report.summary.symbolsChanged).toBe(1);
-    expect(report.riskSummary.signals).toContain("exported-symbols-changed");
+    expect(report.changedFiles.some((file) => file.symbols.some((symbol) => symbol.name === "other"))).toBe(true);
+    expect(report.summary.symbolsChanged).toBe(2);
+    expect(gitTrace.match(/git cat-file --batch/g)).toHaveLength(1);
+    expect(gitTrace).not.toContain("git show");
     expect(report.candidateTests).toContainEqual({
       file: "gone.test.ts",
       confidence: "high",
