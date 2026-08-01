@@ -14,7 +14,7 @@ Unknown commands exit with status 1, print up to three deterministic suggestions
 
 CLI commands default to human-readable stdout; `--pretty` remains an explicit equivalent. Use `--json` for structured automation output, or a format-specific option such as `--compact-json`, `--mermaid`, `--dot`, or `--sqlite` where supported. If `--json` and `--pretty` are both present, `--json` wins.
 
-The `graph` command without output-format flags writes Mermaid to stdout. Use `--json`, `--compact-json`, `--dot`, `--sqlite <path>`, or `--output <path>` for explicit graph artifacts.
+The `graph` command without output-format flags writes Mermaid to stdout. Use `--json`, `--dot`, `--sqlite <path>`, or `--output <path>` for explicit graph artifacts. `graph --json` output is always compact (index-based); `--compact-json` is accepted as a deprecated alias.
 
 Numeric options such as `--limit`, `--threads`, `--depth`, `--max-refs`, and token bounds must be integers in their documented ranges; invalid numeric values fail instead of being silently clamped or ignored.
 
@@ -122,7 +122,7 @@ codegraph graph --root . ./src --no-gitignore --json
 codegraph graph ./src --mermaid
 
 # Detailed symbol graph
-codegraph graph ./src --symbols-detailed --compact-json
+codegraph graph ./src --symbols-detailed --json
 
 # Include detailed SQL statement facts in JSON graph output
 codegraph graph --root . --sql-artifacts --json
@@ -786,18 +786,20 @@ npx tsx src/cli.ts goto <file> <line> <column>
 
 Plain `graph` output is a Mermaid file dependency graph on stdout. `graph --json` returns the structured file graph shown below; add `--output <path>` to write any selected format to a file.
 
+`graph` JSON output is always compact: `files` lists each path once, and every edge references source and target files by their integer offset into `files` instead of repeating the path string. This keeps output size proportional to the number of distinct files rather than the number of edges.
+
 ```json
 {
-  "nodes": ["/abs/path/a.ts", "..."],
-  "edges": [
+  "files": ["/abs/path/a.ts", "/abs/path/b.ts", "..."],
+  "fileEdges": [
     {
-      "from": "/abs/path/a.ts",
+      "from": 0,
       "to": { "type": "external", "name": "react" },
       "raw": "react"
     },
     {
-      "from": "/abs/path/a.ts",
-      "to": { "type": "file", "path": "/abs/path/b.ts" },
+      "from": 0,
+      "to": { "type": "file", "path": 1 },
       "raw": "./b"
     }
   ]
@@ -827,16 +829,18 @@ When using `--symbols-detailed`:
   - `--symbols-detailed-max-edges N`
   - `--symbols-detailed-members-only`
 
-Compact JSON replaces repeated file and symbol IDs with numeric indices:
+With `--symbols` or `--symbols-detailed`, the same JSON also carries `symbols` (each with an integer `id` and `file` offset), `symbolEdges` (integer `from`/`to`), and `symbolIdIndex` (the original string symbol ids, indexed by `symbols[].id`) so callers can recover the portable id when needed:
 
 ```bash
-codegraph graph --root . ./src --symbols-detailed --compact-json --output graph.json
+codegraph graph --root . ./src --symbols-detailed --json --output graph.json
 ```
+
+`--compact-json` is accepted as a deprecated alias for `--json` on `graph`: JSON output has no denormalized form to opt out of, so both flags produce identical results.
 
 When targeting a different repo, pass it with `--root` rather than as an extra positional path:
 
 ```bash
-codegraph graph --root /path/to/project --json --symbols-detailed --compact-json --output graph.json
+codegraph graph --root /path/to/project --json --symbols-detailed --output graph.json
 ```
 
 ## Graph export inspection
@@ -845,7 +849,7 @@ Codegraph currently ships graph data formats, not a packaged interactive viewer.
 
 ```bash
 # Compact JSON for scripts and downstream tooling
-codegraph graph --root . ./src --compact-json --output codegraph.json
+codegraph graph --root . ./src --json --output codegraph.json
 
 # Mermaid for Markdown renderers that support Mermaid diagrams
 codegraph graph --root . ./src --mermaid --output graph.mmd

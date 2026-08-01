@@ -2,7 +2,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { buildSymbolGraph, type SymbolGraph } from "../graphs/symbol-graph.js";
+import { buildSymbolGraph, type SymbolEdge, type SymbolGraph, type SymbolNode } from "../graphs/symbol-graph.js";
 import { buildSymbolGraphDetailed } from "../graphs/symbol-graph-detailed.js";
 import { collectGraph } from "../graph-builder.js";
 import { graphToDOT, graphToMermaid } from "../graphs/render.js";
@@ -17,7 +17,7 @@ import { type BuildOptions, type BuildReport } from "../indexer/types.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import { updateGraphSqlite, writeGraphSqlite } from "../sqlite.js";
 import { buildSqlArtifactGraphFromFiles } from "../sql/index.js";
-import type { Graph } from "../types.js";
+import type { Edge, Graph } from "../types.js";
 import { normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
 import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import {
@@ -27,20 +27,14 @@ import {
   parseSymbolGraphScopeOption,
 } from "./options.js";
 
+// Graph JSON output is always index-based: repeated file paths and symbol ids are
+// replaced with integer offsets into `files[]`/`symbolIdIndex[]` so large graphs don't
+// duplicate the same strings across every node/edge.
 type CompactEdgeTo = { type: "file"; path: number } | { type: "external"; name: string };
-type CompactFileEdge = {
-  from: number;
-  to: CompactEdgeTo;
-  raw: string;
-  typeOnly?: boolean;
-};
-type CompactSymbolEdge = { from: number; to: number; label?: string };
-type CompactSymbolNode = {
-  id: number;
-  file: number;
-  name: string;
-  kind: string;
-};
+type CompactFileEdge = Omit<Edge, "from" | "to"> & { from: number; to: CompactEdgeTo };
+type CompactSymbolEdge = Omit<SymbolEdge, "from" | "to"> & { from: number; to: number };
+type CompactSymbolNode = Omit<SymbolNode, "id" | "file"> & { id: number; file: number };
+type CompactFileProjection = { files: string[]; fileEdges: CompactFileEdge[] };
 type CompactSymbolProjection = {
   files: string[];
   symbols: CompactSymbolNode[];
@@ -96,20 +90,16 @@ function toJSON(obj: unknown): string {
   return JSON.stringify(obj, null, 2);
 }
 
-function compactGraphWithSymbols(fgraph: Graph, sgraph: SymbolGraph, stable = false) {
+export function compactFileGraph(fgraph: Graph, stable = false): CompactFileProjection {
   const files = [...fgraph.nodes];
   if (stable) files.sort();
   const fileIndex = new Map<string, number>();
   for (let i = 0; i < files.length; i++) fileIndex.set(files[i]!, i);
 
   const fileEdges: CompactFileEdge[] = fgraph.edges.map((e) => ({
+    ...e,
     from: fileIndex.get(e.from)!,
-    to:
-      e.to?.type === "file"
-        ? { type: "file" as const, path: fileIndex.get(e.to.path)! }
-        : { type: "external" as const, name: e.to.name },
-    raw: e.raw,
-    ...(e.typeOnly !== undefined ? { typeOnly: e.typeOnly } : {}),
+    to: e.to.type === "file" ? { type: "file" as const, path: fileIndex.get(e.to.path)! } : e.to,
   }));
   if (stable) {
     const toKey = (to: CompactEdgeTo) => (to?.type === "file" ? `file:${to.path}` : `ext:${to?.name ?? ""}`);
@@ -126,6 +116,11 @@ function compactGraphWithSymbols(fgraph: Graph, sgraph: SymbolGraph, stable = fa
     });
   }
 
+  return { files, fileEdges };
+}
+
+export function compactGraphWithSymbols(fgraph: Graph, sgraph: SymbolGraph, stable = false) {
+  const { files, fileEdges } = compactFileGraph(fgraph, stable);
   const symbolProjection = buildCompactSymbolProjection(files, sgraph, stable);
 
   return {
@@ -137,11 +132,11 @@ function compactGraphWithSymbols(fgraph: Graph, sgraph: SymbolGraph, stable = fa
   };
 }
 
-function compactSymbolsOnly(allFiles: string[], sgraph: SymbolGraph, stable = false) {
+export function compactSymbolsOnly(allFiles: string[], sgraph: SymbolGraph, stable = false) {
   return buildCompactSymbolProjection(allFiles, sgraph, stable);
 }
 
-function buildCompactSymbolProjection(
+export function buildCompactSymbolProjection(
   allFiles: string[],
   sgraph: SymbolGraph,
   stable = false,
@@ -156,20 +151,19 @@ function buildCompactSymbolProjection(
   const symbolIndex = new Map<string, number>();
   for (let i = 0; i < symbolIds.length; i++) symbolIndex.set(symbolIds[i]!, i);
 
-  const symbols = symbolIds.map((id) => {
+  const symbols: CompactSymbolNode[] = symbolIds.map((id) => {
     const n = sgraph.nodes.get(id)!;
     return {
+      ...n,
       id: symbolIndex.get(id)!,
       file: fileIndex.get(n.file)!,
-      name: n.name,
-      kind: n.kind,
     };
   });
 
   const symbolEdges: CompactSymbolEdge[] = sgraph.edges.map((e) => ({
+    ...e,
     from: symbolIndex.get(e.from)!,
     to: symbolIndex.get(e.to)!,
-    ...(e.label ? { label: e.label } : {}),
   }));
   if (stable) {
     symbolEdges.sort((a, b) => {
@@ -262,7 +256,6 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
   const resolveNodeModules = context.graphFlags.resolveNodeModules;
   const dynamicImportHeuristics = context.graphFlags.dynamicImportHeuristics;
   const resolutionHints = context.graphFlags.resolutionHints;
-  const compact = context.hasFlag("--compact-json");
   const includeSqlArtifacts = context.hasFlag("--sql-artifacts");
   const outputFile = outputArg ? normalizePath(resolveFilePathFromRoot(context.cwd(), outputArg)) : undefined;
   const sqliteFile = sqliteArg ? normalizePath(resolveFilePathFromRoot(context.cwd(), sqliteArg)) : undefined;
@@ -400,16 +393,9 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
         await writeOut(graphToMermaidSymbols(sgraphOut, context.projectRootFs));
       } else if (format === "dot") {
         await writeOut(graphToDOTSymbols(sgraphOut, context.projectRootFs));
-      } else if (compact) {
+      } else {
         const allFiles = [...index.graph.nodes];
         await writeOut(toJSON(compactSymbolsOnly(allFiles, sgraphOut, stable)));
-      } else {
-        await writeOut(
-          toJSON({
-            nodes: [...sgraphOut.nodes.values()],
-            edges: sgraphOut.edges,
-          }),
-        );
       }
       await finalizeReport();
       return;
@@ -420,17 +406,8 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
       await writeOut(graphToMermaidSymbolsWithFiles(sgraphOut, fgraphOut, context.projectRootFs));
     } else if (format === "dot") {
       await writeOut(graphToDOTSymbolsWithFiles(sgraphOut, fgraphOut, context.projectRootFs));
-    } else if (compact) {
-      await writeOut(toJSON(compactGraphWithSymbols(fgraphOut, sgraphOut, stable)));
     } else {
-      await writeOut(
-        toJSON({
-          files: [...fgraphOut.nodes],
-          fileEdges: fgraphOut.edges,
-          symbols: [...sgraphOut.nodes.values()],
-          symbolEdges: sgraphOut.edges,
-        }),
-      );
+      await writeOut(toJSON(compactGraphWithSymbols(fgraphOut, sgraphOut, stable)));
     }
     await finalizeReport();
     return;
@@ -453,10 +430,11 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
   } else {
     const sqlFiles = includeSqlArtifacts ? files.filter((file) => path.extname(file).toLowerCase() === ".sql") : [];
     const sqlArtifacts = sqlFiles.length ? await buildSqlArtifactGraphFromFiles(sqlFiles) : undefined;
+    const { files: compactFiles, fileEdges } = compactFileGraph(graphOut, stable);
     await writeOut(
       toJSON({
-        nodes: [...graphOut.nodes],
-        edges: graphOut.edges,
+        files: compactFiles,
+        fileEdges,
         ...(sqlArtifacts ? { sqlArtifacts } : {}),
       }),
     );
