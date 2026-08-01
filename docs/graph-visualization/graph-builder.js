@@ -90,7 +90,73 @@ function applyLayout(graph) {
   });
 }
 
+function compactIndex(value, indexes, upperBound) {
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0 && value < upperBound) {
+    return value;
+  }
+  if (typeof value === "string") return indexes.get(value);
+  return undefined;
+}
+
+export function normalizeGraphPayload(payload) {
+  if (!payload || typeof payload !== "object" || !Array.isArray(payload.files)) return payload;
+  const sourceFileEdges = Array.isArray(payload.fileEdges) ? payload.fileEdges : [];
+  const sourceSymbols = Array.isArray(payload.symbols) ? payload.symbols : [];
+  const sourceSymbolEdges = Array.isArray(payload.symbolEdges) ? payload.symbolEdges : [];
+  const portable =
+    payload.format === "codegraph.graph-json" ||
+    sourceFileEdges.some((edge) => typeof edge?.from === "string") ||
+    sourceSymbols.some((symbol) => typeof symbol?.file === "string");
+  if (!portable) return payload;
+
+  const fileIndexes = new Map();
+  payload.files.forEach((file, index) => {
+    if (typeof file === "string") fileIndexes.set(file, index);
+  });
+
+  const fileEdges = [];
+  for (const edge of sourceFileEdges) {
+    if (!edge || typeof edge !== "object") continue;
+    const from = compactIndex(edge.from, fileIndexes, payload.files.length);
+    if (from === undefined || !edge.to || typeof edge.to !== "object") continue;
+    if (edge.to.type === "file") {
+      const target = compactIndex(edge.to.path, fileIndexes, payload.files.length);
+      if (target !== undefined) fileEdges.push({ ...edge, from, to: { type: "file", path: target } });
+      continue;
+    }
+    if (edge.to.type === "external" && typeof edge.to.name === "string") {
+      fileEdges.push({ ...edge, from, to: { type: "external", name: edge.to.name } });
+    }
+  }
+
+  const symbols = [];
+  const symbolIdIndex = [];
+  const symbolIndexes = new Map();
+  for (let sourceIndex = 0; sourceIndex < sourceSymbols.length; sourceIndex += 1) {
+    const symbol = sourceSymbols[sourceIndex];
+    if (!symbol || typeof symbol !== "object") continue;
+    const file = compactIndex(symbol.file, fileIndexes, payload.files.length);
+    if (file === undefined) continue;
+    const index = symbols.length;
+    const id = typeof symbol.id === "string" ? symbol.id : (payload.symbolIdIndex?.[sourceIndex] ?? symbol.name);
+    symbols.push({ ...symbol, file });
+    symbolIdIndex.push(id);
+    if (typeof id === "string") symbolIndexes.set(id, index);
+  }
+
+  const symbolEdges = [];
+  for (const edge of sourceSymbolEdges) {
+    if (!edge || typeof edge !== "object") continue;
+    const from = compactIndex(edge.from, symbolIndexes, symbols.length);
+    const to = compactIndex(edge.to, symbolIndexes, symbols.length);
+    if (from !== undefined && to !== undefined) symbolEdges.push({ ...edge, from, to });
+  }
+
+  return { ...payload, fileEdges, symbols, symbolEdges, symbolIdIndex };
+}
+
 export function buildGraph(payload, options) {
+  payload = normalizeGraphPayload(payload);
   const graph = new Graph({ multi: false, type: "directed" });
 
   if (Array.isArray(payload.nodes) && Array.isArray(payload.edges)) {

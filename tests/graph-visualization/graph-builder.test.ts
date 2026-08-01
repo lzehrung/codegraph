@@ -3,6 +3,7 @@ import {
   shortLabel,
   normalizeToKey,
   edgeKey,
+  normalizeGraphPayload,
   buildGraph,
   FILE_NODE_COLOR,
   EXTERNAL_NODE_COLOR,
@@ -151,6 +152,36 @@ describe("buildGraph -- compact format", () => {
     const size0 = graph.getNodeAttribute("f:0", "size");
     // f:0 has degree > 0 (multiple edges) so size should be >= base
     expect(size0).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe("buildGraph -- portable artifact format", () => {
+  const payload = {
+    format: "codegraph.graph-json",
+    files: ["src/a.ts", "src/b.ts"],
+    fileEdges: [{ from: "src/a.ts", to: { type: "file", path: "src/b.ts" }, raw: "./b" }],
+    symbols: [
+      { id: "src/a.ts:foo", file: "src/a.ts", name: "foo", kind: "function" },
+      { id: "src/b.ts:bar", file: "src/b.ts", name: "bar", kind: "function" },
+    ],
+    symbolEdges: [{ from: "src/a.ts:foo", to: "src/b.ts:bar", label: "calls" }],
+  };
+
+  it("normalizes path and symbol identifiers into compact indexes", () => {
+    expect(normalizeGraphPayload(payload)).toMatchObject({
+      fileEdges: [{ from: 0, to: { type: "file", path: 1 } }],
+      symbols: [{ file: 0 }, { file: 1 }],
+      symbolEdges: [{ from: 0, to: 1 }],
+      symbolIdIndex: ["src/a.ts:foo", "src/b.ts:bar"],
+    });
+  });
+
+  it("renders file and symbol edges from artifact graph JSON", () => {
+    const graph = buildGraph(payload, { showExternal: false, includeSymbols: true });
+
+    expect(graph.hasEdge("f:0->f:1")).toBe(true);
+    expect(graph.hasEdge("f:0->s:0")).toBe(true);
+    expect(graph.hasEdge("s:0->s:1")).toBe(true);
   });
 });
 

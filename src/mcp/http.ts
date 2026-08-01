@@ -52,23 +52,29 @@ export function isAllowedHostHeader(request: IncomingMessage, allowedHostHeaders
   return allowedHostHeaders.loopbackOnly.has(normalizedHost) && isLoopbackRemoteAddress(request.socket.remoteAddress);
 }
 
+function addAllowedHost(target: Set<string>, host: string, port: number): void {
+  target.add(formatHostHeader(host, port).toLowerCase());
+  if (port === 80) target.add(formatHostForUrl(host).toLowerCase());
+}
+
 export function buildAllowedHostHeaders(host: string, port: number): AllowedHostHeaderRules {
   const allowed = emptyAllowedHostHeaderRules();
-  allowed.exact.add(formatHostHeader(host, port).toLowerCase());
+  addAllowedHost(allowed.exact, host, port);
   if (isWildcardBindHost(host)) {
-    allowed.loopbackOnly.add(`127.0.0.1:${port}`);
-    allowed.loopbackOnly.add(`localhost:${port}`);
-    allowed.loopbackOnly.add(`[::1]:${port}`);
+    addAllowedHost(allowed.loopbackOnly, "127.0.0.1", port);
+    addAllowedHost(allowed.loopbackOnly, "localhost", port);
+    addAllowedHost(allowed.loopbackOnly, "::1", port);
     for (const localHost of localInterfaceHostHeaders(port)) {
       allowed.exact.add(localHost);
+      if (port === 80) allowed.exact.add(localHost.replace(/:80$/, ""));
     }
   }
   if (host === "127.0.0.1") {
-    allowed.exact.add(`localhost:${port}`);
+    addAllowedHost(allowed.exact, "localhost", port);
   }
   if (host === "::1" || host === "[::1]") {
-    allowed.exact.add(`[::1]:${port}`);
-    allowed.exact.add(`localhost:${port}`);
+    addAllowedHost(allowed.exact, "::1", port);
+    addAllowedHost(allowed.exact, "localhost", port);
   }
   return allowed;
 }

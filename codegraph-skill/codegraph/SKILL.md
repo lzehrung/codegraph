@@ -107,7 +107,7 @@ Safe shorthand: `impact` and git-backed `drift` default to `HEAD..WORKTREE`; `ar
 
 ### Human Graph Viewer
 
-`viewer` is for a human inspecting a graph, not an agent interface; use graph JSON, SQLite, MCP, or `--json` for structured agent work. Its contract is `codegraph viewer --root <root> [--graph <root-confined-json>] [--host <host>] [--port <0-65535>] [--open] [--print-url]`, with `127.0.0.1` and `4173` as the default host and port.
+`viewer` is for a human inspecting a graph, not an agent interface; use graph JSON, SQLite, MCP, or `--json` for structured agent work. Its contract is `codegraph viewer [--root <root>] [--graph <root-confined-json>] [--host <host>] [--port <0-65535>] [--open] [--print-url]`, with the current directory, `127.0.0.1`, and `4173` as the default root, host, and port.
 
 ```bash
 codegraph viewer --root . --graph codegraph-out/graph.json --open

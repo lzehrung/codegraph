@@ -47,7 +47,7 @@ For raw command flags and output contracts, see [docs/cli.md](./cli.md). For lib
 
 ### Human graph viewing
 
-`viewer` is for a human inspecting a graph, not an agent interface; agents should use graph JSON, SQLite, MCP, or `--json`. Its contract is `codegraph viewer --root <root> [--graph <root-confined-json>] [--host <host>] [--port <0-65535>] [--open] [--print-url]`, with `127.0.0.1` and `4173` as the default host and port.
+`viewer` is for a human inspecting a graph, not an agent interface; agents should use graph JSON, SQLite, MCP, or `--json`. Its contract is `codegraph viewer [--root <root>] [--graph <root-confined-json>] [--host <host>] [--port <0-65535>] [--open] [--print-url]`, with the current directory, `127.0.0.1`, and `4173` as the default root, host, and port.
 
 ```bash
 codegraph viewer --root . --graph codegraph-out/graph.json --open

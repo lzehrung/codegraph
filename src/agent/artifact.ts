@@ -621,7 +621,7 @@ function buildReport(snapshot: AgentProjectSnapshot, graphPath?: string): string
           "",
           "## Graph Viewer",
           `Open this artifact graph in the packaged human viewer:`,
-          `codegraph viewer --root ${quoteShellArg(snapshot.root)} --graph ${quoteShellArg(graphPath)} --open`,
+          `codegraph viewer --root ${quoteShellArg(path.dirname(graphPath))} --graph ${quoteShellArg(path.basename(graphPath))} --open`,
         ]
       : []),
     "",

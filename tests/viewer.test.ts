@@ -1,9 +1,11 @@
+import fs from "node:fs";
 import http from "node:http";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { closeViewerServer, createViewerServer, startViewerServer } from "../src/cli/viewer.js";
+import { buildAllowedHostHeaders } from "../src/mcp/http.js";
 import { captureCli } from "./helpers/cli.js";
 
 type HttpResult = {
@@ -134,6 +136,55 @@ describe("viewer server", () => {
     expect(post.statusCode).toBe(405);
     expect(post.headers.allow).toBe("GET, HEAD");
     expect(deniedHost.statusCode).toBe(403);
+  });
+
+  test("serves the conventional default graph only at /codegraph.json", async () => {
+    const { root } = await createViewerFixture();
+    const defaultGraph = path.join(root, "codegraph.json");
+    await fsp.writeFile(defaultGraph, '{"nodes":["default.ts"],"edges":[]}\n', "utf8");
+    const { server, url } = await startViewerServer({ port: 0, root });
+    servers.push(server);
+
+    expect(url).not.toContain("graph=");
+    const [defaultResult, explicitResult] = await Promise.all([
+      request(server, "/codegraph.json"),
+      request(server, "/graph.json"),
+    ]);
+    expect(defaultResult).toMatchObject({
+      body: '{"nodes":["default.ts"],"edges":[]}\n',
+      statusCode: 200,
+    });
+    expect(explicitResult.statusCode).toBe(404);
+  });
+
+  test("accepts portless Host headers for the default HTTP port", () => {
+    const rules = buildAllowedHostHeaders("127.0.0.1", 80);
+
+    expect(rules.exact.has("127.0.0.1")).toBe(true);
+    expect(rules.exact.has("localhost")).toBe(true);
+  });
+
+  test("rejects a graph replaced between opening and identity validation", async () => {
+    const { graphPath, root } = await createViewerFixture();
+    const replacementPath = path.join(root, "replacement.json");
+    const openedPath = path.join(root, "opened.json");
+    await fsp.writeFile(replacementPath, '{"nodes":["replacement.ts"],"edges":[]}', "utf8");
+    const realpathNative = fs.realpathSync.native;
+    let replaced = false;
+    const realpathSpy = vi.spyOn(fs.realpathSync, "native").mockImplementation((target) => {
+      if (!replaced && path.resolve(String(target)) === graphPath) {
+        replaced = true;
+        fs.renameSync(graphPath, openedPath);
+        fs.copyFileSync(replacementPath, graphPath);
+      }
+      return realpathNative(target);
+    });
+
+    try {
+      expect(() => createViewerServer({ graph: graphPath, root })).toThrow(/changed during validation/i);
+    } finally {
+      realpathSpy.mockRestore();
+    }
   });
 
   test("rejects graph paths outside the root", async () => {

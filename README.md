@@ -169,7 +169,7 @@ codegraph graph --root . ./src --sqlite codegraph.sqlite
 
 ## Visualize a graph
 
-The packaged viewer is a human-facing graph UI; agents should use graph JSON, SQLite, MCP, or `--json` instead. Its command is `codegraph viewer --root <root> [--graph <root-confined-json>] [--host <host>] [--port <0-65535>] [--open] [--print-url]`.
+The packaged viewer is a human-facing graph UI; agents should use graph JSON, SQLite, MCP, or `--json` instead. Its command is `codegraph viewer [--root <root>] [--graph <root-confined-json>] [--host <host>] [--port <0-65535>] [--open] [--print-url]`; the root defaults to the current directory.
 
 ```bash
 codegraph viewer --root . --graph codegraph-out/graph.json --open
