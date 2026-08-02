@@ -20,7 +20,7 @@ import { normalizePath } from "../util/paths.js";
 import { assertSafeRevision } from "../util/git.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
 const UNSAFE_BATCH_REQUEST_CHARACTERS = /[\0\r\n]/;
-const MAX_GIT_BATCH_OUTPUT_BYTES = 16 * 1024 * 1024;
+const MAX_GIT_BATCH_OUTPUT_BYTES_PER_FILE = 16 * 1024 * 1024;
 const MAX_GIT_BATCH_STDERR_CHARACTERS = 64 * 1024;
 
 export type DeletedFileSnapshot = {
@@ -190,6 +190,7 @@ async function readGitFilesAtRevision(
     requests.push({ file, object: `${safeRevision}:${relativeFile}` });
   }
   if (!requests.length) return new Map();
+  const maxOutputBytes = MAX_GIT_BATCH_OUTPUT_BYTES_PER_FILE * requests.length;
 
   try {
     const child = spawn("git", ["cat-file", "--batch"], { cwd: projectRoot });
@@ -207,8 +208,8 @@ async function readGitFilesAtRevision(
     child.stdout.on("data", (chunk: Buffer) => {
       if (settled) return;
       stdoutBytes += chunk.length;
-      if (stdoutBytes > MAX_GIT_BATCH_OUTPUT_BYTES) {
-        fail(new Error(`git cat-file output exceeded ${MAX_GIT_BATCH_OUTPUT_BYTES} bytes`));
+      if (stdoutBytes > maxOutputBytes) {
+        fail(new Error(`git cat-file output exceeded ${maxOutputBytes} bytes`));
         return;
       }
       stdoutChunks.push(chunk);

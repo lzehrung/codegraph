@@ -69,22 +69,19 @@ class GitDiffProvider implements DiffProvider {
       child.stderr.on("data", (data) => {
         stderr += String(data);
       });
+      const { promise: completion, resolve, reject } = Promise.withResolvers<number | null>();
+      child.on("error", reject);
+      child.on("close", resolve);
 
-      const diff = await parseUnifiedDiffStreaming(child.stdout);
-
-      const { promise, resolve, reject } = Promise.withResolvers<Diff>();
-      child.on("close", (code) => {
-        if (code !== 0) {
-          reject(new Error(`Git diff failed with code ${code}: ${stderr}`));
-          return;
-        }
-        const changedLines = changedDiffLineCount(diff);
-        if (changedLines > LARGE_DIFF_LINE_WARNING_THRESHOLD) {
-          diff.warning = `Large diff detected (${changedLines.toLocaleString()} lines). Impact analysis may be incomplete or slow.`;
-        }
-        resolve(diff);
-      });
-      return await promise;
+      const [diff, code] = await Promise.all([parseUnifiedDiffStreaming(child.stdout), completion]);
+      if (code !== 0) {
+        throw new Error(`Git diff failed with code ${code}: ${stderr}`);
+      }
+      const changedLines = changedDiffLineCount(diff);
+      if (changedLines > LARGE_DIFF_LINE_WARNING_THRESHOLD) {
+        diff.warning = `Large diff detected (${changedLines.toLocaleString()} lines). Impact analysis may be incomplete or slow.`;
+      }
+      return diff;
     } catch (error: unknown) {
       throw new Error(`Git diff failed: ${error instanceof Error ? error.message : String(error)}`);
     }
