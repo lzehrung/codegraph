@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { NATIVE_WORKER_AUTO_FILE_THRESHOLD } from "../agent/session.js";
@@ -21,6 +22,7 @@ import { toProjectDisplayPath } from "../util/paths.js";
 import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { parseCacheModeOption, parsePositiveIntegerOption } from "./options.js";
 import { writeCliOutput } from "./pretty.js";
+import type { CommandReport } from "./context.js";
 
 type CacheMode = "off" | "memory" | "disk";
 const INSPECT_DUPLICATE_MIN_TOKENS = 60;
@@ -109,6 +111,9 @@ export type InspectCommandContext = {
   writeJSONLine: (value: unknown) => void;
   writeStdoutLine: (message: string) => void;
   writeStderrLine: (message: string) => void;
+  reportFile?: string | undefined;
+  commandReport?: CommandReport | undefined;
+  writeCommandReport?: (report: CommandReport, reportFile: string | undefined) => Promise<void>;
 };
 
 function normalizePathForDisplay(filePath: string): string {
@@ -258,6 +263,7 @@ async function buildInspectReport(
   nativeMode: NativeRuntimeMode,
   workerOpts: { useNativeWorkers: true } | Record<string, never>,
   progressHandler: BuildOptions["onProgress"],
+  buildReport: BuildReport | undefined,
   limit: number,
   includeDuplicates: boolean,
   writeStderrLine: (message: string) => void,
@@ -277,6 +283,7 @@ async function buildInspectReport(
     ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
     ...(useNativeWorkers ? { useNativeWorkers: true } : {}),
     ...(graphOptions ? { graph: graphOptions } : {}),
+    ...(buildReport ? { report: buildReport } : {}),
   });
   const graph = restrictGraphToIncludeRoots(index.graph, includeRoots, normalizePathForDisplay);
   const hotspots = getHotspots(graph, { limit });
@@ -348,9 +355,14 @@ async function buildInspectReport(
 }
 
 export async function handleInspectCommand(context: InspectCommandContext): Promise<void> {
+  const commandStart = performance.now();
   const cache = parseCacheModeOption(context.getOpt("--cache"));
   const limit = parsePositiveIntegerOption(context.getOpt("--limit"), "--limit", 20);
+  const resolveStart = performance.now();
   const files = await context.resolveFilesFromRoots();
+  if (context.commandReport) {
+    context.commandReport.timings.resolveFilesMs = Math.round(performance.now() - resolveStart);
+  }
   const report = await buildInspectReport(
     context.projectRootFs,
     context.includeRootsAbs,
@@ -361,11 +373,17 @@ export async function handleInspectCommand(context: InspectCommandContext): Prom
     context.nativeMode,
     context.workerOpts,
     context.progressHandler,
+    context.commandReport?.index,
     limit,
     context.hasFlag("--duplicates"),
     context.writeStderrLine,
   );
   writeCliOutput(context, report);
+  if (context.commandReport && context.writeCommandReport) {
+    context.commandReport.timings.commandMs = Math.round(performance.now() - commandStart);
+    context.commandReport.timings.totalMs = context.commandReport.timings.commandMs;
+    await context.writeCommandReport(context.commandReport, context.reportFile);
+  }
 }
 
 export async function handleHotspotsCommand(context: InspectCommandContext): Promise<void> {

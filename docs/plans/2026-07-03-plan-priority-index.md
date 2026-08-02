@@ -40,8 +40,6 @@ These plans mix completed work, overlapping scope, or measurement-gated follow-u
   - Preserve the narrow vertical-slice guidance when consolidating language work.
 - `2026-06-06-performance-and-cache-opportunities.md`
   - Most ranked work shipped; move only still-validated gaps into the performance program.
-- `2026-07-03-core-command-performance-cache-sync.md`
-  - Request-time freshness replaced parts of the interval/cache-sync design.
 - `2026-07-21-warm-run-discovery-avoidance.md`
   - Priorities 1-4 and audit ranks 1-3 shipped; decide whether the remaining stretch items still justify ownership.
 

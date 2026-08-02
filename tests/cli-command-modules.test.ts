@@ -1492,6 +1492,108 @@ describe("CLI command modules", () => {
     }
   });
 
+  test("writes search timing and index reports without changing command output", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-search-report-"));
+    const reportPath = path.join(tempDir, "search-report.json");
+    await fsp.writeFile(path.join(tempDir, "entry.ts"), "export const searchableValue = 1;\n", "utf8");
+
+    try {
+      const result = await captureCli([
+        "search",
+        "searchableValue",
+        "--root",
+        tempDir,
+        "--mode",
+        "text",
+        "--json",
+        "--report-file",
+        reportPath,
+      ]);
+      const response = readJsonRecord(JSON.parse(result.stdout));
+      const report = readJsonRecord(JSON.parse(await fsp.readFile(reportPath, "utf8")));
+      const timings = readJsonRecord(report.timings);
+
+      expect(result).toMatchObject({ stderr: "", exitCode: undefined });
+      expect(response.results).toBeTypeOf("object");
+      expect(report.command).toBe("search");
+      expect(timings.commandMs).toBeTypeOf("number");
+      expect(timings.totalMs).toBeTypeOf("number");
+      expect(report.index).toBeTypeOf("object");
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("writes inspect timing and index reports without changing command output", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-inspect-report-"));
+    const reportPath = path.join(tempDir, "inspect-report.json");
+    await fsp.writeFile(path.join(tempDir, "entry.ts"), "export const inspectedValue = 1;\n", "utf8");
+
+    try {
+      const result = await captureCli(["inspect", "--root", tempDir, "--json", "--report-file", reportPath]);
+      const response = readJsonRecord(JSON.parse(result.stdout));
+      const report = readJsonRecord(JSON.parse(await fsp.readFile(reportPath, "utf8")));
+      const timings = readJsonRecord(report.timings);
+
+      expect(result.exitCode).toBeUndefined();
+      expect(response.files).toBeTypeOf("object");
+      expect(report.command).toBe("inspect");
+      expect(timings.commandMs).toBeTypeOf("number");
+      expect(timings.totalMs).toBeTypeOf("number");
+      expect(report.index).toBeTypeOf("object");
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps inspect duplicate analysis opt-in and emits bounded summaries", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-inspect-duplicates-"));
+    const clone = [
+      "export function calculate(values: number[]): number {",
+      "  const positive = values.filter((value) => value > 0);",
+      "  const doubled = positive.map((value) => value * 2);",
+      "  const bounded = doubled.filter((value) => value < 1000);",
+      "  const total = bounded.reduce((sum, value) => sum + value, 0);",
+      "  const average = bounded.length ? total / bounded.length : 0;",
+      "  const rounded = Math.round(average * 100) / 100;",
+      "  return Number.isFinite(rounded) ? rounded : 0;",
+      "}",
+      "",
+    ].join("\n");
+    await Promise.all([
+      fsp.writeFile(path.join(tempDir, "first.ts"), clone, "utf8"),
+      fsp.writeFile(path.join(tempDir, "second.ts"), clone, "utf8"),
+    ]);
+
+    try {
+      const defaultResult = await captureCli(["inspect", "--root", tempDir, "--cache", "off", "--json"]);
+      const enabledResult = await captureCli([
+        "inspect",
+        "--root",
+        tempDir,
+        "--cache",
+        "off",
+        "--duplicates",
+        "--limit",
+        "1",
+        "--json",
+      ]);
+      const defaultReport = readJsonRecord(JSON.parse(defaultResult.stdout));
+      const defaultDuplicates = readJsonRecord(defaultReport.duplicates);
+      const enabledReport = readJsonRecord(JSON.parse(enabledResult.stdout));
+      const enabledDuplicates = readJsonRecord(enabledReport.duplicates);
+
+      expect(defaultResult.exitCode).toBeUndefined();
+      expect(defaultDuplicates).toEqual({ enabled: false });
+      expect(enabledResult.exitCode).toBeUndefined();
+      expect(enabledDuplicates.enabled).toBe(true);
+      expect(enabledDuplicates.minConfidence).toBe("high");
+      expect(readJsonArray(enabledDuplicates.top)).toHaveLength(1);
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   test("runs graph exploration commands through the main CLI dispatcher", async () => {
     const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-explore-"));
     await fsp.writeFile(path.join(tempDir, "util.ts"), "export function helper() { return 1; }\n", "utf8");

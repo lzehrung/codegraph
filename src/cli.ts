@@ -2,7 +2,7 @@
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
-import type { BuildOptions } from "./indexer/types.js";
+import type { BuildOptions, BuildReport } from "./indexer/types.js";
 import type { GraphBuildOptions } from "./graphs/types.js";
 import type { NativeRuntimeMode } from "./native/treeSitterNative.js";
 import {
@@ -771,16 +771,24 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "search") {
+    const commandReport: CommandReport | undefined = reportEnabled ? { command: "search", timings: {} } : undefined;
+    const indexReport: BuildReport | undefined = reportEnabled ? { timings: {} } : undefined;
+    if (commandReport && indexReport) commandReport.index = indexReport;
+    const buildOptions = buildAgentOptions();
+    if (indexReport) buildOptions.report = indexReport;
     const { handleSearchCommand } = await import("./cli/search.js");
     await handleSearchCommand({
       positionals: parsed.positionals,
       root: projectRootFs,
-      buildOptions: buildAgentOptions(),
+      buildOptions,
+      reportFile,
+      commandReport,
       getOpt,
       hasFlag,
       writeJSONLine,
       writeStdoutLine,
       writeStderrLine,
+      writeCommandReport,
       exit: exitCli,
     });
     return;
@@ -1256,6 +1264,8 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "inspect") {
+    const commandReport: CommandReport | undefined = reportEnabled ? { command: "inspect", timings: {} } : undefined;
+    if (commandReport) commandReport.index = { timings: {} };
     const { handleInspectCommand } = await import("./cli/inspect.js");
     await handleInspectCommand({
       projectRootFs,
@@ -1265,12 +1275,15 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       nativeMode,
       workerOpts,
       progressHandler,
+      reportFile,
+      commandReport,
       getOpt,
       hasFlag,
       resolveFilesFromRoots,
       writeJSONLine,
       writeStdoutLine,
       writeStderrLine,
+      writeCommandReport,
     });
     return;
   }

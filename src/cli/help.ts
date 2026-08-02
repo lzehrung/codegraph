@@ -193,7 +193,7 @@ Safety:
 
 export const SEARCH_HELP_TEXT = `codegraph search - Ranked agent search across project context
 
-Usage: codegraph search "<query>" [--root <path>] [--mode hybrid|symbol|path|text|graph|sql] [--limit <n>] [--from <file|handle>] [--depth <n>] [--no-snippets] [--json]
+Usage: codegraph search "<query>" [--root <path>] [--mode hybrid|symbol|path|text|graph|sql] [--limit <n>] [--from <file|handle>] [--depth <n>] [--no-snippets] [--report [--report-file <path>]] [--json]
 
 Search Modes:
   hybrid   Rank across files, symbols, chunks, SQL, and graph context
@@ -206,6 +206,7 @@ Search Modes:
 Output:
   Results include top-level analysis metadata plus stable handles, rank reasons, provenance, evidence, graph neighbors, follow-up commands, limits, and omission counts.
   Hybrid search is code-first by default: source files and symbols outrank docs unless you use text mode or the docs are the strongest remaining evidence.
+  --report writes command and index timings to stderr; --report-file writes the same JSON report to a file without changing search output.
 
 ${SHARED_INDEX_OPTIONS_HELP}
 `;

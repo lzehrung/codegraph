@@ -1,9 +1,14 @@
+import { performance } from "node:perf_hooks";
 import { formatAgentSearchResponse, searchCodegraph, type AgentSearchMode } from "../agent/search.js";
-import type { CliAgentCommandContext } from "./context.js";
+import type { CliAgentCommandContext, CommandReport } from "./context.js";
 import { SEARCH_HELP_TEXT } from "./help.js";
 import { parsePositiveIntegerOption } from "./options.js";
 
-export type SearchCommandContext = CliAgentCommandContext;
+export type SearchCommandContext = CliAgentCommandContext & {
+  reportFile?: string | undefined;
+  commandReport?: CommandReport | undefined;
+  writeCommandReport?: (report: CommandReport, reportFile: string | undefined) => Promise<void>;
+};
 
 function parseAgentSearchMode(rawValue: string | undefined): AgentSearchMode {
   if (rawValue === undefined) return "hybrid";
@@ -21,6 +26,7 @@ function parseAgentSearchMode(rawValue: string | undefined): AgentSearchMode {
 }
 
 export async function handleSearchCommand(context: SearchCommandContext): Promise<void> {
+  const commandStart = performance.now();
   const query = context.positionals.join(" ").trim();
   if (!query) {
     context.writeStderrLine(SEARCH_HELP_TEXT.trimEnd());
@@ -44,5 +50,10 @@ export async function handleSearchCommand(context: SearchCommandContext): Promis
     context.writeJSONLine(response);
   } else {
     context.writeStdoutLine(formatAgentSearchResponse(response));
+  }
+  if (context.commandReport && context.writeCommandReport) {
+    context.commandReport.timings.commandMs = Math.round(performance.now() - commandStart);
+    context.commandReport.timings.totalMs = context.commandReport.timings.commandMs;
+    await context.writeCommandReport(context.commandReport, context.reportFile);
   }
 }
