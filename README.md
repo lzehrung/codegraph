@@ -348,7 +348,7 @@ The honest boundaries matter:
 - The checked `explore` benchmark demonstrates bounded evidence retrieval, not universal speed, cost, or quality advantages.
 - The separate [semantic corpus](./docs/benchmarks/README.md#semantic-correctness-corpus) reports reviewed definition, reference, dependency, and candidate-test results by runtime mode with an explicit support denominator. Its initial baseline is informational.
 
-Run `codegraph doctor` to confirm the active runtime. Use `--report` on graph, index, or review commands when backend and cache behavior need to be auditable.
+Run `codegraph doctor` to confirm the active runtime. Use `--report` on graph, index, search, inspect, or review commands when backend and cache behavior need to be auditable.
 
 ## Development
 

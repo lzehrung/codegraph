@@ -319,7 +319,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
       if (options.buildOptions?.useNativeWorkers === undefined && files.length >= NATIVE_WORKER_AUTO_FILE_THRESHOLD) {
         buildOptions.useNativeWorkers = true;
       }
-      const buildReport: BuildReport = { timings: {} };
+      const buildReport: BuildReport = options.buildOptions?.report ?? { timings: {} };
       buildOptions.report = buildReport;
       const index = await buildProjectIndexIncremental(options.root, buildOptions);
       if (options.freshness?.policy !== "manual") {
