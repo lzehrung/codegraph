@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import { assertSafeRevision, gitDiffArgs, getUnifiedDiff, listChangedFiles } from "../src/util/git.js";
 
 describe("git revision safety", () => {
-  it("rejects revisions that start with -", () => {
+  it("rejects revisions that could be parsed as options or additional requests", () => {
     expect(() => assertSafeRevision("--output=/tmp/evil", "base")).toThrow(/must not start with "-"/);
     expect(() => assertSafeRevision("", "head")).toThrow(/must not be empty/);
+    for (const revision of ["HEAD\nHEAD", "HEAD\rHEAD", "HEAD\0HEAD"]) {
+      expect(() => assertSafeRevision(revision, "base")).toThrow(/must not contain NUL or newline characters/);
+    }
   });
 
   it("places --end-of-options immediately before revision arguments in gitDiffArgs", () => {

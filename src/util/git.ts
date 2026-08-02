@@ -18,7 +18,12 @@ export function isGitIndexSentinel(value: string): boolean {
   return normalized === "INDEX" || normalized === "STAGED";
 }
 
+const UNSAFE_REVISION_CHARACTERS = /[\0\r\n]/;
+
 export function assertSafeRevision(value: string, label: string): string {
+  if (UNSAFE_REVISION_CHARACTERS.test(value)) {
+    throw new Error(`Invalid ${label}: revisions must not contain NUL or newline characters.`);
+  }
   const trimmed = value.trim();
   if (!trimmed) {
     throw new Error(`Invalid ${label}: revision must not be empty.`);
