@@ -69,12 +69,12 @@ export async function prepareCodegraphLifecycleGitignore(
 
   const resolvedRoot = path.resolve(root);
   if (!(await isGitRepo(resolvedRoot))) return { status: "not-git", path: GITIGNORE_PATH };
-  const [manifestTracked, lifecycleIgnored, diskCacheIgnored] = await Promise.all([
-    isGitPathTracked(resolvedRoot, LIFECYCLE_MANIFEST_PATH),
+  const manifestTracked = await isGitPathTracked(resolvedRoot, LIFECYCLE_MANIFEST_PATH);
+  if (manifestTracked) return { status: "tracked", path: GITIGNORE_PATH };
+  const [lifecycleIgnored, diskCacheIgnored] = await Promise.all([
     isGitPathIgnored(resolvedRoot, LIFECYCLE_MANIFEST_PATH),
     isGitPathIgnored(resolvedRoot, DISK_CACHE_PROBE_PATH),
   ]);
-  if (manifestTracked) return { status: "tracked", path: GITIGNORE_PATH };
   const missingRules = [
     ...(!lifecycleIgnored ? [LIFECYCLE_GITIGNORE_RULE] : []),
     ...(!diskCacheIgnored ? [DISK_CACHE_GITIGNORE_RULE] : []),

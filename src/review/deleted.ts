@@ -19,6 +19,9 @@ import {
 import { normalizePath } from "../util/paths.js";
 import { assertSafeRevision } from "../util/git.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
+const UNSAFE_BATCH_REQUEST_CHARACTERS = /[\0\r\n]/;
+const MAX_GIT_BATCH_OUTPUT_BYTES = 16 * 1024 * 1024;
+const MAX_GIT_BATCH_STDERR_CHARACTERS = 64 * 1024;
 
 export type DeletedFileSnapshot = {
   source: string;
@@ -183,7 +186,7 @@ async function readGitFilesAtRevision(
   const requests: { file: string; object: string }[] = [];
   for (const file of files) {
     const relativeFile = normalizePath(path.relative(projectRoot, file));
-    if (!relativeFile || relativeFile.startsWith("..") || relativeFile.includes("\n")) continue;
+    if (!relativeFile || relativeFile.startsWith("..") || UNSAFE_BATCH_REQUEST_CHARACTERS.test(relativeFile)) continue;
     requests.push({ file, object: `${safeRevision}:${relativeFile}` });
   }
   if (!requests.length) return new Map();
@@ -191,20 +194,39 @@ async function readGitFilesAtRevision(
   try {
     const child = spawn("git", ["cat-file", "--batch"], { cwd: projectRoot });
     const stdoutChunks: Buffer[] = [];
+    let stdoutBytes = 0;
     let stderr = "";
-    child.stdout.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
-    child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
-    });
     const { promise, resolve, reject } = Promise.withResolvers<Buffer>();
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(`git cat-file failed with code ${code}: ${stderr}`));
+    let settled = false;
+    const fail = (error: Error): void => {
+      if (settled) return;
+      settled = true;
+      child.kill();
+      reject(error);
+    };
+    child.stdout.on("data", (chunk: Buffer) => {
+      if (settled) return;
+      stdoutBytes += chunk.length;
+      if (stdoutBytes > MAX_GIT_BATCH_OUTPUT_BYTES) {
+        fail(new Error(`git cat-file output exceeded ${MAX_GIT_BATCH_OUTPUT_BYTES} bytes`));
         return;
       }
-      resolve(Buffer.concat(stdoutChunks));
+      stdoutChunks.push(chunk);
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      const remaining = MAX_GIT_BATCH_STDERR_CHARACTERS - stderr.length;
+      if (remaining > 0) stderr += chunk.slice(0, remaining);
+    });
+    child.on("error", fail);
+    child.on("close", (code) => {
+      if (settled) return;
+      if (code !== 0) {
+        fail(new Error(`git cat-file failed with code ${code}: ${stderr}`));
+        return;
+      }
+      settled = true;
+      resolve(Buffer.concat(stdoutChunks, stdoutBytes));
     });
     child.stdin.end(`${requests.map((request) => request.object).join("\n")}\n`);
     const output = await promise;
