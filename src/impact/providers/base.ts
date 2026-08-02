@@ -44,63 +44,22 @@ function createProvider(providerType: string): DiffProvider {
   }
 }
 
-async function runGitCommand(cwd: string, args: string[], rejectOnFailure: boolean): Promise<string> {
-  return await new Promise((resolve, reject) => {
-    const child = spawn("git", args, { cwd });
-    let stdout = "";
-    let stderr = "";
-    let closeCode: number | null = null;
-    let stdoutEnded = false;
-
-    const maybeResolve = () => {
-      if (closeCode === null || !stdoutEnded) return;
-      if (closeCode !== 0 && rejectOnFailure) {
-        reject(new Error(`git ${args.join(" ")} failed with code ${closeCode}: ${stderr}`));
-        return;
+function changedDiffLineCount(diff: Diff): number {
+  let count = 0;
+  for (const file of diff.files) {
+    for (const hunk of file.hunks) {
+      for (const line of hunk.lines) {
+        if (line.startsWith("+") || line.startsWith("-")) count++;
       }
-      resolve(stdout.trim());
-    };
-
-    child.stdout.on("data", (data) => {
-      stdout += String(data);
-    });
-    child.stdout.on("end", () => {
-      stdoutEnded = true;
-      maybeResolve();
-    });
-    child.stderr.on("data", (data) => {
-      stderr += String(data);
-    });
-    child.on("close", (code) => {
-      closeCode = code ?? 0;
-      maybeResolve();
-    });
-    child.on("error", reject);
-  });
+    }
+  }
+  return count;
 }
 
 // Forward declarations - will be implemented in separate files
 class GitDiffProvider implements DiffProvider {
   async getDiff(opts: Extract<DiffProviderOptions, { provider: "git" }>): Promise<Diff> {
     const cwd = opts.cwd || process.cwd();
-
-    // Circuit breaker: check diff size first
-    let warning: string | undefined;
-    try {
-      const statOutput = await runGitCommand(cwd, gitDiffArgs(opts.base, opts.head, ["--shortstat"]), false);
-      if (statOutput) {
-        const insertionMatch = statOutput.match(/(\d+) insertion/);
-        const deletionMatch = statOutput.match(/(\d+) deletion/);
-        const insertions = insertionMatch ? parseInt(insertionMatch[1]!) : 0;
-        const deletions = deletionMatch ? parseInt(deletionMatch[1]!) : 0;
-
-        if (insertions + deletions > LARGE_DIFF_LINE_WARNING_THRESHOLD) {
-          warning = `Large diff detected (${(insertions + deletions).toLocaleString()} lines). Impact analysis may be incomplete or slow.`;
-        }
-      }
-    } catch {
-      // Ignore stat failures, proceed to full diff
-    }
 
     const args = gitDiffArgs(opts.base, opts.head, ["--no-ext-diff", "--unified=0"]);
 
@@ -110,19 +69,19 @@ class GitDiffProvider implements DiffProvider {
       child.stderr.on("data", (data) => {
         stderr += String(data);
       });
+      const { promise: completion, resolve, reject } = Promise.withResolvers<number | null>();
+      child.on("error", reject);
+      child.on("close", resolve);
 
-      const diff = await parseUnifiedDiffStreaming(child.stdout);
-
-      return new Promise((resolve, reject) => {
-        child.on("close", (code) => {
-          if (code !== 0) {
-            reject(new Error(`Git diff failed with code ${code}: ${stderr}`));
-          } else {
-            if (warning) diff.warning = warning;
-            resolve(diff);
-          }
-        });
-      });
+      const [diff, code] = await Promise.all([parseUnifiedDiffStreaming(child.stdout), completion]);
+      if (code !== 0) {
+        throw new Error(`Git diff failed with code ${code}: ${stderr}`);
+      }
+      const changedLines = changedDiffLineCount(diff);
+      if (changedLines > LARGE_DIFF_LINE_WARNING_THRESHOLD) {
+        diff.warning = `Large diff detected (${changedLines.toLocaleString()} lines). Impact analysis may be incomplete or slow.`;
+      }
+      return diff;
     } catch (error: unknown) {
       throw new Error(`Git diff failed: ${error instanceof Error ? error.message : String(error)}`);
     }
