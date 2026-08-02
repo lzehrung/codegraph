@@ -227,6 +227,61 @@ describe("codegraph MCP handlers", () => {
       await httpServer.close();
     }
   });
+
+  it("refreshes a long-lived Streamable HTTP session after workspace edits", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-http-freshness-"));
+    await fs.writeFile(path.join(root, "initial.ts"), "export function initialSymbol() { return 1; }\n", "utf8");
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      host: "127.0.0.1",
+      port: 0,
+    });
+
+    try {
+      const initialize = await postMcpJson(httpServer.url, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "codegraph-test", version: "1.0.0" },
+        },
+      });
+      const sessionId = initialize.response.headers.get("mcp-session-id");
+      expect(sessionId).toBeTruthy();
+
+      const firstCall = await postMcpJson(
+        httpServer.url,
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: { name: "workspace_symbols", arguments: { query: "initialSymbol" } },
+        },
+        sessionId ?? undefined,
+      );
+      expect(JSON.stringify(firstCall.payload.result)).toContain("initialSymbol");
+
+      await fs.writeFile(path.join(root, "late.ts"), "export function lateSymbol() { return 2; }\n", "utf8");
+      const refreshedCall = await postMcpJson(
+        httpServer.url,
+        {
+          jsonrpc: "2.0",
+          id: 3,
+          method: "tools/call",
+          params: { name: "workspace_symbols", arguments: { query: "lateSymbol" } },
+        },
+        sessionId ?? undefined,
+      );
+      const serializedResult = JSON.stringify(refreshedCall.payload.result);
+      expect(serializedResult).toContain("lateSymbol");
+      expect(serializedResult).toContain('\\"state\\": \\"refreshed\\"');
+      expect(serializedResult).toContain("late.ts");
+    } finally {
+      await httpServer.close();
+    }
+  });
   it("rejects explore calls above the published MCP schema maximums over Streamable HTTP", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-explore-schema-max-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser() { return true; }\n", "utf8");
