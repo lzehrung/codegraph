@@ -13,6 +13,30 @@ function readText(relativePath: string): string {
   return fs.readFileSync(path.resolve(process.cwd(), relativePath), "utf8");
 }
 
+function parsePackedPaths(stdout: string): Set<string> {
+  let jsonStart = stdout.lastIndexOf("[");
+  while (jsonStart >= 0) {
+    try {
+      const parsed: unknown = JSON.parse(stdout.slice(jsonStart));
+      if (Array.isArray(parsed)) {
+        const first = parsed[0];
+        if (first && typeof first === "object" && "files" in first && Array.isArray(first.files)) {
+          const paths = first.files
+            .filter((file): file is { path: string } => {
+              return Boolean(file && typeof file === "object" && "path" in file && typeof file.path === "string");
+            })
+            .map((file) => file.path);
+          return new Set(paths);
+        }
+      }
+    } catch {
+      // npm lifecycle output can precede the final JSON document.
+    }
+    jsonStart = stdout.lastIndexOf("[", jsonStart - 1);
+  }
+  throw new Error(`npm pack did not emit a valid JSON file list:\n${stdout}`);
+}
+
 function readPackedPaths(): Set<string> {
   const npmArgs = ["pack", "--dry-run", "--json", "--ignore-scripts"];
   let command = "npm";
@@ -32,12 +56,11 @@ function readPackedPaths(): Set<string> {
   const result = spawnSync(command, args, {
     cwd: process.cwd(),
     encoding: "utf8",
+    env: { ...process.env, npm_config_ignore_scripts: "true" },
     maxBuffer: 16 * 1024 * 1024,
   });
   expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-
-  const pack = JSON.parse(result.stdout) as Array<{ files: Array<{ path: string }> }>;
-  return new Set(pack[0]?.files.map((file) => file.path) ?? []);
+  return parsePackedPaths(result.stdout);
 }
 
 function declarationHasOwnJsDoc(declarationText: string, symbol: string): boolean {
@@ -198,6 +221,14 @@ function readNativeArtifactPackages(baseDir: string): Record<string, unknown>[] 
 }
 
 describe("package metadata", () => {
+  it("parses npm pack JSON after lifecycle output", () => {
+    const stdout = `[codegraph] Bundled CLI smoke ok\n${JSON.stringify([
+      { files: [{ path: "docs/graph-visualization/app.js" }] },
+    ])}`;
+
+    expect(parsePackedPaths(stdout)).toEqual(new Set(["docs/graph-visualization/app.js"]));
+  });
+
   it("treats a missing native artifact staging directory as no staged artifact packages", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-package-metadata-"));
     fs.mkdirSync(path.join(tempDir, "packages", "codegraph-native"), {
