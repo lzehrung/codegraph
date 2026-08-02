@@ -10,6 +10,7 @@ import packageJson from "../package.json" with { type: "json" };
 import { runGit as git } from "./helpers/git.js";
 import { captureCli, runCliOrThrow, runTsxScriptOrThrow } from "./helpers/cli.js";
 import { copyFixtureSubset, createTwoCommitCycleProject, readOnlySamplePath } from "./helpers/filesystem.js";
+import { decompactFileGraph, type CompactFileGraphPayload } from "./helpers/compactGraph.js";
 
 const sourceCliPath = path.resolve(process.cwd(), "src", "cli.ts");
 
@@ -99,13 +100,33 @@ describe("CLI regressions", () => {
     const stdout = await runCliCommand(["graph", "--json", "--root", samplesRoot, tsRoot]);
 
     expect(pretty).toMatch(/^flowchart LR/m);
-    const graph = JSON.parse(stdout) as { nodes: string[]; edges: unknown[] };
-    expect(Array.isArray(graph.nodes)).toBe(true);
-    expect(Array.isArray(graph.edges)).toBe(true);
+    const graph = JSON.parse(stdout) as { files: string[]; fileEdges: unknown[] };
+    expect(Array.isArray(graph.files)).toBe(true);
+    expect(Array.isArray(graph.fileEdges)).toBe(true);
     const tsRootNorm = `${normalize(tsRoot)}/`;
-    for (const n of graph.nodes) {
+    for (const n of graph.files) {
       expect(normalize(n).startsWith(tsRootNorm)).toBe(true);
     }
+  });
+
+  it("graph --json is compact (index-based) by default with no flag needed", async () => {
+    const stdout = await runCliCommand(["graph", "--json", "--root", samplesRoot, tsRoot]);
+
+    const graph = JSON.parse(stdout) as {
+      files: string[];
+      fileEdges: Array<{ from: number; to: { type: string; path?: number } }>;
+    };
+    expect(graph.files.length).toBeGreaterThan(0);
+    const fileEdge = graph.fileEdges.find((edge) => edge.to.type === "file");
+    expect(fileEdge).toBeDefined();
+    expect(typeof fileEdge?.from).toBe("number");
+    expect(typeof fileEdge?.to.path).toBe("number");
+  });
+
+  it("graph rejects the removed --compact-json flag", async () => {
+    await expect(
+      runCliCommandDetailed(["graph", "--json", "--compact-json", "--root", samplesRoot, tsRoot]),
+    ).rejects.toThrow("Unknown option for graph: --compact-json");
   });
 
   it("graph JSON can include isolated SQL artifacts", async () => {
@@ -115,11 +136,11 @@ describe("CLI regressions", () => {
 
     const stdout = await runCliCommand(["graph", "--stdout", "--root", root, "--sql-artifacts", "--json"]);
     const graph = JSON.parse(stdout) as {
-      edges: unknown[];
+      fileEdges: unknown[];
       sqlArtifacts?: { nodes: Array<{ kind: string; name?: string }> };
     };
 
-    expect(graph.edges).toEqual([]);
+    expect(graph.fileEdges).toEqual([]);
     expect(graph.sqlArtifacts?.nodes).toContainEqual(
       expect.objectContaining({ kind: "sql_table_candidate", name: "users" }),
     );
@@ -185,8 +206,8 @@ describe("CLI regressions", () => {
     await runCliCommand(["graph", "--json", "--root", tsRoot, "-o", outPath]);
     const raw = await fsp.readFile(outPath, "utf8");
     const graph = JSON.parse(raw);
-    expect(graph.nodes).toBeInstanceOf(Array);
-    expect(graph.edges).toBeInstanceOf(Array);
+    expect(graph.files).toBeInstanceOf(Array);
+    expect(graph.fileEdges).toBeInstanceOf(Array);
   });
 
   it("graph --root on an absolute path writes JSON output and progress to stderr", async () => {
@@ -199,7 +220,6 @@ describe("CLI regressions", () => {
       "--json",
       "--symbols-detailed",
       "--progress",
-      "--compact-json",
       "--output",
       outPath,
     ]);
@@ -250,8 +270,8 @@ describe("CLI regressions", () => {
     const out2 = await runCliCommand(args);
     expect(out1).toBe(out2);
 
-    const graph = JSON.parse(out1) as { nodes: string[] };
-    expect(isSorted(graph.nodes.map(normalize))).toBe(true);
+    const graph = JSON.parse(out1) as { files: string[] };
+    expect(isSorted(graph.files.map(normalize))).toBe(true);
   });
 
   it("chunk detects Zig files by extension", async () => {
@@ -316,17 +336,17 @@ describe("CLI regressions", () => {
     await fsp.writeFile(ignoredFile, "export const generated = 1;\n", "utf8");
 
     const defaultGraph = JSON.parse(await runCliCommand(["graph", "--root", tmpDir, srcDir, "--json"])) as {
-      nodes: string[];
+      files: string[];
     };
-    expect(defaultGraph.nodes.map(normalize)).toContain(normalize(keptFile));
-    expect(defaultGraph.nodes.map(normalize)).not.toContain(normalize(ignoredFile));
+    expect(defaultGraph.files.map(normalize)).toContain(normalize(keptFile));
+    expect(defaultGraph.files.map(normalize)).not.toContain(normalize(ignoredFile));
 
     const fullGraph = JSON.parse(
       await runCliCommand(["graph", "--root", tmpDir, srcDir, "--json", "--no-gitignore"]),
     ) as {
-      nodes: string[];
+      files: string[];
     };
-    expect(fullGraph.nodes.map(normalize)).toContain(normalize(ignoredFile));
+    expect(fullGraph.files.map(normalize)).toContain(normalize(ignoredFile));
   });
   it("graph can index sibling child git repositories as one project graph", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-parent-multirepo-"));
@@ -358,17 +378,15 @@ describe("CLI regressions", () => {
       await fsp.writeFile(nestedGitFileA, "export const nestedGitHook = 1;\n", "utf8");
       await fsp.writeFile(nestedGitFileB, "export const nestedGitIndex = 1;\n", "utf8");
 
-      const graph = JSON.parse(
+      const rawGraph = JSON.parse(
         await runCliCommand(["graph", "--root", tmpDir, "billing-service", "shared-ui", "--json"]),
-      ) as {
-        nodes: string[];
-        edges: Array<{ from: string; to: { type: string; path?: string }; raw: string }>;
-      };
+      ) as { files: string[]; fileEdges: CompactFileGraphPayload["fileEdges"] };
+      const graph = decompactFileGraph(rawGraph);
       const nodes = graph.nodes.map(normalize);
       const edges = graph.edges.map((edge) => ({
         ...edge,
         from: normalize(edge.from),
-        to: edge.to.path ? { ...edge.to, path: normalize(edge.to.path) } : edge.to,
+        to: edge.to.type === "file" ? { ...edge.to, path: normalize(edge.to.path) } : edge.to,
       }));
 
       expect(nodes).toContain(normalize(importerFile));
@@ -409,8 +427,8 @@ describe("CLI regressions", () => {
         "--ignore-glob",
         "src/**/*.spec.ts",
       ]),
-    ) as { nodes: string[] };
-    const nodes = graph.nodes.map(normalize);
+    ) as { files: string[] };
+    const nodes = graph.files.map(normalize);
 
     expect(nodes).toContain(normalize(appFile));
     expect(nodes).not.toContain(normalize(specFile));
@@ -471,8 +489,8 @@ describe("CLI regressions", () => {
     await fsp.writeFile(appFile, "export const main = 1;\n", "utf8");
     await fsp.writeFile(sampleFile, "export const fixture = 1;\n", "utf8");
 
-    const graph = JSON.parse(await runCliCommand(["graph", "--root", tmpDir, "--json"])) as { nodes: string[] };
-    const nodes = graph.nodes.map(normalize);
+    const graph = JSON.parse(await runCliCommand(["graph", "--root", tmpDir, "--json"])) as { files: string[] };
+    const nodes = graph.files.map(normalize);
 
     expect(nodes).toContain(normalize(appFile));
     expect(nodes).not.toContain(normalize(sampleFile));
@@ -518,9 +536,9 @@ describe("CLI regressions", () => {
     await fsp.writeFile(sampleFile, "export const fixture = 1;\n", "utf8");
 
     const graph = JSON.parse(await runCliCommand(["graph", "--root", tmpDir, testsDir, "--json"])) as {
-      nodes: string[];
+      files: string[];
     };
-    const nodes = graph.nodes.map(normalize);
+    const nodes = graph.files.map(normalize);
 
     expect(nodes).toContain(normalize(appFile));
     expect(nodes).not.toContain(normalize(sampleFile));
@@ -559,8 +577,8 @@ describe("CLI regressions", () => {
         "--ignore-glob",
         "unit/generated/**",
       ]),
-    ) as { nodes: string[] };
-    const nodes = graph.nodes.map(normalize);
+    ) as { files: string[] };
+    const nodes = graph.files.map(normalize);
 
     expect(nodes).toContain(normalize(unitFile));
     expect(nodes).not.toContain(normalize(generatedUnitFile));
@@ -576,10 +594,10 @@ describe("CLI regressions", () => {
     await fsp.writeFile(path.join(tmpDir, "main.js"), "export const main = 1;\n", "utf8");
 
     const graph = JSON.parse(await runCliCommand(["graph", "--root", tmpDir, "--json", "--resolve-node-modules"])) as {
-      nodes: string[];
+      files: string[];
     };
 
-    expect(graph.nodes.map(normalize)).not.toContain(normalize(packageFile));
+    expect(graph.files.map(normalize)).not.toContain(normalize(packageFile));
   });
 
   it("graph --report writes native backend counters to the report file", async () => {
@@ -595,8 +613,8 @@ describe("CLI regressions", () => {
       tsRoot,
     ]);
 
-    const graph = JSON.parse(result.stdout) as { nodes: string[]; edges: unknown[] };
-    expect(graph.nodes.length).toBeGreaterThan(0);
+    const graph = JSON.parse(result.stdout) as { files: string[]; fileEdges: unknown[] };
+    expect(graph.files.length).toBeGreaterThan(0);
 
     const rawReport = await fsp.readFile(reportPath, "utf8");
     const report = JSON.parse(rawReport) as {
@@ -1009,7 +1027,7 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
       `codegraph hotspots --root "${normalize(tmpDir)}" "${normalize(srcDir)}" --limit 20 --json`,
     );
     expect(report.recommendedCommands).toContain(
-      `codegraph graph --root "${normalize(tmpDir)}" "${normalize(srcDir)}" --json --symbols-detailed --compact-json`,
+      `codegraph graph --root "${normalize(tmpDir)}" "${normalize(srcDir)}" --json --symbols-detailed`,
     );
     expect(report.recommendedCommands).toContain(
       `codegraph duplicates --root "${normalize(tmpDir)}" "${normalize(srcDir)}" --json --min-confidence medium --limit 20 --include-same-file`,
@@ -2079,8 +2097,8 @@ describe("CLI flows", () => {
     const stdout = await runCliCommand(["graph", "--json", "--stdout", "--fast-graph", sampleRoot]);
     const graph = JSON.parse(stdout);
 
-    expect(graph.nodes).toBeInstanceOf(Array);
-    expect(graph.edges).toBeInstanceOf(Array);
+    expect(graph.files).toBeInstanceOf(Array);
+    expect(graph.fileEdges).toBeInstanceOf(Array);
     expect(graph.symbols).toBeUndefined();
   });
 

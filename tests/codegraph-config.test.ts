@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions, mergeGraphOptions } from "../src/config.js";
 import { searchCodegraph } from "../src/agent/search.js";
 import { runTsxScriptOrThrow } from "./helpers/cli.js";
+import { decompactFileGraph, type CompactFileGraphPayload } from "./helpers/compactGraph.js";
 
 async function mkRepo(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-config-"));
@@ -162,9 +163,11 @@ describe("codegraph config", () => {
       { cwd: root },
       "codegraph CLI",
     );
-    const graph = JSON.parse(result.stdout) as {
-      edges: Array<{ from: string; to: { type: string; path?: string }; raw?: string }>;
+    const rawGraph = JSON.parse(result.stdout) as {
+      files: string[];
+      fileEdges: CompactFileGraphPayload["fileEdges"];
     };
+    const graph = decompactFileGraph(rawGraph);
     expect(graph.edges).toContainEqual(
       expect.objectContaining({
         raw: "components/button",

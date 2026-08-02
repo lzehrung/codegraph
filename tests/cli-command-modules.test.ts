@@ -547,7 +547,7 @@ describe("CLI command modules", () => {
     }
   });
 
-  test("graph command can write compact JSON to stdout without default files", async () => {
+  test("graph command can write JSON to stdout without default files", async () => {
     const root = await mkTmpDir("dg-cli-graph-module-");
     const entryFile = path.join(root, "entry.ts");
     const stdout: string[] = [];
@@ -566,7 +566,7 @@ describe("CLI command modules", () => {
     );
 
     const graph = readJsonRecord(JSON.parse(stdout[0] ?? "{}"));
-    expect(readJsonArray(graph.nodes)).toContain(entryFile.replace(/\\/g, "/"));
+    expect(readJsonArray(graph.files)).toContain(entryFile.replace(/\\/g, "/"));
     expect(stderrFiles).toEqual([undefined]);
   });
 
