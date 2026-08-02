@@ -140,11 +140,12 @@ codegraph uninit --root . --force
 codegraph graph --report
 codegraph index --report
 codegraph review --report --report-file review.report.json
+codegraph search "query" --report --report-file search.report.json
 ```
 
 `inspect` emits bounded hotspots, unresolved imports, and cycles. Add `--duplicates` to include a bounded high-confidence duplicate summary; run the recommended `duplicates` command for full grouped JSON.
 
-Graph, index, and review reports include `backend.native.byLanguage` so native usage and fallback remain visible per language. Build reports also include `backend.parser` when syntax-tree backend degradation leaves files without parser context. Reports also include `graph.fallbackImportExtraction.byLanguage` and `byReason` when regex import extraction is used. Review JSON reports `diagnostics.symbolMappingParseFailures`, `diagnostics.missingFiles`, `changedFiles[].status` as `updated`, `deleted`, or `missing`, and `sqlContext` when changed SQL files or changed SQL literals make SQL artifact facts relevant.
+Graph, index, search, and review reports include `backend.native.byLanguage` so native usage and fallback remain visible per language. Build reports also include `backend.parser` when syntax-tree backend degradation leaves files without parser context. Reports also include `graph.fallbackImportExtraction.byLanguage` and `byReason` when regex import extraction is used. Search timing reports contain command totals and the underlying index build report without changing normal stdout. Review JSON reports `diagnostics.symbolMappingParseFailures`, `diagnostics.missingFiles`, `changedFiles[].status` as `updated`, `deleted`, or `missing`, and `sqlContext` when changed SQL files or changed SQL literals make SQL artifact facts relevant.
 
 ### Project lifecycle
 

@@ -1492,6 +1492,38 @@ describe("CLI command modules", () => {
     }
   });
 
+  test("writes search timing and index reports without changing command output", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-search-report-"));
+    const reportPath = path.join(tempDir, "search-report.json");
+    await fsp.writeFile(path.join(tempDir, "entry.ts"), "export const searchableValue = 1;\n", "utf8");
+
+    try {
+      const result = await captureCli([
+        "search",
+        "searchableValue",
+        "--root",
+        tempDir,
+        "--mode",
+        "text",
+        "--json",
+        "--report-file",
+        reportPath,
+      ]);
+      const response = readJsonRecord(JSON.parse(result.stdout));
+      const report = readJsonRecord(JSON.parse(await fsp.readFile(reportPath, "utf8")));
+      const timings = readJsonRecord(report.timings);
+
+      expect(result).toMatchObject({ stderr: "", exitCode: undefined });
+      expect(response.results).toBeTypeOf("object");
+      expect(report.command).toBe("search");
+      expect(timings.commandMs).toBeTypeOf("number");
+      expect(timings.totalMs).toBeTypeOf("number");
+      expect(report.index).toBeTypeOf("object");
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   test("runs graph exploration commands through the main CLI dispatcher", async () => {
     const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-explore-"));
     await fsp.writeFile(path.join(tempDir, "util.ts"), "export function helper() { return 1; }\n", "utf8");

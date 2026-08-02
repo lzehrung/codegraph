@@ -560,8 +560,8 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   [
     "search",
     commandSchema(
-      [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--no-snippets"],
-      [...SHARED_BUILD_OPTIONS, "--depth", "--from", "--limit", "--mode"],
+      [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, ...REPORT_FLAGS, "--no-snippets"],
+      [...SHARED_BUILD_OPTIONS, ...REPORT_OPTIONS, "--depth", "--from", "--limit", "--mode"],
       { kind: "any" },
     ),
   ],
