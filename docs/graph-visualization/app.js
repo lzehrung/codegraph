@@ -1,5 +1,12 @@
 import Sigma from "https://esm.sh/sigma@3.0.0-beta.33";
-import { buildGraph, shortLabel, FILE_NODE_COLOR, SYMBOL_NODE_COLOR, EXTERNAL_NODE_COLOR } from "./graph-builder.js";
+import {
+  buildGraph,
+  normalizeGraphPayload,
+  shortLabel,
+  FILE_NODE_COLOR,
+  SYMBOL_NODE_COLOR,
+  EXTERNAL_NODE_COLOR,
+} from "./graph-builder.js";
 import { buildFileTree, buildEdgeIndexes } from "./file-tree-model.js";
 import { matchesFilter, subtreeMatchesFilter, highlightMatch, kindAbbrev } from "./file-tree-filters.js";
 
@@ -207,7 +214,7 @@ function refreshGraph() {
 
 async function loadGraphFromText(text) {
   const parsed = JSON.parse(text);
-  renderGraph(parsed);
+  renderGraph(normalizeGraphPayload(parsed));
 }
 
 // ===== File Tree: Render =====
@@ -785,7 +792,8 @@ includeSymbolsInput.addEventListener("change", () => {
 
 loadDefaultButton.addEventListener("click", async () => {
   try {
-    const response = await fetch("../../codegraph.json");
+    const graphPath = resolveGraphQueryPath();
+    const response = await fetch(graphPath ?? "../../codegraph.json");
     if (!response.ok) {
       throw new Error(`Request failed with status ${response.status}`);
     }
@@ -797,6 +805,46 @@ loadDefaultButton.addEventListener("click", async () => {
     setStatus(`Failed to load ./codegraph.json: ${message}`);
   }
 });
+
+function resolveGraphQueryPath() {
+  const graph = new URLSearchParams(window.location.search).get("graph");
+  if (!graph) return null;
+
+  const graphUrl = new URL(graph, window.location.href);
+  if (
+    graphUrl.origin !== window.location.origin ||
+    graphUrl.pathname !== "/graph.json" ||
+    graphUrl.search ||
+    graphUrl.hash
+  ) {
+    return null;
+  }
+  return graphUrl.pathname;
+}
+
+async function loadGraphFromQuery() {
+  const graph = new URLSearchParams(window.location.search).get("graph");
+  if (!graph) return;
+
+  try {
+    const graphPath = resolveGraphQueryPath();
+    if (!graphPath) {
+      setStatus("Ignoring an unsafe graph URL.");
+      return;
+    }
+
+    const response = await fetch(graphPath);
+    if (!response.ok) {
+      throw new Error(`Request failed with status ${response.status}`);
+    }
+    await loadGraphFromText(await response.text());
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    setStatus(`Failed to load graph: ${message}`);
+  }
+}
+
+void loadGraphFromQuery();
 
 resetCameraButton.addEventListener("click", () => {
   sigma?.getCamera().animatedReset();

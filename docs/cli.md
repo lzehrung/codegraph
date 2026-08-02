@@ -234,6 +234,7 @@ codegraph artifact --root . --out codegraph-out --json
 codegraph artifact --root . --out codegraph-out --sqlite --graph-json --report --questions --force --json
 codegraph artifact --help
 
+
 # Serve MCP tools over the same search, navigation, artifact, and review layer
 codegraph mcp --root . --stdio
 codegraph mcp --root . --artifact codegraph-out --stdio
@@ -290,6 +291,17 @@ codegraph grep --query '(function_declaration name: (identifier) @name)'
 # Run a plain-text regex grep across the repo
 codegraph grep 'eval\(' --ignore-case
 ```
+
+### Viewer
+
+`viewer` is a human-only UI; use graph JSON, SQLite, MCP, or `--json` for agent and program interfaces. Its contract is `codegraph viewer [--root <root>] [--graph <root-confined-json>] [--host <host>] [--port <0-65535>] [--open] [--print-url]`, with the current directory, `127.0.0.1`, and `4173` as the default root, host, and port. `--print-url` is preview-only: it prints the deterministic URL and exits without starting a server, rejects `--open`, and rejects port `0`.
+
+```bash
+codegraph viewer --root . --graph codegraph-out/graph.json --open
+codegraph viewer --root . --port 4173 --print-url
+```
+
+The viewer auto-fetches a supplied `graph` query parameter while retaining manual upload and default behavior. It imports Sigma from `esm.sh`, so the UI requires network access to that CDN and is not offline or self-contained.
 
 `review`, `goto`, `refs`, and `dumpmod` default to the on-disk incremental cache and reuse the current-project manifest on repeat invocations. Review diff selectors (`--base`, `--head`, and `--changed-since`) choose changed files but do not narrow index freshness; pass `--cache off` for an exhaustive uncached rebuild, or `--cache memory|disk` to select a cache explicitly.
 
@@ -841,9 +853,9 @@ When targeting a different repo, pass it with `--root` rather than as an extra p
 codegraph graph --root /path/to/project --json --symbols-detailed --output graph.json
 ```
 
-## Graph export inspection
+## Graph export and inspection
 
-Codegraph currently ships graph data formats, not a packaged interactive viewer. Use the exported artifacts directly with scripts or existing graph tools:
+Codegraph ships graph data formats for scripts and existing graph tools, plus a packaged interactive viewer for humans. Use `codegraph viewer --root . --graph codegraph.json --open` to inspect root-confined graph JSON; it is not an agent interface.
 
 ```bash
 # Compact JSON for scripts and downstream tooling

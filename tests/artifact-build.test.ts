@@ -4,6 +4,8 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildCodegraphArtifact, buildCodegraphArtifactWithSession } from "../src/agent/artifact.js";
 import { createAgentSession } from "../src/agent/session.js";
+import { quoteShellArg } from "../src/agent/shell.js";
+import { buildGraph } from "../docs/graph-visualization/graph-builder.js";
 import { countingSession } from "./helpers/agent.js";
 import { createArtifactOutputWithStaleFile, mkTmpDir, tryCreateDirectorySymlink } from "./helpers/filesystem.js";
 
@@ -45,6 +47,9 @@ describe("artifact build", () => {
       schemaVersion: number;
       format: string;
       files: string[];
+      fileEdges: Array<{ from: string; to: { type: string; path?: string } }>;
+      symbols: Array<{ id: string; file: string }>;
+      symbolEdges: Array<{ from: string; to: string }>;
       graph: { files: string[] };
     };
 
@@ -56,6 +61,8 @@ describe("artifact build", () => {
     expect(graph.format).toBe("codegraph.graph-json");
     expect(graph.files).toEqual(graph.graph.files);
     expect(graph.graph.files.some((file) => file.includes(root.replace(/\\/g, "/")))).toBe(false);
+    const renderedGraph = buildGraph(graph, { includeSymbols: true, showExternal: false });
+    expect(renderedGraph.size).toBeGreaterThan(0);
     expect(questions.questions.some((question) => question.command.includes("codegraph explain symbol:"))).toBeTruthy();
     expect(questions.questions.some((question) => question.command.includes("codegraph explain sql:"))).toBeTruthy();
     expect(
@@ -63,6 +70,28 @@ describe("artifact build", () => {
         (question) => question.handle === undefined || question.command.includes(question.handle),
       ),
     ).toBeTruthy();
+  });
+
+  it("adds the root-confined viewer handoff only when the report includes graph JSON", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-viewer-"));
+    const graphOutDir = await fs.mkdtemp(path.join(os.tmpdir(), "cg-artifact-viewer-outside-"));
+    const graphlessOutDir = path.join(root, "without-graph");
+    await fs.writeFile(path.join(root, "source.ts"), "export const answer = 42;\n");
+
+    await buildCodegraphArtifact({ root, outDir: graphOutDir, graphJson: true, report: true });
+    await buildCodegraphArtifact({ root, outDir: graphlessOutDir, report: true });
+
+    const graphReport = await fs.readFile(path.join(graphOutDir, "CODEGRAPH_REPORT.md"), "utf8");
+    const graphlessReport = await fs.readFile(path.join(graphlessOutDir, "CODEGRAPH_REPORT.md"), "utf8");
+    const viewerCommand = [
+      "codegraph viewer",
+      `--root ${quoteShellArg(graphOutDir)}`,
+      `--graph ${quoteShellArg("graph.json")}`,
+      "--open",
+    ].join(" ");
+
+    expect(graphReport).toContain(viewerCommand);
+    expect(graphlessReport).not.toContain("codegraph viewer");
   });
 
   it("keeps graph-only symbol nodes as opaque graph IDs in portable graph JSON", async () => {

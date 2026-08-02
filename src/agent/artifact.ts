@@ -141,7 +141,11 @@ export async function buildCodegraphArtifactWithSession(
   }
 
   if (selected.report) {
-    await fs.writeFile(path.join(outDir, REPORT_FILE), buildReport(snapshot), "utf8");
+    await fs.writeFile(
+      path.join(outDir, REPORT_FILE),
+      buildReport(snapshot, selected.graphJson ? path.join(outDir, GRAPH_JSON_FILE) : undefined),
+      "utf8",
+    );
     artifacts.report = REPORT_FILE;
   }
 
@@ -589,7 +593,7 @@ async function collectRelativeOutputDirectories(
   return filters;
 }
 
-function buildReport(snapshot: AgentProjectSnapshot): string {
+function buildReport(snapshot: AgentProjectSnapshot, graphPath?: string): string {
   const hotspots = getHotspots(snapshot.fileGraph, { limit: 5 });
   const sqlObjects = collectSqlObjects(snapshot).slice(0, 10);
   const questions = buildQuestions(snapshot).slice(0, 5);
@@ -612,6 +616,14 @@ function buildReport(snapshot: AgentProjectSnapshot): string {
     "",
     "## Suggested Questions",
     ...questions.map((entry) => `- ${entry.question}`),
+    ...(graphPath
+      ? [
+          "",
+          "## Graph Viewer",
+          `Open this artifact graph in the packaged human viewer:`,
+          `codegraph viewer --root ${quoteShellArg(path.dirname(graphPath))} --graph ${quoteShellArg(path.basename(graphPath))} --open`,
+        ]
+      : []),
     "",
   ];
   return `${lines.join("\n")}\n`;

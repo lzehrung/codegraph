@@ -92,6 +92,7 @@ Examples:
   codegraph packet file:src%2Fcli.ts --json
   codegraph artifact --root . --out codegraph-out --json
   codegraph mcp --root . --stdio
+  codegraph viewer --root . --graph codegraph.json --open
   codegraph install --all --dry-run
   codegraph install --all --yes
   codegraph install --target codex,claude --yes
@@ -503,6 +504,21 @@ Options:
   --compact-json                  Emit compact JSON with summary counts and bounded examples.
 `;
 
+export const VIEWER_HELP_TEXT = `codegraph viewer - Serve the bundled graph visualization viewer
+
+Usage: codegraph viewer [--root <path>] [--graph <root-confined-json>] [--host <host>] [--port <0-65535>] [--open] [--print-url]
+
+The viewer is a human-facing browser app. It serves only its fixed packaged assets and, when provided, the graph JSON at /graph.json.
+Graph paths must stay inside the selected root (the current directory by default) both lexically and after symlink resolution.
+
+Options:
+  --graph <path>    Graph JSON path relative to --root, served only at /graph.json.
+  --host <host>     Listener host. Defaults to 127.0.0.1.
+  --port <port>     Listener port. Defaults to 4173; 0 selects an available port.
+  --open            Open the server URL in the platform browser.
+  --print-url       Print the deterministic URL and exit without starting a server. Cannot use --open or --port 0.
+`;
+
 export function helpTextForCommand(command: string, positionals: readonly string[]): string | undefined {
   if (command === "explore") return EXPLORE_HELP_TEXT;
   if (command === "file") return FILE_HELP_TEXT;
@@ -529,6 +545,7 @@ export function helpTextForCommand(command: string, positionals: readonly string
   if (command === "drift") return DRIFT_HELP_TEXT;
   if (command === "duplicates") return DUPLICATES_HELP_TEXT;
   if (command === "artifact") return ARTIFACT_HELP_TEXT;
+  if (command === "viewer") return VIEWER_HELP_TEXT;
   if (command === "mcp") {
     return positionals[0] === undefined || positionals[0] === "serve" ? MCP_SERVE_HELP_TEXT : MCP_HELP_TEXT;
   }

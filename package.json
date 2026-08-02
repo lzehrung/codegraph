@@ -43,7 +43,8 @@
     "dist",
     "codegraph-skill",
     "THIRD_PARTY_NOTICES",
-    "docs/mcp.md"
+    "docs/mcp.md",
+    "docs/graph-visualization"
   ],
   "scripts": {
     "clean": "node -e \"import('node:fs').then(({ rmSync }) => rmSync('dist', { recursive: true, force: true }))\"",

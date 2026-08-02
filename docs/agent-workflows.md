@@ -45,6 +45,17 @@ For durable repo-local scan scope, add `codegraph.config.json` at the project ro
 
 For raw command flags and output contracts, see [docs/cli.md](./cli.md). For library types and wrappers, see [docs/library-api.md](./library-api.md).
 
+### Human graph viewing
+
+`viewer` is for a human inspecting a graph, not an agent interface; agents should use graph JSON, SQLite, MCP, or `--json`. Its contract is `codegraph viewer [--root <root>] [--graph <root-confined-json>] [--host <host>] [--port <0-65535>] [--open] [--print-url]`, with the current directory, `127.0.0.1`, and `4173` as the default root, host, and port.
+
+```bash
+codegraph viewer --root . --graph codegraph-out/graph.json --open
+codegraph viewer --root . --port 4173 --print-url
+```
+
+`--print-url` is preview-only: it prints the deterministic URL and exits without starting a server, rejects `--open`, and rejects port `0`. The viewer auto-fetches a supplied `graph` query parameter while retaining manual upload and default behavior. It imports Sigma from `esm.sh`, so it requires network access to that CDN and is not offline or self-contained.
+
 ## Explore facade
 
 Start with `explore` when an agent can ask a concrete repo question:

@@ -85,6 +85,7 @@ export const CLI_DISPATCHABLE_COMMANDS = [
   "uninit",
   "uninstall",
   "unresolved",
+  "viewer",
   "version",
 ] as const;
 
@@ -248,6 +249,19 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   } catch (error) {
     writeStderrLine(error instanceof Error ? error.message : String(error));
     exitCli(2);
+  }
+  if (cmd === "viewer") {
+    // Keep the human-only browser server out of normal agent command startup.
+    const { handleViewerCommand } = await import("./cli/viewer.js");
+    await handleViewerCommand({
+      getOpt,
+      hasFlag,
+      cwd: getCwd,
+      writeStderrLine,
+      writeStdoutLine,
+      exit: exitCli,
+    });
+    return;
   }
 
   const reportFile = getOpt("--report-file");

@@ -19,6 +19,15 @@ import {
 } from "../scripts/onboarding/standalone-install-lib.mjs";
 import { mkTmpDir } from "./helpers/filesystem.js";
 
+const VIEWER_ASSETS = [
+  "app.js",
+  "file-tree-filters.js",
+  "file-tree-model.js",
+  "graph-builder.js",
+  "index.html",
+  "styles.css",
+];
+
 async function sha256(filePath: string): Promise<string> {
   return createHash("sha256")
     .update(await fsp.readFile(filePath))
@@ -116,9 +125,15 @@ async function createFakePackageRoot(root: string, target: string): Promise<{ pa
   const packageRoot = path.join(root, "package");
   await fsp.mkdir(path.join(packageRoot, "dist"), { recursive: true });
   await fsp.mkdir(path.join(packageRoot, "codegraph-skill", "codegraph"), { recursive: true });
+  await fsp.mkdir(path.join(packageRoot, "docs", "graph-visualization"), { recursive: true });
   await fsp.mkdir(path.join(packageRoot, "node_modules", "@lzehrung", "codegraph-native"), { recursive: true });
   await fsp.writeFile(path.join(packageRoot, "dist", "cli.js"), "console.log('fake');\n", "utf8");
   await fsp.writeFile(path.join(packageRoot, "codegraph-skill", "codegraph", "SKILL.md"), "# Skill\n", "utf8");
+  await Promise.all(
+    VIEWER_ASSETS.map(async (asset) => {
+      await fsp.writeFile(path.join(packageRoot, "docs", "graph-visualization", asset), `${asset}\n`, "utf8");
+    }),
+  );
   await fsp.writeFile(
     path.join(packageRoot, "package.json"),
     '{"name":"@lzehrung/codegraph","version":"9.8.7","optionalDependencies":{"@lzehrung/codegraph-native":"9.8.7"}}\n',
@@ -267,6 +282,9 @@ describe("standalone distribution", () => {
     expect(entries).toContain(`codegraph-${target}/bin/codegraph`);
     expect(entries).toContain(`codegraph-${target}/bin/codegraph.cmd`);
     expect(entries).toContain(`codegraph-${target}/codegraph-skill/codegraph/SKILL.md`);
+    expect(
+      VIEWER_ASSETS.every((asset) => entries.includes(`codegraph-${target}/docs/graph-visualization/${asset}`)),
+    ).toBe(true);
     expect(entries).toContain(`codegraph-${target}/THIRD_PARTY_NOTICES`);
     expect(entries).toContain(
       `codegraph-${target}/node_modules/@lzehrung/codegraph-native-${result.manifest.nativeSuffix}/`,

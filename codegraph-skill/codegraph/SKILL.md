@@ -105,6 +105,17 @@ Safe shorthand: `impact` and git-backed `drift` default to `HEAD..WORKTREE`; `ar
 - Repeated agent queries over one repo snapshot: prefer MCP so the index stays warm.
 - Durable graph handoff: use `codegraph graph --root . ./src --json --output codegraph.json` rather than parsing display text.
 
+### Human Graph Viewer
+
+`viewer` is for a human inspecting a graph, not an agent interface; use graph JSON, SQLite, MCP, or `--json` for structured agent work. Its contract is `codegraph viewer [--root <root>] [--graph <root-confined-json>] [--host <host>] [--port <0-65535>] [--open] [--print-url]`, with the current directory, `127.0.0.1`, and `4173` as the default root, host, and port.
+
+```bash
+codegraph viewer --root . --graph codegraph-out/graph.json --open
+codegraph viewer --root . --port 4173 --print-url
+```
+
+`--print-url` is preview-only: it prints the deterministic URL and exits without starting a server, rejects `--open`, and rejects port `0`. The viewer auto-fetches a supplied `graph` query parameter while retaining manual upload and default behavior. It imports Sigma from `esm.sh`, so it requires network access to that CDN and is not offline or self-contained.
+
 Do not parse pretty output to recover fields already available in structured output.
 
 ## Live Reads and Sensitive Files
