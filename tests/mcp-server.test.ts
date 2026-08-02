@@ -33,6 +33,16 @@ function readObject(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function readToolJsonResult(payload: JsonRpcObject): Record<string, unknown> {
+  const result = readObject(payload.result);
+  if (!Array.isArray(result.content) || !result.content.length) {
+    throw new Error("MCP tool result did not contain text content.");
+  }
+  const text = readObject(result.content[0]).text;
+  if (typeof text !== "string") throw new Error("MCP tool result content was not text.");
+  return readObject(JSON.parse(text));
+}
+
 async function postMcpJson(
   url: string,
   body: Record<string, unknown>,
@@ -261,7 +271,9 @@ describe("codegraph MCP handlers", () => {
         },
         sessionId ?? undefined,
       );
-      expect(JSON.stringify(firstCall.payload.result)).toContain("initialSymbol");
+      expect(readToolJsonResult(firstCall.payload).symbols).toEqual([
+        expect.objectContaining({ name: "initialSymbol" }),
+      ]);
 
       await fs.writeFile(path.join(root, "late.ts"), "export function lateSymbol() { return 2; }\n", "utf8");
       const refreshedCall = await postMcpJson(
@@ -274,10 +286,14 @@ describe("codegraph MCP handlers", () => {
         },
         sessionId ?? undefined,
       );
-      const serializedResult = JSON.stringify(refreshedCall.payload.result);
-      expect(serializedResult).toContain("lateSymbol");
-      expect(serializedResult).toContain('\\"state\\": \\"refreshed\\"');
-      expect(serializedResult).toContain("late.ts");
+      const refreshedResult = readToolJsonResult(refreshedCall.payload);
+      expect(refreshedResult.freshness).toEqual({ state: "refreshed", changedFiles: ["late.ts"] });
+      expect(refreshedResult.symbols).toEqual([
+        expect.objectContaining({
+          name: "lateSymbol",
+          location: expect.objectContaining({ file: "late.ts" }),
+        }),
+      ]);
     } finally {
       await httpServer.close();
     }

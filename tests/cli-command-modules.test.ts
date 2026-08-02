@@ -1518,7 +1518,7 @@ describe("CLI command modules", () => {
       expect(report.command).toBe("search");
       expect(timings.commandMs).toBeTypeOf("number");
       expect(timings.totalMs).toBeTypeOf("number");
-      expect(report.index).toBeTypeOf("object");
+      expect(readJsonRecord(readJsonRecord(report.index).files).total).toBe(1);
     } finally {
       await fsp.rm(tempDir, { recursive: true, force: true });
     }
@@ -1540,7 +1540,7 @@ describe("CLI command modules", () => {
       expect(report.command).toBe("inspect");
       expect(timings.commandMs).toBeTypeOf("number");
       expect(timings.totalMs).toBeTypeOf("number");
-      expect(report.index).toBeTypeOf("object");
+      expect(readJsonRecord(readJsonRecord(report.index).files).total).toBe(1);
     } finally {
       await fsp.rm(tempDir, { recursive: true, force: true });
     }
