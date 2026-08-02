@@ -85,6 +85,47 @@ describe("agent session", () => {
     expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("reuses current build signatures and stats only files missing from the manifest", async () => {
+    const root = await mkGitRepo();
+    const missingFile = path.resolve(root, "util.ts");
+    const coveredFiles = [path.resolve(root, "main.ts"), path.resolve(root, "schema.sql")];
+    const originalBuild = indexerBuild.buildProjectIndexIncremental;
+    let buildFinished = false;
+    vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockImplementation(async (...args) => {
+      const index = await originalBuild(...args);
+      index.manifestEntries?.delete(missingFile.replace(/\\/g, "/"));
+      buildFinished = true;
+      return index;
+    });
+    const originalStat = fs.stat.bind(fs);
+    const baselineStats: string[] = [];
+    vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+      const file = path.resolve(String(args[0]));
+      if (buildFinished) baselineStats.push(file);
+      return await originalStat(...args);
+    });
+
+    const session = createAgentSession({ root });
+    await session.loadProject({ symbolGraph: "skip" });
+
+    expect(baselineStats.filter((file) => file === missingFile)).toHaveLength(1);
+    expect(baselineStats.filter((file) => coveredFiles.includes(file))).toHaveLength(0);
+    expect(await session.checkFreshness()).toEqual({ state: "fresh" });
+  });
+
+  it("starts fresh after a tracked file metadata-only change on the snapshot fast path", async () => {
+    const root = await mkGitRepo();
+    await createAgentSession({ root }).loadProject({ symbolGraph: "skip" });
+    const mainPath = path.join(root, "main.ts");
+    const stat = await fs.stat(mainPath);
+    await fs.utimes(mainPath, stat.atime, new Date(stat.mtimeMs + 10_000));
+    const session = createAgentSession({ root });
+
+    await session.loadProject({ symbolGraph: "skip" });
+
+    expect(await session.checkFreshness()).toEqual({ state: "fresh" });
+  });
+
   it("skips detailed symbol graph construction until requested", async () => {
     const root = await mkRepo();
     const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
@@ -160,6 +201,59 @@ describe("agent session", () => {
     expect(warm.symbolGraph.edges).toEqual(cold.symbolGraph.edges);
     expect(cold.symbolGraph.edges.some((edge) => edge.label === "extends")).toBe(true);
     expect(cold.symbolGraph.edges.some((edge) => edge.label === "member_of")).toBe(true);
+  });
+
+  it("memoizes a validated detailed sidecar until its file identity changes", async () => {
+    const root = await mkGitRepo();
+    await createAgentSession({ root }).loadProject();
+    const sidecarPath = detailedSymbolGraphSnapshotPath(root);
+    const sidecarText = await fs.readFile(sidecarPath, "utf8");
+    await fs.writeFile(sidecarPath, `${sidecarText}\n`, "utf8");
+    const originalReadFile = fs.readFile.bind(fs);
+    let sidecarReads = 0;
+    vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+      if (path.resolve(String(args[0])) === path.resolve(sidecarPath)) sidecarReads++;
+      return await originalReadFile(...args);
+    });
+
+    const first = await createAgentSession({ root }).loadProject();
+    const retainedNode = first.symbolGraph.nodes.keys().next().value as string;
+    first.symbolGraph.nodes.delete(retainedNode);
+    const second = await createAgentSession({ root }).loadProject();
+
+    expect(second.symbolGraph).not.toBe(first.symbolGraph);
+    expect(second.symbolGraph.nodes.has(retainedNode)).toBe(true);
+    expect(sidecarReads).toBe(1);
+    const beforeRewrite = await fs.stat(sidecarPath);
+    const unchangedText = await originalReadFile(sidecarPath, "utf8");
+    await fs.writeFile(sidecarPath, unchangedText, "utf8");
+    await fs.utimes(sidecarPath, beforeRewrite.atime, beforeRewrite.mtime);
+    await createAgentSession({ root }).loadProject();
+
+    expect(sidecarReads).toBe(2);
+  });
+
+  it("does not cache a detailed graph across an atomic sidecar replacement", async () => {
+    const root = await mkGitRepo();
+    await createAgentSession({ root }).loadProject();
+    const sidecarPath = detailedSymbolGraphSnapshotPath(root);
+    const sidecarText = await fs.readFile(sidecarPath, "utf8");
+    await fs.writeFile(sidecarPath, `${sidecarText}\n`, "utf8");
+    const originalStat = fs.stat.bind(fs);
+    let sidecarStats = 0;
+    vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+      if (path.resolve(String(args[0])) === path.resolve(sidecarPath)) {
+        sidecarStats++;
+        if (sidecarStats === 4) await fs.writeFile(sidecarPath, "{replacement", "utf8");
+      }
+      return await originalStat(...args);
+    });
+    const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+
+    const rebuilt = await createAgentSession({ root }).loadProject();
+
+    expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
+    expect(rebuilt.symbolGraph.nodes.size).toBeGreaterThan(0);
   });
 
   it("rebuilds and refreshes malformed detailed symbol graph sidecars", async () => {

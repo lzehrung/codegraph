@@ -10,6 +10,7 @@ import {
   type IndexManifest,
   type ManifestFileEntry,
 } from "./build-cache.js";
+import { pruneDiskModuleCache } from "./build-cache/module-cache.js";
 import type { GraphCacheEntry, GraphBuildOptions } from "../graphs/types.js";
 import type { BuildOptions, BuildReport, ManifestReport } from "./types.js";
 
@@ -52,7 +53,8 @@ export async function writeIndexManifestSnapshot(args: {
     transientFiles: args.transientFiles ?? [],
     ...(args.symlinkDirectories !== undefined ? { symlinkDirectories: args.symlinkDirectories } : {}),
   };
-  await writeManifest(args.projectRoot, args.opts, manifestData);
+  const manifestWritten = await writeManifest(args.projectRoot, args.opts, manifestData);
+  if (manifestWritten) pruneDiskModuleCache(args.projectRoot, Object.keys(files), args.opts);
   if (args.timings) {
     args.timings.writeManifestMs = Math.round(performance.now() - writeManifestStart);
   }

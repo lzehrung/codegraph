@@ -42,6 +42,28 @@ const BLOOM_FILTER_MAX_HASH_COUNT = 10;
 const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 1;
 const DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME = "detailed-symbol-graph.json";
 
+const MAX_SNAPSHOT_CACHE_ENTRIES = 32;
+
+type SnapshotFileIdentity = {
+  size: number;
+  mtimeMs: number;
+  ctimeMs: number;
+};
+
+type ParsedSnapshotCacheEntry = {
+  identity: SnapshotFileIdentity;
+  payload: unknown;
+};
+
+type DetailedSymbolGraphCacheEntry = {
+  identity: SnapshotFileIdentity;
+  projectSnapshotIdentity: string;
+  graph: DetailedSymbolGraphSnapshotPayload["graph"];
+};
+
+const parsedSnapshotCache = new Map<string, ParsedSnapshotCacheEntry>();
+const detailedSymbolGraphCache = new Map<string, DetailedSymbolGraphCacheEntry>();
+
 type DetailedSymbolGraphSnapshotPayload = {
   version: number;
   projectSnapshotIdentity: string;
@@ -117,6 +139,55 @@ function compareSnapshotPath(left: string, right: string): number {
   return 0;
 }
 
+function sameSnapshotFileIdentity(left: SnapshotFileIdentity, right: SnapshotFileIdentity): boolean {
+  return left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
+}
+
+async function snapshotFileIdentity(snapshotPath: string): Promise<SnapshotFileIdentity> {
+  const stat = await fsp.stat(snapshotPath);
+  return {
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+    ctimeMs: stat.ctimeMs,
+  };
+}
+
+function setBoundedSnapshotCache<K, V>(cache: Map<K, V>, key: K, value: V): void {
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > MAX_SNAPSHOT_CACHE_ENTRIES) {
+    const oldestKey = cache.keys().next().value as K | undefined;
+    if (oldestKey === undefined) break;
+    cache.delete(oldestKey);
+  }
+}
+
+function materializeDetailedSymbolGraph(payload: DetailedSymbolGraphSnapshotPayload["graph"]): SymbolGraph {
+  const graph = structuredClone(payload);
+  return {
+    nodes: new Map(graph.nodes.map((node) => [node.id, node])),
+    edges: graph.edges,
+  };
+}
+
+async function readParsedSnapshot(snapshotPath: string): Promise<ParsedSnapshotCacheEntry> {
+  const before = await snapshotFileIdentity(snapshotPath);
+  const cached = parsedSnapshotCache.get(snapshotPath);
+  if (cached && sameSnapshotFileIdentity(cached.identity, before)) {
+    setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, cached);
+    return cached;
+  }
+  const payload = JSON.parse(await fsp.readFile(snapshotPath, "utf8")) as unknown;
+  const after = await snapshotFileIdentity(snapshotPath);
+  const entry = { identity: before, payload };
+  if (sameSnapshotFileIdentity(before, after)) {
+    setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, entry);
+  } else {
+    parsedSnapshotCache.delete(snapshotPath);
+  }
+  return entry;
+}
+
 function projectIndexManifestEntries(
   entries: ReadonlyMap<string, ManifestFileEntry>,
 ): Map<string, { sig: string; gitSig?: string }> {
@@ -139,16 +210,17 @@ export async function tryLoadProjectIndexSnapshot(
   const filesSignature = projectSnapshotFilesSignature(manifestEntries);
   if ((opts?.cache ?? "off") !== "disk") return null;
   try {
-    const payload = JSON.parse(await fsp.readFile(projectSnapshotPath(projectRoot, opts), "utf8")) as unknown;
+    const rawPayload = (await readParsedSnapshot(projectSnapshotPath(projectRoot, opts))).payload;
     const nativeRuntimeFingerprint = getNativeRuntimeFingerprint(opts?.native);
     if (
-      !isProjectIndexSnapshotPayload(payload) ||
-      payload.filesSignature !== filesSignature ||
-      payload.nativeMode !== normalizedSnapshotNativeMode(opts?.native) ||
-      payload.nativeRuntimeFingerprint !== nativeRuntimeFingerprint
+      !isProjectIndexSnapshotPayload(rawPayload) ||
+      rawPayload.filesSignature !== filesSignature ||
+      rawPayload.nativeMode !== normalizedSnapshotNativeMode(opts?.native) ||
+      rawPayload.nativeRuntimeFingerprint !== nativeRuntimeFingerprint
     ) {
       return null;
     }
+    const payload = structuredClone(rawPayload);
     const graph: Graph = {
       nodes: new Set(payload.graph.nodes),
       edges: payload.graph.edges,
@@ -202,7 +274,7 @@ export async function tryLoadPersistedBloomFilters(
 ): Promise<BloomFilterCache | null> {
   if ((opts?.cache ?? "off") !== "disk" || (opts?.useBloomFilters ?? true) === false) return null;
   try {
-    const payload = JSON.parse(await fsp.readFile(projectSnapshotPath(projectRoot, opts), "utf8")) as unknown;
+    const payload = (await readParsedSnapshot(projectSnapshotPath(projectRoot, opts))).payload;
     const bloomFilters = persistedBloomFiltersFromSnapshot(payload);
     if (!bloomFilters) return null;
     return deserializeBloomFilterCache(bloomFilters);
@@ -255,6 +327,8 @@ export async function writeProjectIndexSnapshot(
     const snapshotPath = projectSnapshotPath(projectRoot, opts);
     await fsp.mkdir(path.dirname(snapshotPath), { recursive: true });
     await fsp.writeFile(snapshotPath, JSON.stringify(payload), "utf8");
+    const identity = await snapshotFileIdentity(snapshotPath);
+    setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, payload: structuredClone(payload) });
   } catch {
     // Snapshot writes are an optimization; cache write failures must not fail indexing.
   }
@@ -272,20 +346,35 @@ export async function tryLoadDetailedSymbolGraphSnapshot(
   if ((opts?.cache ?? "off") !== "disk" || !index.projectSnapshotIdentity) return null;
   try {
     const snapshotPath = detailedSymbolGraphSnapshotPath(projectRoot, opts);
-    const payload = JSON.parse(await fsp.readFile(snapshotPath, "utf8")) as unknown;
+    const observedIdentity = await snapshotFileIdentity(snapshotPath);
+    const cached = detailedSymbolGraphCache.get(snapshotPath);
+    if (
+      cached &&
+      cached.projectSnapshotIdentity === index.projectSnapshotIdentity &&
+      sameSnapshotFileIdentity(cached.identity, observedIdentity)
+    ) {
+      setBoundedSnapshotCache(detailedSymbolGraphCache, snapshotPath, cached);
+      return materializeDetailedSymbolGraph(cached.graph);
+    }
+    const parsed = await readParsedSnapshot(snapshotPath);
+    const payload = parsed.payload;
     if (
       !isDetailedSymbolGraphSnapshotPayload(payload) ||
       payload.projectSnapshotIdentity !== index.projectSnapshotIdentity
     ) {
       return null;
     }
-    const graph: SymbolGraph = {
-      nodes: new Map(payload.graph.nodes.map((node) => [node.id, node])),
-      edges: payload.graph.edges,
-    };
+    const graph = materializeDetailedSymbolGraph(payload.graph);
     if (!(await isDetailedSymbolGraphCompatibleWithProject(projectRoot, index, graph))) {
       return null;
     }
+    const identity = await snapshotFileIdentity(snapshotPath);
+    if (!sameSnapshotFileIdentity(parsed.identity, identity)) return null;
+    setBoundedSnapshotCache(detailedSymbolGraphCache, snapshotPath, {
+      identity,
+      projectSnapshotIdentity: index.projectSnapshotIdentity,
+      graph: payload.graph,
+    });
     return graph;
   } catch {
     return null;
@@ -311,6 +400,8 @@ export async function writeDetailedSymbolGraphSnapshot(
   let tempPath: string | undefined;
   try {
     const snapshotPath = detailedSymbolGraphSnapshotPath(projectRoot, opts);
+    parsedSnapshotCache.delete(snapshotPath);
+    detailedSymbolGraphCache.delete(snapshotPath);
     await fsp.mkdir(path.dirname(snapshotPath), { recursive: true });
     tempPath = path.join(
       path.dirname(snapshotPath),
@@ -318,6 +409,14 @@ export async function writeDetailedSymbolGraphSnapshot(
     );
     await fsp.writeFile(tempPath, JSON.stringify(payload), { encoding: "utf8", flag: "wx" });
     await fsp.rename(tempPath, snapshotPath);
+    const identity = await snapshotFileIdentity(snapshotPath);
+    const cachedPayload = structuredClone(payload);
+    setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, payload: cachedPayload });
+    setBoundedSnapshotCache(detailedSymbolGraphCache, snapshotPath, {
+      identity,
+      projectSnapshotIdentity: index.projectSnapshotIdentity,
+      graph: cachedPayload.graph,
+    });
     tempPath = undefined;
   } catch {
     // Detailed graph persistence is an optimization; source parsing remains authoritative.

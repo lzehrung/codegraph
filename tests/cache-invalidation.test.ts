@@ -1125,6 +1125,70 @@ describe("Cache invalidation and strict hashing", () => {
     expect(nextModule?.locals.some((l) => l.localName === "next")).toBe(true);
   });
 
+  it("parses an unchanged project snapshot once across repeated loads", async () => {
+    const root = await mkTmpDir("dg-snapshot-parse-memo-");
+    await fsp.writeFile(path.join(root, "main.ts"), "export const value = 1;\n", "utf8");
+    await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const manifest = await readManifest(root);
+    const entries = new Map(Object.entries(manifest.files));
+    const snapshotPath = projectSnapshotPathFor(root);
+    const snapshotText = await fsp.readFile(snapshotPath, "utf8");
+    await fsp.writeFile(snapshotPath, `${snapshotText}\n`, "utf8");
+    const originalReadFile = fsp.readFile.bind(fsp);
+    let snapshotReads = 0;
+    const readSpy = vi.spyOn(fsp, "readFile").mockImplementation(async (...args) => {
+      if (path.resolve(String(args[0])) === path.resolve(snapshotPath)) snapshotReads++;
+      return await originalReadFile(...args);
+    });
+
+    const first = await buildCache.tryLoadProjectIndexSnapshot(root, { cache: "disk" }, entries);
+    const firstModule = first?.index.byFile.get(normalize(path.join(root, "main.ts")));
+    if (!firstModule) throw new Error("Expected cached module.");
+    firstModule.locals.length = 0;
+    const second = await buildCache.tryLoadProjectIndexSnapshot(root, { cache: "disk" }, entries);
+    const beforeRewrite = await fsp.stat(snapshotPath);
+    const unchangedText = await originalReadFile(snapshotPath, "utf8");
+    await fsp.writeFile(snapshotPath, unchangedText, "utf8");
+    await fsp.utimes(snapshotPath, beforeRewrite.atime, beforeRewrite.mtime);
+    const third = await buildCache.tryLoadProjectIndexSnapshot(root, { cache: "disk" }, entries);
+    readSpy.mockRestore();
+
+    expect(second?.index.byFile.get(normalize(path.join(root, "main.ts")))?.locals.length).toBeGreaterThan(0);
+    expect(third?.index.byFile.size).toBe(1);
+    expect(snapshotReads).toBe(2);
+  });
+
+  it("does not read unchanged tracked source files for partial cache validation", async () => {
+    const root = await mkTmpDir("dg-git-signature-reuse-");
+    const unchangedPath = path.join(root, "unchanged.ts");
+    const changedPath = path.join(root, "changed.ts");
+    await fsp.writeFile(unchangedPath, "export const unchanged = 1;\n", "utf8");
+    await fsp.writeFile(changedPath, "export const changed = 1;\n", "utf8");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "tests@example.com"]);
+    runGit(root, ["config", "user.name", "Tests"]);
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "base"]);
+    await buildProjectIndex(root, { cache: "disk", cacheStrict: false, threads: 1, useBloomFilters: false });
+    await fsp.writeFile(changedPath, "export const changed = 2;\n", "utf8");
+    const originalReadFile = fsp.readFile.bind(fsp);
+    let unchangedReads = 0;
+    const readSpy = vi.spyOn(fsp, "readFile").mockImplementation(async (...args) => {
+      if (path.resolve(String(args[0])) === path.resolve(unchangedPath)) unchangedReads++;
+      return await originalReadFile(...args);
+    });
+
+    await buildProjectIndexIncremental(root, {
+      cache: "disk",
+      cacheStrict: false,
+      threads: 1,
+      useBloomFilters: false,
+    });
+    readSpy.mockRestore();
+
+    expect(unchangedReads).toBe(0);
+  });
+
   it("reuses persisted bloom filters from the project snapshot on unchanged incremental loads", async () => {
     const root = await mkTmpDir("dg-snapshot-bloom-reuse-");
     const alphaPath = path.join(root, "alpha.ts");

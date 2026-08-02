@@ -43,6 +43,7 @@ export async function finalizeProjectIndex(args: {
     projectFiles,
     referenceCandidates: buildReferenceCandidateIndex(args.modules),
     ...(args.manifestEntries ? { manifestEntries: args.manifestEntries } : {}),
+    ...(args.manifestEntries ? { manifestSignaturesFresh: true } : {}),
     ...(args.buildReport ? { buildReport: args.buildReport } : {}),
     ...(args.opts?.cache ? { cacheMode: args.opts.cache, cacheRootDir: cacheRoot(args.projectRoot, args.opts) } : {}),
   };

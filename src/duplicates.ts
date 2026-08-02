@@ -21,7 +21,8 @@ import {
 import { attemptParsePreparedFileContext, type ParsedFileContext } from "./indexer/parse-context.js";
 import { SymbolKind, type BuildOptions, type ProjectIndex, type SymbolDef } from "./indexer/types.js";
 import { prepareSourceInput } from "./languages/filePrep.js";
-import { SqliteDatabase } from "./sqlite-driver.js";
+import { SqliteDatabase, type SqliteStatement } from "./sqlite-driver.js";
+import { logWithLevel } from "./logging.js";
 import { cacheDatabasePath } from "./indexer/build-cache/module-cache.js";
 import { appendToArrayMap } from "./util/collections.js";
 import { maskJsLikeCommentsStringsAndRegex } from "./util/comments.js";
@@ -274,6 +275,8 @@ const DUPLICATE_UNIT_CACHE_SCHEMA_VERSION = 1;
 const DUPLICATE_UNIT_CACHE_TABLE = "duplicate_unit_cache";
 const DUPLICATE_UNIT_CACHE_SCHEMA_VERSION_KEY = "duplicate_unit_cache.schema_version";
 const DUPLICATE_TOKENIZER_REVISION = 2;
+const DUPLICATE_UNIT_CACHE_MAX_ROWS = 5_000;
+const DUPLICATE_UNIT_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1_000;
 const DUPLICATE_UNIT_CACHE_COLUMNS: readonly SqliteTableColumn[] = [
   { name: "file", definition: "TEXT NOT NULL" },
   { name: "variant", definition: "TEXT NOT NULL" },
@@ -300,8 +303,16 @@ type DuplicateTargetedResult = DuplicateDetectionResult & {
   perTargetSuggestionKeys?: Map<string, Set<string>>;
 };
 const duplicateUnitMemoryCache = new Map<string, DuplicateUnitCacheEntry>();
+type DuplicateUnitDiskStatements = {
+  load: SqliteStatement;
+  write: SqliteStatement;
+  pruneExpired: SqliteStatement;
+  pruneOverflow: SqliteStatement;
+};
+
 type DuplicateUnitDiskDatabaseEntry = {
   db?: SqliteDatabase;
+  statements?: DuplicateUnitDiskStatements;
   leases: number;
   closeRequested: boolean;
 };
@@ -628,7 +639,42 @@ function ensureDuplicateUnitCacheSchema(db: SqliteDatabase): void {
   });
 }
 
-function duplicateUnitCacheDatabase(index: ProjectIndex): SqliteDatabase | null {
+function createDuplicateUnitDiskStatements(db: SqliteDatabase): DuplicateUnitDiskStatements {
+  return {
+    load: db.prepare("SELECT sig, version, payload FROM duplicate_unit_cache WHERE file = ? AND variant = ?"),
+    write: db.prepare(
+      `INSERT INTO duplicate_unit_cache (file, variant, sig, version, payload, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(file, variant) DO UPDATE SET
+         sig = excluded.sig,
+         version = excluded.version,
+         payload = excluded.payload,
+         updated_at = excluded.updated_at`,
+    ),
+    pruneExpired: db.prepare("DELETE FROM duplicate_unit_cache WHERE updated_at < ?"),
+    pruneOverflow: db.prepare(
+      "DELETE FROM duplicate_unit_cache WHERE rowid IN (SELECT rowid FROM duplicate_unit_cache ORDER BY updated_at DESC LIMIT -1 OFFSET ?)",
+    ),
+  };
+}
+
+function maintainDuplicateUnitDiskCache(index: ProjectIndex): void {
+  if (index.cacheMode !== "disk" || !index.cacheRootDir) return;
+  const dbPath = duplicateUnitCacheDatabasePath(index.projectRoot ?? "", { cacheDir: index.cacheRootDir });
+  const entry = duplicateUnitDiskDatabases.get(dbPath);
+  if (!entry?.db || !entry.statements) return;
+  const { db, statements } = entry;
+  try {
+    db.transaction(() => {
+      statements.pruneExpired.run(Date.now() - DUPLICATE_UNIT_CACHE_MAX_AGE_MS);
+      statements.pruneOverflow.run(DUPLICATE_UNIT_CACHE_MAX_ROWS);
+    })();
+  } catch (error) {
+    logWithLevel(undefined, "warn", `Warning: Failed to prune duplicate cache ${dbPath}:`, error);
+  }
+}
+
+function duplicateUnitDiskCache(index: ProjectIndex): DuplicateUnitDiskDatabaseEntry | null {
   if (index.cacheMode !== "disk" || !index.cacheRootDir) return null;
   const dbPath = duplicateUnitCacheDatabasePath(index.projectRoot ?? "", { cacheDir: index.cacheRootDir });
   let entry = duplicateUnitDiskDatabases.get(dbPath);
@@ -636,14 +682,16 @@ function duplicateUnitCacheDatabase(index: ProjectIndex): SqliteDatabase | null 
     entry = { leases: 0, closeRequested: false };
     duplicateUnitDiskDatabases.set(dbPath, entry);
   }
-  if (entry.db) return entry.db;
-  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-  const db = new SqliteDatabase(dbPath);
-  db.pragma("journal_mode = WAL");
-  db.pragma("synchronous = NORMAL");
-  ensureDuplicateUnitCacheSchema(db);
-  entry.db = db;
-  return db;
+  if (!entry.db) {
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+    const db = new SqliteDatabase(dbPath);
+    db.pragma("journal_mode = WAL");
+    db.pragma("synchronous = NORMAL");
+    ensureDuplicateUnitCacheSchema(db);
+    entry.db = db;
+    entry.statements = createDuplicateUnitDiskStatements(db);
+  }
+  return entry;
 }
 
 function closeDuplicateUnitDiskDatabaseEntry(dbPath: string, entry: DuplicateUnitDiskDatabaseEntry): void {
@@ -712,11 +760,10 @@ function tryLoadDuplicateUnitsFromCache(
   }
   if (index.cacheMode === "disk") {
     try {
-      const db = duplicateUnitCacheDatabase(index);
-      if (!db) return null;
-      const row = db
-        .prepare("SELECT sig, version, payload FROM duplicate_unit_cache WHERE file = ? AND variant = ?")
-        .get(file, variant) as { sig: string; version: number; payload: string } | undefined;
+      const entry = duplicateUnitDiskCache(index);
+      const row = entry?.statements?.load.get(file, variant) as
+        | { sig: string; version: number; payload: string }
+        | undefined;
       if (!row || row.sig !== sig || row.version !== DUPLICATE_UNIT_CACHE_VERSION) return null;
       const parsed = JSON.parse(row.payload) as unknown;
       return deserializeDuplicateUnits(parsed);
@@ -742,17 +789,8 @@ function writeDuplicateUnitsToCache(
   }
   if (index.cacheMode === "disk") {
     try {
-      const db = duplicateUnitCacheDatabase(index);
-      if (!db) return;
-      db.prepare(
-        `INSERT INTO duplicate_unit_cache (file, variant, sig, version, payload, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(file, variant) DO UPDATE SET
-           sig = excluded.sig,
-           version = excluded.version,
-           payload = excluded.payload,
-           updated_at = excluded.updated_at`,
-      ).run(
+      const entry = duplicateUnitDiskCache(index);
+      entry?.statements?.write.run(
         file,
         variant,
         sig,
@@ -2433,6 +2471,7 @@ export async function findDuplicates(
   try {
     return await findDuplicatesWithOpenDuplicateUnitCache(index, options);
   } finally {
+    maintainDuplicateUnitDiskCache(index);
     closeDuplicateUnitCacheForIndex(index);
     releaseDuplicateUnitCache();
   }
@@ -2717,6 +2756,7 @@ export async function prepareDuplicateAnalysis(
     });
     return analysis;
   } finally {
+    maintainDuplicateUnitDiskCache(index);
     closeDuplicateUnitCacheForIndex(index);
     releaseDuplicateUnitCache();
   }
@@ -2855,6 +2895,7 @@ export async function findDuplicateContexts(
   try {
     return await findDuplicateContextsWithOpenDuplicateUnitCache(index, targets, options);
   } finally {
+    maintainDuplicateUnitDiskCache(index);
     closeDuplicateUnitCacheForIndex(index);
     releaseDuplicateUnitCache();
   }

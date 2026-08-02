@@ -115,6 +115,8 @@ export type ProjectIndex = {
   referenceCandidates?: ReferenceCandidateIndex;
   sqlNavigation?: SqlNavigationCache;
   manifestEntries?: Map<FileId, ProjectIndexManifestEntry>;
+  /** True only when manifest signatures were observed during the current index build. */
+  manifestSignaturesFresh?: boolean;
   cacheMode?: BuildOptions["cache"];
   buildReport?: BuildReport;
   analysis?: CachedAnalysisSummary;
