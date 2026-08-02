@@ -1524,6 +1524,28 @@ describe("CLI command modules", () => {
     }
   });
 
+  test("writes inspect timing and index reports without changing command output", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-inspect-report-"));
+    const reportPath = path.join(tempDir, "inspect-report.json");
+    await fsp.writeFile(path.join(tempDir, "entry.ts"), "export const inspectedValue = 1;\n", "utf8");
+
+    try {
+      const result = await captureCli(["inspect", "--root", tempDir, "--json", "--report-file", reportPath]);
+      const response = readJsonRecord(JSON.parse(result.stdout));
+      const report = readJsonRecord(JSON.parse(await fsp.readFile(reportPath, "utf8")));
+      const timings = readJsonRecord(report.timings);
+
+      expect(result.exitCode).toBeUndefined();
+      expect(response.files).toBeTypeOf("object");
+      expect(report.command).toBe("inspect");
+      expect(timings.commandMs).toBeTypeOf("number");
+      expect(timings.totalMs).toBeTypeOf("number");
+      expect(report.index).toBeTypeOf("object");
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   test("runs graph exploration commands through the main CLI dispatcher", async () => {
     const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-cli-explore-"));
     await fsp.writeFile(path.join(tempDir, "util.ts"), "export function helper() { return 1; }\n", "utf8");

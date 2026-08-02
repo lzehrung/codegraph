@@ -1264,6 +1264,8 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "inspect") {
+    const commandReport: CommandReport | undefined = reportEnabled ? { command: "inspect", timings: {} } : undefined;
+    if (commandReport) commandReport.index = { timings: {} };
     const { handleInspectCommand } = await import("./cli/inspect.js");
     await handleInspectCommand({
       projectRootFs,
@@ -1273,12 +1275,15 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       nativeMode,
       workerOpts,
       progressHandler,
+      reportFile,
+      commandReport,
       getOpt,
       hasFlag,
       resolveFilesFromRoots,
       writeJSONLine,
       writeStdoutLine,
       writeStderrLine,
+      writeCommandReport,
     });
     return;
   }

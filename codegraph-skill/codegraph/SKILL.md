@@ -104,7 +104,7 @@ Safe shorthand: `impact` and git-backed `drift` default to `HEAD..WORKTREE`; `ar
 - Tool chaining, filtering, stable handles, exact ranges, or schema fields: use `--json`. If `--json` and `--pretty` are both present, `--json` wins.
 - Repeated agent queries over one repo snapshot: prefer MCP so the index stays warm.
 - Durable graph handoff: use `codegraph graph --root . ./src --json --output codegraph.json` rather than parsing display text.
-- Search performance diagnosis: add `--report` for JSON on stderr or `--report-file <path>` for a file while keeping normal search output unchanged.
+- Search and inspect performance diagnosis: add `--report` for JSON on stderr or `--report-file <path>` for a file while keeping normal command output unchanged.
 
 ### Human Graph Viewer
 

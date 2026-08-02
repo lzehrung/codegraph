@@ -440,9 +440,13 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ],
   [
     "inspect",
-    commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--duplicates"], [...SHARED_BUILD_OPTIONS, "--limit"], {
-      kind: "any",
-    }),
+    commandSchema(
+      [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, ...REPORT_FLAGS, "--duplicates"],
+      [...SHARED_BUILD_OPTIONS, ...REPORT_OPTIONS, "--limit"],
+      {
+        kind: "any",
+      },
+    ),
   ],
   [
     "mcp",
