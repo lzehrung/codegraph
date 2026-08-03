@@ -408,8 +408,8 @@ describe("agent search", () => {
       mode: "path",
       limit: 20,
     });
-    expect(directoryPathProse.results.some((result) => result.file === "src/agent/agent.ts")).toBe(true);
-    expect(directoryPathProse.results.flatMap((result) => result.rankReasons).join(" ")).not.toMatch(/\b(?:what|is)\b/);
+    expect(directoryPathProse.results[0]?.file).toBe("src/agent/agent.ts");
+    expect(directoryPathProse.results[0]?.score).toBe(144);
   });
 
   it("preserves every term in an existing spaced path", async () => {
@@ -420,6 +420,19 @@ describe("agent search", () => {
 
     expect(response.results[0]?.file).toBe("src/how config.ts");
     expect(response.results[0]?.rankReasons).toContain("path token match: src, how, config, ts");
+
+    const hybridResponse = await searchCodegraph({ root, query: "src/how config.ts", mode: "hybrid", limit: 20 });
+    const hybridPath = hybridResponse.results.find((result) => result.file === "src/how config.ts");
+    expect(hybridPath?.rankReasons).toContain("path token match: src, how, config, ts");
+
+    const prefixedResponse = await searchCodegraph({ root, query: "./src/how config.ts", mode: "path", limit: 20 });
+    const prefixedPath = prefixedResponse.results.find((result) => result.file === "src/how config.ts");
+    expect(prefixedPath?.rankReasons).toContain("path token match: src, how, config, ts");
+
+    const absoluteQuery = path.join(root, "src", "how config.ts");
+    const absoluteResponse = await searchCodegraph({ root, query: absoluteQuery, mode: "path", limit: 20 });
+    const absolutePath = absoluteResponse.results.find((result) => result.file === "src/how config.ts");
+    expect(absolutePath?.rankReasons.join(" ")).toMatch(/\bhow\b/);
   });
   it("keys the session result cache by rank-bearing query terms", async () => {
     const root = await mkRepo();

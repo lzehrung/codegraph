@@ -29,6 +29,7 @@ import {
 import {
   collectDefinitionFollowUps,
   collectFileFollowUps as collectCommonFileFollowUps,
+  type AgentFileSnapshot,
   isAgentSqlObjectNode,
   normalizeAgentFilePath,
   resolveAgentSnapshotFile,
@@ -269,7 +270,7 @@ async function searchSnapshot(
   queryIndex?: QueryIndexHandle,
 ): Promise<AgentSearchResponse> {
   const mode = request.mode ?? "hybrid";
-  const query = buildQueryTerms(request.query, snapshot.root, snapshot.files);
+  const query = buildQueryTerms(request.query, snapshot);
   const resultMap = new Map<string, MutableSearchResult>();
   const limit = defaultAgentLimit(request.limit, DEFAULT_LIMIT, AGENT_SEARCH_RESULT_LIMIT);
   let fileNeighborIndex: Map<string, FileNeighbor[]> | undefined;
@@ -343,7 +344,7 @@ function getSessionSearchResultCache(session: AgentSession): Map<string, Promise
 }
 
 function searchResultCacheKey(snapshot: AgentProjectSnapshot, request: AgentSearchRequest): string {
-  const query = buildQueryTerms(request.query, snapshot.root, snapshot.files);
+  const query = buildQueryTerms(request.query, snapshot);
   return JSON.stringify({
     projectSnapshotIdentity: snapshot.index.projectSnapshotIdentity ?? "",
     query,
@@ -358,7 +359,7 @@ function searchResultCacheKey(snapshot: AgentProjectSnapshot, request: AgentSear
   });
 }
 function searchPathOnly(root: string, files: readonly string[], request: AgentSearchRequest): AgentSearchResponse {
-  const query = buildQueryTerms(request.query, root, files);
+  const query = buildQueryTerms(request.query, { root, files });
   const resultMap = new Map<string, MutableSearchResult>();
   const limit = defaultAgentLimit(request.limit, DEFAULT_LIMIT, AGENT_SEARCH_RESULT_LIMIT);
 
@@ -429,12 +430,12 @@ function searchNeedsSymbolGraph(request: AgentSearchRequest): boolean {
   return mode !== "path" && mode !== "text" && mode !== "sql";
 }
 
-function buildQueryTerms(input: string, root: string, files: readonly string[]): SearchQueryTerms {
+function buildQueryTerms(input: string, snapshot: AgentFileSnapshot): SearchQueryTerms {
   const normalized = normalizeSearchText(input);
   const tokenSequence = normalized.split(/\s+/).filter((token) => token.length);
   const tokens = Array.from(new Set(tokenSequence));
   const identifierLike = isIdentifierLikeQuery(input);
-  const pathLike = isExplicitPathQuery(input, root, files);
+  const pathLike = isExplicitPathQuery(input, snapshot);
   const filterNaturalLanguageSyntax = !identifierLike && !pathLike;
   const filteredRankTokenSequence = filterNaturalLanguageSyntax
     ? tokenSequence.filter((token) => !NATURAL_LANGUAGE_SYNTAX_TERMS.has(token))
@@ -448,15 +449,14 @@ function buildQueryTerms(input: string, root: string, files: readonly string[]):
   };
 }
 
-function isExplicitPathQuery(input: string, root: string, files: readonly string[]): boolean {
+function isExplicitPathQuery(input: string, snapshot: AgentFileSnapshot): boolean {
   const trimmed = input.trim();
   const slashIndex = trimmed.search(/[\\/]/);
   if (slashIndex < 0) return false;
   const prosePrecedesPath = /\s/.test(trimmed.slice(0, slashIndex));
   if (prosePrecedesPath) return false;
   if (!/\s/.test(trimmed)) return true;
-  const normalizedInputPath = trimmed.replaceAll("\\", "/");
-  return files.some((file) => normalizeAgentFilePath(root, file) === normalizedInputPath);
+  return resolveAgentSnapshotFile(snapshot, trimmed) !== null;
 }
 
 function normalizeSearchText(input: string): string {
