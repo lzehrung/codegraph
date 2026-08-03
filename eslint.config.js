@@ -71,9 +71,10 @@ export default tseslint.config(
         {
           patterns: [
             {
-              // `src/indexer.ts` and the package entrypoint re-export the same builders, so the
-              // boundary has to name every path the symbols can arrive through.
-              group: ["**/indexer/build-index.js", "**/indexer.js", "**/index.js"],
+              // `src/indexer.ts`, the package entrypoint, and the package's own name all
+              // re-export the same builders, so the boundary has to name every path the
+              // symbols can arrive through.
+              group: ["**/indexer/build-index.js", "**/indexer.js", "**/index.js", "@lzehrung/codegraph"],
               importNames: ["buildProjectIndex", "buildProjectIndexFromFiles", "buildProjectIndexIncremental"],
               message:
                 "Load current repository state through loadCurrentProjectIndex (src/indexer/load-current-index.ts).",

@@ -294,6 +294,8 @@ describe("loadCurrentProjectIndex freshness decisions", () => {
       scope: { kind: "resolved-files", files },
       options: { report: coldReport },
     });
+    // A cold disk load still discovers the whole project, because the manifest it writes
+    // describes the project, not one query's scope. Callers restrict their own output.
     expect(fileNames(coldIndex)).toEqual(expect.arrayContaining(["a.ts", "b.ts"]));
 
     const warmReport = newReport();
@@ -304,6 +306,19 @@ describe("loadCurrentProjectIndex freshness decisions", () => {
     });
     expect(warmReport.files?.parsed ?? 0).toBe(0);
     expect(warmReport.manifest?.reused).toBe(true);
+  });
+
+  it("indexes exactly the resolved scope when no manifest is written", async () => {
+    const root = await createProject("dg-load-current-scope-nodisk-");
+    const files = [path.join(root, "src", "a.ts"), path.join(root, "src", "b.ts")];
+    for (const cache of ["off", "memory"] as const) {
+      const index = await loadCurrentProjectIndex({
+        root,
+        scope: { kind: "resolved-files", files },
+        options: { cache, report: newReport() },
+      });
+      expect(fileNames(index), `cache ${cache} must not widen the resolved scope`).toEqual(["a.ts", "b.ts"]);
+    }
   });
 
   it("unions project-scope additional files outside discovery", async () => {

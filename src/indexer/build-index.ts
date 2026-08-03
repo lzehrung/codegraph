@@ -997,6 +997,11 @@ export async function buildProjectIndexIncremental(
   };
   try {
     if (cacheMode !== "disk") {
+      // Without a manifest to reconcile against, a declared project scope is the whole
+      // truth for this build; full discovery would silently widen a scoped query.
+      if (opts?.filesAreProjectScope && opts.files?.length) {
+        return await buildProjectIndexFromFiles(projectRoot, opts.files, opts);
+      }
       return await buildProjectIndexFromExport(projectRoot, opts, { ignoreExistingManifest: true });
     }
     startCheckProgress();
