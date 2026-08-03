@@ -6,13 +6,11 @@ This is the live index for plans that still need a decision or implementation. C
 
 These plans describe current, executable work:
 
-1. `2026-07-28-explore-first-query-ranking-tuning.md`
-   - Improve natural-language ranking, explore composition, and candidate-test selection.
-2. `2026-07-25-performance-program-index.md`
+1. `2026-07-25-performance-program-index.md`
    - Keep the shared performance baseline and coordinate the remaining Git and native-startup work.
-3. `2026-07-25-git-subprocess-elimination.md`
+2. `2026-07-25-git-subprocess-elimination.md`
    - Continue the measured work after implemented priorities 0 and 1.
-4. `2026-07-25-native-runtime-startup.md`
+3. `2026-07-25-native-runtime-startup.md`
    - Reduce native fingerprint and startup costs after validating installed-user impact.
 
 ## Planned
