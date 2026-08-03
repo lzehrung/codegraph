@@ -343,9 +343,13 @@ function getSessionSearchResultCache(session: AgentSession): Map<string, Promise
 }
 
 function searchResultCacheKey(snapshot: AgentProjectSnapshot, request: AgentSearchRequest): string {
+  const query = buildQueryTerms(request.query);
   return JSON.stringify({
     projectSnapshotIdentity: snapshot.index.projectSnapshotIdentity ?? "",
     query: normalizeQuerySearchText(request.query),
+    rankTokens: query.rankTokens,
+    normalizedRankPhrase: query.normalizedRankPhrase,
+    identifierLike: query.identifierLike,
     mode: request.mode ?? "hybrid",
     limit: defaultAgentLimit(request.limit, DEFAULT_LIMIT, AGENT_SEARCH_RESULT_LIMIT),
     depth: normalizeDepth(request.depth),
@@ -450,8 +454,13 @@ function buildQueryTerms(input: string): SearchQueryTerms {
 function isExplicitPathQuery(input: string): boolean {
   const trimmed = input.trim();
   const slashIndex = trimmed.search(/[\\/]/);
-  if (slashIndex < 0 || /\s/.test(trimmed.slice(0, slashIndex))) return false;
-  return !/\s/.test(trimmed) || /\.[A-Za-z0-9]+$/.test(trimmed);
+  const hasPathSeparator = slashIndex >= 0;
+  if (!hasPathSeparator) return false;
+  const prosePrecedesPath = /\s/.test(trimmed.slice(0, slashIndex));
+  if (prosePrecedesPath) return false;
+  const singleToken = !/\s/.test(trimmed);
+  const endsWithExtension = /\.[A-Za-z0-9]+$/.test(trimmed);
+  return singleToken || endsWithExtension;
 }
 
 function normalizeSearchText(input: string): string {

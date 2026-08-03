@@ -258,6 +258,47 @@ describe("agent search", () => {
     expect(tiedLabels).toEqual(["Alpha", "alpha"]);
   });
 
+  it("uses stable handles after all visible ranking keys tie", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-search-handle-tie-"));
+    const file = path.join(root, "handles.ts");
+    const first = symbolDef(file, "same", 0);
+    const second: SymbolDef = {
+      ...symbolDef(file, "same", 100),
+      range: {
+        start: { line: 2, column: 1, index: 100 },
+        end: { line: 2, column: 10, index: 109 },
+      },
+    };
+    const module = moduleIndex(file, [first, second]);
+    const fileGraph: Graph = { nodes: new Set([file]), edges: [] };
+    const byFile = new Map([[file, module]]);
+    const index: ProjectIndex = {
+      graph: fileGraph,
+      modules: byFile,
+      byFile,
+      exportCache: new Map(),
+      scopeCache: new Map(),
+    };
+    const firstNode = symbolNode(first);
+    const secondNode = symbolNode(second);
+    const symbolGraph: SymbolGraph = {
+      nodes: new Map([
+        [firstNode.id, firstNode],
+        [secondNode.id, secondNode],
+      ]),
+      edges: [],
+    };
+
+    const response = await searchCodegraphWithSession(
+      snapshotSession({ root, files: [file], index, fileGraph, symbolGraph }),
+      { root, query: "same", mode: "symbol", limit: 20 },
+    );
+    const handles = response.results.filter((result) => result.label === "same").map((result) => result.handle);
+
+    expect(handles).toHaveLength(2);
+    expect(handles).toEqual([...handles].sort());
+  });
+
   it("skips detailed symbol graph work for path, text, sql, hybrid, symbol, and graph searches", async () => {
     const root = await mkRepo();
     const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
@@ -330,6 +371,22 @@ describe("agent search", () => {
     const identifierResult = identifier.results.find((result) => result.label === "theUserService");
     expect(identifierResult?.rankReasons).toContain("symbol token match: the, user, service");
 
+    const sharedSession = createAgentSession({ root });
+    await searchCodegraphWithSession(sharedSession, {
+      root,
+      query: "the user service",
+      mode: "symbol",
+      limit: 20,
+    });
+    const cachedIdentifier = await searchCodegraphWithSession(sharedSession, {
+      root,
+      query: "theUserService",
+      mode: "symbol",
+      limit: 20,
+    });
+    const cachedIdentifierResult = cachedIdentifier.results.find((result) => result.label === "theUserService");
+    expect(cachedIdentifierResult?.rankReasons).toContain("symbol token match: the, user, service");
+
     const exactPath = await searchCodegraph({ root, query: "src/how/config.ts", mode: "path", limit: 20 });
     expect(exactPath.results[0]?.file).toBe("src/how/config.ts");
     expect(exactPath.results[0]?.rankReasons).toContain("path token match: src, how, config, ts");
@@ -338,6 +395,24 @@ describe("agent search", () => {
     expect(repeatedPath.results[0]?.file).toBe("src/agent/agent.ts");
     expect(repeatedPath.results[0]?.score).toBe(144);
 
+    await searchCodegraphWithSession(sharedSession, {
+      root,
+      query: "src how config ts",
+      mode: "hybrid",
+      limit: 20,
+    });
+    const cachedPath = await searchCodegraphWithSession(sharedSession, {
+      root,
+      query: "src/how/config.ts",
+      mode: "hybrid",
+      limit: 20,
+    });
+    const cachedPathResult = cachedPath.results.find(
+      (result) => result.kind === "file" && result.file === "src/how/config.ts",
+    );
+    expect(cachedPathResult?.rankReasons).toContain("path token match: src, how, config, ts");
+    expect(cachedPathResult?.score).toBe(164);
+
     const mixedProsePath = await searchCodegraph({
       root,
       query: "how does src/how/config.ts preserve config",
@@ -345,6 +420,7 @@ describe("agent search", () => {
       limit: 20,
     });
     expect(mixedProsePath.results.flatMap((result) => result.rankReasons).join(" ")).not.toMatch(/\b(?:how|does)\b/);
+    expect(mixedProsePath.results.some((result) => result.file === "src/how/config.ts")).toBe(true);
   });
 
   it("breaks equal scores by capability before discriminative-term coverage", async () => {

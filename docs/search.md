@@ -21,11 +21,11 @@ Here, "semantic" means syntax- and symbol-aware analysis from the repository. It
 Search follows a compact pipeline:
 
 1. Normalize the query by splitting camel case, lowercasing, and removing punctuation.
-2. For natural-language queries, exclude a small syntax-term set from ranking. Identifier and explicit path queries retain every term; queries that would otherwise lose every term also retain the original terms.
+2. For natural-language queries, exclude a small syntax-term set from ranking. A query that is itself an identifier or path retains every term; a prose query that mentions a path is still filtered. Queries that would otherwise lose every term also retain the original terms.
 3. Gather candidates from the selected surfaces: symbols, paths, text chunks, SQL objects, or graph nodes.
 4. Score lexical evidence. Exact words and phrases beat ordered-token and substring matches.
 5. Apply structural weights. Symbol-name matches outrank incidental prose; exports and nearby graph nodes can receive additional weight.
-6. Sort deterministically by score, capability, distinct matched rank terms, ASCII label, ASCII file path, and stable handle.
+6. Sort deterministically by score, capability (semantic, then graph, then text), distinct matched rank terms, ASCII label, ASCII file path, and stable handle.
 
 Hybrid mode is code-first by default. A direct implementation or symbol match normally outranks documentation, while `--mode text` intentionally favors prose-heavy retrieval.
 
