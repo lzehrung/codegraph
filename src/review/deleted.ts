@@ -260,10 +260,12 @@ async function readGitFilesAtRevision(
       const sizeMatch = header.match(/^[0-9a-f]+ blob ([0-9]+)$/);
       if (!sizeMatch) return new Map();
       const size = Number(sizeMatch[1]);
-      if (!Number.isSafeInteger(size) || size > MAX_GIT_BATCH_OUTPUT_BYTES_PER_FILE) return new Map();
+      if (!Number.isSafeInteger(size)) return new Map();
       const contentEnd = cursor + size;
       if (!Number.isSafeInteger(contentEnd) || contentEnd > output.length) return new Map();
-      sources.set(request.file, output.subarray(cursor, contentEnd).toString("utf8"));
+      if (size <= MAX_GIT_BATCH_OUTPUT_BYTES_PER_FILE) {
+        sources.set(request.file, output.subarray(cursor, contentEnd).toString("utf8"));
+      }
       cursor = contentEnd;
       if (output[cursor] === 0x0a) cursor++;
     }
