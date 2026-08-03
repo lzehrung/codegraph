@@ -365,6 +365,34 @@ describe("codegraph config", () => {
     expect(secondReport.cache?.misses ?? 0).toBe(0);
   });
 
+  it("invalidates extension-aware module cache entries when the native runtime changes", async () => {
+    const root = await mkRepo();
+    await fs.writeFile(
+      path.join(root, "src", "cached.tpl"),
+      "<?php function cached_template() { return 1; }\n",
+      "utf8",
+    );
+
+    await buildProjectIndex(root, {
+      cache: "memory",
+      native: "off",
+      languageExtensions: { ".tpl": "php" },
+    });
+
+    const report: BuildReport = { timings: {} };
+    await buildProjectIndex(root, {
+      cache: "memory",
+      native: "auto",
+      languageExtensions: { ".tpl": "php" },
+      report,
+    });
+
+    expect(report.files?.total).toBeGreaterThan(0);
+    expect(report.files?.cached ?? 0).toBe(0);
+    expect(report.cache?.hits ?? 0).toBe(0);
+    expect(report.cache?.misses).toBe(report.files?.total);
+  });
+
   it("ignores non-dot-prefixed extension keys passed directly to supportForFile", () => {
     expect(supportForFile("widget.tpl", { tpl: "html" })).toBeUndefined();
     expect(supportForFile("widget.tpl", { ".tpl": "html" })?.id).toBe("html");

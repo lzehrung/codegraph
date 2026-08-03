@@ -336,7 +336,7 @@ function graphEdgeKey(edge: Edge): string {
 }
 
 async function moduleCacheSignatureForFile(file: string, sigInfo: FileSignature, opts?: BuildOptions): Promise<string> {
-  const baseSignature = await cacheSignatureForFile(file, sigInfo);
+  const baseSignature = await cacheSignatureForFile(file, sigInfo, opts);
   const normalizedExtensions = normalizeLanguageExtensions(opts?.languageExtensions);
   if (!normalizedExtensions) return baseSignature;
   // Combine via a hash rather than raw concatenation: the disk cache stores this string in a
