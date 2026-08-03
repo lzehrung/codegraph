@@ -301,9 +301,16 @@ describe("agent search", () => {
       path.join(root, "src", "installer.ts"),
       "export function preserveExistingMcpConfig() { return true; }\n",
     );
-    await fs.writeFile(path.join(root, "src", "generic.ts"), "export function howDoesThe() { return false; }\n");
+    await fs.writeFile(
+      path.join(root, "src", "generic.ts"),
+      ["export function howDoesThe() { return false; }", "export function theUserService() { return true; }", ""].join(
+        "\n",
+      ),
+    );
     await fs.mkdir(path.join(root, "src", "how"), { recursive: true });
     await fs.writeFile(path.join(root, "src", "how", "config.ts"), "export const configured = true;\n");
+    await fs.mkdir(path.join(root, "src", "agent"), { recursive: true });
+    await fs.writeFile(path.join(root, "src", "agent", "agent.ts"), "export const agentMarker = true;\n");
 
     const response = await searchCodegraph({
       root,
@@ -319,12 +326,25 @@ describe("agent search", () => {
     const allSyntax = await searchCodegraph({ root, query: "how does the", mode: "symbol", limit: 20 });
     expect(allSyntax.results.some((result) => result.label === "howDoesThe")).toBe(true);
 
-    const identifier = await searchCodegraph({ root, query: "how", mode: "symbol", limit: 20 });
-    expect(identifier.results.some((result) => result.label === "howDoesThe")).toBe(true);
+    const identifier = await searchCodegraph({ root, query: "theUserService", mode: "symbol", limit: 20 });
+    const identifierResult = identifier.results.find((result) => result.label === "theUserService");
+    expect(identifierResult?.rankReasons).toContain("symbol token match: the, user, service");
 
     const exactPath = await searchCodegraph({ root, query: "src/how/config.ts", mode: "path", limit: 20 });
     expect(exactPath.results[0]?.file).toBe("src/how/config.ts");
     expect(exactPath.results[0]?.rankReasons).toContain("path token match: src, how, config, ts");
+
+    const repeatedPath = await searchCodegraph({ root, query: "src/agent/agent.ts", mode: "path", limit: 20 });
+    expect(repeatedPath.results[0]?.file).toBe("src/agent/agent.ts");
+    expect(repeatedPath.results[0]?.score).toBe(144);
+
+    const mixedProsePath = await searchCodegraph({
+      root,
+      query: "how does src/how/config.ts preserve config",
+      mode: "path",
+      limit: 20,
+    });
+    expect(mixedProsePath.results.flatMap((result) => result.rankReasons).join(" ")).not.toMatch(/\b(?:how|does)\b/);
   });
 
   it("breaks equal scores by capability before discriminative-term coverage", async () => {
@@ -334,7 +354,7 @@ describe("agent search", () => {
 
     const response = await searchCodegraph({
       root,
-      query: "ab cd ef gh",
+      query: "ab cd ef gh ij",
       mode: "hybrid",
       limit: 20,
     });
@@ -358,7 +378,7 @@ describe("agent search", () => {
 
     const response = await searchCodegraph({
       root,
-      query: "ab cd ef gh",
+      query: "ab cd ef gh ij",
       mode: "symbol",
       limit: 20,
     });

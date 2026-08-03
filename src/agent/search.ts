@@ -430,20 +430,28 @@ function searchNeedsSymbolGraph(request: AgentSearchRequest): boolean {
 
 function buildQueryTerms(input: string): SearchQueryTerms {
   const normalized = normalizeSearchText(input);
-  const tokens = Array.from(new Set(normalized.split(/\s+/).filter((token) => token.length)));
+  const tokenSequence = normalized.split(/\s+/).filter((token) => token.length);
+  const tokens = Array.from(new Set(tokenSequence));
   const identifierLike = isIdentifierLikeQuery(input);
-  const pathLike = /[\\/]/.test(input);
+  const pathLike = isExplicitPathQuery(input);
   const filterNaturalLanguageSyntax = !identifierLike && !pathLike;
-  const filteredRankTokens = filterNaturalLanguageSyntax
-    ? tokens.filter((token) => !NATURAL_LANGUAGE_SYNTAX_TERMS.has(token))
-    : tokens;
-  const rankTokens = filteredRankTokens.length ? filteredRankTokens : tokens;
+  const filteredRankTokenSequence = filterNaturalLanguageSyntax
+    ? tokenSequence.filter((token) => !NATURAL_LANGUAGE_SYNTAX_TERMS.has(token))
+    : tokenSequence;
+  const rankTokenSequence = filteredRankTokenSequence.length ? filteredRankTokenSequence : tokenSequence;
   return {
     tokens,
-    rankTokens,
-    normalizedRankPhrase: rankTokens.join(" "),
+    rankTokens: Array.from(new Set(rankTokenSequence)),
+    normalizedRankPhrase: rankTokenSequence.join(" "),
     identifierLike,
   };
+}
+
+function isExplicitPathQuery(input: string): boolean {
+  const trimmed = input.trim();
+  const slashIndex = trimmed.search(/[\\/]/);
+  if (slashIndex < 0 || /\s/.test(trimmed.slice(0, slashIndex))) return false;
+  return !/\s/.test(trimmed) || /\.[A-Za-z0-9]+$/.test(trimmed);
 }
 
 function normalizeSearchText(input: string): string {
@@ -487,6 +495,7 @@ function matchTokenScoreFromNormalized(normalized: string, query: SearchQueryTer
   let exactPhrase = false;
   let proximity = false;
   if (matched.length === query.rankTokens.length && query.rankTokens.length > 1) {
+    score += 12;
     if (normalized.includes(query.normalizedRankPhrase)) {
       score += 30;
       exactPhrase = true;
@@ -1140,7 +1149,9 @@ function compareResults(left: MutableSearchResult, right: MutableSearchResult): 
   if (coverageDelta !== 0) return coverageDelta;
   const labelDelta = compareAscii(left.label, right.label);
   if (labelDelta !== 0) return labelDelta;
-  return compareAscii(left.file, right.file);
+  const fileDelta = compareAscii(left.file, right.file);
+  if (fileDelta !== 0) return fileDelta;
+  return compareAscii(left.handle, right.handle);
 }
 
 function capabilityRank(capability: AgentSearchResult["provenance"]["capability"]): number {
