@@ -318,6 +318,60 @@ describe("agent explore", () => {
     expect(response.fileView).toBeUndefined();
   });
 
+  it("preserves ranked anchor order across files, packets, and the primary follow-up", async () => {
+    const root = await mkExploreRepo();
+    await writeFile(
+      root,
+      "src/z-installer.ts",
+      [
+        "export function preserveExistingServerConfig() { return true; }",
+        "export function preserveExistingServerConfigBackup() { return false; }",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(root, "src/a-registry.ts", "export function existingServerConfig() { return false; }\n");
+    const response = await exploreCodegraph({
+      root,
+      query: "preserve existing server config",
+      limit: 10,
+      maxPackets: 2,
+    });
+    const rankedFiles = [...new Set(response.anchors.map((anchor) => anchor.file))];
+    const fileByHandle = new Map(response.anchors.map((anchor) => [anchor.handle, anchor.file]));
+    const packetFiles = response.packets.map((packet) => fileByHandle.get(packet.target) ?? packet.target);
+    const leadingAnchorFiles = response.anchors.slice(0, 2).map((anchor) => anchor.file);
+
+    expect(leadingAnchorFiles).toEqual(["src/z-installer.ts", "src/z-installer.ts"]);
+
+    expect(rankedFiles.slice(0, 2)).toEqual(["src/z-installer.ts", "src/a-registry.ts"]);
+    expect(packetFiles).toEqual(["src/z-installer.ts", "src/a-registry.ts"]);
+    expect(response.followUps[0]).toBe("codegraph file src/z-installer.ts");
+    expect(response.blastRadius.slice(0, 2).map((entry) => entry.file)).toEqual([
+      "src/z-installer.ts",
+      "src/a-registry.ts",
+    ]);
+  });
+
+  it("uses authoritative candidate-test ordering for selected files and symbols", async () => {
+    const root = await mkExploreRepo();
+    await writeFile(
+      root,
+      "src/agent/installer-agent.ts",
+      "export function preserveExistingMcpConfig() { return true; }\n",
+    );
+    await writeFile(
+      root,
+      "tests/installer.test.ts",
+      "import { preserveExistingMcpConfig } from '../src/agent/installer-agent';\npreserveExistingMcpConfig();\n",
+    );
+    await writeFile(root, "tests/agent-alpha.test.ts", "export const unrelatedAgentTest = true;\n");
+
+    const response = await exploreCodegraph({ root, query: "preserveExistingMcpConfig", limit: 5 });
+
+    expect(response.candidateTests[0]).toBe("tests/installer.test.ts");
+    expect(response.candidateTests.indexOf("tests/agent-alpha.test.ts")).toBeGreaterThan(0);
+  });
+
   it("disables packet limits and packet omissions when source packets are excluded", async () => {
     const root = await mkExploreRepo();
     const query = "src/auth.ts";
