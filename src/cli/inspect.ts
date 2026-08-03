@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { NATIVE_WORKER_AUTO_FILE_THRESHOLD } from "../agent/session.js";
 import { findDuplicates, type DuplicateConfidence, type DuplicateGroup } from "../duplicates.js";
-import { collectGraph } from "../graph-builder.js";
 import { findDetailedCycles, getUnresolvedImports } from "../graphs/queries.js";
 import { getHotspots } from "../graphs/hotspots.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
@@ -170,37 +169,30 @@ async function buildScopedReportGraph(
     writeStderrLine: (message: string) => void;
   },
 ): Promise<{ graph: Graph; indexCache?: IndexCacheMetadata }> {
+  // Cache metadata is reporting only: the shared loader owns freshness, so a cold run
+  // builds reusable state here instead of collecting a throwaway graph.
   const useDiskCache = opts.cache === "disk" || opts.cache === undefined;
   const indexCache = useDiskCache ? readIndexCacheMetadata(projectRoot) : null;
   if (indexCache) {
     opts.writeStderrLine(formatIndexCacheMetadata(indexCache));
-    const index = await loadCurrentProjectIndex({
-      root: projectRoot,
-      scope: { kind: "resolved-files", files },
-      options: {
-        cache: "disk",
-        ...(opts.discovery ? { discovery: opts.discovery } : {}),
-        ...(opts.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
-        ...(opts.progressHandler ? { onProgress: opts.progressHandler } : {}),
-        ...(opts.nativeMode && opts.nativeMode !== "auto" ? { native: opts.nativeMode } : {}),
-        ...(opts.workerOpts ?? {}),
-        ...(opts.graphOptions ? { graph: opts.graphOptions } : {}),
-        ...(opts.report ? { report: opts.report } : {}),
-      },
-    });
-    return {
-      graph: restrictGraphToIncludeRoots(index.graph, includeRoots, normalizePathForDisplay),
-      indexCache,
-    };
   }
-
-  const sourceGraph = await collectGraph(projectRoot, files, {
-    ...(opts.graphOptions ?? {}),
-    ...(opts.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
-    ...(opts.report ? { report: opts.report } : {}),
+  const index = await loadCurrentProjectIndex({
+    root: projectRoot,
+    scope: { kind: "resolved-files", files },
+    options: {
+      ...(opts.cache ? { cache: opts.cache } : {}),
+      ...(opts.discovery ? { discovery: opts.discovery } : {}),
+      ...(opts.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
+      ...(opts.progressHandler ? { onProgress: opts.progressHandler } : {}),
+      ...(opts.nativeMode && opts.nativeMode !== "auto" ? { native: opts.nativeMode } : {}),
+      ...(opts.workerOpts ?? {}),
+      ...(opts.graphOptions ? { graph: opts.graphOptions } : {}),
+      ...(opts.report ? { report: opts.report } : {}),
+    },
   });
   return {
-    graph: restrictGraphToIncludeRoots(sourceGraph, includeRoots, normalizePathForDisplay),
+    graph: restrictGraphToIncludeRoots(index.graph, includeRoots, normalizePathForDisplay),
+    ...(indexCache ? { indexCache } : {}),
   };
 }
 

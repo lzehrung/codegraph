@@ -203,6 +203,55 @@ describe("loadCurrentProjectIndex freshness decisions", () => {
     expect(fileNames(index)).toEqual(["a.ts", "b.ts", "c.ts"]);
   });
 
+  it("rebuilds safely when discovery options no longer match the manifest", async () => {
+    const root = await createProject("dg-load-current-discovery-");
+    await loadProjectScope(root, newReport());
+    const report = newReport();
+    const index = await loadProjectScope(root, report, {
+      discovery: { ignoreGlobs: ["src/c.ts"], globRoot: root },
+    });
+    expect(report.manifest?.reused).toBe(false);
+    expect(report.manifest?.reason).toBe("buildOptionsMismatch");
+    expect(report.manifest?.optionsMismatch).toContain("discovery");
+    expect(fileNames(index)).toEqual(["a.ts", "b.ts"]);
+  });
+
+  it("rebuilds safely when the native runtime option no longer matches the manifest", async () => {
+    const root = await createProject("dg-load-current-native-");
+    await loadProjectScope(root, newReport());
+    const report = newReport();
+    await loadProjectScope(root, report, { native: "off" });
+    expect(report.manifest?.reused).toBe(false);
+    expect(report.manifest?.reason).toBe("buildOptionsMismatch");
+    expect(report.manifest?.optionsMismatch).toContain("native");
+    expect(report.files?.parsed).toBe(3);
+  });
+
+  it("rebuilds safely when project configuration changes", async () => {
+    const root = await createProject("dg-load-current-config-");
+    await loadProjectScope(root, newReport());
+    await fsp.writeFile(
+      path.join(root, "codegraph.config.json"),
+      JSON.stringify({ discovery: { ignoreGlobs: ["src/c.ts"] } }, null, 2),
+      "utf8",
+    );
+    const report = newReport();
+    const index = await loadProjectScope(root, report);
+    expect(report.manifest?.reused).toBe(false);
+    expect(report.files?.parsed).toBe(3);
+    expect(fileNames(index)).toEqual(["a.ts", "b.ts", "c.ts"]);
+  });
+
+  it("falls back safely when the persisted snapshot is missing", async () => {
+    const root = await createProject("dg-load-current-missing-snapshot-");
+    await loadProjectScope(root, newReport());
+    await fsp.rm(path.join(root, ".codegraph-cache", "index-v1", "project-index-snapshot.json"));
+    const report = newReport();
+    const index = await loadProjectScope(root, report);
+    expect(fileNames(index)).toEqual(["a.ts", "b.ts", "c.ts"]);
+    expect(index.graph.edges.length).toBeGreaterThan(0);
+  });
+
   it("preserves cache off semantics without claiming a disk cache hit", async () => {
     const root = await createProject("dg-load-current-cache-off-");
     await loadProjectScope(root, newReport());
@@ -269,6 +318,37 @@ describe("loadCurrentProjectIndex freshness decisions", () => {
       options: { report: newReport() },
     });
     expect(fileNames(index)).toContain("extra.ts");
+  });
+
+  it("records transient-file provenance and retires the file when it is no longer supplied", async () => {
+    const root = await createGitProject("dg-load-current-transient-");
+    const outside = path.join(root, "ignored", "extra.ts");
+    await fsp.mkdir(path.dirname(outside), { recursive: true });
+    await fsp.writeFile(outside, "export const extra = 1;\n", "utf8");
+    await fsp.writeFile(path.join(root, ".gitignore"), "ignored/\n", "utf8");
+
+    await loadProjectScope(root, newReport());
+    const withTransient = await loadCurrentProjectIndex({
+      root,
+      scope: { kind: "project", additionalFiles: [outside] },
+      options: { report: newReport() },
+    });
+    expect(fileNames(withTransient)).toContain("extra.ts");
+
+    const manifest = JSON.parse(
+      await fsp.readFile(path.join(root, ".codegraph-cache", "index-v1", "manifest.json"), "utf8"),
+    ) as { transientFiles?: string[] };
+    expect((manifest.transientFiles ?? []).map(normalizeTestPath).map((file) => path.posix.basename(file))).toEqual([
+      "extra.ts",
+    ]);
+
+    const retired = await loadProjectScope(root, newReport());
+    expect(fileNames(retired)).not.toContain("extra.ts");
+    const retiredManifest = JSON.parse(
+      await fsp.readFile(path.join(root, ".codegraph-cache", "index-v1", "manifest.json"), "utf8"),
+    ) as { transientFiles?: string[]; files: Record<string, unknown> };
+    expect(retiredManifest.transientFiles ?? []).toEqual([]);
+    expect(Object.keys(retiredManifest.files).some((file) => file.endsWith("ignored/extra.ts"))).toBe(false);
   });
 
   it("stays correct for a non-Git project through full discovery fallback", async () => {

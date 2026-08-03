@@ -37,6 +37,7 @@ const FAMILIES: Array<{ name: string; args: (root: string) => string[] }> = [
   })),
   { name: "project summary (apisurface)", args: (root: string) => ["apisurface", "--root", root, "--json"] },
   { name: "project summary (cycles)", args: (root: string) => ["cycles", "--root", root, "--json"] },
+  { name: "scoped summary (hotspots)", args: (root: string) => ["hotspots", "--root", root, "--json"] },
   { name: "agent-session (search)", args: (root: string) => ["search", "helper", "--root", root, "--json"] },
 ];
 
