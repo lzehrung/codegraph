@@ -1,15 +1,16 @@
 import path from "node:path";
 import type { AnalysisSummary } from "../analysisSummary.js";
 import { getReverseDependencies, getShortestPath, type DependencyNode } from "../graphs/traversal.js";
+import { defNodeId } from "../graphs/symbol-graph.js";
 import type { BuildOptions } from "../indexer/types.js";
 import { listCandidateTestFiles } from "../impact/context.js";
 import { normalizePath, toProjectDisplayPath } from "../util/paths.js";
+import { parseAgentSymbolHandle } from "./handles.js";
 import {
   formatAgentFileViewResponse,
   getCodegraphFileViewWithSession,
   type AgentFileViewResponse,
 } from "./fileView.js";
-import { resolveSemanticSymbol } from "./semanticSymbols.js";
 import { getCodegraphPacketWithSession, type AgentPacketResponse } from "./packet.js";
 import { searchCodegraphWithSession, type AgentSearchResponse, type AgentSearchResult } from "./search.js";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "./session.js";
@@ -343,14 +344,29 @@ function collectAnchorSelection(
       primaryRankedFile ??= absolute;
       files.add(absolute);
     }
-    const symbol = resolveSemanticSymbol(snapshot, anchor.handle);
-    if (symbol) symbolIds.add(symbol.id);
+    const symbolId = resolveAnchorSymbolId(snapshot, anchor);
+    if (symbolId) symbolIds.add(symbolId);
   }
   return {
     files: [...files],
     symbolIds: [...symbolIds],
     ...(primaryRankedFile ? { primaryRankedFile } : {}),
   };
+}
+
+function resolveAnchorSymbolId(snapshot: AgentProjectSnapshot, anchor: AgentSearchResult): string | undefined {
+  const parsed = parseAgentSymbolHandle(anchor.handle);
+  if (!parsed) return undefined;
+  const absolute = normalizePath(path.resolve(snapshot.root, parsed.file));
+  const symbol = snapshot.index.byFile
+    .get(absolute)
+    ?.locals.find(
+      (candidate) =>
+        candidate.localName === parsed.name &&
+        candidate.range.start.line === parsed.line &&
+        candidate.range.start.column === parsed.column,
+    );
+  return symbol ? defNodeId(symbol) : undefined;
 }
 
 function extractFileMentions(snapshot: AgentProjectSnapshot, query: string): string[] {

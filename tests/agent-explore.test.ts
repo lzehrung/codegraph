@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { exploreCodegraph, formatAgentExploreResponse } from "../src/index.js";
+import * as impactContext from "../src/impact/context.js";
 import { createCodegraphMcpHandlers, listCodegraphMcpTools } from "../src/mcp/server.js";
 import { captureCli } from "./helpers/cli.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
@@ -351,8 +352,21 @@ describe("agent explore", () => {
       "src/a-registry.ts",
     ]);
   });
+  it("keeps explicit mentions before distinct ranked anchor files", async () => {
+    const root = await mkExploreRepo();
+    await writeFile(root, "src/z-installer.ts", "export function preserveExistingServerConfig() { return true; }\n");
+    const response = await exploreCodegraph({
+      root,
+      query: "compare src/routes.ts with preserve existing server config",
+      limit: 10,
+    });
+    const blastRadiusFiles = response.blastRadius.map((entry) => entry.file);
 
-  it("uses authoritative candidate-test ordering for selected files and symbols", async () => {
+    expect(blastRadiusFiles[0]).toBe("src/routes.ts");
+    expect(blastRadiusFiles.indexOf("src/z-installer.ts")).toBeGreaterThan(0);
+  });
+
+  it("uses authoritative candidate-test ordering, symbol IDs, and full-result omissions", async () => {
     const root = await mkExploreRepo();
     await writeFile(
       root,
@@ -365,11 +379,23 @@ describe("agent explore", () => {
       "import { preserveExistingMcpConfig } from '../src/agent/installer-agent';\npreserveExistingMcpConfig();\n",
     );
     await writeFile(root, "tests/agent-alpha.test.ts", "export const unrelatedAgentTest = true;\n");
+    for (let index = 0; index < 12; index += 1) {
+      await writeFile(root, `tests/fill-${String(index).padStart(2, "0")}.test.ts`, "export const filler = true;\n");
+    }
+    const candidateSpy = vi.spyOn(impactContext, "listCandidateTestFiles");
 
-    const response = await exploreCodegraph({ root, query: "preserveExistingMcpConfig", limit: 5 });
+    try {
+      const response = await exploreCodegraph({ root, query: "preserveExistingMcpConfig", limit: 5 });
+      const symbolIds = candidateSpy.mock.calls.at(-1)?.[2];
 
-    expect(response.candidateTests[0]).toBe("tests/installer.test.ts");
-    expect(response.candidateTests.indexOf("tests/agent-alpha.test.ts")).toBeGreaterThan(0);
+      expect(symbolIds?.length).toBeGreaterThan(0);
+      expect(response.candidateTests).toHaveLength(10);
+      expect(response.candidateTests[0]).toBe("tests/installer.test.ts");
+      expect(response.candidateTests.indexOf("tests/agent-alpha.test.ts")).toBeGreaterThan(0);
+      expect(response.omittedCounts.candidateTests).toBe(5);
+    } finally {
+      candidateSpy.mockRestore();
+    }
   });
 
   it("disables packet limits and packet omissions when source packets are excluded", async () => {
