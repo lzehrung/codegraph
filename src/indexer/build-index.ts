@@ -591,8 +591,12 @@ async function buildIndexFromFileListShared(
       })
     : new Map<string, string>();
   const conc = buildConcurrency(opts);
+  const languageExtensions = normalizeLanguageExtensions(opts?.languageExtensions);
   const sqlFiles = normalizedFiles
-    .filter((file) => supportForFile(file, opts?.languageExtensions)?.id === "sql")
+    .filter((file) => {
+      if (!languageExtensions) return path.extname(file).toLowerCase() === ".sql";
+      return supportForFile(file, languageExtensions)?.id === "sql";
+    })
     .sort((left, right) => left.localeCompare(right));
   const fileSignatures = await prepareFileSignatures({
     files: sqlFiles,

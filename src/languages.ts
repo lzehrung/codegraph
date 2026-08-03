@@ -128,7 +128,7 @@ export function supportForFile(
   filename: string,
   extensionMap?: LanguageExtensionMap | undefined,
 ): LanguageSupport | undefined {
-  const mapped = mappedSupportForFile(filename, extensionMap);
+  const mapped = extensionMap ? mappedSupportForFile(filename, extensionMap) : undefined;
   if (mapped) return mapped;
   const ext = path.extname(filename).toLowerCase();
   if (ext === ".h") {
