@@ -355,7 +355,6 @@ describe("agent search", () => {
     await fs.writeFile(path.join(root, "src", "how", "config.ts"), "export const configured = true;\n");
     await fs.mkdir(path.join(root, "src", "agent"), { recursive: true });
     await fs.writeFile(path.join(root, "src", "agent", "agent.ts"), "export const agentMarker = true;\n");
-    await fs.writeFile(path.join(root, "src", "how config.ts"), "export const spacedPath = true;\n");
 
     const response = await searchCodegraph({
       root,
@@ -376,16 +375,12 @@ describe("agent search", () => {
     expect(identifierResult?.rankReasons).toContain("symbol token match: the, user, service");
 
     const exactPath = await searchCodegraph({ root, query: "src/how/config.ts", mode: "path", limit: 20 });
-    const exactPathResult = exactPath.results.find((result) => result.file === "src/how/config.ts");
-    expect(exactPathResult?.rankReasons).toContain("path token match: src, how, config, ts");
+    expect(exactPath.results[0]?.file).toBe("src/how/config.ts");
+    expect(exactPath.results[0]?.rankReasons).toContain("path token match: src, how, config, ts");
 
     const repeatedPath = await searchCodegraph({ root, query: "src/agent/agent.ts", mode: "path", limit: 20 });
     expect(repeatedPath.results[0]?.file).toBe("src/agent/agent.ts");
     expect(repeatedPath.results[0]?.score).toBe(144);
-
-    const spacedPath = await searchCodegraph({ root, query: "src/how config.ts", mode: "path", limit: 20 });
-    const spacedPathResult = spacedPath.results.find((result) => result.file === "src/how config.ts");
-    expect(spacedPathResult?.rankReasons).toContain("path token match: src, how, config, ts");
 
     const mixedProsePath = await searchCodegraph({
       root,
@@ -406,8 +401,26 @@ describe("agent search", () => {
     expect(leadingProsePath.results.flatMap((result) => result.rankReasons).join(" ")).not.toMatch(
       /\b(?:how|is|what|does)\b/,
     );
+
+    const directoryPathProse = await searchCodegraph({
+      root,
+      query: "src/agent what is agent.ts",
+      mode: "path",
+      limit: 20,
+    });
+    expect(directoryPathProse.results.some((result) => result.file === "src/agent/agent.ts")).toBe(true);
+    expect(directoryPathProse.results.flatMap((result) => result.rankReasons).join(" ")).not.toMatch(/\b(?:what|is)\b/);
   });
 
+  it("preserves every term in an existing spaced path", async () => {
+    const root = await mkRepo();
+    await fs.writeFile(path.join(root, "src", "how config.ts"), "export const spacedPath = true;\n");
+
+    const response = await searchCodegraph({ root, query: "src/how config.ts", mode: "path", limit: 20 });
+
+    expect(response.results[0]?.file).toBe("src/how config.ts");
+    expect(response.results[0]?.rankReasons).toContain("path token match: src, how, config, ts");
+  });
   it("keys the session result cache by rank-bearing query terms", async () => {
     const root = await mkRepo();
     await fs.writeFile(path.join(root, "src", "generic.ts"), "export function theUserService() { return true; }\n");
@@ -430,6 +443,13 @@ describe("agent search", () => {
       });
       const identifierResult = identifier.results.find((result) => result.label === "theUserService");
       expect(identifierResult?.rankReasons).toContain("symbol token match: the, user, service");
+      const cachedIdentifier = await searchCodegraphWithSession(session, {
+        root,
+        query: "theUserService",
+        mode: "symbol",
+        limit: 20,
+      });
+      expect(cachedIdentifier).toBe(identifier);
 
       await searchCodegraphWithSession(session, {
         root,
