@@ -123,4 +123,12 @@ export function extra() {
     expect(stagedDiff.files.map((file) => file.path).sort()).toEqual(expectedFiles);
     expect(indexDiff.files.map((file) => file.path).sort()).toEqual(expectedFiles);
   });
+  it("rejects when the Git process cannot be spawned", async () => {
+    const root = createGitRepo();
+    const missingCwd = path.join(root, "missing");
+
+    await expect(getDiff({ provider: "git", cwd: missingCwd, base: "HEAD", head: "WORKTREE" })).rejects.toThrow(
+      /Git diff failed:.*ENOENT/,
+    );
+  });
 });
