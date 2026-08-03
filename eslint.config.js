@@ -52,19 +52,11 @@ export default tseslint.config(
     },
   },
   {
-    // Current-state query modules must load the index through the shared policy helper so a
-    // raw full build cannot be reintroduced. Artifact, lifecycle, historical, graph
-    // materialization, session, and library modules keep their explicit builder access.
-    files: [
-      "src/agent-tools.ts",
-      "src/review.ts",
-      "src/cli/affected.ts",
-      "src/cli/duplicates.ts",
-      "src/cli/graphQueries.ts",
-      "src/cli/impact.ts",
-      "src/cli/inspect.ts",
-      "src/cli/navigation.ts",
-    ],
+    // Every CLI command module plus the review and agent-tool entry points must load the
+    // index through the shared policy helper, so a new current-state query cannot silently
+    // reintroduce a raw full build. Deny by default here; the block below names the
+    // artifact, lifecycle, historical, and graph-materialization exemptions.
+    files: ["src/cli/**/*.ts", "src/review.ts", "src/agent-tools.ts"],
     rules: {
       "no-restricted-imports": [
         "error",
@@ -82,6 +74,15 @@ export default tseslint.config(
           ],
         },
       ],
+    },
+  },
+  {
+    // Explicit exemptions: `graph` materializes artifacts and `index` builds or refreshes
+    // the project index, so both own their builder choice. Keep this list short and
+    // justified; every entry is asserted by tests/cli-index-policy.test.ts.
+    files: ["src/cli/graph.ts", "src/cli/index.ts"],
+    rules: {
+      "no-restricted-imports": "off",
     },
   },
   {

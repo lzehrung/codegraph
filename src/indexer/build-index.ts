@@ -998,10 +998,27 @@ export async function buildProjectIndexIncremental(
   try {
     const declaredScope = opts?.filesAreProjectScope ? opts.files : undefined;
     // A declared project scope is the whole truth for this build, including when it is
-    // empty: full discovery would silently widen a scoped query. An empty scope is built
-    // from the empty file list and never rewrites the shared project manifest.
+    // empty: full discovery would silently widen a scoped query. An empty scope resolves to
+    // an empty index directly -- it is a valid query result, not the missing-file-list
+    // operator error `buildProjectIndexFromFiles` warns about -- and it never rewrites the
+    // shared project manifest.
     if (declaredScope && !declaredScope.length) {
-      return await buildProjectIndexFromFiles(projectRoot, [], opts);
+      const emptyGraph: Graph = { nodes: new Set(), edges: [] };
+      const emptyScopeFileReport = initFileReport(report);
+      if (emptyScopeFileReport) emptyScopeFileReport.total = 0;
+      return {
+        graph: emptyGraph,
+        graphAdjacency: buildGraphAdjacency(emptyGraph),
+        modules: new Map(),
+        byFile: new Map(),
+        projectRoot: normalizedProjectRoot,
+        ...(opts?.native ? { nativeMode: opts.native } : {}),
+        exportCache: new Map(),
+        scopeCache: new Map(),
+        parsed: new Map(),
+        ...(opts?.cache ? { cacheMode: opts.cache } : {}),
+        ...(report ? { buildReport: report } : {}),
+      };
     }
     if (cacheMode !== "disk") {
       if (declaredScope) {
