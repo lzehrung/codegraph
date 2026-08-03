@@ -21,6 +21,7 @@ import { assertSafeRevision } from "../util/git.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
 const UNSAFE_BATCH_REQUEST_CHARACTERS = /[\0\r\n]/;
 const MAX_GIT_BATCH_OUTPUT_BYTES_PER_FILE = 16 * 1024 * 1024;
+const MAX_GIT_BATCH_OUTPUT_BYTES = 64 * 1024 * 1024;
 const MAX_GIT_BATCH_STDERR_CHARACTERS = 64 * 1024;
 
 export type DeletedFileSnapshot = {
@@ -190,7 +191,7 @@ async function readGitFilesAtRevision(
     requests.push({ file, object: `${safeRevision}:${relativeFile}` });
   }
   if (!requests.length) return new Map();
-  const maxOutputBytes = MAX_GIT_BATCH_OUTPUT_BYTES_PER_FILE * requests.length;
+  const maxOutputBytes = Math.min(MAX_GIT_BATCH_OUTPUT_BYTES_PER_FILE * requests.length, MAX_GIT_BATCH_OUTPUT_BYTES);
 
   try {
     const child = spawn("git", ["cat-file", "--batch"], { cwd: projectRoot });
@@ -243,8 +244,9 @@ async function readGitFilesAtRevision(
       const sizeMatch = header.match(/^[0-9a-f]+ blob ([0-9]+)$/);
       if (!sizeMatch) return new Map();
       const size = Number(sizeMatch[1]);
+      if (!Number.isSafeInteger(size) || size > MAX_GIT_BATCH_OUTPUT_BYTES_PER_FILE) return new Map();
       const contentEnd = cursor + size;
-      if (contentEnd > output.length) return new Map();
+      if (!Number.isSafeInteger(contentEnd) || contentEnd > output.length) return new Map();
       sources.set(request.file, output.subarray(cursor, contentEnd).toString("utf8"));
       cursor = contentEnd;
       if (output[cursor] === 0x0a) cursor++;
