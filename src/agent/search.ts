@@ -346,10 +346,7 @@ function searchResultCacheKey(snapshot: AgentProjectSnapshot, request: AgentSear
   const query = buildQueryTerms(request.query);
   return JSON.stringify({
     projectSnapshotIdentity: snapshot.index.projectSnapshotIdentity ?? "",
-    query: normalizeQuerySearchText(request.query),
-    rankTokens: query.rankTokens,
-    normalizedRankPhrase: query.normalizedRankPhrase,
-    identifierLike: query.identifierLike,
+    query,
     mode: request.mode ?? "hybrid",
     limit: defaultAgentLimit(request.limit, DEFAULT_LIMIT, AGENT_SEARCH_RESULT_LIMIT),
     depth: normalizeDepth(request.depth),
@@ -459,8 +456,11 @@ function isExplicitPathQuery(input: string): boolean {
   const prosePrecedesPath = /\s/.test(trimmed.slice(0, slashIndex));
   if (prosePrecedesPath) return false;
   const singleToken = !/\s/.test(trimmed);
-  const endsWithExtension = /\.[A-Za-z0-9]+$/.test(trimmed);
-  return singleToken || endsWithExtension;
+  if (singleToken) return true;
+  const firstToken = trimmed.split(/\s+/, 1)[0] ?? "";
+  const firstTokenEndsWithExtension = /\.[A-Za-z0-9]+$/.test(firstToken);
+  const queryEndsWithExtension = /\.[A-Za-z0-9]+$/.test(trimmed);
+  return queryEndsWithExtension && !firstTokenEndsWithExtension;
 }
 
 function normalizeSearchText(input: string): string {
