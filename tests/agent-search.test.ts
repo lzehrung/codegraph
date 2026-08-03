@@ -410,16 +410,28 @@ describe("agent search", () => {
     });
     expect(directoryPathProse.results[0]?.file).toBe("src/agent/agent.ts");
     expect(directoryPathProse.results[0]?.score).toBe(144);
+    expect(directoryPathProse.results.flatMap((result) => result.rankReasons).join(" ")).not.toMatch(/\b(?:what|is)\b/);
   });
 
   it("preserves every term in an existing spaced path", async () => {
     const root = await mkRepo();
     await fs.writeFile(path.join(root, "src", "how config.ts"), "export const spacedPath = true;\n");
+    await fs.mkdir(path.join(root, "the app"), { recursive: true });
+    await fs.writeFile(path.join(root, "the app", "config.ts"), "export const firstSegmentSpace = true;\n");
 
     const response = await searchCodegraph({ root, query: "src/how config.ts", mode: "path", limit: 20 });
 
     expect(response.results[0]?.file).toBe("src/how config.ts");
     expect(response.results[0]?.rankReasons).toContain("path token match: src, how, config, ts");
+
+    const firstSegmentResponse = await searchCodegraph({
+      root,
+      query: "the app/config.ts",
+      mode: "path",
+      limit: 20,
+    });
+    const firstSegmentPath = firstSegmentResponse.results.find((result) => result.file === "the app/config.ts");
+    expect(firstSegmentPath?.rankReasons).toContain("path token match: the, app, config, ts");
 
     const hybridResponse = await searchCodegraph({ root, query: "src/how config.ts", mode: "hybrid", limit: 20 });
     const hybridPath = hybridResponse.results.find((result) => result.file === "src/how config.ts");

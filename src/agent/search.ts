@@ -453,8 +453,6 @@ function isExplicitPathQuery(input: string, snapshot: AgentFileSnapshot): boolea
   const trimmed = input.trim();
   const slashIndex = trimmed.search(/[\\/]/);
   if (slashIndex < 0) return false;
-  const prosePrecedesPath = /\s/.test(trimmed.slice(0, slashIndex));
-  if (prosePrecedesPath) return false;
   if (!/\s/.test(trimmed)) return true;
   return resolveAgentSnapshotFile(snapshot, trimmed) !== null;
 }
