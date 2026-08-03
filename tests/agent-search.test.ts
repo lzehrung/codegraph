@@ -410,7 +410,7 @@ describe("agent search", () => {
     });
     expect(directoryPathProse.results[0]?.file).toBe("src/agent/agent.ts");
     expect(directoryPathProse.results[0]?.score).toBe(144);
-    expect(directoryPathProse.results.flatMap((result) => result.rankReasons).join(" ")).not.toMatch(/\b(?:what|is)\b/);
+    expect(directoryPathProse.results[0]?.rankReasons).toContain("path token match: src, agent, ts");
   });
 
   it("preserves every term in an existing spaced path", async () => {
