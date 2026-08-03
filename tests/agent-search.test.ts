@@ -454,12 +454,20 @@ describe("agent search", () => {
     const session = createAgentSession({ root });
 
     try {
-      await searchCodegraphWithSession(session, {
+      const naturalLanguage = await searchCodegraphWithSession(session, {
         root,
         query: "the user service",
         mode: "symbol",
         limit: 20,
       });
+      const cachedNaturalLanguage = await searchCodegraphWithSession(session, {
+        root,
+        query: "how does user service",
+        mode: "symbol",
+        limit: 20,
+      });
+      expect(cachedNaturalLanguage.query).toBe("how does user service");
+      expect(cachedNaturalLanguage.results).toBe(naturalLanguage.results);
       const identifier = await searchCodegraphWithSession(session, {
         root,
         query: "theUserService",

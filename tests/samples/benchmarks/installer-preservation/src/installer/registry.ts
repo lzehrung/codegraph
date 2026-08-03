@@ -12,7 +12,11 @@ export function shouldPreserveExistingServer(
   existing: ExistingMcpConfig,
   requested: ExistingMcpConfig,
 ): boolean {
-  return existing.command === requested.command && existing.args.join("\0") === requested.args.join("\0");
+  return (
+    existing.command === requested.command &&
+    existing.args.length === requested.args.length &&
+    existing.args.every((arg, index) => arg === requested.args[index])
+  );
 }
 
 export function preserveExistingMcpConfig(
