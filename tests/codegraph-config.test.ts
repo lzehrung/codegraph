@@ -4,6 +4,9 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions, mergeGraphOptions } from "../src/config.js";
 import { searchCodegraph } from "../src/agent/search.js";
+import { buildProjectIndex, type BuildReport } from "../src/indexer/build-index.js";
+import { diffBuildOptions, summarizeBuildOptions } from "../src/indexer/build-cache.js";
+import { normalizeLanguageExtensions, supportForFile } from "../src/languages.js";
 import { runTsxScriptOrThrow } from "./helpers/cli.js";
 import { decompactFileGraph, type CompactFileGraphPayload } from "./helpers/compactGraph.js";
 

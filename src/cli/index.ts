@@ -3,6 +3,7 @@ import { buildProjectIndexFromFiles, buildProjectIndexIncremental } from "../ind
 import { type BuildOptions, type BuildReport } from "../indexer/types.js";
 import { type GraphBuildOptions } from "../graphs/types.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
+import type { LanguageExtensionMap } from "../languages.js";
 import type { ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { parseCacheModeOption, parseNonNegativeIntegerOption } from "./options.js";
 import { writeCliOutput } from "./pretty.js";
@@ -26,6 +27,7 @@ export type IndexCommandContext = {
   changedSince: string | undefined;
   discoveryOptions: ProjectFileDiscoveryOptions;
   nativeMode: NativeRuntimeMode;
+  languageExtensions: LanguageExtensionMap | undefined;
   workerOpts: { useNativeWorkers: true } | Record<string, never>;
   progressHandler: BuildOptions["onProgress"];
   graphOptions: GraphBuildOptions | undefined;

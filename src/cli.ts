@@ -41,6 +41,7 @@ import {
 export { isRelativePathInside as isCliDiscoveryRelativePathInside } from "./util/discoveryPath.js";
 export const CLI_DISPATCHABLE_COMMANDS = [
   "apisurface",
+  "affected",
   "artifact",
   "callees",
   "callers",
@@ -589,7 +590,15 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
 
   const resolveFilesFromRoots = async (): Promise<string[]> => {
     const { listProjectFiles } = await loadProjectFilesHelpers();
-    const patterns = cmd === "duplicates" ? await getDuplicateProjectPatterns() : undefined;
+    const basePatterns = cmd === "duplicates" ? await getDuplicateProjectPatterns() : undefined;
+    const [{ languageExtensionPatterns }, { DEFAULT_PROJECT_PATTERNS }] = await Promise.all([
+      import("./languages.js"),
+      loadProjectFilesHelpers(),
+    ]);
+    const customPatterns = languageExtensionPatterns(config.languages?.extensions);
+    const patterns = customPatterns.length
+      ? [...(basePatterns ?? DEFAULT_PROJECT_PATTERNS), ...customPatterns]
+      : basePatterns;
     if (!includeRootsAbs.length) {
       const diagnosticFiles = await listProjectFiles(projectRootFs, patterns, {
         ...diagnosticDiscoveryOptions,
@@ -1189,6 +1198,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   }
 
   if (cmd === "affected") {
+    const { handleAffectedCommand } = await import("./cli/affected.js");
     await handleAffectedCommand({
       projectRootFs,
       buildOptions: buildAgentOptions(),

@@ -1,6 +1,13 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
+import {
+  isLiteralLanguageExtension,
+  isRemappableLanguageExtension,
+  normalizeLanguageExtensions,
+  supportById,
+} from "./languages.js";
+import type { LanguageExtensionMap } from "./languages.js";
 import type { GraphBuildOptions } from "./graphs/types.js";
 import { normalizeResolutionHints } from "./util/paths.js";
 import { type ProjectFileDiscoveryOptions } from "./util/projectFiles.js";
@@ -21,6 +28,12 @@ const codegraphConfigSchema = z
       })
       .strict()
       .optional(),
+    languages: z
+      .object({
+        extensions: languageExtensionsSchema.optional(),
+      })
+      .strict()
+      .optional(),
     graph: z
       .object({
         resolutionHints: stringArraySchema.optional(),
@@ -34,6 +47,9 @@ type ParsedCodegraphConfig = z.infer<typeof codegraphConfigSchema>;
 
 export type CodegraphConfig = {
   discovery?: ProjectFileDiscoveryOptions;
+  languages?: {
+    extensions?: LanguageExtensionMap;
+  };
   graph?: {
     resolutionHints?: string[];
   };
@@ -162,5 +178,6 @@ export async function loadCodegraphConfig(projectRoot: string): Promise<Codegrap
   return {
     ...(discovery ? { discovery } : {}),
     ...(graph ? { graph } : {}),
+    ...(languageExtensions ? { languages: { extensions: languageExtensions } } : {}),
   };
 }

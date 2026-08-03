@@ -126,7 +126,6 @@ Examples:
   codegraph -v
 `;
 
-
 export const LIFECYCLE_HELP_TEXT = `codegraph init/status/sync/uninit - Initialize, inspect, refresh, or remove project-local Codegraph state
 
 Usage:
@@ -554,6 +553,7 @@ export function helpTextForCommand(command: string, positionals: readonly string
   if (command === "orient") return ORIENT_HELP_TEXT;
   if (command === "packet") return PACKET_HELP_TEXT;
   if (command === "explain") return EXPLAIN_HELP_TEXT;
+  if (command === "affected") return AFFECTED_HELP_TEXT;
   if (command === "install") return INSTALL_HELP_TEXT;
   if (command === "uninstall") return UNINSTALL_HELP_TEXT;
   if (command === "init" || command === "status" || command === "sync" || command === "uninit")

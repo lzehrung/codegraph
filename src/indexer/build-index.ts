@@ -281,7 +281,9 @@ async function buildIndexedModuleForFile(args: {
 
   const sigInfo = args.fileSignatures.get(args.file);
   if (sigInfo) {
-    const cacheSig = args.cacheEnabled ? await cacheSignatureForFile(args.file, sigInfo, args.opts) : sigInfo.cacheSig;
+    const cacheSig = args.cacheEnabled
+      ? await moduleCacheSignatureForFile(args.file, sigInfo, args.opts)
+      : sigInfo.cacheSig;
     writeToCache(args.projectRoot, args.file, cacheSig, mod, args.opts);
   }
 
@@ -657,7 +659,7 @@ async function buildIndexFromFileListShared(
           const initialManifestEntry = toManifestFileEntry({ ...sigInfo, edges: [] });
           if (initialManifestEntry) manifestEntries.set(file, initialManifestEntry);
         }
-        const cacheSig = cacheEnabled ? await cacheSignatureForFile(file, sigInfo, opts) : sigInfo.cacheSig;
+        const cacheSig = cacheEnabled ? await moduleCacheSignatureForFile(file, sigInfo, opts) : sigInfo.cacheSig;
         let mod: ModuleIndex | null = cacheEnabled ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report) : null;
         if (mod && fileReport) {
           fileReport.cached = (fileReport.cached ?? 0) + 1;
@@ -696,7 +698,7 @@ async function buildIndexFromFileListShared(
             if (persistedFilter) {
               bloomFilterCache.set(file, persistedFilter);
             } else {
-              const filter = await buildBloomFilterForFile(file);
+              const filter = await buildBloomFilterForFile(file, opts);
               if (filter) bloomFilterCache.set(file, filter);
             }
           }
@@ -874,7 +876,7 @@ async function buildProjectIndexWithManifestOptions(
     // cold-start case, but avoids paying for two full-tree walks instead of one. Once a
     // hint is known (the common warm case), both calls skip probing entirely, so running
     // them sequentially here costs no meaningful time either way.
-    const discoveredFiles = await listProjectFiles(projectRoot, undefined, {
+    const discoveredFiles = await listProjectFiles(projectRoot, projectPatternsForLanguageExtensions(opts), {
       ...opts?.discovery,
       ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
       ...(knownSymlinkDirectories !== undefined ? { knownSymlinkDirectories } : {}),
@@ -1015,7 +1017,9 @@ export async function buildProjectIndexIncremental(
     const currentConfigHashResult = await computeConfigHash(projectRoot, opts?.logLevel);
     const currentConfigHash = recordConfigHashResult(manifestReport, currentConfigHashResult, opts?.logLevel);
     const configChanged = !!currentConfigHash && (!manifest?.configHash || currentConfigHash !== manifest.configHash);
-    const requiresFullRebuild = optionDiffs.includes("discovery") || optionDiffs.includes("native");
+    const requiresFullRebuild = optionDiffs.some(
+      (diff) => diff === "discovery" || diff === "native" || diff === "languageExtensions",
+    );
     if (!manifest || !graphOptionsEqual(manifest.graphOptions, graphOptions) || configChanged || requiresFullRebuild) {
       if (configChanged) {
         logWithLevel(opts?.logLevel, "warn", "Configuration changed, rebuilding index...");
@@ -1327,7 +1331,7 @@ export async function buildProjectIndexIncremental(
       for (const file of allFiles) {
         if (changedFiles.has(file)) continue;
         const sigInfo = fileSignatures.get(file)!;
-        const cacheSig = cacheEnabled ? await cacheSignatureForFile(file, sigInfo, opts) : sigInfo.cacheSig;
+        const cacheSig = cacheEnabled ? await moduleCacheSignatureForFile(file, sigInfo, opts) : sigInfo.cacheSig;
         const cached = cacheEnabled ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report) : null;
         if (cached) {
           if (fileReport) fileReport.cached = (fileReport.cached ?? 0) + 1;
@@ -1338,7 +1342,7 @@ export async function buildProjectIndexIncremental(
             if (persistedFilter) {
               bloomFilterCache.set(file, persistedFilter);
             } else {
-              const filter = await buildBloomFilterForFile(file);
+              const filter = await buildBloomFilterForFile(file, opts);
               if (filter) bloomFilterCache.set(file, filter);
             }
           }

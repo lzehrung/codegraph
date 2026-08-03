@@ -38,6 +38,7 @@ const config = await loadCodegraphConfig(root);
 const index = await buildProjectIndex(root, {
   ...(config.discovery ? { discovery: config.discovery } : {}),
   ...(config.graph ? { graph: config.graph } : {}),
+  ...(config.languages?.extensions ? { languageExtensions: config.languages.extensions } : {}),
 });
 ```
 
