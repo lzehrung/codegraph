@@ -231,7 +231,11 @@ export async function searchCodegraphWithSession(
   const resultCache = getSessionSearchResultCache(session);
   const cacheKey = searchResultCacheKey(snapshot, request);
   const existing = resultCache.get(cacheKey);
-  if (existing) return await existing;
+  if (existing) {
+    const response = await existing;
+    if (response.query === request.query) return response;
+    return { ...response, query: request.query };
+  }
   const mode = request.mode ?? "hybrid";
   let queryIndex: QueryIndexHandle | undefined;
   if (mode === "hybrid" || mode === "text") {
@@ -344,10 +348,10 @@ function getSessionSearchResultCache(session: AgentSession): Map<string, Promise
 }
 
 function searchResultCacheKey(snapshot: AgentProjectSnapshot, request: AgentSearchRequest): string {
-  const query = buildQueryTerms(request.query, snapshot);
+  const { rankTokens, normalizedRankPhrase, identifierLike } = buildQueryTerms(request.query, snapshot);
   return JSON.stringify({
     projectSnapshotIdentity: snapshot.index.projectSnapshotIdentity ?? "",
-    query,
+    query: { rankTokens, normalizedRankPhrase, identifierLike },
     mode: request.mode ?? "hybrid",
     limit: defaultAgentLimit(request.limit, DEFAULT_LIMIT, AGENT_SEARCH_RESULT_LIMIT),
     depth: normalizeDepth(request.depth),

@@ -84,7 +84,6 @@ type AgentExploreCollection<T> = {
 type AgentExploreAnchorSelection = {
   files: string[];
   symbolIds: string[];
-  primaryRankedFile?: string;
 };
 
 const DEFAULT_ANCHOR_LIMIT = 5;
@@ -152,15 +151,7 @@ export async function exploreCodegraphWithSession(
     DEFAULT_MAX_CANDIDATE_TESTS,
   );
   const candidateTests = candidateTestResult.items;
-  const followUps = collectFollowUps(
-    request.root,
-    request.query,
-    anchors,
-    packets,
-    anchorFiles,
-    anchorSelection.primaryRankedFile,
-    includeSource,
-  );
+  const followUps = collectFollowUps(request.root, request.query, anchors, packets, anchorFiles, includeSource);
 
   return {
     schemaVersion: 1,
@@ -337,20 +328,15 @@ function collectAnchorSelection(
   });
   const files = new Set(explicitFiles);
   const symbolIds = new Set<string>();
-  let primaryRankedFile: string | undefined;
   for (const anchor of anchors) {
     const absolute = normalizePath(path.resolve(snapshot.root, anchor.file));
-    if (snapshot.fileGraph.nodes.has(absolute)) {
-      primaryRankedFile ??= absolute;
-      files.add(absolute);
-    }
+    if (snapshot.fileGraph.nodes.has(absolute)) files.add(absolute);
     const symbolId = resolveAnchorSymbolId(snapshot, anchor);
     if (symbolId) symbolIds.add(symbolId);
   }
   return {
     files: [...files],
     symbolIds: [...symbolIds],
-    ...(primaryRankedFile ? { primaryRankedFile } : {}),
   };
 }
 
@@ -534,12 +520,9 @@ function collectFollowUps(
   anchors: readonly AgentSearchResult[],
   packets: readonly AgentPacketResponse[],
   anchorFiles: readonly string[],
-  primaryRankedFile: string | undefined,
   includeSource: boolean,
 ): string[] {
-  const orderedFiles = primaryRankedFile
-    ? [primaryRankedFile, ...anchorFiles.filter((file) => file !== primaryRankedFile)]
-    : [...anchorFiles];
+  const orderedFiles = [...anchorFiles];
   const followUps: string[] = [];
   for (const file of orderedFiles.slice(0, 3)) {
     const relative = toProjectDisplayPath(root, file);

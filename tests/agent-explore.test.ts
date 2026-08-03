@@ -363,6 +363,7 @@ describe("agent explore", () => {
     const blastRadiusFiles = response.blastRadius.map((entry) => entry.file);
 
     expect(blastRadiusFiles[0]).toBe("src/routes.ts");
+    expect(response.followUps[0]).toBe("codegraph file src/routes.ts");
     expect(blastRadiusFiles.indexOf("src/z-installer.ts")).toBeGreaterThan(0);
   });
 
