@@ -45,11 +45,11 @@ async function loadProjectScope(root: string, report: BuildReport, options?: Loa
   });
 }
 
-function indexedFiles(index: { byFile: Map<string, unknown> }): string[] {
+function indexedFiles(index: { byFile: ReadonlyMap<string, unknown> }): string[] {
   return [...index.byFile.keys()].map(normalizeTestPath).sort();
 }
 
-function fileNames(index: { byFile: Map<string, unknown> }): string[] {
+function fileNames(index: { byFile: ReadonlyMap<string, unknown> }): string[] {
   return indexedFiles(index).map((file) => path.posix.basename(file));
 }
 
