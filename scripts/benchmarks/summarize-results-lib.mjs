@@ -20,8 +20,15 @@ const ENVIRONMENT_KEYS = ["nodeVersion", "platform", "arch", "cpuModel", "logica
 const RUN_KEYS = ["scenarioId", "variant", "run", "metrics", "checks"];
 const METRIC_KEYS = ["toolCalls", "fileReads", "wallTimeMs"];
 const CHECK_KEYS = ["anchorsExpected", "anchorsFound", "missingAnchors", "completeness"];
+const REVIEWED_CHECK_KEYS = [...CHECK_KEYS, "reviewedRelationships"];
 const SCENARIO_DOCUMENT_KEYS = ["schemaVersion", "scenarios"];
 const SCENARIO_KEYS = ["id", "repo", "task", "expectedAnchors", "metrics", "variants"];
+const REVIEWED_SCENARIO_KEYS = [
+  ...SCENARIO_KEYS,
+  "requiredAnchorOrder",
+  "expectedRecommendedFile",
+  "requiredCandidateTests",
+];
 const VARIANT_KEYS = ["baseline", "codegraph"];
 const VARIANT_ORDER = new Map([
   ["baseline", 0],
@@ -150,6 +157,36 @@ function requireUniqueStrings(value, location, { paths = false, nonEmpty = false
   return value;
 }
 
+function hasReviewedRelationships(value) {
+  return Object.hasOwn(value, "requiredAnchorOrder");
+}
+
+function validateAnchorSelector(selector, location) {
+  requireExactKeys(selector, ["file", "label"], location);
+  requireRepoRelativePath(selector.file, `${location}.file`);
+  requireNonEmptyString(selector.label, `${location}.label`);
+}
+
+function validateReviewedScenario(scenario, location) {
+  if (!hasReviewedRelationships(scenario)) return;
+  requireArray(scenario.requiredAnchorOrder, `${location}.requiredAnchorOrder`, { nonEmpty: true });
+  const pairs = new Set();
+  scenario.requiredAnchorOrder.forEach((pair, index) => {
+    const pairLocation = `${location}.requiredAnchorOrder[${index}]`;
+    requireExactKeys(pair, ["before", "after"], pairLocation);
+    validateAnchorSelector(pair.before, `${pairLocation}.before`);
+    validateAnchorSelector(pair.after, `${pairLocation}.after`);
+    const key = `${pair.before.file}\0${pair.before.label}\0${pair.after.file}\0${pair.after.label}`;
+    if (pairs.has(key)) fail(pairLocation, "duplicate anchor-order pair");
+    pairs.add(key);
+  });
+  requireRepoRelativePath(scenario.expectedRecommendedFile, `${location}.expectedRecommendedFile`);
+  requireUniqueStrings(scenario.requiredCandidateTests, `${location}.requiredCandidateTests`, {
+    paths: true,
+    nonEmpty: true,
+  });
+}
+
 function validateBaselineStep(step, location) {
   requireExactKeys(step, ["type", "path"], location);
   if (step.type !== "read") {
@@ -179,7 +216,7 @@ export function validateScenarioFile(value) {
   const ids = new Set();
   value.scenarios.forEach((scenario, index) => {
     const location = `scenario file.scenarios[${index}]`;
-    requireExactKeys(scenario, SCENARIO_KEYS, location);
+    requireExactKeys(scenario, hasReviewedRelationships(scenario) ? REVIEWED_SCENARIO_KEYS : SCENARIO_KEYS, location);
     requireNonEmptyString(scenario.id, `${location}.id`);
     if (ids.has(scenario.id)) {
       fail(`${location}.id`, `duplicate scenario id ${JSON.stringify(scenario.id)}`);
@@ -208,6 +245,7 @@ export function validateScenarioFile(value) {
     scenario.variants.codegraph.forEach((step, stepIndex) =>
       validateCodegraphStep(step, `${location}.variants.codegraph[${stepIndex}]`),
     );
+    validateReviewedScenario(scenario, location);
   });
 
   return value;
@@ -237,6 +275,63 @@ function scenarioLookupFromOptions(options) {
   );
 }
 
+function requireNullableRank(value, location) {
+  if (value === null) return null;
+  return requirePositiveInteger(value, location);
+}
+
+function requireReciprocalRank(value, rank, location) {
+  if (rank === null) {
+    if (value !== null) fail(location, "must be null when rank is null");
+    return;
+  }
+  requireNonNegativeNumber(value, location);
+  const expected = 1 / rank;
+  if (value !== expected) fail(location, `expected reciprocal rank ${expected}, received ${value}`);
+}
+
+function validateReviewedRelationships(value, location) {
+  requireExactKeys(value, ["anchorOrder", "recommendedFile", "candidateTests"], location);
+  requireArray(value.anchorOrder, `${location}.anchorOrder`, { nonEmpty: true });
+  value.anchorOrder.forEach((pair, index) => {
+    const pairLocation = `${location}.anchorOrder[${index}]`;
+    requireExactKeys(
+      pair,
+      ["before", "after", "beforeRank", "afterRank", "beforeReciprocalRank", "afterReciprocalRank"],
+      pairLocation,
+    );
+    validateAnchorSelector(pair.before, `${pairLocation}.before`);
+    validateAnchorSelector(pair.after, `${pairLocation}.after`);
+    const beforeRank = requireNullableRank(pair.beforeRank, `${pairLocation}.beforeRank`);
+    const afterRank = requireNullableRank(pair.afterRank, `${pairLocation}.afterRank`);
+    requireReciprocalRank(pair.beforeReciprocalRank, beforeRank, `${pairLocation}.beforeReciprocalRank`);
+    requireReciprocalRank(pair.afterReciprocalRank, afterRank, `${pairLocation}.afterReciprocalRank`);
+  });
+  requireExactKeys(
+    value.recommendedFile,
+    ["expected", "actual", "rank", "reciprocalRank"],
+    `${location}.recommendedFile`,
+  );
+  requireRepoRelativePath(value.recommendedFile.expected, `${location}.recommendedFile.expected`);
+  if (value.recommendedFile.actual !== null) {
+    requireRepoRelativePath(value.recommendedFile.actual, `${location}.recommendedFile.actual`);
+  }
+  const recommendedRank = requireNullableRank(value.recommendedFile.rank, `${location}.recommendedFile.rank`);
+  requireReciprocalRank(
+    value.recommendedFile.reciprocalRank,
+    recommendedRank,
+    `${location}.recommendedFile.reciprocalRank`,
+  );
+  requireArray(value.candidateTests, `${location}.candidateTests`, { nonEmpty: true });
+  value.candidateTests.forEach((candidate, index) => {
+    const candidateLocation = `${location}.candidateTests[${index}]`;
+    requireExactKeys(candidate, ["file", "rank", "reciprocalRank"], candidateLocation);
+    requireRepoRelativePath(candidate.file, `${candidateLocation}.file`);
+    const rank = requireNullableRank(candidate.rank, `${candidateLocation}.rank`);
+    requireReciprocalRank(candidate.reciprocalRank, rank, `${candidateLocation}.reciprocalRank`);
+  });
+}
+
 function validateRun(run, index) {
   const location = `results.runs[${index}]`;
   requireExactKeys(run, RUN_KEYS, location);
@@ -251,7 +346,8 @@ function validateRun(run, index) {
   requireNonNegativeNumber(run.metrics.fileReads, `${location}.metrics.fileReads`, { integer: true });
   requireNonNegativeNumber(run.metrics.wallTimeMs, `${location}.metrics.wallTimeMs`);
 
-  requireExactKeys(run.checks, CHECK_KEYS, `${location}.checks`);
+  const checkKeys = Object.hasOwn(run.checks, "reviewedRelationships") ? REVIEWED_CHECK_KEYS : CHECK_KEYS;
+  requireExactKeys(run.checks, checkKeys, `${location}.checks`);
   requirePositiveInteger(run.checks.anchorsExpected, `${location}.checks.anchorsExpected`);
   requireNonNegativeNumber(run.checks.anchorsFound, `${location}.checks.anchorsFound`, {
     integer: true,
@@ -279,6 +375,9 @@ function validateRun(run, index) {
       `${location}.checks.completeness`,
       `expected ${expectedCompleteness} from anchorsFound / anchorsExpected, received ${run.checks.completeness}`,
     );
+  }
+  if (Object.hasOwn(run.checks, "reviewedRelationships")) {
+    validateReviewedRelationships(run.checks.reviewedRelationships, `${location}.checks.reviewedRelationships`);
   }
 }
 
@@ -405,6 +504,53 @@ export function validateResults(value, options = {}) {
           );
         }
       });
+      const expectsReviewed = run.variant === "codegraph" && hasReviewedRelationships(scenario.scenario);
+      const hasReviewed = Object.hasOwn(run.checks, "reviewedRelationships");
+      if (expectsReviewed !== hasReviewed) {
+        fail(
+          `${location}.checks`,
+          expectsReviewed
+            ? "missing reviewedRelationships for the declared codegraph relationship contract"
+            : "reviewedRelationships is not declared for this scenario variant",
+        );
+      }
+      if (expectsReviewed) {
+        const reviewed = run.checks.reviewedRelationships;
+        const declared = scenario.scenario;
+        if (reviewed.anchorOrder.length !== declared.requiredAnchorOrder.length) {
+          fail(`${location}.checks.reviewedRelationships.anchorOrder`, "does not match the declared pair count");
+        }
+        reviewed.anchorOrder.forEach((pair, pairIndex) => {
+          const expectedPair = declared.requiredAnchorOrder[pairIndex];
+          if (
+            pair.before.file !== expectedPair.before.file ||
+            pair.before.label !== expectedPair.before.label ||
+            pair.after.file !== expectedPair.after.file ||
+            pair.after.label !== expectedPair.after.label
+          ) {
+            fail(
+              `${location}.checks.reviewedRelationships.anchorOrder[${pairIndex}]`,
+              "does not match the declared anchor-order pair",
+            );
+          }
+        });
+        if (reviewed.recommendedFile.expected !== declared.expectedRecommendedFile) {
+          fail(
+            `${location}.checks.reviewedRelationships.recommendedFile.expected`,
+            "does not match the declared expectedRecommendedFile",
+          );
+        }
+        const actualTests = reviewed.candidateTests.map((candidate) => candidate.file);
+        if (
+          actualTests.length !== declared.requiredCandidateTests.length ||
+          actualTests.some((file, testIndex) => file !== declared.requiredCandidateTests[testIndex])
+        ) {
+          fail(
+            `${location}.checks.reviewedRelationships.candidateTests`,
+            "does not match the declared requiredCandidateTests",
+          );
+        }
+      }
     }
   });
 
@@ -472,6 +618,26 @@ function summaryOrder(results, options, hasScenarioFile) {
   return requireScenarioOrder(options.scenarioOrder, results.scenarioIds);
 }
 
+function formatRank(rank, reciprocal) {
+  if (rank === null) return "missing";
+  return `rank ${rank}, reciprocal rank ${formatNumber(reciprocal)}`;
+}
+
+export function describeReviewedRelationships(reviewed) {
+  if (!reviewed) return [];
+  const descriptions = reviewed.anchorOrder.map(
+    (pair) =>
+      `${pair.before.file}#${pair.before.label} (${formatRank(pair.beforeRank, pair.beforeReciprocalRank)}) before ${pair.after.file}#${pair.after.label} (${formatRank(pair.afterRank, pair.afterReciprocalRank)})`,
+  );
+  descriptions.push(
+    `recommended ${reviewed.recommendedFile.expected} (${formatRank(reviewed.recommendedFile.rank, reviewed.recommendedFile.reciprocalRank)}; actual ${String(reviewed.recommendedFile.actual)})`,
+  );
+  for (const candidate of reviewed.candidateTests) {
+    descriptions.push(`${candidate.file} (${formatRank(candidate.rank, candidate.reciprocalRank)})`);
+  }
+  return descriptions;
+}
+
 export function summarizeResults(results, options = {}) {
   validateResults(results, options);
   const hasScenarioFile = (options?.scenarioFile ?? options?.scenarios ?? null) !== null;
@@ -503,18 +669,25 @@ export function summarizeResults(results, options = {}) {
       if (left.scenarioId > right.scenarioId) return 1;
       return VARIANT_ORDER.get(left.variant) - VARIANT_ORDER.get(right.variant);
     })
-    .map((group) => ({
-      scenarioId: group.scenarioId,
-      variant: group.variant,
-      sampleCount: group.runs.length,
-      medians: {
-        toolCalls: median(group.runs.map((run) => run.metrics.toolCalls)),
-        fileReads: median(group.runs.map((run) => run.metrics.fileReads)),
-        wallTimeMs: median(group.runs.map((run) => run.metrics.wallTimeMs)),
-      },
-      completeRunCount: group.runs.filter((run) => run.checks.completeness === 1).length,
-      minimumCompleteness: group.runs.reduce((minimum, run) => Math.min(minimum, run.checks.completeness), 1),
-    }));
+    .map((group) => {
+      const summary = {
+        scenarioId: group.scenarioId,
+        variant: group.variant,
+        sampleCount: group.runs.length,
+        medians: {
+          toolCalls: median(group.runs.map((run) => run.metrics.toolCalls)),
+          fileReads: median(group.runs.map((run) => run.metrics.fileReads)),
+          wallTimeMs: median(group.runs.map((run) => run.metrics.wallTimeMs)),
+        },
+        completeRunCount: group.runs.filter((run) => run.checks.completeness === 1).length,
+        minimumCompleteness: group.runs.reduce((minimum, run) => Math.min(minimum, run.checks.completeness), 1),
+      };
+      const descriptions = [
+        ...new Set(group.runs.flatMap((run) => describeReviewedRelationships(run.checks.reviewedRelationships))),
+      ];
+      if (descriptions.length) summary.reviewedRelationships = descriptions;
+      return summary;
+    });
 }
 
 export function escapeMarkdown(value) {
@@ -532,6 +705,7 @@ function formatNumber(value) {
 
 export function renderMarkdownTable(summaries) {
   requireArray(summaries, "summaries", { nonEmpty: true });
+  const includeReviewedRelationships = summaries.some((summary) => Object.hasOwn(summary, "reviewedRelationships"));
   const headers = [
     "Scenario",
     "Variant",
@@ -542,13 +716,12 @@ export function renderMarkdownTable(summaries) {
     "Complete runs",
     "Minimum completeness",
   ];
+  if (includeReviewedRelationships) headers.push("Reviewed relationships");
   const rows = summaries.map((summary, index) => {
     const location = `summaries[${index}]`;
-    requireExactKeys(
-      summary,
-      ["scenarioId", "variant", "sampleCount", "medians", "completeRunCount", "minimumCompleteness"],
-      location,
-    );
+    const summaryKeys = ["scenarioId", "variant", "sampleCount", "medians", "completeRunCount", "minimumCompleteness"];
+    if (Object.hasOwn(summary, "reviewedRelationships")) summaryKeys.push("reviewedRelationships");
+    requireExactKeys(summary, summaryKeys, location);
     requireNonEmptyString(summary.scenarioId, `${location}.scenarioId`);
     if (!VARIANT_ORDER.has(summary.variant)) {
       fail(`${location}.variant`, 'expected "baseline" or "codegraph"');
@@ -566,8 +739,13 @@ export function renderMarkdownTable(summaries) {
     if (summary.minimumCompleteness > 1) {
       fail(`${location}.minimumCompleteness`, "must be between 0 and 1");
     }
+    if (Object.hasOwn(summary, "reviewedRelationships")) {
+      requireUniqueStrings(summary.reviewedRelationships, `${location}.reviewedRelationships`, {
+        nonEmpty: true,
+      });
+    }
 
-    return [
+    const row = [
       escapeMarkdown(summary.scenarioId),
       escapeMarkdown(summary.variant),
       String(summary.sampleCount),
@@ -577,6 +755,14 @@ export function renderMarkdownTable(summaries) {
       String(summary.completeRunCount),
       `${formatNumber(summary.minimumCompleteness * 100)}%`,
     ];
+    if (includeReviewedRelationships) {
+      let description = "-";
+      if (summary.reviewedRelationships) {
+        description = `${summary.reviewedRelationships.length} exact observations; ranks in results.example.json`;
+      }
+      row.push(escapeMarkdown(description));
+    }
+    return row;
   });
   const widths = headers.map((header, column) =>
     rows.reduce((width, row) => Math.max(width, row[column].length), header.length),
