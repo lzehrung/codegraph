@@ -1,6 +1,6 @@
 {
   "name": "@lzehrung/codegraph",
-  "version": "1.8.106",
+  "version": "1.8.107",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -178,6 +178,6 @@
     "fast-uri": "4.1.1"
   },
   "optionalDependencies": {
-    "@lzehrung/codegraph-native": "^1.8.85"
+    "@lzehrung/codegraph-native": "^1.8.86"
   }
 }
