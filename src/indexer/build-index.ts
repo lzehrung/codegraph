@@ -996,11 +996,16 @@ export async function buildProjectIndexIncremental(
     });
   };
   try {
+    const declaredScope = opts?.filesAreProjectScope ? opts.files : undefined;
+    // A declared project scope is the whole truth for this build, including when it is
+    // empty: full discovery would silently widen a scoped query. An empty scope is built
+    // from the empty file list and never rewrites the shared project manifest.
+    if (declaredScope && !declaredScope.length) {
+      return await buildProjectIndexFromFiles(projectRoot, [], opts);
+    }
     if (cacheMode !== "disk") {
-      // Without a manifest to reconcile against, a declared project scope is the whole
-      // truth for this build; full discovery would silently widen a scoped query.
-      if (opts?.filesAreProjectScope && opts.files?.length) {
-        return await buildProjectIndexFromFiles(projectRoot, opts.files, opts);
+      if (declaredScope) {
+        return await buildProjectIndexFromFiles(projectRoot, declaredScope, opts);
       }
       return await buildProjectIndexFromExport(projectRoot, opts, { ignoreExistingManifest: true });
     }

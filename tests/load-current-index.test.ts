@@ -321,6 +321,25 @@ describe("loadCurrentProjectIndex freshness decisions", () => {
     }
   });
 
+  it("keeps an empty resolved scope empty instead of widening to the project", async () => {
+    const root = await createProject("dg-load-current-empty-scope-");
+    await loadProjectScope(root, newReport());
+    for (const cache of ["off", "memory", "disk"] as const) {
+      const index = await loadCurrentProjectIndex({
+        root,
+        scope: { kind: "resolved-files", files: [] },
+        options: { cache, report: newReport() },
+      });
+      expect(index.byFile.size, `cache ${cache} must not widen an empty scope`).toBe(0);
+      expect(index.modules.size).toBe(0);
+    }
+    // The empty scope must not have rewritten the shared project manifest.
+    const manifest = JSON.parse(
+      await fsp.readFile(path.join(root, ".codegraph-cache", "index-v1", "manifest.json"), "utf8"),
+    ) as { files: Record<string, unknown> };
+    expect(Object.keys(manifest.files).length).toBe(3);
+  });
+
   it("unions project-scope additional files outside discovery", async () => {
     const root = await createProject("dg-load-current-additional-");
     const outside = path.join(root, "ignored", "extra.ts");
