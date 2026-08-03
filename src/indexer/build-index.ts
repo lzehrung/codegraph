@@ -953,6 +953,32 @@ export async function buildProjectIndexFromFiles(
 }
 
 /**
+ * Build exactly the file list a caller declared as the current project scope.
+ *
+ * Identical to {@link buildProjectIndexFromFiles} except that an empty list is a valid
+ * query result (a scope whose filters matched nothing), not the missing-file-list operator
+ * error that variant warns about. The manifest stays read-only either way, so a scoped
+ * build never rewrites project-wide state.
+ */
+async function buildDeclaredScopeIndex(
+  projectRoot: string,
+  scopeFiles: readonly string[],
+  opts?: BuildOptions,
+): Promise<ProjectIndex> {
+  try {
+    const useDiskCache = (opts?.cache ?? "off") === "disk";
+    return await buildIndexFromFileListShared(projectRoot, [...scopeFiles], opts, {
+      manifestMode: useDiskCache ? "read-only" : "off",
+    });
+  } finally {
+    if ((opts?.cache ?? "off") === "disk") {
+      closeDiskCacheDatabase(projectRoot, opts);
+      closeDuplicateUnitCacheDatabase(projectRoot, opts);
+    }
+  }
+}
+
+/**
  * Build or refresh a project index using the on-disk manifest when available.
  *
  * Incremental options can target explicit files, `changedSince`, or a
@@ -998,31 +1024,15 @@ export async function buildProjectIndexIncremental(
   try {
     const declaredScope = opts?.filesAreProjectScope ? opts.files : undefined;
     // A declared project scope is the whole truth for this build, including when it is
-    // empty: full discovery would silently widen a scoped query. An empty scope resolves to
-    // an empty index directly -- it is a valid query result, not the missing-file-list
-    // operator error `buildProjectIndexFromFiles` warns about -- and it never rewrites the
-    // shared project manifest.
+    // empty: full discovery would silently widen a scoped query. Scoped builds go through
+    // the shared finalization path with a read-only manifest, so they never rewrite
+    // project-wide state.
     if (declaredScope && !declaredScope.length) {
-      const emptyGraph: Graph = { nodes: new Set(), edges: [] };
-      const emptyScopeFileReport = initFileReport(report);
-      if (emptyScopeFileReport) emptyScopeFileReport.total = 0;
-      return {
-        graph: emptyGraph,
-        graphAdjacency: buildGraphAdjacency(emptyGraph),
-        modules: new Map(),
-        byFile: new Map(),
-        projectRoot: normalizedProjectRoot,
-        ...(opts?.native ? { nativeMode: opts.native } : {}),
-        exportCache: new Map(),
-        scopeCache: new Map(),
-        parsed: new Map(),
-        ...(opts?.cache ? { cacheMode: opts.cache } : {}),
-        ...(report ? { buildReport: report } : {}),
-      };
+      return await buildDeclaredScopeIndex(projectRoot, declaredScope, opts);
     }
     if (cacheMode !== "disk") {
       if (declaredScope) {
-        return await buildProjectIndexFromFiles(projectRoot, declaredScope, opts);
+        return await buildDeclaredScopeIndex(projectRoot, declaredScope, opts);
       }
       return await buildProjectIndexFromExport(projectRoot, opts, { ignoreExistingManifest: true });
     }

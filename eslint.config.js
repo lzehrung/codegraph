@@ -52,11 +52,11 @@ export default tseslint.config(
     },
   },
   {
-    // Every CLI command module plus the review and agent-tool entry points must load the
-    // index through the shared policy helper, so a new current-state query cannot silently
-    // reintroduce a raw full build. Deny by default here; the block below names the
-    // artifact, lifecycle, historical, and graph-materialization exemptions.
-    files: ["src/cli/**/*.ts", "src/review.ts", "src/agent-tools.ts"],
+    // Every CLI module -- the dispatcher included -- plus the review and agent-tool entry
+    // points must load the index through the shared policy helper, so a new current-state
+    // query cannot silently reintroduce a raw full build. Deny by default here; the block
+    // below names the artifact, lifecycle, historical, and graph-materialization exemptions.
+    files: ["src/cli.ts", "src/cli/**/*.ts", "src/review.ts", "src/agent-tools.ts"],
     rules: {
       "no-restricted-imports": [
         "error",
