@@ -4,10 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import {
-  resolveCliCompileCacheDirectory,
-  resolveCodegraphUserCacheRoot,
-} from "../src/cli/compileCache.ts";
+import { resolveCliCompileCacheDirectory, resolveCodegraphUserCacheRoot } from "../src/cli/compileCache.ts";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const bundledCli = path.join(rootDir, "dist", "bin", "cli.js");
@@ -42,15 +39,15 @@ describe("CLI compile cache", () => {
     );
     expect(compileDir.replaceAll("\\", "/")).toBe("C:/Users/me/AppData/Local/codegraph/compile-cache");
     expect(compileDir).not.toContain(".codegraph-cache");
-    expect(compileDir.includes(`${path.sep}.codegraph${path.sep}`) || compileDir.endsWith(`${path.sep}.codegraph`)).toBe(
-      false,
-    );
+    expect(
+      compileDir.includes(`${path.sep}.codegraph${path.sep}`) || compileDir.endsWith(`${path.sep}.codegraph`),
+    ).toBe(false);
   });
 
   it("honors NODE_COMPILE_CACHE override", () => {
-    expect(
-      resolveCliCompileCacheDirectory({ NODE_COMPILE_CACHE: "/tmp/custom-cc" }, "/home/me", "linux"),
-    ).toBe("/tmp/custom-cc");
+    expect(resolveCliCompileCacheDirectory({ NODE_COMPILE_CACHE: "/tmp/custom-cc" }, "/home/me", "linux")).toBe(
+      "/tmp/custom-cc",
+    );
   });
 
   it("treats NODE_DISABLE_COMPILE_CACHE as a hard opt-out", () => {

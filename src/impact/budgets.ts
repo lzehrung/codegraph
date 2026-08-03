@@ -134,8 +134,7 @@ export function rankChangedSymbolsForBudget(
     if (signatureDelta) return signatureDelta;
     const exportDelta = Number(b.exported) - Number(a.exported);
     if (exportDelta) return exportDelta;
-    const incomingDelta =
-      Number(Boolean(hasIncomingEdge.get(b.file))) - Number(Boolean(hasIncomingEdge.get(a.file)));
+    const incomingDelta = Number(Boolean(hasIncomingEdge.get(b.file))) - Number(Boolean(hasIncomingEdge.get(a.file)));
     if (incomingDelta) return incomingDelta;
     const kindDelta = kindPriority(a.kind) - kindPriority(b.kind);
     if (kindDelta) return kindDelta;
