@@ -1008,7 +1008,7 @@ export async function buildProjectIndexIncremental(
     if (manifestReport && !manifestUsed) manifestReport.reason = "missing";
     const optionDiffs = diffBuildOptions(manifest?.buildOptions, opts);
     const warningOptionDiffs = optionDiffs.filter((diff) => diff !== "cache");
-    if (warningOptionDiffs.length) {
+    if (manifest && warningOptionDiffs.length) {
       logWithLevel(
         opts?.logLevel,
         "warn",
@@ -1025,7 +1025,7 @@ export async function buildProjectIndexIncremental(
       (diff) => diff === "discovery" || diff === "native" || diff === "languageExtensions",
     );
     if (!manifest || !graphOptionsEqual(manifest.graphOptions, graphOptions) || configChanged || requiresFullRebuild) {
-      if (configChanged) {
+      if (manifest && configChanged) {
         logWithLevel(opts?.logLevel, "warn", "Configuration changed, rebuilding index...");
       }
       if (manifestReport && manifest) {
@@ -1125,6 +1125,13 @@ export async function buildProjectIndexIncremental(
     // silently produce an incomplete index, so it falls back to a full rebuild instead,
     // the same way a stale manifest commit does above.
     let untrackedFiles: string[] = [];
+    // Without that cheap Git signal -- no repository at all, or `--cache-strict` asking for
+    // maximum certainty over speed -- the manifest file list cannot prove that no new file
+    // appeared, so rediscover the project instead of trusting it. Per-file signature checks
+    // below still keep unchanged files cached, so this costs one directory walk, not a
+    // full reparse. Callers that already resolved the complete scope (`filesAreProjectScope`)
+    // need no rescan.
+    let rediscoveredFiles: string[] = [];
     if (canUseIncrementalDiscoveryFastPath(gitAvailable, opts?.cacheStrict)) {
       try {
         untrackedFiles =
@@ -1143,6 +1150,14 @@ export async function buildProjectIndexIncremental(
         );
         return await buildProjectIndexFromExport(projectRoot, opts, { ignoreExistingManifest: true });
       }
+    } else if (!opts?.filesAreProjectScope) {
+      rediscoveredFiles = await listProjectFiles(projectRoot, projectPatternsForLanguageExtensions(opts), {
+        ...opts?.discovery,
+        ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+        ...(!opts?.cacheStrict && manifest.symlinkDirectories !== undefined
+          ? { knownSymlinkDirectories: manifest.symlinkDirectories }
+          : {}),
+      });
     }
     const allFiles = new Set<string>([
       ...trackedFiles,
@@ -1151,6 +1166,7 @@ export async function buildProjectIndexIncremental(
       ...manifestDiffFiles.filter((file) => fs.existsSync(file)),
       ...gitFiles.filter((file) => fs.existsSync(file)),
       ...untrackedFiles.filter((file) => fs.existsSync(file)),
+      ...rediscoveredFiles.filter((file) => fs.existsSync(file)),
     ]);
     if (fileReport) fileReport.total = allFiles.size;
     const dependentFilesOfDeletedTracked = collectDeletedTrackedFileDependents(trackedEntries, deletedTrackedFiles);
