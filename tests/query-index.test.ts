@@ -107,6 +107,7 @@ describe("persistent query index", () => {
       { query: "validateuser", mode: "text" as const },
       { query: "alpha validateuser", mode: "text" as const },
       { query: "security guide", mode: "hybrid" as const },
+      { query: "how does the guide validate user sessions", mode: "hybrid" as const },
       { query: 'validate" OR token', mode: "text" as const },
       { query: "---", mode: "hybrid" as const },
     ];
@@ -115,6 +116,9 @@ describe("persistent query index", () => {
       const oracle = await search(oracleSession, root, testCase.query, testCase.mode);
       expect(comparable(indexed)).toEqual(comparable(oracle));
     }
+    const directQuery = await search(warmSession, root, "guide validate user sessions", "hybrid");
+    const naturalLanguageQuery = await search(warmSession, root, "how does the guide validate user sessions", "hybrid");
+    expect(comparable(naturalLanguageQuery)).toEqual(comparable(directQuery));
     const crossWord = await search(warmSession, root, "alpha validateuser");
     expect(crossWord.results.some((result) => result.label.startsWith("validateUser"))).toBe(true);
   });
