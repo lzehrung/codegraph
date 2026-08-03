@@ -1,6 +1,6 @@
 import type { QueryIndexStore, StoredQueryIndexChunk } from "./store.js";
 
-export const QUERY_INDEX_CANDIDATE_VERSION = 3;
+export const QUERY_INDEX_CANDIDATE_VERSION = 4;
 
 function codePointLength(value: string): number {
   return Array.from(value).length;
@@ -12,10 +12,10 @@ export function escapeFtsTrigramTerm(term: string): string {
 
 export function findQueryIndexChunkCandidates(
   store: QueryIndexStore,
-  normalizedTerms: readonly string[],
+  rankTerms: readonly string[],
 ): StoredQueryIndexChunk[] {
   const directCandidates = new Map<string, StoredQueryIndexChunk>();
-  const terms = normalizedTerms.filter((term) => term.length);
+  const terms = rankTerms.filter((term) => term.length);
   const eligiblePaths = store.eligibleFilePaths(terms);
   const eligiblePathSet = new Set(eligiblePaths);
   for (const term of terms) {

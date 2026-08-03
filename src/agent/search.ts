@@ -29,6 +29,7 @@ import {
 import {
   collectDefinitionFollowUps,
   collectFileFollowUps as collectCommonFileFollowUps,
+  type AgentFileSnapshot,
   isAgentSqlObjectNode,
   normalizeAgentFilePath,
   resolveAgentSnapshotFile,
@@ -124,6 +125,7 @@ type MutableSearchResult = Omit<
   evidence: AgentSearchEvidence[];
   neighbors: Map<string, { relation: string; target: string; file?: string }>;
   followUps: Set<string>;
+  matchedRankTerms: Set<string>;
 };
 
 type SymbolNeighbor = {
@@ -154,7 +156,8 @@ type ReachableFile = {
 
 type SearchQueryTerms = {
   tokens: string[];
-  normalizedPhrase: string;
+  rankTokens: string[];
+  normalizedRankPhrase: string;
   identifierLike: boolean;
 };
 
@@ -178,9 +181,27 @@ const MAX_TEXT_BYTES = 300_000;
 const MAX_GRAPH_DEPTH = 5;
 const DOCS_EXACT_PHRASE_BOOST = 18;
 const DOCS_PROXIMITY_BOOST = 6;
+const NATURAL_LANGUAGE_SYNTAX_TERMS = new Set([
+  "a",
+  "an",
+  "are",
+  "can",
+  "did",
+  "do",
+  "does",
+  "how",
+  "is",
+  "the",
+  "what",
+  "when",
+  "where",
+  "which",
+  "who",
+  "why",
+]);
 const SEARCH_CACHES = new WeakMap<AgentProjectSnapshot, SearchCache>();
 const SEARCH_RESULT_CACHES = new WeakMap<AgentSession, Map<string, Promise<AgentSearchResponse>>>();
-const SEARCH_RANKING_VERSION = 1;
+const SEARCH_RANKING_VERSION = 2;
 
 export async function searchCodegraph(request: AgentSearchRequest): Promise<AgentSearchResponse> {
   const session = createAgentSession({
@@ -249,7 +270,7 @@ async function searchSnapshot(
   queryIndex?: QueryIndexHandle,
 ): Promise<AgentSearchResponse> {
   const mode = request.mode ?? "hybrid";
-  const query = buildQueryTerms(request.query);
+  const query = buildQueryTerms(request.query, snapshot);
   const resultMap = new Map<string, MutableSearchResult>();
   const limit = defaultAgentLimit(request.limit, DEFAULT_LIMIT, AGENT_SEARCH_RESULT_LIMIT);
   let fileNeighborIndex: Map<string, FileNeighbor[]> | undefined;
@@ -258,7 +279,7 @@ async function searchSnapshot(
     return fileNeighborIndex;
   };
 
-  if (query.tokens.length) {
+  if (query.rankTokens.length) {
     if (mode === "sql") {
       addSqlResults(snapshot, resultMap, getFileNeighborIndex(), query);
     } else if (mode === "hybrid" || mode === "symbol" || mode === "graph") {
@@ -323,9 +344,10 @@ function getSessionSearchResultCache(session: AgentSession): Map<string, Promise
 }
 
 function searchResultCacheKey(snapshot: AgentProjectSnapshot, request: AgentSearchRequest): string {
+  const query = buildQueryTerms(request.query, snapshot);
   return JSON.stringify({
     projectSnapshotIdentity: snapshot.index.projectSnapshotIdentity ?? "",
-    query: normalizeQuerySearchText(request.query),
+    query,
     mode: request.mode ?? "hybrid",
     limit: defaultAgentLimit(request.limit, DEFAULT_LIMIT, AGENT_SEARCH_RESULT_LIMIT),
     depth: normalizeDepth(request.depth),
@@ -337,7 +359,7 @@ function searchResultCacheKey(snapshot: AgentProjectSnapshot, request: AgentSear
   });
 }
 function searchPathOnly(root: string, files: readonly string[], request: AgentSearchRequest): AgentSearchResponse {
-  const query = buildQueryTerms(request.query);
+  const query = buildQueryTerms(request.query, { root, files });
   const resultMap = new Map<string, MutableSearchResult>();
   const limit = defaultAgentLimit(request.limit, DEFAULT_LIMIT, AGENT_SEARCH_RESULT_LIMIT);
 
@@ -358,6 +380,7 @@ function searchPathOnly(root: string, files: readonly string[], request: AgentSe
         }),
       });
       result.score += pathMatch.score * 2;
+      addMatchedRankTerms(result, pathMatch);
       addReason(result, `path token match: ${pathMatch.matched.join(", ")}`);
       addEvidence(result, { source: "path", label: relFile, file: relFile });
       addFileFollowUps(result, relFile);
@@ -407,14 +430,31 @@ function searchNeedsSymbolGraph(request: AgentSearchRequest): boolean {
   return mode !== "path" && mode !== "text" && mode !== "sql";
 }
 
-function buildQueryTerms(input: string): SearchQueryTerms {
+function buildQueryTerms(input: string, snapshot: AgentFileSnapshot): SearchQueryTerms {
   const normalized = normalizeSearchText(input);
-  const tokens = normalized.split(/\s+/).filter((token) => token.length);
+  const tokenSequence = normalized.split(/\s+/).filter((token) => token.length);
+  const tokens = Array.from(new Set(tokenSequence));
+  const identifierLike = isIdentifierLikeQuery(input);
+  const pathLike = isExplicitPathQuery(input, snapshot);
+  const filterNaturalLanguageSyntax = !identifierLike && !pathLike;
+  const filteredRankTokenSequence = filterNaturalLanguageSyntax
+    ? tokenSequence.filter((token) => !NATURAL_LANGUAGE_SYNTAX_TERMS.has(token))
+    : tokenSequence;
+  const rankTokenSequence = filteredRankTokenSequence.length ? filteredRankTokenSequence : tokenSequence;
   return {
-    tokens: Array.from(new Set(tokens)),
-    normalizedPhrase: normalized,
-    identifierLike: isIdentifierLikeQuery(input),
+    tokens,
+    rankTokens: Array.from(new Set(rankTokenSequence)),
+    normalizedRankPhrase: rankTokenSequence.join(" "),
+    identifierLike,
   };
+}
+
+function isExplicitPathQuery(input: string, snapshot: AgentFileSnapshot): boolean {
+  const trimmed = input.trim();
+  const slashIndex = trimmed.search(/[\\/]/);
+  if (slashIndex < 0) return false;
+  if (!/\s/.test(trimmed)) return true;
+  return resolveAgentSnapshotFile(snapshot, trimmed) !== null;
 }
 
 function normalizeSearchText(input: string): string {
@@ -442,31 +482,27 @@ function matchTokenScoreFromNormalized(normalized: string, query: SearchQueryTer
   const matched: string[] = [];
   let score = 0;
 
-  for (const token of query.tokens) {
+  for (const token of query.rankTokens) {
     if (words.has(token)) {
-      matched.push(token);
       score += 10;
-      continue;
-    }
-    if (compact.includes(token)) {
       matched.push(token);
+    } else if (compact.includes(token)) {
       score += 7;
-      continue;
-    }
-    if (normalized.includes(token)) {
       matched.push(token);
+    } else if (normalized.includes(token)) {
       score += 4;
+      matched.push(token);
     }
   }
 
   let exactPhrase = false;
   let proximity = false;
-  if (matched.length === query.tokens.length && query.tokens.length > 1) {
+  if (matched.length === query.rankTokens.length && query.rankTokens.length > 1) {
     score += 12;
-    if (query.normalizedPhrase.includes(" ") && normalized.includes(query.normalizedPhrase)) {
+    if (normalized.includes(query.normalizedRankPhrase)) {
       score += 30;
       exactPhrase = true;
-    } else if (tokensAppearInOrder(normalized, query.tokens)) {
+    } else if (tokensAppearInOrder(normalized, query.rankTokens)) {
       score += 10;
       proximity = true;
     }
@@ -524,6 +560,7 @@ function addSymbolResults(
       provenance: createSearchProvenance(relFile, "semantic", "high", snapshot.analysis),
     });
     result.score += score + (lookup.exportedIds.has(node.id) ? 5 : 0);
+    addMatchedRankTerms(result, nameMatch, fileMatch, docMatch);
     if (nameMatch.matched.length) {
       addReason(result, `${sqlObject ? "SQL object" : "symbol"} token match: ${nameMatch.matched.join(", ")}`);
       addEvidence(result, {
@@ -571,6 +608,7 @@ function addSqlResults(
         provenance: createSearchProvenance(relFile, "semantic", "high", snapshot.analysis),
       });
       result.score += score;
+      addMatchedRankTerms(result, nameMatch, fileMatch, docMatch);
       if (nameMatch.matched.length) {
         addReason(result, `SQL object token match: ${nameMatch.matched.join(", ")}`);
         addEvidence(result, {
@@ -622,6 +660,7 @@ function addPathResults(
       provenance: createSearchProvenance(relFile, "graph", "high", snapshot.analysis),
     });
     result.score += pathMatch.score * 2;
+    addMatchedRankTerms(result, pathMatch);
     addReason(result, `path token match: ${pathMatch.matched.join(", ")}`);
     addEvidence(result, { source: "path", label: relFile, file: relFile });
     addFileNeighbors(snapshot, result, fileNeighborIndex.get(normalizePath(file)) ?? []);
@@ -636,6 +675,7 @@ function mergeSearchResults(
   for (const source of sourceMap.values()) {
     const target = upsertResult(targetMap, source);
     target.score += source.score;
+    for (const term of source.matchedRankTerms) target.matchedRankTerms.add(term);
     for (const reason of source.rankReasons) target.rankReasons.add(reason);
     for (const evidence of source.evidence) addEvidence(target, evidence);
     for (const [key, neighbor] of source.neighbors) target.neighbors.set(key, neighbor);
@@ -659,7 +699,7 @@ async function addTextResults(
     try {
       store.withReadSnapshot(projectSnapshotIdentity, () => {
         const candidateStarted = performance.now();
-        const candidateChunks = findQueryIndexChunkCandidates(store, query.tokens);
+        const candidateChunks = findQueryIndexChunkCandidates(store, query.rankTokens);
         diagnostics.candidateMs += performance.now() - candidateStarted;
         diagnostics.fileCandidates += new Set(candidateChunks.map((chunk) => chunk.path)).size;
         diagnostics.chunkCandidates += candidateChunks.length;
@@ -684,7 +724,7 @@ async function addTextResults(
   const cache = getSearchCache(snapshot);
   for (const file of snapshot.files) {
     const normalizedText = await getCachedNormalizedText(cache, file);
-    if (!normalizedText || !textCouldMatchNormalized(normalizedText, query.tokens)) continue;
+    if (!normalizedText || !textCouldMatchNormalized(normalizedText, query.rankTokens)) continue;
     const relFile = normalizeAgentFilePath(snapshot.root, file);
     const chunks = await getCachedTextChunks(cache, file);
     addTextFileResults(snapshot, resultMap, query, includeSnippets, mode, relFile, chunks);
@@ -718,6 +758,7 @@ function addTextFileResults(
       provenance: createSearchProvenance(relFile, "text", documentationFile ? "medium" : "high", snapshot.analysis),
     });
     result.score += match.score + textResultBoost(match, documentationFile, query, mode);
+    addMatchedRankTerms(result, match);
     addReason(result, `text token match: ${match.matched.join(", ")}`);
     addPhraseReasons(result, match, documentationFile ? "docs text" : "text");
     addEvidence(result, {
@@ -842,6 +883,7 @@ function applyGraphNeighborhood(
       });
       graphResult.score += fileMatch.score + graphBoost(entry.distance);
       addGraphEvidence(graphResult, relFile, entry);
+      addMatchedRankTerms(graphResult, fileMatch);
       addFileFollowUps(graphResult, relFile);
     }
 
@@ -974,9 +1016,16 @@ function upsertResult(resultMap: Map<string, MutableSearchResult>, base: SearchR
     evidence: [],
     neighbors: new Map(),
     followUps: new Set(),
+    matchedRankTerms: new Set(),
   };
   resultMap.set(base.handle, result);
   return result;
+}
+
+function addMatchedRankTerms(result: MutableSearchResult, ...matches: readonly TokenMatch[]): void {
+  for (const match of matches) {
+    for (const term of match.matched) result.matchedRankTerms.add(term);
+  }
 }
 
 function addReason(result: MutableSearchResult, reason: string): void {
@@ -1097,9 +1146,27 @@ function addFileFollowUps(result: MutableSearchResult, relFile: string): void {
 function compareResults(left: MutableSearchResult, right: MutableSearchResult): number {
   const scoreDelta = right.score - left.score;
   if (scoreDelta !== 0) return scoreDelta;
-  const labelDelta = left.label.localeCompare(right.label);
+  const capabilityDelta = capabilityRank(left.provenance.capability) - capabilityRank(right.provenance.capability);
+  if (capabilityDelta !== 0) return capabilityDelta;
+  const coverageDelta = right.matchedRankTerms.size - left.matchedRankTerms.size;
+  if (coverageDelta !== 0) return coverageDelta;
+  const labelDelta = compareAscii(left.label, right.label);
   if (labelDelta !== 0) return labelDelta;
-  return left.file.localeCompare(right.file);
+  const fileDelta = compareAscii(left.file, right.file);
+  if (fileDelta !== 0) return fileDelta;
+  return compareAscii(left.handle, right.handle);
+}
+
+function capabilityRank(capability: AgentSearchResult["provenance"]["capability"]): number {
+  if (capability === "semantic") return 0;
+  if (capability === "graph") return 1;
+  return 2;
+}
+
+function compareAscii(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
 }
 
 function selectTopResults(
