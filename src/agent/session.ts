@@ -11,6 +11,7 @@ import { listProjectFiles, type ProjectFileDiscoveryOptions } from "../util/proj
 import { mapLimit } from "../util/concurrency.js";
 import { normalizePath, toProjectDisplayPath } from "../util/paths.js";
 import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions, mergeGraphOptions } from "../config.js";
+import { languageExtensionPatterns, normalizeLanguageExtensions } from "../languages.js";
 import { createAgentFileLookup } from "./normalize.js";
 import { summarizeAnalysis, type AnalysisSummary } from "../analysisSummary.js";
 import { runSessionInvalidationHooks } from "./sessionLifecycle.js";
@@ -92,6 +93,7 @@ export type AgentFileSignature = {
 type AgentDiscoverySettings = {
   discoveryOptions?: ProjectFileDiscoveryOptions;
   graphOptions?: BuildOptions["graph"];
+  languageExtensions?: BuildOptions["languageExtensions"];
 };
 
 type AgentSessionFilePlan = AgentDiscoverySettings & {
@@ -111,17 +113,20 @@ async function resolveAgentDiscoverySettings(options: AgentSessionOptions): Prom
   const discovery = mergeDiscoveryOptions(config.discovery, optionDiscovery);
   const graph = mergeGraphOptions(config.graph, options.buildOptions?.graph);
   const graphOptions = config.graph || options.buildOptions?.graph ? graph : undefined;
+  const languageExtensions =
+    normalizeLanguageExtensions(options.buildOptions?.languageExtensions) ?? config.languages?.extensions;
   const discoveryOptions = hasDiscoveryOptions(discovery)
     ? { ...discovery, globRoot: discovery.globRoot ?? options.root }
     : undefined;
   return {
     ...(discoveryOptions ? { discoveryOptions } : {}),
     ...(graphOptions ? { graphOptions } : {}),
+    ...(languageExtensions ? { languageExtensions } : {}),
   };
 }
 
 async function resolveAgentSessionFilePlan(options: AgentSessionOptions): Promise<AgentSessionFilePlan> {
-  const { discoveryOptions, graphOptions } = await resolveAgentDiscoverySettings(options);
+  const { discoveryOptions, graphOptions, languageExtensions } = await resolveAgentDiscoverySettings(options);
   // Prefer the manifest-plus-Git reconciliation over a full recursive scan whenever it
   // can be trusted. Preserve its changed/untracked evidence so the indexer does not
   // repeat the same Git subprocesses immediately afterward.
@@ -129,6 +134,7 @@ async function resolveAgentSessionFilePlan(options: AgentSessionOptions): Promis
     ...options.buildOptions,
     ...(discoveryOptions ? { discovery: discoveryOptions } : {}),
     ...(graphOptions ? { graph: graphOptions } : {}),
+    ...(languageExtensions ? { languageExtensions } : {}),
   };
   const incrementalPlan = await resolveIncrementalFilePlan(options.root, incrementalOptions);
   if (incrementalPlan) {
@@ -137,13 +143,18 @@ async function resolveAgentSessionFilePlan(options: AgentSessionOptions): Promis
       incrementalPlan,
       ...(discoveryOptions ? { discoveryOptions } : {}),
       ...(graphOptions ? { graphOptions } : {}),
+      ...(languageExtensions ? { languageExtensions } : {}),
     };
   }
-  const files = await listProjectFiles(options.root, undefined, discoveryOptions);
+  const { DEFAULT_PROJECT_PATTERNS } = await import("../util/projectFiles.js");
+  const customPatterns = languageExtensionPatterns(languageExtensions);
+  const patterns = customPatterns.length ? [...DEFAULT_PROJECT_PATTERNS, ...customPatterns] : undefined;
+  const files = await listProjectFiles(options.root, patterns, discoveryOptions);
   return {
     files,
     ...(discoveryOptions ? { discoveryOptions } : {}),
     ...(graphOptions ? { graphOptions } : {}),
+    ...(languageExtensions ? { languageExtensions } : {}),
   };
 }
 
@@ -299,7 +310,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
   const loadBase = async (): Promise<AgentProjectBaseSnapshot> => {
     if (cachedBase) return cachedBase;
     const loadPromise = (async () => {
-      const { files, discoveryOptions, graphOptions, incrementalPlan } = await loadFilePlan();
+      const { files, discoveryOptions, graphOptions, languageExtensions, incrementalPlan } = await loadFilePlan();
       const buildOptions: IncrementalBuildOptions = {
         ...options.buildOptions,
         ...(graphOptions ? { graph: graphOptions } : {}),
@@ -315,6 +326,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
             }
           : {}),
         ...(discoveryOptions ? { discovery: discoveryOptions } : {}),
+        ...(languageExtensions ? { languageExtensions } : {}),
       };
       if (options.buildOptions?.useNativeWorkers === undefined && files.length >= NATIVE_WORKER_AUTO_FILE_THRESHOLD) {
         buildOptions.useNativeWorkers = true;

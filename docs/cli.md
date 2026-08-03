@@ -51,18 +51,27 @@ Commands that scan a project read `codegraph.config.json` from `--root` when it 
     "includeGlobs": ["src/**/*.ts"],
     "ignoreGlobs": ["tests/samples/**", "tests/languages/samples/**"],
     "useGitignore": true
+  },
+  "languages": {
+    "extensions": {
+      ".tpl": "php",
+      ".inc.php": "php",
+      ".build.ts": "ts"
+    }
   }
 }
 ```
 
 - `discovery.includeGlobs` and `discovery.ignoreGlobs` are project-root-relative, even when a command scans child include roots.
 - `discovery.ignoreGlobs` is for large fixture, generated, or vendored folders that should not be indexed.
+- `languages.extensions` maps additional or built-in literal suffixes to supported language IDs; keys must start with `.` and may contain letters, digits, `.`, `_`, `+`, and `-`, values must name a supported language, and the longest suffix wins.
+- Built-in suffixes remain active unless explicitly remapped by `languages.extensions`; `.vue` and `.svelte` are always handled as single-file components and cannot be remapped.
 - CLI `--include-glob` and `--ignore-glob` values are one-off additions relative to each scanned root.
 - `inspect` follow-up commands preserve the selected `--root` and include roots.
 - `--no-gitignore` overrides `useGitignore`.
 
 Config globs and one-off CLI globs apply at different layers. `codegraph.config.json` globs are durable and project-root-relative. CLI scan-root globs are additive for a single command and are evaluated relative to each active scan root. `--no-gitignore` disables `.gitignore` filtering for that command only; it does not change config.
-Cache and manifest reuse is rooted at `--root`. Reusing a project root lets commands share compatible index and graph entries when the file signatures, config, graph options, and relevant build options still match. Changing `--root`, changing discovery config, or changing graph options creates a different reuse boundary. Child include-root scans can reuse project-root cache entries, but command summaries and follow-up commands stay scoped to the selected include roots.
+Configured language extensions automatically extend discovery for matching files and participate in cache compatibility checks. Reusing a project root lets commands share compatible index and graph entries when the file signatures, config, graph options, and relevant build options still match. Changing `--root`, changing discovery or language-extension config, or changing graph options creates a different reuse boundary. Child include-root scans can reuse project-root cache entries, but command summaries and follow-up commands stay scoped to the selected include roots.
 
 ## Core commands
 
@@ -158,6 +167,19 @@ Graph, index, search, inspect, and review reports include `backend.native.byLang
 - Initializing JSON results add an optional `gitignore` object with `.gitignore` path and `added`, `already-ignored`, `tracked`, `not-git`, or `disabled` status. The lifecycle manifest schema remains unchanged.
 - `uninit` removes only recognized lifecycle state by default and leaves any root `.gitignore` rule in place. It refuses unknown `.codegraph/` entries unless `--force` is passed.
 - Lifecycle commands accept either a positional project path or `--root <path>`. They reject using both together because lifecycle manifests and automatic ignore updates always use one resolved project boundary, not include-root subsets.
+
+### Affected tests
+
+- `affected` maps changed source files to likely test files by traversing reverse dependencies through the project graph. It also includes directly changed test files at depth 0.
+- Inputs can be positional files, newline-delimited `--stdin`, or a Git range with `--base <ref> --head <ref>`. Paths are normalized under `--root` and output as project-root-relative paths.
+- Use `--depth <n>` to expand transitive reverse dependencies, `--filter <glob>` to restrict returned test paths, `--quiet` for path-only output, or `--json` for `schemaVersion: 1`, `changedFiles`, `affectedTests`, and `omittedCounts`.
+
+```bash
+codegraph affected src/auth.ts src/db.ts
+codegraph affected --stdin --quiet
+codegraph affected --base main --head HEAD --json
+codegraph affected --base HEAD --head WORKTREE --filter "tests/**/*.test.ts" --quiet
+```
 
 ### Symbols, navigation, grep, and chunking
 

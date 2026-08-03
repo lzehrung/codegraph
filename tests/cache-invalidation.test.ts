@@ -224,6 +224,58 @@ describe("Cache invalidation and strict hashing", () => {
     expect(second.byFile.has(normalizedSamplePath)).toBe(true);
   });
 
+  it("rediscovers newly supported files when language extensions change incrementally", async () => {
+    const root = await mkTmpDir("dg-incremental-language-extension-discovery-");
+    const mappedPath = path.join(root, "newly-supported.tpl");
+    await fsp.writeFile(mappedPath, "<?php function newly_mapped() { return 1; }\n", "utf8");
+
+    await buildProjectIndex(root, {
+      cache: "disk",
+      logLevel: "silent",
+      threads: 1,
+    });
+
+    const afterMapping = await buildProjectIndexIncremental(root, {
+      cache: "disk",
+      languageExtensions: { ".tpl": "php" },
+      logLevel: "silent",
+      threads: 1,
+    });
+
+    expect(afterMapping.byFile.get(normalize(mappedPath))?.locals.map((local) => local.localName)).toContain(
+      "newly_mapped",
+    );
+  });
+
+  it("recomputes manifest graph edges when a custom extension is remapped", async () => {
+    const root = await mkTmpDir("dg-full-language-extension-graph-");
+    const mappedPath = path.join(root, "entry.tpl");
+    const dependencyPath = path.join(root, "dependency.ts");
+    await fsp.writeFile(mappedPath, 'import "./dependency";\n', "utf8");
+    await fsp.writeFile(dependencyPath, "export const dependency = 1;\n", "utf8");
+
+    const htmlIndex = await buildProjectIndex(root, {
+      cache: "disk",
+      languageExtensions: { ".tpl": "html" },
+      logLevel: "silent",
+      threads: 1,
+    });
+    expect(htmlIndex.graph.edges.filter((edge) => edge.from === normalize(mappedPath))).toEqual([]);
+
+    const tsIndex = await buildProjectIndex(root, {
+      cache: "disk",
+      languageExtensions: { ".tpl": "ts" },
+      logLevel: "silent",
+      threads: 1,
+    });
+
+    expect(tsIndex.graph.edges).toContainEqual({
+      from: normalize(mappedPath),
+      to: { type: "file", path: normalize(dependencyPath) },
+      raw: "./dependency",
+    });
+  });
+
   it("normalizes discovery glob separators before comparing manifest build options", () => {
     const buildOptions = summarizeBuildOptions({
       discovery: {
@@ -303,6 +355,52 @@ describe("Cache invalidation and strict hashing", () => {
       expect.objectContaining({
         from: reportFile,
         raw: "sql:cached:reads_from:users",
+        to: { type: "file", path: schemaFile },
+      }),
+    );
+  });
+
+  it("rebuilds cross-file SQL edges when a custom-mapped SQL definition changes", async () => {
+    const root = await mkTmpDir("dg-mapped-sql-corpus-cache-");
+    const schemaPath = path.join(root, "schema.ddl");
+    const reportPath = path.join(root, "report.sql");
+    const schemaFile = normalize(path.resolve(schemaPath));
+    const reportFile = normalize(path.resolve(reportPath));
+    await fsp.writeFile(schemaPath, "CREATE TABLE users (id integer);\n", "utf8");
+    await fsp.writeFile(reportPath, "SELECT id FROM users;\nSELECT id FROM accounts;\n", "utf8");
+
+    const initial = await buildProjectIndex(root, {
+      threads: 2,
+      cache: "disk",
+      languageExtensions: { ".ddl": "sql" },
+    });
+
+    expect(initial.graph.edges).toContainEqual(
+      expect.objectContaining({
+        from: reportFile,
+        raw: "sql:reads_from:users",
+        to: { type: "file", path: schemaFile },
+      }),
+    );
+
+    await fsp.writeFile(schemaPath, "CREATE TABLE accounts (id integer, active boolean);\n", "utf8");
+    const rebuilt = await buildProjectIndex(root, {
+      threads: 2,
+      cache: "disk",
+      languageExtensions: { ".ddl": "sql" },
+    });
+
+    expect(rebuilt.graph.edges).not.toContainEqual(
+      expect.objectContaining({
+        from: reportFile,
+        raw: "sql:reads_from:users",
+        to: { type: "file", path: schemaFile },
+      }),
+    );
+    expect(rebuilt.graph.edges).toContainEqual(
+      expect.objectContaining({
+        from: reportFile,
+        raw: "sql:reads_from:accounts",
         to: { type: "file", path: schemaFile },
       }),
     );

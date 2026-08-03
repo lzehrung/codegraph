@@ -273,10 +273,11 @@ export async function cacheSignatureForFile(
 
 export async function buildBloomFilterForFile(
   file: string,
+  opts?: Pick<BuildOptions, "languageExtensions">,
 ): Promise<import("../../util/bloomFilter.js").BloomFilter | null> {
   try {
     const source = await fsp.readFile(file, "utf8");
-    const support = supportForFile(file);
+    const support = supportForFile(file, opts?.languageExtensions);
     if (!support) return null;
     return buildBloomFilterFromSource(source, support.id);
   } catch {

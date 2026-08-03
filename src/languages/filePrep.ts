@@ -1,15 +1,10 @@
 import fsp from "node:fs/promises";
 import type { ParserLanguage } from "../languages/types.js";
 
-import {
-  JS_SUPPORT,
-  TS_SUPPORT,
-  TSX_SUPPORT,
-  supportForFile,
-  supportById,
-  type LanguageSupport,
-} from "../languages.js";
-import { prepareSFCScriptSource, detectSFCFramework, type SFCFramework } from "./sfc.js";
+import { JS_SUPPORT, TS_SUPPORT, TSX_SUPPORT, supportForFile, supportById } from "../languages.js";
+import type { LanguageExtensionMap, LanguageSupport } from "../languages.js";
+import { prepareSFCScriptSource, detectSFCFramework } from "./sfc.js";
+import type { SFCFramework } from "./sfc.js";
 
 interface ParserInput {
   source: string;
@@ -38,7 +33,10 @@ const SCRIPT_SUPPORT_MAP: Record<string, LanguageSupport> = {
   tsx: TSX_SUPPORT,
 };
 
-export async function prepareParserInput(file: string, opts?: { source?: string }): Promise<ParserInput> {
+export async function prepareParserInput(
+  file: string,
+  opts?: { source?: string | undefined; languageExtensions?: LanguageExtensionMap | undefined },
+): Promise<ParserInput> {
   const prepared = await prepareSourceInput(file, opts);
   return {
     ...prepared,
@@ -46,14 +44,17 @@ export async function prepareParserInput(file: string, opts?: { source?: string 
   };
 }
 
-export async function prepareSourceInput(file: string, opts?: { source?: string }): Promise<SourceInput> {
+export async function prepareSourceInput(
+  file: string,
+  opts?: { source?: string | undefined; languageExtensions?: LanguageExtensionMap | undefined },
+): Promise<SourceInput> {
   const framework = detectSFCFramework(file);
   if (framework) {
     const rawSource = opts?.source ?? (await fsp.readFile(file, "utf8"));
     return prepareSFCSourceInput(rawSource, framework);
   }
 
-  const sup = supportForFile(file);
+  const sup = supportForFile(file, opts?.languageExtensions);
   if (!sup) throw new UnsupportedParserInputError(file);
   const rawSource = opts?.source ?? (await fsp.readFile(file, "utf8"));
   return {

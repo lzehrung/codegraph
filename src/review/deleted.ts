@@ -29,6 +29,11 @@ export type DeletedFileSnapshot = {
   module: ModuleIndex;
 };
 
+export type DeletedFileImporter = {
+  file: FileId;
+  deletedFile: FileId;
+};
+
 type ReviewableExportEntry = Exclude<ExportEntry, { type: "local" }>;
 
 function normalizeSpecifierBase(fromFile: string, spec: string): string {
@@ -116,18 +121,15 @@ async function resolveDeletedAliasImportTarget(
     .find((candidate) => candidate === deletedTarget);
 }
 
-export async function listDirectDeletedFileTestImporters(
+export async function listDirectDeletedFileImporters(
   index: ProjectIndex,
   deletedFiles: readonly string[],
-  testPatterns: string[] = [],
   projectRoot?: string,
-): Promise<CandidateTestFile[]> {
+): Promise<DeletedFileImporter[]> {
   if (!deletedFiles.length) return [];
 
   const deletedFileSet = new Set(deletedFiles.map((file) => normalizePath(file)));
-  const compiledPatterns = compileTestPatterns(testPatterns);
-  const isIndexTestFile = createIndexTestFileMatcher(index, compiledPatterns, projectRoot);
-  const candidates = new Map<FileId, CandidateTestFile>();
+  const candidates = new Map<string, DeletedFileImporter>();
   const importsByFile = new Map<FileId, Array<{ spec: string; resolved?: string }>>();
   const workspaceConfig = projectRoot ? await loadWorkspaceConfig(projectRoot) : undefined;
 
@@ -144,7 +146,6 @@ export async function listDirectDeletedFileTestImporters(
   }
 
   for (const mod of index.byFile.values()) {
-    if (!isIndexTestFile(mod.file)) continue;
     const uniqueImports = new Map<string, { spec: string; resolved?: string }>();
     for (const entry of importsByFile.get(mod.file) ?? []) {
       uniqueImports.set(`${entry.spec}::${entry.resolved ?? ""}`, entry);
@@ -166,16 +167,32 @@ export async function listDirectDeletedFileTestImporters(
         if (!matchesDeletedImportTarget(mod.file, entry.spec, resolvedAliasTarget, deletedFile)) {
           continue;
         }
-        candidates.set(mod.file, {
+        candidates.set(`${mod.file}::${deletedFile}`, {
           file: mod.file,
-          confidence: "high",
-          reason: "importsChanged",
+          deletedFile,
         });
       }
     }
   }
 
   return Array.from(candidates.values());
+}
+
+export async function listDirectDeletedFileTestImporters(
+  index: ProjectIndex,
+  deletedFiles: readonly string[],
+  testPatterns: string[] = [],
+  projectRoot?: string,
+): Promise<CandidateTestFile[]> {
+  const compiledPatterns = compileTestPatterns(testPatterns);
+  const isIndexTestFile = createIndexTestFileMatcher(index, compiledPatterns, projectRoot);
+  return (await listDirectDeletedFileImporters(index, deletedFiles, projectRoot))
+    .filter((candidate) => isIndexTestFile(candidate.file))
+    .map((candidate) => ({
+      file: candidate.file,
+      confidence: "high",
+      reason: "importsChanged",
+    }));
 }
 
 async function readGitFilesAtRevision(
@@ -192,7 +209,6 @@ async function readGitFilesAtRevision(
   }
   if (!requests.length) return new Map();
   const maxOutputBytes = Math.min(MAX_GIT_BATCH_OUTPUT_BYTES_PER_FILE * requests.length, MAX_GIT_BATCH_OUTPUT_BYTES);
-
   try {
     const child = spawn("git", ["cat-file", "--batch"], { cwd: projectRoot });
     const stdoutChunks: Buffer[] = [];
@@ -244,10 +260,12 @@ async function readGitFilesAtRevision(
       const sizeMatch = header.match(/^[0-9a-f]+ blob ([0-9]+)$/);
       if (!sizeMatch) return new Map();
       const size = Number(sizeMatch[1]);
-      if (!Number.isSafeInteger(size) || size > MAX_GIT_BATCH_OUTPUT_BYTES_PER_FILE) return new Map();
+      if (!Number.isSafeInteger(size)) return new Map();
       const contentEnd = cursor + size;
       if (!Number.isSafeInteger(contentEnd) || contentEnd > output.length) return new Map();
-      sources.set(request.file, output.subarray(cursor, contentEnd).toString("utf8"));
+      if (size <= MAX_GIT_BATCH_OUTPUT_BYTES_PER_FILE) {
+        sources.set(request.file, output.subarray(cursor, contentEnd).toString("utf8"));
+      }
       cursor = contentEnd;
       if (output[cursor] === 0x0a) cursor++;
     }

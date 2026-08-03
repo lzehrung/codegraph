@@ -83,6 +83,46 @@ describe("Graph delta export", () => {
     expect(hasFileEdge(delta.removed, "removed.ts", "dep.ts", "./dep")).toBe(true);
   });
 
+  it("reports exact edge changes when unchanged custom files gain or change mappings", async () => {
+    const root = await mkTmpDir("dg-graph-delta-language-extensions-");
+    const removedSourcePath = path.join(root, "removed.tpl");
+    const addedSourcePath = path.join(root, "added.view");
+    await fsp.writeFile(removedSourcePath, `import './removed-dependency';\n`, "utf8");
+    await fsp.writeFile(addedSourcePath, `import './added-dependency';\n`, "utf8");
+    await fsp.writeFile(path.join(root, "removed-dependency.ts"), "export const removed = 1;\n", "utf8");
+    await fsp.writeFile(path.join(root, "added-dependency.ts"), "export const added = 1;\n", "utf8");
+
+    await buildProjectIndex(root, {
+      cache: "disk",
+      languageExtensions: { ".tpl": "ts" },
+      logLevel: "silent",
+      threads: 1,
+    });
+
+    const delta = await buildGraphDelta(root, {
+      cache: "disk",
+      languageExtensions: { ".tpl": "html", ".view": "ts" },
+      logLevel: "silent",
+      threads: 1,
+    });
+
+    expect(delta.changedFiles).toEqual(["added.view", "removed.tpl"]);
+    expect(delta.added).toEqual([
+      {
+        from: "added.view",
+        to: { type: "file", path: "added-dependency.ts" },
+        raw: "./added-dependency",
+      },
+    ]);
+    expect(delta.removed).toEqual([
+      {
+        from: "removed.tpl",
+        to: { type: "file", path: "removed-dependency.ts" },
+        raw: "./removed-dependency",
+      },
+    ]);
+  });
+
   it("rejects changed files outside the project root", async () => {
     const root = await createTempProjectRoot("dg-graph-delta-root-", [
       { path: "a.ts", contents: "export const a = 1;\n" },

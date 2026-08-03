@@ -4,6 +4,9 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { hasDiscoveryOptions, loadCodegraphConfig, mergeDiscoveryOptions, mergeGraphOptions } from "../src/config.js";
 import { searchCodegraph } from "../src/agent/search.js";
+import { buildProjectIndex, type BuildReport } from "../src/indexer/build-index.js";
+import { diffBuildOptions, summarizeBuildOptions } from "../src/indexer/build-cache.js";
+import { normalizeLanguageExtensions, supportForFile } from "../src/languages.js";
 import { runTsxScriptOrThrow } from "./helpers/cli.js";
 import { decompactFileGraph, type CompactFileGraphPayload } from "./helpers/compactGraph.js";
 
@@ -14,6 +17,37 @@ async function mkRepo(): Promise<string> {
   await fs.writeFile(path.join(root, "src", "kept.ts"), "export const keptAlpha = true;\n", "utf8");
   await fs.writeFile(path.join(root, "tests", "samples", "ignored.ts"), "export const ignoredZebra = true;\n", "utf8");
   return root;
+}
+
+async function writeConfig(root: string, config: unknown): Promise<void> {
+  await fs.writeFile(path.join(root, "codegraph.config.json"), JSON.stringify(config), "utf8");
+}
+
+function normalizedFile(root: string, relativePath: string): string {
+  return path.join(root, relativePath).replace(/\\/g, "/");
+}
+
+async function buildWithProjectConfig(root: string) {
+  const config = await loadCodegraphConfig(root);
+  return await buildProjectIndex(root, {
+    cache: "disk",
+    ...(config.discovery ? { discovery: config.discovery } : {}),
+    ...(config.languages?.extensions ? { languageExtensions: config.languages.extensions } : {}),
+  });
+}
+
+function localExportNames(
+  index: Awaited<ReturnType<typeof buildProjectIndex>>,
+  root: string,
+  relativePath: string,
+): string[] {
+  const moduleIndex = index.byFile.get(normalizedFile(root, relativePath));
+  return (
+    moduleIndex?.exports
+      .filter((entry) => entry.type === "local")
+      .map((entry) => entry.exportedAs)
+      .sort() ?? []
+  );
 }
 
 describe("codegraph config", () => {
@@ -193,5 +227,327 @@ describe("codegraph config", () => {
 
     expect(kept.results.map((result) => result.file)).toContain("src/kept.ts");
     expect(ignored.results).toEqual([]);
+  });
+
+  it("normalizes extension keys and language IDs from codegraph.config.json", async () => {
+    const root = await mkRepo();
+    await writeConfig(root, {
+      languages: {
+        extensions: {
+          ".TPL": "PHP",
+        },
+      },
+    });
+
+    const config = await loadCodegraphConfig(root);
+
+    expect(config.languages?.extensions).toEqual({ ".tpl": "php" });
+  });
+
+  it("discovers uppercase custom suffixes from normalized config mappings without narrowing built-ins", async () => {
+    const root = await mkRepo();
+    await fs.writeFile(
+      path.join(root, "src", "template.TPL"),
+      "<?php function mapped_template() { return 1; }\n",
+      "utf8",
+    );
+    await writeConfig(root, {
+      languages: {
+        extensions: {
+          ".TPL": "php",
+        },
+      },
+    });
+
+    const index = await buildWithProjectConfig(root);
+
+    expect(localExportNames(index, root, "src/kept.ts")).toEqual(["keptAlpha"]);
+    expect(localExportNames(index, root, "src/template.TPL")).toEqual(["mapped_template"]);
+  });
+
+  it("uses the longest configured extension match before shorter remaps", async () => {
+    const root = await mkRepo();
+    await fs.writeFile(
+      path.join(root, "src", "view.inc.php"),
+      "<?php function longest_extension() { return 1; }\n",
+      "utf8",
+    );
+    await writeConfig(root, {
+      languages: {
+        extensions: {
+          ".php": "html",
+          ".inc.php": "php",
+        },
+      },
+    });
+
+    const index = await buildWithProjectConfig(root);
+
+    expect(localExportNames(index, root, "src/view.inc.php")).toContain("longest_extension");
+  });
+
+  it("keeps built-in extensions unless a matching mapping overrides them", async () => {
+    const root = await mkRepo();
+    await fs.writeFile(path.join(root, "src", "builtin.ts"), "export const builtinValue = 1;\n", "utf8");
+    await fs.writeFile(path.join(root, "src", "remapped.php"), "<?php function remapped_php() { return 1; }\n", "utf8");
+    await writeConfig(root, {
+      languages: {
+        extensions: {
+          ".tpl": "php",
+          ".php": "html",
+        },
+      },
+    });
+
+    const index = await buildWithProjectConfig(root);
+
+    expect(localExportNames(index, root, "src/builtin.ts")).toContain("builtinValue");
+    expect(localExportNames(index, root, "src/remapped.php")).not.toContain("remapped_php");
+  });
+
+  it("invalidates disk cache entries when language extension mappings change", async () => {
+    const root = await mkRepo();
+    await fs.writeFile(
+      path.join(root, "src", "cached.tpl"),
+      "<?php function cached_template() { return 1; }\n",
+      "utf8",
+    );
+    await writeConfig(root, {
+      languages: {
+        extensions: {
+          ".tpl": "html",
+        },
+      },
+    });
+
+    const htmlIndex = await buildWithProjectConfig(root);
+    expect(localExportNames(htmlIndex, root, "src/cached.tpl")).not.toContain("cached_template");
+
+    await writeConfig(root, {
+      languages: {
+        extensions: {
+          ".tpl": "php",
+        },
+      },
+    });
+
+    const phpIndex = await buildWithProjectConfig(root);
+
+    expect(localExportNames(phpIndex, root, "src/cached.tpl")).toContain("cached_template");
+  });
+
+  it("does not invalidate the per-file module cache when languageExtensions has a redundant non-dot key", async () => {
+    const root = await mkRepo();
+    await fs.writeFile(
+      path.join(root, "src", "cached.tpl"),
+      "<?php function cached_template() { return 1; }\n",
+      "utf8",
+    );
+
+    const firstReport: BuildReport = { timings: {} };
+    await buildProjectIndex(root, {
+      cache: "memory",
+      languageExtensions: { ".tpl": "html" },
+      report: firstReport,
+    });
+
+    const secondReport: BuildReport = { timings: {} };
+    await buildProjectIndex(root, {
+      cache: "memory",
+      languageExtensions: { ".tpl": "html", tpl: "html" },
+      report: secondReport,
+    });
+
+    expect(firstReport.files?.total).toBeGreaterThan(0);
+    expect(secondReport.files?.total).toBe(firstReport.files?.total);
+    expect(secondReport.files?.cached).toBe(secondReport.files?.total);
+    expect(secondReport.cache?.hits).toBe(secondReport.files?.total);
+    expect(secondReport.cache?.misses ?? 0).toBe(0);
+  });
+
+  it("invalidates extension-aware module cache entries when the native runtime changes", async () => {
+    const root = await mkRepo();
+    await fs.writeFile(
+      path.join(root, "src", "cached.tpl"),
+      "<?php function cached_template() { return 1; }\n",
+      "utf8",
+    );
+
+    await buildProjectIndex(root, {
+      cache: "memory",
+      native: "off",
+      languageExtensions: { ".tpl": "php" },
+    });
+
+    const report: BuildReport = { timings: {} };
+    await buildProjectIndex(root, {
+      cache: "memory",
+      native: "auto",
+      languageExtensions: { ".tpl": "php" },
+      report,
+    });
+
+    expect(report.files?.total).toBeGreaterThan(0);
+    expect(report.files?.cached ?? 0).toBe(0);
+    expect(report.cache?.hits ?? 0).toBe(0);
+    expect(report.cache?.misses).toBe(report.files?.total);
+  });
+
+  it("ignores non-dot-prefixed extension keys passed directly to supportForFile", () => {
+    expect(supportForFile("widget.tpl", { tpl: "html" })).toBeUndefined();
+    expect(supportForFile("widget.tpl", { ".tpl": "html" })?.id).toBe("html");
+  });
+
+  it("ignores non-dot-prefixed languageExtensions keys when comparing manifest build options", () => {
+    const dotOnly = summarizeBuildOptions({
+      languageExtensions: { ".tpl": "html" },
+    });
+    const withNonDotKey = summarizeBuildOptions({
+      languageExtensions: { ".tpl": "html", tpl: "html" },
+    });
+
+    expect(withNonDotKey).toEqual(dotOnly);
+    expect(diffBuildOptions(dotOnly, { languageExtensions: { ".tpl": "html", tpl: "html" } })).not.toContain(
+      "languageExtensions",
+    );
+  });
+
+  it("ignores glob metacharacter suffixes in programmatic support and cache options", () => {
+    const validMapping = { ".tpl": "html" };
+    const withMetacharacter = { ...validMapping, ".foo[bar]": "php" };
+
+    expect(supportForFile("widget.foo[bar]", withMetacharacter)).toBeUndefined();
+    expect(summarizeBuildOptions({ languageExtensions: withMetacharacter })).toEqual(
+      summarizeBuildOptions({ languageExtensions: validMapping }),
+    );
+  });
+
+  it("keeps Vue and Svelte built-in support and cache options when programmatic remaps are attempted", () => {
+    const validMapping = { ".tpl": "html" };
+    const withSfcRemaps = { ...validMapping, ".vue": "php", ".svelte": "php" };
+
+    expect(supportForFile("Component.vue", withSfcRemaps)?.id).toBe("vue");
+    expect(supportForFile("Component.svelte", withSfcRemaps)?.id).toBe("svelte");
+    expect(summarizeBuildOptions({ languageExtensions: withSfcRemaps })).toEqual(
+      summarizeBuildOptions({ languageExtensions: validMapping }),
+    );
+  });
+
+  it("drops unknown language IDs while trimming and lowercasing programmatic extension mappings", () => {
+    const normalized = normalizeLanguageExtensions({
+      ".TPL": " HTML ",
+      ".unknown": "wat",
+      ".PHP": " PHP ",
+    });
+
+    expect(Object.entries(normalized ?? {})).toEqual([
+      [".php", "php"],
+      [".tpl", "html"],
+    ]);
+  });
+
+  it("uses an uppercase valid shorter mapping after ignoring an unknown language ID", () => {
+    const support = supportForFile("widget.component.tpl", {
+      ".component.tpl": "wat",
+      ".tpl": "HTML",
+    });
+
+    expect(support?.id).toBe("html");
+  });
+
+  it("does not discover files solely because an unknown language ID maps their extension", async () => {
+    const root = await mkRepo();
+    await fs.writeFile(
+      path.join(root, "src", "template.tpl"),
+      "<?php function programmatic_template() { return 1; }\n",
+      "utf8",
+    );
+    await fs.writeFile(path.join(root, "src", "ignored.unknown"), "ignored contents\n", "utf8");
+
+    const index = await buildProjectIndex(root, {
+      cache: "off",
+      languageExtensions: {
+        ".unknown": "wat",
+        ".tpl": "php",
+      },
+    });
+
+    expect(localExportNames(index, root, "src/template.tpl")).toContain("programmatic_template");
+    expect(index.byFile.has(normalizedFile(root, "src/ignored.unknown"))).toBe(false);
+  });
+
+  it("ignores unknown language IDs when comparing manifest build options", () => {
+    const validOnly = summarizeBuildOptions({
+      languageExtensions: { ".tpl": "html" },
+    });
+    const withUnknownLanguage = summarizeBuildOptions({
+      languageExtensions: { ".tpl": "html", ".unknown": "wat" },
+    });
+
+    expect(withUnknownLanguage).toEqual(validOnly);
+    expect(
+      diffBuildOptions(
+        { languageExtensions: { ".tpl": "html", ".unknown": "wat" } },
+        { languageExtensions: { ".tpl": "html" } },
+      ),
+    ).not.toContain("languageExtensions");
+  });
+
+  it("rejects language extension keys that do not start with a dot", async () => {
+    const root = await mkRepo();
+    await writeConfig(root, {
+      languages: {
+        extensions: {
+          tpl: "php",
+        },
+      },
+    });
+
+    await expect(loadCodegraphConfig(root)).rejects.toThrow('languages.extensions key "tpl" must start with "."');
+  });
+
+  it("rejects glob metacharacters in configured extension suffixes", async () => {
+    const root = await mkRepo();
+    await writeConfig(root, {
+      languages: {
+        extensions: {
+          ".foo[bar]": "php",
+        },
+      },
+    });
+
+    await expect(loadCodegraphConfig(root)).rejects.toThrow(
+      'languages.extensions key ".foo[bar]" must be a literal suffix containing only letters, digits, ".", "_", "+", or "-"',
+    );
+  });
+
+  it.each([".vue", ".svelte"])("rejects configured remapping of the built-in %s suffix", async (extension) => {
+    const root = await mkRepo();
+    await writeConfig(root, {
+      languages: {
+        extensions: {
+          [extension]: "php",
+        },
+      },
+    });
+
+    await expect(loadCodegraphConfig(root)).rejects.toThrow(
+      `languages.extensions key "${extension}" cannot be remapped`,
+    );
+  });
+
+  it("rejects language extension mappings to unknown languages", async () => {
+    const root = await mkRepo();
+    await writeConfig(root, {
+      languages: {
+        extensions: {
+          ".tpl": "wat",
+        },
+      },
+    });
+
+    await expect(loadCodegraphConfig(root)).rejects.toThrow(
+      'languages.extensions[".tpl"] references unknown language "wat"',
+    );
   });
 });

@@ -53,6 +53,7 @@ Use Codegraph alongside text search and compilers: text search finds exact strin
 | "Where should I start in this repo?"         | `codegraph orient --root . --budget small`                       | Central modules, a bounded tree, and copyable follow-ups                                     |
 | "How does this feature work?"                | `codegraph explore "<question>" --root .`                        | Ranked anchors, source packets, dependency paths, blast radius, and likely tests             |
 | "What could this change break?"              | `codegraph review --base HEAD --head WORKTREE --summary`         | Changed symbols, risk signals, candidate tests, duplicate leads, and review tasks            |
+| "Which tests should I run?"                  | `codegraph affected --base HEAD --head WORKTREE --quiet`         | Deterministic affected test paths from changed files and reverse dependencies                |
 | "What depends on this file?"                 | `codegraph rdeps src/file.ts --json`                             | Reverse dependencies from the resolved project graph                                         |
 | "Where is this symbol defined or used?"      | `codegraph goto <file> <line> <column>` and `codegraph refs ...` | Semantic definitions and references across supported languages                               |
 | "Which declaration matches this name?"       | `codegraph symbols "CodeReviewSession" --root .`                 | Ranked symbols with portable handles, exact ranges, provenance, and omissions                |
@@ -93,6 +94,7 @@ git clone https://github.com/lzehrung/codegraph.git
 cd codegraph
 npm install
 npm run build
+
 node ./dist/cli.js doctor
 node ./dist/cli.js orient --root . --budget small
 ```
@@ -143,6 +145,9 @@ codegraph review --base HEAD --head WORKTREE --summary
 
 # Broader blast-radius map when the summary needs expansion
 codegraph impact --base HEAD --head WORKTREE
+
+# Deterministic affected-test paths for focused validation
+codegraph affected --base HEAD --head WORKTREE --quiet
 ```
 
 Use `--head STAGED` to compare `HEAD` with the index, or use refs such as `--base origin/main --head HEAD` for a branch review.

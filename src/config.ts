@@ -1,6 +1,13 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
+import {
+  isLiteralLanguageExtension,
+  isRemappableLanguageExtension,
+  normalizeLanguageExtensions,
+  supportById,
+} from "./languages.js";
+import type { LanguageExtensionMap } from "./languages.js";
 import type { GraphBuildOptions } from "./graphs/types.js";
 import { normalizeResolutionHints } from "./util/paths.js";
 import { type ProjectFileDiscoveryOptions } from "./util/projectFiles.js";
@@ -9,6 +16,8 @@ export const CODEGRAPH_CONFIG_FILE = "codegraph.config.json";
 
 const stringArraySchema = z.array(z.string().trim().min(1));
 
+const languageExtensionsSchema = z.record(z.string().trim().min(1), z.string().trim().min(1));
+
 const codegraphConfigSchema = z
   .object({
     discovery: z
@@ -16,6 +25,12 @@ const codegraphConfigSchema = z
         includeGlobs: stringArraySchema.optional(),
         ignoreGlobs: stringArraySchema.optional(),
         useGitignore: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    languages: z
+      .object({
+        extensions: languageExtensionsSchema.optional(),
       })
       .strict()
       .optional(),
@@ -32,6 +47,9 @@ type ParsedCodegraphConfig = z.infer<typeof codegraphConfigSchema>;
 
 export type CodegraphConfig = {
   discovery?: ProjectFileDiscoveryOptions;
+  languages?: {
+    extensions?: LanguageExtensionMap;
+  };
   graph?: {
     resolutionHints?: string[];
   };
@@ -102,6 +120,33 @@ function normalizeDiscoveryConfig(
   return hasDiscoveryOptions(normalized) ? normalized : undefined;
 }
 
+function normalizeConfigLanguageExtensions(
+  extensions: Record<string, string> | undefined,
+): LanguageExtensionMap | undefined {
+  if (!extensions) return undefined;
+  for (const [rawKey, rawLanguageId] of Object.entries(extensions)) {
+    const key = rawKey.trim().toLowerCase();
+    const languageId = rawLanguageId.trim().toLowerCase();
+    if (!key.startsWith(".")) {
+      throw new Error(`Invalid ${CODEGRAPH_CONFIG_FILE}: languages.extensions key "${rawKey}" must start with ".".`);
+    }
+    if (!isLiteralLanguageExtension(key)) {
+      throw new Error(
+        `Invalid ${CODEGRAPH_CONFIG_FILE}: languages.extensions key "${rawKey}" must be a literal suffix containing only letters, digits, ".", "_", "+", or "-".`,
+      );
+    }
+    if (!isRemappableLanguageExtension(key)) {
+      throw new Error(`Invalid ${CODEGRAPH_CONFIG_FILE}: languages.extensions key "${rawKey}" cannot be remapped.`);
+    }
+    if (!supportById(languageId)) {
+      throw new Error(
+        `Invalid ${CODEGRAPH_CONFIG_FILE}: languages.extensions["${rawKey}"] references unknown language "${languageId}".`,
+      );
+    }
+  }
+  return normalizeLanguageExtensions(extensions);
+}
+
 export async function loadCodegraphConfig(projectRoot: string): Promise<CodegraphConfig> {
   const configPath = path.join(projectRoot, CODEGRAPH_CONFIG_FILE);
   let raw: string;
@@ -126,11 +171,13 @@ export async function loadCodegraphConfig(projectRoot: string): Promise<Codegrap
   if (!parsed.success) {
     throw new Error(`Invalid ${CODEGRAPH_CONFIG_FILE}: ${z.prettifyError(parsed.error)}`);
   }
+  const languageExtensions = normalizeConfigLanguageExtensions(parsed.data.languages?.extensions);
   const discovery = normalizeDiscoveryConfig(parsed.data.discovery);
   const resolutionHints = normalizeResolutionHints(parsed.data.graph?.resolutionHints);
   const graph = resolutionHints.length ? { resolutionHints } : undefined;
   return {
     ...(discovery ? { discovery } : {}),
     ...(graph ? { graph } : {}),
+    ...(languageExtensions ? { languages: { extensions: languageExtensions } } : {}),
   };
 }

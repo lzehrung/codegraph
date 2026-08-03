@@ -1,9 +1,10 @@
 import { prepareSourceInput } from "../languages/filePrep.js";
 import { loadNearestTsconfigFor, resolveImportSpecifier } from "../util/resolution.js";
 import { loadWorkspaceConfig } from "../util/workspace.js";
-import { type LogLevel } from "../logging.js";
-import { type FallbackImportExtractionEvent, type FallbackImportExtractionReason } from "../graphs/specifiers.js";
+import type { LogLevel } from "../logging.js";
+import type { FallbackImportExtractionEvent, FallbackImportExtractionReason } from "../graphs/specifiers.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
+import type { LanguageExtensionMap } from "../languages.js";
 import { isGraphOnlyLanguage } from "../documentLinks.js";
 import { stripJsLikeComments } from "../util/comments.js";
 import {
@@ -12,10 +13,8 @@ import {
   isNativeBindingLoadedForLanguage,
   isNativeRequiredUnavailableError,
   isNativeQueryAuthoritative,
-  type NativeQueryExecution,
-  type NativeQueryResults,
-  type NativeRuntimeMode,
 } from "../native/treeSitterNative.js";
+import type { NativeQueryExecution, NativeQueryResults, NativeRuntimeMode } from "../native/treeSitterNative.js";
 import type { ResolvedImportTarget } from "./imports/context.js";
 import { collectGraphOnlyImports } from "./imports/graphOnly.js";
 import { collectJsTextImports, collectJsTextValueRequireImports } from "./imports/jsTextImports.js";
@@ -43,13 +42,19 @@ export async function collectImportsForFile(
     native?: NativeRuntimeMode;
     onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
     logLevel?: LogLevel;
+    languageExtensions?: LanguageExtensionMap;
   },
 ): Promise<ImportBinding[]> {
   let source = opts?.source;
   let sup = opts?.sup;
 
   if (!source || !sup) {
-    const prep = await prepareSourceInput(file, source !== undefined ? { source } : undefined);
+    const prep = await prepareSourceInput(
+      file,
+      source !== undefined
+        ? { source, languageExtensions: opts?.languageExtensions }
+        : { languageExtensions: opts?.languageExtensions },
+    );
     source = prep.source;
     sup = prep.sup;
   }

@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import fsp from "node:fs/promises";
-import path from "node:path";
 
 import { uniqueByKey } from "../util/collections.js";
 import type { ModuleIndex, SymbolDef } from "../indexer/types.js";
@@ -8,6 +7,7 @@ import { SymbolKind } from "../indexer/types.js";
 import type { Edge, Range } from "../types.js";
 import { normalizePath } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
+import { supportForFile, type LanguageExtensionMap } from "../languages.js";
 import { extractSqlFactsFromSource, sqlObjectBaseName } from "./extractFacts.js";
 import { pushSqlLookupValue } from "./lookup.js";
 import type { SqlFactKind, SqlStatementFact } from "./types.js";
@@ -49,8 +49,8 @@ type SqlDefinitionCandidateMatch = {
   confidence: number;
 };
 
-function isSqlFile(filePath: string): boolean {
-  return path.extname(filePath).toLowerCase() === ".sql";
+function isSqlFile(filePath: string, languageExtensions?: LanguageExtensionMap): boolean {
+  return supportForFile(filePath, languageExtensions)?.id === "sql";
 }
 
 export function sqlCorpusSignature(
@@ -198,10 +198,13 @@ async function readSqlFacts(filePath: string): Promise<SqlStatementFact[]> {
   return extractSqlFactsFromSource(filePath, await fsp.readFile(filePath, "utf8"));
 }
 
-export async function buildSqlFactCache(allFiles: readonly string[]): Promise<SqlFactCache> {
-  const sqlFiles = Array.from(new Set(allFiles.map(normalizePath).filter(isSqlFile))).sort((left, right) =>
-    left.localeCompare(right),
-  );
+export async function buildSqlFactCache(
+  allFiles: readonly string[],
+  languageExtensions?: LanguageExtensionMap,
+): Promise<SqlFactCache> {
+  const sqlFiles = Array.from(
+    new Set(allFiles.map(normalizePath).filter((file) => isSqlFile(file, languageExtensions))),
+  ).sort((left, right) => left.localeCompare(right));
   const factGroups = await mapLimit(
     sqlFiles,
     SQL_FACT_READ_CONCURRENCY,
@@ -225,10 +228,11 @@ export async function collectSqlEdgesForFile(
   filePath: string,
   allFiles: readonly string[],
   factCache?: SqlFactCache,
+  languageExtensions?: LanguageExtensionMap,
 ): Promise<Edge[]> {
   const normalizedFile = normalizePath(filePath);
-  if (!isSqlFile(normalizedFile)) return [];
-  const cache = factCache ?? (await buildSqlFactCache(allFiles));
+  if (!isSqlFile(normalizedFile, languageExtensions)) return [];
+  const cache = factCache ?? (await buildSqlFactCache(allFiles, languageExtensions));
   const currentFacts = cache.factsByFile.get(normalizedFile) ?? [];
   const edges: Edge[] = [];
   const seen = new Set<string>();

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizeLanguageExtensions, type LanguageExtensionMap } from "../../languages.js";
 import type { GraphBuildOptions } from "../../graphs/types.js";
 import { normalizePath, normalizeResolutionHints } from "../../util/paths.js";
 import { type ProjectFileDiscoveryOptions } from "../../util/projectFiles.js";
@@ -19,9 +20,11 @@ export type ManifestBuildOptions = {
     gitignoreRoot?: string;
     useGitignore: boolean;
   };
+  languageExtensions?: LanguageExtensionMap;
 };
 
 function normalizeManifestBuildOptions(opts?: ManifestBuildOptions): ManifestBuildOptions {
+  const languageExtensions = normalizeLanguageExtensions(opts?.languageExtensions);
   return {
     cache: opts?.cache ?? "off",
     cacheStrict: opts?.cacheStrict ?? true,
@@ -30,6 +33,7 @@ function normalizeManifestBuildOptions(opts?: ManifestBuildOptions): ManifestBui
     incrementalStrict: opts?.incrementalStrict ?? false,
     ...(opts?.nativeRuntimeFingerprint ? { nativeRuntimeFingerprint: opts.nativeRuntimeFingerprint } : {}),
     ...(opts?.discovery ? { discovery: opts.discovery } : {}),
+    ...(languageExtensions ? { languageExtensions } : {}),
   };
 }
 
@@ -53,8 +57,11 @@ function normalizeDiscoveryOptions(discovery?: ProjectFileDiscoveryOptions): Man
   };
 }
 
+export { normalizeLanguageExtensions } from "../../languages.js";
+
 function normalizeBuildOptions(opts?: BuildOptions): ManifestBuildOptions {
   const discovery = normalizeDiscoveryOptions(opts?.discovery);
+  const languageExtensions = normalizeLanguageExtensions(opts?.languageExtensions);
   return {
     cache: opts?.cache ?? "off",
     cacheStrict: opts?.cacheStrict ?? true,
@@ -63,6 +70,7 @@ function normalizeBuildOptions(opts?: BuildOptions): ManifestBuildOptions {
     incrementalStrict: opts?.incrementalStrict ?? false,
     nativeRuntimeFingerprint: getNativeRuntimeFingerprint(opts?.native),
     ...(discovery ? { discovery } : {}),
+    ...(languageExtensions ? { languageExtensions } : {}),
   };
 }
 
@@ -105,6 +113,19 @@ function normalizedDiscoveryOptionsEqual(
   return true;
 }
 
+function normalizedLanguageExtensionsEqual(
+  a: Record<string, string> | undefined,
+  b: Record<string, string> | undefined,
+): boolean {
+  const normalizedA = normalizeLanguageExtensions(a) ?? {};
+  const normalizedB = normalizeLanguageExtensions(b) ?? {};
+  const keys = Array.from(new Set([...Object.keys(normalizedA), ...Object.keys(normalizedB)])).sort();
+  for (const key of keys) {
+    if (normalizedA[key] !== normalizedB[key]) return false;
+  }
+  return true;
+}
+
 export function diffBuildOptions(
   manifestOpts: ManifestBuildOptions | undefined,
   currentOpts: BuildOptions | undefined,
@@ -129,6 +150,9 @@ export function diffBuildOptions(
   }
   if (!normalizedDiscoveryOptionsEqual(normalizedManifest.discovery, normalizedCurrent.discovery)) {
     diffs.push("discovery");
+  }
+  if (!normalizedLanguageExtensionsEqual(normalizedManifest.languageExtensions, normalizedCurrent.languageExtensions)) {
+    diffs.push("languageExtensions");
   }
   return diffs;
 }

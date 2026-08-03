@@ -41,6 +41,7 @@ import {
 export { isRelativePathInside as isCliDiscoveryRelativePathInside } from "./util/discoveryPath.js";
 export const CLI_DISPATCHABLE_COMMANDS = [
   "apisurface",
+  "affected",
   "artifact",
   "callees",
   "callers",
@@ -301,6 +302,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     return {
       ...(progressHandler ? { onProgress: progressHandler } : {}),
       discovery: discoveryOptions,
+      ...(config.languages?.extensions ? { languageExtensions: config.languages.extensions } : {}),
       ...(cache !== undefined ? { cache } : {}),
       ...(hasFlag("--cache-strict") ? { cacheStrict: true } : {}),
       ...(hasFlag("--cache-verify") ? { cacheVerify: true } : {}),
@@ -588,7 +590,15 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
 
   const resolveFilesFromRoots = async (): Promise<string[]> => {
     const { listProjectFiles } = await loadProjectFilesHelpers();
-    const patterns = cmd === "duplicates" ? await getDuplicateProjectPatterns() : undefined;
+    const basePatterns = cmd === "duplicates" ? await getDuplicateProjectPatterns() : undefined;
+    const [{ languageExtensionPatterns }, { DEFAULT_PROJECT_PATTERNS }] = await Promise.all([
+      import("./languages.js"),
+      loadProjectFilesHelpers(),
+    ]);
+    const customPatterns = languageExtensionPatterns(config.languages?.extensions);
+    const patterns = customPatterns.length
+      ? [...(basePatterns ?? DEFAULT_PROJECT_PATTERNS), ...customPatterns]
+      : basePatterns;
     if (!includeRootsAbs.length) {
       const diagnosticFiles = await listProjectFiles(projectRootFs, patterns, {
         ...diagnosticDiscoveryOptions,
@@ -963,6 +973,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     await handleGraphDeltaCommand({
       projectRootFs,
       files,
+      languageExtensions: config.languages?.extensions,
       getOpt,
       hasFlag,
       cwd: getCwd,
@@ -1022,6 +1033,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       discoveryOptions,
       nativeMode,
       workerOpts,
+      languageExtensions: config.languages?.extensions,
       progressHandler,
       graphOptions: hasGraphOverrides ? buildGraphOptions() : undefined,
       reportEnabled,
@@ -1053,6 +1065,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
         onProgress: progressHandler,
         discovery: discoveryOptions,
         ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
+        ...(config.languages?.extensions ? { languageExtensions: config.languages.extensions } : {}),
         ...workerOpts,
       },
       writeJSONLine,
@@ -1184,6 +1197,24 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     return;
   }
 
+  if (cmd === "affected") {
+    const { handleAffectedCommand } = await import("./cli/affected.js");
+    await handleAffectedCommand({
+      projectRootFs,
+      buildOptions: buildAgentOptions(),
+      positionals: parsed.positionals,
+      getOpt,
+      hasFlag,
+      parsedOptions: parsed.options,
+      readStdin: readCliStdin,
+      writeJSONLine,
+      writeStdoutLine,
+      writeStderrLine,
+      exit: exitCli,
+    });
+    return;
+  }
+
   // Review entry point: CLI workflow for review reports.
   if (cmd === "review") {
     const commandReport: CommandReport | undefined = reportEnabled ? { command: "review", timings: {} } : undefined;
@@ -1271,6 +1302,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       projectRootFs,
       includeRootsAbs,
       discoveryOptions,
+      languageExtensions: config.languages?.extensions,
       graphOptions: hasGraphOverrides || nativeMode !== "auto" ? buildGraphOptions() : undefined,
       nativeMode,
       workerOpts,
@@ -1294,6 +1326,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       projectRootFs,
       includeRootsAbs,
       discoveryOptions,
+      languageExtensions: config.languages?.extensions,
       graphOptions: hasGraphOverrides || nativeMode !== "auto" ? buildGraphOptions() : undefined,
       nativeMode,
       workerOpts,

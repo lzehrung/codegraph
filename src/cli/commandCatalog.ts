@@ -33,6 +33,7 @@ export const CLI_COMMAND_CATALOG: readonly CliCommandMetadata[] = [
   { name: "explain", summary: "Explain a file, symbol, SQL object, or search handle", family: "navigate" },
   { name: "impact", summary: "Analyze PR impact", family: "review" },
   { name: "inspect", summary: "Summarize repo structure and recommend next commands", family: "start" },
+  { name: "affected", summary: "List tests likely affected by changed files", family: "review" },
   { name: "graph", summary: "Build dependency graph", family: "graph" },
   { name: "artifact", summary: "Build an agent-ready SQLite/graph/report/question bundle", family: "manage" },
   { name: "drift", summary: "Compare architecture health between refs or artifacts", family: "review" },

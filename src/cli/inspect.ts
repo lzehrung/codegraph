@@ -6,20 +6,21 @@ import { findDuplicates, type DuplicateConfidence, type DuplicateGroup } from ".
 import { collectGraph } from "../graph-builder.js";
 import { findDetailedCycles, getUnresolvedImports } from "../graphs/queries.js";
 import { getHotspots } from "../graphs/hotspots.js";
-import { type GraphBuildOptions } from "../graphs/types.js";
+import type { GraphBuildOptions } from "../graphs/types.js";
 import { buildProjectIndexIncremental } from "../indexer/build-index.js";
 import { type BuildOptions, type BuildReport } from "../indexer/types.js";
 import {
   getNativeTreeSitterLoadError,
   getNativeTreeSitterSupportedLanguageIds,
   isNativeTreeSitterAvailable,
-  type NativeRuntimeMode,
 } from "../native/treeSitterNative.js";
+import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import type { Graph } from "../types.js";
 import { restrictGraphToIncludeRoots } from "../util/includeRoots.js";
 import { supportForFile } from "../languages.js";
+import type { LanguageExtensionMap } from "../languages.js";
 import { toProjectDisplayPath } from "../util/paths.js";
-import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
+import type { ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { parseCacheModeOption, parsePositiveIntegerOption } from "./options.js";
 import { writeCliOutput } from "./pretty.js";
 import type { CommandReport } from "./context.js";
@@ -101,6 +102,7 @@ export type InspectCommandContext = {
   projectRootFs: string;
   includeRootsAbs: string[];
   discoveryOptions: ProjectFileDiscoveryOptions;
+  languageExtensions: LanguageExtensionMap | undefined;
   graphOptions: GraphBuildOptions | undefined;
   nativeMode: NativeRuntimeMode;
   workerOpts: { useNativeWorkers: true } | Record<string, never>;
@@ -159,6 +161,7 @@ async function buildScopedReportGraph(
   opts: {
     cache?: CacheMode;
     discovery?: ProjectFileDiscoveryOptions;
+    languageExtensions?: LanguageExtensionMap;
     graphOptions?: GraphBuildOptions;
     nativeMode?: NativeRuntimeMode;
     workerOpts?: { useNativeWorkers: true } | Record<string, never>;
@@ -176,6 +179,7 @@ async function buildScopedReportGraph(
       filesAreProjectScope: true,
       cache: "disk",
       ...(opts.discovery ? { discovery: opts.discovery } : {}),
+      ...(opts.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
       ...(opts.progressHandler ? { onProgress: opts.progressHandler } : {}),
       ...(opts.nativeMode && opts.nativeMode !== "auto" ? { native: opts.nativeMode } : {}),
       ...(opts.workerOpts ?? {}),
@@ -190,6 +194,7 @@ async function buildScopedReportGraph(
 
   const sourceGraph = await collectGraph(projectRoot, files, {
     ...(opts.graphOptions ?? {}),
+    ...(opts.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
     ...(opts.report ? { report: opts.report } : {}),
   });
   return {
@@ -219,10 +224,13 @@ function summarizeDuplicateGroup(group: DuplicateGroup): DuplicateOpportunitySum
   };
 }
 
-function countFilesByLanguage(files: Iterable<string>): Record<string, number> {
+function countFilesByLanguage(
+  files: Iterable<string>,
+  languageExtensions?: LanguageExtensionMap,
+): Record<string, number> {
   const byLanguage: Record<string, number> = {};
   for (const file of files) {
-    const languageId = supportForFile(file)?.id ?? "other";
+    const languageId = supportForFile(file, languageExtensions)?.id ?? "other";
     byLanguage[languageId] = (byLanguage[languageId] ?? 0) + 1;
   }
   return byLanguage;
@@ -259,6 +267,7 @@ async function buildInspectReport(
   files: string[],
   discovery: ProjectFileDiscoveryOptions,
   graphOptions: GraphBuildOptions | undefined,
+  languageExtensions: LanguageExtensionMap | undefined,
   cache: CacheMode | undefined,
   nativeMode: NativeRuntimeMode,
   workerOpts: { useNativeWorkers: true } | Record<string, never>,
@@ -279,6 +288,7 @@ async function buildInspectReport(
     filesAreProjectScope: true,
     cache: cache ?? "disk",
     discovery,
+    ...(languageExtensions ? { languageExtensions } : {}),
     ...(progressHandler ? { onProgress: progressHandler } : {}),
     ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
     ...(useNativeWorkers ? { useNativeWorkers: true } : {}),
@@ -326,7 +336,7 @@ async function buildInspectReport(
     },
     files: {
       total: files.length,
-      byLanguage: countFilesByLanguage(files),
+      byLanguage: countFilesByLanguage(files, languageExtensions),
     },
     hotspots,
     unresolved: {
@@ -369,6 +379,7 @@ export async function handleInspectCommand(context: InspectCommandContext): Prom
     files,
     context.discoveryOptions,
     context.graphOptions,
+    context.languageExtensions,
     cache,
     context.nativeMode,
     context.workerOpts,
@@ -394,6 +405,7 @@ export async function handleHotspotsCommand(context: InspectCommandContext): Pro
   const { graph } = await buildScopedReportGraph(context.projectRootFs, context.includeRootsAbs, files, {
     ...(cache ? { cache } : {}),
     discovery: context.discoveryOptions,
+    ...(context.languageExtensions ? { languageExtensions: context.languageExtensions } : {}),
     ...(context.graphOptions ? { graphOptions: context.graphOptions } : {}),
     nativeMode: context.nativeMode,
     workerOpts: context.workerOpts,

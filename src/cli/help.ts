@@ -72,6 +72,7 @@ Recommended review commands:
   codegraph impact (defaults to HEAD..WORKTREE)
   codegraph search "auth user" --json
   codegraph explain src/auth.ts --json
+  codegraph affected --base HEAD --head WORKTREE --quiet
 
 Unfamiliar repo:
   codegraph explore "how does auth reach db?" --root .
@@ -84,6 +85,7 @@ Examples:
   codegraph explore "how does auth reach db?"
   codegraph file src/auth.ts
   codegraph explain src/auth.ts --json
+  codegraph affected src/auth.ts --quiet
   codegraph impact --provider git --base HEAD --head WORKTREE
   codegraph init --root .
   codegraph status --root . --json
@@ -141,6 +143,18 @@ State:
   A tracked manifest is left tracked with a warning. Uninit removes lifecycle state but leaves the root .gitignore rule; ordinary sync never changes ignore policy.
   Init and sync may warm or update the disk cache under .codegraph-cache/index-v1/. Other commands do not depend on the manifest.
   Positional paths and --root are alternatives for lifecycle commands; do not combine them.
+`;
+
+export const AFFECTED_HELP_TEXT = `codegraph affected - List tests likely affected by changed files
+
+Usage:
+  codegraph affected [file...] [--stdin] [--base <ref> --head <ref>] [--root <path>] [--depth <n>] [--filter <glob>] [--json | --quiet]
+
+Options:
+  --depth <n>       Reverse dependency traversal depth (default: 1)
+  --filter <glob>   Restrict returned test files by project-root-relative glob
+  --stdin           Read newline-delimited changed files from stdin
+  --quiet           Print affected test paths only
 `;
 
 export const INSTALL_HELP_TEXT = `codegraph install - Configure Codegraph for supported agent clients
@@ -539,6 +553,7 @@ export function helpTextForCommand(command: string, positionals: readonly string
   if (command === "orient") return ORIENT_HELP_TEXT;
   if (command === "packet") return PACKET_HELP_TEXT;
   if (command === "explain") return EXPLAIN_HELP_TEXT;
+  if (command === "affected") return AFFECTED_HELP_TEXT;
   if (command === "install") return INSTALL_HELP_TEXT;
   if (command === "uninstall") return UNINSTALL_HELP_TEXT;
   if (command === "init" || command === "status" || command === "sync" || command === "uninit")

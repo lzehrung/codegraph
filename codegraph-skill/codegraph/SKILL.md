@@ -9,7 +9,7 @@ Use Codegraph when a repository question depends on structure rather than exact 
 
 - architecture, hotspots, cycles, unresolved imports, and public API surface
 - definitions, references, dependencies, reverse dependencies, and paths
-- PR or worktree impact, candidate tests, and risk signals
+- PR or worktree impact, candidate tests, affected test lists, and risk signals
 - duplicate cleanup and refactor-risk triage
 - bounded context for agents through explore, orientation, search, packets, explain, and MCP
 
@@ -24,6 +24,7 @@ Bare `codegraph` prints five task-first routes without scanning the project. Use
 | Review staged and unstaged work                           | `codegraph review --base HEAD --head WORKTREE --summary`    |
 | Review a branch against main                              | `codegraph review --base origin/main --head HEAD --summary` |
 | Map the wider blast radius of a change                    | `codegraph impact --base HEAD --head WORKTREE`              |
+| Select deterministic test paths for changed files         | `codegraph affected --base HEAD --head WORKTREE --quiet`    |
 | Answer a concrete question about an unfamiliar repo       | `codegraph explore "how does auth reach db?" --root .`      |
 | Map a repo before you know the question                   | `codegraph orient --root . --budget small`                  |
 | Diagnose installation, native runtime, or artifact health | `codegraph doctor`                                          |
@@ -36,6 +37,7 @@ Use `--root` to define the boundary for config lookup, cache scope, path confine
 
 - Positional paths are include roots inside the project boundary for `orient`, `drift`, and positional graph commands.
 - `codegraph.config.json` discovery globs are project-root-relative.
+- `languages.extensions` maps literal suffixes such as `.tpl` to supported language IDs; longest suffix wins, while `.vue` and `.svelte` cannot be remapped.
 - CLI `--include-glob` and `--ignore-glob` values are one-off filters relative to each active scan root.
 - Use `--no-gitignore` only when ignored files are intentionally in scope.
 - Commands that load the project index first report cache validation as `Checking project index`, then report build or update progress only when index work is required. Warm cache hits complete as `Checked project index` without claiming a rebuild. Use `--progress` for redirected logs or `--no-progress` to suppress feedback, and JSON stdout remains unchanged.
@@ -88,6 +90,7 @@ Safe shorthand: `impact` and git-backed `drift` default to `HEAD..WORKTREE`; `ar
 
 - compact review handoff: `codegraph review --base HEAD --head WORKTREE --summary`
 - broader change impact: `codegraph impact --base HEAD --head WORKTREE`
+- affected test paths: `codegraph affected --base HEAD --head WORKTREE --quiet`
 - architecture drift: `codegraph drift ./src --base origin/main --head HEAD --graph-edges summary --public-api removals`
 - architecture summary: `codegraph inspect ./src --limit 20`
 - prioritized cycles: `codegraph cycles --sort priority`
