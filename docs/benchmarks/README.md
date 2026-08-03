@@ -7,8 +7,9 @@ On these tiny local fixtures, with Codegraph caching disabled and a fresh proces
 - The preselected-read baseline completes in the low single-digit milliseconds. It is a filesystem floor with known paths, not a competing repository-discovery workflow.
 - Codegraph uses one declared `explore` step while the baseline uses three declared read steps. This count does not represent equivalent work, agent round trips, or tool quality.
 - Every expected evidence anchor is present in every checked run.
+- The installer-preservation corpus keeps reviewed installer anchors ahead of generic MCP and benchmark decoys, recommends the installer source first, and returns its direct test.
 
-These findings describe only the declared workflows and checked fixtures below. Completeness means that expected path anchors appear in captured evidence. It does not measure answer quality, reasoning, relevance, correctness, or whether an agent could produce a good final answer. The benchmark also does not show that either workflow is generally faster, cheaper, or better at repository discovery.
+These findings describe only the declared workflows and checked fixtures below. Completeness requires expected path anchors and any declared reviewed ordering, recommendation, and candidate-test relationships. It does not measure general answer quality, reasoning, relevance, correctness, or whether an agent could produce a good final answer.
 
 ## Reproduce locally
 
@@ -18,7 +19,7 @@ From the repository root, run:
 npm run bench:docs
 ```
 
-This command rebuilds stale `dist` output when needed, runs every scenario and both variants serially, requires complete anchor evidence, rewrites `results.example.json` and the generated table below, and prints the median table. The fixtures are local and the run makes no network requests.
+This command rebuilds stale `dist` output when needed, runs every scenario and both variants serially, requires complete anchors and reviewed relationships, rewrites `results.example.json` and the generated table below, and prints the median table. The fixtures are local and the run makes no network requests.
 
 ### Focused semantic regression fixture
 
@@ -84,7 +85,7 @@ This corpus is not a compiler conformance suite and does not prove universal cor
 
 ## Workflows and metrics
 
-Each checked scenario in [`scenarios.json`](./scenarios.json) defines a local fixture, a task, ordered expected anchors, and the exact steps for both variants. The scenarios cover TypeScript request paths, Python imports, SQL migration and application coupling, and Markdown-to-TypeScript request paths.
+Each checked scenario in [`scenarios.json`](./scenarios.json) defines a local fixture, a task, ordered expected anchors, and the exact steps for both variants. The scenarios cover TypeScript request paths, Python imports, SQL migration and application coupling, Markdown-to-TypeScript request paths, and installer-preservation ranking.
 
 - **Baseline workflow:** three declared direct UTF-8 file reads. The files are selected in advance, so this is not an unaided discovery task.
 - **Codegraph workflow:** one local `codegraph explore <query> --root <fixture> --cache off --json` call. It starts a fresh CLI process and builds a cold in-process index for every sample.
@@ -92,25 +93,28 @@ Each checked scenario in [`scenarios.json`](./scenarios.json) defines a local fi
 - **File reads:** baseline read steps, or unique source paths Codegraph returns in `packets` or `fileView`. This is a context-delivery count, not total parser, indexer, operating-system, or disk I/O.
 - **Wall time:** elapsed time around declared steps. It includes Codegraph process startup and cold indexing but excludes harness setup.
 - **Completeness:** the fraction of expected path anchors found as text in captured evidence. It is evidence-anchor presence, not an answer-quality score.
+- **Reviewed relationships:** selected scenarios declare exact anchor partial orders, one recommended file, and required candidate tests. Results record one-based ranks and reciprocal ranks descriptively; no aggregate accuracy threshold, top-k target, or percentage is inferred.
 
 Medians are calculated independently for each scenario and variant. Tool calls and returned files can approximate workflow coordination and delivered context, but they are not units of time, tokens, bytes, or effort.
 
 ## Checked results
 
-[`results.example.json`](./results.example.json) contains the checked runs behind this table. A SHA-256 digest binds it to the exact ordered scenario definitions. Validation requires every selected scenario, both variants, and every expected run exactly once; it also checks declared step counts. The summarizer generates and orders every table cell, and `npm run bench:docs:check` detects drift.
+[`results.example.json`](./results.example.json) contains the checked runs behind this table. A SHA-256 digest binds it to the exact ordered scenario definitions. Validation requires every selected scenario, both variants, and every expected run exactly once; it also checks declared step counts and the exact reviewed relationship schema. The summarizer generates and orders every table cell, and `npm run bench:docs:check` detects drift.
 
 <!-- benchmark-results:start -->
 
-| Scenario                         | Variant   | Samples | Median tool calls | Median file reads | Median wall time (ms) | Complete runs | Minimum completeness |
-| -------------------------------- | --------- | ------: | ----------------: | ----------------: | --------------------: | ------------: | -------------------: |
-| repo-orientation-small-ts        | baseline  |       3 |                 3 |                 3 |                 2.571 |             3 |                 100% |
-| repo-orientation-small-ts        | codegraph |       3 |                 1 |                 3 |               490.863 |             3 |                 100% |
-| python-import-reference          | baseline  |       3 |                 3 |                 3 |                 2.068 |             3 |                 100% |
-| python-import-reference          | codegraph |       3 |                 1 |                 2 |               480.674 |             3 |                 100% |
-| sql-migration-application-review | baseline  |       3 |                 3 |                 3 |                  2.09 |             3 |                 100% |
-| sql-migration-application-review | codegraph |       3 |                 1 |                 3 |               522.643 |             3 |                 100% |
-| mixed-docs-source-graph          | baseline  |       3 |                 3 |                 3 |                 2.164 |             3 |                 100% |
-| mixed-docs-source-graph          | codegraph |       3 |                 1 |                 3 |               461.371 |             3 |                 100% |
+| Scenario                         | Variant   | Samples | Median tool calls | Median file reads | Median wall time (ms) | Complete runs | Minimum completeness | Reviewed relationships                              |
+| -------------------------------- | --------- | ------: | ----------------: | ----------------: | --------------------: | ------------: | -------------------: | --------------------------------------------------- |
+| repo-orientation-small-ts        | baseline  |       3 |                 3 |                 3 |                 2.529 |             3 |                 100% | -                                                   |
+| repo-orientation-small-ts        | codegraph |       3 |                 1 |                 3 |               410.586 |             3 |                 100% | -                                                   |
+| python-import-reference          | baseline  |       3 |                 3 |                 3 |                 2.507 |             3 |                 100% | -                                                   |
+| python-import-reference          | codegraph |       3 |                 1 |                 3 |               447.115 |             3 |                 100% | -                                                   |
+| sql-migration-application-review | baseline  |       3 |                 3 |                 3 |                 2.515 |             3 |                 100% | -                                                   |
+| sql-migration-application-review | codegraph |       3 |                 1 |                 3 |               456.471 |             3 |                 100% | -                                                   |
+| mixed-docs-source-graph          | baseline  |       3 |                 3 |                 3 |                 3.781 |             3 |                 100% | -                                                   |
+| mixed-docs-source-graph          | codegraph |       3 |                 1 |                 3 |               400.407 |             3 |                 100% | -                                                   |
+| installer-preservation-ranking   | baseline  |       3 |                 3 |                 3 |                 2.418 |             3 |                 100% | -                                                   |
+| installer-preservation-ranking   | codegraph |       3 |                 1 |                 3 |               435.459 |             3 |                 100% | 4 exact observations; ranks in results.example.json |
 
 <!-- benchmark-results:end -->
 

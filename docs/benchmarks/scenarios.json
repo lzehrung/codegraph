@@ -120,6 +120,60 @@
           }
         ]
       }
+    },
+    {
+      "id": "installer-preservation-ranking",
+      "repo": "tests/samples/benchmarks/installer-preservation",
+      "task": "Find how the installer preserves an equivalent existing MCP server configuration, ahead of generic MCP handling and benchmark decoys, and locate its direct test.",
+      "expectedAnchors": ["src/installer/registry.ts", "src/mcp/server.ts", "tests/installer.test.ts"],
+      "requiredAnchorOrder": [
+        {
+          "before": {
+            "file": "src/installer/registry.ts",
+            "label": "preserveExistingMcpConfig"
+          },
+          "after": {
+            "file": "src/mcp/server.ts",
+            "label": "handleExistingMcpSessionRequest"
+          }
+        },
+        {
+          "before": {
+            "file": "src/installer/registry.ts",
+            "label": "shouldPreserveExistingServer"
+          },
+          "after": {
+            "file": "src/benchmarks/realpathExisting.ts",
+            "label": "preserveExistingBenchmarkDirectory"
+          }
+        }
+      ],
+      "expectedRecommendedFile": "src/installer/registry.ts",
+      "requiredCandidateTests": ["tests/installer.test.ts"],
+      "metrics": ["toolCalls", "fileReads", "wallTimeMs"],
+      "variants": {
+        "baseline": [
+          {
+            "type": "read",
+            "path": "src/installer/registry.ts"
+          },
+          {
+            "type": "read",
+            "path": "tests/installer.test.ts"
+          },
+          {
+            "type": "read",
+            "path": "src/mcp/server.ts"
+          }
+        ],
+        "codegraph": [
+          {
+            "type": "codegraph",
+            "command": "explore",
+            "query": "How does the installer preserve an existing MCP server configuration?"
+          }
+        ]
+      }
     }
   ]
 }

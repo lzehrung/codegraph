@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  assertComplete,
   collectSourceFiles,
   loadScenarioFile,
   parseArguments,
@@ -14,6 +15,7 @@ import {
 } from "../scripts/benchmarks/run-scenario-lib.mjs";
 import { calculateScenarioDigest } from "../scripts/benchmarks/benchmark-contract-lib.mjs";
 import {
+  describeReviewedRelationships,
   checkGeneratedBlock,
   median,
   renderMarkdownTable,
@@ -33,6 +35,7 @@ const scenarioIds = [
   "python-import-reference",
   "sql-migration-application-review",
   "mixed-docs-source-graph",
+  "installer-preservation-ranking",
 ];
 
 interface BaselineStep {
@@ -46,12 +49,42 @@ interface CodegraphStep {
   query: string;
 }
 
+interface AnchorSelector {
+  file: string;
+  label: string;
+}
+
+interface ReviewedRelationships {
+  anchorOrder: Array<{
+    before: AnchorSelector;
+    after: AnchorSelector;
+    beforeRank: number | null;
+    afterRank: number | null;
+    beforeReciprocalRank: number | null;
+    afterReciprocalRank: number | null;
+  }>;
+  recommendedFile: {
+    expected: string;
+    actual: string | null;
+    rank: number | null;
+    reciprocalRank: number | null;
+  };
+  candidateTests: Array<{
+    file: string;
+    rank: number | null;
+    reciprocalRank: number | null;
+  }>;
+}
+
 interface Scenario {
   id: string;
   repo: string;
   task: string;
   expectedAnchors: string[];
   metrics: string[];
+  requiredAnchorOrder?: Array<{ before: AnchorSelector; after: AnchorSelector }>;
+  expectedRecommendedFile?: string;
+  requiredCandidateTests?: string[];
   variants: {
     baseline: BaselineStep[];
     codegraph: CodegraphStep[];
@@ -79,6 +112,7 @@ interface BenchmarkRun {
     anchorsFound: number;
     missingAnchors: string[];
     completeness: number;
+    reviewedRelationships?: ReviewedRelationships;
   };
 }
 
@@ -164,6 +198,19 @@ function createScenarioFixture(tempRoot: string): ScenarioDocument {
       },
     ],
   };
+}
+
+function addReviewedContract(document: ScenarioDocument): ScenarioDocument {
+  const scenario = document.scenarios[0];
+  scenario.requiredAnchorOrder = [
+    {
+      before: { file: "src/actual.ts", label: "actual" },
+      after: { file: "src/anchor.ts", label: "anchor" },
+    },
+  ];
+  scenario.expectedRecommendedFile = "src/actual.ts";
+  scenario.requiredCandidateTests = ["src/anchor.ts"];
+  return document;
 }
 
 function addSecondaryScenario(document: ScenarioDocument): ScenarioDocument {
@@ -272,7 +319,7 @@ function findRun(results: BenchmarkResults, scenarioId: string, variant: Variant
 }
 
 describe("public documentation benchmark scenarios", () => {
-  it("loads exactly the four checked local scenarios with canonical metrics, variants, steps, and existing fixtures", () => {
+  it("loads exactly the five checked local scenarios with canonical metrics, variants, steps, and existing fixtures", () => {
     const document = loadScenarioFile("docs/benchmarks/scenarios.json", { rootDir }) as ScenarioDocument;
 
     expect(document.schemaVersion).toBe(1);
@@ -289,9 +336,15 @@ describe("public documentation benchmark scenarios", () => {
       expect(scenario.repo).not.toMatch(/^(?:[a-z][a-z\d+.-]*:|[/\\~])/iu);
       const fixtureRoot = path.join(rootDir, ...scenario.repo.split("/"));
       expect(fs.statSync(fixtureRoot).isDirectory()).toBe(true);
+      const reviewedFiles = [
+        ...(scenario.requiredAnchorOrder ?? []).flatMap((pair) => [pair.before.file, pair.after.file]),
+        ...(scenario.expectedRecommendedFile ? [scenario.expectedRecommendedFile] : []),
+        ...(scenario.requiredCandidateTests ?? []),
+      ];
       for (const relativeFile of [
         ...scenario.expectedAnchors,
         ...scenario.variants.baseline.map((step) => step.path),
+        ...reviewedFiles,
       ]) {
         expect(fs.statSync(path.join(fixtureRoot, ...relativeFile.split("/"))).isFile()).toBe(true);
       }
@@ -339,6 +392,50 @@ describe("public documentation benchmark scenarios", () => {
     for (const testCase of mutations) {
       const document = createScenarioFixture(tempRoot);
       testCase.mutate(document);
+      expect(() => validateScenarioDocument(document, { rootDir: tempRoot }), testCase.name).toThrow();
+    }
+  });
+
+  it("strictly validates reviewed relationship fields and confines every declared path", () => {
+    const tempRoot = createTempRoot();
+    const valid = addReviewedContract(createScenarioFixture(tempRoot));
+    expect(validateScenarioDocument(valid, { rootDir: tempRoot })).toBe(valid);
+
+    const cases: Array<{ name: string; mutate: (scenario: Scenario) => void }> = [
+      {
+        name: "unknown pair field",
+        mutate: (scenario) => {
+          Object.assign(scenario.requiredAnchorOrder?.[0], { unexpected: true });
+        },
+      },
+      {
+        name: "traversing pair file",
+        mutate: (scenario) => {
+          if (scenario.requiredAnchorOrder) scenario.requiredAnchorOrder[0].before.file = "../outside.ts";
+        },
+      },
+      {
+        name: "absolute recommendation",
+        mutate: (scenario) => {
+          scenario.expectedRecommendedFile = "/outside.ts";
+        },
+      },
+      {
+        name: "network candidate test",
+        mutate: (scenario) => {
+          scenario.requiredCandidateTests = ["https://example.test/test.ts"];
+        },
+      },
+      {
+        name: "duplicate pair",
+        mutate: (scenario) => {
+          scenario.requiredAnchorOrder?.push(clone(scenario.requiredAnchorOrder[0]));
+        },
+      },
+    ];
+    for (const testCase of cases) {
+      const document = addReviewedContract(createScenarioFixture(tempRoot));
+      testCase.mutate(document.scenarios[0]);
       expect(() => validateScenarioDocument(document, { rootDir: tempRoot }), testCase.name).toThrow();
     }
   });
@@ -694,6 +791,134 @@ describe("public documentation benchmark runner contracts", () => {
         },
       ]),
     ).toEqual(["src/direct.ts", "src/nested.ts", "src/shared.ts"]);
+  });
+
+  it("records reviewed ranks and rejects failed ordering, recommendation, and candidate-test relationships", async () => {
+    const tempRoot = createTempRoot();
+    const document = addReviewedContract(createScenarioFixture(tempRoot));
+    const response = {
+      anchors: [
+        { file: "src/actual.ts", label: "actual" },
+        { file: "src/anchor.ts", label: "anchor" },
+      ],
+      packets: [{ target: "src/actual.ts" }, { target: "src/anchor.ts" }],
+      candidateTests: ["src/anchor.ts"],
+      followUps: ["codegraph file src/actual.ts", "codegraph file src/anchor.ts"],
+    };
+    const result = await runBenchmark(
+      { runs: 1, scenarioFile: "scenario.json", requireComplete: true },
+      {
+        rootDir: tempRoot,
+        scenarioDocument: document,
+        now: () => 0,
+        executeCodegraph: async () => response,
+        date: () => new Date("2026-07-10T12:00:00.000Z"),
+        environment: {
+          nodeVersion: "v24.0.0",
+          platform: "linux",
+          arch: "x64",
+          cpuModel: "test cpu",
+          logicalCpus: 4,
+          totalMemoryBytes: 1024,
+        },
+      },
+    );
+    assertComplete(result);
+    validateResults(result, { scenarioFile: document });
+    const reviewed = result.runs[1].checks.reviewedRelationships;
+    expect(reviewed).toEqual({
+      anchorOrder: [
+        {
+          before: { file: "src/actual.ts", label: "actual" },
+          after: { file: "src/anchor.ts", label: "anchor" },
+          beforeRank: 1,
+          afterRank: 2,
+          beforeReciprocalRank: 1,
+          afterReciprocalRank: 0.5,
+        },
+      ],
+      recommendedFile: {
+        expected: "src/actual.ts",
+        actual: "src/actual.ts",
+        rank: 1,
+        reciprocalRank: 1,
+      },
+      candidateTests: [{ file: "src/anchor.ts", rank: 1, reciprocalRank: 1 }],
+    });
+    expect(describeReviewedRelationships(reviewed)).toEqual([
+      "src/actual.ts#actual (rank 1, reciprocal rank 1) before src/anchor.ts#anchor (rank 2, reciprocal rank 0.5)",
+      "recommended src/actual.ts (rank 1, reciprocal rank 1; actual src/actual.ts)",
+      "src/anchor.ts (rank 1, reciprocal rank 1)",
+    ]);
+    const summaries = summarizeResults(result, { scenarioFile: document }) as Array<{
+      reviewedRelationships?: string[];
+    }>;
+    expect(summaries[1].reviewedRelationships).toEqual(describeReviewedRelationships(reviewed));
+    expect(renderMarkdownTable(summaries)).toContain("3 exact observations; ranks in results.example.json");
+    const serialized = serializeBenchmarkResult(result);
+    expect(serializeBenchmarkResult(clone(result))).toBe(serialized);
+    expect(serialized).toContain('"beforeReciprocalRank": 1');
+    expect(serialized).toContain('"afterReciprocalRank": 0.5');
+    const unknownField = clone(result);
+    Object.assign(unknownField.runs[1].checks.reviewedRelationships?.recommendedFile ?? {}, {
+      unexpected: true,
+    });
+    expect(() => validateResults(unknownField, { scenarioFile: document })).toThrow(/unknown unexpected/);
+    const invalidReciprocalRank = clone(result);
+    const invalidReviewed = invalidReciprocalRank.runs[1].checks.reviewedRelationships;
+    if (!invalidReviewed) throw new Error("Missing reviewed relationship checks.");
+    invalidReviewed.anchorOrder[0].afterReciprocalRank = 0.25;
+    expect(() => validateResults(invalidReciprocalRank, { scenarioFile: document })).toThrow(
+      /expected reciprocal rank/,
+    );
+
+    const failures = [
+      {
+        name: "ordering",
+        mutate: (checks: ReviewedRelationships) => {
+          checks.anchorOrder[0].beforeRank = 2;
+          checks.anchorOrder[0].beforeReciprocalRank = 0.5;
+        },
+        expected: /must rank before/,
+      },
+      {
+        name: "recommendation",
+        mutate: (checks: ReviewedRelationships) => {
+          checks.recommendedFile.actual = "src/anchor.ts";
+        },
+        expected: /recommended.*expected/,
+      },
+      {
+        name: "candidate test",
+        mutate: (checks: ReviewedRelationships) => {
+          checks.candidateTests[0].rank = null;
+          checks.candidateTests[0].reciprocalRank = null;
+        },
+        expected: /missing candidate test/,
+      },
+    ];
+    for (const testCase of failures) {
+      const failed = clone(result);
+      const failedChecks = failed.runs[1].checks.reviewedRelationships;
+      if (!failedChecks) throw new Error("Missing reviewed relationship checks.");
+      testCase.mutate(failedChecks);
+      expect(() => assertComplete(failed), testCase.name).toThrow(testCase.expected);
+    }
+  });
+
+  it("executes the checked installer-preservation scenario through the public harness", async () => {
+    const document = loadScenarioFile("docs/benchmarks/scenarios.json", { rootDir }) as ScenarioDocument;
+    const scenario = document.scenarios.find((candidate) => candidate.id === "installer-preservation-ranking");
+    if (!scenario) throw new Error("Missing installer-preservation scenario.");
+    const runs = (await runScenario(scenario, { rootDir, runs: 1, now: () => 0 })) as BenchmarkRun[];
+    expect(runs).toHaveLength(2);
+    expect(() => assertComplete({ runs })).not.toThrow();
+    expect(runs[1].checks.reviewedRelationships?.recommendedFile).toMatchObject({
+      expected: "src/installer/registry.ts",
+      actual: "src/installer/registry.ts",
+      rank: 1,
+      reciprocalRank: 1,
+    });
   });
 
   it("accepts explicit runner selections and rejects ambiguous or unsafe arguments", () => {

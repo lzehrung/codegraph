@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-07-11T15:36:03.729Z",
+  "generatedAt": "2026-08-03T05:06:07.947Z",
   "command": [
     "node",
     "scripts/benchmarks/run-scenario.mjs",
@@ -21,12 +21,13 @@
     "totalMemoryBytes": 137141977088
   },
   "scenarioFile": "docs/benchmarks/scenarios.json",
-  "scenarioDigest": "sha256:7d1d6583adf2f3cbaf904cae40837c8e25ca1d540cd1b5a28e444d3fc4db67fa",
+  "scenarioDigest": "sha256:cc8d9ce746ac09e44ed3068e42a1e5efd9daf372137541e27667989b576ba627",
   "scenarioIds": [
     "repo-orientation-small-ts",
     "python-import-reference",
     "sql-migration-application-review",
-    "mixed-docs-source-graph"
+    "mixed-docs-source-graph",
+    "installer-preservation-ranking"
   ],
   "runsPerVariant": 3,
   "runs": [
@@ -37,7 +38,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 3.282
+        "wallTimeMs": 3.519
       },
       "checks": {
         "anchorsExpected": 3,
@@ -53,7 +54,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 2.315
+        "wallTimeMs": 2.529
       },
       "checks": {
         "anchorsExpected": 3,
@@ -69,7 +70,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 2.571
+        "wallTimeMs": 2.426
       },
       "checks": {
         "anchorsExpected": 3,
@@ -85,7 +86,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 601.005
+        "wallTimeMs": 410.586
       },
       "checks": {
         "anchorsExpected": 3,
@@ -101,7 +102,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 465.454
+        "wallTimeMs": 407.15
       },
       "checks": {
         "anchorsExpected": 3,
@@ -117,7 +118,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 490.863
+        "wallTimeMs": 433.541
       },
       "checks": {
         "anchorsExpected": 3,
@@ -130,6 +131,38 @@
       "scenarioId": "python-import-reference",
       "variant": "baseline",
       "run": 1,
+      "metrics": {
+        "toolCalls": 3,
+        "fileReads": 3,
+        "wallTimeMs": 28.508
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "python-import-reference",
+      "variant": "baseline",
+      "run": 2,
+      "metrics": {
+        "toolCalls": 3,
+        "fileReads": 3,
+        "wallTimeMs": 2.507
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "python-import-reference",
+      "variant": "baseline",
+      "run": 3,
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
@@ -144,44 +177,12 @@
     },
     {
       "scenarioId": "python-import-reference",
-      "variant": "baseline",
-      "run": 2,
-      "metrics": {
-        "toolCalls": 3,
-        "fileReads": 3,
-        "wallTimeMs": 1.927
-      },
-      "checks": {
-        "anchorsExpected": 3,
-        "anchorsFound": 3,
-        "missingAnchors": [],
-        "completeness": 1
-      }
-    },
-    {
-      "scenarioId": "python-import-reference",
-      "variant": "baseline",
-      "run": 3,
-      "metrics": {
-        "toolCalls": 3,
-        "fileReads": 3,
-        "wallTimeMs": 2.068
-      },
-      "checks": {
-        "anchorsExpected": 3,
-        "anchorsFound": 3,
-        "missingAnchors": [],
-        "completeness": 1
-      }
-    },
-    {
-      "scenarioId": "python-import-reference",
       "variant": "codegraph",
       "run": 1,
       "metrics": {
         "toolCalls": 1,
-        "fileReads": 2,
-        "wallTimeMs": 480.674
+        "fileReads": 3,
+        "wallTimeMs": 458.782
       },
       "checks": {
         "anchorsExpected": 3,
@@ -196,8 +197,8 @@
       "run": 2,
       "metrics": {
         "toolCalls": 1,
-        "fileReads": 2,
-        "wallTimeMs": 507.044
+        "fileReads": 3,
+        "wallTimeMs": 447.115
       },
       "checks": {
         "anchorsExpected": 3,
@@ -212,8 +213,8 @@
       "run": 3,
       "metrics": {
         "toolCalls": 1,
-        "fileReads": 2,
-        "wallTimeMs": 470.584
+        "fileReads": 3,
+        "wallTimeMs": 407.022
       },
       "checks": {
         "anchorsExpected": 3,
@@ -229,7 +230,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 2.62
+        "wallTimeMs": 19.343
       },
       "checks": {
         "anchorsExpected": 3,
@@ -245,7 +246,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 1.956
+        "wallTimeMs": 2.515
       },
       "checks": {
         "anchorsExpected": 3,
@@ -261,7 +262,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 2.09
+        "wallTimeMs": 2.152
       },
       "checks": {
         "anchorsExpected": 3,
@@ -277,7 +278,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 522.643
+        "wallTimeMs": 456.471
       },
       "checks": {
         "anchorsExpected": 3,
@@ -293,7 +294,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 515.229
+        "wallTimeMs": 445.553
       },
       "checks": {
         "anchorsExpected": 3,
@@ -309,7 +310,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 555.258
+        "wallTimeMs": 475.487
       },
       "checks": {
         "anchorsExpected": 3,
@@ -325,7 +326,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 2.259
+        "wallTimeMs": 33.791
       },
       "checks": {
         "anchorsExpected": 3,
@@ -341,7 +342,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 1.907
+        "wallTimeMs": 3.781
       },
       "checks": {
         "anchorsExpected": 3,
@@ -357,7 +358,7 @@
       "metrics": {
         "toolCalls": 3,
         "fileReads": 3,
-        "wallTimeMs": 2.164
+        "wallTimeMs": 3.261
       },
       "checks": {
         "anchorsExpected": 3,
@@ -373,7 +374,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 462.271
+        "wallTimeMs": 406.232
       },
       "checks": {
         "anchorsExpected": 3,
@@ -389,7 +390,7 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 453.648
+        "wallTimeMs": 400.407
       },
       "checks": {
         "anchorsExpected": 3,
@@ -405,13 +406,244 @@
       "metrics": {
         "toolCalls": 1,
         "fileReads": 3,
-        "wallTimeMs": 461.371
+        "wallTimeMs": 393.461
       },
       "checks": {
         "anchorsExpected": 3,
         "anchorsFound": 3,
         "missingAnchors": [],
         "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "installer-preservation-ranking",
+      "variant": "baseline",
+      "run": 1,
+      "metrics": {
+        "toolCalls": 3,
+        "fileReads": 3,
+        "wallTimeMs": 2.572
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "installer-preservation-ranking",
+      "variant": "baseline",
+      "run": 2,
+      "metrics": {
+        "toolCalls": 3,
+        "fileReads": 3,
+        "wallTimeMs": 2.365
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "installer-preservation-ranking",
+      "variant": "baseline",
+      "run": 3,
+      "metrics": {
+        "toolCalls": 3,
+        "fileReads": 3,
+        "wallTimeMs": 2.418
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1
+      }
+    },
+    {
+      "scenarioId": "installer-preservation-ranking",
+      "variant": "codegraph",
+      "run": 1,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 429.018
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1,
+        "reviewedRelationships": {
+          "anchorOrder": [
+            {
+              "before": {
+                "file": "src/installer/registry.ts",
+                "label": "preserveExistingMcpConfig"
+              },
+              "after": {
+                "file": "src/mcp/server.ts",
+                "label": "handleExistingMcpSessionRequest"
+              },
+              "beforeRank": 1,
+              "afterRank": 3,
+              "beforeReciprocalRank": 1,
+              "afterReciprocalRank": 0.3333333333333333
+            },
+            {
+              "before": {
+                "file": "src/installer/registry.ts",
+                "label": "shouldPreserveExistingServer"
+              },
+              "after": {
+                "file": "src/benchmarks/realpathExisting.ts",
+                "label": "preserveExistingBenchmarkDirectory"
+              },
+              "beforeRank": 2,
+              "afterRank": 5,
+              "beforeReciprocalRank": 0.5,
+              "afterReciprocalRank": 0.2
+            }
+          ],
+          "recommendedFile": {
+            "expected": "src/installer/registry.ts",
+            "actual": "src/installer/registry.ts",
+            "rank": 1,
+            "reciprocalRank": 1
+          },
+          "candidateTests": [
+            {
+              "file": "tests/installer.test.ts",
+              "rank": 1,
+              "reciprocalRank": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "scenarioId": "installer-preservation-ranking",
+      "variant": "codegraph",
+      "run": 2,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 449.712
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1,
+        "reviewedRelationships": {
+          "anchorOrder": [
+            {
+              "before": {
+                "file": "src/installer/registry.ts",
+                "label": "preserveExistingMcpConfig"
+              },
+              "after": {
+                "file": "src/mcp/server.ts",
+                "label": "handleExistingMcpSessionRequest"
+              },
+              "beforeRank": 1,
+              "afterRank": 3,
+              "beforeReciprocalRank": 1,
+              "afterReciprocalRank": 0.3333333333333333
+            },
+            {
+              "before": {
+                "file": "src/installer/registry.ts",
+                "label": "shouldPreserveExistingServer"
+              },
+              "after": {
+                "file": "src/benchmarks/realpathExisting.ts",
+                "label": "preserveExistingBenchmarkDirectory"
+              },
+              "beforeRank": 2,
+              "afterRank": 5,
+              "beforeReciprocalRank": 0.5,
+              "afterReciprocalRank": 0.2
+            }
+          ],
+          "recommendedFile": {
+            "expected": "src/installer/registry.ts",
+            "actual": "src/installer/registry.ts",
+            "rank": 1,
+            "reciprocalRank": 1
+          },
+          "candidateTests": [
+            {
+              "file": "tests/installer.test.ts",
+              "rank": 1,
+              "reciprocalRank": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "scenarioId": "installer-preservation-ranking",
+      "variant": "codegraph",
+      "run": 3,
+      "metrics": {
+        "toolCalls": 1,
+        "fileReads": 3,
+        "wallTimeMs": 435.459
+      },
+      "checks": {
+        "anchorsExpected": 3,
+        "anchorsFound": 3,
+        "missingAnchors": [],
+        "completeness": 1,
+        "reviewedRelationships": {
+          "anchorOrder": [
+            {
+              "before": {
+                "file": "src/installer/registry.ts",
+                "label": "preserveExistingMcpConfig"
+              },
+              "after": {
+                "file": "src/mcp/server.ts",
+                "label": "handleExistingMcpSessionRequest"
+              },
+              "beforeRank": 1,
+              "afterRank": 3,
+              "beforeReciprocalRank": 1,
+              "afterReciprocalRank": 0.3333333333333333
+            },
+            {
+              "before": {
+                "file": "src/installer/registry.ts",
+                "label": "shouldPreserveExistingServer"
+              },
+              "after": {
+                "file": "src/benchmarks/realpathExisting.ts",
+                "label": "preserveExistingBenchmarkDirectory"
+              },
+              "beforeRank": 2,
+              "afterRank": 5,
+              "beforeReciprocalRank": 0.5,
+              "afterReciprocalRank": 0.2
+            }
+          ],
+          "recommendedFile": {
+            "expected": "src/installer/registry.ts",
+            "actual": "src/installer/registry.ts",
+            "rank": 1,
+            "reciprocalRank": 1
+          },
+          "candidateTests": [
+            {
+              "file": "tests/installer.test.ts",
+              "rank": 1,
+              "reciprocalRank": 1
+            }
+          ]
+        }
       }
     }
   ]

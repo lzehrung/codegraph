@@ -111,6 +111,41 @@ function validateAnchors(anchors, label) {
   }
 }
 
+function hasReviewedRelationships(scenario) {
+  return Object.hasOwn(scenario, "requiredAnchorOrder");
+}
+
+function validateAnchorSelector(selector, label) {
+  assertExactKeys(selector, ["file", "label"], label);
+  assertCanonicalScenarioPath(selector.file, `${label}.file`);
+  assertNonEmptyString(selector.label, `${label}.label`);
+}
+
+function validateReviewedRelationships(scenario, label) {
+  const relationshipKeys = ["requiredAnchorOrder", "expectedRecommendedFile", "requiredCandidateTests"];
+  const presentKeys = relationshipKeys.filter((key) => Object.hasOwn(scenario, key));
+  if (!presentKeys.length) return;
+  if (presentKeys.length !== relationshipKeys.length) {
+    fail(`${label} must declare all reviewed relationship fields together.`);
+  }
+  if (!Array.isArray(scenario.requiredAnchorOrder) || !scenario.requiredAnchorOrder.length) {
+    fail(`${label}.requiredAnchorOrder must be a non-empty array.`);
+  }
+  const seenPairs = new Set();
+  for (let index = 0; index < scenario.requiredAnchorOrder.length; index += 1) {
+    const pair = scenario.requiredAnchorOrder[index];
+    const pairLabel = `${label}.requiredAnchorOrder[${index}]`;
+    assertExactKeys(pair, ["before", "after"], pairLabel);
+    validateAnchorSelector(pair.before, `${pairLabel}.before`);
+    validateAnchorSelector(pair.after, `${pairLabel}.after`);
+    const pairKey = `${pair.before.file}\0${pair.before.label}\0${pair.after.file}\0${pair.after.label}`;
+    if (seenPairs.has(pairKey)) fail(`${label}.requiredAnchorOrder contains a duplicate pair.`);
+    seenPairs.add(pairKey);
+  }
+  assertCanonicalScenarioPath(scenario.expectedRecommendedFile, `${label}.expectedRecommendedFile`);
+  validateAnchors(scenario.requiredCandidateTests, `${label}.requiredCandidateTests`);
+}
+
 function validateStep(step, variant, label) {
   if (variant === "baseline") {
     assertExactKeys(step, ["type", "path"], label);
@@ -175,6 +210,42 @@ function validateFilesystemEntries(document, rootDir, fsImpl = fs) {
       );
     }
 
+    if (hasReviewedRelationships(scenario)) {
+      for (let pairIndex = 0; pairIndex < scenario.requiredAnchorOrder.length; pairIndex += 1) {
+        const pair = scenario.requiredAnchorOrder[pairIndex];
+        validateRepoFile(
+          repoAbsolute,
+          repoRealpath,
+          pair.before.file,
+          `${label}.requiredAnchorOrder[${pairIndex}].before.file`,
+          fsImpl,
+        );
+        validateRepoFile(
+          repoAbsolute,
+          repoRealpath,
+          pair.after.file,
+          `${label}.requiredAnchorOrder[${pairIndex}].after.file`,
+          fsImpl,
+        );
+      }
+      validateRepoFile(
+        repoAbsolute,
+        repoRealpath,
+        scenario.expectedRecommendedFile,
+        `${label}.expectedRecommendedFile`,
+        fsImpl,
+      );
+      for (let testIndex = 0; testIndex < scenario.requiredCandidateTests.length; testIndex += 1) {
+        validateRepoFile(
+          repoAbsolute,
+          repoRealpath,
+          scenario.requiredCandidateTests[testIndex],
+          `${label}.requiredCandidateTests[${testIndex}]`,
+          fsImpl,
+        );
+      }
+    }
+
     for (let stepIndex = 0; stepIndex < scenario.variants.baseline.length; stepIndex += 1) {
       const step = scenario.variants.baseline[stepIndex];
       validateRepoFile(repoAbsolute, repoRealpath, step.path, `${label}.variants.baseline[${stepIndex}].path`, fsImpl);
@@ -194,7 +265,11 @@ export function validateScenarioDocument(value, options = {}) {
   for (let index = 0; index < value.scenarios.length; index += 1) {
     const scenario = value.scenarios[index];
     const label = `scenarios[${index}]`;
-    assertExactKeys(scenario, ["id", "repo", "task", "expectedAnchors", "metrics", "variants"], label);
+    const scenarioKeys = ["id", "repo", "task", "expectedAnchors", "metrics", "variants"];
+    if (hasReviewedRelationships(scenario)) {
+      scenarioKeys.push("requiredAnchorOrder", "expectedRecommendedFile", "requiredCandidateTests");
+    }
+    assertExactKeys(scenario, scenarioKeys, label);
     assertNonEmptyString(scenario.id, `${label}.id`);
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(scenario.id)) {
       fail(`${label}.id may contain only letters, digits, dots, underscores, and hyphens.`);
@@ -206,6 +281,7 @@ export function validateScenarioDocument(value, options = {}) {
     validateAnchors(scenario.expectedAnchors, `${label}.expectedAnchors`);
     validateMetrics(scenario.metrics, `${label}.metrics`);
     validateVariants(scenario.variants, `${label}.variants`);
+    validateReviewedRelationships(scenario, label);
   }
 
   if (checkFilesystem) validateFilesystemEntries(value, path.resolve(rootDir), fsImpl);
@@ -486,6 +562,82 @@ export function captureCodegraphEvidence(response) {
   });
 }
 
+function reciprocalRank(rank) {
+  return rank === null ? null : 1 / rank;
+}
+
+function anchorRank(outputs, selector) {
+  let offset = 0;
+  for (const output of outputs) {
+    const anchors = Array.isArray(output.anchors) ? output.anchors : [];
+    const index = anchors.findIndex(
+      (anchor) => isPlainObject(anchor) && anchor.file === selector.file && anchor.label === selector.label,
+    );
+    if (index !== -1) return offset + index + 1;
+    offset += anchors.length;
+  }
+  return null;
+}
+
+function candidateTestRank(outputs, file) {
+  let offset = 0;
+  for (const output of outputs) {
+    const candidateTests = Array.isArray(output.candidateTests) ? output.candidateTests : [];
+    const index = candidateTests.indexOf(file);
+    if (index !== -1) return offset + index + 1;
+    offset += candidateTests.length;
+  }
+  return null;
+}
+
+function recommendedFiles(outputs) {
+  const files = [];
+  const seen = new Set();
+  for (const output of outputs) {
+    const anchors = Array.isArray(output.anchors) ? output.anchors : [];
+    for (const anchor of anchors) {
+      if (!isPlainObject(anchor)) continue;
+      const file = normalizeReturnedFile(anchor.file);
+      if (!file || seen.has(file)) continue;
+      seen.add(file);
+      files.push(file);
+    }
+  }
+  return files;
+}
+
+export function calculateReviewedRelationships(scenario, exploreOutputs) {
+  if (!hasReviewedRelationships(scenario)) return undefined;
+  const outputs = Array.isArray(exploreOutputs) ? exploreOutputs : [exploreOutputs];
+  const recommendations = recommendedFiles(outputs);
+  const recommendedRank = recommendations.indexOf(scenario.expectedRecommendedFile);
+  const expectedRecommendationRank = recommendedRank === -1 ? null : recommendedRank + 1;
+  return {
+    anchorOrder: scenario.requiredAnchorOrder.map((pair) => {
+      const beforeRank = anchorRank(outputs, pair.before);
+      const afterRank = anchorRank(outputs, pair.after);
+      return {
+        before: pair.before,
+        after: pair.after,
+        beforeRank,
+        afterRank,
+        beforeReciprocalRank: reciprocalRank(beforeRank),
+        afterReciprocalRank: reciprocalRank(afterRank),
+      };
+    }),
+    recommendedFile: {
+      expected: scenario.expectedRecommendedFile,
+      actual: recommendations[0] ?? null,
+      rank: expectedRecommendationRank,
+      reciprocalRank: reciprocalRank(expectedRecommendationRank),
+    },
+    candidateTests: scenario.requiredCandidateTests.map((file) => {
+      const rank = candidateTestRank(outputs, file);
+      return { file, rank, reciprocalRank: reciprocalRank(rank) };
+    }),
+  };
+}
+
 async function runVariant(scenario, variant, runNumber, options) {
   const { rootDir, readFile, executeCodegraph, now } = options;
   const capturedOutputs = [];
@@ -529,7 +681,12 @@ async function runVariant(scenario, variant, runNumber, options) {
       fileReads: variant === "baseline" ? steps.length : countSourceFiles(exploreOutputs),
       wallTimeMs: Number(elapsed.toFixed(3)),
     },
-    checks: calculateCompleteness(scenario.expectedAnchors, capturedOutputs),
+    checks: {
+      ...calculateCompleteness(scenario.expectedAnchors, capturedOutputs),
+      ...(variant === "codegraph" && hasReviewedRelationships(scenario)
+        ? { reviewedRelationships: calculateReviewedRelationships(scenario, exploreOutputs) }
+        : {}),
+    },
   };
 }
 
@@ -648,12 +805,31 @@ export async function runBenchmark(options = {}, dependencies = {}) {
 }
 
 export function assertComplete(result) {
-  const incomplete = result.runs.filter((run) => run.checks.completeness < 1);
-  if (!incomplete.length) return;
-  const details = incomplete
-    .map((run) => `${run.scenarioId}/${run.variant}/run-${run.run}: ${run.checks.missingAnchors.join(", ")}`)
-    .join("; ");
-  fail(`Benchmark completeness requirement failed: ${details}.`);
+  const failures = [];
+  for (const run of result.runs) {
+    if (run.checks.completeness < 1) {
+      failures.push(`${run.scenarioId}/${run.variant}/run-${run.run}: missing ${run.checks.missingAnchors.join(", ")}`);
+    }
+    const reviewed = run.checks.reviewedRelationships;
+    if (!reviewed) continue;
+    for (const pair of reviewed.anchorOrder) {
+      if (pair.beforeRank !== null && pair.afterRank !== null && pair.beforeRank < pair.afterRank) continue;
+      failures.push(
+        `${run.scenarioId}/${run.variant}/run-${run.run}: ${pair.before.file}#${pair.before.label} must rank before ${pair.after.file}#${pair.after.label}`,
+      );
+    }
+    if (reviewed.recommendedFile.actual !== reviewed.recommendedFile.expected) {
+      failures.push(
+        `${run.scenarioId}/${run.variant}/run-${run.run}: recommended ${String(reviewed.recommendedFile.actual)}, expected ${reviewed.recommendedFile.expected}`,
+      );
+    }
+    for (const candidate of reviewed.candidateTests) {
+      if (candidate.rank !== null) continue;
+      failures.push(`${run.scenarioId}/${run.variant}/run-${run.run}: missing candidate test ${candidate.file}`);
+    }
+  }
+  if (!failures.length) return;
+  fail(`Benchmark completeness requirement failed: ${failures.join("; ")}.`);
 }
 
 function nearestExistingAncestor(entryPath, fsImpl = fs) {
