@@ -196,7 +196,7 @@ function createGraphQueryContext(overrides: Partial<GraphQueryCommandContext>): 
     },
     listProjectFilesForScan: async () => [],
     collectGraph: async () => ({ nodes: new Set(), edges: [] }),
-    buildProjectIndex: async () => {
+    loadCurrentIndex: async () => {
       throw new Error("unexpected index build");
     },
     ...overrides,
@@ -1737,7 +1737,7 @@ describe("CLI command modules", () => {
           },
         ],
       }),
-      buildProjectIndex: async () => {
+      loadCurrentIndex: async () => {
         throw new Error("unexpected index build");
       },
     });
@@ -1826,7 +1826,7 @@ describe("CLI command modules", () => {
           listedFiles = true;
           return [mainPath, utilPath];
         },
-        buildProjectIndex: async () => {
+        loadCurrentIndex: async () => {
           buildCount += 1;
           return projectIndex;
         },

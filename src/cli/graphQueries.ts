@@ -1,6 +1,5 @@
-import { buildProjectIndexIncremental as defaultBuildProjectIndex } from "../indexer/build-index.js";
 import { getApiSurface } from "../indexer/symbols.js";
-import { type BuildOptions, type ProjectIndex } from "../indexer/types.js";
+import type { CurrentProjectIndexLoader } from "../indexer/load-current-index.js";
 import type { GraphAdjacencyIndex } from "../graphs/adjacency.js";
 import {
   findDetailedCycles,
@@ -31,9 +30,9 @@ export type GraphQueryCommandContext = {
   exit: (code: number) => never;
   listProjectFilesForScan: () => Promise<string[]>;
   graphOptions?: GraphBuildOptions;
-  indexOptions?: BuildOptions;
+  /** Loads the index for current repository state; query handlers never select a builder. */
+  loadCurrentIndex: CurrentProjectIndexLoader;
   collectGraph?: (projectRoot: string, files: string[], options?: GraphBuildOptions) => Promise<Graph>;
-  buildProjectIndex?: (root: string, options?: BuildOptions) => Promise<ProjectIndex>;
 };
 
 type LoadedGraph = {
@@ -50,8 +49,7 @@ async function loadGraph(context: GraphQueryCommandContext): Promise<LoadedGraph
     );
     return { graph };
   }
-  const buildProjectIndex = context.buildProjectIndex ?? defaultBuildProjectIndex;
-  const index = await buildProjectIndex(context.projectRootFs, context.indexOptions);
+  const index = await context.loadCurrentIndex();
   return {
     graph: index.graph,
     ...(index.graphAdjacency ? { adjacency: index.graphAdjacency } : {}),
@@ -213,8 +211,7 @@ async function handleUnresolvedCommand(context: GraphQueryCommandContext): Promi
 
 async function handleApiSurfaceCommand(context: GraphQueryCommandContext): Promise<void> {
   const json = context.hasFlag("--json");
-  const buildProjectIndex = context.buildProjectIndex ?? defaultBuildProjectIndex;
-  const index = await buildProjectIndex(context.projectRootFs, context.indexOptions);
+  const index = await context.loadCurrentIndex();
   const apiSurface = getApiSurface(index);
 
   if (json) {

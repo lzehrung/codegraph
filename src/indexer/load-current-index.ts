@@ -1,4 +1,5 @@
-import { buildProjectIndexIncremental } from "./build-index.js";
+// The builder is imported lazily so `cli.ts` can hand out bound loaders during argument
+// dispatch without pulling the indexer (and its parsers) into CLI startup.
 import type { IncrementalBuildOptions, ProjectIndex } from "./types.js";
 
 /**
@@ -92,6 +93,7 @@ export function currentProjectIndexBuildOptions(
  * This helper only encodes intent: current state, declared scope, disk default.
  */
 export async function loadCurrentProjectIndex(request: LoadCurrentProjectIndexRequest): Promise<ProjectIndex> {
+  const { buildProjectIndexIncremental } = await import("./build-index.js");
   return await buildProjectIndexIncremental(
     request.root,
     currentProjectIndexBuildOptions(request.scope, request.options),

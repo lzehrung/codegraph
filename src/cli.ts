@@ -3,6 +3,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { BuildOptions, BuildReport } from "./indexer/types.js";
+import { createCurrentProjectIndexLoader } from "./indexer/load-current-index.js";
 import type { GraphBuildOptions } from "./graphs/types.js";
 import type { NativeRuntimeMode } from "./native/treeSitterNative.js";
 import {
@@ -1078,15 +1079,16 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
 
   if (cmd === "duplicates") {
     const files = await resolveFiles();
-    const duplicateIndexOptions = buildAgentOptions();
-    duplicateIndexOptions.cache ??= "disk";
     const { handleDuplicatesCommand } = await import("./cli/duplicates.js");
     await handleDuplicatesCommand({
       projectRootFs,
       files,
       getOpt,
       hasFlag,
-      indexOptions: duplicateIndexOptions,
+      loadCurrentIndex: createCurrentProjectIndexLoader(projectRootFs, buildAgentOptions(), {
+        kind: "resolved-files",
+        files,
+      }),
       writeJSONLine,
       writeStdoutLine,
       writeStderrLine,
@@ -1239,11 +1241,12 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     return;
   }
 
-  const buildGraphQueryIndexOptions = (graphOptions: GraphBuildOptions | undefined): BuildOptions => {
+  // One place decides how current-state queries load the index: the shared loader
+  // supplies the disk-cache default and the project scope encoding.
+  const createGraphQueryIndexLoader = (graphOptions: GraphBuildOptions | undefined) => {
     const options = buildAgentOptions();
-    options.cache ??= "disk";
     if (graphOptions) options.graph = graphOptions;
-    return options;
+    return createCurrentProjectIndexLoader(projectRootFs, options);
   };
 
   if (cmd === "deps" || cmd === "rdeps") {
@@ -1262,7 +1265,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       exit: exitCli,
       listProjectFilesForScan: async () => await listProjectFilesForScan(projectRootFs),
       ...(graphOptions ? { graphOptions } : {}),
-      indexOptions: buildGraphQueryIndexOptions(graphOptions),
+      loadCurrentIndex: createGraphQueryIndexLoader(graphOptions),
     });
     return;
   }
@@ -1289,7 +1292,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       },
       ...(collectGraph ? { collectGraph } : {}),
       ...(graphOptions ? { graphOptions } : {}),
-      indexOptions: buildGraphQueryIndexOptions(graphOptions),
+      loadCurrentIndex: createGraphQueryIndexLoader(graphOptions),
     });
     return;
   }
@@ -1355,7 +1358,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
       writeStderrLine,
       exit: exitCli,
       listProjectFilesForScan: async () => await listProjectFilesForScan(projectRootFs),
-      indexOptions: buildGraphQueryIndexOptions(undefined),
+      loadCurrentIndex: createGraphQueryIndexLoader(undefined),
     });
     return;
   }

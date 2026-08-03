@@ -1,4 +1,4 @@
-import { buildProjectIndexIncremental } from "../indexer/build-index.js";
+import type { CurrentProjectIndexLoader } from "../indexer/load-current-index.js";
 import {
   findDuplicates,
   type DuplicateCleanupLabel,
@@ -8,7 +8,6 @@ import {
   type DuplicateGroup,
   type DuplicateUnitRef,
 } from "../duplicates.js";
-import type { BuildOptions } from "../indexer/types.js";
 import { parseNonNegativeIntegerOption, parsePositiveIntegerOption } from "./options.js";
 
 export type DuplicatesCommandContext = {
@@ -16,7 +15,8 @@ export type DuplicatesCommandContext = {
   files: string[];
   getOpt: (name: string) => string | undefined;
   hasFlag: (name: string) => boolean;
-  indexOptions?: BuildOptions;
+  /** Loads the index for current repository state over the resolved duplicate scope. */
+  loadCurrentIndex: CurrentProjectIndexLoader;
   writeJSONLine: (value: unknown) => void;
   writeStdoutLine: (message: string) => void;
   writeStderrLine: (message: string) => void;
@@ -441,11 +441,7 @@ export async function handleDuplicatesCommand(context: DuplicatesCommandContext)
       options.limit = boundedLimit;
     }
 
-    const index = await buildProjectIndexIncremental(context.projectRootFs, {
-      ...context.indexOptions,
-      files: context.files,
-      filesAreProjectScope: true,
-    });
+    const index = await context.loadCurrentIndex();
     const result = await findDuplicates(index, options);
     const sorted = sortedResult(result, sortMode, requestedLimit, profile);
     if (!renderPretty) {

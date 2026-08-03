@@ -7,7 +7,7 @@ import { collectGraph } from "../graph-builder.js";
 import { findDetailedCycles, getUnresolvedImports } from "../graphs/queries.js";
 import { getHotspots } from "../graphs/hotspots.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
-import { buildProjectIndexIncremental } from "../indexer/build-index.js";
+import { loadCurrentProjectIndex } from "../indexer/load-current-index.js";
 import { type BuildOptions, type BuildReport } from "../indexer/types.js";
 import {
   getNativeTreeSitterLoadError,
@@ -174,17 +174,19 @@ async function buildScopedReportGraph(
   const indexCache = useDiskCache ? readIndexCacheMetadata(projectRoot) : null;
   if (indexCache) {
     opts.writeStderrLine(formatIndexCacheMetadata(indexCache));
-    const index = await buildProjectIndexIncremental(projectRoot, {
-      files,
-      filesAreProjectScope: true,
-      cache: "disk",
-      ...(opts.discovery ? { discovery: opts.discovery } : {}),
-      ...(opts.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
-      ...(opts.progressHandler ? { onProgress: opts.progressHandler } : {}),
-      ...(opts.nativeMode && opts.nativeMode !== "auto" ? { native: opts.nativeMode } : {}),
-      ...(opts.workerOpts ?? {}),
-      ...(opts.graphOptions ? { graph: opts.graphOptions } : {}),
-      ...(opts.report ? { report: opts.report } : {}),
+    const index = await loadCurrentProjectIndex({
+      root: projectRoot,
+      scope: { kind: "resolved-files", files },
+      options: {
+        cache: "disk",
+        ...(opts.discovery ? { discovery: opts.discovery } : {}),
+        ...(opts.languageExtensions ? { languageExtensions: opts.languageExtensions } : {}),
+        ...(opts.progressHandler ? { onProgress: opts.progressHandler } : {}),
+        ...(opts.nativeMode && opts.nativeMode !== "auto" ? { native: opts.nativeMode } : {}),
+        ...(opts.workerOpts ?? {}),
+        ...(opts.graphOptions ? { graph: opts.graphOptions } : {}),
+        ...(opts.report ? { report: opts.report } : {}),
+      },
     });
     return {
       graph: restrictGraphToIncludeRoots(index.graph, includeRoots, normalizePathForDisplay),
@@ -283,17 +285,19 @@ async function buildInspectReport(
     writeStderrLine(formatIndexCacheMetadata(indexCache));
   }
   const useNativeWorkers = "useNativeWorkers" in workerOpts || files.length >= NATIVE_WORKER_AUTO_FILE_THRESHOLD;
-  const index = await buildProjectIndexIncremental(projectRoot, {
-    files,
-    filesAreProjectScope: true,
-    cache: cache ?? "disk",
-    discovery,
-    ...(languageExtensions ? { languageExtensions } : {}),
-    ...(progressHandler ? { onProgress: progressHandler } : {}),
-    ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
-    ...(useNativeWorkers ? { useNativeWorkers: true } : {}),
-    ...(graphOptions ? { graph: graphOptions } : {}),
-    ...(buildReport ? { report: buildReport } : {}),
+  const index = await loadCurrentProjectIndex({
+    root: projectRoot,
+    scope: { kind: "resolved-files", files },
+    options: {
+      ...(cache ? { cache } : {}),
+      discovery,
+      ...(languageExtensions ? { languageExtensions } : {}),
+      ...(progressHandler ? { onProgress: progressHandler } : {}),
+      ...(nativeMode !== "auto" ? { native: nativeMode } : {}),
+      ...(useNativeWorkers ? { useNativeWorkers: true } : {}),
+      ...(graphOptions ? { graph: graphOptions } : {}),
+      ...(buildReport ? { report: buildReport } : {}),
+    },
   });
   const graph = restrictGraphToIncludeRoots(index.graph, includeRoots, normalizePathForDisplay);
   const hotspots = getHotspots(graph, { limit });

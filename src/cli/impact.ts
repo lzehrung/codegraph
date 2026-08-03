@@ -1,5 +1,5 @@
-import { buildProjectIndexIncremental } from "../indexer/build-index.js";
-import type { BuildOptions, BuildReport, IncrementalBuildOptions, ProjectIndex } from "../indexer/types.js";
+import { loadCurrentProjectIndex, type LoadCurrentProjectIndexOptions } from "../indexer/load-current-index.js";
+import type { BuildOptions, BuildReport, ProjectIndex } from "../indexer/types.js";
 import {
   analyzeImpactFromDiff,
   type ChangedSymbol,
@@ -418,22 +418,22 @@ function applyAnalysisOptions(context: ImpactCommandContext, options: ImpactOpti
   options.membersOnly = context.hasFlag("--members-only");
 }
 
-// Defaults to the on-disk incremental cache, matching search/orient/inspect/review;
-// pass --cache off to opt out for a single invocation.
+// Current repository state: the diff range describes what to analyze, never the freshness
+// scope of the index. `--cache off` opts out of persisted reuse for one invocation.
 function buildIndexOptions(
   context: ImpactCommandContext,
   options: ImpactOptionsBuilder,
   analysisOptions: { keepParsedForDuplicates?: boolean } = {},
-): IncrementalBuildOptions {
-  const cacheMode =
-    options.cache === "off" || options.cache === "memory" || options.cache === "disk" ? options.cache : "disk";
+): LoadCurrentProjectIndexOptions {
+  const explicitCache =
+    options.cache === "off" || options.cache === "memory" || options.cache === "disk" ? options.cache : undefined;
   const keepParsedForDuplicates = analysisOptions.keepParsedForDuplicates ?? false;
   const keepParsed = options.refContext !== undefined || keepParsedForDuplicates;
-  const indexOpts: IncrementalBuildOptions = {
+  const indexOpts: LoadCurrentProjectIndexOptions = {
     threads: options.threads ?? 0,
     discovery: context.discoveryOptions,
     onProgress: context.progressHandler,
-    cache: cacheMode,
+    ...(explicitCache ? { cache: explicitCache } : {}),
     ...(keepParsed ? { keepParsed } : {}),
     ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
     ...context.workerOpts,
@@ -528,7 +528,11 @@ export async function handleImpactCommand(context: ImpactCommandContext): Promis
     const buildReport: BuildReport = { timings: {} };
     const indexOptions = buildIndexOptions(context, options, { keepParsedForDuplicates: duplicateScope !== "off" });
     indexOptions.report = buildReport;
-    const index = await buildProjectIndexIncremental(context.projectRootFs, indexOptions);
+    const index = await loadCurrentProjectIndex({
+      root: context.projectRootFs,
+      scope: { kind: "project" },
+      options: indexOptions,
+    });
     const report = await analyzeImpactFromDiff(context.projectRootFs, index, options as ImpactOptions, { buildReport });
     const impactReport = ensureImpactReport(report);
 

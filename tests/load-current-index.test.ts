@@ -13,7 +13,10 @@ import { runGit } from "./helpers/git.js";
 type LoadOptions = Parameters<typeof loadCurrentProjectIndex>[0]["options"];
 
 const projectFiles = [
-  { path: path.join("src", "a.ts"), contents: "import { b } from './b.js';\nexport function a() {\n  return b();\n}\n" },
+  {
+    path: path.join("src", "a.ts"),
+    contents: "import { b } from './b.js';\nexport function a() {\n  return b();\n}\n",
+  },
   { path: path.join("src", "b.ts"), contents: "export function b() {\n  return 1;\n}\n" },
   { path: path.join("src", "c.ts"), contents: "export const c = 3;\n" },
 ];
@@ -111,9 +114,7 @@ describe("loadCurrentProjectIndex freshness decisions", () => {
     expect(report.files?.parsed).toBe(3);
     expect(report.manifest?.reason).toBe("missing");
     expect(report.manifest?.reused).toBe(false);
-    await expect(
-      fsp.stat(path.join(root, ".codegraph-cache", "index-v1", "manifest.json")),
-    ).resolves.toBeDefined();
+    await expect(fsp.stat(path.join(root, ".codegraph-cache", "index-v1", "manifest.json"))).resolves.toBeDefined();
   });
 
   it("reuses the snapshot with zero parsed files on an unchanged second load", async () => {
@@ -143,9 +144,7 @@ describe("loadCurrentProjectIndex freshness decisions", () => {
     const report = newReport();
     const index = await loadProjectScope(root, report);
     expect(report.files?.parsed).toBeGreaterThanOrEqual(1);
-    const b = index.byFile.get(
-      [...index.byFile.keys()].find((file) => normalizeTestPath(file).endsWith("src/b.ts"))!,
-    );
+    const b = index.byFile.get([...index.byFile.keys()].find((file) => normalizeTestPath(file).endsWith("src/b.ts"))!);
     expect(b?.exports.map((entry) => ("exportedAs" in entry ? entry.exportedAs : "")).sort()).toEqual(["b", "extra"]);
   });
 

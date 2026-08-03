@@ -7,9 +7,9 @@ import {
   type DuplicateUnitRef,
 } from "./duplicates.js";
 import type { FileId } from "./types.js";
-import { buildProjectIndexIncremental } from "./indexer/build-index.js";
+import { loadCurrentProjectIndex } from "./indexer/load-current-index.js";
 import { summarizeAnalysis } from "./analysisSummary.js";
-import { type IncrementalBuildOptions, type ProjectIndex, type SymbolDef } from "./indexer/types.js";
+import { type ProjectIndex, type SymbolDef } from "./indexer/types.js";
 import { symbolId } from "./indexer/symbols.js";
 import type { GraphBuildOptions } from "./graphs/types.js";
 import type { FileChange, Hunk } from "./impact/types.js";
@@ -100,9 +100,9 @@ const REVIEW_DUPLICATE_TASK_LIMIT = 5;
 const REVIEW_DUPLICATE_MAX_PAIRS = 20_000;
 
 function mergeGraphOptions(
-  base: IncrementalBuildOptions["graph"] | undefined,
-  override: IncrementalBuildOptions["graph"] | undefined,
-): IncrementalBuildOptions["graph"] | undefined {
+  base: GraphBuildOptions | undefined,
+  override: GraphBuildOptions | undefined,
+): GraphBuildOptions | undefined {
   if (!base) return override;
   if (!override) return base;
   return { ...base, ...override };
@@ -174,22 +174,22 @@ async function buildReviewIndex(input: {
   if (reviewReport && !reviewReport.indexReport && indexReport) {
     reviewReport.indexReport = indexReport;
   }
-  const indexOpts: IncrementalBuildOptions = {
-    ...appliedOptions,
-    graph: graphOptions,
-    keepParsed: true,
-    ...(indexReport ? { report: indexReport } : {}),
-  };
-  if (appliedOptions.files?.length) {
-    indexOpts.additionalFiles = appliedOptions.files;
-  }
   // Review range selection describes the diff, not the freshness scope of the
-  // current-project index. Let incremental indexing reconcile the whole project.
-  delete indexOpts.files;
-  delete indexOpts.changedSince;
-  delete indexOpts.gitBase;
-  delete indexOpts.gitHead;
-  const index = await buildProjectIndexIncremental(projectRoot, indexOpts);
+  // current-project index: the shared loader strips those inputs and lets incremental
+  // indexing reconcile the whole project, unioning review targets outside discovery.
+  const index = await loadCurrentProjectIndex({
+    root: projectRoot,
+    scope: {
+      kind: "project",
+      ...(appliedOptions.files?.length ? { additionalFiles: appliedOptions.files } : {}),
+    },
+    options: {
+      ...appliedOptions,
+      graph: graphOptions,
+      keepParsed: true,
+      ...(indexReport ? { report: indexReport } : {}),
+    },
+  });
   if (reviewReport) {
     Object.defineProperty(reviewReport, "index", {
       value: index,
