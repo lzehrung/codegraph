@@ -17,13 +17,6 @@ This is the live index for plans that still need a decision or implementation. C
 - `2026-07-03-14-privacy-preserving-diagnostics.md`
 - `2026-08-03-performance-measurement-backlog.md`
 
-## Needs decision
-
-- `2026-06-06-performance-and-cache-opportunities.md`
-  - Three unmeasured cleanup candidates remain after completed and measurement-only work was removed.
-- `2026-07-21-warm-run-discovery-avoidance.md`
-  - Only the non-Git directory-mtime fallback remains; its state and correctness cost may exceed its value.
-
 ## Deferred or rejected
 
 - A check-only `upgrade` command is rejected because the name implies an update that it would not perform.
