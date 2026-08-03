@@ -325,13 +325,20 @@ describe("loadCurrentProjectIndex freshness decisions", () => {
     const root = await createProject("dg-load-current-empty-scope-");
     await loadProjectScope(root, newReport());
     for (const cache of ["off", "memory", "disk"] as const) {
+      const report = newReport();
       const index = await loadCurrentProjectIndex({
         root,
         scope: { kind: "resolved-files", files: [] },
-        options: { cache, report: newReport() },
+        options: { cache, report },
       });
       expect(index.byFile.size, `cache ${cache} must not widen an empty scope`).toBe(0);
       expect(index.modules.size).toBe(0);
+      // An empty scope is still a finalized index, not a hand-rolled stub: it carries the
+      // same project metadata and timings every other scope does.
+      expect(index.projectFiles, `cache ${cache} must finalize projectFiles`).toBeDefined();
+      expect(index.referenceCandidates, `cache ${cache} must finalize reference candidates`).toBeDefined();
+      expect(report.timings.totalMs, `cache ${cache} must record build timings`).toBeGreaterThanOrEqual(0);
+      expect(report.files?.total).toBe(0);
     }
     // The empty scope must not have rewritten the shared project manifest.
     const manifest = JSON.parse(
