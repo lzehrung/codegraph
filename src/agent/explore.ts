@@ -1,8 +1,11 @@
 import path from "node:path";
 import type { AnalysisSummary } from "../analysisSummary.js";
 import { getReverseDependencies, getShortestPath, type DependencyNode } from "../graphs/traversal.js";
+import { defNodeId } from "../graphs/symbol-graph.js";
 import type { BuildOptions } from "../indexer/types.js";
+import { listCandidateTestFiles } from "../impact/context.js";
 import { normalizePath, toProjectDisplayPath } from "../util/paths.js";
+import { parseAgentSymbolHandle } from "./handles.js";
 import {
   formatAgentFileViewResponse,
   getCodegraphFileViewWithSession,
@@ -78,6 +81,12 @@ type AgentExploreCollection<T> = {
   omittedCount: number;
 };
 
+type AgentExploreAnchorSelection = {
+  files: string[];
+  symbolIds: string[];
+  primaryRankedFile?: string;
+};
+
 const DEFAULT_ANCHOR_LIMIT = 5;
 const DEFAULT_MAX_PACKETS = 3;
 const DEFAULT_MAX_PATHS = 3;
@@ -113,7 +122,8 @@ export async function exploreCodegraphWithSession(
   });
   const snapshot = await session.loadProject({ symbolGraph: "skip" });
   const anchors = search.results.slice(0, anchorLimit);
-  const anchorFiles = collectAnchorFiles(snapshot, request.query, anchors);
+  const anchorSelection = collectAnchorSelection(snapshot, request.query, anchors);
+  const anchorFiles = anchorSelection.files;
   const packetTargets = includeSource ? collectPacketTargets(anchors, effectivePacketLimit) : [];
   const packets = await collectPackets(session, request.root, packetTargets);
   const exactFile = includeSource ? resolveExactFileTarget(snapshot, request.query) : undefined;
@@ -135,9 +145,22 @@ export async function exploreCodegraphWithSession(
     DEFAULT_MAX_BLAST_RADIUS_ENTRIES,
     DEFAULT_MAX_REVERSE_DEPENDENCIES,
   );
-  const candidateTestResult = collectCandidateTests(snapshot, anchorFiles, DEFAULT_MAX_CANDIDATE_TESTS);
+  const candidateTestResult = collectCandidateTests(
+    snapshot,
+    anchorFiles,
+    anchorSelection.symbolIds,
+    DEFAULT_MAX_CANDIDATE_TESTS,
+  );
   const candidateTests = candidateTestResult.items;
-  const followUps = collectFollowUps(request.root, request.query, anchors, packets, anchorFiles, includeSource);
+  const followUps = collectFollowUps(
+    request.root,
+    request.query,
+    anchors,
+    packets,
+    anchorFiles,
+    anchorSelection.primaryRankedFile,
+    includeSource,
+  );
 
   return {
     schemaVersion: 1,
@@ -278,35 +301,72 @@ function collectPackets(
 
 function collectPacketTargets(anchors: readonly AgentSearchResult[], limit: number): string[] {
   const targets: string[] = [];
-  const seen = new Set<string>();
-  for (const anchor of anchors) {
+  const seenTargets = new Set<string>();
+  const seenFiles = new Set<string>();
+  const append = (anchor: AgentSearchResult): void => {
     const target = anchor.kind === "file" ? anchor.file : anchor.handle;
-    if (seen.has(target)) continue;
-    seen.add(target);
+    if (seenTargets.has(target)) return;
+    seenTargets.add(target);
     targets.push(target);
+  };
+
+  for (const anchor of anchors) {
+    if (seenFiles.has(anchor.file)) continue;
+    seenFiles.add(anchor.file);
+    append(anchor);
+    if (targets.length >= limit) return targets;
+  }
+  for (const anchor of anchors) {
+    append(anchor);
     if (targets.length >= limit) break;
   }
   return targets;
 }
 
-function collectAnchorFiles(
+function collectAnchorSelection(
   snapshot: AgentProjectSnapshot,
   query: string,
   anchors: readonly AgentSearchResult[],
-): string[] {
-  const files = new Set<string>();
-  for (const file of extractFileMentions(snapshot, query)) {
-    files.add(file);
-  }
+): AgentExploreAnchorSelection {
+  const explicitFiles = extractFileMentions(snapshot, query).sort((left, right) => {
+    const leftPath = toProjectDisplayPath(snapshot.root, left);
+    const rightPath = toProjectDisplayPath(snapshot.root, right);
+    if (leftPath < rightPath) return -1;
+    if (leftPath > rightPath) return 1;
+    return 0;
+  });
+  const files = new Set(explicitFiles);
+  const symbolIds = new Set<string>();
+  let primaryRankedFile: string | undefined;
   for (const anchor of anchors) {
     const absolute = normalizePath(path.resolve(snapshot.root, anchor.file));
     if (snapshot.fileGraph.nodes.has(absolute)) {
+      primaryRankedFile ??= absolute;
       files.add(absolute);
     }
+    const symbolId = resolveAnchorSymbolId(snapshot, anchor);
+    if (symbolId) symbolIds.add(symbolId);
   }
-  return [...files].sort((left, right) =>
-    toProjectDisplayPath(snapshot.root, left).localeCompare(toProjectDisplayPath(snapshot.root, right)),
-  );
+  return {
+    files: [...files],
+    symbolIds: [...symbolIds],
+    ...(primaryRankedFile ? { primaryRankedFile } : {}),
+  };
+}
+
+function resolveAnchorSymbolId(snapshot: AgentProjectSnapshot, anchor: AgentSearchResult): string | undefined {
+  const parsed = parseAgentSymbolHandle(anchor.handle);
+  if (!parsed) return undefined;
+  const absolute = normalizePath(path.resolve(snapshot.root, parsed.file));
+  const symbol = snapshot.index.byFile
+    .get(absolute)
+    ?.locals.find(
+      (candidate) =>
+        candidate.localName === parsed.name &&
+        candidate.range.start.line === parsed.line &&
+        candidate.range.start.column === parsed.column,
+    );
+  return symbol ? defNodeId(symbol) : undefined;
 }
 
 function extractFileMentions(snapshot: AgentProjectSnapshot, query: string): string[] {
@@ -454,50 +514,18 @@ function formatDependency(snapshot: AgentProjectSnapshot, dependency: Dependency
 function collectCandidateTests(
   snapshot: AgentProjectSnapshot,
   anchorFiles: readonly string[],
+  anchorSymbolIds: readonly string[],
   limit: number,
 ): AgentExploreCollection<string> {
-  const tests = candidateTestsForAnchors(snapshot, anchorFiles);
+  if (!anchorFiles.length && !anchorSymbolIds.length) return { items: [], omittedCount: 0 };
+  const candidates = listCandidateTestFiles(snapshot.index, [...anchorFiles], [...anchorSymbolIds], {
+    maxCandidates: snapshot.index.byFile.size,
+    projectRoot: snapshot.root,
+  });
   return {
-    items: tests.slice(0, limit),
-    omittedCount: Math.max(0, tests.length - limit),
+    items: candidates.slice(0, limit).map((candidate) => toProjectDisplayPath(snapshot.root, candidate.file)),
+    omittedCount: Math.max(0, candidates.length - limit),
   };
-}
-
-function candidateTestsForAnchors(snapshot: AgentProjectSnapshot, anchorFiles: readonly string[]): string[] {
-  if (!anchorFiles.length) return [];
-  const candidateNames = new Set<string>();
-  for (const file of anchorFiles) {
-    candidateNames.add(normalizeStem(path.basename(file)));
-    for (const dependency of getReverseDependencies(snapshot.fileGraph, file, {
-      depth: 2,
-      limit: DEFAULT_MAX_REVERSE_DEPENDENCIES,
-    })) {
-      candidateNames.add(normalizeStem(path.basename(dependency.file)));
-    }
-  }
-  const candidateNameList = [...candidateNames];
-  const tests: string[] = [];
-  for (const file of snapshot.fileGraph.nodes) {
-    const relative = toProjectDisplayPath(snapshot.root, file);
-    if (!looksLikeTestFile(relative)) continue;
-    const testStem = normalizeStem(path.basename(relative));
-    if (candidateNameList.some((candidateName) => testStem.includes(candidateName))) {
-      tests.push(relative);
-    }
-  }
-  return tests.sort();
-}
-
-function looksLikeTestFile(file: string): boolean {
-  const normalized = file.toLowerCase();
-  return /(^|[/.])(test|tests|__tests__)([/.]|$)/.test(normalized) || /\.(test|spec)\.[^.]+$/.test(normalized);
-}
-
-function normalizeStem(name: string): string {
-  return name
-    .replace(/\.(test|spec)\.[^.]+$/i, "")
-    .replace(/\.[^.]+$/, "")
-    .toLowerCase();
 }
 
 function collectFollowUps(
@@ -506,14 +534,18 @@ function collectFollowUps(
   anchors: readonly AgentSearchResult[],
   packets: readonly AgentPacketResponse[],
   anchorFiles: readonly string[],
+  primaryRankedFile: string | undefined,
   includeSource: boolean,
 ): string[] {
+  const orderedFiles = primaryRankedFile
+    ? [primaryRankedFile, ...anchorFiles.filter((file) => file !== primaryRankedFile)]
+    : [...anchorFiles];
   const followUps: string[] = [];
-  for (const file of anchorFiles.slice(0, 3)) {
+  for (const file of orderedFiles.slice(0, 3)) {
     const relative = toProjectDisplayPath(root, file);
     followUps.push(`codegraph file ${quoteShellArg(relative)}`);
   }
-  for (const file of anchorFiles.slice(0, 3)) {
+  for (const file of orderedFiles.slice(0, 3)) {
     const relative = toProjectDisplayPath(root, file);
     followUps.push(`codegraph packet get ${quoteShellArg(relative)}`);
   }
@@ -523,7 +555,7 @@ function collectFollowUps(
   for (const packet of packets) {
     followUps.push(...packet.followUps);
   }
-  for (const file of anchorFiles.slice(0, 3)) {
+  for (const file of orderedFiles.slice(0, 3)) {
     const relative = toProjectDisplayPath(root, file);
     followUps.push(`codegraph refs ${quoteShellArg(`${relative}:1:0`)}`);
   }
