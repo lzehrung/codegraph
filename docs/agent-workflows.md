@@ -211,6 +211,8 @@ For agents performing code reviews or making multiple queries, use sessions to m
 - library callers: one shared `createCodeReviewSession()` per repo snapshot
 - agent hosts: one shared `createAgentSession()` or MCP server per repo snapshot
 
+Per-invocation CLI freshness and long-lived in-memory freshness are different problems. Each CLI process validates the persisted index automatically before a current-state query, so no `codegraph index` or `codegraph sync` step is required first. An agent session or MCP server instead holds a snapshot in memory, and its `manual`, `check`, and `auto` freshness policies decide whether that snapshot is re-checked or refreshed.
+
 The local review session refreshes manually with `refresh()` and records stale-snapshot metadata in `getStats()`. Navigation checks the requested file immediately and checks config or added/removed-file drift on the stale-check interval; impact calls add an interval-throttled tracked-file scan before computing the report.
 
 For library callers performing repeated navigation or impact work, use sessions like this:

@@ -35,9 +35,11 @@ The CLI defaults to `--native auto`, which uses the native Tree-sitter path when
 
 ## Index and cache guidance
 
-The first index-backed query for a project may build the index; interactive progress is written to stderr, leaving JSON stdout parseable. Later commands with the same `--root`, discovery configuration, graph options, and compatible build options reuse disk state under `.codegraph-cache/index-v1`.
+Current-state, index-backed commands validate freshness automatically and default to the on-disk cache. The first query for a project may build the index; interactive progress is written to stderr, leaving JSON stdout parseable. Later commands with the same `--root`, discovery configuration, graph options, and compatible build options reuse disk state under `.codegraph-cache/index-v1`, updating incrementally when files changed and rebuilding when compatibility cannot be established.
 
-Use `--cache disk` for reuse across CLI processes, `--cache memory` for reuse within one process, and `--cache off` for a deliberate cold run. `codegraph init` is optional lifecycle metadata plus cache warmup; query commands do not require `.codegraph/manifest.json`.
+`codegraph index` and `codegraph sync` prewarm or repair that state; they are not prerequisites for `deps`, `refs`, `inspect`, `impact`, `review`, or any other current-state query. Artifact production (`graph`, `artifact`), lifecycle commands, and historical comparisons (`drift`, `graph-delta`) keep explicit build and range semantics instead.
+
+Use `--cache disk` for reuse across CLI processes, `--cache memory` for reuse within one process, and `--cache off` for a deliberate cold run. `--cache-verify` validates manifest entries before reuse and `--cache-strict` adds content hashing plus full rediscovery; both trade speed for certainty. `codegraph init` is optional lifecycle metadata plus cache warmup; query commands do not require `.codegraph/manifest.json`.
 
 Keep `--root` stable for repeat queries. Use `--progress` to force redirected progress logs, `--no-progress` to suppress them, and `codegraph doctor` or `--report` when backend or cache behavior needs diagnosis.
 
@@ -327,7 +329,7 @@ codegraph viewer --root . --port 4173 --print-url
 
 The viewer auto-fetches a supplied `graph` query parameter while retaining manual upload and default behavior. It imports Sigma from `esm.sh`, so the UI requires network access to that CDN and is not offline or self-contained.
 
-`review`, `goto`, `refs`, and `dumpmod` default to the on-disk incremental cache and reuse the current-project manifest on repeat invocations. Review diff selectors (`--base`, `--head`, and `--changed-since`) choose changed files but do not narrow index freshness; pass `--cache off` for an exhaustive uncached rebuild, or `--cache memory|disk` to select a cache explicitly.
+`review`, `goto`, `refs`, `dumpmod`, `deps`, `rdeps`, `path`, `cycles`, `unresolved`, `apisurface`, `inspect`, `hotspots`, `duplicates`, `impact`, and `affected` load current repository state through one shared policy: they validate the on-disk manifest, reuse it when inputs are unchanged, and update incrementally otherwise. Review and impact diff selectors (`--base`, `--head`, and `--changed-since`) choose changed files but do not narrow index freshness; pass `--cache off` for an exhaustive uncached rebuild, or `--cache memory|disk` to select a cache explicitly.
 
 `duplicates` emits one-line triage summaries by default, or grouped exact, renamed, near, and weak clone candidates as JSON with `--json`.
 
@@ -380,7 +382,7 @@ Short JSON shape:
 - Use `orient --json` when follow-up tools need exact focus reasons, limits, and omitted counts. Index feedback is stderr-only, so stdout remains parseable.
 - Small orientation budgets default to `--health skip`. Medium and large default to `--health summary`, which counts cycles and unresolved imports while omitting duplicate health; use `--health full` when exhaustive duplicate counts matter.
 - Use `packet get` with file paths, symbol names, SQL object names, file/symbol/chunk/SQL/graph handles, or review handles to retrieve bounded evidence plus follow-up commands.
-- Agent commands, `goto`, `refs`, `impact`, and a whole-project `graph` or `index` run all reuse the incremental index path and default to disk cache. Use shared index flags such as `--cache`, `--cache-strict`, `--cache-verify`, `--threads`, `--native`, `--workers`, `--include-glob`, `--ignore-glob`, and `--no-gitignore` when the packet should match a specific scan mode.
+- Agent commands and every current-state query default to disk cache and validate automatically; a whole-project `graph` or `index` run performs its explicit build. Use shared index flags such as `--cache`, `--cache-strict`, `--cache-verify`, `--threads`, `--native`, `--workers`, `--include-glob`, `--ignore-glob`, and `--no-gitignore` when the packet should match a specific scan mode.
 - Commands that load the project index first report cache validation as `Checking project index`, then report build or update progress only when index work is required. Warm cache hits complete as `Checked project index` without claiming a rebuild. Use `--progress` for redirected progress logs or `--no-progress` to suppress feedback.
 
 #### Live file views
@@ -492,7 +494,7 @@ Dependency read commands keep the same output contracts while using the indexed 
 
 ### Impact, review, and graph delta
 
-`impact` defaults to the on-disk incremental cache, matching `search`/`orient`/`inspect`/`review`; pass `--cache off` to force a full rebuild for a single invocation.
+`impact` loads current repository state automatically, like `search`/`orient`/`inspect`/`review`, so its `--base`/`--head` range never becomes index invalidation input; pass `--cache off` to force a full rebuild for a single invocation. `graph-delta` and `drift` keep revision-range semantics and are not current-state queries.
 
 Human-readable `impact`, `--compact`, and MCP `impact` apply request-wide analysis budgets by default so large diffs stay useful accelerants instead of timing out. Prefer ranking-aware partial results with exact omit counts in `diagnostics` over unbounded compute. Library callers leave budgets unset for unlimited analysis unless they opt in.
 

@@ -4,6 +4,7 @@ import path from "node:path";
 import { captureCli, runCliOrThrow } from "./helpers/cli.js";
 import { createTempProjectRoot } from "./helpers/filesystem.js";
 import { runGit } from "./helpers/git.js";
+import { CURRENT_QUERY_FAMILY_CASES } from "./helpers/currentQueryFamilies.js";
 
 const CHECK_START = "Checking project index";
 const CHECK_COMPLETE = "Checked project index";
@@ -26,22 +27,17 @@ async function createFreshnessProject(prefix: string): Promise<string> {
   return root;
 }
 
-type FreshnessFamily = {
-  name: string;
-  args: (root: string) => string[];
-};
-
-// One representative command per loader wiring family. The exhaustive mutation matrix
-// lives in tests/load-current-index.test.ts; these cases prove the wiring.
-const FAMILIES: FreshnessFamily[] = [
-  { name: "navigation (refs)", args: (root) => ["refs", "src/helper.ts:1:17", "--root", root, "--json"] },
-  { name: "graph query (deps)", args: (root) => ["deps", "src/app.ts", "--root", root, "--json"] },
-  { name: "whole-project graph summary (apisurface)", args: (root) => ["apisurface", "--root", root, "--json"] },
-  { name: "scoped summary (inspect)", args: (root) => ["inspect", "--root", root, "--json"] },
-  { name: "duplicate analysis (duplicates)", args: (root) => ["duplicates", "--root", root, "--json"] },
-  { name: "diff-aware analysis (impact)", args: (root) => ["impact", "--root", root, "--base", "HEAD", "--json"] },
-  { name: "affected tests", args: (root) => ["affected", "src/helper.ts", "--root", root, "--json"] },
-  { name: "agent session (search)", args: (root) => ["search", "helper", "--root", root, "--json"] },
+// One representative command per current-query wiring family, plus the whole-project graph
+// summaries that historically bypassed the incremental loader and one AgentSession-backed
+// command. The exhaustive mutation matrix lives in tests/load-current-index.test.ts.
+const FAMILIES: Array<{ name: string; args: (root: string) => string[] }> = [
+  ...CURRENT_QUERY_FAMILY_CASES.map((entry) => ({
+    name: `${entry.family} (${entry.command})`,
+    args: entry.args,
+  })),
+  { name: "project summary (apisurface)", args: (root: string) => ["apisurface", "--root", root, "--json"] },
+  { name: "project summary (cycles)", args: (root: string) => ["cycles", "--root", root, "--json"] },
+  { name: "agent-session (search)", args: (root: string) => ["search", "helper", "--root", root, "--json"] },
 ];
 
 function stableJson(raw: string): unknown {

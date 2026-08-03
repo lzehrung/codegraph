@@ -52,6 +52,36 @@ export default tseslint.config(
     },
   },
   {
+    // Current-state query modules must load the index through the shared policy helper so a
+    // raw full build cannot be reintroduced. Artifact, lifecycle, historical, graph
+    // materialization, session, and library modules keep their explicit builder access.
+    files: [
+      "src/agent-tools.ts",
+      "src/review.ts",
+      "src/cli/affected.ts",
+      "src/cli/duplicates.ts",
+      "src/cli/graphQueries.ts",
+      "src/cli/impact.ts",
+      "src/cli/inspect.ts",
+      "src/cli/navigation.ts",
+    ],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["**/indexer/build-index.js"],
+              importNames: ["buildProjectIndex", "buildProjectIndexFromFiles", "buildProjectIndexIncremental"],
+              message:
+                "Load current repository state through loadCurrentProjectIndex (src/indexer/load-current-index.ts).",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: ["tests/**/*.test.ts"],
     rules: {
       "@typescript-eslint/await-thenable": "off",

@@ -99,7 +99,7 @@ Safe shorthand: `impact` and git-backed `drift` default to `HEAD..WORKTREE`; `ar
 
 `inspect --duplicates` adds the slower bounded duplicate summary. Treat duplicate matches, candidate tests, and call-compatibility hints as review leads, not proof.
 
-`review` defaults to the disk cache while `--cache off|memory|disk` remains explicit. Its diff range selects review changes independently from the complete current-project index, so repeated unchanged ranges can reuse a warm manifest without narrowing graph, symbol, candidate-test, or duplicate context.
+Current-state commands validate the on-disk index automatically and default to the disk cache, so `index` and `sync` only prewarm or repair state and are never prerequisites for a query. `--cache off|memory|disk` stays explicit, `--cache-verify` and `--cache-strict` request stronger checks, and `drift`/`graph-delta` keep revision-range semantics instead. `review` and `impact` diff ranges select what to analyze independently from the complete current-project index, so repeated unchanged ranges reuse a warm manifest without narrowing graph, symbol, candidate-test, or duplicate context.
 
 ## Choose Output by Consumer
 
