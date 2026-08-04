@@ -181,8 +181,7 @@ function renderGraph(payload) {
     sigma.refresh({ skipIndexation: true });
     if (selectedNode) {
       syncTreeFromGraph(selectedNode);
-      const label = graph.getNodeAttribute(selectedNode, "fullLabel") ?? graph.getNodeAttribute(selectedNode, "label");
-      setStatus(`Selected: ${label}`);
+      setStatus(`Selected: ${selectedNodeLabel(selectedNode)}`);
     } else {
       clearTreeSync();
       setStatus(`Rendered ${graph.order} nodes and ${graph.size} edges.`);
@@ -655,6 +654,20 @@ function hideDetail() {
 
 // ===== Graph integration =====
 
+function selectedNodeLabel(graphKey) {
+  const item = itemsByKey?.get(graphKey);
+  if (item?.type === "file") {
+    const parts = [];
+    let current = item;
+    while (current?.name) {
+      parts.push(current.name);
+      current = current.parent;
+    }
+    return parts.reverse().join("/");
+  }
+  return currentGraph?.getNodeAttribute(graphKey, "fullLabel") || currentGraph?.getNodeAttribute(graphKey, "label");
+}
+
 function selectAndPanToNode(graphKey) {
   if (!sigma || !currentGraph) {
     setStatus("Load a graph first.");
@@ -681,9 +694,7 @@ function selectAndPanToNode(graphKey) {
     sigma.getCamera().animate({ x: nodeDisplayData.x, y: nodeDisplayData.y, ratio: 0.15 }, { duration: 400 });
   }
 
-  const label =
-    currentGraph.getNodeAttribute(graphKey, "fullLabel") || currentGraph.getNodeAttribute(graphKey, "label");
-  setStatus(`Selected: ${label}`);
+  setStatus(`Selected: ${selectedNodeLabel(graphKey)}`);
 }
 
 function syncTreeFromGraph(graphKey) {

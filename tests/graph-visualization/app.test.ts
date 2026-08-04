@@ -3,13 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const portablePayload = {
   format: "codegraph.graph-json",
-  files: ["src/a.ts", "src/b.ts"],
-  fileEdges: [{ from: "src/a.ts", to: { type: "file", path: "src/b.ts" } }],
+  files: ["C:/repo/src/a.ts", "C:/repo/lib/b.ts"],
+  fileEdges: [{ from: "C:/repo/src/a.ts", to: { type: "file", path: "C:/repo/lib/b.ts" } }],
   symbols: [
-    { id: "src/a.ts:foo", file: "src/a.ts", name: "foo", kind: "function" },
-    { id: "src/b.ts:bar", file: "src/b.ts", name: "bar", kind: "function" },
+    { id: "C:/repo/src/a.ts:foo", file: "C:/repo/src/a.ts", name: "foo", kind: "function" },
+    { id: "C:/repo/lib/b.ts:bar", file: "C:/repo/lib/b.ts", name: "bar", kind: "function" },
   ],
-  symbolEdges: [{ from: "src/a.ts:foo", to: "src/b.ts:bar", label: "calls" }],
+  symbolEdges: [{ from: "C:/repo/src/a.ts:foo", to: "C:/repo/lib/b.ts:bar", label: "calls" }],
 };
 
 const scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
@@ -108,6 +108,7 @@ describe("packaged viewer graph loading", () => {
     const instance = sigmaInstances.at(-1);
     if (!instance) throw new Error("Expected the viewer to create a Sigma instance.");
     instance.emit("clickNode", { node: "f:0" });
+    expect(document.getElementById("status")?.textContent).toBe("Selected: src/a.ts");
 
     const reducer = instance.settings.nodeReducer;
     if (!reducer) throw new Error("Expected the viewer to configure a node reducer.");
