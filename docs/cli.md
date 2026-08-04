@@ -323,11 +323,12 @@ codegraph grep 'eval\(' --ignore-case
 `viewer` is a human-only UI; use graph JSON, SQLite, MCP, or `--json` for agent and program interfaces. Its contract is `codegraph viewer [--root <root>] [--graph <root-confined-json>] [--host <host>] [--port <0-65535>] [--open] [--print-url]`, with the current directory, `127.0.0.1`, and `4173` as the default root, host, and port. `--print-url` is preview-only: it prints the deterministic URL and exits without starting a server, rejects `--open`, and rejects port `0`.
 
 ```bash
+codegraph viewer --root . --open
 codegraph viewer --root . --graph codegraph-out/graph.json --open
 codegraph viewer --root . --port 4173 --print-url
 ```
 
-The viewer auto-fetches a supplied `graph` query parameter while retaining manual upload and default behavior. It imports Sigma from `esm.sh`, so the UI requires network access to that CDN and is not offline or self-contained.
+Without `--graph`, the UI automatically requests `<root>/codegraph.json` after startup; an explicit `--graph` is served and loaded through the fixed `/graph.json` route. Manual upload remains available. The viewer imports Sigma from `esm.sh`, so the UI requires network access to that CDN and is not offline or self-contained.
 
 `review`, `goto`, `refs`, `dumpmod`, `deps`, `rdeps`, `path`, `cycles`, `unresolved`, `apisurface`, `inspect`, `hotspots`, `duplicates`, `impact`, and `affected` load current repository state through one shared policy: they validate the on-disk manifest, reuse it when inputs are unchanged, and update incrementally otherwise. Review and impact diff selectors (`--base`, `--head`, and `--changed-since`) choose changed files but do not narrow index freshness; pass `--cache off` for an exhaustive uncached rebuild, or `--cache memory|disk` to select a cache explicitly.
 

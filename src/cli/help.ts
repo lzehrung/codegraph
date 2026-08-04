@@ -523,11 +523,12 @@ export const VIEWER_HELP_TEXT = `codegraph viewer - Serve the bundled graph visu
 
 Usage: codegraph viewer [--root <path>] [--graph <root-confined-json>] [--host <host>] [--port <0-65535>] [--open] [--print-url]
 
-The viewer is a human-facing browser app. It serves only its fixed packaged assets and, when provided, the graph JSON at /graph.json.
+The viewer is a human-facing browser app. Without --graph, it serves <root>/codegraph.json when present and the app requests it automatically after startup.
+With --graph, it serves the root-confined file at /graph.json and the app loads that fixed route.
 Graph paths must stay inside the selected root (the current directory by default) both lexically and after symlink resolution.
 
 Options:
-  --graph <path>    Graph JSON path relative to --root, served only at /graph.json.
+  --graph <path>    Graph JSON path relative to --root, served at /graph.json instead of the conventional codegraph.json.
   --host <host>     Listener host. Defaults to 127.0.0.1.
   --port <port>     Listener port. Defaults to 4173; 0 selects an available port.
   --open            Open the server URL in the platform browser.
