@@ -1,4 +1,4 @@
-import type { Tool } from "@modelcontextprotocol/sdk/types.js";
+import type { Tool } from "@modelcontextprotocol/server";
 
 import {
   DEFAULT_FILE_VIEW_BYTES,
@@ -23,7 +23,9 @@ export const DEFAULT_CALL_HIERARCHY_LIMIT = 100;
 export const MAX_CALL_HIERARCHY_LIMIT = 500;
 export const MAX_CALL_HIERARCHY_DEPTH = 5;
 
-function objectSchema(properties: Record<string, object>, required: string[] = []): Tool["inputSchema"] {
+type ToolInputSchemaProperties = NonNullable<Tool["inputSchema"]["properties"]>;
+
+function objectSchema(properties: ToolInputSchemaProperties, required: string[] = []): Tool["inputSchema"] {
   return required.length ? { type: "object", properties, required } : { type: "object", properties };
 }
 

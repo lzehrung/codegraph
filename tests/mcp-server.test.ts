@@ -416,8 +416,91 @@ describe("codegraph MCP handlers", () => {
       await httpServer.close();
     }
   });
+  it("validates HTTP Origin headers", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-http-origin-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      host: "127.0.0.1",
+      port: 0,
+    });
 
-  it("accepts loopback host headers when HTTP MCP binds to all IPv4 interfaces", async () => {
+    try {
+      const endpoint = new URL(httpServer.url);
+      const initializeRequest = {
+        jsonrpc: "2.0",
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "codegraph-test", version: "1.0.0" },
+        },
+      };
+      const missingOrigin = await postRawHttpJson(
+        httpServer.url,
+        { ...initializeRequest, id: 1 },
+        { accept: "application/json, text/event-stream" },
+      );
+      const missingPayload = readObject(missingOrigin.payload);
+      expect(missingOrigin.status).toBe(200);
+      expect(missingPayload.result).toBeDefined();
+
+      const matchingOrigin = await postRawHttpJson(
+        httpServer.url,
+        { ...initializeRequest, id: 2 },
+        {
+          accept: "application/json, text/event-stream",
+          origin: `http://127.0.0.1:${endpoint.port}`,
+        },
+      );
+      const matchingPayload = readObject(matchingOrigin.payload);
+      expect(matchingOrigin.status).toBe(200);
+      expect(matchingPayload.result).toBeDefined();
+
+      const rejectedOrigins = ["http://evil.example", "not-an-origin", "null"];
+      for (const [index, origin] of rejectedOrigins.entries()) {
+        const rejected = await postRawHttpJson(httpServer.url, { ...initializeRequest, id: index + 3 }, { origin });
+        const rejectedPayload = readObject(rejected.payload);
+        const rejectedError = readObject(rejectedPayload.error);
+        expect(rejected.status).toBe(403);
+        expect(rejectedPayload.jsonrpc).toBe("2.0");
+        expect(rejectedError.code).toBeTypeOf("number");
+      }
+    } finally {
+      await httpServer.close();
+    }
+  });
+
+  it("routes modern HTTP header claims to strict SDK validation", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-http-modern-boundary-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const counted = countingSession(createAgentSession({ root }));
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      host: "127.0.0.1",
+      port: 0,
+      session: counted.session,
+    });
+
+    try {
+      const response = await postRawHttpJson(
+        httpServer.url,
+        { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
+        { "mcp-protocol-version": "2026-07-28" },
+      );
+      const payload = readObject(response.payload);
+      const error = readObject(payload.error);
+
+      expect(response.status).toBe(400);
+      expect(payload.jsonrpc).toBe("2.0");
+      expect(error.code).toBe(-32602);
+      expect(counted.loads()).toBe(0);
+    } finally {
+      await httpServer.close();
+    }
+  });
+
+  it("accepts loopback host and Origin headers on an all-interface HTTP bind", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-http-wildcard-host-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
     const httpServer = await startCodegraphMcpHttpServer({
@@ -447,6 +530,7 @@ describe("codegraph MCP handlers", () => {
         {
           accept: "application/json, text/event-stream",
           host: `127.0.0.1:${endpoint.port}`,
+          origin: `http://127.0.0.1:${endpoint.port}`,
         },
       );
       const payload = readObject(response.payload);
@@ -463,15 +547,46 @@ describe("codegraph MCP handlers", () => {
         {
           accept: "application/json, text/event-stream",
           host: `localhost:${endpoint.port}`,
+          origin: `http://localhost:${endpoint.port}`,
         },
       );
       const localhostPayload = readObject(localhostResponse.payload);
       expect(localhostResponse.status).toBe(200);
       expect(localhostPayload.result).toBeDefined();
 
-      const rejected = await postRawHttpJson(
+      const ipv6OriginResponse = await postRawHttpJson(
+        loopbackUrl,
+        {
+          ...initializeRequest,
+          id: 3,
+        },
+        {
+          accept: "application/json, text/event-stream",
+          host: `127.0.0.1:${endpoint.port}`,
+          origin: `http://[::1]:${endpoint.port}`,
+        },
+      );
+      const ipv6OriginPayload = readObject(ipv6OriginResponse.payload);
+      expect(ipv6OriginResponse.status).toBe(200);
+      expect(ipv6OriginPayload.result).toBeDefined();
+
+      const rejectedOrigin = await postRawHttpJson(
         loopbackUrl,
         { jsonrpc: "2.0", id: 3, method: "tools/list", params: {} },
+        {
+          host: `127.0.0.1:${endpoint.port}`,
+          origin: "http://evil.example",
+        },
+      );
+      const rejectedOriginPayload = readObject(rejectedOrigin.payload);
+      const rejectedOriginError = readObject(rejectedOriginPayload.error);
+      expect(rejectedOrigin.status).toBe(403);
+      expect(rejectedOriginPayload.jsonrpc).toBe("2.0");
+      expect(rejectedOriginError.code).toBeTypeOf("number");
+
+      const rejected = await postRawHttpJson(
+        loopbackUrl,
+        { jsonrpc: "2.0", id: 4, method: "tools/list", params: {} },
         { host: "evil.example" },
       );
       const rejectedPayload = readObject(rejected.payload);
