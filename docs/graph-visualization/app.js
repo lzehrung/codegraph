@@ -803,13 +803,17 @@ async function fetchGraph(graphPath) {
   await loadGraphFromText(await response.text());
 }
 
-async function loadDefaultGraph() {
+async function loadGraphPath(graphPath) {
   try {
-    await fetchGraph(resolveGraphQueryPath() ?? DEFAULT_GRAPH_PATH);
+    await fetchGraph(graphPath);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
-    setStatus(`Failed to load ./codegraph.json: ${message}`);
+    setStatus(`Failed to load ${graphPath}: ${message}`);
   }
+}
+
+async function loadDefaultGraph() {
+  await loadGraphPath(resolveGraphQueryPath() ?? DEFAULT_GRAPH_PATH);
 }
 
 loadDefaultButton.addEventListener("click", () => {
@@ -839,18 +843,13 @@ async function loadInitialGraph() {
     return;
   }
 
-  try {
-    const graphPath = resolveGraphQueryPath();
-    if (!graphPath) {
-      setStatus("Ignoring an unsafe graph URL.");
-      return;
-    }
-
-    await fetchGraph(graphPath);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    setStatus(`Failed to load graph: ${message}`);
+  const graphPath = resolveGraphQueryPath();
+  if (!graphPath) {
+    setStatus("Ignoring an unsafe graph URL.");
+    return;
   }
+
+  await loadGraphPath(graphPath);
 }
 
 resetCameraButton.addEventListener("click", () => {

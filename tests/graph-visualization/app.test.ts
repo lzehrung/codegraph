@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const portablePayload = {
   format: "codegraph.graph-json",
@@ -11,6 +11,8 @@ const portablePayload = {
   ],
   symbolEdges: [{ from: "src/a.ts:foo", to: "src/b.ts:bar", label: "calls" }],
 };
+
+const scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
 
 function mountViewer(): void {
   document.body.innerHTML = `
@@ -46,6 +48,14 @@ beforeEach(() => {
   HTMLElement.prototype.scrollIntoView = vi.fn();
 });
 
+afterEach(() => {
+  if (scrollIntoViewDescriptor) {
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", scrollIntoViewDescriptor);
+    return;
+  }
+  Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+});
+
 describe("packaged viewer graph loading", () => {
   it("auto-loads the fixed same-origin graph route and reuses it for the default control", async () => {
     const fetchMock = successfulFetch();
@@ -61,6 +71,28 @@ describe("packaged viewer graph loading", () => {
     document.getElementById("load-default")?.click();
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     expect(fetchMock).toHaveBeenLastCalledWith("/graph.json");
+  });
+
+  it.each([
+    ["/", "/codegraph.json"],
+    ["/?graph=%2Fgraph.json", "/graph.json"],
+  ])("reports the resolved graph path when loading %s fails", async (url, graphPath) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: false,
+        status: 404,
+      })),
+    );
+    window.history.replaceState({}, "", url);
+
+    await import("../../docs/graph-visualization/app.js");
+
+    await vi.waitFor(() =>
+      expect(document.getElementById("status")?.textContent).toBe(
+        `Failed to load ${graphPath}: Request failed with status 404`,
+      ),
+    );
   });
 
   it("forces labels for a selected node and its immediate neighbors", async () => {
