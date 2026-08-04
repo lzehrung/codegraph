@@ -2,16 +2,22 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import path from "node:path";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
-  CallToolRequestSchema,
+  createMcpHandler,
   isInitializeRequest,
-  ListToolsRequestSchema,
+  isLegacyRequest,
+  Server,
   type CallToolResult,
-} from "@modelcontextprotocol/sdk/types.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+} from "@modelcontextprotocol/server";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
+import {
+  NodeStreamableHTTPServerTransport,
+  originValidation,
+  toNodeHandler,
+  toWebRequest,
+  type NodeIncomingMessageLike,
+  type NodeMcpRequestHandler,
+} from "@modelcontextprotocol/node";
 import { z } from "zod";
 import { buildCodegraphArtifactWithSession } from "../agent/artifact.js";
 import type { CodegraphArtifactBuildResult } from "../agent/artifact.js";
@@ -70,6 +76,7 @@ import {
 } from "./tools.js";
 import {
   buildAllowedHostHeaders,
+  buildAllowedOriginHostnames,
   closeHttpServer,
   emptyAllowedHostHeaderRules,
   formatHostForUrl,
@@ -89,6 +96,7 @@ import {
   captureCodegraphRuntimeIdentity,
   createInstalledVersionChecker,
   type CodegraphRuntimeIdentity,
+  type InstalledVersionChecker,
 } from "../runtimeIdentity.js";
 
 export { listCodegraphMcpTools } from "./tools.js";
@@ -122,6 +130,13 @@ export type CodegraphMcpHttpServer = CodegraphMcpHttpServerInfo & {
   server: HttpServer;
   close: () => Promise<void>;
 };
+
+type LegacyMcpSession = {
+  server: Server;
+  transport: NodeStreamableHTTPServerTransport;
+};
+
+type OriginValidator = (request: IncomingMessage, response: ServerResponse) => boolean;
 
 export type CodegraphMcpFreshResult<T extends object> = T & { freshness: AgentFreshnessResult };
 
@@ -867,9 +882,9 @@ function createCodegraphMcpHandlersForSession(
 export function createCodegraphMcpProtocolServer(
   handlers: CodegraphMcpHandlers,
   runtimeIdentity: CodegraphRuntimeIdentity = captureCodegraphRuntimeIdentity(getCurrentNativeBindingOrigin()),
-): McpServer {
-  const installedVersion = createInstalledVersionChecker(runtimeIdentity);
-  const server = new McpServer(
+  installedVersion: InstalledVersionChecker = createInstalledVersionChecker(runtimeIdentity),
+): Server {
+  const server = new Server(
     {
       name: "codegraph",
       version: runtimeIdentity.runningVersion,
@@ -879,8 +894,8 @@ export function createCodegraphMcpProtocolServer(
     },
   );
 
-  server.server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: MCP_TOOLS }));
-  server.server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
+  server.setRequestHandler("tools/list", () => ({ tools: MCP_TOOLS }));
+  server.setRequestHandler("tools/call", async (request): Promise<CallToolResult> => {
     try {
       installedVersion.check();
     } catch (error) {
@@ -893,6 +908,14 @@ export function createCodegraphMcpProtocolServer(
   });
 
   return server;
+}
+
+function createCodegraphMcpProtocolFactory(
+  handlers: CodegraphMcpHandlers,
+  runtimeIdentity: CodegraphRuntimeIdentity,
+): () => Server {
+  const installedVersion = createInstalledVersionChecker(runtimeIdentity);
+  return () => createCodegraphMcpProtocolServer(handlers, runtimeIdentity, installedVersion);
 }
 
 export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Promise<void> {
@@ -910,8 +933,13 @@ export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Pro
 
   const handlers = await createWarmedCodegraphMcpHandlers(options);
   const runtimeIdentity = options.runtimeIdentity ?? captureCodegraphRuntimeIdentity(getCurrentNativeBindingOrigin());
-  const server = createCodegraphMcpProtocolServer(handlers, runtimeIdentity);
-  await server.connect(new StdioServerTransport());
+  const createProtocolServer = createCodegraphMcpProtocolFactory(handlers, runtimeIdentity);
+  serveStdio(createProtocolServer, {
+    legacy: "serve",
+    onerror: (error) => {
+      console.error(`[codegraph] MCP stdio error: ${error.message}`);
+    },
+  });
 }
 
 export async function startCodegraphMcpHttpServer(
@@ -920,18 +948,37 @@ export async function startCodegraphMcpHttpServer(
   const host = options.host ?? "127.0.0.1";
   const handlers = await createWarmedCodegraphMcpHandlers(options);
   const runtimeIdentity = options.runtimeIdentity ?? captureCodegraphRuntimeIdentity(getCurrentNativeBindingOrigin());
-  const sessions = new Map<string, { server: McpServer; transport: StreamableHTTPServerTransport }>();
+  const createProtocolServer = createCodegraphMcpProtocolFactory(handlers, runtimeIdentity);
+  const sessions = new Map<string, LegacyMcpSession>();
+  const modernHandler = createMcpHandler(createProtocolServer, {
+    legacy: "reject",
+    onerror: (error) => {
+      console.error(`[codegraph] MCP HTTP error: ${error.message}`);
+    },
+  });
+  const modernNodeHandler = toNodeHandler(modernHandler);
+  const validateOrigin = originValidation(buildAllowedOriginHostnames(host));
   let allowedHostHeaders = emptyAllowedHostHeaderRules();
+  let closeResourcesPromise: Promise<void> | undefined;
+  const closeResources = (): Promise<void> => {
+    closeResourcesPromise ??= closeMcpResources(sessions, modernHandler.close);
+    return closeResourcesPromise;
+  };
 
   const server = createServer((request, response) => {
-    void handleMcpHttpRequest(request, response, handlers, sessions, () => allowedHostHeaders, runtimeIdentity);
+    void handleMcpHttpRequest(
+      request,
+      response,
+      sessions,
+      () => allowedHostHeaders,
+      validateOrigin,
+      modernNodeHandler,
+      createProtocolServer,
+    );
   });
 
   server.on("close", () => {
-    for (const [sessionId, session] of sessions) {
-      sessions.delete(sessionId);
-      void closeMcpSession(session);
-    }
+    void closeResources();
   });
 
   await listenOnHttpServer(server, options.port, host);
@@ -947,10 +994,7 @@ export async function startCodegraphMcpHttpServer(
     port: actualPort,
     url,
     close: async () => {
-      for (const [sessionId, session] of sessions) {
-        sessions.delete(sessionId);
-        await closeMcpSession(session);
-      }
+      await closeResources();
       await closeHttpServer(server);
     },
   };
@@ -959,10 +1003,11 @@ export async function startCodegraphMcpHttpServer(
 async function handleMcpHttpRequest(
   request: IncomingMessage,
   response: ServerResponse,
-  handlers: CodegraphMcpHandlers,
-  sessions: Map<string, { server: McpServer; transport: StreamableHTTPServerTransport }>,
+  sessions: Map<string, LegacyMcpSession>,
   getAllowedHostHeaders: () => AllowedHostHeaderRules,
-  runtimeIdentity: CodegraphRuntimeIdentity,
+  validateOrigin: OriginValidator,
+  modernNodeHandler: NodeMcpRequestHandler,
+  createProtocolServer: () => Server,
 ): Promise<void> {
   const requestPath = getRequestPath(request);
   if (requestPath !== MCP_HTTP_PATH) {
@@ -974,6 +1019,7 @@ async function handleMcpHttpRequest(
     writeJsonRpcError(response, 403, "Forbidden host header");
     return;
   }
+  if (!validateOrigin(request, response)) return;
 
   try {
     if (request.method === "POST") {
@@ -986,7 +1032,18 @@ async function handleMcpHttpRequest(
         writeJsonRpcError(response, 400, "Invalid JSON request body");
         return;
       }
-      await handleMcpHttpPost(request, response, parsedBody.body, handlers, sessions, runtimeIdentity);
+      if (!isMcpNodeRequest(request)) {
+        writeJsonRpcError(response, 400, "Invalid MCP request target");
+        return;
+      }
+
+      const mcpRequest: NodeIncomingMessageLike = request;
+      const webRequest = await toWebRequest(mcpRequest, parsedBody.body);
+      if (await isLegacyRequest(webRequest, parsedBody.body)) {
+        await handleLegacyMcpHttpPost(request, response, parsedBody.body, sessions, createProtocolServer);
+      } else {
+        await modernNodeHandler(mcpRequest, response, parsedBody.body);
+      }
       return;
     }
 
@@ -1003,13 +1060,12 @@ async function handleMcpHttpRequest(
   }
 }
 
-async function handleMcpHttpPost(
+async function handleLegacyMcpHttpPost(
   request: IncomingMessage,
   response: ServerResponse,
   body: unknown,
-  handlers: CodegraphMcpHandlers,
-  sessions: Map<string, { server: McpServer; transport: StreamableHTTPServerTransport }>,
-  runtimeIdentity: CodegraphRuntimeIdentity,
+  sessions: Map<string, LegacyMcpSession>,
+  createProtocolServer: () => Server,
 ): Promise<void> {
   const sessionId = getHeaderValue(request.headers["mcp-session-id"]);
   if (sessionId !== undefined) {
@@ -1027,16 +1083,14 @@ async function handleMcpHttpPost(
     return;
   }
 
-  const protocolServer = createCodegraphMcpProtocolServer(handlers, runtimeIdentity);
+  const protocolServer = createProtocolServer();
   let initializedSessionId: string | undefined;
-  const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
+  const transport = new NodeStreamableHTTPServerTransport({
     enableJsonResponse: true,
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (newSessionId) => {
-      if (transport !== undefined) {
-        initializedSessionId = newSessionId;
-        sessions.set(newSessionId, { server: protocolServer, transport });
-      }
+      initializedSessionId = newSessionId;
+      sessions.set(newSessionId, { server: protocolServer, transport });
     },
     onsessionclosed: (closedSessionId) => {
       const session = sessions.get(closedSessionId);
@@ -1047,9 +1101,8 @@ async function handleMcpHttpPost(
     },
   });
 
-  // The SDK class implements Transport, but its declarations widen optional callbacks under exactOptionalPropertyTypes.
   try {
-    await protocolServer.connect(transport as Transport);
+    await protocolServer.connect(transport);
     await transport.handleRequest(request, response, body);
   } catch (error) {
     if (initializedSessionId !== undefined) {
@@ -1063,7 +1116,7 @@ async function handleMcpHttpPost(
 async function handleExistingMcpSessionRequest(
   request: IncomingMessage,
   response: ServerResponse,
-  sessions: Map<string, { server: McpServer; transport: StreamableHTTPServerTransport }>,
+  sessions: Map<string, LegacyMcpSession>,
 ): Promise<void> {
   const sessionId = getHeaderValue(request.headers["mcp-session-id"]);
   if (sessionId === undefined) {
@@ -1078,11 +1131,21 @@ async function handleExistingMcpSessionRequest(
   await session.transport.handleRequest(request, response);
 }
 
-async function closeMcpSession(session: {
-  server: McpServer;
-  transport: StreamableHTTPServerTransport;
-}): Promise<void> {
+async function closeMcpSession(session: LegacyMcpSession): Promise<void> {
   await Promise.allSettled([session.transport.close(), session.server.close()]);
+}
+
+async function closeMcpResources(
+  sessions: Map<string, LegacyMcpSession>,
+  closeModernHandler: () => Promise<void>,
+): Promise<void> {
+  const legacySessions = [...sessions.values()];
+  sessions.clear();
+  await Promise.allSettled([...legacySessions.map((session) => closeMcpSession(session)), closeModernHandler()]);
+}
+
+function isMcpNodeRequest(request: IncomingMessage): request is IncomingMessage & NodeIncomingMessageLike {
+  return request.method !== undefined && request.url !== undefined;
 }
 
 async function callMcpTool(handlers: CodegraphMcpHandlers, name: string, input: unknown): Promise<unknown> {

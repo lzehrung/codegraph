@@ -318,6 +318,12 @@ codegraph grep --query '(function_declaration name: (identifier) @name)'
 codegraph grep 'eval\(' --ignore-case
 ```
 
+### MCP protocol and network boundary
+
+Codegraph uses the official MCP SDK v2 to serve current 2026-07-28 clients while retaining compatibility with 2025-era clients. MCP protocol connections and HTTP protocol sessions keep separate transport state, but all share the server's one warm Codegraph analysis session for the configured root.
+
+HTTP enforces Host and Origin policies. A missing `Origin` is accepted for non-browser clients; unapproved, malformed, and opaque origins are rejected. This is not authentication: binding `--host` to a non-loopback address exposes an unauthenticated endpoint intended only for trusted networks or containers.
+
 ### Viewer
 
 `viewer` is a human-only UI; use graph JSON, SQLite, MCP, or `--json` for agent and program interfaces. Its contract is `codegraph viewer [--root <root>] [--graph <root-confined-json>] [--host <host>] [--port <0-65535>] [--open] [--print-url]`, with the current directory, `127.0.0.1`, and `4173` as the default root, host, and port. `--print-url` is preview-only: it prints the deterministic URL and exits without starting a server, rejects `--open`, and rejects port `0`.

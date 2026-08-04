@@ -64,9 +64,8 @@ export function buildAllowedHostHeaders(host: string, port: number): AllowedHost
     addAllowedHost(allowed.loopbackOnly, "127.0.0.1", port);
     addAllowedHost(allowed.loopbackOnly, "localhost", port);
     addAllowedHost(allowed.loopbackOnly, "::1", port);
-    for (const localHost of localInterfaceHostHeaders(port)) {
-      allowed.exact.add(localHost);
-      if (port === 80) allowed.exact.add(localHost.replace(/:80$/, ""));
+    for (const localHost of localInterfaceHostnames()) {
+      addAllowedHost(allowed.exact, localHost, port);
     }
   }
   if (host === "127.0.0.1") {
@@ -77,6 +76,22 @@ export function buildAllowedHostHeaders(host: string, port: number): AllowedHost
     addAllowedHost(allowed.exact, "localhost", port);
   }
   return allowed;
+}
+
+export function buildAllowedOriginHostnames(host: string): string[] {
+  const allowed = new Set<string>([formatHostForUrl(host).toLowerCase()]);
+  if (isWildcardBindHost(host)) {
+    allowed.add("127.0.0.1");
+    allowed.add("localhost");
+    allowed.add("::1");
+    for (const localHost of localInterfaceHostnames()) {
+      allowed.add(localHost);
+    }
+  }
+  if (host === "127.0.0.1" || host === "::1" || host === "[::1]") {
+    allowed.add("localhost");
+  }
+  return [...allowed];
 }
 
 export function formatHostForUrl(host: string): string {
@@ -154,18 +169,18 @@ function isWildcardBindHost(host: string): boolean {
   return host === "0.0.0.0" || host === "::" || host === "[::]";
 }
 
-function localInterfaceHostHeaders(port: number): Set<string> {
+function localInterfaceHostnames(): Set<string> {
   const hosts = new Set<string>();
   const hostname = os.hostname().trim().toLowerCase();
   if (hostname) {
-    hosts.add(`${hostname}:${port}`);
+    hosts.add(hostname);
   }
   const interfaces = os.networkInterfaces();
   for (const entries of Object.values(interfaces)) {
     for (const entry of entries ?? []) {
       if (entry.internal) continue;
       const address = entry.address.split("%")[0] ?? entry.address;
-      hosts.add(formatHostHeader(address, port).toLowerCase());
+      hosts.add(formatHostForUrl(address).toLowerCase());
     }
   }
   return hosts;
