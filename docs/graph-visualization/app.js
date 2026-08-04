@@ -14,6 +14,7 @@ import { matchesFilter, subtreeMatchesFilter, highlightMatch, kindAbbrev } from 
 
 const DIM_COLOR = "#374151";
 const HIGHLIGHT_COLOR = "#93c5fd";
+const DEFAULT_GRAPH_PATH = "/codegraph.json";
 
 // ===== DOM refs (with runtime assertions) =====
 
@@ -151,9 +152,11 @@ function renderGraph(payload) {
         result.color = HIGHLIGHT_COLOR;
         result.labelColor = "#111111";
         result.size = Math.min(14, (result.size ?? 6) * 1.4);
+        result.forceLabel = true;
         result.highlighted = true;
       } else if (isNeighbor) {
-        result.labelColor = "#111111";
+        result.labelColor = "#e2e8f0";
+        result.forceLabel = true;
       } else {
         result.color = DIM_COLOR;
       }
@@ -297,7 +300,8 @@ function renderTreeNode(node, parentUl, depth, filter) {
 
     const locateBtn = document.createElement("button");
     locateBtn.className = "tree-locate";
-    locateBtn.title = "Show in graph";
+    locateBtn.title = "Select this node in the graph";
+    locateBtn.setAttribute("aria-label", "Select this node in the graph");
     locateBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       selectAndPanToNode(node.graphKey);
@@ -361,7 +365,8 @@ function renderSymbolNode(sym, parentUl, depth, filter) {
 
   const locateBtn = document.createElement("button");
   locateBtn.className = "tree-locate";
-  locateBtn.title = "Show in graph";
+  locateBtn.title = "Select this node in the graph";
+  locateBtn.setAttribute("aria-label", "Select this node in the graph");
   locateBtn.addEventListener("click", (e) => {
     e.stopPropagation();
     selectAndPanToNode(sym.graphKey);
@@ -790,20 +795,25 @@ includeSymbolsInput.addEventListener("change", () => {
   setStatus("Toggle changed. Click Refresh to re-apply.");
 });
 
-loadDefaultButton.addEventListener("click", async () => {
-  try {
-    const graphPath = resolveGraphQueryPath();
-    const response = await fetch(graphPath ?? "../../codegraph.json");
-    if (!response.ok) {
-      throw new Error(`Request failed with status ${response.status}`);
-    }
+async function fetchGraph(graphPath) {
+  const response = await fetch(graphPath);
+  if (!response.ok) {
+    throw new Error(`Request failed with status ${response.status}`);
+  }
+  await loadGraphFromText(await response.text());
+}
 
-    const text = await response.text();
-    await loadGraphFromText(text);
+async function loadDefaultGraph() {
+  try {
+    await fetchGraph(resolveGraphQueryPath() ?? DEFAULT_GRAPH_PATH);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     setStatus(`Failed to load ./codegraph.json: ${message}`);
   }
+}
+
+loadDefaultButton.addEventListener("click", () => {
+  void loadDefaultGraph();
 });
 
 function resolveGraphQueryPath() {
@@ -822,9 +832,12 @@ function resolveGraphQueryPath() {
   return graphUrl.pathname;
 }
 
-async function loadGraphFromQuery() {
+async function loadInitialGraph() {
   const graph = new URLSearchParams(window.location.search).get("graph");
-  if (!graph) return;
+  if (!graph) {
+    await loadDefaultGraph();
+    return;
+  }
 
   try {
     const graphPath = resolveGraphQueryPath();
@@ -833,18 +846,12 @@ async function loadGraphFromQuery() {
       return;
     }
 
-    const response = await fetch(graphPath);
-    if (!response.ok) {
-      throw new Error(`Request failed with status ${response.status}`);
-    }
-    await loadGraphFromText(await response.text());
+    await fetchGraph(graphPath);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     setStatus(`Failed to load graph: ${message}`);
   }
 }
-
-void loadGraphFromQuery();
 
 resetCameraButton.addEventListener("click", () => {
   sigma?.getCamera().animatedReset();
@@ -905,3 +912,5 @@ if (refreshButton) {
     { capture: true },
   );
 })();
+
+void loadInitialGraph();

@@ -236,35 +236,53 @@ button:hover {
 }
 
 .tree-locate {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  border: 1.5px solid #5a9fd4;
-  background: rgba(77, 163, 255, 0.08);
+  position: relative;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
   padding: 0;
   margin-left: auto;
   flex-shrink: 0;
-  display: none;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
+  color: #72b7ed;
+  opacity: 0.72;
   cursor: pointer;
+}
+
+.tree-locate::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  transform: translate(-1px, -1px);
 }
 
 .tree-locate::after {
   content: "";
+  position: absolute;
   width: 5px;
-  height: 5px;
-  background: #4da3ff;
-  border-radius: 50%;
+  height: 1.5px;
+  border-radius: 1px;
+  background: currentColor;
+  transform: translate(4px, 4px) rotate(45deg);
 }
 
-.tree-row:hover .tree-locate {
-  display: inline-flex;
+.tree-row:hover .tree-locate,
+.tree-locate:hover,
+.tree-locate:focus-visible {
+  background: rgba(77, 163, 255, 0.18);
+  color: #bfdbfe;
+  opacity: 1;
 }
 
-.tree-locate:hover {
-  border-color: #93c5fd;
-  background: rgba(77, 163, 255, 0.25);
+.tree-locate:focus-visible {
+  outline: 1px solid #93c5fd;
+  outline-offset: 1px;
 }
 
 .tree-children.collapsed {

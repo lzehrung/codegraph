@@ -176,12 +176,15 @@ codegraph graph --root . ./src --sqlite codegraph.sqlite
 
 The packaged viewer is a human-facing graph UI; agents should use graph JSON, SQLite, MCP, or `--json` instead. Its command is `codegraph viewer [--root <root>] [--graph <root-confined-json>] [--host <host>] [--port <0-65535>] [--open] [--print-url]`; the root defaults to the current directory.
 
+![Codegraph graph viewer with `src/index.ts` selected and its immediate dependencies labeled](docs/graph-visualization/viewer-selected-node.webp)
+
 ```bash
+codegraph viewer --root . --open
 codegraph viewer --root . --graph codegraph-out/graph.json --open
 codegraph viewer --root . --port 4173 --print-url
 ```
 
-The default host is `127.0.0.1` and the default port is `4173`. `--print-url` is preview-only: it prints the deterministic URL and exits without starting a server, rejects `--open`, and rejects port `0`. The viewer auto-loads the `graph` query parameter when present while retaining manual upload and default behavior.
+The default host is `127.0.0.1` and the default port is `4173`. Without `--graph`, the UI automatically requests `<root>/codegraph.json` after startup; an explicit `--graph` is served and loaded through the fixed `/graph.json` route. `--print-url` is preview-only: it prints the deterministic URL and exits without starting a server, rejects `--open`, and rejects port `0`.
 
 The UI imports Sigma from `esm.sh`, so it requires network access to that CDN and is not offline or self-contained.
 

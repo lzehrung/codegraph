@@ -43,6 +43,7 @@ beforeEach(() => {
   vi.unstubAllGlobals();
   mountViewer();
   window.history.replaceState({}, "", "/");
+  HTMLElement.prototype.scrollIntoView = vi.fn();
 });
 
 describe("packaged viewer graph loading", () => {
@@ -62,6 +63,32 @@ describe("packaged viewer graph loading", () => {
     expect(fetchMock).toHaveBeenLastCalledWith("/graph.json");
   });
 
+  it("forces labels for a selected node and its immediate neighbors", async () => {
+    const fetchMock = successfulFetch();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await import("../../docs/graph-visualization/app.js");
+    await vi.waitFor(() =>
+      expect(document.getElementById("status")?.textContent).toBe("Rendered 4 nodes and 4 edges."),
+    );
+
+    const { sigmaInstances } = await import("./__mocks__/sigma.js");
+    const instance = sigmaInstances.at(-1);
+    if (!instance) throw new Error("Expected the viewer to create a Sigma instance.");
+    instance.emit("clickNode", { node: "f:0" });
+
+    const reducer = instance.settings.nodeReducer;
+    if (!reducer) throw new Error("Expected the viewer to configure a node reducer.");
+    expect(reducer("f:0", { color: "#000000", label: "a.ts", size: 6 })).toMatchObject({
+      forceLabel: true,
+      highlighted: true,
+    });
+    expect(reducer("f:1", { color: "#000000", label: "b.ts", size: 6 })).toMatchObject({
+      forceLabel: true,
+      labelColor: "#e2e8f0",
+    });
+  });
+
   it.each([
     "https%3A%2F%2Fexample.com%2Fgraph.json",
     "%2Fother.json",
@@ -79,23 +106,28 @@ describe("packaged viewer graph loading", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("retains the conventional default control without a query graph", async () => {
+  it("auto-loads the conventional default graph and reuses it for the default control", async () => {
     const fetchMock = successfulFetch();
     vi.stubGlobal("fetch", fetchMock);
     await import("../../docs/graph-visualization/app.js");
-
-    document.getElementById("load-default")?.click();
 
     await vi.waitFor(() =>
       expect(document.getElementById("status")?.textContent).toBe("Rendered 4 nodes and 4 edges."),
     );
-    expect(fetchMock).toHaveBeenCalledWith("../../codegraph.json");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenLastCalledWith("/codegraph.json");
+
+    document.getElementById("load-default")?.click();
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(fetchMock).toHaveBeenLastCalledWith("/codegraph.json");
   });
 
-  it("retains manual file upload without a query graph", async () => {
+  it("retains manual file upload after automatically loading the default graph", async () => {
     const fetchMock = successfulFetch();
     vi.stubGlobal("fetch", fetchMock);
     await import("../../docs/graph-visualization/app.js");
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/codegraph.json"));
+
     const fileInput = document.getElementById("graph-file");
     if (!(fileInput instanceof HTMLInputElement)) throw new Error("Missing graph file input.");
     Object.defineProperty(fileInput, "files", {
@@ -108,6 +140,6 @@ describe("packaged viewer graph loading", () => {
     await vi.waitFor(() =>
       expect(document.getElementById("status")?.textContent).toBe("Rendered 4 nodes and 4 edges."),
     );
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
