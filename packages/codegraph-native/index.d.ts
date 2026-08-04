@@ -5,94 +5,83 @@
  * where position and node-type data are not consumed by the caller.
  */
 export interface CompactCapture {
-  name: string;
-  text: string;
+  name: string
+  text: string
 }
 
 export interface CompactMatch {
-  patternIndex: number;
-  captures: Array<CompactCapture>;
+  patternIndex: number
+  captures: Array<CompactCapture>
 }
 
 export interface CompactQueryResults {
-  imports: Array<CompactMatch>;
+  imports: Array<CompactMatch>
 }
 
 export interface NativeCapture {
-  name: string;
-  text: string;
-  nodeType: string;
-  start: NativePoint;
-  end: NativePoint;
+  name: string
+  text: string
+  nodeType: string
+  start: NativePoint
+  end: NativePoint
 }
 
 export interface NativeDuplicateTokens {
-  normalizedTokens: Array<string>;
+  normalizedTokens: Array<string>
 }
 
 export interface NativeMatch {
-  patternIndex: number;
-  captures: Array<NativeCapture>;
+  patternIndex: number
+  captures: Array<NativeCapture>
 }
 
 export interface NativePoint {
-  row: number;
-  column: number;
-  index: number;
+  row: number
+  column: number
+  index: number
 }
 
 export interface NativeQueryResults {
-  imports: Array<NativeMatch>;
-  exports: Array<NativeMatch>;
-  locals: Array<NativeMatch>;
-  importBindings: Array<NativeMatch>;
+  imports: Array<NativeMatch>
+  exports: Array<NativeMatch>
+  locals: Array<NativeMatch>
+  importBindings: Array<NativeMatch>
 }
 
 export interface NativeQueryRunResult {
-  matches: Array<NativeMatch>;
+  matches: Array<NativeMatch>
 }
 
 export interface NativeSyntaxNode {
-  id: number;
-  parentId: number;
-  nodeType: string;
-  named: boolean;
-  start: NativePoint;
-  end: NativePoint;
-  childIds: Array<number>;
-  namedChildIds: Array<number>;
-  childFieldNames: Array<string>;
+  id: number
+  parentId: number
+  nodeType: string
+  named: boolean
+  start: NativePoint
+  end: NativePoint
+  childIds: Array<number>
+  namedChildIds: Array<number>
+  childFieldNames: Array<string>
 }
 
 export interface NativeSyntaxTree {
-  rootId: number;
-  nodes: Array<NativeSyntaxNode>;
+  rootId: number
+  nodes: Array<NativeSyntaxNode>
 }
 
-export declare function parseSyntaxTree(source: string, languageId: string): NativeSyntaxTree;
+export declare function parseSyntaxTree(source: string, languageId: string): NativeSyntaxTree
 
 /**
  * Run only the imports query and return compact results (name + text only).
  * This is the graph-mode entrypoint optimized for minimal marshaling.
  */
-export declare function runImportsQueryCompact(
-  source: string,
-  languageId: string,
-  importsQuery: string,
-): CompactQueryResults;
+export declare function runImportsQueryCompact(source: string, languageId: string, importsQuery: string): CompactQueryResults
 
-export declare function runLanguageQueries(
-  source: string,
-  languageId: string,
-  importsQuery: string,
-  exportsQuery: string,
-  localsQuery: string,
-  importBindingsQuery: string,
-): NativeQueryResults;
+export declare function runLanguageQueries(source: string, languageId: string, importsQuery: string, exportsQuery: string, localsQuery: string, importBindingsQuery: string): NativeQueryResults
 
 /** Execute a single arbitrary query and return full capture metadata. */
-export declare function runQuery(source: string, languageId: string, queryText: string): NativeQueryRunResult;
+export declare function runQuery(source: string, languageId: string, queryText: string): NativeQueryRunResult
 
-export declare function supportedLanguageIds(): Array<string>;
+export declare function supportedLanguageIds(): Array<string>
 
-export declare function tokenizeDuplicateSource(source: string): NativeDuplicateTokens;
+export declare function tokenizeDuplicateSource(source: string): NativeDuplicateTokens

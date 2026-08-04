@@ -1,4 +1,4 @@
-import { buildProjectIndexIncremental } from "./indexer/build-index.js";
+import { loadCurrentProjectIndex } from "./indexer/load-current-index.js";
 import { listSymbols, symbolId } from "./indexer/symbols.js";
 import { goToDefinition, findReferences } from "./indexer/navigation.js";
 import type {
@@ -743,12 +743,16 @@ function normalizePathArg(root: string, file: string): string {
 async function getToolIndex(root: string, options: ToolRuntimeOptions): Promise<ProjectIndex> {
   return (
     options.index ??
-    (await buildProjectIndexIncremental(root, {
-      cache: "disk",
-      keepParsed: true,
-      useBloomFilters: true,
-      logLevel: "error",
-      ...(options.native ? { native: options.native } : {}),
+    (await loadCurrentProjectIndex({
+      root,
+      scope: { kind: "project" },
+      options: {
+        cache: "disk",
+        keepParsed: true,
+        useBloomFilters: true,
+        logLevel: "error",
+        ...(options.native ? { native: options.native } : {}),
+      },
     }))
   );
 }

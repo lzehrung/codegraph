@@ -1,5 +1,5 @@
 import pm from "picomatch";
-import { buildProjectIndex } from "../indexer/build-index.js";
+import { loadCurrentProjectIndex } from "../indexer/load-current-index.js";
 import type { BuildOptions, ProjectIndex } from "../indexer/types.js";
 import { getReverseNeighbors, graphAdjacencyFor } from "../graphs/adjacency.js";
 import { createGraphFileResolver, normalizeImpactFileChange } from "../impact/path.js";
@@ -305,7 +305,11 @@ async function buildAffectedReportFromContext(context: AffectedCommandContext): 
     new Set(inputs.deletedFiles.map((input) => normalizeChangedFileInput(context.projectRootFs, input))),
   ).sort();
   const depth = parseNonNegativeIntegerOption(context.getOpt("--depth"), "--depth", 1);
-  const index = await buildProjectIndex(context.projectRootFs, context.buildOptions);
+  const index = await loadCurrentProjectIndex({
+    root: context.projectRootFs,
+    scope: { kind: "project" },
+    options: context.buildOptions,
+  });
   const testPatterns = compileTestPatterns(undefined);
   const matchesTestFile = createIndexTestFileMatcher(
     index,
