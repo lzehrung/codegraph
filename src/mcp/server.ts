@@ -998,9 +998,10 @@ export async function startCodegraphMcpHttpServer(
     port: actualPort,
     url,
     close: async () => {
-      const closeServerPromise = closeHttpServer(server);
+      const requestsDrained = closeHttpServer(server);
       await closeResources();
-      await closeServerPromise;
+      await requestsDrained;
+      // An initialize accepted before closeHttpServer() can register after closeResources() snapshots the session map.
       await closeLegacyMcpSessions(sessions);
     },
   };
