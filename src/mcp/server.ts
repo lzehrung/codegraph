@@ -998,8 +998,10 @@ export async function startCodegraphMcpHttpServer(
     port: actualPort,
     url,
     close: async () => {
+      const closeServerPromise = closeHttpServer(server);
       await closeResources();
-      await closeHttpServer(server);
+      await closeServerPromise;
+      await closeLegacyMcpSessions(sessions);
     },
   };
 }
@@ -1139,13 +1141,17 @@ async function closeMcpSession(session: LegacyMcpSession): Promise<void> {
   await Promise.allSettled([session.transport.close(), session.server.close()]);
 }
 
+async function closeLegacyMcpSessions(sessions: Map<string, LegacyMcpSession>): Promise<void> {
+  const legacySessions = [...sessions.values()];
+  sessions.clear();
+  await Promise.allSettled(legacySessions.map((session) => closeMcpSession(session)));
+}
+
 async function closeMcpResources(
   sessions: Map<string, LegacyMcpSession>,
   closeModernHandler: () => Promise<void>,
 ): Promise<void> {
-  const legacySessions = [...sessions.values()];
-  sessions.clear();
-  await Promise.allSettled([...legacySessions.map((session) => closeMcpSession(session)), closeModernHandler()]);
+  await Promise.allSettled([closeLegacyMcpSessions(sessions), closeModernHandler()]);
 }
 
 function isMcpNodeRequest(request: IncomingMessage): request is IncomingMessage & NodeIncomingMessageLike {
