@@ -24,11 +24,18 @@ function isTextContent(value: unknown): value is TextContent {
 
 // These black-box process and network boundaries need a real deadline; fake timers cannot drive them.
 async function withTimeout<T>(operation: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  const timeout = AbortSignal.timeout(timeoutMs);
+  let timeout: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<never>((_, reject) => {
-    timeout.addEventListener("abort", () => reject(new Error(`${label} exceeded ${timeoutMs}ms`)), { once: true });
+    timeout = setTimeout(() => {
+      void operation.catch(() => undefined);
+      reject(new Error(`${label} exceeded ${timeoutMs}ms`));
+    }, timeoutMs);
   });
-  return await Promise.race([operation, expired]);
+  try {
+    return await Promise.race([operation, expired]);
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function createFixture(prefix: string): Promise<string> {
