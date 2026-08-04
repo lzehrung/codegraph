@@ -4,11 +4,9 @@ This is the live index for plans that still need a decision or implementation. C
 
 ## Next
 
-1. `2026-08-04-mcp-sdk-v2-migration.md`
-   - Move to the official split MCP v2 server packages and serve modern plus legacy protocol eras.
-2. `2026-07-25-performance-program-index.md`
+1. `2026-07-25-performance-program-index.md`
    - Keep the shared performance baseline and coordinate the remaining native-startup work.
-3. `2026-07-25-native-runtime-startup.md`
+2. `2026-07-25-native-runtime-startup.md`
    - Reduce native fingerprint and startup costs after validating installed-user impact.
 
 ## Planned

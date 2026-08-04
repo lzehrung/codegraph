@@ -83,7 +83,7 @@ export function buildAllowedOriginHostnames(host: string): string[] {
   if (isWildcardBindHost(host)) {
     allowed.add("127.0.0.1");
     allowed.add("localhost");
-    allowed.add("::1");
+    allowed.add(formatHostForUrl("::1"));
     for (const localHost of localInterfaceHostnames()) {
       allowed.add(localHost);
     }

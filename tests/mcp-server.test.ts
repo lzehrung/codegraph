@@ -416,15 +416,13 @@ describe("codegraph MCP handlers", () => {
       await httpServer.close();
     }
   });
-  it("validates HTTP Origin headers before project/session work", async () => {
+  it("validates HTTP Origin headers", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-http-origin-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
-    const counted = countingSession(createAgentSession({ root }));
     const httpServer = await startCodegraphMcpHttpServer({
       root,
       host: "127.0.0.1",
       port: 0,
-      session: counted.session,
     });
 
     try {
@@ -468,7 +466,6 @@ describe("codegraph MCP handlers", () => {
         expect(rejectedPayload.jsonrpc).toBe("2.0");
         expect(rejectedError.code).toBeTypeOf("number");
       }
-      expect(counted.loads()).toBe(0);
     } finally {
       await httpServer.close();
     }
@@ -556,6 +553,22 @@ describe("codegraph MCP handlers", () => {
       const localhostPayload = readObject(localhostResponse.payload);
       expect(localhostResponse.status).toBe(200);
       expect(localhostPayload.result).toBeDefined();
+
+      const ipv6OriginResponse = await postRawHttpJson(
+        loopbackUrl,
+        {
+          ...initializeRequest,
+          id: 3,
+        },
+        {
+          accept: "application/json, text/event-stream",
+          host: `127.0.0.1:${endpoint.port}`,
+          origin: `http://[::1]:${endpoint.port}`,
+        },
+      );
+      const ipv6OriginPayload = readObject(ipv6OriginResponse.payload);
+      expect(ipv6OriginResponse.status).toBe(200);
+      expect(ipv6OriginPayload.result).toBeDefined();
 
       const rejectedOrigin = await postRawHttpJson(
         loopbackUrl,

@@ -956,7 +956,11 @@ export async function startCodegraphMcpHttpServer(
       console.error(`[codegraph] MCP HTTP error: ${error.message}`);
     },
   });
-  const modernNodeHandler = toNodeHandler(modernHandler);
+  const modernNodeHandler = toNodeHandler(modernHandler, {
+    onerror: (error) => {
+      console.error(`[codegraph] MCP HTTP adapter error: ${error.message}`);
+    },
+  });
   const validateOrigin = originValidation(buildAllowedOriginHostnames(host));
   let allowedHostHeaders = emptyAllowedHostHeaderRules();
   let closeResourcesPromise: Promise<void> | undefined;

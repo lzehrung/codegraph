@@ -3,8 +3,10 @@ import path from "node:path";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { describe, expect, it } from "vitest";
+import { createAgentSession } from "../src/agent/session.js";
 import { getCodegraphVersion } from "../src/cli/packageInfo.js";
 import { startCodegraphMcpHttpServer, type CodegraphMcpHttpServer } from "../src/mcp/server.js";
+import { countingSession } from "./helpers/agent.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 
 const OPERATION_TIMEOUT_MS = 15_000;
@@ -72,6 +74,7 @@ async function assertModernConversation(client: Client): Promise<void> {
 describe("MCP protocol v2 interoperability", () => {
   it("negotiates the modern era over Streamable HTTP", async () => {
     const root = await createFixture("codegraph-mcp-v2-http-");
+    const counted = countingSession(createAgentSession({ root, buildOptions: { native: "off", cache: "off" } }));
     let server: CodegraphMcpHttpServer | undefined;
     const client = new Client(
       { name: "codegraph-mcp-protocol-v2-http-test", version: "1.0.0" },
@@ -83,11 +86,41 @@ describe("MCP protocol v2 interoperability", () => {
         root,
         host: "127.0.0.1",
         port: 0,
-        buildOptions: { native: "off", cache: "off" },
+        session: counted.session,
       });
-      const transport = new StreamableHTTPClientTransport(new URL(server.url));
+      let requestOrigin = new URL(server.url).origin;
+      const originFetch: typeof fetch = async (input, init) => {
+        const headers = new Headers(init?.headers);
+        headers.set("origin", requestOrigin);
+        return await fetch(input, { ...init, headers });
+      };
+      const transport = new StreamableHTTPClientTransport(new URL(server.url), { fetch: originFetch });
       await withTimeout(client.connect(transport), OPERATION_TIMEOUT_MS, "MCP HTTP client connect");
+
+      requestOrigin = "http://evil.example";
+      await expect(
+        withTimeout(
+          client.callTool({
+            name: "search",
+            arguments: { query: SEARCH_SYMBOL, mode: "text", limit: 5 },
+          }),
+          OPERATION_TIMEOUT_MS,
+          "rejected-origin MCP search",
+        ),
+      ).rejects.toThrow();
+      expect(counted.loads()).toBe(0);
+
+      requestOrigin = new URL(server.url).origin;
       await assertModernConversation(client);
+      await withTimeout(
+        client.callTool({
+          name: "search",
+          arguments: { query: SEARCH_SYMBOL, mode: "text", limit: 5 },
+        }),
+        OPERATION_TIMEOUT_MS,
+        "second MCP search tool call",
+      );
+      expect(counted.loads()).toBe(1);
     } finally {
       const cleanupPromises: Promise<void>[] = [
         withTimeout(client.close(), CLEANUP_TIMEOUT_MS, "MCP HTTP client cleanup"),
@@ -127,20 +160,21 @@ describe("MCP protocol v2 interoperability", () => {
       cwd: process.cwd(),
       stderr: "pipe",
     });
-    let childClosed: Promise<void> | undefined;
+    let childStarted = false;
+    const childClosed = new Promise<void>((resolve) => {
+      transport.onclose = () => resolve();
+    });
     let cleanupError: Error | undefined;
     try {
       await withTimeout(client.connect(transport), OPERATION_TIMEOUT_MS, "MCP stdio client connect");
-      childClosed = new Promise<void>((resolve) => {
-        transport.onclose = () => resolve();
-      });
+      childStarted = true;
       expect(transport.pid).toBeTypeOf("number");
       await assertModernConversation(client);
     } finally {
       const cleanupPromises: Promise<void>[] = [
         withTimeout(client.close(), CLEANUP_TIMEOUT_MS, "MCP stdio client cleanup"),
       ];
-      if (childClosed) cleanupPromises.push(withTimeout(childClosed, CLEANUP_TIMEOUT_MS, "MCP stdio child cleanup"));
+      if (childStarted) cleanupPromises.push(withTimeout(childClosed, CLEANUP_TIMEOUT_MS, "MCP stdio child cleanup"));
       const cleanupResults = await Promise.allSettled(cleanupPromises);
       await withTimeout(fsp.rm(root, { recursive: true, force: true }), CLEANUP_TIMEOUT_MS, "stdio temp root cleanup");
       const cleanupFailure = cleanupResults.find((result) => result.status === "rejected");
