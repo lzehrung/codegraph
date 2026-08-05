@@ -118,6 +118,7 @@
     "type": "git",
     "url": "git+https://github.com/lzehrung/codegraph.git"
   },
+  "homepage": "https://github.com/lzehrung/codegraph#readme",
   "engines": {
     "node": ">=22.16"
   },
@@ -128,21 +129,23 @@
     "registry": "https://npm.pkg.github.com"
   },
   "keywords": [
-    "dependency graph",
-    "symbol index",
-    "go to definition",
-    "find references",
-    "AST grep",
+    "codegraph",
+    "mcp",
+    "mcp-server",
+    "ai-agent",
+    "llm",
+    "code-search",
+    "tree-sitter",
+    "dependency-graph",
+    "symbol-index",
+    "go-to-definition",
+    "find-references",
     "monorepo",
-    "npm",
-    "yarn",
-    "pnpm",
-    "lerna",
-    "python"
+    "static-analysis"
   ],
   "author": "Luke Zehrung",
   "license": "MIT",
-  "description": "Multi-language repo navigation and code analysis with dependency graphs, symbol indexes, go-to-definition, references, chunking, and PR impact reports.",
+  "description": "Multi-language repository map for agents and humans: MCP tools, dependency graphs, symbol indexes, impact review, and bounded source evidence.",
   "devDependencies": {
     "@eslint/js": "^9.39.2",
     "@modelcontextprotocol/client": "^2.0.0",
