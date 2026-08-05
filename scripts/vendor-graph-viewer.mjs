@@ -1,16 +1,35 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const root = process.cwd();
 const outDir = path.join(root, "docs", "graph-visualization", "vendor");
+const esbuildBin = path.join(
+  root,
+  "node_modules",
+  "esbuild",
+  "bin",
+  process.platform === "win32" ? "esbuild.exe" : "esbuild",
+);
+const esbuildCli = path.join(root, "node_modules", "esbuild", "bin", "esbuild");
+
 fs.mkdirSync(outDir, { recursive: true });
 
+function resolveEsbuildEntry() {
+  if (fs.existsSync(esbuildBin)) return { command: esbuildBin, prefixArgs: [] };
+  if (fs.existsSync(esbuildCli)) return { command: process.execPath, prefixArgs: [esbuildCli] };
+  throw new Error(
+    "Local esbuild is missing. Run npm install so the viewer:vendor script can use the repo's esbuild devDependency.",
+  );
+}
+
 function run(args) {
-  const result = spawnSync("npx", ["esbuild", ...args], {
+  const { command, prefixArgs } = resolveEsbuildEntry();
+  const result = spawnSync(command, [...prefixArgs, ...args], {
     cwd: root,
     stdio: "inherit",
-    shell: process.platform === "win32",
+    shell: false,
   });
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
@@ -27,7 +46,6 @@ run([
   "--bundle",
   "--format=esm",
   "--platform=browser",
-  "--alias:graphology=./graphology.js",
   `--outfile=${path.join(outDir, "graphology-layout-forceatlas2.js")}`,
 ]);
 run([
