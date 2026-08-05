@@ -1,10 +1,18 @@
 # Codegraph
 
+[![Release](https://img.shields.io/github/v/release/lzehrung/codegraph?display_name=tag&sort=semver)](https://github.com/lzehrung/codegraph/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D22.16-brightgreen.svg)](./package.json)
+[![MCP](https://img.shields.io/badge/MCP-server-purple.svg)](./docs/mcp.md)
+[![Changelog](https://img.shields.io/badge/changelog-Keep%20a%20Changelog-orange.svg)](./CHANGELOG.md)
+
 **Give your coding agent a map of the repository, not a pile of search results.**
 
 Codegraph is a local CLI **and TypeScript library** that turns a source tree into a resolved model of files, symbols, references, and dependencies. Agents and humans can ask where an implementation lives, how components connect, what a change can break, and which tests are likely relevant - then get bounded source evidence and copyable next steps.
 
 Without structural context, an agent spends early turns listing directories, guessing search terms, opening candidate files, and reconstructing relationships in its prompt. Codegraph performs that deterministic discovery once so more of the context window can go toward understanding and changing the code.
+
+On this repository under Node 24 with a warm cache, `codegraph orient --budget small --json` returned in about **0.6s**, and the matching MCP `orient` call returned in about **100ms**. Those are the warm first-turn paths worth optimizing for; broader `explore` / `explain` calls remain heavier and are tracked separately.
 
 Windows PowerShell:
 
@@ -29,6 +37,7 @@ Use Codegraph alongside text search and compilers: text search finds exact strin
 
 ## Table of contents
 
+- [Changelog](./CHANGELOG.md)
 - [What you can do](#what-you-can-do)
 - [Try it](#try-it)
 - [A useful first five minutes](#a-useful-first-five-minutes)
