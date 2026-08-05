@@ -99,11 +99,14 @@ describe("viewer server", () => {
     servers.push(server);
 
     expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/);
-    const [index, app, graph, head] = await Promise.all([
+    const [index, app, graph, head, sigma, graphology, forceAtlas2] = await Promise.all([
       request(server, "/"),
       request(server, "/app.js"),
       request(server, "/graph.json"),
       request(server, "/styles.css", "HEAD"),
+      request(server, "/vendor/sigma.js"),
+      request(server, "/vendor/graphology.js"),
+      request(server, "/vendor/graphology-layout-forceatlas2.js"),
     ]);
 
     expect(index.statusCode).toBe(200);
@@ -113,6 +116,11 @@ describe("viewer server", () => {
     expect(head.statusCode).toBe(200);
     expect(head.body).toBe("");
     expect(head.headers["content-length"]).toBeDefined();
+    for (const asset of [sigma, graphology, forceAtlas2]) {
+      expect(asset.statusCode).toBe(200);
+      expect(asset.headers["content-type"]).toContain("text/javascript");
+      expect(asset.body.length).toBeGreaterThan(0);
+    }
 
     await closeViewerServer(server);
     expect(server.listening).toBe(false);

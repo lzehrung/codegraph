@@ -1,4 +1,4 @@
-import Sigma from "https://esm.sh/sigma@3.0.0-beta.33";
+import Sigma from "./vendor/sigma.js";
 import {
   buildGraph,
   normalizeGraphPayload,

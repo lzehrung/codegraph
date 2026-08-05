@@ -119,7 +119,7 @@ codegraph viewer --root . --graph codegraph-out/graph.json --open
 codegraph viewer --root . --port 4173 --print-url
 ```
 
-`--print-url` is preview-only: it prints the deterministic URL and exits without starting a server, rejects `--open`, and rejects port `0`. Without `--graph`, each load or reload builds the current project graph through the automatically validated disk cache; `init`, `index`, and exported JSON are not prerequisites. An explicit `--graph` is served through the same `/graph.json` route; manual upload remains available, and the viewer requires network access to `esm.sh` for Sigma.
+`--print-url` is preview-only: it prints the deterministic URL and exits without starting a server, rejects `--open`, and rejects port `0`. Without `--graph`, each load or reload builds the current project graph through the automatically validated disk cache; `init`, `index`, and exported JSON are not prerequisites. An explicit `--graph` is served through the same `/graph.json` route; manual upload remains available, and the viewer loads Sigma, Graphology, and ForceAtlas2 from bundled local vendor assets (no CDN).
 
 Do not parse pretty output to recover fields already available in structured output.
 

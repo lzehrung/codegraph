@@ -186,7 +186,7 @@ codegraph viewer --root . --port 4173 --print-url
 
 The default host is `127.0.0.1` and the default port is `4173`. Without `--graph`, each UI load or reload builds a current graph projection through the automatically validated `.codegraph-cache` index; `init`, `index`, and an exported JSON file are not prerequisites. An explicit `--graph` serves that root-confined snapshot through the same `/graph.json` route, while `--print-url` only prints the deterministic URL and exits.
 
-The UI imports Sigma from `esm.sh`, so it requires network access to that CDN and is not offline or self-contained.
+The UI loads Sigma, Graphology, and ForceAtlas2 from bundled `docs/graph-visualization/vendor/` assets, so the viewer stays offline and self-contained once Codegraph is installed.
 
 ## What the output looks like
 
