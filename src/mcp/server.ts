@@ -101,6 +101,7 @@ import {
 
 export { listCodegraphMcpTools } from "./tools.js";
 import { assertWritableDirectoryRealPathWithinRoot, resolveArtifactSqlitePathCandidate } from "./security.js";
+import { awaitStdioMcpLifecycle, DEFAULT_MCP_STDIO_IDLE_TIMEOUT_MS } from "./stdioLifecycle.js";
 
 export type CodegraphMcpWarmupMode = "off" | "base" | "symbols";
 
@@ -116,6 +117,8 @@ export type CodegraphMcpServerOptions = CodegraphMcpHandlerOptions & {
   warmup?: CodegraphMcpWarmupMode;
   host?: string;
   port?: number;
+  /** Stdio-only idle exit timeout in ms. Use 0 to disable. Defaults to 30 minutes. */
+  idleTimeoutMs?: number;
   onHttpListen?: ((info: CodegraphMcpHttpServerInfo) => void) | undefined;
   runtimeIdentity?: CodegraphRuntimeIdentity;
 };
@@ -934,12 +937,23 @@ export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Pro
   const handlers = await createWarmedCodegraphMcpHandlers(options);
   const runtimeIdentity = options.runtimeIdentity ?? captureCodegraphRuntimeIdentity(getCurrentNativeBindingOrigin());
   const createProtocolServer = createCodegraphMcpProtocolFactory(handlers, runtimeIdentity);
-  serveStdio(createProtocolServer, {
+  const handle = serveStdio(createProtocolServer, {
     legacy: "serve",
     onerror: (error) => {
       console.error(`[codegraph] MCP stdio error: ${error.message}`);
     },
   });
+  const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_MCP_STDIO_IDLE_TIMEOUT_MS;
+  const reason = await awaitStdioMcpLifecycle(handle, {
+    idleTimeoutMs,
+    onShutdown: (shutdownReason) => {
+      console.error(`[codegraph] MCP stdio shutting down (${shutdownReason})`);
+    },
+  });
+  if (reason === "idle_timeout" || reason === "parent_disconnect" || reason === "stdin_eof") {
+    // Ensure orphaned stdio servers do not linger after the client is gone.
+    process.exitCode = 0;
+  }
 }
 
 export async function startCodegraphMcpHttpServer(

@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createAgentSession, listAgentSessionFiles } from "../src/agent/session.js";
+import { AGENT_FRESHNESS_CHECK_INTERVAL_MS, createAgentSession, listAgentSessionFiles } from "../src/agent/session.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
 import { createProjectSnapshotIdentity } from "../src/indexer/build-cache.js";
@@ -736,5 +736,53 @@ describe("agent session", () => {
 
     expect(freshness).toEqual({ state: "fresh" });
     expect(scanSpy).not.toHaveBeenCalled();
+  });
+
+  it("throttles repeated freshness checks within the stale-check interval", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-agent-session-fresh-throttle-"));
+    const filePath = path.join(root, "main.ts");
+    await fs.writeFile(filePath, "export const value = 1;\n", "utf8");
+    const session = createAgentSession({ root, freshness: { policy: "check" } });
+    await session.loadProject({ symbolGraph: "skip" });
+    if (!session.checkFreshness) {
+      throw new Error("agent session should expose freshness checks");
+    }
+
+    let nowMs = Date.now();
+    const dateSpy = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    const originalStat = fs.stat.bind(fs);
+    let statCalls = 0;
+    const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+      statCalls += 1;
+      return await originalStat(...args);
+    });
+
+    try {
+      const first = await session.checkFreshness();
+      const afterFirst = statCalls;
+      const second = await session.checkFreshness();
+      expect(first).toEqual({ state: "fresh" });
+      expect(second).toEqual({ state: "fresh" });
+      expect(statCalls).toBe(afterFirst);
+
+      await fs.writeFile(filePath, "export const value = 2;\n", "utf8");
+      const throttled = await session.checkFreshness();
+      expect(throttled).toEqual({ state: "fresh" });
+      expect(statCalls).toBe(afterFirst);
+
+      nowMs += AGENT_FRESHNESS_CHECK_INTERVAL_MS + 1;
+      const afterWindow = await session.checkFreshness();
+      expect(afterWindow).toEqual({
+        state: "stale",
+        changedFiles: ["main.ts"],
+        changedFileCount: 1,
+        omittedChangedFileCount: 0,
+        reason: "session snapshot is older than files on disk",
+      });
+      expect(statCalls).toBeGreaterThan(afterFirst);
+    } finally {
+      statSpy.mockRestore();
+      dateSpy.mockRestore();
+    }
   });
 });

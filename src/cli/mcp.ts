@@ -20,8 +20,15 @@ export async function handleMcpServeCommand(context: McpServeCommandContext): Pr
 
   const artifactPath = context.getOpt("--artifact");
   let port: number | undefined;
+  let idleTimeoutMs: number | undefined;
   try {
     port = parseOptionalBoundedIntegerOption(context.getOpt("--port"), "--port", 0, 65535);
+    idleTimeoutMs = parseOptionalBoundedIntegerOption(
+      context.getOpt("--idle-timeout-ms"),
+      "--idle-timeout-ms",
+      0,
+      24 * 60 * 60 * 1000,
+    );
   } catch (error) {
     context.writeStderrLine(error instanceof Error ? error.message : String(error));
     context.exit(2);
@@ -45,6 +52,7 @@ export async function handleMcpServeCommand(context: McpServeCommandContext): Pr
     ...(artifactPath !== undefined ? { artifactPath } : {}),
     ...(context.buildOptions !== undefined ? { buildOptions: context.buildOptions } : {}),
     ...(warmup !== undefined ? { warmup } : {}),
+    ...(idleTimeoutMs !== undefined ? { idleTimeoutMs } : {}),
     onHttpListen: (info) => {
       context.writeStderrLine(`Codegraph MCP HTTP server listening at ${info.url}`);
     },

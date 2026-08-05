@@ -393,7 +393,7 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const MCP_HELP_TEXT = `codegraph mcp - Serve MCP tools for agent graph navigation
 
-Usage: codegraph mcp [serve] [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--allow-build] [--warmup | --warmup-symbols]
+Usage: codegraph mcp [serve] [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--idle-timeout-ms <ms>] [--allow-build] [--warmup | --warmup-symbols]
 
 Transports:
   --stdio          Serve MCP over stdio (default)
@@ -419,7 +419,7 @@ Tools are read-only unless --allow-build is passed.
 
 export const MCP_SERVE_HELP_TEXT = `codegraph mcp serve - MCP server for agent graph navigation
 
-Usage: codegraph mcp [serve] [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--allow-build] [--warmup | --warmup-symbols]
+Usage: codegraph mcp [serve] [--root <path>] [--artifact <path>] [--stdio | --port <number>] [--host <host>] [--idle-timeout-ms <ms>] [--allow-build] [--warmup | --warmup-symbols]
 
 Tools:
   orient          Build a compact first-turn repo packet
