@@ -36,12 +36,34 @@ type NodeSqliteStatement = StatementSync & {
 
 const requireNodeModule = createRequire(import.meta.url);
 let sqliteModule: NodeSqliteModule | undefined;
+let sqliteLoadError: Error | undefined;
 
 function loadNodeSqlite(): NodeSqliteModule {
   if (sqliteModule) return sqliteModule;
-  const loaded = requireNodeModule("node:sqlite") as NodeSqliteModule;
-  sqliteModule = loaded;
-  return loaded;
+  if (sqliteLoadError) throw sqliteLoadError;
+  try {
+    const loaded = requireNodeModule("node:sqlite") as NodeSqliteModule;
+    sqliteModule = loaded;
+    return loaded;
+  } catch (error) {
+    sqliteLoadError = error instanceof Error ? error : new Error(String(error));
+    throw sqliteLoadError;
+  }
+}
+
+export function getNodeSqliteLoadError(): Error | undefined {
+  if (sqliteModule) return undefined;
+  try {
+    loadNodeSqlite();
+    return undefined;
+  } catch {
+    return sqliteLoadError;
+  }
+}
+
+export function isNodeSqliteUnavailableError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /node:sqlite|No such built-in module:\s*node:sqlite/i.test(message);
 }
 
 function isReadOnlyAllowedAction(actionCode: number, constants: SqliteConstants): boolean {

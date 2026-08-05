@@ -5,7 +5,7 @@ import path from "node:path";
 import { supportForFile } from "../../languages.js";
 import { getNativeRuntimeFingerprint } from "../../native/treeSitterNative.js";
 import { logWithLevel } from "../../logging.js";
-import { SqliteDatabase, type SqliteStatement } from "../../sqlite-driver.js";
+import { SqliteDatabase, type SqliteStatement, isNodeSqliteUnavailableError } from "../../sqlite-driver.js";
 import { buildBloomFilterFromSource } from "../../util/bloomFilter.js";
 import {
   createSqliteTableIfMissing,
@@ -68,6 +68,18 @@ function clearMemoryCacheForProject(projectRoot: string): void {
   }
 }
 const diskModuleCaches = new Map<string, DiskModuleCache>();
+let warnedMissingNodeSqlite = false;
+
+function reportMissingNodeSqlite(logLevel: import("../../logging.js").LogLevel | undefined, error: unknown): void {
+  if (warnedMissingNodeSqlite) return;
+  warnedMissingNodeSqlite = true;
+  logWithLevel(
+    logLevel,
+    "error",
+    "Disk cache requires the Node.js built-in node:sqlite module. Use Node.js >= 22.16, or set --cache off/memory.",
+    error,
+  );
+}
 
 export function cacheRoot(projectRoot: string, opts?: BuildOptions): string {
   return opts?.cacheDir || path.join(projectRoot, ".codegraph-cache", "index-v1");
@@ -122,7 +134,15 @@ function getDiskModuleCache(projectRoot: string, opts?: BuildOptions): DiskModul
   const existing = diskModuleCaches.get(dbPath);
   if (existing) return existing;
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-  const db = new SqliteDatabase(dbPath);
+  let db: SqliteDatabase;
+  try {
+    db = new SqliteDatabase(dbPath);
+  } catch (error) {
+    if (isNodeSqliteUnavailableError(error)) {
+      reportMissingNodeSqlite(opts?.logLevel, error);
+    }
+    throw error;
+  }
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = NORMAL");
   ensureModuleCacheSchema(db);
@@ -364,6 +384,10 @@ export function writeToCache(
       const cache = getDiskModuleCache(projectRoot, opts);
       cache.write.run(file, sig, PARSED_CACHE_VERSION, JSON.stringify(mod), Date.now());
     } catch (error) {
+      if (isNodeSqliteUnavailableError(error)) {
+        reportMissingNodeSqlite(opts?.logLevel, error);
+        throw error;
+      }
       logWithLevel(opts?.logLevel, "warn", "Warning: Failed to write to cache:", error);
     }
   }

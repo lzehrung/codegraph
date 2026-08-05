@@ -74,10 +74,20 @@ async function handleDepsCommand(context: GraphQueryCommandContext): Promise<voi
   const resolvedFile = resolveCliProjectFile(context.projectRootFs, fileArg, "File");
   if (resolvedFile.status === "error") {
     writeCliProjectFileError(context, resolvedFile, json ? "json" : "text");
-    return;
   }
 
   const loaded = await loadGraph(context);
+  if (!loaded.graph.nodes.has(resolvedFile.file)) {
+    const missing = {
+      status: "not_found" as const,
+      reason: "file_not_indexed",
+      file: resolvedFile.file,
+      error: `File is not in the project graph: ${resolvedFile.file}`,
+    };
+    if (json) context.writeJSONLine(missing);
+    else context.writeStdoutLine(`not_found: ${missing.error}`);
+    context.exit(1);
+  }
   const results =
     context.command === "deps"
       ? getDependencies(loaded.graph, resolvedFile.file, {
@@ -111,12 +121,10 @@ async function handlePathCommand(context: GraphQueryCommandContext): Promise<voi
   const resolvedFrom = resolveCliProjectFile(context.projectRootFs, fromArg, "From file");
   if (resolvedFrom.status === "error") {
     writeCliProjectFileError(context, resolvedFrom, json ? "json" : "text");
-    return;
   }
   const resolvedTo = resolveCliProjectFile(context.projectRootFs, toArg, "To file");
   if (resolvedTo.status === "error") {
     writeCliProjectFileError(context, resolvedTo, json ? "json" : "text");
-    return;
   }
 
   const loaded = await loadGraph(context);

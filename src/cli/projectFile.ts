@@ -8,6 +8,7 @@ export type CliProjectFileErrorOutput = "json" | "text";
 export type CliProjectFileErrorContext = {
   writeJSONLine: (value: unknown) => void;
   writeStdoutLine: (message: string) => void;
+  exit: (code: number) => never;
 };
 
 export function resolveCliProjectFile(projectRoot: string, fileArg: string, label: string): CliProjectFileInput {
@@ -22,10 +23,11 @@ export function writeCliProjectFileError(
   context: CliProjectFileErrorContext,
   result: Extract<CliProjectFileInput, { status: "error" }>,
   output: CliProjectFileErrorOutput = "json",
-): void {
+): never {
   if (output === "json") {
     context.writeJSONLine(result);
-    return;
+  } else {
+    context.writeStdoutLine(`error: ${result.reason}: ${result.error}`);
   }
-  context.writeStdoutLine(`error: ${result.reason}: ${result.error}`);
+  return context.exit(1);
 }
