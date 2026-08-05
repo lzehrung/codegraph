@@ -356,7 +356,11 @@ export function tryLoadFromCache(
           return parsed;
         }
       }
-    } catch {
+    } catch (error) {
+      if (isNodeSqliteUnavailableError(error)) {
+        reportMissingNodeSqlite(opts?.logLevel, error);
+        throw error;
+      }
       // cache read failed
     }
     if (cacheEnabled && cacheReport) cacheReport.misses += 1;
