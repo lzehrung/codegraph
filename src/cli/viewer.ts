@@ -27,6 +27,12 @@ const VIEWER_ASSETS: Record<string, { file: string; contentType: string }> = {
   "/graph-builder.js": { file: "graph-builder.js", contentType: "text/javascript; charset=utf-8" },
   "/file-tree-model.js": { file: "file-tree-model.js", contentType: "text/javascript; charset=utf-8" },
   "/file-tree-filters.js": { file: "file-tree-filters.js", contentType: "text/javascript; charset=utf-8" },
+  "/vendor/graphology.js": { file: "vendor/graphology.js", contentType: "text/javascript; charset=utf-8" },
+  "/vendor/graphology-layout-forceatlas2.js": {
+    file: "vendor/graphology-layout-forceatlas2.js",
+    contentType: "text/javascript; charset=utf-8",
+  },
+  "/vendor/sigma.js": { file: "vendor/sigma.js", contentType: "text/javascript; charset=utf-8" },
 };
 
 const graphFileDescriptors = new WeakMap<http.Server, number>();

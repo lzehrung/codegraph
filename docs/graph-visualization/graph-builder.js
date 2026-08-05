@@ -1,5 +1,5 @@
-import Graph from "https://esm.sh/graphology@0.25.4";
-import forceAtlas2 from "https://esm.sh/graphology-layout-forceatlas2@0.10.1";
+import Graph from "./vendor/graphology.js";
+import forceAtlas2 from "./vendor/graphology-layout-forceatlas2.js";
 
 export const FILE_NODE_COLOR = "#4da3ff";
 export const EXTERNAL_NODE_COLOR = "#f59e0b";

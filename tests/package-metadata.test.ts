@@ -295,6 +295,9 @@ describe("package metadata", () => {
       "graph-builder.js",
       "index.html",
       "styles.css",
+      "vendor/graphology.js",
+      "vendor/graphology-layout-forceatlas2.js",
+      "vendor/sigma.js",
     ];
 
     expect(files).toContain("docs/graph-visualization");

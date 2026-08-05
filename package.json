@@ -111,7 +111,8 @@
     "native:sync-meta": "node ./scripts/sync-native-meta.mjs",
     "publish:native:targets": "node ./scripts/publish-native-targets.mjs",
     "publish:native:meta": "npm publish --workspace=@lzehrung/codegraph-native",
-    "bundle:cli": "node ./scripts/bundle-cli.mjs"
+    "bundle:cli": "node ./scripts/bundle-cli.mjs",
+    "viewer:vendor": "node ./scripts/vendor-graph-viewer.mjs"
   },
   "repository": {
     "type": "git",
@@ -158,6 +159,7 @@
     "http-server": "^14.1.1",
     "jsdom": "^29.0.1",
     "prettier": "^3.7.4",
+    "sigma": "^3.0.0-beta.33",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.53.1",
