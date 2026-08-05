@@ -72,6 +72,12 @@ describe("CLI command option validation", () => {
     expect(() => validateCliArgs("review", parsed)).toThrow("Unknown option for review: --summary");
   });
 
+  it("advertises both supported review output modes in validation usage", () => {
+    const parsed = parseCliArgs("review", ["first", "second"]);
+
+    expect(() => validateCliArgs("review", parsed)).toThrow("[--json | --pretty]");
+  });
+
   it("accepts explicit JSON output for installer commands", () => {
     for (const command of ["install", "uninstall"]) {
       const parsed = parseCliArgs(command, ["--json"]);
