@@ -7,7 +7,7 @@ export const CLI_TASK_HELP_TEXT = `codegraph - Ask structural questions about a 
 Start here:
   Configure every supported agent  codegraph install --all --dry-run
   Understand a repository          codegraph explore "how does auth reach the database?" --root .
-  Review local changes             codegraph review --base HEAD --head WORKTREE --summary
+  Review local changes             codegraph review --base HEAD --head WORKTREE
   Find a symbol or file            codegraph search "SessionManager" --json
   Check runtime health             codegraph doctor
 
@@ -18,7 +18,7 @@ export const CLI_HELP_TEXT = `codegraph - Code analysis and dependency graph too
 Start here:
   Configure every supported agent  codegraph install --all --dry-run
   Understand a repository          codegraph explore "how does auth reach the database?" --root .
-  Review local changes             codegraph review --base HEAD --head WORKTREE --summary
+  Review local changes             codegraph review --base HEAD --head WORKTREE
   Find a symbol or file            codegraph search "SessionManager" --json
   Check runtime health             codegraph doctor
 
@@ -68,7 +68,7 @@ Forgiving inputs:
   Read-only project commands accept an existing project-root positional where unambiguous.
 
 Recommended review commands:
-  codegraph review --summary
+  codegraph review
   codegraph impact (defaults to HEAD..WORKTREE)
   codegraph search "auth user" --json
   codegraph explain src/auth.ts --json
@@ -79,7 +79,7 @@ Unfamiliar repo:
   codegraph orient --root . --budget small
 
 Examples:
-  codegraph review --base HEAD --head WORKTREE --summary
+  codegraph review --base HEAD --head WORKTREE
   codegraph orient ./src --budget small
   codegraph search "auth user" --json
   codegraph explore "how does auth reach db?"
@@ -503,7 +503,7 @@ Output:
 
 export const DRIFT_HELP_TEXT = `codegraph drift - Compare architecture drift between graph states
 
-Usage: codegraph drift [roots...] [--root <path>] (--base <ref> | --base-artifact <dir>) [--head <ref>] [--json | --pretty | --compact-json] [--fail-on <kind[,kind...]>] [--hotspot-jump-threshold <n>] [--limit <n>] [--graph-edges <full|summary|off>] [--public-api <all|removals|off>]
+Usage: codegraph drift [roots...] [--root <path>] (--base <ref> | --base-artifact <dir>) [--head <ref>] [--json | --pretty] [--fail-on <kind[,kind...]>] [--hotspot-jump-threshold <n>] [--limit <n>] [--graph-edges <full|summary|off>] [--public-api <all|removals|off>]
 
 Signals:
   Compares dependency cycles, hotspots, unresolved imports, public API symbols, duplicate group counts, and graph edges.
@@ -516,19 +516,18 @@ Options:
   --limit <n>                     Maximum findings to emit in the report output.
   --graph-edges <mode>            Graph edge detail mode: full, summary, or off.
   --public-api <mode>             Public API finding mode: all, removals, or off.
-  --compact-json                  Emit compact JSON with summary counts and bounded examples.
 `;
 
 export const VIEWER_HELP_TEXT = `codegraph viewer - Serve the bundled graph visualization viewer
 
 Usage: codegraph viewer [--root <path>] [--graph <root-confined-json>] [--host <host>] [--port <0-65535>] [--open] [--print-url]
 
-The viewer is a human-facing browser app. Without --graph, it serves <root>/codegraph.json when present and the app requests it automatically after startup.
-With --graph, it serves the root-confined file at /graph.json and the app loads that fixed route.
+Without --graph, the viewer builds a fresh graph projection from the current project and its automatically validated disk cache whenever the UI loads or reloads /graph.json.
+With --graph, it serves the root-confined exported snapshot at the same route instead.
 Graph paths must stay inside the selected root (the current directory by default) both lexically and after symlink resolution.
 
 Options:
-  --graph <path>    Graph JSON path relative to --root, served at /graph.json instead of the conventional codegraph.json.
+  --graph <path>    Root-confined exported graph JSON to inspect instead of the current project.
   --host <host>     Listener host. Defaults to 127.0.0.1.
   --port <port>     Listener port. Defaults to 4173; 0 selects an available port.
   --open            Open the server URL in the platform browser.

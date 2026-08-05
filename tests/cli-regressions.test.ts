@@ -1721,7 +1721,7 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     }
   });
 
-  it("drift JSON output flags take precedence over pretty output", async () => {
+  it("drift JSON output takes precedence over pretty output", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-drift-cli-json-precedence-"));
     try {
       await fsp.mkdir(path.join(root, "src"), { recursive: true });
@@ -1742,76 +1742,8 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
         "--json",
         "--pretty",
       ]);
-      const compactJson = await runCliCommand([
-        "drift",
-        "src",
-        "--root",
-        root,
-        "--base",
-        "HEAD",
-        "--head",
-        "WORKTREE",
-        "--compact-json",
-        "--pretty",
-      ]);
 
       expect(JSON.parse(explicitJson)).toMatchObject({ schemaVersion: 1, format: "full" });
-      expect(JSON.parse(compactJson)).toMatchObject({ schemaVersion: 1, format: "compact" });
-    } finally {
-      await fsp.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("drift usage includes compact JSON output mode", async () => {
-    const result = await runCliWithExit(["drift", "--help"], process.cwd());
-
-    expect(result.exitCode).toBeUndefined();
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("--json | --pretty | --compact-json");
-  });
-
-  it("drift compact json summarizes graph edges and suppresses API additions by default", async () => {
-    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-drift-cli-compact-"));
-    try {
-      await fsp.mkdir(path.join(root, "src"), { recursive: true });
-      await fsp.writeFile(path.join(root, "src", "a.ts"), "export function a() { return 1; }\n", "utf8");
-      git(root, ["init"]);
-      git(root, ["add", "."]);
-      git(root, ["commit", "-m", "base"]);
-      await fsp.writeFile(
-        path.join(root, "src", "b.ts"),
-        "import { a } from './a';\nexport function b() { return a(); }\n",
-        "utf8",
-      );
-      await fsp.writeFile(
-        path.join(root, "src", "a.ts"),
-        "import { b } from './b';\nexport function a() { return b(); }\n",
-        "utf8",
-      );
-      git(root, ["add", "."]);
-      git(root, ["commit", "-m", "head"]);
-
-      const stdout = await runCliCommand([
-        "drift",
-        "src",
-        "--root",
-        root,
-        "--base",
-        "HEAD~1",
-        "--head",
-        "HEAD",
-        "--compact-json",
-      ]);
-      const report = JSON.parse(stdout) as {
-        format: string;
-        summary: { byKind: Record<string, number> };
-        findings: Array<{ kind: string }>;
-      };
-
-      expect(report.format).toBe("compact");
-      expect(report.summary.byKind["graph-edge-added"]).toBeGreaterThan(0);
-      expect(report.findings.some((finding) => finding.kind === "graph-edge-added")).toBe(true);
-      expect(report.findings.some((finding) => finding.kind === "public-api-addition")).toBe(false);
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
@@ -2305,7 +2237,7 @@ index 1111111..2222222 100644
     expect(report.changedFiles.map((entry) => entry.file)).toEqual(["src/main.ts"]);
   });
 
-  it("review CLI prints a compact human summary with --summary", async () => {
+  it("review CLI prints a compact human summary by default", async () => {
     const root = await mkTmpDir("dg-review-summary-");
     initGitRepo(root);
     await fsp.writeFile(path.join(root, "main.ts"), "export function value() { return 1; }\n", "utf8");
@@ -2314,7 +2246,7 @@ index 1111111..2222222 100644
 
     await fsp.writeFile(path.join(root, "main.ts"), "export function value() { return 2; }\n", "utf8");
 
-    const stdout = await runCliCommand(["review", "--root", root, "--base", "HEAD", "--head", "WORKTREE", "--summary"]);
+    const stdout = await runCliCommand(["review", "--root", root, "--base", "HEAD", "--head", "WORKTREE"]);
 
     expect(stdout.startsWith("Review Summary")).toBe(true);
     expect(stdout).toContain("Status: ok");
@@ -2359,7 +2291,7 @@ index 1111111..2222222 100644
     const structured = JSON.parse(await runCliCommand([...reviewArgs, "--json"])) as {
       reviewTasks: Array<{ reason: string }>;
     };
-    const summary = await runCliCommand([...reviewArgs, "--summary", "--duplicates", "all"]);
+    const summary = await runCliCommand([...reviewArgs, "--duplicates", "all"]);
 
     expect(structured.reviewTasks.some((task) => task.reason === "duplicate-sibling")).toBe(true);
     expect(summary).toContain("duplicate-sibling");
@@ -2388,7 +2320,7 @@ index 1111111..2222222 100644
       "utf8",
     );
 
-    const stdout = await runCliCommand(["review", "--root", root, "--base", "HEAD", "--head", "WORKTREE", "--summary"]);
+    const stdout = await runCliCommand(["review", "--root", root, "--base", "HEAD", "--head", "WORKTREE"]);
 
     expect(stdout).toContain("Call compatibility:");
     expect(stdout).toContain("helper:");
@@ -2504,7 +2436,6 @@ index 1111111..2222222 100644
       "HEAD",
       "--head",
       "WORKTREE",
-      "--summary",
       "--max-tests",
       "4",
     ]);
@@ -2544,7 +2475,6 @@ index 1111111..2222222 100644
       "HEAD",
       "--head",
       "WORKTREE",
-      "--summary",
       "--max-tests",
       "3",
     ]);
@@ -2555,7 +2485,7 @@ index 1111111..2222222 100644
     expect(stdout).not.toContain("- tests/pattern-1.test.ts");
   });
 
-  it("review CLI treats --pretty as summary output", async () => {
+  it("review CLI treats --pretty as an explicit equivalent of the default summary", async () => {
     const root = await mkTmpDir("dg-review-pretty-");
     initGitRepo(root);
     await fsp.writeFile(path.join(root, "main.ts"), "export function value() { return 1; }\n", "utf8");
@@ -2564,16 +2494,7 @@ index 1111111..2222222 100644
 
     await fsp.writeFile(path.join(root, "main.ts"), "export function value() { return 2; }\n", "utf8");
 
-    const summary = await runCliCommand([
-      "review",
-      "--root",
-      root,
-      "--base",
-      "HEAD",
-      "--head",
-      "WORKTREE",
-      "--summary",
-    ]);
+    const summary = await runCliCommand(["review", "--root", root, "--base", "HEAD", "--head", "WORKTREE"]);
     const pretty = await runCliCommand(["review", "--root", root, "--base", "HEAD", "--head", "WORKTREE", "--pretty"]);
 
     expect(pretty).toBe(summary);

@@ -253,7 +253,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   [
     "drift",
     commandSchema(
-      [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--compact-json"],
+      [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS],
       [
         ...SHARED_BUILD_OPTIONS,
         "--base",
@@ -380,7 +380,6 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
         ...SHARED_BUILD_FLAGS,
         ...JSON_OUTPUT_FLAGS,
         "--compact",
-        "--compact-json",
         "--include-tests",
         "--members-only",
         "--mermaid",
@@ -526,7 +525,6 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
         ...REPORT_FLAGS,
         "--include-symbol-details",
         "--incremental-strict",
-        "--summary",
       ],
       [
         ...SHARED_BUILD_OPTIONS,
@@ -540,8 +538,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       {
         kind: "max",
         max: 1,
-        usage:
-          "Usage: codegraph review [project-root] [--root <path>] [--base <ref> --head <ref>] [--json | --summary]",
+        usage: "Usage: codegraph review [project-root] [--root <path>] [--base <ref> --head <ref>] [--json | --pretty]",
       },
     ),
   ],

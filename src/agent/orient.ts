@@ -254,7 +254,7 @@ function buildReviewFocus(base: string, head: string): AgentOrientationFocus {
     label: `${base}..${head}`,
     why: "review range requested by the caller",
     followUps: [
-      `codegraph review --base ${quoteShellArg(base)} --head ${quoteShellArg(head)} --summary`,
+      `codegraph review --base ${quoteShellArg(base)} --head ${quoteShellArg(head)}`,
       `codegraph impact --base ${quoteShellArg(base)} --head ${quoteShellArg(head)}`,
     ],
   };
@@ -399,7 +399,7 @@ function buildRecommendedNext(
     });
     commands.push({
       label: "Review current worktree",
-      command: "codegraph review --base HEAD --head WORKTREE --summary",
+      command: "codegraph review --base HEAD --head WORKTREE",
     });
   }
   commands.push({

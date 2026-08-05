@@ -11,7 +11,7 @@ At a terminal, bare `codegraph` shows the five task-first routes without scannin
 For code reviews, start with `review`; it is the compact handoff with changed files, changed symbols, candidate tests, risks, duplicate leads, and analysis labels.
 
 ```bash
-codegraph review --base HEAD --head WORKTREE --summary
+codegraph review --base HEAD --head WORKTREE
 ```
 
 Add `impact` only when you need a wider blast-radius map:
@@ -33,11 +33,11 @@ For PR, worktree, or sweeping review tasks, prefer `review` first; use `impact` 
 
 Use `doctor` only when package/runtime state or an existing artifact path is the question.
 Use `explore` when the agent has a broad question and needs search anchors, packets, paths, blast radius, candidate tests, and follow-ups in one bounded response. Use `search` when it only needs anchors, `explain` when it already knows a file/symbol/SQL object/handle, and `inspect` for a human-readable architecture summary.
-Use `artifact` for durable handoff directories and `mcp` when repeated follow-up calls should share one warm repo session; `build` and `serve` remain accepted but are optional. Search locations can be pasted directly into `goto`, `refs`, `file`, `packet`, or `explain`, and semantic commands accept unique exact names when an agent does not yet have a portable handle.
+Use `artifact` for durable handoff directories and `mcp` when repeated follow-up calls should share one warm repo session; `build` and `serve` remain accepted but are optional. If an MCP transport or startup call fails, do not retry the same broken server: run `codegraph doctor`, use the equivalent CLI command for the current session, and restart the agent client after package upgrades. Search locations can be pasted directly into `goto`, `refs`, `file`, `packet`, or `explain`, and semantic commands accept unique exact names when an agent does not yet have a portable handle.
 
 Choose output by the next consumer:
 
-- The CLI defaults to human-readable output; `--pretty` remains an explicit equivalent and `--summary` selects compact report output where supported.
+- The CLI defaults to compact human-readable output for `review` and readable output elsewhere; `--pretty` remains an explicit equivalent.
 - Use `--json`, MCP tools, or library APIs when the next step needs exact fields, ranges, schema fields, or filtering. If `--json` and `--pretty` are both present, `--json` wins.
 - Do not parse pretty text to recover fields already present in structured output.
 
@@ -55,7 +55,7 @@ codegraph viewer --root . --graph codegraph-out/graph.json --open
 codegraph viewer --root . --port 4173 --print-url
 ```
 
-`--print-url` is preview-only: it prints the deterministic URL and exits without starting a server, rejects `--open`, and rejects port `0`. Without `--graph`, the UI automatically requests `<root>/codegraph.json` after startup; an explicit `--graph` is served and loaded through the fixed `/graph.json` route. Manual upload remains available, and the viewer requires network access to `esm.sh` for Sigma.
+`--print-url` is preview-only: it prints the deterministic URL and exits without starting a server, rejects `--open`, and rejects port `0`. Without `--graph`, each load or reload builds the current project graph through the automatically validated disk cache; lifecycle initialization and exported JSON are not prerequisites. An explicit `--graph` is served through the same `/graph.json` route; manual upload remains available, and the viewer requires network access to `esm.sh` for Sigma.
 
 ## Explore facade
 
@@ -177,10 +177,10 @@ Use `drift` when the agent needs one architecture-regression report for a base/h
 
 ```bash
 codegraph drift ./src --base origin/main --head HEAD --graph-edges summary --public-api removals
-codegraph drift ./src --base origin/main --head HEAD --compact-json
+codegraph drift ./src --base origin/main --head HEAD --json
 ```
 
-Drift compares structural signals over time: dependency cycles, hotspots, unresolved imports, API surface changes, duplicate group counts, and graph edges. It is review and CI evidence, not runtime validation or compiler diagnostics. Use compact JSON for CI or agent handoff, and use graph-edge/API filters to keep human review output bounded.
+Drift compares structural signals over time: dependency cycles, hotspots, unresolved imports, API surface changes, duplicate group counts, and graph edges. It is review and CI evidence, not runtime validation or compiler diagnostics. Use JSON for CI or agent handoff, and use graph-edge/API filters to keep human review output bounded.
 
 ## Agent client installer
 
@@ -473,15 +473,15 @@ Wrapper notes:
 The `codegraph review` CLI produces JSON bundles for downstream scripts and tool integrations:
 
 ```bash
-codegraph review --base origin/main --head HEAD > review.json
-codegraph review --base origin/main --head HEAD --include-symbol-details --max-callsites 5 > review.json
-codegraph review --base origin/main --head HEAD --review-depth standard > review.json
+codegraph review --base origin/main --head HEAD --json > review.json
+codegraph review --base origin/main --head HEAD --include-symbol-details --max-callsites 5 --json > review.json
+codegraph review --base origin/main --head HEAD --review-depth standard --json > review.json
 ```
 
 For current local edits, start with the compact review summary:
 
 ```bash
-codegraph review --base HEAD --head WORKTREE --summary
+codegraph review --base HEAD --head WORKTREE
 ```
 
 Add a ranked blast-radius map only when needed:
@@ -492,7 +492,7 @@ codegraph impact --base HEAD --head WORKTREE
 
 Use `--head STAGED` instead of `WORKTREE` when the review should cover only the index. Keep the full JSON review bundle for scripts or agent steps that need `projectFiles`, `graphDelta`, or detailed symbol handles.
 
-For function-call integrations, keep the JSON object as the handoff. Do not parse `review --summary` or human-readable `impact` text to recover fields that are already present in the TypeScript return values.
+For function-call integrations, keep the JSON object as the handoff. Do not parse human-readable `review` or `impact` text to recover fields that are already present in the TypeScript return values.
 
 In summary mode, high-confidence direct import matches are the first regression targets and medium matches are likely file-level coverage. Low-confidence pattern matches are summarized as breadth hints; use the full JSON bundle only when you need to inspect those fallback candidates.
 
@@ -509,7 +509,7 @@ When `callCompatibility` is present, start with hints where `status` is `likely_
 Pretty impact and review summaries include scoped duplicate leads by default:
 
 - human-readable `impact`: high-confidence exact or renamed clones within changed files.
-- `review --summary`: high-confidence exact or renamed clones within changed plus graph-impacted files.
+- human-readable `review`: high-confidence exact or renamed clones within changed plus graph-impacted files.
 - `--duplicates off|changed|impacted|all`: override the human-summary scope.
 - Git copy or rename similarity metadata can boost duplicate leads when both source and destination are present in the indexed snapshot.
 - Full duplicate groups, variants, raw pair counts, and omission counts remain in `codegraph duplicates --json`.

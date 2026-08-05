@@ -52,7 +52,7 @@ Use Codegraph alongside text search and compilers: text search finds exact strin
 | -------------------------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | "Where should I start in this repo?"         | `codegraph orient --root . --budget small`                       | Central modules, a bounded tree, and copyable follow-ups                                     |
 | "How does this feature work?"                | `codegraph explore "<question>" --root .`                        | Ranked anchors, source packets, dependency paths, blast radius, and likely tests             |
-| "What could this change break?"              | `codegraph review --base HEAD --head WORKTREE --summary`         | Changed symbols, risk signals, candidate tests, duplicate leads, and review tasks            |
+| "What could this change break?"              | `codegraph review --base HEAD --head WORKTREE`                   | Changed symbols, risk signals, candidate tests, duplicate leads, and review tasks            |
 | "Which tests should I run?"                  | `codegraph affected --base HEAD --head WORKTREE --quiet`         | Deterministic affected test paths from changed files and reverse dependencies                |
 | "What depends on this file?"                 | `codegraph rdeps src/file.ts --json`                             | Reverse dependencies from the resolved project graph                                         |
 | "Where is this symbol defined or used?"      | `codegraph goto <file> <line> <column>` and `codegraph refs ...` | Semantic definitions and references across supported languages                               |
@@ -62,7 +62,7 @@ Use Codegraph alongside text search and compilers: text search finds exact strin
 | "Where is code duplicated?"                  | `codegraph duplicates ./src --min-confidence medium`             | Ranked exact and near-duplicate groups with locations and confidence                         |
 | "Can another tool consume the graph?"        | `codegraph graph --root . ./src --json --output codegraph.json`  | JSON, Mermaid, DOT, or SQLite output                                                         |
 
-Human-readable output is the CLI default; `--pretty` remains an explicit equivalent and `--summary` selects compact report output where supported. Use `--json` for stable fields, ranges, handles, reasons, confidence, and omission counts in automation.
+Human-readable output is the CLI default, including the compact `review` report; `--pretty` remains an explicit equivalent. Use `--json` for stable fields, ranges, handles, reasons, confidence, and omission counts in automation.
 
 ## Try it
 
@@ -141,7 +141,7 @@ codegraph refs src/review.ts:215:23
 
 ```bash
 # Compact reviewer handoff for staged and unstaged tracked changes
-codegraph review --base HEAD --head WORKTREE --summary
+codegraph review --base HEAD --head WORKTREE
 
 # Broader blast-radius map when the summary needs expansion
 codegraph impact --base HEAD --head WORKTREE
@@ -184,7 +184,7 @@ codegraph viewer --root . --graph codegraph-out/graph.json --open
 codegraph viewer --root . --port 4173 --print-url
 ```
 
-The default host is `127.0.0.1` and the default port is `4173`. Without `--graph`, the UI automatically requests `<root>/codegraph.json` after startup; an explicit `--graph` is served and loaded through the fixed `/graph.json` route. `--print-url` is preview-only: it prints the deterministic URL and exits without starting a server, rejects `--open`, and rejects port `0`.
+The default host is `127.0.0.1` and the default port is `4173`. Without `--graph`, each UI load or reload builds a current graph projection through the automatically validated `.codegraph-cache` index; `init`, `index`, and an exported JSON file are not prerequisites. An explicit `--graph` serves that root-confined snapshot through the same `/graph.json` route, while `--print-url` only prints the deterministic URL and exits.
 
 The UI imports Sigma from `esm.sh`, so it requires network access to that CDN and is not offline or self-contained.
 

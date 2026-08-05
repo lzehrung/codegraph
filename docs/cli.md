@@ -12,7 +12,7 @@ Bare `codegraph` prints concise task-oriented help and exits without reading pro
 
 Unknown commands exit with status 1, print up to three deterministic suggestions, and may print one task route; they never guess and execute a command. Invalid command arguments and noninteractive installer writes without `--yes` exit with status 2.
 
-CLI commands default to human-readable stdout; `--pretty` remains an explicit equivalent. Use `--json` for structured automation output, or a format-specific option such as `--compact-json`, `--mermaid`, `--dot`, or `--sqlite` where supported. If `--json` and `--pretty` are both present, `--json` wins.
+CLI commands default to human-readable stdout; `--pretty` remains an explicit equivalent. Use `--json` for structured automation output, or a format-specific option such as `--compact`, `--mermaid`, `--dot`, or `--sqlite` where supported. If `--json` and `--pretty` are both present, `--json` wins.
 
 The `graph` command without output-format flags writes Mermaid to stdout. Use `--json`, `--dot`, `--sqlite <path>`, or `--output <path>` for explicit graph artifacts.
 
@@ -20,7 +20,7 @@ Numeric options such as `--limit`, `--threads`, `--depth`, `--max-refs`, and tok
 
 Default workflow:
 
-- code review: `codegraph review --base HEAD --head WORKTREE --summary`
+- code review: `codegraph review --base HEAD --head WORKTREE`
 - blast-radius follow-up: `codegraph impact --base HEAD --head WORKTREE`
 - unfamiliar repo: `codegraph explore "how does auth reach db?" --root .`
 - first-turn map: `codegraph orient --root . --budget small`
@@ -94,7 +94,7 @@ These defaults never approve writes silently: interactive installer changes requ
 
 ```bash
 # Fast code-review handoff for current local edits
-codegraph review --base HEAD --head WORKTREE --summary
+codegraph review --base HEAD --head WORKTREE
 codegraph impact --base HEAD --head WORKTREE
 
 # First-pass repo summary and next-step suggestions
@@ -300,7 +300,6 @@ codegraph duplicates --help
 # Compare architecture drift between git refs
 codegraph drift ./src --base origin/main --head HEAD --graph-edges summary --public-api removals
 codegraph drift ./src --base origin/main --head HEAD --json
-codegraph drift ./src --base origin/main --head HEAD --compact-json
 codegraph drift ./src --base origin/main --head HEAD --fail-on new-cycle,public-api-removal
 codegraph drift --base-artifact ./baseline/codegraph-out --head . --json
 
@@ -322,6 +321,8 @@ codegraph grep 'eval\(' --ignore-case
 
 Codegraph uses the official MCP SDK v2 to serve current 2026-07-28 clients while retaining compatibility with 2025-era clients. MCP protocol connections and HTTP protocol sessions keep separate transport state, but all share the server's one warm Codegraph analysis session for the configured root.
 
+If an MCP transport or startup call fails, run `codegraph doctor`, use the equivalent CLI command for that session, and restart the agent client after package upgrades instead of retrying a broken long-lived server. Published CLI bundles keep the MCP runtime self-contained so an in-place upgrade cannot remove a lazy chunk that a running server has not loaded yet.
+
 HTTP enforces Host and Origin policies. A missing `Origin` is accepted for non-browser clients; unapproved, malformed, and opaque origins are rejected. This is not authentication: binding `--host` to a non-loopback address exposes an unauthenticated endpoint intended only for trusted networks or containers.
 
 ### Viewer
@@ -334,7 +335,7 @@ codegraph viewer --root . --graph codegraph-out/graph.json --open
 codegraph viewer --root . --port 4173 --print-url
 ```
 
-Without `--graph`, the UI automatically requests `<root>/codegraph.json` after startup; an explicit `--graph` is served and loaded through the fixed `/graph.json` route. Manual upload remains available. The viewer imports Sigma from `esm.sh`, so the UI requires network access to that CDN and is not offline or self-contained.
+Without `--graph`, each UI load or reload builds the current project graph through the automatically validated `.codegraph-cache` index; `init`, `index`, and exported JSON are not prerequisites. An explicit `--graph` is served through the same `/graph.json` route, and manual upload remains available. The viewer imports Sigma from `esm.sh`, so the UI requires network access to that CDN and is not offline or self-contained.
 
 `review`, `goto`, `refs`, `dumpmod`, `deps`, `rdeps`, `path`, `cycles`, `unresolved`, `apisurface`, `inspect`, `hotspots`, `duplicates`, `impact`, and `affected` load current repository state through one shared policy: they validate the on-disk manifest, reuse it when inputs are unchanged, and update incrementally otherwise. Review and impact diff selectors (`--base`, `--head`, and `--changed-since`) choose changed files but do not narrow index freshness; pass `--cache off` for an exhaustive uncached rebuild, or `--cache memory|disk` to select a cache explicitly.
 
@@ -528,8 +529,8 @@ codegraph impact --base main --head feature
 codegraph impact --base main --head feature --duplicates changed
 codegraph impact --base main --head feature --duplicates off
 
-# Compact JSON using impact's graph-style alias
-codegraph impact --base main --head feature --compact-json
+# Compact impact JSON
+codegraph impact --base main --head feature --compact
 
 # Limit analysis depth and reference count
 codegraph impact --base main --head feature --depth 2 --max-refs 1000
@@ -564,14 +565,14 @@ codegraph impact --base main --head feature --lcov coverage/lcov.info --coverage
 codegraph impact --base main --head feature --coverage-report coverage/coverage-final.json --test-command-template "pnpm vitest {files}"
 
 # Review bundle for LLM-driven code review
-codegraph review --base origin/main --head HEAD > review.json
-codegraph review --base origin/main --head HEAD --include-symbol-details --max-callsites 5 > review.json
-codegraph review --base origin/main --head HEAD --review-depth standard > review.json
+codegraph review --base origin/main --head HEAD --json > review.json
+codegraph review --base origin/main --head HEAD --include-symbol-details --max-callsites 5 --json > review.json
+codegraph review --base origin/main --head HEAD --review-depth standard --json > review.json
 
 # Compact human-readable review handoff
-codegraph review --base origin/main --head HEAD --summary
-codegraph review --base HEAD --head WORKTREE --summary
-codegraph review --base origin/main --head HEAD --summary --duplicates impacted
+codegraph review --base origin/main --head HEAD
+codegraph review --base HEAD --head WORKTREE
+codegraph review --base origin/main --head HEAD --duplicates impacted
 
 # File-level graph delta between revisions
 codegraph graph-delta --git-base origin/main --git-head HEAD > graph-delta.json
@@ -580,7 +581,7 @@ codegraph graph-delta --git-base origin/main --git-head HEAD > graph-delta.json
 ```bash
 # Architecture drift with CI policy gates
 codegraph drift ./src --base origin/main --head HEAD --graph-edges summary --public-api removals
-codegraph drift ./src --base origin/main --head HEAD --compact-json
+codegraph drift ./src --base origin/main --head HEAD --json
 codegraph drift ./src --base origin/main --head HEAD --fail-on new-cycle,unresolved-import,public-api-removal
 codegraph drift --base-artifact ./baseline/codegraph-out --head . --json
 ```
@@ -589,19 +590,18 @@ codegraph drift --base-artifact ./baseline/codegraph-out --head . --json
 
 - `--graph-edges full|summary|off` controls whether graph-edge churn is emitted per edge, summarized by source file, or suppressed.
 - `--public-api all|removals|off` controls whether API additions are shown; removals stay the main review signal.
-- `--compact-json` emits bounded machine-friendly JSON with summary counts and example findings.
 - Duplicate drift compares group counts plus stable top-group deltas; duplicate increases are review or CI findings and only fail the process when selected by `--fail-on`.
 
 For git-provider impact, `--head` accepts normal revisions plus worktree sentinels. Use `WORKTREE` to compare the base revision against the current working tree, including staged and unstaged tracked-file changes. Use `STAGED` or `INDEX` to compare the base revision against the current index; with `--base HEAD`, that is staged changes only. Untracked files are not included until they are staged or otherwise tracked by Git.
 
-Impact JSON responses include `schemaVersion` plus `format: "full" | "compact"` so downstream tools can branch on payload shape without inferring it from missing fields. Use `--compact` or `--compact-json` for compact impact JSON. Impact JSON can also include `exportSummary`, `reexportChains`, `topImpacts`, `surfaceArea`, `clusters`, and `changedSymbols[].callCompatibility` when applicable. `changedFiles[]` entries preserve git copy or rename metadata as `oldFile` and `similarityIndex` when present. File paths in impact reports are project-relative, and raw diffs that point outside the project root are rejected.
+Impact JSON responses include `schemaVersion` plus `format: "full" | "compact"` so downstream tools can branch on payload shape without inferring it from missing fields. Use `--compact` for compact impact JSON. Impact JSON can also include `exportSummary`, `reexportChains`, `topImpacts`, `surfaceArea`, `clusters`, and `changedSymbols[].callCompatibility` when applicable. `changedFiles[]` entries preserve git copy or rename metadata as `oldFile` and `similarityIndex` when present. File paths in impact reports are project-relative, and raw diffs that point outside the project root are rejected.
 
 `callCompatibility` is a conservative review hint, not type checking. Likely-mismatch support is provider-backed for source languages where Codegraph resolves the callee and can count arguments with high confidence. Overload sets are skipped unless Codegraph can prove the exact overload target. Pretty impact and review summaries show only `likely_mismatch` findings; compatible, unsupported, or ambiguous callsites are omitted from human output and appear in structured data only when useful.
 
 Pretty impact and review summaries also show high-confidence exact or renamed duplicate leads by default:
 
 - Human-readable `impact` defaults to `--duplicates changed`.
-- `review --summary` defaults to `--duplicates impacted`.
+- Human-readable `review` defaults to `--duplicates impacted`.
 - Use `--duplicates off|changed|impacted|all` to control duplicate-lead scope.
 - For `review`, `--duplicates off` is parsed before report construction and skips `prepareDuplicateAnalysis` / duplicate review tasks entirely, not just the human summary.
 - Git copy or rename `similarityIndex` metadata of 80 or higher can boost scoped duplicate leads when both old and new files exist in the indexed snapshot.
@@ -615,8 +615,8 @@ Run impact or review normally; no extra flag is required:
 ```bash
 codegraph impact --base main --head feature
 codegraph impact --base main --head feature --json
-codegraph review --base main --head feature --summary
-codegraph review --base main --head feature > review.json
+codegraph review --base main --head feature
+codegraph review --base main --head feature --json > review.json
 ```
 
 Call compatibility appears only after Codegraph detects a changed callable signature. Human output lists likely argument-count mismatches as review leads; JSON output attaches full hint objects under `changedSymbols[].callCompatibility`.
@@ -629,7 +629,7 @@ Changed non-indexed tracked files such as scripts, Markdown, and extensionless p
 
 `codegraph.config.json` may include `graph.resolutionHints` for repo-local include roots (especially C/C++). CLI `--resolution-hint` values merge on top of config hints and participate in cache/manifest identity.
 
-`codegraph review --summary` prints the changed-file count, changed-symbol count, risk summary, review tasks, and suggested tests without emitting the full `projectFiles` and symbol-detail JSON payload. High- and medium-confidence candidate tests are listed directly; low-confidence pattern matches are summarized as breadth hints and remain available in the full JSON bundle. Use plain `review` output when a downstream tool needs the complete structured bundle.
+`codegraph review` prints the changed-file count, changed-symbol count, risk summary, review tasks, and suggested tests without emitting the full `projectFiles` and symbol-detail JSON payload. High- and medium-confidence candidate tests are listed directly; low-confidence pattern matches are summarized as breadth hints. Use `review --json` when a downstream tool needs the complete structured bundle.
 
 SQL review context is emitted only as `sqlContext.entries[]` in structured review JSON. Entries carry a `reason` such as `changed_sql_file` or `changed_sql_literal`, the matched `objectName`, and the original SQL statement fact. They are review hints, not source dependency edges.
 
@@ -827,7 +827,7 @@ npx tsx src/cli.ts goto <file> <line> <column>
 
 ## Output formats
 
-`--pretty` and `--summary` are presentation modes for compact reading by people or models. They may omit low-confidence or verbose context that remains available in structured JSON and TypeScript return values. Integrators that compose deterministic review packs should use the exported TypeScript functions or JSON output.
+Human-readable output is optimized for compact reading by people or models and may omit low-confidence or verbose context that remains available in structured JSON and TypeScript return values. `--pretty` is an explicit equivalent of that default. Integrators that compose deterministic review packs should use the exported TypeScript functions or JSON output.
 
 Plain `graph` output is a Mermaid file dependency graph on stdout. `graph --json` returns the structured file graph shown below; add `--output <path>` to write any selected format to a file.
 
@@ -888,7 +888,7 @@ codegraph graph --root /path/to/project --json --symbols-detailed --output graph
 
 ## Graph export and inspection
 
-Codegraph ships graph data formats for scripts and existing graph tools, plus a packaged interactive viewer for humans. Use `codegraph viewer --root . --graph codegraph.json --open` to inspect root-confined graph JSON; it is not an agent interface.
+Codegraph ships graph data formats for scripts and existing graph tools, plus a packaged interactive viewer for humans. Use `codegraph viewer --root . --open` for the current project, or add `--graph codegraph.json` to inspect a root-confined exported snapshot; it is not an agent interface.
 
 ```bash
 # Compact JSON for scripts and downstream tooling

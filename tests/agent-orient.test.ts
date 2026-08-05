@@ -106,9 +106,7 @@ describe("agent orient", () => {
       response.recommendedNext.some((next) => next.command === "codegraph impact --base HEAD --head WORKTREE"),
     ).toBe(false);
     expect(
-      response.recommendedNext.some(
-        (next) => next.command === "codegraph review --base HEAD --head WORKTREE --summary",
-      ),
+      response.recommendedNext.some((next) => next.command === "codegraph review --base HEAD --head WORKTREE"),
     ).toBe(false);
   });
 
@@ -123,9 +121,7 @@ describe("agent orient", () => {
       response.recommendedNext.some((next) => next.command === "codegraph impact --base HEAD --head WORKTREE"),
     ).toBe(true);
     expect(
-      response.recommendedNext.some(
-        (next) => next.command === "codegraph review --base HEAD --head WORKTREE --summary",
-      ),
+      response.recommendedNext.some((next) => next.command === "codegraph review --base HEAD --head WORKTREE"),
     ).toBe(true);
   });
 

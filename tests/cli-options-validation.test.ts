@@ -60,10 +60,22 @@ describe("parseCliArgs value-option guard", () => {
 });
 
 describe("CLI command option validation", () => {
-  it("rejects the removed --compact-json flag for graph: JSON output is always compact now", () => {
-    const parsed = parseCliArgs("graph", ["--json", "--compact-json"]);
+  it.each(["graph", "drift", "impact"])("rejects the removed --compact-json flag for %s", (command) => {
+    const parsed = parseCliArgs(command, ["--compact-json"]);
 
-    expect(() => validateCliArgs("graph", parsed)).toThrow("Unknown option for graph: --compact-json");
+    expect(() => validateCliArgs(command, parsed)).toThrow(`Unknown option for ${command}: --compact-json`);
+  });
+
+  it("rejects the removed --summary flag because review is compact by default", () => {
+    const parsed = parseCliArgs("review", ["--summary"]);
+
+    expect(() => validateCliArgs("review", parsed)).toThrow("Unknown option for review: --summary");
+  });
+
+  it("advertises both supported review output modes in validation usage", () => {
+    const parsed = parseCliArgs("review", ["first", "second"]);
+
+    expect(() => validateCliArgs("review", parsed)).toThrow("[--json | --pretty]");
   });
 
   it("accepts explicit JSON output for installer commands", () => {

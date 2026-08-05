@@ -72,7 +72,7 @@ describe("viewer server", () => {
 
     expect(result.exitCode).toBeUndefined();
     expect(result.stderr).toBe("");
-    expect(result.stdout).toBe("http://127.0.0.1:4173/?graph=%2Fgraph.json\n");
+    expect(result.stdout).toBe("http://127.0.0.1:4173/\n");
   });
 
   test("reports invalid viewer arguments on stderr with exit code 2", async () => {
@@ -98,7 +98,7 @@ describe("viewer server", () => {
     const { server, url } = await startViewerServer({ graph: graphPath, port: 0, root });
     servers.push(server);
 
-    expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/\?graph=%2Fgraph\.json$/);
+    expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/);
     const [index, app, graph, head] = await Promise.all([
       request(server, "/"),
       request(server, "/app.js"),
@@ -107,7 +107,7 @@ describe("viewer server", () => {
     ]);
 
     expect(index.statusCode).toBe(200);
-    expect(index.body).toContain("Codegraph Sigma Viewer");
+    expect(index.body).toContain("Codegraph Project Viewer");
     expect(app.headers["content-type"]).toContain("text/javascript");
     expect(graph).toMatchObject({ body: '{"nodes":[],"edges":[]}\n', statusCode: 200 });
     expect(head.statusCode).toBe(200);
@@ -138,23 +138,49 @@ describe("viewer server", () => {
     expect(deniedHost.statusCode).toBe(403);
   });
 
-  test("serves the conventional default graph only at /codegraph.json", async () => {
+  test("builds and refreshes the current project graph without an exported JSON file", async () => {
     const { root } = await createViewerFixture();
-    const defaultGraph = path.join(root, "codegraph.json");
-    await fsp.writeFile(defaultGraph, '{"nodes":["default.ts"],"edges":[]}\n', "utf8");
+    const sourceDirectory = path.join(root, "src");
+    await fsp.mkdir(sourceDirectory);
+    await fsp.writeFile(path.join(sourceDirectory, "alpha.ts"), "export const alpha = 1;\n", "utf8");
     const { server, url } = await startViewerServer({ port: 0, root });
     servers.push(server);
 
     expect(url).not.toContain("graph=");
-    const [defaultResult, explicitResult] = await Promise.all([
-      request(server, "/codegraph.json"),
+    const first = await request(server, "/graph.json");
+    expect(first.statusCode).toBe(200);
+    const firstPayload = JSON.parse(first.body) as { files: string[] };
+    expect(firstPayload.files).toContain("src/alpha.ts");
+
+    await fsp.writeFile(path.join(sourceDirectory, "beta.ts"), "export const beta = 2;\n", "utf8");
+    const [refreshed, obsoleteRoute] = await Promise.all([
       request(server, "/graph.json"),
+      request(server, "/codegraph.json"),
     ]);
-    expect(defaultResult).toMatchObject({
-      body: '{"nodes":["default.ts"],"edges":[]}\n',
-      statusCode: 200,
+    expect(refreshed.statusCode).toBe(200);
+    const refreshedPayload = JSON.parse(refreshed.body) as { files: string[] };
+    expect(refreshedPayload.files).toContain("src/beta.ts");
+    expect(obsoleteRoute.statusCode).toBe(404);
+  });
+
+  test("returns an actionable graph build error without taking down the viewer", async () => {
+    const { root } = await createViewerFixture();
+    const { server } = await startViewerServer({
+      graphProvider: async () => {
+        throw new Error("index unavailable");
+      },
+      port: 0,
+      root,
     });
-    expect(explicitResult.statusCode).toBe(404);
+    servers.push(server);
+
+    const graph = await request(server, "/graph.json");
+    const index = await request(server, "/");
+    expect(graph).toMatchObject({
+      body: "Unable to build the current project graph: index unavailable",
+      statusCode: 500,
+    });
+    expect(index.statusCode).toBe(200);
   });
 
   test("accepts portless Host headers for the default HTTP port", () => {

@@ -57,10 +57,9 @@ afterEach(() => {
 });
 
 describe("packaged viewer graph loading", () => {
-  it("auto-loads the fixed same-origin graph route and reuses it for the default control", async () => {
+  it("auto-loads the current project graph route and reuses it for the reload control", async () => {
     const fetchMock = successfulFetch();
     vi.stubGlobal("fetch", fetchMock);
-    window.history.replaceState({}, "", "/?graph=%2Fgraph.json");
 
     await import("../../docs/graph-visualization/app.js");
     await vi.waitFor(() =>
@@ -73,24 +72,21 @@ describe("packaged viewer graph loading", () => {
     expect(fetchMock).toHaveBeenLastCalledWith("/graph.json");
   });
 
-  it.each([
-    ["/", "/codegraph.json"],
-    ["/?graph=%2Fgraph.json", "/graph.json"],
-  ])("reports the resolved graph path when loading %s fails", async (url, graphPath) => {
+  it("shows the server's actionable project graph error", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => ({
         ok: false,
-        status: 404,
+        status: 500,
+        text: async () => "Unable to build the current project graph: invalid config",
       })),
     );
-    window.history.replaceState({}, "", url);
 
     await import("../../docs/graph-visualization/app.js");
 
     await vi.waitFor(() =>
       expect(document.getElementById("status")?.textContent).toBe(
-        `Failed to load ${graphPath}: Request failed with status 404`,
+        "Could not load the project graph: Unable to build the current project graph: invalid config. Run codegraph doctor, then retry.",
       ),
     );
   });
@@ -122,44 +118,11 @@ describe("packaged viewer graph loading", () => {
     });
   });
 
-  it.each([
-    "https%3A%2F%2Fexample.com%2Fgraph.json",
-    "%2Fother.json",
-    "%2Fgraph.json%3Fdownload%3D1",
-    "%2Fgraph.json%23fragment",
-  ])("rejects unsafe graph query %s", async (graph) => {
-    const fetchMock = successfulFetch();
-    vi.stubGlobal("fetch", fetchMock);
-    window.history.replaceState({}, "", `/?graph=${graph}`);
-
-    await import("../../docs/graph-visualization/app.js");
-    await vi.waitFor(() =>
-      expect(document.getElementById("status")?.textContent).toBe("Ignoring an unsafe graph URL."),
-    );
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("auto-loads the conventional default graph and reuses it for the default control", async () => {
-    const fetchMock = successfulFetch();
-    vi.stubGlobal("fetch", fetchMock);
-    await import("../../docs/graph-visualization/app.js");
-
-    await vi.waitFor(() =>
-      expect(document.getElementById("status")?.textContent).toBe("Rendered 4 nodes and 4 edges."),
-    );
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenLastCalledWith("/codegraph.json");
-
-    document.getElementById("load-default")?.click();
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    expect(fetchMock).toHaveBeenLastCalledWith("/codegraph.json");
-  });
-
   it("retains manual file upload after automatically loading the default graph", async () => {
     const fetchMock = successfulFetch();
     vi.stubGlobal("fetch", fetchMock);
     await import("../../docs/graph-visualization/app.js");
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/codegraph.json"));
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/graph.json"));
 
     const fileInput = document.getElementById("graph-file");
     if (!(fileInput instanceof HTMLInputElement)) throw new Error("Missing graph file input.");

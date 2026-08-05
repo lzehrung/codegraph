@@ -320,7 +320,7 @@ export function summarizeSourceOrders(rows: Array<{ amount: number; tax: number 
         expect(prettyStdout).toContain("matches src/source.ts:");
 
         const prettyCompactStdout = await runImpactCli(
-          ["impact", "--root", root, "--provider", "raw", "--pretty", "--compact-json"],
+          ["impact", "--root", root, "--provider", "raw", "--pretty", "--compact"],
           {
             cwd: root,
             stdin: diffText,
@@ -338,9 +338,9 @@ export function summarizeSourceOrders(rows: Array<{ amount: number; tax: number 
   );
 
   it(
-    "accepts --compact-json as an alias for compact impact JSON",
+    "emits compact impact JSON with --compact",
     async () => {
-      const stdout = await runImpactCli(["impact", sampleRoot, "--provider", "raw", "--compact-json"]);
+      const stdout = await runImpactCli(["impact", sampleRoot, "--provider", "raw", "--compact"]);
       const report = JSON.parse(stdout) as { schemaVersion?: number; format?: string; files?: string[] };
 
       expect(report.schemaVersion).toBe(1);
@@ -457,12 +457,9 @@ describe("review CLI output", () => {
         runGit(root, ["commit", "-m", "delete one file"]);
         const head = runGit(root, ["rev-parse", "HEAD"]);
 
-        const result = await runCodegraphCliResult(
-          ["review", "--root", root, "--base", base, "--head", head, "--summary"],
-          {
-            cwd: root,
-          },
-        );
+        const result = await runCodegraphCliResult(["review", "--root", root, "--base", base, "--head", head], {
+          cwd: root,
+        });
 
         expect(result.stdout).toContain("Review Summary");
         expect(result.stderr).not.toContain("No files provided");
@@ -506,7 +503,7 @@ export function summarizeOrders(rows: Array<{ amount: number; tax: number }>) {
         runGit(root, ["commit", "-m", "make duplicates"]);
         const head = runGit(root, ["rev-parse", "HEAD"]);
 
-        const stdout = await runCodegraphCli(["review", "--root", root, "--base", base, "--head", head, "--summary"], {
+        const stdout = await runCodegraphCli(["review", "--root", root, "--base", base, "--head", head], {
           cwd: root,
         });
 

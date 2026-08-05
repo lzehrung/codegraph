@@ -14,7 +14,7 @@ import { matchesFilter, subtreeMatchesFilter, highlightMatch, kindAbbrev } from 
 
 const DIM_COLOR = "#374151";
 const HIGHLIGHT_COLOR = "#93c5fd";
-const DEFAULT_GRAPH_PATH = "/codegraph.json";
+const DEFAULT_GRAPH_PATH = "/graph.json";
 
 // ===== DOM refs (with runtime assertions) =====
 
@@ -799,68 +799,42 @@ fileInput.addEventListener("change", async (event) => {
 });
 
 showExternalInput.addEventListener("change", () => {
-  setStatus("Toggle changed. Click Refresh to re-apply.");
+  setStatus("Toggle changed. Click Apply filters to re-apply.");
 });
 
 includeSymbolsInput.addEventListener("change", () => {
-  setStatus("Toggle changed. Click Refresh to re-apply.");
+  setStatus("Toggle changed. Click Apply filters to re-apply.");
 });
 
 async function fetchGraph(graphPath) {
   const response = await fetch(graphPath);
+  const text = await response.text();
   if (!response.ok) {
-    throw new Error(`Request failed with status ${response.status}`);
+    throw new Error(text.trim() || `Request failed with status ${response.status}`);
   }
-  await loadGraphFromText(await response.text());
+  await loadGraphFromText(text);
 }
 
 async function loadGraphPath(graphPath) {
+  setStatus("Loading current project graph...");
   try {
     await fetchGraph(graphPath);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
-    setStatus(`Failed to load ${graphPath}: ${message}`);
+    setStatus(`Could not load the project graph: ${message}. Run codegraph doctor, then retry.`);
   }
 }
 
 async function loadDefaultGraph() {
-  await loadGraphPath(resolveGraphQueryPath() ?? DEFAULT_GRAPH_PATH);
+  await loadGraphPath(DEFAULT_GRAPH_PATH);
 }
 
 loadDefaultButton.addEventListener("click", () => {
   void loadDefaultGraph();
 });
 
-function resolveGraphQueryPath() {
-  const graph = new URLSearchParams(window.location.search).get("graph");
-  if (!graph) return null;
-
-  const graphUrl = new URL(graph, window.location.href);
-  if (
-    graphUrl.origin !== window.location.origin ||
-    graphUrl.pathname !== "/graph.json" ||
-    graphUrl.search ||
-    graphUrl.hash
-  ) {
-    return null;
-  }
-  return graphUrl.pathname;
-}
-
 async function loadInitialGraph() {
-  const graph = new URLSearchParams(window.location.search).get("graph");
-  if (!graph) {
-    await loadDefaultGraph();
-    return;
-  }
-
-  const graphPath = resolveGraphQueryPath();
-  if (!graphPath) {
-    setStatus("Ignoring an unsafe graph URL.");
-    return;
-  }
-
-  await loadGraphPath(graphPath);
+  await loadDefaultGraph();
 }
 
 resetCameraButton.addEventListener("click", () => {

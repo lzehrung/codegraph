@@ -19,17 +19,17 @@ Use plain text search for exact strings, logs, config keys, secrets, and prose. 
 
 Bare `codegraph` prints five task-first routes without scanning the project. Use `codegraph --help` for the full command catalog and `codegraph help <command>` for command help; unknown commands suggest but never execute alternatives.
 
-| Task                                                      | Start here                                                  |
-| --------------------------------------------------------- | ----------------------------------------------------------- |
-| Review staged and unstaged work                           | `codegraph review --base HEAD --head WORKTREE --summary`    |
-| Review a branch against main                              | `codegraph review --base origin/main --head HEAD --summary` |
-| Map the wider blast radius of a change                    | `codegraph impact --base HEAD --head WORKTREE`              |
-| Select deterministic test paths for changed files         | `codegraph affected --base HEAD --head WORKTREE --quiet`    |
-| Answer a concrete question about an unfamiliar repo       | `codegraph explore "how does auth reach db?" --root .`      |
-| Map a repo before you know the question                   | `codegraph orient --root . --budget small`                  |
-| Diagnose installation, native runtime, or artifact health | `codegraph doctor`                                          |
+| Task                                                      | Start here                                               |
+| --------------------------------------------------------- | -------------------------------------------------------- |
+| Review staged and unstaged work                           | `codegraph review --base HEAD --head WORKTREE`           |
+| Review a branch against main                              | `codegraph review --base origin/main --head HEAD`        |
+| Map the wider blast radius of a change                    | `codegraph impact --base HEAD --head WORKTREE`           |
+| Select deterministic test paths for changed files         | `codegraph affected --base HEAD --head WORKTREE --quiet` |
+| Answer a concrete question about an unfamiliar repo       | `codegraph explore "how does auth reach db?" --root .`   |
+| Map a repo before you know the question                   | `codegraph orient --root . --budget small`               |
+| Diagnose installation, native runtime, or artifact health | `codegraph doctor`                                       |
 
-Prefer `review` before `impact`: review is the compact reviewer handoff; impact is the broader "what could this break?" map. Both are safe bounded accelerants for another agent's own review workflow (human-readable `impact`, `review --summary --duplicates off`); they do not own reviewer lanes, packets, or finding ledgers. Prefer `explore` before `orient` when you already have a concrete question.
+Prefer `review` before `impact`: review is the compact reviewer handoff; impact is the broader "what could this break?" map. Both are safe bounded accelerants for another agent's own review workflow (human-readable `impact`, `review --duplicates off`); they do not own reviewer lanes, packets, or finding ledgers. Prefer `explore` before `orient` when you already have a concrete question.
 
 ## Keep the Project Boundary Explicit
 
@@ -88,7 +88,7 @@ File targets accept locations copied from search output. Semantic relationship/r
 
 Safe shorthand: `impact` and git-backed `drift` default to `HEAD..WORKTREE`; `artifact`, `packet`, and `mcp` infer `build`, `get`, and `serve`. `grep <regex>` and `sql <db> "SELECT ..."` accept positional forms. Explicit options remain valid.
 
-- compact review handoff: `codegraph review --base HEAD --head WORKTREE --summary`
+- compact review handoff: `codegraph review --base HEAD --head WORKTREE`
 - broader change impact: `codegraph impact --base HEAD --head WORKTREE`
 - affected test paths: `codegraph affected --base HEAD --head WORKTREE --quiet`
 - architecture drift: `codegraph drift ./src --base origin/main --head HEAD --graph-edges summary --public-api removals`
@@ -103,9 +103,9 @@ Current-state commands validate the on-disk index automatically and default to t
 
 ## Choose Output by Consumer
 
-- Human or model reading one result: use the human-readable default; `--pretty` remains an explicit equivalent and `--summary` selects compact report output where supported.
+- Human or model reading one result: use the human-readable default with no output flag; `review` is already compact.
 - Tool chaining, filtering, stable handles, exact ranges, or schema fields: use `--json`. If `--json` and `--pretty` are both present, `--json` wins.
-- Repeated agent queries over one repo snapshot: prefer MCP so the index stays warm.
+- Repeated agent queries over one repo snapshot: prefer MCP so the index stays warm. MCP inputs are flat JSON objects and the server root is fixed at startup; send only fields in the mounted tool schema, never CLI flags such as `--root` or `--json`. If the first MCP call fails at startup or loses its transport, do not retry the same server; run `codegraph doctor`, use the equivalent CLI command for this session, and restart the agent client after package upgrades.
 - Durable graph handoff: use `codegraph graph --root . ./src --json --output codegraph.json` rather than parsing display text.
 - Search and inspect performance diagnosis: add `--report` for JSON on stderr or `--report-file <path>` for a file while keeping normal command output unchanged.
 
@@ -119,7 +119,7 @@ codegraph viewer --root . --graph codegraph-out/graph.json --open
 codegraph viewer --root . --port 4173 --print-url
 ```
 
-`--print-url` is preview-only: it prints the deterministic URL and exits without starting a server, rejects `--open`, and rejects port `0`. Without `--graph`, the UI automatically requests `<root>/codegraph.json` after startup; an explicit `--graph` is served and loaded through the fixed `/graph.json` route. Manual upload remains available, and the viewer requires network access to `esm.sh` for Sigma.
+`--print-url` is preview-only: it prints the deterministic URL and exits without starting a server, rejects `--open`, and rejects port `0`. Without `--graph`, each load or reload builds the current project graph through the automatically validated disk cache; `init`, `index`, and exported JSON are not prerequisites. An explicit `--graph` is served through the same `/graph.json` route; manual upload remains available, and the viewer requires network access to `esm.sh` for Sigma.
 
 Do not parse pretty output to recover fields already available in structured output.
 
