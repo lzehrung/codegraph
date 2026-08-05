@@ -56,7 +56,7 @@ export async function handleDumpmodCommand(context: NavigationCommandContext): P
   }
   const resolvedFile = resolveCliProjectFile(context.projectRootFs, fileArg, "File");
   if (resolvedFile.status === "error") {
-    writeCliProjectFileError(context, resolvedFile);
+    writeCliProjectFileError(context, resolvedFile, context.hasFlag("--json") ? "json" : "text");
   }
   const file = resolvedFile.file;
   const index = await loadNavigationIndex(context);

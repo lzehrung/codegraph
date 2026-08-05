@@ -429,14 +429,16 @@ describe("CLI command modules", () => {
     const root = await mkTmpDir("codegraph-navigation-cache-verify-");
     const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental").mockResolvedValue(emptyIndex);
     try {
-      await handleGotoCommand(
-        createNavigationContext({
-          projectRootFs: root,
-          positionals: [path.join(root, "main.ts"), "1", "1"],
-          hasFlag: (name) => name === "--json" || name === "--cache-verify",
-          writeJSONLine: () => undefined,
-        }),
-      );
+      await expect(
+        handleGotoCommand(
+          createNavigationContext({
+            projectRootFs: root,
+            positionals: [path.join(root, "main.ts"), "1", "1"],
+            hasFlag: (name) => name === "--json" || name === "--cache-verify",
+            writeJSONLine: () => undefined,
+          }),
+        ),
+      ).rejects.toThrow("navigation exit 1");
 
       expect(buildSpy.mock.calls[0]?.[1]?.cacheVerify).toBe(true);
     } finally {
@@ -1893,15 +1895,17 @@ describe("CLI command modules", () => {
     const projectRoot = path.join(os.tmpdir(), "codegraph-query-root").replace(/\\/g, "/");
     const stdoutLines: string[] = [];
 
-    await handleGraphQueryCommand(
-      createGraphQueryContext({
-        command: "rdeps",
-        positionals: ["../outside.ts"],
-        projectRootFs: projectRoot,
-        projectRootAbs: projectRoot,
-        writeStdoutLine: (message) => stdoutLines.push(message),
-      }),
-    );
+    await expect(
+      handleGraphQueryCommand(
+        createGraphQueryContext({
+          command: "rdeps",
+          positionals: ["../outside.ts"],
+          projectRootFs: projectRoot,
+          projectRootAbs: projectRoot,
+          writeStdoutLine: (message) => stdoutLines.push(message),
+        }),
+      ),
+    ).rejects.toThrow("graph query exit 1");
 
     expect(stdoutLines).toHaveLength(1);
     expect(stdoutLines[0]).toContain("error: outside_project_root:");

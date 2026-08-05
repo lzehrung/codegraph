@@ -207,8 +207,9 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
     return;
   }
 
-  const cmd = rawArgs[0] && !rawArgs[0].startsWith("-") ? rawArgs[0] : "graph";
-  const argTokens = rawArgs[0] && !rawArgs[0].startsWith("-") ? rawArgs.slice(1) : rawArgs;
+  const commandWasExplicit = Boolean(rawArgs[0] && !rawArgs[0].startsWith("-"));
+  const cmd = commandWasExplicit ? rawArgs[0]! : "graph";
+  const argTokens = commandWasExplicit ? rawArgs.slice(1) : rawArgs;
 
   let parsed: ReturnType<typeof parseCliArgs>;
   try {
@@ -224,7 +225,7 @@ async function runCliWithActiveRuntime(rawArgs: string[]) {
   };
 
   if (hasFlag("--help") || hasFlag("-h")) {
-    const commandHelp = helpTextForCommand(cmd, parsed.positionals);
+    const commandHelp = commandWasExplicit ? helpTextForCommand(cmd, parsed.positionals) : undefined;
     writeStdoutLine((commandHelp ?? CLI_HELP_TEXT).trimEnd());
     return;
   }

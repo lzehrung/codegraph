@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { resolveFilePathWithinRoot, type FilePathWithinRootResult } from "../util/paths.js";
 import { parseSourceLocationInput } from "../util/sourceLocation.js";
 
@@ -12,11 +13,13 @@ export type CliProjectFileErrorContext = {
 };
 
 export function resolveCliProjectFile(projectRoot: string, fileArg: string, label: string): CliProjectFileInput {
-  const direct = resolveFilePathWithinRoot(projectRoot, fileArg, label);
-  if (direct.status === "ok") return direct;
   const location = parseSourceLocationInput(fileArg);
-  if (location.file === fileArg) return direct;
-  return resolveFilePathWithinRoot(projectRoot, location.file, label);
+  if (location.file !== fileArg && location.line !== undefined) {
+    const direct = resolveFilePathWithinRoot(projectRoot, fileArg, label);
+    if (direct.status === "ok" && fs.existsSync(direct.file)) return direct;
+    return resolveFilePathWithinRoot(projectRoot, location.file, label);
+  }
+  return resolveFilePathWithinRoot(projectRoot, fileArg, label);
 }
 
 export function writeCliProjectFileError(
