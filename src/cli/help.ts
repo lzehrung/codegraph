@@ -556,13 +556,15 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const REVIEW_HELP_TEXT = `codegraph review - Generate a code review report for a git range
 
-Usage: codegraph review [project-root] [--root <path>] [--base <ref> --head <ref>] [--json | --pretty] [--limit <n>]
+Usage: codegraph review [project-root] [--root <path>] [--base <ref> --head <ref>] [--json | --pretty] [--max-tests <n>] [--max-callsites <n>]
 
 Options:
-  --base <ref>   Base revision. Unlike impact, review does not invent a default range.
-  --head <ref>   Head revision or WORKTREE for local changes.
-  --json         Structured review report for automation.
-  --pretty       Human-readable review summary (default when --json is absent).
+  --base <ref>         Base revision. Unlike impact, review does not invent a default range.
+  --head <ref>         Head revision or WORKTREE for local changes.
+  --max-tests <n>      Cap candidate tests included in the report.
+  --max-callsites <n>  Cap call sites included in the report.
+  --json               Structured review report for automation.
+  --pretty             Human-readable review summary (default when --json is absent).
 
 ${SHARED_INDEX_OPTIONS_HELP}
 `;
