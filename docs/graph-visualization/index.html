@@ -3,24 +3,24 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Codegraph Sigma Viewer</title>
+    <title>Codegraph Project Viewer</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <main class="app-shell">
       <aside class="sidebar">
         <header>
-          <h1>Codegraph Sigma Viewer</h1>
-          <p>Load codegraph JSON output and explore dependency relationships with Sigma.js.</p>
+          <h1>Codegraph Project Viewer</h1>
+          <p>Explore the current project's dependencies and symbols.</p>
         </header>
 
         <section class="controls">
-          <label for="graph-file">Graph JSON file</label>
+          <label for="graph-file">Open exported graph JSON (optional)</label>
           <input id="graph-file" type="file" accept="application/json" />
 
           <div class="actions">
-            <button id="load-default" type="button">Load ./codegraph.json</button>
-            <button id="refresh" type="button">Refresh</button>
+            <button id="load-default" type="button">Reload project</button>
+            <button id="refresh" type="button">Apply filters</button>
             <button id="reset-camera" type="button">Reset camera</button>
           </div>
 
@@ -34,7 +34,7 @@
             Include symbols when available (can be large)
           </label>
 
-          <p id="status" role="status">Load a graph to begin.</p>
+          <p id="status" role="status">Loading current project graph...</p>
         </section>
 
         <section class="tree-panel">
@@ -42,7 +42,7 @@
             <input id="tree-search" type="search" placeholder="Filter files and symbols..." autocomplete="off" />
           </div>
           <div id="file-tree" class="file-tree">
-            <p class="empty-state">Load a graph to see the file tree.</p>
+            <p class="empty-state">Loading the project file tree...</p>
           </div>
         </section>
 

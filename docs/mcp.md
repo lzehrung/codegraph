@@ -41,6 +41,8 @@ The MCP initialize response advertises the Codegraph package version captured wh
 
 On Windows, installed-package servers map the verified native addon from `%LOCALAPPDATA%\codegraph\native-cache\v1`, not from npm's package directory. An old server may therefore remain healthy after npm installs a new release, but it must be restarted to use the new JavaScript runtime and cache identity.
 
+The published CLI and MCP runtime is a self-contained bundle rather than a set of lazy content-hashed chunks. This prevents an in-place package upgrade from deleting code that an already running server has not loaded yet; restart the client after an upgrade to select the new runtime.
+
 Run `codegraph doctor` in the installed release to inspect `native.origin`, `native.update`, and any stale npm retirement siblings. `updateSafeForCurrentProcess` describes only the process running doctor; it does not prove that no other process or filesystem service holds a package file.
 
 ## Tools
@@ -339,4 +341,4 @@ When Codegraph MCP tools are available to an agent:
 7. Use `refresh_index` when you need an explicit rebuild.
 8. Use `artifact_build` only when write access was intentionally enabled.
 
-Fall back to CLI commands when MCP tools are unavailable.
+If the first MCP call fails at startup or loses its transport, do not keep retrying that server. Run `codegraph doctor`, fall back to the equivalent CLI command for the current session, and restart the agent client after package upgrades.

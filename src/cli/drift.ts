@@ -90,10 +90,9 @@ export async function handleDriftCommand(context: DriftCommandContext): Promise<
     context.exit(2);
   }
   const json = context.hasFlag("--json");
-  const compactJson = context.hasFlag("--compact-json");
-  const prettyOutput = !json && !compactJson;
+  const prettyOutput = !json;
   const effectiveGraphEdges = graphEdges ?? (prettyOutput ? "summary" : undefined);
-  const effectivePublicApi = publicApi ?? (prettyOutput || compactJson ? "removals" : undefined);
+  const effectivePublicApi = publicApi ?? (prettyOutput ? "removals" : undefined);
 
   let head = context.getOpt("--head");
   if (!head && !baseArtifact) head = "WORKTREE";
@@ -111,7 +110,6 @@ export async function handleDriftCommand(context: DriftCommandContext): Promise<
       },
       ...(effectiveGraphEdges !== undefined ? { graphEdges: effectiveGraphEdges } : {}),
       ...(effectivePublicApi !== undefined ? { publicApi: effectivePublicApi } : {}),
-      ...(compactJson ? { format: "compact" as const } : {}),
       ...(context.graphOptions ? { graph: context.graphOptions } : {}),
       ...(context.indexOptions ? { index: context.indexOptions } : {}),
       ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),

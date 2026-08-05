@@ -62,7 +62,7 @@ The resulting file nodes and typed edges are stored with forward and reverse adj
 
 ## Semantic navigation and impact
 
-Impact and review commands can apply request-wide work budgets so large diffs return ranked partial evidence with exact omit counts instead of hanging. External review orchestrators should treat `impact --provider git` and `review --summary` as bounded accelerants, not as an owned review workflow or packet protocol.
+Impact and review commands can apply request-wide work budgets so large diffs return ranked partial evidence with exact omit counts instead of hanging. External review orchestrators should treat human-readable `impact` and `review` as bounded accelerants, not as an owned review workflow or packet protocol.
 
 The semantic index connects definitions, scopes, exports, and import bindings to graph edges. `goto` resolves local definitions and imported bindings, including supported namespace-member cases. `refs` follows local and imported references through the same model.
 
@@ -116,6 +116,8 @@ Long-lived agent and review sessions reuse only compatible index state. They ref
 Project lifecycle state is optional. `codegraph init` creates `.codegraph/manifest.json` and warms the disk cache, but index-backed queries build and reuse `.codegraph-cache/index-v1` without requiring lifecycle initialization.
 
 One internal policy owns current-state loading: `loadCurrentProjectIndex` chooses the incremental loader, defaults the cache to disk unless the caller set a mode, and encodes scope as either the whole project or an already resolved file set. Freshness itself stays in the incremental indexer. Artifact production, lifecycle operations, revision reconstruction (`drift`, `graph-delta`), and long-lived agent sessions keep their own explicit semantics, so `codegraph index` and `codegraph sync` prewarm or repair state rather than gate queries.
+
+The browser viewer uses that same disk-backed session loader to derive portable graph JSON on demand. Each UI reload validates current project state and regenerates the projection, so neither lifecycle initialization nor a separately managed graph file is required.
 
 ## Performance choices
 

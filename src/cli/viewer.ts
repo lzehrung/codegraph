@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
+import { buildCodegraphGraphJson } from "../agent/artifact.js";
+import { createAgentSession } from "../agent/session.js";
 import type { AllowedHostHeaderRules } from "../mcp/http.js";
 import path from "node:path";
 import { getCodegraphPackageRoot } from "./packageInfo.js";
@@ -29,9 +31,12 @@ const VIEWER_ASSETS: Record<string, { file: string; contentType: string }> = {
 
 const graphFileDescriptors = new WeakMap<http.Server, number>();
 
+export type ViewerGraphProvider = () => Promise<string>;
+
 export type ViewerServerOptions = {
   root: string;
   graph?: string | undefined;
+  graphProvider?: ViewerGraphProvider | undefined;
   host?: string | undefined;
   port?: number | undefined;
 };
@@ -48,33 +53,17 @@ export type ViewerCommandContext = {
 type OpenedGraphFile = {
   fileDescriptor: number;
   path: string;
-  route: "/codegraph.json" | "/graph.json";
 };
 
 type ResolvedViewerOptions = {
   assetRoot: string;
   graphFile: OpenedGraphFile | undefined;
+  graphProvider: ViewerGraphProvider | undefined;
 };
 
-function isMissingFileError(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "ENOENT";
-}
-
-function openGraphFile(
-  lexicalRoot: string,
-  root: string,
-  graph: string,
-  route: OpenedGraphFile["route"],
-  optional: boolean,
-): OpenedGraphFile | undefined {
+function openGraphFile(lexicalRoot: string, root: string, graph: string): OpenedGraphFile {
   const lexicalGraphPath = assertFilePathWithinRoot(lexicalRoot, graph, "Graph");
-  let fileDescriptor: number;
-  try {
-    fileDescriptor = fs.openSync(lexicalGraphPath, "r");
-  } catch (error) {
-    if (optional && isMissingFileError(error)) return undefined;
-    throw error;
-  }
+  const fileDescriptor = fs.openSync(lexicalGraphPath, "r");
 
   try {
     const openedStats = fs.fstatSync(fileDescriptor);
@@ -86,7 +75,7 @@ function openGraphFile(
     if (openedStats.dev !== resolvedStats.dev || openedStats.ino !== resolvedStats.ino) {
       throw new Error(`Graph changed during validation: ${lexicalGraphPath}`);
     }
-    return { fileDescriptor, path: graphPath, route };
+    return { fileDescriptor, path: graphPath };
   } catch (error) {
     fs.closeSync(fileDescriptor);
     throw error;
@@ -110,13 +99,29 @@ function resolveViewerOptions(options: ViewerServerOptions): ResolvedViewerOptio
     throw new Error(`Viewer assets directory is not a directory: ${assetRoot}`);
   }
 
-  let graphFile: OpenedGraphFile | undefined;
-  if (options.graph !== undefined) {
-    graphFile = openGraphFile(lexicalRoot, root, options.graph, "/graph.json", false);
-  } else {
-    graphFile = openGraphFile(lexicalRoot, root, "codegraph.json", "/codegraph.json", true);
+  if (options.graph !== undefined && options.graphProvider) {
+    throw new Error("Viewer options cannot combine a graph file with a graph provider.");
   }
-  return { assetRoot, graphFile };
+  const graphFile = options.graph === undefined ? undefined : openGraphFile(lexicalRoot, root, options.graph);
+  const graphProvider = graphFile ? undefined : (options.graphProvider ?? createProjectGraphProvider(root));
+  return { assetRoot, graphFile, graphProvider };
+}
+
+function createProjectGraphProvider(root: string): ViewerGraphProvider {
+  let inFlight: Promise<string> | undefined;
+  return async () => {
+    const graphPromise =
+      inFlight ??
+      createAgentSession({ root })
+        .loadProject()
+        .then((snapshot) => JSON.stringify(buildCodegraphGraphJson(snapshot)));
+    inFlight = graphPromise;
+    try {
+      return await graphPromise;
+    } finally {
+      if (inFlight === graphPromise) inFlight = undefined;
+    }
+  };
 }
 
 function writeFileResponse(
@@ -146,6 +151,31 @@ function writeFileResponse(
     response.end();
   });
   stream.pipe(response);
+}
+
+async function writeGeneratedGraphResponse(
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+  graphProvider: ViewerGraphProvider,
+): Promise<void> {
+  try {
+    const graphJson = await graphProvider();
+    response.writeHead(200, {
+      "Content-Length": String(Buffer.byteLength(graphJson)),
+      "Content-Type": "application/json; charset=utf-8",
+      "X-Content-Type-Options": "nosniff",
+    });
+    response.end(request.method === "HEAD" ? undefined : graphJson);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const message = `Unable to build the current project graph: ${detail}`;
+    response.writeHead(500, {
+      "Content-Length": String(Buffer.byteLength(message)),
+      "Content-Type": "text/plain; charset=utf-8",
+      "X-Content-Type-Options": "nosniff",
+    });
+    response.end(request.method === "HEAD" ? undefined : message);
+  }
 }
 
 function viewerRequestHandler(
@@ -182,15 +212,21 @@ function viewerRequestHandler(
     }
 
     const pathname = new URL(request.url ?? "/", "http://viewer.local").pathname;
-    if (options.graphFile && pathname === options.graphFile.route) {
-      writeFileResponse(
-        request,
-        response,
-        options.graphFile.path,
-        "application/json; charset=utf-8",
-        options.graphFile.fileDescriptor,
-      );
-      return;
+    if (pathname === "/graph.json") {
+      if (options.graphFile) {
+        writeFileResponse(
+          request,
+          response,
+          options.graphFile.path,
+          "application/json; charset=utf-8",
+          options.graphFile.fileDescriptor,
+        );
+        return;
+      }
+      if (options.graphProvider) {
+        void writeGeneratedGraphResponse(request, response, options.graphProvider);
+        return;
+      }
     }
 
     const asset = VIEWER_ASSETS[pathname];
@@ -242,7 +278,7 @@ export async function startViewerServer(options: ViewerServerOptions): Promise<{
     throw error;
   }
   const actualPort = getHttpServerPort(server.address());
-  return { server, url: viewerUrl(host, actualPort, options.graph !== undefined) };
+  return { server, url: viewerUrl(host, actualPort) };
 }
 
 export async function closeViewerServer(server: http.Server): Promise<void> {
@@ -254,9 +290,8 @@ export async function closeViewerServer(server: http.Server): Promise<void> {
   }
 }
 
-export function viewerUrl(host: string, port: number, hasGraph: boolean): string {
-  const graphQuery = hasGraph ? "?graph=%2Fgraph.json" : "";
-  return `http://${formatHostForUrl(host)}:${port}/${graphQuery}`;
+export function viewerUrl(host: string, port: number): string {
+  return `http://${formatHostForUrl(host)}:${port}/`;
 }
 
 export function openViewerUrl(url: string): void {
@@ -302,9 +337,8 @@ export async function handleViewerCommand(context: ViewerCommandContext): Promis
     };
     const resolvedOptions = resolveViewerOptions(options);
     closeResolvedGraphFile(resolvedOptions);
-    const hasGraph = options.graph !== undefined;
     if (preview) {
-      context.writeStdoutLine(viewerUrl(host, port, hasGraph));
+      context.writeStdoutLine(viewerUrl(host, port));
       return;
     }
   } catch (error) {

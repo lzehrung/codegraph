@@ -136,7 +136,7 @@ export async function buildCodegraphArtifactWithSession(
   }
 
   if (selected.graphJson) {
-    await writeJson(path.join(outDir, GRAPH_JSON_FILE), buildGraphJson(snapshot));
+    await writeJson(path.join(outDir, GRAPH_JSON_FILE), buildCodegraphGraphJson(snapshot));
     artifacts.graphJson = GRAPH_JSON_FILE;
   }
 
@@ -409,7 +409,7 @@ function outputIgnoreGlobs(root: string, outDir: string): string[] {
   return [`${relative}/**`];
 }
 
-function buildGraphJson(snapshot: AgentProjectSnapshot): {
+export function buildCodegraphGraphJson(snapshot: AgentProjectSnapshot): {
   schemaVersion: 1;
   format: "codegraph.graph-json";
   files: PortableGraphJson["files"];

@@ -92,7 +92,7 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
       review: { base: "HEAD~1", head: "HEAD" },
     });
     expect(orient.focus[0]?.kind).toBe("review");
-    expect(orient.focus[0]?.followUps[0]).toBe("codegraph review --base 'HEAD~1' --head HEAD --summary");
+    expect(orient.focus[0]?.followUps[0]).toBe("codegraph review --base 'HEAD~1' --head HEAD");
 
     const packet = await getCodegraphPacket({ root, target: "review:base=HEAD~1;head=HEAD" });
 

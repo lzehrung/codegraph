@@ -333,7 +333,7 @@ function applyAnalysisOptions(context: ImpactCommandContext, options: ImpactOpti
 
   if (context.hasFlag("--cache-strict")) options.cacheStrict = true;
   if (context.hasFlag("--cache-verify")) options.cacheVerify = true;
-  if (context.hasFlag("--compact") || context.hasFlag("--compact-json")) options.compact = true;
+  if (context.hasFlag("--compact")) options.compact = true;
 
   const maxRefs = context.getOpt("--max-refs");
   const parsedMaxRefs = parseOptionalNonNegativeIntegerOption(maxRefs, "--max-refs");
@@ -360,8 +360,7 @@ function applyAnalysisOptions(context: ImpactCommandContext, options: ImpactOpti
 
   // Bounded defaults for the common orchestrator accelerant path (human-readable/--compact)
   // without changing unlimited library behavior when callers omit budgets.
-  const wantsBoundedDefaults =
-    !context.hasFlag("--json") || context.hasFlag("--compact") || context.hasFlag("--compact-json");
+  const wantsBoundedDefaults = !context.hasFlag("--json") || context.hasFlag("--compact");
   if (wantsBoundedDefaults) {
     if (options.maxChangedSymbols === undefined)
       options.maxChangedSymbols = DEFAULT_BOUNDED_IMPACT_BUDGETS.maxChangedSymbols;
@@ -520,8 +519,8 @@ export async function handleImpactCommand(context: ImpactCommandContext): Promis
 
   const mermaid = context.hasFlag("--mermaid");
   const json = context.hasFlag("--json");
-  const compactJson = context.hasFlag("--compact") || context.hasFlag("--compact-json");
-  const pretty = !json && !mermaid && (context.hasFlag("--pretty") || !compactJson);
+  const compact = context.hasFlag("--compact");
+  const pretty = !json && !mermaid && (context.hasFlag("--pretty") || !compact);
   try {
     const duplicateScope =
       pretty && !mermaid ? parseDuplicateLeadScope(context.getOpt("--duplicates"), "changed") : "off";

@@ -2,6 +2,7 @@
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
+import { isCliBootstrapActive } from "./cli/bootstrap.js";
 import type { BuildOptions, BuildReport } from "./indexer/types.js";
 import { createCurrentProjectIndexLoader } from "./indexer/load-current-index.js";
 import type { GraphBuildOptions } from "./graphs/types.js";
@@ -1387,6 +1388,6 @@ export async function main(rawArgs: string[] = process.argv.slice(2)): Promise<v
   });
 }
 
-if (isDirectCliExecution(import.meta.url)) {
+if (!isCliBootstrapActive() && isDirectCliExecution(import.meta.url)) {
   void main();
 }

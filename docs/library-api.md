@@ -838,7 +838,7 @@ The API returns `ArchitectureDriftReport` with `schemaVersion: 1`, base/head sum
 
 ### Programmatic review and impact output
 
-Use the exported TypeScript APIs when another program is composing deterministic review packets, file packs, or model prompts. CLI human-readable and `--summary` output is optimized for compact reading by people or models; it is not the stable integration contract.
+Use the exported TypeScript APIs when another program is composing deterministic review packets, file packs, or model prompts. CLI human-readable output is optimized for compact reading by people or models; it is not the stable integration contract.
 
 - `buildReviewReport()` returns a review bundle with `schemaVersion`, changed files, changed symbols, `graphDelta`, candidate tests, `riskSummary`, `reviewTasks`, optional duplicate sibling-check tasks, optional `sqlContext`, compatibility hints when available, and diagnostics.
 - `analyzeImpactFromDiff()` returns the full or compact impact report shape for batch consumers, including changed-symbol `callCompatibility` hints when available.
@@ -846,7 +846,7 @@ Use the exported TypeScript APIs when another program is composing deterministic
 
 Review-pack builders should preserve symbol handles, diff snippets, callsites, `callCompatibility`, diagnostics, candidate-test confidence, impact reasons, and graph edge metadata. Render prose only at the final UI or prompt boundary.
 
-Readable summaries such as `codegraph review --summary` and `codegraph impact` are CLI presentation modes. Library callers should use `buildReviewReport()`, `analyzeImpactFromDiff()`, `analyzeImpactStreaming()`, or `tool_impactJSON()` and format only the selected fields they need.
+Readable `codegraph review` and `codegraph impact` reports are CLI presentation modes. Library callers should use `buildReviewReport()`, `analyzeImpactFromDiff()`, `analyzeImpactStreaming()`, or `tool_impactJSON()` and format only the selected fields they need.
 
 Duplicate leads in impact and review summaries are also presentation-only. Programmatic callers should use `findDuplicates()` when they need grouped clone data, variants, raw pair counts, or duplicate omission counts.
 

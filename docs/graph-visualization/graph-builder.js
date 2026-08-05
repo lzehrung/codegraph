@@ -288,7 +288,7 @@ export function buildGraph(payload, options) {
       });
     }
   } else {
-    throw new Error("Unsupported graph payload. Expected graph --json output or --compact-json output.");
+    throw new Error("Unsupported graph payload. Expected graph --json output.");
   }
 
   graph.forEachNode((node) => {

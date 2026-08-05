@@ -46,7 +46,7 @@ export async function bundleCli({ rootDir = defaultRootDir, logLevel = "warning"
     bundle: true,
     platform: "node",
     format: "esm",
-    splitting: true,
+    splitting: false,
     outdir: paths.outdir,
     entryNames: "[name]",
     external: ["node:*", "@lzehrung/codegraph-native", "jsonc-parser"],
@@ -58,6 +58,15 @@ export async function bundleCli({ rootDir = defaultRootDir, logLevel = "warning"
     metafile: true,
   });
 
+  const outputFiles = Object.keys(result.metafile.outputs).sort();
+  const selfContainedEntries = new Set([paths.bundledEntry, paths.bundledWorker]);
+  const unexpectedOutputs = outputFiles.filter((file) => !selfContainedEntries.has(path.resolve(file)));
+  if (unexpectedOutputs.length) {
+    throw new Error(
+      `CLI bundle emitted non-entry chunks that can break long-lived MCP processes during upgrades: ${unexpectedOutputs.join(", ")}`,
+    );
+  }
+
   if (!fs.existsSync(paths.bundledEntry)) {
     throw new Error(`Bundled CLI entry was not written to ${paths.bundledEntry}`);
   }
@@ -67,7 +76,7 @@ export async function bundleCli({ rootDir = defaultRootDir, logLevel = "warning"
 
   return {
     ...paths,
-    outputFiles: Object.keys(result.metafile.outputs).sort(),
+    outputFiles,
     metafile: result.metafile,
   };
 }
