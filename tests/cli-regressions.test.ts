@@ -637,7 +637,9 @@ describe("CLI regressions", () => {
   it("rejects out-of-root file navigation inputs explicitly", async () => {
     const outsideFile = path.resolve(process.cwd(), "README.md");
 
-    const dumpmod = JSON.parse(await runCliCommand(["dumpmod", "--json", outsideFile, "--root", tsRoot])) as {
+    const dumpmodResult = await runCliWithExit(["dumpmod", "--json", outsideFile, "--root", tsRoot], process.cwd());
+    expect(dumpmodResult.exitCode).toBe(1);
+    const dumpmod = JSON.parse(dumpmodResult.stdout) as {
       status: string;
       reason?: string;
       error?: string;
@@ -646,7 +648,9 @@ describe("CLI regressions", () => {
     expect(dumpmod.reason).toBe("outside_project_root");
     expect(dumpmod.error).toContain("outside project root");
 
-    const goto = JSON.parse(await runCliCommand(["goto", "--json", outsideFile, "1", "1", "--root", tsRoot])) as {
+    const gotoResult = await runCliWithExit(["goto", "--json", outsideFile, "1", "1", "--root", tsRoot], process.cwd());
+    expect(gotoResult.exitCode).toBe(1);
+    const goto = JSON.parse(gotoResult.stdout) as {
       status: string;
       reason?: string;
       error?: string;
@@ -654,9 +658,12 @@ describe("CLI regressions", () => {
     expect(goto.status).toBe("error");
     expect(goto.reason).toBe("outside_project_root");
 
-    const refs = JSON.parse(
-      await runCliCommand(["refs", "--json", "--file", outsideFile, "--line", "1", "--col", "1", "--root", tsRoot]),
-    ) as {
+    const refsResult = await runCliWithExit(
+      ["refs", "--json", "--file", outsideFile, "--line", "1", "--col", "1", "--root", tsRoot],
+      process.cwd(),
+    );
+    expect(refsResult.exitCode).toBe(1);
+    const refs = JSON.parse(refsResult.stdout) as {
       status: string;
       reason?: string;
       error?: string;
@@ -664,7 +671,9 @@ describe("CLI regressions", () => {
     expect(refs.status).toBe("error");
     expect(refs.reason).toBe("outside_project_root");
 
-    const deps = JSON.parse(await runCliCommand(["deps", outsideFile, "--root", tsRoot, "--json"])) as {
+    const depsResult = await runCliWithExit(["deps", outsideFile, "--root", tsRoot, "--json"], process.cwd());
+    expect(depsResult.exitCode).toBe(1);
+    const deps = JSON.parse(depsResult.stdout) as {
       status: string;
       reason?: string;
       error?: string;
@@ -672,15 +681,27 @@ describe("CLI regressions", () => {
     expect(deps.status).toBe("error");
     expect(deps.reason).toBe("outside_project_root");
 
-    const pathResult = JSON.parse(
-      await runCliCommand(["path", outsideFile, "main.ts", "--root", tsRoot, "--json"]),
-    ) as {
+    const pathResultCapture = await runCliWithExit(
+      ["path", outsideFile, "main.ts", "--root", tsRoot, "--json"],
+      process.cwd(),
+    );
+    expect(pathResultCapture.exitCode).toBe(1);
+    const pathResult = JSON.parse(pathResultCapture.stdout) as {
       status: string;
       reason?: string;
       error?: string;
     };
     expect(pathResult.status).toBe("error");
     expect(pathResult.reason).toBe("outside_project_root");
+  });
+
+  it("exits non-zero for missing deps files instead of empty arrays", async () => {
+    const missing = path.join(tsRoot, "definitely-missing-file.ts");
+    const result = await runCliWithExit(["deps", missing, "--root", tsRoot, "--json"], process.cwd());
+    expect(result.exitCode).toBe(1);
+    const payload = JSON.parse(result.stdout) as { status: string; reason?: string };
+    expect(payload.status).toBe("not_found");
+    expect(payload.reason).toBe("file_not_indexed");
   });
 
   it("graph --native off disables native backend reporting explicitly", async () => {

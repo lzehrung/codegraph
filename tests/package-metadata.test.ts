@@ -432,8 +432,12 @@ describe("package metadata", () => {
     expect(scripts["test:native:required"]).toBe("node ./scripts/run-native-required-tests.mjs");
     expect(scripts["test:native:fallback"]).toContain("tests/native-fallback-reporting.test.ts");
     expect(scripts["test:native:fallback"]).toContain("tests/native-fallback-contract.test.ts");
+    expect(scripts.check).toContain("npm run test:ci");
     expect(scripts["test:ci"]).toContain("--reporter=json");
-    expect(scripts["test:ci"]).toContain("--exclude tests/native-worker-parity.test.ts");
+    expect(scripts["test:ci"]).toContain("--exclude tests/bench-harness.test.ts");
+    expect(scripts["test:ci"]).toContain("--exclude tests/detailed-symbol-native-only.test.ts");
+    expect(scripts["test:ci"]).not.toContain("--exclude tests/native-worker-parity.test.ts");
+    expect(scripts["test:ci"]).not.toContain("--exclude tests/native-tree-sitter.test.ts");
   });
 
   it("exposes opt-in JavaScript, native, and Markdown coverage reporting", () => {

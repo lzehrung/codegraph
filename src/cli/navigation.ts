@@ -56,8 +56,7 @@ export async function handleDumpmodCommand(context: NavigationCommandContext): P
   }
   const resolvedFile = resolveCliProjectFile(context.projectRootFs, fileArg, "File");
   if (resolvedFile.status === "error") {
-    writeCliProjectFileError(context, resolvedFile);
-    return;
+    writeCliProjectFileError(context, resolvedFile, context.hasFlag("--json") ? "json" : "text");
   }
   const file = resolvedFile.file;
   const index = await loadNavigationIndex(context);
@@ -68,7 +67,7 @@ export async function handleDumpmodCommand(context: NavigationCommandContext): P
       reason: "Module not indexed",
       file,
     });
-    return;
+    context.exit(1);
   }
   writeCliOutput(context, {
     file,
@@ -155,7 +154,7 @@ function sortDefinitions(definitions: readonly SymbolDef[]): SymbolDef[] {
 function writePrettyReferences(context: NavigationCommandContext, result: FindReferencesResult): void {
   if (result.status !== "ok") {
     context.writeStdoutLine(`not_found: ${result.reason}`);
-    return;
+    context.exit(1);
   }
   for (const reference of result.references) {
     const rel = toProjectDisplayPath(context.projectRootFs, reference.file);
@@ -173,7 +172,6 @@ export async function handleGotoCommand(context: NavigationCommandContext): Prom
   const resolvedFile = resolveCliProjectFile(context.projectRootFs, input.file, "File");
   if (resolvedFile.status === "error") {
     writeCliProjectFileError(context, resolvedFile, context.hasFlag("--json") ? "json" : "text");
-    return;
   }
   const index = await loadNavigationIndex(context);
   if (input.line === undefined) {
@@ -184,7 +182,7 @@ export async function handleGotoCommand(context: NavigationCommandContext): Prom
     }
     if (!definitions.length) {
       writeCliOutput(context, { status: "not_found", reason: `No indexed symbols in ${input.file}` });
-      return;
+      context.exit(1);
     }
     writeCliOutput(context, {
       status: "ambiguous",
@@ -203,6 +201,7 @@ export async function handleGotoCommand(context: NavigationCommandContext): Prom
     column: input.column ?? 1,
   });
   writeCliOutput(context, res);
+  if (res.status !== "ok") context.exit(1);
 }
 
 export async function handleRefsCommand(context: NavigationCommandContext): Promise<void> {
@@ -217,7 +216,6 @@ export async function handleRefsCommand(context: NavigationCommandContext): Prom
   const resolvedFile = resolveCliProjectFile(context.projectRootFs, input.file, "File");
   if (resolvedFile.status === "error") {
     writeCliProjectFileError(context, resolvedFile, pretty ? "text" : "json");
-    return;
   }
   const index = await loadNavigationIndex(context);
 
@@ -231,6 +229,7 @@ export async function handleRefsCommand(context: NavigationCommandContext): Prom
       writePrettyReferences(context, result);
     } else {
       context.writeJSONLine(result);
+      if (result.status !== "ok") context.exit(1);
     }
     return;
   }
@@ -243,7 +242,7 @@ export async function handleRefsCommand(context: NavigationCommandContext): Prom
     } else {
       context.writeJSONLine(result);
     }
-    return;
+    context.exit(1);
   }
 
   const symbols: Array<{ definition: SymbolDef; references: FindReferencesResult }> = [];

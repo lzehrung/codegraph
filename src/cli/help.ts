@@ -534,6 +534,147 @@ Options:
   --print-url       Print the deterministic URL and exit without starting a server. Cannot use --open or --port 0.
 `;
 
+export const INDEX_HELP_TEXT = `codegraph index - Build the project symbol index
+
+Usage: codegraph index [roots...] [--root <path>] [--json | --full] [--verbose] [--cache <mode>] [--cache-strict] [--cache-verify] [--threads N] [--native <mode>] [--workers]
+
+Output:
+  Builds or refreshes the project symbol index and graph. Default output is a compact file/edge count; --json/--full includes module details.
+
+${SHARED_INDEX_OPTIONS_HELP}
+`;
+
+export const GRAPH_HELP_TEXT = `codegraph graph - Build a dependency graph
+
+Usage: codegraph graph [roots...] [--root <path>] [--json | --mermaid | --dot] [--sqlite <path>] [--output <path> | --stdout] [--sql-artifacts] [--fast-graph] [--resolve-node-modules] [--dynamic-import-heuristics]
+
+Output:
+  Emits a file dependency graph for the selected roots. Use --json/--mermaid/--dot/--sqlite for machine-readable formats.
+
+${SHARED_INDEX_OPTIONS_HELP}
+`;
+
+export const REVIEW_HELP_TEXT = `codegraph review - Generate a code review report for a git range
+
+Usage: codegraph review [project-root] [--root <path>] [--base <ref> --head <ref>] [--json | --pretty] [--max-tests <n>] [--max-callsites <n>]
+
+Options:
+  --base <ref>         Base revision. Unlike impact, review does not invent a default range.
+  --head <ref>         Head revision or WORKTREE for local changes.
+  --max-tests <n>      Cap candidate tests included in the report.
+  --max-callsites <n>  Cap call sites included in the report.
+  --json               Structured review report for automation.
+  --pretty             Human-readable review summary (default when --json is absent).
+
+${SHARED_INDEX_OPTIONS_HELP}
+`;
+
+export const IMPACT_HELP_TEXT = `codegraph impact - Analyze PR impact between two revisions
+
+Usage: codegraph impact [project-root] [--provider git|github|raw] [--base <ref>] [--head <ref>] [--json | --pretty] [--duplicates <mode>]
+
+Defaults:
+  Git provider defaults to HEAD..WORKTREE when --base/--head are omitted.
+
+${SHARED_INDEX_OPTIONS_HELP}
+`;
+
+export const INSPECT_HELP_TEXT = `codegraph inspect - Summarize repo structure and recommend next commands
+
+Usage: codegraph inspect [roots...] [--root <path>] [--limit <n>] [--duplicates] [--json | --pretty]
+
+${SHARED_INDEX_OPTIONS_HELP}
+`;
+
+export const DEPS_HELP_TEXT = `codegraph deps - List dependencies for a file
+
+Usage: codegraph deps <file> [--root <path>] [--depth <n>] [--json]
+
+${SHARED_INDEX_OPTIONS_HELP}
+`;
+
+export const RDEPS_HELP_TEXT = `codegraph rdeps - List reverse dependencies for a file
+
+Usage: codegraph rdeps <file> [--root <path>] [--depth <n>] [--json]
+
+${SHARED_INDEX_OPTIONS_HELP}
+`;
+
+export const PATH_HELP_TEXT = `codegraph path - Find the shortest dependency path between files
+
+Usage: codegraph path <from-file> <to-file> [--root <path>] [--json]
+
+${SHARED_INDEX_OPTIONS_HELP}
+`;
+
+export const CYCLES_HELP_TEXT = `codegraph cycles - Detect dependency cycles
+
+Usage: codegraph cycles [roots...] [--root <path>] [--sort priority|size|fanin] [--json]
+
+${SHARED_INDEX_OPTIONS_HELP}
+`;
+
+export const HOTSPOTS_HELP_TEXT = `codegraph hotspots - Find high-complexity files
+
+Usage: codegraph hotspots [roots...] [--root <path>] [--limit <n>] [--json]
+
+${SHARED_INDEX_OPTIONS_HELP}
+`;
+
+export const UNRESOLVED_HELP_TEXT = `codegraph unresolved - List unresolved project imports
+
+Usage: codegraph unresolved [project-root] [--root <path>] [--json]
+
+${SHARED_INDEX_OPTIONS_HELP}
+`;
+
+export const APISURFACE_HELP_TEXT = `codegraph apisurface - Summarize exported API symbols
+
+Usage: codegraph apisurface [project-root] [--root <path>] [--json]
+
+${SHARED_INDEX_OPTIONS_HELP}
+`;
+
+export const GRAPH_DELTA_HELP_TEXT = `codegraph graph-delta - Report file-level graph changes
+
+Usage: codegraph graph-delta [project-root] [--root <path>] [--git-base <ref> | --changed-since <ref>] [--json]
+
+${SHARED_INDEX_OPTIONS_HELP}
+`;
+
+export const DOCTOR_HELP_TEXT = `codegraph doctor - Inspect backend/runtime state and local graph artifacts
+
+Usage: codegraph doctor [artifact-path] [--json]
+
+Output:
+  Reports Node/runtime health, optional native backend status, and local artifact presence.
+`;
+
+export const CHUNK_HELP_TEXT = `codegraph chunk - Chunk a file for embeddings
+
+Usage: codegraph chunk <file-path> [--language <id>] [--min-tokens <n>] [--max-tokens <n>] [--text] [--json]
+`;
+
+export const SKILL_HELP_TEXT = `codegraph skill - Install or inspect the bundled agent skill
+
+Usage:
+  codegraph skill install [--agent <name> | --target <dir>] [--force]
+  codegraph skill print-path [--agent <name> | --target <dir>]
+  codegraph skill doctor [--agent <name> | --target <dir>]
+`;
+
+export const DUMPMOD_HELP_TEXT = `codegraph dumpmod - Dump one indexed module
+
+Usage: codegraph dumpmod <file> [--root <path>] [--json]
+
+${SHARED_INDEX_OPTIONS_HELP}
+`;
+
+export const VERSION_HELP_TEXT = `codegraph version - Print the installed Codegraph version
+
+Usage: codegraph version [--json]
+`;
+
 export function helpTextForCommand(command: string, positionals: readonly string[]): string | undefined {
   if (command === "explore") return EXPLORE_HELP_TEXT;
   if (command === "file") return FILE_HELP_TEXT;
@@ -562,6 +703,24 @@ export function helpTextForCommand(command: string, positionals: readonly string
   if (command === "duplicates") return DUPLICATES_HELP_TEXT;
   if (command === "artifact") return ARTIFACT_HELP_TEXT;
   if (command === "viewer") return VIEWER_HELP_TEXT;
+  if (command === "index") return INDEX_HELP_TEXT;
+  if (command === "graph") return GRAPH_HELP_TEXT;
+  if (command === "review") return REVIEW_HELP_TEXT;
+  if (command === "impact") return IMPACT_HELP_TEXT;
+  if (command === "inspect") return INSPECT_HELP_TEXT;
+  if (command === "deps") return DEPS_HELP_TEXT;
+  if (command === "rdeps") return RDEPS_HELP_TEXT;
+  if (command === "path") return PATH_HELP_TEXT;
+  if (command === "cycles") return CYCLES_HELP_TEXT;
+  if (command === "hotspots") return HOTSPOTS_HELP_TEXT;
+  if (command === "unresolved") return UNRESOLVED_HELP_TEXT;
+  if (command === "apisurface") return APISURFACE_HELP_TEXT;
+  if (command === "graph-delta") return GRAPH_DELTA_HELP_TEXT;
+  if (command === "doctor") return DOCTOR_HELP_TEXT;
+  if (command === "chunk") return CHUNK_HELP_TEXT;
+  if (command === "skill") return SKILL_HELP_TEXT;
+  if (command === "dumpmod") return DUMPMOD_HELP_TEXT;
+  if (command === "version") return VERSION_HELP_TEXT;
   if (command === "mcp") {
     return positionals[0] === undefined || positionals[0] === "serve" ? MCP_SERVE_HELP_TEXT : MCP_HELP_TEXT;
   }

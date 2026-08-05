@@ -30,6 +30,7 @@ import { buildBloomFilterFromSource } from "../util/bloomFilter.js";
 import { initNativeBackendReport } from "../native/nativeBackendReport.js";
 import { closeDuplicateUnitCacheDatabase } from "../duplicates.js";
 import { isNativeRequiredUnavailableError } from "../native/treeSitterNative.js";
+import { isNodeSqliteUnavailableError } from "../sqlite-driver.js";
 import type { ParserLanguage, SyntaxTreeLike } from "../languages/types.js";
 import type { Edge, FileId, Graph } from "../types.js";
 import {
@@ -758,7 +759,7 @@ async function buildIndexFromFileListShared(
         });
         return [file, mod ?? createEmptyModuleIndex(file), edges] as const;
       } catch (error) {
-        if (isNativeRequiredUnavailableError(error)) throw error;
+        if (isNativeRequiredUnavailableError(error) || isNodeSqliteUnavailableError(error)) throw error;
         if (isUnsupportedParserInputError(error) || isNonNativeParserUnavailableError(error)) {
           return [file, createEmptyModuleIndex(file), []] as const;
         }
@@ -1443,7 +1444,7 @@ export async function buildProjectIndexIncremental(
             });
             return [file, built.module] as const;
           } catch (error) {
-            if (isNativeRequiredUnavailableError(error)) throw error;
+            if (isNativeRequiredUnavailableError(error) || isNodeSqliteUnavailableError(error)) throw error;
             if (isUnsupportedParserInputError(error) || isNonNativeParserUnavailableError(error)) {
               return [file, createEmptyModuleIndex(file)] as const;
             }
