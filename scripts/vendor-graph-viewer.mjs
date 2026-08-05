@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 const root = process.cwd();
 const outDir = path.join(root, "docs", "graph-visualization", "vendor");
