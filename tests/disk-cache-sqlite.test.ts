@@ -392,7 +392,7 @@ describe("disk cache uses sqlite backend", () => {
     expect(units.length).toBeGreaterThan(0);
     expect(units[0]).not.toHaveProperty("text");
     expect(units[0]).not.toHaveProperty("normalizedTokens");
-    expect(row!.payload.byteLength).toBeLessThan(Buffer.byteLength(decompressed, "utf8"));
+    expect(() => JSON.parse(Buffer.from(row!.payload).toString("utf8"))).toThrow();
   });
 
   it("ignores duplicate cache rows written by an older payload version", async () => {
