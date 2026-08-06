@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { getCodegraphPacket, orientCodegraph } from "../src/index.js";
+import { formatAgentFollowUpAsCli, getCodegraphPacket, orientCodegraph } from "../src/index.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 import { runGit } from "./helpers/git.js";
 
@@ -92,13 +92,15 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
       review: { base: "HEAD~1", head: "HEAD" },
     });
     expect(orient.focus[0]?.kind).toBe("review");
-    expect(orient.focus[0]?.followUps[0]).toBe("codegraph review --base 'HEAD~1' --head HEAD");
+    expect(formatAgentFollowUpAsCli(orient.focus[0]!.followUps[0]!)).toBe(
+      "codegraph review --base 'HEAD~1' --head HEAD",
+    );
 
     const packet = await getCodegraphPacket({ root, target: "review:base=HEAD~1;head=HEAD" });
 
     expect(packet.schemaVersion).toBe(2);
     expect(packet.kind).toBe("review");
-    expect(packet.followUps.some((command) => command.includes("codegraph review"))).toBeTruthy();
+    expect(packet.followUps.some((followUp) => followUp.tool === "review")).toBeTruthy();
     if (packet.packet.schemaVersion !== 2) {
       throw new Error("expected review report");
     }
