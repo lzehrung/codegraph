@@ -187,24 +187,26 @@ async function buildReviewIndex(input: {
   // indexing reconcile the whole project, unioning review targets outside discovery.
   // A caller-provided index (e.g. an already-loaded agent session snapshot) is reused
   // as-is when the review does not request additional files beyond normal project scope.
-  const index =
-    providedIndex && !appliedOptions.files?.length
-      ? providedIndex
-      : loadProvidedIndex && !appliedOptions.files?.length
-        ? await loadProvidedIndex()
-        : await loadCurrentProjectIndex({
-            root: projectRoot,
-            scope: {
-              kind: "project",
-              ...(appliedOptions.files?.length ? { additionalFiles: appliedOptions.files } : {}),
-            },
-            options: {
-              ...appliedOptions,
-              graph: graphOptions,
-              keepParsed: true,
-              ...(indexReport ? { report: indexReport } : {}),
-            },
-          });
+  let index: ProjectIndex;
+  if (providedIndex && !appliedOptions.files?.length) {
+    index = providedIndex;
+  } else if (loadProvidedIndex && !appliedOptions.files?.length) {
+    index = await loadProvidedIndex();
+  } else {
+    index = await loadCurrentProjectIndex({
+      root: projectRoot,
+      scope: {
+        kind: "project",
+        ...(appliedOptions.files?.length ? { additionalFiles: appliedOptions.files } : {}),
+      },
+      options: {
+        ...appliedOptions,
+        graph: graphOptions,
+        keepParsed: true,
+        ...(indexReport ? { report: indexReport } : {}),
+      },
+    });
+  }
   if (reviewReport) {
     Object.defineProperty(reviewReport, "index", {
       value: index,
