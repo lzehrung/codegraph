@@ -1232,13 +1232,12 @@ function addPairEvidence(
   });
 }
 
-/** Adds every unique pair from one shared-evidence bucket. */
-function addBucketPairs(
+/** Visits every unique pair from one shared-evidence bucket. */
+function forEachBucketPair(
   bucket: readonly DuplicateInternalUnit[],
-  pairs: Map<string, PairEvidence>,
-  evidenceKind: "rawHash" | "normalizedHash" | "astShape" | "signature",
-  pairFilter?: PairFilter,
-  unitFilter?: UnitFilter,
+  pairFilter: PairFilter | undefined,
+  unitFilter: UnitFilter | undefined,
+  visit: (left: DuplicateInternalUnit, right: DuplicateInternalUnit) => void,
 ): void {
   if (unitFilter) {
     const targetUnits = bucket.filter(unitFilter);
@@ -1251,7 +1250,7 @@ function addBucketPairs(
         if (seenPairs.has(key)) continue;
         seenPairs.add(key);
         if (pairFilter && !pairFilter(left, right)) continue;
-        addPairEvidence(pairs, evidenceKind, left, right);
+        visit(left, right);
       }
     }
     return;
@@ -1260,9 +1259,22 @@ function addBucketPairs(
     for (let j = i + 1; j < bucket.length; j++) {
       const [left, right] = orderedPair(bucket[i]!, bucket[j]!);
       if (pairFilter && !pairFilter(left, right)) continue;
-      addPairEvidence(pairs, evidenceKind, left, right);
+      visit(left, right);
     }
   }
+}
+
+/** Adds every unique pair from one shared-evidence bucket. */
+function addBucketPairs(
+  bucket: readonly DuplicateInternalUnit[],
+  pairs: Map<string, PairEvidence>,
+  evidenceKind: "rawHash" | "normalizedHash" | "astShape" | "signature",
+  pairFilter?: PairFilter,
+  unitFilter?: UnitFilter,
+): void {
+  forEachBucketPair(bucket, pairFilter, unitFilter, (left, right) => {
+    addPairEvidence(pairs, evidenceKind, left, right);
+  });
 }
 
 function bucketPairCountExceeds(
@@ -1327,6 +1339,11 @@ function addConsideredSignature(
   consideredSignaturesByUnit.set(unit.id, new Set([signature]));
 }
 
+/**
+ * Two-pass signature prefilter: count shared fingerprints first, then allocate
+ * PairEvidence only for pairs that already have stronger evidence or meet the
+ * shared-fingerprint threshold (at least 2).
+ */
 function addSignatureBucketsToPairs(
   buckets: Map<string, DuplicateInternalUnit[]>,
   pairs: Map<string, PairEvidence>,
@@ -1335,7 +1352,10 @@ function addSignatureBucketsToPairs(
   pairFilter?: PairFilter,
   unitFilter?: UnitFilter,
 ): number {
+  const signatureMatchCounts = new Map<string, number>();
+  const signatureMatchUnits = new Map<string, [DuplicateInternalUnit, DuplicateInternalUnit]>();
   let oversizedBuckets = 0;
+
   for (const [signature, bucket] of buckets) {
     if (bucket.length < 2) continue;
     if (unitFilter && !bucket.some(unitFilter)) continue;
@@ -1348,8 +1368,41 @@ function addSignatureBucketsToPairs(
     for (const unit of bucket) {
       addConsideredSignature(consideredSignaturesByUnit, unit, signature);
     }
-    addBucketPairs(bucket, pairs, "signature", pairFilter, unitFilter);
+    forEachBucketPair(bucket, pairFilter, unitFilter, (left, right) => {
+      const key = pairKey(left, right);
+      const next = (signatureMatchCounts.get(key) ?? 0) + 1;
+      signatureMatchCounts.set(key, next);
+      // Threshold floor is >= 2; keep unit refs only once a pair can qualify.
+      if (next === 2 && !pairs.has(key) && !signatureMatchUnits.has(key)) {
+        signatureMatchUnits.set(key, [left, right]);
+      }
+    });
   }
+
+  for (const [key, count] of signatureMatchCounts) {
+    const existing = pairs.get(key);
+    if (existing) {
+      existing.signatureMatches = count;
+      continue;
+    }
+    if (count < 2) continue;
+    const units = signatureMatchUnits.get(key);
+    if (!units) continue;
+    const [left, right] = units;
+    if (!hasEnoughSharedFingerprintsFor(count, left.id, right.id, consideredSignaturesByUnit)) {
+      continue;
+    }
+    pairs.set(key, {
+      left,
+      right,
+      rawHash: false,
+      normalizedHash: false,
+      astShape: false,
+      signature: false,
+      signatureMatches: count,
+    });
+  }
+
   return oversizedBuckets;
 }
 
@@ -1802,17 +1855,31 @@ function addSimilarityHintPair(
 }
 
 /** Requires enough shared fingerprints to avoid incidental syntax matches. */
+function hasEnoughSharedFingerprintsFor(
+  signatureMatches: number,
+  leftUnitId: string,
+  rightUnitId: string,
+  consideredSignaturesByUnit: ConsideredSignaturesByUnit,
+): boolean {
+  if (!signatureMatches) return false;
+  const leftConsideredSignatures = consideredSignaturesByUnit.get(leftUnitId)?.size ?? 0;
+  const rightConsideredSignatures = consideredSignaturesByUnit.get(rightUnitId)?.size ?? 0;
+  const smallerConsideredSignatureCount = Math.min(leftConsideredSignatures, rightConsideredSignatures);
+  if (!smallerConsideredSignatureCount) return false;
+  const minimumShared = Math.max(2, Math.ceil(smallerConsideredSignatureCount * 0.25));
+  return signatureMatches >= minimumShared;
+}
+
 function hasEnoughSharedFingerprints(
   evidence: PairEvidence,
   consideredSignaturesByUnit: ConsideredSignaturesByUnit,
 ): boolean {
-  if (!evidence.signatureMatches) return false;
-  const leftConsideredSignatures = consideredSignaturesByUnit.get(evidence.left.id)?.size ?? 0;
-  const rightConsideredSignatures = consideredSignaturesByUnit.get(evidence.right.id)?.size ?? 0;
-  const smallerConsideredSignatureCount = Math.min(leftConsideredSignatures, rightConsideredSignatures);
-  if (!smallerConsideredSignatureCount) return false;
-  const minimumShared = Math.max(2, Math.ceil(smallerConsideredSignatureCount * 0.25));
-  return evidence.signatureMatches >= minimumShared;
+  return hasEnoughSharedFingerprintsFor(
+    evidence.signatureMatches,
+    evidence.left.id,
+    evidence.right.id,
+    consideredSignaturesByUnit,
+  );
 }
 
 function suggestionForPair(evidence: PairEvidence): DuplicateSuggestion {
