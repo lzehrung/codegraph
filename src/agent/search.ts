@@ -683,6 +683,8 @@ function mergeSearchResults(
     const target = upsertResult(targetMap, source);
     target.score += source.score;
     for (const term of source.matchedRankTerms) target.matchedRankTerms.add(term);
+    for (const reason of source.rankReasons) target.rankReasons.add(reason);
+    for (const evidence of source.evidence) addEvidence(target, evidence);
     for (const [key, neighbor] of source.neighbors) target.neighbors.set(key, neighbor);
     for (const [key, followUp] of source.followUps) target.followUps.set(key, followUp);
   }

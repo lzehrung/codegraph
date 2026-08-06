@@ -1533,12 +1533,16 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
 
     const stdout = await runCliCommand(["search", "validate user", "--root", root, "--json"]);
     const response = JSON.parse(stdout) as {
-      results: Array<{ label: string; rankReasons: string[]; followUps: string[] }>;
+      results: Array<{
+        label: string;
+        rankReasons: string[];
+        followUps: Array<{ tool: string; arguments: Record<string, unknown> }>;
+      }>;
     };
 
     expect(response.results[0]?.label).toContain("validateUser");
     expect(response.results[0]?.rankReasons.length).toBeGreaterThan(0);
-    expect(response.results[0]?.followUps.some((cmd) => cmd.includes("codegraph refs"))).toBeTruthy();
+    expect(response.results[0]?.followUps.some((followUp) => followUp.tool === "refs")).toBeTruthy();
   });
 
   it("orient returns compact first-turn context", async () => {
