@@ -156,7 +156,7 @@ Sensitive-file rules:
 
 ## MCP and Freshness
 
-If MCP tools are available, prefer them over repeated CLI invocations. Use `explore`, `orient`, `workspace_symbols`, `search`, `get_file`, `packet_get`, `goto`, `refs`, `rename_preview`, `refactor_plan`, `callers`, `callees`, `deps`, `rdeps`, `path`, `impact`, `review`, and `query_sqlite`; fall back to the CLI when MCP is unavailable.
+If MCP tools are available, prefer them over repeated CLI invocations. Use `explore`, `orient`, `workspace_symbols`, `search`, `get_file`, `packet_get`, `goto`, `refs`, `rename_preview`, `refactor_plan`, `calls`, `type_hierarchy`, `file_deps`, `path`, `impact`, `review`, and `query_sqlite`; fall back to the CLI when MCP is unavailable. Legacy `callers`/`callees`, `supertypes`/`subtypes`, and `deps`/`rdeps` names remain valid `tools/call` aliases.
 
 Codegraph uses the official MCP SDK v2 to serve current 2026-07-28 clients while retaining compatibility with 2025-era clients. MCP protocol connections and HTTP protocol sessions keep separate transport state, but all share the server's one warm Codegraph analysis session for the configured root.
 
@@ -164,8 +164,9 @@ HTTP enforces Host and Origin policies. A missing `Origin` is accepted for non-b
 
 Use `refactor_plan` with flat `handle`, optional `renameTo`, independent optional `maxReferences`, `maxCallers`, and `maxHierarchy` bounds from 0 to 500, and optional `includeSource`. It reuses the configured server root and one session snapshot, returns portable targets and structured tool-call follow-ups even for exact internal review handles, exposes unsupported implementation sections in `sectionIssues`, preserves nested `rename.safe`, and never writes.
 Use `workspace_symbols` for deterministic symbol identities and exact ranges; use `search` when paths, prose, SQL, snippets, or graph evidence should participate.
-Use `supertypes`, `subtypes`, and `implementations` with portable symbol handles for repeated hierarchy queries; their schemas are flat and use the same 10-depth and 500-result caps as the CLI.
-Use `callers` and `callees` with portable callable handles for repeated call hierarchy queries. Their flat schemas accept `handle`, `depth`, `limit`, and `includeHeuristic`, reuse the MCP freshness gate, and cap depth at 5 and symbols at 500; current results remain semantic-only.
+Use `type_hierarchy` with `direction: "supertypes" | "subtypes"` and `implementations` with portable symbol handles for repeated hierarchy queries; schemas are flat and use the same 10-depth and 500-result caps as the CLI.
+Use `calls` with `direction: "callers" | "callees"` and portable callable handles for repeated call hierarchy queries. The flat schema accepts `handle`, `direction`, `depth`, `limit`, and `includeHeuristic`, reuses the MCP freshness gate, and caps depth at 5 and symbols at 500; current results remain semantic-only.
+Use `file_deps` with `direction: "deps" | "rdeps"` for file-level dependency queries.
 Use `rename_preview` with `handle`, `newName`, optional boolean inclusion fields, and optional `maxEdits`. It remains available in read-only mode, reuses the MCP session, never changes files, and has no apply counterpart.
 
 Keep live and indexed evidence distinct:

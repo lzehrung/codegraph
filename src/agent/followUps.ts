@@ -20,7 +20,7 @@ export function formatAgentFollowUpAsCli(followUp: AgentFollowUp): string {
     case "file_deps": {
       const file = stringArgument(args, "file");
       const direction = args.direction === "rdeps" ? "rdeps" : "deps";
-      return `codegraph ${direction}${file === undefined ? "" : ` ${quoteShellArg(file)}`} --json`;
+      return appendJson(`codegraph ${direction}${file === undefined ? "" : ` ${formatPathArgument(file)}`}`, args);
     }
     case "calls": {
       const handle = stringArgument(args, "handle");
@@ -144,6 +144,7 @@ function appendJson(command: string, args: Record<string, unknown>): string {
   let output = command;
   if (typeof args.depth === "number") output += ` --depth ${args.depth}`;
   if (typeof args.limit === "number") output += ` --limit ${args.limit}`;
+  if (args.includeHeuristic === true) output += " --include-heuristic";
   return `${output} --json`;
 }
 
