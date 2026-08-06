@@ -77,7 +77,8 @@ const EMPTY_SYMBOL_GRAPH: SymbolGraph = {
   nodes: new Map(),
   edges: [],
 };
-export const NATIVE_WORKER_AUTO_FILE_THRESHOLD = 250;
+import { NATIVE_WORKER_AUTO_FILE_THRESHOLD } from "../indexer/build-workers.js";
+export { NATIVE_WORKER_AUTO_FILE_THRESHOLD };
 export const AGENT_FRESHNESS_CHECK_INTERVAL_MS = 5_000;
 const DEFAULT_MAX_AUTO_REFRESH_FILES = 50;
 const DEFAULT_MAX_AUTO_REFRESH_BYTES = 2_000_000;

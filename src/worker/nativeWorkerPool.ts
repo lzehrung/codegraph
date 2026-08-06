@@ -13,14 +13,15 @@ export type NativeWorkerPoolOptions = {
   maxQueue?: number | undefined;
 };
 
-const DEFAULT_MAX_THREADS = 8;
+const HARD_MAX_THREADS = 64;
 
 function resolveThreadCount(requested?: number): number {
   const cpus = os.cpus().length;
   if (requested && requested > 0) {
-    return Math.min(requested, 64);
+    return Math.min(requested, HARD_MAX_THREADS);
   }
-  return Math.min(Math.max(cpus - 1, 1), DEFAULT_MAX_THREADS);
+  // Size from available cores; leave one for the main thread.
+  return Math.min(Math.max(cpus - 1, 1), HARD_MAX_THREADS);
 }
 
 export function resolveNativeWorkerPath(): string {

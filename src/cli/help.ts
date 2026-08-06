@@ -41,7 +41,7 @@ Graph Options:
 Build Options:
   --threads N               Number of worker threads (default: auto)
   --native <mode>           Native runtime mode: auto, on, off
-  --workers                 Use Piscina worker threads for native extraction
+  --workers                 Force Piscina native-extraction workers (auto above 250 files)
   --cache <mode>            Cache mode: disk, memory, off
   --limit N                 Result limit for hotspots/inspect summaries
   --cache-strict            Force strict content-hash cache validation
@@ -409,7 +409,7 @@ Index Options:
   --no-progress      Suppress automatic index progress feedback
   --threads N        Number of worker threads (default: auto)
   --native <mode>    Native runtime mode: auto, on, off
-  --workers          Use Piscina worker threads for native extraction
+  --workers          Force Piscina native-extraction workers (auto above 250 files)
   --include-glob <glob> Restrict discovered files to extra glob(s), relative to each scan root
   --ignore-glob <glob>  Exclude extra discovered files by glob, relative to each scan root
   --no-gitignore        Do not apply .gitignore files during discovery
@@ -446,7 +446,7 @@ Index Options:
   --no-progress      Suppress automatic index progress feedback
   --threads N        Number of worker threads (default: auto)
   --native <mode>    Native runtime mode: auto, on, off
-  --workers          Use Piscina worker threads for native extraction
+  --workers          Force Piscina native-extraction workers (auto above 250 files)
   --include-glob <glob> Restrict discovered files to extra glob(s), relative to each scan root
   --ignore-glob <glob>  Exclude extra discovered files by glob, relative to each scan root
   --no-gitignore        Do not apply .gitignore files during discovery

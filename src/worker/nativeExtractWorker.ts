@@ -8,6 +8,7 @@ import type {
   NativeBinding,
   NativeFallbackReason,
   NativeQueryResults,
+  NativeSyntaxTree,
 } from "../native/contracts.js";
 import { loadNativeBinding } from "../native/bindingLoader.js";
 import type { NativeBindingLoadResult } from "../native/bindingLoader.js";
@@ -29,9 +30,20 @@ export type NativeExtractResult = {
   source: string;
   nativeResults: NativeQueryResults | null;
   compactResults: CompactQueryResults | null;
+  syntaxTree: NativeSyntaxTree | null;
   fallbackReason?: NativeFallbackReason;
   error?: string;
 };
+
+export type NativeExtractBatchTask = {
+  tasks: NativeExtractTask[];
+};
+
+export type NativeExtractBatchResult = {
+  results: NativeExtractResult[];
+};
+
+export const NATIVE_WORKER_BATCH_SIZE = 32;
 
 const require = createRequire(import.meta.url);
 const localNativePackageRoot = path.resolve(
@@ -85,6 +97,7 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
         source,
         nativeResults: null,
         compactResults: null,
+        syntaxTree: null,
         fallbackReason: "unavailable",
         ...(loadError ? { error: loadError } : {}),
       };
@@ -97,6 +110,7 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
         source,
         nativeResults: null,
         compactResults: null,
+        syntaxTree: null,
         fallbackReason: "unsupportedLanguage",
       };
     }
@@ -110,6 +124,7 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
           source,
           nativeResults: null,
           compactResults,
+          syntaxTree: null,
         };
       }
 
@@ -121,12 +136,21 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
         task.localsQuery,
         task.importBindingsQuery,
       );
+      let syntaxTree: NativeSyntaxTree | null = null;
+      if (binding.parseSyntaxTree) {
+        try {
+          syntaxTree = binding.parseSyntaxTree(source, task.languageId);
+        } catch {
+          syntaxTree = null;
+        }
+      }
       return {
         filePath: task.filePath,
         languageId: task.languageId,
         source,
         nativeResults,
         compactResults: null,
+        syntaxTree,
       };
     } catch (err) {
       return {
@@ -135,6 +159,7 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
         source,
         nativeResults: null,
         compactResults: null,
+        syntaxTree: null,
         fallbackReason: "queryFailure",
         error: err instanceof Error ? err.message : String(err),
       };
@@ -147,4 +172,17 @@ const runExtraction = createNativeExtractor({
   readFile: fsp.readFile,
 });
 
-export default runExtraction;
+export async function runExtractionBatch(batch: NativeExtractBatchTask): Promise<NativeExtractBatchResult> {
+  const results: NativeExtractResult[] = [];
+  for (const task of batch.tasks) {
+    results.push(await runExtraction(task));
+  }
+  return { results };
+}
+
+export default async function runWorkerTask(
+  task: NativeExtractTask | NativeExtractBatchTask,
+): Promise<NativeExtractResult | NativeExtractBatchResult> {
+  if ("tasks" in task) return await runExtractionBatch(task);
+  return await runExtraction(task);
+}

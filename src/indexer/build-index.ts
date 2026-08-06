@@ -23,6 +23,7 @@ import type { FallbackImportExtractionEvent } from "../graphs/specifiers.js";
 import type { GraphBuildOptions, GraphCacheEntry } from "../graphs/types.js";
 import { isGraphOnlyLanguage } from "../documentLinks.js";
 import { attemptParsePreparedFileContext, type ParsedFileContext } from "./parse-context.js";
+import { ProjectedSyntaxTree } from "../native/projectedTree.js";
 import { collectImportsForFile } from "./imports.js";
 import { collectLocalsAndExportsFromSource } from "./locals-and-exports.js";
 import { compareEdges, edgeKey, toRelativeEdge } from "./shared.js";
@@ -216,7 +217,9 @@ async function buildIndexedModuleForFile(args: {
   let tree: SyntaxTreeLike | undefined;
   const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
 
-  if (!nativeQueries && !graphOnlyLanguage && sup.id !== "sql") {
+  if (prepared.syntaxTree) {
+    tree = new ProjectedSyntaxTree(source, prepared.syntaxTree);
+  } else if (!nativeQueries && !graphOnlyLanguage && sup.id !== "sql") {
     const parseAttempt = attemptParsePreparedFileContext(prepared);
     const parsed = parseAttempt.parsed;
     if (parsed) {
@@ -231,6 +234,14 @@ async function buildIndexedModuleForFile(args: {
         ...(parseAttempt.nativeError ? { nativeError: parseAttempt.nativeError } : {}),
         ...(parseAttempt.jsError ? { jsError: parseAttempt.jsError } : {}),
       });
+    }
+  } else if (nativeQueries && !graphOnlyLanguage && sup.id !== "sql") {
+    // Worker returned queries without a tree (older path/fallback): reconstruct once.
+    const parseAttempt = attemptParsePreparedFileContext(prepared);
+    const parsed = parseAttempt.parsed;
+    if (parsed) {
+      tree = parsed.tree;
+      resolvedLang = parsed.lang ?? resolvedLang;
     }
   }
   const lacksParserContext = !nativeQueries && !tree;
@@ -623,7 +634,7 @@ async function buildIndexFromFileListShared(
     return !(matchesGitSig || cachedEdgesEntry.sig === sigInfo.sig);
   };
   const jsonDependencies = new Set<string>();
-  const workerSetup = await setupWorkerPool(opts);
+  const workerSetup = await setupWorkerPool(opts, normalizedFiles.length);
   try {
     const useBloomFilters = opts?.useBloomFilters ?? true;
     const bloomFilterCache = useBloomFilters
@@ -1328,7 +1339,7 @@ export async function buildProjectIndexIncremental(
 
     const workspaceConfig = await loadWorkspaceConfig(projectRoot);
     const conc = buildConcurrency(opts);
-    const workerSetup = await setupWorkerPool(opts);
+    const workerSetup = await setupWorkerPool(opts, allFiles.size);
     try {
       const useGitSignatures = gitAvailable;
       const gitSigMap = useGitSignatures
