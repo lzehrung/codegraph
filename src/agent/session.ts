@@ -15,6 +15,7 @@ import { languageExtensionPatterns, normalizeLanguageExtensions } from "../langu
 import { createAgentFileLookup } from "./normalize.js";
 import { summarizeAnalysis, type AnalysisSummary } from "../analysisSummary.js";
 import { runSessionInvalidationHooks } from "./sessionLifecycle.js";
+import { prepareDuplicateAnalysis, type DuplicatePreparedAnalysis } from "../duplicates.js";
 
 export type AgentProjectSnapshot = {
   root: string;
@@ -69,6 +70,8 @@ export type AgentSession = {
   discoverFiles?: () => Promise<string[]>;
   listFiles?: () => Promise<string[]>;
   loadProject: (loadOptions?: AgentLoadProjectOptions) => Promise<AgentProjectSnapshot>;
+  /** Bucketed duplicate-detection analysis for the current index, memoized for the session. */
+  loadDuplicateAnalysis?: () => Promise<DuplicatePreparedAnalysis>;
   checkFreshness?: () => Promise<AgentFreshnessResult>;
   invalidate: () => void;
 };
@@ -275,6 +278,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
   let cachedBasicSnapshot: Promise<AgentProjectSnapshot> | undefined;
   let cachedSkippedSnapshot: Promise<AgentProjectSnapshot> | undefined;
   let cachedFileSignatures: Map<string, AgentFileSignature> | undefined;
+  let cachedDuplicateAnalysis: Promise<DuplicatePreparedAnalysis> | undefined;
 
   let lastFreshnessCheckedAt = 0;
   let lastFreshnessResult: AgentFreshnessResult | undefined;
@@ -291,6 +295,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     cachedBasicSnapshot = undefined;
     cachedSkippedSnapshot = undefined;
     cachedFileSignatures = undefined;
+    cachedDuplicateAnalysis = undefined;
     lastFreshnessCheckedAt = 0;
     lastFreshnessResult = undefined;
     freshnessInFlight = undefined;
@@ -436,6 +441,18 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     return await cachedEagerSnapshot;
   };
 
+  const loadDuplicateAnalysis = async (): Promise<DuplicatePreparedAnalysis> => {
+    if (cachedDuplicateAnalysis) return cachedDuplicateAnalysis;
+    const loadPromise = loadBase().then((base) =>
+      prepareDuplicateAnalysis(base.index, { projectRoot: options.root }),
+    );
+    cachedDuplicateAnalysis = loadPromise;
+    loadPromise.catch(() => {
+      if (cachedDuplicateAnalysis === loadPromise) cachedDuplicateAnalysis = undefined;
+    });
+    return loadPromise;
+  };
+
   const checkFreshness = async (): Promise<AgentFreshnessResult> => {
     const policy = options.freshness?.policy ?? "check";
     if (policy === "manual") return { state: "fresh" };
@@ -503,6 +520,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     discoverFiles: () => listAgentSessionFiles(options),
     listFiles: loadFiles,
     loadProject,
+    loadDuplicateAnalysis,
     checkFreshness,
     invalidate,
   };

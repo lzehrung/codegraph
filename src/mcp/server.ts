@@ -838,15 +838,22 @@ function createCodegraphMcpHandlersForSession(
       }),
 
     review: async (request) =>
-      await withFreshness(
-        async () =>
-          await buildReviewReport(root, {
+      await withFreshness(async () => {
+        const [snapshot, duplicateAnalysis] = await Promise.all([
+          session.loadProject({ symbolGraph: "skip" }),
+          session.loadDuplicateAnalysis?.(),
+        ]);
+        return await buildReviewReport(
+          root,
+          {
             ...options.buildOptions,
             gitBase: request.base,
             gitHead: request.head,
             ...(request.reviewDepth !== undefined ? { reviewDepth: request.reviewDepth } : {}),
-          }),
-      ),
+          },
+          { index: snapshot.index, ...(duplicateAnalysis ? { duplicateAnalysis } : {}) },
+        );
+      }),
 
     query_sqlite: async (request) => {
       if (!sqlitePath) {

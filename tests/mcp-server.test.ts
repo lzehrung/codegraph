@@ -3,6 +3,8 @@ import { request as httpRequest } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import * as indexerBuild from "../src/indexer/build-index.js";
+import * as duplicatesModule from "../src/duplicates.js";
 import { describe, expect, it, vi } from "vitest";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
 import {
@@ -188,6 +190,47 @@ describe("codegraph MCP handlers", () => {
     expect(impact).not.toHaveProperty("reviewTasks");
     expect(review).toHaveProperty("riskSummary");
     expect(review).toHaveProperty("reviewTasks");
+  });
+
+  it("reuses the session project index and duplicate analysis across repeated review calls", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-review-reuse-"));
+    runGit(root, ["init"]);
+    const duplicateSource = [
+      "export function normalizeInvoiceRows(rows) {",
+      "  const totals = [];",
+      "  const labels = [];",
+      "  for (const row of rows) {",
+      "    const subtotal = row.amount + row.tax;",
+      "    const rounded = Math.round(subtotal * 100) / 100;",
+      "    const label = rounded > 100 ? 'large' : 'small';",
+      "    labels.push(label);",
+      "    totals.push(rounded);",
+      "  }",
+      "  const encoded = totals.map((value, index) => labels[index] + ':' + value.toFixed(2));",
+      "  return encoded.filter((value) => value.includes(':')).join(',');",
+      "}",
+      "",
+    ].join("\n");
+    await fs.writeFile(path.join(root, "a.ts"), duplicateSource, "utf8");
+    await fs.writeFile(path.join(root, "b.ts"), duplicateSource, "utf8");
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "base"]);
+    const base = runGit(root, ["rev-parse", "HEAD"]);
+    await fs.writeFile(path.join(root, "a.ts"), duplicateSource.replace("row.amount", "row.amount /* changed */"), "utf8");
+    runGit(root, ["add", "a.ts"]);
+    runGit(root, ["commit", "-m", "change"]);
+
+    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
+    const prepareSpy = vi.spyOn(duplicatesModule, "prepareDuplicateAnalysis");
+    const handlers = createCodegraphMcpHandlers({ root });
+
+    const first = await handlers.review({ base, head: "HEAD" });
+    const second = await handlers.review({ base, head: "HEAD" });
+
+    expect(first.reviewTasks.some((task) => task.reason === "duplicate-sibling")).toBe(true);
+    expect(second.reviewTasks.some((task) => task.reason === "duplicate-sibling")).toBe(true);
+    expect(buildSpy).toHaveBeenCalledTimes(1);
+    expect(prepareSpy).toHaveBeenCalledTimes(1);
   });
 
   it("keeps tool calls available when installed package metadata disappears", async () => {

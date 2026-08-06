@@ -141,6 +141,13 @@ async function buildReviewIndex(input: {
   diffChangesByFile: ReadonlyMap<string, FileChange>;
   reviewReport?: ReviewBuildReport;
   reviewTimings?: ReviewTimingReport;
+  /**
+   * A pre-built project index (e.g. an already-loaded agent session snapshot) to reuse
+   * instead of loading a fresh one. Only used when the review does not request additional
+   * files beyond normal project scope, since a caller-provided index cannot know about
+   * scope it wasn't built with.
+   */
+  providedIndex?: ProjectIndex;
 }): Promise<ReviewIndexStage> {
   const {
     projectRoot,
@@ -150,6 +157,7 @@ async function buildReviewIndex(input: {
     diffChangesByFile,
     reviewReport,
     reviewTimings,
+    providedIndex,
   } = input;
   const fastGraphRequested = appliedOptions.graph?.fast ?? false;
   const graphOptions = appliedOptions.graph ? { ...appliedOptions.graph, fast: fastGraphRequested } : { fast: false };
@@ -177,19 +185,26 @@ async function buildReviewIndex(input: {
   // Review range selection describes the diff, not the freshness scope of the
   // current-project index: the shared loader strips those inputs and lets incremental
   // indexing reconcile the whole project, unioning review targets outside discovery.
-  const index = await loadCurrentProjectIndex({
-    root: projectRoot,
-    scope: {
-      kind: "project",
-      ...(appliedOptions.files?.length ? { additionalFiles: appliedOptions.files } : {}),
-    },
-    options: {
-      ...appliedOptions,
-      graph: graphOptions,
-      keepParsed: true,
-      ...(indexReport ? { report: indexReport } : {}),
-    },
-  });
+  // A caller-provided index (e.g. an already-loaded agent session snapshot) is reused
+  // as-is when the review does not request additional files beyond normal project scope
+  // -- that index was already built with `filesAreProjectScope: true`, so it is always at
+  // least as complete as what a fresh load would produce here.
+  const index =
+    providedIndex && !appliedOptions.files?.length
+      ? providedIndex
+      : await loadCurrentProjectIndex({
+          root: projectRoot,
+          scope: {
+            kind: "project",
+            ...(appliedOptions.files?.length ? { additionalFiles: appliedOptions.files } : {}),
+          },
+          options: {
+            ...appliedOptions,
+            graph: graphOptions,
+            keepParsed: true,
+            ...(indexReport ? { report: indexReport } : {}),
+          },
+        });
   if (reviewReport) {
     Object.defineProperty(reviewReport, "index", {
       value: index,
@@ -218,7 +233,11 @@ async function buildReviewIndex(input: {
  * of terminal prose. Prefer this API over CLI summary output when composing
  * deterministic model context or review file packs.
  */
-export async function buildReviewReport(projectRoot: string, opts: ReviewOptions = {}): Promise<ReviewReport> {
+export async function buildReviewReport(
+  projectRoot: string,
+  opts: ReviewOptions = {},
+  cached?: { index?: ProjectIndex; duplicateAnalysis?: DuplicatePreparedAnalysis },
+): Promise<ReviewReport> {
   const appliedOptions = applyReviewPresetOptions(opts);
   const reviewReport = appliedOptions.report;
   const reviewTimings = reviewReport?.timings;
@@ -292,6 +311,7 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
     diffChangesByFile,
     ...(reviewReport ? { reviewReport } : {}),
     ...(reviewTimings ? { reviewTimings } : {}),
+    ...(cached?.index ? { providedIndex: cached.index } : {}),
   });
   const includeDiffContext = appliedOptions.includeDiffContext ?? (includeSymbolDetails && diffHunksByFile.size > 0);
 
@@ -358,6 +378,7 @@ export async function buildReviewReport(projectRoot: string, opts: ReviewOptions
       summaries,
       changedSymbolIds,
       diffHunksByFile,
+      ...(cached?.duplicateAnalysis ? { providedAnalysis: cached.duplicateAnalysis } : {}),
     });
     report.reviewTasks.push(...duplicateReview.tasks);
     if (reviewReport && duplicateReview.preparedAnalysis) {
@@ -475,6 +496,8 @@ async function collectReviewDuplicateTasks(input: {
   summaries: readonly ReviewFileSummary[];
   changedSymbolIds: readonly string[];
   diffHunksByFile: ReadonlyMap<string, Hunk[]>;
+  /** A pre-bucketed analysis to reuse instead of preparing one from scratch. */
+  providedAnalysis?: DuplicatePreparedAnalysis;
 }): Promise<{ tasks: ReviewTask[]; preparedAnalysis?: DuplicatePreparedAnalysis }> {
   const diffHunksByDisplayFile = new Map(
     Array.from(input.diffHunksByFile, ([file, hunks]) => [relativeReviewPath(input.projectRoot, file), hunks]),
@@ -507,9 +530,11 @@ async function collectReviewDuplicateTasks(input: {
   }
   if (!targets.length) return { tasks: [] };
 
-  const preparedAnalysis = await prepareDuplicateAnalysis(input.index, {
-    projectRoot: input.projectRoot,
-  });
+  const preparedAnalysis =
+    input.providedAnalysis ??
+    (await prepareDuplicateAnalysis(input.index, {
+      projectRoot: input.projectRoot,
+    }));
   const contexts = await findDuplicateContextsWithPreparedAnalysis(preparedAnalysis, targets, {
     projectRoot: input.projectRoot,
     minConfidence: "high",
