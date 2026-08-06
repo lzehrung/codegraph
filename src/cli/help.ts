@@ -7,7 +7,7 @@ export const CLI_TASK_HELP_TEXT = `codegraph - Ask structural questions about a 
 Start here:
   Configure every supported agent  codegraph install --all --dry-run
   Understand a repository          codegraph explore "how does auth reach the database?" --root .
-  Review local changes             codegraph review --base HEAD --head WORKTREE
+  Review local changes             codegraph review
   Find a symbol or file            codegraph search "SessionManager" --json
   Check runtime health             codegraph doctor
 
@@ -18,7 +18,7 @@ export const CLI_HELP_TEXT = `codegraph - Code analysis and dependency graph too
 Start here:
   Configure every supported agent  codegraph install --all --dry-run
   Understand a repository          codegraph explore "how does auth reach the database?" --root .
-  Review local changes             codegraph review --base HEAD --head WORKTREE
+  Review local changes             codegraph review
   Find a symbol or file            codegraph search "SessionManager" --json
   Check runtime health             codegraph doctor
 
@@ -79,7 +79,7 @@ Unfamiliar repo:
   codegraph orient --root . --budget small
 
 Examples:
-  codegraph review --base HEAD --head WORKTREE
+  codegraph review
   codegraph orient ./src --budget small
   codegraph search "auth user" --json
   codegraph explore "how does auth reach db?"
@@ -556,11 +556,14 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const REVIEW_HELP_TEXT = `codegraph review - Generate a code review report for a git range
 
-Usage: codegraph review [project-root] [--root <path>] [--base <ref> --head <ref>] [--json | --pretty] [--max-tests <n>] [--max-callsites <n>]
+Usage: codegraph review [project-root] [--root <path>] [--base <ref>] [--head <ref>] [--json | --pretty] [--max-tests <n>] [--max-callsites <n>]
+
+Defaults:
+  Git-backed review defaults to HEAD..WORKTREE when --base/--head/--changed-since are omitted.
 
 Options:
-  --base <ref>         Base revision. Unlike impact, review does not invent a default range.
-  --head <ref>         Head revision or WORKTREE for local changes.
+  --base <ref>         Base revision. Defaults to HEAD unless --changed-since is used.
+  --head <ref>         Head revision or WORKTREE for local changes. Defaults to WORKTREE unless --changed-since is used.
   --max-tests <n>      Cap candidate tests included in the report.
   --max-callsites <n>  Cap call sites included in the report.
   --json               Structured review report for automation.

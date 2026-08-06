@@ -272,9 +272,9 @@ async function collectReviewDuplicateSummary(input: {
 
 export async function handleReviewCommand(context: ReviewCommandContext): Promise<void> {
   const commandStart = performance.now();
-  const base = context.getOpt("--base");
-  const head = context.getOpt("--head");
   const changedSince = context.getOpt("--changed-since");
+  const base = context.getOpt("--base") ?? (changedSince === undefined ? "HEAD" : undefined);
+  const head = context.getOpt("--head") ?? (changedSince === undefined ? "WORKTREE" : undefined);
   const reviewDepthRaw = context.getOpt("--review-depth");
   const reviewDepth = reviewDepthRaw !== undefined ? parseReviewDepth(reviewDepthRaw) : null;
   if (reviewDepthRaw !== undefined && !reviewDepth) {
