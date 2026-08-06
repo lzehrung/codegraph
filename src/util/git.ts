@@ -7,6 +7,11 @@ import { logWithLevel, type LogLevel } from "../logging.js";
 
 const execFileAsync = promisify(execFile);
 
+// Git diff/name-only output can legitimately exceed Node's small default execFile stdout
+// buffer on large review ranges; keep the cap high enough for real repo diffs while still
+// bounded instead of inheriting the ~1 MiB default that causes review/MCP failures.
+const GIT_STDOUT_MAX_BUFFER = 64 * 1024 * 1024;
+
 const gitRepositoryChecks = new Map<string, Promise<boolean>>();
 
 export function isGitWorktreeSentinel(value: string): boolean {
@@ -221,6 +226,7 @@ export async function listChangedFiles(
     const { stdout } = await execFileAsync("git", args, {
       cwd: projectRoot,
       env: process.env,
+      maxBuffer: GIT_STDOUT_MAX_BUFFER,
     });
     const relFiles = stdout
       .split(/\r?\n/)
@@ -260,6 +266,7 @@ export async function listUntrackedFiles(
     const { stdout } = await execFileAsync("git", args, {
       cwd: projectRoot,
       env: process.env,
+      maxBuffer: GIT_STDOUT_MAX_BUFFER,
     });
     // git ls-files -z NUL-delimits entries; the trailing split segment is always an
     // empty string, not a filename, so filter it out without trimming (a leading or
@@ -304,6 +311,7 @@ export async function getUnifiedDiff(
     const { stdout } = await execFileAsync("git", args, {
       cwd: projectRoot,
       env: process.env,
+      maxBuffer: GIT_STDOUT_MAX_BUFFER,
     });
     return stdout;
   } catch (error) {
