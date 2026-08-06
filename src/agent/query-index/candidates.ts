@@ -1,14 +1,6 @@
-import type { QueryIndexStore, StoredQueryIndexChunk } from "./store.js";
+import { codePointLength, escapeFtsTrigramTerm, type QueryIndexStore, type StoredQueryIndexChunk } from "./store.js";
 
 export const QUERY_INDEX_CANDIDATE_VERSION = 4;
-
-function codePointLength(value: string): number {
-  return Array.from(value).length;
-}
-
-export function escapeFtsTrigramTerm(term: string): string {
-  return `"${term.replaceAll('"', '""')}"`;
-}
 
 export function findQueryIndexChunkCandidates(
   store: QueryIndexStore,
@@ -23,7 +15,7 @@ export function findQueryIndexChunkCandidates(
     if (codePointLength(term) >= 3) {
       chunks = store.ftsChunkCandidates(escapeFtsTrigramTerm(term));
     } else {
-      chunks = store.substringChunkCandidates(term);
+      chunks = store.substringChunkCandidates(term, eligiblePaths);
     }
     for (const chunk of chunks) {
       if (eligiblePathSet.has(chunk.path)) directCandidates.set(`${chunk.path}\0${chunk.ordinal}`, chunk);

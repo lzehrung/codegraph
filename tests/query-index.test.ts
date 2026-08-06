@@ -6,7 +6,7 @@ import { searchCodegraphWithSession, type AgentSearchResponse } from "../src/age
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
 import { disposeSessionQueryIndex } from "../src/agent/query-index/sessionStore.js";
 import { resolveQueryIndexPaths, resolveQueryIndexSourcePath } from "../src/agent/query-index/paths.js";
-import { probeQueryIndexSqliteSupport } from "../src/agent/query-index/schema.js";
+import { expectedQueryIndexVersionMetadata, probeQueryIndexSqliteSupport } from "../src/agent/query-index/schema.js";
 import { SqliteDatabase } from "../src/sqlite-driver.js";
 import { ensureQueryIndex } from "../src/agent/query-index/update.js";
 import { QueryIndexStore } from "../src/agent/query-index/store.js";
@@ -15,6 +15,8 @@ import { buildProjectIndexIncremental } from "../src/indexer/build-index.js";
 import { isSymlinkUnavailable } from "./helpers/filesystem.js";
 import { createCodegraphMcpHandlers } from "../src/mcp/server.js";
 import { captureCli } from "./helpers/cli.js";
+import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
+import type { PreparedQueryIndexFile } from "../src/agent/query-index/content.js";
 
 const roots: string[] = [];
 const sessions: AgentSession[] = [];
@@ -540,6 +542,84 @@ describe("persistent query index", () => {
     inspected.close();
     expect(version?.user_version).toBe(3);
     expect(fileColumns).toContainEqual(expect.objectContaining({ name: "normalized_text", type: "BLOB" }));
+  });
+
+  function compressQueryText(text: string): Uint8Array {
+    return brotliCompressSync(text, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } });
+  }
+
+  function preparedFile(filePath: string, chunkTexts: readonly string[]): PreparedQueryIndexFile {
+    const fullText = chunkTexts.join("\n");
+    return {
+      path: filePath,
+      sourceIdentity: `sig-${filePath}`,
+      surface: "code",
+      language: "typescript",
+      byteLength: Buffer.byteLength(fullText, "utf8"),
+      lineCount: fullText.split("\n").length,
+      normalizedText: compressQueryText(fullText.toLowerCase()),
+      sourceRead: true,
+      chunks: chunkTexts.map((text, ordinal) => ({
+        ordinal,
+        kind: "chunk",
+        text: compressQueryText(text),
+        normalizedText: text.toLowerCase(),
+        startLine: ordinal + 1,
+        endLine: ordinal + 1,
+      })),
+    };
+  }
+
+  it("resolves eligible file paths for indexable terms through the FTS index", async () => {
+    const root = await createRepo();
+    const databasePath = path.join(root, "query-eligible.sqlite");
+    const store = new QueryIndexStore(databasePath);
+    store.replaceFiles(
+      [
+        preparedFile("src/alpha.ts", ["export function processPaymentBatch() { return 1; }"]),
+        preparedFile("src/beta.ts", ["export function unrelatedHelper() { return 2; }"]),
+      ],
+      [],
+      {
+        ...expectedQueryIndexVersionMetadata(),
+        projectSnapshotIdentity: "snap-1",
+        projectRootIdentity: "root-1",
+        createdByCodegraphVersion: "test",
+        updatedAt: new Date().toISOString(),
+      },
+    );
+
+    expect(store.eligibleFilePaths(["processpaymentbatch"])).toEqual(["src/alpha.ts"]);
+    expect(store.eligibleFilePaths(["unrelatedhelper"])).toEqual(["src/beta.ts"]);
+    expect(store.eligibleFilePaths(["nonexistentterm"])).toEqual([]);
+    store.close();
+  });
+
+  it("scopes the short-term substring fallback to the given eligible paths", async () => {
+    const root = await createRepo();
+    const databasePath = path.join(root, "query-short-term.sqlite");
+    const store = new QueryIndexStore(databasePath);
+    store.replaceFiles(
+      [
+        preparedFile("src/alpha.ts", ["const id = 1;"]),
+        preparedFile("src/beta.ts", ["const id = 2;"]),
+      ],
+      [],
+      {
+        ...expectedQueryIndexVersionMetadata(),
+        projectSnapshotIdentity: "snap-2",
+        projectRootIdentity: "root-2",
+        createdByCodegraphVersion: "test",
+        updatedAt: new Date().toISOString(),
+      },
+    );
+
+    const bothFiles = store.substringChunkCandidates("id", ["src/alpha.ts", "src/beta.ts"]);
+    expect(new Set(bothFiles.map((chunk) => chunk.path))).toEqual(new Set(["src/alpha.ts", "src/beta.ts"]));
+
+    const scoped = store.substringChunkCandidates("id", ["src/alpha.ts"]);
+    expect(scoped.map((chunk) => chunk.path)).toEqual(["src/alpha.ts"]);
+    store.close();
   });
 
   it("rejects absolute and traversing paths from persisted rows", async () => {
