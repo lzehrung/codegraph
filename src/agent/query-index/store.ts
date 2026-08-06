@@ -10,11 +10,12 @@ import {
 
 export const QUERY_INDEX_BUSY_TIMEOUT_MS = 250;
 
-/** Defensive cap on rows a single candidate query returns; well above realistic match
- * counts, it only bounds pathological terms that match an unusually large share of the
- * corpus (final relevance ranking happens after candidate fetch, so a normal query never
- * hits this). */
-const CANDIDATE_ROW_LIMIT = 2000;
+/** Final cap on hydrated query-index candidates passed into scoring. */
+export const QUERY_INDEX_CANDIDATE_ROW_LIMIT = 2000;
+
+/** Overfetch before applying the final cap so later, higher-quality matches can survive
+ * path-ordered SQL reads and be kept once we do cheap in-memory ranking. */
+const QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT = QUERY_INDEX_CANDIDATE_ROW_LIMIT * 4;
 
 export function codePointLength(value: string): number {
   return Array.from(value).length;
@@ -287,7 +288,7 @@ export class QueryIndexStore {
     }
   }
 
-  ftsChunkCandidates(query: string): StoredQueryIndexChunk[] {
+  ftsChunkCandidates(query: string, limit = QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT): StoredQueryIndexChunk[] {
     const rows = this.db
       .prepare(
         `
@@ -298,7 +299,7 @@ export class QueryIndexStore {
         JOIN files ON files.file_id = chunks.file_id
         WHERE chunk_search MATCH ?
         ORDER BY files.path, chunks.ordinal
-        LIMIT ${CANDIDATE_ROW_LIMIT}
+        LIMIT ${limit}
       `,
       )
       .all(query) as Array<Record<string, unknown>>;
@@ -308,7 +309,11 @@ export class QueryIndexStore {
     });
   }
 
-  substringChunkCandidates(query: string, paths: readonly string[]): StoredQueryIndexChunk[] {
+  substringChunkCandidates(
+    query: string,
+    paths: readonly string[],
+    limit = QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT,
+  ): StoredQueryIndexChunk[] {
     const candidates: StoredQueryIndexChunk[] = [];
     const batchSize = 500;
     for (let offset = 0; offset < paths.length; offset += batchSize) {
@@ -331,12 +336,12 @@ export class QueryIndexStore {
         const chunk = storedCandidateChunkFromRow(row);
         if (chunk) candidates.push(chunk);
       }
-      if (candidates.length >= CANDIDATE_ROW_LIMIT) break;
+      if (candidates.length >= limit) break;
     }
     return candidates;
   }
 
-  compactChunkCandidates(query: string, paths: readonly string[]): StoredQueryIndexChunk[] {
+  compactChunkCandidates(query: string, paths: readonly string[], limit = QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT): StoredQueryIndexChunk[] {
     const candidates: StoredQueryIndexChunk[] = [];
     const batchSize = 500;
     for (let offset = 0; offset < paths.length; offset += batchSize) {
@@ -359,7 +364,7 @@ export class QueryIndexStore {
         const chunk = storedCandidateChunkFromRow(row);
         if (chunk) candidates.push(chunk);
       }
-      if (candidates.length >= CANDIDATE_ROW_LIMIT) break;
+      if (candidates.length >= limit) break;
     }
     return candidates;
   }

@@ -9,7 +9,7 @@ import { resolveQueryIndexPaths, resolveQueryIndexSourcePath } from "../src/agen
 import { expectedQueryIndexVersionMetadata, probeQueryIndexSqliteSupport } from "../src/agent/query-index/schema.js";
 import { SqliteDatabase } from "../src/sqlite-driver.js";
 import { ensureQueryIndex } from "../src/agent/query-index/update.js";
-import { QueryIndexStore } from "../src/agent/query-index/store.js";
+import { QueryIndexStore, QUERY_INDEX_CANDIDATE_ROW_LIMIT } from "../src/agent/query-index/store.js";
 import * as queryIndexWorkerPool from "../src/agent/query-index/workerPool.js";
 import { buildProjectIndexIncremental } from "../src/indexer/build-index.js";
 import { isSymlinkUnavailable } from "./helpers/filesystem.js";
@@ -17,6 +17,7 @@ import { createCodegraphMcpHandlers } from "../src/mcp/server.js";
 import { captureCli } from "./helpers/cli.js";
 import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
 import type { PreparedQueryIndexFile } from "../src/agent/query-index/content.js";
+import { findQueryIndexChunkCandidates } from "../src/agent/query-index/candidates.js";
 
 const roots: string[] = [];
 const sessions: AgentSession[] = [];
@@ -619,6 +620,34 @@ describe("persistent query index", () => {
 
     const scoped = store.substringChunkCandidates("id", ["src/alpha.ts"]);
     expect(scoped.map((chunk) => chunk.path)).toEqual(["src/alpha.ts"]);
+    store.close();
+  });
+
+  it("keeps later higher-quality chunk matches when candidate hydration is capped", async () => {
+    const root = await createRepo();
+    const databasePath = path.join(root, "query-candidate-cap.sqlite");
+    const store = new QueryIndexStore(databasePath);
+    const fillerCount = QUERY_INDEX_CANDIDATE_ROW_LIMIT + 128;
+    const files = Array.from({ length: fillerCount }, (_, index) =>
+      preparedFile(`src/${String(index).padStart(5, "0")}.ts`, ["const alphaNoise = 1;"]),
+    );
+    files.push(preparedFile("src/zz-top.ts", ["const alphaValue = betaValue;"]));
+    store.replaceFiles(
+      files,
+      [],
+      {
+        ...expectedQueryIndexVersionMetadata(),
+        projectSnapshotIdentity: "snap-3",
+        projectRootIdentity: "root-3",
+        createdByCodegraphVersion: "test",
+        updatedAt: new Date().toISOString(),
+      },
+    );
+
+    const candidates = findQueryIndexChunkCandidates(store, ["alpha", "beta"]);
+    expect(candidates[0]?.path).toBe("src/zz-top.ts");
+    expect(candidates.some((candidate) => candidate.path === "src/zz-top.ts")).toBe(true);
+    expect(candidates).toHaveLength(QUERY_INDEX_CANDIDATE_ROW_LIMIT);
     store.close();
   });
 
