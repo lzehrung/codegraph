@@ -128,6 +128,7 @@ export class SqliteStatement {
 
 export class SqliteDatabase {
   private readonly db: ReadonlyAuthorizerDatabase;
+  private readonly statements = new Map<string, SqliteStatement>();
 
   constructor(filePath: PathLike, options?: { readonly?: boolean; timeout?: number }) {
     const sqlite = loadNodeSqlite();
@@ -144,6 +145,8 @@ export class SqliteDatabase {
   }
 
   exec(sql: string): void {
+    // DDL/schema changes invalidate prepared statements; drop the cache.
+    this.statements.clear();
     this.db.exec(sql);
   }
 
@@ -152,7 +155,11 @@ export class SqliteDatabase {
   }
 
   prepare(sql: string): SqliteStatement {
-    return new SqliteStatement(this.db.prepare(sql) as NodeSqliteStatement);
+    const cached = this.statements.get(sql);
+    if (cached) return cached;
+    const statement = new SqliteStatement(this.db.prepare(sql) as NodeSqliteStatement);
+    this.statements.set(sql, statement);
+    return statement;
   }
 
   transaction<T>(fn: () => T): () => T {
@@ -170,6 +177,7 @@ export class SqliteDatabase {
   }
 
   close(): void {
+    this.statements.clear();
     this.db.close();
   }
 }
