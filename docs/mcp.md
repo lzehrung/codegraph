@@ -100,6 +100,16 @@ Portable handle grammar used across `search`, `get_symbol`, `packet_get`, `expla
 - `graph:<url-encoded project-relative path>`
 - review packet targets are separate quoted strings, not portable handles: `review:base=<encoded-ref>;head=<encoded-ref>`
 
+Positions use 1-based lines and 0-based UTF-16 columns, matching the rest of Codegraph's range and navigation APIs.
+
+MCP tool name ↔ CLI command mapping for the common handle-driven follow-ups:
+- `workspace_symbols` ↔ `codegraph symbols`
+- `search` ↔ `codegraph search`
+- `packet_get` ↔ `codegraph packet get`
+- `get_symbol` ↔ `codegraph explain`
+- `calls` ↔ `codegraph callers` / `codegraph callees`
+- `type_hierarchy` ↔ `codegraph supertypes` / `codegraph subtypes`
+
 ### Rename preview
 
 Call `rename_preview` with flat fields `handle`, `newName`, and optional `includeComments`, `includeStrings`, `includeFilenames`, and `maxEdits`. The edit limit defaults to 5000 and caps at 10000; comment and string candidates are opt-in, while filename suggestions require an eligible exported class, interface, or type whose filename matches its name.
