@@ -230,7 +230,7 @@ function successfulRunner(packageRoot: string, calls: CommandCall[], behavior: R
           query: FUNNEL_EXPLORE_QUERY,
           anchors: [{ file: "src/auth.ts" }, { file: "src/storage.ts" }],
           paths: [{ from: "src/auth.ts", to: "src/storage.ts", path: ["src/auth.ts", "src/storage.ts"] }],
-          followUps: ['codegraph file "src/auth.ts"'],
+          followUps: [{ tool: "get_file", arguments: { file: "src/auth.ts" } }],
         }),
         stderr: "",
       };

@@ -698,11 +698,15 @@ function assertFirstFunnelQueryResponse(explore) {
     !Array.isArray(explore.followUps) ||
     !explore.followUps.length ||
     explore.followUps.length > MAX_FUNNEL_FOLLOW_UPS ||
-    !explore.followUps.some(
-      (followUp) => typeof followUp === "string" && followUp.length <= 512 && followUp.startsWith("codegraph "),
+    !explore.followUps.every(
+      (followUp) =>
+        isRecord(followUp) &&
+        typeof followUp.tool === "string" &&
+        followUp.tool.length > 0 &&
+        isRecord(followUp.arguments),
     )
   ) {
-    throw new Error("First explore query did not return a bounded Codegraph follow-up command.");
+    throw new Error("First explore query did not return a bounded, structured Codegraph follow-up.");
   }
 }
 
