@@ -25,6 +25,11 @@ export function escapeFtsTrigramTerm(term: string): string {
   return `"${term.replaceAll('"', '""')}"`;
 }
 
+function normalizedCandidateLimit(limit: number, fallback = QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT): number {
+  if (!Number.isFinite(limit)) return fallback;
+  return Math.max(0, Math.min(Math.trunc(limit), QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT));
+}
+
 export type StoredQueryIndexChunk = QueryTextChunk & {
   path: string;
 };
@@ -192,7 +197,7 @@ export class QueryIndexStore {
         if (shortTerms.some((term) => normalizedText.includes(term))) paths.add(file);
       }
     }
-    return [...paths];
+    return [...paths].sort((left, right) => left.localeCompare(right));
   }
 
   replaceFiles(
@@ -289,6 +294,7 @@ export class QueryIndexStore {
   }
 
   ftsChunkCandidates(query: string, limit = QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT): StoredQueryIndexChunk[] {
+    const normalizedLimit = normalizedCandidateLimit(limit);
     const rows = this.db
       .prepare(
         `
@@ -299,10 +305,10 @@ export class QueryIndexStore {
         JOIN files ON files.file_id = chunks.file_id
         WHERE chunk_search MATCH ?
         ORDER BY files.path, chunks.ordinal
-        LIMIT ${limit}
+        LIMIT ?
       `,
       )
-      .all(query) as Array<Record<string, unknown>>;
+      .all(query, normalizedLimit) as Array<Record<string, unknown>>;
     return rows.flatMap((row) => {
       const chunk = storedCandidateChunkFromRow(row);
       return chunk ? [chunk] : [];
@@ -314,11 +320,14 @@ export class QueryIndexStore {
     paths: readonly string[],
     limit = QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT,
   ): StoredQueryIndexChunk[] {
+    const normalizedLimit = normalizedCandidateLimit(limit);
     const candidates: StoredQueryIndexChunk[] = [];
     const batchSize = 500;
     for (let offset = 0; offset < paths.length; offset += batchSize) {
       const batch = paths.slice(offset, offset + batchSize);
       const placeholders = batch.map(() => "?").join(", ");
+      const remaining = normalizedLimit - candidates.length;
+      if (remaining <= 0) break;
       const rows = this.db
         .prepare(
           `
@@ -329,24 +338,29 @@ export class QueryIndexStore {
           WHERE files.path IN (${placeholders})
             AND instr(chunks.normalized_text, ?) > 0
           ORDER BY files.path, chunks.ordinal
+          LIMIT ?
         `,
         )
-        .all(...batch, query) as Array<Record<string, unknown>>;
+        .all(...batch, query, remaining) as Array<Record<string, unknown>>;
       for (const row of rows) {
         const chunk = storedCandidateChunkFromRow(row);
         if (chunk) candidates.push(chunk);
+        if (candidates.length >= normalizedLimit) break;
       }
-      if (candidates.length >= limit) break;
+      if (candidates.length >= normalizedLimit) break;
     }
     return candidates;
   }
 
   compactChunkCandidates(query: string, paths: readonly string[], limit = QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT): StoredQueryIndexChunk[] {
+    const normalizedLimit = normalizedCandidateLimit(limit);
     const candidates: StoredQueryIndexChunk[] = [];
     const batchSize = 500;
     for (let offset = 0; offset < paths.length; offset += batchSize) {
       const batch = paths.slice(offset, offset + batchSize);
       const placeholders = batch.map(() => "?").join(", ");
+      const remaining = normalizedLimit - candidates.length;
+      if (remaining <= 0) break;
       const rows = this.db
         .prepare(
           `
@@ -357,14 +371,16 @@ export class QueryIndexStore {
           WHERE files.path IN (${placeholders})
             AND instr(replace(chunks.normalized_text, ' ', ''), ?) > 0
           ORDER BY files.path, chunks.ordinal
+          LIMIT ?
         `,
         )
-        .all(...batch, query) as Array<Record<string, unknown>>;
+        .all(...batch, query, remaining) as Array<Record<string, unknown>>;
       for (const row of rows) {
         const chunk = storedCandidateChunkFromRow(row);
         if (chunk) candidates.push(chunk);
+        if (candidates.length >= normalizedLimit) break;
       }
-      if (candidates.length >= limit) break;
+      if (candidates.length >= normalizedLimit) break;
     }
     return candidates;
   }
