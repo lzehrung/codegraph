@@ -212,6 +212,7 @@ export class QueryIndexStore {
       for (const [key, value] of Object.entries(metadata)) upsertMetadata.run(key, value);
       this.db.exec("COMMIT;");
       this.normalizedFiles = undefined;
+      this.reclaimFreeSpace();
       return "committed";
     } catch (error) {
       try {
@@ -220,6 +221,34 @@ export class QueryIndexStore {
         // Preserve the original write failure.
       }
       throw error;
+    }
+  }
+
+  /**
+   * Reclaims pages freed by deletes/rewrites so the sidecar does not grow unbounded.
+   * Incremental auto-vacuum (set in the constructor) makes this a cheap per-write
+   * PRAGMA once enabled; sidecars created before that switch to it here the first time
+   * accumulated free space crosses a threshold worth a one-time full VACUUM.
+   */
+  private reclaimFreeSpace(): void {
+    try {
+      const mode = (this.db.prepare("PRAGMA auto_vacuum").get() as { auto_vacuum?: number } | undefined)
+        ?.auto_vacuum;
+      if (mode === 2) {
+        this.db.exec("PRAGMA incremental_vacuum;");
+        return;
+      }
+      const freelist =
+        (this.db.prepare("PRAGMA freelist_count").get() as { freelist_count?: number } | undefined)
+          ?.freelist_count ?? 0;
+      const pages =
+        (this.db.prepare("PRAGMA page_count").get() as { page_count?: number } | undefined)?.page_count ?? 0;
+      if (pages > 0 && freelist / pages > 0.15) {
+        this.db.pragma("auto_vacuum = INCREMENTAL");
+        this.db.exec("VACUUM;");
+      }
+    } catch {
+      // Best-effort maintenance; never block a write on it.
     }
   }
 

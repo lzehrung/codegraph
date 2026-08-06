@@ -3,6 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import { brotliDecompressSync } from "node:zlib";
 import { DatabaseSync } from "node:sqlite";
 import { buildProjectIndex } from "../src/index.js";
 
@@ -18,12 +19,12 @@ describe("Incremental cache modes", () => {
   const readDiskCacheRow = (
     projectRoot: string,
     file: string,
-  ): { sig: string; version: number; payload: string; updated_at: number } | null => {
+  ): { sig: string; version: number; payload: Uint8Array; updated_at: number } | null => {
     const dbPath = diskCacheDbPathFor(projectRoot);
     const db = new DatabaseSync(dbPath, { readOnly: true });
     try {
       const row = db.prepare("SELECT sig, version, payload, updated_at FROM module_cache WHERE file = ?").get(file) as
-        | { sig: string; version: number; payload: string; updated_at: number }
+        | { sig: string; version: number; payload: Uint8Array; updated_at: number }
         | undefined;
       return row ?? null;
     } finally {
@@ -70,9 +71,9 @@ describe("Incremental cache modes", () => {
 
     const row = readDiskCacheRow(root, fileId);
     expect(row).not.toBeNull();
-    expect(row?.version).toBe(1);
+    expect(row?.version).toBe(2);
     expect(typeof row?.sig).toBe("string");
-    const payload = JSON.parse(row?.payload ?? "null") as unknown;
+    const payload = JSON.parse(row?.payload ? brotliDecompressSync(row.payload).toString("utf8") : "null") as unknown;
     expect(typeof payload).toBe("object");
     expect(payload).not.toBeNull();
     if (payload && typeof payload === "object" && "file" in payload) {

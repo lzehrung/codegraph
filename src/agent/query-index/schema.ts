@@ -129,6 +129,9 @@ export function ensureQueryIndexSchema(db: SqliteDatabase): void {
     if (existing.size) {
       throw new QueryIndexSchemaError("Query index has tables but no recognized schema version.");
     }
+    // Only takes effect before any tables exist; reclaims delete/rewrite churn via
+    // cheap per-write PRAGMA incremental_vacuum instead of growing the file forever.
+    db.pragma("auto_vacuum = INCREMENTAL");
     db.exec(QUERY_INDEX_SCHEMA_SQL);
     db.pragma(`user_version = ${QUERY_INDEX_SCHEMA_VERSION}`);
     return;

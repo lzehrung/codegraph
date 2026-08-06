@@ -1,5 +1,6 @@
 import fsp from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
+import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 import path from "node:path";
 import type { Edge, EdgeTo, Graph, Pos, Range } from "../../types.js";
 import { buildGraphAdjacency } from "../../graphs/adjacency.js";
@@ -177,7 +178,7 @@ async function readParsedSnapshot(snapshotPath: string): Promise<ParsedSnapshotC
     setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, cached);
     return cached;
   }
-  const payload = JSON.parse(await fsp.readFile(snapshotPath, "utf8")) as unknown;
+  const payload = JSON.parse(brotliDecompressSync(await fsp.readFile(snapshotPath)).toString("utf8")) as unknown;
   const after = await snapshotFileIdentity(snapshotPath);
   const entry = { identity: before, payload };
   if (sameSnapshotFileIdentity(before, after)) {
@@ -326,7 +327,10 @@ export async function writeProjectIndexSnapshot(
   try {
     const snapshotPath = projectSnapshotPath(projectRoot, opts);
     await fsp.mkdir(path.dirname(snapshotPath), { recursive: true });
-    await fsp.writeFile(snapshotPath, JSON.stringify(payload), "utf8");
+    await fsp.writeFile(
+      snapshotPath,
+      brotliCompressSync(JSON.stringify(payload), { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } }),
+    );
     const identity = await snapshotFileIdentity(snapshotPath);
     setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, payload: structuredClone(payload) });
   } catch {
@@ -407,7 +411,11 @@ export async function writeDetailedSymbolGraphSnapshot(
       path.dirname(snapshotPath),
       `.${path.basename(snapshotPath)}.${process.pid}.${randomUUID()}.tmp`,
     );
-    await fsp.writeFile(tempPath, JSON.stringify(payload), { encoding: "utf8", flag: "wx" });
+    await fsp.writeFile(
+      tempPath,
+      brotliCompressSync(JSON.stringify(payload), { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } }),
+      { flag: "wx" },
+    );
     await fsp.rename(tempPath, snapshotPath);
     const identity = await snapshotFileIdentity(snapshotPath);
     const cachedPayload = structuredClone(payload);

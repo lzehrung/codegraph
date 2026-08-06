@@ -1,3 +1,4 @@
+import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
@@ -19,7 +20,9 @@ import { normalizePath } from "../../util/paths.js";
 import { lruMapGet, lruMapSet } from "../../util/lruMap.js";
 import { initCacheReport } from "./reports.js";
 
-const PARSED_CACHE_VERSION = 1;
+// v2: brotli-compress the payload (roughly 9x smaller on disk); JSON.stringify(mod) is
+// unchanged, only the on-disk byte encoding differs.
+const PARSED_CACHE_VERSION = 2;
 const MODULE_CACHE_SCHEMA_VERSION = 1;
 const MODULE_CACHE_TABLE = "module_cache";
 const MODULE_CACHE_SCHEMA_VERSION_KEY = "module_cache.schema_version";
@@ -27,7 +30,7 @@ const MODULE_CACHE_COLUMNS: readonly SqliteTableColumn[] = [
   { name: "file", definition: "TEXT PRIMARY KEY" },
   { name: "sig", definition: "TEXT NOT NULL" },
   { name: "version", definition: "INTEGER NOT NULL" },
-  { name: "payload", definition: "TEXT NOT NULL" },
+  { name: "payload", definition: "BLOB NOT NULL" },
   { name: "updated_at", definition: "INTEGER NOT NULL" },
 ];
 
@@ -348,9 +351,9 @@ export function tryLoadFromCache(
   if (mode === "disk") {
     try {
       const cache = getDiskModuleCache(projectRoot, opts);
-      const row = cache.load.get(file) as { sig: string; version: number; payload: string } | undefined;
+      const row = cache.load.get(file) as { sig: string; version: number; payload: Uint8Array } | undefined;
       if (row && row.sig === sig && row.version === PARSED_CACHE_VERSION) {
-        const parsed: unknown = JSON.parse(row.payload);
+        const parsed: unknown = JSON.parse(brotliDecompressSync(row.payload).toString("utf8"));
         if (isModuleIndex(parsed)) {
           if (cacheEnabled && cacheReport) cacheReport.hits += 1;
           return parsed;
@@ -386,7 +389,10 @@ export function writeToCache(
   } else if (mode === "disk") {
     try {
       const cache = getDiskModuleCache(projectRoot, opts);
-      cache.write.run(file, sig, PARSED_CACHE_VERSION, JSON.stringify(mod), Date.now());
+      const payload = brotliCompressSync(JSON.stringify(mod), {
+        params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 },
+      });
+      cache.write.run(file, sig, PARSED_CACHE_VERSION, payload, Date.now());
     } catch (error) {
       if (isNodeSqliteUnavailableError(error)) {
         reportMissingNodeSqlite(opts?.logLevel, error);
