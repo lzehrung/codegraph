@@ -67,11 +67,16 @@ export async function awaitStdioMcpLifecycle(
   const armIdleTimer = () => {
     idleTimer?.clear();
     if (!(idleTimeoutMs > 0)) return;
-    const startedAt = now();
-    idleTimer = setIdleTimer(() => {
-      if (now() - startedAt < idleTimeoutMs) return;
-      void shutdown("idle_timeout");
-    }, idleTimeoutMs);
+    const deadline = now() + idleTimeoutMs;
+    const schedule = () => {
+      const remaining = deadline - now();
+      if (remaining <= 0) {
+        void shutdown("idle_timeout");
+        return;
+      }
+      idleTimer = setIdleTimer(schedule, remaining);
+    };
+    schedule();
   };
 
   const onStdinEnd = () => {

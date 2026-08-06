@@ -944,16 +944,14 @@ export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Pro
     },
   });
   const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_MCP_STDIO_IDLE_TIMEOUT_MS;
-  const reason = await awaitStdioMcpLifecycle(handle, {
+  await awaitStdioMcpLifecycle(handle, {
     idleTimeoutMs,
     onShutdown: (shutdownReason) => {
       console.error(`[codegraph] MCP stdio shutting down (${shutdownReason})`);
     },
   });
-  if (reason === "idle_timeout" || reason === "parent_disconnect" || reason === "stdin_eof") {
-    // Ensure orphaned stdio servers do not linger after the client is gone.
-    process.exitCode = 0;
-  }
+  // Ensure orphaned stdio servers do not linger after the client is gone.
+  process.exitCode = 0;
 }
 
 export async function startCodegraphMcpHttpServer(

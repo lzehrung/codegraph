@@ -43,6 +43,10 @@ export async function handleMcpServeCommand(context: McpServeCommandContext): Pr
     context.writeStderrLine("--host requires --port for mcp serve HTTP transport.");
     context.exit(2);
   }
+  if (idleTimeoutMs !== undefined && port !== undefined) {
+    context.writeStderrLine("--idle-timeout-ms applies only to stdio MCP serve; omit --port or --idle-timeout-ms.");
+    context.exit(2);
+  }
 
   await serveCodegraphMcp({
     root: context.root,

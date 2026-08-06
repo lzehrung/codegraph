@@ -50,19 +50,22 @@ describe("awaitStdioMcpLifecycle", () => {
 
   it("closes after the idle timeout when stdin is quiet", async () => {
     vi.useFakeTimers();
-    const stdin = createFakeStdin();
-    const close = vi.fn(async () => undefined);
-    const pending = awaitStdioMcpLifecycle(
-      { close },
-      {
-        stdin,
-        connected: false,
-        idleTimeoutMs: 1_000,
-      },
-    );
-    await vi.advanceTimersByTimeAsync(1_000);
-    await expect(pending).resolves.toBe("idle_timeout");
-    expect(close).toHaveBeenCalledTimes(1);
-    vi.useRealTimers();
+    try {
+      const stdin = createFakeStdin();
+      const close = vi.fn(async () => undefined);
+      const pending = awaitStdioMcpLifecycle(
+        { close },
+        {
+          stdin,
+          connected: false,
+          idleTimeoutMs: 1_000,
+        },
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(pending).resolves.toBe("idle_timeout");
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
