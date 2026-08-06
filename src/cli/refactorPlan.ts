@@ -1,4 +1,5 @@
 import { buildRefactorPlan, type RefactorPlanResponse } from "../agent/refactorPlan.js";
+import { formatAgentFollowUpAsCli } from "../agent/followUps.js";
 import type { SemanticOmittedCounts, SemanticSymbol } from "../agent/semantic.js";
 import type { CliAgentCommandContext } from "./context.js";
 import { REFACTOR_PLAN_HELP_TEXT } from "./help.js";
@@ -74,7 +75,7 @@ export function formatRefactorPlanResponse(response: RefactorPlanResponse): stri
   }
   if (response.followUps.length) {
     lines.push("Follow-ups:");
-    for (const command of response.followUps) lines.push(`  ${command}`);
+    for (const followUp of response.followUps) lines.push(`  ${formatAgentFollowUpAsCli(followUp)}`);
   }
   return lines.join("\n");
 }

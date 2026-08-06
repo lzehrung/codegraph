@@ -1,3 +1,5 @@
+export { formatAgentFollowUpAsCli, formatAgentFollowUpsAsCli, toolFollowUp } from "./agent/followUps.js";
+export type { AgentFollowUp } from "./agent/followUps.js";
 export {
   DEFAULT_FILE_VIEW_BYTES,
   DEFAULT_FILE_VIEW_LINES,

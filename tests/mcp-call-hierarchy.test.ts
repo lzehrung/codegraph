@@ -43,20 +43,40 @@ function hierarchyTool(name: string) {
 }
 
 describe("call hierarchy MCP tools", () => {
-  it("registers flat bounded schemas and semantic-only descriptions", () => {
-    for (const name of ["callers", "callees"]) {
-      const tool = hierarchyTool(name);
-      expect(tool.description).toContain("proven semantic");
-      expect(tool.description).toContain("Use refs");
-      const schema: unknown = tool.inputSchema;
-      expect(isPlainRecord(schema)).toBe(true);
-      if (!isPlainRecord(schema) || !isPlainRecord(schema.properties)) throw new Error(`${name} schema was invalid`);
-      expect(schema.required).toEqual(["handle"]);
-      expect(Object.keys(schema.properties).sort()).toEqual(["depth", "handle", "includeHeuristic", "limit"]);
-      expect(schema.properties.depth).toMatchObject({ type: "integer", minimum: 1, maximum: 5, default: 1 });
-      expect(schema.properties.limit).toMatchObject({ type: "integer", minimum: 0, maximum: 500, default: 100 });
-      expect(schema.properties.includeHeuristic).toEqual({ type: "boolean" });
-    }
+  it("registers one unified bounded schema and semantic-only description", () => {
+    const tool = hierarchyTool("calls");
+    expect(tool.description).toContain("proven semantic");
+    expect(tool.description).toContain("Use refs");
+    const schema: unknown = tool.inputSchema;
+    expect(isPlainRecord(schema)).toBe(true);
+    if (!isPlainRecord(schema) || !isPlainRecord(schema.properties)) throw new Error("calls schema was invalid");
+    expect(schema.required).toEqual(["handle", "direction"]);
+    expect(Object.keys(schema.properties).sort()).toEqual([
+      "depth",
+      "direction",
+      "handle",
+      "includeHeuristic",
+      "limit",
+    ]);
+    expect(schema.properties.direction).toEqual({ type: "string", enum: ["callers", "callees"] });
+    expect(schema.properties.depth).toMatchObject({ type: "integer", minimum: 1, maximum: 5, default: 1 });
+    expect(schema.properties.limit).toMatchObject({ type: "integer", minimum: 0, maximum: 500, default: 25 });
+    expect(schema.properties.includeHeuristic).toEqual({ type: "boolean" });
+    const names = listCodegraphMcpTools().map((entry) => entry.name);
+    expect(names).toEqual(expect.arrayContaining(["calls", "type_hierarchy", "file_deps"]));
+    expect(names).not.toEqual(
+      expect.arrayContaining(["callers", "callees", "supertypes", "subtypes", "deps", "rdeps"]),
+    );
+  });
+  it("registers a unified file dependency schema", () => {
+    const tool = hierarchyTool("file_deps");
+    const schema: unknown = tool.inputSchema;
+    expect(isPlainRecord(schema)).toBe(true);
+    if (!isPlainRecord(schema) || !isPlainRecord(schema.properties)) throw new Error("file_deps schema was invalid");
+    expect(schema.required).toEqual(["file", "direction"]);
+    expect(Object.keys(schema.properties).sort()).toEqual(["depth", "direction", "file", "limit"]);
+    expect(schema.properties.direction).toEqual({ type: "string", enum: ["deps", "rdeps"] });
+    expect(schema.properties.limit).toMatchObject({ type: "integer", minimum: 0, maximum: 500, default: 25 });
   });
 
   it("uses the supplied freshness gate and preserves grouped callsite and omission counts", async () => {
@@ -70,7 +90,13 @@ describe("call hierarchy MCP tools", () => {
     };
     const handlers = createCodegraphMcpHandlers({ root, session });
 
-    const response = await handlers.callers({ handle: leafHandle, depth: 2, limit: 1, includeHeuristic: true });
+    const response = await handlers.calls({
+      direction: "callers",
+      handle: leafHandle,
+      depth: 2,
+      limit: 1,
+      includeHeuristic: true,
+    });
 
     expect(checkFreshness).toHaveBeenCalledTimes(1);
     expect(loadProject).toHaveBeenCalledTimes(1);
@@ -93,8 +119,8 @@ describe("call hierarchy MCP tools", () => {
     const counted = countingSession(session);
     const handlers = createCodegraphMcpHandlers({ root, session: counted.session });
 
-    const callers = await handlers.callers({ handle: leafHandle, depth: 2 });
-    const callees = await handlers.callees({ handle: outerHandle, depth: 2 });
+    const callers = await handlers.calls({ direction: "callers", handle: leafHandle, depth: 2 });
+    const callees = await handlers.calls({ direction: "callees", handle: outerHandle, depth: 2 });
 
     expect(callers.entries.map((entry) => entry.symbol.name)).toEqual(["middle", "outer"]);
     expect(callees.entries.map((entry) => entry.symbol.name)).toEqual(["middle", "leaf"]);

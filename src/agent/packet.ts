@@ -1,8 +1,8 @@
 import { buildReviewReport, type ReviewReport } from "../review.js";
 import type { BuildOptions } from "../indexer/types.js";
 import { explainCodegraphTargetWithSession, type AgentExplainTarget, type AgentExplanation } from "./explain.js";
+import { type AgentFollowUp, toolFollowUp } from "./followUps.js";
 import { createAgentSession, type AgentSession } from "./session.js";
-import { quoteShellArg } from "./shell.js";
 
 export type AgentPacketKind = "file" | "symbol" | "chunk" | "sql_object" | "graph" | "review";
 
@@ -25,7 +25,7 @@ export type AgentPacketResponse = {
   packet: AgentPacketPayload;
   limits: Record<string, number>;
   omittedCounts: Record<string, number>;
-  followUps: string[];
+  followUps: AgentFollowUp[];
 };
 
 export async function getCodegraphPacket(request: AgentPacketRequest): Promise<AgentPacketResponse> {
@@ -126,8 +126,8 @@ async function buildReviewPacket(request: AgentPacketRequest): Promise<AgentPack
       reviewTasks: 0,
     },
     followUps: [
-      `codegraph impact --provider git --base ${quoteShellArg(range.base)} --head ${quoteShellArg(range.head)}`,
-      `codegraph review --base ${quoteShellArg(range.base)} --head ${quoteShellArg(range.head)}`,
+      toolFollowUp("impact", { provider: "git", base: range.base, head: range.head }),
+      toolFollowUp("review", { base: range.base, head: range.head }),
     ],
   };
 }

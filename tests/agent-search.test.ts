@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
 import { searchCodegraph, searchCodegraphWithSession } from "../src/agent/search.js";
+import { formatAgentFollowUpAsCli } from "../src/agent/followUps.js";
 import { formatAgentSymbolHandle } from "../src/agent/handles.js";
 import type { SymbolEdge, SymbolGraph, SymbolNode } from "../src/graphs.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
@@ -129,7 +130,7 @@ describe("agent search", () => {
     expect(response.results[0]?.handle).not.toContain(root.replace(/\\/g, "/"));
     expect(response.results[0]?.evidence.some((entry) => entry.source === "symbol")).toBeTruthy();
     expect(response.results[0]?.neighbors.some((entry) => entry.file?.endsWith("src/api.ts"))).toBeTruthy();
-    expect(response.results[0]?.followUps.some((cmd) => cmd.includes("codegraph refs"))).toBeTruthy();
+    expect(response.results[0]?.followUps.some((followUp) => followUp.tool === "refs")).toBeTruthy();
     expect(response.results[0]?.provenance.surface).toBe("code");
     expect(response.results[0]?.provenance.capability).toBe("semantic");
     expect(response.results.some((result) => result.file.endsWith("src/auth.ts"))).toBeTruthy();
@@ -141,9 +142,8 @@ describe("agent search", () => {
 
     const response = await searchCodegraph({ root, query: "cost center", mode: "path", limit: 5 });
     const result = response.results.find((entry) => entry.file === "src/cost$center.ts");
-
-    expect(result?.followUps).toContain("codegraph chunk 'src/cost$center.ts'");
-    expect(result?.followUps).not.toContain('codegraph chunk "src/cost$center.ts"');
+    expect(result?.followUps.some((followUp) => followUp.tool === "chunk")).toBe(true);
+    expect(result?.followUps.map(formatAgentFollowUpAsCli)).toContain("codegraph chunk 'src/cost$center.ts'");
   });
 
   it("uses a file-list fast path for pure path searches", async () => {

@@ -35,7 +35,7 @@ import {
   resolveAgentSnapshotFile,
 } from "./normalize.js";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "./session.js";
-import { quoteShellArg } from "./shell.js";
+import { formatAgentFollowUpAsCli, type AgentFollowUp, toolFollowUp } from "./followUps.js";
 import {
   buildQueryTextChunks,
   detectQueryIndexSurface,
@@ -87,7 +87,7 @@ export type AgentSearchResult = {
   rankReasons: string[];
   evidence: AgentSearchEvidence[];
   neighbors: Array<{ relation: string; target: string; file?: string }>;
-  followUps: string[];
+  followUps: AgentFollowUp[];
   omittedCounts: {
     rankReasons: number;
     evidence: number;
@@ -124,7 +124,7 @@ type MutableSearchResult = Omit<
   rankReasons: Set<string>;
   evidence: AgentSearchEvidence[];
   neighbors: Map<string, { relation: string; target: string; file?: string }>;
-  followUps: Set<string>;
+  followUps: Map<string, AgentFollowUp>;
   matchedRankTerms: Set<string>;
 };
 
@@ -264,6 +264,9 @@ export function formatAgentSearchResponse(response: AgentSearchResponse): string
       `${index + 1}. ${result.label} [${result.kind}] ${location} score=${result.score} (${result.provenance.surface}, ${result.provenance.capability})`,
     );
     lines.push(`   ${reasons}`);
+    for (const followUp of result.followUps) {
+      lines.push(`   follow-up: ${formatAgentFollowUpAsCli(followUp)}`);
+    }
   }
   return lines.join("\n");
 }
@@ -683,7 +686,7 @@ function mergeSearchResults(
     for (const reason of source.rankReasons) target.rankReasons.add(reason);
     for (const evidence of source.evidence) addEvidence(target, evidence);
     for (const [key, neighbor] of source.neighbors) target.neighbors.set(key, neighbor);
-    for (const followUp of source.followUps) target.followUps.add(followUp);
+    for (const [key, followUp] of source.followUps) target.followUps.set(key, followUp);
   }
 }
 
@@ -1019,7 +1022,7 @@ function upsertResult(resultMap: Map<string, MutableSearchResult>, base: SearchR
     rankReasons: new Set(),
     evidence: [],
     neighbors: new Map(),
-    followUps: new Set(),
+    followUps: new Map(),
     matchedRankTerms: new Set(),
   };
   resultMap.set(base.handle, result);
@@ -1132,19 +1135,23 @@ function addFileNeighbors(
 }
 
 function addSymbolFollowUps(result: MutableSearchResult, relFile: string, def: SymbolDef | undefined): void {
-  result.followUps.add(`codegraph explain ${quoteShellArg(result.handle)}`);
+  addFollowUp(result, toolFollowUp("get_symbol", { handle: result.handle }));
   if (def) {
-    for (const command of collectDefinitionFollowUps(relFile, def.range.start.line, def.range.start.column)) {
-      result.followUps.add(command);
+    for (const followUp of collectDefinitionFollowUps(relFile, def.range.start.line, def.range.start.column)) {
+      addFollowUp(result, followUp);
     }
   }
   addFileFollowUps(result, relFile);
 }
 
 function addFileFollowUps(result: MutableSearchResult, relFile: string): void {
-  for (const command of collectCommonFileFollowUps(relFile)) {
-    result.followUps.add(command);
+  for (const followUp of collectCommonFileFollowUps(relFile)) {
+    addFollowUp(result, followUp);
   }
+}
+
+function addFollowUp(result: MutableSearchResult, followUp: AgentFollowUp): void {
+  result.followUps.set(JSON.stringify(followUp), followUp);
 }
 
 function compareResults(left: MutableSearchResult, right: MutableSearchResult): number {
@@ -1216,7 +1223,9 @@ function finalizeResult(result: MutableSearchResult): AgentSearchResult {
     if (relationDelta !== 0) return relationDelta;
     return left.target.localeCompare(right.target);
   });
-  const followUps = [...result.followUps].sort();
+  const followUps = [...result.followUps.values()].sort((left, right) =>
+    formatAgentFollowUpAsCli(left).localeCompare(formatAgentFollowUpAsCli(right)),
+  );
   const boundedRankReasons = boundAgentList(rankReasons, AGENT_SEARCH_RANK_REASONS_PER_RESULT_LIMIT);
   const boundedEvidence = boundAgentList(evidence, AGENT_SEARCH_EVIDENCE_PER_RESULT_LIMIT);
   const boundedNeighbors = boundAgentList(neighbors, AGENT_SEARCH_NEIGHBORS_PER_RESULT_LIMIT);

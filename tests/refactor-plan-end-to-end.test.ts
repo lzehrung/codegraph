@@ -83,8 +83,12 @@ describe("search and review handle to refactor plan", () => {
       safe: false,
       conflicts: [expect.objectContaining({ reason: "invalid_identifier" })],
     });
-    expect(fromReview.followUps.every((command) => !command.includes(reviewHandle))).toBe(true);
-    expect(fromReview.followUps.some((command) => command.includes(searchHandle))).toBe(true);
+    expect(fromReview.followUps.every((followUp) => !JSON.stringify(followUp.arguments).includes(reviewHandle))).toBe(
+      true,
+    );
+    expect(fromReview.followUps.some((followUp) => JSON.stringify(followUp.arguments).includes(searchHandle))).toBe(
+      true,
+    );
     expect(await fs.readFile(sourceFile, "utf8")).toBe(beforeSource);
   });
 });

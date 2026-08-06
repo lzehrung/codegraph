@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { defNodeId } from "../src/graphs/symbol-graph.js";
 import { buildRefactorPlanWithSession } from "../src/agent/refactorPlan.js";
+import { formatAgentFollowUpAsCli } from "../src/agent/followUps.js";
 import { resolveSemanticSymbol, semanticSymbolFromDef } from "../src/agent/semanticSymbols.js";
 import { createAgentSession, type AgentSession } from "../src/agent/session.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
@@ -62,8 +63,19 @@ describe("refactor evidence plan", () => {
       reason: expect.stringContaining("Implementation lookup requires"),
     });
     expect(result.omittedCounts.implementations).toBe(1);
-    expect(result.followUps).toContain(`codegraph refs service.ts:2:17`);
-    expect(result.followUps.some((followUp) => followUp.includes(`callers ${handle}`))).toBe(true);
+    expect(result.followUps).toContainEqual({
+      tool: "refs",
+      arguments: { file: "service.ts", line: 2, column: 17 },
+    });
+    expect(
+      result.followUps.some(
+        (followUp) =>
+          followUp.tool === "calls" &&
+          followUp.arguments.direction === "callers" &&
+          followUp.arguments.handle === handle &&
+          formatAgentFollowUpAsCli(followUp).includes(`callers ${handle}`),
+      ),
+    ).toBe(true);
     expect(result.rename).toBeUndefined();
   });
   it("composes supported implementations with independent limits and no section issue", async () => {
@@ -117,8 +129,8 @@ describe("refactor evidence plan", () => {
     });
     expect(result.target.handle).toMatch(/^symbol:/);
     expect(result.target.name).toBe("service");
-    expect(result.followUps.every((followUp) => !followUp.includes(reviewHandle))).toBe(true);
-    expect(result.followUps.some((followUp) => followUp.includes(result.target.handle))).toBe(true);
+    expect(result.followUps.every((followUp) => !JSON.stringify(followUp).includes(reviewHandle))).toBe(true);
+    expect(result.followUps.some((followUp) => JSON.stringify(followUp).includes(result.target.handle))).toBe(true);
   });
 
   it("rejects stale review handles with a workspace-symbol recovery action", async () => {

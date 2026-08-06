@@ -10,6 +10,7 @@ import { isPathUnderIncludeRoots, normalizeIncludeRootsRelative } from "../util/
 import { normalizePath } from "../util/paths.js";
 import { createAgentSession, type AgentSession } from "./session.js";
 import { quoteShellArg } from "./shell.js";
+import { formatAgentFollowUpAsCli, type AgentFollowUp, toolFollowUp } from "./followUps.js";
 
 export type AgentOrientBudget = "small" | "medium" | "large";
 export type AgentOrientHealthMode = "skip" | "summary" | "full";
@@ -68,7 +69,7 @@ export type AgentOrientationFocus = {
   label?: string;
   file?: string;
   why: string;
-  followUps: string[];
+  followUps: AgentFollowUp[];
 };
 
 export type AgentPacketCommand = {
@@ -253,10 +254,7 @@ function buildReviewFocus(base: string, head: string): AgentOrientationFocus {
     kind: "review",
     label: `${base}..${head}`,
     why: "review range requested by the caller",
-    followUps: [
-      `codegraph review --base ${quoteShellArg(base)} --head ${quoteShellArg(head)}`,
-      `codegraph impact --base ${quoteShellArg(base)} --head ${quoteShellArg(head)}`,
-    ],
+    followUps: [toolFollowUp("review", { base, head }), toolFollowUp("impact", { base, head })],
   };
 }
 
@@ -357,7 +355,10 @@ function buildFocusTargets(
         kind: "hotspot" as const,
         file: module.file,
         why: `graph-central module: fan-in ${module.fanIn}, fan-out ${module.fanOut}, score ${module.score}`,
-        followUps: [formatPacketCommand(packet.file), `codegraph explain ${formatFileTargetCommandArg(module.file)}`],
+        followUps: [
+          toolFollowUp("packet_get", { target: packet.file }),
+          toolFollowUp("packet_get", { target: module.file }),
+        ],
       });
       continue;
     }
@@ -366,7 +367,7 @@ function buildFocusTargets(
       kind: "file" as const,
       file: packet.file,
       why: "bounded file packet candidate inside the requested scope",
-      followUps: [formatPacketCommand(packet.file)],
+      followUps: [toolFollowUp("packet_get", { target: packet.file })],
     });
   }
   return focus;
@@ -383,7 +384,7 @@ function buildRecommendedNext(
     for (const followUp of firstFocus.followUps) {
       commands.push({
         label: labelForFollowUp(firstFocus, followUp),
-        command: followUp,
+        command: formatAgentFollowUpAsCli(followUp),
       });
     }
   }
@@ -430,11 +431,11 @@ function fileNeedsRelativePrefix(file: string): boolean {
   );
 }
 
-function labelForFollowUp(focus: AgentOrientationFocus, followUp: string): string {
+function labelForFollowUp(focus: AgentOrientationFocus, followUp: AgentFollowUp): string {
   const label = focus.file ?? focus.label ?? "focus target";
-  if (followUp.startsWith("codegraph packet get ")) return `Get packet for ${label}`;
-  if (followUp.startsWith("codegraph explain ")) return `Explain ${label}`;
-  if (followUp.startsWith("codegraph review ")) return `Review ${label}`;
-  if (followUp.startsWith("codegraph impact ")) return `Map impact for ${label}`;
+  if (followUp.tool === "packet_get") return `Get packet for ${label}`;
+  if (followUp.tool === "get_symbol") return `Explain ${label}`;
+  if (followUp.tool === "review") return `Review ${label}`;
+  if (followUp.tool === "impact") return `Map impact for ${label}`;
   return label;
 }

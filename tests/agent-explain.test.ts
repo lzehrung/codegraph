@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { explainCodegraphTarget } from "../src/agent/explain.js";
+import { formatAgentFollowUpAsCli } from "../src/agent/followUps.js";
 import { searchCodegraph } from "../src/agent/search.js";
 import { runGit } from "./helpers/git.js";
 
@@ -75,7 +76,7 @@ describe("agent explain", () => {
     expect(explanation.target.file).toBe("auth.ts");
     expect(explanation.symbols.some((symbol) => symbol.name === "validateUser")).toBeTruthy();
     expect(explanation.reverseDependencies.some((entry) => entry.file === "api.ts")).toBeTruthy();
-    expect(explanation.followUps.some((cmd) => cmd.includes("codegraph refs"))).toBeTruthy();
+    expect(explanation.followUps.some((followUp) => followUp.tool === "refs")).toBeTruthy();
   });
 
   it("explains a symbol with references and stable follow-ups", async () => {
@@ -87,7 +88,7 @@ describe("agent explain", () => {
     expect(
       explanation.snippets.some((snippet) => snippet.file === "api.ts" && snippet.text.includes("validateUser")),
     ).toBeTruthy();
-    expect(explanation.followUps.some((cmd) => cmd.includes("codegraph goto auth.ts"))).toBeTruthy();
+    expect(explanation.followUps.some((followUp) => followUp.tool === "goto")).toBeTruthy();
   });
 
   it("shell-quotes generated follow-up commands for path metacharacters", async () => {
@@ -96,8 +97,9 @@ describe("agent explain", () => {
 
     const explanation = await explainCodegraphTarget({ root, target: "cost$center.ts" });
 
-    expect(explanation.followUps).toContain("codegraph chunk 'cost$center.ts'");
-    expect(explanation.followUps).not.toContain('codegraph chunk "cost$center.ts"');
+    const renderedFollowUps = explanation.followUps.map(formatAgentFollowUpAsCli);
+    expect(renderedFollowUps).toContain("codegraph chunk 'cost$center.ts'");
+    expect(renderedFollowUps).not.toContain('codegraph chunk "cost$center.ts"');
   });
 
   it("resolves portable symbol handles returned by search", async () => {
@@ -344,10 +346,11 @@ describe("agent explain", () => {
     expect(explanation.duplicates[0]?.right.file).toBe("src/b.ts");
     expect(explanation.duplicates[0]?.left.handle).toContain("src%2Fa.ts");
     expect(explanation.duplicates[0]?.hint).toContain("Possible extraction candidate");
-    const duplicateFollowUp = explanation.followUps.find((command) => command.includes("codegraph duplicates"));
-    expect(duplicateFollowUp).toContain("--json");
-    expect(duplicateFollowUp).toContain("src/a.ts");
-    expect(duplicateFollowUp).toContain("src/b.ts");
+    const duplicateFollowUp = explanation.followUps.find((followUp) => followUp.tool === "duplicates");
+    expect(duplicateFollowUp).toMatchObject({
+      tool: "duplicates",
+      arguments: { json: true, files: ["src/a.ts", "src/b.ts"] },
+    });
   });
 
   it("includes only duplicate groups overlapping symbol explanations", async () => {
@@ -374,8 +377,10 @@ describe("agent explain", () => {
     for (const duplicate of explanation.duplicates) {
       expect(duplicate.left.file === "src/g.ts" || duplicate.right.file === "src/g.ts").toBeTruthy();
     }
-    const duplicateFollowUp = explanation.followUps.find((command) => command.includes("codegraph duplicates"));
-    expect(duplicateFollowUp).toContain("--json");
-    expect(duplicateFollowUp).toContain("src/g.ts");
+    const duplicateFollowUp = explanation.followUps.find((followUp) => followUp.tool === "duplicates");
+    expect(duplicateFollowUp).toMatchObject({
+      tool: "duplicates",
+      arguments: { json: true, files: expect.arrayContaining(["src/g.ts"]) },
+    });
   });
 });

@@ -1,5 +1,6 @@
 import { formatAgentExplanation, type AgentExplanation } from "../agent/explain.js";
 import { getCodegraphPacket } from "../agent/packet.js";
+import { formatAgentFollowUpsAsCli } from "../agent/followUps.js";
 import type { CliAgentCommandContext } from "./context.js";
 import { PACKET_HELP_TEXT } from "./help.js";
 import { parsePositiveIntegerOption } from "./options.js";
@@ -37,7 +38,12 @@ export async function handlePacketCommand(context: PacketCommandContext): Promis
     } else if (isAgentExplanation(response.packet)) {
       context.writeStdoutLine(formatAgentExplanation(response.packet));
     } else {
-      context.writeStdoutLine(formatPrettyValue(response));
+      context.writeStdoutLine(
+        formatPrettyValue({
+          ...response,
+          followUps: formatAgentFollowUpsAsCli(response.followUps),
+        }),
+      );
     }
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);

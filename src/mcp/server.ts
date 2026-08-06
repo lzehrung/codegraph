@@ -67,8 +67,12 @@ import {
   normalizeSqliteRowLimit,
 } from "./sqliteGuard.js";
 import {
+  DEFAULT_CALL_HIERARCHY_LIMIT,
+  MAX_CALL_HIERARCHY_LIMIT,
   DEFAULT_MCP_COLLECTION_LIMIT,
+  DEFAULT_TYPE_HIERARCHY_LIMIT,
   listCodegraphMcpTools,
+  MAX_TYPE_HIERARCHY_LIMIT,
   MAX_MCP_COLLECTION_LIMIT,
   MAX_RENAME_PREVIEW_EDITS,
   MCP_TOOLS,
@@ -172,6 +176,30 @@ export type CodegraphMcpHandlers = {
     maxHierarchy?: number | undefined;
     includeSource?: boolean | undefined;
   }) => Promise<RefactorPlanResponse>;
+  calls: (request: {
+    direction: "callers" | "callees";
+    handle: string;
+    depth?: number | undefined;
+    limit?: number | undefined;
+    includeHeuristic?: boolean | undefined;
+  }) => Promise<CallHierarchyResponse>;
+  type_hierarchy: (request: {
+    direction: "supertypes" | "subtypes";
+    handle: string;
+    depth?: number | undefined;
+    limit?: number | undefined;
+  }) => Promise<TypeHierarchyResponse>;
+  file_deps: (request: {
+    direction: "deps" | "rdeps";
+    file: string;
+    depth?: number | undefined;
+    limit?: number | undefined;
+  }) => Promise<
+    CodegraphMcpFreshResult<{
+      dependencies?: Array<{ file: string; depth: number }>;
+      reverseDependencies?: Array<{ file: string; depth: number }>;
+    }>
+  >;
   callers: (request: {
     handle: string;
     depth?: number | undefined;
@@ -548,6 +576,49 @@ function createCodegraphMcpHandlersForSession(
       depth: dependency.depth,
     }));
   };
+  const calls = async (request: {
+    direction: "callers" | "callees";
+    handle: string;
+    depth?: number | undefined;
+    limit?: number | undefined;
+    includeHeuristic?: boolean | undefined;
+  }): Promise<CallHierarchyResponse> => {
+    const findCalls = request.direction === "callers" ? findCallersWithSession : findCalleesWithSession;
+    return await findCalls(session, {
+      root,
+      handle: request.handle,
+      ...(request.depth !== undefined ? { depth: request.depth } : {}),
+      limit: boundedLimit(request.limit, DEFAULT_CALL_HIERARCHY_LIMIT, MAX_CALL_HIERARCHY_LIMIT),
+      ...(request.includeHeuristic !== undefined ? { includeHeuristic: request.includeHeuristic } : {}),
+    });
+  };
+  const typeHierarchy = async (request: {
+    direction: "supertypes" | "subtypes";
+    handle: string;
+    depth?: number | undefined;
+    limit?: number | undefined;
+  }): Promise<TypeHierarchyResponse> => {
+    const findTypes = request.direction === "supertypes" ? findSupertypesWithSession : findSubtypesWithSession;
+    return await findTypes(session, {
+      root,
+      handle: request.handle,
+      ...(request.depth !== undefined ? { depth: request.depth } : {}),
+      limit: boundedLimit(request.limit, DEFAULT_TYPE_HIERARCHY_LIMIT, MAX_TYPE_HIERARCHY_LIMIT),
+    });
+  };
+  const fileDeps = async (request: {
+    direction: "deps" | "rdeps";
+    file: string;
+    depth?: number | undefined;
+    limit?: number | undefined;
+  }) =>
+    await withFreshness(async () => {
+      const entries = await collectMcpDependencyEntries(
+        request,
+        request.direction === "deps" ? getDependencies : getReverseDependencies,
+      );
+      return request.direction === "deps" ? { dependencies: entries } : { reverseDependencies: entries };
+    });
 
   return {
     search: async (request) =>
@@ -596,45 +667,19 @@ function createCodegraphMcpHandlersForSession(
         ...(request.includeSource !== undefined ? { includeSource: request.includeSource } : {}),
       }),
 
-    callers: async (request) =>
-      await findCallersWithSession(session, {
-        root,
-        handle: request.handle,
-        ...(request.depth !== undefined ? { depth: request.depth } : {}),
-        ...(request.limit !== undefined ? { limit: request.limit } : {}),
-        ...(request.includeHeuristic !== undefined ? { includeHeuristic: request.includeHeuristic } : {}),
-      }),
-
-    callees: async (request) =>
-      await findCalleesWithSession(session, {
-        root,
-        handle: request.handle,
-        ...(request.depth !== undefined ? { depth: request.depth } : {}),
-        ...(request.limit !== undefined ? { limit: request.limit } : {}),
-        ...(request.includeHeuristic !== undefined ? { includeHeuristic: request.includeHeuristic } : {}),
-      }),
-
-    supertypes: async (request) =>
-      await findSupertypesWithSession(session, {
-        root,
-        handle: request.handle,
-        ...(request.depth !== undefined ? { depth: request.depth } : {}),
-        ...(request.limit !== undefined ? { limit: request.limit } : {}),
-      }),
-
-    subtypes: async (request) =>
-      await findSubtypesWithSession(session, {
-        root,
-        handle: request.handle,
-        ...(request.depth !== undefined ? { depth: request.depth } : {}),
-        ...(request.limit !== undefined ? { limit: request.limit } : {}),
-      }),
+    calls,
+    type_hierarchy: typeHierarchy,
+    file_deps: fileDeps,
+    callers: async (request) => await calls({ direction: "callers", ...request }),
+    callees: async (request) => await calls({ direction: "callees", ...request }),
+    supertypes: async (request) => await typeHierarchy({ direction: "supertypes", ...request }),
+    subtypes: async (request) => await typeHierarchy({ direction: "subtypes", ...request }),
 
     implementations: async (request) =>
       await findImplementationsWithSession(session, {
         root,
         handle: request.handle,
-        ...(request.limit !== undefined ? { limit: request.limit } : {}),
+        limit: boundedLimit(request.limit, DEFAULT_TYPE_HIERARCHY_LIMIT, MAX_TYPE_HIERARCHY_LIMIT),
       }),
 
     explore: async (request) =>
@@ -1169,14 +1214,18 @@ async function callMcpTool(handlers: CodegraphMcpHandlers, name: string, input: 
       return await handlers.rename_preview(renamePreviewSchema.parse(input));
     case "refactor_plan":
       return await handlers.refactor_plan(refactorPlanSchema.parse(input));
+    case "calls":
+      return await handlers.calls(callsSchema.parse(input));
     case "callers":
-      return await handlers.callers(callHierarchySchema.parse(input));
+      return await handlers.calls({ ...callHierarchySchema.parse(input), direction: "callers" });
     case "callees":
-      return await handlers.callees(callHierarchySchema.parse(input));
+      return await handlers.calls({ ...callHierarchySchema.parse(input), direction: "callees" });
+    case "type_hierarchy":
+      return await handlers.type_hierarchy(typeHierarchyUnifiedSchema.parse(input));
     case "supertypes":
-      return await handlers.supertypes(typeHierarchySchema.parse(input));
+      return await handlers.type_hierarchy({ ...typeHierarchySchema.parse(input), direction: "supertypes" });
     case "subtypes":
-      return await handlers.subtypes(typeHierarchySchema.parse(input));
+      return await handlers.type_hierarchy({ ...typeHierarchySchema.parse(input), direction: "subtypes" });
     case "implementations":
       return await handlers.implementations(implementationsSchema.parse(input));
     case "explore":
@@ -1193,10 +1242,12 @@ async function callMcpTool(handlers: CodegraphMcpHandlers, name: string, input: 
       return await handlers.goto(navigationSchema.parse(input));
     case "refs":
       return await callRefsTool(handlers, input);
+    case "file_deps":
+      return await handlers.file_deps(fileDepsUnifiedSchema.parse(input));
     case "deps":
-      return await handlers.deps(fileGraphSchema.parse(input));
+      return await handlers.file_deps({ ...fileGraphSchema.parse(input), direction: "deps" });
     case "rdeps":
-      return await handlers.rdeps(fileGraphSchema.parse(input));
+      return await handlers.file_deps({ ...fileGraphSchema.parse(input), direction: "rdeps" });
     case "path":
       return await handlers.path(pathSchema.parse(input));
     case "impact":
@@ -1288,11 +1339,17 @@ const callHierarchySchema = z.object({
   limit: z.number().int().nonnegative().max(500).optional(),
   includeHeuristic: z.boolean().optional(),
 });
+const callsSchema = callHierarchySchema.extend({
+  direction: z.enum(["callers", "callees"]),
+});
 
 const typeHierarchySchema = z.object({
   handle: z.string(),
   depth: z.number().int().min(1).max(10).optional(),
   limit: z.number().int().nonnegative().max(500).optional(),
+});
+const typeHierarchyUnifiedSchema = typeHierarchySchema.extend({
+  direction: z.enum(["supertypes", "subtypes"]),
 });
 
 const implementationsSchema = z.object({
@@ -1364,6 +1421,9 @@ const fileGraphSchema = z.object({
   file: z.string(),
   depth: z.number().int().nonnegative().optional(),
   limit: z.number().int().nonnegative().optional(),
+});
+const fileDepsUnifiedSchema = fileGraphSchema.extend({
+  direction: z.enum(["deps", "rdeps"]),
 });
 
 const pathSchema = z.object({

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { formatAgentFollowUpAsCli } from "../src/agent/followUps.js";
 import { exploreCodegraph, formatAgentExploreResponse } from "../src/index.js";
 import * as impactContext from "../src/impact/context.js";
 import { createCodegraphMcpHandlers, listCodegraphMcpTools } from "../src/mcp/server.js";
@@ -223,12 +224,11 @@ describe("agent explore", () => {
       readString(readRecord(entry, "blastRadius entry").file, "blast radius file"),
     );
     const followUps = readArray(response.followUps, "followUps");
-
     expect(blastRadiusFiles.slice(0, 3)).toEqual(["src/auth.ts", "src/db.ts", "src/routes.ts"]);
     expect(followUps.slice(0, 3)).toEqual([
-      "codegraph file src/auth.ts",
-      "codegraph file src/db.ts",
-      "codegraph file src/routes.ts",
+      { tool: "get_file", arguments: { file: "src/auth.ts" } },
+      { tool: "get_file", arguments: { file: "src/db.ts" } },
+      { tool: "get_file", arguments: { file: "src/routes.ts" } },
     ]);
     expect(response.fileView).toBeUndefined();
   });
@@ -255,7 +255,7 @@ describe("agent explore", () => {
       const followUps = readArray(response.followUps, "followUps");
 
       expect(textOf(blastRadius), query).toContain("src/routes.ts");
-      expect(followUps, query).toContain("codegraph packet get src/auth.ts");
+      expect(followUps, query).toContainEqual({ tool: "packet_get", arguments: { target: "src/auth.ts" } });
     }
   });
 
@@ -281,9 +281,9 @@ describe("agent explore", () => {
     expect(packetTargets).not.toContain("src/auth.ts");
     expect(blastRadiusFiles).toContain("src/auth.tsx");
     expect(blastRadiusFiles).not.toContain("src/auth.ts");
-    expect(followUps).toContain("codegraph packet get src/auth.tsx");
-    expect(followUps).not.toContain("codegraph packet get src/auth.ts");
-    expect(followUps).not.toContain("codegraph refs src/auth.ts:1:0");
+    expect(followUps).toContainEqual({ tool: "packet_get", arguments: { target: "src/auth.tsx" } });
+    expect(followUps).not.toContainEqual({ tool: "packet_get", arguments: { target: "src/auth.ts" } });
+    expect(followUps).not.toContainEqual({ tool: "refs", arguments: { file: "src/auth.ts", line: 1, column: 0 } });
   });
 
   it("matches explicit full-path file mentions with trailing question punctuation", async () => {
@@ -301,8 +301,7 @@ describe("agent explore", () => {
 
     expect(packetTargets).toContain("src/auth.ts");
     expect(blastRadiusFiles).toContain("src/auth.ts");
-    expect(textOf(response.blastRadius)).toContain("src/routes.ts");
-    expect(followUps).toContain("codegraph packet get src/auth.ts");
+    expect(followUps).toContainEqual({ tool: "packet_get", arguments: { target: "src/auth.ts" } });
   });
 
   it("returns symbol anchors and evidence packets for a symbol query", async () => {
@@ -345,8 +344,7 @@ describe("agent explore", () => {
     expect(leadingAnchorFiles).toEqual(["src/z-installer.ts", "src/z-installer.ts"]);
 
     expect(rankedFiles.slice(0, 2)).toEqual(["src/z-installer.ts", "src/a-registry.ts"]);
-    expect(packetFiles).toEqual(["src/z-installer.ts", "src/a-registry.ts"]);
-    expect(response.followUps[0]).toBe("codegraph file src/z-installer.ts");
+    expect(response.followUps[0]).toEqual({ tool: "get_file", arguments: { file: "src/z-installer.ts" } });
     expect(response.blastRadius.slice(0, 2).map((entry) => entry.file)).toEqual([
       "src/z-installer.ts",
       "src/a-registry.ts",
@@ -362,8 +360,7 @@ describe("agent explore", () => {
     });
     const blastRadiusFiles = response.blastRadius.map((entry) => entry.file);
 
-    expect(blastRadiusFiles[0]).toBe("src/routes.ts");
-    expect(response.followUps[0]).toBe("codegraph file src/routes.ts");
+    expect(response.followUps[0]).toEqual({ tool: "get_file", arguments: { file: "src/routes.ts" } });
     expect(blastRadiusFiles.indexOf("src/z-installer.ts")).toBeGreaterThan(0);
   });
 
@@ -446,23 +443,22 @@ describe("agent explore", () => {
     const pretty = formatAgentExploreResponse(response);
 
     expect(response.followUps.length).toBeGreaterThan(0);
-    expect(pretty.trimEnd().split("\n").at(-1)).toBe(`Recommended next: ${response.followUps[0]!}`);
+    expect(pretty.trimEnd().split("\n").at(-1)).toBe(
+      `Recommended next: ${formatAgentFollowUpAsCli(response.followUps[0]!)}`,
+    );
     expect(pretty.match(/^Recommended next:/gmu)).toHaveLength(1);
   });
 
   it("uses default-format refs commands in explore follow-ups", async () => {
     const root = await mkExploreRepo();
     const query = "src/auth.ts";
-
     const response = expectExploreEnvelope(await exploreCodegraph({ root, query }), query);
     const refsFollowUps = readArray(response.followUps, "followUps").filter(
-      (followUp): followUp is string => typeof followUp === "string" && followUp.startsWith("codegraph refs "),
+      (followUp): followUp is { tool: string; arguments: Record<string, unknown> } =>
+        typeof followUp === "object" && followUp !== null && "tool" in followUp && followUp.tool === "refs",
     );
 
     expect(refsFollowUps.length).toBeGreaterThan(0);
-    expect(
-      refsFollowUps.every((followUp) => !followUp.includes(" --json") && !followUp.includes(" --pretty")),
-    ).toBeTruthy();
   });
 
   it("includes the dependency path for a flow-style query between connected files", async () => {
@@ -541,11 +537,11 @@ describe("agent explore", () => {
 
     const response = expectExploreEnvelope(await exploreCodegraph({ root, query, includeSource: false }), query);
     const followUps = readArray(response.followUps, "followUps");
-    const followUpText = followUps.join("\n");
+    const followUpText = JSON.stringify(followUps);
 
-    expect(followUps).toContain(`codegraph explore ${query}`);
-    expect(followUps).toContain(`codegraph search ${query} --json`);
-    expect(followUps).toContain("codegraph orient --budget small");
+    expect(followUps).toContainEqual({ tool: "explore", arguments: { query } });
+    expect(followUps).toContainEqual({ tool: "search", arguments: { query } });
+    expect(followUps).toContainEqual({ tool: "orient", arguments: { budget: "small" } });
     expect(followUpText).not.toContain(root);
     expect(followUpText).not.toContain(" --root ");
   });
