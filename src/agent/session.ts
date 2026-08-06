@@ -78,6 +78,7 @@ const EMPTY_SYMBOL_GRAPH: SymbolGraph = {
   edges: [],
 };
 export const NATIVE_WORKER_AUTO_FILE_THRESHOLD = 250;
+export const AGENT_FRESHNESS_CHECK_INTERVAL_MS = 5_000;
 const DEFAULT_MAX_AUTO_REFRESH_FILES = 50;
 const DEFAULT_MAX_AUTO_REFRESH_BYTES = 2_000_000;
 const DEFAULT_MAX_FRESHNESS_CHANGED_FILES = 25;
@@ -274,6 +275,10 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
   let cachedSkippedSnapshot: Promise<AgentProjectSnapshot> | undefined;
   let cachedFileSignatures: Map<string, AgentFileSignature> | undefined;
 
+  let lastFreshnessCheckedAt = 0;
+  let lastFreshnessResult: AgentFreshnessResult | undefined;
+  let freshnessInFlight: Promise<AgentFreshnessResult> | undefined;
+
   const invalidate = (): void => {
     runSessionInvalidationHooks(session);
     cachedFilePlan = undefined;
@@ -285,6 +290,9 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     cachedBasicSnapshot = undefined;
     cachedSkippedSnapshot = undefined;
     cachedFileSignatures = undefined;
+    lastFreshnessCheckedAt = 0;
+    lastFreshnessResult = undefined;
+    freshnessInFlight = undefined;
   };
 
   const loadFilePlan = async (): Promise<AgentSessionFilePlan> => {
@@ -431,43 +439,62 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
     const policy = options.freshness?.policy ?? "check";
     if (policy === "manual") return { state: "fresh" };
     if (!cachedBase || !cachedFileSignatures) return { state: "fresh" };
-    await cachedBase;
 
-    // Reuse the same fast-path-aware resolution loadFiles()/discoverFiles() use, instead
-    // of an independent full scan, so freshness checks stay cheap on unchanged repos too.
-    const currentFiles = await listAgentSessionFiles(options);
-    const currentSignatures = await collectAgentFileSignatures(currentFiles);
-    const diff = diffAgentFileSignatures(cachedFileSignatures, currentSignatures);
-    if (!diff.changedFiles.length) return { state: "fresh" };
-
-    const changedFiles = diff.changedFiles.map((file) => toProjectDisplayPath(options.root, file));
-    if (policy === "check") {
-      return {
-        state: "stale",
-        ...summarizeChangedFiles(changedFiles),
-        reason: "session snapshot is older than files on disk",
-      };
+    const now = Date.now();
+    if (lastFreshnessResult && now - lastFreshnessCheckedAt < AGENT_FRESHNESS_CHECK_INTERVAL_MS) {
+      return lastFreshnessResult;
     }
+    if (freshnessInFlight) return freshnessInFlight;
 
-    const maxFiles = options.freshness?.maxAutoRefreshFiles ?? DEFAULT_MAX_AUTO_REFRESH_FILES;
-    const maxBytes = options.freshness?.maxAutoRefreshBytes ?? DEFAULT_MAX_AUTO_REFRESH_BYTES;
-    if (diff.changedFiles.length > maxFiles) {
-      return {
-        state: "stale",
-        ...summarizeChangedFiles(changedFiles),
-        reason: `changed file count exceeds ${maxFiles}`,
-      };
-    }
-    if (diff.changedBytes > maxBytes) {
-      return {
-        state: "stale",
-        ...summarizeChangedFiles(changedFiles),
-        reason: `changed byte count exceeds ${maxBytes}`,
-      };
-    }
+    freshnessInFlight = (async (): Promise<AgentFreshnessResult> => {
+      await cachedBase;
+      // Reuse the same fast-path-aware resolution loadFiles()/discoverFiles() use, instead
+      // of an independent full scan, so freshness checks stay cheap on unchanged repos too.
+      const currentFiles = await listAgentSessionFiles(options);
+      const currentSignatures = await collectAgentFileSignatures(currentFiles);
+      const signatures = cachedFileSignatures;
+      if (!signatures) return { state: "fresh" };
+      const diff = diffAgentFileSignatures(signatures, currentSignatures);
+      let result: AgentFreshnessResult;
+      if (!diff.changedFiles.length) {
+        result = { state: "fresh" };
+      } else {
+        const changedFiles = diff.changedFiles.map((file) => toProjectDisplayPath(options.root, file));
+        if (policy === "check") {
+          result = {
+            state: "stale",
+            ...summarizeChangedFiles(changedFiles),
+            reason: "session snapshot is older than files on disk",
+          };
+        } else {
+          const maxFiles = options.freshness?.maxAutoRefreshFiles ?? DEFAULT_MAX_AUTO_REFRESH_FILES;
+          const maxBytes = options.freshness?.maxAutoRefreshBytes ?? DEFAULT_MAX_AUTO_REFRESH_BYTES;
+          if (diff.changedFiles.length > maxFiles) {
+            result = {
+              state: "stale",
+              ...summarizeChangedFiles(changedFiles),
+              reason: `changed file count exceeds ${maxFiles}`,
+            };
+          } else if (diff.changedBytes > maxBytes) {
+            result = {
+              state: "stale",
+              ...summarizeChangedFiles(changedFiles),
+              reason: `changed byte count exceeds ${maxBytes}`,
+            };
+          } else {
+            invalidate();
+            result = { state: "refreshed", changedFiles };
+          }
+        }
+      }
+      lastFreshnessCheckedAt = Date.now();
+      lastFreshnessResult = result;
+      return result;
+    })().finally(() => {
+      freshnessInFlight = undefined;
+    });
 
-    invalidate();
-    return { state: "refreshed", changedFiles };
+    return freshnessInFlight;
   };
 
   const session: AgentSession = {
