@@ -839,7 +839,6 @@ function createCodegraphMcpHandlersForSession(
 
     review: async (request) =>
       await withFreshness(async () => {
-        const snapshot = await session.loadProject({ symbolGraph: "skip" });
         return await buildReviewReport(
           root,
           {
@@ -849,7 +848,11 @@ function createCodegraphMcpHandlersForSession(
             ...(request.reviewDepth !== undefined ? { reviewDepth: request.reviewDepth } : {}),
           },
           {
-            index: snapshot.index,
+            ...(session.loadProject
+              ? {
+                  loadIndex: async () => (await session.loadProject({ symbolGraph: "skip" })).index,
+                }
+              : {}),
             ...(session.loadDuplicateAnalysis ? { loadDuplicateAnalysis: session.loadDuplicateAnalysis } : {}),
           },
         );

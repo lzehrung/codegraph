@@ -142,12 +142,11 @@ async function buildReviewIndex(input: {
   reviewReport?: ReviewBuildReport;
   reviewTimings?: ReviewTimingReport;
   /**
-   * A pre-built project index (e.g. an already-loaded agent session snapshot) to reuse
-   * instead of loading a fresh one. Only used when the review does not request additional
-   * files beyond normal project scope, since a caller-provided index cannot know about
-   * scope it wasn't built with.
+   * Reuse an already loaded project index, or load it lazily only if review work reaches
+   * the current-project build stage.
    */
   providedIndex?: ProjectIndex;
+  loadProvidedIndex?: () => Promise<ProjectIndex>;
 }): Promise<ReviewIndexStage> {
   const {
     projectRoot,
@@ -158,6 +157,7 @@ async function buildReviewIndex(input: {
     reviewReport,
     reviewTimings,
     providedIndex,
+    loadProvidedIndex,
   } = input;
   const fastGraphRequested = appliedOptions.graph?.fast ?? false;
   const graphOptions = appliedOptions.graph ? { ...appliedOptions.graph, fast: fastGraphRequested } : { fast: false };
@@ -186,25 +186,25 @@ async function buildReviewIndex(input: {
   // current-project index: the shared loader strips those inputs and lets incremental
   // indexing reconcile the whole project, unioning review targets outside discovery.
   // A caller-provided index (e.g. an already-loaded agent session snapshot) is reused
-  // as-is when the review does not request additional files beyond normal project scope
-  // -- that index was already built with `filesAreProjectScope: true`, so it is always at
-  // least as complete as what a fresh load would produce here.
+  // as-is when the review does not request additional files beyond normal project scope.
   const index =
     providedIndex && !appliedOptions.files?.length
       ? providedIndex
-      : await loadCurrentProjectIndex({
-          root: projectRoot,
-          scope: {
-            kind: "project",
-            ...(appliedOptions.files?.length ? { additionalFiles: appliedOptions.files } : {}),
-          },
-          options: {
-            ...appliedOptions,
-            graph: graphOptions,
-            keepParsed: true,
-            ...(indexReport ? { report: indexReport } : {}),
-          },
-        });
+      : loadProvidedIndex && !appliedOptions.files?.length
+        ? await loadProvidedIndex()
+        : await loadCurrentProjectIndex({
+            root: projectRoot,
+            scope: {
+              kind: "project",
+              ...(appliedOptions.files?.length ? { additionalFiles: appliedOptions.files } : {}),
+            },
+            options: {
+              ...appliedOptions,
+              graph: graphOptions,
+              keepParsed: true,
+              ...(indexReport ? { report: indexReport } : {}),
+            },
+          });
   if (reviewReport) {
     Object.defineProperty(reviewReport, "index", {
       value: index,
@@ -238,6 +238,7 @@ export async function buildReviewReport(
   opts: ReviewOptions = {},
   cached?: {
     index?: ProjectIndex;
+    loadIndex?: () => Promise<ProjectIndex>;
     duplicateAnalysis?: DuplicatePreparedAnalysis;
     loadDuplicateAnalysis?: () => Promise<DuplicatePreparedAnalysis>;
   },
@@ -316,6 +317,7 @@ export async function buildReviewReport(
     ...(reviewReport ? { reviewReport } : {}),
     ...(reviewTimings ? { reviewTimings } : {}),
     ...(cached?.index ? { providedIndex: cached.index } : {}),
+    ...(cached?.loadIndex ? { loadProvidedIndex: cached.loadIndex } : {}),
   });
   const includeDiffContext = appliedOptions.includeDiffContext ?? (includeSymbolDetails && diffHunksByFile.size > 0);
 

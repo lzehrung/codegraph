@@ -3,8 +3,6 @@ import { request as httpRequest } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import * as indexerBuild from "../src/indexer/build-index.js";
-import * as duplicatesModule from "../src/duplicates.js";
 import { describe, expect, it, vi } from "vitest";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
 import {
@@ -192,7 +190,7 @@ describe("codegraph MCP handlers", () => {
     expect(review).toHaveProperty("reviewTasks");
   });
 
-  it("does not prepare duplicate analysis for no-change MCP review calls", async () => {
+  it("does not load the session index or duplicate analysis for no-change MCP review calls", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-review-no-changes-"));
     runGit(root, ["init"]);
     await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
@@ -200,12 +198,30 @@ describe("codegraph MCP handlers", () => {
     runGit(root, ["commit", "-m", "base"]);
     const base = runGit(root, ["rev-parse", "HEAD"]);
 
-    const prepareSpy = vi.spyOn(duplicatesModule, "prepareDuplicateAnalysis");
-    const handlers = createCodegraphMcpHandlers({ root });
+    const backing = createAgentSession({ root });
+    let projectLoads = 0;
+    let duplicateComputations = 0;
+    let duplicatePromise: ReturnType<NonNullable<AgentSession["loadDuplicateAnalysis"]>> | undefined;
+    const session: AgentSession = {
+      ...countingSession(backing).session,
+      loadProject: async (options) => {
+        projectLoads += 1;
+        return await backing.loadProject(options);
+      },
+      loadDuplicateAnalysis: async () => {
+        duplicatePromise ??= (async () => {
+          duplicateComputations += 1;
+          return await backing.loadDuplicateAnalysis!();
+        })();
+        return await duplicatePromise;
+      },
+    };
+    const handlers = createCodegraphMcpHandlers({ root, session });
     const report = await handlers.review({ base, head: "HEAD" });
 
     expect(report.status).toBe("no_changes");
-    expect(prepareSpy).toHaveBeenCalledTimes(0);
+    expect(projectLoads).toBe(0);
+    expect(duplicateComputations).toBe(0);
   });
 
   it("reuses the session project index and duplicate analysis across repeated review calls", async () => {
@@ -236,17 +252,29 @@ describe("codegraph MCP handlers", () => {
     runGit(root, ["add", "a.ts"]);
     runGit(root, ["commit", "-m", "change"]);
 
-    const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
-    const prepareSpy = vi.spyOn(duplicatesModule, "prepareDuplicateAnalysis");
-    const handlers = createCodegraphMcpHandlers({ root });
+    const backing = createAgentSession({ root });
+    const counted = countingSession(backing);
+    let duplicateComputations = 0;
+    let duplicatePromise: ReturnType<NonNullable<AgentSession["loadDuplicateAnalysis"]>> | undefined;
+    const session: AgentSession = {
+      ...counted.session,
+      loadDuplicateAnalysis: async () => {
+        duplicatePromise ??= (async () => {
+          duplicateComputations += 1;
+          return await backing.loadDuplicateAnalysis!();
+        })();
+        return await duplicatePromise;
+      },
+    };
+    const handlers = createCodegraphMcpHandlers({ root, session });
 
     const first = await handlers.review({ base, head: "HEAD" });
     const second = await handlers.review({ base, head: "HEAD" });
 
     expect(first.reviewTasks.some((task) => task.reason === "duplicate-sibling")).toBe(true);
     expect(second.reviewTasks.some((task) => task.reason === "duplicate-sibling")).toBe(true);
-    expect(buildSpy).toHaveBeenCalledTimes(1);
-    expect(prepareSpy).toHaveBeenCalledTimes(1);
+    expect(counted.loads()).toBe(1);
+    expect(duplicateComputations).toBe(1);
   });
 
   it("keeps tool calls available when installed package metadata disappears", async () => {
