@@ -6,6 +6,7 @@ import {
   getNativeSyntaxTreeExecution,
   type NativeQueryResults,
   type NativeRuntimeMode,
+  type NativeSyntaxTree,
 } from "../native/treeSitterNative.js";
 import type { NativeFallbackReason } from "../native/contracts.js";
 import { ProjectedSyntaxTree } from "../native/projectedTree.js";
@@ -35,6 +36,8 @@ export type PreparedFileContext = {
   lang?: ParserLanguage;
   nativeMode?: NativeRuntimeMode;
   nativeQueries: NativeQueryResults | null;
+  /** Transferable native tree POJO from workers; avoids a second parse on the main thread. */
+  syntaxTree?: NativeSyntaxTree | null;
   nativeFallbackReason?: NativeFallbackReason;
   nativeError?: string;
 };
@@ -79,12 +82,24 @@ export function attemptParsePreparedFileContext(context: PreparedFileContext): P
       nativeFallbackReason: "unsupportedLanguage",
     };
   }
+  if (context.syntaxTree) {
+    return {
+      parsed: {
+        source,
+        tree: new ProjectedSyntaxTree(source, context.syntaxTree),
+        ...(context.lang ? { lang: context.lang } : {}),
+        sup,
+        nativeQueries,
+      },
+    };
+  }
   const nativeTreeExecution = getNativeSyntaxTreeExecution(source, sup, nativeMode);
   if (nativeTreeExecution.tree) {
     return {
       parsed: {
         source,
         tree: new ProjectedSyntaxTree(source, nativeTreeExecution.tree),
+        ...(context.lang ? { lang: context.lang } : {}),
         sup,
         nativeQueries,
       },
