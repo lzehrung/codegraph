@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -31,6 +32,18 @@ async function mkGitRepo(): Promise<string> {
 }
 function detailedSymbolGraphSnapshotPath(root: string): string {
   return path.join(root, ".codegraph-cache", "index-v1", "detailed-symbol-graph.json");
+}
+
+async function readDetailedSidecar(sidecarPath: string): Promise<unknown> {
+  const raw = await fs.readFile(sidecarPath);
+  return JSON.parse(brotliDecompressSync(raw).toString("utf8"));
+}
+
+async function writeDetailedSidecar(sidecarPath: string, sidecar: unknown): Promise<void> {
+  await fs.writeFile(
+    sidecarPath,
+    brotliCompressSync(JSON.stringify(sidecar), { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } }),
+  );
 }
 type MutableDetailedSymbolGraphSidecar = {
   version: number;
@@ -177,7 +190,7 @@ describe("agent session", () => {
     const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
     const cold = await createAgentSession({ root }).loadProject();
     const sidecarPath = detailedSymbolGraphSnapshotPath(root);
-    const sidecar = JSON.parse(await fs.readFile(sidecarPath, "utf8")) as {
+    const sidecar = (await readDetailedSidecar(sidecarPath)) as {
       version: number;
       projectSnapshotIdentity: string;
       graph: { nodes: unknown[]; edges: unknown[] };
@@ -207,8 +220,8 @@ describe("agent session", () => {
     const root = await mkGitRepo();
     await createAgentSession({ root }).loadProject();
     const sidecarPath = detailedSymbolGraphSnapshotPath(root);
-    const sidecarText = await fs.readFile(sidecarPath, "utf8");
-    await fs.writeFile(sidecarPath, `${sidecarText}\n`, "utf8");
+    const sidecarBytes = await fs.readFile(sidecarPath);
+    await fs.writeFile(sidecarPath, Buffer.concat([sidecarBytes, Buffer.from("\n")]));
     const originalReadFile = fs.readFile.bind(fs);
     let sidecarReads = 0;
     vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
@@ -225,8 +238,8 @@ describe("agent session", () => {
     expect(second.symbolGraph.nodes.has(retainedNode)).toBe(true);
     expect(sidecarReads).toBe(1);
     const beforeRewrite = await fs.stat(sidecarPath);
-    const unchangedText = await originalReadFile(sidecarPath, "utf8");
-    await fs.writeFile(sidecarPath, unchangedText, "utf8");
+    const unchangedBytes = (await originalReadFile(sidecarPath)) as Buffer;
+    await fs.writeFile(sidecarPath, unchangedBytes);
     await fs.utimes(sidecarPath, beforeRewrite.atime, beforeRewrite.mtime);
     await createAgentSession({ root }).loadProject();
 
@@ -237,8 +250,8 @@ describe("agent session", () => {
     const root = await mkGitRepo();
     await createAgentSession({ root }).loadProject();
     const sidecarPath = detailedSymbolGraphSnapshotPath(root);
-    const sidecarText = await fs.readFile(sidecarPath, "utf8");
-    await fs.writeFile(sidecarPath, `${sidecarText}\n`, "utf8");
+    const sidecarBytes = await fs.readFile(sidecarPath);
+    await fs.writeFile(sidecarPath, Buffer.concat([sidecarBytes, Buffer.from("\n")]));
     const originalStat = fs.stat.bind(fs);
     let sidecarStats = 0;
     vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
@@ -263,7 +276,7 @@ describe("agent session", () => {
     const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
 
     const rebuilt = await createAgentSession({ root }).loadProject();
-    const refreshed = JSON.parse(await fs.readFile(detailedSymbolGraphSnapshotPath(root), "utf8")) as {
+    const refreshed = (await readDetailedSidecar(detailedSymbolGraphSnapshotPath(root))) as {
       version: number;
     };
 
@@ -313,10 +326,10 @@ describe("agent session", () => {
     ];
 
     for (const tamper of tamperers) {
-      const sidecar = JSON.parse(await fs.readFile(sidecarPath, "utf8")) as MutableDetailedSymbolGraphSidecar;
+      const sidecar = (await readDetailedSidecar(sidecarPath)) as MutableDetailedSymbolGraphSidecar;
       tamper(sidecar);
       refreshDetailedSidecarHash(sidecar);
-      await fs.writeFile(sidecarPath, JSON.stringify(sidecar), "utf8");
+      await writeDetailedSidecar(sidecarPath, sidecar);
       symbolGraphSpy.mockClear();
 
       const rebuilt = await createAgentSession({ root }).loadProject();
@@ -339,9 +352,9 @@ describe("agent session", () => {
     // proven by the structural and semantic checks in
     // `isDetailedSymbolGraphCompatibleWithProject` instead, exercised separately by "rejects
     // well-typed sidecar tampering against the current project index" above.
-    const sidecar = JSON.parse(await fs.readFile(sidecarPath, "utf8")) as MutableDetailedSymbolGraphSidecar;
+    const sidecar = (await readDetailedSidecar(sidecarPath)) as MutableDetailedSymbolGraphSidecar;
     sidecar.graphHash = "f".repeat(64);
-    await fs.writeFile(sidecarPath, JSON.stringify(sidecar), "utf8");
+    await writeDetailedSidecar(sidecarPath, sidecar);
 
     const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
     const warm = await createAgentSession({ root }).loadProject();
@@ -355,17 +368,17 @@ describe("agent session", () => {
     const root = await mkGitRepo();
     await createAgentSession({ root }).loadProject();
     const sidecarPath = detailedSymbolGraphSnapshotPath(root);
-    const legacy = JSON.parse(await fs.readFile(sidecarPath, "utf8")) as {
+    const legacy = (await readDetailedSidecar(sidecarPath)) as {
       version: number;
       projectSnapshotIdentity: string;
       graph: unknown;
     };
     legacy.version = 0;
-    await fs.writeFile(sidecarPath, JSON.stringify(legacy), "utf8");
+    await writeDetailedSidecar(sidecarPath, legacy);
     const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
 
     await createAgentSession({ root }).loadProject();
-    const refreshed = JSON.parse(await fs.readFile(sidecarPath, "utf8")) as { version: number };
+    const refreshed = (await readDetailedSidecar(sidecarPath)) as { version: number };
 
     expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
     expect(refreshed.version).toBe(1);

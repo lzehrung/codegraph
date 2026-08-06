@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 import path from "node:path";
 import { LANG_CONFIGS } from "./bootstrap/treeSitterLanguages.js";
 import { chunkFile, type Chunk } from "./chunking/chunkFile.js";
@@ -189,11 +190,9 @@ type UnitCluster = {
 type DuplicateInternalUnit = DuplicateUnitRef & {
   id: string;
   absoluteFile: string;
-  text: string;
   rawHash: string;
   normalizedHash: string;
   astShapeHash?: string;
-  normalizedTokens: string[];
   tokenSet: Set<string>;
   signatures: Set<string>;
 };
@@ -270,7 +269,9 @@ export type DuplicatePreparationOptions = Pick<
 >;
 
 const duplicatePreparedAnalyses = new WeakMap<DuplicatePreparedAnalysis, DuplicatePreparedAnalysisData>();
-const DUPLICATE_UNIT_CACHE_VERSION = 2;
+// v3: drop dead `text`/`normalizedTokens` fields (never read after construction) and
+// brotli-compress the payload; both cut on-disk cache size by roughly 8x.
+const DUPLICATE_UNIT_CACHE_VERSION = 3;
 const DUPLICATE_UNIT_CACHE_SCHEMA_VERSION = 1;
 const DUPLICATE_UNIT_CACHE_TABLE = "duplicate_unit_cache";
 const DUPLICATE_UNIT_CACHE_SCHEMA_VERSION_KEY = "duplicate_unit_cache.schema_version";
@@ -282,7 +283,7 @@ const DUPLICATE_UNIT_CACHE_COLUMNS: readonly SqliteTableColumn[] = [
   { name: "variant", definition: "TEXT NOT NULL" },
   { name: "sig", definition: "TEXT NOT NULL" },
   { name: "version", definition: "INTEGER NOT NULL" },
-  { name: "payload", definition: "TEXT NOT NULL" },
+  { name: "payload", definition: "BLOB NOT NULL" },
   { name: "updated_at", definition: "INTEGER NOT NULL" },
 ];
 
@@ -762,10 +763,10 @@ function tryLoadDuplicateUnitsFromCache(
     try {
       const entry = duplicateUnitDiskCache(index);
       const row = entry?.statements?.load.get(file, variant) as
-        | { sig: string; version: number; payload: string }
+        | { sig: string; version: number; payload: Uint8Array }
         | undefined;
       if (!row || row.sig !== sig || row.version !== DUPLICATE_UNIT_CACHE_VERSION) return null;
-      const parsed = JSON.parse(row.payload) as unknown;
+      const parsed = JSON.parse(brotliDecompressSync(row.payload).toString("utf8")) as unknown;
       return deserializeDuplicateUnits(parsed);
     } catch {
       return null;
@@ -790,14 +791,10 @@ function writeDuplicateUnitsToCache(
   if (index.cacheMode === "disk") {
     try {
       const entry = duplicateUnitDiskCache(index);
-      entry?.statements?.write.run(
-        file,
-        variant,
-        sig,
-        DUPLICATE_UNIT_CACHE_VERSION,
-        JSON.stringify(serializeDuplicateUnits(units)),
-        Date.now(),
-      );
+      const payload = brotliCompressSync(JSON.stringify(serializeDuplicateUnits(units)), {
+        params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 },
+      });
+      entry?.statements?.write.run(file, variant, sig, DUPLICATE_UNIT_CACHE_VERSION, payload, Date.now());
     } catch {
       // best-effort cache
     }
@@ -828,10 +825,8 @@ function isDuplicateSerializedUnit(value: unknown): value is DuplicateSerialized
     typeof unit.id === "string" &&
     typeof unit.file === "string" &&
     typeof unit.absoluteFile === "string" &&
-    typeof unit.text === "string" &&
     typeof unit.rawHash === "string" &&
     typeof unit.normalizedHash === "string" &&
-    Array.isArray(unit.normalizedTokens) &&
     Array.isArray(unit.tokenSet) &&
     Array.isArray(unit.signatures) &&
     typeof unit.startLine === "number" &&
@@ -925,7 +920,6 @@ function buildInternalUnit(
     ...unit,
     id: internalUnitId(unit, absoluteFile),
     absoluteFile: normalizePath(absoluteFile),
-    text,
     rawHash,
     normalizedHash: hashText(normalizedTokens.join(" ")),
     ...(astShapeHash !== undefined ? { astShapeHash } : {}),
@@ -937,7 +931,6 @@ function buildInternalUnit(
     ...(handles.symbolHandle !== undefined ? { symbolHandle: handles.symbolHandle } : {}),
     ...(heuristics.looksLikeImportList ? { looksLikeImportList: true } : {}),
     ...(heuristics.looksLikeBarrel ? { looksLikeBarrel: true } : {}),
-    normalizedTokens,
     tokenSet: new Set(normalizedTokens),
     signatures,
   };

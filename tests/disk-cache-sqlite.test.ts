@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import path from "node:path";
 import fsp from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
+import { brotliDecompressSync } from "node:zlib";
 
 import { buildProjectIndex, findDuplicates, type BuildReport } from "../src/index.js";
 import { closeDuplicateUnitCacheDatabase } from "../src/duplicates.js";
@@ -367,5 +368,56 @@ describe("disk cache uses sqlite backend", () => {
         "seed-5000",
       ),
     ).toBe(1);
+  });
+
+  it("compresses duplicate cache payloads and drops fields unused after construction", async () => {
+    const root = await mkTmpDir("dg-disk-cache-compressed-duplicates-");
+    await writeDuplicateProject(root);
+    const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const result = await findDuplicates(index, { minConfidence: "high", limit: 5 });
+    expect(result.groups.length).toBeGreaterThan(0);
+
+    const db = new DatabaseSync(duplicateCacheDbPath(root));
+    const row = db
+      .prepare("SELECT version, payload FROM duplicate_unit_cache WHERE file = ?")
+      .get(normalizePathForSql(path.join(root, "src", "a.ts"))) as
+      | { version: number; payload: Uint8Array }
+      | undefined;
+    db.close();
+
+    expect(row).toBeDefined();
+    expect(row!.version).toBe(3);
+    const decompressed = brotliDecompressSync(row!.payload).toString("utf8");
+    const units = JSON.parse(decompressed) as Array<Record<string, unknown>>;
+    expect(units.length).toBeGreaterThan(0);
+    expect(units[0]).not.toHaveProperty("text");
+    expect(units[0]).not.toHaveProperty("normalizedTokens");
+    expect(row!.payload.byteLength).toBeLessThan(Buffer.byteLength(decompressed, "utf8"));
+  });
+
+  it("ignores duplicate cache rows written by an older payload version", async () => {
+    const root = await mkTmpDir("dg-disk-cache-stale-duplicates-");
+    await writeDuplicateProject(root);
+    const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    await findDuplicates(index, { minConfidence: "high", limit: 5 });
+    closeDuplicateUnitCacheDatabase(root, { cacheDir: cacheDir(root) });
+
+    const aFile = normalizePathForSql(path.join(root, "src", "a.ts"));
+    const staleDb = new DatabaseSync(duplicateCacheDbPath(root));
+    staleDb
+      .prepare("UPDATE duplicate_unit_cache SET version = 2, payload = ? WHERE file = ?")
+      .run('[{"text":"stale","normalizedTokens":["stale"]}]', aFile);
+    staleDb.close();
+
+    const reopenedIndex = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const result = await findDuplicates(reopenedIndex, { minConfidence: "high", limit: 5 });
+    expect(result.groups.length).toBeGreaterThan(0);
+
+    const after = new DatabaseSync(duplicateCacheDbPath(root));
+    const row = after.prepare("SELECT version FROM duplicate_unit_cache WHERE file = ?").get(aFile) as
+      | { version: number }
+      | undefined;
+    after.close();
+    expect(row?.version).toBe(3);
   });
 });

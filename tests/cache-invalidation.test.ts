@@ -4,6 +4,7 @@ import os from "node:os";
 import fsp from "node:fs/promises";
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
+import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 import { buildProjectIndex, buildProjectIndexIncremental, type BuildReport } from "../src/index.js";
 import * as indexer from "../src/indexer.js";
 import * as buildCache from "../src/indexer/build-cache.js";
@@ -58,6 +59,18 @@ function manifestPathFor(root: string): string {
 
 function projectSnapshotPathFor(root: string): string {
   return path.join(root, ".codegraph-cache", "index-v1", "project-index-snapshot.json");
+}
+
+async function readProjectSnapshot(snapshotPath: string): Promise<Record<string, unknown>> {
+  const raw = await fsp.readFile(snapshotPath);
+  return JSON.parse(brotliDecompressSync(raw).toString("utf8")) as Record<string, unknown>;
+}
+
+async function writeProjectSnapshot(snapshotPath: string, snapshot: unknown): Promise<void> {
+  await fsp.writeFile(
+    snapshotPath,
+    brotliCompressSync(JSON.stringify(snapshot), { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } }),
+  );
 }
 
 async function readManifest(root: string): Promise<IndexManifest> {
@@ -831,7 +844,7 @@ describe("Cache invalidation and strict hashing", () => {
     await buildProjectIndex(root, { threads: 2, cache: "disk", report: initialReport });
     const snapshotPath = projectSnapshotPathFor(root);
     await expect(fsp.stat(snapshotPath)).resolves.toBeTruthy();
-    const snapshot = JSON.parse(await fsp.readFile(snapshotPath, "utf8")) as {
+    const snapshot = (await readProjectSnapshot(snapshotPath)) as {
       analysis?: {
         backend?: unknown;
         label?: unknown;
@@ -917,9 +930,9 @@ describe("Cache invalidation and strict hashing", () => {
 
     await buildProjectIndex(root, { threads: 2, cache: "disk" });
     const snapshotPath = projectSnapshotPathFor(root);
-    const snapshot = JSON.parse(await fsp.readFile(snapshotPath, "utf8")) as Record<string, unknown>;
+    const snapshot = await readProjectSnapshot(snapshotPath);
     snapshot.modules = [{}];
-    await fsp.writeFile(snapshotPath, JSON.stringify(snapshot), "utf8");
+    await writeProjectSnapshot(snapshotPath, snapshot);
 
     const incremental = await buildProjectIndexIncremental(root, {
       threads: 2,
@@ -937,11 +950,11 @@ describe("Cache invalidation and strict hashing", () => {
 
     await buildProjectIndex(root, { threads: 2, cache: "disk" });
     const snapshotPath = projectSnapshotPathFor(root);
-    const snapshot = JSON.parse(await fsp.readFile(snapshotPath, "utf8")) as {
+    const snapshot = (await readProjectSnapshot(snapshotPath)) as {
       modules?: Array<{ locals?: unknown[] }>;
     };
     if (snapshot.modules?.[0]) snapshot.modules[0].locals = [{}];
-    await fsp.writeFile(snapshotPath, JSON.stringify(snapshot), "utf8");
+    await writeProjectSnapshot(snapshotPath, snapshot);
 
     const incremental = await buildProjectIndexIncremental(root, {
       threads: 2,
@@ -961,7 +974,7 @@ describe("Cache invalidation and strict hashing", () => {
 
     await buildProjectIndex(root, { threads: 2, cache: "disk" });
     const snapshotPath = projectSnapshotPathFor(root);
-    const snapshot = JSON.parse(await fsp.readFile(snapshotPath, "utf8")) as {
+    const snapshot = (await readProjectSnapshot(snapshotPath)) as {
       modules?: Array<{ file?: string; imports?: unknown[]; exports?: unknown[] }>;
     };
     const moduleSnapshot = snapshot.modules?.find((moduleIndex) => moduleIndex.file === normalize(filePath));
@@ -969,7 +982,7 @@ describe("Cache invalidation and strict hashing", () => {
       moduleSnapshot.imports = [{}];
       moduleSnapshot.exports = [{}];
     }
-    await fsp.writeFile(snapshotPath, JSON.stringify(snapshot), "utf8");
+    await writeProjectSnapshot(snapshotPath, snapshot);
 
     const incremental = await buildProjectIndexIncremental(root, {
       threads: 2,
@@ -987,11 +1000,11 @@ describe("Cache invalidation and strict hashing", () => {
 
     await buildProjectIndex(root, { threads: 2, cache: "disk" });
     const snapshotPath = projectSnapshotPathFor(root);
-    const snapshot = JSON.parse(await fsp.readFile(snapshotPath, "utf8")) as Record<string, unknown>;
+    const snapshot = await readProjectSnapshot(snapshotPath);
     snapshot.projectRoot = 1;
     snapshot.nativeMode = "sometimes";
     snapshot.projectFiles = [{}];
-    await fsp.writeFile(snapshotPath, JSON.stringify(snapshot), "utf8");
+    await writeProjectSnapshot(snapshotPath, snapshot);
 
     const incremental = await buildProjectIndexIncremental(root, {
       threads: 2,
@@ -1009,9 +1022,9 @@ describe("Cache invalidation and strict hashing", () => {
 
     await buildProjectIndex(root, { threads: 2, cache: "disk" });
     const snapshotPath = projectSnapshotPathFor(root);
-    const snapshot = JSON.parse(await fsp.readFile(snapshotPath, "utf8")) as Record<string, unknown>;
+    const snapshot = await readProjectSnapshot(snapshotPath);
     snapshot.graph = { nodes: [normalize(filePath)], edges: [{ from: normalize(filePath), to: {} }] };
-    await fsp.writeFile(snapshotPath, JSON.stringify(snapshot), "utf8");
+    await writeProjectSnapshot(snapshotPath, snapshot);
 
     const incremental = await buildProjectIndexIncremental(root, {
       threads: 2,
@@ -1230,8 +1243,8 @@ describe("Cache invalidation and strict hashing", () => {
     const manifest = await readManifest(root);
     const entries = new Map(Object.entries(manifest.files));
     const snapshotPath = projectSnapshotPathFor(root);
-    const snapshotText = await fsp.readFile(snapshotPath, "utf8");
-    await fsp.writeFile(snapshotPath, `${snapshotText}\n`, "utf8");
+    const snapshotBytes = await fsp.readFile(snapshotPath);
+    await fsp.writeFile(snapshotPath, Buffer.concat([snapshotBytes, Buffer.from("\n")]));
     const originalReadFile = fsp.readFile.bind(fsp);
     let snapshotReads = 0;
     const readSpy = vi.spyOn(fsp, "readFile").mockImplementation(async (...args) => {
@@ -1245,8 +1258,8 @@ describe("Cache invalidation and strict hashing", () => {
     firstModule.locals.length = 0;
     const second = await buildCache.tryLoadProjectIndexSnapshot(root, { cache: "disk" }, entries);
     const beforeRewrite = await fsp.stat(snapshotPath);
-    const unchangedText = await originalReadFile(snapshotPath, "utf8");
-    await fsp.writeFile(snapshotPath, unchangedText, "utf8");
+    const unchangedBytes = (await originalReadFile(snapshotPath)) as Buffer;
+    await fsp.writeFile(snapshotPath, unchangedBytes);
     await fsp.utimes(snapshotPath, beforeRewrite.atime, beforeRewrite.mtime);
     const third = await buildCache.tryLoadProjectIndexSnapshot(root, { cache: "disk" }, entries);
     readSpy.mockRestore();
@@ -1380,7 +1393,7 @@ describe("Cache invalidation and strict hashing", () => {
 
     await buildProjectIndex(root, { threads: 2, cache: "disk", useBloomFilters: true });
     const snapshotPath = projectSnapshotPathFor(root);
-    const snapshot = JSON.parse(await fsp.readFile(snapshotPath, "utf8")) as {
+    const snapshot = (await readProjectSnapshot(snapshotPath)) as {
       bloomFilters?: Record<string, unknown>;
     };
     snapshot.bloomFilters = {
@@ -1390,7 +1403,7 @@ describe("Cache invalidation and strict hashing", () => {
         bitsBase64: "AAAA",
       },
     };
-    await fsp.writeFile(snapshotPath, JSON.stringify(snapshot), "utf8");
+    await writeProjectSnapshot(snapshotPath, snapshot);
 
     const rebuilt = await buildProjectIndexIncremental(root, {
       threads: 2,
@@ -1409,7 +1422,7 @@ describe("Cache invalidation and strict hashing", () => {
 
     const initial = await buildProjectIndex(root, { threads: 2, cache: "disk", useBloomFilters: true });
     const snapshotPath = projectSnapshotPathFor(root);
-    const originalSnapshot = JSON.parse(await fsp.readFile(snapshotPath, "utf8")) as {
+    const originalSnapshot = (await readProjectSnapshot(snapshotPath)) as {
       version: number;
       filesSignature: string;
       graph: unknown;
@@ -1419,26 +1432,22 @@ describe("Cache invalidation and strict hashing", () => {
       projectFiles?: unknown;
     };
 
-    await fsp.writeFile(
-      snapshotPath,
-      JSON.stringify({
-        version: 1,
-        filesSignature: originalSnapshot.filesSignature,
-        graph: originalSnapshot.graph,
-        modules: originalSnapshot.modules,
-        ...(originalSnapshot.projectRoot ? { projectRoot: originalSnapshot.projectRoot } : {}),
-        ...(originalSnapshot.nativeMode ? { nativeMode: originalSnapshot.nativeMode } : {}),
-        ...(originalSnapshot.projectFiles ? { projectFiles: originalSnapshot.projectFiles } : {}),
-      }),
-      "utf8",
-    );
+    await writeProjectSnapshot(snapshotPath, {
+      version: 1,
+      filesSignature: originalSnapshot.filesSignature,
+      graph: originalSnapshot.graph,
+      modules: originalSnapshot.modules,
+      ...(originalSnapshot.projectRoot ? { projectRoot: originalSnapshot.projectRoot } : {}),
+      ...(originalSnapshot.nativeMode ? { nativeMode: originalSnapshot.nativeMode } : {}),
+      ...(originalSnapshot.projectFiles ? { projectFiles: originalSnapshot.projectFiles } : {}),
+    });
 
     const rebuilt = await buildProjectIndexIncremental(root, {
       threads: 2,
       cache: "disk",
       useBloomFilters: true,
     });
-    const rewrittenSnapshot = JSON.parse(await fsp.readFile(snapshotPath, "utf8")) as {
+    const rewrittenSnapshot = (await readProjectSnapshot(snapshotPath)) as {
       version: number;
       bloomFilters?: Record<string, unknown>;
       nativeRuntimeFingerprint?: string;

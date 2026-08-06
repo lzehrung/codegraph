@@ -157,6 +157,67 @@ describe("persistent query index", () => {
     expect(storedBytes / sourceBytes).toBeLessThanOrEqual(2.5);
   });
 
+  it("creates new sidecars with incremental auto-vacuum enabled", async () => {
+    const root = await createRepo();
+    const session = createSession(root);
+    await search(session, root, "validateUser");
+    const snapshot = await session.loadProject();
+    const sidecar = resolveQueryIndexPaths(snapshot.index.cacheRootDir!).sidecar;
+    disposeSessionQueryIndex(session);
+
+    const database = new SqliteDatabase(sidecar, { readonly: true });
+    const autoVacuum = database.prepare("PRAGMA auto_vacuum").get() as { auto_vacuum?: number } | undefined;
+    database.close();
+    expect(autoVacuum?.auto_vacuum).toBe(2);
+  });
+
+  it("upgrades an older sidecar without incremental auto-vacuum and reclaims free space", async () => {
+    const root = await createRepo();
+    const source = Array.from(
+      { length: 400 },
+      (_, index) => `export function marker${index}(value: string) { return value + '${index}'.repeat(20); }`,
+    ).join("\n");
+    await fs.writeFile(path.join(root, "src", "auth.ts"), `${source}\n`);
+    const session = createSession(root);
+    await search(session, root, "marker399");
+    const snapshot = await session.loadProject();
+    const sidecar = resolveQueryIndexPaths(snapshot.index.cacheRootDir!).sidecar;
+    disposeSessionQueryIndex(session);
+
+    // Simulate a sidecar created before incremental auto-vacuum existed, bloated by the
+    // delete/rewrite churn years of edits would leave behind.
+    const setup = new SqliteDatabase(sidecar);
+    setup.pragma("auto_vacuum = NONE");
+    setup.exec("VACUUM;");
+    setup.exec("DELETE FROM chunks;");
+    const beforeAutoVacuum = setup.prepare("PRAGMA auto_vacuum").get() as { auto_vacuum?: number } | undefined;
+    const beforeFreelist = setup.prepare("PRAGMA freelist_count").get() as
+      | { freelist_count?: number }
+      | undefined;
+    const beforePages = setup.prepare("PRAGMA page_count").get() as { page_count?: number } | undefined;
+    setup.close();
+    expect(beforeAutoVacuum?.auto_vacuum).toBe(0);
+    const beforeRatio = (beforeFreelist?.freelist_count ?? 0) / (beforePages?.page_count ?? 1);
+    expect(beforeRatio).toBeGreaterThan(0.15);
+
+    // Any subsequent write should detect the stale mode, switch to incremental auto-vacuum,
+    // and reclaim the accumulated free space via a one-time VACUUM.
+    await fs.writeFile(path.join(root, "src", "other.ts"), "export const betaMarker = 'beta only, updated';\n");
+    const nextSession = createSession(root);
+    await search(nextSession, root, "beta only, updated");
+    disposeSessionQueryIndex(nextSession);
+
+    const after = new SqliteDatabase(sidecar, { readonly: true });
+    const afterAutoVacuum = after.prepare("PRAGMA auto_vacuum").get() as { auto_vacuum?: number } | undefined;
+    const afterFreelist = after.prepare("PRAGMA freelist_count").get() as
+      | { freelist_count?: number }
+      | undefined;
+    const afterPages = after.prepare("PRAGMA page_count").get() as { page_count?: number } | undefined;
+    after.close();
+    expect(afterAutoVacuum?.auto_vacuum).toBe(2);
+    expect((afterFreelist?.freelist_count ?? 0) / (afterPages?.page_count ?? 1)).toBeLessThan(0.15);
+  });
+
   it("keeps CLI, library, and MCP result ordering identical", async () => {
     const root = await createRepo();
     const librarySession = createSession(root);
