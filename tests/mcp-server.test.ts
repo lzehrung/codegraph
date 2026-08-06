@@ -192,6 +192,22 @@ describe("codegraph MCP handlers", () => {
     expect(review).toHaveProperty("reviewTasks");
   });
 
+  it("does not prepare duplicate analysis for no-change MCP review calls", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-review-no-changes-"));
+    runGit(root, ["init"]);
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "base"]);
+    const base = runGit(root, ["rev-parse", "HEAD"]);
+
+    const prepareSpy = vi.spyOn(duplicatesModule, "prepareDuplicateAnalysis");
+    const handlers = createCodegraphMcpHandlers({ root });
+    const report = await handlers.review({ base, head: "HEAD" });
+
+    expect(report.status).toBe("no_changes");
+    expect(prepareSpy).toHaveBeenCalledTimes(0);
+  });
+
   it("reuses the session project index and duplicate analysis across repeated review calls", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-review-reuse-"));
     runGit(root, ["init"]);

@@ -236,7 +236,11 @@ async function buildReviewIndex(input: {
 export async function buildReviewReport(
   projectRoot: string,
   opts: ReviewOptions = {},
-  cached?: { index?: ProjectIndex; duplicateAnalysis?: DuplicatePreparedAnalysis },
+  cached?: {
+    index?: ProjectIndex;
+    duplicateAnalysis?: DuplicatePreparedAnalysis;
+    loadDuplicateAnalysis?: () => Promise<DuplicatePreparedAnalysis>;
+  },
 ): Promise<ReviewReport> {
   const appliedOptions = applyReviewPresetOptions(opts);
   const reviewReport = appliedOptions.report;
@@ -379,6 +383,7 @@ export async function buildReviewReport(
       changedSymbolIds,
       diffHunksByFile,
       ...(cached?.duplicateAnalysis ? { providedAnalysis: cached.duplicateAnalysis } : {}),
+      ...(cached?.loadDuplicateAnalysis ? { loadProvidedAnalysis: cached.loadDuplicateAnalysis } : {}),
     });
     report.reviewTasks.push(...duplicateReview.tasks);
     if (reviewReport && duplicateReview.preparedAnalysis) {
@@ -498,6 +503,8 @@ async function collectReviewDuplicateTasks(input: {
   diffHunksByFile: ReadonlyMap<string, Hunk[]>;
   /** A pre-bucketed analysis to reuse instead of preparing one from scratch. */
   providedAnalysis?: DuplicatePreparedAnalysis;
+  /** Loads a reusable prepared analysis only if duplicate tasks are actually needed. */
+  loadProvidedAnalysis?: () => Promise<DuplicatePreparedAnalysis>;
 }): Promise<{ tasks: ReviewTask[]; preparedAnalysis?: DuplicatePreparedAnalysis }> {
   const diffHunksByDisplayFile = new Map(
     Array.from(input.diffHunksByFile, ([file, hunks]) => [relativeReviewPath(input.projectRoot, file), hunks]),
@@ -532,6 +539,7 @@ async function collectReviewDuplicateTasks(input: {
 
   const preparedAnalysis =
     input.providedAnalysis ??
+    (input.loadProvidedAnalysis ? await input.loadProvidedAnalysis() : undefined) ??
     (await prepareDuplicateAnalysis(input.index, {
       projectRoot: input.projectRoot,
     }));
