@@ -538,7 +538,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       {
         kind: "max",
         max: 1,
-        usage: "Usage: codegraph review [project-root] [--root <path>] [--base <ref>] [--head <ref>] [--json | --pretty]",
+        usage: "Usage: codegraph review [project-root] [--root <path>] [--base <ref>] [--head <ref>] [--changed-since <ref>] [--json | --pretty]",
       },
     ),
   ],

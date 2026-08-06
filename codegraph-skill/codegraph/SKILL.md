@@ -21,7 +21,7 @@ Bare `codegraph` prints five task-first routes without scanning the project. Use
 
 | Task                                                      | Start here                                               |
 | --------------------------------------------------------- | -------------------------------------------------------- |
-| Review staged and unstaged work                           | `codegraph review --base HEAD --head WORKTREE`           |
+| Review staged and unstaged work                           | `codegraph review`           |
 | Review a branch against main                              | `codegraph review --base origin/main --head HEAD`        |
 | Map the wider blast radius of a change                    | `codegraph impact --base HEAD --head WORKTREE`           |
 | Select deterministic test paths for changed files         | `codegraph affected --base HEAD --head WORKTREE --quiet` |
@@ -88,7 +88,7 @@ File targets accept locations copied from search output. Semantic relationship/r
 
 Safe shorthand: `impact` and git-backed `drift` default to `HEAD..WORKTREE`; `artifact`, `packet`, and `mcp` infer `build`, `get`, and `serve`. `grep <regex>` and `sql <db> "SELECT ..."` accept positional forms. Explicit options remain valid.
 
-- compact review handoff: `codegraph review --base HEAD --head WORKTREE`
+- compact review handoff: `codegraph review`
 - broader change impact: `codegraph impact --base HEAD --head WORKTREE`
 - affected test paths: `codegraph affected --base HEAD --head WORKTREE --quiet`
 - architecture drift: `codegraph drift ./src --base origin/main --head HEAD --graph-edges summary --public-api removals`

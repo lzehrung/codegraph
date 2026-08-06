@@ -11,7 +11,7 @@ At a terminal, bare `codegraph` shows the five task-first routes without scannin
 For code reviews, start with `review`; it is the compact handoff with changed files, changed symbols, candidate tests, risks, duplicate leads, and analysis labels.
 
 ```bash
-codegraph review --base HEAD --head WORKTREE
+codegraph review
 ```
 
 Add `impact` only when you need a wider blast-radius map:
@@ -140,7 +140,7 @@ Keep the exact symbol handle returned by search or the changed-symbol handle ret
 codegraph search "service dispatch" --mode symbol --json
 codegraph refactor-plan "<exact-handle-from-search>" --max-references 200
 
-codegraph review --base HEAD --head WORKTREE --json
+codegraph review --json
 codegraph refactor-plan "<exact-changed-symbol-handle-from-review>" --rename RenamedService --json
 ```
 
@@ -481,7 +481,7 @@ codegraph review --base origin/main --head HEAD --review-depth standard --json >
 For current local edits, start with the compact review summary:
 
 ```bash
-codegraph review --base HEAD --head WORKTREE
+codegraph review
 ```
 
 Add a ranked blast-radius map only when needed:

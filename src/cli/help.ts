@@ -556,7 +556,7 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const REVIEW_HELP_TEXT = `codegraph review - Generate a code review report for a git range
 
-Usage: codegraph review [project-root] [--root <path>] [--base <ref>] [--head <ref>] [--json | --pretty] [--max-tests <n>] [--max-callsites <n>]
+Usage: codegraph review [project-root] [--root <path>] [--base <ref>] [--head <ref>] [--changed-since <ref>] [--json | --pretty] [--max-tests <n>] [--max-callsites <n>]
 
 Defaults:
   Git-backed review defaults to HEAD..WORKTREE when --base/--head/--changed-since are omitted.
@@ -564,6 +564,7 @@ Defaults:
 Options:
   --base <ref>         Base revision. Defaults to HEAD unless --changed-since is used.
   --head <ref>         Head revision or WORKTREE for local changes. Defaults to WORKTREE unless --changed-since is used.
+  --changed-since <ref>  Compare the current worktree against a single revision without inventing a head ref.
   --max-tests <n>      Cap candidate tests included in the report.
   --max-callsites <n>  Cap call sites included in the report.
   --json               Structured review report for automation.
