@@ -140,7 +140,7 @@ describe("refactor evidence plan", () => {
         root,
         handle: `${reviewHandle}-stale`,
       }),
-    ).rejects.toThrow("Run workspace symbol lookup");
+    ).rejects.toThrow('Run codegraph symbols "<query>" or workspace_symbols');
   });
 
   it("includes the authoritative read-only rename preview without mutating source", async () => {

@@ -91,6 +91,25 @@ Call `workspace_symbols` with flat fields `query`, optional `kinds`, `exportedOn
 
 Exact qualified identities such as `src/session.ts::CodeReviewSession` rank before exact names, prefixes, identifier tokens, and substrings. Responses include deterministic portable symbols plus analysis, freshness, limits, and omissions; only named/default import aliases that resolve to a concrete declaration are returned, while namespace/star and unresolved aliases are counted as omissions.
 
+Portable handle grammar used across `search`, `get_symbol`, `packet_get`, `explain`, `refs`, `rename_preview`, `refactor_plan`, `calls`, `type_hierarchy`, and `implementations`:
+
+- `file:<url-encoded project-relative path>`
+- `symbol:<url-encoded path>:<url-encoded local-name>:<line>:<column>`
+- `chunk:<url-encoded path>:<line>`
+- `sql:<url-encoded object-name>:<url-encoded path>:<line>`
+- `graph:<url-encoded project-relative path>`
+- review packet targets are separate quoted strings, not portable handles: `review:base=<encoded-ref>;head=<encoded-ref>`
+
+Positions use 1-based lines and 0-based UTF-16 columns, matching the rest of Codegraph's range and navigation APIs.
+
+MCP tool name ↔ CLI command mapping for the common handle-driven follow-ups:
+- `workspace_symbols` ↔ `codegraph symbols`
+- `search` ↔ `codegraph search`
+- `packet_get` ↔ `codegraph packet get`
+- `get_symbol` ↔ `codegraph explain`
+- `calls` ↔ `codegraph callers` / `codegraph callees`
+- `type_hierarchy` ↔ `codegraph supertypes` / `codegraph subtypes`
+
 ### Rename preview
 
 Call `rename_preview` with flat fields `handle`, `newName`, and optional `includeComments`, `includeStrings`, `includeFilenames`, and `maxEdits`. The edit limit defaults to 5000 and caps at 10000; comment and string candidates are opt-in, while filename suggestions require an eligible exported class, interface, or type whose filename matches its name.

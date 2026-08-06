@@ -41,7 +41,9 @@ export function requireSemanticSymbol(snapshot: AgentProjectSnapshot, input: str
   const portable = resolveSemanticSymbol(snapshot, input);
   if (portable) return portable;
   if (parseAgentSymbolHandle(input)) {
-    throw new Error("Symbol handle is stale or missing. Run workspace symbol lookup to resolve it again.");
+    throw new Error(
+      'Symbol handle is stale or missing. Run codegraph symbols "<query>" or workspace_symbols to resolve it again.',
+    );
   }
 
   const location = parseSourceLocationInput(input);
@@ -71,11 +73,11 @@ export function requireSemanticSymbol(snapshot: AgentProjectSnapshot, input: str
     throw new Error(`Ambiguous symbol target "${input}". Use one of: ${choices.join(", ")}${suffix}`);
   }
   if (input.includes("::")) {
-    throw new Error("Symbol handle is stale or missing. Run workspace symbol lookup to resolve it again.");
+    throw new Error(
+      'Symbol handle is stale or missing. Run codegraph symbols "<query>" or workspace_symbols to resolve it again.',
+    );
   }
-  throw new Error(
-    `Symbol target "${input}" was not found. Run codegraph search ${JSON.stringify(input)} to locate it.`,
-  );
+  throw new Error(`Symbol target "${input}" was not found. Run codegraph search "<query>" or workspace_symbols to locate it.`);
 }
 
 export function semanticSymbolFromDef(

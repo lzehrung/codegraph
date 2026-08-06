@@ -357,6 +357,14 @@ Usage: codegraph packet [get] <target> [--root <path>] [--json | --pretty] [--ma
 Targets:
   Accepts file paths, symbol names, SQL object names, file:/symbol:/chunk:/sql:/graph: handles from search or explain output, and quoted review packet targets like 'review:base=<encoded-ref>;head=<encoded-ref>'.
 
+Portable handle grammar:
+  file:<url-encoded project-relative path>
+  symbol:<url-encoded path>:<url-encoded local-name>:<line>:<column>
+  chunk:<url-encoded path>:<line>
+  sql:<url-encoded object-name>:<url-encoded path>:<line>
+  graph:<url-encoded project-relative path>
+  Positions use 1-based lines and 0-based UTF-16 columns.
+
 ${SHARED_INDEX_OPTIONS_HELP}
 `;
 
@@ -365,7 +373,7 @@ export const EXPLAIN_HELP_TEXT = `codegraph explain - Explain a file, symbol, SQ
 Usage: codegraph explain <file|symbol|sql-object|handle> [--root <path>] [--max-symbols <n>] [--max-dependencies <n>] [--max-snippets <n>] [--max-duplicates <n>] [--changed-context --base <rev> --head <rev>] [--json]
 
 Targets:
-  File paths, symbol names, SQL object names, and handles returned by codegraph search are accepted.
+  File paths, symbol names, SQL object names, and handles returned by search are accepted. Portable handles use the same grammar documented under \`codegraph packet\`. Stale-handle recovery for humans is \`codegraph symbols "<query>"\` / \`codegraph search "<query>"\`; MCP callers should use \`workspace_symbols\` / \`search\`.
 
 Output:
   Explanations include bounded symbols, dependencies, reverse dependencies, references, snippets, duplicate context, SQL facts, follow-up commands, limits, and omission counts.
