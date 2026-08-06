@@ -7,21 +7,23 @@ import { withReadOnlySqliteDatabase } from "./database.js";
 type DirectFileEdgeDirection = "dependencies" | "dependents";
 
 const loadDirectFileEdges = (db: SqliteDatabase, filePath: string, direction: DirectFileEdgeDirection): string[] => {
+  // Use a literal to_type = 'file' so SQLite can apply the partial indexes
+  // idx_file_edges_from_file / idx_file_edges_to_file.
   let sql = `
       SELECT to_path
       FROM file_edges
-      WHERE to_type = ? AND from_path = ?
+      WHERE to_type = 'file' AND from_path = ?
       ORDER BY rowid;
     `;
   if (direction === "dependents") {
     sql = `
       SELECT from_path
       FROM file_edges
-      WHERE to_type = ? AND to_path = ?
+      WHERE to_type = 'file' AND to_path = ?
       ORDER BY rowid;
     `;
   }
-  return execRowsParams(db, sql, ["file", filePath])
+  return execRowsParams(db, sql, [filePath])
     .map((row) => toSqliteText(row[0]))
     .filter(Boolean);
 };
@@ -99,6 +101,9 @@ export async function queryGraphSqlite(outputPath: string, queryText: string): P
         return { kind: parsed.kind, results: chain };
       }
       case "controllersMostEndpoints": {
+        // Avoid lower() + leading-wildcard LIKE on both sides. Prefix matches on
+        // endpoint names stay sargable; controller suffix uses GLOB (case-sensitive
+        // variants) instead of lower(name) LIKE '%controller'.
         const rows = execRowsParams(
           db,
           `
@@ -106,20 +111,21 @@ export async function queryGraphSqlite(outputPath: string, queryText: string): P
             FROM symbols c
             LEFT JOIN symbols f
               ON f.file = c.file
-              AND f.kind = ?
+              AND f.kind = 'function'
               AND (
-                lower(f.name) LIKE ? OR
-                lower(f.name) LIKE ? OR
-                lower(f.name) LIKE ? OR
-                lower(f.name) LIKE ? OR
-                lower(f.name) LIKE ?
+                f.name GLOB 'get*' OR f.name GLOB 'Get*' OR f.name GLOB 'GET*' OR
+                f.name GLOB 'post*' OR f.name GLOB 'Post*' OR f.name GLOB 'POST*' OR
+                f.name GLOB 'put*' OR f.name GLOB 'Put*' OR f.name GLOB 'PUT*' OR
+                f.name GLOB 'delete*' OR f.name GLOB 'Delete*' OR f.name GLOB 'DELETE*' OR
+                f.name GLOB 'patch*' OR f.name GLOB 'Patch*' OR f.name GLOB 'PATCH*'
               )
-            WHERE c.kind = ? AND c.name LIKE ?
+            WHERE c.kind = 'class'
+              AND (c.name GLOB '*Controller' OR c.name GLOB '*controller')
             GROUP BY c.id
             ORDER BY cnt DESC
             LIMIT ?;
           `,
-          ["function", "get%", "post%", "put%", "delete%", "patch%", "class", "%Controller", parsed.limit],
+          [parsed.limit],
         );
         return {
           kind: parsed.kind,
@@ -182,7 +188,7 @@ export async function queryGraphSqlite(outputPath: string, queryText: string): P
             SELECT name, file, COALESCE(complexity, 0) as score
             FROM symbols
             WHERE kind = ?
-            ORDER BY score DESC
+            ORDER BY complexity DESC NULLS LAST
             LIMIT ?;
           `,
           ["class", parsed.limit],
@@ -203,7 +209,7 @@ export async function queryGraphSqlite(outputPath: string, queryText: string): P
             SELECT name, file, COALESCE(complexity, 0) as score
             FROM symbols
             WHERE kind = ?
-            ORDER BY score DESC
+            ORDER BY complexity DESC NULLS LAST
             LIMIT ?;
           `,
           ["function", parsed.limit],
