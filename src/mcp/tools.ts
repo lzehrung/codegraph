@@ -11,15 +11,15 @@ import { SymbolKind } from "../indexer/types.js";
 
 import { DEFAULT_SQLITE_ROW_LIMIT, MAX_SQLITE_ROW_LIMIT } from "./sqliteGuard.js";
 
-export const DEFAULT_MCP_COLLECTION_LIMIT = 100;
+export const DEFAULT_MCP_COLLECTION_LIMIT = 25;
 export const DEFAULT_RENAME_PREVIEW_EDITS = 5_000;
 export const MAX_RENAME_PREVIEW_EDITS = 10_000;
 export const MAX_MCP_COLLECTION_LIMIT = 500;
 export const MAX_REFACTOR_PLAN_LIMIT = 500;
-export const DEFAULT_TYPE_HIERARCHY_LIMIT = 100;
+export const DEFAULT_TYPE_HIERARCHY_LIMIT = 25;
 export const MAX_TYPE_HIERARCHY_LIMIT = 500;
 export const MAX_TYPE_HIERARCHY_DEPTH = 10;
-export const DEFAULT_CALL_HIERARCHY_LIMIT = 100;
+export const DEFAULT_CALL_HIERARCHY_LIMIT = 25;
 export const MAX_CALL_HIERARCHY_LIMIT = 500;
 export const MAX_CALL_HIERARCHY_DEPTH = 5;
 
@@ -36,6 +36,7 @@ const orientBudgetProperty = { type: "string", enum: ["small", "medium", "large"
 function dependencyInputSchema(): Tool["inputSchema"] {
   return objectSchema(
     {
+      direction: { type: "string", enum: ["deps", "rdeps"] },
       file: stringProperty,
       depth: { type: "integer", minimum: 0, default: 1 },
       limit: {
@@ -45,13 +46,14 @@ function dependencyInputSchema(): Tool["inputSchema"] {
         default: DEFAULT_MCP_COLLECTION_LIMIT,
       },
     },
-    ["file"],
+    ["file", "direction"],
   );
 }
 
 function typeHierarchyInputSchema(): Tool["inputSchema"] {
   return objectSchema(
     {
+      direction: { type: "string", enum: ["supertypes", "subtypes"] },
       handle: stringProperty,
       depth: { type: "integer", minimum: 1, maximum: MAX_TYPE_HIERARCHY_DEPTH, default: 1 },
       limit: {
@@ -61,13 +63,14 @@ function typeHierarchyInputSchema(): Tool["inputSchema"] {
         default: DEFAULT_TYPE_HIERARCHY_LIMIT,
       },
     },
-    ["handle"],
+    ["handle", "direction"],
   );
 }
 
 function callHierarchyInputSchema(): Tool["inputSchema"] {
   return objectSchema(
     {
+      direction: { type: "string", enum: ["callers", "callees"] },
       handle: stringProperty,
       depth: { type: "integer", minimum: 1, maximum: MAX_CALL_HIERARCHY_DEPTH, default: 1 },
       limit: {
@@ -78,7 +81,7 @@ function callHierarchyInputSchema(): Tool["inputSchema"] {
       },
       includeHeuristic: booleanProperty,
     },
-    ["handle"],
+    ["handle", "direction"],
   );
 }
 
@@ -156,27 +159,15 @@ export const MCP_TOOLS: Tool[] = [
     ),
   },
   {
-    name: "callers",
+    name: "calls",
     description:
-      "Find proven semantic callers and exact grouped callsites for a portable symbol handle. Use refs for every symbol reference and deps for file-level dependencies.",
+      "Find proven semantic callers or callees and exact grouped callsites for a portable symbol handle. Use refs for every symbol reference and file_deps for file-level dependencies.",
     inputSchema: callHierarchyInputSchema(),
   },
   {
-    name: "callees",
+    name: "type_hierarchy",
     description:
-      "Find proven semantic callees and exact grouped callsites for a portable symbol handle. Use refs for every symbol reference and deps for file-level dependencies.",
-    inputSchema: callHierarchyInputSchema(),
-  },
-  {
-    name: "supertypes",
-    description:
-      "Find proven direct or transitive supertypes for a portable symbol handle. Returns currently extracted extends and implements relationships only.",
-    inputSchema: typeHierarchyInputSchema(),
-  },
-  {
-    name: "subtypes",
-    description:
-      "Find proven direct or transitive subtypes for a portable symbol handle. Returns currently extracted extends and implements relationships only.",
+      "Find proven direct or transitive supertypes or subtypes for a portable symbol handle. Returns currently extracted extends and implements relationships only.",
     inputSchema: typeHierarchyInputSchema(),
   },
   {
@@ -277,13 +268,8 @@ export const MCP_TOOLS: Tool[] = [
     }),
   },
   {
-    name: "deps",
-    description: "List file dependencies.",
-    inputSchema: dependencyInputSchema(),
-  },
-  {
-    name: "rdeps",
-    description: "List reverse file dependencies.",
+    name: "file_deps",
+    description: "List file dependencies or reverse file dependencies.",
     inputSchema: dependencyInputSchema(),
   },
   {

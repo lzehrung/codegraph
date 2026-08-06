@@ -12,9 +12,9 @@ import {
   type AgentFileViewResponse,
 } from "./fileView.js";
 import { getCodegraphPacketWithSession, type AgentPacketResponse } from "./packet.js";
+import { formatAgentFollowUpAsCli, type AgentFollowUp, toolFollowUp } from "./followUps.js";
 import { searchCodegraphWithSession, type AgentSearchResponse, type AgentSearchResult } from "./search.js";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "./session.js";
-import { quoteShellArg } from "./shell.js";
 
 export type AgentExploreRequest = {
   root: string;
@@ -71,7 +71,7 @@ export type AgentExploreResponse = {
   paths: AgentExploreDependencyPathSummary[];
   blastRadius: AgentExploreBlastRadiusSummary[];
   candidateTests: string[];
-  followUps: string[];
+  followUps: AgentFollowUp[];
   limits: AgentExploreLimits;
   omittedCounts: AgentExploreOmittedCounts;
 };
@@ -251,13 +251,13 @@ export function formatAgentExploreResponse(response: AgentExploreResponse): stri
   }
 
   lines.push("", "Follow-ups");
-  lines.push(...response.followUps.map((entry) => `- ${entry}`));
+  lines.push(...response.followUps.map((entry) => `- ${formatAgentFollowUpAsCli(entry)}`));
 
   lines.push("", "Limits");
   for (const [name, value] of Object.entries(response.limits)) {
     lines.push(`- ${name}: ${value}`);
   }
-  const recommended = response.followUps[0] ?? "codegraph orient --root . --budget small";
+  const recommended = formatAgentFollowUpAsCli(response.followUps[0] ?? toolFollowUp("orient", { budget: "small" }));
   lines.push("", `Recommended next: ${recommended}`);
   return lines.join("\n");
 }
@@ -513,7 +513,6 @@ function collectCandidateTests(
     omittedCount: Math.max(0, candidates.length - limit),
   };
 }
-
 function collectFollowUps(
   root: string,
   query: string,
@@ -521,16 +520,16 @@ function collectFollowUps(
   packets: readonly AgentPacketResponse[],
   anchorFiles: readonly string[],
   includeSource: boolean,
-): string[] {
+): AgentFollowUp[] {
   const orderedFiles = [...anchorFiles];
-  const followUps: string[] = [];
+  const followUps: AgentFollowUp[] = [];
   for (const file of orderedFiles.slice(0, 3)) {
     const relative = toProjectDisplayPath(root, file);
-    followUps.push(`codegraph file ${quoteShellArg(relative)}`);
+    followUps.push(toolFollowUp("get_file", { file: relative }));
   }
   for (const file of orderedFiles.slice(0, 3)) {
     const relative = toProjectDisplayPath(root, file);
-    followUps.push(`codegraph packet get ${quoteShellArg(relative)}`);
+    followUps.push(toolFollowUp("packet_get", { target: relative }));
   }
   for (const anchor of anchors) {
     followUps.push(...anchor.followUps);
@@ -540,24 +539,25 @@ function collectFollowUps(
   }
   for (const file of orderedFiles.slice(0, 3)) {
     const relative = toProjectDisplayPath(root, file);
-    followUps.push(`codegraph refs ${quoteShellArg(`${relative}:1:0`)}`);
+    followUps.push(toolFollowUp("refs", { file: relative, line: 1, column: 0 }));
   }
   if (!includeSource) {
-    followUps.push(`codegraph explore ${quoteShellArg(query)}`);
+    followUps.push(toolFollowUp("explore", { query }));
   }
   if (!anchors.length) {
-    followUps.push(`codegraph search ${quoteShellArg(query)} --json`);
-    followUps.push("codegraph orient --budget small");
+    followUps.push(toolFollowUp("search", { query }));
+    followUps.push(toolFollowUp("orient", { budget: "small" }));
   }
-  return dedupeStrings(followUps).slice(0, 12);
+  return dedupeFollowUps(followUps).slice(0, 12);
 }
 
-function dedupeStrings(values: readonly string[]): string[] {
+function dedupeFollowUps(values: readonly AgentFollowUp[]): AgentFollowUp[] {
   const seen = new Set<string>();
-  const out: string[] = [];
+  const out: AgentFollowUp[] = [];
   for (const value of values) {
-    if (seen.has(value)) continue;
-    seen.add(value);
+    const key = JSON.stringify(value);
+    if (seen.has(key)) continue;
+    seen.add(key);
     out.push(value);
   }
   return out;

@@ -56,7 +56,7 @@ import {
 } from "./normalize.js";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "./session.js";
 import { buildSymbolLookup, type SymbolLookup } from "./symbolLookup.js";
-import { quoteShellArg } from "./shell.js";
+import { formatAgentFollowUpAsCli, type AgentFollowUp, toolFollowUp } from "./followUps.js";
 
 export type AgentExplainTarget = {
   root: string;
@@ -160,7 +160,7 @@ export type AgentExplanation = {
   duplicates: AgentExplanationDuplicate[];
   snippets: AgentExplanationSnippet[];
   hotspots: Array<{ file: string; fanIn: number; fanOut: number; score: number }>;
-  followUps: string[];
+  followUps: AgentFollowUp[];
   limits: {
     symbols: number;
     dependencies: number;
@@ -237,7 +237,9 @@ export function formatAgentExplanation(explanation: AgentExplanation): string {
   if (explanation.followUps.length) {
     lines.push(
       "follow-ups:",
-      ...explanation.followUps.slice(0, AGENT_EXPLAIN_FORMAT_FOLLOWUP_LIMIT).map((command) => `  ${command}`),
+      ...explanation.followUps
+        .slice(0, AGENT_EXPLAIN_FORMAT_FOLLOWUP_LIMIT)
+        .map((followUp) => `  ${formatAgentFollowUpAsCli(followUp)}`),
     );
   }
   return lines.join("\n");
@@ -522,7 +524,7 @@ function emptyExplanation(snapshot: AgentProjectSnapshot, target: AgentExplanati
     duplicates: [],
     snippets: [],
     hotspots: [],
-    followUps: [`codegraph search ${quoteShellArg(target.label)} --json`],
+    followUps: [toolFollowUp("search", { query: target.label })],
     limits: {
       symbols: AGENT_EXPLAIN_DEFAULT_SYMBOL_LIMIT,
       dependencies: AGENT_EXPLAIN_DEFAULT_DEPENDENCY_LIMIT,
@@ -983,47 +985,65 @@ function collectFollowUps(
   symbols: AgentExplanationSymbol[],
   relFile: string,
   duplicates: AgentExplanationDuplicate[],
-): string[] {
-  const followUps = new Set<string>(collectCommonFileFollowUps(relFile));
+): AgentFollowUp[] {
+  const followUps = new Map<string, AgentFollowUp>();
+  const add = (followUp: AgentFollowUp): void => {
+    followUps.set(JSON.stringify(followUp), followUp);
+  };
+  for (const followUp of collectCommonFileFollowUps(relFile)) add(followUp);
 
   if (resolved.kind === "file") {
     for (const symbol of symbols.slice(0, AGENT_EXPLAIN_FILE_SYMBOL_REF_LIMIT)) {
-      followUps.add(
-        `codegraph refs ${quoteShellArg(`${relFile}:${symbol.range.start.line}:${symbol.range.start.column}`)}`,
+      add(
+        toolFollowUp("refs", {
+          file: relFile,
+          line: symbol.range.start.line,
+          column: symbol.range.start.column,
+        }),
       );
     }
   } else {
-    for (const command of collectDefinitionFollowUps(
+    for (const followUp of collectDefinitionFollowUps(
       relFile,
       resolved.def.range.start.line,
       resolved.def.range.start.column,
     )) {
-      followUps.add(command);
+      add(followUp);
     }
-    followUps.add(
-      `codegraph search ${quoteShellArg(resolved.node?.name ?? resolved.def.localName)} --from ${quoteShellArg(relFile)} --json`,
+    add(
+      toolFollowUp("search", {
+        query: resolved.node?.name ?? resolved.def.localName,
+        from: relFile,
+      }),
     );
   }
 
   if (isAgentSqlFile(relFile)) {
-    followUps.add(`codegraph search ${quoteShellArg(relFile)} --mode sql --json`);
+    add(toolFollowUp("search", { query: relFile, mode: "sql" }));
   }
 
   if (duplicates.length) {
-    followUps.add(formatDuplicateFollowUp(duplicates));
+    add(formatDuplicateFollowUp(duplicates));
   }
 
-  return [...followUps].sort();
+  return [...followUps.values()].sort((left, right) =>
+    formatAgentFollowUpAsCli(left).localeCompare(formatAgentFollowUpAsCli(right)),
+  );
 }
 
-function formatDuplicateFollowUp(duplicates: readonly AgentExplanationDuplicate[]): string {
+function formatDuplicateFollowUp(duplicates: readonly AgentExplanationDuplicate[]): AgentFollowUp {
   const files = new Set<string>();
   for (const duplicate of duplicates) {
     files.add(duplicate.left.file);
     files.add(duplicate.right.file);
   }
-  const scope = [...files].sort().map(quoteShellArg).join(" ");
-  return `codegraph duplicates --root . ${scope} --json --min-confidence medium --include-same-file`;
+  return toolFollowUp("duplicates", {
+    root: ".",
+    files: [...files].sort(),
+    json: true,
+    minConfidence: "medium",
+    includeSameFile: true,
+  });
 }
 
 function buildSummary(

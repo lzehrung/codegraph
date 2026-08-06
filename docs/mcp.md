@@ -56,14 +56,14 @@ The server exposes the same bounded primitives as the CLI and library session la
 - `workspace_symbols`: deterministic symbol-identity lookup with exact locations and composable filters; use `search` for hybrid path, prose, SQL, snippet, or graph evidence.
 - `rename_preview`: read-only semantic rename planning by portable symbol handle; filename results are suggestions only and no apply tool exists.
 - `refactor_plan`: one-snapshot refactor evidence packet by search, workspace-symbol, review, or impact handle; optional rename evidence stays read-only and authoritative.
-- `callers`, `callees`: grouped semantic callers or callees plus exact callsites by portable symbol handle; use `refs` for all references and `deps` for file dependencies.
-- `supertypes`, `subtypes`: proven type relationships by portable symbol handle, with bounded traversal depth.
+- `calls`: grouped semantic callers or callees plus exact callsites by portable symbol handle; pass `direction: "callers"` or `"callees"`. Use `refs` for all references and `file_deps` for file-level dependencies.
+- `type_hierarchy`: proven supertype or subtype relationships by portable symbol handle; pass `direction: "supertypes"` or `"subtypes"`.
 - `implementations`: proven type or supported interface/trait-member implementations without same-name inference.
 - `get_file`: bounded project file read with `offset`/`limit` line pagination, exact `number<TAB>line` content, and optional direct graph context.
 - `get_symbol`: resolve a stable search or explain handle.
 - `goto`: definition lookup by file position.
 - `refs`: references by handle or file position.
-- `deps`, `rdeps`, `path`: dependency navigation.
+- `file_deps`, `path`: dependency navigation; pass `direction: "deps"` or `"rdeps"` to `file_deps`.
 - `impact`: compact git-range impact analysis (`format: "compact"`, `impacted`, diagnostics). Bounded by default.
 - `review`: git-range review report (`riskSummary`, `reviewTasks`, candidate tests).
 - `query_sqlite`: bounded read-only SQLite artifact query with freshness metadata.
@@ -81,7 +81,7 @@ If the sidecar is busy or unavailable, MCP uses the same exact in-memory matcher
 
 Use `refresh_index` to rebuild the snapshot, reset SQLite artifact state, or recover after a change burst exceeds automatic limits. With write access, `query_sqlite` refreshes Codegraph SQLite artifacts after small edits; otherwise it refuses stale rows. `artifact_build` refuses stale indexes, so run `refresh_index` after large change bursts.
 `get_file` reads live bytes from disk after path confinement. It does not require a fresh index; only an explicit `includeGraphContext: true` checks indexed freshness and adds direct graph context, so returned file bytes and `totalLines` remain live even when `freshness` reports stale context.
-Tool schemas are flat JSON objects for broad client compatibility; argument combinations such as `refs` handle-vs-position mode are validated by the server.
+Tool schemas are flat JSON objects for broad client compatibility; argument combinations such as `refs` handle-vs-position mode are validated by the server. Legacy paired names (`callers`, `callees`, `supertypes`, `subtypes`, `deps`, and `rdeps`) remain accepted by `tools/call` as aliases, but only the unified tools appear in `tools/list`.
 
 ### `workspace_symbols`
 
@@ -103,17 +103,17 @@ The tool composes references, direct callers and callees, type relationships, im
 
 ### Call hierarchy
 
-Call `callers` or `callees` with flat fields `handle`, optional `depth`, optional `limit`, and optional `includeHeuristic`. Depth defaults to 1 and caps at 5; the symbol limit defaults to 100 and caps at 500.
+Call `calls` with flat fields `direction` (`"callers"` or `"callees"`), `handle`, optional `depth`, optional `limit`, and optional `includeHeuristic`. Depth defaults to 1 and caps at 5; the symbol limit defaults to 25 and caps at 500.
 
-Both tools reuse the server session and freshness gate. Responses group exact project-relative callsites under each related symbol, sort deterministically, and report separate symbol, callsite, and unresolved-site omissions.
+Both directions reuse the server session and freshness gate. Responses group exact project-relative callsites under each related symbol, sort deterministically, and report separate symbol, callsite, and unresolved-site omissions.
 
 Only resolved semantic `calls` edges are currently returned. `includeHeuristic` is accepted for forward compatibility but does not enable guessed dynamic dispatch; imports, arbitrary references, and file dependency edges remain outside call hierarchy.
 
 ### Type hierarchy and implementations
 
-Call `supertypes` or `subtypes` with flat fields `handle`, optional `depth`, and optional `limit`. Depth defaults to 1 and caps at 10; the result limit defaults to 100 and caps at 500.
+Call `type_hierarchy` with flat fields `direction` (`"supertypes"` or `"subtypes"`), `handle`, optional `depth`, and optional `limit`. Depth defaults to 1 and caps at 10; the result limit defaults to 25 and caps at 500.
 
-Call `implementations` with `handle` and optional `limit`; it has no depth field. All three tools reuse the server's one session and freshness gate, return exact project-relative symbol locations plus provenance and omissions, and reject stale handles, non-type hierarchy targets, or unsupported targets with actionable errors.
+Call `implementations` with `handle` and optional `limit`; it has no depth field and the result limit defaults to 25, capped at 500. Both tools reuse the server's one session and freshness gate, return exact project-relative symbol locations plus provenance and omissions, and reject stale handles, non-type hierarchy targets, or unsupported targets with actionable errors.
 
 Only resolved, indexed `extends` and `implements` relationships are returned. Implementation targets are limited to interfaces, traits, abstract types, and members with proven implementation or override relationships; exact implementing declarations are returned, inherited declarations are deduplicated, and overloads, dynamic or structural conformance, and unresolved external bases are not guessed.
 
@@ -334,7 +334,7 @@ When Codegraph MCP tools are available to an agent:
 
 1. Start with `explore` for a broad question.
 2. Use `orient` when you need a compact first-turn map rather than a question answer.
-3. Use `search` to find anchors and `get_file`, `packet_get`, `refs`, `goto`, `deps`, `rdeps`, or `path` for focused follow-up.
+3. Use `search` to find anchors and `get_file`, `packet_get`, `refs`, `goto`, `file_deps`, or `path` for focused follow-up.
 4. Check `freshness` on MCP responses after edits; `refreshed` means the answer used an updated snapshot, and `stale` includes a reason plus a bounded changed-file sample.
 5. Use `impact` and `review` for git-range risk analysis.
 6. Use `query_sqlite` only for read-only artifact inspection; rebuild the artifact when it reports stale state.

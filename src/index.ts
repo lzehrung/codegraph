@@ -4,6 +4,8 @@
  * The npm package currently exposes only `@lzehrung/codegraph`; implementation
  * modules below `dist/` are not a stable import surface for consumers.
  */
+export { formatAgentFollowUpAsCli, formatAgentFollowUpsAsCli, toolFollowUp } from "./agent/followUps.js";
+export type { AgentFollowUp } from "./agent/followUps.js";
 
 /** Language registry helpers and support metadata. */
 export * from "./languages.js";

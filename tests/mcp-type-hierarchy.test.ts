@@ -48,29 +48,34 @@ function hierarchyTool(name: string) {
 }
 
 describe("type hierarchy MCP tools", () => {
-  it("registers flat bounded schemas and precise descriptions", () => {
-    for (const name of ["supertypes", "subtypes"]) {
-      const tool = hierarchyTool(name);
-      expect(tool.description).toContain("proven");
-      const schema: unknown = tool.inputSchema;
-      expect(isPlainRecord(schema)).toBe(true);
-      if (!isPlainRecord(schema) || !isPlainRecord(schema.properties)) throw new Error(`${name} schema was invalid`);
-      expect(schema.required).toEqual(["handle"]);
-      expect(Object.keys(schema.properties).sort()).toEqual(["depth", "handle", "limit"]);
-      expect(schema.properties.depth).toMatchObject({ type: "integer", minimum: 1, maximum: 10, default: 1 });
-      expect(schema.properties.limit).toMatchObject({ type: "integer", minimum: 0, maximum: 500, default: 100 });
-    }
+  it("registers one unified bounded schema and precise descriptions", () => {
+    const tool = hierarchyTool("type_hierarchy");
+    expect(tool.description).toContain("proven");
+    const schema: unknown = tool.inputSchema;
+    expect(isPlainRecord(schema)).toBe(true);
+    if (!isPlainRecord(schema) || !isPlainRecord(schema.properties))
+      throw new Error("type_hierarchy schema was invalid");
+    expect(schema.required).toEqual(["handle", "direction"]);
+    expect(Object.keys(schema.properties).sort()).toEqual(["depth", "direction", "handle", "limit"]);
+    expect(schema.properties.direction).toEqual({ type: "string", enum: ["supertypes", "subtypes"] });
+    expect(schema.properties.depth).toMatchObject({ type: "integer", minimum: 1, maximum: 10, default: 1 });
+    expect(schema.properties.limit).toMatchObject({ type: "integer", minimum: 0, maximum: 500, default: 25 });
 
     const implementations = hierarchyTool("implementations");
     expect(implementations.description).toContain("without name-only inference");
-    const schema: unknown = implementations.inputSchema;
-    expect(isPlainRecord(schema)).toBe(true);
-    if (!isPlainRecord(schema) || !isPlainRecord(schema.properties)) {
+    const implementationSchema: unknown = implementations.inputSchema;
+    expect(isPlainRecord(implementationSchema)).toBe(true);
+    if (!isPlainRecord(implementationSchema) || !isPlainRecord(implementationSchema.properties)) {
       throw new Error("implementations schema was invalid");
     }
-    expect(schema.required).toEqual(["handle"]);
-    expect(Object.keys(schema.properties).sort()).toEqual(["handle", "limit"]);
-    expect(schema.properties.limit).toMatchObject({ type: "integer", minimum: 0, maximum: 500, default: 100 });
+    expect(implementationSchema.required).toEqual(["handle"]);
+    expect(Object.keys(implementationSchema.properties).sort()).toEqual(["handle", "limit"]);
+    expect(implementationSchema.properties.limit).toMatchObject({
+      type: "integer",
+      minimum: 0,
+      maximum: 500,
+      default: 25,
+    });
   });
 
   it("uses the supplied session freshness gate and preserves bounded omissions", async () => {
@@ -84,8 +89,7 @@ describe("type hierarchy MCP tools", () => {
     };
     const handlers = createCodegraphMcpHandlers({ root, session });
 
-    const response = await handlers.subtypes({ handle: baseHandle, depth: 10, limit: 1 });
-
+    const response = await handlers.type_hierarchy({ direction: "subtypes", handle: baseHandle, depth: 10, limit: 1 });
     expect(checkFreshness).toHaveBeenCalledTimes(1);
     expect(loadProject).toHaveBeenCalledTimes(1);
     expect(response.freshness).toEqual({ state: "refreshed", changedFiles: ["types.ts"] });
@@ -134,9 +138,8 @@ describe("type hierarchy MCP tools", () => {
     const counted = countingSession(session);
     const handlers = createCodegraphMcpHandlers({ root, session: counted.session });
 
-    const first = await handlers.supertypes({ handle: specializedHandle, depth: 3 });
-    const second = await handlers.subtypes({ handle: baseHandle, depth: 3 });
-
+    const first = await handlers.type_hierarchy({ direction: "supertypes", handle: specializedHandle, depth: 3 });
+    const second = await handlers.type_hierarchy({ direction: "subtypes", handle: baseHandle, depth: 3 });
     expect(first.relations.map((entry) => entry.type.name)).toEqual(["Worker", "Base", "Service"]);
     expect(second.relations.map((entry) => entry.type.name)).toEqual(["Worker", "Specialized"]);
     expect(counted.loads()).toBe(1);

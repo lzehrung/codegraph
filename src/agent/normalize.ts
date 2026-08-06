@@ -1,7 +1,7 @@
 import path from "node:path";
 import { normalizePath, toProjectDisplayPath, toProjectRelativePath } from "../util/paths.js";
 import { parseSourceLocationInput } from "../util/sourceLocation.js";
-import { quoteShellArg } from "./shell.js";
+import { type AgentFollowUp, toolFollowUp } from "./followUps.js";
 
 export type AgentFileSnapshot = {
   root: string;
@@ -49,15 +49,14 @@ export function isAgentSqlObjectNode(node: { kind: string }): boolean {
   return isAgentSqlObjectKind(node.kind);
 }
 
-export function collectFileFollowUps(file: string): string[] {
+export function collectFileFollowUps(file: string): AgentFollowUp[] {
   return [
-    `codegraph deps ${quoteShellArg(file)} --json`,
-    `codegraph rdeps ${quoteShellArg(file)} --json`,
-    `codegraph chunk ${quoteShellArg(file)}`,
+    toolFollowUp("file_deps", { file, direction: "deps" }),
+    toolFollowUp("file_deps", { file, direction: "rdeps" }),
+    toolFollowUp("chunk", { file }),
   ];
 }
 
-export function collectDefinitionFollowUps(file: string, line: number, column: number): string[] {
-  const location = `${file}:${line}:${column}`;
-  return [`codegraph goto ${quoteShellArg(location)}`, `codegraph refs ${quoteShellArg(location)}`];
+export function collectDefinitionFollowUps(file: string, line: number, column: number): AgentFollowUp[] {
+  return [toolFollowUp("goto", { file, line, column }), toolFollowUp("refs", { file, line, column })];
 }

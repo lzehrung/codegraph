@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
-import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createAgentSession } from "../src/agent/session.js";
+import { afterEach } from "vitest";
 import { orientCodegraph, orientCodegraphWithSession } from "../src/agent/orient.js";
+import { createAgentSession } from "../src/agent/session.js";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import { formatAgentFollowUpAsCli } from "../src/agent/followUps.js";
 import * as duplicates from "../src/duplicates.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import { countingSession } from "./helpers/agent.js";
@@ -41,7 +43,7 @@ describe("agent orient", () => {
     const response = await orientCodegraph({ root, includeRoots: ["."], budget: "small" });
 
     expect(response.focus[0]?.file).toBe("-entry.ts");
-    expect(response.focus[0]?.followUps[0]).toBe("codegraph packet get ./-entry.ts");
+    expect(formatAgentFollowUpAsCli(response.focus[0]!.followUps[0]!)).toBe("codegraph packet get ./-entry.ts");
   });
 
   it.skipIf(process.platform === "win32")("disambiguates handle-like file targets in follow-up commands", async () => {
@@ -49,9 +51,8 @@ describe("agent orient", () => {
     await writeFile(root, "file:entry.ts", "export const value = 1;\n");
 
     const response = await orientCodegraph({ root, includeRoots: ["."], budget: "small" });
-
     expect(response.focus[0]?.file).toBe("file:entry.ts");
-    expect(response.focus[0]?.followUps[0]).toBe("codegraph packet get ./file:entry.ts");
+    expect(formatAgentFollowUpAsCli(response.focus[0]!.followUps[0]!)).toBe("codegraph packet get ./file:entry.ts");
   });
 
   it("does not build the detailed symbol graph for orientation", async () => {
@@ -150,9 +151,11 @@ describe("agent orient", () => {
 
     expect(response.focus[0]?.file).toBe("src/core.ts");
     expect(response.focus[0]?.kind).toBe("hotspot");
-    expect(response.focus[0]?.followUps.some((followUp) => followUp.includes("codegraph explain src/core.ts"))).toBe(
-      true,
-    );
+    expect(
+      response.focus[0]?.followUps.some(
+        (followUp) => followUp.tool === "packet_get" && followUp.arguments.target === "src/core.ts",
+      ),
+    ).toBe(true);
   });
 
   it("uses small budget to skip deep health analysis", async () => {

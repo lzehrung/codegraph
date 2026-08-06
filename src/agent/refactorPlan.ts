@@ -22,7 +22,7 @@ import {
   type AgentSession,
 } from "./session.js";
 import { buildSymbolLookup, type SymbolLookup } from "./symbolLookup.js";
-import { quoteShellArg } from "./shell.js";
+import { type AgentFollowUp, toolFollowUp } from "./followUps.js";
 
 export type RefactorPlanRequest = {
   root: string;
@@ -53,7 +53,7 @@ export type RefactorPlanResponse = SemanticResponseEnvelope & {
   sectionIssues: RefactorPlanSectionIssue[];
   rename?: RenamePreviewResponse;
   candidateTests: RenameCandidateTest[];
-  followUps: string[];
+  followUps: AgentFollowUp[];
 };
 
 const DEFAULT_REFACTOR_REFERENCE_LIMIT = 200;
@@ -185,14 +185,18 @@ export async function buildRefactorPlanInSnapshot(
         freshness,
       )
     : undefined;
-  const followUps = [
-    `codegraph refs ${quoteShellArg(`${target.location.file}:${target.location.range.start.line}:${target.location.range.start.column}`)}`,
-    `codegraph callers ${quoteShellArg(target.handle)} --depth 1 --json`,
-    `codegraph callees ${quoteShellArg(target.handle)} --depth 1 --json`,
-    `codegraph implementations ${quoteShellArg(target.handle)} --json`,
+  const followUps: AgentFollowUp[] = [
+    toolFollowUp("refs", {
+      file: target.location.file,
+      line: target.location.range.start.line,
+      column: target.location.range.start.column,
+    }),
+    toolFollowUp("calls", { handle: target.handle, direction: "callers", depth: 1 }),
+    toolFollowUp("calls", { handle: target.handle, direction: "callees", depth: 1 }),
+    toolFollowUp("implementations", { handle: target.handle }),
   ];
   if (!request.renameTo) {
-    followUps.push(`codegraph rename-preview ${quoteShellArg(target.handle)} <new-name> --json`);
+    followUps.push(toolFollowUp("rename_preview", { handle: target.handle, newName: "<new-name>" }));
   }
 
   return {
