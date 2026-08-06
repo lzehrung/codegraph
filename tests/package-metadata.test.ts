@@ -740,7 +740,7 @@ void onImpactItemStreaming;
         files: ["README.md", "docs/cli.md", "docs/agent-workflows.md", "codegraph-skill/codegraph/SKILL.md"],
       },
       {
-        command: "codegraph review --base HEAD --head WORKTREE",
+        command: "codegraph review",
         files: ["README.md", "docs/cli.md", "docs/agent-workflows.md", "codegraph-skill/codegraph/SKILL.md"],
       },
       {

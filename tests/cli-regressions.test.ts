@@ -129,6 +129,32 @@ describe("CLI regressions", () => {
     ).rejects.toThrow("Unknown option for graph: --compact-json");
   });
 
+  it("review defaults to HEAD..WORKTREE when no explicit range is passed", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-review-default-range-"));
+    try {
+      git(root, ["init"]);
+      await fsp.writeFile(path.join(root, "auth.ts"), "export function authorize() { return false; }\n", "utf8");
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "base"]);
+      await fsp.writeFile(path.join(root, "auth.ts"), "export function authorize() { return true; }\n", "utf8");
+
+      const stdout = await runCliCommand(["review", "--root", root, "--json"]);
+      const report = JSON.parse(stdout) as {
+        base?: string;
+        head?: string;
+        status?: string;
+        changedFiles?: Array<{ file?: string }>;
+      };
+
+      expect(report.base).toBe("HEAD");
+      expect(report.head).toBe("WORKTREE");
+      expect(report.status).toBe("ok");
+      expect(report.changedFiles).toContainEqual(expect.objectContaining({ file: "auth.ts" }));
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("graph JSON can include isolated SQL artifacts", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-cli-sql-"));
     await fsp.mkdir(path.join(root, "db"), { recursive: true });

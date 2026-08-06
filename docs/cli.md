@@ -20,7 +20,7 @@ Numeric options such as `--limit`, `--threads`, `--depth`, `--max-refs`, and tok
 
 Default workflow:
 
-- code review: `codegraph review --base HEAD --head WORKTREE`
+- code review: `codegraph review`
 - blast-radius follow-up: `codegraph impact --base HEAD --head WORKTREE`
 - unfamiliar repo: `codegraph explore "how does auth reach db?" --root .`
 - first-turn map: `codegraph orient --root . --budget small`
@@ -94,7 +94,7 @@ These defaults never approve writes silently: interactive installer changes requ
 
 ```bash
 # Fast code-review handoff for current local edits
-codegraph review --base HEAD --head WORKTREE
+codegraph review
 codegraph impact --base HEAD --head WORKTREE
 
 # First-pass repo summary and next-step suggestions
@@ -571,7 +571,7 @@ codegraph review --base origin/main --head HEAD --review-depth standard --json >
 
 # Compact human-readable review handoff
 codegraph review --base origin/main --head HEAD
-codegraph review --base HEAD --head WORKTREE
+codegraph review
 codegraph review --base origin/main --head HEAD --duplicates impacted
 
 # File-level graph delta between revisions
