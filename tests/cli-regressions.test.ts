@@ -485,6 +485,27 @@ describe("CLI regressions", () => {
     );
   });
 
+  it("graph-delta prints a concise pretty summary by default", async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-graph-delta-pretty-"));
+    const appFile = path.join(tmpDir, "src", "main.ts");
+    const depFile = path.join(tmpDir, "src", "dep.ts");
+    await fsp.mkdir(path.dirname(appFile), { recursive: true });
+    await fsp.writeFile(appFile, "import './dep';\nexport const main = 1;\n", "utf8");
+    await fsp.writeFile(depFile, "export const dep = 1;\n", "utf8");
+    git(tmpDir, ["init"]);
+    git(tmpDir, ["add", "."]);
+    git(tmpDir, ["commit", "-m", "base"]);
+    await fsp.writeFile(appFile, "export const main = 1;\n", "utf8");
+
+    const stdout = await runCliCommand(["graph-delta", "--root", tmpDir, "--git-base", "HEAD", "--git-head", "WORKTREE"]);
+
+    expect(stdout).toContain("Graph delta");
+    expect(stdout).toContain("Changed files: 1");
+    expect(stdout).toContain("Added edges:");
+    expect(stdout).toContain("Removed edges:");
+    expect(stdout).toContain("Files:");
+  });
+
   it("graph rejects scan globs combined with git-head alone when sqlite output is requested", async () => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-cli-graph-git-head-"));
     const appFile = path.join(tmpDir, "src", "main.ts");
@@ -2014,6 +2035,14 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     expect(await fsp.stat(path.join(outDir, "graph.json"))).toBeTruthy();
     await expect(fsp.stat(path.join(outDir, "CODEGRAPH_REPORT.md"))).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fsp.stat(path.join(outDir, "questions.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("grep CLI pretty output renders compact line-oriented hits", async () => {
+    const stdout = await runCliCommand(["grep", "helperFunction", "--root", tsRoot]);
+    expect(stdout).toContain(".ts:");
+    expect(stdout).toContain("helperFunction");
+    expect(stdout).toContain("export function helperFunction");
+    expect(stdout).not.toContain('"file"');
   });
 });
 

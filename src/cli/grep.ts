@@ -19,6 +19,19 @@ export type GrepCommandContext = CliOptionContext &
     parsedOptions: ReadonlyMap<string, readonly string[]>;
   };
 
+function formatGrepHits(
+  hits: Array<{ file: string; line: number; column: number; snippet: string; capture?: string; match?: string }>,
+): string {
+  if (!hits.length) return "No matches.\n";
+  const lines: string[] = [];
+  for (const hit of hits) {
+    const label = hit.capture ?? hit.match ?? "";
+    lines.push(`${hit.file}:${hit.line}:${hit.column}${label ? ` ${label}` : ""}`);
+    lines.push(`  ${hit.snippet}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
 export async function handleGrepCommand(context: GrepCommandContext): Promise<void> {
   const querySource = context.getOpt("--query");
   const positionalPattern = context.positionals.join(" ").trim();
@@ -33,7 +46,7 @@ export async function handleGrepCommand(context: GrepCommandContext): Promise<vo
 
   if (querySource) {
     const hits = await astGrep(context.projectRootFs, querySource, patterns, context.discoveryOptions);
-    writeCliOutput(context, hits);
+    writeCliOutput(context, hits, formatGrepHits);
     return;
   }
 
@@ -45,5 +58,5 @@ export async function handleGrepCommand(context: GrepCommandContext): Promise<vo
     ...(maxHits !== undefined ? { maxHits } : {}),
     ...context.discoveryOptions,
   });
-  writeCliOutput(context, hits);
+  writeCliOutput(context, hits, formatGrepHits);
 }
