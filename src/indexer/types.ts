@@ -298,6 +298,8 @@ export type QueryIndexDiagnostics = {
   updateMs: number;
   candidateMs: number;
   scoringMs: number;
+  /** Files dropped from an otherwise successful preparation batch; see workerPool preparation. */
+  filesSkipped?: number;
   fallbackReason?: string;
 };
 

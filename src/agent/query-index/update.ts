@@ -133,14 +133,20 @@ async function prepareFiles(
   diagnostics: QueryIndexDiagnostics,
 ): Promise<PreparedQueryIndexFile[] | null> {
   try {
+    // Loaded lazily on purpose: importing the worker pool pulls in Piscina, and CLI startup
+    // time is asserted by tests/cli-startup-eager-modules.test.ts.
     const { prepareQueryIndexFilesInWorker } = await import("./workerPool.js");
-    return await prepareQueryIndexFilesInWorker(
+    const prepared = await prepareQueryIndexFilesInWorker(
       projectRoot,
       files.map((file) => ({
         relativePath: file.path,
         sourceIdentity: file.sourceIdentity,
       })),
     );
+    if (prepared && prepared.length < files.length) {
+      diagnostics.filesSkipped = files.length - prepared.length;
+    }
+    return prepared;
   } catch (error) {
     diagnostics.fallbackReason = errorMessage(error);
     return null;
@@ -335,8 +341,8 @@ export async function ensureQueryIndex(snapshot: AgentProjectSnapshot): Promise<
   }
 
   diagnostics.filesRead = prepared.filter((file) => file.sourceRead).length;
-  diagnostics.filesAdded = changed.filter((file) => !storedIdentities.has(file.path)).length;
-  diagnostics.filesUpdated = changed.length - diagnostics.filesAdded;
+  diagnostics.filesAdded = prepared.filter((file) => !storedIdentities.has(file.path)).length;
+  diagnostics.filesUpdated = prepared.length - diagnostics.filesAdded;
   diagnostics.filesDeleted = deleted.length;
   const updateStarted = performance.now();
   try {
