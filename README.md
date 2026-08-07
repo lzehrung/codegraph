@@ -1,7 +1,7 @@
-# Codegraph
+# codegraph
 
 <p align="center">
-  <img src="./assets/codegraph-logo.png" alt="Codegraph" width="300">
+  <img src="./assets/codegraph-logo.png" alt="codegraph" width="300">
 </p>
 
 <p align="center">
@@ -14,9 +14,9 @@
 
 **Give your coding agent a map of the repository, not a pile of search results.**
 
-Codegraph is a local CLI **and TypeScript library** that turns a source tree into a resolved map of files, symbols, references, and dependencies. Ask where an implementation lives, how components connect, what a change can break, or which tests are relevant, then get bounded source evidence and copyable next steps.
+codegraph is a local CLI **and TypeScript library** that turns a source tree into a resolved map of files, symbols, references, and dependencies. Ask where an implementation lives, how components connect, what a change can break, or which tests are relevant, then get bounded source evidence and copyable next steps.
 
-Without structural context, an agent burns early turns listing directories, guessing search terms, opening candidate files, and reconstructing relationships. Codegraph does that discovery once so the context window can stay focused on the problem.
+Without structural context, an agent burns early turns listing directories, guessing search terms, opening candidate files, and reconstructing relationships. codegraph does that discovery once so the context window can stay focused on the problem.
 
 On this repository under Node 24 with a warm cache, `codegraph orient --root . --budget small --json` returned in about **0.6s**, and the matching MCP `orient` call returned in about **100ms**.
 
@@ -39,7 +39,7 @@ codegraph install
 codegraph explore "how does auth reach the database?" --root .
 ```
 
-Use Codegraph alongside text search and compilers: text search finds exact strings, compilers prove language behavior, and Codegraph fills in the cross-file repository map between them. See [Installation](./docs/installation.md) for standalone, package, and source-checkout paths.
+Use codegraph alongside text search and compilers: text search finds exact strings, compilers prove language behavior, and codegraph fills in the cross-file repository map between them. See [Installation](./docs/installation.md) for standalone, package, and source-checkout paths.
 
 ## Table of contents
 
@@ -49,7 +49,7 @@ Use Codegraph alongside text search and compilers: text search finds exact strin
 - [A useful first five minutes](#a-useful-first-five-minutes)
 - [Visualize a graph](#visualize-a-graph)
 - [What the output looks like](#what-the-output-looks-like)
-- [Why Codegraph](#why-codegraph)
+- [Why codegraph](#why-codegraph)
 - [Why not just grep or an LSP?](#why-not-just-grep-or-an-lsp)
 - [Agent setup](#agent-setup)
 - [Language support](#language-support)
@@ -85,7 +85,7 @@ Human-readable output is the CLI default, including the compact `review` report;
 
 ### Standalone archive
 
-The standalone archive bundles Node.js, the CLI, the matching native runtime, and the Codegraph skill.
+The standalone archive bundles Node.js, the CLI, the matching native runtime, and the codegraph skill.
 
 ```powershell
 irm https://github.com/lzehrung/codegraph/releases/latest/download/install.ps1 | iex
@@ -188,7 +188,7 @@ codegraph graph --root . ./src --sqlite codegraph.sqlite
 
 The packaged viewer is a human-facing graph UI; agents should use graph JSON, SQLite, MCP, or `--json` instead. Its command is `codegraph viewer [--root <root>] [--graph <root-confined-json>] [--host <host>] [--port <0-65535>] [--open] [--print-url]`; the root defaults to the current directory.
 
-![Codegraph graph viewer with `src/cli.ts` selected and its immediate dependencies labeled](docs/graph-visualization/viewer-selected-node.webp)
+![codegraph graph viewer with `src/cli.ts` selected and its immediate dependencies labeled](docs/graph-visualization/viewer-selected-node.webp)
 
 ```bash
 codegraph viewer --root . --open
@@ -198,7 +198,7 @@ codegraph viewer --root . --port 4173 --print-url
 
 The default host is `127.0.0.1` and the default port is `4173`. Without `--graph`, each UI load or reload builds a current graph projection through the automatically validated `.codegraph-cache` index; `init`, `index`, and an exported JSON file are not prerequisites. An explicit `--graph` serves that root-confined snapshot through the same `/graph.json` route, while `--print-url` only prints the deterministic URL and exits.
 
-The UI loads Sigma, Graphology, and ForceAtlas2 from bundled `docs/graph-visualization/vendor/` assets, so the viewer stays offline and self-contained once Codegraph is installed.
+The UI loads Sigma, Graphology, and ForceAtlas2 from bundled `docs/graph-visualization/vendor/` assets, so the viewer stays offline and self-contained once codegraph is installed.
 
 ## What the output looks like
 
@@ -249,7 +249,7 @@ Signals: exported-symbols-changed, many-symbols-changed
 
 Structured output carries the underlying changed files, symbols, graph edges, reasons, diagnostics, snippets, and candidate-test confidence.
 
-## Why Codegraph
+## Why codegraph
 
 ### Spend context on the problem, not repository discovery
 
@@ -269,15 +269,15 @@ One repository model can include source code, SQL, workspace packages, documenta
 
 ### Keep the evidence local and reusable
 
-Codegraph runs locally as a CLI, library, or MCP server. Humans get readable output; agents and programs can keep structured JSON, stable handles, warm sessions, SQLite data, or graph exports without parsing display text.
+codegraph runs locally as a CLI, library, or MCP server. Humans get readable output; agents and programs can keep structured JSON, stable handles, warm sessions, SQLite data, or graph exports without parsing display text.
 
 ## Why not just grep or an LSP?
 
-Codegraph complements both.
+codegraph complements both.
 
 - Use text search for exact strings, logs, config keys, and prose.
 - Use a compiler or language server when you need compiler-grade type analysis, overload resolution, dynamic dispatch, or editor refactors.
-- Use Codegraph when the question crosses files, languages, dependency edges, a git diff, or an agent context boundary.
+- Use codegraph when the question crosses files, languages, dependency edges, a git diff, or an agent context boundary.
 
 The distinction is evidence shape, not a claim that one tool replaces the others.
 
@@ -310,7 +310,7 @@ See [Agent workflows](./docs/agent-workflows.md) for exploration strategy, warm 
 
 **Shared source-language indexing and navigation:** JavaScript, TypeScript, Python, PHP, Go, Java, C#, Ruby, Rust, Kotlin, Swift, Zig, C, and C++.
 
-**SQL:** statement chunking, object symbols, common DDL/DML and CTE facts, SQL-to-SQL edges, and object-level navigation. Codegraph does not claim column-definition resolution.
+**SQL:** statement chunking, object symbols, common DDL/DML and CTE facts, SQL-to-SQL edges, and object-level navigation. codegraph does not claim column-definition resolution.
 
 **Graph-first formats:** HTML, Astro, Handlebars, Markdown, MDX, reStructuredText, AsciiDoc, CSS, SCSS, and Less have narrower graph or chunking support.
 
@@ -346,7 +346,7 @@ The root export includes compatibility APIs; documented subpath facades provide 
 
 ## How it works
 
-Codegraph follows a single analysis pipeline:
+codegraph follows a single analysis pipeline:
 
 1. Discover supported files under the selected project and include roots.
 2. Parse source languages with Tree-sitter and extract imports, exports, definitions, bindings, and scopes.
@@ -360,8 +360,8 @@ Disk caching avoids repository-wide source reads on exact warm text-search hits.
 
 The honest boundaries matter:
 
-- Codegraph is not a compiler or type checker. Reflection, generated code, macros, overload behavior, and dynamic dispatch can be missed.
-- Precise navigation depends on successful parsing and language queries. Without a compatible native runtime, Codegraph falls back to reduced graph-only and regex recovery rather than claiming equivalent semantics.
+- codegraph is not a compiler or type checker. Reflection, generated code, macros, overload behavior, and dynamic dispatch can be missed.
+- Precise navigation depends on successful parsing and language queries. Without a compatible native runtime, codegraph falls back to reduced graph-only and regex recovery rather than claiming equivalent semantics.
 - Call-compatibility findings are conservative review leads, not compiler diagnostics.
 - Duplicate matches and candidate tests are ranked leads that still require human or agent judgment.
 - `--fast-graph` is an explicit speed/accuracy tradeoff for plain JavaScript and TypeScript import extraction.
@@ -380,4 +380,4 @@ npm run check
 
 Use the narrowest relevant test while iterating. `npm run check` is the pre-commit baseline for formatting, lint, build, and tests; native workspace changes also require `npm run build:native` and `npm run test:native`.
 
-Codegraph is MIT licensed.
+codegraph is MIT licensed.

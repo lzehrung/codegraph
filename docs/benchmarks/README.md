@@ -2,10 +2,10 @@
 
 ## What the checked results show
 
-On these tiny local fixtures, with Codegraph caching disabled and a fresh process for each sample:
+On these tiny local fixtures, with codegraph caching disabled and a fresh process for each sample:
 
 - The preselected-read baseline completes in the low single-digit milliseconds. It is a filesystem floor with known paths, not a competing repository-discovery workflow.
-- Codegraph uses one declared `explore` step while the baseline uses three declared read steps. This count does not represent equivalent work, agent round trips, or tool quality.
+- codegraph uses one declared `explore` step while the baseline uses three declared read steps. This count does not represent equivalent work, agent round trips, or tool quality.
 - Every expected evidence anchor is present in every checked run.
 - The installer-preservation corpus keeps reviewed installer anchors ahead of generic MCP and benchmark decoys, recommends the installer source first, and returns its direct test.
 
@@ -53,7 +53,7 @@ npm run bench:semantic -- --tier release --mode native --mode reduced --package-
 npm run bench:semantic:summarize -- --input docs/benchmarks/semantic-results.example.json --check
 ```
 
-Use `--dry-run` to validate the manifest and print a byte-stable ordered plan without loading Codegraph. Release automation can point `--package-root` at an installed candidate and set `--package-mode packed`; checkout and packed results are never presented as the same package mode.
+Use `--dry-run` to validate the manifest and print a byte-stable ordered plan without loading codegraph. Release automation can point `--package-root` at an installed candidate and set `--package-mode packed`; checkout and packed results are never presented as the same package mode.
 
 ### Corpus and golden contract
 
@@ -61,7 +61,7 @@ Every case names a declared repository id, tier, language, operation, data-only 
 
 Definition and reference goldens use project-relative files and exact one-based ranges. Dependency goldens compare normalized `(from, to, kind)` tuples, where `kind` is `dependency` or `type-only`; candidate-test goldens compare ordered project-relative test files.
 
-Rationales begin with `Source review:` or `Limitation review:` so a golden cannot be an unexplained Codegraph dump. A golden change still requires source review and a second human reviewer; symbol handles are request inputs only and are not golden identities.
+Rationales begin with `Source review:` or `Limitation review:` so a golden cannot be an unexplained codegraph dump. A golden change still requires source review and a second human reviewer; symbol handles are request inputs only and are not golden identities.
 
 ### Scoring and result schema
 
@@ -88,10 +88,10 @@ This corpus is not a compiler conformance suite and does not prove universal cor
 Each checked scenario in [`scenarios.json`](./scenarios.json) defines a local fixture, a task, ordered expected anchors, and the exact steps for both variants. The scenarios cover TypeScript request paths, Python imports, SQL migration and application coupling, Markdown-to-TypeScript request paths, and installer-preservation ranking.
 
 - **Baseline workflow:** three declared direct UTF-8 file reads. The files are selected in advance, so this is not an unaided discovery task.
-- **Codegraph workflow:** one local `codegraph explore <query> --root <fixture> --cache off --json` call. It starts a fresh CLI process and builds a cold in-process index for every sample.
+- **codegraph workflow:** one local `codegraph explore <query> --root <fixture> --cache off --json` call. It starts a fresh CLI process and builds a cold in-process index for every sample.
 - **Tool calls:** declared workflow steps. A direct read and an `explore` call both count as one, despite doing unequal work.
-- **File reads:** baseline read steps, or unique source paths Codegraph returns in `packets` or `fileView`. This is a context-delivery count, not total parser, indexer, operating-system, or disk I/O.
-- **Wall time:** elapsed time around declared steps. It includes Codegraph process startup and cold indexing but excludes harness setup.
+- **File reads:** baseline read steps, or unique source paths codegraph returns in `packets` or `fileView`. This is a context-delivery count, not total parser, indexer, operating-system, or disk I/O.
+- **Wall time:** elapsed time around declared steps. It includes codegraph process startup and cold indexing but excludes harness setup.
 - **Completeness:** the fraction of expected path anchors found as text in captured evidence. It is evidence-anchor presence, not an answer-quality score.
 - **Reviewed relationships:** selected scenarios declare exact anchor partial orders, one recommended file, and required candidate tests. Results record one-based ranks and reciprocal ranks descriptively; no aggregate accuracy threshold, top-k target, or percentage is inferred.
 
@@ -124,9 +124,9 @@ The checked result document records Node, platform, architecture, CPU, logical C
 
 The checked artifact was produced from a Windows checkout. Its environment metadata is recorded in `results.example.json`, and the generated table above is the source of its measured values.
 
-The comparison is intentionally end-to-end but not process-symmetric. Baseline reads execute inside the already-running harness and read three preselected files; Codegraph launches a fresh Node process, discovers files, builds a cold index, searches, constructs evidence packets, and serializes JSON. The table measures workflow latency and call count, not equivalent-operation throughput or native parser speed.
+The comparison is intentionally end-to-end but not process-symmetric. Baseline reads execute inside the already-running harness and read three preselected files; codegraph launches a fresh Node process, discovers files, builds a cold index, searches, constructs evidence packets, and serializes JSON. The table measures workflow latency and call count, not equivalent-operation throughput or native parser speed.
 
-Read the Codegraph wall-time rows as absolute cold CLI latency. Do not divide them by the baseline rows to estimate a slowdown; use an equal-work engine benchmark for parser or index throughput comparisons.
+Read the codegraph wall-time rows as absolute cold CLI latency. Do not divide them by the baseline rows to estimate a slowdown; use an equal-work engine benchmark for parser or index throughput comparisons.
 Compare query benchmarks only when root, revision, query, Node version, and machine state are the same.
 
 Persistent MCP/server sessions amortize process startup and project loading. Measure those warm workflows separately before using this cold CLI table to set interactive latency targets.
@@ -134,8 +134,8 @@ Persistent MCP/server sessions amortize process startup and project loading. Mea
 ## Limitations and variability
 
 - These fixtures are tiny, local, synthetic, and network-free. They do not represent large repositories, remote tools, warm indexes, long sessions, concurrent agents, or ambiguous discovery tasks.
-- The baseline reads preselected files, while Codegraph starts a process, parses, indexes, and returns structured evidence. The workflows do not perform equivalent internal work.
-- Codegraph runs with `--cache off`; the harness does not clear operating-system file caches or reboot the host. Node version, hardware, storage, memory pressure, antivirus, scheduling, build freshness, and system load can change wall times.
+- The baseline reads preselected files, while codegraph starts a process, parses, indexes, and returns structured evidence. The workflows do not perform equivalent internal work.
+- codegraph runs with `--cache off`; the harness does not clear operating-system file caches or reboot the host. Node version, hardware, storage, memory pressure, antivirus, scheduling, build freshness, and system load can change wall times.
 - Three samples per variant are a modest evidence set. Treat small timing differences cautiously and compare reruns using the recorded environment.
 - The benchmark does not measure answer quality, tokens, output size, or human effort. Complete anchors can still accompany misleading evidence or a wrong answer.
 - Fixture trees, scenario files, and output parents are trusted local maintainer inputs. Traversal and symlink checks prevent common mistakes, but the harness is not an adversarial sandbox; do not rename or retarget these paths during a run.

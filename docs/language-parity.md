@@ -44,7 +44,7 @@ The first release tier covers reviewed Go, Python, and TypeScript cases plus an 
 Notes:
 
 - The native addon is the only Tree-sitter grammar backend for the listed source languages.
-- Without native, Codegraph degrades to reduced graph-only and regex recovery mode; it does not switch to a JS grammar stack.
+- Without native, codegraph degrades to reduced graph-only and regex recovery mode; it does not switch to a JS grammar stack.
 - Native parity tests cover source-language extraction and end-to-end semantics for `TypeScript`, `TSX`, `JavaScript`, `Python`, `PHP`, `Go`, `Java`, `C#`, `Rust`, `Kotlin`, `Swift`, `Zig`, `C`, `C++`, `Ruby`, and `SQL`. Graph/specifier parity is covered for `HTML`, `CSS`, `Less`, `SCSS`, `Vue`, and `Svelte`.
 - JavaScript graphing has an AngularJS-only heuristic for `templateUrl`, controller-name, and DI-token file/external edges. It only applies when a file explicitly uses `angular.module(...)`; generic `controller` or `templateUrl` objects are not treated as Angular.
 - Call compatibility hints compare changed callable arity with resolved callsites when parsing is high confidence. They are not type checking, overload resolution, trait dispatch, function-pointer analysis, macro expansion, or data-flow inference.

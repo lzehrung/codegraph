@@ -3,9 +3,9 @@ name: codegraph
 description: "Use for repo structure, symbol navigation, dependency analysis, duplicate triage, and PR impact review when plain text search is too shallow."
 ---
 
-# Codegraph
+# codegraph
 
-Use Codegraph when a repository question depends on structure rather than exact text:
+Use codegraph when a repository question depends on structure rather than exact text:
 
 - architecture, hotspots, cycles, unresolved imports, and public API surface
 - definitions, references, dependencies, reverse dependencies, and paths
@@ -13,7 +13,7 @@ Use Codegraph when a repository question depends on structure rather than exact 
 - duplicate cleanup and refactor-risk triage
 - bounded context for agents through explore, orientation, search, packets, explain, and MCP
 
-Use plain text search for exact strings, logs, config keys, secrets, and prose. Do not treat Codegraph as runtime proof; verify behavior with focused tests or execution.
+Use plain text search for exact strings, logs, config keys, secrets, and prose. Do not treat codegraph as runtime proof; verify behavior with focused tests or execution.
 
 ## Choose the First Command
 
@@ -21,7 +21,7 @@ Bare `codegraph` prints five task-first routes without scanning the project. Use
 
 | Task                                                      | Start here                                               |
 | --------------------------------------------------------- | -------------------------------------------------------- |
-| Review staged and unstaged work                           | `codegraph review`           |
+| Review staged and unstaged work                           | `codegraph review`                                       |
 | Review a branch against main                              | `codegraph review --base origin/main --head HEAD`        |
 | Map the wider blast radius of a change                    | `codegraph impact --base HEAD --head WORKTREE`           |
 | Select deterministic test paths for changed files         | `codegraph affected --base HEAD --head WORKTREE --quiet` |
@@ -67,7 +67,7 @@ Hierarchy results contain only proven indexed `extends` and `implements` relatio
 
 Use `codegraph rename-preview <target> <new-name> --json` to plan a semantic rename without changing files. Add `--include-comments`, `--include-strings`, or `--include-filenames` only when needed, and use `--max-edits <1-10000>` to bound the plan.
 
-Treat `safe: false`, conflicts, unsafe sites, and omissions as blockers. Eligible exported class, interface, and type filename results are suggestions only; Codegraph has no apply command or tool.
+Treat `safe: false`, conflicts, unsafe sites, and omissions as blockers. Eligible exported class, interface, and type filename results are suggestions only; codegraph has no apply command or tool.
 
 Use `codegraph refactor-plan <target>` to compose references, direct callers and callees, hierarchy, implementations, section issues, candidate tests, omissions, and copyable follow-ups from one snapshot. It accepts portable search or workspace-symbol handles and exact internal review or impact symbol handles; add `--rename <new-name>` only when the packet should include the authoritative nested rename preview.
 
@@ -158,8 +158,8 @@ Sensitive-file rules:
 
 If MCP tools are available, prefer them over repeated CLI invocations. Use `explore`, `orient`, `workspace_symbols`, `search`, `get_file`, `packet_get`, `goto`, `refs`, `rename_preview`, `refactor_plan`, `calls`, `type_hierarchy`, `file_deps`, `path`, `impact`, `review`, and `query_sqlite`; fall back to the CLI when MCP is unavailable. Legacy `callers`/`callees`, `supertypes`/`subtypes`, and `deps`/`rdeps` names remain valid `tools/call` aliases.
 
-Codegraph uses the official MCP SDK v2 to serve current 2026-07-28 clients while retaining compatibility with 2025-era clients. MCP protocol connections and HTTP protocol sessions keep separate transport state, but all share the server's one warm Codegraph analysis session for the configured root.
-On the first `tools/call`, Codegraph can emit `notifications/message` and, when the request includes `_meta.progressToken`, `notifications/progress` before the final result. Stdio carries them inline, and modern Streamable HTTP clients that accept `text/event-stream` receive them as a stream until the terminal result frame.
+codegraph uses the official MCP SDK v2 to serve current 2026-07-28 clients while retaining compatibility with 2025-era clients. MCP protocol connections and HTTP protocol sessions keep separate transport state, but all share the server's one warm codegraph analysis session for the configured root.
+On the first `tools/call`, codegraph can emit `notifications/message` and, when the request includes `_meta.progressToken`, `notifications/progress` before the final result. Stdio carries them inline, and modern Streamable HTTP clients that accept `text/event-stream` receive them as a stream until the terminal result frame.
 HTTP enforces Host and Origin policies. A missing `Origin` is accepted for non-browser clients; unapproved, malformed, and opaque origins are rejected. This is not authentication: binding `--host` to a non-loopback address exposes an unauthenticated endpoint intended only for trusted networks or containers.
 
 Use `refactor_plan` with flat `handle`, optional `renameTo`, independent optional `maxReferences`, `maxCallers`, and `maxHierarchy` bounds from 0 to 500, and optional `includeSource`. It reuses the configured server root and one session snapshot, returns portable targets and structured tool-call follow-ups even for exact internal review handles, exposes unsupported implementation sections in `sectionIssues`, preserves nested `rename.safe`, and never writes.
@@ -175,9 +175,9 @@ Keep live and indexed evidence distinct:
 - Set `allowSensitive: true` only for intentional sensitive reads.
 - Set `includeGraphContext: true` only when freshness-backed context is needed; importers, imports, and symbols are each capped at 100.
 - Plain `get_file` freshness does not gate live bytes.
-- After indexed calls, check `freshness` before trusting graph or semantic context. `refreshed` means Codegraph rebuilt; `stale` includes a reason and bounded changed-file metadata.
+- After indexed calls, check `freshness` before trusting graph or semantic context. `refreshed` means codegraph rebuilt; `stale` includes a reason and bounded changed-file metadata.
 - Run `refresh_index` before `artifact_build` when the index is stale. Artifact writes refuse stale snapshots.
-- After an install or Codegraph update, restart or reload the owning MCP client. `codegraph doctor --json` diagnoses package/native version identity; `refresh_index` refreshes repository state only and does not reload MCP code or tools.
+- After an install or codegraph update, restart or reload the owning MCP client. `codegraph doctor --json` diagnoses package/native version identity; `refresh_index` refreshes repository state only and does not reload MCP code or tools.
 
 ## Agent Setup and Project Lifecycle
 
@@ -194,9 +194,9 @@ codegraph install --all --yes
 
 Interactive confirmation accepts only `y` or `yes` and defaults to no. Noninteractive writes require `--yes`. `--all` is install-only, configures `codex`, `claude`, `cursor`, `gemini`, `opencode`, `omp`, `kilo`, and `agents`, and cannot be combined with target selection, `--detect`, or `--print-config`.
 
-Compatible JSON MCP entries and equivalent unmarked Codex tables are preserved byte-for-byte. Kilo JSONC comments and unrelated settings remain intact. Divergent Codegraph entries are collision-reported without exposing configuration values.
+Compatible JSON MCP entries and equivalent unmarked Codex tables are preserved byte-for-byte. Kilo JSONC comments and unrelated settings remain intact. Divergent codegraph entries are collision-reported without exposing configuration values.
 
-The installer manages Codegraph-owned MCP entries, skill payloads, and marker files; uninstall removes only recognized Codegraph-owned content.
+The installer manages codegraph-owned MCP entries, skill payloads, and marker files; uninstall removes only recognized codegraph-owned content.
 
 Lifecycle commands manage `.codegraph/manifest.json`; other commands do not require that manifest:
 
@@ -250,8 +250,8 @@ codegraph install --all --yes
 
 GitHub Packages requires a classic token with `read:packages`, including for public packages. Use the GitHub username and token during `npm login`.
 
-Do not suggest the unscoped `codegraph` package. Published installs resolve the optional native runtime when a compatible artifact exists; otherwise Codegraph reports reduced graph-only and regex recovery behavior rather than semantic parity.
+Do not suggest the unscoped `codegraph` package. Published installs resolve the optional native runtime when a compatible artifact exists; otherwise codegraph reports reduced graph-only and regex recovery behavior rather than semantic parity.
 
-On Windows, installed releases load native code from `%LOCALAPPDATA%\codegraph\native-cache\v1`. The first upgrade from an older direct-loading release requires closing Codegraph MCP clients once, running `npm install -g @lzehrung/codegraph@latest`, and restarting the clients.
+On Windows, installed releases load native code from `%LOCALAPPDATA%\codegraph\native-cache\v1`. The first upgrade from an older direct-loading release requires closing codegraph MCP clients once, running `npm install -g @lzehrung/codegraph@latest`, and restarting the clients.
 
 Use `codegraph doctor` to inspect `native.origin`, cache fallback errors, stale `.codegraph-*` npm retirement siblings, and installed-versus-running version drift. Do not delete reported paths or kill Node/IDE processes automatically; restart the owning client explicitly, and only clean obsolete cache entries after every process using them has stopped.

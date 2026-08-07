@@ -2,7 +2,7 @@
 
 Guidance for sessions, streaming queries, tool wrappers, and review-oriented agent loops.
 
-Use Codegraph for structural repo questions: architecture, dependency direction, symbol definitions, semantic references, hotspots, cycles, public API surface, and PR impact. Use plain text search alongside it for raw strings, logs, config keys, and non-symbol patterns.
+Use codegraph for structural repo questions: architecture, dependency direction, symbol definitions, semantic references, hotspots, cycles, public API surface, and PR impact. Use plain text search alongside it for raw strings, logs, config keys, and non-symbol patterns.
 
 ## Start here
 
@@ -128,7 +128,7 @@ Resolve the declaration with `symbols`, then pass its portable handle to rename 
 codegraph rename-preview "<type-handle-from-symbols>" RenamedService --include-filenames --json
 ```
 
-Treat `safe: false`, conflicts, unsafe sites, and omitted edits as blockers rather than silently applying a partial plan. Comment and string edits are opt-in low-confidence candidates; eligible exported type filename results are suggestions only, Codegraph never changes files, and no apply command or tool exists.
+Treat `safe: false`, conflicts, unsafe sites, and omitted edits as blockers rather than silently applying a partial plan. Comment and string edits are opt-in low-confidence candidates; eligible exported type filename results are suggestions only, codegraph never changes files, and no apply command or tool exists.
 
 Repeated library calls should use `previewRenameWithSession` or `tool_previewRename` with one caller-owned `AgentSession`. MCP hosts should use `rename_preview`, which stays available in read-only mode and reuses the server session.
 
@@ -193,7 +193,7 @@ codegraph install --target codex,claude --yes
 codegraph uninstall --target codex --yes
 ```
 
-Interactive confirmation accepts only `y` or `yes` and defaults to no. Noninteractive writes require `--yes`; `--print-config <target>` prints an MCP snippet without touching disk, and uninstall removes only Codegraph-owned content.
+Interactive confirmation accepts only `y` or `yes` and defaults to no. Noninteractive writes require `--yes`; `--print-config <target>` prints an MCP snippet without touching disk, and uninstall removes only codegraph-owned content.
 
 ## MCP server
 
@@ -201,7 +201,7 @@ Use `codegraph mcp serve --root . --stdio` when an agent can spawn and own a std
 Use `codegraph mcp serve --root /path/to/repo --port 7331 --warmup` for one shared repo-local Streamable HTTP server, then point clients at `http://127.0.0.1:7331/mcp`.
 MCP is an ergonomics and performance layer over the same analysis engine; it keeps warm session state, returns bounded resources, confines paths to the project root, and keeps tools read-only unless the server is started with `--allow-build`.
 
-Restart or reload the owning client after `codegraph install` or a Codegraph update. A running MCP server keeps the version and tool catalog captured at startup; `codegraph doctor --json` diagnoses package/native identity, while MCP `refresh_index` only refreshes repository analysis state.
+Restart or reload the owning client after `codegraph install` or a codegraph update. A running MCP server keeps the version and tool catalog captured at startup; `codegraph doctor --json` diagnoses package/native identity, while MCP `refresh_index` only refreshes repository analysis state.
 
 See [MCP server](./mcp.md) for client configuration and troubleshooting.
 
@@ -277,6 +277,7 @@ const customSession = await createCodeReviewSession({
   },
 });
 ```
+
 Session presets are a library-session convenience only. There is no CLI `--preset` flag or config key.
 
 Available presets:
@@ -285,6 +286,7 @@ Available presets:
 - `ci-fast`: maximum speed for CI and CD
 - `development`: fast feedback for local development
 - `production`: maximum accuracy
+
 ### Managing multiple sessions
 
 ```ts
@@ -457,7 +459,7 @@ const references = await tool_findReferences(root, "src/main.ts", 10, 5, index);
 Wrapper notes:
 
 - Import only from `@lzehrung/codegraph`.
-- When the agent runtime calls Codegraph as a TypeScript library, prefer structured fields over rendered CLI text. A deterministic review agent should usually call `buildReviewReport()` for changed-file and task metadata, then `analyzeImpactFromDiff()` or `analyzeImpactStreaming()` for impact and graph context. Use CLI output only when the agent is operating through a shell tool.
+- When the agent runtime calls codegraph as a TypeScript library, prefer structured fields over rendered CLI text. A deterministic review agent should usually call `buildReviewReport()` for changed-file and task metadata, then `analyzeImpactFromDiff()` or `analyzeImpactStreaming()` for impact and graph context. Use CLI output only when the agent is operating through a shell tool.
 - Treat `callCompatibility` as a deterministic review lead, not compiler-grade type checking. Likely-mismatch support covers provider-backed source-language callsite arity when callee resolution, signature parsing, and argument counting are all high confidence.
 - For streaming review packs, keep the default `streamSummary: "full"` when the final pack needs suggestions, export summaries, re-export chains, ranked top impacts, graph edges, cycles, clusters, and surface area. Streaming always returns `format: "stream-summary"`; forwarded `compact` is accepted only for compatibility and is ignored. Use `streamSummary: "light"` when the agent only needs progressive chunks plus final changed/impacted counts and details.
 - Build one shared index per agent pass when you will call multiple wrappers in sequence. `tool_getFileOverview()`, `tool_getGraph()`, and `tool_impactJSON()` now accept `index` through their runtime-options argument, while the bounded graph wrappers already accept it in their options object.
@@ -504,7 +506,7 @@ These bundles highlight:
 - Provider-backed call-arity compatibility leads after signature changes
 - risk summaries and review tasks
 
-When `callCompatibility` is present, start with hints where `status` is `likely_mismatch`, inspect `callsiteFile` and `callsiteRange`, and compare `expected` against `actual` before proposing a fix. Missing hints do not prove all callers are valid; Codegraph skips unsupported, ambiguous, overloaded, spread, or unresolved callsites.
+When `callCompatibility` is present, start with hints where `status` is `likely_mismatch`, inspect `callsiteFile` and `callsiteRange`, and compare `expected` against `actual` before proposing a fix. Missing hints do not prove all callers are valid; codegraph skips unsupported, ambiguous, overloaded, spread, or unresolved callsites.
 
 Pretty impact and review summaries include scoped duplicate leads by default:
 
@@ -530,7 +532,7 @@ For the exact JSON shape and CLI flags, see [docs/cli.md](./cli.md).
 
 ## Backend-focused review recipes
 
-These patterns combine Codegraph's core capabilities with backend-review heuristics.
+These patterns combine codegraph's core capabilities with backend-review heuristics.
 
 ### 1. API route impact assessment
 

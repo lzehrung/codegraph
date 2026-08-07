@@ -319,7 +319,7 @@ codegraph grep 'eval\(' --ignore-case
 
 ### MCP protocol and network boundary
 
-Codegraph uses the official MCP SDK v2 to serve current 2026-07-28 clients while retaining compatibility with 2025-era clients. MCP protocol connections and HTTP protocol sessions keep separate transport state, but all share the server's one warm Codegraph analysis session for the configured root.
+codegraph uses the official MCP SDK v2 to serve current 2026-07-28 clients while retaining compatibility with 2025-era clients. MCP protocol connections and HTTP protocol sessions keep separate transport state, but all share the server's one warm codegraph analysis session for the configured root.
 
 If an MCP transport or startup call fails, run `codegraph doctor`, use the equivalent CLI command for that session, and restart the agent client after package upgrades instead of retrying a broken long-lived server. Published CLI bundles keep the MCP runtime self-contained so an in-place upgrade cannot remove a lazy chunk that a running server has not loaded yet.
 
@@ -335,7 +335,7 @@ codegraph viewer --root . --graph codegraph-out/graph.json --open
 codegraph viewer --root . --port 4173 --print-url
 ```
 
-Without `--graph`, each UI load or reload builds the current project graph through the automatically validated `.codegraph-cache` index; `init`, `index`, and exported JSON are not prerequisites. An explicit `--graph` is served through the same `/graph.json` route, and manual upload remains available. The viewer loads Sigma, Graphology, and ForceAtlas2 from bundled `docs/graph-visualization/vendor/` assets, so the UI stays offline and self-contained once Codegraph is installed.
+Without `--graph`, each UI load or reload builds the current project graph through the automatically validated `.codegraph-cache` index; `init`, `index`, and exported JSON are not prerequisites. An explicit `--graph` is served through the same `/graph.json` route, and manual upload remains available. The viewer loads Sigma, Graphology, and ForceAtlas2 from bundled `docs/graph-visualization/vendor/` assets, so the UI stays offline and self-contained once codegraph is installed.
 
 `review`, `goto`, `refs`, `dumpmod`, `deps`, `rdeps`, `path`, `cycles`, `unresolved`, `apisurface`, `inspect`, `hotspots`, `duplicates`, `impact`, and `affected` load current repository state through one shared policy: they validate the on-disk manifest, reuse it when inputs are unchanged, and update incrementally otherwise. Review and impact diff selectors (`--base`, `--head`, and `--changed-since`) choose changed files but do not narrow index freshness; pass `--cache off` for an exhaustive uncached rebuild, or `--cache memory|disk` to select a cache explicitly.
 
@@ -437,19 +437,19 @@ For SQL, prefer handles or schema-qualified names when basenames may be ambiguou
 - `artifact build` writes `codegraph.sqlite`, `graph.json`, `CODEGRAPH_REPORT.md`, `questions.json`, and `manifest.json` by default.
 - Artifact suggested questions use unique IDs backed by stable handles when possible.
 - Use artifact flags to select a subset.
-- Use `--force` to replace recognizable stale Codegraph artifacts while preserving unrelated files.
+- Use `--force` to replace recognizable stale codegraph artifacts while preserving unrelated files.
 - Artifact contents exclude their own output directory and linked outside-root files.
 
 #### Agent client installer
 
-- `install` configures Codegraph-owned MCP entries, bundled skill payloads, and marker files for supported local agent clients: `codex`, `claude`, `cursor`, `gemini`, `opencode`, `omp`, `kilo`, and `agents`.
+- `install` configures codegraph-owned MCP entries, bundled skill payloads, and marker files for supported local agent clients: `codex`, `claude`, `cursor`, `gemini`, `opencode`, `omp`, `kilo`, and `agents`.
 - With neither `--yes` nor `--dry-run`, an interactive install detects targets, prints proposed actions and paths, and accepts only `y` or `yes`; blank input, EOF, interrupt, and every other answer decline without writing.
 - `--all` selects the complete catalog in listed order without detection. It is install-only and conflicts with target selection, `--detect`, and `--print-config`.
 - Noninteractive writes require `--yes`. Use `--detect` to list discovered targets, `--dry-run` to preview actions, or `--print-config <target>` to print a copyable MCP snippet without writing. JSON selection, confirmation, and collision failures return one structured stdout document without a stack trace.
-- Compatible canonical JSON MCP entries, the generic stdio form that omits only `type`, and equivalent unmarked Codex tables are preserved byte-for-byte. Kilo JSONC updates preserve comments and unrelated settings. Divergent Codegraph entries are reported together as secret-free collisions without writing config; uninstall recognizes only strict installer-owned entries.
+- Compatible canonical JSON MCP entries, the generic stdio form that omits only `type`, and equivalent unmarked Codex tables are preserved byte-for-byte. Kilo JSONC updates preserve comments and unrelated settings. Divergent codegraph entries are reported together as secret-free collisions without writing config; uninstall recognizes only strict installer-owned entries.
 - If no target is detected, output lists supported targets, checked paths, and copyable `--all` preview/apply commands; JSON includes `installed: false` and `reason: "no-targets-detected"`.
-- After a confirmed install, Codegraph verifies owned state, reports bounded doctor health, and prints restart/reload plus first-query guidance. It does not claim the client connected.
-- `uninstall` follows the same preview/confirmation rules and removes only Codegraph-owned marker blocks, marker files, exact bundled skill payloads, or exact installer-owned MCP entries.
+- After a confirmed install, codegraph verifies owned state, reports bounded doctor health, and prints restart/reload plus first-query guidance. It does not claim the client connected.
+- `uninstall` follows the same preview/confirmation rules and removes only codegraph-owned marker blocks, marker files, exact bundled skill payloads, or exact installer-owned MCP entries.
 - `skill install` remains the lower-level primitive when you only want to copy the bundled skill directly without MCP config.
 
 #### MCP server
@@ -464,7 +464,7 @@ For SQL, prefer handles or schema-qualified names when basenames may be ambiguou
 - MCP tools are read-only by default; `--allow-build` enables artifact output only when the MCP index is fresh or auto-refreshed.
 - `query_sqlite` is row- and byte-bounded, returns freshness metadata, rejects synthetic payload functions, and refuses stale artifact rows it cannot refresh safely.
 
-- Restart or reload the owning MCP client after installation or a Codegraph update. A running server keeps the version and tool surface captured at startup; use `codegraph doctor` from the same environment to diagnose running-versus-installed version and native state.
+- Restart or reload the owning MCP client after installation or a codegraph update. A running server keeps the version and tool surface captured at startup; use `codegraph doctor` from the same environment to diagnose running-versus-installed version and native state.
   See [docs/mcp.md](./mcp.md) for client configuration examples.
 
 #### Chunking
@@ -596,7 +596,7 @@ For git-provider impact, `--head` accepts normal revisions plus worktree sentine
 
 Impact JSON responses include `schemaVersion` plus `format: "full" | "compact"` so downstream tools can branch on payload shape without inferring it from missing fields. Use `--compact` for compact impact JSON. Impact JSON can also include `exportSummary`, `reexportChains`, `topImpacts`, `surfaceArea`, `clusters`, and `changedSymbols[].callCompatibility` when applicable. `changedFiles[]` entries preserve git copy or rename metadata as `oldFile` and `similarityIndex` when present. File paths in impact reports are project-relative, and raw diffs that point outside the project root are rejected.
 
-`callCompatibility` is a conservative review hint, not type checking. Likely-mismatch support is provider-backed for source languages where Codegraph resolves the callee and can count arguments with high confidence. Overload sets are skipped unless Codegraph can prove the exact overload target. Pretty impact and review summaries show only `likely_mismatch` findings; compatible, unsupported, or ambiguous callsites are omitted from human output and appear in structured data only when useful.
+`callCompatibility` is a conservative review hint, not type checking. Likely-mismatch support is provider-backed for source languages where codegraph resolves the callee and can count arguments with high confidence. Overload sets are skipped unless codegraph can prove the exact overload target. Pretty impact and review summaries show only `likely_mismatch` findings; compatible, unsupported, or ambiguous callsites are omitted from human output and appear in structured data only when useful.
 
 Pretty impact and review summaries also show high-confidence exact or renamed duplicate leads by default:
 
@@ -619,7 +619,7 @@ codegraph review --base main --head feature
 codegraph review --base main --head feature --json > review.json
 ```
 
-Call compatibility appears only after Codegraph detects a changed callable signature. Human output lists likely argument-count mismatches as review leads; JSON output attaches full hint objects under `changedSymbols[].callCompatibility`.
+Call compatibility appears only after codegraph detects a changed callable signature. Human output lists likely argument-count mismatches as review leads; JSON output attaches full hint objects under `changedSymbols[].callCompatibility`.
 
 - Inspect `callsiteFile`, `callsiteRange`, `expected`, and `actual` before treating a hint as a defect.
 - Expect skipped output for overload sets, spread arguments, dynamic dispatch, unresolved callsites, and unsupported syntax.
@@ -687,7 +687,7 @@ codegraph skill doctor
 
 `doctor.native.update` reports bounded, normalized `staleRetirementPaths`, `runningVersion`, `installedVersion`, `restartRequired`, and an optional reason. Doctor never deletes retirement paths, cache entries, or running processes.
 
-After installing or updating Codegraph, restart or reload each MCP client so it launches the current package and tool catalog. If behavior still looks stale, run `codegraph doctor --json` from the same shell or configured executable path, compare running and installed identity, then use MCP `refresh_index` only for repository snapshot freshness.
+After installing or updating codegraph, restart or reload each MCP client so it launches the current package and tool catalog. If behavior still looks stale, run `codegraph doctor --json` from the same shell or configured executable path, compare running and installed identity, then use MCP `refresh_index` only for repository snapshot freshness.
 
 ## Incremental git-scoped runs
 
@@ -867,7 +867,7 @@ When using `--symbols`:
 
 When using `--symbols-detailed`:
 
-- Codegraph adds symbol-to-symbol `uses` edges when a symbol body references another symbol through local references, named or default imports, or namespace members.
+- codegraph adds symbol-to-symbol `uses` edges when a symbol body references another symbol through local references, named or default imports, or namespace members.
 - You can combine `--symbols-detailed` with `--symbols` to keep both usage and import edges alongside file nodes.
 - Pruning options for large repos:
   - `--symbols-detailed-scope {all|imported}`
@@ -888,7 +888,7 @@ codegraph graph --root /path/to/project --json --symbols-detailed --output graph
 
 ## Graph export and inspection
 
-Codegraph ships graph data formats for scripts and existing graph tools, plus a packaged interactive viewer for humans. Use `codegraph viewer --root . --open` for the current project, or add `--graph codegraph.json` to inspect a root-confined exported snapshot; it is not an agent interface.
+codegraph ships graph data formats for scripts and existing graph tools, plus a packaged interactive viewer for humans. Use `codegraph viewer --root . --open` for the current project, or add `--graph codegraph.json` to inspect a root-confined exported snapshot; it is not an agent interface.
 
 ```bash
 # Compact JSON for scripts and downstream tooling

@@ -1,11 +1,11 @@
 # Publishing Guide
 
-Codegraph publishes two top-level npm packages:
+codegraph publishes two top-level npm packages:
 
 - `@lzehrung/codegraph`: the main JS package and CLI
 - `@lzehrung/codegraph-native`: the optional native Tree-sitter meta package plus per-platform binary packages
 
-The main package depends on the native package optionally, so installs still succeed when no matching native binary exists. When native is unavailable, Codegraph degrades to reduced graph-only and regex recovery mode; there is no separate JavaScript parser fallback package.
+The main package depends on the native package optionally, so installs still succeed when no matching native binary exists. When native is unavailable, codegraph degrades to reduced graph-only and regex recovery mode; there is no separate JavaScript parser fallback package.
 
 ## Local Release Commands
 
@@ -185,10 +185,10 @@ Before publishing a cache-enabled release:
 - verify the old process reports restart required and a new process reports the new version and cache key;
 - state the one-time stop-update-restart requirement in the first cache-enabled release notes.
 
-Do not claim updates are universally lock-free. The supported claim is that Codegraph no longer maps the npm-owned native addon; antivirus, backup tools, and stale npm retirement paths can still cause `EBUSY`.
+Do not claim updates are universally lock-free. The supported claim is that codegraph no longer maps the npm-owned native addon; antivirus, backup tools, and stale npm retirement paths can still cause `EBUSY`.
 
 ## Release Notes
 
 - `@lzehrung/codegraph` and `@lzehrung/codegraph-native` version independently.
 - `src/native/bindingLoader.ts` loads a local workspace binary directly, caches installed Windows binaries, and uses the installed native package directly on other platforms or as a safe fallback.
-- If the cache is unavailable, Codegraph records the cache error and preserves the existing native package fallback; if native loading or a query remains unavailable, it degrades to reduced graph-only and regex recovery mode.
+- If the cache is unavailable, codegraph records the cache error and preserves the existing native package fallback; if native loading or a query remains unavailable, it degrades to reduced graph-only and regex recovery mode.

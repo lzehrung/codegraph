@@ -2,7 +2,7 @@
 
 ## Short version
 
-Codegraph turns source files into a resolved dependency graph and a semantic index:
+codegraph turns source files into a resolved dependency graph and a semantic index:
 
 1. Discover files under the selected roots.
 2. Parse supported source languages with Tree-sitter and run language queries for imports, exports, definitions, and bindings.
@@ -16,7 +16,7 @@ The first index-backed question, such as `codegraph explore "..." --root .`, may
 
 ## Discovery
 
-Commands start from the project root and any selected scan roots. Codegraph walks those roots, applies supported-extension filtering, honors `.gitignore` by default, and then applies configured and command-line include or ignore globs. Excluding generated, vendored, and fixture trees here avoids reading or parsing them later.
+Commands start from the project root and any selected scan roots. codegraph walks those roots, applies supported-extension filtering, honors `.gitignore` by default, and then applies configured and command-line include or ignore globs. Excluding generated, vendored, and fixture trees here avoids reading or parsing them later.
 
 Each discovered file is mapped to a language definition. First-class source languages feed the shared Tree-sitter pipeline. Graph-first formats such as documentation and templates use their dedicated link or specifier extractors where the [language parity matrix](./language-parity.md) says graph support is available.
 
@@ -32,7 +32,7 @@ In the normal `auto` runtime mode, the native addon performs this Tree-sitter pa
 
 ### Windows installed-runtime cache
 
-On Windows, an installed Codegraph package resolves the platform `.node` file without loading it, hashes it with a bounded streaming buffer, and publishes the verified bytes to `%LOCALAPPDATA%\codegraph\native-cache\v1`. Each cache entry is keyed by platform target, package version, and SHA-256; concurrent processes converge on one immutable final file without overwriting mapped binaries.
+On Windows, an installed codegraph package resolves the platform `.node` file without loading it, hashes it with a bounded streaming buffer, and publishes the verified bytes to `%LOCALAPPDATA%\codegraph\native-cache\v1`. Each cache entry is keyed by platform target, package version, and SHA-256; concurrent processes converge on one immutable final file without overwriting mapped binaries.
 
 The loader requires the cached path and records both the package-owned source and loaded origin. Local workspace builds bypass this cache so rebuilding `packages/codegraph-native` still takes effect immediately, while non-Windows installed packages keep their existing package loader.
 
@@ -44,7 +44,7 @@ The shortcut recognizes common `import`, `export ... from`, `require()`, and `im
 
 ### Recovery when parsing is unavailable
 
-Recovery is separate from `--fast-graph`. If the native addon is unavailable in `auto` mode, Codegraph continues in a reduced graph-only mode and uses the available regex or graph-first recovery extractors. It does not load a second JavaScript grammar backend. Semantic features that need definitions, scopes, or precise syntax may be unavailable or less complete in this mode.
+Recovery is separate from `--fast-graph`. If the native addon is unavailable in `auto` mode, codegraph continues in a reduced graph-only mode and uses the available regex or graph-first recovery extractors. It does not load a second JavaScript grammar backend. Semantic features that need definitions, scopes, or precise syntax may be unavailable or less complete in this mode.
 
 A failed or empty import query can also trigger a language-specific recovery extractor for that file. This is resilience behavior, not the normal architecture. Use `--report` or `codegraph doctor` when you need to confirm which backend ran. `--native on` makes a missing native addon an error; `--native off` explicitly selects reduced behavior.
 
@@ -101,13 +101,13 @@ Caching avoids repeating work; it does not change extraction or resolution seman
 
 An incremental graph starts from a compatible manifest, keeps edges for unchanged files, and replaces edges for changed files. Changes to file signatures, discovery configuration, graph options, cache schema, or relevant build options invalidate the affected reuse boundary. Corrupt or unsupported cache data is rebuilt rather than treated as current analysis.
 
-On disk-backed incremental loads, Codegraph consults Git only for repository state that the persisted manifest cannot prove by itself: tracked working-tree changes, newly untracked files, and the current revision. Repository detection is memoized per root within a process, independent Git probes run concurrently, and impact/review reuse their parsed unified diff instead of walking the same diff twice. Without that Git signal (a non-Git project, or `--cache-strict`) the load rediscovers project files instead of trusting the manifest file list, so a new file is never invisible to a warm query. Strict cache verification still hashes content; non-strict cache mode uses the documented metadata tradeoff.
+On disk-backed incremental loads, codegraph consults Git only for repository state that the persisted manifest cannot prove by itself: tracked working-tree changes, newly untracked files, and the current revision. Repository detection is memoized per root within a process, independent Git probes run concurrently, and impact/review reuse their parsed unified diff instead of walking the same diff twice. Without that Git signal (a non-Git project, or `--cache-strict`) the load rediscovers project files instead of trusting the manifest file list, so a new file is never invisible to a warm query. Strict cache verification still hashes content; non-strict cache mode uses the documented metadata tradeoff.
 
 Disk-backed text and hybrid search lazily maintain `.codegraph-cache/index-v1/search-v1.sqlite`. Its file and chunk rows come from the loaded snapshot's manifest signatures. SQLite FTS5 selects candidates only; the existing exact matcher and ranker remain authoritative.
 
 A bounded worker pool updates added, changed, deleted, and retired files. One SQLite transaction commits the affected rows and metadata.
 
-Readers use the sidecar only when its project snapshot identity matches the loaded snapshot. On a mismatch, Codegraph updates and revalidates the sidecar; it falls back to in-memory source scanning only if that update cannot be used. Writer contention, unavailable storage, future schemas, or corruption also use in-memory source scanning. Codegraph never returns mixed-snapshot results.
+Readers use the sidecar only when its project snapshot identity matches the loaded snapshot. On a mismatch, codegraph updates and revalidates the sidecar; it falls back to in-memory source scanning only if that update cannot be used. Writer contention, unavailable storage, future schemas, or corruption also use in-memory source scanning. codegraph never returns mixed-snapshot results.
 
 The sidecar stores normalized source and chunk text. [Installation](./installation.md#local-caches) covers sensitive-data handling, cache-off behavior, and safe deletion.
 

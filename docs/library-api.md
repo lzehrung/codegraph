@@ -31,10 +31,10 @@ For repeated calls, prefer one warm session instead of rebuilding indexes ad hoc
 CLI commands and agent sessions read `codegraph.config.json` from the project root when it exists. Core indexing APIs keep discovery and language mappings explicit, so pass both options directly when you want the same behavior in custom code:
 
 ```ts
-import { buildProjectIndex, loadCodegraphConfig } from "@lzehrung/codegraph";
+import { buildProjectIndex, loadcodegraphConfig } from "@lzehrung/codegraph";
 
 const root = process.cwd();
-const config = await loadCodegraphConfig(root);
+const config = await loadcodegraphConfig(root);
 const index = await buildProjectIndex(root, {
   ...(config.discovery ? { discovery: config.discovery } : {}),
   ...(config.graph ? { graph: config.graph } : {}),
@@ -207,17 +207,17 @@ One session load and freshness decision feed the target, definition, references,
 
 ## Live file views
 
-`getCodegraphFileView()` reads a confined project file directly from disk. `getCodegraphFileViewWithSession()` accepts an existing `AgentSession` for optional graph reuse, and `formatAgentFileViewResponse()` renders the same response as stable pretty text.
+`getcodegraphFileView()` reads a confined project file directly from disk. `getcodegraphFileViewWithSession()` accepts an existing `AgentSession` for optional graph reuse, and `formatAgentFileViewResponse()` renders the same response as stable pretty text.
 
 ```ts
 import {
   createAgentSession,
   formatAgentFileViewResponse,
-  getCodegraphFileView,
-  getCodegraphFileViewWithSession,
+  getcodegraphFileView,
+  getcodegraphFileViewWithSession,
 } from "@lzehrung/codegraph";
 
-const page = await getCodegraphFileView({
+const page = await getcodegraphFileView({
   root: process.cwd(),
   file: "src/auth.ts",
   offset: 1,
@@ -226,7 +226,7 @@ const page = await getCodegraphFileView({
 });
 
 if (page.page?.nextOffset) {
-  const next = await getCodegraphFileView({
+  const next = await getcodegraphFileView({
     root: process.cwd(),
     file: page.file,
     offset: page.page.nextOffset,
@@ -236,7 +236,7 @@ if (page.page?.nextOffset) {
 }
 
 const session = createAgentSession({ root: process.cwd() });
-const contextual = await getCodegraphFileViewWithSession(session, {
+const contextual = await getcodegraphFileViewWithSession(session, {
   root: process.cwd(),
   file: "src/auth.ts",
   includeGraphContext: true,
@@ -258,12 +258,12 @@ The root package and `@lzehrung/codegraph/agent` export these functions, constan
 
 ## Agent packets
 
-`orientCodegraph()` returns compact first-turn context for an agent, and `getCodegraphPacket()` retrieves bounded evidence by file path, symbol name, SQL object name, or stable target:
+`orientcodegraph()` returns compact first-turn context for an agent, and `getcodegraphPacket()` retrieves bounded evidence by file path, symbol name, SQL object name, or stable target:
 
 ```ts
-import { getCodegraphPacket, orientCodegraph } from "@lzehrung/codegraph";
+import { getcodegraphPacket, orientcodegraph } from "@lzehrung/codegraph";
 
-const orientation = await orientCodegraph({
+const orientation = await orientcodegraph({
   root: process.cwd(),
   includeRoots: ["src"],
   budget: "small",
@@ -271,7 +271,7 @@ const orientation = await orientCodegraph({
 
 const target = orientation.focus.find((entry) => entry.file);
 if (target?.file) {
-  const packet = await getCodegraphPacket({
+  const packet = await getcodegraphPacket({
     root: process.cwd(),
     target: target.file,
     maxSymbols: 25,
@@ -285,12 +285,12 @@ Small orientation budgets default to `health: "skip"` and set health fields to `
 
 ## Agent search
 
-`searchCodegraph()` builds a project snapshot and returns deterministic, agent-ready anchors across files, symbols, chunks, SQL objects, and optional graph neighborhoods. Hybrid search is code-first by default, so implementation files and symbols outrank docs unless `mode: "text"` is explicit or docs are the strongest remaining evidence. Identifier-like queries stay symbol-first. Pure `path` and `text` searches skip detailed symbol graph construction; hybrid, symbol, SQL, and graph searches keep symbol-aware ranking and neighbors. Handles are project-relative and explainable; result packets include top-level `analysis`, per-result `provenance`, `resultCount`, `totalCandidates`, `limits`, and `omittedCounts`.
+`searchcodegraph()` builds a project snapshot and returns deterministic, agent-ready anchors across files, symbols, chunks, SQL objects, and optional graph neighborhoods. Hybrid search is code-first by default, so implementation files and symbols outrank docs unless `mode: "text"` is explicit or docs are the strongest remaining evidence. Identifier-like queries stay symbol-first. Pure `path` and `text` searches skip detailed symbol graph construction; hybrid, symbol, SQL, and graph searches keep symbol-aware ranking and neighbors. Handles are project-relative and explainable; result packets include top-level `analysis`, per-result `provenance`, `resultCount`, `totalCandidates`, `limits`, and `omittedCounts`.
 
 ```ts
-import { buildCodegraphArtifact, explainCodegraphTarget, exploreCodegraph, searchCodegraph } from "@lzehrung/codegraph";
+import { buildcodegraphArtifact, explaincodegraphTarget, explorecodegraph, searchcodegraph } from "@lzehrung/codegraph";
 
-const response = await searchCodegraph({
+const response = await searchcodegraph({
   root: process.cwd(),
   query: "validate user",
   mode: "hybrid",
@@ -300,7 +300,7 @@ const response = await searchCodegraph({
 const first = response.results[0];
 console.log(first?.handle, first?.rankReasons, first?.omittedCounts, first?.followUps);
 
-const explored = await exploreCodegraph({
+const explored = await explorecodegraph({
   root: process.cwd(),
   query: "how does auth reach db?",
   limit: 5,
@@ -310,7 +310,7 @@ const explored = await exploreCodegraph({
 
 console.log(explored.summary, explored.paths, explored.followUps);
 
-const exactFile = await exploreCodegraph({
+const exactFile = await explorecodegraph({
   root: process.cwd(),
   query: "src/auth.ts",
   includeGraphContext: false,
@@ -318,15 +318,15 @@ const exactFile = await exploreCodegraph({
 console.log(exactFile.fileView?.content, exactFile.fileView?.page?.nextOffset);
 ```
 
-Use `exploreCodegraph()` when the caller has a broad question and needs one bounded response over the existing search, packet, path, reverse-dependency, and candidate-test surfaces. The response has `schemaVersion: 1`, the original query, `analysis`, summary bullets, anchors, packets, paths, blast radius with per-entry omitted lower bounds, candidate tests, follow-ups, flat limits, and omission counts. Path and blast-radius omissions may be lower bounds after bounded scans reach their caps.
+Use `explorecodegraph()` when the caller has a broad question and needs one bounded response over the existing search, packet, path, reverse-dependency, and candidate-test surfaces. The response has `schemaVersion: 1`, the original query, `analysis`, summary bullets, anchors, packets, paths, blast radius with per-entry omitted lower bounds, candidate tests, follow-ups, flat limits, and omission counts. Path and blast-radius omissions may be lower bounds after bounded scans reach their caps.
 When the entire query resolves to an indexed project-relative file path, or to one uniquely matching basename, the response also includes the live `fileView` described above. `includeSource: false` suppresses it; `includeGraphContext` and `allowSensitive` remain explicit request options and are never enabled automatically.
 
 Use `mode: "sql"` for SQL objects, or pass `from` plus `depth` with `mode: "graph"` to boost matches near a file path, file/chunk/graph handle, symbol handle, SQL handle, or symbol name.
 
-`explainCodegraphTarget()` resolves a file path, symbol name, SQL object name, or search handle into a bounded packet for follow-up agent work. Explanations include the same top-level `analysis` label as search so reduced or mixed runs stay visible. SQL object names resolve by exact name first; unqualified basenames resolve only when unique. File and symbol explanations also include bounded medium-or-higher duplicate context that touches the target, with stable handles and conservative repair hints. SQL related objects include a `relation` such as `incoming:reads_from`, `outgoing:writes_to`, or `same_file`. With changed context enabled, the packet includes compact review tasks and candidate tests:
+`explaincodegraphTarget()` resolves a file path, symbol name, SQL object name, or search handle into a bounded packet for follow-up agent work. Explanations include the same top-level `analysis` label as search so reduced or mixed runs stay visible. SQL object names resolve by exact name first; unqualified basenames resolve only when unique. File and symbol explanations also include bounded medium-or-higher duplicate context that touches the target, with stable handles and conservative repair hints. SQL related objects include a `relation` such as `incoming:reads_from`, `outgoing:writes_to`, or `same_file`. With changed context enabled, the packet includes compact review tasks and candidate tests:
 
 ```ts
-const explanation = await explainCodegraphTarget({
+const explanation = await explaincodegraphTarget({
   root: process.cwd(),
   target: first?.handle ?? "src/auth.ts",
   maxSymbols: 25,
@@ -342,10 +342,10 @@ console.log(explanation.summary, explanation.followUps);
 
 Reference and snippet omission counts are lower bounds once the bounded navigation scan reaches the requested cap. This keeps small packets cheap for symbols with many references while still signaling that more context exists.
 
-`buildCodegraphArtifact()` writes the same core artifacts agents usually need for offline navigation. Artifact contents exclude the output directory itself when it is inside the repo; hosts that write through a resolved path while indexing through a symlinked root can pass `filterOutDir` with the lexical project-relative output path:
+`buildcodegraphArtifact()` writes the same core artifacts agents usually need for offline navigation. Artifact contents exclude the output directory itself when it is inside the repo; hosts that write through a resolved path while indexing through a symlinked root can pass `filterOutDir` with the lexical project-relative output path:
 
 ```ts
-const artifact = await buildCodegraphArtifact({
+const artifact = await buildcodegraphArtifact({
   root: process.cwd(),
   outDir: "codegraph-out",
 });
@@ -353,16 +353,16 @@ const artifact = await buildCodegraphArtifact({
 console.log(artifact.manifestPath, artifact.artifacts);
 ```
 
-The `graph.json` artifact is self-describing (`schemaVersion: 1`, `format: "codegraph.graph-json"`) and uses project-relative file paths and portable symbol handles. `questions.json` uses the same stable handles for follow-up commands. With `force: true`, stale known Codegraph artifact files are removed before the selected outputs are written; unrelated files in the directory are preserved.
+The `graph.json` artifact is self-describing (`schemaVersion: 1`, `format: "codegraph.graph-json"`) and uses project-relative file paths and portable symbol handles. `questions.json` uses the same stable handles for follow-up commands. With `force: true`, stale known codegraph artifact files are removed before the selected outputs are written; unrelated files in the directory are preserved.
 
 `createAgentSession()` keeps one in-process project snapshot warm for repeated explore, orient, search, explain, packet, artifact, and MCP calls. It uses incremental indexing with disk cache by default, auto-enables native workers for large cold builds, and carries forward top-level analysis metadata from the build report.
 Session callers can use `freshness: { policy: "check" | "auto" | "manual" }` plus `checkFreshness()` to detect file edits before reusing a warm snapshot. `check` reports stale state without invalidating, `auto` invalidates for bounded changes, and stale results include `changedFileCount`, `omittedChangedFileCount`, `reason`, and a bounded changed-file sample.
-Set `buildOptions.useNativeWorkers` to `false` to opt out. Use `buildCodegraphArtifactWithSession()` when a host already has a session and wants SQLite, graph JSON, report, questions, and manifest outputs from the same snapshot. `createCodegraphMcpHandlers()` exposes the same primitives without starting stdio, which is useful for tests or host applications:
+Set `buildOptions.useNativeWorkers` to `false` to opt out. Use `buildcodegraphArtifactWithSession()` when a host already has a session and wants SQLite, graph JSON, report, questions, and manifest outputs from the same snapshot. `createcodegraphMcpHandlers()` exposes the same primitives without starting stdio, which is useful for tests or host applications:
 
 ```ts
-import { createCodegraphMcpHandlers } from "@lzehrung/codegraph";
+import { createcodegraphMcpHandlers } from "@lzehrung/codegraph";
 
-const handlers = createCodegraphMcpHandlers({
+const handlers = createcodegraphMcpHandlers({
   root: process.cwd(),
   artifactPath: "codegraph-out",
   readOnly: true,
@@ -377,8 +377,8 @@ console.log(search.freshness.state);
 console.log(packet.kind, refs.references, rows.rows, rows.freshness.state);
 ```
 
-`serveCodegraphMcp()` starts the stdio server used by `codegraph mcp serve`. MCP is an agent ergonomics and cache layer over the same analysis engine, not a separate indexer. MCP file and artifact paths are confined after realpath resolution.
-`query_sqlite` is read-only and row- and byte-bounded. It returns freshness metadata for fresh artifact reads, refreshes Codegraph-owned SQLite artifacts after small edits when write access is enabled, and rejects stale artifact queries it cannot refresh safely.
+`servecodegraphMcp()` starts the stdio server used by `codegraph mcp serve`. MCP is an agent ergonomics and cache layer over the same analysis engine, not a separate indexer. MCP file and artifact paths are confined after realpath resolution.
+`query_sqlite` is read-only and row- and byte-bounded. It returns freshness metadata for fresh artifact reads, refreshes codegraph-owned SQLite artifacts after small edits when write access is enabled, and rejects stale artifact queries it cannot refresh safely.
 `artifact_build` is disabled by default and requires `readOnly: false` or CLI `--allow-build`; it refuses to write outputs from a stale MCP index until `refresh_index` succeeds. MCP `orient` and `packet_get` calls use the server-configured root; they do not accept per-request root overrides.
 
 See [MCP server](./mcp.md) for CLI server setup and client configuration examples.
@@ -720,7 +720,7 @@ for (const item of report.impacted.slice(0, 5)) {
 
 ### Call Compatibility Hints
 
-Changed symbols can include `callCompatibility` when a provider-backed callable signature changed and Codegraph resolved high-confidence callsites. These hints compare argument counts only; they are deterministic review leads, not type checking or overload analysis.
+Changed symbols can include `callCompatibility` when a provider-backed callable signature changed and codegraph resolved high-confidence callsites. These hints compare argument counts only; they are deterministic review leads, not type checking or overload analysis.
 
 Use them to prioritize follow-up review:
 
@@ -743,7 +743,7 @@ for (const hint of likelyMismatches) {
 Coverage is intentionally conservative:
 
 - Compatible callsites may be present in structured data but are omitted from human summaries.
-- Unsupported languages, unknown signatures, spread calls, ambiguous callsites, and overload sets are skipped until Codegraph can prove the call target. JS/TS method-level call compatibility is included only for verified receivers such as `new Service().run()` and `const service = new Service(); service.run()`.
+- Unsupported languages, unknown signatures, spread calls, ambiguous callsites, and overload sets are skipped until codegraph can prove the call target. JS/TS method-level call compatibility is included only for verified receivers such as `new Service().run()` and `const service = new Service(); service.run()`.
 
 Include reference context snippets when needed:
 

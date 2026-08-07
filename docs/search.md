@@ -1,18 +1,18 @@
 # Vectorless Search
 
-Codegraph search is deterministic lexical retrieval over a parsed symbol index and repository graph. It does not generate embeddings, call an embedding model, or require a vector database.
+codegraph search is deterministic lexical retrieval over a parsed symbol index and repository graph. It does not generate embeddings, call an embedding model, or require a vector database.
 
 ## Why it feels semantic
 
 The ranking is lexical, but the things being ranked are structural:
 
-| Layer      | What Codegraph knows                                                        |
+| Layer      | What codegraph knows                                                        |
 | ---------- | --------------------------------------------------------------------------- |
 | Syntax     | Symbols, definitions, exports, docstrings, and source ranges                |
 | Repository | Resolved imports, dependencies, reverse dependencies, and graph distance    |
 | Text       | Normalized identifiers, paths, prose chunks, SQL objects, and exact phrases |
 
-A result for `buildReviewReport` is therefore more than a matching string. Codegraph knows that it is a symbol in `src/review.ts`, where it is defined, which files reference or depend on it, and which follow-up commands can inspect it.
+A result for `buildReviewReport` is therefore more than a matching string. codegraph knows that it is a symbol in `src/review.ts`, where it is defined, which files reference or depend on it, and which follow-up commands can inspect it.
 
 Here, "semantic" means syntax- and symbol-aware analysis from the repository. It does not mean embedding similarity.
 
@@ -85,4 +85,4 @@ codegraph search "validate user" --json
 
 Vectorless search is local, deterministic, explainable, and does not require embedding regeneration when the repository changes. Exact identifiers, source locations, and graph relationships remain first-class evidence rather than metadata attached after retrieval.
 
-The tradeoff is conceptual recall. If a query and implementation share no words, docstrings, paths, SQL names, or graph bridge, Codegraph may miss a synonym that embedding search would connect. Use repository terminology, add a structural `--from` anchor, or start with `explore` when the question needs several retrieval steps.
+The tradeoff is conceptual recall. If a query and implementation share no words, docstrings, paths, SQL names, or graph bridge, codegraph may miss a synonym that embedding search would connect. Use repository terminology, add a structural `--from` anchor, or start with `explore` when the question needs several retrieval steps.

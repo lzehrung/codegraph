@@ -1,6 +1,6 @@
 # MCP Server
 
-Codegraph can run as a Model Context Protocol server so tool-capable agents can query repo structure without spawning a new CLI process for every follow-up.
+codegraph can run as a Model Context Protocol server so tool-capable agents can query repo structure without spawning a new CLI process for every follow-up.
 
 Use MCP when an agent will make repeated explore, navigation, search, packet, review, or artifact queries. Use normal CLI commands for one-off local inspection or when your agent runtime does not expose MCP tools.
 
@@ -31,15 +31,15 @@ The shared HTTP endpoint is `http://127.0.0.1:7331/mcp`. HTTP binds to `127.0.0.
 
 Stdio servers exit when the client closes stdin, when an IPC parent disconnects, or after `--idle-timeout-ms` of inactivity (default 30 minutes; `0` disables the idle timer). That keeps orphaned `mcp serve --stdio` processes from lingering after an IDE or agent exits.
 
-Use stdio for a client-owned subprocess. Use HTTP for one long-running Codegraph process per repository, then point every MCP-capable IDE, terminal, or agent client at the same local URL. Exact config keys vary by client, but the MCP settings should use HTTP/Streamable HTTP transport plus the `/mcp` URL instead of a `command`/`args` stdio launch.
+Use stdio for a client-owned subprocess. Use HTTP for one long-running codegraph process per repository, then point every MCP-capable IDE, terminal, or agent client at the same local URL. Exact config keys vary by client, but the MCP settings should use HTTP/Streamable HTTP transport plus the `/mcp` URL instead of a `command`/`args` stdio launch.
 
-Codegraph uses the official MCP SDK v2 to serve current 2026-07-28 clients while retaining compatibility with 2025-era clients. MCP protocol connections and HTTP protocol sessions keep separate transport state, but all share the server's one warm Codegraph analysis session for the configured root.
+codegraph uses the official MCP SDK v2 to serve current 2026-07-28 clients while retaining compatibility with 2025-era clients. MCP protocol connections and HTTP protocol sessions keep separate transport state, but all share the server's one warm codegraph analysis session for the configured root.
 
 HTTP enforces Host and Origin policies. A missing `Origin` is accepted for non-browser clients; unapproved, malformed, and opaque origins are rejected. This is not authentication: binding `--host` to a non-loopback address exposes an unauthenticated endpoint intended only for trusted networks or containers.
 
 ## Runtime identity and updates
 
-The MCP initialize response advertises the Codegraph package version captured when the server starts. The server checks its captured package metadata path at most once every 30 seconds during tool calls; a changed or temporarily unavailable installation produces a deduplicated stderr warning but does not fail the request or terminate the server.
+The MCP initialize response advertises the codegraph package version captured when the server starts. The server checks its captured package metadata path at most once every 30 seconds during tool calls; a changed or temporarily unavailable installation produces a deduplicated stderr warning but does not fail the request or terminate the server.
 
 On Windows, installed-package servers map the verified native addon from `%LOCALAPPDATA%\codegraph\native-cache\v1`, not from npm's package directory. An old server may therefore remain healthy after npm installs a new release, but it must be restarted to use the new JavaScript runtime and cache identity.
 
@@ -74,14 +74,14 @@ The server exposes the same bounded primitives as the CLI and library session la
 
 ## Session lifecycle
 
-MCP keeps one Codegraph session warm for the configured root. That makes follow-up calls cheaper than separate CLI invocations. Startup is lazy unless `--warmup` or `--warmup-symbols` is passed.
-On the first `tools/call`, Codegraph can emit `notifications/message` and, when the request includes `_meta.progressToken`, `notifications/progress` before the final result. Stdio carries them inline, and modern Streamable HTTP clients that accept `text/event-stream` receive them as a stream.
+MCP keeps one codegraph session warm for the configured root. That makes follow-up calls cheaper than separate CLI invocations. Startup is lazy unless `--warmup` or `--warmup-symbols` is passed.
+On the first `tools/call`, codegraph can emit `notifications/message` and, when the request includes `_meta.progressToken`, `notifications/progress` before the final result. Stdio carries them inline, and modern Streamable HTTP clients that accept `text/event-stream` receive them as a stream.
 
 Text and hybrid searches reuse a prepared handle for `.codegraph-cache/index-v1/search-v1.sqlite` and cache identical responses by snapshot identity and request options. A detected refresh or explicit `refresh_index` closes the handle and clears cached responses before the next snapshot.
 
 If the sidecar is busy or unavailable, MCP uses the same exact in-memory matcher. [How it works](./how-it-works.md#cache-and-session-behavior) explains the search cache.
 
-Use `refresh_index` to rebuild the snapshot, reset SQLite artifact state, or recover after a change burst exceeds automatic limits. With write access, `query_sqlite` refreshes Codegraph SQLite artifacts after small edits; otherwise it refuses stale rows. `artifact_build` refuses stale indexes, so run `refresh_index` after large change bursts.
+Use `refresh_index` to rebuild the snapshot, reset SQLite artifact state, or recover after a change burst exceeds automatic limits. With write access, `query_sqlite` refreshes codegraph SQLite artifacts after small edits; otherwise it refuses stale rows. `artifact_build` refuses stale indexes, so run `refresh_index` after large change bursts.
 `get_file` reads live bytes from disk after path confinement. It does not require a fresh index; only an explicit `includeGraphContext: true` checks indexed freshness and adds direct graph context, so returned file bytes and `totalLines` remain live even when `freshness` reports stale context.
 Tool schemas are flat JSON objects for broad client compatibility; argument combinations such as `refs` handle-vs-position mode are validated by the server. Legacy paired names (`callers`, `callees`, `supertypes`, `subtypes`, `deps`, and `rdeps`) remain accepted by `tools/call` as aliases, but only the unified tools appear in `tools/list`.
 
@@ -100,9 +100,10 @@ Portable handle grammar used across `search`, `get_symbol`, `packet_get`, `expla
 - `graph:<url-encoded project-relative path>`
 - review packet targets are separate quoted strings, not portable handles: `review:base=<encoded-ref>;head=<encoded-ref>`
 
-Positions use 1-based lines and 0-based UTF-16 columns, matching the rest of Codegraph's range and navigation APIs.
+Positions use 1-based lines and 0-based UTF-16 columns, matching the rest of codegraph's range and navigation APIs.
 
 MCP tool name ↔ CLI command mapping for the common handle-driven follow-ups:
+
 - `workspace_symbols` ↔ `codegraph symbols`
 - `search` ↔ `codegraph search`
 - `packet_get` ↔ `codegraph packet get`
@@ -208,7 +209,7 @@ codegraph install --target codex,claude --yes
 codegraph install --print-config codex
 ```
 
-Interactive confirmation defaults to no, and noninteractive writes require `--yes`. The installer writes only Codegraph-owned marker blocks, marker files, bundled skill payloads, or exact installer-owned MCP entries; `codegraph uninstall --target <ids> --yes` removes only those owned entries.
+Interactive confirmation defaults to no, and noninteractive writes require `--yes`. The installer writes only codegraph-owned marker blocks, marker files, bundled skill payloads, or exact installer-owned MCP entries; `codegraph uninstall --target <ids> --yes` removes only those owned entries.
 
 Restart or reload configured clients after applying changes. The installer prints restart and first-query guidance but does not claim an MCP connection until a handshake occurs.
 
@@ -231,7 +232,7 @@ Use `command: "codegraph"` when the CLI is on `PATH`. Use the full executable pa
 
 ### Generic Streamable HTTP
 
-Start one Codegraph process per repository:
+Start one codegraph process per repository:
 
 ```bash
 codegraph mcp serve --root /path/to/repo --port 7331 --warmup
@@ -344,14 +345,14 @@ OpenCode uses the `mcp` object in `opencode.json`:
 1. After `codegraph install` or an update, restart or reload the owning MCP client. A running server keeps the package version and tool catalog captured at startup.
 2. Run `codegraph doctor --json` through the same executable path and environment the client uses. Inspect package identity, `native.origin`, and `native.update`; an installed-versus-running mismatch requires a server restart, not `refresh_index`.
 3. If indexed responses report `stale`, call MCP `refresh_index`. This refreshes the repository snapshot and SQLite state, but it does not reload the CLI package or MCP tool definitions.
-4. If a stdio client cannot start Codegraph, verify that its configured `command` resolves in the client's environment or use an absolute executable path. `codegraph install --print-config <target>` prints the current manual snippet without writing.
+4. If a stdio client cannot start codegraph, verify that its configured `command` resolves in the client's environment or use an absolute executable path. `codegraph install --print-config <target>` prints the current manual snippet without writing.
 5. For HTTP, verify the client uses Streamable HTTP at `http://127.0.0.1:7331/mcp`. A non-loopback host requires an explicit server `--host`.
 
-Do not delete native cache entries or npm retirement paths while Codegraph or an owning IDE may still use them. Stop the processes first; `doctor` reports state but never performs cleanup.
+Do not delete native cache entries or npm retirement paths while codegraph or an owning IDE may still use them. Stop the processes first; `doctor` reports state but never performs cleanup.
 
 ## Operating Pattern
 
-When Codegraph MCP tools are available to an agent:
+When codegraph MCP tools are available to an agent:
 
 1. Start with `explore` for a broad question.
 2. Use `orient` when you need a compact first-turn map rather than a question answer.

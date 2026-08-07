@@ -5,7 +5,7 @@ Requirements, standalone and package channels, source checkouts, verification, r
 ## Requirements
 
 - Package and source installs require Node.js 22.16+.
-- Standalone archives bundle Node.js, production dependencies, the matching native runtime, and the Codegraph skill.
+- Standalone archives bundle Node.js, production dependencies, the matching native runtime, and the codegraph skill.
 - Published installs do not require Rust or a manual native setup step on supported targets.
 - Local source checkouts do not require Rust just to build `dist/`, but the native workspace addon only builds when Cargo is available.
 - If no compatible native artifact is available, package installs drop to reduced graph-only and regex recovery mode instead of loading JS grammars.
@@ -69,7 +69,7 @@ Add the reported launcher directory to `PATH` if it is not already present. Afte
 
 ## Option 2: Local source checkout
 
-Use this path when you are developing on Codegraph itself or want the least ambiguous first run.
+Use this path when you are developing on codegraph itself or want the least ambiguous first run.
 
 ```bash
 git clone https://github.com/lzehrung/codegraph.git
@@ -99,11 +99,11 @@ The `codegraph` bin points at the split ESM bundle under `dist/bin/`. Unbundled 
 
 The published bin stores Node's module compile cache outside the project root: `%LOCALAPPDATA%\codegraph\compile-cache` on Windows, or `$XDG_CACHE_HOME/codegraph/compile-cache` (falling back to `~/.cache/codegraph/compile-cache`) elsewhere. You can remove it at any time; the next startup may be slower, but command output is unchanged.
 
-With disk caching enabled, Codegraph creates `.codegraph-cache/index-v1/search-v1.sqlite` in each project. It contains normalized source and chunk text, so treat it as sensitive derived source data. Cache-off runs create no sidecar.
+With disk caching enabled, codegraph creates `.codegraph-cache/index-v1/search-v1.sqlite` in each project. It contains normalized source and chunk text, so treat it as sensitive derived source data. Cache-off runs create no sidecar.
 
 The first index-backed query may create or update this cache and report progress on stderr. Later queries reuse compatible state when `--root`, discovery configuration, graph options, and relevant build options match; use `--cache off` for a deliberate cold run.
 
-To remove it safely, stop Codegraph processes and delete `.codegraph-cache`. `uninit` leaves caches alone. [How it works](./how-it-works.md#cache-and-session-behavior) explains the cache mechanics.
+To remove it safely, stop codegraph processes and delete `.codegraph-cache`. `uninit` leaves caches alone. [How it works](./how-it-works.md#cache-and-session-behavior) explains the cache mechanics.
 
 ## Option 3: Install from the `@lzehrung` registry
 
@@ -120,7 +120,7 @@ Use your GitHub username and the token as the password. Then install the main pa
 npm install -g @lzehrung/codegraph
 ```
 
-Then use Codegraph-owned guidance to verify and configure clients:
+Then use codegraph-owned guidance to verify and configure clients:
 
 ```bash
 codegraph doctor
@@ -128,7 +128,7 @@ codegraph install --all --dry-run
 codegraph install --all --yes
 ```
 
-npm cannot print package-authored completion guidance without lifecycle scripts, so run the explicit Codegraph commands above after a global install or update.
+npm cannot print package-authored completion guidance without lifecycle scripts, so run the explicit codegraph commands above after a global install or update.
 
 The published path is native-first: `@lzehrung/codegraph` optionally resolves the matching native artifact automatically when a published binary exists for the current platform. Unsupported hosts use reduced graph-only mode. No separate grammar package is required.
 
@@ -154,16 +154,16 @@ Installed Windows releases copy the resolved native addon to `%LOCALAPPDATA%\cod
 
 The first upgrade from a release that loaded the addon directly requires one transition:
 
-1. Close or disconnect Codegraph MCP clients.
+1. Close or disconnect codegraph MCP clients.
 2. Run `npm install -g @lzehrung/codegraph@latest`.
 3. Restart the clients and run `codegraph doctor`.
 4. Run `codegraph install --all --dry-run`, then `codegraph install --all --yes` if the preview is correct.
 
-Later upgrades should not be blocked solely because Codegraph mapped npm's native addon. Antivirus, backup software, or stale npm retirement directories can still cause `EBUSY`; `codegraph doctor` reports matching `.codegraph-*` siblings without deleting them.
+Later upgrades should not be blocked solely because codegraph mapped npm's native addon. Antivirus, backup software, or stale npm retirement directories can still cause `EBUSY`; `codegraph doctor` reports matching `.codegraph-*` siblings without deleting them.
 
 An MCP server that survives an update continues running its captured version and warns when the installed version differs. Restart that client or shared server to use the new JavaScript runtime and native cache identity.
 
-Old cache entries are inert after every process using them has stopped. Cleanup must be explicit: close Codegraph clients first, then remove only obsolete version/hash directories under the fixed `v1` cache root; never overwrite or delete a mapped entry in place.
+Old cache entries are inert after every process using them has stopped. Cleanup must be explicit: close codegraph clients first, then remove only obsolete version/hash directories under the fixed `v1` cache root; never overwrite or delete a mapped entry in place.
 
 ## Native runtime modes
 
@@ -194,7 +194,7 @@ The initial [semantic corpus](./benchmarks/README.md#semantic-correctness-corpus
 
 ## Agent client setup
 
-After installing the CLI, run `codegraph install` on an interactive terminal. It detects supported clients, previews the exact Codegraph-owned changes, and asks once before writing:
+After installing the CLI, run `codegraph install` on an interactive terminal. It detects supported clients, previews the exact codegraph-owned changes, and asks once before writing:
 
 ```bash
 codegraph install
@@ -207,7 +207,7 @@ codegraph install --print-config codex
 
 Supported targets are `codex`, `claude`, `cursor`, `gemini`, `opencode`, `omp`, `kilo`, and `agents`. `--all` selects that full catalog in order without detection and cannot be combined with a target, `--detect`, or `--print-config`. OMP installs the managed skill under `.omp/agent/managed-skills/codegraph`; Kilo installs its skill under `.kilocode/skills/codegraph` and updates `.config/kilo/kilo.jsonc` without discarding comments.
 
-Interactive confirmation accepts only `y` or `yes` and defaults to no; noninteractive writes require `--yes`. Existing compatible MCP entries and equivalent unmarked Codex tables are preserved byte-for-byte; divergent Codegraph entries are reported as collisions without writing config. `uninstall` removes only Codegraph-owned entries and leaves compatible pre-existing entries untouched.
+Interactive confirmation accepts only `y` or `yes` and defaults to no; noninteractive writes require `--yes`. Existing compatible MCP entries and equivalent unmarked Codex tables are preserved byte-for-byte; divergent codegraph entries are reported as collisions without writing config. `uninstall` removes only codegraph-owned entries and leaves compatible pre-existing entries untouched.
 
 The lower-level `codegraph skill install --agent <name>` command remains available when you only want to copy the bundled skill. Restart or reload configured MCP clients after installation.
 

@@ -1,8 +1,8 @@
-Codegraph standalone distributions include Node.js and production npm dependencies.
+codegraph standalone distributions include Node.js and production npm dependencies.
 
 Node.js is distributed under the MIT license and includes third-party software under the terms recorded in licenses/node/LICENSE inside each standalone archive.
 
-Production npm package license files and package metadata remain in node_modules inside each standalone archive. Codegraph itself is licensed under the repository LICENSE file.
+Production npm package license files and package metadata remain in node_modules inside each standalone archive. codegraph itself is licensed under the repository LICENSE file.
 
 
 Bundled graph viewer libraries
