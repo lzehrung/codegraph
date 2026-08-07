@@ -207,7 +207,7 @@ Safety:
 
 export const SEARCH_HELP_TEXT = `codegraph search - Ranked agent search across project context
 
-Usage: codegraph search "<query>" [--root <path>] [--mode hybrid|symbol|path|text|graph|sql] [--limit <n>] [--from <file|handle>] [--depth <n>] [--no-snippets] [--report [--report-file <path>]] [--json]
+Usage: codegraph search "<query>" [--root <path>] [--mode hybrid|symbol|path|text|graph|sql] [--limit <n>] [--from <file|handle>] [--depth <n>] [--no-snippets] [--report [--report-file <path>]] [--json | --pretty]
 
 Search Modes:
   hybrid   Rank across files, symbols, chunks, SQL, and graph context
@@ -227,7 +227,7 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const GOTO_HELP_TEXT = `codegraph goto - Go to a definition
 
-Usage: codegraph goto <file>[:line[:column]] [line] [column] [--root <path>] [--json]
+Usage: codegraph goto <file>[:line[:column]] [line] [column] [--root <path>] [--json | --pretty]
 
 A file-only target succeeds when the file defines one symbol; otherwise JSON returns bounded candidates. Search-result locations and portable symbol handles can be pasted directly.
 
@@ -370,7 +370,7 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const EXPLAIN_HELP_TEXT = `codegraph explain - Explain a file, symbol, SQL object, or search handle
 
-Usage: codegraph explain <file|symbol|sql-object|handle> [--root <path>] [--max-symbols <n>] [--max-dependencies <n>] [--max-snippets <n>] [--max-duplicates <n>] [--changed-context --base <rev> --head <rev>] [--json]
+Usage: codegraph explain <file|symbol|sql-object|handle> [--root <path>] [--max-symbols <n>] [--max-dependencies <n>] [--max-snippets <n>] [--max-duplicates <n>] [--changed-context --base <rev> --head <rev>] [--json | --pretty]
 
 Targets:
   File paths, symbol names, SQL object names, and handles returned by search are accepted. Portable handles use the same grammar documented under \`codegraph packet\`. Stale-handle recovery for humans is \`codegraph symbols "<query>"\` / \`codegraph search "<query>"\`; MCP callers should use \`workspace_symbols\` / \`search\`.
@@ -383,7 +383,7 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const ARTIFACT_HELP_TEXT = `codegraph artifact - Build an agent-ready handoff bundle
 
-Usage: codegraph artifact [build] [--root <path>] [--out <dir>] [--sqlite] [--graph-json] [--report] [--questions] [--force] [--json]
+Usage: codegraph artifact [build] [--root <path>] [--out <dir>] [--sqlite] [--graph-json] [--report] [--questions] [--force] [--json | --pretty]
 
 Artifacts:
   codegraph.sqlite       Read-only SQLite graph artifact
@@ -544,7 +544,7 @@ Options:
 
 export const INDEX_HELP_TEXT = `codegraph index - Build the project symbol index
 
-Usage: codegraph index [roots...] [--root <path>] [--json | --full] [--verbose] [--cache <mode>] [--cache-strict] [--cache-verify] [--threads N] [--native <mode>] [--workers]
+Usage: codegraph index [roots...] [--root <path>] [--json | --pretty | --full] [--verbose] [--cache <mode>] [--cache-strict] [--cache-verify] [--threads N] [--native <mode>] [--workers]
 
 Output:
   Builds or refreshes the project symbol index and graph. Default output is a compact file/edge count; --json/--full includes module details.
@@ -600,63 +600,63 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const DEPS_HELP_TEXT = `codegraph deps - List dependencies for a file
 
-Usage: codegraph deps <file> [--root <path>] [--depth <n>] [--json]
+Usage: codegraph deps <file> [--root <path>] [--depth <n>] [--json | --pretty]
 
 ${SHARED_INDEX_OPTIONS_HELP}
 `;
 
 export const RDEPS_HELP_TEXT = `codegraph rdeps - List reverse dependencies for a file
 
-Usage: codegraph rdeps <file> [--root <path>] [--depth <n>] [--json]
+Usage: codegraph rdeps <file> [--root <path>] [--depth <n>] [--json | --pretty]
 
 ${SHARED_INDEX_OPTIONS_HELP}
 `;
 
 export const PATH_HELP_TEXT = `codegraph path - Find the shortest dependency path between files
 
-Usage: codegraph path <from-file> <to-file> [--root <path>] [--json]
+Usage: codegraph path <from-file> <to-file> [--root <path>] [--json | --pretty]
 
 ${SHARED_INDEX_OPTIONS_HELP}
 `;
 
 export const CYCLES_HELP_TEXT = `codegraph cycles - Detect dependency cycles
 
-Usage: codegraph cycles [roots...] [--root <path>] [--sort priority|size|fanin] [--json]
+Usage: codegraph cycles [roots...] [--root <path>] [--sort priority|size|fanin] [--json | --pretty]
 
 ${SHARED_INDEX_OPTIONS_HELP}
 `;
 
 export const HOTSPOTS_HELP_TEXT = `codegraph hotspots - Find high-complexity files
 
-Usage: codegraph hotspots [roots...] [--root <path>] [--limit <n>] [--json]
+Usage: codegraph hotspots [roots...] [--root <path>] [--limit <n>] [--json | --pretty]
 
 ${SHARED_INDEX_OPTIONS_HELP}
 `;
 
 export const UNRESOLVED_HELP_TEXT = `codegraph unresolved - List unresolved project imports
 
-Usage: codegraph unresolved [project-root] [--root <path>] [--json]
+Usage: codegraph unresolved [project-root] [--root <path>] [--json | --pretty]
 
 ${SHARED_INDEX_OPTIONS_HELP}
 `;
 
 export const APISURFACE_HELP_TEXT = `codegraph apisurface - Summarize exported API symbols
 
-Usage: codegraph apisurface [project-root] [--root <path>] [--json]
+Usage: codegraph apisurface [project-root] [--root <path>] [--json | --pretty]
 
 ${SHARED_INDEX_OPTIONS_HELP}
 `;
 
 export const GRAPH_DELTA_HELP_TEXT = `codegraph graph-delta - Report file-level graph changes
 
-Usage: codegraph graph-delta [project-root] [--root <path>] [--git-base <ref> | --changed-since <ref>] [--json]
+Usage: codegraph graph-delta [project-root] [--root <path>] [--git-base <ref> | --changed-since <ref>] [--json | --pretty]
 
 ${SHARED_INDEX_OPTIONS_HELP}
 `;
 
 export const DOCTOR_HELP_TEXT = `codegraph doctor - Inspect backend/runtime state and local graph artifacts
 
-Usage: codegraph doctor [artifact-path] [--json]
+Usage: codegraph doctor [artifact-path] [--json | --pretty]
 
 Output:
   Reports Node/runtime health, optional native backend status, and local artifact presence.
@@ -664,7 +664,7 @@ Output:
 
 export const CHUNK_HELP_TEXT = `codegraph chunk - Chunk a file for embeddings
 
-Usage: codegraph chunk <file-path> [--language <id>] [--min-tokens <n>] [--max-tokens <n>] [--text] [--json]
+Usage: codegraph chunk <file-path> [--language <id>] [--min-tokens <n>] [--max-tokens <n>] [--text] [--json | --pretty]
 `;
 
 export const SKILL_HELP_TEXT = `codegraph skill - Install or inspect the bundled agent skill
@@ -677,14 +677,14 @@ Usage:
 
 export const DUMPMOD_HELP_TEXT = `codegraph dumpmod - Dump one indexed module
 
-Usage: codegraph dumpmod <file> [--root <path>] [--json]
+Usage: codegraph dumpmod <file> [--root <path>] [--json | --pretty]
 
 ${SHARED_INDEX_OPTIONS_HELP}
 `;
 
 export const VERSION_HELP_TEXT = `codegraph version - Print the installed Codegraph version
 
-Usage: codegraph version [--json]
+Usage: codegraph version [--json | --pretty]
 `;
 
 export function helpTextForCommand(command: string, positionals: readonly string[]): string | undefined {

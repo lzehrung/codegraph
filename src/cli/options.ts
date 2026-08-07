@@ -205,7 +205,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], SHARED_BUILD_OPTIONS, {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph apisurface [project-root] [--root <path>] [--json]",
+      usage: "Usage: codegraph apisurface [project-root] [--root <path>] [--json | --pretty]",
     }),
   ],
   [
@@ -216,7 +216,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       {
         kind: "max",
         max: 1,
-        usage: "Usage: codegraph artifact [build] [--root <path>] [--out <dir>] [--json]",
+        usage: "Usage: codegraph artifact [build] [--root <path>] [--out <dir>] [--json | --pretty]",
       },
     ),
   ],
@@ -239,7 +239,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], [...SHARED_BUILD_OPTIONS, "--depth"], {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph deps <file> [--root <path>] [--depth <n>] [--json]",
+      usage: "Usage: codegraph deps <file> [--root <path>] [--depth <n>] [--json | --pretty]",
     }),
   ],
   [
@@ -273,7 +273,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], SHARED_BUILD_OPTIONS, {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph dumpmod <file> [--root <path>] [--json]",
+      usage: "Usage: codegraph dumpmod <file> [--root <path>] [--json | --pretty]",
     }),
   ],
   [
@@ -343,7 +343,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], SHARED_BUILD_OPTIONS, {
       kind: "max",
       max: 3,
-      usage: "Usage: codegraph goto <file>[:line[:column]] [line] [column] [--root <path>] [--json]",
+      usage: "Usage: codegraph goto <file>[:line[:column]] [line] [column] [--root <path>] [--json | --pretty]",
     }),
   ],
   ["graph", graphCommandSchema({ kind: "any" })],
@@ -493,7 +493,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], SHARED_BUILD_OPTIONS, {
       kind: "max",
       max: 2,
-      usage: "Usage: codegraph path <from-file> <to-file> [--root <path>] [--json]",
+      usage: "Usage: codegraph path <from-file> <to-file> [--root <path>] [--json | --pretty]",
     }),
   ],
   [
@@ -501,7 +501,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS], [...SHARED_BUILD_OPTIONS, "--depth"], {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph rdeps <file> [--root <path>] [--depth <n>] [--json]",
+      usage: "Usage: codegraph rdeps <file> [--root <path>] [--depth <n>] [--json | --pretty]",
     }),
   ],
   [
@@ -683,14 +683,14 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     commandSchema([...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--verbose"], SHARED_BUILD_OPTIONS, {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph unresolved [project-root] [--root <path>] [--json]",
+      usage: "Usage: codegraph unresolved [project-root] [--root <path>] [--json | --pretty]",
     }),
   ],
   [
     "version",
     commandSchema(["--json"], [], {
       kind: "none",
-      usage: "Usage: codegraph version [--json]",
+      usage: "Usage: codegraph version [--json | --pretty]",
     }),
   ],
 ]);
