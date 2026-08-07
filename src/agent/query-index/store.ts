@@ -10,6 +10,26 @@ import {
 
 export const QUERY_INDEX_BUSY_TIMEOUT_MS = 250;
 
+/** Final cap on hydrated query-index candidates passed into scoring. */
+export const QUERY_INDEX_CANDIDATE_ROW_LIMIT = 2000;
+
+/** Overfetch before applying the final cap so later, higher-quality matches can survive
+ * path-ordered SQL reads and be kept once we do cheap in-memory ranking. */
+const QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT = QUERY_INDEX_CANDIDATE_ROW_LIMIT * 4;
+
+export function codePointLength(value: string): number {
+  return Array.from(value).length;
+}
+
+export function escapeFtsTrigramTerm(term: string): string {
+  return `"${term.replaceAll('"', '""')}"`;
+}
+
+function normalizedCandidateLimit(limit: number, fallback = QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT): number {
+  if (!Number.isFinite(limit)) return fallback;
+  return Math.max(0, Math.min(Math.trunc(limit), QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT));
+}
+
 export type StoredQueryIndexChunk = QueryTextChunk & {
   path: string;
 };
@@ -127,25 +147,57 @@ export class QueryIndexStore {
     }
     return identities;
   }
+  /**
+   * Files whose normalized text plausibly contains at least one of the given terms.
+   * Terms of 3+ codepoints are resolved through the trigram FTS index (same substring
+   * semantics as `ftsChunkCandidates`, but indexed instead of scanning every file); only
+   * terms too short for the trigram tokenizer fall back to decompressing and scanning
+   * file text directly, and only for those short terms.
+   */
   eligibleFilePaths(normalizedTerms: readonly string[]): string[] {
     if (!normalizedTerms.length) return [];
-    if (!this.normalizedFiles) {
-      const rows = this.db.prepare("SELECT path, normalized_text FROM files ORDER BY path").all() as Array<{
-        path?: unknown;
-        normalized_text?: unknown;
-      }>;
-      const normalizedFiles = new Map<string, string>();
-      for (const row of rows) {
-        if (typeof row.path !== "string" || !(row.normalized_text instanceof Uint8Array)) {
-          throw new Error("Invalid query index file normalization.");
-        }
-        normalizedFiles.set(row.path, brotliDecompressSync(row.normalized_text).toString("utf8"));
+    const paths = new Set<string>();
+    const shortTerms: string[] = [];
+    for (const term of normalizedTerms) {
+      if (codePointLength(term) < 3) {
+        shortTerms.push(term);
+        continue;
       }
-      this.normalizedFiles = normalizedFiles;
+      const rows = this.db
+        .prepare(
+          `
+          SELECT DISTINCT files.path AS path
+          FROM chunk_search
+          JOIN chunks ON chunks.chunk_id = chunk_search.rowid
+          JOIN files ON files.file_id = chunks.file_id
+          WHERE chunk_search MATCH ?
+        `,
+        )
+        .all(escapeFtsTrigramTerm(term)) as Array<{ path?: unknown }>;
+      for (const row of rows) {
+        if (typeof row.path === "string") paths.add(row.path);
+      }
     }
-    return [...this.normalizedFiles]
-      .filter(([, normalizedText]) => normalizedTerms.some((term) => normalizedText.includes(term)))
-      .map(([file]) => file);
+    if (shortTerms.length) {
+      if (!this.normalizedFiles) {
+        const rows = this.db.prepare("SELECT path, normalized_text FROM files ORDER BY path").all() as Array<{
+          path?: unknown;
+          normalized_text?: unknown;
+        }>;
+        const normalizedFiles = new Map<string, string>();
+        for (const row of rows) {
+          if (typeof row.path !== "string" || !(row.normalized_text instanceof Uint8Array)) {
+            throw new Error("Invalid query index file normalization.");
+          }
+          normalizedFiles.set(row.path, brotliDecompressSync(row.normalized_text).toString("utf8"));
+        }
+        this.normalizedFiles = normalizedFiles;
+      }
+      for (const [file, normalizedText] of this.normalizedFiles) {
+        if (shortTerms.some((term) => normalizedText.includes(term))) paths.add(file);
+      }
+    }
+    return [...paths].sort((left, right) => left.localeCompare(right));
   }
 
   replaceFiles(
@@ -270,7 +322,8 @@ export class QueryIndexStore {
     }
   }
 
-  ftsChunkCandidates(query: string): StoredQueryIndexChunk[] {
+  ftsChunkCandidates(query: string, limit = QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT): StoredQueryIndexChunk[] {
+    const normalizedLimit = normalizedCandidateLimit(limit);
     const rows = this.db
       .prepare(
         `
@@ -281,39 +334,62 @@ export class QueryIndexStore {
         JOIN files ON files.file_id = chunks.file_id
         WHERE chunk_search MATCH ?
         ORDER BY files.path, chunks.ordinal
+        LIMIT ?
       `,
       )
-      .all(query) as Array<Record<string, unknown>>;
+      .all(query, normalizedLimit) as Array<Record<string, unknown>>;
     return rows.flatMap((row) => {
       const chunk = storedCandidateChunkFromRow(row);
       return chunk ? [chunk] : [];
     });
   }
 
-  substringChunkCandidates(query: string): StoredQueryIndexChunk[] {
-    const rows = this.db
-      .prepare(
-        `
-        SELECT files.path AS path, chunks.ordinal, chunks.kind, chunks.name,
-               chunks.start_line, chunks.end_line, chunks.text, chunks.normalized_text
-        FROM chunks
-        JOIN files ON files.file_id = chunks.file_id
-        WHERE instr(chunks.normalized_text, ?) > 0
-        ORDER BY files.path, chunks.ordinal
-      `,
-      )
-      .all(query) as Array<Record<string, unknown>>;
-    return rows.flatMap((row) => {
-      const chunk = storedCandidateChunkFromRow(row);
-      return chunk ? [chunk] : [];
-    });
-  }
-  compactChunkCandidates(query: string, paths: readonly string[]): StoredQueryIndexChunk[] {
+  substringChunkCandidates(
+    query: string,
+    paths: readonly string[],
+    limit = QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT,
+  ): StoredQueryIndexChunk[] {
+    const normalizedLimit = normalizedCandidateLimit(limit);
     const candidates: StoredQueryIndexChunk[] = [];
     const batchSize = 500;
     for (let offset = 0; offset < paths.length; offset += batchSize) {
       const batch = paths.slice(offset, offset + batchSize);
       const placeholders = batch.map(() => "?").join(", ");
+      const remaining = normalizedLimit - candidates.length;
+      if (remaining <= 0) break;
+      const rows = this.db
+        .prepare(
+          `
+          SELECT files.path AS path, chunks.ordinal, chunks.kind, chunks.name,
+                 chunks.start_line, chunks.end_line, chunks.text, chunks.normalized_text
+          FROM chunks
+          JOIN files ON files.file_id = chunks.file_id
+          WHERE files.path IN (${placeholders})
+            AND instr(chunks.normalized_text, ?) > 0
+          ORDER BY files.path, chunks.ordinal
+          LIMIT ?
+        `,
+        )
+        .all(...batch, query, remaining) as Array<Record<string, unknown>>;
+      for (const row of rows) {
+        const chunk = storedCandidateChunkFromRow(row);
+        if (chunk) candidates.push(chunk);
+        if (candidates.length >= normalizedLimit) break;
+      }
+      if (candidates.length >= normalizedLimit) break;
+    }
+    return candidates;
+  }
+
+  compactChunkCandidates(query: string, paths: readonly string[], limit = QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT): StoredQueryIndexChunk[] {
+    const normalizedLimit = normalizedCandidateLimit(limit);
+    const candidates: StoredQueryIndexChunk[] = [];
+    const batchSize = 500;
+    for (let offset = 0; offset < paths.length; offset += batchSize) {
+      const batch = paths.slice(offset, offset + batchSize);
+      const placeholders = batch.map(() => "?").join(", ");
+      const remaining = normalizedLimit - candidates.length;
+      if (remaining <= 0) break;
       const rows = this.db
         .prepare(
           `
@@ -324,17 +400,19 @@ export class QueryIndexStore {
           WHERE files.path IN (${placeholders})
             AND instr(replace(chunks.normalized_text, ' ', ''), ?) > 0
           ORDER BY files.path, chunks.ordinal
+          LIMIT ?
         `,
         )
-        .all(...batch, query) as Array<Record<string, unknown>>;
+        .all(...batch, query, remaining) as Array<Record<string, unknown>>;
       for (const row of rows) {
         const chunk = storedCandidateChunkFromRow(row);
         if (chunk) candidates.push(chunk);
+        if (candidates.length >= normalizedLimit) break;
       }
+      if (candidates.length >= normalizedLimit) break;
     }
     return candidates;
   }
-
   checkpoint(): void {
     this.db.pragma("wal_checkpoint(TRUNCATE)");
   }
