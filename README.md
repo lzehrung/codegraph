@@ -367,6 +367,11 @@ The honest boundaries matter:
 - `--fast-graph` is an explicit speed/accuracy tradeoff for plain JavaScript and TypeScript import extraction.
 - The checked `explore` benchmark is a bounded evidence-retrieval benchmark, not a universal performance claim.
 - The separate [semantic corpus](./docs/benchmarks/README.md#semantic-correctness-corpus) reports reviewed definition, reference, dependency, and candidate-test results by runtime mode with an explicit support denominator. Its initial baseline is informational.
+Mitigations are explicit too:
+
+- The repository keeps real-language fixtures and parity suites for definitions, references, dependencies, chunking, MCP, and native-vs-reduced behavior.
+- The semantic corpus publishes reviewed scenarios with an explicit support denominator instead of blanket parity claims.
+- Structured output keeps freshness, confidence, and omission counts visible instead of pretending unsupported cases were resolved.
 
 Run `codegraph doctor` to confirm the active runtime. Use `--report` on graph, index, search, inspect, or review commands when backend and cache behavior need to be auditable.
 
