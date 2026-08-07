@@ -1,5 +1,7 @@
 # Codegraph
 
+![Codegraph](./assets/codegraph-logo.png)
+
 [![Release](https://img.shields.io/github/v/release/lzehrung/codegraph?display_name=tag&sort=semver)](https://github.com/lzehrung/codegraph/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D22.16-brightgreen.svg)](./package.json)
