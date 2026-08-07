@@ -82,7 +82,6 @@ function normalizeBuildOptions(options?: BuildOptions): Record<string, unknown> 
     cacheDir: options.cacheDir ? path.resolve(options.cacheDir) : undefined,
     cacheStrict: options.cacheStrict,
     useBloomFilters: options.useBloomFilters,
-    preset: options.preset,
     graph: options.graph
       ? {
           fast: options.graph.fast,

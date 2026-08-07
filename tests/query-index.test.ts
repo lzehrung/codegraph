@@ -87,7 +87,7 @@ describe("persistent query index", () => {
     const initialSession = createSession(root);
     const initial = await search(initialSession, root, "validateUser");
     const initialSnapshot = await initialSession.loadProject();
-    expect(initialSnapshot.buildReport?.queryIndex).toMatchObject({
+    expect(initialSnapshot.buildReport?.queryIndex, JSON.stringify(initialSnapshot.buildReport?.queryIndex)).toMatchObject({
       sidecarState: "created",
       filesRead: 4,
       filesAdded: 4,
@@ -153,8 +153,8 @@ describe("persistent query index", () => {
       )
       .get() as { bytes?: unknown } | undefined;
     database.close();
-    expect(typeof sourceRow?.bytes).toBe("number");
-    expect(typeof storedRow?.bytes).toBe("number");
+    expect(typeof sourceRow?.bytes, JSON.stringify(sourceRow)).toBe("number");
+    expect(typeof storedRow?.bytes, JSON.stringify(storedRow)).toBe("number");
     const sourceBytes = typeof sourceRow?.bytes === "number" ? sourceRow.bytes : 0;
     const storedBytes = typeof storedRow?.bytes === "number" ? storedRow.bytes : Number.POSITIVE_INFINITY;
     expect(storedBytes / sourceBytes).toBeLessThanOrEqual(2.5);
@@ -201,7 +201,7 @@ describe("persistent query index", () => {
     setup.close();
     expect(beforeAutoVacuum?.auto_vacuum).toBe(0);
     const beforeRatio = (beforeFreelist?.freelist_count ?? 0) / (beforePages?.page_count ?? 1);
-    expect(beforeRatio).toBeGreaterThan(0.15);
+    expect(beforeRatio, JSON.stringify({ beforeFreelist, beforePages })).toBeGreaterThan(0.15);
 
     // Any subsequent write should detect the stale mode, switch to incremental auto-vacuum,
     // and reclaim the accumulated free space via a one-time VACUUM.
@@ -272,7 +272,10 @@ describe("persistent query index", () => {
     expect(refreshed.freshness.state).toBe("refreshed");
     expect(refreshed.results.some((result) => result.file === "src/auth.ts")).toBe(true);
     const snapshot = await session.loadProject();
-    expect(snapshot.buildReport?.queryIndex).toMatchObject({ sidecarState: "updated", filesUpdated: 1 });
+    expect(snapshot.buildReport?.queryIndex, JSON.stringify(snapshot.buildReport?.queryIndex)).toMatchObject({
+      sidecarState: "updated",
+      filesUpdated: 1,
+    });
   });
 
   it("updates only added and modified files while removing deleted rows", async () => {
@@ -288,7 +291,7 @@ describe("persistent query index", () => {
 
     const changed = await search(initialSession, root, "token value");
     const snapshot = await initialSession.loadProject();
-    expect(snapshot.buildReport?.queryIndex).toMatchObject({
+    expect(snapshot.buildReport?.queryIndex, JSON.stringify(snapshot.buildReport?.queryIndex)).toMatchObject({
       sidecarState: "updated",
       filesRead: 2,
       filesAdded: 1,
@@ -436,6 +439,46 @@ describe("persistent query index", () => {
     expect(snapshot.buildReport?.queryIndex).toMatchObject({
       sidecarState: "unavailable",
       fallbackReason: "forced worker failure",
+    });
+    expect(response.results.some((result) => result.file === "src/auth.ts")).toBe(true);
+  });
+
+  it("indexes the rest of a batch when a single file cannot be prepared", async () => {
+    const root = await createRepo();
+
+    const prepared = await queryIndexWorkerPool.prepareQueryIndexFilesInWorker(root, [
+      { relativePath: "src/auth.ts", sourceIdentity: "identity-auth" },
+      { relativePath: "src/vanished.ts", sourceIdentity: "identity-vanished" },
+    ]);
+
+    expect(prepared?.map((file) => file.path)).toEqual(["src/auth.ts"]);
+  });
+
+  it("reports no prepared files when every file in a batch fails", async () => {
+    const root = await createRepo();
+
+    const prepared = await queryIndexWorkerPool.prepareQueryIndexFilesInWorker(root, [
+      { relativePath: "src/vanished-one.ts", sourceIdentity: "identity-one" },
+      { relativePath: "src/vanished-two.ts", sourceIdentity: "identity-two" },
+    ]);
+
+    expect(prepared).toBeNull();
+  });
+
+  it("keeps the sidecar usable and records the omission when a file is skipped", async () => {
+    const root = await createRepo();
+    const realPrepare = queryIndexWorkerPool.prepareQueryIndexFilesInWorker;
+    vi.spyOn(queryIndexWorkerPool, "prepareQueryIndexFilesInWorker").mockImplementation(
+      async (projectRoot, files) => await realPrepare(projectRoot, files.slice(1)),
+    );
+
+    const session = createSession(root);
+    const response = await search(session, root, "validate user");
+    const snapshot = await session.loadProject();
+
+    expect(snapshot.buildReport?.queryIndex, JSON.stringify(snapshot.buildReport?.queryIndex)).toMatchObject({
+      sidecarState: "created",
+      filesSkipped: 1,
     });
     expect(response.results.some((result) => result.file === "src/auth.ts")).toBe(true);
   });

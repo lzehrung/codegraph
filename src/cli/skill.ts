@@ -177,6 +177,38 @@ function buildSkillDoctorReport(requestedTargetDir?: string, requestedAgent?: st
     },
   };
 }
+function formatSkillDoctorSummary(report: SkillDoctorReport): string {
+  const lines = [
+    `Package root: ${report.packageRoot}`,
+    `Bundled skill: ${report.bundledSkillDir ?? "missing"}`,
+    `Install target: ${report.installTargetDir}`,
+    `CLI on PATH: ${report.cliAvailableOnPath ? "yes" : "no"}`,
+    `Installed skill dir: ${report.installedSkill.targetDirExists ? "present" : "missing"}`,
+    `Installed SKILL.md: ${report.installedSkill.skillFilePresent ? report.installedSkill.skillFilePath : "missing"}`,
+  ];
+  if (report.agent) {
+    lines.splice(2, 0, `Agent: ${report.agent}`);
+  }
+  if (report.requestedTargetDir) {
+    lines.splice(3, 0, `Requested target: ${report.requestedTargetDir}`);
+  }
+  return lines.join("\n");
+}
+
+function formatSkillInstallSummary(output: {
+  installed: boolean;
+  agent?: SkillInstallAgent;
+  targetDir: string;
+  skillFilePath: string;
+  sourceDir: string;
+}): string {
+  const lines = ["Installed Codegraph skill.", `Target: ${output.targetDir}`, `Skill file: ${output.skillFilePath}`, `Source: ${output.sourceDir}`];
+  if (output.agent) {
+    lines.splice(1, 0, `Agent: ${output.agent}`);
+  }
+  return lines.join("\n");
+}
+
 
 export type SkillCommandContext = {
   positionals: string[];
@@ -205,7 +237,7 @@ export async function handleSkillCommand(context: SkillCommandContext): Promise<
   }
 
   if (subcommand === "doctor") {
-    writeCliOutput(context, buildSkillDoctorReport(targetOpt, agentOpt));
+    writeCliOutput(context, buildSkillDoctorReport(targetOpt, agentOpt), formatSkillDoctorSummary);
     return;
   }
 
@@ -218,17 +250,21 @@ export async function handleSkillCommand(context: SkillCommandContext): Promise<
     const resolvedTarget = resolveSkillInstallTarget(targetOpt, agentOpt);
     const targetDir = resolvedTarget.targetDir;
     await copyDirectoryRecursive(bundledSkillDir, targetDir, overwrite);
-    writeCliOutput(context, {
-      ...(resolvedTarget.agent
-        ? {
-            agent: resolvedTarget.agent,
-          }
-        : {}),
-      installed: true,
-      targetDir: normalizePathForDisplay(targetDir),
-      skillFilePath: normalizePathForDisplay(path.join(targetDir, "SKILL.md")),
-      sourceDir: normalizePathForDisplay(bundledSkillDir),
-    });
+    writeCliOutput(
+      context,
+      {
+        ...(resolvedTarget.agent
+          ? {
+              agent: resolvedTarget.agent,
+            }
+          : {}),
+        installed: true,
+        targetDir: normalizePathForDisplay(targetDir),
+        skillFilePath: normalizePathForDisplay(path.join(targetDir, "SKILL.md")),
+        sourceDir: normalizePathForDisplay(bundledSkillDir),
+      },
+      formatSkillInstallSummary,
+    );
     return;
   }
 

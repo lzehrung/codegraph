@@ -941,6 +941,7 @@ export function createCodegraphMcpProtocolServer(
   handlers: CodegraphMcpHandlers,
   runtimeIdentity: CodegraphRuntimeIdentity = captureCodegraphRuntimeIdentity(getCurrentNativeBindingOrigin()),
   installedVersion: InstalledVersionChecker = createInstalledVersionChecker(runtimeIdentity),
+  toolCallState: { firstToolCallPending: boolean } = { firstToolCallPending: true },
 ): Server {
   const server = new Server(
     {
@@ -948,12 +949,41 @@ export function createCodegraphMcpProtocolServer(
       version: runtimeIdentity.runningVersion,
     },
     {
-      capabilities: { tools: {} },
+      capabilities: { tools: {}, logging: {} },
     },
   );
 
   server.setRequestHandler("tools/list", () => ({ tools: MCP_TOOLS }));
-  server.setRequestHandler("tools/call", async (request): Promise<CallToolResult> => {
+  server.setRequestHandler("tools/call", async (request, ctx): Promise<CallToolResult> => {
+    const isFirstToolCall = toolCallState.firstToolCallPending;
+    toolCallState.firstToolCallPending = false;
+    const progressToken = isFirstToolCall ? getToolCallProgressToken(request.params) : undefined;
+    const emitFirstToolCallVisibility = async (
+      level: "info" | "error",
+      progress: number,
+      message: string,
+    ): Promise<void> => {
+      if (!isFirstToolCall) return;
+      try {
+        await ctx.mcpReq.log(level, message, "codegraph");
+        if (progressToken !== undefined) {
+          await ctx.mcpReq.notify({
+            method: "notifications/progress",
+            params: {
+              progressToken,
+              progress,
+              total: 1,
+              message,
+            },
+          });
+        }
+      } catch (error) {
+        console.error(
+          `[codegraph] MCP cold-start visibility failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    };
+    await emitFirstToolCallVisibility("info", 0, `Codegraph is warming the first tool call for '${request.params.name}'.`);
     try {
       installedVersion.check();
     } catch (error) {
@@ -961,8 +991,22 @@ export function createCodegraphMcpProtocolServer(
         `[codegraph] installed-version check failed: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    const result = await callMcpTool(handlers, request.params.name, request.params.arguments ?? {});
-    return toToolResult(result);
+    try {
+      const result = await callMcpTool(handlers, request.params.name, request.params.arguments ?? {});
+      await emitFirstToolCallVisibility(
+        "info",
+        1,
+        `Codegraph finished warming the first tool call for '${request.params.name}'.`,
+      );
+      return toToolResult(result);
+    } catch (error) {
+      await emitFirstToolCallVisibility(
+        "error",
+        1,
+        `Codegraph failed while warming the first tool call for '${request.params.name}'.`,
+      );
+      throw error;
+    }
   });
 
   return server;
@@ -973,7 +1017,8 @@ function createCodegraphMcpProtocolFactory(
   runtimeIdentity: CodegraphRuntimeIdentity,
 ): () => Server {
   const installedVersion = createInstalledVersionChecker(runtimeIdentity);
-  return () => createCodegraphMcpProtocolServer(handlers, runtimeIdentity, installedVersion);
+  const toolCallState = { firstToolCallPending: true };
+  return () => createCodegraphMcpProtocolServer(handlers, runtimeIdentity, installedVersion, toolCallState);
 }
 
 export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Promise<void> {
@@ -1318,6 +1363,19 @@ function toToolResult(value: unknown): CallToolResult {
       },
     ],
   };
+}
+const mcpProgressTokenSchema = z.union([z.string(), z.number()]);
+const toolCallMetaSchema = z
+  .object({
+    _meta: z.object({ progressToken: mcpProgressTokenSchema.optional() }).passthrough().optional(),
+    progressToken: mcpProgressTokenSchema.optional(),
+  })
+  .passthrough();
+
+function getToolCallProgressToken(params: unknown): string | number | undefined {
+  const parsed = toolCallMetaSchema.safeParse(params);
+  if (!parsed.success) return undefined;
+  return parsed.data._meta?.progressToken ?? parsed.data.progressToken;
 }
 
 const searchSchema = z.object({

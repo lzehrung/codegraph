@@ -1,15 +1,15 @@
 /**
- * Presets for common workflows
+ * Session preset helpers for common Codegraph workflows.
  *
- * Simplifies the API by providing pre-configured options for typical use cases:
- * - code-review: Balanced speed/accuracy for PR reviews
- * - ci-fast: Maximum speed for CI/CD pipelines
- * - development: Fast feedback for local development
- * - production: Maximum accuracy for production analysis
+ * These presets remain part of the library session API and preconfigure
+ * build options plus timeout and incremental defaults for:
+ * - code-review
+ * - ci-fast
+ * - development
+ * - production
  */
 
 import { type BuildOptions } from "./indexer/types.js";
-import type { ImpactOptions } from "./impact/types.js";
 import { isPlainRecord } from "./util/guards.js";
 
 export type PresetName = "code-review" | "ci-fast" | "development" | "production";
@@ -21,16 +21,9 @@ export type SessionPresetOptions = {
 };
 
 /**
- * Build option presets
+ * Internal build option presets used by the public session presets.
  */
-export const BUILD_PRESETS: Record<PresetName, BuildOptions> = {
-  /**
-   * Code Review preset
-   * - Balanced speed and accuracy
-   * - Incremental caching enabled
-   * - Bloom filters for fast reference scanning
-   * - Content-hash for reliability
-   */
+const SESSION_BUILD_PRESETS: Record<PresetName, BuildOptions> = {
   "code-review": {
     cache: "disk",
     cacheStrict: true,
@@ -42,31 +35,17 @@ export const BUILD_PRESETS: Record<PresetName, BuildOptions> = {
     },
   },
 
-  /**
-   * CI Fast preset
-   * - Maximum speed for CI/CD
-   * - Memory cache only (no disk I/O)
-   * - Fast graph mode
-   * - Fewer threads to avoid I/O bottlenecks
-   */
   "ci-fast": {
     cache: "memory",
-    cacheStrict: false, // mtime is faster
+    cacheStrict: false,
     useBloomFilters: true,
     threads: 4,
     graph: {
-      fast: true, // Use regex-based extraction for JS/TS
+      fast: true,
       resolveNodeModules: false,
     },
   },
 
-  /**
-   * Development preset
-   * - Fast feedback for local development
-   * - Memory cache for speed
-   * - Bloom filters enabled
-   * - No strict caching (faster)
-   */
   development: {
     cache: "memory",
     cacheStrict: false,
@@ -78,13 +57,6 @@ export const BUILD_PRESETS: Record<PresetName, BuildOptions> = {
     },
   },
 
-  /**
-   * Production preset
-   * - Maximum accuracy
-   * - Disk cache with strict validation
-   * - Full parsing (no fast mode)
-   * - More threads for thoroughness
-   */
   production: {
     cache: "disk",
     cacheStrict: true,
@@ -99,99 +71,53 @@ export const BUILD_PRESETS: Record<PresetName, BuildOptions> = {
 };
 
 /**
- * Impact analysis presets
- */
-export const IMPACT_PRESETS: Record<PresetName, Partial<ImpactOptions>> = {
-  "code-review": {
-    depth: 2,
-    maxRefs: 1000,
-    includeTests: false,
-    scope: "all",
-    refContext: "line",
-    refContextLines: 3,
-    verifyReferences: true,
-  },
-
-  "ci-fast": {
-    depth: 1,
-    maxRefs: 500,
-    includeTests: false,
-    scope: "imported", // Only exported symbols
-    // No context snippets - don't set refContext
-    verifyReferences: false,
-  },
-
-  development: {
-    depth: 2,
-    maxRefs: 500,
-    includeTests: true,
-    scope: "all",
-    refContext: "line",
-    refContextLines: 3,
-    verifyReferences: false,
-  },
-
-  production: {
-    depth: 3,
-    maxRefs: 2000,
-    includeTests: true,
-    scope: "all",
-    refContext: "block",
-    refBlockMaxLines: 30,
-    verifyReferences: true,
-  },
-};
-
-/**
  * Session presets
  */
 export const SESSION_PRESETS: Record<PresetName, SessionPresetOptions> = {
   "code-review": {
-    buildOptions: BUILD_PRESETS["code-review"],
-    timeout: 30 * 60 * 1000, // 30 minutes
+    buildOptions: SESSION_BUILD_PRESETS["code-review"],
+    timeout: 30 * 60 * 1000,
     incremental: true,
   },
 
   "ci-fast": {
-    buildOptions: BUILD_PRESETS["ci-fast"],
-    timeout: 10 * 60 * 1000, // 10 minutes
-    incremental: false, // Full rebuild for CI
+    buildOptions: SESSION_BUILD_PRESETS["ci-fast"],
+    timeout: 10 * 60 * 1000,
+    incremental: false,
   },
 
   development: {
-    buildOptions: BUILD_PRESETS["development"],
-    timeout: 60 * 60 * 1000, // 1 hour
+    buildOptions: SESSION_BUILD_PRESETS["development"],
+    timeout: 60 * 60 * 1000,
     incremental: true,
   },
 
   production: {
-    buildOptions: BUILD_PRESETS["production"],
-    timeout: 2 * 60 * 60 * 1000, // 2 hours
+    buildOptions: SESSION_BUILD_PRESETS["production"],
+    timeout: 2 * 60 * 60 * 1000,
     incremental: true,
   },
 };
 
-/**
- * Get build options for a preset
- */
-export function getBuildPreset(preset: PresetName): BuildOptions {
-  return { ...BUILD_PRESETS[preset] };
-}
-
-/**
- * Get impact options for a preset
- */
-export function getImpactPreset(preset: PresetName): Partial<ImpactOptions> {
-  return { ...IMPACT_PRESETS[preset] };
+function cloneBuildOptions(options: BuildOptions | undefined): BuildOptions | undefined {
+  if (!options) return undefined;
+  return {
+    ...options,
+    ...(options.graph ? { graph: { ...options.graph } } : {}),
+  };
 }
 
 /**
  * Get session options for a preset
  */
 export function getSessionPreset(preset: PresetName, root: string): SessionPresetOptions & { root: string } {
+  const sessionPreset = SESSION_PRESETS[preset];
+  const buildOptions = cloneBuildOptions(sessionPreset.buildOptions);
   return {
     root,
-    ...SESSION_PRESETS[preset],
+    ...(sessionPreset.timeout !== undefined ? { timeout: sessionPreset.timeout } : {}),
+    ...(sessionPreset.incremental !== undefined ? { incremental: sessionPreset.incremental } : {}),
+    ...(buildOptions ? { buildOptions } : {}),
   };
 }
 
@@ -210,7 +136,6 @@ export function mergePreset<T extends Record<string, unknown>>(preset: T, custom
 
     if (customValue === undefined) continue;
 
-    // Deep merge for nested objects
     if (isPlainRecord(customValue) && isPlainRecord(presetValue)) {
       merged[key] = { ...presetValue, ...customValue };
     } else {

@@ -10,6 +10,7 @@ import {
   type InstallChange,
   type InstallResult,
   type InstallTargetId,
+  type TargetDetection,
   type UninstallResult,
 } from "../installer/registry.js";
 import { writeCliOutput } from "./pretty.js";
@@ -42,6 +43,15 @@ type InstallerOutput = (InstallResult | UninstallResult) & {
   health?: InstallerHealth;
   guidance?: string[];
 };
+function formatDetectedTargets(targetIds: InstallTargetId[], detections: TargetDetection[]): string {
+  const lines = ["Install target detection:"];
+  for (const [index, detection] of detections.entries()) {
+    const targetId = targetIds[index] ?? `target-${index + 1}`;
+    lines.push(`- ${targetId}: ${detection.detected ? "detected" : "not detected"} (${detection.reason})`);
+  }
+  return lines.join("\n");
+}
+
 
 export async function handleInstallerCommand(context: InstallerCommandContext): Promise<void> {
   const installingAll = context.command === "install" && context.hasFlag("--all");
@@ -58,7 +68,12 @@ export async function handleInstallerCommand(context: InstallerCommandContext): 
   const requestedTargetIds = installingAll ? catalog.map((target) => target.id) : parseInstallerTargets(context);
   const baseOptions = requestedTargetIds ? { targetIds: requestedTargetIds } : {};
   if (context.hasFlag("--detect")) {
-    writeCliOutput(context, { targets: await detectInstallTargets(baseOptions) });
+    const targets = await detectInstallTargets(baseOptions);
+    if (context.hasFlag("--json")) {
+      context.writeJSONLine({ targets });
+    } else {
+      context.writeStdoutLine(formatDetectedTargets(catalog.map((target) => target.id), targets));
+    }
     return;
   }
 

@@ -200,17 +200,8 @@ export {
   type SessionStaleReason,
 } from "./session.js";
 
-/** Preset helpers for build, impact, and session defaults. */
-export {
-  getBuildPreset,
-  getImpactPreset,
-  getSessionPreset,
-  mergePreset,
-  BUILD_PRESETS,
-  IMPACT_PRESETS,
-  SESSION_PRESETS,
-  type PresetName,
-} from "./presets.js";
+/** Session preset helpers. */
+export { getSessionPreset, mergePreset, SESSION_PRESETS, type PresetName } from "./presets.js";
 
 /** Partial-result helpers for returning usable data with recoverable errors. */
 export {

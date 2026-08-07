@@ -277,6 +277,7 @@ const customSession = await createCodeReviewSession({
   },
 });
 ```
+Session presets are a library-session convenience only. There is no CLI `--preset` flag or config key.
 
 Available presets:
 
@@ -284,7 +285,6 @@ Available presets:
 - `ci-fast`: maximum speed for CI and CD
 - `development`: fast feedback for local development
 - `production`: maximum accuracy
-
 ### Managing multiple sessions
 
 ```ts

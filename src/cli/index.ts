@@ -20,6 +20,31 @@ type IndexCommandReport = {
   index?: BuildReport;
 };
 
+type IndexPrettyOutput = {
+  files: number;
+  edges: number;
+  modules?: Array<{
+    file: string;
+    locals: readonly unknown[];
+    exports: readonly unknown[];
+    imports: readonly unknown[];
+  }>;
+};
+
+function formatIndexOutput(output: IndexPrettyOutput): string {
+  const lines = [`Indexed ${output.files} file(s) with ${output.edges} edge(s).`];
+  if (!output.modules) {
+    return lines.join("\n");
+  }
+  lines.push("Modules:");
+  for (const mod of output.modules) {
+    lines.push(
+      `- ${mod.file}: ${mod.locals.length} locals, ${mod.exports.length} exports, ${mod.imports.length} imports`,
+    );
+  }
+  return lines.join("\n");
+}
+
 export type IndexCommandContext = {
   projectRootFs: string;
   includeRootsAbs: string[];
@@ -99,16 +124,24 @@ export async function handleIndexCommand(context: IndexCommandContext): Promise<
       exports: m.exports,
       imports: m.imports,
     }));
-    writeCliOutput(context, {
-      files: modules.length,
-      edges: index.graph.edges.length,
-      modules,
-    });
+    writeCliOutput(
+      context,
+      {
+        files: modules.length,
+        edges: index.graph.edges.length,
+        modules,
+      },
+      formatIndexOutput,
+    );
   } else {
-    writeCliOutput(context, {
-      files: [...index.byFile.keys()].length,
-      edges: index.graph.edges.length,
-    });
+    writeCliOutput(
+      context,
+      {
+        files: [...index.byFile.keys()].length,
+        edges: index.graph.edges.length,
+      },
+      formatIndexOutput,
+    );
   }
   if (verbose && indexReport) {
     const cache = indexReport.cache;

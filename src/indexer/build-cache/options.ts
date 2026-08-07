@@ -10,7 +10,6 @@ export type ManifestBuildOptions = {
   cache?: BuildOptions["cache"];
   cacheStrict?: boolean;
   useBloomFilters?: boolean;
-  preset?: BuildOptions["preset"];
   incrementalStrict?: boolean;
   nativeRuntimeFingerprint?: string;
   discovery?: {
@@ -29,7 +28,6 @@ function normalizeManifestBuildOptions(opts?: ManifestBuildOptions): ManifestBui
     cache: opts?.cache ?? "off",
     cacheStrict: opts?.cacheStrict ?? true,
     useBloomFilters: opts?.useBloomFilters ?? true,
-    preset: opts?.preset,
     incrementalStrict: opts?.incrementalStrict ?? false,
     ...(opts?.nativeRuntimeFingerprint ? { nativeRuntimeFingerprint: opts.nativeRuntimeFingerprint } : {}),
     ...(opts?.discovery ? { discovery: opts.discovery } : {}),
@@ -66,7 +64,6 @@ function normalizeBuildOptions(opts?: BuildOptions): ManifestBuildOptions {
     cache: opts?.cache ?? "off",
     cacheStrict: opts?.cacheStrict ?? true,
     useBloomFilters: opts?.useBloomFilters ?? true,
-    preset: opts?.preset,
     incrementalStrict: opts?.incrementalStrict ?? false,
     nativeRuntimeFingerprint: getNativeRuntimeFingerprint(opts?.native),
     ...(discovery ? { discovery } : {}),
@@ -141,7 +138,6 @@ export function diffBuildOptions(
   if (normalizedManifest.useBloomFilters !== normalizedCurrent.useBloomFilters) {
     diffs.push("useBloomFilters");
   }
-  if (normalizedManifest.preset !== normalizedCurrent.preset) diffs.push("preset");
   if (normalizedManifest.incrementalStrict !== normalizedCurrent.incrementalStrict) {
     diffs.push("incrementalStrict");
   }
