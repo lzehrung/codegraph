@@ -1,6 +1,6 @@
 {
   "name": "@lzehrung/codegraph",
-  "version": "1.8.112",
+  "version": "1.8.113",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -183,6 +183,6 @@
     "@hono/node-server": "^2.0.5"
   },
   "optionalDependencies": {
-    "@lzehrung/codegraph-native": "^1.8.91"
+    "@lzehrung/codegraph-native": "^1.8.92"
   }
 }
