@@ -75,7 +75,7 @@ The server exposes the same bounded primitives as the CLI and library session la
 ## Session lifecycle
 
 MCP keeps one Codegraph session warm for the configured root. That makes follow-up calls cheaper than separate CLI invocations. Startup is lazy unless `--warmup` or `--warmup-symbols` is passed.
-Before index-backed tool calls, MCP checks whether discovered files changed since the warm snapshot. Small changes refresh the session automatically, and responses include `freshness.state` as `fresh`, `refreshed`, or `stale`; stale responses also include `changedFileCount`, `omittedChangedFileCount`, and a bounded changed-file sample.
+On the first `tools/call`, Codegraph can emit `notifications/message` and, when the request includes `_meta.progressToken`, `notifications/progress` before the final result. Stdio carries them inline, and modern Streamable HTTP clients that accept `text/event-stream` receive them as a stream.
 
 Text and hybrid searches reuse a prepared handle for `.codegraph-cache/index-v1/search-v1.sqlite` and cache identical responses by snapshot identity and request options. A detected refresh or explicit `refresh_index` closes the handle and clears cached responses before the next snapshot.
 

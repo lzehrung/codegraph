@@ -4,6 +4,7 @@ import { LANG_CONFIGS } from "../bootstrap/treeSitterLanguages.js";
 import { chunkFile } from "../chunking/chunkFile.js";
 import { chunkSFCFile } from "../chunking/chunkSFC.js";
 import { chunkTextFile } from "../chunking/chunkTextFile.js";
+import type { Chunk } from "../chunking/types.js";
 import { supportForFile } from "../languages.js";
 import { parseSourceLocationInput } from "../util/sourceLocation.js";
 import type {
@@ -35,6 +36,23 @@ const chunkLanguageHelp = Array.from(
 function normalizeChunkLanguageId(languageId: string): string {
   return chunkLanguageAliases[languageId] ?? languageId;
 }
+function formatChunkLine(chunk: Chunk): string {
+  const lineRange = chunk.startLine === chunk.endLine ? `${chunk.startLine}` : `${chunk.startLine}-${chunk.endLine}`;
+  const location = `${chunk.filePath ?? "(input)"}:${lineRange}`;
+  let descriptor = chunk.type;
+  if (chunk.name) {
+    descriptor = `${descriptor} ${chunk.name}`;
+  }
+  return `- ${location} ${descriptor} (${chunk.tokenCount} tokens)`;
+}
+
+function formatChunkSummary(chunks: readonly Chunk[]): string {
+  if (!chunks.length) {
+    return "No chunks.";
+  }
+  return [`${chunks.length} chunk(s).`, ...chunks.map(formatChunkLine)].join("\n");
+}
+
 
 export type ChunkCommandContext = CliPositionalsContext &
   CliOptionContext &
@@ -90,6 +108,7 @@ export async function handleChunkCommand(context: ChunkCommandContext): Promise<
           minTokens,
           maxTokens,
         }),
+        formatChunkSummary,
       );
       return;
     }
@@ -104,6 +123,7 @@ export async function handleChunkCommand(context: ChunkCommandContext): Promise<
           minTokens,
           maxTokens,
         }),
+        formatChunkSummary,
       );
       return;
     }
@@ -122,6 +142,7 @@ export async function handleChunkCommand(context: ChunkCommandContext): Promise<
         minTokens,
         maxTokens,
       }),
+      formatChunkSummary,
     );
   } catch (error) {
     context.writeStderrLine(`Chunking failed: ${error instanceof Error ? error.message : String(error)}`);

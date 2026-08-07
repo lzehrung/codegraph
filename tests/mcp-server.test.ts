@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
 import {
   createCodegraphMcpHandlers,
+  createCodegraphMcpProtocolServer,
   listCodegraphMcpTools,
   startCodegraphMcpHttpServer,
   type CodegraphMcpHandlers,
@@ -23,6 +24,8 @@ import { runGit } from "./helpers/git.js";
 type JsonRpcObject = {
   jsonrpc?: unknown;
   id?: unknown;
+  method?: unknown;
+  params?: unknown;
   result?: unknown;
   error?: unknown;
 };
@@ -42,6 +45,10 @@ function readToolJsonResult(payload: JsonRpcObject): Record<string, unknown> {
   if (typeof text !== "string") throw new Error("MCP tool result content was not text.");
   return readObject(JSON.parse(text));
 }
+function readJsonRpcObject(value: unknown): JsonRpcObject {
+  return readObject(value) as JsonRpcObject;
+}
+
 
 async function postMcpJson(
   url: string,
@@ -63,6 +70,7 @@ async function postMcpJson(
   const payload = (await response.json()) as unknown;
   return { response, payload: readObject(payload) };
 }
+
 
 async function postRawHttpJson(
   url: string,
@@ -160,6 +168,112 @@ describe("codegraph MCP handlers", () => {
     } finally {
       await httpServer.close();
     }
+  });
+  it("advertises logging and emits first-call cold-start notifications once", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-first-call-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const handlers = createCodegraphMcpHandlers({ root });
+    const server = createCodegraphMcpProtocolServer(handlers);
+    const sent: JsonRpcObject[] = [];
+    const transport = {
+      onclose: undefined,
+      onerror: undefined,
+      onmessage: undefined,
+      async start() {},
+      async send(message: unknown) {
+        sent.push(readJsonRpcObject(message));
+      },
+      async close() {},
+    } as Parameters<typeof server.connect>[0];
+
+    await server.connect(transport);
+    if (transport.onmessage === undefined) {
+      throw new Error("Connected MCP transport did not receive an onmessage handler.");
+    }
+
+    transport.onmessage({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: { name: "codegraph-test", version: "1.0.0" },
+      },
+    });
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    expect(readObject(readObject(sent[0].result).capabilities).logging).toEqual({});
+
+    transport.onmessage({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: {
+        name: "get_file",
+        arguments: { file: "auth.ts" },
+        _meta: { progressToken: 7 },
+      },
+    });
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(6);
+    });
+
+    const firstCallMessages = sent.slice(1);
+    const progressMessages = firstCallMessages.filter((message) => message.method === "notifications/progress");
+    const logMessages = firstCallMessages.filter((message) => message.method === "notifications/message");
+    expect(progressMessages).toHaveLength(2);
+    expect(logMessages).toHaveLength(2);
+    expect(
+      progressMessages.some((message) => {
+        const params = readObject(message.params);
+        return params.progressToken === 7 && params.progress === 0 && params.total === 1;
+      }),
+    ).toBeTruthy();
+    expect(
+      progressMessages.some((message) => {
+        const params = readObject(message.params);
+        return params.progressToken === 7 && params.progress === 1 && params.total === 1;
+      }),
+    ).toBeTruthy();
+    expect(logMessages.map((message) => readObject(message.params).data)).toContain(
+      "Codegraph is warming the first tool call for 'get_file'.",
+    );
+    expect(logMessages.map((message) => readObject(message.params).data)).toContain(
+      "Codegraph finished warming the first tool call for 'get_file'.",
+    );
+
+    const firstResult = firstCallMessages.at(-1);
+    if (firstResult === undefined) {
+      throw new Error("First MCP tool call did not return a final response.");
+    }
+    expect(firstResult.id).toBe(2);
+    expect(firstResult.error).toBeUndefined();
+    expect(readObject(firstResult.result).isError).not.toBeTruthy();
+
+    transport.onmessage({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: {
+        name: "get_file",
+        arguments: { file: "auth.ts" },
+        _meta: { progressToken: 8 },
+      },
+    });
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(7);
+    });
+
+    const secondResult = sent.at(-1);
+    if (secondResult === undefined) {
+      throw new Error("Second MCP tool call did not return a final response.");
+    }
+    expect(secondResult.id).toBe(3);
+    expect(secondResult.method).toBeUndefined();
+    expect(secondResult.error).toBeUndefined();
+    expect(readObject(secondResult.result).isError).not.toBeTruthy();
   });
 
   it("returns compact impact data while review keeps review-specific fields", async () => {

@@ -417,6 +417,32 @@ describe("CLI command modules", () => {
 
     expect(stderr).toEqual(["Usage: goto <file>[:line[:column]] [line] [column]"]);
   });
+  test("goto pretty output renders a concise definition summary", async () => {
+    const root = await mkTmpDir("codegraph-goto-pretty-");
+    const utilsPath = path.join(root, "utils.ts");
+    const mainPath = path.join(root, "main.ts");
+    await fsp.writeFile(utilsPath, "export function helper() {\n  return 1;\n}\n", "utf8");
+    await fsp.writeFile(mainPath, 'import { helper } from "./utils";\nhelper();\n', "utf8");
+    const stdout: string[] = [];
+
+    try {
+      await handleGotoCommand(
+        createNavigationContext({
+          projectRootFs: root,
+          positionals: [mainPath, "2", "1"],
+          getOpt: (name) => (name === "--cache" ? "off" : undefined),
+          hasFlag: () => false,
+          writeStdoutLine: (message) => stdout.push(message),
+        }),
+      );
+
+      expect(stdout).toHaveLength(1);
+      expect(stdout[0]).toContain("utils.ts:1:");
+      expect(stdout[0]).toContain("function helper");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 
   test("navigation commands forward --cache-verify to incremental index builds", async () => {
     const emptyIndex: ProjectIndex = {
@@ -1072,6 +1098,32 @@ describe("CLI command modules", () => {
       buildSpy.mockRestore();
     }
   });
+  test("inspect pretty output renders sectioned summaries", async () => {
+    const root = await mkTmpDir("codegraph-inspect-pretty-");
+    const filePath = path.join(root, "main.ts");
+    await fsp.writeFile(filePath, "export const value = 1;\n", "utf8");
+    const stdout: string[] = [];
+
+    try {
+      await handleInspectCommand(
+        createInspectContext({
+          projectRootFs: root,
+          includeRootsAbs: [root],
+          resolveFilesFromRoots: async () => [filePath],
+          hasFlag: () => false,
+          writeStdoutLine: (message) => stdout.push(message),
+        }),
+      );
+
+      expect(stdout).toHaveLength(1);
+      expect(stdout[0]).toContain("Files: 1 total");
+      expect(stdout[0]).toContain("Hotspots:");
+      expect(stdout[0]).toContain("Recommended commands:");
+      expect(stdout[0]).toContain("Duplicates: disabled");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 
   test("passes resolved hotspot files as the current project scope", async () => {
     const root = await mkTmpDir("codegraph-hotspots-scope-options-");
@@ -1149,6 +1201,14 @@ describe("CLI command modules", () => {
     expect(diffBuildOptions(legacyOptions, { native: "auto" })).toContain("native");
     expect(diffBuildOptions(undefined, { native: "auto" })).toContain("native");
   });
+  test("ignores the removed preset field when comparing persisted build options", () => {
+    const current = summarizeBuildOptions({ cache: "disk", cacheStrict: true });
+    expect(current).not.toHaveProperty("preset");
+
+    const legacyManifest = { ...current, preset: "code-review" };
+    expect(diffBuildOptions(legacyManifest, { cache: "disk", cacheStrict: true })).not.toContain("preset");
+  });
+
 
   test("uses shared cache-mode validation in the extracted graph-delta command handler", async () => {
     await expect(
@@ -1278,9 +1338,9 @@ describe("CLI command modules", () => {
       });
 
       expect(pretty).toMatchObject({ stderr: "", exitCode: undefined });
-      expect(pretty.stdout).toContain("- Id:");
-      expect(pretty.stdout).toContain(`  File path: ${filePath}`);
-      expect(result.exitCode).toBeUndefined();
+      expect(pretty.stdout).toContain("chunk(s).");
+      expect(pretty.stdout).toContain(`${filePath}:1`);
+      expect(pretty.stdout).toContain("function beta");
       expect(result.stderr).toBe("");
       const chunks = JSON.parse(result.stdout) as Array<Record<string, unknown>>;
       expect(chunks.length).toBeGreaterThan(0);
@@ -2016,6 +2076,29 @@ describe("CLI command modules", () => {
       await fsp.rm(tempDir, { recursive: true, force: true });
     }
   });
+  test("skill doctor pretty output renders an installation summary", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-skill-pretty-"));
+    const targetDir = path.join(tempDir, "skills", "codegraph");
+    const stdout: string[] = [];
+
+    try {
+      await handleSkillCommand(
+        createSkillContext({
+          positionals: ["doctor"],
+          getOpt: (name) => (name === "--target" ? targetDir : undefined),
+          writeStdoutLine: (message) => stdout.push(message),
+        }),
+      );
+
+      expect(stdout).toHaveLength(1);
+      expect(stdout[0]).toContain(`Install target: ${targetDir.replace(/\\/g, "/")}`);
+      expect(stdout[0]).toContain("Installed SKILL.md:");
+      expect(stdout[0]).toContain("CLI on PATH:");
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
 
   test("prints the bundled skill path through the extracted skill command", async () => {
     const stdoutLines: string[] = [];

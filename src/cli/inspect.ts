@@ -254,6 +254,94 @@ function buildRecommendedInspectCommands(
   commands.push(`codegraph doctor "${normalizePathForDisplay(defaultCacheIndexPath(projectRoot))}"`);
   return commands;
 }
+function formatInspectLanguageCounts(byLanguage: Record<string, number>): string {
+  const entries = Object.entries(byLanguage).sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]));
+  if (!entries.length) {
+    return "(none)";
+  }
+  return entries.map(([languageId, count]) => `${languageId} ${count}`).join(", ");
+}
+
+function formatDuplicateSide(side: DuplicateOpportunitySide): string {
+  const lineRange = side.startLine === side.endLine ? `${side.startLine}` : `${side.startLine}-${side.endLine}`;
+  let label = `${side.file}:${lineRange}`;
+  if (side.name) {
+    label += ` ${side.name}`;
+  }
+  return `${label} (${side.tokenCount} tokens)`;
+}
+
+function formatInspectReport(report: InspectReport): string {
+  const lines = [
+    `Root: ${report.root}`,
+    `Include roots: ${report.includeRoots.length ? report.includeRoots.join(", ") : "(whole project)"}`,
+    `Files: ${report.files.total} total (${formatInspectLanguageCounts(report.files.byLanguage)})`,
+    `Native parser: ${report.backend.native.available ? "available" : "unavailable"}`,
+  ];
+  if (report.indexCache) {
+    lines.push(`Index cache: ${report.indexCache.manifestPath}`);
+  }
+  if (report.backend.native.loadError) {
+    lines.push(`Native load error: ${report.backend.native.loadError}`);
+  }
+
+  lines.push("Hotspots:");
+  if (!report.hotspots.length) {
+    lines.push("- (none)");
+  } else {
+    for (const hotspot of report.hotspots) {
+      lines.push(
+        `- ${hotspot.file} (fan-in ${hotspot.fanIn}, fan-out ${hotspot.fanOut}, score ${hotspot.score.toFixed(1)})`,
+      );
+    }
+  }
+
+  lines.push(`Unresolved imports: ${report.unresolved.total}`);
+  if (!report.unresolved.top.length) {
+    lines.push("- (none)");
+  } else {
+    for (const entry of report.unresolved.top) {
+      lines.push(`- ${entry.name} (${entry.importerCount} importer${entry.importerCount === 1 ? "" : "s"})`);
+    }
+  }
+
+  lines.push(`Cycles: ${report.cycles.total}`);
+  if (!report.cycles.top.length) {
+    lines.push("- (none)");
+  } else {
+    for (const cycle of report.cycles.top) {
+      lines.push(`- ${cycle.size} file(s), priority ${cycle.priorityScore.toFixed(1)}: ${cycle.files.join(" -> ")}`);
+    }
+  }
+
+  if (!report.duplicates.enabled) {
+    lines.push("Duplicates: disabled");
+  } else {
+    lines.push(
+      `Duplicates: ${report.duplicates.total} group(s), min confidence ${report.duplicates.minConfidence}, omitted ${report.duplicates.omitted}`,
+    );
+    if (!report.duplicates.top.length) {
+      lines.push("- (none)");
+    } else {
+      for (const duplicate of report.duplicates.top) {
+        lines.push(
+          `- ${duplicate.confidence}/${duplicate.cloneType} score ${duplicate.score.toFixed(2)}: ${formatDuplicateSide(duplicate.left)} <-> ${formatDuplicateSide(duplicate.right)}`,
+        );
+      }
+    }
+  }
+
+  lines.push("Recommended commands:");
+  if (!report.recommendedCommands.length) {
+    lines.push("- (none)");
+  } else {
+    for (const command of report.recommendedCommands) {
+      lines.push(`- ${command}`);
+    }
+  }
+  return lines.join("\n");
+}
+
 
 async function buildInspectReport(
   projectRoot: string,
@@ -385,7 +473,7 @@ export async function handleInspectCommand(context: InspectCommandContext): Prom
     context.hasFlag("--duplicates"),
     context.writeStderrLine,
   );
-  writeCliOutput(context, report);
+  writeCliOutput(context, report, formatInspectReport);
   if (context.commandReport && context.writeCommandReport) {
     context.commandReport.timings.commandMs = Math.round(performance.now() - commandStart);
     context.commandReport.timings.totalMs = context.commandReport.timings.commandMs;

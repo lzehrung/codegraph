@@ -141,7 +141,6 @@ export type BuildOptions = {
   cacheDir?: string;
   cacheStrict?: boolean;
   useBloomFilters?: boolean;
-  preset?: "code-review" | "ci-fast" | "development" | "production";
   graph?: GraphBuildOptions;
   native?: NativeRuntimeMode;
   cacheVerify?: boolean;

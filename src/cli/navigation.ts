@@ -1,7 +1,7 @@
 import { loadCurrentProjectIndex, type LoadCurrentProjectIndexOptions } from "../indexer/load-current-index.js";
 import { findReferences, goToDefinition } from "../indexer/navigation.js";
 import { parseAgentSymbolHandle } from "../agent/handles.js";
-import type { BuildOptions, FindReferencesResult, SymbolDef } from "../indexer/types.js";
+import { SymbolKind, type BuildOptions, type FindReferencesResult, type GoToResult, type SymbolDef } from "../indexer/types.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import { toProjectDisplayPath } from "../util/paths.js";
 import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
@@ -48,6 +48,131 @@ async function loadNavigationIndex(context: NavigationCommandContext) {
   });
 }
 
+type DumpmodOutput = {
+  file: string;
+  locals: Array<{
+    name: string;
+    kind: SymbolKind;
+    start: SymbolDef["range"]["start"];
+  }>;
+  exports: Array<
+    | {
+        type: "local";
+        exportedAs: string;
+        def: {
+          name: string;
+          kind: SymbolKind;
+          start: SymbolDef["range"]["start"];
+        };
+      }
+    | {
+        type: "reexport";
+        exportedAs: string;
+        fromModule: string;
+        moduleSpecifier?: string;
+        sourceSpecifier: string;
+        typeOnly?: boolean;
+      }
+    | {
+        type: "namespaceReexport";
+        exportedAs: string;
+        fromModule: string;
+        moduleSpecifier?: string;
+        typeOnly?: boolean;
+      }
+    | {
+        type: "exportStar";
+        fromModule: string;
+        moduleSpecifier?: string;
+        sourceSpecifier: string;
+        typeOnly?: boolean;
+      }
+  >;
+};
+
+type GotoCandidate = {
+  name: string;
+  kind: SymbolKind;
+  range: SymbolDef["range"];
+};
+
+type GotoCliOutput =
+  | GoToResult
+  | {
+      status: "ambiguous";
+      reason: string;
+      candidates: GotoCandidate[];
+    };
+
+function formatGotoCandidate(candidate: GotoCandidate): string {
+  return `${candidate.kind} ${candidate.name} @ ${candidate.range.start.line}:${candidate.range.start.column}`;
+}
+
+function formatDumpmodMissingOutput(projectRootFs: string, output: { reason: string; file: string }): string {
+  return `${output.reason}: ${toProjectDisplayPath(projectRootFs, output.file)}`;
+}
+
+function formatDefinitionLocation(projectRootFs: string, definition: SymbolDef): string {
+  const file = toProjectDisplayPath(projectRootFs, definition.file);
+  return `${file}:${definition.range.start.line}:${definition.range.start.column} ${definition.kind} ${definition.localName}`;
+}
+
+function formatDumpmodOutput(projectRootFs: string, output: DumpmodOutput): string {
+  const lines = [`File: ${toProjectDisplayPath(projectRootFs, output.file)}`, "Locals:"];
+  if (!output.locals.length) {
+    lines.push("- (none)");
+  } else {
+    for (const local of output.locals) {
+      lines.push(`- ${local.kind} ${local.name} @ ${local.start.line}:${local.start.column}`);
+    }
+  }
+  lines.push("Exports:");
+  if (!output.exports.length) {
+    lines.push("- (none)");
+  } else {
+    for (const entry of output.exports) {
+      if (entry.type === "local") {
+        lines.push(
+          `- local ${entry.def.kind} ${entry.def.name} as ${entry.exportedAs} @ ${entry.def.start.line}:${entry.def.start.column}`,
+        );
+        continue;
+      }
+      if (entry.type === "reexport") {
+        const typeOnlySuffix = entry.typeOnly ? " (type-only)" : "";
+        lines.push(`- reexport ${entry.exportedAs} from ${entry.fromModule}${typeOnlySuffix}`);
+        continue;
+      }
+      if (entry.type === "namespaceReexport") {
+        const typeOnlySuffix = entry.typeOnly ? " (type-only)" : "";
+        lines.push(`- namespace ${entry.exportedAs} from ${entry.fromModule}${typeOnlySuffix}`);
+        continue;
+      }
+      const typeOnlySuffix = entry.typeOnly ? " (type-only)" : "";
+      lines.push(`- export * from ${entry.fromModule}${typeOnlySuffix}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+function formatGotoOutput(projectRootFs: string, output: GotoCliOutput): string {
+  if (output.status === "ok") {
+    const lines = [formatDefinitionLocation(projectRootFs, output.definition)];
+    const via = output.via;
+    if (via?.importedFrom) {
+      let viaLine = `Resolved via ${via.importedFrom}`;
+      if (via.exportedName) {
+        viaLine += ` as ${via.exportedName}`;
+      }
+      lines.push(viaLine);
+    }
+    return lines.join("\n");
+  }
+  if (output.status === "ambiguous") {
+    return [output.reason, ...output.candidates.map((candidate) => `- ${formatGotoCandidate(candidate)}`)].join("\n");
+  }
+  return output.reason;
+}
+
 export async function handleDumpmodCommand(context: NavigationCommandContext): Promise<void> {
   const [fileArg] = context.positionals;
   if (!fileArg) {
@@ -62,35 +187,42 @@ export async function handleDumpmodCommand(context: NavigationCommandContext): P
   const index = await loadNavigationIndex(context);
   const mod = index.byFile.get(file);
   if (!mod) {
-    writeCliOutput(context, {
-      status: "not_found",
-      reason: "Module not indexed",
-      file,
-    });
+    writeCliOutput(
+      context,
+      {
+        status: "not_found",
+        reason: "Module not indexed",
+        file,
+      },
+      (output) => formatDumpmodMissingOutput(context.projectRootFs, output),
+    );
     context.exit(1);
   }
-  writeCliOutput(context, {
-    file,
-    locals: mod.locals.map((l) => ({
-      name: l.localName,
-      kind: l.kind,
-      start: l.range.start,
-    })),
-    exports: mod.exports.map((e) =>
-      e.type === "local"
-        ? {
-            type: e.type,
-            exportedAs: e.exportedAs,
-            def: {
-              name: e.target.localName,
-              kind: e.target.kind,
-              start: e.target.range.start,
-            },
-          }
-        : e,
-    ),
-    imports: mod.imports,
-  });
+  writeCliOutput(
+    context,
+    {
+      file,
+      locals: mod.locals.map((l) => ({
+        name: l.localName,
+        kind: l.kind,
+        start: l.range.start,
+      })),
+      exports: mod.exports.map((e) =>
+        e.type === "local"
+          ? {
+              type: e.type,
+              exportedAs: e.exportedAs,
+              def: {
+                name: e.target.localName,
+                kind: e.target.kind,
+                start: e.target.range.start,
+              },
+            }
+          : e,
+      ),
+    },
+    (output) => formatDumpmodOutput(context.projectRootFs, output),
+  );
 }
 
 type ResolvedNavigationInput = {
@@ -177,14 +309,20 @@ export async function handleGotoCommand(context: NavigationCommandContext): Prom
   if (input.line === undefined) {
     const definitions = sortDefinitions(index.byFile.get(resolvedFile.file)?.locals ?? []);
     if (definitions.length === 1) {
-      writeCliOutput(context, { status: "ok", definition: definitions[0] });
+      const definition = definitions[0];
+      if (definition === undefined) {
+        throw new Error("Expected one definition candidate.");
+      }
+      const output: GotoCliOutput = { status: "ok", definition };
+      writeCliOutput(context, output, (value) => formatGotoOutput(context.projectRootFs, value));
       return;
     }
     if (!definitions.length) {
-      writeCliOutput(context, { status: "not_found", reason: `No indexed symbols in ${input.file}` });
+      const output: GotoCliOutput = { status: "not_found", reason: `No indexed symbols in ${input.file}` };
+      writeCliOutput(context, output, (value) => formatGotoOutput(context.projectRootFs, value));
       context.exit(1);
     }
-    writeCliOutput(context, {
+    const output: GotoCliOutput = {
       status: "ambiguous",
       reason: `Multiple symbols in ${input.file}; pass one of the candidate locations.`,
       candidates: definitions.map((definition) => ({
@@ -192,7 +330,8 @@ export async function handleGotoCommand(context: NavigationCommandContext): Prom
         kind: definition.kind,
         range: definition.range,
       })),
-    });
+    };
+    writeCliOutput(context, output, (value) => formatGotoOutput(context.projectRootFs, value));
     return;
   }
   const res = await goToDefinition(index, {
@@ -200,7 +339,7 @@ export async function handleGotoCommand(context: NavigationCommandContext): Prom
     line: input.line,
     column: input.column ?? 1,
   });
-  writeCliOutput(context, res);
+  writeCliOutput(context, res, (value) => formatGotoOutput(context.projectRootFs, value));
   if (res.status !== "ok") context.exit(1);
 }
 
