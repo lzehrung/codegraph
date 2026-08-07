@@ -14,11 +14,11 @@
 
 **Give your coding agent a map of the repository, not a pile of search results.**
 
-Codegraph is a local CLI **and TypeScript library** that turns a source tree into a resolved model of files, symbols, references, and dependencies. Agents and humans can ask where an implementation lives, how components connect, what a change can break, and which tests are likely relevant - then get bounded source evidence and copyable next steps.
+Codegraph is a local CLI **and TypeScript library** that turns a source tree into a resolved map of files, symbols, references, and dependencies. Ask where an implementation lives, how components connect, what a change can break, or which tests are relevant, then get bounded source evidence and copyable next steps.
 
-Without structural context, an agent spends early turns listing directories, guessing search terms, opening candidate files, and reconstructing relationships in its prompt. Codegraph performs that deterministic discovery once so more of the context window can go toward understanding and changing the code.
+Without structural context, an agent burns early turns listing directories, guessing search terms, opening candidate files, and reconstructing relationships. Codegraph does that discovery once so the context window can stay focused on the problem.
 
-On this repository under Node 24 with a warm cache, `codegraph orient --root . --budget small --json` returned in about **0.6s**, and the matching MCP `orient` call returned in about **100ms**. Those are the warm first-turn paths worth optimizing for; broader `explore` / `explain` calls remain heavier and are tracked separately.
+On this repository under Node 24 with a warm cache, `codegraph orient --root . --budget small --json` returned in about **0.6s**, and the matching MCP `orient` call returned in about **100ms**.
 
 Windows PowerShell:
 
@@ -39,7 +39,7 @@ codegraph install
 codegraph explore "how does auth reach the database?" --root .
 ```
 
-Use Codegraph alongside text search and compilers: text search finds exact strings, compilers prove language behavior, and Codegraph supplies the cross-file repository map between them. See [Installation](./docs/installation.md) for standalone, package, and source-checkout paths.
+Use Codegraph alongside text search and compilers: text search finds exact strings, compilers prove language behavior, and Codegraph fills in the cross-file repository map between them. See [Installation](./docs/installation.md) for standalone, package, and source-checkout paths.
 
 ## Table of contents
 
@@ -85,8 +85,7 @@ Human-readable output is the CLI default, including the compact `review` report;
 
 ### Standalone archive
 
-The preview standalone channel bundles Node.js, the CLI, production dependencies, the matching native runtime, and the Codegraph skill. Its bootstrap verifies the selected archive against the release `SHA256SUMS` before extraction:
-Standalone assets are attached by a separate post-release workflow, so use a release that lists the archive and installer assets.
+The standalone archive bundles Node.js, the CLI, the matching native runtime, and the Codegraph skill.
 
 ```powershell
 irm https://github.com/lzehrung/codegraph/releases/latest/download/install.ps1 | iex
@@ -96,9 +95,7 @@ irm https://github.com/lzehrung/codegraph/releases/latest/download/install.ps1 |
 curl -fsSL https://github.com/lzehrung/codegraph/releases/latest/download/install.sh | sh
 ```
 
-Both commands preview the target and user-owned install paths, then default to no. Noninteractive automation must download the script and pass `-Yes` on PowerShell or `--yes` on POSIX.
-
-See [Installation](./docs/installation.md#option-1-standalone-release-preview) for supported targets, inspect-before-run commands, version pinning, install roots, and rollback.
+Both commands preview the target and install path before writing. See [Installation](./docs/installation.md#option-1-standalone-release-preview) for supported targets, version pinning, rollback, and the full verification flow.
 
 ### From a source checkout
 
@@ -118,7 +115,7 @@ Continue with `node ./dist/cli.js <command>` from the checkout. To use the bare 
 
 ### From GitHub Packages
 
-After authenticating to GitHub Packages with a classic token that has `read:packages` ([setup](./docs/installation.md#option-3-install-from-the-lzehrung-registry)):
+After authenticating to the `@lzehrung` GitHub Packages registry ([setup](./docs/installation.md#option-3-install-from-the-lzehrung-registry)):
 
 ```bash
 npm login --scope=@lzehrung --auth-type=legacy --registry=https://npm.pkg.github.com
@@ -129,7 +126,7 @@ codegraph install --all --dry-run
 codegraph install --all --yes
 ```
 
-Published package installs resolve the optional native runtime automatically when a compatible artifact exists. See [Installation](./docs/installation.md) for registry setup, npm tarballs, standalone releases, local global installs, and native runtime modes.
+Published package installs resolve the optional native runtime automatically when a compatible artifact exists. See [Installation](./docs/installation.md) for registry setup, tarballs, standalone releases, local global installs, and native runtime modes.
 
 On Windows, installed releases load the native addon from a verified per-user cache so long-running MCP servers do not keep npm's package copy mapped. The first upgrade from an older direct-loading release still requires one stop-update-restart cycle; see [Updating on Windows](./docs/installation.md#updating-on-windows).
 
@@ -235,7 +232,7 @@ Limits
 Recommended next: codegraph file src/review.ts
 ```
 
-Real output includes counts, copyable follow-ups, explicit limits, and omission counts. It does not pretend omitted context was analyzed.
+Real output includes counts, copyable follow-ups, explicit limits, and omission counts.
 
 A worktree review is optimized for a different job:
 
@@ -250,7 +247,7 @@ Risk: high (80)
 Signals: exported-symbols-changed, many-symbols-changed
 ```
 
-Structured output carries the underlying changed files, symbols, graph edges, reasons, diagnostics, snippets, and candidate-test confidence instead of requiring a caller to parse this display text.
+Structured output carries the underlying changed files, symbols, graph edges, reasons, diagnostics, snippets, and candidate-test confidence.
 
 ## Why Codegraph
 
@@ -260,19 +257,19 @@ One bounded `explore` response can combine ranked anchors, relevant source, depe
 
 ### Ground the next action
 
-Results carry source paths, symbol ranges, stable handles, rank reasons, graph relationships, confidence, and omission counts. An agent can inspect why something ranked, jump to the definition or references, and continue from an exact target instead of treating a fuzzy match as an answer.
+Results include source paths, symbol ranges, stable handles, rank reasons, graph relationships, confidence, and omission counts. An agent can inspect why something ranked, jump to the definition or references, and continue from an exact target instead of treating a fuzzy match as an answer.
 
 ### Reuse one map from discovery through review
 
-Search, navigation, dependency analysis, impact, and review share the same graph and semantic index. The target found during discovery can flow directly into `explain`, `refs`, `deps`, impact analysis, and candidate-test selection.
+Search, navigation, dependency analysis, impact, and review reuse the same graph and semantic index. A target found during discovery can flow directly into `explain`, `refs`, `deps`, impact analysis, and candidate-test selection.
 
 ### Work across the repository an agent actually has
 
-Source code, SQL, workspace packages, documentation links, stylesheets, templates, and single-file components can participate in one repository model. Capability claims remain language-specific, so graph support is not presented as full compiler or language-server parity.
+One repository model can include source code, SQL, workspace packages, documentation links, stylesheets, templates, and single-file components. Capability claims stay language-specific, so graph support is not presented as full compiler or language-server parity.
 
 ### Keep the evidence local and reusable
 
-Codegraph runs locally through a CLI, library, or MCP server. People can read pretty output; agents and programs can keep structured JSON, stable handles, warm sessions, SQLite data, or graph exports without parsing display text.
+Codegraph runs locally as a CLI, library, or MCP server. Humans get readable output; agents and programs can keep structured JSON, stable handles, warm sessions, SQLite data, or graph exports without parsing display text.
 
 ## Why not just grep or an LSP?
 
@@ -282,11 +279,11 @@ Codegraph complements both.
 - Use a compiler or language server when you need compiler-grade type analysis, overload resolution, dynamic dispatch, or editor refactors.
 - Use Codegraph when the question crosses files, languages, dependency edges, a git diff, or an agent context boundary.
 
-The useful distinction is evidence shape, not a claim that one tool replaces every other tool.
+The distinction is evidence shape, not a claim that one tool replaces the others.
 
 ## Agent setup
 
-Run `codegraph install` on an interactive terminal to detect supported clients, preview exact Codegraph-owned changes, and confirm once. Use `--all` when you intentionally want the complete current catalog without detection:
+Run `codegraph install` on an interactive terminal to detect supported clients, preview the changes, and confirm once. Use `--all` when you want the full current catalog without detection:
 
 ```bash
 codegraph install
@@ -297,7 +294,7 @@ codegraph install --all --yes
 codegraph install --print-config codex
 ```
 
-Supported target ids are `codex`, `claude`, `cursor`, `gemini`, `opencode`, `omp`, `kilo`, and `agents` (universal agent skills). OMP uses `.omp/agent/managed-skills/codegraph`; Kilo uses `.kilocode/skills/codegraph` plus its comment-preserving JSONC MCP config. Interactive writes default to no; noninteractive writes require `--yes`, and uninstall removes only Codegraph-owned content. `--all` cannot be combined with target selection, `--detect`, or `--print-config`.
+Supported target ids are `codex`, `claude`, `cursor`, `gemini`, `opencode`, `omp`, `kilo`, and `agents`. Interactive writes default to no; noninteractive writes require `--yes`.
 
 For a skill without MCP configuration:
 
@@ -368,7 +365,7 @@ The honest boundaries matter:
 - Call-compatibility findings are conservative review leads, not compiler diagnostics.
 - Duplicate matches and candidate tests are ranked leads that still require human or agent judgment.
 - `--fast-graph` is an explicit speed/accuracy tradeoff for plain JavaScript and TypeScript import extraction.
-- The checked `explore` benchmark demonstrates bounded evidence retrieval, not universal speed, cost, or quality advantages.
+- The checked `explore` benchmark is a bounded evidence-retrieval benchmark, not a universal performance claim.
 - The separate [semantic corpus](./docs/benchmarks/README.md#semantic-correctness-corpus) reports reviewed definition, reference, dependency, and candidate-test results by runtime mode with an explicit support denominator. Its initial baseline is informational.
 
 Run `codegraph doctor` to confirm the active runtime. Use `--report` on graph, index, search, inspect, or review commands when backend and cache behavior need to be auditable.
