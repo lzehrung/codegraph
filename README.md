@@ -1,12 +1,16 @@
 # Codegraph
 
-![Codegraph](./assets/codegraph-logo.png)
+<p align="center">
+  <img src="./assets/codegraph-logo.png" alt="Codegraph" width="300">
+</p>
 
-[![Release](https://img.shields.io/github/v/release/lzehrung/codegraph?display_name=tag&sort=semver)](https://github.com/lzehrung/codegraph/releases/latest)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-[![Node.js](https://img.shields.io/badge/node-%3E%3D22.16-brightgreen.svg)](./package.json)
-[![MCP](https://img.shields.io/badge/MCP-server-purple.svg)](./docs/mcp.md)
-[![Changelog](https://img.shields.io/badge/changelog-Keep%20a%20Changelog-orange.svg)](./CHANGELOG.md)
+<p align="center">
+  <a href="https://github.com/lzehrung/codegraph/releases/latest"><img src="https://img.shields.io/github/v/release/lzehrung/codegraph?display_name=tag&amp;sort=semver" alt="Release"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="./package.json"><img src="https://img.shields.io/badge/node-%3E%3D22.16-brightgreen.svg" alt="Node.js"></a>
+  <a href="./docs/mcp.md"><img src="https://img.shields.io/badge/MCP-server-purple.svg" alt="MCP"></a>
+  <a href="./CHANGELOG.md"><img src="https://img.shields.io/badge/changelog-Keep%20a%20Changelog-orange.svg" alt="Changelog"></a>
+</p>
 
 **Give your coding agent a map of the repository, not a pile of search results.**
 
@@ -63,7 +67,7 @@ Use Codegraph alongside text search and compilers: text search finds exact strin
 | -------------------------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | "Where should I start in this repo?"         | `codegraph orient --root . --budget small`                       | Central modules, a bounded tree, and copyable follow-ups                                     |
 | "How does this feature work?"                | `codegraph explore "<question>" --root .`                        | Ranked anchors, source packets, dependency paths, blast radius, and likely tests             |
-| "What could this change break?"              | `codegraph review`                   | Changed symbols, risk signals, candidate tests, duplicate leads, and review tasks            |
+| "What could this change break?"              | `codegraph review`                                               | Changed symbols, risk signals, candidate tests, duplicate leads, and review tasks            |
 | "Which tests should I run?"                  | `codegraph affected --base HEAD --head WORKTREE --quiet`         | Deterministic affected test paths from changed files and reverse dependencies                |
 | "What depends on this file?"                 | `codegraph rdeps src/file.ts --json`                             | Reverse dependencies from the resolved project graph                                         |
 | "Where is this symbol defined or used?"      | `codegraph goto <file> <line> <column>` and `codegraph refs ...` | Semantic definitions and references across supported languages                               |
