@@ -20,7 +20,9 @@ export function resolveQueryIndexWorkerPath(): string {
   const packageRoot = findPackageRoot(selfDir);
   const compiled = path.join(packageRoot, "dist", "agent", "query-index", "queryIndexWorker.js");
   if (fs.existsSync(compiled)) return compiled;
-  throw new Error(`Query index worker file not found: ${compiled}`);
+  const bundled = path.join(packageRoot, "dist", "bin", "queryIndexWorker.js");
+  if (fs.existsSync(bundled)) return bundled;
+  throw new Error(`Query index worker file not found: ${bundled}`);
 }
 
 export async function prepareQueryIndexFilesInWorker(

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const requiredDistEntries = ["dist/index.js", "dist/cli.js", "dist/bin/cli.js", "dist/agent/query-index/queryIndexWorker.js"];
+const requiredDistEntries = ["dist/index.js", "dist/cli.js", "dist/bin/cli.js", "dist/bin/queryIndexWorker.js"];
 const freshnessInputs = ["package.json", "tsconfig.json", "src"];
 
 function collectNewestMtimeMs(entryPath) {
