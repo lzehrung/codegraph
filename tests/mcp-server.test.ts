@@ -190,6 +190,93 @@ describe("codegraph MCP handlers", () => {
     expect(review).toHaveProperty("reviewTasks");
   });
 
+  it("does not load the session index or duplicate analysis for no-change MCP review calls", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-review-no-changes-"));
+    runGit(root, ["init"]);
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "base"]);
+    const base = runGit(root, ["rev-parse", "HEAD"]);
+
+    const backing = createAgentSession({ root });
+    let projectLoads = 0;
+    let duplicateComputations = 0;
+    let duplicatePromise: ReturnType<NonNullable<AgentSession["loadDuplicateAnalysis"]>> | undefined;
+    const session: AgentSession = {
+      ...countingSession(backing).session,
+      loadProject: async (options) => {
+        projectLoads += 1;
+        return await backing.loadProject(options);
+      },
+      loadDuplicateAnalysis: async () => {
+        duplicatePromise ??= (async () => {
+          duplicateComputations += 1;
+          return await backing.loadDuplicateAnalysis!();
+        })();
+        return await duplicatePromise;
+      },
+    };
+    const handlers = createCodegraphMcpHandlers({ root, session });
+    const report = await handlers.review({ base, head: "HEAD" });
+
+    expect(report.status).toBe("no_changes");
+    expect(projectLoads).toBe(0);
+    expect(duplicateComputations).toBe(0);
+  });
+
+  it("reuses the session project index and duplicate analysis across repeated review calls", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-review-reuse-"));
+    runGit(root, ["init"]);
+    const duplicateSource = [
+      "export function normalizeInvoiceRows(rows) {",
+      "  const totals = [];",
+      "  const labels = [];",
+      "  for (const row of rows) {",
+      "    const subtotal = row.amount + row.tax;",
+      "    const rounded = Math.round(subtotal * 100) / 100;",
+      "    const label = rounded > 100 ? 'large' : 'small';",
+      "    labels.push(label);",
+      "    totals.push(rounded);",
+      "  }",
+      "  const encoded = totals.map((value, index) => labels[index] + ':' + value.toFixed(2));",
+      "  return encoded.filter((value) => value.includes(':')).join(',');",
+      "}",
+      "",
+    ].join("\n");
+    await fs.writeFile(path.join(root, "a.ts"), duplicateSource, "utf8");
+    await fs.writeFile(path.join(root, "b.ts"), duplicateSource, "utf8");
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "base"]);
+    const base = runGit(root, ["rev-parse", "HEAD"]);
+    await fs.writeFile(path.join(root, "a.ts"), duplicateSource.replace("row.amount", "row.amount /* changed */"), "utf8");
+    runGit(root, ["add", "a.ts"]);
+    runGit(root, ["commit", "-m", "change"]);
+
+    const backing = createAgentSession({ root });
+    const counted = countingSession(backing);
+    let duplicateComputations = 0;
+    let duplicatePromise: ReturnType<NonNullable<AgentSession["loadDuplicateAnalysis"]>> | undefined;
+    const session: AgentSession = {
+      ...counted.session,
+      loadDuplicateAnalysis: async () => {
+        duplicatePromise ??= (async () => {
+          duplicateComputations += 1;
+          return await backing.loadDuplicateAnalysis!();
+        })();
+        return await duplicatePromise;
+      },
+    };
+    const handlers = createCodegraphMcpHandlers({ root, session });
+
+    const first = await handlers.review({ base, head: "HEAD" });
+    const second = await handlers.review({ base, head: "HEAD" });
+
+    expect(first.reviewTasks.some((task) => task.reason === "duplicate-sibling")).toBe(true);
+    expect(second.reviewTasks.some((task) => task.reason === "duplicate-sibling")).toBe(true);
+    expect(counted.loads()).toBe(1);
+    expect(duplicateComputations).toBe(1);
+  });
+
   it("keeps tool calls available when installed package metadata disappears", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-runtime-drift-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");

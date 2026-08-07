@@ -838,15 +838,25 @@ function createCodegraphMcpHandlersForSession(
       }),
 
     review: async (request) =>
-      await withFreshness(
-        async () =>
-          await buildReviewReport(root, {
+      await withFreshness(async () => {
+        return await buildReviewReport(
+          root,
+          {
             ...options.buildOptions,
             gitBase: request.base,
             gitHead: request.head,
             ...(request.reviewDepth !== undefined ? { reviewDepth: request.reviewDepth } : {}),
-          }),
-      ),
+          },
+          {
+            ...(session.loadProject
+              ? {
+                  loadIndex: async () => (await session.loadProject({ symbolGraph: "skip" })).index,
+                }
+              : {}),
+            ...(session.loadDuplicateAnalysis ? { loadDuplicateAnalysis: session.loadDuplicateAnalysis } : {}),
+          },
+        );
+      }),
 
     query_sqlite: async (request) => {
       if (!sqlitePath) {
