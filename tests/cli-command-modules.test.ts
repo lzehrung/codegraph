@@ -13,7 +13,7 @@ import { handleGraphQueryCommand, type GraphQueryCommandContext } from "../src/c
 import { CLI_HELP_TEXT, FILE_HELP_TEXT, MCP_SERVE_HELP_TEXT, PACKET_HELP_TEXT } from "../src/cli/help.js";
 import { handleImpactCommand, type ImpactCommandContext } from "../src/cli/impact.js";
 import { handleHotspotsCommand, handleInspectCommand, type InspectCommandContext } from "../src/cli/inspect.js";
-import { handleGotoCommand, handleRefsCommand, type NavigationCommandContext } from "../src/cli/navigation.js";
+import { handleDumpmodCommand, handleGotoCommand, handleRefsCommand, type NavigationCommandContext } from "../src/cli/navigation.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "../src/cli/packageInfo.js";
 import { handlePacketCommand } from "../src/cli/packet.js";
 import { handleSearchCommand } from "../src/cli/search.js";
@@ -535,6 +535,34 @@ describe("CLI command modules", () => {
       scanSpy.mockRestore();
     }
   });
+  test("dumpmod preserves imports in JSON output", async () => {
+    const root = await mkTmpDir("codegraph-dumpmod-json-");
+    const mainPath = path.join(root, "main.ts");
+    const depPath = path.join(root, "dep.ts");
+    await fsp.writeFile(depPath, "export const dep = 1;\n", "utf8");
+    await fsp.writeFile(mainPath, 'import { dep } from "./dep";\nexport const value = dep;\n', "utf8");
+    const jsonLines: unknown[] = [];
+
+    try {
+      await handleDumpmodCommand(
+        createNavigationContext({
+          projectRootFs: root,
+          positionals: [mainPath],
+          getOpt: (name) => (name === "--cache" ? "off" : undefined),
+          hasFlag: (name) => name === "--json",
+          writeJSONLine: (value) => jsonLines.push(value),
+        }),
+      );
+
+      const output = readJsonRecord(jsonLines[0]);
+      const imports = readJsonArray(output.imports);
+      expect(imports.length).toBeGreaterThan(0);
+      expect(JSON.stringify(imports[0])).toContain("./dep");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
 
   test("impact command reuses the on-disk manifest on a second invocation without a full recursive scan", async () => {
     const root = await mkTmpDir("codegraph-impact-manifest-reuse-");

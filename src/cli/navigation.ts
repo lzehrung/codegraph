@@ -1,7 +1,7 @@
 import { loadCurrentProjectIndex, type LoadCurrentProjectIndexOptions } from "../indexer/load-current-index.js";
 import { findReferences, goToDefinition } from "../indexer/navigation.js";
 import { parseAgentSymbolHandle } from "../agent/handles.js";
-import { SymbolKind, type BuildOptions, type FindReferencesResult, type GoToResult, type SymbolDef } from "../indexer/types.js";
+import { SymbolKind, type BuildOptions, type FindReferencesResult, type GoToResult, type ModuleIndex, type SymbolDef } from "../indexer/types.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import { toProjectDisplayPath } from "../util/paths.js";
 import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
@@ -55,6 +55,7 @@ type DumpmodOutput = {
     kind: SymbolKind;
     start: SymbolDef["range"]["start"];
   }>;
+  imports: ModuleIndex["imports"];
   exports: Array<
     | {
         type: "local";
@@ -84,7 +85,7 @@ type DumpmodOutput = {
         type: "exportStar";
         fromModule: string;
         moduleSpecifier?: string;
-        sourceSpecifier: string;
+        sourceSpecifier?: string;
         typeOnly?: boolean;
       }
   >;
@@ -207,6 +208,7 @@ export async function handleDumpmodCommand(context: NavigationCommandContext): P
         kind: l.kind,
         start: l.range.start,
       })),
+      imports: mod.imports,
       exports: mod.exports.map((e) =>
         e.type === "local"
           ? {

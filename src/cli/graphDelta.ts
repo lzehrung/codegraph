@@ -50,7 +50,7 @@ function formatGraphDeltaReport(delta: GraphDeltaReport): string {
       lines.push(`- ${edge.from} -> ${to} (${edge.raw})`);
     }
   }
-  return `${lines.join("\n")}\n`;
+  return lines.join("\n");
 }
 
 export async function handleGraphDeltaCommand(context: GraphDeltaCommandContext): Promise<void> {

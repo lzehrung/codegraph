@@ -22,14 +22,14 @@ export type GrepCommandContext = CliOptionContext &
 function formatGrepHits(
   hits: Array<{ file: string; line: number; column: number; snippet: string; capture?: string; match?: string }>,
 ): string {
-  if (!hits.length) return "No matches.\n";
+  if (!hits.length) return "No matches.";
   const lines: string[] = [];
   for (const hit of hits) {
     const label = hit.capture ?? hit.match ?? "";
     lines.push(`${hit.file}:${hit.line}:${hit.column}${label ? ` ${label}` : ""}`);
     lines.push(`  ${hit.snippet}`);
   }
-  return `${lines.join("\n")}\n`;
+  return lines.join("\n");
 }
 
 export async function handleGrepCommand(context: GrepCommandContext): Promise<void> {
