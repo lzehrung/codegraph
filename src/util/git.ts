@@ -9,6 +9,32 @@ const execFileAsync = promisify(execFile);
 
 const gitRepositoryChecks = new Map<string, Promise<boolean>>();
 
+async function runGitCollectStdout(projectRoot: string, args: string[]): Promise<string> {
+  return await new Promise<string>((resolve, reject) => {
+    const child = spawn("git", args, {
+      cwd: projectRoot,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer | string) => {
+      stdout += typeof chunk === "string" ? chunk : chunk.toString();
+    });
+    child.stderr.on("data", (chunk: Buffer | string) => {
+      stderr += typeof chunk === "string" ? chunk : chunk.toString();
+    });
+    child.on("error", (error) => reject(createGitError(projectRoot, args, error)));
+    child.on("close", (code) => {
+      if (code !== 0) {
+        reject(new Error(`git ${args.join(" ")} failed (${code}): ${stderr || stdout || "unknown error"}`));
+        return;
+      }
+      resolve(stdout);
+    });
+  });
+}
+
 export function isGitWorktreeSentinel(value: string): boolean {
   return value.toUpperCase() === "WORKTREE";
 }
@@ -218,10 +244,7 @@ export async function listChangedFiles(
   }
   args.push("--");
   try {
-    const { stdout } = await execFileAsync("git", args, {
-      cwd: projectRoot,
-      env: process.env,
-    });
+    const stdout = await runGitCollectStdout(projectRoot, args);
     const relFiles = stdout
       .split(/\r?\n/)
       .map((line) => line.trim())
@@ -257,10 +280,7 @@ export async function listUntrackedFiles(
   const args = ["ls-files", "--others", "-z"];
   if (opts?.respectGitignore ?? true) args.push("--exclude-standard");
   try {
-    const { stdout } = await execFileAsync("git", args, {
-      cwd: projectRoot,
-      env: process.env,
-    });
+    const stdout = await runGitCollectStdout(projectRoot, args);
     // git ls-files -z NUL-delimits entries; the trailing split segment is always an
     // empty string, not a filename, so filter it out without trimming (a leading or
     // trailing whitespace character can be a legitimate part of a real filename).
@@ -301,11 +321,7 @@ export async function getUnifiedDiff(
   }
   args.push("--");
   try {
-    const { stdout } = await execFileAsync("git", args, {
-      cwd: projectRoot,
-      env: process.env,
-    });
-    return stdout;
+    return await runGitCollectStdout(projectRoot, args);
   } catch (error) {
     throw createGitError(projectRoot, args, error);
   }

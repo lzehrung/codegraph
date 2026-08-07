@@ -425,6 +425,25 @@ describe("Review report", () => {
     expect(report.head).toBe("HEAD");
   });
 
+  it("handles git-backed review diffs larger than execFile's default stdout buffer", async () => {
+    const root = await mkTmpDir("dg-review-large-diff-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "test@git.local"]);
+    runGit(root, ["config", "user.name", "Codegraph Bot"]);
+    const filePath = path.join(root, "big.ts");
+    const largeBlock = "export const filler = '" + "x".repeat(2_200_000) + "';\n";
+    await fsp.writeFile(filePath, "export const before = 1;\n", "utf8");
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "base"]);
+    const base = runGit(root, ["rev-parse", "HEAD"]);
+    await fsp.writeFile(filePath, largeBlock, "utf8");
+
+    const report = await buildReviewReport(root, { gitBase: base, gitHead: "WORKTREE" });
+
+    expect(report.status).toBe("ok");
+    expect(report.changedFiles.map((entry) => entry.file)).toContain("big.ts");
+  });
+
   it("reports modified tracked non-indexed files as updated", async () => {
     const root = await mkTmpDir("dg-review-git-non-indexed-");
     runGit(root, ["init"]);
