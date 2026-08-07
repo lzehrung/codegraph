@@ -362,7 +362,7 @@ export function tryLoadFromCache(
     } catch (error) {
       if (isNodeSqliteUnavailableError(error)) {
         reportMissingNodeSqlite(opts?.logLevel, error);
-        throw error;
+        return null;
       }
       // cache read failed
     }
@@ -396,7 +396,7 @@ export function writeToCache(
     } catch (error) {
       if (isNodeSqliteUnavailableError(error)) {
         reportMissingNodeSqlite(opts?.logLevel, error);
-        throw error;
+        return;
       }
       logWithLevel(opts?.logLevel, "warn", "Warning: Failed to write to cache:", error);
     }

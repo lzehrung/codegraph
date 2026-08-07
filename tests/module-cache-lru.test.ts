@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import {
@@ -7,6 +7,7 @@ import {
   tryLoadFromCache,
   writeToCache,
 } from "../src/indexer/build-cache/module-cache.js";
+import { SqliteDatabase } from "../src/sqlite-driver.js";
 import type { ModuleIndex } from "../src/indexer/types.js";
 
 function moduleFor(file: string, label: string): ModuleIndex {
@@ -73,4 +74,22 @@ describe("module memory cache bounds", () => {
     expect(tryLoadFromCache(rootB, "/files/b.ts", sig, { cache: "memory" })?.locals[0]?.localName).toBe("b");
     clearMemoryCache();
   });
+});
+it("degrades disk cache cleanly when node:sqlite lacks setReturnArrays", () => {
+  const root = path.join(os.tmpdir(), "dg-cache-old-node-sqlite");
+  const sig = "sig-disk";
+  const prepare = vi.spyOn(SqliteDatabase.prototype, "prepare").mockImplementation(() => {
+    throw new TypeError("this.statement.setReturnArrays is not a function");
+  });
+
+  try {
+    expect(() =>
+      writeToCache(root, "/files/disk.ts", sig, moduleFor("/files/disk.ts", "disk"), { cache: "disk" }),
+    ).not.toThrow();
+    expect(tryLoadFromCache(root, "/files/disk.ts", sig, { cache: "disk" })).toBeNull();
+  } finally {
+    prepare.mockRestore();
+    closeDiskCacheDatabase(root, { cache: "disk" });
+    clearMemoryCache();
+  }
 });

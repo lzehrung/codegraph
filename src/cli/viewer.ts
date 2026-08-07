@@ -5,7 +5,7 @@ import { buildCodegraphGraphJson } from "../agent/artifact.js";
 import { createAgentSession } from "../agent/session.js";
 import type { AllowedHostHeaderRules } from "../mcp/http.js";
 import path from "node:path";
-import { getCodegraphPackageRoot } from "./packageInfo.js";
+import { getCodegraphPackageRoot, normalizePathForDisplay } from "./packageInfo.js";
 import {
   buildAllowedHostHeaders,
   closeHttpServer,
@@ -14,6 +14,7 @@ import {
   isAllowedHostHeader,
   listenOnHttpServer,
 } from "../mcp/http.js";
+import { cacheRoot } from "../indexer/build-cache/module-cache.js";
 import { parseOptionalBoundedIntegerOption } from "./options.js";
 import { assertFilePathWithinRoot, resolveFilePathFromRoot } from "../util/paths.js";
 const DEFAULT_VIEWER_HOST = "127.0.0.1";
@@ -69,6 +70,7 @@ type ResolvedViewerOptions = {
 
 function openGraphFile(lexicalRoot: string, root: string, graph: string): OpenedGraphFile {
   const lexicalGraphPath = assertFilePathWithinRoot(lexicalRoot, graph, "Graph");
+  const initialStats = fs.statSync(lexicalGraphPath);
   const fileDescriptor = fs.openSync(lexicalGraphPath, "r");
 
   try {
@@ -77,8 +79,21 @@ function openGraphFile(lexicalRoot: string, root: string, graph: string): Opened
       throw new Error(`Graph must be a regular file: ${lexicalGraphPath}`);
     }
     const graphPath = assertFilePathWithinRoot(root, fs.realpathSync.native(lexicalGraphPath), "Graph");
-    const resolvedStats = fs.statSync(graphPath);
-    if (openedStats.dev !== resolvedStats.dev || openedStats.ino !== resolvedStats.ino) {
+    const finalStats = fs.statSync(lexicalGraphPath);
+    const inodeAvailable = initialStats.ino !== 0 || openedStats.ino !== 0 || finalStats.ino !== 0;
+    const openedMatchesInitial = inodeAvailable
+      ? openedStats.ino === initialStats.ino
+      : openedStats.size === initialStats.size &&
+        openedStats.mtimeMs === initialStats.mtimeMs &&
+        openedStats.birthtimeMs === initialStats.birthtimeMs &&
+        openedStats.mode === initialStats.mode;
+    const openedMatchesFinal = inodeAvailable
+      ? openedStats.ino === finalStats.ino
+      : openedStats.size === finalStats.size &&
+        openedStats.mtimeMs === finalStats.mtimeMs &&
+        openedStats.birthtimeMs === finalStats.birthtimeMs &&
+        openedStats.mode === finalStats.mode;
+    if (!openedMatchesInitial || !openedMatchesFinal) {
       throw new Error(`Graph changed during validation: ${lexicalGraphPath}`);
     }
     return { fileDescriptor, path: graphPath };
@@ -335,17 +350,26 @@ export async function handleViewerCommand(context: ViewerCommandContext): Promis
     }
 
     const graph = context.getOpt("--graph");
+    const root = resolveFilePathFromRoot(context.cwd(), context.getOpt("--root") ?? ".");
+    if (preview) {
+      context.writeStdoutLine(viewerUrl(host, port));
+      return;
+    }
     options = {
-      root: resolveFilePathFromRoot(context.cwd(), context.getOpt("--root") ?? "."),
+      root,
       ...(graph !== undefined ? { graph } : {}),
       host,
       port,
     };
     const resolvedOptions = resolveViewerOptions(options);
     closeResolvedGraphFile(resolvedOptions);
-    if (preview) {
-      context.writeStdoutLine(viewerUrl(host, port));
-      return;
+    if (graph === undefined) {
+      const diskCacheRoot = cacheRoot(root);
+      if (!fs.existsSync(diskCacheRoot)) {
+        context.writeStderrLine(
+          `No disk cache found under ${normalizePathForDisplay(diskCacheRoot)}. Viewer will build the current project graph on first load; run codegraph init --root ${JSON.stringify(root)} to prewarm it.`,
+        );
+      }
     }
   } catch (error) {
     context.writeStderrLine(error instanceof Error ? error.message : String(error));

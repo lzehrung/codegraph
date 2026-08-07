@@ -63,7 +63,9 @@ export function getNodeSqliteLoadError(): Error | undefined {
 
 export function isNodeSqliteUnavailableError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /node:sqlite|No such built-in module:\s*node:sqlite/i.test(message);
+  return /node:sqlite|No such built-in module:\s*node:sqlite|setReturnArrays is not a function|columns is not a function/i.test(
+    message,
+  );
 }
 
 function isReadOnlyAllowedAction(actionCode: number, constants: SqliteConstants): boolean {

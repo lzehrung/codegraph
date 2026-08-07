@@ -4,6 +4,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import * as viewerModule from "../src/cli/viewer.js";
 import { closeViewerServer, createViewerServer, startViewerServer } from "../src/cli/viewer.js";
 import { buildAllowedHostHeaders } from "../src/mcp/http.js";
 import { captureCli } from "./helpers/cli.js";
@@ -218,6 +219,37 @@ describe("viewer server", () => {
       expect(() => createViewerServer({ graph: graphPath, root })).toThrow(/changed during validation/i);
     } finally {
       realpathSpy.mockRestore();
+    }
+  });
+
+  test("warns when no disk cache is available for a current-project viewer", async () => {
+    const { root } = await createViewerFixture();
+    const stderr: string[] = [];
+    const stdout: string[] = [];
+    const server = http.createServer();
+    const startSpy = vi.spyOn(viewerModule, "startViewerServer").mockResolvedValue({
+      server,
+      url: "http://127.0.0.1:4173/",
+    });
+
+    try {
+      await viewerModule.handleViewerCommand({
+        getOpt: (name) => (name === "--root" ? root : undefined),
+        hasFlag: () => false,
+        cwd: () => root,
+        writeStderrLine: (line) => stderr.push(line),
+        writeStdoutLine: (line) => stdout.push(line),
+        exit: (code) => {
+          throw new Error(`viewer exit ${code}`);
+        },
+      });
+
+      expect(stdout).toEqual(["http://127.0.0.1:4173/"]);
+      expect(stderr.some((line) => line.includes("No disk cache found under"))).toBe(true);
+      expect(stderr.some((line) => line.includes("codegraph init --root"))).toBe(true);
+    } finally {
+      startSpy.mockRestore();
+      await closeViewerServer(server);
     }
   });
 
