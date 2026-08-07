@@ -16,6 +16,7 @@ import { handleHotspotsCommand, handleInspectCommand, type InspectCommandContext
 import { handleDumpmodCommand, handleGotoCommand, handleRefsCommand, type NavigationCommandContext } from "../src/cli/navigation.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "../src/cli/packageInfo.js";
 import { handlePacketCommand } from "../src/cli/packet.js";
+import { handleGrepCommand } from "../src/cli/grep.js";
 import { handleSearchCommand } from "../src/cli/search.js";
 import { handleSkillCommand, type SkillCommandContext } from "../src/cli/skill.js";
 import { handleSqlCommand } from "../src/cli/sql.js";
@@ -562,6 +563,45 @@ describe("CLI command modules", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+  test("grep pretty output streams one hit at a time", async () => {
+    const root = await mkTmpDir("codegraph-grep-stream-");
+    const mainPath = path.join(root, "main.ts");
+    await fsp.writeFile(
+      mainPath,
+      "export function helperFunction() {\n  return 1;\n}\nhelperFunction();\n",
+      "utf8",
+    );
+    const stdoutLines: string[] = [];
+
+    try {
+      await handleGrepCommand({
+        positionals: ["helperFunction"],
+        projectRootFs: root,
+        discoveryOptions: {},
+        parsedOptions: new Map(),
+        getOpt: () => undefined,
+        hasFlag: () => false,
+        writeJSONLine: () => {
+          throw new Error("unexpected json output");
+        },
+        writeStdoutLine: (message) => stdoutLines.push(message),
+        writeStderrLine: (message) => {
+          throw new Error(`unexpected stderr: ${message}`);
+        },
+        exit: (code) => {
+          throw new Error(`unexpected exit ${code}`);
+        },
+      });
+
+      expect(stdoutLines.length).toBeGreaterThan(1);
+      expect(stdoutLines[0]).toContain(".ts:");
+      expect(stdoutLines[0]).toContain("helperFunction");
+      expect(stdoutLines[0]).toContain("\n  ");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
 
 
   test("impact command reuses the on-disk manifest on a second invocation without a full recursive scan", async () => {

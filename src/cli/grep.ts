@@ -1,4 +1,4 @@
-import { astGrep, textGrep } from "../graphs/grep.js";
+import { astGrep, streamAstGrep, streamTextGrep, textGrep, type AstGrepHit, type TextGrepHit } from "../graphs/grep.js";
 import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import type {
   CliJsonWriterContext,
@@ -7,7 +7,6 @@ import type {
   CliStdoutWriterContext,
 } from "./context.js";
 import { parseOptionalPositiveIntegerOption } from "./options.js";
-import { writeCliOutput } from "./pretty.js";
 
 export type GrepCommandContext = CliOptionContext &
   CliJsonWriterContext &
@@ -19,17 +18,22 @@ export type GrepCommandContext = CliOptionContext &
     parsedOptions: ReadonlyMap<string, readonly string[]>;
   };
 
-function formatGrepHits(
-  hits: Array<{ file: string; line: number; column: number; snippet: string; capture?: string; match?: string }>,
-): string {
-  if (!hits.length) return "No matches.";
-  const lines: string[] = [];
-  for (const hit of hits) {
-    const label = hit.capture ?? hit.match ?? "";
-    lines.push(`${hit.file}:${hit.line}:${hit.column}${label ? ` ${label}` : ""}`);
-    lines.push(`  ${hit.snippet}`);
+type GrepHit = AstGrepHit | TextGrepHit;
+
+function formatGrepHit(hit: GrepHit): string {
+  const label = "capture" in hit ? hit.capture : (hit.match ?? "");
+  return `${hit.file}:${hit.line}:${hit.column}${label ? ` ${label}` : ""}\n  ${hit.snippet}`;
+}
+
+async function writeStreamedGrepHits(context: GrepCommandContext, hits: AsyncIterable<GrepHit>): Promise<void> {
+  let wroteHit = false;
+  for await (const hit of hits) {
+    wroteHit = true;
+    context.writeStdoutLine(formatGrepHit(hit));
   }
-  return lines.join("\n");
+  if (!wroteHit) {
+    context.writeStdoutLine("No matches.");
+  }
 }
 
 export async function handleGrepCommand(context: GrepCommandContext): Promise<void> {
@@ -45,18 +49,25 @@ export async function handleGrepCommand(context: GrepCommandContext): Promise<vo
   }
 
   if (querySource) {
-    const hits = await astGrep(context.projectRootFs, querySource, patterns, context.discoveryOptions);
-    writeCliOutput(context, hits, formatGrepHits);
+    if (context.hasFlag("--json")) {
+      context.writeJSONLine(await astGrep(context.projectRootFs, querySource, patterns, context.discoveryOptions));
+    } else {
+      await writeStreamedGrepHits(context, streamAstGrep(context.projectRootFs, querySource, patterns, context.discoveryOptions));
+    }
     return;
   }
 
   const ignoreCase = context.hasFlag("--ignore-case") || context.hasFlag("-i");
   const maxHitsRaw = context.getOpt("--max-hits");
   const maxHits = parseOptionalPositiveIntegerOption(maxHitsRaw, "--max-hits");
-  const hits = await textGrep(context.projectRootFs, patternSource!, patterns, {
+  const grepOptions = {
     ignoreCase,
     ...(maxHits !== undefined ? { maxHits } : {}),
     ...context.discoveryOptions,
-  });
-  writeCliOutput(context, hits, formatGrepHits);
+  };
+  if (context.hasFlag("--json")) {
+    context.writeJSONLine(await textGrep(context.projectRootFs, patternSource!, patterns, grepOptions));
+  } else {
+    await writeStreamedGrepHits(context, streamTextGrep(context.projectRootFs, patternSource!, patterns, grepOptions));
+  }
 }
