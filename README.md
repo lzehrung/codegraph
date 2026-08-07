@@ -371,7 +371,7 @@ The honest boundaries matter:
 Mitigations are explicit too:
 
 - The repository keeps real-language fixtures and parity suites for definitions, references, dependencies, chunking, MCP, and native-vs-reduced behavior.
-- The semantic corpus publishes reviewed scenarios with an explicit support denominator instead of blanket parity claims.
+- The semantic corpus shows which languages and cases were reviewed, and how much of the claimed surface that evidence actually covers.
 - Structured output keeps freshness, confidence, and omission counts visible instead of pretending unsupported cases were resolved.
 
 Run `codegraph doctor` to confirm the active runtime. Use `--report` on graph, index, search, inspect, or review commands when backend and cache behavior need to be auditable.
