@@ -7,12 +7,33 @@ import { logWithLevel, type LogLevel } from "../logging.js";
 
 const execFileAsync = promisify(execFile);
 
-// Git diff/name-only output can legitimately exceed Node's small default execFile stdout
-// buffer on large review ranges; keep the cap high enough for real repo diffs while still
-// bounded instead of inheriting the ~1 MiB default that causes review/MCP failures.
-const GIT_STDOUT_MAX_BUFFER = 64 * 1024 * 1024;
-
 const gitRepositoryChecks = new Map<string, Promise<boolean>>();
+
+async function runGitCollectStdout(projectRoot: string, args: string[]): Promise<string> {
+  return await new Promise<string>((resolve, reject) => {
+    const child = spawn("git", args, {
+      cwd: projectRoot,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer | string) => {
+      stdout += typeof chunk === "string" ? chunk : chunk.toString();
+    });
+    child.stderr.on("data", (chunk: Buffer | string) => {
+      stderr += typeof chunk === "string" ? chunk : chunk.toString();
+    });
+    child.on("error", (error) => reject(createGitError(projectRoot, args, error)));
+    child.on("close", (code) => {
+      if (code !== 0) {
+        reject(new Error(`git ${args.join(" ")} failed (${code}): ${stderr || stdout || "unknown error"}`));
+        return;
+      }
+      resolve(stdout);
+    });
+  });
+}
 
 export function isGitWorktreeSentinel(value: string): boolean {
   return value.toUpperCase() === "WORKTREE";
@@ -223,11 +244,7 @@ export async function listChangedFiles(
   }
   args.push("--");
   try {
-    const { stdout } = await execFileAsync("git", args, {
-      cwd: projectRoot,
-      env: process.env,
-      maxBuffer: GIT_STDOUT_MAX_BUFFER,
-    });
+    const stdout = await runGitCollectStdout(projectRoot, args);
     const relFiles = stdout
       .split(/\r?\n/)
       .map((line) => line.trim())
@@ -263,11 +280,7 @@ export async function listUntrackedFiles(
   const args = ["ls-files", "--others", "-z"];
   if (opts?.respectGitignore ?? true) args.push("--exclude-standard");
   try {
-    const { stdout } = await execFileAsync("git", args, {
-      cwd: projectRoot,
-      env: process.env,
-      maxBuffer: GIT_STDOUT_MAX_BUFFER,
-    });
+    const stdout = await runGitCollectStdout(projectRoot, args);
     // git ls-files -z NUL-delimits entries; the trailing split segment is always an
     // empty string, not a filename, so filter it out without trimming (a leading or
     // trailing whitespace character can be a legitimate part of a real filename).
@@ -308,12 +321,7 @@ export async function getUnifiedDiff(
   }
   args.push("--");
   try {
-    const { stdout } = await execFileAsync("git", args, {
-      cwd: projectRoot,
-      env: process.env,
-      maxBuffer: GIT_STDOUT_MAX_BUFFER,
-    });
-    return stdout;
+    return await runGitCollectStdout(projectRoot, args);
   } catch (error) {
     throw createGitError(projectRoot, args, error);
   }
