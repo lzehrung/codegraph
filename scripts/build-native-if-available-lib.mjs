@@ -4,6 +4,8 @@ import path from "node:path";
 
 const SKIP_MESSAGE =
   "[codegraph] Skipping native workspace build because Cargo is unavailable. Install Rust or run a published package install if you need the native addon in this checkout.";
+const LOCKED_ARTIFACT_SKIP_MESSAGE =
+  "[codegraph] Skipping native rebuild because a packaged Windows addon is locked; reusing the existing artifact. Close Node processes or editor integrations using the addon if you need a fresh native build.";
 
 function buildFailureMessage(detail) {
   return "[codegraph] Native workspace build failed. " + detail;
@@ -82,6 +84,7 @@ function findWindowsNativeArtifacts(packageDir, readdirSyncImpl, pathImpl) {
   return artifacts;
 }
 
+/** @returns {boolean} true when every artifact was removed (or none existed). */
 function cleanWindowsNativeArtifacts({ logger, cwd, readdirSyncImpl, rmSyncImpl, pathImpl }) {
   const packageDir = pathImpl.join(cwd, "packages", "codegraph-native");
   const artifactPaths = findWindowsNativeArtifacts(packageDir, readdirSyncImpl, pathImpl);
@@ -90,9 +93,10 @@ function cleanWindowsNativeArtifacts({ logger, cwd, readdirSyncImpl, rmSyncImpl,
       rmSyncImpl(artifactPath, { force: true });
     } catch (error) {
       logger.warn(lockedArtifactMessage(artifactPath, error));
-      break;
+      return false;
     }
   }
+  return true;
 }
 
 export function hasCargo({ spawnSyncImpl = spawnSync, platform = process.platform } = {}) {
@@ -124,13 +128,17 @@ export function runBuildNativeIfAvailable({
 
   if (platform === "win32") {
     const windowsPath = path.win32;
-    cleanWindowsNativeArtifacts({
+    const cleaned = cleanWindowsNativeArtifacts({
       logger,
       cwd,
       readdirSyncImpl,
       rmSyncImpl,
       pathImpl: windowsPath,
     });
+    if (!cleaned) {
+      logger.warn(LOCKED_ARTIFACT_SKIP_MESSAGE);
+      return 0;
+    }
   }
 
   const result = spawnSyncImpl("npm", ["run", "build:native"], {
