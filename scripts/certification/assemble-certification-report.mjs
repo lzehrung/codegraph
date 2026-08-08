@@ -13,7 +13,7 @@ function parseArgs(argv) {
     if (argument === "--manifest") options.manifestPath = value;
     else if (argument === "--package-reports") options.packageReportDirectory = value;
     else if (argument === "--security") options.securityPath = value;
-    else if (argument === "--semantics") options.semanticsPath = value;
+    else if (argument === "--tests") options.testsPath = value;
     else if (argument === "--hermeticity") options.hermeticityPath = value;
     else if (argument === "--exceptions") options.exceptionsPath = value;
     else if (argument === "--repository") options.repository = value;
@@ -40,7 +40,7 @@ try {
     manifestPath: requireOption(options, "manifestPath"),
     packageReportDirectory: requireOption(options, "packageReportDirectory"),
     securityPath: requireOption(options, "securityPath"),
-    semanticsPath: requireOption(options, "semanticsPath"),
+    testsPath: requireOption(options, "testsPath"),
     hermeticityPath: requireOption(options, "hermeticityPath"),
     exceptionsPath: requireOption(options, "exceptionsPath"),
     repository: options.repository,

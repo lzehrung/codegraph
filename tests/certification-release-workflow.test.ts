@@ -35,7 +35,7 @@ describe("certified release workflows", () => {
     expect(report).toContain("- package-smoke");
     expect(report).toContain("- package-smoke-reduced");
     expect(report).toContain("- package-funnel");
-    expect(report).toContain("- semantic-release");
+    expect(report).toContain("- tests-release");
     expect(report).toContain("- fixture-hermeticity");
     expect(publish).toContain("- certification-report");
     expect(releaseWorkflow).not.toContain("build-standalone-archives");
