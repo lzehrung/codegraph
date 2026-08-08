@@ -38,14 +38,12 @@ export type {
 } from "./agent/explore.js";
 export { orientCodegraph } from "./agent/orient.js";
 export type {
-  AgentModuleSummary,
   AgentOrientBudget,
   AgentOrientHealthMode,
   AgentOrientRequest,
   AgentOrientResponse,
   AgentOrientationFocus,
   AgentPacketCommand,
-  AgentPacketHandle,
   AgentTreeEntry,
 } from "./agent/orient.js";
 export { getCodegraphPacket } from "./agent/packet.js";

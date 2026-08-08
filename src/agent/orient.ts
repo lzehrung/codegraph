@@ -33,23 +33,6 @@ export type AgentTreeEntry = {
   depth: number;
 };
 
-/** @deprecated Orient schema v2 no longer returns module summaries directly; use AgentOrientationFocus instead. */
-export type AgentModuleSummary = {
-  file: string;
-  fanIn: number;
-  fanOut: number;
-  score: number;
-  handle: string;
-};
-
-/** @deprecated Orient schema v2 no longer returns packet handles; use file-path focus targets instead. */
-export type AgentPacketHandle = {
-  kind: "file" | "review";
-  handle: string;
-  label: string;
-  file?: string;
-};
-
 type AgentFocusModuleSummary = {
   file: string;
   fanIn: number;

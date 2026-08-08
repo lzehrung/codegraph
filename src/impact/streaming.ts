@@ -16,6 +16,7 @@ import {
 import { getDiff } from "./providers/base.js";
 import { analyzeImpact } from "./analyzer.js";
 import { discoverProjectFiles, type ProjectFileInfo } from "../util/projectFiles.js";
+import { errorMessage } from "../util/errors.js";
 import { buildImpactReport, newFileRangeForHunk } from "./report.js";
 import {
   applyChangedFileSymbolMapping,
@@ -39,28 +40,21 @@ export type ImpactStreamChunk =
   | { type: "error"; error: string };
 
 type PublicImpactStreamingOptions<Options> = Options extends unknown
-  ? Omit<Options, "compact" | "diagnostics" | "fileLevelFallbackPaths" | "onImpactItem">
+  ? Omit<Options, "diagnostics" | "fileLevelFallbackPaths" | "onImpactItem">
   : never;
+
+type WithoutCompact<Options> = Options extends unknown ? Omit<Options, "compact"> : never;
 
 /**
  * Options for streaming impact analysis.
  *
  * `streamSummary` is scoped to streaming callers so batch APIs do not accept a
- * no-op light mode. Streaming always emits the `stream-summary` report shape,
- * and accepts `compact` only as an ignored compatibility field for callers that
- * forward shared batch options. Use `"full"` for the default terminal report,
- * or `"light"` to skip suggestions, export summaries, re-export chains, ranked
- * top impacts, graph metadata, cycles, clusters, and surface area in the final
- * `complete.report`.
+ * no-op light mode. Streaming always emits the `stream-summary` report shape.
+ * Use `"full"` for the default terminal report, or `"light"` to skip
+ * suggestions, export summaries, re-export chains, ranked top impacts, graph
+ * metadata, cycles, clusters, and surface area in the final `complete.report`.
  */
-export type ImpactStreamingOptions = PublicImpactStreamingOptions<ImpactOptions> & {
-  /**
-   * Compatibility field for callers that forward shared batch options.
-   *
-   * @deprecated Streaming ignores this and always returns `format:
-   * "stream-summary"`. Omit it for streaming calls.
-   */
-  compact?: NonNullable<ImpactOptions["compact"]>;
+export type ImpactStreamingOptions = PublicImpactStreamingOptions<WithoutCompact<ImpactOptions>> & {
   streamSummary?: "full" | "light";
 };
 
@@ -291,7 +285,7 @@ export async function* analyzeImpactStreaming(
         impactedItems = items;
       })
       .catch((error) => {
-        impactError = error instanceof Error ? error.message : String(error);
+        impactError = errorMessage(error);
       })
       .finally(() => {
         impactQueue.close();
@@ -359,7 +353,7 @@ export async function* analyzeImpactStreaming(
   } catch (error) {
     yield {
       type: "error",
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage(error),
     };
   }
 }

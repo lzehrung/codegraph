@@ -281,14 +281,12 @@ export type {
 /** Agent first-turn orientation packets with file-path follow-up targets. */
 export { orientCodegraph } from "./agent/orient.js";
 export type {
-  AgentModuleSummary,
   AgentOrientBudget,
   AgentOrientHealthMode,
   AgentOrientRequest,
   AgentOrientResponse,
   AgentOrientationFocus,
   AgentPacketCommand,
-  AgentPacketHandle,
   AgentTreeEntry,
 } from "./agent/orient.js";
 

@@ -355,15 +355,23 @@ describe("package metadata", () => {
   });
 
   it("keeps implementation modules from importing through the public barrel", () => {
-    const barrelImportPattern =
-      /\b(?:import|export)\s+(?:type\s+)?(?:[\s\S]*?\s+from\s+)?["'](?:\.\/|(?:\.\.\/)+)index\.js["']|import\(["'](?:\.\/|(?:\.\.\/)+)index\.js["']\)/;
-    expect(barrelImportPattern.test('import { value } from "../../index.js";')).toBe(true);
-    expect(barrelImportPattern.test('import { value } from "./impact/index.js";')).toBe(false);
+    const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const barrelImportPatternFor = (relativePath: string): RegExp => {
+      const depth = relativePath.split("/").length - 2; // strip the leading "src" and the file name
+      const specifier = escapeRegExp(`${depth === 0 ? "./" : "../".repeat(depth)}index.js`);
+      return new RegExp(
+        `\\b(?:import|export)\\s+(?:type\\s+)?(?:[\\s\\S]*?\\s+from\\s+)?["']${specifier}["']|import\\(["']${specifier}["']\\)`,
+      );
+    };
+    expect(barrelImportPatternFor("src/sub/module.ts").test('import { value } from "../index.js";')).toBe(true);
+    expect(barrelImportPatternFor("src/sub/module.ts").test('import { value } from "./index.js";')).toBe(false);
+    expect(barrelImportPatternFor("src/cli/commandTable.ts").test('await import("./index.js");')).toBe(false);
+    expect(barrelImportPatternFor("src/cli/commandTable.ts").test('await import("../index.js");')).toBe(true);
     const offenders = listFilesRecursive("src", ".ts").filter((relativePath) => {
       if (relativePath === "src/index.ts") {
         return false;
       }
-      return barrelImportPattern.test(readText(relativePath));
+      return barrelImportPatternFor(relativePath).test(readText(relativePath));
     });
 
     expect(offenders).toEqual([]);
@@ -661,7 +669,7 @@ describe("package metadata", () => {
     expect(rootDeclaration).toContain("type ImpactStreamingOptions");
     expect(impactDeclaration).toContain("type ImpactStreamingOptions");
     expect(typeDeclarationHasOwnJsDoc(streamingDistDeclaration, "ImpactStreamingOptions")).toBe(true);
-    expect(streamingDistDeclaration).toContain("@deprecated Streaming ignores this");
+    expect(streamingDistDeclaration).not.toContain("compact?:");
     expect(sessionDeclaration).toContain("analyzeImpactStream(options: ImpactStreamingOptions)");
     expectTypeScriptSurfaceCheck(`
 import type { ICodeReviewSession } from "../dist/index.js";
@@ -671,13 +679,14 @@ const rootRaw: RootImpactStreamingOptions = { provider: "raw", diffText: "" };
 const rootLight: RootImpactStreamingOptions = { provider: "raw", diffText: "", streamSummary: "light" };
 const rootGit: RootImpactStreamingOptions = { provider: "git", base: "HEAD", head: "WORKTREE" };
 const commonImpactOption: RootImpactStreamingOptions = { provider: "raw", diffText: "", severityWeights: { directRef: 10 } };
-const compactStreaming: RootImpactStreamingOptions = { provider: "raw", diffText: "", compact: true };
 const sessionStreaming: Parameters<ICodeReviewSession["analyzeImpactStream"]>[0] = {
   provider: "raw",
   diffText: "",
   streamSummary: "light",
 };
 
+// @ts-expect-error compact is only available for batch impact reports.
+const compactStreaming: RootImpactStreamingOptions = { provider: "raw", diffText: "", compact: true };
 // @ts-expect-error streamSummary only accepts the documented modes.
 const misspelledSummary: RootImpactStreamingOptions = { provider: "raw", diffText: "", streamSummary: "lite" };
 // @ts-expect-error diagnostics are internal analysis state, not caller options.
@@ -691,8 +700,8 @@ void rootRaw;
 void rootLight;
 void rootGit;
 void commonImpactOption;
-void compactStreaming;
 void sessionStreaming;
+void compactStreaming;
 void misspelledSummary;
 void diagnosticsStreaming;
 void fallbackPathsStreaming;
