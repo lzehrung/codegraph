@@ -212,6 +212,8 @@ function buildMatrixMarkdown(snapshot) {
     "",
     "This table is generated directly from running `tests/languages/*.test.ts` with Vitest. There is no hand-curated corpus behind it: every row is a real test file, and every count is a real pass/fail result from the run that produced this file.",
     "",
+    "Scope: this counts only the dedicated per-language smoke files, not a language's total coverage. Every native-runtime language is also exercised by shared cross-language suites (for example `tests/goto.test.ts`, `tests/references.test.ts`, `tests/native-semantic-parity.test.ts`, `tests/type-hierarchy-language-parity.test.ts`, `tests/call-hierarchy-language-parity.test.ts`, `tests/impact-call-compatibility/cross-language.test.ts`) that are not reflected in the counts below. TypeScript/JavaScript are undercounted the most: they are codegraph's own implementation language and default fixture, so most of the non-language-specific tests in this repo exercise them too.",
+    "",
     "Regenerate with `npm run bench:fixtures`. Verify it is current with `npm run bench:fixtures:check`.",
     "",
     `Generated: ${snapshot.generatedAt} (Node ${snapshot.nodeVersion})`,
