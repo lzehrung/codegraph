@@ -168,7 +168,8 @@ describe("build-native-if-available", () => {
     expect(exitCode).toBe(0);
     expect(spawnSyncImpl).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("A packaged native addon appears to be in use"));
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Skipping native rebuild because a packaged Windows addon is locked"));
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("Skipping native rebuild because a packaged Windows addon is locked"),
+    );
   });
-
 });
