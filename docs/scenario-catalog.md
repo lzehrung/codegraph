@@ -29,7 +29,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 
 ## Semantic certification corpus
 
-[`docs/benchmarks/semantic-corpus.json`](./benchmarks/semantic-corpus.json) is the machine-readable release-tier catalog. Each golden has a source-review rationale and is scored separately in native and reduced runtime modes.
+[`docs/benchmarks/semantic-corpus.json`](./benchmarks/semantic-corpus.json) is the machine-readable release-tier catalog. Each golden has a source-review rationale and is scored separately in native and reduced runtime modes. A generated [fixture test matrix](./benchmarks/fixture-snapshot.md) covers a broader, always-current set of languages directly from `tests/languages/*.test.ts` runs, without hand-authored goldens.
 
 | Scenario                          | Sample                                                                      | Expected behavior                                                                                                                       | Source                    | Date added |
 | --------------------------------- | --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- | ---------- |

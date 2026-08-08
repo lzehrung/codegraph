@@ -366,12 +366,12 @@ The honest boundaries matter:
 - Duplicate matches and candidate tests are ranked leads that still require human or agent judgment.
 - `--fast-graph` is an explicit speed/accuracy tradeoff for plain JavaScript and TypeScript import extraction.
 - The checked `explore` benchmark is a bounded evidence-retrieval benchmark, not a universal performance claim.
-- The separate [semantic corpus](./docs/benchmarks/README.md#semantic-correctness-corpus) reports reviewed definition, reference, dependency, and candidate-test results by runtime mode with an explicit support denominator. Its initial baseline is informational.
+- The separate [semantic corpus](./docs/benchmarks/README.md#semantic-correctness-corpus) is a checked set of small reviewed cases. It shows what codegraph has actually been tested against by language and operation.
 
 Mitigations are explicit too:
 
 - The repository keeps real-language fixtures and parity suites for definitions, references, dependencies, chunking, MCP, and native-vs-reduced behavior.
-- The semantic corpus shows which languages and cases were reviewed, and how much of the claimed surface that evidence actually covers.
+- A generated [fixture test matrix](./docs/benchmarks/fixture-snapshot.md) shows real `tests/languages/*.test.ts` pass/fail results per language, with no hand-authored goldens involved.
 - Structured output keeps freshness, confidence, and omission counts visible instead of pretending unsupported cases were resolved.
 
 Run `codegraph doctor` to confirm the active runtime. Use `--report` on graph, index, search, inspect, or review commands when backend and cache behavior need to be auditable.

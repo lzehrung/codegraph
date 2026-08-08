@@ -41,61 +41,55 @@ Results are not universal latency claims; compare the same root, revision, query
 
 ## Semantic correctness corpus
 
-The [`SemanticCorpusV1` manifest](./semantic-corpus.json) measures library-level definition, reference, dependency, and candidate-test behavior. It is separate from the `explore` comparison above: `scenarios.json` measures evidence-anchor presence for two workflows, while the semantic corpus compares structured API observations with reviewed goldens.
+> **Groundwork in progress:** a fixture-generated alternative now exists at [`fixture-snapshot.md`](./fixture-snapshot.md), built directly from `tests/languages/*.test.ts` runs instead of hand-authored goldens. It does not yet replace this section or the release certification pipeline below; both are documented until the migration is complete.
 
-The initial release tier is small, checked in, deterministic, and network-free. It covers Go, Python, and TypeScript fixtures, candidate-test ordering, and an explicit Markdown navigation limitation; the representative tier currently has no external cases and therefore cannot block a release.
+Separate from the workflow timing table, the semantic corpus checks whether codegraph returns the right definitions, references, dependencies, and candidate tests on small reviewed fixtures.
 
-Run and validate the checked example from the repository root:
+### What it tells you
 
-```bash
-npm run build
-npm run bench:semantic -- --tier release --mode native --mode reduced --package-mode checkout --output docs/benchmarks/semantic-results.example.json
-npm run bench:semantic:summarize -- --input docs/benchmarks/semantic-results.example.json --check
-```
+- which languages and operations were reviewed
+- whether the expected results were returned
+- native and reduced results separately
+- how much of the selected corpus was supported versus unsupported
 
-Use `--dry-run` to validate the manifest and print a byte-stable ordered plan without loading codegraph. Release automation can point `--package-root` at an installed candidate and set `--package-mode packed`; checkout and packed results are never presented as the same package mode.
+### What it does not claim
 
-### Corpus and golden contract
+- universal compiler-level correctness
+- large-repository behavior
+- network or remote reliability
+- a release-blocking accuracy threshold
 
-Every case names a declared repository id, tier, language, operation, data-only request, expected observations, and review rationale. The validator rejects absolute and traversing paths, environment expansion, executable fields, undeclared repository ids, duplicate observations, unknown schema fields, and local fixture paths that escape through symlinks.
+### How it works
 
-Definition and reference goldens use project-relative files and exact one-based ranges. Dependency goldens compare normalized `(from, to, kind)` tuples, where `kind` is `dependency` or `type-only`; candidate-test goldens compare ordered project-relative test files.
+Each case declares:
 
-Rationales begin with `Source review:` or `Limitation review:` so a golden cannot be an unexplained codegraph dump. A golden change still requires source review and a second human reviewer; symbol handles are request inputs only and are not golden identities.
+- a local fixture repository
+- the operation to run
+- the expected results
+- a short review rationale
 
-### Scoring and result schema
+Definitions and references use exact project-relative files and ranges. Dependency cases compare normalized `(from, to, kind)` tuples. Candidate-test cases compare ordered project-relative test paths.
 
-For a supported case, a returned required observation is a true positive and an omitted required observation is a false negative. A returned forbidden observation is a false positive, an allowed observation is neutral, and an unexpected observation is reported for triage rather than silently reclassified.
+[`semantic-results.example.json`](./semantic-results.example.json) stores the checked example output, including environment metadata, per-case results, and grouped summaries.
 
-Duplicate returned observations are reported and de-duplicated before scoring. Precision is `TP / (TP + FP)`, recall is `TP / (TP + FN)`, and F1 is their harmonic mean; a metric with no denominator is `null`, not an invented perfect score.
+The current checked result is informational. It shows what passed on the reviewed fixtures; it does not claim a universal score for all repositories.
 
-Support is successful cases divided by all selected cases. Unsupported and execution-error rows stay in that denominator but are excluded from precision and recall, so every public accuracy row must be read with its support count.
+### Representative tier
 
-Candidate-test cases also report reciprocal rank for the first required test, and summaries report mean reciprocal rank. Latency uses nearest-rank p50, p95, and maximum over successful operation calls; it excludes index construction, and one cache-off explicit-file index is reused for cases in the same repository and runtime mode.
+The scheduled [`semantic-corpus.yml`](../../.github/workflows/semantic-corpus.yml) job is still informational. Representative public-repository cases should only be added when they use a pinned commit, a reviewed license, bounded include roots, and no release dependency on clone availability.
 
-[`semantic-results.example.json`](./semantic-results.example.json) records the corpus digest and revision, selected tiers and cases, package name, version and mode, runtime environment, every returned observation, per-case score, and grouped summaries. Native and reduced rows are always separate and are summarized by operation, language, repository, and total.
+### Workflows and metrics
 
-The checked result is informational. No absolute accuracy or latency threshold exists yet, and the no-baseline scaffold reports `not-configured` without turning the example into a release gate.
+Each checked scenario in [`scenarios.json`](./scenarios.json) defines a local fixture, a task, expected anchors, and the exact steps for both variants.
 
-### Representative tier and limits
+- **Baseline workflow:** three declared direct UTF-8 file reads from preselected files.
+- **codegraph workflow:** one local `codegraph explore <query> --root <fixture> --cache off --json` call.
+- **Tool calls:** declared workflow steps only.
+- **File reads:** baseline read steps, or unique source paths codegraph returns in `packets` or `fileView`.
+- **Wall time:** elapsed time around the declared steps.
+- **Completeness:** whether the expected anchors were present in the captured evidence.
 
-The scheduled [`semantic-corpus.yml`](../../.github/workflows/semantic-corpus.yml) job is informational and has `continue-on-error`. It currently writes a schema-valid empty representative report; pinned public repositories should be added only with an immutable commit, a reviewed permissive license, bounded include roots, and no release dependency on clone availability.
-
-This corpus is not a compiler conformance suite and does not prove universal correctness. Its fixtures are tiny, checked-in examples; ambiguous language behavior, generated code, macros, dynamic dispatch, large-repository scaling, cold index latency, and network reliability remain outside the current evidence.
-
-## Workflows and metrics
-
-Each checked scenario in [`scenarios.json`](./scenarios.json) defines a local fixture, a task, ordered expected anchors, and the exact steps for both variants. The scenarios cover TypeScript request paths, Python imports, SQL migration and application coupling, Markdown-to-TypeScript request paths, and installer-preservation ranking.
-
-- **Baseline workflow:** three declared direct UTF-8 file reads. The files are selected in advance, so this is not an unaided discovery task.
-- **codegraph workflow:** one local `codegraph explore <query> --root <fixture> --cache off --json` call. It starts a fresh CLI process and builds a cold in-process index for every sample.
-- **Tool calls:** declared workflow steps. A direct read and an `explore` call both count as one, despite doing unequal work.
-- **File reads:** baseline read steps, or unique source paths codegraph returns in `packets` or `fileView`. This is a context-delivery count, not total parser, indexer, operating-system, or disk I/O.
-- **Wall time:** elapsed time around declared steps. It includes codegraph process startup and cold indexing but excludes harness setup.
-- **Completeness:** the fraction of expected path anchors found as text in captured evidence. It is evidence-anchor presence, not an answer-quality score.
-- **Reviewed relationships:** selected scenarios declare exact anchor partial orders, one recommended file, and required candidate tests. Results record one-based ranks and reciprocal ranks descriptively; no aggregate accuracy threshold, top-k target, or percentage is inferred.
-
-Medians are calculated independently for each scenario and variant. Tool calls and returned files can approximate workflow coordination and delivered context, but they are not units of time, tokens, bytes, or effort.
+Medians are calculated independently for each scenario and variant.
 
 ## Checked results
 

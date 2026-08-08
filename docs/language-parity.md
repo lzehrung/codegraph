@@ -37,7 +37,7 @@ Status key:
 | Svelte           | Yes              | No                | No               | No              | Yes      | Yes             | Yes               | No                 | Yes          | Yes                 |
 | SQL              | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Partial           | No                 | Yes          | Yes                 |
 
-The matrix states supported capability classes; it is not a measured accuracy table. The [semantic corpus](./benchmarks/README.md#semantic-correctness-corpus) publishes the currently measured subset by operation, language, repository, and native or reduced runtime, with support shown beside precision and recall.
+The matrix states supported capability classes; it is not a measured accuracy table. The [semantic corpus](./benchmarks/README.md#semantic-correctness-corpus) publishes the currently measured subset by operation, language, repository, and native or reduced runtime, with support shown beside precision and recall. A generated [fixture test matrix](./benchmarks/fixture-snapshot.md) also shows real `tests/languages/*.test.ts` pass/fail counts per language, with no hand-authored goldens involved.
 
 The first release tier covers reviewed Go, Python, and TypeScript cases plus an explicit unsupported Markdown navigation case. Languages absent from that corpus retain their test-backed matrix status, but they have no semantic-corpus measurement yet.
 
