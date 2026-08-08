@@ -352,12 +352,8 @@ function resolveFilePath(projectRoot: string, file: FileId): FileId {
   return normalizePath(resolveFilePathFromRoot(projectRoot, file));
 }
 
-function normalizeFilePath(file: FileId): FileId {
-  return file.replace(/\\/g, "/");
-}
-
 function toProjectRelative(projectRoot: string, file: FileId): FileId {
-  return toProjectRelativePath(projectRoot, file) ?? normalizeFilePath(file);
+  return toProjectRelativePath(projectRoot, file) ?? normalizePath(file);
 }
 
 function pushUniqueSuggestion(output: ImpactSuggestion[], seen: Set<string>, suggestion: ImpactSuggestion): void {

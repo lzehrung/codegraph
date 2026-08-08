@@ -10,6 +10,7 @@ import {
 } from "../native/treeSitterNative.js";
 import { SymbolKind, type ProjectIndex, type ResolvedExport, type SymbolDef } from "../indexer/types.js";
 import type { FileId } from "../types.js";
+import { normalizePath } from "../util/paths.js";
 import { buildSymbolGraph, type SymbolGraph } from "./symbol-graph.js";
 import { collectDetailedDeclarations } from "./symbol-graph-detailed/ast.js";
 import {
@@ -32,8 +33,6 @@ type BuildDetailedSymbolGraphOptions = {
 };
 
 type ResolvedDetailedExport = ResolvedExport;
-
-const normalizePath = (file: string) => file.replace(/\\/g, "/");
 
 export async function buildSymbolGraphDetailed(
   index: ProjectIndex,

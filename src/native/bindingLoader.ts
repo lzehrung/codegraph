@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { normalizePath } from "../util/paths.js";
+import { errorMessage } from "../util/errors.js";
+
 import type { NativeBindingOrigin } from "./contracts.js";
 import { prepareNativeRuntimeCache } from "./runtimeCache.js";
 
@@ -75,10 +78,6 @@ export function findLocalNativeBinary(packageRoot: string): string | null {
   }
 }
 
-function normalizePathForDisplay(filePath: string): string {
-  return filePath.replace(/\\/g, "/");
-}
-
 function readPlatformPackage(
   packageName: string,
   target: string,
@@ -121,8 +120,8 @@ export function loadNativeBinding<T>(options: BindingLoaderOptions): NativeBindi
           mode: "workspace",
           packageName: options.packageName,
           ...(localTarget ? { target: localTarget } : {}),
-          sourcePath: normalizePathForDisplay(localBinary),
-          loadedPath: normalizePathForDisplay(localBinary),
+          sourcePath: normalizePath(localBinary),
+          loadedPath: normalizePath(localBinary),
         },
       };
     } catch (error) {
@@ -165,7 +164,7 @@ export function loadNativeBinding<T>(options: BindingLoaderOptions): NativeBindi
       installedPackageVersion = platformPackage.packageVersion;
     } catch (error) {
       if (platform === "win32") {
-        cacheError = error instanceof Error ? error.message : String(error);
+        cacheError = errorMessage(error);
       }
     }
   }
@@ -189,14 +188,14 @@ export function loadNativeBinding<T>(options: BindingLoaderOptions): NativeBindi
             packageName: `${options.packageName}-${target}`,
             packageVersion: installedPackageVersion,
             target,
-            sourcePath: normalizePathForDisplay(cached.sourcePath),
-            loadedPath: normalizePathForDisplay(cached.loadedPath),
+            sourcePath: normalizePath(cached.sourcePath),
+            loadedPath: normalizePath(cached.loadedPath),
             cacheKey: cached.cacheKey,
             sha256: cached.sha256,
           },
         };
       } catch (error) {
-        cacheError = `cached native addon failed to load: ${error instanceof Error ? error.message : String(error)}`;
+        cacheError = `cached native addon failed to load: ${errorMessage(error)}`;
         lastError = error;
       }
     }
@@ -214,8 +213,8 @@ export function loadNativeBinding<T>(options: BindingLoaderOptions): NativeBindi
     packageName: originPackageName,
     ...(installedPackageVersion ? { packageVersion: installedPackageVersion } : {}),
     ...(target ? { target } : {}),
-    ...(installedSourcePath ? { sourcePath: normalizePathForDisplay(installedSourcePath) } : {}),
-    ...(originLoadedPath ? { loadedPath: normalizePathForDisplay(originLoadedPath) } : {}),
+    ...(installedSourcePath ? { sourcePath: normalizePath(installedSourcePath) } : {}),
+    ...(originLoadedPath ? { loadedPath: normalizePath(originLoadedPath) } : {}),
     ...(cacheError ? { cacheError } : {}),
   };
   try {

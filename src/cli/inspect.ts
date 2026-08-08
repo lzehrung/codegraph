@@ -18,7 +18,7 @@ import type { Graph } from "../types.js";
 import { restrictGraphToIncludeRoots } from "../util/includeRoots.js";
 import { supportForFile } from "../languages.js";
 import type { LanguageExtensionMap } from "../languages.js";
-import { toProjectDisplayPath } from "../util/paths.js";
+import { normalizePath, toProjectDisplayPath } from "../util/paths.js";
 import type { ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { parseCacheModeOption, parsePositiveIntegerOption } from "./options.js";
 import { writeCliOutput } from "./pretty.js";
@@ -117,10 +117,6 @@ export type InspectCommandContext = {
   writeCommandReport?: (report: CommandReport, reportFile: string | undefined) => Promise<void>;
 };
 
-function normalizePathForDisplay(filePath: string): string {
-  return filePath.replace(/\\/g, "/");
-}
-
 function defaultCacheIndexPath(projectRoot: string): string {
   return path.join(projectRoot, ".codegraph-cache", "index-v1");
 }
@@ -138,7 +134,7 @@ function readIndexCacheMetadata(projectRoot: string): IndexCacheMetadata | null 
       lastCommit?: string;
     };
     return {
-      manifestPath: normalizePathForDisplay(manifestPath),
+      manifestPath: normalizePath(manifestPath),
       ...(typeof parsed.updatedAt === "number" ? { updatedAt: parsed.updatedAt } : {}),
       ...(typeof parsed.lastCommit === "string" && parsed.lastCommit ? { lastCommit: parsed.lastCommit } : {}),
     };
@@ -191,7 +187,7 @@ async function buildScopedReportGraph(
     },
   });
   return {
-    graph: restrictGraphToIncludeRoots(index.graph, includeRoots, normalizePathForDisplay),
+    graph: restrictGraphToIncludeRoots(index.graph, includeRoots, normalizePath),
     ...(indexCache ? { indexCache } : {}),
   };
 }
@@ -236,9 +232,9 @@ function buildRecommendedInspectCommands(
   hasCycles: boolean,
   hasUnresolvedImports: boolean,
 ): string[] {
-  const rootFlag = `--root "${normalizePathForDisplay(projectRoot)}"`;
+  const rootFlag = `--root "${normalizePath(projectRoot)}"`;
   const targetSuffix = includeRoots.length
-    ? ` ${includeRoots.map((root) => `"${normalizePathForDisplay(root)}"`).join(" ")}`
+    ? ` ${includeRoots.map((root) => `"${normalizePath(root)}"`).join(" ")}`
     : "";
   const commands = [
     `codegraph hotspots ${rootFlag}${targetSuffix} --limit 20 --json`,
@@ -251,7 +247,7 @@ function buildRecommendedInspectCommands(
   if (hasCycles) {
     commands.push(`codegraph cycles ${rootFlag}${targetSuffix} --sort priority --json`);
   }
-  commands.push(`codegraph doctor "${normalizePathForDisplay(defaultCacheIndexPath(projectRoot))}"`);
+  commands.push(`codegraph doctor "${normalizePath(defaultCacheIndexPath(projectRoot))}"`);
   return commands;
 }
 function formatInspectLanguageCounts(byLanguage: Record<string, number>): string {
@@ -379,7 +375,7 @@ async function buildInspectReport(
       ...(buildReport ? { report: buildReport } : {}),
     },
   });
-  const graph = restrictGraphToIncludeRoots(index.graph, includeRoots, normalizePathForDisplay);
+  const graph = restrictGraphToIncludeRoots(index.graph, includeRoots, normalizePath);
   const hotspots = getHotspots(graph, { limit });
   const unresolved = getUnresolvedImports(graph, { projectRoot });
   const cycles = findDetailedCycles(graph);
@@ -408,8 +404,8 @@ async function buildInspectReport(
   }
   const loadError = getNativeTreeSitterLoadError(nativeMode);
   return {
-    root: normalizePathForDisplay(projectRoot),
-    includeRoots: includeRoots.map(normalizePathForDisplay),
+    root: normalizePath(projectRoot),
+    includeRoots: includeRoots.map(normalizePath),
     ...(indexCache ? { indexCache } : {}),
     backend: {
       native: {
@@ -433,7 +429,7 @@ async function buildInspectReport(
     cycles: {
       total: cycles.length,
       top: cycles.slice(0, limit).map((cycle) => ({
-        files: cycle.files.map(normalizePathForDisplay),
+        files: cycle.files.map(normalizePath),
         priorityScore: cycle.priorityScore,
         size: cycle.files.length,
       })),

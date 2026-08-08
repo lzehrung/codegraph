@@ -1,4 +1,5 @@
 import type { FileId, Graph } from "../types.js";
+import { normalizePath } from "../util/paths.js";
 import { getFiniteNonNegativeLimit } from "./limits.js";
 
 export type HotspotEntry = {
@@ -13,12 +14,8 @@ export type HotspotOptions = {
   includeRoots?: string[];
 };
 
-function normalizeHotspotPath(filePath: string): string {
-  return filePath.replace(/\\/g, "/");
-}
-
 function normalizeHotspotRoots(includeRoots: string[]): string[] {
-  return includeRoots.map(normalizeHotspotPath);
+  return includeRoots.map(normalizePath);
 }
 
 function compareHotspotEntries(a: HotspotEntry, b: HotspotEntry): number {
@@ -37,7 +34,7 @@ function isHotspotUnderRoots(filePath: string, normalizedRoots: string[]): boole
   if (!normalizedRoots.length) {
     return true;
   }
-  const normalizedFile = normalizeHotspotPath(filePath);
+  const normalizedFile = normalizePath(filePath);
   return normalizedRoots.some((root) => normalizedFile === root || normalizedFile.startsWith(`${root}/`));
 }
 

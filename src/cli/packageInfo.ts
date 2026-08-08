@@ -2,8 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { normalizePath } from "../util/paths.js";
+
 export function normalizePathForDisplay(filePath: string): string {
-  return filePath.replace(/\\/g, "/");
+  return normalizePath(filePath);
 }
 
 export function pathExists(filePath: string): boolean {

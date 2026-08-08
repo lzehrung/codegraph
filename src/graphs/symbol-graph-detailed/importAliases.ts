@@ -1,12 +1,11 @@
 import type { ModuleIndex, ProjectIndex, ResolvedExport, SymbolDef } from "../../indexer/types.js";
 import type { ImportBinding } from "../../indexer/types.js";
+import { normalizePath } from "../../util/paths.js";
 
 export type ImportAliasMaps = {
   aliasToTargetDef: Map<string, SymbolDef>;
   aliasToTargetModule: Map<string, string>;
 };
-
-const normalizePath = (file: string) => file.replace(/\\/g, "/");
 
 type ResolveExportNamespace = (file: string, exportedName: string) => ResolvedExport | null;
 type ResolveExportFrom = (file: string, exportedName: string) => SymbolDef | null;

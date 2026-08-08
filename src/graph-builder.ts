@@ -1,7 +1,7 @@
 import { isUnsupportedParserInputError } from "./languages/filePrep.js";
 import type { Edge, Graph } from "./types.js";
 import { loadWorkspaceConfig } from "./util/workspace.js";
-import { normalizeResolutionHints } from "./util/paths.js";
+import { normalizePath, normalizeResolutionHints } from "./util/paths.js";
 import { mapLimit } from "./util/concurrency.js";
 import { logWithLevel } from "./logging.js";
 import type { LogLevel } from "./logging.js";
@@ -57,7 +57,6 @@ export async function collectGraph(
     languageExtensions?: LanguageExtensionMap;
   },
 ): Promise<Graph> {
-  const normalizePath = (file: string) => file.replace(/\\/g, "/");
   const normalizedFiles = files.map(normalizePath);
   const normalizedAllFiles = (opts?.allFiles ?? files).map(normalizePath);
   const isSqlFile = (file: string): boolean => supportForFile(file, opts?.languageExtensions)?.id === "sql";
