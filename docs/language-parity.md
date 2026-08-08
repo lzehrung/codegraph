@@ -37,7 +37,7 @@ Status key:
 | Svelte           | Yes              | No                | No               | No              | Yes      | Yes             | Yes               | No                 | Yes          | Yes                 |
 | SQL              | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Partial           | No                 | Yes          | Yes                 |
 
-The matrix states supported capability classes; it is not a measured accuracy table. A generated [fixture test matrix](./benchmarks/fixture-snapshot.md) shows real `tests/languages/*.test.ts` pass/fail results per language, with no hand-authored goldens involved.
+The matrix states supported capability classes; it is not a measured accuracy table. A generated [fixture test matrix](./benchmarks/fixture-snapshot.md) shows real `tests/languages/*.test.ts` status and test counts per language, with no hand-authored goldens involved.
 
 Notes:
 

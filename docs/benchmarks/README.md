@@ -41,7 +41,7 @@ Results are not universal latency claims; compare the same root, revision, query
 
 ## Fixture test matrix
 
-[`fixture-snapshot.md`](./fixture-snapshot.md) shows per-language pass/fail results generated directly from `tests/languages/*.test.ts` runs. Regenerate with `npm run bench:fixtures`; verify it is current with `npm run bench:fixtures:check`. This, and the rest of the automated test suite, is also what release certification checks: there is no separate hand-authored golden corpus.
+[`fixture-snapshot.md`](./fixture-snapshot.md) shows per-language status and test counts generated directly from `tests/languages/*.test.ts` runs. Regenerate with `npm run bench:fixtures`; verify it is current with `npm run bench:fixtures:check`. This, and the rest of the automated test suite, is also what release certification checks: there is no separate hand-authored golden corpus.
 
 ## Workflow definitions
 

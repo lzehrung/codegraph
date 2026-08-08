@@ -371,7 +371,7 @@ The honest boundaries matter:
 Mitigations are explicit too:
 
 - The repository keeps real-language fixtures and parity suites for definitions, references, dependencies, chunking, MCP, and native-vs-reduced behavior.
-- A generated [fixture test matrix](./docs/benchmarks/fixture-snapshot.md) shows real `tests/languages/*.test.ts` pass/fail results per language, with no hand-authored goldens involved.
+- A generated [fixture test matrix](./docs/benchmarks/fixture-snapshot.md) shows real `tests/languages/*.test.ts` status and test counts per language, with no hand-authored goldens involved.
 - Structured output keeps freshness, confidence, and omission counts visible instead of pretending unsupported cases were resolved.
 
 Run `codegraph doctor` to confirm the active runtime. Use `--report` on graph, index, search, inspect, or review commands when backend and cache behavior need to be auditable.
