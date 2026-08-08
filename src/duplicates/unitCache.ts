@@ -114,7 +114,7 @@ export function migrateDuplicateUnitCacheTable(db: SqliteDatabase): void {
   if (!columns.has("version"))
     db.exec("ALTER TABLE duplicate_unit_cache ADD COLUMN version INTEGER NOT NULL DEFAULT 0;");
   if (!columns.has("payload"))
-    db.exec("ALTER TABLE duplicate_unit_cache ADD COLUMN payload TEXT NOT NULL DEFAULT '[]';");
+    db.exec("ALTER TABLE duplicate_unit_cache ADD COLUMN payload BLOB NOT NULL DEFAULT (x'');");
   if (!columns.has("updated_at")) {
     db.exec("ALTER TABLE duplicate_unit_cache ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;");
   }
