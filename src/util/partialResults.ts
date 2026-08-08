@@ -5,6 +5,7 @@
  * analyzed along with detailed error information. This is especially useful
  * for agents that can work with incomplete data.
  */
+import { errorMessage } from "./errors.js";
 
 /**
  * Result that may be partial
@@ -175,7 +176,7 @@ export async function withPartialResults<T, I>(
         failed++;
         const partialError: PartialError = {
           target: `${itemName}[${index}]`,
-          message: error instanceof Error ? error.message : String(error),
+          message: errorMessage(error),
           severity: "error",
           retryable: true,
         };

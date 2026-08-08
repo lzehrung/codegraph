@@ -13,6 +13,7 @@ import {
   AGENT_SEARCH_RESULT_LIMIT,
 } from "../presentation/bounds.js";
 import { normalizePath } from "../util/paths.js";
+import { errorMessage } from "../util/errors.js";
 import { boundAgentList, defaultAgentLimit } from "./bounds.js";
 import {
   formatAgentChunkHandle,
@@ -724,7 +725,7 @@ async function addTextResults(
       return;
     } catch (error) {
       diagnostics.sidecarState = "unavailable";
-      diagnostics.fallbackReason = error instanceof Error ? error.message : String(error);
+      diagnostics.fallbackReason = errorMessage(error);
     }
   }
 

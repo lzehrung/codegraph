@@ -1,6 +1,6 @@
 import { findCallees, findCallers, type CallHierarchyResponse } from "../agent/callHierarchy.js";
 import type { SemanticLocation, SemanticSymbol } from "../agent/semantic.js";
-import type { CliAgentCommandContext } from "./context.js";
+import { exitWithError, type CliAgentCommandContext } from "./context.js";
 import { CALLEES_HELP_TEXT, CALLERS_HELP_TEXT } from "./help.js";
 import { parseBoundedIntegerOption } from "./options.js";
 
@@ -53,8 +53,7 @@ export async function handleCallHierarchyCommand(
     }
     context.writeStdoutLine(formatCallHierarchyResponse(response));
   } catch (error: unknown) {
-    context.writeStderrLine(error instanceof Error ? error.message : String(error));
-    context.exit(1);
+    exitWithError(context, error, 1);
   }
 }
 

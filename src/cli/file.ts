@@ -7,6 +7,7 @@ import {
   getCodegraphFileView,
 } from "../agent/fileView.js";
 import type { CliAgentCommandContext } from "./context.js";
+import { errorMessage } from "../util/errors.js";
 import { FILE_HELP_TEXT } from "./help.js";
 import { parseSourceLocationInput } from "../util/sourceLocation.js";
 import { parseBoundedIntegerOption, parsePositiveIntegerOption } from "./options.js";
@@ -66,7 +67,7 @@ export async function handleFileCommand(context: FileCommandContext): Promise<vo
       context.writeStdoutLine(formatAgentFileViewResponse(response));
     }
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     context.writeStderrLine(message);
     context.exit(1);
   }

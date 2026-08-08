@@ -1,5 +1,6 @@
 import type { LanguageSupport } from "../languages.js";
 import { stringifyUnknown } from "../util/ast.js";
+import { errorMessage } from "../util/errors.js";
 import type {
   CompactImportsExecution,
   NativeBindingState,
@@ -66,7 +67,7 @@ export function getNativeQueryExecutionForState(
     return {
       results: null,
       fallbackReason: "queryFailure",
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage(error),
     };
   }
 }
@@ -121,7 +122,7 @@ export function getCompactImportsExecution(
     return {
       results: null,
       fallbackReason: "queryFailure",
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage(error),
     };
   }
 }
@@ -156,7 +157,7 @@ export function getNativeSingleQueryExecution(
     return {
       matches: null,
       fallbackReason: "queryFailure",
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage(error),
     };
   }
 }
@@ -189,7 +190,7 @@ export function getNativeSyntaxTreeExecution(
     return {
       tree: null,
       fallbackReason: "queryFailure",
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage(error),
     };
   }
 }

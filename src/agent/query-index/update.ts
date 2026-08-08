@@ -5,6 +5,7 @@ import type { AgentProjectSnapshot } from "../session.js";
 import type { QueryIndexDiagnostics } from "../../indexer/types.js";
 import { getCodegraphVersion } from "../../cli/packageInfo.js";
 import { normalizePath } from "../../util/paths.js";
+import { errorMessage } from "../../util/errors.js";
 import type { PreparedQueryIndexFile } from "./content.js";
 import {
   createProjectRootIdentity,
@@ -61,10 +62,6 @@ function emptyDiagnostics(sidecarState: QueryIndexDiagnostics["sidecarState"]): 
 
 function elapsedMs(startedAt: number): number {
   return performance.now() - startedAt;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function lookupManifestEntry(snapshot: AgentProjectSnapshot, file: string) {

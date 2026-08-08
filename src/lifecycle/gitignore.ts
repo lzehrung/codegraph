@@ -2,6 +2,7 @@ import type { Stats } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { isGitPathIgnored, isGitPathTracked, isGitRepo } from "../util/git.js";
+import { errorMessage } from "../util/errors.js";
 import { CodegraphLifecycleUserError } from "./errors.js";
 
 const LIFECYCLE_MANIFEST_PATH = ".codegraph/manifest.json";
@@ -26,7 +27,7 @@ async function readGitignoreFile(
     stats = await fsp.lstat(gitignorePath);
   } catch (error) {
     if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
-      const detail = error instanceof Error ? error.message : String(error);
+      const detail = errorMessage(error);
       throw new CodegraphLifecycleUserError(
         `Unable to inspect ${gitignorePath}: ${detail}. Check the path and permissions or rerun with --no-update-gitignore.`,
       );
@@ -46,7 +47,7 @@ async function readGitignoreFile(
     try {
       existing = await fsp.readFile(gitignorePath, "utf8");
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
+      const detail = errorMessage(error);
       throw new CodegraphLifecycleUserError(
         `Unable to read ${gitignorePath}: ${detail}. Check file permissions or rerun with --no-update-gitignore.`,
       );
@@ -90,7 +91,7 @@ export async function prepareCodegraphLifecycleGitignore(
   try {
     await fsp.appendFile(gitignorePath, suffix, "utf8");
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = errorMessage(error);
     throw new CodegraphLifecycleUserError(
       `Unable to update ${gitignorePath}: ${detail}. Check file permissions or rerun with --no-update-gitignore.`,
     );

@@ -12,6 +12,7 @@ import type { GraphBuildOptions } from "../graphs/types.js";
 import type { BuildOptions } from "../indexer/types.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import { parseNonNegativeIntegerOption, parseOptionalNonNegativeIntegerOption } from "./options.js";
+import { exitWithError } from "./context.js";
 
 export interface DriftCommandContext {
   projectRootFs: string;
@@ -78,8 +79,7 @@ export async function handleDriftCommand(context: DriftCommandContext): Promise<
     graphEdges = parseGraphEdgesMode(context.getOpt("--graph-edges"));
     publicApi = parsePublicApiMode(context.getOpt("--public-api"));
   } catch (error) {
-    context.writeStderrLine(error instanceof Error ? error.message : String(error));
-    context.exit(2);
+    exitWithError(context, error, 2);
   }
 
   let base = context.getOpt("--base");
@@ -115,8 +115,7 @@ export async function handleDriftCommand(context: DriftCommandContext): Promise<
       ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
     });
   } catch (error) {
-    context.writeStderrLine(error instanceof Error ? error.message : String(error));
-    context.exit(1);
+    exitWithError(context, error, 1);
   }
   if (prettyOutput) {
     for (const line of renderArchitectureDriftReport(report, { limit: maxFindings }).trimEnd().split("\n")) {

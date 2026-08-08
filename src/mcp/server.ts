@@ -53,6 +53,7 @@ import { buildReviewReport, type ReviewDepth, type ReviewReport } from "../revie
 import { SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY, queryGraphSqliteRaw, type RawSqlResult } from "../sqlite.js";
 import { isPlainRecord } from "../util/guards.js";
 import { toProjectDisplayPath } from "../util/paths.js";
+import { errorMessage } from "../util/errors.js";
 import { createAgentSession, listAgentSessionFiles } from "../agent/session.js";
 import { mapLimit } from "../util/concurrency.js";
 import { assertRealPathCandidateWithinRoot, resolveProjectFile } from "../util/confinedFile.js";
@@ -978,18 +979,18 @@ export function createCodegraphMcpProtocolServer(
           });
         }
       } catch (error) {
-        console.error(
-          `[codegraph] MCP cold-start visibility failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        console.error(`[codegraph] MCP cold-start visibility failed: ${errorMessage(error)}`);
       }
     };
-    await emitFirstToolCallVisibility("info", 0, `Codegraph is warming the first tool call for '${request.params.name}'.`);
+    await emitFirstToolCallVisibility(
+      "info",
+      0,
+      `Codegraph is warming the first tool call for '${request.params.name}'.`,
+    );
     try {
       installedVersion.check();
     } catch (error) {
-      console.error(
-        `[codegraph] installed-version check failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      console.error(`[codegraph] installed-version check failed: ${errorMessage(error)}`);
     }
     try {
       const result = await callMcpTool(handlers, request.params.name, request.params.arguments ?? {});

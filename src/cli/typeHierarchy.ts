@@ -6,7 +6,7 @@ import {
   type TypeHierarchyResponse,
 } from "../agent/typeHierarchy.js";
 import type { SemanticSymbol } from "../agent/semantic.js";
-import type { CliAgentCommandContext } from "./context.js";
+import { exitWithError, type CliAgentCommandContext } from "./context.js";
 import { IMPLEMENTATIONS_HELP_TEXT, SUBTYPES_HELP_TEXT, SUPERTYPES_HELP_TEXT } from "./help.js";
 import { parseBoundedIntegerOption } from "./options.js";
 
@@ -65,8 +65,7 @@ export async function handleTypeHierarchyCommand(
     const response = command === "supertypes" ? await findSupertypes(request) : await findSubtypes(request);
     writeResponse(context, response, formatTypeHierarchyResponse);
   } catch (error: unknown) {
-    context.writeStderrLine(error instanceof Error ? error.message : String(error));
-    context.exit(1);
+    exitWithError(context, error, 1);
   }
 }
 

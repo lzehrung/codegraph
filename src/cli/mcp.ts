@@ -2,7 +2,13 @@ import { serveCodegraphMcp, type CodegraphMcpWarmupMode } from "../mcp/server.js
 import { MCP_HELP_TEXT } from "./help.js";
 import { parseOptionalBoundedIntegerOption } from "./options.js";
 import type { BuildOptions } from "../indexer/types.js";
-import type { CliOptionContext, CliPositionalsContext, CliRootContext, CliStderrExitContext } from "./context.js";
+import {
+  exitWithError,
+  type CliOptionContext,
+  type CliPositionalsContext,
+  type CliRootContext,
+  type CliStderrExitContext,
+} from "./context.js";
 
 export type McpServeCommandContext = CliPositionalsContext &
   CliRootContext &
@@ -30,8 +36,7 @@ export async function handleMcpServeCommand(context: McpServeCommandContext): Pr
       24 * 60 * 60 * 1000,
     );
   } catch (error) {
-    context.writeStderrLine(error instanceof Error ? error.message : String(error));
-    context.exit(2);
+    exitWithError(context, error, 2);
   }
   const host = context.getOpt("--host");
   const warmup = parseMcpWarmupMode(context);

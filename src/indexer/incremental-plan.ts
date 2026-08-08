@@ -7,6 +7,7 @@ import {
 } from "./build-cache.js";
 import type { BuildOptions, IncrementalBuildOptions } from "./types.js";
 import { listChangedFiles, listUntrackedFiles } from "../util/git.js";
+import { errorMessage } from "../util/errors.js";
 import {
   createDiscoveredFileMatcher,
   DEFAULT_PROJECT_PATTERNS,
@@ -27,7 +28,7 @@ export type TrackedManifestFilePlan = {
 };
 
 export function isMissingGitRevisionError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = errorMessage(error);
   return (
     message.includes("Invalid revision range") ||
     message.includes("bad revision") ||

@@ -9,6 +9,7 @@ import type { FileChange } from "../impact/types.js";
 import { listDirectDeletedFileImporters } from "../review/deleted.js";
 import type { FileId } from "../types.js";
 import { normalizePath, resolveFilePathWithinRoot, toProjectDisplayPath } from "../util/paths.js";
+import { exitWithError } from "./context.js";
 import { parseNonNegativeIntegerOption } from "./options.js";
 
 export type AffectedTestEntry = {
@@ -346,7 +347,6 @@ export async function handleAffectedCommand(context: AffectedCommandContext): Pr
     }
     context.writeStdoutLine(formatPrettyReport(report));
   } catch (error) {
-    context.writeStderrLine(error instanceof Error ? error.message : String(error));
-    context.exit(2);
+    exitWithError(context, error, 2);
   }
 }
