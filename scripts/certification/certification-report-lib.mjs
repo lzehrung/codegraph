@@ -57,21 +57,26 @@ function requirePassingSection(section, sectionName) {
 
 function requireCompleteTests(section) {
   const report = requireSectionSchema(section, "tests");
-  if (!isRecord(report.package) || report.package.name !== "@lzehrung/codegraph") {
+  if (
+    !isRecord(report.package) ||
+    report.package.name !== "@lzehrung/codegraph" ||
+    typeof report.package.version !== "string" ||
+    !report.package.version.trim()
+  ) {
     throw new PackageCertificationError(
       "certification-section-invalid",
-      "Release test certification must record the root package identity.",
+      "Release test certification must record the root package identity and version.",
       { section: "tests" },
     );
   }
-  if (typeof report.revision !== "string" || !report.revision) {
+  if (typeof report.revision !== "string" || !report.revision.trim()) {
     throw new PackageCertificationError(
       "certification-section-invalid",
       "Release test certification must record the source revision under test.",
       { section: "tests" },
     );
   }
-  if (typeof report.command !== "string" || !report.command) {
+  if (typeof report.command !== "string" || !report.command.trim()) {
     throw new PackageCertificationError(
       "certification-section-invalid",
       "Release test certification must record the command that was executed.",
@@ -80,10 +85,11 @@ function requireCompleteTests(section) {
   }
   const status = sectionStatus(report);
   if (status !== "pass") {
-    throw new PackageCertificationError("certification-section-invalid", `Release test suite status is ${status}.`, {
-      section: "tests",
-      status,
-    });
+    throw new PackageCertificationError(
+      status === "fail" ? "certification-section-failed" : "certification-section-incomplete",
+      `Release test suite status is ${status ?? "unexecuted"}.`,
+      { section: "tests", status },
+    );
   }
   return report;
 }

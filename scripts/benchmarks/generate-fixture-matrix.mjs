@@ -65,6 +65,12 @@ function usage() {
   ].join("\n");
 }
 
+function readValue(argv, index, flag) {
+  const value = argv[index + 1];
+  if (value === undefined || value.startsWith("--")) throw new Error(`Missing value after ${flag}.`);
+  return value;
+}
+
 function parseArgs(argv) {
   const options = {
     reportPath: undefined,
@@ -79,13 +85,13 @@ function parseArgs(argv) {
       console.log(usage());
       process.exit(0);
     } else if (arg === "--report") {
-      options.reportPath = argv[index + 1];
+      options.reportPath = readValue(argv, index, arg);
       index += 2;
     } else if (arg === "--snapshot") {
-      options.snapshotPath = argv[index + 1];
+      options.snapshotPath = readValue(argv, index, arg);
       index += 2;
     } else if (arg === "--matrix") {
-      options.matrixPath = argv[index + 1];
+      options.matrixPath = readValue(argv, index, arg);
       index += 2;
     } else if (arg === "--check") {
       options.check = true;
@@ -228,7 +234,7 @@ function buildMatrixMarkdown(snapshot) {
 }
 
 function normalizeForComparison(snapshot) {
-  const { generatedAt: _generatedAt, ...rest } = snapshot;
+  const { generatedAt: _generatedAt, nodeVersion: _nodeVersion, ...rest } = snapshot;
   return rest;
 }
 

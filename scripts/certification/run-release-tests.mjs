@@ -17,6 +17,12 @@ function usage() {
   ].join("\n");
 }
 
+function readValue(argv, index, flag) {
+  const value = argv[index + 1];
+  if (value === undefined || value.startsWith("--")) throw new Error(`Missing value after ${flag}.`);
+  return value;
+}
+
 function parseArgs(argv) {
   const options = {};
   let index = 0;
@@ -26,10 +32,10 @@ function parseArgs(argv) {
       console.log(usage());
       process.exit(0);
     } else if (arg === "--revision") {
-      options.revision = argv[index + 1];
+      options.revision = readValue(argv, index, arg);
       index += 2;
     } else if (arg === "--output") {
-      options.outputPath = argv[index + 1];
+      options.outputPath = readValue(argv, index, arg);
       index += 2;
     } else {
       throw new Error(`Unrecognized argument: ${arg}`);
