@@ -498,6 +498,25 @@ describe("package metadata", () => {
     expect(result.stdout).toContain("Skipping prepare build during global install");
   });
 
+  it("lets npm pack dry-run reuse an existing dist build without wiping dist", () => {
+    const env = { ...process.env };
+    for (const key of Object.keys(env)) {
+      if (key.toLowerCase() === "npm_command") {
+        delete env[key];
+      }
+    }
+    env.npm_command = "pack";
+    env.npm_config_dry_run = "true";
+    const result = spawnSync(process.execPath, ["./scripts/prepare-package.mjs"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env,
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Skipping prepare build during npm pack --dry-run");
+  });
+
   it("prints slow-test reporter help when help is the leading argument", () => {
     const result = spawnSync(process.execPath, ["./scripts/report-slow-tests.mjs", "--help"], {
       cwd: process.cwd(),
