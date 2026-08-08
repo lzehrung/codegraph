@@ -58,7 +58,6 @@ export function lineOverlap(
   return Math.max(0, endLine - startLine + 1);
 }
 
-
 export function rangesSubstantiallyOverlap(left: DuplicateUnitRef, right: DuplicateUnitRef): boolean {
   if (left.file !== right.file || left.languageId !== right.languageId) return false;
   const overlap = lineOverlap(left, right);
@@ -120,11 +119,19 @@ export function normalizeIntegerOption(
   return resolved;
 }
 
-export function normalizePositiveIntegerOption(value: number | undefined, optionName: string, fallback: number): number {
+export function normalizePositiveIntegerOption(
+  value: number | undefined,
+  optionName: string,
+  fallback: number,
+): number {
   return normalizeIntegerOption(value, optionName, fallback, 1, "a positive integer");
 }
 
-export function normalizeNonNegativeIntegerOption(value: number | undefined, optionName: string, fallback: number): number {
+export function normalizeNonNegativeIntegerOption(
+  value: number | undefined,
+  optionName: string,
+  fallback: number,
+): number {
   return normalizeIntegerOption(value, optionName, fallback, 0, "a non-negative integer");
 }
 
@@ -442,7 +449,11 @@ export function metricsForPair(evidence: PairEvidence): DuplicateMetrics {
   return metrics;
 }
 
-export function addToBucket(buckets: Map<string, DuplicateInternalUnit[]>, key: string, unit: DuplicateInternalUnit): void {
+export function addToBucket(
+  buckets: Map<string, DuplicateInternalUnit[]>,
+  key: string,
+  unit: DuplicateInternalUnit,
+): void {
   appendToArrayMap(buckets, key, unit);
 }
 
@@ -1111,7 +1122,10 @@ export function groupLooksLikeBarrelNoise(locations: readonly DuplicateUnitRef[]
   return locations.every((location) => location.looksLikeBarrel && isTopLevelSourceBarrel(location.file));
 }
 
-export function cleanupLabelsForGroup(group: DuplicateGroup, locations: readonly DuplicateUnitRef[]): DuplicateCleanupLabel[] {
+export function cleanupLabelsForGroup(
+  group: DuplicateGroup,
+  locations: readonly DuplicateUnitRef[],
+): DuplicateCleanupLabel[] {
   const labels = new Set<DuplicateCleanupLabel>();
   const files = clusterFiles(locations);
   const allTests = files.length > 0 && files.every(isTestFile);
@@ -1381,7 +1395,10 @@ export function coalesceDuplicateGroups(groups: DuplicateGroup[], variantLimit: 
   return coalesced;
 }
 
-export function groupSuggestions(suggestions: readonly DuplicateSuggestion[], includeRawPairs: boolean): DuplicateGroup[] {
+export function groupSuggestions(
+  suggestions: readonly DuplicateSuggestion[],
+  includeRawPairs: boolean,
+): DuplicateGroup[] {
   const refs = suggestions.flatMap((suggestion) => [suggestion.left, suggestion.right]);
   const clusters = createUnitClusters(refs);
   const variantLimit = includeRawPairs ? Number.POSITIVE_INFINITY : DEFAULT_GROUP_VARIANT_LIMIT;
@@ -1408,4 +1425,3 @@ export function groupSuggestions(suggestions: readonly DuplicateSuggestion[], in
   );
   return enrichDuplicateGroups(coalesceDuplicateGroups(groups, variantLimit));
 }
-

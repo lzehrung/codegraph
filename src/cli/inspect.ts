@@ -251,7 +251,9 @@ function buildRecommendedInspectCommands(
   return commands;
 }
 function formatInspectLanguageCounts(byLanguage: Record<string, number>): string {
-  const entries = Object.entries(byLanguage).sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]));
+  const entries = Object.entries(byLanguage).sort(
+    (left, right) => right[1] - left[1] || left[0].localeCompare(right[0]),
+  );
   if (!entries.length) {
     return "(none)";
   }
@@ -337,7 +339,6 @@ function formatInspectReport(report: InspectReport): string {
   }
   return lines.join("\n");
 }
-
 
 async function buildInspectReport(
   projectRoot: string,

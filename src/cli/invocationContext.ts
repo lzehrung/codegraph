@@ -2,13 +2,15 @@ import fs from "node:fs";
 import path from "node:path";
 import type { GraphBuildOptions } from "../graphs/types.js";
 import type { CodegraphConfig } from "../config.js";
-import {
-  createCurrentProjectIndexLoader,
-  type CurrentProjectIndexLoader,
-} from "../indexer/load-current-index.js";
+import { createCurrentProjectIndexLoader, type CurrentProjectIndexLoader } from "../indexer/load-current-index.js";
 import type { BuildOptions } from "../indexer/types.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
-import { normalizePath, normalizeResolutionHints, resolveFilePathFromRoot, toProjectDisplayPath } from "../util/paths.js";
+import {
+  normalizePath,
+  normalizeResolutionHints,
+  resolveFilePathFromRoot,
+  toProjectDisplayPath,
+} from "../util/paths.js";
 import type { ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { createCliProgressHandler, exitCli, getCwd, writeStderrLine } from "./context.js";
 import { parseCacheModeOption, parseOptionalNonNegativeIntegerOption, type ParsedCliArgs } from "./options.js";

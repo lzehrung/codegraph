@@ -4,13 +4,22 @@ import path from "node:path";
 import { LANG_CONFIGS } from "../bootstrap/treeSitterLanguages.js";
 import { chunkFile, type Chunk } from "../chunking/chunkFile.js";
 import { chunkTextFile } from "../chunking/chunkTextFile.js";
-import { countDuplicateTokens, hasUnterminatedQuotedLiteral, normalizeDuplicateSourceTokens } from "../duplicate-token-normalization.js";
+import {
+  countDuplicateTokens,
+  hasUnterminatedQuotedLiteral,
+  normalizeDuplicateSourceTokens,
+} from "../duplicate-token-normalization.js";
 import { supportForFile } from "../languages.js";
 import type { ParsedFileContext } from "../indexer/parse-context.js";
 import { attemptParsePreparedFileContext } from "../indexer/parse-context.js";
 import { SymbolKind, type ProjectIndex, type SymbolDef } from "../indexer/types.js";
 import { prepareSourceInput } from "../languages/filePrep.js";
-import { getNativeDuplicateTokens, getNativeTreeSitterSupportedLanguageIds, isNativeDuplicateTokenizationAvailable, isNativeTreeSitterDisabledByEnv } from "../native/treeSitterNative.js";
+import {
+  getNativeDuplicateTokens,
+  getNativeTreeSitterSupportedLanguageIds,
+  isNativeDuplicateTokenizationAvailable,
+  isNativeTreeSitterDisabledByEnv,
+} from "../native/treeSitterNative.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { maskJsLikeCommentsStringsAndRegex } from "../util/comments.js";
 import { collectLineStartOffsets } from "../util/lines.js";
@@ -387,7 +396,11 @@ export function lineRangeToByteRange(
   return { start: startIndex, end: endOffset };
 }
 
-export function findSmallestCoveringNode(node: SyntaxNodeLike, startIndex: number, endIndex: number): SyntaxNodeLike | null {
+export function findSmallestCoveringNode(
+  node: SyntaxNodeLike,
+  startIndex: number,
+  endIndex: number,
+): SyntaxNodeLike | null {
   if (node.endIndex < startIndex || node.startIndex > endIndex) return null;
   if (node.startIndex > startIndex || node.endIndex < endIndex) return null;
   for (const child of node.namedChildren) {

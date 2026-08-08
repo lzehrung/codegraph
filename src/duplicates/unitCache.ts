@@ -2,7 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 import type { BuildOptions, ProjectIndex } from "../indexer/types.js";
-import { getNativeDuplicateTokens, getNativeTreeSitterSupportedLanguageIds, isNativeDuplicateTokenizationAvailable, isNativeTreeSitterDisabledByEnv } from "../native/treeSitterNative.js";
+import {
+  getNativeDuplicateTokens,
+  getNativeTreeSitterSupportedLanguageIds,
+  isNativeDuplicateTokenizationAvailable,
+  isNativeTreeSitterDisabledByEnv,
+} from "../native/treeSitterNative.js";
 import { SqliteDatabase, type SqliteStatement } from "../sqlite-driver.js";
 import { logWithLevel } from "../logging.js";
 import { cacheDatabasePath } from "../indexer/build-cache/module-cache.js";

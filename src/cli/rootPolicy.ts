@@ -112,7 +112,12 @@ export function resolveCliRootPolicy(input: {
       ],
     };
   }
-  if (isLifecycleCommand(command) && !rootOpt && firstPositionalRoot !== undefined && !isExistingDirectory(firstPositionalRoot)) {
+  if (
+    isLifecycleCommand(command) &&
+    !rootOpt &&
+    firstPositionalRoot !== undefined &&
+    !isExistingDirectory(firstPositionalRoot)
+  ) {
     return {
       status: "error",
       messages: [`Invalid ${command} path "${positionals[0]!}". Expected an existing directory or use --root <path>.`],
@@ -134,7 +139,10 @@ export function resolveCliRootPolicy(input: {
   }
 
   const defaultProjectRoot =
-    usesLegacyRootPositional(command) && !rootOpt && firstPositionalRoot !== undefined && isExistingDirectory(firstPositionalRoot)
+    usesLegacyRootPositional(command) &&
+    !rootOpt &&
+    firstPositionalRoot !== undefined &&
+    isExistingDirectory(firstPositionalRoot)
       ? firstPositionalRoot
       : cwd();
   const projectRootFs = rootOpt ? resolveAbs(rootOpt) : defaultProjectRoot;
@@ -180,9 +188,9 @@ export function resolveCliDiscoveryGlobPolicy(
   };
   const hasCliDiscoveryGlobs = Boolean(
     includeGlobs.length ||
-      scanIgnoreGlobs.length ||
-      activeCliRootGlobDiscoveryOptions.includeGlobs?.length ||
-      activeCliRootGlobDiscoveryOptions.ignoreGlobs?.length,
+    scanIgnoreGlobs.length ||
+    activeCliRootGlobDiscoveryOptions.includeGlobs?.length ||
+    activeCliRootGlobDiscoveryOptions.ignoreGlobs?.length,
   );
   return {
     cliGlobDiscoveryOptions,

@@ -44,7 +44,6 @@ async function prepareQueryIndexFilesInProcess(
   return usable;
 }
 
-
 export async function prepareQueryIndexFilesInWorker(
   projectRoot: string,
   files: readonly Pick<QueryIndexWorkerTask, "relativePath" | "sourceIdentity">[],

@@ -497,7 +497,15 @@ describe("CLI regressions", () => {
     git(tmpDir, ["commit", "-m", "base"]);
     await fsp.writeFile(appFile, "export const main = 1;\n", "utf8");
 
-    const stdout = await runCliCommand(["graph-delta", "--root", tmpDir, "--git-base", "HEAD", "--git-head", "WORKTREE"]);
+    const stdout = await runCliCommand([
+      "graph-delta",
+      "--root",
+      tmpDir,
+      "--git-base",
+      "HEAD",
+      "--git-head",
+      "WORKTREE",
+    ]);
 
     expect(stdout).toContain("Graph delta");
     expect(stdout).toContain("Changed files: 1");
@@ -505,7 +513,6 @@ describe("CLI regressions", () => {
     expect(stdout).toContain("Removed edges:");
     expect(stdout).toContain("Files:");
     expect(stdout).not.toContain("\n\n\n");
-
   });
 
   it("graph rejects scan globs combined with git-head alone when sqlite output is requested", async () => {
@@ -2046,7 +2053,6 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
     expect(stdout).toContain("export function helperFunction");
     expect(stdout).not.toContain('"file"');
     expect(stdout).not.toContain("\n\n\n");
-
   });
 });
 

@@ -260,4 +260,3 @@ export type DuplicateTargetedResult = DuplicateDetectionResult & {
   perTargetSkippedCandidateCounts?: Map<string, number>;
   perTargetSuggestionKeys?: Map<string, Set<string>>;
 };
-

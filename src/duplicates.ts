@@ -4,21 +4,51 @@ import * as duplicateUnits from "./duplicates/units.js";
 import * as duplicateScoring from "./duplicates/scoring.js";
 import * as duplicateUnitCache from "./duplicates/unitCache.js";
 import type {
-  CollectedDuplicateUnits, DuplicateContextResult, DuplicateDetectionOptions, DuplicateDetectionResult, DuplicateGroup,
-  DuplicateInternalUnit, DuplicatePreparedAnalysis, DuplicatePreparedAnalysisData, DuplicatePreparationOptions,
-  DuplicateSuggestion, DuplicateTarget, DuplicateTargetedResult, DuplicateUnitCollectionOptions, DuplicateUnitRef,
-  PairFilter, PreparedDuplicateBuckets, UnitFilter,
+  CollectedDuplicateUnits,
+  DuplicateContextResult,
+  DuplicateDetectionOptions,
+  DuplicateDetectionResult,
+  DuplicateGroup,
+  DuplicateInternalUnit,
+  DuplicatePreparedAnalysis,
+  DuplicatePreparedAnalysisData,
+  DuplicatePreparationOptions,
+  DuplicateSuggestion,
+  DuplicateTarget,
+  DuplicateTargetedResult,
+  DuplicateUnitCollectionOptions,
+  DuplicateUnitRef,
+  PairFilter,
+  PreparedDuplicateBuckets,
+  UnitFilter,
 } from "./duplicates/types.js";
 
 const { collectDuplicateUnits, normalizeDetectionFile } = duplicateUnits;
 const {
-  DEFAULT_GROUP_VARIANT_LIMIT, DEFAULT_LIMIT, DEFAULT_MAX_BUCKET_SIZE, DEFAULT_MAX_TOKENS, DEFAULT_MIN_TOKENS,
-  DEFAULT_SHINGLE_SIZE, DEFAULT_WINDOW_SIZE, buildCandidatePairs, buildCandidatePairsFromPreparedBuckets,
-  compareSuggestions, confidenceRank, filterPreparedDuplicateBuckets, groupSuggestions, hasLineOverlap, lineOverlap,
-  normalizeConfidence, normalizeNonNegativeIntegerOption, normalizePositiveIntegerOption, prepareDuplicateCandidateBuckets,
-  suggestionForPair, suggestionVariantKey,
+  DEFAULT_GROUP_VARIANT_LIMIT,
+  DEFAULT_LIMIT,
+  DEFAULT_MAX_BUCKET_SIZE,
+  DEFAULT_MAX_TOKENS,
+  DEFAULT_MIN_TOKENS,
+  DEFAULT_SHINGLE_SIZE,
+  DEFAULT_WINDOW_SIZE,
+  buildCandidatePairs,
+  buildCandidatePairsFromPreparedBuckets,
+  compareSuggestions,
+  confidenceRank,
+  filterPreparedDuplicateBuckets,
+  groupSuggestions,
+  hasLineOverlap,
+  lineOverlap,
+  normalizeConfidence,
+  normalizeNonNegativeIntegerOption,
+  normalizePositiveIntegerOption,
+  prepareDuplicateCandidateBuckets,
+  suggestionForPair,
+  suggestionVariantKey,
 } = duplicateScoring;
-const { closeDuplicateUnitCacheForIndex, leaseDuplicateUnitCacheForIndex, maintainDuplicateUnitDiskCache } = duplicateUnitCache;
+const { closeDuplicateUnitCacheForIndex, leaseDuplicateUnitCacheForIndex, maintainDuplicateUnitDiskCache } =
+  duplicateUnitCache;
 
 const duplicatePreparedAnalyses = new WeakMap<DuplicatePreparedAnalysis, DuplicatePreparedAnalysisData>();
 
@@ -502,11 +532,25 @@ export async function findDuplicateContext(
   return contexts[0]!;
 }
 
-
 export type {
-  DuplicateConfidence, DuplicateCloneType, DuplicateCleanupLabel, DuplicateUnitKind, DuplicateUnitRef, DuplicateMetrics,
-  DuplicateSuggestion, DuplicateClusterSummary, DuplicateGroup, DuplicateDetectionOptions, DuplicateSimilarityHint,
-  DuplicateDetectionOmittedCounts, DuplicateDetectionStats, DuplicateDetectionFilteredCounts, DuplicateDetectionResult,
-  DuplicateTarget, DuplicateContextResult, DuplicatePreparedAnalysis, DuplicatePreparationOptions,
+  DuplicateConfidence,
+  DuplicateCloneType,
+  DuplicateCleanupLabel,
+  DuplicateUnitKind,
+  DuplicateUnitRef,
+  DuplicateMetrics,
+  DuplicateSuggestion,
+  DuplicateClusterSummary,
+  DuplicateGroup,
+  DuplicateDetectionOptions,
+  DuplicateSimilarityHint,
+  DuplicateDetectionOmittedCounts,
+  DuplicateDetectionStats,
+  DuplicateDetectionFilteredCounts,
+  DuplicateDetectionResult,
+  DuplicateTarget,
+  DuplicateContextResult,
+  DuplicatePreparedAnalysis,
+  DuplicatePreparationOptions,
 } from "./duplicates/types.js";
 export { closeDuplicateUnitCacheDatabase } from "./duplicates/unitCache.js";

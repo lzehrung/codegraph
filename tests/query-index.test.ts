@@ -87,7 +87,10 @@ describe("persistent query index", () => {
     const initialSession = createSession(root);
     const initial = await search(initialSession, root, "validateUser");
     const initialSnapshot = await initialSession.loadProject();
-    expect(initialSnapshot.buildReport?.queryIndex, JSON.stringify(initialSnapshot.buildReport?.queryIndex)).toMatchObject({
+    expect(
+      initialSnapshot.buildReport?.queryIndex,
+      JSON.stringify(initialSnapshot.buildReport?.queryIndex),
+    ).toMatchObject({
       sidecarState: "created",
       filesRead: 4,
       filesAdded: 4,
@@ -194,9 +197,7 @@ describe("persistent query index", () => {
     setup.exec("VACUUM;");
     setup.exec("DELETE FROM chunks;");
     const beforeAutoVacuum = setup.prepare("PRAGMA auto_vacuum").get() as { auto_vacuum?: number } | undefined;
-    const beforeFreelist = setup.prepare("PRAGMA freelist_count").get() as
-      | { freelist_count?: number }
-      | undefined;
+    const beforeFreelist = setup.prepare("PRAGMA freelist_count").get() as { freelist_count?: number } | undefined;
     const beforePages = setup.prepare("PRAGMA page_count").get() as { page_count?: number } | undefined;
     setup.close();
     expect(beforeAutoVacuum?.auto_vacuum).toBe(0);
@@ -212,9 +213,7 @@ describe("persistent query index", () => {
 
     const after = new SqliteDatabase(sidecar, { readonly: true });
     const afterAutoVacuum = after.prepare("PRAGMA auto_vacuum").get() as { auto_vacuum?: number } | undefined;
-    const afterFreelist = after.prepare("PRAGMA freelist_count").get() as
-      | { freelist_count?: number }
-      | undefined;
+    const afterFreelist = after.prepare("PRAGMA freelist_count").get() as { freelist_count?: number } | undefined;
     const afterPages = after.prepare("PRAGMA page_count").get() as { page_count?: number } | undefined;
     after.close();
     expect(afterAutoVacuum?.auto_vacuum).toBe(2);
@@ -705,10 +704,7 @@ describe("persistent query index", () => {
     const databasePath = path.join(root, "query-short-term.sqlite");
     const store = new QueryIndexStore(databasePath);
     store.replaceFiles(
-      [
-        preparedFile("src/alpha.ts", ["const id = 1;"]),
-        preparedFile("src/beta.ts", ["const id = 2;"]),
-      ],
+      [preparedFile("src/alpha.ts", ["const id = 1;"]), preparedFile("src/beta.ts", ["const id = 2;"])],
       [],
       {
         ...expectedQueryIndexVersionMetadata(),
@@ -736,17 +732,13 @@ describe("persistent query index", () => {
       preparedFile(`src/${String(index).padStart(5, "0")}.ts`, ["const alphaNoise = 1;"]),
     );
     files.push(preparedFile("src/zz-top.ts", ["const alphaValue = betaValue;"]));
-    store.replaceFiles(
-      files,
-      [],
-      {
-        ...expectedQueryIndexVersionMetadata(),
-        projectSnapshotIdentity: "snap-3",
-        projectRootIdentity: "root-3",
-        createdByCodegraphVersion: "test",
-        updatedAt: new Date().toISOString(),
-      },
-    );
+    store.replaceFiles(files, [], {
+      ...expectedQueryIndexVersionMetadata(),
+      projectSnapshotIdentity: "snap-3",
+      projectRootIdentity: "root-3",
+      createdByCodegraphVersion: "test",
+      updatedAt: new Date().toISOString(),
+    });
 
     const candidates = findQueryIndexChunkCandidates(store, ["alpha", "beta"]);
     expect(candidates[0]?.path).toBe("src/zz-top.ts");

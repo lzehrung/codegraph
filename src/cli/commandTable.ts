@@ -45,8 +45,7 @@ const agentIoWriters = {
 } as const;
 
 function graphQueryArgs(ctx: CliProjectContext) {
-  const graphOptions =
-    ctx.hasGraphOverrides || ctx.nativeMode !== "auto" ? ctx.buildGraphOptions() : undefined;
+  const graphOptions = ctx.hasGraphOverrides || ctx.nativeMode !== "auto" ? ctx.buildGraphOptions() : undefined;
   return { ctx, graphOptions };
 }
 
@@ -113,7 +112,10 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
     stage: "base",
     run: async (ctx) => {
       const { buildDoctorReport } = await import("./doctor.js");
-      writeCliOutput({ hasFlag: ctx.hasFlag, writeJSONLine, writeStdoutLine }, buildDoctorReport(ctx.parsed.positionals.at(-1)));
+      writeCliOutput(
+        { hasFlag: ctx.hasFlag, writeJSONLine, writeStdoutLine },
+        buildDoctorReport(ctx.parsed.positionals.at(-1)),
+      );
     },
   },
   skill: {
@@ -186,7 +188,9 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
   search: {
     stage: "project",
     run: async (ctx) => {
-      const commandReport: CommandReport | undefined = ctx.reportEnabled ? { command: "search", timings: {} } : undefined;
+      const commandReport: CommandReport | undefined = ctx.reportEnabled
+        ? { command: "search", timings: {} }
+        : undefined;
       const indexReport: BuildReport | undefined = ctx.reportEnabled ? { timings: {} } : undefined;
       if (commandReport && indexReport) commandReport.index = indexReport;
       const buildOptions = ctx.buildAgentOptions();

@@ -52,7 +52,10 @@ export async function handleGrepCommand(context: GrepCommandContext): Promise<vo
     if (context.hasFlag("--json")) {
       context.writeJSONLine(await astGrep(context.projectRootFs, querySource, patterns, context.discoveryOptions));
     } else {
-      await writeStreamedGrepHits(context, streamAstGrep(context.projectRootFs, querySource, patterns, context.discoveryOptions));
+      await writeStreamedGrepHits(
+        context,
+        streamAstGrep(context.projectRootFs, querySource, patterns, context.discoveryOptions),
+      );
     }
     return;
   }

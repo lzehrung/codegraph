@@ -284,15 +284,14 @@ export class QueryIndexStore {
    */
   private reclaimFreeSpace(): void {
     try {
-      const mode = (this.db.prepare("PRAGMA auto_vacuum").get() as { auto_vacuum?: number } | undefined)
-        ?.auto_vacuum;
+      const mode = (this.db.prepare("PRAGMA auto_vacuum").get() as { auto_vacuum?: number } | undefined)?.auto_vacuum;
       if (mode === 2) {
         this.db.exec("PRAGMA incremental_vacuum;");
         return;
       }
       const freelist =
-        (this.db.prepare("PRAGMA freelist_count").get() as { freelist_count?: number } | undefined)
-          ?.freelist_count ?? 0;
+        (this.db.prepare("PRAGMA freelist_count").get() as { freelist_count?: number } | undefined)?.freelist_count ??
+        0;
       const pages =
         (this.db.prepare("PRAGMA page_count").get() as { page_count?: number } | undefined)?.page_count ?? 0;
       if (pages > 0 && freelist / pages > 0.15) {
@@ -381,7 +380,11 @@ export class QueryIndexStore {
     return candidates;
   }
 
-  compactChunkCandidates(query: string, paths: readonly string[], limit = QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT): StoredQueryIndexChunk[] {
+  compactChunkCandidates(
+    query: string,
+    paths: readonly string[],
+    limit = QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT,
+  ): StoredQueryIndexChunk[] {
     const normalizedLimit = normalizedCandidateLimit(limit);
     const candidates: StoredQueryIndexChunk[] = [];
     const batchSize = 500;

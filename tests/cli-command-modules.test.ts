@@ -13,7 +13,12 @@ import { handleGraphQueryCommand, type GraphQueryCommandContext } from "../src/c
 import { CLI_HELP_TEXT, FILE_HELP_TEXT, MCP_SERVE_HELP_TEXT, PACKET_HELP_TEXT } from "../src/cli/help.js";
 import { handleImpactCommand, type ImpactCommandContext } from "../src/cli/impact.js";
 import { handleHotspotsCommand, handleInspectCommand, type InspectCommandContext } from "../src/cli/inspect.js";
-import { handleDumpmodCommand, handleGotoCommand, handleRefsCommand, type NavigationCommandContext } from "../src/cli/navigation.js";
+import {
+  handleDumpmodCommand,
+  handleGotoCommand,
+  handleRefsCommand,
+  type NavigationCommandContext,
+} from "../src/cli/navigation.js";
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "../src/cli/packageInfo.js";
 import { handlePacketCommand } from "../src/cli/packet.js";
 import { handleGrepCommand } from "../src/cli/grep.js";
@@ -566,11 +571,7 @@ describe("CLI command modules", () => {
   test("grep pretty output streams one hit at a time", async () => {
     const root = await mkTmpDir("codegraph-grep-stream-");
     const mainPath = path.join(root, "main.ts");
-    await fsp.writeFile(
-      mainPath,
-      "export function helperFunction() {\n  return 1;\n}\nhelperFunction();\n",
-      "utf8",
-    );
+    await fsp.writeFile(mainPath, "export function helperFunction() {\n  return 1;\n}\nhelperFunction();\n", "utf8");
     const stdoutLines: string[] = [];
 
     try {
@@ -601,8 +602,6 @@ describe("CLI command modules", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
-
-
 
   test("impact command reuses the on-disk manifest on a second invocation without a full recursive scan", async () => {
     const root = await mkTmpDir("codegraph-impact-manifest-reuse-");
@@ -1276,7 +1275,6 @@ describe("CLI command modules", () => {
     const legacyManifest = { ...current, preset: "code-review" };
     expect(diffBuildOptions(legacyManifest, { cache: "disk", cacheStrict: true })).not.toContain("preset");
   });
-
 
   test("uses shared cache-mode validation in the extracted graph-delta command handler", async () => {
     await expect(
@@ -2166,7 +2164,6 @@ describe("CLI command modules", () => {
       await fsp.rm(tempDir, { recursive: true, force: true });
     }
   });
-
 
   test("prints the bundled skill path through the extracted skill command", async () => {
     const stdoutLines: string[] = [];
