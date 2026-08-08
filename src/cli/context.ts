@@ -4,6 +4,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import type { BuildOptions, BuildReport } from "../indexer/types.js";
 import type { ReviewBuildReport } from "../review.js";
+import { errorMessage } from "../util/errors.js";
 import { normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
 import { isCliValueOption, type ParsedCliArgs } from "./options.js";
 import {
@@ -219,6 +220,17 @@ export function writeError(error: unknown): void {
     return;
   }
   writeStderrLine(String(error));
+}
+
+/**
+ * Write a caught error to stderr and exit. Replaces the duplicated
+ * `catch { writeStderrLine(...); exit(1|2); }` shape across CLI handlers.
+ * Exit-code convention: 2 for usage/argument errors, 1 for runtime failures.
+ */
+export function exitWithError(context: CliStderrExitContext, error: unknown, exitCode: number, prefix?: string): never {
+  const message = errorMessage(error);
+  context.writeStderrLine(prefix ? `${prefix}: ${message}` : message);
+  context.exit(exitCode);
 }
 
 function formatNativeBackendStatus(report: BuildReport | undefined): string | undefined {
