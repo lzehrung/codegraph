@@ -9,7 +9,8 @@ export type WorkerThreadCountOptions = {
   max?: number | undefined;
 };
 
-/** Single worker-pool sizing policy: explicit request wins, else the configured default, else availableParallelism() - 1; always clamped to [1, max]. */
+/** Single worker-pool sizing policy: explicit request wins, else the configured default,
+ * else availableParallelism() - 1; always clamped to [1, max]. */
 export function resolveWorkerThreadCount(options?: WorkerThreadCountOptions): number {
   const max = options?.max ?? 64;
   const requested = options?.requested;
