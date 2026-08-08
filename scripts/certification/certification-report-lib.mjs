@@ -166,18 +166,28 @@ export async function assembleCertificationReport(options) {
     validate: (section) => requirePassingSection(section, "hermeticity"),
     failures,
   });
-  if (
-    manifest &&
-    (!isRecord(tests.package) ||
-      tests.package.name !== "@lzehrung/codegraph" ||
-      tests.package.version !== manifest.rootVersion ||
-      tests.revision !== manifest.sourceRevision)
-  ) {
-    failures.push({
-      code: "report-candidate-mismatch",
-      message: "Test certification does not describe the release candidate revision.",
-      context: { section: "tests" },
-    });
+  if (manifest) {
+    const mismatches = [];
+    if (!isRecord(tests.package)) {
+      mismatches.push({ field: "package", actual: tests.package, expected: "an object" });
+    } else {
+      if (tests.package.name !== "@lzehrung/codegraph") {
+        mismatches.push({ field: "package.name", actual: tests.package.name, expected: "@lzehrung/codegraph" });
+      }
+      if (tests.package.version !== manifest.rootVersion) {
+        mismatches.push({ field: "package.version", actual: tests.package.version, expected: manifest.rootVersion });
+      }
+    }
+    if (tests.revision !== manifest.sourceRevision) {
+      mismatches.push({ field: "revision", actual: tests.revision, expected: manifest.sourceRevision });
+    }
+    if (mismatches.length) {
+      failures.push({
+        code: "report-candidate-mismatch",
+        message: `Test certification does not describe the release candidate: ${mismatches.map((m) => m.field).join(", ")} mismatched.`,
+        context: { section: "tests", mismatches },
+      });
+    }
   }
   if (isRecord(security) && security.status === "fail") {
     const errors = Array.isArray(security.errors) ? security.errors : [];
