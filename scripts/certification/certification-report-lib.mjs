@@ -55,71 +55,35 @@ function requirePassingSection(section, sectionName) {
   return report;
 }
 
-function requireCompleteSemantics(section) {
-  const report = requireSectionSchema(section, "semantics");
-  if (report.informational !== true) {
+function requireCompleteTests(section) {
+  const report = requireSectionSchema(section, "tests");
+  if (!isRecord(report.package) || report.package.name !== "@lzehrung/codegraph") {
     throw new PackageCertificationError(
       "certification-section-invalid",
-      "Semantic release certification must be explicitly informational.",
-      { section: "semantics" },
+      "Release test certification must record the root package identity.",
+      { section: "tests" },
     );
   }
-  if (report.packageMode !== "packed" || !isRecord(report.package)) {
+  if (typeof report.revision !== "string" || !report.revision) {
     throw new PackageCertificationError(
-      "certification-section-incomplete",
-      "Semantic release certification must execute the packed root package.",
-      { section: "semantics" },
+      "certification-section-invalid",
+      "Release test certification must record the source revision under test.",
+      { section: "tests" },
     );
   }
-  const tiers = isRecord(report.corpus) && Array.isArray(report.corpus.tiers) ? report.corpus.tiers : [];
-  if (!tiers.includes("release") || tiers.includes("representative")) {
+  if (typeof report.command !== "string" || !report.command) {
     throw new PackageCertificationError(
-      "certification-section-incomplete",
-      "Semantic release certification must contain only the checked-in release tier.",
-      { section: "semantics", tiers },
-    );
-  }
-  const modes = new Set(Array.isArray(report.modes) ? report.modes.filter((mode) => typeof mode === "string") : []);
-  const missingModes = ["native", "reduced"].filter((mode) => !modes.has(mode));
-  if (missingModes.length) {
-    throw new PackageCertificationError(
-      "certification-section-incomplete",
-      "Semantic release certification omitted required execution modes.",
-      { section: "semantics", missingModes },
-    );
-  }
-  if (!Array.isArray(report.cases) || !report.cases.length) {
-    throw new PackageCertificationError(
-      "certification-section-incomplete",
-      "Semantic release certification contains no executed case rows.",
-      { section: "semantics" },
-    );
-  }
-  const missingCaseModes = ["native", "reduced"].filter(
-    (mode) => !report.cases.some((caseResult) => isRecord(caseResult) && caseResult.runtimeMode === mode),
-  );
-  if (missingCaseModes.length) {
-    throw new PackageCertificationError(
-      "certification-section-incomplete",
-      "Semantic release certification contains unexecuted runtime modes.",
-      { section: "semantics", missingModes: missingCaseModes },
-    );
-  }
-  const errorCases = report.cases.filter((caseResult) => isRecord(caseResult) && caseResult.status === "error");
-  if (errorCases.length) {
-    throw new PackageCertificationError(
-      "certification-section-failed",
-      "Semantic release certification contains execution errors.",
-      { section: "semantics", errorCases },
+      "certification-section-invalid",
+      "Release test certification must record the command that was executed.",
+      { section: "tests" },
     );
   }
   const status = sectionStatus(report);
-  if (status === "fail" || status === "incomplete") {
-    throw new PackageCertificationError(
-      status === "fail" ? "certification-section-failed" : "certification-section-incomplete",
-      `Semantic release certification status is ${status}.`,
-      { section: "semantics", status },
-    );
+  if (status !== "pass") {
+    throw new PackageCertificationError("certification-section-invalid", `Release test suite status is ${status}.`, {
+      section: "tests",
+      status,
+    });
   }
   return report;
 }
@@ -184,10 +148,10 @@ export async function assembleCertificationReport(options) {
     validate: (section) => requirePassingSection(section, "security"),
     failures,
   });
-  const semantics = await captureSection({
-    name: "semantics",
-    filePath: options.semanticsPath,
-    validate: requireCompleteSemantics,
+  const tests = await captureSection({
+    name: "tests",
+    filePath: options.testsPath,
+    validate: requireCompleteTests,
     failures,
   });
   const hermeticity = await captureSection({
@@ -198,14 +162,15 @@ export async function assembleCertificationReport(options) {
   });
   if (
     manifest &&
-    (!isRecord(semantics.package) ||
-      semantics.package.name !== "@lzehrung/codegraph" ||
-      semantics.package.version !== manifest.rootVersion)
+    (!isRecord(tests.package) ||
+      tests.package.name !== "@lzehrung/codegraph" ||
+      tests.package.version !== manifest.rootVersion ||
+      tests.revision !== manifest.sourceRevision)
   ) {
     failures.push({
       code: "report-candidate-mismatch",
-      message: "Semantic certification does not describe the packed release candidate.",
-      context: { section: "semantics" },
+      message: "Test certification does not describe the release candidate revision.",
+      context: { section: "tests" },
     });
   }
   if (isRecord(security) && security.status === "fail") {
@@ -292,7 +257,7 @@ export async function assembleCertificationReport(options) {
     },
     security,
     packages,
-    semantics,
+    tests,
     hermeticity,
     summary: {
       status: summaryStatus,

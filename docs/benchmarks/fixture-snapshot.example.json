@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-08T01:35:48.457Z",
+  "generatedAt": "2026-08-08T02:00:08.120Z",
   "source": "tests/languages/*.test.ts via vitest",
   "nodeVersion": "v22.16.0",
   "numTotalTests": 227,
@@ -8,9 +8,7 @@
   "languages": [
     {
       "language": "AsciiDoc",
-      "files": [
-        "tests/languages/adoc.test.ts"
-      ],
+      "files": ["tests/languages/adoc.test.ts"],
       "tests": 3,
       "passed": 3,
       "failed": 0,
@@ -19,9 +17,7 @@
     },
     {
       "language": "Astro",
-      "files": [
-        "tests/languages/astro.test.ts"
-      ],
+      "files": ["tests/languages/astro.test.ts"],
       "tests": 3,
       "passed": 3,
       "failed": 0,
@@ -30,9 +26,7 @@
     },
     {
       "language": "C",
-      "files": [
-        "tests/languages/c.test.ts"
-      ],
+      "files": ["tests/languages/c.test.ts"],
       "tests": 5,
       "passed": 5,
       "failed": 0,
@@ -41,9 +35,7 @@
     },
     {
       "language": "C#",
-      "files": [
-        "tests/languages/csharp.test.ts"
-      ],
+      "files": ["tests/languages/csharp.test.ts"],
       "tests": 3,
       "passed": 3,
       "failed": 0,
@@ -52,9 +44,7 @@
     },
     {
       "language": "C++",
-      "files": [
-        "tests/languages/cpp.test.ts"
-      ],
+      "files": ["tests/languages/cpp.test.ts"],
       "tests": 6,
       "passed": 6,
       "failed": 0,
@@ -63,9 +53,7 @@
     },
     {
       "language": "CSS",
-      "files": [
-        "tests/languages/css.test.ts"
-      ],
+      "files": ["tests/languages/css.test.ts"],
       "tests": 2,
       "passed": 2,
       "failed": 0,
@@ -74,9 +62,7 @@
     },
     {
       "language": "Go",
-      "files": [
-        "tests/languages/go.test.ts"
-      ],
+      "files": ["tests/languages/go.test.ts"],
       "tests": 6,
       "passed": 6,
       "failed": 0,
@@ -85,9 +71,7 @@
     },
     {
       "language": "Handlebars",
-      "files": [
-        "tests/languages/hbs.test.ts"
-      ],
+      "files": ["tests/languages/hbs.test.ts"],
       "tests": 3,
       "passed": 3,
       "failed": 0,
@@ -96,9 +80,7 @@
     },
     {
       "language": "HTML",
-      "files": [
-        "tests/languages/html.test.ts"
-      ],
+      "files": ["tests/languages/html.test.ts"],
       "tests": 2,
       "passed": 2,
       "failed": 0,
@@ -107,9 +89,7 @@
     },
     {
       "language": "Java",
-      "files": [
-        "tests/languages/java.test.ts"
-      ],
+      "files": ["tests/languages/java.test.ts"],
       "tests": 13,
       "passed": 13,
       "failed": 0,
@@ -118,9 +98,7 @@
     },
     {
       "language": "JavaScript",
-      "files": [
-        "tests/languages/javascript.test.ts"
-      ],
+      "files": ["tests/languages/javascript.test.ts"],
       "tests": 2,
       "passed": 2,
       "failed": 0,
@@ -129,9 +107,7 @@
     },
     {
       "language": "Kotlin",
-      "files": [
-        "tests/languages/kotlin.test.ts"
-      ],
+      "files": ["tests/languages/kotlin.test.ts"],
       "tests": 8,
       "passed": 8,
       "failed": 0,
@@ -140,9 +116,7 @@
     },
     {
       "language": "Less",
-      "files": [
-        "tests/languages/less.test.ts"
-      ],
+      "files": ["tests/languages/less.test.ts"],
       "tests": 2,
       "passed": 2,
       "failed": 0,
@@ -151,9 +125,7 @@
     },
     {
       "language": "Markdown",
-      "files": [
-        "tests/languages/markdown.test.ts"
-      ],
+      "files": ["tests/languages/markdown.test.ts"],
       "tests": 3,
       "passed": 3,
       "failed": 0,
@@ -162,9 +134,7 @@
     },
     {
       "language": "MDX",
-      "files": [
-        "tests/languages/mdx.test.ts"
-      ],
+      "files": ["tests/languages/mdx.test.ts"],
       "tests": 3,
       "passed": 3,
       "failed": 0,
@@ -173,9 +143,7 @@
     },
     {
       "language": "PHP",
-      "files": [
-        "tests/languages/php.test.ts"
-      ],
+      "files": ["tests/languages/php.test.ts"],
       "tests": 44,
       "passed": 44,
       "failed": 0,
@@ -184,10 +152,7 @@
     },
     {
       "language": "Python",
-      "files": [
-        "tests/languages/python-all.test.ts",
-        "tests/languages/python.test.ts"
-      ],
+      "files": ["tests/languages/python-all.test.ts", "tests/languages/python.test.ts"],
       "tests": 4,
       "passed": 4,
       "failed": 0,
@@ -196,9 +161,7 @@
     },
     {
       "language": "reStructuredText",
-      "files": [
-        "tests/languages/rst.test.ts"
-      ],
+      "files": ["tests/languages/rst.test.ts"],
       "tests": 3,
       "passed": 3,
       "failed": 0,
@@ -207,9 +170,7 @@
     },
     {
       "language": "Ruby",
-      "files": [
-        "tests/languages/ruby.test.ts"
-      ],
+      "files": ["tests/languages/ruby.test.ts"],
       "tests": 5,
       "passed": 5,
       "failed": 0,
@@ -218,9 +179,7 @@
     },
     {
       "language": "Rust",
-      "files": [
-        "tests/languages/rust.test.ts"
-      ],
+      "files": ["tests/languages/rust.test.ts"],
       "tests": 5,
       "passed": 5,
       "failed": 0,
@@ -229,9 +188,7 @@
     },
     {
       "language": "SCSS",
-      "files": [
-        "tests/languages/scss.test.ts"
-      ],
+      "files": ["tests/languages/scss.test.ts"],
       "tests": 5,
       "passed": 5,
       "failed": 0,
@@ -240,9 +197,7 @@
     },
     {
       "language": "SQL",
-      "files": [
-        "tests/languages/sql.test.ts"
-      ],
+      "files": ["tests/languages/sql.test.ts"],
       "tests": 6,
       "passed": 6,
       "failed": 0,
@@ -251,9 +206,7 @@
     },
     {
       "language": "Svelte",
-      "files": [
-        "tests/languages/svelte.test.ts"
-      ],
+      "files": ["tests/languages/svelte.test.ts"],
       "tests": 4,
       "passed": 4,
       "failed": 0,
@@ -262,9 +215,7 @@
     },
     {
       "language": "Swift",
-      "files": [
-        "tests/languages/swift.test.ts"
-      ],
+      "files": ["tests/languages/swift.test.ts"],
       "tests": 4,
       "passed": 4,
       "failed": 0,
@@ -273,9 +224,7 @@
     },
     {
       "language": "TSX",
-      "files": [
-        "tests/languages/tsx.test.ts"
-      ],
+      "files": ["tests/languages/tsx.test.ts"],
       "tests": 2,
       "passed": 2,
       "failed": 0,
@@ -284,9 +233,7 @@
     },
     {
       "language": "TypeScript",
-      "files": [
-        "tests/languages/typescript.test.ts"
-      ],
+      "files": ["tests/languages/typescript.test.ts"],
       "tests": 3,
       "passed": 3,
       "failed": 0,
@@ -295,9 +242,7 @@
     },
     {
       "language": "Vue",
-      "files": [
-        "tests/languages/vue.test.ts"
-      ],
+      "files": ["tests/languages/vue.test.ts"],
       "tests": 4,
       "passed": 4,
       "failed": 0,
@@ -306,9 +251,7 @@
     },
     {
       "language": "Zig",
-      "files": [
-        "tests/languages/zig.test.ts"
-      ],
+      "files": ["tests/languages/zig.test.ts"],
       "tests": 7,
       "passed": 7,
       "failed": 0,

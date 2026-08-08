@@ -526,12 +526,10 @@ jobs:
           path: temp/certification/package-smoke-reduced.json
           if-no-files-found: error
 
-  semantic-release:
-    name: Run packed release semantic corpus
+  tests-release:
+    name: Run full test suite for release candidate
     needs:
       - plan-release
-      - assemble-release-candidates
-      - security-production
     runs-on: ubuntu-latest
     steps:
       - name: Checkout planned source
@@ -539,46 +537,33 @@ jobs:
         with:
           ref: ${{ needs.plan-release.outputs.source_revision }}
 
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
           node-version: 24.10.0
 
-      - name: Download release candidates
-        uses: actions/download-artifact@v8
-        with:
-          name: release-candidates
-          path: temp/release-candidates
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
 
-      - name: Install and certify packed semantic host packages
+      - name: Build
+        run: npm run build
+
+      - name: Run full test suite and certify
         shell: bash
         run: >-
-          node ./scripts/certification/run-package-smoke.mjs
-          --manifest temp/release-candidates/release-candidate-manifest.json
-          --target linux-x64-gnu
-          --mode runtime
-          --install-dir "$RUNNER_TEMP/codegraph-semantic-install"
-          --output temp/certification/semantic-host-package-smoke.json
+          node ./scripts/certification/run-release-tests.mjs
+          --revision ${{ needs.plan-release.outputs.source_revision }}
+          --output temp/certification/tests-results.json
 
-      - name: Run checked-in release semantic corpus
-        shell: bash
-        run: >-
-          node ./scripts/benchmarks/run-semantic-corpus.mjs
-          --tier release
-          --mode native
-          --mode reduced
-          --package-mode packed
-          --package-root "$RUNNER_TEMP/codegraph-semantic-install/node_modules/@lzehrung/codegraph"
-          --output temp/certification/semantic-results.json
-
-      - name: Upload semantic report
+      - name: Upload tests report
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: semantic-release
-          path: |
-            temp/certification/semantic-results.json
-            temp/certification/semantic-host-package-smoke.json
+          name: tests-release
+          path: temp/certification/tests-results.json
           if-no-files-found: error
 
   certification-report:
@@ -590,7 +575,7 @@ jobs:
       - fixture-hermeticity
       - package-smoke
       - package-smoke-reduced
-      - semantic-release
+      - tests-release
       - package-funnel
     runs-on: ubuntu-latest
     steps:
@@ -629,11 +614,11 @@ jobs:
           name: fixture-hermeticity
           path: temp/sections/hermeticity
 
-      - name: Download semantic report
+      - name: Download tests report
         uses: actions/download-artifact@v8
         with:
-          name: semantic-release
-          path: temp/sections/semantics
+          name: tests-release
+          path: temp/sections/tests
 
       - name: Require every package certification row
         run: >-
@@ -652,7 +637,7 @@ jobs:
           --manifest temp/release-candidates/release-candidate-manifest.json
           --package-reports temp/package-smoke-reports
           --security temp/sections/security/security.json
-          --semantics temp/sections/semantics/semantic-results.json
+          --tests temp/sections/tests/tests-results.json
           --hermeticity temp/sections/hermeticity/hermeticity.json
           --exceptions scripts/certification/native-target-exceptions.json
           --repository https://github.com/${{ github.repository }}

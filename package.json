@@ -77,8 +77,6 @@
     "bench:native:full": "node ./scripts/bench-native.mjs --runs 1 --fixtures typescript,python,go,rust,mixed --workloads full,graph --temperatures cold",
     "bench:docs": "node ./scripts/ensure-dist-for-tests.mjs && node ./scripts/benchmarks/run-scenario.mjs --output docs/benchmarks/results.example.json --require-complete && node ./scripts/benchmarks/summarize-results.mjs --input docs/benchmarks/results.example.json --scenario-file docs/benchmarks/scenarios.json --readme docs/benchmarks/README.md --write",
     "bench:docs:check": "node ./scripts/benchmarks/summarize-results.mjs --input docs/benchmarks/results.example.json --scenario-file docs/benchmarks/scenarios.json --readme docs/benchmarks/README.md --check",
-    "bench:semantic": "node ./scripts/benchmarks/run-semantic-corpus.mjs",
-    "bench:semantic:summarize": "node ./scripts/benchmarks/summarize-semantic-corpus.mjs",
     "bench:fixtures": "node ./scripts/benchmarks/generate-fixture-matrix.mjs",
     "bench:fixtures:check": "node ./scripts/benchmarks/generate-fixture-matrix.mjs --check",
     "bench:query": "node ./scripts/benchmarks/measure-query-substrate.mjs",

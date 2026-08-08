@@ -113,9 +113,7 @@ function runVitest(reportPath) {
   if (result.error) throw result.error;
   // Vitest exits non-zero when tests fail; the JSON report is still written and is what we score.
   if (!fs.existsSync(absoluteReportPath)) {
-    throw new Error(
-      `Vitest did not produce a JSON report at ${reportPath} (exit code ${result.status ?? "unknown"}).`,
-    );
+    throw new Error(`Vitest did not produce a JSON report at ${reportPath} (exit code ${result.status ?? "unknown"}).`);
   }
   return absoluteReportPath;
 }
@@ -186,9 +184,14 @@ function buildSnapshot(reportPath) {
 
 function markdownTable(rows, columns) {
   if (!rows.length) return "_None._";
-  const header = `| ${columns.map((column) => column.label).join(" | ")} |`;
-  const separator = `| ${columns.map(() => "---").join(" | ")} |`;
-  const body = rows.map((row) => `| ${columns.map((column) => column.value(row)).join(" | ")} |`);
+  const cellValues = rows.map((row) => columns.map((column) => String(column.value(row))));
+  const widths = columns.map((column, index) =>
+    Math.max(column.label.length, ...cellValues.map((cells) => cells[index].length)),
+  );
+  const formatRow = (cells) => `| ${cells.map((cell, index) => cell.padEnd(widths[index])).join(" | ")} |`;
+  const header = formatRow(columns.map((column) => column.label));
+  const separator = `| ${widths.map((width) => "-".repeat(width)).join(" | ")} |`;
+  const body = cellValues.map((cells) => formatRow(cells));
   return [header, separator, ...body].join("\n");
 }
 

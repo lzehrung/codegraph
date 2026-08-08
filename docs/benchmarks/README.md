@@ -39,46 +39,11 @@ npm run bench:query -- --root . --cli-samples 5 --mcp-samples 10
 Pass `--include-baseline` to add same-machine cache-off rows. CLI timing includes process startup, project snapshot validation, search, and JSON serialization. MCP timing discards one warmup and reports the following calls.
 Results are not universal latency claims; compare the same root, revision, query, Node version, and machine state.
 
-## Semantic correctness corpus
+## Fixture test matrix
 
-> **Groundwork in progress:** a fixture-generated alternative now exists at [`fixture-snapshot.md`](./fixture-snapshot.md), built directly from `tests/languages/*.test.ts` runs instead of hand-authored goldens. It does not yet replace this section or the release certification pipeline below; both are documented until the migration is complete.
+[`fixture-snapshot.md`](./fixture-snapshot.md) shows per-language pass/fail results generated directly from `tests/languages/*.test.ts` runs. Regenerate with `npm run bench:fixtures`; verify it is current with `npm run bench:fixtures:check`. This, and the rest of the automated test suite, is also what release certification checks: there is no separate hand-authored golden corpus.
 
-Separate from the workflow timing table, the semantic corpus checks whether codegraph returns the right definitions, references, dependencies, and candidate tests on small reviewed fixtures.
-
-### What it tells you
-
-- which languages and operations were reviewed
-- whether the expected results were returned
-- native and reduced results separately
-- how much of the selected corpus was supported versus unsupported
-
-### What it does not claim
-
-- universal compiler-level correctness
-- large-repository behavior
-- network or remote reliability
-- a release-blocking accuracy threshold
-
-### How it works
-
-Each case declares:
-
-- a local fixture repository
-- the operation to run
-- the expected results
-- a short review rationale
-
-Definitions and references use exact project-relative files and ranges. Dependency cases compare normalized `(from, to, kind)` tuples. Candidate-test cases compare ordered project-relative test paths.
-
-[`semantic-results.example.json`](./semantic-results.example.json) stores the checked example output, including environment metadata, per-case results, and grouped summaries.
-
-The current checked result is informational. It shows what passed on the reviewed fixtures; it does not claim a universal score for all repositories.
-
-### Representative tier
-
-The scheduled [`semantic-corpus.yml`](../../.github/workflows/semantic-corpus.yml) job is still informational. Representative public-repository cases should only be added when they use a pinned commit, a reviewed license, bounded include roots, and no release dependency on clone availability.
-
-### Workflows and metrics
+## Workflow definitions
 
 Each checked scenario in [`scenarios.json`](./scenarios.json) defines a local fixture, a task, expected anchors, and the exact steps for both variants.
 

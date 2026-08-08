@@ -366,7 +366,7 @@ The honest boundaries matter:
 - Duplicate matches and candidate tests are ranked leads that still require human or agent judgment.
 - `--fast-graph` is an explicit speed/accuracy tradeoff for plain JavaScript and TypeScript import extraction.
 - The checked `explore` benchmark is a bounded evidence-retrieval benchmark, not a universal performance claim.
-- The separate [semantic corpus](./docs/benchmarks/README.md#semantic-correctness-corpus) is a checked set of small reviewed cases. It shows what codegraph has actually been tested against by language and operation.
+- The fixture test matrix and language parity docs show what codegraph has actually been tested against by language and operation; absence there means untested, not guaranteed.
 
 Mitigations are explicit too:
 

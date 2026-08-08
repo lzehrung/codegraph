@@ -40,8 +40,5 @@ jobs:
       - name: Check fixture cleanliness
         run: npm run fixtures:check-clean
 
-      - name: Semantic corpus release tier
-        run: npm run bench:semantic -- --tier release --mode native --mode reduced --package-mode checkout --output semantic-release-results.json
-
       - name: Native benchmark smoke
         run: npm run bench:native:smoke -- --json

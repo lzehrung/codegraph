@@ -12,7 +12,7 @@ interface CertificationFixture {
     manifestPath: string;
     packageReportDirectory: string;
     securityPath: string;
-    semanticsPath: string;
+    testsPath: string;
     hermeticityPath: string;
     exceptionsPath: string;
     repository: string;
@@ -100,15 +100,13 @@ async function certificationFixture(
     errors: options.securityStatus === "fail" ? [{ code: "audit-failed", message: "audit failed" }] : [],
     rejectedVulnerabilities: [],
   });
-  const semanticsPath = path.join(root, "semantics.json");
-  writeJson(semanticsPath, {
+  const testsPath = path.join(root, "tests.json");
+  writeJson(testsPath, {
     schemaVersion: 1,
-    informational: true,
-    packageMode: "packed",
+    revision: "a".repeat(40),
     package: { name: "@lzehrung/codegraph", version: "2.0.0" },
-    corpus: { tiers: ["release"] },
-    modes: ["native", "reduced"],
-    cases: [{ runtimeMode: "native" }, { runtimeMode: "reduced" }],
+    command: "npm run test:all",
+    status: "pass",
   });
   const hermeticityPath = path.join(root, "hermeticity.json");
   writeJson(hermeticityPath, { schemaVersion: 1, status: "pass", fixtureRoots: [], violations: [] });
@@ -130,7 +128,7 @@ async function certificationFixture(
       manifestPath,
       packageReportDirectory: reportsDirectory,
       securityPath,
-      semanticsPath,
+      testsPath,
       hermeticityPath,
       exceptionsPath,
       repository: "https://github.com/lzehrung/codegraph",
@@ -158,7 +156,7 @@ describe("CertificationReportV1 assembly", () => {
         "packages",
         "schemaVersion",
         "security",
-        "semantics",
+        "tests",
         "source",
         "summary",
         "versions",
