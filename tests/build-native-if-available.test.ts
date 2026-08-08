@@ -138,7 +138,7 @@ describe("build-native-if-available", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("warns clearly when a Windows native artifact is locked during cleanup", () => {
+  it("skips rebuild and reuses the artifact when a Windows native addon is locked", () => {
     const warn = vi.fn();
     const spawnSyncImpl = vi.fn().mockReturnValueOnce({ status: 0 }).mockReturnValueOnce({
       status: 1,
@@ -165,9 +165,11 @@ describe("build-native-if-available", () => {
       rmSyncImpl,
     });
 
-    expect(exitCode).toBe(1);
-    expect(spawnSyncImpl).toHaveBeenCalledTimes(2);
+    expect(exitCode).toBe(0);
+    expect(spawnSyncImpl).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("A packaged native addon appears to be in use"));
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("copy artifact failed"));
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("Skipping native rebuild because a packaged Windows addon is locked"),
+    );
   });
 });

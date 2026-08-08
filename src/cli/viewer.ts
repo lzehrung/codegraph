@@ -17,6 +17,8 @@ import {
 import { cacheRoot } from "../indexer/build-cache/module-cache.js";
 import { parseOptionalBoundedIntegerOption } from "./options.js";
 import { assertFilePathWithinRoot, resolveFilePathFromRoot } from "../util/paths.js";
+import { errorMessage } from "../util/errors.js";
+import { exitWithError } from "./context.js";
 const DEFAULT_VIEWER_HOST = "127.0.0.1";
 const DEFAULT_VIEWER_PORT = 4173;
 
@@ -54,7 +56,7 @@ export type ViewerCommandContext = {
   cwd: () => string;
   writeStderrLine: (line: string) => void;
   writeStdoutLine: (line: string) => void;
-  exit: (code: number) => void;
+  exit: (code: number) => never;
 };
 
 type OpenedGraphFile = {
@@ -188,7 +190,7 @@ async function writeGeneratedGraphResponse(
     });
     response.end(request.method === "HEAD" ? undefined : graphJson);
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = errorMessage(error);
     const message = `Unable to build the current project graph: ${detail}`;
     response.writeHead(500, {
       "Content-Length": String(Buffer.byteLength(message)),
@@ -372,9 +374,7 @@ export async function handleViewerCommand(context: ViewerCommandContext): Promis
       }
     }
   } catch (error) {
-    context.writeStderrLine(error instanceof Error ? error.message : String(error));
-    context.exit(2);
-    return;
+    exitWithError(context, error, 2);
   }
 
   if (!options) return;

@@ -19,6 +19,7 @@ import { getHotspots } from "./graphs/hotspots.js";
 import type { NativeRuntimeMode } from "./native/treeSitterNative.js";
 import { fileExists } from "./util/workspace.js";
 import { isFilePathWithinRoot, normalizePath, resolveFilePathFromRoot } from "./util/paths.js";
+import { errorMessage } from "./util/errors.js";
 import { listProjectFiles } from "./util/projectFiles.js";
 import { boundAgentList, defaultAgentLimit, normalizeAgentLimit } from "./agent/bounds.js";
 import { normalizeAgentOutputPath } from "./agent/normalize.js";
@@ -210,7 +211,7 @@ export async function tool_impactJSON(
   } catch (error) {
     return {
       status: "error",
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage(error),
     };
   }
 }
@@ -281,7 +282,7 @@ export async function tool_getFileOverview(
   } catch (error) {
     return {
       status: "error",
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage(error),
     };
   }
 }
@@ -555,7 +556,7 @@ export async function tool_findSymbol(
   } catch (error) {
     return {
       status: "error",
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage(error),
     };
   }
 }

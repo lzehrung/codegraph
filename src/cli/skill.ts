@@ -202,13 +202,17 @@ function formatSkillInstallSummary(output: {
   skillFilePath: string;
   sourceDir: string;
 }): string {
-  const lines = ["Installed Codegraph skill.", `Target: ${output.targetDir}`, `Skill file: ${output.skillFilePath}`, `Source: ${output.sourceDir}`];
+  const lines = [
+    "Installed Codegraph skill.",
+    `Target: ${output.targetDir}`,
+    `Skill file: ${output.skillFilePath}`,
+    `Source: ${output.sourceDir}`,
+  ];
   if (output.agent) {
     lines.splice(1, 0, `Agent: ${output.agent}`);
   }
   return lines.join("\n");
 }
-
 
 export type SkillCommandContext = {
   positionals: string[];

@@ -10,6 +10,7 @@ import {
 import type { LanguageExtensionMap } from "./languages.js";
 import type { GraphBuildOptions } from "./graphs/types.js";
 import { normalizeResolutionHints } from "./util/paths.js";
+import { errorMessage } from "./util/errors.js";
 import { type ProjectFileDiscoveryOptions } from "./util/projectFiles.js";
 
 export const CODEGRAPH_CONFIG_FILE = "codegraph.config.json";
@@ -163,7 +164,7 @@ export async function loadCodegraphConfig(projectRoot: string): Promise<Codegrap
   try {
     parsedJson = JSON.parse(raw);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     throw new Error(`Invalid ${CODEGRAPH_CONFIG_FILE}: ${message}`);
   }
 

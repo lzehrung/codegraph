@@ -1,6 +1,6 @@
 import { formatWorkspaceSymbolsResponse, workspaceSymbols } from "../agent/workspaceSymbols.js";
 import { SymbolKind } from "../indexer/types.js";
-import type { CliAgentCommandContext } from "./context.js";
+import { exitWithError, type CliAgentCommandContext } from "./context.js";
 import { SYMBOLS_HELP_TEXT } from "./help.js";
 import { parseBoundedIntegerOption } from "./options.js";
 
@@ -35,8 +35,7 @@ export async function handleSymbolsCommand(context: SymbolsCommandContext): Prom
   try {
     kinds = parseWorkspaceSymbolKinds(context.getOpt("--kind"));
   } catch (error: unknown) {
-    context.writeStderrLine(error instanceof Error ? error.message : String(error));
-    context.exit(1);
+    exitWithError(context, error, 1);
   }
   const fileGlob = context.getOpt("--file-glob");
   if (!query && !kinds?.length && !fileGlob) {
@@ -62,7 +61,6 @@ export async function handleSymbolsCommand(context: SymbolsCommandContext): Prom
       context.writeStdoutLine(formatWorkspaceSymbolsResponse(response));
     }
   } catch (error: unknown) {
-    context.writeStderrLine(error instanceof Error ? error.message : String(error));
-    context.exit(1);
+    exitWithError(context, error, 1);
   }
 }

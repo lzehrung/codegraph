@@ -1,17 +1,17 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Piscina } from "piscina";
 import { findPackageRoot } from "../../cli/packageInfo.js";
 import { prepareQueryIndexFile, type PreparedQueryIndexFile } from "./content.js";
 import { resolveQueryIndexSourcePath } from "./paths.js";
+import { resolveWorkerThreadCount } from "../../util/workerThreads.js";
 import type { QueryIndexWorkerTask } from "./queryIndexWorker.js";
 
 const QUERY_INDEX_MAX_THREADS = 4;
 
 function resolveWorkerThreads(): number {
-  return Math.min(Math.max(os.availableParallelism() - 1, 1), QUERY_INDEX_MAX_THREADS);
+  return resolveWorkerThreadCount({ max: QUERY_INDEX_MAX_THREADS });
 }
 
 export function resolveQueryIndexWorkerPath(): string {
@@ -43,7 +43,6 @@ async function prepareQueryIndexFilesInProcess(
   if (!usable.length) return null;
   return usable;
 }
-
 
 export async function prepareQueryIndexFilesInWorker(
   projectRoot: string,

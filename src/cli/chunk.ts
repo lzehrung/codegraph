@@ -7,13 +7,14 @@ import { chunkTextFile } from "../chunking/chunkTextFile.js";
 import type { Chunk } from "../chunking/types.js";
 import { supportForFile } from "../languages.js";
 import { parseSourceLocationInput } from "../util/sourceLocation.js";
-import type {
-  CliCwdContext,
-  CliJsonWriterContext,
-  CliOptionContext,
-  CliPositionalsContext,
-  CliStderrExitContext,
-  CliStdoutWriterContext,
+import {
+  exitWithError,
+  type CliCwdContext,
+  type CliJsonWriterContext,
+  type CliOptionContext,
+  type CliPositionalsContext,
+  type CliStderrExitContext,
+  type CliStdoutWriterContext,
 } from "./context.js";
 import { parsePositiveIntegerOption } from "./options.js";
 import { writeCliOutput } from "./pretty.js";
@@ -52,7 +53,6 @@ function formatChunkSummary(chunks: readonly Chunk[]): string {
   }
   return [`${chunks.length} chunk(s).`, ...chunks.map(formatChunkLine)].join("\n");
 }
-
 
 export type ChunkCommandContext = CliPositionalsContext &
   CliOptionContext &
@@ -145,7 +145,6 @@ export async function handleChunkCommand(context: ChunkCommandContext): Promise<
       formatChunkSummary,
     );
   } catch (error) {
-    context.writeStderrLine(`Chunking failed: ${error instanceof Error ? error.message : String(error)}`);
-    context.exit(1);
+    exitWithError(context, error, 1, "Chunking failed");
   }
 }

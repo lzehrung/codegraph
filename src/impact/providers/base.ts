@@ -4,6 +4,7 @@ import { Readable } from "node:stream";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { parseUnifiedDiff, parseUnifiedDiffStreaming } from "../parse.js";
 import { gitDiffArgs } from "../../util/git.js";
+import { errorMessage } from "../../util/errors.js";
 
 const LARGE_DIFF_LINE_WARNING_THRESHOLD = 50_000;
 const DEFAULT_GITHUB_DIFF_TIMEOUT_MS = 30_000;
@@ -83,7 +84,7 @@ class GitDiffProvider implements DiffProvider {
       }
       return diff;
     } catch (error: unknown) {
-      throw new Error(`Git diff failed: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`Git diff failed: ${errorMessage(error)}`);
     }
   }
 }

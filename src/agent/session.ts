@@ -443,9 +443,7 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
 
   const loadDuplicateAnalysis = async (): Promise<DuplicatePreparedAnalysis> => {
     if (cachedDuplicateAnalysis) return cachedDuplicateAnalysis;
-    const loadPromise = loadBase().then((base) =>
-      prepareDuplicateAnalysis(base.index, { projectRoot: options.root }),
-    );
+    const loadPromise = loadBase().then((base) => prepareDuplicateAnalysis(base.index, { projectRoot: options.root }));
     cachedDuplicateAnalysis = loadPromise;
     loadPromise.catch(() => {
       if (cachedDuplicateAnalysis === loadPromise) cachedDuplicateAnalysis = undefined;

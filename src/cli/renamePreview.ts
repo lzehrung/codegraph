@@ -6,7 +6,7 @@ import {
   type RenameUnsafeSite,
 } from "../agent/renamePreview.js";
 import type { SemanticSymbol } from "../agent/semantic.js";
-import type { CliAgentCommandContext } from "./context.js";
+import { exitWithError, type CliAgentCommandContext } from "./context.js";
 import { RENAME_PREVIEW_HELP_TEXT } from "./help.js";
 import { parseOptionalBoundedIntegerOption } from "./options.js";
 
@@ -45,8 +45,7 @@ export async function handleRenamePreviewCommand(context: RenamePreviewCommandCo
     }
     context.writeStdoutLine(formatRenamePreviewResponse(response));
   } catch (error: unknown) {
-    context.writeStderrLine(error instanceof Error ? error.message : String(error));
-    context.exit(1);
+    exitWithError(context, error, 1);
   }
 }
 

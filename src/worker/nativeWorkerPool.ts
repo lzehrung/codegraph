@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import os from "node:os";
 import { Piscina } from "piscina";
+import { resolveWorkerThreadCount } from "../util/workerThreads.js";
 
 import type { NativeExtractTask, NativeExtractResult } from "./nativeExtractWorker.js";
 
@@ -16,12 +16,7 @@ export type NativeWorkerPoolOptions = {
 const HARD_MAX_THREADS = 64;
 
 function resolveThreadCount(requested?: number): number {
-  const cpus = os.cpus().length;
-  if (requested && requested > 0) {
-    return Math.min(requested, HARD_MAX_THREADS);
-  }
-  // Size from available cores; leave one for the main thread.
-  return Math.min(Math.max(cpus - 1, 1), HARD_MAX_THREADS);
+  return resolveWorkerThreadCount({ requested, max: HARD_MAX_THREADS });
 }
 
 export function resolveNativeWorkerPath(): string {

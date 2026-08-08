@@ -77,7 +77,9 @@ export function requireSemanticSymbol(snapshot: AgentProjectSnapshot, input: str
       'Symbol handle is stale or missing. Run codegraph symbols "<query>" or workspace_symbols to resolve it again.',
     );
   }
-  throw new Error(`Symbol target "${input}" was not found. Run codegraph search "<query>" or workspace_symbols to locate it.`);
+  throw new Error(
+    `Symbol target "${input}" was not found. Run codegraph search "<query>" or workspace_symbols to locate it.`,
+  );
 }
 
 export function semanticSymbolFromDef(

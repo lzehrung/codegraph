@@ -1,5 +1,6 @@
 import type { ProjectIndex } from "../indexer/types.js";
 import type { FileId, Range } from "../types.js";
+import { normalizePath } from "../util/paths.js";
 
 export type SymbolNodeKind =
   | "function"
@@ -90,11 +91,9 @@ export function nodeForDef(def: {
   };
 }
 
-const normalizeFilePath = (file: string) => file.replace(/\\/g, "/");
-
 function normalizeFileFilter(files?: Set<FileId>): Set<FileId> | undefined {
   if (!files) return undefined;
-  return new Set(Array.from(files, normalizeFilePath));
+  return new Set(Array.from(files, normalizePath));
 }
 
 export async function buildSymbolGraph(index: ProjectIndex, opts?: BuildSymbolGraphOptions): Promise<SymbolGraph> {
@@ -106,7 +105,7 @@ export async function buildSymbolGraph(index: ProjectIndex, opts?: BuildSymbolGr
 
   const shouldIncludeFile = (file: FileId): boolean => {
     if (!includedFiles) return true;
-    return includedFiles.has(normalizeFilePath(file));
+    return includedFiles.has(normalizePath(file));
   };
 
   const addEdge = (from: string, to: string, label?: string) => {
@@ -128,7 +127,7 @@ export async function buildSymbolGraph(index: ProjectIndex, opts?: BuildSymbolGr
     if (!shouldIncludeFile(file)) continue;
     for (const imp of mod.imports) {
       if (!imp) continue;
-      const targetFile = typeof imp.resolved === "string" ? normalizeFilePath(imp.resolved) : undefined;
+      const targetFile = typeof imp.resolved === "string" ? normalizePath(imp.resolved) : undefined;
       const targetMod = targetFile ? index.byFile.get(targetFile) : undefined;
 
       if (imp.kind === "named") {

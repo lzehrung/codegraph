@@ -52,7 +52,6 @@ function formatDetectedTargets(targetIds: InstallTargetId[], detections: TargetD
   return lines.join("\n");
 }
 
-
 export async function handleInstallerCommand(context: InstallerCommandContext): Promise<void> {
   const installingAll = context.command === "install" && context.hasFlag("--all");
   if (installingAll) assertAllIsExclusive(context);
@@ -72,7 +71,12 @@ export async function handleInstallerCommand(context: InstallerCommandContext): 
     if (context.hasFlag("--json")) {
       context.writeJSONLine({ targets });
     } else {
-      context.writeStdoutLine(formatDetectedTargets(catalog.map((target) => target.id), targets));
+      context.writeStdoutLine(
+        formatDetectedTargets(
+          catalog.map((target) => target.id),
+          targets,
+        ),
+      );
     }
     return;
   }

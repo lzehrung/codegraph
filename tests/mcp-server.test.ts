@@ -49,7 +49,6 @@ function readJsonRpcObject(value: unknown): JsonRpcObject {
   return readObject(value) as JsonRpcObject;
 }
 
-
 async function postMcpJson(
   url: string,
   body: Record<string, unknown>,
@@ -70,7 +69,6 @@ async function postMcpJson(
   const payload = (await response.json()) as unknown;
   return { response, payload: readObject(payload) };
 }
-
 
 async function postRawHttpJson(
   url: string,
@@ -362,7 +360,11 @@ describe("codegraph MCP handlers", () => {
     runGit(root, ["add", "."]);
     runGit(root, ["commit", "-m", "base"]);
     const base = runGit(root, ["rev-parse", "HEAD"]);
-    await fs.writeFile(path.join(root, "a.ts"), duplicateSource.replace("row.amount", "row.amount /* changed */"), "utf8");
+    await fs.writeFile(
+      path.join(root, "a.ts"),
+      duplicateSource.replace("row.amount", "row.amount /* changed */"),
+      "utf8",
+    );
     runGit(root, ["add", "a.ts"]);
     runGit(root, ["commit", "-m", "change"]);
 

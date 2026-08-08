@@ -31,6 +31,7 @@ import {
   parseOptionalPositiveIntegerOption,
   parsePositiveIntegerOption,
 } from "./options.js";
+import { exitWithError } from "./context.js";
 import { changedFilesWithSimilaritySources, duplicateSimilarityHintsFromChanges } from "./duplicateSimilarity.js";
 import { DEFAULT_BOUNDED_IMPACT_BUDGETS } from "../impact/budgets.js";
 
@@ -552,7 +553,6 @@ export async function handleImpactCommand(context: ImpactCommandContext): Promis
       context.writeJSONLine(report);
     }
   } catch (error) {
-    context.writeStderrLine(`Impact analysis failed: ${error instanceof Error ? error.message : String(error)}`);
-    context.exit(1);
+    exitWithError(context, error, 1, "Impact analysis failed");
   }
 }

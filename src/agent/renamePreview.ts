@@ -11,6 +11,7 @@ import { supportForFile } from "../languages.js";
 import type { Range } from "../types.js";
 import { ensureParsedContext } from "../indexer/parse-context.js";
 import { resolveReadableFile } from "../util/confinedFile.js";
+import { errorMessage } from "../util/errors.js";
 import { classifySensitiveFile } from "./fileView.js";
 import { normalizeAgentFilePath } from "./normalize.js";
 import type { SemanticLocation, SemanticProvenance, SemanticResponseEnvelope, SemanticSymbol } from "./semantic.js";
@@ -181,7 +182,7 @@ export async function previewRenameInSnapshot(
     if (referenceResult.status === "ok") semanticReferences.push(...referenceResult.references);
     else referenceFailure = referenceResult.reason;
   } catch (error: unknown) {
-    referenceFailure = error instanceof Error ? error.message : String(error);
+    referenceFailure = errorMessage(error);
   }
   const semanticDefinitions = new Map<string, SymbolDef>([[resolved.id, resolved.def]]);
   const implementationResult = queryImplementations(snapshot.index, snapshot.symbolGraph, resolved.id, {
@@ -255,7 +256,7 @@ export async function previewRenameInSnapshot(
         if (memberReferences.status === "ok") semanticReferences.push(...memberReferences.references);
         else referenceFailure ??= memberReferences.reason;
       } catch (error: unknown) {
-        referenceFailure ??= error instanceof Error ? error.message : String(error);
+        referenceFailure ??= errorMessage(error);
       }
     }
   } else if (/\b(?:ambiguous|overload)\b/i.test(implementationResult.reason)) {
@@ -708,7 +709,7 @@ async function loadRenameFile(
         beforeMtimeMs: before.mtimeMs,
       };
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       let reason: RenameUnsafeSite["reason"] = "unresolved_reference";
       if (/outside project root/i.test(message)) reason = "outside_root";
       else if (/binary source|malformed UTF-8/i.test(message)) reason = "unsupported_syntax";
@@ -761,7 +762,7 @@ async function verifyFilesUnchanged(
         provenance: {
           ...provenance,
           confidence: "low",
-          reason: error instanceof Error ? error.message : String(error),
+          reason: errorMessage(error),
         },
       });
     }
@@ -800,7 +801,7 @@ async function collectTextualRenameEdits(
         reason: "parse_degraded",
         provenance: {
           ...heuristicProvenance,
-          reason: error instanceof Error ? error.message : String(error),
+          reason: errorMessage(error),
         },
       });
       continue;

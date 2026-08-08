@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import type { PathLike } from "node:fs";
 import type { DatabaseSync, StatementColumnMetadata, StatementResultingChanges, StatementSync } from "node:sqlite";
+import { errorMessage } from "./util/errors.js";
 
 export type SqliteValue = null | number | bigint | string | NodeJS.ArrayBufferView;
 export type SqliteRow = Record<string, unknown>;
@@ -62,7 +63,7 @@ export function getNodeSqliteLoadError(): Error | undefined {
 }
 
 export function isNodeSqliteUnavailableError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = errorMessage(error);
   return /node:sqlite|No such built-in module:\s*node:sqlite|setReturnArrays is not a function|columns is not a function/i.test(
     message,
   );

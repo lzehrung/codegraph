@@ -1,4 +1,5 @@
 import path from "node:path";
+import { errorMessage } from "./errors.js";
 
 export function normalizePath(p: string): string {
   return typeof p === "string" ? p.replace(/\\/g, "/") : "";
@@ -111,7 +112,7 @@ export function resolveFilePathWithinRoot(
     return {
       status: "error",
       reason: "outside_project_root",
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage(error),
     };
   }
 }

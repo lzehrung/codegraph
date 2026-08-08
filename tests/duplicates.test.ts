@@ -697,7 +697,6 @@ export function summarizePayments(rows: Array<{ amount: number; fee: number }>) 
 
     expect(result.groups).toHaveLength(1);
     expect(result.omittedCounts.groups).toBeGreaterThan(0);
-    expect(result.omittedCounts.suggestions).toBeGreaterThan(0);
     expect(result.stats.candidatePairs).toBeGreaterThan(0);
     expect(result.stats.comparedPairs).toBeGreaterThan(0);
   });
@@ -1714,7 +1713,7 @@ export interface NormalizedModeMap {
     };
     const actionabilityParsed = JSON.parse(actionabilityResult.stdout) as {
       groups?: Array<{ primaryLeft?: { file?: string }; primaryRight?: { file?: string } }>;
-      omittedCounts?: { groups?: number; suggestions?: number; rawSuggestions?: number };
+      omittedCounts?: { groups?: number; rawSuggestions?: number };
     };
 
     expect(defaultResult.exitCode).toBeUndefined();
@@ -1726,7 +1725,7 @@ export interface NormalizedModeMap {
     expect(actionabilityParsed.groups?.[0]?.primaryLeft?.file?.startsWith("src/")).toBeTruthy();
     expect(actionabilityParsed.groups?.[0]?.primaryRight?.file?.startsWith("src/")).toBeTruthy();
   });
-  test("duplicates CLI actionability sort keeps omitted group alias counts aligned", async () => {
+  test("duplicates CLI actionability sort keeps omitted group counts aligned", async () => {
     const root = await makeTempProject();
     const sourceDuplicateA = `
 export function summarizeOrders(rows: number[]) {
@@ -1764,16 +1763,15 @@ export interface NormalizedModeMap {
       cwd: root,
     });
     const defaultParsed = JSON.parse(defaultResult.stdout) as {
-      omittedCounts?: { groups?: number; suggestions?: number; rawSuggestions?: number };
+      omittedCounts?: { groups?: number; rawSuggestions?: number };
     };
     const parsed = JSON.parse(result.stdout) as {
-      omittedCounts?: { groups?: number; suggestions?: number; rawSuggestions?: number };
+      omittedCounts?: { groups?: number; rawSuggestions?: number };
     };
 
     expect(defaultResult.exitCode).toBeUndefined();
     expect(result.exitCode).toBeUndefined();
     expect(parsed.omittedCounts?.groups).toBeGreaterThan(0);
-    expect(parsed.omittedCounts?.suggestions).toBe(parsed.omittedCounts?.groups);
     expect(parsed.omittedCounts?.rawSuggestions).toBe(defaultParsed.omittedCounts?.rawSuggestions);
   });
 
@@ -2182,7 +2180,7 @@ export function sameRows(rows: number[]) {
     });
     const parsed = JSON.parse(result.stdout) as {
       groups?: unknown[];
-      omittedCounts?: { groups?: number; suggestions?: number; candidatePairs?: number };
+      omittedCounts?: { groups?: number; candidatePairs?: number };
       stats?: { candidatePairs?: number };
     };
 
@@ -2190,7 +2188,6 @@ export function sameRows(rows: number[]) {
     expect(result.stderr).toBe("");
     expect(parsed.groups).toHaveLength(0);
     expect(parsed.omittedCounts?.groups).toBeGreaterThan(0);
-    expect(parsed.omittedCounts?.suggestions).toBeGreaterThan(0);
     expect(parsed.omittedCounts?.candidatePairs).toBe(0);
     expect(parsed.stats?.candidatePairs).toBeGreaterThan(0);
   });

@@ -380,9 +380,7 @@ describe("disk cache uses sqlite backend", () => {
     const db = new DatabaseSync(duplicateCacheDbPath(root));
     const row = db
       .prepare("SELECT version, payload FROM duplicate_unit_cache WHERE file = ?")
-      .get(normalizePathForSql(path.join(root, "src", "a.ts"))) as
-      | { version: number; payload: Uint8Array }
-      | undefined;
+      .get(normalizePathForSql(path.join(root, "src", "a.ts"))) as { version: number; payload: Uint8Array } | undefined;
     db.close();
 
     expect(row).toBeDefined();

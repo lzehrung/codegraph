@@ -1,7 +1,7 @@
 import { buildRefactorPlan, type RefactorPlanResponse } from "../agent/refactorPlan.js";
 import { formatAgentFollowUpAsCli } from "../agent/followUps.js";
 import type { SemanticOmittedCounts, SemanticSymbol } from "../agent/semantic.js";
-import type { CliAgentCommandContext } from "./context.js";
+import { exitWithError, type CliAgentCommandContext } from "./context.js";
 import { REFACTOR_PLAN_HELP_TEXT } from "./help.js";
 import { parseOptionalBoundedIntegerOption } from "./options.js";
 
@@ -52,8 +52,7 @@ export async function handleRefactorPlanCommand(context: RefactorPlanCommandCont
     }
     context.writeStdoutLine(formatRefactorPlanResponse(response));
   } catch (error: unknown) {
-    context.writeStderrLine(error instanceof Error ? error.message : String(error));
-    context.exit(1);
+    exitWithError(context, error, 1);
   }
 }
 

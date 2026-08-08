@@ -8,6 +8,7 @@ import {
   type DuplicateGroup,
   type DuplicateUnitRef,
 } from "../duplicates.js";
+import { exitWithError } from "./context.js";
 import { parseNonNegativeIntegerOption, parsePositiveIntegerOption } from "./options.js";
 
 export type DuplicatesCommandContext = {
@@ -393,7 +394,6 @@ function sortedResult(
       omittedCounts: {
         ...result.omittedCounts,
         groups: result.omittedCounts.groups + omittedBySort,
-        suggestions: result.omittedCounts.suggestions + omittedBySort,
       },
       ...(profileFilteredCount > 0 ? { filteredCounts: { cleanupProfileGroups: profileFilteredCount } } : {}),
     },
@@ -456,7 +456,6 @@ export async function handleDuplicatesCommand(context: DuplicatesCommandContext)
       }),
     );
   } catch (error) {
-    context.writeStderrLine(`Duplicate detection failed: ${error instanceof Error ? error.message : String(error)}`);
-    context.exit(1);
+    exitWithError(context, error, 1, "Duplicate detection failed");
   }
 }
