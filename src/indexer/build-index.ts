@@ -15,6 +15,7 @@ import { getGitHead, isGitRepo, getGitBlobHashes, listChangedFiles } from "../ut
 import { clearImportResolutionCaches, resolveSpecifier } from "../util/resolution.js";
 import { assertFilePathWithinRoot, normalizePath } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
+import { resolveWorkerThreadCount } from "../util/workerThreads.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
 import { collectGraph } from "../graph-builder.js";
 import { collectEdgesForFile } from "../graph-edge-collector.js";
@@ -505,7 +506,7 @@ function emitIndexLifecycleProgress(
 }
 
 function buildConcurrency(opts: BuildOptions | undefined): number {
-  return Math.max(1, Math.min(Number(opts?.threads || 0) || 8, 64));
+  return resolveWorkerThreadCount({ requested: Number(opts?.threads || 0), defaultCount: 8, max: 64 });
 }
 
 async function prepareFileSignatures(args: {
