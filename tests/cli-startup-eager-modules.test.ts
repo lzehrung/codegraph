@@ -7,7 +7,10 @@ import { pathToFileURL } from "node:url";
 
 const cliPath = path.resolve(process.cwd(), "dist", "cli.js");
 const sourceCliPath = path.resolve(process.cwd(), "src", "cli.ts");
+const sourceCommandTablePath = path.resolve(process.cwd(), "src", "cli", "commandTable.ts");
+const sourceInvocationContextPath = path.resolve(process.cwd(), "src", "cli", "invocationContext.ts");
 const workerPoolPath = path.resolve(process.cwd(), "src", "worker", "nativeWorkerPool.ts");
+const workerThreadsPath = path.resolve(process.cwd(), "src", "util", "workerThreads.ts");
 
 /** Project modules under dist/ that load while handling lightweight CLI entrypoints. */
 function countDistModulesLoaded(args: string[]): {
@@ -77,67 +80,78 @@ function modulePathEndsWith(moduleUrl: string, suffix: string): boolean {
 
 describe("CLI startup eager module loading", () => {
   it("keeps command handlers and heavy discovery behind dynamic import()", async () => {
-    const source = await fs.promises.readFile(sourceCliPath, "utf8");
-    const staticHandlerImports = [
-      'from "./cli/chunk.js"',
-      'from "./cli/doctor.js"',
-      'from "./cli/drift.js"',
-      'from "./cli/duplicates.js"',
-      'from "./cli/explain.js"',
-      'from "./cli/explore.js"',
-      'from "./cli/file.js"',
-      'from "./cli/graphDelta.js"',
-      'from "./cli/graphQueries.js"',
-      'from "./cli/grep.js"',
-      'from "./cli/impact.js"',
-      'from "./cli/install.js"',
-      'from "./cli/lifecycle.js"',
-      'from "./cli/index.js"',
-      'from "./cli/inspect.js"',
-      'from "./cli/orient.js"',
-      'from "./cli/navigation.js"',
-      'from "./cli/packet.js"',
-      'from "./cli/review.js"',
-      'from "./cli/search.js"',
-      'from "./cli/skill.js"',
-      'from "./cli/symbols.js"',
-      'from "./cli/typeHierarchy.js"',
-      'from "./cli/callHierarchy.js"',
-      'from "./cli/renamePreview.js"',
-      'from "./cli/refactorPlan.js"',
-      'from "./cli/artifact.js"',
-      'from "./cli/graph.js"',
-      'from "./cli/mcp.js"',
-      'from "./cli/sql.js"',
-      'from "./graph-builder.js"',
-      'from "./lifecycle/manifest.js"',
-      'from "./config.js"',
-      'from "./util/git.js"',
-      'from "./util/projectFiles.js"',
-      'from "./cli/discoveryGlobs.js"',
-      'from "./util/includeRoots.js"',
+    const [cliSource, commandTableSource, invocationContextSource] = await Promise.all([
+      fs.promises.readFile(sourceCliPath, "utf8"),
+      fs.promises.readFile(sourceCommandTablePath, "utf8"),
+      fs.promises.readFile(sourceInvocationContextPath, "utf8"),
+    ]);
+    // Basenames that must never be statically imported by the dispatcher family.
+    const lazyOnlyModules = [
+      "artifact.js",
+      "callHierarchy.js",
+      "chunk.js",
+      "config.js",
+      "discoveryGlobs.js",
+      "doctor.js",
+      "drift.js",
+      "duplicates.js",
+      "explain.js",
+      "explore.js",
+      "file.js",
+      "git.js",
+      "graph-builder.js",
+      "graph.js",
+      "graphDelta.js",
+      "graphQueries.js",
+      "grep.js",
+      "impact.js",
+      "includeRoots.js",
+      "index.js",
+      "inspect.js",
+      "install.js",
+      "lifecycle.js",
+      "manifest.js",
+      "mcp.js",
+      "navigation.js",
+      "orient.js",
+      "packet.js",
+      "projectFiles.js",
+      "refactorPlan.js",
+      "renamePreview.js",
+      "review.js",
+      "search.js",
+      "skill.js",
+      "sql.js",
+      "symbols.js",
+      "typeHierarchy.js",
     ];
 
-    for (const line of source.split(/\r?\n/)) {
-      if (!line.startsWith("import ")) continue;
-      if (line.startsWith("import type ")) continue;
-      for (const fragment of staticHandlerImports) {
-        expect(line, `unexpected static import of ${fragment}`).not.toContain(fragment);
+    for (const source of [cliSource, commandTableSource, invocationContextSource]) {
+      for (const line of source.split(/\r?\n/)) {
+        if (!line.startsWith("import ")) continue;
+        if (line.startsWith("import type ")) continue;
+        const specifier = /"([^"]+)"\s*;?\s*$/.exec(line)?.[1] ?? "";
+        const finalSegment = specifier.split("/").pop() ?? "";
+        for (const moduleName of lazyOnlyModules) {
+          expect(finalSegment, `unexpected static import of ${moduleName}`).not.toBe(moduleName);
+        }
       }
     }
 
-    expect(source).toContain('await import("./cli/orient.js")');
-    expect(source).toContain('await import("./cli/search.js")');
-    expect(source).toContain('await import("./cli/doctor.js")');
-    expect(source).toContain("loadConfigHelpers");
-    expect(source).toContain("loadProjectFilesHelpers");
+    expect(commandTableSource).toContain('await import("./orient.js")');
+    expect(commandTableSource).toContain('await import("./search.js")');
+    expect(commandTableSource).toContain('await import("./doctor.js")');
+    expect(invocationContextSource).toContain("loadConfigHelpers");
+    expect(invocationContextSource).toContain("loadProjectFilesHelpers");
   });
 
-  it("keeps os.cpus() behind worker-pool sizing, not module scope", async () => {
-    const source = await fs.promises.readFile(workerPoolPath, "utf8");
-    expect(source).toMatch(/function resolveThreadCount\([\s\S]*os\.cpus\(\)/);
-    const moduleScope = source.split("function resolveThreadCount")[0] ?? "";
-    expect(moduleScope).not.toContain("os.cpus()");
+  it("keeps host parallelism reads inside worker-pool sizing, not module scope", async () => {
+    const sizingSource = await fs.promises.readFile(workerThreadsPath, "utf8");
+    expect(sizingSource).toMatch(/function resolveWorkerThreadCount\([\s\S]*os\.availableParallelism\(\)/);
+    const moduleScope = sizingSource.split("function resolveWorkerThreadCount")[0] ?? "";
+    expect(moduleScope).not.toContain("os.availableParallelism()");
+    const workerPoolSource = await fs.promises.readFile(workerPoolPath, "utf8");
+    expect(workerPoolSource).not.toContain("os.cpus()");
   });
 
   it("loads fewer than 30 dist modules for no args, --version, --help, and doctor", () => {
