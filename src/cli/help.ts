@@ -437,10 +437,10 @@ Tools:
   search          Deterministic ranked search with stable handles
   get_file        Bounded project file reads inside the root
   get_symbol      Resolve a search/explain handle
-  goto            Go to definition by qualified symbol path or file position
-  refs            Find references by qualified symbol path, handle, or file position
-  deps            List file dependencies by file or qualified symbol path
-  rdeps           List reverse file dependencies by file or qualified symbol path
+  goto            Go to definition by handle, qualified symbol path, or file position
+  refs            Find references by handle, qualified symbol path, or file position
+  deps            List file dependencies by file, qualified symbol path, or handle
+  rdeps           List reverse file dependencies by file, qualified symbol path, or handle
   path            Find shortest dependency path
   impact          Build compact impact context for a git range
   review          Build review context for a git range

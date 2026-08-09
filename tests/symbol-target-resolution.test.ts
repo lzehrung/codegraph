@@ -33,9 +33,24 @@ describe("public symbol target resolution", () => {
       const handle = rootApi.resolveSymbolTarget(index, qualified.target.handle);
       expect(handle).toMatchObject({ status: "exact", target: { handle: qualified.target.handle } });
 
+      qualified.target.definition.range.start.index = undefined;
+      const fallbackHandle = rootApi.resolveSymbolTarget(
+        index,
+        `${qualified.target.definition.file}::${qualified.target.definition.localName}::0`,
+      );
+      expect(fallbackHandle).toMatchObject({
+        status: "exact",
+        target: {
+          handle: `${qualified.target.definition.file}::${qualified.target.definition.localName}::0`,
+        },
+      });
+
       const { line, column } = qualified.target.definition.range.start;
       const location = rootApi.resolveSymbolTarget(index, `src/service.ts:${line}:${column}`);
-      expect(location).toMatchObject({ status: "exact", target: { handle: qualified.target.handle } });
+      expect(location).toMatchObject({
+        status: "exact",
+        target: { handle: `${qualified.target.definition.file}::${qualified.target.definition.localName}::0` },
+      });
 
       const exactName = rootApi.resolveSymbolTarget(index, "unique");
       expect(exactName).toMatchObject({ status: "exact", target: { definition: { localName: "unique" } } });

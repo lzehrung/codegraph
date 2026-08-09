@@ -60,7 +60,7 @@ async function loadGraph(context: GraphQueryCommandContext): Promise<LoadedGraph
 async function handleDepsCommand(context: GraphQueryCommandContext): Promise<void> {
   const [fileArg] = context.positionals;
   if (!fileArg) {
-    context.writeStderrLine(`Usage: ${context.command} <file> [--depth N] [--json]`);
+    context.writeStderrLine(`Usage: ${context.command} <file|file::symbol|symbol:...> [--depth N] [--json]`);
     context.exit(2);
   }
   const depthRaw = context.getOpt("--depth");

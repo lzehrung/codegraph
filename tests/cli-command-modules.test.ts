@@ -329,6 +329,12 @@ describe("CLI command modules", () => {
     expect(MCP_SERVE_HELP_TEXT).toContain("orient");
     expect(MCP_SERVE_HELP_TEXT).toContain("packet_get");
     expect(MCP_SERVE_HELP_TEXT).toContain("refresh_index");
+    expect(MCP_SERVE_HELP_TEXT).toContain(
+      "goto            Go to definition by handle, qualified symbol path, or file position",
+    );
+    expect(MCP_SERVE_HELP_TEXT).toContain(
+      "deps            List file dependencies by file, qualified symbol path, or handle",
+    );
   });
 
   test("packet help documents accepted target shapes", () => {
@@ -1988,7 +1994,7 @@ describe("CLI command modules", () => {
       ),
     ).rejects.toThrow("graph query exit 2");
 
-    expect(stderrLines).toEqual(["Usage: deps <file> [--depth N] [--json]"]);
+    expect(stderrLines).toEqual(["Usage: deps <file|file::symbol|symbol:...> [--depth N] [--json]"]);
   });
 
   test("rejects invalid graph query depth values before scanning the graph", async () => {

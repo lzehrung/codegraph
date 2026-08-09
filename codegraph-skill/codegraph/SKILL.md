@@ -75,8 +75,8 @@ The independent `--max-references`, `--max-callers`, and `--max-hierarchy` bound
 
 ### Navigate
 
-- dependencies: `codegraph deps <file|file::symbol>`
-- reverse dependencies: `codegraph rdeps <file|file::symbol>`
+- dependencies: `codegraph deps <file|file::symbol|symbol:...>`
+- reverse dependencies: `codegraph rdeps <file|file::symbol|symbol:...>`
 - shortest path: `codegraph path <from> <to>`
 - definition at a source location: `codegraph goto <file>:<line>:<column>`
 - references at a source location: `codegraph refs <file>:<line>:<column>`

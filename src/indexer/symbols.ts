@@ -107,7 +107,7 @@ function resolveExactSymbolHandle(index: ProjectIndex, input: string): ResolvedS
   const startIndex = Number(parts[2]);
   const definition = index.byFile
     .get(file)
-    ?.locals.find((candidate) => candidate.localName === name && candidate.range.start.index === startIndex);
+    ?.locals.find((candidate) => candidate.localName === name && (candidate.range.start.index ?? 0) === startIndex);
   if (!definition) return null;
   return { handle: symbolId(definition), definition };
 }
