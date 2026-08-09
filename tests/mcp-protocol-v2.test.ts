@@ -4,7 +4,7 @@ import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/cli
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { describe, expect, it } from "vitest";
 import { createAgentSession } from "../src/agent/session.js";
-import { getCodegraphVersion } from "../src/cli/packageInfo.js";
+import { getCodegraphVersion } from "../src/util/packageInfo.js";
 import { startCodegraphMcpHttpServer, type CodegraphMcpHttpServer } from "../src/mcp/server.js";
 import { countingSession } from "./helpers/agent.js";
 import { mkTmpDir } from "./helpers/filesystem.js";

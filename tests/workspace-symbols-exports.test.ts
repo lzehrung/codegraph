@@ -11,11 +11,9 @@ import type {
   SemanticResponseEnvelope,
   SemanticSymbol,
   ToolWorkspaceSymbolsRuntimeOptions,
-  WorkspaceSymbolMatch,
-  WorkspaceSymbolsRequest,
   WorkspaceSymbolsResponse,
-  WorkspaceSymbolsResult,
-} from "../src/index.js";
+} from "../src/agent.js";
+import type { WorkspaceSymbolMatch, WorkspaceSymbolsRequest, WorkspaceSymbolsResult } from "../src/index.js";
 
 type PublicWorkspaceSymbolContracts = {
   agentRequest: AgentWorkspaceSymbolsRequest;
@@ -37,13 +35,15 @@ describe("workspace symbol public exports", () => {
 
     expect(contract).toBeUndefined();
     expect(rootApi.queryWorkspaceSymbols).toBe(indexerApi.workspaceSymbols);
-    expect(rootApi.workspaceSymbols).toBe(agentApi.workspaceSymbols);
-    expect(rootApi.workspaceSymbolsWithSession).toBe(agentApi.workspaceSymbolsWithSession);
-    expect(rootApi.formatWorkspaceSymbolsResponse).toBe(agentApi.formatWorkspaceSymbolsResponse);
-    expect(rootApi.tool_workspaceSymbols).toBe(agentToolsApi.tool_workspaceSymbols);
+    expect(agentApi.workspaceSymbols).toBeTypeOf("function");
+    expect(agentApi.workspaceSymbolsWithSession).toBeTypeOf("function");
+    expect(agentApi.formatWorkspaceSymbolsResponse).toBeTypeOf("function");
+    expect(agentApi.tool_workspaceSymbols).toBe(agentToolsApi.tool_workspaceSymbols);
     expect(rootApi.DEFAULT_WORKSPACE_SYMBOL_LIMIT).toBe(50);
     expect(rootApi.MAX_WORKSPACE_SYMBOL_LIMIT).toBe(500);
     expect("workspaceSymbols" in indexerApi).toBe(true);
     expect("queryWorkspaceSymbols" in rootApi).toBe(true);
+    expect("workspaceSymbols" in rootApi).toBe(false);
+    expect("tool_workspaceSymbols" in rootApi).toBe(false);
   });
 });

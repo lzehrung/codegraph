@@ -5,19 +5,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as agentFacade from "../src/agent.js";
 import { type AgentSession } from "../src/agent/session.js";
-import * as rootFacade from "../src/index.js";
 import { isSymlinkUnavailable } from "./helpers/filesystem.js";
 
 const { createAgentSession, formatAgentFileViewResponse, getCodegraphFileView, getCodegraphFileViewWithSession } =
-  rootFacade;
+  agentFacade;
 
 const publicFileViewFacades = [
-  {
-    name: "package root",
-    formatAgentFileViewResponse: rootFacade.formatAgentFileViewResponse,
-    getCodegraphFileView: rootFacade.getCodegraphFileView,
-    getCodegraphFileViewWithSession: rootFacade.getCodegraphFileViewWithSession,
-  },
   {
     name: "agent",
     formatAgentFileViewResponse: agentFacade.formatAgentFileViewResponse,

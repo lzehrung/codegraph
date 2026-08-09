@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { formatAgentFollowUpAsCli } from "../src/agent/followUps.js";
-import { exploreCodegraph, formatAgentExploreResponse } from "../src/index.js";
+import { exploreCodegraph, formatAgentExploreResponse } from "../src/agent.js";
 import * as impactContext from "../src/impact/context.js";
 import { createCodegraphMcpHandlers, listCodegraphMcpTools } from "../src/mcp/server.js";
 import { captureCli } from "./helpers/cli.js";

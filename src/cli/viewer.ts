@@ -5,7 +5,7 @@ import { buildCodegraphGraphJson } from "../agent/artifact.js";
 import { createAgentSession } from "../agent/session.js";
 import type { AllowedHostHeaderRules } from "../mcp/http.js";
 import path from "node:path";
-import { getCodegraphPackageRoot, normalizePathForDisplay } from "./packageInfo.js";
+import { getCodegraphPackageRoot, normalizePathForDisplay } from "../util/packageInfo.js";
 import {
   buildAllowedHostHeaders,
   closeHttpServer,

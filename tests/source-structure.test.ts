@@ -36,6 +36,7 @@ describe("source module structure", () => {
       "src/util/resolutionCandidates.ts",
       "src/util/specifiers.ts",
       "src/util/workspace.ts",
+      "src/util/packageInfo.ts",
     ];
 
     for (const relativePath of expectedModules) {
@@ -72,7 +73,6 @@ describe("source module structure", () => {
       "src/cli/graphDelta.ts",
       "src/cli/help.ts",
       "src/cli/mcp.ts",
-      "src/cli/packageInfo.ts",
       "src/cli/search.ts",
       "src/cli/skill.ts",
       "src/cli/sql.ts",

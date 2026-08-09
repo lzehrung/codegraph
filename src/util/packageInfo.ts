@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { normalizePath } from "../util/paths.js";
+import { normalizePath } from "./paths.js";
 
 export function normalizePathForDisplay(filePath: string): string {
   return normalizePath(filePath);
@@ -25,7 +25,7 @@ export function findPackageRoot(startDir: string): string {
     }
     const parent = path.dirname(current);
     if (parent === current) {
-      throw new Error("Unable to locate package root from current CLI path.");
+      throw new Error("Unable to locate package root.");
     }
     current = parent;
   }

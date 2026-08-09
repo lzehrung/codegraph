@@ -6,14 +6,16 @@ import * as indexerApi from "../src/indexer.js";
 import type {
   ImplementationEntry,
   ImplementationsResponse,
-  IndexImplementationsResult,
-  IndexTypeHierarchyResult,
   ToolTypeHierarchyRuntimeOptions,
-  TypeHierarchyDirection,
   TypeHierarchyRelation,
-  TypeHierarchyRelationKind,
   TypeHierarchyRequest,
   TypeHierarchyResponse,
+} from "../src/agent.js";
+import type {
+  IndexImplementationsResult,
+  IndexTypeHierarchyResult,
+  TypeHierarchyDirection,
+  TypeHierarchyRelationKind,
 } from "../src/index.js";
 
 type PublicHierarchyContracts = {
@@ -36,13 +38,16 @@ describe("type hierarchy public exports", () => {
     expect(contract).toBeUndefined();
     expect(rootApi.queryTypeHierarchy).toBe(indexerApi.findTypeHierarchy);
     expect(rootApi.queryImplementations).toBe(indexerApi.findImplementations);
-    expect(rootApi.findSupertypes).toBe(agentApi.findSupertypes);
-    expect(rootApi.findSubtypesWithSession).toBe(agentApi.findSubtypesWithSession);
-    expect(rootApi.findImplementations).toBe(agentApi.findImplementations);
-    expect(rootApi.tool_findSupertypes).toBe(agentToolsApi.tool_findSupertypes);
-    expect(rootApi.tool_findSubtypes).toBe(agentToolsApi.tool_findSubtypes);
-    expect(rootApi.tool_findImplementations).toBe(agentToolsApi.tool_findImplementations);
+    expect(agentApi.findSupertypes).toBeTypeOf("function");
+    expect(agentApi.findSubtypesWithSession).toBeTypeOf("function");
+    expect(agentApi.findImplementations).toBeTypeOf("function");
+    expect(agentApi.tool_findSupertypes).toBe(agentToolsApi.tool_findSupertypes);
+    expect(agentApi.tool_findSubtypes).toBe(agentToolsApi.tool_findSubtypes);
+    expect(agentApi.tool_findImplementations).toBe(agentToolsApi.tool_findImplementations);
     expect("findTypeHierarchy" in indexerApi).toBe(true);
     expect("queryTypeHierarchy" in rootApi).toBe(true);
+    expect("findSupertypes" in rootApi).toBe(false);
+    expect("findImplementations" in rootApi).toBe(false);
+    expect("tool_findImplementations" in rootApi).toBe(false);
   });
 });

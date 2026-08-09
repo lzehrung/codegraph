@@ -377,6 +377,55 @@ describe("package metadata", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("keeps the root entrypoint free of mcp and cli modules", () => {
+    const importPattern =
+      /(?:import|export)\s+(?:type\s+)?(?:[^;]*?\s+from\s+)?["'](\.[^"']+)["']|import\(["'](\.[^"']+)["']\)/g;
+    const visited = new Set<string>();
+    const queue = ["src/index.ts"];
+
+    while (queue.length > 0) {
+      const relativePath = queue.shift()!;
+      if (visited.has(relativePath)) {
+        continue;
+      }
+      visited.add(relativePath);
+      const normalized = relativePath.replace(/\\/g, "/");
+      expect(normalized.includes("/cli/") || normalized.startsWith("src/cli/"), normalized).toBe(false);
+      expect(normalized.includes("/mcp/") || normalized === "src/mcp.ts", normalized).toBe(false);
+
+      const source = readText(relativePath);
+      for (const match of source.matchAll(importPattern)) {
+        const specifier = match[1] ?? match[2];
+        if (!specifier || !specifier.startsWith(".")) {
+          continue;
+        }
+        const fromDir = path.posix.dirname(normalized);
+        let resolved = path.posix.normalize(path.posix.join(fromDir, specifier));
+        if (resolved.endsWith(".js")) {
+          resolved = `${resolved.slice(0, -3)}.ts`;
+        } else if (!resolved.endsWith(".ts")) {
+          const asFile = `${resolved}.ts`;
+          const asIndex = `${resolved}/index.ts`;
+          if (fs.existsSync(path.resolve(process.cwd(), asFile))) {
+            resolved = asFile;
+          } else if (fs.existsSync(path.resolve(process.cwd(), asIndex))) {
+            resolved = asIndex;
+          } else {
+            continue;
+          }
+        }
+        if (!resolved.startsWith("src/")) {
+          continue;
+        }
+        if (!visited.has(resolved)) {
+          queue.push(resolved);
+        }
+      }
+    }
+
+    expect(visited.has("src/index.ts")).toBe(true);
+  });
+
   it("keeps implementation modules from importing through broad internal barrels", () => {
     const broadBarrelImportPattern =
       /\bimport\s+(?:type\s+)?(?:[^;]*?\s+from\s+)?["'](?:\.\/|(?:\.\.\/)+)(?:util|graphs|indexer)\.js["']|import\(["'](?:\.\/|(?:\.\.\/)+)(?:util|graphs|indexer)\.js["']\)/;
@@ -641,7 +690,7 @@ describe("package metadata", () => {
     const rootPackage = readJson("package.json");
     const rootExports = rootPackage.exports;
     expect(rootExports).toBeDefined();
-    const expectedExports = [".", "./agent", "./graphs", "./impact", "./indexer", "./languages"];
+    const expectedExports = [".", "./agent", "./graphs", "./impact", "./indexer", "./languages", "./mcp"];
     expect(Object.keys(rootExports as Record<string, unknown>).sort()).toEqual(expectedExports);
 
     for (const packageExport of expectedExports) {
@@ -663,6 +712,7 @@ describe("package metadata", () => {
     expect(libraryApi).toContain("@lzehrung/codegraph/indexer");
     expect(libraryApi).toContain("@lzehrung/codegraph/impact");
     expect(libraryApi).toContain("@lzehrung/codegraph/languages");
+    expect(libraryApi).toContain("@lzehrung/codegraph/mcp");
     expect(libraryApi).toContain("Public-stable APIs");
     expect(libraryApi).toContain("Public-legacy APIs");
     expect(libraryApi).toContain("Internal-only modules");

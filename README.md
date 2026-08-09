@@ -340,9 +340,9 @@ console.log(impact.changedSymbols, impact.impacted);
 
 Keep structured fields until the final UI or prompt boundary. Repeated callers should prefer one warm `createCodeReviewSession()` or agent/MCP session; see the [Library API reference](./docs/library-api.md) for exports, session lifecycle, streaming, graph APIs, and review reports.
 
-The public surface also includes `buildReviewReport`, `analyzeImpactStreaming`, and `tool_impactJSON` for specialized review and integration workflows. Batch output can retain ranked top impacts and full report metadata; streaming callers can choose a lighter terminal summary after consuming incremental chunks.
+The public surface also includes `buildReviewReport` and `analyzeImpactStreaming` on the root export, plus `tool_impactJSON` from `@lzehrung/codegraph/agent`, for specialized review and integration workflows. Batch output can retain ranked top impacts and full report metadata; streaming callers can choose a lighter terminal summary after consuming incremental chunks.
 
-The root export includes compatibility APIs; documented subpath facades provide narrower imports. See the [public API boundary](./docs/library-api.md#public-api-boundary) before choosing an import path.
+The root export is the core library surface. Agent-shaped APIs live under `@lzehrung/codegraph/agent`, and MCP handlers/server under `@lzehrung/codegraph/mcp`. See the [public API boundary](./docs/library-api.md#public-api-boundary) before choosing an import path.
 
 ## How it works
 

@@ -1,6 +1,6 @@
 {
   "name": "@lzehrung/codegraph",
-  "version": "1.8.114",
+  "version": "2.0.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -34,6 +34,11 @@
       "types": "./dist/languages.d.ts",
       "import": "./dist/languages.js",
       "default": "./dist/languages.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp.d.ts",
+      "import": "./dist/mcp.js",
+      "default": "./dist/mcp.js"
     }
   },
   "bin": {
