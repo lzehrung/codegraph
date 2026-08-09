@@ -88,6 +88,9 @@ describe("forgiving CLI inputs", () => {
     expect(jsonRecord((await runCliOrThrow(["goto", handle, "--root", root, "--json"])).stdout).status).toBe("ok");
     expect(jsonRecord((await runCliOrThrow(["refs", handle, "--root", root, "--json"])).stdout).status).toBe("ok");
 
+    const locatedGoto = jsonRecord((await runCliOrThrow(["goto", "main.ts:1:17", "--root", root, "--json"])).stdout);
+    expect(locatedGoto).toMatchObject({ status: "ok", definition: { localName: "target" } });
+
     const qualifiedTarget = "main.ts::target";
     const qualifiedGoto = jsonRecord((await runCliOrThrow(["goto", qualifiedTarget, "--root", root, "--json"])).stdout);
     expect(qualifiedGoto).toMatchObject({ status: "ok", definition: { localName: "target" } });

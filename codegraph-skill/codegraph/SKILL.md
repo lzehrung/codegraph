@@ -78,12 +78,12 @@ The independent `--max-references`, `--max-callers`, and `--max-hierarchy` bound
 - dependencies: `codegraph deps <file|file::symbol>`
 - reverse dependencies: `codegraph rdeps <file|file::symbol>`
 - shortest path: `codegraph path <from> <to>`
-- definition: `codegraph goto <file>::<symbol>` or `codegraph goto <file>:<line>:<column>`
-- references for one declaration: `codegraph refs <file>::<symbol>`
-- references at a location: `codegraph refs <file>:<line>:<column>`
+- definition at a source location: `codegraph goto <file>:<line>:<column>`
+- references at a source location: `codegraph refs <file>:<line>:<column>`
+- definition or references without coordinates: `codegraph goto|refs <file>::<symbol>`
 - references for every definition in a file: `codegraph refs <file>`
 
-Use an exact project-relative `file::symbol` path to avoid location coordinates. `deps` and `rdeps` resolve that declaration to its defining file, while `callers` and `callees` expose symbol-level calls. Duplicate local names return declaration candidates; run `codegraph symbols` to get a portable handle.
+Use line and column coordinates when known; this is the primary navigation form. Use an exact project-relative `file::symbol` path when coordinates are unavailable. `deps` and `rdeps` resolve either form to its defining file, while `callers` and `callees` expose symbol-level calls. Duplicate local names return declaration candidates; run `codegraph symbols` to get a portable handle.
 
 ### Review and Inspect
 
