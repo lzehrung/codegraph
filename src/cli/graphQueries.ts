@@ -1,4 +1,5 @@
-import { getApiSurface } from "../indexer/symbols.js";
+import { findLocalSymbolDefinitions, getApiSurface, parseQualifiedSymbolPath } from "../indexer/symbols.js";
+import { parseAgentSymbolHandle } from "../agent/handles.js";
 import type { CurrentProjectIndexLoader } from "../indexer/load-current-index.js";
 import type { GraphAdjacencyIndex } from "../graphs/adjacency.js";
 import {
@@ -59,7 +60,7 @@ async function loadGraph(context: GraphQueryCommandContext): Promise<LoadedGraph
 async function handleDepsCommand(context: GraphQueryCommandContext): Promise<void> {
   const [fileArg] = context.positionals;
   if (!fileArg) {
-    context.writeStderrLine(`Usage: ${context.command} <file> [--depth N] [--json]`);
+    context.writeStderrLine(`Usage: ${context.command} <file|file::symbol|symbol:...> [--depth N] [--json]`);
     context.exit(2);
   }
   const depthRaw = context.getOpt("--depth");
@@ -71,18 +72,70 @@ async function handleDepsCommand(context: GraphQueryCommandContext): Promise<voi
     context.exit(2);
   }
   const json = context.hasFlag("--json");
-  const resolvedFile = resolveCliProjectFile(context.projectRootFs, fileArg, "File");
+  const symbolPath = parseQualifiedSymbolPath(fileArg);
+  const symbolHandle = parseAgentSymbolHandle(fileArg);
+  const targetInput = symbolPath?.file ?? symbolHandle?.file ?? fileArg;
+  const resolvedFile = resolveCliProjectFile(context.projectRootFs, targetInput, "File");
   if (resolvedFile.status === "error") {
     writeCliProjectFileError(context, resolvedFile, json ? "json" : "text");
   }
 
   const loaded = await loadGraph(context);
-  if (!loaded.graph.nodes.has(resolvedFile.file)) {
+  let targetFile = resolvedFile.file;
+  if (symbolPath || symbolHandle) {
+    const index = await context.loadCurrentIndex();
+    if (symbolPath) {
+      const definitions = findLocalSymbolDefinitions(index, resolvedFile.file, symbolPath.name);
+      if (definitions.length === 1) {
+        const definition = definitions[0];
+        if (!definition) throw new Error("Expected one symbol-path definition.");
+        targetFile = definition.file;
+      } else {
+        const status = definitions.length ? "ambiguous" : "not_found";
+        const detail = definitions.length
+          ? `Multiple symbols named ${symbolPath.name} are defined in ${symbolPath.file}.`
+          : `No indexed symbol ${symbolPath.name} is defined in ${symbolPath.file}.`;
+        const reason = definitions.length
+          ? `${detail} Run codegraph symbols "${symbolPath.file}::${symbolPath.name}" to obtain a portable handle.`
+          : detail;
+        const output = {
+          status,
+          reason,
+          ...(definitions.length
+            ? {
+                candidates: definitions.map((definition) => ({
+                  name: definition.localName,
+                  kind: definition.kind,
+                  range: definition.range,
+                })),
+              }
+            : {}),
+        };
+        if (json) context.writeJSONLine(output);
+        else context.writeStdoutLine(`${status}: ${reason}`);
+        context.exit(1);
+      }
+    } else if (symbolHandle) {
+      const definition = findLocalSymbolDefinitions(index, resolvedFile.file, symbolHandle.name).find(
+        (candidate) =>
+          candidate.range.start.line === symbolHandle.line && candidate.range.start.column === symbolHandle.column,
+      );
+      if (!definition) {
+        const reason = `Symbol handle is stale or missing. Run codegraph symbols "${symbolHandle.file}::${symbolHandle.name}" to resolve it again.`;
+        const output = { status: "not_found", reason };
+        if (json) context.writeJSONLine(output);
+        else context.writeStdoutLine(`not_found: ${reason}`);
+        context.exit(1);
+      }
+      targetFile = definition.file;
+    }
+  }
+  if (!loaded.graph.nodes.has(targetFile)) {
     const missing = {
       status: "not_found" as const,
       reason: "file_not_indexed",
-      file: resolvedFile.file,
-      error: `File is not in the project graph: ${resolvedFile.file}`,
+      file: targetFile,
+      error: `File is not in the project graph: ${targetFile}`,
     };
     if (json) context.writeJSONLine(missing);
     else context.writeStdoutLine(`not_found: ${missing.error}`);
@@ -90,11 +143,11 @@ async function handleDepsCommand(context: GraphQueryCommandContext): Promise<voi
   }
   const results =
     context.command === "deps"
-      ? getDependencies(loaded.graph, resolvedFile.file, {
+      ? getDependencies(loaded.graph, targetFile, {
           ...(depth !== undefined ? { depth } : {}),
           ...(loaded.adjacency ? { adjacency: loaded.adjacency } : {}),
         })
-      : getReverseDependencies(loaded.graph, resolvedFile.file, {
+      : getReverseDependencies(loaded.graph, targetFile, {
           ...(depth !== undefined ? { depth } : {}),
           ...(loaded.adjacency ? { adjacency: loaded.adjacency } : {}),
         });

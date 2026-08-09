@@ -111,6 +111,10 @@ export type {
 export { buildRefactorPlan, buildRefactorPlanInSnapshot, buildRefactorPlanWithSession } from "./agent/refactorPlan.js";
 export type { RefactorPlanRequest, RefactorPlanResponse, RefactorPlanSectionIssue } from "./agent/refactorPlan.js";
 
+/** Resolve a portable handle, qualified path, location, or exact name for semantic agent queries. */
+export { requireSemanticSymbol } from "./agent/semanticSymbols.js";
+export type { ResolvedSemanticSymbol } from "./agent/semanticSymbols.js";
+
 export type {
   SemanticLocation,
   SemanticOmittedCounts,

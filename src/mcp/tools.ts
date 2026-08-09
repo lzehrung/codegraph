@@ -30,6 +30,10 @@ function objectSchema(properties: ToolInputSchemaProperties, required: string[] 
 }
 
 const stringProperty = { type: "string" };
+const dependencyFileProperty = {
+  type: "string",
+  description: "File path, qualified file::symbol path, or portable symbol handle.",
+};
 const booleanProperty = { type: "boolean" };
 const orientBudgetProperty = { type: "string", enum: ["small", "medium", "large"] };
 
@@ -37,7 +41,7 @@ function dependencyInputSchema(): Tool["inputSchema"] {
   return objectSchema(
     {
       direction: { type: "string", enum: ["deps", "rdeps"] },
-      file: stringProperty,
+      file: dependencyFileProperty,
       depth: { type: "integer", minimum: 0, default: 1 },
       limit: {
         type: "integer",
@@ -83,6 +87,41 @@ function callHierarchyInputSchema(): Tool["inputSchema"] {
     },
     ["handle", "direction"],
   );
+}
+
+function navigationInputSchema(includeLimit: boolean): Tool["inputSchema"] {
+  const properties: ToolInputSchemaProperties = {
+    handle: stringProperty,
+    file: stringProperty,
+    line: { type: "integer", minimum: 1 },
+    column: { type: "integer", minimum: 0 },
+    ...(includeLimit
+      ? {
+          limit: {
+            type: "integer",
+            minimum: 0,
+            maximum: MAX_MCP_COLLECTION_LIMIT,
+            default: DEFAULT_MCP_COLLECTION_LIMIT,
+          },
+        }
+      : {}),
+  };
+  return {
+    ...objectSchema(properties),
+    additionalProperties: false,
+    oneOf: [
+      {
+        required: ["handle"],
+        not: {
+          anyOf: [{ required: ["file"] }, { required: ["line"] }, { required: ["column"] }],
+        },
+      },
+      {
+        required: ["file", "line", "column"],
+        not: { required: ["handle"] },
+      },
+    ],
+  };
 }
 
 export const MCP_TOOLS: Tool[] = [
@@ -245,31 +284,18 @@ export const MCP_TOOLS: Tool[] = [
   },
   {
     name: "goto",
-    description: "Resolve the definition at a file position.",
-    inputSchema: objectSchema(
-      { file: stringProperty, line: { type: "integer", minimum: 1 }, column: { type: "integer", minimum: 0 } },
-      ["file", "line", "column"],
-    ),
+    description: "Resolve a definition by portable handle, qualified file::symbol path, or file position.",
+    inputSchema: navigationInputSchema(false),
   },
   {
     name: "refs",
-    description: "Find references by stable handle or file position.",
-    inputSchema: objectSchema({
-      handle: stringProperty,
-      file: stringProperty,
-      line: { type: "integer", minimum: 1 },
-      column: { type: "integer", minimum: 0 },
-      limit: {
-        type: "integer",
-        minimum: 0,
-        maximum: MAX_MCP_COLLECTION_LIMIT,
-        default: DEFAULT_MCP_COLLECTION_LIMIT,
-      },
-    }),
+    description: "Find references by portable handle, qualified file::symbol path, or file position.",
+    inputSchema: navigationInputSchema(true),
   },
   {
     name: "file_deps",
-    description: "List file dependencies or reverse file dependencies.",
+    description:
+      "List file dependencies or reverse file dependencies by file path, qualified file::symbol path, or portable handle.",
     inputSchema: dependencyInputSchema(),
   },
   {

@@ -63,9 +63,9 @@ The server exposes the same bounded primitives as the CLI and library session la
 - `implementations`: proven type or supported interface/trait-member implementations without same-name inference.
 - `get_file`: bounded project file read with `offset`/`limit` line pagination, exact `number<TAB>line` content, and optional direct graph context.
 - `get_symbol`: resolve a stable search or explain handle.
-- `goto`: definition lookup by file position.
-- `refs`: references by handle or file position.
-- `file_deps`, `path`: dependency navigation; pass `direction: "deps"` or `"rdeps"` to `file_deps`.
+- `goto`: definition lookup by portable handle, qualified `file::symbol` path, or file position.
+- `refs`: references by portable handle, qualified `file::symbol` path, or file position.
+- `file_deps`, `path`: dependency navigation; pass `direction: "deps"` or `"rdeps"` to `file_deps`. `file_deps.file` accepts a portable symbol handle or qualified symbol path and traverses its declaring file.
 - `impact`: compact git-range impact analysis (`format: "compact"`, `impacted`, diagnostics). Bounded by default.
 - `review`: git-range review report (`riskSummary`, `reviewTasks`, candidate tests).
 - `query_sqlite`: bounded read-only SQLite artifact query with freshness metadata.
@@ -103,6 +103,8 @@ Portable handle grammar used across `search`, `get_symbol`, `packet_get`, `expla
 - review packet targets are separate quoted strings, not portable handles: `review:base=<encoded-ref>;head=<encoded-ref>`
 
 Positions use 1-based lines and 0-based UTF-16 columns, matching the rest of codegraph's range and navigation APIs.
+
+Position-based `goto` and `refs` requests (`file`, `line`, `column`) remain the primary navigation form. Alternatively, `goto.handle` and `refs.handle` accept an exact qualified identity, `<project-relative-file>::<local-symbol>`, without coordinates; each tool rejects mixed modes. `file_deps.file` accepts that identity or a portable `symbol:` handle, resolves its declaration, and returns file-graph dependencies; use `calls` for symbol-level callers and callees. Duplicate local names return an ambiguity error rather than selecting one.
 
 MCP tool name ↔ CLI command mapping for the common handle-driven follow-ups:
 

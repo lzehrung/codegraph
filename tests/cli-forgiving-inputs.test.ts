@@ -32,6 +32,20 @@ describe("forgiving CLI inputs", () => {
       "utf8",
     );
     await fsp.writeFile(path.join(root, "single.ts"), "export const only = 1;\n", "utf8");
+    await fsp.writeFile(
+      path.join(root, "duplicates.ts"),
+      [
+        "export class First { duplicate(): number { return 1; } }",
+        "export class Second { duplicate(): number { return 2; } }",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(root, "consumer.ts"),
+      "import { target } from './main';\nexport const downstream = target();\n",
+      "utf8",
+    );
     git(root, ["init"]);
     git(root, ["config", "user.email", "tests@example.com"]);
     git(root, ["config", "user.name", "Tests"]);
@@ -74,11 +88,93 @@ describe("forgiving CLI inputs", () => {
     expect(jsonRecord((await runCliOrThrow(["goto", handle, "--root", root, "--json"])).stdout).status).toBe("ok");
     expect(jsonRecord((await runCliOrThrow(["refs", handle, "--root", root, "--json"])).stdout).status).toBe("ok");
 
+    const locatedGoto = jsonRecord((await runCliOrThrow(["goto", "main.ts:1:17", "--root", root, "--json"])).stdout);
+    expect(locatedGoto).toMatchObject({ status: "ok", definition: { localName: "target" } });
+
+    const qualifiedTarget = "main.ts::target";
+    const qualifiedGoto = jsonRecord((await runCliOrThrow(["goto", qualifiedTarget, "--root", root, "--json"])).stdout);
+    expect(qualifiedGoto).toMatchObject({ status: "ok", definition: { localName: "target" } });
+    const qualifiedRefs = jsonRecord((await runCliOrThrow(["refs", qualifiedTarget, "--root", root, "--json"])).stdout);
+    expect(qualifiedRefs).toMatchObject({ status: "ok", definition: { localName: "target" } });
+
+    const dependencies = JSON.parse(
+      (await runCliOrThrow(["deps", "consumer.ts::downstream", "--root", root, "--json"])).stdout,
+    ) as Array<{ file: string }>;
+    expect(dependencies).toEqual(
+      expect.arrayContaining([expect.objectContaining({ file: expect.stringMatching(/main\.ts$/u) })]),
+    );
+    const reverseDependencies = JSON.parse(
+      (await runCliOrThrow(["rdeps", qualifiedTarget, "--root", root, "--json"])).stdout,
+    ) as Array<{ file: string }>;
+    expect(reverseDependencies).toEqual(
+      expect.arrayContaining([expect.objectContaining({ file: expect.stringMatching(/consumer\.ts$/u) })]),
+    );
+    const reverseDependenciesByHandle = JSON.parse(
+      (await runCliOrThrow(["rdeps", handle, "--root", root, "--json"])).stdout,
+    ) as Array<{ file: string }>;
+    expect(reverseDependenciesByHandle).toEqual(
+      expect.arrayContaining([expect.objectContaining({ file: expect.stringMatching(/consumer\.ts$/u) })]),
+    );
+
+    const missingDependency = await captureCli(["deps", "main.ts::missing", "--root", root, "--json"]);
+    expect(missingDependency.exitCode).toBe(1);
+    expect(jsonRecord(missingDependency.stdout)).toMatchObject({
+      status: "not_found",
+      reason: "No indexed symbol missing is defined in main.ts.",
+    });
+
+    const ambiguousDependency = await captureCli(["rdeps", "duplicates.ts::duplicate", "--root", root, "--json"]);
+    expect(ambiguousDependency.exitCode).toBe(1);
+    expect(jsonRecord(ambiguousDependency.stdout)).toMatchObject({
+      status: "ambiguous",
+      reason: expect.stringContaining("codegraph symbols"),
+      candidates: expect.arrayContaining([expect.objectContaining({ name: "duplicate" })]),
+    });
+
+    const missingTarget = await captureCli(["goto", "main.ts::missing", "--root", root, "--json"]);
+    expect(missingTarget.exitCode).toBe(1);
+    expect(jsonRecord(missingTarget.stdout)).toMatchObject({
+      status: "not_found",
+      reason: expect.stringContaining("No indexed symbol missing in"),
+    });
+
+    const ambiguousTarget = await captureCli(["goto", "duplicates.ts::duplicate", "--root", root, "--json"]);
+    expect(ambiguousTarget.exitCode).toBe(1);
+    expect(jsonRecord(ambiguousTarget.stdout)).toMatchObject({
+      status: "ambiguous",
+      reason: expect.stringContaining("codegraph symbols"),
+    });
+
     const fileView = jsonRecord(
       (await runCliOrThrow(["file", `${path.join(root, "main.ts")}:2`, "--root", root, "--json"])).stdout,
     );
     expect(fileView.offset).toBe(2);
     expect(fileView.content).toContain("caller");
+  });
+
+  test("rejects coordinates mixed with qualified navigation targets", async () => {
+    const qualifiedTarget = "main.ts::target";
+
+    for (const args of [
+      ["goto", qualifiedTarget, "1", "1"],
+      ["refs", "--file", qualifiedTarget, "--line", "1", "--col", "1"],
+      ["refs", "--file", qualifiedTarget, "--column", "1"],
+      ["goto", "main.ts:1:1::target"],
+      ["refs", "--file", "main.ts:1:1::target"],
+    ]) {
+      const result = await captureCli([...args, "--root", root, "--json"]);
+      expect(result.exitCode).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("qualified file::symbol target cannot be combined with a line or column");
+    }
+
+    const goto = jsonRecord((await runCliOrThrow(["goto", qualifiedTarget, "--root", root, "--json"])).stdout);
+    expect(goto).toMatchObject({ status: "ok", definition: { localName: "target" } });
+
+    const refs = jsonRecord(
+      (await runCliOrThrow(["refs", "--file", qualifiedTarget, "--root", root, "--json"])).stdout,
+    );
+    expect(refs).toMatchObject({ status: "ok", definition: { localName: "target" } });
   });
 
   test("formats goto file errors for the selected output mode", async () => {

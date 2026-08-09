@@ -7,8 +7,13 @@ npm install @lzehrung/codegraph-core
 ```
 
 ```ts
-import { buildProjectIndex } from "@lzehrung/codegraph-core";
-import { createAgentSession } from "@lzehrung/codegraph-core/agent";
+import { buildProjectIndex, resolveSymbolTarget } from "@lzehrung/codegraph-core";
+
+const index = await buildProjectIndex(process.cwd());
+const target = resolveSymbolTarget(index, "src/service.ts::start");
+if (target.status !== "exact") throw new Error(`Target did not resolve: ${target.input}`);
+
+console.log(target.target.handle, target.target.definition.range.start);
 ```
 
 CLI, MCP server, installer, and graph-viewer assets remain in `@lzehrung/codegraph`.
