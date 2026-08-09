@@ -159,6 +159,8 @@ describe("forgiving CLI inputs", () => {
       ["goto", qualifiedTarget, "1", "1"],
       ["refs", "--file", qualifiedTarget, "--line", "1", "--col", "1"],
       ["refs", "--file", qualifiedTarget, "--column", "1"],
+      ["goto", "main.ts:1:1::target"],
+      ["refs", "--file", "main.ts:1:1::target"],
     ]) {
       const result = await captureCli([...args, "--root", root, "--json"]);
       expect(result.exitCode).toBe(2);
