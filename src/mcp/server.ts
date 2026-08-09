@@ -45,7 +45,7 @@ import {
 import { findCalleesWithSession, findCallersWithSession, type CallHierarchyResponse } from "../agent/callHierarchy.js";
 import { previewRenameWithSession, type RenamePreviewResponse } from "../agent/renamePreview.js";
 import { buildRefactorPlanWithSession, type RefactorPlanResponse } from "../agent/refactorPlan.js";
-import { requireSemanticSymbol } from "../agent/semanticSymbols.js";
+import { requireSemanticSymbol, resolveSemanticSymbol } from "../agent/semanticSymbols.js";
 import { getDependencies, getReverseDependencies, getShortestPath, type DependencyNode } from "../graphs/queries.js";
 import { findReferences, goToDefinition } from "../indexer/navigation.js";
 import { parseQualifiedSymbolPath } from "../indexer/symbols.js";
@@ -575,9 +575,15 @@ function createCodegraphMcpHandlersForSession(
       ...(request.depth !== undefined ? { depth: request.depth } : {}),
       limit: boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT),
     };
-    const targetFile = parseQualifiedSymbolPath(request.file)
-      ? requireSemanticSymbol(snapshot, request.file).def.file
-      : await resolveProjectFile(await realRoot, root, request.file);
+    const resolvedSymbol = resolveSemanticSymbol(snapshot, request.file);
+    let targetFile: string;
+    if (resolvedSymbol) {
+      targetFile = resolvedSymbol.def.file;
+    } else if (parseQualifiedSymbolPath(request.file)) {
+      targetFile = requireSemanticSymbol(snapshot, request.file).def.file;
+    } else {
+      targetFile = await resolveProjectFile(await realRoot, root, request.file);
+    }
     return collectEntries(snapshot.fileGraph, targetFile, queryOptions).map((dependency) => ({
       file: relative(dependency.file),
       depth: dependency.depth,

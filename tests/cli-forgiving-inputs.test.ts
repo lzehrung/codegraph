@@ -33,6 +33,15 @@ describe("forgiving CLI inputs", () => {
     );
     await fsp.writeFile(path.join(root, "single.ts"), "export const only = 1;\n", "utf8");
     await fsp.writeFile(
+      path.join(root, "duplicates.ts"),
+      [
+        "export class First { duplicate(): number { return 1; } }",
+        "export class Second { duplicate(): number { return 2; } }",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await fsp.writeFile(
       path.join(root, "consumer.ts"),
       "import { target } from './main';\nexport const downstream = target();\n",
       "utf8",
@@ -97,6 +106,20 @@ describe("forgiving CLI inputs", () => {
     expect(reverseDependencies).toEqual(
       expect.arrayContaining([expect.objectContaining({ file: expect.stringMatching(/consumer\.ts$/u) })]),
     );
+
+    const missingTarget = await captureCli(["goto", "main.ts::missing", "--root", root, "--json"]);
+    expect(missingTarget.exitCode).toBe(1);
+    expect(jsonRecord(missingTarget.stdout)).toMatchObject({
+      status: "not_found",
+      reason: expect.stringContaining("No indexed symbol missing in"),
+    });
+
+    const ambiguousTarget = await captureCli(["goto", "duplicates.ts::duplicate", "--root", root, "--json"]);
+    expect(ambiguousTarget.exitCode).toBe(1);
+    expect(jsonRecord(ambiguousTarget.stdout)).toMatchObject({
+      status: "ambiguous",
+      reason: expect.stringContaining("codegraph symbols"),
+    });
 
     const fileView = jsonRecord(
       (await runCliOrThrow(["file", `${path.join(root, "main.ts")}:2`, "--root", root, "--json"])).stdout,

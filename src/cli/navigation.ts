@@ -349,7 +349,7 @@ export async function handleGotoCommand(context: NavigationCommandContext): Prom
   if (input.symbolName !== undefined) {
     const resolution = resolveSymbolPath(index, resolvedFile.file, input.symbolName);
     writeCliOutput(context, resolution, (value) => formatGotoOutput(context.projectRootFs, value));
-    if (resolution.status === "not_found") context.exit(1);
+    if (resolution.status !== "ok") context.exit(1);
     return;
   }
   if (input.line === undefined) {

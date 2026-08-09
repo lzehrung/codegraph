@@ -45,6 +45,22 @@ function readToolJsonResult(payload: JsonRpcObject): Record<string, unknown> {
   if (typeof text !== "string") throw new Error("MCP tool result content was not text.");
   return readObject(JSON.parse(text));
 }
+function readToolError(payload: JsonRpcObject): string {
+  if (payload.error !== undefined) {
+    const message = readObject(payload.error).message;
+    if (typeof message !== "string") throw new Error("MCP protocol error did not contain a message.");
+    return message;
+  }
+  const result = readObject(payload.result);
+  expect(result.isError).toBe(true);
+  if (!Array.isArray(result.content) || !result.content.length) {
+    throw new Error("MCP tool error did not contain text content.");
+  }
+  const text = readObject(result.content[0]).text;
+  if (typeof text !== "string") throw new Error("MCP tool error content was not text.");
+  return text;
+}
+
 function readJsonRpcObject(value: unknown): JsonRpcObject {
   return readObject(value) as JsonRpcObject;
 }
@@ -115,7 +131,21 @@ async function postRawHttpJson(
 describe("codegraph MCP handlers", () => {
   it("serves real MCP tool listing over a specified local HTTP port", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-http-"));
-    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    await fs.writeFile(path.join(root, "auth.ts"), "export function ok(): number { return 1; }\n", "utf8");
+    await fs.writeFile(
+      path.join(root, "api.ts"),
+      "import { ok } from './auth';\nexport function route(): number { return ok(); }\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(root, "duplicates.ts"),
+      [
+        "export class First { duplicate(): number { return 1; } }",
+        "export class Second { duplicate(): number { return 2; } }",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
     const httpServer = await startCodegraphMcpHttpServer({
       root,
       host: "127.0.0.1",
@@ -157,12 +187,14 @@ describe("codegraph MCP handlers", () => {
       const toolsResult = readObject(toolsList.payload.result);
       const tools = toolsResult.tools;
       expect(Array.isArray(tools)).toBeTruthy();
-      const toolNames = (tools as Array<{ name?: unknown }>).map((tool) => tool.name);
+      const listedTools = tools as Array<{ name?: unknown; description?: unknown }>;
+      const toolNames = listedTools.map((tool) => tool.name);
       expect(toolNames).toContain("search");
       expect(toolNames).toContain("orient");
       expect(toolNames).toContain("packet_get");
       expect(toolNames).toContain("query_sqlite");
       expect(toolNames).toContain("refresh_index");
+      expect(listedTools.find((tool) => tool.name === "refs")?.description).toContain("qualified file::symbol path");
 
       const gotoCall = await postMcpJson(
         httpServer.url,
@@ -175,12 +207,73 @@ describe("codegraph MCP handlers", () => {
         sessionId ?? undefined,
       );
       expect(gotoCall.response.status).toBe(200);
-      const gotoResult = readObject(gotoCall.payload.result);
-      const content = gotoResult.content;
-      if (!Array.isArray(content) || !content[0]) throw new Error("goto returned no MCP content.");
-      const gotoContent = readObject(content[0]);
-      if (typeof gotoContent.text !== "string") throw new Error("goto MCP content did not contain text.");
-      expect(JSON.parse(gotoContent.text)).toMatchObject({ status: "ok", definition: { localName: "ok" } });
+      expect(readToolJsonResult(gotoCall.payload)).toMatchObject({ status: "ok", definition: { localName: "ok" } });
+
+      const refsCall = await postMcpJson(
+        httpServer.url,
+        {
+          jsonrpc: "2.0",
+          id: 4,
+          method: "tools/call",
+          params: { name: "refs", arguments: { handle: "auth.ts::ok" } },
+        },
+        sessionId ?? undefined,
+      );
+      expect(readToolJsonResult(refsCall.payload).references).toEqual(
+        expect.arrayContaining([expect.objectContaining({ file: "api.ts" })]),
+      );
+
+      const depsCall = await postMcpJson(
+        httpServer.url,
+        {
+          jsonrpc: "2.0",
+          id: 5,
+          method: "tools/call",
+          params: { name: "file_deps", arguments: { file: "api.ts::route", direction: "deps" } },
+        },
+        sessionId ?? undefined,
+      );
+      expect(readToolJsonResult(depsCall.payload).dependencies).toEqual(
+        expect.arrayContaining([expect.objectContaining({ file: "auth.ts" })]),
+      );
+
+      const reverseDepsCall = await postMcpJson(
+        httpServer.url,
+        {
+          jsonrpc: "2.0",
+          id: 6,
+          method: "tools/call",
+          params: { name: "file_deps", arguments: { file: "auth.ts::ok", direction: "rdeps" } },
+        },
+        sessionId ?? undefined,
+      );
+      expect(readToolJsonResult(reverseDepsCall.payload).reverseDependencies).toEqual(
+        expect.arrayContaining([expect.objectContaining({ file: "api.ts" })]),
+      );
+
+      const missingCall = await postMcpJson(
+        httpServer.url,
+        {
+          jsonrpc: "2.0",
+          id: 7,
+          method: "tools/call",
+          params: { name: "goto", arguments: { handle: "auth.ts::missing" } },
+        },
+        sessionId ?? undefined,
+      );
+      expect(readToolError(missingCall.payload)).toContain('Symbol path "auth.ts::missing" was not found');
+
+      const ambiguousCall = await postMcpJson(
+        httpServer.url,
+        {
+          jsonrpc: "2.0",
+          id: 8,
+          method: "tools/call",
+          params: { name: "file_deps", arguments: { file: "duplicates.ts::duplicate", direction: "deps" } },
+        },
+        sessionId ?? undefined,
+      );
+      expect(readToolError(ambiguousCall.payload)).toContain('Ambiguous symbol target "duplicates.ts::duplicate"');
     } finally {
       await httpServer.close();
     }
@@ -886,6 +979,14 @@ describe("codegraph MCP handlers", () => {
 
     const dependencies = await handlers.deps({ file: "api.ts::route" });
     expect(dependencies.dependencies).toEqual(expect.arrayContaining([expect.objectContaining({ file: "auth.ts" })]));
+
+    const workspaceSymbols = await handlers.workspace_symbols({ query: "route", fileGlob: "api.ts" });
+    const route = workspaceSymbols.symbols.find((symbol) => symbol.localName === "route");
+    if (!route) throw new Error("Expected portable route handle.");
+    const dependenciesByHandle = await handlers.deps({ file: route.handle });
+    expect(dependenciesByHandle.dependencies).toEqual(
+      expect.arrayContaining([expect.objectContaining({ file: "auth.ts" })]),
+    );
   });
 
   it("returns orientation and packet data through MCP handlers", async () => {

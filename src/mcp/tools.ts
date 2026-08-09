@@ -255,7 +255,7 @@ export const MCP_TOOLS: Tool[] = [
   },
   {
     name: "refs",
-    description: "Find references by stable handle or file position.",
+    description: "Find references by portable handle, qualified file::symbol path, or file position.",
     inputSchema: objectSchema({
       handle: stringProperty,
       file: stringProperty,

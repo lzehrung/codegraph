@@ -65,7 +65,7 @@ The server exposes the same bounded primitives as the CLI and library session la
 - `get_symbol`: resolve a stable search or explain handle.
 - `goto`: definition lookup by portable handle, qualified `file::symbol` path, or file position.
 - `refs`: references by portable handle, qualified `file::symbol` path, or file position.
-- `file_deps`, `path`: dependency navigation; pass `direction: "deps"` or `"rdeps"` to `file_deps`. `file_deps.file` also accepts a qualified symbol path and traverses its declaring file.
+- `file_deps`, `path`: dependency navigation; pass `direction: "deps"` or `"rdeps"` to `file_deps`. `file_deps.file` accepts a portable symbol handle or qualified symbol path and traverses its declaring file.
 - `impact`: compact git-range impact analysis (`format: "compact"`, `impacted`, diagnostics). Bounded by default.
 - `review`: git-range review report (`riskSummary`, `reviewTasks`, candidate tests).
 - `query_sqlite`: bounded read-only SQLite artifact query with freshness metadata.
@@ -104,7 +104,7 @@ Portable handle grammar used across `search`, `get_symbol`, `packet_get`, `expla
 
 Positions use 1-based lines and 0-based UTF-16 columns, matching the rest of codegraph's range and navigation APIs.
 
-`goto.handle` and `refs.handle` also accept an exact qualified identity, `<project-relative-file>::<local-symbol>`, without line or column coordinates. `file_deps.file` accepts the same identity, resolves its declaration, and returns file-graph dependencies; use `calls` for symbol-level callers and callees. Duplicate local names return an ambiguity error rather than selecting one.
+`goto.handle` and `refs.handle` also accept an exact qualified identity, `<project-relative-file>::<local-symbol>`, without line or column coordinates. `file_deps.file` accepts that identity or a portable `symbol:` handle, resolves its declaration, and returns file-graph dependencies; use `calls` for symbol-level callers and callees. Duplicate local names return an ambiguity error rather than selecting one.
 
 MCP tool name ↔ CLI command mapping for the common handle-driven follow-ups:
 
