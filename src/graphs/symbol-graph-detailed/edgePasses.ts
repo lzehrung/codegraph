@@ -318,7 +318,7 @@ function recordIdentifierRelations(
   context: EdgePassContext,
   fromId: string,
   container: SyntaxNodeLike,
-  relationForTarget: (target: SymbolDef, index: number) => "extends" | "implements",
+  relationForTarget: (target: SymbolDef, index: number) => "extends" | "implements" | "trait" | "mixin",
 ): void {
   const identifiers: SyntaxNodeLike[] = [];
   const collect = (node: SyntaxNodeLike): void => {
@@ -386,6 +386,35 @@ export function emitClassInheritanceEdges(context: EdgePassContext, classNodes: 
     if (context.sup.id === "python") {
       const bases = cls.node.childForFieldName("superclasses") ?? findFirstNodeByType(cls.node, "argument_list");
       if (bases) recordIdentifierRelations(context, fromId, bases, () => "extends");
+      continue;
+    }
+
+    if (context.sup.id === "php") {
+      const base = findFirstNodeByType(cls.node, "base_clause");
+      if (base) recordIdentifierRelations(context, fromId, base, () => "extends");
+
+      const interfaces = findFirstNodeByType(cls.node, "class_interface_clause");
+      if (interfaces) recordIdentifierRelations(context, fromId, interfaces, () => "implements");
+
+      const traitUses: SyntaxNodeLike[] = [];
+      collectNodesByType(cls.node, "use_declaration", traitUses);
+      for (const traitUse of traitUses) recordIdentifierRelations(context, fromId, traitUse, () => "trait");
+      continue;
+    }
+
+    if (context.sup.id === "ruby") {
+      const superclass = findFirstNodeByType(cls.node, "superclass");
+      if (superclass) recordIdentifierRelations(context, fromId, superclass, () => "extends");
+
+      const calls: SyntaxNodeLike[] = [];
+      collectNodesByType(cls.node, "call", calls);
+      for (const call of calls) {
+        const methodNode = call.childForFieldName("method");
+        const methodName = methodNode ? sliceText(methodNode, context.source) : undefined;
+        if (methodName !== "include" && methodName !== "extend" && methodName !== "prepend") continue;
+        const args = call.childForFieldName("arguments");
+        if (args) recordIdentifierRelations(context, fromId, args, () => "mixin");
+      }
       continue;
     }
 

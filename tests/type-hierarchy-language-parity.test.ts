@@ -17,7 +17,7 @@ afterAll(async () => {
 type ProvenRelation = {
   from: string;
   to: string;
-  relation: "extends" | "implements";
+  relation: "extends" | "implements" | "trait" | "mixin";
 };
 
 const PROVEN_RELATIONS: ProvenRelation[] = [
@@ -36,10 +36,15 @@ const PROVEN_RELATIONS: ProvenRelation[] = [
   { from: "PyWorker", to: "PyBase", relation: "extends" },
   { from: "KotlinWorker", to: "KotlinService", relation: "implements" },
   { from: "KotlinSpecialized", to: "KotlinWorker", relation: "extends" },
+  { from: "PhpWorker", to: "PhpBase", relation: "extends" },
+  { from: "PhpWorker", to: "PhpService", relation: "implements" },
+  { from: "PhpWorker", to: "PhpGreets", relation: "trait" },
+  { from: "RubyWorker", to: "RubyBase", relation: "extends" },
+  { from: "RubyWorker", to: "RubyGreets", relation: "mixin" },
 ];
 
 nativeDescribe("type hierarchy language parity", () => {
-  it("extracts only proven current inheritance and conformance forms across eight languages", async () => {
+  it("extracts only proven current inheritance and conformance forms across ten languages", async () => {
     const root = await mkTmpDir("cg-hierarchy-parity-");
     roots.push(root);
     const fixtures: Record<string, string> = {
@@ -84,6 +89,30 @@ nativeDescribe("type hierarchy language parity", () => {
         "}",
         "class KotlinSpecialized : KotlinWorker()",
       ].join("\n"),
+      "Types.php": [
+        "<?php",
+        "interface PhpService { public function run(): void; }",
+        'trait PhpGreets { public function greet(): string { return "hi"; } }',
+        "class PhpBase {}",
+        "class PhpWorker extends PhpBase implements PhpService {",
+        "  use PhpGreets;",
+        "  public function run(): void {}",
+        "}",
+      ].join("\n"),
+      "types.rb": [
+        "module RubyGreets",
+        "  def greet",
+        '    "hi"',
+        "  end",
+        "end",
+        "",
+        "class RubyBase",
+        "end",
+        "",
+        "class RubyWorker < RubyBase",
+        "  include RubyGreets",
+        "end",
+      ].join("\n"),
     };
     for (const [file, source] of Object.entries(fixtures)) await fs.writeFile(path.join(root, file), source);
 
@@ -92,7 +121,7 @@ nativeDescribe("type hierarchy language parity", () => {
     const nodesByName = new Map([...graph.nodes.values()].map((node) => [node.name, node.id]));
     const actualRelations = new Set(
       graph.edges
-        .filter((edge) => edge.label === "extends" || edge.label === "implements")
+        .filter((edge) => ["extends", "implements", "trait", "mixin"].includes(edge.label))
         .map((edge) => `${graph.nodes.get(edge.from)?.name}:${edge.label}:${graph.nodes.get(edge.to)?.name}`),
     );
 
