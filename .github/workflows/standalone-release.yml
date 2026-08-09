@@ -192,6 +192,7 @@ jobs:
             --no-fund \
             --no-package-lock \
             "${{ steps.packages.outputs.root }}" \
+            "${{ steps.packages.outputs.core }}" \
             "${{ steps.packages.outputs.native }}" \
             "${{ steps.packages.outputs.nativeTarget }}"
 

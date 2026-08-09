@@ -345,6 +345,8 @@ const impact = await analyzeImpactFromDiff(root, index, {
 console.log(impact.changedSymbols, impact.impacted);
 ```
 
+For review-oriented batch data, use `buildReviewReport()` or `analyzeImpactFromDiff()`. For progressive analysis, `analyzeImpactStreaming()` emits structured fields and a final summary with ranked top impacts; agent-shaped integrations can use `tool_impactJSON()`.
+
 ### Trace dependencies, consumers, and a symbol's references
 
 One index supports file traversal and semantic navigation. File identities in graph results use normalized `/` separators.

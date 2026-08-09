@@ -132,6 +132,10 @@ describe("certified release workflows", () => {
     expect(download).toContain('fs.writeFileSync("temp/release-candidates/SHA256SUMS"');
     expect(build).toContain("- download-release-candidates");
     expect(build).toContain("npm run build:standalone --");
+    expect(build).toContain('"${{ steps.packages.outputs.root }}"');
+    expect(build).toContain('"${{ steps.packages.outputs.core }}"');
+    expect(build).toContain('"${{ steps.packages.outputs.native }}"');
+    expect(build).toContain('"${{ steps.packages.outputs.nativeTarget }}"');
     expect(build).not.toContain('"ls", "--omit=dev"');
     expect(smoke).toContain("- build-standalone-archives");
     expect(smoke).toContain("installStandaloneBundle");
