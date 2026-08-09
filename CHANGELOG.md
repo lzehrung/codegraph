@@ -9,6 +9,10 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ## [2.0.0] - 2026-08-09
 
+### Added
+
+- Published `@lzehrung/codegraph-core` as the slim library install (graphs/indexer/impact/agent helpers) without MCP SDK, installer-only deps, or viewer/skill assets.
+
 ### Breaking Changes
 
 - Narrowed the root `@lzehrung/codegraph` export to core library primitives (indexing, graphs, impact, `CodeReviewSession`, SQLite/SQL, chunking, duplicates, drift, review, config, languages, native checks, and indexer `query*` aliases).
@@ -19,9 +23,10 @@ GitHub Releases remain the certified publish record. This file summarizes produc
 
 ### Migration
 
-- Replace root imports of agent APIs with `@lzehrung/codegraph/agent`.
+- Library-only consumers should install `@lzehrung/codegraph-core` (and its `./agent` subpath) instead of the full CLI/MCP package.
+- Replace root imports of agent APIs with `@lzehrung/codegraph/agent` or `@lzehrung/codegraph-core/agent`.
 - Replace root imports of MCP APIs with `@lzehrung/codegraph/mcp`.
-- Import `toolFollowUp` / `AgentFollowUp` from `@lzehrung/codegraph/agent` when needed; do not depend on CLI follow-up string formatters.
+- Import `toolFollowUp` / `AgentFollowUp` from the agent entrypoint when needed; do not depend on CLI follow-up string formatters.
 
 ## [1.8.111] - 2026-08-05
 

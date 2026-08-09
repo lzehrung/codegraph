@@ -47,6 +47,7 @@ async function writeManifest(directory: string): Promise<string> {
     nativeVersion: "3.0.0",
     files: [
       await candidateRecord(directory, "@lzehrung/codegraph", "packages/root.tgz"),
+      await candidateRecord(directory, "@lzehrung/codegraph-core", "packages/core.tgz"),
       await candidateRecord(directory, "@lzehrung/codegraph-native", "packages/native.tgz"),
       await candidateRecord(directory, `@lzehrung/codegraph-native-${target}`, `packages/native-${target}.tgz`, target),
     ],
@@ -92,6 +93,12 @@ describe("release candidate package contract", () => {
               package: "@lzehrung/codegraph",
               file: "packages/root.tgz",
               sha256: "a".repeat(64),
+              size: 1,
+            },
+            {
+              package: "@lzehrung/codegraph-core",
+              file: "packages/core.tgz",
+              sha256: "d".repeat(64),
               size: 1,
             },
             {

@@ -132,12 +132,27 @@ async function createCandidateSet(target: string): Promise<{
       root,
       packagesDirectory,
       {
+        name: "@lzehrung/codegraph-core",
+        version: "2.0.0",
+        type: "module",
+        main: "dist/index.js",
+        files: ["dist"],
+      },
+      {
+        "dist/index.js": "export const codegraphCore = true;\n",
+      },
+    ),
+    packTinyPackage(
+      root,
+      packagesDirectory,
+      {
         name: "@lzehrung/codegraph",
         version: "2.0.0",
         type: "module",
         main: "dist/index.js",
         bin: { codegraph: "dist/bin/cli.js" },
         files: ["dist"],
+        dependencies: { "@lzehrung/codegraph-core": "2.0.0" },
       },
       {
         "dist/index.js": "export const codegraph = true;\n",
@@ -264,7 +279,7 @@ describe("package smoke modes", () => {
 
     expect(report.status).toBe("pass");
     expect(report.mode).toBe("structural");
-    expect(commandRunner.calls).toHaveLength(3);
+    expect(commandRunner.calls).toHaveLength(4);
     expect(commandRunner.calls.every((call) => call.includes("--dry-run"))).toBe(true);
   });
 
@@ -294,7 +309,7 @@ describe("package smoke modes", () => {
     );
     expect(mcpCalls).toEqual(["initialize", "tools/list", "tools/call:search"]);
     expect(commandRunner.calls.some((call) => call[1] === "install")).toBe(true);
-    expect(commandRunner.calls.filter((call) => call[0] === "tar")).toHaveLength(3);
+    expect(commandRunner.calls.filter((call) => call[0] === "tar")).toHaveLength(4);
     expect(commandRunner.calls.some((call) => call.includes("--pack-destination"))).toBe(false);
   });
 

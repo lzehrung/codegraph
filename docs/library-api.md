@@ -46,9 +46,10 @@ const index = await buildProjectIndex(root, {
 
 ## Public API Boundary
 
-The npm package exposes these documented entry points:
+The published packages expose these documented entry points:
 
-- `@lzehrung/codegraph` for the core library surface: project indexing, graphs,
+- `@lzehrung/codegraph-core` for the slim library install without CLI, MCP, installer, or graph-viewer assets. Prefer it for library-only consumers. It mirrors the core and `./agent` / `./graphs` / `./impact` / `./indexer` / `./languages` entrypoints below.
+- `@lzehrung/codegraph` for the product package (CLI/MCP/viewer/installer) and a convenience re-export of the core library surface: project indexing, graphs,
   impact analysis, `CodeReviewSession`, SQLite/SQL helpers, semantic chunking,
   duplicate detection, architecture drift, review reports, config loading, language
   metadata, native runtime capability checks, and `indexer` query\* aliases.

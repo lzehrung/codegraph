@@ -1,6 +1,6 @@
 # Separating the reusable TypeScript library from CLI, MCP, and viewer bloat (2026-08-08)
 
-Status: Phases 1–2 implemented on branch `refactor/library-surface-separation` (package version 2.0.0). Phase 3 (package split) remains deferred.
+Status: Phases 1–3 implemented on branch `refactor/library-surface-separation` (package version 2.0.0). `@lzehrung/codegraph-core` is the slim library package; `@lzehrung/codegraph` remains the CLI/MCP/viewer product and depends on core.
 
 ## Problem
 

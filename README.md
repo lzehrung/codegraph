@@ -342,7 +342,7 @@ Keep structured fields until the final UI or prompt boundary. Repeated callers s
 
 The public surface also includes `buildReviewReport` and `analyzeImpactStreaming` on the root export, plus `tool_impactJSON` from `@lzehrung/codegraph/agent`, for specialized review and integration workflows. Batch output can retain ranked top impacts and full report metadata; streaming callers can choose a lighter terminal summary after consuming incremental chunks.
 
-The root export is the core library surface. Agent-shaped APIs live under `@lzehrung/codegraph/agent`, and MCP handlers/server under `@lzehrung/codegraph/mcp`. See the [public API boundary](./docs/library-api.md#public-api-boundary) before choosing an import path.
+Library-only installs should use `@lzehrung/codegraph-core`. The product package `@lzehrung/codegraph` keeps the CLI/MCP/viewer surface and still re-exports the library APIs; agent helpers live under `/agent`, and MCP under `/mcp`. See the [public API boundary](./docs/library-api.md#public-api-boundary) before choosing an import path.
 
 ## How it works
 

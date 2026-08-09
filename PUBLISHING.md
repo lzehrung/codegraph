@@ -1,8 +1,9 @@
 # Publishing Guide
 
-codegraph publishes two top-level npm packages:
+codegraph publishes three top-level npm packages:
 
-- `@lzehrung/codegraph`: the main JS package and CLI
+- `@lzehrung/codegraph`: the product package (CLI, MCP server, installer, viewer assets) and a convenience re-export of the library surface
+- `@lzehrung/codegraph-core`: the slim TypeScript library install without MCP/CLI/viewer assets
 - `@lzehrung/codegraph-native`: the optional native Tree-sitter meta package plus per-platform binary packages
 
 The main package depends on the native package optionally, so installs still succeed when no matching native binary exists. When native is unavailable, codegraph degrades to reduced graph-only and regex recovery mode; there is no separate JavaScript parser fallback package.
@@ -104,9 +105,12 @@ The workflow exposes the `PACKAGE_PUBLISH_TOKEN` Actions secret as both `NODE_AU
 ## Package Roles
 
 - `@lzehrung/codegraph`
-  - Publishes `dist/` and the CLI.
+  - Publishes `dist/`, the CLI, MCP docs/skill/viewer assets, and depends on `@lzehrung/codegraph-core`.
   - Loads `@lzehrung/codegraph-native` when present.
   - Drops to reduced graph-only and regex recovery mode when native is unavailable.
+- `@lzehrung/codegraph-core`
+  - Publishes the staged library `dist/` subset (no MCP SDK, installer-only deps, or viewer/skill assets).
+  - Versions with the root package and is packed/published whenever root is released.
 - `@lzehrung/codegraph-native`
   - Publishes the meta package.
   - Resolves and loads the correct per-platform binary package.

@@ -6,6 +6,7 @@ import { getNativeTargetMetadata, nativeTargetMetadata } from "../native-targets
 export const RELEASE_CANDIDATE_MANIFEST_SCHEMA_VERSION = 1;
 export const PACKAGE_SMOKE_REPORT_SCHEMA_VERSION = 1;
 export const ROOT_PACKAGE_NAME = "@lzehrung/codegraph";
+export const CORE_PACKAGE_NAME = "@lzehrung/codegraph-core";
 export const NATIVE_META_PACKAGE_NAME = "@lzehrung/codegraph-native";
 export const NATIVE_TARGET_PACKAGE_PREFIX = "@lzehrung/codegraph-native-";
 
@@ -84,7 +85,11 @@ function validateCandidateRecord(value, index) {
     fail("manifest-invalid", `files[${index}].size must be a positive safe integer.`, { file });
   }
 
-  if (packageName === ROOT_PACKAGE_NAME || packageName === NATIVE_META_PACKAGE_NAME) {
+  if (
+    packageName === ROOT_PACKAGE_NAME ||
+    packageName === CORE_PACKAGE_NAME ||
+    packageName === NATIVE_META_PACKAGE_NAME
+  ) {
     if (record.target !== undefined) {
       fail("target-mismatch", `${packageName} must not declare a native target.`, { package: packageName });
     }
@@ -158,6 +163,7 @@ export function validateReleaseCandidateManifest(value, options = {}) {
   }
 
   assertSinglePackageRecord(files, ROOT_PACKAGE_NAME);
+  assertSinglePackageRecord(files, CORE_PACKAGE_NAME);
   assertSinglePackageRecord(files, NATIVE_META_PACKAGE_NAME);
 
   if (options.expectedTargets !== undefined) {
@@ -270,9 +276,10 @@ export async function readReleaseCandidateManifest(manifestPath, options = {}) {
 export function selectReleaseCandidatePackages(manifest, target) {
   const expectedTargetPackage = expectedPackageForTarget(target);
   const root = manifest.files.find((entry) => entry.package === ROOT_PACKAGE_NAME);
+  const core = manifest.files.find((entry) => entry.package === CORE_PACKAGE_NAME);
   const native = manifest.files.find((entry) => entry.package === NATIVE_META_PACKAGE_NAME);
   const nativeTarget = manifest.files.find((entry) => entry.target === target);
-  if (!root || !native || !nativeTarget) {
+  if (!root || !core || !native || !nativeTarget) {
     fail("target-mismatch", `Release candidate manifest has no complete package set for ${target}.`, { target });
   }
   if (nativeTarget.package !== expectedTargetPackage) {
@@ -282,13 +289,15 @@ export function selectReleaseCandidatePackages(manifest, target) {
       expectedPackage: expectedTargetPackage,
     });
   }
-  return { root, native, nativeTarget };
+  return { root, core, native, nativeTarget };
 }
 
 export function selectReducedReleaseCandidatePackage(manifest) {
   const root = manifest.files.find((entry) => entry.package === ROOT_PACKAGE_NAME);
+  const core = manifest.files.find((entry) => entry.package === CORE_PACKAGE_NAME);
   if (!root) fail("manifest-incomplete", `Release candidate manifest has no ${ROOT_PACKAGE_NAME} tarball.`);
-  return { root };
+  if (!core) fail("manifest-incomplete", `Release candidate manifest has no ${CORE_PACKAGE_NAME} tarball.`);
+  return { root, core };
 }
 
 export function releaseCandidatePublicationOrder(manifest) {
@@ -296,9 +305,11 @@ export function releaseCandidatePublicationOrder(manifest) {
     .filter((entry) => entry.target !== undefined)
     .sort((left, right) => left.target.localeCompare(right.target));
   const native = manifest.files.find((entry) => entry.package === NATIVE_META_PACKAGE_NAME);
+  const core = manifest.files.find((entry) => entry.package === CORE_PACKAGE_NAME);
   const root = manifest.files.find((entry) => entry.package === ROOT_PACKAGE_NAME);
-  if (!native || !root) fail("manifest-incomplete", "Release candidate manifest is missing publishable packages.");
-  return [...targets, native, root];
+  if (!native || !core || !root)
+    fail("manifest-incomplete", "Release candidate manifest is missing publishable packages.");
+  return [...targets, native, core, root];
 }
 
 export function assertReleaseCandidateIdentity(manifest, expected) {

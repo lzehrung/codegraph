@@ -14,6 +14,7 @@ import {
   recoverNativePackageManifestForResume,
   recoverRootPackageManifestForResume,
   releasePackages,
+  restoreCorePackageManifest,
   restoreRootPackageManifest,
   restoreNativePackageManifest,
   sanitizePublishedRootPackageManifest,
@@ -28,8 +29,10 @@ const rootDir = process.cwd();
 const rootPackagePath = path.join(rootDir, "package.json");
 const nativeRootPath = path.join(rootDir, "packages", "codegraph-native");
 const nativePackagePath = path.join(rootDir, "packages", "codegraph-native", "package.json");
+const corePackagePath = path.join(rootDir, "packages", "codegraph-core", "package.json");
 const currentRootPackage = readJson(rootPackagePath);
 const currentNativePackage = readJson(nativePackagePath);
+const currentCorePackage = readJson(corePackagePath);
 const originalRootPackageJson = `${JSON.stringify(
   recoverRootPackageManifestForResume(currentRootPackage, readJsonFromString(readGitFile("package.json"))),
   null,
@@ -40,6 +43,14 @@ const originalNativePackageJson = `${JSON.stringify(
     currentNativePackage,
     readJsonFromString(readGitFile("packages/codegraph-native/package.json")),
   ),
+  null,
+  2,
+)}\n`;
+const originalCorePackageJson = `${JSON.stringify(
+  {
+    ...readJsonFromString(readGitFile("packages/codegraph-core/package.json")),
+    version: currentCorePackage.version,
+  },
   null,
   2,
 )}\n`;
@@ -161,15 +172,20 @@ function readCurrentPackageVersions() {
 function normalizeManagedManifests(versionPlan) {
   let rootPackage = JSON.parse(originalRootPackageJson);
   const nativePackage = JSON.parse(originalNativePackageJson);
+  let corePackage = JSON.parse(originalCorePackageJson);
 
   const rootVersion = versionPlan.get("root");
   const nativeVersion = versionPlan.get("native");
+  const coreVersion = versionPlan.get("core") ?? rootVersion;
 
   if (rootVersion) {
     rootPackage.version = rootVersion;
   }
   if (nativeVersion) {
     nativePackage.version = nativeVersion;
+  }
+  if (coreVersion) {
+    corePackage = restoreCorePackageManifest(corePackage, coreVersion, nativePackage.version);
   }
   if (rootVersion) {
     rootPackage = restoreRootPackageManifest(rootPackage, rootVersion, nativePackage.version);
@@ -180,6 +196,7 @@ function normalizeManagedManifests(versionPlan) {
 
   writeJson(rootPackagePath, rootPackage);
   writeJson(nativePackagePath, nativePackage);
+  writeJson(corePackagePath, corePackage);
 }
 
 function restoreNativePackage(versionPlan) {
@@ -204,6 +221,25 @@ function writePublishReadyRootPackage(versionPlan) {
       restoreRootPackageManifest(sourceManifest, intendedVersion, readJson(nativePackagePath).version),
     ),
   );
+}
+
+function writePublishReadyCorePackage(versionPlan) {
+  const intendedVersion = versionPlan.get("core") ?? versionPlan.get("root");
+  if (!intendedVersion) {
+    return;
+  }
+  const sourceManifest = JSON.parse(originalCorePackageJson);
+  writeJson(
+    corePackagePath,
+    restoreCorePackageManifest(sourceManifest, intendedVersion, readJson(nativePackagePath).version),
+  );
+}
+
+function restoreCorePackage(versionPlan) {
+  const sourceManifest = JSON.parse(originalCorePackageJson);
+  const intendedVersion = versionPlan.get("core") ?? versionPlan.get("root") ?? sourceManifest.version;
+  const nativeVersion = versionPlan.get("native") ?? readJson(nativePackagePath).version;
+  writeJson(corePackagePath, restoreCorePackageManifest(sourceManifest, intendedVersion, nativeVersion));
 }
 
 function writePublishReadyNativePackage(versionPlan) {
@@ -446,6 +482,14 @@ if (publishPlan) {
         run("npm", ["run", "publish:native:meta"]);
         continue;
       }
+      if (step === "prepareCoreManifest") {
+        writePublishReadyCorePackage(versionPlan);
+        continue;
+      }
+      if (step === "publishCore") {
+        run("npm", ["publish", "--workspace=@lzehrung/codegraph-core"]);
+        continue;
+      }
       if (step === "prepareRootManifest") {
         writePublishReadyRootPackage(versionPlan);
         continue;
@@ -456,6 +500,7 @@ if (publishPlan) {
     }
   } finally {
     restoreRootPackage(versionPlan);
+    restoreCorePackage(versionPlan);
     restoreNativePackage(versionPlan);
   }
 }

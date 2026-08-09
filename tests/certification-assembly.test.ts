@@ -20,6 +20,7 @@ function createAssemblyCheckout(): {
   root: string;
   output: string;
   originalRootManifest: string;
+  originalCoreManifest: string;
   originalNativeManifest: string;
 } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-candidate-assembly-"));
@@ -35,6 +36,15 @@ function createAssemblyCheckout(): {
     scripts: { prepare: "do-not-run" },
     workspaces: ["packages/*"],
     devDependencies: { typescript: "1.0.0" },
+    dependencies: { "@lzehrung/codegraph-core": "1.0.0" },
+    optionalDependencies: { "@lzehrung/codegraph-native": "^1.0.0" },
+  };
+  const coreManifest = {
+    name: "@lzehrung/codegraph-core",
+    version: "1.0.0",
+    type: "module",
+    main: "dist/index.js",
+    files: ["dist"],
     optionalDependencies: { "@lzehrung/codegraph-native": "^1.0.0" },
   };
   const nativeManifest = {
@@ -47,10 +57,14 @@ function createAssemblyCheckout(): {
       targets: nativeTargetMetadata.map((target) => target.rustTarget),
     },
   };
+  const coreRoot = path.join(root, "packages", "codegraph-core");
   writeJson(path.join(root, "package.json"), rootManifest);
+  writeJson(path.join(coreRoot, "package.json"), coreManifest);
   writeJson(path.join(nativeRoot, "package.json"), nativeManifest);
   fs.mkdirSync(path.join(root, "dist"), { recursive: true });
+  fs.mkdirSync(path.join(coreRoot, "dist"), { recursive: true });
   fs.writeFileSync(path.join(root, "dist", "index.js"), "export const ok = true;\n", "utf8");
+  fs.writeFileSync(path.join(coreRoot, "dist", "index.js"), "export const ok = true;\n", "utf8");
   fs.writeFileSync(path.join(nativeRoot, "index.js"), "export const native = true;\n", "utf8");
 
   for (const target of nativeTargetMetadata) {
@@ -67,6 +81,7 @@ function createAssemblyCheckout(): {
     root,
     output,
     originalRootManifest: fs.readFileSync(path.join(root, "package.json"), "utf8"),
+    originalCoreManifest: fs.readFileSync(path.join(coreRoot, "package.json"), "utf8"),
     originalNativeManifest: fs.readFileSync(path.join(nativeRoot, "package.json"), "utf8"),
   };
 }
@@ -78,7 +93,7 @@ afterEach(() => {
 });
 
 describe("release candidate assembly", () => {
-  it("packs each target, native meta, and root exactly once and restores source manifests", async () => {
+  it("packs each target, native meta, core, and root exactly once and restores source manifests", async () => {
     const fixture = createAssemblyCheckout();
     const packedNames: string[] = [];
     const packedManifests = new Map<string, Record<string, unknown>>();
@@ -104,12 +119,15 @@ describe("release candidate assembly", () => {
       },
     });
 
-    expect(packedNames).toHaveLength(10);
-    expect(new Set(packedNames).size).toBe(10);
-    expect(result.manifest.files).toHaveLength(10);
+    expect(packedNames).toHaveLength(11);
+    expect(new Set(packedNames).size).toBe(11);
+    expect(result.manifest.files).toHaveLength(11);
     expect(fs.existsSync(result.manifestPath)).toBe(true);
     expect(fs.existsSync(result.checksumsPath)).toBe(true);
     expect(fs.readFileSync(path.join(fixture.root, "package.json"), "utf8")).toBe(fixture.originalRootManifest);
+    expect(fs.readFileSync(path.join(fixture.root, "packages", "codegraph-core", "package.json"), "utf8")).toBe(
+      fixture.originalCoreManifest,
+    );
     expect(fs.readFileSync(path.join(fixture.root, "packages", "codegraph-native", "package.json"), "utf8")).toBe(
       fixture.originalNativeManifest,
     );
@@ -117,8 +135,11 @@ describe("release candidate assembly", () => {
     const packedRoot = packedManifests.get("@lzehrung/codegraph");
     expect(packedRoot).toMatchObject({
       version: "2.0.0",
+      dependencies: { "@lzehrung/codegraph-core": "2.0.0" },
       optionalDependencies: { "@lzehrung/codegraph-native": "^3.0.0" },
     });
+    const packedCore = packedManifests.get("@lzehrung/codegraph-core");
+    expect(packedCore).toMatchObject({ version: "2.0.0" });
     expect(packedRoot).not.toHaveProperty("scripts");
     expect(packedRoot).not.toHaveProperty("workspaces");
     expect(packedRoot).not.toHaveProperty("devDependencies");

@@ -384,7 +384,7 @@ async function resolvePackageArtifacts(context, artifact) {
         packageVersion: manifest.nativeVersion,
         target: selection.nativeTarget.target,
       },
-      paths: [selection.root, selection.native, selection.nativeTarget].map((entry) => {
+      paths: [selection.core, selection.root, selection.native, selection.nativeTarget].map((entry) => {
         return path.resolve(manifestDirectory, entry.file);
       }),
     };
