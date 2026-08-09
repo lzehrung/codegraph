@@ -76,6 +76,9 @@ Public-stable APIs (documented integration surface):
 - Indexing and navigation: `buildProjectIndex`, `buildProjectIndexIncremental`,
   `buildProjectIndexFromFiles`, `goToDefinition`, `findReferences`, symbol handles,
   graph builders and renderers.
+- Symbol targets: `resolveSymbolTarget` returns deterministic exact, ambiguous,
+  and not-found outcomes for reusable handles, qualified paths, source
+  locations, and exact names.
 - Sessions: `createCodeReviewSession`.
 - Impact and review: impact reports, `buildReviewReport`, `analyzeImpactFromDiff`,
   `analyzeImpactStreaming`.
@@ -90,6 +93,45 @@ unless they specifically need these shapes.
 
 Internal-only modules (anything outside the documented entry points above) are
 not covered by semver.
+
+## Symbol target resolution
+
+`resolveSymbolTarget(index, input)` is the index-level capability for turning a
+known target into one reusable `SymbolHandle` and `SymbolDef`. It is exported
+from the root package and `@lzehrung/codegraph-core/indexer`; it does not build
+or refresh an index.
+
+It accepts a canonical `symbolId()` handle, project-relative
+`file::symbol` path, `file:line[:column]` source location, or exact symbol
+name. Relative file targets use `index.projectRoot`, so consumers that build an
+index with `buildProjectIndex(root)` can pass `src/file.ts::symbol`.
+
+```ts
+import { buildProjectIndex, resolveSymbolTarget } from "@lzehrung/codegraph-core";
+
+const index = await buildProjectIndex(process.cwd());
+const resolution = resolveSymbolTarget(index, "src/service.ts::start");
+
+if (resolution.status === "exact") {
+  console.log(resolution.target.handle, resolution.target.definition.range.start);
+} else if (resolution.status === "ambiguous") {
+  console.log(resolution.candidates.map((candidate) => candidate.handle));
+} else {
+  console.log(`No target matched ${resolution.input}.`);
+}
+```
+
+The exact result has `{ handle, definition }`, where `handle` is a canonical
+`SymbolHandle` accepted by existing index-level ID queries. Ambiguous outcomes
+return every candidate in deterministic file and source order; not-found
+outcomes return the input without guessing.
+
+Agent hosts with an `AgentProjectSnapshot` can import
+`requireSemanticSymbol` from `@lzehrung/codegraph-core/agent`. It accepts the
+same inputs plus agent `symbol:...` handles and returns `{ id, def }`; stale
+handles, ambiguous targets, and missing targets throw descriptive errors with
+portable choices when available. Use `resolveSymbolTarget` when structured
+outcomes are required.
 
 ## Workspace-symbol lookup
 

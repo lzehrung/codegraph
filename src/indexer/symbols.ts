@@ -8,7 +8,9 @@ import type {
   SymbolHandle,
   SymbolListItem,
 } from "./types.js";
+import { normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
 import { findReferences, resolveExport, resolveImported } from "./navigation.js";
+import { parseSourceLocationInput } from "../util/sourceLocation.js";
 
 export function symbolId(def: SymbolDef): SymbolHandle {
   const index = def?.range?.start?.index ?? 0;
@@ -31,6 +33,102 @@ export function parseQualifiedSymbolPath(value: string): QualifiedSymbolPath | n
 export function findLocalSymbolDefinitions(index: ProjectIndex, file: string, name: string): SymbolDef[] {
   const normalizedFile = file.replace(/\\/g, "/");
   return index.byFile.get(normalizedFile)?.locals.filter((definition) => definition.localName === name) ?? [];
+}
+
+/** A canonical symbol identity paired with its indexed definition. */
+export type ResolvedSymbolTarget = {
+  handle: SymbolHandle;
+  definition: SymbolDef;
+};
+
+/**
+ * Deterministic result of resolving a symbol target against one project index.
+ *
+ * `exact` has one reusable handle and definition. `ambiguous` preserves every
+ * deterministic candidate, while `not_found` never guesses a target.
+ */
+export type SymbolTargetResolution =
+  | { status: "exact"; input: string; target: ResolvedSymbolTarget }
+  | { status: "ambiguous"; input: string; candidates: ResolvedSymbolTarget[] }
+  | { status: "not_found"; input: string };
+
+/**
+ * Resolve a canonical handle, `file::symbol`, source location, or exact name.
+ *
+ * Relative file targets resolve from `index.projectRoot` when it is available.
+ */
+export function resolveSymbolTarget(index: ProjectIndex, input: string): SymbolTargetResolution {
+  const handle = resolveExactSymbolHandle(index, input);
+  if (handle) {
+    return { status: "exact", input, target: handle };
+  }
+
+  const qualified = parseQualifiedSymbolPath(input);
+  if (qualified) {
+    const file = resolveIndexedFile(index, qualified.file);
+    const definitions = file ? findLocalSymbolDefinitions(index, file, qualified.name) : [];
+    return resolutionForDefinitions(input, definitions);
+  }
+
+  const location = parseSourceLocationInput(input);
+  const file = resolveIndexedFile(index, location.file);
+  if (file) {
+    const definitions = (index.byFile.get(file)?.locals ?? []).filter((definition) => {
+      if (location.line !== undefined && definition.range.start.line !== location.line) return false;
+      if (location.column !== undefined && definition.range.start.column !== location.column) return false;
+      return true;
+    });
+    return resolutionForDefinitions(input, definitions);
+  }
+
+  const definitions: SymbolDef[] = [];
+  for (const module of index.byFile.values()) {
+    for (const definition of module.locals) {
+      if (definition.localName === input) definitions.push(definition);
+    }
+  }
+  return resolutionForDefinitions(input, definitions);
+}
+
+function resolveIndexedFile(index: ProjectIndex, file: string): string | undefined {
+  const normalized = normalizePath(file);
+  if (index.byFile.has(normalized)) return normalized;
+  if (!index.projectRoot) return undefined;
+  const rooted = normalizePath(resolveFilePathFromRoot(index.projectRoot, file));
+  return index.byFile.has(rooted) ? rooted : undefined;
+}
+
+function resolveExactSymbolHandle(index: ProjectIndex, input: string): ResolvedSymbolTarget | null {
+  const parts = input.split("::");
+  if (parts.length !== 3 || !/^\d+$/.test(parts[2] ?? "")) return null;
+  const file = resolveIndexedFile(index, parts[0] ?? "");
+  if (!file) return null;
+  const name = parts[1] ?? "";
+  const startIndex = Number(parts[2]);
+  const definition = index.byFile
+    .get(file)
+    ?.locals.find((candidate) => candidate.localName === name && candidate.range.start.index === startIndex);
+  if (!definition) return null;
+  return { handle: symbolId(definition), definition };
+}
+
+function resolutionForDefinitions(input: string, definitions: readonly SymbolDef[]): SymbolTargetResolution {
+  const candidates = definitions
+    .map((definition) => ({ handle: symbolId(definition), definition }))
+    .sort(compareResolvedSymbolTargets);
+  if (candidates.length === 1) {
+    return { status: "exact", input, target: candidates[0]! };
+  }
+  if (candidates.length) return { status: "ambiguous", input, candidates };
+  return { status: "not_found", input };
+}
+
+function compareResolvedSymbolTargets(left: ResolvedSymbolTarget, right: ResolvedSymbolTarget): number {
+  return (
+    left.definition.file.localeCompare(right.definition.file) ||
+    (left.definition.range.start.index ?? 0) - (right.definition.range.start.index ?? 0) ||
+    left.definition.localName.localeCompare(right.definition.localName)
+  );
 }
 
 export function defFromSymbolId(index: ProjectIndex, id: SymbolHandle): SymbolDef | null {

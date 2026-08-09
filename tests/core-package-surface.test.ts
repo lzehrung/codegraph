@@ -27,6 +27,23 @@ describe("codegraph-core package surface", () => {
     expect(files.some((file) => file.startsWith("cli/") || file.includes("/cli/"))).toBe(false);
   });
 
+  it("stages documented symbol-target resolvers without product-only modules", () => {
+    const files = new Set(collectCorePackageFiles(distRoot));
+    const declaration = (file: string): string => fs.readFileSync(path.join(distRoot, file), "utf8");
+    expect([...files]).toEqual(
+      expect.arrayContaining([
+        "index.d.ts",
+        "indexer.d.ts",
+        "agent.d.ts",
+        "indexer/symbols.d.ts",
+        "agent/semanticSymbols.d.ts",
+      ]),
+    );
+    expect(declaration("index.d.ts")).toContain("resolveSymbolTarget");
+    expect(declaration("indexer.d.ts")).toContain("resolveSymbolTarget");
+    expect(declaration("agent.d.ts")).toContain("requireSemanticSymbol");
+  });
+
   it("keeps the staged declaration graph closed for TypeScript consumers", () => {
     const files = new Set(collectCorePackageFiles(distRoot));
     const declarationFiles = [...files].filter((file) => file.endsWith(".d.ts"));

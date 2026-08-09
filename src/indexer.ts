@@ -156,8 +156,10 @@ export {
   goToDefinitionById,
   listSymbols,
   resolveSymbolId,
+  resolveSymbolTarget,
   symbolId,
 } from "./indexer/symbols.js";
+export type { ResolvedSymbolTarget, SymbolTargetResolution } from "./indexer/symbols.js";
 
 export function collectLocalsAndExportsFromSource(
   file: string,
