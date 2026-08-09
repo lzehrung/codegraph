@@ -107,6 +107,14 @@ describe("release script helpers", () => {
       releaseScript.indexOf("prepareNativeTargetArtifactsForPublish();"),
     );
     expect(releaseScript).not.toContain("--legacy-peer-deps");
+    expect(releaseScript).toContain('"packages/codegraph-core/package.json"');
+  });
+
+  it("stages the core package manifest in the release commit", () => {
+    const releaseScript = fs.readFileSync("scripts/release.mjs", "utf8");
+    const commitAndTag = releaseScript.slice(releaseScript.indexOf("function commitAndTag"));
+    expect(commitAndTag).toContain('"packages/codegraph-core/package.json"');
+    expect(commitAndTag).toContain('"packages/codegraph-native/package.json"');
   });
 
   it("bumps semantic versions by release type", () => {

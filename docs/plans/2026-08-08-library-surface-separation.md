@@ -23,11 +23,11 @@ ships `docs/graph-visualization` (vendored `sigma.js`/`graphology` bundles),
 imports. Only static-import surface (what a bundler can tree-shake, what TypeScript
 autocomplete surfaces) is fixable without a package split; raw install size is not.
 
-## Current export surface (verified)
+## Pre-change export surface (historical)
 
-`package.json#exports` already carves out `"./agent"`, `"./graphs"`, `"./impact"`,
-`"./indexer"`, `"./languages"` alongside `"."`. There is no `"./mcp"` subpath — MCP only
-ships bundled into root. `src/cli.ts` / `src/cli/*` / `src/installer/*` are not exported
+Before Phases 1–2, `package.json#exports` already carved out `"./agent"`, `"./graphs"`, `"./impact"`,
+`"./indexer"`, `"./languages"` alongside `"."`. There was no `"./mcp"` subpath — MCP only
+shipped bundled into root. After Phase 2, `"./mcp"` is a documented product-package export. `src/cli.ts` / `src/cli/*` / `src/installer/*` are not exported
 from `index.ts` today (good), but `src/cli/viewer.ts` (dev graph-viewer HTTP server) and
 `src/installer/registry.ts` (1,296 lines; writes MCP/skill config into Claude/Cursor/Codex
 etc.) are CLI-only features that ship in `dist/` and inflate the package regardless.

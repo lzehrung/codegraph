@@ -363,7 +363,13 @@ function planVersions(selectedPackages, currentVersions, { releaseType, shouldRe
 }
 
 function commitAndTag(selectedPackages, versionPlan) {
-  runGit(["add", "package.json", "package-lock.json", "packages/codegraph-native/package.json"]);
+  runGit([
+    "add",
+    "package.json",
+    "package-lock.json",
+    "packages/codegraph-core/package.json",
+    "packages/codegraph-native/package.json",
+  ]);
   const commitNeeded =
     spawnSync("git", ["diff", "--cached", "--quiet"], {
       cwd: rootDir,
