@@ -1,15 +1,22 @@
 var __getOwnPropNames = Object.getOwnPropertyNames;
-var __commonJS = (cb, mod) => function __require() {
-  return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
-};
+var __commonJS = (cb, mod) =>
+  function __require() {
+    return (mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports);
+  };
 
 // node_modules/graphology-utils/is-graph.js
 var require_is_graph = __commonJS({
   "node_modules/graphology-utils/is-graph.js"(exports, module) {
     module.exports = function isGraph(value) {
-      return value !== null && typeof value === "object" && typeof value.addUndirectedEdgeWithKey === "function" && typeof value.dropNode === "function" && typeof value.multi === "boolean";
+      return (
+        value !== null &&
+        typeof value === "object" &&
+        typeof value.addUndirectedEdgeWithKey === "function" &&
+        typeof value.dropNode === "function" &&
+        typeof value.multi === "boolean"
+      );
     };
-  }
+  },
 });
 
 // node_modules/graphology-utils/getters.js
@@ -21,37 +28,33 @@ var require_getters = __commonJS({
     }
     function createNodeValueGetter(nameOrFunction, defaultValue) {
       var getter = {};
-      var coerceToDefault = function(v) {
+      var coerceToDefault = function (v) {
         if (typeof v === "undefined") return defaultValue;
         return v;
       };
       if (typeof defaultValue === "function") coerceToDefault = defaultValue;
-      var get = function(attributes) {
+      var get = function (attributes) {
         return coerceToDefault(attributes[nameOrFunction]);
       };
-      var returnDefault = function() {
+      var returnDefault = function () {
         return coerceToDefault(void 0);
       };
       if (typeof nameOrFunction === "string") {
         getter.fromAttributes = get;
-        getter.fromGraph = function(graph, node) {
+        getter.fromGraph = function (graph, node) {
           return get(graph.getNodeAttributes(node));
         };
-        getter.fromEntry = function(node, attributes) {
+        getter.fromEntry = function (node, attributes) {
           return get(attributes);
         };
       } else if (typeof nameOrFunction === "function") {
-        getter.fromAttributes = function() {
-          throw new Error(
-            "graphology-utils/getters/createNodeValueGetter: irrelevant usage."
-          );
+        getter.fromAttributes = function () {
+          throw new Error("graphology-utils/getters/createNodeValueGetter: irrelevant usage.");
         };
-        getter.fromGraph = function(graph, node) {
-          return coerceToDefault(
-            nameOrFunction(node, graph.getNodeAttributes(node))
-          );
+        getter.fromGraph = function (graph, node) {
+          return coerceToDefault(nameOrFunction(node, graph.getNodeAttributes(node)));
         };
-        getter.fromEntry = function(node, attributes) {
+        getter.fromEntry = function (node, attributes) {
           return coerceToDefault(nameOrFunction(node, attributes));
         };
       } else {
@@ -63,34 +66,32 @@ var require_getters = __commonJS({
     }
     function createEdgeValueGetter(nameOrFunction, defaultValue) {
       var getter = {};
-      var coerceToDefault = function(v) {
+      var coerceToDefault = function (v) {
         if (typeof v === "undefined") return defaultValue;
         return v;
       };
       if (typeof defaultValue === "function") coerceToDefault = defaultValue;
-      var get = function(attributes) {
+      var get = function (attributes) {
         return coerceToDefault(attributes[nameOrFunction]);
       };
-      var returnDefault = function() {
+      var returnDefault = function () {
         return coerceToDefault(void 0);
       };
       if (typeof nameOrFunction === "string") {
         getter.fromAttributes = get;
-        getter.fromGraph = function(graph, edge) {
+        getter.fromGraph = function (graph, edge) {
           return get(graph.getEdgeAttributes(edge));
         };
-        getter.fromEntry = function(edge, attributes) {
+        getter.fromEntry = function (edge, attributes) {
           return get(attributes);
         };
         getter.fromPartialEntry = getter.fromEntry;
         getter.fromMinimalEntry = getter.fromEntry;
       } else if (typeof nameOrFunction === "function") {
-        getter.fromAttributes = function() {
-          throw new Error(
-            "graphology-utils/getters/createEdgeValueGetter: irrelevant usage."
-          );
+        getter.fromAttributes = function () {
+          throw new Error("graphology-utils/getters/createEdgeValueGetter: irrelevant usage.");
         };
-        getter.fromGraph = function(graph, edge) {
+        getter.fromGraph = function (graph, edge) {
           var extremities = graph.extremities(edge);
           return coerceToDefault(
             nameOrFunction(
@@ -100,17 +101,17 @@ var require_getters = __commonJS({
               extremities[1],
               graph.getNodeAttributes(extremities[0]),
               graph.getNodeAttributes(extremities[1]),
-              graph.isUndirected(edge)
-            )
+              graph.isUndirected(edge),
+            ),
           );
         };
-        getter.fromEntry = function(e, a, s, t, sa, ta, u) {
+        getter.fromEntry = function (e, a, s, t, sa, ta, u) {
           return coerceToDefault(nameOrFunction(e, a, s, t, sa, ta, u));
         };
-        getter.fromPartialEntry = function(e, a, s, t) {
+        getter.fromPartialEntry = function (e, a, s, t) {
           return coerceToDefault(nameOrFunction(e, a, s, t));
         };
-        getter.fromMinimalEntry = function(e, a) {
+        getter.fromMinimalEntry = function (e, a) {
           return coerceToDefault(nameOrFunction(e, a));
         };
       } else {
@@ -123,10 +124,10 @@ var require_getters = __commonJS({
     }
     exports.createNodeValueGetter = createNodeValueGetter;
     exports.createEdgeValueGetter = createEdgeValueGetter;
-    exports.createEdgeWeightGetter = function(name) {
+    exports.createEdgeWeightGetter = function (name) {
       return createEdgeValueGetter(name, coerceWeight);
     };
-  }
+  },
 });
 
 // node_modules/graphology-layout-forceatlas2/iterate.js
@@ -161,7 +162,8 @@ var require_iterate = __commonJS({
     var MAX_FORCE = 10;
     module.exports = function iterate(options, NodeMatrix, EdgeMatrix) {
       var l, r, n, n1, n2, rn, e, w, g, s;
-      var order = NodeMatrix.length, size = EdgeMatrix.length;
+      var order = NodeMatrix.length,
+        size = EdgeMatrix.length;
       var adjustSizes = options.adjustSizes;
       var thetaSquared = options.barnesHutTheta * options.barnesHutTheta;
       var outboundAttCompensation, coefficient, xDist, yDist, ewc, distance, factor;
@@ -180,14 +182,21 @@ var require_iterate = __commonJS({
         outboundAttCompensation /= order / PPN;
       }
       if (options.barnesHutOptimize) {
-        var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, q, q2, subdivisionAttempts;
+        var minX = Infinity,
+          maxX = -Infinity,
+          minY = Infinity,
+          maxY = -Infinity,
+          q,
+          q2,
+          subdivisionAttempts;
         for (n = 0; n < order; n += PPN) {
           minX = Math.min(minX, NodeMatrix[n + NODE_X]);
           maxX = Math.max(maxX, NodeMatrix[n + NODE_X]);
           minY = Math.min(minY, NodeMatrix[n + NODE_Y]);
           maxY = Math.max(maxY, NodeMatrix[n + NODE_Y]);
         }
-        var dx = maxX - minX, dy = maxY - minY;
+        var dx = maxX - minX,
+          dy = maxY - minY;
         if (dx > dy) {
           minY -= (dx - dy) / 2;
           maxY = minY + dx;
@@ -223,8 +232,14 @@ var require_iterate = __commonJS({
                   q = RegionMatrix[r + REGION_FIRST_CHILD] + PPR * 3;
                 }
               }
-              RegionMatrix[r + REGION_MASS_CENTER_X] = (RegionMatrix[r + REGION_MASS_CENTER_X] * RegionMatrix[r + REGION_MASS] + NodeMatrix[n + NODE_X] * NodeMatrix[n + NODE_MASS]) / (RegionMatrix[r + REGION_MASS] + NodeMatrix[n + NODE_MASS]);
-              RegionMatrix[r + REGION_MASS_CENTER_Y] = (RegionMatrix[r + REGION_MASS_CENTER_Y] * RegionMatrix[r + REGION_MASS] + NodeMatrix[n + NODE_Y] * NodeMatrix[n + NODE_MASS]) / (RegionMatrix[r + REGION_MASS] + NodeMatrix[n + NODE_MASS]);
+              RegionMatrix[r + REGION_MASS_CENTER_X] =
+                (RegionMatrix[r + REGION_MASS_CENTER_X] * RegionMatrix[r + REGION_MASS] +
+                  NodeMatrix[n + NODE_X] * NodeMatrix[n + NODE_MASS]) /
+                (RegionMatrix[r + REGION_MASS] + NodeMatrix[n + NODE_MASS]);
+              RegionMatrix[r + REGION_MASS_CENTER_Y] =
+                (RegionMatrix[r + REGION_MASS_CENTER_Y] * RegionMatrix[r + REGION_MASS] +
+                  NodeMatrix[n + NODE_Y] * NodeMatrix[n + NODE_MASS]) /
+                (RegionMatrix[r + REGION_MASS] + NodeMatrix[n + NODE_MASS]);
               RegionMatrix[r + REGION_MASS] += NodeMatrix[n + NODE_MASS];
               r = q;
               continue;
@@ -329,30 +344,27 @@ var require_iterate = __commonJS({
           r = 0;
           while (true) {
             if (RegionMatrix[r + REGION_FIRST_CHILD] >= 0) {
-              distance = Math.pow(
-                NodeMatrix[n + NODE_X] - RegionMatrix[r + REGION_MASS_CENTER_X],
-                2
-              ) + Math.pow(
-                NodeMatrix[n + NODE_Y] - RegionMatrix[r + REGION_MASS_CENTER_Y],
-                2
-              );
+              distance =
+                Math.pow(NodeMatrix[n + NODE_X] - RegionMatrix[r + REGION_MASS_CENTER_X], 2) +
+                Math.pow(NodeMatrix[n + NODE_Y] - RegionMatrix[r + REGION_MASS_CENTER_Y], 2);
               s = RegionMatrix[r + REGION_SIZE];
-              if (4 * s * s / distance < thetaSquared) {
+              if ((4 * s * s) / distance < thetaSquared) {
                 xDist = NodeMatrix[n + NODE_X] - RegionMatrix[r + REGION_MASS_CENTER_X];
                 yDist = NodeMatrix[n + NODE_Y] - RegionMatrix[r + REGION_MASS_CENTER_Y];
                 if (adjustSizes === true) {
                   if (distance > 0) {
-                    factor = coefficient * NodeMatrix[n + NODE_MASS] * RegionMatrix[r + REGION_MASS] / distance;
+                    factor = (coefficient * NodeMatrix[n + NODE_MASS] * RegionMatrix[r + REGION_MASS]) / distance;
                     NodeMatrix[n + NODE_DX] += xDist * factor;
                     NodeMatrix[n + NODE_DY] += yDist * factor;
                   } else if (distance < 0) {
-                    factor = -coefficient * NodeMatrix[n + NODE_MASS] * RegionMatrix[r + REGION_MASS] / Math.sqrt(distance);
+                    factor =
+                      (-coefficient * NodeMatrix[n + NODE_MASS] * RegionMatrix[r + REGION_MASS]) / Math.sqrt(distance);
                     NodeMatrix[n + NODE_DX] += xDist * factor;
                     NodeMatrix[n + NODE_DY] += yDist * factor;
                   }
                 } else {
                   if (distance > 0) {
-                    factor = coefficient * NodeMatrix[n + NODE_MASS] * RegionMatrix[r + REGION_MASS] / distance;
+                    factor = (coefficient * NodeMatrix[n + NODE_MASS] * RegionMatrix[r + REGION_MASS]) / distance;
                     NodeMatrix[n + NODE_DX] += xDist * factor;
                     NodeMatrix[n + NODE_DY] += yDist * factor;
                   }
@@ -372,17 +384,18 @@ var require_iterate = __commonJS({
                 distance = xDist * xDist + yDist * yDist;
                 if (adjustSizes === true) {
                   if (distance > 0) {
-                    factor = coefficient * NodeMatrix[n + NODE_MASS] * NodeMatrix[rn + NODE_MASS] / distance;
+                    factor = (coefficient * NodeMatrix[n + NODE_MASS] * NodeMatrix[rn + NODE_MASS]) / distance;
                     NodeMatrix[n + NODE_DX] += xDist * factor;
                     NodeMatrix[n + NODE_DY] += yDist * factor;
                   } else if (distance < 0) {
-                    factor = -coefficient * NodeMatrix[n + NODE_MASS] * NodeMatrix[rn + NODE_MASS] / Math.sqrt(distance);
+                    factor =
+                      (-coefficient * NodeMatrix[n + NODE_MASS] * NodeMatrix[rn + NODE_MASS]) / Math.sqrt(distance);
                     NodeMatrix[n + NODE_DX] += xDist * factor;
                     NodeMatrix[n + NODE_DY] += yDist * factor;
                   }
                 } else {
                   if (distance > 0) {
-                    factor = coefficient * NodeMatrix[n + NODE_MASS] * NodeMatrix[rn + NODE_MASS] / distance;
+                    factor = (coefficient * NodeMatrix[n + NODE_MASS] * NodeMatrix[rn + NODE_MASS]) / distance;
                     NodeMatrix[n + NODE_DX] += xDist * factor;
                     NodeMatrix[n + NODE_DY] += yDist * factor;
                   }
@@ -401,9 +414,10 @@ var require_iterate = __commonJS({
             xDist = NodeMatrix[n1 + NODE_X] - NodeMatrix[n2 + NODE_X];
             yDist = NodeMatrix[n1 + NODE_Y] - NodeMatrix[n2 + NODE_Y];
             if (adjustSizes === true) {
-              distance = Math.sqrt(xDist * xDist + yDist * yDist) - NodeMatrix[n1 + NODE_SIZE] - NodeMatrix[n2 + NODE_SIZE];
+              distance =
+                Math.sqrt(xDist * xDist + yDist * yDist) - NodeMatrix[n1 + NODE_SIZE] - NodeMatrix[n2 + NODE_SIZE];
               if (distance > 0) {
-                factor = coefficient * NodeMatrix[n1 + NODE_MASS] * NodeMatrix[n2 + NODE_MASS] / distance / distance;
+                factor = (coefficient * NodeMatrix[n1 + NODE_MASS] * NodeMatrix[n2 + NODE_MASS]) / distance / distance;
                 NodeMatrix[n1 + NODE_DX] += xDist * factor;
                 NodeMatrix[n1 + NODE_DY] += yDist * factor;
                 NodeMatrix[n2 + NODE_DX] -= xDist * factor;
@@ -418,7 +432,7 @@ var require_iterate = __commonJS({
             } else {
               distance = Math.sqrt(xDist * xDist + yDist * yDist);
               if (distance > 0) {
-                factor = coefficient * NodeMatrix[n1 + NODE_MASS] * NodeMatrix[n2 + NODE_MASS] / distance / distance;
+                factor = (coefficient * NodeMatrix[n1 + NODE_MASS] * NodeMatrix[n2 + NODE_MASS]) / distance / distance;
                 NodeMatrix[n1 + NODE_DX] += xDist * factor;
                 NodeMatrix[n1 + NODE_DY] += yDist * factor;
                 NodeMatrix[n2 + NODE_DX] -= xDist * factor;
@@ -438,8 +452,7 @@ var require_iterate = __commonJS({
         if (options.strongGravityMode) {
           if (distance > 0) factor = coefficient * NodeMatrix[n + NODE_MASS] * g;
         } else {
-          if (distance > 0)
-            factor = coefficient * NodeMatrix[n + NODE_MASS] * g / distance;
+          if (distance > 0) factor = (coefficient * NodeMatrix[n + NODE_MASS] * g) / distance;
         }
         NodeMatrix[n + NODE_DX] -= xDist * factor;
         NodeMatrix[n + NODE_DY] -= yDist * factor;
@@ -457,17 +470,17 @@ var require_iterate = __commonJS({
           if (options.linLogMode) {
             if (options.outboundAttractionDistribution) {
               if (distance > 0) {
-                factor = -coefficient * ewc * Math.log(1 + distance) / distance / NodeMatrix[n1 + NODE_MASS];
+                factor = (-coefficient * ewc * Math.log(1 + distance)) / distance / NodeMatrix[n1 + NODE_MASS];
               }
             } else {
               if (distance > 0) {
-                factor = -coefficient * ewc * Math.log(1 + distance) / distance;
+                factor = (-coefficient * ewc * Math.log(1 + distance)) / distance;
               }
             }
           } else {
             if (options.outboundAttractionDistribution) {
               if (distance > 0) {
-                factor = -coefficient * ewc / NodeMatrix[n1 + NODE_MASS];
+                factor = (-coefficient * ewc) / NodeMatrix[n1 + NODE_MASS];
               }
             } else {
               if (distance > 0) {
@@ -480,16 +493,15 @@ var require_iterate = __commonJS({
           if (options.linLogMode) {
             if (options.outboundAttractionDistribution) {
               if (distance > 0) {
-                factor = -coefficient * ewc * Math.log(1 + distance) / distance / NodeMatrix[n1 + NODE_MASS];
+                factor = (-coefficient * ewc * Math.log(1 + distance)) / distance / NodeMatrix[n1 + NODE_MASS];
               }
             } else {
-              if (distance > 0)
-                factor = -coefficient * ewc * Math.log(1 + distance) / distance;
+              if (distance > 0) factor = (-coefficient * ewc * Math.log(1 + distance)) / distance;
             }
           } else {
             if (options.outboundAttractionDistribution) {
               distance = 1;
-              factor = -coefficient * ewc / NodeMatrix[n1 + NODE_MASS];
+              factor = (-coefficient * ewc) / NodeMatrix[n1 + NODE_MASS];
             } else {
               distance = 1;
               factor = -coefficient * ewc;
@@ -507,20 +519,27 @@ var require_iterate = __commonJS({
       if (adjustSizes === true) {
         for (n = 0; n < order; n += PPN) {
           if (NodeMatrix[n + NODE_FIXED] !== 1) {
-            force = Math.sqrt(
-              Math.pow(NodeMatrix[n + NODE_DX], 2) + Math.pow(NodeMatrix[n + NODE_DY], 2)
-            );
+            force = Math.sqrt(Math.pow(NodeMatrix[n + NODE_DX], 2) + Math.pow(NodeMatrix[n + NODE_DY], 2));
             if (force > MAX_FORCE) {
-              NodeMatrix[n + NODE_DX] = NodeMatrix[n + NODE_DX] * MAX_FORCE / force;
-              NodeMatrix[n + NODE_DY] = NodeMatrix[n + NODE_DY] * MAX_FORCE / force;
+              NodeMatrix[n + NODE_DX] = (NodeMatrix[n + NODE_DX] * MAX_FORCE) / force;
+              NodeMatrix[n + NODE_DY] = (NodeMatrix[n + NODE_DY] * MAX_FORCE) / force;
             }
-            swinging = NodeMatrix[n + NODE_MASS] * Math.sqrt(
-              (NodeMatrix[n + NODE_OLD_DX] - NodeMatrix[n + NODE_DX]) * (NodeMatrix[n + NODE_OLD_DX] - NodeMatrix[n + NODE_DX]) + (NodeMatrix[n + NODE_OLD_DY] - NodeMatrix[n + NODE_DY]) * (NodeMatrix[n + NODE_OLD_DY] - NodeMatrix[n + NODE_DY])
-            );
-            traction = Math.sqrt(
-              (NodeMatrix[n + NODE_OLD_DX] + NodeMatrix[n + NODE_DX]) * (NodeMatrix[n + NODE_OLD_DX] + NodeMatrix[n + NODE_DX]) + (NodeMatrix[n + NODE_OLD_DY] + NodeMatrix[n + NODE_DY]) * (NodeMatrix[n + NODE_OLD_DY] + NodeMatrix[n + NODE_DY])
-            ) / 2;
-            nodespeed = 0.1 * Math.log(1 + traction) / (1 + Math.sqrt(swinging));
+            swinging =
+              NodeMatrix[n + NODE_MASS] *
+              Math.sqrt(
+                (NodeMatrix[n + NODE_OLD_DX] - NodeMatrix[n + NODE_DX]) *
+                  (NodeMatrix[n + NODE_OLD_DX] - NodeMatrix[n + NODE_DX]) +
+                  (NodeMatrix[n + NODE_OLD_DY] - NodeMatrix[n + NODE_DY]) *
+                    (NodeMatrix[n + NODE_OLD_DY] - NodeMatrix[n + NODE_DY]),
+              );
+            traction =
+              Math.sqrt(
+                (NodeMatrix[n + NODE_OLD_DX] + NodeMatrix[n + NODE_DX]) *
+                  (NodeMatrix[n + NODE_OLD_DX] + NodeMatrix[n + NODE_DX]) +
+                  (NodeMatrix[n + NODE_OLD_DY] + NodeMatrix[n + NODE_DY]) *
+                    (NodeMatrix[n + NODE_OLD_DY] + NodeMatrix[n + NODE_DY]),
+              ) / 2;
+            nodespeed = (0.1 * Math.log(1 + traction)) / (1 + Math.sqrt(swinging));
             newX = NodeMatrix[n + NODE_X] + NodeMatrix[n + NODE_DX] * (nodespeed / options.slowDown);
             NodeMatrix[n + NODE_X] = newX;
             newY = NodeMatrix[n + NODE_Y] + NodeMatrix[n + NODE_DY] * (nodespeed / options.slowDown);
@@ -530,18 +549,28 @@ var require_iterate = __commonJS({
       } else {
         for (n = 0; n < order; n += PPN) {
           if (NodeMatrix[n + NODE_FIXED] !== 1) {
-            swinging = NodeMatrix[n + NODE_MASS] * Math.sqrt(
-              (NodeMatrix[n + NODE_OLD_DX] - NodeMatrix[n + NODE_DX]) * (NodeMatrix[n + NODE_OLD_DX] - NodeMatrix[n + NODE_DX]) + (NodeMatrix[n + NODE_OLD_DY] - NodeMatrix[n + NODE_DY]) * (NodeMatrix[n + NODE_OLD_DY] - NodeMatrix[n + NODE_DY])
-            );
-            traction = Math.sqrt(
-              (NodeMatrix[n + NODE_OLD_DX] + NodeMatrix[n + NODE_DX]) * (NodeMatrix[n + NODE_OLD_DX] + NodeMatrix[n + NODE_DX]) + (NodeMatrix[n + NODE_OLD_DY] + NodeMatrix[n + NODE_DY]) * (NodeMatrix[n + NODE_OLD_DY] + NodeMatrix[n + NODE_DY])
-            ) / 2;
-            nodespeed = NodeMatrix[n + NODE_CONVERGENCE] * Math.log(1 + traction) / (1 + Math.sqrt(swinging));
+            swinging =
+              NodeMatrix[n + NODE_MASS] *
+              Math.sqrt(
+                (NodeMatrix[n + NODE_OLD_DX] - NodeMatrix[n + NODE_DX]) *
+                  (NodeMatrix[n + NODE_OLD_DX] - NodeMatrix[n + NODE_DX]) +
+                  (NodeMatrix[n + NODE_OLD_DY] - NodeMatrix[n + NODE_DY]) *
+                    (NodeMatrix[n + NODE_OLD_DY] - NodeMatrix[n + NODE_DY]),
+              );
+            traction =
+              Math.sqrt(
+                (NodeMatrix[n + NODE_OLD_DX] + NodeMatrix[n + NODE_DX]) *
+                  (NodeMatrix[n + NODE_OLD_DX] + NodeMatrix[n + NODE_DX]) +
+                  (NodeMatrix[n + NODE_OLD_DY] + NodeMatrix[n + NODE_DY]) *
+                    (NodeMatrix[n + NODE_OLD_DY] + NodeMatrix[n + NODE_DY]),
+              ) / 2;
+            nodespeed = (NodeMatrix[n + NODE_CONVERGENCE] * Math.log(1 + traction)) / (1 + Math.sqrt(swinging));
             NodeMatrix[n + NODE_CONVERGENCE] = Math.min(
               1,
               Math.sqrt(
-                nodespeed * (Math.pow(NodeMatrix[n + NODE_DX], 2) + Math.pow(NodeMatrix[n + NODE_DY], 2)) / (1 + Math.sqrt(swinging))
-              )
+                (nodespeed * (Math.pow(NodeMatrix[n + NODE_DX], 2) + Math.pow(NodeMatrix[n + NODE_DY], 2))) /
+                  (1 + Math.sqrt(swinging)),
+              ),
             );
             newX = NodeMatrix[n + NODE_X] + NodeMatrix[n + NODE_DX] * (nodespeed / options.slowDown);
             NodeMatrix[n + NODE_X] = newX;
@@ -552,7 +581,7 @@ var require_iterate = __commonJS({
       }
       return {};
     };
-  }
+  },
 });
 
 // node_modules/graphology-layout-forceatlas2/helpers.js
@@ -560,27 +589,30 @@ var require_helpers = __commonJS({
   "node_modules/graphology-layout-forceatlas2/helpers.js"(exports) {
     var PPN = 10;
     var PPE = 3;
-    exports.assign = function(target) {
+    exports.assign = function (target) {
       target = target || {};
-      var objects = Array.prototype.slice.call(arguments).slice(1), i, k, l;
+      var objects = Array.prototype.slice.call(arguments).slice(1),
+        i,
+        k,
+        l;
       for (i = 0, l = objects.length; i < l; i++) {
         if (!objects[i]) continue;
         for (k in objects[i]) target[k] = objects[i][k];
       }
       return target;
     };
-    exports.validateSettings = function(settings) {
+    exports.validateSettings = function (settings) {
       if ("linLogMode" in settings && typeof settings.linLogMode !== "boolean")
         return { message: "the `linLogMode` setting should be a boolean." };
       if ("outboundAttractionDistribution" in settings && typeof settings.outboundAttractionDistribution !== "boolean")
         return {
-          message: "the `outboundAttractionDistribution` setting should be a boolean."
+          message: "the `outboundAttractionDistribution` setting should be a boolean.",
         };
       if ("adjustSizes" in settings && typeof settings.adjustSizes !== "boolean")
         return { message: "the `adjustSizes` setting should be a boolean." };
       if ("edgeWeightInfluence" in settings && typeof settings.edgeWeightInfluence !== "number")
         return {
-          message: "the `edgeWeightInfluence` setting should be a number."
+          message: "the `edgeWeightInfluence` setting should be a number.",
         };
       if ("scalingRatio" in settings && !(typeof settings.scalingRatio === "number" && settings.scalingRatio >= 0))
         return { message: "the `scalingRatio` setting should be a number >= 0." };
@@ -592,11 +624,14 @@ var require_helpers = __commonJS({
         return { message: "the `slowDown` setting should be a number >= 0." };
       if ("barnesHutOptimize" in settings && typeof settings.barnesHutOptimize !== "boolean")
         return { message: "the `barnesHutOptimize` setting should be a boolean." };
-      if ("barnesHutTheta" in settings && !(typeof settings.barnesHutTheta === "number" && settings.barnesHutTheta >= 0))
+      if (
+        "barnesHutTheta" in settings &&
+        !(typeof settings.barnesHutTheta === "number" && settings.barnesHutTheta >= 0)
+      )
         return { message: "the `barnesHutTheta` setting should be a number >= 0." };
       return null;
     };
-    exports.graphToByteArrays = function(graph, getEdgeWeight) {
+    exports.graphToByteArrays = function (graph, getEdgeWeight) {
       var order = graph.order;
       var size = graph.size;
       var index = {};
@@ -604,7 +639,7 @@ var require_helpers = __commonJS({
       var NodeMatrix = new Float32Array(order * PPN);
       var EdgeMatrix = new Float32Array(size * PPE);
       j = 0;
-      graph.forEachNode(function(node, attr) {
+      graph.forEachNode(function (node, attr) {
         index[node] = j;
         NodeMatrix[j] = attr.x;
         NodeMatrix[j + 1] = attr.y;
@@ -619,7 +654,7 @@ var require_helpers = __commonJS({
         j += PPN;
       });
       j = 0;
-      graph.forEachEdge(function(edge, attr, source, target, sa, ta, u) {
+      graph.forEachEdge(function (edge, attr, source, target, sa, ta, u) {
         var sj = index[source];
         var tj = index[target];
         var weight = getEdgeWeight(edge, attr, source, target, sa, ta, u);
@@ -632,28 +667,29 @@ var require_helpers = __commonJS({
       });
       return {
         nodes: NodeMatrix,
-        edges: EdgeMatrix
+        edges: EdgeMatrix,
       };
     };
-    exports.assignLayoutChanges = function(graph, NodeMatrix, outputReducer) {
+    exports.assignLayoutChanges = function (graph, NodeMatrix, outputReducer) {
       var i = 0;
-      graph.updateEachNodeAttributes(function(node, attr) {
+      graph.updateEachNodeAttributes(function (node, attr) {
         attr.x = NodeMatrix[i];
         attr.y = NodeMatrix[i + 1];
         i += PPN;
         return outputReducer ? outputReducer(node, attr) : attr;
       });
     };
-    exports.readGraphPositions = function(graph, NodeMatrix) {
+    exports.readGraphPositions = function (graph, NodeMatrix) {
       var i = 0;
-      graph.forEachNode(function(node, attr) {
+      graph.forEachNode(function (node, attr) {
         NodeMatrix[i] = attr.x;
         NodeMatrix[i + 1] = attr.y;
         i += PPN;
       });
     };
-    exports.collectLayoutChanges = function(graph, NodeMatrix, outputReducer) {
-      var nodes = graph.nodes(), positions = {};
+    exports.collectLayoutChanges = function (graph, NodeMatrix, outputReducer) {
+      var nodes = graph.nodes(),
+        positions = {};
       for (var i = 0, j = 0, l = NodeMatrix.length; i < l; i += PPN) {
         if (outputReducer) {
           var newAttr = Object.assign({}, graph.getNodeAttributes(nodes[j]));
@@ -662,12 +698,12 @@ var require_helpers = __commonJS({
           newAttr = outputReducer(nodes[j], newAttr);
           positions[nodes[j]] = {
             x: newAttr.x,
-            y: newAttr.y
+            y: newAttr.y,
           };
         } else {
           positions[nodes[j]] = {
             x: NodeMatrix[i],
-            y: NodeMatrix[i + 1]
+            y: NodeMatrix[i + 1],
           };
         }
         j++;
@@ -677,14 +713,12 @@ var require_helpers = __commonJS({
     exports.createWorker = function createWorker(fn) {
       var xURL = window.URL || window.webkitURL;
       var code = fn.toString();
-      var objectUrl = xURL.createObjectURL(
-        new Blob(["(" + code + ").call(this);"], { type: "text/javascript" })
-      );
+      var objectUrl = xURL.createObjectURL(new Blob(["(" + code + ").call(this);"], { type: "text/javascript" }));
       var worker = new Worker(objectUrl);
       xURL.revokeObjectURL(objectUrl);
       return worker;
     };
-  }
+  },
 });
 
 // node_modules/graphology-layout-forceatlas2/defaults.js
@@ -700,9 +734,9 @@ var require_defaults = __commonJS({
       gravity: 1,
       slowDown: 1,
       barnesHutOptimize: false,
-      barnesHutTheta: 0.5
+      barnesHutTheta: 0.5,
     };
-  }
+  },
 });
 
 // node_modules/graphology-layout-forceatlas2/index.js
@@ -715,33 +749,21 @@ var require_index = __commonJS({
     var DEFAULT_SETTINGS = require_defaults();
     function abstractSynchronousLayout(assign, graph, params) {
       if (!isGraph(graph))
-        throw new Error(
-          "graphology-layout-forceatlas2: the given graph is not a valid graphology instance."
-        );
+        throw new Error("graphology-layout-forceatlas2: the given graph is not a valid graphology instance.");
       if (typeof params === "number") params = { iterations: params };
       var iterations = params.iterations;
       if (typeof iterations !== "number")
-        throw new Error(
-          "graphology-layout-forceatlas2: invalid number of iterations."
-        );
+        throw new Error("graphology-layout-forceatlas2: invalid number of iterations.");
       if (iterations <= 0)
-        throw new Error(
-          "graphology-layout-forceatlas2: you should provide a positive number of iterations."
-        );
-      var getEdgeWeight = createEdgeWeightGetter(
-        "getEdgeWeight" in params ? params.getEdgeWeight : "weight"
-      ).fromEntry;
+        throw new Error("graphology-layout-forceatlas2: you should provide a positive number of iterations.");
+      var getEdgeWeight = createEdgeWeightGetter("getEdgeWeight" in params ? params.getEdgeWeight : "weight").fromEntry;
       var outputReducer = typeof params.outputReducer === "function" ? params.outputReducer : null;
       var settings = helpers.assign({}, DEFAULT_SETTINGS, params.settings);
       var validationError = helpers.validateSettings(settings);
-      if (validationError)
-        throw new Error(
-          "graphology-layout-forceatlas2: " + validationError.message
-        );
+      if (validationError) throw new Error("graphology-layout-forceatlas2: " + validationError.message);
       var matrices = helpers.graphToByteArrays(graph, getEdgeWeight);
       var i;
-      for (i = 0; i < iterations; i++)
-        iterate(settings, matrices.nodes, matrices.edges);
+      for (i = 0; i < iterations; i++) iterate(settings, matrices.nodes, matrices.edges);
       if (assign) {
         helpers.assignLayoutChanges(graph, matrices.nodes, outputReducer);
         return;
@@ -755,13 +777,13 @@ var require_index = __commonJS({
         strongGravityMode: true,
         gravity: 0.05,
         scalingRatio: 10,
-        slowDown: 1 + Math.log(order)
+        slowDown: 1 + Math.log(order),
       };
     }
     var synchronousLayout = abstractSynchronousLayout.bind(null, false);
     synchronousLayout.assign = abstractSynchronousLayout.bind(null, true);
     synchronousLayout.inferSettings = inferSettings;
     module.exports = synchronousLayout;
-  }
+  },
 });
 export default require_index();
