@@ -75,6 +75,23 @@ describe("certified release workflows", () => {
     expect(releaseIndex).toBeGreaterThan(publishIndex);
   });
 
+  it("certifies planned package identities and records every release manifest", () => {
+    const tests = jobBlock(releaseWorkflow, "tests-release");
+    const publish = jobBlock(releaseWorkflow, "publish-certified");
+
+    expect(tests).toContain("Prepare planned package manifests");
+    expect(tests).toContain("restoreCorePackageManifest");
+    expect(tests).toContain("restoreNativePackageManifest");
+    expect(tests).toContain("restoreRootPackageManifest");
+    expect(tests.indexOf("Prepare planned package manifests")).toBeGreaterThan(
+      tests.indexOf("npm ci --ignore-scripts"),
+    );
+    expect(tests.indexOf("Prepare planned package manifests")).toBeLessThan(tests.indexOf("npm run build"));
+    expect(publish).toContain("packages/codegraph-core/package.json");
+    expect(publish).toContain('["@lzehrung/codegraph-core", process.env.ROOT_VERSION]');
+    expect(publish).toContain("@lzehrung/codegraph-core@$ROOT_VERSION");
+  });
+
   it("builds both musl targets through Zig instead of host glibc tools", () => {
     const build = jobBlock(releaseWorkflow, "build-native-artifacts");
 

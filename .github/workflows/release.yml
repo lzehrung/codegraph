@@ -548,6 +548,40 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
+      - name: Prepare planned package manifests
+        env:
+          ROOT_VERSION: ${{ needs.plan-release.outputs.root_version }}
+          NATIVE_VERSION: ${{ needs.plan-release.outputs.native_version }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import {
+            restoreCorePackageManifest,
+            restoreNativePackageManifest,
+            restoreRootPackageManifest,
+          } from "./scripts/release-lib.mjs";
+
+          const rootPath = "package.json";
+          const corePath = "packages/codegraph-core/package.json";
+          const nativePath = "packages/codegraph-native/package.json";
+          const rootPackage = JSON.parse(fs.readFileSync(rootPath, "utf8"));
+          const corePackage = JSON.parse(fs.readFileSync(corePath, "utf8"));
+          const nativePackage = JSON.parse(fs.readFileSync(nativePath, "utf8"));
+          fs.writeFileSync(
+            rootPath,
+            `${JSON.stringify(restoreRootPackageManifest(rootPackage, process.env.ROOT_VERSION, process.env.NATIVE_VERSION), null, 2)}\n`,
+          );
+          fs.writeFileSync(
+            corePath,
+            `${JSON.stringify(restoreCorePackageManifest(corePackage, process.env.ROOT_VERSION, process.env.NATIVE_VERSION), null, 2)}\n`,
+          );
+          fs.writeFileSync(
+            nativePath,
+            `${JSON.stringify(restoreNativePackageManifest(nativePackage, process.env.NATIVE_VERSION), null, 2)}\n`,
+          );
+          NODE
+          npm install --package-lock-only --ignore-scripts
+
       - name: Build
         run: npm run build
 
@@ -751,17 +785,24 @@ jobs:
           node --input-type=module <<'NODE'
           import fs from "node:fs";
           import {
+            restoreCorePackageManifest,
             restoreNativePackageManifest,
             restoreRootPackageManifest,
           } from "./scripts/release-lib.mjs";
 
           const rootPath = "package.json";
+          const corePath = "packages/codegraph-core/package.json";
           const nativePath = "packages/codegraph-native/package.json";
           const rootPackage = JSON.parse(fs.readFileSync(rootPath, "utf8"));
+          const corePackage = JSON.parse(fs.readFileSync(corePath, "utf8"));
           const nativePackage = JSON.parse(fs.readFileSync(nativePath, "utf8"));
           fs.writeFileSync(
             rootPath,
             `${JSON.stringify(restoreRootPackageManifest(rootPackage, process.env.ROOT_VERSION, process.env.NATIVE_VERSION), null, 2)}\n`,
+          );
+          fs.writeFileSync(
+            corePath,
+            `${JSON.stringify(restoreCorePackageManifest(corePackage, process.env.ROOT_VERSION, process.env.NATIVE_VERSION), null, 2)}\n`,
           );
           fs.writeFileSync(
             nativePath,
@@ -769,14 +810,15 @@ jobs:
           );
           NODE
           npm install --package-lock-only --ignore-scripts
-          git add package.json package-lock.json packages/codegraph-native/package.json
-          git commit -m "release: @lzehrung/codegraph@${ROOT_VERSION}, @lzehrung/codegraph-native@${NATIVE_VERSION}"
+          git add package.json package-lock.json packages/codegraph-core/package.json packages/codegraph-native/package.json
+          git commit -m "release: @lzehrung/codegraph@${ROOT_VERSION}, @lzehrung/codegraph-core@${ROOT_VERSION}, @lzehrung/codegraph-native@${NATIVE_VERSION}"
           node --input-type=module <<'NODE'
           import { execFileSync } from "node:child_process";
           import { tagNamesForPackageVersion } from "./scripts/release-lib.mjs";
 
           const releases = [
             ["@lzehrung/codegraph", process.env.ROOT_VERSION],
+            ["@lzehrung/codegraph-core", process.env.ROOT_VERSION],
             ["@lzehrung/codegraph-native", process.env.NATIVE_VERSION],
           ];
           for (const [packageName, version] of releases) {
@@ -800,6 +842,7 @@ jobs:
             echo "Published certified packages:"
             echo ""
             echo "- \`@lzehrung/codegraph@$ROOT_VERSION\`"
+            echo "- \`@lzehrung/codegraph-core@$ROOT_VERSION\`"
             echo "- \`@lzehrung/codegraph-native@$NATIVE_VERSION\`"
             echo ""
             echo "Standalone preview assets are built, smoked, and attached by the final release job."
