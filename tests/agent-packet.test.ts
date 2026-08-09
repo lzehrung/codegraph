@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { formatAgentFollowUpAsCli, getCodegraphPacket, orientCodegraph } from "../src/index.js";
+import { getCodegraphPacket, orientCodegraph } from "../src/agent.js";
+import { formatAgentFollowUpAsCli } from "../src/agent/followUps.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
 import { runGit } from "./helpers/git.js";
 

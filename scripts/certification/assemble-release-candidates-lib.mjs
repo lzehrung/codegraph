@@ -2,11 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   prepareNativePackageManifestForPublish,
+  restoreCorePackageManifest,
   restoreRootPackageManifest,
   sanitizePublishedRootPackageManifest,
 } from "../release-lib.mjs";
 import { assertCompleteNativeTargetArtifacts, getSupportedNativeTargetSuffixes } from "../native-targets-lib.mjs";
 import {
+  CORE_PACKAGE_NAME,
   PackageCertificationError,
   describeCandidateFile,
   validateReleaseCandidateManifest,
@@ -111,10 +113,14 @@ export async function assembleReleaseCandidates(options) {
   const rootPackagePath = path.join(rootDirectory, "package.json");
   const nativeRoot = path.join(rootDirectory, "packages", "codegraph-native");
   const nativePackagePath = path.join(nativeRoot, "package.json");
+  const coreRoot = path.join(rootDirectory, "packages", "codegraph-core");
+  const corePackagePath = path.join(coreRoot, "package.json");
   const originalRootPackageJson = fs.readFileSync(rootPackagePath, "utf8");
   const originalNativePackageJson = fs.readFileSync(nativePackagePath, "utf8");
+  const originalCorePackageJson = fs.readFileSync(corePackagePath, "utf8");
   const rootPackage = JSON.parse(originalRootPackageJson);
   const nativePackage = JSON.parse(originalNativePackageJson);
+  const corePackage = JSON.parse(originalCorePackageJson);
   const sourceRevision = options.sourceRevision;
   const rootVersion = options.rootVersion;
   const nativeVersion = options.nativeVersion;
@@ -126,7 +132,11 @@ export async function assembleReleaseCandidates(options) {
   if (typeof rootVersion !== "string" || typeof nativeVersion !== "string") {
     throw new PackageCertificationError("candidate-identity-mismatch", "rootVersion and nativeVersion are required.");
   }
-  if (rootPackage.name !== "@lzehrung/codegraph" || nativePackage.name !== "@lzehrung/codegraph-native") {
+  if (
+    rootPackage.name !== "@lzehrung/codegraph" ||
+    corePackage.name !== CORE_PACKAGE_NAME ||
+    nativePackage.name !== "@lzehrung/codegraph-native"
+  ) {
     throw new PackageCertificationError("candidate-identity-mismatch", "Release package names do not match Codegraph.");
   }
 
@@ -162,6 +172,12 @@ export async function assembleReleaseCandidates(options) {
     assertPackedIdentity(nativePack, nativePackage.name, nativeVersion);
     files.push(await candidateRecord(nativePack, packagesDirectory, outputDirectory));
 
+    const publishCorePackage = restoreCorePackageManifest(corePackage, rootVersion, nativeVersion);
+    writeJsonSync(corePackagePath, publishCorePackage);
+    const corePack = await packPackage(coreRoot, packagesDirectory);
+    assertPackedIdentity(corePack, CORE_PACKAGE_NAME, rootVersion);
+    files.push(await candidateRecord(corePack, packagesDirectory, outputDirectory));
+
     writeJsonSync(rootPackagePath, publishRootPackage);
     const rootPack = await packPackage(rootDirectory, packagesDirectory);
     assertPackedIdentity(rootPack, rootPackage.name, rootVersion);
@@ -169,6 +185,7 @@ export async function assembleReleaseCandidates(options) {
   } finally {
     fs.writeFileSync(rootPackagePath, originalRootPackageJson, "utf8");
     fs.writeFileSync(nativePackagePath, originalNativePackageJson, "utf8");
+    fs.writeFileSync(corePackagePath, originalCorePackageJson, "utf8");
   }
 
   const manifest = validateReleaseCandidateManifest(

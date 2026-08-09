@@ -14,7 +14,7 @@ import {
   type CommandReport,
 } from "./context.js";
 import type { CliBaseContext, CliProjectContext } from "./invocationContext.js";
-import { getCodegraphPackageIdentity, getCodegraphVersion } from "./packageInfo.js";
+import { getCodegraphPackageIdentity, getCodegraphVersion } from "../util/packageInfo.js";
 import { writeCliOutput } from "./pretty.js";
 
 /**

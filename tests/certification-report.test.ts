@@ -41,6 +41,7 @@ async function certificationFixture(
   const target = "win32-x64-msvc";
   const candidates = [
     { package: "@lzehrung/codegraph", file: "packages/root.tgz", content: "root" },
+    { package: "@lzehrung/codegraph-core", file: "packages/core.tgz", content: "core" },
     { package: "@lzehrung/codegraph-native", file: "packages/native.tgz", content: "native" },
     {
       package: `@lzehrung/codegraph-native-${target}`,

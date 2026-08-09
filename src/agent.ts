@@ -1,4 +1,4 @@
-export { formatAgentFollowUpAsCli, formatAgentFollowUpsAsCli, toolFollowUp } from "./agent/followUps.js";
+export { toolFollowUp } from "./agent/followUps.js";
 export type { AgentFollowUp } from "./agent/followUps.js";
 export {
   DEFAULT_FILE_VIEW_BYTES,
@@ -73,8 +73,6 @@ export type {
 } from "./agent/explain.js";
 export { buildCodegraphArtifact, buildCodegraphArtifactWithSession } from "./agent/artifact.js";
 export type { CodegraphArtifactBuildRequest, CodegraphArtifactBuildResult } from "./agent/artifact.js";
-export { createCodegraphMcpHandlers, listCodegraphMcpTools, serveCodegraphMcp } from "./mcp/server.js";
-export type { CodegraphMcpHandlers, CodegraphMcpServerOptions } from "./mcp/server.js";
 export {
   formatWorkspaceSymbolsResponse,
   workspaceSymbols,
@@ -120,3 +118,38 @@ export type {
   SemanticResponseEnvelope,
   SemanticSymbol,
 } from "./agent/semantic.js";
+
+/** Agent-oriented JSON tool wrappers around the core codegraph APIs. */
+export {
+  tool_impactJSON,
+  tool_impactFromDiffText,
+  tool_getFileOverview,
+  tool_findSymbol,
+  tool_listProjectFiles,
+  tool_getGraph,
+  tool_getDependencies,
+  tool_getReverseDependencies,
+  tool_getHotspots,
+  tool_goToDefinition,
+  tool_workspaceSymbols,
+  tool_findImplementations,
+  tool_findSubtypes,
+  tool_findSupertypes,
+  tool_findReferences,
+  tool_findCallees,
+  tool_findCallers,
+  tool_previewRename,
+  tool_buildRefactorPlan,
+  type ToolFileOverview,
+  type ToolFileOverviewImport,
+  type ToolFileOverviewDefinition,
+  type ToolFileOverviewResult,
+  type ToolSymbolMatch,
+  type ToolDependencyEntry,
+  type ToolHotspotEntry,
+  type ToolWorkspaceSymbolsRuntimeOptions,
+  type ToolTypeHierarchyRuntimeOptions,
+  type ToolCallHierarchyRuntimeOptions,
+  type ToolRenamePreviewRuntimeOptions,
+  type ToolRefactorPlanRuntimeOptions,
+} from "./agent-tools.js";

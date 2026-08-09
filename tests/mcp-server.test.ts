@@ -18,7 +18,7 @@ import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import { SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY } from "../src/sqlite.js";
 import { countingSession } from "./helpers/agent.js";
 import { createArtifactOutputWithStaleFile, createLinkedTempRoot, isSymlinkUnavailable } from "./helpers/filesystem.js";
-import { getCodegraphVersion } from "../src/cli/packageInfo.js";
+import { getCodegraphVersion } from "../src/util/packageInfo.js";
 import { runGit } from "./helpers/git.js";
 
 type JsonRpcObject = {

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Piscina } from "piscina";
-import { findPackageRoot } from "../../cli/packageInfo.js";
+import { findPackageRoot } from "../../util/packageInfo.js";
 import { prepareQueryIndexFile, type PreparedQueryIndexFile } from "./content.js";
 import { resolveQueryIndexSourcePath } from "./paths.js";
 import { resolveWorkerThreadCount } from "../../util/workerThreads.js";

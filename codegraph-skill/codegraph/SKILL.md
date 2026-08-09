@@ -236,7 +236,10 @@ The bootstrap previews its target and paths, then confirms interactively or requ
 
 For package installs, use only the scoped packages:
 
-- CLI and library: `@lzehrung/codegraph`
+- product package (CLI/MCP/viewer): `@lzehrung/codegraph`
+- slim library install: `@lzehrung/codegraph-core`
+- agent-shaped APIs: `@lzehrung/codegraph/agent` or `@lzehrung/codegraph-core/agent`
+- MCP handlers/server: `@lzehrung/codegraph/mcp`
 - optional native runtime: `@lzehrung/codegraph-native`
 
 ```bash

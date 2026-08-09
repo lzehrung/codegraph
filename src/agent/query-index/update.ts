@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { AgentProjectSnapshot } from "../session.js";
 import type { QueryIndexDiagnostics } from "../../indexer/types.js";
-import { getCodegraphVersion } from "../../cli/packageInfo.js";
+import { getCodegraphVersion } from "../../util/packageInfo.js";
 import { normalizePath } from "../../util/paths.js";
 import { errorMessage } from "../../util/errors.js";
 import type { PreparedQueryIndexFile } from "./content.js";

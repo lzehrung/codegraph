@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { NativeBindingOrigin } from "./native/contracts.js";
-import { getCodegraphPackageIdentity } from "./cli/packageInfo.js";
+import { getCodegraphPackageIdentity } from "./util/packageInfo.js";
 
 const INSTALLED_VERSION_CHECK_INTERVAL_MS = 30_000;
 const RUNNING_PACKAGE_IDENTITY = getCodegraphPackageIdentity();

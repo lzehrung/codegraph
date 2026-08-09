@@ -107,6 +107,14 @@ describe("release script helpers", () => {
       releaseScript.indexOf("prepareNativeTargetArtifactsForPublish();"),
     );
     expect(releaseScript).not.toContain("--legacy-peer-deps");
+    expect(releaseScript).toContain('"packages/codegraph-core/package.json"');
+  });
+
+  it("stages the core package manifest in the release commit", () => {
+    const releaseScript = fs.readFileSync("scripts/release.mjs", "utf8");
+    const commitAndTag = releaseScript.slice(releaseScript.indexOf("function commitAndTag"));
+    expect(commitAndTag).toContain('"packages/codegraph-core/package.json"');
+    expect(commitAndTag).toContain('"packages/codegraph-native/package.json"');
   });
 
   it("bumps semantic versions by release type", () => {
@@ -203,6 +211,7 @@ describe("release script helpers", () => {
 
   it("resolves release package selectors by id and package name", () => {
     expect(getReleasePackage("root").name).toBe("@lzehrung/codegraph");
+    expect(getReleasePackage("core").name).toBe("@lzehrung/codegraph-core");
     expect(getReleasePackage("@lzehrung/codegraph-native").id).toBe("native");
   });
 
@@ -214,11 +223,11 @@ describe("release script helpers", () => {
         "packages/codegraph-js-fallback/package.json",
         "docs/scenario-catalog.md",
       ]),
-    ).toEqual(["root", "native"]);
+    ).toEqual(["root", "core", "native"]);
   });
 
   it("treats published MCP documentation as a root package change", () => {
-    expect(detectChangedReleasePackages(["docs/mcp.md"])).toEqual(["root"]);
+    expect(detectChangedReleasePackages(["docs/mcp.md"])).toEqual(["root", "core"]);
   });
 
   it("treats release packaging scripts as root package changes", () => {
@@ -234,7 +243,7 @@ describe("release script helpers", () => {
         "scripts/release-lib.mjs",
         "tests/release-script.test.ts",
       ]),
-    ).toEqual(["root"]);
+    ).toEqual(["root", "core"]);
   });
 
   it("treats native packaging gates as root package changes", () => {
@@ -247,7 +256,7 @@ describe("release script helpers", () => {
         "scripts/stage-native-package.mjs",
         "scripts/sync-native-meta.mjs",
       ]),
-    ).toEqual(["root"]);
+    ).toEqual(["root", "core"]);
   });
 
   it("publishes only selected root and native packages that are not already in the registry", () => {
@@ -290,7 +299,15 @@ describe("release script helpers", () => {
         },
         publishNativeTargets: true,
       }),
-    ).toEqual(["publishNativeTargets", "prepareNativeMeta", "publishNativeMeta", "prepareRootManifest", "publishRoot"]);
+    ).toEqual([
+      "publishNativeTargets",
+      "prepareNativeMeta",
+      "publishNativeMeta",
+      "prepareCoreManifest",
+      "publishCore",
+      "prepareRootManifest",
+      "publishRoot",
+    ]);
   });
 
   it("selects the latest package-scoped tag by version", () => {
@@ -328,10 +345,10 @@ describe("release script helpers", () => {
 
   it("rejects the removed JS fallback package selector", () => {
     expect(() => getReleasePackage("js-fallback")).toThrow(
-      "Unknown release package selector: js-fallback. Use one of: root, @lzehrung/codegraph, native, @lzehrung/codegraph-native",
+      "Unknown release package selector: js-fallback. Use one of: root, @lzehrung/codegraph, core, @lzehrung/codegraph-core, native, @lzehrung/codegraph-native",
     );
     expect(() => getReleasePackage("@lzehrung/codegraph-js-fallback")).toThrow(
-      "Unknown release package selector: @lzehrung/codegraph-js-fallback. Use one of: root, @lzehrung/codegraph, native, @lzehrung/codegraph-native",
+      "Unknown release package selector: @lzehrung/codegraph-js-fallback. Use one of: root, @lzehrung/codegraph, core, @lzehrung/codegraph-core, native, @lzehrung/codegraph-native",
     );
   });
 

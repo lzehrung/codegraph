@@ -19,7 +19,7 @@ import { CLI_HELP_TEXT, CLI_TASK_HELP_TEXT, helpTextForCommand, isKnownCliComman
 import { routeForCliIntent, suggestCliCommands } from "./cli/commandCatalog.js";
 import { createCliBaseContext, createCliOptionAccessors, loadCliProjectContext } from "./cli/invocationContext.js";
 import { validateCliArgs, type ParsedCliArgs } from "./cli/options.js";
-import { getCodegraphPackageIdentity, getCodegraphVersion } from "./cli/packageInfo.js";
+import { getCodegraphPackageIdentity, getCodegraphVersion } from "./util/packageInfo.js";
 import { errorMessage } from "./util/errors.js";
 
 export { isRelativePathInside as isCliDiscoveryRelativePathInside } from "./util/discoveryPath.js";

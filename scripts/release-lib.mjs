@@ -32,6 +32,14 @@ export const releasePackages = [
     ownedPrefixes: ["src/", "codegraph-skill/", "scripts/certification/"],
   },
   {
+    id: "core",
+    name: "@lzehrung/codegraph-core",
+    manifestPath: "packages/codegraph-core/package.json",
+    publishWorkspace: "@lzehrung/codegraph-core",
+    ownedFiles: new Set(["scripts/stage-core-package.mjs", "scripts/stage-core-package-lib.mjs"]),
+    ownedPrefixes: ["packages/codegraph-core/"],
+  },
+  {
     id: "native",
     name: "@lzehrung/codegraph-native",
     manifestPath: "packages/codegraph-native/package.json",
@@ -152,6 +160,12 @@ export function detectChangedReleasePackages(changedPaths) {
       matchedPackages.add(match.id);
     }
   }
+  if (matchedPackages.has("root")) {
+    matchedPackages.add("core");
+  }
+  if (matchedPackages.has("core")) {
+    matchedPackages.add("root");
+  }
   return releasePackages.map((pkg) => pkg.id).filter((pkgId) => matchedPackages.has(pkgId));
 }
 
@@ -203,6 +217,9 @@ export function computePublishExecutionSteps(publishPlan) {
   if (publishPlan.publishByPackage["@lzehrung/codegraph-native"]) {
     steps.push("publishNativeTargets", "prepareNativeMeta", "publishNativeMeta");
   }
+  if (publishPlan.publishByPackage["@lzehrung/codegraph-core"] || publishPlan.publishByPackage["@lzehrung/codegraph"]) {
+    steps.push("prepareCoreManifest", "publishCore");
+  }
   if (publishPlan.publishByPackage["@lzehrung/codegraph"]) {
     steps.push("prepareRootManifest", "publishRoot");
   }
@@ -239,12 +256,43 @@ function syncRootNativeOptionalDependency(pkg, nativeVersion) {
   };
 }
 
-export function restoreRootPackageManifest(pkg, version, nativeVersion) {
+function syncRootCoreDependency(pkg, version) {
+  if (!version) {
+    return pkg;
+  }
+  const dependencies =
+    pkg.dependencies && typeof pkg.dependencies === "object" && !Array.isArray(pkg.dependencies)
+      ? { ...pkg.dependencies }
+      : null;
+  if (!dependencies || typeof dependencies["@lzehrung/codegraph-core"] !== "string") {
+    return pkg;
+  }
+  dependencies["@lzehrung/codegraph-core"] = version;
+  return {
+    ...pkg,
+    dependencies,
+  };
+}
+
+export function restoreCorePackageManifest(pkg, version, nativeVersion) {
   return syncRootNativeOptionalDependency(
     {
       ...pkg,
       version,
     },
+    nativeVersion,
+  );
+}
+
+export function restoreRootPackageManifest(pkg, version, nativeVersion) {
+  return syncRootNativeOptionalDependency(
+    syncRootCoreDependency(
+      {
+        ...pkg,
+        version,
+      },
+      version,
+    ),
     nativeVersion,
   );
 }

@@ -424,8 +424,8 @@ const neighbors = querySymbolNeighbors(symbolGraph, {
 These wrappers are designed to be imported directly into agent runtimes:
 
 ```ts
+import { buildProjectIndex } from "@lzehrung/codegraph";
 import {
-  buildProjectIndex,
   tool_getFileOverview,
   tool_findSymbol,
   tool_impactJSON,
@@ -434,7 +434,7 @@ import {
   tool_getHotspots,
   tool_goToDefinition,
   tool_findReferences,
-} from "@lzehrung/codegraph";
+} from "@lzehrung/codegraph/agent";
 
 const root = process.cwd();
 const index = await buildProjectIndex(root);

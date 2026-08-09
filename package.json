@@ -1,6 +1,6 @@
 {
   "name": "@lzehrung/codegraph",
-  "version": "1.8.114",
+  "version": "2.0.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -34,6 +34,11 @@
       "types": "./dist/languages.d.ts",
       "import": "./dist/languages.js",
       "default": "./dist/languages.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp.d.ts",
+      "import": "./dist/mcp.js",
+      "default": "./dist/mcp.js"
     }
   },
   "bin": {
@@ -49,7 +54,7 @@
   "scripts": {
     "clean": "node -e \"import('node:fs').then(({ rmSync }) => rmSync('dist', { recursive: true, force: true }))\"",
     "check": "npm run security:production && npm run lint && npm run format && npm run build && npm run test:ci && npm run fixtures:check-clean",
-    "build": "npm run clean && tsc -p tsconfig.json && node ./scripts/bundle-cli.mjs && node ./scripts/build-native-if-available.mjs",
+    "build": "npm run clean && tsc -p tsconfig.json && node ./scripts/bundle-cli.mjs && node ./scripts/stage-core-package.mjs && node ./scripts/build-native-if-available.mjs",
     "generate:duplicate-keywords": "node ./scripts/generate-duplicate-keywords.mjs",
     "format": "prettier --write . --ignore-unknown",
     "lint": "npx eslint \"src/**/*.ts\" \"tests/**/*.ts\"",
@@ -112,7 +117,8 @@
     "publish:native:targets": "node ./scripts/publish-native-targets.mjs",
     "publish:native:meta": "npm publish --workspace=@lzehrung/codegraph-native",
     "bundle:cli": "node ./scripts/bundle-cli.mjs",
-    "viewer:vendor": "node ./scripts/vendor-graph-viewer.mjs"
+    "viewer:vendor": "node ./scripts/vendor-graph-viewer.mjs",
+    "build:core": "node ./scripts/stage-core-package.mjs"
   },
   "repository": {
     "type": "git",
@@ -169,6 +175,7 @@
     "vitest": "^4.1.8"
   },
   "dependencies": {
+    "@lzehrung/codegraph-core": "2.0.0",
     "@modelcontextprotocol/node": "^2.0.0",
     "@modelcontextprotocol/server": "^2.0.0",
     "fast-glob": "^3.3.3",

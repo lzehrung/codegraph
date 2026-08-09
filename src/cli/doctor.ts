@@ -11,7 +11,7 @@ import {
   normalizePathForDisplay,
   pathExists,
   type CodegraphPackageIdentity,
-} from "./packageInfo.js";
+} from "../util/packageInfo.js";
 import { isPlainRecord } from "../util/guards.js";
 import type { NativeBindingOrigin } from "../native/contracts.js";
 import { captureCodegraphRuntimeIdentity, createInstalledVersionChecker } from "../runtimeIdentity.js";

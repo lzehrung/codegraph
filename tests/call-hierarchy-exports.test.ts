@@ -4,14 +4,16 @@ import * as agentToolsApi from "../src/agent-tools.js";
 import * as rootApi from "../src/index.js";
 import * as indexerApi from "../src/indexer.js";
 import type {
-  CallHierarchyDirection,
   CallHierarchyEntry,
-  CallHierarchyMatch,
   CallHierarchyRequest,
   CallHierarchyResponse,
+  ToolCallHierarchyRuntimeOptions,
+} from "../src/agent.js";
+import type {
+  CallHierarchyDirection,
+  CallHierarchyMatch,
   CallHierarchySite,
   IndexCallHierarchyResult,
-  ToolCallHierarchyRuntimeOptions,
 } from "../src/index.js";
 
 type PublicCallHierarchyContracts = {
@@ -31,11 +33,13 @@ describe("call hierarchy public exports", () => {
 
     expect(contract).toBeUndefined();
     expect(rootApi.queryCallHierarchy).toBe(indexerApi.findCallHierarchy);
-    expect(rootApi.findCallers).toBe(agentApi.findCallers);
-    expect(rootApi.findCalleesWithSession).toBe(agentApi.findCalleesWithSession);
-    expect(rootApi.tool_findCallers).toBe(agentToolsApi.tool_findCallers);
-    expect(rootApi.tool_findCallees).toBe(agentToolsApi.tool_findCallees);
+    expect(agentApi.findCallers).toBeTypeOf("function");
+    expect(agentApi.findCalleesWithSession).toBeTypeOf("function");
+    expect(agentApi.tool_findCallers).toBe(agentToolsApi.tool_findCallers);
+    expect(agentApi.tool_findCallees).toBe(agentToolsApi.tool_findCallees);
     expect("findCallHierarchy" in indexerApi).toBe(true);
     expect("queryCallHierarchy" in rootApi).toBe(true);
+    expect("findCallers" in rootApi).toBe(false);
+    expect("tool_findCallers" in rootApi).toBe(false);
   });
 });

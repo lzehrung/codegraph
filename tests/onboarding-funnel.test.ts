@@ -245,6 +245,7 @@ async function createReleaseCandidate(parent: string): Promise<ReleaseCandidate>
   const candidateDirectory = path.join(parent, "release-candidates");
   const candidates: CandidateInput[] = [
     { contents: "root", file: "packages/root.tgz", package: "@lzehrung/codegraph" },
+    { contents: "core", file: "packages/core.tgz", package: "@lzehrung/codegraph-core" },
     { contents: "native-meta", file: "packages/native-meta.tgz", package: "@lzehrung/codegraph-native" },
     {
       contents: "native-target",
@@ -500,6 +501,9 @@ describe("onboarding funnel smoke", () => {
       expect(result.status).toBe("pass");
       const npmInstall = calls.find((call) => call.command === "npm");
       expect(npmInstall).toBeDefined();
+      const byFileName = new Map(
+        candidates.paths.map((candidatePath) => [path.basename(candidatePath), candidatePath]),
+      );
       expect(npmInstall?.args).toEqual([
         "install",
         "--prefix",
@@ -508,7 +512,10 @@ describe("onboarding funnel smoke", () => {
         "--audit=false",
         "--fund=false",
         "--loglevel=verbose",
-        ...candidates.paths,
+        byFileName.get("core.tgz"),
+        byFileName.get("root.tgz"),
+        byFileName.get("native-meta.tgz"),
+        byFileName.get("native-target.tgz"),
       ]);
       expect(npmInstall?.options.timeoutMs).toBe(FUNNEL_PACKAGE_SETUP_TIMEOUT_MS);
       expect(result.checks).toContainEqual(expect.objectContaining({ name: "package-candidate", status: "pass" }));

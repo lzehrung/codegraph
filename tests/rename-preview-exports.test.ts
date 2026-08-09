@@ -12,7 +12,7 @@ import type {
   RenamePreviewResponse,
   RenameUnsafeSite,
   ToolRenamePreviewRuntimeOptions,
-} from "../src/index.js";
+} from "../src/agent.js";
 
 type PublicRenameContracts = {
   request: RenamePreviewRequest;
@@ -31,9 +31,11 @@ describe("rename preview public exports", () => {
     const contract: PublicRenameContracts | undefined = undefined;
 
     expect(contract).toBeUndefined();
-    expect(rootApi.previewRename).toBe(agentApi.previewRename);
-    expect(rootApi.previewRenameWithSession).toBe(agentApi.previewRenameWithSession);
-    expect(rootApi.previewRenameInSnapshot).toBe(agentApi.previewRenameInSnapshot);
-    expect(rootApi.tool_previewRename).toBe(agentToolsApi.tool_previewRename);
+    expect(agentApi.previewRename).toBeTypeOf("function");
+    expect(agentApi.previewRenameWithSession).toBeTypeOf("function");
+    expect(agentApi.previewRenameInSnapshot).toBeTypeOf("function");
+    expect(agentApi.tool_previewRename).toBe(agentToolsApi.tool_previewRename);
+    expect("previewRename" in rootApi).toBe(false);
+    expect("tool_previewRename" in rootApi).toBe(false);
   });
 });

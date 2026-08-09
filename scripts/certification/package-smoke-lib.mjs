@@ -7,6 +7,7 @@ import {
   NATIVE_META_PACKAGE_NAME,
   PACKAGE_SMOKE_REPORT_SCHEMA_VERSION,
   PackageCertificationError,
+  CORE_PACKAGE_NAME,
   ROOT_PACKAGE_NAME,
   computeFileSha256,
   readReleaseCandidateManifest,
@@ -128,12 +129,16 @@ function parseJsonOutput(result, code, description) {
 }
 
 function expectedVersionForEntry(manifest, entry) {
-  return entry.package === ROOT_PACKAGE_NAME ? manifest.rootVersion : manifest.nativeVersion;
+  if (entry.package === ROOT_PACKAGE_NAME || entry.package === CORE_PACKAGE_NAME) {
+    return manifest.rootVersion;
+  }
+  return manifest.nativeVersion;
 }
 
 function requiredArchiveFile(entry) {
   if (entry.target) return `index.${entry.target}.node`;
   if (entry.package === NATIVE_META_PACKAGE_NAME) return "index.js";
+  if (entry.package === CORE_PACKAGE_NAME) return "dist/index.js";
   return "dist/bin/cli.js";
 }
 
@@ -850,7 +855,7 @@ export async function runPackageSmoke(options) {
   let entries;
   if (mode === "reduced") {
     selection = selectReducedReleaseCandidatePackage(manifest);
-    entries = [selection.root];
+    entries = [selection.core, selection.root];
   } else {
     const metadata = getNativeTargetMetadata(target);
     if (metadata.certificationClass !== mode) {
@@ -877,7 +882,7 @@ export async function runPackageSmoke(options) {
       }
     }
     selection = selectReleaseCandidatePackages(manifest, target);
-    entries = [selection.nativeTarget, selection.native, selection.root];
+    entries = [selection.nativeTarget, selection.native, selection.core, selection.root];
   }
 
   const packageIdentities = [];

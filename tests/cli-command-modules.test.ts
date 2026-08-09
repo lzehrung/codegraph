@@ -19,7 +19,7 @@ import {
   handleRefsCommand,
   type NavigationCommandContext,
 } from "../src/cli/navigation.js";
-import { getCodegraphPackageIdentity, getCodegraphVersion } from "../src/cli/packageInfo.js";
+import { getCodegraphPackageIdentity, getCodegraphVersion } from "../src/util/packageInfo.js";
 import { handlePacketCommand } from "../src/cli/packet.js";
 import { handleGrepCommand } from "../src/cli/grep.js";
 import { handleSearchCommand } from "../src/cli/search.js";

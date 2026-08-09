@@ -1,0 +1,67 @@
+{
+  "name": "@lzehrung/codegraph-core",
+  "version": "2.0.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./agent": {
+      "types": "./dist/agent.d.ts",
+      "import": "./dist/agent.js",
+      "default": "./dist/agent.js"
+    },
+    "./graphs": {
+      "types": "./dist/graphs.d.ts",
+      "import": "./dist/graphs.js",
+      "default": "./dist/graphs.js"
+    },
+    "./impact": {
+      "types": "./dist/impact/index.d.ts",
+      "import": "./dist/impact/index.js",
+      "default": "./dist/impact/index.js"
+    },
+    "./indexer": {
+      "types": "./dist/indexer.d.ts",
+      "import": "./dist/indexer.js",
+      "default": "./dist/indexer.js"
+    },
+    "./languages": {
+      "types": "./dist/languages.d.ts",
+      "import": "./dist/languages.js",
+      "default": "./dist/languages.js"
+    }
+  },
+  "files": [
+    "dist",
+    "THIRD_PARTY_NOTICES"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lzehrung/codegraph.git",
+    "directory": "packages/codegraph-core"
+  },
+  "homepage": "https://github.com/lzehrung/codegraph#readme",
+  "engines": {
+    "node": ">=22.16"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "description": "Pure TypeScript library for Codegraph project indexes, graphs, impact analysis, and agent-shaped query helpers without the CLI or MCP server.",
+  "dependencies": {
+    "fast-glob": "^3.3.3",
+    "picomatch": "^4.0.3",
+    "piscina": "^4.5.1",
+    "tsconfig-paths": "^4.2.0",
+    "zod": "^4.4.3"
+  },
+  "optionalDependencies": {
+    "@lzehrung/codegraph-native": "^1.8.93"
+  }
+}

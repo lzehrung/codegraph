@@ -5,7 +5,7 @@ import path from "node:path";
 import { applyEdits, modify, parse as parseJsonc, type ParseError } from "jsonc-parser";
 import { parse as parseToml } from "smol-toml";
 import { getSkillTargetDirForAgent, type SkillInstallAgent } from "../cli/skill.js";
-import { getCodegraphPackageRoot, normalizePathForDisplay, pathExists } from "../cli/packageInfo.js";
+import { getCodegraphPackageRoot, normalizePathForDisplay, pathExists } from "../util/packageInfo.js";
 
 export type InstallTargetId = SkillInstallAgent;
 

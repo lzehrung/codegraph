@@ -1,7 +1,7 @@
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { getCodegraphPackageRoot, normalizePathForDisplay, pathExists } from "./packageInfo.js";
+import { getCodegraphPackageRoot, normalizePathForDisplay, pathExists } from "../util/packageInfo.js";
 import { writeCliOutput } from "./pretty.js";
 
 export type SkillInstallAgent = "agents" | "claude" | "codex" | "cursor" | "gemini" | "opencode" | "omp" | "kilo";

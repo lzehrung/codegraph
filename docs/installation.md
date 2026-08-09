@@ -1,5 +1,7 @@
 # Installation
 
+Library-only TypeScript consumers can install `@lzehrung/codegraph-core` to avoid MCP SDK, installer, skill, and graph-viewer package weight. The product package `@lzehrung/codegraph` remains the CLI/MCP distribution and depends on core.
+
 Requirements, standalone and package channels, source checkouts, verification, rollback, caches, and runtime selection.
 
 ## Requirements

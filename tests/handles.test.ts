@@ -8,8 +8,8 @@ import {
   findReferencesById,
   symbolId,
   defFromSymbolId,
-  tool_findSymbol,
 } from "../src/index.js";
+import { tool_findSymbol } from "../src/agent.js";
 import { readOnlySamplePath } from "./helpers/filesystem.js";
 
 const norm = (p: string) => p.replace(/\\/g, "/");
