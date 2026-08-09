@@ -320,14 +320,21 @@ See [Language parity](./docs/language-parity.md) for the capability matrix and [
 
 ## Using as a library
 
-Use the TypeScript API when another program needs structured results or a warm, reusable session:
+Install the slim library package when you do not need the CLI, MCP server, installer, or viewer:
+
+```bash
+npm install @lzehrung/codegraph-core
+```
+
+It exposes the same core, graph, impact, and agent entrypoints as the product package. Use it when your application needs structured evidence instead of CLI text.
+
+### Review a diff
 
 ```ts
-import { buildProjectIndex, analyzeImpactFromDiff } from "@lzehrung/codegraph";
+import { analyzeImpactFromDiff, buildProjectIndex } from "@lzehrung/codegraph-core";
 
 const root = process.cwd();
 const index = await buildProjectIndex(root, { native: "auto" });
-
 const impact = await analyzeImpactFromDiff(root, index, {
   provider: "git",
   base: "HEAD",
@@ -338,11 +345,61 @@ const impact = await analyzeImpactFromDiff(root, index, {
 console.log(impact.changedSymbols, impact.impacted);
 ```
 
-Keep structured fields until the final UI or prompt boundary. Repeated callers should prefer one warm `createCodeReviewSession()` or agent/MCP session; see the [Library API reference](./docs/library-api.md) for exports, session lifecycle, streaming, graph APIs, and review reports.
+### Trace dependencies, consumers, and a symbol's references
 
-The public surface also includes `buildReviewReport` and `analyzeImpactStreaming` on the root export, plus `tool_impactJSON` from `@lzehrung/codegraph/agent`, for specialized review and integration workflows. Batch output can retain ranked top impacts and full report metadata; streaming callers can choose a lighter terminal summary after consuming incremental chunks.
+One index supports file traversal and semantic navigation. File identities in graph results use normalized `/` separators.
 
-Library-only installs should use `@lzehrung/codegraph-core`. The product package `@lzehrung/codegraph` keeps the CLI/MCP/viewer surface and still re-exports the library APIs; agent helpers live under `/agent`, and MCP under `/mcp`. See the [public API boundary](./docs/library-api.md#public-api-boundary) before choosing an import path.
+```ts
+import path from "node:path";
+import {
+  buildProjectIndex,
+  findReferences,
+  getDependencies,
+  getReverseDependencies,
+  goToDefinition,
+} from "@lzehrung/codegraph-core";
+
+const root = process.cwd();
+const file = path.join(root, "src", "auth.ts").replaceAll(path.sep, "/");
+const index = await buildProjectIndex(root);
+
+const dependencies = getDependencies(index.graph, file, { depth: 2, limit: 20 });
+const consumers = getReverseDependencies(index.graph, file, { depth: 2, limit: 20 });
+
+const definition = await goToDefinition(index, { file, line: 42, column: 13 });
+if (definition.status === "ok") {
+  const references = await findReferences(index, {
+    file: definition.definition.file,
+    line: definition.definition.range.start.line,
+    column: definition.definition.range.start.column,
+  });
+  console.log({ dependencies, consumers, references });
+}
+```
+
+### Build a warm in-process explorer
+
+Use the agent subpath for bounded, agent-ready answers. The session reuses a snapshot and refreshes bounded edits automatically.
+
+```ts
+import { createAgentSession, exploreCodegraphWithSession } from "@lzehrung/codegraph-core/agent";
+
+const root = process.cwd();
+const session = createAgentSession({ root, freshness: { policy: "auto" } });
+const answer = await exploreCodegraphWithSession(session, {
+  root,
+  query: "how does auth reach the database?",
+  limit: 5,
+  maxPackets: 3,
+  maxPaths: 3,
+});
+
+console.log(answer.summary, answer.anchors, answer.followUps);
+```
+
+For offline navigation, `buildCodegraphArtifact()` writes graph JSON, SQLite, questions, and a manifest from the same analysis model. See the [Library API reference](./docs/library-api.md) for sessions, streaming impact, artifacts, graph APIs, and review reports.
+
+The product package `@lzehrung/codegraph` keeps the CLI/MCP/viewer surface and re-exports core APIs. Agent helpers live under `/agent`; MCP handlers and the server live under `/mcp`. See the [public API boundary](./docs/library-api.md#public-api-boundary) before choosing an import path.
 
 ## How it works
 
