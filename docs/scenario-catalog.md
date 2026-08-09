@@ -29,7 +29,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 
 ## Fixture test matrix
 
-[`fixture-snapshot.md`](./benchmarks/fixture-snapshot.md) is the generated, always-current catalog: a per-language pass/fail snapshot straight from `tests/languages/*.test.ts` runs, with no hand-authored goldens.
+[`fixture-snapshot.md`](./benchmarks/fixture-snapshot.md) is the generated, always-current catalog: a per-language status and test-count snapshot straight from `tests/languages/*.test.ts` runs, with no hand-authored goldens.
 
 ## Native grammar coverage
 
