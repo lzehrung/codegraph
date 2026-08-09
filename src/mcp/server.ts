@@ -45,6 +45,7 @@ import {
 import { findCalleesWithSession, findCallersWithSession, type CallHierarchyResponse } from "../agent/callHierarchy.js";
 import { previewRenameWithSession, type RenamePreviewResponse } from "../agent/renamePreview.js";
 import { buildRefactorPlanWithSession, type RefactorPlanResponse } from "../agent/refactorPlan.js";
+import { parseAgentSymbolHandle } from "../agent/handles.js";
 import { requireSemanticSymbol, resolveSemanticSymbol } from "../agent/semanticSymbols.js";
 import { getDependencies, getReverseDependencies, getShortestPath, type DependencyNode } from "../graphs/queries.js";
 import { findReferences, goToDefinition } from "../indexer/navigation.js";
@@ -579,7 +580,7 @@ function createCodegraphMcpHandlersForSession(
     let targetFile: string;
     if (resolvedSymbol) {
       targetFile = resolvedSymbol.def.file;
-    } else if (parseQualifiedSymbolPath(request.file)) {
+    } else if (parseAgentSymbolHandle(request.file) || parseQualifiedSymbolPath(request.file)) {
       targetFile = requireSemanticSymbol(snapshot, request.file).def.file;
     } else {
       targetFile = await resolveProjectFile(await realRoot, root, request.file);

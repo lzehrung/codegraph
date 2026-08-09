@@ -195,6 +195,7 @@ describe("codegraph MCP handlers", () => {
       expect(toolNames).toContain("query_sqlite");
       expect(toolNames).toContain("refresh_index");
       expect(listedTools.find((tool) => tool.name === "refs")?.description).toContain("qualified file::symbol path");
+      expect(listedTools.find((tool) => tool.name === "file_deps")?.description).toContain("portable handle");
 
       const gotoCall = await postMcpJson(
         httpServer.url,
@@ -986,6 +987,9 @@ describe("codegraph MCP handlers", () => {
     const dependenciesByHandle = await handlers.deps({ file: route.handle });
     expect(dependenciesByHandle.dependencies).toEqual(
       expect.arrayContaining([expect.objectContaining({ file: "auth.ts" })]),
+    );
+    await expect(handlers.deps({ file: "symbol:api.ts:route:99:0" })).rejects.toThrow(
+      "Symbol handle is stale or missing",
     );
   });
 

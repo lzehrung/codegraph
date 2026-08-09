@@ -478,13 +478,15 @@ For SQL, prefer handles or schema-qualified names when basenames may be ambiguou
 ### Dependency analysis and diagnostics
 
 ```bash
-# Dependencies of a file or its defining symbol
+# Dependencies of a file, defining symbol, or portable symbol handle
 codegraph deps src/main.ts
 codegraph deps src/main.ts::main
+codegraph deps 'symbol:src/main.ts:main:12:1'
 
-# Reverse dependencies of a file or its defining symbol
+# Reverse dependencies of a file, defining symbol, or portable symbol handle
 codegraph rdeps src/utils.ts
 codegraph rdeps src/utils.ts::normalize
+codegraph rdeps 'symbol:src/utils.ts:normalize:8:1'
 
 # Shortest dependency path
 codegraph path src/main.ts src/utils.ts

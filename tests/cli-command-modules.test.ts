@@ -691,7 +691,11 @@ describe("CLI command modules", () => {
 
       { args: ["index", "--help"], heading: "codegraph index", usage: "Usage: codegraph index" },
       { args: ["review", "--help"], heading: "codegraph review", usage: "Usage: codegraph review" },
-      { args: ["deps", "--help"], heading: "codegraph deps", usage: "Usage: codegraph deps <file|file::symbol>" },
+      {
+        args: ["deps", "--help"],
+        heading: "codegraph deps",
+        usage: "Usage: codegraph deps <file|file::symbol|symbol:...>",
+      },
       { args: ["artifact", "--help"], heading: "codegraph artifact", usage: "Usage: codegraph artifact [build]" },
       { args: ["drift", "--help"], heading: "codegraph drift", usage: "Usage: codegraph drift [roots...]" },
       { args: ["mcp", "--help"], heading: "codegraph mcp", usage: "Usage: codegraph mcp [serve]" },

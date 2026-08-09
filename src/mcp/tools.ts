@@ -30,6 +30,10 @@ function objectSchema(properties: ToolInputSchemaProperties, required: string[] 
 }
 
 const stringProperty = { type: "string" };
+const dependencyFileProperty = {
+  type: "string",
+  description: "File path, qualified file::symbol path, or portable symbol handle.",
+};
 const booleanProperty = { type: "boolean" };
 const orientBudgetProperty = { type: "string", enum: ["small", "medium", "large"] };
 
@@ -37,7 +41,7 @@ function dependencyInputSchema(): Tool["inputSchema"] {
   return objectSchema(
     {
       direction: { type: "string", enum: ["deps", "rdeps"] },
-      file: stringProperty,
+      file: dependencyFileProperty,
       depth: { type: "integer", minimum: 0, default: 1 },
       limit: {
         type: "integer",
@@ -271,7 +275,8 @@ export const MCP_TOOLS: Tool[] = [
   },
   {
     name: "file_deps",
-    description: "List file dependencies or reverse file dependencies.",
+    description:
+      "List file dependencies or reverse file dependencies by file path, qualified file::symbol path, or portable handle.",
     inputSchema: dependencyInputSchema(),
   },
   {

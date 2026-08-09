@@ -1,4 +1,5 @@
 import { findLocalSymbolDefinitions, getApiSurface, parseQualifiedSymbolPath } from "../indexer/symbols.js";
+import { parseAgentSymbolHandle } from "../agent/handles.js";
 import type { CurrentProjectIndexLoader } from "../indexer/load-current-index.js";
 import type { GraphAdjacencyIndex } from "../graphs/adjacency.js";
 import {
@@ -72,28 +73,61 @@ async function handleDepsCommand(context: GraphQueryCommandContext): Promise<voi
   }
   const json = context.hasFlag("--json");
   const symbolPath = parseQualifiedSymbolPath(fileArg);
-  const resolvedFile = resolveCliProjectFile(context.projectRootFs, symbolPath?.file ?? fileArg, "File");
+  const symbolHandle = parseAgentSymbolHandle(fileArg);
+  const targetInput = symbolPath?.file ?? symbolHandle?.file ?? fileArg;
+  const resolvedFile = resolveCliProjectFile(context.projectRootFs, targetInput, "File");
   if (resolvedFile.status === "error") {
     writeCliProjectFileError(context, resolvedFile, json ? "json" : "text");
   }
 
   const loaded = await loadGraph(context);
   let targetFile = resolvedFile.file;
-  if (symbolPath) {
+  if (symbolPath || symbolHandle) {
     const index = await context.loadCurrentIndex();
-    const definitions = findLocalSymbolDefinitions(index, resolvedFile.file, symbolPath.name);
-    if (definitions.length === 1) {
-      const definition = definitions[0];
-      if (!definition) throw new Error("Expected one symbol-path definition.");
+    if (symbolPath) {
+      const definitions = findLocalSymbolDefinitions(index, resolvedFile.file, symbolPath.name);
+      if (definitions.length === 1) {
+        const definition = definitions[0];
+        if (!definition) throw new Error("Expected one symbol-path definition.");
+        targetFile = definition.file;
+      } else {
+        const status = definitions.length ? "ambiguous" : "not_found";
+        const detail = definitions.length
+          ? `Multiple symbols named ${symbolPath.name} are defined in ${symbolPath.file}.`
+          : `No indexed symbol ${symbolPath.name} is defined in ${symbolPath.file}.`;
+        const reason = definitions.length
+          ? `${detail} Run codegraph symbols "${symbolPath.file}::${symbolPath.name}" to obtain a portable handle.`
+          : detail;
+        const output = {
+          status,
+          reason,
+          ...(definitions.length
+            ? {
+                candidates: definitions.map((definition) => ({
+                  name: definition.localName,
+                  kind: definition.kind,
+                  range: definition.range,
+                })),
+              }
+            : {}),
+        };
+        if (json) context.writeJSONLine(output);
+        else context.writeStdoutLine(`${status}: ${reason}`);
+        context.exit(1);
+      }
+    } else if (symbolHandle) {
+      const definition = findLocalSymbolDefinitions(index, resolvedFile.file, symbolHandle.name).find(
+        (candidate) =>
+          candidate.range.start.line === symbolHandle.line && candidate.range.start.column === symbolHandle.column,
+      );
+      if (!definition) {
+        const reason = `Symbol handle is stale or missing. Run codegraph symbols "${symbolHandle.file}::${symbolHandle.name}" to resolve it again.`;
+        const output = { status: "not_found", reason };
+        if (json) context.writeJSONLine(output);
+        else context.writeStdoutLine(`not_found: ${reason}`);
+        context.exit(1);
+      }
       targetFile = definition.file;
-    } else {
-      const detail = definitions.length
-        ? `Multiple symbols named ${symbolPath.name} are defined in ${symbolPath.file}.`
-        : `No indexed symbol ${symbolPath.name} is defined in ${symbolPath.file}.`;
-      const output = { status: definitions.length ? "ambiguous" : "not_found", reason: detail };
-      if (json) context.writeJSONLine(output);
-      else context.writeStdoutLine(`${output.status}: ${detail}`);
-      context.exit(1);
     }
   }
   if (!loaded.graph.nodes.has(targetFile)) {

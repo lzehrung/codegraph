@@ -109,6 +109,27 @@ describe("forgiving CLI inputs", () => {
     expect(reverseDependencies).toEqual(
       expect.arrayContaining([expect.objectContaining({ file: expect.stringMatching(/consumer\.ts$/u) })]),
     );
+    const reverseDependenciesByHandle = JSON.parse(
+      (await runCliOrThrow(["rdeps", handle, "--root", root, "--json"])).stdout,
+    ) as Array<{ file: string }>;
+    expect(reverseDependenciesByHandle).toEqual(
+      expect.arrayContaining([expect.objectContaining({ file: expect.stringMatching(/consumer\.ts$/u) })]),
+    );
+
+    const missingDependency = await captureCli(["deps", "main.ts::missing", "--root", root, "--json"]);
+    expect(missingDependency.exitCode).toBe(1);
+    expect(jsonRecord(missingDependency.stdout)).toMatchObject({
+      status: "not_found",
+      reason: "No indexed symbol missing is defined in main.ts.",
+    });
+
+    const ambiguousDependency = await captureCli(["rdeps", "duplicates.ts::duplicate", "--root", root, "--json"]);
+    expect(ambiguousDependency.exitCode).toBe(1);
+    expect(jsonRecord(ambiguousDependency.stdout)).toMatchObject({
+      status: "ambiguous",
+      reason: expect.stringContaining("codegraph symbols"),
+      candidates: expect.arrayContaining([expect.objectContaining({ name: "duplicate" })]),
+    });
 
     const missingTarget = await captureCli(["goto", "main.ts::missing", "--root", root, "--json"]);
     expect(missingTarget.exitCode).toBe(1);
