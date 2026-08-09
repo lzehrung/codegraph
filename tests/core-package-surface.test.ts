@@ -1,7 +1,12 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { collectCorePackageFiles, isForbiddenCorePackagePath } from "../scripts/stage-core-package-lib.mjs";
+import {
+  collectCorePackageFiles,
+  isForbiddenCorePackagePath,
+  stageCorePackage,
+} from "../scripts/stage-core-package-lib.mjs";
 
 const repoRoot = process.cwd();
 const distRoot = path.join(repoRoot, "dist");
@@ -44,6 +49,29 @@ describe("codegraph-core package surface", () => {
         }
         expect(files.has(resolved), `${String(relativePath)} -> ${String(resolved)}`).toBe(true);
       }
+    }
+  });
+
+  it("keeps core-specific notices when staging", () => {
+    const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codegraph-core-stage-"));
+    const coreNotices = "core-only notice\n";
+    try {
+      fs.mkdirSync(path.join(temporaryRoot, "dist", "impact"), { recursive: true });
+      fs.mkdirSync(path.join(temporaryRoot, "packages", "codegraph-core"), { recursive: true });
+      fs.writeFileSync(path.join(temporaryRoot, "packages", "codegraph-core", "package.json"), "{}\n");
+      fs.writeFileSync(path.join(temporaryRoot, "packages", "codegraph-core", "THIRD_PARTY_NOTICES"), coreNotices);
+      for (const entry of ["index.js", "agent.js", "graphs.js", "impact/index.js", "indexer.js", "languages.js"]) {
+        fs.writeFileSync(path.join(temporaryRoot, "dist", entry), "export {};\n");
+      }
+      fs.writeFileSync(path.join(temporaryRoot, "THIRD_PARTY_NOTICES"), "product notice\n");
+
+      stageCorePackage({ repoRoot: temporaryRoot });
+
+      expect(
+        fs.readFileSync(path.join(temporaryRoot, "packages", "codegraph-core", "THIRD_PARTY_NOTICES"), "utf8"),
+      ).toBe(coreNotices);
+    } finally {
+      fs.rmSync(temporaryRoot, { recursive: true, force: true });
     }
   });
 

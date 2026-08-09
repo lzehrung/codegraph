@@ -390,7 +390,10 @@ describe("package metadata", () => {
       }
       visited.add(relativePath);
       const normalized = relativePath.replace(/\\/g, "/");
-      expect(normalized.includes("/cli/") || normalized.startsWith("src/cli/"), normalized).toBe(false);
+      expect(
+        normalized === "src/cli.ts" || normalized.includes("/cli/") || normalized.startsWith("src/cli/"),
+        normalized,
+      ).toBe(false);
       expect(normalized.includes("/mcp/") || normalized === "src/mcp.ts", normalized).toBe(false);
 
       const source = readText(relativePath);

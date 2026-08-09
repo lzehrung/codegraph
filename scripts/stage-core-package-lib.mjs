@@ -123,8 +123,7 @@ export function collectCorePackageFiles(distRoot, options = {}) {
     }
   }
 
-  // Type-only modules are erased from JS imports; walk the declaration closure so
-  // TypeScript consumers do not hit missing .d.ts paths after packing.
+  // Type-only imports vanish from JS; include their declaration closure.
   const declarationQueue = [...staged].filter((file) => file.endsWith(".d.ts"));
   while (declarationQueue.length > 0) {
     const relativeDtsPath = declarationQueue.shift().replaceAll("\\", "/");
@@ -186,14 +185,6 @@ export function stageCorePackage({ repoRoot = process.cwd() } = {}) {
     const toPath = path.join(destinationDist, relativePath);
     fs.mkdirSync(path.dirname(toPath), { recursive: true });
     fs.copyFileSync(fromPath, toPath);
-  }
-
-  const noticesSource = path.join(absoluteRepoRoot, "THIRD_PARTY_NOTICES");
-  const noticesDestination = path.join(packageRoot, "THIRD_PARTY_NOTICES");
-  if (fs.existsSync(noticesSource)) {
-    fs.copyFileSync(noticesSource, noticesDestination);
-  } else if (fs.existsSync(noticesDestination)) {
-    fs.rmSync(noticesDestination, { force: true });
   }
 
   return { packageRoot, destinationDist, files };
