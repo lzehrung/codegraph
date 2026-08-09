@@ -266,6 +266,10 @@ function parseNavigationInput(
     lineValue = context.getOpt("--line") ?? context.positionals[1];
     columnValue = context.getOpt("--col") ?? context.getOpt("--column") ?? context.positionals[2];
   }
+  if (qualifiedSymbol && (lineValue !== undefined || columnValue !== undefined)) {
+    context.writeStderrLine("A qualified file::symbol target cannot be combined with a line or column.");
+    context.exit(2);
+  }
 
   let line = location.line;
   if (lineValue !== undefined) {

@@ -89,6 +89,41 @@ function callHierarchyInputSchema(): Tool["inputSchema"] {
   );
 }
 
+function navigationInputSchema(includeLimit: boolean): Tool["inputSchema"] {
+  const properties: ToolInputSchemaProperties = {
+    handle: stringProperty,
+    file: stringProperty,
+    line: { type: "integer", minimum: 1 },
+    column: { type: "integer", minimum: 0 },
+    ...(includeLimit
+      ? {
+          limit: {
+            type: "integer",
+            minimum: 0,
+            maximum: MAX_MCP_COLLECTION_LIMIT,
+            default: DEFAULT_MCP_COLLECTION_LIMIT,
+          },
+        }
+      : {}),
+  };
+  return {
+    ...objectSchema(properties),
+    additionalProperties: false,
+    oneOf: [
+      {
+        required: ["handle"],
+        not: {
+          anyOf: [{ required: ["file"] }, { required: ["line"] }, { required: ["column"] }],
+        },
+      },
+      {
+        required: ["file", "line", "column"],
+        not: { required: ["handle"] },
+      },
+    ],
+  };
+}
+
 export const MCP_TOOLS: Tool[] = [
   {
     name: "search",
@@ -250,28 +285,12 @@ export const MCP_TOOLS: Tool[] = [
   {
     name: "goto",
     description: "Resolve a definition by portable handle, qualified file::symbol path, or file position.",
-    inputSchema: objectSchema({
-      handle: stringProperty,
-      file: stringProperty,
-      line: { type: "integer", minimum: 1 },
-      column: { type: "integer", minimum: 0 },
-    }),
+    inputSchema: navigationInputSchema(false),
   },
   {
     name: "refs",
     description: "Find references by portable handle, qualified file::symbol path, or file position.",
-    inputSchema: objectSchema({
-      handle: stringProperty,
-      file: stringProperty,
-      line: { type: "integer", minimum: 1 },
-      column: { type: "integer", minimum: 0 },
-      limit: {
-        type: "integer",
-        minimum: 0,
-        maximum: MAX_MCP_COLLECTION_LIMIT,
-        default: DEFAULT_MCP_COLLECTION_LIMIT,
-      },
-    }),
+    inputSchema: navigationInputSchema(true),
   },
   {
     name: "file_deps",

@@ -1088,21 +1088,43 @@ describe("codegraph MCP handlers", () => {
     expect(refs.references).toHaveLength(1);
   });
 
-  it("advertises refs with an OpenAI-compatible flat object schema", () => {
+  it("advertises goto and refs with mutually exclusive handle-or-complete-location schemas", () => {
+    const gotoTool = listCodegraphMcpTools().find((tool) => tool.name === "goto");
     const refsTool = listCodegraphMcpTools().find((tool) => tool.name === "refs");
+    const gotoSchema = readObject(gotoTool!.inputSchema);
     const refsSchema = readObject(refsTool!.inputSchema);
+    const gotoProperties = readObject(gotoSchema.properties);
     const refsProperties = readObject(refsSchema.properties);
+    const alternatives = [
+      {
+        required: ["handle"],
+        not: {
+          anyOf: [{ required: ["file"] }, { required: ["line"] }, { required: ["column"] }],
+        },
+      },
+      {
+        required: ["file", "line", "column"],
+        not: { required: ["handle"] },
+      },
+    ];
+
+    expect(gotoSchema.type).toBe("object");
+    expect(gotoSchema.additionalProperties).toBe(false);
+    expect(gotoSchema.required).toBeUndefined();
+    expect(gotoSchema.oneOf).toEqual(alternatives);
+    expect(Object.keys(gotoProperties).sort()).toEqual(["column", "file", "handle", "line"]);
 
     expect(refsSchema.type).toBe("object");
+    expect(refsSchema.additionalProperties).toBe(false);
     expect(refsSchema.required).toBeUndefined();
-    expect(refsSchema.oneOf).toBeUndefined();
-    expect(refsSchema.anyOf).toBeUndefined();
-    expect(refsSchema.allOf).toBeUndefined();
-    expect(refsSchema.not).toBeUndefined();
-    expect(refsProperties.handle).toEqual(expect.objectContaining({ type: "string" }));
-    expect(refsProperties.file).toEqual(expect.objectContaining({ type: "string" }));
-    expect(refsProperties.line).toEqual(expect.objectContaining({ type: "integer", minimum: 1 }));
-    expect(refsProperties.column).toEqual(expect.objectContaining({ type: "integer", minimum: 0 }));
+    expect(refsSchema.oneOf).toEqual(alternatives);
+    expect(Object.keys(refsProperties).sort()).toEqual(["column", "file", "handle", "limit", "line"]);
+    expect(refsProperties.limit).toEqual({
+      type: "integer",
+      minimum: 0,
+      maximum: 500,
+      default: 25,
+    });
   });
 
   it("keeps refs handle-or-position validation in the handler", async () => {

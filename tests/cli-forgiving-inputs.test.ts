@@ -152,6 +152,29 @@ describe("forgiving CLI inputs", () => {
     expect(fileView.content).toContain("caller");
   });
 
+  test("rejects coordinates mixed with qualified navigation targets", async () => {
+    const qualifiedTarget = "main.ts::target";
+
+    for (const args of [
+      ["goto", qualifiedTarget, "1", "1"],
+      ["refs", "--file", qualifiedTarget, "--line", "1", "--col", "1"],
+      ["refs", "--file", qualifiedTarget, "--column", "1"],
+    ]) {
+      const result = await captureCli([...args, "--root", root, "--json"]);
+      expect(result.exitCode).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("qualified file::symbol target cannot be combined with a line or column");
+    }
+
+    const goto = jsonRecord((await runCliOrThrow(["goto", qualifiedTarget, "--root", root, "--json"])).stdout);
+    expect(goto).toMatchObject({ status: "ok", definition: { localName: "target" } });
+
+    const refs = jsonRecord(
+      (await runCliOrThrow(["refs", "--file", qualifiedTarget, "--root", root, "--json"])).stdout,
+    );
+    expect(refs).toMatchObject({ status: "ok", definition: { localName: "target" } });
+  });
+
   test("formats goto file errors for the selected output mode", async () => {
     const outsideRoot = path.join(root, "..", "outside.ts");
     const pretty = await captureCli(["goto", outsideRoot, "--root", root]);

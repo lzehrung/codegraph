@@ -83,7 +83,7 @@ The independent `--max-references`, `--max-callers`, and `--max-hierarchy` bound
 - definition or references without coordinates: `codegraph goto|refs <file>::<symbol>`
 - references for every definition in a file: `codegraph refs <file>`
 
-Use line and column coordinates when known; this is the primary navigation form. Use an exact project-relative `file::symbol` path when coordinates are unavailable. `deps` and `rdeps` accept either form or a portable `symbol:` handle and resolve it to its defining file, while `callers` and `callees` expose symbol-level calls. Duplicate local names return declaration candidates; run `codegraph symbols` to get a portable handle.
+Use line and column coordinates when known; this is the primary navigation form. Use an exact project-relative `file::symbol` path when coordinates are unavailable; it cannot be combined with line or column input. `deps` and `rdeps` accept either form or a portable `symbol:` handle and resolve it to its defining file, while `callers` and `callees` expose symbol-level calls. Duplicate local names return declaration candidates; run `codegraph symbols` to get a portable handle.
 
 ### Review and Inspect
 

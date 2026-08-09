@@ -104,7 +104,7 @@ Portable handle grammar used across `search`, `get_symbol`, `packet_get`, `expla
 
 Positions use 1-based lines and 0-based UTF-16 columns, matching the rest of codegraph's range and navigation APIs.
 
-Position-based `goto` and `refs` requests (`file`, `line`, `column`) remain the primary navigation form. `goto.handle` and `refs.handle` also accept an exact qualified identity, `<project-relative-file>::<local-symbol>`, without coordinates. `file_deps.file` accepts that identity or a portable `symbol:` handle, resolves its declaration, and returns file-graph dependencies; use `calls` for symbol-level callers and callees. Duplicate local names return an ambiguity error rather than selecting one.
+Position-based `goto` and `refs` requests (`file`, `line`, `column`) remain the primary navigation form. Alternatively, `goto.handle` and `refs.handle` accept an exact qualified identity, `<project-relative-file>::<local-symbol>`, without coordinates; each tool rejects mixed modes. `file_deps.file` accepts that identity or a portable `symbol:` handle, resolves its declaration, and returns file-graph dependencies; use `calls` for symbol-level callers and callees. Duplicate local names return an ambiguity error rather than selecting one.
 
 MCP tool name ↔ CLI command mapping for the common handle-driven follow-ups:
 
