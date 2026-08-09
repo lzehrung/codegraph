@@ -62,7 +62,7 @@ Analysis Output Options:
 
 Forgiving inputs:
   File arguments accept file:line[:column] locations from search output.
-  Symbol commands accept a portable handle, unique exact name, file, or file:line[:column].
+  Symbol commands accept a portable handle, qualified file::symbol path, unique exact name, file, or file:line[:column].
   refs accepts a file alone and returns references for every symbol defined in that file.
   impact and drift default to HEAD..WORKTREE; artifact, packet, and mcp infer their only subcommand.
   Read-only project commands accept an existing project-root positional where unambiguous.
@@ -227,19 +227,21 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const GOTO_HELP_TEXT = `codegraph goto - Go to a definition
 
-Usage: codegraph goto <file>[:line[:column]] [line] [column] [--root <path>] [--json | --pretty]
+Usage: codegraph goto <file>::<symbol> [--root <path>] [--json | --pretty]
+       codegraph goto <file>[:line[:column]] [line] [column] [--root <path>] [--json | --pretty]
 
-A file-only target succeeds when the file defines one symbol; otherwise JSON returns bounded candidates. Search-result locations and portable symbol handles can be pasted directly.
+A qualified symbol path resolves one definition without a location. A file-only target succeeds when the file defines one symbol; otherwise JSON returns bounded candidates. Search-result locations and portable symbol handles can be pasted directly.
 
 ${SHARED_INDEX_OPTIONS_HELP}
 `;
 
 export const REFS_HELP_TEXT = `codegraph refs - Find semantic references
 
-Usage: codegraph refs <file>[:line[:column]] [line] [column] [--root <path>] [--json | --pretty]
+Usage: codegraph refs <file>::<symbol> [--root <path>] [--json | --pretty]
+       codegraph refs <file>[:line[:column]] [line] [column] [--root <path>] [--json | --pretty]
        codegraph refs --file <file> [--line <line> --col <column>] [--root <path>] [--json | --pretty]
 
-A file-only target finds references for every symbol defined in that file. Search-result locations and portable symbol handles can be pasted directly.
+A qualified symbol path finds references for one declaration without a location. A file-only target finds references for every symbol defined in that file. Search-result locations and portable symbol handles can be pasted directly.
 
 ${SHARED_INDEX_OPTIONS_HELP}
 `;
@@ -435,10 +437,10 @@ Tools:
   search          Deterministic ranked search with stable handles
   get_file        Bounded project file reads inside the root
   get_symbol      Resolve a search/explain handle
-  goto            Go to definition by file position
-  refs            Find references by handle or file position
-  deps            List dependencies
-  rdeps           List reverse dependencies
+  goto            Go to definition by qualified symbol path or file position
+  refs            Find references by qualified symbol path, handle, or file position
+  deps            List file dependencies by file or qualified symbol path
+  rdeps           List reverse file dependencies by file or qualified symbol path
   path            Find shortest dependency path
   impact          Build compact impact context for a git range
   review          Build review context for a git range
@@ -598,16 +600,20 @@ Usage: codegraph inspect [roots...] [--root <path>] [--limit <n>] [--duplicates]
 ${SHARED_INDEX_OPTIONS_HELP}
 `;
 
-export const DEPS_HELP_TEXT = `codegraph deps - List dependencies for a file
+export const DEPS_HELP_TEXT = `codegraph deps - List file dependencies
 
-Usage: codegraph deps <file> [--root <path>] [--depth <n>] [--json | --pretty]
+Usage: codegraph deps <file|file::symbol> [--root <path>] [--depth <n>] [--json | --pretty]
+
+A qualified symbol path uses its declaring file for file-graph traversal. Use callees for symbol-level call relationships.
 
 ${SHARED_INDEX_OPTIONS_HELP}
 `;
 
-export const RDEPS_HELP_TEXT = `codegraph rdeps - List reverse dependencies for a file
+export const RDEPS_HELP_TEXT = `codegraph rdeps - List reverse file dependencies
 
-Usage: codegraph rdeps <file> [--root <path>] [--depth <n>] [--json | --pretty]
+Usage: codegraph rdeps <file|file::symbol> [--root <path>] [--depth <n>] [--json | --pretty]
+
+A qualified symbol path uses its declaring file for file-graph traversal. Use callers for symbol-level call relationships.
 
 ${SHARED_INDEX_OPTIONS_HELP}
 `;

@@ -32,6 +32,11 @@ describe("forgiving CLI inputs", () => {
       "utf8",
     );
     await fsp.writeFile(path.join(root, "single.ts"), "export const only = 1;\n", "utf8");
+    await fsp.writeFile(
+      path.join(root, "consumer.ts"),
+      "import { target } from './main';\nexport const downstream = target();\n",
+      "utf8",
+    );
     git(root, ["init"]);
     git(root, ["config", "user.email", "tests@example.com"]);
     git(root, ["config", "user.name", "Tests"]);
@@ -73,6 +78,25 @@ describe("forgiving CLI inputs", () => {
     const handle = String(target.handle);
     expect(jsonRecord((await runCliOrThrow(["goto", handle, "--root", root, "--json"])).stdout).status).toBe("ok");
     expect(jsonRecord((await runCliOrThrow(["refs", handle, "--root", root, "--json"])).stdout).status).toBe("ok");
+
+    const qualifiedTarget = "main.ts::target";
+    const qualifiedGoto = jsonRecord((await runCliOrThrow(["goto", qualifiedTarget, "--root", root, "--json"])).stdout);
+    expect(qualifiedGoto).toMatchObject({ status: "ok", definition: { localName: "target" } });
+    const qualifiedRefs = jsonRecord((await runCliOrThrow(["refs", qualifiedTarget, "--root", root, "--json"])).stdout);
+    expect(qualifiedRefs).toMatchObject({ status: "ok", definition: { localName: "target" } });
+
+    const dependencies = JSON.parse(
+      (await runCliOrThrow(["deps", "consumer.ts::downstream", "--root", root, "--json"])).stdout,
+    ) as Array<{ file: string }>;
+    expect(dependencies).toEqual(
+      expect.arrayContaining([expect.objectContaining({ file: expect.stringMatching(/main\.ts$/u) })]),
+    );
+    const reverseDependencies = JSON.parse(
+      (await runCliOrThrow(["rdeps", qualifiedTarget, "--root", root, "--json"])).stdout,
+    ) as Array<{ file: string }>;
+    expect(reverseDependencies).toEqual(
+      expect.arrayContaining([expect.objectContaining({ file: expect.stringMatching(/consumer\.ts$/u) })]),
+    );
 
     const fileView = jsonRecord(
       (await runCliOrThrow(["file", `${path.join(root, "main.ts")}:2`, "--root", root, "--json"])).stdout,

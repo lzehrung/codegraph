@@ -163,6 +163,24 @@ describe("codegraph MCP handlers", () => {
       expect(toolNames).toContain("packet_get");
       expect(toolNames).toContain("query_sqlite");
       expect(toolNames).toContain("refresh_index");
+
+      const gotoCall = await postMcpJson(
+        httpServer.url,
+        {
+          jsonrpc: "2.0",
+          id: 3,
+          method: "tools/call",
+          params: { name: "goto", arguments: { handle: "auth.ts::ok" } },
+        },
+        sessionId ?? undefined,
+      );
+      expect(gotoCall.response.status).toBe(200);
+      const gotoResult = readObject(gotoCall.payload.result);
+      const content = gotoResult.content;
+      if (!Array.isArray(content) || !content[0]) throw new Error("goto returned no MCP content.");
+      const gotoContent = readObject(content[0]);
+      if (typeof gotoContent.text !== "string") throw new Error("goto MCP content did not contain text.");
+      expect(JSON.parse(gotoContent.text)).toMatchObject({ status: "ok", definition: { localName: "ok" } });
     } finally {
       await httpServer.close();
     }
@@ -848,6 +866,26 @@ describe("codegraph MCP handlers", () => {
 
     const refs = await handlers.refs({ handle: first!.handle });
     expect(refs.references.some((ref) => ref.file === "api.ts")).toBeTruthy();
+  });
+
+  it("resolves qualified symbol paths for goto, refs, and file dependencies", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-qualified-symbol-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
+    await fs.writeFile(
+      path.join(root, "api.ts"),
+      "import { validateUser } from './auth';\nexport function route() { return validateUser(1); }\n",
+    );
+
+    const handlers = createCodegraphMcpHandlers({ root });
+    const target = "auth.ts::validateUser";
+    const goto = await handlers.goto({ handle: target });
+    expect(goto).toMatchObject({ status: "ok", definition: { localName: "validateUser" } });
+
+    const refs = await handlers.refs({ handle: target });
+    expect(refs.references).toEqual(expect.arrayContaining([expect.objectContaining({ file: "api.ts" })]));
+
+    const dependencies = await handlers.deps({ file: "api.ts::route" });
+    expect(dependencies.dependencies).toEqual(expect.arrayContaining([expect.objectContaining({ file: "auth.ts" })]));
   });
 
   it("returns orientation and packet data through MCP handlers", async () => {

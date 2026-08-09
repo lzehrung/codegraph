@@ -75,14 +75,15 @@ The independent `--max-references`, `--max-callers`, and `--max-hierarchy` bound
 
 ### Navigate
 
-- dependencies: `codegraph deps <file>`
-- reverse dependencies: `codegraph rdeps <file>`
+- dependencies: `codegraph deps <file|file::symbol>`
+- reverse dependencies: `codegraph rdeps <file|file::symbol>`
 - shortest path: `codegraph path <from> <to>`
-- definition: `codegraph goto <file>:<line>:<column>`
+- definition: `codegraph goto <file>::<symbol>` or `codegraph goto <file>:<line>:<column>`
+- references for one declaration: `codegraph refs <file>::<symbol>`
 - references at a location: `codegraph refs <file>:<line>:<column>`
 - references for every definition in a file: `codegraph refs <file>`
 
-File targets accept locations copied from search output. Semantic relationship/refactor commands accept a portable handle, unique exact symbol name, single-definition file, or `file:line[:column]`; ambiguous targets return handle choices instead of guessing.
+Use an exact project-relative `file::symbol` path to avoid location coordinates. `deps` and `rdeps` resolve that declaration to its defining file, while `callers` and `callees` expose symbol-level calls. Duplicate local names return handle choices instead of guessing.
 
 ### Review and Inspect
 
@@ -166,7 +167,7 @@ Use `refactor_plan` with flat `handle`, optional `renameTo`, independent optiona
 Use `workspace_symbols` for deterministic symbol identities and exact ranges; use `search` when paths, prose, SQL, snippets, or graph evidence should participate.
 Use `type_hierarchy` with `direction: "supertypes" | "subtypes"` and `implementations` with portable symbol handles for repeated hierarchy queries; schemas are flat and use the same 10-depth and 500-result caps as the CLI.
 Use `calls` with `direction: "callers" | "callees"` and portable callable handles for repeated call hierarchy queries. The flat schema accepts `handle`, `direction`, `depth`, `limit`, and `includeHeuristic`, reuses the MCP freshness gate, and caps depth at 5 and symbols at 500; current results remain semantic-only.
-Use `file_deps` with `direction: "deps" | "rdeps"` for file-level dependency queries.
+Use `file_deps` with `direction: "deps" | "rdeps"` for file-level dependency queries. Its `file` field may be an exact `file::symbol` path, which resolves to the declaring file; use `calls` for symbol-level relationships.
 Use `rename_preview` with `handle`, `newName`, optional boolean inclusion fields, and optional `maxEdits`. It remains available in read-only mode, reuses the MCP session, never changes files, and has no apply counterpart.
 
 Keep live and indexed evidence distinct:

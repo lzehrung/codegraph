@@ -15,6 +15,24 @@ export function symbolId(def: SymbolDef): SymbolHandle {
   return `${def.file}::${def.localName}::${index}`;
 }
 
+export type QualifiedSymbolPath = {
+  file: string;
+  name: string;
+};
+
+/** Parse a project-relative file and local symbol identity such as `src/main.ts::run`. */
+export function parseQualifiedSymbolPath(value: string): QualifiedSymbolPath | null {
+  const separator = value.lastIndexOf("::");
+  if (separator <= 0 || separator === value.length - 2 || value.indexOf("::") !== separator) return null;
+  return { file: value.slice(0, separator), name: value.slice(separator + 2) };
+}
+
+/** Return every local definition named `name` in an already-resolved indexed file. */
+export function findLocalSymbolDefinitions(index: ProjectIndex, file: string, name: string): SymbolDef[] {
+  const normalizedFile = file.replace(/\\/g, "/");
+  return index.byFile.get(normalizedFile)?.locals.filter((definition) => definition.localName === name) ?? [];
+}
+
 export function defFromSymbolId(index: ProjectIndex, id: SymbolHandle): SymbolDef | null {
   if (!id) return null;
   const parts = id.split("::");

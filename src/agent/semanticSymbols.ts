@@ -1,4 +1,5 @@
 import { defNodeId } from "../graphs/symbol-graph.js";
+import { findLocalSymbolDefinitions, parseQualifiedSymbolPath } from "../indexer/symbols.js";
 import type { SymbolDef } from "../indexer/types.js";
 import { formatAgentSymbolHandle, parseAgentSymbolHandle } from "./handles.js";
 import { normalizeAgentFilePath, resolveAgentSnapshotFile } from "./normalize.js";
@@ -27,6 +28,11 @@ export function resolveSemanticSymbol(snapshot: AgentProjectSnapshot, handle: st
   return null;
 }
 
+function looksLikeLegacyDefNodeId(input: string): boolean {
+  const parts = input.split("::");
+  return parts.length === 3 && /^\d+(?:\D.*)?$/.test(parts[2] ?? "");
+}
+
 function formatSemanticCandidate(snapshot: AgentProjectSnapshot, candidate: ResolvedSemanticSymbol): string {
   return formatAgentSymbolHandle({
     file: normalizeAgentFilePath(snapshot.root, candidate.def.file),
@@ -46,11 +52,15 @@ export function requireSemanticSymbol(snapshot: AgentProjectSnapshot, input: str
     );
   }
 
-  const location = parseSourceLocationInput(input);
+  const qualifiedSymbol = parseQualifiedSymbolPath(input);
+  const location = parseSourceLocationInput(qualifiedSymbol?.file ?? input);
   const file = resolveAgentSnapshotFile(snapshot, location.file);
   const candidates: ResolvedSemanticSymbol[] = [];
   if (file) {
-    for (const def of snapshot.index.byFile.get(file)?.locals ?? []) {
+    const definitions = qualifiedSymbol
+      ? findLocalSymbolDefinitions(snapshot.index, file, qualifiedSymbol.name)
+      : (snapshot.index.byFile.get(file)?.locals ?? []);
+    for (const def of definitions) {
       if (location.line !== undefined && def.range.start.line !== location.line) continue;
       if (location.column !== undefined && def.range.start.column !== location.column) continue;
       candidates.push({ id: defNodeId(def), def });
@@ -59,6 +69,11 @@ export function requireSemanticSymbol(snapshot: AgentProjectSnapshot, input: str
     const lookup = buildSymbolLookup(snapshot);
     const internal = lookup.defById.get(input);
     if (internal) return { id: input, def: internal };
+    if (looksLikeLegacyDefNodeId(input)) {
+      throw new Error(
+        'Symbol handle is stale or missing. Run codegraph symbols "<query>" or workspace_symbols to resolve it again.',
+      );
+    }
     for (const [id, def] of lookup.defById) {
       if (def.localName !== input) continue;
       candidates.push({ id, def });
@@ -72,9 +87,9 @@ export function requireSemanticSymbol(snapshot: AgentProjectSnapshot, input: str
     const suffix = omitted ? ` (and ${omitted} more)` : "";
     throw new Error(`Ambiguous symbol target "${input}". Use one of: ${choices.join(", ")}${suffix}`);
   }
-  if (input.includes("::")) {
+  if (qualifiedSymbol) {
     throw new Error(
-      'Symbol handle is stale or missing. Run codegraph symbols "<query>" or workspace_symbols to resolve it again.',
+      `Symbol path "${input}" was not found. Run codegraph symbols "${qualifiedSymbol.file}::${qualifiedSymbol.name}" to locate it.`,
     );
   }
   throw new Error(

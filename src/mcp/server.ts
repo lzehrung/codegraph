@@ -45,8 +45,10 @@ import {
 import { findCalleesWithSession, findCallersWithSession, type CallHierarchyResponse } from "../agent/callHierarchy.js";
 import { previewRenameWithSession, type RenamePreviewResponse } from "../agent/renamePreview.js";
 import { buildRefactorPlanWithSession, type RefactorPlanResponse } from "../agent/refactorPlan.js";
+import { requireSemanticSymbol } from "../agent/semanticSymbols.js";
 import { getDependencies, getReverseDependencies, getShortestPath, type DependencyNode } from "../graphs/queries.js";
 import { findReferences, goToDefinition } from "../indexer/navigation.js";
+import { parseQualifiedSymbolPath } from "../indexer/symbols.js";
 import { analyzeImpactFromDiff, type CompactImpactReport } from "../impact/index.js";
 import { DEFAULT_BOUNDED_IMPACT_BUDGETS } from "../impact/budgets.js";
 import { buildReviewReport, type ReviewDepth, type ReviewReport } from "../review.js";
@@ -253,7 +255,9 @@ export type CodegraphMcpHandlers = {
     allowSensitive?: boolean | undefined;
   }) => Promise<CodegraphMcpFreshResult<AgentFileViewResponse>>;
   get_symbol: (request: { handle: string }) => Promise<CodegraphMcpFreshResult<AgentExplanation["target"]>>;
-  goto: (request: { file: string; line: number; column: number }) => Promise<CodegraphMcpFreshResult<GoToResult>>;
+  goto: (
+    request: { handle: string } | { file: string; line: number; column: number },
+  ) => Promise<CodegraphMcpFreshResult<GoToResult>>;
   refs: (
     request:
       | { handle: string; limit?: number | undefined }
@@ -571,11 +575,10 @@ function createCodegraphMcpHandlersForSession(
       ...(request.depth !== undefined ? { depth: request.depth } : {}),
       limit: boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT),
     };
-    return collectEntries(
-      snapshot.fileGraph,
-      await resolveProjectFile(await realRoot, root, request.file),
-      queryOptions,
-    ).map((dependency) => ({
+    const targetFile = parseQualifiedSymbolPath(request.file)
+      ? requireSemanticSymbol(snapshot, request.file).def.file
+      : await resolveProjectFile(await realRoot, root, request.file);
+    return collectEntries(snapshot.fileGraph, targetFile, queryOptions).map((dependency) => ({
       file: relative(dependency.file),
       depth: dependency.depth,
     }));
@@ -741,6 +744,10 @@ function createCodegraphMcpHandlersForSession(
     goto: async (request) =>
       await withFreshness(async () => {
         const snapshot = await session.loadProject({ symbolGraph: "skip" });
+        if ("handle" in request) {
+          const resolved = requireSemanticSymbol(snapshot, request.handle);
+          return { status: "ok", definition: resolved.def };
+        }
         return await goToDefinition(snapshot.index, {
           file: await resolveProjectFile(await realRoot, root, request.file),
           line: request.line,
@@ -764,6 +771,23 @@ function createCodegraphMcpHandlersForSession(
         }
 
         if (handle !== undefined) {
+          if (parseQualifiedSymbolPath(handle)) {
+            const snapshot = await session.loadProject({ symbolGraph: "skip" });
+            const resolved = requireSemanticSymbol(snapshot, handle);
+            const result = await findReferences(
+              snapshot.index,
+              { def: resolved.def },
+              {
+                maxReferences: boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT),
+              },
+            );
+            return {
+              references:
+                result.status === "ok"
+                  ? result.references.map((reference) => ({ file: relative(reference.file), range: reference.range }))
+                  : [],
+            };
+          }
           const explanation = await explainCodegraphTargetWithSession(session, {
             root,
             target: handle,
@@ -1307,7 +1331,7 @@ async function callMcpTool(handlers: CodegraphMcpHandlers, name: string, input: 
     case "get_symbol":
       return await handlers.get_symbol(handleSchema.parse(input));
     case "goto":
-      return await handlers.goto(navigationSchema.parse(input));
+      return await callGotoTool(handlers, input);
     case "refs":
       return await callRefsTool(handlers, input);
     case "file_deps":
@@ -1331,6 +1355,15 @@ async function callMcpTool(handlers: CodegraphMcpHandlers, name: string, input: 
     default:
       throw new Error(`Unknown MCP tool: ${name}`);
   }
+}
+
+async function callGotoTool(handlers: CodegraphMcpHandlers, input: unknown): Promise<GoToResult> {
+  const request = navigationSchema.parse(input);
+  if (request.handle !== undefined) return await handlers.goto({ handle: request.handle });
+  if (request.file === undefined || request.line === undefined || request.column === undefined) {
+    throw new Error("goto requires either handle or file, line, and column.");
+  }
+  return await handlers.goto({ file: request.file, line: request.line, column: request.column });
 }
 
 async function callRefsTool(
@@ -1471,11 +1504,23 @@ const handleSchema = z.object({
   handle: z.string(),
 });
 
-const navigationSchema = z.object({
-  file: z.string(),
-  line: z.number().int().positive(),
-  column: z.number().int().nonnegative(),
-});
+const navigationSchema = z
+  .object({
+    handle: z.string().optional(),
+    file: z.string().optional(),
+    line: z.number().int().positive().optional(),
+    column: z.number().int().nonnegative().optional(),
+  })
+  .refine(
+    (request) => {
+      const hasHandle = request.handle !== undefined;
+      const hasAnyPosition = request.file !== undefined || request.line !== undefined || request.column !== undefined;
+      const hasCompletePosition =
+        request.file !== undefined && request.line !== undefined && request.column !== undefined;
+      return hasHandle ? !hasAnyPosition : hasCompletePosition;
+    },
+    { message: "goto requires either handle or file, line, and column." },
+  );
 
 const refsSchema = z
   .object({

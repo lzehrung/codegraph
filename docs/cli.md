@@ -232,6 +232,8 @@ Use `--kind <kind,...>`, `--exported`, `--include-imports`, `--file-glob <projec
 
 Structured results include `schemaVersion`, root and analysis metadata, freshness, effective limits, omission counts, the normalized query, total candidates, and deterministic project-relative symbols. Resolvable named/default import aliases keep their binding location but carry a handle for the declaration; namespace/star aliases, unresolved aliases, and failed import scans are reported under `omittedCounts`.
 
+Use an exact qualified path, `<project-relative-file>::<local-symbol>`, with `goto` or `refs` to target one declaration without line or column coordinates. `deps` and `rdeps` accept the same form, then traverse the defining file's dependency edges; use `callers` or `callees` for symbol-level call relationships. If one file defines multiple declarations with the same local name, codegraph returns candidates and requires the portable handle from `symbols` to avoid guessing.
+
 `callers` and `callees` accept one portable function or callable-member handle from `symbols`. Depth defaults to 1 and caps at 5; the symbol limit defaults to 100 and caps at 500, while callsites are grouped under each related symbol and bounded separately.
 
 Pretty symbol and callsite rows are the default. `--json` reports exact project-relative callsites, provenance, freshness, and separate symbol, callsite, and unresolved-site omissions; `--include-heuristic` is accepted, but current results remain limited to resolved semantic `calls` edges rather than guessed dynamic calls, file dependencies, imports, or references.
@@ -304,9 +306,11 @@ codegraph drift ./src --base origin/main --head HEAD --fail-on new-cycle,public-
 codegraph drift --base-artifact ./baseline/codegraph-out --head . --json
 
 # Go to definition
+codegraph goto <file>::<symbol>
 codegraph goto <file>:<line>:<column>
 
 # Find references
+codegraph refs <file>::<symbol>
 codegraph refs <file>  # all symbols in the file
 codegraph refs <file>:<line>:<column>
 
@@ -474,11 +478,13 @@ For SQL, prefer handles or schema-qualified names when basenames may be ambiguou
 ### Dependency analysis and diagnostics
 
 ```bash
-# Dependencies of a file
+# Dependencies of a file or its defining symbol
 codegraph deps src/main.ts
+codegraph deps src/main.ts::main
 
-# Reverse dependencies
+# Reverse dependencies of a file or its defining symbol
 codegraph rdeps src/utils.ts
+codegraph rdeps src/utils.ts::normalize
 
 # Shortest dependency path
 codegraph path src/main.ts src/utils.ts

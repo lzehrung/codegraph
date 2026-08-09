@@ -1,5 +1,6 @@
 import { loadCurrentProjectIndex, type LoadCurrentProjectIndexOptions } from "../indexer/load-current-index.js";
 import { findReferences, goToDefinition } from "../indexer/navigation.js";
+import { findLocalSymbolDefinitions, parseQualifiedSymbolPath } from "../indexer/symbols.js";
 import { parseAgentSymbolHandle } from "../agent/handles.js";
 import {
   SymbolKind,
@@ -7,6 +8,7 @@ import {
   type FindReferencesResult,
   type GoToResult,
   type ModuleIndex,
+  type ProjectIndex,
   type SymbolDef,
 } from "../indexer/types.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
@@ -236,6 +238,7 @@ export async function handleDumpmodCommand(context: NavigationCommandContext): P
 
 type ResolvedNavigationInput = {
   file: string;
+  symbolName?: string;
   line?: number;
   column?: number;
 };
@@ -248,9 +251,10 @@ function parseNavigationInput(
   const positional = context.positionals[0];
   const target = fileOption ?? positional ?? "";
   const symbolHandle = parseAgentSymbolHandle(target);
+  const qualifiedSymbol = parseQualifiedSymbolPath(target);
   const location = symbolHandle
     ? { file: symbolHandle.file, line: symbolHandle.line, column: symbolHandle.column }
-    : parseCliSourceLocation(target);
+    : parseCliSourceLocation(qualifiedSymbol?.file ?? target);
   if (!location.file) return null;
 
   let lineValue: string | undefined;
@@ -277,8 +281,35 @@ function parseNavigationInput(
   }
   return {
     file: location.file,
+    ...(qualifiedSymbol ? { symbolName: qualifiedSymbol.name } : {}),
     ...(line !== undefined ? { line } : {}),
     ...(column !== undefined ? { column } : {}),
+  };
+}
+
+type SymbolPathResolution =
+  | { status: "ok"; definition: SymbolDef }
+  | { status: "not_found"; reason: string }
+  | { status: "ambiguous"; reason: string; candidates: GotoCandidate[] };
+
+function resolveSymbolPath(index: ProjectIndex, file: string, symbolName: string): SymbolPathResolution {
+  const definitions = sortDefinitions(findLocalSymbolDefinitions(index, file, symbolName));
+  if (definitions.length === 1) {
+    const definition = definitions[0];
+    if (!definition) throw new Error("Expected one symbol-path definition.");
+    return { status: "ok", definition };
+  }
+  if (!definitions.length) {
+    return { status: "not_found", reason: `No indexed symbol ${symbolName} in ${file}` };
+  }
+  return {
+    status: "ambiguous",
+    reason: `Multiple symbols named ${symbolName} in ${file}; use a portable handle from codegraph symbols to disambiguate.`,
+    candidates: definitions.map((definition) => ({
+      name: definition.localName,
+      kind: definition.kind,
+      range: definition.range,
+    })),
   };
 }
 
@@ -315,6 +346,12 @@ export async function handleGotoCommand(context: NavigationCommandContext): Prom
     writeCliProjectFileError(context, resolvedFile, context.hasFlag("--json") ? "json" : "text");
   }
   const index = await loadNavigationIndex(context);
+  if (input.symbolName !== undefined) {
+    const resolution = resolveSymbolPath(index, resolvedFile.file, input.symbolName);
+    writeCliOutput(context, resolution, (value) => formatGotoOutput(context.projectRootFs, value));
+    if (resolution.status === "not_found") context.exit(1);
+    return;
+  }
   if (input.line === undefined) {
     const definitions = sortDefinitions(index.byFile.get(resolvedFile.file)?.locals ?? []);
     if (definitions.length === 1) {
@@ -366,6 +403,26 @@ export async function handleRefsCommand(context: NavigationCommandContext): Prom
     writeCliProjectFileError(context, resolvedFile, pretty ? "text" : "json");
   }
   const index = await loadNavigationIndex(context);
+
+  if (input.symbolName !== undefined) {
+    const resolution = resolveSymbolPath(index, resolvedFile.file, input.symbolName);
+    if (resolution.status !== "ok") {
+      if (pretty) {
+        context.writeStdoutLine(formatGotoOutput(context.projectRootFs, resolution));
+      } else {
+        context.writeJSONLine(resolution);
+      }
+      context.exit(1);
+    }
+    const result = await findReferences(index, { def: resolution.definition });
+    if (pretty) {
+      writePrettyReferences(context, result);
+    } else {
+      context.writeJSONLine(result);
+      if (result.status !== "ok") context.exit(1);
+    }
+    return;
+  }
 
   if (input.line !== undefined) {
     const result = await findReferences(index, {

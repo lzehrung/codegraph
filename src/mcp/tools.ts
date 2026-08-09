@@ -245,11 +245,13 @@ export const MCP_TOOLS: Tool[] = [
   },
   {
     name: "goto",
-    description: "Resolve the definition at a file position.",
-    inputSchema: objectSchema(
-      { file: stringProperty, line: { type: "integer", minimum: 1 }, column: { type: "integer", minimum: 0 } },
-      ["file", "line", "column"],
-    ),
+    description: "Resolve a definition by portable handle, qualified file::symbol path, or file position.",
+    inputSchema: objectSchema({
+      handle: stringProperty,
+      file: stringProperty,
+      line: { type: "integer", minimum: 1 },
+      column: { type: "integer", minimum: 0 },
+    }),
   },
   {
     name: "refs",
