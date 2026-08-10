@@ -1124,6 +1124,79 @@ describe("Impact Analyzer Edge Cases", () => {
       expect(fallbackResult.explain.fanIn).toBe(2);
       expect(fallbackResult).toEqual(explicitFanInResult);
     });
+
+    it("discounts confidence but not severity for medium-confidence resolved references", async () => {
+      const mockIndex = {
+        graph: { edges: [] },
+        byFile: new Map(),
+      };
+
+      const changedSymbol = {
+        id: "test.ts::func::100",
+        file: "test.ts",
+        name: "func",
+        kind: SymbolKind.Function,
+        exported: false,
+        range: { start: { line: 1, column: 1, index: 100 }, end: { line: 3, column: 2, index: 150 } },
+        typeOnly: false,
+      };
+
+      const exactRef = {
+        file: "user.ts",
+        range: { start: { line: 5, column: 10 } },
+      };
+
+      const memberAccessRef = {
+        file: "user.ts",
+        range: { start: { line: 5, column: 10 } },
+        provenance: { resolution: "member-access", confidence: "medium" },
+      };
+
+      const exactResult = await calculateSeverity(changedSymbol, exactRef, ["directRef"], 0, mockIndex);
+      const memberAccessResult = await calculateSeverity(changedSymbol, memberAccessRef, ["directRef"], 0, mockIndex);
+
+      expect(memberAccessResult.severity).toBe(exactResult.severity);
+      expect(memberAccessResult.confidence).toBeLessThan(exactResult.confidence);
+      expect(memberAccessResult.confidence).toBeCloseTo(exactResult.confidence * 0.85, 5);
+      expect(memberAccessResult.explain.resolutionConfidence).toBe("medium");
+      expect(exactResult.explain.resolutionConfidence).toBeUndefined();
+    });
+
+    it("discounts confidence more sharply for low-confidence resolved references", async () => {
+      const mockIndex = {
+        graph: { edges: [] },
+        byFile: new Map(),
+      };
+
+      const changedSymbol = {
+        id: "test.ts::func::100",
+        file: "test.ts",
+        name: "func",
+        kind: SymbolKind.Function,
+        exported: false,
+        range: { start: { line: 1, column: 1, index: 100 }, end: { line: 3, column: 2, index: 150 } },
+        typeOnly: false,
+      };
+
+      const lowConfidenceRef = {
+        file: "user.ts",
+        range: { start: { line: 5, column: 10 } },
+        provenance: { confidence: "low" },
+      };
+
+      const mediumConfidenceRef = {
+        file: "user.ts",
+        range: { start: { line: 5, column: 10 } },
+        provenance: { confidence: "medium" },
+      };
+
+      const lowResult = await calculateSeverity(changedSymbol, lowConfidenceRef, ["directRef"], 0, mockIndex);
+      const mediumResult = await calculateSeverity(changedSymbol, mediumConfidenceRef, ["directRef"], 0, mockIndex);
+
+      expect(lowResult.severity).toBe(mediumResult.severity);
+      expect(lowResult.confidence).toBeLessThan(mediumResult.confidence);
+      expect(lowResult.explain.resolutionConfidence).toBe("low");
+    });
   });
 
   describe("analyzeImpact edge cases", () => {
@@ -1844,6 +1917,102 @@ index 1111111..2222222 100644
       expect(report.schemaVersion).toBeTypeOf("number");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("memberResolutionCoverage diagnostics", () => {
+  it("flags languages without receiver member-call resolution alongside receiver-aware languages", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-member-coverage-"));
+    try {
+      await fsp.mkdir(path.join(root, "src"), { recursive: true });
+      const tsFile = path.join(root, "src", "main.ts");
+      const pyFile = path.join(root, "src", "main.py");
+      await fsp.writeFile(tsFile, "export function helper(a: string) { return a; }\n", "utf8");
+      await fsp.writeFile(pyFile, "def helper(a):\n    return a\n", "utf8");
+
+      const index = await buildProjectIndex(root, { cache: "memory" });
+      const diffText = `diff --git a/src/main.ts b/src/main.ts
+--- a/src/main.ts
++++ b/src/main.ts
+@@ -1,1 +1,1 @@
+-export function helper(a: string) { return a; }
++export function helper(a: string, b: number) { return a; }
+diff --git a/src/main.py b/src/main.py
+--- a/src/main.py
++++ b/src/main.py
+@@ -1,2 +1,2 @@
+-def helper(a):
+-    return a
++def helper(a, b):
++    return a
+`;
+
+      const result = await analyzeImpactFromDiff(root, index, {
+        provider: "raw",
+        diffText,
+      });
+
+      if ("files" in result) {
+        throw new Error("Expected full impact report");
+      }
+
+      expect(result.diagnostics?.memberResolutionCoverage?.receiverAwareLanguages).toContain("ts");
+      expect(result.diagnostics?.memberResolutionCoverage?.limitedLanguages).toContain("python");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+});
+
+describe("transitive impact reason/confidence merge", () => {
+  it("preserves the stronger direct-reference reason and discounted confidence when a transitive edge also touches the file", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-transitive-merge-"));
+    try {
+      await fsp.mkdir(path.join(root, "src"), { recursive: true });
+      const serviceFile = path.join(root, "src", "service.ts");
+      const consumerFile = path.join(root, "src", "consumer.ts");
+      await fsp.writeFile(
+        serviceFile,
+        ["export class Service {", "  run(value: number, extra: number): number { return value; }", "}", ""].join("\n"),
+        "utf8",
+      );
+      await fsp.writeFile(
+        consumerFile,
+        [
+          'import { Service } from "./service";',
+          "const service = new Service();",
+          "export const result = service.run(1);",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const index = await buildProjectIndex(root, { cache: "memory" });
+      const diffText = `diff --git a/src/service.ts b/src/service.ts
+--- a/src/service.ts
++++ b/src/service.ts
+@@ -2,1 +2,1 @@
+-  run(value: number): number { return value; }
++  run(value: number, extra: number): number { return value; }
+`;
+
+      const result = await analyzeImpactFromDiff(root, index, { provider: "raw", diffText });
+      if ("files" in result) {
+        throw new Error("Expected full impact report");
+      }
+
+      // consumer.ts has both a direct member-access reference to `run` AND an
+      // incoming file-level transitive dependency edge (via the import). The
+      // direct reference is higher priority and carries a resolution-confidence
+      // discount; the transitive pass must not clobber either.
+      const consumerItem = result.impacted.find((item) => item.file === "src/consumer.ts");
+      expect(consumerItem?.reasons).toEqual(expect.arrayContaining(["directRef", "transitive"]));
+      expect(consumerItem?.explain?.reason).toBe("directRef");
+      expect(consumerItem?.explain?.resolutionConfidence).toBe("medium");
+      expect(consumerItem?.confidence).toBeCloseTo(0.85, 5);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 });

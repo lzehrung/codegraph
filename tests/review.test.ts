@@ -49,6 +49,41 @@ describe("Review report", () => {
     expect(report.diagnostics?.missingFiles ?? []).toEqual([]);
   });
 
+  it("flags languages without receiver member-call resolution in diagnostics", async () => {
+    const root = await mkTmpDir("dg-review-member-coverage-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    const tsFile = path.join(srcDir, "api.ts");
+    const pyFile = path.join(srcDir, "helper.py");
+    await fsp.writeFile(tsFile, "export function helper(a: string, b: number) { return a + b; }\n", "utf8");
+    await fsp.writeFile(pyFile, "def helper(a, b):\n    return a + b\n", "utf8");
+
+    const diffText = [
+      "diff --git a/src/api.ts b/src/api.ts",
+      "index 1234567..abcdef0 100644",
+      "--- a/src/api.ts",
+      "+++ b/src/api.ts",
+      "@@ -1,1 +1,1 @@",
+      "-export function helper(a: string) { return a; }",
+      "+export function helper(a: string, b: number) { return a + b; }",
+      "diff --git a/src/helper.py b/src/helper.py",
+      "index 1234567..abcdef0 100644",
+      "--- a/src/helper.py",
+      "+++ b/src/helper.py",
+      "@@ -1,2 +1,2 @@",
+      "-def helper(a):",
+      "-    return a",
+      "+def helper(a, b):",
+      "+    return a + b",
+      "",
+    ].join("\n");
+
+    const report = await buildReviewReport(root, { diffText });
+
+    expect(report.diagnostics?.memberResolutionCoverage?.receiverAwareLanguages).toContain("ts");
+    expect(report.diagnostics?.memberResolutionCoverage?.limitedLanguages).toContain("python");
+  });
+
   it("includes definition snippets and callsites when enabled", async () => {
     const root = await mkTmpDir("dg-review-details-");
     const srcDir = path.join(root, "src");

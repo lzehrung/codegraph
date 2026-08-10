@@ -20,6 +20,7 @@ export type SeverityExplain = {
   typeOnly?: boolean;
   depth?: number;
   hints?: string[];
+  resolutionConfidence?: "medium" | "low";
 };
 
 export type SeverityResult = {
@@ -44,6 +45,8 @@ const severityWeightKeys: ReadonlyArray<keyof SeverityWeights> = [
   "sameFile",
   "typeOnly",
   "depthDecay",
+  "resolutionConfidenceMedium",
+  "resolutionConfidenceLow",
 ];
 
 export function selectStrongerImpactReason(
@@ -146,6 +149,14 @@ export function calculateSeverity(
     score *= validatedWeights.transitive;
     explain.reason = "transitive";
     confidence = 0.6;
+  }
+
+  if (ref.provenance?.confidence === "medium") {
+    confidence *= validatedWeights.resolutionConfidenceMedium;
+    explain.resolutionConfidence = "medium";
+  } else if (ref.provenance?.confidence === "low") {
+    confidence *= validatedWeights.resolutionConfidenceLow;
+    explain.resolutionConfidence = "low";
   }
 
   if (changedSymbol.exported) {

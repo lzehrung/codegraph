@@ -606,6 +606,10 @@ Impact JSON responses include `schemaVersion` plus `format: "full" | "compact"` 
 
 `callCompatibility` is a conservative review hint, not type checking. Likely-mismatch support is provider-backed for source languages where codegraph resolves the callee and can count arguments with high confidence. Overload sets are skipped unless codegraph can prove the exact overload target. Pretty impact and review summaries show only `likely_mismatch` findings; compatible, unsupported, or ambiguous callsites are omitted from human output and appear in structured data only when useful.
 
+Each `impacted[]` item carries `severity` (0-1, ranked descending) and an independent `confidence` (0-1, how sure codegraph is the impact is real). `confidence` starts from the reference's relationship to the changed symbol (direct, namespace, import alias, or transitive) and is discounted further when the underlying reference was verified through medium- or low-confidence resolution, such as receiver/instance member-call matching (`obj.method()`) rather than an exact scope or import binding; `explain.resolutionConfidence` reports that discount tier (`"medium" | "low"`) when applied. This discount changes `confidence` only, not `severity` or item ranking, so a lower-certainty finding stays visible rather than silently dropping in rank.
+
+`diagnostics.memberResolutionCoverage` reports, for the source languages among changed files, which languages have verified receiver/instance member-call resolution (`receiverAwareLanguages`) and which do not (`limitedLanguages`). For `limitedLanguages`, consumers reached only through a receiver expression may be missing from `impacted[]` entirely, not just lower-confidence; direct name, import, and same-file references are unaffected. Pretty output prints a `Note:`/diagnostics line naming the limited languages when present; the field is omitted from JSON when there is nothing to flag. See `docs/language-parity.md` for which languages currently support receiver resolution.
+
 Pretty impact and review summaries also show high-confidence exact or renamed duplicate leads by default:
 
 - Human-readable `impact` defaults to `--duplicates changed`.
@@ -799,6 +803,10 @@ It accepts result-producing statements such as `SELECT` and `PRAGMA` and rejects
   "diagnostics": {
     "missingFiles": [],
     "symbolMappingParseFailures": [],
+    "memberResolutionCoverage": {
+      "receiverAwareLanguages": ["ts"],
+      "limitedLanguages": ["python"],
+    },
   },
 }
 ```
@@ -810,6 +818,7 @@ Important review-bundle details:
 - `changedFiles[].status` distinguishes normal updates from real Git deletions and explicit missing input files.
 - `diagnostics.symbolMappingParseFailures` reports files where symbol-level diff mapping degraded. Source-language failures affect `symbol-mapping-degraded` risk; graph-first document files remain diagnostics without becoming high-priority source review tasks.
 - `diagnostics.missingFiles` reports explicit paths that were not present on disk.
+- `diagnostics.memberResolutionCoverage` buckets the source languages among changed files by whether codegraph resolves receiver/instance member calls (`obj.method()`). `limitedLanguages` flags languages where that resolution is not implemented, so consumers reached only through a receiver may be undercounted; direct name, import, and same-file references remain unaffected. The field is omitted when there is nothing to flag.
 - `graph-delta` reports file-level edge additions and removals for changed files and is intended for lightweight CI artifacts.
 - `--include-symbol-details` attaches definition snippets and callsite ranges for changed symbols.
 - Changed symbol details may include `callCompatibility` for high-confidence provider-backed callsite arity mismatches after signature changes. Agents should inspect the code before treating these leads as defects.

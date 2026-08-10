@@ -369,6 +369,13 @@ export type Reference = {
   range: Range;
   context?: string;
   via?: { import?: ImportBinding; namespaceMember?: string };
+  /**
+   * Resolution provenance for this specific reference, populated only when the
+   * reference was verified through a goto-style lookup (e.g. member-access
+   * receiver resolution) rather than an exact scope/import binding. Absent
+   * means the reference came from an exact scope or import-binding match.
+   */
+  provenance?: ResolutionProvenance;
 };
 
 export type FindReferencesResult =

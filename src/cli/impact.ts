@@ -468,12 +468,20 @@ function formatPrettyImpactReport(impactReport: ImpactReport, duplicateSummary?:
         `references ${diagnostics.referencesRetained} retained (${diagnostics.referencesOmitted} omitted); ` +
         `deadline exceeded: ${diagnostics.deadlineExceeded ? "yes" : "no"}`,
     );
+    if (diagnostics.memberResolutionCoverage?.limitedLanguages.length) {
+      lines.push(
+        `Note: ${diagnostics.memberResolutionCoverage.limitedLanguages.join(", ")} do not resolve receiver member calls (e.g. obj.method()); consumers reached only through a receiver may be missing from this report.`,
+      );
+    }
   }
   lines.push("");
   for (const item of impactReport.impacted.slice(0, 10)) {
     const reasonLabel = formatImpactReasonLabel(item);
+    const confidenceNote = item.explain?.resolutionConfidence
+      ? `, resolution confidence: ${item.explain.resolutionConfidence}`
+      : "";
     lines.push(
-      `${item.file}: ${item.symbols.join(", ")} (${reasonLabel}, severity: ${(item.severity * 100).toFixed(1)}%)`,
+      `${item.file}: ${item.symbols.join(", ")} (${reasonLabel}, severity: ${(item.severity * 100).toFixed(1)}%${confidenceNote})`,
     );
     if ("refs" in item && item.refs?.length) {
       const contextsToShow = item.refs.slice(0, 2);

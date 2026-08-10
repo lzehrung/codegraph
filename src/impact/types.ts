@@ -216,6 +216,13 @@ export type ImpactItem = {
     depth?: number; // transitive depth
     refsCount?: number; // number of references found
     hints?: string[]; // lightweight hints like "signatureChanged", "exportChanged"
+    /**
+     * Set when a reference behind this impact was verified through
+     * medium- or low-confidence resolution (e.g. member-access receiver
+     * matching) rather than an exact scope/import binding. Absent means
+     * every contributing reference was exactly resolved.
+     */
+    resolutionConfidence?: "medium" | "low";
   };
 };
 
@@ -257,6 +264,25 @@ export type ImpactDiagnostics = {
     unknownCallsites: number;
     emittedHints: number;
   };
+  memberResolutionCoverage?: MemberResolutionCoverage;
+};
+
+/**
+ * Coverage of receiver/instance member-call resolution (e.g. `obj.method()`)
+ * for the source languages touched by the changed symbols in this analysis.
+ *
+ * Consumer discovery for a changed symbol only needs receiver resolution when
+ * some caller reaches it through a member-access expression rather than a
+ * direct name, import, or same-file scope binding. `limitedLanguages` flags
+ * source languages where codegraph cannot verify that kind of call site, so
+ * the impacted/reference set for those languages may under-count consumers
+ * reached only via an object/receiver.
+ */
+export type MemberResolutionCoverage = {
+  /** Source languages among the changed files where receiver member-call resolution is supported and verified. */
+  receiverAwareLanguages: string[];
+  /** Source languages among the changed files where receiver member-call resolution is not implemented. */
+  limitedLanguages: string[];
 };
 
 /**
@@ -464,6 +490,17 @@ export type SeverityWeights = {
   importAlias: number;
   /** Multiplier for transitive impact (default: 0.4) */
   transitive: number;
+  /**
+   * Confidence multiplier applied when a reference was verified through
+   * medium-confidence resolution (e.g. member-access receiver matching)
+   * rather than an exact scope/import binding (default: 0.85)
+   */
+  resolutionConfidenceMedium: number;
+  /**
+   * Confidence multiplier applied when a reference was verified through
+   * low-confidence resolution (default: 0.6)
+   */
+  resolutionConfidenceLow: number;
 };
 
 /** Default severity weights */
@@ -476,6 +513,8 @@ export const DEFAULT_SEVERITY_WEIGHTS: SeverityWeights = {
   namespaceMember: 0.8,
   importAlias: 0.6,
   transitive: 0.4,
+  resolutionConfidenceMedium: 0.85,
+  resolutionConfidenceLow: 0.6,
 };
 
 /**

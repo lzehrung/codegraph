@@ -508,6 +508,8 @@ These bundles highlight:
 
 When `callCompatibility` is present, start with hints where `status` is `likely_mismatch`, inspect `callsiteFile` and `callsiteRange`, and compare `expected` against `actual` before proposing a fix. Missing hints do not prove all callers are valid; codegraph skips unsupported, ambiguous, overloaded, spread, or unresolved callsites.
 
+`impacted[]` items separate `severity` (rank/impact if the finding is real) from `confidence` (certainty the finding is real). A lower `confidence` with `explain.resolutionConfidence` set to `"medium"` or `"low"` means the reference was matched through receiver/instance member-call resolution rather than an exact scope or import binding; treat it as a real finding worth checking, not noise, since it does not change severity or drop the item's rank. When `diagnostics.memberResolutionCoverage.limitedLanguages` is non-empty, treat the changed symbol's consumer list for those languages as a lower bound: codegraph has no receiver-call resolution for them, so callers reached only through `obj.method()` can be entirely absent from `impacted[]`, not just lower-confidence. Prefer `refs`/`grep` for a manual sweep of those files before concluding a symbol is safe to change.
+
 Pretty impact and review summaries include scoped duplicate leads by default:
 
 - human-readable `impact`: high-confidence exact or renamed clones within changed files.

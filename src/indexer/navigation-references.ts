@@ -8,7 +8,7 @@ import { readPhpNamespaceFromRange } from "./navigation-php.js";
 import { candidateFilesImportingTarget } from "./reference-candidates.js";
 import { buildScopeIndexFromSource, type ScopeIndex } from "./scope.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
-import type { ModuleIndex, ProjectIndex, SymbolDef } from "./types.js";
+import type { ModuleIndex, ProjectIndex, ResolutionProvenance, SymbolDef } from "./types.js";
 import type { ImportBinding } from "./import-types.js";
 
 export function getCachedScope(
@@ -83,6 +83,8 @@ async function collectNamedNodeReferences(index: ProjectIndex, fileId: string, s
   }
 }
 
+export type VerifiedNamedNodeReference = { range: Range; provenance?: ResolutionProvenance };
+
 export async function collectVerifiedNamedNodeReferences(
   index: ProjectIndex,
   fileId: string,
@@ -92,11 +94,11 @@ export async function collectVerifiedNamedNodeReferences(
     file: string;
     line: number;
     column: number;
-  }) => Promise<{ status: string; definition?: SymbolDef }>,
+  }) => Promise<{ status: string; definition?: SymbolDef; provenance?: ResolutionProvenance }>,
   maxVerified?: number,
-): Promise<Range[]> {
+): Promise<VerifiedNamedNodeReference[]> {
   const matches = await collectNamedNodeReferences(index, fileId, symbolName);
-  const verified: Range[] = [];
+  const verified: VerifiedNamedNodeReference[] = [];
   for (const range of matches) {
     if (maxVerified !== undefined && maxVerified > 0 && verified.length >= maxVerified) {
       break;
@@ -108,7 +110,7 @@ export async function collectVerifiedNamedNodeReferences(
     });
     if (resolved.status !== "ok" || !resolved.definition) continue;
     if (sameDef(resolved.definition, expectedDef)) {
-      verified.push(range);
+      verified.push({ range, ...(resolved.provenance ? { provenance: resolved.provenance } : {}) });
     }
   }
   return verified;

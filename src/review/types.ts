@@ -1,6 +1,6 @@
 import type { CandidateTestFile } from "../impact/context.js";
 import type { AnalysisSummary } from "../analysisSummary.js";
-import type { CallCompatibilityHint, FileChange } from "../impact/types.js";
+import type { CallCompatibilityHint, FileChange, MemberResolutionCoverage } from "../impact/types.js";
 import type { BuildReport, IncrementalBuildOptions, ProjectIndex } from "../indexer/types.js";
 import type { DuplicatePreparedAnalysis } from "../duplicates.js";
 import type { SqlReviewContext } from "../sql/review.js";
@@ -97,6 +97,7 @@ export type ReviewTask = {
 export type ReviewDiagnostics = {
   missingFiles: string[];
   symbolMappingParseFailures: string[];
+  memberResolutionCoverage?: MemberResolutionCoverage;
 };
 
 export type ReviewTimingReport = {

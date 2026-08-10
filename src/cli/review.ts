@@ -240,6 +240,11 @@ function formatReviewSummary(
     lines.push("Diagnostics:");
     lines.push(`- missing files: ${report.diagnostics.missingFiles.length}`);
     lines.push(`- symbol mapping parse failures: ${report.diagnostics.symbolMappingParseFailures.length}`);
+    if (report.diagnostics.memberResolutionCoverage?.limitedLanguages.length) {
+      lines.push(
+        `- limited receiver-call resolution: ${report.diagnostics.memberResolutionCoverage.limitedLanguages.join(", ")} (consumers reached only through a receiver, e.g. obj.method(), may be missing)`,
+      );
+    }
   }
   appendReviewCallCompatibility(lines, report);
   appendDuplicateLeadSummary(lines, duplicateSummary);
