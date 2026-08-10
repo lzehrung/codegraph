@@ -187,7 +187,9 @@
     "zod": "^4.4.3"
   },
   "overrides": {
-    "@hono/node-server": "^2.0.5"
+    "@hono/node-server": "^2.0.5",
+    "@emnapi/core": "1.11.3",
+    "@emnapi/runtime": "1.11.3"
   },
   "optionalDependencies": {
     "@lzehrung/codegraph-native": "^1.8.96"
