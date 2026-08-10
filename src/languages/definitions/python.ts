@@ -80,6 +80,10 @@ export const PYTHON_DEF: LanguageDefinition = {
       (function_definition name: (identifier) @name)
       (class_definition name: (identifier) @name)
       (assignment left: (identifier) @name)
+      ;; \`case Point(x=x, y=y):\` binds the right-hand identifier of a keyword
+      ;; pattern as a new local, distinct from the left-hand attribute name it
+      ;; matches against.
+      (keyword_pattern . (identifier) (dotted_name (identifier) @name))
     `,
     importBindings: `
       (import_statement) @stmt
@@ -100,6 +104,12 @@ export const PYTHON_DEF: LanguageDefinition = {
   },
   isDeclarationName: (node) => {
     const t = node.parent?.type;
+    if (
+      t === "dotted_name" &&
+      node.parent?.parent?.type === "keyword_pattern" &&
+      node.parent.namedChildren.length === 1
+    )
+      return true;
     return !!t && ["function_definition", "class_definition", "assignment", "aliased_import"].includes(t);
   },
   createsBlockScope: (n) => n.type === "module" || n.type === "block",

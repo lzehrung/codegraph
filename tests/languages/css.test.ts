@@ -29,6 +29,10 @@ const definition: LanguageTestDefinition = {
       },
       {
         from: "main.css",
+        to: { type: "file", path: "print.css" },
+      },
+      {
+        from: "main.css",
         to: { type: "external", name: "cdn-bg" },
       },
     ],

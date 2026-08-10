@@ -44,6 +44,15 @@ const definition: LanguageTestDefinition = {
         to: { type: "file", path: "helpers.py" },
       },
     ],
+    goToDefinition: [
+      {
+        name: "go to definition resolves a match keyword-pattern bound variable from its usage site",
+        file: "match_patterns.py",
+        line: 10,
+        column: 20,
+        expectedDefinition: { file: "match_patterns.py", line: 9 },
+      },
+    ],
   },
 };
 

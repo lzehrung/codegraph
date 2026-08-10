@@ -173,7 +173,7 @@ describe("Project Indexing", () => {
     it("should index all Python files", async () => {
       const index = await createTestIndex("python");
 
-      expectModuleCount(index, 5);
+      expectModuleCount(index, 6);
 
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "python");
       expectFileInIndex(index, path.join(samplePath, "main.py").replace(/\\/g, "/"));
@@ -181,6 +181,7 @@ describe("Project Indexing", () => {
       expectFileInIndex(index, path.join(samplePath, "helpers.py").replace(/\\/g, "/"));
       expectFileInIndex(index, path.join(samplePath, "relative-imports.py").replace(/\\/g, "/"));
       expectFileInIndex(index, path.join(samplePath, "__init__.py").replace(/\\/g, "/"));
+      expectFileInIndex(index, path.join(samplePath, "match_patterns.py").replace(/\\/g, "/"));
     });
 
     it("should detect Python imports and exports", async () => {
