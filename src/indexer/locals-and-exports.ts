@@ -32,9 +32,10 @@ const METHOD_LIKE_BINDING_NODE_TYPES = new Set([
   "function_definition",
 ]);
 
-// Class field declarations are absent from every language's native `locals` query
-// (only method-like declarations are queried), so `#private` and public class
-// fields resolve to zero definitions without this structural supplement.
+// TypeScript/TSX and JavaScript class field declarations are absent from
+// those languages' native `locals` query (only method-like declarations
+// are queried there), so `#private` and public class fields resolve to
+// zero definitions without this structural supplement.
 const FIELD_LIKE_BINDING_NODE_TYPES = new Set([
   "public_field_definition", // TypeScript/TSX
   "field_definition", // JavaScript
