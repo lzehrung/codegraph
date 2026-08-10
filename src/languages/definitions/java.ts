@@ -14,6 +14,11 @@ export const JAVA_DEF: LanguageDefinition = {
         captureId: "class",
       },
       {
+        type: "record_declaration",
+        nameQuery: "name: (identifier) @chunk.name",
+        captureId: "class",
+      },
+      {
         type: "interface_declaration",
         nameQuery: "name: (identifier) @chunk.name",
         captureId: "interface",
@@ -43,6 +48,7 @@ export const JAVA_DEF: LanguageDefinition = {
     `,
     exports: `
       (class_declaration name: (identifier) @name)
+      (record_declaration name: (identifier) @name)
       (interface_declaration name: (identifier) @name)
       (enum_declaration name: (identifier) @name)
       (enum_constant name: (identifier) @name)
@@ -51,6 +57,7 @@ export const JAVA_DEF: LanguageDefinition = {
     `,
     locals: `
       (class_declaration name: (identifier) @name)
+      (record_declaration name: (identifier) @name)
       (interface_declaration name: (identifier) @name)
       (enum_declaration name: (identifier) @name)
       (enum_constant name: (identifier) @name)
@@ -70,7 +77,7 @@ export const JAVA_DEF: LanguageDefinition = {
     const parent = node.parent;
     if (!parent) return "variable";
     if (parent.type === "method_declaration" || parent.type === "constructor_declaration") return "method";
-    if (parent.type === "class_declaration") return "class";
+    if (parent.type === "class_declaration" || parent.type === "record_declaration") return "class";
     if (parent.type === "interface_declaration") return "interface";
     if (parent.type === "enum_declaration") return "type";
     return "variable";
@@ -81,6 +88,7 @@ export const JAVA_DEF: LanguageDefinition = {
     const p = node.parent;
     if (!p) return false;
     if (p.type === "class_declaration" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "record_declaration" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "interface_declaration" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "enum_declaration" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "enum_constant" && p.childForFieldName("name")?.id === node.id) return true;

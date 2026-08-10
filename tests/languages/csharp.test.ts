@@ -50,6 +50,14 @@ const definition: LanguageTestDefinition = {
           { name: "Slow", kind: "variable" },
         ],
       },
+      {
+        file: "RecordTypes.cs",
+        includes: [
+          { name: "ISized", kind: "interface" },
+          { name: "Point", kind: "class" },
+          { name: "NamedShape", kind: "class" },
+        ],
+      },
     ],
   },
 };

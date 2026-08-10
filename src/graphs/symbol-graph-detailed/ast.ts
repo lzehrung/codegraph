@@ -55,6 +55,7 @@ export function collectDetailedDeclarations(
   ]);
   const typeNodeTypes = new Set([
     "class_declaration",
+    "record_declaration",
     "abstract_class_declaration",
     "class_definition",
     "class",
