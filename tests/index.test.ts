@@ -181,6 +181,7 @@ describe("Project Indexing", () => {
       expectFileInIndex(index, path.join(samplePath, "helpers.py").replace(/\\/g, "/"));
       expectFileInIndex(index, path.join(samplePath, "relative-imports.py").replace(/\\/g, "/"));
       expectFileInIndex(index, path.join(samplePath, "__init__.py").replace(/\\/g, "/"));
+      expectFileInIndex(index, path.join(samplePath, "match_patterns.py").replace(/\\/g, "/"));
     });
 
     it("should detect Python imports and exports", async () => {

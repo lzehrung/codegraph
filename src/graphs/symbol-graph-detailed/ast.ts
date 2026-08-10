@@ -67,7 +67,7 @@ export function collectDetailedDeclarations(
     "class_specifier",
     "struct_specifier",
     // Enums can implement interfaces/protocols in several supported languages
-    // (Java, C#, PHP, Kotlin) — treat them as class-kind nodes so
+    // (Java, C#, PHP, Kotlin) - treat them as class-kind nodes so
     // emitClassInheritanceEdges sees them and wires implements/extends edges.
     "enum_declaration",
   ]);
