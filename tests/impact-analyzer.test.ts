@@ -1963,6 +1963,83 @@ diff --git a/src/main.py b/src/main.py
       await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
+
+  it("omits the field entirely when every changed language is receiver-aware", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-member-coverage-clean-"));
+    try {
+      await fsp.mkdir(path.join(root, "src"), { recursive: true });
+      const tsFile = path.join(root, "src", "main.ts");
+      await fsp.writeFile(tsFile, "export function helper(a: string) { return a; }\n", "utf8");
+
+      const index = await buildProjectIndex(root, { cache: "memory" });
+      const diffText = `diff --git a/src/main.ts b/src/main.ts
+--- a/src/main.ts
++++ b/src/main.ts
+@@ -1,1 +1,1 @@
+-export function helper(a: string) { return a; }
++export function helper(a: string, b: number) { return a; }
+`;
+
+      const result = await analyzeImpactFromDiff(root, index, {
+        provider: "raw",
+        diffText,
+      });
+
+      if ("files" in result) {
+        throw new Error("Expected full impact report");
+      }
+
+      expect(result.diagnostics?.memberResolutionCoverage).toBeUndefined();
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
+  it("still flags a limited language even when maxChangedSymbols budgets it out of the reference-lookup queue", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-member-coverage-budget-"));
+    try {
+      await fsp.mkdir(path.join(root, "src"), { recursive: true });
+      const tsFile = path.join(root, "src", "a.ts");
+      const pyFile = path.join(root, "src", "b.py");
+      await fsp.writeFile(tsFile, "export function helperA(x: string) { return x; }\n", "utf8");
+      await fsp.writeFile(pyFile, "def helperB(x):\n    return x\n", "utf8");
+
+      const index = await buildProjectIndex(root, { cache: "memory" });
+      const diffText = `diff --git a/src/a.ts b/src/a.ts
+--- a/src/a.ts
++++ b/src/a.ts
+@@ -1,1 +1,1 @@
+-export function helperA(x: string) { return x; }
++export function helperA(x: string, y: number) { return x; }
+diff --git a/src/b.py b/src/b.py
+--- a/src/b.py
++++ b/src/b.py
+@@ -1,2 +1,2 @@
+-def helperB(x):
+-    return x
++def helperB(x, y):
++    return x
+`;
+
+      // Force the ranking budget to select only one changed symbol for reference
+      // lookups; memberResolutionCoverage must still see both languages because
+      // it is computed from all non-ignored changed symbols, not the post-budget
+      // reference-lookup queue.
+      const result = await analyzeImpactFromDiff(root, index, {
+        provider: "raw",
+        diffText,
+        maxChangedSymbols: 1,
+      });
+
+      if ("files" in result) {
+        throw new Error("Expected full impact report");
+      }
+
+      expect(result.diagnostics?.memberResolutionCoverage?.limitedLanguages).toContain("python");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
 });
 
 describe("transitive impact reason/confidence merge", () => {

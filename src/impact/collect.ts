@@ -54,10 +54,6 @@ export function createImpactDiagnostics(changedFilesTotal: number, changedFilesI
       unknownCallsites: 0,
       emittedHints: 0,
     },
-    memberResolutionCoverage: {
-      receiverAwareLanguages: [],
-      limitedLanguages: [],
-    },
   };
 }
 

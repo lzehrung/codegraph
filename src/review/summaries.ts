@@ -273,7 +273,10 @@ export async function summarizeChangedFiles(input: {
   );
 
   const changedSymbolsForCompatibility = fileEntries.flatMap((entry) => entry.changedSymbols);
-  diagnostics.memberResolutionCoverage = computeMemberResolutionCoverage(changedSymbolsForCompatibility, index);
+  const memberResolutionCoverage = computeMemberResolutionCoverage(changedSymbolsForCompatibility, index);
+  if (memberResolutionCoverage.limitedLanguages.length) {
+    diagnostics.memberResolutionCoverage = memberResolutionCoverage;
+  }
   const referenceCache = createReferenceLookupCache();
   if (changedSymbolsForCompatibility.length) {
     await attachCallCompatibilityHints(index, changedSymbolsForCompatibility, {

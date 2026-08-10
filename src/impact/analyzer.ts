@@ -94,7 +94,10 @@ export async function analyzeImpact(
   );
   recordReferenceLookupOmitted(workBudget, filteredChangedSymbols.length - budgetedChangedSymbols.length);
   if (diagnostics) {
-    diagnostics.memberResolutionCoverage = computeMemberResolutionCoverage(budgetedChangedSymbols, index);
+    const memberResolutionCoverage = computeMemberResolutionCoverage(filteredChangedSymbols, index);
+    if (memberResolutionCoverage.limitedLanguages.length) {
+      diagnostics.memberResolutionCoverage = memberResolutionCoverage;
+    }
   }
 
   const directOptions = {

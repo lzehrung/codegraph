@@ -470,7 +470,7 @@ function formatPrettyImpactReport(impactReport: ImpactReport, duplicateSummary?:
     );
     if (diagnostics.memberResolutionCoverage?.limitedLanguages.length) {
       lines.push(
-        `Note: ${diagnostics.memberResolutionCoverage.limitedLanguages.join(", ")} do not resolve receiver member calls (e.g. obj.method()); consumers reached only through a receiver may be missing from this report.`,
+        `Note: limited receiver-call resolution for: ${diagnostics.memberResolutionCoverage.limitedLanguages.join(", ")}; consumers reached only through a receiver (e.g. obj.method()) may be missing from this report.`,
       );
     }
   }

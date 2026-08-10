@@ -319,7 +319,7 @@ export function summarizeOrders(rows: Array<{ amount: number; tax: number }>) {
 
         expect(stdout).toContain("resolution confidence: medium");
         expect(stdout).toContain(
-          "Note: python do not resolve receiver member calls (e.g. obj.method()); consumers reached only through a receiver may be missing from this report.",
+          "Note: limited receiver-call resolution for: python; consumers reached only through a receiver (e.g. obj.method()) may be missing from this report.",
         );
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
