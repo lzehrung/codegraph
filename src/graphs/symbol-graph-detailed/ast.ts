@@ -66,6 +66,10 @@ export function collectDetailedDeclarations(
     "struct_declaration",
     "class_specifier",
     "struct_specifier",
+    // Enums can implement interfaces/protocols in several supported languages
+    // (Java, C#, PHP, Kotlin) — treat them as class-kind nodes so
+    // emitClassInheritanceEdges sees them and wires implements/extends edges.
+    "enum_declaration",
   ]);
 
   const findDefinition = (name: string, nameNode: SyntaxNodeLike): SymbolDef | undefined => {

@@ -173,7 +173,7 @@ describe("Project Indexing", () => {
     it("should index all Python files", async () => {
       const index = await createTestIndex("python");
 
-      expectModuleCount(index, 5);
+      expectModuleCount(index, 6);
 
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "python");
       expectFileInIndex(index, path.join(samplePath, "main.py").replace(/\\/g, "/"));
