@@ -191,6 +191,31 @@ describe("authoritative empty native results", () => {
     expect(specs[0]!.spec).toBe("./bar");
   });
 
+  it("extracts triple-slash reference specifiers when native imports are empty", () => {
+    const support = supportById("ts")!;
+    const source = '/// <reference path="./globals.d.ts" />\nexport const x = 1;\n';
+    const specs = collectModuleSpecifiersFromSource(support, undefined, source, {
+      nativeQueries: { imports: [], exports: [], locals: [], importBindings: [] },
+    });
+    expect(specs).toContainEqual(expect.objectContaining({ spec: "./globals.d.ts", typeOnly: true }));
+  });
+
+  it("extracts a path= attribute regardless of its position among other reference attributes", () => {
+    const support = supportById("ts")!;
+    const source = '/// <reference no-default-lib="true" path="./globals.d.ts" />\nexport const x = 1;\n';
+    const specs = collectModuleSpecifiersFromSource(support, undefined, source, {
+      nativeQueries: { imports: [], exports: [], locals: [], importBindings: [] },
+    });
+    expect(specs).toContainEqual(expect.objectContaining({ spec: "./globals.d.ts", typeOnly: true }));
+  });
+
+  it("extracts triple-slash reference specifiers in fast mode", () => {
+    const support = supportById("ts")!;
+    const source = '/// <reference path="./globals.d.ts" />\nexport const x = 1;\n';
+    const specs = collectModuleSpecifiersFromSource(support, undefined, source, { fast: true });
+    expect(specs).toContainEqual(expect.objectContaining({ spec: "./globals.d.ts", typeOnly: true }));
+  });
+
   it("reports query-empty when non-authoritative native module specifiers fall back to regex recovery", () => {
     const tsxSupport = supportById("tsx")!;
     const support = {

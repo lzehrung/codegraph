@@ -161,6 +161,36 @@ function extractCssUrlSpecifiers(source: string): ModuleSpecifier[] {
   return out;
 }
 
+// `/// <reference path="./other.ts" />` - a type-only file dependency directive.
+// Distinct from `<reference lib="..." />`/`<reference types="..." />`, which name
+// a TS lib or an @types package rather than a project-relative file, and are left
+// unresolved (no `path=` attribute to extract). Triple-slash directives allow their
+// attributes in any order (and other attributes may appear alongside `path=`), so
+// this matches the whole tag first and then searches within it for `path=`,
+// rather than requiring `path=` to be the first/only attribute.
+const TRIPLE_SLASH_REFERENCE_TAG_PATTERN = /^\/\/\/\s*<reference\s+([^>]*?)\/>/gm;
+const TRIPLE_SLASH_PATH_ATTRIBUTE_PATTERN = /\bpath\s*=\s*["']([^"']+)["']/;
+
+function extractTripleSlashReferenceSpecifiers(source: string): ModuleSpecifier[] {
+  const out: ModuleSpecifier[] = [];
+  for (const tagMatch of source.matchAll(TRIPLE_SLASH_REFERENCE_TAG_PATTERN)) {
+    const attributes = tagMatch[1] ?? "";
+    const spec = TRIPLE_SLASH_PATH_ATTRIBUTE_PATTERN.exec(attributes)?.[1]?.trim();
+    if (!spec) continue;
+    out.push({ spec, typeOnly: true });
+  }
+  return out;
+}
+
+// Triple-slash reference edges are a source-text scan, independent of whether
+// the native query ran — apply it on every TS/TSX exit path (fast-mode regex
+// recovery, the native-query happy path, and the query-unavailable/query-error
+// regex-recovery fallback), not just the native-query path.
+function appendTripleSlashReferencesForTs(support: LanguageSupport, source: string, out: ModuleSpecifier[]): void {
+  if (support.id !== "ts" && support.id !== "tsx") return;
+  appendUniqueSpecifiers(out, extractTripleSlashReferenceSpecifiers(source), makeSeenSet(out));
+}
+
 function stripCssComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, (match) => match.replace(/[^\r\n]/g, " "));
 }
@@ -298,6 +328,7 @@ export function collectModuleSpecifiersFromSource(
     } catch {
       // ignore
     }
+    appendTripleSlashReferencesForTs(support, source, out);
     return normalizeModuleSpecifiers(out);
   }
 
@@ -359,6 +390,7 @@ export function collectModuleSpecifiersFromSource(
           reportFallback("query-empty");
         }
       }
+      appendTripleSlashReferencesForTs(support, source, out);
       if (out.length || isNativeQueryAuthoritative(support, "imports")) {
         return normalizeModuleSpecifiers(out);
       }
@@ -393,6 +425,7 @@ export function collectModuleSpecifiersFromSource(
         // ignore
       }
     }
+    appendTripleSlashReferencesForTs(support, source, out);
     return normalizeModuleSpecifiers(out);
   }
 

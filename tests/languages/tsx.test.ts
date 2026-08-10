@@ -11,6 +11,7 @@ const definition: LanguageTestDefinition = {
       expectedChunks: (chunks) => {
         expect(chunks.some((c) => c.type === "imports")).toBe(true);
         expect(chunks.some((c) => c.type === "function" && c.name === "Button")).toBe(true);
+        expect(chunks.some((c) => c.type === "jsx" && c.text.includes("One") && c.text.includes("Two"))).toBe(true);
       },
     },
   ],

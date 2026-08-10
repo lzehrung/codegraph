@@ -25,6 +25,10 @@ const definition: LanguageTestDefinition = {
         from: "dynamic-import.ts",
         to: { type: "file", path: "helpers.ts" },
       },
+      {
+        from: "triple-slash-reference.ts",
+        to: { type: "file", path: "triple-slash-globals.d.ts" },
+      },
     ],
     symbols: [
       {
