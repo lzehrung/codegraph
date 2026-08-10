@@ -161,6 +161,22 @@ function extractCssUrlSpecifiers(source: string): ModuleSpecifier[] {
   return out;
 }
 
+// `/// <reference path="./other.ts" />` — a type-only file dependency directive.
+// Distinct from `<reference lib="..." />`/`<reference types="..." />`, which name
+// a TS lib or an @types package rather than a project-relative file, and are left
+// unresolved (no `path=` attribute to extract).
+const TRIPLE_SLASH_REFERENCE_PATH_PATTERN = /^\/\/\/\s*<reference\s+path\s*=\s*["']([^"']+)["']\s*\/>/gm;
+
+function extractTripleSlashReferenceSpecifiers(source: string): ModuleSpecifier[] {
+  const out: ModuleSpecifier[] = [];
+  for (const match of source.matchAll(TRIPLE_SLASH_REFERENCE_PATH_PATTERN)) {
+    const spec = match[1]?.trim();
+    if (!spec) continue;
+    out.push({ spec, typeOnly: true });
+  }
+  return out;
+}
+
 function stripCssComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, (match) => match.replace(/[^\r\n]/g, " "));
 }
@@ -358,6 +374,9 @@ export function collectModuleSpecifiersFromSource(
         if (!beforeCssRecovery && out.length) {
           reportFallback("query-empty");
         }
+      }
+      if (support.id === "ts" || support.id === "tsx") {
+        appendUniqueSpecifiers(out, extractTripleSlashReferenceSpecifiers(source), makeSeenSet(out));
       }
       if (out.length || isNativeQueryAuthoritative(support, "imports")) {
         return normalizeModuleSpecifiers(out);

@@ -38,7 +38,9 @@ const ANGULAR_JS_TEMPLATE_URL_PATTERN = /templateUrl\s*:\s*(['"`])([^'"`]+)\1/gs
 const ANGULAR_JS_CONTROLLER_REF_PATTERN = /controller\s*:\s*(['"])([^'"`]+)\1/gs;
 
 function looksLikeAngularJsSource(source: string): boolean {
-  return /angular\s*\.\s*module\s*\(/.test(source);
+  // `angular.module(` (common) or `angular["module"](`/`angular['module'](` (bracket access,
+  // e.g. from minified or lint-avoidance code) both register/retrieve an Angular module.
+  return /angular\s*(?:\.\s*module|\[\s*(['"])module\1\s*\])\s*\(/.test(source);
 }
 
 function parseRegistrationKind(value: string): AngularJsRegistrationKind | undefined {

@@ -66,6 +66,28 @@ describe("AngularJS framework characterization", () => {
     ).toBe(true);
   });
 
+  it("triggers AngularJS heuristics for bracket-access module registration", async () => {
+    const root = frameworkSamplePath("bracket-access");
+
+    const index = await buildProjectIndex(root);
+    const graph = await collectGraph(root, Array.from(index.byFile.keys()));
+
+    const controllerFile = normalizePath(path.join(root, "user.controller.js"));
+    const serviceFile = normalizePath(path.join(root, "user.service.js"));
+
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from === controllerFile && edge.to.type === "file" && normalizePath(edge.to.path) === serviceFile,
+      ),
+    ).toBe(true);
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === controllerFile && edge.to.type === "external" && edge.to.name === "$scope",
+      ),
+    ).toBe(true);
+  });
+
   it("adds heuristic graph edges for AngularJS template, controller, and DI wiring", async () => {
     const root = frameworkSamplePath("graph");
 
