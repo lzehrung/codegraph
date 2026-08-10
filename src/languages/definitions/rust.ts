@@ -53,7 +53,7 @@ export const RUST_DEF: LanguageDefinition = {
       (static_item name: (identifier) @name) @stmt
       (use_declaration argument: (scoped_identifier path: (identifier) @from name: (identifier) @src)) @stmt
       (use_declaration argument: (identifier) @src) @stmt
-      ;; Grouped imports: \`use foo::{Bar, Baz};\` — emit one export per named
+      ;; Grouped imports: \`use foo::{Bar, Baz};\` - emit one export per named
       ;; member so each is a resolvable target, matching the plain
       ;; scoped_identifier form above.
       (use_declaration argument: (scoped_use_list path: (identifier) @from list: (use_list (identifier) @src))) @stmt
