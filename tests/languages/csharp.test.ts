@@ -68,6 +68,15 @@ const definition: LanguageTestDefinition = {
         expectedDefinition: { file: "PatternMatching.cs", line: 7 },
       },
     ],
+    references: [
+      {
+        name: "find references for an is-pattern bound variable includes its usage site",
+        file: "PatternMatching.cs",
+        line: 7,
+        column: 29,
+        minimumCount: 2,
+      },
+    ],
   },
 };
 
