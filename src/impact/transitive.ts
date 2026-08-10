@@ -3,7 +3,7 @@ import { type ProjectIndex } from "../indexer/types.js";
 import { compileTestPatterns, createIndexTestFileMatcher } from "./testPatterns.js";
 import type { FileChange, ImpactItem, ImpactOptions, ImpactReason } from "./types.js";
 import { createImpactIgnoreMatcher } from "./path.js";
-import { calculateTransitiveSeverity } from "./severity.js";
+import { calculateTransitiveSeverity, selectStrongerImpactReason } from "./severity.js";
 
 type ImpactEmitter = (item: ImpactItem, phase: "partial" | "final") => void;
 
@@ -178,6 +178,7 @@ export function analyzeTransitiveImpact(
       const fanIn = reverseDeps.get(dependentFile)?.length || 0;
       const resolvedDepth = improvesDepth ? nextDepth : Math.min(existing?.depth ?? nextDepth, nextDepth);
 
+      const bestReason = selectStrongerImpactReason(existing?.explain?.reason, reason);
       const transitiveItem: ImpactItem = {
         file: dependentFile,
         symbols: existing?.symbols || [],
@@ -186,7 +187,7 @@ export function analyzeTransitiveImpact(
         depth: resolvedDepth,
         explain: {
           ...existing?.explain,
-          reason,
+          ...(bestReason !== undefined && { reason: bestReason }),
           depth: resolvedDepth,
           ...(fanIn > 0 && { fanIn }),
         },

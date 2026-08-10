@@ -264,6 +264,71 @@ export function summarizeOrders(rows: Array<{ amount: number; tax: number }>) {
   );
 
   it(
+    "surfaces resolution confidence and member-resolution coverage in pretty output",
+    async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-cli-resolution-"));
+      try {
+        const srcDir = path.join(root, "src");
+        await fsp.mkdir(srcDir, { recursive: true });
+        const serviceFile = path.join(srcDir, "service.ts");
+        const consumerFile = path.join(srcDir, "consumer.ts");
+        const pyFile = path.join(root, "helper.py");
+        await fsp.writeFile(
+          serviceFile,
+          ["export class Service {", "  run(value: number, extra: number): number { return value; }", "}", ""].join(
+            "\n",
+          ),
+          "utf8",
+        );
+        await fsp.writeFile(
+          consumerFile,
+          [
+            'import { Service } from "./service";',
+            "const service = new Service();",
+            "export const result = service.run(1);",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        await fsp.writeFile(pyFile, "def helper(a, b):\n    return a + b\n", "utf8");
+
+        const diffText = [
+          "diff --git a/src/service.ts b/src/service.ts",
+          "index 1234567..abcdef0 100644",
+          "--- a/src/service.ts",
+          "+++ b/src/service.ts",
+          "@@ -2,1 +2,1 @@",
+          "-  run(value: number): number { return value; }",
+          "+  run(value: number, extra: number): number { return value; }",
+          "diff --git a/helper.py b/helper.py",
+          "index 1234567..abcdef0 100644",
+          "--- a/helper.py",
+          "+++ b/helper.py",
+          "@@ -1,2 +1,2 @@",
+          "-def helper(a):",
+          "-    return a",
+          "+def helper(a, b):",
+          "+    return a + b",
+          "",
+        ].join("\n");
+
+        const stdout = await runImpactCli(["impact", "--root", root, "--provider", "raw", "--pretty"], {
+          cwd: root,
+          stdin: diffText,
+        });
+
+        expect(stdout).toContain("resolution confidence: medium");
+        expect(stdout).toContain(
+          "Note: limited receiver-call resolution for: python; consumers reached only through a receiver (e.g. obj.method()) may be missing from this report.",
+        );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+    slowCliTimeoutMs,
+  );
+
+  it(
     "uses raw diff copy similarity metadata for scoped duplicate leads",
     async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-cli-copy-duplicates-"));
@@ -463,6 +528,49 @@ describe("review CLI output", () => {
 
         expect(result.stdout).toContain("Review Summary");
         expect(result.stderr).not.toContain("No files provided");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+    slowCliTimeoutMs,
+  );
+
+  it(
+    "flags languages without receiver member-call resolution in diagnostics",
+    async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-review-cli-coverage-"));
+      try {
+        runGit(root, ["init"]);
+        runGit(root, ["config", "user.email", "review@test.local"]);
+        runGit(root, ["config", "user.name", "Codegraph Bot"]);
+        await fsp.mkdir(path.join(root, "src"), { recursive: true });
+        await fsp.writeFile(
+          path.join(root, "src", "api.ts"),
+          "export function helper(a: string) { return a; }\n",
+          "utf8",
+        );
+        await fsp.writeFile(path.join(root, "src", "helper.py"), "def helper(a):\n    return a\n", "utf8");
+        runGit(root, ["add", "."]);
+        runGit(root, ["commit", "-m", "initial"]);
+        const base = runGit(root, ["rev-parse", "HEAD"]);
+
+        await fsp.writeFile(
+          path.join(root, "src", "api.ts"),
+          "export function helper(a: string, b: number) { return a; }\n",
+          "utf8",
+        );
+        await fsp.writeFile(path.join(root, "src", "helper.py"), "def helper(a, b):\n    return a + b\n", "utf8");
+        runGit(root, ["add", "."]);
+        runGit(root, ["commit", "-m", "signature changes"]);
+        const head = runGit(root, ["rev-parse", "HEAD"]);
+
+        const result = await runCodegraphCliResult(["review", "--root", root, "--base", base, "--head", head], {
+          cwd: root,
+        });
+
+        expect(result.stdout).toContain(
+          "limited receiver-call resolution: python (consumers reached only through a receiver, e.g. obj.method(), may be missing)",
+        );
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }

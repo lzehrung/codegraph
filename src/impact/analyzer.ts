@@ -7,6 +7,7 @@ import { analyzeDirectReferences } from "./direct.js";
 import { analyzeTransitiveImpact, seedTransitiveFromFiles } from "./transitive.js";
 import { buildDependencyStats } from "./severity.js";
 import { attachCallCompatibilityHints } from "./callCompatibility.js";
+import { computeMemberResolutionCoverage } from "./memberResolutionCoverage.js";
 import { createReferenceLookupCache } from "./referenceCache.js";
 import {
   createImpactWorkBudget,
@@ -92,6 +93,12 @@ export async function analyzeImpact(
     fanInByFile,
   );
   recordReferenceLookupOmitted(workBudget, filteredChangedSymbols.length - budgetedChangedSymbols.length);
+  if (diagnostics) {
+    const memberResolutionCoverage = computeMemberResolutionCoverage(filteredChangedSymbols, index);
+    if (memberResolutionCoverage.limitedLanguages.length) {
+      diagnostics.memberResolutionCoverage = memberResolutionCoverage;
+    }
+  }
 
   const directOptions = {
     maxRefs,

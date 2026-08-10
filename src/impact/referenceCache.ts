@@ -92,6 +92,7 @@ function cloneReference(reference: Reference): Reference {
     range: reference.range,
     ...(reference.context !== undefined ? { context: reference.context } : {}),
     ...(reference.via !== undefined ? { via: reference.via } : {}),
+    ...(reference.provenance !== undefined ? { provenance: reference.provenance } : {}),
   };
 }
 

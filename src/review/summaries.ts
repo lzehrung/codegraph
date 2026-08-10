@@ -6,6 +6,7 @@ import { findReferences } from "../indexer/navigation.js";
 import { type ExportEntry, type ModuleIndex, type ProjectIndex, type SymbolDef } from "../indexer/types.js";
 import { symbolId } from "../indexer/symbols.js";
 import { attachCallCompatibilityHints } from "../impact/callCompatibility.js";
+import { computeMemberResolutionCoverage } from "../impact/memberResolutionCoverage.js";
 import { locateChangedSymbolsWithLines, mapChangedLinesToSymbols } from "../impact/map.js";
 import type { CallCompatibilityHint, ChangedSymbol, FileChange, Hunk } from "../impact/types.js";
 import type { FileId, Range } from "../types.js";
@@ -272,6 +273,10 @@ export async function summarizeChangedFiles(input: {
   );
 
   const changedSymbolsForCompatibility = fileEntries.flatMap((entry) => entry.changedSymbols);
+  const memberResolutionCoverage = computeMemberResolutionCoverage(changedSymbolsForCompatibility, index);
+  if (memberResolutionCoverage.limitedLanguages.length) {
+    diagnostics.memberResolutionCoverage = memberResolutionCoverage;
+  }
   const referenceCache = createReferenceLookupCache();
   if (changedSymbolsForCompatibility.length) {
     await attachCallCompatibilityHints(index, changedSymbolsForCompatibility, {

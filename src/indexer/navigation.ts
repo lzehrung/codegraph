@@ -346,9 +346,9 @@ export async function findReferences(
             (params) => goToDefinition(index, params),
             remainingReferences,
           );
-          for (const range of ranges) {
+          for (const { range, provenance } of ranges) {
             if (hasReachedMaxReferences()) break;
-            pushRef({ file: fileId, range, via: { import: imp } });
+            pushRef({ file: fileId, range, via: { import: imp }, ...(provenance ? { provenance } : {}) });
           }
         } else {
           let exported = exportedName;
@@ -387,9 +387,9 @@ export async function findReferences(
           (params) => goToDefinition(index, params),
           remainingReferences,
         );
-        for (const range of ranges) {
+        for (const { range, provenance } of ranges) {
           if (hasReachedMaxReferences()) break;
-          pushRef({ file: fileId, range });
+          pushRef({ file: fileId, range, ...(provenance ? { provenance } : {}) });
         }
       }
     }
@@ -409,9 +409,9 @@ export async function findReferences(
         (params) => goToDefinition(index, params),
         remainingReferences,
       );
-      for (const range of ranges) {
+      for (const { range, provenance } of ranges) {
         if (hasReachedMaxReferences()) break;
-        pushRef({ file: fileId, range });
+        pushRef({ file: fileId, range, ...(provenance ? { provenance } : {}) });
       }
     }
   }

@@ -117,7 +117,11 @@ export function buildReviewTasks(input: {
 }
 
 export function hasDiagnostics(diagnostics: ReviewDiagnostics): boolean {
-  return !!(diagnostics.missingFiles.length || diagnostics.symbolMappingParseFailures.length);
+  return !!(
+    diagnostics.missingFiles.length ||
+    diagnostics.symbolMappingParseFailures.length ||
+    diagnostics.memberResolutionCoverage?.limitedLanguages.length
+  );
 }
 
 export function isRiskRelevantSymbolMappingFile(file: string): boolean {
