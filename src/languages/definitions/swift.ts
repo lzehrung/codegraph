@@ -24,6 +24,16 @@ export const SWIFT_DEF: LanguageDefinition = {
         captureId: "enum",
       },
       {
+        type: "class_declaration",
+        nameQuery: 'declaration_kind: "extension" name: (user_type (type_identifier) @chunk.name)',
+        captureId: "extension",
+      },
+      {
+        type: "class_declaration",
+        nameQuery: 'declaration_kind: "actor" name: (_) @chunk.name',
+        captureId: "actor",
+      },
+      {
         type: "protocol_declaration",
         nameQuery: "name: (type_identifier) @chunk.name",
         captureId: "protocol",
@@ -76,6 +86,8 @@ export const SWIFT_DEF: LanguageDefinition = {
       (class_declaration declaration_kind: "class" name: (_) @name)
       (class_declaration declaration_kind: "struct" name: (_) @name)
       (class_declaration declaration_kind: "enum" name: (_) @name)
+      (class_declaration declaration_kind: "extension" name: (user_type (type_identifier) @name))
+      (class_declaration declaration_kind: "actor" name: (_) @name)
       (enum_entry name: (simple_identifier) @name)
       (protocol_declaration name: (type_identifier) @name)
       (function_declaration name: (simple_identifier) @name)
@@ -88,6 +100,8 @@ export const SWIFT_DEF: LanguageDefinition = {
       (class_declaration declaration_kind: "class" name: (_) @name)
       (class_declaration declaration_kind: "struct" name: (_) @name)
       (class_declaration declaration_kind: "enum" name: (_) @name)
+      (class_declaration declaration_kind: "extension" name: (user_type (type_identifier) @name))
+      (class_declaration declaration_kind: "actor" name: (_) @name)
       (enum_entry name: (simple_identifier) @name)
       (protocol_declaration name: (type_identifier) @name)
       (function_declaration name: (simple_identifier) @name)
@@ -116,6 +130,9 @@ export const SWIFT_DEF: LanguageDefinition = {
       if (declarationKind === "enum") return "type";
       return "class";
     }
+    // Extension names are wrapped in a user_type node
+    // (`extension Container { ... }` -> name: (user_type (type_identifier))).
+    if (parent.type === "user_type" && parent.parent?.type === "class_declaration") return "class";
     if (parent.type === "protocol_declaration" || parent.type === "typealias_declaration") return "type";
     return "variable";
   },
@@ -123,6 +140,12 @@ export const SWIFT_DEF: LanguageDefinition = {
     const parent = node.parent;
     if (!parent) return false;
     if (parent.type === "class_declaration" && parent.childForFieldName("name")?.id === node.id) return true;
+    if (
+      parent.type === "user_type" &&
+      parent.parent?.type === "class_declaration" &&
+      parent.parent.childForFieldName("name")?.id === parent.id
+    )
+      return true;
     if (parent.type === "protocol_declaration" && parent.childForFieldName("name")?.id === node.id) return true;
     if (parent.type === "enum_entry" && parent.childForFieldName("name")?.id === node.id) return true;
     if (parent.type === "function_declaration" && parent.childForFieldName("name")?.id === node.id) return true;

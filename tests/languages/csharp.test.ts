@@ -59,6 +59,24 @@ const definition: LanguageTestDefinition = {
         ],
       },
     ],
+    goToDefinition: [
+      {
+        name: "go to definition resolves an is-pattern bound variable from its usage site",
+        file: "PatternMatching.cs",
+        line: 9,
+        column: 42,
+        expectedDefinition: { file: "PatternMatching.cs", line: 7 },
+      },
+    ],
+    references: [
+      {
+        name: "find references for an is-pattern bound variable includes its usage site",
+        file: "PatternMatching.cs",
+        line: 7,
+        column: 29,
+        minimumCount: 2,
+      },
+    ],
   },
 };
 

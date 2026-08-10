@@ -70,6 +70,7 @@ export const CSHARP_DEF: LanguageDefinition = {
       (enum_member_declaration name: (identifier) @name)
       (method_declaration name: (identifier) @name)
       (variable_declarator (identifier) @name)
+      (declaration_pattern name: (identifier) @name)
     `,
     importBindings: `
       (using_directive name: (identifier) @alias . (_) @from) @stmt
@@ -103,6 +104,7 @@ export const CSHARP_DEF: LanguageDefinition = {
     if (p.type === "method_declaration" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "variable_declarator" && p.child(0)?.id === node.id) return true;
     if (p.type === "parameter" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "declaration_pattern" && p.childForFieldName("name")?.id === node.id) return true;
     return false;
   },
 };
