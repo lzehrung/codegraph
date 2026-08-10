@@ -340,6 +340,17 @@ function recordIdentifierRelations(
   }
 }
 
+const RUBY_NESTED_SCOPE_TYPES = new Set(["class", "module", "method", "singleton_method", "block", "do_block"]);
+
+/** Collects `call` nodes directly in a Ruby class/module body, not inside a nested class, module, method, or block. */
+function collectDirectCallsExcludingNestedScopes(node: SyntaxNodeLike, out: SyntaxNodeLike[]): void {
+  for (const child of node.namedChildren ?? []) {
+    if (child.type === "call") out.push(child);
+    if (RUBY_NESTED_SCOPE_TYPES.has(child.type)) continue;
+    collectDirectCallsExcludingNestedScopes(child, out);
+  }
+}
+
 export function emitClassInheritanceEdges(context: EdgePassContext, classNodes: DetailedClassNode[]): void {
   const interfaceIds = new Set(
     classNodes
@@ -407,8 +418,9 @@ export function emitClassInheritanceEdges(context: EdgePassContext, classNodes: 
       if (superclass) recordIdentifierRelations(context, fromId, superclass, () => "extends");
 
       const calls: SyntaxNodeLike[] = [];
-      collectNodesByType(cls.node, "call", calls);
+      collectDirectCallsExcludingNestedScopes(cls.node, calls);
       for (const call of calls) {
+        if (call.childForFieldName("receiver")) continue;
         const methodNode = call.childForFieldName("method");
         const methodName = methodNode ? sliceText(methodNode, context.source) : undefined;
         if (methodName !== "include" && methodName !== "extend" && methodName !== "prepend") continue;
@@ -497,7 +509,8 @@ export function emitMemberImplementationEdges(
   }
   const hierarchyByKey = new Map<string, SymbolGraph["edges"][number]>();
   for (const edge of graph.edges) {
-    if (edge.label !== "extends" && edge.label !== "implements" && edge.label !== "trait") continue;
+    if (edge.label !== "extends" && edge.label !== "implements" && edge.label !== "trait" && edge.label !== "mixin")
+      continue;
     const key = `${edge.from}->${edge.to}::${edge.label}`;
     const existing = hierarchyByKey.get(key);
     if (!existing || (!existing.site && edge.site)) hierarchyByKey.set(key, edge);

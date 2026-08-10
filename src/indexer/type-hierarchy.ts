@@ -334,6 +334,9 @@ function implementationRootRelations(
   if (targetNode.kind === "type" || incoming.some((edge) => edge.relation === "trait")) {
     relations.add("trait");
   }
+  if (incoming.some((edge) => edge.relation === "mixin")) {
+    relations.add("mixin");
+  }
   if (targetNode.implementationTarget) relations.add("extends");
   return relations;
 }
