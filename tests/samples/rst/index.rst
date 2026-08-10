@@ -14,3 +14,5 @@ Docs
    api
 
 `External <https://example.com/rst>`_
+
+See :doc:`reference` and :doc:`Custom Title <api>` for more.

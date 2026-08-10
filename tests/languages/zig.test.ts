@@ -18,6 +18,8 @@ const definition: LanguageTestDefinition = {
     dependencyGraph: [
       { from: "main.zig", to: { type: "file", path: "helpers.zig" } },
       { from: "main.zig", to: { type: "file", path: "math.zig" } },
+      { from: "main.zig", to: { type: "external", name: "std" } },
+      { from: "main.zig", to: { type: "external", name: "build_options" } },
     ],
     symbols: [
       { file: "helpers.zig", includes: [{ name: "helper", kind: "function" }] },

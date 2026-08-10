@@ -383,6 +383,31 @@ describe("SQL artifact graph", () => {
     }
   });
 
+  it("preserves identifier case when building candidate node ids", async () => {
+    const root = await mkTmpDir("cg-sql-case-artifacts-");
+    try {
+      const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+      await fsp.writeFile(
+        schemaFile,
+        ["CREATE TABLE `MyTable` (id integer primary key);", "CREATE TABLE mytable (id integer primary key);"].join(
+          "\n",
+        ),
+        "utf8",
+      );
+
+      const graph = await buildSqlArtifactGraphFromFiles([schemaFile]);
+      const tableCandidateIds = graph.nodes
+        .filter((node) => node.kind === "sql_table_candidate")
+        .map((node) => node.id);
+
+      expect(tableCandidateIds).toContain("sql:candidate:sql_table_candidate:MyTable");
+      expect(tableCandidateIds).toContain("sql:candidate:sql_table_candidate:mytable");
+      expect(new Set(tableCandidateIds).size).toBe(tableCandidateIds.length);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("reuses SQL facts across per-file edge collection", async () => {
     const root = await mkTmpDir("cg-sql-cache-");
     const files: string[] = [];
