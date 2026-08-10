@@ -84,6 +84,20 @@ const definition: LanguageTestDefinition = {
         column: 15,
         expectedDefinition: { file: "utils.go", line: 13 },
       },
+      {
+        name: "go to definition resolves a promoted method through struct embedding",
+        file: "embedding.go",
+        line: 22,
+        column: 8,
+        expectedDefinition: { file: "embedding.go", line: 7 },
+      },
+      {
+        name: "go to definition resolves a value-receiver method",
+        file: "embedding.go",
+        line: 23,
+        column: 11,
+        expectedDefinition: { file: "embedding.go", line: 16 },
+      },
     ],
     references: [
       {

@@ -79,6 +79,26 @@ const definition: LanguageTestDefinition = {
     ],
     goToDefinition: [
       {
+        name: "resolves grouped Rust use imports",
+        file: "grouped-use.rs",
+        line: 6,
+        column: 5,
+        expectedDefinition: {
+          file: "grouped_targets.rs",
+          line: 1,
+        },
+      },
+      {
+        name: "resolves the second member of a grouped Rust use import",
+        file: "grouped-use.rs",
+        line: 6,
+        column: 21,
+        expectedDefinition: {
+          file: "grouped_targets.rs",
+          line: 5,
+        },
+      },
+      {
         name: "resolves aliased Rust imports",
         file: "aliased-use.rs",
         line: 9,
