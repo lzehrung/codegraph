@@ -177,6 +177,15 @@ function extractTripleSlashReferenceSpecifiers(source: string): ModuleSpecifier[
   return out;
 }
 
+// Triple-slash reference edges are a source-text scan, independent of whether
+// the native query ran — apply it on every TS/TSX exit path (fast-mode regex
+// recovery, the native-query happy path, and the query-unavailable/query-error
+// regex-recovery fallback), not just the native-query path.
+function appendTripleSlashReferencesForTs(support: LanguageSupport, source: string, out: ModuleSpecifier[]): void {
+  if (support.id !== "ts" && support.id !== "tsx") return;
+  appendUniqueSpecifiers(out, extractTripleSlashReferenceSpecifiers(source), makeSeenSet(out));
+}
+
 function stripCssComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, (match) => match.replace(/[^\r\n]/g, " "));
 }
@@ -314,6 +323,7 @@ export function collectModuleSpecifiersFromSource(
     } catch {
       // ignore
     }
+    appendTripleSlashReferencesForTs(support, source, out);
     return normalizeModuleSpecifiers(out);
   }
 
@@ -375,9 +385,7 @@ export function collectModuleSpecifiersFromSource(
           reportFallback("query-empty");
         }
       }
-      if (support.id === "ts" || support.id === "tsx") {
-        appendUniqueSpecifiers(out, extractTripleSlashReferenceSpecifiers(source), makeSeenSet(out));
-      }
+      appendTripleSlashReferencesForTs(support, source, out);
       if (out.length || isNativeQueryAuthoritative(support, "imports")) {
         return normalizeModuleSpecifiers(out);
       }
@@ -412,6 +420,7 @@ export function collectModuleSpecifiersFromSource(
         // ignore
       }
     }
+    appendTripleSlashReferencesForTs(support, source, out);
     return normalizeModuleSpecifiers(out);
   }
 
