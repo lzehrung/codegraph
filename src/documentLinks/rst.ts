@@ -30,8 +30,8 @@ export function extractRstModuleSpecifiers(source: string): ModuleSpecifier[] {
   for (const match of source.matchAll(/:doc:`([^`\n]+)`/g)) {
     const body = match[1]?.trim();
     if (!body) continue;
-    // `:doc:`Custom Title <path>`` carries the target inside angle brackets;
-    // bare `:doc:`path`` has the target as the whole body.
+    // Sphinx role syntax: ":doc:`Custom Title <path>`" carries the target inside
+    // angle brackets; bare ":doc:`path`" has the target as the whole body.
     const angled = /<([^>\n]+)>\s*$/.exec(body);
     const rawSpecifier = (angled?.[1] ?? body).trim();
     if (!rawSpecifier) continue;
