@@ -51,12 +51,17 @@ export const RUST_DEF: LanguageDefinition = {
       (enum_variant name: (identifier) @name) @stmt
       (const_item name: (identifier) @name) @stmt
       (static_item name: (identifier) @name) @stmt
-      (use_declaration argument: (scoped_identifier path: (identifier) @from name: (identifier) @src)) @stmt
+      (use_declaration argument: (scoped_identifier path: (_) @from name: (identifier) @src)) @stmt
       (use_declaration argument: (identifier) @src) @stmt
-      ;; Grouped imports: \`use foo::{Bar, Baz};\` - emit one export per named
-      ;; member so each is a resolvable target, matching the plain
-      ;; scoped_identifier form above.
-      (use_declaration argument: (scoped_use_list path: (identifier) @from list: (use_list (identifier) @src))) @stmt
+      ;; Grouped imports: \`use foo::{Bar, Baz};\` (and scoped forms like
+      ;; \`use crate::foo::{Bar, Baz};\`) - emit one export per named member
+      ;; so each is a resolvable target, matching the plain scoped_identifier
+      ;; form above. The shared path may itself be scoped, so it is captured
+      ;; generically rather than requiring a single bare identifier segment.
+      (use_declaration argument: (scoped_use_list path: (_) @from list: (use_list (identifier) @src))) @stmt
+      ;; Aliased members inside a group (\`use foo::{Bar as Baz}\`) export
+      ;; under their alias, matching how a single aliased import behaves.
+      (use_declaration argument: (scoped_use_list path: (_) @from list: (use_list (use_as_clause alias: (identifier) @src)))) @stmt
     `,
     locals: `
       (function_item name: (identifier) @name)
@@ -74,10 +79,13 @@ export const RUST_DEF: LanguageDefinition = {
       (extern_crate_declaration name: (identifier) @from) @stmt
       (extern_crate_declaration name: (identifier) @from alias: (identifier) @alias) @stmt
       (use_declaration argument: (use_as_clause path: (identifier) @from alias: (identifier) @alias)) @stmt
-      (use_declaration argument: (use_as_clause path: (scoped_identifier path: (identifier) @from name: (identifier) @iname) alias: (identifier) @alias)) @stmt
-      (use_declaration argument: (scoped_identifier path: (identifier) @from name: (identifier) @iname)) @stmt
+      (use_declaration argument: (use_as_clause path: (scoped_identifier path: (_) @from name: (identifier) @iname) alias: (identifier) @alias)) @stmt
+      (use_declaration argument: (scoped_identifier path: (_) @from name: (identifier) @iname)) @stmt
       (use_declaration argument: (identifier) @from) @stmt
-      (use_declaration argument: (scoped_use_list path: (identifier) @from list: (use_list (identifier) @iname))) @stmt
+      (use_declaration argument: (scoped_use_list path: (_) @from list: (use_list (identifier) @iname))) @stmt
+      ;; Aliased members inside a group (\`use foo::{Bar as Baz}\`): import
+      ;; the original name under its local alias.
+      (use_declaration argument: (scoped_use_list path: (_) @from list: (use_list (use_as_clause path: (identifier) @iname alias: (identifier) @alias)))) @stmt
     `,
   },
   nodeTypes: {

@@ -99,6 +99,36 @@ const definition: LanguageTestDefinition = {
         },
       },
       {
+        name: "resolves a grouped Rust use import with a scoped (self::) path",
+        file: "grouped-use-scoped.rs",
+        line: 4,
+        column: 5,
+        expectedDefinition: {
+          file: "grouped_targets.rs",
+          line: 1,
+        },
+      },
+      {
+        name: "resolves a non-grouped Rust use import with a multi-segment scoped path",
+        file: "scoped-path-use.rs",
+        line: 4,
+        column: 5,
+        expectedDefinition: {
+          file: "grouped_targets.rs",
+          line: 1,
+        },
+      },
+      {
+        name: "resolves an aliased member inside a grouped Rust use import",
+        file: "grouped-use-scoped.rs",
+        line: 4,
+        column: 21,
+        expectedDefinition: {
+          file: "grouped_targets.rs",
+          line: 5,
+        },
+      },
+      {
         name: "resolves aliased Rust imports",
         file: "aliased-use.rs",
         line: 9,
