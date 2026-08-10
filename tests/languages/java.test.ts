@@ -74,6 +74,14 @@ const definition: LanguageTestDefinition = {
           { name: "Ready", kind: "variable" },
         ],
       },
+      {
+        file: "RecordTypes.java",
+        includes: [
+          { name: "Point", kind: "class" },
+          { name: "NamedShape", kind: "class" },
+          { name: "Sized", kind: "interface" },
+        ],
+      },
     ],
     goToDefinition: [
       {

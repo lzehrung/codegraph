@@ -32,6 +32,14 @@ const METHOD_LIKE_BINDING_NODE_TYPES = new Set([
   "function_definition",
 ]);
 
+// Class field declarations are absent from every language's native `locals` query
+// (only method-like declarations are queried), so `#private` and public class
+// fields resolve to zero definitions without this structural supplement.
+const FIELD_LIKE_BINDING_NODE_TYPES = new Set([
+  "public_field_definition", // TypeScript/TSX
+  "field_definition", // JavaScript
+]);
+
 function appendJsLikeRegexFallbackExports(
   file: string,
   source: string,
@@ -429,6 +437,13 @@ export function collectLocalsAndExportsFromSource(
       const name = node.childForFieldName("name");
       if (name) {
         pushLocal(sliceText(name, source), SymbolKind.Function, toRange(name), name);
+      }
+    } else if (FIELD_LIKE_BINDING_NODE_TYPES.has(node.type)) {
+      // TypeScript exposes the field name via the "name" field; JavaScript exposes
+      // the same position via "property". Both cover `#private` and public names.
+      const name = node.childForFieldName("name") ?? node.childForFieldName("property");
+      if (name) {
+        pushLocal(sliceText(name, source), SymbolKind.Variable, toRange(name), name);
       }
     }
     for (const child of node.namedChildren) {
