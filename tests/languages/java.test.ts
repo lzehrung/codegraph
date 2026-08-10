@@ -82,6 +82,10 @@ const definition: LanguageTestDefinition = {
           { name: "Sized", kind: "interface" },
         ],
       },
+      {
+        file: "AnnotationTypes.java",
+        includes: [{ name: "AnnotatedMarker", kind: "interface" }],
+      },
     ],
     goToDefinition: [
       {

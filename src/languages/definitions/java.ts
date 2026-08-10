@@ -29,6 +29,11 @@ export const JAVA_DEF: LanguageDefinition = {
         captureId: "enum",
       },
       {
+        type: "annotation_type_declaration",
+        nameQuery: "name: (identifier) @chunk.name",
+        captureId: "interface",
+      },
+      {
         type: "method_declaration",
         nameQuery: "name: (identifier) @chunk.name",
         captureId: "method",
@@ -51,6 +56,7 @@ export const JAVA_DEF: LanguageDefinition = {
       (record_declaration name: (identifier) @name)
       (interface_declaration name: (identifier) @name)
       (enum_declaration name: (identifier) @name)
+      (annotation_type_declaration name: (identifier) @name)
       (enum_constant name: (identifier) @name)
       (method_declaration name: (identifier) @name)
       (field_declaration (variable_declarator name: (identifier) @name))
@@ -60,6 +66,7 @@ export const JAVA_DEF: LanguageDefinition = {
       (record_declaration name: (identifier) @name)
       (interface_declaration name: (identifier) @name)
       (enum_declaration name: (identifier) @name)
+      (annotation_type_declaration name: (identifier) @name)
       (enum_constant name: (identifier) @name)
       (method_declaration name: (identifier) @name)
       (variable_declarator name: (identifier) @name)
@@ -78,7 +85,7 @@ export const JAVA_DEF: LanguageDefinition = {
     if (!parent) return "variable";
     if (parent.type === "method_declaration" || parent.type === "constructor_declaration") return "method";
     if (parent.type === "class_declaration" || parent.type === "record_declaration") return "class";
-    if (parent.type === "interface_declaration") return "interface";
+    if (parent.type === "interface_declaration" || parent.type === "annotation_type_declaration") return "interface";
     if (parent.type === "enum_declaration") return "type";
     return "variable";
   },
@@ -90,6 +97,7 @@ export const JAVA_DEF: LanguageDefinition = {
     if (p.type === "class_declaration" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "record_declaration" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "interface_declaration" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "annotation_type_declaration" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "enum_declaration" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "enum_constant" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "method_declaration" && p.childForFieldName("name")?.id === node.id) return true;

@@ -38,7 +38,14 @@ const definition: LanguageTestDefinition = {
       },
       {
         file: "Extensions.swift",
-        includes: [{ name: "makeDefault" }],
+        includes: [{ name: "WorkerImpl", kind: "class" }, { name: "makeDefault" }],
+      },
+      {
+        file: "Actors.swift",
+        includes: [
+          { name: "Counter", kind: "class" },
+          { name: "increment", kind: "function" },
+        ],
       },
       {
         file: "StaticMembers.swift",
