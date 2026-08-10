@@ -1,5 +1,10 @@
 export const SQL_IDENTIFIER_PART_PATTERN =
-  String.raw`(?:"(?:""|[^"])+"|` + "`[^`]+`" + String.raw`|\[[^\]]+\]|[A-Za-z_][\w$]*)`;
+  String.raw`(?:"(?:""|[^"])+"|` +
+  "`[^`]+`" +
+  String.raw`|\[[^\]]+\]|` +
+  // T-SQL local/global temp table names start with one or two "#" characters
+  // (#Temp, ##GlobalTemp), which the bare identifier form must permit.
+  String.raw`#{1,2}[A-Za-z_][\w$]*|[A-Za-z_][\w$]*)`;
 
 export const SQL_OBJECT_NAME_PATTERN = String.raw`${SQL_IDENTIFIER_PART_PATTERN}(?:\s*\.\s*${SQL_IDENTIFIER_PART_PATTERN}){0,2}`;
 

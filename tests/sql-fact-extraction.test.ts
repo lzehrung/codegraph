@@ -404,4 +404,24 @@ describe("SQL fact extraction", () => {
       }),
     ]);
   });
+
+  it("extracts T-SQL local and global temp table facts", () => {
+    const filePath = path.join(fixtureRoot, "migrations", "20240510120500_temp_table.sql");
+    const facts = extractSqlFactsFromSource(
+      filePath,
+      [
+        "CREATE TABLE #TempResults (id INT, name VARCHAR(50));",
+        "INSERT INTO #TempResults (id, name) VALUES (1, 'a');",
+        "SELECT * FROM #TempResults;",
+        "CREATE TABLE ##GlobalTempResults (id INT);",
+      ].join("\n"),
+    );
+
+    expect(facts).toEqual([
+      expect.objectContaining({ kind: "defines_table", objectName: "#TempResults" }),
+      expect.objectContaining({ kind: "writes_to", objectName: "#TempResults" }),
+      expect.objectContaining({ kind: "reads_from", objectName: "#TempResults" }),
+      expect.objectContaining({ kind: "defines_table", objectName: "##GlobalTempResults" }),
+    ]);
+  });
 });
