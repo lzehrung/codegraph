@@ -313,6 +313,16 @@ export function buildScopeIndexFromSource(
       }
     }
 
+    if (node.type === "declaration_pattern") {
+      // C# is-pattern bound variable: `if (o is string text)`. This node type
+      // is unique to C#'s pattern-matching grammar, so it's safe to register
+      // unconditionally here rather than gating on customDeclLanguages (which
+      // would also newly activate isDeclarationName-driven registration for
+      // every other C# declaration form, an unrelated and untested change).
+      const name = node.childForFieldName("name");
+      if (name) addDecl(name, "local");
+    }
+
     if (
       customDeclLanguages.has(support.id) &&
       idSet.has(node.type) &&

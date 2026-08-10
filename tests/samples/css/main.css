@@ -1,6 +1,7 @@
 @import "./base.css";
 @import "./theme.css";
 @import "./missing.css";
+@import "./print.css" print;
 
 .container {
   display: flex;
