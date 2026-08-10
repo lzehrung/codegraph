@@ -130,6 +130,9 @@ nativeDescribe("type hierarchy language parity", () => {
       expect(nodesByName.has(expected.to), `${expected.to} was not indexed`).toBe(true);
       expect(actualRelations).toContain(`${expected.from}:${expected.relation}:${expected.to}`);
     }
+    expect(actualRelations.size, "unexpected extra extends/implements/trait/mixin edges were emitted").toBe(
+      PROVEN_RELATIONS.length,
+    );
     expect(actualRelations).not.toContain("TsUnrelated:implements:TsService");
     for (const [ownerName, implementationName, memberName] of [
       ["TsAbstract", "TsConcrete", "execute"],
