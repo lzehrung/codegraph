@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-08T19:53:55.640Z",
+  "generatedAt": "2026-08-10T15:25:50.763Z",
   "source": "tests/languages/*.test.ts via vitest",
   "nodeVersion": "v22.16.0",
-  "numTotalTests": 227,
+  "numTotalTests": 237,
   "numFailedTests": 0,
   "languages": [
     {
@@ -36,8 +36,8 @@
     {
       "language": "C#",
       "files": ["tests/languages/csharp.test.ts"],
-      "tests": 3,
-      "passed": 3,
+      "tests": 5,
+      "passed": 5,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -63,8 +63,8 @@
     {
       "language": "Go",
       "files": ["tests/languages/go.test.ts"],
-      "tests": 6,
-      "passed": 6,
+      "tests": 8,
+      "passed": 8,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -152,9 +152,9 @@
     },
     {
       "language": "Python",
-      "files": ["tests/languages/python-all.test.ts", "tests/languages/python.test.ts"],
-      "tests": 4,
-      "passed": 4,
+      "files": ["tests/languages/python.test.ts"],
+      "tests": 5,
+      "passed": 5,
       "failed": 0,
       "skipped": 0,
       "status": "passing"
@@ -180,8 +180,8 @@
     {
       "language": "Rust",
       "files": ["tests/languages/rust.test.ts"],
-      "tests": 5,
-      "passed": 5,
+      "tests": 10,
+      "passed": 10,
       "failed": 0,
       "skipped": 0,
       "status": "passing"

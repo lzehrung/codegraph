@@ -30,7 +30,6 @@ const LANGUAGE_NAMES = {
   mdx: "MDX",
   php: "PHP",
   python: "Python",
-  "python-all": "Python",
   rst: "reStructuredText",
   ruby: "Ruby",
   rust: "Rust",

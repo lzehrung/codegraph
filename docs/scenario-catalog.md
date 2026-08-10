@@ -193,7 +193,7 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 | Scenario                   | Sample                                     | Expected behavior                                                                                           | Source                                            | Date added |
 | -------------------------- | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------- | ---------- |
 | Relative `from` imports    | `tests/samples/python/relative-imports.py` | Dependency graph includes edges to `utils.py` and `helpers.py` for relative `from` imports.                 | https://github.com/tree-sitter/tree-sitter-python | 2026-01-22 |
-| `__all__` export filtering | `tests/languages/python-all.test.ts`       | Export extraction respects `__all__` tuple/list assignments and avoids false positives from nearby strings. | Internal regression test                          | 2026-03-22 |
+| `__all__` export filtering | `tests/languages/python.test.ts`           | Export extraction respects `__all__` tuple/list assignments and avoids false positives from nearby strings. | Internal regression test                          | 2026-03-22 |
 
 ## PHP
 
