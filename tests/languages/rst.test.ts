@@ -26,6 +26,10 @@ const definition: LanguageTestDefinition = {
         from: "index.rst",
         to: { type: "external", name: "https://example.com/rst" },
       },
+      {
+        from: "index.rst",
+        to: { type: "file", path: "reference.rst" },
+      },
     ],
     goToDefinition: [
       {

@@ -1,6 +1,10 @@
 import { type ModuleSpecifier } from "../util/specifiers.js";
 import { dedupeModuleSpecifiers, normalizeLinkSpecifier, normalizeReferenceLabel } from "./shared.js";
 
+// Sphinx `:ref:`/`:term:` roles are deliberately not extracted here: they
+// target in-document labels (`.. _label:`) or glossary terms, not files, so
+// they aren't file-dependency edges. Only `:doc:` (a document-path role) is
+// handled below, alongside this module's other file-targeting patterns.
 export function extractRstModuleSpecifiers(source: string): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
   const namedTargets = collectRstTargetDefinitions(source);
@@ -20,6 +24,22 @@ export function extractRstModuleSpecifiers(source: string): ModuleSpecifier[] {
     const label = normalizeReferenceLabel(match[1]);
     if (!label) continue;
     const normalized = namedTargets.get(label);
+    if (normalized) out.push(normalized);
+  }
+
+  for (const match of source.matchAll(/:doc:`([^`\n]+)`/g)) {
+    const body = match[1]?.trim();
+    if (!body) continue;
+    // `:doc:`Custom Title <path>`` carries the target inside angle brackets;
+    // bare `:doc:`path`` has the target as the whole body.
+    const angled = /<([^>\n]+)>\s*$/.exec(body);
+    const rawSpecifier = (angled?.[1] ?? body).trim();
+    if (!rawSpecifier) continue;
+    const normalized = normalizeLinkSpecifier(rawSpecifier, {
+      preferRelative: true,
+      resolutionKind: "document",
+      forceRelative: true,
+    });
     if (normalized) out.push(normalized);
   }
 

@@ -141,9 +141,10 @@ Minimal catalog of Tree-sitter scenarios with sample coverage.
 
 ## reStructuredText
 
-| Scenario                                                 | Sample                        | Expected behavior                                                                                                                                                                                                | Source                      | Date added |
-| -------------------------------------------------------- | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- | ---------- |
-| Inline links, target definitions, includes, and toctrees | `tests/samples/rst/index.rst` | Dependency graph resolves explicit reStructuredText links, named target definitions, `include` directives, and Sphinx-style `toctree` entries to local `.rst` files while semantic navigation stays `not_found`. | Internal regression fixture | 2026-04-20 |
+| Scenario                                                 | Sample                        | Expected behavior                                                                                                                                                                                                      | Source                      | Date added |
+| -------------------------------------------------------- | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- | ---------- |
+| Inline links, target definitions, includes, and toctrees | `tests/samples/rst/index.rst` | Dependency graph resolves explicit reStructuredText links, named target definitions, `include` directives, and Sphinx-style `toctree` entries to local `.rst` files while semantic navigation stays `not_found`.       | Internal regression fixture | 2026-04-20 |
+| Sphinx `:doc:` role references                           | `tests/samples/rst/index.rst` | Dependency graph resolves bare `` :doc:`page` `` and titled `` :doc:`Title <page>` `` role references to local `.rst` files; `:ref:`/`:term:` roles are not extracted since they target in-document labels, not files. | Internal regression fixture | 2026-08-10 |
 
 ## AsciiDoc
 

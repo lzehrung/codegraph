@@ -79,7 +79,14 @@ function relatedCandidateKindForFact(fact: SqlStatementFact): SqlArtifactNodeKin
 }
 
 function candidateNodeId(kind: SqlArtifactNodeKind, name: string): string {
-  return `sql:candidate:${kind}:${name.toLowerCase()}`;
+  // Case-preserving: quoted identifiers (backtick/bracket/double-quote) are
+  // case-sensitive on several dialects (MySQL on case-sensitive filesystems,
+  // Postgres double-quoted, T-SQL with a case-sensitive collation), and
+  // extractFacts already normalizes via normalizeSqlIdentifierPart, which
+  // preserves case. Lowercasing here would silently merge distinct objects
+  // that only differ by case (e.g. a backtick-quoted `MyTable` and an
+  // unquoted mytable reference).
+  return `sql:candidate:${kind}:${name}`;
 }
 
 function edgeKindForFact(kind: SqlFactKind): SqlArtifactEdgeKind {
