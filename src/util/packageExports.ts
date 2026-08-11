@@ -1,18 +1,42 @@
-const PACKAGE_EXPORT_CONDITION_PRIORITY = [
-  "import",
-  "node",
-  "default",
-  "require",
-  "module",
-  "module-sync",
-  "node-addons",
-] as const;
+/**
+ * Conditional `package.json#exports` target selection.
+ *
+ * Matches Node's documented algorithm for the parts this indexer needs:
+ * - condition object keys are evaluated in author/declaration order
+ * - `default` always matches and terminates
+ * - nested condition objects recurse
+ * - arrays are fallback lists (collected here; the resolver takes the first existing file)
+ * - unmatched conditions fall through
+ *
+ * Deliberately not modeled (keep these out of "silent disagreement" territory by
+ * documenting rather than approximating):
+ * - custom `--conditions` / user-defined condition names beyond the Node builtins below
+ * - `browser` / `deno` / `worker` / `types` / `development` / `production` conditions
+ * - import attributes (`with` / `assert`) as condition inputs
+ * - `imports` (`#...`) package imports maps
+ * - URL / non-`./` targets (filtered out, matching prior indexer behavior)
+ * - `module-sync` top-level-await restrictions when loaded via `require()`
+ *
+ * `import` and `require` are mutually exclusive and selected by
+ * {@link PackageExportConditionMode}. Unspecified mode defaults to `import`.
+ */
+export type PackageExportConditionMode = "import" | "require";
+
+const SHARED_PACKAGE_EXPORT_CONDITIONS = ["node-addons", "node", "module-sync", "module", "default"] as const;
+
+function activePackageExportConditions(mode: PackageExportConditionMode): ReadonlySet<string> {
+  return new Set<string>([...SHARED_PACKAGE_EXPORT_CONDITIONS, mode]);
+}
 
 function isExportTargetRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function collectPackageExportTargets(target: unknown, matchedSubpath?: string): string[] | null {
+function collectPackageExportTargets(
+  target: unknown,
+  conditions: ReadonlySet<string>,
+  matchedSubpath?: string,
+): string[] | null {
   if (target === null) return null;
   if (typeof target === "string") {
     const resolvedTarget = matchedSubpath === undefined ? target : target.replaceAll("*", matchedSubpath);
@@ -21,17 +45,18 @@ function collectPackageExportTargets(target: unknown, matchedSubpath?: string): 
   if (Array.isArray(target)) {
     const targets: string[] = [];
     for (const entry of target) {
-      const fallbackTargets = collectPackageExportTargets(entry, matchedSubpath);
+      const fallbackTargets = collectPackageExportTargets(entry, conditions, matchedSubpath);
       if (fallbackTargets?.length) targets.push(...fallbackTargets);
     }
     return targets;
   }
   if (!isExportTargetRecord(target)) return [];
 
-  for (const condition of PACKAGE_EXPORT_CONDITION_PRIORITY) {
-    if (!Object.hasOwn(target, condition)) continue;
-    const conditionTargets = collectPackageExportTargets(target[condition], matchedSubpath);
-    if (conditionTargets === null || conditionTargets.length) return conditionTargets;
+  // Author key order, not a hard-coded priority list. Restored from pre-c1680788.
+  for (const [condition, conditionTarget] of Object.entries(target)) {
+    if (!conditions.has(condition)) continue;
+    const conditionTargets = collectPackageExportTargets(conditionTarget, conditions, matchedSubpath);
+    if (condition === "default" || conditionTargets === null || conditionTargets.length) return conditionTargets;
   }
   return [];
 }
@@ -48,19 +73,24 @@ function matchSubpathPattern(pattern: string, subpath: string): string | null {
   return subpath.slice(prefix.length, subpath.length - suffix.length);
 }
 
-export function resolvePackageExportTargets(exportsField: unknown, subpath: string): string[] {
+export function resolvePackageExportTargets(
+  exportsField: unknown,
+  subpath: string,
+  mode: PackageExportConditionMode = "import",
+): string[] {
+  const conditions = activePackageExportConditions(mode);
   if (typeof exportsField === "string" || Array.isArray(exportsField)) {
-    return subpath === "." ? (collectPackageExportTargets(exportsField) ?? []) : [];
+    return subpath === "." ? (collectPackageExportTargets(exportsField, conditions) ?? []) : [];
   }
   if (!isExportTargetRecord(exportsField)) return [];
 
   const exportKeys = Object.keys(exportsField);
   const hasSubpathMap = exportKeys.some((key) => key.startsWith("."));
   if (!hasSubpathMap) {
-    return subpath === "." ? (collectPackageExportTargets(exportsField) ?? []) : [];
+    return subpath === "." ? (collectPackageExportTargets(exportsField, conditions) ?? []) : [];
   }
   if (Object.hasOwn(exportsField, subpath)) {
-    return collectPackageExportTargets(exportsField[subpath]) ?? [];
+    return collectPackageExportTargets(exportsField[subpath], conditions) ?? [];
   }
 
   let matchedPattern:
@@ -82,9 +112,7 @@ export function resolvePackageExportTargets(exportsField: unknown, subpath: stri
     }
   }
   if (!matchedPattern) return [];
-  return collectPackageExportTargets(exportsField[matchedPattern.pattern], matchedPattern.matchedSubpath) ?? [];
-}
-
-export function pickPackageExportTarget(target: unknown): string | null {
-  return collectPackageExportTargets(target)?.[0] ?? null;
+  return (
+    collectPackageExportTargets(exportsField[matchedPattern.pattern], conditions, matchedPattern.matchedSubpath) ?? []
+  );
 }

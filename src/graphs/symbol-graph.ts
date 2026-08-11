@@ -118,7 +118,7 @@ export async function buildSymbolGraph(index: ProjectIndex, opts?: BuildSymbolGr
     edges.push(label ? { from, to, label } : { from, to });
   };
 
-  const addDefinitionEdge = (aliasId: string, targetFile: FileId, exportedName: string, label: string): void => {
+  const addDefinitionEdge = (aliasId: string, targetFile: FileId, exportedName: string, label: string): boolean => {
     const resolutionKey = `${fileIdentityKey(targetFile)}::${exportedName}`;
     let resolved: ResolvedExport | null;
     if (exportResolutions.has(resolutionKey)) {
@@ -127,11 +127,12 @@ export async function buildSymbolGraph(index: ProjectIndex, opts?: BuildSymbolGr
       resolved = resolveExport(index, targetFile, exportedName);
       exportResolutions.set(resolutionKey, resolved);
     }
-    if (!resolved || resolved.kind !== "resolved") return;
+    if (!resolved || resolved.kind !== "resolved") return false;
     const def = resolved.def;
     const targetId = defNodeId(def);
     if (!nodes.has(targetId)) nodes.set(targetId, nodeForDef(def));
     addEdge(aliasId, targetId, label);
+    return true;
   };
 
   for (const mod of index.byFile.values()) {
@@ -170,7 +171,16 @@ export async function buildSymbolGraph(index: ProjectIndex, opts?: BuildSymbolGr
             kind: "import",
           });
         }
-        if (targetFile) addDefinitionEdge(aliasId, targetFile, "default", "default");
+        if (targetFile && !addDefinitionEdge(aliasId, targetFile, "default", "default")) {
+          const fallbackExport = index.byFile
+            .get(fileIdentityKey(targetFile))
+            ?.exports.find((entry) => entry.type === "local")?.target;
+          if (fallbackExport) {
+            const targetId = defNodeId(fallbackExport);
+            if (!nodes.has(targetId)) nodes.set(targetId, nodeForDef(fallbackExport));
+            addEdge(aliasId, targetId, "default");
+          }
+        }
       } else if (imp.kind === "namespace") {
         const aliasId = `${displayFile}::${imp.localNS}::import`;
         if (!nodes.has(aliasId)) {

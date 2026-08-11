@@ -43,8 +43,12 @@ type LanguageDefinitionFingerprintDescriptor = {
     grammar: string;
     classifyDefinition?: string;
     isDeclarationName?: string;
+    scopeDeclarationNames?: string;
+    normalizeIdentifier?: string;
     createsBlockScope?: string;
     createsFunctionScope?: string;
+    usesQueryDrivenLocals: boolean;
+    membersAreImplicitlyInScope: boolean;
     isTypeOnly?: string;
   };
 };
@@ -62,6 +66,9 @@ function languageDefinitionFingerprintDescriptor(
   const nativeNormalizeQuery = functionSource(native?.normalizeQuery);
   const classifyDefinition = functionSource(definition.classifyDefinition);
   const isDeclarationName = functionSource(definition.isDeclarationName);
+  const scopeDeclarationNames =
+    definition.scopeDeclarationNames === "all" ? "all" : functionSource(definition.scopeDeclarationNames);
+  const normalizeIdentifier = functionSource(definition.normalizeIdentifier);
   const createsBlockScope = functionSource(definition.createsBlockScope);
   const createsFunctionScope = functionSource(definition.createsFunctionScope);
   const isTypeOnly = functionSource(definition.isTypeOnly);
@@ -83,8 +90,14 @@ function languageDefinitionFingerprintDescriptor(
       : {}),
     behavior: {
       grammar: functionSource(definition.grammar) ?? "",
+      // Booleans serialize under the same defaults adaptDefinition applies, so the
+      // fingerprint tracks effective behavior rather than incidental optionality.
+      usesQueryDrivenLocals: definition.usesQueryDrivenLocals ?? false,
+      membersAreImplicitlyInScope: definition.membersAreImplicitlyInScope ?? true,
       ...(classifyDefinition ? { classifyDefinition } : {}),
       ...(isDeclarationName ? { isDeclarationName } : {}),
+      ...(scopeDeclarationNames ? { scopeDeclarationNames } : {}),
+      ...(normalizeIdentifier ? { normalizeIdentifier } : {}),
       ...(createsBlockScope ? { createsBlockScope } : {}),
       ...(createsFunctionScope ? { createsFunctionScope } : {}),
       ...(isTypeOnly ? { isTypeOnly } : {}),
@@ -93,9 +106,45 @@ function languageDefinitionFingerprintDescriptor(
 }
 
 /**
+ * Structural guard against fingerprint drift: every LanguageDefinition key must be
+ * covered by languageDefinitionFingerprintDescriptor above. Record exhaustiveness
+ * makes adding a field to LanguageDefinition without descriptor coverage a
+ * typecheck error, and the runtime check in tests/cache-invalidation.test.ts
+ * rejects definition objects carrying keys outside this set. Coverage here means
+ * the field participates in the fingerprint; if a future field genuinely cannot
+ * affect indexing results, serialize a stable placeholder for it in the
+ * descriptor and keep its entry below.
+ */
+export const languageDefinitionFingerprintCoverage: Readonly<Record<keyof LanguageDefinition, true>> = {
+  id: true,
+  extensions: true,
+  grammar: true,
+  structure: true,
+  graph: true,
+  usesQueryDrivenLocals: true,
+  classifyDefinition: true,
+  isDeclarationName: true,
+  scopeDeclarationNames: true,
+  normalizeIdentifier: true,
+  createsBlockScope: true,
+  createsFunctionScope: true,
+  membersAreImplicitlyInScope: true,
+  supportsCrossModuleSymbols: true,
+  isTypeOnly: true,
+  nodeTypes: true,
+  native: true,
+};
+
+/**
  * Changes whenever this package version or a loaded language definition changes.
- * The descriptor is generated from the definitions and their Tree-sitter queries so
- * definition/query edits cannot silently outlive an on-disk index.
+ * The descriptor serializes every LanguageDefinition field (guarded by
+ * languageDefinitionFingerprintCoverage): structure and graph queries, plus the
+ * source text of every behavior hook, so editing a definition or its queries
+ * cannot silently outlive an on-disk index. Changes to the code that interprets
+ * definitions — the import resolver, the chunker, scope construction — are NOT
+ * covered by this descriptor; they invalidate only via the package-version
+ * component, so same-version installs and dev iteration must bump the version or
+ * clear the cache for those to take effect.
  */
 export function getImplementationFingerprint(): string {
   if (cachedImplementationFingerprint) return cachedImplementationFingerprint;

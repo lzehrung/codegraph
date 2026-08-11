@@ -328,7 +328,7 @@ codegraph grep --query '(function_declaration name: (identifier) @name)'
 codegraph grep 'eval\(' --ignore-case
 ```
 
-`grep --json` does not return a bare hit array; it returns an envelope `{ items, limit, totalSeen, truncated, omitted }` so callers can tell a complete result from a capped prefix. `limit` always means the effective cap that was applied: for text greps it is the effective `--max-hits` value (default 5000, capped at 200000), and for uncapped `--query` AST greps it is `null`. `truncated` is exact for text greps (the scan probes one hit past the effective limit, so a true count equal to the limit still reports `truncated: false`, including at the 200000 ceiling) and is always `false` for AST greps today. `totalSeen` and `omitted` count only observed hits and are lower bounds once truncated. Human-readable grep output stays a plain streamed hit list.
+`grep --json` does not return a bare hit array; it returns an envelope `{ items, limit, totalSeen, truncated, omitted }` so callers can tell a complete result from a capped prefix. `limit` always means the effective cap that was applied: for text greps it is the effective `--max-hits` value (default 5000, capped at 200000), and for uncapped `--query` AST greps it is `null`. `truncated` is exact for text greps (the scan probes one hit past the effective limit, so a true count equal to the limit still reports `truncated: false`, including at the 200000 ceiling) and is always `false` for AST greps today. When text results are truncated, `totalSeen` and `omitted` are lower bounds from the bounded probe, not full corpus-wide counts. Human-readable grep output stays a plain streamed hit list.
 
 ### MCP protocol and network boundary
 

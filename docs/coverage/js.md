@@ -6,9 +6,9 @@ Source: `coverage/js/lcov.info`
 
 | Metric | Hit | Found | Coverage |
 | --- | ---: | ---: | ---: |
-| Lines | 26666 | 29460 | 90.52% |
-| Functions | 4479 | 4773 | 93.84% |
-| Branches | 20106 | 25419 | 79.10% |
+| Lines | 26809 | 29581 | 90.63% |
+| Functions | 4491 | 4782 | 93.91% |
+| Branches | 20263 | 25565 | 79.26% |
 
 ## Least-covered Files
 
@@ -18,7 +18,6 @@ Source: `coverage/js/lcov.info`
 | `src/cli/compileCache.ts` | 46.15% | 66.67% | 56.52% |
 | `src/languages/definitions/htmlStub.ts` | 50.00% | 50.00% | n/a |
 | `src/util/errors.ts` | 50.00% | 100.00% | 50.00% |
-| `src/indexer/build-workers.ts` | 51.85% | 77.78% | 53.66% |
 | `src/languages/definitions/javascript.ts` | 62.50% | 83.33% | 57.89% |
 | `src/cli/explore.ts` | 62.50% | 100.00% | 50.00% |
 | `src/cli/pretty.ts` | 62.75% | 80.00% | 62.22% |
@@ -34,6 +33,7 @@ Source: `coverage/js/lcov.info`
 | `src/languages/definitions/html.ts` | 66.67% | 0.00% | n/a |
 | `src/languages/definitions/less.ts` | 66.67% | 0.00% | n/a |
 | `src/languages/definitions/sql.ts` | 66.67% | 0.00% | n/a |
+| `src/languages/definitions/svelte.ts` | 66.67% | 0.00% | n/a |
 
 ## Type-Only Or Re-Export Files
 

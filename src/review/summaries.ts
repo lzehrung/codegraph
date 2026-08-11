@@ -177,17 +177,16 @@ function statementDeclaresEntry(statement: ExportStatement, entry: ReviewableExp
 type RemovedExportGroup = {
   /** Specifiers declared by complete export statements inside the removed lines. */
   specifiers: ExportSpecifier[];
-  /** New-side lines collectChangedLines maps these removed lines to. They do not
-      exist in the new source, so they must not be attributed to survivors. */
+  /** Removed lines that have no replacement. Remove only these from changed-line
+      attribution so a replacement export remains visible as an addition. */
   mappedLines: number[];
 };
 
 // A maximal run of non-context diff lines forms one change group: removed lines
-// optionally followed by added lines. A group with no added lines is a pure
-// deletion; when its removed text parses as complete export declarations, those
-// declarations are gone from the new source, and their mapped new-side lines
-// (newLine + deletionStreak, mirroring collectChangedLines) otherwise land on
-// unrelated surviving statements or outside the file entirely.
+// optionally followed by added lines. Recover every complete removed export
+// declaration, then compare it with the current source before reporting it. Only
+// pure deletions lose their mapped new-side lines; replacement groups must retain
+// those lines so their added export declarations are also reported as changed.
 function collectRemovedExportGroups(hunks: Hunk[]): RemovedExportGroup[] {
   const groups: RemovedExportGroup[] = [];
   for (const hunk of hunks) {
@@ -198,12 +197,12 @@ function collectRemovedExportGroups(hunks: Hunk[]): RemovedExportGroup[] {
     let removedMapped: number[] = [];
     let groupHasAdded = false;
     const flushGroup = () => {
-      if (removedTexts.length && !groupHasAdded) {
+      if (removedTexts.length) {
         const removedStatements = listExportStatements(removedTexts.join("\n"));
         if (removedStatements.length) {
           groups.push({
             specifiers: removedStatements.flatMap((statement) => statement.specifiers),
-            mappedLines: removedMapped,
+            mappedLines: groupHasAdded ? [] : removedMapped,
           });
         }
       }

@@ -253,7 +253,7 @@ Usage: codegraph grep <regex> [--root <path>] [--ignore-case] [--max-hits <n>] [
        codegraph grep --query <tree-sitter-query> [--root <path>] [--json]
 
 A bare positional is a text regex. Use --query explicitly for Tree-sitter queries.
---json returns an envelope { items, limit, totalSeen, truncated, omitted }. For text greps, limit is the effective --max-hits cap (default 5000, max 200000). For --query AST greps, which are uncapped today, limit is null and truncated is always false.
+--json returns an envelope { items, limit, totalSeen, truncated, omitted }. For text greps, limit is the effective --max-hits cap (default 5000, max 200000). The scan probes one hit past that cap, so truncated is exact while totalSeen and omitted are lower bounds on observed hits whenever truncated is true. For --query AST greps, which are uncapped today, limit is null and truncated is always false.
 `;
 
 export const SQL_HELP_TEXT = `codegraph sql - Query a graph SQLite export read-only

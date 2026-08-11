@@ -1,3 +1,8 @@
+import fsp from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -6,6 +11,10 @@ import {
   DEFAULT_NATIVE_MAX_PROJECTED_NODES,
   DEFAULT_NATIVE_SOURCE_MAX_BYTES,
 } from "../src/worker/nativeExtractWorker.js";
+import { buildProjectIndexFromFiles } from "../src/indexer/build-index.js";
+import { cacheSignatureForFile, fileSignature, writeToCache } from "../src/indexer/build-cache/module-cache.js";
+import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
+import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import type { NativeBinding, NativeSyntaxTree } from "../src/native/contracts.js";
 
 afterEach(() => {
@@ -147,4 +156,91 @@ describe("native extraction resource limits", () => {
     expect(result.syntaxTree).toBe(tree);
     expect(result.error).toBeUndefined();
   });
+});
+
+describe.runIf(isNativeTreeSitterAvailable())("resource-limited worker cache behavior", () => {
+  it("does not persist or reuse an empty module after a byte-limit fallback", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-resource-limit-cache-"));
+    const file = path.join(root, "oversized.ts");
+    const normalizedFile = normalizePath(file);
+    const source = `export const retained = 1;\n${"// filler\n".repeat(Math.ceil(DEFAULT_NATIVE_SOURCE_MAX_BYTES / 10))}`;
+    await fsp.writeFile(file, source, "utf8");
+
+    try {
+      const firstReport = { timings: {} };
+      const first = await buildProjectIndexFromFiles(root, [file], {
+        cache: "disk",
+        native: "on",
+        nativeThreads: 1,
+        useNativeWorkers: true,
+        report: firstReport,
+      });
+      expect(first.byFile.get(fileIdentityKey(normalizedFile))?.locals).toEqual([]);
+      expect(firstReport.backend?.native.filesFellBack).toBe(1);
+      expect(firstReport.backend?.native.errors[0]?.file).toBe(normalizedFile);
+
+      const db = new DatabaseSync(path.join(root, ".codegraph-cache", "index-v1", "index-cache.sqlite"), {
+        readOnly: true,
+      });
+      try {
+        const row = db.prepare("SELECT file FROM module_cache WHERE file = ?").get(normalizedFile);
+        expect(row).toBeUndefined();
+      } finally {
+        db.close();
+      }
+
+      const secondReport = { timings: {} };
+      await buildProjectIndexFromFiles(root, [file], {
+        cache: "disk",
+        native: "on",
+        nativeThreads: 1,
+        useNativeWorkers: true,
+        report: secondReport,
+      });
+      expect(secondReport.cache?.hits).toBe(0);
+      expect(secondReport.workerPool?.tasksSubmitted).toBe(1);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
+
+describe.runIf(isNativeTreeSitterAvailable())("module cache upgrade behavior", () => {
+  it("rejects an older empty cache artifact whose implementation fingerprint differs", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-resource-limit-upgrade-"));
+    const file = path.join(root, "sample.ts");
+    const normalizedFile = normalizePath(file);
+    await fsp.writeFile(file, "export const retained = 1;\n", "utf8");
+
+    try {
+      const signature = await fileSignature(file, true);
+      const currentCacheSignature = await cacheSignatureForFile(file, signature, { native: "on" });
+      const separator = currentCacheSignature.lastIndexOf(":");
+      expect(separator).toBeGreaterThan(0);
+      const legacyCacheSignature = `${currentCacheSignature.slice(0, separator)}:${"0".repeat(64)}`;
+      writeToCache(
+        root,
+        normalizedFile,
+        legacyCacheSignature,
+        { file: normalizedFile, exports: [], imports: [], locals: [] },
+        { cache: "disk", native: "on" },
+      );
+
+      const report = { timings: {} };
+      const index = await buildProjectIndexFromFiles(root, [file], {
+        cache: "disk",
+        native: "on",
+        nativeThreads: 1,
+        useNativeWorkers: true,
+        report,
+      });
+
+      expect(report.cache?.hits).toBe(0);
+      expect(index.byFile.get(fileIdentityKey(normalizedFile))?.locals.map((symbol) => symbol.localName)).toContain(
+        "retained",
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
 });

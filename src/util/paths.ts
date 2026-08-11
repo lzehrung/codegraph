@@ -14,7 +14,8 @@ const defaultCaseInsensitiveFileIdentity = process.platform === "win32" || proce
 let caseInsensitiveFileIdentity = defaultCaseInsensitiveFileIdentity;
 let fileIdentityCaseSensitivityFrozen = false;
 let fileIdentityCaseSensitivityPinned = false;
-let fileIdentityCaseSensitivityProbe: Promise<void> | undefined;
+let fileIdentityCaseSensitivityRoot: string | undefined;
+const fileIdentityCaseSensitivityProbes = new Map<string, Promise<void>>();
 let fileIdentityCaseSensitivityProbeGeneration = 0;
 /**
  * Configures the assumed filesystem case sensitivity used by {@link fileIdentityKey}.
@@ -31,13 +32,19 @@ export function isFileIdentityCaseInsensitive(): boolean {
 }
 
 /**
- * Probes the project-root volume once per process, then configures {@link fileIdentityKey}
- * with the observed case sensitivity. Probe failures retain the platform default.
+ * Probes each indexed root and configures {@link fileIdentityKey} from the first
+ * observed filesystem mode. A conflicting later root emits a process warning because
+ * identity keys are process-global. Probe failures retain the platform default.
  */
 export function initializeFileIdentityCaseSensitivity(projectRoot: string): Promise<void> {
+  const resolvedRoot = path.resolve(projectRoot);
   const generation = fileIdentityCaseSensitivityProbeGeneration;
-  fileIdentityCaseSensitivityProbe ??= probeFileIdentityCaseSensitivity(projectRoot, generation);
-  return fileIdentityCaseSensitivityProbe;
+  let probe = fileIdentityCaseSensitivityProbes.get(resolvedRoot);
+  if (!probe) {
+    probe = probeFileIdentityCaseSensitivity(resolvedRoot, generation);
+    fileIdentityCaseSensitivityProbes.set(resolvedRoot, probe);
+  }
+  return probe;
 }
 
 /**
@@ -50,16 +57,16 @@ export function initializeFileIdentityCaseSensitivity(projectRoot: string): Prom
  */
 export function resetFileIdentityCaseSensitivityForTests(caseInsensitive?: boolean): void {
   fileIdentityCaseSensitivityProbeGeneration += 1;
-  fileIdentityCaseSensitivityProbe = undefined;
+  fileIdentityCaseSensitivityProbes.clear();
   caseInsensitiveFileIdentity = caseInsensitive ?? defaultCaseInsensitiveFileIdentity;
   fileIdentityCaseSensitivityFrozen = false;
   fileIdentityCaseSensitivityPinned = caseInsensitive !== undefined;
+  fileIdentityCaseSensitivityRoot = undefined;
 }
 
-async function probeFileIdentityCaseSensitivity(projectRoot: string, generation: number): Promise<void> {
+async function probeFileIdentityCaseSensitivity(resolvedRoot: string, generation: number): Promise<void> {
   let caseInsensitive = defaultCaseInsensitiveFileIdentity;
   try {
-    const resolvedRoot = path.resolve(projectRoot);
     const caseFlippedRoot = flipPathCharacterCase(resolvedRoot);
     if (caseFlippedRoot) {
       const rootStat = await fsp.stat(resolvedRoot);
@@ -73,10 +80,19 @@ async function probeFileIdentityCaseSensitivity(projectRoot: string, generation:
   } catch {
     // Some filesystems cannot be probed. Keep the platform default.
   }
-  if (generation !== fileIdentityCaseSensitivityProbeGeneration) return;
-  if (fileIdentityCaseSensitivityPinned) return;
-  setFileIdentityCaseInsensitive(caseInsensitive);
+  if (generation !== fileIdentityCaseSensitivityProbeGeneration || fileIdentityCaseSensitivityPinned) return;
+  if (fileIdentityCaseSensitivityFrozen) {
+    if (caseInsensitive !== caseInsensitiveFileIdentity && fileIdentityCaseSensitivityRoot) {
+      process.emitWarning(
+        `Codegraph file identity uses ${fileIdentityCaseSensitivityRoot} as ${caseInsensitiveFileIdentity ? "case-insensitive" : "case-sensitive"}, but ${resolvedRoot} is ${caseInsensitive ? "case-insensitive" : "case-sensitive"}. Multiple filesystem case modes are not supported in one process.`,
+        { code: "CODEGRAPH_FILE_IDENTITY_CASE_MODE_CONFLICT" },
+      );
+    }
+    return;
+  }
+  caseInsensitiveFileIdentity = caseInsensitive;
   fileIdentityCaseSensitivityFrozen = true;
+  fileIdentityCaseSensitivityRoot = resolvedRoot;
 }
 
 function isMissingPathError(error: unknown): boolean {

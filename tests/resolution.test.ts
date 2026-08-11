@@ -1800,6 +1800,48 @@ describe("Import Resolution", () => {
     ).resolves.toEqual({ external: "exported-package/private" });
   });
 
+  it("resolves dual package exports by import mode without reusing the wrong cache entry", async () => {
+    const root = await mkTmpDir("dg-resolve-node-export-conditions-");
+    const sourceFile = path.join(root, "src", "main.ts");
+    const packageDir = path.join(root, "node_modules", "dual-package");
+    const importFile = path.join(packageDir, "dist", "import.mjs");
+    const requireFile = path.join(packageDir, "dist", "require.cjs");
+
+    await fsp.mkdir(path.dirname(sourceFile), { recursive: true });
+    await fsp.mkdir(path.dirname(importFile), { recursive: true });
+    await fsp.writeFile(sourceFile, "export const main = 1;\n", "utf8");
+    await fsp.writeFile(importFile, "export const esm = 1;\n", "utf8");
+    await fsp.writeFile(requireFile, "module.exports = 1;\n", "utf8");
+    await fsp.writeFile(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        exports: {
+          ".": {
+            import: "./dist/import.mjs",
+            require: "./dist/require.cjs",
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const imported = await resolveSpecifier(sourceFile, "dual-package", root, undefined, undefined, {
+      resolveNodeModules: true,
+      exportCondition: "import",
+    });
+    const required = await resolveSpecifier(sourceFile, "dual-package", root, undefined, undefined, {
+      resolveNodeModules: true,
+      exportCondition: "require",
+    });
+
+    expect(typeof imported).toBe("string");
+    expect(typeof required).toBe("string");
+    if (typeof imported === "string" && typeof required === "string") {
+      expect(imported.replace(/\\/g, "/")).toBe(importFile.replace(/\\/g, "/"));
+      expect(required.replace(/\\/g, "/")).toBe(requireFile.replace(/\\/g, "/"));
+    }
+  });
+
   it("honors workspace export maps instead of resolving private source files", async () => {
     const root = await mkTmpDir("dg-resolve-workspace-exports-");
     const sourceFile = path.join(root, "src", "main.ts");

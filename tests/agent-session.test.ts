@@ -35,6 +35,10 @@ function detailedSymbolGraphSnapshotPath(root: string): string {
   return path.join(root, ".codegraph-cache", "index-v1", "detailed-symbol-graph.json");
 }
 
+function projectSnapshotPath(root: string): string {
+  return path.join(root, ".codegraph-cache", "index-v1", "project-index-snapshot.json");
+}
+
 async function readDetailedSidecar(sidecarPath: string): Promise<unknown> {
   const raw = await fs.readFile(sidecarPath);
   return JSON.parse(brotliDecompressSync(raw).toString("utf8"));
@@ -299,6 +303,28 @@ describe("agent session", () => {
     expect(refreshed.version).toBe(2);
   });
 
+  it("does not publish an identity or sidecar when the project snapshot write fails", async () => {
+    const root = await mkGitRepo();
+    const snapshotPath = projectSnapshotPath(root);
+    const sidecarPath = detailedSymbolGraphSnapshotPath(root);
+    const originalRename = fs.rename.bind(fs);
+    const rename = vi.spyOn(fs, "rename").mockImplementation(async (source, target) => {
+      if (path.resolve(String(target)) === path.resolve(snapshotPath)) {
+        throw Object.assign(new Error("injected snapshot publish failure"), { code: "EIO" });
+      }
+      await originalRename(source, target);
+    });
+    try {
+      const loaded = await createAgentSession({ root }).loadProject();
+
+      expect(loaded.index.projectSnapshotIdentity).toBeUndefined();
+      await expect(fs.stat(snapshotPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(sidecarPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      rename.mockRestore();
+    }
+  });
+
   it("rejects a detailed symbol graph sidecar stored for another root", async () => {
     const root = await mkGitRepo();
     await createAgentSession({ root }).loadProject();
@@ -312,6 +338,25 @@ describe("agent session", () => {
 
     expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
     expect(rebuilt.symbolGraph.nodes.size).toBeGreaterThan(0);
+  });
+
+  it("rejects a detailed sidecar with an extra edge between valid nodes", async () => {
+    const root = await mkGitRepo();
+    const cold = await createAgentSession({ root }).loadProject();
+    const sidecarPath = detailedSymbolGraphSnapshotPath(root);
+    const sidecar = (await readDetailedSidecar(sidecarPath)) as MutableDetailedSymbolGraphSidecar;
+    const [from, to] = sidecar.graph.nodes;
+    if (!from || !to) throw new Error("expected at least two persisted symbol nodes");
+    sidecar.graph.edges.push({ from: from.id, to: to.id, label: "tampered-extra-edge" });
+    refreshDetailedSidecarHash(sidecar);
+    await writeDetailedSidecar(sidecarPath, sidecar);
+    const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+
+    const rebuilt = await createAgentSession({ root }).loadProject();
+
+    expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
+    expect(rebuilt.symbolGraph.edges).toEqual(cold.symbolGraph.edges);
+    expect(rebuilt.symbolGraph.edges.some((edge) => edge.label === "tampered-extra-edge")).toBe(false);
   });
   it("rejects well-typed sidecar tampering against the current project index", async () => {
     const root = await mkGitRepo();

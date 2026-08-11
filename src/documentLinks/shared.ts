@@ -45,7 +45,7 @@ export function dedupeModuleSpecifiers(entries: ModuleSpecifier[]): ModuleSpecif
   return uniqueByKey(
     entries,
     (entry) =>
-      `${entry.spec}::${entry.typeOnly ? 1 : 0}::${entry.resolutionKind ?? ""}::${entry.dropIfUnresolved ? 1 : 0}`,
+      `${entry.spec}::${entry.typeOnly ? 1 : 0}::${entry.resolutionKind ?? ""}::${entry.exportCondition ?? ""}::${entry.dropIfUnresolved ? 1 : 0}`,
   );
 }
 

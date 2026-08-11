@@ -1,28 +1,121 @@
 import { describe, expect, it } from "vitest";
-import { pickPackageExportTarget, resolvePackageExportTargets } from "../src/util/packageExports.js";
+import { resolvePackageExportTargets } from "../src/util/packageExports.js";
 
 describe("package export target selection", () => {
   it("picks string targets directly", () => {
-    expect(pickPackageExportTarget("./dist/index.js")).toBe("./dist/index.js");
+    expect(resolvePackageExportTargets("./dist/index.js", ".")).toEqual(["./dist/index.js"]);
   });
 
-  it("prefers import conditions while retaining node and require fallbacks", () => {
+  // Restored from pre-c1680788: asserts Node author-key order, not the buggy
+  // "prefers import" priority list that replaced this assertion.
+  it("uses Node's declared condition order", () => {
     expect(
-      pickPackageExportTarget({
-        require: "./dist/index.cjs",
-        default: "./dist/index.js",
-        import: "./dist/index.mjs",
-      }),
-    ).toBe("./dist/index.mjs");
-
-    expect(pickPackageExportTarget({ node: "./dist/index.node.js" })).toBe("./dist/index.node.js");
+      resolvePackageExportTargets(
+        {
+          import: "./dist/index.mjs",
+          require: "./dist/index.cjs",
+          default: "./dist/index.js",
+        },
+        ".",
+      ),
+    ).toEqual(["./dist/index.mjs"]);
 
     expect(
-      pickPackageExportTarget({
-        require: "./dist/index.cjs",
-        module: "./dist/index.module.js",
-      }),
-    ).toBe("./dist/index.cjs");
+      resolvePackageExportTargets(
+        {
+          node: "./dist/index.node.js",
+          import: "./dist/index.mjs",
+        },
+        ".",
+      ),
+    ).toEqual(["./dist/index.node.js"]);
+
+    expect(
+      resolvePackageExportTargets(
+        {
+          import: "./dist/index.mjs",
+          node: "./dist/index.node.js",
+        },
+        ".",
+      ),
+    ).toEqual(["./dist/index.mjs"]);
+
+    expect(
+      resolvePackageExportTargets(
+        {
+          require: "./dist/index.cjs",
+          module: "./dist/index.module.js",
+        },
+        ".",
+        "require",
+      ),
+    ).toEqual(["./dist/index.cjs"]);
+  });
+
+  it("selects mutually exclusive import vs require by consumer mode", () => {
+    const dual = {
+      require: "./cjs.cjs",
+      import: "./esm.mjs",
+      default: "./default.js",
+    };
+    expect(resolvePackageExportTargets(dual, ".", "require")).toEqual(["./cjs.cjs"]);
+    expect(resolvePackageExportTargets(dual, ".", "import")).toEqual(["./esm.mjs"]);
+
+    const importFirst = {
+      import: "./esm.mjs",
+      require: "./cjs.cjs",
+    };
+    expect(resolvePackageExportTargets(importFirst, ".", "require")).toEqual(["./cjs.cjs"]);
+    expect(resolvePackageExportTargets(importFirst, ".", "import")).toEqual(["./esm.mjs"]);
+
+    // Reviewer's probe shape: default before import terminates for import mode.
+    const probe = {
+      require: "./cjs.cjs",
+      default: "./default.js",
+      import: "./esm.mjs",
+    };
+    expect(resolvePackageExportTargets(probe, ".", "require")).toEqual(["./cjs.cjs"]);
+    expect(resolvePackageExportTargets(probe, ".", "import")).toEqual(["./default.js"]);
+  });
+
+  it("terminates on default and recurses nested conditions", () => {
+    expect(
+      resolvePackageExportTargets(
+        {
+          default: "./default.js",
+          import: "./never.mjs",
+        },
+        ".",
+      ),
+    ).toEqual(["./default.js"]);
+
+    expect(
+      resolvePackageExportTargets(
+        {
+          node: {
+            require: "./feature-node.cjs",
+            import: "./feature-node.mjs",
+          },
+          default: "./feature.mjs",
+        },
+        ".",
+        "require",
+      ),
+    ).toEqual(["./feature-node.cjs"]);
+
+    expect(
+      resolvePackageExportTargets(
+        {
+          node: {
+            require: "./feature-node.cjs",
+            import: "./feature-node.mjs",
+          },
+          default: "./feature.mjs",
+        },
+        ".",
+        "import",
+      ),
+    ).toEqual(["./feature-node.mjs"]);
   });
 
   it("matches subpath patterns and preserves conditional-array fallback targets", () => {
@@ -44,7 +137,7 @@ describe("package export target selection", () => {
 
   it("refuses unlisted subpaths and invalid target shapes", () => {
     expect(resolvePackageExportTargets({ "./public": "./dist/public.js" }, "./private")).toEqual([]);
-    expect(pickPackageExportTarget(null)).toBeNull();
-    expect(pickPackageExportTarget(false)).toBeNull();
+    expect(resolvePackageExportTargets(null, ".")).toEqual([]);
+    expect(resolvePackageExportTargets(false, ".")).toEqual([]);
   });
 });

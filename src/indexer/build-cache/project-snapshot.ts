@@ -386,8 +386,7 @@ export async function writeProjectIndexSnapshot(
   index: ProjectIndex,
   filesSignature: string,
 ): Promise<void> {
-  if ((opts?.cache ?? "off") !== "disk") return;
-  index.projectSnapshotIdentity = createProjectSnapshotIdentity(filesSignature, opts);
+  const projectSnapshotIdentity = createProjectSnapshotIdentity(filesSignature, opts);
   const serializedBloomFilters = index.bloomFilters
     ? serializeBloomFilterCache(
         index.bloomFilters,
@@ -423,7 +422,9 @@ export async function writeProjectIndexSnapshot(
     await writeSnapshotAtomically(snapshotPath, compressed);
     const identity = await snapshotFileIdentity(snapshotPath);
     setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, compressed });
+    index.projectSnapshotIdentity = projectSnapshotIdentity;
   } catch {
+    delete index.projectSnapshotIdentity;
     // Snapshot writes are an optimization; cache write failures must not fail indexing.
   }
 }
@@ -708,8 +709,49 @@ async function isDetailedSymbolGraphCompatibleWithProject(
       return false;
     }
   }
-  const edgeKeys = new Set(graph.edges.map((edge) => `${edge.from}\0${edge.to}\0${edge.label ?? ""}`));
-  return base.edges.every((edge) => edgeKeys.has(`${edge.from}\0${edge.to}\0${edge.label ?? ""}`));
+  return sameSymbolEdgeMultiset(base.edges, graph.edges);
+}
+
+function sameSymbolEdgeMultiset(expected: readonly SymbolEdge[], actual: readonly SymbolEdge[]): boolean {
+  if (expected.length !== actual.length) return false;
+  const counts = new Map<string, number>();
+  for (const edge of expected) {
+    const key = serializedSymbolEdge(edge);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  for (const edge of actual) {
+    const key = serializedSymbolEdge(edge);
+    const remaining = counts.get(key);
+    if (remaining === undefined) return false;
+    if (remaining === 1) counts.delete(key);
+    else counts.set(key, remaining - 1);
+  }
+  return !counts.size;
+}
+
+function serializedSymbolEdge(edge: SymbolEdge): string {
+  return JSON.stringify({
+    from: edge.from,
+    to: edge.to,
+    label: edge.label,
+    site: edge.site
+      ? {
+          file: edge.site.file,
+          range: {
+            start: {
+              line: edge.site.range.start.line,
+              column: edge.site.range.start.column,
+              ...(edge.site.range.start.index !== undefined ? { index: edge.site.range.start.index } : {}),
+            },
+            end: {
+              line: edge.site.range.end.line,
+              column: edge.site.range.end.column,
+              ...(edge.site.range.end.index !== undefined ? { index: edge.site.range.end.index } : {}),
+            },
+          },
+        }
+      : undefined,
+  });
 }
 
 function normalizedSnapshotNativeMode(

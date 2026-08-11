@@ -112,7 +112,7 @@ export const RUST_DEF: LanguageDefinition = {
   },
   createsFunctionScope: (node) => node.type === "function_item",
   createsBlockScope: (node) => node.type === "block",
-  membersAreImplicitlyInScope: true,
+  membersAreImplicitlyInScope: false,
   isDeclarationName: (node) => {
     const p = node.parent;
     if (!p) return false;

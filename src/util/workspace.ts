@@ -5,7 +5,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import fg from "fast-glob";
 import { stripHashInlineComment } from "./comments.js";
-import { resolvePackageExportTargets } from "./packageExports.js";
+import { resolvePackageExportTargets, type PackageExportConditionMode } from "./packageExports.js";
 import { listResolutionCandidates } from "./resolutionCandidates.js";
 
 async function pathMatchesCachedStat(
@@ -269,6 +269,7 @@ export function listWorkspacePackageResolutionCandidates(
   spec: string,
   ws: WorkspaceConfig | undefined,
   resolutionExtensions?: readonly string[],
+  exportCondition: PackageExportConditionMode = "import",
 ): string[] {
   if (!ws) return [];
   const { name, subpath } = resolvePackageSubpath(spec);
@@ -281,7 +282,7 @@ export function listWorkspacePackageResolutionCandidates(
   };
   if (Object.hasOwn(pkg, "exports")) {
     const key = subpath ? `./${subpath}` : ".";
-    for (const target of resolvePackageExportTargets(pkg.exports, key)) {
+    for (const target of resolvePackageExportTargets(pkg.exports, key, exportCondition)) {
       pushRelativeCandidates(target);
     }
     return Array.from(new Set(candidates));
@@ -303,12 +304,13 @@ export async function resolveWorkspacePackage(
   spec: string,
   ws: WorkspaceConfig | undefined,
   resolutionExtensions?: readonly string[],
+  exportCondition: PackageExportConditionMode = "import",
 ): Promise<string | null> {
   if (!ws) return null;
   const { name } = resolvePackageSubpath(spec);
   const pkg = ws.packages.get(name);
   if (!pkg) return null;
-  for (const candidate of listWorkspacePackageResolutionCandidates(spec, ws, resolutionExtensions)) {
+  for (const candidate of listWorkspacePackageResolutionCandidates(spec, ws, resolutionExtensions, exportCondition)) {
     if (await fileExists(candidate)) {
       return path.resolve(candidate);
     }

@@ -3,6 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
 import * as indexer from "../src/indexer.js";
+import * as scopeModule from "../src/indexer/scope.js";
 import { getCachedReferenceCandidateFiles } from "../src/indexer/navigation-references.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import {
@@ -817,7 +818,7 @@ describe("Find References", () => {
             ).toBe(false);
           }
 
-          const methodHelper = await testFindReferences(index, mainFile, 3, 3, 2);
+          const methodHelper = await testFindReferences(index, mainFile, 3, 3, 1);
           expect(methodHelper.status).toBe("ok");
           expectReferenceAt(methodHelper, mainFile, 6);
           if (methodHelper.status === "ok") {
@@ -1944,19 +1945,72 @@ describe("Find References", () => {
           );
 
           const index = await createTestIndexFromFiles(root, [sourceFile, entryFile, consumerFile]);
-          const localResult = await testFindReferences(index, entryFile, 1, 16, 3);
-          expect(localResult.status).toBe("ok");
-          if (localResult.status === "ok") {
-            expect(localResult.references.map((reference) => [reference.file, reference.range.start.line])).toEqual([
-              [consumerFile, 2],
-              [entryFile, 1],
-              [entryFile, 2],
-            ]);
+          const scopeBuildSpy = vi.spyOn(scopeModule, "buildScopeIndexFromSource");
+          try {
+            const localResult = await testFindReferences(index, entryFile, 1, 16, 3);
+            expect(localResult.status).toBe("ok");
+            if (localResult.status === "ok") {
+              const firstReferences = localResult.references.map((reference) => [
+                reference.file,
+                reference.range.start.line,
+              ]);
+              expect(firstReferences).toEqual([
+                [consumerFile, 2],
+                [entryFile, 1],
+                [entryFile, 2],
+              ]);
+              expect(index.scopeCache.has(fileIdentityKey(entryFile))).toBe(true);
+
+              const buildCountAfterFirst = scopeBuildSpy.mock.calls.length;
+              const warmResult = await testFindReferences(index, entryFile, 1, 16, 3);
+              expect(scopeBuildSpy.mock.calls.length).toBe(buildCountAfterFirst);
+              expect(warmResult.status).toBe("ok");
+              if (warmResult.status === "ok") {
+                expect(warmResult.references.map((reference) => [reference.file, reference.range.start.line])).toEqual(
+                  firstReferences,
+                );
+              }
+            }
+          } finally {
+            scopeBuildSpy.mockRestore();
           }
         } finally {
           await fsp.rm(root, { recursive: true, force: true });
         }
       });
     }
+
+    it("excludes type and namespace re-export clauses from same-name local references", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-export-from-forms-"));
+      try {
+        const sourceFile = path.join(root, "source.ts").replace(/\\/g, "/");
+        const entryFile = path.join(root, "entry.ts").replace(/\\/g, "/");
+        await fsp.writeFile(sourceFile, "export type Foo = string;\nexport const value = 1;\n", "utf8");
+        await fsp.writeFile(
+          entryFile,
+          ['const ns = "local";', 'export type { Foo } from "./source";', 'export * as ns from "./source";'].join("\n"),
+          "utf8",
+        );
+
+        const index = await createTestIndexFromFiles(root, [sourceFile, entryFile]);
+        const typeResult = await testFindReferences(index, sourceFile, 1, 13, 1);
+        expect(typeResult.status).toBe("ok");
+        if (typeResult.status === "ok") {
+          expect(typeResult.references.map((reference) => [reference.file, reference.range.start.line])).toEqual([
+            [sourceFile, 1],
+          ]);
+        }
+
+        const localNamespace = await testFindReferences(index, entryFile, 1, 7, 1);
+        expect(localNamespace.status).toBe("ok");
+        if (localNamespace.status === "ok") {
+          expect(localNamespace.references.map((reference) => [reference.file, reference.range.start.line])).toEqual([
+            [entryFile, 1],
+          ]);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
   });
 });

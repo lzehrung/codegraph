@@ -145,15 +145,14 @@ export async function resolveMemberAccessDefinition(params: {
     }
   }
 
-  if (
-    obj &&
-    prop &&
-    node.id === prop.id &&
-    (supportsReceiverMemberResolution(sup.id) ||
-      (sup.id === "php" && /^(?:this|\$this|self)$/.test(sliceText(obj, source))))
-  ) {
+  const receiverName = obj ? sliceText(obj, source) : "";
+  const implicitClassReceiver =
+    (isJsTsLanguage(sup.id) && receiverName === "this") ||
+    (sup.id === "php" && /^(?:\$this|self|static)$/.test(receiverName)) ||
+    (sup.id === "rust" && /^(?:self|Self)$/.test(receiverName));
+  if (obj && prop && node.id === prop.id && (supportsReceiverMemberResolution(sup.id) || implicitClassReceiver)) {
     const member = sliceText(prop, source);
-    if (!sup.membersAreImplicitlyInScope && /^(?:this|\$this|self)$/.test(sliceText(obj, source))) {
+    if (!sup.membersAreImplicitlyInScope && implicitClassReceiver) {
       const classContainer = findEnclosingClassContainer(node);
       const memberDef = classContainer
         ? findLocalWithinNode(mod.locals, member, classContainer, sup.normalizeIdentifier)

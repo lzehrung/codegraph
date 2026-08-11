@@ -123,6 +123,7 @@ function normalizeModuleSpecifiers(specifiers: ModuleSpecifier[]): ModuleSpecifi
           ...(entry.raw !== undefined ? { raw: entry.raw } : {}),
           ...(entry.phpImportType ? { phpImportType: entry.phpImportType } : {}),
           ...(entry.resolutionKind ? { resolutionKind: entry.resolutionKind } : {}),
+          ...(entry.exportCondition ? { exportCondition: entry.exportCondition } : {}),
           ...(entry.dropIfUnresolved ? { dropIfUnresolved: true } : {}),
           ...(entry.resolved ? { resolved: entry.resolved } : {}),
           ...(entry.confidence !== undefined ? { confidence: entry.confidence } : {}),
@@ -132,7 +133,7 @@ function normalizeModuleSpecifiers(specifiers: ModuleSpecifier[]): ModuleSpecifi
 
 function appendUniqueSpecifiers(target: ModuleSpecifier[], incoming: ModuleSpecifier[], seen: Set<string>): void {
   for (const entry of incoming) {
-    const key = `${entry.spec}::${entry.typeOnly ? 1 : 0}`;
+    const key = `${entry.spec}::${entry.typeOnly ? 1 : 0}::${entry.exportCondition ?? ""}`;
     if (seen.has(key)) continue;
     seen.add(key);
     target.push(entry);
@@ -140,7 +141,7 @@ function appendUniqueSpecifiers(target: ModuleSpecifier[], incoming: ModuleSpeci
 }
 
 function makeSeenSet(target: ModuleSpecifier[]): Set<string> {
-  return new Set(target.map((entry) => `${entry.spec}::${entry.typeOnly ? 1 : 0}`));
+  return new Set(target.map((entry) => `${entry.spec}::${entry.typeOnly ? 1 : 0}::${entry.exportCondition ?? ""}`));
 }
 
 function nativeCaptureStartIndex(
@@ -390,12 +391,16 @@ export function collectModuleSpecifiersFromSource(
           }
         }
         const stylesheetImport = support.id === "css" || support.id === "scss" || support.id === "less";
+        const isJsFamily = support.id === "js" || support.id === "jsx" || support.id === "ts" || support.id === "tsx";
+        // CommonJS require() and TS `import x = require(...)` both use the require condition.
+        const exportCondition = isJsFamily && /\brequire\s*\(/.test(stmtText) ? ("require" as const) : undefined;
         for (const capture of match.captures) {
           if (capture.name !== "mod") continue;
           out.push({
             spec: unquote(capture.text),
             typeOnly,
             ...(stylesheetImport ? { resolutionKind: "stylesheet" } : {}),
+            ...(exportCondition ? { exportCondition } : {}),
           });
         }
       }

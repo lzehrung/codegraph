@@ -40,6 +40,40 @@ const FIELD_LIKE_BINDING_NODE_TYPES = new Set([
   "field_definition", // JavaScript
 ]);
 
+const MEMBER_CONTAINER_NODE_TYPES: Record<string, true> = {
+  class_body: true,
+  class_declaration: true,
+  abstract_class_declaration: true,
+  class_definition: true,
+  class: true,
+  interface_declaration: true,
+  impl_item: true,
+  trait_item: true,
+  enum_declaration: true,
+  enum_item: true,
+};
+
+const CALLABLE_DECLARATION_NODE_TYPES: Record<string, true> = {
+  function_declaration: true,
+  generator_function_declaration: true,
+  function_definition: true,
+  function_item: true,
+  method_definition: true,
+  method_declaration: true,
+  method: true,
+  singleton_method: true,
+};
+
+function isTypeMemberDeclaration(node: SyntaxNodeLike): boolean {
+  let current = node.parent?.parent ?? null;
+  while (current) {
+    if (MEMBER_CONTAINER_NODE_TYPES[current.type]) return true;
+    if (CALLABLE_DECLARATION_NODE_TYPES[current.type]) return false;
+    current = current.parent;
+  }
+  return false;
+}
+
 function appendJsLikeRegexFallbackExports(
   file: string,
   source: string,
@@ -315,6 +349,7 @@ export function collectLocalsAndExportsFromSource(
       kind,
       range,
     };
+    if (node && isTypeMemberDeclaration(node)) base.isMember = true;
     if (docstring) base.docstring = docstring;
     if (lineSpan) base.lineSpan = lineSpan;
     if (typeof complexity === "number") base.complexity = complexity;

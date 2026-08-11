@@ -121,8 +121,15 @@ export function resolveNamedDefinition(
   support: LanguageSupport,
   name: string,
 ): GoToResult | null {
-  const hit = resolveExport(index, file, name, { allowLocalFallback: support.membersAreImplicitlyInScope });
-  if (hit?.kind === "resolved") {
+  const requiresExplicitReceiver = !support.membersAreImplicitlyInScope;
+  const directExport = requiresExplicitReceiver
+    ? mod.exports.find((entry) => entry.type === "local" && entry.exportedAs === name && !entry.target.isMember)
+    : undefined;
+  const hit =
+    directExport && directExport.type === "local"
+      ? { kind: "resolved" as const, def: directExport.target }
+      : resolveExport(index, file, name, { allowLocalFallback: support.membersAreImplicitlyInScope });
+  if (hit?.kind === "resolved" && (!requiresExplicitReceiver || !hit.def.isMember)) {
     return okGoToResult(index, hit.def, {
       via: { exportedName: name },
       resolution: "exact",

@@ -1,3 +1,7 @@
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { listSymbols } from "../../src/index.js";
+import { createTestIndex } from "../test-utils.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 
@@ -81,3 +85,13 @@ const definition: LanguageTestDefinition = {
 };
 
 runLanguageTests(definition);
+
+describe("TypeScript symbol extraction", () => {
+  it("extracts type aliases with the type kind", async () => {
+    const index = await createTestIndex("typescript");
+    const file = path.resolve(process.cwd(), "tests", "samples", "typescript", "utils.ts");
+    const utilityType = listSymbols(index, { file }).find((symbol) => symbol.name === "UtilityType");
+
+    expect(utilityType).toMatchObject({ name: "UtilityType", kind: "type" });
+  });
+});

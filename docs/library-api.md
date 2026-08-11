@@ -28,6 +28,8 @@ For repeated calls, prefer one warm session instead of rebuilding indexes ad hoc
 - `createCodeReviewSession()` for repeated navigation and impact work in library code
 - `createAgentSession()` or MCP for repeated orient/search/explain/packet work in agent hosts
 
+One Node.js process uses one filesystem case-sensitivity mode for file identity. Building indexes on roots with different case modes emits a `CODEGRAPH_FILE_IDENTITY_CASE_MODE_CONFLICT` warning naming both roots; use separate processes for those roots.
+
 CLI commands and agent sessions read `codegraph.config.json` from the project root when it exists. Core indexing APIs keep discovery and language mappings explicit, so pass both options directly when you want the same behavior in custom code:
 
 ```ts

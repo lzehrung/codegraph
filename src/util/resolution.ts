@@ -24,7 +24,8 @@ import { clearPhpResolutionCaches, getPhpComposerImplicitFiles, resolvePhpImport
 import { clearPythonResolutionCache, resolvePythonModule } from "./resolution/python.js";
 import { resolveRustImportPath } from "./resolution/rust.js";
 import { clearTsconfigCache, loadNearestTsconfigFor, type MatchPathFn } from "./resolution/tsconfig.js";
-import type { ModuleSpecifierResolutionKind } from "./specifiers.js";
+import type { ModuleSpecifierExportCondition, ModuleSpecifierResolutionKind } from "./specifiers.js";
+import type { PackageExportConditionMode } from "./packageExports.js";
 import { lruMapGet, lruMapSet } from "./lruMap.js";
 export { resolveGoImportPath } from "./resolution/go.js";
 export { resolveJvmPackageImportPaths } from "./resolution/jvm.js";
@@ -148,6 +149,7 @@ export async function resolveImportSpecifier(
     resolveNodeModules?: boolean;
     resolutionHints?: string[];
     phpImportType?: "class" | "function" | "const";
+    exportCondition?: ModuleSpecifierExportCondition;
   },
 ): Promise<FileId | { external: string }> {
   if (languageId === "go") {
@@ -174,6 +176,7 @@ export async function resolveImportSpecifier(
   return resolveSpecifier(fromFile, spec, projectRoot, opts?.matchPath, opts?.workspaceConfig, {
     resolveNodeModules: !!opts?.resolveNodeModules,
     ...(opts?.resolutionHints ? { resolutionHints: opts.resolutionHints } : {}),
+    ...(opts?.exportCondition ? { exportCondition: opts.exportCondition } : {}),
   });
 }
 
@@ -188,6 +191,7 @@ export async function resolveSpecifier(
     resolutionHints?: string[];
     resolutionExtensions?: readonly string[];
     allowScssPartialResolution?: boolean;
+    exportCondition?: ModuleSpecifierExportCondition;
   },
 ): Promise<FileId | { external: string }> {
   const resolutionHints = normalizeResolutionHints(opts?.resolutionHints);
@@ -195,6 +199,7 @@ export async function resolveSpecifier(
   const resolutionExtensions = getResolutionExtensions(opts?.resolutionExtensions);
   const extensionKey = resolutionExtensions.join("|");
   const workspaceKey = workspaceConfig ? fileIdentityKey(path.resolve(workspaceConfig.rootDir)) : "";
+  const exportCondition: PackageExportConditionMode = opts?.exportCondition === "require" ? "require" : "import";
   const cacheKey = [
     fileIdentityKey(path.resolve(projectRoot)),
     fileIdentityKey(path.resolve(fromFile)),
@@ -204,6 +209,7 @@ export async function resolveSpecifier(
     `scssPartial=${opts?.allowScssPartialResolution ? 1 : 0}`,
     `hints=${hintKey}`,
     `exts=${extensionKey}`,
+    `exportCondition=${exportCondition}`,
   ].join("::");
   const cached = getResolveSpecifierCacheEntry(cacheKey);
   if (cached && (typeof cached !== "string" || isFilePathWithinRoot(projectRoot, cached))) return cached;
@@ -275,7 +281,12 @@ export async function resolveSpecifier(
   }
 
   if (!spec.startsWith(".") && !spec.startsWith("/")) {
-    const resolvedWs = await resolveWorkspacePackage(spec, workspaceConfig, opts?.resolutionExtensions);
+    const resolvedWs = await resolveWorkspacePackage(
+      spec,
+      workspaceConfig,
+      opts?.resolutionExtensions,
+      exportCondition,
+    );
     if (resolvedWs && isFilePathWithinRoot(projectRoot, resolvedWs)) {
       setResolveSpecifierCacheEntry(cacheKey, resolvedWs);
       return resolvedWs;
@@ -292,7 +303,7 @@ export async function resolveSpecifier(
       }
     }
     if (opts?.resolveNodeModules) {
-      const nm = await resolveFromNodeModules(spec, fromFile, projectRoot, opts?.resolutionExtensions);
+      const nm = await resolveFromNodeModules(spec, fromFile, projectRoot, opts?.resolutionExtensions, exportCondition);
       if (nm && isFilePathWithinRoot(projectRoot, nm)) {
         setResolveSpecifierCacheEntry(cacheKey, nm);
         return nm;

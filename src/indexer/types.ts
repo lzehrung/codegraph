@@ -31,6 +31,7 @@ export type SymbolDef = {
   localName: string;
   kind: SymbolKind;
   range: Range;
+  isMember?: boolean;
   docstring?: string;
   lineSpan?: number;
   complexity?: number;

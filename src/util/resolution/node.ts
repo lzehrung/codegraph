@@ -1,6 +1,6 @@
 import path from "node:path";
 import { findFirstExistingResolutionCandidate } from "./findFirstExisting.js";
-import { resolvePackageExportTargets } from "../packageExports.js";
+import { resolvePackageExportTargets, type PackageExportConditionMode } from "../packageExports.js";
 import { fileIdentityKey, isFilePathWithinRoot } from "../paths.js";
 import { directoryExists, loadJSON, type MinimalPackageJson } from "../workspace.js";
 
@@ -9,6 +9,7 @@ export async function resolveFromNodeModules(
   fromFile: string,
   projectRoot: string,
   resolutionExtensions?: readonly string[],
+  exportCondition: PackageExportConditionMode = "import",
 ): Promise<string | null> {
   try {
     const resolvedProjectRoot = path.resolve(projectRoot);
@@ -29,7 +30,7 @@ export async function resolveFromNodeModules(
 
         if (pkg && Object.hasOwn(pkg, "exports")) {
           const exportKey = subpath ? `./${subpath}` : ".";
-          for (const target of resolvePackageExportTargets(pkg.exports, exportKey)) {
+          for (const target of resolvePackageExportTargets(pkg.exports, exportKey, exportCondition)) {
             const hit = await tryResolveRelative(target);
             if (hit) return hit;
           }

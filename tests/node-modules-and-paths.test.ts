@@ -37,6 +37,7 @@ describe("Node modules resolution (opt-in) and path normalization", () => {
     await fsp.writeFile(sourceFile, 'import "my-pkg";\nimport "my-pkg/feature";\n', "utf8");
     await fsp.writeFile(path.join(nm, "esm.js"), "export const value = 1;\n", "utf8");
     await fsp.writeFile(path.join(nm, "feature.cjs"), "module.exports = 2;\n", "utf8");
+    await fsp.writeFile(path.join(nm, "feature.mjs"), "export const value = 2;\n", "utf8");
     await fsp.writeFile(
       path.join(nm, "package.json"),
       JSON.stringify(
@@ -48,6 +49,7 @@ describe("Node modules resolution (opt-in) and path normalization", () => {
               import: "./esm.js",
             },
             "./feature": {
+              import: "./feature.mjs",
               require: "./feature.cjs",
               module: "./feature.module.js",
             },
@@ -63,7 +65,7 @@ describe("Node modules resolution (opt-in) and path normalization", () => {
       path.join(nm, "esm.js").replace(/\\/g, "/"),
     );
     await expect(resolveFromNodeModules("my-pkg/feature", sourceFile, root)).resolves.toBe(
-      path.join(nm, "feature.cjs").replace(/\\/g, "/"),
+      path.join(nm, "feature.mjs").replace(/\\/g, "/"),
     );
   });
 

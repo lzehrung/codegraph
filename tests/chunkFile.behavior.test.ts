@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LANG_CONFIGS } from "../src/bootstrap/treeSitterLanguages.js";
@@ -666,5 +667,79 @@ describe("chunkTextFile and chunkFile regressions", () => {
 
     expect(chunks.some((chunk) => chunk.type === "class" && chunk.name === "Tiny")).toBe(true);
     expect(chunks.some((chunk) => chunk.type === "method" && chunk.name === "run")).toBe(true);
+  });
+
+  it("preserves native block text when non-ASCII precedes captures", () => {
+    // Accented Latin (2 UTF-8 bytes), CJK (3), and an emoji (4 bytes / UTF-16 surrogate pair)
+    // must not shift Tree-sitter UTF-8 byte indexes relative to String.slice UTF-16 units.
+    const source = [
+      "// Café résumé 你好 🌍 prefix",
+      "",
+      "export function alpha() {",
+      "  const label = 'café';",
+      "  return label;",
+      "}",
+      "",
+      "export function beta() {",
+      "  const msg = '覆盖 ✅';",
+      "  return msg;",
+      "}",
+      "",
+    ].join("\n");
+
+    expect(Buffer.byteLength(source, "utf8")).toBeGreaterThan(source.length);
+
+    const nativeSpy = vi.spyOn(nativeRuntime, "getNativeSingleQueryExecution");
+    const chunks = chunkFile({
+      language: LANG_CONFIGS.typescript,
+      source,
+      filePath: "unicode-probe.ts",
+      minTokens: 1,
+      maxTokens: 400,
+      tokenizer: tokenize,
+    });
+
+    expect(nativeSpy).toHaveBeenCalled();
+    expect(nativeSpy.mock.results[0]?.type).toBe("return");
+    const nativeResult = nativeSpy.mock.results[0]?.value as { matches: unknown[] | null };
+    expect(nativeResult.matches?.length).toBeGreaterThan(0);
+
+    const alpha = chunks.find((chunk) => chunk.type === "function" && chunk.name === "alpha");
+    const beta = chunks.find((chunk) => chunk.type === "function" && chunk.name === "beta");
+    expect(alpha).toBeDefined();
+    expect(beta).toBeDefined();
+    expect(alpha!.text).toContain("function alpha");
+    expect(alpha!.text).toContain("const label = 'café'");
+    expect(alpha!.text).toContain("return label");
+    expect(beta!.text).toContain("function beta");
+    expect(beta!.text).toContain("const msg = '覆盖 ✅'");
+    expect(beta!.text).toContain("return msg");
+
+    expect(source.includes(alpha!.text)).toBe(true);
+    expect(source.includes(beta!.text)).toBe(true);
+
+    const covered = new Array<boolean>(source.length).fill(false);
+    for (const chunk of chunks) {
+      let offset = source.indexOf(chunk.text);
+      expect(offset).toBeGreaterThanOrEqual(0);
+      while (offset !== -1) {
+        for (let index = offset; index < offset + chunk.text.length; index += 1) {
+          covered[index] = true;
+        }
+        offset = source.indexOf(chunk.text, offset + 1);
+      }
+    }
+    expect(covered.every(Boolean)).toBe(true);
+    expect(chunks.every((chunk) => chunk.tokenCount <= 400)).toBe(true);
+
+    const again = chunkFile({
+      language: LANG_CONFIGS.typescript,
+      source,
+      filePath: "unicode-probe.ts",
+      minTokens: 1,
+      maxTokens: 400,
+      tokenizer: tokenize,
+    });
+    expect(again.map((chunk) => chunk.id)).toEqual(chunks.map((chunk) => chunk.id));
   });
 });

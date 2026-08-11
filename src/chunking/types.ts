@@ -25,7 +25,9 @@ export interface Chunk {
 export interface BlockCandidate {
   kind: string;
   name?: string;
+  /** Start offset in JS string index units (UTF-16 code units). */
   startByte: number;
+  /** End offset in JS string index units (UTF-16 code units). */
   endByte: number;
   startLine: number;
   endLine: number;
@@ -34,7 +36,9 @@ export interface BlockCandidate {
 export type ChunkCapture = {
   name: string;
   text: string;
+  /** Start offset in JS string index units (UTF-16 code units). */
   startByte: number;
+  /** End offset in JS string index units (UTF-16 code units). */
   endByte: number;
   startLine: number;
   endLine: number;

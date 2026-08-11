@@ -88,7 +88,7 @@ export async function* streamTextGrep(
     useGitignore?: boolean;
   },
 ): AsyncGenerator<TextGrepHit, void, void> {
-  const maxHits = Math.max(1, Math.min(opts?.maxHits ?? 5000, TEXT_GREP_STREAM_MAX_HITS));
+  const maxHits = Math.max(0, Math.min(opts?.maxHits ?? 5000, TEXT_GREP_STREAM_MAX_HITS));
   const flags = `g${opts?.ignoreCase ? "i" : ""}`;
 
   let regex: RegExp;
@@ -192,7 +192,7 @@ export async function textGrepBounded(
     useGitignore?: boolean;
   },
 ): Promise<GrepResultEnvelope<TextGrepHit>> {
-  const limit = Math.max(1, Math.min(opts?.maxHits ?? 5000, TEXT_GREP_MAX_HITS));
+  const limit = Math.max(0, Math.min(opts?.maxHits ?? 5000, TEXT_GREP_MAX_HITS));
   const items: TextGrepHit[] = [];
   let totalSeen = 0;
   for await (const hit of streamTextGrep(projectRoot, patternSource, patterns, { ...opts, maxHits: limit + 1 })) {

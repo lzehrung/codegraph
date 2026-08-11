@@ -30,8 +30,12 @@ import * as projectFilesModule from "../src/util/projectFiles.js";
 import * as gitModule from "../src/util/git.js";
 import * as incrementalPlan from "../src/indexer/incremental-plan.js";
 import * as filePrep from "../src/languages/filePrep.js";
-import { getLanguageById } from "../src/languages/registry.js";
-import { clearImplementationFingerprintCache } from "../src/indexer/build-cache/options.js";
+import { getAllLanguages, getLanguageById } from "../src/languages/registry.js";
+import type { LanguageDefinition } from "../src/languages/types.js";
+import {
+  clearImplementationFingerprintCache,
+  languageDefinitionFingerprintCoverage,
+} from "../src/indexer/build-cache/options.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { runGit } from "./helpers/git.js";
 import { createTempProjectRoot, mkTmpDir } from "./helpers/filesystem.js";
@@ -249,6 +253,111 @@ describe("Cache invalidation and strict hashing", () => {
       typescript.graph.imports = originalImportsQuery;
       clearImplementationFingerprintCache();
     }
+  });
+
+  // Each mutation changes only the named definition field; source bytes stay fixed.
+  // Values are chosen to flip the field's effective behavior (or, for hooks, to
+  // introduce a behavior-neutral hook where none existed) so any fingerprint
+  // change is attributable to descriptor coverage alone.
+  const snapshotField = <K extends keyof LanguageDefinition>(
+    definition: LanguageDefinition,
+    field: K,
+  ): (() => void) => {
+    if (field in definition) {
+      const value = definition[field];
+      return () => {
+        definition[field] = value;
+      };
+    }
+    return () => {
+      delete definition[field];
+    };
+  };
+
+  const definitionFieldMutations: Array<{
+    field: "scopeDeclarationNames" | "normalizeIdentifier" | "usesQueryDrivenLocals" | "membersAreImplicitlyInScope";
+    apply: (definition: LanguageDefinition) => void;
+  }> = [
+    {
+      field: "scopeDeclarationNames",
+      apply: (definition) => {
+        definition.scopeDeclarationNames = () => false;
+      },
+    },
+    {
+      field: "normalizeIdentifier",
+      apply: (definition) => {
+        definition.normalizeIdentifier = (name) => name;
+      },
+    },
+    {
+      field: "usesQueryDrivenLocals",
+      apply: (definition) => {
+        definition.usesQueryDrivenLocals = true;
+      },
+    },
+    {
+      field: "membersAreImplicitlyInScope",
+      apply: (definition) => {
+        definition.membersAreImplicitlyInScope = true;
+      },
+    },
+  ];
+
+  for (const { field, apply } of definitionFieldMutations) {
+    it(`rebuilds when language-definition field ${field} changes without source changes`, async () => {
+      const root = await mkTmpDir(`dg-implementation-fingerprint-${field}-`);
+      const entryPath = path.join(root, "entry.ts");
+      const source = "export const fingerprinted = 1;\n";
+      await fsp.writeFile(entryPath, source, "utf8");
+      const file = normalize(path.resolve(entryPath));
+      const typescript = getLanguageById("ts");
+      if (!typescript) throw new Error("Expected TypeScript language definition.");
+      const restore = snapshotField(typescript, field);
+
+      clearImplementationFingerprintCache();
+      try {
+        await buildProjectIndex(root, { threads: 2, cache: "disk" });
+        const initialSignature = readModuleCacheSignature(root, file);
+        if (!initialSignature) throw new Error("Expected a cached module signature.");
+
+        apply(typescript);
+        clearImplementationFingerprintCache();
+        const report: BuildReport = { timings: {} };
+        const rebuilt = await buildProjectIndexIncremental(root, {
+          threads: 2,
+          cache: "disk",
+          report,
+        });
+        const rebuiltSignature = readModuleCacheSignature(root, file);
+
+        expect(await fsp.readFile(entryPath, "utf8")).toBe(source);
+        expect(rebuiltSignature).not.toBe(initialSignature);
+        expect(report.manifest?.optionsMismatch).toContain("implementation");
+        expect(report.files?.parsed).toBe(1);
+        expect(moduleForPath(rebuilt, entryPath)?.locals.some((local) => local.localName === "fingerprinted")).toBe(
+          true,
+        );
+      } finally {
+        restore();
+        clearImplementationFingerprintCache();
+      }
+    });
+  }
+
+  it("guards that every LanguageDefinition field is covered by the implementation fingerprint", () => {
+    for (const definition of getAllLanguages()) {
+      const uncovered = Object.keys(definition).filter((key) => !(key in languageDefinitionFingerprintCoverage));
+      expect(uncovered, `${definition.id} carries definition fields without fingerprint coverage`).toEqual([]);
+    }
+
+    // Demonstrate the guard: a field added to a definition without descriptor
+    // coverage is detected instead of silently outliving the on-disk index.
+    const typescript = getLanguageById("ts");
+    if (!typescript) throw new Error("Expected TypeScript language definition.");
+    const probe = { ...typescript, someFutureSemanticField: true };
+    const uncoveredInProbe = Object.keys(probe).filter((key) => !(key in languageDefinitionFingerprintCoverage));
+    expect(uncoveredInProbe).toEqual(["someFutureSemanticField"]);
   });
 
   it("namespaces shared custom cache directories and rejects a manifest from another root", async () => {

@@ -45,6 +45,7 @@ export function isMemberAccessNode(sup: LanguageSupport, node: SyntaxNodeLike): 
   return (
     node.type === memberExpressionType ||
     (sup.id === "go" && node.type === "qualified_type") ||
+    (sup.id === "php" && (node.type === "member_call_expression" || node.type === "scoped_call_expression")) ||
     node.type === "member_access_expression" ||
     node.type === "qualified_name" ||
     node.type === "field_access" ||
@@ -119,6 +120,14 @@ export function getMemberAccessParts(sup: LanguageSupport, memberNode: SyntaxNod
       return fieldParts(memberNode, "scope", "name");
     }
     return fieldParts(memberNode, "receiver", "method");
+  }
+  if (sup.id === "php") {
+    if (memberNode.type === "member_call_expression") {
+      return fieldParts(memberNode, "object", "name");
+    }
+    if (memberNode.type === "scoped_call_expression") {
+      return fieldParts(memberNode, "scope", "name");
+    }
   }
   if (sup.id === "rust" && memberNode.type === "scoped_identifier") {
     return fieldParts(memberNode, "path", "name");

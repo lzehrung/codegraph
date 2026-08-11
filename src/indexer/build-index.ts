@@ -315,7 +315,8 @@ async function buildIndexedModuleForFile(args: {
   );
 
   const sigInfo = args.fileSignatures.get(args.file);
-  if (sigInfo) {
+  const cacheable = !prepared.nativeFallbackReason && !lacksParserContext;
+  if (sigInfo && cacheable) {
     const cacheSig = args.cacheEnabled
       ? await moduleCacheSignatureForFile(args.file, sigInfo, args.opts)
       : sigInfo.cacheSig;
@@ -1114,7 +1115,8 @@ export async function buildProjectIndexIncremental(
     }
     const currentConfigHashResult = await computeConfigHash(projectRoot, opts?.logLevel);
     const currentConfigHash = recordConfigHashResult(manifestReport, currentConfigHashResult, opts?.logLevel);
-    const configChanged = !!currentConfigHash && (!manifest?.configHash || currentConfigHash !== manifest.configHash);
+    const configChanged =
+      !!currentConfigHashResult.error || !manifest?.configHash || currentConfigHash !== manifest.configHash;
     const requiresFullRebuild = optionDiffs.some(
       (diff) => diff === "discovery" || diff === "native" || diff === "implementation" || diff === "languageExtensions",
     );
@@ -1123,7 +1125,13 @@ export async function buildProjectIndexIncremental(
         logWithLevel(opts?.logLevel, "warn", "Configuration changed, rebuilding index...");
       }
       if (manifestReport && manifest) {
-        manifestReport.reason = requiresFullRebuild ? "buildOptionsMismatch" : "graphOptionsMismatch";
+        let reason = "graphOptionsMismatch";
+        if (requiresFullRebuild) {
+          reason = "buildOptionsMismatch";
+        } else if (configChanged) {
+          reason = "configChanged";
+        }
+        manifestReport.reason = reason;
         manifestReport.reused = false;
       }
       return await buildProjectIndexFromExport(projectRoot, opts, { ignoreExistingManifest: true });

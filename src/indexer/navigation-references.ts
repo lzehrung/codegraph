@@ -33,7 +33,7 @@ function exportFromIdentifier(
   const moduleIndex = index.byFile.get(fileIdentityKey(fileId));
   if (!moduleIndex) return null;
 
-  const exportFromPattern = /\bexport\s*\{([^}]*)\}\s*from\s*(["'])([^"']+)\2/g;
+  const exportFromPattern = /\bexport\s+(?:type\s+)?\{([^}]*)\}\s*from\s*(["'])([^"']+)\2/g;
   let match: RegExpExecArray | null;
   while ((match = exportFromPattern.exec(parsed.source))) {
     const listText = match[1]!;
@@ -72,6 +72,14 @@ function exportFromIdentifier(
       return { isExportFrom: true, sourceSpecifier, ...(entry ? { entry } : {}) };
     }
     itemOffset += listText.length + 1;
+  }
+  const namespaceExportPattern = /\bexport\s*\*\s*as\s*([A-Za-z_$][\w$]*)\s*from\s*(["'])([^"']+)\2/g;
+  while ((match = namespaceExportPattern.exec(parsed.source))) {
+    const namespace = match[1]!;
+    const namespaceStart = match.index + match[0].indexOf(namespace);
+    if (startIndex >= namespaceStart && startIndex < namespaceStart + namespace.length) {
+      return { isExportFrom: true };
+    }
   }
   return null;
 }
@@ -112,6 +120,7 @@ export function getCachedScope(
       (occurrence) => !exportFromIdentifier(index, fileId, occurrence, parsedCtx)?.isExportFrom,
     );
   }
+  index.scopeCache.set(fileKey, scopeIndex);
   return scopeIndex;
 }
 export async function buildPhpQualifiedNames(

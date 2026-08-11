@@ -968,7 +968,7 @@ describe("Review report", () => {
         exported: true,
       }),
     );
-    expect(report.summary.symbolsChanged).toBe(1);
+    expect(report.summary.symbolsChanged).toBe(2);
     expect(report.riskSummary.signals).toContain("exported-symbols-changed");
     expect(report.riskSummary.level).toBe("medium");
   });
@@ -1003,9 +1003,9 @@ describe("Review report", () => {
     });
 
     const summary = report.changedFiles.find((entry) => entry.file === "src/index.ts");
-    expect(summary?.symbols.map((symbol) => symbol.name)).toEqual(["first"]);
+    expect(summary?.symbols.map((symbol) => symbol.name)).toEqual(["first", "previousFirst"]);
     expect(summary?.apiContext?.map((symbol) => symbol.name)).toEqual(["second"]);
-    expect(report.summary.symbolsChanged).toBe(1);
+    expect(report.summary.symbolsChanged).toBe(2);
   });
 
   it("reports renamed exports inside multi-line barrel blocks as changed", async () => {
@@ -1043,6 +1043,37 @@ describe("Review report", () => {
     expect(summary?.symbols.map((symbol) => symbol.name)).toEqual(["current"]);
     expect(summary?.apiContext?.map((symbol) => symbol.name)).toEqual(["other"]);
     expect(report.summary.symbolsChanged).toBe(1);
+  });
+
+  it("reports both sides of a replaced re-export", async () => {
+    const root = await mkTmpDir("dg-review-reexport-replacement-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    const previousFile = path.join(srcDir, "previous.ts");
+    const currentFile = path.join(srcDir, "current.ts");
+    const barrelFile = path.join(srcDir, "index.ts");
+    await fsp.writeFile(previousFile, "export const previous = 1;\n", "utf8");
+    await fsp.writeFile(currentFile, "export const current = 2;\n", "utf8");
+    await fsp.writeFile(barrelFile, 'export { current } from "./current";\n', "utf8");
+
+    const report = await buildReviewReport(root, {
+      diffText: [
+        "diff --git a/src/index.ts b/src/index.ts",
+        "index 1111111..2222222 100644",
+        "--- a/src/index.ts",
+        "+++ b/src/index.ts",
+        "@@ -1 +1 @@",
+        '-export { previous } from "./previous";',
+        '+export { current } from "./current";',
+        "",
+      ].join("\n"),
+    });
+
+    const summary = report.changedFiles.find((entry) => entry.file === "src/index.ts");
+    expect(summary?.symbols.map((symbol) => symbol.name)).toEqual(["current", "previous"]);
+    expect(summary?.apiContext).toBeUndefined();
+    expect(report.summary.symbolsChanged).toBe(2);
+    expect(report.riskSummary.signals).toContain("exported-symbols-changed");
   });
 
   it("reports a removed trailing re-export as an exported API change", async () => {
@@ -1239,10 +1270,11 @@ describe("Review report", () => {
       diagnostics: { missingFiles: [], symbolMappingParseFailures: [] },
     });
 
-    expect(result.summaries[0]?.symbols.map((symbol) => symbol.name)).toEqual(["first"]);
+    expect(result.summaries[0]?.symbols.map((symbol) => symbol.name)).toEqual(["first", "previousFirst"]);
     expect(result.summaries[0]?.apiContext?.map((symbol) => symbol.name)).toEqual(["second"]);
-    expect(result.changedSymbolIds).toHaveLength(1);
-    expect(result.changedSymbolIds[0]).toContain("::first::");
+    expect(result.changedSymbolIds).toHaveLength(2);
+    expect(result.changedSymbolIds).toContainEqual(expect.stringContaining("::first::"));
+    expect(result.changedSymbolIds).toContainEqual(expect.stringContaining("::previousFirst::"));
   });
 
   it("marks binary diff entries and suppresses symbol-level claims", async () => {

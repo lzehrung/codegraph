@@ -1373,6 +1373,48 @@ describe("codegraph MCP handlers", () => {
     expect(byPosition.truncated).toBe(true);
     expect(byPosition.omitted).toBe(1);
   });
+  it("returns empty truncated pages with exact lower-bound metadata for zero limits", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-zero-limit-"));
+    await fs.writeFile(path.join(root, "a.ts"), 'import { b } from "./b";\nexport const a = b;\n');
+    await fs.writeFile(path.join(root, "b.ts"), "export const b = 1;\n");
+    await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
+    await fs.writeFile(
+      path.join(root, "api.ts"),
+      'import { validateUser } from "./auth";\nexport const ok = validateUser(1);\n',
+    );
+
+    const handlers = createCodegraphMcpHandlers({ root });
+
+    const deps = await handlers.deps({ file: "a.ts", limit: 0 });
+    expect(deps).toEqual({
+      dependencies: [],
+      limit: 0,
+      totalSeen: 1,
+      truncated: true,
+      omitted: 1,
+      freshness: { state: "fresh" },
+    });
+
+    const rdeps = await handlers.rdeps({ file: "b.ts", limit: 0 });
+    expect(rdeps).toEqual({
+      reverseDependencies: [],
+      limit: 0,
+      totalSeen: 1,
+      truncated: true,
+      omitted: 1,
+      freshness: { state: "fresh" },
+    });
+
+    const refs = await handlers.refs({ handle: "auth.ts::validateUser", limit: 0 });
+    expect(refs).toEqual({
+      references: [],
+      limit: 0,
+      totalSeen: 1,
+      truncated: true,
+      omitted: 1,
+      freshness: { state: "fresh" },
+    });
+  });
 
   it("bounds the MCP review report with explicit transport limits and omitted counts", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-review-bounded-"));

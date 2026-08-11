@@ -1,6 +1,9 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildSymbolGraphDetailed } from "../../src/graphs/symbol-graph-detailed.js";
+import { buildProjectIndex, goToDefinition } from "../../src/index.js";
 import { findImplementations } from "../../src/indexer/type-hierarchy.js";
 import { createTestIndexFromFiles } from "../test-utils.js";
 import { runLanguageTests } from "./runner.js";
@@ -611,5 +614,55 @@ describe("PHP enum interface conformance", () => {
         relation: "implements",
       }),
     ]);
+  });
+});
+
+describe("PHP explicit method receivers", () => {
+  it("resolves instance and static receiver calls while preserving function imports", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-php-member-navigation-"));
+    const classFile = path.join(root, "example.php");
+    const helperFile = path.join(root, "helpers.php");
+    const classSource = `<?php
+namespace App;
+use function Imported\\helper;
+class Example {
+    function helper() {}
+    function run() {
+        $this->helper();
+        self::helper();
+        static::helper();
+        helper();
+    }
+}
+`;
+
+    try {
+      await writeFile(classFile, classSource, "utf8");
+      await writeFile(helperFile, "<?php namespace Imported; function helper() {}", "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const receiverCalls = [
+        { line: 7, column: 17 },
+        { line: 8, column: 15 },
+        { line: 9, column: 17 },
+      ];
+
+      for (const position of receiverCalls) {
+        const result = await goToDefinition(index, { file: classFile, ...position });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") {
+          expect(result.definition.file.replace(/\\/g, "/")).toBe(classFile.replace(/\\/g, "/"));
+          expect(result.definition.range.start.line).toBe(5);
+        }
+      }
+
+      const imported = await goToDefinition(index, { file: classFile, line: 10, column: 9 });
+      expect(imported.status).toBe("ok");
+      if (imported.status === "ok") {
+        expect(imported.definition.file.replace(/\\/g, "/")).toBe(helperFile.replace(/\\/g, "/"));
+        expect(imported.definition.range.start.line).toBe(1);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

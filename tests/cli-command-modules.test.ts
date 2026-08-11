@@ -710,6 +710,88 @@ describe("CLI command modules", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+  test("textGrepBounded returns an empty, truncated page for maxHits: 0", async () => {
+    const root = await mkTmpDir("codegraph-grep-zero-limit-");
+    await fsp.writeFile(path.join(root, "main.ts"), "needle\n", "utf8");
+    try {
+      const envelope = await textGrepBounded(root, "needle", ["**/*.ts"], { maxHits: 0 });
+      expect(envelope).toEqual({
+        items: [],
+        limit: 0,
+        totalSeen: 1,
+        truncated: true,
+        omitted: 1,
+      });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("grep --json reports the 200000 max-hits clamp for a small result set", async () => {
+    const root = await mkTmpDir("codegraph-grep-clamped-limit-");
+    await fsp.writeFile(path.join(root, "main.ts"), "needle\n", "utf8");
+    const jsonLines: unknown[] = [];
+    try {
+      await handleGrepCommand({
+        positionals: ["needle"],
+        projectRootFs: root,
+        discoveryOptions: {},
+        parsedOptions: new Map(),
+        getOpt: (name) => (name === "--max-hits" ? String(TEXT_GREP_MAX_HITS + 1) : undefined),
+        hasFlag: (name) => name === "--json",
+        writeJSONLine: (value) => jsonLines.push(value),
+        writeStdoutLine: () => {
+          throw new Error("unexpected stdout");
+        },
+        writeStderrLine: (message) => {
+          throw new Error(`unexpected stderr: ${message}`);
+        },
+        exit: (code) => {
+          throw new Error(`unexpected exit ${code}`);
+        },
+      });
+
+      expect(jsonLines).toHaveLength(1);
+      expect(readJsonRecord(jsonLines[0])).toEqual({
+        items: [{ file: "main.ts", line: 1, column: 1, match: "needle", snippet: "needle" }],
+        limit: TEXT_GREP_MAX_HITS,
+        totalSeen: 1,
+        truncated: false,
+        omitted: 0,
+      });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("textGrepBounded treats exactly 200000 hits as complete", async () => {
+    const root = await mkTmpDir("codegraph-grep-exact-ceiling-");
+    await fsp.writeFile(path.join(root, "main.ts"), "x\n".repeat(TEXT_GREP_MAX_HITS), "utf8");
+    try {
+      const envelope = await textGrepBounded(root, "^x$", ["**/*.ts"], { maxHits: TEXT_GREP_MAX_HITS });
+      expect(envelope.limit).toBe(TEXT_GREP_MAX_HITS);
+      expect(envelope.totalSeen).toBe(TEXT_GREP_MAX_HITS);
+      expect(envelope.truncated).toBe(false);
+      expect(envelope.omitted).toBe(0);
+      expect(envelope.items).toHaveLength(TEXT_GREP_MAX_HITS);
+      expect(envelope.items[0]).toEqual({
+        file: "main.ts",
+        line: 1,
+        column: 1,
+        match: "x",
+        snippet: "x",
+      });
+      expect(envelope.items[TEXT_GREP_MAX_HITS - 1]).toEqual({
+        file: "main.ts",
+        line: TEXT_GREP_MAX_HITS,
+        column: 1,
+        match: "x",
+        snippet: "x",
+      });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
 
   test("textGrepBounded reports truncated:true at the 200_000 hit ceiling when more hits exist", async () => {
     const root = await mkTmpDir("codegraph-grep-ceiling-");

@@ -1,7 +1,10 @@
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
 import { LANG_CONFIGS } from "../../src/bootstrap/treeSitterLanguages.js";
 import { chunkFile } from "../../src/chunking/chunkFile.js";
-import { expect } from "vitest";
+import { buildProjectIndex, goToDefinition } from "../../src/index.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 
@@ -227,5 +230,41 @@ describe("Rust macro_rules! structure", () => {
     });
 
     expect(chunks).toContainEqual(expect.objectContaining({ type: "macro", name: "make_answer" }));
+  });
+});
+
+describe("Rust explicit method receivers", () => {
+  it("resolves self and Self calls without lexically resolving a bare impl method", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cg-rust-member-navigation-"));
+    const file = path.join(root, "example.rs");
+    const source = `struct Example;
+impl Example {
+    fn helper() {}
+    fn run(&self) {
+        self.helper();
+        Self::helper();
+        helper();
+    }
+}
+`;
+
+    try {
+      await writeFile(file, source, "utf8");
+      const index = await buildProjectIndex(root, { cache: "off" });
+
+      for (const [line, column] of [
+        [5, 14],
+        [6, 15],
+      ]) {
+        const result = await goToDefinition(index, { file, line, column });
+        expect(result.status).toBe("ok");
+        if (result.status === "ok") expect(result.definition.range.start.line).toBe(3);
+      }
+
+      const bareCall = await goToDefinition(index, { file, line: 7, column: 9 });
+      expect(bareCall.status).toBe("not_found");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

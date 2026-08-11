@@ -170,6 +170,9 @@ describe("Import extraction fallback reporting", () => {
     ]);
     expect(specs[0]?.typeOnly).toBe(true);
     expect(specs.at(-1)?.typeOnly).toBe(true);
+    expect(specs.slice(4, 6).map((entry) => entry.exportCondition)).toEqual(["require", "require"]);
+    expect(specs[6]?.exportCondition).toBeUndefined();
+    expect(specs[7]?.exportCondition).toBe("require");
   });
 
   it("ignores import and require examples inside string literals", () => {

@@ -66,6 +66,7 @@ async function resolveGenericSpecifier(
       resolveNodeModules: !!context.resolveNodeModules,
       ...(resolutionExtensions ? { resolutionExtensions } : {}),
       ...(context.resolutionHints ? { resolutionHints: context.resolutionHints } : {}),
+      ...(entry.exportCondition ? { exportCondition: entry.exportCondition } : {}),
       ...(context.support.id === "scss" && entry.resolutionKind !== "document"
         ? { allowScssPartialResolution: true }
         : {}),
@@ -84,6 +85,7 @@ async function resolveImportSpecifierEdge(
       ...(context.workspaceConfig ? { workspaceConfig: context.workspaceConfig } : {}),
       resolveNodeModules: !!context.resolveNodeModules,
       ...(context.resolutionHints ? { resolutionHints: context.resolutionHints } : {}),
+      ...(entry.exportCondition ? { exportCondition: entry.exportCondition } : {}),
     });
     if (typeof rawResolved === "string") {
       return edgeToResolvedFile(rawResolved);
@@ -96,6 +98,7 @@ async function resolveImportSpecifierEdge(
     resolveNodeModules: !!context.resolveNodeModules,
     ...(context.resolutionHints ? { resolutionHints: context.resolutionHints } : {}),
     ...(entry.phpImportType ? { phpImportType: entry.phpImportType } : {}),
+    ...(entry.exportCondition ? { exportCondition: entry.exportCondition } : {}),
   });
   return typeof res === "string" ? edgeToResolvedFile(res) : edgeToExternal(entry.raw ?? res.external);
 }

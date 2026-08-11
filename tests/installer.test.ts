@@ -952,6 +952,58 @@ describe("agent installer workflow", () => {
     }
   });
 
+  it("attempts every rollback restore and reports entries that remain unrestored", async () => {
+    const homeDir = await mkTmpDir("cg-install-rollback-restore-");
+    await installCodegraphTargets({ homeDir, targetIds: ["codex"], yes: true });
+    const skillPath = path.join(homeDir, ".codex", "skills", "codegraph", "SKILL.md");
+    const markerPath = path.join(homeDir, ".codex", "skills", "codegraph", "CODEGRAPH_INSTALLED");
+    const configPath = path.join(homeDir, ".codex", "config.toml");
+    const originalSkill = await fsp.readFile(skillPath);
+    const originalConfig = await fsp.readFile(configPath);
+    const originalRemove = fsp.rm.bind(fsp);
+    const remove = vi.spyOn(fsp, "rm").mockImplementation(async (target, options) => {
+      if (path.resolve(String(target)) === path.resolve(skillPath)) return;
+      await originalRemove(target, options);
+    });
+    const originalRename = fsp.rename.bind(fsp);
+    const rename = vi.spyOn(fsp, "rename").mockImplementation(async (source, target) => {
+      if (path.resolve(String(target)) === path.resolve(markerPath)) {
+        throw Object.assign(new Error("injected marker restore failure"), { code: "EIO" });
+      }
+      await originalRename(source, target);
+    });
+    try {
+      await expect(uninstallCodegraphTargets({ homeDir, targetIds: ["codex"], yes: true })).rejects.toThrow(
+        normalizeExpectedPath(markerPath),
+      );
+    } finally {
+      rename.mockRestore();
+      remove.mockRestore();
+    }
+
+    await expect(fsp.readFile(skillPath)).resolves.toEqual(originalSkill);
+    await expect(fsp.readFile(configPath)).resolves.toEqual(originalConfig);
+    await expect(fsp.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("removes an orphan installer marker when the skill file is already missing", async () => {
+    const homeDir = await mkTmpDir("cg-uninstall-orphan-marker-");
+    await installCodegraphTargets({ homeDir, targetIds: ["codex"], yes: true });
+    const skillPath = path.join(homeDir, ".codex", "skills", "codegraph", "SKILL.md");
+    const markerPath = path.join(homeDir, ".codex", "skills", "codegraph", "CODEGRAPH_INSTALLED");
+    await fsp.rm(skillPath);
+
+    const result = await uninstallCodegraphTargets({ homeDir, targetIds: ["codex"], yes: true });
+
+    expectInstallerChange(result.changes, {
+      target: "codex",
+      action: "delete",
+      path: markerPath,
+      dryRun: false,
+    });
+    await expect(fsp.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it.each([
     { name: "config", destinationForHome: (homeDir: string) => path.join(homeDir, ".cursor", "mcp.json") },
     {

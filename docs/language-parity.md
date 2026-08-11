@@ -90,6 +90,7 @@ Notes:
 - File dependency edges are deduplicated by physical source/target and runtime versus type-only kind; Rust `pub use` re-exports resolve to first-party files before external classification.
 - Python discovers `.pyi` stubs alongside `.py` sources. Match-case captures in tuple, `as`, splat, and unambiguous bare patterns are local bindings; qualified value patterns are not inferred as captures.
 - JavaScript expands `module.exports = { ...source }` for statically resolvable CommonJS imports and local object literals. Dynamic spread sources remain explicit namespace-reexport markers rather than silently disappearing.
+- Node `package.json#exports` condition matching follows author key order with mutually exclusive `import`/`require` modes threaded from ESM `import`/`import()` versus CommonJS `require()` (and TypeScript `import x = require(...)`). Nested conditions, array fallbacks, and `default` termination match Node for those cases. Custom `--conditions`, `browser`/`types`/`development`/`production`, import attributes, and `#imports` maps are not modeled.
 - Ruby treats `Constant = Struct.new(...)` as a class-kind symbol and a synthetic detailed class declaration. Runtime-computed class factories remain outside this recognition.
 
 ## Project file discovery coverage

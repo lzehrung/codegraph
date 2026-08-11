@@ -494,29 +494,42 @@ async function applyInstallPlan(plan: InstallPlan, verifyInstalledConfig = true)
     }
     await verifyInstallPlan(plan, verifyInstalledConfig);
   } catch (error) {
-    try {
-      await rollbackInstallPlan(plan);
-    } catch (rollbackError) {
-      throw new Error(
-        `Codegraph installer failed and rollback also failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
-        { cause: error },
-      );
+    const rollbackFailures = await rollbackInstallPlan(plan);
+    if (rollbackFailures.length) {
+      const details = rollbackFailures
+        .map(
+          ({ file, error: rollbackError }) =>
+            `${normalizePathForDisplay(file.path)} (${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)})`,
+        )
+        .join(", ");
+      throw new Error(`Codegraph installer failed and rollback could not restore: ${details}`, { cause: error });
     }
     throw error;
   }
 }
 
-async function rollbackInstallPlan(plan: InstallPlan): Promise<void> {
+type InstallRollbackFailure = {
+  file: PlannedInstallFile;
+  error: unknown;
+};
+
+async function rollbackInstallPlan(plan: InstallPlan): Promise<InstallRollbackFailure[]> {
+  const failures: InstallRollbackFailure[] = [];
   for (const file of [...plan.files].reverse()) {
-    if (file.snapshot.bytes === null) {
-      await removePlannedInstallFile(file.path, file.root);
-      continue;
+    try {
+      if (file.snapshot.bytes === null) {
+        await removePlannedInstallFile(file.path, file.root);
+        continue;
+      }
+      await writeTextFileAtomic(file.path, file.snapshot.bytes, {
+        mode: file.snapshot.mode ?? 0o600,
+        root: file.root,
+      });
+    } catch (error) {
+      failures.push({ file, error });
     }
-    await writeTextFileAtomic(file.path, file.snapshot.bytes, {
-      mode: file.snapshot.mode ?? 0o600,
-      root: file.root,
-    });
   }
+  return failures;
 }
 
 async function removePlannedInstallFile(filePath: string, root: string): Promise<void> {
@@ -590,6 +603,7 @@ async function prepareUninstallPlan(
     const skillSnapshot = await snapshotInstallFile(skillPath, skillRoot);
     const markerSnapshot = await snapshotInstallFile(markerPath, skillRoot);
     const removeOwnedSkill = isInstallerOwnedSkill(markerSnapshot.bytes, skillSnapshot.bytes);
+    const removeOrphanMarker = skillSnapshot.bytes === null && markerSnapshot.bytes !== null;
     addPlannedInstallFile(
       files,
       createPlannedInstallFile(
@@ -609,7 +623,7 @@ async function prepareUninstallPlan(
         "marker",
         markerPath,
         skillRoot,
-        removeOwnedSkill ? null : markerSnapshot.bytes,
+        removeOwnedSkill || removeOrphanMarker ? null : markerSnapshot.bytes,
         markerSnapshot,
         dryRun,
       ),
