@@ -192,7 +192,7 @@ function collectMarkdownReferenceDefinitionsForOccurrences(source: string): Map<
     const label = normalizeReferenceLabel(source.slice(absoluteLabelStart + 1, labelEnd));
     const rawDestination = parseMarkdownReferenceDefinitionDestination(source.slice(labelEnd + 2, endIndex));
     const destination = rawDestination ? extractMarkdownDestination(rawDestination) : "";
-    if (label && destination && !isObviouslyDynamicSpecifier(destination)) {
+    if (label && destination && !isObviouslyDynamicSpecifier(destination) && !out.has(label)) {
       out.set(label, { destination });
     }
     lineStart = endIndex;
@@ -275,7 +275,7 @@ function collectMarkdownReferenceDefinitions(source: string): Map<string, Module
       preferRelative: true,
       resolutionKind: "document",
     });
-    if (normalized) out.set(label, normalized);
+    if (normalized && !out.has(label)) out.set(label, normalized);
     lineStart = endIndex;
   }
 

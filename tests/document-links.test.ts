@@ -58,6 +58,25 @@ describe("document link graph extraction", () => {
     expect(edges).toHaveLength(1);
   });
 
+  it("uses the first definition for duplicate Markdown reference labels", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-first-reference-"));
+    const indexFile = path.join(root, "index.md");
+    const guideFile = path.join(root, "guide.md");
+
+    await fsp.writeFile(indexFile, "[Guide][guide]\n\n[guide]: ./guide.md\n[guide]: ./missing.md\n", "utf8");
+    await fsp.writeFile(guideFile, "# Guide\n", "utf8");
+
+    const normalizedIndex = indexFile.replace(/\\/g, "/");
+    const normalizedGuide = guideFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedIndex, normalizedGuide]);
+
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedGuide,
+      ),
+    ).toBe(true);
+  });
+
   it("ignores dynamic handlebars path expressions", async () => {
     const root = path.resolve(process.cwd(), "tests", "samples", "hbs");
     const pageFile = path.join(root, "page.hbs").replace(/\\/g, "/");

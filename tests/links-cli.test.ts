@@ -31,6 +31,20 @@ describe("links CLI", () => {
     }
   });
 
+  it("uses singular wording for one broken link", async () => {
+    const projectRoot = await createMarkdownProject({
+      "README.md": "[missing](missing.md)\n",
+    });
+    try {
+      const result = await captureCli(["links", projectRoot, "--pretty"]);
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe("1 broken Markdown link found:\nREADME.md:1:11 missing_file: missing.md\n");
+    } finally {
+      await fsp.rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it("prints sorted broken-link details and verbose scan counts", async () => {
     const projectRoot = await createMarkdownProject({
       "README.md": "[second](z.md)\n[first](a.md)\n[external](https://example.com)\n",

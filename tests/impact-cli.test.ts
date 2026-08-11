@@ -168,7 +168,7 @@ describe("impact CLI output", () => {
         );
 
         expect(stdout).toContain("Markdown links:");
-        expect(stdout).toContain("1 broken Markdown links found:");
+        expect(stdout).toContain("1 broken Markdown link found:");
         expect(stdout).toContain("README.md:2:11 missing_file: missing.md");
       } finally {
         await fsp.rm(fixture.root, { recursive: true, force: true });
@@ -595,7 +595,7 @@ describe("review CLI output", () => {
         );
 
         expect(stdout).toContain("Markdown links:");
-        expect(stdout).toContain("1 broken Markdown links found:");
+        expect(stdout).toContain("1 broken Markdown link found:");
         expect(stdout).toContain("README.md:2:11 missing_file: missing.md");
       } finally {
         await fsp.rm(fixture.root, { recursive: true, force: true });

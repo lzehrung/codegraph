@@ -37,7 +37,7 @@ export type MarkdownLinkCheckResult = {
   failures: MarkdownLinkCheckFailure[];
 };
 
-type TargetStatus = { status: "found"; isDirectory: boolean } | { status: "missing" };
+type TargetStatus = { status: "found"; isDirectory: boolean; realPath: string } | { status: "missing" };
 
 type LocalLinkTarget = {
   path: string;
@@ -57,6 +57,7 @@ export async function checkMarkdownLinksInFiles(
   files: Iterable<string>,
 ): Promise<MarkdownLinkCheckResult> {
   const root = path.resolve(projectRoot);
+  const realRoot = await fsp.realpath(root);
   const markdownFiles = Array.from(new Set(Array.from(files, (file) => path.resolve(root, file))))
     .filter((file) => isFilePathWithinRoot(root, file))
     .filter((file) => supportForFile(file)?.id === "markdown");
@@ -97,9 +98,13 @@ export async function checkMarkdownLinksInFiles(
         failures.push(toFailure(root, file, occurrence, "missing_file", resolvedTarget));
         continue;
       }
+      if (!isFilePathWithinRoot(realRoot, targetStatus.realPath)) {
+        failures.push(toFailure(root, file, occurrence, "outside_root", resolvedTarget));
+        continue;
+      }
       if (!target.fragment || targetStatus.isDirectory || supportForFile(resolvedTarget)?.id !== "markdown") continue;
 
-      const anchors = await cachedMarkdownAnchors(resolvedTarget, anchorsByPath);
+      const anchors = await cachedMarkdownAnchors(targetStatus.realPath, anchorsByPath);
       if (!anchors.has(target.fragment)) {
         failures.push(toFailure(root, file, occurrence, "missing_fragment", resolvedTarget));
       }
@@ -133,17 +138,50 @@ function parseLocalLinkTarget(destination: string): LocalLinkTarget | null {
   const targetPath = queryIndex >= 0 ? pathWithQuery.slice(0, queryIndex) : pathWithQuery;
   const fragment = hashIndex >= 0 ? decodeFragment(trimmed.slice(hashIndex + 1)) : undefined;
   return {
-    path: targetPath,
+    path: decodeMarkdownPath(targetPath),
     ...(fragment ? { fragment } : {}),
   };
 }
 
+function decodeMarkdownPath(targetPath: string): string {
+  return decodeUriComponent(unescapeMarkdownPunctuation(targetPath));
+}
+
 function decodeFragment(fragment: string): string {
+  return decodeUriComponent(fragment);
+}
+
+function decodeUriComponent(value: string): string {
   try {
-    return decodeURIComponent(fragment);
+    return decodeURIComponent(value);
   } catch {
-    return fragment;
+    return value;
   }
+}
+
+function unescapeMarkdownPunctuation(value: string): string {
+  let unescaped = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value.charAt(index);
+    const escapedCharacter = value.charAt(index + 1);
+    if (character === "\\" && isMarkdownPunctuation(escapedCharacter)) {
+      unescaped += escapedCharacter;
+      index += 1;
+      continue;
+    }
+    unescaped += character;
+  }
+  return unescaped;
+}
+
+function isMarkdownPunctuation(value: string): boolean {
+  const code = value.charCodeAt(0);
+  return (
+    (code >= 33 && code <= 47) ||
+    (code >= 58 && code <= 64) ||
+    (code >= 91 && code <= 96) ||
+    (code >= 123 && code <= 126)
+  );
 }
 
 function resolveMarkdownTarget(root: string, sourceFile: string, destination: string): string {
@@ -167,8 +205,9 @@ async function cachedTargetStatus(
 
 async function readTargetStatus(target: string): Promise<TargetStatus> {
   try {
-    const stats = await fsp.stat(target);
-    return { status: "found", isDirectory: stats.isDirectory() };
+    const realPath = await fsp.realpath(target);
+    const stats = await fsp.stat(realPath);
+    return { status: "found", isDirectory: stats.isDirectory(), realPath };
   } catch (error) {
     if (isMissingPathError(error)) return { status: "missing" };
     throw new Error(
@@ -206,7 +245,6 @@ async function readMarkdownFile(file: string): Promise<string> {
 
 function collectMarkdownAnchors(source: string): Set<string> {
   const anchors = new Set<string>();
-  const counts = new Map<string, number>();
   const lines = source.split(/\r?\n/);
   let fence: "`" | "~" | null = null;
 
@@ -224,13 +262,13 @@ function collectMarkdownAnchors(source: string): Set<string> {
 
     const atx = line.match(/^ {0,3}#{1,6}[ \t]+(.+?)(?:[ \t]+#+[ \t]*)?$/);
     if (atx?.[1]) {
-      addMarkdownAnchor(anchors, counts, atx[1]);
+      addMarkdownAnchor(anchors, atx[1]);
       continue;
     }
 
     const underline = lines[index + 1];
     if (line.trim() && underline && /^ {0,3}(?:=+|-+)[ \t]*$/.test(underline)) {
-      addMarkdownAnchor(anchors, counts, line);
+      addMarkdownAnchor(anchors, line);
       index += 1;
     }
   }
@@ -238,22 +276,36 @@ function collectMarkdownAnchors(source: string): Set<string> {
   return anchors;
 }
 
-function addMarkdownAnchor(anchors: Set<string>, counts: Map<string, number>, heading: string): void {
-  const slug = markdownHeadingSlug(heading);
-  if (!slug) return;
-  const duplicateCount = counts.get(slug) ?? 0;
-  counts.set(slug, duplicateCount + 1);
-  anchors.add(duplicateCount ? `${slug}-${duplicateCount}` : slug);
+function addMarkdownAnchor(anchors: Set<string>, heading: string): void {
+  const baseSlug = markdownHeadingSlug(heading);
+  if (!baseSlug) return;
+
+  let slug = baseSlug;
+  let suffix = 1;
+  while (anchors.has(slug)) {
+    slug = `${baseSlug}-${suffix}`;
+    suffix += 1;
+  }
+  anchors.add(slug);
 }
 
 function markdownHeadingSlug(heading: string): string {
-  return heading
-    .replace(/<[^>]*>/g, "")
-    .replace(/[\\`*_~]/g, "")
+  return renderMarkdownHeading(heading)
     .trim()
     .toLowerCase()
-    .replace(/[^\p{L}\p{N}\-\s]/gu, "")
+    .replace(/[^\p{L}\p{N}_\-\s]/gu, "")
     .replace(/\s+/g, "-");
+}
+
+function renderMarkdownHeading(heading: string): string {
+  return unescapeMarkdownPunctuation(heading)
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]+)\]\[[^\]]*\]/g, "$1")
+    .replace(/<[^>]*>/g, "")
+    .replace(/[\\`*~]/g, "")
+    .replace(/(^|[^\p{L}\p{N}])_+(?=\S)/gu, "$1")
+    .replace(/_+(?=\s|$)/g, "");
 }
 
 function toFailure(

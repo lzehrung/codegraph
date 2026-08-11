@@ -41,7 +41,7 @@ export function formatMarkdownLinkCheckResult(result: MarkdownLinkCheckResult, v
   if (!summary.failures) {
     lines.push("No broken Markdown links found.");
   } else {
-    lines.push(`${summary.failures} broken Markdown links found:`);
+    lines.push(`${summary.failures} broken Markdown ${summary.failures === 1 ? "link" : "links"} found:`);
     for (const failure of [...result.failures].sort(compareFailures)) {
       const { line, column } = failure.range.start;
       lines.push(`${failure.file}:${line}:${column} ${failure.reason}: ${failure.raw}`);

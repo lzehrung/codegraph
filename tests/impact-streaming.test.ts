@@ -319,6 +319,39 @@ index 1234567..abcdef0 100644
     }
   });
 
+  it("keeps broken Markdown links in the streaming completion report", async () => {
+    const root = await mkTmpDir("dg-stream-markdown-links-");
+    try {
+      const readme = path.join(root, "README.md");
+      await fsp.writeFile(readme, "[Missing](./missing.md)\n", "utf8");
+      const index = await buildProjectIndex(root);
+      const diffText = [
+        "diff --git a/README.md b/README.md",
+        "index 1234567..abcdef0 100644",
+        "--- a/README.md",
+        "+++ b/README.md",
+        "@@ -0,0 +1 @@",
+        "+[Missing](./missing.md)",
+        "",
+      ].join("\n");
+
+      const batch = await analyzeImpactFromDiff(root, index, { provider: "raw", diffText });
+      let streamed: ImpactStreamSummaryReport | undefined;
+      for await (const chunk of analyzeImpactStreaming(root, index, { provider: "raw", diffText })) {
+        if (chunk.type === "complete") streamed = chunk.report;
+      }
+
+      expect(batch.format).toBe("full");
+      expect(streamed).toBeDefined();
+      if (batch.format === "full" && streamed) {
+        expect(batch.markdownLinks?.summary.failures).toBe(1);
+        expect(streamed.markdownLinks).toEqual(batch.markdownLinks);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps streaming final extras aligned with batch impact reports", async () => {
     const root = path.resolve(process.cwd(), "tests", "samples", "impact-suggestions");
     const index = await buildProjectIndex(root);
