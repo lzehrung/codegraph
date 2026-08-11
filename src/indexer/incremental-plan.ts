@@ -8,6 +8,7 @@ import {
 import type { BuildOptions, IncrementalBuildOptions } from "./types.js";
 import { listChangedFiles, listUntrackedFiles } from "../util/git.js";
 import { errorMessage } from "../util/errors.js";
+import { fileIdentityKey } from "../util/paths.js";
 import {
   createDiscoveredFileMatcher,
   DEFAULT_PROJECT_PATTERNS,
@@ -66,9 +67,10 @@ export function collectDeletedTrackedFileDependents(
 ): Set<string> {
   const dependents = new Set<string>();
   if (!deletedTrackedFiles.size) return dependents;
+  const deletedFileKeys = new Set(Array.from(deletedTrackedFiles, fileIdentityKey));
   for (const [file, entry] of Object.entries(trackedEntries)) {
-    if (deletedTrackedFiles.has(file)) continue;
-    if (entry.edges.some((edge) => edge.to.type === "file" && deletedTrackedFiles.has(edge.to.path))) {
+    if (deletedFileKeys.has(fileIdentityKey(file))) continue;
+    if (entry.edges.some((edge) => edge.to.type === "file" && deletedFileKeys.has(fileIdentityKey(edge.to.path)))) {
       dependents.add(file);
     }
   }
@@ -86,27 +88,28 @@ export function collectTrackedFileDependents(
   for (const [file, entry] of Object.entries(trackedEntries)) {
     for (const edge of entry.edges) {
       if (edge.to.type !== "file") continue;
-      const importedFile = edge.to.path;
-      let bucket = reverseDeps.get(importedFile);
+      const importedFileKey = fileIdentityKey(edge.to.path);
+      let bucket = reverseDeps.get(importedFileKey);
       if (!bucket) {
         bucket = new Set<string>();
-        reverseDeps.set(importedFile, bucket);
+        reverseDeps.set(importedFileKey, bucket);
       }
       bucket.add(file);
     }
   }
 
-  const enqueued = new Set<string>(changedFiles);
-  const queue = [...changedFiles];
+  const enqueued = new Set(Array.from(changedFiles, fileIdentityKey));
+  const queue = [...enqueued];
   let head = 0;
   while (head < queue.length) {
-    const target = queue[head]!;
+    const targetKey = queue[head]!;
     head += 1;
-    for (const dependent of reverseDeps.get(target) ?? []) {
-      if (enqueued.has(dependent)) continue;
-      enqueued.add(dependent);
+    for (const dependent of reverseDeps.get(targetKey) ?? []) {
+      const dependentKey = fileIdentityKey(dependent);
+      if (enqueued.has(dependentKey)) continue;
+      enqueued.add(dependentKey);
       dependents.add(dependent);
-      queue.push(dependent);
+      queue.push(dependentKey);
     }
   }
 

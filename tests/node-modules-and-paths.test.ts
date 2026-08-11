@@ -59,9 +59,11 @@ describe("Node modules resolution (opt-in) and path normalization", () => {
       "utf8",
     );
 
-    await expect(resolveFromNodeModules("my-pkg", sourceFile, root)).resolves.toBe(path.join(nm, "esm.js"));
+    await expect(resolveFromNodeModules("my-pkg", sourceFile, root)).resolves.toBe(
+      path.join(nm, "esm.js").replace(/\\/g, "/"),
+    );
     await expect(resolveFromNodeModules("my-pkg/feature", sourceFile, root)).resolves.toBe(
-      path.join(nm, "feature.cjs"),
+      path.join(nm, "feature.cjs").replace(/\\/g, "/"),
     );
   });
 

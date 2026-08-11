@@ -1,5 +1,5 @@
 import type { ParserLanguage } from "./parserBackend.js";
-import { prepareSourceInput } from "./languages/filePrep.js";
+import { prepareSourceInput, type PreparedSFCEmbeddedBlock } from "./languages/filePrep.js";
 import { supportForFile, type LanguageExtensionMap, type LanguageSupport } from "./languages.js";
 import type { Edge } from "./types.js";
 import { loadNearestTsconfigFor } from "./util/resolution.js";
@@ -41,6 +41,7 @@ export async function collectEdgesForFile(
       sup: LanguageSupport;
       lang?: ParserLanguage;
       nativeQueries?: NativeQueryResults | null;
+      embeddedBlocks?: PreparedSFCEmbeddedBlock[];
     };
     fast?: boolean;
     fastRegexDisabledLanguages?: string[];
@@ -98,12 +99,14 @@ export async function collectEdgesForFile(
   const lang = parsed?.lang;
   let src = parsed?.source;
   const nativeQueries = parsed?.nativeQueries ?? null;
+  let embeddedBlocks = parsed?.embeddedBlocks ?? [];
   let compactNativeImports: CompactQueryResults | null = null;
   let graphOnlyLanguage = sup ? isGraphOnlyLanguage(sup.id) : false;
   if (!sup || src === undefined) {
     const prep = await prepareSourceInput(file, { languageExtensions: opts.languageExtensions });
     sup = prep.sup;
     src = prep.source;
+    embeddedBlocks = prep.embeddedBlocks ?? [];
     graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
     const fastRegexDisabled = opts.fastRegexDisabledLanguages?.includes(sup.id);
     const shouldSkipNativeForFastGraph = !!opts.fast && (sup.id === "ts" || sup.id === "js") && !fastRegexDisabled;
@@ -153,17 +156,32 @@ export async function collectEdgesForFile(
     }
   }
 
+  const specSources = specs.map((entry) => ({ entry, support: sup }));
+  for (const block of embeddedBlocks) {
+    const blockSpecs = collectModuleSpecifiersFromSource(block.sup, undefined, block.source, {
+      fast,
+      file: normalizedFile,
+      ...(opts.fastRegexDisabledLanguages ? { fastRegexDisabledLanguages: opts.fastRegexDisabledLanguages } : {}),
+      ...(opts.onFallbackImportExtraction ? { onFallbackImportExtraction: opts.onFallbackImportExtraction } : {}),
+      ...(opts.native ? { native: opts.native } : {}),
+      ...(opts.logLevel ? { logLevel: opts.logLevel } : {}),
+    });
+    for (const entry of blockSpecs) {
+      specSources.push({ entry, support: block.sup });
+    }
+  }
+
   const graphOnlyAliasLanguage = graphOnlyLanguage && graphOnlyLanguageSupportsImportAliases(sup.id);
   const needsGraphOnlyResolutionConfig =
-    graphOnlyAliasLanguage && specs.some(({ spec }) => graphOnlySpecifierNeedsResolutionConfig(spec));
+    graphOnlyAliasLanguage && specSources.some(({ entry }) => graphOnlySpecifierNeedsResolutionConfig(entry.spec));
   const { matchPath } =
     sup.id === "ts" || sup.id === "tsx" || needsGraphOnlyResolutionConfig
       ? await loadNearestTsconfigFor(file, projectRoot, opts?.logLevel)
       : { matchPath: undefined };
   const edges: Edge[] = [];
-  const edgeResolutionTasks = specs.map(async (entry) => {
+  const edgeResolutionTasks = specSources.map(async ({ entry, support }) => {
     return await resolveModuleSpecifierEdges(entry, {
-      support: sup,
+      support,
       file,
       projectRoot,
       workspaceConfig,

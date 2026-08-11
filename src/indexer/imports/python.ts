@@ -24,7 +24,10 @@ function resolvePythonNamespaceMember(resolved: ResolvedImportTarget, imported: 
   let baseDir = resolved;
   try {
     const stat = fs.statSync(baseDir);
-    if (!stat.isDirectory() && baseDir.toLowerCase().endsWith("__init__.py")) {
+    if (
+      !stat.isDirectory() &&
+      (baseDir.toLowerCase().endsWith("__init__.py") || baseDir.toLowerCase().endsWith("__init__.pyi"))
+    ) {
       baseDir = path.dirname(baseDir);
     }
   } catch {
@@ -33,7 +36,9 @@ function resolvePythonNamespaceMember(resolved: ResolvedImportTarget, imported: 
 
   const candidates = [
     path.join(baseDir, `${imported}.py`),
+    path.join(baseDir, `${imported}.pyi`),
     path.join(baseDir, imported, "__init__.py"),
+    path.join(baseDir, imported, "__init__.pyi"),
     path.join(baseDir, imported),
   ];
   for (const candidate of candidates) {

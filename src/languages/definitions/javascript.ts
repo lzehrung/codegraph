@@ -58,6 +58,11 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
         left: (member_expression object: (identifier) @mod property: (property_identifier) @prop)
         right: (object (shorthand_property_identifier) @cjs_shorthand)))
         (#eq? @mod "module") (#eq? @prop "exports")
+      ;; CJS spread export: module.exports = { ...base }
+      ((expression_statement (assignment_expression
+        left: (member_expression object: (identifier) @mod property: (property_identifier) @prop)
+        right: (object (spread_element (identifier) @cjs_spread))) @stmt)
+        (#eq? @mod "module") (#eq? @prop "exports"))
       (expression_statement (assignment_expression
         left: (member_expression object: (identifier) @mod property: (property_identifier) @prop)
         right: (object (pair key: (property_identifier) @cjs_export_name value: (identifier) @cjs_local))))
@@ -152,7 +157,7 @@ export const JAVASCRIPT_DEF: LanguageDefinition = {
       ].includes(p)
     );
   },
-  createsBlockScope: (n) => n.type === "program" || n.type === "block",
+  createsBlockScope: (n) => n.type === "program" || n.type === "block" || n.type === "class_body",
   createsFunctionScope: (n) =>
     n.type === "function_declaration" ||
     n.type === "generator_function_declaration" ||

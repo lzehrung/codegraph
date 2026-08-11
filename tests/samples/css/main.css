@@ -1,7 +1,12 @@
 @import "./base.css";
-@import "./theme.css";
+@import "./theme";
 @import "./missing.css";
 @import "./print.css" print;
+@value brand from "./tokens.css";
+
+.button {
+  composes: utility from "./composed.css";
+}
 
 .container {
   display: flex;

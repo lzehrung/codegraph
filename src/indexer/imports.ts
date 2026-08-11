@@ -2,7 +2,7 @@ import { prepareSourceInput } from "../languages/filePrep.js";
 import { loadNearestTsconfigFor, resolveImportSpecifier } from "../util/resolution.js";
 import { loadWorkspaceConfig } from "../util/workspace.js";
 import type { LogLevel } from "../logging.js";
-import type { FallbackImportExtractionEvent, FallbackImportExtractionReason } from "../graphs/specifiers.js";
+import { collectModuleSpecifiersFromSource, type FallbackImportExtractionEvent, type FallbackImportExtractionReason } from "../graphs/specifiers.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
 import type { LanguageExtensionMap } from "../languages.js";
 import { isGraphOnlyLanguage } from "../documentLinks.js";
@@ -211,7 +211,13 @@ export async function collectImportsForFile(
       if (imports.length) {
         return imports;
       }
-      if (isNativeQueryAuthoritative(resolvedSup, "importBindings")) {
+      if (
+        isNativeQueryAuthoritative(resolvedSup, "importBindings") &&
+        resolvedSup.id !== "html" &&
+        resolvedSup.id !== "css" &&
+        resolvedSup.id !== "scss" &&
+        resolvedSup.id !== "less"
+      ) {
         return imports;
       }
       nativeFallbackReason = "query-empty";
@@ -228,6 +234,24 @@ export async function collectImportsForFile(
 
   await runFallback();
   await finalizeImports();
+  if (
+    !imports.length &&
+    (resolvedSup.id === "html" || resolvedSup.id === "css" || resolvedSup.id === "scss" || resolvedSup.id === "less")
+  ) {
+    const specifiers = collectModuleSpecifiersFromSource(resolvedSup, undefined, resolvedSource, {
+      file,
+      ...(opts?.native ? { native: opts.native } : {}),
+      ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
+    });
+    for (const specifier of specifiers) {
+      imports.push({
+        kind: "star",
+        from: specifier.spec,
+        resolved: await resolveFrom(specifier.spec),
+        ...(specifier.typeOnly ? { typeOnly: true } : {}),
+      });
+    }
+  }
   if (!nativeFallbackReason && !nativeLanguageAvailable && imports.length) {
     reportFallback("reduced-mode");
   }

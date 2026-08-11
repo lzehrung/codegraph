@@ -330,7 +330,9 @@ export class CodeReviewSession implements ICodeReviewSession {
   }
 
   private indexedProjectFiles(index: ProjectIndex): string[] {
-    const files = index.manifestEntries ? [...index.manifestEntries.keys()] : [...index.byFile.keys()];
+    const files = index.manifestEntries
+      ? [...index.manifestEntries.keys()]
+      : Array.from(index.byFile.values(), (module) => module.file);
     return files.map((file) => {
       if (path.isAbsolute(file)) {
         return file;

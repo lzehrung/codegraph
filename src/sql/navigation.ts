@@ -19,7 +19,8 @@ import {
   normalizeSqlObjectName,
   SQL_IDENTIFIER_PART_PATTERN,
   splitTopLevelCommaSeparated,
-  sqlObjectBaseName,
+  sqlObjectBaseNameLookupKey,
+  sqlObjectLookupKey,
   sqlParenDepthAt,
 } from "./lex.js";
 import type { SqlStatementFact } from "./types.js";
@@ -40,26 +41,19 @@ function isSqlFile(filePath: string): boolean {
   return path.extname(filePath).toLowerCase() === ".sql";
 }
 
-function rangeForLine(line: number): Range {
-  return {
-    start: { line, column: 1 },
-    end: { line, column: 1 },
-  };
-}
-
-function rangeForToken(line: number, column: number): Range {
+function rangeForToken(line: number, column: number, length: number): Range {
   return {
     start: { line, column },
-    end: { line, column },
+    end: { line, column: column + length },
   };
 }
 
 function sqlFiles(index: ProjectIndex): string[] {
-  return Array.from(index.byFile.keys())
+  return Array.from(index.byFile.values())
+    .map((module) => normalizePath(module.file))
     .filter(isSqlFile)
     .sort((left, right) => left.localeCompare(right));
 }
-
 function getSqlNavigationCache(index: ProjectIndex): NonNullable<ProjectIndex["sqlNavigation"]> {
   index.sqlNavigation ??= {
     sourceByFile: new Map(),
@@ -77,8 +71,8 @@ function getSqlDefinitionLookup(index: ProjectIndex): SqlDefinitionLookup {
     const module = index.byFile.get(fileIdentityKey(file));
     if (!module) continue;
     for (const local of module.locals) {
-      pushSqlLookupValue(exact, local.localName.toLowerCase(), local);
-      pushSqlLookupValue(basename, sqlObjectBaseName(local.localName).toLowerCase(), local);
+      pushSqlLookupValue(exact, sqlObjectLookupKey(local.localName), local);
+      pushSqlLookupValue(basename, sqlObjectBaseNameLookupKey(local.localName), local);
     }
   }
   cache.definitionLookup = { exact, basename };
@@ -86,8 +80,8 @@ function getSqlDefinitionLookup(index: ProjectIndex): SqlDefinitionLookup {
 }
 
 function sqlDefinitionsFromLookup(lookup: SqlDefinitionLookup, objectName: string): SymbolDef[] {
-  const normalizedName = objectName.toLowerCase();
-  const basenameKey = sqlObjectBaseName(objectName).toLowerCase();
+  const normalizedName = sqlObjectLookupKey(objectName);
+  const basenameKey = sqlObjectBaseNameLookupKey(objectName);
   const exactDefinitions = lookup.exact.get(normalizedName) ?? [];
   const basenameDefinitions = lookup.basename.get(basenameKey) ?? [];
   if (exactDefinitions.length) return exactDefinitions;
@@ -106,8 +100,8 @@ function sqlDefinitionMatches(
   lookup: SqlDefinitionLookup,
   objectName: string,
 ): { exact: SymbolDef[]; basename: SymbolDef[] } {
-  const normalizedName = objectName.toLowerCase();
-  const basenameKey = sqlObjectBaseName(objectName).toLowerCase();
+  const normalizedName = sqlObjectLookupKey(objectName);
+  const basenameKey = sqlObjectBaseNameLookupKey(objectName);
   const exact = lookup.exact.get(normalizedName) ?? [];
   const basename = lookup.basename.get(basenameKey) ?? [];
   return { exact, basename };
@@ -191,11 +185,10 @@ function cteNamesForStatement(text: string): Set<string> {
     "gi",
   );
   for (const match of text.matchAll(cteRe)) {
-    if (sqlParenDepthAt(text, match.index ?? 0) > 0) continue;
     const name = normalizeSqlObjectName(match[1]);
     if (!name) continue;
-    cteNames.add(name.toLowerCase());
-    cteNames.add(sqlObjectBaseName(name).toLowerCase());
+    cteNames.add(sqlObjectLookupKey(name));
+    cteNames.add(sqlObjectBaseNameLookupKey(name));
   }
   return cteNames;
 }
@@ -243,10 +236,10 @@ function sqlAliasMapForStatement(statementText: string): Map<string, string> {
     for (const part of splitTopLevelCommaSeparated(clause)) {
       const parsed = parseSqlSourceEntry(part);
       if (!parsed?.aliasName) continue;
-      const objectKey = parsed.objectName.toLowerCase();
-      const objectBaseKey = sqlObjectBaseName(parsed.objectName).toLowerCase();
+      const objectKey = sqlObjectLookupKey(parsed.objectName);
+      const objectBaseKey = sqlObjectBaseNameLookupKey(parsed.objectName);
       if (cteNames.has(objectKey) || cteNames.has(objectBaseKey)) continue;
-      aliases.set(parsed.aliasName.toLowerCase(), parsed.objectName);
+      aliases.set(sqlObjectLookupKey(parsed.aliasName), parsed.objectName);
     }
   }
   return aliases;
@@ -272,8 +265,8 @@ function resolveQualifiedSqlName(
   if (!firstPart) return null;
   if (statementText) {
     const maskedStatementText = maskSqlStringsAndComments(statementText);
-    if (cteNamesForStatement(maskedStatementText).has(firstPart.toLowerCase())) return null;
-    const aliasTarget = sqlAliasMapForStatement(maskedStatementText).get(firstPart.toLowerCase());
+    if (cteNamesForStatement(maskedStatementText).has(sqlObjectLookupKey(firstPart))) return null;
+    const aliasTarget = sqlAliasMapForStatement(maskedStatementText).get(sqlObjectLookupKey(firstPart));
     if (aliasTarget && sqlDefinitionsFromLookup(lookup, aliasTarget).length) return aliasTarget;
   }
   for (let partCount = parts.length - 1; partCount >= 1; partCount -= 1) {
@@ -297,29 +290,45 @@ function statementColumnForOffset(statement: SqlStatementNavigationSlice, offset
   return offset - lastLineStart;
 }
 
-function matchesSqlDefinitionName(name: string, targetNames: ReadonlySet<string>): boolean {
-  const normalized = name.toLowerCase();
-  const baseName = sqlObjectBaseName(name).toLowerCase();
-  return targetNames.has(normalized) || targetNames.has(baseName);
+function sqlNameResolvesToDefinition(
+  lookup: SqlDefinitionLookup,
+  name: string,
+  definition: SymbolDef,
+): boolean {
+  const matches = sqlDefinitionMatches(lookup, name);
+  if (matches.exact.length) return matches.exact.includes(definition);
+  return matches.basename.length === 1 && matches.basename[0] === definition;
 }
 
-function prefixMatchesSqlDefinition(
-  lookup: SqlDefinitionLookup,
-  prefix: string,
-  targetNames: ReadonlySet<string>,
-): boolean {
-  const matches = sqlDefinitionMatches(lookup, prefix);
-  if (matches.exact.length) {
-    return matches.exact.some((definition) => matchesSqlDefinitionName(definition.localName, targetNames));
+function factReferenceRanges(fact: SqlStatementFact, objectName: string): Range[] {
+  const statement: SqlStatementNavigationSlice = {
+    text: fact.statementText,
+    startLine: fact.startLine,
+    startColumn: fact.startColumn,
+    endLine: fact.endLine,
+  };
+  const objectKey = sqlObjectLookupKey(objectName);
+  const ranges: Range[] = [];
+  const maskedStatementText = maskSqlStringsAndComments(statement.text);
+  for (const match of maskedStatementText.matchAll(SQL_DOTTED_TOKEN_RE)) {
+    const token = normalizeSqlObjectName(match[0]);
+    if (!token || sqlObjectLookupKey(token) !== objectKey) continue;
+    const offset = match.index ?? 0;
+    ranges.push(
+      rangeForToken(
+        statementLineForOffset(statement, offset),
+        statementColumnForOffset(statement, offset),
+        match[0].length,
+      ),
+    );
   }
-  if (matches.basename.length !== 1) return false;
-  return matchesSqlDefinitionName(matches.basename[0]?.localName ?? "", targetNames);
+  return ranges;
 }
 
 function qualifiedReferenceRanges(
   lookup: SqlDefinitionLookup,
   statement: SqlStatementNavigationSlice,
-  targetNames: ReadonlySet<string>,
+  definition: SymbolDef,
 ): Range[] {
   const ranges: Range[] = [];
   const maskedStatementText = maskSqlStringsAndComments(statement.text);
@@ -332,17 +341,23 @@ function qualifiedReferenceRanges(
     if (parts.length < 2) continue;
     const firstPart = parts[0];
     if (!firstPart) continue;
-    if (cteNames.has(firstPart.toLowerCase())) continue;
-    const aliasTarget = aliases.get(firstPart.toLowerCase());
-    const matchesAlias = aliasTarget ? matchesSqlDefinitionName(aliasTarget, targetNames) : false;
+    if (cteNames.has(sqlObjectLookupKey(firstPart))) continue;
+    const aliasTarget = aliases.get(sqlObjectLookupKey(firstPart));
+    const matchesAlias = aliasTarget ? sqlNameResolvesToDefinition(lookup, aliasTarget, definition) : false;
     let matchesPrefix = false;
     for (let partCount = parts.length - 1; partCount >= 1 && !matchesPrefix; partCount -= 1) {
       const candidate = parts.slice(0, partCount).join(".");
-      matchesPrefix = prefixMatchesSqlDefinition(lookup, candidate, targetNames);
+      matchesPrefix = sqlNameResolvesToDefinition(lookup, candidate, definition);
     }
     if (!matchesAlias && !matchesPrefix) continue;
     const offset = match.index ?? 0;
-    ranges.push(rangeForToken(statementLineForOffset(statement, offset), statementColumnForOffset(statement, offset)));
+    ranges.push(
+      rangeForToken(
+        statementLineForOffset(statement, offset),
+        statementColumnForOffset(statement, offset),
+        match[0].length,
+      ),
+    );
   }
   return ranges;
 }
@@ -392,41 +407,36 @@ export async function findSqlReferences(
   definition: SymbolDef,
 ): Promise<FindReferencesResult | null> {
   if (!isSqlFile(definition.file)) return null;
-  const objectName = definition.localName;
-  const targetNames = new Set([objectName.toLowerCase(), sqlObjectBaseName(objectName).toLowerCase()]);
   const references: Reference[] = [];
   const seen = new Set<string>();
   const lookup = getSqlDefinitionLookup(index);
+  const addReference = (file: string, range: Range): void => {
+    const key = `${file}:${range.start.line}:${range.start.column}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    references.push({ file, range });
+  };
+
   for (const file of sqlFiles(index)) {
     const facts = await sqlFactsForFile(index, file);
     for (const fact of facts) {
-      const names = new Set<string>();
       for (const name of [fact.objectName, fact.relatedObjectName]) {
-        if (!name) continue;
-        names.add(name.toLowerCase());
-        names.add(sqlObjectBaseName(name).toLowerCase());
+        if (!name || !sqlNameResolvesToDefinition(lookup, name, definition)) continue;
+        for (const range of factReferenceRanges(fact, name)) {
+          addReference(file, range);
+        }
       }
-      const matchesDefinition = Array.from(names).some((name) => targetNames.has(name));
-      if (!matchesDefinition) continue;
-      const range = rangeForLine(fact.startLine);
-      const key = `${file}:${range.start.line}:${range.start.column}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      references.push({ file, range });
     }
     for (const statement of sqlStatementSlices(facts)) {
-      for (const range of qualifiedReferenceRanges(lookup, statement, targetNames)) {
-        const key = `${file}:${range.start.line}:${range.start.column}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        references.push({ file, range });
+      for (const range of qualifiedReferenceRanges(lookup, statement, definition)) {
+        addReference(file, range);
       }
     }
   }
   references.sort((left, right) => {
     const fileCompare = left.file.localeCompare(right.file);
     if (fileCompare !== 0) return fileCompare;
-    return left.range.start.line - right.range.start.line;
+    return left.range.start.line - right.range.start.line || left.range.start.column - right.range.start.column;
   });
   return {
     status: "ok",

@@ -1,4 +1,6 @@
-import { expect } from "vitest";
+import { expect, it } from "vitest";
+import { collectModuleSpecifiersFromSource } from "../../src/graphs.js";
+import { supportById } from "../../src/languages.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 
@@ -27,6 +29,14 @@ const definition: LanguageTestDefinition = {
       },
       {
         from: "main.less",
+        to: { type: "file", path: "reference.less" },
+      },
+      {
+        from: "main.less",
+        to: { type: "file", path: "css-mode.less" },
+      },
+      {
+        from: "main.less",
         to: { type: "external", name: "cdn-noise" },
       },
       {
@@ -38,7 +48,28 @@ const definition: LanguageTestDefinition = {
         to: { type: "file", path: "theme.less" },
       },
     ],
+    absentDependencyGraph: [
+      {
+        from: "main.less",
+        to: { type: "file", path: "theme.ts" },
+      },
+    ],
   },
 };
 
 runLanguageTests(definition);
+
+it("recovers Less option imports in reduced mode", () => {
+  const support = supportById("less")!;
+  const specifiers = collectModuleSpecifiersFromSource(
+    support,
+    undefined,
+    '@import (reference) "./reference";\n@import (css) "./css-mode";',
+    { native: "off" },
+  );
+
+  expect(specifiers).toEqual([
+    { spec: "./reference", resolutionKind: "stylesheet" },
+    { spec: "./css-mode", resolutionKind: "stylesheet" },
+  ]);
+});

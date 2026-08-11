@@ -6,6 +6,7 @@ import fsp from "node:fs/promises";
 import { brotliDecompressSync } from "node:zlib";
 import { DatabaseSync } from "node:sqlite";
 import { buildProjectIndex } from "../src/index.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -44,7 +45,7 @@ describe("Incremental cache modes", () => {
     expect(first.byFile.size).toBeGreaterThan(0);
     expect(second.byFile.size).toBe(first.byFile.size);
 
-    const fileId = normalize(path.resolve(utilPath));
+    const fileId = fileIdentityKey(path.resolve(utilPath));
     const firstMod = first.byFile.get(fileId);
     const secondMod = second.byFile.get(fileId);
     expect(firstMod).toBeDefined();
@@ -71,7 +72,7 @@ describe("Incremental cache modes", () => {
 
     const row = readDiskCacheRow(root, fileId);
     expect(row).not.toBeNull();
-    expect(row?.version).toBe(2);
+    expect(row?.version).toBe(3);
     expect(typeof row?.sig).toBe("string");
     const payload = JSON.parse(row?.payload ? brotliDecompressSync(row.payload).toString("utf8") : "null") as unknown;
     expect(typeof payload).toBe("object");
@@ -84,6 +85,6 @@ describe("Incremental cache modes", () => {
     const second = await buildProjectIndex(root, { threads: 2, cache: "disk" });
     expect(second.byFile.size).toBe(first.byFile.size);
     expect(fs.existsSync(dbPath)).toBe(true);
-    expect(second.byFile.get(fileId)?.file).toBe(fileId);
+    expect(second.byFile.get(fileIdentityKey(path.resolve(utilPath)))?.file).toBe(fileId);
   });
 });

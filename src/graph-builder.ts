@@ -170,5 +170,7 @@ export async function collectGraph(
   );
   addEdgeTargetsToGraph(angularJsEdges);
   graph.edges = mergeUniqueEdges(graph.edges, newEdges, angularJsEdges);
+  graph.nodes = new Set(normalizedAllFiles);
+  addEdgeTargetsToGraph(graph.edges);
   return graph;
 }

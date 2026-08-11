@@ -72,7 +72,7 @@ export function extractHtmlStyleSpecifiers(source: string): ModuleSpecifier[] {
 
 export function extractHtmlInlineScriptSpecifiers(source: string): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
-  const cleaned = maskHtmlEmbeddedBodies(stripHtmlCommentsAndLiteralBlocks(source));
+  const cleaned = stripHtmlCommentsAndLiteralBlocks(source);
   const inlineScriptRe = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
   for (const match of cleaned.matchAll(inlineScriptRe)) {
     const attrs = match[1] ?? "";

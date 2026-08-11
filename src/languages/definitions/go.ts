@@ -50,6 +50,7 @@ export const GO_DEF: LanguageDefinition = {
       (type_spec name: (type_identifier) @name)
       (parameter_declaration name: (identifier) @name)
       (short_var_declaration left: (expression_list (identifier) @name))
+      (type_spec type: (struct_type (field_declaration_list (field_declaration name: (field_identifier) @name))))
     `,
     importBindings: `
       (import_spec name: (package_identifier) @alias path: (interpreted_string_literal) @from) @stmt
@@ -74,7 +75,9 @@ export const GO_DEF: LanguageDefinition = {
     if (p.type === "const_spec" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "short_var_declaration") return true;
     if (p.type === "parameter_declaration") return true;
+    if (p.type === "field_declaration" && node.type === "field_identifier") return true;
     return false;
   },
+  scopeDeclarationNames: (node) => node.type === "field_identifier" && node.parent?.type === "field_declaration",
 };
 registerLanguage(GO_DEF);

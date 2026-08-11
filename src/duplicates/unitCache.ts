@@ -90,6 +90,10 @@ export function duplicateUnitCacheDatabasePath(projectRoot: string, opts?: Build
   return cacheDatabasePath(projectRoot, opts, "duplicate-unit-cache.sqlite");
 }
 
+function duplicateUnitCacheDatabasePathForRoot(cacheRootDir: string): string {
+  return path.join(cacheRootDir, "duplicate-unit-cache.sqlite").replace(/\\/g, "/");
+}
+
 export function createDuplicateUnitCacheTable(db: SqliteDatabase): void {
   createSqliteTableIfMissing(db, DUPLICATE_UNIT_CACHE_TABLE, DUPLICATE_UNIT_CACHE_COLUMNS, [
     "PRIMARY KEY (file, variant)",
@@ -152,7 +156,7 @@ export function createDuplicateUnitDiskStatements(db: SqliteDatabase): Duplicate
 
 export function maintainDuplicateUnitDiskCache(index: ProjectIndex): void {
   if (index.cacheMode !== "disk" || !index.cacheRootDir) return;
-  const dbPath = duplicateUnitCacheDatabasePath(index.projectRoot ?? "", { cacheDir: index.cacheRootDir });
+  const dbPath = duplicateUnitCacheDatabasePathForRoot(index.cacheRootDir);
   const entry = duplicateUnitDiskDatabases.get(dbPath);
   if (!entry?.db || !entry.statements) return;
   const { db, statements } = entry;
@@ -168,7 +172,7 @@ export function maintainDuplicateUnitDiskCache(index: ProjectIndex): void {
 
 export function duplicateUnitDiskCache(index: ProjectIndex): DuplicateUnitDiskDatabaseEntry | null {
   if (index.cacheMode !== "disk" || !index.cacheRootDir) return null;
-  const dbPath = duplicateUnitCacheDatabasePath(index.projectRoot ?? "", { cacheDir: index.cacheRootDir });
+  const dbPath = duplicateUnitCacheDatabasePathForRoot(index.cacheRootDir);
   let entry = duplicateUnitDiskDatabases.get(dbPath);
   if (!entry) {
     entry = { leases: 0, closeRequested: false };
@@ -217,7 +221,7 @@ export function closeDuplicateUnitCacheDatabase(projectRoot: string, opts?: Buil
 
 export function leaseDuplicateUnitCacheForIndex(index: ProjectIndex): () => void {
   if (index.cacheMode !== "disk" || !index.cacheRootDir) return () => {};
-  const dbPath = duplicateUnitCacheDatabasePath(index.projectRoot ?? "", { cacheDir: index.cacheRootDir });
+  const dbPath = duplicateUnitCacheDatabasePathForRoot(index.cacheRootDir);
   let entry = duplicateUnitDiskDatabases.get(dbPath);
   if (!entry) {
     entry = { leases: 0, closeRequested: false };
@@ -234,7 +238,10 @@ export function leaseDuplicateUnitCacheForIndex(index: ProjectIndex): () => void
 
 export function closeDuplicateUnitCacheForIndex(index: ProjectIndex): void {
   if (index.cacheMode !== "disk" || !index.cacheRootDir) return;
-  closeDuplicateUnitCacheDatabase(index.projectRoot ?? "", { cacheDir: index.cacheRootDir });
+  const dbPath = duplicateUnitCacheDatabasePathForRoot(index.cacheRootDir);
+  const entry = duplicateUnitDiskDatabases.get(dbPath);
+  if (!entry) return;
+  closeDuplicateUnitDiskDatabaseEntry(dbPath, entry);
 }
 
 export function tryLoadDuplicateUnitsFromCache(

@@ -4,8 +4,22 @@ import { LANG_CONFIGS } from "../src/bootstrap/treeSitterLanguages.js";
 import { chunkFile } from "../src/chunking/chunkFile.js";
 import { chunkTextFile } from "../src/chunking/chunkTextFile.js";
 import * as nativeRuntime from "../src/native/treeSitterNative.js";
+import { withStableChunkIds } from "../src/chunking/chunkId.js";
+import type { RangedChunk } from "../src/chunking/types.js";
 
 const tokenize = (text: string) => (text.trim() ? text.trim().split(/\s+/).length : 0);
+
+function countOccurrences(text: string, needle: string): number {
+  let count = 0;
+  let offset = 0;
+  while (offset < text.length) {
+    const match = text.indexOf(needle, offset);
+    if (match === -1) break;
+    count++;
+    offset = match + needle.length;
+  }
+  return count;
+}
 
 describe("chunkFile detailed behavior", () => {
   afterEach(() => {
@@ -228,8 +242,8 @@ module Legacy {
 
     expect(chunks.some((c) => c.type === "namespace" && c.name === "Tools")).toBe(true);
     expect(chunks.some((c) => c.type === "namespace" && c.name === "Legacy")).toBe(true);
-    expect(chunks.some((c) => c.type === "function" && c.name === "build")).toBe(false);
-    expect(chunks.filter((c) => c.text.includes('function build()')).length).toBe(1);
+    expect(chunks.some((c) => c.type === "function" && c.name === "build")).toBe(true);
+    expect(chunks.filter((c) => c.text.includes('function build()')).length).toBe(2);
   });
 
   it("captures TypeScript enums regardless of identifier node type", () => {
@@ -507,7 +521,29 @@ describe("chunkTextFile and chunkFile regressions", () => {
     }
   });
 
-  it("uses disjoint source ranges when a large class promotes its methods", () => {
+  it("keeps duplicate IDs collision-free for same-offset hierarchical chunks", () => {
+    const sharedChunk: RangedChunk = {
+      id: "",
+      languageId: "javascript",
+      filePath: "same-offset.js",
+      type: "declaration",
+      name: "Shared",
+      startLine: 1,
+      endLine: 1,
+      text: "class Shared {}",
+      tokenCount: 3,
+      sourceStart: 0,
+      sourceEnd: 16,
+    };
+    const chunks = withStableChunkIds([sharedChunk, { ...sharedChunk }], "javascript", "same-offset.js");
+
+    expect(chunks[0]?.id).toBeDefined();
+    expect(chunks[1]?.id).toBeDefined();
+    expect(chunks[1]?.id).not.toBe(chunks[0]?.id);
+    expect(chunks[1]?.id.endsWith(":1")).toBe(true);
+  });
+
+  it("covers a large class while keeping nested method chunks distinct", () => {
     const source = [
       "class Example {",
       "  first() {",
@@ -528,15 +564,62 @@ describe("chunkTextFile and chunkFile regressions", () => {
       tokenizer: tokenize,
     });
 
-    let rangeStart = 0;
+    const covered = new Array<boolean>(source.length).fill(false);
     for (const chunk of chunks) {
-      const rangeEnd = rangeStart + chunk.text.length;
-      expect(source.slice(rangeStart, rangeEnd)).toBe(chunk.text);
-      rangeStart = rangeEnd;
+      let offset = source.indexOf(chunk.text);
+      expect(offset).toBeGreaterThanOrEqual(0);
+      while (offset !== -1) {
+        for (let index = offset; index < offset + chunk.text.length; index++) {
+          covered[index] = true;
+        }
+        offset = source.indexOf(chunk.text, offset + 1);
+      }
+      expect(countOccurrences(chunk.text, "first marker")).toBeLessThanOrEqual(1);
+      expect(countOccurrences(chunk.text, "second marker")).toBeLessThanOrEqual(1);
     }
 
-    expect(rangeStart).toBe(source.length);
-    expect(chunks.filter((chunk) => chunk.text.includes("first marker"))).toHaveLength(1);
-    expect(chunks.filter((chunk) => chunk.text.includes("second marker"))).toHaveLength(1);
+    expect(covered.every(Boolean)).toBe(true);
+    expect(chunks.filter((chunk) => chunk.type === "class" && chunk.name === "Example").length).toBeGreaterThan(1);
+    expect(chunks.some((chunk) => chunk.type === "method" && chunk.name === "first")).toBe(true);
+    expect(chunks.some((chunk) => chunk.type === "method" && chunk.name === "second")).toBe(true);
+  });
+
+  it("does not duplicate a method when merging a small class", () => {
+    const source = [
+      "class Small {",
+      "  run() {",
+      "    return 'unique method marker';",
+      "  }",
+      "}",
+    ].join("\n");
+    const chunks = chunkFile({
+      language: LANG_CONFIGS.javascript,
+      source,
+      filePath: "Small.js",
+      minTokens: 20,
+      maxTokens: 100,
+      tokenizer: tokenize,
+    });
+
+    expect(chunks.some((chunk) => chunk.type === "class" && chunk.name === "Small")).toBe(true);
+    expect(chunks.some((chunk) => chunk.type === "method" && chunk.name === "run")).toBe(true);
+    for (const chunk of chunks) {
+      expect(countOccurrences(chunk.text, "unique method marker")).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("keeps class and method chunks for a file below maxTokens", () => {
+    const source = ["class Tiny {", "  run() {", "    return 1;", "  }", "}"].join("\n");
+    const chunks = chunkFile({
+      language: LANG_CONFIGS.javascript,
+      source,
+      filePath: "Tiny.js",
+      minTokens: 1,
+      maxTokens: 100,
+      tokenizer: tokenize,
+    });
+
+    expect(chunks.some((chunk) => chunk.type === "class" && chunk.name === "Tiny")).toBe(true);
+    expect(chunks.some((chunk) => chunk.type === "method" && chunk.name === "run")).toBe(true);
   });
 });

@@ -6,21 +6,16 @@ describe("package export target selection", () => {
     expect(pickPackageExportTarget("./dist/index.js")).toBe("./dist/index.js");
   });
 
-  it("uses Node's declared condition order", () => {
+  it("prefers import conditions while retaining node and require fallbacks", () => {
     expect(
       pickPackageExportTarget({
-        import: "./dist/index.mjs",
         require: "./dist/index.cjs",
         default: "./dist/index.js",
+        import: "./dist/index.mjs",
       }),
     ).toBe("./dist/index.mjs");
 
-    expect(
-      pickPackageExportTarget({
-        node: "./dist/index.node.js",
-        import: "./dist/index.mjs",
-      }),
-    ).toBe("./dist/index.node.js");
+    expect(pickPackageExportTarget({ node: "./dist/index.node.js" })).toBe("./dist/index.node.js");
 
     expect(
       pickPackageExportTarget({

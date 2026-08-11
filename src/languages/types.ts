@@ -63,6 +63,13 @@ export interface LanguageDefinition {
   isDeclarationName?: (node: SyntaxNodeLike) => boolean;
 
   /**
+   * Names that must be registered by scope construction in addition to its
+   * structural declaration handling. "all" preserves a language's established
+   * declaration-name semantics; a predicate can opt in a missing node shape.
+   */
+  scopeDeclarationNames?: "all" | ((node: SyntaxNodeLike) => boolean);
+
+  /**
    * Helper to check if a node creates a block scope.
    */
   createsBlockScope?: (node: SyntaxNodeLike) => boolean;

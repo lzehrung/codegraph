@@ -92,7 +92,7 @@ export const CSHARP_DEF: LanguageDefinition = {
     return "variable";
   },
   createsFunctionScope: (node) => node.type === "method_declaration" || node.type === "constructor_declaration",
-  createsBlockScope: (node) => node.type === "block",
+  createsBlockScope: (node) => node.type === "block" || node.type === "declaration_list",
   isDeclarationName: (node) => {
     const p = node.parent;
     if (!p) return false;

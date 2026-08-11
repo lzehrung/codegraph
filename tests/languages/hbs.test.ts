@@ -19,6 +19,10 @@ const definition: LanguageTestDefinition = {
         to: { type: "external", name: "https://example.com/hbs" },
       },
       {
+        from: "page.hbs",
+        to: { type: "file", path: "partials/block.hbs" },
+      },
+      {
         from: "page.handlebars",
         to: { type: "file", path: "guide.asciidoc" },
       },

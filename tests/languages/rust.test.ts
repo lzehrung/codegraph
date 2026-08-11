@@ -1,3 +1,6 @@
+import { readFile } from "node:fs/promises";
+import { LANG_CONFIGS } from "../../src/bootstrap/treeSitterLanguages.js";
+import { chunkFile } from "../../src/chunking/chunkFile.js";
 import { expect } from "vitest";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
@@ -76,6 +79,10 @@ const definition: LanguageTestDefinition = {
         file: "nested_service.rs",
         includes: [{ name: "NestedRunner" }, { name: "run" }],
       },
+      {
+        file: ".regressions/macros.rs",
+        includes: [{ name: "make_answer", kind: "function" }],
+      },
     ],
     goToDefinition: [
       {
@@ -138,6 +145,16 @@ const definition: LanguageTestDefinition = {
           line: 1,
         },
       },
+      {
+        name: "resolves a Rust macro invocation",
+        file: ".regressions/macros.rs",
+        line: 6,
+        column: 5,
+        expectedDefinition: {
+          file: ".regressions/macros.rs",
+          line: 1,
+        },
+      },
     ],
     references: [
       {
@@ -147,8 +164,31 @@ const definition: LanguageTestDefinition = {
         column: 8,
         minimumCount: 3,
       },
+      {
+        name: "finds Rust macro definition and invocation references",
+        file: ".regressions/macros.rs",
+        line: 1,
+        column: 14,
+        minimumCount: 2,
+      },
     ],
   },
 };
 
 runLanguageTests(definition);
+
+describe("Rust macro_rules! structure", () => {
+  it("chunks macro definitions from the dedicated fixture", async () => {
+    const source = await readFile("tests/samples/rust/.regressions/macros.rs", "utf8");
+    const chunks = chunkFile({
+      language: LANG_CONFIGS.rust!,
+      source,
+      filePath: "macros.rs",
+      minTokens: 1,
+      maxTokens: 1_000,
+      tokenizer: (text) => text.trim().split(/\s+/).filter(Boolean).length,
+    });
+
+    expect(chunks).toContainEqual(expect.objectContaining({ type: "macro", name: "make_answer" }));
+  });
+});

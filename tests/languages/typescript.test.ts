@@ -1,4 +1,3 @@
-import { expect } from "vitest";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 
@@ -8,38 +7,44 @@ const definition: LanguageTestDefinition = {
     {
       name: "chunks basic TypeScript structures",
       sourceFile: "typescript.sample.ts",
-      expectedChunks: (chunks) => {
-        expect(chunks.some((c) => c.type === "imports")).toBe(true);
-        expect(chunks.some((c) => c.type === "interface" && c.name === "User")).toBe(true);
-        expect(chunks.some((c) => c.type === "enum" && c.name === "Role")).toBe(true);
-        expect(chunks.some((c) => c.type === "type_alias" && c.name === "UserId")).toBe(true);
-        expect(chunks.some((c) => c.type === "class" && c.name === "Service")).toBe(true);
-        expect(chunks.some((c) => c.type === "function" && c.name === "helper")).toBe(true);
-      },
+      exactChunks: [
+        { type: "imports", startLine: 1, endLine: 2 },
+        { type: "interface", name: "User", startLine: 3, endLine: 7 },
+        { type: "enum", name: "Role", startLine: 8, endLine: 12 },
+        { type: "type_alias", name: "UserId", startLine: 13, endLine: 14 },
+        { type: "class", name: "Service", startLine: 15, endLine: 21 },
+        { type: "method", name: "constructor", startLine: 16, endLine: 16 },
+        { type: "method", name: "getRole", startLine: 18, endLine: 20 },
+        { type: "misc", startLine: 21, endLine: 22 },
+        { type: "function", name: "helper", startLine: 23, endLine: 25 },
+      ],
     },
   ],
   parity: {
     sampleDir: "typescript",
-    dependencyGraph: [
-      {
-        from: "dynamic-import.ts",
-        to: { type: "file", path: "helpers.ts" },
-      },
-      {
-        from: "triple-slash-reference.ts",
-        to: { type: "file", path: "triple-slash-globals.d.ts" },
-      },
-    ],
-    symbols: [
-      {
-        file: "abstract-implementation.ts",
-        includes: [
-          { name: "AbstractJob", kind: "class" },
-          { name: "execute", kind: "function" },
-          { name: "ConcreteJob", kind: "class" },
-        ],
-      },
-    ],
+    exact: {
+      dependencyGraph: [
+        {
+          from: "dynamic-import.ts",
+          to: { type: "file", path: "helpers.ts" },
+        },
+        {
+          from: "triple-slash-reference.ts",
+          to: { type: "file", path: "triple-slash-globals.d.ts" },
+        },
+      ],
+      symbols: [
+        {
+          file: "abstract-implementation.ts",
+          symbols: [
+            { name: "AbstractJob", kind: "class" },
+            { name: "ConcreteJob", kind: "class" },
+            { name: "execute", kind: "function" },
+            { name: "execute", kind: "function" },
+          ],
+        },
+      ],
+    },
   },
 };
 

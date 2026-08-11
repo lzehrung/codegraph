@@ -24,6 +24,7 @@ import {
   extractGraphOnlyModuleSpecifiers,
   extractHtmlAttributeSpecifiers,
   extractHtmlInlineScriptSpecifiers,
+  extractHtmlStyleSpecifiers,
   isGraphOnlyLanguage,
 } from "../documentLinks.js";
 import { sliceText, unquote } from "../util/ast.js";
@@ -195,14 +196,33 @@ function stripCssComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, (match) => match.replace(/[^\r\n]/g, " "));
 }
 
+const CSS_IMPORT_SPECIFIER_PATTERN =
+  /(?:^|[;{}])\s*@(import|use|forward)\s+(?:\([^)]*\)\s*)?(?:url\(\s*(?:"([^"]+)"|'([^']+)'|([^)\s]+))\s*\)|"([^"]+)"|'([^']+)')(?=\s*(?:[^;{}]*;|$))/gim;
+
 function extractCssImportSpecifiers(source: string): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
   const cleaned = stripCssComments(source);
-  const re = /(?:^|[;{}])\s*@(import|use|forward)\s+(?:url\()?["']([^"']+)["']/gim;
-  for (const match of cleaned.matchAll(re)) {
-    const spec = (match[2] ?? "").trim();
+  for (const match of cleaned.matchAll(CSS_IMPORT_SPECIFIER_PATTERN)) {
+    const spec = (match[2] ?? match[3] ?? match[4] ?? match[5] ?? match[6] ?? "").trim();
     if (!spec) continue;
-    out.push({ spec, typeOnly: false });
+    out.push({ spec, typeOnly: false, resolutionKind: "stylesheet" });
+  }
+  return out;
+}
+
+function extractCssModuleSpecifiers(source: string): ModuleSpecifier[] {
+  const out: ModuleSpecifier[] = [];
+  const cleaned = stripCssComments(source);
+  const patterns = [
+    /(?:^|[;{}])\s*composes\s*:\s*[^;{}]*?\bfrom\s+(?:"([^"]+)"|'([^']+)')/gim,
+    /(?:^|[;{}])\s*@value\s+[^;{}]*?\bfrom\s+(?:"([^"]+)"|'([^']+)')/gim,
+    /(?:^|[;{}])\s*@value\s+[A-Za-z_-][\w-]*\s*:\s*(?:"([^"]+)"|'([^']+)')/gim,
+  ];
+  for (const pattern of patterns) {
+    for (const match of cleaned.matchAll(pattern)) {
+      const spec = (match[1] ?? match[2] ?? "").trim();
+      if (spec) out.push({ spec, typeOnly: false, resolutionKind: "stylesheet" });
+    }
   }
   return out;
 }
@@ -334,11 +354,12 @@ export function collectModuleSpecifiersFromSource(
 
   const nativeImportsArray = resolvedNativeImports;
   const hasNativeImports = !!nativeImportsArray;
+  const nativeImportsToProcess = htmlLikeLanguage ? [] : (nativeImportsArray ?? []);
 
   let queryFailed = false;
   if (hasNativeImports) {
     try {
-      for (const match of nativeImportsArray) {
+      for (const match of nativeImportsToProcess) {
         const capMap = Object.fromEntries(match.captures.map((capture) => [capture.name, capture] as const)) as Record<
           string,
           CompactCapture | NativeCapture | undefined
@@ -368,9 +389,14 @@ export function collectModuleSpecifiersFromSource(
             continue;
           }
         }
+        const stylesheetImport = support.id === "css" || support.id === "scss" || support.id === "less";
         for (const capture of match.captures) {
           if (capture.name !== "mod") continue;
-          out.push({ spec: unquote(capture.text), typeOnly });
+          out.push({
+            spec: unquote(capture.text),
+            typeOnly,
+            ...(stylesheetImport ? { resolutionKind: "stylesheet" } : {}),
+          });
         }
       }
       if (htmlLikeLanguage) {
@@ -378,6 +404,7 @@ export function collectModuleSpecifiersFromSource(
         const htmlSeen = makeSeenSet(out);
         appendUniqueSpecifiers(out, extractHtmlAttributeSpecifiers(source), htmlSeen);
         appendUniqueSpecifiers(out, extractHtmlInlineScriptSpecifiers(source), htmlSeen);
+        appendUniqueSpecifiers(out, extractHtmlStyleSpecifiers(source), htmlSeen);
         if (!beforeHtmlRecovery && out.length) {
           reportFallback("query-empty");
         }
@@ -385,6 +412,8 @@ export function collectModuleSpecifiersFromSource(
       if (support.id === "css" || support.id === "scss" || support.id === "less") {
         const beforeCssRecovery = out.length;
         const cssSeen = makeSeenSet(out);
+        appendUniqueSpecifiers(out, extractCssImportSpecifiers(source), cssSeen);
+        appendUniqueSpecifiers(out, extractCssModuleSpecifiers(source), cssSeen);
         appendUniqueSpecifiers(out, extractCssUrlSpecifiers(source), cssSeen);
         if (!beforeCssRecovery && out.length) {
           reportFallback("query-empty");
@@ -439,10 +468,12 @@ export function collectModuleSpecifiersFromSource(
     const beforeRecovery = out.length;
     const attributeSpecs = extractHtmlAttributeSpecifiers(source);
     const inlineSpecs = extractHtmlInlineScriptSpecifiers(source);
-    if (attributeSpecs.length || inlineSpecs.length) {
+    const styleSpecs = extractHtmlStyleSpecifiers(source);
+    if (attributeSpecs.length || inlineSpecs.length || styleSpecs.length) {
       const fallbackSeen = makeSeenSet(out);
       appendUniqueSpecifiers(out, attributeSpecs, fallbackSeen);
       appendUniqueSpecifiers(out, inlineSpecs, fallbackSeen);
+      appendUniqueSpecifiers(out, styleSpecs, fallbackSeen);
     }
     if (out.length > beforeRecovery) {
       reportFallback(reducedRecoveryReason);
@@ -452,6 +483,7 @@ export function collectModuleSpecifiersFromSource(
     const beforeRecovery = out.length;
     const cssSeen = makeSeenSet(out);
     appendUniqueSpecifiers(out, extractCssImportSpecifiers(source), cssSeen);
+    appendUniqueSpecifiers(out, extractCssModuleSpecifiers(source), cssSeen);
     appendUniqueSpecifiers(out, extractCssUrlSpecifiers(source), cssSeen);
     if (out.length > beforeRecovery) {
       reportFallback(reducedRecoveryReason);

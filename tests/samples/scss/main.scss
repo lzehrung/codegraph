@@ -2,6 +2,7 @@
 @use "./mixins";
 @use "./tokens";
 @use "./missing";
+@import "./theme";
 
 .container {
   color: variables.$primary-color;

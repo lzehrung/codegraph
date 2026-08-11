@@ -48,6 +48,24 @@ describe("Go to Definition", () => {
       }
     });
 
+    it("resolves quoted SQL identifiers with their exact case", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-quoted-goto-"));
+      try {
+        const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+        const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+        const schemaLines = ['CREATE TABLE "Users" (id integer);', 'CREATE TABLE "users" (id integer);'];
+        const reportLines = ['SELECT id FROM "Users";', 'SELECT id FROM "users";'];
+        await fsp.writeFile(schemaFile, schemaLines.join("\n"), "utf8");
+        await fsp.writeFile(reportFile, reportLines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [schemaFile, reportFile]);
+
+        await testGoToDefinition(index, reportFile, 1, reportLines[0]!.indexOf('"Users"') + 1, schemaFile, 1);
+        await testGoToDefinition(index, reportFile, 2, reportLines[1]!.indexOf('"users"') + 1, schemaFile, 2);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("resolves alias-qualified and table-qualified SQL object references", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-qualified-goto-"));
       try {
@@ -317,6 +335,16 @@ describe("Go to Definition", () => {
     });
   });
 
+  describe("Go", () => {
+    it("resolves promoted struct fields through embedding", async () => {
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "go");
+      const embeddingFile = path.join(samplePath, "embedding.go").replace(/\\/g, "/");
+      const index = await createTestIndexFromFiles(samplePath, [embeddingFile]);
+
+      await testGoToDefinition(index, embeddingFile, 22, 8, embeddingFile, 4);
+    });
+  });
+
   describe("TypeScript", () => {
     it("resolves TypeScript enum imports to enum declarations", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-enum-goto-"));
@@ -362,7 +390,7 @@ describe("Go to Definition", () => {
         const consumer = ['import Widget from "./widget";', usageLine, ""].join("\n");
         await fsp.writeFile(consumerFile, consumer, "utf8");
         const index = await createTestIndexFromFiles(root, [widgetFile, consumerFile]);
-        const widgetModule = index.byFile.get(widgetFile);
+        const widgetModule = index.byFile.get(fileIdentityKey(widgetFile));
         const defaultExport = widgetModule?.exports.find(
           (entry) => entry.type === "local" && entry.exportedAs === "default",
         );
@@ -565,6 +593,33 @@ describe("Go to Definition", () => {
         expect(result.definition.range.start.line).toBe(1); // helperFunction definition
       }
     });
+
+    it("resolves an unqualified call to the same-file method, not a same-named method in another class", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-method-goto-unqualified-"));
+      try {
+        const mainFile = path.join(root, "main.ts").replace(/\\/g, "/");
+        await fsp.writeFile(
+          mainFile,
+          [
+            "class Main {",
+            "  helper() { }",
+            "  run() {",
+            "    helper();",
+            "  }",
+            "}",
+            "class Other {",
+            "  helper() { }",
+            "}",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        const index = await createTestIndexFromFiles(root, [mainFile]);
+        await testGoToDefinition(index, mainFile, 4, 5, mainFile, 2);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("TSX", () => {
@@ -685,6 +740,18 @@ describe("Go to Definition", () => {
         await fsp.rm(root, { recursive: true, force: true });
       }
     });
+
+    it("resolves Python match bindings and Python stub imports", async () => {
+      const fixturePath = path.resolve(process.cwd(), "tests", "samples", "language-regressions", "python");
+      const matchFile = path.join(fixturePath, "match_bindings.py").replace(/\\/g, "/");
+      const stubFile = path.join(fixturePath, "stubs.pyi").replace(/\\/g, "/");
+      const consumerFile = path.join(fixturePath, "stub_consumer.py").replace(/\\/g, "/");
+      const index = await createTestIndexFromFiles(fixturePath, [matchFile, stubFile, consumerFile]);
+
+      await testGoToDefinition(index, matchFile, 4, 20, matchFile, 3);
+      await testGoToDefinition(index, matchFile, 6, 20, matchFile, 5);
+      await testGoToDefinition(index, consumerFile, 4, 10, stubFile, 5);
+    });
   });
 
   describe("PHP", () => {
@@ -786,13 +853,19 @@ describe("Go to Definition", () => {
       await testGoToDefinition(index, consumerFile, 3, 25, serviceFile, 5);
     });
 
-    it("should find definition of fully-qualified Composer-mapped type references", async () => {
+    it("should not treat fully-qualified PHP type names as receiver members", async () => {
       const index = await createTestIndex("php");
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "php");
       const consumerFile = path.join(samplePath, "composer-type-qualified-consumer.php").replace(/\\/g, "/");
       const serviceFile = path.join(samplePath, "src", "Domain", "Service.php").replace(/\\/g, "/");
 
-      await testGoToDefinition(index, consumerFile, 3, 37, serviceFile, 5);
+      const result = await testGoToDefinition(index, consumerFile, 3, 37, serviceFile, 5);
+      if (result.status === "ok") {
+        expect(result.provenance).toEqual({
+          resolution: "php-qualified",
+          confidence: "high",
+        });
+      }
     });
 
     it("should find definitions through Composer PSR-0, autoload-dev, classmap, and files entries", async () => {
@@ -984,6 +1057,33 @@ describe("Go to Definition", () => {
       if (result.status === "ok") {
         expect(result.definition.file).toBe(helpersFile);
         expect(result.definition.range.start.line).toBe(1); // helperFunction definition
+      }
+    });
+
+    it("resolves an unqualified call to the same-file method, not a same-named method in another class", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-js-method-goto-unqualified-"));
+      try {
+        const mainFile = path.join(root, "main.js").replace(/\\/g, "/");
+        await fsp.writeFile(
+          mainFile,
+          [
+            "class Main {",
+            "  helper() { }",
+            "  run() {",
+            "    helper();",
+            "  }",
+            "}",
+            "class Other {",
+            "  helper() { }",
+            "}",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        const index = await createTestIndexFromFiles(root, [mainFile]);
+        await testGoToDefinition(index, mainFile, 4, 5, mainFile, 2);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
       }
     });
   });
@@ -1285,6 +1385,33 @@ describe("Go to Definition", () => {
         await fsp.rm(root, { recursive: true, force: true });
       }
     });
+
+    it("resolves an unqualified call to the same-file method, not a same-named method in another class", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-java-method-goto-unqualified-"));
+      try {
+        const mainFile = path.join(root, "Main.java").replace(/\\/g, "/");
+        await fsp.writeFile(
+          mainFile,
+          [
+            "class Main {",
+            "  void helper() { }",
+            "  void run() {",
+            "    helper();",
+            "  }",
+            "}",
+            "class Other {",
+            "  void helper() { }",
+            "}",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        const index = await createTestIndexFromFiles(root, [mainFile]);
+        await testGoToDefinition(index, mainFile, 4, 5, mainFile, 2);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("C#", () => {
@@ -1366,6 +1493,33 @@ describe("Go to Definition", () => {
           serviceFile,
           5,
         );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("resolves an unqualified call to the same-file method, not a same-named method in another class", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-csharp-method-goto-unqualified-"));
+      try {
+        const mainFile = path.join(root, "Main.cs").replace(/\\/g, "/");
+        await fsp.writeFile(
+          mainFile,
+          [
+            "class Main {",
+            "  void Helper() { }",
+            "  void Run() {",
+            "    Helper();",
+            "  }",
+            "}",
+            "class Other {",
+            "  void Helper() { }",
+            "}",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        const index = await createTestIndexFromFiles(root, [mainFile]);
+        await testGoToDefinition(index, mainFile, 4, 5, mainFile, 2);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }
@@ -1481,6 +1635,14 @@ describe("Go to Definition", () => {
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }
+    });
+
+    it("resolves macro invocations to macro_rules definitions", async () => {
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "rust");
+      const macroFile = path.join(samplePath, ".regressions", "macros.rs").replace(/\\/g, "/");
+      const index = await createTestIndexFromFiles(samplePath, [macroFile]);
+
+      await testGoToDefinition(index, macroFile, 6, 5, macroFile, 1);
     });
   });
 });

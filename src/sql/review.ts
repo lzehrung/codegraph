@@ -3,7 +3,8 @@ import path from "node:path";
 import { listProjectFiles } from "../util/projectFiles.js";
 import { normalizePath } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
-import { extractSqlFactsFromSource, sqlObjectBaseName } from "./extractFacts.js";
+import { extractSqlFactsFromSource } from "./extractFacts.js";
+import { normalizeSqlObjectName, sqlObjectLookupKey } from "./lex.js";
 import { sqlObjectLookupKeys } from "./lookup.js";
 import type { SqlBridgeReason, SqlStatementFact } from "./types.js";
 
@@ -39,6 +40,8 @@ const SQL_LITERAL_HINT = new RegExp(
   ].join("|"),
   "i",
 );
+
+const SQL_OBJECT_MENTION_RE = new RegExp(SQL_OBJECT_NAME_HINT, "g");
 
 function isSqlFile(filePath: string): boolean {
   return path.extname(filePath).toLowerCase() === ".sql";
@@ -87,24 +90,78 @@ async function collectSqlFacts(
   return factGroups.flat();
 }
 
+function sqlLiteralsInSource(source: string): string[] {
+  const literals: string[] = [];
+  let index = 0;
+  while (index < source.length) {
+    if (source.startsWith("//", index) || source[index] === "#") {
+      const lineEnd = source.indexOf("\n", index + 1);
+      index = lineEnd < 0 ? source.length : lineEnd + 1;
+      continue;
+    }
+    if (source.startsWith("/*", index)) {
+      const commentEnd = source.indexOf("*/", index + 2);
+      index = commentEnd < 0 ? source.length : commentEnd + 2;
+      continue;
+    }
+    if (source.startsWith("<!--", index)) {
+      const commentEnd = source.indexOf("-->", index + 4);
+      index = commentEnd < 0 ? source.length : commentEnd + 3;
+      continue;
+    }
+
+    const quote = source[index];
+    if (quote !== "'" && quote !== '"' && quote !== "`") {
+      index += 1;
+      continue;
+    }
+
+    const tripleQuoted = source.startsWith(quote.repeat(3), index);
+    const contentStart = index + (tripleQuoted ? 3 : 1);
+    index = contentStart;
+    let closed = false;
+    while (index < source.length) {
+      if (tripleQuoted && source.startsWith(quote.repeat(3), index)) {
+        closed = true;
+        break;
+      }
+      const character = source[index];
+      if (!tripleQuoted && character === "\\") {
+        index += 2;
+        continue;
+      }
+      if (!tripleQuoted && character === quote) {
+        closed = true;
+        break;
+      }
+      index += 1;
+    }
+    if (!closed) break;
+
+    const content = source.slice(contentStart, index).replace(/\\([\\'"`])/g, "$1");
+    if (SQL_LITERAL_HINT.test(content)) literals.push(content);
+    index += tripleQuoted ? 3 : 1;
+  }
+  return literals;
+}
+
 async function collectChangedSqlLiteralSources(changedFiles: readonly string[]): Promise<string[]> {
   const sources: string[] = [];
   for (const changedFile of changedFiles) {
     if (isSqlFile(changedFile)) continue;
     const source = await readExistingFile(changedFile);
-    if (!source || !SQL_LITERAL_HINT.test(source)) continue;
-    sources.push(source);
+    if (!source) continue;
+    sources.push(...sqlLiteralsInSource(source));
   }
   return sources;
 }
 
 function changedSourceObjectMentions(source: string): Set<string> {
   const mentions = new Set<string>();
-  const objectRe = /[A-Za-z_][A-Za-z0-9_$]*(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_$]*)*/g;
-  for (const match of source.matchAll(objectRe)) {
-    const normalized = match[0].replace(/\s*\.\s*/g, ".").toLowerCase();
-    mentions.add(normalized);
-    mentions.add(sqlObjectBaseName(normalized).toLowerCase());
+  for (const match of source.matchAll(SQL_OBJECT_MENTION_RE)) {
+    const normalized = normalizeSqlObjectName(match[0]);
+    if (!normalized) continue;
+    for (const key of sqlObjectLookupKeys(normalized)) mentions.add(key);
   }
   return mentions;
 }
@@ -116,7 +173,7 @@ function collectChangedSqlLiteralObjects(
   const objectNamesByKey = new Map<string, Set<string>>();
   for (const fact of facts) {
     if (!fact.objectName) continue;
-    const canonicalName = fact.objectName.toLowerCase();
+    const canonicalName = sqlObjectLookupKey(fact.objectName);
     for (const key of sqlObjectLookupKeys(fact.objectName)) {
       const existing = objectNamesByKey.get(key);
       if (existing) existing.add(canonicalName);
@@ -165,7 +222,7 @@ export async function collectSqlReviewContext(
       addEntry({ reason: "changed_sql_file", objectName: fact.objectName, fact });
       continue;
     }
-    const objectName = fact.objectName?.toLowerCase();
+    const objectName = fact.objectName ? sqlObjectLookupKey(fact.objectName) : null;
     if (objectName && literalObjects.has(objectName)) {
       addEntry({ reason: "changed_sql_literal", objectName: fact.objectName, fact });
     }

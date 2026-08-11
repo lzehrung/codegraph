@@ -626,6 +626,23 @@ nativeDescribe("native semantic coverage", () => {
         { file: "TypeScriptWidget.svelte", line: 2, column: 17, expectedStatus: "not_found" },
         { file: "TypeScriptWidget.svelte", line: 2, column: 17, expectedStatus: "not_found" },
       ),
+      sampleExpectation(
+        "language-regressions/python",
+        ["match_bindings.py", "stubs.pyi", "stub_consumer.py"],
+        [
+          { file: "match_bindings.py", names: ["x", "y", "w"] },
+          { file: "stubs.pyi", names: ["StubType", "stub_function"] },
+        ],
+        { file: "stub_consumer.py", line: 4, column: 10, expectedStatus: "ok" },
+        { file: "stubs.pyi", line: 5, column: 5, expectedStatus: "ok" },
+      ),
+      sampleExpectation(
+        "rust",
+        [".regressions/macros.rs"],
+        [{ file: ".regressions/macros.rs", names: ["make_answer"] }],
+        { file: ".regressions/macros.rs", line: 6, column: 5, expectedStatus: "ok" },
+        { file: ".regressions/macros.rs", line: 1, column: 14, expectedStatus: "ok" },
+      ),
     ];
 
     for (const testCase of cases) {

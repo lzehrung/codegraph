@@ -399,15 +399,21 @@ function collectCteReads(text: string): { names: Set<string>; facts: SqlFactDraf
     "gi",
   );
 
+  const seenFacts = new Set<string>();
+
   for (const match of text.matchAll(ctePattern)) {
-    if (sqlParenDepthAt(text, match.index ?? 0) > 0) continue;
     const name = normalizeSqlObjectName(match[1]);
     if (!name) continue;
     for (const key of sqlObjectLookupKeys(name)) names.add(key);
     const bodyStart = (match.index ?? 0) + match[0].length;
     const bodyEnd = findMatchingParen(text, bodyStart - 1);
     if (bodyEnd < 0) continue;
-    facts.push(...extractReadFacts(text.slice(bodyStart, bodyEnd)));
+    for (const fact of extractReadFacts(text.slice(bodyStart, bodyEnd))) {
+      const key = `${fact.kind}:${fact.objectName ?? ""}:${fact.relatedObjectName ?? ""}`;
+      if (seenFacts.has(key)) continue;
+      seenFacts.add(key);
+      facts.push(fact);
+    }
   }
 
   return { names, facts };

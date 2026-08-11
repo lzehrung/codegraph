@@ -63,6 +63,20 @@ const definition: LanguageTestDefinition = {
         from: "modules.html",
         to: { type: "file", path: "about.html" },
       },
+      {
+        from: "index.html",
+        to: { type: "file", path: "theme.css" },
+      },
+    ],
+    absentDependencyGraph: [
+      {
+        from: "index.html",
+        to: { type: "file", path: "commented.js" },
+      },
+      {
+        from: "index.html",
+        to: { type: "file", path: "literal.html" },
+      },
     ],
   },
 };

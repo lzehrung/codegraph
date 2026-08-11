@@ -33,7 +33,7 @@ export async function resolveMemberAccessDefinition(params: {
   const optionalMemberTypes = memberAccessTraversalTypes(sup);
 
   const resolveExpression = async (expr: SyntaxNodeLike): Promise<ResolvedExport | null> => {
-    const exprIsId = sup.nodeTypes.identifier.includes(expr.type);
+    const exprIsId = sup.nodeTypes.identifier.includes(expr.type) && !isMemberAccessNode(sup, expr);
     if (exprIsId || expr.type === "identifier" || expr.type === "type_identifier" || expr.type === "constant") {
       const lexicalBinding = resolveLexicalBinding?.(expr);
       if (lexicalBinding) return { kind: "resolved", def: lexicalBinding };

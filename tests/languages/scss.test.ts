@@ -38,6 +38,10 @@ const definition: LanguageTestDefinition = {
         to: { type: "external", name: "./missing" },
       },
       {
+        from: "main.scss",
+        to: { type: "file", path: "theme.scss" },
+      },
+      {
         from: "use-partials.scss",
         to: { type: "file", path: "_variables.scss" },
       },
@@ -86,6 +90,10 @@ const definition: LanguageTestDefinition = {
       {
         from: "main.scss",
         to: { type: "file", path: "_tokens.ts" },
+      },
+      {
+        from: "main.scss",
+        to: { type: "file", path: "theme.ts" },
       },
     ],
   },

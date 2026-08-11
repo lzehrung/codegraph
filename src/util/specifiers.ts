@@ -2,12 +2,14 @@ import path from "node:path";
 import { buildJsLikeLiteralMask, stripJsLikeComments, stripPythonCommentsAndStrings } from "./comments.js";
 import { normalizePath } from "./paths.js";
 
+export type ModuleSpecifierResolutionKind = "document" | "source" | "stylesheet";
+
 export type ModuleSpecifier = {
   spec: string;
   raw?: string;
   typeOnly?: boolean;
   phpImportType?: "class" | "function" | "const";
-  resolutionKind?: "document" | "source";
+  resolutionKind?: ModuleSpecifierResolutionKind;
   dropIfUnresolved?: boolean;
   resolved?: "heuristic" | "precise";
   confidence?: number;

@@ -603,6 +603,100 @@ export function collectLocalsAndExportsFromSource(
         }
         continue;
       }
+      if (map["cjs_spread"]) {
+        const spreadName = map["cjs_spread"].text;
+        const imported = imports.find(
+          (binding) =>
+            (binding.kind === "default" && binding.local === spreadName) ||
+            (binding.kind === "namespace" && binding.localNS === spreadName),
+        );
+        if (imported) {
+          const fromModule = typeof imported.resolved === "string" ? imported.resolved : imported.from;
+          if (!exports.some((entry) => entry.type === "exportStar" && entry.fromModule === fromModule)) {
+            exports.push({
+              type: "exportStar",
+              fromModule,
+              moduleSpecifier: imported.from,
+              sourceSpecifier: imported.from,
+            });
+          }
+          continue;
+        }
+
+        const findLocalObject = (node: SyntaxNodeLike): SyntaxNodeLike | undefined => {
+          if (node.type === "variable_declarator") {
+            const name = node.childForFieldName("name");
+            const value = node.childForFieldName("value");
+            if (sliceText(name, source) === spreadName && value?.type === "object") return value;
+          }
+          for (const child of node.namedChildren) {
+            const value = findLocalObject(child);
+            if (value) return value;
+          }
+          return undefined;
+        };
+        const localObject = treeForEnrichment ? findLocalObject(treeForEnrichment.rootNode) : undefined;
+        if (localObject) {
+          const addObjectMember = (exportedAs: string, value: SyntaxNodeLike, member: SyntaxNodeLike): void => {
+            let local: SymbolDef | undefined;
+            if (value.type === "identifier" || value.type === "shorthand_property_identifier") {
+              local = locals.find((definition) => definition.localName === sliceText(value, source));
+            } else if (value.type === "function" || value.type === "arrow_function") {
+              local = buildSymbolDef(exportedAs, SymbolKind.Function, toRange(value), member);
+              locals.push(local);
+            }
+            if (
+              local &&
+              !exports.some((entry) => entry.type === "local" && entry.exportedAs === exportedAs)
+            ) {
+              exports.push({ type: "local", exportedAs, target: local });
+            }
+          };
+
+          for (const member of localObject.namedChildren) {
+            if (member.type === "shorthand_property_identifier") {
+              addObjectMember(member.text, member, member);
+              continue;
+            }
+            if (member.type === "pair") {
+              const key = member.childForFieldName("key");
+              const value = member.childForFieldName("value");
+              if (
+                key &&
+                value &&
+                (key.type === "identifier" || key.type === "property_identifier" || key.type === "string")
+              ) {
+                addObjectMember(key.type === "string" ? unquote(key.text) : key.text, value, member);
+              }
+              continue;
+            }
+            if (member.type === "method_definition") {
+              const name = member.childForFieldName("name");
+              if (name) {
+                const local = locals.find(
+                  (definition) =>
+                    definition.localName === name.text &&
+                    definition.range.start.index === name.startIndex,
+                );
+                if (local && !exports.some((entry) => entry.type === "local" && entry.exportedAs === name.text)) {
+                  exports.push({ type: "local", exportedAs: name.text, target: local });
+                }
+              }
+            }
+          }
+          continue;
+        }
+
+        // The source exists syntactically but cannot be resolved without executing
+        // user code. Keep an explicit API marker instead of silently losing it.
+        const unresolvedMarker = `<unresolved cjs spread: ${spreadName}>`;
+        exports.push({
+          type: "namespaceReexport",
+          exportedAs: unresolvedMarker,
+          fromModule: unresolvedMarker,
+        });
+        continue;
+      }
       if (map["cjs_shorthand"]) {
         const nameText = map["cjs_shorthand"].text;
         const local = locals.find((def) => def.localName === nameText);

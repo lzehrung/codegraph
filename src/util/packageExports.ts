@@ -1,12 +1,12 @@
-const ACTIVE_PACKAGE_EXPORT_CONDITIONS: Record<string, true> = {
-  "node-addons": true,
-  node: true,
-  import: true,
-  require: true,
-  "module-sync": true,
-  module: true,
-  default: true,
-};
+const PACKAGE_EXPORT_CONDITION_PRIORITY = [
+  "import",
+  "node",
+  "default",
+  "require",
+  "module",
+  "module-sync",
+  "node-addons",
+] as const;
 
 function isExportTargetRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -28,9 +28,9 @@ function collectPackageExportTargets(target: unknown, matchedSubpath?: string): 
   }
   if (!isExportTargetRecord(target)) return [];
 
-  for (const [condition, conditionTarget] of Object.entries(target)) {
-    if (!Object.hasOwn(ACTIVE_PACKAGE_EXPORT_CONDITIONS, condition)) continue;
-    const conditionTargets = collectPackageExportTargets(conditionTarget, matchedSubpath);
+  for (const condition of PACKAGE_EXPORT_CONDITION_PRIORITY) {
+    if (!Object.hasOwn(target, condition)) continue;
+    const conditionTargets = collectPackageExportTargets(target[condition], matchedSubpath);
     if (conditionTargets === null || conditionTargets.length) return conditionTargets;
   }
   return [];

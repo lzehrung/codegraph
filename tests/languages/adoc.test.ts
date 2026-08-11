@@ -30,6 +30,16 @@ const definition: LanguageTestDefinition = {
         from: "index.asciidoc",
         to: { type: "file", path: "guide.asciidoc" },
       },
+      {
+        from: "index.adoc",
+        to: { type: "file", path: "partials/live.adoc" },
+      },
+    ],
+    absentDependencyGraph: [
+      {
+        from: "index.adoc",
+        to: { type: "file", path: "partials/ignored.adoc" },
+      },
     ],
     goToDefinition: [
       {

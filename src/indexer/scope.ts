@@ -76,7 +76,7 @@ export function buildScopeIndexFromSource(
   }
 
   const idSet = new Set([...support.nodeTypes.identifier, ...(support.nodeTypes.shorthandPropertyIdentifier ?? [])]);
-  const customDeclLanguages = new Set(["c", "cpp", "kotlin", "swift"]);
+  const scopeDeclarationNames = support.scopeDeclarationNames;
   const paramParentTypes = new Set(["parameter_declaration", "parameter", "class_parameter", "lambda_parameters"]);
   const isJavaScriptOrTypeScript = isJsTsLanguage(support.id);
   const isJsTsFunctionDeclaration = (node: SyntaxNodeLike): boolean =>
@@ -362,7 +362,7 @@ export function buildScopeIndexFromSource(
     }
 
     if (
-      customDeclLanguages.has(support.id) &&
+      scopeDeclarationNames(node) &&
       idSet.has(node.type) &&
       support.isDeclarationName(node) &&
       !isScopedCppEnumeratorName(node)

@@ -3,7 +3,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { GRAPH_ONLY_RESOLUTION_EXTENSIONS } from "./graphOnlyExtensions.js";
 import { fileIdentityKey, isFilePathWithinRoot, normalizePath, normalizeResolutionHints } from "./paths.js";
-import { DEFAULT_RESOLUTION_EXTENSIONS, getResolutionExtensions } from "./resolutionCandidates.js";
+import { DEFAULT_RESOLUTION_EXTENSIONS, STYLESHEET_RESOLUTION_EXTENSIONS, getResolutionExtensions } from "./resolutionCandidates.js";
 import {
   clearWorkspaceCaches,
   clearFileExistsCache,
@@ -20,6 +20,7 @@ import { clearPhpResolutionCaches, getPhpComposerImplicitFiles, resolvePhpImport
 import { clearPythonResolutionCache, resolvePythonModule } from "./resolution/python.js";
 import { resolveRustImportPath } from "./resolution/rust.js";
 import { clearTsconfigCache, loadNearestTsconfigFor, type MatchPathFn } from "./resolution/tsconfig.js";
+import type { ModuleSpecifierResolutionKind } from "./specifiers.js";
 import { lruMapGet, lruMapSet } from "./lruMap.js";
 export { resolveGoImportPath } from "./resolution/go.js";
 export { resolveJvmPackageImportPaths } from "./resolution/jvm.js";
@@ -60,7 +61,7 @@ const GRAPH_ONLY_LANGUAGE_DOCUMENT_RESOLUTION_EXTENSIONS: Record<string, readonl
 
 const GRAPH_ONLY_LANGUAGE_SOURCE_RESOLUTION_EXTENSIONS: Record<string, readonly string[]> = {
   mdx: DEFAULT_RESOLUTION_EXTENSIONS,
-  astro: [".astro", ...DEFAULT_RESOLUTION_EXTENSIONS],
+  astro: [...DEFAULT_RESOLUTION_EXTENSIONS, ".astro"],
 };
 
 function fileExistsSync(p: string): boolean {
@@ -73,8 +74,11 @@ function fileExistsSync(p: string): boolean {
 
 export function getGraphOnlyResolutionExtensions(
   languageId: string,
-  resolutionKind: "document" | "source" = "document",
+  resolutionKind: ModuleSpecifierResolutionKind = "document",
 ): string[] {
+  if (resolutionKind === "stylesheet") {
+    return Array.from(STYLESHEET_RESOLUTION_EXTENSIONS);
+  }
   const normalizedLanguageId = languageId.toLowerCase();
   const preferredExtensions =
     resolutionKind === "source"

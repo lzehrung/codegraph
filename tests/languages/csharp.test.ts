@@ -39,7 +39,6 @@ const definition: LanguageTestDefinition = {
         from: "NamespaceAlias.cs",
         to: { type: "external", name: "System.Collections.Generic" },
       },
-    ],
       {
         from: "GlobalUsings.cs",
         to: { type: "external", name: "System.Text" },
@@ -48,6 +47,7 @@ const definition: LanguageTestDefinition = {
         from: "GlobalUsings.cs",
         to: { type: "file", path: "Shared.cs" },
       },
+    ],
     symbols: [
       {
         file: "AdvancedTypes.cs",
@@ -78,7 +78,6 @@ const definition: LanguageTestDefinition = {
         column: 42,
         expectedDefinition: { file: "PatternMatching.cs", line: 7 },
       },
-    ],
       {
         name: "go to definition resolves a type through a global using namespace",
         file: "GlobalUsings.cs",
@@ -86,6 +85,7 @@ const definition: LanguageTestDefinition = {
         column: 9,
         expectedDefinition: { file: "Shared.cs", line: 3 },
       },
+    ],
     references: [
       {
         name: "find references for an is-pattern bound variable includes its usage site",

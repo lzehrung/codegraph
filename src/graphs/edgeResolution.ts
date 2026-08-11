@@ -13,6 +13,7 @@ import {
 import { type ModuleSpecifier } from "../util/specifiers.js";
 import { type WorkspaceConfig } from "../util/workspace.js";
 import { isGraphOnlyLanguage } from "../documentLinks.js";
+import { STYLESHEET_RESOLUTION_EXTENSIONS } from "../util/resolutionCandidates.js";
 
 type ResolvedSpecifierEdge = {
   to: EdgeTo;
@@ -106,9 +107,12 @@ export async function resolveModuleSpecifierEdges(
   context: ModuleSpecifierResolutionContext,
 ): Promise<ResolvedSpecifierEdge[] | null> {
   const graphOnlyLanguage = isGraphOnlyLanguage(context.support.id);
-  const resolutionExtensions = graphOnlyLanguage
-    ? getGraphOnlyResolutionExtensions(context.support.id, entry.resolutionKind ?? "document")
-    : undefined;
+  let resolutionExtensions: readonly string[] | undefined;
+  if (entry.resolutionKind === "stylesheet") {
+    resolutionExtensions = STYLESHEET_RESOLUTION_EXTENSIONS;
+  } else if (graphOnlyLanguage) {
+    resolutionExtensions = getGraphOnlyResolutionExtensions(context.support.id, entry.resolutionKind ?? "document");
+  }
 
   let to: EdgeTo;
   if (context.support.id === "python") {

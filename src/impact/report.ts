@@ -266,7 +266,7 @@ function buildReexportChains(
 
     while (stack.length) {
       const current = stack.pop()!;
-      const edges = reexportsBySource.get(current.file) ?? [];
+      const edges = reexportsBySource.get(fileIdentityKey(current.file)) ?? [];
       for (const edge of edges) {
         // Only filter named re-exports by symbol name. Export-star and namespace
         // re-exports include all symbols from the source module.

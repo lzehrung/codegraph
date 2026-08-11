@@ -44,6 +44,27 @@ describe("Agent Tools", () => {
     expect(result.files!.some((f) => f.replace(/\\/g, "/").endsWith("main.ts"))).toBe(true);
   });
 
+  const expectedTypescriptEdges = [
+    { from: "dynamic-import.ts", to: { type: "file" as const, path: "helpers.ts" } },
+    { from: "main.ts", to: { type: "file" as const, path: "utils.ts" } },
+    {
+      from: "triple-slash-reference.ts",
+      to: { type: "file" as const, path: "triple-slash-globals.d.ts" },
+    },
+    { from: "utils.ts", to: { type: "file" as const, path: "helpers.ts" } },
+  ];
+
+  const edgeKey = (edge: { from: string; to: { type: string; path?: string; name?: string } }) => {
+    if (edge.to.type === "external") return `${edge.from}|external|${edge.to.name}`;
+    return `${edge.from}|file|${edge.to.path}`;
+  };
+
+  const expectExactTypescriptEdges = (
+    edges: Array<{ from: string; to: { type: string; path?: string; name?: string } }>,
+  ) => {
+    expect([...edges.map(edgeKey)].sort()).toEqual([...expectedTypescriptEdges.map(edgeKey)].sort());
+  };
+
   it("tool_getGraph should return graph", async () => {
     const result = await tool_getGraph(samplePath);
     expect(result.status).toBe("ok");
@@ -56,6 +77,7 @@ describe("Agent Tools", () => {
         (edge) => !path.isAbsolute(edge.from) && (edge.to.type !== "file" || !path.isAbsolute(edge.to.path)),
       ),
     ).toBe(true);
+    expectExactTypescriptEdges(result.graph!.edges);
   });
 
   it("tool_getGraph accepts explicit native mode overrides", async () => {
@@ -63,6 +85,7 @@ describe("Agent Tools", () => {
     expect(result.status).toBe("ok");
     expect(result.graph).toBeDefined();
     expect(result.graph!.nodes.length).toBeGreaterThan(0);
+    expectExactTypescriptEdges(result.graph!.edges);
   });
 
   it("tool_getDependencies returns bounded normalized dependencies", async () => {

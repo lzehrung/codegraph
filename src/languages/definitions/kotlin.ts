@@ -124,6 +124,7 @@ export const KOTLIN_DEF: LanguageDefinition = {
     if (parent.type === "type_parameter" && node.type === "type_identifier") return true;
     return false;
   },
+  scopeDeclarationNames: "all",
   createsFunctionScope: (node) =>
     node.type === "function_declaration" || node.type === "anonymous_function" || node.type === "lambda_literal",
   createsBlockScope: (node) =>

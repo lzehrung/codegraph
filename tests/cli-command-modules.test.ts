@@ -35,6 +35,7 @@ import { getNativeRuntimeFingerprint } from "../src/native/treeSitterNative.js";
 import type { Graph } from "../src/types.js";
 import { runGit } from "./helpers/git.js";
 import { createTwoCommitCycleProject, mkTmpDir } from "./helpers/filesystem.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 import * as projectFilesModule from "../src/util/projectFiles.js";
 
 function readJsonRecord(value: unknown): Record<string, unknown> {
@@ -1914,8 +1915,8 @@ describe("CLI command modules", () => {
     const projectIndex: ProjectIndex = {
       graph,
       graphAdjacency: {
-        forward: new Map([[mainPath, [utilPath]]]),
-        reverse: new Map([[utilPath, [mainPath]]]),
+        forward: new Map([[fileIdentityKey(mainPath), [utilPath]]]),
+        reverse: new Map([[fileIdentityKey(utilPath), [mainPath]]]),
       },
       modules: new Map(),
       byFile: new Map(),

@@ -19,6 +19,7 @@ import { SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY } from "../src/sqlite.js";
 import { countingSession } from "./helpers/agent.js";
 import { createArtifactOutputWithStaleFile, createLinkedTempRoot, isSymlinkUnavailable } from "./helpers/filesystem.js";
 import { getCodegraphVersion } from "../src/util/packageInfo.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 import { runGit } from "./helpers/git.js";
 
 type JsonRpcObject = {
@@ -1724,8 +1725,8 @@ describe("codegraph MCP handlers", () => {
     };
     const index: ProjectIndex = {
       graph: fileGraph,
-      modules: new Map([[targetFile, moduleIndex]]),
-      byFile: new Map([[targetFile, moduleIndex]]),
+      modules: new Map([[fileIdentityKey(targetFile), moduleIndex]]),
+      byFile: new Map([[fileIdentityKey(targetFile), moduleIndex]]),
       exportCache: new Map(),
       scopeCache: new Map(),
     };

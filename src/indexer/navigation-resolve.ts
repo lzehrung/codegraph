@@ -145,7 +145,7 @@ function resolvePythonSubmodule(targetFile: string, exportedName: string): FileI
     const targetStat = fs.statSync(targetFile);
     if (targetStat.isDirectory()) {
       baseDir = targetFile;
-    } else if (path.basename(targetFile) === "__init__.py") {
+    } else if (path.basename(targetFile) === "__init__.py" || path.basename(targetFile) === "__init__.pyi") {
       baseDir = path.dirname(targetFile);
     } else {
       return null;
@@ -155,9 +155,11 @@ function resolvePythonSubmodule(targetFile: string, exportedName: string): FileI
   }
 
   const moduleFile = path.join(baseDir, `${exportedName}.py`);
+  const stubModuleFile = path.join(baseDir, `${exportedName}.pyi`);
   const packageInit = path.join(baseDir, exportedName, "__init__.py");
+  const stubPackageInit = path.join(baseDir, exportedName, "__init__.pyi");
   const namespacePackage = path.join(baseDir, exportedName);
-  for (const candidate of [moduleFile, packageInit, namespacePackage]) {
+  for (const candidate of [moduleFile, stubModuleFile, packageInit, stubPackageInit, namespacePackage]) {
     try {
       const candidateStat = fs.statSync(candidate);
       if (candidate === namespacePackage ? candidateStat.isDirectory() : candidateStat.isFile()) {

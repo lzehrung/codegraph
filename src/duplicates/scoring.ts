@@ -1035,7 +1035,17 @@ export function mergeLocations(locations: Iterable<DuplicateUnitRef>): Duplicate
     const existing = locationsByKey.get(key);
     locationsByKey.set(key, existing ? preferredDuplicateUnitRef(existing, location) : location);
   }
-  return Array.from(locationsByKey.values()).sort(compareUnitRefs);
+
+  const merged: DuplicateUnitRef[] = [];
+  for (const location of Array.from(locationsByKey.values()).sort(comparePrimaryUnitRefs)) {
+    const overlappingIndex = merged.findIndex((existing) => rangesSubstantiallyOverlap(existing, location));
+    if (overlappingIndex === -1) {
+      merged.push(location);
+      continue;
+    }
+    merged[overlappingIndex] = preferredDuplicateUnitRef(merged[overlappingIndex]!, location);
+  }
+  return merged.sort(compareUnitRefs);
 }
 
 export function groupLocations(group: DuplicateGroup): DuplicateUnitRef[] {

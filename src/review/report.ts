@@ -41,7 +41,7 @@ export async function collectReviewSqlContext(input: {
   index: ProjectIndex;
   changedFileList: string[];
 }): Promise<SqlReviewContext | undefined> {
-  const indexedFiles = Array.from(input.index.byFile.keys());
+  const indexedFiles = Array.from(input.index.byFile.values(), (module) => normalizePath(module.file));
   const normalizedChangedFiles = new Set(input.changedFileList.map(normalizePath));
   const indexedFilesCoverMoreThanReviewSet = indexedFiles.some(
     (file) => !normalizedChangedFiles.has(normalizePath(file)),

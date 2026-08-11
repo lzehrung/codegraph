@@ -3,6 +3,7 @@ import path from "node:path";
 import { collectGraph, buildProjectIndex } from "../src/index.js";
 import type { ImportBinding } from "../src/index.js";
 import { readOnlySamplePath } from "./helpers/filesystem.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 
 function expectNamespaceImport(binding: ImportBinding | undefined, localNS: string): void {
   expect(binding).toBeDefined();
@@ -53,7 +54,7 @@ describe("Complex Monorepo Scenarios", () => {
     const index = await buildProjectIndex(root, { cache: "off" });
 
     // Verify that internal.ts can resolve 'login' which is exported by the barrel it imports from
-    const fileIndex = index.byFile.get(internalFile);
+    const fileIndex = index.byFile.get(fileIdentityKey(internalFile));
     expect(fileIndex).toBeDefined();
 
     // Find the import from './index'
@@ -86,7 +87,7 @@ describe("Complex Monorepo Scenarios", () => {
   it("handles type-only imports in TS files", async () => {
     const mainFile = path.join(root, "packages/web-app/src/main.ts").replace(/\\/g, "/");
     const index = await buildProjectIndex(root, { cache: "off" });
-    const fileIndex = index.byFile.get(mainFile);
+    const fileIndex = index.byFile.get(fileIdentityKey(mainFile));
 
     const typeImport = fileIndex?.imports.find((i) => i.from === "@complex/shared-types");
     expect(typeImport).toBeDefined();
@@ -98,7 +99,7 @@ describe("Complex Monorepo Scenarios", () => {
   it("handles type-only imports in TSX files", async () => {
     const tsxFile = path.join(root, "packages/web-app/src/UserProfile.tsx").replace(/\\/g, "/");
     const index = await buildProjectIndex(root, { cache: "off" });
-    const fileIndex = index.byFile.get(tsxFile);
+    const fileIndex = index.byFile.get(fileIdentityKey(tsxFile));
 
     const typeImport = fileIndex?.imports.find((i) => i.from === "@complex/shared-types");
     expect(typeImport).toBeDefined();
@@ -149,7 +150,7 @@ describe("Complex Monorepo Scenarios", () => {
 
     // The auth.ts file uses App.GlobalConfig from globals.d.ts
     // We want to see if the tool can find this reference
-    const fileIndex = index.byFile.get(authFile);
+    const fileIndex = index.byFile.get(fileIdentityKey(authFile));
     expect(fileIndex).toBeDefined();
 
     // Check for symbol references to 'App' or 'GlobalConfig'
@@ -160,7 +161,7 @@ describe("Complex Monorepo Scenarios", () => {
   it("handles Go grouped and aliased imports", async () => {
     const goFile = path.join(root, "packages/go-lib/lib.go").replace(/\\/g, "/");
     const index = await buildProjectIndex(root, { cache: "off" });
-    const fileIndex = index.byFile.get(goFile);
+    const fileIndex = index.byFile.get(fileIdentityKey(goFile));
 
     expect(fileIndex).toBeDefined();
 
@@ -176,7 +177,7 @@ describe("Complex Monorepo Scenarios", () => {
   it("handles Rust mod items", async () => {
     const rustFile = path.join(root, "packages/rust-lib/src/lib.rs").replace(/\\/g, "/");
     const index = await buildProjectIndex(root, { cache: "off" });
-    const fileIndex = index.byFile.get(rustFile);
+    const fileIndex = index.byFile.get(fileIdentityKey(rustFile));
 
     expect(fileIndex).toBeDefined();
 
@@ -191,7 +192,7 @@ describe("Complex Monorepo Scenarios", () => {
     const index = await buildProjectIndex(root, { cache: "off" });
 
     // Check for 'use utils::helper;' (captured by re-export in our current query)
-    const helperExport = index.byFile.get(rustFile)?.exports.find((e) => e.exportedAs === "helper");
+    const helperExport = index.byFile.get(fileIdentityKey(rustFile))?.exports.find((e) => e.exportedAs === "helper");
     expect(helperExport).toBeDefined();
   });
 });

@@ -86,7 +86,7 @@ import {
   SymbolKind,
 } from "./types.js";
 import { isNonNativeParserUnavailableError, isParserSyntaxTree } from "../parserBackend.js";
-import { isUnsupportedParserInputError } from "../languages/filePrep.js";
+import { isUnsupportedParserInputError, type PreparedSFCEmbeddedBlock } from "../languages/filePrep.js";
 import { buildSqlFactCache, buildSqlModuleIndex, sqlCorpusSignature, type SqlFactCache } from "../sql/sourceGraph.js";
 import { finalizeProjectIndex } from "./finalize.js";
 import { toManifestFileEntry, writeIndexManifestSnapshot } from "./build-manifest.js";
@@ -113,6 +113,7 @@ type IndexedFileGraphContext = {
   lang?: ParserLanguage;
   nativeQueries?: import("../native/treeSitterNative.js").NativeQueryResults | null;
   tree?: SyntaxTreeLike;
+  embeddedBlocks?: PreparedSFCEmbeddedBlock[];
 };
 
 type IndexedFileModuleResult = {
@@ -328,6 +329,7 @@ async function buildIndexedModuleForFile(args: {
       ...(resolvedLang ? { lang: resolvedLang } : {}),
       ...(nativeQueries !== undefined ? { nativeQueries } : {}),
       ...(tree ? { tree } : {}),
+      ...(embeddedBlocks ? { embeddedBlocks } : {}),
     },
   };
 }
@@ -1029,6 +1031,7 @@ export async function buildProjectIndexIncremental(
   opts?: IncrementalBuildOptions,
 ): Promise<ProjectIndex> {
   await initializeFileIdentityCaseSensitivity(projectRoot);
+  clearImportResolutionCaches();
   const graphOptions = normalizeGraphOptions(opts?.graph);
   const strictIncremental = opts?.incrementalStrict ?? false;
   if (strictIncremental && graphOptions.fast) graphOptions.fast = false;
@@ -1657,12 +1660,19 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
     ...gitFiles.filter((file) => fs.existsSync(file)),
   ]);
   const changedFiles = new Set<string>();
-  explicitFiles.forEach((file) => changedFiles.add(file));
-  manifestDiffFiles.forEach((file) => changedFiles.add(file));
-  gitFiles.forEach((file) => changedFiles.add(file));
+  const changedFileKeys = new Set<string>();
+  const addChangedFile = (file: string): void => {
+    const key = fileIdentityKey(file);
+    if (changedFileKeys.has(key)) return;
+    changedFileKeys.add(key);
+    changedFiles.add(file);
+  };
+  explicitFiles.forEach(addChangedFile);
+  manifestDiffFiles.forEach(addChangedFile);
+  gitFiles.forEach(addChangedFile);
   if (languageExtensionsChanged) {
     for (const file of trackedFiles) {
-      if (languageSupportChangedForFile(file)) changedFiles.add(file);
+      if (languageSupportChangedForFile(file)) addChangedFile(file);
     }
   }
   if (!languageExtensionsChanged && allFiles.size === 0 && changedFiles.size === 0) {
@@ -1681,7 +1691,7 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
       const hasMatchingGitSig = !!entry?.gitSig && !!sigInfo.gitSig && entry.gitSig === sigInfo.gitSig;
       const hasMatchingSig = entry?.sig === sigInfo.sig;
       if (!entry || !(hasMatchingGitSig || hasMatchingSig)) {
-        changedFiles.add(file);
+        addChangedFile(file);
       }
     }
   }
@@ -1698,13 +1708,15 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
   const index = await buildProjectIndexIncremental(projectRoot, opts);
   if (languageExtensionsChanged) {
     for (const file of index.modules.keys()) {
-      if (languageSupportChangedForFile(file)) changedFiles.add(file);
+      if (!languageSupportChangedForFile(file)) continue;
+      const displayFile = index.byFile.get(fileIdentityKey(file))?.file ?? file;
+      addChangedFile(displayFile);
     }
   }
   const changedList = Array.from(changedFiles);
   const afterEdges = new Map<string, Edge>();
   for (const edge of index.graph.edges) {
-    if (changedFiles.has(edge.from)) afterEdges.set(edgeKey(edge), edge);
+    if (changedFileKeys.has(fileIdentityKey(edge.from))) afterEdges.set(edgeKey(edge), edge);
   }
   const added: Edge[] = [];
   const removed: Edge[] = [];

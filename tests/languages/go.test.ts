@@ -108,17 +108,17 @@ const definition: LanguageTestDefinition = {
     ],
     references: [
       {
-        name: "find references for UtilityClass includes aliased type use",
-        file: "utils.go",
-        line: 9,
-        column: 6,
-        minimumCount: 4,
-      },
-      {
         name: "find references for an embedded struct field includes promoted use",
         file: "embedding.go",
         line: 4,
         column: 2,
+        minimumCount: 4,
+      },
+      {
+        name: "find references for UtilityClass includes aliased type use",
+        file: "utils.go",
+        line: 9,
+        column: 6,
         minimumCount: 4,
       },
     ],

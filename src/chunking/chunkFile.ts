@@ -29,9 +29,13 @@ export interface ChunkFileOptions {
 
 /**
  * Splits code into semantic chunks using Tree-sitter queries.
- * Nested declarations use one source range: a parent is emitted when it fits the
- * budget; otherwise its children are promoted. Every source range is emitted once.
+ * Nested declarations retain their hierarchical chunks: parents and children are
+ * emitted independently. Every source byte is covered by at least one chunk, and
+ * no individual chunk text repeats a source span internally.
  *
+ * A parent that exceeds `maxTokens` is split at semantic inner boundaries (or
+ * token boundaries when no such boundaries exist), while child declarations
+ * remain available as their own chunks.
  * @param opts Chunking options
  * @returns Array of semantic chunks
  */
@@ -40,7 +44,7 @@ export function chunkFile(opts: ChunkFileOptions): Chunk[] {
   const matches = getChunkMatches(language, source, filePath);
   const newlineOffsets = collectNewlineOffsets(source);
   const { mainBlocks, innerBlocks, comments } = collectChunkBlockGroups(language, matches);
-  const selectedBlocks = selectMainBlocks(mainBlocks, source, tokenizer, maxTokens);
+  const selectedBlocks = selectMainBlocks(mainBlocks);
   const preliminaryChunks: RangedChunk[] = [];
 
   for (const block of selectedBlocks) {
@@ -145,23 +149,12 @@ function appendBlockChunks(
   );
 }
 
-function selectMainBlocks(
-  mainBlocks: BlockCandidate[],
-  source: string,
-  tokenizer: ChunkTokenizer,
-  maxTokens: number,
-): BlockCandidate[] {
+function selectMainBlocks(mainBlocks: BlockCandidate[]): BlockCandidate[] {
   const nodes = buildBlockTree(mainBlocks);
   const selected: BlockCandidate[] = [];
 
   const visit = (node: BlockNode) => {
-    const tokens = tokenizer(source.slice(node.block.startByte, node.block.endByte));
-    const hasFunctionChild = node.block.kind === "module_var" && node.children.some((child) => child.block.kind === "function");
-    if ((tokens <= maxTokens && !hasFunctionChild) || !node.children.length) {
-      selected.push(node.block);
-      return;
-    }
-
+    selected.push(node.block);
     for (const child of node.children) {
       visit(child);
     }

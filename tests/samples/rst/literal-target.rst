@@ -1,0 +1,2 @@
+Literal target
+==============

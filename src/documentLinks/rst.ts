@@ -113,7 +113,7 @@ function stripRstCommentsAndLiteralBlocks(source: string): string {
       continue;
     }
 
-    if (/^\s*\.\.\s*(?!_[^:]+:)/.test(line)) {
+    if (/^\s*\.\.\s*$/.test(line) || (/^\s*\.\.\s+/.test(line) && !/^\s*\.\.\s+_[^:]+:/.test(line))) {
       lines[index] = blankRstLine(line);
       indentedBlockIndent = indent;
       continue;

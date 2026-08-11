@@ -687,3 +687,38 @@ exports[`native semantic coverage > keeps native semantics stable for representa
   },
 }
 `;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 42`] = `
+{
+  "goto": {
+    "file": "stubs.pyi",
+    "line": 5,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "stub_consumer.py:1",
+      "stub_consumer.py:4",
+      "stubs.pyi:5",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 43`] = `
+{
+  "goto": {
+    "file": ".regressions/macros.rs",
+    "line": 1,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      ".regressions/macros.rs:1",
+      ".regressions/macros.rs:6",
+    ],
+    "status": "ok",
+  },
+}
+`;

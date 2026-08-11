@@ -161,7 +161,7 @@ export async function buildArchitectureSnapshot(
     ? await buildProjectIndexFromFiles(root, files, indexOptions)
     : await buildProjectIndex(root, indexOptions);
   const includeRoots = options.includeRoots ? normalizeIncludeRootsAbsolute(root, options.includeRoots) : [];
-  const indexedFiles = [...index.byFile.keys()].sort();
+  const indexedFiles = Array.from(index.byFile.values(), (module) => module.file).sort();
 
   return {
     schemaVersion: 1,

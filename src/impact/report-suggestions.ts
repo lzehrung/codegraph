@@ -422,7 +422,7 @@ async function collectUntestedChangeSuggestions(
     );
     if (refs.status !== "ok") return undefined;
 
-    const hasTestRef = refs.references.some((entry) => testFiles.has(entry.file));
+    const hasTestRef = refs.references.some((entry) => testFiles.has(fileIdentityKey(entry.file)));
     if (hasTestRef) return undefined;
 
     const coverage = coverageByFile.get(symbol.file);

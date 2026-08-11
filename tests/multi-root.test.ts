@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
 import { listProjectFiles, buildProjectIndexFromFiles } from "../src/index.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 
 describe("Multi-root scanning", () => {
   it("indexes files across multiple roots and merges into one graph", async () => {
@@ -17,8 +18,8 @@ describe("Multi-root scanning", () => {
     // Expect modules from both roots to be present
     const tsMain = path.join(tsRoot, "main.ts").replace(/\\/g, "/");
     const jsMain = path.join(jsRoot, "main.js").replace(/\\/g, "/");
-    expect(index.byFile.has(tsMain)).toBe(true);
-    expect(index.byFile.has(jsMain)).toBe(true);
+    expect(index.byFile.has(fileIdentityKey(tsMain))).toBe(true);
+    expect(index.byFile.has(fileIdentityKey(jsMain))).toBe(true);
 
     // Should build a combined graph
     expect(index.graph.nodes.size).toBeGreaterThan(0);

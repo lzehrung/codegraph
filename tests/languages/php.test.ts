@@ -1,4 +1,8 @@
-import { expect } from "vitest";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { buildSymbolGraphDetailed } from "../../src/graphs/symbol-graph-detailed.js";
+import { findImplementations } from "../../src/indexer/type-hierarchy.js";
+import { createTestIndexFromFiles } from "../test-utils.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 
@@ -199,6 +203,13 @@ const definition: LanguageTestDefinition = {
       {
         file: "multi-namespace/Library.php",
         includes: [{ name: "FirstService" }, { name: "SecondService" }],
+      },
+      {
+        file: "EnumImplementation.php",
+        includes: [
+          { name: "EnumContract", kind: "interface" },
+          { name: "EnumStatus", kind: "type" },
+        ],
       },
     ],
     goToDefinition: [
@@ -489,3 +500,36 @@ const definition: LanguageTestDefinition = {
 };
 
 runLanguageTests(definition);
+
+describe("PHP enum interface conformance", () => {
+  it("emits an implements edge and returns the enum from implementation lookup", async () => {
+    const sampleDir = path.resolve(process.cwd(), "tests", "samples", "php");
+    const fixture = path.join(sampleDir, "EnumImplementation.php");
+    const index = await createTestIndexFromFiles(sampleDir, [fixture]);
+    const graph = await buildSymbolGraphDetailed(index);
+    const interfaceNode = [...graph.nodes.values()].find((node) => node.name === "EnumContract");
+    const enumNode = [...graph.nodes.values()].find((node) => node.name === "EnumStatus");
+
+    expect(interfaceNode).toBeDefined();
+    expect(enumNode).toBeDefined();
+    if (!interfaceNode || !enumNode) return;
+
+    expect(graph.edges).toContainEqual(
+      expect.objectContaining({
+        from: enumNode.id,
+        to: interfaceNode.id,
+        label: "implements",
+      }),
+    );
+
+    const result = findImplementations(index, graph, interfaceNode.id);
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.implementations).toEqual([
+      expect.objectContaining({
+        symbolId: enumNode.id,
+        relation: "implements",
+      }),
+    ]);
+  });
+});

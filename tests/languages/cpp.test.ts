@@ -7,6 +7,8 @@ import { listCandidateTestFiles } from "../../src/impact/context.js";
 import { normalizePath } from "../../src/util/paths.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
+import { C_SUPPORT, CPP_SUPPORT, supportForFile } from "../../src/languages.js";
+import { parseSyntaxTree } from "@lzehrung/codegraph-native";
 
 const definition: LanguageTestDefinition = {
   id: "cpp",
@@ -28,6 +30,9 @@ const definition: LanguageTestDefinition = {
       { from: "main.cpp", to: { type: "file", path: "utils.hpp" } },
       { from: "main.cpp", to: { type: "file", path: "helpers.hpp" } },
       { from: "namespace-usage.cpp", to: { type: "file", path: "namespaces.hpp" } },
+    ],
+    absentDependencyGraph: [
+      { from: "module-import.cpp", to: { type: "external", name: "foo" } },
     ],
     symbols: [
       {
@@ -73,6 +78,31 @@ const definition: LanguageTestDefinition = {
 };
 
 runLanguageTests(definition);
+
+describe("C++ language boundaries", () => {
+  it("identifies .h headers with C++ syntax", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-header-language-"));
+    const cppHeader = path.join(root, "widget.h");
+    const cHeader = path.join(root, "widget_c.h");
+    try {
+      await fs.writeFile(cppHeader, "namespace widgets { class Widget {}; }\n", "utf8");
+      await fs.writeFile(cHeader, "struct Widget { int value; };\n", "utf8");
+
+      expect(supportForFile(cppHeader)).toBe(CPP_SUPPORT);
+      expect(supportForFile(cHeader)).toBe(C_SUPPORT);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("documents the C++20 module grammar limitation", () => {
+    const tree = parseSyntaxTree("export module foo;\nimport foo;\n", "cpp");
+    const nodeTypes = tree.nodes.map((node) => node.nodeType);
+
+    expect(nodeTypes).not.toContain("module_declaration");
+    expect(nodeTypes).not.toContain("import_declaration");
+  });
+});
 
 describe("C++ configured include roots", () => {
   it("loads Gunship-shaped resolution hints and ranks linked and changed tests", async () => {

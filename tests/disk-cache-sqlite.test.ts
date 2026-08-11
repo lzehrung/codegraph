@@ -313,7 +313,7 @@ describe("disk cache uses sqlite backend", () => {
     await writeDuplicateProject(root);
     const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
     await findDuplicates(index, { minConfidence: "high", limit: 5 });
-    closeDuplicateUnitCacheDatabase(root, { cacheDir: cacheDir(root) });
+    closeDuplicateUnitCacheDatabase(root);
     const db = new DatabaseSync(duplicateCacheDbPath(root));
     db.prepare(
       `INSERT INTO duplicate_unit_cache(file, variant, sig, version, payload, updated_at)
@@ -338,7 +338,7 @@ describe("disk cache uses sqlite backend", () => {
     await writeDuplicateProject(root);
     const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
     await findDuplicates(index, { minConfidence: "high", limit: 5 });
-    closeDuplicateUnitCacheDatabase(root, { cacheDir: cacheDir(root) });
+    closeDuplicateUnitCacheDatabase(root);
     const db = new DatabaseSync(duplicateCacheDbPath(root));
     const insert = db.prepare(
       `INSERT INTO duplicate_unit_cache(file, variant, sig, version, payload, updated_at)
@@ -398,7 +398,7 @@ describe("disk cache uses sqlite backend", () => {
     await writeDuplicateProject(root);
     const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
     await findDuplicates(index, { minConfidence: "high", limit: 5 });
-    closeDuplicateUnitCacheDatabase(root, { cacheDir: cacheDir(root) });
+    closeDuplicateUnitCacheDatabase(root);
 
     const aFile = normalizePathForSql(path.join(root, "src", "a.ts"));
     const staleDb = new DatabaseSync(duplicateCacheDbPath(root));

@@ -24,6 +24,7 @@ export type LanguageSupport = {
   };
   classifyDefinition: (nameNode: SyntaxNodeLike) => string;
   isDeclarationName: (node: SyntaxNodeLike) => boolean;
+  scopeDeclarationNames: (node: SyntaxNodeLike) => boolean;
   createsBlockScope: (node: SyntaxNodeLike) => boolean;
   createsFunctionScope: (node: SyntaxNodeLike) => boolean;
   supportsCrossModuleSymbols: boolean;
@@ -40,6 +41,8 @@ function adaptDefinition(def: LanguageDefinition): LanguageSupport {
     queries: def.graph,
     classifyDefinition: def.classifyDefinition || (() => "variable"),
     isDeclarationName: def.isDeclarationName || (() => false),
+    scopeDeclarationNames:
+      def.scopeDeclarationNames === "all" ? () => true : (def.scopeDeclarationNames ?? (() => false)),
     createsBlockScope: def.createsBlockScope || (() => false),
     createsFunctionScope: def.createsFunctionScope || (() => false),
     supportsCrossModuleSymbols: def.supportsCrossModuleSymbols || false,

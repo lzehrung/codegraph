@@ -1,4 +1,6 @@
-import { expect } from "vitest";
+import { expect, it } from "vitest";
+import { collectModuleSpecifiersFromSource } from "../../src/graphs.js";
+import { supportById } from "../../src/languages.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 
@@ -35,8 +37,31 @@ const definition: LanguageTestDefinition = {
         from: "main.css",
         to: { type: "external", name: "cdn-bg" },
       },
+      {
+        from: "main.css",
+        to: { type: "file", path: "tokens.css" },
+      },
+      {
+        from: "main.css",
+        to: { type: "file", path: "composed.css" },
+      },
+    ],
+    absentDependencyGraph: [
+      {
+        from: "main.css",
+        to: { type: "file", path: "theme.ts" },
+      },
     ],
   },
 };
 
 runLanguageTests(definition);
+
+it("recovers media-qualified CSS imports in reduced mode", () => {
+  const support = supportById("css")!;
+  const specifiers = collectModuleSpecifiersFromSource(support, undefined, '@import "./print.css" screen;', {
+    native: "off",
+  });
+
+  expect(specifiers).toEqual([{ spec: "./print.css", resolutionKind: "stylesheet" }]);
+});

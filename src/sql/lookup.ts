@@ -1,3 +1,5 @@
+import { appendToArrayMap } from "../util/collections.js";
+
 import { sqlObjectBaseNameLookupKey, sqlObjectLookupKey } from "./lex.js";
 
 export function sqlObjectLookupKeys(name: string): string[] {

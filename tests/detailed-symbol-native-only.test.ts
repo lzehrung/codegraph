@@ -4,6 +4,7 @@ import os from "node:os";
 import fsp from "node:fs/promises";
 import { buildProjectIndex } from "../src/indexer.js";
 import { createUnavailableParserBackendSpies, expectParserBackendUnusedForNativeOwnership } from "./helpers/native.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -109,7 +110,7 @@ describe("detailed symbol graph in native-only installs", () => {
     const index = await buildProjectIndex(root, { report });
     const warnings = warnSpy.mock.calls.map((call) => String(call[0] ?? ""));
     expect(index.byFile.size).toBe(1);
-    expect(index.byFile.get(normalizePath(path.join(root, "legacy.js")))).toBeDefined();
+    expect(index.byFile.get(fileIdentityKey(normalizePath(path.join(root, "legacy.js"))))).toBeDefined();
     expectParserBackendUnusedForNativeOwnership({ parseSpy: fallbackSpies.parseSpy });
     expect(report.backend?.parser?.total).toBe(1);
     expect(report.backend?.parser?.byLanguage.js).toBe(1);
@@ -258,7 +259,7 @@ describe("detailed symbol graph in native-only installs", () => {
 
     const { buildProjectIndex } = await import("../src/indexer.js");
     const index = await buildProjectIndex(root);
-    const moduleIndex = index.byFile.get(normalizePath(entryFile));
+    const moduleIndex = index.byFile.get(fileIdentityKey(normalizePath(entryFile)));
 
     const method = moduleIndex?.locals.find((entry) => entry.localName === "run");
     expect(moduleIndex?.locals.map((entry) => entry.localName)).toEqual(

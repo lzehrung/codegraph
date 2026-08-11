@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { buildProjectIndex, goToDefinition, type ProjectIndex } from "../src/index.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 
 const projectRoot = path.resolve(process.cwd(), "tests", "samples", "json-imports");
 const normalize = (p: string) => p.replace(/\\/g, "/");
@@ -48,11 +49,11 @@ describe("JSON module imports", () => {
   });
 
   it("creates stub modules with default exports for JSON files", () => {
-    const jsonModule = index.byFile.get(jsonFile);
+    const jsonModule = index.byFile.get(fileIdentityKey(jsonFile));
     expect(jsonModule).toBeDefined();
     expect(jsonModule?.exports.some((e) => e.type === "local" && e.exportedAs === "default")).toBe(true);
 
-    const jsModule = index.byFile.get(jsFile);
+    const jsModule = index.byFile.get(fileIdentityKey(jsFile));
     expect(jsModule).toBeDefined();
     const defaultImport = jsModule?.imports.find((imp) => imp.kind === "default" && imp.from.includes("./data.json"));
     expect(defaultImport?.resolved).toBe(jsonFile);

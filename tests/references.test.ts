@@ -4,6 +4,7 @@ import os from "node:os";
 import fsp from "node:fs/promises";
 import * as indexer from "../src/indexer.js";
 import { getCachedReferenceCandidateFiles } from "../src/indexer/navigation-references.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 import {
   createTestIndex,
   createTestIndexFromFiles,
@@ -37,7 +38,7 @@ describe("Find References", () => {
       await fsp.writeFile(otherFile, "export function other() { return 2; }\n", "utf8");
 
       const index = await createTestIndexFromFiles(root, [aFile, bFile, cFile, dFile, otherFile]);
-      const def = index.byFile.get(aFile)?.locals.find((local) => local.localName === "target");
+      const def = index.byFile.get(fileIdentityKey(aFile))?.locals.find((local) => local.localName === "target");
       if (!def) throw new Error("Expected target definition");
 
       const candidates = getCachedReferenceCandidateFiles(index, def, ["target"], false);
@@ -133,6 +134,111 @@ describe("Find References", () => {
       expect(result.status).toBe("ok");
       expectReferenceAt(result, schemaFile, 1);
       expectReferenceAt(result, reportFile, 1);
+    });
+
+    it("uses basename fallback only for unambiguous SQL definitions and returns token ranges", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-schema-reference-"));
+      try {
+        const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+        const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+        const schemaLines = [
+          "CREATE TABLE schema1.users (id integer);",
+          "CREATE TABLE schema2.users (id integer);",
+          "CREATE TABLE schema3.audit_users (id integer);",
+        ];
+        const reportLines = [
+          "SELECT id FROM schema1.users;",
+          "SELECT id FROM schema2.users;",
+          "SELECT id FROM users;",
+          "  SELECT id FROM audit_users;",
+        ];
+        await fsp.writeFile(schemaFile, schemaLines.join("\n"), "utf8");
+        await fsp.writeFile(reportFile, reportLines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [schemaFile, reportFile]);
+
+        const schema1Result = await testFindReferences(
+          index,
+          schemaFile,
+          1,
+          schemaLines[0]!.indexOf("schema1.users") + 1,
+          2,
+        );
+        const auditUsersResult = await testFindReferences(
+          index,
+          schemaFile,
+          3,
+          schemaLines[2]!.indexOf("schema3.audit_users") + 1,
+          2,
+        );
+
+        expect(schema1Result.status).toBe("ok");
+        if (schema1Result.status === "ok") {
+          const reportReferences = schema1Result.references.filter((reference) => reference.file === reportFile);
+          expect(reportReferences).toEqual([
+            expect.objectContaining({
+              range: expect.objectContaining({
+                start: expect.objectContaining({
+                  line: 1,
+                  column: reportLines[0]!.indexOf("schema1.users") + 1,
+                }),
+              }),
+            }),
+          ]);
+        }
+
+        expect(auditUsersResult.status).toBe("ok");
+        if (auditUsersResult.status === "ok") {
+          expect(auditUsersResult.references).toContainEqual(
+            expect.objectContaining({
+              file: reportFile,
+              range: {
+                start: { line: 4, column: reportLines[3]!.indexOf("audit_users") + 1 },
+                end: { line: 4, column: reportLines[3]!.indexOf("audit_users") + "audit_users".length + 1 },
+              },
+            }),
+          );
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("does not conflate quoted SQL identifiers with different case", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-quoted-reference-"));
+      try {
+        const schemaFile = path.join(root, "schema.sql").replace(/\\/g, "/");
+        const reportFile = path.join(root, "report.sql").replace(/\\/g, "/");
+        const schemaLines = ['CREATE TABLE "Users" (id integer);', 'CREATE TABLE "users" (id integer);'];
+        const reportLines = ['SELECT id FROM "Users";', 'SELECT id FROM "users";'];
+        await fsp.writeFile(schemaFile, schemaLines.join("\n"), "utf8");
+        await fsp.writeFile(reportFile, reportLines.join("\n"), "utf8");
+        const index = await createTestIndexFromFiles(root, [schemaFile, reportFile]);
+
+        const upperCaseResult = await testFindReferences(
+          index,
+          schemaFile,
+          1,
+          schemaLines[0]!.indexOf('"Users"') + 1,
+          2,
+        );
+
+        expect(upperCaseResult.status).toBe("ok");
+        if (upperCaseResult.status === "ok") {
+          expect(upperCaseResult.references).toContainEqual(
+            expect.objectContaining({
+              file: reportFile,
+              range: expect.objectContaining({ start: expect.objectContaining({ line: 1 }) }),
+            }),
+          );
+          expect(
+            upperCaseResult.references.some(
+              (reference) => reference.file === reportFile && reference.range.start.line === 2,
+            ),
+          ).toBe(false);
+        }
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
     });
 
     it("finds alias-qualified and table-qualified SQL object references", async () => {
@@ -512,6 +618,158 @@ describe("Find References", () => {
     }
   });
 
+  describe("unqualified same-name method resolution across files", () => {
+    const cases: Array<{
+      label: string;
+      fileName: string;
+      source: string;
+      ownDefinition: { line: number; column: number };
+      callsiteLine: number;
+      otherDefinition: { line: number; column: number };
+    }> = [
+      {
+        label: "Java",
+        fileName: "Main.java",
+        source: [
+          "class Main {",
+          "  void helper() { }",
+          "  void run() {",
+          "    helper();",
+          "  }",
+          "}",
+          "class Other {",
+          "  void helper() { }",
+          "}",
+          "",
+        ].join("\n"),
+        ownDefinition: { line: 2, column: 8 },
+        callsiteLine: 4,
+        otherDefinition: { line: 8, column: 8 },
+      },
+      {
+        label: "C#",
+        fileName: "Main.cs",
+        source: [
+          "class Main {",
+          "  void Helper() { }",
+          "  void Run() {",
+          "    Helper();",
+          "  }",
+          "}",
+          "class Other {",
+          "  void Helper() { }",
+          "}",
+          "",
+        ].join("\n"),
+        ownDefinition: { line: 2, column: 8 },
+        callsiteLine: 4,
+        otherDefinition: { line: 8, column: 8 },
+      },
+      {
+        label: "JavaScript",
+        fileName: "main.js",
+        source: [
+          "class Main {",
+          "  helper() { }",
+          "  run() {",
+          "    helper();",
+          "  }",
+          "}",
+          "class Other {",
+          "  helper() { }",
+          "}",
+          "",
+        ].join("\n"),
+        ownDefinition: { line: 2, column: 3 },
+        callsiteLine: 4,
+        otherDefinition: { line: 8, column: 3 },
+      },
+      {
+        label: "TypeScript",
+        fileName: "main.ts",
+        source: [
+          "class Main {",
+          "  helper() { }",
+          "  run() {",
+          "    helper();",
+          "  }",
+          "}",
+          "class Other {",
+          "  helper() { }",
+          "}",
+          "",
+        ].join("\n"),
+        ownDefinition: { line: 2, column: 3 },
+        callsiteLine: 4,
+        otherDefinition: { line: 8, column: 3 },
+      },
+    ];
+
+    for (const testCase of cases) {
+      it(`binds an unqualified ${testCase.label} call to the same-file declaration, not a same-named declaration in another class`, async () => {
+        const root = await fsp.mkdtemp(path.join(os.tmpdir(), `cg-${testCase.label.toLowerCase()}-unqualified-`));
+        try {
+          const file = path.join(root, testCase.fileName).replace(/\\/g, "/");
+          await fsp.writeFile(file, testCase.source, "utf8");
+          const index = await createTestIndexFromFiles(root, [file]);
+
+          const ownResult = await testFindReferences(
+            index,
+            file,
+            testCase.ownDefinition.line,
+            testCase.ownDefinition.column,
+            2,
+          );
+          expect(ownResult.status).toBe("ok");
+          expectReferenceAt(ownResult, file, testCase.callsiteLine);
+
+          const otherResult = await testFindReferences(
+            index,
+            file,
+            testCase.otherDefinition.line,
+            testCase.otherDefinition.column,
+            1,
+          );
+          expect(otherResult.status).toBe("ok");
+          if (otherResult.status === "ok") {
+            expect(
+              otherResult.references.some(
+                (reference) => reference.file === file && reference.range.start.line === testCase.callsiteLine,
+              ),
+            ).toBe(false);
+            expect(
+              otherResult.references.some(
+                (reference) => reference.file === file && reference.range.start.line === testCase.ownDefinition.line,
+              ),
+            ).toBe(false);
+          }
+        } finally {
+          await fsp.rm(root, { recursive: true, force: true });
+        }
+      });
+    }
+  });
+
+  describe("Python match bindings and stubs", () => {
+    it("finds exact references for pattern bindings and stub exports", async () => {
+      const fixturePath = path.resolve(process.cwd(), "tests", "samples", "language-regressions", "python");
+      const matchFile = path.join(fixturePath, "match_bindings.py").replace(/\\/g, "/");
+      const stubFile = path.join(fixturePath, "stubs.pyi").replace(/\\/g, "/");
+      const consumerFile = path.join(fixturePath, "stub_consumer.py").replace(/\\/g, "/");
+      const index = await createTestIndexFromFiles(fixturePath, [matchFile, stubFile, consumerFile]);
+
+      const tupleReferences = await testFindReferences(index, matchFile, 3, 15, 2);
+      expect(tupleReferences.status).toBe("ok");
+      expectReferenceAt(tupleReferences, matchFile, 3);
+      expectReferenceAt(tupleReferences, matchFile, 4);
+
+      const stubReferences = await testFindReferences(index, stubFile, 5, 5, 2);
+      expect(stubReferences.status).toBe("ok");
+      expectReferenceAt(stubReferences, stubFile, 5);
+      expectReferenceAt(stubReferences, consumerFile, 4);
+    });
+  });
+
   describe("TypeScript", () => {
     it("should find all references to exported function", async () => {
       const index = await createTestIndex("typescript");
@@ -738,7 +996,7 @@ describe("Find References", () => {
 
         const index = await createTestIndexFromPath(root);
         const normalizedUtil = utilFile.replace(/\\/g, "/");
-        const utilModule = index.byFile.get(normalizedUtil);
+        const utilModule = index.byFile.get(fileIdentityKey(normalizedUtil));
         const fooDef = utilModule?.locals.find((local) => local.localName === "foo");
 
         expect(fooDef).toBeDefined();
@@ -1115,6 +1373,18 @@ describe("Find References", () => {
       expectReferenceAt(result, aliasedFile, 9);
       expectReferenceAt(result, interfacesFile, 9);
     });
+
+    it("should find embedded struct fields at direct and promoted uses", async () => {
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "go");
+      const embeddingFile = path.join(samplePath, "embedding.go").replace(/\\/g, "/");
+      const index = await createTestIndexFromFiles(samplePath, [embeddingFile]);
+
+      const result = await testFindReferences(index, embeddingFile, 4, 2, 4);
+      expectReferenceAt(result, embeddingFile, 4);
+      expectReferenceAt(result, embeddingFile, 8);
+      expectReferenceAt(result, embeddingFile, 21);
+      expectReferenceAt(result, embeddingFile, 22);
+    });
   });
 
   describe("C", () => {
@@ -1460,6 +1730,17 @@ describe("Find References", () => {
 
       const result = await testFindReferences(index, utilsFile, 1, 8, 3);
       expectReferenceAt(result, aliasFile, 9);
+    });
+
+    it("finds macro_rules definitions and invocations", async () => {
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "rust");
+      const macroFile = path.join(samplePath, ".regressions", "macros.rs").replace(/\\/g, "/");
+      const index = await createTestIndexFromFiles(samplePath, [macroFile]);
+      const result = await testFindReferences(index, macroFile, 1, 14, 2);
+
+      expect(result.status).toBe("ok");
+      expectReferenceAt(result, macroFile, 1);
+      expectReferenceAt(result, macroFile, 6);
     });
   });
 });

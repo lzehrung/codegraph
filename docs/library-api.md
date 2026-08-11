@@ -437,9 +437,9 @@ See [MCP server](./mcp.md) for CLI server setup and client configuration example
 
 ## Semantic chunking
 
-The library provides semantic code chunking utilities for preparing codebases for LLM processing and vector embeddings. It uses Tree-sitter to split code into meaningful units while respecting token budgets. `chunkFile()` and `chunkTextFile()` preserve every input byte exactly once across chunks in source order.
+The library provides semantic code chunking utilities for preparing codebases for LLM processing and vector embeddings. It uses Tree-sitter to split code into meaningful units while respecting token budgets. `chunkFile()` and `chunkTextFile()` cover every source byte with at least one chunk.
 
-Nested semantic candidates follow a no-overlap policy: when a parent fits `maxTokens`, it is emitted instead of its children; when it does not, children are promoted recursively. Function-valued declarations retain their function chunk rather than a generic declaration wrapper. Any oversized line is split within the line so every emitted chunk respects `maxTokens`.
+Nested semantic candidates retain hierarchical granularity: a parent and its declarations are emitted as separate chunks, even when their ranges overlap. No individual chunk text repeats a source span internally, and any oversized line is split within the line so every emitted chunk respects `maxTokens`.
 
 ### APIs
 

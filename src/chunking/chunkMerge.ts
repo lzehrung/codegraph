@@ -20,15 +20,10 @@ export function mergeSmallChunks(
       if (current.type === "misc" && current.tokenCount === 0) break;
       const next = chunks[index]!;
 
-      // Chunks are only mergeable when their source ranges touch. In particular,
-      // a child range must never be appended to a parent that already contains it.
-      if (next.sourceStart < current.sourceEnd) {
-        if (next.sourceEnd <= current.sourceEnd) {
-          index++;
-          continue;
-        }
-        break;
-      }
+      // Hierarchical chunks may overlap, but nested ranges must remain separate.
+      // Only genuinely adjacent ranges can be concatenated without duplicating
+      // source text inside the resulting chunk.
+      if (next.sourceStart < current.sourceEnd) break;
       if (next.sourceStart !== current.sourceEnd) break;
       const combinedText = `${current.text}${next.text}`;
       const combinedTokens = tokenizer(combinedText);
@@ -82,11 +77,8 @@ export function fillGapsWithMiscChunks(
   );
 
   for (const chunk of sortedChunks) {
-    if (chunk.sourceEnd <= currentOffset) continue;
-    if (chunk.sourceStart < currentOffset) continue;
-
     if (chunk.sourceStart > currentOffset) {
-      const appendedToPrevious = appendZeroTokenGap(
+      const appendedToPrevious = appendTriviaGap(
         result,
         source,
         currentOffset,
@@ -110,12 +102,14 @@ export function fillGapsWithMiscChunks(
       }
     }
 
+    // Keep nested declarations as independent chunks. They already cover bytes
+    // inside the parent, so they must not cause another misc chunk to be emitted.
     result.push(chunk);
-    currentOffset = chunk.sourceEnd;
+    currentOffset = Math.max(currentOffset, chunk.sourceEnd);
   }
 
   if (currentOffset < source.length) {
-    const appendedToPrevious = appendZeroTokenGap(
+    const appendedToPrevious = appendTriviaGap(
       result,
       source,
       currentOffset,
@@ -142,7 +136,7 @@ export function fillGapsWithMiscChunks(
   return mergeSmallChunks(result, minTokens, maxTokens, tokenizer);
 }
 
-function appendZeroTokenGap(
+function appendTriviaGap(
   chunks: RangedChunk[],
   source: string,
   start: number,
@@ -153,10 +147,11 @@ function appendZeroTokenGap(
 ): boolean {
   if (!chunks.length || end <= start) return false;
 
-  const text = source.slice(start, end);
-  if (tokenizer(text) !== 0) return false;
-
   const previous = chunks[chunks.length - 1]!;
+  if (previous.sourceEnd !== start) return false;
+  const text = source.slice(start, end);
+  if (!/^[\s;]+$/u.test(text)) return false;
+
   const combinedText = `${previous.text}${text}`;
   const tokenCount = tokenizer(combinedText);
   if (tokenCount > maxTokens) return false;

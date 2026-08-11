@@ -4,7 +4,7 @@ import { registerLanguage } from "../registry.js";
 
 export const PYTHON_DEF: LanguageDefinition = {
   id: "python",
-  extensions: [".py"],
+  extensions: [".py", ".pyi"],
   grammar: () => loadTreeSitterLanguage("tree-sitter-python"),
   structure: {
     blocks: [
@@ -83,7 +83,14 @@ export const PYTHON_DEF: LanguageDefinition = {
       ;; \`case Point(x=x, y=y):\` binds the right-hand identifier of a keyword
       ;; pattern as a new local, distinct from the left-hand attribute name it
       ;; matches against.
-      (keyword_pattern . (identifier) (dotted_name (identifier) @name))
+      ;; A bare identifier in a case pattern is represented as a single-name
+      ;; dotted_name inside a case_pattern. Nested tuple/list/or patterns
+      ;; preserve this shape for each capture.
+      (case_pattern (dotted_name (identifier) @name))
+      ;; \`case value as alias:\` binds the direct identifier child as its alias.
+      (as_pattern (identifier) @name)
+      ;; \`case [head, *tail]:\` binds the capture after the splat.
+      (splat_pattern (identifier) @name)
     `,
     importBindings: `
       (import_statement) @stmt
@@ -102,14 +109,27 @@ export const PYTHON_DEF: LanguageDefinition = {
     if (t === "class_definition") return "class";
     return "variable";
   },
+  scopeDeclarationNames: (node) => {
+    const parentType = node.parent?.type;
+    return (
+      parentType === "case_pattern" ||
+      parentType === "as_pattern" ||
+      parentType === "splat_pattern" ||
+      parentType === "dotted_name"
+    );
+  },
   isDeclarationName: (node) => {
-    const t = node.parent?.type;
+    const parent = node.parent;
+    const t = parent?.type;
     if (
       t === "dotted_name" &&
-      node.parent?.parent?.type === "keyword_pattern" &&
-      node.parent.namedChildren.length === 1
+      parent &&
+      parent.namedChildren.length === 1 &&
+      (parent.parent?.type === "keyword_pattern" || parent.parent?.type === "case_pattern")
     )
       return true;
+    if (parent?.type === "as_pattern") return true;
+    if (t === "splat_pattern") return true;
     return !!t && ["function_definition", "class_definition", "assignment", "aliased_import"].includes(t);
   },
   createsBlockScope: (n) => n.type === "module" || n.type === "block",

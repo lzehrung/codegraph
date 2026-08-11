@@ -10,7 +10,7 @@ import { createImpactDiagnostics, listFileLevelFallbackPaths } from "../src/impa
 import { rankChangedSymbolsForBudget } from "../src/impact/budgets.js";
 import { buildProjectIndex, buildProjectIndexFromFiles, SymbolKind } from "../src/indexer.js";
 import type { ProjectIndex } from "../src/indexer.js";
-import { normalizePath } from "../src/util/paths.js";
+import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import type { Edge } from "../src/types.js";
 import type { FileChange, ImpactItem } from "../src/impact/types.js";
 import { createTestIndex } from "./test-utils.js";
@@ -28,7 +28,7 @@ describe("Reference lookup cache", () => {
       await fsp.writeFile(mainFile, 'import { helper } from "./api";\nexport const value = helper();\n', "utf8");
 
       const firstIndex = await buildProjectIndex(root, { cache: "memory" });
-      const firstDef = firstIndex.byFile.get(apiFileId)?.locals.find((local) => local.localName === "helper");
+      const firstDef = firstIndex.byFile.get(fileIdentityKey(apiFileId))?.locals.find((local) => local.localName === "helper");
       expect(firstDef).toBeDefined();
       const cache = createReferenceLookupCache();
       const firstRefs = await cache.get(firstIndex, firstDef!);
@@ -39,7 +39,7 @@ describe("Reference lookup cache", () => {
 
       await fsp.writeFile(mainFile, "export const value = 1;\n", "utf8");
       const secondIndex = await buildProjectIndex(root, { cache: "memory" });
-      const secondDef = secondIndex.byFile.get(apiFileId)?.locals.find((local) => local.localName === "helper");
+      const secondDef = secondIndex.byFile.get(fileIdentityKey(apiFileId))?.locals.find((local) => local.localName === "helper");
       expect(secondDef).toBeDefined();
       const secondRefs = await cache.get(secondIndex, secondDef!);
 
@@ -1844,7 +1844,7 @@ describe("Impact Analyzer Edge Cases", () => {
         );
         const index = await buildProjectIndex(root, { cache: "memory" });
         const apiFile = normalizePath(path.join(root, "src/api.ts"));
-        const changedSymbols = (index.byFile.get(apiFile)?.locals ?? [])
+        const changedSymbols = (index.byFile.get(fileIdentityKey(apiFile))?.locals ?? [])
           .filter((symbol) => symbol.localName.startsWith("symbol"))
           .map((symbol) => ({
             id: `${symbol.file}::${symbol.localName}::${symbol.range.start.index ?? 0}`,

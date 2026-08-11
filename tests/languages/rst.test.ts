@@ -30,6 +30,20 @@ const definition: LanguageTestDefinition = {
         from: "index.rst",
         to: { type: "file", path: "reference.rst" },
       },
+      {
+        from: "index.rst",
+        to: { type: "file", path: "includes/literal.rst" },
+      },
+    ],
+    absentDependencyGraph: [
+      {
+        from: "index.rst",
+        to: { type: "file", path: "literal-target.rst" },
+      },
+      {
+        from: "index.rst",
+        to: { type: "external", name: "./generated/*.rst" },
+      },
     ],
     goToDefinition: [
       {

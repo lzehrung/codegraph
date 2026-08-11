@@ -48,7 +48,7 @@ describe("Import Resolution", () => {
     expect(helperImport!.kind).toBe("named");
     expect(helperImport!.from).toBe("./utils.js");
     expect(typeof helperImport!.resolved).toBe("string");
-    expect((helperImport!.resolved as string).replace(/\\/g, "/")).toBe(utilsFile!.replace(/\\/g, "/"));
+    expect((helperImport!.resolved as string).replace(/\\/g, "/")).toBe(path.join(root, "utils.ts").replace(/\\/g, "/"));
   });
 
   it("should resolve .jsx imports to .tsx source files", async () => {
@@ -66,12 +66,12 @@ describe("Import Resolution", () => {
 
     const resolved = await resolveSpecifier(appFile, "./components/Button.jsx", root);
 
-    expect(resolved).toBe(buttonFile);
+    expect(resolved).toBe(buttonFile.replace(/\\/g, "/"));
 
     const index = await buildProjectIndex(root);
     const normalizedApp = appFile.replace(/\\/g, "/");
     const normalizedButton = buttonFile.replace(/\\/g, "/");
-    const appModule = index.byFile.get(normalizedApp);
+    const appModule = index.byFile.get(fileIdentityKey(normalizedApp));
     const buttonImport = appModule?.imports[0];
 
     expect(buttonImport?.from).toBe("./components/Button.jsx");
@@ -98,7 +98,7 @@ describe("Import Resolution", () => {
     const mainModule = index.byFile.get(mainFile!);
     const helperImport = mainModule!.imports[0];
     expect(typeof helperImport!.resolved).toBe("string");
-    expect((helperImport!.resolved as string).replace(/\\/g, "/")).toBe(utilsFile!.replace(/\\/g, "/"));
+    expect((helperImport!.resolved as string).replace(/\\/g, "/")).toBe(path.join(root, "utils.mts").replace(/\\/g, "/"));
   });
 
   it("should resolve .cjs imports to .cts source files", async () => {
@@ -121,7 +121,7 @@ describe("Import Resolution", () => {
     const mainModule = index.byFile.get(mainFile!);
     const helperImport = mainModule!.imports[0];
     expect(typeof helperImport!.resolved).toBe("string");
-    expect((helperImport!.resolved as string).replace(/\\/g, "/")).toBe(utilsFile!.replace(/\\/g, "/"));
+    expect((helperImport!.resolved as string).replace(/\\/g, "/")).toBe(path.join(root, "utils.cts").replace(/\\/g, "/"));
   });
 
   it("should still resolve regular .js files when they exist", async () => {
@@ -145,7 +145,7 @@ describe("Import Resolution", () => {
     const mainModule = index.byFile.get(mainFile!);
     const helperImport = mainModule!.imports[0];
     expect(typeof helperImport!.resolved).toBe("string");
-    expect(helperImport!.resolved).toBe(utilsFile);
+    expect(helperImport!.resolved).toBe(path.join(root, "utils.js").replace(/\\/g, "/"));
   });
 
   it("resolves directory imports to index files instead of directory paths", async () => {
@@ -159,12 +159,12 @@ describe("Import Resolution", () => {
 
     const resolved = await resolveSpecifier(mainFile, "./foo", root);
 
-    expect(resolved).toBe(indexFile);
+    expect(resolved).toBe(indexFile.replace(/\\/g, "/"));
 
     const normalizedMain = mainFile.replace(/\\/g, "/");
     const normalizedIndex = indexFile.replace(/\\/g, "/");
     const projectIndex = await buildProjectIndex(root);
-    const mainModule = projectIndex.byFile.get(normalizedMain);
+    const mainModule = projectIndex.byFile.get(fileIdentityKey(normalizedMain));
     const fooImport = mainModule?.imports[0];
 
     expect(fooImport?.resolved).toBe(normalizedIndex);
@@ -218,7 +218,7 @@ describe("Import Resolution", () => {
     }
 
     const projectIndex = await buildProjectIndex(root);
-    expect(projectIndex.byFile.has(packageDir.replace(/\\/g, "/"))).toBe(false);
+    expect(projectIndex.byFile.has(fileIdentityKey(packageDir))).toBe(false);
   });
 
   it("keys root-relative import resolution by project root", async () => {
@@ -232,8 +232,8 @@ describe("Import Resolution", () => {
     await fsp.writeFile(targetA, "export const value = 'a';\n", "utf8");
     await fsp.writeFile(targetB, "export const value = 'b';\n", "utf8");
 
-    await expect(resolveSpecifier(fromFile, "/target", rootA)).resolves.toBe(targetA);
-    await expect(resolveSpecifier(fromFile, "/target", rootB)).resolves.toBe(targetB);
+    await expect(resolveSpecifier(fromFile, "/target", rootA)).resolves.toBe(targetA.replace(/\\/g, "/"));
+    await expect(resolveSpecifier(fromFile, "/target", rootB)).resolves.toBe(targetB.replace(/\\/g, "/"));
   });
 
   it("keys Python module resolution by project root", async () => {
@@ -320,8 +320,8 @@ describe("Import Resolution", () => {
     const symbolGraph = await buildSymbolGraphDetailed(index);
 
     // Find the main and helper functions in the symbol graph
-    const mainFile = Array.from(index.byFile.keys()).find((f) => f.endsWith("main.ts"));
-    const utilsFile = Array.from(index.byFile.keys()).find((f) => f.endsWith("utils.ts"));
+    const mainFile = path.join(root, "main.ts").replace(/\\/g, "/");
+    const utilsFile = path.join(root, "utils.ts").replace(/\\/g, "/");
 
     const nodes = [...symbolGraph.nodes.values()];
     const mainFunc = nodes.find((n) => n.file === mainFile && n.name === "main");
@@ -378,7 +378,7 @@ describe("Import Resolution", () => {
 
     const normalizedPage = pageFile.replace(/\\/g, "/");
     const index = await buildProjectIndex(root);
-    const pageModule = index.byFile.get(normalizedPage);
+    const pageModule = index.byFile.get(fileIdentityKey(normalizedPage));
     const rawImport = pageModule?.imports[0];
 
     expect(pageModule).toBeDefined();
@@ -399,7 +399,7 @@ describe("Import Resolution", () => {
     const normalizedPage = pageFile.replace(/\\/g, "/");
     const graph = await collectGraph(root, [normalizedPage]);
     const index = await buildProjectIndex(root);
-    const pageModule = index.byFile.get(normalizedPage);
+    const pageModule = index.byFile.get(fileIdentityKey(normalizedPage));
 
     expect(graph.edges).toHaveLength(0);
     expect(pageModule).toBeDefined();
@@ -435,7 +435,7 @@ describe("Import Resolution", () => {
     const normalizedComponent = componentFile.replace(/\\/g, "/");
     const graph = await collectGraph(root, [normalizedPage, normalizedComponent]);
     const index = await buildProjectIndex(root);
-    const pageModule = index.byFile.get(normalizedPage);
+    const pageModule = index.byFile.get(fileIdentityKey(normalizedPage));
 
     expect(
       graph.edges.some(
@@ -478,7 +478,7 @@ describe("Import Resolution", () => {
     const normalizedLayout = layoutFile.replace(/\\/g, "/");
     const graph = await collectGraph(root, [normalizedPage, normalizedLayout]);
     const index = await buildProjectIndex(root);
-    const pageModule = index.byFile.get(normalizedPage);
+    const pageModule = index.byFile.get(fileIdentityKey(normalizedPage));
 
     expect(
       graph.edges.some(
@@ -511,7 +511,7 @@ describe("Import Resolution", () => {
       normalizedApiSource,
     ]);
     const index = await buildProjectIndex(root);
-    const indexModule = index.byFile.get(normalizedIndex);
+    const indexModule = index.byFile.get(fileIdentityKey(normalizedIndex));
 
     expect(
       graph.edges.some(
@@ -561,7 +561,7 @@ describe("Import Resolution", () => {
       normalizedApiSource,
     ]);
     const index = await buildProjectIndex(root);
-    const indexModule = index.byFile.get(normalizedIndex);
+    const indexModule = index.byFile.get(fileIdentityKey(normalizedIndex));
 
     expect(
       graph.edges.some(
@@ -607,7 +607,7 @@ describe("Import Resolution", () => {
       normalizedApiSource,
     ]);
     const index = await buildProjectIndex(root);
-    const indexModule = index.byFile.get(normalizedIndex);
+    const indexModule = index.byFile.get(fileIdentityKey(normalizedIndex));
 
     expect(
       graph.edges.some(
@@ -645,7 +645,7 @@ describe("Import Resolution", () => {
     const normalizedMarkdown = markdownFile.replace(/\\/g, "/");
     const graph = await collectGraph(root, [normalizedPage, normalizedComponent, normalizedMarkdown]);
     const index = await buildProjectIndex(root);
-    const pageModule = index.byFile.get(normalizedPage);
+    const pageModule = index.byFile.get(fileIdentityKey(normalizedPage));
 
     expect(
       graph.edges.some(
@@ -675,7 +675,7 @@ describe("Import Resolution", () => {
     const normalizedMarkdown = markdownFile.replace(/\\/g, "/");
     const graph = await collectGraph(root, [normalizedPage, normalizedComponent, normalizedMarkdown]);
     const index = await buildProjectIndex(root);
-    const pageModule = index.byFile.get(normalizedPage);
+    const pageModule = index.byFile.get(fileIdentityKey(normalizedPage));
 
     expect(
       graph.edges.some(
@@ -890,7 +890,7 @@ describe("Import Resolution", () => {
     );
 
     const index = await buildProjectIndex(root);
-    const consumerModule = index.byFile.get(consumerFile.replace(/\\/g, "/"));
+    const consumerModule = index.byFile.get(fileIdentityKey(consumerFile.replace(/\\/g, "/")));
     const helperImport = consumerModule?.imports.find(
       (entry) => entry.kind === "named" && entry.local === "Legacy_Utils_StringHelper",
     );

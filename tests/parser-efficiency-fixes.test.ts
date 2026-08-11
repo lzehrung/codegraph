@@ -20,6 +20,7 @@ import { collectChangedLines } from "../src/impact/map.js";
 import { seedTransitiveFromFiles } from "../src/impact/analyzer.js";
 import type { ProjectIndex } from "../src/indexer.js";
 import type { Edge } from "../src/types.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -312,7 +313,7 @@ describe("method_definition locals", () => {
       const { locateChangedSymbols } = await import("../src/impact/map.js");
 
       const libFile = path.join(root, "lib.js").replace(/\\/g, "/");
-      const mod = index.byFile.get(libFile);
+      const mod = index.byFile.get(fileIdentityKey(libFile));
       expect(mod).toBeDefined();
 
       // Simulate changing line 3 (inside the method body)

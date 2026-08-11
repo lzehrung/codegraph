@@ -144,6 +144,7 @@ export function createCFamilyLanguageDefinition(options: CFamilyLanguageDefiniti
     nodeTypes: options.nodeTypes,
     classifyDefinition: options.classifyDefinition,
     isDeclarationName: options.isDeclarationName,
+    scopeDeclarationNames: "all",
     createsFunctionScope: options.createsFunctionScope,
     createsBlockScope: (node) => node.type === "compound_statement",
     supportsCrossModuleSymbols: true,

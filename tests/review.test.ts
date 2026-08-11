@@ -784,8 +784,8 @@ describe("Review report", () => {
     expect(report.status).toBe("ok");
     expect(report.changedFiles.map((changedFile) => changedFile.file)).toEqual(["extras/explicit.ts"]);
     expect(report.changedFiles[0]?.symbols.some((symbol) => symbol.name === "explicitValue")).toBe(true);
-    expect(reviewBuildReport.index?.byFile.has(normalize(includedFile))).toBe(true);
-    expect(reviewBuildReport.index?.byFile.has(normalize(explicitFile))).toBe(true);
+    expect(reviewBuildReport.index?.byFile.has(fileIdentityKey(normalize(includedFile)))).toBe(true);
+    expect(reviewBuildReport.index?.byFile.has(fileIdentityKey(normalize(explicitFile)))).toBe(true);
     expect(warmReport.changedFiles).toEqual(report.changedFiles);
     expect(warmIndexReport.files?.parsed ?? 0).toBe(0);
   });
@@ -2272,7 +2272,7 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     expect(Object.keys(reviewBuildReport)).not.toContain("duplicateAnalysis");
   });
 
-  it("keeps duplicate sibling tasks for symbol-free changed regions in files with changed symbols", async () => {
+  it("does not create duplicate sibling tasks for unchanged regions outside changed symbols", async () => {
     const root = await mkTmpDir("dg-review-duplicate-top-level-");
     runGit(root, ["init"]);
     runGit(root, ["symbolic-ref", "HEAD", "refs/heads/main"]);
@@ -2302,7 +2302,7 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
       (entry) => entry.reason === "duplicate-sibling" && entry.description.includes("src/a.ts"),
     );
 
-    expect(task).toBeDefined();
+    expect(task).toBeUndefined();
   });
   it("applies scoped bucket-size limits identically to prepared and direct duplicate analysis", async () => {
     const root = await mkTmpDir("dg-review-duplicate-scoped-buckets-");
@@ -2384,7 +2384,7 @@ describe("Indexing helper", () => {
     await fsp.writeFile(indexPath, `export * from './utils';\n`, "utf8");
 
     const fullIndex = await buildProjectIndex(root);
-    const fullModule = fullIndex.byFile.get(normalize(indexPath));
+    const fullModule = fullIndex.byFile.get(fileIdentityKey(normalize(indexPath)));
     if (!fullModule) throw new Error("Full index missing index.ts");
     const utilsNormalized = normalize(utilsPath);
     const fullExportStar = fullModule.exports.find(
@@ -2396,7 +2396,7 @@ describe("Indexing helper", () => {
     expect(fullExportStar).toBeDefined();
 
     const subsetIndex = await buildProjectIndexFromFiles(root, [indexPath, utilsPath]);
-    const subsetModule = subsetIndex.byFile.get(normalize(indexPath));
+    const subsetModule = subsetIndex.byFile.get(fileIdentityKey(normalize(indexPath)));
     if (!subsetModule) throw new Error("Subset index missing index.ts");
     const subsetExportStar = subsetModule.exports.find(
       (exp) =>
@@ -2416,14 +2416,14 @@ describe("Indexing helper", () => {
 
     const normalizedMainPath = mainPath.replace(/\\/g, "/");
     const fullIndex = await buildProjectIndex(root, { cache: "disk" });
-    const fullMainModule = fullIndex.byFile.get(normalizedMainPath);
+    const fullMainModule = fullIndex.byFile.get(fileIdentityKey(normalizedMainPath));
     expect(fullMainModule).toBeDefined();
 
     const incrementalIndex = await indexerBuild.buildProjectIndexIncremental(root, {
       cache: "disk",
       files: [mainPath],
     });
-    const incrementalMainModule = incrementalIndex.byFile.get(normalizedMainPath);
+    const incrementalMainModule = incrementalIndex.byFile.get(fileIdentityKey(normalizedMainPath));
     expect(incrementalMainModule).toBeDefined();
 
     const hasToolNamespaceImport = (imports: NonNullable<typeof fullMainModule>["imports"]) =>

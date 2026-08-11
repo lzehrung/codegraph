@@ -141,6 +141,21 @@ export function collectDetailedDeclarations(
           }
         }
       }
+    } else if (sup.id === "ruby" && node.type === "assignment") {
+      const left = node.childForFieldName("left");
+      const right = node.childForFieldName("right");
+      const receiver = right?.childForFieldName("receiver");
+      const method = right?.childForFieldName("method");
+      if (
+        left?.type === "constant" &&
+        right?.type === "call" &&
+        receiver?.text === "Struct" &&
+        method?.text === "new"
+      ) {
+        const name = sliceText(left, source);
+        const def = findDefinition(name, left);
+        if (def) classNodes.push({ name, node, def });
+      }
     }
 
     for (const child of node.namedChildren) walk(child);

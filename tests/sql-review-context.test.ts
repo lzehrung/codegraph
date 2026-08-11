@@ -39,6 +39,34 @@ describe("SQL review context", () => {
     }
   });
 
+  it("bridges SQL literals but ignores SQL-shaped source comments", async () => {
+    const root = await mkTmpDir("cg-sql-review-");
+    try {
+      const schema = await writeFile(path.join(root, "db", "schema.sql"), "CREATE TABLE users (id integer);\n");
+      const code = await writeFile(
+        path.join(root, "src", "userRepo.ts"),
+        ["// SELECT id FROM users;", "const users = 1;"].join("\n"),
+      );
+
+      const commentContext = await collectSqlReviewContext(root, { changedFiles: [code] });
+
+      expect(commentContext).toBeUndefined();
+
+      await fs.writeFile(code, 'export const query = "SELECT id FROM users";\n', "utf8");
+      const literalContext = await collectSqlReviewContext(root, { changedFiles: [code] });
+
+      expect(literalContext?.entries).toEqual([
+        expect.objectContaining({
+          reason: "changed_sql_literal",
+          objectName: "users",
+          fact: expect.objectContaining({ filePath: schema.replace(/\\/g, "/"), kind: "defines_table" }),
+        }),
+      ]);
+    } finally {
+      await rmTmpDir(root);
+    }
+  });
+
   it("includes changed SQL files without creating source dependency impact", async () => {
     const root = await mkTmpDir("cg-sql-review-");
     try {

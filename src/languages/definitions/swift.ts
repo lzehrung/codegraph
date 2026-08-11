@@ -163,6 +163,7 @@ export const SWIFT_DEF: LanguageDefinition = {
       return true;
     return false;
   },
+  scopeDeclarationNames: "all",
   createsFunctionScope: (node) =>
     node.type === "function_declaration" ||
     node.type === "init_declaration" ||
