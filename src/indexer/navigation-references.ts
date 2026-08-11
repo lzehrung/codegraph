@@ -45,7 +45,10 @@ export async function buildPhpQualifiedNames(
   def: SymbolDef,
 ): Promise<string[]> {
   try {
-    const definitionParsed = await ensureParsedContext(definitionFile, index.parsed?.get(fileIdentityKey(definitionFile)));
+    const definitionParsed = await ensureParsedContext(
+      definitionFile,
+      index.parsed?.get(fileIdentityKey(definitionFile)),
+    );
     if (definitionParsed.sup.id !== "php") {
       return [];
     }
@@ -299,7 +302,8 @@ export function getCachedReferenceCandidateFiles(
 
   const candidates = new Map<string, string>();
   const candidateFileEntries =
-    getIndexedReferenceCandidateFiles(index, def, exportedNames) ?? Array.from(index.byFile.values(), (module) => module.file);
+    getIndexedReferenceCandidateFiles(index, def, exportedNames) ??
+    Array.from(index.byFile.values(), (module) => module.file);
   for (const fileId of candidateFileEntries) {
     if (fileIdentityKey(fileId) === fileIdentityKey(def.file)) continue;
     const moduleIndex = index.byFile.get(fileIdentityKey(fileId));

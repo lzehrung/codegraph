@@ -180,9 +180,7 @@ describe("JSON output flag command allow-list", () => {
     expect(() => validateCliArgs("viewer", parseCliArgs("viewer", ["--json"]))).toThrow(
       "Unknown option for viewer: --json",
     );
-    expect(() => validateCliArgs("mcp", parseCliArgs("mcp", ["--json"]))).toThrow(
-      "Unknown option for mcp: --json",
-    );
+    expect(() => validateCliArgs("mcp", parseCliArgs("mcp", ["--json"]))).toThrow("Unknown option for mcp: --json");
     expect(() => validateCliArgs("viewer", parseCliArgs("viewer", ["--pretty"]))).toThrow(
       "Unknown option for viewer: --pretty",
     );

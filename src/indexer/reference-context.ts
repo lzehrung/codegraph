@@ -8,7 +8,11 @@ import type { SymbolDef } from "./types.js";
 export function sameDef(left: SymbolDef, right: SymbolDef): boolean {
   const leftIndex = left.range.start.index ?? 0;
   const rightIndex = right.range.start.index ?? 0;
-  return fileIdentityKey(left.file) === fileIdentityKey(right.file) && left.localName === right.localName && leftIndex === rightIndex;
+  return (
+    fileIdentityKey(left.file) === fileIdentityKey(right.file) &&
+    left.localName === right.localName &&
+    leftIndex === rightIndex
+  );
 }
 
 export function rangeContains(range: Range, pos: { row: number; column: number }): boolean {

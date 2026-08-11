@@ -74,7 +74,6 @@ export interface ArchitectureSignalAvailability {
 }
 export const ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION = 2 as const;
 
-
 export interface ArchitectureSnapshot {
   schemaVersion: typeof ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION;
   root: string;

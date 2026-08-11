@@ -22,9 +22,8 @@ function blankMarkup(source: string): string {
 }
 
 function stripHtmlCommentsAndLiteralBlocks(source: string): string {
-  return source.replace(
-    /<!--[\s\S]*?(?:-->|$)|<(pre|code)\b[^>]*>[\s\S]*?(?:<\/\1\s*>|$)/gi,
-    (match) => blankMarkup(match),
+  return source.replace(/<!--[\s\S]*?(?:-->|$)|<(pre|code)\b[^>]*>[\s\S]*?(?:<\/\1\s*>|$)/gi, (match) =>
+    blankMarkup(match),
   );
 }
 

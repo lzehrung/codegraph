@@ -133,7 +133,7 @@ function resolveGoPackageExport(index: ProjectIndex, file: FileId, exportedName:
     const directory = packageDirectoryLookup(index, "go").get(fileIdentityKey(path.dirname(file)));
     if (!directory) return null;
     const sourcePackage = readGoPackageName(file);
-    const candidates = sourcePackage ? directory.byName.get(sourcePackage) ?? [] : directory.all;
+    const candidates = sourcePackage ? (directory.byName.get(sourcePackage) ?? []) : directory.all;
     for (const moduleEntry of candidates) {
       const exportEntry = moduleNameLookup(index, moduleEntry.file)?.localExports.get(exportedName)?.[0];
       if (exportEntry) return exportEntry;
@@ -385,7 +385,6 @@ export function resolveModuleExports(
   }
   return resolved;
 }
-
 
 export function resolveImported(
   index: ProjectIndex,

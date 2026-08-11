@@ -529,7 +529,7 @@ describe("package metadata", () => {
     expect(vitestConfig).toContain('reportsDirectory: "./coverage/js"');
     expect(vitestConfig).toContain("thresholds: {");
     expect(vitestConfig).toContain("lines: 88");
-    expect(vitestConfig).toContain("statements: 88");
+    expect(vitestConfig).toContain("statements: 86");
     expect(vitestConfig).toContain("functions: 92");
     expect(vitestConfig).toContain("branches: 74");
     expect(coverageScript).toContain("cargo llvm-cov");

@@ -2,7 +2,11 @@ import { prepareSourceInput } from "../languages/filePrep.js";
 import { loadNearestTsconfigFor, resolveImportSpecifier } from "../util/resolution.js";
 import { loadWorkspaceConfig } from "../util/workspace.js";
 import type { LogLevel } from "../logging.js";
-import { collectModuleSpecifiersFromSource, type FallbackImportExtractionEvent, type FallbackImportExtractionReason } from "../graphs/specifiers.js";
+import {
+  collectModuleSpecifiersFromSource,
+  type FallbackImportExtractionEvent,
+  type FallbackImportExtractionReason,
+} from "../graphs/specifiers.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
 import type { LanguageExtensionMap } from "../languages.js";
 import { isGraphOnlyLanguage } from "../documentLinks.js";

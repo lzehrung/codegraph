@@ -55,7 +55,9 @@ function functionSource(value: unknown): string | undefined {
   return typeof value === "function" ? Function.prototype.toString.call(value) : undefined;
 }
 
-function languageDefinitionFingerprintDescriptor(definition: LanguageDefinition): LanguageDefinitionFingerprintDescriptor {
+function languageDefinitionFingerprintDescriptor(
+  definition: LanguageDefinition,
+): LanguageDefinitionFingerprintDescriptor {
   const native = definition.native;
   const nativeNormalizeQuery = functionSource(native?.normalizeQuery);
   const classifyDefinition = functionSource(definition.classifyDefinition);

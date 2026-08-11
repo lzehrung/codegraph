@@ -111,7 +111,12 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     expect([...leadFiles].some((file) => file.includes("importList"))).toBe(false);
     expect(summary?.omittedCounts.byBoilerplate).toBeGreaterThan(0);
 
-    const optedIn = await collectDuplicateLeadSummary({ index, projectRoot: root, scope: "all", includeBoilerplate: true });
+    const optedIn = await collectDuplicateLeadSummary({
+      index,
+      projectRoot: root,
+      scope: "all",
+      includeBoilerplate: true,
+    });
     const optedInFiles = new Set(optedIn?.leads.flatMap((lead) => [lead.file, lead.otherFile]));
     expect([...optedInFiles].some((file) => file.includes("importList"))).toBe(true);
     expect(optedIn?.omittedCounts.byBoilerplate).toBe(0);
@@ -144,7 +149,12 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     expect([...leadFiles].some((file) => file.includes("barrel"))).toBe(false);
     expect(summary?.omittedCounts.byBoilerplate).toBeGreaterThan(0);
 
-    const optedIn = await collectDuplicateLeadSummary({ index, projectRoot: root, scope: "all", includeBoilerplate: true });
+    const optedIn = await collectDuplicateLeadSummary({
+      index,
+      projectRoot: root,
+      scope: "all",
+      includeBoilerplate: true,
+    });
     const optedInFiles = new Set(optedIn?.leads.flatMap((lead) => [lead.file, lead.otherFile]));
     expect([...optedInFiles].some((file) => file.includes("barrel"))).toBe(true);
     expect(optedIn?.omittedCounts.byBoilerplate).toBe(0);
@@ -172,17 +182,22 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     const baseArgs = ["duplicates", "--root", ".", "src", "--json", "--include-small", "--min-tokens", "40"];
     const unfiltered = await captureCli(baseArgs, { cwd: root });
     const cleanup = await captureCli([...baseArgs, "--profile", "cleanup"], { cwd: root });
-    const parseResult = (result: { stdout: string }): {
+    const parseResult = (result: {
+      stdout: string;
+    }): {
       groups?: Array<{ primaryLeft?: { file?: string }; primaryRight?: { file?: string } }>;
       filteredCounts?: { cleanupProfileGroups?: number };
-    } => JSON.parse(result.stdout) as {
-      groups?: Array<{ primaryLeft?: { file?: string }; primaryRight?: { file?: string } }>;
-      filteredCounts?: { cleanupProfileGroups?: number };
-    };
+    } =>
+      JSON.parse(result.stdout) as {
+        groups?: Array<{ primaryLeft?: { file?: string }; primaryRight?: { file?: string } }>;
+        filteredCounts?: { cleanupProfileGroups?: number };
+      };
     const unfilteredResult = parseResult(unfiltered);
     const cleanupResult = parseResult(cleanup);
-    const groupIncludesBarrel = (group: { primaryLeft?: { file?: string }; primaryRight?: { file?: string } }): boolean =>
-      Boolean(group.primaryLeft?.file?.includes("barrel") || group.primaryRight?.file?.includes("barrel"));
+    const groupIncludesBarrel = (group: {
+      primaryLeft?: { file?: string };
+      primaryRight?: { file?: string };
+    }): boolean => Boolean(group.primaryLeft?.file?.includes("barrel") || group.primaryRight?.file?.includes("barrel"));
 
     expect(unfiltered.exitCode).toBeUndefined();
     expect(cleanup.exitCode).toBeUndefined();

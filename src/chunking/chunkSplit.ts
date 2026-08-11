@@ -39,7 +39,18 @@ export function splitLargeBlockSimple(
 
     if (lineTokens > maxTokens) {
       flush();
-      emitRangeWithinBudget(block, source, line.start, line.end, line.startLine, tokenizer, maxTokens, out, languageId, filePath);
+      emitRangeWithinBudget(
+        block,
+        source,
+        line.start,
+        line.end,
+        line.startLine,
+        tokenizer,
+        maxTokens,
+        out,
+        languageId,
+        filePath,
+      );
       continue;
     }
 
@@ -115,7 +126,18 @@ export function splitLargeBlockUsingInnerBlocks(
 
     if (segmentTokens > maxTokens) {
       flush();
-      emitRangeWithinBudget(block, source, start, end, segmentStartRow + 1, tokenizer, maxTokens, out, languageId, filePath);
+      emitRangeWithinBudget(
+        block,
+        source,
+        start,
+        end,
+        segmentStartRow + 1,
+        tokenizer,
+        maxTokens,
+        out,
+        languageId,
+        filePath,
+      );
       continue;
     }
 
@@ -198,7 +220,18 @@ function emitRangeWithinBudget(
   const text = source.slice(start, end);
   const tokenCount = tokenizer(text);
   if (tokenCount <= maxTokens) {
-    pushRangedChunk(out, block, languageId, filePath, start, end, startLine, endLineForText(startLine, text), text, tokenCount);
+    pushRangedChunk(
+      out,
+      block,
+      languageId,
+      filePath,
+      start,
+      end,
+      startLine,
+      endLineForText(startLine, text),
+      text,
+      tokenCount,
+    );
     return;
   }
 

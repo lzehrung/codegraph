@@ -20,7 +20,6 @@ import {
 export { calculateSeverity, calculateTransitiveSeverity } from "./severity.js";
 export { seedTransitiveFromFiles } from "./transitive.js";
 
-
 /**
  * Impact scores are normalized effective scores: confidence already
  * contributes to severity. Remaining ties prefer more certain, shallower

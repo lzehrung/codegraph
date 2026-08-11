@@ -85,7 +85,6 @@ export function buildScopeIndexFromSource(
   const isJsTsVarDeclaration = (node: SyntaxNodeLike): boolean =>
     isJavaScriptOrTypeScript && node.type === "variable_declaration";
 
-
   const isParamNode = (node: SyntaxNodeLike): boolean => {
     let current: SyntaxNodeLike | null = node.parent;
     while (current) {
@@ -224,10 +223,7 @@ export function buildScopeIndexFromSource(
           if (isStaticRequireCall(value)) addUnsupportedRequirePatternDecls(name, addBindingToScope);
           else addPatternDecls(name, "local", addBindingToScope);
         }
-      } else if (
-        (child.type === "identifier" || child.type === "field_identifier") &&
-        node.type === "assignment"
-      ) {
+      } else if ((child.type === "identifier" || child.type === "field_identifier") && node.type === "assignment") {
         addBindingToScope(child, "local");
       } else if (node.type === "let_declaration" || node.type === "const_item" || node.type === "static_item") {
         const pattern = node.childForFieldName("pattern") || node.childForFieldName("name");

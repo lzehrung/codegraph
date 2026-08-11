@@ -40,10 +40,7 @@ export type InstallChange = {
   dryRun: boolean;
 };
 
-export type InstallerCollisionKind =
-  | "user-owned-codegraph-entry"
-  | "user-owned-codegraph-table"
-  | "user-owned-skill";
+export type InstallerCollisionKind = "user-owned-codegraph-entry" | "user-owned-codegraph-table" | "user-owned-skill";
 
 export type InstallerCollision = {
   target: InstallTargetId;
@@ -372,7 +369,13 @@ async function prepareInstallPlan(
     const markerPath = path.join(skillTargetDir, "CODEGRAPH_INSTALLED");
     const skillSnapshot = await snapshotInstallFile(skillPath, skillRoot);
     const markerSnapshot = await snapshotInstallFile(markerPath, skillRoot);
-    const skillCollision = findSkillCollision(definition, skillPath, skillSnapshot.bytes, markerSnapshot.bytes, bundledSkill);
+    const skillCollision = findSkillCollision(
+      definition,
+      skillPath,
+      skillSnapshot.bytes,
+      markerSnapshot.bytes,
+      bundledSkill,
+    );
     if (skillCollision && !force) {
       conflicts.push(skillCollision);
       continue;
@@ -637,11 +640,7 @@ function readSkillShaFromMarker(markerBytes: Buffer): string | null {
   return match?.[1] ?? null;
 }
 
-function isInstallerOwnedSkill(
-  markerBytes: Buffer | null,
-  skillBytes: Buffer | null,
-  bundledSkill: Buffer,
-): boolean {
+function isInstallerOwnedSkill(markerBytes: Buffer | null, skillBytes: Buffer | null, bundledSkill: Buffer): boolean {
   if (markerBytes === null || skillBytes === null) return false;
   if (!isValidInstallMarker(markerBytes)) return false;
   if (skillBytes.equals(bundledSkill)) return true;

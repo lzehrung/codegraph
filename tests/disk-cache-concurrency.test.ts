@@ -103,18 +103,19 @@ function readIntegrity(dbPath: string): string {
   }
 }
 
+function toPayloadBytes(payload: NonNullable<unknown>): Uint8Array {
+  if (payload instanceof Uint8Array) return payload;
+  if (Buffer.isBuffer(payload)) return payload;
+  return Buffer.from(String(payload));
+}
+
 function readCachedPayloadTexts(dbPath: string): string[] {
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
     const rows = db.prepare("SELECT payload FROM module_cache").all() as Array<{ payload?: unknown }>;
     return rows.map((row) => {
       if (!row.payload) return "";
-      const bytes =
-        row.payload instanceof Uint8Array
-          ? row.payload
-          : Buffer.isBuffer(row.payload)
-            ? row.payload
-            : Buffer.from(String(row.payload));
+      const bytes = toPayloadBytes(row.payload);
       return brotliDecompressSync(bytes).toString("utf8");
     });
   } finally {
@@ -168,107 +169,103 @@ try {
 }
 
 describe("disk cache multi-process concurrency", () => {
-  it(
-    "survives concurrent readers and writers against one cache directory",
-    async () => {
-      expect(fs.existsSync(distIndex), "dist/index.js must exist (run ensure-dist / build first)").toBe(true);
+  it("survives concurrent readers and writers against one cache directory", async () => {
+    expect(fs.existsSync(distIndex), "dist/index.js must exist (run ensure-dist / build first)").toBe(true);
 
-      const projectRoot = await mkTmpDir("dg-disk-cache-concurrency-");
-      const workerDir = await mkTmpDir("dg-disk-cache-concurrency-worker-");
-      const workerPath = path.join(workerDir, "disk-cache-concurrency-worker.mjs");
-      const writerCount = 4;
-      const readerCount = 4;
+    const projectRoot = await mkTmpDir("dg-disk-cache-concurrency-");
+    const workerDir = await mkTmpDir("dg-disk-cache-concurrency-worker-");
+    const workerPath = path.join(workerDir, "disk-cache-concurrency-worker.mjs");
+    const writerCount = 4;
+    const readerCount = 4;
 
-      try {
-        await fsp.mkdir(path.join(projectRoot, "src"), { recursive: true });
-        await fsp.writeFile(path.join(projectRoot, "src", "shared.ts"), "export const shared = 1;\n", "utf8");
-        for (let id = 0; id < writerCount; id += 1) {
-          await fsp.writeFile(
-            path.join(projectRoot, "src", `worker-${id}.ts`),
-            `import { shared } from "./shared.js";\nexport const value${id} = shared + ${id};\n`,
-            "utf8",
-          );
-        }
-        await fsp.writeFile(workerPath, buildWorkerSource(), "utf8");
-
-        const seed = await spawnWorker(workerPath, { role: "reader", id: -1, projectRoot });
-        expect(seed.status, seed.stderr || seed.stdout).toBe(0);
-        expect(seed.result?.ok).toBe(true);
-        expect(fs.existsSync(moduleCacheDbPath(projectRoot))).toBe(true);
-
-        const nonce = Date.now().toString(36);
-        const writerJobs: Extract<WorkerJob, { role: "writer" }>[] = [];
-        for (let id = 0; id < writerCount; id += 1) {
-          writerJobs.push({
-            role: "writer",
-            id,
-            projectRoot,
-            relativeFile: path.join("src", `worker-${id}.ts`),
-            marker: `MARKER_${id}_${nonce}`,
-          });
-        }
-        const readerJobs: WorkerJob[] = [];
-        for (let id = 0; id < readerCount; id += 1) {
-          readerJobs.push({ role: "reader", id, projectRoot });
-        }
-
-        // Wave 1: concurrent writers on distinct files — lost-update sensitive.
-        const writerOutcomes = await Promise.all(writerJobs.map((job) => spawnWorker(workerPath, job)));
-        for (const outcome of writerOutcomes) {
-          expect(outcome.status, outcome.stderr || outcome.stdout).toBe(0);
-          expect(outcome.result?.ok, outcome.stderr || outcome.stdout).toBe(true);
-        }
-
-        const dbPath = moduleCacheDbPath(projectRoot);
-        expect(readIntegrity(dbPath)).toBe("ok");
-        let payloads = readCachedPayloadTexts(dbPath).join("\n");
-        for (const job of writerJobs) {
-          expect(payloads, `lost update for writer ${job.id}`).toContain(job.marker);
-        }
-
-        // Wave 2: concurrent readers + another writer pass against the hot cache.
-        const mixedJobs: WorkerJob[] = [
-          ...readerJobs,
-          ...writerJobs.map((job) => ({
-            ...job,
-            marker: `${job.marker}_B`,
-          })),
-        ];
-        const mixedOutcomes = await Promise.all(mixedJobs.map((job) => spawnWorker(workerPath, job)));
-        for (const outcome of mixedOutcomes) {
-          expect(outcome.status, outcome.stderr || outcome.stdout).toBe(0);
-          expect(outcome.result?.ok, outcome.stderr || outcome.stdout).toBe(true);
-        }
-
-        expect(readIntegrity(dbPath)).toBe("ok");
-        payloads = readCachedPayloadTexts(dbPath).join("\n");
-        for (const job of mixedJobs) {
-          if (job.role !== "writer") continue;
-          expect(payloads, `lost update for mixed writer ${job.id}`).toContain(job.marker);
-        }
-
-        // Source-of-truth files must retain the latest writer markers.
-        for (const job of writerJobs) {
-          const source = await fsp.readFile(path.join(projectRoot, job.relativeFile), "utf8");
-          expect(source).toContain(`${job.marker}_B`);
-        }
-
-        const snap = snapshotPath(projectRoot);
-        expect(fs.existsSync(snap)).toBe(true);
-        const snapshotJson = brotliDecompressSync(await fsp.readFile(snap)).toString("utf8");
-        const parsed = JSON.parse(snapshotJson) as { modules?: unknown[] };
-        expect(Array.isArray(parsed.modules)).toBe(true);
-        expect((parsed.modules ?? []).length).toBeGreaterThanOrEqual(writerCount + 1);
-
-        const finalPass = await spawnWorker(workerPath, { role: "reader", id: 99, projectRoot });
-        expect(finalPass.status, finalPass.stderr || finalPass.stdout).toBe(0);
-        expect(finalPass.result?.ok).toBe(true);
-        expect(readIntegrity(dbPath)).toBe("ok");
-      } finally {
-        await fsp.rm(projectRoot, { recursive: true, force: true });
-        await fsp.rm(workerDir, { recursive: true, force: true });
+    try {
+      await fsp.mkdir(path.join(projectRoot, "src"), { recursive: true });
+      await fsp.writeFile(path.join(projectRoot, "src", "shared.ts"), "export const shared = 1;\n", "utf8");
+      for (let id = 0; id < writerCount; id += 1) {
+        await fsp.writeFile(
+          path.join(projectRoot, "src", `worker-${id}.ts`),
+          `import { shared } from "./shared.js";\nexport const value${id} = shared + ${id};\n`,
+          "utf8",
+        );
       }
-    },
-    120_000,
-  );
+      await fsp.writeFile(workerPath, buildWorkerSource(), "utf8");
+
+      const seed = await spawnWorker(workerPath, { role: "reader", id: -1, projectRoot });
+      expect(seed.status, seed.stderr || seed.stdout).toBe(0);
+      expect(seed.result?.ok).toBe(true);
+      expect(fs.existsSync(moduleCacheDbPath(projectRoot))).toBe(true);
+
+      const nonce = Date.now().toString(36);
+      const writerJobs: Extract<WorkerJob, { role: "writer" }>[] = [];
+      for (let id = 0; id < writerCount; id += 1) {
+        writerJobs.push({
+          role: "writer",
+          id,
+          projectRoot,
+          relativeFile: path.join("src", `worker-${id}.ts`),
+          marker: `MARKER_${id}_${nonce}`,
+        });
+      }
+      const readerJobs: WorkerJob[] = [];
+      for (let id = 0; id < readerCount; id += 1) {
+        readerJobs.push({ role: "reader", id, projectRoot });
+      }
+
+      // Wave 1: concurrent writers on distinct files — lost-update sensitive.
+      const writerOutcomes = await Promise.all(writerJobs.map((job) => spawnWorker(workerPath, job)));
+      for (const outcome of writerOutcomes) {
+        expect(outcome.status, outcome.stderr || outcome.stdout).toBe(0);
+        expect(outcome.result?.ok, outcome.stderr || outcome.stdout).toBe(true);
+      }
+
+      const dbPath = moduleCacheDbPath(projectRoot);
+      expect(readIntegrity(dbPath)).toBe("ok");
+      let payloads = readCachedPayloadTexts(dbPath).join("\n");
+      for (const job of writerJobs) {
+        expect(payloads, `lost update for writer ${job.id}`).toContain(job.marker);
+      }
+
+      // Wave 2: concurrent readers + another writer pass against the hot cache.
+      const mixedJobs: WorkerJob[] = [
+        ...readerJobs,
+        ...writerJobs.map((job) => ({
+          ...job,
+          marker: `${job.marker}_B`,
+        })),
+      ];
+      const mixedOutcomes = await Promise.all(mixedJobs.map((job) => spawnWorker(workerPath, job)));
+      for (const outcome of mixedOutcomes) {
+        expect(outcome.status, outcome.stderr || outcome.stdout).toBe(0);
+        expect(outcome.result?.ok, outcome.stderr || outcome.stdout).toBe(true);
+      }
+
+      expect(readIntegrity(dbPath)).toBe("ok");
+      payloads = readCachedPayloadTexts(dbPath).join("\n");
+      for (const job of mixedJobs) {
+        if (job.role !== "writer") continue;
+        expect(payloads, `lost update for mixed writer ${job.id}`).toContain(job.marker);
+      }
+
+      // Source-of-truth files must retain the latest writer markers.
+      for (const job of writerJobs) {
+        const source = await fsp.readFile(path.join(projectRoot, job.relativeFile), "utf8");
+        expect(source).toContain(`${job.marker}_B`);
+      }
+
+      const snap = snapshotPath(projectRoot);
+      expect(fs.existsSync(snap)).toBe(true);
+      const snapshotJson = brotliDecompressSync(await fsp.readFile(snap)).toString("utf8");
+      const parsed = JSON.parse(snapshotJson) as { modules?: unknown[] };
+      expect(Array.isArray(parsed.modules)).toBe(true);
+      expect((parsed.modules ?? []).length).toBeGreaterThanOrEqual(writerCount + 1);
+
+      const finalPass = await spawnWorker(workerPath, { role: "reader", id: 99, projectRoot });
+      expect(finalPass.status, finalPass.stderr || finalPass.stdout).toBe(0);
+      expect(finalPass.result?.ok).toBe(true);
+      expect(readIntegrity(dbPath)).toBe("ok");
+    } finally {
+      await fsp.rm(projectRoot, { recursive: true, force: true });
+      await fsp.rm(workerDir, { recursive: true, force: true });
+    }
+  }, 120_000);
 });

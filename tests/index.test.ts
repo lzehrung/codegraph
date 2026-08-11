@@ -347,7 +347,11 @@ describe("Project Indexing", () => {
     const upperCaseUtility = path.join(root, "Util.ts");
     const lowerCaseUtility = path.join(root, "util.ts");
 
-    await fsp.writeFile(mainFile, 'import { value } from "./Util";\nexport function consume() { return value; }\n', "utf8");
+    await fsp.writeFile(
+      mainFile,
+      'import { value } from "./Util";\nexport function consume() { return value; }\n',
+      "utf8",
+    );
     await fsp.writeFile(upperCaseUtility, "export const value = 1;\n", "utf8");
     await fsp.writeFile(lowerCaseUtility, "export const value = 2;\n", "utf8");
 
@@ -367,7 +371,9 @@ describe("Project Indexing", () => {
 
       expect(references.status).toBe("ok");
       if (references.status === "ok") {
-        expect(references.references.map((reference) => fileIdentityKey(reference.file))).toContain(fileIdentityKey(mainFile));
+        expect(references.references.map((reference) => fileIdentityKey(reference.file))).toContain(
+          fileIdentityKey(mainFile),
+        );
       }
       expect(mergedUtility?.file).toBe(lowerCaseUtility.replace(/\\/g, "/"));
       expect(mergedMain?.imports[0]?.resolved).toBe(upperCaseUtility.replace(/\\/g, "/"));

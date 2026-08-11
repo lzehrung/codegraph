@@ -243,7 +243,7 @@ module Legacy {
     expect(chunks.some((c) => c.type === "namespace" && c.name === "Tools")).toBe(true);
     expect(chunks.some((c) => c.type === "namespace" && c.name === "Legacy")).toBe(true);
     expect(chunks.some((c) => c.type === "function" && c.name === "build")).toBe(true);
-    expect(chunks.filter((c) => c.text.includes('function build()')).length).toBe(2);
+    expect(chunks.filter((c) => c.text.includes("function build()")).length).toBe(2);
   });
 
   it("captures TypeScript enums regardless of identifier node type", () => {
@@ -494,13 +494,7 @@ describe("chunkTextFile and chunkFile regressions", () => {
       "  return 'second';",
       "}",
     ].join("\n");
-    const sourceWithInsertion = [
-      "function inserted() {",
-      "  return 'inserted';",
-      "}",
-      "",
-      unchangedSource,
-    ].join("\n");
+    const sourceWithInsertion = ["function inserted() {", "  return 'inserted';", "}", "", unchangedSource].join("\n");
     const options = {
       language: LANG_CONFIGS.javascript,
       filePath: "stable.js",
@@ -585,13 +579,7 @@ describe("chunkTextFile and chunkFile regressions", () => {
   });
 
   it("does not duplicate a method when merging a small class", () => {
-    const source = [
-      "class Small {",
-      "  run() {",
-      "    return 'unique method marker';",
-      "  }",
-      "}",
-    ].join("\n");
+    const source = ["class Small {", "  run() {", "    return 'unique method marker';", "  }", "}"].join("\n");
     const chunks = chunkFile({
       language: LANG_CONFIGS.javascript,
       source,

@@ -1146,11 +1146,7 @@ function extractCallsiteArgumentsFromProvider(request: ExtractCallsiteArgumentsR
 
   const astArgumentText = findCallsiteArgumentText(request);
   if (astArgumentText !== null) {
-    return callsiteFromArgumentText(
-      request.languageId,
-      astArgumentText.text,
-      astArgumentText.trailingArgumentCount,
-    );
+    return callsiteFromArgumentText(request.languageId, astArgumentText.text, astArgumentText.trailingArgumentCount);
   }
 
   if (!isJsTsLanguage(request.languageId)) {

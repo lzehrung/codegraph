@@ -51,9 +51,12 @@ function summarize(snapshot: ArchitectureSnapshot): ArchitectureSnapshotSummary 
 }
 
 function assertSnapshotSchema(snapshot: ArchitectureSnapshot, label: "base" | "head"): void {
-  if (snapshot.schemaVersion !== ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION) {
+  // Read into a widened local so the equality check cannot narrow the literal type to
+  // `never`, which would make the template expression untypable.
+  const actual: number = snapshot.schemaVersion;
+  if (actual !== ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION) {
     throw new Error(
-      `Cannot compare ${label} architecture snapshot schema version ${String(snapshot.schemaVersion)}; expected ${ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION}. Regenerate the drift baseline.`,
+      `Cannot compare ${label} architecture snapshot schema version ${actual}; expected ${ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION}. Regenerate the drift baseline.`,
     );
   }
 }

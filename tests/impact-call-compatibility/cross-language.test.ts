@@ -23,7 +23,6 @@ function parseFixture(fileName: string, source: string): { languageId: string; t
 }
 
 describe("cross-language call compatibility extraction", () => {
-
   it.each([
     ["helper.ts", "export function helper(a: string, b = 1, ...rest: string[]) { return a; }", 1, null],
     ["helper.ts", "export function helper(value = /.../) { return value; }", 0, 1],

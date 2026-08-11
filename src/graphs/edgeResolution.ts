@@ -140,4 +140,3 @@ export async function resolveModuleSpecifierEdges(
   }
   return [withSpecifierMetadata(entry, to)];
 }
-

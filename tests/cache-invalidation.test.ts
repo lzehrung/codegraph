@@ -247,9 +247,7 @@ describe("Cache invalidation and strict hashing", () => {
     expect(
       parentIndex.graph.edges.some(
         (edge) =>
-          edge.from === normalize(childEntryPath) &&
-          edge.to.type === "file" &&
-          edge.to.path === normalize(outsidePath),
+          edge.from === normalize(childEntryPath) && edge.to.type === "file" && edge.to.path === normalize(outsidePath),
       ),
     ).toBe(true);
 
@@ -258,9 +256,9 @@ describe("Cache invalidation and strict hashing", () => {
     expect(
       childIndex.graph.edges.some((edge) => edge.to.type === "file" && edge.to.path === normalize(outsidePath)),
     ).toBe(false);
-    expect(Array.from(childIndex.byFile.keys()).some((file) => fileIdentityKey(file) === fileIdentityKey(outsidePath))).toBe(
-      false,
-    );
+    expect(
+      Array.from(childIndex.byFile.keys()).some((file) => fileIdentityKey(file) === fileIdentityKey(outsidePath)),
+    ).toBe(false);
   });
 
   it("rejects and rebuilds a pre-implementation-fingerprint manifest", async () => {
@@ -297,7 +295,9 @@ describe("Cache invalidation and strict hashing", () => {
     const manifest = await readManifest(root);
 
     expect(moduleForPath(rebuilt, entryPath)?.locals.some((local) => local.localName === "current")).toBe(true);
-    expect(rebuilt.graph.edges.some((edge) => edge.to.type === "file" && edge.to.path.endsWith("/stale.ts"))).toBe(false);
+    expect(rebuilt.graph.edges.some((edge) => edge.to.type === "file" && edge.to.path.endsWith("/stale.ts"))).toBe(
+      false,
+    );
     expect(manifest.version).toBe(MANIFEST_VERSION);
     expect(manifest.buildOptions?.implementationFingerprint).toMatch(/^[a-f0-9]{64}$/);
   });
@@ -428,9 +428,9 @@ describe("Cache invalidation and strict hashing", () => {
       threads: 1,
     });
 
-    expect(afterMapping.byFile.get(fileIdentityKey(normalize(mappedPath)))?.locals.map((local) => local.localName)).toContain(
-      "newly_mapped",
-    );
+    expect(
+      afterMapping.byFile.get(fileIdentityKey(normalize(mappedPath)))?.locals.map((local) => local.localName),
+    ).toContain("newly_mapped");
   });
 
   it("recomputes manifest graph edges when a custom extension is remapped", async () => {
@@ -1437,7 +1437,9 @@ describe("Cache invalidation and strict hashing", () => {
     const third = await buildCache.tryLoadProjectIndexSnapshot(root, { cache: "disk" }, entries);
     readSpy.mockRestore();
 
-    expect(second?.index.byFile.get(fileIdentityKey(normalize(path.join(root, "main.ts"))))?.locals.length).toBeGreaterThan(0);
+    expect(
+      second?.index.byFile.get(fileIdentityKey(normalize(path.join(root, "main.ts"))))?.locals.length,
+    ).toBeGreaterThan(0);
     expect(third?.index.byFile.size).toBe(1);
     expect(snapshotReads).toBe(2);
   });
@@ -1628,7 +1630,9 @@ describe("Cache invalidation and strict hashing", () => {
     });
 
     expect(
-      incremental.byFile.get(fileIdentityKey(normalize(entryPath)))?.locals.some((local) => local.localName === "disabledBloom"),
+      incremental.byFile
+        .get(fileIdentityKey(normalize(entryPath)))
+        ?.locals.some((local) => local.localName === "disabledBloom"),
     ).toBe(true);
     expect(incremental.bloomFilters).toBeUndefined();
   });
@@ -1658,7 +1662,9 @@ describe("Cache invalidation and strict hashing", () => {
       useBloomFilters: true,
     });
 
-    expect(rebuilt.byFile.get(fileIdentityKey(normalize(entryPath)))?.locals.some((local) => local.localName === "guarded")).toBe(true);
+    expect(
+      rebuilt.byFile.get(fileIdentityKey(normalize(entryPath)))?.locals.some((local) => local.localName === "guarded"),
+    ).toBe(true);
     expect(rebuilt.bloomFilters?.get(normalize(entryPath))?.mightContain("guarded")).toBe(true);
   });
 

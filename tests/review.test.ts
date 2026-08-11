@@ -2391,9 +2391,7 @@ describe("boundReviewReportForTransport", () => {
   }
 
   it("reports truncated collections as-is with zero omitted counts when under every limit", async () => {
-    const { boundReviewReportForTransport, DEFAULT_REVIEW_TRANSPORT_LIMITS } = await import(
-      "../src/review/types.js"
-    );
+    const { boundReviewReportForTransport, DEFAULT_REVIEW_TRANSPORT_LIMITS } = await import("../src/review/types.js");
     const report = makeBaseReport({
       changedFiles: [{ file: "a.ts", status: "updated", symbols: [] }],
       graphDelta: [{ from: "a.ts", to: { type: "file", path: "b.ts" }, raw: "./b" }],

@@ -12,7 +12,6 @@ export function createSqlObjectNameRegExp(flags = "iy"): RegExp {
   return new RegExp(SQL_OBJECT_NAME_PATTERN, flags);
 }
 
-
 export function normalizeSqlIdentifierPart(raw: string): string {
   const trimmed = raw.trim();
   if (trimmed.startsWith('"') && trimmed.endsWith('"')) {

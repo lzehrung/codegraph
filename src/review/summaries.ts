@@ -43,11 +43,9 @@ function listReviewableExports(mod: ModuleIndex): ReviewableExportEntry[] {
   return mod.exports.filter((entry): entry is ReviewableExportEntry => entry.type !== "local");
 }
 
-
 function exportSummaryName(entry: ReviewableExportEntry): string {
   return entry.type === "exportStar" ? "*" : entry.exportedAs;
 }
-
 
 function buildExportSummary(
   file: string,
@@ -78,18 +76,16 @@ function parseExportSummaries(file: string, source: string): ReviewSymbolSummary
 
   const namedMatch = source.match(/^export\s+(?:type\s+)?\{([^}]*)\}\s+from\b/);
   if (!namedMatch?.[1]) return [];
-  return namedMatch[1]
-    .split(",")
-    .flatMap((specifier) => {
-      const specifierMatch = specifier
-        .trim()
-        .replace(/^type\s+/, "")
-        .match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
-      const sourceSpecifier = specifierMatch?.[1];
-      if (!sourceSpecifier) return [];
-      const exportedAs = specifierMatch[2] ?? sourceSpecifier;
-      return [buildExportSummary(file, "reexport", exportedAs, fromModule)];
-    });
+  return namedMatch[1].split(",").flatMap((specifier) => {
+    const specifierMatch = specifier
+      .trim()
+      .replace(/^type\s+/, "")
+      .match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
+    const sourceSpecifier = specifierMatch?.[1];
+    if (!sourceSpecifier) return [];
+    const exportedAs = specifierMatch[2] ?? sourceSpecifier;
+    return [buildExportSummary(file, "reexport", exportedAs, fromModule)];
+  });
 }
 
 function uniqueExportSummaries(summaries: readonly ReviewSymbolSummary[]): ReviewSymbolSummary[] {
@@ -120,9 +116,9 @@ function buildExportSummaryGroups(
   );
   if (!changed.length) return { changed: [], context: [] };
   const changedHandles = new Set(changed.map((summary) => summary.handle));
-  const context = uniqueExportSummaries(source.split(/\r?\n/).flatMap((line) => parseExportSummaries(file, line.trim()))).filter(
-    (summary) => !changedHandles.has(summary.handle),
-  );
+  const context = uniqueExportSummaries(
+    source.split(/\r?\n/).flatMap((line) => parseExportSummaries(file, line.trim())),
+  ).filter((summary) => !changedHandles.has(summary.handle));
   return { changed, context };
 }
 

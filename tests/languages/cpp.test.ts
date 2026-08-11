@@ -95,9 +95,7 @@ const definition: LanguageTestDefinition = {
         },
       ],
     },
-    absentDependencyGraph: [
-      { from: "module-import.cpp", to: { type: "external", name: "foo" } },
-    ],
+    absentDependencyGraph: [{ from: "module-import.cpp", to: { type: "external", name: "foo" } }],
     goToDefinition: [
       {
         name: "go to definition resolves namespace-qualified Widget alias target",

@@ -333,7 +333,10 @@ export async function findReferences(
         if (hasReachedMaxReferences()) break;
         if (imp.kind === "namespace") {
           const hit = resolveExport(index, targetFile, exportedName);
-          const matchesDef = hit?.kind === "resolved" ? sameDef(hit.def, def) : fileIdentityKey(targetFile) === fileIdentityKey(definitionFile);
+          const matchesDef =
+            hit?.kind === "resolved"
+              ? sameDef(hit.def, def)
+              : fileIdentityKey(targetFile) === fileIdentityKey(definitionFile);
           if (!matchesDef) continue;
           const parsed = await ensureCandidateParsed();
           const ranges = await collectNamespaceMemberRefs(fileId, imp.localNS, exportedName, parsed);
@@ -374,7 +377,10 @@ export async function findReferences(
             exported = "default";
           }
           const hit = resolveExport(index, targetFile, exported);
-          const matchesDef = hit?.kind === "resolved" ? sameDef(hit.def, def) : fileIdentityKey(targetFile) === fileIdentityKey(definitionFile);
+          const matchesDef =
+            hit?.kind === "resolved"
+              ? sameDef(hit.def, def)
+              : fileIdentityKey(targetFile) === fileIdentityKey(definitionFile);
           if (!matchesDef) continue;
           const resolvedScope = await ensureScope();
           const localName = imp.local;

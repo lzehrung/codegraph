@@ -28,7 +28,9 @@ describe("Reference lookup cache", () => {
       await fsp.writeFile(mainFile, 'import { helper } from "./api";\nexport const value = helper();\n', "utf8");
 
       const firstIndex = await buildProjectIndex(root, { cache: "memory" });
-      const firstDef = firstIndex.byFile.get(fileIdentityKey(apiFileId))?.locals.find((local) => local.localName === "helper");
+      const firstDef = firstIndex.byFile
+        .get(fileIdentityKey(apiFileId))
+        ?.locals.find((local) => local.localName === "helper");
       expect(firstDef).toBeDefined();
       const cache = createReferenceLookupCache();
       const firstRefs = await cache.get(firstIndex, firstDef!);
@@ -39,7 +41,9 @@ describe("Reference lookup cache", () => {
 
       await fsp.writeFile(mainFile, "export const value = 1;\n", "utf8");
       const secondIndex = await buildProjectIndex(root, { cache: "memory" });
-      const secondDef = secondIndex.byFile.get(fileIdentityKey(apiFileId))?.locals.find((local) => local.localName === "helper");
+      const secondDef = secondIndex.byFile
+        .get(fileIdentityKey(apiFileId))
+        ?.locals.find((local) => local.localName === "helper");
       expect(secondDef).toBeDefined();
       const secondRefs = await cache.get(secondIndex, secondDef!);
 
@@ -910,7 +914,6 @@ describe("Impact Analyzer Edge Cases", () => {
         }
       });
     }
-
 
     it("applies ignore globs for sparse explicit-file indexes", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-analyzer-"));

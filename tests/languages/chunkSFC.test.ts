@@ -33,15 +33,8 @@ describe("chunkSFCFile", () => {
     expect(chunks.some((c) => c.type.startsWith("template"))).toBe(true);
   });
   it("keeps IDs for unchanged blocks when a preceding SFC block is inserted", () => {
-    const unchangedSource = [
-      '<script lang="ts">',
-      "export const stable = 1;",
-      "</script>",
-    ].join("\n");
-    const sourceWithInsertion = [
-      "<template><p>inserted</p></template>",
-      unchangedSource,
-    ].join("\n");
+    const unchangedSource = ['<script lang="ts">', "export const stable = 1;", "</script>"].join("\n");
+    const sourceWithInsertion = ["<template><p>inserted</p></template>", unchangedSource].join("\n");
     const options = {
       filePath: "Component.vue",
       framework: "vue" as const,

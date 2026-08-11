@@ -294,9 +294,7 @@ async function expectNativeSemantics(expectation: SemanticExpectation): Promise<
       expect(
         nativeIndex.graph.edges.some(
           (edge) =>
-            normalizeFile(edge.from) === expectedEdge.from &&
-            edge.raw === expectedEdge.raw &&
-            edge.to.type === "file",
+            normalizeFile(edge.from) === expectedEdge.from && edge.raw === expectedEdge.raw && edge.to.type === "file",
         ),
         `missing native SQL graph edge ${expectedEdge.raw} from ${relativeFile(expectation.root, expectedEdge.from)}`,
       ).toBe(true);

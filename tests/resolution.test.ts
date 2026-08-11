@@ -48,7 +48,9 @@ describe("Import Resolution", () => {
     expect(helperImport!.kind).toBe("named");
     expect(helperImport!.from).toBe("./utils.js");
     expect(typeof helperImport!.resolved).toBe("string");
-    expect((helperImport!.resolved as string).replace(/\\/g, "/")).toBe(path.join(root, "utils.ts").replace(/\\/g, "/"));
+    expect((helperImport!.resolved as string).replace(/\\/g, "/")).toBe(
+      path.join(root, "utils.ts").replace(/\\/g, "/"),
+    );
   });
 
   it("should resolve .jsx imports to .tsx source files", async () => {
@@ -98,7 +100,9 @@ describe("Import Resolution", () => {
     const mainModule = index.byFile.get(mainFile!);
     const helperImport = mainModule!.imports[0];
     expect(typeof helperImport!.resolved).toBe("string");
-    expect((helperImport!.resolved as string).replace(/\\/g, "/")).toBe(path.join(root, "utils.mts").replace(/\\/g, "/"));
+    expect((helperImport!.resolved as string).replace(/\\/g, "/")).toBe(
+      path.join(root, "utils.mts").replace(/\\/g, "/"),
+    );
   });
 
   it("should resolve .cjs imports to .cts source files", async () => {
@@ -121,7 +125,9 @@ describe("Import Resolution", () => {
     const mainModule = index.byFile.get(mainFile!);
     const helperImport = mainModule!.imports[0];
     expect(typeof helperImport!.resolved).toBe("string");
-    expect((helperImport!.resolved as string).replace(/\\/g, "/")).toBe(path.join(root, "utils.cts").replace(/\\/g, "/"));
+    expect((helperImport!.resolved as string).replace(/\\/g, "/")).toBe(
+      path.join(root, "utils.cts").replace(/\\/g, "/"),
+    );
   });
 
   it("should still resolve regular .js files when they exist", async () => {
@@ -1703,7 +1709,11 @@ describe("Import Resolution", () => {
     await fsp.writeFile(parentTarget, "export const value = 1;\n", "utf8");
     await fsp.writeFile(nestedSource, 'import { value } from "@parent/value";\nexport { value };\n', "utf8");
     await fsp.writeFile(extendedSource, "export const main = 1;\n", "utf8");
-    await fsp.writeFile(path.join(extendedRoot, "tsconfig.json"), JSON.stringify({ extends: "../tsconfig.json" }), "utf8");
+    await fsp.writeFile(
+      path.join(extendedRoot, "tsconfig.json"),
+      JSON.stringify({ extends: "../tsconfig.json" }),
+      "utf8",
+    );
 
     const nestedIndex = await buildProjectIndex(nestedRoot, { cache: "off" });
     const nestedModule = nestedIndex.byFile.get(fileIdentityKey(nestedSource));
@@ -1769,15 +1779,24 @@ describe("Import Resolution", () => {
       "utf8",
     );
 
-    const resolvedExport = await resolveSpecifier(sourceFile, "exported-package/features/feature", root, undefined, undefined, {
-      resolveNodeModules: true,
-    });
+    const resolvedExport = await resolveSpecifier(
+      sourceFile,
+      "exported-package/features/feature",
+      root,
+      undefined,
+      undefined,
+      {
+        resolveNodeModules: true,
+      },
+    );
     expect(typeof resolvedExport).toBe("string");
     if (typeof resolvedExport === "string") {
       expect(resolvedExport.replace(/\\/g, "/")).toBe(exportedFile.replace(/\\/g, "/"));
     }
     await expect(
-      resolveSpecifier(sourceFile, "exported-package/private", root, undefined, undefined, { resolveNodeModules: true }),
+      resolveSpecifier(sourceFile, "exported-package/private", root, undefined, undefined, {
+        resolveNodeModules: true,
+      }),
     ).resolves.toEqual({ external: "exported-package/private" });
   });
 
@@ -1790,7 +1809,11 @@ describe("Import Resolution", () => {
 
     await fsp.mkdir(path.dirname(sourceFile), { recursive: true });
     await fsp.mkdir(path.dirname(exportedFile), { recursive: true });
-    await fsp.writeFile(path.join(root, "package.json"), JSON.stringify({ private: true, workspaces: ["packages/*"] }), "utf8");
+    await fsp.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ private: true, workspaces: ["packages/*"] }),
+      "utf8",
+    );
     await fsp.writeFile(
       path.join(packageDir, "package.json"),
       JSON.stringify({
@@ -1823,5 +1846,4 @@ describe("Import Resolution", () => {
       resolveSpecifier(sourceFile, "@scope/library/private", root, undefined, workspaceConfig),
     ).resolves.toEqual({ external: "@scope/library/private" });
   });
-
 });

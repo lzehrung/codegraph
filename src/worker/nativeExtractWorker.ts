@@ -96,11 +96,7 @@ function resolveSourceMaxBytes(task: NativeExtractTask): number {
   return DEFAULT_NATIVE_SOURCE_MAX_BYTES;
 }
 
-function resourceLimitFallback(
-  task: NativeExtractTask,
-  source: string,
-  error: string,
-): NativeExtractResult {
+function resourceLimitFallback(task: NativeExtractTask, source: string, error: string): NativeExtractResult {
   return {
     filePath: task.filePath,
     languageId: task.languageId,
@@ -131,10 +127,9 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
       (loaded.error ? `: ${loaded.error instanceof Error ? loaded.error.message : String(loaded.error)}` : "");
   }
 
-  async function loadSource(task: NativeExtractTask): Promise<
-    | { ok: true; source: string }
-    | { ok: false; source: string; error: string }
-  > {
+  async function loadSource(
+    task: NativeExtractTask,
+  ): Promise<{ ok: true; source: string } | { ok: false; source: string; error: string }> {
     const maxSourceBytes = resolveSourceMaxBytes(task);
     if (task.source !== undefined) {
       const bytes = Buffer.byteLength(task.source, "utf8");

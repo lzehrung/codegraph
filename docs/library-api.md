@@ -478,10 +478,9 @@ interface Chunk {
   text: string;
   tokenCount: number;
 }
-
 ```
-Chunk IDs are content-addressed SHA-256 values scoped by language and file path. The hash includes the final chunk type, optional name, and text, so adding an unrelated earlier chunk does not renumber unchanged chunks. Identical chunks receive a deterministic suffix only to keep IDs unique.
 
+Chunk IDs are content-addressed SHA-256 values scoped by language and file path. The hash includes the final chunk type, optional name, and text, so adding an unrelated earlier chunk does not renumber unchanged chunks. Identical chunks receive a deterministic suffix only to keep IDs unique.
 
 ### Options
 

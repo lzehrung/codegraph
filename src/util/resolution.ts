@@ -3,7 +3,11 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { GRAPH_ONLY_RESOLUTION_EXTENSIONS } from "./graphOnlyExtensions.js";
 import { fileIdentityKey, isFilePathWithinRoot, normalizePath, normalizeResolutionHints } from "./paths.js";
-import { DEFAULT_RESOLUTION_EXTENSIONS, STYLESHEET_RESOLUTION_EXTENSIONS, getResolutionExtensions } from "./resolutionCandidates.js";
+import {
+  DEFAULT_RESOLUTION_EXTENSIONS,
+  STYLESHEET_RESOLUTION_EXTENSIONS,
+  getResolutionExtensions,
+} from "./resolutionCandidates.js";
 import {
   clearWorkspaceCaches,
   clearFileExistsCache,

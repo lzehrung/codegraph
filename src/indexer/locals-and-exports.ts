@@ -645,10 +645,7 @@ export function collectLocalsAndExportsFromSource(
               local = buildSymbolDef(exportedAs, SymbolKind.Function, toRange(value), member);
               locals.push(local);
             }
-            if (
-              local &&
-              !exports.some((entry) => entry.type === "local" && entry.exportedAs === exportedAs)
-            ) {
+            if (local && !exports.some((entry) => entry.type === "local" && entry.exportedAs === exportedAs)) {
               exports.push({ type: "local", exportedAs, target: local });
             }
           };
@@ -675,8 +672,7 @@ export function collectLocalsAndExportsFromSource(
               if (name) {
                 const local = locals.find(
                   (definition) =>
-                    definition.localName === name.text &&
-                    definition.range.start.index === name.startIndex,
+                    definition.localName === name.text && definition.range.start.index === name.startIndex,
                 );
                 if (local && !exports.some((entry) => entry.type === "local" && entry.exportedAs === name.text)) {
                   exports.push({ type: "local", exportedAs: name.text, target: local });

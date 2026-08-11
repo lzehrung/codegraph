@@ -33,8 +33,8 @@ Status key:
 | MDX              | Yes              | No                | No               | No              | No       | No              | Yes               | No                 | No           | No                  |
 | reStructuredText | Yes              | No                | No               | No              | No       | No              | Yes               | No                 | No           | No                  |
 | AsciiDoc         | Yes              | No                | No               | No              | No       | No              | Yes               | No                 | No           | No                  |
-| Vue              | Yes              | No                | No              | No               | Yes      | Yes             | Yes               | No                 | No           | Yes                 |
-| Svelte           | Yes              | No                | No              | No               | Yes      | Yes             | Yes               | No                 | No           | Yes                 |
+| Vue              | Yes              | No                | No               | No              | Yes      | Yes             | Yes               | No                 | No           | Yes                 |
+| Svelte           | Yes              | No                | No               | No              | Yes      | Yes             | Yes               | No                 | No           | Yes                 |
 | SQL              | Yes              | Yes               | Yes              | Yes             | Yes      | No              | Partial           | No                 | Yes          | Yes                 |
 
 The matrix states supported capability classes; it is not a measured accuracy table. A generated [fixture test matrix](./benchmarks/fixture-snapshot.md) shows real `tests/languages/*.test.ts` status and test counts per language, with no hand-authored goldens involved.

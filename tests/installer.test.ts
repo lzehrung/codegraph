@@ -1591,7 +1591,6 @@ describe("agent installer workflow", () => {
     }
   });
 
-
   it("preserves a pre-existing user-owned SKILL.md without --force and overwrites with --force", async () => {
     const homeDir = await mkTmpDir("cg-install-user-skill-collision-");
     const skillDir = path.join(homeDir, ".agents", "skills", "codegraph");

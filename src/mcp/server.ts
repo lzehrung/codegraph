@@ -293,9 +293,7 @@ export type CodegraphMcpHandlers = {
     file: string;
     depth?: number | undefined;
     limit?: number | undefined;
-  }) => Promise<
-    CodegraphMcpFreshResult<McpTruncationMeta & { dependencies: Array<{ file: string; depth: number }> }>
-  >;
+  }) => Promise<CodegraphMcpFreshResult<McpTruncationMeta & { dependencies: Array<{ file: string; depth: number }> }>>;
   rdeps: (request: {
     file: string;
     depth?: number | undefined;
@@ -1148,8 +1146,7 @@ export async function startCodegraphMcpHttpServer(
   const sessionStore = createLegacyMcpSessionStore({
     idleMs: options.httpSessionIdleMs ?? DEFAULT_MCP_HTTP_SESSION_IDLE_MS,
     maxCount: options.httpSessionMaxCount ?? DEFAULT_MCP_HTTP_SESSION_MAX_COUNT,
-    evictionIntervalMs:
-      options.httpSessionEvictionIntervalMs ?? DEFAULT_MCP_HTTP_SESSION_EVICTION_INTERVAL_MS,
+    evictionIntervalMs: options.httpSessionEvictionIntervalMs ?? DEFAULT_MCP_HTTP_SESSION_EVICTION_INTERVAL_MS,
   });
   const modernHandler = createMcpHandler(createProtocolServer, {
     legacy: "reject",
@@ -1481,9 +1478,15 @@ async function callMcpTool(handlers: CodegraphMcpHandlers, name: string, input: 
     case "type_hierarchy":
       return await handlers.type_hierarchy(parseMcpToolInput(typeHierarchyUnifiedSchema, input, "type_hierarchy"));
     case "supertypes":
-      return await handlers.type_hierarchy({ ...parseMcpToolInput(typeHierarchySchema, input, name), direction: "supertypes" });
+      return await handlers.type_hierarchy({
+        ...parseMcpToolInput(typeHierarchySchema, input, name),
+        direction: "supertypes",
+      });
     case "subtypes":
-      return await handlers.type_hierarchy({ ...parseMcpToolInput(typeHierarchySchema, input, name), direction: "subtypes" });
+      return await handlers.type_hierarchy({
+        ...parseMcpToolInput(typeHierarchySchema, input, name),
+        direction: "subtypes",
+      });
     case "implementations":
       return await handlers.implementations(parseMcpToolInput(implementationsSchema, input, "implementations"));
     case "explore":
@@ -1594,97 +1597,125 @@ function parseMcpToolInput<T>(schema: z.ZodType<T>, input: unknown, toolName: st
   throw new Error(formatMcpInvalidParams(toolName, parsed.error));
 }
 
-const searchSchema = z.object({
-  query: z.string(),
-  mode: z.enum(["hybrid", "symbol", "path", "text", "graph", "sql"]).optional(),
-  from: z.string().optional(),
-  depth: z.number().int().nonnegative().optional(),
-  limit: z.number().int().nonnegative().optional(),
-}).strict();
+const searchSchema = z
+  .object({
+    query: z.string(),
+    mode: z.enum(["hybrid", "symbol", "path", "text", "graph", "sql"]).optional(),
+    from: z.string().optional(),
+    depth: z.number().int().nonnegative().optional(),
+    limit: z.number().int().nonnegative().optional(),
+  })
+  .strict();
 
-const workspaceSymbolsSchema = z.object({
-  query: z.string(),
-  kinds: z.array(z.nativeEnum(SymbolKind)).optional(),
-  exportedOnly: z.boolean().optional(),
-  includeImports: z.boolean().optional(),
-  fileGlob: z.string().optional(),
-  limit: z.number().int().nonnegative().max(MAX_WORKSPACE_SYMBOL_LIMIT).optional(),
-}).strict();
+const workspaceSymbolsSchema = z
+  .object({
+    query: z.string(),
+    kinds: z.array(z.nativeEnum(SymbolKind)).optional(),
+    exportedOnly: z.boolean().optional(),
+    includeImports: z.boolean().optional(),
+    fileGlob: z.string().optional(),
+    limit: z.number().int().nonnegative().max(MAX_WORKSPACE_SYMBOL_LIMIT).optional(),
+  })
+  .strict();
 
-const renamePreviewSchema = z.object({
-  handle: z.string(),
-  newName: z.string(),
-  includeComments: z.boolean().optional(),
-  includeStrings: z.boolean().optional(),
-  includeFilenames: z.boolean().optional(),
-  maxEdits: z.number().int().min(1).max(MAX_RENAME_PREVIEW_EDITS).optional(),
-}).strict();
+const renamePreviewSchema = z
+  .object({
+    handle: z.string(),
+    newName: z.string(),
+    includeComments: z.boolean().optional(),
+    includeStrings: z.boolean().optional(),
+    includeFilenames: z.boolean().optional(),
+    maxEdits: z.number().int().min(1).max(MAX_RENAME_PREVIEW_EDITS).optional(),
+  })
+  .strict();
 
-const refactorPlanSchema = z.object({
-  handle: z.string(),
-  renameTo: z.string().optional(),
-  maxReferences: z.number().int().nonnegative().max(MAX_REFACTOR_PLAN_LIMIT).optional(),
-  maxCallers: z.number().int().nonnegative().max(MAX_REFACTOR_PLAN_LIMIT).optional(),
-  maxHierarchy: z.number().int().nonnegative().max(MAX_REFACTOR_PLAN_LIMIT).optional(),
-  includeSource: z.boolean().optional(),
-}).strict();
+const refactorPlanSchema = z
+  .object({
+    handle: z.string(),
+    renameTo: z.string().optional(),
+    maxReferences: z.number().int().nonnegative().max(MAX_REFACTOR_PLAN_LIMIT).optional(),
+    maxCallers: z.number().int().nonnegative().max(MAX_REFACTOR_PLAN_LIMIT).optional(),
+    maxHierarchy: z.number().int().nonnegative().max(MAX_REFACTOR_PLAN_LIMIT).optional(),
+    includeSource: z.boolean().optional(),
+  })
+  .strict();
 
-const callHierarchySchema = z.object({
-  handle: z.string(),
-  depth: z.number().int().min(1).max(5).optional(),
-  limit: z.number().int().nonnegative().max(500).optional(),
-  includeHeuristic: z.boolean().optional(),
-}).strict();
-const callsSchema = callHierarchySchema.extend({
-  direction: z.enum(["callers", "callees"]),
-}).strict();
+const callHierarchySchema = z
+  .object({
+    handle: z.string(),
+    depth: z.number().int().min(1).max(5).optional(),
+    limit: z.number().int().nonnegative().max(500).optional(),
+    includeHeuristic: z.boolean().optional(),
+  })
+  .strict();
+const callsSchema = callHierarchySchema
+  .extend({
+    direction: z.enum(["callers", "callees"]),
+  })
+  .strict();
 
-const typeHierarchySchema = z.object({
-  handle: z.string(),
-  depth: z.number().int().min(1).max(10).optional(),
-  limit: z.number().int().nonnegative().max(500).optional(),
-}).strict();
-const typeHierarchyUnifiedSchema = typeHierarchySchema.extend({
-  direction: z.enum(["supertypes", "subtypes"]),
-}).strict();
+const typeHierarchySchema = z
+  .object({
+    handle: z.string(),
+    depth: z.number().int().min(1).max(10).optional(),
+    limit: z.number().int().nonnegative().max(500).optional(),
+  })
+  .strict();
+const typeHierarchyUnifiedSchema = typeHierarchySchema
+  .extend({
+    direction: z.enum(["supertypes", "subtypes"]),
+  })
+  .strict();
 
-const implementationsSchema = z.object({
-  handle: z.string(),
-  limit: z.number().int().nonnegative().max(500).optional(),
-}).strict();
+const implementationsSchema = z
+  .object({
+    handle: z.string(),
+    limit: z.number().int().nonnegative().max(500).optional(),
+  })
+  .strict();
 
-const exploreSchema = z.object({
-  query: z.string(),
-  limit: z.number().int().nonnegative().max(50).optional(),
-  maxPackets: z.number().int().nonnegative().max(10).optional(),
-  maxPaths: z.number().int().nonnegative().max(10).optional(),
-  includeSource: z.boolean().optional(),
-}).strict();
+const exploreSchema = z
+  .object({
+    query: z.string(),
+    limit: z.number().int().nonnegative().max(50).optional(),
+    maxPackets: z.number().int().nonnegative().max(10).optional(),
+    maxPaths: z.number().int().nonnegative().max(10).optional(),
+    includeSource: z.boolean().optional(),
+  })
+  .strict();
 
-const orientSchema = z.object({
-  includeRoots: z.array(z.string()).optional(),
-  budget: z.enum(["small", "medium", "large"]).optional(),
-}).strict();
+const orientSchema = z
+  .object({
+    includeRoots: z.array(z.string()).optional(),
+    budget: z.enum(["small", "medium", "large"]).optional(),
+  })
+  .strict();
 
-const packetGetSchema = z.object({
-  target: z.string(),
-  maxSymbols: z.number().int().positive().max(200).optional(),
-  maxSnippets: z.number().int().positive().max(50).optional(),
-  maxDuplicates: z.number().int().positive().max(20).optional(),
-}).strict();
+const packetGetSchema = z
+  .object({
+    target: z.string(),
+    maxSymbols: z.number().int().positive().max(200).optional(),
+    maxSnippets: z.number().int().positive().max(50).optional(),
+    maxDuplicates: z.number().int().positive().max(20).optional(),
+  })
+  .strict();
 
-const getFileSchema = z.object({
-  file: z.string(),
-  offset: z.number().int().positive().optional(),
-  limit: z.number().int().positive().max(MAX_FILE_VIEW_LINES).optional(),
-  maxBytes: z.number().int().positive().max(MAX_FILE_VIEW_BYTES).optional(),
-  includeGraphContext: z.boolean().optional(),
-  allowSensitive: z.boolean().optional(),
-}).strict();
+const getFileSchema = z
+  .object({
+    file: z.string(),
+    offset: z.number().int().positive().optional(),
+    limit: z.number().int().positive().max(MAX_FILE_VIEW_LINES).optional(),
+    maxBytes: z.number().int().positive().max(MAX_FILE_VIEW_BYTES).optional(),
+    includeGraphContext: z.boolean().optional(),
+    allowSensitive: z.boolean().optional(),
+  })
+  .strict();
 
-const handleSchema = z.object({
-  handle: z.string(),
-}).strict();
+const handleSchema = z
+  .object({
+    handle: z.string(),
+  })
+  .strict();
 
 const navigationSchema = z
   .object({
@@ -1727,46 +1758,62 @@ const refsSchema = z
     },
   );
 
-const fileGraphSchema = z.object({
-  file: z.string(),
-  depth: z.number().int().nonnegative().optional(),
-  limit: z.number().int().nonnegative().optional(),
-}).strict();
-const fileDepsUnifiedSchema = fileGraphSchema.extend({
-  direction: z.enum(["deps", "rdeps"]),
-}).strict();
+const fileGraphSchema = z
+  .object({
+    file: z.string(),
+    depth: z.number().int().nonnegative().optional(),
+    limit: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+const fileDepsUnifiedSchema = fileGraphSchema
+  .extend({
+    direction: z.enum(["deps", "rdeps"]),
+  })
+  .strict();
 
-const pathSchema = z.object({
-  from: z.string(),
-  to: z.string(),
-}).strict();
+const pathSchema = z
+  .object({
+    from: z.string(),
+    to: z.string(),
+  })
+  .strict();
 
-const gitRangeSchema = z.object({
-  base: z.string(),
-  head: z.string(),
-}).strict();
+const gitRangeSchema = z
+  .object({
+    base: z.string(),
+    head: z.string(),
+  })
+  .strict();
 
-const reviewSchema = z.object({
-  base: z.string(),
-  head: z.string(),
-  reviewDepth: z.enum(["minimal", "standard", "deep"]).optional(),
-}).strict();
+const reviewSchema = z
+  .object({
+    base: z.string(),
+    head: z.string(),
+    reviewDepth: z.enum(["minimal", "standard", "deep"]).optional(),
+  })
+  .strict();
 
-const querySqliteSchema = z.object({
-  query: z.string(),
-  params: z.array(z.union([z.string(), z.number(), z.null()])).optional(),
-  limit: z.number().int().nonnegative().optional(),
-}).strict();
+const querySqliteSchema = z
+  .object({
+    query: z.string(),
+    params: z.array(z.union([z.string(), z.number(), z.null()])).optional(),
+    limit: z.number().int().nonnegative().optional(),
+  })
+  .strict();
 
-const refreshIndexSchema = z.object({
-  warmup: z.enum(["off", "base", "symbols"]).optional(),
-}).strict();
+const refreshIndexSchema = z
+  .object({
+    warmup: z.enum(["off", "base", "symbols"]).optional(),
+  })
+  .strict();
 
-const artifactBuildSchema = z.object({
-  outDir: z.string().optional(),
-  sqlite: z.boolean().optional(),
-  graphJson: z.boolean().optional(),
-  report: z.boolean().optional(),
-  questions: z.boolean().optional(),
-  force: z.boolean().optional(),
-}).strict();
+const artifactBuildSchema = z
+  .object({
+    outDir: z.string().optional(),
+    sqlite: z.boolean().optional(),
+    graphJson: z.boolean().optional(),
+    report: z.boolean().optional(),
+    questions: z.boolean().optional(),
+    force: z.boolean().optional(),
+  })
+  .strict();

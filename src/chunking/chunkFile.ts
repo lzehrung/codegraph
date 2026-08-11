@@ -78,9 +78,7 @@ export function chunkFile(opts: ChunkFileOptions): Chunk[] {
     );
   }
 
-  preliminaryChunks.sort(
-    (left, right) => left.sourceStart - right.sourceStart || right.sourceEnd - left.sourceEnd,
-  );
+  preliminaryChunks.sort((left, right) => left.sourceStart - right.sourceStart || right.sourceEnd - left.sourceEnd);
   const mergedChunks = mergeSmallChunks(preliminaryChunks, minTokens, maxTokens, tokenizer);
   const completeChunks = fillGapsWithMiscChunks(
     mergedChunks,
@@ -240,11 +238,7 @@ function selectStandaloneComments(comments: BlockCandidate[], selectedBlocks: Bl
   const selectedComments: BlockCandidate[] = [];
 
   for (const comment of deduplicateBlocks(comments)) {
-    if (
-      selectedBlocks.some(
-        (block) => block.startByte <= comment.startByte && comment.endByte <= block.endByte,
-      )
-    ) {
+    if (selectedBlocks.some((block) => block.startByte <= comment.startByte && comment.endByte <= block.endByte)) {
       continue;
     }
 

@@ -24,7 +24,10 @@ export function withStableChunkIds(chunks: Chunk[], languageId: string, filePath
       .digest("hex");
     const occurrence = occurrences.get(digest) ?? 0;
     occurrences.set(digest, occurrence + 1);
-    const id = occurrence === 0 ? `${languageId}:${scopedPath}:${digest}` : `${languageId}:${scopedPath}:${digest}:${occurrence}`;
+    const id =
+      occurrence === 0
+        ? `${languageId}:${scopedPath}:${digest}`
+        : `${languageId}:${scopedPath}:${digest}:${occurrence}`;
 
     return { ...chunk, id };
   });

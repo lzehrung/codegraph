@@ -39,14 +39,7 @@ nativeDescribe("combined native extraction", () => {
         "",
       );
       const separateTree = loaded.binding.parseSyntaxTree?.(testCase.source, testCase.languageId);
-      const combined = extractLanguage(
-        testCase.source,
-        testCase.languageId,
-        "",
-        "",
-        testCase.localsQuery,
-        "",
-      );
+      const combined = extractLanguage(testCase.source, testCase.languageId, "", "", testCase.localsQuery, "");
 
       expect(combined.results).toEqual(separateResults);
       expect(combined.syntaxTree).toEqual(separateTree);

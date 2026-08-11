@@ -28,100 +28,100 @@ const definition: LanguageTestDefinition = {
     sampleDir: "php",
     exact: {
       dependencyGraph: [
-      { from: "main.php", to: { type: "file", path: "utils.php" } },
-      { from: "main.php", to: { type: "file", path: "helpers.php" } },
-      { from: "dir-include-consumer.php", to: { type: "file", path: "helpers.php" } },
-      { from: "grouped-consumer.php", to: { type: "file", path: "helpers.php" } },
-      { from: "grouped-consumer.php", to: { type: "file", path: "partials/shared.php" } },
-      {
-        from: "grouped-consumer.php",
-        to: { type: "file", path: "src/Support/Toolbox.php" },
-      },
-      {
-        from: "grouped-consumer.php",
-        to: { type: "file", path: "src/Support/support_helper.php" },
-      },
-      {
-        from: "grouped-consumer.php",
-        to: { type: "file", path: "src/Support/DEFAULT_NAME.php" },
-      },
-      {
-        from: "composer-consumer.php",
-        to: { type: "file", path: "src/Domain/Service.php" },
-      },
-      {
-        from: "composer-qualified-consumer.php",
-        to: { type: "file", path: "src/Domain/Service.php" },
-      },
-      {
-        from: "composer-static-qualified-consumer.php",
-        to: { type: "file", path: "src/Domain/Service.php" },
-      },
-      {
-        from: "composer-static-constant-consumer.php",
-        to: { type: "file", path: "src/Domain/Service.php" },
-      },
-      {
-        from: "composer-static-property-consumer.php",
-        to: { type: "file", path: "src/Domain/Service.php" },
-      },
-      {
-        from: "composer-type-qualified-consumer.php",
-        to: { type: "file", path: "src/Domain/Service.php" },
-      },
-      {
-        from: "composer-psr0-consumer.php",
-        to: { type: "file", path: "legacy/Tools/Box.php" },
-      },
-      {
-        from: "composer-dev-psr4-consumer.php",
-        to: { type: "file", path: "dev-src/Tool.php" },
-      },
-      {
-        from: "composer-dev-psr0-consumer.php",
-        to: { type: "file", path: "dev-legacy/Tools/Box.php" },
-      },
-      {
-        from: "composer-classmap-consumer.php",
-        to: { type: "file", path: "classmap/Specific.php" },
-      },
-      {
-        from: "composer-dev-classmap-consumer.php",
-        to: { type: "file", path: "dev-classmap/DevSpecific.php" },
-      },
-      {
-        from: "composer-excluded-psr4-consumer.php",
-        to: { type: "file", path: "classmap/Excluded/PsrMapped.php" },
-      },
-      {
-        from: "composer-excluded-psr4-consumer.php",
-        to: { type: "file", path: "classmap/Excluded/psr_helper.php" },
-      },
-      {
-        from: "composer-excluded-classmap-consumer.php",
-        to: { type: "external", name: "ClassMap\\Excluded\\Hidden" },
-      },
-      {
-        from: "main.php",
-        to: { type: "external", name: "App\\Utils\\UtilityClass" },
-      },
-      {
-        from: "main.php",
-        to: { type: "external", name: "App\\Utils\\helper_function" },
-      },
-      {
-        from: "function-import-consumer.php",
-        to: { type: "file", path: "src/Collision/ThingFunction.php" },
-      },
-      {
-        from: "bracketed-consumer.php",
-        to: { type: "file", path: "multi-namespace/Library.php" },
-      },
-      {
-        from: "bracketed-qualified-consumer.php",
-        to: { type: "file", path: "multi-namespace/Library.php" },
-      },
-    ],
+        { from: "main.php", to: { type: "file", path: "utils.php" } },
+        { from: "main.php", to: { type: "file", path: "helpers.php" } },
+        { from: "dir-include-consumer.php", to: { type: "file", path: "helpers.php" } },
+        { from: "grouped-consumer.php", to: { type: "file", path: "helpers.php" } },
+        { from: "grouped-consumer.php", to: { type: "file", path: "partials/shared.php" } },
+        {
+          from: "grouped-consumer.php",
+          to: { type: "file", path: "src/Support/Toolbox.php" },
+        },
+        {
+          from: "grouped-consumer.php",
+          to: { type: "file", path: "src/Support/support_helper.php" },
+        },
+        {
+          from: "grouped-consumer.php",
+          to: { type: "file", path: "src/Support/DEFAULT_NAME.php" },
+        },
+        {
+          from: "composer-consumer.php",
+          to: { type: "file", path: "src/Domain/Service.php" },
+        },
+        {
+          from: "composer-qualified-consumer.php",
+          to: { type: "file", path: "src/Domain/Service.php" },
+        },
+        {
+          from: "composer-static-qualified-consumer.php",
+          to: { type: "file", path: "src/Domain/Service.php" },
+        },
+        {
+          from: "composer-static-constant-consumer.php",
+          to: { type: "file", path: "src/Domain/Service.php" },
+        },
+        {
+          from: "composer-static-property-consumer.php",
+          to: { type: "file", path: "src/Domain/Service.php" },
+        },
+        {
+          from: "composer-type-qualified-consumer.php",
+          to: { type: "file", path: "src/Domain/Service.php" },
+        },
+        {
+          from: "composer-psr0-consumer.php",
+          to: { type: "file", path: "legacy/Tools/Box.php" },
+        },
+        {
+          from: "composer-dev-psr4-consumer.php",
+          to: { type: "file", path: "dev-src/Tool.php" },
+        },
+        {
+          from: "composer-dev-psr0-consumer.php",
+          to: { type: "file", path: "dev-legacy/Tools/Box.php" },
+        },
+        {
+          from: "composer-classmap-consumer.php",
+          to: { type: "file", path: "classmap/Specific.php" },
+        },
+        {
+          from: "composer-dev-classmap-consumer.php",
+          to: { type: "file", path: "dev-classmap/DevSpecific.php" },
+        },
+        {
+          from: "composer-excluded-psr4-consumer.php",
+          to: { type: "file", path: "classmap/Excluded/PsrMapped.php" },
+        },
+        {
+          from: "composer-excluded-psr4-consumer.php",
+          to: { type: "file", path: "classmap/Excluded/psr_helper.php" },
+        },
+        {
+          from: "composer-excluded-classmap-consumer.php",
+          to: { type: "external", name: "ClassMap\\Excluded\\Hidden" },
+        },
+        {
+          from: "main.php",
+          to: { type: "external", name: "App\\Utils\\UtilityClass" },
+        },
+        {
+          from: "main.php",
+          to: { type: "external", name: "App\\Utils\\helper_function" },
+        },
+        {
+          from: "function-import-consumer.php",
+          to: { type: "file", path: "src/Collision/ThingFunction.php" },
+        },
+        {
+          from: "bracketed-consumer.php",
+          to: { type: "file", path: "multi-namespace/Library.php" },
+        },
+        {
+          from: "bracketed-qualified-consumer.php",
+          to: { type: "file", path: "multi-namespace/Library.php" },
+        },
+      ],
       references: [
         {
           name: "find references for PHP helper class",
@@ -260,7 +260,10 @@ const definition: LanguageTestDefinition = {
         },
         {
           file: "src/Support/Toolbox.php",
-          symbols: [{ name: "Toolbox", kind: "class" }, { name: "make", kind: "function" }],
+          symbols: [
+            { name: "Toolbox", kind: "class" },
+            { name: "make", kind: "function" },
+          ],
         },
         { file: "src/Support/support_helper.php", symbols: [{ name: "support_helper", kind: "function" }] },
         { file: "src/Support/DEFAULT_NAME.php", symbols: [{ name: "DEFAULT_NAME", kind: "variable" }] },
@@ -281,7 +284,10 @@ const definition: LanguageTestDefinition = {
         },
         {
           file: "multi-namespace/Library.php",
-          symbols: [{ name: "FirstService", kind: "class" }, { name: "SecondService", kind: "class" }],
+          symbols: [
+            { name: "FirstService", kind: "class" },
+            { name: "SecondService", kind: "class" },
+          ],
         },
         {
           file: "EnumImplementation.php",

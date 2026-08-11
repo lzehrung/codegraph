@@ -197,12 +197,9 @@ describe("AngularJS framework characterization", () => {
   it("does not treat unrelated dotted methods as AngularJS registrations", async () => {
     const root = await mkTmpDir("cg-angularjs-registration-guard-");
     const unrelatedSource = ["angular.module('admin');", "foo.controller('Fake');", ""].join("\n");
-    const consumerSource = [
-      "angular.module('admin').directive('widget', {",
-      "  controller: 'Fake',",
-      "});",
-      "",
-    ].join("\n");
+    const consumerSource = ["angular.module('admin').directive('widget', {", "  controller: 'Fake',", "});", ""].join(
+      "\n",
+    );
     await fsp.writeFile(path.join(root, "unrelated.js"), unrelatedSource, "utf8");
     await fsp.writeFile(path.join(root, "consumer.js"), consumerSource, "utf8");
 

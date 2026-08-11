@@ -138,7 +138,7 @@ it("preserves Vue block content and original coordinates while extracting embedd
 
   const script = parseSFC(source).find((block) => block.type === "script");
   expect(script).toMatchObject({ startLine: 5, endLine: 9 });
-  expect(script?.content).toContain('<!-- </script> -->');
+  expect(script?.content).toContain("<!-- </script> -->");
   expect(script?.content).toContain('const embeddedClose = "</script>";');
   expect(script?.content).toContain('import { scriptValue } from "./sfc-block-script.ts";');
 

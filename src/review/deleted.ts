@@ -113,7 +113,6 @@ async function resolveDeletedAliasImportTarget(
     }
   }
 
-
   return listWorkspacePackageResolutionCandidates(spec, workspaceConfig, resolutionExtensions)
     .map((candidate) => normalizePath(candidate))
     .find((candidate) => candidate === deletedTarget);

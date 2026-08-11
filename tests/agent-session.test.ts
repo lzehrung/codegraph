@@ -548,9 +548,11 @@ describe("agent session", () => {
       "schema.sql",
       "util.ts",
     ]);
-    expect(snapshot.index.byFile.get(fileIdentityKey(customPath.replace(/\\/g, "/")))?.locals.map((local) => local.localName)).toContain(
-      "customFeature",
-    );
+    expect(
+      snapshot.index.byFile
+        .get(fileIdentityKey(customPath.replace(/\\/g, "/")))
+        ?.locals.map((local) => local.localName),
+    ).toContain("customFeature");
     expect(buildSpy.mock.calls[0]?.[1]?.languageExtensions).toEqual({ ".custom": "ts" });
   });
 

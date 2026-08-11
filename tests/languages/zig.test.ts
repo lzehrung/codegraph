@@ -7,9 +7,7 @@ const definition: LanguageTestDefinition = {
     {
       name: "chunks Zig source without parser crashes",
       sourceFile: "zig.sample.zig",
-      exactChunks: [
-        { type: "misc", startLine: 1, endLine: 9 },
-      ],
+      exactChunks: [{ type: "misc", startLine: 1, endLine: 9 }],
     },
   ],
   parity: {
@@ -36,9 +34,7 @@ const definition: LanguageTestDefinition = {
       symbols: [
         {
           file: "helpers.zig",
-          symbols: [
-            { name: "helper", kind: "function" },
-          ],
+          symbols: [{ name: "helper", kind: "function" }],
         },
         {
           file: "main.zig",
@@ -55,9 +51,7 @@ const definition: LanguageTestDefinition = {
         },
         {
           file: "math.zig",
-          symbols: [
-            { name: "Number", kind: "type" },
-          ],
+          symbols: [{ name: "Number", kind: "type" }],
         },
       ],
       references: [

@@ -205,12 +205,11 @@ async function analyzeChangedSymbolReferences(
     );
     const rankedSeverity = replacesExistingEvidence ? severityResult.severity : existing!.severity;
     const rankedConfidence = replacesExistingEvidence ? severityResult.confidence : (existing!.confidence ?? 0);
-    const rankedExplain = replacesExistingEvidence ? severityResult.explain : existing!.explain ?? severityResult.explain;
+    const rankedExplain = replacesExistingEvidence
+      ? severityResult.explain
+      : (existing!.explain ?? severityResult.explain);
     let resolutionConfidence: "medium" | "low" | undefined;
-    if (
-      existing?.explain?.resolutionConfidence === "low" ||
-      severityResult.explain.resolutionConfidence === "low"
-    ) {
+    if (existing?.explain?.resolutionConfidence === "low" || severityResult.explain.resolutionConfidence === "low") {
       resolutionConfidence = "low";
     } else if (
       existing?.explain?.resolutionConfidence === "medium" ||

@@ -171,9 +171,7 @@ export function boundReviewReportForTransport(
   report: ReviewReport,
   limits: ReviewTransportLimits = DEFAULT_REVIEW_TRANSPORT_LIMITS,
 ): ReviewReportForTransport {
-  const projectFilesOmitted = report.projectFiles
-    ? Math.max(0, report.projectFiles.length - limits.projectFiles)
-    : 0;
+  const projectFilesOmitted = report.projectFiles ? Math.max(0, report.projectFiles.length - limits.projectFiles) : 0;
   const changedFilesOmitted = Math.max(0, report.changedFiles.length - limits.changedFiles);
   const graphDeltaOmitted = Math.max(0, report.graphDelta.length - limits.graphDelta);
   const candidateTestsOmitted = Math.max(0, report.candidateTests.length - limits.candidateTests);

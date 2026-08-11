@@ -62,9 +62,9 @@ describe("CommonJS spread exports", () => {
       exportedAs: "<unresolved cjs spread: dynamic>",
       fromModule: "<unresolved cjs spread: dynamic>",
     });
-    expect(
-      barrel.exports.map((entry) => (entry.type === "local" ? entry.exportedAs : entry.type)),
-    ).toContain("localFunction");
+    expect(barrel.exports.map((entry) => (entry.type === "local" ? entry.exportedAs : entry.type))).toContain(
+      "localFunction",
+    );
     const baseResult = await goToDefinition(index, { file: consumerFile, line: 3, column: 2 });
     expect(baseResult.status).toBe("ok");
     if (baseResult.status === "ok") {

@@ -245,9 +245,7 @@ function decodeSnapshotPayload(compressed: Buffer): unknown {
   return JSON.parse(brotliDecompressSync(compressed).toString("utf8")) as unknown;
 }
 
-async function readParsedSnapshot(
-  snapshotPath: string,
-): Promise<{ identity: SnapshotFileIdentity; payload: unknown }> {
+async function readParsedSnapshot(snapshotPath: string): Promise<{ identity: SnapshotFileIdentity; payload: unknown }> {
   const before = await snapshotFileIdentity(snapshotPath);
   const cached = parsedSnapshotCache.get(snapshotPath);
   if (cached && sameSnapshotFileIdentity(cached.identity, before)) {
@@ -391,7 +389,10 @@ export async function writeProjectIndexSnapshot(
   if ((opts?.cache ?? "off") !== "disk") return;
   index.projectSnapshotIdentity = createProjectSnapshotIdentity(filesSignature, opts);
   const serializedBloomFilters = index.bloomFilters
-    ? serializeBloomFilterCache(index.bloomFilters, Array.from(index.byFile.values(), (module) => module.file))
+    ? serializeBloomFilterCache(
+        index.bloomFilters,
+        Array.from(index.byFile.values(), (module) => module.file),
+      )
     : undefined;
   const snapshotAnalysisReport = analysisReportFromBuildReport(index.buildReport);
   const snapshotAnalysis = index.buildReport ? summarizeAnalysis({ index, report: index.buildReport }) : index.analysis;
@@ -682,7 +683,10 @@ async function isDetailedSymbolGraphCompatibleWithProject(
     if (!graph.nodes.has(edge.from) || !graph.nodes.has(edge.to)) return false;
     if (edge.site) {
       const normalizedSiteFile = normalizePath(edge.site.file);
-      if (!indexedFiles.has(fileIdentityKey(normalizedSiteFile)) || !isFilePathWithinRoot(normalizedRoot, normalizedSiteFile)) {
+      if (
+        !indexedFiles.has(fileIdentityKey(normalizedSiteFile)) ||
+        !isFilePathWithinRoot(normalizedRoot, normalizedSiteFile)
+      ) {
         return false;
       }
     }

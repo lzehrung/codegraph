@@ -130,9 +130,7 @@ describe("C# global using directives", () => {
       moduleEntry.imports.find(
         (binding) => binding.kind === "named" && binding.local === "TextBuilder" && binding.from === "Shared",
       ),
-      moduleEntry.imports.find(
-        (binding) => binding.kind === "star" && binding.from === "Shared.TextUtilities",
-      ),
+      moduleEntry.imports.find((binding) => binding.kind === "star" && binding.from === "Shared.TextUtilities"),
     ];
     for (const binding of sharedBindings) {
       expect(typeof binding?.resolved).toBe("string");

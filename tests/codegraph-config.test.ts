@@ -24,7 +24,6 @@ async function writeConfig(root: string, config: unknown): Promise<void> {
   await fs.writeFile(path.join(root, "codegraph.config.json"), JSON.stringify(config), "utf8");
 }
 
-
 async function buildWithProjectConfig(root: string) {
   const config = await loadCodegraphConfig(root);
   return await buildProjectIndex(root, {

@@ -199,12 +199,7 @@ function findAngularJsClosingToken(tokens: AngularJsToken[], start: number): num
 function parseAngularJsModuleStart(tokens: AngularJsToken[], start: number): number | undefined {
   const angularToken = tokens[start];
   const previous = tokens[start - 1]?.value;
-  if (
-    angularToken?.kind !== "identifier" ||
-    angularToken.value !== "angular" ||
-    previous === "." ||
-    previous === "]"
-  ) {
+  if (angularToken?.kind !== "identifier" || angularToken.value !== "angular" || previous === "." || previous === "]") {
     return undefined;
   }
 
@@ -232,16 +227,12 @@ function parseAngularJsMember(tokens: AngularJsToken[], start: number): AngularJ
     return { name: tokens[start + 1]?.value ?? "", nextIndex: start + 2 };
   }
   const optionalMember =
-    tokens[start]?.value === "?" &&
-    tokens[start + 1]?.value === "." &&
-    tokens[start + 2]?.kind === "identifier";
+    tokens[start]?.value === "?" && tokens[start + 1]?.value === "." && tokens[start + 2]?.kind === "identifier";
   if (optionalMember) {
     return { name: tokens[start + 2]?.value ?? "", nextIndex: start + 3 };
   }
   const bracketMember =
-    tokens[start]?.value === "[" &&
-    tokens[start + 1]?.kind === "string" &&
-    tokens[start + 2]?.value === "]";
+    tokens[start]?.value === "[" && tokens[start + 1]?.kind === "string" && tokens[start + 2]?.value === "]";
   if (bracketMember) {
     return { name: tokens[start + 1]?.value ?? "", nextIndex: start + 3 };
   }
@@ -276,11 +267,7 @@ function isAngularJsAssignmentBoundary(tokens: AngularJsToken[], index: number):
   return ";,)]}".includes(next.value);
 }
 
-function findAngularJsAssignedVariable(
-  tokens: AngularJsToken[],
-  start: number,
-  end: number,
-): string | undefined {
+function findAngularJsAssignedVariable(tokens: AngularJsToken[], start: number, end: number): string | undefined {
   if (!isAngularJsAssignmentBoundary(tokens, end) || tokens[start - 1]?.value !== "=") return undefined;
   const candidate = tokens[start - 2];
   if (candidate?.kind !== "identifier") return undefined;
@@ -400,9 +387,7 @@ export function extractAngularJsRegistrations(source: string): AngularJsRegistra
 
   const out: AngularJsRegistration[] = [];
   const seen = new Set<string>();
-  const matches = collectAngularJsRegistrationMatches(source).sort(
-    (left, right) => left.tokenIndex - right.tokenIndex,
-  );
+  const matches = collectAngularJsRegistrationMatches(source).sort((left, right) => left.tokenIndex - right.tokenIndex);
   for (const match of matches) {
     const { kind, name } = match.registration;
     const key = `${kind}:${name}`;

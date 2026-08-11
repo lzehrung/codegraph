@@ -41,7 +41,17 @@ export function chunkTextFile(opts: TextChunkOptions): Chunk[] {
 
   const flush = () => {
     if (currentStart === -1) return;
-    pushBoundedRange(chunks, source, currentStart, currentEnd, currentStartLine, languageId, filePath, tokenizer, maxTokens);
+    pushBoundedRange(
+      chunks,
+      source,
+      currentStart,
+      currentEnd,
+      currentStartLine,
+      languageId,
+      filePath,
+      tokenizer,
+      maxTokens,
+    );
     currentStart = -1;
     currentEnd = -1;
     currentTokens = 0;
@@ -51,7 +61,17 @@ export function chunkTextFile(opts: TextChunkOptions): Chunk[] {
     const lineTokens = tokenizer(source.slice(line.start, line.end));
     if (lineTokens > maxTokens) {
       flush();
-      pushBoundedRange(chunks, source, line.start, line.end, line.startLine, languageId, filePath, tokenizer, maxTokens);
+      pushBoundedRange(
+        chunks,
+        source,
+        line.start,
+        line.end,
+        line.startLine,
+        languageId,
+        filePath,
+        tokenizer,
+        maxTokens,
+      );
       continue;
     }
 

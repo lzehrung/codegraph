@@ -81,7 +81,11 @@ export function clearDuplicateUnitMemoryCacheForRoot(projectRoot: string): void 
       normalizedFile.startsWith(`${rootPrefix}/`)
     ) {
       const entry = duplicateUnitMemoryCache.get(key);
-      if (entry) duplicateUnitMemoryCacheBytes = Math.max(0, duplicateUnitMemoryCacheBytes - estimateDuplicateUnitCacheEntryBytes(entry));
+      if (entry)
+        duplicateUnitMemoryCacheBytes = Math.max(
+          0,
+          duplicateUnitMemoryCacheBytes - estimateDuplicateUnitCacheEntryBytes(entry),
+        );
       duplicateUnitMemoryCache.delete(key);
     }
   }
@@ -94,7 +98,10 @@ function readDuplicateUnitMemoryCache(key: string): DuplicateUnitCacheEntry | un
 function writeDuplicateUnitMemoryCache(key: string, entry: DuplicateUnitCacheEntry): void {
   const existing = duplicateUnitMemoryCache.get(key);
   if (existing) {
-    duplicateUnitMemoryCacheBytes = Math.max(0, duplicateUnitMemoryCacheBytes - estimateDuplicateUnitCacheEntryBytes(existing));
+    duplicateUnitMemoryCacheBytes = Math.max(
+      0,
+      duplicateUnitMemoryCacheBytes - estimateDuplicateUnitCacheEntryBytes(existing),
+    );
     duplicateUnitMemoryCache.delete(key);
   }
   const entryBytes = estimateDuplicateUnitCacheEntryBytes(entry);
@@ -108,13 +115,15 @@ function writeDuplicateUnitMemoryCache(key: string, entry: DuplicateUnitCacheEnt
     const oldest = duplicateUnitMemoryCache.get(oldestKey);
     duplicateUnitMemoryCache.delete(oldestKey);
     if (oldest) {
-      duplicateUnitMemoryCacheBytes = Math.max(0, duplicateUnitMemoryCacheBytes - estimateDuplicateUnitCacheEntryBytes(oldest));
+      duplicateUnitMemoryCacheBytes = Math.max(
+        0,
+        duplicateUnitMemoryCacheBytes - estimateDuplicateUnitCacheEntryBytes(oldest),
+      );
     }
   }
   duplicateUnitMemoryCache.set(key, entry);
   duplicateUnitMemoryCacheBytes += entryBytes;
 }
-
 
 export function duplicateUnitCacheVariant(
   index: ProjectIndex,

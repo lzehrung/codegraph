@@ -113,7 +113,9 @@ function configureReferenceLookups(fixtures: readonly ReferenceFixture[]): void 
 }
 
 async function analyzeSymbols(names: readonly string[], exportedSymbols = new Set(names)) {
-  const analysis = analyzeImpact(createIndex(), createChangedSymbols(names, exportedSymbols), [], { membersOnly: true });
+  const analysis = analyzeImpact(createIndex(), createChangedSymbols(names, exportedSymbols), [], {
+    membersOnly: true,
+  });
   await Promise.resolve();
   await Promise.resolve();
   await Promise.resolve();

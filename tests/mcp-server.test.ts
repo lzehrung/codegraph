@@ -556,7 +556,6 @@ describe("codegraph MCP handlers", () => {
     }
   });
 
-
   it("evicts idle HTTP sessions and bounds the concurrent session count", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-session-evict-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
@@ -1157,7 +1156,10 @@ describe("codegraph MCP handlers", () => {
 
   it("reports exact truncation metadata for capped deps, rdeps, and file_deps results", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-deps-truncation-"));
-    await fs.writeFile(path.join(root, "a.ts"), 'import { b } from "./b";\nimport { c } from "./c";\nexport const a = b + c;\n');
+    await fs.writeFile(
+      path.join(root, "a.ts"),
+      'import { b } from "./b";\nimport { c } from "./c";\nexport const a = b + c;\n',
+    );
     await fs.writeFile(path.join(root, "b.ts"), "export const b = 1;\n");
     await fs.writeFile(path.join(root, "c.ts"), "export const c = 2;\n");
     await fs.writeFile(path.join(root, "d.ts"), 'import { b } from "./b";\nexport const d = b;\n');
@@ -1265,7 +1267,6 @@ describe("codegraph MCP handlers", () => {
     expect(report.graphDelta.length).toBeLessThanOrEqual(report.limits.graphDelta);
     expect(report.candidateTests.length).toBeLessThanOrEqual(report.limits.candidateTests);
   });
-
 
   it("rejects unknown MCP tool arguments instead of silently stripping them", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-unknown-args-"));

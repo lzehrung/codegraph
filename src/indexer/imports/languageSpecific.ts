@@ -152,7 +152,6 @@ async function appendKotlinTextImports(context: LanguageSpecificImportContext): 
   }
 }
 
-
 async function appendPhpComposerImplicitImports(context: LanguageSpecificImportContext): Promise<void> {
   if (context.languageId !== "php") {
     return;

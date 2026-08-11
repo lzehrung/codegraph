@@ -424,21 +424,29 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ["index", graphCommandSchema({ kind: "any" })],
   [
     "init",
-    commandSchema([...SHARED_BUILD_FLAGS, "--json", "--pretty", "--force", "--no-update-gitignore"], LIFECYCLE_BUILD_OPTIONS, {
-      kind: "max",
-      max: 1,
-      usage:
-        "Usage: codegraph init [path] [--force] [--no-update-gitignore] [--json | --pretty] OR codegraph init --root <path> [--force] [--no-update-gitignore] [--json | --pretty]",
-    }),
+    commandSchema(
+      [...SHARED_BUILD_FLAGS, "--json", "--pretty", "--force", "--no-update-gitignore"],
+      LIFECYCLE_BUILD_OPTIONS,
+      {
+        kind: "max",
+        max: 1,
+        usage:
+          "Usage: codegraph init [path] [--force] [--no-update-gitignore] [--json | --pretty] OR codegraph init --root <path> [--force] [--no-update-gitignore] [--json | --pretty]",
+      },
+    ),
   ],
   [
     "install",
-    commandSchema(["--all", "--detect", "--dry-run", "--force", "--json", "--pretty", "--yes"], ["--print-config", "--target"], {
-      kind: "max",
-      max: 1,
-      usage:
-        "Usage: codegraph install [target] [--target <ids> | --all] [--detect] [--yes | --dry-run] [--force] [--json] [--print-config <target>]",
-    }),
+    commandSchema(
+      ["--all", "--detect", "--dry-run", "--force", "--json", "--pretty", "--yes"],
+      ["--print-config", "--target"],
+      {
+        kind: "max",
+        max: 1,
+        usage:
+          "Usage: codegraph install [target] [--target <ids> | --all] [--detect] [--yes | --dry-run] [--force] [--json] [--print-config <target>]",
+      },
+    ),
   ],
   [
     "uninstall",
@@ -648,12 +656,16 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ],
   [
     "sync",
-    commandSchema([...SHARED_BUILD_FLAGS, "--json", "--pretty", "--init", "--no-update-gitignore"], LIFECYCLE_BUILD_OPTIONS, {
-      kind: "max",
-      max: 1,
-      usage:
-        "Usage: codegraph sync [path] [--init] [--no-update-gitignore] [--json | --pretty] OR codegraph sync --root <path> [--init] [--no-update-gitignore] [--json | --pretty]",
-    }),
+    commandSchema(
+      [...SHARED_BUILD_FLAGS, "--json", "--pretty", "--init", "--no-update-gitignore"],
+      LIFECYCLE_BUILD_OPTIONS,
+      {
+        kind: "max",
+        max: 1,
+        usage:
+          "Usage: codegraph sync [path] [--init] [--no-update-gitignore] [--json | --pretty] OR codegraph sync --root <path> [--init] [--no-update-gitignore] [--json | --pretty]",
+      },
+    ),
   ],
   [
     "sql",
@@ -668,7 +680,8 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     commandSchema(["--force", "--json", "--pretty"], ["--root"], {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph uninit [path] [--force] [--json | --pretty] OR codegraph uninit --root <path> [--force] [--json | --pretty]",
+      usage:
+        "Usage: codegraph uninit [path] [--force] [--json | --pretty] OR codegraph uninit --root <path> [--force] [--json | --pretty]",
     }),
   ],
   [

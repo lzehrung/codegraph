@@ -35,9 +35,7 @@ export type LanguageSample =
       expectedChunks: (chunks: Chunk[]) => void;
     });
 
-export type GraphEdgeExpectation =
-  | { type: "file"; path: string }
-  | { type: "external"; name: string };
+export type GraphEdgeExpectation = { type: "file"; path: string } | { type: "external"; name: string };
 
 export interface DependencyGraphExpectation {
   from: string; // Path relative to tests/samples/<language>/

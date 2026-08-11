@@ -109,7 +109,6 @@ export function runLanguageTests(def: LanguageTestDefinition) {
         return `${edge.from}|file|${edge.to.path}|${kind}`;
       };
 
-
       const expectationIdentity = (expectation: DependencyGraphExpectation): string => {
         const from = resolveSamplePath(expectation.from);
         const kind = expectation.typeOnly ? "type-only" : "runtime";
@@ -171,9 +170,7 @@ export function runLanguageTests(def: LanguageTestDefinition) {
 
       const assertExactDependencyGraph = (expectations: DependencyGraphExpectation[]) => {
         it("builds the exact dependency graph", () => {
-          expect(sortedKeys(graph.edges.map(edgeIdentity))).toEqual(
-            sortedKeys(expectations.map(expectationIdentity)),
-          );
+          expect(sortedKeys(graph.edges.map(edgeIdentity))).toEqual(sortedKeys(expectations.map(expectationIdentity)));
         });
       };
 
@@ -320,4 +317,3 @@ export function runLanguageTests(def: LanguageTestDefinition) {
     }
   });
 }
-

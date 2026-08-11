@@ -32,7 +32,10 @@ export function parseQualifiedSymbolPath(value: string): QualifiedSymbolPath | n
 /** Return every local definition named `name` in an already-resolved indexed file. */
 export function findLocalSymbolDefinitions(index: ProjectIndex, file: string, name: string): SymbolDef[] {
   const normalizedFile = normalizePath(file);
-  return index.byFile.get(fileIdentityKey(normalizedFile))?.locals.filter((definition) => definition.localName === name) ?? [];
+  return (
+    index.byFile.get(fileIdentityKey(normalizedFile))?.locals.filter((definition) => definition.localName === name) ??
+    []
+  );
 }
 
 /** A canonical symbol identity paired with its indexed definition. */
@@ -228,9 +231,7 @@ export async function findReferencesById(index: ProjectIndex, id: SymbolHandle) 
 
 export function listSymbols(index: ProjectIndex, opts?: { file?: string; includeImports?: boolean }): SymbolListItem[] {
   const out: SymbolListItem[] = [];
-  const files = opts?.file
-    ? [opts.file]
-    : Array.from(index.byFile.values(), (module) => module.file);
+  const files = opts?.file ? [opts.file] : Array.from(index.byFile.values(), (module) => module.file);
 
   for (const file of files) {
     const mod = index.byFile.get(fileIdentityKey(file));

@@ -127,13 +127,7 @@ export async function runGit(
       if (totalBytes > maxBuffer) {
         killGitChild(child);
         settle(() =>
-          reject(
-            createGitError(
-              projectRoot,
-              args,
-              new Error(`stdout exceeded maxBuffer (${maxBuffer} bytes)`),
-            ),
-          ),
+          reject(createGitError(projectRoot, args, new Error(`stdout exceeded maxBuffer (${maxBuffer} bytes)`))),
         );
         return;
       }

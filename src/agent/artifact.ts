@@ -716,7 +716,9 @@ function collectSqlObjects(
     .filter((node) => node.kind === "table" || node.kind === "view" || node.kind === "index" || node.kind === "routine")
     .map((node) => {
       const file = normalizeAgentFilePath(snapshot.root, node.file);
-      const def = snapshot.index.byFile.get(fileIdentityKey(node.file))?.locals.find((local) => defNodeId(local) === node.id);
+      const def = snapshot.index.byFile
+        .get(fileIdentityKey(node.file))
+        ?.locals.find((local) => defNodeId(local) === node.id);
       return {
         name: node.name,
         kind: node.kind,

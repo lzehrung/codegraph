@@ -290,11 +290,7 @@ function statementColumnForOffset(statement: SqlStatementNavigationSlice, offset
   return offset - lastLineStart;
 }
 
-function sqlNameResolvesToDefinition(
-  lookup: SqlDefinitionLookup,
-  name: string,
-  definition: SymbolDef,
-): boolean {
+function sqlNameResolvesToDefinition(lookup: SqlDefinitionLookup, name: string, definition: SymbolDef): boolean {
   const matches = sqlDefinitionMatches(lookup, name);
   if (matches.exact.length) return matches.exact.includes(definition);
   return matches.basename.length === 1 && matches.basename[0] === definition;

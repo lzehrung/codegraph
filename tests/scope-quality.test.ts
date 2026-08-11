@@ -228,9 +228,10 @@ def foo(x):
   });
 
   it("binds function-expression parameters through the function scope contract", () => {
-    const source = ['const value = "module";', "const mapValue = function (value: string) { return value.length; };"].join(
-      "\n",
-    );
+    const source = [
+      'const value = "module";',
+      "const mapValue = function (value: string) { return value.length; };",
+    ].join("\n");
     const parameterIndex = source.indexOf("value", source.indexOf("mapValue"));
     const usageIndex = source.lastIndexOf("value");
     const scopeIndex = buildScopeIndexFromSource("test.ts", source, TS_SUPPORT);

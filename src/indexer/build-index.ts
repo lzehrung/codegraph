@@ -406,7 +406,6 @@ function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: BuildOption
     return null;
   };
 
-
   for (const mod of modules.values()) {
     const expandedImportKeys = new Set<string>();
     for (const existing of mod.imports) {
@@ -618,7 +617,10 @@ async function buildIndexFromFileListShared(
     }
   }
   const cachedGraphEntries =
-    manifest && !languageExtensionsChanged && !implementationChanged && graphOptionsEqual(manifest.graphOptions, graphOptions)
+    manifest &&
+    !languageExtensionsChanged &&
+    !implementationChanged &&
+    graphOptionsEqual(manifest.graphOptions, graphOptions)
       ? new Map<string, ManifestFileEntry>(
           Object.entries(manifestFiles).filter(([file]) => !staleCachedEdgeFiles.has(file)),
         )
@@ -1112,11 +1114,7 @@ export async function buildProjectIndexIncremental(
     const currentConfigHash = recordConfigHashResult(manifestReport, currentConfigHashResult, opts?.logLevel);
     const configChanged = !!currentConfigHash && (!manifest?.configHash || currentConfigHash !== manifest.configHash);
     const requiresFullRebuild = optionDiffs.some(
-      (diff) =>
-        diff === "discovery" ||
-        diff === "native" ||
-        diff === "implementation" ||
-        diff === "languageExtensions",
+      (diff) => diff === "discovery" || diff === "native" || diff === "implementation" || diff === "languageExtensions",
     );
     if (!manifest || !graphOptionsEqual(manifest.graphOptions, graphOptions) || configChanged || requiresFullRebuild) {
       if (manifest && configChanged) {

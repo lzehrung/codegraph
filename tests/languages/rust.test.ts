@@ -92,9 +92,7 @@ const definition: LanguageTestDefinition = {
         },
         {
           file: "reexports.rs",
-          symbols: [
-            { name: "build_engine", kind: "function" },
-          ],
+          symbols: [{ name: "build_engine", kind: "function" }],
         },
         {
           file: "nested_service.rs",

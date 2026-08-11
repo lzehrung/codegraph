@@ -615,7 +615,10 @@ async function addScopeConflicts(
     if (!consumer) continue;
     let collides = false;
     try {
-      const parsed = await ensureParsedContext(reference.file, snapshot.index.parsed?.get(fileIdentityKey(reference.file)));
+      const parsed = await ensureParsedContext(
+        reference.file,
+        snapshot.index.parsed?.get(fileIdentityKey(reference.file)),
+      );
       const scopeIndex = getCachedScope(snapshot.index, reference.file, consumer, parsed);
       const activeBinding = scopeIndex.all.find((binding) => binding.import === activeImport);
       const activeScope = activeBinding
