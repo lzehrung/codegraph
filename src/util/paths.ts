@@ -12,13 +12,17 @@ function normalizeWindowsComparablePath(filePath: string): string {
 
 const defaultCaseInsensitiveFileIdentity = process.platform === "win32" || process.platform === "darwin";
 let caseInsensitiveFileIdentity = defaultCaseInsensitiveFileIdentity;
+let fileIdentityCaseSensitivityFrozen = false;
+let fileIdentityCaseSensitivityPinned = false;
 let fileIdentityCaseSensitivityProbe: Promise<void> | undefined;
-
+let fileIdentityCaseSensitivityProbeGeneration = 0;
 /**
- * Overrides the assumed filesystem case sensitivity used by {@link fileIdentityKey}.
- * Call once per process after probing the volume that holds the project root.
+ * Configures the assumed filesystem case sensitivity used by {@link fileIdentityKey}.
+ * The first generated key or completed probe freezes the effective value; later
+ * calls are ignored so one index cannot contain keys from mixed case modes.
  */
 export function setFileIdentityCaseInsensitive(caseInsensitive: boolean): void {
+  if (fileIdentityCaseSensitivityFrozen) return;
   caseInsensitiveFileIdentity = caseInsensitive;
 }
 
@@ -31,11 +35,28 @@ export function isFileIdentityCaseInsensitive(): boolean {
  * with the observed case sensitivity. Probe failures retain the platform default.
  */
 export function initializeFileIdentityCaseSensitivity(projectRoot: string): Promise<void> {
-  fileIdentityCaseSensitivityProbe ??= probeFileIdentityCaseSensitivity(projectRoot);
+  const generation = fileIdentityCaseSensitivityProbeGeneration;
+  fileIdentityCaseSensitivityProbe ??= probeFileIdentityCaseSensitivity(projectRoot, generation);
   return fileIdentityCaseSensitivityProbe;
 }
 
-async function probeFileIdentityCaseSensitivity(projectRoot: string): Promise<void> {
+/**
+ * Resets the process-global identity probe for tests that need to exercise both
+ * filesystem case modes. Production code must configure identity once and never reset it.
+ *
+ * Passing an explicit mode pins it: the probe will not overwrite it with the host
+ * filesystem's real behavior, so a test can exercise the case-sensitive branch on a
+ * case-insensitive host. Calling with no argument restores probe-driven detection.
+ */
+export function resetFileIdentityCaseSensitivityForTests(caseInsensitive?: boolean): void {
+  fileIdentityCaseSensitivityProbeGeneration += 1;
+  fileIdentityCaseSensitivityProbe = undefined;
+  caseInsensitiveFileIdentity = caseInsensitive ?? defaultCaseInsensitiveFileIdentity;
+  fileIdentityCaseSensitivityFrozen = false;
+  fileIdentityCaseSensitivityPinned = caseInsensitive !== undefined;
+}
+
+async function probeFileIdentityCaseSensitivity(projectRoot: string, generation: number): Promise<void> {
   let caseInsensitive = defaultCaseInsensitiveFileIdentity;
   try {
     const resolvedRoot = path.resolve(projectRoot);
@@ -52,7 +73,10 @@ async function probeFileIdentityCaseSensitivity(projectRoot: string): Promise<vo
   } catch {
     // Some filesystems cannot be probed. Keep the platform default.
   }
+  if (generation !== fileIdentityCaseSensitivityProbeGeneration) return;
+  if (fileIdentityCaseSensitivityPinned) return;
   setFileIdentityCaseInsensitive(caseInsensitive);
+  fileIdentityCaseSensitivityFrozen = true;
 }
 
 function isMissingPathError(error: unknown): boolean {
@@ -85,6 +109,7 @@ function flipPathCharacterCase(filePath: string): string | null {
  * serialized artifacts, and user-facing output.
  */
 export function fileIdentityKey(filePath: string): string {
+  fileIdentityCaseSensitivityFrozen = true;
   const normalized = normalizeWindowsComparablePath(filePath);
   return caseInsensitiveFileIdentity ? normalized.toLowerCase() : normalized;
 }

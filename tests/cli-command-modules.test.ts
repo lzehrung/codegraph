@@ -24,6 +24,7 @@ import {
 import { getCodegraphPackageIdentity, getCodegraphVersion } from "../src/util/packageInfo.js";
 import { handlePacketCommand } from "../src/cli/packet.js";
 import { handleGrepCommand } from "../src/cli/grep.js";
+import { TEXT_GREP_MAX_HITS, textGrepBounded } from "../src/graphs/grep.js";
 import { handleSearchCommand } from "../src/cli/search.js";
 import { handleSkillCommand, type SkillCommandContext } from "../src/cli/skill.js";
 import { handleSqlCommand } from "../src/cli/sql.js";
@@ -380,15 +381,19 @@ describe("CLI command modules", () => {
     expect(PACKET_HELP_TEXT).not.toContain("CLI orient returns file handles");
   });
 
-  test("install and uninstall help omit --json because output is always structured", async () => {
+  test("install and uninstall help document --json/--pretty and install documents --force", async () => {
     for (const command of ["install", "uninstall"]) {
       const result = await captureCli([command, "--help"]);
 
       expect(result.exitCode, command).toBeUndefined();
       expect(result.stderr, command).toBe("");
       expect(result.stdout, command).toContain(`Usage: codegraph ${command}`);
-      expect(result.stdout, command).not.toContain("--json");
+      expect(result.stdout, command).toContain("--json");
+      expect(result.stdout, command).toContain("--pretty");
     }
+    const installHelp = await captureCli(["install", "--help"]);
+    expect(installHelp.stdout).toContain("--force");
+    expect(installHelp.stdout).toMatch(/re-run with --force/i);
   });
 
   test("top-level help documents human defaults and JSON opt-in", async () => {
@@ -706,6 +711,22 @@ describe("CLI command modules", () => {
     }
   });
 
+  test("textGrepBounded reports truncated:true at the 200_000 hit ceiling when more hits exist", async () => {
+    const root = await mkTmpDir("codegraph-grep-ceiling-");
+    const filePath = path.join(root, "main.ts");
+    await fsp.writeFile(filePath, `${"x\n".repeat(TEXT_GREP_MAX_HITS + 1)}`, "utf8");
+    try {
+      const envelope = await textGrepBounded(root, "^x$", ["**/*.ts"], { maxHits: TEXT_GREP_MAX_HITS });
+      expect(envelope.limit).toBe(TEXT_GREP_MAX_HITS);
+      expect(envelope.truncated).toBe(true);
+      expect(envelope.totalSeen).toBe(TEXT_GREP_MAX_HITS + 1);
+      expect(envelope.items).toHaveLength(TEXT_GREP_MAX_HITS);
+      expect(envelope.omitted).toBe(1);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   test("grep --json --query wraps AST hits in a complete envelope", async () => {
     const root = await mkTmpDir("codegraph-grep-ast-envelope-");
     const mainPath = path.join(root, "main.ts");
@@ -735,7 +756,8 @@ describe("CLI command modules", () => {
       const envelope = readJsonRecord(jsonLines[0]);
       const items = readJsonArray(envelope.items);
       expect(items.length).toBeGreaterThan(0);
-      // astGrep has no result cap, so the envelope always reports a complete result.
+      // astGrep has no result cap: limit is null and the envelope is always complete.
+      expect(envelope.limit).toBeNull();
       expect(envelope.truncated).toBe(false);
       expect(envelope.omitted).toBe(0);
       expect(envelope.totalSeen).toBe(items.length);
@@ -1647,6 +1669,33 @@ describe("CLI command modules", () => {
         },
       }),
     ).rejects.toThrow('Invalid --cache value "banana". Expected one of: off, memory, disk.');
+  });
+
+  test("graph-delta --json parses and emits JSON while unsupported flags still error", async () => {
+    const root = await createTwoCommitCycleProject("codegraph-graph-delta-json-", runCliModuleGit);
+    try {
+      const json = await captureCli([
+        "graph-delta",
+        "--root",
+        root,
+        "--git-base",
+        "HEAD~1",
+        "--git-head",
+        "HEAD",
+        "--json",
+      ]);
+      expect(json.exitCode).toBeUndefined();
+      const payload = readJsonRecord(JSON.parse(json.stdout));
+      expect(Array.isArray(payload.changedFiles)).toBe(true);
+      expect(Array.isArray(payload.added)).toBe(true);
+      expect(Array.isArray(payload.removed)).toBe(true);
+
+      const bad = await captureCli(["graph-delta", "--root", root, "--not-a-real-flag"]);
+      expect(bad.exitCode).toBe(2);
+      expect(bad.stderr).toContain("Unknown option for graph-delta: --not-a-real-flag");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 
   test("impact command retains parsed cache only when reference context is requested", async () => {

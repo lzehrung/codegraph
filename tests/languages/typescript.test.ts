@@ -33,6 +33,14 @@ const definition: LanguageTestDefinition = {
           to: { type: "file", path: "triple-slash-globals.d.ts" },
           typeOnly: true,
         },
+        {
+          from: "main.ts",
+          to: { type: "file", path: "utils.ts" },
+        },
+        {
+          from: "utils.ts",
+          to: { type: "file", path: "helpers.ts" },
+        },
       ],
       symbols: [
         {
@@ -42,6 +50,29 @@ const definition: LanguageTestDefinition = {
             { name: "ConcreteJob", kind: "class" },
             { name: "execute", kind: "function" },
             { name: "execute", kind: "function" },
+          ],
+        },
+      ],
+      references: [
+        {
+          name: "find references for UtilityClass resolves namespace and named import constructions",
+          file: "utils.ts",
+          line: 5,
+          column: 14,
+          references: [
+            { file: "main.ts", line: 8 },
+            { file: "main.ts", line: 12 },
+            { file: "utils.ts", line: 5 },
+          ],
+        },
+        {
+          name: "find references for UtilityClass.getValue resolves through the receiver",
+          file: "utils.ts",
+          line: 12,
+          column: 3,
+          references: [
+            { file: "main.ts", line: 13 },
+            { file: "utils.ts", line: 12 },
           ],
         },
       ],

@@ -18,6 +18,7 @@ export const CPP_DEF = createCFamilyLanguageDefinition({
   extensions: [".cc", ".cpp", ".cxx", ".c++", ".hpp", ".hh", ".hxx", ".ipp", ".tpp", ".inl"],
   grammarPackage: "tree-sitter-cpp",
   includeFieldIdentifier: true,
+  usesQueryDrivenLocals: true,
   blocks: (functionNameQuery) => [
     cFamilyFunctionBlock(functionNameQuery),
     cFamilyTypeIdentifierBlock("class_specifier", "class"),

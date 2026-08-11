@@ -11,6 +11,13 @@ import { buildProjectIndex, findDuplicateContext, findDuplicateContexts, findDup
 import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
 import { DUPLICATE_IDENTIFIER_KEYWORDS } from "../src/duplicate-keywords.js";
 import { normalizeDuplicateSourceTokens } from "../src/duplicate-token-normalization.js";
+import { getDuplicateAstContext } from "../src/duplicates/units.js";
+import {
+  fileIdentityKey,
+  isFileIdentityCaseInsensitive,
+  resetFileIdentityCaseSensitivityForTests,
+  setFileIdentityCaseInsensitive,
+} from "../src/util/paths.js";
 
 const tempRoots: string[] = [];
 
@@ -2402,5 +2409,34 @@ export function sharedOversizedClone(rows) {
 
     expect(result.groups).toHaveLength(0);
     expect(result.omittedCounts.oversizedBuckets).toBeGreaterThan(0);
+  });
+
+  test("hits identity-keyed parsed cache when duplicate AST path casing differs", async () => {
+    const originalCaseSensitivity = isFileIdentityCaseInsensitive();
+    const root = await makeTempProject();
+    try {
+      resetFileIdentityCaseSensitivityForTests(true);
+      setFileIdentityCaseInsensitive(true);
+      fileIdentityKey("freeze-case-mode");
+
+      const source = "export function helper() {\n  return 1;\n}\n";
+      const displayFile = await writeProjectFile(root, "src/Util.ts", source);
+      const index = await buildProjectIndex(root, { cache: "off" });
+      const { ensureParsedContext } = await import("../src/indexer/parse-context.js");
+      const parsed = await ensureParsedContext(displayFile);
+      index.parsed = new Map([[fileIdentityKey(displayFile), parsed]]);
+
+      const queryFile = displayFile.includes("Util.ts")
+        ? displayFile.replace("Util.ts", "util.ts")
+        : displayFile.replace("util.ts", "Util.ts");
+      expect(queryFile).not.toBe(displayFile);
+      expect(fileIdentityKey(queryFile)).toBe(fileIdentityKey(displayFile));
+      expect(index.parsed.has(queryFile)).toBe(false);
+
+      const context = await getDuplicateAstContext(index, queryFile, source, new Map());
+      expect(context?.source).toBe(source);
+    } finally {
+      resetFileIdentityCaseSensitivityForTests(originalCaseSensitivity);
+    }
   });
 });

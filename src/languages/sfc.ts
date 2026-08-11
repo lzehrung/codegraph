@@ -49,8 +49,10 @@ export function parseSFC(source: string): SFCBlock[] {
 
     const closeTag = findClosingTag(source, openTag.name, openTag.end);
     if (!closeTag) {
-      cursor = openTag.end;
-      continue;
+      // Malformed document: stop at the first unmatched opening tag rather
+      // than scanning inside the unclosed block and reporting its contents as
+      // additional top-level blocks.
+      break;
     }
     const contentStart = openTag.end;
     const contentEnd = closeTag.start;
@@ -265,6 +267,12 @@ function findNextSFCOpeningTag(source: string, fromIndex: number): SFCOpeningTag
 
 function findClosingTag(source: string, tag: string, fromIndex: number): SFCClosingTag | null {
   let index = fromIndex;
+  // Template bodies are parsed content and commonly nest same-name blocks
+  // (Vue <template v-if>), so their close tag is matched by depth. Script and
+  // style bodies are raw text that cannot nest, so the first matching close
+  // tag still wins there.
+  let depth = 1;
+  const trackNesting = tag === "template";
   while (index < source.length) {
     if (source.startsWith("<!--", index)) {
       index = skipDelimited(source, index + 4, "-->");
@@ -288,27 +296,48 @@ function findClosingTag(source: string, tag: string, fromIndex: number): SFCClos
       index = skipDelimited(source, index + 2, "*/");
       continue;
     }
-    if (char !== "<" || source[index + 1] !== "/") {
+    if (char !== "<") {
       index++;
       continue;
     }
 
-    const nameStart = index + 2;
-    if (!matchesCaseInsensitive(source, nameStart, tag)) {
-      index++;
+    if (source[index + 1] === "/") {
+      const nameStart = index + 2;
+      if (!matchesCaseInsensitive(source, nameStart, tag)) {
+        index++;
+        continue;
+      }
+      const nameEnd = nameStart + tag.length;
+      if (!isTagBoundary(source[nameEnd])) {
+        index++;
+        continue;
+      }
+      const tagEnd = findTagEnd(source, nameEnd);
+      if (tagEnd === -1) {
+        index++;
+        continue;
+      }
+      depth--;
+      if (depth === 0) return { start: index, end: tagEnd };
+      index = tagEnd;
       continue;
     }
-    const nameEnd = nameStart + tag.length;
-    if (!isTagBoundary(source[nameEnd])) {
-      index++;
-      continue;
+
+    if (trackNesting) {
+      const nameStart = index + 1;
+      if (matchesCaseInsensitive(source, nameStart, tag)) {
+        const nameEnd = nameStart + tag.length;
+        if (isTagBoundary(source[nameEnd])) {
+          const tagEnd = findTagEnd(source, nameEnd);
+          if (tagEnd !== -1) {
+            if (source[tagEnd - 2] !== "/") depth++;
+            index = tagEnd;
+            continue;
+          }
+        }
+      }
     }
-    const tagEnd = findTagEnd(source, nameEnd);
-    if (tagEnd === -1) {
-      index++;
-      continue;
-    }
-    return { start: index, end: tagEnd };
+    index++;
   }
   return null;
 }

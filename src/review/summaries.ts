@@ -7,10 +7,12 @@ import { type ExportEntry, type ModuleIndex, type ProjectIndex, type SymbolDef }
 import { symbolId } from "../indexer/symbols.js";
 import { attachCallCompatibilityHints } from "../impact/callCompatibility.js";
 import { computeMemberResolutionCoverage } from "../impact/memberResolutionCoverage.js";
-import { locateChangedSymbolsWithLines, mapChangedLinesToSymbols } from "../impact/map.js";
+import { collectChangedLines, locateChangedSymbolsWithLines, mapChangedLinesToSymbols } from "../impact/map.js";
 import type { CallCompatibilityHint, ChangedSymbol, FileChange, Hunk } from "../impact/types.js";
 import type { FileId, Range } from "../types.js";
+import { maskJsLikeCommentsAndStrings } from "../util/comments.js";
 import { mapLimit } from "../util/concurrency.js";
+import { collectLineStartOffsets } from "../util/lines.js";
 import { fileIdentityKey, toProjectDisplayPath } from "../util/paths.js";
 import type { DeletedFileSnapshot } from "./deleted.js";
 import { isRiskRelevantSymbolMappingFile } from "./risk.js";
@@ -61,17 +63,24 @@ function buildExportSummary(
   };
 }
 
-function parseExportSummaries(file: string, source: string): ReviewSymbolSummary[] {
+type ExportSpecifier = {
+  kind: ReviewableExportEntry["type"];
+  name: string;
+  /** Module specifier exactly as written in the source statement. */
+  fromModule: string;
+};
+
+function parseExportSpecifiers(source: string): ExportSpecifier[] {
   const fromMatch = source.match(/\bfrom\s+(['"])([^'"]+)\1/);
   const fromModule = fromMatch?.[2];
   if (!fromModule) return [];
 
   if (/^export\s*\*\s+from\b/.test(source)) {
-    return [buildExportSummary(file, "exportStar", "*", fromModule)];
+    return [{ kind: "exportStar", name: "*", fromModule }];
   }
   const namespaceMatch = source.match(/^export\s*\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\b/);
   if (namespaceMatch?.[1]) {
-    return [buildExportSummary(file, "namespaceReexport", namespaceMatch[1], fromModule)];
+    return [{ kind: "namespaceReexport", name: namespaceMatch[1], fromModule }];
   }
 
   const namedMatch = source.match(/^export\s+(?:type\s+)?\{([^}]*)\}\s+from\b/);
@@ -84,7 +93,7 @@ function parseExportSummaries(file: string, source: string): ReviewSymbolSummary
     const sourceSpecifier = specifierMatch?.[1];
     if (!sourceSpecifier) return [];
     const exportedAs = specifierMatch[2] ?? sourceSpecifier;
-    return [buildExportSummary(file, "reexport", exportedAs, fromModule)];
+    return [{ kind: "reexport", name: exportedAs, fromModule }];
   });
 }
 
@@ -103,22 +112,186 @@ function buildExportSummaries(file: string, entries: readonly ReviewableExportEn
   });
 }
 
+type ExportStatement = {
+  startLine: number; // 1-based, inclusive
+  endLine: number; // 1-based, inclusive
+  specifiers: ExportSpecifier[];
+};
+
+// 1-based line number for a character offset, mirroring src/languages/sfc.ts.
+function lineForOffset(lineStarts: readonly number[], offset: number): number {
+  let lo = 0;
+  let hi = lineStarts.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (lineStarts[mid]! <= offset) lo = mid + 1;
+    else hi = mid - 1;
+  }
+  return hi + 1;
+}
+
+// Locate whole re-export declarations, which may span multiple lines: an export
+// brace list broken across lines followed by a from-clause counts as one
+// declaration. Statements are found on comment/string-masked source so literals
+// and comments cannot forge or hide a declaration; specifiers are parsed from the
+// original text. (Deliberately avoids spelling a literal import here: the core
+// package stager scans this file's compiled output for import specifiers and is
+// not comment-aware.)
+function listExportStatements(source: string): ExportStatement[] {
+  const patterns = [
+    /\bexport\s*(?:type\s+)?\{[^}]*\}\s*from\s*("|')[^"']*\1/g,
+    /\bexport\s*\*\s+as\s+[A-Za-z_$][\w$]*\s*from\s*("|')[^"']*\1/g,
+    /\bexport\s*\*\s*from\s*("|')[^"']*\1/g,
+  ];
+  const masked = maskJsLikeCommentsAndStrings(source);
+  const lineStarts = collectLineStartOffsets(source);
+  const statements: ExportStatement[] = [];
+  for (const pattern of patterns) {
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(masked))) {
+      const text = source.slice(match.index, match.index + match[0].length);
+      const specifiers = parseExportSpecifiers(text);
+      if (!specifiers.length) continue;
+      statements.push({
+        startLine: lineForOffset(lineStarts, match.index),
+        endLine: lineForOffset(lineStarts, match.index + match[0].length - 1),
+        specifiers,
+      });
+    }
+  }
+  return statements;
+}
+
+// The index may store `fromModule` resolved to an absolute path while the
+// statement carries the raw specifier (`moduleSpecifier`), so accept either.
+function statementDeclaresEntry(statement: ExportStatement, entry: ReviewableExportEntry): boolean {
+  const name = exportSummaryName(entry);
+  return statement.specifiers.some(
+    (specifier) =>
+      specifier.kind === entry.type &&
+      specifier.name === name &&
+      (specifier.fromModule === entry.fromModule || specifier.fromModule === entry.moduleSpecifier),
+  );
+}
+
+type RemovedExportGroup = {
+  /** Specifiers declared by complete export statements inside the removed lines. */
+  specifiers: ExportSpecifier[];
+  /** New-side lines collectChangedLines maps these removed lines to. They do not
+      exist in the new source, so they must not be attributed to survivors. */
+  mappedLines: number[];
+};
+
+// A maximal run of non-context diff lines forms one change group: removed lines
+// optionally followed by added lines. A group with no added lines is a pure
+// deletion; when its removed text parses as complete export declarations, those
+// declarations are gone from the new source, and their mapped new-side lines
+// (newLine + deletionStreak, mirroring collectChangedLines) otherwise land on
+// unrelated surviving statements or outside the file entirely.
+function collectRemovedExportGroups(hunks: Hunk[]): RemovedExportGroup[] {
+  const groups: RemovedExportGroup[] = [];
+  for (const hunk of hunks) {
+    let oldLine = hunk.oldStart;
+    let newLine = hunk.newStart;
+    let deletionStreak = 0;
+    let removedTexts: string[] = [];
+    let removedMapped: number[] = [];
+    let groupHasAdded = false;
+    const flushGroup = () => {
+      if (removedTexts.length && !groupHasAdded) {
+        const removedStatements = listExportStatements(removedTexts.join("\n"));
+        if (removedStatements.length) {
+          groups.push({
+            specifiers: removedStatements.flatMap((statement) => statement.specifiers),
+            mappedLines: removedMapped,
+          });
+        }
+      }
+      removedTexts = [];
+      removedMapped = [];
+      groupHasAdded = false;
+    };
+    for (const line of hunk.lines) {
+      if (line.startsWith(" ")) {
+        flushGroup();
+        oldLine += 1;
+        newLine += 1;
+        deletionStreak = 0;
+      } else if (line.startsWith("+")) {
+        groupHasAdded = true;
+        newLine += 1;
+        deletionStreak = 0;
+      } else if (line.startsWith("-")) {
+        const mapped = newLine > 0 ? newLine + deletionStreak : oldLine;
+        removedTexts.push(line.slice(1));
+        removedMapped.push(mapped);
+        oldLine += 1;
+        deletionStreak += 1;
+      }
+    }
+    flushGroup();
+  }
+  return groups;
+}
+
+function statementDeclaresSpecifier(statement: ExportStatement, specifier: ExportSpecifier): boolean {
+  return statement.specifiers.some(
+    (candidate) =>
+      candidate.kind === specifier.kind &&
+      candidate.name === specifier.name &&
+      candidate.fromModule === specifier.fromModule,
+  );
+}
+
 function buildExportSummaryGroups(
   file: string,
+  mod: ModuleIndex,
   source: string,
   hunks: Hunk[] | undefined,
 ): { changed: ReviewSymbolSummary[]; context: ReviewSymbolSummary[] } {
-  if (!hunks) return { changed: [], context: [] };
-  const changed = uniqueExportSummaries(
-    hunks.flatMap((hunk) =>
-      hunk.lines.flatMap((line) => (line.startsWith("+") ? parseExportSummaries(file, line.slice(1).trim()) : [])),
-    ),
+  const entries = listReviewableExports(mod);
+  if (!hunks) {
+    // No diff information (explicit-file or library review) means "unknown
+    // what changed", not "nothing changed": mirror the locals path, which
+    // lists every local, by reporting the full public surface as changed.
+    return { changed: uniqueExportSummaries(buildExportSummaries(file, entries)), context: [] };
+  }
+  // A declaration counts as changed when any new-side changed line falls inside
+  // its statement range; every export the declaration declares is then changed,
+  // while exports from untouched declarations stay as API context.
+  const statements = listExportStatements(source);
+  // Pure deletions of whole export declarations have no new-side line, so
+  // range intersection cannot see them. Recover the removed specifiers from
+  // the diff and drop their bogus mapped lines to avoid misattributing the
+  // deletion to whichever statement shifted into place.
+  const removedGroups = collectRemovedExportGroups(hunks);
+  const changedLines = collectChangedLines(hunks);
+  for (const group of removedGroups) {
+    for (const line of group.mappedLines) changedLines.delete(line);
+  }
+  const touchedStatements = statements.filter((statement) => {
+    for (const line of changedLines) {
+      if (line >= statement.startLine && line <= statement.endLine) return true;
+    }
+    return false;
+  });
+  const changedEntries = entries.filter((entry) =>
+    touchedStatements.some((statement) => statementDeclaresEntry(statement, entry)),
   );
+  const removedSpecifiers = removedGroups
+    .flatMap((group) => group.specifiers)
+    .filter((specifier) => !statements.some((statement) => statementDeclaresSpecifier(statement, specifier)));
+  const changed = uniqueExportSummaries([
+    ...buildExportSummaries(file, changedEntries),
+    ...removedSpecifiers.map((specifier) =>
+      buildExportSummary(file, specifier.kind, specifier.name, specifier.fromModule),
+    ),
+  ]);
   if (!changed.length) return { changed: [], context: [] };
   const changedHandles = new Set(changed.map((summary) => summary.handle));
-  const context = uniqueExportSummaries(
-    source.split(/\r?\n/).flatMap((line) => parseExportSummaries(file, line.trim())),
-  ).filter((summary) => !changedHandles.has(summary.handle));
+  const context = uniqueExportSummaries(buildExportSummaries(file, entries)).filter(
+    (summary) => !changedHandles.has(summary.handle),
+  );
   return { changed, context };
 }
 
@@ -395,7 +568,7 @@ export async function summarizeChangedFiles(input: {
       const refs = entry?.refs;
       if (refs?.status === "ok") {
         const candidates = refs.references.filter(
-          (ref) => !(ref.file === local.file && sameRange(ref.range, local.range)),
+          (ref) => !(fileIdentityKey(ref.file) === fileIdentityKey(local.file) && sameRange(ref.range, local.range)),
         );
         const limited = candidates.slice(0, maxCallsites).map((ref) => ({
           file: relativePath(projectRoot, ref.file),
@@ -498,7 +671,7 @@ export async function summarizeChangedFiles(input: {
       const localSymbols: ReviewSymbolSummary[] = await Promise.all(
         locals.map((local) => buildSymbolSummary(local, mod, diffLinesByHandle)),
       );
-      const exportSummaryGroups = buildExportSummaryGroups(file, await loadSource(file), hunks);
+      const exportSummaryGroups = buildExportSummaryGroups(file, mod, await loadSource(file), hunks);
       const symbols = [...localSymbols, ...exportSummaryGroups.changed];
       return {
         summary: {

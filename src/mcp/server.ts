@@ -157,6 +157,8 @@ type LegacyMcpSession = {
   server: Server;
   transport: NodeStreamableHTTPServerTransport;
   lastActivityAt: number;
+  inFlightRequests: number;
+  openSseStreams: number;
 };
 
 type OriginValidator = (request: IncomingMessage, response: ServerResponse) => boolean;
@@ -1284,7 +1286,7 @@ async function handleLegacyMcpHttpPost(
     }
     sessionStore.touch(sessionId);
     try {
-      await session.transport.handleRequest(request, response, body);
+      await handleLegacyMcpSessionRequest(session, request, response, body);
     } catch (error) {
       await sessionStore.delete(sessionId);
       throw error;
@@ -1297,20 +1299,50 @@ async function handleLegacyMcpHttpPost(
     return;
   }
 
-  await sessionStore.ensureCapacityForNewSession();
+  const hasCapacity = await sessionStore.ensureCapacityForNewSession();
+  if (!hasCapacity) {
+    writeJsonRpcError(
+      response,
+      503,
+      "MCP session capacity reached: all configured sessions are active; close an existing session and retry.",
+    );
+    return;
+  }
+  let capacityReservationHeld = true;
+  const releaseCapacityReservation = (): void => {
+    if (!capacityReservationHeld) return;
+    capacityReservationHeld = false;
+    sessionStore.releaseCapacityReservation();
+  };
   const protocolServer = createProtocolServer();
   let initializedSessionId: string | undefined;
+  // The transport callbacks close over the session, but the session needs the
+  // transport, so the binding is resolved through a ref rather than a mutable let.
+  const sessionRef: { current: LegacyMcpSession | undefined } = { current: undefined };
   const transport = new NodeStreamableHTTPServerTransport({
     enableJsonResponse: true,
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (newSessionId) => {
       initializedSessionId = newSessionId;
-      sessionStore.set(newSessionId, { server: protocolServer, transport, lastActivityAt: Date.now() });
+      const initialized = sessionRef.current;
+      if (initialized === undefined) {
+        throw new Error("MCP session state was not initialized before the transport session.");
+      }
+      sessionStore.set(newSessionId, initialized);
+      releaseCapacityReservation();
     },
     onsessionclosed: (closedSessionId) => {
       void sessionStore.delete(closedSessionId);
     },
   });
+  const session: LegacyMcpSession = {
+    server: protocolServer,
+    transport,
+    lastActivityAt: Date.now(),
+    inFlightRequests: 0,
+    openSseStreams: 0,
+  };
+  sessionRef.current = session;
   transport.onerror = (error) => {
     console.error(`[codegraph] MCP HTTP session transport error: ${error.message}`);
     if (initializedSessionId !== undefined) void sessionStore.delete(initializedSessionId);
@@ -1321,13 +1353,14 @@ async function handleLegacyMcpHttpPost(
 
   try {
     await protocolServer.connect(transport);
-    await transport.handleRequest(request, response, body);
+    await handleLegacyMcpSessionRequest(session, request, response, body);
   } catch (error) {
     if (initializedSessionId !== undefined) {
       await sessionStore.delete(initializedSessionId);
     } else {
-      await closeMcpSession({ server: protocolServer, transport, lastActivityAt: Date.now() });
+      await closeMcpSession(session);
     }
+    releaseCapacityReservation();
     throw error;
   }
 }
@@ -1349,11 +1382,33 @@ async function handleExistingMcpSessionRequest(
   }
   sessionStore.touch(sessionId);
   try {
-    await session.transport.handleRequest(request, response);
+    await handleLegacyMcpSessionRequest(session, request, response);
   } catch (error) {
     await sessionStore.delete(sessionId);
     throw error;
   }
+}
+
+async function handleLegacyMcpSessionRequest(
+  session: LegacyMcpSession,
+  request: IncomingMessage,
+  response: ServerResponse,
+  body?: unknown,
+): Promise<void> {
+  const tracksSseStream = isLegacySseRequest(request);
+  session.inFlightRequests += 1;
+  if (tracksSseStream) session.openSseStreams += 1;
+  try {
+    await session.transport.handleRequest(request, response, body);
+  } finally {
+    session.inFlightRequests -= 1;
+    if (tracksSseStream) session.openSseStreams -= 1;
+  }
+}
+
+function isLegacySseRequest(request: IncomingMessage): boolean {
+  if (request.method !== "GET") return false;
+  return getHeaderValue(request.headers.accept)?.includes("text/event-stream") ?? false;
 }
 
 type LegacyMcpSessionStoreOptions = {
@@ -1368,14 +1423,16 @@ type LegacyMcpSessionStore = {
   set(sessionId: string, session: LegacyMcpSession): void;
   touch(sessionId: string): void;
   delete(sessionId: string): Promise<void>;
-  ensureCapacityForNewSession(): Promise<void>;
+  ensureCapacityForNewSession(): Promise<boolean>;
+  releaseCapacityReservation(): void;
   stop(): void;
 };
 
 function createLegacyMcpSessionStore(options: LegacyMcpSessionStoreOptions): LegacyMcpSessionStore {
   const sessions = new Map<string, LegacyMcpSession>();
-  let evictionTimer: ReturnType<typeof setInterval> | undefined;
   let stopped = false;
+  let evictionTimer: ReturnType<typeof setInterval> | undefined;
+  let pendingInitializations = 0;
 
   const store: LegacyMcpSessionStore = {
     sessions,
@@ -1398,12 +1455,26 @@ function createLegacyMcpSessionStore(options: LegacyMcpSessionStoreOptions): Leg
     },
     async ensureCapacityForNewSession() {
       await evictIdleLegacyMcpSessions(store, options.idleMs);
-      if (sessions.size < options.maxCount) return;
-      const oldest = [...sessions.entries()].sort((left, right) => left[1].lastActivityAt - right[1].lastActivityAt);
-      while (sessions.size >= options.maxCount && oldest.length) {
-        const [sessionId] = oldest.shift()!;
+      if (sessions.size + pendingInitializations < options.maxCount) {
+        pendingInitializations += 1;
+        return true;
+      }
+      const oldest = [...sessions.entries()]
+        .filter(([, session]) => !session.inFlightRequests && !session.openSseStreams)
+        .sort((left, right) => left[1].lastActivityAt - right[1].lastActivityAt);
+      while (sessions.size + pendingInitializations >= options.maxCount && oldest.length) {
+        const oldestSession = oldest.shift();
+        if (oldestSession === undefined) break;
+        const [sessionId, session] = oldestSession;
+        if (session.inFlightRequests || session.openSseStreams) continue;
         await store.delete(sessionId);
       }
+      if (sessions.size + pendingInitializations >= options.maxCount) return false;
+      pendingInitializations += 1;
+      return true;
+    },
+    releaseCapacityReservation() {
+      if (pendingInitializations) pendingInitializations -= 1;
     },
     stop() {
       stopped = true;
@@ -1430,10 +1501,8 @@ function createLegacyMcpSessionStore(options: LegacyMcpSessionStoreOptions): Leg
 async function evictIdleLegacyMcpSessions(store: LegacyMcpSessionStore, idleMs: number): Promise<void> {
   if (idleMs <= 0) return;
   const cutoff = Date.now() - idleMs;
-  const expired = [...store.sessions.entries()]
-    .filter(([, session]) => session.lastActivityAt <= cutoff)
-    .map(([sessionId]) => sessionId);
-  for (const sessionId of expired) {
+  for (const [sessionId, session] of store.sessions) {
+    if (session.lastActivityAt > cutoff || session.inFlightRequests || session.openSseStreams) continue;
     await store.delete(sessionId);
   }
 }
@@ -1538,7 +1607,7 @@ async function callGotoTool(handlers: CodegraphMcpHandlers, input: unknown): Pro
 async function callRefsTool(
   handlers: CodegraphMcpHandlers,
   input: unknown,
-): Promise<{ references: AgentExplanationReference[] }> {
+): Promise<McpTruncationMeta & { references: AgentExplanationReference[] }> {
   const request = parseMcpToolInput(refsSchema, input, "refs");
   if (request.handle !== undefined) {
     return await handlers.refs({

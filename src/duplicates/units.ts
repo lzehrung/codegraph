@@ -320,12 +320,13 @@ export async function getDuplicateAstContext(
   source: string,
   cache: DuplicateAstContextCache,
 ): Promise<DuplicateAstContext | undefined> {
-  if (cache.has(file)) return cache.get(file) ?? undefined;
+  const fileKey = fileIdentityKey(file);
+  if (cache.has(fileKey)) return cache.get(fileKey) ?? undefined;
 
-  const retained = index.parsed?.get(file);
+  const retained = index.parsed?.get(fileKey);
   if (retained?.source === source) {
     const context = astContextFromParsed(retained);
-    cache.set(file, context);
+    cache.set(fileKey, context);
     return context;
   }
 
@@ -339,14 +340,14 @@ export async function getDuplicateAstContext(
       nativeQueries: null,
     });
     if (!attempt.parsed) {
-      cache.set(file, null);
+      cache.set(fileKey, null);
       return undefined;
     }
     const context = astContextFromParsed(attempt.parsed);
-    cache.set(file, context);
+    cache.set(fileKey, context);
     return context;
   } catch {
-    cache.set(file, null);
+    cache.set(fileKey, null);
     return undefined;
   }
 }

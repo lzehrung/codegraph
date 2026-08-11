@@ -319,6 +319,100 @@ describe("SQL review context", () => {
     }
   });
 
+  it("bridges real SQL literal forms the detector previously missed", async () => {
+    const root = await mkTmpDir("cg-sql-review-");
+    try {
+      const schema = await writeFile(
+        path.join(root, "db", "schema.sql"),
+        ["CREATE TABLE users (id integer);", "CREATE TABLE #temp (id integer);"].join("\n"),
+      );
+      const wideSelectList = Array.from(
+        { length: 80 },
+        (_, index) => `CASE WHEN ${index} = ${index} THEN c${index} ELSE c${index} END AS c${index}`,
+      ).join(", ");
+      expect(wideSelectList.length).toBeGreaterThan(1000);
+
+      const longSelectCode = await writeFile(
+        path.join(root, "src", "longSelectRepo.ts"),
+        `export const query = \`SELECT ${wideSelectList} FROM users\`;\n`,
+      );
+      const recursiveCode = await writeFile(
+        path.join(root, "src", "recursiveRepo.ts"),
+        "export const query = `WITH RECURSIVE tree AS (SELECT id FROM users) SELECT * FROM tree`;\n",
+      );
+      const hintedWithCode = await writeFile(
+        path.join(root, "src", "hintedWithRepo.ts"),
+        "export const query = `WITH /*hint*/ tree AS (SELECT id FROM users) SELECT * FROM tree`;\n",
+      );
+      const tempCode = await writeFile(
+        path.join(root, "src", "tempRepo.ts"),
+        "export const query = `SELECT id FROM #temp`;\n",
+      );
+      const commentCode = await writeFile(
+        path.join(root, "src", "commentRepo.ts"),
+        [
+          "// WITH RECURSIVE tree AS (SELECT id FROM users)",
+          "// WITH /*hint*/ tree AS (SELECT id FROM users)",
+          "// SELECT id FROM #temp",
+          `// SELECT ${wideSelectList} FROM users`,
+          "const users = 1;",
+        ].join("\n"),
+      );
+      const ordinaryIdentifierCode = await writeFile(
+        path.join(root, "src", "ordinaryRepo.ts"),
+        [
+          "export function created() { return 'with care'; }",
+          "export const select = 1;",
+          "export function updateStatus() { return 'update only'; }",
+        ].join("\n"),
+      );
+
+      const longSelectContext = await collectSqlReviewContext(root, { changedFiles: [longSelectCode] });
+      expect(longSelectContext?.entries).toEqual([
+        expect.objectContaining({
+          reason: "changed_sql_literal",
+          objectName: "users",
+          fact: expect.objectContaining({ filePath: schema.replace(/\\/g, "/"), kind: "defines_table" }),
+        }),
+      ]);
+
+      const recursiveContext = await collectSqlReviewContext(root, { changedFiles: [recursiveCode] });
+      expect(recursiveContext?.entries).toEqual([
+        expect.objectContaining({
+          reason: "changed_sql_literal",
+          objectName: "users",
+          fact: expect.objectContaining({ filePath: schema.replace(/\\/g, "/"), kind: "defines_table" }),
+        }),
+      ]);
+
+      const hintedWithContext = await collectSqlReviewContext(root, { changedFiles: [hintedWithCode] });
+      expect(hintedWithContext?.entries).toEqual([
+        expect.objectContaining({
+          reason: "changed_sql_literal",
+          objectName: "users",
+          fact: expect.objectContaining({ filePath: schema.replace(/\\/g, "/"), kind: "defines_table" }),
+        }),
+      ]);
+
+      const tempContext = await collectSqlReviewContext(root, { changedFiles: [tempCode] });
+      expect(tempContext?.entries).toEqual([
+        expect.objectContaining({
+          reason: "changed_sql_literal",
+          objectName: "#temp",
+          fact: expect.objectContaining({ filePath: schema.replace(/\\/g, "/"), kind: "defines_table" }),
+        }),
+      ]);
+
+      const commentContext = await collectSqlReviewContext(root, { changedFiles: [commentCode] });
+      expect(commentContext).toBeUndefined();
+
+      const ordinaryContext = await collectSqlReviewContext(root, { changedFiles: [ordinaryIdentifierCode] });
+      expect(ordinaryContext).toBeUndefined();
+    } finally {
+      await rmTmpDir(root);
+    }
+  });
+
   it("surfaces SQL candidates for changed code update literals", async () => {
     const root = await mkTmpDir("cg-sql-review-");
     try {

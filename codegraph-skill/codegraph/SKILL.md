@@ -87,7 +87,7 @@ Use line and column coordinates when known; this is the primary navigation form.
 
 ### Review and Inspect
 
-Safe shorthand: `impact` and git-backed `drift` default to `HEAD..WORKTREE`; `artifact`, `packet`, and `mcp` infer `build`, `get`, and `serve`. `grep <regex>` and `sql <db> "SELECT ..."` accept positional forms. Explicit options remain valid. `grep --json` returns an envelope `{ items, limit, totalSeen, truncated, omitted }`, not a bare hit array: check `truncated` before treating results as complete, and raise `--max-hits` (default 5000) when it is true.
+Safe shorthand: `impact` and git-backed `drift` default to `HEAD..WORKTREE`; `artifact`, `packet`, and `mcp` infer `build`, `get`, and `serve`. `grep <regex>` and `sql <db> "SELECT ..."` accept positional forms. Explicit options remain valid. `grep --json` returns an envelope `{ items, limit, totalSeen, truncated, omitted }`, not a bare hit array: `limit` is the effective `--max-hits` cap for text greps (default 5000, capped at 200000) and `null` for uncapped `--query` AST greps. Check `truncated` before treating text results as complete, and raise `--max-hits` when it is true - `truncated` stays exact through that ceiling. `graph-delta --json` emits structured edge add/remove reports for revision ranges.
 
 - compact review handoff: `codegraph review`
 - broader change impact: `codegraph impact --base HEAD --head WORKTREE`

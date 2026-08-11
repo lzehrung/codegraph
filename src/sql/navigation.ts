@@ -89,7 +89,9 @@ function sqlDefinitionsFromLookup(lookup: SqlDefinitionLookup, objectName: strin
 }
 
 function preferredSqlDefinition(definitions: SymbolDef[], currentFile: string): SymbolDef | null {
-  const currentFileDefinitions = definitions.filter((definition) => definition.file === currentFile);
+  const currentFileDefinitions = definitions.filter(
+    (definition) => fileIdentityKey(definition.file) === fileIdentityKey(currentFile),
+  );
   if (currentFileDefinitions.length === 1) return currentFileDefinitions[0] ?? null;
   if (currentFileDefinitions.length > 1) return null;
   if (definitions.length === 1) return definitions[0] ?? null;

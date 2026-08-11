@@ -363,9 +363,12 @@ async function collectUntestedChangeSuggestions(
       }
       return template;
     }
-    const hasPnpm = index.graph.nodes.has(path.resolve(projectRoot, "pnpm-lock.yaml").replace(/\\/g, "/"));
-    const hasYarn = index.graph.nodes.has(path.resolve(projectRoot, "yarn.lock").replace(/\\/g, "/"));
-    const hasPackage = index.graph.nodes.has(path.resolve(projectRoot, "package.json").replace(/\\/g, "/"));
+    const graphNodeKeys = new Set(Array.from(index.graph.nodes, fileIdentityKey));
+    const hasPnpm = graphNodeKeys.has(fileIdentityKey(path.resolve(projectRoot, "pnpm-lock.yaml").replace(/\\/g, "/")));
+    const hasYarn = graphNodeKeys.has(fileIdentityKey(path.resolve(projectRoot, "yarn.lock").replace(/\\/g, "/")));
+    const hasPackage = graphNodeKeys.has(
+      fileIdentityKey(path.resolve(projectRoot, "package.json").replace(/\\/g, "/")),
+    );
     let runner = "npm run";
     if (hasPnpm) {
       runner = "pnpm";

@@ -1,7 +1,7 @@
 import { isUnsupportedParserInputError } from "./languages/filePrep.js";
 import type { Edge, Graph } from "./types.js";
 import { loadWorkspaceConfig } from "./util/workspace.js";
-import { normalizePath, normalizeResolutionHints } from "./util/paths.js";
+import { fileIdentityKey, normalizePath, normalizeResolutionHints } from "./util/paths.js";
 import { mapLimit } from "./util/concurrency.js";
 import { logWithLevel } from "./logging.js";
 import type { LogLevel } from "./logging.js";
@@ -129,7 +129,7 @@ export async function collectGraph(
       const sigEntry = opts?.fileSignatures?.get(normalizedFile);
       const shouldReplace = hasExplicitReplace && replaceSet.has(normalizedFile);
       const cachedFileEdges = !shouldReplace ? opts?.cachedFileEdges?.get(normalizedFile) : undefined;
-      const parsedEntry = opts?.parsed?.get(file);
+      const parsedEntry = opts?.parsed?.get(fileIdentityKey(file));
       const edges = await collectEdgesForFile(file, projectRoot, workspaceConfig, {
         ...(parsedEntry ? { parsed: parsedEntry } : {}),
         fast: !!opts?.fast,

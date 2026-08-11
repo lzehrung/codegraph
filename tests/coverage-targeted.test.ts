@@ -332,6 +332,9 @@ describe("targeted coverage for graph triples and native worker fallback", () =>
           runLanguageQueries: () => {
             throw new Error("unexpected query");
           },
+          extractLanguage: () => {
+            throw new Error("unexpected query");
+          },
         },
       }),
       readFile: async () => "from disk",
@@ -384,6 +387,15 @@ describe("targeted coverage for graph triples and native worker fallback", () =>
               locals: [{ patternIndex: 0, captures: [capture("query", localsQuery)] }],
               importBindings: [{ patternIndex: 0, captures: [capture("query", importBindingsQuery)] }],
             }),
+            extractLanguage: (source, languageId, importsQuery, exportsQuery, localsQuery, importBindingsQuery) => ({
+              results: {
+                imports: [{ patternIndex: 0, captures: [capture("source", source), capture("language", languageId)] }],
+                exports: [{ patternIndex: 0, captures: [capture("query", exportsQuery)] }],
+                locals: [{ patternIndex: 0, captures: [capture("query", localsQuery)] }],
+                importBindings: [{ patternIndex: 0, captures: [capture("query", importBindingsQuery)] }],
+              },
+              syntaxTree: null,
+            }),
             runImportsQueryCompact: (source, languageId, importsQuery) => ({
               imports: [{ patternIndex: 0, captures: [{ name: languageId, text: `${importsQuery}:${source}` }] }],
             }),
@@ -423,6 +435,9 @@ describe("targeted coverage for graph triples and native worker fallback", () =>
         binding: {
           supportedLanguageIds: () => ["ts"],
           runLanguageQueries: () => {
+            throw new Error("query failed");
+          },
+          extractLanguage: () => {
             throw new Error("query failed");
           },
         },

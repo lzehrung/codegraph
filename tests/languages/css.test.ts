@@ -55,7 +55,25 @@ const definition: LanguageTestDefinition = {
           to: { type: "file", path: "tokens.css" },
         },
       ],
+      references: [
+        {
+          name: "find references is not available",
+          file: "base.css",
+          line: 1,
+          column: 2,
+          expectedStatus: "not_found",
+        },
+      ],
     },
+    goToDefinition: [
+      {
+        name: "go to definition is not available",
+        file: "base.css",
+        line: 1,
+        column: 2,
+        expectedStatus: "not_found",
+      },
+    ],
     absentDependencyGraph: [
       {
         from: "main.css",

@@ -72,3 +72,13 @@ jobs:
 
       - name: Integration tests
         run: npm run test:integration
+
+      - name: Path identity and disk-cache regression tests
+        run: >
+          npx vitest run
+          tests/cache-invalidation.test.ts
+          tests/path-normalization.test.ts
+          tests/node-modules-and-paths.test.ts
+          tests/cache-modes.test.ts
+          tests/disk-cache-sqlite.test.ts
+          tests/disk-cache-concurrency.test.ts

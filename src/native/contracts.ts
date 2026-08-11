@@ -115,7 +115,7 @@ export type NativeBinding = {
     localsQuery: string,
     importBindingsQuery: string,
   ) => NativeQueryResults;
-  extractLanguage?: (
+  extractLanguage: (
     source: string,
     languageId: string,
     importsQuery: string,

@@ -60,14 +60,20 @@ const definition: LanguageTestDefinition = {
           file: "helpers.zig",
           line: 1,
           column: 8,
-          exactCount: 2,
+          references: [
+            { file: "helpers.zig", line: 1 },
+            { file: "main.zig", line: 5 },
+          ],
         },
         {
           name: "find references includes Zig imported type member usage",
           file: "math.zig",
           line: 1,
           column: 11,
-          exactCount: 2,
+          references: [
+            { file: "math.zig", line: 1 },
+            { file: "main.zig", line: 5 },
+          ],
         },
       ],
     },

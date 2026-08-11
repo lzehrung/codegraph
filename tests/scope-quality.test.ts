@@ -3,6 +3,7 @@ import {
   buildProjectIndexFromFiles,
   buildScopeIndexFromSource,
   TS_SUPPORT,
+  JS_SUPPORT,
   PY_SUPPORT,
   PHP_SUPPORT,
   CPP_SUPPORT,
@@ -27,6 +28,34 @@ describe("scope index quality", () => {
 
     const xInAll = scopeIndex.all.filter((b) => b.name === "x");
     expect(xInAll.length).toBe(1);
+  });
+
+  it("keeps JavaScript and TypeScript class method names out of lexical lookup", () => {
+    const source = [
+      'import { helper } from "./helper.js";',
+      "class Widget {",
+      "  helper() { return 1; }",
+      "  run() {",
+      "    return helper();",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    const cases = [
+      { file: "test.js", support: JS_SUPPORT },
+      { file: "test.ts", support: TS_SUPPORT },
+    ];
+
+    for (const testCase of cases) {
+      const scopeIndex = buildScopeIndexFromSource(testCase.file, source, testCase.support, undefined, [
+        { kind: "named", local: "helper", imported: "helper", from: "./helper.js" },
+      ]);
+      const helperBindings = scopeIndex.bindings.get("helper");
+
+      expect(helperBindings).toHaveLength(1);
+      expect(helperBindings![0]!.kind).toBe("importNamed");
+      expect(helperBindings![0]!.occurrences.map((occurrence) => occurrence.start.line)).toEqual([5]);
+    }
   });
 
   it("should handle nested function shadowing", () => {

@@ -9,6 +9,7 @@ import {
   fileIdentityKey,
   initializeFileIdentityCaseSensitivity,
   isFileIdentityCaseInsensitive,
+  resetFileIdentityCaseSensitivityForTests,
   setFileIdentityCaseInsensitive,
 } from "../src/util/paths.js";
 import { createTestIndex, expectFileInIndex, expectModuleCount } from "./test-utils.js";
@@ -358,6 +359,7 @@ describe("Project Indexing", () => {
     await initializeFileIdentityCaseSensitivity(root);
     const originalCaseSensitivity = isFileIdentityCaseInsensitive();
     try {
+      resetFileIdentityCaseSensitivityForTests(true);
       setFileIdentityCaseInsensitive(true);
       const merged = await buildProjectIndexFromFiles(root, [mainFile, upperCaseUtility, lowerCaseUtility]);
       const mergedUtility = merged.byFile.get(fileIdentityKey(lowerCaseUtility));
@@ -378,6 +380,7 @@ describe("Project Indexing", () => {
       expect(mergedUtility?.file).toBe(lowerCaseUtility.replace(/\\/g, "/"));
       expect(mergedMain?.imports[0]?.resolved).toBe(upperCaseUtility.replace(/\\/g, "/"));
 
+      resetFileIdentityCaseSensitivityForTests(false);
       setFileIdentityCaseInsensitive(false);
       const distinct = await buildProjectIndexFromFiles(root, [mainFile, upperCaseUtility, lowerCaseUtility]);
 
@@ -387,7 +390,7 @@ describe("Project Indexing", () => {
         distinct.byFile.get(fileIdentityKey(lowerCaseUtility)),
       );
     } finally {
-      setFileIdentityCaseInsensitive(originalCaseSensitivity);
+      resetFileIdentityCaseSensitivityForTests(originalCaseSensitivity);
       await fsp.rm(root, { recursive: true, force: true });
     }
   });

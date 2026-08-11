@@ -16,7 +16,7 @@ import {
   loadWorkspaceConfig,
   type WorkspaceConfig,
 } from "../util/workspace.js";
-import { normalizePath } from "../util/paths.js";
+import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { assertSafeRevision } from "../util/git.js";
 import type { GraphBuildOptions } from "../graphs/types.js";
 const UNSAFE_BATCH_REQUEST_CHARACTERS = /[\0\r\n]/;
@@ -56,13 +56,16 @@ function matchesDeletedImportTarget(
   resolved: string | undefined,
   deletedFile: string,
 ): boolean {
-  if (resolved && normalizePath(resolved) === deletedFile) {
+  if (resolved && fileIdentityKey(normalizePath(resolved)) === fileIdentityKey(deletedFile)) {
     return true;
   }
   if (!spec.startsWith(".")) {
     return false;
   }
-  return buildDeletedImportCandidates(fromFile, spec, deletedFile).has(deletedFile);
+  const deletedKey = fileIdentityKey(deletedFile);
+  return [...buildDeletedImportCandidates(fromFile, spec, deletedFile)].some(
+    (candidate) => fileIdentityKey(candidate) === deletedKey,
+  );
 }
 
 function getImportResolvedPath(entry: Pick<ImportBinding, "resolved">): string | undefined {

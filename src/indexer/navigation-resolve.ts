@@ -33,8 +33,8 @@ const packageDirectoryLookups = new WeakMap<
   ProjectIndex,
   Map<"go" | "java" | "kotlin", Map<string, PackageDirectoryLookup>>
 >();
-const goPackageNameCache = new Map<FileId, string | null>();
-const packageNameCache = new Map<string, string | null>();
+type PackageNameCaches = Record<"go" | "jvm", Map<string, string | null>>;
+const packageNameCaches = new WeakMap<ProjectIndex, PackageNameCaches>();
 
 export type ResolveExportOptions = {
   preferredKind?: SymbolKind;
@@ -110,18 +110,28 @@ function sameResolvedExport(left: ResolvedExport, right: ResolvedExport): boolea
   return false;
 }
 
-function readGoPackageName(filePath: string): string | null {
+function packageNameCacheFor(index: ProjectIndex): PackageNameCaches {
+  let caches = packageNameCaches.get(index);
+  if (!caches) {
+    caches = { go: new Map<string, string | null>(), jvm: new Map<string, string | null>() };
+    packageNameCaches.set(index, caches);
+  }
+  return caches;
+}
+
+function readGoPackageName(index: ProjectIndex, filePath: string): string | null {
+  const cache = packageNameCacheFor(index).go;
   const key = fileIdentityKey(filePath);
-  const cached = goPackageNameCache.get(key);
+  const cached = cache.get(key);
   if (cached !== undefined) return cached;
   try {
     const source = fs.readFileSync(filePath, "utf8");
     const match = source.match(/^\s*package\s+([A-Za-z_][A-Za-z0-9_]*)/m);
     const packageName = match?.[1] ?? null;
-    goPackageNameCache.set(key, packageName);
+    cache.set(key, packageName);
     return packageName;
   } catch {
-    goPackageNameCache.set(key, null);
+    cache.set(key, null);
     return null;
   }
 }
@@ -132,7 +142,7 @@ function resolveGoPackageExport(index: ProjectIndex, file: FileId, exportedName:
     if (!support || support.id !== "go") return null;
     const directory = packageDirectoryLookup(index, "go").get(fileIdentityKey(path.dirname(file)));
     if (!directory) return null;
-    const sourcePackage = readGoPackageName(file);
+    const sourcePackage = readGoPackageName(index, file);
     const candidates = sourcePackage ? (directory.byName.get(sourcePackage) ?? []) : directory.all;
     for (const moduleEntry of candidates) {
       const exportEntry = moduleNameLookup(index, moduleEntry.file)?.localExports.get(exportedName)?.[0];
@@ -144,9 +154,14 @@ function resolveGoPackageExport(index: ProjectIndex, file: FileId, exportedName:
   return null;
 }
 
-function readPackageNameForLanguage(filePath: string, languageId: "java" | "kotlin"): string | null {
+function readPackageNameForLanguage(
+  index: ProjectIndex,
+  filePath: string,
+  languageId: "java" | "kotlin",
+): string | null {
+  const cache = packageNameCacheFor(index).jvm;
   const key = `${languageId}::${fileIdentityKey(filePath)}`;
-  const cached = packageNameCache.get(key);
+  const cached = cache.get(key);
   if (cached !== undefined) return cached;
   try {
     const source = fs.readFileSync(filePath, "utf8");
@@ -154,10 +169,10 @@ function readPackageNameForLanguage(filePath: string, languageId: "java" | "kotl
       languageId === "kotlin"
         ? (source.match(/^\s*package\s+([A-Za-z_][\w.]*)/m)?.[1] ?? null)
         : (source.match(/^\s*package\s+([A-Za-z_][\w.]*)\s*;/m)?.[1] ?? null);
-    packageNameCache.set(key, packageName);
+    cache.set(key, packageName);
     return packageName;
   } catch {
-    packageNameCache.set(key, null);
+    cache.set(key, null);
     return null;
   }
 }
@@ -185,8 +200,8 @@ function packageDirectoryLookup(
     directory.all.push(moduleEntry);
     const packageName =
       languageId === "go"
-        ? readGoPackageName(moduleEntry.file)
-        : readPackageNameForLanguage(moduleEntry.file, languageId);
+        ? readGoPackageName(index, moduleEntry.file)
+        : readPackageNameForLanguage(index, moduleEntry.file, languageId);
     if (!packageName) continue;
     const entries = directory.byName.get(packageName) ?? [];
     entries.push(moduleEntry);
@@ -195,14 +210,13 @@ function packageDirectoryLookup(
   byLanguage.set(languageId, directories);
   return directories;
 }
-
 function resolveSiblingPackageExport(
   index: ProjectIndex,
   targetFile: string,
   exportedName: string,
   languageId: "java" | "kotlin",
 ): ResolvedExport | null {
-  const packageName = readPackageNameForLanguage(targetFile, languageId);
+  const packageName = readPackageNameForLanguage(index, targetFile, languageId);
   if (!packageName) return null;
   const directory = packageDirectoryLookup(index, languageId).get(fileIdentityKey(path.dirname(targetFile)));
   if (!directory) return null;

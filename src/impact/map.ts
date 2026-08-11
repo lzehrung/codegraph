@@ -49,7 +49,7 @@ export async function locateChangedSymbolsWithLines(
 
   let parsedEntry;
   try {
-    parsedEntry = await ensureParsedContext(file, index.parsed?.get(file));
+    parsedEntry = await ensureParsedContext(file, index.parsed?.get(fileIdentityKey(file)));
   } catch {
     return { changedSymbols: [], changedLines, parseFailed: true };
   }

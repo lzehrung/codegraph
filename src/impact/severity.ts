@@ -180,14 +180,14 @@ export function calculateSeverity(
   }
 
   const fanInCounts = fanInByFile ?? getCachedFanInByFile(index);
-  const fanIn = fanInCounts.get(ref.file) ?? 0;
+  const fanIn = fanInCounts.get(fileIdentityKey(ref.file)) ?? 0;
   if (fanIn > 0) {
     const fanInFactor = 1 + Math.min(Math.log10(fanIn + 1), 1);
     score *= fanInFactor;
     explain.fanIn = fanIn;
   }
 
-  if (ref.file === changedSymbol.file) {
+  if (fileIdentityKey(ref.file) === fileIdentityKey(changedSymbol.file)) {
     score *= validatedWeights.sameFile;
     explain.sameFile = true;
   }

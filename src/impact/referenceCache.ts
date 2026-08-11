@@ -5,6 +5,7 @@ import { DEFAULT_REF_CONTEXT_LINES } from "../indexer/shared.js";
 import type { FindReferencesResult, ProjectIndex, Reference, SymbolDef } from "../indexer/types.js";
 import type { LanguageSupport } from "../languages.js";
 import type { SyntaxTreeLike } from "../languages/types.js";
+import { fileIdentityKey } from "../util/paths.js";
 
 export type CachedReferenceOptions = {
   maxReferences?: number;
@@ -103,12 +104,13 @@ async function attachReferenceContext(
 ): Promise<void> {
   const perFileCache = new Map<string, { source: string; tree: SyntaxTreeLike; sup: LanguageSupport }>();
   for (const ref of references) {
-    let cached = perFileCache.get(ref.file);
+    const fileKey = fileIdentityKey(ref.file);
+    let cached = perFileCache.get(fileKey);
     if (!cached) {
-      const parsedEntry = index.parsed?.get(ref.file);
+      const parsedEntry = index.parsed?.get(fileKey);
       const parsed = await ensureParsedContext(ref.file, parsedEntry);
       cached = { source: parsed.source, tree: parsed.tree, sup: parsed.sup };
-      perFileCache.set(ref.file, cached);
+      perFileCache.set(fileKey, cached);
     }
     if (options.context === "line") {
       ref.context = extractLineContext(cached.source, ref.range.start.line, options.lines ?? DEFAULT_REF_CONTEXT_LINES);

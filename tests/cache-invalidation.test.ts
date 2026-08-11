@@ -5,7 +5,7 @@ import fsp from "node:fs/promises";
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
-import { buildProjectIndex, buildProjectIndexIncremental, type BuildReport } from "../src/index.js";
+import { buildProjectIndex, buildProjectIndexIncremental, resolveExport, type BuildReport } from "../src/index.js";
 import type { ModuleIndex, ProjectIndex } from "../src/indexer/types.js";
 import * as indexer from "../src/indexer.js";
 import * as buildCache from "../src/indexer/build-cache.js";
@@ -76,6 +76,33 @@ function moduleForPath(index: ProjectIndex, filePath: string): ModuleIndex | und
 function manifestPathFor(root: string): string {
   return path.join(root, ".codegraph-cache", "index-v1", "manifest.json");
 }
+
+describe("navigation package cache invalidation", () => {
+  it("resolves Go sibling symbols using the package name from the rebuilt index", async () => {
+    const root = await mkTmpDir("codegraph-go-package-cache-");
+    const oldPackageFile = normalize(path.join(root, "old.go"));
+    const newPackageFile = normalize(path.join(root, "new.go"));
+    const consumerFile = normalize(path.join(root, "consumer.go"));
+    try {
+      await fsp.writeFile(oldPackageFile, "package old\nfunc Symbol() {}\n", "utf8");
+      await fsp.writeFile(newPackageFile, "package new\nfunc Symbol() {}\n", "utf8");
+      await fsp.writeFile(consumerFile, "package old\nfunc Use() { Symbol() }\n", "utf8");
+
+      const firstIndex = await buildProjectIndex(root, { cache: "off" });
+      const first = resolveExport(firstIndex, consumerFile, "Symbol");
+      expect(first?.kind).toBe("resolved");
+      if (first?.kind === "resolved") expect(first.def.file).toBe(oldPackageFile);
+
+      await fsp.writeFile(consumerFile, "package new\nfunc Use() { Symbol() }\n", "utf8");
+      const rebuiltIndex = await buildProjectIndex(root, { cache: "off" });
+      const rebuilt = resolveExport(rebuiltIndex, consumerFile, "Symbol");
+      expect(rebuilt?.kind).toBe("resolved");
+      if (rebuilt?.kind === "resolved") expect(rebuilt.def.file).toBe(newPackageFile);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
 
 function projectSnapshotPathFor(root: string): string {
   return path.join(root, ".codegraph-cache", "index-v1", "project-index-snapshot.json");

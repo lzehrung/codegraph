@@ -50,6 +50,7 @@ export type NativeExtractBatchResult = {
 };
 
 export const NATIVE_WORKER_BATCH_SIZE = 32;
+export const REQUIRED_NATIVE_EXTRACTION_VERSION = "1.8.99";
 
 /**
  * Default source byte cap before native parse/projection.
@@ -118,6 +119,12 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
     if (binding || loadError) return;
     const loaded = deps.loadBinding();
     if (loaded.binding) {
+      if (typeof loaded.binding.extractLanguage !== "function") {
+        loadError =
+          `@lzehrung/codegraph-native >= ${REQUIRED_NATIVE_EXTRACTION_VERSION} is required; ` +
+          "the installed native binary does not provide extractLanguage. Reinstall the native package.";
+        return;
+      }
       binding = loaded.binding;
       supportedIds = new Set(binding.supportedLanguageIds());
       return;
@@ -213,26 +220,7 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
         };
       }
 
-      if (binding.extractLanguage) {
-        const extraction = binding.extractLanguage(
-          source,
-          task.languageId,
-          task.importsQuery,
-          task.exportsQuery,
-          task.localsQuery,
-          task.importBindingsQuery,
-        );
-        return {
-          filePath: task.filePath,
-          languageId: task.languageId,
-          source,
-          nativeResults: extraction.results,
-          compactResults: null,
-          syntaxTree: extraction.syntaxTree,
-        };
-      }
-
-      const nativeResults = binding.runLanguageQueries(
+      const extraction = binding.extractLanguage(
         source,
         task.languageId,
         task.importsQuery,
@@ -240,25 +228,13 @@ export function createNativeExtractor(deps: NativeExtractorDeps): NativeExtracto
         task.localsQuery,
         task.importBindingsQuery,
       );
-      let syntaxTree: NativeSyntaxTree | null = null;
-      if (binding.parseSyntaxTree) {
-        try {
-          syntaxTree = binding.parseSyntaxTree(source, task.languageId);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          if (/max (node|depth) limit/i.test(message)) {
-            return resourceLimitFallback(task, source, message);
-          }
-          syntaxTree = null;
-        }
-      }
       return {
         filePath: task.filePath,
         languageId: task.languageId,
         source,
-        nativeResults,
+        nativeResults: extraction.results,
         compactResults: null,
-        syntaxTree,
+        syntaxTree: extraction.syntaxTree,
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

@@ -6,6 +6,7 @@ export const RUST_DEF: LanguageDefinition = {
   id: "rust",
   extensions: [".rs"],
   grammar: () => loadTreeSitterLanguage("tree-sitter-rust"),
+  usesQueryDrivenLocals: true,
   structure: {
     blocks: [
       {
@@ -111,6 +112,7 @@ export const RUST_DEF: LanguageDefinition = {
   },
   createsFunctionScope: (node) => node.type === "function_item",
   createsBlockScope: (node) => node.type === "block",
+  membersAreImplicitlyInScope: true,
   isDeclarationName: (node) => {
     const p = node.parent;
     if (!p) return false;

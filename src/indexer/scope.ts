@@ -40,8 +40,9 @@ export function buildScopeIndexFromSource(
   const allScopes: Scope[] = [rootScope];
   const extraBindings: Binding[] = [];
 
+  const normalizeIdentifier = support.normalizeIdentifier;
   const buildBinding = (nameNode: SyntaxNodeLike, kind: BindingKind): Binding => ({
-    name: sliceText(nameNode, source),
+    name: normalizeIdentifier(sliceText(nameNode, source)),
     kind,
     def: toRange(nameNode),
     node: nameNode,
@@ -106,7 +107,7 @@ export function buildScopeIndexFromSource(
 
   const addHoistedDecl = (nameNode: SyntaxNodeLike, kind: BindingKind): void => {
     const target = [...stack].reverse().find((scope) => scope.kind === "function") ?? rootScope;
-    const name = sliceText(nameNode, source);
+    const name = normalizeIdentifier(sliceText(nameNode, source));
     if (!target.map.has(name)) addBinding(target, nameNode, kind);
   };
 
@@ -158,7 +159,7 @@ export function buildScopeIndexFromSource(
   };
 
   const hasImportBinding = (nameNode: SyntaxNodeLike): boolean => {
-    const name = sliceText(nameNode, source);
+    const name = normalizeIdentifier(sliceText(nameNode, source));
     const binding = rootScope.map.get(name);
     return (
       !!binding && (binding.kind === "importDefault" || binding.kind === "importNamed" || binding.kind === "namespace")
@@ -256,6 +257,31 @@ export function buildScopeIndexFromSource(
     }
   };
 
+  const isMemberFunction = (node: SyntaxNodeLike): boolean => {
+    if (
+      node.type === "method_definition" ||
+      node.type === "method_declaration" ||
+      node.type === "method" ||
+      node.type === "singleton_method"
+    ) {
+      return true;
+    }
+    let current = node.parent;
+    while (current) {
+      if (
+        current.type === "class_body" ||
+        current.type === "class_declaration" ||
+        current.type === "class_definition" ||
+        current.type === "class" ||
+        current.type === "impl_item"
+      ) {
+        return true;
+      }
+      current = current.parent;
+    }
+    return false;
+  };
+
   const walk = (node: SyntaxNodeLike) => {
     if (
       node.type === "function_declaration" ||
@@ -269,7 +295,7 @@ export function buildScopeIndexFromSource(
       node.type === "func_literal"
     ) {
       const name = node.childForFieldName("name");
-      if (name) {
+      if (name && (support.membersAreImplicitlyInScope || !isMemberFunction(node))) {
         if (isJsTsFunctionDeclaration(node)) addHoistedDecl(name, "function");
         else addDecl(name, "function");
       }
@@ -383,7 +409,7 @@ export function buildScopeIndexFromSource(
     }
 
     if (idSet.has(node.type) && !support.isDeclarationName(node)) {
-      const name = sliceText(node, source);
+      const name = normalizeIdentifier(sliceText(node, source));
       const binding = lookup(name);
       if (binding) {
         binding.occurrences.push(toRange(node));

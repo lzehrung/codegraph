@@ -1,6 +1,7 @@
 import { supportForFile } from "../languages.js";
 import { supportsReceiverMemberResolution } from "../indexer/navigation-goto.js";
 import type { ProjectIndex } from "../indexer/types.js";
+import { fileIdentityKey } from "../util/paths.js";
 import type { ChangedSymbol, MemberResolutionCoverage } from "./types.js";
 
 /**
@@ -22,10 +23,11 @@ export function computeMemberResolutionCoverage(
   const seenFiles = new Set<string>();
 
   for (const symbol of changedSymbols) {
-    if (seenFiles.has(symbol.file)) continue;
-    seenFiles.add(symbol.file);
+    const fileKey = fileIdentityKey(symbol.file);
+    if (seenFiles.has(fileKey)) continue;
+    seenFiles.add(fileKey);
 
-    const languageId = index.parsed?.get(symbol.file)?.sup.id ?? supportForFile(symbol.file)?.id;
+    const languageId = index.parsed?.get(fileKey)?.sup.id ?? supportForFile(symbol.file)?.id;
     if (!languageId) continue;
 
     if (supportsReceiverMemberResolution(languageId)) {

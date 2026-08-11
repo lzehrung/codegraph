@@ -26,6 +26,7 @@ export const KOTLIN_DEF: LanguageDefinition = {
   id: "kotlin",
   extensions: [".kt", ".kts"],
   grammar: () => loadTreeSitterLanguage("tree-sitter-kotlin"),
+  usesQueryDrivenLocals: true,
   structure: {
     blocks: [
       {

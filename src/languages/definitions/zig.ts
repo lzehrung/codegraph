@@ -15,6 +15,7 @@ export const ZIG_DEF: LanguageDefinition = {
   id: "zig",
   extensions: [".zig"],
   grammar: () => loadTreeSitterLanguage("@tree-sitter-grammars/tree-sitter-zig"),
+  usesQueryDrivenLocals: true,
   structure: {
     blocks: [
       { type: "function_declaration", nameQuery: "name: (identifier) @chunk.name", captureId: "function" },

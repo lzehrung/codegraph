@@ -56,7 +56,25 @@ const definition: LanguageTestDefinition = {
           to: { type: "file", path: "variables.less" },
         },
       ],
+      references: [
+        {
+          name: "find references is not available",
+          file: "variables.less",
+          line: 3,
+          column: 2,
+          expectedStatus: "not_found",
+        },
+      ],
     },
+    goToDefinition: [
+      {
+        name: "go to definition is not available",
+        file: "variables.less",
+        line: 3,
+        column: 2,
+        expectedStatus: "not_found",
+      },
+    ],
     absentDependencyGraph: [
       {
         from: "main.less",

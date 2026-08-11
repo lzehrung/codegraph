@@ -211,7 +211,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   [
     "artifact",
     commandSchema(
-      [...SHARED_BUILD_FLAGS, "--force", "--graph-json", "--json", "--questions", "--report", "--sqlite"],
+      [...SHARED_BUILD_FLAGS, "--force", "--graph-json", ...JSON_OUTPUT_FLAGS, "--questions", "--report", "--sqlite"],
       [...SHARED_BUILD_OPTIONS, "--out", "--output"],
       {
         kind: "max",
@@ -222,7 +222,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ],
   [
     "chunk",
-    commandSchema(["--json", "--text"], ["--language", "--max-tokens", "--min-tokens"], {
+    commandSchema([...JSON_OUTPUT_FLAGS, "--text"], ["--language", "--max-tokens", "--min-tokens"], {
       kind: "max",
       max: 1,
       usage: "Usage: codegraph chunk <file-path> [options]",
@@ -350,12 +350,13 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   [
     "graph-delta",
     commandSchema(
-      [...SHARED_BUILD_FLAGS, "--incremental-strict"],
+      [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--incremental-strict"],
       [...SHARED_BUILD_OPTIONS, "--changed-since", "--git-base", "--git-head", "--output"],
       {
         kind: "max",
         max: 1,
-        usage: "Usage: codegraph graph-delta [project-root] [--root <path>] [--git-base <ref> | --changed-since <ref>]",
+        usage:
+          "Usage: codegraph graph-delta [project-root] [--root <path>] [--git-base <ref> | --changed-since <ref>] [--json | --pretty]",
       },
     ),
   ],
@@ -444,7 +445,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
         kind: "max",
         max: 1,
         usage:
-          "Usage: codegraph install [target] [--target <ids> | --all] [--detect] [--yes | --dry-run] [--force] [--json] [--print-config <target>]",
+          "Usage: codegraph install [target] [--target <ids> | --all] [--detect] [--yes | --dry-run] [--force] [--json | --pretty] [--print-config <target>]",
       },
     ),
   ],
@@ -453,7 +454,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     commandSchema(["--detect", "--dry-run", "--json", "--pretty", "--yes"], ["--target"], {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph uninstall [target] [--target <ids>] [--detect] [--yes | --dry-run] [--json]",
+      usage: "Usage: codegraph uninstall [target] [--target <ids>] [--detect] [--yes | --dry-run] [--json | --pretty]",
     }),
   ],
   [
@@ -643,7 +644,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     commandSchema(["--force", "--json"], ["--agent", "--target"], {
       kind: "max",
       max: 2,
-      usage: "Usage: codegraph skill <install|print-path|doctor> [--agent <name> | --target <dir>] [--force]",
+      usage: "Usage: codegraph skill <install|print-path|doctor> [--agent <name> | --target <dir>] [--force] [--json]",
     }),
   ],
   [
@@ -672,7 +673,8 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     commandSchema(["--json"], ["--db", "--query", "--sqlite"], {
       kind: "max",
       max: 2,
-      usage: 'Usage: codegraph sql <sqlite-path> "SELECT ..." OR codegraph sql --db <sqlite path> --query "SELECT ..."',
+      usage:
+        'Usage: codegraph sql <sqlite-path> "SELECT ..." [--json] OR codegraph sql --db <sqlite path> --query "SELECT ..." [--json]',
     }),
   ],
   [

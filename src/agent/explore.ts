@@ -330,7 +330,10 @@ function collectAnchorSelection(
   const symbolIds = new Set<string>();
   for (const anchor of anchors) {
     const absolute = normalizePath(path.resolve(snapshot.root, anchor.file));
-    if (snapshot.fileGraph.nodes.has(absolute)) files.add(absolute);
+    const graphNode = snapshot.fileGraph.nodes.has(absolute)
+      ? absolute
+      : [...snapshot.fileGraph.nodes].find((node) => fileIdentityKey(node) === fileIdentityKey(absolute));
+    if (graphNode) files.add(graphNode);
     const symbolId = resolveAnchorSymbolId(snapshot, anchor);
     if (symbolId) symbolIds.add(symbolId);
   }

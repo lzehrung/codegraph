@@ -33,6 +33,42 @@ const definition: LanguageTestDefinition = {
           from: "dynamic-import.js",
           to: { type: "file", path: "helpers.js" },
         },
+        {
+          from: "main.js",
+          to: { type: "file", path: "helpers.js" },
+        },
+        {
+          from: "main.js",
+          to: { type: "file", path: "utils.js" },
+        },
+        {
+          from: "utils.js",
+          to: { type: "file", path: "helpers.js" },
+        },
+      ],
+      references: [
+        {
+          name: "find references for helpers.js helperFunction distinguishes the same-named utils.js export",
+          file: "helpers.js",
+          line: 1,
+          column: 17,
+          references: [
+            { file: "helpers.js", line: 1 },
+            { file: "helpers.js", line: 18 },
+            { file: "main.js", line: 25 },
+            { file: "main.js", line: 33 },
+          ],
+        },
+        {
+          name: "find references for UtilityClass.getValue resolves through the receiver",
+          file: "utils.js",
+          line: 10,
+          column: 3,
+          references: [
+            { file: "main.js", line: 13 },
+            { file: "utils.js", line: 10 },
+          ],
+        },
       ],
     },
   },

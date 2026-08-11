@@ -129,14 +129,14 @@ Examples:
 export const LIFECYCLE_HELP_TEXT = `codegraph init/status/sync/uninit - Initialize, inspect, refresh, or remove project-local Codegraph state
 
 Usage:
-  codegraph init [path] [--force] [--no-update-gitignore] [--json]
-  codegraph init --root <path> [--force] [--no-update-gitignore] [--json]
-  codegraph status [path] [--json]
-  codegraph status --root <path> [--json]
-  codegraph sync [path] [--init] [--no-update-gitignore] [--json]
-  codegraph sync --root <path> [--init] [--no-update-gitignore] [--json]
-  codegraph uninit [path] [--force] [--json]
-  codegraph uninit --root <path> [--force] [--json]
+  codegraph init [path] [--force] [--no-update-gitignore] [--json | --pretty]
+  codegraph init --root <path> [--force] [--no-update-gitignore] [--json | --pretty]
+  codegraph status [path] [--json | --pretty]
+  codegraph status --root <path> [--json | --pretty]
+  codegraph sync [path] [--init] [--no-update-gitignore] [--json | --pretty]
+  codegraph sync --root <path> [--init] [--no-update-gitignore] [--json | --pretty]
+  codegraph uninit [path] [--force] [--json | --pretty]
+  codegraph uninit --root <path> [--force] [--json | --pretty]
 
 State:
   Lifecycle commands own only .codegraph/manifest.json metadata. In a Git worktree, init and sync --init ensure it is effectively ignored, appending .codegraph/ and .codegraph-cache/ to the resolved root's .gitignore only when needed; opt out with --no-update-gitignore.
@@ -159,7 +159,7 @@ Options:
 
 export const INSTALL_HELP_TEXT = `codegraph install - Configure Codegraph for supported agent clients
 
-Usage: codegraph install [target] [--target <codex,claude,cursor,gemini,opencode,omp,kilo,agents> | --all] [--yes | --dry-run] [--print-config <target>] [--detect]
+Usage: codegraph install [target] [--target <codex,claude,cursor,gemini,opencode,omp,kilo,agents> | --all] [--yes | --dry-run] [--force] [--json | --pretty] [--print-config <target>] [--detect]
 
 Targets:
   codex, claude, cursor, gemini, opencode, omp, kilo, agents
@@ -167,12 +167,13 @@ Targets:
 
 Safety:
   Interactive terminals preview changes and ask for confirmation. Noninteractive writes require --yes; use --dry-run to preview changed files or --print-config <target> to print the MCP snippet.
+  --force overwrites conflicting skill or config files the installer refuses to clobber by default; collision errors tell you to re-run with --force.
   --all cannot be combined with a target, --detect, or --print-config.
 `;
 
 export const UNINSTALL_HELP_TEXT = `codegraph uninstall - Remove Codegraph-owned installer configuration
 
-Usage: codegraph uninstall [target] [--target <codex,claude,cursor,gemini,opencode,omp,kilo,agents>] [--yes | --dry-run] [--detect]
+Usage: codegraph uninstall [target] [--target <codex,claude,cursor,gemini,opencode,omp,kilo,agents>] [--yes | --dry-run] [--json | --pretty] [--detect]
 
 Safety:
   Removes only Codegraph-owned marker blocks, marker files, exact bundled skill payloads, or exact installer-owned MCP entries.
@@ -248,16 +249,17 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const GREP_HELP_TEXT = `codegraph grep - Search source text or syntax trees
 
-Usage: codegraph grep <regex> [--root <path>] [--ignore-case] [--max-hits <n>]
-       codegraph grep --query <tree-sitter-query> [--root <path>]
+Usage: codegraph grep <regex> [--root <path>] [--ignore-case] [--max-hits <n>] [--json]
+       codegraph grep --query <tree-sitter-query> [--root <path>] [--json]
 
 A bare positional is a text regex. Use --query explicitly for Tree-sitter queries.
+--json returns an envelope { items, limit, totalSeen, truncated, omitted }. For text greps, limit is the effective --max-hits cap (default 5000, max 200000). For --query AST greps, which are uncapped today, limit is null and truncated is always false.
 `;
 
 export const SQL_HELP_TEXT = `codegraph sql - Query a graph SQLite export read-only
 
-Usage: codegraph sql <sqlite-path> "SELECT ..."
-       codegraph sql --db <sqlite-path> --query "SELECT ..."
+Usage: codegraph sql <sqlite-path> "SELECT ..." [--json]
+       codegraph sql --db <sqlite-path> --query "SELECT ..." [--json]
 `;
 
 export const SYMBOLS_HELP_TEXT = `codegraph symbols - Deterministic workspace-symbol lookup
@@ -556,10 +558,10 @@ ${SHARED_INDEX_OPTIONS_HELP}
 
 export const GRAPH_HELP_TEXT = `codegraph graph - Build a dependency graph
 
-Usage: codegraph graph [roots...] [--root <path>] [--json | --mermaid | --dot] [--sqlite <path>] [--output <path> | --stdout] [--sql-artifacts] [--fast-graph] [--resolve-node-modules] [--dynamic-import-heuristics]
+Usage: codegraph graph [roots...] [--root <path>] [--json | --pretty | --mermaid | --dot] [--sqlite <path>] [--output <path> | --stdout] [--sql-artifacts] [--fast-graph] [--resolve-node-modules] [--dynamic-import-heuristics]
 
 Output:
-  Emits a file dependency graph for the selected roots. Use --json/--mermaid/--dot/--sqlite for machine-readable formats.
+  Emits a file dependency graph for the selected roots. Use --json/--pretty/--mermaid/--dot/--sqlite for machine-readable or explicit human formats.
 
 ${SHARED_INDEX_OPTIONS_HELP}
 `;
@@ -676,9 +678,9 @@ Usage: codegraph chunk <file-path> [--language <id>] [--min-tokens <n>] [--max-t
 export const SKILL_HELP_TEXT = `codegraph skill - Install or inspect the bundled agent skill
 
 Usage:
-  codegraph skill install [--agent <name> | --target <dir>] [--force]
-  codegraph skill print-path [--agent <name> | --target <dir>]
-  codegraph skill doctor [--agent <name> | --target <dir>]
+  codegraph skill install [--agent <name> | --target <dir>] [--force] [--json]
+  codegraph skill print-path [--agent <name> | --target <dir>] [--json]
+  codegraph skill doctor [--agent <name> | --target <dir>] [--json]
 `;
 
 export const DUMPMOD_HELP_TEXT = `codegraph dumpmod - Dump one indexed module

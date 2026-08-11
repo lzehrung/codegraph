@@ -68,7 +68,10 @@ const definition: LanguageTestDefinition = {
           file: "function-pointers.h",
           line: 3,
           column: 15,
-          exactCount: 2,
+          references: [
+            { file: "function-pointers.h", line: 3 },
+            { file: "advanced-use.c", line: 4 },
+          ],
         },
       ],
     },

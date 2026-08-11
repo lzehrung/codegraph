@@ -83,7 +83,25 @@ const definition: LanguageTestDefinition = {
           to: { type: "external", name: "./missing.ts" },
         },
       ],
+      references: [
+        {
+          name: "find references is not available",
+          file: "App.svelte",
+          line: 3,
+          column: 19,
+          expectedStatus: "not_found",
+        },
+      ],
     },
+    goToDefinition: [
+      {
+        name: "go to definition is not available",
+        file: "App.svelte",
+        line: 3,
+        column: 19,
+        expectedStatus: "not_found",
+      },
+    ],
     absentDependencyGraph: [
       {
         from: "ExternalScripts.svelte",
@@ -172,6 +190,22 @@ it("preserves Svelte block content and original coordinates while extracting emb
     .filter((target) => target === scriptFile || target === styleFile || target === templateFile)
     .sort();
   expect(indexedTargets).toEqual([scriptFile, styleFile, templateFile].sort());
+});
+
+it("extracts the full outer template block when templates nest", () => {
+  const source = '<template><template v-if="ok"><span/></template><p/></template>';
+  const blocks = parseSFC(source);
+  expect(blocks).toHaveLength(1);
+  const template = blocks[0];
+  expect(template?.type).toBe("template");
+  expect(template?.content).toBe('<template v-if="ok"><span/></template><p/>');
+  expect(template?.blockEnd).toBe(source.length);
+});
+
+it("stops at the first unmatched opening tag instead of reclassifying nested content as top-level blocks", () => {
+  expect(parseSFC("<template><script>const x = 1;</script>")).toEqual([]);
+  const blocks = parseSFC("<style>h1 { color: red; }</style><template><p>oops");
+  expect(blocks.map((block) => block.type)).toEqual(["style"]);
 });
 
 function lineAndColumnAt(source: string, offset: number): { line: number; column: number } {

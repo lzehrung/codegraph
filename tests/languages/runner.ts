@@ -10,10 +10,8 @@ import type {
   ExactReferencesExpectation,
   ExactSymbolExpectation,
   LanguageTestDefinition,
-  ReferencesExpectation,
-  SymbolExpectation,
 } from "./types.js";
-import { createTestIndexFromFiles, createTestIndexFromPath, findSymbolsByName } from "../test-utils.js";
+import { createTestIndexFromFiles, createTestIndexFromPath } from "../test-utils.js";
 import { collectGraph, findReferences, goToDefinition, listSymbols } from "../../src/index.js";
 import type { ProjectIndex } from "../../src/index.js";
 import type { Edge, Graph } from "../../src/types.js";
@@ -86,11 +84,7 @@ export function runLanguageTests(def: LanguageTestDefinition) {
           tokenizer: tokenize,
         });
 
-        if (sample.exactChunks) {
-          assertExactChunks(chunks, sample.exactChunks);
-        } else {
-          sample.expectedChunks(chunks);
-        }
+        assertExactChunks(chunks, sample.exactChunks);
       });
     }
 
@@ -127,13 +121,13 @@ export function runLanguageTests(def: LanguageTestDefinition) {
         const addFile = (filePath: string) => {
           files.add(resolveSamplePath(filePath));
         };
-        for (const expectation of def.parity?.exact?.dependencyGraph ?? def.parity?.dependencyGraph ?? []) {
+        for (const expectation of def.parity.exact.dependencyGraph ?? []) {
           addFile(expectation.from);
           if (expectation.to.type === "file") {
             addFile(expectation.to.path);
           }
         }
-        for (const expectation of def.parity?.absentDependencyGraph ?? []) {
+        for (const expectation of def.parity.absentDependencyGraph ?? []) {
           addFile(expectation.from);
           if (expectation.to.type === "file") {
             const targetFile = resolveSamplePath(expectation.to.path);
@@ -142,20 +136,22 @@ export function runLanguageTests(def: LanguageTestDefinition) {
             }
           }
         }
-        for (const expectation of def.parity?.exact?.symbols ?? []) {
+        for (const expectation of def.parity.exact.symbols ?? []) {
           addFile(expectation.file);
         }
-        for (const expectation of def.parity?.symbols ?? []) {
-          addFile(expectation.file);
-        }
-        for (const expectation of def.parity?.goToDefinition ?? []) {
+        for (const expectation of def.parity.goToDefinition ?? []) {
           addFile(expectation.file);
           if (expectation.expectedDefinition) {
             addFile(expectation.expectedDefinition.file);
           }
         }
-        for (const expectation of def.parity?.exact?.references ?? def.parity?.references ?? []) {
+        for (const expectation of def.parity.exact.references ?? []) {
           addFile(expectation.file);
+          if (expectation.expectedStatus !== "not_found") {
+            for (const site of expectation.references) {
+              addFile(site.file);
+            }
+          }
         }
         return Array.from(files);
       };
@@ -174,24 +170,13 @@ export function runLanguageTests(def: LanguageTestDefinition) {
         });
       };
 
-      const assertSubsetDependencyGraph = (expectations: DependencyGraphExpectation[]) => {
-        it("builds the dependency graph", () => {
-          for (const expectation of expectations) {
-            const found = graph.edges.some((edge) => matchEdge(edge, expectation));
-            expect(found).toBe(true);
-          }
-        });
-      };
-
-      if (def.parity.exact?.dependencyGraph) {
+      if (def.parity.exact.dependencyGraph) {
         assertExactDependencyGraph(def.parity.exact.dependencyGraph);
-      } else if (def.parity.dependencyGraph) {
-        assertSubsetDependencyGraph(def.parity.dependencyGraph);
       }
 
       if (def.parity.absentDependencyGraph) {
         it("does not build unsupported dependency graph edges", () => {
-          for (const expectation of def.parity?.absentDependencyGraph ?? []) {
+          for (const expectation of def.parity.absentDependencyGraph) {
             const found = graph.edges.some((edge) => matchEdge(edge, expectation));
             expect(found).toBe(false);
           }
@@ -213,53 +198,29 @@ export function runLanguageTests(def: LanguageTestDefinition) {
         });
       };
 
-      const assertSubsetSymbols = (expectations: SymbolExpectation[]) => {
-        it("extracts symbols", () => {
-          for (const expectation of expectations) {
-            const filePath = resolveSamplePath(expectation.file);
-            for (const symbol of expectation.includes) {
-              const matches = findSymbolsByName(index, symbol.name, filePath);
-              expect(matches.length).toBeGreaterThan(0);
-              if (symbol.kind) {
-                const hasKind = matches.some((match) => match.kind === symbol.kind);
-                expect(hasKind).toBe(true);
-              }
-            }
-            for (const name of expectation.excludes ?? []) {
-              const matches = findSymbolsByName(index, name, filePath);
-              expect(matches.length).toBe(0);
-            }
-          }
-        });
-      };
-
-      if (def.parity.exact?.symbols) {
+      if (def.parity.exact.symbols) {
         assertExactSymbols(def.parity.exact.symbols);
-      } else if (def.parity.symbols) {
-        assertSubsetSymbols(def.parity.symbols);
       }
 
-      if (def.parity.goToDefinition) {
-        for (const expectation of def.parity.goToDefinition ?? []) {
-          it(expectation.name, async () => {
-            const filePath = resolveSamplePath(expectation.file);
-            const result = await goToDefinition(index, {
-              file: filePath,
-              line: expectation.line,
-              column: expectation.column,
-            });
-            const status = expectation.expectedStatus ?? "ok";
-            if (status === "not_found") {
-              expect(result.status).toBe("not_found");
-              return;
-            }
-            expect(result.status).toBe("ok");
-            if (result.status === "ok" && expectation.expectedDefinition) {
-              expect(result.definition.file).toBe(resolveSamplePath(expectation.expectedDefinition.file));
-              expect(result.definition.range.start.line).toBe(expectation.expectedDefinition.line);
-            }
+      for (const expectation of def.parity.goToDefinition ?? []) {
+        it(expectation.name, async () => {
+          const filePath = resolveSamplePath(expectation.file);
+          const result = await goToDefinition(index, {
+            file: filePath,
+            line: expectation.line,
+            column: expectation.column,
           });
-        }
+          const status = expectation.expectedStatus ?? "ok";
+          if (status === "not_found") {
+            expect(result.status).toBe("not_found");
+            return;
+          }
+          expect(result.status).toBe("ok");
+          if (result.status === "ok" && expectation.expectedDefinition) {
+            expect(result.definition.file).toBe(resolveSamplePath(expectation.expectedDefinition.file));
+            expect(result.definition.range.start.line).toBe(expectation.expectedDefinition.line);
+          }
+        });
       }
 
       const assertExactReferences = (expectations: ExactReferencesExpectation[]) => {
@@ -278,41 +239,28 @@ export function runLanguageTests(def: LanguageTestDefinition) {
             }
             expect(result.status).toBe("ok");
             if (result.status === "ok") {
-              expect(expectation.exactCount, "exact.references require exactCount when status is ok").toEqual(
-                expect.any(Number),
+              if (!expectation.references?.length) {
+                throw new Error(
+                  "exact.references identity form requires at least one expected site; an empty or missing list cannot assert zero references",
+                );
+              }
+              const referenceIdentity = (file: string, line: number) => `${file}:${line}`;
+              const actual = new Set(
+                result.references.map((reference) =>
+                  referenceIdentity(normalizePath(reference.file), reference.range.start.line),
+                ),
               );
-              expect(result.references.length).toBe(expectation.exactCount);
+              const expected = new Set(
+                expectation.references.map((site) => referenceIdentity(resolveSamplePath(site.file), site.line)),
+              );
+              expect(sortedKeys(Array.from(actual))).toEqual(sortedKeys(Array.from(expected)));
             }
           });
         }
       };
 
-      const assertSubsetReferences = (expectations: ReferencesExpectation[]) => {
-        for (const expectation of expectations) {
-          it(expectation.name, async () => {
-            const filePath = resolveSamplePath(expectation.file);
-            const result = await findReferences(index, {
-              file: filePath,
-              line: expectation.line,
-              column: expectation.column,
-            });
-            const status = expectation.expectedStatus ?? "ok";
-            if (status === "not_found") {
-              expect(result.status).toBe("not_found");
-              return;
-            }
-            expect(result.status).toBe("ok");
-            if (result.status === "ok") {
-              expect(result.references.length).toBeGreaterThanOrEqual(expectation.minimumCount ?? 1);
-            }
-          });
-        }
-      };
-
-      if (def.parity.exact?.references) {
+      if (def.parity.exact.references) {
         assertExactReferences(def.parity.exact.references);
-      } else if (def.parity.references) {
-        assertSubsetReferences(def.parity.references);
       }
     }
   });

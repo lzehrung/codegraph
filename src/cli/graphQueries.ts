@@ -12,7 +12,7 @@ import {
 } from "../graphs/queries.js";
 import { type GraphBuildOptions } from "../graphs/types.js";
 import type { Graph } from "../types.js";
-import { toProjectDisplayPath } from "../util/paths.js";
+import { fileIdentityKey, toProjectDisplayPath } from "../util/paths.js";
 import { parseOptionalNonNegativeIntegerOption } from "./options.js";
 import { resolveCliProjectFile, writeCliProjectFileError } from "./projectFile.js";
 
@@ -130,7 +130,11 @@ async function handleDepsCommand(context: GraphQueryCommandContext): Promise<voi
       targetFile = definition.file;
     }
   }
-  if (!loaded.graph.nodes.has(targetFile)) {
+  const targetIdentity = fileIdentityKey(targetFile);
+  const matchedGraphNode = loaded.graph.nodes.has(targetFile)
+    ? targetFile
+    : [...loaded.graph.nodes].find((node) => fileIdentityKey(node) === targetIdentity);
+  if (!matchedGraphNode) {
     const missing = {
       status: "not_found" as const,
       reason: "file_not_indexed",
@@ -141,6 +145,7 @@ async function handleDepsCommand(context: GraphQueryCommandContext): Promise<voi
     else context.writeStdoutLine(`not_found: ${missing.error}`);
     context.exit(1);
   }
+  targetFile = matchedGraphNode;
   const results =
     context.command === "deps"
       ? getDependencies(loaded.graph, targetFile, {

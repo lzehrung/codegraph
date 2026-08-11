@@ -61,7 +61,9 @@ export function findClosestBinding(
   file: FileId,
   bindingName: string,
   currentNode: SyntaxNodeLike,
+  support: LanguageSupport,
 ): SymbolDef | null {
+  bindingName = support.normalizeIdentifier(bindingName);
   let currentScope = scopeIndex.allScopes.find((scope) => {
     const start = scope.node.startIndex;
     const end = scope.node.endIndex;
@@ -116,9 +118,10 @@ export function resolveNamedDefinition(
   index: ProjectIndex,
   mod: ModuleIndex,
   file: FileId,
+  support: LanguageSupport,
   name: string,
 ): GoToResult | null {
-  const hit = resolveExport(index, file, name);
+  const hit = resolveExport(index, file, name, { allowLocalFallback: support.membersAreImplicitlyInScope });
   if (hit?.kind === "resolved") {
     return okGoToResult(index, hit.def, {
       via: { exportedName: name },

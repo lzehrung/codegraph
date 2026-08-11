@@ -176,6 +176,25 @@ describe("CLI command option validation", () => {
 });
 
 describe("JSON output flag command allow-list", () => {
+  it("accepts --json and --pretty for graph-delta, artifact, and chunk", () => {
+    for (const command of ["graph-delta", "artifact", "chunk"]) {
+      expect(() => validateCliArgs(command, parseCliArgs(command, ["--json"]))).not.toThrow();
+      expect(() => validateCliArgs(command, parseCliArgs(command, ["--pretty"]))).not.toThrow();
+    }
+  });
+
+  it("accepts install --force and documents the collision recovery flag in schema usage", () => {
+    expect(() => validateCliArgs("install", parseCliArgs("install", ["--force", "--dry-run"]))).not.toThrow();
+    expect(() => validateCliArgs("install", parseCliArgs("install", ["--json"]))).not.toThrow();
+    expect(() => validateCliArgs("install", parseCliArgs("install", ["--pretty"]))).not.toThrow();
+  });
+
+  it("still rejects genuinely unsupported flags for graph-delta", () => {
+    expect(() => validateCliArgs("graph-delta", parseCliArgs("graph-delta", ["--not-a-real-flag"]))).toThrow(
+      "Unknown option for graph-delta: --not-a-real-flag",
+    );
+  });
+
   it("rejects --json on viewer and mcp while keeping version --json", () => {
     expect(() => validateCliArgs("viewer", parseCliArgs("viewer", ["--json"]))).toThrow(
       "Unknown option for viewer: --json",

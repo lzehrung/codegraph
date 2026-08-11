@@ -1,4 +1,5 @@
 import type { LanguageSupport } from "../languages.js";
+import { isJsTsLanguage } from "../languages/js-family.js";
 import type { ParserLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import { fileIdentityKey } from "../util/paths.js";
@@ -9,8 +10,71 @@ import { readPhpNamespaceFromRange } from "./navigation-php.js";
 import { candidateFilesImportingTarget } from "./reference-candidates.js";
 import { buildScopeIndexFromSource, type ScopeIndex } from "./scope.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
-import type { ModuleIndex, ProjectIndex, ResolutionProvenance, SymbolDef } from "./types.js";
+import type { ExportEntry, ModuleIndex, ProjectIndex, ResolutionProvenance, SymbolDef } from "./types.js";
 import type { ImportBinding } from "./import-types.js";
+
+type ReexportEntry = Extract<ExportEntry, { type: "reexport" }>;
+
+type ExportFromIdentifier = {
+  isExportFrom: boolean;
+  sourceSpecifier?: string;
+  entry?: ReexportEntry;
+};
+
+function exportFromIdentifier(
+  index: ProjectIndex,
+  fileId: string,
+  range: Range,
+  parsed: ParsedFileContext,
+): ExportFromIdentifier | null {
+  if (!isJsTsLanguage(parsed.sup.id)) return null;
+  const startIndex = range.start.index;
+  if (typeof startIndex !== "number") return null;
+  const moduleIndex = index.byFile.get(fileIdentityKey(fileId));
+  if (!moduleIndex) return null;
+
+  const exportFromPattern = /\bexport\s*\{([^}]*)\}\s*from\s*(["'])([^"']+)\2/g;
+  let match: RegExpExecArray | null;
+  while ((match = exportFromPattern.exec(parsed.source))) {
+    const listText = match[1]!;
+    const listOffset = match[0].indexOf(listText);
+    if (listOffset < 0) continue;
+    const listStart = match.index + listOffset;
+    let itemOffset = 0;
+    for (const item of listText.split(",")) {
+      const leadingWhitespace = item.search(/\S/);
+      if (leadingWhitespace < 0) {
+        itemOffset += item.length + 1;
+        continue;
+      }
+      const itemText = item.trim();
+      const itemStart = listStart + itemOffset + leadingWhitespace;
+      const itemEnd = itemStart + itemText.length;
+      if (startIndex < itemStart || startIndex >= itemEnd) {
+        itemOffset += item.length + 1;
+        continue;
+      }
+
+      const sourceMatch = /^([A-Za-z_$][\w$]*)/.exec(itemText);
+      if (!sourceMatch) return { isExportFrom: true };
+      const sourceSpecifier = sourceMatch[1]!;
+      const sourceEnd = itemStart + sourceSpecifier.length;
+      if (startIndex >= sourceEnd) return { isExportFrom: true };
+      const fromSpecifier = match[3]!;
+      const matchingEntries = moduleIndex.exports.filter(
+        (candidate): candidate is ReexportEntry =>
+          candidate.type === "reexport" && candidate.sourceSpecifier === sourceSpecifier,
+      );
+      const entry =
+        matchingEntries.find(
+          (candidate) => candidate.moduleSpecifier === fromSpecifier || candidate.fromModule === fromSpecifier,
+        ) ?? (matchingEntries.length === 1 ? matchingEntries[0] : undefined);
+      return { isExportFrom: true, sourceSpecifier, ...(entry ? { entry } : {}) };
+    }
+    itemOffset += listText.length + 1;
+  }
+  return null;
+}
 
 export function getCachedScope(
   index: ProjectIndex,
@@ -24,7 +88,15 @@ export function getCachedScope(
   },
 ): ScopeIndex {
   const fileKey = fileIdentityKey(fileId);
-  if (index.scopeCache.has(fileKey)) return index.scopeCache.get(fileKey)!;
+  const cachedScope = index.scopeCache.get(fileKey);
+  if (cachedScope) {
+    for (const binding of cachedScope.all) {
+      binding.occurrences = binding.occurrences.filter(
+        (occurrence) => !exportFromIdentifier(index, fileId, occurrence, parsedCtx)?.isExportFrom,
+      );
+    }
+    return cachedScope;
+  }
   const scopeIndex = buildScopeIndexFromSource(
     fileId,
     parsedCtx.source,
@@ -35,10 +107,13 @@ export function getCachedScope(
       tree: parsedCtx.tree,
     },
   );
-  index.scopeCache.set(fileKey, scopeIndex);
+  for (const binding of scopeIndex.all) {
+    binding.occurrences = binding.occurrences.filter(
+      (occurrence) => !exportFromIdentifier(index, fileId, occurrence, parsedCtx)?.isExportFrom,
+    );
+  }
   return scopeIndex;
 }
-
 export async function buildPhpQualifiedNames(
   index: ProjectIndex,
   definitionFile: string,
@@ -117,6 +192,7 @@ export async function collectVerifiedNamedNodeReferences(
     if (maxVerified !== undefined && maxVerified > 0 && verified.length >= maxVerified) {
       break;
     }
+    if (exportFromIdentifier(index, fileId, range, parsed)?.isExportFrom) continue;
     const resolved = await resolveDefinition(
       {
         file: fileId,
@@ -285,9 +361,7 @@ export function getCachedReferenceCandidateFiles(
   hasGlobalNameReferences: boolean,
 ): string[] {
   if (hasGlobalNameReferences) {
-    return Array.from(index.byFile.values(), (module) => module.file)
-      .filter((candidateFile) => fileIdentityKey(candidateFile) !== fileIdentityKey(def.file))
-      .sort((left, right) => left.localeCompare(right));
+    return Array.from(index.byFile.values(), (module) => module.file).sort((left, right) => left.localeCompare(right));
   }
 
   let cache = referenceCandidateCache.get(index);

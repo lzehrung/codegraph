@@ -80,8 +80,14 @@ function normalizeSymbols(
   const normalized: Record<string, string[]> = {};
   for (const expectation of expectations) {
     const file = normalizeFile(expectation.file);
-    const symbolNames = new Set(listSymbols(index, { file }).map((symbol) => symbol.name));
-    normalized[file] = expectation.names.filter((name) => symbolNames.has(name)).sort();
+    const actualNames = listSymbols(index, { file })
+      .map((symbol) => symbol.name)
+      .sort();
+    const actualNameSet = new Set(actualNames);
+    expect(actualNames.length, `expected indexed symbols in ${file}`).toBeGreaterThan(0);
+    const missingNames = expectation.names.filter((name) => !actualNameSet.has(name));
+    expect(missingNames, `missing expected symbols in ${file}`).toEqual([]);
+    normalized[file] = actualNames;
   }
   return normalized;
 }
@@ -245,11 +251,7 @@ async function normalizeSqlFacts(
 async function expectNativeSemantics(expectation: SemanticExpectation): Promise<void> {
   const nativeIndex = await buildSemanticIndex(expectation, "native");
 
-  expect(normalizeSymbols(nativeIndex, expectation.symbols)).toEqual(
-    Object.fromEntries(
-      (expectation.symbols ?? []).map((entry) => [normalizeFile(entry.file), [...entry.names].sort()]),
-    ),
-  );
+  normalizeSymbols(nativeIndex, expectation.symbols);
 
   if (expectation.sqlFacts?.length) {
     const actualFacts = await normalizeSqlFacts(expectation.sqlFacts);

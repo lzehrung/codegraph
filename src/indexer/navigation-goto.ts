@@ -145,8 +145,28 @@ export async function resolveMemberAccessDefinition(params: {
     }
   }
 
-  if (obj && prop && node.id === prop.id && supportsReceiverMemberResolution(sup.id)) {
+  if (
+    obj &&
+    prop &&
+    node.id === prop.id &&
+    (supportsReceiverMemberResolution(sup.id) ||
+      (sup.id === "php" && /^(?:this|\$this|self)$/.test(sliceText(obj, source))))
+  ) {
     const member = sliceText(prop, source);
+    if (!sup.membersAreImplicitlyInScope && /^(?:this|\$this|self)$/.test(sliceText(obj, source))) {
+      const classContainer = findEnclosingClassContainer(node);
+      const memberDef = classContainer
+        ? findLocalWithinNode(mod.locals, member, classContainer, sup.normalizeIdentifier)
+        : undefined;
+      if (memberDef) {
+        return okGoToResult(index, memberDef, {
+          via: { exportedName: member },
+          resolution: "member-access",
+          confidence: "medium",
+        });
+      }
+    }
+
     const objDef = await resolveReceiverDefinition(obj, source, sup, resolveExpression);
 
     if (objDef) {
@@ -181,9 +201,26 @@ export async function resolveMemberAccessDefinition(params: {
   return null;
 }
 
+function findEnclosingClassContainer(node: SyntaxNodeLike): SyntaxNodeLike | null {
+  let current = node.parent;
+  while (current) {
+    if (
+      current.type === "class_declaration" ||
+      current.type === "abstract_class_declaration" ||
+      current.type === "class_definition" ||
+      current.type === "impl_item"
+    ) {
+      return current;
+    }
+    current = current.parent;
+  }
+  return null;
+}
+
 export function supportsReceiverMemberResolution(languageId: string): boolean {
   return (
     languageId === "csharp" ||
+    languageId === "python" ||
     languageId === "js" ||
     languageId === "java" ||
     languageId === "javascript" ||
@@ -529,14 +566,16 @@ function findLocalWithinNode(
   locals: readonly SymbolDef[],
   member: string,
   node: SyntaxNodeLike,
+  normalizeIdentifier: (name: string) => string = (name) => name,
 ): SymbolDef | undefined {
   const containerStart = node.startIndex;
   const containerEnd = node.endIndex;
+  const normalizedMember = normalizeIdentifier(member);
   return locals.find((local) => {
     const startIndex = local.range.start.index;
     const endIndex = local.range.end.index;
     return (
-      local.localName === member &&
+      normalizeIdentifier(local.localName) === normalizedMember &&
       startIndex !== undefined &&
       endIndex !== undefined &&
       startIndex >= containerStart &&

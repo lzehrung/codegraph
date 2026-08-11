@@ -41,19 +41,35 @@ const cloneEdge = (edge: Edge): Edge => ({
  * distinct relationships (`sql:reads_from:...` vs `sql:writes_to:...`), so `raw` is part
  * of their identity and collapsing on it would discard real graph semantics.
  */
-function deduplicateEdges(edges: Edge[], rawIsIdentity = false): Edge[] {
-  const seen = new Set<string>();
-  const deduplicated: Edge[] = [];
+export function deduplicateEdges(edges: Edge[], rawIsIdentity = false): Edge[] {
+  const deduplicated = new Map<string, Edge>();
   for (const edge of edges) {
     const target = edge.to.type === "file" ? fileIdentityKey(edge.to.path) : edge.to.name;
     const type = edge.typeOnly ? "type-only" : "runtime";
     const discriminator = rawIsIdentity ? `\0${edge.raw}` : "";
     const key = `${fileIdentityKey(edge.from)}\0${edge.to.type}\0${target}\0${type}${discriminator}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    deduplicated.push(edge);
+    const previous = deduplicated.get(key);
+    if (!previous || hasBetterProvenance(edge, previous)) deduplicated.set(key, edge);
   }
-  return deduplicated;
+  return [...deduplicated.values()];
+}
+
+function hasBetterProvenance(candidate: Edge, previous: Edge): boolean {
+  let candidateResolutionRank = 0;
+  if (candidate.resolved === "precise") candidateResolutionRank = 2;
+  else if (candidate.resolved === "heuristic") candidateResolutionRank = 1;
+  let previousResolutionRank = 0;
+  if (previous.resolved === "precise") previousResolutionRank = 2;
+  else if (previous.resolved === "heuristic") previousResolutionRank = 1;
+  if (candidateResolutionRank !== previousResolutionRank) {
+    return candidateResolutionRank > previousResolutionRank;
+  }
+  const candidateConfidence = candidate.confidence;
+  const previousConfidence = previous.confidence;
+  if (candidateConfidence === undefined || previousConfidence === undefined) {
+    return candidateConfidence !== undefined && previousConfidence === undefined;
+  }
+  return candidateConfidence > previousConfidence;
 }
 
 export async function collectEdgesForFile(

@@ -59,10 +59,10 @@ export async function handleGrepCommand(context: GrepCommandContext): Promise<vo
   if (querySource) {
     if (context.hasFlag("--json")) {
       const items = await astGrep(context.projectRootFs, querySource, patterns, context.discoveryOptions);
-      // astGrep has no result cap today, so every result is always complete.
+      // astGrep has no result cap today: limit is null so it always means "the cap applied".
       const envelope: GrepResultEnvelope<AstGrepHit> = {
         items,
-        limit: items.length,
+        limit: null,
         totalSeen: items.length,
         truncated: false,
         omitted: 0,

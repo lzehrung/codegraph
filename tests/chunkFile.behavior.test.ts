@@ -151,9 +151,66 @@ const finalize = () => {
     });
 
     const processUsersChunks = chunks.filter((c) => c.type === "function" && c.name === "processUsers");
-    expect(processUsersChunks.length).toBeGreaterThan(1);
+    expect(processUsersChunks.length).toBe(5);
+    expect(processUsersChunks.map((chunk) => [chunk.startLine, chunk.endLine])).toEqual([
+      [1, 1],
+      [2, 3],
+      [4, 8],
+      [9, 10],
+      [11, 15],
+    ]);
+    for (let index = 1; index < processUsersChunks.length; index += 1) {
+      expect(processUsersChunks[index]?.startLine).toBeGreaterThan(processUsersChunks[index - 1]?.endLine ?? 0);
+    }
+
+    let nextOffset = 0;
+    const byteRanges = processUsersChunks.map((chunk) => {
+      const start = source.indexOf(chunk.text, nextOffset);
+      expect(start).toBeGreaterThanOrEqual(nextOffset);
+      const end = start + chunk.text.length;
+      nextOffset = end;
+      return [start, end];
+    });
+    expect(byteRanges).toEqual([
+      [0, 31],
+      [31, 88],
+      [88, 173],
+      [173, 220],
+      [220, 299],
+    ]);
+    expect(nextOffset).toBe(299);
+    for (let index = 1; index < byteRanges.length; index += 1) {
+      expect(byteRanges[index]?.[0]).toBeGreaterThanOrEqual(byteRanges[index - 1]?.[1] ?? 0);
+    }
+
     expect(processUsersChunks.every((chunk) => chunk.tokenCount <= 8)).toBe(true);
     expect(processUsersChunks.map((chunk) => chunk.text).join("")).toContain("else {");
+  });
+
+  it("keeps sibling chunks disjoint in source bytes and line ranges", () => {
+    const source = ["function first() {", "  return 1;", "}", "", "function second() {", "  return 2;", "}"].join("\n");
+    const chunks = chunkFile({
+      language: LANG_CONFIGS.javascript,
+      source,
+      filePath: "siblings.js",
+      minTokens: 1,
+      maxTokens: 100,
+      tokenizer: tokenize,
+    });
+    const siblings = chunks.filter((chunk) => chunk.type === "function");
+    expect(siblings.map((chunk) => chunk.name)).toEqual(["first", "second"]);
+
+    let nextOffset = 0;
+    for (let index = 0; index < siblings.length; index += 1) {
+      const chunk = siblings[index]!;
+      const start = source.indexOf(chunk.text, nextOffset);
+      expect(start).toBeGreaterThanOrEqual(nextOffset);
+      if (index) {
+        expect(chunk.startLine).toBeGreaterThan(siblings[index - 1]!.endLine);
+      }
+      nextOffset = start + chunk.text.length;
+    }
+    expect(nextOffset).toBeLessThanOrEqual(source.length);
   });
 
   it("detects JavaScript functions assigned to variables and properties", () => {

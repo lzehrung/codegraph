@@ -81,7 +81,10 @@ const definition: LanguageTestDefinition = {
           file: "PatternMatching.cs",
           line: 7,
           column: 29,
-          exactCount: 2,
+          references: [
+            { file: "PatternMatching.cs", line: 7 },
+            { file: "PatternMatching.cs", line: 9 },
+          ],
         },
       ],
     },

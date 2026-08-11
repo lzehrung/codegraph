@@ -179,6 +179,7 @@ const BASE_HELPERS = {
     n.type === "function_expression" ||
     n.type === "arrow_function" ||
     n.type === "method_definition",
+  membersAreImplicitlyInScope: false,
   supportsCrossModuleSymbols: true,
 };
 

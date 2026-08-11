@@ -15,6 +15,16 @@ export const CORE_PACKAGE_EXTRA_FILES = Object.freeze(["agent/query-index/queryI
 const IMPORT_PATTERN =
   /(?:import|export)\s+(?:type\s+)?(?:[^;]*?\s+from\s+)?["'](\.[^"']+)["']|import\(["'](\.[^"']+)["']\)/g;
 
+// Import scanning runs on comment-stripped source. A code example inside a doc
+// comment would otherwise be followed as a real dependency and fail the build on
+// a path that does not exist.
+const LINE_COMMENT_PATTERN = /(^|[^:"'\\])\/\/[^\n]*/g;
+const BLOCK_COMMENT_PATTERN = /\/\*[\s\S]*?\*\//g;
+
+export function stripCommentsForImportScan(source) {
+  return source.replace(BLOCK_COMMENT_PATTERN, "").replace(LINE_COMMENT_PATTERN, (_match, prefix) => prefix);
+}
+
 const FORBIDDEN_SEGMENT_PATTERN = /(^|\/)(cli|mcp|installer|bin)(\/|$)/;
 
 export function isForbiddenCorePackagePath(relativePath) {
@@ -62,7 +72,7 @@ function relatedArtifacts(relativeJsPath) {
 
 function collectRelativeSpecifiers(source) {
   const specifiers = [];
-  for (const match of source.matchAll(IMPORT_PATTERN)) {
+  for (const match of stripCommentsForImportScan(source).matchAll(IMPORT_PATTERN)) {
     const specifier = match[1] ?? match[2];
     if (!specifier || !specifier.startsWith(".")) {
       continue;

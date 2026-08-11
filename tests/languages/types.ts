@@ -1,5 +1,3 @@
-import type { Chunk } from "../../src/chunking/chunkFile.js";
-
 export interface ChunkExpectation {
   type: string;
   name?: string;
@@ -19,21 +17,10 @@ type LanguageSampleBase = {
   };
 };
 
-/**
- * Prefer `exactChunks`: a complete ordered contract (count, names, ranges).
- * `expectedChunks` remains for unconverted subset-style suites.
- */
-export type LanguageSample =
-  | (LanguageSampleBase & {
-      /** Preferred: exact chunk list matched in order on type/name/ranges. */
-      exactChunks: ChunkExpectation[];
-      expectedChunks?: undefined;
-    })
-  | (LanguageSampleBase & {
-      exactChunks?: undefined;
-      /** Subset/legacy callback assertions. */
-      expectedChunks: (chunks: Chunk[]) => void;
-    });
+/** Complete ordered chunk contract (count, names, and ranges). */
+export type LanguageSample = LanguageSampleBase & {
+  exactChunks: ChunkExpectation[];
+};
 
 export type GraphEdgeExpectation = { type: "file"; path: string } | { type: "external"; name: string };
 
@@ -41,12 +28,6 @@ export interface DependencyGraphExpectation {
   from: string; // Path relative to tests/samples/<language>/
   to: GraphEdgeExpectation;
   typeOnly?: boolean;
-}
-
-export interface SymbolExpectation {
-  file: string; // Path relative to tests/samples/<language>/
-  includes: Array<{ name: string; kind?: string }>;
-  excludes?: string[];
 }
 
 /** Complete symbol multiset for a file (name + optional kind). */
@@ -67,29 +48,30 @@ export interface GoToDefinitionExpectation {
   };
 }
 
-export interface ReferencesExpectation {
-  name: string;
+/** A single expected reference site, matched on normalized file + line identity. */
+export interface ExactReferenceSite {
   file: string; // Path relative to tests/samples/<language>/
-  line: number;
-  column: number;
-  expectedStatus?: "ok" | "not_found";
-  minimumCount?: number;
+  line: number; // 1-based line number
 }
 
-export interface ExactReferencesExpectation {
+type ExactReferencesExpectationBase = {
   name: string;
   file: string;
   line: number;
   column: number;
-  expectedStatus?: "ok" | "not_found";
-  /** Required when status is ok (default): precise reference count. */
-  exactCount?: number;
-}
+};
 
-/**
- * Preferred exact-set contracts. When present for a category, the runner asserts
- * equality (no extras / no missing) instead of subset presence checks.
- */
+export type ExactReferencesExpectation =
+  | (ExactReferencesExpectationBase & {
+      expectedStatus?: "ok";
+      references: [ExactReferenceSite, ...ExactReferenceSite[]];
+    })
+  | (ExactReferencesExpectationBase & {
+      expectedStatus: "not_found";
+      references?: never;
+    });
+
+/** Complete exact-set contracts for language parity assertions. */
 export interface ExactParityExpectations {
   dependencyGraph?: DependencyGraphExpectation[];
   symbols?: ExactSymbolExpectation[];
@@ -98,19 +80,9 @@ export interface ExactParityExpectations {
 
 export interface LanguageParityDefinition {
   sampleDir: string; // tests/samples/<sampleDir>/
-  /**
-   * Preferred exact assertions for edges, symbols, and references.
-   * Keep subset fields below only for suites not yet converted.
-   */
-  exact?: ExactParityExpectations;
-  /** Subset mode: each listed edge must exist (extras allowed). */
-  dependencyGraph?: DependencyGraphExpectation[];
+  exact: ExactParityExpectations;
   absentDependencyGraph?: DependencyGraphExpectation[];
-  /** Subset mode: listed symbols must be present. */
-  symbols?: SymbolExpectation[];
   goToDefinition?: GoToDefinitionExpectation[];
-  /** Subset mode: reference count is a minimum. */
-  references?: ReferencesExpectation[];
 }
 
 export interface LanguageTestDefinition {

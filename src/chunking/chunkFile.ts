@@ -33,9 +33,9 @@ export interface ChunkFileOptions {
  * emitted independently. Every source byte is covered by at least one chunk, and
  * no individual chunk text repeats a source span internally.
  *
- * A parent that exceeds `maxTokens` is split at semantic inner boundaries (or
- * token boundaries when no such boundaries exist), while child declarations
- * remain available as their own chunks.
+ * A parent that exceeds `maxTokens` is split at complete source-line boundaries,
+ * while an individual oversized line is split at token boundaries. Child
+ * declarations remain available as their own chunks.
  * @param opts Chunking options
  * @returns Array of semantic chunks
  */

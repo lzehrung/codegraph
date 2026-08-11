@@ -8,6 +8,7 @@ import {
   getNativeSyntaxTreeExecution,
   isNativeRequiredUnavailableError,
 } from "../native/treeSitterNative.js";
+import { resolveExport } from "../indexer/navigation-resolve.js";
 import { SymbolKind, type ProjectIndex, type ResolvedExport, type SymbolDef } from "../indexer/types.js";
 import type { FileId } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
@@ -79,82 +80,11 @@ export async function buildSymbolGraphDetailed(
     return maybePushEdge(fromId, toId, label, site);
   };
 
-  const resolveExportNamespace = (
-    file: string,
-    exportedName: string,
-    cache: Map<string, ResolvedDetailedExport | null> = new Map(),
-  ): ResolvedDetailedExport | null => {
-    const normalizedFile = normalizePath(file);
-    const key = `${fileIdentityKey(normalizedFile)}::${exportedName}`;
-    if (cache.has(key)) return cache.get(key) ?? null;
-    cache.set(key, null);
-    const moduleEntry = index.byFile.get(fileIdentityKey(normalizedFile));
-    if (!moduleEntry) {
-      return null;
-    }
+  const resolveExportNamespace = (file: string, exportedName: string): ResolvedDetailedExport | null =>
+    resolveExport(index, file, exportedName);
 
-    for (const exportEntry of moduleEntry.exports) {
-      if (exportEntry.type === "local" && exportEntry.exportedAs === exportedName) {
-        const resolved: ResolvedDetailedExport = { kind: "resolved", def: exportEntry.target };
-        cache.set(key, resolved);
-        return resolved;
-      }
-    }
-
-    for (const exportEntry of moduleEntry.exports) {
-      if (exportEntry.type === "namespaceReexport" && exportEntry.exportedAs === exportedName) {
-        const resolved: ResolvedDetailedExport = {
-          kind: "namespace",
-          file: normalizePath(exportEntry.fromModule),
-        };
-        cache.set(key, resolved);
-        return resolved;
-      }
-    }
-
-    for (const exportEntry of moduleEntry.exports) {
-      if (
-        exportEntry.type === "reexport" &&
-        exportEntry.exportedAs === exportedName &&
-        typeof exportEntry.fromModule === "string"
-      ) {
-        const resolved =
-          resolveExportNamespace(exportEntry.fromModule, exportEntry.sourceSpecifier || exportedName, cache) ??
-          resolveExportNamespace(exportEntry.fromModule, exportedName, cache);
-        if (resolved) {
-          cache.set(key, resolved);
-          return resolved;
-        }
-      }
-    }
-
-    for (const exportEntry of moduleEntry.exports) {
-      if (exportEntry.type === "exportStar" && typeof exportEntry.fromModule === "string") {
-        const resolved = resolveExportNamespace(exportEntry.fromModule, exportedName, cache);
-        if (resolved) {
-          cache.set(key, resolved);
-          return resolved;
-        }
-      }
-    }
-
-    const local = moduleEntry.locals.find((entry) => entry.localName === exportedName);
-    if (local) {
-      const resolved: ResolvedDetailedExport = { kind: "resolved", def: local };
-      cache.set(key, resolved);
-      return resolved;
-    }
-
-    cache.set(key, null);
-    return null;
-  };
-
-  const resolveExportDef = (
-    file: string,
-    exportedName: string,
-    cache?: Map<string, ResolvedDetailedExport | null>,
-  ): SymbolDef | null => {
-    const resolved = resolveExportNamespace(file, exportedName, cache);
+  const resolveExportDef = (file: string, exportedName: string): SymbolDef | null => {
+    const resolved = resolveExportNamespace(file, exportedName);
     return resolved?.kind === "resolved" ? resolved.def : null;
   };
 
@@ -187,11 +117,8 @@ export async function buildSymbolGraphDetailed(
     return moduleEntry?.locals.find((entry) => entry.localName === lastName) ?? null;
   };
 
-  const resolveExportFrom = (
-    file: string,
-    exportedName: string,
-    cache: Map<string, ResolvedDetailedExport | null> = new Map(),
-  ): SymbolDef | null => resolveExportDef(file, exportedName, cache);
+  const resolveExportFrom = (file: string, exportedName: string): SymbolDef | null =>
+    resolveExportDef(file, exportedName);
 
   const optionFileKeys = opts?.files ? new Set(Array.from(opts.files, fileIdentityKey)) : undefined;
   for (const moduleEntry of index.byFile.values()) {

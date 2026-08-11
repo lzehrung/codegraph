@@ -6,6 +6,7 @@ export const CSHARP_DEF: LanguageDefinition = {
   id: "csharp",
   extensions: [".cs"],
   grammar: () => loadTreeSitterLanguage("tree-sitter-c-sharp"),
+  usesQueryDrivenLocals: true,
   structure: {
     blocks: [
       {

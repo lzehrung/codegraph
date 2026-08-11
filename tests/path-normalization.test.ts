@@ -9,7 +9,12 @@ import {
   toProjectDisplayPath,
   toProjectRelativePath,
 } from "../src/util.js";
-import { fileIdentityKey, isFileIdentityCaseInsensitive, setFileIdentityCaseInsensitive } from "../src/util/paths.js";
+import {
+  fileIdentityKey,
+  isFileIdentityCaseInsensitive,
+  resetFileIdentityCaseSensitivityForTests,
+  setFileIdentityCaseInsensitive,
+} from "../src/util/paths.js";
 import { createImpactIncludeMatcher, normalizeImpactFilePath } from "../src/impact/path.js";
 
 describe("cross-platform path normalization", () => {
@@ -112,15 +117,31 @@ describe("cross-platform path normalization", () => {
   it("uses filesystem case sensitivity for path identity while normalizing drive letters", () => {
     const originalCaseSensitivity = isFileIdentityCaseInsensitive();
     try {
+      resetFileIdentityCaseSensitivityForTests();
       setFileIdentityCaseInsensitive(true);
       expect(fileIdentityKey("E:/x")).toBe(fileIdentityKey("e:/X"));
       expect(fileIdentityKey("E:/repo/Util.ts")).toBe(fileIdentityKey("e:/REPO/util.ts"));
 
+      resetFileIdentityCaseSensitivityForTests();
       setFileIdentityCaseInsensitive(false);
       expect(fileIdentityKey("E:/x")).toBe(fileIdentityKey("e:/x"));
       expect(fileIdentityKey("E:/repo/Util.ts")).not.toBe(fileIdentityKey("E:/repo/util.ts"));
     } finally {
-      setFileIdentityCaseInsensitive(originalCaseSensitivity);
+      resetFileIdentityCaseSensitivityForTests(originalCaseSensitivity);
+    }
+  });
+  it("freezes identity case mode after the first key", () => {
+    const originalCaseSensitivity = isFileIdentityCaseInsensitive();
+    try {
+      resetFileIdentityCaseSensitivityForTests(true);
+      const firstKey = fileIdentityKey("E:/Repo/Util.ts");
+
+      setFileIdentityCaseInsensitive(false);
+
+      expect(isFileIdentityCaseInsensitive()).toBe(true);
+      expect(fileIdentityKey("e:/repo/util.ts")).toBe(firstKey);
+    } finally {
+      resetFileIdentityCaseSensitivityForTests(originalCaseSensitivity);
     }
   });
 });

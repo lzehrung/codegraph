@@ -6,6 +6,7 @@ export const SWIFT_DEF: LanguageDefinition = {
   id: "swift",
   extensions: [".swift"],
   grammar: () => loadTreeSitterLanguage("tree-sitter-swift"),
+  usesQueryDrivenLocals: true,
   structure: {
     blocks: [
       {

@@ -343,6 +343,14 @@ describe("Go to Definition", () => {
 
       await testGoToDefinition(index, embeddingFile, 22, 8, embeddingFile, 4);
     });
+    it("resolves range variables to their declarations", async () => {
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "go");
+      const rangeFile = path.join(samplePath, "range-variables.go").replace(/\\/g, "/");
+      const index = await createTestIndexFromFiles(samplePath, [rangeFile]);
+
+      await testGoToDefinition(index, rangeFile, 6, 12, rangeFile, 5);
+      await testGoToDefinition(index, rangeFile, 6, 16, rangeFile, 5);
+    });
   });
 
   describe("TypeScript", () => {
@@ -594,28 +602,31 @@ describe("Go to Definition", () => {
       }
     });
 
-    it("resolves an unqualified call to the same-file method, not a same-named method in another class", async () => {
-      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-method-goto-unqualified-"));
+    it("resolves bare imported calls separately from explicit receiver method calls", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-ts-method-goto-explicit-receiver-"));
       try {
+        const helperFile = path.join(root, "helper.ts").replace(/\\/g, "/");
         const mainFile = path.join(root, "main.ts").replace(/\\/g, "/");
+        await fsp.writeFile(helperFile, "export function helper(): number { return 42; }\n", "utf8");
         await fsp.writeFile(
           mainFile,
           [
-            "class Main {",
-            "  helper() { }",
-            "  run() {",
+            'import { helper } from "./helper.js";',
+            "class Widget {",
+            "  helper(): number { return 1; }",
+            "  run(): number {",
             "    helper();",
+            "    return this.helper();",
             "  }",
-            "}",
-            "class Other {",
-            "  helper() { }",
             "}",
             "",
           ].join("\n"),
           "utf8",
         );
-        const index = await createTestIndexFromFiles(root, [mainFile]);
-        await testGoToDefinition(index, mainFile, 4, 5, mainFile, 2);
+        const index = await createTestIndexFromFiles(root, [helperFile, mainFile]);
+
+        await testGoToDefinition(index, mainFile, 5, 5, helperFile, 1);
+        await testGoToDefinition(index, mainFile, 6, 17, mainFile, 3);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }
@@ -781,6 +792,15 @@ describe("Go to Definition", () => {
         expect(result.definition.file).toBe(utilsFile);
         expect(result.definition.range.start.line).toBe(5);
       }
+    });
+    it("resolves typed, untyped, and static properties to their declarations", async () => {
+      const samplePath = path.resolve(process.cwd(), "tests", "samples", "php");
+      const propertiesFile = path.join(samplePath, "properties.php").replace(/\\/g, "/");
+      const index = await createTestIndexFromFiles(samplePath, [propertiesFile]);
+
+      await testGoToDefinition(index, propertiesFile, 11, 23, propertiesFile, 5);
+      await testGoToDefinition(index, propertiesFile, 11, 38, propertiesFile, 6);
+      await testGoToDefinition(index, propertiesFile, 11, 53, propertiesFile, 7);
     });
 
     it("should find definition of grouped use aliases", async () => {
@@ -1060,28 +1080,31 @@ describe("Go to Definition", () => {
       }
     });
 
-    it("resolves an unqualified call to the same-file method, not a same-named method in another class", async () => {
-      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-js-method-goto-unqualified-"));
+    it("resolves bare imported calls separately from explicit receiver method calls", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-js-method-goto-explicit-receiver-"));
       try {
+        const helperFile = path.join(root, "helper.js").replace(/\\/g, "/");
         const mainFile = path.join(root, "main.js").replace(/\\/g, "/");
+        await fsp.writeFile(helperFile, "export function helper() { return 42; }\n", "utf8");
         await fsp.writeFile(
           mainFile,
           [
-            "class Main {",
-            "  helper() { }",
+            'import { helper } from "./helper.js";',
+            "class Widget {",
+            "  helper() { return 1; }",
             "  run() {",
             "    helper();",
+            "    return this.helper();",
             "  }",
-            "}",
-            "class Other {",
-            "  helper() { }",
             "}",
             "",
           ].join("\n"),
           "utf8",
         );
-        const index = await createTestIndexFromFiles(root, [mainFile]);
-        await testGoToDefinition(index, mainFile, 4, 5, mainFile, 2);
+        const index = await createTestIndexFromFiles(root, [helperFile, mainFile]);
+
+        await testGoToDefinition(index, mainFile, 5, 5, helperFile, 1);
+        await testGoToDefinition(index, mainFile, 6, 17, mainFile, 3);
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
       }

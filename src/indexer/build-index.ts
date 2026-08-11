@@ -940,11 +940,13 @@ async function buildProjectIndexWithManifestOptions(
       ...(knownSymlinkDirectories !== undefined ? { knownSymlinkDirectories } : {}),
       onSymlinkDirectoriesDiscovered,
     });
-    const additionalFiles = normalizeIndexedFileInputs(
+    const additionalFileCandidates = normalizeIndexedFileInputs(
       projectRoot,
       opts?.additionalFiles ?? [],
       "Additional index file",
-    ).filter((file) => fs.existsSync(file));
+    );
+    const additionalFileExistence = await probePathExistence(additionalFileCandidates, buildConcurrency(opts));
+    const additionalFiles = additionalFileCandidates.filter((file) => additionalFileExistence.get(file));
     const discoveredFileSet = new Set(discoveredFiles);
     const files = Array.from(new Set([...discoveredFiles, ...additionalFiles]));
     const transientFiles = additionalFiles.filter((file) => !discoveredFileSet.has(file));
@@ -1192,20 +1194,6 @@ export async function buildProjectIndexIncremental(
       (file) => Object.hasOwn(trackedEntries, file),
     );
     const previousTransientFileSet = new Set(previousTransientFiles);
-    const additionalFileSet = new Set(additionalFiles.filter((file) => fs.existsSync(file)));
-    const transientFiles = [...additionalFileSet].filter(
-      (file) => previousTransientFileSet.has(file) || !Object.hasOwn(trackedEntries, file),
-    );
-    const retiredTransientFiles = previousTransientFiles.filter((file) => !additionalFileSet.has(file));
-    const { trackedFiles, deletedTrackedFiles } = await partitionTrackedManifestFiles(trackedEntries);
-    for (const file of retiredTransientFiles) {
-      trackedFiles.delete(file);
-      deletedTrackedFiles.add(file);
-      delete trackedEntries[file];
-    }
-    if (retiredTransientFiles.length) manifestRequiresSanitization = true;
-    const fileReport = initFileReport(report);
-    if (fileReport) fileReport.total = trackedFiles.size;
     const needsGitScan = !!opts?.gitBase || !!opts?.changedSince;
     const gitFiles = needsGitScan ? await listChangedFiles(projectRoot, buildIncrementalGitDiffOptions(opts)) : [];
     // New files that were never committed, staged, or passed explicitly have no tracked
@@ -1251,14 +1239,38 @@ export async function buildProjectIndexIncremental(
           : {}),
       });
     }
+    const candidateFiles = [
+      ...explicitFiles,
+      ...additionalFiles,
+      ...manifestDiffFiles,
+      ...gitFiles,
+      ...untrackedFiles,
+      ...rediscoveredFiles,
+    ];
+    const candidateExistence = await probePathExistence(candidateFiles, buildConcurrency(opts));
+    const existsInCandidateSnapshot = (file: string): boolean => candidateExistence.get(file) ?? false;
+    const additionalFileSet = new Set(additionalFiles.filter(existsInCandidateSnapshot));
+    const transientFiles = [...additionalFileSet].filter(
+      (file) => previousTransientFileSet.has(file) || !Object.hasOwn(trackedEntries, file),
+    );
+    const retiredTransientFiles = previousTransientFiles.filter((file) => !additionalFileSet.has(file));
+    const { trackedFiles, deletedTrackedFiles } = await partitionTrackedManifestFiles(trackedEntries);
+    for (const file of retiredTransientFiles) {
+      trackedFiles.delete(file);
+      deletedTrackedFiles.add(file);
+      delete trackedEntries[file];
+    }
+    if (retiredTransientFiles.length) manifestRequiresSanitization = true;
+    const fileReport = initFileReport(report);
+    if (fileReport) fileReport.total = trackedFiles.size;
     const allFiles = new Set<string>([
       ...trackedFiles,
-      ...explicitFiles.filter((file) => fs.existsSync(file)),
-      ...additionalFiles.filter((file) => fs.existsSync(file)),
-      ...manifestDiffFiles.filter((file) => fs.existsSync(file)),
-      ...gitFiles.filter((file) => fs.existsSync(file)),
-      ...untrackedFiles.filter((file) => fs.existsSync(file)),
-      ...rediscoveredFiles.filter((file) => fs.existsSync(file)),
+      ...explicitFiles.filter(existsInCandidateSnapshot),
+      ...additionalFiles.filter(existsInCandidateSnapshot),
+      ...manifestDiffFiles.filter(existsInCandidateSnapshot),
+      ...gitFiles.filter(existsInCandidateSnapshot),
+      ...untrackedFiles.filter(existsInCandidateSnapshot),
+      ...rediscoveredFiles.filter(existsInCandidateSnapshot),
     ]);
     if (fileReport) fileReport.total = allFiles.size;
     const dependentFilesOfDeletedTracked = collectDeletedTrackedFileDependents(trackedEntries, deletedTrackedFiles);
@@ -1289,7 +1301,7 @@ export async function buildProjectIndexIncremental(
     }
     const changedFiles = new Set<string>();
     const markAsChanged = (file: string): void => {
-      if (fs.existsSync(file)) changedFiles.add(file);
+      if (allFiles.has(file)) changedFiles.add(file);
     };
     // Git working-tree diffs are change *candidates*, not proof the indexed bytes are
     // stale. `lastCommit...WORKTREE` stays dirty across warm runs after we index the
@@ -1298,8 +1310,12 @@ export async function buildProjectIndexIncremental(
     // `allFiles` above so signature validation can decide; only skip the early snapshot
     // fast-path while candidates exist.
     const gitChangeCandidates = new Set<string>();
-    for (const file of manifestDiffFiles) if (fs.existsSync(file)) gitChangeCandidates.add(file);
-    for (const file of gitFiles) if (fs.existsSync(file)) gitChangeCandidates.add(file);
+    for (const file of manifestDiffFiles) {
+      if (existsInCandidateSnapshot(file)) gitChangeCandidates.add(file);
+    }
+    for (const file of gitFiles) {
+      if (existsInCandidateSnapshot(file)) gitChangeCandidates.add(file);
+    }
     const explicitFileSet = new Set(explicitFiles);
     const explicitFilesCoverAllFiles =
       explicitFileSet.size === allFiles.size && [...allFiles].every((file) => explicitFileSet.has(file));
@@ -1635,14 +1651,12 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
     supportForFile(file, previousLanguageExtensions)?.id !== supportForFile(file, currentLanguageExtensions)?.id;
   const strictIncremental = opts?.incrementalStrict ?? false;
   if (strictIncremental && graphOptions.fast) graphOptions.fast = false;
-  const explicitFiles = normalizeIndexedFileInputs(projectRoot, opts?.files ?? [], "Graph delta file").filter((file) =>
-    fs.existsSync(file),
-  );
+  const explicitFiles = normalizeIndexedFileInputs(projectRoot, opts?.files ?? [], "Graph delta file");
   const additionalFiles = normalizeIndexedFileInputs(
     projectRoot,
     opts?.additionalFiles ?? [],
     "Additional graph delta file",
-  ).filter((file) => fs.existsSync(file));
+  );
   const needsGitScan = !!opts?.gitBase || !!opts?.changedSince;
   const gitFiles = needsGitScan ? await listChangedFiles(projectRoot, buildIncrementalGitDiffOptions(opts)) : [];
   const { trackedFiles } = await partitionTrackedManifestFiles(trackedEntries);
@@ -1668,12 +1682,20 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
       );
     }
   }
+  const candidateExistence = await probePathExistence(
+    [...explicitFiles, ...additionalFiles, ...manifestDiffFiles, ...gitFiles],
+    buildConcurrency(opts),
+  );
+  const existsInCandidateSnapshot = (file: string): boolean => candidateExistence.get(file) ?? false;
+  const existingExplicitFiles = explicitFiles.filter(existsInCandidateSnapshot);
+  const existingAdditionalFiles = additionalFiles.filter(existsInCandidateSnapshot);
+
   const allFiles = new Set<string>([
     ...trackedFiles,
-    ...explicitFiles,
-    ...additionalFiles,
-    ...manifestDiffFiles.filter((file) => fs.existsSync(file)),
-    ...gitFiles.filter((file) => fs.existsSync(file)),
+    ...existingExplicitFiles,
+    ...existingAdditionalFiles,
+    ...manifestDiffFiles.filter(existsInCandidateSnapshot),
+    ...gitFiles.filter(existsInCandidateSnapshot),
   ]);
   const changedFiles = new Set<string>();
   const changedFileKeys = new Set<string>();
@@ -1683,7 +1705,7 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
     changedFileKeys.add(key);
     changedFiles.add(file);
   };
-  explicitFiles.forEach(addChangedFile);
+  existingExplicitFiles.forEach(addChangedFile);
   manifestDiffFiles.forEach(addChangedFile);
   gitFiles.forEach(addChangedFile);
   if (languageExtensionsChanged) {

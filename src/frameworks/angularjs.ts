@@ -196,10 +196,24 @@ function findAngularJsClosingToken(tokens: AngularJsToken[], start: number): num
   return undefined;
 }
 
+const ANGULAR_JS_GLOBAL_OWNERS = new Set(["window", "globalThis", "self", "global"]);
+
+function isAngularJsGlobalPropertyAccess(tokens: AngularJsToken[], angularIndex: number): boolean {
+  if (tokens[angularIndex - 1]?.value !== ".") return false;
+  const owner = tokens[angularIndex - 2];
+  if (owner?.kind !== "identifier" || !ANGULAR_JS_GLOBAL_OWNERS.has(owner.value)) return false;
+  const ownerPrevious = tokens[angularIndex - 3]?.value;
+  return ownerPrevious !== "." && ownerPrevious !== "]";
+}
+
 function parseAngularJsModuleStart(tokens: AngularJsToken[], start: number): number | undefined {
   const angularToken = tokens[start];
   const previous = tokens[start - 1]?.value;
-  if (angularToken?.kind !== "identifier" || angularToken.value !== "angular" || previous === "." || previous === "]") {
+  if (angularToken?.kind !== "identifier" || angularToken.value !== "angular") {
+    return undefined;
+  }
+  // Allow only known globals (`window.angular`); keep rejecting unrelated `*.angular`.
+  if (previous === "]" || (previous === "." && !isAngularJsGlobalPropertyAccess(tokens, start))) {
     return undefined;
   }
 

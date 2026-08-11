@@ -387,7 +387,7 @@ export class CodeReviewSession implements ICodeReviewSession {
   ): void {
     const trackedEntries = index.manifestEntries?.size
       ? [...index.manifestEntries].map(([file, entry]) => [file, this.trackedSignatureFromManifest(entry.sig)] as const)
-      : [...index.byFile.keys()].map((file) => [file, this.statSignature(file)] as const);
+      : [...index.byFile.values()].map((module) => [module.file, this.statSignature(module.file)] as const);
     this.trackedFileSignatures = new Map(trackedEntries);
     this.trackedDirectorySignatures = this.directorySignatures(projectFiles);
     this.configSignature = this.statSignature(this.configFilePath());

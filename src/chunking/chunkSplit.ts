@@ -71,89 +71,20 @@ export function splitLargeBlockSimple(
 
 export function splitLargeBlockUsingInnerBlocks(
   block: BlockCandidate,
-  innerBlocks: BlockCandidate[],
+  _innerBlocks: BlockCandidate[],
   source: string,
   tokenizer: ChunkTokenizer,
   maxTokens: number,
   out: RangedChunk[],
   languageId: string,
-  newlineOffsets: number[],
+  _newlineOffsets: number[],
   filePath?: string,
 ): void {
-  const boundaries = new Set<number>([block.startByte, block.endByte]);
-  for (const innerBlock of innerBlocks) {
-    boundaries.add(innerBlock.startByte);
-    boundaries.add(innerBlock.endByte);
-  }
-  const sorted = Array.from(boundaries).sort((left, right) => left - right);
-
-  if (sorted.length < 2) {
-    splitLargeBlockSimple(block, source, tokenizer, maxTokens, out, languageId, filePath);
-    return;
-  }
-
-  let currentStart = -1;
-  let currentEnd = -1;
-  let currentStartLine = block.startLine;
-  let currentTokens = 0;
-
-  const flush = () => {
-    if (currentStart === -1) return;
-    emitRangeWithinBudget(
-      block,
-      source,
-      currentStart,
-      currentEnd,
-      currentStartLine,
-      tokenizer,
-      maxTokens,
-      out,
-      languageId,
-      filePath,
-    );
-    currentStart = -1;
-    currentEnd = -1;
-    currentTokens = 0;
-  };
-
-  for (let index = 0; index < sorted.length - 1; index++) {
-    const start = sorted[index]!;
-    const end = sorted[index + 1]!;
-    if (end <= start) continue;
-
-    const segmentTokens = tokenizer(source.slice(start, end));
-    const [segmentStartRow] = locateLineAndColFromByte(newlineOffsets, start);
-
-    if (segmentTokens > maxTokens) {
-      flush();
-      emitRangeWithinBudget(
-        block,
-        source,
-        start,
-        end,
-        segmentStartRow + 1,
-        tokenizer,
-        maxTokens,
-        out,
-        languageId,
-        filePath,
-      );
-      continue;
-    }
-
-    if (currentStart !== -1 && currentTokens + segmentTokens > maxTokens) {
-      flush();
-    }
-
-    if (currentStart === -1) {
-      currentStart = start;
-      currentStartLine = segmentStartRow + 1;
-    }
-    currentEnd = end;
-    currentTokens += segmentTokens;
-  }
-
-  flush();
+  // Semantic boundaries are useful for selecting a parent chunk, but splitting
+  // that parent at arbitrary AST offsets can make sibling line ranges overlap.
+  // Pack complete source lines here; split within a line only when that line
+  // alone exceeds the token budget.
+  splitLargeBlockSimple(block, source, tokenizer, maxTokens, out, languageId, filePath);
 }
 
 /** Splits an oversized string on code-point boundaries using the configured tokenizer. */

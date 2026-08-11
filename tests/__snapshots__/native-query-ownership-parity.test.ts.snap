@@ -3,6 +3,16 @@
 exports[`native query ownership > keeps SFC chunking productive in native mode 1`] = `
 [
   {
+    "endLine": 1,
+    "filePath": "tests/samples/vue/inline-script.vue",
+    "languageId": "vue",
+    "name": undefined,
+    "startLine": 1,
+    "text": "<template>",
+    "tokenCount": 1,
+    "type": "misc",
+  },
+  {
     "endLine": 2,
     "filePath": "tests/samples/vue/inline-script.vue",
     "languageId": "html",
@@ -15,6 +25,27 @@ exports[`native query ownership > keeps SFC chunking productive in native mode 1
     "type": "template:misc",
   },
   {
+    "endLine": 3,
+    "filePath": "tests/samples/vue/inline-script.vue",
+    "languageId": "vue",
+    "name": undefined,
+    "startLine": 3,
+    "text": "</template>",
+    "tokenCount": 1,
+    "type": "misc",
+  },
+  {
+    "endLine": 3,
+    "filePath": "tests/samples/vue/inline-script.vue",
+    "languageId": "vue",
+    "name": undefined,
+    "startLine": 3,
+    "text": "
+",
+    "tokenCount": 0,
+    "type": "misc",
+  },
+  {
     "endLine": 4,
     "filePath": "tests/samples/vue/inline-script.vue",
     "languageId": "typescript",
@@ -24,6 +55,16 @@ exports[`native query ownership > keeps SFC chunking productive in native mode 1
 ",
     "tokenCount": 0,
     "type": "script:misc",
+  },
+  {
+    "endLine": 4,
+    "filePath": "tests/samples/vue/inline-script.vue",
+    "languageId": "vue",
+    "name": undefined,
+    "startLine": 4,
+    "text": "<script lang="ts">",
+    "tokenCount": 2,
+    "type": "misc",
   },
   {
     "endLine": 6,
@@ -49,6 +90,27 @@ exports[`native query ownership > keeps SFC chunking productive in native mode 1
     "type": "script:module_var",
   },
   {
+    "endLine": 8,
+    "filePath": "tests/samples/vue/inline-script.vue",
+    "languageId": "vue",
+    "name": undefined,
+    "startLine": 8,
+    "text": "</script>",
+    "tokenCount": 1,
+    "type": "misc",
+  },
+  {
+    "endLine": 8,
+    "filePath": "tests/samples/vue/inline-script.vue",
+    "languageId": "vue",
+    "name": undefined,
+    "startLine": 8,
+    "text": "
+",
+    "tokenCount": 0,
+    "type": "misc",
+  },
+  {
     "endLine": 9,
     "filePath": "tests/samples/vue/inline-script.vue",
     "languageId": "css",
@@ -58,6 +120,16 @@ exports[`native query ownership > keeps SFC chunking productive in native mode 1
 ",
     "tokenCount": 0,
     "type": "style:misc",
+  },
+  {
+    "endLine": 9,
+    "filePath": "tests/samples/vue/inline-script.vue",
+    "languageId": "vue",
+    "name": undefined,
+    "startLine": 9,
+    "text": "<style scoped>",
+    "tokenCount": 2,
+    "type": "misc",
   },
   {
     "endLine": 12,
@@ -72,11 +144,42 @@ exports[`native query ownership > keeps SFC chunking productive in native mode 1
     "tokenCount": 5,
     "type": "style:rule",
   },
+  {
+    "endLine": 13,
+    "filePath": "tests/samples/vue/inline-script.vue",
+    "languageId": "vue",
+    "name": undefined,
+    "startLine": 13,
+    "text": "</style>",
+    "tokenCount": 1,
+    "type": "misc",
+  },
+  {
+    "endLine": 13,
+    "filePath": "tests/samples/vue/inline-script.vue",
+    "languageId": "vue",
+    "name": undefined,
+    "startLine": 13,
+    "text": "
+",
+    "tokenCount": 0,
+    "type": "misc",
+  },
 ]
 `;
 
 exports[`native query ownership > keeps SFC chunking productive in native mode 2`] = `
 [
+  {
+    "endLine": 1,
+    "filePath": "tests/samples/svelte/inline-script.svelte",
+    "languageId": "svelte",
+    "name": undefined,
+    "startLine": 1,
+    "text": "<script lang="ts">",
+    "tokenCount": 2,
+    "type": "misc",
+  },
   {
     "endLine": 2,
     "filePath": "tests/samples/svelte/inline-script.svelte",
@@ -112,6 +215,16 @@ exports[`native query ownership > keeps SFC chunking productive in native mode 2
     "type": "script:module_var",
   },
   {
+    "endLine": 5,
+    "filePath": "tests/samples/svelte/inline-script.svelte",
+    "languageId": "svelte",
+    "name": undefined,
+    "startLine": 5,
+    "text": "</script>",
+    "tokenCount": 1,
+    "type": "misc",
+  },
+  {
     "endLine": 8,
     "filePath": "tests/samples/svelte/inline-script.svelte",
     "languageId": "html",
@@ -124,6 +237,16 @@ exports[`native query ownership > keeps SFC chunking productive in native mode 2
 ",
     "tokenCount": 2,
     "type": "template:misc",
+  },
+  {
+    "endLine": 9,
+    "filePath": "tests/samples/svelte/inline-script.svelte",
+    "languageId": "svelte",
+    "name": undefined,
+    "startLine": 9,
+    "text": "<style>",
+    "tokenCount": 1,
+    "type": "misc",
   },
   {
     "endLine": 10,
@@ -148,6 +271,27 @@ exports[`native query ownership > keeps SFC chunking productive in native mode 2
 ",
     "tokenCount": 5,
     "type": "style:rule",
+  },
+  {
+    "endLine": 13,
+    "filePath": "tests/samples/svelte/inline-script.svelte",
+    "languageId": "svelte",
+    "name": undefined,
+    "startLine": 13,
+    "text": "</style>",
+    "tokenCount": 1,
+    "type": "misc",
+  },
+  {
+    "endLine": 13,
+    "filePath": "tests/samples/svelte/inline-script.svelte",
+    "languageId": "svelte",
+    "name": undefined,
+    "startLine": 13,
+    "text": "
+",
+    "tokenCount": 0,
+    "type": "misc",
   },
 ]
 `;
@@ -287,6 +431,16 @@ exports[`native query ownership > keeps chunkFile productive in native mode 3`] 
 exports[`reduced query mode > keeps SFC chunking safe without native 1`] = `
 [
   {
+    "endLine": 1,
+    "filePath": "tests/samples/vue/inline-script.vue",
+    "languageId": "vue",
+    "name": undefined,
+    "startLine": 1,
+    "text": "<template>",
+    "tokenCount": 1,
+    "type": "misc",
+  },
+  {
     "endLine": 2,
     "filePath": "tests/samples/vue/inline-script.vue",
     "languageId": "html",
@@ -297,6 +451,37 @@ exports[`reduced query mode > keeps SFC chunking safe without native 1`] = `
 ",
     "tokenCount": 2,
     "type": "template:misc",
+  },
+  {
+    "endLine": 3,
+    "filePath": "tests/samples/vue/inline-script.vue",
+    "languageId": "vue",
+    "name": undefined,
+    "startLine": 3,
+    "text": "</template>",
+    "tokenCount": 1,
+    "type": "misc",
+  },
+  {
+    "endLine": 3,
+    "filePath": "tests/samples/vue/inline-script.vue",
+    "languageId": "vue",
+    "name": undefined,
+    "startLine": 3,
+    "text": "
+",
+    "tokenCount": 0,
+    "type": "misc",
+  },
+  {
+    "endLine": 4,
+    "filePath": "tests/samples/vue/inline-script.vue",
+    "languageId": "vue",
+    "name": undefined,
+    "startLine": 4,
+    "text": "<script lang="ts">",
+    "tokenCount": 2,
+    "type": "misc",
   },
   {
     "endLine": 7,
@@ -313,6 +498,37 @@ const state = useLogic();
     "type": "script:misc",
   },
   {
+    "endLine": 8,
+    "filePath": "tests/samples/vue/inline-script.vue",
+    "languageId": "vue",
+    "name": undefined,
+    "startLine": 8,
+    "text": "</script>",
+    "tokenCount": 1,
+    "type": "misc",
+  },
+  {
+    "endLine": 8,
+    "filePath": "tests/samples/vue/inline-script.vue",
+    "languageId": "vue",
+    "name": undefined,
+    "startLine": 8,
+    "text": "
+",
+    "tokenCount": 0,
+    "type": "misc",
+  },
+  {
+    "endLine": 9,
+    "filePath": "tests/samples/vue/inline-script.vue",
+    "languageId": "vue",
+    "name": undefined,
+    "startLine": 9,
+    "text": "<style scoped>",
+    "tokenCount": 2,
+    "type": "misc",
+  },
+  {
     "endLine": 12,
     "filePath": "tests/samples/vue/inline-script.vue",
     "languageId": "css",
@@ -326,11 +542,42 @@ const state = useLogic();
     "tokenCount": 5,
     "type": "style:misc",
   },
+  {
+    "endLine": 13,
+    "filePath": "tests/samples/vue/inline-script.vue",
+    "languageId": "vue",
+    "name": undefined,
+    "startLine": 13,
+    "text": "</style>",
+    "tokenCount": 1,
+    "type": "misc",
+  },
+  {
+    "endLine": 13,
+    "filePath": "tests/samples/vue/inline-script.vue",
+    "languageId": "vue",
+    "name": undefined,
+    "startLine": 13,
+    "text": "
+",
+    "tokenCount": 0,
+    "type": "misc",
+  },
 ]
 `;
 
 exports[`reduced query mode > keeps SFC chunking safe without native 2`] = `
 [
+  {
+    "endLine": 1,
+    "filePath": "tests/samples/svelte/inline-script.svelte",
+    "languageId": "svelte",
+    "name": undefined,
+    "startLine": 1,
+    "text": "<script lang="ts">",
+    "tokenCount": 2,
+    "type": "misc",
+  },
   {
     "endLine": 4,
     "filePath": "tests/samples/svelte/inline-script.svelte",
@@ -344,6 +591,16 @@ exports[`reduced query mode > keeps SFC chunking safe without native 2`] = `
 ",
     "tokenCount": 10,
     "type": "script:misc",
+  },
+  {
+    "endLine": 5,
+    "filePath": "tests/samples/svelte/inline-script.svelte",
+    "languageId": "svelte",
+    "name": undefined,
+    "startLine": 5,
+    "text": "</script>",
+    "tokenCount": 1,
+    "type": "misc",
   },
   {
     "endLine": 8,
@@ -360,6 +617,16 @@ exports[`reduced query mode > keeps SFC chunking safe without native 2`] = `
     "type": "template:misc",
   },
   {
+    "endLine": 9,
+    "filePath": "tests/samples/svelte/inline-script.svelte",
+    "languageId": "svelte",
+    "name": undefined,
+    "startLine": 9,
+    "text": "<style>",
+    "tokenCount": 1,
+    "type": "misc",
+  },
+  {
     "endLine": 12,
     "filePath": "tests/samples/svelte/inline-script.svelte",
     "languageId": "css",
@@ -372,6 +639,27 @@ exports[`reduced query mode > keeps SFC chunking safe without native 2`] = `
 ",
     "tokenCount": 5,
     "type": "style:misc",
+  },
+  {
+    "endLine": 13,
+    "filePath": "tests/samples/svelte/inline-script.svelte",
+    "languageId": "svelte",
+    "name": undefined,
+    "startLine": 13,
+    "text": "</style>",
+    "tokenCount": 1,
+    "type": "misc",
+  },
+  {
+    "endLine": 13,
+    "filePath": "tests/samples/svelte/inline-script.svelte",
+    "languageId": "svelte",
+    "name": undefined,
+    "startLine": 13,
+    "text": "
+",
+    "tokenCount": 0,
+    "type": "misc",
   },
 ]
 `;

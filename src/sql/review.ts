@@ -23,14 +23,20 @@ export type SqlReviewContextOptions = {
   projectFiles?: readonly string[];
 };
 
-const SQL_IDENTIFIER_HINT = '(?:[A-Za-z_][A-Za-z0-9_$]*|"[^"\\r\\n]+"|`[^`\\r\\n]+`|\\[[^\\]\\r\\n]+\\])';
+// Keep aligned with SQL_IDENTIFIER_PART_PATTERN in lex.ts (including T-SQL #/## temp names).
+const SQL_IDENTIFIER_HINT =
+  '(?:#{1,2}[A-Za-z_][A-Za-z0-9_$]*|[A-Za-z_][A-Za-z0-9_$]*|"[^"\\r\\n]+"|`[^`\\r\\n]+`|\\[[^\\]\\r\\n]+\\])';
 const SQL_OBJECT_NAME_HINT = `${SQL_IDENTIFIER_HINT}(?:\\s*\\.\\s*${SQL_IDENTIFIER_HINT})*`;
 const SQL_OBJECT_TERMINATOR_HINT = "(?=\\s|\\(|\\)|,|;|['\"`]|$)";
+// Wide SELECT lists / CASE expressions routinely exceed 1k chars before FROM.
+const SQL_SELECT_FROM_SPAN_HINT = 10_000;
+// Allow whitespace and /* block comments */ between WITH clause tokens.
+const SQL_WITH_GAP_HINT = "(?:\\s|/\\*[\\s\\S]*?\\*/)+";
 const SQL_FACT_READ_CONCURRENCY = 32;
 const SQL_LITERAL_HINT = new RegExp(
   [
-    `\\bselect\\b[\\s\\S]{0,1000}?\\bfrom\\s+${SQL_OBJECT_NAME_HINT}${SQL_OBJECT_TERMINATOR_HINT}`,
-    "\\bwith\\s+[A-Za-z_][A-Za-z0-9_$]*\\s+as\\b",
+    `\\bselect\\b[\\s\\S]{0,${SQL_SELECT_FROM_SPAN_HINT}}?\\bfrom\\s+${SQL_OBJECT_NAME_HINT}${SQL_OBJECT_TERMINATOR_HINT}`,
+    `\\bwith${SQL_WITH_GAP_HINT}(?:recursive${SQL_WITH_GAP_HINT})?[A-Za-z_][A-Za-z0-9_$]*${SQL_WITH_GAP_HINT}as\\b`,
     `\\binsert\\s+into\\s+${SQL_OBJECT_NAME_HINT}${SQL_OBJECT_TERMINATOR_HINT}`,
     `\\bupdate\\s+(?:only\\s+)?${SQL_OBJECT_NAME_HINT}\\s+set\\b`,
     `\\bdelete\\s+from\\s+${SQL_OBJECT_NAME_HINT}${SQL_OBJECT_TERMINATOR_HINT}`,
@@ -40,7 +46,6 @@ const SQL_LITERAL_HINT = new RegExp(
   ].join("|"),
   "i",
 );
-
 const SQL_OBJECT_MENTION_RE = new RegExp(SQL_OBJECT_NAME_HINT, "g");
 
 function isSqlFile(filePath: string): boolean {

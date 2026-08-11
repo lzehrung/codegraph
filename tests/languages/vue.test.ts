@@ -30,6 +30,42 @@ describe("Vue SFC chunking", () => {
     const templateChunks = chunks.filter((chunk) => chunk.type?.startsWith("template"));
     expect(templateChunks.every((chunk) => chunk.languageId === "html")).toBe(true);
   });
+
+  it("covers SFC tags, blank blocks, and inter-block text with bounded chunks", () => {
+    const coverageSource = [
+      "<!-- coverage-prefix -->",
+      "<template>",
+      "  <main>template-marker</main>",
+      "</template>",
+      "",
+      "<script>",
+      "const scriptMarker = 1;",
+      "</script>",
+      "<style>",
+      ".style-marker { color: red; }",
+      "</style>",
+      "<!-- coverage-suffix -->",
+    ].join("\n");
+    const chunks = chunkSFCFile({
+      source: coverageSource,
+      framework: "vue",
+      minTokens: 1,
+      maxTokens: 4,
+    });
+
+    for (const marker of [
+      "coverage-prefix",
+      "<template>",
+      "template-marker",
+      "scriptMarker",
+      "style-marker",
+      "coverage-suffix",
+    ]) {
+      expect(chunks.some((chunk) => chunk.text.includes(marker))).toBe(true);
+    }
+    expect(chunks.some((chunk) => chunk.text.includes("\n\n"))).toBe(true);
+    expect(chunks.every((chunk) => chunk.tokenCount <= 4)).toBe(true);
+  });
 });
 
 const definition: LanguageTestDefinition = {
@@ -83,7 +119,25 @@ const definition: LanguageTestDefinition = {
           to: { type: "file", path: "logic.ts" },
         },
       ],
+      references: [
+        {
+          name: "find references is not available",
+          file: "App.vue",
+          line: 2,
+          column: 17,
+          expectedStatus: "not_found",
+        },
+      ],
     },
+    goToDefinition: [
+      {
+        name: "go to definition is not available",
+        file: "App.vue",
+        line: 2,
+        column: 17,
+        expectedStatus: "not_found",
+      },
+    ],
     absentDependencyGraph: [
       {
         from: "ExternalScripts.vue",
@@ -170,6 +224,29 @@ it("preserves Vue block content and original coordinates while extracting embedd
     .filter((target) => target === scriptFile || target === styleFile || target === templateFile)
     .sort();
   expect(indexedTargets).toEqual([scriptFile, styleFile, templateFile].sort());
+});
+
+it("extracts the full outer template block when Vue templates nest", () => {
+  const source = '<template><template v-if="ok"><span/></template><p/></template>';
+  const blocks = parseSFC(source);
+  expect(blocks).toHaveLength(1);
+  const template = blocks[0];
+  expect(template?.type).toBe("template");
+  expect(template?.content).toBe('<template v-if="ok"><span/></template><p/>');
+  expect(template?.blockEnd).toBe(source.length);
+});
+
+it("does not treat self-closing nested templates as nesting", () => {
+  const source = "<template><template /><p/></template>";
+  const blocks = parseSFC(source);
+  expect(blocks).toHaveLength(1);
+  expect(blocks[0]?.content).toBe("<template /><p/>");
+});
+
+it("stops at the first unmatched opening tag instead of reclassifying nested content as top-level blocks", () => {
+  expect(parseSFC("<template><script>const x = 1;</script>")).toEqual([]);
+  const blocks = parseSFC("<script>export default {}</script><template><p>oops");
+  expect(blocks.map((block) => block.type)).toEqual(["script"]);
 });
 
 function lineAndColumnAt(source: string, offset: number): { line: number; column: number } {

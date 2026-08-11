@@ -14,7 +14,6 @@ import { maskJsLikeCommentsAndStrings } from "../util/comments.js";
 import { sliceText, toRange, unquote } from "../util/ast.js";
 import { bindingKindToSymbolKind } from "./declarations.js";
 import { buildScopeIndexFromSource } from "./scope.js";
-import { QUERY_DRIVEN_LOCALS_LANGUAGES } from "./shared.js";
 import { SymbolKind } from "./types.js";
 import type { LanguageSupport } from "../languages.js";
 import type { ParserLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
@@ -387,7 +386,7 @@ export function collectLocalsAndExportsFromSource(
 
   const extractLocalsFromNativeQueries = (): boolean => {
     if (!nativeQueries) return false;
-    if (!QUERY_DRIVEN_LOCALS_LANGUAGES.has(support.id) && support.id !== "go") return false;
+    if (!support.usesQueryDrivenLocals) return false;
     let capturedLocals = false;
     try {
       // Lazily get the tree only for enrichment (classification + docstrings).

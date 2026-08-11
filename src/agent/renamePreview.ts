@@ -797,7 +797,7 @@ async function collectTextualRenameEdits(
     if (!loaded) continue;
     let parsed;
     try {
-      parsed = await ensureParsedContext(file, input.snapshot.index.parsed?.get(file));
+      parsed = await ensureParsedContext(file, input.snapshot.index.parsed?.get(fileIdentityKey(file)));
     } catch (error: unknown) {
       input.unsafeSites.push({
         location: { file: loaded.displayPath, range: zeroRange() },

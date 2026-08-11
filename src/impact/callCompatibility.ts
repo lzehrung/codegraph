@@ -1386,7 +1386,7 @@ function sameRangeStart(left: Range, right: Range): boolean {
 
 function sameDefinition(left: SymbolDef, right: SymbolDef): boolean {
   return (
-    left.file === right.file &&
+    fileIdentityKey(left.file) === fileIdentityKey(right.file) &&
     left.localName === right.localName &&
     left.kind === right.kind &&
     left.range.start.index === right.range.start.index
@@ -1634,7 +1634,10 @@ async function buildCallCompatibilityHintForReference(input: {
   projectRoot?: string | undefined;
 }): Promise<CallCompatibilityHint | null> {
   const { index, changedSymbol, signature, ref, diagnostics, projectRoot } = input;
-  if (ref.file === changedSymbol.file && sameRangeStart(ref.range, changedSymbol.range)) {
+  if (
+    fileIdentityKey(ref.file) === fileIdentityKey(changedSymbol.file) &&
+    sameRangeStart(ref.range, changedSymbol.range)
+  ) {
     return null;
   }
 
@@ -1643,7 +1646,11 @@ async function buildCallCompatibilityHintForReference(input: {
     return null;
   }
 
-  const parsedCallsite = await tryEnsureParsedContext(ref.file, index.parsed?.get(ref.file), diagnostics);
+  const parsedCallsite = await tryEnsureParsedContext(
+    ref.file,
+    index.parsed?.get(fileIdentityKey(ref.file)),
+    diagnostics,
+  );
   if (!parsedCallsite) {
     return null;
   }
@@ -1719,7 +1726,7 @@ export async function attachCallCompatibilityHints(
 
     const parsedDefinition = await tryEnsureParsedContext(
       changedSymbol.file,
-      index.parsed?.get(changedSymbol.file),
+      index.parsed?.get(fileIdentityKey(changedSymbol.file)),
       diagnostics,
     );
     if (!parsedDefinition) {

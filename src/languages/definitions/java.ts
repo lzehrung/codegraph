@@ -6,6 +6,7 @@ export const JAVA_DEF: LanguageDefinition = {
   id: "java",
   extensions: [".java"],
   grammar: () => loadTreeSitterLanguage("tree-sitter-java"),
+  usesQueryDrivenLocals: true,
   structure: {
     blocks: [
       {

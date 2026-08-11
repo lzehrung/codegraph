@@ -13,7 +13,7 @@ import { mkTmpDir } from "./helpers/filesystem.js";
  *
  * Covers:
  * - Real separate OS processes (spawn), so SQLite file locking / WAL is exercised
- * - Concurrent writers that each mutate a distinct source file then rebuild with cache: "disk"
+ * - Concurrent build workers against distinct source files prepared before each wave
  * - Concurrent readers that rebuild against the same cache directory without mutating
  * - Postconditions: no child crash, sqlite integrity_check ok, every writer marker retained in
  *   cached module payloads, project-index-snapshot remains readable
@@ -124,24 +124,12 @@ function readCachedPayloadTexts(dbPath: string): string[] {
 }
 
 function buildWorkerSource(): string {
-  return `import fsp from "node:fs/promises";
-import path from "node:path";
+  return `const distHref = ${JSON.stringify(pathToFileURL(distIndex).href)};
 
-const distHref = ${JSON.stringify(pathToFileURL(distIndex).href)};
 const { buildProjectIndex } = await import(distHref);
 
 const job = JSON.parse(process.argv[2] ?? "{}");
 try {
-  if (job.role === "writer") {
-    const absolute = path.join(job.projectRoot, job.relativeFile);
-    const source = [
-      'import { shared } from "./shared.js";',
-      "export const " + job.marker + " = 1;",
-      "export const value = shared;",
-      "",
-    ].join("\\n");
-    await fsp.writeFile(absolute, source, "utf8");
-  }
   const report = {};
   const index = await buildProjectIndex(job.projectRoot, {
     cache: "disk",
@@ -166,6 +154,24 @@ try {
   process.exitCode = 1;
 }
 `;
+}
+
+async function prepareWriterSources(
+  projectRoot: string,
+  jobs: Array<Extract<WorkerJob, { role: "writer" }>>,
+): Promise<void> {
+  await Promise.all(
+    jobs.map(async (job) => {
+      const absolute = path.join(projectRoot, job.relativeFile);
+      const source = [
+        'import { shared } from "./shared.js";',
+        "export const " + job.marker + " = 1;",
+        "export const value = shared;",
+        "",
+      ].join("\n");
+      await fsp.writeFile(absolute, source, "utf8");
+    }),
+  );
 }
 
 describe("disk cache multi-process concurrency", () => {
@@ -211,6 +217,9 @@ describe("disk cache multi-process concurrency", () => {
         readerJobs.push({ role: "reader", id, projectRoot });
       }
 
+      // Prepare every source mutation before the concurrent build wave starts.
+      await prepareWriterSources(projectRoot, writerJobs);
+
       // Wave 1: concurrent writers on distinct files — lost-update sensitive.
       const writerOutcomes = await Promise.all(writerJobs.map((job) => spawnWorker(workerPath, job)));
       for (const outcome of writerOutcomes) {
@@ -225,14 +234,15 @@ describe("disk cache multi-process concurrency", () => {
         expect(payloads, `lost update for writer ${job.id}`).toContain(job.marker);
       }
 
+      // Prepare the second source mutation wave before mixing concurrent readers and writers.
+      const mixedWriterJobs = writerJobs.map((job) => ({
+        ...job,
+        marker: `${job.marker}_B`,
+      }));
+      await prepareWriterSources(projectRoot, mixedWriterJobs);
+
       // Wave 2: concurrent readers + another writer pass against the hot cache.
-      const mixedJobs: WorkerJob[] = [
-        ...readerJobs,
-        ...writerJobs.map((job) => ({
-          ...job,
-          marker: `${job.marker}_B`,
-        })),
-      ];
+      const mixedJobs: WorkerJob[] = [...readerJobs, ...mixedWriterJobs];
       const mixedOutcomes = await Promise.all(mixedJobs.map((job) => spawnWorker(workerPath, job)));
       for (const outcome of mixedOutcomes) {
         expect(outcome.status, outcome.stderr || outcome.stdout).toBe(0);

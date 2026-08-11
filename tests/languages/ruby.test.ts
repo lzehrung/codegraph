@@ -64,14 +64,20 @@ const definition: LanguageTestDefinition = {
           file: "namespaced.rb",
           line: 5,
           column: 11,
-          exactCount: 2,
+          references: [
+            { file: "namespaced.rb", line: 5 },
+            { file: "consumer.rb", line: 3 },
+          ],
         },
         {
           name: "finds Struct.new class assignment references",
           file: ".regressions/struct_point.rb",
           line: 1,
           column: 1,
-          exactCount: 2,
+          references: [
+            { file: ".regressions/struct_point.rb", line: 1 },
+            { file: ".regressions/struct_point.rb", line: 3 },
+          ],
         },
       ],
     },

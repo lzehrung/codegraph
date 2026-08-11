@@ -6,6 +6,7 @@ export const PYTHON_DEF: LanguageDefinition = {
   id: "python",
   extensions: [".py", ".pyi"],
   grammar: () => loadTreeSitterLanguage("tree-sitter-python"),
+  usesQueryDrivenLocals: true,
   structure: {
     blocks: [
       {
@@ -134,6 +135,7 @@ export const PYTHON_DEF: LanguageDefinition = {
   },
   createsBlockScope: (n) => n.type === "module" || n.type === "block",
   createsFunctionScope: (n) => n.type === "function_definition" || n.type === "lambda",
+  membersAreImplicitlyInScope: false,
   supportsCrossModuleSymbols: true,
 };
 registerLanguage(PYTHON_DEF);

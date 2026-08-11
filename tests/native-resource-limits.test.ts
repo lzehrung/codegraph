@@ -26,12 +26,13 @@ describe("native extraction resource limits", () => {
   });
 
   it("returns a structured fallback when provided source exceeds the byte cap", async () => {
-    const runLanguageQueries = vi.fn(() => emptyResults());
+    const extractLanguage = vi.fn(() => ({ results: emptyResults(), syntaxTree: null }));
     const extractor = createNativeExtractor({
       loadBinding: () => ({
         binding: {
           supportedLanguageIds: () => ["ts"],
-          runLanguageQueries,
+          runLanguageQueries: () => emptyResults(),
+          extractLanguage,
         } satisfies NativeBinding,
       }),
       readFile: async () => {
@@ -56,17 +57,18 @@ describe("native extraction resource limits", () => {
     expect(result.fallbackReason).toBe("queryFailure");
     expect(result.error).toMatch(/source exceeds native byte limit/i);
     expect(result.error).toContain(String(DEFAULT_NATIVE_SOURCE_MAX_BYTES));
-    expect(runLanguageQueries).not.toHaveBeenCalled();
+    expect(extractLanguage).not.toHaveBeenCalled();
   });
 
   it("stats the file before reading when the on-disk size exceeds the configurable cap", async () => {
     const readFile = vi.fn(async () => "should not load");
-    const runLanguageQueries = vi.fn(() => emptyResults());
+    const extractLanguage = vi.fn(() => ({ results: emptyResults(), syntaxTree: null }));
     const extractor = createNativeExtractor({
       loadBinding: () => ({
         binding: {
           supportedLanguageIds: () => ["ts"],
-          runLanguageQueries,
+          runLanguageQueries: () => emptyResults(),
+          extractLanguage,
         } satisfies NativeBinding,
       }),
       readFile,
@@ -86,7 +88,7 @@ describe("native extraction resource limits", () => {
     expect(result.fallbackReason).toBe("queryFailure");
     expect(result.error).toMatch(/source exceeds native byte limit \(64 > 32\)/);
     expect(readFile).not.toHaveBeenCalled();
-    expect(runLanguageQueries).not.toHaveBeenCalled();
+    expect(extractLanguage).not.toHaveBeenCalled();
   });
 
   it("surfaces native projection depth/node limit errors as structured fallbacks", async () => {
@@ -95,7 +97,7 @@ describe("native extraction resource limits", () => {
         binding: {
           supportedLanguageIds: () => ["ts"],
           runLanguageQueries: () => emptyResults(),
-          parseSyntaxTree: () => {
+          extractLanguage: () => {
             throw new Error(`syntax tree projection exceeded max depth limit (${DEFAULT_NATIVE_MAX_PROJECTED_DEPTH})`);
           },
         } satisfies NativeBinding,
@@ -125,7 +127,7 @@ describe("native extraction resource limits", () => {
         binding: {
           supportedLanguageIds: () => ["ts"],
           runLanguageQueries: () => emptyResults(),
-          parseSyntaxTree: () => tree,
+          extractLanguage: () => ({ results: emptyResults(), syntaxTree: tree }),
         } satisfies NativeBinding,
       }),
       readFile: async () => "export const value = 1;\n",

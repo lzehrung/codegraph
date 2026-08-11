@@ -70,6 +70,10 @@ export async function astGrep(
   return hits;
 }
 
+/** Display hit ceiling; stream allows +1 so `textGrepBounded` probes can detect truncation. */
+export const TEXT_GREP_MAX_HITS = 200_000;
+const TEXT_GREP_STREAM_MAX_HITS = TEXT_GREP_MAX_HITS + 1;
+
 export async function* streamTextGrep(
   projectRoot: string,
   patternSource: string,
@@ -84,7 +88,7 @@ export async function* streamTextGrep(
     useGitignore?: boolean;
   },
 ): AsyncGenerator<TextGrepHit, void, void> {
-  const maxHits = Math.max(1, Math.min(opts?.maxHits ?? 5000, 200_000));
+  const maxHits = Math.max(1, Math.min(opts?.maxHits ?? 5000, TEXT_GREP_STREAM_MAX_HITS));
   const flags = `g${opts?.ignoreCase ? "i" : ""}`;
 
   let regex: RegExp;
@@ -156,7 +160,8 @@ export async function textGrep(
  */
 export type GrepResultEnvelope<T> = {
   items: T[];
-  limit: number;
+  /** Effective result cap, or null when the path is uncapped (AST --query). */
+  limit: number | null;
   totalSeen: number;
   truncated: boolean;
   omitted: number;
@@ -187,7 +192,7 @@ export async function textGrepBounded(
     useGitignore?: boolean;
   },
 ): Promise<GrepResultEnvelope<TextGrepHit>> {
-  const limit = Math.max(1, Math.min(opts?.maxHits ?? 5000, 200_000));
+  const limit = Math.max(1, Math.min(opts?.maxHits ?? 5000, TEXT_GREP_MAX_HITS));
   const items: TextGrepHit[] = [];
   let totalSeen = 0;
   for await (const hit of streamTextGrep(projectRoot, patternSource, patterns, { ...opts, maxHits: limit + 1 })) {

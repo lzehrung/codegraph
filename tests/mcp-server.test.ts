@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { request as httpRequest } from "node:http";
+import { request as httpRequest, type IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -87,6 +87,26 @@ async function postMcpJson(
   });
   const payload = (await response.json()) as unknown;
   return { response, payload: readObject(payload) };
+}
+async function openMcpSse(url: string, sessionId: string): Promise<IncomingMessage> {
+  const endpoint = new URL(url);
+  const { promise, resolve, reject } = Promise.withResolvers<IncomingMessage>();
+  const request = httpRequest(
+    {
+      hostname: endpoint.hostname,
+      port: endpoint.port,
+      path: endpoint.pathname,
+      method: "GET",
+      headers: {
+        accept: "text/event-stream",
+        "mcp-session-id": sessionId,
+      },
+    },
+    (response) => resolve(response),
+  );
+  request.on("error", reject);
+  request.end();
+  return await promise;
 }
 
 async function postRawHttpJson(
@@ -614,6 +634,127 @@ describe("codegraph MCP handlers", () => {
       const replacement = await initialize(4);
       expect(await probeSession(105, replacement)).toBe(200);
       expect(DEFAULT_MCP_HTTP_SESSION_MAX_COUNT).toBeGreaterThan(0);
+    } finally {
+      await httpServer.close();
+    }
+  });
+
+  it("rejects a new session instead of evicting an in-flight request", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-session-capacity-active-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const backingSession = createAgentSession({ root });
+    const loadStarted = Promise.withResolvers<void>();
+    const releaseLoad = Promise.withResolvers<void>();
+    const session: AgentSession = {
+      ...backingSession,
+      loadProject: async (options) => {
+        loadStarted.resolve();
+        await releaseLoad.promise;
+        return await backingSession.loadProject(options);
+      },
+    };
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      port: 0,
+      session,
+      httpSessionIdleMs: 0,
+      httpSessionMaxCount: 1,
+    });
+
+    const initialize = async (id: number): Promise<{ response: Response; payload: JsonRpcObject }> =>
+      await postMcpJson(httpServer.url, {
+        jsonrpc: "2.0",
+        id,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: `codegraph-test-${id}`, version: "1.0.0" },
+        },
+      });
+
+    try {
+      const first = await initialize(1);
+      const firstSessionId = first.response.headers.get("mcp-session-id");
+      expect(firstSessionId).toBeTruthy();
+      const inFlight = postMcpJson(
+        httpServer.url,
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: { name: "search", arguments: { query: "ok", mode: "symbol" } },
+        },
+        firstSessionId ?? undefined,
+      );
+      await loadStarted.promise;
+
+      const rejected = await initialize(3);
+      expect(rejected.response.status).toBe(503);
+      const error = readObject(rejected.payload.error);
+      expect(error.code).toBe(-32000);
+      expect(error.message).toMatch(/all configured sessions are active/);
+
+      releaseLoad.resolve();
+      expect((await inFlight).response.status).toBe(200);
+      expect(
+        (
+          await postMcpJson(
+            httpServer.url,
+            { jsonrpc: "2.0", id: 4, method: "tools/list", params: {} },
+            firstSessionId ?? undefined,
+          )
+        ).response.status,
+      ).toBe(200);
+    } finally {
+      releaseLoad.resolve();
+      await httpServer.close();
+    }
+  });
+
+  it("does not idle-evict a session holding an open SSE stream", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-session-sse-active-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      port: 0,
+      httpSessionIdleMs: 30,
+      httpSessionMaxCount: 1,
+      httpSessionEvictionIntervalMs: 10,
+    });
+
+    try {
+      const initialize = await postMcpJson(httpServer.url, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "codegraph-sse-test", version: "1.0.0" },
+        },
+      });
+      const sessionId = initialize.response.headers.get("mcp-session-id");
+      expect(sessionId).toBeTruthy();
+      const stream = await openMcpSse(httpServer.url, sessionId ?? "");
+      expect(stream.statusCode).toBe(200);
+      // This integration test deliberately waits on the real eviction timer; fake timers do not control an interval
+      // created while the HTTP server is serving real Node requests.
+      const wait = Promise.withResolvers<void>();
+      setTimeout(wait.resolve, 120);
+      await wait.promise;
+
+      const probe = await postMcpJson(
+        httpServer.url,
+        { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
+        sessionId ?? undefined,
+      );
+      expect(probe.response.status).toBe(200);
+
+      const streamClosed = Promise.withResolvers<void>();
+      stream.once("close", streamClosed.resolve);
+      stream.destroy();
+      await streamClosed.promise;
     } finally {
       await httpServer.close();
     }

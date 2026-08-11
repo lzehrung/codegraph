@@ -66,6 +66,15 @@ export class InstallerCollisionError extends Error {
         const entryType = conflict.kind === "user-owned-codegraph-table" ? "table" : "entry";
         message = `User-owned Codegraph MCP ${entryType} already exists. Remove or rename that entry before retrying.`;
       }
+    } else {
+      const skillPaths = conflicts
+        .filter((candidate) => candidate.kind === "user-owned-skill")
+        .map((candidate) => candidate.path);
+      if (skillPaths.length) {
+        message +=
+          ` User-owned skill files exist at ${skillPaths.join(", ")}. ` +
+          "Re-run with --force to overwrite them, or move those files aside before retrying.";
+      }
     }
     super(message);
     this.name = "InstallerCollisionError";
@@ -580,7 +589,7 @@ async function prepareUninstallPlan(
     const markerPath = path.join(skillTargetDir, "CODEGRAPH_INSTALLED");
     const skillSnapshot = await snapshotInstallFile(skillPath, skillRoot);
     const markerSnapshot = await snapshotInstallFile(markerPath, skillRoot);
-    const removeOwnedSkill = markerSnapshot.bytes !== null && skillSnapshot.bytes?.equals(bundledSkill);
+    const removeOwnedSkill = isInstallerOwnedSkill(markerSnapshot.bytes, skillSnapshot.bytes);
     addPlannedInstallFile(
       files,
       createPlannedInstallFile(
@@ -595,7 +604,15 @@ async function prepareUninstallPlan(
     );
     addPlannedInstallFile(
       files,
-      createPlannedInstallFile(definition, "marker", markerPath, skillRoot, null, markerSnapshot, dryRun),
+      createPlannedInstallFile(
+        definition,
+        "marker",
+        markerPath,
+        skillRoot,
+        removeOwnedSkill ? null : markerSnapshot.bytes,
+        markerSnapshot,
+        dryRun,
+      ),
     );
 
     if (definition.kind === "skill-only") continue;
@@ -640,12 +657,11 @@ function readSkillShaFromMarker(markerBytes: Buffer): string | null {
   return match?.[1] ?? null;
 }
 
-function isInstallerOwnedSkill(markerBytes: Buffer | null, skillBytes: Buffer | null, bundledSkill: Buffer): boolean {
+function isInstallerOwnedSkill(markerBytes: Buffer | null, skillBytes: Buffer | null): boolean {
   if (markerBytes === null || skillBytes === null) return false;
   if (!isValidInstallMarker(markerBytes)) return false;
-  if (skillBytes.equals(bundledSkill)) return true;
   const recordedSha = readSkillShaFromMarker(markerBytes);
-  if (recordedSha === null) return true;
+  if (recordedSha === null) return false;
   return recordedSha === skillContentSha256(skillBytes);
 }
 
@@ -657,8 +673,8 @@ function findSkillCollision(
   bundledSkill: Buffer,
 ): InstallerCollision | undefined {
   if (skillBytes === null) return undefined;
-  if (skillBytes.equals(bundledSkill)) return undefined;
-  if (isInstallerOwnedSkill(markerBytes, skillBytes, bundledSkill)) return undefined;
+  if (markerBytes === null && skillBytes.equals(bundledSkill)) return undefined;
+  if (isInstallerOwnedSkill(markerBytes, skillBytes)) return undefined;
   return {
     target: definition.id,
     path: normalizePathForDisplay(skillPath),

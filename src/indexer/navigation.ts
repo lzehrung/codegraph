@@ -117,7 +117,7 @@ export async function goToDefinition(
         ? {
             resolveLexicalBinding: (receiver) => {
               if (!sup.nodeTypes.identifier.includes(receiver.type)) return null;
-              return findClosestBinding(scopeIndex, file, sliceText(receiver, source), receiver);
+              return findClosestBinding(scopeIndex, file, sliceText(receiver, source), receiver, sup);
             },
           }
         : {}),
@@ -169,7 +169,7 @@ export async function goToDefinition(
 
   if (name) {
     const scopeIndex = getOrBuildScopeIndex(index, file, source, sup, lang, mod, tree);
-    const local = findClosestBinding(scopeIndex, file, name, node);
+    const local = findClosestBinding(scopeIndex, file, name, node, sup);
     if (local) {
       return okGoToResult(index, local, {
         resolution: "exact",
@@ -178,7 +178,7 @@ export async function goToDefinition(
     }
 
     if (sup.supportsCrossModuleSymbols) {
-      const resolvedName = resolveNamedDefinition(index, mod, file, name);
+      const resolvedName = resolveNamedDefinition(index, mod, file, sup, name);
       if (resolvedName) {
         return resolvedName;
       }
@@ -261,7 +261,8 @@ export async function findReferences(
     refs.push(ref);
   };
 
-  const localBindings = scope.bindings.get(def.localName) ?? [];
+  const normalizedLocalName = parsedContext.sup.normalizeIdentifier(def.localName);
+  const localBindings = scope.bindings.get(normalizedLocalName) ?? [];
   const localBinding = localBindings.find(
     (binding) => binding.def && binding.def.start.index === def.range.start.index,
   );
@@ -280,7 +281,7 @@ export async function findReferences(
     }
   }
   if (!exportedNames.length && shouldUseLocalNameAsExportFallback(def, parsedContext)) {
-    exportedNames.push(def.localName);
+    exportedNames.push(normalizedLocalName);
   }
 
   const exportedNameSet = new Set(exportedNames);
@@ -441,7 +442,7 @@ export async function findReferences(
   }
 
   refs.sort((left, right) => {
-    if (left.file === right.file) {
+    if (fileIdentityKey(left.file) === fileIdentityKey(right.file)) {
       const leftIndex = left.range.start.index ?? 0;
       const rightIndex = right.range.start.index ?? 0;
       return leftIndex - rightIndex;

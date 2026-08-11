@@ -219,6 +219,17 @@ describe("AngularJS framework characterization", () => {
     ).toBe(false);
   });
 
+  it("registers window.angular module chains but not unrelated dotted controllers", () => {
+    const namespaced = [
+      "window.angular.module('m').controller('C', function C() {});",
+      "foo.controller('Fake');",
+      "",
+    ].join("\n");
+
+    expect(extractAngularJsRegistrations(namespaced)).toEqual([{ kind: "controller", name: "C" }]);
+    expect(extractAngularJsRegistrations("foo.controller('Fake');")).toEqual([]);
+  });
+
   it("keeps registrations on variables assigned from an AngularJS module", async () => {
     const root = await mkTmpDir("cg-angularjs-module-variable-");
     const serviceSource = [

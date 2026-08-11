@@ -91,7 +91,10 @@ const definition: LanguageTestDefinition = {
           file: "namespaces.hpp",
           line: 4,
           column: 7,
-          exactCount: 2,
+          references: [
+            { file: "namespaces.hpp", line: 4 },
+            { file: "namespace-usage.cpp", line: 4 },
+          ],
         },
       ],
     },
