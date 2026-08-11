@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { tryCreateDirectorySymlink } from "./helpers/filesystem.js";
-import { checkMarkdownLinks } from "../src/documentLinks/check.js";
+import { checkMarkdownLinks, checkMarkdownLinksInFiles } from "../src/documentLinks/check.js";
 
 async function makeRoot(name: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), `cg-markdown-links-${name}-`));
@@ -136,4 +136,19 @@ describe("Markdown link validation", () => {
       ]);
     }
   });
+
+  it.runIf(process.platform === "win32")(
+    "recovers real on-disk casing when given identity-normalized (lowercased) file inputs",
+    async () => {
+      const root = await makeRoot("identity-normalized-casing");
+      await writeFile(root, "README.md", "[Missing](./missing.md)\n");
+
+      const result = await checkMarkdownLinksInFiles(root, ["readme.md"]);
+
+      expect(result.summary.filesScanned).toBe(1);
+      expect(result.failures).toEqual([
+        expect.objectContaining({ file: "README.md", reason: "missing_file", target: "missing.md" }),
+      ]);
+    },
+  );
 });
