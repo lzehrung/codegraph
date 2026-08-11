@@ -101,9 +101,7 @@ const CLI_VALUE_OPTIONS = new Set<string>([
 ]);
 
 type CliPositionalPolicy =
-  | { kind: "any" }
-  | { kind: "max"; max: number; usage: string }
-  | { kind: "none"; usage: string };
+  { kind: "any" } | { kind: "max"; max: number; usage: string } | { kind: "none"; usage: string };
 
 type CliCommandSchema = {
   flags?: readonly string[];
@@ -677,6 +675,14 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
       kind: "none",
       usage:
         "Usage: codegraph viewer [--root <path>] [--graph <root-confined-json>] [--host <host>] [--port <0-65535>] [--open] [--print-url]",
+    }),
+  ],
+  [
+    "links",
+    commandSchema(["--verbose", ...JSON_OUTPUT_FLAGS], ["--root"], {
+      kind: "max",
+      max: 1,
+      usage: "Usage: codegraph links [project-root] [--root <path>] [--json | --pretty] [--verbose]",
     }),
   ],
   [

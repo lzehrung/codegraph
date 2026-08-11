@@ -646,6 +646,13 @@ Usage: codegraph unresolved [project-root] [--root <path>] [--json | --pretty]
 ${SHARED_INDEX_OPTIONS_HELP}
 `;
 
+export const LINKS_HELP_TEXT = `codegraph links - Check local Markdown links
+
+Usage: codegraph links [project-root] [--root <path>] [--json | --pretty] [--verbose]
+
+Checks local Markdown file, reference, fragment, and root-boundary targets. External links are skipped.
+`;
+
 export const APISURFACE_HELP_TEXT = `codegraph apisurface - Summarize exported API symbols
 
 Usage: codegraph apisurface [project-root] [--root <path>] [--json | --pretty]
@@ -732,6 +739,7 @@ export function helpTextForCommand(command: string, positionals: readonly string
   if (command === "cycles") return CYCLES_HELP_TEXT;
   if (command === "hotspots") return HOTSPOTS_HELP_TEXT;
   if (command === "unresolved") return UNRESOLVED_HELP_TEXT;
+  if (command === "links") return LINKS_HELP_TEXT;
   if (command === "apisurface") return APISURFACE_HELP_TEXT;
   if (command === "graph-delta") return GRAPH_DELTA_HELP_TEXT;
   if (command === "doctor") return DOCTOR_HELP_TEXT;

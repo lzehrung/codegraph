@@ -104,6 +104,7 @@ Monorepo and diagnostic behavior:
 - Project file traversal stops at the nearest manifest boundary, so scoped scans do not inherit unrelated parent projects.
 - `inspect` and `unresolved` use supported dependency manifests to suppress declared third-party packages from unresolved-import diagnostics.
 - Graph-only document and template link edges still appear in graph output. They are excluded from unresolved-import diagnostics by default, so source import health is not mixed with documentation link checking.
+- The `links` command and `checkMarkdownLinks()` validate only links authored in Markdown sources: local file and directory targets plus GitHub-style heading fragments, confined to the project root, with external URLs skipped and no network access. Images, MDX, other document formats, and custom HTML or site-generator anchors are not validated.
 
 ## C/C++ resolution hints
 

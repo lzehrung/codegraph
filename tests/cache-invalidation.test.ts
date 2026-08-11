@@ -45,8 +45,7 @@ function readModuleCacheUpdatedAt(root: string, file: string): number | null {
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
     const row = db.prepare("SELECT updated_at FROM module_cache WHERE file = ?").get(file) as
-      | { updated_at: number }
-      | undefined;
+      { updated_at: number } | undefined;
     return row?.updated_at ?? null;
   } finally {
     db.close();

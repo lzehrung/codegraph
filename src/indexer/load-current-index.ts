@@ -11,8 +11,7 @@ import type { IncrementalBuildOptions, ProjectIndex } from "./types.js";
  * "these files changed"; changed-file inputs belong to `buildProjectIndexIncremental`.
  */
 export type CurrentProjectIndexScope =
-  | { kind: "project"; additionalFiles?: readonly string[] }
-  | { kind: "resolved-files"; files: readonly string[] };
+  { kind: "project"; additionalFiles?: readonly string[] } | { kind: "resolved-files"; files: readonly string[] };
 
 /**
  * Build options accepted for current-state loads.

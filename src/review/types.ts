@@ -1,6 +1,7 @@
+import type { MarkdownLinkCheckResult } from "../documentLinks/check.js";
 import type { CandidateTestFile } from "../impact/context.js";
-import type { AnalysisSummary } from "../analysisSummary.js";
 import type { CallCompatibilityHint, FileChange, MemberResolutionCoverage } from "../impact/types.js";
+import type { AnalysisSummary } from "../analysisSummary.js";
 import type { BuildReport, IncrementalBuildOptions, ProjectIndex } from "../indexer/types.js";
 import type { DuplicatePreparedAnalysis } from "../duplicates.js";
 import type { SqlReviewContext } from "../sql/review.js";
@@ -56,6 +57,7 @@ export type ReviewReport = {
   graphDelta: Edge[];
   candidateTests: CandidateTestFile[];
   sqlContext?: SqlReviewContext;
+  markdownLinks?: MarkdownLinkCheckResult;
   diagnostics?: ReviewDiagnostics;
 };
 

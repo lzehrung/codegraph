@@ -396,6 +396,7 @@ async function buildFullStreamSummaryReport(
     changedFiles: fullReport.changedFiles,
     changedSymbols: fullReport.changedSymbols,
     impacted: fullReport.impacted,
+    ...(fullReport.markdownLinks ? { markdownLinks: fullReport.markdownLinks } : {}),
     ...(fullReport.suggestions ? { suggestions: fullReport.suggestions } : {}),
     ...(fullReport.exportSummary ? { exportSummary: fullReport.exportSummary } : {}),
     ...(fullReport.reexportChains ? { reexportChains: fullReport.reexportChains } : {}),

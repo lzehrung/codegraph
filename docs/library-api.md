@@ -1,6 +1,6 @@
 # Library API
 
-Programmatic APIs for indexing, graph building, live file views, agent search/explain/artifacts, MCP handlers, chunking, SQL artifact facts, read-only SQLite inspection, and impact analysis.
+Programmatic APIs for indexing, graph building, live file views, agent search/explain/artifacts, MCP handlers, chunking, SQL artifact facts, read-only SQLite inspection, Markdown link checking, and impact analysis.
 
 For sessions, streaming workflows, tool wrappers, and review-oriented recipes, see [docs/agent-workflows.md](./agent-workflows.md).
 
@@ -647,7 +647,26 @@ for (const edge of graph.edges) {
 }
 ```
 
-`getUnresolvedImports(graph, { projectRoot })` reports unresolved source imports. It excludes graph-only document/template link edges by default; pass `{ includeGraphOnly: true }` when a custom caller intentionally wants those links included in the same report.
+`getUnresolvedImports(graph, { projectRoot })` reports unresolved source imports. It excludes graph-only document/template link edges by default; pass `{ includeGraphOnly: true }` when a custom caller intentionally wants those links included in the same report. It remains a source-import diagnostic and is not the Markdown link checker; use `checkMarkdownLinks()` below for authored Markdown link validation.
+
+## Markdown link checking
+
+`checkMarkdownLinks(projectRoot)` validates links authored in Markdown files with no index build and no network access. It returns the same stable result the `links` CLI command prints with `--json`.
+
+```ts
+import { checkMarkdownLinks } from "@lzehrung/codegraph";
+
+const result = await checkMarkdownLinks(process.cwd());
+for (const failure of result.failures) {
+  console.log(failure.file, failure.range.start, failure.reason, failure.raw);
+}
+```
+
+- Covered syntax: inline links, reference-style links and definitions, autolinks, and raw HTML `a[href]` links.
+- Local targets resolve relative to the source file (`/path` resolves from the project root) and are valid when they exist as a file or directory; fragments are checked against the GitHub-style heading anchors of Markdown targets.
+- Local targets outside the project root fail with reason `outside_root`; external URLs are counted under `summary.externalSkipped` and never probed.
+- Failure `reason` is one of `missing_file`, `missing_reference`, `missing_fragment`, or `outside_root`; failures carry exact source ranges and are sorted by source path and range.
+- Validation is limited to `.md` sources, including raw HTML `a[href]` inside Markdown. Images, standalone HTML, MDX, JSX, TSX, other document formats, and custom HTML or site-generator anchors are not validated.
 
 Build an index from an explicit multi-root file list:
 
@@ -893,9 +912,9 @@ The API returns `ArchitectureDriftReport` with `schemaVersion: 1`, base/head sum
 
 Use the exported TypeScript APIs when another program is composing deterministic review packets, file packs, or model prompts. CLI human-readable output is optimized for compact reading by people or models; it is not the stable integration contract.
 
-- `buildReviewReport()` returns a review bundle with `schemaVersion`, changed files, changed symbols, `graphDelta`, candidate tests, `riskSummary`, `reviewTasks`, optional duplicate sibling-check tasks, optional `sqlContext`, compatibility hints when available, and diagnostics. Accepts an optional third argument, `{ index?, loadIndex?, duplicateAnalysis?, loadDuplicateAnalysis? }`, so a caller that already holds a warm `ProjectIndex` (or wants to defer loading it until review work actually needs it) and, for repeated review calls, a `DuplicatePreparedAnalysis` from `prepareDuplicateAnalysis()` can skip redundant rebuilds. The MCP `review` tool uses the lazy forms to avoid paying index or duplicate-analysis cost on no-change reviews.
-- `analyzeImpactFromDiff()` returns the full or compact impact report shape for batch consumers, including changed-symbol `callCompatibility` hints when available.
-- `analyzeImpactStreaming()` emits progress and incremental chunks, then a final `complete.report` summary. Streaming always returns `format: "stream-summary"`. By default this includes the same key structured fields needed by pack builders: changed files, changed symbols, impacted items, suggestions, export summaries, re-export chains, ranked top impacts, surface area, clusters, cycles, graph edges, diagnostics, and warning text. Set `streamSummary: "light"` to drop suggestions, export summaries, re-export chains, ranked top impacts, graph metadata, cycles, clusters, and surface area from the final report.
+- `buildReviewReport()` returns a review bundle with `schemaVersion`, changed files, changed symbols, `graphDelta`, candidate tests, `riskSummary`, `reviewTasks`, an offline `markdownLinks` result for Markdown sources in the analysis scope when there are changes, optional duplicate sibling-check tasks, optional `sqlContext`, compatibility hints when available, and diagnostics. Accepts an optional third argument, `{ index?, loadIndex?, duplicateAnalysis?, loadDuplicateAnalysis? }`, so a caller that already holds a warm `ProjectIndex` (or wants to defer loading it until review work actually needs it) and, for repeated review calls, a `DuplicatePreparedAnalysis` from `prepareDuplicateAnalysis()` can skip redundant rebuilds. The MCP `review` tool uses the lazy forms to avoid paying index or duplicate-analysis cost on no-change reviews.
+- `analyzeImpactFromDiff()` returns the full or compact impact report shape for batch consumers, including an offline `markdownLinks` result for Markdown sources in the analysis scope when diffs are non-empty and changed-symbol `callCompatibility` hints when available.
+- `analyzeImpactStreaming()` emits progress and incremental chunks, then a final `complete.report` summary. Streaming always returns `format: "stream-summary"`. By default this includes the same key structured fields needed by pack builders: changed files, changed symbols, impacted items, Markdown link findings, suggestions, export summaries, re-export chains, ranked top impacts, surface area, clusters, cycles, graph edges, diagnostics, and warning text. Set `streamSummary: "light"` to drop suggestions, export summaries, re-export chains, ranked top impacts, graph metadata, cycles, clusters, and surface area from the final report.
 
 Review-pack builders should preserve symbol handles, diff snippets, callsites, `callCompatibility`, diagnostics, candidate-test confidence, impact reasons, and graph edge metadata. Render prose only at the final UI or prompt boundary.
 

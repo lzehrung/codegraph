@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { collectGraph } from "../src/index.js";
+import { extractMarkdownLinkOccurrences } from "../src/documentLinks/markdown.js";
 
 describe("document link graph extraction", () => {
   it("ignores hash-only anchors and markdown image links", async () => {
@@ -806,5 +807,34 @@ describe("document link graph extraction", () => {
           (edge.to.name === "{dynamicPath}" || edge.raw === "{dynamicPath}"),
       ),
     ).toBe(false);
+  });
+
+  it("captures Markdown link occurrences with locations and missing references", () => {
+    const occurrences = extractMarkdownLinkOccurrences(
+      [
+        "[Direct](./guide.md#section)",
+        "[Reference][guide]",
+        "[Missing][absent]",
+        "<https://example.com/docs>",
+        '<a href="./raw.html">Raw</a>',
+        "",
+        "[guide]: ./reference.md",
+      ].join("\n"),
+    );
+
+    expect(
+      occurrences.map((occurrence) =>
+        "missingReference" in occurrence
+          ? { raw: occurrence.raw, missingReference: true, line: occurrence.range.start.line }
+          : { raw: occurrence.raw, line: occurrence.range.start.line },
+      ),
+    ).toEqual([
+      { raw: "./guide.md#section", line: 1 },
+      { raw: "./reference.md", line: 2 },
+      { raw: "absent", missingReference: true, line: 3 },
+      { raw: "https://example.com/docs", line: 4 },
+      { raw: "./raw.html", line: 5 },
+    ]);
+    expect(occurrences[0]?.range.start).toMatchObject({ line: 1, column: 10 });
   });
 });

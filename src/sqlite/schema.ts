@@ -22,8 +22,7 @@ const ensureSymbolsVisibilityColumn = (db: SqliteDatabase) => {
 export function readGraphSchemaVersion(db: SqliteDatabase): number {
   try {
     const row = db.prepare("SELECT value FROM graph_metadata WHERE key = ?").get(GRAPH_SCHEMA_VERSION_KEY) as
-      | { value?: unknown }
-      | undefined;
+      { value?: unknown } | undefined;
     if (!row?.value) return 0;
     const version = Number(String(row.value));
     if (!Number.isInteger(version) || version < 0) return 0;
