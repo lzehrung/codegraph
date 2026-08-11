@@ -20,6 +20,7 @@ import {
 } from "../src/util/paths.js";
 import type { Edge } from "../src/types.js";
 import type { FileChange, ImpactItem } from "../src/impact/types.js";
+import { goToSqlDefinition } from "../src/sql/navigation.js";
 import { createTestIndex } from "./test-utils.js";
 
 describe("Reference lookup cache", () => {
@@ -2533,16 +2534,26 @@ describe("path identity silent lookup regressions", () => {
       expect(queryFile).not.toBe(displayFile);
       expect(fileIdentityKey(queryFile)).toBe(fileIdentityKey(displayFile));
 
-      const { goToSqlDefinition } = await import("../src/sql/navigation.js");
-      const result = await goToSqlDefinition(index, {
-        file: queryFile,
-        line: 2,
-        column: 15,
-      });
+      const exact = await goToSqlDefinition(index, { file: displayFile, line: 2, column: 15 });
+      expect(exact?.status).toBe("ok");
+      if (exact?.status === "ok") {
+        expect(fileIdentityKey(exact.definition.file)).toBe(fileIdentityKey(displayFile));
+      }
 
-      expect(result?.status).toBe("ok");
-      if (result?.status === "ok") {
-        expect(fileIdentityKey(result.definition.file)).toBe(fileIdentityKey(displayFile));
+      // A differently-cased query path only names the same file on a genuinely
+      // case-insensitive volume. On a case-sensitive one it is a different path and
+      // must not resolve, so probe the real filesystem rather than the identity mode
+      // this test pins.
+      const flippedExistsOnDisk = await fsp
+        .stat(queryFile)
+        .then(() => true)
+        .catch(() => false);
+      if (flippedExistsOnDisk) {
+        const flipped = await goToSqlDefinition(index, { file: queryFile, line: 2, column: 15 });
+        expect(flipped?.status).toBe("ok");
+        if (flipped?.status === "ok") {
+          expect(fileIdentityKey(flipped.definition.file)).toBe(fileIdentityKey(displayFile));
+        }
       }
     } finally {
       resetFileIdentityCaseSensitivityForTests(originalCaseSensitivity);
