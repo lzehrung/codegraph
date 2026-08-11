@@ -9,6 +9,35 @@ function normalizeWindowsComparablePath(filePath: string): string {
   return normalizePath(filePath).replace(/^([A-Za-z]):/, (_, driveLetter: string) => `${driveLetter.toUpperCase()}:`);
 }
 
+let caseInsensitiveFileIdentity = process.platform === "win32" || process.platform === "darwin";
+
+/**
+ * Overrides the assumed filesystem case sensitivity used by {@link fileIdentityKey}.
+ * Call once per process after probing the volume that holds the project root.
+ */
+export function setFileIdentityCaseInsensitive(caseInsensitive: boolean): void {
+  caseInsensitiveFileIdentity = caseInsensitive;
+}
+
+export function isFileIdentityCaseInsensitive(): boolean {
+  return caseInsensitiveFileIdentity;
+}
+
+/**
+ * Canonical comparison key for a file path.
+ *
+ * Use this for every map key, set membership test, dedup check, and path equality
+ * comparison so one physical file can never be keyed two different ways (for example
+ * `./Util` resolving beside a discovered `util.ts` on a case-insensitive volume).
+ *
+ * Never persist or display this value. Keep {@link normalizePath} output for storage,
+ * serialized artifacts, and user-facing output.
+ */
+export function fileIdentityKey(filePath: string): string {
+  const normalized = normalizeWindowsComparablePath(filePath);
+  return caseInsensitiveFileIdentity ? normalized.toLowerCase() : normalized;
+}
+
 function isWindowsQualifiedAbsolutePath(filePath: string): boolean {
   const normalizedPath = normalizePath(filePath);
   return /^[A-Za-z]:\//.test(normalizedPath) || normalizedPath.startsWith("//");
