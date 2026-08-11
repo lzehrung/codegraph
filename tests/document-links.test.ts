@@ -8,6 +8,7 @@ import {
   extractHtmlStyleSpecifiers,
 } from "../src/documentLinks.js";
 import { collectGraph } from "../src/index.js";
+import { extractMarkdownLinkOccurrences } from "../src/documentLinks/markdown.js";
 
 describe("document link graph extraction", () => {
   it("ignores hash-only anchors and markdown image links", async () => {
@@ -60,6 +61,25 @@ describe("document link graph extraction", () => {
     );
 
     expect(edges).toHaveLength(1);
+  });
+
+  it("uses the first definition for duplicate Markdown reference labels", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-doc-links-first-reference-"));
+    const indexFile = path.join(root, "index.md");
+    const guideFile = path.join(root, "guide.md");
+
+    await fsp.writeFile(indexFile, "[Guide][guide]\n\n[guide]: ./guide.md\n[guide]: ./missing.md\n", "utf8");
+    await fsp.writeFile(guideFile, "# Guide\n", "utf8");
+
+    const normalizedIndex = indexFile.replace(/\\/g, "/");
+    const normalizedGuide = guideFile.replace(/\\/g, "/");
+    const graph = await collectGraph(root, [normalizedIndex, normalizedGuide]);
+
+    expect(
+      graph.edges.some(
+        (edge) => edge.from === normalizedIndex && edge.to.type === "file" && edge.to.path === normalizedGuide,
+      ),
+    ).toBe(true);
   });
 
   it("ignores dynamic handlebars path expressions", async () => {
@@ -811,6 +831,35 @@ describe("document link graph extraction", () => {
           (edge.to.name === "{dynamicPath}" || edge.raw === "{dynamicPath}"),
       ),
     ).toBe(false);
+  });
+
+  it("captures Markdown link occurrences with locations and missing references", () => {
+    const occurrences = extractMarkdownLinkOccurrences(
+      [
+        "[Direct](./guide.md#section)",
+        "[Reference][guide]",
+        "[Missing][absent]",
+        "<https://example.com/docs>",
+        '<a href="./raw.html">Raw</a>',
+        "",
+        "[guide]: ./reference.md",
+      ].join("\n"),
+    );
+
+    expect(
+      occurrences.map((occurrence) =>
+        "missingReference" in occurrence
+          ? { raw: occurrence.raw, missingReference: true, line: occurrence.range.start.line }
+          : { raw: occurrence.raw, line: occurrence.range.start.line },
+      ),
+    ).toEqual([
+      { raw: "./guide.md#section", line: 1 },
+      { raw: "./reference.md", line: 2 },
+      { raw: "absent", missingReference: true, line: 3 },
+      { raw: "https://example.com/docs", line: 4 },
+      { raw: "./raw.html", line: 5 },
+    ]);
+    expect(occurrences[0]?.range.start).toMatchObject({ line: 1, column: 10 });
   });
 });
 

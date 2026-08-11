@@ -107,12 +107,7 @@ export type InstallTarget = {
 };
 
 type ConfigKind =
-  | "toml-block"
-  | "json-mcp-servers"
-  | "json-mcp-servers-no-type"
-  | "json-opencode-mcp"
-  | "json-kilo-mcp"
-  | "skill-only";
+  "toml-block" | "json-mcp-servers" | "json-mcp-servers-no-type" | "json-opencode-mcp" | "json-kilo-mcp" | "skill-only";
 
 type TargetDefinition = {
   id: InstallTargetId;

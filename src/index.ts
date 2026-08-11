@@ -78,6 +78,14 @@ export {
   type CycleSortMode,
 } from "./graphs.js";
 
+/** Local Markdown link validation. */
+export {
+  checkMarkdownLinks,
+  type MarkdownLinkCheckFailure,
+  type MarkdownLinkCheckFailureReason,
+  type MarkdownLinkCheckResult,
+} from "./documentLinks/check.js";
+
 /** Symbol query parser and graph-neighborhood query helpers. */
 export {
   parseSymbolQuery,

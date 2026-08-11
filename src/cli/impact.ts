@@ -10,6 +10,7 @@ import {
   type ImpactReport,
 } from "../impact/index.js";
 import { formatRequiredArgumentCount, mapSuggestions, mapSurfaceArea } from "../impact/reportShared.js";
+import { formatMarkdownLinkCheckResult } from "./links.js";
 import { graphToMermaidSymbolsWithFiles } from "../graphs/symbol-render.js";
 import { type GraphBuildOptions } from "../graphs/types.js";
 import { type SymbolGraph, type SymbolNodeKind } from "../graphs/symbol-graph.js";
@@ -473,6 +474,11 @@ function formatPrettyImpactReport(impactReport: ImpactReport, duplicateSummary?:
         `Note: limited receiver-call resolution for: ${diagnostics.memberResolutionCoverage.limitedLanguages.join(", ")}; consumers reached only through a receiver (e.g. obj.method()) may be missing from this report.`,
       );
     }
+  }
+  if (impactReport.markdownLinks) {
+    lines.push("");
+    lines.push("Markdown links:");
+    lines.push(formatMarkdownLinkCheckResult(impactReport.markdownLinks, false));
   }
   lines.push("");
   for (const item of impactReport.impacted.slice(0, 10)) {

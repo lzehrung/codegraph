@@ -1,3 +1,4 @@
+import type { MarkdownLinkCheckResult } from "../documentLinks/check.js";
 import type { AnalysisSummary } from "../analysisSummary.js";
 import type { FileId, Range } from "../types.js";
 import { type SymbolHandle, type SymbolDef } from "../indexer/types.js";
@@ -94,12 +95,7 @@ export type ImpactReason =
   | "fileLevelChange"; // fallback for changed files without symbol-level mapping
 
 export type ImpactSuggestionKind =
-  | "missingImport"
-  | "missingExport"
-  | "missingDeclaration"
-  | "configImpact"
-  | "breakingChange"
-  | "untestedChange";
+  "missingImport" | "missingExport" | "missingDeclaration" | "configImpact" | "breakingChange" | "untestedChange";
 
 export type ImpactSuggestionConfidence = "high" | "medium" | "low";
 
@@ -312,6 +308,7 @@ export type ImpactStreamSummaryReport = {
   clusters: ImpactCluster[];
   cycles: ImpactCycle[];
   graph: ImpactReport["graph"];
+  markdownLinks?: MarkdownLinkCheckResult;
   diagnostics: ImpactDiagnostics;
   warning?: string | undefined;
 };
@@ -352,6 +349,7 @@ export type ImpactReport = {
     symbolEdges: Array<{ from: number; to: number; label: string }>; // indices into changedSymbols
   };
   diagnostics?: ImpactDiagnostics;
+  markdownLinks?: MarkdownLinkCheckResult;
   warning?: string | undefined;
 };
 
@@ -466,6 +464,7 @@ export type CompactImpactReport = {
     symbolEdges: Array<{ from: number; to: number; label: string }>; // indices into changedSymbols
   };
   diagnostics?: ImpactDiagnostics;
+  markdownLinks?: MarkdownLinkCheckResult;
   warning?: string | undefined;
 };
 

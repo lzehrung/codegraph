@@ -166,13 +166,11 @@ export async function buildRefactorPlanInSnapshot(
     projectRoot: snapshot.root,
   });
   const omittedCandidateTests = Math.max(0, allCandidateTests.length - 100);
-  const candidateTests = allCandidateTests.slice(0, 100).map(
-    (candidate): RenameCandidateTest => ({
-      file: normalizeAgentFilePath(snapshot.root, candidate.file),
-      confidence: candidate.confidence,
-      reason: candidate.reason,
-    }),
-  );
+  const candidateTests = allCandidateTests.slice(0, 100).map((candidate): RenameCandidateTest => ({
+    file: normalizeAgentFilePath(snapshot.root, candidate.file),
+    confidence: candidate.confidence,
+    reason: candidate.reason,
+  }));
   const target = semanticSymbolFromDef(snapshot, resolved.def);
   const rename = request.renameTo
     ? await previewRenameInSnapshot(

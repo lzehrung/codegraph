@@ -518,6 +518,26 @@ Cycle detection reports source dependency cycles. Document-only link loops, such
 
 Dependency read commands keep the same output contracts while using the indexed graph path and derived adjacency maps internally when available. This makes repeated `deps`, `rdeps`, and `path` reads cheaper on warm manifest-backed projects.
 
+#### Markdown link validation
+
+`links` validates links authored in Markdown files under the project root. It covers inline links, reference-style links and definitions, autolinks, and raw HTML `a[href]` links, resolving local targets relative to the source file; `/path` targets resolve from the project root.
+
+```bash
+# Check Markdown links under the project root
+node ./dist/cli.js links
+node ./dist/cli.js links ./docs --json
+node ./dist/cli.js links --verbose
+```
+
+- A target is valid when it exists as a file or directory; a fragment is validated against the GitHub-style heading anchors of a Markdown target.
+- Local targets outside `--root` fail with reason `outside_root`; the checker never reads outside the project boundary.
+- External URLs (`http:`, `https:`, other schemes, and protocol-relative) are skipped without any network request, so results are deterministic and offline.
+- Failure reasons are `missing_file`, `missing_reference` (a reference-style usage with no matching definition), `missing_fragment`, and `outside_root`.
+- Pretty output reports a count plus `file:line:column`, reason, and raw destination per failure; `--verbose` also lists skipped external links and scan counts.
+- `--json` emits the stable `schemaVersion: 1` result with `summary` counts and `failures` sorted by source path and range. The exit status is `1` when any broken link is found and `0` otherwise; malformed arguments and discovery or read failures keep the standard command-error behavior.
+- Images, MDX, and other document formats are not validated, and custom HTML or site-generator anchors are not recognized.
+- `unresolved` remains a source-import diagnostic and intentionally excludes graph-only document edges; use `links` for Markdown link checking.
+
 ### Impact, review, and graph delta
 
 `impact` loads current repository state automatically, like `search`/`orient`/`inspect`/`review`, so its `--base`/`--head` range never becomes index invalidation input; pass `--cache off` to force a full rebuild for a single invocation. `graph-delta` and `drift` keep revision-range semantics and are not current-state queries.
@@ -615,6 +635,8 @@ For git-provider impact, `--head` accepts normal revisions plus worktree sentine
 
 Impact JSON responses include `schemaVersion` plus `format: "full" | "compact"` so downstream tools can branch on payload shape without inferring it from missing fields. Use `--compact` for compact impact JSON. Impact JSON can also include `exportSummary`, `reexportChains`, `topImpacts`, `surfaceArea`, `clusters`, and `changedSymbols[].callCompatibility` when applicable. `changedFiles[]` entries preserve git copy or rename metadata as `oldFile` and `similarityIndex` when present. File paths in impact reports are project-relative, and raw diffs that point outside the project root are rejected.
 
+When a review or non-empty impact range is analyzed, its JSON report includes `markdownLinks`, the same result schema used by `codegraph links --json` for Markdown sources in the analysis scope; pretty output adds a `Markdown links:` section. The check validates only `.md` sources, including raw `a[href]` inside Markdown. Standalone HTML, MDX, JSX, and TSX links are outside this validator's scope.
+
 `callCompatibility` is a conservative review hint, not type checking. Likely-mismatch support is provider-backed for source languages where codegraph resolves the callee and can count arguments with high confidence. Overload sets are skipped unless codegraph can prove the exact overload target. Pretty impact and review summaries show only `likely_mismatch` findings; compatible, unsupported, or ambiguous callsites are omitted from human output and appear in structured data only when useful.
 
 Each `impacted[]` item carries `severity` (0-1, ranked descending) and an independent `confidence` (0-1, how sure codegraph is the impact is real). `confidence` starts from the reference's relationship to the changed symbol (direct, namespace, import alias, or transitive) and is discounted further when the underlying reference was verified through medium- or low-confidence resolution, such as receiver/instance member-call matching (`obj.method()`) rather than an exact scope or import binding; `explain.resolutionConfidence` reports that discount tier (`"medium" | "low"`) when applied. This discount changes `confidence` only, not `severity` or item ranking, so a lower-certainty finding stays visible rather than silently dropping in rank.
@@ -657,7 +679,7 @@ Changed non-indexed tracked files such as scripts, Markdown, and extensionless p
 
 SQL review context is emitted only as `sqlContext.entries[]` in structured review JSON. Entries carry a `reason` such as `changed_sql_file` or `changed_sql_literal`, the matched `objectName`, and the original SQL statement fact. They are review hints, not source dependency edges.
 
-`inspect` and `unresolved` exclude graph-only document/template link edges plus known runtime and package externals from unresolved-import counts so diagnostics stay focused on source import resolution gaps. Runtime and package filtering includes Node builtins such as `node:path` and `fs`, supported-language standard library imports, URL imports, and dependencies declared in nearby manifests such as `package.json`, `requirements.txt`, `requirements.in`, `pyproject.toml`, `setup.cfg`, `Pipfile`, `composer.json`, `Cargo.toml`, `go.mod`, `build.zig.zon`, `Gemfile`, `*.gemspec`, `pom.xml`, `build.gradle`, `build.gradle.kts`, `*.csproj`, `*.fsproj`, `*.vbproj`, `vcpkg.json`, and `Package.swift`.
+`inspect` and `unresolved` exclude graph-only document/template link edges plus known runtime and package externals from unresolved-import counts so diagnostics stay focused on source import resolution gaps. `unresolved` remains a source-import diagnostic and does not check Markdown link targets; use `links` for local Markdown link validation. Runtime and package filtering includes Node builtins such as `node:path` and `fs`, supported-language standard library imports, URL imports, and dependencies declared in nearby manifests such as `package.json`, `requirements.txt`, `requirements.in`, `pyproject.toml`, `setup.cfg`, `Pipfile`, `composer.json`, `Cargo.toml`, `go.mod`, `build.zig.zon`, `Gemfile`, `*.gemspec`, `pom.xml`, `build.gradle`, `build.gradle.kts`, `*.csproj`, `*.fsproj`, `*.vbproj`, `vcpkg.json`, and `Package.swift`.
 
 ### Doctor and skill commands
 

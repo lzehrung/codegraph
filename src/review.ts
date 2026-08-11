@@ -1,3 +1,4 @@
+import { checkMarkdownLinksInFiles } from "./documentLinks/check.js";
 import { performance } from "node:perf_hooks";
 import {
   findDuplicateContextsWithPreparedAnalysis,
@@ -361,6 +362,7 @@ export async function buildReviewReport(
   });
 
   const projectFiles = index.projectFiles ?? (await discoverProjectFiles(projectRoot));
+  const markdownLinks = await checkMarkdownLinksInFiles(projectRoot, index.byFile.keys());
   const sqlContext = await collectReviewSqlContext({ projectRoot, index, changedFileList });
   const report = assembleReviewReport({
     appliedOptions,
@@ -374,6 +376,7 @@ export async function buildReviewReport(
       ...(reviewReport?.indexReport ? { report: reviewReport.indexReport } : {}),
     }),
     ...(sqlContext ? { sqlContext } : {}),
+    markdownLinks,
     diagnostics,
     riskRelevantParseFailures,
     exportedChangedCount,

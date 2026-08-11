@@ -1,12 +1,5 @@
 export type SqlFileRole =
-  | "schema_snapshot"
-  | "migration"
-  | "seed"
-  | "query"
-  | "routine"
-  | "fixture"
-  | "dump"
-  | "unknown";
+  "schema_snapshot" | "migration" | "seed" | "query" | "routine" | "fixture" | "dump" | "unknown";
 
 export type SqlFactKind =
   | "defines_table"
@@ -26,10 +19,7 @@ export type SqlFactKind =
 export type SqlTruthTier = "sql_statement_fact" | "sql_schema_candidate";
 
 export type SqlBridgeReason =
-  | "changed_sql_file"
-  | "changed_sql_literal"
-  | "explicit_orm_mapping"
-  | "same_pr_object_name";
+  "changed_sql_file" | "changed_sql_literal" | "explicit_orm_mapping" | "same_pr_object_name";
 
 export interface SqlStatementFact {
   readonly id: string;

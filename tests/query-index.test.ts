@@ -147,8 +147,7 @@ describe("persistent query index", () => {
 
     const database = new SqliteDatabase(sidecar, { readonly: true });
     const sourceRow = database.prepare("SELECT sum(byte_length) AS bytes FROM files").get() as
-      | { bytes?: unknown }
-      | undefined;
+      { bytes?: unknown } | undefined;
     const storedRow = database
       .prepare(
         `

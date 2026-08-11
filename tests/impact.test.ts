@@ -275,6 +275,34 @@ index 1234567..abcdef0 100644
       }
     });
 
+    it("includes Markdown link validation in full and compact reports", async () => {
+      const root = await fsp.mkdtemp(path.join(process.cwd(), "tmp-impact-markdown-links-"));
+      try {
+        const readme = path.join(root, "README.md");
+        await fsp.writeFile(readme, "[Missing](./missing.md)\n", "utf8");
+        const index = await buildProjectIndexFromFiles(root, [readme]);
+        const diffText = [
+          "diff --git a/README.md b/README.md",
+          "index 1234567..abcdef0 100644",
+          "--- a/README.md",
+          "+++ b/README.md",
+          "@@ -0,0 +1 @@",
+          "+[Missing](./missing.md)",
+          "",
+        ].join("\n");
+
+        const full = await analyzeImpactFromDiff(root, index, { provider: "raw", diffText });
+        const compact = await analyzeImpactFromDiff(root, index, { provider: "raw", diffText, compact: true });
+
+        expect(full.markdownLinks?.summary).toMatchObject({ filesScanned: 1, failures: 1 });
+        expect(compact.markdownLinks?.failures).toContainEqual(
+          expect.objectContaining({ file: "README.md", reason: "missing_file", raw: "./missing.md" }),
+        );
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it("normalizes rename oldPath before fallback seeding", async () => {
       const root = await fsp.mkdtemp(path.join(process.cwd(), "tmp-impact-rename-normalize-"));
       try {

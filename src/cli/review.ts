@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import path from "node:path";
+import { formatMarkdownLinkCheckResult } from "./links.js";
 import { buildReviewReport, type ReviewBuildReport, type ReviewDepth, type ReviewReport } from "../review.js";
 import type { CandidateTestFile } from "../impact/context.js";
 import { formatRequiredArgumentCount } from "../impact/reportShared.js";
@@ -208,6 +209,11 @@ function formatReviewSummary(
     if (remainingFiles > 0) {
       lines.push(`- ... and ${remainingFiles} more`);
     }
+  }
+  if (report.markdownLinks) {
+    lines.push("");
+    lines.push("Markdown links:");
+    lines.push(formatMarkdownLinkCheckResult(report.markdownLinks, false));
   }
   lines.push("");
   lines.push("Candidate tests:");

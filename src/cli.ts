@@ -50,6 +50,7 @@ export const CLI_DISPATCHABLE_COMMANDS = [
   "init",
   "inspect",
   "install",
+  "links",
   "mcp",
   "orient",
   "packet",

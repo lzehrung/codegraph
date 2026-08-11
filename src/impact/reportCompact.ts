@@ -36,6 +36,7 @@ export function buildCompactImpactReport(parts: CompactImpactReportParts): Compa
     format: "compact",
     ...(parts.analysis ? { analysis: parts.analysis } : {}),
     ...(parts.projectFiles ? { projectFiles: parts.projectFiles } : {}),
+    ...(parts.markdownLinks ? { markdownLinks: parts.markdownLinks } : {}),
     files: context.files,
     changedFiles: parts.changedFiles.map((fileChange) => ({
       file: context.fileId(fileChange.file),

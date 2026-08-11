@@ -1,13 +1,5 @@
 export type AngularJsRegistrationKind =
-  | "component"
-  | "constant"
-  | "controller"
-  | "directive"
-  | "factory"
-  | "filter"
-  | "provider"
-  | "service"
-  | "value";
+  "component" | "constant" | "controller" | "directive" | "factory" | "filter" | "provider" | "service" | "value";
 
 export type AngularJsRegistration = {
   kind: AngularJsRegistrationKind;
@@ -15,9 +7,7 @@ export type AngularJsRegistration = {
 };
 
 export type AngularJsReference =
-  | { kind: "templateUrl"; value: string }
-  | { kind: "controller"; value: string }
-  | { kind: "inject"; value: string };
+  { kind: "templateUrl"; value: string } | { kind: "controller"; value: string } | { kind: "inject"; value: string };
 
 type AngularJsTokenKind = "identifier" | "string" | "punctuation";
 

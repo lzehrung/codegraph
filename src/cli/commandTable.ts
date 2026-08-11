@@ -614,6 +614,19 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
       });
     },
   },
+  links: {
+    stage: "base",
+    run: async (ctx) => {
+      const { handleLinksCommand } = await import("./links.js");
+      await handleLinksCommand({
+        projectRootFs: ctx.projectRootFs,
+        hasFlag: ctx.hasFlag,
+        writeJSONLine,
+        writeStdoutLine,
+        exit: exitCli,
+      });
+    },
+  },
   path: {
     stage: "project",
     run: (ctx) => runPathFamilyCommand(ctx, "path"),

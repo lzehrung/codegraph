@@ -21,12 +21,7 @@ export type CliIndexBehavior =
 
 /** Wiring family of a `current-query` command; each family owns a behavioral CLI test. */
 export type CliCurrentQueryFamily =
-  | "navigation"
-  | "graph-query"
-  | "structural-summary"
-  | "duplicate-analysis"
-  | "diff-aware"
-  | "affected-tests";
+  "navigation" | "graph-query" | "structural-summary" | "duplicate-analysis" | "diff-aware" | "affected-tests";
 
 export type CliIndexPolicyEntry = {
   command: string;
@@ -159,6 +154,7 @@ export const CLI_INDEX_POLICY: readonly CliIndexPolicyEntry[] = [
     reason: "Exported API summary over current repository state.",
   },
   { command: "grep", behaviors: ["none"], reason: "Text and Tree-sitter query search without an index." },
+  { command: "links", behaviors: ["none"], reason: "Validates Markdown files directly without an index." },
   {
     command: "graph-delta",
     behaviors: ["historical"],

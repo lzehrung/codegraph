@@ -52,6 +52,31 @@ describe("Review report", () => {
     expect(report.diagnostics?.missingFiles ?? []).toEqual([]);
   });
 
+  it("includes Markdown link validation in the report", async () => {
+    const root = await mkTmpDir("dg-review-markdown-links-");
+    try {
+      await fsp.writeFile(path.join(root, "README.md"), "[Missing](./missing.md)\n", "utf8");
+      const diffText = [
+        "diff --git a/README.md b/README.md",
+        "index 1234567..abcdef0 100644",
+        "--- a/README.md",
+        "+++ b/README.md",
+        "@@ -0,0 +1 @@",
+        "+[Missing](./missing.md)",
+        "",
+      ].join("\n");
+
+      const report = await buildReviewReport(root, { diffText });
+
+      expect(report.markdownLinks?.summary).toMatchObject({ filesScanned: 1, failures: 1 });
+      expect(report.markdownLinks?.failures).toContainEqual(
+        expect.objectContaining({ file: "README.md", reason: "missing_file", raw: "./missing.md" }),
+      );
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("flags languages without receiver member-call resolution in diagnostics", async () => {
     const root = await mkTmpDir("dg-review-member-coverage-");
     const srcDir = path.join(root, "src");

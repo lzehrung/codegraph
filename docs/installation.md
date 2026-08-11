@@ -192,7 +192,7 @@ A certification report distinguishes the bytes it inspected from the host behavi
 
 Semantic reports make the same distinction with `packageMode`. `packed` means the corpus runner loaded the installed candidate package, while `checkout` identifies a source-build trend run; native and reduced results are never combined.
 
-The initial [semantic corpus](./benchmarks/README.md#semantic-correctness-corpus) is informational and does not create an absolute accuracy threshold. Consult the release's machine-readable report before treating a package version or target as certified.
+The initial [semantic corpus](./benchmarks/README.md#focused-semantic-regression-fixture) is informational and does not create an absolute accuracy threshold. Consult the release's machine-readable report before treating a package version or target as certified.
 
 ## Agent client setup
 

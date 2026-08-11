@@ -299,13 +299,11 @@ export async function previewRenameInSnapshot(
       },
     });
   }
-  const definitionCandidates = [...semanticDefinitions.values()].map(
-    (definition): CandidateEdit => ({
-      file: definition.file,
-      range: definition.range,
-      kind: "definition",
-    }),
-  );
+  const definitionCandidates = [...semanticDefinitions.values()].map((definition): CandidateEdit => ({
+    file: definition.file,
+    range: definition.range,
+    kind: "definition",
+  }));
   const referenceLimitExceeded = semanticReferences.length > maxEdits;
   const selectedReferences = semanticReferences.slice(0, maxEdits);
   const importDeclarations = await collectImportDeclarationCandidates(
@@ -318,14 +316,12 @@ export async function previewRenameInSnapshot(
     ...definitionCandidates,
     ...importDeclarations.candidates,
     ...exportDeclarations.candidates,
-    ...selectedReferences.map(
-      (reference): CandidateEdit => ({
-        file: reference.file,
-        range: reference.range,
-        kind: "reference",
-        reference,
-      }),
-    ),
+    ...selectedReferences.map((reference): CandidateEdit => ({
+      file: reference.file,
+      range: reference.range,
+      kind: "reference",
+      reference,
+    })),
   ];
   const candidateLimitExceeded = allCandidates.length > maxEdits;
   const candidates = allCandidates.slice(0, maxEdits);
@@ -436,13 +432,11 @@ export async function previewRenameInSnapshot(
     projectRoot: snapshot.root,
   });
   const omittedCandidateTests = Math.max(0, allCandidateTests.length - 100);
-  const candidateTests = allCandidateTests.slice(0, 100).map(
-    (candidate): RenameCandidateTest => ({
-      file: normalizeAgentFilePath(snapshot.root, candidate.file),
-      confidence: candidate.confidence,
-      reason: candidate.reason,
-    }),
-  );
+  const candidateTests = allCandidateTests.slice(0, 100).map((candidate): RenameCandidateTest => ({
+    file: normalizeAgentFilePath(snapshot.root, candidate.file),
+    confidence: candidate.confidence,
+    reason: candidate.reason,
+  }));
   if (omittedCandidateTests) {
     unsafeSites.push({
       location: {

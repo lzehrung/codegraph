@@ -578,7 +578,7 @@ export function collectLocalsAndExportsFromSource(
             const hasTuple = /=\s*\(/.test(assignmentText);
             if (!items.length || hasTuple) {
               const strRe = /["']([^"']+)["']/g;
-              for (let submatch; (submatch = strRe.exec(assignmentText)); ) {
+              for (let submatch; (submatch = strRe.exec(assignmentText));) {
                 const name = submatch[1]!;
                 pythonAllExports.add(name);
                 const local = mergedLocals.find((def) => def.localName === name);

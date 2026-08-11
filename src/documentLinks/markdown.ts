@@ -1,8 +1,10 @@
 import path from "node:path";
 import { extractJsTsSpecifiers, type ModuleSpecifier } from "../util/specifiers.js";
+import { type Range } from "../types.js";
 import { extractHtmlAttributeSpecifiers } from "./html.js";
 import {
   dedupeModuleSpecifiers,
+  isObviouslyDynamicSpecifier,
   markResolutionKind,
   normalizeLinkSpecifier,
   normalizeReferenceLabel,
@@ -14,6 +16,113 @@ const MAX_MARKDOWN_INLINE_LABEL_SCAN_LENGTH = Number.POSITIVE_INFINITY;
 export function extractMarkdownModuleSpecifiers(source: string): ModuleSpecifier[] {
   const sanitized = stripMarkdownCode(source);
   return extractMarkdownModuleSpecifiersFromSanitized(sanitized);
+}
+
+export type MarkdownLinkOccurrence =
+  | {
+      raw: string;
+      range: Range;
+      destination: string;
+    }
+  | {
+      raw: string;
+      range: Range;
+      missingReference: true;
+    };
+
+type MarkdownReferenceDefinition = {
+  destination: string;
+};
+
+export function extractMarkdownLinkOccurrences(source: string): MarkdownLinkOccurrence[] {
+  const sanitized = stripMarkdownCode(source);
+  const lineStarts = collectMarkdownLineStarts(sanitized);
+  const referenceDefs = collectMarkdownReferenceDefinitionsForOccurrences(sanitized);
+  const out: MarkdownLinkOccurrence[] = [];
+
+  for (let index = 0; index < sanitized.length; index += 1) {
+    if (sanitized[index] !== "[") continue;
+    if (sanitized[index - 1] === "!") continue;
+
+    const inlineLabelEnd = findMarkdownLabelEnd(sanitized, index + 1, MAX_MARKDOWN_INLINE_LABEL_SCAN_LENGTH);
+    if (inlineLabelEnd >= 0 && sanitized[inlineLabelEnd + 1] === "(") {
+      const parsed = parseMarkdownInlineLink(sanitized, inlineLabelEnd + 2);
+      if (parsed) {
+        const destination = extractMarkdownDestination(parsed.destination);
+        if (destination && !isObviouslyDynamicSpecifier(destination)) {
+          const destinationStart = findMarkdownDestinationStart(sanitized, inlineLabelEnd + 2);
+          out.push({
+            raw: destination,
+            destination,
+            range: markdownRange(sanitized, destinationStart, destinationStart + destination.length, lineStarts),
+          });
+        }
+        index = parsed.endIndex;
+        continue;
+      }
+      if (isEmptyMarkdownInlineDestination(sanitized, inlineLabelEnd + 2)) {
+        index = findEmptyMarkdownInlineDestinationEnd(sanitized, inlineLabelEnd + 2);
+        continue;
+      }
+    }
+
+    const labelEnd = findMarkdownLabelEnd(sanitized, index + 1, MAX_MARKDOWN_REFERENCE_LABEL_SCAN_LENGTH);
+    if (labelEnd < 0) {
+      index = skipConsecutiveMarkdownOpeners(sanitized, index);
+      continue;
+    }
+
+    const suffix = parseMarkdownReferenceSuffix(sanitized, labelEnd + 1);
+    if (!suffix && isMarkdownReferenceDefinitionLabel(sanitized, index, labelEnd)) {
+      const lineEnd = sanitized.indexOf("\n", labelEnd + 1);
+      index = lineEnd >= 0 ? lineEnd : sanitized.length;
+      continue;
+    }
+
+    const text = sanitized.slice(index + 1, labelEnd).trim();
+    const rawLabel = suffix ? suffix.label.trim() || text : text;
+    const resolvedLabel = normalizeReferenceLabel(rawLabel);
+    if (!resolvedLabel) continue;
+
+    const destination = referenceDefs.get(resolvedLabel);
+    const rangeEnd = (suffix?.endIndex ?? labelEnd) + 1;
+    const range = markdownRange(sanitized, index, rangeEnd, lineStarts);
+    if (destination) {
+      out.push({ raw: destination.destination, destination: destination.destination, range });
+    } else if (suffix) {
+      out.push({ raw: rawLabel, range, missingReference: true });
+    }
+    index = suffix?.endIndex ?? labelEnd;
+  }
+
+  for (const match of sanitized.matchAll(/<([^>\s]+)>/g)) {
+    const candidate = match[1]?.trim();
+    if (!candidate || match.index === undefined) continue;
+    if (isMarkdownAngleDestinationInLinkSyntax(sanitized, match.index)) continue;
+    if (candidate.startsWith("/") || candidate.startsWith("?")) continue;
+    if (!isLikelyMarkdownAutolinkTarget(candidate) || isObviouslyDynamicSpecifier(candidate)) continue;
+    const start = match.index + 1;
+    out.push({
+      raw: candidate,
+      destination: candidate,
+      range: markdownRange(sanitized, start, start + candidate.length, lineStarts),
+    });
+  }
+
+  for (const match of sanitized.matchAll(/<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"']+))/gi)) {
+    const destination = match[1] ?? match[2] ?? match[3];
+    if (!destination || match.index === undefined || isObviouslyDynamicSpecifier(destination)) continue;
+    const destinationOffset = match[0].indexOf(destination);
+    if (destinationOffset < 0) continue;
+    const start = match.index + destinationOffset;
+    out.push({
+      raw: destination,
+      destination,
+      range: markdownRange(sanitized, start, start + destination.length, lineStarts),
+    });
+  }
+
+  return out;
 }
 
 function extractMarkdownModuleSpecifiersFromSanitized(sanitized: string): ModuleSpecifier[] {
@@ -59,6 +168,77 @@ export function extractMdxModuleSpecifiers(source: string): ModuleSpecifier[] {
   return dedupeModuleSpecifiers(out);
 }
 
+function collectMarkdownReferenceDefinitionsForOccurrences(source: string): Map<string, MarkdownReferenceDefinition> {
+  const out = new Map<string, MarkdownReferenceDefinition>();
+
+  for (let lineStart = 0; lineStart < source.length; lineStart += 1) {
+    const lineEnd = source.indexOf("\n", lineStart);
+    const endIndex = lineEnd >= 0 ? lineEnd : source.length;
+    const line = source.slice(lineStart, endIndex);
+    const leading = line.match(/^ {0,3}/)?.[0] ?? "";
+    const labelStart = leading.length;
+    if (line[labelStart] !== "[") {
+      lineStart = endIndex;
+      continue;
+    }
+
+    const absoluteLabelStart = lineStart + labelStart;
+    const labelEnd = findMarkdownLabelEnd(source, absoluteLabelStart + 1, MAX_MARKDOWN_REFERENCE_LABEL_SCAN_LENGTH);
+    if (labelEnd < 0 || labelEnd > lineStart + line.length || source[labelEnd + 1] !== ":") {
+      lineStart = endIndex;
+      continue;
+    }
+
+    const label = normalizeReferenceLabel(source.slice(absoluteLabelStart + 1, labelEnd));
+    const rawDestination = parseMarkdownReferenceDefinitionDestination(source.slice(labelEnd + 2, endIndex));
+    const destination = rawDestination ? extractMarkdownDestination(rawDestination) : "";
+    if (label && destination && !isObviouslyDynamicSpecifier(destination) && !out.has(label)) {
+      out.set(label, { destination });
+    }
+    lineStart = endIndex;
+  }
+
+  return out;
+}
+
+function collectMarkdownLineStarts(source: string): number[] {
+  const lineStarts = [0];
+  for (let index = source.indexOf("\n"); index >= 0; index = source.indexOf("\n", index + 1)) {
+    lineStarts.push(index + 1);
+  }
+  return lineStarts;
+}
+
+function findMarkdownDestinationStart(source: string, startIndex: number): number {
+  let index = startIndex;
+  while (index < source.length && /\s/.test(source.charAt(index))) {
+    index += 1;
+  }
+  return index;
+}
+
+function markdownRange(source: string, start: number, end: number, lineStarts: readonly number[]): Range {
+  return {
+    start: markdownPosition(source, start, lineStarts),
+    end: markdownPosition(source, end, lineStarts),
+  };
+}
+
+function markdownPosition(source: string, index: number, lineStarts: readonly number[]): Range["start"] {
+  const boundedIndex = Math.max(0, Math.min(index, source.length));
+  let low = 0;
+  let high = lineStarts.length - 1;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if ((lineStarts[middle] ?? 0) <= boundedIndex) {
+      low = middle;
+    } else {
+      high = middle - 1;
+    }
+  }
+  const lineStart = lineStarts[low] ?? 0;
+  return { line: low + 1, column: boundedIndex - lineStart + 1, index: boundedIndex };
+}
 function collectMarkdownReferenceDefinitions(source: string): Map<string, ModuleSpecifier> {
   const out = new Map<string, ModuleSpecifier>();
 
@@ -95,7 +275,7 @@ function collectMarkdownReferenceDefinitions(source: string): Map<string, Module
       preferRelative: true,
       resolutionKind: "document",
     });
-    if (normalized) out.set(label, normalized);
+    if (normalized && !out.has(label)) out.set(label, normalized);
     lineStart = endIndex;
   }
 

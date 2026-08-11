@@ -36,6 +36,7 @@ export const CLI_COMMAND_CATALOG: readonly CliCommandMetadata[] = [
   { name: "affected", summary: "List tests likely affected by changed files", family: "review" },
   { name: "graph", summary: "Build dependency graph", family: "graph" },
   { name: "artifact", summary: "Build an agent-ready SQLite/graph/report/question bundle", family: "manage" },
+  { name: "links", summary: "Check local Markdown links", family: "review" },
   { name: "drift", summary: "Compare architecture health between refs or artifacts", family: "review" },
   { name: "mcp", summary: "Serve MCP tools for agent graph navigation", family: "manage" },
   { name: "viewer", summary: "Serve the bundled graph visualization viewer for people", family: "manage" },

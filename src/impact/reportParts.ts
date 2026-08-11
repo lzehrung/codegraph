@@ -1,3 +1,4 @@
+import type { MarkdownLinkCheckResult } from "../documentLinks/check.js";
 import type { ProjectIndex } from "../indexer/types.js";
 import type { FileId } from "../types.js";
 import type {
@@ -39,5 +40,6 @@ export type ImpactReportPartsBase = {
   }>;
   symbolEdges: Array<{ from: number; to: number; label: string }>;
   projectFiles: ProjectIndex["projectFiles"];
+  markdownLinks?: MarkdownLinkCheckResult;
   displayFile: (file: FileId) => FileId;
 };

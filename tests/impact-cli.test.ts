@@ -77,6 +77,22 @@ async function runImpactCliSubprocess(args: string[], opts?: { cwd?: string; std
   return result.stdout;
 }
 
+async function createMarkdownLinkGitFixture(): Promise<{ root: string; base: string; head: string }> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-markdown-links-cli-"));
+  runGit(root, ["init"]);
+  runGit(root, ["config", "user.email", "links@test.local"]);
+  runGit(root, ["config", "user.name", "Codegraph Bot"]);
+  await fsp.writeFile(path.join(root, "README.md"), "# Docs\n[Guide](guide.md)\n", "utf8");
+  await fsp.writeFile(path.join(root, "guide.md"), "# Guide\n", "utf8");
+  runGit(root, ["add", "."]);
+  runGit(root, ["commit", "-m", "initial"]);
+  const base = runGit(root, ["rev-parse", "HEAD"]);
+  await fsp.writeFile(path.join(root, "README.md"), "# Docs\n[Missing](missing.md)\n", "utf8");
+  runGit(root, ["add", "."]);
+  runGit(root, ["commit", "-m", "break link"]);
+  return { root, base, head: runGit(root, ["rev-parse", "HEAD"]) };
+}
+
 describe("impact CLI output", () => {
   async function createCallCompatibilityFixture(restSignature = false): Promise<{ root: string; diffText: string }> {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-cli-call-"));
@@ -126,6 +142,37 @@ describe("impact CLI output", () => {
       expect(stdout).toContain("Analysis:");
       expect(stdout).toContain("Changed files: 1");
       expect(stdout).toContain("Changed symbols:");
+    },
+    slowCliTimeoutMs,
+  );
+
+  it(
+    "prints Markdown link findings in pretty output",
+    async () => {
+      const fixture = await createMarkdownLinkGitFixture();
+      try {
+        const stdout = await runImpactCli(
+          [
+            "impact",
+            "--root",
+            fixture.root,
+            "--provider",
+            "git",
+            "--base",
+            fixture.base,
+            "--head",
+            fixture.head,
+            "--pretty",
+          ],
+          { cwd: fixture.root, stdin: "" },
+        );
+
+        expect(stdout).toContain("Markdown links:");
+        expect(stdout).toContain("1 broken Markdown link found:");
+        expect(stdout).toContain("README.md:2:11 missing_file: missing.md");
+      } finally {
+        await fsp.rm(fixture.root, { recursive: true, force: true });
+      }
     },
     slowCliTimeoutMs,
   );
@@ -532,6 +579,28 @@ describe("review CLI output", () => {
         expect(result.stderr).not.toContain("No files provided");
       } finally {
         await fsp.rm(root, { recursive: true, force: true });
+      }
+    },
+    slowCliTimeoutMs,
+  );
+
+  it(
+    "prints Markdown link findings in pretty output",
+    async () => {
+      const fixture = await createMarkdownLinkGitFixture();
+      try {
+        const stdout = await runCodegraphCli(
+          ["review", "--root", fixture.root, "--base", fixture.base, "--head", fixture.head],
+          {
+            cwd: fixture.root,
+          },
+        );
+
+        expect(stdout).toContain("Markdown links:");
+        expect(stdout).toContain("1 broken Markdown link found:");
+        expect(stdout).toContain("README.md:2:11 missing_file: missing.md");
+      } finally {
+        await fsp.rm(fixture.root, { recursive: true, force: true });
       }
     },
     slowCliTimeoutMs,

@@ -710,7 +710,7 @@ function collectExportSignaturesFromText(
 
   const functionRe =
     /^\s*export\s+(?:default\s+)?(?:async\s+)?function\s*(?:\*\s*)?(?:([A-Za-z_$][\w$]*))?(?:\s*<[^>]+>)?\s*\(/gm;
-  for (let match; (match = functionRe.exec(scanText)); ) {
+  for (let match; (match = functionRe.exec(scanText));) {
     const params = readBalancedParenContent(scanText, functionRe.lastIndex - 1);
     if (params && functionSuffixStartsAfterParams(scanText, params.endIndex)) {
       pushMatch(match, match[1] ?? "default", params.content);
@@ -719,7 +719,7 @@ function collectExportSignaturesFromText(
   }
 
   const arrowRe = /^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:<[^>]+>\s*)?\(/gm;
-  for (let match; (match = arrowRe.exec(scanText)); ) {
+  for (let match; (match = arrowRe.exec(scanText));) {
     const name = match[1];
     const params = readBalancedParenContent(scanText, arrowRe.lastIndex - 1);
     if (name && params && arrowSuffixStartsAfterParams(scanText, params.endIndex)) {
@@ -729,7 +729,7 @@ function collectExportSignaturesFromText(
   }
 
   const singleParamArrowRe = /^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?([A-Za-z_$][\w$]*)\s*=>/gm;
-  for (let match; (match = singleParamArrowRe.exec(scanText)); ) {
+  for (let match; (match = singleParamArrowRe.exec(scanText));) {
     const name = match[1];
     if (!name) continue;
     output.push({

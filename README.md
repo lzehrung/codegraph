@@ -59,23 +59,24 @@ Use codegraph alongside text search and compilers: text search finds exact strin
 - [Documentation](./docs)
   - [CLI](./docs/cli.md)
   - [Publishing](./PUBLISHING.md)
-- [Contributing](#contributing)
+- [Development](#development)
 
 ## What you can do
 
-| Question                                     | Start here                                                       | What comes back                                                                              |
-| -------------------------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| "Where should I start in this repo?"         | `codegraph orient --root . --budget small`                       | Central modules, a bounded tree, and copyable follow-ups                                     |
-| "How does this feature work?"                | `codegraph explore "<question>" --root .`                        | Ranked anchors, source packets, dependency paths, blast radius, and likely tests             |
-| "What could this change break?"              | `codegraph review`                                               | Changed symbols, risk signals, candidate tests, duplicate leads, and review tasks            |
-| "Which tests should I run?"                  | `codegraph affected --base HEAD --head WORKTREE --quiet`         | Deterministic affected test paths from changed files and reverse dependencies                |
-| "What depends on this file?"                 | `codegraph rdeps src/file.ts --json`                             | Reverse dependencies from the resolved project graph                                         |
-| "Where is this symbol defined or used?"      | `codegraph goto <file> <line> <column>` and `codegraph refs ...` | Semantic definitions and references across supported languages                               |
-| "Which declaration matches this name?"       | `codegraph symbols "CodeReviewSession" --root .`                 | Ranked symbols with portable handles, exact ranges, provenance, and omissions                |
-| "What evidence do I need before a refactor?" | `codegraph refactor-plan <symbol-target>`                        | References, call and type relationships, candidate tests, omissions, and copyable follow-ups |
-| "Is the architecture drifting?"              | `codegraph drift ./src --base origin/main --head HEAD`           | New cycles, hotspot changes, unresolved imports, API changes, and graph deltas               |
-| "Where is code duplicated?"                  | `codegraph duplicates ./src --min-confidence medium`             | Ranked exact and near-duplicate groups with locations and confidence                         |
-| "Can another tool consume the graph?"        | `codegraph graph --root . ./src --json --output codegraph.json`  | JSON, Mermaid, DOT, or SQLite output                                                         |
+| Question                                     | Start here                                                       | What comes back                                                                                           |
+| -------------------------------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| "Where should I start in this repo?"         | `codegraph orient --root . --budget small`                       | Central modules, a bounded tree, and copyable follow-ups                                                  |
+| "How does this feature work?"                | `codegraph explore "<question>" --root .`                        | Ranked anchors, source packets, dependency paths, blast radius, and likely tests                          |
+| "What could this change break?"              | `codegraph review`                                               | Changed symbols, Markdown link findings, risk signals, candidate tests, duplicate leads, and review tasks |
+| "Which tests should I run?"                  | `codegraph affected --base HEAD --head WORKTREE --quiet`         | Deterministic affected test paths from changed files and reverse dependencies                             |
+| "What depends on this file?"                 | `codegraph rdeps src/file.ts --json`                             | Reverse dependencies from the resolved project graph                                                      |
+| "Where is this symbol defined or used?"      | `codegraph goto <file> <line> <column>` and `codegraph refs ...` | Semantic definitions and references across supported languages                                            |
+| "Which declaration matches this name?"       | `codegraph symbols "CodeReviewSession" --root .`                 | Ranked symbols with portable handles, exact ranges, provenance, and omissions                             |
+| "What evidence do I need before a refactor?" | `codegraph refactor-plan <symbol-target>`                        | References, call and type relationships, candidate tests, omissions, and copyable follow-ups              |
+| "Is the architecture drifting?"              | `codegraph drift ./src --base origin/main --head HEAD`           | New cycles, hotspot changes, unresolved imports, API changes, and graph deltas                            |
+| "Where is code duplicated?"                  | `codegraph duplicates ./src --min-confidence medium`             | Ranked exact and near-duplicate groups with locations and confidence                                      |
+| "Are the Markdown links broken?"             | `node ./dist/cli.js links --root .`                              | Local Markdown link failures with exact ranges, external URLs skipped, JSON for CI                        |
+| "Can another tool consume the graph?"        | `codegraph graph --root . ./src --json --output codegraph.json`  | JSON, Mermaid, DOT, or SQLite output                                                                      |
 
 Human-readable output is the CLI default, including the compact `review` report; `--pretty` remains an explicit equivalent. Use `--json` for stable fields, ranges, handles, reasons, confidence, and omission counts in automation.
 
@@ -173,6 +174,9 @@ codegraph unresolved
 codegraph apisurface
 codegraph duplicates ./src --min-confidence medium --limit 20
 codegraph drift ./src --base origin/main --head HEAD --graph-edges summary --public-api removals
+
+# Validate local Markdown links offline (exit 1 on broken links)
+node ./dist/cli.js links --root .
 ```
 
 ### Export the model

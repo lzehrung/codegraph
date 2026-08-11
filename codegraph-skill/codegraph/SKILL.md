@@ -11,6 +11,7 @@ Use codegraph when a repository question depends on structure rather than exact 
 - definitions, references, dependencies, reverse dependencies, and paths
 - PR or worktree impact, candidate tests, affected test lists, and risk signals
 - duplicate cleanup and refactor-risk triage
+- local Markdown link validation with exact ranges and no network access
 - bounded context for agents through explore, orientation, search, packets, explain, and MCP
 
 Use plain text search for exact strings, logs, config keys, secrets, and prose. Do not treat codegraph as runtime proof; verify behavior with focused tests or execution.
@@ -97,6 +98,9 @@ Safe shorthand: `impact` and git-backed `drift` default to `HEAD..WORKTREE`; `ar
 - prioritized cycles: `codegraph cycles --sort priority`
 - duplicate cleanup: `codegraph duplicates --root . ./src --profile cleanup`
 - full duplicate groups: `codegraph duplicates --root . ./src --json`
+- local Markdown link check: `codegraph links --json`
+
+`links` validates Markdown-authored links against local files, directories, and GitHub-style heading fragments, confined to the project root. Raw HTML `a[href]` inside `.md` files is included; standalone HTML, MDX, JSX, TSX, images, other document formats, and custom HTML or site-generator anchors are not validated. External URLs are skipped without network requests; broken links exit with status 1, so treat exit 1 as a findings report, not a tool failure. `review` and non-empty `impact` reports embed the same `markdownLinks` schema for Markdown sources in the analysis scope and render its findings in pretty output. `unresolved` remains a source-import diagnostic and intentionally excludes these document edges.
 
 `inspect --duplicates` adds the slower bounded duplicate summary. Treat duplicate matches, candidate tests, and call-compatibility hints as review leads, not proof.
 

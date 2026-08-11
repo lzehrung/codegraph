@@ -23,7 +23,13 @@ export function isLifecycleCommand(command: string): command is "init" | "status
 }
 
 export function acceptsOptionalProjectRoot(command: string): boolean {
-  return command === "apisurface" || command === "graph-delta" || command === "review" || command === "unresolved";
+  return (
+    command === "apisurface" ||
+    command === "graph-delta" ||
+    command === "links" ||
+    command === "review" ||
+    command === "unresolved"
+  );
 }
 
 /** Commands whose single positional may name the project root (back-compat form). */
@@ -38,6 +44,7 @@ function usesLegacyRootPositional(command: string): boolean {
     command === "impact" ||
     command === "review" ||
     command === "apisurface" ||
+    command === "links" ||
     command === "unresolved" ||
     isLifecycleCommand(command)
   );

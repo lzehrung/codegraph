@@ -23,6 +23,7 @@ export function buildFullImpactReport(parts: FullImpactReportParts): ImpactRepor
     format: "full",
     ...(parts.analysis ? { analysis: parts.analysis } : {}),
     ...(parts.projectFiles ? { projectFiles: parts.projectFiles } : {}),
+    ...(parts.markdownLinks ? { markdownLinks: parts.markdownLinks } : {}),
     changedFiles: parts.changedFiles,
     changedSymbols: parts.changedSymbols.map((symbol) => ({
       ...symbol,

@@ -1,3 +1,4 @@
+import type { MarkdownLinkCheckResult } from "../documentLinks/check.js";
 import path from "node:path";
 import type { AnalysisSummary } from "../analysisSummary.js";
 import type { CandidateTestFile } from "../impact/context.js";
@@ -65,6 +66,7 @@ export function assembleReviewReport(input: {
   graphDelta: Edge[];
   analysis?: AnalysisSummary;
   sqlContext?: SqlReviewContext;
+  markdownLinks: MarkdownLinkCheckResult;
   diagnostics: ReviewDiagnostics;
   riskRelevantParseFailures: number;
   exportedChangedCount: number;
@@ -98,6 +100,7 @@ export function assembleReviewReport(input: {
     graphDelta: input.graphDelta,
     candidateTests: input.candidateTests,
     ...(input.sqlContext ? { sqlContext: input.sqlContext } : {}),
+    markdownLinks: input.markdownLinks,
     ...(hasDiagnostics(input.diagnostics) ? { diagnostics: input.diagnostics } : {}),
   };
   if (input.appliedOptions.gitBase !== undefined) report.base = input.appliedOptions.gitBase;

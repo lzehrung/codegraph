@@ -1,3 +1,4 @@
+import { checkMarkdownLinksInFiles } from "../documentLinks/check.js";
 import type { FileId } from "../types.js";
 import path from "node:path";
 import { type ProjectIndex, type BuildReport } from "../indexer/types.js";
@@ -46,6 +47,9 @@ export async function buildImpactReport(
   const surfaceArea = buildSurfaceArea(index, normalizedDiffFiles, impactedItems);
   const projectFiles = index.projectFiles ?? (await discoverProjectFiles(projectRoot));
   const analysis = summarizeAnalysis({ index, report: options.buildReport ?? index.buildReport });
+  const markdownLinks = normalizedDiffFiles.length
+    ? await checkMarkdownLinksInFiles(projectRoot, index.byFile.keys())
+    : undefined;
 
   // Build changedFiles summary
   const changedFiles = normalizedDiffFiles.map((fileChange) => ({
@@ -144,6 +148,7 @@ export async function buildImpactReport(
       fileEdges,
       symbolEdges,
       projectFiles,
+      ...(markdownLinks ? { markdownLinks } : {}),
       displayFile,
     });
     if (options.warning) report.warning = options.warning;
@@ -167,6 +172,7 @@ export async function buildImpactReport(
     fileEdges,
     symbolEdges,
     displayFile,
+    ...(markdownLinks ? { markdownLinks } : {}),
     diagnostics,
     warning: options.warning,
   });
