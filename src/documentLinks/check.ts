@@ -58,22 +58,9 @@ export async function checkMarkdownLinksInFiles(
 ): Promise<MarkdownLinkCheckResult> {
   const root = path.resolve(projectRoot);
   const realRoot = await fsp.realpath(root);
-  const resolvedFiles = Array.from(new Set(Array.from(files, (file) => path.resolve(root, file))))
+  const markdownFiles = Array.from(new Set(Array.from(files, (file) => path.resolve(root, file))))
     .filter((file) => isFilePathWithinRoot(root, file))
     .filter((file) => supportForFile(file)?.id === "markdown");
-  const markdownFiles = Array.from(
-    new Set(
-      await Promise.all(
-        resolvedFiles.map(async (file) => {
-          try {
-            return await fsp.realpath(file);
-          } catch {
-            return file;
-          }
-        }),
-      ),
-    ),
-  );
   const targetStatusByPath = new Map<string, Promise<TargetStatus>>();
   const anchorsByPath = new Map<string, Promise<Set<string>>>();
   const failures: MarkdownLinkCheckFailure[] = [];
@@ -81,12 +68,13 @@ export async function checkMarkdownLinksInFiles(
   let externalSkipped = 0;
 
   for (const file of markdownFiles) {
+    const displayFile = await recoverDisplayFileCasing(file);
     const source = await readMarkdownFile(file);
     const occurrences = extractMarkdownLinkOccurrences(source);
     for (const occurrence of occurrences) {
       if ("missingReference" in occurrence) {
         linksChecked += 1;
-        failures.push(toFailure(root, file, occurrence, "missing_reference"));
+        failures.push(toFailure(root, displayFile, occurrence, "missing_reference"));
         continue;
       }
 
@@ -102,24 +90,24 @@ export async function checkMarkdownLinksInFiles(
       linksChecked += 1;
       const resolvedTarget = resolveMarkdownTarget(root, file, target.path);
       if (!isFilePathWithinRoot(root, resolvedTarget)) {
-        failures.push(toFailure(root, file, occurrence, "outside_root", resolvedTarget));
+        failures.push(toFailure(root, displayFile, occurrence, "outside_root", resolvedTarget));
         continue;
       }
 
       const targetStatus = await cachedTargetStatus(resolvedTarget, targetStatusByPath);
       if (targetStatus.status === "missing") {
-        failures.push(toFailure(root, file, occurrence, "missing_file", resolvedTarget));
+        failures.push(toFailure(root, displayFile, occurrence, "missing_file", resolvedTarget));
         continue;
       }
       if (!isFilePathWithinRoot(realRoot, targetStatus.realPath)) {
-        failures.push(toFailure(root, file, occurrence, "outside_root", resolvedTarget));
+        failures.push(toFailure(root, displayFile, occurrence, "outside_root", resolvedTarget));
         continue;
       }
       if (!target.fragment || targetStatus.isDirectory || supportForFile(resolvedTarget)?.id !== "markdown") continue;
 
       const anchors = await cachedMarkdownAnchors(targetStatus.realPath, anchorsByPath);
       if (!anchors.has(target.fragment)) {
-        failures.push(toFailure(root, file, occurrence, "missing_fragment", resolvedTarget));
+        failures.push(toFailure(root, displayFile, occurrence, "missing_fragment", resolvedTarget));
       }
     }
   }
@@ -136,6 +124,18 @@ export async function checkMarkdownLinksInFiles(
     },
     failures,
   };
+}
+
+async function recoverDisplayFileCasing(file: string): Promise<string> {
+  const dir = path.dirname(file);
+  const base = path.basename(file);
+  try {
+    const entries = await fsp.readdir(dir);
+    const match = entries.find((entry) => entry.toLowerCase() === base.toLowerCase());
+    return match ? path.join(dir, match) : file;
+  } catch {
+    return file;
+  }
 }
 
 function parseLocalLinkTarget(destination: string): LocalLinkTarget | null {
