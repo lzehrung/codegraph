@@ -10,42 +10,52 @@ const definition: LanguageTestDefinition = {
     {
       name: "chunks CSS rules",
       sourceFile: "css.sample.css",
-      expectedChunks: (chunks) => {
-        expect(chunks.some((c) => c.type === "comment")).toBe(true);
-        expect(chunks.some((c) => c.type === "rule")).toBe(true);
-        expect(chunks.some((c) => c.type === "media")).toBe(true);
-        expect(chunks.some((c) => c.type === "keyframes")).toBe(true);
-      },
+      exactChunks: [
+        { type: "comment", startLine: 1, endLine: 1 },
+        { type: "misc", startLine: 1, endLine: 3 },
+        { type: "rule", startLine: 4, endLine: 8 },
+        { type: "rule", startLine: 9, endLine: 13 },
+        { type: "media", startLine: 14, endLine: 18 },
+        { type: "rule", startLine: 15, endLine: 17 },
+        { type: "misc", startLine: 18, endLine: 19 },
+        { type: "keyframes", startLine: 20, endLine: 27 },
+      ],
     },
   ],
   parity: {
     sampleDir: "css",
-    dependencyGraph: [
-      {
-        from: "main.css",
-        to: { type: "file", path: "base.css" },
-      },
-      {
-        from: "main.css",
-        to: { type: "file", path: "theme.css" },
-      },
-      {
-        from: "main.css",
-        to: { type: "file", path: "print.css" },
-      },
-      {
-        from: "main.css",
-        to: { type: "external", name: "cdn-bg" },
-      },
-      {
-        from: "main.css",
-        to: { type: "file", path: "tokens.css" },
-      },
-      {
-        from: "main.css",
-        to: { type: "file", path: "composed.css" },
-      },
-    ],
+    exact: {
+      dependencyGraph: [
+        {
+          from: "main.css",
+          to: { type: "external", name: "./missing.css" },
+        },
+        {
+          from: "main.css",
+          to: { type: "external", name: "cdn-bg" },
+        },
+        {
+          from: "main.css",
+          to: { type: "file", path: "base.css" },
+        },
+        {
+          from: "main.css",
+          to: { type: "file", path: "composed.css" },
+        },
+        {
+          from: "main.css",
+          to: { type: "file", path: "print.css" },
+        },
+        {
+          from: "main.css",
+          to: { type: "file", path: "theme.css" },
+        },
+        {
+          from: "main.css",
+          to: { type: "file", path: "tokens.css" },
+        },
+      ],
+    },
     absentDependencyGraph: [
       {
         from: "main.css",

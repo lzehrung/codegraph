@@ -31,6 +31,7 @@ const definition: LanguageTestDefinition = {
         {
           from: "triple-slash-reference.ts",
           to: { type: "file", path: "triple-slash-globals.d.ts" },
+          typeOnly: true,
         },
       ],
       symbols: [

@@ -41,7 +41,7 @@ describe("architecture drift artifact baselines", () => {
       root,
       "graph.json",
       JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         format: "codegraph.graph-json",
         files: ["z/a.ts", "z/b.ts", "a/a.ts", "a/b.ts"],
         fileEdges: [
@@ -86,7 +86,7 @@ describe("architecture drift artifact baselines", () => {
       root,
       "graph.json",
       JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         format: "codegraph.graph-json",
         graph: {
           files: ["src/a.d.ts->b.ts", "src/c.ts", "src/a.d.ts", "b.ts->src/d.ts"],
@@ -122,7 +122,7 @@ describe("architecture drift artifact baselines", () => {
       root,
       "graph.json",
       JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         format: "codegraph.graph-json",
         graph: {
           files: ["z.ts", "a.ts", "m.ts"],
@@ -157,6 +157,56 @@ describe("architecture drift artifact baselines", () => {
     expect(report.base.ref).toBe(`artifact:${outDir.replace(/\\/g, "/")}`);
     expect(report.base.root.replace(/\\/g, "/")).toBe(outDir.replace(/\\/g, "/"));
     expect(report.head.root.replace(/\\/g, "/")).toBe(root.replace(/\\/g, "/"));
+  });
+
+  it("reports a type-only artifact edge becoming runtime in the current checkout", async () => {
+    const root = await mkTmpDir("cg-drift-artifact-type-only-");
+    await writeFile(root, "src/b.ts", "export function b() { return 1; }\nexport type B = number;\n");
+    await writeFile(root, "src/a.ts", "import type { B } from './b';\nexport function a(value: B) { return value; }\n");
+    const outDir = path.join(root, "baseline");
+    await buildCodegraphArtifact({ root, outDir, graphJson: true });
+
+    const baseline = await loadArchitectureSnapshotFromArtifact(outDir);
+    expect(baseline.graphEdges.some((edge) => edge.typeOnly)).toBe(true);
+
+    await writeFile(root, "src/a.ts", "import { b } from './b';\nexport function a() { return b(); }\n");
+    const report = await analyzeArchitectureDrift(root, { baseArtifact: outDir, head: ".", includeRoots: ["src"] });
+
+    const finding = report.findings.find((entry) => entry.kind === "graph-edge-type-changed");
+    expect(finding).toBeDefined();
+    expect(finding?.severity).toBe("warning");
+    expect(report.findings.some((entry) => entry.kind === "graph-edge-added")).toBe(false);
+    expect(report.findings.some((entry) => entry.kind === "graph-edge-removed")).toBe(false);
+  });
+
+  it("rejects a version-1 artifact instead of misreading its drift edges", async () => {
+    const root = await mkTmpDir("cg-drift-artifact-legacy-");
+    await writeFile(
+      root,
+      "manifest.json",
+      JSON.stringify({
+        schemaVersion: 1,
+        graphJsonSchema: "codegraph.graph-json",
+        artifacts: { graphJson: "graph.json" },
+      }),
+    );
+    await writeFile(
+      root,
+      "graph.json",
+      JSON.stringify({
+        schemaVersion: 1,
+        format: "codegraph.graph-json",
+        graph: {
+          files: ["src/a.ts", "src/b.ts"],
+          fileEdges: [{ from: "src/a.ts", to: { type: "file", path: "src/b.ts" }, raw: "./b" }],
+          symbols: [],
+        },
+      }),
+    );
+
+    await expect(loadArchitectureSnapshotFromArtifact(root)).rejects.toThrow(
+      "schema version 1 is unsupported; regenerate the drift baseline with schema version 2",
+    );
   });
 
   it("rejects non-current heads when comparing against an artifact baseline", async () => {

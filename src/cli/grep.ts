@@ -1,4 +1,12 @@
-import { astGrep, streamAstGrep, streamTextGrep, textGrep, type AstGrepHit, type TextGrepHit } from "../graphs/grep.js";
+import {
+  astGrep,
+  streamAstGrep,
+  streamTextGrep,
+  textGrepBounded,
+  type AstGrepHit,
+  type GrepResultEnvelope,
+  type TextGrepHit,
+} from "../graphs/grep.js";
 import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import type {
   CliJsonWriterContext,
@@ -50,7 +58,16 @@ export async function handleGrepCommand(context: GrepCommandContext): Promise<vo
 
   if (querySource) {
     if (context.hasFlag("--json")) {
-      context.writeJSONLine(await astGrep(context.projectRootFs, querySource, patterns, context.discoveryOptions));
+      const items = await astGrep(context.projectRootFs, querySource, patterns, context.discoveryOptions);
+      // astGrep has no result cap today, so every result is always complete.
+      const envelope: GrepResultEnvelope<AstGrepHit> = {
+        items,
+        limit: items.length,
+        totalSeen: items.length,
+        truncated: false,
+        omitted: 0,
+      };
+      context.writeJSONLine(envelope);
     } else {
       await writeStreamedGrepHits(
         context,
@@ -69,7 +86,7 @@ export async function handleGrepCommand(context: GrepCommandContext): Promise<vo
     ...context.discoveryOptions,
   };
   if (context.hasFlag("--json")) {
-    context.writeJSONLine(await textGrep(context.projectRootFs, patternSource!, patterns, grepOptions));
+    context.writeJSONLine(await textGrepBounded(context.projectRootFs, patternSource!, patterns, grepOptions));
   } else {
     await writeStreamedGrepHits(context, streamTextGrep(context.projectRootFs, patternSource!, patterns, grepOptions));
   }

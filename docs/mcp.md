@@ -31,9 +31,11 @@ The shared HTTP endpoint is `http://127.0.0.1:7331/mcp`. HTTP binds to `127.0.0.
 
 Stdio servers exit when the client closes stdin, when an IPC parent disconnects, or after `--idle-timeout-ms` of inactivity (default 30 minutes; `0` disables the idle timer). That keeps orphaned `mcp serve --stdio` processes from lingering after an IDE or agent exits.
 
+HTTP protocol sessions track last activity, cap concurrent legacy sessions (default 32), and evict idle sessions on a timer (default 30 minutes). Transport errors and protocol session closes also remove the session.
+
 Use stdio for a client-owned subprocess. Use HTTP for one long-running codegraph process per repository, then point every MCP-capable IDE, terminal, or agent client at the same local URL. Exact config keys vary by client, but the MCP settings should use HTTP/Streamable HTTP transport plus the `/mcp` URL instead of a `command`/`args` stdio launch.
 
-codegraph uses the official MCP SDK v2 to serve current 2026-07-28 clients while retaining compatibility with 2025-era clients. MCP protocol connections and HTTP protocol sessions keep separate transport state, but all share the server's one warm codegraph analysis session for the configured root.
+codegraph uses the official MCP SDK v2 to serve current 2026-07-28 clients while retaining compatibility with 2025-era clients. MCP protocol connections and HTTP protocol sessions keep separate transport state, but all share the server's one warm codegraph analysis session for the configured root. Tool request schemas set `additionalProperties: false` and reject unknown fields with an actionable invalid-parameter error instead of silently ignoring typos.
 
 HTTP enforces Host and Origin policies. A missing `Origin` is accepted for non-browser clients; unapproved, malformed, and opaque origins are rejected. This is not authentication: binding `--host` to a non-loopback address exposes an unauthenticated endpoint intended only for trusted networks or containers.
 
@@ -64,10 +66,10 @@ The server exposes the same bounded primitives as the CLI and library session la
 - `get_file`: bounded project file read with `offset`/`limit` line pagination, exact `number<TAB>line` content, and optional direct graph context.
 - `get_symbol`: resolve a stable search or explain handle.
 - `goto`: definition lookup by portable handle, qualified `file::symbol` path, or file position.
-- `refs`: references by portable handle, qualified `file::symbol` path, or file position.
-- `file_deps`, `path`: dependency navigation; pass `direction: "deps"` or `"rdeps"` to `file_deps`. `file_deps.file` accepts a portable symbol handle or qualified symbol path and traverses its declaring file.
+- `refs`: references by portable handle, qualified `file::symbol` path, or file position. The response pairs `references` with `limit`, `totalSeen`, `truncated`, and `omitted`; `truncated` is exact (the lookup probes one reference past the limit), while `totalSeen`/`omitted` count only observed references.
+- `file_deps`, `path`: dependency navigation; pass `direction: "deps"` or `"rdeps"` to `file_deps`. `file_deps.file` accepts a portable symbol handle or qualified symbol path and traverses its declaring file. `dependencies`/`reverseDependencies` carry the same `limit`/`totalSeen`/`truncated`/`omitted` metadata as `refs`, so a capped prefix is always distinguishable from a complete result.
 - `impact`: compact git-range impact analysis (`format: "compact"`, `impacted`, diagnostics). Bounded by default.
-- `review`: git-range review report (`riskSummary`, `reviewTasks`, candidate tests).
+- `review`: git-range review report (`riskSummary`, `reviewTasks`, candidate tests). MCP is a bounded transport: `projectFiles`, `changedFiles` (including per-file `symbols`), `graphDelta`, and `candidateTests` are capped at the response's `limits` with exact per-collection `omittedCounts`, and `summary` totals stay accurate for the full report. Library callers that need the complete unbounded report call `buildReviewReport` directly instead of going through MCP.
 - `query_sqlite`: bounded read-only SQLite artifact query with freshness metadata.
 - `refresh_index`: invalidate the in-memory session and optionally rebuild the base or symbol snapshot.
 - `artifact_build`: artifact creation, available only with write access enabled.
@@ -210,10 +212,11 @@ Run `codegraph install` interactively to detect supported local clients, preview
 codegraph install
 codegraph install --target codex,claude --dry-run
 codegraph install --target codex,claude --yes
+codegraph install --target codex --yes --force
 codegraph install --print-config codex
 ```
 
-Interactive confirmation defaults to no, and noninteractive writes require `--yes`. The installer writes only codegraph-owned marker blocks, marker files, bundled skill payloads, or exact installer-owned MCP entries; `codegraph uninstall --target <ids> --yes` removes only those owned entries.
+Interactive confirmation defaults to no, and noninteractive writes require `--yes`. The installer writes only codegraph-owned marker blocks, marker files, bundled skill payloads, or exact installer-owned MCP entries; `codegraph uninstall --target <ids> --yes` removes only those owned entries. A pre-existing `SKILL.md` is overwritten only when a Codegraph ownership marker and known payload match, or when `--force` is passed.
 
 Restart or reload configured clients after applying changes. The installer prints restart and first-query guidance but does not claim an MCP connection until a handshake occurs.
 

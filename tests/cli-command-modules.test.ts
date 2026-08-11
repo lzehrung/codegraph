@@ -6,12 +6,14 @@ import { describe, expect, test, vi } from "vitest";
 import { MAX_FILE_VIEW_BYTES, MAX_FILE_VIEW_LINES } from "../src/agent/fileView.js";
 import { handleChunkCommand, type ChunkCommandContext } from "../src/cli/chunk.js";
 import type { CliAgentCommandContext } from "../src/cli/context.js";
+import { maybeWriteNativeBackendStatus, runWithCliRuntime } from "../src/cli/context.js";
 import { buildDoctorReport, findStaleNpmRetirementPaths } from "../src/cli/doctor.js";
 import { handleGraphCommand, type GraphCommandContext } from "../src/cli/graph.js";
 import { handleGraphDeltaCommand } from "../src/cli/graphDelta.js";
 import { handleGraphQueryCommand, type GraphQueryCommandContext } from "../src/cli/graphQueries.js";
 import { CLI_HELP_TEXT, FILE_HELP_TEXT, MCP_SERVE_HELP_TEXT, PACKET_HELP_TEXT } from "../src/cli/help.js";
 import { handleImpactCommand, type ImpactCommandContext } from "../src/cli/impact.js";
+import { handleIndexCommand, type IndexCommandContext } from "../src/cli/index.js";
 import { handleHotspotsCommand, handleInspectCommand, type InspectCommandContext } from "../src/cli/inspect.js";
 import {
   handleDumpmodCommand,
@@ -30,7 +32,7 @@ import { captureCli } from "./helpers/cli.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
 import { diffBuildOptions, summarizeBuildOptions } from "../src/indexer/build-cache.js";
 import type { ProjectIndex } from "../src/indexer.js";
-import type { BuildOptions } from "../src/indexer/types.js";
+import type { BuildOptions, BuildReport, NativeBackendReport } from "../src/indexer/types.js";
 import { getNativeRuntimeFingerprint } from "../src/native/treeSitterNative.js";
 import type { Graph } from "../src/types.js";
 import { runGit } from "./helpers/git.js";
@@ -174,6 +176,40 @@ function createGraphContext(overrides: Partial<GraphCommandContext>): GraphComma
       throw new Error("unexpected stdout");
     },
     setStderrFilePath: () => {},
+    writeCommandReport: async () => {},
+    maybeWriteNativeBackendStatus: () => {},
+    ...overrides,
+  };
+}
+
+function createIndexContext(overrides: Partial<IndexCommandContext>): IndexCommandContext {
+  const projectRoot = path.join(os.tmpdir(), "codegraph-index-context").replace(/\\/g, "/");
+  return {
+    projectRootFs: projectRoot,
+    includeRootsAbs: [projectRoot],
+    gitBase: undefined,
+    changedSince: undefined,
+    discoveryOptions: {},
+    nativeMode: "auto",
+    languageExtensions: undefined,
+    workerOpts: {},
+    progressHandler: undefined,
+    graphOptions: undefined,
+    reportEnabled: false,
+    reportFile: undefined,
+    showProgress: false,
+    getOpt: (name) => (name === "--cache" ? "off" : undefined),
+    hasFlag: () => false,
+    resolveFiles: async () => [],
+    writeJSONLine: () => {
+      throw new Error("unexpected json output");
+    },
+    writeStdoutLine: () => {
+      throw new Error("unexpected stdout");
+    },
+    writeStderrLine: () => {
+      throw new Error("unexpected stderr");
+    },
     writeCommandReport: async () => {},
     maybeWriteNativeBackendStatus: () => {},
     ...overrides,
@@ -608,6 +644,310 @@ describe("CLI command modules", () => {
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
+  });
+
+  test("grep --json wraps text hits in a truncation envelope with an exact truncated flag", async () => {
+    const root = await mkTmpDir("codegraph-grep-envelope-");
+    const mainPath = path.join(root, "main.ts");
+    await fsp.writeFile(
+      mainPath,
+      "export function needleFn() {\n  return 1;\n}\nneedleFn();\nconst alias = needleFn;\n",
+      "utf8",
+    );
+    const jsonLines: unknown[] = [];
+    const runGrep = async (maxHits: string | undefined): Promise<Record<string, unknown>> => {
+      jsonLines.length = 0;
+      await handleGrepCommand({
+        positionals: ["needleFn"],
+        projectRootFs: root,
+        discoveryOptions: {},
+        parsedOptions: new Map(),
+        getOpt: (name) => (name === "--max-hits" ? maxHits : undefined),
+        hasFlag: (name) => name === "--json",
+        writeJSONLine: (value) => jsonLines.push(value),
+        writeStdoutLine: () => {
+          throw new Error("unexpected stdout");
+        },
+        writeStderrLine: (message) => {
+          throw new Error(`unexpected stderr: ${message}`);
+        },
+        exit: (code) => {
+          throw new Error(`unexpected exit ${code}`);
+        },
+      });
+      return readJsonRecord(jsonLines[0]);
+    };
+
+    try {
+      const capped = await runGrep("1");
+      expect(readJsonArray(capped.items)).toHaveLength(1);
+      expect(capped.limit).toBe(1);
+      expect(capped.truncated).toBe(true);
+      expect(capped.totalSeen).toBe(2);
+      expect(capped.omitted).toBe(1);
+
+      // Exactly-at-limit must read as complete: the scan probes one hit past
+      // the cap, so a true count equal to the limit is not confused with "more exist".
+      const atLimit = await runGrep("3");
+      expect(readJsonArray(atLimit.items)).toHaveLength(3);
+      expect(atLimit.truncated).toBe(false);
+      expect(atLimit.totalSeen).toBe(3);
+      expect(atLimit.omitted).toBe(0);
+
+      const complete = await runGrep(undefined);
+      const items = readJsonArray(complete.items);
+      expect(items).toHaveLength(3);
+      expect(complete.limit).toBe(5000);
+      expect(complete.truncated).toBe(false);
+      expect(complete.totalSeen).toBe(3);
+      expect(complete.omitted).toBe(0);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("grep --json --query wraps AST hits in a complete envelope", async () => {
+    const root = await mkTmpDir("codegraph-grep-ast-envelope-");
+    const mainPath = path.join(root, "main.ts");
+    await fsp.writeFile(mainPath, "export function helperFunction() {\n  return 1;\n}\nhelperFunction();\n", "utf8");
+    const jsonLines: unknown[] = [];
+
+    try {
+      await handleGrepCommand({
+        positionals: [],
+        projectRootFs: root,
+        discoveryOptions: {},
+        parsedOptions: new Map(),
+        getOpt: (name) => (name === "--query" ? "(identifier) @id" : undefined),
+        hasFlag: (name) => name === "--json",
+        writeJSONLine: (value) => jsonLines.push(value),
+        writeStdoutLine: () => {
+          throw new Error("unexpected stdout");
+        },
+        writeStderrLine: (message) => {
+          throw new Error(`unexpected stderr: ${message}`);
+        },
+        exit: (code) => {
+          throw new Error(`unexpected exit ${code}`);
+        },
+      });
+
+      const envelope = readJsonRecord(jsonLines[0]);
+      const items = readJsonArray(envelope.items);
+      expect(items.length).toBeGreaterThan(0);
+      // astGrep has no result cap, so the envelope always reports a complete result.
+      expect(envelope.truncated).toBe(false);
+      expect(envelope.omitted).toBe(0);
+      expect(envelope.totalSeen).toBe(items.length);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("graph --json carries analysis metadata and wires the backend warning independent of progress", async () => {
+    const root = await mkTmpDir("codegraph-graph-analysis-");
+    const entryFile = path.join(root, "entry.ts");
+    await fsp.writeFile(entryFile, "export const value = 1;\n", "utf8");
+    const stdout: string[] = [];
+    const backendCalls: Array<{ report: BuildReport | undefined; showProgress: boolean }> = [];
+
+    await handleGraphCommand(
+      createGraphContext({
+        projectRootFs: root,
+        cwd: () => root,
+        nativeMode: "off",
+        resolveFiles: async () => [entryFile.replace(/\\/g, "/")],
+        hasFlag: (name) => name === "--stdout" || name === "--json",
+        writeStdoutLine: (message) => stdout.push(message),
+        maybeWriteNativeBackendStatus: (report, showProgress) => {
+          backendCalls.push({ report, showProgress });
+        },
+      }),
+    );
+
+    const graph = readJsonRecord(JSON.parse(stdout[0] ?? "{}"));
+    const analysis = readJsonRecord(graph.analysis);
+    expect(analysis.mode).toBe("reduced");
+    expect(analysis.backend).toBe("graph-only");
+    expect(typeof analysis.label).toBe("string");
+    expect(backendCalls).toHaveLength(1);
+    expect(backendCalls[0]?.showProgress).toBe(false);
+    expect(backendCalls[0]?.report).toBeDefined();
+  });
+
+  test("graph human output keeps the mermaid contract and still wires the backend warning without progress", async () => {
+    const root = await mkTmpDir("codegraph-graph-analysis-human-");
+    const entryFile = path.join(root, "entry.ts");
+    await fsp.writeFile(entryFile, "export const value = 1;\n", "utf8");
+    const stdout: string[] = [];
+    const backendCalls: Array<{ report: BuildReport | undefined; showProgress: boolean }> = [];
+
+    await handleGraphCommand(
+      createGraphContext({
+        projectRootFs: root,
+        cwd: () => root,
+        nativeMode: "off",
+        resolveFiles: async () => [entryFile.replace(/\\/g, "/")],
+        hasFlag: () => false,
+        writeStdoutLine: (message) => stdout.push(message),
+        maybeWriteNativeBackendStatus: (report, showProgress) => {
+          backendCalls.push({ report, showProgress });
+        },
+      }),
+    );
+
+    // Human graph output stays mermaid; the degradation signal for this mode is the
+    // stderr warning emitted through the backend-status hook, which must fire even
+    // though --progress was not requested.
+    expect(stdout[0]).toContain("flowchart");
+    expect(backendCalls).toHaveLength(1);
+    expect(backendCalls[0]?.showProgress).toBe(false);
+    expect(backendCalls[0]?.report?.backend?.native.filesFellBack).toBeGreaterThan(0);
+  });
+
+  test("index pretty and JSON output advertise reduced analysis when native parsing is off", async () => {
+    const root = await mkTmpDir("codegraph-index-analysis-");
+    const entryFile = path.join(root, "entry.ts");
+    await fsp.writeFile(entryFile, "export const value = 1;\n", "utf8");
+    const resolvedFiles = [entryFile.replace(/\\/g, "/")];
+    const backendCalls: Array<{ report: BuildReport | undefined; showProgress: boolean }> = [];
+    const recordBackendCall = (report: BuildReport | undefined, showProgress: boolean): void => {
+      backendCalls.push({ report, showProgress });
+    };
+
+    try {
+      const prettyLines: string[] = [];
+      await handleIndexCommand(
+        createIndexContext({
+          projectRootFs: root,
+          includeRootsAbs: [root],
+          nativeMode: "off",
+          resolveFiles: async () => resolvedFiles,
+          writeStdoutLine: (message) => prettyLines.push(message),
+          maybeWriteNativeBackendStatus: recordBackendCall,
+        }),
+      );
+      expect(prettyLines[0]).toContain("Indexed 1 file(s)");
+      expect(prettyLines[0]).toContain("Analysis: reduced graph-only.");
+
+      const jsonLines: unknown[] = [];
+      await handleIndexCommand(
+        createIndexContext({
+          projectRootFs: root,
+          includeRootsAbs: [root],
+          nativeMode: "off",
+          resolveFiles: async () => resolvedFiles,
+          hasFlag: (name) => name === "--json",
+          writeJSONLine: (value) => jsonLines.push(value),
+          maybeWriteNativeBackendStatus: recordBackendCall,
+        }),
+      );
+      const output = readJsonRecord(jsonLines[0]);
+      const analysis = readJsonRecord(output.analysis);
+      expect(analysis.mode).toBe("reduced");
+      expect(analysis.backend).toBe("graph-only");
+
+      // Both runs consulted the backend-status hook with showProgress off, so the
+      // degradation warning decision never depends on progress rendering.
+      expect(backendCalls).toHaveLength(2);
+      expect(backendCalls.every((call) => !call.showProgress && call.report !== undefined)).toBe(true);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("index pretty output only prints an Analysis line when the JSON analysis mode is reduced or mixed", async () => {
+    const root = await mkTmpDir("codegraph-index-analysis-normal-");
+    const entryFile = path.join(root, "entry.ts");
+    await fsp.writeFile(entryFile, "export const value = 1;\n", "utf8");
+    const resolvedFiles = [entryFile.replace(/\\/g, "/")];
+
+    try {
+      const jsonLines: unknown[] = [];
+      await handleIndexCommand(
+        createIndexContext({
+          projectRootFs: root,
+          includeRootsAbs: [root],
+          resolveFiles: async () => resolvedFiles,
+          hasFlag: (name) => name === "--json",
+          writeJSONLine: (value) => jsonLines.push(value),
+        }),
+      );
+      const analysis = readJsonRecord(readJsonRecord(jsonLines[0]).analysis);
+      expect(["semantic", "mixed", "reduced"]).toContain(analysis.mode);
+
+      const prettyLines: string[] = [];
+      await handleIndexCommand(
+        createIndexContext({
+          projectRootFs: root,
+          includeRootsAbs: [root],
+          resolveFiles: async () => resolvedFiles,
+          writeStdoutLine: (message) => prettyLines.push(message),
+        }),
+      );
+      expect(prettyLines[0]).toContain("Indexed 1 file(s)");
+      if (analysis.mode === "semantic") {
+        // Normal native runs keep the prior one-line output contract.
+        expect(prettyLines[0]).not.toContain("Analysis:");
+      } else {
+        expect(prettyLines[0]).toContain(`Analysis: ${String(analysis.label)}.`);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  describe("maybeWriteNativeBackendStatus", () => {
+    const reportWithNative = (overrides: Partial<NativeBackendReport>): BuildReport => ({
+      timings: {},
+      backend: {
+        native: {
+          available: true,
+          enabled: true,
+          supportedLanguageIds: ["typescript"],
+          filesUsed: 3,
+          filesFellBack: 0,
+          fallbackReasons: { unavailable: 0, unsupportedLanguage: 0, queryFailure: 0 },
+          byLanguage: {},
+          errors: [],
+          ...overrides,
+        },
+      },
+    });
+
+    const captureStderr = async (report: BuildReport, showProgress: boolean): Promise<string> => {
+      const chunks: string[] = [];
+      await runWithCliRuntime({ stderr: (chunk) => chunks.push(chunk) }, async () => {
+        maybeWriteNativeBackendStatus(report, showProgress);
+      });
+      return chunks.join("");
+    };
+
+    test("warns when the native addon is unavailable, even without --progress", async () => {
+      const stderr = await captureStderr(
+        reportWithNative({ available: false, enabled: false, filesUsed: 0, loadError: "MODULE_NOT_FOUND" }),
+        false,
+      );
+      expect(stderr).toContain("Backend: reduced graph/regex mode");
+      expect(stderr).toContain("native addon unavailable");
+      expect(stderr).toContain("MODULE_NOT_FOUND");
+    });
+
+    test("warns when files fell back from native parsing, even without --progress", async () => {
+      const stderr = await captureStderr(reportWithNative({ filesUsed: 5, filesFellBack: 2 }), false);
+      expect(stderr).toContain("native tree-sitter used for 5 file(s)");
+      expect(stderr).toContain("fallback for 2 file(s)");
+    });
+
+    test("stays silent for a healthy native backend without --progress", async () => {
+      const stderr = await captureStderr(reportWithNative({}), false);
+      expect(stderr).toBe("");
+    });
+
+    test("prints the backend status line for a healthy native backend with --progress", async () => {
+      const stderr = await captureStderr(reportWithNative({}), true);
+      expect(stderr).toContain("Backend: native tree-sitter used for 3 file(s)");
+    });
   });
 
   test("impact command reuses the on-disk manifest on a second invocation without a full recursive scan", async () => {

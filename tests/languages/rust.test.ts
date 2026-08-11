@@ -11,79 +11,123 @@ const definition: LanguageTestDefinition = {
     {
       name: "chunks Rust structures",
       sourceFile: "rust.sample.rs",
-      expectedChunks: (chunks) => {
-        expect(chunks.some((c) => c.type === "struct" && c.name === "MyStruct")).toBe(true);
-        expect(chunks.some((c) => c.type === "impl" && c.name === "MyStruct")).toBe(true);
-        expect(chunks.some((c) => c.type === "function" && c.name === "function")).toBe(true);
-        expect(chunks.some((c) => c.type === "module" && c.name === "my_mod")).toBe(true);
-      },
+      exactChunks: [
+        { type: "misc", startLine: 1, endLine: 2 },
+        { type: "struct", name: "MyStruct", startLine: 3, endLine: 6 },
+        { type: "impl", name: "MyStruct", startLine: 7, endLine: 15 },
+        { type: "function", name: "new", startLine: 8, endLine: 10 },
+        { type: "function", name: "method", startLine: 12, endLine: 14 },
+        { type: "misc", startLine: 15, endLine: 16 },
+        { type: "function", name: "function", startLine: 17, endLine: 20 },
+        { type: "module", name: "my_mod", startLine: 21, endLine: 23 },
+        { type: "function", name: "mod_function", startLine: 22, endLine: 22 },
+        { type: "misc", startLine: 23, endLine: 24 },
+      ],
     },
   ],
   parity: {
     sampleDir: "rust",
-    dependencyGraph: [
-      {
-        from: "main.rs",
-        to: { type: "file", path: "utils.rs" },
-      },
-      {
-        from: "main.rs",
-        to: { type: "file", path: "helpers.rs" },
-      },
-      {
-        from: "aliased-use.rs",
-        to: { type: "file", path: "utils.rs" },
-      },
-      {
-        from: "aliased-use.rs",
-        to: { type: "file", path: "helpers.rs" },
-      },
-      {
-        from: "reexports.rs",
-        to: { type: "file", path: "utils.rs" },
-      },
-      {
-        from: "reexports.rs",
-        to: { type: "file", path: "helpers.rs" },
-      },
-      {
-        from: "nested.rs",
-        to: { type: "file", path: "nested_service.rs" },
-      },
-      {
-        from: "extern-crate.rs",
-        to: { type: "file", path: "utils.rs" },
-      },
-      {
-        from: "extern-crate.rs",
-        to: { type: "external", name: "serde" },
-      },
-    ],
-    symbols: [
-      {
-        file: "models.rs",
-        includes: [
-          { name: "Runner" },
-          { name: "Mode", kind: "type" },
-          { name: "Fast", kind: "variable" },
-          { name: "Slow", kind: "variable" },
-          { name: "Engine" },
-          { name: "run" },
-        ],
-      },
-      {
-        file: "reexports.rs",
-        includes: [{ name: "build_engine" }],
-      },
-      {
-        file: "nested_service.rs",
-        includes: [{ name: "NestedRunner" }, { name: "run" }],
-      },
-      {
-        file: ".regressions/macros.rs",
-        includes: [{ name: "make_answer", kind: "function" }],
-      },
-    ],
+    exact: {
+      dependencyGraph: [
+        {
+          from: "main.rs",
+          to: { type: "file", path: "utils.rs" },
+        },
+        {
+          from: "main.rs",
+          to: { type: "file", path: "helpers.rs" },
+        },
+        {
+          from: "grouped-use.rs",
+          to: { type: "file", path: "grouped_targets.rs" },
+        },
+        {
+          from: "grouped-use-scoped.rs",
+          to: { type: "file", path: "grouped_targets.rs" },
+        },
+        {
+          from: "scoped-path-use.rs",
+          to: { type: "file", path: "grouped_targets.rs" },
+        },
+        {
+          from: "aliased-use.rs",
+          to: { type: "file", path: "utils.rs" },
+        },
+        {
+          from: "aliased-use.rs",
+          to: { type: "file", path: "helpers.rs" },
+        },
+        {
+          from: "reexports.rs",
+          to: { type: "file", path: "utils.rs" },
+        },
+        {
+          from: "reexports.rs",
+          to: { type: "file", path: "helpers.rs" },
+        },
+        {
+          from: "nested.rs",
+          to: { type: "file", path: "nested_service.rs" },
+        },
+        {
+          from: "extern-crate.rs",
+          to: { type: "file", path: "utils.rs" },
+        },
+        {
+          from: "extern-crate.rs",
+          to: { type: "external", name: "serde" },
+        },
+      ],
+      symbols: [
+        {
+          file: "models.rs",
+          symbols: [
+            { name: "Runner", kind: "class" },
+            { name: "Mode", kind: "type" },
+            { name: "Fast", kind: "variable" },
+            { name: "Slow", kind: "variable" },
+            { name: "Engine", kind: "class" },
+            { name: "run", kind: "function" },
+          ],
+        },
+        {
+          file: "reexports.rs",
+          symbols: [
+            { name: "build_engine", kind: "function" },
+          ],
+        },
+        {
+          file: "nested_service.rs",
+          symbols: [
+            { name: "NestedRunner", kind: "class" },
+            { name: "run", kind: "function" },
+          ],
+        },
+        {
+          file: ".regressions/macros.rs",
+          symbols: [
+            { name: "make_answer", kind: "function" },
+            { name: "invoke", kind: "function" },
+          ],
+        },
+      ],
+      references: [
+        {
+          name: "tracks aliased Rust import references",
+          file: "utils.rs",
+          line: 1,
+          column: 8,
+          exactCount: 9,
+        },
+        {
+          name: "finds Rust macro definition and invocation references",
+          file: ".regressions/macros.rs",
+          line: 1,
+          column: 14,
+          exactCount: 2,
+        },
+      ],
+    },
     goToDefinition: [
       {
         name: "resolves grouped Rust use imports",
@@ -154,22 +198,6 @@ const definition: LanguageTestDefinition = {
           file: ".regressions/macros.rs",
           line: 1,
         },
-      },
-    ],
-    references: [
-      {
-        name: "tracks aliased Rust import references",
-        file: "utils.rs",
-        line: 1,
-        column: 8,
-        minimumCount: 3,
-      },
-      {
-        name: "finds Rust macro definition and invocation references",
-        file: ".regressions/macros.rs",
-        line: 1,
-        column: 14,
-        minimumCount: 2,
       },
     ],
   },

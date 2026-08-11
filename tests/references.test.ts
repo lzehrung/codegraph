@@ -823,7 +823,10 @@ describe("Find References", () => {
         const namespaceUsage = result.references.find(
           (ref) => ref.file.includes("main.ts") && ref.via?.namespaceMember,
         );
-        expect(namespaceUsage).toBeDefined();
+        expect(namespaceUsage?.range).toEqual({
+          start: { line: 7, column: 27, index: 266 },
+          end: { line: 7, column: 41, index: 280 },
+        });
       }
     });
   });

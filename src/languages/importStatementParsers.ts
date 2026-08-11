@@ -42,7 +42,7 @@ export function parseRustImportStatement(stmtText: string): ParsedRustImportStat
     };
   }
 
-  const useMatch = trimmed.match(/^use\s+(.+?)\s*;?$/);
+  const useMatch = trimmed.match(/^(?:pub(?:\s*\([^)]*\))?\s+)?use\s+(.+?)\s*;?$/);
   const useBody = useMatch?.[1]?.trim();
   if (!useBody) return null;
   if (useBody.includes("{") || useBody.includes(",")) return null;

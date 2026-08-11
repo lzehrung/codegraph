@@ -38,7 +38,12 @@ export const DEFAULT_PROJECT_FILE_IGNORES = [
   "**/build/**",
   "**/target/**",
   "**/.venv/**",
+  "**/venv/**",
+  "**/site-packages/**",
   "**/__pycache__/**",
+  "**/vendor/bundle/**",
+  "**/.build/**",
+  "**/Pods/**",
 ];
 
 export const DEFAULT_PROJECT_MANIFESTS = [
@@ -322,16 +327,16 @@ export async function listProjectFiles(
 ): Promise<string[]> {
   const root = await ensureDirectoryReadable(projectRoot, "Project root");
   const globRoot = options?.globRoot ? await ensureDirectoryReadable(options.globRoot, "Glob root") : root;
-  const includeMatchers = (options?.includeGlobs ?? [])
-    .map(normalizeGlobPattern)
-    .filter(Boolean)
-    .map((globPattern) => picomatch(globPattern, { dot: true }));
+  const includeGlobs = (options?.includeGlobs ?? []).map(normalizeGlobPattern).filter(Boolean);
+  const includeMatchers = includeGlobs.map((globPattern) => picomatch(globPattern, { dot: true }));
   const userIgnoreGlobs = (options?.ignoreGlobs ?? []).map(normalizeGlobPattern).filter(Boolean);
   const userIgnoreMatchers = userIgnoreGlobs.map((globPattern) => picomatch(globPattern, { dot: true }));
-  const fastGlobIgnoreGlobs = [
-    ...DEFAULT_PROJECT_FILE_IGNORES,
-    ...translateGlobRootIgnoreGlobsForScanRoot(root, globRoot, userIgnoreGlobs),
-  ];
+  const defaultIgnoreMatchers = DEFAULT_PROJECT_FILE_IGNORES.map((globPattern) =>
+    picomatch(globPattern, { dot: true }),
+  );
+  const patternMatchers = patterns.map((pattern) => picomatch(normalizeGlobPattern(pattern), { dot: true }));
+  const translatedUserIgnoreGlobs = translateGlobRootIgnoreGlobsForScanRoot(root, globRoot, userIgnoreGlobs);
+  const fastGlobIgnoreGlobs = [...DEFAULT_PROJECT_FILE_IGNORES, ...translatedUserIgnoreGlobs];
 
   try {
     const useGitignore = options?.useGitignore ?? true;
@@ -348,6 +353,18 @@ export async function listProjectFiles(
       followSymbolicLinks: false,
       ignore: fastGlobIgnoreGlobs,
     });
+    // Explicit includeGlobs may re-open default-ignored trees (for example vendored
+    // dependency dirs). Scan those include patterns without default ignores, then keep
+    // only paths that still match the project patterns and include globs below.
+    const includedOverrideFiles = includeGlobs.length
+      ? await fg(translateGlobRootIgnoreGlobsForScanRoot(root, globRoot, includeGlobs), {
+          cwd: root,
+          absolute: true,
+          dot: true,
+          followSymbolicLinks: false,
+          ignore: translatedUserIgnoreGlobs,
+        })
+      : [];
     const linkedFiles = await listEntriesFromSafeSymlinkDirectories(root, realRoot, patterns, fastGlobIgnoreGlobs, {
       globRoot,
       filterIgnoreGlobs: [...DEFAULT_PROJECT_FILE_IGNORES, ...userIgnoreGlobs],
@@ -358,17 +375,38 @@ export async function listProjectFiles(
         ? { onSymlinkDirectoriesDiscovered: options.onSymlinkDirectoriesDiscovered }
         : {}),
     });
-    const rootSafeFiles = await filterRealPathsWithinRootEntries([...files, ...linkedFiles], realRoot);
+    const linkedOverrideFiles =
+      includeGlobs.length === 0
+        ? []
+        : await listEntriesFromSafeSymlinkDirectories(root, realRoot, patterns, translatedUserIgnoreGlobs, {
+            globRoot,
+            filterIgnoreGlobs: userIgnoreGlobs,
+            ...(options?.knownSymlinkDirectories !== undefined
+              ? { knownSymlinkDirectories: options.knownSymlinkDirectories }
+              : {}),
+          });
+    const rootSafeFiles = await filterRealPathsWithinRootEntries(
+      [...files, ...includedOverrideFiles, ...linkedFiles, ...linkedOverrideFiles],
+      realRoot,
+    );
+    const seen = new Set<string>();
     return rootSafeFiles
       .map(({ path: filePath, realPath }) => ({ filePath: normalizePath(filePath), realPath }))
       .filter(({ filePath, realPath }) => {
-        if (
-          includeMatchers.length &&
-          !includeMatchers.some((matcher) => matchesDiscoveryGlob(filePath, globRoot, matcher))
-        ) {
+        if (seen.has(filePath)) return false;
+        seen.add(filePath);
+        const rootRelative = normalizePath(path.relative(root, filePath));
+        if (!isRelativePathInside(rootRelative)) return false;
+        if (!patternMatchers.some((matcher) => matcher(rootRelative))) return false;
+        const matchesInclude =
+          !includeMatchers.length ||
+          includeMatchers.some((matcher) => matchesDiscoveryGlob(filePath, globRoot, matcher));
+        if (!matchesInclude) return false;
+        if (userIgnoreMatchers.some((matcher) => matchesDiscoveryGlob(filePath, globRoot, matcher))) {
           return false;
         }
-        if (userIgnoreMatchers.some((matcher) => matchesDiscoveryGlob(filePath, globRoot, matcher))) {
+        const ignoredByDefault = defaultIgnoreMatchers.some((matcher) => matcher(rootRelative));
+        if (ignoredByDefault && !(includeMatchers.length > 0 && matchesInclude)) {
           return false;
         }
         return !isIgnoredByGitignore(filePath, gitignoreRules) && !isIgnoredByGitignore(realPath, gitignoreRules);
@@ -413,12 +451,12 @@ export function createDiscoveredFileMatcher(
     if (!isRelativePathInside(rootRelative)) return false;
     const normalizedRootRelative = normalizePath(rootRelative);
     if (!patternMatchers.some((matcher) => matcher(normalizedRootRelative))) return false;
-    if (defaultIgnoreMatchers.some((matcher) => matcher(normalizedRootRelative))) return false;
-    if (
-      includeMatchers.length &&
-      !includeMatchers.some((matcher) => matchesDiscoveryGlob(absolutePath, globRoot, matcher))
-    ) {
-      return false;
+    const matchesInclude =
+      !includeMatchers.length ||
+      includeMatchers.some((matcher) => matchesDiscoveryGlob(absolutePath, globRoot, matcher));
+    if (!matchesInclude) return false;
+    if (defaultIgnoreMatchers.some((matcher) => matcher(normalizedRootRelative))) {
+      if (!(includeMatchers.length > 0 && matchesInclude)) return false;
     }
     return !userIgnoreMatchers.some((matcher) => matchesDiscoveryGlob(absolutePath, globRoot, matcher));
   };

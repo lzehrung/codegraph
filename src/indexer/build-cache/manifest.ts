@@ -8,6 +8,7 @@ import { CODEGRAPH_CONFIG_FILE } from "../../config.js";
 import { logWithLevel, type LogLevel } from "../../logging.js";
 import type { Edge } from "../../types.js";
 import {
+  DEFAULT_PROJECT_FILE_IGNORES,
   DEFAULT_PROJECT_MANIFESTS,
   listProjectFiles,
   type ProjectFileDiscoveryOptions,
@@ -155,15 +156,7 @@ export async function computeConfigHash(projectRoot: string, logLevel?: LogLevel
       cwd: projectRoot,
       absolute: true,
       dot: true,
-      ignore: [
-        "**/node_modules/**",
-        "**/.git/**",
-        "**/dist/**",
-        "**/build/**",
-        "**/target/**",
-        "**/.venv/**",
-        "**/__pycache__/**",
-      ],
+      ignore: DEFAULT_PROJECT_FILE_IGNORES,
     });
     configFiles.sort();
     const hash = crypto.createHash("sha1");

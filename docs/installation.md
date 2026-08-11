@@ -213,6 +213,8 @@ Interactive confirmation accepts only `y` or `yes` and defaults to no; nonintera
 
 The lower-level `codegraph skill install --agent <name>` command remains available when you only want to copy the bundled skill. Restart or reload configured MCP clients after installation.
 
+Concurrent installs are serialized with short-lived lease locks. A lock abandoned by an interrupted installer is reclaimed automatically once its lease expires; a lock that cannot be verified as abandoned is left untouched and the error names the lock file to delete once no other installer is running.
+
 ## Next steps
 
 - For CLI commands and examples, see [docs/cli.md](./cli.md).

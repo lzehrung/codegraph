@@ -80,7 +80,6 @@ export const PHP_DEF: LanguageDefinition = {
       (const_declaration (const_element (name) @name))
     `,
     locals: `
-      (namespace_definition name: (namespace_name) @name)
       (class_declaration name: (name) @name)
       (interface_declaration name: (name) @name)
       (trait_declaration name: (name) @name)
@@ -89,7 +88,6 @@ export const PHP_DEF: LanguageDefinition = {
       (function_definition name: (name) @name)
       (method_declaration name: (name) @name)
       (const_declaration (const_element (name) @name))
-      (property_element (variable_name) @name)
     `,
     importBindings: `
       (require_expression) @stmt

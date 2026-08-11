@@ -41,6 +41,11 @@ export type NativeSyntaxTree = {
   nodes: NativeSyntaxNode[];
 };
 
+export type NativeLanguageExtraction = {
+  results: NativeQueryResults;
+  syntaxTree: NativeSyntaxTree;
+};
+
 export type CompactCapture = {
   name: string;
   text: string;
@@ -110,6 +115,14 @@ export type NativeBinding = {
     localsQuery: string,
     importBindingsQuery: string,
   ) => NativeQueryResults;
+  extractLanguage?: (
+    source: string,
+    languageId: string,
+    importsQuery: string,
+    exportsQuery: string,
+    localsQuery: string,
+    importBindingsQuery: string,
+  ) => NativeLanguageExtraction;
   runImportsQueryCompact?: (source: string, languageId: string, importsQuery: string) => CompactQueryResults;
   runQuery?: (source: string, languageId: string, queryText: string) => { matches: NativeMatch[] };
   parseSyntaxTree?: (source: string, languageId: string) => NativeSyntaxTree;

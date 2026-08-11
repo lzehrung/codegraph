@@ -55,7 +55,7 @@ type SnapshotFileIdentity = {
 
 type ParsedSnapshotCacheEntry = {
   identity: SnapshotFileIdentity;
-  payload: unknown;
+  compressed: Buffer;
 };
 
 type DetailedSymbolGraphCacheEntry = {
@@ -241,22 +241,29 @@ function materializeDetailedSymbolGraph(payload: DetailedSymbolGraphSnapshotPayl
   };
 }
 
-async function readParsedSnapshot(snapshotPath: string): Promise<ParsedSnapshotCacheEntry> {
+function decodeSnapshotPayload(compressed: Buffer): unknown {
+  return JSON.parse(brotliDecompressSync(compressed).toString("utf8")) as unknown;
+}
+
+async function readParsedSnapshot(
+  snapshotPath: string,
+): Promise<{ identity: SnapshotFileIdentity; payload: unknown }> {
   const before = await snapshotFileIdentity(snapshotPath);
   const cached = parsedSnapshotCache.get(snapshotPath);
   if (cached && sameSnapshotFileIdentity(cached.identity, before)) {
     setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, cached);
-    return cached;
+    return { identity: cached.identity, payload: decodeSnapshotPayload(cached.compressed) };
   }
-  const payload = JSON.parse(brotliDecompressSync(await fsp.readFile(snapshotPath)).toString("utf8")) as unknown;
+  const compressed = Buffer.from(await fsp.readFile(snapshotPath));
+  const payload = decodeSnapshotPayload(compressed);
   const after = await snapshotFileIdentity(snapshotPath);
-  const entry = { identity: before, payload };
+  const entry = { identity: before, compressed };
   if (sameSnapshotFileIdentity(before, after)) {
     setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, entry);
   } else {
     parsedSnapshotCache.delete(snapshotPath);
   }
-  return entry;
+  return { identity: before, payload };
 }
 
 function projectIndexManifestEntries(
@@ -294,7 +301,8 @@ export async function tryLoadProjectIndexSnapshot(
     ) {
       return null;
     }
-    const payload = structuredClone(rawPayload);
+    // Payload is freshly JSON.parsed from memoized compressed bytes (no deep clone).
+    const payload = rawPayload;
     const graph: Graph = {
       nodes: new Set(payload.graph.nodes),
       edges: payload.graph.edges,
@@ -408,12 +416,12 @@ export async function writeProjectIndexSnapshot(
   };
   try {
     const snapshotPath = projectSnapshotPath(projectRoot, opts);
-    await writeSnapshotAtomically(
-      snapshotPath,
-      brotliCompressSync(JSON.stringify(payload), { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } }),
-    );
+    const compressed = brotliCompressSync(JSON.stringify(payload), {
+      params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 },
+    });
+    await writeSnapshotAtomically(snapshotPath, compressed);
     const identity = await snapshotFileIdentity(snapshotPath);
-    setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, payload: structuredClone(payload) });
+    setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, compressed });
   } catch {
     // Snapshot writes are an optimization; cache write failures must not fail indexing.
   }
@@ -490,13 +498,13 @@ export async function writeDetailedSymbolGraphSnapshot(
     const snapshotPath = detailedSymbolGraphSnapshotPath(projectRoot, opts);
     parsedSnapshotCache.delete(snapshotPath);
     detailedSymbolGraphCache.delete(snapshotPath);
-    await writeSnapshotAtomically(
-      snapshotPath,
-      brotliCompressSync(JSON.stringify(payload), { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } }),
-    );
+    const compressed = brotliCompressSync(JSON.stringify(payload), {
+      params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 },
+    });
+    await writeSnapshotAtomically(snapshotPath, compressed);
     const identity = await snapshotFileIdentity(snapshotPath);
     const cachedPayload = structuredClone(payload);
-    setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, payload: cachedPayload });
+    setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, compressed });
     setBoundedSnapshotCache(detailedSymbolGraphCache, snapshotPath, {
       identity,
       projectSnapshotIdentity: index.projectSnapshotIdentity,

@@ -12,7 +12,9 @@ Bare `codegraph` prints concise task-oriented help and exits without reading pro
 
 Unknown commands exit with status 1, print up to three deterministic suggestions, and may print one task route; they never guess and execute a command. Invalid command arguments and noninteractive installer writes without `--yes` exit with status 2.
 
-CLI commands default to human-readable stdout; `--pretty` remains an explicit equivalent. Use `--json` for structured automation output, or a format-specific option such as `--compact`, `--mermaid`, `--dot`, or `--sqlite` where supported. If `--json` and `--pretty` are both present, `--json` wins.
+CLI commands default to human-readable stdout; `--pretty` remains an explicit equivalent. Use `--json` for structured automation output, or a format-specific option such as `--compact`, `--mermaid`, `--dot`, or `--sqlite` where supported. If `--json` and `--pretty` are both present, `--json` wins. Commands that ignore structured output, including `viewer` and `mcp`, reject `--json`/`--pretty`. Global `--version --json` and `version --json` remain supported.
+
+Unhandled failures print a concise error message by default. Set `CODEGRAPH_DEBUG=1` or pass `--debug` to include a stack trace.
 
 The `graph` command without output-format flags writes Mermaid to stdout. Use `--json`, `--dot`, `--sqlite <path>`, or `--output <path>` for explicit graph artifacts.
 
@@ -32,6 +34,8 @@ The CLI defaults to `--native auto`, which uses the native Tree-sitter path when
 
 - `--native on`: require native explicitly and fail if it is unavailable
 - `--native off`: disable native explicitly and run reduced graph-only and regex recovery mode
+
+Reduced-accuracy runs are never silent: `graph` and `index` print a one-line `Backend:` warning on stderr whenever the native addon is unavailable or files fell back to regex extraction, independent of `--progress`, and `graph --json` / `index` structured output carries an `analysis` object (`mode`, `backend`, `label`, and fallback file counts) so automation can tell `semantic`, `mixed`, and `reduced` runs apart.
 
 ## Index and cache guidance
 
@@ -65,7 +69,9 @@ Commands that scan a project read `codegraph.config.json` from `--root` when it 
 ```
 
 - `discovery.includeGlobs` and `discovery.ignoreGlobs` are project-root-relative, even when a command scans child include roots.
-- `discovery.ignoreGlobs` is for large fixture, generated, or vendored folders that should not be indexed.
+- Default discovery already ignores common dependency and build trees: `node_modules/`, `.git/`, `.codegraph/`, `.codegraph-cache/`, `dist/`, `build/`, `target/` (Java/Kotlin/Rust), Python `.venv/`/`venv/`/`site-packages/`/`__pycache__/`, Ruby `vendor/bundle/`, Swift `.build/`, and CocoaPods `Pods/`. Bare `vendor/`, `env/`, `bin/`, and `obj/` stay discoverable because they are ambiguous across ecosystems; add them through `discovery.ignoreGlobs` when needed.
+- `discovery.ignoreGlobs` is for additional large fixture, generated, or vendored folders that should not be indexed.
+- `discovery.includeGlobs` can re-include a default-ignored tree when you intentionally want that path indexed (for example `vendor/bundle/**`). User `ignoreGlobs` and `.gitignore` still apply.
 - `languages.extensions` maps additional or built-in literal suffixes to supported language IDs; keys must start with `.` and may contain letters, digits, `.`, `_`, `+`, and `-`, values must name a supported language, and the longest suffix wins.
 - Built-in suffixes remain active unless explicitly remapped by `languages.extensions`; `.vue` and `.svelte` are always handled as single-file components and cannot be remapped.
 - CLI `--include-glob` and `--ignore-glob` values are one-off additions relative to each scanned root.
@@ -275,6 +281,7 @@ codegraph mcp --help
 # Install or preview agent client integration
 codegraph install --target codex,claude --dry-run
 codegraph install --target codex,claude --yes
+codegraph install --target codex --yes --force
 codegraph install --all --dry-run
 codegraph install --all --yes
 codegraph install --print-config codex
@@ -320,6 +327,8 @@ codegraph grep --query '(function_declaration name: (identifier) @name)'
 # Run a plain-text regex grep across the repo
 codegraph grep 'eval\(' --ignore-case
 ```
+
+`grep --json` does not return a bare hit array; it returns an envelope `{ items, limit, totalSeen, truncated, omitted }` so callers can tell a complete result from a capped prefix. `truncated` is exact (the scan probes one hit past the effective `--max-hits` limit, default 5000, so a true count equal to the limit still reports `truncated: false`), while `totalSeen` and `omitted` count only observed hits and are lower bounds once truncated. Human-readable grep output stays a plain streamed hit list.
 
 ### MCP protocol and network boundary
 
@@ -449,7 +458,7 @@ For SQL, prefer handles or schema-qualified names when basenames may be ambiguou
 - `install` configures codegraph-owned MCP entries, bundled skill payloads, and marker files for supported local agent clients: `codex`, `claude`, `cursor`, `gemini`, `opencode`, `omp`, `kilo`, and `agents`.
 - With neither `--yes` nor `--dry-run`, an interactive install detects targets, prints proposed actions and paths, and accepts only `y` or `yes`; blank input, EOF, interrupt, and every other answer decline without writing.
 - `--all` selects the complete catalog in listed order without detection. It is install-only and conflicts with target selection, `--detect`, and `--print-config`.
-- Noninteractive writes require `--yes`. Use `--detect` to list discovered targets, `--dry-run` to preview actions, or `--print-config <target>` to print a copyable MCP snippet without writing. JSON selection, confirmation, and collision failures return one structured stdout document without a stack trace.
+- Noninteractive writes require `--yes`. Use `--detect` to list discovered targets, `--dry-run` to preview actions, or `--print-config <target>` to print a copyable MCP snippet without writing. JSON selection, confirmation, and collision failures return one structured stdout document without a stack trace. Pre-existing user-owned `SKILL.md` files are not overwritten unless the install ownership marker and known payload match, or `--force` is passed.
 - Compatible canonical JSON MCP entries, the generic stdio form that omits only `type`, and equivalent unmarked Codex tables are preserved byte-for-byte. Kilo JSONC updates preserve comments and unrelated settings. Divergent codegraph entries are reported together as secret-free collisions without writing config; uninstall recognizes only strict installer-owned entries.
 - If no target is detected, output lists supported targets, checked paths, and copyable `--all` preview/apply commands; JSON includes `installed: false` and `reason: "no-targets-detected"`.
 - After a confirmed install, codegraph verifies owned state, reports bounded doctor health, and prints restart/reload plus first-query guidance. It does not claim the client connected.
@@ -459,7 +468,8 @@ For SQL, prefer handles or schema-qualified names when basenames may be ambiguou
 #### MCP server
 
 - `mcp serve` exposes explore, navigation, search, read-only rename preview, impact, review, SQLite query, session refresh, and artifact-build tools.
-- MCP uses stdio by default or Streamable HTTP with `--port <number>`.
+- MCP uses stdio by default or Streamable HTTP with `--port <number>`. HTTP protocol sessions are activity-tracked, count-bounded, and idle-evicted; tool schemas reject unknown fields.
+- `mcp` and `viewer` reject `--json`/`--pretty` because they do not emit structured command output.
 - Startup is lazy by default; `--warmup` builds the base session cache before serving requests, and `--warmup-symbols` also builds the detailed symbol graph.
 - Index-backed responses include `freshness`; small file changes auto-refresh, while stale responses include a reason, total changed-file count, and a bounded changed-file sample.
 - Use `refresh_index` to force a rebuild, reset SQLite artifact state, or recover after stale change bursts.
@@ -597,8 +607,9 @@ codegraph drift --base-artifact ./baseline/codegraph-out --head . --json
 `drift` compares architecture signals, not runtime behavior, compiler diagnostics, or style.
 
 - `--graph-edges full|summary|off` controls whether graph-edge churn is emitted per edge, summarized by source file, or suppressed.
+- An edge that flips between type-only and runtime (for example `import type` becoming a runtime import) is reported as a `graph-edge-type-changed` finding (warning when an edge gains runtime weight, info when it becomes type-only) rather than as an add/remove pair.
 - `--public-api all|removals|off` controls whether API additions are shown; removals stay the main review signal.
-- Duplicate drift compares group counts plus stable top-group deltas; duplicate increases are review or CI findings and only fail the process when selected by `--fail-on`.
+- Duplicate drift compares group counts plus stable top-group deltas; group identity keys on file, unit kind, symbol name, and content shape, so inserting lines above an unchanged clone does not rewrite its key. Duplicate increases are review or CI findings and only fail the process when selected by `--fail-on`.
 
 For git-provider impact, `--head` accepts normal revisions plus worktree sentinels. Use `WORKTREE` to compare the base revision against the current working tree, including staged and unstaged tracked-file changes. Use `STAGED` or `INDEX` to compare the base revision against the current index; with `--base HEAD`, that is staged changes only. Untracked files are not included until they are staged or otherwise tracked by Git.
 
@@ -614,6 +625,7 @@ Pretty impact and review summaries also show high-confidence exact or renamed du
 
 - Human-readable `impact` defaults to `--duplicates changed`.
 - Human-readable `review` defaults to `--duplicates impacted`.
+- Identical import-list and barrel-file boilerplate is omitted from these leads by default and reported under `omittedCounts.byBoilerplate`.
 - Use `--duplicates off|changed|impacted|all` to control duplicate-lead scope.
 - For `review`, `--duplicates off` is parsed before report construction and skips `prepareDuplicateAnalysis` / duplicate review tasks entirely, not just the human summary.
 - Git copy or rename `similarityIndex` metadata of 80 or higher can boost scoped duplicate leads when both old and new files exist in the indexed snapshot.
@@ -849,7 +861,7 @@ Human-readable output is optimized for compact reading by people or models and m
 
 Plain `graph` output is a Mermaid file dependency graph on stdout. `graph --json` returns the structured file graph shown below; add `--output <path>` to write any selected format to a file.
 
-`graph` JSON output is always compact: `files` lists each path once, and every edge references source and target files by their integer offset into `files` instead of repeating the path string. This keeps output size proportional to the number of distinct files rather than the number of edges.
+`graph` JSON output is always compact: `files` lists each path once, and every edge references source and target files by their integer offset into `files` instead of repeating the path string. This keeps output size proportional to the number of distinct files rather than the number of edges. Every JSON graph payload (with or without `--symbols`) ends with an `analysis` object describing the parse backend that produced it (`mode`: `semantic`, `mixed`, or `reduced`; plus `backend`, a human `label`, and fallback file counts), mirroring what `index --json` reports.
 
 ```json
 {
@@ -865,7 +877,16 @@ Plain `graph` output is a Mermaid file dependency graph on stdout. `graph --json
       "to": { "type": "file", "path": 1 },
       "raw": "./b"
     }
-  ]
+  ],
+  "analysis": {
+    "mode": "semantic",
+    "backend": "native",
+    "parserDegradedFiles": 0,
+    "fallbackImportExtractionFiles": 0,
+    "nativeFilesUsed": 2,
+    "nativeFilesFellBack": 0,
+    "label": "native semantic"
+  }
 }
 ```
 

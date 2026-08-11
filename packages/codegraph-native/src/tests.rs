@@ -1,8 +1,9 @@
 use super::{
-    parse_syntax_tree, run_imports_query_compact, run_language_queries, run_query,
+    extract_language, parse_syntax_tree, run_imports_query_compact, run_language_queries, run_query,
     supported_language_ids,
 };
 use crate::languages::language_for_id;
+use crate::parser_pool::{parse_invocations_for_tests, reset_parse_invocations_for_tests};
 use crate::query::execute_query;
 use crate::types::NativeMatch;
 use std::collections::HashSet;
@@ -206,6 +207,66 @@ use tree_sitter::Parser;
             first_capture_texts(&results.locals),
             vec!["value".to_string()]
         );
+    }
+
+    #[test]
+    fn extract_language_matches_separate_queries_and_projection_with_one_parse() {
+        let cases = [
+            (
+                "ts",
+                "import { helper } from './dep';\nexport function greet() { return helper(); }",
+                "(function_declaration name: (identifier) @name)",
+            ),
+            (
+                "python",
+                "from dep import helper\ndef greet():\n    return helper()",
+                "(function_definition name: (identifier) @name)",
+            ),
+            (
+                "go",
+                "package main\nfunc greet() { helper() }",
+                "(function_declaration name: (identifier) @name)",
+            ),
+        ];
+
+        for (language_id, source, locals_query) in cases {
+            let separate_results = run_language_queries(
+                source.to_string(),
+                language_id.to_string(),
+                "".to_string(),
+                "".to_string(),
+                locals_query.to_string(),
+                "".to_string(),
+            )
+            .expect("separate native queries should succeed");
+            let separate_tree = parse_syntax_tree(source.to_string(), language_id.to_string())
+                .expect("separate syntax tree projection should succeed");
+
+            reset_parse_invocations_for_tests();
+            let combined = extract_language(
+                source.to_string(),
+                language_id.to_string(),
+                "".to_string(),
+                "".to_string(),
+                locals_query.to_string(),
+                "".to_string(),
+            )
+            .expect("combined native extraction should succeed");
+
+            assert_eq!(
+                parse_invocations_for_tests(),
+                1,
+                "combined extraction should parse {language_id} exactly once"
+            );
+            assert_eq!(
+                combined.results, separate_results,
+                "combined query results should match separate queries for {language_id}"
+            );
+            assert_eq!(
+                combined.syntax_tree, separate_tree,
+                "combined projection should match separate projection for {language_id}"
+            );
+        }
     }
 
     #[test]

@@ -4,10 +4,12 @@ import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   buildProjectIndexFromFiles,
+  extractSqlFactsFromSource,
   findReferences,
   goToDefinition,
   listSymbols,
   type ProjectIndex,
+  type SqlFactKind,
 } from "../src/index.js";
 import * as nativeRuntime from "../src/native/treeSitterNative.js";
 import { withNativeRuntimeModeAsync } from "./helpers/native.js";
@@ -21,10 +23,20 @@ type SymbolExpectation = {
   names: string[];
 };
 
+type SqlFactExpectation = {
+  file: string;
+  facts: Array<{
+    kind: SqlFactKind;
+    objectName: string | null;
+    relatedObjectName?: string | null;
+  }>;
+};
+
 type SemanticExpectation = {
   root: string;
   files: string[];
   symbols?: SymbolExpectation[];
+  sqlFacts?: SqlFactExpectation[];
   goto: {
     file: string;
     line: number;
@@ -176,6 +188,7 @@ function sampleExpectation(
   symbols: SymbolExpectation[] | undefined,
   goto: SemanticExpectation["goto"],
   references: SemanticExpectation["references"],
+  sqlFacts?: SqlFactExpectation[],
 ): SemanticExpectation {
   const root = path.join(sampleRoot, rootDir);
   return {
@@ -185,9 +198,48 @@ function sampleExpectation(
       file: path.join(root, expectation.file),
       names: expectation.names,
     })),
+    sqlFacts: sqlFacts?.map((expectation) => ({
+      file: path.join(root, expectation.file),
+      facts: expectation.facts,
+    })),
     goto: { ...goto, file: path.join(root, goto.file) },
     references: { ...references, file: path.join(root, references.file) },
   };
+}
+
+async function normalizeSqlFacts(
+  expectations: SqlFactExpectation[] | undefined,
+): Promise<Record<string, Array<{ kind: SqlFactKind; objectName: string | null; relatedObjectName: string | null }>>> {
+  if (!expectations?.length) {
+    return {};
+  }
+  const normalized: Record<
+    string,
+    Array<{ kind: SqlFactKind; objectName: string | null; relatedObjectName: string | null }>
+  > = {};
+  for (const expectation of expectations) {
+    const file = normalizeFile(expectation.file);
+    const source = await fsp.readFile(file, "utf8");
+    const facts = extractSqlFactsFromSource(file, source);
+    normalized[file] = expectation.facts.map((expected) => {
+      const match = facts.find(
+        (fact) =>
+          fact.kind === expected.kind &&
+          fact.objectName === expected.objectName &&
+          (expected.relatedObjectName === undefined || fact.relatedObjectName === expected.relatedObjectName),
+      );
+      expect(
+        match,
+        `missing SQL fact ${expected.kind}:${expected.objectName} in ${relativeFile(path.dirname(file), file)}`,
+      ).toBeDefined();
+      return {
+        kind: match!.kind,
+        objectName: match!.objectName,
+        relatedObjectName: match!.relatedObjectName,
+      };
+    });
+  }
+  return normalized;
 }
 
 async function expectNativeSemantics(expectation: SemanticExpectation): Promise<void> {
@@ -198,6 +250,58 @@ async function expectNativeSemantics(expectation: SemanticExpectation): Promise<
       (expectation.symbols ?? []).map((entry) => [normalizeFile(entry.file), [...entry.names].sort()]),
     ),
   );
+
+  if (expectation.sqlFacts?.length) {
+    const actualFacts = await normalizeSqlFacts(expectation.sqlFacts);
+    expect(actualFacts).toEqual(
+      Object.fromEntries(
+        expectation.sqlFacts.map((entry) => [
+          normalizeFile(entry.file),
+          entry.facts.map((fact) => ({
+            kind: fact.kind,
+            objectName: fact.objectName,
+            relatedObjectName: fact.relatedObjectName ?? null,
+          })),
+        ]),
+      ),
+    );
+
+    const edgeKinds = new Set(["reads_from", "writes_to", "joins", "alters_table", "references_object"]);
+    const definedObjectNames = new Set(
+      expectation.sqlFacts.flatMap((entry) =>
+        entry.facts
+          .filter((fact) => fact.kind.startsWith("defines_") && fact.objectName)
+          .map((fact) => fact.objectName as string),
+      ),
+    );
+    const expectedEdgeFacts = expectation.sqlFacts.flatMap((entry) =>
+      entry.facts
+        .filter(
+          (fact) =>
+            edgeKinds.has(fact.kind) &&
+            fact.objectName != null &&
+            (definedObjectNames.has(fact.objectName) ||
+              [...definedObjectNames].some(
+                (defined) => defined === fact.objectName || defined.endsWith(`.${fact.objectName}`),
+              )),
+        )
+        .map((fact) => ({
+          from: normalizeFile(entry.file),
+          raw: `sql:${fact.kind}:${fact.objectName}`,
+        })),
+    );
+    for (const expectedEdge of expectedEdgeFacts) {
+      expect(
+        nativeIndex.graph.edges.some(
+          (edge) =>
+            normalizeFile(edge.from) === expectedEdge.from &&
+            edge.raw === expectedEdge.raw &&
+            edge.to.type === "file",
+        ),
+        `missing native SQL graph edge ${expectedEdge.raw} from ${relativeFile(expectation.root, expectedEdge.from)}`,
+      ).toBe(true);
+    }
+  }
 
   const nativeGoto = await normalizeGoto(nativeIndex, expectation.goto);
   if (expectation.goto.expectedStatus === "ok") {
@@ -637,6 +741,65 @@ nativeDescribe("native semantic coverage", () => {
         { file: "stubs.pyi", line: 5, column: 5, expectedStatus: "ok" },
       ),
       sampleExpectation(
+        "sql/graph",
+        ["001_create_users.sql", "002_alter_users.sql", "report.sql"],
+        [{ file: "001_create_users.sql", names: ["users"] }],
+        { file: "report.sql", line: 1, column: 25, expectedStatus: "ok" },
+        { file: "001_create_users.sql", line: 1, column: 16, expectedStatus: "ok" },
+        [
+          { file: "001_create_users.sql", facts: [{ kind: "defines_table", objectName: "users" }] },
+          { file: "002_alter_users.sql", facts: [{ kind: "alters_table", objectName: "users" }] },
+          { file: "report.sql", facts: [{ kind: "reads_from", objectName: "users" }] },
+        ],
+      ),
+      sampleExpectation(
+        "sql/graph",
+        ["qualified_schema.sql", "qualified_report.sql"],
+        [{ file: "qualified_schema.sql", names: ["public.users"] }],
+        { file: "qualified_report.sql", line: 1, column: 25, expectedStatus: "ok" },
+        { file: "qualified_schema.sql", line: 1, column: 22, expectedStatus: "ok" },
+        [
+          { file: "qualified_schema.sql", facts: [{ kind: "defines_table", objectName: "public.users" }] },
+          { file: "qualified_report.sql", facts: [{ kind: "reads_from", objectName: "public.users" }] },
+        ],
+      ),
+      sampleExpectation(
+        "sql/facts",
+        ["schema.sql", "nested_ctes.sql"],
+        [
+          {
+            file: "schema.sql",
+            names: ["users", "active_users", "users_org_idx"],
+          },
+        ],
+        { file: "nested_ctes.sql", line: 7, column: 20, expectedStatus: "ok" },
+        { file: "schema.sql", line: 1, column: 14, expectedStatus: "ok" },
+        [
+          {
+            file: "schema.sql",
+            facts: [
+              { kind: "defines_table", objectName: "users" },
+              { kind: "defines_view", objectName: "active_users" },
+              { kind: "defines_index", objectName: "users_org_idx", relatedObjectName: "users" },
+            ],
+          },
+          {
+            file: "nested_ctes.sql",
+            facts: [
+              { kind: "reads_from", objectName: "accounts" },
+              { kind: "reads_from", objectName: "users" },
+            ],
+          },
+        ],
+      ),
+      sampleExpectation(
+        "sql/graph",
+        ["001_create_users.sql", "report.sql"],
+        [{ file: "001_create_users.sql", names: ["users"] }],
+        { file: "report.sql", line: 1, column: 8, expectedStatus: "not_found" },
+        { file: "report.sql", line: 1, column: 8, expectedStatus: "not_found" },
+      ),
+      sampleExpectation(
         "rust",
         [".regressions/macros.rs"],
         [{ file: ".regressions/macros.rs", names: ["make_answer"] }],
@@ -653,5 +816,55 @@ nativeDescribe("native semantic coverage", () => {
   it("keeps native semantics stable for normalization-sensitive TypeScript export assignment", async () => {
     const testCase = await createTypeScriptNormalizationCase();
     await expectNativeSemantics(testCase);
+  });
+
+  it("keeps native SQL ambiguous basename fallback as an explicit non-result", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-native-sql-ambiguous-"));
+    tempDirs.push(root);
+    const schemaFile = path.join(root, "schema.sql");
+    const reportFile = path.join(root, "report.sql");
+    await fsp.writeFile(
+      schemaFile,
+      ["CREATE TABLE schema1.users (id integer);", "CREATE TABLE schema2.users (id integer);"].join("\n"),
+      "utf8",
+    );
+    const query = "SELECT users.id FROM schema1.users;";
+    await fsp.writeFile(reportFile, query, "utf8");
+
+    await expectNativeSemantics({
+      root,
+      files: [schemaFile, reportFile],
+      symbols: [
+        {
+          file: schemaFile,
+          names: ["schema1.users", "schema2.users"],
+        },
+      ],
+      sqlFacts: [
+        {
+          file: schemaFile,
+          facts: [
+            { kind: "defines_table", objectName: "schema1.users" },
+            { kind: "defines_table", objectName: "schema2.users" },
+          ],
+        },
+        {
+          file: reportFile,
+          facts: [{ kind: "reads_from", objectName: "schema1.users" }],
+        },
+      ],
+      goto: {
+        file: reportFile,
+        line: 1,
+        column: query.indexOf("users.id") + 1,
+        expectedStatus: "not_found",
+      },
+      references: {
+        file: reportFile,
+        line: 1,
+        column: query.indexOf("users.id") + 1,
+        expectedStatus: "not_found",
+      },
+    });
   });
 });

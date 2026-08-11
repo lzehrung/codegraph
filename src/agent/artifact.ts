@@ -68,7 +68,7 @@ type PortableGraphBody = {
 };
 
 type PortableGraphJson = PortableGraphBody & {
-  schemaVersion: 1;
+  schemaVersion: 2;
   format: "codegraph.graph-json";
   graph: PortableGraphBody;
 };
@@ -410,7 +410,7 @@ function outputIgnoreGlobs(root: string, outDir: string): string[] {
 }
 
 export function buildCodegraphGraphJson(snapshot: AgentProjectSnapshot): {
-  schemaVersion: 1;
+  schemaVersion: 2;
   format: "codegraph.graph-json";
   files: PortableGraphJson["files"];
   fileEdges: PortableGraphJson["fileEdges"];
@@ -464,7 +464,7 @@ export function buildCodegraphGraphJson(snapshot: AgentProjectSnapshot): {
       }),
   };
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     format: "codegraph.graph-json",
     files: graph.files,
     fileEdges: graph.fileEdges,

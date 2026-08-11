@@ -104,6 +104,7 @@ import {
   isMissingGitRevisionError,
   listUntrackedProjectFiles,
   partitionTrackedManifestFiles,
+  probePathExistence,
 } from "./incremental-plan.js";
 import { parsedCacheMaxEntries, setParsedCacheEntry } from "./parsed-cache.js";
 
@@ -394,24 +395,24 @@ function projectPatternsForLanguageExtensions(opts?: BuildOptions): string[] | u
 }
 
 function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: BuildOptions): void {
-  const importAlreadyPresent = (imports: ImportBinding[], candidate: ImportBinding): boolean =>
-    imports.some((existing) => {
-      if (existing.kind !== candidate.kind) return false;
-      if (existing.from !== candidate.from) return false;
-      if (existing.resolved !== candidate.resolved) return false;
-      if ((existing.typeOnly ?? false) !== (candidate.typeOnly ?? false)) {
-        return false;
-      }
-      if (candidate.kind === "named" && existing.kind === "named") {
-        return existing.local === candidate.local && existing.imported === candidate.imported;
-      }
-      if (candidate.kind === "namespace" && existing.kind === "namespace") {
-        return existing.localNS === candidate.localNS;
-      }
-      return false;
-    });
+  const expandedImportKey = (binding: ImportBinding): string | null => {
+    const typeOnly = binding.typeOnly ?? false;
+    if (binding.kind === "named") {
+      return JSON.stringify(["named", binding.from, binding.resolved, typeOnly, binding.local, binding.imported]);
+    }
+    if (binding.kind === "namespace") {
+      return JSON.stringify(["namespace", binding.from, binding.resolved, typeOnly, binding.localNS]);
+    }
+    return null;
+  };
+
 
   for (const mod of modules.values()) {
+    const expandedImportKeys = new Set<string>();
+    for (const existing of mod.imports) {
+      const key = expandedImportKey(existing);
+      if (key) expandedImportKeys.add(key);
+    }
     for (const imp of [...mod.imports]) {
       if (imp.kind !== "star" || typeof imp.resolved !== "string") continue;
       const target = modules.get(fileIdentityKey(imp.resolved));
@@ -443,7 +444,9 @@ function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: BuildOption
               resolved: imp.resolved,
               ...(imp.typeOnly !== undefined ? { typeOnly: imp.typeOnly } : {}),
             };
-        if (importAlreadyPresent(mod.imports, expandedImport)) continue;
+        const expandedImportKeyValue = expandedImportKey(expandedImport);
+        if (!expandedImportKeyValue || expandedImportKeys.has(expandedImportKeyValue)) continue;
+        expandedImportKeys.add(expandedImportKeyValue);
         mod.imports.push(expandedImport);
       }
     }
@@ -598,10 +601,18 @@ async function buildIndexFromFileListShared(
   if (timings && useManifest) {
     timings.manifestMs = Math.round(performance.now() - manifestStart);
   }
+  const edgeProbeConcurrency = buildConcurrency(opts);
   const staleCachedEdgeFiles = new Set<string>();
   if (manifest) {
+    const edgeTargetPaths: string[] = [];
+    for (const entry of Object.values(manifestFiles)) {
+      for (const edge of entry.edges) {
+        if (edge.to.type === "file") edgeTargetPaths.push(edge.to.path);
+      }
+    }
+    const edgeTargetExistence = await probePathExistence(edgeTargetPaths, edgeProbeConcurrency);
     for (const [file, entry] of Object.entries(manifestFiles)) {
-      if (entry.edges.some((edge) => edge.to.type === "file" && !fs.existsSync(edge.to.path))) {
+      if (entry.edges.some((edge) => edge.to.type === "file" && !edgeTargetExistence.get(edge.to.path))) {
         staleCachedEdgeFiles.add(file);
       }
     }
@@ -628,7 +639,7 @@ async function buildIndexFromFileListShared(
         ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
       })
     : new Map<string, string>();
-  const conc = buildConcurrency(opts);
+  const conc = edgeProbeConcurrency;
   const languageExtensions = normalizeLanguageExtensions(opts?.languageExtensions);
   const sqlFiles = normalizedFiles
     .filter((file) => {
@@ -1188,7 +1199,7 @@ export async function buildProjectIndexIncremental(
       (file) => previousTransientFileSet.has(file) || !Object.hasOwn(trackedEntries, file),
     );
     const retiredTransientFiles = previousTransientFiles.filter((file) => !additionalFileSet.has(file));
-    const { trackedFiles, deletedTrackedFiles } = partitionTrackedManifestFiles(trackedEntries);
+    const { trackedFiles, deletedTrackedFiles } = await partitionTrackedManifestFiles(trackedEntries);
     for (const file of retiredTransientFiles) {
       trackedFiles.delete(file);
       deletedTrackedFiles.add(file);
@@ -1525,11 +1536,18 @@ export async function buildProjectIndexIncremental(
       const baseGraph: Graph | undefined =
         cachedGraphEntries.size > 0 ? { nodes: new Set<string>(), edges: [] } : undefined;
       if (baseGraph) {
+        const baseGraphEdgeTargets: string[] = [];
+        for (const entry of cachedGraphEntries.values()) {
+          for (const edge of entry.edges) {
+            if (edge.to.type === "file") baseGraphEdgeTargets.push(edge.to.path);
+          }
+        }
+        const baseGraphEdgeExistence = await probePathExistence(baseGraphEdgeTargets, conc);
         for (const [file, entry] of cachedGraphEntries) {
           baseGraph.nodes.add(file);
           for (const edge of entry.edges) {
             baseGraph.edges.push(edge);
-            if (edge.to.type === "file" && fs.existsSync(edge.to.path)) {
+            if (edge.to.type === "file" && baseGraphEdgeExistence.get(edge.to.path)) {
               baseGraph.nodes.add(edge.to.path);
             }
           }
@@ -1629,7 +1647,7 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
   ).filter((file) => fs.existsSync(file));
   const needsGitScan = !!opts?.gitBase || !!opts?.changedSince;
   const gitFiles = needsGitScan ? await listChangedFiles(projectRoot, buildIncrementalGitDiffOptions(opts)) : [];
-  const { trackedFiles } = partitionTrackedManifestFiles(trackedEntries);
+  const { trackedFiles } = await partitionTrackedManifestFiles(trackedEntries);
   const gitAvailable = await isGitRepo(projectRoot);
   const currentHead = gitAvailable ? await getGitHead(projectRoot) : null;
   const hasExplicitGitRange = !!opts?.gitBase || !!opts?.gitHead;

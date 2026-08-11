@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, test } from "vitest";
 import { captureCli, runCliOrThrow } from "./helpers/cli.js";
 import { runCli } from "../src/cli.js";
-import { appendDuplicateLeadSummary } from "../src/duplicatesLeads.js";
+import { appendDuplicateLeadSummary, collectDuplicateLeadSummary } from "../src/duplicatesLeads.js";
 import { buildProjectIndex, findDuplicateContext, findDuplicateContexts, findDuplicates } from "../src/index.js";
 import { isNativeTreeSitterAvailable } from "../src/native/treeSitterNative.js";
 import { DUPLICATE_IDENTIFIER_KEYWORDS } from "../src/duplicate-keywords.js";
@@ -54,14 +54,141 @@ describe("duplicate detection", () => {
       omittedCounts: {
         byBudget: 0,
         byConfidenceOrType: 2,
+        byBoilerplate: 1,
         byScope: 3,
         hiddenEvidence: 0,
       },
     });
 
     expect(lines).toContain("Duplicate leads:");
-    expect(lines).toContain("- none after confidence/type filters");
-    expect(lines).toContain("- omitted: 2 by confidence/type, 3 outside changed scope");
+    expect(lines).toContain("- none after confidence/type/boilerplate filters");
+    expect(lines).toContain("- omitted: 2 by confidence/type, 1 boilerplate, 3 outside changed scope");
+  });
+
+  test("omits identical import-list boilerplate from core duplicate leads by default", async () => {
+    const root = await makeTempProject();
+    const importList = `${[
+      'import { alphaOne } from "./alpha-one";',
+      'import { betaTwo } from "./beta-two";',
+      'import { gammaThree } from "./gamma-three";',
+      'import { deltaFour } from "./delta-four";',
+      'import { epsilonFive } from "./epsilon-five";',
+      'import { zetaSix } from "./zeta-six";',
+      'import { etaSeven } from "./eta-seven";',
+      'import { thetaEight } from "./theta-eight";',
+      'import { iotaNine } from "./iota-nine";',
+      'import { kappaTen } from "./kappa-ten";',
+      'import { lambdaEleven } from "./lambda-eleven";',
+      'import { muTwelve } from "./mu-twelve";',
+    ].join("\n")}\n`;
+    await writeProjectFile(root, "src/importListA.ts", importList);
+    await writeProjectFile(root, "src/importListB.ts", importList);
+
+    const duplicateSource = `
+export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }>) {
+  const totals: number[] = [];
+  const labels: string[] = [];
+  for (const row of rows) {
+    const subtotal = row.amount + row.tax;
+    const rounded = Math.round(subtotal * 100) / 100;
+    const label = rounded > 100 ? "large" : "small";
+    labels.push(label);
+    totals.push(rounded);
+  }
+  const encoded = totals.map((value, index) => labels[index] + ":" + value.toFixed(2));
+  return encoded.filter((value) => value.includes(":")).join(",");
+}
+`;
+    await writeProjectFile(root, "src/a.ts", duplicateSource);
+    await writeProjectFile(root, "src/b.ts", duplicateSource);
+
+    const index = await buildProjectIndex(root);
+    const summary = await collectDuplicateLeadSummary({ index, projectRoot: root, scope: "all" });
+
+    expect(summary).toBeDefined();
+    const leadFiles = new Set(summary?.leads.flatMap((lead) => [lead.file, lead.otherFile]));
+    expect(leadFiles.has("src/a.ts") || leadFiles.has("src\\a.ts")).toBe(true);
+    expect([...leadFiles].some((file) => file.includes("importList"))).toBe(false);
+    expect(summary?.omittedCounts.byBoilerplate).toBeGreaterThan(0);
+
+    const optedIn = await collectDuplicateLeadSummary({ index, projectRoot: root, scope: "all", includeBoilerplate: true });
+    const optedInFiles = new Set(optedIn?.leads.flatMap((lead) => [lead.file, lead.otherFile]));
+    expect([...optedInFiles].some((file) => file.includes("importList"))).toBe(true);
+    expect(optedIn?.omittedCounts.byBoilerplate).toBe(0);
+  });
+
+  test("omits identical barrel boilerplate from core duplicate leads by default", async () => {
+    const root = await makeTempProject();
+    const barrel = `${[
+      'export { alphaOne } from "./alpha-one";',
+      'export { betaTwo } from "./beta-two";',
+      'export { gammaThree } from "./gamma-three";',
+      'export { deltaFour } from "./delta-four";',
+      'export { epsilonFive } from "./epsilon-five";',
+      'export { zetaSix } from "./zeta-six";',
+      'export { etaSeven } from "./eta-seven";',
+      'export { thetaEight } from "./theta-eight";',
+      'export { iotaNine } from "./iota-nine";',
+      'export { kappaTen } from "./kappa-ten";',
+      'export { lambdaEleven } from "./lambda-eleven";',
+      'export { muTwelve } from "./mu-twelve";',
+    ].join("\n")}\n`;
+    await writeProjectFile(root, "src/barrelA.ts", barrel);
+    await writeProjectFile(root, "src/barrelB.ts", barrel);
+
+    const index = await buildProjectIndex(root);
+    const summary = await collectDuplicateLeadSummary({ index, projectRoot: root, scope: "all" });
+
+    expect(summary).toBeDefined();
+    const leadFiles = new Set(summary?.leads.flatMap((lead) => [lead.file, lead.otherFile]));
+    expect([...leadFiles].some((file) => file.includes("barrel"))).toBe(false);
+    expect(summary?.omittedCounts.byBoilerplate).toBeGreaterThan(0);
+
+    const optedIn = await collectDuplicateLeadSummary({ index, projectRoot: root, scope: "all", includeBoilerplate: true });
+    const optedInFiles = new Set(optedIn?.leads.flatMap((lead) => [lead.file, lead.otherFile]));
+    expect([...optedInFiles].some((file) => file.includes("barrel"))).toBe(true);
+    expect(optedIn?.omittedCounts.byBoilerplate).toBe(0);
+  });
+
+  test("duplicates CLI cleanup profile filters barrel boilerplate", async () => {
+    const root = await makeTempProject();
+    const barrel = `${[
+      'export { alphaOne } from "./alpha-one";',
+      'export { betaTwo } from "./beta-two";',
+      'export { gammaThree } from "./gamma-three";',
+      'export { deltaFour } from "./delta-four";',
+      'export { epsilonFive } from "./epsilon-five";',
+      'export { zetaSix } from "./zeta-six";',
+      'export { etaSeven } from "./eta-seven";',
+      'export { thetaEight } from "./theta-eight";',
+      'export { iotaNine } from "./iota-nine";',
+      'export { kappaTen } from "./kappa-ten";',
+      'export { lambdaEleven } from "./lambda-eleven";',
+      'export { muTwelve } from "./mu-twelve";',
+    ].join("\n")}\n`;
+    await writeProjectFile(root, "src/barrelA.ts", barrel);
+    await writeProjectFile(root, "src/barrelB.ts", barrel);
+
+    const baseArgs = ["duplicates", "--root", ".", "src", "--json", "--include-small", "--min-tokens", "40"];
+    const unfiltered = await captureCli(baseArgs, { cwd: root });
+    const cleanup = await captureCli([...baseArgs, "--profile", "cleanup"], { cwd: root });
+    const parseResult = (result: { stdout: string }): {
+      groups?: Array<{ primaryLeft?: { file?: string }; primaryRight?: { file?: string } }>;
+      filteredCounts?: { cleanupProfileGroups?: number };
+    } => JSON.parse(result.stdout) as {
+      groups?: Array<{ primaryLeft?: { file?: string }; primaryRight?: { file?: string } }>;
+      filteredCounts?: { cleanupProfileGroups?: number };
+    };
+    const unfilteredResult = parseResult(unfiltered);
+    const cleanupResult = parseResult(cleanup);
+    const groupIncludesBarrel = (group: { primaryLeft?: { file?: string }; primaryRight?: { file?: string } }): boolean =>
+      Boolean(group.primaryLeft?.file?.includes("barrel") || group.primaryRight?.file?.includes("barrel"));
+
+    expect(unfiltered.exitCode).toBeUndefined();
+    expect(cleanup.exitCode).toBeUndefined();
+    expect(unfilteredResult.groups?.some(groupIncludesBarrel)).toBe(true);
+    expect(cleanupResult.groups?.some(groupIncludesBarrel)).toBe(false);
+    expect(cleanupResult.filteredCounts?.cleanupProfileGroups).toBeGreaterThan(0);
   });
 
   test("reports exact duplicate functions across files", async () => {

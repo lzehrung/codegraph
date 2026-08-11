@@ -1,9 +1,7 @@
-import path from "node:path";
 import type { LanguageSupport } from "../languages.js";
 import type { Edge, EdgeTo } from "../types.js";
 import {
   getGraphOnlyResolutionExtensions,
-  getPhpComposerImplicitFiles,
   resolveImportSpecifier,
   resolveJvmPackageImportPaths,
   resolvePythonModule,
@@ -143,32 +141,3 @@ export async function resolveModuleSpecifierEdges(
   return [withSpecifierMetadata(entry, to)];
 }
 
-export async function collectPhpComposerImplicitEdges(args: {
-  projectRoot: string;
-  file: string;
-  normalizedFile: string;
-  existingEdges: readonly Edge[];
-}): Promise<Edge[]> {
-  const implicitFiles = await getPhpComposerImplicitFiles(args.projectRoot, args.file);
-  const seenFileTargets = new Set(
-    args.existingEdges
-      .map((edge) => (edge.to.type === "file" ? edge.to.path : null))
-      .filter((target): target is string => !!target),
-  );
-  const edges: Edge[] = [];
-  for (const implicitFile of implicitFiles) {
-    const normalizedTarget = implicitFile.replace(/\\/g, "/");
-    if (normalizedTarget === args.normalizedFile || seenFileTargets.has(normalizedTarget)) {
-      continue;
-    }
-
-    const relativeRaw = path.relative(path.dirname(args.file), implicitFile).replace(/\\/g, "/");
-    edges.push({
-      from: args.normalizedFile,
-      to: { type: "file", path: normalizedTarget },
-      raw: relativeRaw.startsWith(".") || relativeRaw.startsWith("/") ? relativeRaw : `./${relativeRaw}`,
-    });
-    seenFileTargets.add(normalizedTarget);
-  }
-  return edges;
-}

@@ -1,7 +1,7 @@
 use napi_derive::napi;
 use tree_sitter::Point;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 #[napi(object)]
 pub struct NativePoint {
     pub row: u32,
@@ -9,7 +9,7 @@ pub struct NativePoint {
     pub index: u32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 #[napi(object)]
 pub struct NativeCapture {
     pub name: String,
@@ -19,14 +19,14 @@ pub struct NativeCapture {
     pub end: NativePoint,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 #[napi(object)]
 pub struct NativeMatch {
     pub pattern_index: u32,
     pub captures: Vec<NativeCapture>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 #[napi(object)]
 pub struct NativeQueryResults {
     pub imports: Vec<NativeMatch>,
@@ -35,41 +35,48 @@ pub struct NativeQueryResults {
     pub import_bindings: Vec<NativeMatch>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+#[napi(object)]
+pub struct NativeLanguageExtraction {
+    pub results: NativeQueryResults,
+    pub syntax_tree: NativeSyntaxTree,
+}
+
 /// Compact capture with only name and text -- used by graph-mode imports
 /// where position and node-type data are not consumed by the caller.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 #[napi(object)]
 pub struct CompactCapture {
     pub name: String,
     pub text: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 #[napi(object)]
 pub struct CompactMatch {
     pub pattern_index: u32,
     pub captures: Vec<CompactCapture>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 #[napi(object)]
 pub struct CompactQueryResults {
     pub imports: Vec<CompactMatch>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 #[napi(object)]
 pub struct NativeDuplicateTokens {
     pub normalized_tokens: Vec<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 #[napi(object)]
 pub struct NativeQueryRunResult {
     pub matches: Vec<NativeMatch>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 #[napi(object)]
 pub struct NativeSyntaxNode {
     pub id: u32,
@@ -83,7 +90,7 @@ pub struct NativeSyntaxNode {
     pub child_field_names: Vec<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 #[napi(object)]
 pub struct NativeSyntaxTree {
     pub root_id: u32,

@@ -87,7 +87,7 @@ Use line and column coordinates when known; this is the primary navigation form.
 
 ### Review and Inspect
 
-Safe shorthand: `impact` and git-backed `drift` default to `HEAD..WORKTREE`; `artifact`, `packet`, and `mcp` infer `build`, `get`, and `serve`. `grep <regex>` and `sql <db> "SELECT ..."` accept positional forms. Explicit options remain valid.
+Safe shorthand: `impact` and git-backed `drift` default to `HEAD..WORKTREE`; `artifact`, `packet`, and `mcp` infer `build`, `get`, and `serve`. `grep <regex>` and `sql <db> "SELECT ..."` accept positional forms. Explicit options remain valid. `grep --json` returns an envelope `{ items, limit, totalSeen, truncated, omitted }`, not a bare hit array: check `truncated` before treating results as complete, and raise `--max-hits` (default 5000) when it is true.
 
 - compact review handoff: `codegraph review`
 - broader change impact: `codegraph impact --base HEAD --head WORKTREE`
@@ -105,14 +105,14 @@ Current-state commands validate the on-disk index automatically and default to t
 ## Choose Output by Consumer
 
 - Human or model reading one result: use the human-readable default with no output flag; `review` is already compact.
-- Tool chaining, filtering, stable handles, exact ranges, or schema fields: use `--json`. If `--json` and `--pretty` are both present, `--json` wins.
-- Repeated agent queries over one repo snapshot: prefer MCP so the index stays warm. MCP inputs are flat JSON objects and the server root is fixed at startup; send only fields in the mounted tool schema, never CLI flags such as `--root` or `--json`. If the first MCP call fails at startup or loses its transport, do not retry the same server; run `codegraph doctor`, use the equivalent CLI command for this session, and restart the agent client after package upgrades.
-- Durable graph handoff: use `codegraph graph --root . ./src --json --output codegraph.json` rather than parsing display text.
+- Tool chaining, filtering, stable handles, exact ranges, or schema fields: use `--json`. If `--json` and `--pretty` are both present, `--json` wins. `viewer` and `mcp` reject `--json`/`--pretty` because they do not emit structured command output.
+- Repeated agent queries over one repo snapshot: prefer MCP so the index stays warm. MCP inputs are flat JSON objects and the server root is fixed at startup; send only fields in the mounted tool schema, never CLI flags such as `--root` or `--json`. Unknown tool fields are rejected as invalid parameters. If the first MCP call fails at startup or loses its transport, do not retry the same server; run `codegraph doctor`, use the equivalent CLI command for this session, and restart the agent client after package upgrades.
+- Durable graph handoff: use `codegraph graph --root . ./src --json --output codegraph.json` rather than parsing display text. `graph --json` and `index --json` payloads include an `analysis` object (`mode`, `backend`, `label`, fallback counts); when `mode` is `mixed` or `reduced` the run used regex/graph-only extraction for some or all files, so treat symbol accuracy accordingly. Degraded runs also print a `Backend:` warning on stderr even without `--progress`.
 - Search and inspect performance diagnosis: add `--report` for JSON on stderr or `--report-file <path>` for a file while keeping normal command output unchanged.
 
 ### Human Graph Viewer
 
-`viewer` is for a human inspecting a graph, not an agent interface; use graph JSON, SQLite, MCP, or `--json` for structured agent work. Its contract is `codegraph viewer [--root <root>] [--graph <root-confined-json>] [--host <host>] [--port <0-65535>] [--open] [--print-url]`, with the current directory, `127.0.0.1`, and `4173` as the default root, host, and port.
+`viewer` is for a human inspecting a graph, not an agent interface; use graph JSON, SQLite, MCP, or `--json` for structured agent work. Its contract is `codegraph viewer [--root <root>] [--graph <root-confined-json>] [--host <host>] [--port <0-65535>] [--open] [--print-url]`, with the current directory, `127.0.0.1`, and `4173` as the default root, host, and port. Do not pass `--json` to `viewer`.
 
 ```bash
 codegraph viewer --root . --open
@@ -159,7 +159,7 @@ Sensitive-file rules:
 
 If MCP tools are available, prefer them over repeated CLI invocations. Use `explore`, `orient`, `workspace_symbols`, `search`, `get_file`, `packet_get`, `goto`, `refs`, `rename_preview`, `refactor_plan`, `calls`, `type_hierarchy`, `file_deps`, `path`, `impact`, `review`, and `query_sqlite`; fall back to the CLI when MCP is unavailable. Legacy `callers`/`callees`, `supertypes`/`subtypes`, and `deps`/`rdeps` names remain valid `tools/call` aliases.
 
-codegraph uses the official MCP SDK v2 to serve current 2026-07-28 clients while retaining compatibility with 2025-era clients. MCP protocol connections and HTTP protocol sessions keep separate transport state, but all share the server's one warm codegraph analysis session for the configured root.
+codegraph uses the official MCP SDK v2 to serve current 2026-07-28 clients while retaining compatibility with 2025-era clients. MCP protocol connections and HTTP protocol sessions keep separate transport state, but all share the server's one warm codegraph analysis session for the configured root. Tool schemas reject unknown fields, and idle HTTP protocol sessions are evicted with a bounded session count.
 On the first `tools/call`, codegraph can emit `notifications/message` and, when the request includes `_meta.progressToken`, `notifications/progress` before the final result. Stdio carries them inline, and modern Streamable HTTP clients that accept `text/event-stream` receive them as a stream until the terminal result frame.
 HTTP enforces Host and Origin policies. A missing `Origin` is accepted for non-browser clients; unapproved, malformed, and opaque origins are rejected. This is not authentication: binding `--host` to a non-loopback address exposes an unauthenticated endpoint intended only for trusted networks or containers.
 
@@ -167,7 +167,7 @@ Use `refactor_plan` with flat `handle`, optional `renameTo`, independent optiona
 Use `workspace_symbols` for deterministic symbol identities and exact ranges; use `search` when paths, prose, SQL, snippets, or graph evidence should participate.
 Use `type_hierarchy` with `direction: "supertypes" | "subtypes"` and `implementations` with portable symbol handles for repeated hierarchy queries; schemas are flat and use the same 10-depth and 500-result caps as the CLI.
 Use `calls` with `direction: "callers" | "callees"` and portable callable handles for repeated call hierarchy queries. The flat schema accepts `handle`, `direction`, `depth`, `limit`, and `includeHeuristic`, reuses the MCP freshness gate, and caps depth at 5 and symbols at 500; current results remain semantic-only.
-Use `file_deps` with `direction: "deps" | "rdeps"` for file-level dependency queries. Its `file` field accepts an exact `file::symbol` path or portable `symbol:` handle and resolves either to the declaring file; use `calls` for symbol-level relationships.
+Use `file_deps` with `direction: "deps" | "rdeps"` for file-level dependency queries. Its `file` field accepts an exact `file::symbol` path or portable `symbol:` handle and resolves either to the declaring file; use `calls` for symbol-level relationships. `refs` and `file_deps` pair their collections with `limit`, `totalSeen`, `truncated`, and `omitted`; when `truncated` is true the result is a capped prefix, so rerun with a higher `limit` instead of treating it as complete. MCP `review` is bounded for transport: collections are capped at the response's `limits` with exact `omittedCounts`, while `summary` totals always describe the full report.
 Use `rename_preview` with `handle`, `newName`, optional boolean inclusion fields, and optional `maxEdits`. It remains available in read-only mode, reuses the MCP session, never changes files, and has no apply counterpart.
 
 Keep live and indexed evidence distinct:
@@ -189,6 +189,7 @@ codegraph install
 codegraph install --target codex,claude --dry-run
 codegraph install --print-config codex
 codegraph install --target codex,claude --yes
+codegraph install --target codex --yes --force
 codegraph install --all --dry-run
 codegraph install --all --yes
 ```
@@ -197,7 +198,7 @@ Interactive confirmation accepts only `y` or `yes` and defaults to no. Nonintera
 
 Compatible JSON MCP entries and equivalent unmarked Codex tables are preserved byte-for-byte. Kilo JSONC comments and unrelated settings remain intact. Divergent codegraph entries are collision-reported without exposing configuration values.
 
-The installer manages codegraph-owned MCP entries, skill payloads, and marker files; uninstall removes only recognized codegraph-owned content.
+The installer manages codegraph-owned MCP entries, skill payloads, and marker files; uninstall removes only recognized codegraph-owned content. Existing user-owned `SKILL.md` files are preserved unless an ownership marker and known payload match, or `--force` is passed.
 
 Lifecycle commands manage `.codegraph/manifest.json`; other commands do not require that manifest:
 

@@ -1,3 +1,4 @@
+import { ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION } from "./types.js";
 import type {
   ArchitectureCycle,
   ArchitectureDriftCompareOptions,
@@ -34,6 +35,7 @@ export const ARCHITECTURE_DRIFT_FINDING_KINDS: readonly ArchitectureDriftFinding
   "duplicate-decrease",
   "graph-edge-added",
   "graph-edge-removed",
+  "graph-edge-type-changed",
 ] as const;
 
 function summarize(snapshot: ArchitectureSnapshot): ArchitectureSnapshotSummary {
@@ -46,6 +48,14 @@ function summarize(snapshot: ArchitectureSnapshot): ArchitectureSnapshotSummary 
     publicApi: snapshot.publicApi,
     duplicates: snapshot.duplicates,
   };
+}
+
+function assertSnapshotSchema(snapshot: ArchitectureSnapshot, label: "base" | "head"): void {
+  if (snapshot.schemaVersion !== ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION) {
+    throw new Error(
+      `Cannot compare ${label} architecture snapshot schema version ${String(snapshot.schemaVersion)}; expected ${ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION}. Regenerate the drift baseline.`,
+    );
+  }
 }
 
 function byKey<T extends { key: string }>(items: readonly T[]): Map<string, T> {
@@ -250,6 +260,66 @@ function pushGraphEdgeSummary(
   });
 }
 
+/** Identifies an edge independent of its type-only/runtime kind so kind flips pair up. */
+function edgeKindAgnosticKey(edge: ArchitectureGraphEdge): string {
+  return `${edge.from}\0${edge.raw}\0${edge.to}`;
+}
+
+function pushGraphEdgeTypeChanged(
+  findings: ArchitectureDriftFinding[],
+  baseEdge: ArchitectureGraphEdge,
+  headEdge: ArchitectureGraphEdge,
+): void {
+  const beforeTypeOnly = baseEdge.typeOnly ?? false;
+  const afterTypeOnly = headEdge.typeOnly ?? false;
+  findings.push({
+    kind: "graph-edge-type-changed",
+    severity: afterTypeOnly ? "info" : "warning",
+    key: edgeKindAgnosticKey(headEdge),
+    title: `Graph edge became ${afterTypeOnly ? "type-only" : "runtime"}: ${headEdge.from} -> ${headEdge.to}`,
+    file: headEdge.from,
+    edge: headEdge,
+    details: { beforeTypeOnly, afterTypeOnly },
+  });
+}
+
+/**
+ * Pairs added/removed edges that differ only in type-only kind and emits one
+ * type-changed finding per pair. Returns the edges that remain genuine
+ * additions/removals.
+ */
+function extractEdgeTypeChanges(
+  findings: ArchitectureDriftFinding[],
+  added: readonly ArchitectureGraphEdge[],
+  removed: readonly ArchitectureGraphEdge[],
+): { added: ArchitectureGraphEdge[]; removed: ArchitectureGraphEdge[] } {
+  const removedByIdentity = new Map<string, ArchitectureGraphEdge[]>();
+  for (const edge of removed) {
+    const identity = edgeKindAgnosticKey(edge);
+    const list = removedByIdentity.get(identity);
+    if (list) {
+      list.push(edge);
+    } else {
+      removedByIdentity.set(identity, [edge]);
+    }
+  }
+  const remainingAdded: ArchitectureGraphEdge[] = [];
+  const consumedRemoved = new Set<ArchitectureGraphEdge>();
+  for (const addedEdge of added) {
+    const candidates = removedByIdentity.get(edgeKindAgnosticKey(addedEdge));
+    const match = candidates?.find(
+      (candidate) => !consumedRemoved.has(candidate) && (candidate.typeOnly ?? false) !== (addedEdge.typeOnly ?? false),
+    );
+    if (!match) {
+      remainingAdded.push(addedEdge);
+      continue;
+    }
+    consumedRemoved.add(match);
+    pushGraphEdgeTypeChanged(findings, match, addedEdge);
+  }
+  return { added: remainingAdded, removed: removed.filter((edge) => !consumedRemoved.has(edge)) };
+}
+
 function compareGraphEdges(
   findings: ArchitectureDriftFinding[],
   base: readonly ArchitectureGraphEdge[],
@@ -259,24 +329,25 @@ function compareGraphEdges(
   if (mode === "off") return;
   const baseByKey = byKey(base);
   const headByKey = byKey(head);
+  const addedEdges = Array.from(headByKey.values()).filter((edge) => !baseByKey.has(edge.key));
+  const removedEdges = Array.from(baseByKey.values()).filter((edge) => !headByKey.has(edge.key));
+  const { added, removed } = extractEdgeTypeChanges(findings, addedEdges, removedEdges);
   if (mode === "full") {
-    for (const edge of headByKey.values()) {
-      if (!baseByKey.has(edge.key)) pushGraphEdge(findings, "graph-edge-added", edge);
+    for (const edge of added) {
+      pushGraphEdge(findings, "graph-edge-added", edge);
     }
-    for (const edge of baseByKey.values()) {
-      if (!headByKey.has(edge.key)) pushGraphEdge(findings, "graph-edge-removed", edge);
+    for (const edge of removed) {
+      pushGraphEdge(findings, "graph-edge-removed", edge);
     }
     return;
   }
 
   const addedByFile = new Map<string, number>();
   const removedByFile = new Map<string, number>();
-  for (const edge of headByKey.values()) {
-    if (baseByKey.has(edge.key)) continue;
+  for (const edge of added) {
     addedByFile.set(edge.from, (addedByFile.get(edge.from) ?? 0) + 1);
   }
-  for (const edge of baseByKey.values()) {
-    if (headByKey.has(edge.key)) continue;
+  for (const edge of removed) {
     removedByFile.set(edge.from, (removedByFile.get(edge.from) ?? 0) + 1);
   }
   for (const file of Array.from(addedByFile.keys()).sort()) {
@@ -327,6 +398,8 @@ export function compareArchitectureSnapshots(
   head: ArchitectureSnapshot,
   options: ArchitectureDriftCompareOptions = {},
 ): ArchitectureDriftReport {
+  assertSnapshotSchema(base, "base");
+  assertSnapshotSchema(head, "head");
   const thresholds = { ...DEFAULT_DRIFT_THRESHOLDS, ...options.thresholds };
   const findings: ArchitectureDriftFinding[] = [];
   compareCycles(findings, base.cycles, head.cycles);

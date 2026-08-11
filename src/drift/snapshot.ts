@@ -1,5 +1,5 @@
 import path from "node:path";
-import { findDuplicates } from "../duplicates.js";
+import { findDuplicates, type DuplicateGroup, type DuplicateUnitRef } from "../duplicates.js";
 import { getHotspots } from "../graphs/hotspots.js";
 import { findDetailedCycles, getUnresolvedImports, sortDetailedCycles } from "../graphs/queries.js";
 import { buildProjectIndex, buildProjectIndexFromFiles } from "../indexer/build-index.js";
@@ -9,15 +9,16 @@ import { DEFAULT_PROJECT_PATTERNS, listProjectFiles } from "../util/projectFiles
 import { isPathUnderIncludeRoots, normalizeIncludeRootsAbsolute } from "../util/includeRoots.js";
 import { normalizePath, resolveFilePathFromRoot, toProjectDisplayPath } from "../util/paths.js";
 import { countFilesByLanguage } from "./languages.js";
-import type {
-  ArchitectureCycle,
-  ArchitectureDuplicateSummary,
-  ArchitectureGraphEdge,
-  ArchitectureHotspot,
-  ArchitecturePublicApiSymbol,
-  ArchitectureSnapshot,
-  ArchitectureSnapshotOptions,
-  ArchitectureUnresolvedImport,
+import {
+  ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION,
+  type ArchitectureCycle,
+  type ArchitectureDuplicateSummary,
+  type ArchitectureGraphEdge,
+  type ArchitectureHotspot,
+  type ArchitecturePublicApiSymbol,
+  type ArchitectureSnapshot,
+  type ArchitectureSnapshotOptions,
+  type ArchitectureUnresolvedImport,
 } from "./types.js";
 
 const DEFAULT_DUPLICATE_LIMIT = 50;
@@ -99,12 +100,26 @@ function toSnapshotPublicApi(root: string, index: Parameters<typeof getApiSurfac
   return symbols.sort((left, right) => left.id.localeCompare(right.id));
 }
 
-function duplicateGroupKey(group: {
-  primaryLeft: { file: string; startLine: number };
-  primaryRight: { file: string; startLine: number };
-}): string {
-  const left = `${group.primaryLeft.file}:${group.primaryLeft.startLine}`;
-  const right = `${group.primaryRight.file}:${group.primaryRight.startLine}`;
+/**
+ * Identifies a duplicate unit without line positions so that inserting or
+ * removing lines above an unchanged clone does not rewrite its group key.
+ */
+function duplicateUnitIdentity(unit: DuplicateUnitRef): string {
+  const span = Math.max(1, unit.endLine - unit.startLine + 1);
+  return [
+    unit.file,
+    unit.languageId,
+    unit.kind,
+    unit.name ?? "",
+    unit.symbolKind ?? "",
+    String(unit.tokenCount),
+    String(span),
+  ].join("\0");
+}
+
+function duplicateGroupKey(group: Pick<DuplicateGroup, "primaryLeft" | "primaryRight">): string {
+  const left = duplicateUnitIdentity(group.primaryLeft);
+  const right = duplicateUnitIdentity(group.primaryRight);
   return left < right ? `${left}<->${right}` : `${right}<->${left}`;
 }
 
@@ -131,7 +146,8 @@ function edgeTarget(edge: Edge, root: string): string {
 }
 
 function edgeKey(edge: Edge, root: string): string {
-  return `${toProjectDisplayPath(root, edge.from)}\0${edge.raw}\0${edgeTarget(edge, root)}`;
+  const kind = edge.typeOnly ? "type-only" : "runtime";
+  return `${toProjectDisplayPath(root, edge.from)}\0${edge.raw}\0${edgeTarget(edge, root)}\0${kind}`;
 }
 
 function toSnapshotEdges(root: string, edges: readonly Edge[]): ArchitectureGraphEdge[] {
@@ -141,6 +157,7 @@ function toSnapshotEdges(root: string, edges: readonly Edge[]): ArchitectureGrap
       from: toProjectDisplayPath(root, edge.from),
       to: edgeTarget(edge, root),
       raw: edge.raw,
+      ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
     }))
     .sort((left, right) => left.key.localeCompare(right.key));
 }
@@ -164,7 +181,7 @@ export async function buildArchitectureSnapshot(
   const indexedFiles = Array.from(index.byFile.values(), (module) => module.file).sort();
 
   return {
-    schemaVersion: 1,
+    schemaVersion: ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION,
     root,
     files: {
       total: indexedFiles.length,

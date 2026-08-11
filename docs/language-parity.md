@@ -43,7 +43,7 @@ Notes:
 
 - The native addon is the only Tree-sitter grammar backend for the listed source languages.
 - Without native, codegraph degrades to reduced graph-only and regex recovery mode; it does not switch to a JS grammar stack.
-- Native parity tests cover source-language extraction and end-to-end semantics for `TypeScript`, `TSX`, `JavaScript`, `Python`, `PHP`, `Go`, `Java`, `C#`, `Rust`, `Kotlin`, `Swift`, `Zig`, `C`, `C++`, `Ruby`, and `SQL`. Graph/specifier parity is covered for `HTML`, `CSS`, `Less`, `SCSS`, `Vue`, and `Svelte`.
+- Native parity tests cover source-language extraction and end-to-end semantics for `TypeScript`, `TSX`, `JavaScript`, `Python`, `PHP`, `Go`, `Java`, `C#`, `Rust`, `Kotlin`, `Swift`, `Zig`, `C`, `C++`, `Ruby`, and `SQL`. Graph/specifier parity is covered for `HTML`, `CSS`, `Less`, `SCSS`, `Vue`, and `Svelte`. SQL parity asserts unqualified and schema-qualified object navigation, reference lookup, and DDL/DML/CTE statement facts under native mode; intentional non-results such as column-level navigation and ambiguous basename fallback are covered by explicit `not_found` cases.
 - JavaScript graphing has an AngularJS-only heuristic for `templateUrl`, controller-name, and DI-token file/external edges. It only applies when a file explicitly uses `angular.module(...)`; generic `controller` or `templateUrl` objects are not treated as Angular.
 - Call compatibility hints compare changed callable arity with resolved callsites when parsing is high confidence. They are not type checking, overload resolution, trait dispatch, function-pointer analysis, macro expansion, or data-flow inference.
 - Call compatibility skips same-file overload sets unless a future resolver can prove the exact overload target.
@@ -75,17 +75,19 @@ Notes:
 - Astro frontmatter static imports use the script candidate order, while its HTML-style links continue to use document candidates.
 - `SQL` is supported as a repository language, not a full database analyzer. It discovers `.sql` files by default, chunks statements including T-SQL `GO` batches while retaining `BEGIN`/`END` bodies, extracts table/view/index/routine symbols, records common DDL/DML and nested CTE read/write facts, creates SQL-to-SQL object edges, and supports SQL-file go-to-definition and find-references.
 - SQL object edges are exact for unique object-name matches. Qualified-to-basename fallback is heuristic and only used when unambiguous; ambiguous basename guesses are skipped.
-- SQL navigation resolves schema-qualified names plus object-level `alias.column`, `table.column`, and `schema.table.column` references to table/view definitions when the prefix is unambiguous. Quoted identifiers retain their case, and unqualified basename fallback is skipped when multiple definitions share that basename. It does not resolve specific column definitions.
+- SQL navigation resolves schema-qualified names plus object-level `alias.column`, `table.column`, and `schema.table.column` references to table/view definitions when the prefix is unambiguous. Quoted identifiers retain their case, and unqualified basename fallback is skipped when multiple definitions share that basename. It does not resolve specific column definitions; native semantic parity covers that limitation with an explicit `not_found` case.
 - SQL explain targets use the same conservative rule: exact object names win, and unqualified basenames resolve only when unique. SQL does not infer a current schema from migrations, seeds, dumps, or fixtures.
 - Application-code strings are not globally linked to SQL objects. The review-context bridge examines only SQL-shaped string or template literal content, so source comments and ordinary identifiers do not surface SQL facts.
 - SQL indexing, graphing, and navigation are native-only and do not require the JS fallback package.
 - C typedef reference recovery is limited to direct declaration use-site coverage. Macro-expanded or otherwise non-local typedef references are not claimed.
 - C# alias-only `using Alias = Namespace.Type;` navigation is limited when there is no companion namespace import. Graph extraction is covered, but alias-only member navigation is not claimed yet.
 - C# `global using` namespace, alias, and static forms are represented by the native grammar as `using_directive` and preserve dependency edges plus import bindings. PHP enum interface conformance likewise uses `class_interface_clause`, shared with classes, and emits `implements` edges.
-- Go struct field declarations inside `struct` type specs are indexed as local variables; direct and promoted selector uses are covered by go-to-definition and references.
+- PHP reads Composer PSR-0, PSR-4, classmap, and `autoload.files` metadata for first-party resolution, but does not turn Composer autoload machinery into implicit dependency-graph edges. PHP symbols include declaration names, enum cases, and constants, not namespace or property-variable names.
+- Go struct field declarations inside `struct` type specs are indexed as local variables; direct and promoted selector uses are covered by go-to-definition and references. Go locals extraction is query-driven and limited to `name:` positions, so type-position identifiers such as builtin types (`int`) and generic type parameters (`T`) are not indexed as variables.
 - C++20 module declarations (`export module`) and module imports (`import foo;`) are not extracted. The shipped `tree-sitter-cpp` 0.23.4 grammar does not expose `module_declaration` or `import_declaration`, so only `preproc_include` produces C++ dependency edges. Upstream revision `8b5b49e` exposes those nodes; a grammar upgrade must add extraction before this limitation can be removed.
 - `.h` files use C++ parsing when their first 8 KB contains a C++ signal (`class`, `namespace`, `template`, `typename`, `constexpr`, `operator`, `using namespace`, or `::`); otherwise they use C parsing.
 - Rust indexes `macro_rules!` definitions as function-kind symbols; macro invocations resolve to the definition and contribute reference hits.
+- File dependency edges are deduplicated by physical source/target and runtime versus type-only kind; Rust `pub use` re-exports resolve to first-party files before external classification.
 - Python discovers `.pyi` stubs alongside `.py` sources. Match-case captures in tuple, `as`, splat, and unambiguous bare patterns are local bindings; qualified value patterns are not inferred as captures.
 - JavaScript expands `module.exports = { ...source }` for statically resolvable CommonJS imports and local object literals. Dynamic spread sources remain explicit namespace-reexport markers rather than silently disappearing.
 - Ruby treats `Constant = Struct.new(...)` as a class-kind symbol and a synthetic detailed class declaration. Runtime-computed class factories remain outside this recognition.
@@ -113,6 +115,15 @@ Status key:
 | Swift           | `Package.swift`, `Package.resolved`, `*.xcodeproj`, `*.xcworkspace`                                                                                                                                                      | Yes for `Package.swift`                                                   |
 | C and C++       | `CMakeLists.txt`, `CMakePresets.json`, `CMakeUserPresets.json`, `Makefile`, `makefile`, `GNUmakefile`, `configure.ac`, `configure.in`, `meson.build`, `meson_options.txt`, `conanfile.txt`, `conanfile.py`, `vcpkg.json` | Yes for `vcpkg.json`; Partial for directory fallback cases                |
 | IDE             | `.idea`                                                                                                                                                                                                                  | Partial via directory fallback                                            |
+
+Default discovery ignores:
+
+- Always skipped: `node_modules/`, `.git/`, `.codegraph/`, `.codegraph-cache/`, `dist/`, `build/`, and `target/` (covers Maven/Gradle and Rust).
+- Python: `.venv/`, `venv/`, `site-packages/`, and `__pycache__/`. Bare `env/` is not ignored by default because many repos use that name for configuration, not a virtualenv.
+- Ruby: `vendor/bundle/` (Bundler). Bare `vendor/` is left alone so Go and Composer trees that projects intentionally track remain indexable; exclude them with `discovery.ignoreGlobs` when desired.
+- Swift / CocoaPods: `.build/` and `Pods/`.
+- .NET `bin/` and `obj/` are left alone because `bin/` commonly holds first-party scripts; add those globs explicitly when indexing build output is undesirable.
+- Explicit `discovery.includeGlobs` (or CLI `--include-glob`) can re-include a default-ignored directory; user ignore globs and `.gitignore` still win for exclusions.
 
 Monorepo and diagnostic behavior:
 

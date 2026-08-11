@@ -20,6 +20,7 @@ export type InstallOptions = {
   targetIds?: InstallTargetId[];
   yes?: boolean;
   dryRun?: boolean;
+  force?: boolean;
   homeDir?: string;
   env?: Record<string, string | undefined>;
 };
@@ -39,7 +40,10 @@ export type InstallChange = {
   dryRun: boolean;
 };
 
-export type InstallerCollisionKind = "user-owned-codegraph-entry" | "user-owned-codegraph-table";
+export type InstallerCollisionKind =
+  | "user-owned-codegraph-entry"
+  | "user-owned-codegraph-table"
+  | "user-owned-skill";
 
 export type InstallerCollision = {
   target: InstallTargetId;
@@ -57,8 +61,14 @@ export class InstallerCollisionError extends Error {
       "Resolve or rename the existing Codegraph entries before retrying.";
     const conflict = conflicts.length === 1 ? conflicts[0] : undefined;
     if (conflict) {
-      const entryType = conflict.kind === "user-owned-codegraph-table" ? "table" : "entry";
-      message = `User-owned Codegraph MCP ${entryType} already exists. Remove or rename that entry before retrying.`;
+      if (conflict.kind === "user-owned-skill") {
+        message =
+          `User-owned skill already exists at ${conflict.path}. ` +
+          "Re-run with --force to overwrite, or move that file aside before retrying.";
+      } else {
+        const entryType = conflict.kind === "user-owned-codegraph-table" ? "table" : "entry";
+        message = `User-owned Codegraph MCP ${entryType} already exists. Remove or rename that entry before retrying.`;
+      }
     }
     super(message);
     this.name = "InstallerCollisionError";
@@ -207,6 +217,7 @@ const DEFAULT_TARGET_IDS = TARGET_DEFINITIONS.map((target) => target.id);
 const INSTALLER_LOCK_RETRIES = 100;
 const INSTALLER_LOCK_RETRY_MS = 20;
 const INSTALLER_LOCK_LEASE_MS = 30_000;
+const INSTALLER_LOCK_ABANDONED_MS = INSTALLER_LOCK_LEASE_MS * 2;
 
 export function listInstallTargets(): InstallTarget[] {
   return TARGET_DEFINITIONS.map(createInstallTarget);
@@ -329,8 +340,9 @@ async function installDefinitions(
 ): Promise<InstallResult> {
   const settings = installerSettings(options);
   const dryRun = options.dryRun ?? false;
+  const force = options.force ?? false;
   const install = async (): Promise<InstallResult> => {
-    const plan = await prepareInstallPlan(definitions, settings, dryRun);
+    const plan = await prepareInstallPlan(definitions, settings, dryRun, force);
     if (!dryRun) await applyInstallPlan(plan);
     return {
       installed: plan.changes.some((change) => change.action === "create" || change.action === "update"),
@@ -348,6 +360,7 @@ async function prepareInstallPlan(
   definitions: readonly TargetDefinition[],
   settings: InstallerSettings,
   dryRun: boolean,
+  force: boolean,
 ): Promise<InstallPlan> {
   const bundledSkill = await fsp.readFile(bundledSkillFilePath());
   const files: PlannedInstallFile[] = [];
@@ -356,35 +369,24 @@ async function prepareInstallPlan(
     const skillTargetDir = getSkillTargetDirForAgent(definition.id, settings.homeDir, settings.env);
     const skillRoot = skillInstallRoot(definition, settings);
     const skillPath = path.join(skillTargetDir, "SKILL.md");
+    const markerPath = path.join(skillTargetDir, "CODEGRAPH_INSTALLED");
+    const skillSnapshot = await snapshotInstallFile(skillPath, skillRoot);
+    const markerSnapshot = await snapshotInstallFile(markerPath, skillRoot);
+    const skillCollision = findSkillCollision(definition, skillPath, skillSnapshot.bytes, markerSnapshot.bytes, bundledSkill);
+    if (skillCollision && !force) {
+      conflicts.push(skillCollision);
+      continue;
+    }
+
     addPlannedInstallFile(
       files,
-      createPlannedInstallFile(
-        definition,
-        "skill",
-        skillPath,
-        skillRoot,
-        bundledSkill,
-        await snapshotInstallFile(skillPath, skillRoot),
-        dryRun,
-      ),
+      createPlannedInstallFile(definition, "skill", skillPath, skillRoot, bundledSkill, skillSnapshot, dryRun),
     );
 
-    const markerPath = path.join(skillTargetDir, "CODEGRAPH_INSTALLED");
-    const markerContent = Buffer.from(
-      `Installed by codegraph install for ${definition.label}.\nRun codegraph skill install --agent ${definition.id} --force to refresh bundled skill files.\n`,
-      "utf8",
-    );
+    const markerContent = Buffer.from(renderInstallMarker(definition, bundledSkill), "utf8");
     addPlannedInstallFile(
       files,
-      createPlannedInstallFile(
-        definition,
-        "marker",
-        markerPath,
-        skillRoot,
-        markerContent,
-        await snapshotInstallFile(markerPath, skillRoot),
-        dryRun,
-      ),
+      createPlannedInstallFile(definition, "marker", markerPath, skillRoot, markerContent, markerSnapshot, dryRun),
     );
 
     if (definition.kind === "skill-only") continue;
@@ -611,6 +613,57 @@ async function prepareUninstallPlan(
   return {
     files,
     changes: files.map((file) => file.change),
+  };
+}
+
+function skillContentSha256(bytes: Buffer): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function renderInstallMarker(definition: TargetDefinition, bundledSkill: Buffer): string {
+  return (
+    `Installed by codegraph install for ${definition.label}.\n` +
+    `skillSha256=${skillContentSha256(bundledSkill)}\n` +
+    `Run codegraph install --target ${definition.id} --yes --force to refresh bundled skill files.\n`
+  );
+}
+
+function isValidInstallMarker(markerBytes: Buffer): boolean {
+  return markerBytes.toString("utf8").includes("Installed by codegraph install for ");
+}
+
+function readSkillShaFromMarker(markerBytes: Buffer): string | null {
+  const match = /^skillSha256=([a-f0-9]{64})$/m.exec(markerBytes.toString("utf8"));
+  return match?.[1] ?? null;
+}
+
+function isInstallerOwnedSkill(
+  markerBytes: Buffer | null,
+  skillBytes: Buffer | null,
+  bundledSkill: Buffer,
+): boolean {
+  if (markerBytes === null || skillBytes === null) return false;
+  if (!isValidInstallMarker(markerBytes)) return false;
+  if (skillBytes.equals(bundledSkill)) return true;
+  const recordedSha = readSkillShaFromMarker(markerBytes);
+  if (recordedSha === null) return true;
+  return recordedSha === skillContentSha256(skillBytes);
+}
+
+function findSkillCollision(
+  definition: TargetDefinition,
+  skillPath: string,
+  skillBytes: Buffer | null,
+  markerBytes: Buffer | null,
+  bundledSkill: Buffer,
+): InstallerCollision | undefined {
+  if (skillBytes === null) return undefined;
+  if (skillBytes.equals(bundledSkill)) return undefined;
+  if (isInstallerOwnedSkill(markerBytes, skillBytes, bundledSkill)) return undefined;
+  return {
+    target: definition.id,
+    path: normalizePathForDisplay(skillPath),
+    kind: "user-owned-skill",
   };
 }
 
@@ -1172,6 +1225,7 @@ async function withInstallerLeaseLock<T>(
 }
 
 async function acquireInstallerLeaseLock(lockPath: string, resourceName: string): Promise<InstallerLeaseLock> {
+  let lastConflict: InstallerLeaseConflict = "live";
   for (let attempt = 0; attempt < INSTALLER_LOCK_RETRIES; attempt += 1) {
     const acquisitionPath = `${lockPath}.acquire-${randomUUID()}`;
     let published = false;
@@ -1200,10 +1254,91 @@ async function acquireInstallerLeaseLock(lockPath: string, resourceName: string)
       await fsp.rm(acquisitionPath, { force: true }).catch(() => undefined);
       if (published) await fsp.rm(lockPath, { force: true }).catch(() => undefined);
       if (!isInstallerLockPublishConflict(error, lockPath)) throw error;
+      const conflict = await resolveInstallerLeaseConflict(lockPath);
+      if (conflict === "absent" || conflict === "reclaimed") continue;
+      lastConflict = conflict;
       await waitForInstallerLockRetry();
     }
   }
-  throw new Error(`Another Codegraph installer is still updating ${resourceName}.`);
+  if (lastConflict === "live") {
+    throw new Error(`Another Codegraph installer is still updating ${resourceName}.`);
+  }
+  throw new Error(
+    `Codegraph installer found an existing lock at ${normalizePathForDisplay(lockPath)} while updating ${resourceName}, ` +
+      "but the lock could not be safely reclaimed because its metadata is corrupt, unreadable, or still potentially live. " +
+      "The lock was left untouched. If no other Codegraph installer is running, delete that lock file and retry.",
+  );
+}
+
+type InstallerLeaseConflict = "absent" | "reclaimed" | "live" | "blocked";
+
+type InstallerLeaseObservation = {
+  content: string;
+  mtimeMs: number;
+};
+
+async function resolveInstallerLeaseConflict(lockPath: string): Promise<InstallerLeaseConflict> {
+  let observed: InstallerLeaseObservation;
+  try {
+    const stats = await fsp.lstat(lockPath);
+    // Legacy directory locks and other non-files cannot be verified, so they are never removed.
+    if (!stats.isFile()) return "blocked";
+    observed = { content: await fsp.readFile(lockPath, "utf8"), mtimeMs: stats.mtimeMs };
+  } catch (error) {
+    if (isFileSystemErrorCode(error, "ENOENT")) return "absent";
+    return "blocked";
+  }
+  const metadata = parseInstallerLeaseMetadata(observed.content);
+  if (metadata) {
+    const leaseExpiresAt = Date.parse(metadata.leaseExpiresAt);
+    if (Number.isNaN(leaseExpiresAt)) return "blocked";
+    if (leaseExpiresAt > Date.now()) return "live";
+    return await reclaimAbandonedInstallerLease(lockPath, observed);
+  }
+  // Corrupt metadata never authorizes removal on its own. A live owner renews the lock every
+  // half lease, so only a lock untouched for two full lease intervals provably has no live
+  // renewer and is safe to reclaim.
+  if (Date.now() - observed.mtimeMs < INSTALLER_LOCK_ABANDONED_MS) return "blocked";
+  return await reclaimAbandonedInstallerLease(lockPath, observed);
+}
+
+async function reclaimAbandonedInstallerLease(
+  lockPath: string,
+  observed: InstallerLeaseObservation,
+): Promise<InstallerLeaseConflict> {
+  // Detach the lock from its published name first. A fresh acquirer can only publish at
+  // lockPath after this rename, so whatever sits at reclaimPath afterwards is exactly the
+  // lease that was moved, and compare-before-delete below stays race-free for it.
+  const reclaimPath = `${lockPath}.reclaim-${process.pid}-${randomUUID()}`;
+  try {
+    await fsp.rename(lockPath, reclaimPath);
+  } catch (error) {
+    if (isFileSystemErrorCode(error, "ENOENT")) return "absent";
+    return "blocked";
+  }
+  let verified = false;
+  try {
+    const stats = await fsp.lstat(reclaimPath);
+    verified =
+      stats.isFile() &&
+      stats.mtimeMs === observed.mtimeMs &&
+      (await fsp.readFile(reclaimPath, "utf8")) === observed.content;
+  } catch {
+    verified = false;
+  }
+  if (verified) {
+    await fsp.rm(reclaimPath, { force: true });
+    return "reclaimed";
+  }
+  // The moved lock is not the abandoned lease that was vetted: another installer owns it.
+  // Restore it without ever overwriting a lock published at lockPath in the meantime.
+  try {
+    await fsp.link(reclaimPath, lockPath);
+  } catch {
+    // Another installer already published a fresh lock at lockPath; never replace it.
+  }
+  await fsp.rm(reclaimPath, { force: true });
+  return "blocked";
 }
 
 function isInstallerLockPublishConflict(error: unknown, lockPath: string): boolean {

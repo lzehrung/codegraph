@@ -15,7 +15,8 @@ export type ArchitectureDriftFindingKind =
   | "duplicate-increase"
   | "duplicate-decrease"
   | "graph-edge-added"
-  | "graph-edge-removed";
+  | "graph-edge-removed"
+  | "graph-edge-type-changed";
 
 export type ArchitectureDriftSeverity = "error" | "warning" | "info";
 
@@ -58,6 +59,7 @@ export interface ArchitectureGraphEdge {
   from: string;
   to: string;
   raw: string;
+  typeOnly?: boolean;
 }
 
 export interface ArchitectureUnresolvedImportSummary {
@@ -70,9 +72,11 @@ export interface ArchitectureSignalAvailability {
   publicApi?: boolean;
   duplicates?: boolean;
 }
+export const ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION = 2 as const;
+
 
 export interface ArchitectureSnapshot {
-  schemaVersion: 1;
+  schemaVersion: typeof ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION;
   root: string;
   files: { total: number; byLanguage: Record<string, number> };
   hotspots: ArchitectureHotspot[];

@@ -16,45 +16,87 @@ const definition: LanguageTestDefinition = {
     {
       name: "chunks C++ structures",
       sourceFile: "cpp.sample.cpp",
-      expectedChunks: (chunks) => {
-        expect(chunks.some((c) => c.type === "class" && c.name === "MyClass")).toBe(true);
-        expect(chunks.some((c) => c.type === "struct" && c.name === "MyStruct")).toBe(true);
-        expect(chunks.some((c) => c.type === "enum" && c.name === "MyMode")).toBe(true);
-        expect(chunks.some((c) => c.type === "function" && c.name === "add")).toBe(true);
-      },
+      exactChunks: [
+        { type: "misc", startLine: 1, endLine: 2 },
+        { type: "namespace", name: "demo", startLine: 3, endLine: 17 },
+        { type: "class", name: "MyClass", startLine: 4, endLine: 7 },
+        { type: "function", name: "method", startLine: 6, endLine: 6 },
+        { type: "struct", name: "MyStruct", startLine: 9, endLine: 11 },
+        { type: "enum", name: "MyMode", startLine: 13, endLine: 16 },
+        { type: "misc", startLine: 17, endLine: 19 },
+        { type: "function", name: "add", startLine: 20, endLine: 22 },
+      ],
     },
   ],
   parity: {
     sampleDir: "cpp",
-    dependencyGraph: [
-      { from: "main.cpp", to: { type: "file", path: "utils.hpp" } },
-      { from: "main.cpp", to: { type: "file", path: "helpers.hpp" } },
-      { from: "namespace-usage.cpp", to: { type: "file", path: "namespaces.hpp" } },
-    ],
+    exact: {
+      dependencyGraph: [
+        {
+          from: "main.cpp",
+          to: { type: "file", path: "helpers.hpp" },
+        },
+        {
+          from: "main.cpp",
+          to: { type: "file", path: "utils.hpp" },
+        },
+        {
+          from: "namespace-usage.cpp",
+          to: { type: "file", path: "namespaces.hpp" },
+        },
+      ],
+      symbols: [
+        {
+          file: "advanced.hpp",
+          symbols: [
+            { name: "demo", kind: "class" },
+            { name: "Mode", kind: "type" },
+            { name: "Fast", kind: "variable" },
+            { name: "Slow", kind: "variable" },
+            { name: "Count", kind: "type" },
+            { name: "Engine", kind: "class" },
+            { name: "run", kind: "function" },
+            { name: "combine", kind: "function" },
+            { name: "left", kind: "variable" },
+            { name: "right", kind: "variable" },
+          ],
+        },
+        {
+          file: "namespaces.hpp",
+          symbols: [
+            { name: "toolkit", kind: "class" },
+            { name: "Widget", kind: "class" },
+            { name: "buildWidget", kind: "function" },
+            { name: "aliases", kind: "class" },
+          ],
+        },
+        {
+          file: "templates.hpp",
+          symbols: [
+            { name: "Holder", kind: "class" },
+            { name: "Holder", kind: "function" },
+            { name: "value", kind: "variable" },
+            { name: "get", kind: "function" },
+            { name: "value_", kind: "variable" },
+            { name: "compute", kind: "function" },
+            { name: "value", kind: "variable" },
+            { name: "compute", kind: "function" },
+            { name: "value", kind: "variable" },
+          ],
+        },
+      ],
+      references: [
+        {
+          name: "find references for Widget includes namespace alias usage",
+          file: "namespaces.hpp",
+          line: 4,
+          column: 7,
+          exactCount: 2,
+        },
+      ],
+    },
     absentDependencyGraph: [
       { from: "module-import.cpp", to: { type: "external", name: "foo" } },
-    ],
-    symbols: [
-      {
-        file: "advanced.hpp",
-        includes: [
-          { name: "demo" },
-          { name: "Mode", kind: "type" },
-          { name: "Fast", kind: "variable" },
-          { name: "Slow", kind: "variable" },
-          { name: "Count" },
-          { name: "Engine" },
-          { name: "combine" },
-        ],
-      },
-      {
-        file: "namespaces.hpp",
-        includes: [{ name: "toolkit" }, { name: "Widget" }, { name: "buildWidget" }],
-      },
-      {
-        file: "templates.hpp",
-        includes: [{ name: "Holder" }, { name: "compute" }],
-      },
     ],
     goToDefinition: [
       {
@@ -63,15 +105,6 @@ const definition: LanguageTestDefinition = {
         line: 4,
         column: 12,
         expectedDefinition: { file: "namespaces.hpp", line: 4 },
-      },
-    ],
-    references: [
-      {
-        name: "find references for Widget includes namespace alias usage",
-        file: "namespaces.hpp",
-        line: 4,
-        column: 7,
-        minimumCount: 2,
       },
     ],
   },

@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { parseCliArgs } from "../src/cli/context.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { parseCliArgs, runWithCliRuntime, writeError } from "../src/cli/context.js";
 import {
   parseImpactScopeOption,
   parseNonNegativeIntegerOption,
@@ -172,5 +172,70 @@ describe("CLI command option validation", () => {
       const parsed = parseCliArgs(command, ["--no-update-gitignore"]);
       expect(() => validateCliArgs(command, parsed)).toThrow(`Unknown option for ${command}: --no-update-gitignore`);
     }
+  });
+});
+
+describe("JSON output flag command allow-list", () => {
+  it("rejects --json on viewer and mcp while keeping version --json", () => {
+    expect(() => validateCliArgs("viewer", parseCliArgs("viewer", ["--json"]))).toThrow(
+      "Unknown option for viewer: --json",
+    );
+    expect(() => validateCliArgs("mcp", parseCliArgs("mcp", ["--json"]))).toThrow(
+      "Unknown option for mcp: --json",
+    );
+    expect(() => validateCliArgs("viewer", parseCliArgs("viewer", ["--pretty"]))).toThrow(
+      "Unknown option for viewer: --pretty",
+    );
+    expect(() => validateCliArgs("version", parseCliArgs("version", ["--json"]))).not.toThrow();
+    expect(() => validateCliArgs("version", parseCliArgs("version", ["--pretty"]))).not.toThrow();
+  });
+});
+
+describe("writeError stack policy", () => {
+  const previousDebug = process.env.CODEGRAPH_DEBUG;
+
+  afterEach(() => {
+    if (previousDebug === undefined) delete process.env.CODEGRAPH_DEBUG;
+    else process.env.CODEGRAPH_DEBUG = previousDebug;
+  });
+
+  it("prints a concise message by default and a stack when CODEGRAPH_DEBUG is set", async () => {
+    const error = new Error("boom-failure");
+    error.stack = "Error: boom-failure\n    at fakeFrame (src/example.ts:1:1)";
+
+    delete process.env.CODEGRAPH_DEBUG;
+    const defaultStderr: string[] = [];
+    await runWithCliRuntime(
+      {
+        stderr: (chunk) => {
+          defaultStderr.push(chunk);
+        },
+        exit: ((code: number): never => {
+          throw new Error(`unexpected exit ${code}`);
+        }) as (code: number) => never,
+      },
+      async () => {
+        writeError(error);
+      },
+    );
+    expect(defaultStderr.join("")).toContain("boom-failure");
+    expect(defaultStderr.join("")).not.toContain("fakeFrame");
+
+    process.env.CODEGRAPH_DEBUG = "1";
+    const debugStderr: string[] = [];
+    await runWithCliRuntime(
+      {
+        stderr: (chunk) => {
+          debugStderr.push(chunk);
+        },
+        exit: ((code: number): never => {
+          throw new Error(`unexpected exit ${code}`);
+        }) as (code: number) => never,
+      },
+      async () => {
+        writeError(error);
+      },
+    );
+    expect(debugStderr.join("")).toContain("fakeFrame");
   });
 });

@@ -8,28 +8,39 @@ const definition: LanguageTestDefinition = {
   id: "astro",
   parity: {
     sampleDir: "astro",
-    dependencyGraph: [
-      {
-        from: "page.astro",
-        to: { type: "file", path: "Layout.astro" },
-      },
-      {
-        from: "page.astro",
-        to: { type: "file", path: "guide.md" },
-      },
-      {
-        from: "page.astro",
-        to: { type: "file", path: "inline.ts" },
-      },
-      {
-        from: "page.astro",
-        to: { type: "file", path: "docs/about.astro" },
-      },
-      {
-        from: "page.astro",
-        to: { type: "file", path: "util.ts" },
-      },
-    ],
+    exact: {
+      dependencyGraph: [
+        {
+          from: "page.astro",
+          to: { type: "file", path: "docs/about.astro" },
+        },
+        {
+          from: "page.astro",
+          to: { type: "file", path: "guide.md" },
+        },
+        {
+          from: "page.astro",
+          to: { type: "file", path: "inline.ts" },
+        },
+        {
+          from: "page.astro",
+          to: { type: "file", path: "Layout.astro" },
+        },
+        {
+          from: "page.astro",
+          to: { type: "file", path: "util.ts" },
+        },
+      ],
+      references: [
+        {
+          name: "astro remains graph-only for references",
+          file: "page.astro",
+          line: 7,
+          column: 2,
+          expectedStatus: "not_found",
+        },
+      ],
+    },
     absentDependencyGraph: [
       {
         from: "page.astro",
@@ -39,15 +50,6 @@ const definition: LanguageTestDefinition = {
     goToDefinition: [
       {
         name: "astro remains graph-only for go-to-definition",
-        file: "page.astro",
-        line: 7,
-        column: 2,
-        expectedStatus: "not_found",
-      },
-    ],
-    references: [
-      {
-        name: "astro remains graph-only for references",
         file: "page.astro",
         line: 7,
         column: 2,

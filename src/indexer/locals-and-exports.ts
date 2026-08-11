@@ -387,7 +387,7 @@ export function collectLocalsAndExportsFromSource(
 
   const extractLocalsFromNativeQueries = (): boolean => {
     if (!nativeQueries) return false;
-    if (!QUERY_DRIVEN_LOCALS_LANGUAGES.has(support.id)) return false;
+    if (!QUERY_DRIVEN_LOCALS_LANGUAGES.has(support.id) && support.id !== "go") return false;
     let capturedLocals = false;
     try {
       // Lazily get the tree only for enrichment (classification + docstrings).

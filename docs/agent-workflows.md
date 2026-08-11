@@ -514,6 +514,7 @@ Pretty impact and review summaries include scoped duplicate leads by default:
 
 - human-readable `impact`: high-confidence exact or renamed clones within changed files.
 - human-readable `review`: high-confidence exact or renamed clones within changed plus graph-impacted files.
+- Identical import-list and barrel-file boilerplate is omitted from leads by default and counted under `omittedCounts.byBoilerplate`; it remains fully visible in `codegraph duplicates --json`.
 - `--duplicates off|changed|impacted|all`: override the human-summary scope.
 - Git copy or rename similarity metadata can boost duplicate leads when both source and destination are present in the indexed snapshot.
 - Full duplicate groups, variants, raw pair counts, and omission counts remain in `codegraph duplicates --json`.

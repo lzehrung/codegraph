@@ -1,4 +1,3 @@
-import { expect } from "vitest";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 
@@ -8,56 +7,81 @@ const definition: LanguageTestDefinition = {
     {
       name: "chunks Swift structures",
       sourceFile: "swift.sample.swift",
-      expectedChunks: (chunks) => {
-        expect(chunks.some((c) => c.type === "class" && c.name === "MyClass")).toBe(true);
-        expect(chunks.some((c) => c.type === "protocol" && c.name === "MyProtocol")).toBe(true);
-        expect(chunks.some((c) => c.type === "function" && c.name === "topLevel")).toBe(true);
-        expect(chunks.some((c) => c.type === "type" && c.name === "Alias")).toBe(true);
-        expect(chunks.some((c) => c.type === "struct" && c.name === "MyStruct")).toBe(true);
-        expect(chunks.some((c) => c.type === "enum" && c.name === "SampleMode")).toBe(true);
-      },
+      exactChunks: [
+        { type: "misc", startLine: 1, endLine: 2 },
+        { type: "class", name: "MyClass", startLine: 3, endLine: 7 },
+        { type: "function", name: "method", startLine: 4, endLine: 6 },
+        { type: "misc", startLine: 7, endLine: 8 },
+        { type: "struct", name: "MyStruct", startLine: 9, endLine: 11 },
+        { type: "property", name: "value", startLine: 10, endLine: 10 },
+        { type: "misc", startLine: 11, endLine: 12 },
+        { type: "protocol", name: "MyProtocol", startLine: 13, endLine: 16 },
+        { type: "function", name: "topLevel", startLine: 17, endLine: 18 },
+        { type: "type", name: "Alias", startLine: 19, endLine: 20 },
+        { type: "enum", name: "SampleMode", startLine: 21, endLine: 25 },
+        { type: "property", name: "topValue", startLine: 26, endLine: 26 },
+      ],
     },
   ],
   parity: {
     sampleDir: "swift",
-    dependencyGraph: [
-      { from: "main.swift", to: { type: "file", path: "Utils.swift" } },
-      { from: "main.swift", to: { type: "file", path: "Helpers.swift" } },
-      { from: "AdvancedUsage.swift", to: { type: "file", path: "StaticMembers.swift" } },
-    ],
-    symbols: [
-      {
-        file: "Protocols.swift",
-        includes: [
-          { name: "Worker" },
-          { name: "name" },
-          { name: "act" },
-          { name: "WorkerName" },
-          { name: "WorkerImpl" },
-        ],
-      },
-      {
-        file: "Extensions.swift",
-        includes: [{ name: "WorkerImpl", kind: "class" }, { name: "makeDefault" }],
-      },
-      {
-        file: "Actors.swift",
-        includes: [
-          { name: "Counter", kind: "class" },
-          { name: "increment", kind: "function" },
-        ],
-      },
-      {
-        file: "StaticMembers.swift",
-        includes: [
-          { name: "Status", kind: "type" },
-          { name: "ready", kind: "variable" },
-          { name: "done", kind: "variable" },
-          { name: "UtilityFactory", kind: "class" },
-          { name: "build" },
-        ],
-      },
-    ],
+    exact: {
+      dependencyGraph: [
+        {
+          from: "AdvancedUsage.swift",
+          to: { type: "file", path: "StaticMembers.swift" },
+        },
+        {
+          from: "main.swift",
+          to: { type: "file", path: "Helpers.swift" },
+        },
+        {
+          from: "main.swift",
+          to: { type: "file", path: "Utils.swift" },
+        },
+      ],
+      symbols: [
+        {
+          file: "Protocols.swift",
+          symbols: [
+            { name: "Worker", kind: "type" },
+            { name: "name", kind: "variable" },
+            { name: "act", kind: "function" },
+            { name: "WorkerName", kind: "type" },
+            { name: "WorkerImpl", kind: "class" },
+            { name: "name", kind: "variable" },
+            { name: "name", kind: "variable" },
+            { name: "act", kind: "function" },
+            { name: "index", kind: "variable" },
+          ],
+        },
+        {
+          file: "Extensions.swift",
+          symbols: [
+            { name: "WorkerImpl", kind: "class" },
+            { name: "makeDefault", kind: "function" },
+          ],
+        },
+        {
+          file: "Actors.swift",
+          symbols: [
+            { name: "Counter", kind: "class" },
+            { name: "value", kind: "variable" },
+            { name: "increment", kind: "function" },
+          ],
+        },
+        {
+          file: "StaticMembers.swift",
+          symbols: [
+            { name: "Status", kind: "type" },
+            { name: "ready", kind: "variable" },
+            { name: "done", kind: "variable" },
+            { name: "UtilityFactory", kind: "class" },
+            { name: "build", kind: "function" },
+          ],
+        },
+      ],
+    },
     goToDefinition: [
       {
         name: "go to definition resolves UtilityFactory from imported static members file",

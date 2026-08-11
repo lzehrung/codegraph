@@ -4,6 +4,7 @@ import { supportForFile } from "../languages.js";
 import type { FileId } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import {
+  type ExportEntry,
   type ImportBinding,
   type ModuleIndex,
   type ProjectIndex,
@@ -15,7 +16,23 @@ import {
 function cacheKey(file: FileId, name: string): string {
   return `${fileIdentityKey(file)}::${name}`;
 }
+type ModuleNameLookup = {
+  localExports: Map<string, SymbolDef[]>;
+  namespaceReexports: Map<string, Extract<ExportEntry, { type: "namespaceReexport" }>[]>;
+  reexports: Map<string, Extract<ExportEntry, { type: "reexport" }>[]>;
+  locals: Map<string, SymbolDef[]>;
+};
 
+type PackageDirectoryLookup = {
+  all: ModuleIndex[];
+  byName: Map<string, ModuleIndex[]>;
+};
+
+const moduleNameLookups = new WeakMap<ProjectIndex, Map<string, ModuleNameLookup>>();
+const packageDirectoryLookups = new WeakMap<
+  ProjectIndex,
+  Map<"go" | "java" | "kotlin", Map<string, PackageDirectoryLookup>>
+>();
 const goPackageNameCache = new Map<FileId, string | null>();
 const packageNameCache = new Map<string, string | null>();
 
@@ -26,6 +43,42 @@ export type ResolveExportOptions = {
 
 function moduleFor(index: ProjectIndex, file: FileId): ModuleIndex | undefined {
   return index.byFile.get(fileIdentityKey(file));
+}
+
+function moduleNameLookup(index: ProjectIndex, file: FileId): ModuleNameLookup | undefined {
+  let lookups = moduleNameLookups.get(index);
+  if (!lookups) {
+    lookups = new Map<string, ModuleNameLookup>();
+    for (const moduleEntry of index.byFile.values()) {
+      const localExports = new Map<string, SymbolDef[]>();
+      const namespaceReexports = new Map<string, Extract<ExportEntry, { type: "namespaceReexport" }>[]>();
+      const reexports = new Map<string, Extract<ExportEntry, { type: "reexport" }>[]>();
+      const locals = new Map<string, SymbolDef[]>();
+      for (const entry of moduleEntry.exports) {
+        if (entry.type === "local") {
+          const entries = localExports.get(entry.exportedAs) ?? [];
+          entries.push(entry.target);
+          localExports.set(entry.exportedAs, entries);
+        } else if (entry.type === "namespaceReexport") {
+          const entries = namespaceReexports.get(entry.exportedAs) ?? [];
+          entries.push(entry);
+          namespaceReexports.set(entry.exportedAs, entries);
+        } else if (entry.type === "reexport") {
+          const entries = reexports.get(entry.exportedAs) ?? [];
+          entries.push(entry);
+          reexports.set(entry.exportedAs, entries);
+        }
+      }
+      for (const local of moduleEntry.locals) {
+        const entries = locals.get(local.localName) ?? [];
+        entries.push(local);
+        locals.set(local.localName, entries);
+      }
+      lookups.set(fileIdentityKey(moduleEntry.file), { localExports, namespaceReexports, reexports, locals });
+    }
+    moduleNameLookups.set(index, lookups);
+  }
+  return lookups.get(fileIdentityKey(file));
 }
 
 function sameSymbolDef(left: SymbolDef, right: SymbolDef): boolean {
@@ -77,19 +130,13 @@ function resolveGoPackageExport(index: ProjectIndex, file: FileId, exportedName:
   try {
     const support = supportForFile(file);
     if (!support || support.id !== "go") return null;
-    const baseDirKey = fileIdentityKey(path.dirname(file));
+    const directory = packageDirectoryLookup(index, "go").get(fileIdentityKey(path.dirname(file)));
+    if (!directory) return null;
     const sourcePackage = readGoPackageName(file);
-    for (const moduleEntry of index.byFile.values()) {
-      const candidateFile = moduleEntry.file;
-      if (fileIdentityKey(path.dirname(candidateFile)) !== baseDirKey) continue;
-      if (sourcePackage && readGoPackageName(candidateFile) !== sourcePackage) {
-        continue;
-      }
-      for (const entry of moduleEntry.exports) {
-        if (entry.type === "local" && entry.exportedAs === exportedName) {
-          return entry.target;
-        }
-      }
+    const candidates = sourcePackage ? directory.byName.get(sourcePackage) ?? [] : directory.all;
+    for (const moduleEntry of candidates) {
+      const exportEntry = moduleNameLookup(index, moduleEntry.file)?.localExports.get(exportedName)?.[0];
+      if (exportEntry) return exportEntry;
     }
   } catch {
     // supportForFile throws on unsupported files (for example .json)
@@ -115,6 +162,40 @@ function readPackageNameForLanguage(filePath: string, languageId: "java" | "kotl
   }
 }
 
+function packageDirectoryLookup(
+  index: ProjectIndex,
+  languageId: "go" | "java" | "kotlin",
+): Map<string, PackageDirectoryLookup> {
+  let byLanguage = packageDirectoryLookups.get(index);
+  if (!byLanguage) {
+    byLanguage = new Map<"go" | "java" | "kotlin", Map<string, PackageDirectoryLookup>>();
+    packageDirectoryLookups.set(index, byLanguage);
+  }
+  const cached = byLanguage.get(languageId);
+  if (cached) return cached;
+
+  const directories = new Map<string, PackageDirectoryLookup>();
+  for (const moduleEntry of index.byFile.values()) {
+    const directoryKey = fileIdentityKey(path.dirname(moduleEntry.file));
+    let directory = directories.get(directoryKey);
+    if (!directory) {
+      directory = { all: [], byName: new Map<string, ModuleIndex[]>() };
+      directories.set(directoryKey, directory);
+    }
+    directory.all.push(moduleEntry);
+    const packageName =
+      languageId === "go"
+        ? readGoPackageName(moduleEntry.file)
+        : readPackageNameForLanguage(moduleEntry.file, languageId);
+    if (!packageName) continue;
+    const entries = directory.byName.get(packageName) ?? [];
+    entries.push(moduleEntry);
+    directory.byName.set(packageName, entries);
+  }
+  byLanguage.set(languageId, directories);
+  return directories;
+}
+
 function resolveSiblingPackageExport(
   index: ProjectIndex,
   targetFile: string,
@@ -123,17 +204,12 @@ function resolveSiblingPackageExport(
 ): ResolvedExport | null {
   const packageName = readPackageNameForLanguage(targetFile, languageId);
   if (!packageName) return null;
+  const directory = packageDirectoryLookup(index, languageId).get(fileIdentityKey(path.dirname(targetFile)));
+  if (!directory) return null;
   const targetFileKey = fileIdentityKey(targetFile);
-  const targetDirKey = fileIdentityKey(path.dirname(targetFile));
-  for (const moduleEntry of index.byFile.values()) {
-    const candidateFile = moduleEntry.file;
-    if (fileIdentityKey(candidateFile) === targetFileKey || fileIdentityKey(path.dirname(candidateFile)) !== targetDirKey) {
-      continue;
-    }
-    if (readPackageNameForLanguage(candidateFile, languageId) !== packageName) {
-      continue;
-    }
-    const hit = resolveExport(index, candidateFile, exportedName);
+  for (const moduleEntry of directory.byName.get(packageName) ?? []) {
+    if (fileIdentityKey(moduleEntry.file) === targetFileKey) continue;
+    const hit = resolveExport(index, moduleEntry.file, exportedName);
     if (hit) return hit;
   }
   return null;
@@ -186,6 +262,8 @@ export function resolveExport(
   function resolveFromFile(fileInner: FileId, name: string): ResolvedExport | null {
     const moduleEntry = moduleFor(index, fileInner);
     if (!moduleEntry) return null;
+    const names = moduleNameLookup(index, moduleEntry.file);
+    if (!names) return null;
     const normalizedFile = normalizePath(moduleEntry.file);
     const key = opts?.preferredKind
       ? `${cacheKey(normalizedFile, name)}::${opts.preferredKind}::${allowLocalFallback ? "local" : "export"}`
@@ -203,33 +281,29 @@ export function resolveExport(
       return result;
     }
 
-    for (const entry of moduleEntry.exports) {
-      if (entry.type === "local" && entry.exportedAs === name && matchesPreferredKind(entry.target)) {
-        const result: ResolvedExport = { kind: "resolved", def: entry.target };
+    for (const target of names.localExports.get(name) ?? []) {
+      if (matchesPreferredKind(target)) {
+        const result: ResolvedExport = { kind: "resolved", def: target };
         index.exportCache.set(key, result);
         return result;
       }
     }
 
-    for (const entry of moduleEntry.exports) {
-      if (entry.type === "namespaceReexport" && entry.exportedAs === name) {
-        const result: ResolvedExport = {
-          kind: "namespace",
-          file: normalizePath(entry.fromModule),
-        };
-        index.exportCache.set(key, result);
-        return result;
-      }
+    for (const entry of names.namespaceReexports.get(name) ?? []) {
+      const result: ResolvedExport = {
+        kind: "namespace",
+        file: normalizePath(entry.fromModule),
+      };
+      index.exportCache.set(key, result);
+      return result;
     }
 
-    for (const entry of moduleEntry.exports) {
-      if (entry.type === "reexport" && entry.exportedAs === name) {
-        const downstream =
-          resolveFromFile(entry.fromModule, entry.sourceSpecifier || name) ?? resolveFromFile(entry.fromModule, name);
-        if (downstream) {
-          index.exportCache.set(key, downstream);
-          return downstream;
-        }
+    for (const entry of names.reexports.get(name) ?? []) {
+      const downstream =
+        resolveFromFile(entry.fromModule, entry.sourceSpecifier || name) ?? resolveFromFile(entry.fromModule, name);
+      if (downstream) {
+        index.exportCache.set(key, downstream);
+        return downstream;
       }
     }
 
@@ -252,13 +326,12 @@ export function resolveExport(
     }
 
     if (allowLocalFallback) {
-      const local = moduleEntry.locals.find(
-        (candidate) => candidate.localName === name && matchesPreferredKind(candidate),
-      );
-      if (local) {
-        const result: ResolvedExport = { kind: "resolved", def: local };
-        index.exportCache.set(key, result);
-        return result;
+      for (const local of names.locals.get(name) ?? []) {
+        if (matchesPreferredKind(local)) {
+          const result: ResolvedExport = { kind: "resolved", def: local };
+          index.exportCache.set(key, result);
+          return result;
+        }
       }
     }
 

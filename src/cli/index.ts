@@ -1,6 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { buildProjectIndexFromFiles, buildProjectIndexIncremental } from "../indexer/build-index.js";
 import { type BuildOptions, type BuildReport } from "../indexer/types.js";
+import { summarizeAnalysis, type AnalysisSummary } from "../analysisSummary.js";
 import { type GraphBuildOptions } from "../graphs/types.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import type { LanguageExtensionMap } from "../languages.js";
@@ -23,6 +24,7 @@ type IndexCommandReport = {
 type IndexPrettyOutput = {
   files: number;
   edges: number;
+  analysis: AnalysisSummary;
   modules?: Array<{
     file: string;
     locals: readonly unknown[];
@@ -33,6 +35,9 @@ type IndexPrettyOutput = {
 
 function formatIndexOutput(output: IndexPrettyOutput): string {
   const lines = [`Indexed ${output.files} file(s) with ${output.edges} edge(s).`];
+  if (output.analysis.mode !== "semantic") {
+    lines.push(`Analysis: ${output.analysis.label}.`);
+  }
   if (!output.modules) {
     return lines.join("\n");
   }
@@ -86,8 +91,12 @@ export async function handleIndexCommand(context: IndexCommandContext): Promise<
   const full = context.hasFlag("--json") || context.hasFlag("--full");
   const cacheVerify = context.hasFlag("--cache-verify");
   const shouldWriteManifest = !context.includeRootsAbs.length && !context.gitBase && !context.changedSince;
-  const indexReport: BuildReport | undefined = context.reportEnabled || verbose ? { timings: {} } : undefined;
-  if (commandReport && indexReport) {
+  // Always populated (not gated behind --report/--verbose) so a plain `index`
+  // run can detect and surface reduced-accuracy analysis (native tree-sitter
+  // unavailable or per-file fallback) via both the stderr warning and the
+  // pretty/--json `analysis` field below, per finding #43.
+  const indexReport: BuildReport = { timings: {} };
+  if (commandReport) {
     commandReport.index = indexReport;
   }
   // Defaults to the on-disk incremental cache, matching search/orient/inspect/review;
@@ -103,7 +112,7 @@ export async function handleIndexCommand(context: IndexCommandContext): Promise<
     cacheStrict,
     cacheVerify,
     ...(context.graphOptions ? { graph: context.graphOptions } : {}),
-    ...(indexReport ? { report: indexReport } : {}),
+    report: indexReport,
   };
   // Whole-project runs reuse the on-disk manifest and Git-backed incremental discovery
   // instead of a full recursive scan; scoped include roots or an explicit git range keep
@@ -113,6 +122,7 @@ export async function handleIndexCommand(context: IndexCommandContext): Promise<
     ? await buildProjectIndexIncremental(context.projectRootFs, baseIndexOptions)
     : await buildProjectIndexFromFiles(context.projectRootFs, files, baseIndexOptions);
   context.maybeWriteNativeBackendStatus(indexReport, context.showProgress);
+  const analysis = summarizeAnalysis({ index, nativeMode: context.nativeMode, report: indexReport });
   if (full) {
     const modules = [...index.byFile.values()].map((m) => ({
       file: m.file,
@@ -129,6 +139,7 @@ export async function handleIndexCommand(context: IndexCommandContext): Promise<
       {
         files: modules.length,
         edges: index.graph.edges.length,
+        analysis,
         modules,
       },
       formatIndexOutput,
@@ -139,11 +150,12 @@ export async function handleIndexCommand(context: IndexCommandContext): Promise<
       {
         files: [...index.byFile.keys()].length,
         edges: index.graph.edges.length,
+        analysis,
       },
       formatIndexOutput,
     );
   }
-  if (verbose && indexReport) {
+  if (verbose) {
     const cache = indexReport.cache;
     const fileStats = indexReport.files;
     if (cache) {

@@ -101,20 +101,22 @@ export function runLanguageTests(def: LanguageTestDefinition) {
 
       const normalizePath = (p: string) => p.replace(/\\/g, "/");
       const resolveSamplePath = (p: string) => normalizePath(path.join(samplePath, p));
-
       const edgeIdentity = (edge: Edge): string => {
+        const kind = edge.typeOnly ? "type-only" : "runtime";
         if (edge.to.type === "external") {
-          return `${edge.from}|external|${edge.to.name}`;
+          return `${edge.from}|external|${edge.to.name}|${kind}`;
         }
-        return `${edge.from}|file|${edge.to.path}`;
+        return `${edge.from}|file|${edge.to.path}|${kind}`;
       };
+
 
       const expectationIdentity = (expectation: DependencyGraphExpectation): string => {
         const from = resolveSamplePath(expectation.from);
+        const kind = expectation.typeOnly ? "type-only" : "runtime";
         if (expectation.to.type === "external") {
-          return `${from}|external|${expectation.to.name}`;
+          return `${from}|external|${expectation.to.name}|${kind}`;
         }
-        return `${from}|file|${resolveSamplePath(expectation.to.path)}`;
+        return `${from}|file|${resolveSamplePath(expectation.to.path)}|${kind}`;
       };
 
       const matchEdge = (edge: Edge, expectation: DependencyGraphExpectation) => {

@@ -14,11 +14,11 @@ use napi_derive::napi;
 
 use crate::languages::language_for_id;
 use crate::parser_pool::parse_source;
-use crate::projection::push_projected_node;
+use crate::projection::{push_projected_node, ProjectionLimits};
 use crate::query::{execute_query_cached, execute_query_compact};
 use crate::types::{
-    CompactQueryResults, NativeDuplicateTokens, NativeQueryResults, NativeQueryRunResult,
-    NativeSyntaxTree,
+    CompactQueryResults, NativeDuplicateTokens, NativeLanguageExtraction, NativeQueryResults,
+    NativeQueryRunResult, NativeSyntaxTree,
 };
 
 #[napi]
@@ -26,6 +26,31 @@ pub fn supported_language_ids() -> Vec<String> {
     languages::supported_language_ids()
 }
 
+
+fn execute_language_queries(
+    source: &str,
+    language_id: &str,
+    language: &tree_sitter::Language,
+    root: tree_sitter::Node<'_>,
+    imports_query: &str,
+    exports_query: &str,
+    locals_query: &str,
+    import_bindings_query: &str,
+) -> Result<NativeQueryResults> {
+    Ok(NativeQueryResults {
+        imports: execute_query_cached(source, root, language, imports_query, language_id)?,
+        exports: execute_query_cached(source, root, language, exports_query, language_id)?,
+        locals: execute_query_cached(source, root, language, locals_query, language_id)?,
+        import_bindings: execute_query_cached(source, root, language, import_bindings_query, language_id)?,
+    })
+}
+
+fn project_syntax_tree(root: tree_sitter::Node<'_>) -> Result<NativeSyntaxTree> {
+    let mut nodes = Vec::new();
+    let root_id = push_projected_node(root, &mut nodes, ProjectionLimits::default())
+        .map_err(|error| napi::Error::from_reason(error.message()))?;
+    Ok(NativeSyntaxTree { root_id, nodes })
+}
 #[napi]
 pub fn run_language_queries(
     source: String,
@@ -39,20 +64,46 @@ pub fn run_language_queries(
         .ok_or_else(|| napi::Error::from_reason(format!("Unsupported language: {language_id}")))?;
     let tree = parse_source(source.as_str(), language_id.as_str(), &language)?;
     let root = tree.root_node();
-    let lid = language_id.as_str();
+    execute_language_queries(
+        source.as_str(),
+        language_id.as_str(),
+        &language,
+        root,
+        imports_query.as_str(),
+        exports_query.as_str(),
+        locals_query.as_str(),
+        import_bindings_query.as_str(),
+    )
+}
 
-    Ok(NativeQueryResults {
-        imports: execute_query_cached(source.as_str(), root, &language, imports_query.as_str(), lid)?,
-        exports: execute_query_cached(source.as_str(), root, &language, exports_query.as_str(), lid)?,
-        locals: execute_query_cached(source.as_str(), root, &language, locals_query.as_str(), lid)?,
-        import_bindings: execute_query_cached(
-            source.as_str(),
-            root,
-            &language,
-            import_bindings_query.as_str(),
-            lid,
-        )?,
-    })
+#[napi]
+pub fn extract_language(
+    source: String,
+    language_id: String,
+    imports_query: String,
+    exports_query: String,
+    locals_query: String,
+    import_bindings_query: String,
+) -> Result<NativeLanguageExtraction> {
+    let language = language_for_id(&language_id)
+        .ok_or_else(|| napi::Error::from_reason(format!("Unsupported language: {language_id}")))?;
+    let tree = parse_source(source.as_str(), language_id.as_str(), &language)?;
+    let root = tree.root_node();
+    let results = execute_language_queries(
+        source.as_str(),
+        language_id.as_str(),
+        &language,
+        root,
+        imports_query.as_str(),
+        exports_query.as_str(),
+        locals_query.as_str(),
+        import_bindings_query.as_str(),
+    )?;
+
+    Ok(NativeLanguageExtraction {
+            results,
+            syntax_tree: project_syntax_tree(root)?,
+        })
 }
 
 #[napi]
@@ -113,7 +164,5 @@ pub fn parse_syntax_tree(source: String, language_id: String) -> Result<NativeSy
         .ok_or_else(|| napi::Error::from_reason(format!("Unsupported language: {language_id}")))?;
     let tree = parse_source(source.as_str(), language_id.as_str(), &language)?;
 
-    let mut nodes = Vec::new();
-    let root_id = push_projected_node(tree.root_node(), None, &mut nodes);
-    Ok(NativeSyntaxTree { root_id, nodes })
+    Ok(project_syntax_tree(tree.root_node())?)
 }

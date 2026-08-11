@@ -1,5 +1,16 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`native semantic coverage > keeps native SQL ambiguous basename fallback as an explicit non-result 1`] = `
+{
+  "goto": {
+    "status": "not_found",
+  },
+  "references": {
+    "status": "not_found",
+  },
+}
+`;
+
 exports[`native semantic coverage > keeps native semantics stable for normalization-sensitive TypeScript export assignment 1`] = `
 {
   "goto": {
@@ -107,7 +118,6 @@ exports[`native semantic coverage > keeps native semantics stable for representa
       "main.py:11",
       "main.py:16",
       "main.py:3",
-      "main.py:7",
       "main.py:7",
       "utils.py:1",
       "utils.py:30",
@@ -311,7 +321,6 @@ exports[`native semantic coverage > keeps native semantics stable for representa
   "references": {
     "refs": [
       "main.rs:4",
-      "main.rs:4",
       "main.rs:8",
       "utils.rs:1",
     ],
@@ -348,7 +357,6 @@ exports[`native semantic coverage > keeps native semantics stable for representa
   },
   "references": {
     "refs": [
-      "nested.rs:3",
       "nested.rs:3",
       "nested.rs:6",
       "nested_service.rs:1",
@@ -542,7 +550,6 @@ exports[`native semantic coverage > keeps native semantics stable for representa
   "references": {
     "refs": [
       "main.rb:4",
-      "main.rb:4",
       "utils.rb:2",
     ],
     "status": "ok",
@@ -707,6 +714,71 @@ exports[`native semantic coverage > keeps native semantics stable for representa
 `;
 
 exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 43`] = `
+{
+  "goto": {
+    "file": "001_create_users.sql",
+    "line": 1,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "001_create_users.sql:1",
+      "002_alter_users.sql:1",
+      "report.sql:1",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 44`] = `
+{
+  "goto": {
+    "file": "qualified_schema.sql",
+    "line": 1,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "qualified_report.sql:1",
+      "qualified_schema.sql:1",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 45`] = `
+{
+  "goto": {
+    "file": "schema.sql",
+    "line": 1,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      "nested_ctes.sql:7",
+      "schema.sql:1",
+      "schema.sql:11",
+      "schema.sql:8",
+    ],
+    "status": "ok",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 46`] = `
+{
+  "goto": {
+    "status": "not_found",
+  },
+  "references": {
+    "status": "not_found",
+  },
+}
+`;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 47`] = `
 {
   "goto": {
     "file": ".regressions/macros.rs",

@@ -128,6 +128,16 @@ export function buildScopeIndexFromSource(
       addBindingToScope(pattern, kind);
       return;
     }
+    // Parameter nodes put names and types as siblings. Walking the whole subtree
+    // would register type-position identifiers (`int`, `T`, package qualifiers).
+    if (pattern.type === "parameter_declaration" || pattern.type === "variadic_parameter_declaration") {
+      const typeNode = pattern.childForFieldName("type");
+      for (const child of pattern.namedChildren) {
+        if (typeNode && child.id === typeNode.id) continue;
+        addPatternDecls(child, kind, addBindingToScope);
+      }
+      return;
+    }
     if (pattern.type === "pair_pattern") {
       const value = pattern.childForFieldName("value");
       if (value) {
@@ -201,6 +211,11 @@ export function buildScopeIndexFromSource(
     node: SyntaxNodeLike,
     addBindingToScope: (nameNode: SyntaxNodeLike, kind: BindingKind) => void = addDecl,
   ): void => {
+    if (node.type === "short_var_declaration") {
+      const left = node.childForFieldName("left");
+      if (left) addPatternDecls(left, "local", addBindingToScope);
+      return;
+    }
     for (const child of node.namedChildren) {
       if (child.type === "variable_declarator" || child.type === "var_spec" || child.type === "const_spec") {
         const name = child.childForFieldName("name");
@@ -211,7 +226,7 @@ export function buildScopeIndexFromSource(
         }
       } else if (
         (child.type === "identifier" || child.type === "field_identifier") &&
-        (node.type === "assignment" || node.type === "short_var_declaration")
+        node.type === "assignment"
       ) {
         addBindingToScope(child, "local");
       } else if (node.type === "let_declaration" || node.type === "const_item" || node.type === "static_item") {

@@ -57,7 +57,7 @@ describe("artifact build", () => {
     expect(manifest.artifacts.sqlite).toBe("codegraph.sqlite");
     expect(manifest.sql.supported).toBeTruthy();
     expect(manifest.sql.limitation).toContain("current-schema reconstruction");
-    expect(graph.schemaVersion).toBe(1);
+    expect(graph.schemaVersion).toBe(2);
     expect(graph.format).toBe("codegraph.graph-json");
     expect(graph.files).toEqual(graph.graph.files);
     expect(graph.graph.files.some((file) => file.includes(root.replace(/\\/g, "/")))).toBe(false);

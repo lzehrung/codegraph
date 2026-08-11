@@ -47,10 +47,13 @@ export function chunkFile(opts: ChunkFileOptions): Chunk[] {
   const selectedBlocks = selectMainBlocks(mainBlocks);
   const preliminaryChunks: RangedChunk[] = [];
 
+  const sortedInnerBlocks = [...innerBlocks].sort(
+    (left, right) => left.startByte - right.startByte || left.endByte - right.endByte,
+  );
   for (const block of selectedBlocks) {
     appendBlockChunks(
       block,
-      innerBlocks,
+      sortedInnerBlocks,
       source,
       tokenizer,
       maxTokens,
@@ -128,9 +131,7 @@ function appendBlockChunks(
     return;
   }
 
-  const innerInRange = innerBlocks.filter(
-    (innerBlock) => innerBlock.startByte > block.startByte && innerBlock.endByte < block.endByte,
-  );
+  const innerInRange = collectContainedInnerBlocks(innerBlocks, block);
   if (!innerInRange.length) {
     splitLargeBlockSimple(block, source, tokenizer, maxTokens, out, languageId, filePath);
     return;
@@ -147,6 +148,24 @@ function appendBlockChunks(
     newlineOffsets,
     filePath,
   );
+}
+
+function collectContainedInnerBlocks(sortedInnerBlocks: BlockCandidate[], block: BlockCandidate): BlockCandidate[] {
+  let low = 0;
+  let high = sortedInnerBlocks.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (sortedInnerBlocks[mid]!.startByte <= block.startByte) low = mid + 1;
+    else high = mid;
+  }
+
+  const innerInRange: BlockCandidate[] = [];
+  for (let index = low; index < sortedInnerBlocks.length; index++) {
+    const innerBlock = sortedInnerBlocks[index]!;
+    if (innerBlock.startByte >= block.endByte) break;
+    if (innerBlock.endByte < block.endByte) innerInRange.push(innerBlock);
+  }
+  return innerInRange;
 }
 
 function selectMainBlocks(mainBlocks: BlockCandidate[]): BlockCandidate[] {

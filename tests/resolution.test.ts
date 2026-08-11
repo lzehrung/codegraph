@@ -1619,7 +1619,7 @@ describe("Import Resolution", () => {
     expect(result.status).toBe("not_found");
   });
 
-  it("treats PHP autoload.files entries as implicit file dependencies and symbol sources", async () => {
+  it("uses PHP autoload.files entries as symbol sources without implicit dependency edges", async () => {
     const root = await mkTmpDir("dg-resolve-php-autoload-files-");
     const bootstrapDir = path.join(root, "bootstrap");
     const consumerFile = path.join(root, "consumer.php");
@@ -1645,7 +1645,7 @@ describe("Import Resolution", () => {
       graph.edges.some(
         (edge) => edge.from === consumerPath && edge.to.type === "file" && edge.to.path === bootstrapPath,
       ),
-    ).toBe(true);
+    ).toBe(false);
 
     const index = await buildProjectIndex(root);
     const result = await goToDefinition(index, {

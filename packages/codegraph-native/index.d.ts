@@ -18,6 +18,8 @@ export interface CompactQueryResults {
   imports: Array<CompactMatch>
 }
 
+export declare function extractLanguage(source: string, languageId: string, importsQuery: string, exportsQuery: string, localsQuery: string, importBindingsQuery: string): NativeLanguageExtraction
+
 export interface NativeCapture {
   name: string
   text: string
@@ -28,6 +30,11 @@ export interface NativeCapture {
 
 export interface NativeDuplicateTokens {
   normalizedTokens: Array<string>
+}
+
+export interface NativeLanguageExtraction {
+  results: NativeQueryResults
+  syntaxTree: NativeSyntaxTree
 }
 
 export interface NativeMatch {

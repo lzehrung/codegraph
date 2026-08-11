@@ -3,6 +3,7 @@ export { ARCHITECTURE_DRIFT_FINDING_KINDS, DEFAULT_DRIFT_THRESHOLDS, compareArch
 export { renderArchitectureDriftReport, type ArchitectureDriftRenderOptions } from "./report.js";
 export { analyzeArchitectureDrift } from "./git.js";
 export { loadArchitectureSnapshotFromArtifact } from "./artifact.js";
+export { ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION } from "./types.js";
 export type {
   ArchitectureCycle,
   ArchitectureDriftCompareOptions,

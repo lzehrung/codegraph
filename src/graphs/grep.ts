@@ -149,3 +149,51 @@ export async function textGrep(
   }
   return hits;
 }
+
+/**
+ * A capped collection paired with enough metadata for a machine caller to
+ * tell a complete result apart from a truncated prefix, per finding #44.
+ */
+export type GrepResultEnvelope<T> = {
+  items: T[];
+  limit: number;
+  totalSeen: number;
+  truncated: boolean;
+  omitted: number;
+};
+
+/**
+ * Same corpus scan as `textGrep`, but reports whether the `maxHits` cap
+ * actually truncated the result. Scaling: files/matches. Detecting
+ * truncation by re-scanning the whole corpus for an exact count would
+ * reintroduce the O(all files) cost the `maxHits` early-exit exists to avoid
+ * on 10k-100k file repos, so this instead probes exactly one hit past the
+ * display limit (bounded, O(1) extra work). `truncated` is therefore exact
+ * (fixes the boundary case where the true count equals the limit, which a
+ * naive `hitCount === maxHits` check cannot distinguish from "more exist"),
+ * while `omitted`/`totalSeen` reflect only what was actually observed and
+ * are a conservative lower bound — not a full corpus-wide count — once
+ * truncated.
+ */
+export async function textGrepBounded(
+  projectRoot: string,
+  patternSource: string,
+  patterns?: string[],
+  opts?: {
+    ignoreCase?: boolean;
+    maxHits?: number;
+    includeGlobs?: string[];
+    ignoreGlobs?: string[];
+    useGitignore?: boolean;
+  },
+): Promise<GrepResultEnvelope<TextGrepHit>> {
+  const limit = Math.max(1, Math.min(opts?.maxHits ?? 5000, 200_000));
+  const items: TextGrepHit[] = [];
+  let totalSeen = 0;
+  for await (const hit of streamTextGrep(projectRoot, patternSource, patterns, { ...opts, maxHits: limit + 1 })) {
+    totalSeen += 1;
+    if (items.length < limit) items.push(hit);
+  }
+  const truncated = totalSeen > limit;
+  return { items, limit, totalSeen, truncated, omitted: truncated ? totalSeen - limit : 0 };
+}

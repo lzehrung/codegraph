@@ -177,6 +177,7 @@ export async function findPhpComposerPath(projectRoot: string, fromFile: string)
   );
 }
 
+
 export async function getPhpComposerImplicitFiles(projectRoot: string, fromFile: string): Promise<string[]> {
   const composerPath = await findPhpComposerPath(projectRoot, fromFile);
   if (!composerPath) {

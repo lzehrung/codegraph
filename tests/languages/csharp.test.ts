@@ -11,65 +11,80 @@ const definition: LanguageTestDefinition = {
     {
       name: "chunks C# structures",
       sourceFile: "csharp.sample.cs",
-      expectedChunks: (chunks) => {
-        expect(chunks.some((c) => c.type === "namespace" && c.name === "MyNamespace")).toBe(true);
-        expect(chunks.some((c) => c.type === "class" && c.name === "MyClass")).toBe(true);
-        expect(chunks.some((c) => c.type === "method" && c.name === "MyMethod")).toBe(true);
-        expect(chunks.some((c) => c.type === "interface" && c.name === "IMyInterface")).toBe(true);
-        expect(chunks.some((c) => c.type === "enum" && c.name === "MyEnum")).toBe(true);
-      },
+      exactChunks: [
+        { type: "misc", startLine: 1, endLine: 3 },
+        { type: "namespace", name: "MyNamespace", startLine: 4, endLine: 19 },
+        { type: "class", name: "MyClass", startLine: 5, endLine: 9 },
+        { type: "method", name: "MyMethod", startLine: 6, endLine: 8 },
+        { type: "interface", name: "IMyInterface", startLine: 11, endLine: 13 },
+        { type: "method", name: "InterfaceMethod", startLine: 12, endLine: 12 },
+        { type: "enum", name: "MyEnum", startLine: 15, endLine: 18 },
+        { type: "misc", startLine: 19, endLine: 20 },
+      ],
     },
   ],
   parity: {
     sampleDir: "csharp",
-    dependencyGraph: [
-      {
-        from: "Main.cs",
-        to: { type: "file", path: "Utils.cs" },
-      },
-      {
-        from: "Main.cs",
-        to: { type: "file", path: "Helpers.cs" },
-      },
-      {
-        from: "AliasOnly.cs",
-        to: { type: "file", path: "Utils.cs" },
-      },
-      {
-        from: "NamespaceAlias.cs",
-        to: { type: "external", name: "System.Collections.Generic" },
-      },
-      {
-        from: "GlobalUsings.cs",
-        to: { type: "external", name: "System.Text" },
-      },
-      {
-        from: "GlobalUsings.cs",
-        to: { type: "file", path: "Shared.cs" },
-      },
-    ],
-    symbols: [
-      {
-        file: "AdvancedTypes.cs",
-        includes: [
-          { name: "IRunnable" },
-          { name: "Toolbox" },
-          { name: "NestedTool" },
-          { name: "Execute" },
-          { name: "Mode", kind: "type" },
-          { name: "Fast", kind: "variable" },
-          { name: "Slow", kind: "variable" },
-        ],
-      },
-      {
-        file: "RecordTypes.cs",
-        includes: [
-          { name: "ISized", kind: "interface" },
-          { name: "Point", kind: "class" },
-          { name: "NamedShape", kind: "class" },
-        ],
-      },
-    ],
+    exact: {
+      dependencyGraph: [
+        {
+          from: "Main.cs",
+          to: { type: "file", path: "Utils.cs" },
+        },
+        {
+          from: "Main.cs",
+          to: { type: "file", path: "Helpers.cs" },
+        },
+        {
+          from: "AliasOnly.cs",
+          to: { type: "file", path: "Utils.cs" },
+        },
+        {
+          from: "NamespaceAlias.cs",
+          to: { type: "external", name: "System.Collections.Generic" },
+        },
+        {
+          from: "GlobalUsings.cs",
+          to: { type: "external", name: "System.Text" },
+        },
+        {
+          from: "GlobalUsings.cs",
+          to: { type: "file", path: "Shared.cs" },
+        },
+      ],
+      symbols: [
+        {
+          file: "AdvancedTypes.cs",
+          symbols: [
+            { name: "IRunnable", kind: "interface" },
+            { name: "Run", kind: "function" },
+            { name: "Toolbox", kind: "class" },
+            { name: "NestedTool", kind: "class" },
+            { name: "Execute", kind: "function" },
+            { name: "Mode", kind: "type" },
+            { name: "Fast", kind: "variable" },
+            { name: "Slow", kind: "variable" },
+          ],
+        },
+        {
+          file: "RecordTypes.cs",
+          symbols: [
+            { name: "ISized", kind: "interface" },
+            { name: "Point", kind: "class" },
+            { name: "NamedShape", kind: "class" },
+          ],
+        },
+      ],
+      references: [
+        {
+          name: "find references for an is-pattern bound variable includes its usage site",
+          file: "PatternMatching.cs",
+          line: 7,
+          column: 29,
+          exactCount: 2,
+        },
+      ],
+    },
     goToDefinition: [
       {
         name: "go to definition resolves an is-pattern bound variable from its usage site",
@@ -84,15 +99,6 @@ const definition: LanguageTestDefinition = {
         line: 10,
         column: 9,
         expectedDefinition: { file: "Shared.cs", line: 3 },
-      },
-    ],
-    references: [
-      {
-        name: "find references for an is-pattern bound variable includes its usage site",
-        file: "PatternMatching.cs",
-        line: 7,
-        column: 29,
-        minimumCount: 2,
       },
     ],
   },

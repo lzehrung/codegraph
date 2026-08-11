@@ -18,7 +18,7 @@ import type { NativeRuntimeMode, CompactQueryResults, NativeQueryResults } from 
 import { recordNativeExecutionOutcome } from "./native/nativeBackendReport.js";
 import { collectModuleSpecifiersFromSource } from "./graphs/specifiers.js";
 import type { FallbackImportExtractionEvent } from "./graphs/specifiers.js";
-import { collectPhpComposerImplicitEdges, resolveModuleSpecifierEdges } from "./graphs/edgeResolution.js";
+import { resolveModuleSpecifierEdges } from "./graphs/edgeResolution.js";
 import type { GraphCacheEntry } from "./graphs/types.js";
 import type { BuildReport } from "./indexer/types.js";
 import type { SyntaxTreeLike } from "./languages/types.js";
@@ -29,6 +29,32 @@ const cloneEdge = (edge: Edge): Edge => ({
   ...edge,
   to: edge.to.type === "file" ? { type: "file", path: edge.to.path } : { type: "external", name: edge.to.name },
 });
+
+/**
+ * Collapses duplicate edges.
+ *
+ * File-dependency edges identify on the resolved target: several import bindings that
+ * resolve to one file express a single dependency, and counting them separately would
+ * inflate fan-in, hotspots, and drift totals.
+ *
+ * SQL fact edges are the opposite. They deliberately reuse one file pair to express
+ * distinct relationships (`sql:reads_from:...` vs `sql:writes_to:...`), so `raw` is part
+ * of their identity and collapsing on it would discard real graph semantics.
+ */
+function deduplicateEdges(edges: Edge[], rawIsIdentity = false): Edge[] {
+  const seen = new Set<string>();
+  const deduplicated: Edge[] = [];
+  for (const edge of edges) {
+    const target = edge.to.type === "file" ? fileIdentityKey(edge.to.path) : edge.to.name;
+    const type = edge.typeOnly ? "type-only" : "runtime";
+    const discriminator = rawIsIdentity ? `\0${edge.raw}` : "";
+    const key = `${fileIdentityKey(edge.from)}\0${edge.to.type}\0${target}\0${type}${discriminator}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduplicated.push(edge);
+  }
+  return deduplicated;
+}
 
 export async function collectEdgesForFile(
   file: string,
@@ -68,7 +94,6 @@ export async function collectEdgesForFile(
   const sig = sigEntry?.sig;
   const gitSig = sigEntry?.gitSig;
   const sqlFile = supportForFile(normalizedFile, opts.languageExtensions)?.id === "sql";
-
   const emitCacheEntry = (edges: Edge[]) => {
     if (!sig || !opts.onFileEdges) return;
     opts.onFileEdges(normalizedFile, {
@@ -89,7 +114,7 @@ export async function collectEdgesForFile(
   const matchesSig = !!sig && !!cached && cached.sig === sig;
 
   if (cached && (matchesGitSig || matchesSig)) {
-    const cloned = cached.edges.map(cloneEdge);
+    const cloned = deduplicateEdges(cached.edges.map(cloneEdge), sqlFile);
     emitCacheEntry(cloned);
     return cloned;
   }
@@ -123,10 +148,12 @@ export async function collectEdgesForFile(
       });
     }
   }
-
   if (sup.id === "sql") {
     const allFiles = opts.allFiles ?? [normalizedFile];
-    const sqlEdges = await collectSqlEdgesForFile(normalizedFile, allFiles, opts.sqlFactCache, opts.languageExtensions);
+    const sqlEdges = deduplicateEdges(
+      await collectSqlEdgesForFile(normalizedFile, allFiles, opts.sqlFactCache, opts.languageExtensions),
+      true,
+    );
     emitCacheEntry(sqlEdges);
     return sqlEdges;
   }
@@ -206,9 +233,7 @@ export async function collectEdgesForFile(
     }
   }
 
-  if (sup.id === "php") {
-    edges.push(...(await collectPhpComposerImplicitEdges({ projectRoot, file, normalizedFile, existingEdges: edges })));
-  }
-  emitCacheEntry(edges);
-  return edges;
+  const deduplicatedEdges = deduplicateEdges(edges);
+  emitCacheEntry(deduplicatedEdges);
+  return deduplicatedEdges;
 }

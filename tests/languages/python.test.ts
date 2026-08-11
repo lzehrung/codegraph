@@ -14,42 +14,35 @@ const definition: LanguageTestDefinition = {
     {
       name: "chunks Python with docstrings",
       sourceFile: "python.sample.py",
-      expectedChunks: (chunks) => {
-        // expect(chunks.some((c) => c.type === "docstring")).toBe(true);
-        expect(chunks.some((c) => c.type === "imports")).toBe(true);
-        expect(chunks.some((c) => c.type === "module_var" && c.name === "CONFIG_PATH")).toBe(true);
-
-        const classChunk = chunks.find((c) => c.type === "class" && c.name === "Foo");
-        expect(classChunk).toBeDefined();
-
-        const methodChunk = chunks.find((c) => c.type === "function" && c.name === "method");
-        expect(methodChunk).toBeDefined(); // Method is inside class, but might be split if large enough or configured
-
-        const topLevelFunc = chunks.find((c) => c.type === "function" && c.name === "top_level");
-        expect(topLevelFunc).toBeDefined();
-
-        // We expect only the top-level docstring to be a standalone chunk
-        // Note: In the previous turn, we fixed the Python definition to only capture top-level docstrings.
-        // However, the sample file has a top-level docstring.
-        // Let's verify that we get exactly 1 docstring chunk.
-        const docstringChunks = chunks.filter((c) => c.type === "docstring");
-        expect(docstringChunks.length).toBe(1);
-        expect(docstringChunks[0]?.text.trim()).toBe('"""Module docstring explaining the purpose of this file."""');
-      },
+      exactChunks: [
+        { type: "docstring", startLine: 1, endLine: 2 },
+        { type: "imports", startLine: 3, endLine: 3 },
+        { type: "imports", startLine: 4, endLine: 5 },
+        { type: "module_var", name: "CONFIG_PATH", startLine: 6, endLine: 7 },
+        { type: "class", name: "Foo", startLine: 8, endLine: 15 },
+        { type: "function", name: "method", startLine: 11, endLine: 17 },
+        { type: "function", name: "top_level", startLine: 18, endLine: 22 },
+      ],
     },
   ],
   parity: {
     sampleDir: "python",
-    dependencyGraph: [
-      {
-        from: "relative-imports.py",
-        to: { type: "file", path: "utils.py" },
-      },
-      {
-        from: "relative-imports.py",
-        to: { type: "file", path: "helpers.py" },
-      },
-    ],
+    exact: {
+      dependencyGraph: [
+        {
+          from: "relative-imports.py",
+          to: { type: "file", path: "helpers.py" },
+        },
+        {
+          from: "relative-imports.py",
+          to: { type: "file", path: "utils.py" },
+        },
+        {
+          from: "utils.py",
+          to: { type: "file", path: "helpers.py" },
+        },
+      ],
+    },
     goToDefinition: [
       {
         name: "go to definition resolves a match keyword-pattern bound variable from its usage site",

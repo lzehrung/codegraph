@@ -3,7 +3,7 @@ import type { ParserLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../language
 import type { Range } from "../types.js";
 import { fileIdentityKey } from "../util/paths.js";
 import { sliceText, toRange } from "../util/ast.js";
-import { ensureParsedContext } from "./parse-context.js";
+import { ensureParsedContext, type ParsedFileContext } from "./parse-context.js";
 import { sameDef } from "./reference-context.js";
 import { readPhpNamespaceFromRange } from "./navigation-php.js";
 import { candidateFilesImportingTarget } from "./reference-candidates.js";
@@ -58,7 +58,11 @@ export async function buildPhpQualifiedNames(
   }
 }
 
-async function collectNamedNodeReferences(index: ProjectIndex, fileId: string, symbolName: string): Promise<Range[]> {
+async function collectNamedNodeReferences(
+  index: ProjectIndex,
+  fileId: string,
+  symbolName: string,
+): Promise<{ ranges: Range[]; parsed: ParsedFileContext } | null> {
   try {
     const parsedEntry = index.parsed?.get(fileIdentityKey(fileId));
     const parsed = await ensureParsedContext(fileId, parsedEntry);
@@ -69,19 +73,19 @@ async function collectNamedNodeReferences(index: ProjectIndex, fileId: string, s
       "type_identifier",
       "field_identifier",
     ]);
-    const matches: Range[] = [];
+    const ranges: Range[] = [];
     const walk = (node: SyntaxNodeLike): void => {
       if (identifierTypes.has(node.type) && sliceText(node, parsed.source) === symbolName) {
-        matches.push(toRange(node));
+        ranges.push(toRange(node));
       }
       for (const child of node.namedChildren) {
         walk(child);
       }
     };
     walk(parsed.tree.rootNode);
-    return matches;
+    return { ranges, parsed };
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -92,24 +96,32 @@ export async function collectVerifiedNamedNodeReferences(
   fileId: string,
   symbolName: string,
   expectedDef: SymbolDef,
-  resolveDefinition: (params: {
-    file: string;
-    line: number;
-    column: number;
-  }) => Promise<{ status: string; definition?: SymbolDef; provenance?: ResolutionProvenance }>,
+  resolveDefinition: (
+    params: {
+      file: string;
+      line: number;
+      column: number;
+    },
+    parsed: ParsedFileContext,
+  ) => Promise<{ status: string; definition?: SymbolDef; provenance?: ResolutionProvenance }>,
   maxVerified?: number,
 ): Promise<VerifiedNamedNodeReference[]> {
-  const matches = await collectNamedNodeReferences(index, fileId, symbolName);
+  const collected = await collectNamedNodeReferences(index, fileId, symbolName);
+  if (!collected) return [];
+  const { ranges, parsed } = collected;
   const verified: VerifiedNamedNodeReference[] = [];
-  for (const range of matches) {
+  for (const range of ranges) {
     if (maxVerified !== undefined && maxVerified > 0 && verified.length >= maxVerified) {
       break;
     }
-    const resolved = await resolveDefinition({
-      file: fileId,
-      line: range.start.line,
-      column: range.start.column,
-    });
+    const resolved = await resolveDefinition(
+      {
+        file: fileId,
+        line: range.start.line,
+        column: range.start.column,
+      },
+      parsed,
+    );
     if (resolved.status !== "ok" || !resolved.definition) continue;
     if (sameDef(resolved.definition, expectedDef)) {
       verified.push({ range, ...(resolved.provenance ? { provenance: resolved.provenance } : {}) });

@@ -124,3 +124,80 @@ export type ReviewBuildReport = {
 export type ReviewDiffMetadata = Pick<ReviewFileSummary, "oldFile" | "similarityIndex">;
 
 export type ReviewDiffChange = FileChange;
+
+/**
+ * Per-collection caps applied only when a `ReviewReport` crosses a bounded
+ * transport (currently the MCP `review` tool) — see
+ * `boundReviewReportForTransport`.
+ */
+export type ReviewTransportLimits = {
+  projectFiles: number;
+  changedFiles: number;
+  symbolsPerFile: number;
+  graphDelta: number;
+  candidateTests: number;
+};
+
+export const DEFAULT_REVIEW_TRANSPORT_LIMITS: ReviewTransportLimits = {
+  projectFiles: 300,
+  changedFiles: 50,
+  symbolsPerFile: 20,
+  graphDelta: 300,
+  candidateTests: 50,
+};
+
+export type ReviewTransportOmittedCounts = {
+  projectFiles: number;
+  changedFiles: number;
+  symbols: number;
+  graphDelta: number;
+  candidateTests: number;
+};
+
+export type ReviewReportForTransport = ReviewReport & {
+  limits: ReviewTransportLimits;
+  omittedCounts: ReviewTransportOmittedCounts;
+};
+
+/**
+ * Caps each top-level (and per-file nested `symbols`) collection in a
+ * `ReviewReport` for wire transports with hard payload/context limits, per
+ * finding #45. `summary` counts are left untouched so the numeric totals
+ * stay accurate even when the detailed listings are capped. Library callers
+ * that need the complete, unbounded report should call `buildReviewReport`
+ * directly instead of going through a bounded transport.
+ */
+export function boundReviewReportForTransport(
+  report: ReviewReport,
+  limits: ReviewTransportLimits = DEFAULT_REVIEW_TRANSPORT_LIMITS,
+): ReviewReportForTransport {
+  const projectFilesOmitted = report.projectFiles
+    ? Math.max(0, report.projectFiles.length - limits.projectFiles)
+    : 0;
+  const changedFilesOmitted = Math.max(0, report.changedFiles.length - limits.changedFiles);
+  const graphDeltaOmitted = Math.max(0, report.graphDelta.length - limits.graphDelta);
+  const candidateTestsOmitted = Math.max(0, report.candidateTests.length - limits.candidateTests);
+
+  let symbolsOmitted = 0;
+  const changedFiles = report.changedFiles.slice(0, limits.changedFiles).map((file) => {
+    const omitted = Math.max(0, file.symbols.length - limits.symbolsPerFile);
+    symbolsOmitted += omitted;
+    return omitted ? { ...file, symbols: file.symbols.slice(0, limits.symbolsPerFile) } : file;
+  });
+
+  return {
+    ...report,
+    ...(report.projectFiles ? { projectFiles: report.projectFiles.slice(0, limits.projectFiles) } : {}),
+    changedFiles,
+    graphDelta: report.graphDelta.slice(0, limits.graphDelta),
+    candidateTests: report.candidateTests.slice(0, limits.candidateTests),
+    limits,
+    omittedCounts: {
+      projectFiles: projectFilesOmitted,
+      changedFiles: changedFilesOmitted,
+      symbols: symbolsOmitted,
+      graphDelta: graphDeltaOmitted,
+      candidateTests: candidateTestsOmitted,
+    },
+  };
+}

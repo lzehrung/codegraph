@@ -207,8 +207,9 @@ describe("forgiving CLI inputs", () => {
 
   test("infers simple subcommands and positional query forms", async () => {
     const grepOutput = await runCliOrThrow(["grep", "target", "--root", root, "--json"]);
-    const grepResults: unknown = JSON.parse(grepOutput.stdout);
-    expect(grepResults).toEqual(expect.arrayContaining([expect.objectContaining({ file: "main.ts" })]));
+    const grepResults = jsonRecord(grepOutput.stdout);
+    expect(grepResults.items).toEqual(expect.arrayContaining([expect.objectContaining({ file: "main.ts" })]));
+    expect(grepResults.truncated).toBe(false);
 
     const packet = jsonRecord((await runCliOrThrow(["packet", "main.ts:1:17", "--root", root, "--json"])).stdout);
     expect(packet.kind).toBe("file");

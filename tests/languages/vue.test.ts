@@ -36,48 +36,54 @@ const definition: LanguageTestDefinition = {
   id: "vue",
   parity: {
     sampleDir: "vue",
-    dependencyGraph: [
-      {
-        from: "inline-script.vue",
-        to: { type: "file", path: "logic.ts" },
-      },
-      {
-        from: "script-setup.vue",
-        to: { type: "file", path: "logic.ts" },
-      },
-      {
-        from: "App.vue",
-        to: { type: "file", path: "Child.vue" },
-      },
-      {
-        from: "App.vue",
-        to: { type: "file", path: "logic.ts" },
-      },
-      {
-        from: "TsScript.vue",
-        to: { type: "file", path: "Child.vue" },
-      },
-      {
-        from: "TsScript.vue",
-        to: { type: "file", path: "logic.ts" },
-      },
-      {
-        from: "ExternalScripts.vue",
-        to: { type: "file", path: "logic.ts" },
-      },
-      {
-        from: "ExternalScripts.vue",
-        to: { type: "file", path: "extra.ts" },
-      },
-      {
-        from: "ExternalScripts.vue",
-        to: { type: "external", name: "https://cdn.example/vue-helper.js" },
-      },
-      {
-        from: "ExternalScripts.vue",
-        to: { type: "external", name: "./missing.ts" },
-      },
-    ],
+    exact: {
+      dependencyGraph: [
+        {
+          from: "App.vue",
+          to: { type: "file", path: "Child.vue" },
+        },
+        {
+          from: "App.vue",
+          to: { type: "file", path: "logic.ts" },
+        },
+        {
+          from: "Child.vue",
+          to: { type: "external", name: "./missing.ts" },
+        },
+        {
+          from: "ExternalScripts.vue",
+          to: { type: "external", name: "./missing.ts" },
+        },
+        {
+          from: "ExternalScripts.vue",
+          to: { type: "external", name: "https://cdn.example/vue-helper.js" },
+        },
+        {
+          from: "ExternalScripts.vue",
+          to: { type: "file", path: "extra.ts" },
+        },
+        {
+          from: "ExternalScripts.vue",
+          to: { type: "file", path: "logic.ts" },
+        },
+        {
+          from: "inline-script.vue",
+          to: { type: "file", path: "logic.ts" },
+        },
+        {
+          from: "script-setup.vue",
+          to: { type: "file", path: "logic.ts" },
+        },
+        {
+          from: "TsScript.vue",
+          to: { type: "file", path: "Child.vue" },
+        },
+        {
+          from: "TsScript.vue",
+          to: { type: "file", path: "logic.ts" },
+        },
+      ],
+    },
     absentDependencyGraph: [
       {
         from: "ExternalScripts.vue",

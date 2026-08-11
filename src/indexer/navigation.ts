@@ -51,7 +51,11 @@ import { findSqlReferences, goToSqlDefinition } from "../sql/navigation.js";
 
 export { resolveExport, resolveImported } from "./navigation-resolve.js";
 
-export async function goToDefinition(index: ProjectIndex, req: GoToRequest): Promise<GoToResult> {
+export async function goToDefinition(
+  index: ProjectIndex,
+  req: GoToRequest,
+  parsedContext?: ParsedFileContext,
+): Promise<GoToResult> {
   const { file, line, column } = req;
   const mod = index.byFile.get(fileIdentityKey(file));
   if (!mod) return { status: "not_found", reason: "File not indexed" };
@@ -59,8 +63,7 @@ export async function goToDefinition(index: ProjectIndex, req: GoToRequest): Pro
   const sqlResult = await goToSqlDefinition(index, req);
   if (sqlResult) return sqlResult;
 
-  const parsedEntry = index.parsed?.get(fileIdentityKey(file));
-  const context = await ensureParsedContext(file, parsedEntry);
+  const context = parsedContext ?? (await ensureParsedContext(file, index.parsed?.get(fileIdentityKey(file))));
   const sup = context.sup;
   const lang = context.lang;
   const source = context.source;
@@ -356,7 +359,7 @@ export async function findReferences(
             fileId,
             exportedName,
             def,
-            (params) => goToDefinition(index, params),
+            (params, parsed) => goToDefinition(index, params, parsed),
             remainingReferences,
           );
           for (const { range, provenance } of ranges) {
@@ -397,7 +400,7 @@ export async function findReferences(
           fileId,
           candidateName,
           def,
-          (params) => goToDefinition(index, params),
+          (params, parsed) => goToDefinition(index, params, parsed),
           remainingReferences,
         );
         for (const { range, provenance } of ranges) {
@@ -421,7 +424,7 @@ export async function findReferences(
         fileId,
         def.localName,
         def,
-        (params) => goToDefinition(index, params),
+        (params, parsed) => goToDefinition(index, params, parsed),
         remainingReferences,
       );
       for (const { range, provenance } of ranges) {
@@ -542,7 +545,7 @@ export async function collectNamespaceMemberRefs(
         const objectName = sliceText(obj, source);
         const propertyName = sliceText(prop, source);
         if (objectName === ns && propertyName === member) {
-          ranges.push(toRange(node));
+          ranges.push(toRange(prop));
         }
       }
     }

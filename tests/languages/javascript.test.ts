@@ -12,24 +12,29 @@ const definition: LanguageTestDefinition = {
     {
       name: "chunks basic JavaScript structures",
       sourceFile: "javascript.sample.js",
-      expectedChunks: (chunks) => {
-        expect(chunks.some((c) => c.type === "comment")).toBe(true);
-        expect(chunks.some((c) => c.type === "imports")).toBe(true);
-        expect(chunks.some((c) => c.type === "module_var" && c.name === "API_BASE_URL")).toBe(true);
-        expect(chunks.some((c) => c.type === "class" && c.name === "Foo")).toBe(true);
-        expect(chunks.some((c) => c.type === "method" && c.name === "bar")).toBe(true);
-        expect(chunks.some((c) => c.type === "function" && c.name === "baz")).toBe(true);
-      },
+      exactChunks: [
+        { type: "comment", startLine: 1, endLine: 2 },
+        { type: "imports", startLine: 3, endLine: 4 },
+        { type: "module_var", name: "API_BASE_URL", startLine: 5, endLine: 6 },
+        { type: "class", name: "Foo", startLine: 7, endLine: 18 },
+        { type: "method", name: "constructor", startLine: 8, endLine: 10 },
+        { type: "method", name: "bar", startLine: 12, endLine: 17 },
+        { type: "misc", startLine: 18, endLine: 19 },
+        { type: "comment", startLine: 20, endLine: 20 },
+        { type: "function", name: "baz", startLine: 21, endLine: 23 },
+      ],
     },
   ],
   parity: {
     sampleDir: "javascript",
-    dependencyGraph: [
-      {
-        from: "dynamic-import.js",
-        to: { type: "file", path: "helpers.js" },
-      },
-    ],
+    exact: {
+      dependencyGraph: [
+        {
+          from: "dynamic-import.js",
+          to: { type: "file", path: "helpers.js" },
+        },
+      ],
+    },
   },
 };
 

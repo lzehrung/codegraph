@@ -1,4 +1,4 @@
-import type { ProjectIndex } from "../indexer/types.js";
+import type { ProjectIndex, ResolvedExport } from "../indexer/types.js";
 import { resolveExport, resolveModuleExports } from "../indexer/navigation-resolve.js";
 import type { FileId, Range } from "../types.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
@@ -103,6 +103,8 @@ export async function buildSymbolGraph(index: ProjectIndex, opts?: BuildSymbolGr
   const edges: SymbolEdge[] = [];
   const seenEdges = new Set<string>();
   const includedFiles = normalizeFileFilter(opts?.files);
+  const exportResolutions = new Map<string, ResolvedExport | null>();
+  const moduleExportResolutions = new Map<string, Map<string, ResolvedExport>>();
 
   const shouldIncludeFile = (file: FileId): boolean => {
     if (!includedFiles) return true;
@@ -117,7 +119,14 @@ export async function buildSymbolGraph(index: ProjectIndex, opts?: BuildSymbolGr
   };
 
   const addDefinitionEdge = (aliasId: string, targetFile: FileId, exportedName: string, label: string): void => {
-    const resolved = resolveExport(index, targetFile, exportedName);
+    const resolutionKey = `${fileIdentityKey(targetFile)}::${exportedName}`;
+    let resolved: ResolvedExport | null;
+    if (exportResolutions.has(resolutionKey)) {
+      resolved = exportResolutions.get(resolutionKey)!;
+    } else {
+      resolved = resolveExport(index, targetFile, exportedName);
+      exportResolutions.set(resolutionKey, resolved);
+    }
     if (!resolved || resolved.kind !== "resolved") return;
     const def = resolved.def;
     const targetId = defNodeId(def);
@@ -173,7 +182,14 @@ export async function buildSymbolGraph(index: ProjectIndex, opts?: BuildSymbolGr
           });
         }
         if (targetFile) {
-          const exports = resolveModuleExports(index, targetFile, { allowLocalFallback: false });
+          const targetKey = fileIdentityKey(targetFile);
+          let exports: Map<string, ResolvedExport>;
+          if (moduleExportResolutions.has(targetKey)) {
+            exports = moduleExportResolutions.get(targetKey)!;
+          } else {
+            exports = resolveModuleExports(index, targetFile, { allowLocalFallback: false });
+            moduleExportResolutions.set(targetKey, exports);
+          }
           for (const [exportedName, resolved] of exports) {
             if (resolved.kind !== "resolved") continue;
             const def = resolved.def;

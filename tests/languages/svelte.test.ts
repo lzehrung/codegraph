@@ -36,48 +36,54 @@ const definition: LanguageTestDefinition = {
   id: "svelte",
   parity: {
     sampleDir: "svelte",
-    dependencyGraph: [
-      {
-        from: "inline-script.svelte",
-        to: { type: "file", path: "logic.ts" },
-      },
-      {
-        from: "reactive.svelte",
-        to: { type: "file", path: "logic.ts" },
-      },
-      {
-        from: "App.svelte",
-        to: { type: "file", path: "Widget.svelte" },
-      },
-      {
-        from: "App.svelte",
-        to: { type: "file", path: "logic.ts" },
-      },
-      {
-        from: "TypeScriptWidget.svelte",
-        to: { type: "file", path: "Widget.svelte" },
-      },
-      {
-        from: "TypeScriptWidget.svelte",
-        to: { type: "file", path: "logic.ts" },
-      },
-      {
-        from: "ExternalScripts.svelte",
-        to: { type: "file", path: "logic.ts" },
-      },
-      {
-        from: "ExternalScripts.svelte",
-        to: { type: "file", path: "extra.ts" },
-      },
-      {
-        from: "ExternalScripts.svelte",
-        to: { type: "external", name: "https://cdn.example/svelte-helper.js" },
-      },
-      {
-        from: "ExternalScripts.svelte",
-        to: { type: "external", name: "./missing.ts" },
-      },
-    ],
+    exact: {
+      dependencyGraph: [
+        {
+          from: "App.svelte",
+          to: { type: "file", path: "logic.ts" },
+        },
+        {
+          from: "App.svelte",
+          to: { type: "file", path: "Widget.svelte" },
+        },
+        {
+          from: "ExternalScripts.svelte",
+          to: { type: "external", name: "./missing.ts" },
+        },
+        {
+          from: "ExternalScripts.svelte",
+          to: { type: "external", name: "https://cdn.example/svelte-helper.js" },
+        },
+        {
+          from: "ExternalScripts.svelte",
+          to: { type: "file", path: "extra.ts" },
+        },
+        {
+          from: "ExternalScripts.svelte",
+          to: { type: "file", path: "logic.ts" },
+        },
+        {
+          from: "inline-script.svelte",
+          to: { type: "file", path: "logic.ts" },
+        },
+        {
+          from: "reactive.svelte",
+          to: { type: "file", path: "logic.ts" },
+        },
+        {
+          from: "TypeScriptWidget.svelte",
+          to: { type: "file", path: "logic.ts" },
+        },
+        {
+          from: "TypeScriptWidget.svelte",
+          to: { type: "file", path: "Widget.svelte" },
+        },
+        {
+          from: "Widget.svelte",
+          to: { type: "external", name: "./missing.ts" },
+        },
+      ],
+    },
     absentDependencyGraph: [
       {
         from: "ExternalScripts.svelte",

@@ -13,39 +13,68 @@ const definition: LanguageTestDefinition = {
     {
       name: "chunks Ruby structures",
       sourceFile: "ruby.sample.rb",
-      expectedChunks: (chunks) => {
-        expect(chunks.some((c) => c.type === "module" && c.name === "MyModule")).toBe(true);
-        expect(chunks.some((c) => c.type === "class" && c.name === "MyClass")).toBe(true);
-        expect(chunks.some((c) => c.type === "method" && c.name === "my_method")).toBe(true);
-      },
+      exactChunks: [
+        { type: "comment", startLine: 1, endLine: 1 },
+        { type: "module", name: "MyModule", startLine: 2, endLine: 12 },
+        { type: "class", name: "MyClass", startLine: 3, endLine: 11 },
+        { type: "method", name: "my_method", startLine: 4, endLine: 6 },
+        { type: "method", name: "static_method", startLine: 8, endLine: 10 },
+        { type: "misc", startLine: 12, endLine: 16 },
+      ],
     },
   ],
   parity: {
     sampleDir: "ruby",
-    dependencyGraph: [
-      {
-        from: "main.rb",
-        to: { type: "file", path: "utils.rb" },
-      },
-      {
-        from: "main.rb",
-        to: { type: "file", path: "helpers.rb" },
-      },
-      {
-        from: "consumer.rb",
-        to: { type: "file", path: "namespaced.rb" },
-      },
-    ],
-    symbols: [
-      {
-        file: "namespaced.rb",
-        includes: [{ name: "Outer" }, { name: "Inner" }, { name: "Tool" }],
-      },
-      {
-        file: ".regressions/struct_point.rb",
-        includes: [{ name: "Point", kind: "class" }],
-      },
-    ],
+    exact: {
+      dependencyGraph: [
+        {
+          from: "consumer.rb",
+          to: { type: "file", path: "namespaced.rb" },
+        },
+        {
+          from: "main.rb",
+          to: { type: "file", path: "helpers.rb" },
+        },
+        {
+          from: "main.rb",
+          to: { type: "file", path: "utils.rb" },
+        },
+      ],
+      symbols: [
+        {
+          file: "namespaced.rb",
+          symbols: [
+            { name: "Outer", kind: "class" },
+            { name: "Inner", kind: "class" },
+            { name: "VALUE", kind: "variable" },
+            { name: "Tool", kind: "class" },
+          ],
+        },
+        {
+          file: ".regressions/struct_point.rb",
+          symbols: [
+            { name: "Point", kind: "class" },
+            { name: "point", kind: "variable" },
+          ],
+        },
+      ],
+      references: [
+        {
+          name: "find references for namespaced class",
+          file: "namespaced.rb",
+          line: 5,
+          column: 11,
+          exactCount: 2,
+        },
+        {
+          name: "finds Struct.new class assignment references",
+          file: ".regressions/struct_point.rb",
+          line: 1,
+          column: 1,
+          exactCount: 2,
+        },
+      ],
+    },
     goToDefinition: [
       {
         name: "go to definition resolves namespaced class use",
@@ -60,22 +89,6 @@ const definition: LanguageTestDefinition = {
         line: 3,
         column: 9,
         expectedDefinition: { file: ".regressions/struct_point.rb", line: 1 },
-      },
-    ],
-    references: [
-      {
-        name: "find references for namespaced class",
-        file: "namespaced.rb",
-        line: 5,
-        column: 11,
-        minimumCount: 2,
-      },
-      {
-        name: "finds Struct.new class assignment references",
-        file: ".regressions/struct_point.rb",
-        line: 1,
-        column: 1,
-        minimumCount: 2,
       },
     ],
   },

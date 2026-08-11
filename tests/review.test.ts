@@ -13,6 +13,7 @@ import {
 import * as indexerBuild from "../src/indexer/build-index.js";
 import * as indexerNavigation from "../src/indexer/navigation.js";
 import type { BuildReport, IncrementalBuildOptions, SymbolDef } from "../src/indexer/types.js";
+import { boundReviewReportForTransport, DEFAULT_REVIEW_TRANSPORT_LIMITS } from "../src/review/types.js";
 import { summarizeChangedFiles } from "../src/review/summaries.js";
 import { fileIdentityKey } from "../src/util/paths.js";
 import * as impactMap from "../src/impact/map.js";
@@ -2370,6 +2371,119 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
         reason: "changedTest",
       },
     ]);
+  });
+});
+
+describe("boundReviewReportForTransport", () => {
+  function makeBaseReport(overrides: Partial<ReviewReport> = {}): ReviewReport {
+    return {
+      schemaVersion: 2,
+      status: "ok",
+      projectFiles: [],
+      summary: { filesChanged: 0, symbolsChanged: 0, candidateTests: 0 },
+      riskSummary: { level: "low", score: 0, signals: [] },
+      reviewTasks: [],
+      changedFiles: [],
+      graphDelta: [],
+      candidateTests: [],
+      ...overrides,
+    };
+  }
+
+  it("reports truncated collections as-is with zero omitted counts when under every limit", async () => {
+    const { boundReviewReportForTransport, DEFAULT_REVIEW_TRANSPORT_LIMITS } = await import(
+      "../src/review/types.js"
+    );
+    const report = makeBaseReport({
+      changedFiles: [{ file: "a.ts", status: "updated", symbols: [] }],
+      graphDelta: [{ from: "a.ts", to: { type: "file", path: "b.ts" }, raw: "./b" }],
+    });
+
+    const bounded = boundReviewReportForTransport(report);
+
+    expect(bounded.limits).toEqual(DEFAULT_REVIEW_TRANSPORT_LIMITS);
+    expect(bounded.omittedCounts).toEqual({
+      projectFiles: 0,
+      changedFiles: 0,
+      symbols: 0,
+      graphDelta: 0,
+      candidateTests: 0,
+    });
+    expect(bounded.changedFiles).toEqual(report.changedFiles);
+    expect(bounded.graphDelta).toEqual(report.graphDelta);
+    expect(bounded.summary).toEqual(report.summary);
+  });
+
+  it("caps each collection (including per-file symbols) and reports exact omitted counts when a report exceeds the limits", async () => {
+    const { boundReviewReportForTransport } = await import("../src/review/types.js");
+    const limits = { projectFiles: 3, changedFiles: 2, symbolsPerFile: 2, graphDelta: 3, candidateTests: 2 };
+    const changedFiles = Array.from({ length: 5 }, (_, fileIndex) => ({
+      file: `file-${fileIndex}.ts`,
+      status: "updated" as const,
+      symbols: Array.from({ length: 4 }, (_, symbolIndex) => ({
+        name: `sym${symbolIndex}`,
+        kind: "function",
+        handle: `file-${fileIndex}.ts::sym${symbolIndex}`,
+        exported: true,
+      })),
+    }));
+    const report = makeBaseReport({
+      projectFiles: Array.from({ length: 6 }, (_, i) => ({
+        path: `p${i}.ts`,
+        kind: "file",
+        type: "typescript",
+        role: "manifest",
+        projectRoot: ".",
+      })),
+      summary: { filesChanged: 5, symbolsChanged: 20, candidateTests: 5 },
+      changedFiles,
+      graphDelta: Array.from({ length: 8 }, (_, i) => ({
+        from: `a${i}.ts`,
+        to: { type: "file" as const, path: `b${i}.ts` },
+        raw: `./b${i}`,
+      })),
+      candidateTests: Array.from({ length: 5 }, (_, i) => ({
+        file: `t${i}.test.ts`,
+        confidence: "low" as const,
+        reason: "pattern" as const,
+      })),
+    });
+
+    const bounded = boundReviewReportForTransport(report, limits);
+
+    expect(bounded.limits).toEqual(limits);
+    expect(bounded.projectFiles).toHaveLength(3);
+    expect(bounded.changedFiles).toHaveLength(2);
+    expect(bounded.changedFiles.every((file) => file.symbols.length <= 2)).toBe(true);
+    expect(bounded.graphDelta).toHaveLength(3);
+    expect(bounded.candidateTests).toHaveLength(2);
+    // Numeric summary totals stay accurate even though the detailed listings are capped.
+    expect(bounded.summary).toEqual(report.summary);
+    expect(bounded.omittedCounts).toEqual({
+      projectFiles: 3,
+      changedFiles: 3,
+      symbols: 4,
+      graphDelta: 5,
+      candidateTests: 3,
+    });
+  });
+
+  it("keeps the library path (buildReviewReport called directly) fully unbounded", async () => {
+    const root = await mkTmpDir("dg-review-transport-library-path-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    const files = await Promise.all(
+      Array.from({ length: 60 }, async (_, index) => {
+        const filePath = path.join(srcDir, `file-${index}.ts`);
+        await fsp.writeFile(filePath, `export const value${index} = ${index};\n`, "utf8");
+        return filePath;
+      }),
+    );
+
+    await buildProjectIndex(root, { cache: "disk" });
+    const report = await buildReviewReport(root, { files });
+
+    expect(report.changedFiles.length).toBe(60);
   });
 });
 
