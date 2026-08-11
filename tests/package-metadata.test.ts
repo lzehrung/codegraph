@@ -696,7 +696,7 @@ describe("package metadata", () => {
     }
   });
 
-  it("keeps the public API boundary documented around the root package export", () => {
+  it("keeps public package boundaries documented", () => {
     const rootPackage = readJson("package.json");
     const rootExports = rootPackage.exports;
     expect(rootExports).toBeDefined();
@@ -717,16 +717,16 @@ describe("package metadata", () => {
 
     const libraryApi = readText("docs/library-api.md");
     expect(libraryApi).toContain("## Public API Boundary");
-    expect(libraryApi).toContain("@lzehrung/codegraph/agent");
-    expect(libraryApi).toContain("@lzehrung/codegraph/graphs");
-    expect(libraryApi).toContain("@lzehrung/codegraph/indexer");
-    expect(libraryApi).toContain("@lzehrung/codegraph/impact");
-    expect(libraryApi).toContain("@lzehrung/codegraph/languages");
+    expect(libraryApi).toContain("@lzehrung/codegraph-core/agent");
+    expect(libraryApi).toContain("@lzehrung/codegraph-core/graphs");
+    expect(libraryApi).toContain("@lzehrung/codegraph-core/indexer");
+    expect(libraryApi).toContain("@lzehrung/codegraph-core/impact");
+    expect(libraryApi).toContain("@lzehrung/codegraph-core/languages");
     expect(libraryApi).toContain("@lzehrung/codegraph/mcp");
     expect(libraryApi).toContain("Public-stable APIs");
     expect(libraryApi).toContain("Public-legacy APIs");
     expect(libraryApi).toContain("Internal-only modules");
-    expect(libraryApi).toContain("@lzehrung/codegraph/dist/...");
+    expect(libraryApi).toContain("@lzehrung/codegraph-core/dist/...");
 
     const readme = readText("README.md");
     expect(readme).toContain("./docs/library-api.md#public-api-boundary");

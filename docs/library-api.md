@@ -6,8 +6,8 @@ For sessions, streaming workflows, tool wrappers, and review-oriented recipes, s
 
 ## Runtime model
 
-Import from `@lzehrung/codegraph` or one of its documented subpath facades and
-call the API directly.
+Import from `@lzehrung/codegraph-core` or one of its documented library subpaths
+and call the API directly.
 
 The library defaults to `native: "auto"`, which uses the native Tree-sitter path when `@lzehrung/codegraph-native` is installed for the current platform and falls back automatically otherwise.
 
@@ -17,7 +17,7 @@ Override that per call with `native: "on"` or `native: "off"`.
 - `native: "off"` disables native explicitly and runs reduced graph-only and regex recovery mode.
 
 ```ts
-import { buildProjectIndex } from "@lzehrung/codegraph";
+import { buildProjectIndex } from "@lzehrung/codegraph-core";
 
 const index = await buildProjectIndex(process.cwd(), { native: "auto" });
 const reducedIndex = await buildProjectIndex(process.cwd(), { native: "off" });
@@ -33,7 +33,7 @@ One Node.js process uses one filesystem case-sensitivity mode for file identity.
 CLI commands and agent sessions read `codegraph.config.json` from the project root when it exists. Core indexing APIs keep discovery and language mappings explicit, so pass both options directly when you want the same behavior in custom code:
 
 ```ts
-import { buildProjectIndex, loadCodegraphConfig } from "@lzehrung/codegraph";
+import { buildProjectIndex, loadCodegraphConfig } from "@lzehrung/codegraph-core";
 
 const root = process.cwd();
 const config = await loadCodegraphConfig(root);
@@ -51,25 +51,22 @@ const index = await buildProjectIndex(root, {
 The published packages expose these documented entry points:
 
 - `@lzehrung/codegraph-core` for the slim library install without CLI, MCP, installer, or graph-viewer assets. Prefer it for library-only consumers. It mirrors the core and `./agent` / `./graphs` / `./impact` / `./indexer` / `./languages` entrypoints below.
-- `@lzehrung/codegraph` for the product package (CLI/MCP/viewer/installer) and a convenience re-export of the core library surface: project indexing, graphs,
-  impact analysis, `CodeReviewSession`, SQLite/SQL helpers, semantic chunking,
-  duplicate detection, architecture drift, review reports, config loading, language
-  metadata, native runtime capability checks, and `indexer` query\* aliases.
-- `@lzehrung/codegraph/agent` for agent sessions, live file views,
+- `@lzehrung/codegraph` for the product package (CLI/MCP/viewer/installer) and a convenience re-export of the core library surface.
+- `@lzehrung/codegraph-core/agent` for agent sessions, live file views,
   orient/search/explain/explore/packet helpers, semantic hierarchy, rename and
   refactor helpers, and `tool_*` wrappers. This subpath does **not** include MCP
   server or CLI string-formatters.
-- `@lzehrung/codegraph/graphs` for graph builders, graph queries, renderers,
+- `@lzehrung/codegraph-core/graphs` for graph builders, graph queries, renderers,
   symbol graphs, grep, hotspots, cycles, and unresolved-import helpers.
-- `@lzehrung/codegraph/indexer` for project indexing, workspace-symbol lookup,
+- `@lzehrung/codegraph-core/indexer` for project indexing, workspace-symbol lookup,
   navigation, references, symbols, and API-surface analysis.
-- `@lzehrung/codegraph/impact` for diff impact analysis, streaming impact
+- `@lzehrung/codegraph-core/impact` for diff impact analysis, streaming impact
   reports, impact context, and candidate test helpers.
-- `@lzehrung/codegraph/languages` for language-support metadata.
+- `@lzehrung/codegraph-core/languages` for language-support metadata.
 - `@lzehrung/codegraph/mcp` for `createCodegraphMcpHandlers`,
-  `listCodegraphMcpTools`, and `serveCodegraphMcp`.
+  `listCodegraphMcpTools`, and `serveCodegraphMcp`; it requires the product package.
 
-Do not import from generated paths such as `@lzehrung/codegraph/dist/...` or
+Do not import from generated paths such as `@lzehrung/codegraph-core/dist/...` or
 repo-internal source paths. Those modules are implementation details and can
 move during refactors.
 
@@ -100,7 +97,7 @@ not covered by semver.
 
 `resolveSymbolTarget(index, input)` is the index-level capability for turning a
 known target into one reusable `SymbolHandle` and `SymbolDef`. It is exported
-from the root package and `@lzehrung/codegraph-core/indexer`; it does not build
+from the core root package and `@lzehrung/codegraph-core/indexer`; it does not build
 or refresh an index.
 
 It accepts a canonical `symbolId()` handle, project-relative
@@ -137,11 +134,11 @@ outcomes are required.
 
 ## Workspace-symbol lookup
 
-The root package exports the index-level function as `queryWorkspaceSymbols(index, request)`. `@lzehrung/codegraph/indexer` exports it as `workspaceSymbols`. `@lzehrung/codegraph/agent` exports agent-level `workspaceSymbols(request)` and `workspaceSymbolsWithSession(session, request)`.
+The core root package exports the index-level function as `queryWorkspaceSymbols(index, request)`. `@lzehrung/codegraph-core/indexer` exports it as `workspaceSymbols`. `@lzehrung/codegraph-core/agent` exports agent-level `workspaceSymbols(request)` and `workspaceSymbolsWithSession(session, request)`.
 
 ```ts
-import { SymbolKind } from "@lzehrung/codegraph";
-import { createAgentSession, workspaceSymbolsWithSession } from "@lzehrung/codegraph/agent";
+import { SymbolKind } from "@lzehrung/codegraph-core";
+import { createAgentSession, workspaceSymbolsWithSession } from "@lzehrung/codegraph-core/agent";
 
 const root = process.cwd();
 const session = createAgentSession({ root });
@@ -159,14 +156,14 @@ Requests accept `query`, `kinds`, `exportedOnly`, `includeImports`, `fileGlob`, 
 
 `WorkspaceSymbolsResponse` includes the shared semantic envelope, query, symbols, and total candidates. Symbols are deterministic and project-relative; resolvable named/default import aliases keep their binding location but use a portable handle for the declaration, while namespace/star aliases, unresolved aliases, and failed import scans contribute explicit omission counts.
 
-For tool hosts, `tool_workspaceSymbols(root, request, runtimeOptions)` is exported from `@lzehrung/codegraph/agent` and accepts an optional warm `AgentSession` or build options, but not both. Shared semantic location, provenance, omission, symbol, and response-envelope types are exported from `@lzehrung/codegraph/agent`.
+For tool hosts, `tool_workspaceSymbols(root, request, runtimeOptions)` is exported from `@lzehrung/codegraph-core/agent` and accepts an optional warm `AgentSession` or build options, but not both. Shared semantic location, provenance, omission, symbol, and response-envelope types are exported from `@lzehrung/codegraph-core/agent`.
 
 ## Call hierarchy
 
-`@lzehrung/codegraph/agent` exports `findCallers`, `findCallees`, and their `WithSession` variants. Requests use `root`, a portable callable `handle`, optional `depth` from 1 to 5, optional `limit` from 0 to 500, optional `includeHeuristic`, and optional standalone `buildOptions`.
+`@lzehrung/codegraph-core/agent` exports `findCallers`, `findCallees`, and their `WithSession` variants. Requests use `root`, a portable callable `handle`, optional `depth` from 1 to 5, optional `limit` from 0 to 500, optional `includeHeuristic`, and optional standalone `buildOptions`.
 
 ```ts
-import { createAgentSession, findCallersWithSession } from "@lzehrung/codegraph/agent";
+import { createAgentSession, findCallersWithSession } from "@lzehrung/codegraph-core/agent";
 
 const root = process.cwd();
 const session = createAgentSession({ root });
@@ -180,14 +177,18 @@ const result = await findCallersWithSession(session, {
 
 Responses group exact project-relative callsites under deterministic related symbols and report freshness, provenance, effective limits, and separate symbol, callsite, and unresolved-site omissions. Current extraction returns resolved semantic `calls` edges only; `includeHeuristic` is accepted but does not infer dynamic dispatch or promote imports, references, or file dependencies into calls.
 
-The root exposes the index-core operation as `queryCallHierarchy(graph, id, direction, options)`; `@lzehrung/codegraph/indexer` exports it as `findCallHierarchy`. Tool hosts can use `tool_findCallers` and `tool_findCallees` from `@lzehrung/codegraph/agent` with either a warm session or build options, but not both.
+The core root package exposes the index-core operation as `queryCallHierarchy(graph, id, direction, options)`; `@lzehrung/codegraph-core/indexer` exports it as `findCallHierarchy`. Tool hosts can use `tool_findCallers` and `tool_findCallees` from `@lzehrung/codegraph-core/agent` with either a warm session or build options, but not both.
 
 ## Type hierarchy and implementations
 
-`@lzehrung/codegraph/agent` exports `findSupertypes`, `findSubtypes`, `findImplementations`, and their `WithSession` variants. Requests use `root`, a portable symbol `handle`, optional `limit`, optional hierarchy `depth`, and optional standalone `buildOptions`.
+`@lzehrung/codegraph-core/agent` exports `findSupertypes`, `findSubtypes`, `findImplementations`, and their `WithSession` variants. Requests use `root`, a portable symbol `handle`, optional `limit`, optional hierarchy `depth`, and optional standalone `buildOptions`.
 
 ```ts
-import { createAgentSession, findSubtypesWithSession, workspaceSymbolsWithSession } from "@lzehrung/codegraph/agent";
+import {
+  createAgentSession,
+  findSubtypesWithSession,
+  workspaceSymbolsWithSession,
+} from "@lzehrung/codegraph-core/agent";
 
 const root = process.cwd();
 const session = createAgentSession({ root });
@@ -206,16 +207,16 @@ if (service) {
 
 Hierarchy depth defaults to 1 and caps at 10; hierarchy and implementation results default to 100 and cap at 500. Responses use the shared semantic envelope with exact project-relative symbols, declaration or relation sites when extraction provides them, provenance, effective limits, and omission counts.
 
-The root aliases index-core functions as `queryTypeHierarchy(graph, id, direction, options)` and `queryImplementations(index, graph, id, options)`; `@lzehrung/codegraph/indexer` exports them as `findTypeHierarchy` and `findImplementations`. Tool hosts can use `tool_findSupertypes`, `tool_findSubtypes`, and `tool_findImplementations` from `@lzehrung/codegraph/agent` with either a warm session or build options, but not both.
+The core root aliases index-core functions as `queryTypeHierarchy(graph, id, direction, options)` and `queryImplementations(index, graph, id, options)`; `@lzehrung/codegraph-core/indexer` exports them as `findTypeHierarchy` and `findImplementations`. Tool hosts can use `tool_findSupertypes`, `tool_findSubtypes`, and `tool_findImplementations` from `@lzehrung/codegraph-core/agent` with either a warm session or build options, but not both.
 
 Only proven indexed `extends` and `implements` relationships participate. Implementation targets are limited to interfaces, traits, abstract types, and members with proven implementation or override relationships; results identify exact implementing declarations, deduplicate inherited declarations, and reject unresolved overload identity instead of inferring same-name matches.
 
 ## Rename preview
 
-`@lzehrung/codegraph/agent` exports `previewRename`, `previewRenameWithSession`, and `previewRenameInSnapshot`. `RenamePreviewRequest` uses `root`, a portable symbol `handle`, `newName`, optional comment, string, and filename inclusion flags, optional `maxEdits`, and optional standalone `buildOptions`.
+`@lzehrung/codegraph-core/agent` exports `previewRename`, `previewRenameWithSession`, and `previewRenameInSnapshot`. `RenamePreviewRequest` uses `root`, a portable symbol `handle`, `newName`, optional comment, string, and filename inclusion flags, optional `maxEdits`, and optional standalone `buildOptions`.
 
 ```ts
-import { createAgentSession, previewRenameWithSession } from "@lzehrung/codegraph/agent";
+import { createAgentSession, previewRenameWithSession } from "@lzehrung/codegraph-core/agent";
 
 const root = process.cwd();
 const session = createAgentSession({ root });
@@ -229,14 +230,14 @@ const preview = await previewRenameWithSession(session, {
 
 `RenamePreviewResponse` returns the target, proposed name, `safe`, exact project-relative edits, conflicts, unsafe sites, filename suggestions, candidate tests, provenance, freshness, limits, and omissions. Exported concrete types include `RenameEdit`, `RenameEditKind`, `RenameConflict`, `RenameUnsafeSite`, `RenameFilenameSuggestion`, and `RenameCandidateTest`.
 
-`tool_previewRename(root, request, runtimeOptions)` from `@lzehrung/codegraph/agent` accepts either a shared `AgentSession` or build options, but not both, and returns the shared response unchanged. All rename-preview entry points are read-only: eligible exported class, interface, and type filenames produce suggestions only, project files are never changed, and no apply API exists.
+`tool_previewRename(root, request, runtimeOptions)` from `@lzehrung/codegraph-core/agent` accepts either a shared `AgentSession` or build options, but not both, and returns the shared response unchanged. All rename-preview entry points are read-only: eligible exported class, interface, and type filenames produce suggestions only, project files are never changed, and no apply API exists.
 
 ## Refactor evidence plans
 
-`@lzehrung/codegraph/agent` exports `buildRefactorPlan`, `buildRefactorPlanWithSession`, and `buildRefactorPlanInSnapshot`, plus `RefactorPlanRequest`, `RefactorPlanResponse`, and `RefactorPlanSectionIssue`. A request accepts `root`, a portable search or workspace-symbol handle or exact internal review/impact symbol handle, optional `renameTo`, independent `maxReferences`, `maxCallers`, and `maxHierarchy` bounds from 0 to 500, optional `includeSource`, and optional standalone `buildOptions`.
+`@lzehrung/codegraph-core/agent` exports `buildRefactorPlan`, `buildRefactorPlanWithSession`, and `buildRefactorPlanInSnapshot`, plus `RefactorPlanRequest`, `RefactorPlanResponse`, and `RefactorPlanSectionIssue`. A request accepts `root`, a portable search or workspace-symbol handle or exact internal review/impact symbol handle, optional `renameTo`, independent `maxReferences`, `maxCallers`, and `maxHierarchy` bounds from 0 to 500, optional `includeSource`, and optional standalone `buildOptions`.
 
 ```ts
-import { buildRefactorPlanWithSession, createAgentSession } from "@lzehrung/codegraph/agent";
+import { buildRefactorPlanWithSession, createAgentSession } from "@lzehrung/codegraph-core/agent";
 
 const root = process.cwd();
 const session = createAgentSession({ root });
@@ -252,11 +253,11 @@ const plan = await buildRefactorPlanWithSession(session, {
 
 One session load and freshness decision feed the target, definition, references, callers, callees, supertypes, subtypes, implementations, candidate tests, and follow-ups. Unsupported implementation sections appear in `plan.sectionIssues` and contribute an omission instead of silently looking complete; internal input handles are normalized to a portable target handle, and nested `plan.rename.safe` remains authoritative when present.
 
-`tool_buildRefactorPlan(root, request, runtimeOptions)` from `@lzehrung/codegraph/agent` accepts either a shared `AgentSession` or build options, but not both. Every entry point returns evidence only, never writes source, and exposes no apply API.
+`tool_buildRefactorPlan(root, request, runtimeOptions)` from `@lzehrung/codegraph-core/agent` accepts either a shared `AgentSession` or build options, but not both. Every entry point returns evidence only, never writes source, and exposes no apply API.
 
 ## Live file views
 
-`getCodegraphFileView()` reads a confined project file directly from disk. `getCodegraphFileViewWithSession()` accepts an existing `AgentSession` for optional graph reuse, and `formatAgentFileViewResponse()` renders the same response as stable pretty text. All three are exported from `@lzehrung/codegraph/agent`.
+`getCodegraphFileView()` reads a confined project file directly from disk. `getCodegraphFileViewWithSession()` accepts an existing `AgentSession` for optional graph reuse, and `formatAgentFileViewResponse()` renders the same response as stable pretty text. All three are exported from `@lzehrung/codegraph-core/agent`.
 
 ```ts
 import {
@@ -264,7 +265,7 @@ import {
   formatAgentFileViewResponse,
   getCodegraphFileView,
   getCodegraphFileViewWithSession,
-} from "@lzehrung/codegraph/agent";
+} from "@lzehrung/codegraph-core/agent";
 
 const page = await getCodegraphFileView({
   root: process.cwd(),
@@ -303,14 +304,14 @@ Graph context defaults off, so a plain call neither creates nor consults an inde
 
 Within the 16 MiB input limit, ordinary reads and structural summaries for recognized environment, authentication, and credential text configs validate the full raw stream before returning bounded content or extracting bounded keys; known binary extensions, NUL bytes, and malformed or incomplete UTF-8 are rejected. Default key-material summaries use file metadata, may report size, and do not read raw secret bytes; `allowSensitive: true` requests raw values but does not bypass the input-size, binary, NUL, or UTF-8 guards, so `.p12` and `.pfx` bundles summarize by default and reject raw access. For text-config summaries, `truncated` reports an incomplete bounded structural scan.
 
-`@lzehrung/codegraph/agent` exports these functions, constants, `AgentFileViewRequest`, `AgentFileViewResponse`, `AgentFileGraphContext`, `AgentFileViewSensitiveInfo`, and `AgentFileViewSensitiveKind`.
+`@lzehrung/codegraph-core/agent` exports these functions, constants, `AgentFileViewRequest`, `AgentFileViewResponse`, `AgentFileGraphContext`, `AgentFileViewSensitiveInfo`, and `AgentFileViewSensitiveKind`.
 
 ## Agent packets
 
-`@lzehrung/codegraph/agent` exports `orientCodegraph()` for compact first-turn context and `getCodegraphPacket()` for bounded evidence by file path, symbol name, SQL object name, or stable target:
+`@lzehrung/codegraph-core/agent` exports `orientCodegraph()` for compact first-turn context and `getCodegraphPacket()` for bounded evidence by file path, symbol name, SQL object name, or stable target:
 
 ```ts
-import { getCodegraphPacket, orientCodegraph } from "@lzehrung/codegraph/agent";
+import { getCodegraphPacket, orientCodegraph } from "@lzehrung/codegraph-core/agent";
 
 const orientation = await orientCodegraph({
   root: process.cwd(),
@@ -334,7 +335,7 @@ Small orientation budgets default to `health: "skip"` and set health fields to `
 
 ## Agent search
 
-`@lzehrung/codegraph/agent` exports `searchCodegraph()` for deterministic, agent-ready anchors across files, symbols, chunks, SQL objects, and optional graph neighborhoods. Hybrid search is code-first by default, so implementation files and symbols outrank docs unless `mode: "text"` is explicit or docs are the strongest remaining evidence. Identifier-like queries stay symbol-first. Pure `path` and `text` searches skip detailed symbol graph construction; hybrid, symbol, SQL, and graph searches keep symbol-aware ranking and neighbors. Handles are project-relative and explainable; result packets include top-level `analysis`, per-result `provenance`, `resultCount`, `totalCandidates`, `limits`, and `omittedCounts`.
+`@lzehrung/codegraph-core/agent` exports `searchCodegraph()` for deterministic, agent-ready anchors across files, symbols, chunks, SQL objects, and optional graph neighborhoods. Hybrid search is code-first by default, so implementation files and symbols outrank docs unless `mode: "text"` is explicit or docs are the strongest remaining evidence. Identifier-like queries stay symbol-first. Pure `path` and `text` searches skip detailed symbol graph construction; hybrid, symbol, SQL, and graph searches keep symbol extraction enabled.
 
 ```ts
 import {
@@ -342,7 +343,7 @@ import {
   explainCodegraphTarget,
   exploreCodegraph,
   searchCodegraph,
-} from "@lzehrung/codegraph/agent";
+} from "@lzehrung/codegraph-core/agent";
 
 const response = await searchCodegraph({
   root: process.cwd(),
@@ -409,7 +410,7 @@ console.log(artifact.manifestPath, artifact.artifacts);
 
 The `graph.json` artifact is self-describing (`schemaVersion: 2`, `format: "codegraph.graph-json"`) and uses project-relative file paths and portable symbol handles. Version 1 graph artifacts are rejected by drift baseline loading and must be regenerated. `questions.json` uses the same stable handles for follow-up commands. With `force: true`, stale known codegraph artifact files are removed before the selected outputs are written; unrelated files in the directory are preserved.
 
-`createAgentSession()` (from `@lzehrung/codegraph/agent`) keeps one in-process project snapshot warm for repeated explore, orient, search, explain, packet, artifact, and MCP calls. It uses incremental indexing with disk cache by default, auto-enables native workers for large cold builds, and carries forward top-level analysis metadata from the build report.
+`createAgentSession()` (from `@lzehrung/codegraph-core/agent`) keeps one in-process project snapshot warm for repeated explore, orient, search, explain, packet, artifact, and MCP calls. It uses incremental indexing with disk cache by default, auto-enables native workers for large cold builds, and carries forward top-level analysis metadata from the build report.
 Session callers can use `freshness: { policy: "check" | "auto" | "manual" }` plus `checkFreshness()` to detect file edits before reusing a warm snapshot. `check` reports stale state without invalidating, `auto` invalidates for bounded changes, and stale results include `changedFileCount`, `omittedChangedFileCount`, `reason`, and a bounded changed-file sample.
 Set `buildOptions.useNativeWorkers` to `false` to opt out. Use `buildCodegraphArtifactWithSession()` when a host already has a session and wants SQLite, graph JSON, report, questions, and manifest outputs from the same snapshot. `createCodegraphMcpHandlers()` (from `@lzehrung/codegraph/mcp`) exposes the same primitives without starting stdio, which is useful for tests or host applications:
 
@@ -446,7 +447,7 @@ Nested semantic candidates retain hierarchical granularity: a parent and its dec
 ### APIs
 
 ```ts
-import { chunkFile, chunkTextFile, LANG_CONFIGS } from "@lzehrung/codegraph";
+import { chunkFile, chunkTextFile, LANG_CONFIGS } from "@lzehrung/codegraph-core";
 
 const source = `function hello(name) { return "Hello " + name; }`;
 const chunks = chunkFile({
@@ -532,7 +533,7 @@ The integration examples demonstrate semantic chunking with type-based filtering
 - Paths are project-relative when the index has a project root.
 
 ```ts
-import { buildProjectIndex, findDuplicateContext, findDuplicates } from "@lzehrung/codegraph";
+import { buildProjectIndex, findDuplicateContext, findDuplicates } from "@lzehrung/codegraph-core";
 
 const root = process.cwd();
 const index = await buildProjectIndex(root);
@@ -573,7 +574,7 @@ Tests:
 Build a full project index and use go-to-definition:
 
 ```ts
-import { buildProjectIndex, goToDefinition } from "@lzehrung/codegraph";
+import { buildProjectIndex, goToDefinition } from "@lzehrung/codegraph-core";
 
 const root = process.cwd();
 const index = await buildProjectIndex(root);
@@ -588,7 +589,7 @@ if (res.status === "ok") {
 Find references with the same index:
 
 ```ts
-import { findReferences } from "@lzehrung/codegraph";
+import { findReferences } from "@lzehrung/codegraph-core";
 
 const refs = await findReferences(index, { file, line: 21, column: 18 });
 if (refs.status === "ok") {
@@ -602,7 +603,7 @@ if (refs.status === "ok") {
 ## Incremental indexing
 
 ```ts
-import { buildProjectIndexIncremental } from "@lzehrung/codegraph";
+import { buildProjectIndexIncremental } from "@lzehrung/codegraph-core";
 
 const root = process.cwd();
 const incremental = await buildProjectIndexIncremental(root, {
@@ -623,7 +624,7 @@ const incremental = await buildProjectIndexIncremental(root, {
 When scanning a child directory with project-root-relative include or ignore globs, pass `globRoot`.
 
 ```ts
-import { listProjectFiles, discoverProjectFiles, collectGraph } from "@lzehrung/codegraph";
+import { listProjectFiles, discoverProjectFiles, collectGraph } from "@lzehrung/codegraph-core";
 
 const root = process.cwd();
 const files = await listProjectFiles(root);
@@ -660,7 +661,7 @@ for (const edge of graph.edges) {
 `checkMarkdownLinks(projectRoot)` validates links authored in Markdown files with no index build and no network access. It returns the same stable result the `links` CLI command prints with `--json`.
 
 ```ts
-import { checkMarkdownLinks } from "@lzehrung/codegraph";
+import { checkMarkdownLinks } from "@lzehrung/codegraph-core";
 
 const result = await checkMarkdownLinks(process.cwd());
 for (const failure of result.failures) {
@@ -677,7 +678,7 @@ for (const failure of result.failures) {
 Build an index from an explicit multi-root file list:
 
 ```ts
-import { listProjectFiles, buildProjectIndexFromFiles } from "@lzehrung/codegraph";
+import { listProjectFiles, buildProjectIndexFromFiles } from "@lzehrung/codegraph-core";
 
 const root = process.cwd();
 const tsRoot = `${root}/tests/samples/typescript`;
@@ -694,7 +695,7 @@ console.log({ files: index.byFile.size, edges: index.graph.edges.length });
 Produce a Mermaid diagram string from an in-memory graph:
 
 ```ts
-import { graphToMermaid } from "@lzehrung/codegraph";
+import { graphToMermaid } from "@lzehrung/codegraph-core";
 
 const mermaid = graphToMermaid(graph);
 console.log(mermaid);
@@ -703,7 +704,7 @@ console.log(mermaid);
 ## Read-only SQL from code
 
 ```ts
-import { queryGraphSqliteRaw } from "@lzehrung/codegraph";
+import { queryGraphSqliteRaw } from "@lzehrung/codegraph-core";
 
 const result = await queryGraphSqliteRaw(
   "./codegraph.sqlite",
@@ -721,7 +722,7 @@ console.log(result.columns, result.rows);
 SQL source files participate in normal project indexing through SQL-specific symbols, SQL-to-SQL object edges, and SQL navigation. SQL-to-SQL edges are precise for exact object-name matches, heuristic for unambiguous qualified-to-basename fallback matches, and skipped for ambiguous basename guesses. Navigation is object-level: alias-qualified and table-qualified column uses can resolve to table/view definitions, but not to specific column declarations. These APIs expose the lower-level statement facts and candidate graph for common DDL/DML definitions, reads, writes, constraints, CTEs, renames, truncates, and merges. They do not infer a current schema, and application-code string literals are bridged to SQL only through explicit review-context rules.
 
 ```ts
-import { extractSqlFactsFromSource, projectSqlFactsToGraph, collectSqlReviewContext } from "@lzehrung/codegraph";
+import { extractSqlFactsFromSource, projectSqlFactsToGraph, collectSqlReviewContext } from "@lzehrung/codegraph-core";
 
 const filePath = `${process.cwd()}/db/schema.sql`;
 const source = "CREATE TABLE users (id integer);";
@@ -745,7 +746,7 @@ A handle is either:
 - `${file}::${alias}::import` for an import alias
 
 ```ts
-import { buildProjectIndex, listSymbols, goToDefinitionById, findReferencesById } from "@lzehrung/codegraph";
+import { buildProjectIndex, listSymbols, goToDefinitionById, findReferencesById } from "@lzehrung/codegraph-core";
 
 const root = process.cwd();
 const index = await buildProjectIndex(root);
@@ -772,7 +773,7 @@ Optional request-wide budgets on `ImpactOptions` constrain computation before wo
 
 `ReviewOptions.duplicateTasks: false` skips duplicate analysis entirely.
 
-import { buildProjectIndex, analyzeImpactFromDiff } from "@lzehrung/codegraph";
+import { buildProjectIndex, analyzeImpactFromDiff } from "@lzehrung/codegraph-core";
 
 const root = process.cwd();
 const index = await buildProjectIndex(root);
@@ -844,13 +845,13 @@ const reportWithBlockContext = await analyzeImpactFromDiff(root, index, {
 
 ## Agent tool wrappers
 
-`@lzehrung/codegraph/agent` also exports agent-oriented wrappers with explicit status discriminants.
+`@lzehrung/codegraph-core/agent` also exports agent-oriented wrappers with explicit status discriminants.
 
 `tool_getFileOverview()` is structured-first. Its `ok` result exposes `overview.imports` and `overview.definitions` directly for agent consumption, while `renderedOverview` remains an optional convenience string for logging or debugging.
 
 ```ts
-import { buildProjectIndex } from "@lzehrung/codegraph";
-import { tool_getFileOverview } from "@lzehrung/codegraph/agent";
+import { buildProjectIndex } from "@lzehrung/codegraph-core";
+import { tool_getFileOverview } from "@lzehrung/codegraph-core/agent";
 
 const root = process.cwd();
 const index = await buildProjectIndex(root);
@@ -864,7 +865,7 @@ if (overview.status === "ok") {
 For bounded graph exploration, prefer the smaller wrappers before requesting the full file graph:
 
 ```ts
-import { buildProjectIndex } from "@lzehrung/codegraph";
+import { buildProjectIndex } from "@lzehrung/codegraph-core";
 import {
   tool_findSymbol,
   tool_getDependencies,
@@ -873,7 +874,7 @@ import {
   tool_goToDefinition,
   tool_findReferences,
   tool_impactJSON,
-} from "@lzehrung/codegraph/agent";
+} from "@lzehrung/codegraph-core/agent";
 
 const root = process.cwd();
 const index = await buildProjectIndex(root);
@@ -891,7 +892,7 @@ const impact = await tool_impactJSON(root, { provider: "git", base: "HEAD", head
 Use `analyzeArchitectureDrift()` when a caller needs one deterministic architecture-regression report instead of separately comparing cycles, unresolved imports, API surface, duplicates, hotspots, and graph edges.
 
 ```ts
-import { analyzeArchitectureDrift } from "@lzehrung/codegraph";
+import { analyzeArchitectureDrift } from "@lzehrung/codegraph-core";
 
 const report = await analyzeArchitectureDrift(process.cwd(), {
   provider: "git",
