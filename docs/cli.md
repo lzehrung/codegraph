@@ -816,13 +816,14 @@ Important review-bundle details:
 - `schemaVersion` identifies the review JSON schema for CI validation and compatibility checks.
 - `riskSummary` and `reviewTasks` provide agent-ready review focus areas and likely risk hotspots.
 - `changedFiles[].status` distinguishes normal updates from real Git deletions and explicit missing input files.
+- `changedFiles[].isBinary` is `true` when Git reported a binary diff. Those entries make no symbol-level claims.
 - `diagnostics.symbolMappingParseFailures` reports files where symbol-level diff mapping degraded. Source-language failures affect `symbol-mapping-degraded` risk; graph-first document files remain diagnostics without becoming high-priority source review tasks.
 - `diagnostics.missingFiles` reports explicit paths that were not present on disk.
 - `diagnostics.memberResolutionCoverage` buckets the source languages among changed files by whether codegraph resolves receiver/instance member calls (`obj.method()`). `limitedLanguages` flags languages where that resolution is not implemented, so consumers reached only through a receiver may be undercounted; direct name, import, and same-file references remain unaffected. The field is omitted when there is nothing to flag.
 - `graph-delta` reports file-level edge additions and removals for changed files and is intended for lightweight CI artifacts.
 - `--include-symbol-details` attaches definition snippets and callsite ranges for changed symbols.
 - Changed symbol details may include `callCompatibility` for high-confidence provider-backed callsite arity mismatches after signature changes. Agents should inspect the code before treating these leads as defects.
-- When diff data is available, review reports focus on symbols touched by diff hunks and include `diffSnippets` with changed-line context.
+- When diff data is available, `symbols` and `summary.symbolsChanged` include only symbols and re-exports touched by diff hunks. Unchanged re-exports may appear in `changedFiles[].apiContext`, never as changed symbols.
 - `--review-depth minimal|standard|deep` applies preset bundles:
   - `minimal`: fast graph, no symbol snippets, `maxCallsites=0`, `maxCandidates=10`
   - `standard`: symbol snippets plus up to 2 callsites, `maxCandidates=25`

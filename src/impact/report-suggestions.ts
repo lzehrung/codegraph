@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { SymbolKind, type ProjectIndex } from "../indexer/types.js";
 import { findReferences } from "../indexer/navigation.js";
-import { resolveFilePathFromRoot, toProjectDisplayPath } from "../util/paths.js";
+import { fileIdentityKey, resolveFilePathFromRoot, toProjectDisplayPath } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
 import { maskJsLikeCommentsAndStrings } from "../util/comments.js";
 import { listCandidateTestFiles } from "./context.js";
@@ -276,9 +276,11 @@ function collectConfigAndBreakingSuggestions(
       const normalized = normalizeImpactFilePath(projectRoot, fileChange.path);
       const removedLines = removedLinesByFile.get(normalized);
       if (!removedLines || removedLines.size === 0) continue;
-      const mod = index.byFile.get(normalized);
+      const mod = index.byFile.get(fileIdentityKey(normalized));
       const hasExports = !!mod?.exports.length;
-      const alreadyHasForFile = Array.from(breakingByKey.values()).some((entry) => entry.file === normalized);
+      const alreadyHasForFile = Array.from(breakingByKey.values()).some(
+        (entry) => fileIdentityKey(entry.file) === fileIdentityKey(normalized),
+      );
       if (!hasExports || alreadyHasForFile) continue;
       upsertBreakingSuggestion({
         file: normalized,
@@ -309,9 +311,10 @@ async function collectUntestedChangeSuggestions(
   const testPatterns = compileTestPatterns(options?.testPatterns);
   const isIndexTestFile = createIndexTestFileMatcher(index, testPatterns, projectRoot);
   const testFiles = new Set<string>();
-  for (const file of index.byFile.keys()) {
+  for (const module of index.byFile.values()) {
+    const file = module.file;
     if (isIndexTestFile(file)) {
-      testFiles.add(file);
+      testFiles.add(fileIdentityKey(file));
     }
   }
 
@@ -319,8 +322,9 @@ async function collectUntestedChangeSuggestions(
   if (!fanInByFileInput) {
     for (const edge of index.graph.edges) {
       if (edge.to.type !== "file") continue;
-      const current = fanInByFile.get(edge.to.path) ?? 0;
-      fanInByFile.set(edge.to.path, current + 1);
+      const key = fileIdentityKey(edge.to.path);
+      const current = fanInByFile.get(key) ?? 0;
+      fanInByFile.set(key, current + 1);
     }
   }
 
@@ -434,7 +438,7 @@ async function collectUntestedChangeSuggestions(
       ? `Coverage currently exercises ${coveredLines}/${totalLines} changed line(s).`
       : "No LCOV or Istanbul coverage data matched this symbol range.";
 
-    const fanIn = fanInByFile.get(symbol.file) ?? 0;
+    const fanIn = fanInByFile.get(fileIdentityKey(symbol.file)) ?? 0;
     const confidence = confidenceFromSignals({
       hasCoverageData,
       coveredLines,

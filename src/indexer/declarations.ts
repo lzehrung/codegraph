@@ -1,6 +1,7 @@
 import type { FileId } from "../types.js";
 import type { LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
+import { fileIdentityKey } from "../util/paths.js";
 import { SymbolKind, type ExportEntry, type ProjectIndex, type SymbolDef, type SymbolHandle } from "./types.js";
 import type { BindingKind } from "./scope-types.js";
 
@@ -107,6 +108,6 @@ export function isSymbolHandleExported(exports: readonly ExportEntry[], handle: 
 }
 
 export function isProjectSymbolExported(index: ProjectIndex, file: FileId, symbolDef: SymbolDef): boolean {
-  const mod = index.byFile.get(file);
+  const mod = index.byFile.get(fileIdentityKey(file));
   return mod ? isLocalSymbolExported(mod.exports, symbolDef) : false;
 }

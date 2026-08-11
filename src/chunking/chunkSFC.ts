@@ -1,6 +1,7 @@
 import type { Chunk } from "./chunkFile.js";
 import { chunkFile } from "./chunkFile.js";
 import { chunkTextFile } from "./chunkTextFile.js";
+import { withStableChunkIds } from "./chunkId.js";
 import { LANG_CONFIGS } from "../bootstrap/treeSitterLanguages.js";
 import {
   parseSFC,
@@ -42,8 +43,6 @@ export function chunkSFCFile(opts: ChunkSFCOptions): Chunk[] {
 
   const sortedBlocks = blocks.sort((a, b) => a.startLine - b.startLine);
   const chunks: Chunk[] = [];
-  let chunkCounter = 0;
-  const makeChunkId = () => `${framework}:${filePath ?? "unknown"}:${chunkCounter++}`;
 
   for (const block of sortedBlocks) {
     const blockChunks = chunkBlock({
@@ -56,16 +55,19 @@ export function chunkSFCFile(opts: ChunkSFCOptions): Chunk[] {
       ...(logLevel ? { logLevel } : {}),
     });
     for (const chunk of blockChunks) {
-      chunk.id = makeChunkId();
-      chunk.startLine += block.startLine - 1;
-      chunk.endLine += block.startLine - 1;
-      chunk.type = `${block.type}:${chunk.type}`;
-      chunk.filePath = filePath ?? chunk.filePath;
-      chunks.push(chunk);
+      chunks.push({
+        ...chunk,
+        id: "",
+        startLine: chunk.startLine + block.startLine - 1,
+        endLine: chunk.endLine + block.startLine - 1,
+        type: `${block.type}:${chunk.type}`,
+        filePath: filePath ?? chunk.filePath,
+      });
     }
   }
 
-  return chunks.sort((a, b) => a.startLine - b.startLine || a.endLine - b.endLine);
+  const sortedChunks = chunks.sort((left, right) => left.startLine - right.startLine || left.endLine - right.endLine);
+  return withStableChunkIds(sortedChunks, framework, filePath);
 }
 
 function chunkBlock(opts: {

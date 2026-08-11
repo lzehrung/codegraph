@@ -33,7 +33,7 @@ import { buildReviewReport } from "../review.js";
 import { extractSqlFactsFromSource, sqlObjectBaseName } from "../sql/extractFacts.js";
 import type { SqlStatementFact } from "../sql/types.js";
 import type { Range } from "../types.js";
-import { normalizePath } from "../util/paths.js";
+import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
 import { boundAgentList, defaultAgentLimit, emptyAgentBoundedList, type BoundedAgentList } from "./bounds.js";
 import {
@@ -589,7 +589,7 @@ function collectFileSymbols(
   lookup: SymbolLookup,
   file: string,
 ): AgentExplanationSymbol[] {
-  const moduleIndex = snapshot.index.byFile.get(file);
+  const moduleIndex = snapshot.index.byFile.get(fileIdentityKey(file));
   if (!moduleIndex) return [];
   return moduleIndex.locals
     .map((local) => ({

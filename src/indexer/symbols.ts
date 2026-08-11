@@ -8,7 +8,7 @@ import type {
   SymbolHandle,
   SymbolListItem,
 } from "./types.js";
-import { normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
+import { fileIdentityKey, normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
 import { findReferences, resolveExport, resolveImported } from "./navigation.js";
 import { parseSourceLocationInput } from "../util/sourceLocation.js";
 
@@ -31,8 +31,8 @@ export function parseQualifiedSymbolPath(value: string): QualifiedSymbolPath | n
 
 /** Return every local definition named `name` in an already-resolved indexed file. */
 export function findLocalSymbolDefinitions(index: ProjectIndex, file: string, name: string): SymbolDef[] {
-  const normalizedFile = file.replace(/\\/g, "/");
-  return index.byFile.get(normalizedFile)?.locals.filter((definition) => definition.localName === name) ?? [];
+  const normalizedFile = normalizePath(file);
+  return index.byFile.get(fileIdentityKey(normalizedFile))?.locals.filter((definition) => definition.localName === name) ?? [];
 }
 
 /** A canonical symbol identity paired with its indexed definition. */
@@ -73,7 +73,7 @@ export function resolveSymbolTarget(index: ProjectIndex, input: string): SymbolT
   const location = parseSourceLocationInput(input);
   const file = resolveIndexedFile(index, location.file);
   if (file) {
-    const definitions = (index.byFile.get(file)?.locals ?? []).filter((definition) => {
+    const definitions = (index.byFile.get(fileIdentityKey(file))?.locals ?? []).filter((definition) => {
       if (location.line !== undefined && definition.range.start.line !== location.line) return false;
       if (location.column !== undefined && definition.range.start.column !== location.column) return false;
       return true;
@@ -92,10 +92,10 @@ export function resolveSymbolTarget(index: ProjectIndex, input: string): SymbolT
 
 function resolveIndexedFile(index: ProjectIndex, file: string): string | undefined {
   const normalized = normalizePath(file);
-  if (index.byFile.has(normalized)) return normalized;
+  if (index.byFile.has(fileIdentityKey(normalized))) return normalized;
   if (!index.projectRoot) return undefined;
   const rooted = normalizePath(resolveFilePathFromRoot(index.projectRoot, file));
-  return index.byFile.has(rooted) ? rooted : undefined;
+  return index.byFile.has(fileIdentityKey(rooted)) ? rooted : undefined;
 }
 
 function resolveExactSymbolHandle(index: ProjectIndex, input: string): ResolvedSymbolTarget | null {
@@ -106,7 +106,7 @@ function resolveExactSymbolHandle(index: ProjectIndex, input: string): ResolvedS
   const name = parts[1] ?? "";
   const startIndex = Number(parts[2]);
   const definition = index.byFile
-    .get(file)
+    .get(fileIdentityKey(file))
     ?.locals.find((candidate) => candidate.localName === name && (candidate.range.start.index ?? 0) === startIndex);
   if (!definition) return null;
   return { handle: symbolId(definition), definition };
@@ -138,9 +138,9 @@ export function defFromSymbolId(index: ProjectIndex, id: SymbolHandle): SymbolDe
   const rawFile = parts[0]!;
   const localName = parts[1]!;
   const startStr = parts[2]!;
-  const file = rawFile.replace(/\\/g, "/");
+  const file = normalizePath(rawFile);
   const startIndex = Number(startStr);
-  const mod = index.byFile.get(file);
+  const mod = index.byFile.get(fileIdentityKey(file));
   if (!mod) return null;
   const exact = mod.locals.find((def) => def.localName === localName && (def.range?.start?.index ?? 0) === startIndex);
   if (exact) return exact;
@@ -154,8 +154,8 @@ export function resolveSymbolId(index: ProjectIndex, id: SymbolHandle): SymbolDe
   if (parts.length === 3 && parts[2] === "import") {
     const rawFile = parts[0]!;
     const alias = parts[1]!;
-    const file = rawFile.replace(/\\/g, "/");
-    const mod = index.byFile.get(file);
+    const file = normalizePath(rawFile);
+    const mod = index.byFile.get(fileIdentityKey(file));
     if (!mod) return null;
 
     const named = mod.imports.find(
@@ -181,7 +181,7 @@ export function resolveSymbolId(index: ProjectIndex, id: SymbolHandle): SymbolDe
       if (target) {
         const hit = resolveExport(index, target, "default");
         if (hit?.kind === "resolved") return hit.def;
-        const targetModule = index.byFile.get(target);
+        const targetModule = index.byFile.get(fileIdentityKey(target));
         const first = targetModule?.exports.find(
           (entry): entry is ExportEntry & { type: "local" } => entry.type === "local",
         );
@@ -193,7 +193,7 @@ export function resolveSymbolId(index: ProjectIndex, id: SymbolHandle): SymbolDe
     if (namespaceImport) {
       const target = typeof namespaceImport.resolved === "string" ? namespaceImport.resolved : undefined;
       if (target) {
-        const targetModule = index.byFile.get(target);
+        const targetModule = index.byFile.get(fileIdentityKey(target));
         const first = targetModule?.exports.find(
           (entry): entry is ExportEntry & { type: "local" } => entry.type === "local",
         );
@@ -228,15 +228,18 @@ export async function findReferencesById(index: ProjectIndex, id: SymbolHandle) 
 
 export function listSymbols(index: ProjectIndex, opts?: { file?: string; includeImports?: boolean }): SymbolListItem[] {
   const out: SymbolListItem[] = [];
-  const files = opts?.file ? [opts.file.replace(/\\/g, "/")] : Array.from(index.byFile.keys());
+  const files = opts?.file
+    ? [opts.file]
+    : Array.from(index.byFile.values(), (module) => module.file);
 
   for (const file of files) {
-    const mod = index.byFile.get(file);
+    const mod = index.byFile.get(fileIdentityKey(file));
     if (!mod) continue;
+    const displayFile = mod.file;
     for (const def of mod.locals) {
       out.push({
         id: symbolId(def),
-        file,
+        file: displayFile,
         name: def.localName,
         kind: def.kind,
         range: def.range,
@@ -247,15 +250,15 @@ export function listSymbols(index: ProjectIndex, opts?: { file?: string; include
       for (const imp of mod.imports) {
         if (imp.kind === "named" || imp.kind === "default") {
           out.push({
-            id: `${file}::${imp.local}::import`,
-            file,
+            id: `${displayFile}::${imp.local}::import`,
+            file: displayFile,
             name: imp.local,
             kind: "import",
           });
         } else if (imp.kind === "namespace") {
           out.push({
-            id: `${file}::${imp.localNS}::import`,
-            file,
+            id: `${displayFile}::${imp.localNS}::import`,
+            file: displayFile,
             name: imp.localNS,
             kind: "namespaceImport",
           });
@@ -269,7 +272,7 @@ export function listSymbols(index: ProjectIndex, opts?: { file?: string; include
 
 export function getApiSurface(index: ProjectIndex): ApiSurface {
   const out: ApiSurface = [];
-  for (const [file, mod] of index.byFile) {
+  for (const mod of index.byFile.values()) {
     const exports = mod.exports.map((entry) => {
       if (entry.type === "local") {
         return {
@@ -302,7 +305,7 @@ export function getApiSurface(index: ProjectIndex): ApiSurface {
       };
     });
     if (exports.length) {
-      out.push({ file, exports });
+      out.push({ file: mod.file, exports });
     }
   }
   return out;

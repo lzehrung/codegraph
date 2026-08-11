@@ -6,6 +6,7 @@ import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 import { buildProjectIndex, buildProjectIndexIncremental, type BuildReport } from "../src/index.js";
+import type { ModuleIndex, ProjectIndex } from "../src/indexer/types.js";
 import * as indexer from "../src/indexer.js";
 import * as buildCache from "../src/indexer/build-cache.js";
 import {
@@ -29,6 +30,9 @@ import * as projectFilesModule from "../src/util/projectFiles.js";
 import * as gitModule from "../src/util/git.js";
 import * as incrementalPlan from "../src/indexer/incremental-plan.js";
 import * as filePrep from "../src/languages/filePrep.js";
+import { getLanguageById } from "../src/languages/registry.js";
+import { clearImplementationFingerprintCache } from "../src/indexer/build-cache/options.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 import { runGit } from "./helpers/git.js";
 import { createTempProjectRoot, mkTmpDir } from "./helpers/filesystem.js";
 
@@ -53,6 +57,22 @@ function readModuleCacheUpdatedAt(root: string, file: string): number | null {
   }
 }
 
+function readModuleCacheSignature(root: string, file: string): string | null {
+  const dbPath = diskCacheDbPathFor(root);
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    const row = db.prepare("SELECT sig FROM module_cache WHERE file = ?").get(file) as { sig: string } | undefined;
+    return row?.sig ?? null;
+  } finally {
+    db.close();
+  }
+}
+
+function moduleForPath(index: ProjectIndex, filePath: string): ModuleIndex | undefined {
+  const identity = fileIdentityKey(filePath);
+  return Array.from(index.byFile.entries()).find(([file]) => fileIdentityKey(file) === identity)?.[1];
+}
+
 function manifestPathFor(root: string): string {
   return path.join(root, ".codegraph-cache", "index-v1", "manifest.json");
 }
@@ -70,6 +90,23 @@ async function writeProjectSnapshot(snapshotPath: string, snapshot: unknown): Pr
   await fsp.writeFile(
     snapshotPath,
     brotliCompressSync(JSON.stringify(snapshot), { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } }),
+  );
+}
+async function projectSnapshotTempNames(root: string): Promise<string[]> {
+  const cacheDir = path.dirname(projectSnapshotPathFor(root));
+  const snapshotName = path.basename(projectSnapshotPathFor(root));
+  const prefix = `.${snapshotName}.`;
+  const names = await fsp.readdir(cacheDir);
+  return names.filter((name) => name.startsWith(prefix) && name.endsWith(".tmp"));
+}
+async function rewriteProjectSnapshot(root: string, index: ProjectIndex): Promise<void> {
+  const manifest = await readManifest(root);
+  const entries = new Map(Object.entries(manifest.files));
+  await buildCache.writeProjectIndexSnapshot(
+    root,
+    { cache: "disk", threads: 1 },
+    index,
+    buildCache.projectSnapshotFilesSignature(entries),
   );
 }
 
@@ -122,7 +159,7 @@ describe("Cache invalidation and strict hashing", () => {
 
     const idx1 = await buildProjectIndex(root, { threads: 2, cache: "disk" });
     const utilFile = Array.from(idx1.byFile.keys()).find((f) => f.endsWith("/util.ts") || f.endsWith("\\util.ts"))!;
-    const mod1 = idx1.byFile.get(utilFile)!;
+    const mod1 = idx1.byFile.get(fileIdentityKey(utilFile))!;
     expect(mod1.locals.some((l) => l.localName === "a")).toBe(true);
 
     // Change content but keep length and restore mtime
@@ -137,7 +174,7 @@ describe("Cache invalidation and strict hashing", () => {
 
     // Disk cache validation should pick up content changes even if mtime matches
     const idx2 = await buildProjectIndex(root, { threads: 2, cache: "disk" });
-    const mod2 = idx2.byFile.get(utilFile)!;
+    const mod2 = idx2.byFile.get(fileIdentityKey(utilFile))!;
     expect(mod2.locals.some((l) => l.localName === "b")).toBe(true);
 
     // Strict: should also invalidate and pick up 'b'
@@ -146,8 +183,144 @@ describe("Cache invalidation and strict hashing", () => {
       cache: "disk",
       cacheStrict: true,
     });
-    const mod3 = idx3.byFile.get(utilFile)!;
+    const mod3 = idx3.byFile.get(fileIdentityKey(utilFile))!;
     expect(mod3.locals.some((l) => l.localName === "b")).toBe(true);
+  });
+
+  it("rebuilds when the generated language-definition fingerprint changes without source changes", async () => {
+    const root = await mkTmpDir("dg-implementation-fingerprint-");
+    const entryPath = path.join(root, "entry.ts");
+    const source = "export const fingerprinted = 1;\n";
+    await fsp.writeFile(entryPath, source, "utf8");
+    const file = normalize(path.resolve(entryPath));
+    const typescript = getLanguageById("ts");
+    if (!typescript) throw new Error("Expected TypeScript language definition.");
+    const originalImportsQuery = typescript.graph.imports;
+
+    clearImplementationFingerprintCache();
+    try {
+      await buildProjectIndex(root, { threads: 2, cache: "disk" });
+      const initialSignature = readModuleCacheSignature(root, file);
+      if (!initialSignature) throw new Error("Expected a cached module signature.");
+
+      typescript.graph.imports = `${originalImportsQuery}\n`;
+      clearImplementationFingerprintCache();
+      const report: BuildReport = { timings: {} };
+      const rebuilt = await buildProjectIndexIncremental(root, {
+        threads: 2,
+        cache: "disk",
+        report,
+      });
+      const rebuiltSignature = readModuleCacheSignature(root, file);
+
+      expect(await fsp.readFile(entryPath, "utf8")).toBe(source);
+      expect(rebuiltSignature).not.toBe(initialSignature);
+      expect(report.manifest?.optionsMismatch).toContain("implementation");
+      expect(report.files?.parsed).toBe(1);
+      expect(moduleForPath(rebuilt, entryPath)?.locals.some((local) => local.localName === "fingerprinted")).toBe(true);
+    } finally {
+      typescript.graph.imports = originalImportsQuery;
+      clearImplementationFingerprintCache();
+    }
+  });
+
+  it("namespaces shared custom cache directories and rejects a manifest from another root", async () => {
+    const parentRoot = await mkTmpDir("dg-cache-root-parent-");
+    const childRoot = path.join(parentRoot, "child");
+    const sharedCacheDir = await mkTmpDir("dg-cache-root-shared-");
+    const outsidePath = path.join(parentRoot, "outside.ts");
+    const childEntryPath = path.join(childRoot, "entry.ts");
+    const options = { cache: "disk" as const, cacheDir: sharedCacheDir, threads: 2 };
+    await fsp.mkdir(childRoot, { recursive: true });
+    await fsp.writeFile(outsidePath, "export const outside = 1;\n", "utf8");
+    await fsp.writeFile(childEntryPath, 'import { outside } from "../outside";\nexport { outside };\n', "utf8");
+
+    const parentIndex = await buildProjectIndex(parentRoot, options);
+    const parentCacheRoot = buildCache.cacheRoot(parentRoot, options);
+    const childCacheRoot = buildCache.cacheRoot(childRoot, options);
+    const parentManifest = await fsp.readFile(path.join(parentCacheRoot, "manifest.json"), "utf8");
+    await fsp.mkdir(childCacheRoot, { recursive: true });
+    await fsp.writeFile(path.join(childCacheRoot, "manifest.json"), parentManifest, "utf8");
+
+    expect(parentCacheRoot).not.toBe(childCacheRoot);
+    expect(await buildCache.loadManifest(childRoot, options)).toBeNull();
+    expect(
+      parentIndex.graph.edges.some(
+        (edge) =>
+          edge.from === normalize(childEntryPath) &&
+          edge.to.type === "file" &&
+          edge.to.path === normalize(outsidePath),
+      ),
+    ).toBe(true);
+
+    const childIndex = await buildProjectIndex(childRoot, options);
+
+    expect(
+      childIndex.graph.edges.some((edge) => edge.to.type === "file" && edge.to.path === normalize(outsidePath)),
+    ).toBe(false);
+    expect(Array.from(childIndex.byFile.keys()).some((file) => fileIdentityKey(file) === fileIdentityKey(outsidePath))).toBe(
+      false,
+    );
+  });
+
+  it("rejects and rebuilds a pre-implementation-fingerprint manifest", async () => {
+    const root = await mkTmpDir("dg-cache-legacy-manifest-");
+    const entryPath = path.join(root, "entry.ts");
+    const file = normalize(path.resolve(entryPath));
+    await fsp.writeFile(entryPath, "export const current = 1;\n", "utf8");
+    await fsp.mkdir(path.dirname(manifestPathFor(root)), { recursive: true });
+    await fsp.writeFile(
+      manifestPathFor(root),
+      JSON.stringify({
+        version: 2,
+        projectRoot: normalize(path.resolve(root)),
+        updatedAt: Date.now(),
+        graphOptions: {},
+        buildOptions: { cache: "disk" },
+        files: {
+          [file]: {
+            sig: "legacy-signature",
+            edges: [
+              {
+                from: file,
+                to: { type: "file", path: normalize(path.join(root, "stale.ts")) },
+                raw: "./stale",
+              },
+            ],
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const rebuilt = await buildProjectIndexIncremental(root, { threads: 2, cache: "disk" });
+    const manifest = await readManifest(root);
+
+    expect(moduleForPath(rebuilt, entryPath)?.locals.some((local) => local.localName === "current")).toBe(true);
+    expect(rebuilt.graph.edges.some((edge) => edge.to.type === "file" && edge.to.path.endsWith("/stale.ts"))).toBe(false);
+    expect(manifest.version).toBe(MANIFEST_VERSION);
+    expect(manifest.buildOptions?.implementationFingerprint).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("rejects and rewrites a project snapshot stored for another root", async () => {
+    const root = await mkTmpDir("dg-cache-snapshot-root-");
+    const entryPath = path.join(root, "entry.ts");
+    await fsp.writeFile(entryPath, "export const rooted = 1;\n", "utf8");
+    await buildProjectIndex(root, { threads: 2, cache: "disk" });
+    const manifest = await readManifest(root);
+    const snapshotPath = projectSnapshotPathFor(root);
+    const snapshot = await readProjectSnapshot(snapshotPath);
+    const otherRoot = await mkTmpDir("dg-cache-other-root-");
+    snapshot.projectRoot = normalize(otherRoot);
+    await writeProjectSnapshot(snapshotPath, snapshot);
+
+    const entries = new Map(Object.entries(manifest.files));
+    expect(await buildCache.tryLoadProjectIndexSnapshot(root, { cache: "disk" }, entries)).toBeNull();
+
+    const rebuilt = await buildProjectIndexIncremental(root, { threads: 2, cache: "disk" });
+    const rewritten = await readProjectSnapshot(snapshotPath);
+    expect(moduleForPath(rebuilt, entryPath)?.locals.some((local) => local.localName === "rooted")).toBe(true);
+    expect(rewritten.projectRoot).toBe(normalize(root));
   });
 
   it("supports incremental rebuilds with manifest reuse", async () => {
@@ -167,7 +340,7 @@ describe("Cache invalidation and strict hashing", () => {
     });
     const afterUpdatedAt = readModuleCacheUpdatedAt(root, fileId);
     expect(afterUpdatedAt).toBe(beforeUpdatedAt);
-    const modA = idxNoChange.byFile.get(fileId)!;
+    const modA = idxNoChange.byFile.get(fileIdentityKey(fileId))!;
     expect(modA.locals.some((l) => l.localName === "a")).toBe(true);
 
     await fsp.writeFile(filePath, `export const b = 2;\n`, "utf8");
@@ -180,7 +353,7 @@ describe("Cache invalidation and strict hashing", () => {
     const afterChangeUpdatedAt = readModuleCacheUpdatedAt(root, fileId);
     if (afterChangeUpdatedAt === null) throw new Error("missing disk cache row after change");
     expect(afterChangeUpdatedAt).toBeGreaterThan(beforeChangeUpdatedAt);
-    const modB = idxChanged.byFile.get(fileId)!;
+    const modB = idxChanged.byFile.get(fileIdentityKey(fileId))!;
     expect(modB.locals.some((l) => l.localName === "b")).toBe(true);
 
     await buildProjectIndexIncremental(root, {
@@ -213,8 +386,8 @@ describe("Cache invalidation and strict hashing", () => {
     });
     const normalizedUnitPath = normalize(unitPath);
     const normalizedSamplePath = normalize(samplePath);
-    expect(first.byFile.has(normalizedUnitPath)).toBe(true);
-    expect(first.byFile.has(normalizedSamplePath)).toBe(false);
+    expect(first.byFile.has(fileIdentityKey(normalizedUnitPath))).toBe(true);
+    expect(first.byFile.has(fileIdentityKey(normalizedSamplePath))).toBe(false);
 
     const manifestAfterFirstBuild = await readManifest(testsRoot);
     expect(manifestAfterFirstBuild.buildOptions?.discovery?.globRoot).toBe(normalize(path.resolve(root)));
@@ -233,8 +406,8 @@ describe("Cache invalidation and strict hashing", () => {
     expect(report.manifest?.used).toBe(true);
     expect(report.manifest?.reused).toBe(false);
     expect(report.manifest?.optionsMismatch).toContain("discovery");
-    expect(second.byFile.has(normalizedUnitPath)).toBe(true);
-    expect(second.byFile.has(normalizedSamplePath)).toBe(true);
+    expect(second.byFile.has(fileIdentityKey(normalizedUnitPath))).toBe(true);
+    expect(second.byFile.has(fileIdentityKey(normalizedSamplePath))).toBe(true);
   });
 
   it("rediscovers newly supported files when language extensions change incrementally", async () => {
@@ -255,7 +428,7 @@ describe("Cache invalidation and strict hashing", () => {
       threads: 1,
     });
 
-    expect(afterMapping.byFile.get(normalize(mappedPath))?.locals.map((local) => local.localName)).toContain(
+    expect(afterMapping.byFile.get(fileIdentityKey(normalize(mappedPath)))?.locals.map((local) => local.localName)).toContain(
       "newly_mapped",
     );
   });
@@ -337,7 +510,7 @@ describe("Cache invalidation and strict hashing", () => {
       report,
     });
 
-    expect(index.byFile.has(normalize(entry))).toBe(true);
+    expect(index.byFile.has(fileIdentityKey(normalize(entry)))).toBe(true);
     expect(report.manifest?.used).toBe(true);
     expect(report.manifest?.reused).toBe(false);
     expect(report.manifest?.reason).toBe("staleGitCommit");
@@ -652,7 +825,7 @@ describe("Cache invalidation and strict hashing", () => {
     expect(warnSpy).toHaveBeenCalled();
 
     // If full build triggered, ghost file should be indexed
-    expect(idx.byFile.has(normalize(ghostPath))).toBe(true);
+    expect(idx.byFile.has(fileIdentityKey(normalize(ghostPath)))).toBe(true);
 
     warnSpy.mockRestore();
   });
@@ -824,7 +997,7 @@ describe("Cache invalidation and strict hashing", () => {
       expect(prepSpy).not.toHaveBeenCalled();
       expect(signatureSpy).not.toHaveBeenCalled();
       expect(await fsp.readFile(manifestPathFor(root), "utf8")).toBe(manifestBefore);
-      const moduleIndex = incremental.byFile.get(normalize(filePath));
+      const moduleIndex = incremental.byFile.get(fileIdentityKey(normalize(filePath)));
       expect(moduleIndex?.locals.some((local) => local.localName === "snap")).toBe(true);
       expect([...(incremental.manifestEntries?.entries() ?? [])]).toEqual([
         ...(initial.manifestEntries?.entries() ?? []),
@@ -881,7 +1054,7 @@ describe("Cache invalidation and strict hashing", () => {
       expect(incremental.analysis?.label).toBe(snapshot.analysis?.label);
       expect(report.backend).toEqual(snapshot.analysisReport?.backend);
       expect(report.graph).toEqual(snapshot.analysisReport?.graph);
-      const moduleIndex = incremental.byFile.get(normalize(filePath));
+      const moduleIndex = incremental.byFile.get(fileIdentityKey(normalize(filePath)));
       expect(moduleIndex?.locals.some((local) => local.localName === "reportedSnap")).toBe(true);
     } finally {
       prepSpy.mockRestore();
@@ -914,8 +1087,8 @@ describe("Cache invalidation and strict hashing", () => {
       expect(report.files?.total).toBe(2);
       expect(report.files?.changed).toBe(0);
       expect(report.files?.cached).toBe(2);
-      expect(incremental.byFile.has(normalize(firstPath))).toBe(true);
-      expect(incremental.byFile.has(normalize(secondPath))).toBe(true);
+      expect(incremental.byFile.has(fileIdentityKey(normalize(firstPath)))).toBe(true);
+      expect(incremental.byFile.has(fileIdentityKey(normalize(secondPath)))).toBe(true);
     } finally {
       prepSpy.mockRestore();
       discoverSpy.mockRestore();
@@ -939,7 +1112,7 @@ describe("Cache invalidation and strict hashing", () => {
       cache: "disk",
     });
 
-    const moduleIndex = incremental.byFile.get(normalize(filePath));
+    const moduleIndex = incremental.byFile.get(fileIdentityKey(normalize(filePath)));
     expect(moduleIndex?.locals.some((local) => local.localName === "snap")).toBe(true);
   });
 
@@ -961,7 +1134,7 @@ describe("Cache invalidation and strict hashing", () => {
       cache: "disk",
     });
 
-    const moduleIndex = incremental.byFile.get(normalize(filePath));
+    const moduleIndex = incremental.byFile.get(fileIdentityKey(normalize(filePath)));
     expect(moduleIndex?.locals.some((local) => local.localName === "snap")).toBe(true);
   });
 
@@ -989,7 +1162,7 @@ describe("Cache invalidation and strict hashing", () => {
       cache: "disk",
     });
 
-    const moduleIndex = incremental.byFile.get(normalize(filePath));
+    const moduleIndex = incremental.byFile.get(fileIdentityKey(normalize(filePath)));
     expect(moduleIndex?.locals.some((local) => local.localName === "snap")).toBe(true);
   });
 
@@ -1011,7 +1184,7 @@ describe("Cache invalidation and strict hashing", () => {
       cache: "disk",
     });
 
-    const moduleIndex = incremental.byFile.get(normalize(filePath));
+    const moduleIndex = incremental.byFile.get(fileIdentityKey(normalize(filePath)));
     expect(moduleIndex?.locals.some((local) => local.localName === "snap")).toBe(true);
   });
 
@@ -1031,7 +1204,7 @@ describe("Cache invalidation and strict hashing", () => {
       cache: "disk",
     });
 
-    const moduleIndex = incremental.byFile.get(normalize(filePath));
+    const moduleIndex = incremental.byFile.get(fileIdentityKey(normalize(filePath)));
     expect(moduleIndex?.locals.some((local) => local.localName === "snap")).toBe(true);
   });
   it("drops manifest edges for deleted files during incremental builds", async () => {
@@ -1083,7 +1256,7 @@ describe("Cache invalidation and strict hashing", () => {
       ),
     ).toBe(false);
 
-    const mainModule = incremental.byFile.get(normalizedMain);
+    const mainModule = incremental.byFile.get(fileIdentityKey(normalizedMain));
     expect(mainModule).toBeDefined();
     expect(mainModule?.imports.some((imp) => typeof imp.resolved === "string" && imp.resolved === normalizedUtil)).toBe(
       false,
@@ -1182,7 +1355,7 @@ describe("Cache invalidation and strict hashing", () => {
       });
       const manifestAfter = await readManifest(root);
 
-      expect(incremental.byFile.has(normalize(outsideFile))).toBe(false);
+      expect(incremental.byFile.has(fileIdentityKey(normalize(outsideFile)))).toBe(false);
       expect([...incremental.graph.nodes].includes(normalize(outsideFile))).toBe(false);
       expect(Object.keys(manifestAfter.files)).not.toContain(normalize(outsideFile));
     } finally {
@@ -1231,7 +1404,7 @@ describe("Cache invalidation and strict hashing", () => {
       cache: "disk",
     });
 
-    const nextModule = incremental.byFile.get(normalize(nextPath));
+    const nextModule = incremental.byFile.get(fileIdentityKey(normalize(nextPath)));
     expect(nextModule).toBeDefined();
     expect(nextModule?.locals.some((l) => l.localName === "next")).toBe(true);
   });
@@ -1253,7 +1426,7 @@ describe("Cache invalidation and strict hashing", () => {
     });
 
     const first = await buildCache.tryLoadProjectIndexSnapshot(root, { cache: "disk" }, entries);
-    const firstModule = first?.index.byFile.get(normalize(path.join(root, "main.ts")));
+    const firstModule = first?.index.byFile.get(fileIdentityKey(normalize(path.join(root, "main.ts"))));
     if (!firstModule) throw new Error("Expected cached module.");
     firstModule.locals.length = 0;
     const second = await buildCache.tryLoadProjectIndexSnapshot(root, { cache: "disk" }, entries);
@@ -1264,9 +1437,83 @@ describe("Cache invalidation and strict hashing", () => {
     const third = await buildCache.tryLoadProjectIndexSnapshot(root, { cache: "disk" }, entries);
     readSpy.mockRestore();
 
-    expect(second?.index.byFile.get(normalize(path.join(root, "main.ts")))?.locals.length).toBeGreaterThan(0);
+    expect(second?.index.byFile.get(fileIdentityKey(normalize(path.join(root, "main.ts"))))?.locals.length).toBeGreaterThan(0);
     expect(third?.index.byFile.size).toBe(1);
     expect(snapshotReads).toBe(2);
+  });
+  it("writes project snapshots atomically and cleans only stale temporary files", async () => {
+    const root = await mkTmpDir("dg-snapshot-atomic-");
+    const sourcePath = path.join(root, "main.ts");
+    await fsp.writeFile(sourcePath, "export const value = 1;\n", "utf8");
+    const index = await buildProjectIndex(root, { cache: "disk", threads: 1 });
+    const snapshotPath = projectSnapshotPathFor(root);
+    const initialSnapshot = await readProjectSnapshot(snapshotPath);
+    expect(await projectSnapshotTempNames(root)).toEqual([]);
+
+    index.graph.nodes.add(normalize(path.join(root, "rename-failure.ts")));
+    const originalRename = fsp.rename.bind(fsp);
+    const renameSpy = vi.spyOn(fsp, "rename").mockImplementation(async (from, to) => {
+      if (path.resolve(String(to)) === path.resolve(snapshotPath)) {
+        throw new Error("simulated interrupted snapshot rename");
+      }
+      return await originalRename(from, to);
+    });
+    try {
+      await rewriteProjectSnapshot(root, index);
+    } finally {
+      renameSpy.mockRestore();
+    }
+    expect(await readProjectSnapshot(snapshotPath)).toEqual(initialSnapshot);
+    expect(await projectSnapshotTempNames(root)).toEqual([]);
+
+    index.graph.nodes.add(normalize(path.join(root, "partial-write.ts")));
+    let readableDuringPartialWrite = false;
+    const originalWriteFile = fsp.writeFile.bind(fsp);
+    const partialWriteSpy = vi.spyOn(fsp, "writeFile").mockImplementation(async (...args) => {
+      const candidate = typeof args[0] === "string" ? args[0] : undefined;
+      const snapshotPrefix = `.${path.basename(snapshotPath)}.`;
+      if (!candidate || !path.basename(candidate).startsWith(snapshotPrefix)) {
+        return await originalWriteFile(...args);
+      }
+      await originalWriteFile(candidate, Buffer.from("truncated snapshot"), { flag: "wx" });
+      try {
+        await readProjectSnapshot(snapshotPath);
+        readableDuringPartialWrite = true;
+      } catch {
+        readableDuringPartialWrite = false;
+      }
+      throw new Error("simulated interrupted snapshot write");
+    });
+    try {
+      await rewriteProjectSnapshot(root, index);
+    } finally {
+      partialWriteSpy.mockRestore();
+    }
+    expect(readableDuringPartialWrite).toBe(true);
+    expect(await readProjectSnapshot(snapshotPath)).toEqual(initialSnapshot);
+    expect(await projectSnapshotTempNames(root)).toEqual([]);
+
+    const staleTempPath = path.join(
+      path.dirname(snapshotPath),
+      `.${path.basename(snapshotPath)}.123.00000000-0000-0000-0000-000000000001.tmp`,
+    );
+    const freshTempPath = path.join(
+      path.dirname(snapshotPath),
+      `.${path.basename(snapshotPath)}.456.00000000-0000-0000-0000-000000000002.tmp`,
+    );
+    await fsp.writeFile(staleTempPath, "stale", "utf8");
+    const staleTime = new Date(Date.now() - 2 * 24 * 60 * 60 * 1_000);
+    await fsp.utimes(staleTempPath, staleTime, staleTime);
+    await fsp.writeFile(freshTempPath, "active", "utf8");
+
+    index.graph.nodes.add(normalize(path.join(root, "successful-write.ts")));
+    await rewriteProjectSnapshot(root, index);
+
+    await expect(fsp.stat(staleTempPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fsp.readFile(freshTempPath, "utf8")).resolves.toBe("active");
+    expect(await projectSnapshotTempNames(root)).toEqual([path.basename(freshTempPath)]);
+    const finalSnapshot = await readProjectSnapshot(snapshotPath);
+    expect(finalSnapshot.graph).not.toEqual(initialSnapshot.graph);
   });
 
   it("does not read unchanged tracked source files for partial cache validation", async () => {
@@ -1381,7 +1628,7 @@ describe("Cache invalidation and strict hashing", () => {
     });
 
     expect(
-      incremental.byFile.get(normalize(entryPath))?.locals.some((local) => local.localName === "disabledBloom"),
+      incremental.byFile.get(fileIdentityKey(normalize(entryPath)))?.locals.some((local) => local.localName === "disabledBloom"),
     ).toBe(true);
     expect(incremental.bloomFilters).toBeUndefined();
   });
@@ -1411,7 +1658,7 @@ describe("Cache invalidation and strict hashing", () => {
       useBloomFilters: true,
     });
 
-    expect(rebuilt.byFile.get(normalize(entryPath))?.locals.some((local) => local.localName === "guarded")).toBe(true);
+    expect(rebuilt.byFile.get(fileIdentityKey(normalize(entryPath)))?.locals.some((local) => local.localName === "guarded")).toBe(true);
     expect(rebuilt.bloomFilters?.get(normalize(entryPath))?.mightContain("guarded")).toBe(true);
   });
 
@@ -1451,13 +1698,15 @@ describe("Cache invalidation and strict hashing", () => {
       version: number;
       bloomFilters?: Record<string, unknown>;
       nativeRuntimeFingerprint?: string;
+      implementationFingerprint?: string;
     };
 
-    expect(initial.byFile.has(normalize(entryPath))).toBe(true);
-    expect(rebuilt.byFile.has(normalize(entryPath))).toBe(true);
+    expect(initial.byFile.has(fileIdentityKey(normalize(entryPath)))).toBe(true);
+    expect(rebuilt.byFile.has(fileIdentityKey(normalize(entryPath)))).toBe(true);
     expect(rebuilt.bloomFilters?.get(normalize(entryPath))?.mightContain("versioned")).toBe(true);
-    expect(rewrittenSnapshot.version).toBe(3);
+    expect(rewrittenSnapshot.version).toBe(4);
     expect(rewrittenSnapshot.nativeRuntimeFingerprint).toBeTypeOf("string");
+    expect(rewrittenSnapshot.implementationFingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(rewrittenSnapshot.bloomFilters?.[normalize(entryPath)]).toBeDefined();
   });
 
@@ -1507,7 +1756,7 @@ describe("Cache invalidation and strict hashing", () => {
         (edge) => edge.from === normalize(main) && edge.to.type === "file" && edge.to.path === normalize(depPath),
       ),
     ).toBe(false);
-    const mainModule = rebuilt.byFile.get(normalize(main));
+    const mainModule = rebuilt.byFile.get(fileIdentityKey(normalize(main)));
     expect(mainModule).toBeDefined();
     expect(
       mainModule?.imports.some((imp) => typeof imp.resolved === "string" && imp.resolved === normalize(depPath)),
@@ -1603,12 +1852,12 @@ describe("Cache invalidation and strict hashing", () => {
     });
 
     try {
-      await loadNearestTsconfigFor(sourceFile);
+      await loadNearestTsconfigFor(sourceFile, root);
       await loadWorkspaceConfig(root);
 
       clearImportResolutionCaches();
 
-      await loadNearestTsconfigFor(sourceFile);
+      await loadNearestTsconfigFor(sourceFile, root);
       await loadWorkspaceConfig(root);
 
       const tsconfigReads = readSpy.mock.calls.filter(
@@ -1642,7 +1891,7 @@ describe("Cache invalidation and strict hashing", () => {
       threads: 2,
       cache: "disk",
     });
-    expect(initial.byFile.has(normalize(generatedPath))).toBe(true);
+    expect(initial.byFile.has(fileIdentityKey(normalize(generatedPath)))).toBe(true);
 
     await fsp.writeFile(path.join(root, ".gitignore"), "src/generated.ts\n", "utf8");
 
@@ -1651,8 +1900,8 @@ describe("Cache invalidation and strict hashing", () => {
       cache: "disk",
     });
 
-    expect(rebuilt.byFile.has(normalize(trackedPath))).toBe(true);
-    expect(rebuilt.byFile.has(normalize(generatedPath))).toBe(false);
+    expect(rebuilt.byFile.has(fileIdentityKey(normalize(trackedPath)))).toBe(true);
+    expect(rebuilt.byFile.has(fileIdentityKey(normalize(generatedPath)))).toBe(false);
   });
 
   it("picks up a newly created untracked file on an incremental build without an explicit file list", async () => {
@@ -1677,8 +1926,8 @@ describe("Cache invalidation and strict hashing", () => {
       // untracked file itself via Git rather than requiring a caller-supplied file list.
       const rebuilt = await buildProjectIndexIncremental(root, { cache: "disk" });
 
-      expect(rebuilt.byFile.has(normalize(trackedPath))).toBe(true);
-      expect(rebuilt.byFile.has(normalize(freshPath))).toBe(true);
+      expect(rebuilt.byFile.has(fileIdentityKey(normalize(trackedPath)))).toBe(true);
+      expect(rebuilt.byFile.has(fileIdentityKey(normalize(freshPath)))).toBe(true);
       expect(scanSpy).not.toHaveBeenCalled();
     } finally {
       scanSpy.mockRestore();
@@ -1714,8 +1963,8 @@ describe("Cache invalidation and strict hashing", () => {
       const rebuilt = await buildProjectIndexIncremental(root, { cache: "disk", cacheStrict: false });
 
       expect(gitSigSpy).not.toHaveBeenCalled();
-      expect(rebuilt.byFile.has(normalize(trackedPath))).toBe(true);
-      expect(rebuilt.byFile.has(normalize(scratchPath))).toBe(true);
+      expect(rebuilt.byFile.has(fileIdentityKey(normalize(trackedPath)))).toBe(true);
+      expect(rebuilt.byFile.has(fileIdentityKey(normalize(scratchPath)))).toBe(true);
     } finally {
       gitSigSpy.mockRestore();
     }
@@ -1741,7 +1990,7 @@ describe("Cache invalidation and strict hashing", () => {
     await fsp.writeFile(scratchPath, "export const scratchUpdated = 2;\n", "utf8");
     const rebuilt = await buildProjectIndexIncremental(root, { cache: "disk" });
 
-    const scratchModule = rebuilt.byFile.get(normalize(scratchPath));
+    const scratchModule = rebuilt.byFile.get(fileIdentityKey(normalize(scratchPath)));
     expect(scratchModule?.locals.some((local) => local.localName === "scratchUpdated")).toBe(true);
     expect(scratchModule?.locals.some((local) => local.localName === "scratchOriginal")).toBe(false);
   });
@@ -1767,8 +2016,8 @@ describe("Cache invalidation and strict hashing", () => {
     try {
       const rebuilt = await buildProjectIndexIncremental(root, { cache: "disk" });
 
-      expect(rebuilt.byFile.has(normalize(trackedPath))).toBe(true);
-      expect(rebuilt.byFile.has(normalize(stagedPath))).toBe(true);
+      expect(rebuilt.byFile.has(fileIdentityKey(normalize(trackedPath)))).toBe(true);
+      expect(rebuilt.byFile.has(fileIdentityKey(normalize(stagedPath)))).toBe(true);
       expect(scanSpy).not.toHaveBeenCalled();
     } finally {
       scanSpy.mockRestore();
@@ -1797,8 +2046,8 @@ describe("Cache invalidation and strict hashing", () => {
       // reaches `fresh.ts` through the ordinary full-scan path.
       const rebuilt = await buildProjectIndexIncremental(root, { cache: "disk" });
 
-      expect(rebuilt.byFile.has(normalize(trackedPath))).toBe(true);
-      expect(rebuilt.byFile.has(normalize(freshPath))).toBe(true);
+      expect(rebuilt.byFile.has(fileIdentityKey(normalize(trackedPath)))).toBe(true);
+      expect(rebuilt.byFile.has(fileIdentityKey(normalize(freshPath)))).toBe(true);
     } finally {
       untrackedSpy.mockRestore();
     }
@@ -1875,7 +2124,7 @@ describe("Cache invalidation and strict hashing", () => {
 
     const rebuilt = await buildProjectIndex(root, { cache: "disk", cacheStrict: true });
 
-    expect(rebuilt.byFile.has(normalize(path.join(linkedPackage, "src", "index.ts")))).toBe(true);
+    expect(rebuilt.byFile.has(fileIdentityKey(normalize(path.join(linkedPackage, "src", "index.ts"))))).toBe(true);
     const refreshedManifest = await readManifest(root);
     expect((refreshedManifest.symlinkDirectories ?? []).map(normalize)).toContain(normalize(linkedPackage));
   });
@@ -1902,7 +2151,7 @@ describe("Cache invalidation and strict hashing", () => {
     // graphOptions mismatch (missing on the fixture manifest) forces a full rebuild path,
     // exercising exactly the branch that reads a possibly-absent symlinkDirectories hint.
     const rebuilt = await buildProjectIndexIncremental(root, { cache: "disk" });
-    expect(rebuilt.byFile.has(normalize(path.join(root, "a.ts")))).toBe(true);
+    expect(rebuilt.byFile.has(fileIdentityKey(normalize(path.join(root, "a.ts"))))).toBe(true);
 
     const backfilledManifest = await readManifest(root);
     expect(backfilledManifest.symlinkDirectories).toEqual([]);

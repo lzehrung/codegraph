@@ -3,8 +3,16 @@ import type { ParserLanguage } from "../languages/types.js";
 
 import { JS_SUPPORT, TS_SUPPORT, TSX_SUPPORT, supportForFile, supportById } from "../languages.js";
 import type { LanguageExtensionMap, LanguageSupport } from "../languages.js";
-import { prepareSFCScriptSource, detectSFCFramework } from "./sfc.js";
-import type { SFCFramework } from "./sfc.js";
+import {
+  buildSvelteTemplateBlocks,
+  detectSFCFramework,
+  parseSFC,
+  prepareSFCBlockSource,
+  prepareSFCScriptSource,
+  styleLanguageKey,
+  templateLanguageKey,
+} from "./sfc.js";
+import type { SFCBlock, SFCFramework } from "./sfc.js";
 
 interface ParserInput {
   source: string;
@@ -12,9 +20,16 @@ interface ParserInput {
   lang: ParserLanguage;
 }
 
-interface SourceInput {
+export interface PreparedSFCEmbeddedBlock {
+  block: SFCBlock;
   source: string;
   sup: LanguageSupport;
+}
+
+export interface SourceInput {
+  source: string;
+  sup: LanguageSupport;
+  embeddedBlocks?: PreparedSFCEmbeddedBlock[];
 }
 
 export class UnsupportedParserInputError extends Error {
@@ -70,8 +85,39 @@ export function isUnsupportedParserInputError(error: unknown): error is Unsuppor
 function prepareSFCSourceInput(source: string, framework: SFCFramework): SourceInput {
   const { maskedSource, scriptLangId } = prepareSFCScriptSource(source, framework);
   const sup = SCRIPT_SUPPORT_MAP[scriptLangId] ?? supportById(scriptLangId) ?? JS_SUPPORT;
+  const parsedBlocks = parseSFC(source);
+  const blocks =
+    framework === "svelte" ? [...parsedBlocks, ...buildSvelteTemplateBlocks(source, parsedBlocks)] : parsedBlocks;
+  const embeddedBlocks = prepareEmbeddedSFCBlocks(source, framework, blocks);
   return {
     source: maskedSource,
     sup,
+    ...(embeddedBlocks.length ? { embeddedBlocks } : {}),
   };
+}
+
+function prepareEmbeddedSFCBlocks(
+  source: string,
+  framework: SFCFramework,
+  blocks: SFCBlock[],
+): PreparedSFCEmbeddedBlock[] {
+  const prepared: PreparedSFCEmbeddedBlock[] = [];
+  for (const block of blocks) {
+    let languageId: "css" | "scss" | "less" | "html" | null = null;
+    if (block.type === "style") {
+      languageId = styleLanguageKey(block);
+    } else if (block.type === "template") {
+      languageId = templateLanguageKey(framework);
+    }
+    if (!languageId) continue;
+
+    const sup = supportById(languageId);
+    if (!sup) continue;
+    prepared.push({
+      block,
+      source: prepareSFCBlockSource(source, block),
+      sup,
+    });
+  }
+  return prepared;
 }

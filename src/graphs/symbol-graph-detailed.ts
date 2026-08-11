@@ -10,7 +10,7 @@ import {
 } from "../native/treeSitterNative.js";
 import { SymbolKind, type ProjectIndex, type ResolvedExport, type SymbolDef } from "../indexer/types.js";
 import type { FileId } from "../types.js";
-import { normalizePath } from "../util/paths.js";
+import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { buildSymbolGraph, type SymbolGraph } from "./symbol-graph.js";
 import { collectDetailedDeclarations } from "./symbol-graph-detailed/ast.js";
 import {
@@ -51,9 +51,9 @@ export async function buildSymbolGraphDetailed(
 
   const importedByOthers = new Set<string>();
   if (scopeMode === "imported") {
-    for (const [, moduleEntry] of index.byFile) {
+    for (const moduleEntry of index.byFile.values()) {
       for (const imp of moduleEntry.imports) {
-        const target = typeof imp.resolved === "string" ? normalizePath(imp.resolved) : undefined;
+        const target = typeof imp.resolved === "string" ? fileIdentityKey(imp.resolved) : undefined;
         if (target) importedByOthers.add(target);
       }
     }
@@ -85,10 +85,10 @@ export async function buildSymbolGraphDetailed(
     cache: Map<string, ResolvedDetailedExport | null> = new Map(),
   ): ResolvedDetailedExport | null => {
     const normalizedFile = normalizePath(file);
-    const key = `${normalizedFile}::${exportedName}`;
+    const key = `${fileIdentityKey(normalizedFile)}::${exportedName}`;
     if (cache.has(key)) return cache.get(key) ?? null;
     cache.set(key, null);
-    const moduleEntry = index.byFile.get(normalizedFile);
+    const moduleEntry = index.byFile.get(fileIdentityKey(normalizedFile));
     if (!moduleEntry) {
       return null;
     }
@@ -181,7 +181,7 @@ export async function buildSymbolGraphDetailed(
       return targetDef;
     }
 
-    const fileKey = typeof file === "string" ? normalizePath(file) : null;
+    const fileKey = typeof file === "string" ? fileIdentityKey(file) : null;
     const moduleEntry = fileKey ? index.byFile.get(fileKey) : undefined;
     const lastName = names[0];
     return moduleEntry?.locals.find((entry) => entry.localName === lastName) ?? null;
@@ -193,17 +193,19 @@ export async function buildSymbolGraphDetailed(
     cache: Map<string, ResolvedDetailedExport | null> = new Map(),
   ): SymbolDef | null => resolveExportDef(file, exportedName, cache);
 
-  for (const [file, moduleEntry] of index.byFile) {
-    if (opts?.files && !opts.files.has(file)) continue;
+  const optionFileKeys = opts?.files ? new Set(Array.from(opts.files, fileIdentityKey)) : undefined;
+  for (const moduleEntry of index.byFile.values()) {
+    const file = moduleEntry.file;
+    if (optionFileKeys && !optionFileKeys.has(fileIdentityKey(file))) continue;
     if (scopeMode === "imported") {
       const hasFuncOrClass = moduleEntry.locals.some(
         (local) => local.kind === SymbolKind.Function || local.kind === SymbolKind.Class,
       );
-      const isImportedOrImports = importedByOthers.has(normalizePath(file)) || !!moduleEntry.imports.length;
+      const isImportedOrImports = importedByOthers.has(fileIdentityKey(file)) || !!moduleEntry.imports.length;
       if (!(hasFuncOrClass && isImportedOrImports)) continue;
     }
     try {
-      const parsedEntry = index.parsed?.get(file);
+      const parsedEntry = index.parsed?.get(fileIdentityKey(file));
       let sup = parsedEntry?.sup;
       let src = parsedEntry?.source;
       let tree: SyntaxTreeLike | undefined = parsedEntry?.tree;

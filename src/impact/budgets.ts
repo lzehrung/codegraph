@@ -1,6 +1,7 @@
 import { performance } from "node:perf_hooks";
 import type { FileId } from "../types.js";
 import { SymbolKind, type ProjectIndex } from "../indexer/types.js";
+import { fileIdentityKey } from "../util/paths.js";
 import { buildDependencyStats } from "./severity.js";
 import type { ChangedSymbol, ImpactDiagnostics, ImpactOptions } from "./types.js";
 
@@ -118,14 +119,15 @@ export function rankChangedSymbolsForBudget(
   const hasIncomingEdge = new Map<FileId, boolean>();
   if (index.graphAdjacency) {
     for (const symbol of changedSymbols) {
-      if (hasIncomingEdge.has(symbol.file)) continue;
-      const incoming = index.graphAdjacency.reverse.get(symbol.file);
-      hasIncomingEdge.set(symbol.file, Boolean(incoming && incoming.length > 0));
+      const key = fileIdentityKey(symbol.file);
+      if (hasIncomingEdge.has(key)) continue;
+      const incoming = index.graphAdjacency.reverse.get(key);
+      hasIncomingEdge.set(key, Boolean(incoming && incoming.length > 0));
     }
   } else {
     for (const edge of index.graph.edges) {
       if (edge.to.type !== "file") continue;
-      hasIncomingEdge.set(edge.to.path, true);
+      hasIncomingEdge.set(fileIdentityKey(edge.to.path), true);
     }
   }
 
@@ -134,11 +136,13 @@ export function rankChangedSymbolsForBudget(
     if (signatureDelta) return signatureDelta;
     const exportDelta = Number(b.exported) - Number(a.exported);
     if (exportDelta) return exportDelta;
-    const incomingDelta = Number(Boolean(hasIncomingEdge.get(b.file))) - Number(Boolean(hasIncomingEdge.get(a.file)));
+    const incomingDelta =
+      Number(Boolean(hasIncomingEdge.get(fileIdentityKey(b.file)))) -
+      Number(Boolean(hasIncomingEdge.get(fileIdentityKey(a.file))));
     if (incomingDelta) return incomingDelta;
     const kindDelta = kindPriority(a.kind) - kindPriority(b.kind);
     if (kindDelta) return kindDelta;
-    const fanInDelta = (fanIn.get(b.file) ?? 0) - (fanIn.get(a.file) ?? 0);
+    const fanInDelta = (fanIn.get(fileIdentityKey(b.file)) ?? 0) - (fanIn.get(fileIdentityKey(a.file)) ?? 0);
     if (fanInDelta) return fanInDelta;
     const fileDelta = comparePathsStable(a.file, b.file);
     if (fileDelta) return fileDelta;

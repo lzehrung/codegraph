@@ -13,6 +13,7 @@ import { supportForFile } from "../languages.js";
 import type { LanguageSupport } from "../languages.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
+import { fileIdentityKey } from "../util/paths.js";
 import type { FileChange, ChangedSymbol } from "./types.js";
 import { collectChangedLines } from "./hunks.js";
 import { toRange } from "../util/ast.js";
@@ -74,7 +75,7 @@ export async function locateChangedSymbolsWithLines(
     signatureChanged: boolean;
   };
   const seenHandles = new Map<SymbolHandle, SymbolEntry>();
-  const mod = index.byFile.get(file);
+  const mod = index.byFile.get(fileIdentityKey(file));
 
   // Pre-build an O(1) position lookup so findDeclarationNameInAncestors does
   // not do an O(locals) scan for every candidate declaration name node.
@@ -285,7 +286,7 @@ export async function mapChangedLinesToSymbols(
 
   let parsedEntry;
   try {
-    parsedEntry = await ensureParsedContext(file, index.parsed?.get(file));
+    parsedEntry = await ensureParsedContext(file, index.parsed?.get(fileIdentityKey(file)));
   } catch {
     return new Map();
   }
@@ -295,7 +296,7 @@ export async function mapChangedLinesToSymbols(
   const sup = parsedEntry.sup;
   const changedLines = changedLinesOverride ?? collectChangedLines(hunks);
 
-  const mod = index.byFile.get(file);
+  const mod = index.byFile.get(fileIdentityKey(file));
   const trackedPositions = mod ? buildTrackedSymbolPositions(mod.locals) : undefined;
 
   const nodes = findNodesInLines(tree, changedLines);
@@ -826,7 +827,7 @@ function findSymbolHandleForNode(
   source: string,
   trackedPositions?: ReadonlySet<string>,
 ): SymbolHandle | null {
-  const mod = index.byFile.get(file);
+  const mod = index.byFile.get(fileIdentityKey(file));
   if (!mod) return null;
 
   // Exact declaration name node

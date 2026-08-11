@@ -138,11 +138,8 @@ const finalize = () => {
 
     const processUsersChunks = chunks.filter((c) => c.type === "function" && c.name === "processUsers");
     expect(processUsersChunks.length).toBeGreaterThan(1);
-    expect(processUsersChunks[0]?.startLine).toBe(1);
-    expect(processUsersChunks[processUsersChunks.length - 1]?.endLine).toBe(14);
-
-    const elseSegment = processUsersChunks.find((c) => c.startLine === 9 && c.endLine === 13);
-    expect(elseSegment).toBeDefined();
+    expect(processUsersChunks.every((chunk) => chunk.tokenCount <= 8)).toBe(true);
+    expect(processUsersChunks.map((chunk) => chunk.text).join("")).toContain("else {");
   });
 
   it("detects JavaScript functions assigned to variables and properties", () => {
@@ -231,7 +228,8 @@ module Legacy {
 
     expect(chunks.some((c) => c.type === "namespace" && c.name === "Tools")).toBe(true);
     expect(chunks.some((c) => c.type === "namespace" && c.name === "Legacy")).toBe(true);
-    expect(chunks.some((c) => c.type === "function" && c.name === "build")).toBe(true);
+    expect(chunks.some((c) => c.type === "function" && c.name === "build")).toBe(false);
+    expect(chunks.filter((c) => c.text.includes('function build()')).length).toBe(1);
   });
 
   it("captures TypeScript enums regardless of identifier node type", () => {
@@ -400,7 +398,7 @@ function processItems(items) {
   });
 });
 
-describe("chunkTextFile", () => {
+describe("chunkTextFile and chunkFile regressions", () => {
   it("splits text blobs according to the token budget", () => {
     const source = Array.from({ length: 24 }, (_, i) => `line ${i + 1}`).join("\n");
 
@@ -419,5 +417,126 @@ describe("chunkTextFile", () => {
     const combined = chunks.map((c) => c.text).join("\n");
     expect(combined).toContain("line 1");
     expect(combined).toContain("line 24");
+  });
+
+  it("keeps text chunk IDs when an earlier chunk is inserted", () => {
+    const unchangedSource = ["later alpha", "later beta"].join("\n");
+    const before = chunkTextFile({
+      source: unchangedSource,
+      filePath: "stable.txt",
+      languageId: "text",
+      maxTokens: 2,
+      tokenizer: tokenize,
+    });
+    const after = chunkTextFile({
+      source: ["inserted chunk", unchangedSource].join("\n"),
+      filePath: "stable.txt",
+      languageId: "text",
+      maxTokens: 2,
+      tokenizer: tokenize,
+    });
+    const idsAfter = new Map(after.map((chunk) => [chunk.text, chunk.id]));
+
+    for (const chunk of before) {
+      expect(idsAfter.get(chunk.text)).toBe(chunk.id);
+    }
+  });
+
+  it("splits oversized single-line text and semantic chunks without dropping source", () => {
+    const source = "function minified(){const value=1234567890;return value+1234567890;}";
+    const maxTokens = 12;
+    const characterTokenizer = (text: string) => text.length;
+
+    const semanticChunks = chunkFile({
+      language: LANG_CONFIGS.javascript,
+      source,
+      filePath: "minified.js",
+      minTokens: 1,
+      maxTokens,
+      tokenizer: characterTokenizer,
+    });
+    const textChunks = chunkTextFile({
+      source,
+      filePath: "minified.txt",
+      languageId: "text",
+      minTokens: 1,
+      maxTokens,
+      tokenizer: characterTokenizer,
+    });
+
+    expect(semanticChunks.every((chunk) => chunk.tokenCount <= maxTokens)).toBe(true);
+    expect(semanticChunks.map((chunk) => chunk.text).join("")).toBe(source);
+    expect(textChunks.every((chunk) => chunk.tokenCount <= maxTokens)).toBe(true);
+    expect(textChunks.map((chunk) => chunk.text).join("")).toBe(source);
+  });
+
+  it("keeps IDs for unchanged semantic chunks when an earlier chunk is inserted", () => {
+    const unchangedSource = [
+      "function unchangedFirst() {",
+      "  return 'first';",
+      "}",
+      "",
+      "function unchangedSecond() {",
+      "  return 'second';",
+      "}",
+    ].join("\n");
+    const sourceWithInsertion = [
+      "function inserted() {",
+      "  return 'inserted';",
+      "}",
+      "",
+      unchangedSource,
+    ].join("\n");
+    const options = {
+      language: LANG_CONFIGS.javascript,
+      filePath: "stable.js",
+      minTokens: 1,
+      maxTokens: 100,
+      tokenizer: tokenize,
+    };
+    const before = chunkFile({ ...options, source: unchangedSource });
+    const after = chunkFile({ ...options, source: sourceWithInsertion });
+
+    const unchangedChunks = before.filter((chunk) => chunk.name?.startsWith("unchanged"));
+    const unchangedAfter = after.filter((chunk) => chunk.name?.startsWith("unchanged"));
+    const idsAfter = new Map(unchangedAfter.map((chunk) => [chunk.name, chunk.id]));
+
+    expect(unchangedChunks).toHaveLength(2);
+    for (const chunk of unchangedChunks) {
+      expect(idsAfter.get(chunk.name)).toBe(chunk.id);
+    }
+  });
+
+  it("uses disjoint source ranges when a large class promotes its methods", () => {
+    const source = [
+      "class Example {",
+      "  first() {",
+      "    return 'first marker';",
+      "  }",
+      "",
+      "  second() {",
+      "    return 'second marker';",
+      "  }",
+      "}",
+    ].join("\n");
+    const chunks = chunkFile({
+      language: LANG_CONFIGS.javascript,
+      source,
+      filePath: "Example.js",
+      minTokens: 1,
+      maxTokens: 8,
+      tokenizer: tokenize,
+    });
+
+    let rangeStart = 0;
+    for (const chunk of chunks) {
+      const rangeEnd = rangeStart + chunk.text.length;
+      expect(source.slice(rangeStart, rangeEnd)).toBe(chunk.text);
+      rangeStart = rangeEnd;
+    }
+
+    expect(rangeStart).toBe(source.length);
+    expect(chunks.filter((chunk) => chunk.text.includes("first marker"))).toHaveLength(1);
+    expect(chunks.filter((chunk) => chunk.text.includes("second marker"))).toHaveLength(1);
   });
 });

@@ -1,3 +1,4 @@
+import { fileIdentityKey } from "../util/paths.js";
 import type { FileId, Graph } from "../types.js";
 
 export type GraphAdjacencyIndex = {
@@ -6,12 +7,13 @@ export type GraphAdjacencyIndex = {
 };
 
 function appendNeighbor(adjacency: Map<FileId, FileId[]>, from: FileId, to: FileId): void {
-  const neighbors = adjacency.get(from);
+  const key = fileIdentityKey(from);
+  const neighbors = adjacency.get(key);
   if (neighbors) {
     neighbors.push(to);
     return;
   }
-  adjacency.set(from, [to]);
+  adjacency.set(key, [to]);
 }
 
 export function buildGraphAdjacency(graph: Graph): GraphAdjacencyIndex {
@@ -38,9 +40,9 @@ export function graphAdjacencyFor(graph: Graph): GraphAdjacencyIndex {
 }
 
 export function getForwardNeighbors(adjacency: GraphAdjacencyIndex, file: FileId): readonly FileId[] {
-  return adjacency.forward.get(file) ?? [];
+  return adjacency.forward.get(fileIdentityKey(file)) ?? [];
 }
 
 export function getReverseNeighbors(adjacency: GraphAdjacencyIndex, file: FileId): readonly FileId[] {
-  return adjacency.reverse.get(file) ?? [];
+  return adjacency.reverse.get(fileIdentityKey(file)) ?? [];
 }

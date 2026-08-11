@@ -7,6 +7,7 @@ import { isJsTsLanguage } from "../languages/js-family.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import { sliceText, toRange } from "../util/ast.js";
+import { fileIdentityKey } from "../util/paths.js";
 import {
   getCallCompatibilityProvider,
   getCallCompatibilitySupportedLanguages,
@@ -50,6 +51,11 @@ type AngleMode = "always" | "type-context";
 interface SignatureParameterText {
   text: string;
   skipFirstReceiver: boolean;
+}
+
+interface CallsiteArgumentText {
+  text: string;
+  trailingArgumentCount: number;
 }
 
 function supportsCallCompatibilityLanguage(languageId: string): boolean {
@@ -551,7 +557,7 @@ function findRegexLiteralEnd(text: string, index: number): number | null {
   return -1;
 }
 
-function splitTopLevelCommaGroups(text: string, angleMode: AngleMode): string[] | null {
+function splitTopLevelCommaGroups(text: string, angleMode: AngleMode, detectRegexLiterals = true): string[] | null {
   const trimmed = text.trim();
   if (!trimmed) {
     return [];
@@ -593,7 +599,7 @@ function splitTopLevelCommaGroups(text: string, angleMode: AngleMode): string[] 
       continue;
     }
 
-    if (canStartRegexLiteral(text, index, groupStart)) {
+    if (detectRegexLiterals && canStartRegexLiteral(text, index, groupStart)) {
       const regexEnd = findRegexLiteralEnd(text, index);
       if (regexEnd === null) {
         return null;
@@ -907,28 +913,125 @@ function isReceiverParameter(
   return false;
 }
 
+function hasTopLevelEllipsis(text: string): boolean {
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  let braceDepth = 0;
+  let angleDepth = 0;
+  let quote: string | null = null;
+  let escaped = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+
+    const commentEnd = findCommentEnd(text, index);
+    if (commentEnd !== null) {
+      if (commentEnd < 0) {
+        return false;
+      }
+      index = commentEnd - 1;
+      continue;
+    }
+
+    if (canStartRegexLiteral(text, index, 0)) {
+      const regexEnd = findRegexLiteralEnd(text, index);
+      if (regexEnd === null || regexEnd < 0) {
+        return false;
+      }
+      index = regexEnd - 1;
+      continue;
+    }
+
+    if (char === '"' || char === "'" || char === "`") {
+      quote = char;
+      continue;
+    }
+    if (char === "(") {
+      parenDepth += 1;
+      continue;
+    }
+    if (char === ")") {
+      parenDepth -= 1;
+      if (parenDepth < 0) {
+        return false;
+      }
+      continue;
+    }
+    if (char === "[") {
+      bracketDepth += 1;
+      continue;
+    }
+    if (char === "]") {
+      bracketDepth -= 1;
+      if (bracketDepth < 0) {
+        return false;
+      }
+      continue;
+    }
+    if (char === "{") {
+      braceDepth += 1;
+      continue;
+    }
+    if (char === "}") {
+      braceDepth -= 1;
+      if (braceDepth < 0) {
+        return false;
+      }
+      continue;
+    }
+    const atDelimiterTopLevel = !parenDepth && !bracketDepth && !braceDepth;
+    if (char === "<" && atDelimiterTopLevel) {
+      angleDepth += 1;
+      continue;
+    }
+    if (char === ">" && angleDepth && atDelimiterTopLevel && text[index - 1] !== "=") {
+      angleDepth -= 1;
+      continue;
+    }
+    if (!angleDepth && atDelimiterTopLevel && text.startsWith("...", index)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function isParameterSeparator(languageId: string, parameter: string): boolean {
+  const trimmed = parameter.trim();
+  return languageId === "python" && (trimmed === "/" || trimmed === "*");
+}
+
 function isRestParameter(languageId: string, parameter: string): boolean {
   const trimmed = parameter.trim();
   if (!trimmed) {
     return false;
   }
-  if (trimmed === "..." || trimmed.startsWith("...")) {
+  if (hasTopLevelEllipsis(trimmed)) {
     return true;
   }
   if (languageId === "python" || languageId === "ruby") {
     return trimmed.startsWith("*") || trimmed.startsWith("**");
-  }
-  if (languageId === "go") {
-    return trimmed.includes("...");
   }
   if (languageId === "csharp") {
     return /\bparams\b/.test(trimmed);
   }
   if (languageId === "kotlin") {
     return /\bvararg\b/.test(trimmed);
-  }
-  if (languageId === "swift") {
-    return trimmed.endsWith("...");
   }
   return false;
 }
@@ -964,7 +1067,7 @@ function signatureFromParameterText(
   angleMode: AngleMode,
   skipFirstReceiver = true,
 ): CallableSignature | null {
-  const parameters = splitTopLevelCommaGroups(parameterText, angleMode);
+  const parameters = splitTopLevelCommaGroups(parameterText, angleMode, languageId !== "python");
   if (!parameters) {
     return null;
   }
@@ -976,7 +1079,11 @@ function signatureFromParameterText(
 
   parameters.forEach((parameter, index) => {
     const trimmed = parameter.trim();
-    if (!trimmed || isReceiverParameter(languageId, trimmed, index, skipFirstReceiver)) {
+    if (
+      !trimmed ||
+      isParameterSeparator(languageId, trimmed) ||
+      isReceiverParameter(languageId, trimmed, index, skipFirstReceiver)
+    ) {
       return;
     }
     if (isRestParameter(languageId, trimmed)) {
@@ -1039,7 +1146,11 @@ function extractCallsiteArgumentsFromProvider(request: ExtractCallsiteArgumentsR
 
   const astArgumentText = findCallsiteArgumentText(request);
   if (astArgumentText !== null) {
-    return callsiteFromArgumentText(request.languageId, astArgumentText);
+    return callsiteFromArgumentText(
+      request.languageId,
+      astArgumentText.text,
+      astArgumentText.trailingArgumentCount,
+    );
   }
 
   if (!isJsTsLanguage(request.languageId)) {
@@ -1087,16 +1198,99 @@ const callExpressionTypes = new Set([
 
 const argumentListTypes = new Set(["argument_list", "arguments", "value_arguments", "call_suffix"]);
 
-function findCallsiteArgumentText(request: ExtractCallsiteArgumentsRequest): string | null {
+function countTrailingClosureArguments(text: string): number | null {
+  let startIndex = 0;
+  let count = 0;
+
+  while (startIndex < text.length) {
+    while (/\s/.test(text[startIndex] ?? "")) {
+      startIndex += 1;
+    }
+    if (startIndex === text.length) {
+      return count;
+    }
+    if (text[startIndex] !== "{") {
+      return null;
+    }
+
+    let braceDepth = 0;
+    let quote: string | null = null;
+    let escaped = false;
+    let closed = false;
+    for (let index = startIndex; index < text.length; index += 1) {
+      const char = text[index];
+      if (quote) {
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        if (char === "\\") {
+          escaped = true;
+          continue;
+        }
+        if (char === quote) {
+          quote = null;
+        }
+        continue;
+      }
+
+      const commentEnd = findCommentEnd(text, index);
+      if (commentEnd !== null) {
+        if (commentEnd < 0) {
+          return null;
+        }
+        index = commentEnd - 1;
+        continue;
+      }
+
+      if (char === '"' || char === "'" || char === "`") {
+        quote = char;
+        continue;
+      }
+      if (char === "{") {
+        braceDepth += 1;
+        continue;
+      }
+      if (char === "}") {
+        braceDepth -= 1;
+        if (braceDepth < 0) {
+          return null;
+        }
+        if (!braceDepth) {
+          startIndex = index + 1;
+          count += 1;
+          closed = true;
+          break;
+        }
+      }
+    }
+    if (!closed) {
+      return null;
+    }
+  }
+
+  return count;
+}
+
+function findCallsiteArgumentText(request: ExtractCallsiteArgumentsRequest): CallsiteArgumentText | null {
   if (!request.tree) {
     return null;
   }
 
   const endIndex = request.calleeEndIndex ?? request.calleeStartIndex;
   const node = request.tree.rootNode.descendantForIndex(request.calleeStartIndex, endIndex);
-  const callNode = findAncestorOfTypes(node, callExpressionTypes);
+  let callNode = findAncestorOfTypes(node, callExpressionTypes);
   if (!callNode) {
     return null;
+  }
+  let parentCallNode = callNode.parent;
+  while (parentCallNode && callExpressionTypes.has(parentCallNode.type)) {
+    const trailingText = request.source.slice(callNode.endIndex, parentCallNode.endIndex).trimStart();
+    if (!trailingText.startsWith("{")) {
+      break;
+    }
+    callNode = parentCallNode;
+    parentCallNode = callNode.parent;
   }
   if (request.calleeStartIndex < callNode.startIndex || request.calleeStartIndex > callNode.endIndex) {
     return null;
@@ -1112,22 +1306,35 @@ function findCallsiteArgumentText(request: ExtractCallsiteArgumentsRequest): str
     findFirstDescendantOfTypes(callNode, argumentListTypes);
   if (argumentNode) {
     let text = request.source.slice(argumentNode.startIndex, argumentNode.endIndex).trim();
-    if (argumentNode.type === "call_suffix") {
-      const nested = findFirstDescendantOfTypes(argumentNode, new Set(["value_arguments"]));
-      if (nested) {
-        text = request.source.slice(nested.startIndex, nested.endIndex).trim();
+    let trailingArgumentCount = 0;
+    const callSuffix =
+      argumentNode.type === "call_suffix"
+        ? argumentNode
+        : findFirstDescendantOfTypes(callNode, new Set(["call_suffix"]));
+    const valueArguments =
+      argumentNode.type === "value_arguments"
+        ? argumentNode
+        : findFirstDescendantOfTypes(callSuffix ?? argumentNode, new Set(["value_arguments"]));
+    if (valueArguments) {
+      const trailingEndIndex = callSuffix?.endIndex ?? callNode.endIndex;
+      const trailingText = request.source.slice(valueArguments.endIndex, trailingEndIndex).trim();
+      const count = countTrailingClosureArguments(trailingText);
+      if (count === null) {
+        return null;
       }
+      text = request.source.slice(valueArguments.startIndex, valueArguments.endIndex).trim();
+      trailingArgumentCount = count;
     }
     if (text.startsWith("(") && text.endsWith(")")) {
-      return text.slice(1, -1);
+      return { text: text.slice(1, -1), trailingArgumentCount };
     }
-    return text;
+    return { text, trailingArgumentCount };
   }
 
   if (request.languageId === "zig") {
     const openIndex = findOpeningParen(request.source, callNode.startIndex);
     const balanced = findBalancedParentheses(request.source, openIndex);
-    return balanced?.inner ?? null;
+    return balanced ? { text: balanced.inner, trailingArgumentCount: 0 } : null;
   }
 
   return null;
@@ -1147,7 +1354,11 @@ function hasUncountableSpreadArgument(languageId: string, arg: string): boolean 
   return false;
 }
 
-function callsiteFromArgumentText(languageId: string, argumentText: string): CallsiteArguments | null {
+function callsiteFromArgumentText(
+  languageId: string,
+  argumentText: string,
+  trailingArgumentCount = 0,
+): CallsiteArguments | null {
   const args = splitTopLevelCommaGroups(argumentText, "type-context");
   if (!args) {
     return null;
@@ -1159,7 +1370,7 @@ function callsiteFromArgumentText(languageId: string, argumentText: string): Cal
     }
   }
 
-  return { argCount: args.length, confidence: "high" };
+  return { argCount: args.length + trailingArgumentCount, confidence: "high" };
 }
 
 function isCallableChangedSymbol(symbol: ChangedSymbol): boolean {
@@ -1205,7 +1416,7 @@ function hasSameFileOverloadCandidates(
   source: string,
   tree: SyntaxTreeLike,
 ): boolean {
-  const module = index.byFile.get(changedSymbol.file);
+  const module = index.byFile.get(fileIdentityKey(changedSymbol.file));
   if (!module) {
     return false;
   }
@@ -1256,7 +1467,7 @@ function findCallerSymbolId(index: ProjectIndex, ref: Reference): string | undef
     return undefined;
   }
 
-  const module = index.byFile.get(ref.file);
+  const module = index.byFile.get(fileIdentityKey(ref.file));
   if (!module) {
     return undefined;
   }
@@ -1324,7 +1535,8 @@ async function collectVerifiedCallsiteReferences(
   const refs: Reference[] = [];
   const seen = new Set<string>();
 
-  for (const [file] of index.byFile) {
+  for (const module of index.byFile.values()) {
+    const file = module.file;
     if (refs.length >= maxRefs) {
       break;
     }
@@ -1335,7 +1547,7 @@ async function collectVerifiedCallsiteReferences(
     if (!support || !supportsCallCompatibilityLanguage(support.id)) {
       continue;
     }
-    const parsed = await tryEnsureParsedContext(file, index.parsed?.get(file), diagnostics);
+    const parsed = await tryEnsureParsedContext(file, index.parsed?.get(fileIdentityKey(file)), diagnostics);
     if (!parsed) {
       continue;
     }
@@ -1363,7 +1575,7 @@ async function collectVerifiedCallsiteReferences(
               };
               if (sameDefinition(result.definition, def)) {
                 const range = toRange(gotoNode);
-                const key = `${file}:${range.start.line}:${range.start.column}`;
+                const key = `${fileIdentityKey(file)}:${range.start.line}:${range.start.column}`;
                 if (!seen.has(key)) {
                   seen.add(key);
                   refs.push({ file, range });

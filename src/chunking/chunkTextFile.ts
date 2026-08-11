@@ -1,4 +1,6 @@
 import type { Chunk } from "./chunkFile.js";
+import { withStableChunkIds } from "./chunkId.js";
+import { splitTextWithinTokenBudget } from "./chunkSplit.js";
 import { countWhitespaceTokens } from "./tokenizer.js";
 import type { ChunkTokenizer } from "./types.js";
 
@@ -29,47 +31,117 @@ export interface TextChunkOptions {
  */
 export function chunkTextFile(opts: TextChunkOptions): Chunk[] {
   const { source, filePath, languageId = "text", maxTokens = 400, tokenizer = countWhitespaceTokens } = opts;
+  if (!source.length) return [];
 
-  const lines = source.split(/\r?\n/);
   const chunks: Chunk[] = [];
-  let chunkId = 0;
-
-  let currentLines: string[] = [];
-  let currentTokens = 0;
+  let currentStart = -1;
+  let currentEnd = -1;
   let currentStartLine = 1;
+  let currentTokens = 0;
 
-  const pushChunk = () => {
-    if (!currentLines.length) return;
-    const text = currentLines.join("\n");
-    const tokenCount = tokenizer(text);
-    if (tokenCount === 0) return;
-    const endLine = currentStartLine + currentLines.length - 1;
+  const flush = () => {
+    if (currentStart === -1) return;
+    pushBoundedRange(chunks, source, currentStart, currentEnd, currentStartLine, languageId, filePath, tokenizer, maxTokens);
+    currentStart = -1;
+    currentEnd = -1;
+    currentTokens = 0;
+  };
+
+  for (const line of lineRanges(source)) {
+    const lineTokens = tokenizer(source.slice(line.start, line.end));
+    if (lineTokens > maxTokens) {
+      flush();
+      pushBoundedRange(chunks, source, line.start, line.end, line.startLine, languageId, filePath, tokenizer, maxTokens);
+      continue;
+    }
+
+    if (currentStart !== -1 && currentTokens + lineTokens > maxTokens) {
+      flush();
+    }
+
+    if (currentStart === -1) {
+      currentStart = line.start;
+      currentStartLine = line.startLine;
+    }
+    currentEnd = line.end;
+    currentTokens += lineTokens;
+  }
+
+  flush();
+  return withStableChunkIds(chunks, languageId, filePath);
+}
+
+function pushBoundedRange(
+  chunks: Chunk[],
+  source: string,
+  start: number,
+  end: number,
+  startLine: number,
+  languageId: string,
+  filePath: string | undefined,
+  tokenizer: ChunkTokenizer,
+  maxTokens: number,
+): void {
+  const text = source.slice(start, end);
+  const tokenCount = tokenizer(text);
+  if (tokenCount <= maxTokens) {
     chunks.push({
-      id: `${languageId}:${filePath ?? "unknown"}:${chunkId++}`,
+      id: "",
       languageId,
       type: "text",
-      startLine: currentStartLine,
-      endLine,
+      startLine,
+      endLine: endLineForText(startLine, text),
       text,
       tokenCount,
       ...(filePath !== undefined ? { filePath } : {}),
     });
-    currentLines = [];
-    currentTokens = 0;
-  };
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
-    const lineTokens = tokenizer(line);
-    if (currentTokens + lineTokens > maxTokens && currentLines.length) {
-      pushChunk();
-      currentStartLine = i + 1;
-    }
-    currentLines.push(line);
-    currentTokens += lineTokens;
+    return;
   }
 
-  pushChunk();
+  let segmentStartLine = startLine;
+  for (const segment of splitTextWithinTokenBudget(text, tokenizer, maxTokens)) {
+    chunks.push({
+      id: "",
+      languageId,
+      type: "text",
+      startLine: segmentStartLine,
+      endLine: endLineForText(segmentStartLine, segment),
+      text: segment,
+      tokenCount: tokenizer(segment),
+      ...(filePath !== undefined ? { filePath } : {}),
+    });
+    segmentStartLine += countLineBreaks(segment);
+  }
+}
 
-  return chunks;
+function lineRanges(source: string): Array<{ start: number; end: number; startLine: number }> {
+  const ranges: Array<{ start: number; end: number; startLine: number }> = [];
+  let start = 0;
+  let line = 1;
+
+  for (let offset = 0; offset < source.length; offset++) {
+    if (source[offset] !== "\n") continue;
+    ranges.push({ start, end: offset + 1, startLine: line });
+    start = offset + 1;
+    line++;
+  }
+
+  if (start < source.length) {
+    ranges.push({ start, end: source.length, startLine: line });
+  }
+
+  return ranges;
+}
+
+function countLineBreaks(text: string): number {
+  let count = 0;
+  for (let index = 0; index < text.length; index++) {
+    if (text[index] === "\n") count++;
+  }
+  return count;
+}
+
+function endLineForText(startLine: number, text: string): number {
+  const lineBreaks = countLineBreaks(text);
+  return startLine + lineBreaks - (text.endsWith("\n") ? 1 : 0);
 }

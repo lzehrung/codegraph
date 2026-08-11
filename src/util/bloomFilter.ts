@@ -5,6 +5,7 @@
  * allowing us to skip files that definitely don't contain the symbol.
  */
 
+import { fileIdentityKey } from "./paths.js";
 import crypto from "node:crypto";
 
 /**
@@ -194,15 +195,15 @@ export class BloomFilterCache {
   private filters = new Map<string, BloomFilter>();
 
   set(file: string, filter: BloomFilter): void {
-    this.filters.set(file, filter);
+    this.filters.set(fileIdentityKey(file), filter);
   }
 
   get(file: string): BloomFilter | undefined {
-    return this.filters.get(file);
+    return this.filters.get(fileIdentityKey(file));
   }
 
   has(file: string): boolean {
-    return this.filters.has(file);
+    return this.filters.has(fileIdentityKey(file));
   }
 
   /**
@@ -213,7 +214,7 @@ export class BloomFilterCache {
     const candidates: string[] = [];
 
     for (const file of files) {
-      const filter = this.filters.get(file);
+      const filter = this.filters.get(fileIdentityKey(file));
       if (!filter) {
         // If no filter exists, assume it might contain the symbol
         candidates.push(file);

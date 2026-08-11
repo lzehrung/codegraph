@@ -13,6 +13,8 @@ import {
 import * as indexerBuild from "../src/indexer/build-index.js";
 import * as indexerNavigation from "../src/indexer/navigation.js";
 import type { BuildReport, IncrementalBuildOptions, SymbolDef } from "../src/indexer/types.js";
+import { summarizeChangedFiles } from "../src/review/summaries.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 import * as impactMap from "../src/impact/map.js";
 import { collectDuplicateLeadSummary } from "../src/duplicatesLeads.js";
 import { findDuplicates, findDuplicatesWithPreparedAnalysis, prepareDuplicateAnalysis } from "../src/duplicates.js";
@@ -963,6 +965,126 @@ describe("Review report", () => {
     expect(report.summary.symbolsChanged).toBe(1);
     expect(report.riskSummary.signals).toContain("exported-symbols-changed");
     expect(report.riskSummary.level).toBe("medium");
+  });
+
+  it("limits re-export changes to the diff-touched export and keeps other exports as API context", async () => {
+    const root = await mkTmpDir("dg-review-reexport-scope-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    const firstFile = path.join(srcDir, "first.ts");
+    const secondFile = path.join(srcDir, "second.ts");
+    const barrelFile = path.join(srcDir, "index.ts");
+    await fsp.writeFile(firstFile, `export const first = 1;\n`, "utf8");
+    await fsp.writeFile(secondFile, `export const second = 2;\n`, "utf8");
+    await fsp.writeFile(
+      barrelFile,
+      [`export { first } from "./first";`, `export { second } from "./second";`, ``].join("\n"),
+      "utf8",
+    );
+
+    const report = await buildReviewReport(root, {
+      diffText: [
+        "diff --git a/src/index.ts b/src/index.ts",
+        "index 1111111..2222222 100644",
+        "--- a/src/index.ts",
+        "+++ b/src/index.ts",
+        "@@ -1,2 +1,2 @@",
+        "-export { previousFirst } from './first';",
+        "+export { first } from './first';",
+        " export { second } from './second';",
+        "",
+      ].join("\n"),
+    });
+
+    const summary = report.changedFiles.find((entry) => entry.file === "src/index.ts");
+    expect(summary?.symbols.map((symbol) => symbol.name)).toEqual(["first"]);
+    expect(summary?.apiContext?.map((symbol) => symbol.name)).toEqual(["second"]);
+    expect(report.summary.symbolsChanged).toBe(1);
+  });
+
+  it("keeps untouched re-exports out of changed symbol IDs", async () => {
+    const root = await mkTmpDir("dg-review-reexport-symbol-ids-");
+    const barrelFile = path.join(root, "index.ts");
+    await fsp.writeFile(
+      barrelFile,
+      [`export { first } from "./first";`, `export { second } from "./second";`, ``].join("\n"),
+      "utf8",
+    );
+    const module = {
+      file: barrelFile,
+      exports: [
+        {
+          type: "reexport" as const,
+          exportedAs: "first",
+          fromModule: "./first",
+          sourceSpecifier: "first",
+        },
+        {
+          type: "reexport" as const,
+          exportedAs: "second",
+          fromModule: "./second",
+          sourceSpecifier: "second",
+        },
+      ],
+      imports: [],
+      locals: [],
+    };
+    const byFile = new Map([[fileIdentityKey(barrelFile), module]]);
+    const index = {
+      graph: { nodes: new Set([barrelFile]), edges: [] },
+      modules: byFile,
+      byFile,
+      exportCache: new Map(),
+      scopeCache: new Map(),
+    };
+    const hunk = {
+      oldStart: 1,
+      newStart: 1,
+      lines: ["-export { previousFirst } from './first';", "+export { first } from './first';"],
+    };
+    const result = await summarizeChangedFiles({
+      projectRoot: root,
+      index,
+      changedFileList: [barrelFile],
+      diffHunksByFile: new Map([[barrelFile, [hunk]]]),
+      diffKindsByFile: new Map([[barrelFile, "modified"]]),
+      diffChangesByFile: new Map(),
+      explicitFiles: new Set(),
+      existenceByFile: new Map([[barrelFile, true]]),
+      deletedSnapshots: new Map(),
+      includeSymbolDetails: false,
+      includeDiffContext: false,
+      diffContextLines: 0,
+      maxCallsites: 0,
+      referenceConcurrency: 1,
+      diagnostics: { missingFiles: [], symbolMappingParseFailures: [] },
+    });
+
+    expect(result.summaries[0]?.symbols.map((symbol) => symbol.name)).toEqual(["first"]);
+    expect(result.summaries[0]?.apiContext?.map((symbol) => symbol.name)).toEqual(["second"]);
+    expect(result.changedSymbolIds).toHaveLength(1);
+    expect(result.changedSymbolIds[0]).toContain("::first::");
+  });
+
+  it("marks binary diff entries and suppresses symbol-level claims", async () => {
+    const root = await mkTmpDir("dg-review-binary-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.writeFile(path.join(srcDir, "api.ts"), `export const api = 1;\n`, "utf8");
+    await fsp.writeFile(path.join(srcDir, "index.ts"), `export * from "./api";\n`, "utf8");
+
+    const report = await buildReviewReport(root, {
+      diffText: [
+        "diff --git a/src/index.ts b/src/index.ts",
+        "index 1111111..2222222 100644",
+        "Binary files a/src/index.ts and b/src/index.ts differ",
+        "",
+      ].join("\n"),
+    });
+
+    const summary = report.changedFiles.find((entry) => entry.file === "src/index.ts");
+    expect(summary).toMatchObject({ isBinary: true, status: "updated", symbols: [] });
+    expect(report.summary.symbolsChanged).toBe(0);
   });
 
   it("reconstructs deleted files from raw diff text", async () => {

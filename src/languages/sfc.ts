@@ -19,7 +19,17 @@ interface Range {
   end: number;
 }
 
-const TAG_PATTERN = /<(template|script|style)\b([^>]*)>/gi;
+interface SFCOpeningTag {
+  name: "template" | "script" | "style";
+  attrsText: string;
+  start: number;
+  end: number;
+}
+
+interface SFCClosingTag {
+  start: number;
+  end: number;
+}
 
 export function detectSFCFramework(filePath: string): SFCFramework | null {
   const ext = path.extname(filePath).toLowerCase();
@@ -30,44 +40,37 @@ export function detectSFCFramework(filePath: string): SFCFramework | null {
 
 export function parseSFC(source: string): SFCBlock[] {
   const blocks: SFCBlock[] = [];
-  const lower = source.toLowerCase();
   const lineIndex = buildLineIndex(source);
 
-  let match: RegExpExecArray | null;
-  while ((match = TAG_PATTERN.exec(source)) !== null) {
-    const tagName = (match[1] ?? "").toLowerCase();
-    const attrsText = match[2] ?? "";
-    const openTagStart = match.index;
-    const openTagEnd = match.index + match[0].length;
+  let cursor = 0;
+  while (cursor < source.length) {
+    const openTag = findNextSFCOpeningTag(source, cursor);
+    if (!openTag) break;
 
-    const close = findClosingTag(lower, tagName, openTagEnd);
-    if (close === -1) {
-      break;
+    const closeTag = findClosingTag(source, openTag.name, openTag.end);
+    if (!closeTag) {
+      cursor = openTag.end;
+      continue;
     }
-    const closeTagLength = tagName.length + 3; // </tag>
-    const blockEnd = close + closeTagLength;
-    const contentStart = openTagEnd;
-    const contentEnd = close;
-
-    const attrs = parseAttributes(attrsText);
-    const type = tagName === "template" || tagName === "script" || tagName === "style" ? tagName : "custom";
+    const contentStart = openTag.end;
+    const contentEnd = closeTag.start;
     const content = source.slice(contentStart, contentEnd);
     const startLine = lineForOffset(lineIndex, contentStart);
     const endLine =
       contentStart === contentEnd ? startLine : lineForOffset(lineIndex, Math.max(contentStart, contentEnd - 1));
 
     blocks.push({
-      type: type,
-      attrs,
+      type: openTag.name,
+      attrs: parseAttributes(openTag.attrsText),
       content,
       startLine,
       endLine,
       startOffset: contentStart,
       endOffset: contentEnd,
-      blockStart: openTagStart,
-      blockEnd,
+      blockStart: openTag.start,
+      blockEnd: closeTag.end,
     });
-    TAG_PATTERN.lastIndex = blockEnd;
+    cursor = closeTag.end;
   }
 
   return blocks;
@@ -104,6 +107,14 @@ export function buildSvelteTemplateBlocks(source: string, blocks: SFCBlock[]): S
     });
   }
   return templateBlocks;
+}
+
+/**
+ * Preserves a block's original offsets while making it safe to parse with the
+ * language that owns the block rather than the enclosing SFC grammar.
+ */
+export function prepareSFCBlockSource(source: string, block: SFCBlock): string {
+  return maskOutsideRanges(source, [{ start: block.startOffset, end: block.endOffset }]);
 }
 
 export function prepareSFCScriptSource(
@@ -157,8 +168,8 @@ export function styleLanguageKey(block: SFCBlock): "css" | "scss" | "less" | nul
   return null;
 }
 
-export function templateLanguageKey(framework: SFCFramework): "html" | null {
-  return framework === "vue" ? "html" : null;
+export function templateLanguageKey(_framework: SFCFramework): "html" {
+  return "html";
 }
 
 function normalizeLang(value: string | boolean | undefined): string | undefined {
@@ -192,9 +203,172 @@ function appendSyntheticImports(source: string, imports: string[]): string {
   return `${source}\n${syntheticSource}`;
 }
 
-function findClosingTag(lowerSource: string, tag: string, fromIndex: number): number {
-  const closeExpr = `</${tag}>`;
-  return lowerSource.indexOf(closeExpr, fromIndex);
+function findNextSFCOpeningTag(source: string, fromIndex: number): SFCOpeningTag | null {
+  let index = fromIndex;
+  while (index < source.length) {
+    if (source.startsWith("<!--", index)) {
+      index = skipDelimited(source, index + 4, "-->");
+      continue;
+    }
+    if (source.startsWith("<![CDATA[", index)) {
+      index = skipDelimited(source, index + 9, "]]>");
+      continue;
+    }
+
+    const char = source[index]!;
+    if (isQuote(char)) {
+      index = skipQuotedString(source, index);
+      continue;
+    }
+    if (char !== "<") {
+      index++;
+      continue;
+    }
+    if (source[index + 1] === "/" || source[index + 1] === "!" || source[index + 1] === "?") {
+      const tagEnd = findTagEnd(source, index + 1);
+      index = tagEnd === -1 ? index + 1 : tagEnd;
+      continue;
+    }
+
+    const nameStart = index + 1;
+    let nameEnd = nameStart;
+    while (isTagNameCharacter(source[nameEnd])) nameEnd++;
+    if (nameEnd === nameStart) {
+      index++;
+      continue;
+    }
+
+    const tagEnd = findTagEnd(source, nameEnd);
+    if (tagEnd === -1) {
+      index = nameEnd;
+      continue;
+    }
+
+    const tagName = source.slice(nameStart, nameEnd).toLowerCase();
+    const attrsEnd = source[tagEnd - 2] === "/" ? tagEnd - 2 : tagEnd - 1;
+    if (
+      (tagName === "template" || tagName === "script" || tagName === "style") &&
+      isTagBoundary(source[nameEnd]) &&
+      source[tagEnd - 2] !== "/"
+    ) {
+      return {
+        name: tagName,
+        attrsText: source.slice(nameEnd, attrsEnd),
+        start: index,
+        end: tagEnd,
+      };
+    }
+    index = tagEnd;
+  }
+  return null;
+}
+
+function findClosingTag(source: string, tag: string, fromIndex: number): SFCClosingTag | null {
+  let index = fromIndex;
+  while (index < source.length) {
+    if (source.startsWith("<!--", index)) {
+      index = skipDelimited(source, index + 4, "-->");
+      continue;
+    }
+    if (source.startsWith("<![CDATA[", index)) {
+      index = skipDelimited(source, index + 9, "]]>");
+      continue;
+    }
+
+    const char = source[index]!;
+    if (isQuote(char)) {
+      index = skipQuotedString(source, index);
+      continue;
+    }
+    if (tag === "script" && source.startsWith("//", index)) {
+      index = skipLineComment(source, index + 2);
+      continue;
+    }
+    if ((tag === "script" || tag === "style") && source.startsWith("/*", index)) {
+      index = skipDelimited(source, index + 2, "*/");
+      continue;
+    }
+    if (char !== "<" || source[index + 1] !== "/") {
+      index++;
+      continue;
+    }
+
+    const nameStart = index + 2;
+    if (!matchesCaseInsensitive(source, nameStart, tag)) {
+      index++;
+      continue;
+    }
+    const nameEnd = nameStart + tag.length;
+    if (!isTagBoundary(source[nameEnd])) {
+      index++;
+      continue;
+    }
+    const tagEnd = findTagEnd(source, nameEnd);
+    if (tagEnd === -1) {
+      index++;
+      continue;
+    }
+    return { start: index, end: tagEnd };
+  }
+  return null;
+}
+
+function findTagEnd(source: string, fromIndex: number): number {
+  let index = fromIndex;
+  while (index < source.length) {
+    const char = source[index]!;
+    if (isQuote(char)) {
+      index = skipQuotedString(source, index);
+      continue;
+    }
+    if (char === ">") return index + 1;
+    index++;
+  }
+  return -1;
+}
+
+function skipQuotedString(source: string, quoteStart: number): number {
+  const quote = source[quoteStart]!;
+  let index = quoteStart + 1;
+  while (index < source.length) {
+    if (source[index] === "\\") {
+      index += 2;
+      continue;
+    }
+    if (source[index] === quote) return index + 1;
+    index++;
+  }
+  return source.length;
+}
+
+function skipDelimited(source: string, contentStart: number, closing: string): number {
+  const closingIndex = source.indexOf(closing, contentStart);
+  return closingIndex === -1 ? source.length : closingIndex + closing.length;
+}
+
+function skipLineComment(source: string, contentStart: number): number {
+  const newline = source.indexOf("\n", contentStart);
+  return newline === -1 ? source.length : newline + 1;
+}
+
+function matchesCaseInsensitive(source: string, start: number, value: string): boolean {
+  if (start + value.length > source.length) return false;
+  for (let index = 0; index < value.length; index++) {
+    if (source[start + index]!.toLowerCase() !== value[index]!) return false;
+  }
+  return true;
+}
+
+function isTagNameCharacter(char: string | undefined): boolean {
+  return !!char && /[A-Za-z0-9:_-]/.test(char);
+}
+
+function isTagBoundary(char: string | undefined): boolean {
+  return char === undefined || char === ">" || char === "/" || /\s/.test(char);
+}
+
+function isQuote(char: string): boolean {
+  return char === "'" || char === '"' || char === "`";
 }
 
 function parseAttributes(source: string): Record<string, string | boolean> {

@@ -1,3 +1,4 @@
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { errorMessage } from "./errors.js";
 
@@ -9,7 +10,9 @@ function normalizeWindowsComparablePath(filePath: string): string {
   return normalizePath(filePath).replace(/^([A-Za-z]):/, (_, driveLetter: string) => `${driveLetter.toUpperCase()}:`);
 }
 
-let caseInsensitiveFileIdentity = process.platform === "win32" || process.platform === "darwin";
+const defaultCaseInsensitiveFileIdentity = process.platform === "win32" || process.platform === "darwin";
+let caseInsensitiveFileIdentity = defaultCaseInsensitiveFileIdentity;
+let fileIdentityCaseSensitivityProbe: Promise<void> | undefined;
 
 /**
  * Overrides the assumed filesystem case sensitivity used by {@link fileIdentityKey}.
@@ -21,6 +24,54 @@ export function setFileIdentityCaseInsensitive(caseInsensitive: boolean): void {
 
 export function isFileIdentityCaseInsensitive(): boolean {
   return caseInsensitiveFileIdentity;
+}
+
+/**
+ * Probes the project-root volume once per process, then configures {@link fileIdentityKey}
+ * with the observed case sensitivity. Probe failures retain the platform default.
+ */
+export function initializeFileIdentityCaseSensitivity(projectRoot: string): Promise<void> {
+  fileIdentityCaseSensitivityProbe ??= probeFileIdentityCaseSensitivity(projectRoot);
+  return fileIdentityCaseSensitivityProbe;
+}
+
+async function probeFileIdentityCaseSensitivity(projectRoot: string): Promise<void> {
+  let caseInsensitive = defaultCaseInsensitiveFileIdentity;
+  try {
+    const resolvedRoot = path.resolve(projectRoot);
+    const caseFlippedRoot = flipPathCharacterCase(resolvedRoot);
+    if (caseFlippedRoot) {
+      const rootStat = await fsp.stat(resolvedRoot);
+      try {
+        const caseFlippedStat = await fsp.stat(caseFlippedRoot);
+        caseInsensitive = rootStat.dev === caseFlippedStat.dev && rootStat.ino === caseFlippedStat.ino;
+      } catch (error) {
+        if (isMissingPathError(error)) caseInsensitive = false;
+      }
+    }
+  } catch {
+    // Some filesystems cannot be probed. Keep the platform default.
+  }
+  setFileIdentityCaseInsensitive(caseInsensitive);
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR");
+}
+
+function flipPathCharacterCase(filePath: string): string | null {
+  const rootLength = path.parse(filePath).root.length;
+  for (let index = filePath.length - 1; index >= rootLength; index -= 1) {
+    const character = filePath[index];
+    if (!character) continue;
+    if (character >= "a" && character <= "z") {
+      return `${filePath.slice(0, index)}${character.toUpperCase()}${filePath.slice(index + 1)}`;
+    }
+    if (character >= "A" && character <= "Z") {
+      return `${filePath.slice(0, index)}${character.toLowerCase()}${filePath.slice(index + 1)}`;
+    }
+  }
+  return null;
 }
 
 /**

@@ -3,7 +3,14 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { buildProjectIndex, buildProjectIndexFromFiles, buildProjectIndexIncremental } from "../src/index.js";
+import { findReferences } from "../src/indexer/navigation.js";
 import type { ProgressUpdate } from "../src/types.js";
+import {
+  fileIdentityKey,
+  initializeFileIdentityCaseSensitivity,
+  isFileIdentityCaseInsensitive,
+  setFileIdentityCaseInsensitive,
+} from "../src/util/paths.js";
 import { createTestIndex, expectFileInIndex, expectModuleCount } from "./test-utils.js";
 
 describe("Project Indexing", () => {
@@ -32,8 +39,8 @@ describe("Project Indexing", () => {
 
     const index = await buildProjectIndexFromFiles(root, [appManifest]);
 
-    expect(index.byFile.has(appManifest.replace(/\\/g, "/"))).toBe(true);
-    expect(index.byFile.has(libManifest.replace(/\\/g, "/"))).toBe(false);
+    expect(index.byFile.has(fileIdentityKey(appManifest.replace(/\\/g, "/")))).toBe(true);
+    expect(index.byFile.has(fileIdentityKey(libManifest.replace(/\\/g, "/")))).toBe(false);
     expect(
       index.graph.edges.some(
         (edge) =>
@@ -150,7 +157,7 @@ describe("Project Indexing", () => {
       // Check that utils.ts has exports
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
       const utilsFile = path.join(samplePath, "utils.ts").replace(/\\/g, "/");
-      const utilsModule = index.byFile.get(utilsFile);
+      const utilsModule = index.byFile.get(fileIdentityKey(utilsFile));
 
       expect(utilsModule).toBeDefined();
       expect(utilsModule!.exports.length).toBeGreaterThan(0);
@@ -162,7 +169,7 @@ describe("Project Indexing", () => {
 
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "typescript");
       const mainFile = path.join(samplePath, "main.ts").replace(/\\/g, "/");
-      const mainModule = index.byFile.get(mainFile);
+      const mainModule = index.byFile.get(fileIdentityKey(mainFile));
 
       expect(mainModule).toBeDefined();
       expect(mainModule!.imports.length).toBeGreaterThan(0);
@@ -189,7 +196,7 @@ describe("Project Indexing", () => {
 
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "python");
       const utilsFile = path.join(samplePath, "utils.py").replace(/\\/g, "/");
-      const utilsModule = index.byFile.get(utilsFile);
+      const utilsModule = index.byFile.get(fileIdentityKey(utilsFile));
 
       expect(utilsModule).toBeDefined();
       expect(utilsModule!.exports.length).toBeGreaterThan(0);
@@ -201,7 +208,7 @@ describe("Project Indexing", () => {
 
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "python");
       const mainFile = path.join(samplePath, "main.py").replace(/\\/g, "/");
-      const mainModule = index.byFile.get(mainFile);
+      const mainModule = index.byFile.get(fileIdentityKey(mainFile));
 
       expect(mainModule).toBeDefined();
       expect(mainModule!.imports.length).toBeGreaterThan(0);
@@ -229,7 +236,7 @@ describe("Project Indexing", () => {
 
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "javascript");
       const utilsFile = path.join(samplePath, "utils.js").replace(/\\/g, "/");
-      const utilsModule = index.byFile.get(utilsFile);
+      const utilsModule = index.byFile.get(fileIdentityKey(utilsFile));
 
       expect(utilsModule).toBeDefined();
       expect(utilsModule!.exports.length).toBeGreaterThan(0);
@@ -241,7 +248,7 @@ describe("Project Indexing", () => {
 
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "javascript");
       const mainFile = path.join(samplePath, "main.js").replace(/\\/g, "/");
-      const mainModule = index.byFile.get(mainFile);
+      const mainModule = index.byFile.get(fileIdentityKey(mainFile));
 
       expect(mainModule).toBeDefined();
       expect(mainModule!.imports.length).toBeGreaterThan(0);
@@ -252,7 +259,7 @@ describe("Project Indexing", () => {
 
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "javascript");
       const mainFile = path.join(samplePath, "main.js").replace(/\\/g, "/");
-      const mainModule = index.byFile.get(mainFile);
+      const mainModule = index.byFile.get(fileIdentityKey(mainFile));
 
       expect(mainModule).toBeDefined();
 
@@ -270,7 +277,7 @@ describe("Project Indexing", () => {
 
       const samplePath = path.resolve(process.cwd(), "tests", "samples", "javascript");
       const mixedFile = path.join(samplePath, "mixed.js").replace(/\\/g, "/");
-      const mixedModule = index.byFile.get(mixedFile);
+      const mixedModule = index.byFile.get(fileIdentityKey(mixedFile));
 
       expect(mixedModule).toBeDefined();
       expect(mixedModule!.imports.length).toBeGreaterThan(0);
@@ -308,10 +315,10 @@ describe("Project Indexing", () => {
         path.join(adocPath, "guide.adoc").replace(/\\/g, "/"),
       ]);
 
-      const markdownModule = markdownIndex.byFile.get(markdownFile);
-      const mdxModule = mdxIndex.byFile.get(mdxFile);
-      const rstModule = rstIndex.byFile.get(rstFile);
-      const adocModule = adocIndex.byFile.get(adocFile);
+      const markdownModule = markdownIndex.byFile.get(fileIdentityKey(markdownFile));
+      const mdxModule = mdxIndex.byFile.get(fileIdentityKey(mdxFile));
+      const rstModule = rstIndex.byFile.get(fileIdentityKey(rstFile));
+      const adocModule = adocIndex.byFile.get(fileIdentityKey(adocFile));
 
       expect(markdownModule).toBeDefined();
       expect(markdownModule!.imports.length).toBeGreaterThan(0);
@@ -333,5 +340,49 @@ describe("Project Indexing", () => {
       expect(adocModule!.exports).toHaveLength(0);
       expect(adocModule!.locals).toHaveLength(0);
     });
+  });
+  it("merges cased import targets only on configured case-insensitive filesystems", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codegraph-file-identity-"));
+    const mainFile = path.join(root, "main.ts");
+    const upperCaseUtility = path.join(root, "Util.ts");
+    const lowerCaseUtility = path.join(root, "util.ts");
+
+    await fsp.writeFile(mainFile, 'import { value } from "./Util";\nexport function consume() { return value; }\n', "utf8");
+    await fsp.writeFile(upperCaseUtility, "export const value = 1;\n", "utf8");
+    await fsp.writeFile(lowerCaseUtility, "export const value = 2;\n", "utf8");
+
+    await initializeFileIdentityCaseSensitivity(root);
+    const originalCaseSensitivity = isFileIdentityCaseInsensitive();
+    try {
+      setFileIdentityCaseInsensitive(true);
+      const merged = await buildProjectIndexFromFiles(root, [mainFile, upperCaseUtility, lowerCaseUtility]);
+      const mergedUtility = merged.byFile.get(fileIdentityKey(lowerCaseUtility));
+      const mergedMain = merged.byFile.get(fileIdentityKey(mainFile));
+
+      expect(fileIdentityKey(upperCaseUtility)).toBe(fileIdentityKey(lowerCaseUtility));
+      expect(merged.byFile.size).toBe(2);
+      const valueDefinition = mergedUtility?.locals.find((local) => local.localName === "value");
+      if (!valueDefinition) throw new Error("Expected merged utility export.");
+      const references = await findReferences(merged, { def: valueDefinition });
+
+      expect(references.status).toBe("ok");
+      if (references.status === "ok") {
+        expect(references.references.map((reference) => fileIdentityKey(reference.file))).toContain(fileIdentityKey(mainFile));
+      }
+      expect(mergedUtility?.file).toBe(lowerCaseUtility.replace(/\\/g, "/"));
+      expect(mergedMain?.imports[0]?.resolved).toBe(upperCaseUtility.replace(/\\/g, "/"));
+
+      setFileIdentityCaseInsensitive(false);
+      const distinct = await buildProjectIndexFromFiles(root, [mainFile, upperCaseUtility, lowerCaseUtility]);
+
+      expect(fileIdentityKey(upperCaseUtility)).not.toBe(fileIdentityKey(lowerCaseUtility));
+      expect(distinct.byFile.size).toBe(3);
+      expect(distinct.byFile.get(fileIdentityKey(upperCaseUtility))).not.toBe(
+        distinct.byFile.get(fileIdentityKey(lowerCaseUtility)),
+      );
+    } finally {
+      setFileIdentityCaseInsensitive(originalCaseSensitivity);
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });

@@ -11,7 +11,7 @@ import type {
   SymbolDef,
 } from "../indexer/types.js";
 import type { Range } from "../types.js";
-import { normalizePath } from "../util/paths.js";
+import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { extractSqlFactsFromSource } from "./extractFacts.js";
 import { pushSqlLookupValue } from "./lookup.js";
 import {
@@ -74,7 +74,7 @@ function getSqlDefinitionLookup(index: ProjectIndex): SqlDefinitionLookup {
   const exact = new Map<string, SymbolDef[]>();
   const basename = new Map<string, SymbolDef[]>();
   for (const file of sqlFiles(index)) {
-    const module = index.byFile.get(file);
+    const module = index.byFile.get(fileIdentityKey(file));
     if (!module) continue;
     for (const local of module.locals) {
       pushSqlLookupValue(exact, local.localName.toLowerCase(), local);
@@ -349,20 +349,22 @@ function qualifiedReferenceRanges(
 
 async function sourceForFile(filePath: string, index: ProjectIndex): Promise<string> {
   const cache = getSqlNavigationCache(index);
-  const cached = cache.sourceByFile.get(filePath);
+  const key = fileIdentityKey(filePath);
+  const cached = cache.sourceByFile.get(key);
   if (cached !== undefined) return cached;
-  const parsed = index.parsed?.get(filePath);
+  const parsed = index.parsed?.get(key);
   const source = parsed ? parsed.source : await fsp.readFile(filePath, "utf8");
-  cache.sourceByFile.set(filePath, source);
+  cache.sourceByFile.set(key, source);
   return source;
 }
 
 async function sqlFactsForFile(index: ProjectIndex, filePath: string): Promise<SqlStatementFact[]> {
   const cache = getSqlNavigationCache(index);
-  const cached = cache.factsByFile.get(filePath);
+  const key = fileIdentityKey(filePath);
+  const cached = cache.factsByFile.get(key);
   if (cached) return cached;
   const facts = extractSqlFactsFromSource(filePath, await sourceForFile(filePath, index));
-  cache.factsByFile.set(filePath, facts);
+  cache.factsByFile.set(key, facts);
   return facts;
 }
 

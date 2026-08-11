@@ -3,6 +3,7 @@ import { getNativeSyntaxTreeExecution, type NativeRuntimeMode } from "../native/
 import { ProjectedSyntaxTree } from "../native/projectedTree.js";
 import { declarationKindToBindingKind } from "./declarations.js";
 import type { LanguageSupport } from "../languages.js";
+import { isJsTsLanguage } from "../languages/js-family.js";
 import type { ParserLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
 import type { ImportBinding } from "./types.js";
@@ -77,6 +78,13 @@ export function buildScopeIndexFromSource(
   const idSet = new Set([...support.nodeTypes.identifier, ...(support.nodeTypes.shorthandPropertyIdentifier ?? [])]);
   const customDeclLanguages = new Set(["c", "cpp", "kotlin", "swift"]);
   const paramParentTypes = new Set(["parameter_declaration", "parameter", "class_parameter", "lambda_parameters"]);
+  const isJavaScriptOrTypeScript = isJsTsLanguage(support.id);
+  const isJsTsFunctionDeclaration = (node: SyntaxNodeLike): boolean =>
+    isJavaScriptOrTypeScript &&
+    (node.type === "function_declaration" || node.type === "generator_function_declaration");
+  const isJsTsVarDeclaration = (node: SyntaxNodeLike): boolean =>
+    isJavaScriptOrTypeScript && node.type === "variable_declaration";
+
 
   const isParamNode = (node: SyntaxNodeLike): boolean => {
     let current: SyntaxNodeLike | null = node.parent;
@@ -87,10 +95,20 @@ export function buildScopeIndexFromSource(
     return false;
   };
 
-  const addDecl = (nameNode: SyntaxNodeLike, kind: BindingKind) => {
-    const target = stack[stack.length - 1];
+  const addBinding = (target: Scope, nameNode: SyntaxNodeLike, kind: BindingKind): void => {
     const binding = buildBinding(nameNode, kind);
-    target?.map.set(binding.name, binding);
+    target.map.set(binding.name, binding);
+  };
+
+  const addDecl = (nameNode: SyntaxNodeLike, kind: BindingKind): void => {
+    const target = stack[stack.length - 1];
+    if (target) addBinding(target, nameNode, kind);
+  };
+
+  const addHoistedDecl = (nameNode: SyntaxNodeLike, kind: BindingKind): void => {
+    const target = [...stack].reverse().find((scope) => scope.kind === "function") ?? rootScope;
+    const name = sliceText(nameNode, source);
+    if (!target.map.has(name)) addBinding(target, nameNode, kind);
   };
 
   const lookup = (name: string): Binding | undefined => {
@@ -101,20 +119,24 @@ export function buildScopeIndexFromSource(
     return rootScope.map.get(name);
   };
 
-  const addPatternDecls = (pattern: SyntaxNodeLike, kind: BindingKind): void => {
+  const addPatternDecls = (
+    pattern: SyntaxNodeLike,
+    kind: BindingKind,
+    addBindingToScope: (nameNode: SyntaxNodeLike, kind: BindingKind) => void = addDecl,
+  ): void => {
     if (idSet.has(pattern.type)) {
-      addDecl(pattern, kind);
+      addBindingToScope(pattern, kind);
       return;
     }
     if (pattern.type === "pair_pattern") {
       const value = pattern.childForFieldName("value");
       if (value) {
-        addPatternDecls(value, kind);
+        addPatternDecls(value, kind, addBindingToScope);
       }
       return;
     }
     for (const child of pattern.namedChildren) {
-      addPatternDecls(child, kind);
+      addPatternDecls(child, kind, addBindingToScope);
     }
   };
 
@@ -144,18 +166,21 @@ export function buildScopeIndexFromSource(
     return false;
   };
 
-  const addUnsupportedRequirePatternDecls = (pattern: SyntaxNodeLike): void => {
+  const addUnsupportedRequirePatternDecls = (
+    pattern: SyntaxNodeLike,
+    addBindingToScope: (nameNode: SyntaxNodeLike, kind: BindingKind) => void = addDecl,
+  ): void => {
     if (idSet.has(pattern.type)) {
-      if (!hasImportBinding(pattern)) addPatternDecls(pattern, "local");
+      if (!hasImportBinding(pattern)) addPatternDecls(pattern, "local", addBindingToScope);
       return;
     }
     if (pattern.type !== "object_pattern") {
-      addPatternDecls(pattern, "local");
+      addPatternDecls(pattern, "local", addBindingToScope);
       return;
     }
     for (const child of pattern.namedChildren) {
       if (child.type === "shorthand_property_identifier" || child.type === "shorthand_property_identifier_pattern") {
-        if (!hasImportBinding(child)) addPatternDecls(child, "local");
+        if (!hasImportBinding(child)) addPatternDecls(child, "local", addBindingToScope);
         continue;
       }
       if (child.type === "pair_pattern") {
@@ -164,11 +189,59 @@ export function buildScopeIndexFromSource(
           continue;
         }
         if (value) {
-          addPatternDecls(value, "local");
+          addPatternDecls(value, "local", addBindingToScope);
         }
         continue;
       }
-      addPatternDecls(child, "local");
+      addPatternDecls(child, "local", addBindingToScope);
+    }
+  };
+
+  const addVariableDeclarations = (
+    node: SyntaxNodeLike,
+    addBindingToScope: (nameNode: SyntaxNodeLike, kind: BindingKind) => void = addDecl,
+  ): void => {
+    for (const child of node.namedChildren) {
+      if (child.type === "variable_declarator" || child.type === "var_spec" || child.type === "const_spec") {
+        const name = child.childForFieldName("name");
+        const value = child.childForFieldName("value");
+        if (name) {
+          if (isStaticRequireCall(value)) addUnsupportedRequirePatternDecls(name, addBindingToScope);
+          else addPatternDecls(name, "local", addBindingToScope);
+        }
+      } else if (
+        (child.type === "identifier" || child.type === "field_identifier") &&
+        (node.type === "assignment" || node.type === "short_var_declaration")
+      ) {
+        addBindingToScope(child, "local");
+      } else if (node.type === "let_declaration" || node.type === "const_item" || node.type === "static_item") {
+        const pattern = node.childForFieldName("pattern") || node.childForFieldName("name");
+        if (pattern) addPatternDecls(pattern, "local", addBindingToScope);
+      }
+    }
+  };
+
+  const collectHoistedDeclarations = (scopeNode: SyntaxNodeLike): void => {
+    if (!isJavaScriptOrTypeScript) return;
+
+    const visit = (node: SyntaxNodeLike): void => {
+      if (support.createsFunctionScope(node)) {
+        if (isJsTsFunctionDeclaration(node)) {
+          const name = node.childForFieldName("name");
+          if (name) addHoistedDecl(name, "function");
+        }
+        return;
+      }
+      if (isJsTsVarDeclaration(node)) {
+        addVariableDeclarations(node, addHoistedDecl);
+      }
+      for (const child of node.namedChildren) {
+        visit(child);
+      }
+    };
+
+    for (const child of scopeNode.namedChildren) {
+      visit(child);
     }
   };
 
@@ -186,7 +259,8 @@ export function buildScopeIndexFromSource(
     ) {
       const name = node.childForFieldName("name");
       if (name) {
-        addDecl(name, "function");
+        if (isJsTsFunctionDeclaration(node)) addHoistedDecl(name, "function");
+        else addDecl(name, "function");
       }
     }
     if (
@@ -244,28 +318,9 @@ export function buildScopeIndexFromSource(
       allScopes.push(scope);
       pushed = true;
 
-      if (
-        node.type === "function_declaration" ||
-        node.type === "generator_function_declaration" ||
-        node.type === "function_definition" ||
-        node.type === "method_definition" ||
-        node.type === "method_declaration" ||
-        node.type === "method" ||
-        node.type === "singleton_method" ||
-        node.type === "function_item" ||
-        node.type === "func_literal"
-      ) {
-        const params = node.childForFieldName("parameters");
-        if (params) {
-          const queue: SyntaxNodeLike[] = [params];
-          while (queue.length) {
-            const current = queue.pop();
-            if (!current) continue;
-            if (current.type === "identifier") addDecl(current, "param");
-            for (const child of current.namedChildren) queue.push(child);
-          }
-        }
-      }
+      const params = node.childForFieldName("parameters");
+      if (params) addPatternDecls(params, "param");
+      collectHoistedDeclarations(node);
     } else if (support.createsBlockScope(node)) {
       if (node.type !== "program" && node.type !== "module") {
         const scope: Scope = {
@@ -293,24 +348,7 @@ export function buildScopeIndexFromSource(
       node.type === "const_item" ||
       node.type === "static_item"
     ) {
-      for (const child of node.namedChildren) {
-        if (child.type === "variable_declarator" || child.type === "var_spec" || child.type === "const_spec") {
-          const name = child.childForFieldName("name");
-          const value = child.childForFieldName("value");
-          if (name) {
-            if (isStaticRequireCall(value)) addUnsupportedRequirePatternDecls(name);
-            else addPatternDecls(name, "local");
-          }
-        } else if (
-          (child.type === "identifier" || child.type === "field_identifier") &&
-          (node.type === "assignment" || node.type === "short_var_declaration")
-        ) {
-          addDecl(child, "local");
-        } else if (node.type === "let_declaration" || node.type === "const_item" || node.type === "static_item") {
-          const pattern = node.childForFieldName("pattern") || node.childForFieldName("name");
-          if (pattern) addPatternDecls(pattern, "local");
-        }
-      }
+      addVariableDeclarations(node, isJsTsVarDeclaration(node) ? addHoistedDecl : addDecl);
     }
 
     if (node.type === "declaration_pattern") {
@@ -343,25 +381,27 @@ export function buildScopeIndexFromSource(
 
     for (const child of node.namedChildren) {
       if (pushed) {
-        const type = node.type;
+        const params = node.childForFieldName("parameters");
+        const skipsFunctionParameters = support.createsFunctionScope(node) && params?.id === child.id;
         if (
-          (type === "function_declaration" ||
-            type === "generator_function_declaration" ||
-            type === "function_definition" ||
-            type === "method_definition" ||
-            type === "method_declaration" ||
-            type === "method" ||
-            type === "singleton_method" ||
-            type === "function_item" ||
-            type === "func_literal" ||
-            type === "class_declaration" ||
-            type === "abstract_class_declaration" ||
-            type === "class_definition" ||
-            type === "class" ||
-            type === "module" ||
-            type === "struct_item" ||
-            type === "mod_item") &&
-          (child.type === "identifier" || child.type === "type_identifier" || child.type === "parameters")
+          skipsFunctionParameters ||
+          ((node.type === "function_declaration" ||
+            node.type === "generator_function_declaration" ||
+            node.type === "function_definition" ||
+            node.type === "method_definition" ||
+            node.type === "method_declaration" ||
+            node.type === "method" ||
+            node.type === "singleton_method" ||
+            node.type === "function_item" ||
+            node.type === "func_literal" ||
+            node.type === "class_declaration" ||
+            node.type === "abstract_class_declaration" ||
+            node.type === "class_definition" ||
+            node.type === "class" ||
+            node.type === "module" ||
+            node.type === "struct_item" ||
+            node.type === "mod_item") &&
+            (child.type === "identifier" || child.type === "type_identifier" || child.type === "parameters"))
         ) {
           continue;
         }
@@ -372,6 +412,7 @@ export function buildScopeIndexFromSource(
     if (pushed) stack.pop();
   };
 
+  collectHoistedDeclarations(tree.rootNode);
   walk(tree.rootNode);
 
   const bindings = new Map<string, Binding[]>();

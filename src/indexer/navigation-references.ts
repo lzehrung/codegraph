@@ -1,6 +1,7 @@
 import type { LanguageSupport } from "../languages.js";
 import type { ParserLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { Range } from "../types.js";
+import { fileIdentityKey } from "../util/paths.js";
 import { sliceText, toRange } from "../util/ast.js";
 import { ensureParsedContext } from "./parse-context.js";
 import { sameDef } from "./reference-context.js";
@@ -22,7 +23,8 @@ export function getCachedScope(
     tree: SyntaxTreeLike;
   },
 ): ScopeIndex {
-  if (index.scopeCache.has(fileId)) return index.scopeCache.get(fileId)!;
+  const fileKey = fileIdentityKey(fileId);
+  if (index.scopeCache.has(fileKey)) return index.scopeCache.get(fileKey)!;
   const scopeIndex = buildScopeIndexFromSource(
     fileId,
     parsedCtx.source,
@@ -33,7 +35,7 @@ export function getCachedScope(
       tree: parsedCtx.tree,
     },
   );
-  index.scopeCache.set(fileId, scopeIndex);
+  index.scopeCache.set(fileKey, scopeIndex);
   return scopeIndex;
 }
 
@@ -43,7 +45,7 @@ export async function buildPhpQualifiedNames(
   def: SymbolDef,
 ): Promise<string[]> {
   try {
-    const definitionParsed = await ensureParsedContext(definitionFile, index.parsed?.get(definitionFile));
+    const definitionParsed = await ensureParsedContext(definitionFile, index.parsed?.get(fileIdentityKey(definitionFile)));
     if (definitionParsed.sup.id !== "php") {
       return [];
     }
@@ -58,7 +60,7 @@ export async function buildPhpQualifiedNames(
 
 async function collectNamedNodeReferences(index: ProjectIndex, fileId: string, symbolName: string): Promise<Range[]> {
   try {
-    const parsedEntry = index.parsed?.get(fileId);
+    const parsedEntry = index.parsed?.get(fileIdentityKey(fileId));
     const parsed = await ensureParsedContext(fileId, parsedEntry);
     const identifierTypes = new Set<string>([
       ...parsed.sup.nodeTypes.identifier,
@@ -126,7 +128,7 @@ export function getCandidateReferenceNames(
 
   for (const imp of moduleIndex.imports) {
     const resolved = typeof imp.resolved === "string" ? imp.resolved : undefined;
-    if (!resolved || resolved !== definitionFile) continue;
+    if (!resolved || fileIdentityKey(resolved) !== fileIdentityKey(definitionFile)) continue;
     hasDirectImport = true;
 
     if (imp.kind === "named") {
@@ -145,12 +147,14 @@ export function getCandidateReferenceNames(
 }
 
 export function hasExpandedNamedImport(moduleIndex: ModuleIndex, targetFile: string, symbolName: string): boolean {
+  const targetKey = fileIdentityKey(targetFile);
   return moduleIndex.imports.some(
     (candidate) =>
       candidate.kind === "named" &&
       candidate.local === symbolName &&
       candidate.imported === symbolName &&
-      candidate.resolved === targetFile,
+      typeof candidate.resolved === "string" &&
+      fileIdentityKey(candidate.resolved) === targetKey,
   );
 }
 
@@ -158,7 +162,7 @@ const referenceCandidateCache = new WeakMap<ProjectIndex, Map<string, string[]>>
 
 function referenceCandidateCacheKey(def: SymbolDef, exportedNames: readonly string[]): string {
   const sortedNames = [...exportedNames].sort();
-  return `${def.file}::${def.range.start.index ?? 0}::${sortedNames.join("\0")}`;
+  return `${fileIdentityKey(def.file)}::${def.range.start.index ?? 0}::${sortedNames.join("\0")}`;
 }
 
 function importCanReferenceDefinition(
@@ -172,7 +176,7 @@ function importCanReferenceDefinition(
 
   const resolvesToDefinition = (exportedName: string): boolean => {
     const hit = resolveExport(index, targetFile, exportedName);
-    return hit?.kind === "resolved" ? sameDef(hit.def, def) : targetFile === def.file;
+    return hit?.kind === "resolved" ? sameDef(hit.def, def) : fileIdentityKey(targetFile) === fileIdentityKey(def.file);
   };
 
   if (imp.kind === "named") {
@@ -197,15 +201,15 @@ function moduleExportProbeNames(
   visited: ReadonlySet<string> = new Set(),
 ): string[] {
   const names = new Set(exportedNames);
-  const nextVisited = new Set([...visited, moduleIndex.file]);
+  const nextVisited = new Set([...visited, fileIdentityKey(moduleIndex.file)]);
   for (const entry of moduleIndex.exports) {
     if (entry.type === "reexport" || entry.type === "namespaceReexport") {
       names.add(entry.exportedAs);
       continue;
     }
     if (entry.type === "exportStar") {
-      const targetModule = index.byFile.get(entry.fromModule);
-      if (!targetModule || nextVisited.has(targetModule.file)) continue;
+      const targetModule = index.byFile.get(fileIdentityKey(entry.fromModule));
+      if (!targetModule || nextVisited.has(fileIdentityKey(targetModule.file))) continue;
       for (const exportedName of moduleExportProbeNames(index, targetModule, exportedNames, nextVisited)) {
         names.add(exportedName);
       }
@@ -214,19 +218,20 @@ function moduleExportProbeNames(
   return [...names];
 }
 
-function filesExportingDefinition(index: ProjectIndex, def: SymbolDef, exportedNames: readonly string[]): Set<string> {
-  const files = new Set<string>([def.file]);
-  for (const [fileId, moduleIndex] of index.byFile) {
-    if (fileId === def.file || !moduleIndex.exports.length) continue;
+function filesExportingDefinition(index: ProjectIndex, def: SymbolDef, exportedNames: readonly string[]): string[] {
+  const files = new Map<string, string>([[fileIdentityKey(def.file), def.file]]);
+  for (const moduleIndex of index.byFile.values()) {
+    const fileId = moduleIndex.file;
+    if (fileIdentityKey(fileId) === fileIdentityKey(def.file) || !moduleIndex.exports.length) continue;
     for (const exportedName of moduleExportProbeNames(index, moduleIndex, exportedNames)) {
       const resolved = resolveExport(index, fileId, exportedName);
       if (resolved?.kind === "resolved" && sameDef(resolved.def, def)) {
-        files.add(fileId);
+        files.set(fileIdentityKey(fileId), fileId);
         break;
       }
     }
   }
-  return files;
+  return [...files.values()];
 }
 
 function getIndexedReferenceCandidateFiles(
@@ -236,14 +241,15 @@ function getIndexedReferenceCandidateFiles(
 ): readonly string[] | undefined {
   if (def.file.toLowerCase().endsWith(".php")) return undefined;
   if (!index.referenceCandidates) return undefined;
-  const files = new Set<string>();
+  const files = new Map<string, string>();
   for (const exportingFile of filesExportingDefinition(index, def, exportedNames)) {
     for (const importingFile of candidateFilesImportingTarget(index.referenceCandidates, exportingFile) ?? []) {
-      files.add(importingFile);
+      files.set(fileIdentityKey(importingFile), importingFile);
     }
   }
-  for (const [fileId, moduleIndex] of index.byFile) {
-    if (fileId === def.file || files.has(fileId)) continue;
+  for (const moduleIndex of index.byFile.values()) {
+    const fileId = moduleIndex.file;
+    if (fileIdentityKey(fileId) === fileIdentityKey(def.file) || files.has(fileIdentityKey(fileId))) continue;
     if (
       moduleIndex.imports.some(
         (imp) =>
@@ -251,10 +257,10 @@ function getIndexedReferenceCandidateFiles(
           importCanReferenceDefinition(index, imp, def, exportedNames),
       )
     ) {
-      files.add(fileId);
+      files.set(fileIdentityKey(fileId), fileId);
     }
   }
-  return [...files].sort((left, right) => left.localeCompare(right));
+  return [...files.values()].sort((left, right) => left.localeCompare(right));
 }
 
 export function getCachedReferenceCandidateFiles(
@@ -264,8 +270,8 @@ export function getCachedReferenceCandidateFiles(
   hasGlobalNameReferences: boolean,
 ): string[] {
   if (hasGlobalNameReferences) {
-    return Array.from(index.byFile.keys())
-      .filter((candidateFile) => candidateFile !== def.file)
+    return Array.from(index.byFile.values(), (module) => module.file)
+      .filter((candidateFile) => fileIdentityKey(candidateFile) !== fileIdentityKey(def.file))
       .sort((left, right) => left.localeCompare(right));
   }
 
@@ -279,18 +285,19 @@ export function getCachedReferenceCandidateFiles(
   const cached = cache.get(key);
   if (cached) return cached;
 
-  const candidates = new Set<string>();
-  const candidateFileEntries = getIndexedReferenceCandidateFiles(index, def, exportedNames) ?? index.byFile.keys();
+  const candidates = new Map<string, string>();
+  const candidateFileEntries =
+    getIndexedReferenceCandidateFiles(index, def, exportedNames) ?? Array.from(index.byFile.values(), (module) => module.file);
   for (const fileId of candidateFileEntries) {
-    if (fileId === def.file) continue;
-    const moduleIndex = index.byFile.get(fileId);
+    if (fileIdentityKey(fileId) === fileIdentityKey(def.file)) continue;
+    const moduleIndex = index.byFile.get(fileIdentityKey(fileId));
     if (!moduleIndex) continue;
     if (moduleIndex.imports.some((imp) => importCanReferenceDefinition(index, imp, def, exportedNames))) {
-      candidates.add(fileId);
+      candidates.set(fileIdentityKey(fileId), fileId);
     }
   }
 
-  const sorted = Array.from(candidates).sort((left, right) => left.localeCompare(right));
+  const sorted = [...candidates.values()].sort((left, right) => left.localeCompare(right));
   cache.set(key, sorted);
   return sorted;
 }

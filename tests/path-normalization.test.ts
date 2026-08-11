@@ -9,6 +9,7 @@ import {
   toProjectDisplayPath,
   toProjectRelativePath,
 } from "../src/util.js";
+import { fileIdentityKey, isFileIdentityCaseInsensitive, setFileIdentityCaseInsensitive } from "../src/util/paths.js";
 import { createImpactIncludeMatcher, normalizeImpactFilePath } from "../src/impact/path.js";
 
 describe("cross-platform path normalization", () => {
@@ -107,5 +108,19 @@ describe("cross-platform path normalization", () => {
 
     expect(hints).toEqual(["src/index.ts", "packages/core", "tests/main.test.ts"]);
     expect(normalizeResolutionHints()).toEqual([]);
+  });
+  it("uses filesystem case sensitivity for path identity while normalizing drive letters", () => {
+    const originalCaseSensitivity = isFileIdentityCaseInsensitive();
+    try {
+      setFileIdentityCaseInsensitive(true);
+      expect(fileIdentityKey("E:/x")).toBe(fileIdentityKey("e:/X"));
+      expect(fileIdentityKey("E:/repo/Util.ts")).toBe(fileIdentityKey("e:/REPO/util.ts"));
+
+      setFileIdentityCaseInsensitive(false);
+      expect(fileIdentityKey("E:/x")).toBe(fileIdentityKey("e:/x"));
+      expect(fileIdentityKey("E:/repo/Util.ts")).not.toBe(fileIdentityKey("E:/repo/util.ts"));
+    } finally {
+      setFileIdentityCaseInsensitive(originalCaseSensitivity);
+    }
   });
 });

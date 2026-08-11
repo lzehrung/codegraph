@@ -46,4 +46,9 @@ export type ChunkMatch = {
 };
 
 export type ChunkTokenizer = (text: string) => number;
-export type ChunkIdFactory = () => string;
+
+/** Internal source offsets used while assembling non-overlapping chunks. */
+export type RangedChunk = Chunk & {
+  sourceStart: number;
+  sourceEnd: number;
+};

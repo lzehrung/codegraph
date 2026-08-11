@@ -5,7 +5,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import fg from "fast-glob";
 import { stripHashInlineComment } from "./comments.js";
-import { pickPackageExportTarget } from "./packageExports.js";
+import { resolvePackageExportTargets } from "./packageExports.js";
 import { listResolutionCandidates } from "./resolutionCandidates.js";
 
 async function pathMatchesCachedStat(
@@ -239,7 +239,7 @@ export async function loadWorkspaceConfig(projectRoot: string): Promise<Workspac
         name,
         path: dir,
         ...(typeof info.main === "string" ? { main: info.main } : {}),
-        ...(info.exports ? { exports: info.exports } : {}),
+        ...(Object.hasOwn(info, "exports") ? { exports: info.exports } : {}),
       });
     }
   }
@@ -279,18 +279,12 @@ export function listWorkspacePackageResolutionCandidates(
   const pushRelativeCandidates = (rel: string): void => {
     candidates.push(...listResolutionCandidates(path.resolve(baseDir, rel), resolutionExtensions));
   };
-  if (pkg.exports) {
+  if (Object.hasOwn(pkg, "exports")) {
     const key = subpath ? `./${subpath}` : ".";
-    if (typeof pkg.exports === "string" && key === ".") {
-      pushRelativeCandidates(pkg.exports);
-    } else if (typeof pkg.exports === "object") {
-      const exportMap = pkg.exports as Record<string, unknown>;
-      const target = exportMap[key] ?? (key === "." ? exportMap["."] : undefined);
-      const rel = pickPackageExportTarget(target);
-      if (rel) {
-        pushRelativeCandidates(rel);
-      }
+    for (const target of resolvePackageExportTargets(pkg.exports, key)) {
+      pushRelativeCandidates(target);
     }
+    return Array.from(new Set(candidates));
   }
 
   if (subpath) {

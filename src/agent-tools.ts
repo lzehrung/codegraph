@@ -18,7 +18,7 @@ import { getDependencies, getReverseDependencies, type DependencyNode } from "./
 import { getHotspots } from "./graphs/hotspots.js";
 import type { NativeRuntimeMode } from "./native/treeSitterNative.js";
 import { fileExists } from "./util/workspace.js";
-import { isFilePathWithinRoot, normalizePath, resolveFilePathFromRoot } from "./util/paths.js";
+import { fileIdentityKey, isFilePathWithinRoot, normalizePath, resolveFilePathFromRoot } from "./util/paths.js";
 import { errorMessage } from "./util/errors.js";
 import { listProjectFiles } from "./util/projectFiles.js";
 import { boundAgentList, defaultAgentLimit, normalizeAgentLimit } from "./agent/bounds.js";
@@ -814,7 +814,7 @@ function listSymbolsForOverview(
   exportedDefinitions: Set<string>;
 } {
   const symbols = listSymbols(index, { file, includeImports: false });
-  const mod = index.byFile.get(file);
+  const mod = index.byFile.get(fileIdentityKey(file));
   return {
     imports: mod?.imports ?? [],
     definitions: symbols,
@@ -918,7 +918,7 @@ async function getToolMissingFileResult(
     }
   | undefined
 > {
-  if (index.byFile.has(absPath)) {
+  if (index.byFile.has(fileIdentityKey(absPath))) {
     return undefined;
   }
   const reason = (await fileExists(absPath)) ? "file_not_indexed" : "file_not_found";
@@ -1109,6 +1109,6 @@ function isExportedSymbolDefinition(exportedDefinitions: Set<string>, symbol: Sy
 }
 
 function getExportedSymbolIdsForFile(index: ProjectIndex, file: string): Set<string> {
-  const mod = index.byFile.get(file);
+  const mod = index.byFile.get(fileIdentityKey(file));
   return new Set(mod?.exports.filter((entry) => entry.type === "local").map((entry) => symbolId(entry.target)) ?? []);
 }

@@ -92,9 +92,10 @@ async function resolveDeletedAliasImportTarget(
   if (spec.startsWith(".") || spec.startsWith("/") || /^[A-Za-z]:[\\/]/.test(spec)) {
     return undefined;
   }
+  if (!projectRoot) return undefined;
   const deletedTarget = normalizePath(deletedFile);
   const resolutionExtensions = deletedImportResolutionExtensions(deletedFile);
-  const { matchPath } = await loadNearestTsconfigFor(fromFile);
+  const { matchPath } = await loadNearestTsconfigFor(fromFile, projectRoot);
   if (matchPath) {
     const matched = matchPath(
       spec,
@@ -112,9 +113,6 @@ async function resolveDeletedAliasImportTarget(
     }
   }
 
-  if (!projectRoot) {
-    return undefined;
-  }
 
   return listWorkspacePackageResolutionCandidates(spec, workspaceConfig, resolutionExtensions)
     .map((candidate) => normalizePath(candidate))

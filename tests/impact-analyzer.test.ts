@@ -6,12 +6,13 @@ import { analyzeImpactFromDiff } from "../src/index.js";
 import { analyzeImpact, seedTransitiveFromFiles, calculateSeverity } from "../src/impact/analyzer.js";
 import { DEFAULT_SEVERITY_WEIGHTS } from "../src/impact/types.js";
 import { createReferenceLookupCache } from "../src/impact/referenceCache.js";
-import { createImpactDiagnostics } from "../src/impact/collect.js";
+import { createImpactDiagnostics, listFileLevelFallbackPaths } from "../src/impact/collect.js";
 import { rankChangedSymbolsForBudget } from "../src/impact/budgets.js";
 import { buildProjectIndex, buildProjectIndexFromFiles, SymbolKind } from "../src/indexer.js";
 import type { ProjectIndex } from "../src/indexer.js";
 import { normalizePath } from "../src/util/paths.js";
 import type { Edge } from "../src/types.js";
+import type { FileChange, ImpactItem } from "../src/impact/types.js";
 import { createTestIndex } from "./test-utils.js";
 
 describe("Reference lookup cache", () => {
@@ -386,6 +387,141 @@ describe("Impact Analyzer Edge Cases", () => {
       }
     });
 
+    it.each([
+      {
+        label: "Python positional-only markers",
+        file: "main.py",
+        beforeSignature: "def helper(a):",
+        afterSignature: "def helper(a, /, b):",
+        source: [
+          "def helper(a, /, b):",
+          "    return a",
+          "",
+          "compatible = helper(1, 2)",
+          "incompatible = helper(1)",
+          "",
+        ].join("\n"),
+        signatureLine: 1,
+        expected: { minArgs: 2, maxArgs: 2, confidence: "high" },
+        compatibleArgCount: 2,
+        incompatibleArgCount: 1,
+      },
+      {
+        label: "Java varargs",
+        file: "Main.java",
+        beforeSignature: "  void helper(String required) {}",
+        afterSignature: "  void helper(String required, String... args) {}",
+        source: [
+          "class Main {",
+          "  void helper(String required, String... args) {}",
+          "  void run() {",
+          '    helper("x", "y");',
+          "    helper();",
+          "  }",
+          "}",
+          "",
+        ].join("\n"),
+        signatureLine: 2,
+        expected: { minArgs: 1, maxArgs: null, confidence: "high" },
+        compatibleArgCount: 2,
+        incompatibleArgCount: 0,
+      },
+      {
+        label: "Kotlin trailing lambdas",
+        file: "main.kt",
+        beforeSignature: "fun helper(value: Int) { }",
+        afterSignature: "fun helper(value: Int, callback: () -> Unit) { callback() }",
+        source: [
+          "fun helper(value: Int, callback: () -> Unit) { callback() }",
+          "fun run() {",
+          "  helper(1) { }",
+          "  helper(1)",
+          "}",
+          "",
+        ].join("\n"),
+        signatureLine: 1,
+        expected: { minArgs: 2, maxArgs: 2, confidence: "high" },
+        compatibleArgCount: 2,
+        incompatibleArgCount: 1,
+      },
+      {
+        label: "Swift trailing closures",
+        file: "main.swift",
+        beforeSignature: "func helper(_ value: Int) { }",
+        afterSignature: "func helper(_ value: Int, callback: () -> Void) { callback() }",
+        source: [
+          "func helper(_ value: Int, callback: () -> Void) { callback() }",
+          "func run() {",
+          "  helper(1) { }",
+          "  helper(1)",
+          "}",
+          "",
+        ].join("\n"),
+        signatureLine: 1,
+        expected: { minArgs: 2, maxArgs: 2, confidence: "high" },
+        compatibleArgCount: 2,
+        incompatibleArgCount: 1,
+      },
+    ])(
+      "reports only genuine argument-count mismatches for $label",
+      async ({
+        file,
+        beforeSignature,
+        afterSignature,
+        source,
+        signatureLine,
+        expected,
+        compatibleArgCount,
+        incompatibleArgCount,
+      }) => {
+        const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-compat-regression-"));
+        try {
+          const targetFile = path.join(root, file);
+          await fsp.writeFile(targetFile, source, "utf8");
+          const index = await buildProjectIndex(root, { cache: "memory" });
+          const diffText = `diff --git a/${file} b/${file}
+--- a/${file}
++++ b/${file}
+@@ -${signatureLine},1 +${signatureLine},1 @@
+-${beforeSignature}
++${afterSignature}
+`;
+
+          const result = await analyzeImpactFromDiff(root, index, {
+            provider: "raw",
+            diffText,
+            includeTests: true,
+          });
+
+          if ("files" in result) {
+            throw new Error("Expected full impact report");
+          }
+
+          const helper = result.changedSymbols.find((symbol) => symbol.name === "helper");
+          expect(helper?.callCompatibility).toContainEqual(
+            expect.objectContaining({
+              status: "compatible",
+              reason: "compatible_argument_count",
+              actual: { argCount: compatibleArgCount, confidence: "high" },
+              expected,
+              callsiteFile: file,
+            }),
+          );
+          expect(helper?.callCompatibility).toContainEqual(
+            expect.objectContaining({
+              status: "likely_mismatch",
+              reason: "argument_count_below_minimum",
+              actual: { argCount: incompatibleArgCount, confidence: "high" },
+              expected,
+              callsiteFile: file,
+            }),
+          );
+        } finally {
+          await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+        }
+      },
+    );
+
     it.each(["self", "cls"])("counts %s as an ordinary parameter for Python free functions", async (receiverName) => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-python-free-self-"));
       try {
@@ -707,6 +843,75 @@ describe("Impact Analyzer Edge Cases", () => {
       expect(fallbackItem?.reasons).toContain("fileLevelChange");
     });
 
+    const fallbackChangeCases: ReadonlyArray<{ kind: FileChange["kind"]; isBinary: boolean }> = [
+      { kind: "added", isBinary: false },
+      { kind: "added", isBinary: true },
+      { kind: "modified", isBinary: false },
+      { kind: "modified", isBinary: true },
+      { kind: "deleted", isBinary: false },
+      { kind: "deleted", isBinary: true },
+      { kind: "renamed", isBinary: false },
+      { kind: "renamed", isBinary: true },
+    ];
+
+    for (const changeCase of fallbackChangeCases) {
+      it(`seeds dependents for ${changeCase.kind} ${changeCase.isBinary ? "binary" : "text"} changes`, () => {
+        const root = path.resolve("src/impact-fallback-matrix");
+        const suffix = changeCase.isBinary ? "binary" : "text";
+        const changedFile = path.join(root, `${changeCase.kind}-${suffix}.ts`);
+        const oldPath = path.join(root, `${changeCase.kind}-${suffix}-old.ts`);
+        const dependentFile = path.join(root, `${changeCase.kind}-${suffix}-consumer.ts`);
+        const lookupPath = changeCase.kind === "renamed" ? oldPath : changedFile;
+        const edges: Edge[] = [
+          {
+            from: dependentFile,
+            to: { type: "file", path: lookupPath },
+            raw: "./changed",
+          },
+        ];
+        const index: ProjectIndex = {
+          graph: { nodes: new Set([changedFile, oldPath, dependentFile]), edges },
+          modules: new Map(),
+          byFile: new Map(),
+          exportCache: new Map(),
+          scopeCache: new Map(),
+        };
+        const change: FileChange = {
+          path: changedFile,
+          kind: changeCase.kind,
+          hunks: [],
+        };
+        if (changeCase.kind === "renamed") {
+          change.oldPath = oldPath;
+        }
+        if (changeCase.isBinary) {
+          change.isBinary = true;
+        } else if (changeCase.kind === "added" || changeCase.kind === "modified") {
+          change.hunks = [{ oldStart: 1, newStart: 1, lines: ["+sideEffect();"] }];
+        }
+
+        const impacted = new Map<string, ImpactItem>();
+        const diagnostics = createImpactDiagnostics(1, 0);
+        seedTransitiveFromFiles(index, impacted, [change], {
+          includeTests: false,
+          fileLevelFallback: true,
+          fileLevelFallbackPaths: listFileLevelFallbackPaths([change], new Set<string>()),
+          diagnostics,
+        });
+
+        expect(impacted.has(dependentFile)).toBe(true);
+        expect(diagnostics.fallbackSeededFiles).toBe(1);
+        expect(diagnostics.fallbackSeededDependents).toBe(1);
+        const item = impacted.get(dependentFile);
+        if (changeCase.kind === "added" || changeCase.kind === "modified") {
+          expect(item?.reasons).toContain("fileLevelChange");
+        } else {
+          expect(item?.reasons).toContain("transitive");
+        }
+      });
+    }
+
+
     it("applies ignore globs for sparse explicit-file indexes", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-analyzer-"));
       try {
@@ -971,9 +1176,8 @@ describe("Impact Analyzer Edge Cases", () => {
       expect(sameFileResult.explain.sameFile).toBe(true);
       expect(differentFileResult.explain.sameFile).toBeUndefined();
 
-      // Both should be 1.0 due to clamping, but sameFile should be marked in explain
-      expect(sameFileResult.severity).toBe(1.0);
-      expect(differentFileResult.severity).toBe(1.0);
+      // Saturating normalization retains the same-file boost for ranking.
+      expect(sameFileResult.severity).toBeGreaterThan(differentFileResult.severity);
     });
 
     it("should penalize type-only changes", async () => {
@@ -1053,9 +1257,8 @@ describe("Impact Analyzer Edge Cases", () => {
       expect(highFanInResult.explain.fanIn).toBe(3);
       expect(lowFanInResult.explain.fanIn).toBeUndefined();
 
-      // Both should be 1.0 due to clamping, but high fan-in should be marked in explain
-      expect(highFanInResult.severity).toBe(1.0);
-      expect(lowFanInResult.severity).toBe(1.0);
+      // Saturating normalization retains the fan-in boost for ranking.
+      expect(highFanInResult.severity).toBeGreaterThan(lowFanInResult.severity);
     });
 
     it("should reject invalid severity weights instead of silently repairing them", () => {
@@ -1125,7 +1328,7 @@ describe("Impact Analyzer Edge Cases", () => {
       expect(fallbackResult).toEqual(explicitFanInResult);
     });
 
-    it("discounts confidence but not severity for medium-confidence resolved references", async () => {
+    it("discounts severity and confidence for medium-confidence resolved references", async () => {
       const mockIndex = {
         graph: { edges: [] },
         byFile: new Map(),
@@ -1155,7 +1358,7 @@ describe("Impact Analyzer Edge Cases", () => {
       const exactResult = await calculateSeverity(changedSymbol, exactRef, ["directRef"], 0, mockIndex);
       const memberAccessResult = await calculateSeverity(changedSymbol, memberAccessRef, ["directRef"], 0, mockIndex);
 
-      expect(memberAccessResult.severity).toBe(exactResult.severity);
+      expect(memberAccessResult.severity).toBeLessThan(exactResult.severity);
       expect(memberAccessResult.confidence).toBeLessThan(exactResult.confidence);
       expect(memberAccessResult.confidence).toBeCloseTo(exactResult.confidence * 0.85, 5);
       expect(memberAccessResult.explain.resolutionConfidence).toBe("medium");
@@ -1193,7 +1396,7 @@ describe("Impact Analyzer Edge Cases", () => {
       const lowResult = await calculateSeverity(changedSymbol, lowConfidenceRef, ["directRef"], 0, mockIndex);
       const mediumResult = await calculateSeverity(changedSymbol, mediumConfidenceRef, ["directRef"], 0, mockIndex);
 
-      expect(lowResult.severity).toBe(mediumResult.severity);
+      expect(lowResult.severity).toBeLessThan(mediumResult.severity);
       expect(lowResult.confidence).toBeLessThan(mediumResult.confidence);
       expect(lowResult.explain.resolutionConfidence).toBe("low");
     });

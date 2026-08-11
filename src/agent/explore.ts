@@ -4,7 +4,7 @@ import { getReverseDependencies, getShortestPath, type DependencyNode } from "..
 import { defNodeId } from "../graphs/symbol-graph.js";
 import type { BuildOptions } from "../indexer/types.js";
 import { listCandidateTestFiles } from "../impact/context.js";
-import { normalizePath, toProjectDisplayPath } from "../util/paths.js";
+import { fileIdentityKey, normalizePath, toProjectDisplayPath } from "../util/paths.js";
 import { parseAgentSymbolHandle } from "./handles.js";
 import {
   formatAgentFileViewResponse,
@@ -345,7 +345,7 @@ function resolveAnchorSymbolId(snapshot: AgentProjectSnapshot, anchor: AgentSear
   if (!parsed) return undefined;
   const absolute = normalizePath(path.resolve(snapshot.root, parsed.file));
   const symbol = snapshot.index.byFile
-    .get(absolute)
+    .get(fileIdentityKey(absolute))
     ?.locals.find(
       (candidate) =>
         candidate.localName === parsed.name &&

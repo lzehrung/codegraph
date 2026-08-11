@@ -1,3 +1,4 @@
+import { fileIdentityKey } from "../util/paths.js";
 import type { ParsedFileContext } from "./parse-context.js";
 import type { BuildOptions } from "./types.js";
 
@@ -11,8 +12,9 @@ export function setParsedCacheEntry(
   entry: ParsedFileContext,
   maxEntries: number,
 ): void {
-  if (parsedMap.has(file)) parsedMap.delete(file);
-  parsedMap.set(file, entry);
+  const key = fileIdentityKey(file);
+  if (parsedMap.has(key)) parsedMap.delete(key);
+  parsedMap.set(key, entry);
   while (parsedMap.size > maxEntries) {
     const oldest = parsedMap.keys().next().value;
     if (!oldest) break;

@@ -12,7 +12,7 @@ import {
   listProjectFiles,
   type ProjectFileDiscoveryOptions,
 } from "../../util/projectFiles.js";
-import { assertFilePathWithinRoot, isFilePathWithinRoot } from "../../util/paths.js";
+import { assertFilePathWithinRoot, fileIdentityKey, isFilePathWithinRoot } from "../../util/paths.js";
 import { getGitBlobHashes } from "../../util/git.js";
 import { stringifyUnknown } from "../../util/ast.js";
 import type { BuildOptions } from "../types.js";
@@ -83,7 +83,7 @@ export async function collectWorkspaceManifestDependencyEdges(
   return edges;
 }
 
-export const MANIFEST_VERSION = 2;
+export const MANIFEST_VERSION = 3;
 
 export type ManifestFileEntry = GraphCacheEntry;
 
@@ -117,7 +117,13 @@ type ConfigHashResult = {
 };
 
 export function normalizeIndexedFileInputs(projectRoot: string, files: readonly string[], label: string): string[] {
-  return Array.from(new Set(files.filter(Boolean).map((file) => assertFilePathWithinRoot(projectRoot, file, label))));
+  const filesByIdentity = new Map<string, string>();
+  for (const input of files) {
+    if (!input) continue;
+    const file = assertFilePathWithinRoot(projectRoot, input, label);
+    filesByIdentity.set(fileIdentityKey(file), file);
+  }
+  return [...filesByIdentity.values()];
 }
 
 export function sanitizeManifestEntriesForRoot(
@@ -234,7 +240,16 @@ export async function loadManifest(projectRoot: string, opts?: BuildOptions): Pr
     const manifestPath = manifestFilePath(projectRoot, opts);
     const raw = await fsp.readFile(manifestPath, "utf8");
     const parsed = JSON.parse(raw) as IndexManifest;
-    if (parsed.version !== MANIFEST_VERSION) return null;
+    if (
+      parsed.version !== MANIFEST_VERSION ||
+      typeof parsed.projectRoot !== "string" ||
+      !/^[a-f0-9]{64}$/.test(parsed.buildOptions?.implementationFingerprint ?? "")
+    ) {
+      return null;
+    }
+    const activeRootIdentity = fileIdentityKey(path.resolve(projectRoot));
+    const manifestRootIdentity = fileIdentityKey(path.resolve(parsed.projectRoot));
+    if (manifestRootIdentity !== activeRootIdentity) return null;
     return parsed;
   } catch {
     return null;

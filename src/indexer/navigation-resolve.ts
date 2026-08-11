@@ -2,26 +2,73 @@ import fs from "node:fs";
 import path from "node:path";
 import { supportForFile } from "../languages.js";
 import type { FileId } from "../types.js";
-import { type ImportBinding, type ProjectIndex, type ResolvedExport, type SymbolDef, SymbolKind } from "./types.js";
+import { fileIdentityKey, normalizePath } from "../util/paths.js";
+import {
+  type ImportBinding,
+  type ModuleIndex,
+  type ProjectIndex,
+  type ResolvedExport,
+  type SymbolDef,
+  SymbolKind,
+} from "./types.js";
 
 function cacheKey(file: FileId, name: string): string {
-  return `${file}::${name}`;
+  return `${fileIdentityKey(file)}::${name}`;
 }
 
 const goPackageNameCache = new Map<FileId, string | null>();
 const packageNameCache = new Map<string, string | null>();
 
+export type ResolveExportOptions = {
+  preferredKind?: SymbolKind;
+  allowLocalFallback?: boolean;
+};
+
+function moduleFor(index: ProjectIndex, file: FileId): ModuleIndex | undefined {
+  return index.byFile.get(fileIdentityKey(file));
+}
+
+function sameSymbolDef(left: SymbolDef, right: SymbolDef): boolean {
+  if (
+    fileIdentityKey(left.file) !== fileIdentityKey(right.file) ||
+    left.localName !== right.localName ||
+    left.kind !== right.kind
+  ) {
+    return false;
+  }
+
+  const leftIndex = left.range.start.index;
+  const rightIndex = right.range.start.index;
+  if (typeof leftIndex === "number" && typeof rightIndex === "number") {
+    return leftIndex === rightIndex;
+  }
+
+  return left.range.start.line === right.range.start.line && left.range.start.column === right.range.start.column;
+}
+
+function sameResolvedExport(left: ResolvedExport, right: ResolvedExport): boolean {
+  if (left.kind !== right.kind) return false;
+  if (left.kind === "resolved" && right.kind === "resolved") {
+    return sameSymbolDef(left.def, right.def);
+  }
+  if (left.kind === "namespace" && right.kind === "namespace") {
+    return fileIdentityKey(left.file) === fileIdentityKey(right.file);
+  }
+  return false;
+}
+
 function readGoPackageName(filePath: string): string | null {
-  const cached = goPackageNameCache.get(filePath);
+  const key = fileIdentityKey(filePath);
+  const cached = goPackageNameCache.get(key);
   if (cached !== undefined) return cached;
   try {
     const source = fs.readFileSync(filePath, "utf8");
     const match = source.match(/^\s*package\s+([A-Za-z_][A-Za-z0-9_]*)/m);
     const packageName = match?.[1] ?? null;
-    goPackageNameCache.set(filePath, packageName);
+    goPackageNameCache.set(key, packageName);
     return packageName;
   } catch {
-    goPackageNameCache.set(filePath, null);
+    goPackageNameCache.set(key, null);
     return null;
   }
 }
@@ -30,11 +77,12 @@ function resolveGoPackageExport(index: ProjectIndex, file: FileId, exportedName:
   try {
     const support = supportForFile(file);
     if (!support || support.id !== "go") return null;
-    const baseDir = path.dirname(file);
+    const baseDirKey = fileIdentityKey(path.dirname(file));
     const sourcePackage = readGoPackageName(file);
-    for (const [filePath, moduleEntry] of index.byFile) {
-      if (path.dirname(filePath) !== baseDir) continue;
-      if (sourcePackage && readGoPackageName(filePath) !== sourcePackage) {
+    for (const moduleEntry of index.byFile.values()) {
+      const candidateFile = moduleEntry.file;
+      if (fileIdentityKey(path.dirname(candidateFile)) !== baseDirKey) continue;
+      if (sourcePackage && readGoPackageName(candidateFile) !== sourcePackage) {
         continue;
       }
       for (const entry of moduleEntry.exports) {
@@ -50,7 +98,7 @@ function resolveGoPackageExport(index: ProjectIndex, file: FileId, exportedName:
 }
 
 function readPackageNameForLanguage(filePath: string, languageId: "java" | "kotlin"): string | null {
-  const key = `${languageId}::${filePath}`;
+  const key = `${languageId}::${fileIdentityKey(filePath)}`;
   const cached = packageNameCache.get(key);
   if (cached !== undefined) return cached;
   try {
@@ -75,17 +123,51 @@ function resolveSiblingPackageExport(
 ): ResolvedExport | null {
   const packageName = readPackageNameForLanguage(targetFile, languageId);
   if (!packageName) return null;
-  const targetDir = path.dirname(targetFile);
-  for (const filePath of index.byFile.keys()) {
-    if (filePath === targetFile || path.dirname(filePath) !== targetDir) {
+  const targetFileKey = fileIdentityKey(targetFile);
+  const targetDirKey = fileIdentityKey(path.dirname(targetFile));
+  for (const moduleEntry of index.byFile.values()) {
+    const candidateFile = moduleEntry.file;
+    if (fileIdentityKey(candidateFile) === targetFileKey || fileIdentityKey(path.dirname(candidateFile)) !== targetDirKey) {
       continue;
     }
-    if (readPackageNameForLanguage(filePath, languageId) !== packageName) {
+    if (readPackageNameForLanguage(candidateFile, languageId) !== packageName) {
       continue;
     }
-    const hit = resolveExport(index, filePath, exportedName);
+    const hit = resolveExport(index, candidateFile, exportedName);
     if (hit) return hit;
   }
+  return null;
+}
+
+function resolvePythonSubmodule(targetFile: string, exportedName: string): FileId | null {
+  let baseDir: string;
+  try {
+    const targetStat = fs.statSync(targetFile);
+    if (targetStat.isDirectory()) {
+      baseDir = targetFile;
+    } else if (path.basename(targetFile) === "__init__.py") {
+      baseDir = path.dirname(targetFile);
+    } else {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+
+  const moduleFile = path.join(baseDir, `${exportedName}.py`);
+  const packageInit = path.join(baseDir, exportedName, "__init__.py");
+  const namespacePackage = path.join(baseDir, exportedName);
+  for (const candidate of [moduleFile, packageInit, namespacePackage]) {
+    try {
+      const candidateStat = fs.statSync(candidate);
+      if (candidate === namespacePackage ? candidateStat.isDirectory() : candidateStat.isFile()) {
+        return normalizePath(candidate);
+      }
+    } catch {
+      // The next candidate can still be a real submodule.
+    }
+  }
+
   return null;
 }
 
@@ -93,22 +175,22 @@ export function resolveExport(
   index: ProjectIndex,
   file: FileId,
   exportedName: string,
-  opts?: { preferredKind?: SymbolKind; allowLocalFallback?: boolean },
+  opts?: ResolveExportOptions,
 ): ResolvedExport | null {
   const visited = new Set<string>();
   const matchesPreferredKind = (def: SymbolDef): boolean => !opts?.preferredKind || def.kind === opts.preferredKind;
   const allowLocalFallback = opts?.allowLocalFallback ?? true;
 
   function resolveFromFile(fileInner: FileId, name: string): ResolvedExport | null {
-    const normalizedFile = fileInner.replace(/\\/g, "/");
-    const moduleEntry = index.byFile.get(normalizedFile);
+    const moduleEntry = moduleFor(index, fileInner);
     if (!moduleEntry) return null;
+    const normalizedFile = normalizePath(moduleEntry.file);
     const key = opts?.preferredKind
       ? `${cacheKey(normalizedFile, name)}::${opts.preferredKind}::${allowLocalFallback ? "local" : "export"}`
       : `${cacheKey(normalizedFile, name)}::${allowLocalFallback ? "local" : "export"}`;
     if (index.exportCache.has(key)) return index.exportCache.get(key)!;
 
-    const cycleKey = `${normalizedFile}::${name}`;
+    const cycleKey = cacheKey(normalizedFile, name);
     if (visited.has(cycleKey)) return null;
     visited.add(cycleKey);
 
@@ -131,7 +213,7 @@ export function resolveExport(
       if (entry.type === "namespaceReexport" && entry.exportedAs === name) {
         const result: ResolvedExport = {
           kind: "namespace",
-          file: entry.fromModule,
+          file: normalizePath(entry.fromModule),
         };
         index.exportCache.set(key, result);
         return result;
@@ -139,7 +221,7 @@ export function resolveExport(
     }
 
     for (const entry of moduleEntry.exports) {
-      if (entry.type === "reexport" && entry.exportedAs === name && typeof entry.fromModule === "string") {
+      if (entry.type === "reexport" && entry.exportedAs === name) {
         const downstream =
           resolveFromFile(entry.fromModule, entry.sourceSpecifier || name) ?? resolveFromFile(entry.fromModule, name);
         if (downstream) {
@@ -149,14 +231,22 @@ export function resolveExport(
       }
     }
 
+    const starCandidates: ResolvedExport[] = [];
     for (const entry of moduleEntry.exports) {
-      if (entry.type === "exportStar" && typeof entry.fromModule === "string") {
-        const downstream = resolveFromFile(entry.fromModule, name);
-        if (downstream) {
-          index.exportCache.set(key, downstream);
-          return downstream;
-        }
+      if (entry.type !== "exportStar") continue;
+      const downstream = resolveFromFile(entry.fromModule, name);
+      if (downstream && !starCandidates.some((candidate) => sameResolvedExport(candidate, downstream))) {
+        starCandidates.push(downstream);
       }
+    }
+    const [onlyStarCandidate] = starCandidates;
+    if (starCandidates.length === 1 && onlyStarCandidate) {
+      index.exportCache.set(key, onlyStarCandidate);
+      return onlyStarCandidate;
+    }
+    if (starCandidates.length) {
+      index.exportCache.set(key, null);
+      return null;
     }
 
     if (allowLocalFallback) {
@@ -176,6 +266,51 @@ export function resolveExport(
 
   return resolveFromFile(file, exportedName);
 }
+
+function collectExportedNames(
+  index: ProjectIndex,
+  file: FileId,
+  includeLocalFallback: boolean,
+  names: Set<string>,
+  visited: Set<FileId>,
+): void {
+  const fileKey = fileIdentityKey(file);
+  if (visited.has(fileKey)) return;
+  visited.add(fileKey);
+
+  const moduleEntry = moduleFor(index, file);
+  if (!moduleEntry) return;
+  for (const entry of moduleEntry.exports) {
+    if (entry.type === "exportStar") {
+      collectExportedNames(index, entry.fromModule, includeLocalFallback, names, visited);
+    } else {
+      names.add(entry.exportedAs);
+    }
+  }
+  if (includeLocalFallback) {
+    for (const local of moduleEntry.locals) {
+      names.add(local.localName);
+    }
+  }
+}
+
+export function resolveModuleExports(
+  index: ProjectIndex,
+  file: FileId,
+  opts?: ResolveExportOptions,
+): Map<string, ResolvedExport> {
+  const names = new Set<string>();
+  const includeLocalFallback = opts?.allowLocalFallback ?? true;
+  collectExportedNames(index, file, includeLocalFallback, names, new Set<FileId>());
+
+  const resolved = new Map<string, ResolvedExport>();
+  for (const name of names) {
+    const hit = resolveExport(index, file, name, opts);
+    if (hit) resolved.set(name, hit);
+  }
+  return resolved;
+}
+
 
 export function resolveImported(
   index: ProjectIndex,
@@ -218,42 +353,11 @@ export function resolveImported(
   try {
     const support = supportForFile(targetFile);
     if (support?.id === "python") {
-      const base =
-        fs.existsSync(targetFile) && fs.statSync(targetFile).isDirectory() ? targetFile : path.dirname(targetFile);
-      const subCandidates = [
-        path.join(base, `${exportedName}.py`),
-        path.join(base, exportedName, "__init__.py"),
-        path.join(base, exportedName),
-      ];
-      for (const candidate of subCandidates) {
-        try {
-          if (fs.existsSync(candidate)) {
-            return {
-              file: candidate.replace(/\\/g, "/"),
-              localName: exportedName,
-              kind: SymbolKind.Variable,
-              range: {
-                start: { line: 1, column: 1, index: 0 },
-                end: { line: 1, column: 1, index: 0 },
-              },
-            };
-          }
-        } catch {
-          // fallback resolution continues
-        }
-      }
-      return {
-        file: targetFile.replace(/\\/g, "/"),
-        localName: exportedName,
-        kind: SymbolKind.Variable,
-        range: {
-          start: { line: 1, column: 1, index: 0 },
-          end: { line: 1, column: 1, index: 0 },
-        },
-      };
+      const submodule = resolvePythonSubmodule(targetFile, exportedName);
+      if (submodule) return { namespace: submodule };
     }
   } catch {
-    // Unsupported file extension, cannot resolve detailed import.
+    // Unsupported file extension, cannot resolve a Python submodule.
   }
 
   return null;

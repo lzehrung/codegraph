@@ -102,7 +102,7 @@ export async function collectImportsForFile(
 
   const tsCfg =
     resolvedSup.id === "ts" || resolvedSup.id === "tsx"
-      ? await loadNearestTsconfigFor(file, opts?.logLevel)
+      ? await loadNearestTsconfigFor(file, projectRoot, opts?.logLevel)
       : undefined;
   const workspaceConfig = await loadWorkspaceConfig(projectRoot);
   const resolvedImportCache = new Map<string, Promise<ResolvedImportTarget>>();

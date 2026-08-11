@@ -21,7 +21,7 @@ import type {
 import { buildSymbolGraphDetailed } from "../graphs/symbol-graph-detailed.js";
 import { findDetailedCycles } from "../graphs/queries.js";
 import { discoverProjectFiles } from "../util/projectFiles.js";
-import { normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
+import { fileIdentityKey, normalizePath, resolveFilePathFromRoot } from "../util/paths.js";
 import { newFileRangeForHunk } from "./hunks.js";
 import { createGraphFileResolver, normalizeImpactFileChange, toImpactReportFilePath } from "./path.js";
 import { buildCompactImpactReport } from "./reportCompact.js";
@@ -221,7 +221,8 @@ function buildReexportChains(
   if (!exportedSymbols.length) return undefined;
 
   const reexportsBySource = new Map<FileId, ReexportEdge[]>();
-  for (const [file, mod] of index.byFile) {
+  for (const mod of index.byFile.values()) {
+    const file = mod.file;
     for (const entry of mod.exports) {
       if (entry.type !== "reexport" && entry.type !== "exportStar" && entry.type !== "namespaceReexport") {
         continue;
@@ -231,7 +232,8 @@ function buildReexportChains(
         resolvedSourcePath = resolveFilePathFromRoot(path.dirname(file), entry.fromModule);
       }
       const sourceFile = normalizePath(resolvedSourcePath);
-      const edges = reexportsBySource.get(sourceFile) ?? [];
+      const sourceKey = fileIdentityKey(sourceFile);
+      const edges = reexportsBySource.get(sourceKey) ?? [];
       const edge: ReexportEdge = {
         exporter: file,
         type: entry.type,
@@ -240,7 +242,7 @@ function buildReexportChains(
         edge.sourceSpecifier = entry.sourceSpecifier;
       }
       edges.push(edge);
-      reexportsBySource.set(sourceFile, edges);
+      reexportsBySource.set(sourceKey, edges);
     }
   }
 
@@ -437,31 +439,32 @@ function buildSurfaceArea(
   const fanOut = new Map<FileId, number>();
 
   for (const node of index.graph.nodes) {
-    const normalizedNode = normalizePath(node);
-    fanIn.set(normalizedNode, 0);
-    fanOut.set(normalizedNode, 0);
+    const key = fileIdentityKey(node);
+    fanIn.set(key, 0);
+    fanOut.set(key, 0);
   }
 
   for (const edge of index.graph.edges) {
-    const from = normalizePath(edge.from);
+    const from = fileIdentityKey(edge.from);
     fanOut.set(from, (fanOut.get(from) || 0) + 1);
     if (edge.to.type === "file") {
-      const to = normalizePath(edge.to.path);
+      const to = fileIdentityKey(edge.to.path);
       fanIn.set(to, (fanIn.get(to) || 0) + 1);
     }
   }
 
-  const changedFiles = new Set(diffFiles.map((fileChange) => normalizePath(fileChange.path)));
-  const impactedFiles = new Set(impactedItems.map((item) => normalizePath(item.file)));
+  const changedFiles = new Set(diffFiles.map((fileChange) => fileIdentityKey(fileChange.path)));
+  const impactedFiles = new Set(impactedItems.map((item) => fileIdentityKey(item.file)));
 
   const files = Array.from(index.graph.nodes).map((file) => {
     const normalizedFile = normalizePath(file);
+    const key = fileIdentityKey(normalizedFile);
     return {
       file: normalizedFile,
-      fanIn: fanIn.get(normalizedFile) || 0,
-      fanOut: fanOut.get(normalizedFile) || 0,
-      changed: changedFiles.has(normalizedFile),
-      impacted: impactedFiles.has(normalizedFile),
+      fanIn: fanIn.get(key) || 0,
+      fanOut: fanOut.get(key) || 0,
+      changed: changedFiles.has(key),
+      impacted: impactedFiles.has(key),
     };
   });
 

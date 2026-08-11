@@ -12,6 +12,10 @@ export type ReviewFileSummary = {
   status: "updated" | "deleted" | "missing";
   oldFile?: string;
   similarityIndex?: number;
+  /** True when Git reported a binary diff and symbol analysis was skipped. */
+  isBinary?: true;
+  /** Unchanged re-exports included only as API context for a changed export. */
+  apiContext?: ReviewSymbolSummary[];
   symbols: ReviewSymbolSummary[];
 };
 

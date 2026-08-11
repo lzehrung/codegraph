@@ -1,6 +1,6 @@
 import { isGraphOnlyLanguage } from "../documentLinks.js";
 import type { LanguageExtensionMap } from "../languages.js";
-import { prepareSourceInput } from "../languages/filePrep.js";
+import { prepareSourceInput, type PreparedSFCEmbeddedBlock } from "../languages/filePrep.js";
 import {
   getNativeQueryExecution,
   getNativeSyntaxTreeExecution,
@@ -35,6 +35,7 @@ export type PreparedFileContext = {
   sup: LanguageSupport;
   lang?: ParserLanguage;
   nativeMode?: NativeRuntimeMode;
+  embeddedBlocks?: PreparedSFCEmbeddedBlock[];
   nativeQueries: NativeQueryResults | null;
   /** Transferable native tree POJO from workers; avoids a second parse on the main thread. */
   syntaxTree?: NativeSyntaxTree | null;
@@ -142,6 +143,7 @@ export async function prepareFileForIndexing(
       file,
       source: prep.source,
       sup: prep.sup,
+      ...(prep.embeddedBlocks ? { embeddedBlocks: prep.embeddedBlocks } : {}),
       ...(native ? { nativeMode: native } : {}),
       nativeQueries: null,
     };
@@ -153,6 +155,7 @@ export async function prepareFileForIndexing(
     file,
     source: prep.source,
     sup: prep.sup,
+    ...(prep.embeddedBlocks ? { embeddedBlocks: prep.embeddedBlocks } : {}),
     ...(native ? { nativeMode: native } : {}),
     nativeQueries: nativeExecution.results,
     ...(nativeExecution.fallbackReason ? { nativeFallbackReason: nativeExecution.fallbackReason } : {}),

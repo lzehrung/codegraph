@@ -3,6 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
 import { goToDefinition } from "../src/index.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 import { createTestIndex, createTestIndexFromFiles, testGoToDefinition } from "./test-utils.js";
 
 describe("Go to Definition", () => {
@@ -641,6 +642,47 @@ describe("Go to Definition", () => {
       if (result.status === "ok") {
         expect(result.definition.file).toBe(utilsFile);
         expect(result.definition.range.start.line).toBe(1); // helper_function definition
+      }
+    });
+
+    it("does not fabricate a definition for a missing imported symbol", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-missing-import-goto-"));
+      const moduleFile = path.join(root, "module.py").replace(/\\/g, "/");
+      const mainFile = path.join(root, "main.py").replace(/\\/g, "/");
+      try {
+        await fsp.writeFile(moduleFile, "def existing():\n    return 1\n", "utf8");
+        await fsp.writeFile(mainFile, "from module import missing\nmissing()\n", "utf8");
+
+        const index = await createTestIndexFromFiles(root, [moduleFile, mainFile]);
+        const result = await goToDefinition(index, { file: mainFile, line: 2, column: 2 });
+
+        expect(result.status).toBe("not_found");
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("keeps a real Python submodule as a namespace import", async () => {
+      const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-python-submodule-import-"));
+      const packageDir = path.join(root, "package");
+      const packageFile = path.join(packageDir, "__init__.py").replace(/\\/g, "/");
+      const childFile = path.join(packageDir, "child.py").replace(/\\/g, "/");
+      const mainFile = path.join(root, "main.py").replace(/\\/g, "/");
+      try {
+        await fsp.mkdir(packageDir);
+        await fsp.writeFile(packageFile, "", "utf8");
+        await fsp.writeFile(childFile, "value = 1\n", "utf8");
+        await fsp.writeFile(mainFile, "from package import child\n", "utf8");
+
+        const index = await createTestIndexFromFiles(root, [packageFile, childFile, mainFile]);
+        const mainModule = index.byFile.get(fileIdentityKey(mainFile));
+        const binding = mainModule?.imports.find((candidate) => candidate.kind === "namespace");
+
+        expect(binding?.kind).toBe("namespace");
+        if (!binding || binding.kind !== "namespace") return;
+        expect(binding.resolved).toBe(childFile);
+      } finally {
+        await fsp.rm(root, { recursive: true, force: true });
       }
     });
   });

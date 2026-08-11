@@ -6,6 +6,7 @@ import { loadNearestTsconfigFor } from "./util/resolution.js";
 import type { WorkspaceConfig } from "./util/workspace.js";
 import { extractJsTsDynamicSpecifiers } from "./util/specifiers.js";
 import { logWithLevel } from "./logging.js";
+import { fileIdentityKey } from "./util/paths.js";
 import type { LogLevel } from "./logging.js";
 import {
   graphOnlyLanguageSupportsImportAliases,
@@ -50,6 +51,8 @@ export async function collectEdgesForFile(
     fileSignature?: { sig: string; gitSig?: string; cacheSig?: string };
     sqlCorpusSig?: string;
     cachedFileEdges?: GraphCacheEntry;
+    /** Root stored with the manifest that supplied `cachedFileEdges`. */
+    cachedFileEdgesProjectRoot?: string;
     languageExtensions?: LanguageExtensionMap;
     onFileEdges?: (file: string, entry: GraphCacheEntry) => void;
     onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
@@ -76,8 +79,11 @@ export async function collectEdgesForFile(
   };
 
   const sqlCacheIsValid = sqlFile && !!opts.sqlCorpusSig && opts.cachedFileEdges?.sqlCorpusSig === opts.sqlCorpusSig;
+  const cacheRootMatchesProject =
+    opts.cachedFileEdgesProjectRoot === undefined ||
+    fileIdentityKey(opts.cachedFileEdgesProjectRoot) === fileIdentityKey(projectRoot);
   const canReadCache = !sqlFile || sqlCacheIsValid;
-  const cached = canReadCache && (sig || gitSig) ? opts.cachedFileEdges : undefined;
+  const cached = canReadCache && cacheRootMatchesProject && (sig || gitSig) ? opts.cachedFileEdges : undefined;
   const matchesGitSig = !!gitSig && !!cached?.gitSig && cached.gitSig === gitSig;
   const matchesSig = !!sig && !!cached && cached.sig === sig;
 
@@ -152,7 +158,7 @@ export async function collectEdgesForFile(
     graphOnlyAliasLanguage && specs.some(({ spec }) => graphOnlySpecifierNeedsResolutionConfig(spec));
   const { matchPath } =
     sup.id === "ts" || sup.id === "tsx" || needsGraphOnlyResolutionConfig
-      ? await loadNearestTsconfigFor(file, opts?.logLevel)
+      ? await loadNearestTsconfigFor(file, projectRoot, opts?.logLevel)
       : { matchPath: undefined };
   const edges: Edge[] = [];
   const edgeResolutionTasks = specs.map(async (entry) => {

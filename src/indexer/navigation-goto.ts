@@ -2,6 +2,7 @@ import type { LanguageSupport } from "../languages.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import type { SyntaxNodeLike } from "../languages/types.js";
 import { sliceText } from "../util/ast.js";
+import { fileIdentityKey } from "../util/paths.js";
 import {
   getMemberAccessParts,
   getNavigationExpressionProperty,
@@ -19,8 +20,9 @@ export async function resolveMemberAccessDefinition(params: {
   node: SyntaxNodeLike;
   source: string;
   sup: LanguageSupport;
+  resolveLexicalBinding?: (expression: SyntaxNodeLike) => SymbolDef | null;
 }): Promise<GoToResult | null> {
-  const { index, mod, node, source, sup } = params;
+  const { index, mod, node, source, sup, resolveLexicalBinding } = params;
   const parent = node.parent;
   if (!parent || !sup.supportsCrossModuleSymbols || !isMemberAccessNode(sup, parent)) {
     return null;
@@ -31,9 +33,11 @@ export async function resolveMemberAccessDefinition(params: {
   const optionalMemberTypes = memberAccessTraversalTypes(sup);
 
   const resolveExpression = async (expr: SyntaxNodeLike): Promise<ResolvedExport | null> => {
-    const exprName = sliceText(expr, source);
     const exprIsId = sup.nodeTypes.identifier.includes(expr.type);
     if (exprIsId || expr.type === "identifier" || expr.type === "type_identifier" || expr.type === "constant") {
+      const lexicalBinding = resolveLexicalBinding?.(expr);
+      if (lexicalBinding) return { kind: "resolved", def: lexicalBinding };
+      const exprName = sliceText(expr, source);
       const imp = mod.imports.find(
         (candidate) =>
           (candidate.kind === "named" && candidate.local === exprName) ||
@@ -129,7 +133,7 @@ export async function resolveMemberAccessDefinition(params: {
       });
     }
     if (chain.kind === "namespace") {
-      const targetMod = index.byFile.get(chain.file);
+      const targetMod = index.byFile.get(fileIdentityKey(chain.file));
       const first = targetMod?.exports.find((entry) => entry.type === "local");
       if (first) {
         return okGoToResult(index, first.target, {
@@ -155,7 +159,7 @@ export async function resolveMemberAccessDefinition(params: {
       const nameNode = targetContext.tree.rootNode.descendantForPosition(targetPosition, targetPosition);
       const container = nameNode.parent;
       if (container) {
-        const targetModule = index.byFile.get(objDef.file);
+        const targetModule = index.byFile.get(fileIdentityKey(objDef.file));
         if (targetModule) {
           const memberDef =
             targetContext.sup.id === "java"
@@ -498,7 +502,7 @@ async function resolveMemberDefinitionForBase(
   const nameNode = targetContext.tree.rootNode.descendantForPosition(targetPosition, targetPosition);
   const container = nameNode.parent;
   if (!container) return undefined;
-  const targetModule = index.byFile.get(baseDef.file);
+  const targetModule = index.byFile.get(fileIdentityKey(baseDef.file));
   if (!targetModule) return undefined;
   const directHit = findDirectLocalWithinNode(targetModule.locals, member, container, targetContext);
   if (directHit) return directHit;

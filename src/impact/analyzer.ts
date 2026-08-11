@@ -20,6 +20,33 @@ import {
 export { calculateSeverity, calculateTransitiveSeverity } from "./severity.js";
 export { seedTransitiveFromFiles } from "./transitive.js";
 
+
+/**
+ * Impact scores are normalized effective scores: confidence already
+ * contributes to severity. Remaining ties prefer more certain, shallower
+ * evidence before stable file and symbol identities, so async lookup completion
+ * order cannot affect ranked output.
+ */
+function compareImpactItems(left: ImpactItem, right: ImpactItem): number {
+  const severityDifference = right.severity - left.severity;
+  if (severityDifference !== 0) return severityDifference;
+
+  const confidenceDifference = (right.confidence ?? 0) - (left.confidence ?? 0);
+  if (confidenceDifference !== 0) return confidenceDifference;
+
+  const depthDifference = (left.depth ?? Number.MAX_SAFE_INTEGER) - (right.depth ?? Number.MAX_SAFE_INTEGER);
+  if (depthDifference !== 0) return depthDifference;
+
+  if (left.file < right.file) return -1;
+  if (left.file > right.file) return 1;
+
+  const leftSymbol = left.symbols[0] ?? "";
+  const rightSymbol = right.symbols[0] ?? "";
+  if (leftSymbol < rightSymbol) return -1;
+  if (leftSymbol > rightSymbol) return 1;
+  return 0;
+}
+
 export async function analyzeImpact(
   index: ProjectIndex,
   changedSymbols: ChangedSymbol[],
@@ -163,7 +190,7 @@ export async function analyzeImpact(
   }
 
   syncBudgetDiagnostics(diagnostics, workBudget);
-  const sorted = Array.from(impacted.values()).sort((a, b) => b.severity - a.severity);
+  const sorted = Array.from(impacted.values()).sort(compareImpactItems);
   for (const item of sorted) {
     emitImpactItem(item, "final");
   }

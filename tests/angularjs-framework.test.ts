@@ -3,6 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
 import { buildProjectIndex, buildSymbolGraphDetailed, collectGraph } from "../src/index.js";
+import { extractAngularJsRegistrations } from "../src/frameworks/angularjs.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -180,5 +181,67 @@ describe("AngularJS framework characterization", () => {
         (edge) => edge.from === configFile && edge.to.type === "file" && normalizePath(edge.to.path) === templateFile,
       ),
     ).toBe(false);
+  });
+
+  it("does not treat unrelated dotted methods as AngularJS registrations", async () => {
+    const root = await mkTmpDir("cg-angularjs-registration-guard-");
+    const unrelatedSource = ["angular.module('admin');", "foo.controller('Fake');", ""].join("\n");
+    const consumerSource = [
+      "angular.module('admin').directive('widget', {",
+      "  controller: 'Fake',",
+      "});",
+      "",
+    ].join("\n");
+    await fsp.writeFile(path.join(root, "unrelated.js"), unrelatedSource, "utf8");
+    await fsp.writeFile(path.join(root, "consumer.js"), consumerSource, "utf8");
+
+    expect(extractAngularJsRegistrations(unrelatedSource)).toEqual([]);
+
+    const index = await buildProjectIndex(root);
+    const graph = await collectGraph(root, Array.from(index.byFile.keys()));
+    const consumerFile = normalizePath(path.join(root, "consumer.js")).toLowerCase();
+    const unrelatedFile = normalizePath(path.join(root, "unrelated.js")).toLowerCase();
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from.toLowerCase() === consumerFile &&
+          edge.to.type === "file" &&
+          normalizePath(edge.to.path).toLowerCase() === unrelatedFile,
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps registrations on variables assigned from an AngularJS module", async () => {
+    const root = await mkTmpDir("cg-angularjs-module-variable-");
+    const serviceSource = [
+      "const app = angular.module('admin');",
+      "app.service('userService', function userService() {});",
+      "",
+    ].join("\n");
+    const controllerSource = [
+      "angular.module('admin').controller('UserCtrl', [",
+      "  'userService',",
+      "  function UserCtrl(userService) {},",
+      "]);",
+      "",
+    ].join("\n");
+    await fsp.writeFile(path.join(root, "user.service.js"), serviceSource, "utf8");
+    await fsp.writeFile(path.join(root, "user.controller.js"), controllerSource, "utf8");
+
+    expect(extractAngularJsRegistrations(serviceSource)).toEqual([{ kind: "service", name: "userService" }]);
+
+    const index = await buildProjectIndex(root);
+    const graph = await collectGraph(root, Array.from(index.byFile.keys()));
+    const controllerFile = normalizePath(path.join(root, "user.controller.js")).toLowerCase();
+    const serviceFile = normalizePath(path.join(root, "user.service.js")).toLowerCase();
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.from.toLowerCase() === controllerFile &&
+          edge.to.type === "file" &&
+          normalizePath(edge.to.path).toLowerCase() === serviceFile &&
+          edge.raw === "userService",
+      ),
+    ).toBe(true);
   });
 });

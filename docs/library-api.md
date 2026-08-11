@@ -437,7 +437,9 @@ See [MCP server](./mcp.md) for CLI server setup and client configuration example
 
 ## Semantic chunking
 
-The library provides semantic code chunking utilities for preparing codebases for LLM processing and vector embeddings. It uses Tree-sitter to split code into meaningful units while respecting token budgets.
+The library provides semantic code chunking utilities for preparing codebases for LLM processing and vector embeddings. It uses Tree-sitter to split code into meaningful units while respecting token budgets. `chunkFile()` and `chunkTextFile()` preserve every input byte exactly once across chunks in source order.
+
+Nested semantic candidates follow a no-overlap policy: when a parent fits `maxTokens`, it is emitted instead of its children; when it does not, children are promoted recursively. Function-valued declarations retain their function chunk rather than a generic declaration wrapper. Any oversized line is split within the line so every emitted chunk respects `maxTokens`.
 
 ### APIs
 
@@ -476,7 +478,10 @@ interface Chunk {
   text: string;
   tokenCount: number;
 }
+
 ```
+Chunk IDs are content-addressed SHA-256 values scoped by language and file path. The hash includes the final chunk type, optional name, and text, so adding an unrelated earlier chunk does not renumber unchanged chunks. Identical chunks receive a deterministic suffix only to keep IDs unique.
+
 
 ### Options
 
@@ -489,7 +494,7 @@ interface Chunk {
 ```json
 [
   {
-    "id": "javascript:utils.js:0",
+    "id": "javascript:utils.js:<sha256>",
     "languageId": "javascript",
     "filePath": "utils.js",
     "type": "function",

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { GRAPH_ONLY_RESOLUTION_EXTENSIONS } from "./graphOnlyExtensions.js";
-import { isFilePathWithinRoot, normalizePath, normalizeResolutionHints } from "./paths.js";
+import { fileIdentityKey, isFilePathWithinRoot, normalizePath, normalizeResolutionHints } from "./paths.js";
 import { DEFAULT_RESOLUTION_EXTENSIONS, getResolutionExtensions } from "./resolutionCandidates.js";
 import {
   clearWorkspaceCaches,
@@ -144,23 +144,23 @@ export async function resolveImportSpecifier(
 ): Promise<FileId | { external: string }> {
   if (languageId === "go") {
     const goResolved = await resolveGoImportPath(projectRoot, fromFile, spec);
-    if (goResolved) return goResolved;
+    if (goResolved) return isFilePathWithinRoot(projectRoot, goResolved) ? goResolved : { external: spec };
   }
   if (languageId === "kotlin") {
     const kotlinResolved = await resolveKotlinImportPath(projectRoot, spec);
-    if (kotlinResolved) return kotlinResolved;
+    if (kotlinResolved) return isFilePathWithinRoot(projectRoot, kotlinResolved) ? kotlinResolved : { external: spec };
   }
   if (languageId === "java") {
     const javaResolved = await resolveJavaImportPath(projectRoot, spec);
-    if (javaResolved) return javaResolved;
+    if (javaResolved) return isFilePathWithinRoot(projectRoot, javaResolved) ? javaResolved : { external: spec };
   }
   if (languageId === "php") {
     const phpResolved = await resolvePhpImportPath(projectRoot, fromFile, spec, opts?.phpImportType);
-    if (phpResolved) return phpResolved;
+    if (phpResolved) return isFilePathWithinRoot(projectRoot, phpResolved) ? phpResolved : { external: spec };
   }
   if (languageId === "rust") {
     const rustResolved = await resolveRustImportPath(projectRoot, fromFile, spec);
-    if (rustResolved) return rustResolved;
+    if (rustResolved) return isFilePathWithinRoot(projectRoot, rustResolved) ? rustResolved : { external: spec };
   }
 
   return resolveSpecifier(fromFile, spec, projectRoot, opts?.matchPath, opts?.workspaceConfig, {
@@ -186,10 +186,10 @@ export async function resolveSpecifier(
   const hintKey = resolutionHints.join("|");
   const resolutionExtensions = getResolutionExtensions(opts?.resolutionExtensions);
   const extensionKey = resolutionExtensions.join("|");
-  const workspaceKey = workspaceConfig ? normalizePath(workspaceConfig.rootDir) : "";
+  const workspaceKey = workspaceConfig ? fileIdentityKey(path.resolve(workspaceConfig.rootDir)) : "";
   const cacheKey = [
-    normalizePath(projectRoot),
-    fromFile,
+    fileIdentityKey(path.resolve(projectRoot)),
+    fileIdentityKey(path.resolve(fromFile)),
     spec,
     `workspace=${workspaceKey}`,
     `nm=${opts?.resolveNodeModules ? 1 : 0}`,
@@ -198,7 +198,8 @@ export async function resolveSpecifier(
     `exts=${extensionKey}`,
   ].join("::");
   const cached = getResolveSpecifierCacheEntry(cacheKey);
-  if (cached) return cached;
+  if (cached && (typeof cached !== "string" || isFilePathWithinRoot(projectRoot, cached))) return cached;
+  if (cached) resolveSpecifierCache.delete(cacheKey);
   const hasSchemePrefix = /^[A-Za-z][A-Za-z0-9+.-]*:/.test(spec);
   const isWindowsAbsolutePath = /^[A-Za-z]:[\\/]/.test(spec);
   if (!isWindowsAbsolutePath && (hasSchemePrefix || spec.startsWith("//"))) {
@@ -216,13 +217,13 @@ export async function resolveSpecifier(
       base = path.join(projectRoot, spec);
     }
     const hit = await findFirstExistingResolutionCandidate(base, resolutionExtensions);
-    if (hit) {
+    if (hit && isFilePathWithinRoot(projectRoot, hit)) {
       setResolveSpecifierCacheEntry(cacheKey, hit);
       return hit;
     }
     if (opts?.allowScssPartialResolution && path.extname(fromFile).toLowerCase() === ".scss") {
       const partialHit = await findFirstExistingScssPartialCandidate(base);
-      if (partialHit) {
+      if (partialHit && isFilePathWithinRoot(projectRoot, partialHit)) {
         setResolveSpecifierCacheEntry(cacheKey, partialHit);
         return partialHit;
       }
@@ -237,27 +238,27 @@ export async function resolveSpecifier(
       spec,
       undefined,
       (candidate: string) => {
-        return fileExistsSync(candidate);
+        return isFilePathWithinRoot(projectRoot, candidate) && fileExistsSync(candidate);
       },
       resolutionExtensions,
     );
     if (m) {
       const cand = path.resolve(m);
       const hasExt = !!path.extname(cand);
-      if (hasExt && fileExistsSync(cand)) {
+      if (hasExt && isFilePathWithinRoot(projectRoot, cand) && fileExistsSync(cand)) {
         setResolveSpecifierCacheEntry(cacheKey, cand);
         return cand;
       }
       for (const e of resolutionExtensions) {
         const pth = cand + e;
-        if (fileExistsSync(pth)) {
+        if (isFilePathWithinRoot(projectRoot, pth) && fileExistsSync(pth)) {
           setResolveSpecifierCacheEntry(cacheKey, pth);
           return pth;
         }
       }
       for (const e of resolutionExtensions) {
         const pth = path.join(cand, "index" + e);
-        if (fileExistsSync(pth)) {
+        if (isFilePathWithinRoot(projectRoot, pth) && fileExistsSync(pth)) {
           setResolveSpecifierCacheEntry(cacheKey, pth);
           return pth;
         }
@@ -267,7 +268,7 @@ export async function resolveSpecifier(
 
   if (!spec.startsWith(".") && !spec.startsWith("/")) {
     const resolvedWs = await resolveWorkspacePackage(spec, workspaceConfig, opts?.resolutionExtensions);
-    if (resolvedWs) {
+    if (resolvedWs && isFilePathWithinRoot(projectRoot, resolvedWs)) {
       setResolveSpecifierCacheEntry(cacheKey, resolvedWs);
       return resolvedWs;
     }
@@ -277,14 +278,14 @@ export async function resolveSpecifier(
     if (shouldTryPathLikeFallback) {
       // Try path-like fallback for languages that often map package-like names to source paths.
       const pathLike = await resolvePathLikeModule(projectRoot, spec, opts?.resolutionExtensions);
-      if (pathLike) {
+      if (pathLike && isFilePathWithinRoot(projectRoot, pathLike)) {
         setResolveSpecifierCacheEntry(cacheKey, pathLike);
         return pathLike;
       }
     }
     if (opts?.resolveNodeModules) {
       const nm = await resolveFromNodeModules(spec, fromFile, projectRoot, opts?.resolutionExtensions);
-      if (nm) {
+      if (nm && isFilePathWithinRoot(projectRoot, nm)) {
         setResolveSpecifierCacheEntry(cacheKey, nm);
         return nm;
       }

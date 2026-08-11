@@ -13,7 +13,12 @@ import {
 } from "../util/projectFiles.js";
 import { getGitHead, isGitRepo, getGitBlobHashes, listChangedFiles } from "../util/git.js";
 import { clearImportResolutionCaches, resolveSpecifier } from "../util/resolution.js";
-import { assertFilePathWithinRoot, normalizePath } from "../util/paths.js";
+import {
+  assertFilePathWithinRoot,
+  fileIdentityKey,
+  initializeFileIdentityCaseSensitivity,
+  normalizePath,
+} from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
 import { resolveWorkerThreadCount } from "../util/workerThreads.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
@@ -177,7 +182,9 @@ async function resolveCrossModuleSymbolExports(
 ): Promise<void> {
   if (!support.supportsCrossModuleSymbols) return;
   if (support.id !== "ts" && support.id !== "js") return;
-  const { matchPath } = await import("../util/resolution.js").then((mod) => mod.loadNearestTsconfigFor(file, logLevel));
+  const { matchPath } = await import("../util/resolution.js").then((mod) =>
+    mod.loadNearestTsconfigFor(file, projectRoot, logLevel),
+  );
   for (const entry of mod.exports) {
     if (entry.type !== "reexport" && entry.type !== "exportStar" && entry.type !== "namespaceReexport") {
       continue;
@@ -206,14 +213,14 @@ async function buildIndexedModuleForFile(args: {
   workerSetup: WorkerPoolSetupResult;
   parsedMap: Map<string, ParsedFileContext>;
   parsedCacheMaxEntries: number;
-  jsonDependencies: Set<string>;
+  jsonDependencies: Map<string, string>;
   bloomFilterCache: import("../util/bloomFilter.js").BloomFilterCache | undefined;
   onFallbackImportExtraction: ((event: FallbackImportExtractionEvent) => void) | undefined;
   fileSignatures: Map<string, FileSignature>;
   cacheEnabled: boolean;
 }): Promise<IndexedFileModuleResult> {
   const prepared = await prepareFileContextForBuild(args.file, args.support, args.opts, args.workerSetup, args.report);
-  const { source, sup, nativeQueries } = prepared;
+  const { source, sup, nativeQueries, embeddedBlocks } = prepared;
   let resolvedLang = prepared.lang;
   let tree: SyntaxTreeLike | undefined;
   const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
@@ -267,6 +274,19 @@ async function buildIndexedModuleForFile(args: {
           ...(args.opts?.languageExtensions ? { languageExtensions: args.opts.languageExtensions } : {}),
           ...(args.onFallbackImportExtraction ? { onFallbackImportExtraction: args.onFallbackImportExtraction } : {}),
         });
+  for (const block of embeddedBlocks ?? []) {
+    imports.push(
+      ...(await collectImportsForFile(args.file, args.projectRoot, {
+        source: block.source,
+        sup: block.sup,
+        graphOptions: args.graphOptions,
+        ...(args.opts?.native ? { native: args.opts.native } : {}),
+        ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
+        ...(args.opts?.languageExtensions ? { languageExtensions: args.opts.languageExtensions } : {}),
+        ...(args.onFallbackImportExtraction ? { onFallbackImportExtraction: args.onFallbackImportExtraction } : {}),
+      })),
+    );
+  }
   collectJsonDependencies(imports, args.jsonDependencies);
   let mod: ModuleIndex;
   if (sup.id === "sql") {
@@ -316,17 +336,18 @@ function isJsonFile(filePath: string): boolean {
   return filePath.toLowerCase().endsWith(".json");
 }
 
-function collectJsonDependencies(imports: ImportBinding[], bucket: Set<string>): void {
+function collectJsonDependencies(imports: ImportBinding[], bucket: Map<string, string>): void {
   for (const imp of imports) {
-    const resolved = typeof imp.resolved === "string" ? imp.resolved.replace(/\\/g, "/") : null;
-    if (resolved && isJsonFile(resolved)) bucket.add(resolved);
+    const resolved = typeof imp.resolved === "string" ? normalizePath(imp.resolved) : null;
+    if (resolved && isJsonFile(resolved)) bucket.set(fileIdentityKey(resolved), resolved);
   }
 }
 
 function ensureJsonModule(modules: Map<FileId, ModuleIndex>, filePath: string): void {
   const resolved = path.resolve(filePath);
-  const normalized = resolved.replace(/\\/g, "/");
-  if (modules.has(normalized)) return;
+  const normalized = normalizePath(resolved);
+  const key = fileIdentityKey(normalized);
+  if (modules.has(key)) return;
   if (!fs.existsSync(resolved)) return;
   const pos = { line: 1, column: 1, index: 0 };
   const symbol: SymbolDef = {
@@ -335,7 +356,7 @@ function ensureJsonModule(modules: Map<FileId, ModuleIndex>, filePath: string): 
     kind: SymbolKind.Default,
     range: { start: pos, end: pos },
   };
-  modules.set(normalized, {
+  modules.set(key, {
     file: normalized,
     exports: [{ type: "local", exportedAs: "default", target: symbol }],
     imports: [],
@@ -344,8 +365,9 @@ function ensureJsonModule(modules: Map<FileId, ModuleIndex>, filePath: string): 
 }
 
 function graphEdgeKey(edge: Edge): string {
-  const target = edge.to.type === "file" ? `file:${edge.to.path}` : `external:${edge.to.name}`;
-  return `${edge.from}::${target}::${edge.raw ?? ""}::${edge.typeOnly ? 1 : 0}`;
+  const from = fileIdentityKey(edge.from);
+  const target = edge.to.type === "file" ? `file:${fileIdentityKey(edge.to.path)}` : `external:${edge.to.name}`;
+  return `${from}::${target}::${edge.raw ?? ""}::${edge.typeOnly ? 1 : 0}`;
 }
 
 async function moduleCacheSignatureForFile(file: string, sigInfo: FileSignature, opts?: BuildOptions): Promise<string> {
@@ -390,7 +412,7 @@ function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: BuildOption
   for (const mod of modules.values()) {
     for (const imp of [...mod.imports]) {
       if (imp.kind !== "star" || typeof imp.resolved !== "string") continue;
-      const target = modules.get(imp.resolved);
+      const target = modules.get(fileIdentityKey(imp.resolved));
       if (!target) continue;
       const targetSupport = supportForFile(imp.resolved, opts?.languageExtensions);
       const exportedSymbols = target.exports.filter((entry) => entry.type === "local").length
@@ -543,6 +565,7 @@ async function buildIndexFromFileListShared(
   helperOpts?: BuildIndexHelperOptions,
 ): Promise<ProjectIndex> {
   clearImportResolutionCaches();
+  await initializeFileIdentityCaseSensitivity(projectRoot);
   const {
     normalizedProjectRoot,
     report,
@@ -567,9 +590,9 @@ async function buildIndexFromFileListShared(
   const manifestStart = performance.now();
   const manifest = useManifest && !helperOpts?.ignoreExistingManifest ? await loadManifest(projectRoot, opts) : null;
   const manifestFiles = sanitizeManifestEntriesForRoot(projectRoot, manifest?.files);
-  const languageExtensionsChanged = manifest
-    ? diffBuildOptions(manifest.buildOptions, opts).includes("languageExtensions")
-    : false;
+  const manifestOptionDiffs = manifest ? diffBuildOptions(manifest.buildOptions, opts) : [];
+  const languageExtensionsChanged = manifestOptionDiffs.includes("languageExtensions");
+  const implementationChanged = manifestOptionDiffs.includes("implementation");
   if (timings && useManifest) {
     timings.manifestMs = Math.round(performance.now() - manifestStart);
   }
@@ -582,7 +605,7 @@ async function buildIndexFromFileListShared(
     }
   }
   const cachedGraphEntries =
-    manifest && !languageExtensionsChanged && graphOptionsEqual(manifest.graphOptions, graphOptions)
+    manifest && !languageExtensionsChanged && !implementationChanged && graphOptionsEqual(manifest.graphOptions, graphOptions)
       ? new Map<string, ManifestFileEntry>(
           Object.entries(manifestFiles).filter(([file]) => !staleCachedEdgeFiles.has(file)),
         )
@@ -634,7 +657,7 @@ async function buildIndexFromFileListShared(
     const matchesGitSig = !!sigInfo.gitSig && !!cachedEdgesEntry.gitSig && cachedEdgesEntry.gitSig === sigInfo.gitSig;
     return !(matchesGitSig || cachedEdgesEntry.sig === sigInfo.sig);
   };
-  const jsonDependencies = new Set<string>();
+  const jsonDependencies = new Map<string, string>();
   const workerSetup = await setupWorkerPool(opts, normalizedFiles.length);
   try {
     const useBloomFilters = opts?.useBloomFilters ?? true;
@@ -705,6 +728,7 @@ async function buildIndexFromFileListShared(
             fileSignature: sigInfo,
             ...(sqlCorpusSig ? { sqlCorpusSig } : {}),
             ...(cachedEdgesEntry ? { cachedFileEdges: cachedEdgesEntry } : {}),
+            ...(manifest?.projectRoot ? { cachedFileEdgesProjectRoot: manifest.projectRoot } : {}),
             ...(onFileEdges ? { onFileEdges } : {}),
             ...(onFallbackImportExtraction ? { onFallbackImportExtraction } : {}),
             allFiles: normalizedFiles,
@@ -764,6 +788,7 @@ async function buildIndexFromFileListShared(
           fileSignature: sigInfo,
           ...(sqlCorpusSig ? { sqlCorpusSig } : {}),
           ...(cachedEdgesEntry ? { cachedFileEdges: cachedEdgesEntry } : {}),
+          ...(manifest?.projectRoot ? { cachedFileEdgesProjectRoot: manifest.projectRoot } : {}),
           ...(onFileEdges ? { onFileEdges } : {}),
           ...(onFallbackImportExtraction ? { onFallbackImportExtraction } : {}),
           allFiles: normalizedFiles,
@@ -806,7 +831,7 @@ async function buildIndexFromFileListShared(
       }
     };
     for (const [file, mod, edges] of fileResults) {
-      modules.set(file, mod);
+      modules.set(fileIdentityKey(file), mod);
       appendUniqueGraphEdges(edges);
     }
     const workspaceManifestEdges = await collectWorkspaceManifestDependencyEdges(
@@ -817,7 +842,7 @@ async function buildIndexFromFileListShared(
     );
     appendUniqueGraphEdges(workspaceManifestEdges);
     if (timings) timings.graphMs = Math.round(performance.now() - graphStart);
-    for (const jsonPath of jsonDependencies) {
+    for (const jsonPath of jsonDependencies.values()) {
       ensureJsonModule(modules, jsonPath);
     }
     expandStarImports(modules, opts);
@@ -864,6 +889,7 @@ async function buildProjectIndexWithManifestOptions(
   opts?: FullDiscoveryBuildOptions,
   helperOpts?: Pick<BuildIndexHelperOptions, "ignoreExistingManifest">,
 ): Promise<ProjectIndex> {
+  await initializeFileIdentityCaseSensitivity(projectRoot);
   try {
     const useDiskCache = (opts?.cache ?? "off") === "disk";
     // With disk caching enabled, reuse the previous full scan's symlinked-directory
@@ -1002,7 +1028,7 @@ export async function buildProjectIndexIncremental(
   projectRoot: string,
   opts?: IncrementalBuildOptions,
 ): Promise<ProjectIndex> {
-  clearImportResolutionCaches();
+  await initializeFileIdentityCaseSensitivity(projectRoot);
   const graphOptions = normalizeGraphOptions(opts?.graph);
   const strictIncremental = opts?.incrementalStrict ?? false;
   if (strictIncremental && graphOptions.fast) graphOptions.fast = false;
@@ -1072,7 +1098,11 @@ export async function buildProjectIndexIncremental(
     const currentConfigHash = recordConfigHashResult(manifestReport, currentConfigHashResult, opts?.logLevel);
     const configChanged = !!currentConfigHash && (!manifest?.configHash || currentConfigHash !== manifest.configHash);
     const requiresFullRebuild = optionDiffs.some(
-      (diff) => diff === "discovery" || diff === "native" || diff === "languageExtensions",
+      (diff) =>
+        diff === "discovery" ||
+        diff === "native" ||
+        diff === "implementation" ||
+        diff === "languageExtensions",
     );
     if (!manifest || !graphOptionsEqual(manifest.graphOptions, graphOptions) || configChanged || requiresFullRebuild) {
       if (manifest && configChanged) {
@@ -1358,7 +1388,7 @@ export async function buildProjectIndexIncremental(
       });
       const modules = new Map<FileId, ModuleIndex>();
       const parsedMap = new Map<string, ParsedFileContext>();
-      const jsonDependencies = new Set<string>();
+      const jsonDependencies = new Map<string, string>();
       const useBloomFilters = opts?.useBloomFilters ?? true;
       const bloomFilterCache = useBloomFilters
         ? new (await import("../util/bloomFilter.js")).BloomFilterCache()
@@ -1376,8 +1406,9 @@ export async function buildProjectIndexIncremental(
       const invalidateCachedDependents = () => {
         const dependentFilesOfChanged = collectTrackedFileDependents(trackedEntries, changedFiles);
         for (const file of dependentFilesOfChanged) {
-          if (modules.has(file)) {
-            modules.delete(file);
+          const key = fileIdentityKey(file);
+          if (modules.has(key)) {
+            modules.delete(key);
             if (fileReport) {
               fileReport.cached = Math.max(0, (fileReport.cached ?? 0) - 1);
             }
@@ -1405,7 +1436,7 @@ export async function buildProjectIndexIncremental(
         const cached = cacheEnabled ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report) : null;
         if (cached) {
           if (fileReport) fileReport.cached = (fileReport.cached ?? 0) + 1;
-          modules.set(file, cached);
+          modules.set(fileIdentityKey(file), cached);
           collectJsonDependencies(cached.imports, jsonDependencies);
           if (bloomFilterCache) {
             const persistedFilter = persistedBloomFilters?.get(file);
@@ -1477,11 +1508,11 @@ export async function buildProjectIndexIncremental(
           }
         });
         for (const [file, mod] of fileResults) {
-          modules.set(file.replace(/\\/g, "/"), mod);
+          modules.set(fileIdentityKey(file), mod);
         }
         if (timings) timings.parseMs = Math.round(performance.now() - parseStart);
       }
-      for (const jsonPath of jsonDependencies) {
+      for (const jsonPath of jsonDependencies.values()) {
         ensureJsonModule(modules, jsonPath);
       }
       expandStarImports(modules, opts);

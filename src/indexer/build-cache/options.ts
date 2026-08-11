@@ -1,7 +1,11 @@
+import crypto from "node:crypto";
 import path from "node:path";
 import { normalizeLanguageExtensions, type LanguageExtensionMap } from "../../languages.js";
+import { getAllLanguages } from "../../languages/registry.js";
+import type { LanguageDefinition } from "../../languages/types.js";
 import type { GraphBuildOptions } from "../../graphs/types.js";
 import { normalizePath, normalizeResolutionHints } from "../../util/paths.js";
+import { getCodegraphVersion } from "../../util/packageInfo.js";
 import { type ProjectFileDiscoveryOptions } from "../../util/projectFiles.js";
 import { getNativeRuntimeFingerprint } from "../../native/treeSitterNative.js";
 import type { BuildOptions } from "../types.js";
@@ -12,6 +16,7 @@ export type ManifestBuildOptions = {
   useBloomFilters?: boolean;
   incrementalStrict?: boolean;
   nativeRuntimeFingerprint?: string;
+  implementationFingerprint?: string;
   discovery?: {
     includeGlobs?: string[];
     ignoreGlobs?: string[];
@@ -22,6 +27,93 @@ export type ManifestBuildOptions = {
   languageExtensions?: LanguageExtensionMap;
 };
 
+type LanguageDefinitionFingerprintDescriptor = {
+  id: string;
+  extensions: string[];
+  structure: LanguageDefinition["structure"];
+  graph: LanguageDefinition["graph"];
+  nodeTypes?: LanguageDefinition["nodeTypes"];
+  supportsCrossModuleSymbols: boolean;
+  native?: {
+    authoritativeKinds: string[];
+    notes: string[];
+    normalizeQuery?: string;
+  };
+  behavior: {
+    grammar: string;
+    classifyDefinition?: string;
+    isDeclarationName?: string;
+    createsBlockScope?: string;
+    createsFunctionScope?: string;
+    isTypeOnly?: string;
+  };
+};
+
+let cachedImplementationFingerprint: string | undefined;
+
+function functionSource(value: unknown): string | undefined {
+  return typeof value === "function" ? Function.prototype.toString.call(value) : undefined;
+}
+
+function languageDefinitionFingerprintDescriptor(definition: LanguageDefinition): LanguageDefinitionFingerprintDescriptor {
+  const native = definition.native;
+  const nativeNormalizeQuery = functionSource(native?.normalizeQuery);
+  const classifyDefinition = functionSource(definition.classifyDefinition);
+  const isDeclarationName = functionSource(definition.isDeclarationName);
+  const createsBlockScope = functionSource(definition.createsBlockScope);
+  const createsFunctionScope = functionSource(definition.createsFunctionScope);
+  const isTypeOnly = functionSource(definition.isTypeOnly);
+  return {
+    id: definition.id,
+    extensions: [...definition.extensions].sort(),
+    structure: definition.structure,
+    graph: definition.graph,
+    ...(definition.nodeTypes ? { nodeTypes: definition.nodeTypes } : {}),
+    supportsCrossModuleSymbols: definition.supportsCrossModuleSymbols ?? false,
+    ...(native
+      ? {
+          native: {
+            authoritativeKinds: [...(native.authoritativeKinds ?? [])].sort(),
+            notes: [...(native.notes ?? [])],
+            ...(nativeNormalizeQuery ? { normalizeQuery: nativeNormalizeQuery } : {}),
+          },
+        }
+      : {}),
+    behavior: {
+      grammar: functionSource(definition.grammar) ?? "",
+      ...(classifyDefinition ? { classifyDefinition } : {}),
+      ...(isDeclarationName ? { isDeclarationName } : {}),
+      ...(createsBlockScope ? { createsBlockScope } : {}),
+      ...(createsFunctionScope ? { createsFunctionScope } : {}),
+      ...(isTypeOnly ? { isTypeOnly } : {}),
+    },
+  };
+}
+
+/**
+ * Changes whenever this package version or a loaded language definition changes.
+ * The descriptor is generated from the definitions and their Tree-sitter queries so
+ * definition/query edits cannot silently outlive an on-disk index.
+ */
+export function getImplementationFingerprint(): string {
+  if (cachedImplementationFingerprint) return cachedImplementationFingerprint;
+  const definitions = getAllLanguages()
+    .map(languageDefinitionFingerprintDescriptor)
+    .sort((left, right) => left.id.localeCompare(right.id));
+  const hash = crypto.createHash("sha256");
+  hash.update("codegraph-implementation-fingerprint-v1");
+  hash.update("\0");
+  hash.update(getCodegraphVersion());
+  hash.update("\0");
+  hash.update(JSON.stringify(definitions));
+  cachedImplementationFingerprint = hash.digest("hex");
+  return cachedImplementationFingerprint;
+}
+
+export function clearImplementationFingerprintCache(): void {
+  cachedImplementationFingerprint = undefined;
+}
+
 function normalizeManifestBuildOptions(opts?: ManifestBuildOptions): ManifestBuildOptions {
   const languageExtensions = normalizeLanguageExtensions(opts?.languageExtensions);
   return {
@@ -30,6 +122,7 @@ function normalizeManifestBuildOptions(opts?: ManifestBuildOptions): ManifestBui
     useBloomFilters: opts?.useBloomFilters ?? true,
     incrementalStrict: opts?.incrementalStrict ?? false,
     ...(opts?.nativeRuntimeFingerprint ? { nativeRuntimeFingerprint: opts.nativeRuntimeFingerprint } : {}),
+    ...(opts?.implementationFingerprint ? { implementationFingerprint: opts.implementationFingerprint } : {}),
     ...(opts?.discovery ? { discovery: opts.discovery } : {}),
     ...(languageExtensions ? { languageExtensions } : {}),
   };
@@ -66,6 +159,7 @@ function normalizeBuildOptions(opts?: BuildOptions): ManifestBuildOptions {
     useBloomFilters: opts?.useBloomFilters ?? true,
     incrementalStrict: opts?.incrementalStrict ?? false,
     nativeRuntimeFingerprint: getNativeRuntimeFingerprint(opts?.native),
+    implementationFingerprint: getImplementationFingerprint(),
     ...(discovery ? { discovery } : {}),
     ...(languageExtensions ? { languageExtensions } : {}),
   };
@@ -143,6 +237,9 @@ export function diffBuildOptions(
   }
   if (normalizedManifest.nativeRuntimeFingerprint !== normalizedCurrent.nativeRuntimeFingerprint) {
     diffs.push("native");
+  }
+  if (normalizedManifest.implementationFingerprint !== normalizedCurrent.implementationFingerprint) {
+    diffs.push("implementation");
   }
   if (!normalizedDiscoveryOptionsEqual(normalizedManifest.discovery, normalizedCurrent.discovery)) {
     diffs.push("discovery");

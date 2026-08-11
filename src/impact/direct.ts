@@ -44,6 +44,35 @@ function referenceScanLimitForKeptRefs(maxRefs: number): number {
   return Math.max(maxRefs + 50, maxRefs * 4);
 }
 
+function isStrongerImpactEvidence(
+  existing: ImpactItem | undefined,
+  candidateSeverity: number,
+  candidateConfidence: number,
+): boolean {
+  if (!existing) return true;
+  if (candidateSeverity !== existing.severity) {
+    return candidateSeverity > existing.severity;
+  }
+  return candidateConfidence > (existing.confidence ?? 0);
+}
+
+function compareReferenceContexts(
+  left: NonNullable<ImpactItem["refs"]>[number],
+  right: NonNullable<ImpactItem["refs"]>[number],
+): number {
+  const positionDifference =
+    left.range.start.line - right.range.start.line ||
+    left.range.start.column - right.range.start.column ||
+    left.range.end.line - right.range.end.line ||
+    left.range.end.column - right.range.end.column;
+  if (positionDifference !== 0) return positionDifference;
+  const leftContext = left.context ?? "";
+  const rightContext = right.context ?? "";
+  if (leftContext < rightContext) return -1;
+  if (leftContext > rightContext) return 1;
+  return 0;
+}
+
 export async function analyzeDirectReferences(context: DirectImpactContext): Promise<void> {
   const semaphore = new Semaphore(8);
   const tasks: Array<Promise<void>> = [];
@@ -149,43 +178,67 @@ async function analyzeChangedSymbolReferences(
     const reasons: ImpactReason[] = existing?.reasons ? [...existing.reasons] : [];
     if (!reasons.includes(reason)) {
       reasons.push(reason);
+      reasons.sort();
     }
 
     const symbols = existing?.symbols ? [...existing.symbols] : [];
     if (!symbols.includes(changedSymbol.name)) {
       symbols.push(changedSymbol.name);
+      symbols.sort();
     }
 
     const existingRefs = existing?.refs ? [...existing.refs] : [];
     if (options.refContext && ref.context !== undefined) {
       existingRefs.push({ range: ref.range, context: ref.context });
+      existingRefs.sort(compareReferenceContexts);
     }
 
     const existingHints = existing?.explain?.hints ?? [];
     const newHints = severityResult.explain.hints ?? [];
     const mergedHints =
-      !existingHints.length && !newHints.length ? undefined : [...new Set([...existingHints, ...newHints])];
+      !existingHints.length && !newHints.length ? undefined : [...new Set([...existingHints, ...newHints])].sort();
     const bestReason = selectStrongerImpactReason(existing?.explain?.reason, severityResult.explain.reason);
+    const replacesExistingEvidence = isStrongerImpactEvidence(
+      existing,
+      severityResult.severity,
+      severityResult.confidence,
+    );
+    const rankedSeverity = replacesExistingEvidence ? severityResult.severity : existing!.severity;
+    const rankedConfidence = replacesExistingEvidence ? severityResult.confidence : (existing!.confidence ?? 0);
+    const rankedExplain = replacesExistingEvidence ? severityResult.explain : existing!.explain ?? severityResult.explain;
+    let resolutionConfidence: "medium" | "low" | undefined;
+    if (
+      existing?.explain?.resolutionConfidence === "low" ||
+      severityResult.explain.resolutionConfidence === "low"
+    ) {
+      resolutionConfidence = "low";
+    } else if (
+      existing?.explain?.resolutionConfidence === "medium" ||
+      severityResult.explain.resolutionConfidence === "medium"
+    ) {
+      resolutionConfidence = "medium";
+    }
+    const { resolutionConfidence: _rankedResolutionConfidence, ...rankedExplainDetails } = rankedExplain;
 
     const impactItem: ImpactItem = {
       file: ref.file,
       symbols,
       reasons,
-      severity: Math.max(existing?.severity ?? 0, severityResult.severity),
+      severity: rankedSeverity,
       depth: 0,
       ...(options.refContext && existingRefs.length ? { refs: existingRefs } : {}),
       explain: {
-        ...existing?.explain,
-        ...severityResult.explain,
-        ...(bestReason !== undefined && { reason: bestReason }),
-        ...(mergedHints && { hints: mergedHints }),
+        ...rankedExplainDetails,
+        ...(resolutionConfidence !== undefined ? { resolutionConfidence } : {}),
         refsCount: (existing?.explain?.refsCount ?? 0) + 1,
       },
-      confidence: Math.max(existing?.confidence ?? 0, severityResult.confidence),
+      confidence: rankedConfidence,
     };
 
-    if (changedSymbol.typeOnly !== undefined) {
+    if (replacesExistingEvidence && changedSymbol.typeOnly !== undefined) {
       impactItem.typeOnly = changedSymbol.typeOnly;
+    } else if (existing?.typeOnly !== undefined) {
+      impactItem.typeOnly = existing.typeOnly;
     }
 
     context.impacted.set(ref.file, impactItem);

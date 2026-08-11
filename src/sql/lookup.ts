@@ -1,9 +1,8 @@
-import { appendToArrayMap } from "../util/collections.js";
-import { sqlObjectBaseName } from "./lex.js";
+import { sqlObjectBaseNameLookupKey, sqlObjectLookupKey } from "./lex.js";
 
 export function sqlObjectLookupKeys(name: string): string[] {
-  const normalized = name.toLowerCase();
-  const baseName = sqlObjectBaseName(name).toLowerCase();
+  const normalized = sqlObjectLookupKey(name);
+  const baseName = sqlObjectBaseNameLookupKey(name);
   return normalized === baseName ? [normalized] : [normalized, baseName];
 }
 
