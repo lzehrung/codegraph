@@ -7,6 +7,8 @@ import { listCandidateTestFiles } from "../../src/impact/context.js";
 import { normalizePath } from "../../src/util/paths.js";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
+import { C_SUPPORT, CPP_SUPPORT, supportForFile } from "../../src/languages.js";
+import { parseSyntaxTree } from "@lzehrung/codegraph-native";
 
 const definition: LanguageTestDefinition = {
   id: "cpp",
@@ -14,43 +16,89 @@ const definition: LanguageTestDefinition = {
     {
       name: "chunks C++ structures",
       sourceFile: "cpp.sample.cpp",
-      expectedChunks: (chunks) => {
-        expect(chunks.some((c) => c.type === "class" && c.name === "MyClass")).toBe(true);
-        expect(chunks.some((c) => c.type === "struct" && c.name === "MyStruct")).toBe(true);
-        expect(chunks.some((c) => c.type === "enum" && c.name === "MyMode")).toBe(true);
-        expect(chunks.some((c) => c.type === "function" && c.name === "add")).toBe(true);
-      },
+      exactChunks: [
+        { type: "misc", startLine: 1, endLine: 2 },
+        { type: "namespace", name: "demo", startLine: 3, endLine: 17 },
+        { type: "class", name: "MyClass", startLine: 4, endLine: 7 },
+        { type: "function", name: "method", startLine: 6, endLine: 6 },
+        { type: "struct", name: "MyStruct", startLine: 9, endLine: 11 },
+        { type: "enum", name: "MyMode", startLine: 13, endLine: 16 },
+        { type: "misc", startLine: 17, endLine: 19 },
+        { type: "function", name: "add", startLine: 20, endLine: 22 },
+      ],
     },
   ],
   parity: {
     sampleDir: "cpp",
-    dependencyGraph: [
-      { from: "main.cpp", to: { type: "file", path: "utils.hpp" } },
-      { from: "main.cpp", to: { type: "file", path: "helpers.hpp" } },
-      { from: "namespace-usage.cpp", to: { type: "file", path: "namespaces.hpp" } },
-    ],
-    symbols: [
-      {
-        file: "advanced.hpp",
-        includes: [
-          { name: "demo" },
-          { name: "Mode", kind: "type" },
-          { name: "Fast", kind: "variable" },
-          { name: "Slow", kind: "variable" },
-          { name: "Count" },
-          { name: "Engine" },
-          { name: "combine" },
-        ],
-      },
-      {
-        file: "namespaces.hpp",
-        includes: [{ name: "toolkit" }, { name: "Widget" }, { name: "buildWidget" }],
-      },
-      {
-        file: "templates.hpp",
-        includes: [{ name: "Holder" }, { name: "compute" }],
-      },
-    ],
+    exact: {
+      dependencyGraph: [
+        {
+          from: "main.cpp",
+          to: { type: "file", path: "helpers.hpp" },
+        },
+        {
+          from: "main.cpp",
+          to: { type: "file", path: "utils.hpp" },
+        },
+        {
+          from: "namespace-usage.cpp",
+          to: { type: "file", path: "namespaces.hpp" },
+        },
+      ],
+      symbols: [
+        {
+          file: "advanced.hpp",
+          symbols: [
+            { name: "demo", kind: "class" },
+            { name: "Mode", kind: "type" },
+            { name: "Fast", kind: "variable" },
+            { name: "Slow", kind: "variable" },
+            { name: "Count", kind: "type" },
+            { name: "Engine", kind: "class" },
+            { name: "run", kind: "function" },
+            { name: "combine", kind: "function" },
+            { name: "left", kind: "variable" },
+            { name: "right", kind: "variable" },
+          ],
+        },
+        {
+          file: "namespaces.hpp",
+          symbols: [
+            { name: "toolkit", kind: "class" },
+            { name: "Widget", kind: "class" },
+            { name: "buildWidget", kind: "function" },
+            { name: "aliases", kind: "class" },
+          ],
+        },
+        {
+          file: "templates.hpp",
+          symbols: [
+            { name: "Holder", kind: "class" },
+            { name: "Holder", kind: "function" },
+            { name: "value", kind: "variable" },
+            { name: "get", kind: "function" },
+            { name: "value_", kind: "variable" },
+            { name: "compute", kind: "function" },
+            { name: "value", kind: "variable" },
+            { name: "compute", kind: "function" },
+            { name: "value", kind: "variable" },
+          ],
+        },
+      ],
+      references: [
+        {
+          name: "find references for Widget includes namespace alias usage",
+          file: "namespaces.hpp",
+          line: 4,
+          column: 7,
+          references: [
+            { file: "namespaces.hpp", line: 4 },
+            { file: "namespace-usage.cpp", line: 4 },
+          ],
+        },
+      ],
+    },
+    absentDependencyGraph: [{ from: "module-import.cpp", to: { type: "external", name: "foo" } }],
     goToDefinition: [
       {
         name: "go to definition resolves namespace-qualified Widget alias target",
@@ -60,19 +108,35 @@ const definition: LanguageTestDefinition = {
         expectedDefinition: { file: "namespaces.hpp", line: 4 },
       },
     ],
-    references: [
-      {
-        name: "find references for Widget includes namespace alias usage",
-        file: "namespaces.hpp",
-        line: 4,
-        column: 7,
-        minimumCount: 2,
-      },
-    ],
   },
 };
 
 runLanguageTests(definition);
+
+describe("C++ language boundaries", () => {
+  it("identifies .h headers with C++ syntax", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-cpp-header-language-"));
+    const cppHeader = path.join(root, "widget.h");
+    const cHeader = path.join(root, "widget_c.h");
+    try {
+      await fs.writeFile(cppHeader, "namespace widgets { class Widget {}; }\n", "utf8");
+      await fs.writeFile(cHeader, "struct Widget { int value; };\n", "utf8");
+
+      expect(supportForFile(cppHeader)).toBe(CPP_SUPPORT);
+      expect(supportForFile(cHeader)).toBe(C_SUPPORT);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("documents the C++20 module grammar limitation", () => {
+    const tree = parseSyntaxTree("export module foo;\nimport foo;\n", "cpp");
+    const nodeTypes = tree.nodes.map((node) => node.nodeType);
+
+    expect(nodeTypes).not.toContain("module_declaration");
+    expect(nodeTypes).not.toContain("import_declaration");
+  });
+});
 
 describe("C++ configured include roots", () => {
   it("loads Gunship-shaped resolution hints and ranks linked and changed tests", async () => {

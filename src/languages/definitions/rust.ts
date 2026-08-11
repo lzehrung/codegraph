@@ -6,6 +6,7 @@ export const RUST_DEF: LanguageDefinition = {
   id: "rust",
   extensions: [".rs"],
   grammar: () => loadTreeSitterLanguage("tree-sitter-rust"),
+  usesQueryDrivenLocals: true,
   structure: {
     blocks: [
       {
@@ -33,6 +34,11 @@ export const RUST_DEF: LanguageDefinition = {
         nameQuery: "name: (identifier) @chunk.name",
         captureId: "module",
       },
+      {
+        type: "macro_definition",
+        nameQuery: "name: (identifier) @chunk.name",
+        captureId: "macro",
+      },
     ],
     splitPoints: ["if_expression", "for_expression", "while_expression", "loop_expression", "match_expression"],
     comments: ["line_comment", "block_comment"],
@@ -51,6 +57,7 @@ export const RUST_DEF: LanguageDefinition = {
       (enum_variant name: (identifier) @name) @stmt
       (const_item name: (identifier) @name) @stmt
       (static_item name: (identifier) @name) @stmt
+      (macro_definition name: (identifier) @name) @stmt
       (use_declaration argument: (scoped_identifier path: (_) @from name: (identifier) @src)) @stmt
       (use_declaration argument: (identifier) @src) @stmt
       ;; Grouped imports: \`use foo::{Bar, Baz};\` (and scoped forms like
@@ -71,6 +78,7 @@ export const RUST_DEF: LanguageDefinition = {
       (enum_variant name: (identifier) @name)
       (const_item name: (identifier) @name)
       (static_item name: (identifier) @name)
+      (macro_definition name: (identifier) @name)
       (let_declaration pattern: (identifier) @name)
       (parameter pattern: (identifier) @name)
     `,
@@ -93,16 +101,18 @@ export const RUST_DEF: LanguageDefinition = {
     memberExpression: "field_expression",
   },
   supportsCrossModuleSymbols: true,
+  scopeDeclarationNames: (node) => node.parent?.type === "macro_definition",
   classifyDefinition: (node) => {
     const parent = node.parent;
     if (!parent) return "variable";
-    if (parent.type === "function_item") return "function";
+    if (parent.type === "function_item" || parent.type === "macro_definition") return "function";
     if (parent.type === "enum_item") return "type";
     if (parent.type === "struct_item" || parent.type === "trait_item") return "class";
     return "variable";
   },
   createsFunctionScope: (node) => node.type === "function_item",
   createsBlockScope: (node) => node.type === "block",
+  membersAreImplicitlyInScope: false,
   isDeclarationName: (node) => {
     const p = node.parent;
     if (!p) return false;
@@ -113,6 +123,7 @@ export const RUST_DEF: LanguageDefinition = {
     if (p.type === "enum_variant" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "const_item" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "static_item" && p.childForFieldName("name")?.id === node.id) return true;
+    if (p.type === "macro_definition" && p.childForFieldName("name")?.id === node.id) return true;
     if (p.type === "let_declaration" && p.childForFieldName("pattern")?.id === node.id) return true;
     if (p.type === "parameter" && p.childForFieldName("pattern")?.id === node.id) return true;
     return false;

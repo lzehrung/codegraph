@@ -5,7 +5,7 @@ import { ensureParsedContext } from "../indexer/parse-context.js";
 import type { LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { toRange } from "../util/ast.js";
-import { normalizePath, resolveFilePathFromRoot, toProjectRelativePath } from "../util/paths.js";
+import { fileIdentityKey, normalizePath, resolveFilePathFromRoot, toProjectRelativePath } from "../util/paths.js";
 import { collectChangedLines } from "./hunks.js";
 import type { FileChange, ImpactOptions, ImpactSuggestion, ImpactSuggestionConfidence } from "./types.js";
 
@@ -54,7 +54,7 @@ export async function collectImpactSuggestions(
 
     const absoluteFile = resolveFilePath(projectRoot, fileChange.path);
     const reportFile = toProjectRelative(projectRoot, absoluteFile);
-    const mod = index.byFile.get(absoluteFile);
+    const mod = index.byFile.get(fileIdentityKey(absoluteFile));
     const importedLocals = collectImportedLocals(mod);
     const importedFiles = collectImportedFiles(mod);
     const missingExportSuggestions = collectMissingExportSuggestions(
@@ -70,7 +70,7 @@ export async function collectImpactSuggestions(
       pushUniqueSuggestion(output, seen, suggestion);
     }
 
-    const parsedEntry = await ensureParsedContext(absoluteFile, index.parsed?.get(absoluteFile));
+    const parsedEntry = await ensureParsedContext(absoluteFile, index.parsed?.get(fileIdentityKey(absoluteFile)));
     if (!parsedEntry) continue;
 
     const changedLines = collectChangedLines(fileChange.hunks);
@@ -90,7 +90,9 @@ export async function collectImpactSuggestions(
       if (result.status === "ok") continue;
 
       const exportCandidates = exportLookup.filesByExportName.get(candidate.name) ?? new Set<FileId>();
-      const filteredCandidates = [...exportCandidates].filter((file) => file !== absoluteFile);
+      const filteredCandidates = [...exportCandidates].filter(
+        (file) => fileIdentityKey(file) !== fileIdentityKey(absoluteFile),
+      );
 
       if (filteredCandidates.length) {
         const relatedFile = selectBestCandidateFile(index, absoluteFile, filteredCandidates);
@@ -134,9 +136,10 @@ function buildExportLookup(index: ProjectIndex): ExportLookup {
   const exportNamesByFile = new Map<FileId, Set<string>>();
   const filesByExportName = new Map<string, Set<FileId>>();
 
-  for (const [file, mod] of index.byFile) {
+  for (const mod of index.byFile.values()) {
+    const file = mod.file;
     const names = collectExportNames(mod);
-    exportNamesByFile.set(file, names);
+    exportNamesByFile.set(fileIdentityKey(file), names);
     for (const name of names) {
       const existing = filesByExportName.get(name) ?? new Set<FileId>();
       existing.add(file);
@@ -222,7 +225,7 @@ function collectMissingExportSuggestions(
     if (!binding.resolved) continue;
     if (typeof binding.resolved !== "string") continue;
 
-    const exportedNames = lookup.exportNamesByFile.get(binding.resolved);
+    const exportedNames = lookup.exportNamesByFile.get(fileIdentityKey(binding.resolved));
     if (!exportedNames) continue;
 
     if (binding.kind === "named") {
@@ -359,7 +362,13 @@ function toProjectRelative(projectRoot: string, file: FileId): FileId {
 function pushUniqueSuggestion(output: ImpactSuggestion[], seen: Set<string>, suggestion: ImpactSuggestion): void {
   const range = suggestion.range?.start;
   const rangeKey = range ? `${range.line}:${range.column}` : "no-range";
-  const keyParts = [suggestion.file, suggestion.kind, suggestion.symbol ?? "", suggestion.relatedFile ?? "", rangeKey];
+  const keyParts = [
+    fileIdentityKey(suggestion.file),
+    suggestion.kind,
+    suggestion.symbol ?? "",
+    suggestion.relatedFile ? fileIdentityKey(suggestion.relatedFile) : "",
+    rangeKey,
+  ];
   const key = keyParts.join("|");
   if (seen.has(key)) return;
   seen.add(key);

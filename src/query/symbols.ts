@@ -35,13 +35,13 @@ export type NeighborResult = {
 
 export function querySymbolNeighbors(sg: SymbolGraph, query: NeighborQuery): NeighborResult {
   const direction = query.direction ?? "both";
-  const maxDepth = typeof query.maxDepth === "number" && query.maxDepth > 0 ? query.maxDepth : 1;
+  const maxDepth = typeof query.maxDepth === "number" && query.maxDepth >= 0 ? query.maxDepth : 1;
   const labelFilter = query.edgeLabels?.length ? new Set(query.edgeLabels) : null;
 
   const outgoing = new Map<string, SymbolEdge[]>();
   const incoming = new Map<string, SymbolEdge[]>();
   for (const edge of sg.edges) {
-    if (labelFilter && edge.label && !labelFilter.has(edge.label)) continue;
+    if (labelFilter && (!edge.label || !labelFilter.has(edge.label))) continue;
     const outList = outgoing.get(edge.from) ?? [];
     outList.push(edge);
     outgoing.set(edge.from, outList);

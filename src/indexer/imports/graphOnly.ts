@@ -27,7 +27,7 @@ export async function collectGraphOnlyImports(context: GraphOnlyImportExtraction
   let matchPath: Awaited<ReturnType<typeof loadNearestTsconfigFor>>["matchPath"] | undefined;
   let workspaceConfig: Awaited<ReturnType<typeof loadWorkspaceConfig>> | undefined;
   if (needsResolutionConfig) {
-    const tsconfig = await loadNearestTsconfigFor(context.file, context.logLevel);
+    const tsconfig = await loadNearestTsconfigFor(context.file, context.projectRoot, context.logLevel);
     matchPath = tsconfig.matchPath;
     workspaceConfig = await loadWorkspaceConfig(context.projectRoot);
   }

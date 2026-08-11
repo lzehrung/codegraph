@@ -1,6 +1,7 @@
 import type { LanguageSupport } from "../languages.js";
 import type { ParserLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import type { FileId } from "../types.js";
+import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { okGoToResult } from "./navigation-provenance.js";
 import { buildScopeIndexFromSource, type ScopeIndex } from "./scope.js";
 import { resolveExport, resolveImported } from "./navigation-resolve.js";
@@ -47,10 +48,11 @@ export function getOrBuildScopeIndex(
   mod: ModuleIndex,
   tree: SyntaxTreeLike,
 ): ScopeIndex {
-  let scopeIndex = index.scopeCache.get(file);
+  const fileKey = fileIdentityKey(file);
+  let scopeIndex = index.scopeCache.get(fileKey);
   if (scopeIndex) return scopeIndex;
   scopeIndex = buildScopeIndexFromSource(file, source, sup, lang, mod.imports, { tree });
-  index.scopeCache.set(file, scopeIndex);
+  index.scopeCache.set(fileKey, scopeIndex);
   return scopeIndex;
 }
 
@@ -59,7 +61,9 @@ export function findClosestBinding(
   file: FileId,
   bindingName: string,
   currentNode: SyntaxNodeLike,
+  support: LanguageSupport,
 ): SymbolDef | null {
+  bindingName = support.normalizeIdentifier(bindingName);
   let currentScope = scopeIndex.allScopes.find((scope) => {
     const start = scope.node.startIndex;
     const end = scope.node.endIndex;
@@ -114,10 +118,18 @@ export function resolveNamedDefinition(
   index: ProjectIndex,
   mod: ModuleIndex,
   file: FileId,
+  support: LanguageSupport,
   name: string,
 ): GoToResult | null {
-  const hit = resolveExport(index, file, name);
-  if (hit?.kind === "resolved") {
+  const requiresExplicitReceiver = !support.membersAreImplicitlyInScope;
+  const directExport = requiresExplicitReceiver
+    ? mod.exports.find((entry) => entry.type === "local" && entry.exportedAs === name && !entry.target.isMember)
+    : undefined;
+  const hit =
+    directExport && directExport.type === "local"
+      ? { kind: "resolved" as const, def: directExport.target }
+      : resolveExport(index, file, name, { allowLocalFallback: support.membersAreImplicitlyInScope });
+  if (hit?.kind === "resolved" && (!requiresExplicitReceiver || !hit.def.isMember)) {
     return okGoToResult(index, hit.def, {
       via: { exportedName: name },
       resolution: "exact",
@@ -125,7 +137,7 @@ export function resolveNamedDefinition(
     });
   }
   if (hit?.kind === "namespace") {
-    const targetMod = index.byFile.get(hit.file);
+    const targetMod = index.byFile.get(fileIdentityKey(hit.file));
     const firstExport = targetMod?.exports.find((entry) => entry.type === "local");
     if (firstExport) {
       return okGoToResult(index, firstExport.target, {
@@ -174,8 +186,8 @@ export function resolveNamedDefinition(
         });
       }
     } else if (imp.kind === "namespace" && imp.localNS === name) {
-      const targetFile = typeof imp.resolved === "string" ? imp.resolved.replace(/\\/g, "/") : undefined;
-      const targetMod = targetFile ? index.byFile.get(targetFile) : undefined;
+      const targetFile = typeof imp.resolved === "string" ? normalizePath(imp.resolved) : undefined;
+      const targetMod = targetFile ? index.byFile.get(fileIdentityKey(targetFile)) : undefined;
       const firstExport = targetMod?.exports.find((entry) => entry.type === "local");
       if (firstExport) {
         return okGoToResult(index, firstExport.target, {

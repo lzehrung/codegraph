@@ -1,4 +1,3 @@
-import { expect } from "vitest";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 
@@ -8,85 +7,165 @@ const definition: LanguageTestDefinition = {
     {
       name: "chunks Java structures",
       sourceFile: "java.sample.java",
-      expectedChunks: (chunks) => {
-        expect(chunks.some((c) => c.type === "class" && c.name === "MyClass")).toBe(true);
-        expect(chunks.some((c) => c.type === "method" && c.name === "myMethod")).toBe(true);
-        expect(chunks.some((c) => c.type === "interface" && c.name === "MyInterface")).toBe(true);
-        expect(chunks.some((c) => c.type === "enum" && c.name === "MyEnum")).toBe(true);
-      },
+      exactChunks: [
+        { type: "misc", startLine: 1, endLine: 4 },
+        { type: "class", name: "MyClass", startLine: 5, endLine: 15 },
+        { type: "method", name: "MyClass", startLine: 8, endLine: 10 },
+        { type: "method", name: "myMethod", startLine: 12, endLine: 14 },
+        { type: "misc", startLine: 15, endLine: 16 },
+        { type: "interface", name: "MyInterface", startLine: 17, endLine: 19 },
+        { type: "method", name: "interfaceMethod", startLine: 18, endLine: 18 },
+        { type: "misc", startLine: 19, endLine: 20 },
+        { type: "enum", name: "MyEnum", startLine: 21, endLine: 25 },
+      ],
     },
   ],
   parity: {
     sampleDir: "java",
-    dependencyGraph: [
-      {
-        from: "static-imports.java",
-        to: { type: "file", path: "utils/Utils.java" },
-      },
-      {
-        from: "static-imports.java",
-        to: { type: "file", path: "helpers/Helpers.java" },
-      },
-      {
-        from: "WildcardImports.java",
-        to: { type: "file", path: "pkg/PackageTypes.java" },
-      },
-      {
-        from: "WildcardImports.java",
-        to: { type: "file", path: "pkg/PackageService.java" },
-      },
-      {
-        from: "StaticWildcardImports.java",
-        to: { type: "file", path: "utils/Utils.java" },
-      },
-    ],
-    symbols: [
-      {
-        file: "NestedTypes.java",
-        includes: [{ name: "NestedTypes" }, { name: "InnerHelper" }, { name: "run" }, { name: "Contract" }],
-      },
-      {
-        file: "utils/Utils.java",
-        includes: [{ name: "UtilityClass" }],
-      },
-      {
-        file: "pkg/PackageTypes.java",
-        includes: [{ name: "PackageTypes" }, { name: "NestedValue" }, { name: "ServiceContract" }],
-      },
-      {
-        file: "pkg/Mode.java",
-        includes: [
-          { name: "Mode", kind: "type" },
-          { name: "FAST", kind: "variable" },
-          { name: "SLOW", kind: "variable" },
-        ],
-      },
-      {
-        file: "pkg/PackageService.java",
-        includes: [{ name: "PackageService" }],
-      },
-      {
-        file: "pkg/ScopedEnums.java",
-        includes: [
-          { name: "ScopedEnums", kind: "class" },
-          { name: "PrimaryMode", kind: "type" },
-          { name: "SecondaryMode", kind: "type" },
-          { name: "Ready", kind: "variable" },
-        ],
-      },
-      {
-        file: "RecordTypes.java",
-        includes: [
-          { name: "Point", kind: "class" },
-          { name: "NamedShape", kind: "class" },
-          { name: "Sized", kind: "interface" },
-        ],
-      },
-      {
-        file: "AnnotationTypes.java",
-        includes: [{ name: "AnnotatedMarker", kind: "interface" }],
-      },
-    ],
+    exact: {
+      dependencyGraph: [
+        {
+          from: "static-imports.java",
+          to: { type: "file", path: "utils/Utils.java" },
+        },
+        {
+          from: "static-imports.java",
+          to: { type: "file", path: "helpers/Helpers.java" },
+        },
+        {
+          from: "WildcardImports.java",
+          to: { type: "file", path: "pkg/Mode.java" },
+        },
+        {
+          from: "WildcardImports.java",
+          to: { type: "file", path: "pkg/PackageService.java" },
+        },
+        {
+          from: "WildcardImports.java",
+          to: { type: "file", path: "pkg/PackageTypes.java" },
+        },
+        {
+          from: "WildcardImports.java",
+          to: { type: "file", path: "pkg/ScopedEnums.java" },
+        },
+        {
+          from: "StaticWildcardImports.java",
+          to: { type: "file", path: "utils/Utils.java" },
+        },
+        {
+          from: "EnumMemberAccess.java",
+          to: { type: "file", path: "pkg/ScopedEnums.java" },
+        },
+      ],
+      symbols: [
+        {
+          file: "NestedTypes.java",
+          symbols: [
+            { name: "NestedTypes", kind: "class" },
+            { name: "InnerHelper", kind: "class" },
+            { name: "run", kind: "function" },
+            { name: "Contract", kind: "interface" },
+            { name: "execute", kind: "function" },
+          ],
+        },
+        {
+          file: "utils/Utils.java",
+          symbols: [
+            { name: "Utils", kind: "class" },
+            { name: "helperFunction", kind: "function" },
+            { name: "UtilityClass", kind: "class" },
+          ],
+        },
+        {
+          file: "pkg/PackageTypes.java",
+          symbols: [
+            { name: "PackageTypes", kind: "class" },
+            { name: "NestedValue", kind: "class" },
+            { name: "ServiceContract", kind: "interface" },
+            { name: "serve", kind: "function" },
+          ],
+        },
+        {
+          file: "pkg/Mode.java",
+          symbols: [
+            { name: "Mode", kind: "type" },
+            { name: "FAST", kind: "variable" },
+            { name: "SLOW", kind: "variable" },
+          ],
+        },
+        {
+          file: "pkg/PackageService.java",
+          symbols: [
+            { name: "PackageService", kind: "interface" },
+            { name: "serve", kind: "function" },
+          ],
+        },
+        {
+          file: "pkg/ScopedEnums.java",
+          symbols: [
+            { name: "ScopedEnums", kind: "class" },
+            { name: "PrimaryMode", kind: "type" },
+            { name: "Ready", kind: "variable" },
+            { name: "shadow", kind: "function" },
+            { name: "SecondaryMode", kind: "variable" },
+            { name: "Missing", kind: "variable" },
+            { name: "nested", kind: "variable" },
+            { name: "Missing", kind: "variable" },
+            { name: "SecondaryMode", kind: "type" },
+            { name: "Ready", kind: "variable" },
+          ],
+        },
+        {
+          file: "RecordTypes.java",
+          symbols: [
+            { name: "Sized", kind: "interface" },
+            { name: "size", kind: "function" },
+            { name: "Point", kind: "class" },
+            { name: "sum", kind: "function" },
+            { name: "NamedShape", kind: "class" },
+            { name: "size", kind: "function" },
+          ],
+        },
+        {
+          file: "AnnotationTypes.java",
+          symbols: [{ name: "AnnotatedMarker", kind: "interface" }],
+        },
+      ],
+      references: [
+        {
+          name: "find references for wildcard-imported interface",
+          file: "pkg/PackageTypes.java",
+          line: 7,
+          column: 11,
+          references: [
+            { file: "pkg/PackageTypes.java", line: 7 },
+            { file: "WildcardImports.java", line: 7 },
+          ],
+        },
+        {
+          name: "find references for wildcard-imported package interfaces across files",
+          file: "pkg/PackageService.java",
+          line: 3,
+          column: 18,
+          references: [
+            { file: "pkg/PackageService.java", line: 3 },
+            { file: "WildcardImports.java", line: 8 },
+          ],
+        },
+        {
+          name: "find references for static wildcard-imported methods",
+          file: "utils/Utils.java",
+          line: 4,
+          column: 22,
+          references: [
+            { file: "utils/Utils.java", line: 4 },
+            { file: "static-imports.java", line: 3 },
+            { file: "static-imports.java", line: 8 },
+            { file: "StaticWildcardImports.java", line: 7 },
+          ],
+        },
+      ],
+    },
     goToDefinition: [
       {
         name: "go to definition resolves wildcard-imported nested type",
@@ -136,29 +215,6 @@ const definition: LanguageTestDefinition = {
         line: 7,
         column: 5,
         expectedDefinition: { file: "utils/Utils.java", line: 4 },
-      },
-    ],
-    references: [
-      {
-        name: "find references for wildcard-imported interface",
-        file: "pkg/PackageTypes.java",
-        line: 7,
-        column: 11,
-        minimumCount: 2,
-      },
-      {
-        name: "find references for wildcard-imported package interfaces across files",
-        file: "pkg/PackageService.java",
-        line: 3,
-        column: 18,
-        minimumCount: 2,
-      },
-      {
-        name: "find references for static wildcard-imported methods",
-        file: "utils/Utils.java",
-        line: 4,
-        column: 22,
-        minimumCount: 2,
       },
     ],
   },

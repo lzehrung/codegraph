@@ -95,6 +95,7 @@ export type CFamilyLanguageDefinitionOptions = {
   splitPoints?: readonly string[];
   extraExportQueries?: readonly string[];
   extraLocalQueries?: readonly string[];
+  usesQueryDrivenLocals?: boolean;
   nodeTypes: NonNullable<LanguageDefinition["nodeTypes"]>;
   classifyDefinition: NonNullable<LanguageDefinition["classifyDefinition"]>;
   isDeclarationName: NonNullable<LanguageDefinition["isDeclarationName"]>;
@@ -144,9 +145,11 @@ export function createCFamilyLanguageDefinition(options: CFamilyLanguageDefiniti
     nodeTypes: options.nodeTypes,
     classifyDefinition: options.classifyDefinition,
     isDeclarationName: options.isDeclarationName,
+    scopeDeclarationNames: "all",
     createsFunctionScope: options.createsFunctionScope,
     createsBlockScope: (node) => node.type === "compound_statement",
     supportsCrossModuleSymbols: true,
+    usesQueryDrivenLocals: options.usesQueryDrivenLocals || false,
   };
 }
 

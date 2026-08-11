@@ -171,7 +171,7 @@ const BASE_HELPERS = {
       ].includes(p)
     );
   },
-  createsBlockScope: (n: SyntaxNodeLike) => n.type === "program" || n.type === "block",
+  createsBlockScope: (n: SyntaxNodeLike) => n.type === "program" || n.type === "block" || n.type === "class_body",
   createsFunctionScope: (n: SyntaxNodeLike) =>
     n.type === "generator_function_declaration" ||
     n.type === "function_declaration" ||
@@ -179,6 +179,7 @@ const BASE_HELPERS = {
     n.type === "function_expression" ||
     n.type === "arrow_function" ||
     n.type === "method_definition",
+  membersAreImplicitlyInScope: false,
   supportsCrossModuleSymbols: true,
 };
 

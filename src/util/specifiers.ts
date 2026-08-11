@@ -2,12 +2,17 @@ import path from "node:path";
 import { buildJsLikeLiteralMask, stripJsLikeComments, stripPythonCommentsAndStrings } from "./comments.js";
 import { normalizePath } from "./paths.js";
 
+export type ModuleSpecifierResolutionKind = "document" | "source" | "stylesheet";
+
+export type ModuleSpecifierExportCondition = "import" | "require";
+
 export type ModuleSpecifier = {
   spec: string;
   raw?: string;
   typeOnly?: boolean;
   phpImportType?: "class" | "function" | "const";
-  resolutionKind?: "document" | "source";
+  resolutionKind?: ModuleSpecifierResolutionKind;
+  exportCondition?: ModuleSpecifierExportCondition;
   dropIfUnresolved?: boolean;
   resolved?: "heuristic" | "precise";
   confidence?: number;
@@ -29,10 +34,17 @@ export function extractJsTsSpecifiers(source: string): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
   try {
     const src = stripJsLikeComments(source);
-    const push = (spec: string, typeOnly?: boolean) => {
-      if (spec) out.push({ spec, ...(typeOnly ? { typeOnly: true } : {}) });
+    const push = (spec: string, opts?: { typeOnly?: boolean; exportCondition?: ModuleSpecifierExportCondition }) => {
+      if (!spec) return;
+      out.push({
+        spec,
+        ...(opts?.typeOnly ? { typeOnly: true } : {}),
+        ...(opts?.exportCondition ? { exportCondition: opts.exportCondition } : {}),
+      });
     };
     const literalMask = buildJsLikeLiteralMask(src);
+    // Capture groups: 1 import-from, 2 side-effect import, 3 export-from,
+    // 4 destructured require, 5 require(), 6 import(), 7 import = require, 8 declare module.
     const combined =
       /^\s*import\s+[^\n;]*?\s+from\s+["']([^"']+)["']|^\s*import\s+["']([^"']+)["']|\bexport\s+[^\n;]*?\s+from\s+["']([^"']+)["']|\b(?:const|let|var)\s*\{[^}]*\}\s*=\s*require\s*\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\brequire\s*\(\s*["']([^"']+)["']\s*\)|(?<!["'`])\bimport\s*\(\s*["']([^"']+)["']\s*\)|^\s*import\s+[A-Za-z_$][\w$]*\s*=\s*require\s*\(\s*["']([^"']+)["']\s*\)|^\s*declare\s+module\s+["']([^"']+)["']/gm;
 
@@ -49,7 +61,12 @@ export function extractJsTsSpecifiers(source: string): ModuleSpecifier[] {
       } else if (match[8] !== undefined) {
         typeOnly = true;
       }
-      push(spec, typeOnly);
+      const exportCondition: ModuleSpecifierExportCondition | undefined =
+        match[4] !== undefined || match[5] !== undefined || match[7] !== undefined ? "require" : undefined;
+      push(spec, {
+        ...(typeOnly ? { typeOnly: true } : {}),
+        ...(exportCondition ? { exportCondition } : {}),
+      });
     }
   } catch {
     /* regex/parse fallback: ignore */

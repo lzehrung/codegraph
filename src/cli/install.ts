@@ -176,7 +176,9 @@ async function runInstallerOperation(
   options: { targetIds: InstallTargetId[]; yes?: boolean; dryRun?: boolean },
 ): Promise<InstallResult | UninstallResult> {
   try {
-    if (context.command === "install") return await installCodegraphTargets(options);
+    if (context.command === "install") {
+      return await installCodegraphTargets({ ...options, force: context.hasFlag("--force") });
+    }
     return await uninstallCodegraphTargets(options);
   } catch (error) {
     if (error instanceof InstallerCollisionError) {

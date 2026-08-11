@@ -11,6 +11,7 @@ import {
   resolveWorkspacePackage,
 } from "../src/util.js";
 import { loadPhpComposerConfig } from "../src/util/resolution/phpComposer.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -47,7 +48,9 @@ describe("Import Resolution", () => {
     expect(helperImport!.kind).toBe("named");
     expect(helperImport!.from).toBe("./utils.js");
     expect(typeof helperImport!.resolved).toBe("string");
-    expect((helperImport!.resolved as string).replace(/\\/g, "/")).toBe(utilsFile!.replace(/\\/g, "/"));
+    expect((helperImport!.resolved as string).replace(/\\/g, "/")).toBe(
+      path.join(root, "utils.ts").replace(/\\/g, "/"),
+    );
   });
 
   it("should resolve .jsx imports to .tsx source files", async () => {
@@ -65,12 +68,12 @@ describe("Import Resolution", () => {
 
     const resolved = await resolveSpecifier(appFile, "./components/Button.jsx", root);
 
-    expect(resolved).toBe(buttonFile);
+    expect(resolved).toBe(buttonFile.replace(/\\/g, "/"));
 
     const index = await buildProjectIndex(root);
     const normalizedApp = appFile.replace(/\\/g, "/");
     const normalizedButton = buttonFile.replace(/\\/g, "/");
-    const appModule = index.byFile.get(normalizedApp);
+    const appModule = index.byFile.get(fileIdentityKey(normalizedApp));
     const buttonImport = appModule?.imports[0];
 
     expect(buttonImport?.from).toBe("./components/Button.jsx");
@@ -97,7 +100,9 @@ describe("Import Resolution", () => {
     const mainModule = index.byFile.get(mainFile!);
     const helperImport = mainModule!.imports[0];
     expect(typeof helperImport!.resolved).toBe("string");
-    expect((helperImport!.resolved as string).replace(/\\/g, "/")).toBe(utilsFile!.replace(/\\/g, "/"));
+    expect((helperImport!.resolved as string).replace(/\\/g, "/")).toBe(
+      path.join(root, "utils.mts").replace(/\\/g, "/"),
+    );
   });
 
   it("should resolve .cjs imports to .cts source files", async () => {
@@ -120,7 +125,9 @@ describe("Import Resolution", () => {
     const mainModule = index.byFile.get(mainFile!);
     const helperImport = mainModule!.imports[0];
     expect(typeof helperImport!.resolved).toBe("string");
-    expect((helperImport!.resolved as string).replace(/\\/g, "/")).toBe(utilsFile!.replace(/\\/g, "/"));
+    expect((helperImport!.resolved as string).replace(/\\/g, "/")).toBe(
+      path.join(root, "utils.cts").replace(/\\/g, "/"),
+    );
   });
 
   it("should still resolve regular .js files when they exist", async () => {
@@ -144,7 +151,7 @@ describe("Import Resolution", () => {
     const mainModule = index.byFile.get(mainFile!);
     const helperImport = mainModule!.imports[0];
     expect(typeof helperImport!.resolved).toBe("string");
-    expect(helperImport!.resolved).toBe(utilsFile);
+    expect(helperImport!.resolved).toBe(path.join(root, "utils.js").replace(/\\/g, "/"));
   });
 
   it("resolves directory imports to index files instead of directory paths", async () => {
@@ -158,12 +165,12 @@ describe("Import Resolution", () => {
 
     const resolved = await resolveSpecifier(mainFile, "./foo", root);
 
-    expect(resolved).toBe(indexFile);
+    expect(resolved).toBe(indexFile.replace(/\\/g, "/"));
 
     const normalizedMain = mainFile.replace(/\\/g, "/");
     const normalizedIndex = indexFile.replace(/\\/g, "/");
     const projectIndex = await buildProjectIndex(root);
-    const mainModule = projectIndex.byFile.get(normalizedMain);
+    const mainModule = projectIndex.byFile.get(fileIdentityKey(normalizedMain));
     const fooImport = mainModule?.imports[0];
 
     expect(fooImport?.resolved).toBe(normalizedIndex);
@@ -217,7 +224,7 @@ describe("Import Resolution", () => {
     }
 
     const projectIndex = await buildProjectIndex(root);
-    expect(projectIndex.byFile.has(packageDir.replace(/\\/g, "/"))).toBe(false);
+    expect(projectIndex.byFile.has(fileIdentityKey(packageDir))).toBe(false);
   });
 
   it("keys root-relative import resolution by project root", async () => {
@@ -231,8 +238,8 @@ describe("Import Resolution", () => {
     await fsp.writeFile(targetA, "export const value = 'a';\n", "utf8");
     await fsp.writeFile(targetB, "export const value = 'b';\n", "utf8");
 
-    await expect(resolveSpecifier(fromFile, "/target", rootA)).resolves.toBe(targetA);
-    await expect(resolveSpecifier(fromFile, "/target", rootB)).resolves.toBe(targetB);
+    await expect(resolveSpecifier(fromFile, "/target", rootA)).resolves.toBe(targetA.replace(/\\/g, "/"));
+    await expect(resolveSpecifier(fromFile, "/target", rootB)).resolves.toBe(targetB.replace(/\\/g, "/"));
   });
 
   it("keys Python module resolution by project root", async () => {
@@ -274,7 +281,7 @@ describe("Import Resolution", () => {
     );
     await fsp.writeFile(appFile, 'import value from "@pkg";\nexport const result = value;\n', "utf8");
 
-    const { matchPath } = await loadNearestTsconfigFor(appFile);
+    const { matchPath } = await loadNearestTsconfigFor(appFile, root);
 
     expect(matchPath).toBeDefined();
 
@@ -319,8 +326,8 @@ describe("Import Resolution", () => {
     const symbolGraph = await buildSymbolGraphDetailed(index);
 
     // Find the main and helper functions in the symbol graph
-    const mainFile = Array.from(index.byFile.keys()).find((f) => f.endsWith("main.ts"));
-    const utilsFile = Array.from(index.byFile.keys()).find((f) => f.endsWith("utils.ts"));
+    const mainFile = path.join(root, "main.ts").replace(/\\/g, "/");
+    const utilsFile = path.join(root, "utils.ts").replace(/\\/g, "/");
 
     const nodes = [...symbolGraph.nodes.values()];
     const mainFunc = nodes.find((n) => n.file === mainFile && n.name === "main");
@@ -377,7 +384,7 @@ describe("Import Resolution", () => {
 
     const normalizedPage = pageFile.replace(/\\/g, "/");
     const index = await buildProjectIndex(root);
-    const pageModule = index.byFile.get(normalizedPage);
+    const pageModule = index.byFile.get(fileIdentityKey(normalizedPage));
     const rawImport = pageModule?.imports[0];
 
     expect(pageModule).toBeDefined();
@@ -398,7 +405,7 @@ describe("Import Resolution", () => {
     const normalizedPage = pageFile.replace(/\\/g, "/");
     const graph = await collectGraph(root, [normalizedPage]);
     const index = await buildProjectIndex(root);
-    const pageModule = index.byFile.get(normalizedPage);
+    const pageModule = index.byFile.get(fileIdentityKey(normalizedPage));
 
     expect(graph.edges).toHaveLength(0);
     expect(pageModule).toBeDefined();
@@ -434,7 +441,7 @@ describe("Import Resolution", () => {
     const normalizedComponent = componentFile.replace(/\\/g, "/");
     const graph = await collectGraph(root, [normalizedPage, normalizedComponent]);
     const index = await buildProjectIndex(root);
-    const pageModule = index.byFile.get(normalizedPage);
+    const pageModule = index.byFile.get(fileIdentityKey(normalizedPage));
 
     expect(
       graph.edges.some(
@@ -477,7 +484,7 @@ describe("Import Resolution", () => {
     const normalizedLayout = layoutFile.replace(/\\/g, "/");
     const graph = await collectGraph(root, [normalizedPage, normalizedLayout]);
     const index = await buildProjectIndex(root);
-    const pageModule = index.byFile.get(normalizedPage);
+    const pageModule = index.byFile.get(fileIdentityKey(normalizedPage));
 
     expect(
       graph.edges.some(
@@ -510,7 +517,7 @@ describe("Import Resolution", () => {
       normalizedApiSource,
     ]);
     const index = await buildProjectIndex(root);
-    const indexModule = index.byFile.get(normalizedIndex);
+    const indexModule = index.byFile.get(fileIdentityKey(normalizedIndex));
 
     expect(
       graph.edges.some(
@@ -560,7 +567,7 @@ describe("Import Resolution", () => {
       normalizedApiSource,
     ]);
     const index = await buildProjectIndex(root);
-    const indexModule = index.byFile.get(normalizedIndex);
+    const indexModule = index.byFile.get(fileIdentityKey(normalizedIndex));
 
     expect(
       graph.edges.some(
@@ -606,7 +613,7 @@ describe("Import Resolution", () => {
       normalizedApiSource,
     ]);
     const index = await buildProjectIndex(root);
-    const indexModule = index.byFile.get(normalizedIndex);
+    const indexModule = index.byFile.get(fileIdentityKey(normalizedIndex));
 
     expect(
       graph.edges.some(
@@ -644,7 +651,7 @@ describe("Import Resolution", () => {
     const normalizedMarkdown = markdownFile.replace(/\\/g, "/");
     const graph = await collectGraph(root, [normalizedPage, normalizedComponent, normalizedMarkdown]);
     const index = await buildProjectIndex(root);
-    const pageModule = index.byFile.get(normalizedPage);
+    const pageModule = index.byFile.get(fileIdentityKey(normalizedPage));
 
     expect(
       graph.edges.some(
@@ -674,7 +681,7 @@ describe("Import Resolution", () => {
     const normalizedMarkdown = markdownFile.replace(/\\/g, "/");
     const graph = await collectGraph(root, [normalizedPage, normalizedComponent, normalizedMarkdown]);
     const index = await buildProjectIndex(root);
-    const pageModule = index.byFile.get(normalizedPage);
+    const pageModule = index.byFile.get(fileIdentityKey(normalizedPage));
 
     expect(
       graph.edges.some(
@@ -889,7 +896,7 @@ describe("Import Resolution", () => {
     );
 
     const index = await buildProjectIndex(root);
-    const consumerModule = index.byFile.get(consumerFile.replace(/\\/g, "/"));
+    const consumerModule = index.byFile.get(fileIdentityKey(consumerFile.replace(/\\/g, "/")));
     const helperImport = consumerModule?.imports.find(
       (entry) => entry.kind === "named" && entry.local === "Legacy_Utils_StringHelper",
     );
@@ -1618,7 +1625,7 @@ describe("Import Resolution", () => {
     expect(result.status).toBe("not_found");
   });
 
-  it("treats PHP autoload.files entries as implicit file dependencies and symbol sources", async () => {
+  it("uses PHP autoload.files entries as symbol sources without implicit dependency edges", async () => {
     const root = await mkTmpDir("dg-resolve-php-autoload-files-");
     const bootstrapDir = path.join(root, "bootstrap");
     const consumerFile = path.join(root, "consumer.php");
@@ -1644,7 +1651,7 @@ describe("Import Resolution", () => {
       graph.edges.some(
         (edge) => edge.from === consumerPath && edge.to.type === "file" && edge.to.path === bootstrapPath,
       ),
-    ).toBe(true);
+    ).toBe(false);
 
     const index = await buildProjectIndex(root);
     const result = await goToDefinition(index, {
@@ -1658,5 +1665,227 @@ describe("Import Resolution", () => {
       expect(result.definition.file).toBe(bootstrapPath);
       expect(result.definition.range.start.line).toBe(3);
     }
+  });
+  it("confines relative, root-relative, and tsconfig alias targets to the project root", async () => {
+    const parent = await mkTmpDir("dg-resolve-root-confinement-");
+    const root = path.join(parent, "nested");
+    const sourceFile = path.join(root, "src", "main.ts");
+    const outsideFile = path.join(parent, "outside.ts");
+
+    await fsp.mkdir(path.dirname(sourceFile), { recursive: true });
+    await fsp.writeFile(sourceFile, "export const main = 1;\n", "utf8");
+    await fsp.writeFile(outsideFile, "export const outside = 1;\n", "utf8");
+    await fsp.writeFile(
+      path.join(root, "tsconfig.json"),
+      JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@outside/*": ["../*"] } } }),
+      "utf8",
+    );
+
+    await expect(resolveSpecifier(sourceFile, "../../outside", root)).resolves.toEqual({ external: "../../outside" });
+    await expect(resolveSpecifier(sourceFile, "/../outside", root)).resolves.toEqual({ external: "/../outside" });
+
+    const { matchPath } = await loadNearestTsconfigFor(sourceFile, root);
+    await expect(resolveSpecifier(sourceFile, "@outside/outside", root, matchPath)).resolves.toEqual({
+      external: "@outside/outside",
+    });
+  });
+
+  it("does not inherit parent tsconfig aliases through a nested project root or extends chain", async () => {
+    const parent = await mkTmpDir("dg-resolve-tsconfig-root-boundary-");
+    const parentTarget = path.join(parent, "shared", "value.ts");
+    const nestedRoot = path.join(parent, "nested");
+    const nestedSource = path.join(nestedRoot, "src", "main.ts");
+    const extendedRoot = path.join(parent, "extended");
+    const extendedSource = path.join(extendedRoot, "src", "main.ts");
+
+    await fsp.mkdir(path.dirname(parentTarget), { recursive: true });
+    await fsp.mkdir(path.dirname(nestedSource), { recursive: true });
+    await fsp.mkdir(path.dirname(extendedSource), { recursive: true });
+    await fsp.writeFile(
+      path.join(parent, "tsconfig.json"),
+      JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@parent/*": ["shared/*"] } } }),
+      "utf8",
+    );
+    await fsp.writeFile(parentTarget, "export const value = 1;\n", "utf8");
+    await fsp.writeFile(nestedSource, 'import { value } from "@parent/value";\nexport { value };\n', "utf8");
+    await fsp.writeFile(extendedSource, "export const main = 1;\n", "utf8");
+    await fsp.writeFile(
+      path.join(extendedRoot, "tsconfig.json"),
+      JSON.stringify({ extends: "../tsconfig.json" }),
+      "utf8",
+    );
+
+    const nestedIndex = await buildProjectIndex(nestedRoot, { cache: "off" });
+    const nestedModule = nestedIndex.byFile.get(fileIdentityKey(nestedSource));
+    expect(nestedModule?.imports[0]?.resolved).toEqual({ external: "@parent/value" });
+
+    const extendedTsconfig = await loadNearestTsconfigFor(extendedSource, extendedRoot);
+    await expect(
+      resolveSpecifier(extendedSource, "@parent/value", extendedRoot, extendedTsconfig.matchPath),
+    ).resolves.toEqual({ external: "@parent/value" });
+  });
+
+  it("does not climb to node_modules outside the root and still resolves in-root third-party packages", async () => {
+    const parent = await mkTmpDir("dg-resolve-node-root-boundary-");
+    const root = path.join(parent, "nested");
+    const sourceFile = path.join(root, "src", "main.ts");
+    const parentPackageDir = path.join(parent, "node_modules", "parent-package");
+    const localPackageDir = path.join(root, "node_modules", "local-package");
+    const localEntry = path.join(localPackageDir, "index.js");
+
+    await fsp.mkdir(path.dirname(sourceFile), { recursive: true });
+    await fsp.mkdir(parentPackageDir, { recursive: true });
+    await fsp.mkdir(localPackageDir, { recursive: true });
+    await fsp.writeFile(sourceFile, "export const main = 1;\n", "utf8");
+    await fsp.writeFile(path.join(parentPackageDir, "package.json"), JSON.stringify({ main: "./index.js" }), "utf8");
+    await fsp.writeFile(path.join(parentPackageDir, "index.js"), "module.exports = 1;\n", "utf8");
+    await fsp.writeFile(path.join(localPackageDir, "package.json"), JSON.stringify({ main: "./index.js" }), "utf8");
+    await fsp.writeFile(localEntry, "module.exports = 1;\n", "utf8");
+
+    await expect(
+      resolveSpecifier(sourceFile, "parent-package", root, undefined, undefined, { resolveNodeModules: true }),
+    ).resolves.toEqual({ external: "parent-package" });
+
+    const resolvedLocal = await resolveSpecifier(sourceFile, "local-package", root, undefined, undefined, {
+      resolveNodeModules: true,
+    });
+    expect(typeof resolvedLocal).toBe("string");
+    if (typeof resolvedLocal === "string") {
+      expect(resolvedLocal.replace(/\\/g, "/")).toBe(localEntry.replace(/\\/g, "/"));
+    }
+  });
+
+  it("honors node_modules export patterns and refuses private package subpaths", async () => {
+    const root = await mkTmpDir("dg-resolve-node-exports-");
+    const sourceFile = path.join(root, "src", "main.ts");
+    const packageDir = path.join(root, "node_modules", "exported-package");
+    const exportedFile = path.join(packageDir, "dist", "esm", "feature.js");
+    const privateFile = path.join(packageDir, "private.js");
+
+    await fsp.mkdir(path.dirname(sourceFile), { recursive: true });
+    await fsp.mkdir(path.dirname(exportedFile), { recursive: true });
+    await fsp.writeFile(sourceFile, "export const main = 1;\n", "utf8");
+    await fsp.writeFile(exportedFile, "export const feature = 1;\n", "utf8");
+    await fsp.writeFile(privateFile, "export const privateValue = 1;\n", "utf8");
+    await fsp.writeFile(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        exports: {
+          "./features/*": {
+            import: ["./dist/missing/*.js", "./dist/esm/*.js"],
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const resolvedExport = await resolveSpecifier(
+      sourceFile,
+      "exported-package/features/feature",
+      root,
+      undefined,
+      undefined,
+      {
+        resolveNodeModules: true,
+      },
+    );
+    expect(typeof resolvedExport).toBe("string");
+    if (typeof resolvedExport === "string") {
+      expect(resolvedExport.replace(/\\/g, "/")).toBe(exportedFile.replace(/\\/g, "/"));
+    }
+    await expect(
+      resolveSpecifier(sourceFile, "exported-package/private", root, undefined, undefined, {
+        resolveNodeModules: true,
+      }),
+    ).resolves.toEqual({ external: "exported-package/private" });
+  });
+
+  it("resolves dual package exports by import mode without reusing the wrong cache entry", async () => {
+    const root = await mkTmpDir("dg-resolve-node-export-conditions-");
+    const sourceFile = path.join(root, "src", "main.ts");
+    const packageDir = path.join(root, "node_modules", "dual-package");
+    const importFile = path.join(packageDir, "dist", "import.mjs");
+    const requireFile = path.join(packageDir, "dist", "require.cjs");
+
+    await fsp.mkdir(path.dirname(sourceFile), { recursive: true });
+    await fsp.mkdir(path.dirname(importFile), { recursive: true });
+    await fsp.writeFile(sourceFile, "export const main = 1;\n", "utf8");
+    await fsp.writeFile(importFile, "export const esm = 1;\n", "utf8");
+    await fsp.writeFile(requireFile, "module.exports = 1;\n", "utf8");
+    await fsp.writeFile(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        exports: {
+          ".": {
+            import: "./dist/import.mjs",
+            require: "./dist/require.cjs",
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const imported = await resolveSpecifier(sourceFile, "dual-package", root, undefined, undefined, {
+      resolveNodeModules: true,
+      exportCondition: "import",
+    });
+    const required = await resolveSpecifier(sourceFile, "dual-package", root, undefined, undefined, {
+      resolveNodeModules: true,
+      exportCondition: "require",
+    });
+
+    expect(typeof imported).toBe("string");
+    expect(typeof required).toBe("string");
+    if (typeof imported === "string" && typeof required === "string") {
+      expect(imported.replace(/\\/g, "/")).toBe(importFile.replace(/\\/g, "/"));
+      expect(required.replace(/\\/g, "/")).toBe(requireFile.replace(/\\/g, "/"));
+    }
+  });
+
+  it("honors workspace export maps instead of resolving private source files", async () => {
+    const root = await mkTmpDir("dg-resolve-workspace-exports-");
+    const sourceFile = path.join(root, "src", "main.ts");
+    const packageDir = path.join(root, "packages", "library");
+    const exportedFile = path.join(packageDir, "src", "feature.ts");
+    const privateFile = path.join(packageDir, "private.ts");
+
+    await fsp.mkdir(path.dirname(sourceFile), { recursive: true });
+    await fsp.mkdir(path.dirname(exportedFile), { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ private: true, workspaces: ["packages/*"] }),
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "@scope/library",
+        exports: {
+          "./features/*": {
+            import: ["./src/*.ts"],
+          },
+        },
+      }),
+      "utf8",
+    );
+    await fsp.writeFile(sourceFile, "export const main = 1;\n", "utf8");
+    await fsp.writeFile(exportedFile, "export const feature = 1;\n", "utf8");
+    await fsp.writeFile(privateFile, "export const privateValue = 1;\n", "utf8");
+
+    const workspaceConfig = await loadWorkspaceConfig(root);
+    const resolvedExport = await resolveSpecifier(
+      sourceFile,
+      "@scope/library/features/feature",
+      root,
+      undefined,
+      workspaceConfig,
+    );
+    expect(typeof resolvedExport).toBe("string");
+    if (typeof resolvedExport === "string") {
+      expect(resolvedExport.replace(/\\/g, "/")).toBe(exportedFile.replace(/\\/g, "/"));
+    }
+    await expect(
+      resolveSpecifier(sourceFile, "@scope/library/private", root, undefined, workspaceConfig),
+    ).resolves.toEqual({ external: "@scope/library/private" });
   });
 });

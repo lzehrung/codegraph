@@ -63,10 +63,13 @@ export async function resolvePythonModule(
   const candidates: string[] = [];
   if (relPath) {
     candidates.push(path.join(startDir, relPath + ".py"));
+    candidates.push(path.join(startDir, relPath + ".pyi"));
     candidates.push(path.join(startDir, relPath, "__init__.py"));
+    candidates.push(path.join(startDir, relPath, "__init__.pyi"));
     candidates.push(path.join(startDir, relPath));
   } else if (importDotCount > 0) {
     candidates.push(path.join(startDir, "__init__.py"));
+    candidates.push(path.join(startDir, "__init__.pyi"));
   }
 
   for (const c of candidates) {
@@ -101,10 +104,14 @@ export async function resolvePythonModule(
 
     const anchorCandidates = [
       parentPath + ".py",
+      parentPath + ".pyi",
       path.join(parentPath, "__init__.py"),
+      path.join(parentPath, "__init__.pyi"),
       parentPath,
       anchorPath + ".py",
+      anchorPath + ".pyi",
       path.join(anchorPath, "__init__.py"),
+      path.join(anchorPath, "__init__.pyi"),
       anchorPath,
     ];
     for (const c of anchorCandidates) {

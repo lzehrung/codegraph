@@ -2,7 +2,21 @@ import fs from "node:fs";
 import path from "node:path";
 
 const requiredDistEntries = ["dist/index.js", "dist/cli.js", "dist/bin/cli.js", "dist/bin/queryIndexWorker.js"];
-const freshnessInputs = ["package.json", "tsconfig.json", "src"];
+const freshnessInputs = [
+  "package.json",
+  "tsconfig.json",
+  "src",
+  "scripts/bundle-cli.mjs",
+  "scripts/bundle-cli-lib.mjs",
+  "scripts/stage-core-package.mjs",
+  "scripts/stage-core-package-lib.mjs",
+  "scripts/build-native-if-available.mjs",
+  "scripts/build-native-if-available-lib.mjs",
+  "packages/codegraph-native/src",
+  "packages/codegraph-native/build.rs",
+  "packages/codegraph-native/Cargo.toml",
+  "packages/codegraph-native/Cargo.lock",
+];
 
 function collectNewestMtimeMs(entryPath) {
   if (!fs.existsSync(entryPath)) {

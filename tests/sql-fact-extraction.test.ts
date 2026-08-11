@@ -164,6 +164,36 @@ describe("SQL fact extraction", () => {
     ]);
   });
 
+  it("splits T-SQL GO batches without splitting BEGIN and END bodies", async () => {
+    const filePath = path.join(fixtureRoot, "tsql_batches.sql");
+    const facts = extractSqlFactsFromSource(filePath, await readFixture("tsql_batches.sql"));
+    const statementTexts = Array.from(new Set(facts.map((fact) => fact.statementText)));
+
+    expect(statementTexts).toEqual([
+      "CREATE TABLE source_users (id integer)",
+      [
+        "BEGIN",
+        "  INSERT INTO audit_users (id) SELECT id FROM source_users;",
+        "  SELECT id FROM source_users;",
+        "END",
+      ].join("\n"),
+      "SELECT id FROM audit_users",
+    ]);
+    expect(facts).toContainEqual(expect.objectContaining({ kind: "writes_to", objectName: "audit_users" }));
+    expect(facts).toContainEqual(expect.objectContaining({ kind: "reads_from", objectName: "source_users" }));
+    expect(facts).toContainEqual(expect.objectContaining({ kind: "reads_from", objectName: "audit_users" }));
+  });
+
+  it("extracts reads from nested comma-separated CTEs", async () => {
+    const filePath = path.join(fixtureRoot, "nested_ctes.sql");
+    const facts = extractSqlFactsFromSource(filePath, await readFixture("nested_ctes.sql"));
+
+    expect(facts).toEqual([
+      expect.objectContaining({ kind: "reads_from", objectName: "accounts" }),
+      expect.objectContaining({ kind: "reads_from", objectName: "users" }),
+    ]);
+  });
+
   it("handles PostgreSQL ONLY table modifiers as syntax instead of object names", () => {
     const filePath = path.join(fixtureRoot, "migrations", "20240510120100_only.sql");
     const facts = extractSqlFactsFromSource(

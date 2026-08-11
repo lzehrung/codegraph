@@ -211,7 +211,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   [
     "artifact",
     commandSchema(
-      [...SHARED_BUILD_FLAGS, "--force", "--graph-json", "--json", "--questions", "--report", "--sqlite"],
+      [...SHARED_BUILD_FLAGS, "--force", "--graph-json", ...JSON_OUTPUT_FLAGS, "--questions", "--report", "--sqlite"],
       [...SHARED_BUILD_OPTIONS, "--out", "--output"],
       {
         kind: "max",
@@ -222,7 +222,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ],
   [
     "chunk",
-    commandSchema(["--json", "--text"], ["--language", "--max-tokens", "--min-tokens"], {
+    commandSchema([...JSON_OUTPUT_FLAGS, "--text"], ["--language", "--max-tokens", "--min-tokens"], {
       kind: "max",
       max: 1,
       usage: "Usage: codegraph chunk <file-path> [options]",
@@ -244,10 +244,10 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ],
   [
     "doctor",
-    commandSchema(["--json"], [], {
+    commandSchema(["--json", "--pretty"], [], {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph doctor [artifact-path]",
+      usage: "Usage: codegraph doctor [artifact-path] [--json | --pretty]",
     }),
   ],
   [
@@ -350,12 +350,13 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   [
     "graph-delta",
     commandSchema(
-      [...SHARED_BUILD_FLAGS, "--incremental-strict"],
+      [...SHARED_BUILD_FLAGS, ...JSON_OUTPUT_FLAGS, "--incremental-strict"],
       [...SHARED_BUILD_OPTIONS, "--changed-since", "--git-base", "--git-head", "--output"],
       {
         kind: "max",
         max: 1,
-        usage: "Usage: codegraph graph-delta [project-root] [--root <path>] [--git-base <ref> | --changed-since <ref>]",
+        usage:
+          "Usage: codegraph graph-delta [project-root] [--root <path>] [--git-base <ref> | --changed-since <ref>] [--json | --pretty]",
       },
     ),
   ],
@@ -424,28 +425,36 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ["index", graphCommandSchema({ kind: "any" })],
   [
     "init",
-    commandSchema([...SHARED_BUILD_FLAGS, "--json", "--force", "--no-update-gitignore"], LIFECYCLE_BUILD_OPTIONS, {
-      kind: "max",
-      max: 1,
-      usage:
-        "Usage: codegraph init [path] [--force] [--no-update-gitignore] [--json] OR codegraph init --root <path> [--force] [--no-update-gitignore] [--json]",
-    }),
+    commandSchema(
+      [...SHARED_BUILD_FLAGS, "--json", "--pretty", "--force", "--no-update-gitignore"],
+      LIFECYCLE_BUILD_OPTIONS,
+      {
+        kind: "max",
+        max: 1,
+        usage:
+          "Usage: codegraph init [path] [--force] [--no-update-gitignore] [--json | --pretty] OR codegraph init --root <path> [--force] [--no-update-gitignore] [--json | --pretty]",
+      },
+    ),
   ],
   [
     "install",
-    commandSchema(["--all", "--detect", "--dry-run", "--yes"], ["--print-config", "--target"], {
-      kind: "max",
-      max: 1,
-      usage:
-        "Usage: codegraph install [target] [--target <ids> | --all] [--detect] [--yes | --dry-run] [--print-config <target>]",
-    }),
+    commandSchema(
+      ["--all", "--detect", "--dry-run", "--force", "--json", "--pretty", "--yes"],
+      ["--print-config", "--target"],
+      {
+        kind: "max",
+        max: 1,
+        usage:
+          "Usage: codegraph install [target] [--target <ids> | --all] [--detect] [--yes | --dry-run] [--force] [--json | --pretty] [--print-config <target>]",
+      },
+    ),
   ],
   [
     "uninstall",
-    commandSchema(["--detect", "--dry-run", "--yes"], ["--target"], {
+    commandSchema(["--detect", "--dry-run", "--json", "--pretty", "--yes"], ["--target"], {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph uninstall [target] [--target <ids>] [--detect] [--yes | --dry-run]",
+      usage: "Usage: codegraph uninstall [target] [--target <ids>] [--detect] [--yes | --dry-run] [--json | --pretty]",
     }),
   ],
   [
@@ -635,40 +644,46 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     commandSchema(["--force", "--json"], ["--agent", "--target"], {
       kind: "max",
       max: 2,
-      usage: "Usage: codegraph skill <install|print-path|doctor> [--agent <name> | --target <dir>] [--force]",
+      usage: "Usage: codegraph skill <install|print-path|doctor> [--agent <name> | --target <dir>] [--force] [--json]",
     }),
   ],
   [
     "status",
-    commandSchema([...STATUS_BUILD_FLAGS, "--json"], STATUS_BUILD_OPTIONS, {
+    commandSchema([...STATUS_BUILD_FLAGS, "--json", "--pretty"], STATUS_BUILD_OPTIONS, {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph status [path] [--json] OR codegraph status --root <path> [--json]",
+      usage: "Usage: codegraph status [path] [--json | --pretty] OR codegraph status --root <path> [--json | --pretty]",
     }),
   ],
   [
     "sync",
-    commandSchema([...SHARED_BUILD_FLAGS, "--json", "--init", "--no-update-gitignore"], LIFECYCLE_BUILD_OPTIONS, {
-      kind: "max",
-      max: 1,
-      usage:
-        "Usage: codegraph sync [path] [--init] [--no-update-gitignore] [--json] OR codegraph sync --root <path> [--init] [--no-update-gitignore] [--json]",
-    }),
+    commandSchema(
+      [...SHARED_BUILD_FLAGS, "--json", "--pretty", "--init", "--no-update-gitignore"],
+      LIFECYCLE_BUILD_OPTIONS,
+      {
+        kind: "max",
+        max: 1,
+        usage:
+          "Usage: codegraph sync [path] [--init] [--no-update-gitignore] [--json | --pretty] OR codegraph sync --root <path> [--init] [--no-update-gitignore] [--json | --pretty]",
+      },
+    ),
   ],
   [
     "sql",
     commandSchema(["--json"], ["--db", "--query", "--sqlite"], {
       kind: "max",
       max: 2,
-      usage: 'Usage: codegraph sql <sqlite-path> "SELECT ..." OR codegraph sql --db <sqlite path> --query "SELECT ..."',
+      usage:
+        'Usage: codegraph sql <sqlite-path> "SELECT ..." [--json] OR codegraph sql --db <sqlite path> --query "SELECT ..." [--json]',
     }),
   ],
   [
     "uninit",
-    commandSchema(["--force", "--json"], ["--root"], {
+    commandSchema(["--force", "--json", "--pretty"], ["--root"], {
       kind: "max",
       max: 1,
-      usage: "Usage: codegraph uninit [path] [--force] [--json] OR codegraph uninit --root <path> [--force] [--json]",
+      usage:
+        "Usage: codegraph uninit [path] [--force] [--json | --pretty] OR codegraph uninit --root <path> [--force] [--json | --pretty]",
     }),
   ],
   [
@@ -689,7 +704,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ],
   [
     "version",
-    commandSchema(["--json"], [], {
+    commandSchema(["--json", "--pretty"], [], {
       kind: "none",
       usage: "Usage: codegraph version [--json | --pretty]",
     }),
@@ -697,7 +712,7 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
 ]);
 
 function allowedFlagsForSchema(schema: CliCommandSchema): Set<string> {
-  return new Set(["--help", "-h", "--version", "-v", "--json", "--pretty", ...(schema.flags ?? [])]);
+  return new Set(["--help", "-h", "--version", "-v", "--debug", ...(schema.flags ?? [])]);
 }
 
 function allowedOptionsForSchema(schema: CliCommandSchema): Set<string> {

@@ -6,6 +6,7 @@ export const PHP_DEF: LanguageDefinition = {
   id: "php",
   extensions: [".php"],
   grammar: () => loadTreeSitterLanguage("tree-sitter-php"),
+  usesQueryDrivenLocals: true,
   structure: {
     blocks: [
       {
@@ -80,7 +81,6 @@ export const PHP_DEF: LanguageDefinition = {
       (const_declaration (const_element (name) @name))
     `,
     locals: `
-      (namespace_definition name: (namespace_name) @name)
       (class_declaration name: (name) @name)
       (interface_declaration name: (name) @name)
       (trait_declaration name: (name) @name)
@@ -119,6 +119,7 @@ export const PHP_DEF: LanguageDefinition = {
     }
     return "variable";
   },
+  normalizeIdentifier: (name) => name.replace(/^\$/, ""),
   isDeclarationName: (node) => {
     const parent = node.parent;
     if (!parent) return false;
@@ -138,13 +139,15 @@ export const PHP_DEF: LanguageDefinition = {
       return parent.childForFieldName("name")?.id === node.id;
     }
 
+    if (parent.type === "property_element" && node.type === "variable_name") return true;
     return (
       parent.type === "const_element" &&
       parent.namedChildren.some((child) => child.id === node.id && child.type === "name")
     );
   },
-  createsBlockScope: (node) => node.type === "compound_statement" || node.type === "program",
+  scopeDeclarationNames: (node) => node.type === "variable_name" && node.parent?.type === "property_element",
   createsFunctionScope: (node) => node.type === "function_definition" || node.type === "method_declaration",
+  membersAreImplicitlyInScope: false,
   supportsCrossModuleSymbols: true,
 };
 

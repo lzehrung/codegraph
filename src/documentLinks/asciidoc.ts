@@ -3,10 +3,43 @@ import { type ModuleSpecifier } from "../util/specifiers.js";
 import { extractHtmlAttributeSpecifiers } from "./html.js";
 import { dedupeModuleSpecifiers, normalizeLinkSpecifier } from "./shared.js";
 
+function blankAsciidocLine(line: string): string {
+  return line.replace(/[^\r\n]/g, " ");
+}
+
+function stripAsciidocCommentsAndLiteralBlocks(source: string): string {
+  const lines = source.split(/\r?\n/);
+  let blockDelimiter: "----" | "...." | "////" | null = null;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    const trimmed = line.trim();
+
+    if (blockDelimiter) {
+      lines[index] = blankAsciidocLine(line);
+      if (trimmed === blockDelimiter) blockDelimiter = null;
+      continue;
+    }
+
+    if (trimmed === "----" || trimmed === "...." || trimmed === "////") {
+      blockDelimiter = trimmed;
+      lines[index] = blankAsciidocLine(line);
+      continue;
+    }
+
+    if (/^\s*\/\//.test(line)) {
+      lines[index] = blankAsciidocLine(line);
+    }
+  }
+
+  return lines.join("\n");
+}
+
 export function extractAsciidocModuleSpecifiers(source: string): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
+  const cleaned = stripAsciidocCommentsAndLiteralBlocks(source);
 
-  for (const match of source.matchAll(/\b(xref|link):([^\[\s]+)\[[^\]]*]/g)) {
+  for (const match of cleaned.matchAll(/\b(xref|link):([^\[\s]+)\[[^\]]*]/g)) {
     const directive = (match[1] ?? "").toLowerCase();
     const rawSpecifier = match[2]?.trim();
     if (!rawSpecifier) continue;
@@ -24,7 +57,7 @@ export function extractAsciidocModuleSpecifiers(source: string): ModuleSpecifier
     }
   }
 
-  for (const match of source.matchAll(/\binclude::([^\[\n]+)\[[^\]]*]/g)) {
+  for (const match of cleaned.matchAll(/^\s*include::([^\[\n]+)\[[^\]]*]/gm)) {
     const rawSpecifier = match[1]?.trim();
     if (!rawSpecifier) continue;
     const normalized = normalizeLinkSpecifier(rawSpecifier, {
@@ -35,7 +68,7 @@ export function extractAsciidocModuleSpecifiers(source: string): ModuleSpecifier
     if (normalized) out.push(normalized);
   }
 
-  for (const match of source.matchAll(/<<([^>,]+)(?:,[^>]*)?>>/g)) {
+  for (const match of cleaned.matchAll(/<<([^>,]+)(?:,[^>]*)?>>/g)) {
     const rawSpecifier = match[1]?.trim();
     if (!rawSpecifier) continue;
     if (!isLikelyAsciidocFileTarget(rawSpecifier)) continue;
@@ -48,7 +81,7 @@ export function extractAsciidocModuleSpecifiers(source: string): ModuleSpecifier
   }
 
   out.push(
-    ...extractHtmlAttributeSpecifiers(source, {
+    ...extractHtmlAttributeSpecifiers(cleaned, {
       a: ["href"],
     }),
   );

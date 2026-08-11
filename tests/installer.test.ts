@@ -716,6 +716,31 @@ describe("agent installer workflow", () => {
     });
   });
 
+  it("lists every conflicting skill path and force guidance for multiple skill collisions", async () => {
+    const homeDir = await mkTmpDir("cg-install-multiple-skill-collisions-");
+    const agentsSkillPath = path.join(homeDir, ".agents", "skills", "codegraph", "SKILL.md");
+    const claudeSkillPath = path.join(homeDir, ".claude", "skills", "codegraph", "SKILL.md");
+    const userSkill = "# User maintained Codegraph skill\n";
+
+    await fsp.mkdir(path.dirname(agentsSkillPath), { recursive: true });
+    await fsp.mkdir(path.dirname(claudeSkillPath), { recursive: true });
+    await fsp.writeFile(agentsSkillPath, userSkill, "utf8");
+    await fsp.writeFile(claudeSkillPath, userSkill, "utf8");
+
+    let caught: unknown;
+    try {
+      await installCodegraphTargets({ homeDir, targetIds: ["agents", "claude"], yes: true });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(InstallerCollisionError);
+    if (!(caught instanceof InstallerCollisionError)) throw caught;
+    expect(caught.message).toContain("--force");
+    expect(caught.message).toContain(normalizeExpectedPath(agentsSkillPath));
+    expect(caught.message).toContain(normalizeExpectedPath(claudeSkillPath));
+  });
+
   it("returns one JSON collision envelope without stderr", async () => {
     const homeDir = await mkTmpDir("cg-install-json-collision-cli-");
     const configPath = path.join(homeDir, ".cursor", "mcp.json");
@@ -927,6 +952,58 @@ describe("agent installer workflow", () => {
     }
   });
 
+  it("attempts every rollback restore and reports entries that remain unrestored", async () => {
+    const homeDir = await mkTmpDir("cg-install-rollback-restore-");
+    await installCodegraphTargets({ homeDir, targetIds: ["codex"], yes: true });
+    const skillPath = path.join(homeDir, ".codex", "skills", "codegraph", "SKILL.md");
+    const markerPath = path.join(homeDir, ".codex", "skills", "codegraph", "CODEGRAPH_INSTALLED");
+    const configPath = path.join(homeDir, ".codex", "config.toml");
+    const originalSkill = await fsp.readFile(skillPath);
+    const originalConfig = await fsp.readFile(configPath);
+    const originalRemove = fsp.rm.bind(fsp);
+    const remove = vi.spyOn(fsp, "rm").mockImplementation(async (target, options) => {
+      if (path.resolve(String(target)) === path.resolve(skillPath)) return;
+      await originalRemove(target, options);
+    });
+    const originalRename = fsp.rename.bind(fsp);
+    const rename = vi.spyOn(fsp, "rename").mockImplementation(async (source, target) => {
+      if (path.resolve(String(target)) === path.resolve(markerPath)) {
+        throw Object.assign(new Error("injected marker restore failure"), { code: "EIO" });
+      }
+      await originalRename(source, target);
+    });
+    try {
+      await expect(uninstallCodegraphTargets({ homeDir, targetIds: ["codex"], yes: true })).rejects.toThrow(
+        normalizeExpectedPath(markerPath),
+      );
+    } finally {
+      rename.mockRestore();
+      remove.mockRestore();
+    }
+
+    await expect(fsp.readFile(skillPath)).resolves.toEqual(originalSkill);
+    await expect(fsp.readFile(configPath)).resolves.toEqual(originalConfig);
+    await expect(fsp.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("removes an orphan installer marker when the skill file is already missing", async () => {
+    const homeDir = await mkTmpDir("cg-uninstall-orphan-marker-");
+    await installCodegraphTargets({ homeDir, targetIds: ["codex"], yes: true });
+    const skillPath = path.join(homeDir, ".codex", "skills", "codegraph", "SKILL.md");
+    const markerPath = path.join(homeDir, ".codex", "skills", "codegraph", "CODEGRAPH_INSTALLED");
+    await fsp.rm(skillPath);
+
+    const result = await uninstallCodegraphTargets({ homeDir, targetIds: ["codex"], yes: true });
+
+    expectInstallerChange(result.changes, {
+      target: "codex",
+      action: "delete",
+      path: markerPath,
+      dryRun: false,
+    });
+    await expect(fsp.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it.each([
     { name: "config", destinationForHome: (homeDir: string) => path.join(homeDir, ".cursor", "mcp.json") },
     {
@@ -959,31 +1036,111 @@ describe("agent installer workflow", () => {
     await expect(readFile(linkedTarget)).resolves.toBe("user-owned target\n");
   });
 
-  it.each(["directory", "legacy file"] as const)("retains an abandoned %s lock", async (lockKind) => {
-    const homeDir = await mkTmpDir("cg-install-abandoned-lock-");
+  function installerTransactionLockPathFor(homeDir: string): string {
     const scope = path.resolve(homeDir);
-    const lockPath = path.join(
-      os.tmpdir(),
-      `codegraph-installer-${createHash("sha256").update(scope).digest("hex")}.lock`,
-    );
+    return path.join(os.tmpdir(), `codegraph-installer-${createHash("sha256").update(scope).digest("hex")}.lock`);
+  }
+
+  it("reclaims an abandoned expired lock file and proceeds with the install", async () => {
+    const homeDir = await mkTmpDir("cg-install-abandoned-lock-");
+    const lockPath = installerTransactionLockPathFor(homeDir);
     const metadata = `${JSON.stringify({
       owner: "abandoned-owner",
       pid: findDeadProcessId(),
       leaseExpiresAt: new Date(Date.now() - 60_000).toISOString(),
     })}\n`;
-    if (lockKind === "directory") {
-      await fsp.mkdir(lockPath);
-      await fsp.writeFile(path.join(lockPath, "owner.json"), metadata, "utf8");
-    } else {
-      await fsp.writeFile(lockPath, metadata, "utf8");
+    await fsp.writeFile(lockPath, metadata, "utf8");
+
+    try {
+      const result = await installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true });
+
+      expect(result.installed).toBe(true);
+      expect(result.verified).toBe(true);
+      await expect(fsp.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+      const config = JSON.parse(await readFile(path.join(homeDir, ".cursor", "mcp.json"))) as {
+        mcpServers?: { codegraph?: { command?: string } };
+      };
+      expect(config.mcpServers?.codegraph?.command).toBe("codegraph");
+    } finally {
+      await fsp.rm(lockPath, { force: true });
     }
+  });
+
+  it("does not reclaim a lock whose lease is still owned by another installer", async () => {
+    const homeDir = await mkTmpDir("cg-install-live-lock-");
+    const lockPath = installerTransactionLockPathFor(homeDir);
+    const metadata = `${JSON.stringify({
+      owner: "live-owner",
+      pid: findDeadProcessId(),
+      leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+    })}\n`;
+    await fsp.writeFile(lockPath, metadata, "utf8");
 
     try {
       await expect(installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true })).rejects.toThrow(
         "Another Codegraph installer is still updating",
       );
-      const stats = await fsp.lstat(lockPath);
-      expect(lockKind === "directory" ? stats.isDirectory() : stats.isFile()).toBe(true);
+      expect(await readFile(lockPath)).toBe(metadata);
+    } finally {
+      await fsp.rm(lockPath, { force: true });
+    }
+  });
+
+  it.each([
+    ["unparseable", "this is not installer lease metadata\n"],
+    [
+      "undatable",
+      `${JSON.stringify({ owner: "corrupt-owner", pid: findDeadProcessId(), leaseExpiresAt: "not-a-date" })}\n`,
+    ],
+  ])("retains a lock with %s metadata and reports an actionable error", async (_description, content) => {
+    const homeDir = await mkTmpDir("cg-install-corrupt-lock-");
+    const lockPath = installerTransactionLockPathFor(homeDir);
+    await fsp.writeFile(lockPath, content, "utf8");
+
+    try {
+      await expect(installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true })).rejects.toThrow(
+        /could not be safely reclaimed.*delete that lock file and retry/iu,
+      );
+      expect(await readFile(lockPath)).toBe(content);
+    } finally {
+      await fsp.rm(lockPath, { force: true });
+    }
+  });
+
+  it("reclaims a corrupt lock that provably has no live owner", async () => {
+    const homeDir = await mkTmpDir("cg-install-orphaned-lock-");
+    const lockPath = installerTransactionLockPathFor(homeDir);
+    await fsp.writeFile(lockPath, "this is not installer lease metadata\n", "utf8");
+    const abandonedAt = new Date(Date.now() - 120_000);
+    await fsp.utimes(lockPath, abandonedAt, abandonedAt);
+
+    try {
+      const result = await installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true });
+
+      expect(result.installed).toBe(true);
+      expect(result.verified).toBe(true);
+      await expect(fsp.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await fsp.rm(lockPath, { force: true });
+    }
+  });
+
+  it("retains an abandoned legacy directory lock", async () => {
+    const homeDir = await mkTmpDir("cg-install-abandoned-dir-lock-");
+    const lockPath = installerTransactionLockPathFor(homeDir);
+    const metadata = `${JSON.stringify({
+      owner: "abandoned-owner",
+      pid: findDeadProcessId(),
+      leaseExpiresAt: new Date(Date.now() - 60_000).toISOString(),
+    })}\n`;
+    await fsp.mkdir(lockPath);
+    await fsp.writeFile(path.join(lockPath, "owner.json"), metadata, "utf8");
+
+    try {
+      await expect(installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true })).rejects.toThrow(
+        /could not be safely reclaimed/iu,
+      );
+      expect((await fsp.lstat(lockPath)).isDirectory()).toBe(true);
     } finally {
       await fsp.rm(lockPath, { recursive: true, force: true });
     }
@@ -1189,6 +1346,92 @@ describe("agent installer workflow", () => {
     await expect(fsp.stat(path.join(skillDir, "CODEGRAPH_INSTALLED"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("removes stale installer-owned skill payloads with a recorded marker on uninstall", async () => {
+    const homeDir = await mkTmpDir("cg-uninstall-stale-skill-");
+    const skillDir = path.join(homeDir, ".agents", "skills", "codegraph");
+    const skillPath = path.join(skillDir, "SKILL.md");
+    const markerPath = path.join(skillDir, "CODEGRAPH_INSTALLED");
+    const previousSkill = "# Previous bundled Codegraph skill\n";
+    const previousSha = createHash("sha256").update(previousSkill).digest("hex");
+
+    await installCodegraphTargets({ homeDir, targetIds: ["agents"], yes: true });
+    await fsp.writeFile(skillPath, previousSkill, "utf8");
+    await fsp.writeFile(
+      markerPath,
+      `Installed by codegraph install for Agents skill directory.\nskillSha256=${previousSha}\n`,
+      "utf8",
+    );
+
+    await uninstallCodegraphTargets({ homeDir, targetIds: ["agents"], yes: true });
+
+    await expect(fsp.stat(skillPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fsp.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("treats a sha-less legacy marker as a collision and preserves it on uninstall", async () => {
+    const homeDir = await mkTmpDir("cg-shaless-marker-");
+    const skillDir = path.join(homeDir, ".agents", "skills", "codegraph");
+    const skillPath = path.join(skillDir, "SKILL.md");
+    const markerPath = path.join(skillDir, "CODEGRAPH_INSTALLED");
+    const previousSkill = await readFile(BUNDLED_SKILL_PATH);
+    const legacyMarker = "Installed by codegraph install for Agents skill directory.\n";
+
+    await fsp.mkdir(skillDir, { recursive: true });
+    await fsp.writeFile(skillPath, previousSkill, "utf8");
+    await fsp.writeFile(markerPath, legacyMarker, "utf8");
+
+    await expect(installCodegraphTargets({ homeDir, targetIds: ["agents"], yes: true })).rejects.toBeInstanceOf(
+      InstallerCollisionError,
+    );
+    await expect(readFile(skillPath)).resolves.toBe(previousSkill);
+    await expect(readFile(markerPath)).resolves.toBe(legacyMarker);
+
+    await uninstallCodegraphTargets({ homeDir, targetIds: ["agents"], yes: true });
+
+    await expect(readFile(skillPath)).resolves.toBe(previousSkill);
+    await expect(readFile(markerPath)).resolves.toBe(legacyMarker);
+  });
+
+  it("allows install after uninstalling a simulated upgraded skill payload", async () => {
+    const homeDir = await mkTmpDir("cg-uninstall-upgraded-skill-round-trip-");
+    const skillDir = path.join(homeDir, ".agents", "skills", "codegraph");
+    const skillPath = path.join(skillDir, "SKILL.md");
+    const markerPath = path.join(skillDir, "CODEGRAPH_INSTALLED");
+    const previousSkill = "# Previous bundled Codegraph skill\n";
+    const previousSha = createHash("sha256").update(previousSkill).digest("hex");
+
+    await installCodegraphTargets({ homeDir, targetIds: ["agents"], yes: true });
+    await fsp.writeFile(skillPath, previousSkill, "utf8");
+    await fsp.writeFile(
+      markerPath,
+      `Installed by codegraph install for Agents skill directory.\nskillSha256=${previousSha}\n`,
+      "utf8",
+    );
+    await uninstallCodegraphTargets({ homeDir, targetIds: ["agents"], yes: true });
+
+    await installCodegraphTargets({ homeDir, targetIds: ["agents"], yes: true });
+
+    expect(await readFile(skillPath)).toBe(await readFile(BUNDLED_SKILL_PATH));
+    expect(await readFile(markerPath)).toContain("skillSha256=");
+  });
+
+  it("preserves a user-owned skill and its marker on uninstall", async () => {
+    const homeDir = await mkTmpDir("cg-uninstall-user-owned-skill-");
+    const skillDir = path.join(homeDir, ".agents", "skills", "codegraph");
+    const skillPath = path.join(skillDir, "SKILL.md");
+    const markerPath = path.join(skillDir, "CODEGRAPH_INSTALLED");
+    const userSkill = "# User maintained Codegraph skill\nDo not delete.\n";
+
+    await installCodegraphTargets({ homeDir, targetIds: ["agents"], yes: true });
+    const marker = await readFile(markerPath);
+    await fsp.writeFile(skillPath, userSkill, "utf8");
+
+    await uninstallCodegraphTargets({ homeDir, targetIds: ["agents"], yes: true });
+
+    expect(await readFile(skillPath)).toBe(userSkill);
+    expect(await readFile(markerPath)).toBe(marker);
+  });
+
   it("installs and removes the bundled skill payload for a Codex MCP target without deleting user files", async () => {
     const homeDir = await mkTmpDir("cg-install-codex-skill-payload-");
     const skillDir = path.join(homeDir, ".codex", "skills", "codegraph");
@@ -1242,7 +1485,7 @@ describe("agent installer workflow", () => {
     expect(await readFile(extraFilePath)).toBe(extraFile);
   });
 
-  it("preserves modified installer-owned SKILL.md on uninstall", async () => {
+  it("preserves a modified installer-owned SKILL.md and marker on uninstall", async () => {
     const homeDir = await mkTmpDir("cg-uninstall-skill-modified-");
     const skillDir = path.join(homeDir, ".agents", "skills", "codegraph");
     const installedSkillPath = path.join(skillDir, "SKILL.md");
@@ -1255,7 +1498,7 @@ describe("agent installer workflow", () => {
     await uninstallCodegraphTargets({ homeDir, targetIds: ["agents"], yes: true });
 
     expect(await readFile(installedSkillPath)).toBe(modifiedSkill);
-    await expect(fsp.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(markerPath)).toContain("skillSha256=");
   });
 
   it("preserves an unmarked user-owned skill payload on uninstall", async () => {
@@ -1509,6 +1752,96 @@ describe("agent installer workflow", () => {
     ]) {
       await expect(fsp.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
     }
+  });
+
+  it("preserves a pre-existing user-owned SKILL.md without --force and overwrites with --force", async () => {
+    const homeDir = await mkTmpDir("cg-install-user-skill-collision-");
+    const skillDir = path.join(homeDir, ".agents", "skills", "codegraph");
+    const skillPath = path.join(skillDir, "SKILL.md");
+    const userSkill = "# User maintained Codegraph skill\nDo not overwrite.\n";
+
+    await fsp.mkdir(skillDir, { recursive: true });
+    await fsp.writeFile(skillPath, userSkill, "utf8");
+
+    let caught: unknown;
+    try {
+      await installCodegraphTargets({ homeDir, targetIds: ["agents"], yes: true });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(InstallerCollisionError);
+    const collision = caught as InstallerCollisionError;
+    expect(collision.conflicts).toEqual([
+      {
+        target: "agents",
+        path: normalizeExpectedPath(skillPath),
+        kind: "user-owned-skill",
+      },
+    ]);
+    expect(await readFile(skillPath)).toBe(userSkill);
+    await expect(fsp.stat(path.join(skillDir, "CODEGRAPH_INSTALLED"))).rejects.toMatchObject({ code: "ENOENT" });
+
+    await installCodegraphTargets({ homeDir, targetIds: ["agents"], yes: true, force: true });
+    expect(await readFile(skillPath)).toBe(await readFile(BUNDLED_SKILL_PATH));
+    expect(await readFile(path.join(skillDir, "CODEGRAPH_INSTALLED"))).toContain("skillSha256=");
+  });
+
+  it("upgrades an unmodified Codegraph-owned SKILL.md when the recorded payload differs", async () => {
+    const homeDir = await mkTmpDir("cg-install-owned-skill-upgrade-");
+    const skillDir = path.join(homeDir, ".agents", "skills", "codegraph");
+    const skillPath = path.join(skillDir, "SKILL.md");
+    const markerPath = path.join(skillDir, "CODEGRAPH_INSTALLED");
+    const previousSkill = "# Previous Codegraph bundled skill\n";
+    const previousSha = createHash("sha256").update(previousSkill).digest("hex");
+
+    await fsp.mkdir(skillDir, { recursive: true });
+    await fsp.writeFile(skillPath, previousSkill, "utf8");
+    await fsp.writeFile(
+      markerPath,
+      `Installed by codegraph install for Agents skill directory.\nskillSha256=${previousSha}\n`,
+      "utf8",
+    );
+
+    await installCodegraphTargets({ homeDir, targetIds: ["agents"], yes: true });
+
+    expect(await readFile(skillPath)).toBe(await readFile(BUNDLED_SKILL_PATH));
+    const marker = await readFile(markerPath);
+    expect(marker).toContain("skillSha256=");
+    expect(marker).not.toContain(previousSha);
+  });
+
+  it("preserves a customized Codegraph skill when the ownership hash no longer matches", async () => {
+    const homeDir = await mkTmpDir("cg-install-modified-owned-skill-");
+    const skillDir = path.join(homeDir, ".agents", "skills", "codegraph");
+    const skillPath = path.join(skillDir, "SKILL.md");
+    const markerPath = path.join(skillDir, "CODEGRAPH_INSTALLED");
+    const customized = `${await readFile(BUNDLED_SKILL_PATH)}\n# Local customization\n`;
+
+    await installCodegraphTargets({ homeDir, targetIds: ["agents"], yes: true });
+    await fsp.writeFile(skillPath, customized, "utf8");
+
+    await expect(installCodegraphTargets({ homeDir, targetIds: ["agents"], yes: true })).rejects.toBeInstanceOf(
+      InstallerCollisionError,
+    );
+    expect(await readFile(skillPath)).toBe(customized);
+    expect(await readFile(markerPath)).toContain("skillSha256=");
+  });
+
+  it("rolls back skill writes when a later config collision is detected in the same plan", async () => {
+    const homeDir = await mkTmpDir("cg-install-skill-config-preflight-");
+    const cursorConfigPath = path.join(homeDir, ".cursor", "mcp.json");
+    const cursorSkillPath = path.join(homeDir, ".cursor", "skills", "codegraph", "SKILL.md");
+    await fsp.mkdir(path.dirname(cursorConfigPath), { recursive: true });
+    await fsp.writeFile(
+      cursorConfigPath,
+      `${JSON.stringify({ mcpServers: { codegraph: { command: "other-tool", note: "user-owned" } } }, null, 2)}\n`,
+      "utf8",
+    );
+
+    await expect(installCodegraphTargets({ homeDir, targetIds: ["cursor"], yes: true })).rejects.toBeInstanceOf(
+      InstallerCollisionError,
+    );
+    await expect(fsp.stat(cursorSkillPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("prints direct config snippets through the library helper", async () => {

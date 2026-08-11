@@ -1,5 +1,11 @@
 import path from "node:path";
-import { normalizePath, toProjectDisplayPath, toProjectRelativePath } from "../util/paths.js";
+import {
+  fileIdentityKey,
+  normalizePath,
+  resolveFilePathFromRoot,
+  toProjectDisplayPath,
+  toProjectRelativePath,
+} from "../util/paths.js";
 import { parseSourceLocationInput } from "../util/sourceLocation.js";
 import { type AgentFollowUp, toolFollowUp } from "./followUps.js";
 
@@ -20,16 +26,14 @@ export function normalizeAgentOutputPath(root: string, file: string): string {
 }
 
 export function createAgentFileLookup(files: readonly string[]): Map<string, string> {
-  return new Map(files.map((file) => [normalizePath(file), normalizePath(file)]));
+  return new Map(files.map((file) => [fileIdentityKey(file), normalizePath(file)]));
 }
 
 export function resolveAgentSnapshotFile(snapshot: AgentFileSnapshot, candidate: string): string | null {
   const normalizedFiles = snapshot.fileLookup ?? createAgentFileLookup(snapshot.files);
   const resolveCandidate = (value: string): string | null => {
-    const absoluteCandidate = path.isAbsolute(value)
-      ? normalizePath(value)
-      : normalizePath(path.resolve(snapshot.root, value));
-    return normalizedFiles.get(absoluteCandidate) ?? null;
+    const absoluteCandidate = resolveFilePathFromRoot(snapshot.root, value);
+    return normalizedFiles.get(fileIdentityKey(absoluteCandidate)) ?? null;
   };
   const direct = resolveCandidate(candidate);
   if (direct) return direct;

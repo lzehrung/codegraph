@@ -2,6 +2,11 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  extractHtmlAttributeSpecifiers,
+  extractHtmlInlineScriptSpecifiers,
+  extractHtmlStyleSpecifiers,
+} from "../src/documentLinks.js";
 import { collectGraph } from "../src/index.js";
 
 describe("document link graph extraction", () => {
@@ -806,5 +811,54 @@ describe("document link graph extraction", () => {
           (edge.to.name === "{dynamicPath}" || edge.raw === "{dynamicPath}"),
       ),
     ).toBe(false);
+  });
+});
+
+describe("html scanner quote and context awareness", () => {
+  it("keeps attribute edges when an attribute value contains an HTML comment opener", () => {
+    const specs = extractHtmlAttributeSpecifiers('<a title="<!--" href="./dep.js">x</a>');
+    expect(specs.some((entry) => entry.spec === "./dep.js")).toBe(true);
+  });
+
+  it("still ignores genuinely commented-out tags while keeping later real edges", () => {
+    const specs = extractHtmlAttributeSpecifiers(
+      '<!-- <script src="./commented.js"></script> -->\n<script src="./real.js"></script>',
+    );
+    expect(specs.some((entry) => entry.spec === "./real.js")).toBe(true);
+    expect(specs.some((entry) => entry.spec === "./commented.js")).toBe(false);
+  });
+
+  it("keeps attribute edges when an attribute value contains a literal-block opener", () => {
+    const specs = extractHtmlAttributeSpecifiers('<a data="<pre>" href="./dep.js">x</a>');
+    expect(specs.some((entry) => entry.spec === "./dep.js")).toBe(true);
+  });
+
+  it("still ignores pre literal blocks while keeping later real edges", () => {
+    const specs = extractHtmlAttributeSpecifiers(
+      '<pre><a href="./literal.html">example</a></pre>\n<a href="./real.html">real</a>',
+    );
+    expect(specs.some((entry) => entry.spec === "./real.html")).toBe(true);
+    expect(specs.some((entry) => entry.spec === "./literal.html")).toBe(false);
+  });
+
+  it("keeps inline style imports when a quoted attribute contains an angle bracket", () => {
+    const specs = extractHtmlStyleSpecifiers(`<style data=" > ">@import './dep.css';</style>`);
+    expect(specs.some((entry) => entry.spec === "./dep.css")).toBe(true);
+  });
+
+  it("keeps inline script imports when a script string contains an HTML comment opener", () => {
+    const specs = extractHtmlInlineScriptSpecifiers(`<script>const marker = "<!--"; import('./dep.js')</script>`);
+    expect(specs.some((entry) => entry.spec === "./dep.js")).toBe(true);
+  });
+
+  it("keeps markup after a self-closing literal-block tag", () => {
+    const specs = extractHtmlAttributeSpecifiers('<pre/>\n<a href="./real.html">real</a>');
+    expect(specs.some((entry) => entry.spec === "./real.html")).toBe(true);
+  });
+
+  it("keeps scanning later markup after an unclosed raw-text tag in a malformed document", () => {
+    const specs = extractHtmlAttributeSpecifiers('<script src="./a.js"><a href="./b.html">');
+    expect(specs.some((entry) => entry.spec === "./a.js")).toBe(true);
+    expect(specs.some((entry) => entry.spec === "./b.html")).toBe(true);
   });
 });

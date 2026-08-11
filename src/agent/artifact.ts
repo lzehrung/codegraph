@@ -6,7 +6,7 @@ import { defNodeId } from "../graphs/symbol-graph.js";
 import type { BuildOptions } from "../indexer/types.js";
 import { queryGraphSqliteRaw, writeGraphSqlite } from "../sqlite.js";
 import { isPlainRecord } from "../util/guards.js";
-import { isFilePathWithinRoot, normalizePath, toProjectRelativePath } from "../util/paths.js";
+import { fileIdentityKey, isFilePathWithinRoot, normalizePath, toProjectRelativePath } from "../util/paths.js";
 import { formatAgentSqlHandle, formatAgentSymbolHandle } from "./handles.js";
 import { createAgentFileLookup, normalizeAgentFilePath } from "./normalize.js";
 import { createAgentSession } from "./session.js";
@@ -68,7 +68,7 @@ type PortableGraphBody = {
 };
 
 type PortableGraphJson = PortableGraphBody & {
-  schemaVersion: 1;
+  schemaVersion: 2;
   format: "codegraph.graph-json";
   graph: PortableGraphBody;
 };
@@ -410,7 +410,7 @@ function outputIgnoreGlobs(root: string, outDir: string): string[] {
 }
 
 export function buildCodegraphGraphJson(snapshot: AgentProjectSnapshot): {
-  schemaVersion: 1;
+  schemaVersion: 2;
   format: "codegraph.graph-json";
   files: PortableGraphJson["files"];
   fileEdges: PortableGraphJson["fileEdges"];
@@ -464,7 +464,7 @@ export function buildCodegraphGraphJson(snapshot: AgentProjectSnapshot): {
       }),
   };
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     format: "codegraph.graph-json",
     files: graph.files,
     fileEdges: graph.fileEdges,
@@ -716,7 +716,9 @@ function collectSqlObjects(
     .filter((node) => node.kind === "table" || node.kind === "view" || node.kind === "index" || node.kind === "routine")
     .map((node) => {
       const file = normalizeAgentFilePath(snapshot.root, node.file);
-      const def = snapshot.index.byFile.get(node.file)?.locals.find((local) => defNodeId(local) === node.id);
+      const def = snapshot.index.byFile
+        .get(fileIdentityKey(node.file))
+        ?.locals.find((local) => defNodeId(local) === node.id);
       return {
         name: node.name,
         kind: node.kind,

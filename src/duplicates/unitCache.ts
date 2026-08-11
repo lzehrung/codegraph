@@ -26,6 +26,8 @@ import type {
   DuplicateUnitDiskDatabaseEntry,
   DuplicateUnitDiskStatements,
 } from "./types.js";
+import { lruMapGet } from "../util/lruMap.js";
+import { fileIdentityKey, normalizePath } from "../util/paths.js";
 
 // v3: drop dead `text`/`normalizedTokens` fields (never read after construction) and
 // brotli-compress the payload; both cut on-disk cache size by roughly 8x.
@@ -36,6 +38,8 @@ export const DUPLICATE_UNIT_CACHE_SCHEMA_VERSION_KEY = "duplicate_unit_cache.sch
 export const DUPLICATE_TOKENIZER_REVISION = 2;
 export const DUPLICATE_UNIT_CACHE_MAX_ROWS = 5_000;
 export const DUPLICATE_UNIT_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1_000;
+export const DUPLICATE_UNIT_MEMORY_CACHE_MAX_ENTRIES = 2_048;
+export const DUPLICATE_UNIT_MEMORY_CACHE_MAX_BYTES = 64 * 1024 * 1024;
 export const DUPLICATE_UNIT_CACHE_COLUMNS: readonly SqliteTableColumn[] = [
   { name: "file", definition: "TEXT NOT NULL" },
   { name: "variant", definition: "TEXT NOT NULL" },
@@ -47,6 +51,79 @@ export const DUPLICATE_UNIT_CACHE_COLUMNS: readonly SqliteTableColumn[] = [
 
 export const duplicateUnitMemoryCache = new Map<string, DuplicateUnitCacheEntry>();
 export const duplicateUnitDiskDatabases = new Map<string, DuplicateUnitDiskDatabaseEntry>();
+
+let duplicateUnitMemoryCacheBytes = 0;
+
+function estimateDuplicateUnitCacheEntryBytes(entry: DuplicateUnitCacheEntry): number {
+  let bytes = entry.sig.length * 2 + 64;
+  for (const unit of entry.units) {
+    bytes += unit.id.length * 2 + unit.file.length * 2 + unit.absoluteFile.length * 2 + 128;
+    bytes += unit.tokenSet.size * 24 + unit.signatures.size * 24;
+    bytes += unit.tokenCount * 4;
+  }
+  return bytes;
+}
+
+export function clearDuplicateUnitMemoryCache(): void {
+  duplicateUnitMemoryCache.clear();
+  duplicateUnitMemoryCacheBytes = 0;
+}
+
+export function clearDuplicateUnitMemoryCacheForRoot(projectRoot: string): void {
+  const rootPrefix = normalizePath(projectRoot).replace(/\/$/, "");
+  const rootKey = fileIdentityKey(rootPrefix);
+  for (const key of [...duplicateUnitMemoryCache.keys()]) {
+    const file = key.split("\u0000")[0] ?? "";
+    const normalizedFile = normalizePath(file);
+    if (
+      fileIdentityKey(normalizedFile) === rootKey ||
+      normalizedFile === rootPrefix ||
+      normalizedFile.startsWith(`${rootPrefix}/`)
+    ) {
+      const entry = duplicateUnitMemoryCache.get(key);
+      if (entry)
+        duplicateUnitMemoryCacheBytes = Math.max(
+          0,
+          duplicateUnitMemoryCacheBytes - estimateDuplicateUnitCacheEntryBytes(entry),
+        );
+      duplicateUnitMemoryCache.delete(key);
+    }
+  }
+}
+
+function readDuplicateUnitMemoryCache(key: string): DuplicateUnitCacheEntry | undefined {
+  return lruMapGet(duplicateUnitMemoryCache, key);
+}
+
+function writeDuplicateUnitMemoryCache(key: string, entry: DuplicateUnitCacheEntry): void {
+  const existing = duplicateUnitMemoryCache.get(key);
+  if (existing) {
+    duplicateUnitMemoryCacheBytes = Math.max(
+      0,
+      duplicateUnitMemoryCacheBytes - estimateDuplicateUnitCacheEntryBytes(existing),
+    );
+    duplicateUnitMemoryCache.delete(key);
+  }
+  const entryBytes = estimateDuplicateUnitCacheEntryBytes(entry);
+  while (
+    duplicateUnitMemoryCache.size > 0 &&
+    (duplicateUnitMemoryCache.size >= DUPLICATE_UNIT_MEMORY_CACHE_MAX_ENTRIES ||
+      duplicateUnitMemoryCacheBytes + entryBytes > DUPLICATE_UNIT_MEMORY_CACHE_MAX_BYTES)
+  ) {
+    const oldestKey = duplicateUnitMemoryCache.keys().next().value as string | undefined;
+    if (oldestKey === undefined) break;
+    const oldest = duplicateUnitMemoryCache.get(oldestKey);
+    duplicateUnitMemoryCache.delete(oldestKey);
+    if (oldest) {
+      duplicateUnitMemoryCacheBytes = Math.max(
+        0,
+        duplicateUnitMemoryCacheBytes - estimateDuplicateUnitCacheEntryBytes(oldest),
+      );
+    }
+  }
+  duplicateUnitMemoryCache.set(key, entry);
+  duplicateUnitMemoryCacheBytes += entryBytes;
+}
 
 export function duplicateUnitCacheVariant(
   index: ProjectIndex,
@@ -88,6 +165,10 @@ export function duplicateUnitCacheKey(file: string, variant: string): string {
 
 export function duplicateUnitCacheDatabasePath(projectRoot: string, opts?: BuildOptions): string {
   return cacheDatabasePath(projectRoot, opts, "duplicate-unit-cache.sqlite");
+}
+
+function duplicateUnitCacheDatabasePathForRoot(cacheRootDir: string): string {
+  return path.join(cacheRootDir, "duplicate-unit-cache.sqlite").replace(/\\/g, "/");
 }
 
 export function createDuplicateUnitCacheTable(db: SqliteDatabase): void {
@@ -152,7 +233,7 @@ export function createDuplicateUnitDiskStatements(db: SqliteDatabase): Duplicate
 
 export function maintainDuplicateUnitDiskCache(index: ProjectIndex): void {
   if (index.cacheMode !== "disk" || !index.cacheRootDir) return;
-  const dbPath = duplicateUnitCacheDatabasePath(index.projectRoot ?? "", { cacheDir: index.cacheRootDir });
+  const dbPath = duplicateUnitCacheDatabasePathForRoot(index.cacheRootDir);
   const entry = duplicateUnitDiskDatabases.get(dbPath);
   if (!entry?.db || !entry.statements) return;
   const { db, statements } = entry;
@@ -168,7 +249,7 @@ export function maintainDuplicateUnitDiskCache(index: ProjectIndex): void {
 
 export function duplicateUnitDiskCache(index: ProjectIndex): DuplicateUnitDiskDatabaseEntry | null {
   if (index.cacheMode !== "disk" || !index.cacheRootDir) return null;
-  const dbPath = duplicateUnitCacheDatabasePath(index.projectRoot ?? "", { cacheDir: index.cacheRootDir });
+  const dbPath = duplicateUnitCacheDatabasePathForRoot(index.cacheRootDir);
   let entry = duplicateUnitDiskDatabases.get(dbPath);
   if (!entry) {
     entry = { leases: 0, closeRequested: false };
@@ -209,15 +290,18 @@ export function closeDuplicateUnitDiskDatabaseEntry(dbPath: string, entry: Dupli
 }
 
 export function closeDuplicateUnitCacheDatabase(projectRoot: string, opts?: BuildOptions): void {
+  clearDuplicateUnitMemoryCacheForRoot(projectRoot);
   const dbPath = duplicateUnitCacheDatabasePath(projectRoot, opts);
   const entry = duplicateUnitDiskDatabases.get(dbPath);
-  if (!entry) return;
+  if (!entry) {
+    return;
+  }
   closeDuplicateUnitDiskDatabaseEntry(dbPath, entry);
 }
 
 export function leaseDuplicateUnitCacheForIndex(index: ProjectIndex): () => void {
   if (index.cacheMode !== "disk" || !index.cacheRootDir) return () => {};
-  const dbPath = duplicateUnitCacheDatabasePath(index.projectRoot ?? "", { cacheDir: index.cacheRootDir });
+  const dbPath = duplicateUnitCacheDatabasePathForRoot(index.cacheRootDir);
   let entry = duplicateUnitDiskDatabases.get(dbPath);
   if (!entry) {
     entry = { leases: 0, closeRequested: false };
@@ -234,7 +318,10 @@ export function leaseDuplicateUnitCacheForIndex(index: ProjectIndex): () => void
 
 export function closeDuplicateUnitCacheForIndex(index: ProjectIndex): void {
   if (index.cacheMode !== "disk" || !index.cacheRootDir) return;
-  closeDuplicateUnitCacheDatabase(index.projectRoot ?? "", { cacheDir: index.cacheRootDir });
+  const dbPath = duplicateUnitCacheDatabasePathForRoot(index.cacheRootDir);
+  const entry = duplicateUnitDiskDatabases.get(dbPath);
+  if (!entry) return;
+  closeDuplicateUnitDiskDatabaseEntry(dbPath, entry);
 }
 
 export function tryLoadDuplicateUnitsFromCache(
@@ -246,7 +333,7 @@ export function tryLoadDuplicateUnitsFromCache(
   if (!sig) return null;
   const key = duplicateUnitCacheKey(file, variant);
   if (index.cacheMode === "memory") {
-    const entry = duplicateUnitMemoryCache.get(key);
+    const entry = readDuplicateUnitMemoryCache(key);
     if (entry && entry.sig === sig) return entry.units;
     return null;
   }
@@ -276,7 +363,7 @@ export function writeDuplicateUnitsToCache(
   if (!sig) return;
   const key = duplicateUnitCacheKey(file, variant);
   if (index.cacheMode === "memory") {
-    duplicateUnitMemoryCache.set(key, { sig, units });
+    writeDuplicateUnitMemoryCache(key, { sig, units });
     return;
   }
   if (index.cacheMode === "disk") {

@@ -6,9 +6,11 @@ import {
   buildProjectIndex,
   buildProjectIndexFromFiles,
   chunkFile,
+  extractSqlFactsFromSource,
   listSymbols,
   supportForFile,
 } from "../../src/index.js";
+import { fileIdentityKey } from "../../src/util/paths.js";
 import { LANG_CONFIGS } from "../../src/bootstrap/treeSitterLanguages.js";
 
 it("registers SQL files as language support", () => {
@@ -43,6 +45,22 @@ it("chunks SQL at statement boundaries", () => {
   expect(chunks[0]?.text).toContain("CREATE TABLE users");
   expect(chunks[1]?.text).toContain("CREATE INDEX users_org_idx");
   expect(chunks[2]?.text).toContain("JOIN organizations");
+});
+
+it("keeps T-SQL batches and nested CTE fixtures as SQL facts", async () => {
+  const fixtureRoot = path.resolve(process.cwd(), "tests", "samples", "sql", "facts");
+  const batchFile = path.join(fixtureRoot, "tsql_batches.sql");
+  const nestedCteFile = path.join(fixtureRoot, "nested_ctes.sql");
+  const [batchSource, nestedCteSource] = await Promise.all([
+    fsp.readFile(batchFile, "utf8"),
+    fsp.readFile(nestedCteFile, "utf8"),
+  ]);
+
+  const batchFacts = extractSqlFactsFromSource(batchFile, batchSource);
+  const nestedCteFacts = extractSqlFactsFromSource(nestedCteFile, nestedCteSource);
+
+  expect(new Set(batchFacts.map((fact) => fact.statementText)).size).toBe(3);
+  expect(nestedCteFacts.map((fact) => fact.objectName)).toEqual(["accounts", "users"]);
 });
 
 it("indexes SQL object definitions as language symbols", async () => {
@@ -94,8 +112,8 @@ it("includes discovered SQL files in the normal repository index", async () => {
   const reportFile = path.join(samplePath, "report.sql").replace(/\\/g, "/");
   const index = await buildProjectIndex(samplePath);
 
-  expect(index.byFile.has(schemaFile)).toBe(true);
-  expect(index.byFile.has(reportFile)).toBe(true);
+  expect(index.byFile.has(fileIdentityKey(schemaFile))).toBe(true);
+  expect(index.byFile.has(fileIdentityKey(reportFile))).toBe(true);
   expect(index.graph.edges).toContainEqual(
     expect.objectContaining({
       from: reportFile,

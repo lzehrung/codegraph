@@ -6,6 +6,7 @@ import { createAgentSession, type AgentProjectSnapshot } from "../src/agent/sess
 import { workspaceSymbolsInSnapshot, workspaceSymbolsWithSession } from "../src/agent/workspaceSymbols.js";
 import { buildProjectIndexFromFiles } from "../src/indexer/build-index.js";
 import { isSymlinkUnavailable, mkTmpDir } from "./helpers/filesystem.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 
 async function renameFixture() {
   const root = await mkTmpDir("cg-rename-preview-");
@@ -99,7 +100,7 @@ describe("rename preview", () => {
     const symbols = await workspaceSymbolsInSnapshot(snapshot, { query: "run" });
     const target = symbols.symbols.find((symbol) => symbol.location.range.start.line === 1);
     expect(target).toBeDefined();
-    const moduleIndex = snapshot.index.byFile.get(file.replace(/\\/g, "/"));
+    const moduleIndex = snapshot.index.byFile.get(fileIdentityKey(file.replace(/\\/g, "/")));
     expect(moduleIndex).toBeDefined();
     moduleIndex!.locals = moduleIndex!.locals.filter(
       (definition) => definition.localName !== "run" || definition.range.start.line !== 2,

@@ -9,6 +9,7 @@ import {
   parseFile,
 } from "../src/index.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 
 describe("Kotlin import resolution regression", () => {
   it("ignores generated trees when resolving package imports from a repo root", async () => {
@@ -90,10 +91,10 @@ describe("Kotlin import resolution regression", () => {
     });
     const elapsedMs = performance.now() - startedAt;
 
-    expect(index.byFile.has(mainFile.replace(/\\/g, "/"))).toBe(true);
-    expect(index.byFile.has(normalizedSourceHelper)).toBe(true);
-    expect(index.byFile.has(normalizedSourceService)).toBe(true);
-    expect(index.byFile.has(normalizedIgnoredHelper)).toBe(false);
+    expect(index.byFile.has(fileIdentityKey(mainFile))).toBe(true);
+    expect(index.byFile.has(fileIdentityKey(normalizedSourceHelper))).toBe(true);
+    expect(index.byFile.has(fileIdentityKey(normalizedSourceService))).toBe(true);
+    expect(index.byFile.has(fileIdentityKey(normalizedIgnoredHelper))).toBe(false);
     expect(elapsedMs).toBeLessThan(10000);
   });
 

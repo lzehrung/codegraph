@@ -1522,15 +1522,20 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
       "--max-hits",
       "50",
     ]);
-    const hits = JSON.parse(stdout) as Array<{
-      file: string;
-      line: number;
-      column: number;
-      match: string;
-    }>;
+    const envelope = JSON.parse(stdout) as {
+      items: Array<{
+        file: string;
+        line: number;
+        column: number;
+        match: string;
+      }>;
+      truncated: boolean;
+    };
+    const hits = envelope.items;
     expect(hits.length).toBeGreaterThan(0);
     expect(hits.some((h) => h.file === "utils.ts")).toBe(true);
     expect(hits.every((h) => typeof h.line === "number" && typeof h.column === "number")).toBe(true);
+    expect(envelope.truncated).toBe(false);
   });
 
   it("grep rejects invalid --max-hits values", async () => {
@@ -1565,9 +1570,9 @@ export function summarizeInvoices(rows: Array<{ amount: number; tax: number }>) 
       "--ignore-glob",
       "src/**/*.spec.ts",
     ]);
-    const hits = JSON.parse(stdout) as Array<{ file: string }>;
+    const envelope = JSON.parse(stdout) as { items: Array<{ file: string }> };
 
-    expect(hits.map((hit) => normalize(hit.file))).toEqual([normalize(path.relative(tmpDir, appFile))]);
+    expect(envelope.items.map((hit) => normalize(hit.file))).toEqual([normalize(path.relative(tmpDir, appFile))]);
   });
 
   it("grep rejects ambiguous usage (both --query and --pattern)", async () => {

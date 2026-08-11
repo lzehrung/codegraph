@@ -10,6 +10,7 @@ import {
   ProjectIndex,
   SymbolListItem,
 } from "../src/index.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 
 const sampleRoot = path.resolve(process.cwd(), "tests", "samples").replace(/\\/g, "/");
 const sampleIndexCache = new Map<string, Promise<ProjectIndex>>();
@@ -136,8 +137,9 @@ export async function testFindReferences(
 }
 
 export function expectFileInIndex(index: ProjectIndex, expectedFile: string): void {
-  const files = Array.from(index.byFile.keys());
-  expect(files).toContain(expectedFile);
+  expect(Array.from(index.byFile.values(), (module) => fileIdentityKey(module.file))).toContain(
+    fileIdentityKey(expectedFile),
+  );
 }
 
 export function expectModuleCount(index: ProjectIndex, expectedCount: number): void {

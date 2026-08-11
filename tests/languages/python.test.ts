@@ -4,7 +4,9 @@ import fsp from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
-import { collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
+import { buildProjectIndex, collectLocalsAndExportsFromSource, parseFile } from "../../src/indexer.js";
+import { expectFileInIndex, findSymbolsByName } from "../test-utils.js";
+import { findReferences, goToDefinition } from "../../src/index.js";
 
 const definition: LanguageTestDefinition = {
   id: "python",
@@ -12,42 +14,35 @@ const definition: LanguageTestDefinition = {
     {
       name: "chunks Python with docstrings",
       sourceFile: "python.sample.py",
-      expectedChunks: (chunks) => {
-        // expect(chunks.some((c) => c.type === "docstring")).toBe(true);
-        expect(chunks.some((c) => c.type === "imports")).toBe(true);
-        expect(chunks.some((c) => c.type === "module_var" && c.name === "CONFIG_PATH")).toBe(true);
-
-        const classChunk = chunks.find((c) => c.type === "class" && c.name === "Foo");
-        expect(classChunk).toBeDefined();
-
-        const methodChunk = chunks.find((c) => c.type === "function" && c.name === "method");
-        expect(methodChunk).toBeDefined(); // Method is inside class, but might be split if large enough or configured
-
-        const topLevelFunc = chunks.find((c) => c.type === "function" && c.name === "top_level");
-        expect(topLevelFunc).toBeDefined();
-
-        // We expect only the top-level docstring to be a standalone chunk
-        // Note: In the previous turn, we fixed the Python definition to only capture top-level docstrings.
-        // However, the sample file has a top-level docstring.
-        // Let's verify that we get exactly 1 docstring chunk.
-        const docstringChunks = chunks.filter((c) => c.type === "docstring");
-        expect(docstringChunks.length).toBe(1);
-        expect(docstringChunks[0]?.text).toBe('"""Module docstring explaining the purpose of this file."""');
-      },
+      exactChunks: [
+        { type: "docstring", startLine: 1, endLine: 2 },
+        { type: "imports", startLine: 3, endLine: 3 },
+        { type: "imports", startLine: 4, endLine: 5 },
+        { type: "module_var", name: "CONFIG_PATH", startLine: 6, endLine: 7 },
+        { type: "class", name: "Foo", startLine: 8, endLine: 15 },
+        { type: "function", name: "method", startLine: 11, endLine: 17 },
+        { type: "function", name: "top_level", startLine: 18, endLine: 22 },
+      ],
     },
   ],
   parity: {
     sampleDir: "python",
-    dependencyGraph: [
-      {
-        from: "relative-imports.py",
-        to: { type: "file", path: "utils.py" },
-      },
-      {
-        from: "relative-imports.py",
-        to: { type: "file", path: "helpers.py" },
-      },
-    ],
+    exact: {
+      dependencyGraph: [
+        {
+          from: "relative-imports.py",
+          to: { type: "file", path: "helpers.py" },
+        },
+        {
+          from: "relative-imports.py",
+          to: { type: "file", path: "utils.py" },
+        },
+        {
+          from: "utils.py",
+          to: { type: "file", path: "helpers.py" },
+        },
+      ],
+    },
     goToDefinition: [
       {
         name: "go to definition resolves a match keyword-pattern bound variable from its usage site",
@@ -61,6 +56,46 @@ const definition: LanguageTestDefinition = {
 };
 
 runLanguageTests(definition);
+
+describe("Python stub discovery", () => {
+  it("discovers and indexes .pyi declarations", async () => {
+    const fixturePath = path.resolve(process.cwd(), "tests", "samples", "language-regressions", "python");
+    const stubFile = path.join(fixturePath, "stubs.pyi");
+    const index = await buildProjectIndex(fixturePath, { cache: "off" });
+
+    expectFileInIndex(index, stubFile);
+    expect(findSymbolsByName(index, "StubType", stubFile)).toHaveLength(1);
+    expect(findSymbolsByName(index, "stub_function", stubFile)).toHaveLength(1);
+  });
+});
+
+describe("Python match bindings", () => {
+  it("resolves tuple and as-pattern captures as local symbols", async () => {
+    const fixturePath = path.resolve(process.cwd(), "tests", "samples", "language-regressions", "python");
+    const file = path.join(fixturePath, "match_bindings.py");
+    const index = await buildProjectIndex(fixturePath, { cache: "off" });
+
+    expect(findSymbolsByName(index, "x", file)).toHaveLength(1);
+    expect(findSymbolsByName(index, "y", file)).toHaveLength(1);
+    expect(findSymbolsByName(index, "w", file)).toHaveLength(1);
+
+    const tupleUsage = await goToDefinition(index, { file, line: 4, column: 20 });
+    expect(tupleUsage.status).toBe("ok");
+    if (tupleUsage.status === "ok") expect(tupleUsage.definition.range.start.line).toBe(3);
+
+    const aliasUsage = await goToDefinition(index, { file, line: 6, column: 20 });
+    expect(aliasUsage.status).toBe("ok");
+    if (aliasUsage.status === "ok") expect(aliasUsage.definition.range.start.line).toBe(5);
+
+    const tupleReferences = await findReferences(index, { file, line: 3, column: 15 });
+    expect(tupleReferences.status).toBe("ok");
+    if (tupleReferences.status === "ok") expect(tupleReferences.references).toHaveLength(2);
+
+    const aliasReferences = await findReferences(index, { file, line: 5, column: 19 });
+    expect(aliasReferences.status).toBe("ok");
+    if (aliasReferences.status === "ok") expect(aliasReferences.references).toHaveLength(2);
+  });
+});
 
 describe("Python __all__ exports", () => {
   async function collectModule(source: string) {

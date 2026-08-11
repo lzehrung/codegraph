@@ -12,6 +12,7 @@ import type { Range } from "../types.js";
 import { ensureParsedContext } from "../indexer/parse-context.js";
 import { resolveReadableFile } from "../util/confinedFile.js";
 import { errorMessage } from "../util/errors.js";
+import { fileIdentityKey } from "../util/paths.js";
 import { classifySensitiveFile } from "./fileView.js";
 import { normalizeAgentFilePath } from "./normalize.js";
 import type { SemanticLocation, SemanticProvenance, SemanticResponseEnvelope, SemanticSymbol } from "./semantic.js";
@@ -533,12 +534,12 @@ async function addScopeConflicts(
   references: readonly Reference[],
   conflicts: RenameConflict[],
 ): Promise<void> {
-  const moduleIndex = snapshot.index.byFile.get(target.file);
+  const moduleIndex = snapshot.index.byFile.get(fileIdentityKey(target.file));
   if (!moduleIndex) return;
   const file = normalizeAgentFilePath(snapshot.root, target.file);
   let localCollision: SymbolDef | undefined;
   try {
-    const parsed = await ensureParsedContext(target.file, snapshot.index.parsed?.get(target.file));
+    const parsed = await ensureParsedContext(target.file, snapshot.index.parsed?.get(fileIdentityKey(target.file)));
     const scopeIndex = getCachedScope(snapshot.index, target.file, moduleIndex, parsed);
     const targetBinding = scopeIndex.all.find(
       (binding) =>
@@ -608,13 +609,16 @@ async function addScopeConflicts(
   for (const reference of references) {
     const activeImport = reference.via?.import;
     const localImportWillChange = activeImport?.kind === "named" && activeImport.local === target.localName;
-    if (!activeImport || !localImportWillChange || seenImportFiles.has(reference.file)) continue;
-    seenImportFiles.add(reference.file);
-    const consumer = snapshot.index.byFile.get(reference.file);
+    if (!activeImport || !localImportWillChange || seenImportFiles.has(fileIdentityKey(reference.file))) continue;
+    seenImportFiles.add(fileIdentityKey(reference.file));
+    const consumer = snapshot.index.byFile.get(fileIdentityKey(reference.file));
     if (!consumer) continue;
     let collides = false;
     try {
-      const parsed = await ensureParsedContext(reference.file, snapshot.index.parsed?.get(reference.file));
+      const parsed = await ensureParsedContext(
+        reference.file,
+        snapshot.index.parsed?.get(fileIdentityKey(reference.file)),
+      );
       const scopeIndex = getCachedScope(snapshot.index, reference.file, consumer, parsed);
       const activeBinding = scopeIndex.all.find((binding) => binding.import === activeImport);
       const activeScope = activeBinding
@@ -793,7 +797,7 @@ async function collectTextualRenameEdits(
     if (!loaded) continue;
     let parsed;
     try {
-      parsed = await ensureParsedContext(file, input.snapshot.index.parsed?.get(file));
+      parsed = await ensureParsedContext(file, input.snapshot.index.parsed?.get(fileIdentityKey(file)));
     } catch (error: unknown) {
       input.unsafeSites.push({
         location: { file: loaded.displayPath, range: zeroRange() },
@@ -1145,7 +1149,7 @@ function buildFilenameSuggestions(
   const isPublicType =
     def.kind === SymbolKind.Class || def.kind === SymbolKind.Interface || def.kind === SymbolKind.TypeAlias;
   const isExported = snapshot.index.byFile
-    .get(def.file)
+    .get(fileIdentityKey(def.file))
     ?.exports.some((entry) => entry.type === "local" && defNodeId(entry.target) === defNodeId(def));
   if (!isPublicType || !isExported) return [];
   const parsed = path.parse(normalizeAgentFilePath(snapshot.root, def.file));

@@ -23,7 +23,7 @@ import {
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
 import { maskJsLikeCommentsStringsAndRegex } from "../util/comments.js";
 import { collectLineStartOffsets } from "../util/lines.js";
-import { assertFilePathWithinRoot, normalizePath, toProjectDisplayPath } from "../util/paths.js";
+import { assertFilePathWithinRoot, fileIdentityKey, normalizePath, toProjectDisplayPath } from "../util/paths.js";
 import { logWithLevel } from "../logging.js";
 import { duplicateUnitCacheVariant, tryLoadDuplicateUnitsFromCache, writeDuplicateUnitsToCache } from "./unitCache.js";
 import type {
@@ -320,12 +320,13 @@ export async function getDuplicateAstContext(
   source: string,
   cache: DuplicateAstContextCache,
 ): Promise<DuplicateAstContext | undefined> {
-  if (cache.has(file)) return cache.get(file) ?? undefined;
+  const fileKey = fileIdentityKey(file);
+  if (cache.has(fileKey)) return cache.get(fileKey) ?? undefined;
 
-  const retained = index.parsed?.get(file);
+  const retained = index.parsed?.get(fileKey);
   if (retained?.source === source) {
     const context = astContextFromParsed(retained);
-    cache.set(file, context);
+    cache.set(fileKey, context);
     return context;
   }
 
@@ -339,14 +340,14 @@ export async function getDuplicateAstContext(
       nativeQueries: null,
     });
     if (!attempt.parsed) {
-      cache.set(file, null);
+      cache.set(fileKey, null);
       return undefined;
     }
     const context = astContextFromParsed(attempt.parsed);
-    cache.set(file, context);
+    cache.set(fileKey, context);
     return context;
   } catch {
-    cache.set(file, null);
+    cache.set(fileKey, null);
     return undefined;
   }
 }
@@ -486,10 +487,13 @@ export async function collectDuplicateUnits(
   index: ProjectIndex,
   options: DuplicateUnitCollectionOptions,
 ): Promise<CollectedDuplicateUnits> {
-  const files = options.files ?? Array.from(index.byFile.keys());
-  const normalizedFiles = Array.from(
-    new Set(files.map((file) => normalizeDetectionFile(file, options.projectRoot))),
-  ).sort();
+  const files = options.files ?? Array.from(index.byFile.values(), (module) => module.file);
+  const filesByIdentity = new Map<string, string>();
+  for (const file of files) {
+    const normalized = normalizeDetectionFile(file, options.projectRoot);
+    filesByIdentity.set(fileIdentityKey(normalized), normalized);
+  }
+  const normalizedFiles = [...filesByIdentity.values()].sort();
   const units: DuplicateInternalUnit[] = [];
   const astContextCache: DuplicateAstContextCache = new Map();
   const variant = duplicateUnitCacheVariant(
@@ -549,11 +553,11 @@ export async function buildDuplicateUnitsForFile(
   windowSize: number,
   astContextCache: DuplicateAstContextCache,
 ): Promise<DuplicateInternalUnit[]> {
-  const moduleIndex = index.byFile.get(file);
+  const moduleIndex = index.byFile.get(fileIdentityKey(file));
   const language = languageForFile(file);
   if (!language) return [];
 
-  let source = index.parsed?.get(file)?.source;
+  let source = index.parsed?.get(fileIdentityKey(file))?.source;
   if (source === undefined) {
     try {
       source = await fsp.readFile(file, "utf8");

@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { request as httpRequest } from "node:http";
+import { request as httpRequest, type IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -10,15 +10,18 @@ import {
   createCodegraphMcpProtocolServer,
   listCodegraphMcpTools,
   startCodegraphMcpHttpServer,
+  DEFAULT_MCP_HTTP_SESSION_MAX_COUNT,
   type CodegraphMcpHandlers,
 } from "../src/mcp/server.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex } from "../src/indexer/types.js";
+import { DEFAULT_REVIEW_TRANSPORT_LIMITS } from "../src/review/types.js";
 import type { Graph } from "../src/types.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import { SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY } from "../src/sqlite.js";
 import { countingSession } from "./helpers/agent.js";
 import { createArtifactOutputWithStaleFile, createLinkedTempRoot, isSymlinkUnavailable } from "./helpers/filesystem.js";
 import { getCodegraphVersion } from "../src/util/packageInfo.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 import { runGit } from "./helpers/git.js";
 
 type JsonRpcObject = {
@@ -84,6 +87,26 @@ async function postMcpJson(
   });
   const payload = (await response.json()) as unknown;
   return { response, payload: readObject(payload) };
+}
+async function openMcpSse(url: string, sessionId: string): Promise<IncomingMessage> {
+  const endpoint = new URL(url);
+  const { promise, resolve, reject } = Promise.withResolvers<IncomingMessage>();
+  const request = httpRequest(
+    {
+      hostname: endpoint.hostname,
+      port: endpoint.port,
+      path: endpoint.pathname,
+      method: "GET",
+      headers: {
+        accept: "text/event-stream",
+        "mcp-session-id": sessionId,
+      },
+    },
+    (response) => resolve(response),
+  );
+  request.on("error", reject);
+  request.end();
+  return await promise;
 }
 
 async function postRawHttpJson(
@@ -553,6 +576,190 @@ describe("codegraph MCP handlers", () => {
     }
   });
 
+  it("evicts idle HTTP sessions and bounds the concurrent session count", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-session-evict-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      port: 0,
+      httpSessionIdleMs: 50,
+      httpSessionMaxCount: 2,
+      httpSessionEvictionIntervalMs: 20,
+    });
+
+    const initialize = async (id: number): Promise<string> => {
+      const result = await postMcpJson(httpServer.url, {
+        jsonrpc: "2.0",
+        id,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: `codegraph-test-${id}`, version: "1.0.0" },
+        },
+      });
+      expect(result.response.status).toBe(200);
+      const sessionId = result.response.headers.get("mcp-session-id");
+      expect(sessionId).toBeTruthy();
+      return sessionId!;
+    };
+
+    const probeSession = async (id: number, sessionId: string): Promise<number> => {
+      const result = await postMcpJson(
+        httpServer.url,
+        {
+          jsonrpc: "2.0",
+          id,
+          method: "tools/list",
+          params: {},
+        },
+        sessionId,
+      );
+      return result.response.status;
+    };
+
+    try {
+      const first = await initialize(1);
+      const second = await initialize(2);
+      expect(await probeSession(101, first)).toBe(200);
+      expect(await probeSession(102, second)).toBe(200);
+
+      await initialize(3);
+      expect(await probeSession(103, first)).toBe(400);
+
+      await vi.waitFor(async () => {
+        expect(await probeSession(104, second)).toBe(400);
+      }, 2_000);
+
+      const replacement = await initialize(4);
+      expect(await probeSession(105, replacement)).toBe(200);
+      expect(DEFAULT_MCP_HTTP_SESSION_MAX_COUNT).toBeGreaterThan(0);
+    } finally {
+      await httpServer.close();
+    }
+  });
+
+  it("rejects a new session instead of evicting an in-flight request", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-session-capacity-active-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const backingSession = createAgentSession({ root });
+    const loadStarted = Promise.withResolvers<void>();
+    const releaseLoad = Promise.withResolvers<void>();
+    const session: AgentSession = {
+      ...backingSession,
+      loadProject: async (options) => {
+        loadStarted.resolve();
+        await releaseLoad.promise;
+        return await backingSession.loadProject(options);
+      },
+    };
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      port: 0,
+      session,
+      httpSessionIdleMs: 0,
+      httpSessionMaxCount: 1,
+    });
+
+    const initialize = async (id: number): Promise<{ response: Response; payload: JsonRpcObject }> =>
+      await postMcpJson(httpServer.url, {
+        jsonrpc: "2.0",
+        id,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: `codegraph-test-${id}`, version: "1.0.0" },
+        },
+      });
+
+    try {
+      const first = await initialize(1);
+      const firstSessionId = first.response.headers.get("mcp-session-id");
+      expect(firstSessionId).toBeTruthy();
+      const inFlight = postMcpJson(
+        httpServer.url,
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: { name: "search", arguments: { query: "ok", mode: "symbol" } },
+        },
+        firstSessionId ?? undefined,
+      );
+      await loadStarted.promise;
+
+      const rejected = await initialize(3);
+      expect(rejected.response.status).toBe(503);
+      const error = readObject(rejected.payload.error);
+      expect(error.code).toBe(-32000);
+      expect(error.message).toMatch(/all configured sessions are active/);
+
+      releaseLoad.resolve();
+      expect((await inFlight).response.status).toBe(200);
+      expect(
+        (
+          await postMcpJson(
+            httpServer.url,
+            { jsonrpc: "2.0", id: 4, method: "tools/list", params: {} },
+            firstSessionId ?? undefined,
+          )
+        ).response.status,
+      ).toBe(200);
+    } finally {
+      releaseLoad.resolve();
+      await httpServer.close();
+    }
+  });
+
+  it("does not idle-evict a session holding an open SSE stream", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-session-sse-active-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const httpServer = await startCodegraphMcpHttpServer({
+      root,
+      port: 0,
+      httpSessionIdleMs: 30,
+      httpSessionMaxCount: 1,
+      httpSessionEvictionIntervalMs: 10,
+    });
+
+    try {
+      const initialize = await postMcpJson(httpServer.url, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "codegraph-sse-test", version: "1.0.0" },
+        },
+      });
+      const sessionId = initialize.response.headers.get("mcp-session-id");
+      expect(sessionId).toBeTruthy();
+      const stream = await openMcpSse(httpServer.url, sessionId ?? "");
+      expect(stream.statusCode).toBe(200);
+      // This integration test deliberately waits on the real eviction timer; fake timers do not control an interval
+      // created while the HTTP server is serving real Node requests.
+      const wait = Promise.withResolvers<void>();
+      setTimeout(wait.resolve, 120);
+      await wait.promise;
+
+      const probe = await postMcpJson(
+        httpServer.url,
+        { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
+        sessionId ?? undefined,
+      );
+      expect(probe.response.status).toBe(200);
+
+      const streamClosed = Promise.withResolvers<void>();
+      stream.once("close", streamClosed.resolve);
+      stream.destroy();
+      await streamClosed.promise;
+    } finally {
+      await httpServer.close();
+    }
+  });
+
   it("refreshes a long-lived Streamable HTTP session after workspace edits", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-http-freshness-"));
     await fs.writeFile(path.join(root, "initial.ts"), "export function initialSymbol() { return 1; }\n", "utf8");
@@ -699,7 +906,7 @@ describe("codegraph MCP handlers", () => {
         }
         expect(serializedError).toContain(field.name);
         expect(serializedError).toContain(String(field.maximum));
-        expect(serializedError).toMatch(/too_big|maximum|max|less than or equal|at most/i);
+        expect(serializedError).toMatch(/too_big|maximum|max|Too big|less than or equal|at most|<=/i);
       }
       expect(counted.loads()).toBe(0);
     } finally {
@@ -1086,6 +1293,217 @@ describe("codegraph MCP handlers", () => {
 
     const refs = await handlers.refs({ handle: first!.handle, limit: 1 });
     expect(refs.references).toHaveLength(1);
+  });
+
+  it("reports exact truncation metadata for capped deps, rdeps, and file_deps results", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-deps-truncation-"));
+    await fs.writeFile(
+      path.join(root, "a.ts"),
+      'import { b } from "./b";\nimport { c } from "./c";\nexport const a = b + c;\n',
+    );
+    await fs.writeFile(path.join(root, "b.ts"), "export const b = 1;\n");
+    await fs.writeFile(path.join(root, "c.ts"), "export const c = 2;\n");
+    await fs.writeFile(path.join(root, "d.ts"), 'import { b } from "./b";\nexport const d = b;\n');
+
+    const handlers = createCodegraphMcpHandlers({ root });
+
+    const limited = await handlers.deps({ file: "a.ts", limit: 1 });
+    expect(limited.dependencies).toHaveLength(1);
+    expect(limited.limit).toBe(1);
+    expect(limited.truncated).toBe(true);
+    expect(limited.totalSeen).toBe(2);
+    expect(limited.omitted).toBe(1);
+
+    // Exactly-at-limit must read as complete: the handler probes one entry past the
+    // cap, so a true count equal to the limit is not confused with "more exist".
+    const atLimit = await handlers.deps({ file: "a.ts", limit: 2 });
+    expect(atLimit.dependencies).toHaveLength(2);
+    expect(atLimit.truncated).toBe(false);
+    expect(atLimit.totalSeen).toBe(2);
+    expect(atLimit.omitted).toBe(0);
+
+    const complete = await handlers.deps({ file: "a.ts" });
+    expect(complete.dependencies).toHaveLength(2);
+    expect(complete.truncated).toBe(false);
+    expect(complete.omitted).toBe(0);
+    expect(complete.totalSeen).toBe(2);
+
+    const limitedRdeps = await handlers.rdeps({ file: "b.ts", limit: 1 });
+    expect(limitedRdeps.reverseDependencies).toHaveLength(1);
+    expect(limitedRdeps.truncated).toBe(true);
+    expect(limitedRdeps.omitted).toBe(1);
+
+    const fileDeps = await handlers.file_deps({ file: "a.ts", direction: "deps", limit: 50 });
+    expect(fileDeps.dependencies).toHaveLength(2);
+    expect(fileDeps.truncated).toBe(false);
+    expect(fileDeps.omitted).toBe(0);
+  });
+
+  it("reports exact truncation metadata for capped refs results", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-refs-truncation-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
+    await fs.writeFile(
+      path.join(root, "api.ts"),
+      "import { validateUser } from './auth';\nexport function route() { return validateUser(1); }\n",
+    );
+
+    const handlers = createCodegraphMcpHandlers({ root });
+
+    const limited = await handlers.refs({ handle: "auth.ts::validateUser", limit: 1 });
+    expect(limited.references).toHaveLength(1);
+    expect(limited.limit).toBe(1);
+    expect(limited.truncated).toBe(true);
+    expect(limited.totalSeen).toBe(2);
+    expect(limited.omitted).toBe(1);
+
+    const complete = await handlers.refs({ handle: "auth.ts::validateUser", limit: 50 });
+    expect(complete.references.length).toBeGreaterThan(1);
+    expect(complete.truncated).toBe(false);
+    expect(complete.omitted).toBe(0);
+    expect(complete.totalSeen).toBe(complete.references.length);
+
+    // The position-based form shares the same metadata contract.
+    const byPosition = await handlers.refs({
+      file: "auth.ts",
+      line: 1,
+      column: "export function ".length,
+      limit: 1,
+    });
+    expect(byPosition.references).toHaveLength(1);
+    expect(byPosition.truncated).toBe(true);
+    expect(byPosition.omitted).toBe(1);
+  });
+  it("returns empty truncated pages with exact lower-bound metadata for zero limits", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-zero-limit-"));
+    await fs.writeFile(path.join(root, "a.ts"), 'import { b } from "./b";\nexport const a = b;\n');
+    await fs.writeFile(path.join(root, "b.ts"), "export const b = 1;\n");
+    await fs.writeFile(path.join(root, "auth.ts"), "export function validateUser(id: number) { return id > 0; }\n");
+    await fs.writeFile(
+      path.join(root, "api.ts"),
+      'import { validateUser } from "./auth";\nexport const ok = validateUser(1);\n',
+    );
+
+    const handlers = createCodegraphMcpHandlers({ root });
+
+    const deps = await handlers.deps({ file: "a.ts", limit: 0 });
+    expect(deps).toEqual({
+      dependencies: [],
+      limit: 0,
+      totalSeen: 1,
+      truncated: true,
+      omitted: 1,
+      freshness: { state: "fresh" },
+    });
+
+    const rdeps = await handlers.rdeps({ file: "b.ts", limit: 0 });
+    expect(rdeps).toEqual({
+      reverseDependencies: [],
+      limit: 0,
+      totalSeen: 1,
+      truncated: true,
+      omitted: 1,
+      freshness: { state: "fresh" },
+    });
+
+    const refs = await handlers.refs({ handle: "auth.ts::validateUser", limit: 0 });
+    expect(refs).toEqual({
+      references: [],
+      limit: 0,
+      totalSeen: 1,
+      truncated: true,
+      omitted: 1,
+      freshness: { state: "fresh" },
+    });
+  });
+
+  it("bounds the MCP review report with explicit transport limits and omitted counts", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-review-bounded-"));
+    runGit(root, ["init"]);
+    await fs.writeFile(path.join(root, "auth.ts"), "export function authorize() { return false; }\n", "utf8");
+    await fs.writeFile(
+      path.join(root, "api.ts"),
+      'import { authorize } from "./auth";\nexport const handle = () => authorize();\n',
+      "utf8",
+    );
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "base"]);
+    const base = runGit(root, ["rev-parse", "HEAD"]);
+    await fs.writeFile(path.join(root, "auth.ts"), "export function authorize() { return true; }\n", "utf8");
+    runGit(root, ["add", "auth.ts"]);
+    runGit(root, ["commit", "-m", "change"]);
+
+    const handlers = createCodegraphMcpHandlers({ root });
+    const report = await handlers.review({ base, head: "HEAD" });
+
+    expect(report.status).toBe("ok");
+    expect(report.limits).toEqual(DEFAULT_REVIEW_TRANSPORT_LIMITS);
+    // A small report fits every collection, so nothing is omitted — but the
+    // transport boundary is still explicit.
+    expect(report.omittedCounts).toEqual({
+      projectFiles: 0,
+      changedFiles: 0,
+      symbols: 0,
+      graphDelta: 0,
+      candidateTests: 0,
+    });
+    expect(report.changedFiles.length).toBeLessThanOrEqual(report.limits.changedFiles);
+    expect(report.graphDelta.length).toBeLessThanOrEqual(report.limits.graphDelta);
+    expect(report.candidateTests.length).toBeLessThanOrEqual(report.limits.candidateTests);
+  });
+
+  it("rejects unknown MCP tool arguments instead of silently stripping them", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-unknown-args-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const handlers = createCodegraphMcpHandlers({ root });
+    const server = createCodegraphMcpProtocolServer(handlers);
+    const sent: JsonRpcObject[] = [];
+    const transport = {
+      onclose: undefined,
+      onerror: undefined,
+      onmessage: undefined,
+      async start() {},
+      async send(message: unknown) {
+        sent.push(readJsonRpcObject(message));
+      },
+      async close() {},
+    } as Parameters<typeof server.connect>[0];
+
+    await server.connect(transport);
+    if (transport.onmessage === undefined) {
+      throw new Error("Connected MCP transport did not receive an onmessage handler.");
+    }
+
+    transport.onmessage({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "refs",
+        arguments: {
+          file: "auth.ts",
+          line: 1,
+          column: 0,
+          maxReferencess: 5,
+        },
+      },
+    });
+    await vi.waitFor(() => {
+      expect(sent.some((message) => message.id === 1)).toBeTruthy();
+    });
+
+    const result = sent.find((message) => message.id === 1);
+    expect(result).toBeDefined();
+    const error = readObject(result!.error);
+    expect(String(error.message)).toMatch(/Invalid parameters for refs/i);
+    expect(String(error.message)).toMatch(/maxReferencess|Unrecognized key/i);
+  });
+
+  it("advertises additionalProperties false for collection tools", () => {
+    for (const name of ["search", "workspace_symbols", "file_deps", "review", "query_sqlite"] as const) {
+      const tool = listCodegraphMcpTools().find((entry) => entry.name === name);
+      expect(tool, name).toBeDefined();
+      expect(readObject(tool!.inputSchema).additionalProperties).toBe(false);
+    }
   });
 
   it("advertises goto and refs with mutually exclusive handle-or-complete-location schemas", () => {
@@ -1724,8 +2142,8 @@ describe("codegraph MCP handlers", () => {
     };
     const index: ProjectIndex = {
       graph: fileGraph,
-      modules: new Map([[targetFile, moduleIndex]]),
-      byFile: new Map([[targetFile, moduleIndex]]),
+      modules: new Map([[fileIdentityKey(targetFile), moduleIndex]]),
+      byFile: new Map([[fileIdentityKey(targetFile), moduleIndex]]),
       exportCache: new Map(),
       scopeCache: new Map(),
     };

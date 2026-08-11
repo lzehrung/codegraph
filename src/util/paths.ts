@@ -1,3 +1,4 @@
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { errorMessage } from "./errors.js";
 
@@ -7,6 +8,126 @@ export function normalizePath(p: string): string {
 
 function normalizeWindowsComparablePath(filePath: string): string {
   return normalizePath(filePath).replace(/^([A-Za-z]):/, (_, driveLetter: string) => `${driveLetter.toUpperCase()}:`);
+}
+
+const defaultCaseInsensitiveFileIdentity = process.platform === "win32" || process.platform === "darwin";
+let caseInsensitiveFileIdentity = defaultCaseInsensitiveFileIdentity;
+let fileIdentityCaseSensitivityFrozen = false;
+let fileIdentityCaseSensitivityPinned = false;
+let fileIdentityCaseSensitivityRoot: string | undefined;
+const fileIdentityCaseSensitivityProbes = new Map<string, Promise<void>>();
+let fileIdentityCaseSensitivityProbeGeneration = 0;
+/**
+ * Configures the assumed filesystem case sensitivity used by {@link fileIdentityKey}.
+ * The first generated key or completed probe freezes the effective value; later
+ * calls are ignored so one index cannot contain keys from mixed case modes.
+ */
+export function setFileIdentityCaseInsensitive(caseInsensitive: boolean): void {
+  if (fileIdentityCaseSensitivityFrozen) return;
+  caseInsensitiveFileIdentity = caseInsensitive;
+}
+
+export function isFileIdentityCaseInsensitive(): boolean {
+  return caseInsensitiveFileIdentity;
+}
+
+/**
+ * Probes each indexed root and configures {@link fileIdentityKey} from the first
+ * observed filesystem mode. A conflicting later root emits a process warning because
+ * identity keys are process-global. Probe failures retain the platform default.
+ */
+export function initializeFileIdentityCaseSensitivity(projectRoot: string): Promise<void> {
+  const resolvedRoot = path.resolve(projectRoot);
+  const generation = fileIdentityCaseSensitivityProbeGeneration;
+  let probe = fileIdentityCaseSensitivityProbes.get(resolvedRoot);
+  if (!probe) {
+    probe = probeFileIdentityCaseSensitivity(resolvedRoot, generation);
+    fileIdentityCaseSensitivityProbes.set(resolvedRoot, probe);
+  }
+  return probe;
+}
+
+/**
+ * Resets the process-global identity probe for tests that need to exercise both
+ * filesystem case modes. Production code must configure identity once and never reset it.
+ *
+ * Passing an explicit mode pins it: the probe will not overwrite it with the host
+ * filesystem's real behavior, so a test can exercise the case-sensitive branch on a
+ * case-insensitive host. Calling with no argument restores probe-driven detection.
+ */
+export function resetFileIdentityCaseSensitivityForTests(caseInsensitive?: boolean): void {
+  fileIdentityCaseSensitivityProbeGeneration += 1;
+  fileIdentityCaseSensitivityProbes.clear();
+  caseInsensitiveFileIdentity = caseInsensitive ?? defaultCaseInsensitiveFileIdentity;
+  fileIdentityCaseSensitivityFrozen = false;
+  fileIdentityCaseSensitivityPinned = caseInsensitive !== undefined;
+  fileIdentityCaseSensitivityRoot = undefined;
+}
+
+async function probeFileIdentityCaseSensitivity(resolvedRoot: string, generation: number): Promise<void> {
+  let caseInsensitive = defaultCaseInsensitiveFileIdentity;
+  try {
+    const caseFlippedRoot = flipPathCharacterCase(resolvedRoot);
+    if (caseFlippedRoot) {
+      const rootStat = await fsp.stat(resolvedRoot);
+      try {
+        const caseFlippedStat = await fsp.stat(caseFlippedRoot);
+        caseInsensitive = rootStat.dev === caseFlippedStat.dev && rootStat.ino === caseFlippedStat.ino;
+      } catch (error) {
+        if (isMissingPathError(error)) caseInsensitive = false;
+      }
+    }
+  } catch {
+    // Some filesystems cannot be probed. Keep the platform default.
+  }
+  if (generation !== fileIdentityCaseSensitivityProbeGeneration || fileIdentityCaseSensitivityPinned) return;
+  if (fileIdentityCaseSensitivityFrozen) {
+    if (caseInsensitive !== caseInsensitiveFileIdentity && fileIdentityCaseSensitivityRoot) {
+      process.emitWarning(
+        `Codegraph file identity uses ${fileIdentityCaseSensitivityRoot} as ${caseInsensitiveFileIdentity ? "case-insensitive" : "case-sensitive"}, but ${resolvedRoot} is ${caseInsensitive ? "case-insensitive" : "case-sensitive"}. Multiple filesystem case modes are not supported in one process.`,
+        { code: "CODEGRAPH_FILE_IDENTITY_CASE_MODE_CONFLICT" },
+      );
+    }
+    return;
+  }
+  caseInsensitiveFileIdentity = caseInsensitive;
+  fileIdentityCaseSensitivityFrozen = true;
+  fileIdentityCaseSensitivityRoot = resolvedRoot;
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR");
+}
+
+function flipPathCharacterCase(filePath: string): string | null {
+  const rootLength = path.parse(filePath).root.length;
+  for (let index = filePath.length - 1; index >= rootLength; index -= 1) {
+    const character = filePath[index];
+    if (!character) continue;
+    if (character >= "a" && character <= "z") {
+      return `${filePath.slice(0, index)}${character.toUpperCase()}${filePath.slice(index + 1)}`;
+    }
+    if (character >= "A" && character <= "Z") {
+      return `${filePath.slice(0, index)}${character.toLowerCase()}${filePath.slice(index + 1)}`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Canonical comparison key for a file path.
+ *
+ * Use this for every map key, set membership test, dedup check, and path equality
+ * comparison so one physical file can never be keyed two different ways (for example
+ * `./Util` resolving beside a discovered `util.ts` on a case-insensitive volume).
+ *
+ * Never persist or display this value. Keep {@link normalizePath} output for storage,
+ * serialized artifacts, and user-facing output.
+ */
+export function fileIdentityKey(filePath: string): string {
+  fileIdentityCaseSensitivityFrozen = true;
+  const normalized = normalizeWindowsComparablePath(filePath);
+  return caseInsensitiveFileIdentity ? normalized.toLowerCase() : normalized;
 }
 
 function isWindowsQualifiedAbsolutePath(filePath: string): boolean {

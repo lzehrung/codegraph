@@ -7,9 +7,10 @@ import { dedupeModuleSpecifiers, normalizeLinkSpecifier, normalizeReferenceLabel
 // handled below, alongside this module's other file-targeting patterns.
 export function extractRstModuleSpecifiers(source: string): ModuleSpecifier[] {
   const out: ModuleSpecifier[] = [];
-  const namedTargets = collectRstTargetDefinitions(source);
+  const cleaned = stripRstCommentsAndLiteralBlocks(source);
+  const namedTargets = collectRstTargetDefinitions(cleaned);
 
-  for (const match of source.matchAll(/`[^`<\n]*<([^>\n]+)>`_/g)) {
+  for (const match of cleaned.matchAll(/`[^`<\n]*<([^>\n]+)>`_/g)) {
     const rawSpecifier = match[1]?.trim();
     if (!rawSpecifier) continue;
     const normalized = normalizeLinkSpecifier(rawSpecifier, {
@@ -20,14 +21,14 @@ export function extractRstModuleSpecifiers(source: string): ModuleSpecifier[] {
     if (normalized) out.push(normalized);
   }
 
-  for (const match of source.matchAll(/`([^`\n]+)`_/g)) {
+  for (const match of cleaned.matchAll(/`([^`\n]+)`_/g)) {
     const label = normalizeReferenceLabel(match[1]);
     if (!label) continue;
     const normalized = namedTargets.get(label);
     if (normalized) out.push(normalized);
   }
 
-  for (const match of source.matchAll(/:doc:`([^`\n]+)`/g)) {
+  for (const match of cleaned.matchAll(/:doc:`([^`\n]+)`/g)) {
     const body = match[1]?.trim();
     if (!body) continue;
     // Sphinx role syntax: ":doc:`Custom Title <path>`" carries the target inside
@@ -43,7 +44,7 @@ export function extractRstModuleSpecifiers(source: string): ModuleSpecifier[] {
     if (normalized) out.push(normalized);
   }
 
-  for (const match of source.matchAll(/^\s*\.\.\s+include::\s+([^\s]+)\s*$/gm)) {
+  for (const match of cleaned.matchAll(/^\s*\.\.\s+include::\s+([^\s]+)\s*$/gm)) {
     const rawSpecifier = match[1]?.trim();
     if (!rawSpecifier) continue;
     const normalized = normalizeLinkSpecifier(rawSpecifier, {
@@ -54,9 +55,76 @@ export function extractRstModuleSpecifiers(source: string): ModuleSpecifier[] {
     if (normalized) out.push(normalized);
   }
 
-  out.push(...extractRstToctreeSpecifiers(source));
+  for (const match of cleaned.matchAll(/^\s*\.\.\s+literalinclude::\s+([^\s]+)\s*$/gm)) {
+    const rawSpecifier = match[1]?.trim();
+    if (!rawSpecifier) continue;
+    const normalized = normalizeLinkSpecifier(rawSpecifier, {
+      preferRelative: true,
+      resolutionKind: "document",
+      forceRelative: true,
+    });
+    if (normalized) out.push(normalized);
+  }
+
+  out.push(...extractRstToctreeSpecifiers(cleaned));
 
   return dedupeModuleSpecifiers(out);
+}
+
+function blankRstLine(line: string): string {
+  return line.replace(/[^\r\n]/g, " ");
+}
+
+function leadingWhitespaceLength(line: string): number {
+  return line.match(/^\s*/)?.[0].length ?? 0;
+}
+
+function stripRstCommentsAndLiteralBlocks(source: string): string {
+  const lines = source.split(/\r?\n/);
+  let indentedBlockIndent: number | null = null;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    const trimmed = line.trim();
+    const indent = leadingWhitespaceLength(line);
+
+    if (indentedBlockIndent !== null) {
+      if (!trimmed) {
+        lines[index] = blankRstLine(line);
+        continue;
+      }
+      if (indent > indentedBlockIndent) {
+        lines[index] = blankRstLine(line);
+        continue;
+      }
+      indentedBlockIndent = null;
+    }
+
+    const directiveMatch = line.match(/^(\s*)\.\.\s+([A-Za-z][A-Za-z0-9_-]*)::/);
+    if (directiveMatch) {
+      const directive = directiveMatch[2]?.toLowerCase();
+      const directiveIndent = directiveMatch[1]?.length ?? 0;
+      if (directive === "comment") {
+        lines[index] = blankRstLine(line);
+        indentedBlockIndent = directiveIndent;
+      } else if (directive === "code" || directive === "code-block" || directive === "sourcecode") {
+        indentedBlockIndent = directiveIndent;
+      }
+      continue;
+    }
+
+    if (/^\s*\.\.\s*$/.test(line) || (/^\s*\.\.\s+/.test(line) && !/^\s*\.\.\s+_[^:]+:/.test(line))) {
+      lines[index] = blankRstLine(line);
+      indentedBlockIndent = indent;
+      continue;
+    }
+
+    if (/::\s*$/.test(line)) {
+      indentedBlockIndent = indent;
+    }
+  }
+
+  return lines.join("\n");
 }
 
 function collectRstTargetDefinitions(source: string): Map<string, ModuleSpecifier> {
@@ -108,6 +176,7 @@ function extractRstToctreeSpecifiers(source: string): ModuleSpecifier[] {
 
     const titledMatch = content.match(/<([^>]+)>/);
     const rawSpecifier = titledMatch?.[1]?.trim() ?? content;
+    if (/[*?\[\]{}]/.test(rawSpecifier)) continue;
     const normalized = normalizeLinkSpecifier(rawSpecifier, {
       preferRelative: true,
       resolutionKind: "document",

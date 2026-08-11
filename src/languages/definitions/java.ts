@@ -6,6 +6,7 @@ export const JAVA_DEF: LanguageDefinition = {
   id: "java",
   extensions: [".java"],
   grammar: () => loadTreeSitterLanguage("tree-sitter-java"),
+  usesQueryDrivenLocals: true,
   structure: {
     blocks: [
       {
@@ -90,7 +91,7 @@ export const JAVA_DEF: LanguageDefinition = {
     return "variable";
   },
   createsFunctionScope: (node) => node.type === "method_declaration" || node.type === "constructor_declaration",
-  createsBlockScope: (node) => node.type === "block",
+  createsBlockScope: (node) => node.type === "block" || node.type === "class_body",
   isDeclarationName: (node) => {
     const p = node.parent;
     if (!p) return false;

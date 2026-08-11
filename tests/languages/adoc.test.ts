@@ -5,44 +5,56 @@ const definition: LanguageTestDefinition = {
   id: "adoc",
   parity: {
     sampleDir: "adoc",
-    dependencyGraph: [
+    exact: {
+      dependencyGraph: [
+        {
+          from: "index.adoc",
+          to: { type: "external", name: "https://example.com/adoc" },
+        },
+        {
+          from: "index.adoc",
+          to: { type: "file", path: "appendix.adoc" },
+        },
+        {
+          from: "index.adoc",
+          to: { type: "file", path: "guide.adoc" },
+        },
+        {
+          from: "index.adoc",
+          to: { type: "file", path: "partials/intro.adoc" },
+        },
+        {
+          from: "index.adoc",
+          to: { type: "file", path: "partials/live.adoc" },
+        },
+        {
+          from: "index.adoc",
+          to: { type: "file", path: "summary.adoc" },
+        },
+        {
+          from: "index.asciidoc",
+          to: { type: "file", path: "guide.asciidoc" },
+        },
+      ],
+      references: [
+        {
+          name: "asciidoc remains graph-only for references",
+          file: "index.adoc",
+          line: 3,
+          column: 2,
+          expectedStatus: "not_found",
+        },
+      ],
+    },
+    absentDependencyGraph: [
       {
         from: "index.adoc",
-        to: { type: "file", path: "guide.adoc" },
-      },
-      {
-        from: "index.adoc",
-        to: { type: "file", path: "summary.adoc" },
-      },
-      {
-        from: "index.adoc",
-        to: { type: "file", path: "partials/intro.adoc" },
-      },
-      {
-        from: "index.adoc",
-        to: { type: "file", path: "appendix.adoc" },
-      },
-      {
-        from: "index.adoc",
-        to: { type: "external", name: "https://example.com/adoc" },
-      },
-      {
-        from: "index.asciidoc",
-        to: { type: "file", path: "guide.asciidoc" },
+        to: { type: "file", path: "partials/ignored.adoc" },
       },
     ],
     goToDefinition: [
       {
         name: "asciidoc remains graph-only for go-to-definition",
-        file: "index.adoc",
-        line: 3,
-        column: 2,
-        expectedStatus: "not_found",
-      },
-    ],
-    references: [
-      {
-        name: "asciidoc remains graph-only for references",
         file: "index.adoc",
         line: 3,
         column: 2,

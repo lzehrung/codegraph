@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import {
   diffBuildOptions,
   loadManifest,
@@ -8,6 +9,8 @@ import {
 import type { BuildOptions, IncrementalBuildOptions } from "./types.js";
 import { listChangedFiles, listUntrackedFiles } from "../util/git.js";
 import { errorMessage } from "../util/errors.js";
+import { fileIdentityKey } from "../util/paths.js";
+import { mapLimit } from "../util/concurrency.js";
 import {
   createDiscoveredFileMatcher,
   DEFAULT_PROJECT_PATTERNS,
@@ -26,6 +29,33 @@ export type TrackedManifestFilePlan = {
   trackedFiles: Set<string>;
   deletedTrackedFiles: Set<string>;
 };
+
+/** Bound concurrent existence probes so warm builds don't stall the event loop. */
+export const PATH_EXISTS_PROBE_CONCURRENCY = 64;
+
+export async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fsp.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Probe unique paths once with bounded concurrency. Scaling: O(unique paths)
+ * syscalls instead of O(call sites × paths).
+ */
+export async function probePathExistence(
+  paths: readonly string[],
+  concurrency: number = PATH_EXISTS_PROBE_CONCURRENCY,
+): Promise<Map<string, boolean>> {
+  const uniquePaths = Array.from(new Set(paths));
+  const results = await mapLimit(uniquePaths, concurrency, async (filePath) => {
+    return [filePath, await pathExists(filePath)] as const;
+  });
+  return new Map(results);
+}
 
 export function isMissingGitRevisionError(error: unknown): boolean {
   const message = errorMessage(error);
@@ -49,14 +79,22 @@ export function buildIncrementalGitDiffOptions(opts: IncrementalBuildOptions | u
   return gitOpts;
 }
 
-export function partitionTrackedManifestFiles(
+export async function partitionTrackedManifestFiles(
   trackedEntries: Record<string, ManifestFileEntry>,
-): TrackedManifestFilePlan {
+  concurrency: number = PATH_EXISTS_PROBE_CONCURRENCY,
+): Promise<TrackedManifestFilePlan> {
   const trackedFileList = Object.keys(trackedEntries);
+  const existence = await probePathExistence(trackedFileList, concurrency);
+  const trackedFiles = new Set<string>();
+  const deletedTrackedFiles = new Set<string>();
+  for (const file of trackedFileList) {
+    if (existence.get(file)) trackedFiles.add(file);
+    else deletedTrackedFiles.add(file);
+  }
   return {
     trackedFileList,
-    trackedFiles: new Set(trackedFileList.filter((file) => fs.existsSync(file))),
-    deletedTrackedFiles: new Set(trackedFileList.filter((file) => !fs.existsSync(file))),
+    trackedFiles,
+    deletedTrackedFiles,
   };
 }
 
@@ -66,9 +104,10 @@ export function collectDeletedTrackedFileDependents(
 ): Set<string> {
   const dependents = new Set<string>();
   if (!deletedTrackedFiles.size) return dependents;
+  const deletedFileKeys = new Set(Array.from(deletedTrackedFiles, fileIdentityKey));
   for (const [file, entry] of Object.entries(trackedEntries)) {
-    if (deletedTrackedFiles.has(file)) continue;
-    if (entry.edges.some((edge) => edge.to.type === "file" && deletedTrackedFiles.has(edge.to.path))) {
+    if (deletedFileKeys.has(fileIdentityKey(file))) continue;
+    if (entry.edges.some((edge) => edge.to.type === "file" && deletedFileKeys.has(fileIdentityKey(edge.to.path)))) {
       dependents.add(file);
     }
   }
@@ -86,27 +125,28 @@ export function collectTrackedFileDependents(
   for (const [file, entry] of Object.entries(trackedEntries)) {
     for (const edge of entry.edges) {
       if (edge.to.type !== "file") continue;
-      const importedFile = edge.to.path;
-      let bucket = reverseDeps.get(importedFile);
+      const importedFileKey = fileIdentityKey(edge.to.path);
+      let bucket = reverseDeps.get(importedFileKey);
       if (!bucket) {
         bucket = new Set<string>();
-        reverseDeps.set(importedFile, bucket);
+        reverseDeps.set(importedFileKey, bucket);
       }
       bucket.add(file);
     }
   }
 
-  const enqueued = new Set<string>(changedFiles);
-  const queue = [...changedFiles];
+  const enqueued = new Set(Array.from(changedFiles, fileIdentityKey));
+  const queue = [...enqueued];
   let head = 0;
   while (head < queue.length) {
-    const target = queue[head]!;
+    const targetKey = queue[head]!;
     head += 1;
-    for (const dependent of reverseDeps.get(target) ?? []) {
-      if (enqueued.has(dependent)) continue;
-      enqueued.add(dependent);
+    for (const dependent of reverseDeps.get(targetKey) ?? []) {
+      const dependentKey = fileIdentityKey(dependent);
+      if (enqueued.has(dependentKey)) continue;
+      enqueued.add(dependentKey);
       dependents.add(dependent);
-      queue.push(dependent);
+      queue.push(dependentKey);
     }
   }
 
@@ -188,7 +228,7 @@ export async function resolveIncrementalFilePlan(
 
   try {
     const trackedEntries = sanitizeManifestEntriesForRoot(projectRoot, manifest.files);
-    const { trackedFiles } = partitionTrackedManifestFiles(trackedEntries);
+    const { trackedFiles } = await partitionTrackedManifestFiles(trackedEntries);
 
     // Diff against the working tree, not just the current commit: a file that was
     // `git add`ed but never committed is neither in the manifest (not yet indexed) nor
@@ -202,9 +242,11 @@ export async function resolveIncrementalFilePlan(
       listUntrackedProjectFiles(projectRoot, opts?.discovery, true),
     ]);
 
+    const candidatePaths = [...workingTreeDiffFiles, ...untrackedFiles];
+    const existence = candidatePaths.length ? await probePathExistence(candidatePaths) : new Map<string, boolean>();
     const files = new Set<string>(trackedFiles);
-    for (const file of workingTreeDiffFiles) if (fs.existsSync(file)) files.add(file);
-    for (const file of untrackedFiles) if (fs.existsSync(file)) files.add(file);
+    for (const file of workingTreeDiffFiles) if (existence.get(file)) files.add(file);
+    for (const file of untrackedFiles) if (existence.get(file)) files.add(file);
     return {
       files: Array.from(files).sort(),
       manifestUpdatedAt: manifest.updatedAt,

@@ -14,6 +14,7 @@ import {
 } from "../graphs/symbol-render.js";
 import { buildProjectIndexFromFiles, buildProjectIndexIncremental } from "../indexer/build-index.js";
 import { type BuildOptions, type BuildReport } from "../indexer/types.js";
+import { summarizeAnalysis } from "../analysisSummary.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import { updateGraphSqlite, writeGraphSqlite } from "../sqlite.js";
 import { buildSqlArtifactGraphFromFiles } from "../sql/index.js";
@@ -280,9 +281,12 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
       context.writeStdoutLine(text);
     }
   };
-  const indexReport: BuildReport | undefined =
-    context.reportEnabled || context.showProgress ? { timings: {} } : undefined;
-  if (commandReport && indexReport) {
+  // Always populated (not gated behind --report/--progress) so a normal run can
+  // detect and surface reduced-accuracy analysis (native tree-sitter unavailable
+  // or per-file regex fallback) via both the stderr warning and the --json
+  // `analysis` field below, per finding #43.
+  const indexReport: BuildReport = { timings: {} };
+  if (commandReport) {
     commandReport.index = indexReport;
   }
   if (sqliteFile) {
@@ -308,7 +312,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
           ...(context.gitHead ? { gitHead: context.gitHead } : {}),
           ...(context.changedSince ? { changedSince: context.changedSince } : {}),
           graph: graphOptions,
-          ...(indexReport ? { report: indexReport } : {}),
+          report: indexReport,
         })
       : await buildProjectIndexFromFiles(context.projectRootFs, files, {
           onProgress: context.progressHandler,
@@ -319,7 +323,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
           ...(sqliteCacheMode !== undefined ? { cache: sqliteCacheMode } : {}),
           cacheStrict,
           graph: graphOptions,
-          ...(indexReport ? { report: indexReport } : {}),
+          report: indexReport,
         });
     context.maybeWriteNativeBackendStatus(indexReport, context.showProgress);
 
@@ -371,9 +375,10 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
         dynamicImportHeuristics,
         ...(resolutionHints.length ? { resolutionHints } : {}),
       },
-      ...(indexReport ? { report: indexReport } : {}),
+      report: indexReport,
     });
     context.maybeWriteNativeBackendStatus(indexReport, context.showProgress);
+    const analysis = summarizeAnalysis({ index, nativeMode: context.nativeMode, report: indexReport });
     let sgraph: SymbolGraph;
     if (detailedSymbols) {
       const scope = parseSymbolGraphScopeOption(context.getOpt("--symbols-detailed-scope"), "--symbols-detailed-scope");
@@ -396,7 +401,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
         await writeOut(graphToDOTSymbols(sgraphOut, context.projectRootFs));
       } else {
         const allFiles = [...index.graph.nodes];
-        await writeOut(toJSON(compactSymbolsOnly(allFiles, sgraphOut, stable)));
+        await writeOut(toJSON({ ...compactSymbolsOnly(allFiles, sgraphOut, stable), analysis }));
       }
       await finalizeReport();
       return;
@@ -408,7 +413,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
     } else if (format === "dot") {
       await writeOut(graphToDOTSymbolsWithFiles(sgraphOut, fgraphOut, context.projectRootFs));
     } else {
-      await writeOut(toJSON(compactGraphWithSymbols(fgraphOut, sgraphOut, stable)));
+      await writeOut(toJSON({ ...compactGraphWithSymbols(fgraphOut, sgraphOut, stable), analysis }));
     }
     await finalizeReport();
     return;
@@ -420,9 +425,10 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
     dynamicImportHeuristics,
     ...(context.nativeMode !== "auto" ? { native: context.nativeMode } : {}),
     ...(resolutionHints.length ? { resolutionHints } : {}),
-    ...(indexReport ? { report: indexReport } : {}),
+    report: indexReport,
   });
   context.maybeWriteNativeBackendStatus(indexReport, context.showProgress);
+  const analysis = summarizeAnalysis({ nativeMode: context.nativeMode, report: indexReport });
   const graphOut = stable ? stabilizeGraph(graph) : graph;
   if (format === "mermaid") {
     await writeOut(graphToMermaid(graphOut));
@@ -437,6 +443,7 @@ export async function handleGraphCommand(context: GraphCommandContext): Promise<
         files: compactFiles,
         fileEdges,
         ...(sqlArtifacts ? { sqlArtifacts } : {}),
+        analysis,
       }),
     );
   }

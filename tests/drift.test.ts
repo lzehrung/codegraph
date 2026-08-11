@@ -17,7 +17,7 @@ async function writeFile(root: string, file: string, content: string): Promise<v
 
 function makeSnapshot(overrides: Partial<ArchitectureSnapshot> = {}): ArchitectureSnapshot {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     root: "/repo",
     files: { total: 0, byLanguage: {} },
     hotspots: [],
@@ -138,12 +138,152 @@ describe("architecture drift", () => {
   it("suppresses graph edge drift when graph edges are disabled", () => {
     const base = makeSnapshot();
     const head = makeSnapshot({
-      graphEdges: [{ key: "src/a.ts\u0000./b\u0000src/b.ts", from: "src/a.ts", to: "src/b.ts", raw: "./b" }],
+      graphEdges: [{ key: "src/a.ts\0./b\0src/b.ts", from: "src/a.ts", to: "src/b.ts", raw: "./b" }],
     });
 
     const report = compareArchitectureSnapshots(base, head, { graphEdges: "off" });
 
     expect(report.findings.some((finding) => finding.kind === "graph-edge-added")).toBe(false);
+  });
+
+  it("reports a type-only to runtime edge change instead of add/remove churn", () => {
+    const base = makeSnapshot({
+      graphEdges: [
+        {
+          key: "src/a.ts\0./b\0src/b.ts\0type-only",
+          from: "src/a.ts",
+          to: "src/b.ts",
+          raw: "./b",
+          typeOnly: true,
+        },
+      ],
+    });
+    const head = makeSnapshot({
+      graphEdges: [
+        {
+          key: "src/a.ts\0./b\0src/b.ts\0runtime",
+          from: "src/a.ts",
+          to: "src/b.ts",
+          raw: "./b",
+          typeOnly: false,
+        },
+      ],
+    });
+
+    const report = compareArchitectureSnapshots(base, head, { failOn: [] });
+
+    expect(report.findings).toContainEqual(
+      expect.objectContaining({
+        kind: "graph-edge-type-changed",
+        severity: "warning",
+        file: "src/a.ts",
+        details: { beforeTypeOnly: true, afterTypeOnly: false },
+      }),
+    );
+    expect(report.findings.some((finding) => finding.kind === "graph-edge-added")).toBe(false);
+    expect(report.findings.some((finding) => finding.kind === "graph-edge-removed")).toBe(false);
+  });
+
+  it("reports a runtime to type-only edge change as info in summary mode", () => {
+    const base = makeSnapshot({
+      graphEdges: [
+        { key: "src/a.ts\0./b\0src/b.ts\0runtime", from: "src/a.ts", to: "src/b.ts", raw: "./b", typeOnly: false },
+      ],
+    });
+    const head = makeSnapshot({
+      graphEdges: [
+        { key: "src/a.ts\0./b\0src/b.ts\0type-only", from: "src/a.ts", to: "src/b.ts", raw: "./b", typeOnly: true },
+      ],
+    });
+
+    const report = compareArchitectureSnapshots(base, head, { failOn: [], graphEdges: "summary" });
+
+    expect(report.findings).toContainEqual(
+      expect.objectContaining({
+        kind: "graph-edge-type-changed",
+        severity: "info",
+        details: { beforeTypeOnly: false, afterTypeOnly: true },
+      }),
+    );
+    expect(report.findings.some((finding) => finding.kind === "graph-edge-added")).toBe(false);
+    expect(report.findings.some((finding) => finding.kind === "graph-edge-removed")).toBe(false);
+  });
+
+  it("detects a type-only import becoming a runtime dependency", async () => {
+    const root = await mkTmpDir("cg-drift-type-only-");
+    await writeFile(root, "src/b.ts", "export function b() { return 1; }\nexport type B = number;\n");
+    await writeFile(root, "src/a.ts", "import type { B } from './b';\nexport function a(value: B) { return value; }\n");
+    const base = await buildArchitectureSnapshot(root, { includeRoots: ["src"] });
+    expect(base.graphEdges.some((edge) => edge.typeOnly)).toBe(true);
+
+    await writeFile(root, "src/a.ts", "import { b } from './b';\nexport function a() { return b(); }\n");
+    const head = await buildArchitectureSnapshot(root, { includeRoots: ["src"] });
+
+    const report = compareArchitectureSnapshots(base, head, { failOn: [] });
+
+    const finding = report.findings.find((entry) => entry.kind === "graph-edge-type-changed");
+    expect(finding).toBeDefined();
+    expect(finding?.severity).toBe("warning");
+    expect(finding?.edge?.to).toBe("src/b.ts");
+    expect(report.findings.some((entry) => entry.kind === "graph-edge-added")).toBe(false);
+    expect(report.findings.some((entry) => entry.kind === "graph-edge-removed")).toBe(false);
+  });
+
+  it("keeps duplicate group keys stable when lines shift above unchanged clones", async () => {
+    const root = await mkTmpDir("cg-drift-duplicates-");
+    const cloneA = `
+export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }>) {
+  const totals: number[] = [];
+  const labels: string[] = [];
+  for (const row of rows) {
+    const subtotal = row.amount + row.tax;
+    const rounded = Math.round(subtotal * 100) / 100;
+    const label = rounded > 100 ? "large" : "small";
+    labels.push(label);
+    totals.push(rounded);
+  }
+  const encoded = totals.map((value, index) => labels[index] + ":" + value.toFixed(2));
+  return encoded.filter((value) => value.includes(":")).join(",");
+}
+`;
+    const cloneB = `
+export function summarizeLedgerEntries(entries: Array<{ credit: number; debit: number; note: string }>) {
+  let balance = 0;
+  const notes: string[] = [];
+  entries.forEach((entry, position) => {
+    balance += entry.credit - entry.debit;
+    if (entry.note.length) {
+      notes.push(position + ":" + entry.note.trim());
+    }
+  });
+  const average = entries.length ? balance / entries.length : 0;
+  return { balance: Math.round(balance * 100) / 100, average, notes: notes.join(";") };
+}
+`;
+    await writeFile(root, "src/dupA1.ts", cloneA);
+    await writeFile(root, "src/dupA2.ts", cloneA);
+    await writeFile(root, "src/dupB1.ts", cloneB);
+    await writeFile(root, "src/dupB2.ts", cloneB);
+    const base = await buildArchitectureSnapshot(root);
+    expect(base.duplicates.groups.total).toBe(2);
+    expect(base.duplicates.topGroupKeys).toHaveLength(2);
+
+    const shiftedA = `// leading comment shifts every line below\n${cloneA}`;
+    await writeFile(root, "src/dupA1.ts", shiftedA);
+    await writeFile(root, "src/dupA2.ts", shiftedA);
+    await writeFile(root, "src/dupB2.ts", "export function replacement() { return 42; }\n");
+    const head = await buildArchitectureSnapshot(root);
+    expect(head.duplicates.groups.total).toBe(1);
+
+    const report = compareArchitectureSnapshots(base, head, { failOn: [] });
+
+    const finding = report.findings.find((entry) => entry.kind === "duplicate-decrease");
+    expect(finding).toBeDefined();
+    expect(finding?.details?.newTopGroupKeys).toEqual([]);
+    expect(finding?.details?.resolvedTopGroupKeys).toHaveLength(1);
+    const unchangedKey = base.duplicates.topGroupKeys.find((key) => head.duplicates.topGroupKeys.includes(key));
+    expect(unchangedKey).toBeDefined();
+    expect(finding?.details?.resolvedTopGroupKeys).not.toContain(unchangedKey);
   });
 
   it("reports duplicate top group additions and removals", () => {

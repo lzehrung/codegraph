@@ -2,6 +2,7 @@ import type { FileId } from "../types.js";
 import type { FileChange } from "./types.js";
 import pm from "picomatch";
 import {
+  fileIdentityKey,
   isAbsoluteFilePath,
   isFilePathWithinRoot,
   normalizePath,
@@ -99,32 +100,37 @@ export function normalizeImpactDiffFiles(
 }
 
 export function createGraphFileResolver(graphNodes: Iterable<FileId>): (filePath: string) => FileId {
-  const normalizedNodes = Array.from(new Set(Array.from(graphNodes, (node) => normalizePath(node))));
-  const exactNodes = new Set(normalizedNodes);
+  const nodesByIdentity = new Map<string, FileId>();
+  for (const node of graphNodes) {
+    const normalizedNode = normalizePath(node);
+    nodesByIdentity.set(fileIdentityKey(normalizedNode), normalizedNode);
+  }
   const cache = new Map<string, FileId>();
 
   return (filePath: string): FileId => {
     const normalized = normalizePath(filePath);
-    const cached = cache.get(normalized);
+    const identity = fileIdentityKey(normalized);
+    const cached = cache.get(identity);
     if (cached) return cached;
-    if (exactNodes.has(normalized)) {
-      cache.set(normalized, normalized);
-      return normalized;
+    const exact = nodesByIdentity.get(identity);
+    if (exact) {
+      cache.set(identity, exact);
+      return exact;
     }
 
-    const suffix = normalized.startsWith("/") ? normalized.slice(1) : normalized;
+    const suffix = identity.startsWith("/") ? identity.slice(1) : identity;
     let match: FileId | null = null;
-    for (const node of normalizedNodes) {
-      if (!node.endsWith(`/${suffix}`)) continue;
+    for (const [nodeIdentity, node] of nodesByIdentity) {
+      if (!nodeIdentity.endsWith(`/${suffix}`)) continue;
       if (match && match !== node) {
-        cache.set(normalized, normalized);
+        cache.set(identity, normalized);
         return normalized;
       }
       match = node;
     }
 
     const resolved = match ?? normalized;
-    cache.set(normalized, resolved);
+    cache.set(identity, resolved);
     return resolved;
   };
 }

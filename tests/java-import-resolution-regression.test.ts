@@ -9,6 +9,7 @@ import {
   parseFile,
 } from "../src/index.js";
 import { mkTmpDir } from "./helpers/filesystem.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 
 describe("Java import resolution regression", () => {
   it("ignores target trees when resolving imports from a repo root", async () => {
@@ -86,9 +87,9 @@ describe("Java import resolution regression", () => {
     });
     const elapsedMs = performance.now() - startedAt;
 
-    expect(index.byFile.has(mainFile.replace(/\\/g, "/"))).toBe(true);
-    expect(index.byFile.has(normalizedSourcePackage)).toBe(true);
-    expect(index.byFile.has(normalizedIgnoredPackage)).toBe(false);
+    expect(index.byFile.has(fileIdentityKey(mainFile))).toBe(true);
+    expect(index.byFile.has(fileIdentityKey(normalizedSourcePackage))).toBe(true);
+    expect(index.byFile.has(fileIdentityKey(normalizedIgnoredPackage))).toBe(false);
     expect(elapsedMs).toBeLessThan(10000);
   });
 

@@ -19,8 +19,13 @@ import type { BuildOptions, BuildReport, WorkerPoolReport } from "./types.js";
 
 export const NATIVE_WORKER_AUTO_FILE_THRESHOLD = 250;
 
+type NativeWorkerPool = {
+  run(task: NativeExtractTask | { tasks: NativeExtractTask[] }): Promise<unknown>;
+  destroy(): Promise<void>;
+};
+
 export type WorkerPoolSetupResult = {
-  pool: import("piscina").Piscina | null;
+  pool: NativeWorkerPool | null;
   report: WorkerPoolReport | undefined;
   startTime: number;
   batchSize: number;
@@ -126,6 +131,18 @@ export async function teardownWorkerPool(
   }
 }
 
+function recordPreparedNativeExecutionOutcome(report: BuildReport | undefined, prepared: PreparedFileContext): void {
+  if (isGraphOnlyLanguage(prepared.sup.id)) return;
+  recordNativeExecutionOutcome(report, {
+    file: prepared.file,
+    support: prepared.sup,
+    languageId: prepared.sup.id,
+    results: prepared.nativeQueries,
+    ...(prepared.nativeFallbackReason ? { fallbackReason: prepared.nativeFallbackReason } : {}),
+    ...(prepared.nativeError ? { error: prepared.nativeError } : {}),
+  });
+}
+
 export async function prepareFileContextForBuild(
   file: string,
   support: LanguageSupport,
@@ -137,7 +154,7 @@ export async function prepareFileContextForBuild(
   if (workerSetup.pool && !isSFCFile(file) && !isGraphOnlyLanguage(support.id)) {
     if (workerSetup.report) workerSetup.report.tasksSubmitted++;
     try {
-      const workerResult: NativeExtractResult = await workerSetup.pool.run(buildWorkerTask(file, support));
+      const workerResult = (await workerSetup.pool.run(buildWorkerTask(file, support))) as NativeExtractResult;
       prepared = workerResultToPrepared(workerResult, support, file);
     } catch (error) {
       if (isNativeRequiredUnavailableError(error)) throw error;
@@ -156,17 +173,7 @@ export async function prepareFileContextForBuild(
   } else {
     prepared = await prepareFileForIndexing(file, opts?.native, opts?.languageExtensions);
   }
-  if (isGraphOnlyLanguage(prepared.sup.id)) {
-    return prepared;
-  }
-  recordNativeExecutionOutcome(report, {
-    file,
-    support: prepared.sup,
-    languageId: prepared.sup.id,
-    results: prepared.nativeQueries,
-    ...(prepared.nativeFallbackReason ? { fallbackReason: prepared.nativeFallbackReason } : {}),
-    ...(prepared.nativeError ? { error: prepared.nativeError } : {}),
-  });
+  recordPreparedNativeExecutionOutcome(report, prepared);
   return prepared;
 }
 
@@ -209,27 +216,32 @@ export async function prepareFileContextsForBuildBatch(
       for (const [i, entry] of slice.entries()) {
         const workerResult = batchResult.results[i];
         if (!workerResult) {
-          results[entry.index] = await prepareFileForIndexing(entry.file, opts?.native, opts?.languageExtensions);
+          if (workerSetup.report) {
+            workerSetup.report.tasksFailed++;
+            workerSetup.report.errors ??= [];
+            if (workerSetup.report.errors.length < 20) {
+              workerSetup.report.errors.push({
+                file: entry.file,
+                message: "Native worker returned no result for batch task.",
+              });
+            }
+          }
+          const prepared = await prepareFileForIndexing(entry.file, opts?.native, opts?.languageExtensions);
+          recordPreparedNativeExecutionOutcome(report, prepared);
+          results[entry.index] = prepared;
           continue;
         }
         const prepared = workerResultToPrepared(workerResult, entry.support, entry.file);
-        if (!isGraphOnlyLanguage(prepared.sup.id)) {
-          recordNativeExecutionOutcome(report, {
-            file: entry.file,
-            support: prepared.sup,
-            languageId: prepared.sup.id,
-            results: prepared.nativeQueries,
-            ...(prepared.nativeFallbackReason ? { fallbackReason: prepared.nativeFallbackReason } : {}),
-            ...(prepared.nativeError ? { error: prepared.nativeError } : {}),
-          });
-        }
+        recordPreparedNativeExecutionOutcome(report, prepared);
         results[entry.index] = prepared;
       }
     } catch (error) {
       if (isNativeRequiredUnavailableError(error)) throw error;
       if (workerSetup.report) workerSetup.report.tasksFailed += slice.length;
       for (const entry of slice) {
-        results[entry.index] = await prepareFileForIndexing(entry.file, opts?.native, opts?.languageExtensions);
+        const prepared = await prepareFileForIndexing(entry.file, opts?.native, opts?.languageExtensions);
+        recordPreparedNativeExecutionOutcome(report, prepared);
+        results[entry.index] = prepared;
       }
     }
   }

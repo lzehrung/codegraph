@@ -6,12 +6,21 @@ import { analyzeImpactFromDiff } from "../src/index.js";
 import { analyzeImpact, seedTransitiveFromFiles, calculateSeverity } from "../src/impact/analyzer.js";
 import { DEFAULT_SEVERITY_WEIGHTS } from "../src/impact/types.js";
 import { createReferenceLookupCache } from "../src/impact/referenceCache.js";
-import { createImpactDiagnostics } from "../src/impact/collect.js";
+import { createImpactDiagnostics, listFileLevelFallbackPaths } from "../src/impact/collect.js";
 import { rankChangedSymbolsForBudget } from "../src/impact/budgets.js";
 import { buildProjectIndex, buildProjectIndexFromFiles, SymbolKind } from "../src/indexer.js";
-import type { ProjectIndex } from "../src/indexer.js";
-import { normalizePath } from "../src/util/paths.js";
+import type { ProjectIndex } from "../src/indexer/types.js";
+import { compileTestPatterns, createIndexTestFileMatcher } from "../src/impact/testPatterns.js";
+import {
+  fileIdentityKey,
+  isFileIdentityCaseInsensitive,
+  normalizePath,
+  resetFileIdentityCaseSensitivityForTests,
+  setFileIdentityCaseInsensitive,
+} from "../src/util/paths.js";
 import type { Edge } from "../src/types.js";
+import type { FileChange, ImpactItem } from "../src/impact/types.js";
+import { goToSqlDefinition } from "../src/sql/navigation.js";
 import { createTestIndex } from "./test-utils.js";
 
 describe("Reference lookup cache", () => {
@@ -27,7 +36,9 @@ describe("Reference lookup cache", () => {
       await fsp.writeFile(mainFile, 'import { helper } from "./api";\nexport const value = helper();\n', "utf8");
 
       const firstIndex = await buildProjectIndex(root, { cache: "memory" });
-      const firstDef = firstIndex.byFile.get(apiFileId)?.locals.find((local) => local.localName === "helper");
+      const firstDef = firstIndex.byFile
+        .get(fileIdentityKey(apiFileId))
+        ?.locals.find((local) => local.localName === "helper");
       expect(firstDef).toBeDefined();
       const cache = createReferenceLookupCache();
       const firstRefs = await cache.get(firstIndex, firstDef!);
@@ -38,7 +49,9 @@ describe("Reference lookup cache", () => {
 
       await fsp.writeFile(mainFile, "export const value = 1;\n", "utf8");
       const secondIndex = await buildProjectIndex(root, { cache: "memory" });
-      const secondDef = secondIndex.byFile.get(apiFileId)?.locals.find((local) => local.localName === "helper");
+      const secondDef = secondIndex.byFile
+        .get(fileIdentityKey(apiFileId))
+        ?.locals.find((local) => local.localName === "helper");
       expect(secondDef).toBeDefined();
       const secondRefs = await cache.get(secondIndex, secondDef!);
 
@@ -386,6 +399,141 @@ describe("Impact Analyzer Edge Cases", () => {
       }
     });
 
+    it.each([
+      {
+        label: "Python positional-only markers",
+        file: "main.py",
+        beforeSignature: "def helper(a):",
+        afterSignature: "def helper(a, /, b):",
+        source: [
+          "def helper(a, /, b):",
+          "    return a",
+          "",
+          "compatible = helper(1, 2)",
+          "incompatible = helper(1)",
+          "",
+        ].join("\n"),
+        signatureLine: 1,
+        expected: { minArgs: 2, maxArgs: 2, confidence: "high" },
+        compatibleArgCount: 2,
+        incompatibleArgCount: 1,
+      },
+      {
+        label: "Java varargs",
+        file: "Main.java",
+        beforeSignature: "  void helper(String required) {}",
+        afterSignature: "  void helper(String required, String... args) {}",
+        source: [
+          "class Main {",
+          "  void helper(String required, String... args) {}",
+          "  void run() {",
+          '    helper("x", "y");',
+          "    helper();",
+          "  }",
+          "}",
+          "",
+        ].join("\n"),
+        signatureLine: 2,
+        expected: { minArgs: 1, maxArgs: null, confidence: "high" },
+        compatibleArgCount: 2,
+        incompatibleArgCount: 0,
+      },
+      {
+        label: "Kotlin trailing lambdas",
+        file: "main.kt",
+        beforeSignature: "fun helper(value: Int) { }",
+        afterSignature: "fun helper(value: Int, callback: () -> Unit) { callback() }",
+        source: [
+          "fun helper(value: Int, callback: () -> Unit) { callback() }",
+          "fun run() {",
+          "  helper(1) { }",
+          "  helper(1)",
+          "}",
+          "",
+        ].join("\n"),
+        signatureLine: 1,
+        expected: { minArgs: 2, maxArgs: 2, confidence: "high" },
+        compatibleArgCount: 2,
+        incompatibleArgCount: 1,
+      },
+      {
+        label: "Swift trailing closures",
+        file: "main.swift",
+        beforeSignature: "func helper(_ value: Int) { }",
+        afterSignature: "func helper(_ value: Int, callback: () -> Void) { callback() }",
+        source: [
+          "func helper(_ value: Int, callback: () -> Void) { callback() }",
+          "func run() {",
+          "  helper(1) { }",
+          "  helper(1)",
+          "}",
+          "",
+        ].join("\n"),
+        signatureLine: 1,
+        expected: { minArgs: 2, maxArgs: 2, confidence: "high" },
+        compatibleArgCount: 2,
+        incompatibleArgCount: 1,
+      },
+    ])(
+      "reports only genuine argument-count mismatches for $label",
+      async ({
+        file,
+        beforeSignature,
+        afterSignature,
+        source,
+        signatureLine,
+        expected,
+        compatibleArgCount,
+        incompatibleArgCount,
+      }) => {
+        const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-call-compat-regression-"));
+        try {
+          const targetFile = path.join(root, file);
+          await fsp.writeFile(targetFile, source, "utf8");
+          const index = await buildProjectIndex(root, { cache: "memory" });
+          const diffText = `diff --git a/${file} b/${file}
+--- a/${file}
++++ b/${file}
+@@ -${signatureLine},1 +${signatureLine},1 @@
+-${beforeSignature}
++${afterSignature}
+`;
+
+          const result = await analyzeImpactFromDiff(root, index, {
+            provider: "raw",
+            diffText,
+            includeTests: true,
+          });
+
+          if ("files" in result) {
+            throw new Error("Expected full impact report");
+          }
+
+          const helper = result.changedSymbols.find((symbol) => symbol.name === "helper");
+          expect(helper?.callCompatibility).toContainEqual(
+            expect.objectContaining({
+              status: "compatible",
+              reason: "compatible_argument_count",
+              actual: { argCount: compatibleArgCount, confidence: "high" },
+              expected,
+              callsiteFile: file,
+            }),
+          );
+          expect(helper?.callCompatibility).toContainEqual(
+            expect.objectContaining({
+              status: "likely_mismatch",
+              reason: "argument_count_below_minimum",
+              actual: { argCount: incompatibleArgCount, confidence: "high" },
+              expected,
+              callsiteFile: file,
+            }),
+          );
+        } finally {
+          await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+        }
+      },
+    );
+
     it.each(["self", "cls"])("counts %s as an ordinary parameter for Python free functions", async (receiverName) => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-python-free-self-"));
       try {
@@ -707,6 +855,74 @@ describe("Impact Analyzer Edge Cases", () => {
       expect(fallbackItem?.reasons).toContain("fileLevelChange");
     });
 
+    const fallbackChangeCases: ReadonlyArray<{ kind: FileChange["kind"]; isBinary: boolean }> = [
+      { kind: "added", isBinary: false },
+      { kind: "added", isBinary: true },
+      { kind: "modified", isBinary: false },
+      { kind: "modified", isBinary: true },
+      { kind: "deleted", isBinary: false },
+      { kind: "deleted", isBinary: true },
+      { kind: "renamed", isBinary: false },
+      { kind: "renamed", isBinary: true },
+    ];
+
+    for (const changeCase of fallbackChangeCases) {
+      it(`seeds dependents for ${changeCase.kind} ${changeCase.isBinary ? "binary" : "text"} changes`, () => {
+        const root = path.resolve("src/impact-fallback-matrix");
+        const suffix = changeCase.isBinary ? "binary" : "text";
+        const changedFile = path.join(root, `${changeCase.kind}-${suffix}.ts`);
+        const oldPath = path.join(root, `${changeCase.kind}-${suffix}-old.ts`);
+        const dependentFile = path.join(root, `${changeCase.kind}-${suffix}-consumer.ts`);
+        const lookupPath = changeCase.kind === "renamed" ? oldPath : changedFile;
+        const edges: Edge[] = [
+          {
+            from: dependentFile,
+            to: { type: "file", path: lookupPath },
+            raw: "./changed",
+          },
+        ];
+        const index: ProjectIndex = {
+          graph: { nodes: new Set([changedFile, oldPath, dependentFile]), edges },
+          modules: new Map(),
+          byFile: new Map(),
+          exportCache: new Map(),
+          scopeCache: new Map(),
+        };
+        const change: FileChange = {
+          path: changedFile,
+          kind: changeCase.kind,
+          hunks: [],
+        };
+        if (changeCase.kind === "renamed") {
+          change.oldPath = oldPath;
+        }
+        if (changeCase.isBinary) {
+          change.isBinary = true;
+        } else if (changeCase.kind === "added" || changeCase.kind === "modified") {
+          change.hunks = [{ oldStart: 1, newStart: 1, lines: ["+sideEffect();"] }];
+        }
+
+        const impacted = new Map<string, ImpactItem>();
+        const diagnostics = createImpactDiagnostics(1, 0);
+        seedTransitiveFromFiles(index, impacted, [change], {
+          includeTests: false,
+          fileLevelFallback: true,
+          fileLevelFallbackPaths: listFileLevelFallbackPaths([change], new Set<string>()),
+          diagnostics,
+        });
+
+        expect(impacted.has(dependentFile)).toBe(true);
+        expect(diagnostics.fallbackSeededFiles).toBe(1);
+        expect(diagnostics.fallbackSeededDependents).toBe(1);
+        const item = impacted.get(dependentFile);
+        if (changeCase.kind === "added" || changeCase.kind === "modified") {
+          expect(item?.reasons).toContain("fileLevelChange");
+        } else {
+          expect(item?.reasons).toContain("transitive");
+        }
+      });
+    }
+
     it("applies ignore globs for sparse explicit-file indexes", async () => {
       const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-impact-analyzer-"));
       try {
@@ -836,6 +1052,35 @@ describe("Impact Analyzer Edge Cases", () => {
       });
 
       expect(Array.from(impacted.values()).some((item) => item.file.endsWith("MyTests.ts"))).toBe(false);
+    });
+    it("infers test roots from display-cased module paths", () => {
+      const originalCaseSensitivity = isFileIdentityCaseInsensitive();
+      try {
+        resetFileIdentityCaseSensitivityForTests(true);
+        setFileIdentityCaseInsensitive(true);
+        const featureFile = "C:/Repo/src/feature.ts";
+        const testFile = "C:/Repo/Checks/MyTests.ts";
+        const index: ProjectIndex = {
+          projectRoot: undefined,
+          graph: { nodes: new Set([featureFile, testFile]), edges: [] },
+          modules: new Map([
+            [fileIdentityKey(featureFile), { file: featureFile, exports: [], imports: [], locals: [] }],
+            [fileIdentityKey(testFile), { file: testFile, exports: [], imports: [], locals: [] }],
+          ]),
+          byFile: new Map([
+            [fileIdentityKey(featureFile), { file: featureFile, exports: [], imports: [], locals: [] }],
+            [fileIdentityKey(testFile), { file: testFile, exports: [], imports: [], locals: [] }],
+          ]),
+          exportCache: new Map(),
+          scopeCache: new Map(),
+        };
+        const matcher = createIndexTestFileMatcher(index, compileTestPatterns(["^Checks/MyTests\\.ts$"]));
+
+        expect(matcher(testFile)).toBe(true);
+        expect(matcher(featureFile)).toBe(false);
+      } finally {
+        resetFileIdentityCaseSensitivityForTests(originalCaseSensitivity);
+      }
     });
 
     it("supports custom test patterns", async () => {
@@ -971,9 +1216,44 @@ describe("Impact Analyzer Edge Cases", () => {
       expect(sameFileResult.explain.sameFile).toBe(true);
       expect(differentFileResult.explain.sameFile).toBeUndefined();
 
-      // Both should be 1.0 due to clamping, but sameFile should be marked in explain
-      expect(sameFileResult.severity).toBe(1.0);
-      expect(differentFileResult.severity).toBe(1.0);
+      // Saturating normalization retains the same-file boost for ranking.
+      expect(sameFileResult.severity).toBeGreaterThan(differentFileResult.severity);
+    });
+
+    it("treats same-file boost as path-identity when casing differs", () => {
+      const originalCaseSensitivity = isFileIdentityCaseInsensitive();
+      try {
+        resetFileIdentityCaseSensitivityForTests(true);
+        setFileIdentityCaseInsensitive(true);
+
+        const mockIndex = {
+          graph: { edges: [] },
+          byFile: new Map(),
+        };
+
+        const changedSymbol = {
+          id: "test.ts::func::100",
+          file: "src/user.ts",
+          name: "func",
+          kind: SymbolKind.Function,
+          exported: false,
+          range: { start: { line: 1, column: 1, index: 100 }, end: { line: 3, column: 2, index: 150 } },
+          typeOnly: false,
+        };
+
+        const mixedCaseRef = {
+          file: "Src/User.ts",
+          range: { start: { line: 5, column: 10 } },
+        };
+
+        const result = calculateSeverity(changedSymbol, mixedCaseRef, ["directRef"], 0, mockIndex);
+
+        expect(mixedCaseRef.file === changedSymbol.file).toBe(false);
+        expect(fileIdentityKey(mixedCaseRef.file)).toBe(fileIdentityKey(changedSymbol.file));
+        expect(result.explain.sameFile).toBe(true);
+      } finally {
+        resetFileIdentityCaseSensitivityForTests(originalCaseSensitivity);
+      }
     });
 
     it("should penalize type-only changes", async () => {
@@ -1053,9 +1333,49 @@ describe("Impact Analyzer Edge Cases", () => {
       expect(highFanInResult.explain.fanIn).toBe(3);
       expect(lowFanInResult.explain.fanIn).toBeUndefined();
 
-      // Both should be 1.0 due to clamping, but high fan-in should be marked in explain
-      expect(highFanInResult.severity).toBe(1.0);
-      expect(lowFanInResult.severity).toBe(1.0);
+      // Saturating normalization retains the fan-in boost for ranking.
+      expect(highFanInResult.severity).toBeGreaterThan(lowFanInResult.severity);
+    });
+
+    it("counts fan-in when reference path casing differs from edge path casing", () => {
+      const originalCaseSensitivity = isFileIdentityCaseInsensitive();
+      try {
+        resetFileIdentityCaseSensitivityForTests(true);
+        setFileIdentityCaseInsensitive(true);
+
+        const mockIndex = {
+          graph: {
+            edges: [
+              { to: { type: "file", path: "src/user.ts" } },
+              { to: { type: "file", path: "src/user.ts" } },
+              { to: { type: "file", path: "src/user.ts" } },
+            ],
+          },
+          byFile: new Map(),
+        };
+
+        const changedSymbol = {
+          id: "test.ts::func::100",
+          file: "test.ts",
+          name: "func",
+          kind: SymbolKind.Function,
+          exported: false,
+          range: { start: { line: 1, column: 1, index: 100 }, end: { line: 3, column: 2, index: 150 } },
+          typeOnly: false,
+        };
+
+        const ref = {
+          file: "Src/User.ts",
+          range: { start: { line: 5, column: 10 } },
+        };
+
+        const result = calculateSeverity(changedSymbol, ref, ["directRef"], 0, mockIndex);
+
+        expect(fileIdentityKey(ref.file)).toBe(fileIdentityKey("src/user.ts"));
+        expect(result.explain.fanIn).toBe(3);
+      } finally {
+        resetFileIdentityCaseSensitivityForTests(originalCaseSensitivity);
+      }
     });
 
     it("should reject invalid severity weights instead of silently repairing them", () => {
@@ -1125,7 +1445,7 @@ describe("Impact Analyzer Edge Cases", () => {
       expect(fallbackResult).toEqual(explicitFanInResult);
     });
 
-    it("discounts confidence but not severity for medium-confidence resolved references", async () => {
+    it("discounts severity and confidence for medium-confidence resolved references", async () => {
       const mockIndex = {
         graph: { edges: [] },
         byFile: new Map(),
@@ -1155,7 +1475,7 @@ describe("Impact Analyzer Edge Cases", () => {
       const exactResult = await calculateSeverity(changedSymbol, exactRef, ["directRef"], 0, mockIndex);
       const memberAccessResult = await calculateSeverity(changedSymbol, memberAccessRef, ["directRef"], 0, mockIndex);
 
-      expect(memberAccessResult.severity).toBe(exactResult.severity);
+      expect(memberAccessResult.severity).toBeLessThan(exactResult.severity);
       expect(memberAccessResult.confidence).toBeLessThan(exactResult.confidence);
       expect(memberAccessResult.confidence).toBeCloseTo(exactResult.confidence * 0.85, 5);
       expect(memberAccessResult.explain.resolutionConfidence).toBe("medium");
@@ -1193,7 +1513,7 @@ describe("Impact Analyzer Edge Cases", () => {
       const lowResult = await calculateSeverity(changedSymbol, lowConfidenceRef, ["directRef"], 0, mockIndex);
       const mediumResult = await calculateSeverity(changedSymbol, mediumConfidenceRef, ["directRef"], 0, mockIndex);
 
-      expect(lowResult.severity).toBe(mediumResult.severity);
+      expect(lowResult.severity).toBeLessThan(mediumResult.severity);
       expect(lowResult.confidence).toBeLessThan(mediumResult.confidence);
       expect(lowResult.explain.resolutionConfidence).toBe("low");
     });
@@ -1641,7 +1961,7 @@ describe("Impact Analyzer Edge Cases", () => {
         );
         const index = await buildProjectIndex(root, { cache: "memory" });
         const apiFile = normalizePath(path.join(root, "src/api.ts"));
-        const changedSymbols = (index.byFile.get(apiFile)?.locals ?? [])
+        const changedSymbols = (index.byFile.get(fileIdentityKey(apiFile))?.locals ?? [])
           .filter((symbol) => symbol.localName.startsWith("symbol"))
           .map((symbol) => ({
             id: `${symbol.file}::${symbol.localName}::${symbol.range.start.index ?? 0}`,
@@ -1927,9 +2247,9 @@ describe("memberResolutionCoverage diagnostics", () => {
     try {
       await fsp.mkdir(path.join(root, "src"), { recursive: true });
       const tsFile = path.join(root, "src", "main.ts");
-      const pyFile = path.join(root, "src", "main.py");
+      const phpFile = path.join(root, "src", "main.php");
       await fsp.writeFile(tsFile, "export function helper(a: string) { return a; }\n", "utf8");
-      await fsp.writeFile(pyFile, "def helper(a):\n    return a\n", "utf8");
+      await fsp.writeFile(phpFile, "<?php\nfunction helper(a) { return a; }\n", "utf8");
 
       const index = await buildProjectIndex(root, { cache: "memory" });
       const diffText = `diff --git a/src/main.ts b/src/main.ts
@@ -1938,14 +2258,12 @@ describe("memberResolutionCoverage diagnostics", () => {
 @@ -1,1 +1,1 @@
 -export function helper(a: string) { return a; }
 +export function helper(a: string, b: number) { return a; }
-diff --git a/src/main.py b/src/main.py
---- a/src/main.py
-+++ b/src/main.py
-@@ -1,2 +1,2 @@
--def helper(a):
--    return a
-+def helper(a, b):
-+    return a
+diff --git a/src/main.php b/src/main.php
+--- a/src/main.php
++++ b/src/main.php
+@@ -2,1 +2,1 @@
+-function helper(a) { return a; }
++function helper(a, b) { return a; }
 `;
 
       const result = await analyzeImpactFromDiff(root, index, {
@@ -1958,7 +2276,7 @@ diff --git a/src/main.py b/src/main.py
       }
 
       expect(result.diagnostics?.memberResolutionCoverage?.receiverAwareLanguages).toContain("ts");
-      expect(result.diagnostics?.memberResolutionCoverage?.limitedLanguages).toContain("python");
+      expect(result.diagnostics?.memberResolutionCoverage?.limitedLanguages).toContain("php");
     } finally {
       await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
@@ -2000,9 +2318,9 @@ diff --git a/src/main.py b/src/main.py
     try {
       await fsp.mkdir(path.join(root, "src"), { recursive: true });
       const tsFile = path.join(root, "src", "a.ts");
-      const pyFile = path.join(root, "src", "b.py");
+      const phpFile = path.join(root, "src", "b.php");
       await fsp.writeFile(tsFile, "export function helperA(x: string) { return x; }\n", "utf8");
-      await fsp.writeFile(pyFile, "def helperB(x):\n    return x\n", "utf8");
+      await fsp.writeFile(phpFile, "<?php\nfunction helperB(x) { return x; }\n", "utf8");
 
       const index = await buildProjectIndex(root, { cache: "memory" });
       const diffText = `diff --git a/src/a.ts b/src/a.ts
@@ -2011,14 +2329,12 @@ diff --git a/src/main.py b/src/main.py
 @@ -1,1 +1,1 @@
 -export function helperA(x: string) { return x; }
 +export function helperA(x: string, y: number) { return x; }
-diff --git a/src/b.py b/src/b.py
---- a/src/b.py
-+++ b/src/b.py
-@@ -1,2 +1,2 @@
--def helperB(x):
--    return x
-+def helperB(x, y):
-+    return x
+diff --git a/src/b.php b/src/b.php
+--- a/src/b.php
++++ b/src/b.php
+@@ -2,1 +2,1 @@
+-function helperB(x) { return x; }
++function helperB(x, y) { return x; }
 `;
 
       // Force the ranking budget to select only one changed symbol for reference
@@ -2035,7 +2351,7 @@ diff --git a/src/b.py b/src/b.py
         throw new Error("Expected full impact report");
       }
 
-      expect(result.diagnostics?.memberResolutionCoverage?.limitedLanguages).toContain("python");
+      expect(result.diagnostics?.memberResolutionCoverage?.limitedLanguages).toContain("php");
     } finally {
       await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
@@ -2090,6 +2406,158 @@ describe("transitive impact reason/confidence merge", () => {
       expect(consumerItem?.confidence).toBeCloseTo(0.85, 5);
     } finally {
       await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+});
+
+describe("path identity silent lookup regressions", () => {
+  function flipPathLetterCase(filePath: string): string {
+    for (let index = filePath.length - 1; index >= 0; index -= 1) {
+      const character = filePath[index];
+      if (!character) continue;
+      if (character >= "a" && character <= "z") {
+        return `${filePath.slice(0, index)}${character.toUpperCase()}${filePath.slice(index + 1)}`;
+      }
+      if (character >= "A" && character <= "Z") {
+        return `${filePath.slice(0, index)}${character.toLowerCase()}${filePath.slice(index + 1)}`;
+      }
+    }
+    return filePath;
+  }
+
+  it("hits identity-keyed parsed cache when locateChangedSymbols path casing differs", async () => {
+    const originalCaseSensitivity = isFileIdentityCaseInsensitive();
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-parsed-cache-casing-"));
+    try {
+      resetFileIdentityCaseSensitivityForTests(true);
+      setFileIdentityCaseInsensitive(true);
+      fileIdentityKey("freeze-case-mode");
+
+      await fsp.mkdir(path.join(root, "src"), { recursive: true });
+      const displayFile = normalizePath(path.join(root, "src", "Util.ts"));
+      await fsp.writeFile(displayFile, "export function helper() {\n  return 1;\n}\n", "utf8");
+
+      const index = await buildProjectIndexFromFiles(root, [displayFile], { cache: "off" });
+      const { ensureParsedContext } = await import("../src/indexer/parse-context.js");
+      const { locateChangedSymbols } = await import("../src/impact/map.js");
+      const parsed = await ensureParsedContext(displayFile);
+      index.parsed = new Map([[fileIdentityKey(displayFile), parsed]]);
+
+      const queryFile = flipPathLetterCase(displayFile);
+      expect(queryFile).not.toBe(displayFile);
+      expect(fileIdentityKey(queryFile)).toBe(fileIdentityKey(displayFile));
+      expect(index.parsed.has(queryFile)).toBe(false);
+      expect(index.parsed.has(fileIdentityKey(queryFile))).toBe(true);
+
+      const changed = await locateChangedSymbols(index, queryFile, [
+        {
+          oldStart: 2,
+          newStart: 2,
+          lines: ["+  return 2;"],
+        },
+      ]);
+
+      expect(changed.some((symbol) => symbol.name === "helper")).toBe(true);
+    } finally {
+      resetFileIdentityCaseSensitivityForTests(originalCaseSensitivity);
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves graph node membership when the query path casing differs", async () => {
+    const originalCaseSensitivity = isFileIdentityCaseInsensitive();
+    try {
+      resetFileIdentityCaseSensitivityForTests(true);
+      setFileIdentityCaseInsensitive(true);
+      fileIdentityKey("freeze-case-mode");
+
+      const projectRoot = path.join(os.tmpdir(), "codegraph-graph-casing").replace(/\\/g, "/");
+      const mainPath = `${projectRoot}/src/Main.ts`;
+      const utilPath = `${projectRoot}/src/util.ts`;
+      expect(fileIdentityKey("src/main.ts")).toBe(fileIdentityKey("src/Main.ts"));
+
+      const jsonLines: unknown[] = [];
+      const { handleGraphQueryCommand } = await import("../src/cli/graphQueries.js");
+      await handleGraphQueryCommand({
+        command: "deps",
+        positionals: ["src/main.ts"],
+        projectRootFs: projectRoot,
+        projectRootAbs: projectRoot,
+        getOpt: () => undefined,
+        hasFlag: (name) => name === "--json",
+        writeJSONLine: (value) => jsonLines.push(value),
+        writeStdoutLine: () => {},
+        writeStderrLine: () => {},
+        exit: (code) => {
+          throw new Error(`unexpected exit ${code}: ${JSON.stringify(jsonLines)}`);
+        },
+        listProjectFilesForScan: async () => [mainPath, utilPath],
+        collectGraph: async () => ({
+          nodes: new Set([mainPath, utilPath]),
+          edges: [
+            {
+              from: mainPath,
+              to: { type: "file", path: utilPath },
+              raw: "./util",
+            },
+          ],
+        }),
+        loadCurrentIndex: async () => {
+          throw new Error("unexpected index build");
+        },
+      });
+
+      expect(jsonLines).toEqual([[{ file: utilPath, depth: 1 }]]);
+    } finally {
+      resetFileIdentityCaseSensitivityForTests(originalCaseSensitivity);
+    }
+  });
+
+  it("compares mixed-form SQL definition paths by identity", async () => {
+    const originalCaseSensitivity = isFileIdentityCaseInsensitive();
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-sql-identity-casing-"));
+    try {
+      resetFileIdentityCaseSensitivityForTests(true);
+      setFileIdentityCaseInsensitive(true);
+      fileIdentityKey("freeze-case-mode");
+
+      await fsp.mkdir(path.join(root, "sql"), { recursive: true });
+      const displayFile = normalizePath(path.join(root, "sql", "Schema.sql"));
+      await fsp.writeFile(
+        displayFile,
+        ["CREATE TABLE users (id integer);", "SELECT * FROM users;", ""].join("\n"),
+        "utf8",
+      );
+
+      const index = await buildProjectIndexFromFiles(root, [displayFile], { cache: "off" });
+      const queryFile = flipPathLetterCase(displayFile);
+      expect(queryFile).not.toBe(displayFile);
+      expect(fileIdentityKey(queryFile)).toBe(fileIdentityKey(displayFile));
+
+      const exact = await goToSqlDefinition(index, { file: displayFile, line: 2, column: 15 });
+      expect(exact?.status).toBe("ok");
+      if (exact?.status === "ok") {
+        expect(fileIdentityKey(exact.definition.file)).toBe(fileIdentityKey(displayFile));
+      }
+
+      // A differently-cased query path only names the same file on a genuinely
+      // case-insensitive volume. On a case-sensitive one it is a different path and
+      // must not resolve, so probe the real filesystem rather than the identity mode
+      // this test pins.
+      const flippedExistsOnDisk = await fsp
+        .stat(queryFile)
+        .then(() => true)
+        .catch(() => false);
+      if (flippedExistsOnDisk) {
+        const flipped = await goToSqlDefinition(index, { file: queryFile, line: 2, column: 15 });
+        expect(flipped?.status).toBe("ok");
+        if (flipped?.status === "ok") {
+          expect(fileIdentityKey(flipped.definition.file)).toBe(fileIdentityKey(displayFile));
+        }
+      }
+    } finally {
+      resetFileIdentityCaseSensitivityForTests(originalCaseSensitivity);
+      await fsp.rm(root, { recursive: true, force: true });
     }
   });
 });

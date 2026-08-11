@@ -3,5 +3,17 @@
 xref:guide.adoc[Guide]
 link:./summary.adoc[Summary]
 include::partials/intro.adoc[]
+
+////
+include::partials/ignored.adoc[]
+////
+
+----
+include::partials/ignored.adoc[]
+xref:partials/ignored.adoc[Ignored]
+----
+
+// include::partials/ignored.adoc[]
+include::partials/live.adoc[]
 <<appendix.adoc#top,Appendix>>
 link:https://example.com/adoc[External]

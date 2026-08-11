@@ -10,64 +10,95 @@ const definition: LanguageTestDefinition = {
     {
       name: "chunks SCSS structures",
       sourceFile: "scss.sample.scss",
-      expectedChunks: (chunks) => {
-        expect(chunks.some((c) => c.type === "comment")).toBe(true);
-        expect(chunks.some((c) => c.type === "rule")).toBe(true);
-        expect(chunks.some((c) => c.type === "mixin")).toBe(true);
-        expect(chunks.some((c) => c.type === "function")).toBe(true);
-      },
+      exactChunks: [
+        { type: "comment", startLine: 1, endLine: 1 },
+        { type: "misc", startLine: 1, endLine: 5 },
+        { type: "mixin", startLine: 6, endLine: 12 },
+        { type: "rule", startLine: 13, endLine: 20 },
+        { type: "rule", startLine: 17, endLine: 19 },
+        { type: "misc", startLine: 20, endLine: 21 },
+        { type: "function", startLine: 22, endLine: 24 },
+      ],
     },
   ],
   parity: {
     sampleDir: "scss",
-    dependencyGraph: [
+    exact: {
+      dependencyGraph: [
+        {
+          from: "extensionless-forward.scss",
+          to: { type: "file", path: "_tokens.scss" },
+        },
+        {
+          from: "extensionless-import.scss",
+          to: { type: "file", path: "_tokens.scss" },
+        },
+        {
+          from: "forward.scss",
+          to: { type: "file", path: "_mixins.scss" },
+        },
+        {
+          from: "forward.scss",
+          to: { type: "file", path: "_variables.scss" },
+        },
+        {
+          from: "main.scss",
+          to: { type: "external", name: "./icons" },
+        },
+        {
+          from: "main.scss",
+          to: { type: "external", name: "./missing" },
+        },
+        {
+          from: "main.scss",
+          to: { type: "file", path: "_mixins.scss" },
+        },
+        {
+          from: "main.scss",
+          to: { type: "file", path: "_tokens.scss" },
+        },
+        {
+          from: "main.scss",
+          to: { type: "file", path: "_variables.scss" },
+        },
+        {
+          from: "main.scss",
+          to: { type: "file", path: "theme.scss" },
+        },
+        {
+          from: "uppercase-extension-import.scss",
+          to: { type: "file", path: "_tokens.scss" },
+        },
+        {
+          from: "use-partials.scss",
+          to: { type: "external", name: "cdn-texture" },
+        },
+        {
+          from: "use-partials.scss",
+          to: { type: "file", path: "_mixins.scss" },
+        },
+        {
+          from: "use-partials.scss",
+          to: { type: "file", path: "_variables.scss" },
+        },
+      ],
+      references: [
+        {
+          name: "find references is not available",
+          file: "_variables.scss",
+          line: 3,
+          column: 2,
+          expectedStatus: "not_found",
+        },
+      ],
+    },
+    goToDefinition: [
       {
-        from: "main.scss",
-        to: { type: "file", path: "_variables.scss" },
-      },
-      {
-        from: "main.scss",
-        to: { type: "file", path: "_mixins.scss" },
-      },
-      {
-        from: "main.scss",
-        to: { type: "file", path: "_tokens.scss" },
-      },
-      {
-        from: "main.scss",
-        to: { type: "external", name: "./missing" },
-      },
-      {
-        from: "use-partials.scss",
-        to: { type: "file", path: "_variables.scss" },
-      },
-      {
-        from: "use-partials.scss",
-        to: { type: "file", path: "_mixins.scss" },
-      },
-      {
-        from: "use-partials.scss",
-        to: { type: "external", name: "cdn-texture" },
-      },
-      {
-        from: "forward.scss",
-        to: { type: "file", path: "_variables.scss" },
-      },
-      {
-        from: "forward.scss",
-        to: { type: "file", path: "_mixins.scss" },
-      },
-      {
-        from: "extensionless-forward.scss",
-        to: { type: "file", path: "_tokens.scss" },
-      },
-      {
-        from: "extensionless-import.scss",
-        to: { type: "file", path: "_tokens.scss" },
-      },
-      {
-        from: "uppercase-extension-import.scss",
-        to: { type: "file", path: "_tokens.scss" },
+        name: "go to definition is not available",
+        file: "_variables.scss",
+        line: 3,
+        column: 2,
+        expectedStatus: "not_found",
       },
     ],
     absentDependencyGraph: [
@@ -86,6 +117,10 @@ const definition: LanguageTestDefinition = {
       {
         from: "main.scss",
         to: { type: "file", path: "_tokens.ts" },
+      },
+      {
+        from: "main.scss",
+        to: { type: "file", path: "theme.ts" },
       },
     ],
   },

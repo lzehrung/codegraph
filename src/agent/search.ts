@@ -199,6 +199,7 @@ const NATURAL_LANGUAGE_SYNTAX_TERMS = new Set([
   "which",
   "who",
   "why",
+  "or",
 ]);
 const SEARCH_CACHES = new WeakMap<AgentProjectSnapshot, SearchCache>();
 const SEARCH_RESULT_CACHES = new WeakMap<AgentSession, Map<string, Promise<AgentSearchResponse>>>();
@@ -752,8 +753,8 @@ function addTextFileResults(
   for (const chunk of chunks) {
     const match = matchTokenScoreFromNormalized(chunk.normalizedText, query);
     if (match.score <= 0) continue;
-
     const handle = formatAgentChunkHandle({ file: relFile, line: chunk.startLine });
+
     const result = upsertResult(resultMap, {
       handle,
       kind: "chunk",
@@ -765,6 +766,13 @@ function addTextFileResults(
       },
       provenance: createSearchProvenance(relFile, "text", documentationFile ? "medium" : "high", snapshot.analysis),
     });
+    if (chunk.name && result.label === `${relFile}:${chunk.startLine}`) {
+      result.label = `${chunk.name} (${relFile})`;
+      result.range = {
+        start: { line: chunk.startLine, column: 0 },
+        end: { line: chunk.endLine, column: 0 },
+      };
+    }
     result.score += match.score + textResultBoost(match, documentationFile, query, mode);
     addMatchedRankTerms(result, match);
     addReason(result, `text token match: ${match.matched.join(", ")}`);

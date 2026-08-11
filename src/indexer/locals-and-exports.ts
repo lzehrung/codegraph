@@ -14,7 +14,6 @@ import { maskJsLikeCommentsAndStrings } from "../util/comments.js";
 import { sliceText, toRange, unquote } from "../util/ast.js";
 import { bindingKindToSymbolKind } from "./declarations.js";
 import { buildScopeIndexFromSource } from "./scope.js";
-import { QUERY_DRIVEN_LOCALS_LANGUAGES } from "./shared.js";
 import { SymbolKind } from "./types.js";
 import type { LanguageSupport } from "../languages.js";
 import type { ParserLanguage, SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
@@ -40,6 +39,40 @@ const FIELD_LIKE_BINDING_NODE_TYPES = new Set([
   "public_field_definition", // TypeScript/TSX
   "field_definition", // JavaScript
 ]);
+
+const MEMBER_CONTAINER_NODE_TYPES: Record<string, true> = {
+  class_body: true,
+  class_declaration: true,
+  abstract_class_declaration: true,
+  class_definition: true,
+  class: true,
+  interface_declaration: true,
+  impl_item: true,
+  trait_item: true,
+  enum_declaration: true,
+  enum_item: true,
+};
+
+const CALLABLE_DECLARATION_NODE_TYPES: Record<string, true> = {
+  function_declaration: true,
+  generator_function_declaration: true,
+  function_definition: true,
+  function_item: true,
+  method_definition: true,
+  method_declaration: true,
+  method: true,
+  singleton_method: true,
+};
+
+function isTypeMemberDeclaration(node: SyntaxNodeLike): boolean {
+  let current = node.parent?.parent ?? null;
+  while (current) {
+    if (MEMBER_CONTAINER_NODE_TYPES[current.type]) return true;
+    if (CALLABLE_DECLARATION_NODE_TYPES[current.type]) return false;
+    current = current.parent;
+  }
+  return false;
+}
 
 function appendJsLikeRegexFallbackExports(
   file: string,
@@ -316,6 +349,7 @@ export function collectLocalsAndExportsFromSource(
       kind,
       range,
     };
+    if (node && isTypeMemberDeclaration(node)) base.isMember = true;
     if (docstring) base.docstring = docstring;
     if (lineSpan) base.lineSpan = lineSpan;
     if (typeof complexity === "number") base.complexity = complexity;
@@ -387,7 +421,7 @@ export function collectLocalsAndExportsFromSource(
 
   const extractLocalsFromNativeQueries = (): boolean => {
     if (!nativeQueries) return false;
-    if (!QUERY_DRIVEN_LOCALS_LANGUAGES.has(support.id)) return false;
+    if (!support.usesQueryDrivenLocals) return false;
     let capturedLocals = false;
     try {
       // Lazily get the tree only for enrichment (classification + docstrings).
@@ -601,6 +635,96 @@ export function collectLocalsAndExportsFromSource(
             typeOnly: isTypeOnly,
           });
         }
+        continue;
+      }
+      if (map["cjs_spread"]) {
+        const spreadName = map["cjs_spread"].text;
+        const imported = imports.find(
+          (binding) =>
+            (binding.kind === "default" && binding.local === spreadName) ||
+            (binding.kind === "namespace" && binding.localNS === spreadName),
+        );
+        if (imported) {
+          const fromModule = typeof imported.resolved === "string" ? imported.resolved : imported.from;
+          if (!exports.some((entry) => entry.type === "exportStar" && entry.fromModule === fromModule)) {
+            exports.push({
+              type: "exportStar",
+              fromModule,
+              moduleSpecifier: imported.from,
+              sourceSpecifier: imported.from,
+            });
+          }
+          continue;
+        }
+
+        const findLocalObject = (node: SyntaxNodeLike): SyntaxNodeLike | undefined => {
+          if (node.type === "variable_declarator") {
+            const name = node.childForFieldName("name");
+            const value = node.childForFieldName("value");
+            if (sliceText(name, source) === spreadName && value?.type === "object") return value;
+          }
+          for (const child of node.namedChildren) {
+            const value = findLocalObject(child);
+            if (value) return value;
+          }
+          return undefined;
+        };
+        const localObject = treeForEnrichment ? findLocalObject(treeForEnrichment.rootNode) : undefined;
+        if (localObject) {
+          const addObjectMember = (exportedAs: string, value: SyntaxNodeLike, member: SyntaxNodeLike): void => {
+            let local: SymbolDef | undefined;
+            if (value.type === "identifier" || value.type === "shorthand_property_identifier") {
+              local = locals.find((definition) => definition.localName === sliceText(value, source));
+            } else if (value.type === "function" || value.type === "arrow_function") {
+              local = buildSymbolDef(exportedAs, SymbolKind.Function, toRange(value), member);
+              locals.push(local);
+            }
+            if (local && !exports.some((entry) => entry.type === "local" && entry.exportedAs === exportedAs)) {
+              exports.push({ type: "local", exportedAs, target: local });
+            }
+          };
+
+          for (const member of localObject.namedChildren) {
+            if (member.type === "shorthand_property_identifier") {
+              addObjectMember(member.text, member, member);
+              continue;
+            }
+            if (member.type === "pair") {
+              const key = member.childForFieldName("key");
+              const value = member.childForFieldName("value");
+              if (
+                key &&
+                value &&
+                (key.type === "identifier" || key.type === "property_identifier" || key.type === "string")
+              ) {
+                addObjectMember(key.type === "string" ? unquote(key.text) : key.text, value, member);
+              }
+              continue;
+            }
+            if (member.type === "method_definition") {
+              const name = member.childForFieldName("name");
+              if (name) {
+                const local = locals.find(
+                  (definition) =>
+                    definition.localName === name.text && definition.range.start.index === name.startIndex,
+                );
+                if (local && !exports.some((entry) => entry.type === "local" && entry.exportedAs === name.text)) {
+                  exports.push({ type: "local", exportedAs: name.text, target: local });
+                }
+              }
+            }
+          }
+          continue;
+        }
+
+        // The source exists syntactically but cannot be resolved without executing
+        // user code. Keep an explicit API marker instead of silently losing it.
+        const unresolvedMarker = `<unresolved cjs spread: ${spreadName}>`;
+        exports.push({
+          type: "namespaceReexport",
+          exportedAs: unresolvedMarker,
+          fromModule: unresolvedMarker,
+        });
         continue;
       }
       if (map["cjs_shorthand"]) {

@@ -12,7 +12,7 @@ import {
   type SymbolDef,
 } from "../indexer/types.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
-import { toProjectDisplayPath } from "../util/paths.js";
+import { fileIdentityKey, toProjectDisplayPath } from "../util/paths.js";
 import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 import { parseCacheModeOption, parseNonNegativeIntegerOption, parsePositiveIntegerOption } from "./options.js";
 import { parseCliSourceLocation } from "./location.js";
@@ -195,7 +195,7 @@ export async function handleDumpmodCommand(context: NavigationCommandContext): P
   }
   const file = resolvedFile.file;
   const index = await loadNavigationIndex(context);
-  const mod = index.byFile.get(file);
+  const mod = index.byFile.get(fileIdentityKey(file));
   if (!mod) {
     writeCliOutput(
       context,
@@ -363,7 +363,7 @@ export async function handleGotoCommand(context: NavigationCommandContext): Prom
     return;
   }
   if (input.line === undefined) {
-    const definitions = sortDefinitions(index.byFile.get(resolvedFile.file)?.locals ?? []);
+    const definitions = sortDefinitions(index.byFile.get(fileIdentityKey(resolvedFile.file))?.locals ?? []);
     if (definitions.length === 1) {
       const definition = definitions[0];
       if (definition === undefined) {
@@ -449,7 +449,7 @@ export async function handleRefsCommand(context: NavigationCommandContext): Prom
     return;
   }
 
-  const definitions = sortDefinitions(index.byFile.get(resolvedFile.file)?.locals ?? []);
+  const definitions = sortDefinitions(index.byFile.get(fileIdentityKey(resolvedFile.file))?.locals ?? []);
   if (!definitions.length) {
     const result = { status: "not_found" as const, reason: `No indexed symbols in ${input.file}` };
     if (pretty) {

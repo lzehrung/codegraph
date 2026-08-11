@@ -24,11 +24,15 @@ export type LanguageSupport = {
   };
   classifyDefinition: (nameNode: SyntaxNodeLike) => string;
   isDeclarationName: (node: SyntaxNodeLike) => boolean;
+  scopeDeclarationNames: (node: SyntaxNodeLike) => boolean;
   createsBlockScope: (node: SyntaxNodeLike) => boolean;
   createsFunctionScope: (node: SyntaxNodeLike) => boolean;
+  membersAreImplicitlyInScope: boolean;
   supportsCrossModuleSymbols: boolean;
   isTypeOnly: (stmtText: string) => boolean;
+  usesQueryDrivenLocals: boolean;
   native?: NativeCompatibility;
+  normalizeIdentifier: (name: string) => string;
 };
 
 function adaptDefinition(def: LanguageDefinition): LanguageSupport {
@@ -40,10 +44,15 @@ function adaptDefinition(def: LanguageDefinition): LanguageSupport {
     queries: def.graph,
     classifyDefinition: def.classifyDefinition || (() => "variable"),
     isDeclarationName: def.isDeclarationName || (() => false),
+    scopeDeclarationNames:
+      def.scopeDeclarationNames === "all" ? () => true : (def.scopeDeclarationNames ?? (() => false)),
     createsBlockScope: def.createsBlockScope || (() => false),
     createsFunctionScope: def.createsFunctionScope || (() => false),
+    membersAreImplicitlyInScope: def.membersAreImplicitlyInScope ?? true,
     supportsCrossModuleSymbols: def.supportsCrossModuleSymbols || false,
     isTypeOnly: def.isTypeOnly || (() => false),
+    usesQueryDrivenLocals: def.usesQueryDrivenLocals || false,
+    normalizeIdentifier: def.normalizeIdentifier || ((name) => name),
     ...(def.native ? { native: def.native } : {}),
   };
 }

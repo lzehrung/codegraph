@@ -29,6 +29,7 @@ import { type ScopeIndex } from "./scope.js";
 import { type FileId, type Range } from "../types.js";
 import { isJsTsLanguage } from "../languages/js-family.js";
 import { resolveImportSpecifier } from "../util/resolution.js";
+import { fileIdentityKey } from "../util/paths.js";
 import { sliceText, toRange } from "../util/ast.js";
 import {
   getMemberAccessParts,
@@ -50,16 +51,19 @@ import { findSqlReferences, goToSqlDefinition } from "../sql/navigation.js";
 
 export { resolveExport, resolveImported } from "./navigation-resolve.js";
 
-export async function goToDefinition(index: ProjectIndex, req: GoToRequest): Promise<GoToResult> {
+export async function goToDefinition(
+  index: ProjectIndex,
+  req: GoToRequest,
+  parsedContext?: ParsedFileContext,
+): Promise<GoToResult> {
   const { file, line, column } = req;
-  const mod = index.byFile.get(file);
+  const mod = index.byFile.get(fileIdentityKey(file));
   if (!mod) return { status: "not_found", reason: "File not indexed" };
 
   const sqlResult = await goToSqlDefinition(index, req);
   if (sqlResult) return sqlResult;
 
-  const parsedEntry = index.parsed?.get(file);
-  const context = await ensureParsedContext(file, parsedEntry);
+  const context = parsedContext ?? (await ensureParsedContext(file, index.parsed?.get(fileIdentityKey(file))));
   const sup = context.sup;
   const lang = context.lang;
   const source = context.source;
@@ -99,12 +103,24 @@ export async function goToDefinition(index: ProjectIndex, req: GoToRequest): Pro
   }
 
   if (sup.supportsCrossModuleSymbols) {
+    const scopeIndex =
+      node.parent && isMemberAccessNode(sup, node.parent)
+        ? getOrBuildScopeIndex(index, file, source, sup, lang, mod, tree)
+        : null;
     const memberAccessResult = await resolveMemberAccessDefinition({
       index,
       mod,
       node,
       source,
       sup,
+      ...(scopeIndex
+        ? {
+            resolveLexicalBinding: (receiver) => {
+              if (!sup.nodeTypes.identifier.includes(receiver.type)) return null;
+              return findClosestBinding(scopeIndex, file, sliceText(receiver, source), receiver, sup);
+            },
+          }
+        : {}),
     });
     if (memberAccessResult) {
       return memberAccessResult;
@@ -153,7 +169,7 @@ export async function goToDefinition(index: ProjectIndex, req: GoToRequest): Pro
 
   if (name) {
     const scopeIndex = getOrBuildScopeIndex(index, file, source, sup, lang, mod, tree);
-    const local = findClosestBinding(scopeIndex, file, name, node);
+    const local = findClosestBinding(scopeIndex, file, name, node, sup);
     if (local) {
       return okGoToResult(index, local, {
         resolution: "exact",
@@ -162,7 +178,7 @@ export async function goToDefinition(index: ProjectIndex, req: GoToRequest): Pro
     }
 
     if (sup.supportsCrossModuleSymbols) {
-      const resolvedName = resolveNamedDefinition(index, mod, file, name);
+      const resolvedName = resolveNamedDefinition(index, mod, file, sup, name);
       if (resolvedName) {
         return resolvedName;
       }
@@ -200,7 +216,7 @@ export async function findReferences(
     def = req.def;
     provenance = createNavigationProvenance(index, "exact", "high");
   } else {
-    const module = index.byFile.get(req.file);
+    const module = index.byFile.get(fileIdentityKey(req.file));
     const localAtPosition = module?.locals.find((local) =>
       rangeContains(local.range, {
         row: req.line,
@@ -226,10 +242,10 @@ export async function findReferences(
   if (sqlReferences) return sqlReferences;
 
   const definitionFile = def.file;
-  const parsedDef = index.parsed?.get(definitionFile);
+  const parsedDef = index.parsed?.get(fileIdentityKey(definitionFile));
   const parsedContext = await ensureParsedContext(definitionFile, parsedDef);
 
-  const mod = index.byFile.get(definitionFile);
+  const mod = index.byFile.get(fileIdentityKey(definitionFile));
   if (!mod) return { status: "not_found", reason: "Module not found" };
 
   const scope = getCachedScope(index, definitionFile, mod, parsedContext);
@@ -239,13 +255,14 @@ export async function findReferences(
   const seenRefs = new Set<string>();
   const hasReachedMaxReferences = (): boolean => maxReferences !== undefined && refs.length >= maxReferences;
   const pushRef = (ref: Reference): void => {
-    const key = `${ref.file}:${ref.range.start.line}:${ref.range.start.column}`;
+    const key = `${fileIdentityKey(ref.file)}:${ref.range.start.line}:${ref.range.start.column}`;
     if (seenRefs.has(key)) return;
     seenRefs.add(key);
     refs.push(ref);
   };
 
-  const localBindings = scope.bindings.get(def.localName) ?? [];
+  const normalizedLocalName = parsedContext.sup.normalizeIdentifier(def.localName);
+  const localBindings = scope.bindings.get(normalizedLocalName) ?? [];
   const localBinding = localBindings.find(
     (binding) => binding.def && binding.def.start.index === def.range.start.index,
   );
@@ -264,7 +281,7 @@ export async function findReferences(
     }
   }
   if (!exportedNames.length && shouldUseLocalNameAsExportFallback(def, parsedContext)) {
-    exportedNames.push(def.localName);
+    exportedNames.push(normalizedLocalName);
   }
 
   const exportedNameSet = new Set(exportedNames);
@@ -273,9 +290,9 @@ export async function findReferences(
   let candidateFiles = getCachedReferenceCandidateFiles(index, def, exportedNames, !!phpQualifiedNames.length);
   if (index.bloomFilters && phpQualifiedNames.length) {
     candidateFiles = candidateFiles.filter((candidateFile) => {
-      const module = index.byFile.get(candidateFile);
+      const module = index.byFile.get(fileIdentityKey(candidateFile));
       if (!module) return true;
-      const filter = index.bloomFilters?.get(candidateFile);
+      const filter = index.bloomFilters?.get(fileIdentityKey(candidateFile));
       if (!filter) return true;
 
       const aliases = getCandidateReferenceNames(module, definitionFile, exportedNameSet);
@@ -288,14 +305,14 @@ export async function findReferences(
 
   for (const fileId of candidateFiles) {
     if (hasReachedMaxReferences()) break;
-    const module = index.byFile.get(fileId);
+    const module = index.byFile.get(fileIdentityKey(fileId));
     if (!module) continue;
 
     let scopeIndex: ScopeIndex | null = null;
     let candidateParsedContext: ParsedFileContext | null = null;
     const ensureCandidateParsed = async (): Promise<ParsedFileContext> => {
       if (!candidateParsedContext) {
-        const parsedEntry = index.parsed?.get(fileId);
+        const parsedEntry = index.parsed?.get(fileIdentityKey(fileId));
         candidateParsedContext = await ensureParsedContext(fileId, parsedEntry);
       }
       return candidateParsedContext;
@@ -317,7 +334,10 @@ export async function findReferences(
         if (hasReachedMaxReferences()) break;
         if (imp.kind === "namespace") {
           const hit = resolveExport(index, targetFile, exportedName);
-          const matchesDef = hit?.kind === "resolved" ? sameDef(hit.def, def) : targetFile === definitionFile;
+          const matchesDef =
+            hit?.kind === "resolved"
+              ? sameDef(hit.def, def)
+              : fileIdentityKey(targetFile) === fileIdentityKey(definitionFile);
           if (!matchesDef) continue;
           const parsed = await ensureCandidateParsed();
           const ranges = await collectNamespaceMemberRefs(fileId, imp.localNS, exportedName, parsed);
@@ -343,7 +363,7 @@ export async function findReferences(
             fileId,
             exportedName,
             def,
-            (params) => goToDefinition(index, params),
+            (params, parsed) => goToDefinition(index, params, parsed),
             remainingReferences,
           );
           for (const { range, provenance } of ranges) {
@@ -358,7 +378,10 @@ export async function findReferences(
             exported = "default";
           }
           const hit = resolveExport(index, targetFile, exported);
-          const matchesDef = hit?.kind === "resolved" ? sameDef(hit.def, def) : targetFile === definitionFile;
+          const matchesDef =
+            hit?.kind === "resolved"
+              ? sameDef(hit.def, def)
+              : fileIdentityKey(targetFile) === fileIdentityKey(definitionFile);
           if (!matchesDef) continue;
           const resolvedScope = await ensureScope();
           const localName = imp.local;
@@ -384,7 +407,7 @@ export async function findReferences(
           fileId,
           candidateName,
           def,
-          (params) => goToDefinition(index, params),
+          (params, parsed) => goToDefinition(index, params, parsed),
           remainingReferences,
         );
         for (const { range, provenance } of ranges) {
@@ -396,9 +419,11 @@ export async function findReferences(
   }
 
   if (shouldScanVerifiedReferences(def, phpQualifiedNames, parsedContext)) {
-    for (const fileId of Array.from(index.byFile.keys()).sort((left, right) => left.localeCompare(right))) {
+    for (const fileId of Array.from(index.byFile.values(), (module) => module.file).sort((left, right) =>
+      left.localeCompare(right),
+    )) {
       if (hasReachedMaxReferences()) break;
-      const filter = index.bloomFilters?.get(fileId);
+      const filter = index.bloomFilters?.get(fileIdentityKey(fileId));
       if (filter && !filter.mightContain(def.localName)) continue;
       const remainingReferences = maxReferences !== undefined ? Math.max(0, maxReferences - refs.length) : undefined;
       const ranges = await collectVerifiedNamedNodeReferences(
@@ -406,7 +431,7 @@ export async function findReferences(
         fileId,
         def.localName,
         def,
-        (params) => goToDefinition(index, params),
+        (params, parsed) => goToDefinition(index, params, parsed),
         remainingReferences,
       );
       for (const { range, provenance } of ranges) {
@@ -417,7 +442,7 @@ export async function findReferences(
   }
 
   refs.sort((left, right) => {
-    if (left.file === right.file) {
+    if (fileIdentityKey(left.file) === fileIdentityKey(right.file)) {
       const leftIndex = left.range.start.index ?? 0;
       const rightIndex = right.range.start.index ?? 0;
       return leftIndex - rightIndex;
@@ -429,12 +454,12 @@ export async function findReferences(
     const perFileCache = new Map<string, { source: string; tree: SyntaxTreeLike; sup: LanguageSupport }>();
 
     for (const ref of refs) {
-      let cached = perFileCache.get(ref.file);
+      let cached = perFileCache.get(fileIdentityKey(ref.file));
       if (!cached) {
-        const parsedEntry = index.parsed?.get(ref.file);
+        const parsedEntry = index.parsed?.get(fileIdentityKey(ref.file));
         const parsed = await ensureParsedContext(ref.file, parsedEntry);
         cached = { source: parsed.source, tree: parsed.tree, sup: parsed.sup };
-        perFileCache.set(ref.file, cached);
+        perFileCache.set(fileIdentityKey(ref.file), cached);
       }
 
       if (opts.context === "line") {
@@ -527,7 +552,7 @@ export async function collectNamespaceMemberRefs(
         const objectName = sliceText(obj, source);
         const propertyName = sliceText(prop, source);
         if (objectName === ns && propertyName === member) {
-          ranges.push(toRange(node));
+          ranges.push(toRange(prop));
         }
       }
     }

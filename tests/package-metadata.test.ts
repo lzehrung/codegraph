@@ -492,7 +492,9 @@ describe("package metadata", () => {
     expect(scripts["test:native:required"]).toBe("node ./scripts/run-native-required-tests.mjs");
     expect(scripts["test:native:fallback"]).toContain("tests/native-fallback-reporting.test.ts");
     expect(scripts["test:native:fallback"]).toContain("tests/native-fallback-contract.test.ts");
-    expect(scripts.check).toContain("npm run test:ci");
+    expect(scripts.check).toContain("npm run test:native");
+    expect(scripts.check).toContain("npm run test:coverage");
+    expect(scripts.check).not.toContain("npm run test:ci");
     expect(scripts["test:ci"]).toContain("--reporter=json");
     expect(scripts["test:ci"]).toContain("--exclude tests/bench-harness.test.ts");
     expect(scripts["test:ci"]).toContain("--exclude tests/detailed-symbol-native-only.test.ts");
@@ -500,7 +502,7 @@ describe("package metadata", () => {
     expect(scripts["test:ci"]).not.toContain("--exclude tests/native-tree-sitter.test.ts");
   });
 
-  it("exposes opt-in JavaScript, native, and Markdown coverage reporting", () => {
+  it("gates JavaScript coverage in check via enforced thresholds, native and Markdown reporting stay opt-in", () => {
     const rootPackage = readJson("package.json");
     const scripts = readStringRecord(rootPackage.scripts);
     const vitestConfig = readText("vitest.config.ts");
@@ -525,6 +527,11 @@ describe("package metadata", () => {
     expect(vitestConfig).not.toContain('"src/impact/types.ts"');
     expect(vitestConfig).toContain('reporter: ["text", "html", "lcov"]');
     expect(vitestConfig).toContain('reportsDirectory: "./coverage/js"');
+    expect(vitestConfig).toContain("thresholds: {");
+    expect(vitestConfig).toContain("lines: 88");
+    expect(vitestConfig).toContain("statements: 86");
+    expect(vitestConfig).toContain("functions: 92");
+    expect(vitestConfig).toContain("branches: 74");
     expect(coverageScript).toContain("cargo llvm-cov");
     expect(coverageScript).toContain("coverage/native");
     expect(coverageScript).toContain("tests/bench-harness.test.ts");

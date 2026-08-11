@@ -1,6 +1,6 @@
 import picomatch from "picomatch";
 import type { Range } from "../types.js";
-import { toProjectDisplayPath } from "../util/paths.js";
+import { fileIdentityKey, toProjectDisplayPath } from "../util/paths.js";
 import { ensureParsedContext } from "./parse-context.js";
 import { getCachedScope } from "./navigation-references.js";
 import { resolveImported } from "./navigation-resolve.js";
@@ -163,10 +163,11 @@ async function buildImportCandidates(index: ProjectIndex): Promise<ImportCandida
   const symbols: WorkspaceSymbolMatch[] = [];
   let omitted = 0;
   let failedFiles = 0;
-  for (const [file, moduleIndex] of index.byFile) {
+  for (const moduleIndex of index.byFile.values()) {
     if (!moduleIndex.imports.length) continue;
+    const file = moduleIndex.file;
     try {
-      const parsed = await ensureParsedContext(file, index.parsed?.get(file));
+      const parsed = await ensureParsedContext(file, index.parsed?.get(fileIdentityKey(file)));
       const scope = getCachedScope(index, file, moduleIndex, parsed);
       for (const binding of scope.all) {
         if (!binding.import) continue;
@@ -178,7 +179,7 @@ async function buildImportCandidates(index: ProjectIndex): Promise<ImportCandida
         }
         const displayFile = toProjectDisplayPath(index.projectRoot, file);
         symbols.push({
-          id: `${file}::${binding.name}::import`,
+          id: `${displayFile}::${binding.name}::import`,
           def: target,
           file: displayFile,
           name: binding.name,

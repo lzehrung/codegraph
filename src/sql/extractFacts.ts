@@ -116,9 +116,10 @@ function splitSqlStatements(source: string): SqlStatementSlice[] {
   const statements: SqlStatementSlice[] = [];
   const lineStarts = lineStartsFor(source);
   let start = 0;
-  let line = 1;
+  let lineStart = 0;
   let i = 0;
   let lookingForStatementStart = true;
+  let blockDepth = 0;
   let singleQuoted = false;
   let doubleQuoted = false;
   let backtickQuoted = false;
@@ -127,10 +128,10 @@ function splitSqlStatements(source: string): SqlStatementSlice[] {
   let blockComment = false;
   let dollarQuote: string | null = null;
 
-  const pushStatement = (end: number): void => {
+  const pushStatement = (end: number, nextStart = end + 1): void => {
     const statement = statementSlice(source, lineStarts, start, end);
     if (statement) statements.push(statement);
-    start = end + 1;
+    start = nextStart;
     lookingForStatementStart = true;
   };
 
@@ -139,7 +140,7 @@ function splitSqlStatements(source: string): SqlStatementSlice[] {
     const next = source[i + 1] ?? "";
 
     if (char === "\n") {
-      line += 1;
+      lineStart = i + 1;
       if (lineComment) lineComment = false;
       if (lookingForStatementStart) {
         start = i + 1;
@@ -164,6 +165,25 @@ function splitSqlStatements(source: string): SqlStatementSlice[] {
       }
       i += 1;
       continue;
+    }
+
+    if (
+      i === lineStart &&
+      !blockDepth &&
+      !singleQuoted &&
+      !doubleQuoted &&
+      !backtickQuoted &&
+      !bracketQuoted &&
+      !dollarQuote
+    ) {
+      const batchSeparator = source.slice(i).match(/^[\t ]*GO(?:[\t ]*(?:--[^\r\n]*)?)?(?:\r?\n|$)/i);
+      if (batchSeparator?.[0]) {
+        const nextStart = i + batchSeparator[0].length;
+        pushStatement(i, nextStart);
+        i = nextStart;
+        lineStart = nextStart;
+        continue;
+      }
     }
 
     if (lookingForStatementStart) {
@@ -266,7 +286,18 @@ function splitSqlStatements(source: string): SqlStatementSlice[] {
         continue;
       }
     }
-    if (char === ";") {
+    if (/[A-Za-z_]/.test(char)) {
+      let wordEnd = i + 1;
+      while (/[A-Za-z0-9_$]/.test(source[wordEnd] ?? "")) {
+        wordEnd += 1;
+      }
+      const word = source.slice(i, wordEnd).toLowerCase();
+      if (word === "begin") blockDepth += 1;
+      if (word === "end" && blockDepth) blockDepth -= 1;
+      i = wordEnd;
+      continue;
+    }
+    if (char === ";" && !blockDepth) {
       pushStatement(i);
     }
     i += 1;
@@ -368,15 +399,21 @@ function collectCteReads(text: string): { names: Set<string>; facts: SqlFactDraf
     "gi",
   );
 
+  const seenFacts = new Set<string>();
+
   for (const match of text.matchAll(ctePattern)) {
-    if (sqlParenDepthAt(text, match.index ?? 0) > 0) continue;
     const name = normalizeSqlObjectName(match[1]);
     if (!name) continue;
     for (const key of sqlObjectLookupKeys(name)) names.add(key);
     const bodyStart = (match.index ?? 0) + match[0].length;
     const bodyEnd = findMatchingParen(text, bodyStart - 1);
     if (bodyEnd < 0) continue;
-    facts.push(...extractReadFacts(text.slice(bodyStart, bodyEnd)));
+    for (const fact of extractReadFacts(text.slice(bodyStart, bodyEnd))) {
+      const key = `${fact.kind}:${fact.objectName ?? ""}:${fact.relatedObjectName ?? ""}`;
+      if (seenFacts.has(key)) continue;
+      seenFacts.add(key);
+      facts.push(fact);
+    }
   }
 
   return { names, facts };

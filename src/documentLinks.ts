@@ -1,12 +1,20 @@
 import { type ModuleSpecifier } from "./util/specifiers.js";
 import { extractAsciidocModuleSpecifiers } from "./documentLinks/asciidoc.js";
-import { extractHtmlAttributeSpecifiers, extractHtmlInlineScriptSpecifiers } from "./documentLinks/html.js";
+import {
+  extractHtmlAttributeSpecifiers,
+  extractHtmlInlineScriptSpecifiers,
+  extractHtmlStyleSpecifiers,
+} from "./documentLinks/html.js";
 import { extractMarkdownModuleSpecifiers, extractMdxModuleSpecifiers } from "./documentLinks/markdown.js";
 import { extractRstModuleSpecifiers } from "./documentLinks/rst.js";
 import { extractAstroModuleSpecifiers, extractHandlebarsModuleSpecifiers } from "./documentLinks/sfc.js";
 
 export { extractAsciidocModuleSpecifiers } from "./documentLinks/asciidoc.js";
-export { extractHtmlAttributeSpecifiers, extractHtmlInlineScriptSpecifiers } from "./documentLinks/html.js";
+export {
+  extractHtmlAttributeSpecifiers,
+  extractHtmlInlineScriptSpecifiers,
+  extractHtmlStyleSpecifiers,
+} from "./documentLinks/html.js";
 export { extractMarkdownModuleSpecifiers, extractMdxModuleSpecifiers } from "./documentLinks/markdown.js";
 export { extractRstModuleSpecifiers } from "./documentLinks/rst.js";
 export { extractAstroModuleSpecifiers, extractHandlebarsModuleSpecifiers } from "./documentLinks/sfc.js";

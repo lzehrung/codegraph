@@ -13,7 +13,12 @@ import {
 } from "../util/projectFiles.js";
 import { getGitHead, isGitRepo, getGitBlobHashes, listChangedFiles } from "../util/git.js";
 import { clearImportResolutionCaches, resolveSpecifier } from "../util/resolution.js";
-import { assertFilePathWithinRoot, normalizePath } from "../util/paths.js";
+import {
+  assertFilePathWithinRoot,
+  fileIdentityKey,
+  initializeFileIdentityCaseSensitivity,
+  normalizePath,
+} from "../util/paths.js";
 import { mapLimit } from "../util/concurrency.js";
 import { resolveWorkerThreadCount } from "../util/workerThreads.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
@@ -81,7 +86,7 @@ import {
   SymbolKind,
 } from "./types.js";
 import { isNonNativeParserUnavailableError, isParserSyntaxTree } from "../parserBackend.js";
-import { isUnsupportedParserInputError } from "../languages/filePrep.js";
+import { isUnsupportedParserInputError, type PreparedSFCEmbeddedBlock } from "../languages/filePrep.js";
 import { buildSqlFactCache, buildSqlModuleIndex, sqlCorpusSignature, type SqlFactCache } from "../sql/sourceGraph.js";
 import { finalizeProjectIndex } from "./finalize.js";
 import { toManifestFileEntry, writeIndexManifestSnapshot } from "./build-manifest.js";
@@ -99,6 +104,7 @@ import {
   isMissingGitRevisionError,
   listUntrackedProjectFiles,
   partitionTrackedManifestFiles,
+  probePathExistence,
 } from "./incremental-plan.js";
 import { parsedCacheMaxEntries, setParsedCacheEntry } from "./parsed-cache.js";
 
@@ -108,6 +114,7 @@ type IndexedFileGraphContext = {
   lang?: ParserLanguage;
   nativeQueries?: import("../native/treeSitterNative.js").NativeQueryResults | null;
   tree?: SyntaxTreeLike;
+  embeddedBlocks?: PreparedSFCEmbeddedBlock[];
 };
 
 type IndexedFileModuleResult = {
@@ -177,7 +184,9 @@ async function resolveCrossModuleSymbolExports(
 ): Promise<void> {
   if (!support.supportsCrossModuleSymbols) return;
   if (support.id !== "ts" && support.id !== "js") return;
-  const { matchPath } = await import("../util/resolution.js").then((mod) => mod.loadNearestTsconfigFor(file, logLevel));
+  const { matchPath } = await import("../util/resolution.js").then((mod) =>
+    mod.loadNearestTsconfigFor(file, projectRoot, logLevel),
+  );
   for (const entry of mod.exports) {
     if (entry.type !== "reexport" && entry.type !== "exportStar" && entry.type !== "namespaceReexport") {
       continue;
@@ -206,14 +215,14 @@ async function buildIndexedModuleForFile(args: {
   workerSetup: WorkerPoolSetupResult;
   parsedMap: Map<string, ParsedFileContext>;
   parsedCacheMaxEntries: number;
-  jsonDependencies: Set<string>;
+  jsonDependencies: Map<string, string>;
   bloomFilterCache: import("../util/bloomFilter.js").BloomFilterCache | undefined;
   onFallbackImportExtraction: ((event: FallbackImportExtractionEvent) => void) | undefined;
   fileSignatures: Map<string, FileSignature>;
   cacheEnabled: boolean;
 }): Promise<IndexedFileModuleResult> {
   const prepared = await prepareFileContextForBuild(args.file, args.support, args.opts, args.workerSetup, args.report);
-  const { source, sup, nativeQueries } = prepared;
+  const { source, sup, nativeQueries, embeddedBlocks } = prepared;
   let resolvedLang = prepared.lang;
   let tree: SyntaxTreeLike | undefined;
   const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
@@ -267,6 +276,19 @@ async function buildIndexedModuleForFile(args: {
           ...(args.opts?.languageExtensions ? { languageExtensions: args.opts.languageExtensions } : {}),
           ...(args.onFallbackImportExtraction ? { onFallbackImportExtraction: args.onFallbackImportExtraction } : {}),
         });
+  for (const block of embeddedBlocks ?? []) {
+    imports.push(
+      ...(await collectImportsForFile(args.file, args.projectRoot, {
+        source: block.source,
+        sup: block.sup,
+        graphOptions: args.graphOptions,
+        ...(args.opts?.native ? { native: args.opts.native } : {}),
+        ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
+        ...(args.opts?.languageExtensions ? { languageExtensions: args.opts.languageExtensions } : {}),
+        ...(args.onFallbackImportExtraction ? { onFallbackImportExtraction: args.onFallbackImportExtraction } : {}),
+      })),
+    );
+  }
   collectJsonDependencies(imports, args.jsonDependencies);
   let mod: ModuleIndex;
   if (sup.id === "sql") {
@@ -293,7 +315,8 @@ async function buildIndexedModuleForFile(args: {
   );
 
   const sigInfo = args.fileSignatures.get(args.file);
-  if (sigInfo) {
+  const cacheable = !prepared.nativeFallbackReason && !lacksParserContext;
+  if (sigInfo && cacheable) {
     const cacheSig = args.cacheEnabled
       ? await moduleCacheSignatureForFile(args.file, sigInfo, args.opts)
       : sigInfo.cacheSig;
@@ -308,6 +331,7 @@ async function buildIndexedModuleForFile(args: {
       ...(resolvedLang ? { lang: resolvedLang } : {}),
       ...(nativeQueries !== undefined ? { nativeQueries } : {}),
       ...(tree ? { tree } : {}),
+      ...(embeddedBlocks ? { embeddedBlocks } : {}),
     },
   };
 }
@@ -316,17 +340,18 @@ function isJsonFile(filePath: string): boolean {
   return filePath.toLowerCase().endsWith(".json");
 }
 
-function collectJsonDependencies(imports: ImportBinding[], bucket: Set<string>): void {
+function collectJsonDependencies(imports: ImportBinding[], bucket: Map<string, string>): void {
   for (const imp of imports) {
-    const resolved = typeof imp.resolved === "string" ? imp.resolved.replace(/\\/g, "/") : null;
-    if (resolved && isJsonFile(resolved)) bucket.add(resolved);
+    const resolved = typeof imp.resolved === "string" ? normalizePath(imp.resolved) : null;
+    if (resolved && isJsonFile(resolved)) bucket.set(fileIdentityKey(resolved), resolved);
   }
 }
 
 function ensureJsonModule(modules: Map<FileId, ModuleIndex>, filePath: string): void {
   const resolved = path.resolve(filePath);
-  const normalized = resolved.replace(/\\/g, "/");
-  if (modules.has(normalized)) return;
+  const normalized = normalizePath(resolved);
+  const key = fileIdentityKey(normalized);
+  if (modules.has(key)) return;
   if (!fs.existsSync(resolved)) return;
   const pos = { line: 1, column: 1, index: 0 };
   const symbol: SymbolDef = {
@@ -335,7 +360,7 @@ function ensureJsonModule(modules: Map<FileId, ModuleIndex>, filePath: string): 
     kind: SymbolKind.Default,
     range: { start: pos, end: pos },
   };
-  modules.set(normalized, {
+  modules.set(key, {
     file: normalized,
     exports: [{ type: "local", exportedAs: "default", target: symbol }],
     imports: [],
@@ -344,8 +369,9 @@ function ensureJsonModule(modules: Map<FileId, ModuleIndex>, filePath: string): 
 }
 
 function graphEdgeKey(edge: Edge): string {
-  const target = edge.to.type === "file" ? `file:${edge.to.path}` : `external:${edge.to.name}`;
-  return `${edge.from}::${target}::${edge.raw ?? ""}::${edge.typeOnly ? 1 : 0}`;
+  const from = fileIdentityKey(edge.from);
+  const target = edge.to.type === "file" ? `file:${fileIdentityKey(edge.to.path)}` : `external:${edge.to.name}`;
+  return `${from}::${target}::${edge.raw ?? ""}::${edge.typeOnly ? 1 : 0}`;
 }
 
 async function moduleCacheSignatureForFile(file: string, sigInfo: FileSignature, opts?: BuildOptions): Promise<string> {
@@ -370,27 +396,26 @@ function projectPatternsForLanguageExtensions(opts?: BuildOptions): string[] | u
 }
 
 function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: BuildOptions): void {
-  const importAlreadyPresent = (imports: ImportBinding[], candidate: ImportBinding): boolean =>
-    imports.some((existing) => {
-      if (existing.kind !== candidate.kind) return false;
-      if (existing.from !== candidate.from) return false;
-      if (existing.resolved !== candidate.resolved) return false;
-      if ((existing.typeOnly ?? false) !== (candidate.typeOnly ?? false)) {
-        return false;
-      }
-      if (candidate.kind === "named" && existing.kind === "named") {
-        return existing.local === candidate.local && existing.imported === candidate.imported;
-      }
-      if (candidate.kind === "namespace" && existing.kind === "namespace") {
-        return existing.localNS === candidate.localNS;
-      }
-      return false;
-    });
+  const expandedImportKey = (binding: ImportBinding): string | null => {
+    const typeOnly = binding.typeOnly ?? false;
+    if (binding.kind === "named") {
+      return JSON.stringify(["named", binding.from, binding.resolved, typeOnly, binding.local, binding.imported]);
+    }
+    if (binding.kind === "namespace") {
+      return JSON.stringify(["namespace", binding.from, binding.resolved, typeOnly, binding.localNS]);
+    }
+    return null;
+  };
 
   for (const mod of modules.values()) {
+    const expandedImportKeys = new Set<string>();
+    for (const existing of mod.imports) {
+      const key = expandedImportKey(existing);
+      if (key) expandedImportKeys.add(key);
+    }
     for (const imp of [...mod.imports]) {
       if (imp.kind !== "star" || typeof imp.resolved !== "string") continue;
-      const target = modules.get(imp.resolved);
+      const target = modules.get(fileIdentityKey(imp.resolved));
       if (!target) continue;
       const targetSupport = supportForFile(imp.resolved, opts?.languageExtensions);
       const exportedSymbols = target.exports.filter((entry) => entry.type === "local").length
@@ -419,7 +444,9 @@ function expandStarImports(modules: Map<FileId, ModuleIndex>, opts?: BuildOption
               resolved: imp.resolved,
               ...(imp.typeOnly !== undefined ? { typeOnly: imp.typeOnly } : {}),
             };
-        if (importAlreadyPresent(mod.imports, expandedImport)) continue;
+        const expandedImportKeyValue = expandedImportKey(expandedImport);
+        if (!expandedImportKeyValue || expandedImportKeys.has(expandedImportKeyValue)) continue;
+        expandedImportKeys.add(expandedImportKeyValue);
         mod.imports.push(expandedImport);
       }
     }
@@ -543,6 +570,7 @@ async function buildIndexFromFileListShared(
   helperOpts?: BuildIndexHelperOptions,
 ): Promise<ProjectIndex> {
   clearImportResolutionCaches();
+  await initializeFileIdentityCaseSensitivity(projectRoot);
   const {
     normalizedProjectRoot,
     report,
@@ -567,22 +595,33 @@ async function buildIndexFromFileListShared(
   const manifestStart = performance.now();
   const manifest = useManifest && !helperOpts?.ignoreExistingManifest ? await loadManifest(projectRoot, opts) : null;
   const manifestFiles = sanitizeManifestEntriesForRoot(projectRoot, manifest?.files);
-  const languageExtensionsChanged = manifest
-    ? diffBuildOptions(manifest.buildOptions, opts).includes("languageExtensions")
-    : false;
+  const manifestOptionDiffs = manifest ? diffBuildOptions(manifest.buildOptions, opts) : [];
+  const languageExtensionsChanged = manifestOptionDiffs.includes("languageExtensions");
+  const implementationChanged = manifestOptionDiffs.includes("implementation");
   if (timings && useManifest) {
     timings.manifestMs = Math.round(performance.now() - manifestStart);
   }
+  const edgeProbeConcurrency = buildConcurrency(opts);
   const staleCachedEdgeFiles = new Set<string>();
   if (manifest) {
+    const edgeTargetPaths: string[] = [];
+    for (const entry of Object.values(manifestFiles)) {
+      for (const edge of entry.edges) {
+        if (edge.to.type === "file") edgeTargetPaths.push(edge.to.path);
+      }
+    }
+    const edgeTargetExistence = await probePathExistence(edgeTargetPaths, edgeProbeConcurrency);
     for (const [file, entry] of Object.entries(manifestFiles)) {
-      if (entry.edges.some((edge) => edge.to.type === "file" && !fs.existsSync(edge.to.path))) {
+      if (entry.edges.some((edge) => edge.to.type === "file" && !edgeTargetExistence.get(edge.to.path))) {
         staleCachedEdgeFiles.add(file);
       }
     }
   }
   const cachedGraphEntries =
-    manifest && !languageExtensionsChanged && graphOptionsEqual(manifest.graphOptions, graphOptions)
+    manifest &&
+    !languageExtensionsChanged &&
+    !implementationChanged &&
+    graphOptionsEqual(manifest.graphOptions, graphOptions)
       ? new Map<string, ManifestFileEntry>(
           Object.entries(manifestFiles).filter(([file]) => !staleCachedEdgeFiles.has(file)),
         )
@@ -603,7 +642,7 @@ async function buildIndexFromFileListShared(
         ...(opts?.logLevel ? { logLevel: opts.logLevel } : {}),
       })
     : new Map<string, string>();
-  const conc = buildConcurrency(opts);
+  const conc = edgeProbeConcurrency;
   const languageExtensions = normalizeLanguageExtensions(opts?.languageExtensions);
   const sqlFiles = normalizedFiles
     .filter((file) => {
@@ -634,7 +673,7 @@ async function buildIndexFromFileListShared(
     const matchesGitSig = !!sigInfo.gitSig && !!cachedEdgesEntry.gitSig && cachedEdgesEntry.gitSig === sigInfo.gitSig;
     return !(matchesGitSig || cachedEdgesEntry.sig === sigInfo.sig);
   };
-  const jsonDependencies = new Set<string>();
+  const jsonDependencies = new Map<string, string>();
   const workerSetup = await setupWorkerPool(opts, normalizedFiles.length);
   try {
     const useBloomFilters = opts?.useBloomFilters ?? true;
@@ -705,6 +744,7 @@ async function buildIndexFromFileListShared(
             fileSignature: sigInfo,
             ...(sqlCorpusSig ? { sqlCorpusSig } : {}),
             ...(cachedEdgesEntry ? { cachedFileEdges: cachedEdgesEntry } : {}),
+            ...(manifest?.projectRoot ? { cachedFileEdgesProjectRoot: manifest.projectRoot } : {}),
             ...(onFileEdges ? { onFileEdges } : {}),
             ...(onFallbackImportExtraction ? { onFallbackImportExtraction } : {}),
             allFiles: normalizedFiles,
@@ -764,6 +804,7 @@ async function buildIndexFromFileListShared(
           fileSignature: sigInfo,
           ...(sqlCorpusSig ? { sqlCorpusSig } : {}),
           ...(cachedEdgesEntry ? { cachedFileEdges: cachedEdgesEntry } : {}),
+          ...(manifest?.projectRoot ? { cachedFileEdgesProjectRoot: manifest.projectRoot } : {}),
           ...(onFileEdges ? { onFileEdges } : {}),
           ...(onFallbackImportExtraction ? { onFallbackImportExtraction } : {}),
           allFiles: normalizedFiles,
@@ -806,7 +847,7 @@ async function buildIndexFromFileListShared(
       }
     };
     for (const [file, mod, edges] of fileResults) {
-      modules.set(file, mod);
+      modules.set(fileIdentityKey(file), mod);
       appendUniqueGraphEdges(edges);
     }
     const workspaceManifestEdges = await collectWorkspaceManifestDependencyEdges(
@@ -817,7 +858,7 @@ async function buildIndexFromFileListShared(
     );
     appendUniqueGraphEdges(workspaceManifestEdges);
     if (timings) timings.graphMs = Math.round(performance.now() - graphStart);
-    for (const jsonPath of jsonDependencies) {
+    for (const jsonPath of jsonDependencies.values()) {
       ensureJsonModule(modules, jsonPath);
     }
     expandStarImports(modules, opts);
@@ -864,6 +905,7 @@ async function buildProjectIndexWithManifestOptions(
   opts?: FullDiscoveryBuildOptions,
   helperOpts?: Pick<BuildIndexHelperOptions, "ignoreExistingManifest">,
 ): Promise<ProjectIndex> {
+  await initializeFileIdentityCaseSensitivity(projectRoot);
   try {
     const useDiskCache = (opts?.cache ?? "off") === "disk";
     // With disk caching enabled, reuse the previous full scan's symlinked-directory
@@ -899,11 +941,13 @@ async function buildProjectIndexWithManifestOptions(
       ...(knownSymlinkDirectories !== undefined ? { knownSymlinkDirectories } : {}),
       onSymlinkDirectoriesDiscovered,
     });
-    const additionalFiles = normalizeIndexedFileInputs(
+    const additionalFileCandidates = normalizeIndexedFileInputs(
       projectRoot,
       opts?.additionalFiles ?? [],
       "Additional index file",
-    ).filter((file) => fs.existsSync(file));
+    );
+    const additionalFileExistence = await probePathExistence(additionalFileCandidates, buildConcurrency(opts));
+    const additionalFiles = additionalFileCandidates.filter((file) => additionalFileExistence.get(file));
     const discoveredFileSet = new Set(discoveredFiles);
     const files = Array.from(new Set([...discoveredFiles, ...additionalFiles]));
     const transientFiles = additionalFiles.filter((file) => !discoveredFileSet.has(file));
@@ -1002,6 +1046,7 @@ export async function buildProjectIndexIncremental(
   projectRoot: string,
   opts?: IncrementalBuildOptions,
 ): Promise<ProjectIndex> {
+  await initializeFileIdentityCaseSensitivity(projectRoot);
   clearImportResolutionCaches();
   const graphOptions = normalizeGraphOptions(opts?.graph);
   const strictIncremental = opts?.incrementalStrict ?? false;
@@ -1070,16 +1115,23 @@ export async function buildProjectIndexIncremental(
     }
     const currentConfigHashResult = await computeConfigHash(projectRoot, opts?.logLevel);
     const currentConfigHash = recordConfigHashResult(manifestReport, currentConfigHashResult, opts?.logLevel);
-    const configChanged = !!currentConfigHash && (!manifest?.configHash || currentConfigHash !== manifest.configHash);
+    const configChanged =
+      !!currentConfigHashResult.error || !manifest?.configHash || currentConfigHash !== manifest.configHash;
     const requiresFullRebuild = optionDiffs.some(
-      (diff) => diff === "discovery" || diff === "native" || diff === "languageExtensions",
+      (diff) => diff === "discovery" || diff === "native" || diff === "implementation" || diff === "languageExtensions",
     );
     if (!manifest || !graphOptionsEqual(manifest.graphOptions, graphOptions) || configChanged || requiresFullRebuild) {
       if (manifest && configChanged) {
         logWithLevel(opts?.logLevel, "warn", "Configuration changed, rebuilding index...");
       }
       if (manifestReport && manifest) {
-        manifestReport.reason = requiresFullRebuild ? "buildOptionsMismatch" : "graphOptionsMismatch";
+        let reason = "graphOptionsMismatch";
+        if (requiresFullRebuild) {
+          reason = "buildOptionsMismatch";
+        } else if (configChanged) {
+          reason = "configChanged";
+        }
+        manifestReport.reason = reason;
         manifestReport.reused = false;
       }
       return await buildProjectIndexFromExport(projectRoot, opts, { ignoreExistingManifest: true });
@@ -1150,20 +1202,6 @@ export async function buildProjectIndexIncremental(
       (file) => Object.hasOwn(trackedEntries, file),
     );
     const previousTransientFileSet = new Set(previousTransientFiles);
-    const additionalFileSet = new Set(additionalFiles.filter((file) => fs.existsSync(file)));
-    const transientFiles = [...additionalFileSet].filter(
-      (file) => previousTransientFileSet.has(file) || !Object.hasOwn(trackedEntries, file),
-    );
-    const retiredTransientFiles = previousTransientFiles.filter((file) => !additionalFileSet.has(file));
-    const { trackedFiles, deletedTrackedFiles } = partitionTrackedManifestFiles(trackedEntries);
-    for (const file of retiredTransientFiles) {
-      trackedFiles.delete(file);
-      deletedTrackedFiles.add(file);
-      delete trackedEntries[file];
-    }
-    if (retiredTransientFiles.length) manifestRequiresSanitization = true;
-    const fileReport = initFileReport(report);
-    if (fileReport) fileReport.total = trackedFiles.size;
     const needsGitScan = !!opts?.gitBase || !!opts?.changedSince;
     const gitFiles = needsGitScan ? await listChangedFiles(projectRoot, buildIncrementalGitDiffOptions(opts)) : [];
     // New files that were never committed, staged, or passed explicitly have no tracked
@@ -1209,14 +1247,38 @@ export async function buildProjectIndexIncremental(
           : {}),
       });
     }
+    const candidateFiles = [
+      ...explicitFiles,
+      ...additionalFiles,
+      ...manifestDiffFiles,
+      ...gitFiles,
+      ...untrackedFiles,
+      ...rediscoveredFiles,
+    ];
+    const candidateExistence = await probePathExistence(candidateFiles, buildConcurrency(opts));
+    const existsInCandidateSnapshot = (file: string): boolean => candidateExistence.get(file) ?? false;
+    const additionalFileSet = new Set(additionalFiles.filter(existsInCandidateSnapshot));
+    const transientFiles = [...additionalFileSet].filter(
+      (file) => previousTransientFileSet.has(file) || !Object.hasOwn(trackedEntries, file),
+    );
+    const retiredTransientFiles = previousTransientFiles.filter((file) => !additionalFileSet.has(file));
+    const { trackedFiles, deletedTrackedFiles } = await partitionTrackedManifestFiles(trackedEntries);
+    for (const file of retiredTransientFiles) {
+      trackedFiles.delete(file);
+      deletedTrackedFiles.add(file);
+      delete trackedEntries[file];
+    }
+    if (retiredTransientFiles.length) manifestRequiresSanitization = true;
+    const fileReport = initFileReport(report);
+    if (fileReport) fileReport.total = trackedFiles.size;
     const allFiles = new Set<string>([
       ...trackedFiles,
-      ...explicitFiles.filter((file) => fs.existsSync(file)),
-      ...additionalFiles.filter((file) => fs.existsSync(file)),
-      ...manifestDiffFiles.filter((file) => fs.existsSync(file)),
-      ...gitFiles.filter((file) => fs.existsSync(file)),
-      ...untrackedFiles.filter((file) => fs.existsSync(file)),
-      ...rediscoveredFiles.filter((file) => fs.existsSync(file)),
+      ...explicitFiles.filter(existsInCandidateSnapshot),
+      ...additionalFiles.filter(existsInCandidateSnapshot),
+      ...manifestDiffFiles.filter(existsInCandidateSnapshot),
+      ...gitFiles.filter(existsInCandidateSnapshot),
+      ...untrackedFiles.filter(existsInCandidateSnapshot),
+      ...rediscoveredFiles.filter(existsInCandidateSnapshot),
     ]);
     if (fileReport) fileReport.total = allFiles.size;
     const dependentFilesOfDeletedTracked = collectDeletedTrackedFileDependents(trackedEntries, deletedTrackedFiles);
@@ -1247,7 +1309,7 @@ export async function buildProjectIndexIncremental(
     }
     const changedFiles = new Set<string>();
     const markAsChanged = (file: string): void => {
-      if (fs.existsSync(file)) changedFiles.add(file);
+      if (allFiles.has(file)) changedFiles.add(file);
     };
     // Git working-tree diffs are change *candidates*, not proof the indexed bytes are
     // stale. `lastCommit...WORKTREE` stays dirty across warm runs after we index the
@@ -1256,8 +1318,12 @@ export async function buildProjectIndexIncremental(
     // `allFiles` above so signature validation can decide; only skip the early snapshot
     // fast-path while candidates exist.
     const gitChangeCandidates = new Set<string>();
-    for (const file of manifestDiffFiles) if (fs.existsSync(file)) gitChangeCandidates.add(file);
-    for (const file of gitFiles) if (fs.existsSync(file)) gitChangeCandidates.add(file);
+    for (const file of manifestDiffFiles) {
+      if (existsInCandidateSnapshot(file)) gitChangeCandidates.add(file);
+    }
+    for (const file of gitFiles) {
+      if (existsInCandidateSnapshot(file)) gitChangeCandidates.add(file);
+    }
     const explicitFileSet = new Set(explicitFiles);
     const explicitFilesCoverAllFiles =
       explicitFileSet.size === allFiles.size && [...allFiles].every((file) => explicitFileSet.has(file));
@@ -1358,7 +1424,7 @@ export async function buildProjectIndexIncremental(
       });
       const modules = new Map<FileId, ModuleIndex>();
       const parsedMap = new Map<string, ParsedFileContext>();
-      const jsonDependencies = new Set<string>();
+      const jsonDependencies = new Map<string, string>();
       const useBloomFilters = opts?.useBloomFilters ?? true;
       const bloomFilterCache = useBloomFilters
         ? new (await import("../util/bloomFilter.js")).BloomFilterCache()
@@ -1376,8 +1442,9 @@ export async function buildProjectIndexIncremental(
       const invalidateCachedDependents = () => {
         const dependentFilesOfChanged = collectTrackedFileDependents(trackedEntries, changedFiles);
         for (const file of dependentFilesOfChanged) {
-          if (modules.has(file)) {
-            modules.delete(file);
+          const key = fileIdentityKey(file);
+          if (modules.has(key)) {
+            modules.delete(key);
             if (fileReport) {
               fileReport.cached = Math.max(0, (fileReport.cached ?? 0) - 1);
             }
@@ -1405,7 +1472,7 @@ export async function buildProjectIndexIncremental(
         const cached = cacheEnabled ? tryLoadFromCache(projectRoot, file, cacheSig, opts, report) : null;
         if (cached) {
           if (fileReport) fileReport.cached = (fileReport.cached ?? 0) + 1;
-          modules.set(file, cached);
+          modules.set(fileIdentityKey(file), cached);
           collectJsonDependencies(cached.imports, jsonDependencies);
           if (bloomFilterCache) {
             const persistedFilter = persistedBloomFilters?.get(file);
@@ -1477,11 +1544,11 @@ export async function buildProjectIndexIncremental(
           }
         });
         for (const [file, mod] of fileResults) {
-          modules.set(file.replace(/\\/g, "/"), mod);
+          modules.set(fileIdentityKey(file), mod);
         }
         if (timings) timings.parseMs = Math.round(performance.now() - parseStart);
       }
-      for (const jsonPath of jsonDependencies) {
+      for (const jsonPath of jsonDependencies.values()) {
         ensureJsonModule(modules, jsonPath);
       }
       expandStarImports(modules, opts);
@@ -1491,11 +1558,18 @@ export async function buildProjectIndexIncremental(
       const baseGraph: Graph | undefined =
         cachedGraphEntries.size > 0 ? { nodes: new Set<string>(), edges: [] } : undefined;
       if (baseGraph) {
+        const baseGraphEdgeTargets: string[] = [];
+        for (const entry of cachedGraphEntries.values()) {
+          for (const edge of entry.edges) {
+            if (edge.to.type === "file") baseGraphEdgeTargets.push(edge.to.path);
+          }
+        }
+        const baseGraphEdgeExistence = await probePathExistence(baseGraphEdgeTargets, conc);
         for (const [file, entry] of cachedGraphEntries) {
           baseGraph.nodes.add(file);
           for (const edge of entry.edges) {
             baseGraph.edges.push(edge);
-            if (edge.to.type === "file" && fs.existsSync(edge.to.path)) {
+            if (edge.to.type === "file" && baseGraphEdgeExistence.get(edge.to.path)) {
               baseGraph.nodes.add(edge.to.path);
             }
           }
@@ -1585,17 +1659,15 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
     supportForFile(file, previousLanguageExtensions)?.id !== supportForFile(file, currentLanguageExtensions)?.id;
   const strictIncremental = opts?.incrementalStrict ?? false;
   if (strictIncremental && graphOptions.fast) graphOptions.fast = false;
-  const explicitFiles = normalizeIndexedFileInputs(projectRoot, opts?.files ?? [], "Graph delta file").filter((file) =>
-    fs.existsSync(file),
-  );
+  const explicitFiles = normalizeIndexedFileInputs(projectRoot, opts?.files ?? [], "Graph delta file");
   const additionalFiles = normalizeIndexedFileInputs(
     projectRoot,
     opts?.additionalFiles ?? [],
     "Additional graph delta file",
-  ).filter((file) => fs.existsSync(file));
+  );
   const needsGitScan = !!opts?.gitBase || !!opts?.changedSince;
   const gitFiles = needsGitScan ? await listChangedFiles(projectRoot, buildIncrementalGitDiffOptions(opts)) : [];
-  const { trackedFiles } = partitionTrackedManifestFiles(trackedEntries);
+  const { trackedFiles } = await partitionTrackedManifestFiles(trackedEntries);
   const gitAvailable = await isGitRepo(projectRoot);
   const currentHead = gitAvailable ? await getGitHead(projectRoot) : null;
   const hasExplicitGitRange = !!opts?.gitBase || !!opts?.gitHead;
@@ -1618,20 +1690,35 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
       );
     }
   }
+  const candidateExistence = await probePathExistence(
+    [...explicitFiles, ...additionalFiles, ...manifestDiffFiles, ...gitFiles],
+    buildConcurrency(opts),
+  );
+  const existsInCandidateSnapshot = (file: string): boolean => candidateExistence.get(file) ?? false;
+  const existingExplicitFiles = explicitFiles.filter(existsInCandidateSnapshot);
+  const existingAdditionalFiles = additionalFiles.filter(existsInCandidateSnapshot);
+
   const allFiles = new Set<string>([
     ...trackedFiles,
-    ...explicitFiles,
-    ...additionalFiles,
-    ...manifestDiffFiles.filter((file) => fs.existsSync(file)),
-    ...gitFiles.filter((file) => fs.existsSync(file)),
+    ...existingExplicitFiles,
+    ...existingAdditionalFiles,
+    ...manifestDiffFiles.filter(existsInCandidateSnapshot),
+    ...gitFiles.filter(existsInCandidateSnapshot),
   ]);
   const changedFiles = new Set<string>();
-  explicitFiles.forEach((file) => changedFiles.add(file));
-  manifestDiffFiles.forEach((file) => changedFiles.add(file));
-  gitFiles.forEach((file) => changedFiles.add(file));
+  const changedFileKeys = new Set<string>();
+  const addChangedFile = (file: string): void => {
+    const key = fileIdentityKey(file);
+    if (changedFileKeys.has(key)) return;
+    changedFileKeys.add(key);
+    changedFiles.add(file);
+  };
+  existingExplicitFiles.forEach(addChangedFile);
+  manifestDiffFiles.forEach(addChangedFile);
+  gitFiles.forEach(addChangedFile);
   if (languageExtensionsChanged) {
     for (const file of trackedFiles) {
-      if (languageSupportChangedForFile(file)) changedFiles.add(file);
+      if (languageSupportChangedForFile(file)) addChangedFile(file);
     }
   }
   if (!languageExtensionsChanged && allFiles.size === 0 && changedFiles.size === 0) {
@@ -1650,7 +1737,7 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
       const hasMatchingGitSig = !!entry?.gitSig && !!sigInfo.gitSig && entry.gitSig === sigInfo.gitSig;
       const hasMatchingSig = entry?.sig === sigInfo.sig;
       if (!entry || !(hasMatchingGitSig || hasMatchingSig)) {
-        changedFiles.add(file);
+        addChangedFile(file);
       }
     }
   }
@@ -1667,13 +1754,15 @@ export async function buildGraphDelta(projectRoot: string, opts?: IncrementalBui
   const index = await buildProjectIndexIncremental(projectRoot, opts);
   if (languageExtensionsChanged) {
     for (const file of index.modules.keys()) {
-      if (languageSupportChangedForFile(file)) changedFiles.add(file);
+      if (!languageSupportChangedForFile(file)) continue;
+      const displayFile = index.byFile.get(fileIdentityKey(file))?.file ?? file;
+      addChangedFile(displayFile);
     }
   }
   const changedList = Array.from(changedFiles);
   const afterEdges = new Map<string, Edge>();
   for (const edge of index.graph.edges) {
-    if (changedFiles.has(edge.from)) afterEdges.set(edgeKey(edge), edge);
+    if (changedFileKeys.has(fileIdentityKey(edge.from))) afterEdges.set(edgeKey(edge), edge);
   }
   const added: Edge[] = [];
   const removed: Edge[] = [];

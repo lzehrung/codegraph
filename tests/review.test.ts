@@ -13,6 +13,9 @@ import {
 import * as indexerBuild from "../src/indexer/build-index.js";
 import * as indexerNavigation from "../src/indexer/navigation.js";
 import type { BuildReport, IncrementalBuildOptions, SymbolDef } from "../src/indexer/types.js";
+import { boundReviewReportForTransport, DEFAULT_REVIEW_TRANSPORT_LIMITS } from "../src/review/types.js";
+import { summarizeChangedFiles } from "../src/review/summaries.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 import * as impactMap from "../src/impact/map.js";
 import { collectDuplicateLeadSummary } from "../src/duplicatesLeads.js";
 import { findDuplicates, findDuplicatesWithPreparedAnalysis, prepareDuplicateAnalysis } from "../src/duplicates.js";
@@ -54,9 +57,12 @@ describe("Review report", () => {
     const srcDir = path.join(root, "src");
     await fsp.mkdir(srcDir, { recursive: true });
     const tsFile = path.join(srcDir, "api.ts");
-    const pyFile = path.join(srcDir, "helper.py");
+    // Go is deliberately chosen: it has no receiver member-call resolution, so it
+    // exercises the limited-language branch. Python moved into the receiver-aware
+    // set, so it can no longer serve as the negative case here.
+    const goFile = path.join(srcDir, "helper.go");
     await fsp.writeFile(tsFile, "export function helper(a: string, b: number) { return a + b; }\n", "utf8");
-    await fsp.writeFile(pyFile, "def helper(a, b):\n    return a + b\n", "utf8");
+    await fsp.writeFile(goFile, "package main\n\nfunc Helper(a string, b int) string {\n\treturn a\n}\n", "utf8");
 
     const diffText = [
       "diff --git a/src/api.ts b/src/api.ts",
@@ -66,22 +72,24 @@ describe("Review report", () => {
       "@@ -1,1 +1,1 @@",
       "-export function helper(a: string) { return a; }",
       "+export function helper(a: string, b: number) { return a + b; }",
-      "diff --git a/src/helper.py b/src/helper.py",
+      "diff --git a/src/helper.go b/src/helper.go",
       "index 1234567..abcdef0 100644",
-      "--- a/src/helper.py",
-      "+++ b/src/helper.py",
-      "@@ -1,2 +1,2 @@",
-      "-def helper(a):",
-      "-    return a",
-      "+def helper(a, b):",
-      "+    return a + b",
+      "--- a/src/helper.go",
+      "+++ b/src/helper.go",
+      "@@ -1,5 +1,5 @@",
+      " package main",
+      " ",
+      "-func Helper(a string) string {",
+      "+func Helper(a string, b int) string {",
+      " \treturn a",
+      " }",
       "",
     ].join("\n");
 
     const report = await buildReviewReport(root, { diffText });
 
     expect(report.diagnostics?.memberResolutionCoverage?.receiverAwareLanguages).toContain("ts");
-    expect(report.diagnostics?.memberResolutionCoverage?.limitedLanguages).toContain("python");
+    expect(report.diagnostics?.memberResolutionCoverage?.limitedLanguages).toContain("go");
   });
 
   it("includes definition snippets and callsites when enabled", async () => {
@@ -782,8 +790,8 @@ describe("Review report", () => {
     expect(report.status).toBe("ok");
     expect(report.changedFiles.map((changedFile) => changedFile.file)).toEqual(["extras/explicit.ts"]);
     expect(report.changedFiles[0]?.symbols.some((symbol) => symbol.name === "explicitValue")).toBe(true);
-    expect(reviewBuildReport.index?.byFile.has(normalize(includedFile))).toBe(true);
-    expect(reviewBuildReport.index?.byFile.has(normalize(explicitFile))).toBe(true);
+    expect(reviewBuildReport.index?.byFile.has(fileIdentityKey(normalize(includedFile)))).toBe(true);
+    expect(reviewBuildReport.index?.byFile.has(fileIdentityKey(normalize(explicitFile)))).toBe(true);
     expect(warmReport.changedFiles).toEqual(report.changedFiles);
     expect(warmIndexReport.files?.parsed ?? 0).toBe(0);
   });
@@ -960,9 +968,334 @@ describe("Review report", () => {
         exported: true,
       }),
     );
-    expect(report.summary.symbolsChanged).toBe(1);
+    expect(report.summary.symbolsChanged).toBe(2);
     expect(report.riskSummary.signals).toContain("exported-symbols-changed");
     expect(report.riskSummary.level).toBe("medium");
+  });
+
+  it("limits re-export changes to the diff-touched export and keeps other exports as API context", async () => {
+    const root = await mkTmpDir("dg-review-reexport-scope-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    const firstFile = path.join(srcDir, "first.ts");
+    const secondFile = path.join(srcDir, "second.ts");
+    const barrelFile = path.join(srcDir, "index.ts");
+    await fsp.writeFile(firstFile, `export const first = 1;\n`, "utf8");
+    await fsp.writeFile(secondFile, `export const second = 2;\n`, "utf8");
+    await fsp.writeFile(
+      barrelFile,
+      [`export { first } from "./first";`, `export { second } from "./second";`, ``].join("\n"),
+      "utf8",
+    );
+
+    const report = await buildReviewReport(root, {
+      diffText: [
+        "diff --git a/src/index.ts b/src/index.ts",
+        "index 1111111..2222222 100644",
+        "--- a/src/index.ts",
+        "+++ b/src/index.ts",
+        "@@ -1,2 +1,2 @@",
+        "-export { previousFirst } from './first';",
+        "+export { first } from './first';",
+        " export { second } from './second';",
+        "",
+      ].join("\n"),
+    });
+
+    const summary = report.changedFiles.find((entry) => entry.file === "src/index.ts");
+    expect(summary?.symbols.map((symbol) => symbol.name)).toEqual(["first", "previousFirst"]);
+    expect(summary?.apiContext?.map((symbol) => symbol.name)).toEqual(["second"]);
+    expect(report.summary.symbolsChanged).toBe(2);
+  });
+
+  it("reports renamed exports inside multi-line barrel blocks as changed", async () => {
+    const root = await mkTmpDir("dg-review-multiline-barrel-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    const apiFile = path.join(srcDir, "api.ts");
+    const otherFile = path.join(srcDir, "other.ts");
+    const barrelFile = path.join(srcDir, "index.ts");
+    await fsp.writeFile(apiFile, `export const current = 1;\n`, "utf8");
+    await fsp.writeFile(otherFile, `export const other = 2;\n`, "utf8");
+    await fsp.writeFile(
+      barrelFile,
+      [`export {`, `  current,`, `} from "./api";`, `export { other } from "./other";`, ``].join("\n"),
+      "utf8",
+    );
+
+    const report = await buildReviewReport(root, {
+      diffText: [
+        "diff --git a/src/index.ts b/src/index.ts",
+        "index 1111111..2222222 100644",
+        "--- a/src/index.ts",
+        "+++ b/src/index.ts",
+        "@@ -1,4 +1,4 @@",
+        " export {",
+        "-  previous,",
+        "+  current,",
+        ' } from "./api";',
+        ' export { other } from "./other";',
+        "",
+      ].join("\n"),
+    });
+
+    const summary = report.changedFiles.find((entry) => entry.file === "src/index.ts");
+    expect(summary?.symbols.map((symbol) => symbol.name)).toEqual(["current"]);
+    expect(summary?.apiContext?.map((symbol) => symbol.name)).toEqual(["other"]);
+    expect(report.summary.symbolsChanged).toBe(1);
+  });
+
+  it("reports both sides of a replaced re-export", async () => {
+    const root = await mkTmpDir("dg-review-reexport-replacement-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    const previousFile = path.join(srcDir, "previous.ts");
+    const currentFile = path.join(srcDir, "current.ts");
+    const barrelFile = path.join(srcDir, "index.ts");
+    await fsp.writeFile(previousFile, "export const previous = 1;\n", "utf8");
+    await fsp.writeFile(currentFile, "export const current = 2;\n", "utf8");
+    await fsp.writeFile(barrelFile, 'export { current } from "./current";\n', "utf8");
+
+    const report = await buildReviewReport(root, {
+      diffText: [
+        "diff --git a/src/index.ts b/src/index.ts",
+        "index 1111111..2222222 100644",
+        "--- a/src/index.ts",
+        "+++ b/src/index.ts",
+        "@@ -1 +1 @@",
+        '-export { previous } from "./previous";',
+        '+export { current } from "./current";',
+        "",
+      ].join("\n"),
+    });
+
+    const summary = report.changedFiles.find((entry) => entry.file === "src/index.ts");
+    expect(summary?.symbols.map((symbol) => symbol.name)).toEqual(["current", "previous"]);
+    expect(summary?.apiContext).toBeUndefined();
+    expect(report.summary.symbolsChanged).toBe(2);
+    expect(report.riskSummary.signals).toContain("exported-symbols-changed");
+  });
+
+  it("reports a removed trailing re-export as an exported API change", async () => {
+    const root = await mkTmpDir("dg-review-reexport-removal-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    const firstFile = path.join(srcDir, "first.ts");
+    const secondFile = path.join(srcDir, "second.ts");
+    const barrelFile = path.join(srcDir, "index.ts");
+    await fsp.writeFile(firstFile, `export const first = 1;\n`, "utf8");
+    await fsp.writeFile(secondFile, `export const second = 2;\n`, "utf8");
+    await fsp.writeFile(barrelFile, `export { first } from "./first";\n`, "utf8");
+
+    const report = await buildReviewReport(root, {
+      diffText: [
+        "diff --git a/src/index.ts b/src/index.ts",
+        "index 1111111..2222222 100644",
+        "--- a/src/index.ts",
+        "+++ b/src/index.ts",
+        "@@ -1,2 +1 @@",
+        ' export { first } from "./first";',
+        '-export { second } from "./second";',
+        "",
+      ].join("\n"),
+    });
+
+    const summary = report.changedFiles.find((entry) => entry.file === "src/index.ts");
+    expect(summary?.symbols).toContainEqual(
+      expect.objectContaining({
+        name: "second",
+        kind: "reexport",
+        exported: true,
+      }),
+    );
+    expect(summary?.symbols.map((symbol) => symbol.name)).toEqual(["second"]);
+    expect(summary?.apiContext?.map((symbol) => symbol.name)).toEqual(["first"]);
+    expect(report.summary.symbolsChanged).toBe(1);
+    expect(report.riskSummary.signals).toContain("exported-symbols-changed");
+    expect(report.reviewTasks).toContainEqual(expect.objectContaining({ id: "api-compat", priority: "high" }));
+  });
+
+  it("attributes a mid-file re-export removal to the removed export", async () => {
+    const root = await mkTmpDir("dg-review-reexport-mid-removal-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    const firstFile = path.join(srcDir, "first.ts");
+    const secondFile = path.join(srcDir, "second.ts");
+    const thirdFile = path.join(srcDir, "third.ts");
+    const barrelFile = path.join(srcDir, "index.ts");
+    await fsp.writeFile(firstFile, `export const first = 1;\n`, "utf8");
+    await fsp.writeFile(secondFile, `export const second = 2;\n`, "utf8");
+    await fsp.writeFile(thirdFile, `export const third = 3;\n`, "utf8");
+    await fsp.writeFile(
+      barrelFile,
+      [`export { first } from "./first";`, `export { third } from "./third";`, ``].join("\n"),
+      "utf8",
+    );
+
+    const report = await buildReviewReport(root, {
+      diffText: [
+        "diff --git a/src/index.ts b/src/index.ts",
+        "index 1111111..2222222 100644",
+        "--- a/src/index.ts",
+        "+++ b/src/index.ts",
+        "@@ -1,3 +1,2 @@",
+        ' export { first } from "./first";',
+        '-export { second } from "./second";',
+        ' export { third } from "./third";',
+        "",
+      ].join("\n"),
+    });
+
+    const summary = report.changedFiles.find((entry) => entry.file === "src/index.ts");
+    expect(summary?.symbols.map((symbol) => symbol.name)).toEqual(["second"]);
+    expect(summary?.apiContext?.map((symbol) => symbol.name)).toEqual(["first", "third"]);
+    expect(report.summary.symbolsChanged).toBe(1);
+    expect(report.riskSummary.signals).toContain("exported-symbols-changed");
+  });
+
+  it("lists the full export surface for explicit files without diff hunks", async () => {
+    const root = await mkTmpDir("dg-review-reexport-no-hunks-");
+    const barrelFile = path.join(root, "index.ts");
+    await fsp.writeFile(
+      barrelFile,
+      [`export { first } from "./first";`, `export { second } from "./second";`, ``].join("\n"),
+      "utf8",
+    );
+    const module = {
+      file: barrelFile,
+      exports: [
+        {
+          type: "reexport" as const,
+          exportedAs: "first",
+          fromModule: "./first",
+          sourceSpecifier: "first",
+        },
+        {
+          type: "reexport" as const,
+          exportedAs: "second",
+          fromModule: "./second",
+          sourceSpecifier: "second",
+        },
+      ],
+      imports: [],
+      locals: [],
+    };
+    const byFile = new Map([[fileIdentityKey(barrelFile), module]]);
+    const index = {
+      graph: { nodes: new Set([barrelFile]), edges: [] },
+      modules: byFile,
+      byFile,
+      exportCache: new Map(),
+      scopeCache: new Map(),
+    };
+    const result = await summarizeChangedFiles({
+      projectRoot: root,
+      index,
+      changedFileList: [barrelFile],
+      diffHunksByFile: new Map(),
+      diffKindsByFile: new Map([[barrelFile, "modified"]]),
+      diffChangesByFile: new Map(),
+      explicitFiles: new Set([barrelFile]),
+      existenceByFile: new Map([[barrelFile, true]]),
+      deletedSnapshots: new Map(),
+      includeSymbolDetails: false,
+      includeDiffContext: false,
+      diffContextLines: 0,
+      maxCallsites: 0,
+      referenceConcurrency: 1,
+      diagnostics: { missingFiles: [], symbolMappingParseFailures: [] },
+    });
+
+    expect(result.summaries[0]?.symbols.map((symbol) => symbol.name)).toEqual(["first", "second"]);
+    expect(result.summaries[0]?.apiContext).toBeUndefined();
+    expect(result.exportedChangedCount).toBe(2);
+    expect(result.changedSymbolIds).toHaveLength(2);
+  });
+
+  it("keeps untouched re-exports out of changed symbol IDs", async () => {
+    const root = await mkTmpDir("dg-review-reexport-symbol-ids-");
+    const barrelFile = path.join(root, "index.ts");
+    await fsp.writeFile(
+      barrelFile,
+      [`export { first } from "./first";`, `export { second } from "./second";`, ``].join("\n"),
+      "utf8",
+    );
+    const module = {
+      file: barrelFile,
+      exports: [
+        {
+          type: "reexport" as const,
+          exportedAs: "first",
+          fromModule: "./first",
+          sourceSpecifier: "first",
+        },
+        {
+          type: "reexport" as const,
+          exportedAs: "second",
+          fromModule: "./second",
+          sourceSpecifier: "second",
+        },
+      ],
+      imports: [],
+      locals: [],
+    };
+    const byFile = new Map([[fileIdentityKey(barrelFile), module]]);
+    const index = {
+      graph: { nodes: new Set([barrelFile]), edges: [] },
+      modules: byFile,
+      byFile,
+      exportCache: new Map(),
+      scopeCache: new Map(),
+    };
+    const hunk = {
+      oldStart: 1,
+      newStart: 1,
+      lines: ["-export { previousFirst } from './first';", "+export { first } from './first';"],
+    };
+    const result = await summarizeChangedFiles({
+      projectRoot: root,
+      index,
+      changedFileList: [barrelFile],
+      diffHunksByFile: new Map([[barrelFile, [hunk]]]),
+      diffKindsByFile: new Map([[barrelFile, "modified"]]),
+      diffChangesByFile: new Map(),
+      explicitFiles: new Set(),
+      existenceByFile: new Map([[barrelFile, true]]),
+      deletedSnapshots: new Map(),
+      includeSymbolDetails: false,
+      includeDiffContext: false,
+      diffContextLines: 0,
+      maxCallsites: 0,
+      referenceConcurrency: 1,
+      diagnostics: { missingFiles: [], symbolMappingParseFailures: [] },
+    });
+
+    expect(result.summaries[0]?.symbols.map((symbol) => symbol.name)).toEqual(["first", "previousFirst"]);
+    expect(result.summaries[0]?.apiContext?.map((symbol) => symbol.name)).toEqual(["second"]);
+    expect(result.changedSymbolIds).toHaveLength(2);
+    expect(result.changedSymbolIds).toContainEqual(expect.stringContaining("::first::"));
+    expect(result.changedSymbolIds).toContainEqual(expect.stringContaining("::previousFirst::"));
+  });
+
+  it("marks binary diff entries and suppresses symbol-level claims", async () => {
+    const root = await mkTmpDir("dg-review-binary-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.writeFile(path.join(srcDir, "api.ts"), `export const api = 1;\n`, "utf8");
+    await fsp.writeFile(path.join(srcDir, "index.ts"), `export * from "./api";\n`, "utf8");
+
+    const report = await buildReviewReport(root, {
+      diffText: [
+        "diff --git a/src/index.ts b/src/index.ts",
+        "index 1111111..2222222 100644",
+        "Binary files a/src/index.ts and b/src/index.ts differ",
+        "",
+      ].join("\n"),
+    });
+
+    const summary = report.changedFiles.find((entry) => entry.file === "src/index.ts");
+    expect(summary).toMatchObject({ isBinary: true, status: "updated", symbols: [] });
+    expect(report.summary.symbolsChanged).toBe(0);
   });
 
   it("reconstructs deleted files from raw diff text", async () => {
@@ -2150,7 +2483,7 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
     expect(Object.keys(reviewBuildReport)).not.toContain("duplicateAnalysis");
   });
 
-  it("keeps duplicate sibling tasks for symbol-free changed regions in files with changed symbols", async () => {
+  it("does not create duplicate sibling tasks for unchanged regions outside changed symbols", async () => {
     const root = await mkTmpDir("dg-review-duplicate-top-level-");
     runGit(root, ["init"]);
     runGit(root, ["symbolic-ref", "HEAD", "refs/heads/main"]);
@@ -2180,7 +2513,7 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
       (entry) => entry.reason === "duplicate-sibling" && entry.description.includes("src/a.ts"),
     );
 
-    expect(task).toBeDefined();
+    expect(task).toBeUndefined();
   });
   it("applies scoped bucket-size limits identically to prepared and direct duplicate analysis", async () => {
     const root = await mkTmpDir("dg-review-duplicate-scoped-buckets-");
@@ -2251,6 +2584,117 @@ export function normalizeInvoiceRows(rows: Array<{ amount: number; tax: number }
   });
 });
 
+describe("boundReviewReportForTransport", () => {
+  function makeBaseReport(overrides: Partial<ReviewReport> = {}): ReviewReport {
+    return {
+      schemaVersion: 2,
+      status: "ok",
+      projectFiles: [],
+      summary: { filesChanged: 0, symbolsChanged: 0, candidateTests: 0 },
+      riskSummary: { level: "low", score: 0, signals: [] },
+      reviewTasks: [],
+      changedFiles: [],
+      graphDelta: [],
+      candidateTests: [],
+      ...overrides,
+    };
+  }
+
+  it("reports truncated collections as-is with zero omitted counts when under every limit", async () => {
+    const { boundReviewReportForTransport, DEFAULT_REVIEW_TRANSPORT_LIMITS } = await import("../src/review/types.js");
+    const report = makeBaseReport({
+      changedFiles: [{ file: "a.ts", status: "updated", symbols: [] }],
+      graphDelta: [{ from: "a.ts", to: { type: "file", path: "b.ts" }, raw: "./b" }],
+    });
+
+    const bounded = boundReviewReportForTransport(report);
+
+    expect(bounded.limits).toEqual(DEFAULT_REVIEW_TRANSPORT_LIMITS);
+    expect(bounded.omittedCounts).toEqual({
+      projectFiles: 0,
+      changedFiles: 0,
+      symbols: 0,
+      graphDelta: 0,
+      candidateTests: 0,
+    });
+    expect(bounded.changedFiles).toEqual(report.changedFiles);
+    expect(bounded.graphDelta).toEqual(report.graphDelta);
+    expect(bounded.summary).toEqual(report.summary);
+  });
+
+  it("caps each collection (including per-file symbols) and reports exact omitted counts when a report exceeds the limits", async () => {
+    const { boundReviewReportForTransport } = await import("../src/review/types.js");
+    const limits = { projectFiles: 3, changedFiles: 2, symbolsPerFile: 2, graphDelta: 3, candidateTests: 2 };
+    const changedFiles = Array.from({ length: 5 }, (_, fileIndex) => ({
+      file: `file-${fileIndex}.ts`,
+      status: "updated" as const,
+      symbols: Array.from({ length: 4 }, (_, symbolIndex) => ({
+        name: `sym${symbolIndex}`,
+        kind: "function",
+        handle: `file-${fileIndex}.ts::sym${symbolIndex}`,
+        exported: true,
+      })),
+    }));
+    const report = makeBaseReport({
+      projectFiles: Array.from({ length: 6 }, (_, i) => ({
+        path: `p${i}.ts`,
+        kind: "file",
+        type: "typescript",
+        role: "manifest",
+        projectRoot: ".",
+      })),
+      summary: { filesChanged: 5, symbolsChanged: 20, candidateTests: 5 },
+      changedFiles,
+      graphDelta: Array.from({ length: 8 }, (_, i) => ({
+        from: `a${i}.ts`,
+        to: { type: "file" as const, path: `b${i}.ts` },
+        raw: `./b${i}`,
+      })),
+      candidateTests: Array.from({ length: 5 }, (_, i) => ({
+        file: `t${i}.test.ts`,
+        confidence: "low" as const,
+        reason: "pattern" as const,
+      })),
+    });
+
+    const bounded = boundReviewReportForTransport(report, limits);
+
+    expect(bounded.limits).toEqual(limits);
+    expect(bounded.projectFiles).toHaveLength(3);
+    expect(bounded.changedFiles).toHaveLength(2);
+    expect(bounded.changedFiles.every((file) => file.symbols.length <= 2)).toBe(true);
+    expect(bounded.graphDelta).toHaveLength(3);
+    expect(bounded.candidateTests).toHaveLength(2);
+    // Numeric summary totals stay accurate even though the detailed listings are capped.
+    expect(bounded.summary).toEqual(report.summary);
+    expect(bounded.omittedCounts).toEqual({
+      projectFiles: 3,
+      changedFiles: 3,
+      symbols: 4,
+      graphDelta: 5,
+      candidateTests: 3,
+    });
+  });
+
+  it("keeps the library path (buildReviewReport called directly) fully unbounded", async () => {
+    const root = await mkTmpDir("dg-review-transport-library-path-");
+    const srcDir = path.join(root, "src");
+    await fsp.mkdir(srcDir, { recursive: true });
+    const files = await Promise.all(
+      Array.from({ length: 60 }, async (_, index) => {
+        const filePath = path.join(srcDir, `file-${index}.ts`);
+        await fsp.writeFile(filePath, `export const value${index} = ${index};\n`, "utf8");
+        return filePath;
+      }),
+    );
+
+    await buildProjectIndex(root, { cache: "disk" });
+    const report = await buildReviewReport(root, { files });
+
+    expect(report.changedFiles.length).toBe(60);
+  });
+});
+
 describe("Indexing helper", () => {
   it("keeps star-import expansions in sync between full and subset builds", async () => {
     const root = await mkTmpDir("dg-review-indexer-");
@@ -2262,7 +2706,7 @@ describe("Indexing helper", () => {
     await fsp.writeFile(indexPath, `export * from './utils';\n`, "utf8");
 
     const fullIndex = await buildProjectIndex(root);
-    const fullModule = fullIndex.byFile.get(normalize(indexPath));
+    const fullModule = fullIndex.byFile.get(fileIdentityKey(normalize(indexPath)));
     if (!fullModule) throw new Error("Full index missing index.ts");
     const utilsNormalized = normalize(utilsPath);
     const fullExportStar = fullModule.exports.find(
@@ -2274,7 +2718,7 @@ describe("Indexing helper", () => {
     expect(fullExportStar).toBeDefined();
 
     const subsetIndex = await buildProjectIndexFromFiles(root, [indexPath, utilsPath]);
-    const subsetModule = subsetIndex.byFile.get(normalize(indexPath));
+    const subsetModule = subsetIndex.byFile.get(fileIdentityKey(normalize(indexPath)));
     if (!subsetModule) throw new Error("Subset index missing index.ts");
     const subsetExportStar = subsetModule.exports.find(
       (exp) =>
@@ -2294,14 +2738,14 @@ describe("Indexing helper", () => {
 
     const normalizedMainPath = mainPath.replace(/\\/g, "/");
     const fullIndex = await buildProjectIndex(root, { cache: "disk" });
-    const fullMainModule = fullIndex.byFile.get(normalizedMainPath);
+    const fullMainModule = fullIndex.byFile.get(fileIdentityKey(normalizedMainPath));
     expect(fullMainModule).toBeDefined();
 
     const incrementalIndex = await indexerBuild.buildProjectIndexIncremental(root, {
       cache: "disk",
       files: [mainPath],
     });
-    const incrementalMainModule = incrementalIndex.byFile.get(normalizedMainPath);
+    const incrementalMainModule = incrementalIndex.byFile.get(fileIdentityKey(normalizedMainPath));
     expect(incrementalMainModule).toBeDefined();
 
     const hasToolNamespaceImport = (imports: NonNullable<typeof fullMainModule>["imports"]) =>

@@ -1,5 +1,6 @@
 import type { FileId, Edge } from "../types.js";
 import { type ProjectIndex } from "../indexer/types.js";
+import { fileIdentityKey } from "../util/paths.js";
 import { compileTestPatterns, createIndexTestFileMatcher } from "./testPatterns.js";
 import type { FileChange, ImpactItem, ImpactOptions, ImpactReason } from "./types.js";
 import { createImpactIgnoreMatcher } from "./path.js";
@@ -9,10 +10,10 @@ type ImpactEmitter = (item: ImpactItem, phase: "partial" | "final") => void;
 
 function getDependentFiles(index: ProjectIndex, filePath: FileId, reverseDeps?: Map<FileId, Edge[]>): FileId[] {
   if (reverseDeps) {
-    return reverseDeps.get(filePath)?.map((edge) => edge.from) ?? [];
+    return reverseDeps.get(fileIdentityKey(filePath))?.map((edge) => edge.from) ?? [];
   }
   return index.graph.edges
-    .filter((edge) => edge.to.type === "file" && edge.to.path === filePath)
+    .filter((edge) => edge.to.type === "file" && fileIdentityKey(edge.to.path) === fileIdentityKey(filePath))
     .map((edge) => edge.from);
 }
 
@@ -36,15 +37,16 @@ export function seedTransitiveFromFiles(
   for (const fileChange of changedFiles) {
     if (isIgnored(fileChange.path)) continue;
 
-    const shouldSeedModifiedFallback =
-      fileChange.kind === "modified" &&
+    const isAddedOrModified = fileChange.kind === "added" || fileChange.kind === "modified";
+    const shouldSeedFileLevelFallback =
+      isAddedOrModified &&
       options.fileLevelFallback &&
       (fallbackPathSet.has(fileChange.path) ||
         fileChange.isBinary ||
         fileChange.modeChanged ||
         !fileChange.hunks.length);
 
-    if (shouldSeedModifiedFallback) {
+    if (shouldSeedFileLevelFallback) {
       if (impacted.has(fileChange.path)) continue;
       const dependents = getDependentFiles(index, fileChange.path, reverseDeps);
       if (dependents.length) {
@@ -74,6 +76,8 @@ export function seedTransitiveFromFiles(
       continue;
     }
 
+    // Deleted and renamed files have no reliable changed-symbol seed, so their old/current
+    // importers are always seeded independently of fileLevelFallback, including binary changes.
     if (fileChange.kind !== "deleted" && fileChange.kind !== "renamed") continue;
 
     const lookupPaths =
@@ -144,8 +148,7 @@ export function analyzeTransitiveImpact(
   while (qi < queue.length) {
     const { file, depth, reason } = queue[qi++]!;
     if (depth >= maxDepth) continue;
-
-    const edgesIn = reverseDeps.get(file) || [];
+    const edgesIn = reverseDeps.get(fileIdentityKey(file)) || [];
     for (const edge of edgesIn) {
       const dependentFile = edge.from;
       if ((!options.includeTests && isIndexTestFile(dependentFile)) || isIgnored(dependentFile)) {
@@ -174,8 +177,7 @@ export function analyzeTransitiveImpact(
       if (!improvesDepth && !improvesStrength) {
         continue;
       }
-
-      const fanIn = reverseDeps.get(dependentFile)?.length || 0;
+      const fanIn = reverseDeps.get(fileIdentityKey(dependentFile))?.length || 0;
       const resolvedDepth = improvesDepth ? nextDepth : Math.min(existing?.depth ?? nextDepth, nextDepth);
 
       const bestReason = selectStrongerImpactReason(existing?.explain?.reason, reason);

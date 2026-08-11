@@ -1,38 +1,187 @@
-import { execFile, spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
-import { promisify } from "node:util";
 import { stringifyUnknown } from "./ast.js";
 import { normalizePath } from "./paths.js";
 import { logWithLevel, type LogLevel } from "../logging.js";
 
-const execFileAsync = promisify(execFile);
+/**
+ * Default wall-clock budget for a single Git child.
+ * Long enough for ordinary local repos; short enough that a locked network FS or
+ * hung credential helper cannot pin an MCP request indefinitely.
+ */
+export const DEFAULT_GIT_TIMEOUT_MS = 30_000;
 
 const gitRepositoryChecks = new Map<string, Promise<boolean>>();
 
-async function runGitCollectStdout(projectRoot: string, args: string[]): Promise<string> {
-  return await new Promise<string>((resolve, reject) => {
-    const child = spawn("git", args, {
+let gitExecutableForTests: string | null = null;
+
+/** Test-only override of the Git executable path. Pass null to restore. */
+export function setGitExecutableForTests(executable: string | null): void {
+  gitExecutableForTests = executable;
+}
+
+export type RunGitOptions = {
+  timeoutMs?: number | undefined;
+  signal?: AbortSignal | undefined;
+  maxBuffer?: number | undefined;
+  input?: string | undefined;
+  /** Test hook: observe the spawned child (e.g. to assert timeout kill). */
+  onSpawn?: ((child: { pid?: number }) => void) | undefined;
+};
+
+/** Test-only: drop memoized `isGitRepo` promises. */
+export function clearGitRepositoryCheckCacheForTests(): void {
+  gitRepositoryChecks.clear();
+}
+
+function resolveGitTimeoutMs(timeoutMs: number | undefined): number {
+  if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0) {
+    return Math.floor(timeoutMs);
+  }
+  return DEFAULT_GIT_TIMEOUT_MS;
+}
+
+function killGitChild(child: ChildProcess): void {
+  if (child.killed || child.exitCode !== null) return;
+  try {
+    child.kill("SIGTERM");
+  } catch {
+    // ignore
+  }
+  // Escalate if the child ignores SIGTERM (common on Windows for hung helpers).
+  setTimeout(() => {
+    if (child.killed || child.exitCode !== null) return;
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // ignore
+    }
+  }, 1_000).unref?.();
+}
+
+/**
+ * Central bounded Git execution: timeout + optional AbortSignal, always kills the child.
+ * Preserves stderr/stdout in rejection messages for diagnosis.
+ */
+export async function runGit(
+  projectRoot: string,
+  args: string[],
+  options?: RunGitOptions,
+): Promise<{ stdout: string; stderr: string }> {
+  const timeoutMs = resolveGitTimeoutMs(options?.timeoutMs);
+  const maxBuffer = options?.maxBuffer ?? 64 * 1024 * 1024;
+  const executable = gitExecutableForTests ?? "git";
+  const signal = options?.signal;
+
+  if (signal?.aborted) {
+    throw createGitError(projectRoot, args, new Error("aborted before start"));
+  }
+
+  return await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+    const child = spawn(executable, args, {
       cwd: projectRoot,
       env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [options?.input !== undefined ? "pipe" : "ignore", "pipe", "pipe"],
+      windowsHide: true,
     });
+    options?.onSpawn?.(child.pid === undefined ? {} : { pid: child.pid });
+
     let stdout = "";
     let stderr = "";
-    child.stdout.on("data", (chunk: Buffer | string) => {
-      stdout += typeof chunk === "string" ? chunk : chunk.toString();
-    });
-    child.stderr.on("data", (chunk: Buffer | string) => {
-      stderr += typeof chunk === "string" ? chunk : chunk.toString();
-    });
-    child.on("error", (error) => reject(createGitError(projectRoot, args, error)));
-    child.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(`git ${args.join(" ")} failed (${code}): ${stderr || stdout || "unknown error"}`));
+    let settled = false;
+    let timedOut = false;
+    let aborted = false;
+    let totalBytes = 0;
+
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener("abort", onAbort);
+      fn();
+    };
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killGitChild(child);
+    }, timeoutMs);
+    timer.unref?.();
+
+    const onAbort = () => {
+      aborted = true;
+      killGitChild(child);
+    };
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
+
+    const stdoutStream = child.stdout;
+    const stderrStream = child.stderr;
+    if (!stdoutStream || !stderrStream) {
+      killGitChild(child);
+      settle(() => reject(createGitError(projectRoot, args, new Error("git child missing stdio pipes"))));
+      return;
+    }
+
+    stdoutStream.on("data", (chunk: Buffer | string) => {
+      const textChunk = typeof chunk === "string" ? chunk : chunk.toString();
+      totalBytes += Buffer.byteLength(textChunk, "utf8");
+      if (totalBytes > maxBuffer) {
+        killGitChild(child);
+        settle(() =>
+          reject(createGitError(projectRoot, args, new Error(`stdout exceeded maxBuffer (${maxBuffer} bytes)`))),
+        );
         return;
       }
-      resolve(stdout);
+      stdout += textChunk;
     });
+    stderrStream.on("data", (chunk: Buffer | string) => {
+      stderr += typeof chunk === "string" ? chunk : chunk.toString();
+    });
+    child.on("error", (error) => {
+      settle(() => reject(createGitError(projectRoot, args, error)));
+    });
+    child.on("close", (code, signalName) => {
+      settle(() => {
+        if (timedOut) {
+          reject(
+            createGitError(
+              projectRoot,
+              args,
+              new Error(`timed out after ${timeoutMs}ms${stderr ? `: ${stderr.trim()}` : ""}`),
+            ),
+          );
+          return;
+        }
+        if (aborted) {
+          reject(createGitError(projectRoot, args, new Error(`aborted${stderr ? `: ${stderr.trim()}` : ""}`)));
+          return;
+        }
+        if (code !== 0) {
+          reject(
+            new Error(
+              `git ${args.join(" ")} failed (${code ?? signalName ?? "unknown"}): ${stderr || stdout || "unknown error"}`,
+            ),
+          );
+          return;
+        }
+        resolve({ stdout, stderr });
+      });
+    });
+
+    if (options?.input !== undefined) {
+      if (!child.stdin) {
+        killGitChild(child);
+        settle(() => reject(createGitError(projectRoot, args, new Error("git child missing stdin pipe"))));
+        return;
+      }
+      child.stdin.write(options.input);
+      child.stdin.end();
+    }
   });
+}
+
+async function runGitCollectStdout(projectRoot: string, args: string[]): Promise<string> {
+  const { stdout } = await runGit(projectRoot, args);
+  return stdout;
 }
 
 export function isGitWorktreeSentinel(value: string): boolean {
@@ -71,13 +220,11 @@ export function gitDiffArgs(base: string, head: string, extraArgs: string[] = []
   const safeHead = assertSafeRevision(head, "head");
   return ["diff", ...extraArgs, "--end-of-options", `${safeBase}..${safeHead}`];
 }
+
 export async function getGitHead(projectRoot: string): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], {
-      cwd: projectRoot,
-      env: process.env,
-    });
-    const hash = stdout?.toString().trim();
+    const { stdout } = await runGit(projectRoot, ["rev-parse", "HEAD"]);
+    const hash = stdout.trim();
     return hash || null;
   } catch {
     return null;
@@ -90,11 +237,8 @@ export async function isGitRepo(projectRoot: string): Promise<boolean> {
   if (cached) return await cached;
   const check = (async () => {
     try {
-      const { stdout } = await execFileAsync("git", ["rev-parse", "--is-inside-work-tree"], {
-        cwd: resolvedRoot,
-        env: process.env,
-      });
-      return stdout?.toString().trim() === "true";
+      const { stdout } = await runGit(resolvedRoot, ["rev-parse", "--is-inside-work-tree"]);
+      return stdout.trim() === "true";
     } catch {
       return false;
     }
@@ -113,13 +257,15 @@ export async function isGitPathIgnored(projectRoot: string, file: string): Promi
 
 async function runGitPathPredicate(projectRoot: string, args: string[]): Promise<boolean> {
   try {
-    await execFileAsync("git", args, {
-      cwd: projectRoot,
-      env: process.env,
-    });
+    await runGit(projectRoot, args);
     return true;
   } catch (error) {
-    if (typeof error === "object" && error !== null && "code" in error && error.code === 1) return false;
+    const message = error instanceof Error ? error.message : String(error);
+    // git ls-files --error-unmatch / check-ignore --quiet exit 1 for "no".
+    if (/\bfailed \(1\):/.test(message)) return false;
+    if (error instanceof Error && message.startsWith(`git ${args.join(" ")} failed in ${projectRoot}:`)) {
+      throw error;
+    }
     throw createGitError(projectRoot, args, error);
   }
 }
@@ -145,9 +291,7 @@ export async function getGitBlobHashes(
     // memory costs a little extra parsing but stays correct at any repo size.
     // Full-repo NUL listings can exceed Node's default 1 MiB execFile maxBuffer on large
     // trees; raising it keeps the argv-limit fix from regressing into a silent maxBuffer miss.
-    const { stdout: trackedStdout } = await execFileAsync("git", ["ls-files", "-z"], {
-      cwd: projectRoot,
-      env: process.env,
+    const { stdout: trackedStdout } = await runGit(projectRoot, ["ls-files", "-z"], {
       maxBuffer: 64 * 1024 * 1024,
     });
     const trackedRel = trackedStdout
@@ -156,36 +300,13 @@ export async function getGitBlobHashes(
       .map((line) => line.trim())
       .filter((rel) => rel && relFileSet.has(rel));
     if (!trackedRel.length) return new Map();
-    const hashes = await new Promise<string[]>((resolve, reject) => {
-      const child = spawn("git", ["hash-object", "--stdin-paths"], {
-        cwd: projectRoot,
-        env: process.env,
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-      let stdout = "";
-      let stderr = "";
-      child.stdout.on("data", (chunk: Buffer | string) => {
-        stdout += typeof chunk === "string" ? chunk : chunk.toString();
-      });
-      child.stderr.on("data", (chunk: Buffer | string) => {
-        stderr += typeof chunk === "string" ? chunk : chunk.toString();
-      });
-      child.on("error", reject);
-      child.on("close", (code) => {
-        if (code !== 0) {
-          reject(new Error(`git hash-object failed (${code}): ${stderr || "unknown error"}`));
-          return;
-        }
-        resolve(
-          stdout
-            .split(/\r?\n/)
-            .map((line) => line.trim())
-            .filter(Boolean),
-        );
-      });
-      child.stdin.write(trackedRel.join("\n"));
-      child.stdin.end();
+    const { stdout: hashStdout } = await runGit(projectRoot, ["hash-object", "--stdin-paths"], {
+      input: trackedRel.join("\n"),
     });
+    const hashes = hashStdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
     if (hashes.length !== trackedRel.length) {
       logWithLevel(
         opts?.logLevel,
@@ -337,6 +458,8 @@ function createGitError(projectRoot: string, args: string[], error: unknown): Er
     error.stderr.trim()
   ) {
     detail = error.stderr.trim();
+  } else if (error instanceof Error && error.message) {
+    detail = error.message;
   }
   return new Error(`git ${args.join(" ")} failed in ${projectRoot}: ${detail}`);
 }

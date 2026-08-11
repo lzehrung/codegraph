@@ -8,7 +8,7 @@ import { compileTestPatterns, createIndexTestFileMatcher, isTestFilePath } from 
 import type { FileChange } from "../impact/types.js";
 import { listDirectDeletedFileImporters } from "../review/deleted.js";
 import type { FileId } from "../types.js";
-import { normalizePath, resolveFilePathWithinRoot, toProjectDisplayPath } from "../util/paths.js";
+import { fileIdentityKey, normalizePath, resolveFilePathWithinRoot, toProjectDisplayPath } from "../util/paths.js";
 import { exitWithError } from "./context.js";
 import { parseNonNegativeIntegerOption } from "./options.js";
 
@@ -172,7 +172,7 @@ async function collectAffectedTests(
   const affected = new Map<string, AffectedTestAccumulator>();
   const omittedCounts: AffectedOmittedCounts = { changedFiles: 0, filteredTests: 0 };
   const resolver = createGraphFileResolver(state.index.graph.nodes);
-  const graphNodes = new Set(Array.from(state.index.graph.nodes, (node) => normalizePath(node)));
+  const graphNodeKeys = new Set(Array.from(state.index.graph.nodes, fileIdentityKey));
   const adjacency = state.index.graphAdjacency ?? graphAdjacencyFor(state.index.graph);
   const pathPatterns = compileTestPatterns(undefined);
 
@@ -186,12 +186,12 @@ async function collectAffectedTests(
     if (!state.maxDepth) continue;
 
     const startFile = resolver(changedFile);
-    if (!graphNodes.has(normalizePath(startFile))) {
+    if (!graphNodeKeys.has(fileIdentityKey(startFile))) {
       omittedCounts.changedFiles += 1;
       continue;
     }
 
-    const visited = new Set<string>([startFile]);
+    const visited = new Set<string>([fileIdentityKey(startFile)]);
     const queue: Array<{ file: string; depth: number }> = [{ file: startFile, depth: 0 }];
     let queueIndex = 0;
     while (queueIndex < queue.length) {
@@ -200,8 +200,9 @@ async function collectAffectedTests(
       if (current.depth >= state.maxDepth) continue;
       const nextDepth = current.depth + 1;
       for (const neighbor of getReverseNeighbors(adjacency, current.file)) {
-        if (visited.has(neighbor)) continue;
-        visited.add(neighbor);
+        const neighborKey = fileIdentityKey(neighbor);
+        if (visited.has(neighborKey)) continue;
+        visited.add(neighborKey);
         queue.push({ file: neighbor, depth: nextDepth });
         maybeAddTest(
           affected,

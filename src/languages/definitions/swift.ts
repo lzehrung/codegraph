@@ -6,6 +6,7 @@ export const SWIFT_DEF: LanguageDefinition = {
   id: "swift",
   extensions: [".swift"],
   grammar: () => loadTreeSitterLanguage("tree-sitter-swift"),
+  usesQueryDrivenLocals: true,
   structure: {
     blocks: [
       {
@@ -163,6 +164,7 @@ export const SWIFT_DEF: LanguageDefinition = {
       return true;
     return false;
   },
+  scopeDeclarationNames: "all",
   createsFunctionScope: (node) =>
     node.type === "function_declaration" ||
     node.type === "init_declaration" ||

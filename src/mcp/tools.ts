@@ -26,7 +26,10 @@ export const MAX_CALL_HIERARCHY_DEPTH = 5;
 type ToolInputSchemaProperties = NonNullable<Tool["inputSchema"]["properties"]>;
 
 function objectSchema(properties: ToolInputSchemaProperties, required: string[] = []): Tool["inputSchema"] {
-  return required.length ? { type: "object", properties, required } : { type: "object", properties };
+  const schema = required.length
+    ? { type: "object" as const, properties, required, additionalProperties: false as const }
+    : { type: "object" as const, properties, additionalProperties: false as const };
+  return schema;
 }
 
 const stringProperty = { type: "string" };

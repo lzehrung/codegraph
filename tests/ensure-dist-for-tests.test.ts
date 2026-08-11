@@ -86,4 +86,66 @@ describe("inspectDistForTests", () => {
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
+
+  test("should require a build when a build script changes after dist was built", async () => {
+    const root = await createTempRoot();
+    const srcTime = new Date("2026-04-27T12:00:00.000Z");
+    const distTime = new Date("2026-04-27T12:01:00.000Z");
+    const scriptEditTime = new Date("2026-04-27T12:02:00.000Z");
+
+    try {
+      await setFileMtime(path.join(root, "src", "nested.ts"), srcTime);
+      await setFreshnessInputsTimestamp(root, srcTime);
+      await setFileMtime(path.join(root, "dist", "index.js"), distTime, "export {};\n");
+      await setFileMtime(path.join(root, "dist", "cli.js"), distTime, "export {};\n");
+      await fsp.mkdir(path.join(root, "dist", "bin"), { recursive: true });
+      await setFileMtime(path.join(root, "dist", "bin", "cli.js"), distTime, "export {};\n");
+      await setFileMtime(path.join(root, "dist", "bin", "queryIndexWorker.js"), distTime, "export {};\n");
+
+      expect(inspectDistForTests(root)).toMatchObject({ needsBuild: false, reason: "fresh" });
+
+      await fsp.mkdir(path.join(root, "scripts"), { recursive: true });
+      await setFileMtime(path.join(root, "scripts", "bundle-cli.mjs"), scriptEditTime, "// edited bundler logic\n");
+
+      expect(inspectDistForTests(root)).toMatchObject({
+        needsBuild: true,
+        reason: "stale",
+      });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("should require a build when native addon inputs change after dist was built", async () => {
+    const root = await createTempRoot();
+    const srcTime = new Date("2026-04-27T12:00:00.000Z");
+    const distTime = new Date("2026-04-27T12:01:00.000Z");
+    const nativeEditTime = new Date("2026-04-27T12:02:00.000Z");
+
+    try {
+      await setFileMtime(path.join(root, "src", "nested.ts"), srcTime);
+      await setFreshnessInputsTimestamp(root, srcTime);
+      await setFileMtime(path.join(root, "dist", "index.js"), distTime, "export {};\n");
+      await setFileMtime(path.join(root, "dist", "cli.js"), distTime, "export {};\n");
+      await fsp.mkdir(path.join(root, "dist", "bin"), { recursive: true });
+      await setFileMtime(path.join(root, "dist", "bin", "cli.js"), distTime, "export {};\n");
+      await setFileMtime(path.join(root, "dist", "bin", "queryIndexWorker.js"), distTime, "export {};\n");
+
+      expect(inspectDistForTests(root)).toMatchObject({ needsBuild: false, reason: "fresh" });
+
+      await fsp.mkdir(path.join(root, "packages", "codegraph-native", "src"), { recursive: true });
+      await setFileMtime(
+        path.join(root, "packages", "codegraph-native", "src", "lib.rs"),
+        nativeEditTime,
+        "// edited native source\n",
+      );
+
+      expect(inspectDistForTests(root)).toMatchObject({
+        needsBuild: true,
+        reason: "stale",
+      });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
 });

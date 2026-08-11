@@ -1,5 +1,3 @@
-import type { Chunk } from "../../src/chunking/chunkFile.js";
-
 export interface ChunkExpectation {
   type: string;
   name?: string;
@@ -9,7 +7,7 @@ export interface ChunkExpectation {
   endLine?: number;
 }
 
-export interface LanguageSample {
+type LanguageSampleBase = {
   name: string;
   source?: string;
   sourceFile?: string; // Path relative to tests/languages/samples/
@@ -17,20 +15,25 @@ export interface LanguageSample {
     minTokens?: number;
     maxTokens?: number;
   };
-  expectedChunks: (chunks: Chunk[]) => void; // Function to assert on chunks
-}
+};
+
+/** Complete ordered chunk contract (count, names, and ranges). */
+export type LanguageSample = LanguageSampleBase & {
+  exactChunks: ChunkExpectation[];
+};
 
 export type GraphEdgeExpectation = { type: "file"; path: string } | { type: "external"; name: string };
 
 export interface DependencyGraphExpectation {
   from: string; // Path relative to tests/samples/<language>/
   to: GraphEdgeExpectation;
+  typeOnly?: boolean;
 }
 
-export interface SymbolExpectation {
-  file: string; // Path relative to tests/samples/<language>/
-  includes: Array<{ name: string; kind?: string }>;
-  excludes?: string[];
+/** Complete symbol multiset for a file (name + optional kind). */
+export interface ExactSymbolExpectation {
+  file: string;
+  symbols: Array<{ name: string; kind?: string }>;
 }
 
 export interface GoToDefinitionExpectation {
@@ -45,22 +48,41 @@ export interface GoToDefinitionExpectation {
   };
 }
 
-export interface ReferencesExpectation {
-  name: string;
+/** A single expected reference site, matched on normalized file + line identity. */
+export interface ExactReferenceSite {
   file: string; // Path relative to tests/samples/<language>/
+  line: number; // 1-based line number
+}
+
+type ExactReferencesExpectationBase = {
+  name: string;
+  file: string;
   line: number;
   column: number;
-  expectedStatus?: "ok" | "not_found";
-  minimumCount?: number;
+};
+
+export type ExactReferencesExpectation =
+  | (ExactReferencesExpectationBase & {
+      expectedStatus?: "ok";
+      references: [ExactReferenceSite, ...ExactReferenceSite[]];
+    })
+  | (ExactReferencesExpectationBase & {
+      expectedStatus: "not_found";
+      references?: never;
+    });
+
+/** Complete exact-set contracts for language parity assertions. */
+export interface ExactParityExpectations {
+  dependencyGraph?: DependencyGraphExpectation[];
+  symbols?: ExactSymbolExpectation[];
+  references?: ExactReferencesExpectation[];
 }
 
 export interface LanguageParityDefinition {
   sampleDir: string; // tests/samples/<sampleDir>/
-  dependencyGraph?: DependencyGraphExpectation[];
+  exact: ExactParityExpectations;
   absentDependencyGraph?: DependencyGraphExpectation[];
-  symbols?: SymbolExpectation[];
   goToDefinition?: GoToDefinitionExpectation[];
-  references?: ReferencesExpectation[];
 }
 
 export interface LanguageTestDefinition {

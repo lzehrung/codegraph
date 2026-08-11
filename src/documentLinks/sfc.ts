@@ -19,7 +19,7 @@ export function extractHandlebarsModuleSpecifiers(source: string): ModuleSpecifi
   const out: ModuleSpecifier[] = [];
   out.push(...extractHtmlAttributeSpecifiers(source));
 
-  for (const match of source.matchAll(/\{\{\s*>\s*(?:"([^"]+)"|'([^']+)'|([^\s}]+))/g)) {
+  for (const match of source.matchAll(/\{\{\s*(?:#\s*)?>\s*(?:"([^"]+)"|'([^']+)'|([^\s}]+))/g)) {
     const rawSpecifier = match[1] ?? match[2] ?? match[3];
     if (!rawSpecifier) continue;
     const normalized = normalizeLinkSpecifier(rawSpecifier, {

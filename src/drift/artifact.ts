@@ -6,14 +6,19 @@ import type { Edge, Graph } from "../types.js";
 import { isPlainRecord } from "../util/guards.js";
 import { normalizePath } from "../util/paths.js";
 import { countFilesByLanguage } from "./languages.js";
-import type { ArchitectureGraphEdge, ArchitectureSnapshot, ArchitectureUnresolvedImport } from "./types.js";
+import {
+  ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION,
+  type ArchitectureGraphEdge,
+  type ArchitectureSnapshot,
+  type ArchitectureUnresolvedImport,
+} from "./types.js";
 
 interface ArtifactManifest {
   artifacts: { graphJson: string };
 }
 
 interface PortableGraphJson {
-  schemaVersion: 1;
+  schemaVersion: typeof ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION;
   format: "codegraph.graph-json";
   graph: {
     files: string[];
@@ -64,8 +69,13 @@ function assertArtifactChild(outDir: string, artifactPath: string): string {
 }
 
 function parseGraphJson(value: unknown): PortableGraphJson {
-  if (!isPlainRecord(value) || value.schemaVersion !== 1 || value.format !== "codegraph.graph-json") {
+  if (!isPlainRecord(value) || value.format !== "codegraph.graph-json") {
     throw new Error("Codegraph artifact graph.json is missing or invalid.");
+  }
+  if (value.schemaVersion !== ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION) {
+    throw new Error(
+      `Codegraph artifact graph.json schema version ${String(value.schemaVersion)} is unsupported; regenerate the drift baseline with schema version ${ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION}.`,
+    );
   }
   if (!isPlainRecord(value.graph) || !Array.isArray(value.graph.files) || !Array.isArray(value.graph.fileEdges)) {
     throw new Error("Codegraph artifact graph.json does not contain a portable graph.");
@@ -84,14 +94,22 @@ function parseGraphJson(value: unknown): PortableGraphJson {
     ) {
       continue;
     }
+    const typeOnly = typeof edge.typeOnly === "boolean" ? edge.typeOnly : undefined;
+    const typeOnlyField = typeOnly !== undefined ? { typeOnly } : {};
     if (edge.to.type === "file" && typeof edge.to.path === "string") {
       fileEdges.push({
         from: normalizePath(edge.from),
         raw: edge.raw,
         to: { type: "file", path: normalizePath(edge.to.path) },
+        ...typeOnlyField,
       });
     } else if (edge.to.type === "external" && typeof edge.to.name === "string") {
-      fileEdges.push({ from: normalizePath(edge.from), raw: edge.raw, to: { type: "external", name: edge.to.name } });
+      fileEdges.push({
+        from: normalizePath(edge.from),
+        raw: edge.raw,
+        to: { type: "external", name: edge.to.name },
+        ...typeOnlyField,
+      });
     }
   }
   const symbols = Array.isArray(value.graph.symbols)
@@ -105,7 +123,7 @@ function parseGraphJson(value: unknown): PortableGraphJson {
       })
     : [];
   return {
-    schemaVersion: 1,
+    schemaVersion: ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION,
     format: "codegraph.graph-json",
     graph: { files, fileEdges, symbols },
   };
@@ -117,12 +135,19 @@ function edgeTarget(edge: Edge): string {
 }
 
 function edgeKey(edge: Edge): string {
-  return `${edge.from}\0${edge.raw}\0${edgeTarget(edge)}`;
+  const kind = edge.typeOnly ? "type-only" : "runtime";
+  return `${edge.from}\0${edge.raw}\0${edgeTarget(edge)}\0${kind}`;
 }
 
 function graphEdges(edges: readonly Edge[]): ArchitectureGraphEdge[] {
   return edges
-    .map((edge) => ({ key: edgeKey(edge), from: edge.from, to: edgeTarget(edge), raw: edge.raw }))
+    .map((edge) => ({
+      key: edgeKey(edge),
+      from: edge.from,
+      to: edgeTarget(edge),
+      raw: edge.raw,
+      ...(edge.typeOnly !== undefined ? { typeOnly: edge.typeOnly } : {}),
+    }))
     .sort((left, right) => left.key.localeCompare(right.key));
 }
 
@@ -147,7 +172,7 @@ export async function loadArchitectureSnapshotFromArtifact(outDirInput: string):
   const graphJson = parseGraphJson(await readJson(graphPath, "graph.json"));
   const graph: Graph = { nodes: new Set(graphJson.graph.files), edges: graphJson.graph.fileEdges };
   return {
-    schemaVersion: 1,
+    schemaVersion: ARCHITECTURE_SNAPSHOT_SCHEMA_VERSION,
     root: outDir,
     files: { total: graphJson.graph.files.length, byLanguage: countFilesByLanguage(graphJson.graph.files) },
     hotspots: getHotspots(graph)

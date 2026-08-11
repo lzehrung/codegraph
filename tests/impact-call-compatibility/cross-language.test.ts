@@ -25,15 +25,19 @@ function parseFixture(fileName: string, source: string): { languageId: string; t
 describe("cross-language call compatibility extraction", () => {
   it.each([
     ["helper.ts", "export function helper(a: string, b = 1, ...rest: string[]) { return a; }", 1, null],
+    ["helper.ts", "export function helper(value = /.../) { return value; }", 0, 1],
     ["helper.ts", "export const helper = a => a;\n", 1, 1],
     ["helper.tsx", "export const helper = a => a;\n", 1, 1],
     ["helper.js", "export const helper = a => a;\n", 1, 1],
     ["helper.jsx", "export const helper = a => a;\n", 1, 1],
     ["helper.py", "def helper(self, a, b):\n    return a\n", 3, 3],
     ["helper.py", "class Helper:\n    def helper(self, a, b=1, *args, **kwargs):\n        return a\n", 1, null],
+    ["helper.py", "def helper(a, /, b):\n    return a\n", 2, 2],
+    ["helper.py", "def helper(a, *, b):\n    return a\n", 2, 2],
     ["helper.go", "package main\nfunc helper(a string, b int, rest ...string) {}\n", 2, null],
     ["helper.rs", "fn helper(&self, a: i32, b: String) {}\n", 2, 2],
     ["Helper.java", "class Helper { void helper(String a, int b) {} }\n", 2, 2],
+    ["Helper.java", "class Helper { void helper(String... args) {} }\n", 0, null],
     ["Helper.cs", "class Helper { void helper(string a, int b = 1, params string[] rest) {} }\n", 1, null],
     ["helper.kt", "fun helper(a: String, b: Int = 1, vararg rest: String) {}\n", 1, null],
     ["helper.swift", "func helper(_ a: String, b: Int = 1, rest: String...) {}\n", 1, null],
@@ -41,6 +45,7 @@ describe("cross-language call compatibility extraction", () => {
     ["helper.rb", "def helper(a, b = 1, *rest, c:, d: 2, **kw)\nend\n", 2, null],
     ["helper.c", "void helper(char *a, int b, ...);\n", 2, null],
     ["helper.cpp", "void helper(const char* a, int b = 1) {}\n", 1, 2],
+    ["helper.cpp", "template <typename... Ts> void helper(std::tuple<Ts...> values) {}\n", 1, 1],
     ["helper.zig", "fn helper(a: []const u8, b: i32) void {}\n", 2, 2],
   ])("extracts callable signatures for %s", (fileName, source, minArgs, maxArgs) => {
     const parsed = parseFixture(fileName, source);
@@ -63,6 +68,8 @@ describe("cross-language call compatibility extraction", () => {
     ["Call.cs", 'class Call { void Run(){ Helper("x", b: 2); } }\n', "Helper", 2],
     ["call.kt", 'fun run(){ helper("x", b = 2) }\n', "helper", 2],
     ["call.swift", 'func run(){ helper("x", b: 2) }\n', "helper", 2],
+    ["call.kt", "fun run(){ helper(1) { } }\n", "helper", 2],
+    ["call.swift", "func run(){ helper(1) { } }\n", "helper", 2],
     ["call.php", '<?php helper("x", b: 2);\n', "helper", 2],
     ["call.rb", "helper(1, c: 2)\n", "helper", 2],
     ["call.c", 'void run(){ helper("x", 1); }\n', "helper", 2],

@@ -1,11 +1,12 @@
 import type { ParserLanguage } from "./parserBackend.js";
-import { prepareSourceInput } from "./languages/filePrep.js";
+import { prepareSourceInput, type PreparedSFCEmbeddedBlock } from "./languages/filePrep.js";
 import { supportForFile, type LanguageExtensionMap, type LanguageSupport } from "./languages.js";
 import type { Edge } from "./types.js";
 import { loadNearestTsconfigFor } from "./util/resolution.js";
 import type { WorkspaceConfig } from "./util/workspace.js";
 import { extractJsTsDynamicSpecifiers } from "./util/specifiers.js";
 import { logWithLevel } from "./logging.js";
+import { fileIdentityKey } from "./util/paths.js";
 import type { LogLevel } from "./logging.js";
 import {
   graphOnlyLanguageSupportsImportAliases,
@@ -17,7 +18,7 @@ import type { NativeRuntimeMode, CompactQueryResults, NativeQueryResults } from 
 import { recordNativeExecutionOutcome } from "./native/nativeBackendReport.js";
 import { collectModuleSpecifiersFromSource } from "./graphs/specifiers.js";
 import type { FallbackImportExtractionEvent } from "./graphs/specifiers.js";
-import { collectPhpComposerImplicitEdges, resolveModuleSpecifierEdges } from "./graphs/edgeResolution.js";
+import { resolveModuleSpecifierEdges } from "./graphs/edgeResolution.js";
 import type { GraphCacheEntry } from "./graphs/types.js";
 import type { BuildReport } from "./indexer/types.js";
 import type { SyntaxTreeLike } from "./languages/types.js";
@@ -28,6 +29,48 @@ const cloneEdge = (edge: Edge): Edge => ({
   ...edge,
   to: edge.to.type === "file" ? { type: "file", path: edge.to.path } : { type: "external", name: edge.to.name },
 });
+
+/**
+ * Collapses duplicate edges.
+ *
+ * File-dependency edges identify on the resolved target: several import bindings that
+ * resolve to one file express a single dependency, and counting them separately would
+ * inflate fan-in, hotspots, and drift totals.
+ *
+ * SQL fact edges are the opposite. They deliberately reuse one file pair to express
+ * distinct relationships (`sql:reads_from:...` vs `sql:writes_to:...`), so `raw` is part
+ * of their identity and collapsing on it would discard real graph semantics.
+ */
+export function deduplicateEdges(edges: Edge[], rawIsIdentity = false): Edge[] {
+  const deduplicated = new Map<string, Edge>();
+  for (const edge of edges) {
+    const target = edge.to.type === "file" ? fileIdentityKey(edge.to.path) : edge.to.name;
+    const type = edge.typeOnly ? "type-only" : "runtime";
+    const discriminator = rawIsIdentity ? `\0${edge.raw}` : "";
+    const key = `${fileIdentityKey(edge.from)}\0${edge.to.type}\0${target}\0${type}${discriminator}`;
+    const previous = deduplicated.get(key);
+    if (!previous || hasBetterProvenance(edge, previous)) deduplicated.set(key, edge);
+  }
+  return [...deduplicated.values()];
+}
+
+function hasBetterProvenance(candidate: Edge, previous: Edge): boolean {
+  let candidateResolutionRank = 0;
+  if (candidate.resolved === "precise") candidateResolutionRank = 2;
+  else if (candidate.resolved === "heuristic") candidateResolutionRank = 1;
+  let previousResolutionRank = 0;
+  if (previous.resolved === "precise") previousResolutionRank = 2;
+  else if (previous.resolved === "heuristic") previousResolutionRank = 1;
+  if (candidateResolutionRank !== previousResolutionRank) {
+    return candidateResolutionRank > previousResolutionRank;
+  }
+  const candidateConfidence = candidate.confidence;
+  const previousConfidence = previous.confidence;
+  if (candidateConfidence === undefined || previousConfidence === undefined) {
+    return candidateConfidence !== undefined && previousConfidence === undefined;
+  }
+  return candidateConfidence > previousConfidence;
+}
 
 export async function collectEdgesForFile(
   file: string,
@@ -40,6 +83,7 @@ export async function collectEdgesForFile(
       sup: LanguageSupport;
       lang?: ParserLanguage;
       nativeQueries?: NativeQueryResults | null;
+      embeddedBlocks?: PreparedSFCEmbeddedBlock[];
     };
     fast?: boolean;
     fastRegexDisabledLanguages?: string[];
@@ -50,6 +94,8 @@ export async function collectEdgesForFile(
     fileSignature?: { sig: string; gitSig?: string; cacheSig?: string };
     sqlCorpusSig?: string;
     cachedFileEdges?: GraphCacheEntry;
+    /** Root stored with the manifest that supplied `cachedFileEdges`. */
+    cachedFileEdgesProjectRoot?: string;
     languageExtensions?: LanguageExtensionMap;
     onFileEdges?: (file: string, entry: GraphCacheEntry) => void;
     onFallbackImportExtraction?: (event: FallbackImportExtractionEvent) => void;
@@ -64,7 +110,6 @@ export async function collectEdgesForFile(
   const sig = sigEntry?.sig;
   const gitSig = sigEntry?.gitSig;
   const sqlFile = supportForFile(normalizedFile, opts.languageExtensions)?.id === "sql";
-
   const emitCacheEntry = (edges: Edge[]) => {
     if (!sig || !opts.onFileEdges) return;
     opts.onFileEdges(normalizedFile, {
@@ -76,13 +121,16 @@ export async function collectEdgesForFile(
   };
 
   const sqlCacheIsValid = sqlFile && !!opts.sqlCorpusSig && opts.cachedFileEdges?.sqlCorpusSig === opts.sqlCorpusSig;
+  const cacheRootMatchesProject =
+    opts.cachedFileEdgesProjectRoot === undefined ||
+    fileIdentityKey(opts.cachedFileEdgesProjectRoot) === fileIdentityKey(projectRoot);
   const canReadCache = !sqlFile || sqlCacheIsValid;
-  const cached = canReadCache && (sig || gitSig) ? opts.cachedFileEdges : undefined;
+  const cached = canReadCache && cacheRootMatchesProject && (sig || gitSig) ? opts.cachedFileEdges : undefined;
   const matchesGitSig = !!gitSig && !!cached?.gitSig && cached.gitSig === gitSig;
   const matchesSig = !!sig && !!cached && cached.sig === sig;
 
   if (cached && (matchesGitSig || matchesSig)) {
-    const cloned = cached.edges.map(cloneEdge);
+    const cloned = deduplicateEdges(cached.edges.map(cloneEdge), sqlFile);
     emitCacheEntry(cloned);
     return cloned;
   }
@@ -92,12 +140,14 @@ export async function collectEdgesForFile(
   const lang = parsed?.lang;
   let src = parsed?.source;
   const nativeQueries = parsed?.nativeQueries ?? null;
+  let embeddedBlocks = parsed?.embeddedBlocks ?? [];
   let compactNativeImports: CompactQueryResults | null = null;
   let graphOnlyLanguage = sup ? isGraphOnlyLanguage(sup.id) : false;
   if (!sup || src === undefined) {
     const prep = await prepareSourceInput(file, { languageExtensions: opts.languageExtensions });
     sup = prep.sup;
     src = prep.source;
+    embeddedBlocks = prep.embeddedBlocks ?? [];
     graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
     const fastRegexDisabled = opts.fastRegexDisabledLanguages?.includes(sup.id);
     const shouldSkipNativeForFastGraph = !!opts.fast && (sup.id === "ts" || sup.id === "js") && !fastRegexDisabled;
@@ -114,10 +164,12 @@ export async function collectEdgesForFile(
       });
     }
   }
-
   if (sup.id === "sql") {
     const allFiles = opts.allFiles ?? [normalizedFile];
-    const sqlEdges = await collectSqlEdgesForFile(normalizedFile, allFiles, opts.sqlFactCache, opts.languageExtensions);
+    const sqlEdges = deduplicateEdges(
+      await collectSqlEdgesForFile(normalizedFile, allFiles, opts.sqlFactCache, opts.languageExtensions),
+      true,
+    );
     emitCacheEntry(sqlEdges);
     return sqlEdges;
   }
@@ -147,17 +199,32 @@ export async function collectEdgesForFile(
     }
   }
 
+  const specSources = specs.map((entry) => ({ entry, support: sup }));
+  for (const block of embeddedBlocks) {
+    const blockSpecs = collectModuleSpecifiersFromSource(block.sup, undefined, block.source, {
+      fast,
+      file: normalizedFile,
+      ...(opts.fastRegexDisabledLanguages ? { fastRegexDisabledLanguages: opts.fastRegexDisabledLanguages } : {}),
+      ...(opts.onFallbackImportExtraction ? { onFallbackImportExtraction: opts.onFallbackImportExtraction } : {}),
+      ...(opts.native ? { native: opts.native } : {}),
+      ...(opts.logLevel ? { logLevel: opts.logLevel } : {}),
+    });
+    for (const entry of blockSpecs) {
+      specSources.push({ entry, support: block.sup });
+    }
+  }
+
   const graphOnlyAliasLanguage = graphOnlyLanguage && graphOnlyLanguageSupportsImportAliases(sup.id);
   const needsGraphOnlyResolutionConfig =
-    graphOnlyAliasLanguage && specs.some(({ spec }) => graphOnlySpecifierNeedsResolutionConfig(spec));
+    graphOnlyAliasLanguage && specSources.some(({ entry }) => graphOnlySpecifierNeedsResolutionConfig(entry.spec));
   const { matchPath } =
     sup.id === "ts" || sup.id === "tsx" || needsGraphOnlyResolutionConfig
-      ? await loadNearestTsconfigFor(file, opts?.logLevel)
+      ? await loadNearestTsconfigFor(file, projectRoot, opts?.logLevel)
       : { matchPath: undefined };
   const edges: Edge[] = [];
-  const edgeResolutionTasks = specs.map(async (entry) => {
+  const edgeResolutionTasks = specSources.map(async ({ entry, support }) => {
     return await resolveModuleSpecifierEdges(entry, {
-      support: sup,
+      support,
       file,
       projectRoot,
       workspaceConfig,
@@ -182,9 +249,7 @@ export async function collectEdgesForFile(
     }
   }
 
-  if (sup.id === "php") {
-    edges.push(...(await collectPhpComposerImplicitEdges({ projectRoot, file, normalizedFile, existingEdges: edges })));
-  }
-  emitCacheEntry(edges);
-  return edges;
+  const deduplicatedEdges = deduplicateEdges(edges);
+  emitCacheEntry(deduplicatedEdges);
+  return deduplicatedEdges;
 }

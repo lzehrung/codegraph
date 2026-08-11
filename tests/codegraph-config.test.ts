@@ -7,6 +7,7 @@ import { searchCodegraph } from "../src/agent/search.js";
 import { buildProjectIndex, type BuildReport } from "../src/indexer/build-index.js";
 import { diffBuildOptions, summarizeBuildOptions } from "../src/indexer/build-cache.js";
 import { normalizeLanguageExtensions, supportForFile } from "../src/languages.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 import { runTsxScriptOrThrow } from "./helpers/cli.js";
 import { decompactFileGraph, type CompactFileGraphPayload } from "./helpers/compactGraph.js";
 
@@ -23,10 +24,6 @@ async function writeConfig(root: string, config: unknown): Promise<void> {
   await fs.writeFile(path.join(root, "codegraph.config.json"), JSON.stringify(config), "utf8");
 }
 
-function normalizedFile(root: string, relativePath: string): string {
-  return path.join(root, relativePath).replace(/\\/g, "/");
-}
-
 async function buildWithProjectConfig(root: string) {
   const config = await loadCodegraphConfig(root);
   return await buildProjectIndex(root, {
@@ -41,7 +38,7 @@ function localExportNames(
   root: string,
   relativePath: string,
 ): string[] {
-  const moduleIndex = index.byFile.get(normalizedFile(root, relativePath));
+  const moduleIndex = index.byFile.get(fileIdentityKey(path.join(root, relativePath)));
   return (
     moduleIndex?.exports
       .filter((entry) => entry.type === "local")
@@ -473,7 +470,7 @@ describe("codegraph config", () => {
     });
 
     expect(localExportNames(index, root, "src/template.tpl")).toContain("programmatic_template");
-    expect(index.byFile.has(normalizedFile(root, "src/ignored.unknown"))).toBe(false);
+    expect(index.byFile.has(fileIdentityKey(path.join(root, "src/ignored.unknown")))).toBe(false);
   });
 
   it("ignores unknown language IDs when comparing manifest build options", () => {

@@ -56,4 +56,46 @@ describe("Agent query helpers", () => {
     const neighborNames = neighbors.nodes.map((n) => n.name);
     expect(neighborNames).toContain("add");
   });
+
+  it("excludes unlabeled edges when filtering neighbor edges by label", () => {
+    const graph = {
+      nodes: new Map([
+        ["start", { id: "start", file: "graph.ts", name: "start", kind: "function" as const }],
+        ["called", { id: "called", file: "graph.ts", name: "called", kind: "function" as const }],
+        ["unlabeled", { id: "unlabeled", file: "graph.ts", name: "unlabeled", kind: "function" as const }],
+      ]),
+      edges: [
+        { from: "start", to: "called", label: "calls" },
+        { from: "start", to: "unlabeled" },
+      ],
+    };
+
+    const neighbors = querySymbolNeighbors(graph, {
+      symbolId: "start",
+      direction: "out",
+      edgeLabels: ["calls"],
+    });
+
+    expect(neighbors.nodes.map((node) => node.id)).toEqual(["start", "called"]);
+    expect(neighbors.edges).toEqual([{ from: "start", to: "called", label: "calls" }]);
+  });
+
+  it("returns only the start node when neighbor max depth is zero", () => {
+    const graph = {
+      nodes: new Map([
+        ["start", { id: "start", file: "graph.ts", name: "start", kind: "function" as const }],
+        ["called", { id: "called", file: "graph.ts", name: "called", kind: "function" as const }],
+      ]),
+      edges: [{ from: "start", to: "called", label: "calls" }],
+    };
+
+    const neighbors = querySymbolNeighbors(graph, {
+      symbolId: "start",
+      direction: "out",
+      maxDepth: 0,
+    });
+
+    expect(neighbors.nodes.map((node) => node.id)).toEqual(["start"]);
+    expect(neighbors.edges).toEqual([]);
+  });
 });

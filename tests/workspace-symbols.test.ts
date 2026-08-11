@@ -9,7 +9,11 @@ import { buildProjectIndexFromFiles } from "../src/indexer/build-index.js";
 import { workspaceSymbols } from "../src/indexer/workspace-symbols.js";
 import { SymbolKind, type ProjectIndex } from "../src/indexer/types.js";
 import type { AgentProjectSnapshot, AgentSession } from "../src/agent/session.js";
-
+import {
+  fileIdentityKey,
+  isFileIdentityCaseInsensitive,
+  resetFileIdentityCaseSensitivityForTests,
+} from "../src/util/paths.js";
 const SEMANTIC_ANALYSIS = {
   mode: "semantic" as const,
   backend: "unknown" as const,
@@ -236,12 +240,51 @@ describe("workspace symbol lookup", () => {
     expect(resolved?.def.file.replace(/\\/g, "/")).toMatch(/\/src\/service\.ts$/);
   });
 
+  it("keeps import symbol paths display-cased when identity keys are lowercased", async () => {
+    const originalCaseSensitivity = isFileIdentityCaseInsensitive();
+    const isolatedRoot = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-workspace-symbols-case-"));
+    try {
+      const sourceDir = path.join(isolatedRoot, "Src");
+      const targetFile = path.join(sourceDir, "Service.ts");
+      const importerFile = path.join(sourceDir, "Importer.ts");
+      await fs.mkdir(sourceDir, { recursive: true });
+      await fs.writeFile(targetFile, "export class Service {}\n");
+      await fs.writeFile(
+        importerFile,
+        "import { Service as LocalService } from './Service';\nexport function useService() { return LocalService; }\n",
+      );
+      const built = await buildProjectIndexFromFiles(isolatedRoot, [targetFile, importerFile], {
+        cache: "off",
+        keepParsed: true,
+      });
+
+      resetFileIdentityCaseSensitivityForTests(true);
+      const byFile = new Map(
+        Array.from(built.byFile.values(), (moduleIndex) => [fileIdentityKey(moduleIndex.file), moduleIndex] as const),
+      );
+      const isolatedIndex: ProjectIndex = {
+        ...built,
+        modules: byFile,
+        byFile,
+      };
+      const result = await workspaceSymbols(isolatedIndex, { query: "LocalService", includeImports: true });
+
+      expect(result.symbols[0]?.file).toBe("Src/Importer.ts");
+      expect(result.symbols[0]?.id).toContain("Src/Importer.ts");
+      expect(result.symbols[0]?.file).not.toContain("src/importer.ts");
+    } finally {
+      resetFileIdentityCaseSensitivityForTests(originalCaseSensitivity);
+      await fs.rm(isolatedRoot, { recursive: true, force: true });
+    }
+  });
+
   it("reports failed import scans and omitted aliases instead of silently dropping them", async () => {
     const importerEntry = [...index.byFile.entries()].find(([file]) => file.endsWith("/src/importer.ts"));
     expect(importerEntry).toBeDefined();
     const missingFile = path.join(root, "src", "missing.ts");
     const byFile = new Map(index.byFile);
-    byFile.set(missingFile, importerEntry![1]);
+    const missingModule = { ...importerEntry![1], file: missingFile };
+    byFile.set(fileIdentityKey(missingFile), missingModule);
     const failingIndex: ProjectIndex = {
       ...index,
       modules: new Map(byFile),
@@ -250,8 +293,8 @@ describe("workspace symbol lookup", () => {
       exportCache: new Map(),
       scopeCache: new Map(),
     };
-
     const result = await workspaceSymbols(failingIndex, { query: "LocalService", includeImports: true });
+
     expect(result.importScanFailures).toBe(1);
     expect(result.omittedImports).toBeGreaterThan(0);
 

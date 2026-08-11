@@ -1,7 +1,11 @@
+import crypto from "node:crypto";
 import path from "node:path";
 import { normalizeLanguageExtensions, type LanguageExtensionMap } from "../../languages.js";
+import { getAllLanguages } from "../../languages/registry.js";
+import type { LanguageDefinition } from "../../languages/types.js";
 import type { GraphBuildOptions } from "../../graphs/types.js";
 import { normalizePath, normalizeResolutionHints } from "../../util/paths.js";
+import { getCodegraphVersion } from "../../util/packageInfo.js";
 import { type ProjectFileDiscoveryOptions } from "../../util/projectFiles.js";
 import { getNativeRuntimeFingerprint } from "../../native/treeSitterNative.js";
 import type { BuildOptions } from "../types.js";
@@ -12,6 +16,7 @@ export type ManifestBuildOptions = {
   useBloomFilters?: boolean;
   incrementalStrict?: boolean;
   nativeRuntimeFingerprint?: string;
+  implementationFingerprint?: string;
   discovery?: {
     includeGlobs?: string[];
     ignoreGlobs?: string[];
@@ -22,6 +27,144 @@ export type ManifestBuildOptions = {
   languageExtensions?: LanguageExtensionMap;
 };
 
+type LanguageDefinitionFingerprintDescriptor = {
+  id: string;
+  extensions: string[];
+  structure: LanguageDefinition["structure"];
+  graph: LanguageDefinition["graph"];
+  nodeTypes?: LanguageDefinition["nodeTypes"];
+  supportsCrossModuleSymbols: boolean;
+  native?: {
+    authoritativeKinds: string[];
+    notes: string[];
+    normalizeQuery?: string;
+  };
+  behavior: {
+    grammar: string;
+    classifyDefinition?: string;
+    isDeclarationName?: string;
+    scopeDeclarationNames?: string;
+    normalizeIdentifier?: string;
+    createsBlockScope?: string;
+    createsFunctionScope?: string;
+    usesQueryDrivenLocals: boolean;
+    membersAreImplicitlyInScope: boolean;
+    isTypeOnly?: string;
+  };
+};
+
+let cachedImplementationFingerprint: string | undefined;
+
+function functionSource(value: unknown): string | undefined {
+  return typeof value === "function" ? Function.prototype.toString.call(value) : undefined;
+}
+
+function languageDefinitionFingerprintDescriptor(
+  definition: LanguageDefinition,
+): LanguageDefinitionFingerprintDescriptor {
+  const native = definition.native;
+  const nativeNormalizeQuery = functionSource(native?.normalizeQuery);
+  const classifyDefinition = functionSource(definition.classifyDefinition);
+  const isDeclarationName = functionSource(definition.isDeclarationName);
+  const scopeDeclarationNames =
+    definition.scopeDeclarationNames === "all" ? "all" : functionSource(definition.scopeDeclarationNames);
+  const normalizeIdentifier = functionSource(definition.normalizeIdentifier);
+  const createsBlockScope = functionSource(definition.createsBlockScope);
+  const createsFunctionScope = functionSource(definition.createsFunctionScope);
+  const isTypeOnly = functionSource(definition.isTypeOnly);
+  return {
+    id: definition.id,
+    extensions: [...definition.extensions].sort(),
+    structure: definition.structure,
+    graph: definition.graph,
+    ...(definition.nodeTypes ? { nodeTypes: definition.nodeTypes } : {}),
+    supportsCrossModuleSymbols: definition.supportsCrossModuleSymbols ?? false,
+    ...(native
+      ? {
+          native: {
+            authoritativeKinds: [...(native.authoritativeKinds ?? [])].sort(),
+            notes: [...(native.notes ?? [])],
+            ...(nativeNormalizeQuery ? { normalizeQuery: nativeNormalizeQuery } : {}),
+          },
+        }
+      : {}),
+    behavior: {
+      grammar: functionSource(definition.grammar) ?? "",
+      // Booleans serialize under the same defaults adaptDefinition applies, so the
+      // fingerprint tracks effective behavior rather than incidental optionality.
+      usesQueryDrivenLocals: definition.usesQueryDrivenLocals ?? false,
+      membersAreImplicitlyInScope: definition.membersAreImplicitlyInScope ?? true,
+      ...(classifyDefinition ? { classifyDefinition } : {}),
+      ...(isDeclarationName ? { isDeclarationName } : {}),
+      ...(scopeDeclarationNames ? { scopeDeclarationNames } : {}),
+      ...(normalizeIdentifier ? { normalizeIdentifier } : {}),
+      ...(createsBlockScope ? { createsBlockScope } : {}),
+      ...(createsFunctionScope ? { createsFunctionScope } : {}),
+      ...(isTypeOnly ? { isTypeOnly } : {}),
+    },
+  };
+}
+
+/**
+ * Structural guard against fingerprint drift: every LanguageDefinition key must be
+ * covered by languageDefinitionFingerprintDescriptor above. Record exhaustiveness
+ * makes adding a field to LanguageDefinition without descriptor coverage a
+ * typecheck error, and the runtime check in tests/cache-invalidation.test.ts
+ * rejects definition objects carrying keys outside this set. Coverage here means
+ * the field participates in the fingerprint; if a future field genuinely cannot
+ * affect indexing results, serialize a stable placeholder for it in the
+ * descriptor and keep its entry below.
+ */
+export const languageDefinitionFingerprintCoverage: Readonly<Record<keyof LanguageDefinition, true>> = {
+  id: true,
+  extensions: true,
+  grammar: true,
+  structure: true,
+  graph: true,
+  usesQueryDrivenLocals: true,
+  classifyDefinition: true,
+  isDeclarationName: true,
+  scopeDeclarationNames: true,
+  normalizeIdentifier: true,
+  createsBlockScope: true,
+  createsFunctionScope: true,
+  membersAreImplicitlyInScope: true,
+  supportsCrossModuleSymbols: true,
+  isTypeOnly: true,
+  nodeTypes: true,
+  native: true,
+};
+
+/**
+ * Changes whenever this package version or a loaded language definition changes.
+ * The descriptor serializes every LanguageDefinition field (guarded by
+ * languageDefinitionFingerprintCoverage): structure and graph queries, plus the
+ * source text of every behavior hook, so editing a definition or its queries
+ * cannot silently outlive an on-disk index. Changes to the code that interprets
+ * definitions — the import resolver, the chunker, scope construction — are NOT
+ * covered by this descriptor; they invalidate only via the package-version
+ * component, so same-version installs and dev iteration must bump the version or
+ * clear the cache for those to take effect.
+ */
+export function getImplementationFingerprint(): string {
+  if (cachedImplementationFingerprint) return cachedImplementationFingerprint;
+  const definitions = getAllLanguages()
+    .map(languageDefinitionFingerprintDescriptor)
+    .sort((left, right) => left.id.localeCompare(right.id));
+  const hash = crypto.createHash("sha256");
+  hash.update("codegraph-implementation-fingerprint-v1");
+  hash.update("\0");
+  hash.update(getCodegraphVersion());
+  hash.update("\0");
+  hash.update(JSON.stringify(definitions));
+  cachedImplementationFingerprint = hash.digest("hex");
+  return cachedImplementationFingerprint;
+}
+
+export function clearImplementationFingerprintCache(): void {
+  cachedImplementationFingerprint = undefined;
+}
+
 function normalizeManifestBuildOptions(opts?: ManifestBuildOptions): ManifestBuildOptions {
   const languageExtensions = normalizeLanguageExtensions(opts?.languageExtensions);
   return {
@@ -30,6 +173,7 @@ function normalizeManifestBuildOptions(opts?: ManifestBuildOptions): ManifestBui
     useBloomFilters: opts?.useBloomFilters ?? true,
     incrementalStrict: opts?.incrementalStrict ?? false,
     ...(opts?.nativeRuntimeFingerprint ? { nativeRuntimeFingerprint: opts.nativeRuntimeFingerprint } : {}),
+    ...(opts?.implementationFingerprint ? { implementationFingerprint: opts.implementationFingerprint } : {}),
     ...(opts?.discovery ? { discovery: opts.discovery } : {}),
     ...(languageExtensions ? { languageExtensions } : {}),
   };
@@ -66,6 +210,7 @@ function normalizeBuildOptions(opts?: BuildOptions): ManifestBuildOptions {
     useBloomFilters: opts?.useBloomFilters ?? true,
     incrementalStrict: opts?.incrementalStrict ?? false,
     nativeRuntimeFingerprint: getNativeRuntimeFingerprint(opts?.native),
+    implementationFingerprint: getImplementationFingerprint(),
     ...(discovery ? { discovery } : {}),
     ...(languageExtensions ? { languageExtensions } : {}),
   };
@@ -143,6 +288,9 @@ export function diffBuildOptions(
   }
   if (normalizedManifest.nativeRuntimeFingerprint !== normalizedCurrent.nativeRuntimeFingerprint) {
     diffs.push("native");
+  }
+  if (normalizedManifest.implementationFingerprint !== normalizedCurrent.implementationFingerprint) {
+    diffs.push("implementation");
   }
   if (!normalizedDiscoveryOptionsEqual(normalizedManifest.discovery, normalizedCurrent.discovery)) {
     diffs.push("discovery");

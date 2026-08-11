@@ -19,6 +19,7 @@ func (o EmbeddingOuter) ValueReceiverMethod() int {
 
 func useEmbedding() int {
 	o := EmbeddingOuter{EmbeddedInner: EmbeddedInner{Name: "x"}, Extra: 1}
+	_ = o.Name
 	_ = o.GetName()
 	return o.ValueReceiverMethod()
 }

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { uniqueByKey } from "../util/collections.js";
-import { type ModuleSpecifier } from "../util/specifiers.js";
+import { type ModuleSpecifier, type ModuleSpecifierResolutionKind } from "../util/specifiers.js";
 const DOCUMENT_RELATIVE_EXTENSIONS = new Set([
   ".md",
   ".mdx",
@@ -45,7 +45,7 @@ export function dedupeModuleSpecifiers(entries: ModuleSpecifier[]): ModuleSpecif
   return uniqueByKey(
     entries,
     (entry) =>
-      `${entry.spec}::${entry.typeOnly ? 1 : 0}::${entry.resolutionKind ?? ""}::${entry.dropIfUnresolved ? 1 : 0}`,
+      `${entry.spec}::${entry.typeOnly ? 1 : 0}::${entry.resolutionKind ?? ""}::${entry.exportCondition ?? ""}::${entry.dropIfUnresolved ? 1 : 0}`,
   );
 }
 
@@ -54,7 +54,7 @@ export function normalizeLinkSpecifier(
   opts?: {
     preferRelative?: boolean;
     forceRelative?: boolean;
-    resolutionKind?: "document" | "source";
+    resolutionKind?: ModuleSpecifierResolutionKind;
   },
 ): ModuleSpecifier | null {
   const original = rawSpecifier.trim();
@@ -102,7 +102,7 @@ export function normalizeLinkSpecifier(
 
 export function markResolutionKind(
   entries: ModuleSpecifier[],
-  resolutionKind: "document" | "source",
+  resolutionKind: ModuleSpecifierResolutionKind,
 ): ModuleSpecifier[] {
   return entries.map((entry) => ({
     ...entry,

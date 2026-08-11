@@ -53,6 +53,11 @@ export interface LanguageDefinition {
   };
 
   /**
+   * Whether native local-definition captures are authoritative for this language.
+   */
+  usesQueryDrivenLocals?: boolean;
+
+  /**
    * Helper to classify a definition node (function vs class vs var).
    */
   classifyDefinition?: (node: SyntaxNodeLike) => string;
@@ -63,6 +68,18 @@ export interface LanguageDefinition {
   isDeclarationName?: (node: SyntaxNodeLike) => boolean;
 
   /**
+   * Names that must be registered by scope construction in addition to its
+   * structural declaration handling. "all" preserves a language's established
+   * declaration-name semantics; a predicate can opt in a missing node shape.
+   */
+  scopeDeclarationNames?: "all" | ((node: SyntaxNodeLike) => boolean);
+
+  /**
+   * Normalizes syntax-specific identifier spelling for lexical scope matching.
+   */
+  normalizeIdentifier?: (name: string) => string;
+
+  /**
    * Helper to check if a node creates a block scope.
    */
   createsBlockScope?: (node: SyntaxNodeLike) => boolean;
@@ -71,6 +88,11 @@ export interface LanguageDefinition {
    * Helper to check if a node creates a function scope.
    */
   createsFunctionScope?: (node: SyntaxNodeLike) => boolean;
+
+  /**
+   * Whether an unqualified call within a type can resolve to one of its members.
+   */
+  membersAreImplicitlyInScope?: boolean;
 
   /**
    * Whether the language supports cross-module symbol resolution.

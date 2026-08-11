@@ -1,6 +1,7 @@
 import {
   findDuplicates,
   findDuplicatesWithPreparedAnalysis,
+  type DuplicateCleanupLabel,
   type DuplicateCloneType,
   type DuplicateGroup,
   type DuplicatePreparedAnalysis,
@@ -27,6 +28,7 @@ export type DuplicateLeadSummary = {
   omittedCounts: {
     byBudget: number;
     byConfidenceOrType: number;
+    byBoilerplate: number;
     byScope: number;
     hiddenEvidence: number;
   };
@@ -35,6 +37,7 @@ export type DuplicateLeadSummary = {
 const DEFAULT_DUPLICATE_LEAD_LIMIT = 5;
 const DEFAULT_DUPLICATE_LEAD_MAX_PAIRS = 20_000;
 const REVIEW_CLONE_TYPES = new Set<DuplicateCloneType>(["exact", "renamed"]);
+const BOILERPLATE_CLEANUP_LABELS = new Set<DuplicateCleanupLabel>(["import-list-noise", "barrel-export-noise"]);
 
 function normalizeDuplicateScope(value: string | undefined, fallback: DuplicateLeadScope): DuplicateLeadScope {
   if (value === undefined) return fallback;
@@ -77,6 +80,7 @@ export async function collectDuplicateLeadSummary(input: {
   maxPairs?: number;
   similarityHints?: readonly DuplicateSimilarityHint[];
   preparedAnalysis?: DuplicatePreparedAnalysis;
+  includeBoilerplate?: boolean;
 }): Promise<DuplicateLeadSummary | undefined> {
   const limit = input.limit ?? DEFAULT_DUPLICATE_LEAD_LIMIT;
   const maxPairs = input.maxPairs ?? DEFAULT_DUPLICATE_LEAD_MAX_PAIRS;
@@ -96,12 +100,23 @@ export async function collectDuplicateLeadSummary(input: {
   const result = input.preparedAnalysis
     ? await findDuplicatesWithPreparedAnalysis(input.preparedAnalysis, detectionOptions)
     : await findDuplicates(input.index, detectionOptions);
-  const visibleGroups = result.groups.filter(
+  // Identical import lists and barrel re-export files are expected boilerplate,
+  // not actionable duplication, so they stay out of leads unless opted in.
+  const candidateGroups: DuplicateGroup[] = [];
+  let boilerplateGroupCount = 0;
+  for (const group of result.groups) {
+    if (!input.includeBoilerplate && group.cleanupLabels.some((label) => BOILERPLATE_CLEANUP_LABELS.has(label))) {
+      boilerplateGroupCount++;
+      continue;
+    }
+    candidateGroups.push(group);
+  }
+  const visibleGroups = candidateGroups.filter(
     (group) => group.confidence === "high" && REVIEW_CLONE_TYPES.has(group.cloneType),
   );
   const limitedGroups = visibleGroups.slice(0, limit);
-  const hiddenGroupCount = countHiddenGroups(result.groups);
-  if (!limitedGroups.length && !result.omittedCounts.groups && !hiddenGroupCount) {
+  const hiddenGroupCount = countHiddenGroups(candidateGroups);
+  if (!limitedGroups.length && !result.omittedCounts.groups && !hiddenGroupCount && !boilerplateGroupCount) {
     return undefined;
   }
 
@@ -113,6 +128,7 @@ export async function collectDuplicateLeadSummary(input: {
     omittedCounts: {
       byBudget: Math.max(0, visibleGroups.length - limitedGroups.length) + result.omittedCounts.groups,
       byConfidenceOrType: hiddenGroupCount,
+      byBoilerplate: boilerplateGroupCount,
       byScope: Math.max(0, allScopeFileCount - scopedFileCount),
       hiddenEvidence:
         result.omittedCounts.rawSuggestions +
@@ -128,7 +144,7 @@ export function appendDuplicateLeadSummary(lines: string[], summary: DuplicateLe
   lines.push("");
   lines.push("Duplicate leads:");
   if (!summary.leads.length) {
-    lines.push("- none after confidence/type filters");
+    lines.push("- none after confidence/type/boilerplate filters");
   }
   for (const lead of summary.leads) {
     lines.push(
@@ -140,6 +156,7 @@ export function appendDuplicateLeadSummary(lines: string[], summary: DuplicateLe
   const omittedParts: string[] = [];
   if (omitted.byBudget) omittedParts.push(`${omitted.byBudget} by budget`);
   if (omitted.byConfidenceOrType) omittedParts.push(`${omitted.byConfidenceOrType} by confidence/type`);
+  if (omitted.byBoilerplate) omittedParts.push(`${omitted.byBoilerplate} boilerplate`);
   if (omitted.byScope) omittedParts.push(`${omitted.byScope} outside ${summary.scope} scope`);
   if (omitted.hiddenEvidence) omittedParts.push(`${omitted.hiddenEvidence} hidden evidence items`);
   if (omittedParts.length) {

@@ -11,6 +11,7 @@ import {
 } from "../src/index.js";
 import { tool_findSymbol } from "../src/agent.js";
 import { readOnlySamplePath } from "./helpers/filesystem.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 
 const norm = (p: string) => p.replace(/\\/g, "/");
 
@@ -62,7 +63,7 @@ describe("Agent-friendly symbol handles", () => {
 
   it("symbolId round-trips via defFromSymbolId", async () => {
     const index = await buildProjectIndex(root, { cache: "off" });
-    const modA = index.byFile.get(pkga)!;
+    const modA = index.byFile.get(fileIdentityKey(pkga))!;
     const classDef = modA.locals.find((d) => d.localName === "AClass")!;
     const id = symbolId(classDef);
     const back = defFromSymbolId(index, id);

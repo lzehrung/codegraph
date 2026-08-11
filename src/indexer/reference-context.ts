@@ -1,3 +1,4 @@
+import { fileIdentityKey } from "../util/paths.js";
 import { sliceText } from "../util/ast.js";
 import type { LanguageSupport } from "../languages.js";
 import type { SyntaxNodeLike, SyntaxTreeLike } from "../languages/types.js";
@@ -7,7 +8,11 @@ import type { SymbolDef } from "./types.js";
 export function sameDef(left: SymbolDef, right: SymbolDef): boolean {
   const leftIndex = left.range.start.index ?? 0;
   const rightIndex = right.range.start.index ?? 0;
-  return left.file === right.file && left.localName === right.localName && leftIndex === rightIndex;
+  return (
+    fileIdentityKey(left.file) === fileIdentityKey(right.file) &&
+    left.localName === right.localName &&
+    leftIndex === rightIndex
+  );
 }
 
 export function rangeContains(range: Range, pos: { row: number; column: number }): boolean {

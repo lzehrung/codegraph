@@ -3,6 +3,7 @@ import type { LanguageSupport } from "../../languages.js";
 import type { SyntaxNodeLike } from "../../languages/types.js";
 import { sliceText, toRange } from "../../util/ast.js";
 import { getMemberAccessParts } from "../../util/memberAccess.js";
+import { fileIdentityKey } from "../../util/paths.js";
 import { defNodeId, nodeForDef, type SymbolGraph } from "../symbol-graph.js";
 import type { DetailedClassNode, DetailedFunctionNode } from "./ast.js";
 import { collectIdentifiers, collectNodesByType, findFirstNodeByType, isIdentifierType } from "./ast.js";
@@ -245,7 +246,7 @@ export function emitFunctionBodyEdges(context: EdgePassContext, functionNodes: D
           if (exportedName) {
             target = context.resolveExportFrom(modFile, exportedName);
             if (!target) {
-              const targetModule = context.index.byFile.get(modFile);
+              const targetModule = context.index.byFile.get(fileIdentityKey(modFile));
               target = (targetModule?.locals ?? []).find((local) => local.localName === exportedName) ?? null;
             }
           }

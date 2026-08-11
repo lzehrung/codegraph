@@ -1,9 +1,7 @@
-import path from "node:path";
 import type { LanguageSupport } from "../languages.js";
 import type { Edge, EdgeTo } from "../types.js";
 import {
   getGraphOnlyResolutionExtensions,
-  getPhpComposerImplicitFiles,
   resolveImportSpecifier,
   resolveJvmPackageImportPaths,
   resolvePythonModule,
@@ -13,6 +11,7 @@ import {
 import { type ModuleSpecifier } from "../util/specifiers.js";
 import { type WorkspaceConfig } from "../util/workspace.js";
 import { isGraphOnlyLanguage } from "../documentLinks.js";
+import { STYLESHEET_RESOLUTION_EXTENSIONS } from "../util/resolutionCandidates.js";
 
 type ResolvedSpecifierEdge = {
   to: EdgeTo;
@@ -67,6 +66,7 @@ async function resolveGenericSpecifier(
       resolveNodeModules: !!context.resolveNodeModules,
       ...(resolutionExtensions ? { resolutionExtensions } : {}),
       ...(context.resolutionHints ? { resolutionHints: context.resolutionHints } : {}),
+      ...(entry.exportCondition ? { exportCondition: entry.exportCondition } : {}),
       ...(context.support.id === "scss" && entry.resolutionKind !== "document"
         ? { allowScssPartialResolution: true }
         : {}),
@@ -85,6 +85,7 @@ async function resolveImportSpecifierEdge(
       ...(context.workspaceConfig ? { workspaceConfig: context.workspaceConfig } : {}),
       resolveNodeModules: !!context.resolveNodeModules,
       ...(context.resolutionHints ? { resolutionHints: context.resolutionHints } : {}),
+      ...(entry.exportCondition ? { exportCondition: entry.exportCondition } : {}),
     });
     if (typeof rawResolved === "string") {
       return edgeToResolvedFile(rawResolved);
@@ -97,6 +98,7 @@ async function resolveImportSpecifierEdge(
     resolveNodeModules: !!context.resolveNodeModules,
     ...(context.resolutionHints ? { resolutionHints: context.resolutionHints } : {}),
     ...(entry.phpImportType ? { phpImportType: entry.phpImportType } : {}),
+    ...(entry.exportCondition ? { exportCondition: entry.exportCondition } : {}),
   });
   return typeof res === "string" ? edgeToResolvedFile(res) : edgeToExternal(entry.raw ?? res.external);
 }
@@ -106,9 +108,12 @@ export async function resolveModuleSpecifierEdges(
   context: ModuleSpecifierResolutionContext,
 ): Promise<ResolvedSpecifierEdge[] | null> {
   const graphOnlyLanguage = isGraphOnlyLanguage(context.support.id);
-  const resolutionExtensions = graphOnlyLanguage
-    ? getGraphOnlyResolutionExtensions(context.support.id, entry.resolutionKind ?? "document")
-    : undefined;
+  let resolutionExtensions: readonly string[] | undefined;
+  if (entry.resolutionKind === "stylesheet") {
+    resolutionExtensions = STYLESHEET_RESOLUTION_EXTENSIONS;
+  } else if (graphOnlyLanguage) {
+    resolutionExtensions = getGraphOnlyResolutionExtensions(context.support.id, entry.resolutionKind ?? "document");
+  }
 
   let to: EdgeTo;
   if (context.support.id === "python") {
@@ -137,34 +142,4 @@ export async function resolveModuleSpecifierEdges(
     return null;
   }
   return [withSpecifierMetadata(entry, to)];
-}
-
-export async function collectPhpComposerImplicitEdges(args: {
-  projectRoot: string;
-  file: string;
-  normalizedFile: string;
-  existingEdges: readonly Edge[];
-}): Promise<Edge[]> {
-  const implicitFiles = await getPhpComposerImplicitFiles(args.projectRoot, args.file);
-  const seenFileTargets = new Set(
-    args.existingEdges
-      .map((edge) => (edge.to.type === "file" ? edge.to.path : null))
-      .filter((target): target is string => !!target),
-  );
-  const edges: Edge[] = [];
-  for (const implicitFile of implicitFiles) {
-    const normalizedTarget = implicitFile.replace(/\\/g, "/");
-    if (normalizedTarget === args.normalizedFile || seenFileTargets.has(normalizedTarget)) {
-      continue;
-    }
-
-    const relativeRaw = path.relative(path.dirname(args.file), implicitFile).replace(/\\/g, "/");
-    edges.push({
-      from: args.normalizedFile,
-      to: { type: "file", path: normalizedTarget },
-      raw: relativeRaw.startsWith(".") || relativeRaw.startsWith("/") ? relativeRaw : `./${relativeRaw}`,
-    });
-    seenFileTargets.add(normalizedTarget);
-  }
-  return edges;
 }

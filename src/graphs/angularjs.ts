@@ -2,6 +2,7 @@ import fsp from "node:fs/promises";
 import type { ParsedFileContext } from "../indexer/parse-context.js";
 import { extractAngularJsReferences, extractAngularJsRegistrations } from "../frameworks/angularjs.js";
 import type { Edge } from "../types.js";
+import { fileIdentityKey } from "../util/paths.js";
 import { resolveSpecifier } from "../util/resolution.js";
 import { type WorkspaceConfig } from "../util/workspace.js";
 
@@ -21,7 +22,7 @@ export async function collectAngularJsFrameworkEdges(
 
   const contexts: AngularJsFileContext[] = [];
   for (const file of jsFiles) {
-    const parsedSource = parsed?.get(file)?.source;
+    const parsedSource = parsed?.get(fileIdentityKey(file))?.source;
     if (parsedSource !== undefined) {
       contexts.push({ file, source: parsedSource });
       continue;

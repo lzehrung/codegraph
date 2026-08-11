@@ -1,51 +1,68 @@
-import type { BlockCandidate, Chunk, ChunkIdFactory, ChunkTokenizer } from "./types.js";
+import type { BlockCandidate, ChunkTokenizer, RangedChunk } from "./types.js";
 
 export function splitLargeBlockSimple(
   block: BlockCandidate,
   source: string,
   tokenizer: ChunkTokenizer,
   maxTokens: number,
-  makeChunkId: ChunkIdFactory,
-  out: Chunk[],
+  out: RangedChunk[],
   languageId: string,
   filePath?: string,
 ): void {
-  const text = source.slice(block.startByte, block.endByte);
-  const lines = text.split(/\r?\n/);
-
+  let currentStart = -1;
+  let currentEnd = -1;
   let currentStartLine = block.startLine;
-  let currentLines: string[] = [];
   let currentTokens = 0;
 
   const flush = () => {
-    if (!currentLines.length) return;
-    const chunkText = currentLines.join("\n");
-    const tokenCount = tokenizer(chunkText);
-    const endLine = currentStartLine + currentLines.length - 1;
-    out.push({
-      id: makeChunkId(),
+    if (currentStart === -1) return;
+    emitRangeWithinBudget(
+      block,
+      source,
+      currentStart,
+      currentEnd,
+      currentStartLine,
+      tokenizer,
+      maxTokens,
+      out,
       languageId,
-      type: block.kind,
-      startLine: currentStartLine,
-      endLine,
-      text: chunkText,
-      tokenCount,
-      ...(filePath !== undefined ? { filePath } : {}),
-      ...(block.name !== undefined ? { name: block.name } : {}),
-    });
-    currentLines = [];
+      filePath,
+    );
+    currentStart = -1;
+    currentEnd = -1;
     currentTokens = 0;
   };
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
-    const lineTokens = tokenizer(line);
-    if (currentTokens + lineTokens > maxTokens && currentLines.length) {
+  for (const line of lineRanges(source, block.startByte, block.endByte, block.startLine)) {
+    const lineText = source.slice(line.start, line.end);
+    const lineTokens = tokenizer(lineText);
+
+    if (lineTokens > maxTokens) {
       flush();
-      currentStartLine = block.startLine + i;
+      emitRangeWithinBudget(
+        block,
+        source,
+        line.start,
+        line.end,
+        line.startLine,
+        tokenizer,
+        maxTokens,
+        out,
+        languageId,
+        filePath,
+      );
+      continue;
     }
 
-    currentLines.push(line);
+    if (currentStart !== -1 && currentTokens + lineTokens > maxTokens) {
+      flush();
+    }
+
+    if (currentStart === -1) {
+      currentStart = line.start;
+      currentStartLine = line.startLine;
+    }
+    currentEnd = line.end;
     currentTokens += lineTokens;
   }
 
@@ -54,85 +71,197 @@ export function splitLargeBlockSimple(
 
 export function splitLargeBlockUsingInnerBlocks(
   block: BlockCandidate,
-  innerBlocks: BlockCandidate[],
+  _innerBlocks: BlockCandidate[],
   source: string,
   tokenizer: ChunkTokenizer,
   maxTokens: number,
-  makeChunkId: ChunkIdFactory,
-  out: Chunk[],
+  out: RangedChunk[],
   languageId: string,
-  newlineOffsets: number[],
+  _newlineOffsets: number[],
   filePath?: string,
 ): void {
-  const boundaries = new Set<number>();
-  boundaries.add(block.startByte);
-  boundaries.add(block.endByte);
-  for (const ib of innerBlocks) {
-    boundaries.add(ib.startByte);
-    boundaries.add(ib.endByte);
+  // Semantic boundaries are useful for selecting a parent chunk, but splitting
+  // that parent at arbitrary AST offsets can make sibling line ranges overlap.
+  // Pack complete source lines here; split within a line only when that line
+  // alone exceeds the token budget.
+  splitLargeBlockSimple(block, source, tokenizer, maxTokens, out, languageId, filePath);
+}
+
+/** Splits an oversized string on code-point boundaries using the configured tokenizer. */
+export function splitTextWithinTokenBudget(text: string, tokenizer: ChunkTokenizer, maxTokens: number): string[] {
+  if (!text.length) return [];
+  if (tokenizer(text) <= maxTokens) return [text];
+
+  const segments: string[] = [];
+  let start = 0;
+
+  while (start < text.length) {
+    if (tokenizer(text.slice(start)) <= maxTokens) {
+      segments.push(text.slice(start));
+      break;
+    }
+
+    let low = nextCodePointBoundary(text, start);
+    let high = text.length;
+    let end = start;
+
+    while (low <= high) {
+      const candidate = previousCodePointBoundary(text, low + ((high - low) >>> 1));
+      if (candidate <= start) {
+        low = nextCodePointBoundary(text, start);
+        continue;
+      }
+
+      if (tokenizer(text.slice(start, candidate)) <= maxTokens) {
+        end = candidate;
+        low = candidate + 1;
+      } else {
+        high = candidate - 1;
+      }
+    }
+
+    if (end === start) {
+      const next = nextCodePointBoundary(text, start);
+      const singleCodePoint = text.slice(start, next);
+      if (tokenizer(singleCodePoint) > maxTokens) {
+        throw new RangeError("maxTokens is smaller than the configured tokenizer's smallest unit");
+      }
+      end = next;
+    }
+
+    segments.push(text.slice(start, end));
+    start = end;
   }
-  const sorted = Array.from(boundaries).sort((a, b) => a - b);
 
-  type Segment = { startByte: number; endByte: number };
-  const segments: Segment[] = [];
+  return segments;
+}
 
-  for (let i = 0; i < sorted.length - 1; i++) {
-    const startByte = sorted[i]!;
-    const endByte = sorted[i + 1]!;
-    if (endByte <= startByte) continue;
-    const segText = source.slice(startByte, endByte);
-    if (!segText.trim()) continue;
-    segments.push({ startByte, endByte });
-  }
-
-  if (!segments.length) {
-    splitLargeBlockSimple(block, source, tokenizer, maxTokens, makeChunkId, out, languageId, filePath);
+function emitRangeWithinBudget(
+  block: BlockCandidate,
+  source: string,
+  start: number,
+  end: number,
+  startLine: number,
+  tokenizer: ChunkTokenizer,
+  maxTokens: number,
+  out: RangedChunk[],
+  languageId: string,
+  filePath: string | undefined,
+): void {
+  const text = source.slice(start, end);
+  const tokenCount = tokenizer(text);
+  if (tokenCount <= maxTokens) {
+    pushRangedChunk(
+      out,
+      block,
+      languageId,
+      filePath,
+      start,
+      end,
+      startLine,
+      endLineForText(startLine, text),
+      text,
+      tokenCount,
+    );
     return;
   }
 
-  let currentStart = segments[0]!.startByte;
-  let currentEnd = segments[0]!.endByte;
-  let currentText = source.slice(currentStart, currentEnd);
-  let currentTokens = tokenizer(currentText);
-
-  const pushChunk = () => {
-    const chunkText = source.slice(currentStart, currentEnd);
-    const tokenCount = tokenizer(chunkText);
-    const [startRowZero] = locateLineAndColFromByte(newlineOffsets, currentStart);
-    const [endRowZero] = locateLineAndColFromByte(newlineOffsets, currentEnd);
-
-    out.push({
-      id: makeChunkId(),
+  let segmentStart = start;
+  let segmentStartLine = startLine;
+  for (const segment of splitTextWithinTokenBudget(text, tokenizer, maxTokens)) {
+    const segmentEnd = segmentStart + segment.length;
+    pushRangedChunk(
+      out,
+      block,
       languageId,
-      type: block.kind,
-      startLine: startRowZero + 1,
-      endLine: endRowZero + 1,
-      text: chunkText,
-      tokenCount,
-      ...(filePath !== undefined ? { filePath } : {}),
-      ...(block.name !== undefined ? { name: block.name } : {}),
-    });
-  };
+      filePath,
+      segmentStart,
+      segmentEnd,
+      segmentStartLine,
+      endLineForText(segmentStartLine, segment),
+      segment,
+      tokenizer(segment),
+    );
+    segmentStartLine += countLineBreaks(segment);
+    segmentStart = segmentEnd;
+  }
+}
 
-  for (let i = 1; i < segments.length; i++) {
-    const seg = segments[i]!;
-    const segText = source.slice(seg.startByte, seg.endByte);
-    const segTokens = tokenizer(segText);
+function pushRangedChunk(
+  out: RangedChunk[],
+  block: BlockCandidate,
+  languageId: string,
+  filePath: string | undefined,
+  sourceStart: number,
+  sourceEnd: number,
+  startLine: number,
+  endLine: number,
+  text: string,
+  tokenCount: number,
+): void {
+  out.push({
+    id: "",
+    languageId,
+    type: block.kind,
+    startLine,
+    endLine,
+    text,
+    tokenCount,
+    sourceStart,
+    sourceEnd,
+    ...(filePath !== undefined ? { filePath } : {}),
+    ...(block.name !== undefined ? { name: block.name } : {}),
+  });
+}
 
-    if (currentTokens + segTokens > maxTokens && currentTokens > 0) {
-      pushChunk();
-      currentStart = seg.startByte;
-      currentEnd = seg.endByte;
-      currentText = segText;
-      currentTokens = segTokens;
-    } else {
-      currentEnd = seg.endByte;
-      currentText += segText;
-      currentTokens += segTokens;
-    }
+function lineRanges(
+  source: string,
+  start: number,
+  end: number,
+  startLine: number,
+): Array<{ start: number; end: number; startLine: number }> {
+  const ranges: Array<{ start: number; end: number; startLine: number }> = [];
+  let rangeStart = start;
+  let line = startLine;
+
+  for (let offset = start; offset < end; offset++) {
+    if (source[offset] !== "\n") continue;
+    ranges.push({ start: rangeStart, end: offset + 1, startLine: line });
+    rangeStart = offset + 1;
+    line++;
   }
 
-  pushChunk();
+  if (rangeStart < end) {
+    ranges.push({ start: rangeStart, end, startLine: line });
+  }
+
+  return ranges;
+}
+
+function countLineBreaks(text: string): number {
+  let count = 0;
+  for (let index = 0; index < text.length; index++) {
+    if (text[index] === "\n") count++;
+  }
+  return count;
+}
+
+function endLineForText(startLine: number, text: string): number {
+  const lineBreaks = countLineBreaks(text);
+  return startLine + lineBreaks - (text.endsWith("\n") ? 1 : 0);
+}
+
+function nextCodePointBoundary(text: string, index: number): number {
+  if (index >= text.length) return text.length;
+  const codePoint = text.codePointAt(index);
+  return index + (codePoint !== undefined && codePoint > 0xffff ? 2 : 1);
+}
+
+function previousCodePointBoundary(text: string, index: number): number {
+  if (index <= 0 || index >= text.length || text.charCodeAt(index) < 0xdc00 || text.charCodeAt(index) > 0xdfff) {
+    return index;
+  }
+  return index - 1;
 }
 
 function locateLineAndColFromByte(newlineOffsets: number[], byteOffset: number): [number, number] {

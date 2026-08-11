@@ -28,6 +28,8 @@ For repeated calls, prefer one warm session instead of rebuilding indexes ad hoc
 - `createCodeReviewSession()` for repeated navigation and impact work in library code
 - `createAgentSession()` or MCP for repeated orient/search/explain/packet work in agent hosts
 
+One Node.js process uses one filesystem case-sensitivity mode for file identity. Building indexes on roots with different case modes emits a `CODEGRAPH_FILE_IDENTITY_CASE_MODE_CONFLICT` warning naming both roots; use separate processes for those roots.
+
 CLI commands and agent sessions read `codegraph.config.json` from the project root when it exists. Core indexing APIs keep discovery and language mappings explicit, so pass both options directly when you want the same behavior in custom code:
 
 ```ts
@@ -405,7 +407,7 @@ const artifact = await buildCodegraphArtifact({
 console.log(artifact.manifestPath, artifact.artifacts);
 ```
 
-The `graph.json` artifact is self-describing (`schemaVersion: 1`, `format: "codegraph.graph-json"`) and uses project-relative file paths and portable symbol handles. `questions.json` uses the same stable handles for follow-up commands. With `force: true`, stale known codegraph artifact files are removed before the selected outputs are written; unrelated files in the directory are preserved.
+The `graph.json` artifact is self-describing (`schemaVersion: 2`, `format: "codegraph.graph-json"`) and uses project-relative file paths and portable symbol handles. Version 1 graph artifacts are rejected by drift baseline loading and must be regenerated. `questions.json` uses the same stable handles for follow-up commands. With `force: true`, stale known codegraph artifact files are removed before the selected outputs are written; unrelated files in the directory are preserved.
 
 `createAgentSession()` (from `@lzehrung/codegraph/agent`) keeps one in-process project snapshot warm for repeated explore, orient, search, explain, packet, artifact, and MCP calls. It uses incremental indexing with disk cache by default, auto-enables native workers for large cold builds, and carries forward top-level analysis metadata from the build report.
 Session callers can use `freshness: { policy: "check" | "auto" | "manual" }` plus `checkFreshness()` to detect file edits before reusing a warm snapshot. `check` reports stale state without invalidating, `auto` invalidates for bounded changes, and stale results include `changedFileCount`, `omittedChangedFileCount`, `reason`, and a bounded changed-file sample.
@@ -437,7 +439,9 @@ See [MCP server](./mcp.md) for CLI server setup and client configuration example
 
 ## Semantic chunking
 
-The library provides semantic code chunking utilities for preparing codebases for LLM processing and vector embeddings. It uses Tree-sitter to split code into meaningful units while respecting token budgets.
+The library provides semantic code chunking utilities for preparing codebases for LLM processing and vector embeddings. It uses Tree-sitter to split code into meaningful units while respecting token budgets. `chunkFile()` and `chunkTextFile()` cover every source byte with at least one chunk.
+
+Nested semantic candidates retain hierarchical granularity: a parent and its declarations are emitted as separate chunks, even when their ranges overlap. Semantic block boundaries follow the AST and may begin or end mid-line. When one oversized semantic block is split into pieces, those sibling pieces are line-aligned and do not overlap; only a single source line that exceeds `maxTokens` is split within the line. No individual chunk text repeats a source span internally, and every emitted chunk respects `maxTokens`.
 
 ### APIs
 
@@ -478,6 +482,8 @@ interface Chunk {
 }
 ```
 
+Chunk IDs are content-addressed SHA-256 values scoped by language and file path. The hash includes the final chunk type, optional name, and text, so adding an unrelated earlier chunk does not renumber unchanged chunks. Identical chunks receive a deterministic suffix only to keep IDs unique.
+
 ### Options
 
 - `minTokens`: minimum tokens per chunk, default `150`
@@ -489,7 +495,7 @@ interface Chunk {
 ```json
 [
   {
-    "id": "javascript:utils.js:0",
+    "id": "javascript:utils.js:<sha256>",
     "languageId": "javascript",
     "filePath": "utils.js",
     "type": "function",
@@ -882,9 +888,10 @@ const report = await analyzeArchitectureDrift(process.cwd(), {
 
 Drift callers can tune noise and payload size without changing the core comparison:
 
-- `graphEdges: "full" | "summary" | "off"` controls graph-edge churn detail.
+- `graphEdges: "full" | "summary" | "off"` controls graph-edge churn detail. Edge identity includes the type-only flag, so an `import type` flipping to a runtime import (or back) produces a `graph-edge-type-changed` finding (warning when an edge gains runtime weight, info when it becomes type-only) instead of an add/remove pair.
 - `publicApi: "all" | "removals" | "off"` controls whether API additions are emitted.
 - `format: "compact"` emits bounded example findings plus `summary.byKind` and `summary.bySeverity`.
+- Duplicate group identity keys on file, unit kind, symbol name, and content shape rather than line positions, so line shifts above an unchanged clone do not produce false new/resolved top-group deltas.
 - Git-backed reports expose logical `base.ref` and `head.ref` values instead of temporary checkout paths.
 
 The API returns `ArchitectureDriftReport` with `schemaVersion: 1`, base/head summaries, bounded findings, and policy state. Drift compares architecture signals only; it does not run code, typecheck, or lint.
@@ -901,7 +908,7 @@ Review-pack builders should preserve symbol handles, diff snippets, callsites, `
 
 Readable `codegraph review` and `codegraph impact` reports are CLI presentation modes. Library callers should use `buildReviewReport()`, `analyzeImpactFromDiff()`, `analyzeImpactStreaming()`, or `tool_impactJSON()` and format only the selected fields they need.
 
-Duplicate leads in impact and review summaries are also presentation-only. Programmatic callers should use `findDuplicates()` when they need grouped clone data, variants, raw pair counts, or duplicate omission counts.
+Duplicate leads in impact and review summaries are also presentation-only. Programmatic callers should use `findDuplicates()` when they need grouped clone data, variants, raw pair counts, or duplicate omission counts. `collectDuplicateLeadSummary()` omits groups labeled `import-list-noise` or `barrel-export-noise` from leads by default (identical import lists and barrel files are expected boilerplate, not actionable clones) and reports them under `omittedCounts.byBoilerplate`; pass `includeBoilerplate: true` to opt back in.
 
 Useful wrapper details:
 

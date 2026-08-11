@@ -1,11 +1,26 @@
+import { Buffer } from "node:buffer";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LANG_CONFIGS } from "../src/bootstrap/treeSitterLanguages.js";
 import { chunkFile } from "../src/chunking/chunkFile.js";
 import { chunkTextFile } from "../src/chunking/chunkTextFile.js";
 import * as nativeRuntime from "../src/native/treeSitterNative.js";
+import { withStableChunkIds } from "../src/chunking/chunkId.js";
+import type { RangedChunk } from "../src/chunking/types.js";
 
 const tokenize = (text: string) => (text.trim() ? text.trim().split(/\s+/).length : 0);
+
+function countOccurrences(text: string, needle: string): number {
+  let count = 0;
+  let offset = 0;
+  while (offset < text.length) {
+    const match = text.indexOf(needle, offset);
+    if (match === -1) break;
+    count++;
+    offset = match + needle.length;
+  }
+  return count;
+}
 
 describe("chunkFile detailed behavior", () => {
   afterEach(() => {
@@ -137,12 +152,66 @@ const finalize = () => {
     });
 
     const processUsersChunks = chunks.filter((c) => c.type === "function" && c.name === "processUsers");
-    expect(processUsersChunks.length).toBeGreaterThan(1);
-    expect(processUsersChunks[0]?.startLine).toBe(1);
-    expect(processUsersChunks[processUsersChunks.length - 1]?.endLine).toBe(14);
+    expect(processUsersChunks.length).toBe(5);
+    expect(processUsersChunks.map((chunk) => [chunk.startLine, chunk.endLine])).toEqual([
+      [1, 1],
+      [2, 3],
+      [4, 8],
+      [9, 10],
+      [11, 15],
+    ]);
+    for (let index = 1; index < processUsersChunks.length; index += 1) {
+      expect(processUsersChunks[index]?.startLine).toBeGreaterThan(processUsersChunks[index - 1]?.endLine ?? 0);
+    }
 
-    const elseSegment = processUsersChunks.find((c) => c.startLine === 9 && c.endLine === 13);
-    expect(elseSegment).toBeDefined();
+    let nextOffset = 0;
+    const byteRanges = processUsersChunks.map((chunk) => {
+      const start = source.indexOf(chunk.text, nextOffset);
+      expect(start).toBeGreaterThanOrEqual(nextOffset);
+      const end = start + chunk.text.length;
+      nextOffset = end;
+      return [start, end];
+    });
+    expect(byteRanges).toEqual([
+      [0, 31],
+      [31, 88],
+      [88, 173],
+      [173, 220],
+      [220, 299],
+    ]);
+    expect(nextOffset).toBe(299);
+    for (let index = 1; index < byteRanges.length; index += 1) {
+      expect(byteRanges[index]?.[0]).toBeGreaterThanOrEqual(byteRanges[index - 1]?.[1] ?? 0);
+    }
+
+    expect(processUsersChunks.every((chunk) => chunk.tokenCount <= 8)).toBe(true);
+    expect(processUsersChunks.map((chunk) => chunk.text).join("")).toContain("else {");
+  });
+
+  it("keeps sibling chunks disjoint in source bytes and line ranges", () => {
+    const source = ["function first() {", "  return 1;", "}", "", "function second() {", "  return 2;", "}"].join("\n");
+    const chunks = chunkFile({
+      language: LANG_CONFIGS.javascript,
+      source,
+      filePath: "siblings.js",
+      minTokens: 1,
+      maxTokens: 100,
+      tokenizer: tokenize,
+    });
+    const siblings = chunks.filter((chunk) => chunk.type === "function");
+    expect(siblings.map((chunk) => chunk.name)).toEqual(["first", "second"]);
+
+    let nextOffset = 0;
+    for (let index = 0; index < siblings.length; index += 1) {
+      const chunk = siblings[index]!;
+      const start = source.indexOf(chunk.text, nextOffset);
+      expect(start).toBeGreaterThanOrEqual(nextOffset);
+      if (index) {
+        expect(chunk.startLine).toBeGreaterThan(siblings[index - 1]!.endLine);
+      }
+      nextOffset = start + chunk.text.length;
+    }
+    expect(nextOffset).toBeLessThanOrEqual(source.length);
   });
 
   it("detects JavaScript functions assigned to variables and properties", () => {
@@ -232,6 +301,7 @@ module Legacy {
     expect(chunks.some((c) => c.type === "namespace" && c.name === "Tools")).toBe(true);
     expect(chunks.some((c) => c.type === "namespace" && c.name === "Legacy")).toBe(true);
     expect(chunks.some((c) => c.type === "function" && c.name === "build")).toBe(true);
+    expect(chunks.filter((c) => c.text.includes("function build()")).length).toBe(2);
   });
 
   it("captures TypeScript enums regardless of identifier node type", () => {
@@ -400,7 +470,7 @@ function processItems(items) {
   });
 });
 
-describe("chunkTextFile", () => {
+describe("chunkTextFile and chunkFile regressions", () => {
   it("splits text blobs according to the token budget", () => {
     const source = Array.from({ length: 24 }, (_, i) => `line ${i + 1}`).join("\n");
 
@@ -419,5 +489,257 @@ describe("chunkTextFile", () => {
     const combined = chunks.map((c) => c.text).join("\n");
     expect(combined).toContain("line 1");
     expect(combined).toContain("line 24");
+  });
+
+  it("keeps text chunk IDs when an earlier chunk is inserted", () => {
+    const unchangedSource = ["later alpha", "later beta"].join("\n");
+    const before = chunkTextFile({
+      source: unchangedSource,
+      filePath: "stable.txt",
+      languageId: "text",
+      maxTokens: 2,
+      tokenizer: tokenize,
+    });
+    const after = chunkTextFile({
+      source: ["inserted chunk", unchangedSource].join("\n"),
+      filePath: "stable.txt",
+      languageId: "text",
+      maxTokens: 2,
+      tokenizer: tokenize,
+    });
+    const idsAfter = new Map(after.map((chunk) => [chunk.text, chunk.id]));
+
+    for (const chunk of before) {
+      expect(idsAfter.get(chunk.text)).toBe(chunk.id);
+    }
+  });
+
+  it("splits oversized single-line text and semantic chunks without dropping source", () => {
+    const source = "function minified(){const value=1234567890;return value+1234567890;}";
+    const maxTokens = 12;
+    const characterTokenizer = (text: string) => text.length;
+
+    const semanticChunks = chunkFile({
+      language: LANG_CONFIGS.javascript,
+      source,
+      filePath: "minified.js",
+      minTokens: 1,
+      maxTokens,
+      tokenizer: characterTokenizer,
+    });
+    const textChunks = chunkTextFile({
+      source,
+      filePath: "minified.txt",
+      languageId: "text",
+      minTokens: 1,
+      maxTokens,
+      tokenizer: characterTokenizer,
+    });
+
+    expect(semanticChunks.every((chunk) => chunk.tokenCount <= maxTokens)).toBe(true);
+    expect(semanticChunks.map((chunk) => chunk.text).join("")).toBe(source);
+    expect(textChunks.every((chunk) => chunk.tokenCount <= maxTokens)).toBe(true);
+    expect(textChunks.map((chunk) => chunk.text).join("")).toBe(source);
+  });
+
+  it("keeps IDs for unchanged semantic chunks when an earlier chunk is inserted", () => {
+    const unchangedSource = [
+      "function unchangedFirst() {",
+      "  return 'first';",
+      "}",
+      "",
+      "function unchangedSecond() {",
+      "  return 'second';",
+      "}",
+    ].join("\n");
+    const sourceWithInsertion = ["function inserted() {", "  return 'inserted';", "}", "", unchangedSource].join("\n");
+    const options = {
+      language: LANG_CONFIGS.javascript,
+      filePath: "stable.js",
+      minTokens: 1,
+      maxTokens: 100,
+      tokenizer: tokenize,
+    };
+    const before = chunkFile({ ...options, source: unchangedSource });
+    const after = chunkFile({ ...options, source: sourceWithInsertion });
+
+    const unchangedChunks = before.filter((chunk) => chunk.name?.startsWith("unchanged"));
+    const unchangedAfter = after.filter((chunk) => chunk.name?.startsWith("unchanged"));
+    const idsAfter = new Map(unchangedAfter.map((chunk) => [chunk.name, chunk.id]));
+
+    expect(unchangedChunks).toHaveLength(2);
+    for (const chunk of unchangedChunks) {
+      expect(idsAfter.get(chunk.name)).toBe(chunk.id);
+    }
+  });
+
+  it("keeps duplicate IDs collision-free for same-offset hierarchical chunks", () => {
+    const sharedChunk: RangedChunk = {
+      id: "",
+      languageId: "javascript",
+      filePath: "same-offset.js",
+      type: "declaration",
+      name: "Shared",
+      startLine: 1,
+      endLine: 1,
+      text: "class Shared {}",
+      tokenCount: 3,
+      sourceStart: 0,
+      sourceEnd: 16,
+    };
+    const chunks = withStableChunkIds([sharedChunk, { ...sharedChunk }], "javascript", "same-offset.js");
+
+    expect(chunks[0]?.id).toBeDefined();
+    expect(chunks[1]?.id).toBeDefined();
+    expect(chunks[1]?.id).not.toBe(chunks[0]?.id);
+    expect(chunks[1]?.id.endsWith(":1")).toBe(true);
+  });
+
+  it("covers a large class while keeping nested method chunks distinct", () => {
+    const source = [
+      "class Example {",
+      "  first() {",
+      "    return 'first marker';",
+      "  }",
+      "",
+      "  second() {",
+      "    return 'second marker';",
+      "  }",
+      "}",
+    ].join("\n");
+    const chunks = chunkFile({
+      language: LANG_CONFIGS.javascript,
+      source,
+      filePath: "Example.js",
+      minTokens: 1,
+      maxTokens: 8,
+      tokenizer: tokenize,
+    });
+
+    const covered = new Array<boolean>(source.length).fill(false);
+    for (const chunk of chunks) {
+      let offset = source.indexOf(chunk.text);
+      expect(offset).toBeGreaterThanOrEqual(0);
+      while (offset !== -1) {
+        for (let index = offset; index < offset + chunk.text.length; index++) {
+          covered[index] = true;
+        }
+        offset = source.indexOf(chunk.text, offset + 1);
+      }
+      expect(countOccurrences(chunk.text, "first marker")).toBeLessThanOrEqual(1);
+      expect(countOccurrences(chunk.text, "second marker")).toBeLessThanOrEqual(1);
+    }
+
+    expect(covered.every(Boolean)).toBe(true);
+    expect(chunks.filter((chunk) => chunk.type === "class" && chunk.name === "Example").length).toBeGreaterThan(1);
+    expect(chunks.some((chunk) => chunk.type === "method" && chunk.name === "first")).toBe(true);
+    expect(chunks.some((chunk) => chunk.type === "method" && chunk.name === "second")).toBe(true);
+  });
+
+  it("does not duplicate a method when merging a small class", () => {
+    const source = ["class Small {", "  run() {", "    return 'unique method marker';", "  }", "}"].join("\n");
+    const chunks = chunkFile({
+      language: LANG_CONFIGS.javascript,
+      source,
+      filePath: "Small.js",
+      minTokens: 20,
+      maxTokens: 100,
+      tokenizer: tokenize,
+    });
+
+    expect(chunks.some((chunk) => chunk.type === "class" && chunk.name === "Small")).toBe(true);
+    expect(chunks.some((chunk) => chunk.type === "method" && chunk.name === "run")).toBe(true);
+    for (const chunk of chunks) {
+      expect(countOccurrences(chunk.text, "unique method marker")).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("keeps class and method chunks for a file below maxTokens", () => {
+    const source = ["class Tiny {", "  run() {", "    return 1;", "  }", "}"].join("\n");
+    const chunks = chunkFile({
+      language: LANG_CONFIGS.javascript,
+      source,
+      filePath: "Tiny.js",
+      minTokens: 1,
+      maxTokens: 100,
+      tokenizer: tokenize,
+    });
+
+    expect(chunks.some((chunk) => chunk.type === "class" && chunk.name === "Tiny")).toBe(true);
+    expect(chunks.some((chunk) => chunk.type === "method" && chunk.name === "run")).toBe(true);
+  });
+
+  it("preserves native block text when non-ASCII precedes captures", () => {
+    // Accented Latin (2 UTF-8 bytes), CJK (3), and an emoji (4 bytes / UTF-16 surrogate pair)
+    // must not shift Tree-sitter UTF-8 byte indexes relative to String.slice UTF-16 units.
+    const source = [
+      "// Café résumé 你好 🌍 prefix",
+      "",
+      "export function alpha() {",
+      "  const label = 'café';",
+      "  return label;",
+      "}",
+      "",
+      "export function beta() {",
+      "  const msg = '覆盖 ✅';",
+      "  return msg;",
+      "}",
+      "",
+    ].join("\n");
+
+    expect(Buffer.byteLength(source, "utf8")).toBeGreaterThan(source.length);
+
+    const nativeSpy = vi.spyOn(nativeRuntime, "getNativeSingleQueryExecution");
+    const chunks = chunkFile({
+      language: LANG_CONFIGS.typescript,
+      source,
+      filePath: "unicode-probe.ts",
+      minTokens: 1,
+      maxTokens: 400,
+      tokenizer: tokenize,
+    });
+
+    expect(nativeSpy).toHaveBeenCalled();
+    expect(nativeSpy.mock.results[0]?.type).toBe("return");
+    const nativeResult = nativeSpy.mock.results[0]?.value as { matches: unknown[] | null };
+    expect(nativeResult.matches?.length).toBeGreaterThan(0);
+
+    const alpha = chunks.find((chunk) => chunk.type === "function" && chunk.name === "alpha");
+    const beta = chunks.find((chunk) => chunk.type === "function" && chunk.name === "beta");
+    expect(alpha).toBeDefined();
+    expect(beta).toBeDefined();
+    expect(alpha!.text).toContain("function alpha");
+    expect(alpha!.text).toContain("const label = 'café'");
+    expect(alpha!.text).toContain("return label");
+    expect(beta!.text).toContain("function beta");
+    expect(beta!.text).toContain("const msg = '覆盖 ✅'");
+    expect(beta!.text).toContain("return msg");
+
+    expect(source.includes(alpha!.text)).toBe(true);
+    expect(source.includes(beta!.text)).toBe(true);
+
+    const covered = new Array<boolean>(source.length).fill(false);
+    for (const chunk of chunks) {
+      let offset = source.indexOf(chunk.text);
+      expect(offset).toBeGreaterThanOrEqual(0);
+      while (offset !== -1) {
+        for (let index = offset; index < offset + chunk.text.length; index += 1) {
+          covered[index] = true;
+        }
+        offset = source.indexOf(chunk.text, offset + 1);
+      }
+    }
+    expect(covered.every(Boolean)).toBe(true);
+    expect(chunks.every((chunk) => chunk.tokenCount <= 400)).toBe(true);
+
+    const again = chunkFile({
+      language: LANG_CONFIGS.typescript,
+      source,
+      filePath: "unicode-probe.ts",
+      minTokens: 1,
+      maxTokens: 400,
+      tokenizer: tokenize,
+    });
+    expect(again.map((chunk) => chunk.id)).toEqual(chunks.map((chunk) => chunk.id));
   });
 });

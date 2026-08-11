@@ -20,7 +20,7 @@ import {
   REVIEW_SUMMARY_TASK_LIMIT,
 } from "../presentation/bounds.js";
 import { type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
-import { normalizePath } from "../util/paths.js";
+import { fileIdentityKey, normalizePath } from "../util/paths.js";
 import { duplicateSimilarityHintsFromChanges } from "./duplicateSimilarity.js";
 import { parseCacheModeOption, parseOptionalNonNegativeIntegerOption } from "./options.js";
 
@@ -168,8 +168,8 @@ function filterIndexedScopeFiles(input: {
   const { index, projectRoot, scopedFiles } = input;
   if (scopedFiles === undefined) return undefined;
   return scopedFiles.filter((file) => {
-    if (index.byFile.has(file)) return true;
-    return index.byFile.has(normalizePath(path.resolve(projectRoot, file)));
+    if (index.byFile.has(fileIdentityKey(file))) return true;
+    return index.byFile.has(fileIdentityKey(normalizePath(path.resolve(projectRoot, file))));
   });
 }
 

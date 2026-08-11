@@ -9,7 +9,7 @@ import type { ProjectFileInfo } from "../../util/projectFiles.js";
 import { BloomFilter, BloomFilterCache } from "../../util/bloomFilter.js";
 import { summarizeAnalysis } from "../../analysisSummary.js";
 import type { AnalysisSummary } from "../../analysisSummary.js";
-import { isFilePathWithinRoot, normalizePath } from "../../util/paths.js";
+import { fileIdentityKey, isFilePathWithinRoot, normalizePath } from "../../util/paths.js";
 import { getNativeRuntimeFingerprint } from "../../native/treeSitterNative.js";
 import { SymbolKind } from "../types.js";
 import type {
@@ -30,19 +30,21 @@ import {
   type SymbolNodeKind,
   type SymbolVisibility,
 } from "../../graphs/symbol-graph.js";
-import { normalizeGraphOptions } from "./options.js";
+import { getImplementationFingerprint, normalizeGraphOptions } from "./options.js";
 import { cacheRoot } from "./module-cache.js";
 import type { ManifestFileEntry } from "./manifest.js";
 
 const SNAPSHOT_SYMBOL_KINDS = new Set<SymbolKind>(Object.values(SymbolKind));
-const PROJECT_SNAPSHOT_VERSION = 3;
+const PROJECT_SNAPSHOT_VERSION = 4;
 const BLOOM_FILTER_MIN_SIZE = 1_000;
 const BLOOM_FILTER_MAX_SIZE = 1_000_000;
 const BLOOM_FILTER_MIN_HASH_COUNT = 1;
 const BLOOM_FILTER_MAX_HASH_COUNT = 10;
-const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 1;
+const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 2;
 const DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME = "detailed-symbol-graph.json";
 
+const SNAPSHOT_TEMP_RETENTION_MS = 24 * 60 * 60 * 1_000;
+const SNAPSHOT_TEMP_SUFFIX = ".tmp";
 const MAX_SNAPSHOT_CACHE_ENTRIES = 32;
 
 type SnapshotFileIdentity = {
@@ -53,7 +55,7 @@ type SnapshotFileIdentity = {
 
 type ParsedSnapshotCacheEntry = {
   identity: SnapshotFileIdentity;
-  payload: unknown;
+  compressed: Buffer;
 };
 
 type DetailedSymbolGraphCacheEntry = {
@@ -67,6 +69,8 @@ const detailedSymbolGraphCache = new Map<string, DetailedSymbolGraphCacheEntry>(
 
 type DetailedSymbolGraphSnapshotPayload = {
   version: number;
+  projectRoot: string;
+  implementationFingerprint: string;
   projectSnapshotIdentity: string;
   graph: {
     nodes: SymbolNode[];
@@ -99,9 +103,10 @@ type ProjectIndexSnapshotPayload = {
     edges: Graph["edges"];
   };
   modules: ModuleIndex[];
-  projectRoot?: string;
+  projectRoot: string;
   nativeMode?: ProjectIndex["nativeMode"];
   nativeRuntimeFingerprint: string;
+  implementationFingerprint: string;
   projectFiles?: ProjectFileInfo[];
   bloomFilters?: Record<string, SerializedBloomFilter>;
   analysis?: AnalysisSummary;
@@ -124,14 +129,24 @@ export function projectSnapshotFilesSignature(entries: ReadonlyMap<string, Manif
 }
 export function createProjectSnapshotIdentity(filesSignature: string, opts: BuildOptions | undefined): string {
   const hash = createHash("sha256");
-  hash.update("project-index-snapshot-identity-v1");
+  hash.update("project-index-snapshot-identity-v2");
   hash.update("\0");
   hash.update(filesSignature);
   hash.update("\0");
   hash.update(JSON.stringify(normalizeGraphOptions(opts?.graph)));
   hash.update("\0");
   hash.update(getNativeRuntimeFingerprint(opts?.native));
+  hash.update("\0");
+  hash.update(getImplementationFingerprint());
   return hash.digest("hex");
+}
+
+function serializedProjectRoot(projectRoot: string): string {
+  return normalizePath(path.resolve(projectRoot));
+}
+
+function projectRootMatches(projectRoot: string, storedProjectRoot: string): boolean {
+  return fileIdentityKey(path.resolve(projectRoot)) === fileIdentityKey(path.resolve(storedProjectRoot));
 }
 
 function compareSnapshotPath(left: string, right: string): number {
@@ -152,6 +167,61 @@ async function snapshotFileIdentity(snapshotPath: string): Promise<SnapshotFileI
     ctimeMs: stat.ctimeMs,
   };
 }
+async function fsyncSnapshotFile(snapshotPath: string): Promise<void> {
+  const handle = await fsp.open(snapshotPath, "r+");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+function isSnapshotTempName(name: string, snapshotName: string): boolean {
+  const prefix = `.${snapshotName}.`;
+  if (!name.startsWith(prefix) || !name.endsWith(SNAPSHOT_TEMP_SUFFIX)) return false;
+  const marker = name.slice(prefix.length, -SNAPSHOT_TEMP_SUFFIX.length);
+  return /^\d+\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(marker);
+}
+
+async function cleanupStaleSnapshotTemps(snapshotPath: string): Promise<void> {
+  let entries: Array<{ name: string; isFile(): boolean }>;
+  try {
+    entries = await fsp.readdir(path.dirname(snapshotPath), { withFileTypes: true });
+  } catch {
+    return;
+  }
+  const cutoff = Date.now() - SNAPSHOT_TEMP_RETENTION_MS;
+  const snapshotName = path.basename(snapshotPath);
+  for (const entry of entries) {
+    if (!entry.isFile() || !isSnapshotTempName(entry.name, snapshotName)) continue;
+    const candidate = path.join(path.dirname(snapshotPath), entry.name);
+    try {
+      const stat = await fsp.lstat(candidate);
+      if (stat.mtimeMs > cutoff) continue;
+      await fsp.rm(candidate, { force: true });
+    } catch {
+      // Abandoned snapshot cleanup must not block a cache write.
+    }
+  }
+}
+
+async function writeSnapshotAtomically(snapshotPath: string, data: Buffer): Promise<void> {
+  await fsp.mkdir(path.dirname(snapshotPath), { recursive: true });
+  await cleanupStaleSnapshotTemps(snapshotPath);
+  let tempPath: string | undefined = path.join(
+    path.dirname(snapshotPath),
+    `.${path.basename(snapshotPath)}.${process.pid}.${randomUUID()}${SNAPSHOT_TEMP_SUFFIX}`,
+  );
+  try {
+    await fsp.writeFile(tempPath, data, { flag: "wx" });
+    await fsyncSnapshotFile(tempPath);
+    await fsp.rename(tempPath, snapshotPath);
+    tempPath = undefined;
+  } finally {
+    if (tempPath) {
+      await fsp.rm(tempPath, { force: true }).catch(() => undefined);
+    }
+  }
+}
 
 function setBoundedSnapshotCache<K, V>(cache: Map<K, V>, key: K, value: V): void {
   cache.delete(key);
@@ -171,22 +241,27 @@ function materializeDetailedSymbolGraph(payload: DetailedSymbolGraphSnapshotPayl
   };
 }
 
-async function readParsedSnapshot(snapshotPath: string): Promise<ParsedSnapshotCacheEntry> {
+function decodeSnapshotPayload(compressed: Buffer): unknown {
+  return JSON.parse(brotliDecompressSync(compressed).toString("utf8")) as unknown;
+}
+
+async function readParsedSnapshot(snapshotPath: string): Promise<{ identity: SnapshotFileIdentity; payload: unknown }> {
   const before = await snapshotFileIdentity(snapshotPath);
   const cached = parsedSnapshotCache.get(snapshotPath);
   if (cached && sameSnapshotFileIdentity(cached.identity, before)) {
     setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, cached);
-    return cached;
+    return { identity: cached.identity, payload: decodeSnapshotPayload(cached.compressed) };
   }
-  const payload = JSON.parse(brotliDecompressSync(await fsp.readFile(snapshotPath)).toString("utf8")) as unknown;
+  const compressed = Buffer.from(await fsp.readFile(snapshotPath));
+  const payload = decodeSnapshotPayload(compressed);
   const after = await snapshotFileIdentity(snapshotPath);
-  const entry = { identity: before, payload };
+  const entry = { identity: before, compressed };
   if (sameSnapshotFileIdentity(before, after)) {
     setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, entry);
   } else {
     parsedSnapshotCache.delete(snapshotPath);
   }
-  return entry;
+  return { identity: before, payload };
 }
 
 function projectIndexManifestEntries(
@@ -213,27 +288,31 @@ export async function tryLoadProjectIndexSnapshot(
   try {
     const rawPayload = (await readParsedSnapshot(projectSnapshotPath(projectRoot, opts))).payload;
     const nativeRuntimeFingerprint = getNativeRuntimeFingerprint(opts?.native);
+    const implementationFingerprint = getImplementationFingerprint();
     if (
       !isProjectIndexSnapshotPayload(rawPayload) ||
       rawPayload.filesSignature !== filesSignature ||
+      !projectRootMatches(projectRoot, rawPayload.projectRoot) ||
       rawPayload.nativeMode !== normalizedSnapshotNativeMode(opts?.native) ||
-      rawPayload.nativeRuntimeFingerprint !== nativeRuntimeFingerprint
+      rawPayload.nativeRuntimeFingerprint !== nativeRuntimeFingerprint ||
+      rawPayload.implementationFingerprint !== implementationFingerprint
     ) {
       return null;
     }
-    const payload = structuredClone(rawPayload);
+    // Payload is freshly JSON.parsed from memoized compressed bytes (no deep clone).
+    const payload = rawPayload;
     const graph: Graph = {
       nodes: new Set(payload.graph.nodes),
       edges: payload.graph.edges,
     };
-    const modules = new Map(payload.modules.map((moduleIndex) => [moduleIndex.file, moduleIndex]));
+    const modules = new Map(payload.modules.map((moduleIndex) => [fileIdentityKey(moduleIndex.file), moduleIndex]));
     const shouldHydrateBloomFilters = opts?.useBloomFilters ?? true;
     const index: ProjectIndex = {
       graph,
       graphAdjacency: buildGraphAdjacency(graph),
       modules,
       byFile: modules,
-      ...(payload.projectRoot ? { projectRoot: payload.projectRoot } : {}),
+      projectRoot: serializedProjectRoot(projectRoot),
       ...(payload.nativeMode ? { nativeMode: payload.nativeMode } : {}),
       exportCache: new Map(),
       scopeCache: new Map(),
@@ -262,10 +341,8 @@ export async function tryLoadProjectIndexSnapshot(
  * Load only the bloom-filter section of the last-written project snapshot, without requiring
  * the whole snapshot to match this build's files signature or native runtime fingerprint.
  * Bloom filters are a pure function of a file's text, so a filter persisted for a given file
- * is safe to reuse for that file whenever the caller has independently proven -- via its own
- * cache-hit signature comparison -- that the file's content has not changed, exactly like
- * reusing that file's cached `ModuleIndex`. Only the bloom section is validated (version +
- * serialized filter shape), so a corrupt bloom payload is rejected without walking
+ * is safe to reuse after its snapshot's root and implementation fingerprints are validated.
+ * Only the bloom section is then read, so a corrupt payload is rejected without walking
  * `graph.edges` / `modules`. Returns `null` when disk caching is off, `useBloomFilters` is
  * disabled, or no valid snapshot with bloom data exists.
  */
@@ -276,7 +353,7 @@ export async function tryLoadPersistedBloomFilters(
   if ((opts?.cache ?? "off") !== "disk" || (opts?.useBloomFilters ?? true) === false) return null;
   try {
     const payload = (await readParsedSnapshot(projectSnapshotPath(projectRoot, opts))).payload;
-    const bloomFilters = persistedBloomFiltersFromSnapshot(payload);
+    const bloomFilters = persistedBloomFiltersFromSnapshot(payload, projectRoot);
     if (!bloomFilters) return null;
     return deserializeBloomFilterCache(bloomFilters);
   } catch {
@@ -284,11 +361,21 @@ export async function tryLoadPersistedBloomFilters(
   }
 }
 
-/** Light validation for bloom hydrate: snapshot version + bloom section only. */
-function persistedBloomFiltersFromSnapshot(value: unknown): Record<string, SerializedBloomFilter> | null {
+/** Light validation for bloom hydration: snapshot version, root identity, and bloom section only. */
+function persistedBloomFiltersFromSnapshot(
+  value: unknown,
+  projectRoot: string,
+): Record<string, SerializedBloomFilter> | null {
   if (!value || typeof value !== "object") return null;
   const payload = value as Partial<ProjectIndexSnapshotPayload>;
-  if (payload.version !== PROJECT_SNAPSHOT_VERSION) return null;
+  if (
+    payload.version !== PROJECT_SNAPSHOT_VERSION ||
+    typeof payload.projectRoot !== "string" ||
+    !projectRootMatches(projectRoot, payload.projectRoot) ||
+    payload.implementationFingerprint !== getImplementationFingerprint()
+  ) {
+    return null;
+  }
   if (!isSerializedBloomFilterRecord(payload.bloomFilters)) return null;
   return payload.bloomFilters;
 }
@@ -299,23 +386,26 @@ export async function writeProjectIndexSnapshot(
   index: ProjectIndex,
   filesSignature: string,
 ): Promise<void> {
-  if ((opts?.cache ?? "off") !== "disk") return;
-  index.projectSnapshotIdentity = createProjectSnapshotIdentity(filesSignature, opts);
+  const projectSnapshotIdentity = createProjectSnapshotIdentity(filesSignature, opts);
   const serializedBloomFilters = index.bloomFilters
-    ? serializeBloomFilterCache(index.bloomFilters, index.byFile.keys())
+    ? serializeBloomFilterCache(
+        index.bloomFilters,
+        Array.from(index.byFile.values(), (module) => module.file),
+      )
     : undefined;
   const snapshotAnalysisReport = analysisReportFromBuildReport(index.buildReport);
   const snapshotAnalysis = index.buildReport ? summarizeAnalysis({ index, report: index.buildReport }) : index.analysis;
   const payload: ProjectIndexSnapshotPayload = {
     version: PROJECT_SNAPSHOT_VERSION,
     filesSignature,
+    projectRoot: serializedProjectRoot(projectRoot),
     nativeRuntimeFingerprint: getNativeRuntimeFingerprint(opts?.native),
+    implementationFingerprint: getImplementationFingerprint(),
     graph: {
       nodes: [...index.graph.nodes],
       edges: index.graph.edges,
     },
     modules: [...index.byFile.values()],
-    ...(index.projectRoot ? { projectRoot: index.projectRoot } : {}),
     ...(normalizedSnapshotNativeMode(index.nativeMode)
       ? { nativeMode: normalizedSnapshotNativeMode(index.nativeMode) }
       : {}),
@@ -326,14 +416,15 @@ export async function writeProjectIndexSnapshot(
   };
   try {
     const snapshotPath = projectSnapshotPath(projectRoot, opts);
-    await fsp.mkdir(path.dirname(snapshotPath), { recursive: true });
-    await fsp.writeFile(
-      snapshotPath,
-      brotliCompressSync(JSON.stringify(payload), { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } }),
-    );
+    const compressed = brotliCompressSync(JSON.stringify(payload), {
+      params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 },
+    });
+    await writeSnapshotAtomically(snapshotPath, compressed);
     const identity = await snapshotFileIdentity(snapshotPath);
-    setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, payload: structuredClone(payload) });
+    setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, compressed });
+    index.projectSnapshotIdentity = projectSnapshotIdentity;
   } catch {
+    delete index.projectSnapshotIdentity;
     // Snapshot writes are an optimization; cache write failures must not fail indexing.
   }
 }
@@ -364,6 +455,8 @@ export async function tryLoadDetailedSymbolGraphSnapshot(
     const payload = parsed.payload;
     if (
       !isDetailedSymbolGraphSnapshotPayload(payload) ||
+      !projectRootMatches(projectRoot, payload.projectRoot) ||
+      payload.implementationFingerprint !== getImplementationFingerprint() ||
       payload.projectSnapshotIdentity !== index.projectSnapshotIdentity
     ) {
       return null;
@@ -394,6 +487,8 @@ export async function writeDetailedSymbolGraphSnapshot(
   if ((opts?.cache ?? "off") !== "disk" || !index.projectSnapshotIdentity) return;
   const payload: DetailedSymbolGraphSnapshotPayload = {
     version: DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION,
+    projectRoot: serializedProjectRoot(projectRoot),
+    implementationFingerprint: getImplementationFingerprint(),
     graphHash: detailedSymbolGraphContentHash(index.projectSnapshotIdentity, graph),
     projectSnapshotIdentity: index.projectSnapshotIdentity,
     graph: {
@@ -401,37 +496,24 @@ export async function writeDetailedSymbolGraphSnapshot(
       edges: graph.edges,
     },
   };
-  let tempPath: string | undefined;
   try {
     const snapshotPath = detailedSymbolGraphSnapshotPath(projectRoot, opts);
     parsedSnapshotCache.delete(snapshotPath);
     detailedSymbolGraphCache.delete(snapshotPath);
-    await fsp.mkdir(path.dirname(snapshotPath), { recursive: true });
-    tempPath = path.join(
-      path.dirname(snapshotPath),
-      `.${path.basename(snapshotPath)}.${process.pid}.${randomUUID()}.tmp`,
-    );
-    await fsp.writeFile(
-      tempPath,
-      brotliCompressSync(JSON.stringify(payload), { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } }),
-      { flag: "wx" },
-    );
-    await fsp.rename(tempPath, snapshotPath);
+    const compressed = brotliCompressSync(JSON.stringify(payload), {
+      params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 },
+    });
+    await writeSnapshotAtomically(snapshotPath, compressed);
     const identity = await snapshotFileIdentity(snapshotPath);
     const cachedPayload = structuredClone(payload);
-    setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, payload: cachedPayload });
+    setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, compressed });
     setBoundedSnapshotCache(detailedSymbolGraphCache, snapshotPath, {
       identity,
       projectSnapshotIdentity: index.projectSnapshotIdentity,
       graph: cachedPayload.graph,
     });
-    tempPath = undefined;
   } catch {
     // Detailed graph persistence is an optimization; source parsing remains authoritative.
-  } finally {
-    if (tempPath) {
-      await fsp.rm(tempPath, { force: true }).catch(() => undefined);
-    }
   }
 }
 
@@ -462,6 +544,9 @@ function isDetailedSymbolGraphSnapshotPayload(value: unknown): value is Detailed
   const payload = value as Partial<DetailedSymbolGraphSnapshotPayload>;
   if (
     payload.version !== DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION ||
+    typeof payload.projectRoot !== "string" ||
+    typeof payload.implementationFingerprint !== "string" ||
+    !/^[a-f0-9]{64}$/.test(payload.implementationFingerprint) ||
     typeof payload.projectSnapshotIdentity !== "string" ||
     !/^[a-f0-9]{64}$/.test(payload.projectSnapshotIdentity) ||
     typeof payload.graphHash !== "string" ||
@@ -584,11 +669,11 @@ async function isDetailedSymbolGraphCompatibleWithProject(
   graph: SymbolGraph,
 ): Promise<boolean> {
   const normalizedRoot = path.resolve(projectRoot);
-  const indexedFiles = new Set([...index.byFile.keys()].map(normalizePath));
+  const indexedFiles = new Set([...index.byFile.keys()]);
   for (const node of graph.nodes.values()) {
     const normalizedFile = normalizePath(node.file);
     if (
-      !indexedFiles.has(normalizedFile) ||
+      !indexedFiles.has(fileIdentityKey(normalizedFile)) ||
       !isFilePathWithinRoot(normalizedRoot, normalizedFile) ||
       !node.id.startsWith(`${normalizedFile}::`)
     ) {
@@ -599,7 +684,10 @@ async function isDetailedSymbolGraphCompatibleWithProject(
     if (!graph.nodes.has(edge.from) || !graph.nodes.has(edge.to)) return false;
     if (edge.site) {
       const normalizedSiteFile = normalizePath(edge.site.file);
-      if (!indexedFiles.has(normalizedSiteFile) || !isFilePathWithinRoot(normalizedRoot, normalizedSiteFile)) {
+      if (
+        !indexedFiles.has(fileIdentityKey(normalizedSiteFile)) ||
+        !isFilePathWithinRoot(normalizedRoot, normalizedSiteFile)
+      ) {
         return false;
       }
     }
@@ -621,8 +709,49 @@ async function isDetailedSymbolGraphCompatibleWithProject(
       return false;
     }
   }
-  const edgeKeys = new Set(graph.edges.map((edge) => `${edge.from}\0${edge.to}\0${edge.label ?? ""}`));
-  return base.edges.every((edge) => edgeKeys.has(`${edge.from}\0${edge.to}\0${edge.label ?? ""}`));
+  return sameSymbolEdgeMultiset(base.edges, graph.edges);
+}
+
+function sameSymbolEdgeMultiset(expected: readonly SymbolEdge[], actual: readonly SymbolEdge[]): boolean {
+  if (expected.length !== actual.length) return false;
+  const counts = new Map<string, number>();
+  for (const edge of expected) {
+    const key = serializedSymbolEdge(edge);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  for (const edge of actual) {
+    const key = serializedSymbolEdge(edge);
+    const remaining = counts.get(key);
+    if (remaining === undefined) return false;
+    if (remaining === 1) counts.delete(key);
+    else counts.set(key, remaining - 1);
+  }
+  return !counts.size;
+}
+
+function serializedSymbolEdge(edge: SymbolEdge): string {
+  return JSON.stringify({
+    from: edge.from,
+    to: edge.to,
+    label: edge.label,
+    site: edge.site
+      ? {
+          file: edge.site.file,
+          range: {
+            start: {
+              line: edge.site.range.start.line,
+              column: edge.site.range.start.column,
+              ...(edge.site.range.start.index !== undefined ? { index: edge.site.range.start.index } : {}),
+            },
+            end: {
+              line: edge.site.range.end.line,
+              column: edge.site.range.end.column,
+              ...(edge.site.range.end.index !== undefined ? { index: edge.site.range.end.index } : {}),
+            },
+          },
+        }
+      : undefined,
+  });
 }
 
 function normalizedSnapshotNativeMode(
@@ -677,7 +806,10 @@ function isProjectIndexSnapshotPayload(value: unknown): value is ProjectIndexSna
   return (
     payload.version === PROJECT_SNAPSHOT_VERSION &&
     typeof payload.filesSignature === "string" &&
+    typeof payload.projectRoot === "string" &&
     typeof payload.nativeRuntimeFingerprint === "string" &&
+    typeof payload.implementationFingerprint === "string" &&
+    /^[a-f0-9]{64}$/.test(payload.implementationFingerprint) &&
     !!payload.graph &&
     Array.isArray(payload.graph.nodes) &&
     payload.graph.nodes.every((node) => typeof node === "string") &&
@@ -685,7 +817,6 @@ function isProjectIndexSnapshotPayload(value: unknown): value is ProjectIndexSna
     payload.graph.edges.every(isGraphEdge) &&
     Array.isArray(payload.modules) &&
     payload.modules.every(isModuleIndex) &&
-    (payload.projectRoot === undefined || typeof payload.projectRoot === "string") &&
     (payload.nativeMode === undefined || isSnapshotNativeMode(payload.nativeMode)) &&
     (payload.bloomFilters === undefined || isSerializedBloomFilterRecord(payload.bloomFilters)) &&
     (payload.analysis === undefined || isAnalysisSummary(payload.analysis)) &&

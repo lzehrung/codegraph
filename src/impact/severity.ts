@@ -1,5 +1,6 @@
 import type { FileId, Edge } from "../types.js";
 import { type ProjectIndex, type Reference } from "../indexer/types.js";
+import { fileIdentityKey } from "../util/paths.js";
 import type { ChangedSymbol, ImpactReason, SeverityWeights } from "./types.js";
 import { DEFAULT_SEVERITY_WEIGHTS } from "./types.js";
 
@@ -24,7 +25,9 @@ export type SeverityExplain = {
 };
 
 export type SeverityResult = {
+  /** Normalized effective score used to rank impacts. */
   severity: number;
+  /** Certainty of the reference resolution, also factored into severity. */
   confidence: number;
   explain: SeverityExplain;
 };
@@ -84,6 +87,17 @@ function normalizeSeverityWeights(weights: SeverityWeights): SeverityWeights {
   return normalized;
 }
 
+/**
+ * Keep severity in its public 0..1 range without collapsing distinct high
+ * scores into a single value. The mapping is monotonic, so it preserves the
+ * ordering of the effective score used by impact ranking.
+ */
+function normalizeSeverityScore(score: number): number {
+  if (!Number.isFinite(score)) return 1;
+  if (score <= 0) return 0;
+  return score / (1 + score);
+}
+
 function getCachedFanInByFile(index: ProjectIndex): Map<FileId, number> {
   const cached = cachedFanInByGraph.get(index.graph);
   if (cached) return cached;
@@ -99,15 +113,16 @@ export function buildDependencyStats(edges: Edge[]): DependencyStats {
   for (const edge of edges) {
     if (edge.to.type !== "file") continue;
 
-    const nextCount = (fanInByFile.get(edge.to.path) ?? 0) + 1;
-    fanInByFile.set(edge.to.path, nextCount);
+    const key = fileIdentityKey(edge.to.path);
+    const nextCount = (fanInByFile.get(key) ?? 0) + 1;
+    fanInByFile.set(key, nextCount);
 
-    const incoming = reverseDeps.get(edge.to.path);
+    const incoming = reverseDeps.get(key);
     if (incoming) {
       incoming.push(edge);
       continue;
     }
-    reverseDeps.set(edge.to.path, [edge]);
+    reverseDeps.set(key, [edge]);
   }
 
   return { fanInByFile, reverseDeps };
@@ -165,14 +180,14 @@ export function calculateSeverity(
   }
 
   const fanInCounts = fanInByFile ?? getCachedFanInByFile(index);
-  const fanIn = fanInCounts.get(ref.file) ?? 0;
+  const fanIn = fanInCounts.get(fileIdentityKey(ref.file)) ?? 0;
   if (fanIn > 0) {
     const fanInFactor = 1 + Math.min(Math.log10(fanIn + 1), 1);
     score *= fanInFactor;
     explain.fanIn = fanIn;
   }
 
-  if (ref.file === changedSymbol.file) {
+  if (fileIdentityKey(ref.file) === fileIdentityKey(changedSymbol.file)) {
     score *= validatedWeights.sameFile;
     explain.sameFile = true;
   }
@@ -196,8 +211,13 @@ export function calculateSeverity(
   explain.depth = depth;
   confidence *= Math.pow(0.9, depth);
 
+  // Resolution confidence is ranking evidence, not display-only metadata.
+  // Apply it before the saturating normalization so lower-confidence matches
+  // cannot tie exact matches solely because both scores would otherwise cap.
+  score *= confidence;
+
   return {
-    severity: Math.min(1.0, Math.max(0.0, score)),
+    severity: normalizeSeverityScore(score),
     confidence: Math.min(1.0, Math.max(0.0, confidence)),
     explain,
   };

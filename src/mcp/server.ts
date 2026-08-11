@@ -53,6 +53,7 @@ import { parseQualifiedSymbolPath } from "../indexer/symbols.js";
 import { analyzeImpactFromDiff, type CompactImpactReport } from "../impact/index.js";
 import { DEFAULT_BOUNDED_IMPACT_BUDGETS } from "../impact/budgets.js";
 import { buildReviewReport, type ReviewDepth, type ReviewReport } from "../review.js";
+import { boundReviewReportForTransport, type ReviewReportForTransport } from "../review/types.js";
 import { SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY, queryGraphSqliteRaw, type RawSqlResult } from "../sqlite.js";
 import { isPlainRecord } from "../util/guards.js";
 import { toProjectDisplayPath } from "../util/paths.js";
@@ -63,7 +64,7 @@ import { assertRealPathCandidateWithinRoot, resolveProjectFile } from "../util/c
 import type { AgentFreshnessResult, AgentProjectSnapshot, AgentSession } from "../agent/session.js";
 import { SymbolKind } from "../indexer/types.js";
 import { DEFAULT_WORKSPACE_SYMBOL_LIMIT, MAX_WORKSPACE_SYMBOL_LIMIT } from "../indexer/workspace-symbols.js";
-import type { BuildOptions, GoToResult } from "../indexer/types.js";
+import type { BuildOptions, FindReferencesResult, GoToResult } from "../indexer/types.js";
 import {
   assertMcpSqliteQueryResourceBounded,
   boundRawSqlResult,
@@ -127,6 +128,12 @@ export type CodegraphMcpServerOptions = CodegraphMcpHandlerOptions & {
   port?: number;
   /** Stdio-only idle exit timeout in ms. Use 0 to disable. Defaults to 30 minutes. */
   idleTimeoutMs?: number;
+  /** HTTP session idle eviction timeout in ms. Use 0 to disable. Defaults to 30 minutes. */
+  httpSessionIdleMs?: number;
+  /** Maximum concurrent legacy HTTP MCP sessions. Defaults to 32. */
+  httpSessionMaxCount?: number;
+  /** How often to scan for idle HTTP sessions in ms. Defaults to 60 seconds. */
+  httpSessionEvictionIntervalMs?: number;
   onHttpListen?: ((info: CodegraphMcpHttpServerInfo) => void) | undefined;
   runtimeIdentity?: CodegraphRuntimeIdentity;
 };
@@ -142,14 +149,32 @@ export type CodegraphMcpHttpServer = CodegraphMcpHttpServerInfo & {
   close: () => Promise<void>;
 };
 
+export const DEFAULT_MCP_HTTP_SESSION_IDLE_MS = 30 * 60 * 1000;
+export const DEFAULT_MCP_HTTP_SESSION_MAX_COUNT = 32;
+export const DEFAULT_MCP_HTTP_SESSION_EVICTION_INTERVAL_MS = 60_000;
+
 type LegacyMcpSession = {
   server: Server;
   transport: NodeStreamableHTTPServerTransport;
+  lastActivityAt: number;
+  inFlightRequests: number;
+  openSseStreams: number;
 };
 
 type OriginValidator = (request: IncomingMessage, response: ServerResponse) => boolean;
 
 export type CodegraphMcpFreshResult<T extends object> = T & { freshness: AgentFreshnessResult };
+
+/**
+ * Truncation metadata for a capped collection response, per finding #44:
+ * lets a machine caller tell a complete result apart from a capped prefix.
+ */
+export type McpTruncationMeta = {
+  limit: number;
+  totalSeen: number;
+  truncated: boolean;
+  omitted: number;
+};
 
 export type CodegraphMcpHandlers = {
   search: (request: {
@@ -202,10 +227,12 @@ export type CodegraphMcpHandlers = {
     depth?: number | undefined;
     limit?: number | undefined;
   }) => Promise<
-    CodegraphMcpFreshResult<{
-      dependencies?: Array<{ file: string; depth: number }>;
-      reverseDependencies?: Array<{ file: string; depth: number }>;
-    }>
+    CodegraphMcpFreshResult<
+      McpTruncationMeta & {
+        dependencies?: Array<{ file: string; depth: number }>;
+        reverseDependencies?: Array<{ file: string; depth: number }>;
+      }
+    >
   >;
   callers: (request: {
     handle: string;
@@ -263,24 +290,26 @@ export type CodegraphMcpHandlers = {
     request:
       | { handle: string; limit?: number | undefined }
       | { file: string; line: number; column: number; limit?: number | undefined },
-  ) => Promise<CodegraphMcpFreshResult<{ references: AgentExplanationReference[] }>>;
+  ) => Promise<CodegraphMcpFreshResult<McpTruncationMeta & { references: AgentExplanationReference[] }>>;
   deps: (request: {
     file: string;
     depth?: number | undefined;
     limit?: number | undefined;
-  }) => Promise<CodegraphMcpFreshResult<{ dependencies: Array<{ file: string; depth: number }> }>>;
+  }) => Promise<CodegraphMcpFreshResult<McpTruncationMeta & { dependencies: Array<{ file: string; depth: number }> }>>;
   rdeps: (request: {
     file: string;
     depth?: number | undefined;
     limit?: number | undefined;
-  }) => Promise<CodegraphMcpFreshResult<{ reverseDependencies: Array<{ file: string; depth: number }> }>>;
+  }) => Promise<
+    CodegraphMcpFreshResult<McpTruncationMeta & { reverseDependencies: Array<{ file: string; depth: number }> }>
+  >;
   path: (request: { from: string; to: string }) => Promise<CodegraphMcpFreshResult<{ path: string[] | null }>>;
   impact: (request: { base: string; head: string }) => Promise<CodegraphMcpFreshResult<CompactImpactReport>>;
   review: (request: {
     base: string;
     head: string;
     reviewDepth?: ReviewDepth | undefined;
-  }) => Promise<CodegraphMcpFreshResult<ReviewReport>>;
+  }) => Promise<CodegraphMcpFreshResult<ReviewReportForTransport>>;
   refresh_index: (request: { warmup?: CodegraphMcpWarmupMode | undefined }) => Promise<{
     refreshed: true;
     warmup: CodegraphMcpWarmupMode;
@@ -309,6 +338,10 @@ type McpDependencyRequest = {
 type McpDependencyEntry = {
   file: string;
   depth: number;
+};
+
+type McpDependencyCollection = McpTruncationMeta & {
+  entries: McpDependencyEntry[];
 };
 
 type SqliteArtifactFileSignature = {
@@ -570,11 +603,17 @@ function createCodegraphMcpHandlersForSession(
       file: string,
       options: { depth?: number; limit: number },
     ) => DependencyNode[],
-  ): Promise<McpDependencyEntry[]> => {
+  ): Promise<McpDependencyCollection> => {
     const snapshot = await session.loadProject({ symbolGraph: "skip" });
+    const limit = boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT);
     const queryOptions = {
       ...(request.depth !== undefined ? { depth: request.depth } : {}),
-      limit: boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT),
+      // Probe one entry past the display limit so `truncated` is exact
+      // rather than a `results.length === limit` heuristic (which cannot
+      // tell "exactly limit reachable files" apart from "more exist"),
+      // without re-walking the whole reachable graph for an exact total —
+      // see finding #44.
+      limit: limit + 1,
     };
     const resolvedSymbol = resolveSemanticSymbol(snapshot, request.file);
     let targetFile: string;
@@ -585,10 +624,14 @@ function createCodegraphMcpHandlersForSession(
     } else {
       targetFile = await resolveProjectFile(await realRoot, root, request.file);
     }
-    return collectEntries(snapshot.fileGraph, targetFile, queryOptions).map((dependency) => ({
+    const collected = collectEntries(snapshot.fileGraph, targetFile, queryOptions);
+    const totalSeen = collected.length;
+    const truncated = totalSeen > limit;
+    const entries = collected.slice(0, limit).map((dependency) => ({
       file: relative(dependency.file),
       depth: dependency.depth,
     }));
+    return { entries, limit, totalSeen, truncated, omitted: truncated ? totalSeen - limit : 0 };
   };
   const calls = async (request: {
     direction: "callers" | "callees";
@@ -620,6 +663,20 @@ function createCodegraphMcpHandlersForSession(
       limit: boundedLimit(request.limit, DEFAULT_TYPE_HIERARCHY_LIMIT, MAX_TYPE_HIERARCHY_LIMIT),
     });
   };
+  const boundedReferencesFromResult = (
+    result: FindReferencesResult,
+    limit: number,
+  ): McpTruncationMeta & { references: AgentExplanationReference[] } => {
+    if (result.status !== "ok") {
+      return { references: [], limit, totalSeen: 0, truncated: false, omitted: 0 };
+    }
+    const totalSeen = result.references.length;
+    const truncated = totalSeen > limit;
+    const references = result.references
+      .slice(0, limit)
+      .map((reference) => ({ file: relative(reference.file), range: reference.range }));
+    return { references, limit, totalSeen, truncated, omitted: truncated ? totalSeen - limit : 0 };
+  };
   const fileDeps = async (request: {
     direction: "deps" | "rdeps";
     file: string;
@@ -627,11 +684,13 @@ function createCodegraphMcpHandlersForSession(
     limit?: number | undefined;
   }) =>
     await withFreshness(async () => {
-      const entries = await collectMcpDependencyEntries(
+      const { entries, ...meta } = await collectMcpDependencyEntries(
         request,
         request.direction === "deps" ? getDependencies : getReverseDependencies,
       );
-      return request.direction === "deps" ? { dependencies: entries } : { reverseDependencies: entries };
+      return request.direction === "deps"
+        ? { dependencies: entries, ...meta }
+        : { reverseDependencies: entries, ...meta };
     });
 
   return {
@@ -777,39 +836,35 @@ function createCodegraphMcpHandlersForSession(
           throw new Error("refs requires either handle or file, line, and column.");
         }
 
+        const limit = boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT);
+
         if (handle !== undefined) {
           if (parseQualifiedSymbolPath(handle)) {
             const snapshot = await session.loadProject({ symbolGraph: "skip" });
             const resolved = requireSemanticSymbol(snapshot, handle);
-            const result = await findReferences(
-              snapshot.index,
-              { def: resolved.def },
-              {
-                maxReferences: boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT),
-              },
-            );
-            return {
-              references:
-                result.status === "ok"
-                  ? result.references.map((reference) => ({ file: relative(reference.file), range: reference.range }))
-                  : [],
-            };
+            // Probe one reference past the display limit so `truncated` is exact — see
+            // `collectMcpDependencyEntries` for the rationale (finding #44).
+            const result = await findReferences(snapshot.index, { def: resolved.def }, { maxReferences: limit + 1 });
+            return boundedReferencesFromResult(result, limit);
           }
           const explanation = await explainCodegraphTargetWithSession(session, {
             root,
             target: handle,
-            maxReferences: boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT),
+            maxReferences: limit,
           });
-          return { references: explanation.references };
+          return {
+            references: explanation.references,
+            limit: explanation.limits.references,
+            totalSeen: explanation.references.length + explanation.omittedCounts.references,
+            truncated: explanation.omittedCounts.references > 0,
+            omitted: explanation.omittedCounts.references,
+          };
         }
         if (file === undefined || line === undefined || column === undefined) {
           throw new Error("refs requires either handle or file, line, and column.");
         }
 
         const snapshot = await session.loadProject({ symbolGraph: "skip" });
-        const referenceOptions = {
-          maxReferences: boundedLimit(request.limit, DEFAULT_MCP_COLLECTION_LIMIT, MAX_MCP_COLLECTION_LIMIT),
-        };
         const result = await findReferences(
           snapshot.index,
           {
@@ -817,27 +872,21 @@ function createCodegraphMcpHandlersForSession(
             line,
             column,
           },
-          referenceOptions,
+          { maxReferences: limit + 1 },
         );
-        if (result.status !== "ok") return { references: [] };
-        return {
-          references: result.references.map((reference) => ({
-            file: relative(reference.file),
-            range: reference.range,
-          })),
-        };
+        return boundedReferencesFromResult(result, limit);
       }),
 
     deps: async (request) =>
       await withFreshness(async () => {
-        const dependencies = await collectMcpDependencyEntries(request, getDependencies);
-        return { dependencies };
+        const { entries, ...meta } = await collectMcpDependencyEntries(request, getDependencies);
+        return { dependencies: entries, ...meta };
       }),
 
     rdeps: async (request) =>
       await withFreshness(async () => {
-        const reverseDependencies = await collectMcpDependencyEntries(request, getReverseDependencies);
-        return { reverseDependencies };
+        const { entries, ...meta } = await collectMcpDependencyEntries(request, getReverseDependencies);
+        return { reverseDependencies: entries, ...meta };
       }),
 
     path: async (request) =>
@@ -871,7 +920,7 @@ function createCodegraphMcpHandlersForSession(
 
     review: async (request) =>
       await withFreshness(async () => {
-        return await buildReviewReport(
+        const report = await buildReviewReport(
           root,
           {
             ...options.buildOptions,
@@ -888,6 +937,9 @@ function createCodegraphMcpHandlersForSession(
             ...(session.loadDuplicateAnalysis ? { loadDuplicateAnalysis: session.loadDuplicateAnalysis } : {}),
           },
         );
+        // MCP is a bounded transport (finding #45); library callers that need the
+        // complete, unbounded report should call `buildReviewReport` directly.
+        return boundReviewReportForTransport(report);
       }),
 
     query_sqlite: async (request) => {
@@ -1093,7 +1145,11 @@ export async function startCodegraphMcpHttpServer(
   const handlers = await createWarmedCodegraphMcpHandlers(options);
   const runtimeIdentity = options.runtimeIdentity ?? captureCodegraphRuntimeIdentity(getCurrentNativeBindingOrigin());
   const createProtocolServer = createCodegraphMcpProtocolFactory(handlers, runtimeIdentity);
-  const sessions = new Map<string, LegacyMcpSession>();
+  const sessionStore = createLegacyMcpSessionStore({
+    idleMs: options.httpSessionIdleMs ?? DEFAULT_MCP_HTTP_SESSION_IDLE_MS,
+    maxCount: options.httpSessionMaxCount ?? DEFAULT_MCP_HTTP_SESSION_MAX_COUNT,
+    evictionIntervalMs: options.httpSessionEvictionIntervalMs ?? DEFAULT_MCP_HTTP_SESSION_EVICTION_INTERVAL_MS,
+  });
   const modernHandler = createMcpHandler(createProtocolServer, {
     legacy: "reject",
     onerror: (error) => {
@@ -1109,7 +1165,10 @@ export async function startCodegraphMcpHttpServer(
   let allowedHostHeaders = emptyAllowedHostHeaderRules();
   let closeResourcesPromise: Promise<void> | undefined;
   const closeResources = (): Promise<void> => {
-    closeResourcesPromise ??= closeMcpResources(sessions, modernHandler.close);
+    closeResourcesPromise ??= (async () => {
+      sessionStore.stop();
+      await closeMcpResources(sessionStore.sessions, modernHandler.close);
+    })();
     return closeResourcesPromise;
   };
 
@@ -1117,7 +1176,7 @@ export async function startCodegraphMcpHttpServer(
     void handleMcpHttpRequest(
       request,
       response,
-      sessions,
+      sessionStore,
       () => allowedHostHeaders,
       validateOrigin,
       modernNodeHandler,
@@ -1146,7 +1205,7 @@ export async function startCodegraphMcpHttpServer(
       await closeResources();
       await requestsDrained;
       // An initialize accepted before closeHttpServer() can register after closeResources() snapshots the session map.
-      await closeLegacyMcpSessions(sessions);
+      await closeLegacyMcpSessions(sessionStore.sessions);
     },
   };
 }
@@ -1154,7 +1213,7 @@ export async function startCodegraphMcpHttpServer(
 async function handleMcpHttpRequest(
   request: IncomingMessage,
   response: ServerResponse,
-  sessions: Map<string, LegacyMcpSession>,
+  sessionStore: LegacyMcpSessionStore,
   getAllowedHostHeaders: () => AllowedHostHeaderRules,
   validateOrigin: OriginValidator,
   modernNodeHandler: NodeMcpRequestHandler,
@@ -1191,7 +1250,7 @@ async function handleMcpHttpRequest(
       const mcpRequest: NodeIncomingMessageLike = request;
       const webRequest = await toWebRequest(mcpRequest, parsedBody.body);
       if (await isLegacyRequest(webRequest, parsedBody.body)) {
-        await handleLegacyMcpHttpPost(request, response, parsedBody.body, sessions, createProtocolServer);
+        await handleLegacyMcpHttpPost(request, response, parsedBody.body, sessionStore, createProtocolServer);
       } else {
         await modernNodeHandler(mcpRequest, response, parsedBody.body);
       }
@@ -1199,7 +1258,7 @@ async function handleMcpHttpRequest(
     }
 
     if (request.method === "GET" || request.method === "DELETE") {
-      await handleExistingMcpSessionRequest(request, response, sessions);
+      await handleExistingMcpSessionRequest(request, response, sessionStore);
       return;
     }
 
@@ -1215,17 +1274,23 @@ async function handleLegacyMcpHttpPost(
   request: IncomingMessage,
   response: ServerResponse,
   body: unknown,
-  sessions: Map<string, LegacyMcpSession>,
+  sessionStore: LegacyMcpSessionStore,
   createProtocolServer: () => Server,
 ): Promise<void> {
   const sessionId = getHeaderValue(request.headers["mcp-session-id"]);
   if (sessionId !== undefined) {
-    const session = sessions.get(sessionId);
+    const session = sessionStore.get(sessionId);
     if (!session) {
       writeJsonRpcError(response, 400, "Bad Request: No valid session ID provided");
       return;
     }
-    await session.transport.handleRequest(request, response, body);
+    sessionStore.touch(sessionId);
+    try {
+      await handleLegacyMcpSessionRequest(session, request, response, body);
+    } catch (error) {
+      await sessionStore.delete(sessionId);
+      throw error;
+    }
     return;
   }
 
@@ -1234,32 +1299,68 @@ async function handleLegacyMcpHttpPost(
     return;
   }
 
+  const hasCapacity = await sessionStore.ensureCapacityForNewSession();
+  if (!hasCapacity) {
+    writeJsonRpcError(
+      response,
+      503,
+      "MCP session capacity reached: all configured sessions are active; close an existing session and retry.",
+    );
+    return;
+  }
+  let capacityReservationHeld = true;
+  const releaseCapacityReservation = (): void => {
+    if (!capacityReservationHeld) return;
+    capacityReservationHeld = false;
+    sessionStore.releaseCapacityReservation();
+  };
   const protocolServer = createProtocolServer();
   let initializedSessionId: string | undefined;
+  // The transport callbacks close over the session, but the session needs the
+  // transport, so the binding is resolved through a ref rather than a mutable let.
+  const sessionRef: { current: LegacyMcpSession | undefined } = { current: undefined };
   const transport = new NodeStreamableHTTPServerTransport({
     enableJsonResponse: true,
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (newSessionId) => {
       initializedSessionId = newSessionId;
-      sessions.set(newSessionId, { server: protocolServer, transport });
+      const initialized = sessionRef.current;
+      if (initialized === undefined) {
+        throw new Error("MCP session state was not initialized before the transport session.");
+      }
+      sessionStore.set(newSessionId, initialized);
+      releaseCapacityReservation();
     },
     onsessionclosed: (closedSessionId) => {
-      const session = sessions.get(closedSessionId);
-      if (session) {
-        sessions.delete(closedSessionId);
-        void closeMcpSession(session);
-      }
+      void sessionStore.delete(closedSessionId);
     },
   });
+  const session: LegacyMcpSession = {
+    server: protocolServer,
+    transport,
+    lastActivityAt: Date.now(),
+    inFlightRequests: 0,
+    openSseStreams: 0,
+  };
+  sessionRef.current = session;
+  transport.onerror = (error) => {
+    console.error(`[codegraph] MCP HTTP session transport error: ${error.message}`);
+    if (initializedSessionId !== undefined) void sessionStore.delete(initializedSessionId);
+  };
+  transport.onclose = () => {
+    if (initializedSessionId !== undefined) void sessionStore.delete(initializedSessionId);
+  };
 
   try {
     await protocolServer.connect(transport);
-    await transport.handleRequest(request, response, body);
+    await handleLegacyMcpSessionRequest(session, request, response, body);
   } catch (error) {
     if (initializedSessionId !== undefined) {
-      sessions.delete(initializedSessionId);
+      await sessionStore.delete(initializedSessionId);
+    } else {
+      await closeMcpSession(session);
     }
-    await closeMcpSession({ server: protocolServer, transport });
+    releaseCapacityReservation();
     throw error;
   }
 }
@@ -1267,19 +1368,143 @@ async function handleLegacyMcpHttpPost(
 async function handleExistingMcpSessionRequest(
   request: IncomingMessage,
   response: ServerResponse,
-  sessions: Map<string, LegacyMcpSession>,
+  sessionStore: LegacyMcpSessionStore,
 ): Promise<void> {
   const sessionId = getHeaderValue(request.headers["mcp-session-id"]);
   if (sessionId === undefined) {
     writeJsonRpcError(response, 400, "Invalid or missing session ID");
     return;
   }
-  const session = sessions.get(sessionId);
+  const session = sessionStore.get(sessionId);
   if (!session) {
     writeJsonRpcError(response, 400, "Invalid or missing session ID");
     return;
   }
-  await session.transport.handleRequest(request, response);
+  sessionStore.touch(sessionId);
+  try {
+    await handleLegacyMcpSessionRequest(session, request, response);
+  } catch (error) {
+    await sessionStore.delete(sessionId);
+    throw error;
+  }
+}
+
+async function handleLegacyMcpSessionRequest(
+  session: LegacyMcpSession,
+  request: IncomingMessage,
+  response: ServerResponse,
+  body?: unknown,
+): Promise<void> {
+  const tracksSseStream = isLegacySseRequest(request);
+  session.inFlightRequests += 1;
+  if (tracksSseStream) session.openSseStreams += 1;
+  try {
+    await session.transport.handleRequest(request, response, body);
+  } finally {
+    session.inFlightRequests -= 1;
+    if (tracksSseStream) session.openSseStreams -= 1;
+  }
+}
+
+function isLegacySseRequest(request: IncomingMessage): boolean {
+  if (request.method !== "GET") return false;
+  return getHeaderValue(request.headers.accept)?.includes("text/event-stream") ?? false;
+}
+
+type LegacyMcpSessionStoreOptions = {
+  idleMs: number;
+  maxCount: number;
+  evictionIntervalMs: number;
+};
+
+type LegacyMcpSessionStore = {
+  sessions: Map<string, LegacyMcpSession>;
+  get(sessionId: string): LegacyMcpSession | undefined;
+  set(sessionId: string, session: LegacyMcpSession): void;
+  touch(sessionId: string): void;
+  delete(sessionId: string): Promise<void>;
+  ensureCapacityForNewSession(): Promise<boolean>;
+  releaseCapacityReservation(): void;
+  stop(): void;
+};
+
+function createLegacyMcpSessionStore(options: LegacyMcpSessionStoreOptions): LegacyMcpSessionStore {
+  const sessions = new Map<string, LegacyMcpSession>();
+  let stopped = false;
+  let evictionTimer: ReturnType<typeof setInterval> | undefined;
+  let pendingInitializations = 0;
+
+  const store: LegacyMcpSessionStore = {
+    sessions,
+    get(sessionId) {
+      return sessions.get(sessionId);
+    },
+    set(sessionId, session) {
+      sessions.set(sessionId, session);
+    },
+    touch(sessionId) {
+      const session = sessions.get(sessionId);
+      if (!session) return;
+      session.lastActivityAt = Date.now();
+    },
+    async delete(sessionId) {
+      const session = sessions.get(sessionId);
+      if (!session) return;
+      sessions.delete(sessionId);
+      await closeMcpSession(session);
+    },
+    async ensureCapacityForNewSession() {
+      await evictIdleLegacyMcpSessions(store, options.idleMs);
+      if (sessions.size + pendingInitializations < options.maxCount) {
+        pendingInitializations += 1;
+        return true;
+      }
+      const oldest = [...sessions.entries()]
+        .filter(([, session]) => !session.inFlightRequests && !session.openSseStreams)
+        .sort((left, right) => left[1].lastActivityAt - right[1].lastActivityAt);
+      while (sessions.size + pendingInitializations >= options.maxCount && oldest.length) {
+        const oldestSession = oldest.shift();
+        if (oldestSession === undefined) break;
+        const [sessionId, session] = oldestSession;
+        if (session.inFlightRequests || session.openSseStreams) continue;
+        await store.delete(sessionId);
+      }
+      if (sessions.size + pendingInitializations >= options.maxCount) return false;
+      pendingInitializations += 1;
+      return true;
+    },
+    releaseCapacityReservation() {
+      if (pendingInitializations) pendingInitializations -= 1;
+    },
+    stop() {
+      stopped = true;
+      if (evictionTimer !== undefined) {
+        clearInterval(evictionTimer);
+        evictionTimer = undefined;
+      }
+    },
+  };
+
+  if (options.idleMs > 0 && options.evictionIntervalMs > 0) {
+    evictionTimer = setInterval(() => {
+      if (stopped) return;
+      void evictIdleLegacyMcpSessions(store, options.idleMs).catch((error) => {
+        console.error(`[codegraph] MCP HTTP session eviction failed: ${errorMessage(error)}`);
+      });
+    }, options.evictionIntervalMs);
+    evictionTimer.unref?.();
+  }
+
+  return store;
+}
+
+async function evictIdleLegacyMcpSessions(store: LegacyMcpSessionStore, idleMs: number): Promise<void> {
+  if (idleMs <= 0) return;
+  const cutoff = Date.now() - idleMs;
+  for (const [sessionId, session] of store.sessions) {
+    if (session.lastActivityAt > cutoff || session.inFlightRequests || session.openSseStreams) continue;
+    await store.delete(sessionId);
+  }
 }
 
 async function closeMcpSession(session: LegacyMcpSession): Promise<void> {
@@ -1306,66 +1531,72 @@ function isMcpNodeRequest(request: IncomingMessage): request is IncomingMessage 
 async function callMcpTool(handlers: CodegraphMcpHandlers, name: string, input: unknown): Promise<unknown> {
   switch (name) {
     case "search":
-      return await handlers.search(searchSchema.parse(input));
+      return await handlers.search(parseMcpToolInput(searchSchema, input, "search"));
     case "workspace_symbols":
-      return await handlers.workspace_symbols(workspaceSymbolsSchema.parse(input));
+      return await handlers.workspace_symbols(parseMcpToolInput(workspaceSymbolsSchema, input, "workspace_symbols"));
     case "rename_preview":
-      return await handlers.rename_preview(renamePreviewSchema.parse(input));
+      return await handlers.rename_preview(parseMcpToolInput(renamePreviewSchema, input, "rename_preview"));
     case "refactor_plan":
-      return await handlers.refactor_plan(refactorPlanSchema.parse(input));
+      return await handlers.refactor_plan(parseMcpToolInput(refactorPlanSchema, input, "refactor_plan"));
     case "calls":
-      return await handlers.calls(callsSchema.parse(input));
+      return await handlers.calls(parseMcpToolInput(callsSchema, input, "calls"));
     case "callers":
-      return await handlers.calls({ ...callHierarchySchema.parse(input), direction: "callers" });
+      return await handlers.calls({ ...parseMcpToolInput(callHierarchySchema, input, name), direction: "callers" });
     case "callees":
-      return await handlers.calls({ ...callHierarchySchema.parse(input), direction: "callees" });
+      return await handlers.calls({ ...parseMcpToolInput(callHierarchySchema, input, name), direction: "callees" });
     case "type_hierarchy":
-      return await handlers.type_hierarchy(typeHierarchyUnifiedSchema.parse(input));
+      return await handlers.type_hierarchy(parseMcpToolInput(typeHierarchyUnifiedSchema, input, "type_hierarchy"));
     case "supertypes":
-      return await handlers.type_hierarchy({ ...typeHierarchySchema.parse(input), direction: "supertypes" });
+      return await handlers.type_hierarchy({
+        ...parseMcpToolInput(typeHierarchySchema, input, name),
+        direction: "supertypes",
+      });
     case "subtypes":
-      return await handlers.type_hierarchy({ ...typeHierarchySchema.parse(input), direction: "subtypes" });
+      return await handlers.type_hierarchy({
+        ...parseMcpToolInput(typeHierarchySchema, input, name),
+        direction: "subtypes",
+      });
     case "implementations":
-      return await handlers.implementations(implementationsSchema.parse(input));
+      return await handlers.implementations(parseMcpToolInput(implementationsSchema, input, "implementations"));
     case "explore":
-      return await handlers.explore(exploreSchema.parse(input));
+      return await handlers.explore(parseMcpToolInput(exploreSchema, input, "explore"));
     case "orient":
-      return await handlers.orient(orientSchema.parse(input));
+      return await handlers.orient(parseMcpToolInput(orientSchema, input, "orient"));
     case "packet_get":
-      return await handlers.packet_get(packetGetSchema.parse(input));
+      return await handlers.packet_get(parseMcpToolInput(packetGetSchema, input, "packet_get"));
     case "get_file":
-      return await handlers.get_file(getFileSchema.parse(input));
+      return await handlers.get_file(parseMcpToolInput(getFileSchema, input, "get_file"));
     case "get_symbol":
-      return await handlers.get_symbol(handleSchema.parse(input));
+      return await handlers.get_symbol(parseMcpToolInput(handleSchema, input, "get_symbol"));
     case "goto":
       return await callGotoTool(handlers, input);
     case "refs":
       return await callRefsTool(handlers, input);
     case "file_deps":
-      return await handlers.file_deps(fileDepsUnifiedSchema.parse(input));
+      return await handlers.file_deps(parseMcpToolInput(fileDepsUnifiedSchema, input, "file_deps"));
     case "deps":
-      return await handlers.file_deps({ ...fileGraphSchema.parse(input), direction: "deps" });
+      return await handlers.file_deps({ ...parseMcpToolInput(fileGraphSchema, input, name), direction: "deps" });
     case "rdeps":
-      return await handlers.file_deps({ ...fileGraphSchema.parse(input), direction: "rdeps" });
+      return await handlers.file_deps({ ...parseMcpToolInput(fileGraphSchema, input, name), direction: "rdeps" });
     case "path":
-      return await handlers.path(pathSchema.parse(input));
+      return await handlers.path(parseMcpToolInput(pathSchema, input, "path"));
     case "impact":
-      return await handlers.impact(gitRangeSchema.parse(input));
+      return await handlers.impact(parseMcpToolInput(gitRangeSchema, input, name));
     case "review":
-      return await handlers.review(reviewSchema.parse(input));
+      return await handlers.review(parseMcpToolInput(reviewSchema, input, "review"));
     case "query_sqlite":
-      return await handlers.query_sqlite(querySqliteSchema.parse(input));
+      return await handlers.query_sqlite(parseMcpToolInput(querySqliteSchema, input, "query_sqlite"));
     case "refresh_index":
-      return await handlers.refresh_index(refreshIndexSchema.parse(input));
+      return await handlers.refresh_index(parseMcpToolInput(refreshIndexSchema, input, "refresh_index"));
     case "artifact_build":
-      return await handlers.artifact_build(artifactBuildSchema.parse(input));
+      return await handlers.artifact_build(parseMcpToolInput(artifactBuildSchema, input, "artifact_build"));
     default:
       throw new Error(`Unknown MCP tool: ${name}`);
   }
 }
 
 async function callGotoTool(handlers: CodegraphMcpHandlers, input: unknown): Promise<GoToResult> {
-  const request = navigationSchema.parse(input);
+  const request = parseMcpToolInput(navigationSchema, input, "goto");
   if (request.handle !== undefined) return await handlers.goto({ handle: request.handle });
   if (request.file === undefined || request.line === undefined || request.column === undefined) {
     throw new Error("goto requires either handle or file, line, and column.");
@@ -1376,8 +1607,8 @@ async function callGotoTool(handlers: CodegraphMcpHandlers, input: unknown): Pro
 async function callRefsTool(
   handlers: CodegraphMcpHandlers,
   input: unknown,
-): Promise<{ references: AgentExplanationReference[] }> {
-  const request = refsSchema.parse(input);
+): Promise<McpTruncationMeta & { references: AgentExplanationReference[] }> {
+  const request = parseMcpToolInput(refsSchema, input, "refs");
   if (request.handle !== undefined) {
     return await handlers.refs({
       handle: request.handle,
@@ -1419,97 +1650,141 @@ function getToolCallProgressToken(params: unknown): string | number | undefined 
   return parsed.data._meta?.progressToken ?? parsed.data.progressToken;
 }
 
-const searchSchema = z.object({
-  query: z.string(),
-  mode: z.enum(["hybrid", "symbol", "path", "text", "graph", "sql"]).optional(),
-  from: z.string().optional(),
-  depth: z.number().int().nonnegative().optional(),
-  limit: z.number().int().nonnegative().optional(),
-});
+function formatMcpInvalidParams(toolName: string, error: z.ZodError): string {
+  const details = error.issues
+    .map((issue) => {
+      const path = issue.path.length ? issue.path.join(".") : "(root)";
+      return `${path}: ${issue.message}`;
+    })
+    .join("; ");
+  return `Invalid parameters for ${toolName}: ${details}`;
+}
 
-const workspaceSymbolsSchema = z.object({
-  query: z.string(),
-  kinds: z.array(z.nativeEnum(SymbolKind)).optional(),
-  exportedOnly: z.boolean().optional(),
-  includeImports: z.boolean().optional(),
-  fileGlob: z.string().optional(),
-  limit: z.number().int().nonnegative().max(MAX_WORKSPACE_SYMBOL_LIMIT).optional(),
-});
+function parseMcpToolInput<T>(schema: z.ZodType<T>, input: unknown, toolName: string): T {
+  const parsed = schema.safeParse(input);
+  if (parsed.success) return parsed.data;
+  throw new Error(formatMcpInvalidParams(toolName, parsed.error));
+}
 
-const renamePreviewSchema = z.object({
-  handle: z.string(),
-  newName: z.string(),
-  includeComments: z.boolean().optional(),
-  includeStrings: z.boolean().optional(),
-  includeFilenames: z.boolean().optional(),
-  maxEdits: z.number().int().min(1).max(MAX_RENAME_PREVIEW_EDITS).optional(),
-});
+const searchSchema = z
+  .object({
+    query: z.string(),
+    mode: z.enum(["hybrid", "symbol", "path", "text", "graph", "sql"]).optional(),
+    from: z.string().optional(),
+    depth: z.number().int().nonnegative().optional(),
+    limit: z.number().int().nonnegative().optional(),
+  })
+  .strict();
 
-const refactorPlanSchema = z.object({
-  handle: z.string(),
-  renameTo: z.string().optional(),
-  maxReferences: z.number().int().nonnegative().max(MAX_REFACTOR_PLAN_LIMIT).optional(),
-  maxCallers: z.number().int().nonnegative().max(MAX_REFACTOR_PLAN_LIMIT).optional(),
-  maxHierarchy: z.number().int().nonnegative().max(MAX_REFACTOR_PLAN_LIMIT).optional(),
-  includeSource: z.boolean().optional(),
-});
+const workspaceSymbolsSchema = z
+  .object({
+    query: z.string(),
+    kinds: z.array(z.nativeEnum(SymbolKind)).optional(),
+    exportedOnly: z.boolean().optional(),
+    includeImports: z.boolean().optional(),
+    fileGlob: z.string().optional(),
+    limit: z.number().int().nonnegative().max(MAX_WORKSPACE_SYMBOL_LIMIT).optional(),
+  })
+  .strict();
 
-const callHierarchySchema = z.object({
-  handle: z.string(),
-  depth: z.number().int().min(1).max(5).optional(),
-  limit: z.number().int().nonnegative().max(500).optional(),
-  includeHeuristic: z.boolean().optional(),
-});
-const callsSchema = callHierarchySchema.extend({
-  direction: z.enum(["callers", "callees"]),
-});
+const renamePreviewSchema = z
+  .object({
+    handle: z.string(),
+    newName: z.string(),
+    includeComments: z.boolean().optional(),
+    includeStrings: z.boolean().optional(),
+    includeFilenames: z.boolean().optional(),
+    maxEdits: z.number().int().min(1).max(MAX_RENAME_PREVIEW_EDITS).optional(),
+  })
+  .strict();
 
-const typeHierarchySchema = z.object({
-  handle: z.string(),
-  depth: z.number().int().min(1).max(10).optional(),
-  limit: z.number().int().nonnegative().max(500).optional(),
-});
-const typeHierarchyUnifiedSchema = typeHierarchySchema.extend({
-  direction: z.enum(["supertypes", "subtypes"]),
-});
+const refactorPlanSchema = z
+  .object({
+    handle: z.string(),
+    renameTo: z.string().optional(),
+    maxReferences: z.number().int().nonnegative().max(MAX_REFACTOR_PLAN_LIMIT).optional(),
+    maxCallers: z.number().int().nonnegative().max(MAX_REFACTOR_PLAN_LIMIT).optional(),
+    maxHierarchy: z.number().int().nonnegative().max(MAX_REFACTOR_PLAN_LIMIT).optional(),
+    includeSource: z.boolean().optional(),
+  })
+  .strict();
 
-const implementationsSchema = z.object({
-  handle: z.string(),
-  limit: z.number().int().nonnegative().max(500).optional(),
-});
+const callHierarchySchema = z
+  .object({
+    handle: z.string(),
+    depth: z.number().int().min(1).max(5).optional(),
+    limit: z.number().int().nonnegative().max(500).optional(),
+    includeHeuristic: z.boolean().optional(),
+  })
+  .strict();
+const callsSchema = callHierarchySchema
+  .extend({
+    direction: z.enum(["callers", "callees"]),
+  })
+  .strict();
 
-const exploreSchema = z.object({
-  query: z.string(),
-  limit: z.number().int().nonnegative().max(50).optional(),
-  maxPackets: z.number().int().nonnegative().max(10).optional(),
-  maxPaths: z.number().int().nonnegative().max(10).optional(),
-  includeSource: z.boolean().optional(),
-});
+const typeHierarchySchema = z
+  .object({
+    handle: z.string(),
+    depth: z.number().int().min(1).max(10).optional(),
+    limit: z.number().int().nonnegative().max(500).optional(),
+  })
+  .strict();
+const typeHierarchyUnifiedSchema = typeHierarchySchema
+  .extend({
+    direction: z.enum(["supertypes", "subtypes"]),
+  })
+  .strict();
 
-const orientSchema = z.object({
-  includeRoots: z.array(z.string()).optional(),
-  budget: z.enum(["small", "medium", "large"]).optional(),
-});
+const implementationsSchema = z
+  .object({
+    handle: z.string(),
+    limit: z.number().int().nonnegative().max(500).optional(),
+  })
+  .strict();
 
-const packetGetSchema = z.object({
-  target: z.string(),
-  maxSymbols: z.number().int().positive().max(200).optional(),
-  maxSnippets: z.number().int().positive().max(50).optional(),
-  maxDuplicates: z.number().int().positive().max(20).optional(),
-});
+const exploreSchema = z
+  .object({
+    query: z.string(),
+    limit: z.number().int().nonnegative().max(50).optional(),
+    maxPackets: z.number().int().nonnegative().max(10).optional(),
+    maxPaths: z.number().int().nonnegative().max(10).optional(),
+    includeSource: z.boolean().optional(),
+  })
+  .strict();
 
-const getFileSchema = z.object({
-  file: z.string(),
-  offset: z.number().int().positive().optional(),
-  limit: z.number().int().positive().max(MAX_FILE_VIEW_LINES).optional(),
-  maxBytes: z.number().int().positive().max(MAX_FILE_VIEW_BYTES).optional(),
-  includeGraphContext: z.boolean().optional(),
-  allowSensitive: z.boolean().optional(),
-});
+const orientSchema = z
+  .object({
+    includeRoots: z.array(z.string()).optional(),
+    budget: z.enum(["small", "medium", "large"]).optional(),
+  })
+  .strict();
 
-const handleSchema = z.object({
-  handle: z.string(),
-});
+const packetGetSchema = z
+  .object({
+    target: z.string(),
+    maxSymbols: z.number().int().positive().max(200).optional(),
+    maxSnippets: z.number().int().positive().max(50).optional(),
+    maxDuplicates: z.number().int().positive().max(20).optional(),
+  })
+  .strict();
+
+const getFileSchema = z
+  .object({
+    file: z.string(),
+    offset: z.number().int().positive().optional(),
+    limit: z.number().int().positive().max(MAX_FILE_VIEW_LINES).optional(),
+    maxBytes: z.number().int().positive().max(MAX_FILE_VIEW_BYTES).optional(),
+    includeGraphContext: z.boolean().optional(),
+    allowSensitive: z.boolean().optional(),
+  })
+  .strict();
+
+const handleSchema = z
+  .object({
+    handle: z.string(),
+  })
+  .strict();
 
 const navigationSchema = z
   .object({
@@ -1518,6 +1793,7 @@ const navigationSchema = z
     line: z.number().int().positive().optional(),
     column: z.number().int().nonnegative().optional(),
   })
+  .strict()
   .refine(
     (request) => {
       const hasHandle = request.handle !== undefined;
@@ -1537,6 +1813,7 @@ const refsSchema = z
     column: z.number().int().nonnegative().optional(),
     limit: z.number().int().nonnegative().optional(),
   })
+  .strict()
   .refine(
     (request) => {
       const hasHandle = request.handle !== undefined;
@@ -1550,46 +1827,62 @@ const refsSchema = z
     },
   );
 
-const fileGraphSchema = z.object({
-  file: z.string(),
-  depth: z.number().int().nonnegative().optional(),
-  limit: z.number().int().nonnegative().optional(),
-});
-const fileDepsUnifiedSchema = fileGraphSchema.extend({
-  direction: z.enum(["deps", "rdeps"]),
-});
+const fileGraphSchema = z
+  .object({
+    file: z.string(),
+    depth: z.number().int().nonnegative().optional(),
+    limit: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+const fileDepsUnifiedSchema = fileGraphSchema
+  .extend({
+    direction: z.enum(["deps", "rdeps"]),
+  })
+  .strict();
 
-const pathSchema = z.object({
-  from: z.string(),
-  to: z.string(),
-});
+const pathSchema = z
+  .object({
+    from: z.string(),
+    to: z.string(),
+  })
+  .strict();
 
-const gitRangeSchema = z.object({
-  base: z.string(),
-  head: z.string(),
-});
+const gitRangeSchema = z
+  .object({
+    base: z.string(),
+    head: z.string(),
+  })
+  .strict();
 
-const reviewSchema = z.object({
-  base: z.string(),
-  head: z.string(),
-  reviewDepth: z.enum(["minimal", "standard", "deep"]).optional(),
-});
+const reviewSchema = z
+  .object({
+    base: z.string(),
+    head: z.string(),
+    reviewDepth: z.enum(["minimal", "standard", "deep"]).optional(),
+  })
+  .strict();
 
-const querySqliteSchema = z.object({
-  query: z.string(),
-  params: z.array(z.union([z.string(), z.number(), z.null()])).optional(),
-  limit: z.number().int().nonnegative().optional(),
-});
+const querySqliteSchema = z
+  .object({
+    query: z.string(),
+    params: z.array(z.union([z.string(), z.number(), z.null()])).optional(),
+    limit: z.number().int().nonnegative().optional(),
+  })
+  .strict();
 
-const refreshIndexSchema = z.object({
-  warmup: z.enum(["off", "base", "symbols"]).optional(),
-});
+const refreshIndexSchema = z
+  .object({
+    warmup: z.enum(["off", "base", "symbols"]).optional(),
+  })
+  .strict();
 
-const artifactBuildSchema = z.object({
-  outDir: z.string().optional(),
-  sqlite: z.boolean().optional(),
-  graphJson: z.boolean().optional(),
-  report: z.boolean().optional(),
-  questions: z.boolean().optional(),
-  force: z.boolean().optional(),
-});
+const artifactBuildSchema = z
+  .object({
+    outDir: z.string().optional(),
+    sqlite: z.boolean().optional(),
+    graphJson: z.boolean().optional(),
+    report: z.boolean().optional(),
+    questions: z.boolean().optional(),
+    force: z.boolean().optional(),
+  })
+  .strict();

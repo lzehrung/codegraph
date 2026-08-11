@@ -21,6 +21,7 @@ import * as nativeRuntime from "../src/native/treeSitterNative.js";
 import { supportForFile } from "../src/languages.js";
 import type { NativeCapture, NativeQueryResults } from "../src/native/treeSitterNative.js";
 import { simplifyNativeTestModuleIndex } from "./helpers/native.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 
 const nativeDescribe = nativeRuntime.isNativeTreeSitterAvailable() ? describe : describe.skip;
 
@@ -322,7 +323,7 @@ nativeDescribe("native fallback contract", () => {
         report,
       });
 
-      expect(simplifyNativeTestModuleIndex(index.byFile.get(alphaNormalized)!)).toEqual(jsOnlyAlpha);
+      expect(simplifyNativeTestModuleIndex(index.byFile.get(fileIdentityKey(alphaNormalized))!)).toEqual(jsOnlyAlpha);
       expect(report.backend?.native.byLanguage.ts?.filesSeen).toBe(2);
       expect(report.backend?.native.byLanguage.ts?.filesUsed).toBe(1);
       expect(report.backend?.native.byLanguage.ts?.filesFellBack).toBe(1);
@@ -334,7 +335,7 @@ nativeDescribe("native fallback contract", () => {
         message: "forced native query failure",
       });
 
-      const betaModule = index.byFile.get(betaNormalized);
+      const betaModule = index.byFile.get(fileIdentityKey(betaNormalized));
       expect(betaModule).toBeDefined();
       expect(spy).toHaveBeenCalled();
     } finally {
@@ -358,7 +359,7 @@ nativeDescribe("native fallback contract", () => {
         report,
       });
 
-      expect(simplifyNativeTestModuleIndex(index.byFile.get(alphaNormalized)!)).toEqual(jsOnlyAlpha);
+      expect(simplifyNativeTestModuleIndex(index.byFile.get(fileIdentityKey(alphaNormalized))!)).toEqual(jsOnlyAlpha);
       expect(report.backend?.native.byLanguage.ts?.filesSeen).toBe(2);
       expect(report.backend?.native.byLanguage.ts?.filesUsed).toBe(1);
       expect(report.backend?.native.byLanguage.ts?.filesFellBack).toBe(1);

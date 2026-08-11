@@ -619,6 +619,77 @@ describe("project file discovery", () => {
     expect(discovered.has(normalize(ignoredFile))).toBe(false);
   });
 
+  it("excludes vendored dependency trees by default across ecosystems", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-default-ignores-"));
+    const keptRuby = path.join(tempDir, "app", "main.rb");
+    const keptPython = path.join(tempDir, "src", "main.py");
+    const keptSwift = path.join(tempDir, "Sources", "App.swift");
+    const excluded = [
+      path.join(tempDir, "vendor", "bundle", "gems", "example", "lib", "example.rb"),
+      path.join(tempDir, ".venv", "lib", "python3.12", "site-packages", "pkg", "mod.py"),
+      path.join(tempDir, "venv", "lib", "python3.12", "site-packages", "pkg", "mod.py"),
+      path.join(tempDir, "lib", "python3.12", "site-packages", "pkg", "mod.py"),
+      path.join(tempDir, ".build", "debug", "App.swift"),
+      path.join(tempDir, "Pods", "AFNetworking", "AFNetworking.h"),
+      path.join(tempDir, "env", "config.py"),
+      path.join(tempDir, "vendor", "first_party.go"),
+      path.join(tempDir, "bin", "tools.ts"),
+      path.join(tempDir, "obj", "Debug", "app.cs"),
+    ];
+
+    await createFile(keptRuby, "puts 1\n");
+    await createFile(keptPython, "x = 1\n");
+    await createFile(keptSwift, "struct App {}\n");
+    await Promise.all(excluded.map(async (filePath) => createFile(filePath, "// excluded fixture\n")));
+
+    const discovered = await listProjectFiles(tempDir, undefined, { useGitignore: false });
+    const discoveredSet = new Set(discovered.map(normalize));
+
+    expect(discoveredSet.has(normalize(keptRuby))).toBe(true);
+    expect(discoveredSet.has(normalize(keptPython))).toBe(true);
+    expect(discoveredSet.has(normalize(keptSwift))).toBe(true);
+    expect(discoveredSet.has(normalize(path.join(tempDir, "env", "config.py")))).toBe(true);
+    expect(discoveredSet.has(normalize(path.join(tempDir, "vendor", "first_party.go")))).toBe(true);
+    expect(discoveredSet.has(normalize(path.join(tempDir, "bin", "tools.ts")))).toBe(true);
+    expect(discoveredSet.has(normalize(path.join(tempDir, "obj", "Debug", "app.cs")))).toBe(true);
+
+    for (const filePath of [
+      path.join(tempDir, "vendor", "bundle", "gems", "example", "lib", "example.rb"),
+      path.join(tempDir, ".venv", "lib", "python3.12", "site-packages", "pkg", "mod.py"),
+      path.join(tempDir, "venv", "lib", "python3.12", "site-packages", "pkg", "mod.py"),
+      path.join(tempDir, "lib", "python3.12", "site-packages", "pkg", "mod.py"),
+      path.join(tempDir, ".build", "debug", "App.swift"),
+      path.join(tempDir, "Pods", "AFNetworking", "AFNetworking.h"),
+    ]) {
+      expect(discoveredSet.has(normalize(filePath))).toBe(false);
+    }
+  });
+
+  it("lets includeGlobs re-include default-ignored vendored directories", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-ignore-override-"));
+    const kept = path.join(tempDir, "src", "main.py");
+    const vendored = path.join(tempDir, "vendor", "bundle", "gems", "example", "lib", "example.rb");
+    const sitePackage = path.join(tempDir, ".venv", "lib", "python3.12", "site-packages", "pkg", "mod.py");
+    await createFile(kept, "x = 1\n");
+    await createFile(vendored, "puts 1\n");
+    await createFile(sitePackage, "x = 1\n");
+
+    const excludedByDefault = await listProjectFiles(tempDir, undefined, { useGitignore: false });
+    const excludedSet = new Set(excludedByDefault.map(normalize));
+    expect(excludedSet.has(normalize(vendored))).toBe(false);
+    expect(excludedSet.has(normalize(sitePackage))).toBe(false);
+    expect(excludedSet.has(normalize(kept))).toBe(true);
+
+    const overridden = await listProjectFiles(tempDir, undefined, {
+      includeGlobs: ["vendor/bundle/**", ".venv/**"],
+      useGitignore: false,
+    });
+    const overriddenSet = new Set(overridden.map(normalize));
+    expect(overriddenSet.has(normalize(vendored))).toBe(true);
+    expect(overriddenSet.has(normalize(sitePackage))).toBe(true);
+    expect(overriddenSet.has(normalize(kept))).toBe(false);
+  });
+
   it("supports disabling .gitignore filtering and applying additive include/ignore globs", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codegraph-project-discovery-"));
     const appFile = path.join(tempDir, "src", "app.ts");
@@ -867,6 +938,18 @@ describe("createDiscoveredFileMatcher", () => {
     expect(isDiscovered(`${root}/.codegraph-cache/index-v1/manifest.json`)).toBe(false);
     expect(isDiscovered(`${root}/.codegraph-cache/index-v1/notes.md`)).toBe(false);
     expect(isDiscovered(`/outside/index.ts`)).toBe(false);
+  });
+
+  it("lets includeGlobs override default ignores in createDiscoveredFileMatcher", () => {
+    const root = normalize(path.resolve("/tmp/codegraph-matcher-root"));
+    const isDiscovered = createDiscoveredFileMatcher(root, root, ["**/*.rb", "**/*.py"], {
+      includeGlobs: ["vendor/bundle/**", ".venv/**"],
+    });
+
+    expect(isDiscovered(`${root}/vendor/bundle/gems/example.rb`)).toBe(true);
+    expect(isDiscovered(`${root}/.venv/lib/site-packages/pkg.py`)).toBe(true);
+    expect(isDiscovered(`${root}/node_modules/pkg/index.py`)).toBe(false);
+    expect(isDiscovered(`${root}/src/main.py`)).toBe(false);
   });
 
   it("applies user include and ignore globs relative to globRoot", () => {

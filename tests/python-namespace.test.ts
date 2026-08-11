@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import { collectGraph, buildProjectIndex, goToDefinition, findReferences } from "../src/index.js";
 import fsp from "node:fs/promises";
+import { fileIdentityKey } from "../src/util/paths.js";
 
 async function ensureFixture(root: string) {
   const utilDir = path.join(root, "pkg_ns", "submod");
@@ -53,7 +54,7 @@ describe("Python namespace packages (PEP 420)", () => {
     await ensureFixture(root);
     const index = await buildProjectIndex(root);
     const appMain = path.join(root, "app", "main.py").replace(/\\/g, "/");
-    const mainModule = index.byFile.get(appMain);
+    const mainModule = index.byFile.get(fileIdentityKey(appMain));
     const submodImport = mainModule?.imports.find(
       (entry) => entry.kind === "namespace" && entry.localNS === "submod" && entry.from === "pkg_ns",
     );

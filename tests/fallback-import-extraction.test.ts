@@ -9,6 +9,7 @@ import {
   isNativeTreeSitterAvailable,
 } from "../src/native/treeSitterNative.js";
 import * as nativeRuntime from "../src/native/treeSitterNative.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
   return await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -40,7 +41,7 @@ nativeTsDescribe("native TypeScript import binding recovery", () => {
 
     try {
       const index = await buildProjectIndexFromFiles(root, [main, dep]);
-      const mod = index.byFile.get(main.replace(/\\/g, "/"));
+      const mod = index.byFile.get(fileIdentityKey(main));
       expect(mod?.imports).toEqual([
         expect.objectContaining({ kind: "default", local: "dep", from: "./dep", mechanism: "cjs" }),
       ]);
@@ -62,7 +63,7 @@ nativeTsDescribe("native TypeScript import binding recovery", () => {
 
     try {
       const index = await buildProjectIndexFromFiles(root, [main, dep], { native: "off" });
-      const mod = index.byFile.get(main.replace(/\\/g, "/"));
+      const mod = index.byFile.get(fileIdentityKey(main));
       expect(mod?.imports).toEqual([
         expect.objectContaining({ kind: "default", local: "depRef", from: "./dep", mechanism: "cjs" }),
       ]);
@@ -89,7 +90,7 @@ describe("Import extraction fallback reporting", () => {
 
     const normalizedMain = main.replace(/\\/g, "/");
     const normalizedDep = dep.replace(/\\/g, "/");
-    const mod = index.byFile.get(normalizedMain);
+    const mod = index.byFile.get(fileIdentityKey(normalizedMain));
     const importBinding = mod?.imports.find(
       (entry) => entry.kind === "default" && entry.local === "util" && entry.from === "./dep",
     );
@@ -113,7 +114,7 @@ describe("Import extraction fallback reporting", () => {
 
     try {
       const index = await buildProjectIndexFromFiles(root, [main, types], { native: "off" });
-      const mod = index.byFile.get(main.replace(/\\/g, "/"));
+      const mod = index.byFile.get(fileIdentityKey(main));
       expect(mod?.imports).toEqual([
         expect.objectContaining({ kind: "named", imported: "Foo", local: "Foo", typeOnly: true }),
         expect.objectContaining({ kind: "named", imported: "bar", local: "bar", typeOnly: false }),
@@ -169,6 +170,9 @@ describe("Import extraction fallback reporting", () => {
     ]);
     expect(specs[0]?.typeOnly).toBe(true);
     expect(specs.at(-1)?.typeOnly).toBe(true);
+    expect(specs.slice(4, 6).map((entry) => entry.exportCondition)).toEqual(["require", "require"]);
+    expect(specs[6]?.exportCondition).toBeUndefined();
+    expect(specs[7]?.exportCondition).toBe("require");
   });
 
   it("ignores import and require examples inside string literals", () => {

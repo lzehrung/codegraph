@@ -214,9 +214,15 @@ export function writeStderrLine(message: string): void {
   }
 }
 
+function shouldIncludeErrorStack(): boolean {
+  if (process.argv.includes("--debug")) return true;
+  const value = process.env.CODEGRAPH_DEBUG?.trim().toLowerCase();
+  return value === "1" || value === "true" || value === "yes";
+}
+
 export function writeError(error: unknown): void {
   if (error instanceof Error) {
-    writeStderrLine(error.stack ?? error.message);
+    writeStderrLine(shouldIncludeErrorStack() ? (error.stack ?? error.message) : error.message);
     return;
   }
   writeStderrLine(String(error));
@@ -282,10 +288,30 @@ function formatParserBackendSummary(report: BuildReport | undefined): string | u
   return `Parser backend degradation: ${parser.total} file(s) [${parts.join(", ")}]`;
 }
 
+/**
+ * True when the run actually operated in a lower-accuracy mode: native
+ * tree-sitter unavailable entirely, or some files fell back to regex/graph-
+ * only extraction. Distinct from `showProgress`, which only controls whether
+ * the *extra* per-language breakdown is printed.
+ */
+function isNativeBackendDegraded(report: BuildReport | undefined): boolean {
+  const native = report?.backend?.native;
+  if (!native) return false;
+  if (!native.available) return true;
+  if (native.filesFellBack > 0) return true;
+  return (report?.backend?.parser?.total ?? 0) > 0;
+}
+
 export function maybeWriteNativeBackendStatus(report: BuildReport | undefined, showProgress: boolean): void {
+  // Degradation is signaled unconditionally so a plain `graph`/`index` run
+  // (no --progress, no --report) still tells the user their results are
+  // reduced-accuracy instead of silently returning them. Healthy runs stay
+  // quiet unless --progress was requested, matching prior behavior.
+  if (showProgress || isNativeBackendDegraded(report)) {
+    const message = formatNativeBackendStatus(report);
+    if (message) writeStderrLine(message);
+  }
   if (!showProgress) return;
-  const message = formatNativeBackendStatus(report);
-  if (message) writeStderrLine(message);
   const summary = formatNativeBackendFallbackSummary(report);
   if (summary) writeStderrLine(summary);
   const parserSummary = formatParserBackendSummary(report);

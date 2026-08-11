@@ -1,6 +1,6 @@
 import type { ModuleIndex, ProjectIndex, ResolvedExport, SymbolDef } from "../../indexer/types.js";
 import type { ImportBinding } from "../../indexer/types.js";
-import { normalizePath } from "../../util/paths.js";
+import { fileIdentityKey, normalizePath } from "../../util/paths.js";
 
 export type ImportAliasMaps = {
   aliasToTargetDef: Map<string, SymbolDef>;
@@ -12,7 +12,7 @@ type ResolveExportFrom = (file: string, exportedName: string) => SymbolDef | nul
 
 function targetModuleForImport(index: ProjectIndex, imp: ImportBinding): ModuleIndex | undefined {
   const targetFile = typeof imp.resolved === "string" ? normalizePath(imp.resolved) : undefined;
-  return targetFile ? index.byFile.get(targetFile) : undefined;
+  return targetFile ? index.byFile.get(fileIdentityKey(targetFile)) : undefined;
 }
 
 export function buildImportAliasMaps(

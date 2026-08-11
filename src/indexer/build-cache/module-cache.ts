@@ -16,13 +16,13 @@ import {
   type SqliteTableColumn,
 } from "../../util/sqliteSchema.js";
 import type { BuildOptions, BuildReport, ModuleIndex } from "../types.js";
-import { normalizePath } from "../../util/paths.js";
+import { fileIdentityKey, normalizePath } from "../../util/paths.js";
 import { lruMapGet, lruMapSet } from "../../util/lruMap.js";
 import { initCacheReport } from "./reports.js";
+import { getImplementationFingerprint } from "./options.js";
 
-// v2: brotli-compress the payload (roughly 9x smaller on disk); JSON.stringify(mod) is
-// unchanged, only the on-disk byte encoding differs.
-const PARSED_CACHE_VERSION = 2;
+// v3: implementation fingerprint and root-namespaced custom cache directories.
+const PARSED_CACHE_VERSION = 3;
 const MODULE_CACHE_SCHEMA_VERSION = 1;
 const MODULE_CACHE_TABLE = "module_cache";
 const MODULE_CACHE_SCHEMA_VERSION_KEY = "module_cache.schema_version";
@@ -42,8 +42,8 @@ type ModuleCacheEntry = {
 
 const MAX_MEMORY_CACHE_ENTRIES = 5000;
 const memoryCache = new Map<string, ModuleCacheEntry>();
-let cachedRuntimeFingerprint: string | undefined;
-let cachedRuntimeHash: string | undefined;
+let cachedExecutionFingerprint: string | undefined;
+let cachedExecutionHash: string | undefined;
 
 type DiskModuleCache = {
   db: SqliteDatabase;
@@ -84,8 +84,18 @@ function reportMissingNodeSqlite(logLevel: import("../../logging.js").LogLevel |
   );
 }
 
+function projectCacheNamespace(projectRoot: string): string {
+  const rootIdentity = fileIdentityKey(path.resolve(projectRoot));
+  const hash = crypto.createHash("sha256").update(rootIdentity).digest("hex");
+  return `project-${hash}`;
+}
+
 export function cacheRoot(projectRoot: string, opts?: BuildOptions): string {
-  return opts?.cacheDir || path.join(projectRoot, ".codegraph-cache", "index-v1");
+  if (!opts?.cacheDir) return path.join(projectRoot, ".codegraph-cache", "index-v1");
+  const namespace = projectCacheNamespace(projectRoot);
+  const configuredCacheDir = path.resolve(opts.cacheDir);
+  if (path.basename(configuredCacheDir) === namespace) return configuredCacheDir;
+  return path.join(configuredCacheDir, namespace);
 }
 
 export function cacheDatabasePath(projectRoot: string, opts: BuildOptions | undefined, filename: string): string {
@@ -286,12 +296,13 @@ export async function cacheSignatureForFile(
     sigInfo.contentHash = contentSignature;
   }
   const runtimeFingerprint = getNativeRuntimeFingerprint(opts?.native);
-  if (runtimeFingerprint !== cachedRuntimeFingerprint || !cachedRuntimeHash) {
-    cachedRuntimeFingerprint = runtimeFingerprint;
-    cachedRuntimeHash = crypto.createHash("sha256").update(runtimeFingerprint).digest("hex");
+  const implementationFingerprint = getImplementationFingerprint();
+  const executionFingerprint = `${runtimeFingerprint}\0${implementationFingerprint}`;
+  if (executionFingerprint !== cachedExecutionFingerprint || !cachedExecutionHash) {
+    cachedExecutionFingerprint = executionFingerprint;
+    cachedExecutionHash = crypto.createHash("sha256").update(executionFingerprint).digest("hex");
   }
-  const runtimeHash = cachedRuntimeHash;
-  return `${contentSignature}:${runtimeHash}`;
+  return `${contentSignature}:${cachedExecutionHash}`;
 }
 
 export async function buildBloomFilterForFile(

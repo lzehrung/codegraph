@@ -5,7 +5,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import fg from "fast-glob";
 import { stripHashInlineComment } from "./comments.js";
-import { pickPackageExportTarget } from "./packageExports.js";
+import { resolvePackageExportTargets, type PackageExportConditionMode } from "./packageExports.js";
 import { listResolutionCandidates } from "./resolutionCandidates.js";
 
 async function pathMatchesCachedStat(
@@ -239,7 +239,7 @@ export async function loadWorkspaceConfig(projectRoot: string): Promise<Workspac
         name,
         path: dir,
         ...(typeof info.main === "string" ? { main: info.main } : {}),
-        ...(info.exports ? { exports: info.exports } : {}),
+        ...(Object.hasOwn(info, "exports") ? { exports: info.exports } : {}),
       });
     }
   }
@@ -269,6 +269,7 @@ export function listWorkspacePackageResolutionCandidates(
   spec: string,
   ws: WorkspaceConfig | undefined,
   resolutionExtensions?: readonly string[],
+  exportCondition: PackageExportConditionMode = "import",
 ): string[] {
   if (!ws) return [];
   const { name, subpath } = resolvePackageSubpath(spec);
@@ -279,18 +280,12 @@ export function listWorkspacePackageResolutionCandidates(
   const pushRelativeCandidates = (rel: string): void => {
     candidates.push(...listResolutionCandidates(path.resolve(baseDir, rel), resolutionExtensions));
   };
-  if (pkg.exports) {
+  if (Object.hasOwn(pkg, "exports")) {
     const key = subpath ? `./${subpath}` : ".";
-    if (typeof pkg.exports === "string" && key === ".") {
-      pushRelativeCandidates(pkg.exports);
-    } else if (typeof pkg.exports === "object") {
-      const exportMap = pkg.exports as Record<string, unknown>;
-      const target = exportMap[key] ?? (key === "." ? exportMap["."] : undefined);
-      const rel = pickPackageExportTarget(target);
-      if (rel) {
-        pushRelativeCandidates(rel);
-      }
+    for (const target of resolvePackageExportTargets(pkg.exports, key, exportCondition)) {
+      pushRelativeCandidates(target);
     }
+    return Array.from(new Set(candidates));
   }
 
   if (subpath) {
@@ -309,12 +304,13 @@ export async function resolveWorkspacePackage(
   spec: string,
   ws: WorkspaceConfig | undefined,
   resolutionExtensions?: readonly string[],
+  exportCondition: PackageExportConditionMode = "import",
 ): Promise<string | null> {
   if (!ws) return null;
   const { name } = resolvePackageSubpath(spec);
   const pkg = ws.packages.get(name);
   if (!pkg) return null;
-  for (const candidate of listWorkspacePackageResolutionCandidates(spec, ws, resolutionExtensions)) {
+  for (const candidate of listWorkspacePackageResolutionCandidates(spec, ws, resolutionExtensions, exportCondition)) {
     if (await fileExists(candidate)) {
       return path.resolve(candidate);
     }

@@ -3,6 +3,7 @@ import { type ProjectIndex } from "../indexer/types.js";
 import { buildSymbolGraphDetailed } from "../graphs/symbol-graph-detailed.js";
 import { type SymbolEdge } from "../graphs/symbol-graph.js";
 import { buildGraphAdjacency, getForwardNeighbors, getReverseNeighbors } from "../graphs/adjacency.js";
+import { fileIdentityKey } from "../util/paths.js";
 import { createGraphFileResolver } from "./path.js";
 import { compileTestPatterns, createIndexTestFileMatcher } from "./testPatterns.js";
 
@@ -279,9 +280,10 @@ export function listCandidateTestFiles(
   const isIndexTestFile = createIndexTestFileMatcher(index, allPatterns, projectRoot, resolvedChangedFiles);
 
   const upsertCandidate = (candidate: CandidateTestFile): void => {
-    const existing = candidates.get(candidate.file);
+    const key = fileIdentityKey(candidate.file);
+    const existing = candidates.get(key);
     if (!existing || candidateConfidenceRank(candidate.confidence) > candidateConfidenceRank(existing.confidence)) {
-      candidates.set(candidate.file, candidate);
+      candidates.set(key, candidate);
     }
   };
 
@@ -320,8 +322,8 @@ export function listCandidateTestFiles(
   // The navigation candidate index can retain proven resolved-import links that are
   // absent from a sparse file graph. Treat those symbol-owner reverse links as high confidence.
   for (const file of symbolFiles) {
-    for (const dependent of index.referenceCandidates?.byTargetFile.get(file) ?? []) {
-      if (isIndexTestFile(dependent) && !candidates.has(dependent)) {
+    for (const dependent of index.referenceCandidates?.byTargetFile.get(fileIdentityKey(file)) ?? []) {
+      if (isIndexTestFile(dependent) && !candidates.has(fileIdentityKey(dependent))) {
         upsertCandidate({
           file: dependent,
           confidence: "high",
@@ -358,8 +360,9 @@ export function listCandidateTestFiles(
 
   // Pattern matches are low-confidence fill-in only. Collect all matches so the
   // deterministic rank/path ordering is applied before the result limit.
-  for (const [file] of index.byFile) {
-    if (!candidates.has(file) && isIndexTestFile(file)) {
+  for (const module of index.byFile.values()) {
+    const file = module.file;
+    if (!candidates.has(fileIdentityKey(file)) && isIndexTestFile(file)) {
       upsertCandidate({
         file,
         confidence: "low",

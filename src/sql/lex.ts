@@ -15,15 +15,32 @@ export function createSqlObjectNameRegExp(flags = "iy"): RegExp {
 export function normalizeSqlIdentifierPart(raw: string): string {
   const trimmed = raw.trim();
   if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
-    return trimmed.slice(1, -1).replace(/""/g, '"');
+    return `"${trimmed.slice(1, -1).replace(/""/g, '"')}"`;
   }
   if (trimmed.startsWith("`") && trimmed.endsWith("`")) {
-    return trimmed.slice(1, -1);
+    return `\`${trimmed.slice(1, -1)}\``;
   }
   if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-    return trimmed.slice(1, -1);
+    return `[${trimmed.slice(1, -1)}]`;
   }
   return trimmed;
+}
+export function sqlObjectLookupKey(name: string): string {
+  return name
+    .split(".")
+    .map((part) => {
+      const trimmed = part.trim();
+      const quoted =
+        (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+        (trimmed.startsWith("`") && trimmed.endsWith("`")) ||
+        (trimmed.startsWith("[") && trimmed.endsWith("]"));
+      return quoted ? trimmed : trimmed.toLowerCase();
+    })
+    .join(".");
+}
+
+export function sqlObjectBaseNameLookupKey(name: string): string {
+  return sqlObjectLookupKey(sqlObjectBaseName(name));
 }
 
 export function normalizeSqlObjectName(raw: string | undefined): string | null {

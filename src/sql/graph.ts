@@ -80,13 +80,20 @@ function relatedCandidateKindForFact(fact: SqlStatementFact): SqlArtifactNodeKin
 
 function candidateNodeId(kind: SqlArtifactNodeKind, name: string): string {
   // Case-preserving: quoted identifiers (backtick/bracket/double-quote) are
-  // case-sensitive on several dialects (MySQL on case-sensitive filesystems,
-  // Postgres double-quoted, T-SQL with a case-sensitive collation), and
-  // extractFacts already normalizes via normalizeSqlIdentifierPart, which
-  // preserves case. Lowercasing here would silently merge distinct objects
-  // that only differ by case (e.g. a backtick-quoted `MyTable` and an
-  // unquoted mytable reference).
-  return `sql:candidate:${kind}:${name}`;
+  // case-sensitive on several dialects. IDs expose the identifier itself,
+  // without SQL quoting delimiters, so quoted `MyTable` remains distinct from
+  // unquoted `mytable` while matching the user-visible candidate name.
+  const displayName = name
+    .split(".")
+    .map((part) => {
+      const trimmed = part.trim();
+      if (trimmed.startsWith("`") && trimmed.endsWith("`")) return trimmed.slice(1, -1);
+      if (trimmed.startsWith("[") && trimmed.endsWith("]")) return trimmed.slice(1, -1);
+      if (trimmed.startsWith('"') && trimmed.endsWith('"')) return trimmed.slice(1, -1).replace(/""/g, '"');
+      return trimmed;
+    })
+    .join(".");
+  return `sql:candidate:${kind}:${displayName}`;
 }
 
 function edgeKindForFact(kind: SqlFactKind): SqlArtifactEdgeKind {

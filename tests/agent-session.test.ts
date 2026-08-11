@@ -11,6 +11,7 @@ import { createProjectSnapshotIdentity } from "../src/indexer/build-cache.js";
 import type { ProjectIndex } from "../src/indexer/types.js";
 import * as projectFilesModule from "../src/util/projectFiles.js";
 import * as gitModule from "../src/util/git.js";
+import { fileIdentityKey, normalizePath } from "../src/util/paths.js";
 import { runGit as git } from "./helpers/git.js";
 
 async function mkRepo(): Promise<string> {
@@ -34,6 +35,10 @@ function detailedSymbolGraphSnapshotPath(root: string): string {
   return path.join(root, ".codegraph-cache", "index-v1", "detailed-symbol-graph.json");
 }
 
+function projectSnapshotPath(root: string): string {
+  return path.join(root, ".codegraph-cache", "index-v1", "project-index-snapshot.json");
+}
+
 async function readDetailedSidecar(sidecarPath: string): Promise<unknown> {
   const raw = await fs.readFile(sidecarPath);
   return JSON.parse(brotliDecompressSync(raw).toString("utf8"));
@@ -47,6 +52,8 @@ async function writeDetailedSidecar(sidecarPath: string, sidecar: unknown): Prom
 }
 type MutableDetailedSymbolGraphSidecar = {
   version: number;
+  projectRoot: string;
+  implementationFingerprint: string;
   projectSnapshotIdentity: string;
   graphHash: string;
   graph: {
@@ -192,14 +199,25 @@ describe("agent session", () => {
     const sidecarPath = detailedSymbolGraphSnapshotPath(root);
     const sidecar = (await readDetailedSidecar(sidecarPath)) as {
       version: number;
+      projectRoot: string;
+      implementationFingerprint: string;
       projectSnapshotIdentity: string;
       graph: { nodes: unknown[]; edges: unknown[] };
     };
 
     expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
-    expect(sidecar.version).toBe(1);
+    expect(sidecar.version).toBe(2);
+    expect(sidecar.projectRoot).toBe(normalizePath(root));
+    expect(sidecar.implementationFingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(sidecar.projectSnapshotIdentity).toBe(cold.index.projectSnapshotIdentity);
-    expect(Object.keys(sidecar).sort()).toEqual(["graph", "graphHash", "projectSnapshotIdentity", "version"]);
+    expect(Object.keys(sidecar).sort()).toEqual([
+      "graph",
+      "graphHash",
+      "implementationFingerprint",
+      "projectRoot",
+      "projectSnapshotIdentity",
+      "version",
+    ]);
     expect(Object.keys(sidecar.graph).sort()).toEqual(["edges", "nodes"]);
 
     symbolGraphSpy.mockClear();
@@ -282,7 +300,63 @@ describe("agent session", () => {
 
     expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
     expect(rebuilt.symbolGraph.nodes.size).toBeGreaterThan(0);
-    expect(refreshed.version).toBe(1);
+    expect(refreshed.version).toBe(2);
+  });
+
+  it("does not publish an identity or sidecar when the project snapshot write fails", async () => {
+    const root = await mkGitRepo();
+    const snapshotPath = projectSnapshotPath(root);
+    const sidecarPath = detailedSymbolGraphSnapshotPath(root);
+    const originalRename = fs.rename.bind(fs);
+    const rename = vi.spyOn(fs, "rename").mockImplementation(async (source, target) => {
+      if (path.resolve(String(target)) === path.resolve(snapshotPath)) {
+        throw Object.assign(new Error("injected snapshot publish failure"), { code: "EIO" });
+      }
+      await originalRename(source, target);
+    });
+    try {
+      const loaded = await createAgentSession({ root }).loadProject();
+
+      expect(loaded.index.projectSnapshotIdentity).toBeUndefined();
+      await expect(fs.stat(snapshotPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(sidecarPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      rename.mockRestore();
+    }
+  });
+
+  it("rejects a detailed symbol graph sidecar stored for another root", async () => {
+    const root = await mkGitRepo();
+    await createAgentSession({ root }).loadProject();
+    const sidecarPath = detailedSymbolGraphSnapshotPath(root);
+    const sidecar = (await readDetailedSidecar(sidecarPath)) as MutableDetailedSymbolGraphSidecar;
+    sidecar.projectRoot = normalizePath(path.resolve(root, "..", "other-root"));
+    await writeDetailedSidecar(sidecarPath, sidecar);
+    const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+
+    const rebuilt = await createAgentSession({ root }).loadProject();
+
+    expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
+    expect(rebuilt.symbolGraph.nodes.size).toBeGreaterThan(0);
+  });
+
+  it("rejects a detailed sidecar with an extra edge between valid nodes", async () => {
+    const root = await mkGitRepo();
+    const cold = await createAgentSession({ root }).loadProject();
+    const sidecarPath = detailedSymbolGraphSnapshotPath(root);
+    const sidecar = (await readDetailedSidecar(sidecarPath)) as MutableDetailedSymbolGraphSidecar;
+    const [from, to] = sidecar.graph.nodes;
+    if (!from || !to) throw new Error("expected at least two persisted symbol nodes");
+    sidecar.graph.edges.push({ from: from.id, to: to.id, label: "tampered-extra-edge" });
+    refreshDetailedSidecarHash(sidecar);
+    await writeDetailedSidecar(sidecarPath, sidecar);
+    const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+
+    const rebuilt = await createAgentSession({ root }).loadProject();
+
+    expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
+    expect(rebuilt.symbolGraph.edges).toEqual(cold.symbolGraph.edges);
+    expect(rebuilt.symbolGraph.edges.some((edge) => edge.label === "tampered-extra-edge")).toBe(false);
   });
   it("rejects well-typed sidecar tampering against the current project index", async () => {
     const root = await mkGitRepo();
@@ -381,7 +455,7 @@ describe("agent session", () => {
     const refreshed = (await readDetailedSidecar(sidecarPath)) as { version: number };
 
     expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
-    expect(refreshed.version).toBe(1);
+    expect(refreshed.version).toBe(2);
   });
 
   it("invalidates the detailed sidecar after a tracked edit", async () => {
@@ -519,9 +593,11 @@ describe("agent session", () => {
       "schema.sql",
       "util.ts",
     ]);
-    expect(snapshot.index.byFile.get(customPath.replace(/\\/g, "/"))?.locals.map((local) => local.localName)).toContain(
-      "customFeature",
-    );
+    expect(
+      snapshot.index.byFile
+        .get(fileIdentityKey(customPath.replace(/\\/g, "/")))
+        ?.locals.map((local) => local.localName),
+    ).toContain("customFeature");
     expect(buildSpy.mock.calls[0]?.[1]?.languageExtensions).toEqual({ ".custom": "ts" });
   });
 

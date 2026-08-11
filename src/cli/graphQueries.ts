@@ -12,7 +12,7 @@ import {
 } from "../graphs/queries.js";
 import { type GraphBuildOptions } from "../graphs/types.js";
 import type { Graph } from "../types.js";
-import { toProjectDisplayPath } from "../util/paths.js";
+import { fileIdentityKey, toProjectDisplayPath } from "../util/paths.js";
 import { parseOptionalNonNegativeIntegerOption } from "./options.js";
 import { resolveCliProjectFile, writeCliProjectFileError } from "./projectFile.js";
 
@@ -40,6 +40,11 @@ type LoadedGraph = {
   graph: Graph;
   adjacency?: GraphAdjacencyIndex;
 };
+
+function findGraphNodeByIdentity(nodes: ReadonlySet<string>, file: string): string | undefined {
+  const identity = fileIdentityKey(file);
+  return [...nodes].find((node) => fileIdentityKey(node) === identity);
+}
 
 async function loadGraph(context: GraphQueryCommandContext): Promise<LoadedGraph> {
   if (context.collectGraph) {
@@ -130,7 +135,8 @@ async function handleDepsCommand(context: GraphQueryCommandContext): Promise<voi
       targetFile = definition.file;
     }
   }
-  if (!loaded.graph.nodes.has(targetFile)) {
+  const matchedGraphNode = findGraphNodeByIdentity(loaded.graph.nodes, targetFile);
+  if (!matchedGraphNode) {
     const missing = {
       status: "not_found" as const,
       reason: "file_not_indexed",
@@ -141,6 +147,7 @@ async function handleDepsCommand(context: GraphQueryCommandContext): Promise<voi
     else context.writeStdoutLine(`not_found: ${missing.error}`);
     context.exit(1);
   }
+  targetFile = matchedGraphNode;
   const results =
     context.command === "deps"
       ? getDependencies(loaded.graph, targetFile, {
@@ -181,9 +188,12 @@ async function handlePathCommand(context: GraphQueryCommandContext): Promise<voi
   }
 
   const loaded = await loadGraph(context);
-  const pathResult = getShortestPath(loaded.graph, resolvedFrom.file, resolvedTo.file, {
-    ...(loaded.adjacency ? { adjacency: loaded.adjacency } : {}),
-  });
+  const pathResult = getShortestPath(
+    loaded.graph,
+    findGraphNodeByIdentity(loaded.graph.nodes, resolvedFrom.file) ?? resolvedFrom.file,
+    findGraphNodeByIdentity(loaded.graph.nodes, resolvedTo.file) ?? resolvedTo.file,
+    { ...(loaded.adjacency ? { adjacency: loaded.adjacency } : {}) },
+  );
 
   if (json) {
     context.writeJSONLine(pathResult);

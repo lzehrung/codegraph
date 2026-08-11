@@ -125,8 +125,11 @@ describe("persistent query index", () => {
     const directQuery = await search(warmSession, root, "guide validate user sessions", "hybrid");
     const naturalLanguageQuery = await search(warmSession, root, "how does the guide validate user sessions", "hybrid");
     expect(comparable(naturalLanguageQuery)).toEqual(comparable(directQuery));
-    const crossWord = await search(warmSession, root, "alpha validateuser");
-    expect(crossWord.results.some((result) => result.label.startsWith("validateUser"))).toBe(true);
+    const exactSymbol = await search(warmSession, root, "validateUser");
+    const authEvidence = exactSymbol.results
+      .find((result) => result.file === "src/auth.ts")
+      ?.evidence.find((evidence) => evidence.file === "src/auth.ts");
+    expect(authEvidence?.line).toBe(1);
   });
 
   it("keeps compressed indexed text below the amplification target", async () => {

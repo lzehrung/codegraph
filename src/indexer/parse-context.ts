@@ -1,6 +1,6 @@
 import { isGraphOnlyLanguage } from "../documentLinks.js";
 import type { LanguageExtensionMap } from "../languages.js";
-import { prepareSourceInput } from "../languages/filePrep.js";
+import { prepareSourceInput, type PreparedSFCEmbeddedBlock } from "../languages/filePrep.js";
 import {
   getNativeQueryExecution,
   getNativeSyntaxTreeExecution,
@@ -19,6 +19,7 @@ export type ParsedFileContext = {
   sup: LanguageSupport;
   lang?: ParserLanguage;
   nativeQueries?: NativeQueryResults | null;
+  embeddedBlocks?: PreparedSFCEmbeddedBlock[];
 };
 
 export type ParsedFileCacheEntry = {
@@ -35,6 +36,7 @@ export type PreparedFileContext = {
   sup: LanguageSupport;
   lang?: ParserLanguage;
   nativeMode?: NativeRuntimeMode;
+  embeddedBlocks?: PreparedSFCEmbeddedBlock[];
   nativeQueries: NativeQueryResults | null;
   /** Transferable native tree POJO from workers; avoids a second parse on the main thread. */
   syntaxTree?: NativeSyntaxTree | null;
@@ -67,9 +69,8 @@ function createGraphOnlySyntaxTree(): SyntaxTreeLike {
     rootNode,
   };
 }
-
 export function attemptParsePreparedFileContext(context: PreparedFileContext): PreparedFileParseAttempt {
-  const { file, source, sup, nativeMode, nativeQueries } = context;
+  const { file, source, sup, nativeMode, nativeQueries, embeddedBlocks } = context;
   const graphOnlyLanguage = isGraphOnlyLanguage(sup.id);
   if (graphOnlyLanguage) {
     return {
@@ -77,6 +78,7 @@ export function attemptParsePreparedFileContext(context: PreparedFileContext): P
         source,
         tree: createGraphOnlySyntaxTree(),
         sup,
+        ...(embeddedBlocks ? { embeddedBlocks } : {}),
         nativeQueries,
       },
       nativeFallbackReason: "unsupportedLanguage",
@@ -89,6 +91,7 @@ export function attemptParsePreparedFileContext(context: PreparedFileContext): P
         tree: new ProjectedSyntaxTree(source, context.syntaxTree),
         ...(context.lang ? { lang: context.lang } : {}),
         sup,
+        ...(embeddedBlocks ? { embeddedBlocks } : {}),
         nativeQueries,
       },
     };
@@ -101,6 +104,7 @@ export function attemptParsePreparedFileContext(context: PreparedFileContext): P
         tree: new ProjectedSyntaxTree(source, nativeTreeExecution.tree),
         ...(context.lang ? { lang: context.lang } : {}),
         sup,
+        ...(embeddedBlocks ? { embeddedBlocks } : {}),
         nativeQueries,
       },
     };
@@ -124,7 +128,7 @@ export function parsePreparedFileContext(context: PreparedFileContext): ParsedFi
       source: context.source,
       tree: createGraphOnlySyntaxTree(),
       sup: context.sup,
-      ...(context.lang ? { lang: context.lang } : {}),
+      ...(context.embeddedBlocks ? { embeddedBlocks: context.embeddedBlocks } : {}),
       nativeQueries: context.nativeQueries,
     };
   }
@@ -142,6 +146,7 @@ export async function prepareFileForIndexing(
       file,
       source: prep.source,
       sup: prep.sup,
+      ...(prep.embeddedBlocks ? { embeddedBlocks: prep.embeddedBlocks } : {}),
       ...(native ? { nativeMode: native } : {}),
       nativeQueries: null,
     };
@@ -153,6 +158,7 @@ export async function prepareFileForIndexing(
     file,
     source: prep.source,
     sup: prep.sup,
+    ...(prep.embeddedBlocks ? { embeddedBlocks: prep.embeddedBlocks } : {}),
     ...(native ? { nativeMode: native } : {}),
     nativeQueries: nativeExecution.results,
     ...(nativeExecution.fallbackReason ? { nativeFallbackReason: nativeExecution.fallbackReason } : {}),

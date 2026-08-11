@@ -1,6 +1,7 @@
-import type { ProjectIndex } from "../indexer/types.js";
+import type { ProjectIndex, ResolvedExport } from "../indexer/types.js";
+import { resolveExport, resolveModuleExports } from "../indexer/navigation-resolve.js";
 import type { FileId, Range } from "../types.js";
-import { normalizePath } from "../util/paths.js";
+import { fileIdentityKey, normalizePath } from "../util/paths.js";
 
 export type SymbolNodeKind =
   | "function"
@@ -91,9 +92,9 @@ export function nodeForDef(def: {
   };
 }
 
-function normalizeFileFilter(files?: Set<FileId>): Set<FileId> | undefined {
+function normalizeFileFilter(files?: Set<FileId>): Set<string> | undefined {
   if (!files) return undefined;
-  return new Set(Array.from(files, normalizePath));
+  return new Set(Array.from(files, fileIdentityKey));
 }
 
 export async function buildSymbolGraph(index: ProjectIndex, opts?: BuildSymbolGraphOptions): Promise<SymbolGraph> {
@@ -102,10 +103,12 @@ export async function buildSymbolGraph(index: ProjectIndex, opts?: BuildSymbolGr
   const edges: SymbolEdge[] = [];
   const seenEdges = new Set<string>();
   const includedFiles = normalizeFileFilter(opts?.files);
+  const exportResolutions = new Map<string, ResolvedExport | null>();
+  const moduleExportResolutions = new Map<string, Map<string, ResolvedExport>>();
 
   const shouldIncludeFile = (file: FileId): boolean => {
     if (!includedFiles) return true;
-    return includedFiles.has(normalizePath(file));
+    return includedFiles.has(fileIdentityKey(file));
   };
 
   const addEdge = (from: string, to: string, label?: string) => {
@@ -115,93 +118,94 @@ export async function buildSymbolGraph(index: ProjectIndex, opts?: BuildSymbolGr
     edges.push(label ? { from, to, label } : { from, to });
   };
 
-  for (const [file, mod] of index.byFile) {
-    if (!shouldIncludeFile(file)) continue;
+  const addDefinitionEdge = (aliasId: string, targetFile: FileId, exportedName: string, label: string): boolean => {
+    const resolutionKey = `${fileIdentityKey(targetFile)}::${exportedName}`;
+    let resolved: ResolvedExport | null;
+    if (exportResolutions.has(resolutionKey)) {
+      resolved = exportResolutions.get(resolutionKey)!;
+    } else {
+      resolved = resolveExport(index, targetFile, exportedName);
+      exportResolutions.set(resolutionKey, resolved);
+    }
+    if (!resolved || resolved.kind !== "resolved") return false;
+    const def = resolved.def;
+    const targetId = defNodeId(def);
+    if (!nodes.has(targetId)) nodes.set(targetId, nodeForDef(def));
+    addEdge(aliasId, targetId, label);
+    return true;
+  };
+
+  for (const mod of index.byFile.values()) {
+    const displayFile = normalizePath(mod.file);
+    if (!shouldIncludeFile(displayFile)) continue;
     for (const def of mod.locals) {
       const node = nodeForDef(def);
       if (!nodes.has(node.id)) nodes.set(node.id, node);
     }
   }
-
-  for (const [file, mod] of index.byFile) {
-    if (!shouldIncludeFile(file)) continue;
+  for (const mod of index.byFile.values()) {
+    const displayFile = normalizePath(mod.file);
+    if (!shouldIncludeFile(displayFile)) continue;
     for (const imp of mod.imports) {
       if (!imp) continue;
       const targetFile = typeof imp.resolved === "string" ? normalizePath(imp.resolved) : undefined;
-      const targetMod = targetFile ? index.byFile.get(targetFile) : undefined;
 
       if (imp.kind === "named") {
-        const aliasId = `${file}::${imp.local}::import`;
+        const aliasId = `${displayFile}::${imp.local}::import`;
         if (!nodes.has(aliasId)) {
           nodes.set(aliasId, {
             id: aliasId,
-            file,
+            file: displayFile,
             name: imp.local,
             kind: "import",
           });
         }
-        if (targetMod) {
-          let resolvedExport = targetMod.exports.find(
-            (entry) => entry.type === "local" && entry.exportedAs === imp.imported,
-          );
-          if (!resolvedExport) {
-            const local = targetMod.locals.find((entry) => entry.localName === imp.imported);
-            if (local) {
-              resolvedExport = {
-                type: "local",
-                exportedAs: imp.imported,
-                target: local,
-              };
-            }
-          }
-          if (resolvedExport && resolvedExport.type === "local") {
-            const def = resolvedExport.target;
-            const targetId = defNodeId(def);
-            if (!nodes.has(targetId)) nodes.set(targetId, nodeForDef(def));
-            addEdge(aliasId, targetId, imp.imported);
-          }
-        }
+        if (targetFile) addDefinitionEdge(aliasId, targetFile, imp.imported, imp.imported);
       } else if (imp.kind === "default") {
-        const aliasId = `${file}::${imp.local}::import`;
+        const aliasId = `${displayFile}::${imp.local}::import`;
         if (!nodes.has(aliasId)) {
           nodes.set(aliasId, {
             id: aliasId,
-            file,
+            file: displayFile,
             name: imp.local,
             kind: "import",
           });
         }
-        if (targetMod) {
-          let resolvedExport = targetMod.exports.find(
-            (entry) => entry.type === "local" && entry.exportedAs === "default",
-          );
-          if (!resolvedExport) {
-            resolvedExport = targetMod.exports.find((entry) => entry.type === "local");
-          }
-          if (resolvedExport && resolvedExport.type === "local") {
-            const def = resolvedExport.target;
-            const targetId = defNodeId(def);
-            if (!nodes.has(targetId)) nodes.set(targetId, nodeForDef(def));
+        if (targetFile && !addDefinitionEdge(aliasId, targetFile, "default", "default")) {
+          const fallbackExport = index.byFile
+            .get(fileIdentityKey(targetFile))
+            ?.exports.find((entry) => entry.type === "local")?.target;
+          if (fallbackExport) {
+            const targetId = defNodeId(fallbackExport);
+            if (!nodes.has(targetId)) nodes.set(targetId, nodeForDef(fallbackExport));
             addEdge(aliasId, targetId, "default");
           }
         }
       } else if (imp.kind === "namespace") {
-        const aliasId = `${file}::${imp.localNS}::import`;
+        const aliasId = `${displayFile}::${imp.localNS}::import`;
         if (!nodes.has(aliasId)) {
           nodes.set(aliasId, {
             id: aliasId,
-            file,
+            file: displayFile,
             name: imp.localNS,
             kind: "namespaceImport",
           });
         }
-        if (targetMod) {
-          const exportedLocals = targetMod.exports.filter((entry) => entry.type === "local");
-          for (const entry of exportedLocals) {
-            const def = entry.target;
+        if (targetFile) {
+          const targetKey = fileIdentityKey(targetFile);
+          let exports: Map<string, ResolvedExport>;
+          if (moduleExportResolutions.has(targetKey)) {
+            exports = moduleExportResolutions.get(targetKey)!;
+          } else {
+            exports = resolveModuleExports(index, targetFile, { allowLocalFallback: false });
+            moduleExportResolutions.set(targetKey, exports);
+          }
+          for (const [exportedName, resolved] of exports) {
+            if (resolved.kind !== "resolved") continue;
+            const def = resolved.def;
             const targetId = defNodeId(def);
             if (!nodes.has(targetId)) nodes.set(targetId, nodeForDef(def));
-            addEdge(aliasId, targetId, entry.exportedAs);
+            addEdge(aliasId, targetId, exportedName);
           }
         }
       }

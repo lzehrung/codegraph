@@ -4,6 +4,7 @@ import path from "node:path";
 import fsp from "node:fs/promises";
 import { buildProjectIndex, SymbolKind } from "../src/index.js";
 import { locateChangedSymbols } from "../src/impact/map.js";
+import { fileIdentityKey } from "../src/util/paths.js";
 
 type MethodLocalCase = {
   label: string;
@@ -219,7 +220,7 @@ describe("method-like local symbols", () => {
       await fsp.writeFile(file, testCase.source, "utf8");
 
       const index = await buildProjectIndex(root);
-      const moduleIndex = index.byFile.get(file);
+      const moduleIndex = index.byFile.get(fileIdentityKey(file));
       const methodLocal = moduleIndex?.locals.find(
         (local) => local.localName === testCase.methodName && local.range.start.line === testCase.methodLine,
       );
@@ -310,7 +311,7 @@ describe("method-like local symbols", () => {
       await fsp.writeFile(file, testCase.source, "utf8");
 
       const index = await buildProjectIndex(root);
-      const moduleIndex = index.byFile.get(file);
+      const moduleIndex = index.byFile.get(fileIdentityKey(file));
       const methodLocal = moduleIndex?.locals.find(
         (local) => local.localName === "run" && local.range.start.line === testCase.methodLine,
       );

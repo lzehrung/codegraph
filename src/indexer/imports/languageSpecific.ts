@@ -6,8 +6,8 @@ import {
   parsePhpImportStatement,
   parseRustImportStatement,
 } from "../../languages/importStatementParsers.js";
-import { getPhpComposerImplicitFiles } from "../../util/resolution.js";
 import { isRustCfgTestStatement } from "../../util/rustTestModules.js";
+import { getPhpComposerImplicitFiles } from "../../util/resolution.js";
 import type { ImportBinding } from "../types.js";
 import type { ImportBindingSink, ImportResolver, ResolvedImportTarget } from "./context.js";
 

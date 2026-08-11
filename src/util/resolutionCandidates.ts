@@ -1,5 +1,7 @@
 import path from "node:path";
 
+export const STYLESHEET_RESOLUTION_EXTENSIONS = [".css", ".scss", ".less"] as const;
+
 export const DEFAULT_RESOLUTION_EXTENSIONS = [
   ".ts",
   ".tsx",
@@ -10,9 +12,7 @@ export const DEFAULT_RESOLUTION_EXTENSIONS = [
   ".mjs",
   ".cjs",
   ".json",
-  ".css",
-  ".scss",
-  ".less",
+  ...STYLESHEET_RESOLUTION_EXTENSIONS,
   ".php",
   ".html",
   ".vue",

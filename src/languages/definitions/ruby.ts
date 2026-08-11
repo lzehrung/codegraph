@@ -58,6 +58,21 @@ export const RUBY_DEF: LanguageDefinition = {
     memberExpression: "call",
   },
   supportsCrossModuleSymbols: true,
+  classifyDefinition: (node) => {
+    const assignment = node.parent;
+    const value = assignment?.childForFieldName("right");
+    if (
+      assignment?.type === "assignment" &&
+      assignment.childForFieldName("left")?.id === node.id &&
+      value?.type === "call" &&
+      value.childForFieldName("receiver")?.text === "Struct" &&
+      value.childForFieldName("method")?.text === "new"
+    ) {
+      return "class";
+    }
+    return "variable";
+  },
+  scopeDeclarationNames: (node) => node.type === "constant" && node.parent?.type === "assignment",
   createsFunctionScope: (node) => node.type === "method" || node.type === "singleton_method",
   createsBlockScope: (node) => node.type === "do_block" || node.type === "block",
   isDeclarationName: (node) => {

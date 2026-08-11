@@ -1,4 +1,3 @@
-import { expect } from "vitest";
 import { runLanguageTests } from "./runner.js";
 import type { LanguageTestDefinition } from "./types.js";
 
@@ -8,60 +7,102 @@ const definition: LanguageTestDefinition = {
     {
       name: "chunks HTML structure",
       sourceFile: "html.sample.html",
-      expectedChunks: (chunks) => {
-        expect(chunks.some((c) => c.type === "comment")).toBe(true);
-        expect(chunks.some((c) => c.type === "element" && c.name === "app")).toBe(true);
-        expect(chunks.some((c) => c.type === "script")).toBe(true);
-        expect(chunks.some((c) => c.type === "style")).toBe(true);
-      },
+      exactChunks: [
+        { type: "misc", startLine: 1, endLine: 7 },
+        { type: "script", startLine: 7, endLine: 7 },
+        { type: "misc", startLine: 7, endLine: 10 },
+        { type: "comment", startLine: 10, endLine: 11 },
+        { type: "element", name: "app", startLine: 11, endLine: 16 },
+        { type: "script", startLine: 16, endLine: 20 },
+        { type: "style", startLine: 20, endLine: 24 },
+        { type: "misc", startLine: 24, endLine: 26 },
+      ],
     },
   ],
   parity: {
     sampleDir: "html",
-    dependencyGraph: [
+    exact: {
+      dependencyGraph: [
+        {
+          from: "index.html",
+          to: { type: "external", name: "./missing.js" },
+        },
+        {
+          from: "index.html",
+          to: { type: "external", name: "cdn-intro" },
+        },
+        {
+          from: "index.html",
+          to: { type: "external", name: "cdn-logo@1x" },
+        },
+        {
+          from: "index.html",
+          to: { type: "external", name: "cdn-logo@2x" },
+        },
+        {
+          from: "index.html",
+          to: { type: "external", name: "https://example.com/embed" },
+        },
+        {
+          from: "index.html",
+          to: { type: "external", name: "logo.svg" },
+        },
+        {
+          from: "index.html",
+          to: { type: "file", path: "about.html" },
+        },
+        {
+          from: "index.html",
+          to: { type: "file", path: "app.js" },
+        },
+        {
+          from: "index.html",
+          to: { type: "file", path: "inline-helper.js" },
+        },
+        {
+          from: "index.html",
+          to: { type: "file", path: "styles.css" },
+        },
+        {
+          from: "index.html",
+          to: { type: "file", path: "theme.css" },
+        },
+        {
+          from: "modules.html",
+          to: { type: "file", path: "about.html" },
+        },
+        {
+          from: "modules.html",
+          to: { type: "file", path: "app.js" },
+        },
+      ],
+      references: [
+        {
+          name: "find references is not available",
+          file: "index.html",
+          line: 9,
+          column: 14,
+          expectedStatus: "not_found",
+        },
+      ],
+    },
+    goToDefinition: [
+      {
+        name: "go to definition is not available",
+        file: "index.html",
+        line: 9,
+        column: 14,
+        expectedStatus: "not_found",
+      },
+    ],
+    absentDependencyGraph: [
       {
         from: "index.html",
-        to: { type: "file", path: "styles.css" },
+        to: { type: "file", path: "commented.js" },
       },
       {
         from: "index.html",
-        to: { type: "file", path: "app.js" },
-      },
-      {
-        from: "index.html",
-        to: { type: "file", path: "about.html" },
-      },
-      {
-        from: "index.html",
-        to: { type: "external", name: "logo.svg" },
-      },
-      {
-        from: "index.html",
-        to: { type: "file", path: "inline-helper.js" },
-      },
-      {
-        from: "index.html",
-        to: { type: "external", name: "cdn-logo@1x" },
-      },
-      {
-        from: "index.html",
-        to: { type: "external", name: "cdn-logo@2x" },
-      },
-      {
-        from: "index.html",
-        to: { type: "external", name: "cdn-intro" },
-      },
-      {
-        from: "index.html",
-        to: { type: "external", name: "https://example.com/embed" },
-      },
-      {
-        from: "modules.html",
-        to: { type: "file", path: "app.js" },
-      },
-      {
-        from: "modules.html",
-        to: { type: "file", path: "about.html" },
+        to: { type: "file", path: "literal.html" },
       },
     ],
   },

@@ -62,7 +62,7 @@ function inferIndexProjectRoot(index: ProjectIndex, referenceFiles: readonly Fil
     return normalizePath(projectRoot);
   }
 
-  return inferCommonProjectRoot([...index.byFile.keys(), ...referenceFiles]);
+  return inferCommonProjectRoot([...Array.from(index.byFile.values(), (module) => module.file), ...referenceFiles]);
 }
 
 export function createIndexTestFileMatcher(
