@@ -6,8 +6,7 @@ For sessions, streaming workflows, tool wrappers, and review-oriented recipes, s
 
 ## Runtime model
 
-Import from `@lzehrung/codegraph-core` or one of its documented library subpaths
-and call the API directly.
+Import from `@lzehrung/codegraph-core` or one of its documented library subpaths and call the API directly.
 
 The library defaults to `native: "auto"`, which uses the native Tree-sitter path when `@lzehrung/codegraph-native` is installed for the current platform and falls back automatically otherwise.
 
