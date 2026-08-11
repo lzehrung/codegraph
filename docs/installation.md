@@ -181,7 +181,8 @@ Explicit CLI, library, and tool `native` options take precedence over `CODEGRAPH
 
 ## Runtime package roles
 
-- `@lzehrung/codegraph`: main library and CLI
+- `@lzehrung/codegraph-core`: slim library package for programmatic use
+- `@lzehrung/codegraph`: product package for the CLI, MCP server, viewer, installer, and a convenience re-export of core
 - `@lzehrung/codegraph-native`: optional native runtime package that resolves the matching binary artifact
 
 Reduced mode preserves graph-only and regex-backed recovery where available; it does not provide a non-native Tree-sitter parser.

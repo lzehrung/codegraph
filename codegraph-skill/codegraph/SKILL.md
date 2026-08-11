@@ -100,7 +100,7 @@ Safe shorthand: `impact` and git-backed `drift` default to `HEAD..WORKTREE`; `ar
 - full duplicate groups: `codegraph duplicates --root . ./src --json`
 - local Markdown link check: `codegraph links --json`
 
-`links` validates Markdown-authored links against local files, directories, and GitHub-style heading fragments, confined to the project root. Raw HTML `a[href]` inside `.md` files is included; standalone HTML, MDX, JSX, TSX, images, other document formats, and custom HTML or site-generator anchors are not validated. External URLs are skipped without network requests; broken links exit with status 1, so treat exit 1 as a findings report, not a tool failure. `review` and non-empty `impact` reports embed the same `markdownLinks` schema for Markdown sources in the analysis scope and render its findings in pretty output. `unresolved` remains a source-import diagnostic and intentionally excludes these document edges.
+`links` checks root-confined local Markdown links and GitHub-style heading fragments, including raw HTML `a[href]` in `.md` files. It skips external URLs and unsupported formats; exit 1 reports broken links. `review` and non-empty `impact` include the same `markdownLinks` findings; `unresolved` excludes document edges.
 
 `inspect --duplicates` adds the slower bounded duplicate summary. Treat duplicate matches, candidate tests, and call-compatibility hints as review leads, not proof.
 
