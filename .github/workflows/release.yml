@@ -783,9 +783,13 @@ jobs:
 
       - name: Publish only certified tarballs
         env:
-          NODE_AUTH_TOKEN: ${{ inputs.bootstrap_public_npm && secrets.NPM_BOOTSTRAP_TOKEN || '' }}
+          BOOTSTRAP_PUBLIC_NPM: ${{ inputs.bootstrap_public_npm }}
+          NPM_BOOTSTRAP_TOKEN: ${{ inputs.bootstrap_public_npm && secrets.NPM_BOOTSTRAP_TOKEN || '' }}
         shell: bash
         run: |
+          if [ "$BOOTSTRAP_PUBLIC_NPM" = "true" ]; then
+            export NODE_AUTH_TOKEN="$NPM_BOOTSTRAP_TOKEN"
+          fi
           node ./scripts/certification/publish-release-candidates.mjs \
             --manifest temp/release-candidates/release-candidate-manifest.json \
             --expected-source-revision ${{ needs.plan-release.outputs.source_revision }} \
