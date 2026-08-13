@@ -16,18 +16,23 @@ function jobBlock(workflow: string, jobName: string): string {
 describe("certified release workflows", () => {
   it("finishes package certification and publication before standalone previews", () => {
     const assemble = jobBlock(releaseWorkflow, "assemble-release-candidates");
-    const authPreflight = jobBlock(releaseWorkflow, "registry-auth-preflight");
+    const publish = jobBlock(releaseWorkflow, "publish-certified");
     const buildNative = jobBlock(releaseWorkflow, "build-native-artifacts");
     const security = jobBlock(releaseWorkflow, "security-production");
     const smoke = jobBlock(releaseWorkflow, "package-smoke");
     const packageFunnel = jobBlock(releaseWorkflow, "package-funnel");
     const report = jobBlock(releaseWorkflow, "certification-report");
-    const publish = jobBlock(releaseWorkflow, "publish-certified");
-
-    expect(authPreflight).toContain("npm whoami --registry=https://npm.pkg.github.com");
-    expect(authPreflight).toContain("NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}");
-    expect(authPreflight).toContain("GITHUB_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}");
-    expect(buildNative).toContain("- registry-auth-preflight");
+    expect(releaseWorkflow).toContain("id-token: write");
+    expect(releaseWorkflow).not.toContain("registry-auth-preflight:");
+    expect(releaseWorkflow).not.toContain("PACKAGE_PUBLISH_TOKEN");
+    expect(releaseWorkflow).not.toContain("npm.pkg.github.com");
+    expect(buildNative).not.toContain("registry-auth-preflight");
+    expect(publish).toContain("environment: npm-production");
+    expect(publish).toContain("registry-url: https://registry.npmjs.org");
+    expect(publish).toContain("Verify trusted-publishing runtime");
+    expect(publish).toContain("11.5.1 minimum for trusted publishing");
+    expect(publish).not.toContain("NODE_AUTH_TOKEN");
+    expect(publish).not.toContain("NPM_TOKEN");
     expect(assemble).toContain("- build-native-artifacts");
     expect(security).toContain("- assemble-release-candidates");
     expect(smoke).toContain("- security-production");
@@ -62,8 +67,11 @@ describe("certified release workflows", () => {
     expect(releaseWorkflow.split("assemble-release-candidates.mjs")).toHaveLength(2);
     expect(releaseWorkflow).not.toContain("npm pack");
     expect(publish).toContain("publish-release-candidates.mjs");
-    expect(publish).toContain("NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}");
-    expect(publish).toContain("GITHUB_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}");
+    expect(publish).toContain("registry-url: https://registry.npmjs.org");
+    expect(publish).toContain("environment: npm-production");
+    expect(publish).not.toContain("PACKAGE_PUBLISH_TOKEN");
+    expect(publish).not.toContain("NODE_AUTH_TOKEN");
+    expect(publish).not.toContain("NPM_TOKEN");
     expect(publish).not.toContain("CODEGRAPH_PACKAGES_TOKEN_B64");
     expect(publish).not.toContain("base64 --decode");
     expect(publish).toContain("temp/release-candidates/packages/*.tgz");

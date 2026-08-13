@@ -680,6 +680,9 @@ describe("onboarding funnel smoke", () => {
       expect(env?.NODE_COMPILE_CACHE).toBe(path.join(workspace, "node-compile-cache"));
       expect(env?.HOME).not.toBe("C:/real-home");
       expect(env?.PATH?.split(path.delimiter)[0]).toBe(path.join(workspace, "runner"));
+      const npmUserConfig = await fsp.readFile(path.join(workspace, "config", "npmrc"), "utf8");
+      expect(npmUserConfig).toBe("audit=false\nfund=false\nupdate-notifier=false\n");
+      expect(npmUserConfig).not.toContain("@lzehrung:registry");
     } finally {
       await fsp.rm(parent, { recursive: true, force: true });
     }

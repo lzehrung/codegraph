@@ -51,7 +51,8 @@
     "node": ">=22.16"
   },
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
   },
   "description": "Pure TypeScript library for Codegraph project indexes, graphs, impact analysis, and agent-shaped query helpers without the CLI or MCP server.",
   "dependencies": {

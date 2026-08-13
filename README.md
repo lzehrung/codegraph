@@ -114,20 +114,16 @@ node ./dist/cli.js orient --root . --budget small
 
 Continue with `node ./dist/cli.js <command>` from the checkout. To use the bare `codegraph` examples below unchanged, run `npm install -g .` after the build, then `codegraph doctor` and `codegraph install --all --dry-run`.
 
-### From GitHub Packages
-
-After authenticating to the `@lzehrung` GitHub Packages registry ([setup](./docs/installation.md#option-3-install-from-the-lzehrung-registry)):
+### From npm
 
 ```bash
-npm login --scope=@lzehrung --auth-type=legacy --registry=https://npm.pkg.github.com
-npm config set "@lzehrung:registry" "https://npm.pkg.github.com"
 npm install -g @lzehrung/codegraph
 codegraph doctor
 codegraph install --all --dry-run
 codegraph install --all --yes
 ```
 
-Published package installs resolve the optional native runtime automatically when a compatible artifact exists. See [Installation](./docs/installation.md) for registry setup, tarballs, standalone releases, local global installs, and native runtime modes.
+Published package installs resolve the optional native runtime automatically when a compatible artifact exists. See [Installation](./docs/installation.md) for package, tarball, standalone, local global-install, and native-runtime details.
 
 On Windows, installed releases load the native addon from a verified per-user cache so long-running MCP servers do not keep npm's package copy mapped. The first upgrade from an older direct-loading release still requires one stop-update-restart cycle; see [Updating on Windows](./docs/installation.md#updating-on-windows).
 

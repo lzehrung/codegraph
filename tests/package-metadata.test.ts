@@ -853,14 +853,25 @@ void onImpactItemStreaming;
     const readme = readText("README.md");
     const installationDoc = readText("docs/installation.md");
     const skillDoc = readText("codegraph-skill/codegraph/SKILL.md");
+    const publishingDoc = readText("PUBLISHING.md");
 
-    expect(readme).toContain("@lzehrung:registry");
-    expect(readme).not.toContain("opt-in JS fallback path");
-    expect(installationDoc).toContain("@lzehrung:registry");
+    expect(readme).toContain("npm install -g @lzehrung/codegraph");
+    expect(readme).not.toContain("@lzehrung:registry");
+    expect(readme).not.toContain("npm.pkg.github.com");
+    expect(installationDoc).toContain("Install from public npm");
+    expect(installationDoc).not.toContain("@lzehrung:registry");
+    expect(installationDoc).not.toContain("npm.pkg.github.com");
     expect(installationDoc).toContain("reduced graph-only and regex recovery mode");
     expect(installationDoc).not.toContain("--legacy-peer-deps");
+    expect(skillDoc).not.toContain("@lzehrung:registry");
+    expect(skillDoc).not.toContain("npm.pkg.github.com");
     expect(skillDoc).not.toContain("@lzehrung/codegraph-js-fallback");
     expect(skillDoc).not.toContain("compatibility shim");
+    expect(publishingDoc).toContain("npm trusted publishing");
+    expect(publishingDoc).toContain("https://registry.npmjs.org");
+    expect(publishingDoc).not.toContain("PACKAGE_PUBLISH_TOKEN");
+    expect(publishingDoc).not.toContain("npm.pkg.github.com");
+    expect(fs.existsSync(".npmrc")).toBe(false);
   });
 
   it("keeps the release workflow on the certified package path", () => {

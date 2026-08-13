@@ -222,11 +222,7 @@ export async function createFunnelIsolation(workspace, baseEnv = process.env) {
     null,
     2,
   )}\n`;
-  await fsp.writeFile(
-    npmUserConfig,
-    "audit=false\nfund=false\nupdate-notifier=false\n@lzehrung:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}\n",
-    "utf8",
-  );
+  await fsp.writeFile(npmUserConfig, "audit=false\nfund=false\nupdate-notifier=false\n", "utf8");
   await fsp.mkdir(path.dirname(cursorConfigPath), { recursive: true });
   await fsp.writeFile(cursorConfigPath, cursorConfig, "utf8");
   const homeParts = path.parse(paths.home);

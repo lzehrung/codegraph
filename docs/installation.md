@@ -107,16 +107,9 @@ The first index-backed query may create or update this cache and report progress
 
 To remove it safely, stop codegraph processes and delete `.codegraph-cache`. `uninit` leaves caches alone. [How it works](./how-it-works.md#cache-and-session-behavior) explains the cache mechanics.
 
-## Option 3: Install from the `@lzehrung` registry
+## Option 3: Install from public npm
 
-GitHub Packages requires authentication, including for public packages. Create a classic personal access token with `read:packages`, then authenticate and configure the scope:
-
-```bash
-npm login --scope=@lzehrung --auth-type=legacy --registry=https://npm.pkg.github.com
-npm config set "@lzehrung:registry" "https://npm.pkg.github.com"
-```
-
-Use your GitHub username and the token as the password. Then install the main package:
+Public npm installs need no GitHub authentication, token, or `@lzehrung` registry mapping:
 
 ```bash
 npm install -g @lzehrung/codegraph
@@ -146,7 +139,7 @@ Replace `VERSION` with the desired release version from the GitHub release page.
 
 Each release attaches a pre-built `.tgz` that `npm install` can consume by URL with no registry configuration needed for the root package itself.
 
-Important: the tarball alone does not bundle the native addon. To analyze source languages after a tarball install, configure the `@lzehrung` registry so the optional `@lzehrung/codegraph-native` package can resolve for your platform.
+Important: the tarball alone does not bundle the native addon. The optional `@lzehrung/codegraph-native` package resolves from public npm when a compatible artifact exists.
 
 Without the native runtime package, the CLI and library still install, but supported source languages run in reduced graph-only and regex recovery mode.
 

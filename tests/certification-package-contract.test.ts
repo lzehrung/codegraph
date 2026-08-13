@@ -6,6 +6,7 @@ import {
   PackageCertificationError,
   computeFileSha256,
   readReleaseCandidateManifest,
+  releaseCandidatePublicationOrder,
   selectReleaseCandidatePackages,
   validateNativeTargetExceptions,
   validateReleaseCandidateManifest,
@@ -121,7 +122,7 @@ describe("release candidate package contract", () => {
     ).toThrowError(expect.objectContaining<Partial<PackageCertificationError>>({ code: "target-mismatch" }));
   });
 
-  it("selects one complete root, meta, and target package set", async () => {
+  it("orders target packages before native, core, and root publication", async () => {
     const directory = temporaryDirectory();
     const manifestPath = await writeManifest(directory);
     const manifest = await readReleaseCandidateManifest(manifestPath, {
@@ -129,9 +130,12 @@ describe("release candidate package contract", () => {
       expectedTargets: ["win32-x64-msvc"],
     });
 
-    expect(selectReleaseCandidatePackages(manifest, "win32-x64-msvc").nativeTarget.package).toBe(
+    expect(releaseCandidatePublicationOrder(manifest).map((entry) => entry.package)).toEqual([
       "@lzehrung/codegraph-native-win32-x64-msvc",
-    );
+      "@lzehrung/codegraph-native",
+      "@lzehrung/codegraph-core",
+      "@lzehrung/codegraph",
+    ]);
   });
 });
 
