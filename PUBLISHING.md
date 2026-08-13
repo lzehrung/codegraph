@@ -100,7 +100,7 @@ A structural result proves archive checksum, package identity, target naming, an
 
 Publishing waits for every required package row plus security, semantics, and hermeticity. Missing, failed, stale-revision, wrong-version, expired-exception, size, or checksum evidence stops the job before `npm publish` is invoked.
 
-Normal `publish-certified` runs use npm trusted publishing: the protected `npm-production` environment requires approval, and npm accepts the job's GitHub Actions OIDC identity only for configured `lzehrung/codegraph` `release.yml` publishers. It publishes the certified tarballs to `https://registry.npmjs.org` with public access and carries no npm publishing token.
+Normal `publish-certified` runs use npm trusted publishing: the protected `npm-prod` environment requires approval, and npm accepts the job's GitHub Actions OIDC identity only for configured `lzehrung/codegraph` `release.yml` publishers. It publishes the certified tarballs to `https://registry.npmjs.org` with public access and carries no npm publishing token.
 
 ### First public npm release
 

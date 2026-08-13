@@ -680,7 +680,7 @@ jobs:
       - plan-release
       - certification-report
     runs-on: ubuntu-latest
-    environment: npm-production
+    environment: npm-prod
     steps:
       - name: Checkout planned source
         uses: actions/checkout@v6

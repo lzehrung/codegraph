@@ -29,7 +29,7 @@ describe("certified release workflows", () => {
     expect(releaseWorkflow).not.toContain("PACKAGE_PUBLISH_TOKEN");
     expect(releaseWorkflow).not.toContain("npm.pkg.github.com");
     expect(buildNative).not.toContain("registry-auth-preflight");
-    expect(publish).toContain("environment: npm-production");
+    expect(publish).toContain("environment: npm-prod");
     expect(publish).toContain("registry-url: https://registry.npmjs.org");
     expect(publish).toContain("Verify trusted-publishing runtime");
     expect(publish).toContain("11.5.1 minimum for trusted publishing");
@@ -73,7 +73,7 @@ describe("certified release workflows", () => {
     expect(releaseWorkflow).not.toContain("npm pack");
     expect(publish).toContain("publish-release-candidates.mjs");
     expect(publish).toContain("registry-url: https://registry.npmjs.org");
-    expect(publish).toContain("environment: npm-production");
+    expect(publish).toContain("environment: npm-prod");
     expect(publish).not.toContain("PACKAGE_PUBLISH_TOKEN");
     expect(publish).toContain("NPM_BOOTSTRAP_TOKEN");
     expect(publish).toContain(
