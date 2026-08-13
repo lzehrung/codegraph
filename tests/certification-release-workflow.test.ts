@@ -23,6 +23,8 @@ describe("certified release workflows", () => {
     const packageFunnel = jobBlock(releaseWorkflow, "package-funnel");
     const report = jobBlock(releaseWorkflow, "certification-report");
     expect(releaseWorkflow).toContain("id-token: write");
+    expect(releaseWorkflow).toContain("bootstrap_public_npm:");
+    expect(releaseWorkflow).toContain("default: false");
     expect(releaseWorkflow).not.toContain("registry-auth-preflight:");
     expect(releaseWorkflow).not.toContain("PACKAGE_PUBLISH_TOKEN");
     expect(releaseWorkflow).not.toContain("npm.pkg.github.com");
@@ -31,8 +33,11 @@ describe("certified release workflows", () => {
     expect(publish).toContain("registry-url: https://registry.npmjs.org");
     expect(publish).toContain("Verify trusted-publishing runtime");
     expect(publish).toContain("11.5.1 minimum for trusted publishing");
-    expect(publish).not.toContain("NODE_AUTH_TOKEN");
-    expect(publish).not.toContain("NPM_TOKEN");
+    expect(publish).toContain("Require bootstrap token when requested");
+    expect(publish).toContain("NPM_BOOTSTRAP_TOKEN");
+    expect(publish).toContain(
+      "NODE_AUTH_TOKEN: ${{ inputs.bootstrap_public_npm && secrets.NPM_BOOTSTRAP_TOKEN || '' }}",
+    );
     expect(assemble).toContain("- build-native-artifacts");
     expect(security).toContain("- assemble-release-candidates");
     expect(smoke).toContain("- security-production");
@@ -70,8 +75,10 @@ describe("certified release workflows", () => {
     expect(publish).toContain("registry-url: https://registry.npmjs.org");
     expect(publish).toContain("environment: npm-production");
     expect(publish).not.toContain("PACKAGE_PUBLISH_TOKEN");
-    expect(publish).not.toContain("NODE_AUTH_TOKEN");
-    expect(publish).not.toContain("NPM_TOKEN");
+    expect(publish).toContain("NPM_BOOTSTRAP_TOKEN");
+    expect(publish).toContain(
+      "NODE_AUTH_TOKEN: ${{ inputs.bootstrap_public_npm && secrets.NPM_BOOTSTRAP_TOKEN || '' }}",
+    );
     expect(publish).not.toContain("CODEGRAPH_PACKAGES_TOKEN_B64");
     expect(publish).not.toContain("base64 --decode");
     expect(publish).toContain("temp/release-candidates/packages/*.tgz");

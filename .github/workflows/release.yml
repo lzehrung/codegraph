@@ -12,6 +12,11 @@ on:
           - patch
           - minor
           - major
+      bootstrap_public_npm:
+        description: Bootstrap unpublished public registry entries with the temporary NPM_BOOTSTRAP_TOKEN environment secret
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -709,6 +714,17 @@ jobs:
           }
           NODE
 
+      - name: Require bootstrap token when requested
+        if: ${{ inputs.bootstrap_public_npm }}
+        env:
+          NPM_BOOTSTRAP_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
+        shell: bash
+        run: |
+          if [ -z "$NPM_BOOTSTRAP_TOKEN" ]; then
+            echo "NPM_BOOTSTRAP_TOKEN is required only while creating the unpublished public registry entries." >&2
+            exit 1
+          fi
+
       - name: Configure git author
         run: |
           git config user.name "github-actions[bot]"
@@ -766,6 +782,8 @@ jobs:
           NODE
 
       - name: Publish only certified tarballs
+        env:
+          NODE_AUTH_TOKEN: ${{ inputs.bootstrap_public_npm && secrets.NPM_BOOTSTRAP_TOKEN || '' }}
         shell: bash
         run: |
           node ./scripts/certification/publish-release-candidates.mjs \
