@@ -7,6 +7,7 @@ import {
   assertCompleteNativeTargetArtifacts,
   getSupportedNativeTargetPackageNames,
 } from "../scripts/native-targets-lib.mjs";
+import { nativeTargetPackageIdentity } from "../scripts/publish-native-targets.mjs";
 import {
   bumpVersion,
   computePublishPlan,
@@ -108,6 +109,53 @@ describe("release script helpers", () => {
     );
     expect(releaseScript).not.toContain("--legacy-peer-deps");
     expect(releaseScript).toContain('"packages/codegraph-core/package.json"');
+  });
+
+  it("uses native target package metadata for registry identities", () => {
+    expect(
+      nativeTargetPackageIdentity({
+        suffix: "win32-x64-msvc",
+        packageJson: {
+          name: "@lzehrung/codegraph-native-win32-x64-msvc",
+          version: "1.8.100",
+        },
+      }),
+    ).toEqual({
+      name: "@lzehrung/codegraph-native-win32-x64-msvc",
+      version: "1.8.100",
+    });
+    expect(() => nativeTargetPackageIdentity({ suffix: "win32-x64-msvc", packageJson: null })).toThrow(
+      "Native target package metadata is missing for win32-x64-msvc.",
+    );
+  });
+
+  it("uses public npm and public access for every local publishing path", () => {
+    const publicRegistry = "https://registry.npmjs.org";
+    const publisherPaths = [
+      "scripts/certification/publish-release-candidates.mjs",
+      "scripts/release.mjs",
+      "scripts/publish-native-targets.mjs",
+    ];
+    const packageManifestPaths = [
+      "package.json",
+      "packages/codegraph-core/package.json",
+      "packages/codegraph-native/package.json",
+    ];
+
+    for (const publisherPath of publisherPaths) {
+      const publisher = fs.readFileSync(publisherPath, "utf8");
+      expect(publisher, publisherPath).toContain(publicRegistry);
+      expect(publisher, publisherPath).toContain("--access=public");
+      expect(publisher, publisherPath).not.toContain("npm.pkg.github.com");
+    }
+    for (const packageManifestPath of packageManifestPaths) {
+      const manifest = fs.readFileSync(packageManifestPath, "utf8");
+      expect(manifest, packageManifestPath).toContain('"access": "public"');
+      expect(manifest, packageManifestPath).toContain(`"registry": "${publicRegistry}"`);
+    }
+    expect(fs.readFileSync("package.json", "utf8")).toContain(
+      'publish:native:meta": "npm publish --workspace=@lzehrung/codegraph-native --registry=https://registry.npmjs.org --access=public',
+    );
   });
 
   it("stages the core package manifest in the release commit", () => {

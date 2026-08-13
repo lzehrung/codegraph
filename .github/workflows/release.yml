@@ -12,10 +12,15 @@ on:
           - patch
           - minor
           - major
+      bootstrap_public_npm:
+        description: Bootstrap unpublished public registry entries with the temporary NPM_BOOTSTRAP_TOKEN environment secret
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: write
-  packages: write
+  id-token: write
 
 concurrency:
   group: release
@@ -50,29 +55,10 @@ jobs:
           )
           echo "$version" >> "$GITHUB_OUTPUT"
 
-  registry-auth-preflight:
-    name: Verify classic package token
-    needs: plan-release
-    runs-on: ubuntu-latest
-    steps:
-      - name: Setup Node for GitHub Packages
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24.10.0
-          registry-url: https://npm.pkg.github.com
-          scope: "@lzehrung"
-
-      - name: Authenticate classic package token
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}
-        run: npm whoami --registry=https://npm.pkg.github.com
-
   build-native-artifacts:
     name: Build ${{ matrix.suffix }}
     needs:
       - plan-release
-      - registry-auth-preflight
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -694,6 +680,7 @@ jobs:
       - plan-release
       - certification-report
     runs-on: ubuntu-latest
+    environment: npm-prod
     steps:
       - name: Checkout planned source
         uses: actions/checkout@v6
@@ -701,12 +688,42 @@ jobs:
           fetch-depth: 0
           ref: ${{ needs.plan-release.outputs.source_revision }}
 
-      - name: Setup Node for GitHub Packages
+      - name: Setup Node for public npm
         uses: actions/setup-node@v6
         with:
           node-version: 24.10.0
-          registry-url: https://npm.pkg.github.com
-          scope: "@lzehrung"
+          registry-url: https://registry.npmjs.org
+
+      - name: Verify trusted-publishing runtime
+        shell: bash
+        run: |
+          node --version
+          npm_version="$(npm --version)"
+          echo "npm ${npm_version}"
+          node --input-type=module - "$npm_version" <<'NODE'
+          const actual = process.argv[2] ?? "";
+          const parsed = /^(\d+)\.(\d+)\.(\d+)$/.exec(actual);
+          if (!parsed) throw new Error(`Unable to parse npm version: ${actual}`);
+          const [major, minor, patch] = parsed.slice(1).map(Number);
+          if (
+            major < 11 ||
+            (major === 11 && minor < 5) ||
+            (major === 11 && minor === 5 && patch < 1)
+          ) {
+            throw new Error(`npm ${actual} is below the 11.5.1 minimum for trusted publishing.`);
+          }
+          NODE
+
+      - name: Require bootstrap token when requested
+        if: ${{ inputs.bootstrap_public_npm }}
+        env:
+          NPM_BOOTSTRAP_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
+        shell: bash
+        run: |
+          if [ -z "$NPM_BOOTSTRAP_TOKEN" ]; then
+            echo "NPM_BOOTSTRAP_TOKEN is required only while creating the unpublished public registry entries." >&2
+            exit 1
+          fi
 
       - name: Configure git author
         run: |
@@ -766,10 +783,13 @@ jobs:
 
       - name: Publish only certified tarballs
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}
+          BOOTSTRAP_PUBLIC_NPM: ${{ inputs.bootstrap_public_npm }}
+          NPM_BOOTSTRAP_TOKEN: ${{ inputs.bootstrap_public_npm && secrets.NPM_BOOTSTRAP_TOKEN || '' }}
         shell: bash
         run: |
+          if [ "$BOOTSTRAP_PUBLIC_NPM" = "true" ]; then
+            export NODE_AUTH_TOKEN="$NPM_BOOTSTRAP_TOKEN"
+          fi
           node ./scripts/certification/publish-release-candidates.mjs \
             --manifest temp/release-candidates/release-candidate-manifest.json \
             --expected-source-revision ${{ needs.plan-release.outputs.source_revision }} \

@@ -249,17 +249,13 @@ For package installs, use only the scoped packages:
 - optional native runtime: `@lzehrung/codegraph-native`
 
 ```bash
-npm login --scope=@lzehrung --auth-type=legacy --registry=https://npm.pkg.github.com
-npm config set "@lzehrung:registry" "https://npm.pkg.github.com"
 npm install -g @lzehrung/codegraph
 codegraph doctor
 codegraph install --all --dry-run
 codegraph install --all --yes
 ```
 
-GitHub Packages requires a classic token with `read:packages`, including for public packages. Use the GitHub username and token during `npm login`.
-
-Do not suggest the unscoped `codegraph` package. Published installs resolve the optional native runtime when a compatible artifact exists; otherwise codegraph reports reduced graph-only and regex recovery behavior rather than semantic parity.
+Public npm installs need no GitHub token or `@lzehrung` registry mapping. Do not suggest the unscoped `codegraph` package. Published installs resolve the optional native runtime when a compatible artifact exists; otherwise codegraph reports reduced graph-only and regex recovery behavior rather than semantic parity.
 
 On Windows, installed releases load native code from `%LOCALAPPDATA%\codegraph\native-cache\v1`. The first upgrade from an older direct-loading release requires closing codegraph MCP clients once, running `npm install -g @lzehrung/codegraph@latest`, and restarting the clients.
 

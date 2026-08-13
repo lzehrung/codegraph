@@ -288,7 +288,7 @@ function packageExistsInRegistry(packageName, version) {
     "view",
     `${packageName}@${version}`,
     "version",
-    "--registry=https://npm.pkg.github.com",
+    "--registry=https://registry.npmjs.org",
   ]);
   return result.status === 0 && result.stdout === version;
 }
@@ -493,7 +493,12 @@ if (publishPlan) {
         continue;
       }
       if (step === "publishCore") {
-        run("npm", ["publish", "--workspace=@lzehrung/codegraph-core"]);
+        run("npm", [
+          "publish",
+          "--workspace=@lzehrung/codegraph-core",
+          "--registry=https://registry.npmjs.org",
+          "--access=public",
+        ]);
         continue;
       }
       if (step === "prepareRootManifest") {
@@ -501,7 +506,7 @@ if (publishPlan) {
         continue;
       }
       if (step === "publishRoot") {
-        run("npm", ["publish"]);
+        run("npm", ["publish", "--registry=https://registry.npmjs.org", "--access=public"]);
       }
     }
   } finally {

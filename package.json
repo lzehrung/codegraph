@@ -115,7 +115,7 @@
     "native:stage-local": "node ./scripts/stage-native-package.mjs",
     "native:sync-meta": "node ./scripts/sync-native-meta.mjs",
     "publish:native:targets": "node ./scripts/publish-native-targets.mjs",
-    "publish:native:meta": "npm publish --workspace=@lzehrung/codegraph-native",
+    "publish:native:meta": "npm publish --workspace=@lzehrung/codegraph-native --registry=https://registry.npmjs.org --access=public",
     "bundle:cli": "node ./scripts/bundle-cli.mjs",
     "viewer:vendor": "node ./scripts/vendor-graph-viewer.mjs",
     "build:core": "node ./scripts/stage-core-package.mjs"
@@ -132,7 +132,8 @@
     "packages/*"
   ],
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
   },
   "keywords": [
     "codegraph",

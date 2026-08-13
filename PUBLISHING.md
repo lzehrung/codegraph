@@ -100,7 +100,13 @@ A structural result proves archive checksum, package identity, target naming, an
 
 Publishing waits for every required package row plus security, semantics, and hermeticity. Missing, failed, stale-revision, wrong-version, expired-exception, size, or checksum evidence stops the job before `npm publish` is invoked.
 
-The workflow exposes the `PACKAGE_PUBLISH_TOKEN` Actions secret as both `NODE_AUTH_TOKEN` for `actions/setup-node` and `GITHUB_TOKEN` for the repository `.npmrc` in the registry preflight and publication job. It must contain a current classic personal access token with `read:packages` and `write:packages`; GitHub Packages does not support fine-grained personal access tokens for this purpose.
+Normal `publish-certified` runs use npm trusted publishing: the protected `npm-prod` environment requires approval, and npm accepts the job's GitHub Actions OIDC identity only for configured `lzehrung/codegraph` `release.yml` publishers. It publishes the certified tarballs to `https://registry.npmjs.org` with public access and carries no npm publishing token.
+
+### First public npm release
+
+npm requires a package to exist before it accepts a trusted-publisher configuration. The one-time bootstrap dispatch selects `bootstrap_public_npm` and uses an expiring, scope-restricted `NPM_BOOTSTRAP_TOKEN` environment secret after all certification gates pass.
+
+After that release, configure `lzehrung/codegraph` `release.yml` as an `npm publish` trusted publisher for every package, remove the secret, and remove the bootstrap path. Do not select the bootstrap input for routine releases.
 
 ## Package Roles
 

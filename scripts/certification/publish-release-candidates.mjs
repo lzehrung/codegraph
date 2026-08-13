@@ -11,7 +11,7 @@ import { runPackageCommand } from "./package-smoke-lib.mjs";
 import { getSupportedNativeTargetSuffixes, readJsonFile } from "../native-targets-lib.mjs";
 
 function parseArgs(argv) {
-  const options = { registry: "https://npm.pkg.github.com" };
+  const options = { registry: "https://registry.npmjs.org" };
   const supported = {
     "--manifest": true,
     "--registry": true,
@@ -64,7 +64,7 @@ try {
   for (const entry of publicationOrder) {
     const result = runPackageCommand(
       "npm",
-      ["publish", entry.absolutePath, "--ignore-scripts", `--registry=${options.registry}`],
+      ["publish", entry.absolutePath, "--ignore-scripts", "--access=public", `--registry=${options.registry}`],
       { cwd: rootDirectory, timeoutMs: 300_000 },
     );
     process.stdout.write(result.stdout);

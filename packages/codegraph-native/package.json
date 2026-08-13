@@ -31,7 +31,8 @@
     "prepublish:napi": "node ../../node_modules/@napi-rs/cli/dist/cli.js pre-publish --cwd ."
   },
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
   },
   "napi": {
     "binaryName": "index",
