@@ -579,12 +579,15 @@ describe("codegraph MCP handlers", () => {
   it("evicts idle HTTP sessions and bounds the concurrent session count", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-session-evict-"));
     await fs.writeFile(path.join(root, "auth.ts"), "export const ok = 1;\n", "utf8");
+    const sessionIdleMs = 50;
+    const sessionEvictionIntervalMs = 20;
+    const sessionEvictionWaitMs = sessionIdleMs + sessionEvictionIntervalMs * 2;
     const httpServer = await startCodegraphMcpHttpServer({
       root,
       port: 0,
-      httpSessionIdleMs: 50,
+      httpSessionIdleMs: sessionIdleMs,
       httpSessionMaxCount: 2,
-      httpSessionEvictionIntervalMs: 20,
+      httpSessionEvictionIntervalMs: sessionEvictionIntervalMs,
     });
 
     const initialize = async (id: number): Promise<string> => {
@@ -627,9 +630,11 @@ describe("codegraph MCP handlers", () => {
       await initialize(3);
       expect(await probeSession(103, first)).toBe(400);
 
-      await vi.waitFor(async () => {
-        expect(await probeSession(104, second)).toBe(400);
-      }, 2_000);
+      // This integration test must wait for the real server interval; fake timers do not drive it.
+      const wait = Promise.withResolvers<void>();
+      setTimeout(wait.resolve, sessionEvictionWaitMs);
+      await wait.promise;
+      expect(await probeSession(104, second)).toBe(400);
 
       const replacement = await initialize(4);
       expect(await probeSession(105, replacement)).toBe(200);
