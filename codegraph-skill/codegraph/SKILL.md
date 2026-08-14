@@ -224,9 +224,27 @@ Lifecycle commands accept either one positional project path or `--root <path>`,
 
 ## Installation
 
-Package and source installs require Node.js 22.16 or newer; standalone archives bundle Node.js.
+For normal CLI and MCP use, install from public npm with Node.js 22.16 or newer:
 
-For the preview standalone channel, use the release bootstrap appropriate to the host:
+```bash
+npm install -g @lzehrung/codegraph
+codegraph doctor
+codegraph install --all --dry-run
+codegraph install --all --yes
+```
+
+Public npm installs need no GitHub token or `@lzehrung` registry mapping. Do not suggest the unscoped `codegraph` package. If `.npmrc` still maps `@lzehrung` to `https://npm.pkg.github.com`, remove or replace that legacy mapping; npm otherwise selects GitHub Packages instead of current public releases.
+
+Published installs resolve the optional native runtime when a compatible artifact exists; otherwise codegraph reports reduced graph-only and regex recovery behavior rather than semantic parity.
+
+For library or API consumers, use only the scoped packages:
+
+- slim library install: `@lzehrung/codegraph-core`
+- agent-shaped APIs: `@lzehrung/codegraph/agent` or `@lzehrung/codegraph-core/agent`
+- MCP handlers/server: `@lzehrung/codegraph/mcp`
+- optional native runtime: `@lzehrung/codegraph-native`
+
+No Node.js or npm? The preview standalone archive is self-contained: it bundles Node.js, production dependencies, the matching native runtime, and the codegraph skill.
 
 ```powershell
 irm https://github.com/lzehrung/codegraph/releases/latest/download/install.ps1 | iex
@@ -236,26 +254,7 @@ irm https://github.com/lzehrung/codegraph/releases/latest/download/install.ps1 |
 curl -fsSL https://github.com/lzehrung/codegraph/releases/latest/download/install.sh | sh
 ```
 
-The standalone Linux archives require glibc. On musl Linux, use the package or source installation path instead.
-
-The bootstrap previews its target and paths, then confirms interactively or requires `-Yes`/`--yes` for noninteractive writes. It verifies the selected archive against release `SHA256SUMS`, rejects unsafe entries, installs under a versioned user-owned root, and records the prior version; pin or roll back with `./install.ps1 -Version VERSION` or `sh ./install.sh --version VERSION`. This channel is checksummed preview content, not a signed release claim.
-
-For package installs, use only the scoped packages:
-
-- product package (CLI/MCP/viewer): `@lzehrung/codegraph`
-- slim library install: `@lzehrung/codegraph-core`
-- agent-shaped APIs: `@lzehrung/codegraph/agent` or `@lzehrung/codegraph-core/agent`
-- MCP handlers/server: `@lzehrung/codegraph/mcp`
-- optional native runtime: `@lzehrung/codegraph-native`
-
-```bash
-npm install -g @lzehrung/codegraph
-codegraph doctor
-codegraph install --all --dry-run
-codegraph install --all --yes
-```
-
-Public npm installs need no GitHub token or `@lzehrung` registry mapping. Do not suggest the unscoped `codegraph` package. Published installs resolve the optional native runtime when a compatible artifact exists; otherwise codegraph reports reduced graph-only and regex recovery behavior rather than semantic parity.
+The standalone Linux archives require glibc. On musl Linux, use the package or source installation path instead. The bootstrap previews its target and paths, then confirms interactively or requires `-Yes`/`--yes` for noninteractive writes. It verifies the selected archive against release `SHA256SUMS`, rejects unsafe entries, installs under a versioned user-owned root, and records the prior version; pin or roll back with `./install.ps1 -Version VERSION` or `sh ./install.sh --version VERSION`. This channel is checksummed preview content, not a signed release claim.
 
 On Windows, installed releases load native code from `%LOCALAPPDATA%\codegraph\native-cache\v1`. The first upgrade from an older direct-loading release requires closing codegraph MCP clients once, running `npm install -g @lzehrung/codegraph@latest`, and restarting the clients.
 

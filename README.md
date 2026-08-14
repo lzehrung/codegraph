@@ -20,26 +20,26 @@ Without structural context, an agent burns early turns listing directories, gues
 
 On this repository under Node 24 with a warm cache, `codegraph orient --root . --budget small --json` returned in about **0.6s**, and the matching MCP `orient` call returned in about **100ms**.
 
-Windows PowerShell:
+With Node.js 22.16 or newer, install from npm:
+
+```bash
+npm install -g @lzehrung/codegraph
+codegraph doctor
+codegraph install
+codegraph explore "how does auth reach the database?" --root .
+```
+
+No Node.js or npm? The standalone installers download a self-contained bundle with Node.js, the CLI, and the matching native runtime:
 
 ```powershell
 irm https://github.com/lzehrung/codegraph/releases/latest/download/install.ps1 | iex
 ```
 
-macOS or glibc-based Linux:
-
 ```bash
 curl -fsSL https://github.com/lzehrung/codegraph/releases/latest/download/install.sh | sh
 ```
 
-Then configure an agent and ask the first question:
-
-```bash
-codegraph install
-codegraph explore "how does auth reach the database?" --root .
-```
-
-Use codegraph alongside text search and compilers: text search finds exact strings, compilers prove language behavior, and codegraph fills in the cross-file repository map between them. See [Installation](./docs/installation.md) for standalone, package, and source-checkout paths.
+Use codegraph alongside text search and compilers: text search finds exact strings, compilers prove language behavior, and codegraph fills in the cross-file repository map between them. See [Installation](./docs/installation.md) for npm, standalone, and source-checkout paths.
 
 ## Table of contents
 
@@ -82,9 +82,20 @@ Human-readable output is the CLI default, including the compact `review` report;
 
 ## Try it
 
-**Requirement:** Package and source installs require Node.js 22.16 or newer. Standalone archives bundle Node.js.
+**Recommended:** Install from npm when Node.js 22.16 or newer is available. The standalone archive bundles Node.js.
 
-### Standalone archive
+### From npm (recommended)
+
+```bash
+npm install -g @lzehrung/codegraph
+codegraph doctor
+codegraph install --all --dry-run
+codegraph install --all --yes
+```
+
+Published package installs resolve the optional native runtime automatically when a compatible artifact exists. On Windows, installed releases load the native addon from a verified per-user cache so long-running MCP servers do not keep npm's package copy mapped. See [Installation](./docs/installation.md) for updates and runtime details.
+
+### Standalone archive (no Node.js or npm)
 
 The standalone archive bundles Node.js, the CLI, the matching native runtime, and the codegraph skill.
 
@@ -96,11 +107,11 @@ irm https://github.com/lzehrung/codegraph/releases/latest/download/install.ps1 |
 curl -fsSL https://github.com/lzehrung/codegraph/releases/latest/download/install.sh | sh
 ```
 
-Both commands preview the target and install path before writing. See [Installation](./docs/installation.md#option-1-standalone-release-preview) for supported targets, version pinning, rollback, and the full verification flow.
+Both commands preview the target and install path before writing. See [Installation](./docs/installation.md#option-2-standalone-release-preview) for supported targets, version pinning, rollback, and the full verification flow.
 
-### From a source checkout
+### From a source checkout (development)
 
-This is the least ambiguous way to evaluate the current repository:
+Use this path to evaluate the current repository or contribute changes:
 
 ```bash
 git clone https://github.com/lzehrung/codegraph.git
@@ -113,19 +124,6 @@ node ./dist/cli.js orient --root . --budget small
 ```
 
 Continue with `node ./dist/cli.js <command>` from the checkout. To use the bare `codegraph` examples below unchanged, run `npm install -g .` after the build, then `codegraph doctor` and `codegraph install --all --dry-run`.
-
-### From npm
-
-```bash
-npm install -g @lzehrung/codegraph
-codegraph doctor
-codegraph install --all --dry-run
-codegraph install --all --yes
-```
-
-Published package installs resolve the optional native runtime automatically when a compatible artifact exists. See [Installation](./docs/installation.md) for package, tarball, standalone, local global-install, and native-runtime details.
-
-On Windows, installed releases load the native addon from a verified per-user cache so long-running MCP servers do not keep npm's package copy mapped. The first upgrade from an older direct-loading release still requires one stop-update-restart cycle; see [Updating on Windows](./docs/installation.md#updating-on-windows).
 
 ## A useful first five minutes
 

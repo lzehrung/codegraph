@@ -12,7 +12,29 @@ Requirements, standalone and package channels, source checkouts, verification, r
 - Local source checkouts do not require Rust just to build `dist/`, but the native workspace addon only builds when Cargo is available.
 - If no compatible native artifact is available, package installs drop to reduced graph-only and regex recovery mode instead of loading JS grammars.
 
-## Option 1: Standalone release (preview)
+For most CLI and MCP users, install from public npm. Use the standalone archive only when you need the bundled Node.js runtime; use a source checkout for development.
+
+## Option 1: Install from public npm (recommended)
+
+Public npm installs need no GitHub authentication, token, or registry mapping. If a user or project `.npmrc` still contains `@lzehrung:registry=https://npm.pkg.github.com`, remove or replace that legacy mapping first; npm otherwise selects GitHub Packages instead of current public releases.
+
+```bash
+npm install -g @lzehrung/codegraph
+```
+
+Then use codegraph-owned guidance to verify and configure clients:
+
+```bash
+codegraph doctor
+codegraph install --all --dry-run
+codegraph install --all --yes
+```
+
+npm cannot print package-authored completion guidance without lifecycle scripts, so run the explicit codegraph commands above after a global install or update.
+
+The published path is native-first: `@lzehrung/codegraph` optionally resolves the matching native artifact automatically when a published binary exists for the current platform. Unsupported hosts use reduced graph-only mode. No separate grammar package is required.
+
+## Option 2: Standalone release (preview)
 
 The standalone channel does not require npm, a system Node.js installation, or registry configuration. It currently identifies itself as `standalone-preview`.
 Standalone assets are attached after package publication by a separate release workflow. Use a release that lists the matching archive, installer, and `SHA256SUMS` assets.
@@ -69,9 +91,9 @@ Default roots:
 
 Add the reported launcher directory to `PATH` if it is not already present. After installation, run `codegraph install`, then restart or reload the configured client.
 
-## Option 2: Local source checkout
+## Option 3: Local source checkout
 
-Use this path when you are developing on codegraph itself or want the least ambiguous first run.
+Use this path when developing on codegraph or evaluating a working-tree change.
 
 ```bash
 git clone https://github.com/lzehrung/codegraph.git
@@ -106,26 +128,6 @@ With disk caching enabled, codegraph creates `.codegraph-cache/index-v1/search-v
 The first index-backed query may create or update this cache and report progress on stderr. Later queries reuse compatible state when `--root`, discovery configuration, graph options, and relevant build options match; use `--cache off` for a deliberate cold run.
 
 To remove it safely, stop codegraph processes and delete `.codegraph-cache`. `uninit` leaves caches alone. [How it works](./how-it-works.md#cache-and-session-behavior) explains the cache mechanics.
-
-## Option 3: Install from public npm
-
-Public npm installs need no GitHub authentication, token, or `@lzehrung` registry mapping:
-
-```bash
-npm install -g @lzehrung/codegraph
-```
-
-Then use codegraph-owned guidance to verify and configure clients:
-
-```bash
-codegraph doctor
-codegraph install --all --dry-run
-codegraph install --all --yes
-```
-
-npm cannot print package-authored completion guidance without lifecycle scripts, so run the explicit codegraph commands above after a global install or update.
-
-The published path is native-first: `@lzehrung/codegraph` optionally resolves the matching native artifact automatically when a published binary exists for the current platform. Unsupported hosts use reduced graph-only mode. No separate grammar package is required.
 
 ## Option 4: Install from an npm release tarball
 
