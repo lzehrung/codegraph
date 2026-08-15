@@ -31,18 +31,17 @@ import {
   type SymbolVisibility,
 } from "../../graphs/symbol-graph.js";
 import { getImplementationFingerprint, normalizeGraphOptions } from "./options.js";
-import { cacheRoot } from "./module-cache.js";
+import { cacheAbsolutePath, cacheRelativePath, cacheRoot } from "./module-cache.js";
 import type { ManifestFileEntry } from "./manifest.js";
 
 const SNAPSHOT_SYMBOL_KINDS = new Set<SymbolKind>(Object.values(SymbolKind));
-const PROJECT_SNAPSHOT_VERSION = 4;
+const PROJECT_SNAPSHOT_VERSION = 5;
 const BLOOM_FILTER_MIN_SIZE = 1_000;
 const BLOOM_FILTER_MAX_SIZE = 1_000_000;
 const BLOOM_FILTER_MIN_HASH_COUNT = 1;
 const BLOOM_FILTER_MAX_HASH_COUNT = 10;
-const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 2;
+const DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION = 3;
 const DETAILED_SYMBOL_GRAPH_SNAPSHOT_FILENAME = "detailed-symbol-graph.json";
-
 const SNAPSHOT_TEMP_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const SNAPSHOT_TEMP_SUFFIX = ".tmp";
 const MAX_SNAPSHOT_CACHE_ENTRIES = 32;
@@ -104,6 +103,7 @@ type ProjectIndexSnapshotPayload = {
   };
   modules: ModuleIndex[];
   projectRoot: string;
+  languageExtensions?: ProjectIndex["languageExtensions"];
   nativeMode?: ProjectIndex["nativeMode"];
   nativeRuntimeFingerprint: string;
   implementationFingerprint: string;
@@ -113,10 +113,13 @@ type ProjectIndexSnapshotPayload = {
   analysisReport?: SnapshotAnalysisReport;
 };
 
-export function projectSnapshotFilesSignature(entries: ReadonlyMap<string, ManifestFileEntry>): string {
+export function projectSnapshotFilesSignature(
+  entries: ReadonlyMap<string, ManifestFileEntry>,
+  projectRoot?: string,
+): string {
   const hash = createHash("sha256");
   for (const [file, entry] of [...entries.entries()].sort(([left], [right]) => compareSnapshotPath(left, right))) {
-    hash.update(file);
+    hash.update(projectRoot ? cacheRelativePath(projectRoot, file) : file);
     hash.update("\0");
     hash.update(entry.sig);
     hash.update("\0");
@@ -145,6 +148,111 @@ function serializedProjectRoot(projectRoot: string): string {
   return normalizePath(path.resolve(projectRoot));
 }
 
+function transformPath(root: string, value: string, toRelative: boolean): string {
+  if (toRelative) {
+    return path.isAbsolute(value) ? cacheRelativePath(root, value) : value;
+  }
+  return cacheAbsolutePath(root, value);
+}
+
+function transformHandle(root: string, value: string, toRelative: boolean): string {
+  const separator = value.indexOf("::");
+  if (separator < 0) return transformPath(root, value, toRelative);
+  const file = value.slice(0, separator);
+  return `${transformPath(root, file, toRelative)}${value.slice(separator)}`;
+}
+
+function transformModule(root: string, module: ModuleIndex, toRelative: boolean): ModuleIndex {
+  const copy = structuredClone(module);
+  const file = (value: string): string => transformPath(root, value, toRelative);
+  copy.file = file(copy.file);
+  for (const local of copy.locals) local.file = file(local.file);
+  for (const entry of copy.exports) {
+    if (entry.type === "local") entry.target.file = file(entry.target.file);
+  }
+  for (const binding of copy.imports) {
+    if (typeof binding.resolved === "string") binding.resolved = file(binding.resolved);
+  }
+  return copy;
+}
+
+function transformSnapshotPaths(
+  payload: ProjectIndexSnapshotPayload,
+  root: string,
+  toRelative: boolean,
+): ProjectIndexSnapshotPayload {
+  const copy = structuredClone(payload);
+  copy.graph.nodes = copy.graph.nodes.map((node) => transformPath(root, node, toRelative));
+  copy.graph.edges = copy.graph.edges.map((edge) => ({
+    ...edge,
+    from: transformPath(root, edge.from, toRelative),
+    to: edge.to.type === "file" ? { ...edge.to, path: transformPath(root, edge.to.path, toRelative) } : edge.to,
+  }));
+  copy.modules = copy.modules.map((module) => transformModule(root, module, toRelative));
+  if (copy.projectFiles) {
+    copy.projectFiles = copy.projectFiles.map((file) => ({
+      ...file,
+      path: transformPath(root, file.path, toRelative),
+      projectRoot: transformPath(root, file.projectRoot, toRelative),
+    }));
+  }
+  if (copy.bloomFilters) {
+    const bloomFilters: Record<string, SerializedBloomFilter> = {};
+    for (const [file, filter] of Object.entries(copy.bloomFilters)) {
+      bloomFilters[transformPath(root, file, toRelative)] = filter;
+    }
+    copy.bloomFilters = bloomFilters;
+  }
+  return copy;
+}
+function migrateProjectSnapshotPayload(value: unknown, currentRoot: string): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const payload = value as Partial<ProjectIndexSnapshotPayload>;
+  if (payload.version !== 4 || typeof payload.projectRoot !== "string") return value;
+  const relative = transformSnapshotPaths(value as ProjectIndexSnapshotPayload, payload.projectRoot, true);
+  const migrated = transformSnapshotPaths(relative, currentRoot, false);
+  migrated.version = PROJECT_SNAPSHOT_VERSION;
+  migrated.projectRoot = serializedProjectRoot(currentRoot);
+  return migrated;
+}
+function transformDetailedGraph(
+  graph: DetailedSymbolGraphSnapshotPayload["graph"],
+  root: string,
+  toRelative: boolean,
+): DetailedSymbolGraphSnapshotPayload["graph"] {
+  return {
+    nodes: graph.nodes.map((node) => {
+      const file = transformPath(root, node.file, toRelative);
+      return { ...node, file, id: transformHandle(root, node.id, toRelative) };
+    }),
+    edges: graph.edges.map((edge) => ({
+      ...edge,
+      from: transformHandle(root, edge.from, toRelative),
+      to: transformHandle(root, edge.to, toRelative),
+      ...(edge.site
+        ? {
+            site: {
+              ...edge.site,
+              file: transformPath(root, edge.site.file, toRelative),
+            },
+          }
+        : {}),
+    })),
+  };
+}
+
+function migrateDetailedSymbolGraphPayload(value: unknown, currentRoot: string): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const payload = value as Partial<DetailedSymbolGraphSnapshotPayload>;
+  if (payload.version !== 2 || typeof payload.projectRoot !== "string" || !payload.graph) return value;
+  const relativeGraph = transformDetailedGraph(payload.graph, payload.projectRoot, true);
+  return {
+    ...payload,
+    version: DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION,
+    projectRoot: serializedProjectRoot(currentRoot),
+    graph: transformDetailedGraph(relativeGraph, currentRoot, false),
+  };
+}
 function projectRootMatches(projectRoot: string, storedProjectRoot: string): boolean {
   return fileIdentityKey(path.resolve(projectRoot)) === fileIdentityKey(path.resolve(storedProjectRoot));
 }
@@ -283,24 +391,26 @@ export async function tryLoadProjectIndexSnapshot(
   opts: BuildOptions | undefined,
   manifestEntries: ReadonlyMap<string, ManifestFileEntry>,
 ): Promise<LoadedProjectIndexSnapshot | null> {
-  const filesSignature = projectSnapshotFilesSignature(manifestEntries);
+  const filesSignature = projectSnapshotFilesSignature(manifestEntries, projectRoot);
   if ((opts?.cache ?? "off") !== "disk") return null;
   try {
     const rawPayload = (await readParsedSnapshot(projectSnapshotPath(projectRoot, opts))).payload;
+    const migratedPayload = migrateProjectSnapshotPayload(rawPayload, projectRoot);
+    const payload =
+      migratedPayload && typeof migratedPayload === "object" && !Array.isArray(migratedPayload)
+        ? transformSnapshotPaths(migratedPayload as ProjectIndexSnapshotPayload, projectRoot, false)
+        : migratedPayload;
     const nativeRuntimeFingerprint = getNativeRuntimeFingerprint(opts?.native);
     const implementationFingerprint = getImplementationFingerprint();
     if (
-      !isProjectIndexSnapshotPayload(rawPayload) ||
-      rawPayload.filesSignature !== filesSignature ||
-      !projectRootMatches(projectRoot, rawPayload.projectRoot) ||
-      rawPayload.nativeMode !== normalizedSnapshotNativeMode(opts?.native) ||
-      rawPayload.nativeRuntimeFingerprint !== nativeRuntimeFingerprint ||
-      rawPayload.implementationFingerprint !== implementationFingerprint
+      !isProjectIndexSnapshotPayload(payload) ||
+      payload.filesSignature !== filesSignature ||
+      payload.nativeMode !== normalizedSnapshotNativeMode(opts?.native) ||
+      payload.nativeRuntimeFingerprint !== nativeRuntimeFingerprint ||
+      payload.implementationFingerprint !== implementationFingerprint
     ) {
       return null;
     }
-    // Payload is freshly JSON.parsed from memoized compressed bytes (no deep clone).
-    const payload = rawPayload;
     const graph: Graph = {
       nodes: new Set(payload.graph.nodes),
       edges: payload.graph.edges,
@@ -313,11 +423,12 @@ export async function tryLoadProjectIndexSnapshot(
       modules,
       byFile: modules,
       projectRoot: serializedProjectRoot(projectRoot),
+      ...(payload.languageExtensions ? { languageExtensions: payload.languageExtensions } : {}),
       ...(payload.nativeMode ? { nativeMode: payload.nativeMode } : {}),
       exportCache: new Map(),
       scopeCache: new Map(),
       ...(shouldHydrateBloomFilters && payload.bloomFilters
-        ? { bloomFilters: deserializeBloomFilterCache(payload.bloomFilters) }
+        ? { bloomFilters: deserializeBloomFilterCache(payload.bloomFilters, projectRoot) }
         : {}),
       ...(payload.projectFiles ? { projectFiles: payload.projectFiles } : {}),
       referenceCandidates: buildReferenceCandidateIndex(modules),
@@ -355,7 +466,7 @@ export async function tryLoadPersistedBloomFilters(
     const payload = (await readParsedSnapshot(projectSnapshotPath(projectRoot, opts))).payload;
     const bloomFilters = persistedBloomFiltersFromSnapshot(payload, projectRoot);
     if (!bloomFilters) return null;
-    return deserializeBloomFilterCache(bloomFilters);
+    return deserializeBloomFilterCache(bloomFilters, projectRoot);
   } catch {
     return null;
   }
@@ -366,12 +477,12 @@ function persistedBloomFiltersFromSnapshot(
   value: unknown,
   projectRoot: string,
 ): Record<string, SerializedBloomFilter> | null {
-  if (!value || typeof value !== "object") return null;
-  const payload = value as Partial<ProjectIndexSnapshotPayload>;
+  const migrated = migrateProjectSnapshotPayload(value, projectRoot);
+  if (!migrated || typeof migrated !== "object") return null;
+  const payload = migrated as Partial<ProjectIndexSnapshotPayload>;
   if (
     payload.version !== PROJECT_SNAPSHOT_VERSION ||
     typeof payload.projectRoot !== "string" ||
-    !projectRootMatches(projectRoot, payload.projectRoot) ||
     payload.implementationFingerprint !== getImplementationFingerprint()
   ) {
     return null;
@@ -391,29 +502,35 @@ export async function writeProjectIndexSnapshot(
     ? serializeBloomFilterCache(
         index.bloomFilters,
         Array.from(index.byFile.values(), (module) => module.file),
+        projectRoot,
       )
     : undefined;
   const snapshotAnalysisReport = analysisReportFromBuildReport(index.buildReport);
   const snapshotAnalysis = index.buildReport ? summarizeAnalysis({ index, report: index.buildReport }) : index.analysis;
-  const payload: ProjectIndexSnapshotPayload = {
-    version: PROJECT_SNAPSHOT_VERSION,
-    filesSignature,
-    projectRoot: serializedProjectRoot(projectRoot),
-    nativeRuntimeFingerprint: getNativeRuntimeFingerprint(opts?.native),
-    implementationFingerprint: getImplementationFingerprint(),
-    graph: {
-      nodes: [...index.graph.nodes],
-      edges: index.graph.edges,
+  const payload = transformSnapshotPaths(
+    {
+      version: PROJECT_SNAPSHOT_VERSION,
+      filesSignature,
+      projectRoot: serializedProjectRoot(projectRoot),
+      nativeRuntimeFingerprint: getNativeRuntimeFingerprint(opts?.native),
+      implementationFingerprint: getImplementationFingerprint(),
+      graph: {
+        nodes: [...index.graph.nodes],
+        edges: index.graph.edges,
+      },
+      modules: [...index.byFile.values()],
+      ...(index.languageExtensions ? { languageExtensions: index.languageExtensions } : {}),
+      ...(normalizedSnapshotNativeMode(index.nativeMode)
+        ? { nativeMode: normalizedSnapshotNativeMode(index.nativeMode) }
+        : {}),
+      ...(index.projectFiles ? { projectFiles: index.projectFiles } : {}),
+      ...(serializedBloomFilters ? { bloomFilters: serializedBloomFilters } : {}),
+      ...(snapshotAnalysis ? { analysis: snapshotAnalysis } : {}),
+      ...(snapshotAnalysisReport ? { analysisReport: snapshotAnalysisReport } : {}),
     },
-    modules: [...index.byFile.values()],
-    ...(normalizedSnapshotNativeMode(index.nativeMode)
-      ? { nativeMode: normalizedSnapshotNativeMode(index.nativeMode) }
-      : {}),
-    ...(index.projectFiles ? { projectFiles: index.projectFiles } : {}),
-    ...(serializedBloomFilters ? { bloomFilters: serializedBloomFilters } : {}),
-    ...(snapshotAnalysis ? { analysis: snapshotAnalysis } : {}),
-    ...(snapshotAnalysisReport ? { analysisReport: snapshotAnalysisReport } : {}),
-  };
+    projectRoot,
+    true,
+  );
   try {
     const snapshotPath = projectSnapshotPath(projectRoot, opts);
     const compressed = brotliCompressSync(JSON.stringify(payload), {
@@ -452,10 +569,20 @@ export async function tryLoadDetailedSymbolGraphSnapshot(
       return materializeDetailedSymbolGraph(cached.graph);
     }
     const parsed = await readParsedSnapshot(snapshotPath);
-    const payload = parsed.payload;
+    const migratedPayload = migrateDetailedSymbolGraphPayload(parsed.payload, projectRoot);
+    const payload =
+      migratedPayload && typeof migratedPayload === "object" && !Array.isArray(migratedPayload)
+        ? {
+            ...(migratedPayload as DetailedSymbolGraphSnapshotPayload),
+            graph: transformDetailedGraph(
+              (migratedPayload as DetailedSymbolGraphSnapshotPayload).graph,
+              projectRoot,
+              false,
+            ),
+          }
+        : migratedPayload;
     if (
       !isDetailedSymbolGraphSnapshotPayload(payload) ||
-      !projectRootMatches(projectRoot, payload.projectRoot) ||
       payload.implementationFingerprint !== getImplementationFingerprint() ||
       payload.projectSnapshotIdentity !== index.projectSnapshotIdentity
     ) {
@@ -485,17 +612,21 @@ export async function writeDetailedSymbolGraphSnapshot(
   graph: SymbolGraph,
 ): Promise<void> {
   if ((opts?.cache ?? "off") !== "disk" || !index.projectSnapshotIdentity) return;
-  const payload: DetailedSymbolGraphSnapshotPayload = {
+  const payload = {
     version: DETAILED_SYMBOL_GRAPH_SNAPSHOT_VERSION,
     projectRoot: serializedProjectRoot(projectRoot),
     implementationFingerprint: getImplementationFingerprint(),
     graphHash: detailedSymbolGraphContentHash(index.projectSnapshotIdentity, graph),
     projectSnapshotIdentity: index.projectSnapshotIdentity,
-    graph: {
-      nodes: [...graph.nodes.values()],
-      edges: graph.edges,
-    },
-  };
+    graph: transformDetailedGraph(
+      {
+        nodes: [...graph.nodes.values()],
+        edges: graph.edges,
+      },
+      projectRoot,
+      true,
+    ),
+  } satisfies DetailedSymbolGraphSnapshotPayload;
   try {
     const snapshotPath = detailedSymbolGraphSnapshotPath(projectRoot, opts);
     parsedSnapshotCache.delete(snapshotPath);
@@ -505,12 +636,14 @@ export async function writeDetailedSymbolGraphSnapshot(
     });
     await writeSnapshotAtomically(snapshotPath, compressed);
     const identity = await snapshotFileIdentity(snapshotPath);
-    const cachedPayload = structuredClone(payload);
     setBoundedSnapshotCache(parsedSnapshotCache, snapshotPath, { identity, compressed });
     setBoundedSnapshotCache(detailedSymbolGraphCache, snapshotPath, {
       identity,
       projectSnapshotIdentity: index.projectSnapshotIdentity,
-      graph: cachedPayload.graph,
+      graph: {
+        nodes: [...graph.nodes.values()],
+        edges: graph.edges,
+      },
     });
   } catch {
     // Detailed graph persistence is an optimization; source parsing remains authoritative.
@@ -922,13 +1055,14 @@ function isAnalysisSummary(value: unknown): value is AnalysisSummary {
 function serializeBloomFilterCache(
   cache: BloomFilterCache,
   files: Iterable<string>,
+  projectRoot: string,
 ): Record<string, SerializedBloomFilter> | undefined {
   const serialized: Record<string, SerializedBloomFilter> = {};
   for (const file of files) {
     const filter = cache.get(file);
     if (!filter) continue;
     const metadata = filter.getMetadata();
-    serialized[file] = {
+    serialized[cacheRelativePath(projectRoot, file)] = {
       size: metadata.size,
       hashCount: metadata.hashCount,
       bitsBase64: filter.toBuffer().toString("base64"),
@@ -936,11 +1070,16 @@ function serializeBloomFilterCache(
   }
   return Object.keys(serialized).length ? serialized : undefined;
 }
-
-function deserializeBloomFilterCache(serialized: Record<string, SerializedBloomFilter>): BloomFilterCache {
+function deserializeBloomFilterCache(
+  serialized: Record<string, SerializedBloomFilter>,
+  projectRoot: string,
+): BloomFilterCache {
   const cache = new BloomFilterCache();
   for (const [file, filter] of Object.entries(serialized)) {
-    cache.set(file, BloomFilter.fromBuffer(Buffer.from(filter.bitsBase64, "base64"), filter.size, filter.hashCount));
+    cache.set(
+      cacheAbsolutePath(projectRoot, file),
+      BloomFilter.fromBuffer(Buffer.from(filter.bitsBase64, "base64"), filter.size, filter.hashCount),
+    );
   }
   return cache;
 }
@@ -966,9 +1105,17 @@ function isSerializedBloomFilter(value: unknown): value is SerializedBloomFilter
   ) {
     return false;
   }
-  const maxBytes = Math.ceil(filter.size / 8);
-  const maxBase64Length = Math.ceil(maxBytes / 3) * 4;
-  return filter.bitsBase64.length === maxBase64Length;
+  const expectedBytes = Math.ceil(filter.size / 8);
+  let decoded: Buffer;
+  try {
+    decoded = Buffer.from(filter.bitsBase64, "base64");
+  } catch {
+    return false;
+  }
+  return (
+    decoded.length === expectedBytes &&
+    decoded.toString("base64") === filter.bitsBase64
+  );
 }
 
 function isModuleIndex(value: unknown): value is ModuleIndex {

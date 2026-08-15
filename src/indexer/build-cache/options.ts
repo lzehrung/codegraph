@@ -9,6 +9,9 @@ import { getCodegraphVersion } from "../../util/packageInfo.js";
 import { type ProjectFileDiscoveryOptions } from "../../util/projectFiles.js";
 import { getNativeRuntimeFingerprint } from "../../native/treeSitterNative.js";
 import type { BuildOptions } from "../types.js";
+export { normalizeLanguageExtensions } from "../../languages.js";
+
+export const CORE_ALGORITHM_EPOCH = 2;
 
 export type ManifestBuildOptions = {
   cache?: BuildOptions["cache"];
@@ -17,6 +20,7 @@ export type ManifestBuildOptions = {
   incrementalStrict?: boolean;
   nativeRuntimeFingerprint?: string;
   implementationFingerprint?: string;
+  coreAlgorithmEpoch?: number;
   discovery?: {
     includeGlobs?: string[];
     ignoreGlobs?: string[];
@@ -152,7 +156,9 @@ export function getImplementationFingerprint(): string {
     .map(languageDefinitionFingerprintDescriptor)
     .sort((left, right) => left.id.localeCompare(right.id));
   const hash = crypto.createHash("sha256");
-  hash.update("codegraph-implementation-fingerprint-v1");
+  hash.update("codegraph-implementation-fingerprint-v2");
+  hash.update("\0");
+  hash.update(String(CORE_ALGORITHM_EPOCH));
   hash.update("\0");
   hash.update(getCodegraphVersion());
   hash.update("\0");
@@ -174,6 +180,7 @@ function normalizeManifestBuildOptions(opts?: ManifestBuildOptions): ManifestBui
     incrementalStrict: opts?.incrementalStrict ?? false,
     ...(opts?.nativeRuntimeFingerprint ? { nativeRuntimeFingerprint: opts.nativeRuntimeFingerprint } : {}),
     ...(opts?.implementationFingerprint ? { implementationFingerprint: opts.implementationFingerprint } : {}),
+    coreAlgorithmEpoch: opts?.coreAlgorithmEpoch ?? 1,
     ...(opts?.discovery ? { discovery: opts.discovery } : {}),
     ...(languageExtensions ? { languageExtensions } : {}),
   };
@@ -199,8 +206,6 @@ function normalizeDiscoveryOptions(discovery?: ProjectFileDiscoveryOptions): Man
   };
 }
 
-export { normalizeLanguageExtensions } from "../../languages.js";
-
 function normalizeBuildOptions(opts?: BuildOptions): ManifestBuildOptions {
   const discovery = normalizeDiscoveryOptions(opts?.discovery);
   const languageExtensions = normalizeLanguageExtensions(opts?.languageExtensions);
@@ -211,6 +216,7 @@ function normalizeBuildOptions(opts?: BuildOptions): ManifestBuildOptions {
     incrementalStrict: opts?.incrementalStrict ?? false,
     nativeRuntimeFingerprint: getNativeRuntimeFingerprint(opts?.native),
     implementationFingerprint: getImplementationFingerprint(),
+    coreAlgorithmEpoch: CORE_ALGORITHM_EPOCH,
     ...(discovery ? { discovery } : {}),
     ...(languageExtensions ? { languageExtensions } : {}),
   };
@@ -288,6 +294,9 @@ export function diffBuildOptions(
   }
   if (normalizedManifest.nativeRuntimeFingerprint !== normalizedCurrent.nativeRuntimeFingerprint) {
     diffs.push("native");
+  }
+  if ((normalizedManifest.coreAlgorithmEpoch ?? 1) !== (normalizedCurrent.coreAlgorithmEpoch ?? CORE_ALGORITHM_EPOCH)) {
+    diffs.push("coreAlgorithm");
   }
   if (normalizedManifest.implementationFingerprint !== normalizedCurrent.implementationFingerprint) {
     diffs.push("implementation");

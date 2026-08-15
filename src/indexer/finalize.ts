@@ -1,5 +1,6 @@
-import { performance } from "node:perf_hooks";
+import { normalizeLanguageExtensions } from "../languages.js";
 import { buildGraphAdjacency } from "../graphs/adjacency.js";
+import { performance } from "node:perf_hooks";
 import { discoverProjectFiles, type ProjectFileInfo } from "../util/projectFiles.js";
 import type { FileId, Graph } from "../types.js";
 import type { BloomFilterCache } from "../util/bloomFilter.js";
@@ -28,16 +29,17 @@ export async function finalizeProjectIndex(args: {
     discoverProjectFiles(args.projectRoot, {
       ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
     }));
+  const languageExtensions = normalizeLanguageExtensions(args.opts?.languageExtensions);
   const parsed = retainedParsedCache(args.parsedMap, args.opts);
   return {
     graph: args.graph,
     graphAdjacency: buildGraphAdjacency(args.graph),
     modules: args.modules,
     byFile: args.modules,
-    projectRoot: args.normalizedProjectRoot,
-    ...(args.opts?.native ? { nativeMode: args.opts.native } : {}),
+    ...(languageExtensions ? { languageExtensions } : {}),
     exportCache: new Map(),
     scopeCache: new Map(),
+    ...(args.opts?.native ? { nativeMode: args.opts.native } : {}),
     ...(parsed ? { parsed } : {}),
     ...(args.bloomFilterCache ? { bloomFilters: args.bloomFilterCache } : {}),
     projectFiles,

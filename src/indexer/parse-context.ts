@@ -173,6 +173,7 @@ export async function parseFile(file: string): Promise<ParsedFileContext> {
 export async function ensureParsedContext(
   file: string,
   parsedEntry?: ParsedFileCacheEntry,
+  languageExtensions?: LanguageExtensionMap,
 ): Promise<ParsedFileContext> {
   if (parsedEntry?.sup) {
     return {
@@ -183,5 +184,5 @@ export async function ensureParsedContext(
       nativeQueries: parsedEntry.nativeQueries ?? null,
     };
   }
-  return parsePreparedFileContext(await prepareFileForIndexing(file));
+  return parsePreparedFileContext(await prepareFileForIndexing(file, undefined, languageExtensions));
 }

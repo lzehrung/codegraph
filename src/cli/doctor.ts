@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { cacheRoot, resolveCacheAnchor } from "../indexer/build-cache/module-cache.js";
 import {
   isNativeTreeSitterAvailable,
   getNativeBindingOrigin,
@@ -34,7 +35,6 @@ export type DoctorNativeUpdateReport = {
   installedVersion?: string;
   reason?: string;
 };
-
 export type DoctorReport = {
   package: CodegraphPackageIdentity;
   native: {
@@ -43,6 +43,11 @@ export type DoctorReport = {
     supportedLanguageIds: string[];
     origin?: DoctorNativeOriginReport;
     update?: DoctorNativeUpdateReport;
+  };
+  cache: {
+    path: string;
+    anchor: string;
+    layer: string;
   };
   indexArtifact?: IndexedArtifactReport;
 };
@@ -310,8 +315,14 @@ export function buildDoctorReport(indexPath?: string): DoctorReport {
   const origin = getNativeBindingOrigin();
   const runtimeIdentity = captureCodegraphRuntimeIdentity(origin);
   const update = createInstalledVersionChecker(runtimeIdentity, { warn: () => undefined }).check(true);
+  const cacheResolution = resolveCacheAnchor(process.cwd());
   return {
     package: packageIdentity,
+    cache: {
+      path: normalizePathForDisplay(cacheRoot(process.cwd())),
+      anchor: normalizePathForDisplay(cacheResolution.anchor),
+      layer: cacheResolution.layer,
+    },
     native: {
       available: isNativeTreeSitterAvailable(),
       ...(loadError ? { loadError: String(loadError) } : {}),

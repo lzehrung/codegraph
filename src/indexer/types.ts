@@ -107,6 +107,7 @@ export type ProjectIndex = {
   modules: Map<FileId, ModuleIndex>;
   byFile: Map<FileId, ModuleIndex>;
   projectRoot?: string;
+  languageExtensions?: LanguageExtensionMap;
   nativeMode?: NativeRuntimeMode;
   exportCache: Map<string, ResolvedExport | null>;
   scopeCache: Map<string, ScopeIndex>;
@@ -135,11 +136,14 @@ export type ProjectIndex = {
  */
 export type LanguageExtensionMap = import("../languages.js").LanguageExtensionMap;
 
+export type CacheLocation = "project" | "repo" | "user" | string;
+
 export type BuildOptions = {
   onProgress?: ((progress: ProgressUpdate) => void) | undefined;
   threads?: number;
   cache?: "off" | "memory" | "disk";
   cacheDir?: string;
+  cacheLocation?: CacheLocation;
   cacheStrict?: boolean;
   useBloomFilters?: boolean;
   graph?: GraphBuildOptions;

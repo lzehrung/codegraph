@@ -137,7 +137,9 @@ export async function buildSymbolGraphDetailed(
       let src = parsedEntry?.source;
       let tree: SyntaxTreeLike | undefined = parsedEntry?.tree;
       if (!sup || src === undefined) {
-        const prep = await prepareSourceInput(file);
+        const prep = await prepareSourceInput(file, {
+          languageExtensions: index.languageExtensions,
+        });
         sup = prep.sup;
         src = prep.source;
       }

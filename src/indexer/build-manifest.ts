@@ -6,6 +6,7 @@ import {
   MANIFEST_VERSION,
   recordConfigHashResult,
   summarizeBuildOptions,
+  transformManifestEntries,
   writeManifest,
   type IndexManifest,
   type ManifestFileEntry,
@@ -49,8 +50,8 @@ export async function writeIndexManifestSnapshot(args: {
     ...(configHash ? { configHash } : {}),
     graphOptions: args.graphOptions,
     buildOptions: summarizeBuildOptions(args.opts),
-    files,
-    transientFiles: args.transientFiles ?? [],
+    files: transformManifestEntries(args.projectRoot, files, true),
+    transientFiles: (args.transientFiles ?? []).map((file) => path.relative(args.projectRoot, file).replace(/\\/g, "/")),
     ...(args.symlinkDirectories !== undefined ? { symlinkDirectories: args.symlinkDirectories } : {}),
   };
   const manifestWritten = await writeManifest(args.projectRoot, args.opts, manifestData);
