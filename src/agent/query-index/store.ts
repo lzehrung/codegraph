@@ -119,6 +119,7 @@ export class QueryIndexStore {
     try {
       ensureQueryIndexSchema(db);
       db.pragma("journal_mode = WAL");
+      db.pragma("synchronous = NORMAL");
       db.pragma("foreign_keys = ON");
     } catch (error) {
       db.close();

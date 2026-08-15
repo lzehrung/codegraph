@@ -541,11 +541,12 @@ async function prepareFileSignatures(args: {
   opts: BuildOptions | undefined;
   gitSigMap: Map<string, string>;
   cacheEnabled: boolean;
+  needsContentHash: boolean;
   concurrency: number;
 }): Promise<Map<string, FileSignature>> {
   const entries = await mapLimit(args.files, args.concurrency, async (file) => {
     const gitSig = args.gitSigMap.get(file);
-    const sigInfo = await fileSignature(file, args.opts?.cacheStrict, gitSig, {
+    const sigInfo = await fileSignature(file, args.needsContentHash ? args.opts?.cacheStrict : false, gitSig, {
       forceContentHash: args.cacheEnabled && !gitSig,
     });
     return [file, sigInfo] as const;
@@ -658,6 +659,7 @@ async function buildIndexFromFileListShared(
     opts,
     gitSigMap,
     cacheEnabled,
+    needsContentHash: true,
     concurrency: conc,
   });
   const sqlCorpusSig = sqlCorpusSignature(sqlFiles, fileSignatures);
@@ -1432,6 +1434,7 @@ export async function buildProjectIndexIncremental(
         opts,
         gitSigMap,
         cacheEnabled,
+        needsContentHash: cacheEnabled || useManifest || opts?.cacheStrict === true,
         concurrency: conc,
       });
       const modules = new Map<FileId, ModuleIndex>();
