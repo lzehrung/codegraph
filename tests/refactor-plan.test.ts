@@ -187,4 +187,59 @@ describe("refactor evidence plan", () => {
     expect(result.omittedCounts.callers).toBeGreaterThan(0);
     expect(result.omittedCounts.callees).toBeGreaterThan(0);
   });
+  it("O6: correctly handles 100 and 101 candidate test boundaries in refactor plan", async () => {
+    const root100 = await mkTmpDir("cg-refactor-test-100-");
+    await fsp.writeFile(path.join(root100, "service.ts"), "export function service(): number { return 1; }\n");
+    await Promise.all(
+      Array.from({ length: 100 }, async (_, index) => {
+        const suffix = String(index).padStart(3, "0");
+        await fsp.writeFile(
+          path.join(root100, `candidate-${suffix}.test.ts`),
+          'import { service } from "./service.js";\nservice();\n',
+        );
+      }),
+    );
+    const session100 = createAgentSession({ root: root100, freshness: { policy: "check" } });
+    const snapshot100 = await session100.loadProject();
+    const targetDef100 = [...snapshot100.index.byFile.values()]
+      .flatMap((m) => m.locals)
+      .find((d) => d.localName === "service");
+    expect(targetDef100).toBeDefined();
+    const handle100 = semanticSymbolFromDef(snapshot100, targetDef100!).handle;
+
+    const result100 = await buildRefactorPlanWithSession(session100, {
+      root: root100,
+      handle: handle100,
+    });
+
+    expect(result100.candidateTests).toHaveLength(100);
+    expect(result100.omittedCounts.candidateTests).toBe(0);
+
+    const root101 = await mkTmpDir("cg-refactor-test-101-");
+    await fsp.writeFile(path.join(root101, "service.ts"), "export function service(): number { return 1; }\n");
+    await Promise.all(
+      Array.from({ length: 101 }, async (_, index) => {
+        const suffix = String(index).padStart(3, "0");
+        await fsp.writeFile(
+          path.join(root101, `candidate-${suffix}.test.ts`),
+          'import { service } from "./service.js";\nservice();\n',
+        );
+      }),
+    );
+    const session101 = createAgentSession({ root: root101, freshness: { policy: "check" } });
+    const snapshot101 = await session101.loadProject();
+    const targetDef101 = [...snapshot101.index.byFile.values()]
+      .flatMap((m) => m.locals)
+      .find((d) => d.localName === "service");
+    expect(targetDef101).toBeDefined();
+    const handle101 = semanticSymbolFromDef(snapshot101, targetDef101!).handle;
+
+    const result101 = await buildRefactorPlanWithSession(session101, {
+      root: root101,
+      handle: handle101,
+    });
+
+    expect(result101.candidateTests).toHaveLength(100);
+    expect(result101.omittedCounts.candidateTests).toBe(1);
+  });
 });

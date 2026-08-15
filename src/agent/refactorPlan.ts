@@ -7,7 +7,7 @@ import {
   type TypeHierarchyResult,
 } from "../indexer/type-hierarchy.js";
 import type { BuildOptions } from "../indexer/types.js";
-import { listCandidateTestFiles } from "../impact/context.js";
+import { shapeCandidateTests } from "./candidateTests.js";
 import { classifySensitiveFile } from "./fileView.js";
 import { normalizeAgentFilePath } from "./normalize.js";
 import { previewRenameInSnapshot, type RenameCandidateTest, type RenamePreviewResponse } from "./renamePreview.js";
@@ -161,16 +161,12 @@ export async function buildRefactorPlanInSnapshot(
     });
   }
 
-  const allCandidateTests = listCandidateTestFiles(snapshot.index, [resolved.def.file], [resolved.id], {
-    maxCandidates: 101,
-    projectRoot: snapshot.root,
-  });
-  const omittedCandidateTests = Math.max(0, allCandidateTests.length - 100);
-  const candidateTests = allCandidateTests.slice(0, 100).map((candidate): RenameCandidateTest => ({
-    file: normalizeAgentFilePath(snapshot.root, candidate.file),
-    confidence: candidate.confidence,
-    reason: candidate.reason,
-  }));
+  const { candidateTests, omittedCandidateTests } = shapeCandidateTests(
+    snapshot.index,
+    snapshot.root,
+    [resolved.def.file],
+    [resolved.id],
+  );
   const target = semanticSymbolFromDef(snapshot, resolved.def);
   const rename = request.renameTo
     ? await previewRenameInSnapshot(

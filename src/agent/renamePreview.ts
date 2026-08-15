@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { defNodeId } from "../graphs/symbol-graph.js";
-import { listCandidateTestFiles } from "../impact/context.js";
+import { shapeCandidateTests, type RenameCandidateTest } from "./candidateTests.js";
+export type { RenameCandidateTest };
 import { findReferences } from "../indexer/navigation.js";
 import { resolveExport } from "../indexer/navigation-resolve.js";
 import { getCachedScope } from "../indexer/navigation-references.js";
@@ -77,11 +78,6 @@ export type RenameFilenameSuggestion = {
   caseOnlyRisk: boolean;
 };
 
-export type RenameCandidateTest = {
-  file: string;
-  confidence: "high" | "medium" | "low";
-  reason: string;
-};
 
 export type RenamePreviewResponse = SemanticResponseEnvelope & {
   target: SemanticSymbol;
@@ -427,16 +423,12 @@ export async function previewRenameInSnapshot(
   }
 
   const editedFiles = [...new Set(normalizedEdits.map((edit) => edit.file))];
-  const allCandidateTests = listCandidateTestFiles(snapshot.index, editedFiles, [...semanticDefinitions.keys()], {
-    maxCandidates: 101,
-    projectRoot: snapshot.root,
-  });
-  const omittedCandidateTests = Math.max(0, allCandidateTests.length - 100);
-  const candidateTests = allCandidateTests.slice(0, 100).map((candidate): RenameCandidateTest => ({
-    file: normalizeAgentFilePath(snapshot.root, candidate.file),
-    confidence: candidate.confidence,
-    reason: candidate.reason,
-  }));
+  const { candidateTests, omittedCandidateTests } = shapeCandidateTests(
+    snapshot.index,
+    snapshot.root,
+    editedFiles,
+    [...semanticDefinitions.keys()],
+  );
   if (omittedCandidateTests) {
     unsafeSites.push({
       location: {

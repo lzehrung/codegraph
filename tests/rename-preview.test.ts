@@ -631,4 +631,54 @@ describe("rename preview", () => {
     expect(result.omittedCounts.candidateTests).toBeGreaterThan(0);
     expect(result.unsafeSites).toContainEqual(expect.objectContaining({ reason: "limit_exceeded" }));
   });
+  it("O6: correctly handles 100 and 101 candidate test boundaries in rename preview", async () => {
+    const root100 = await mkTmpDir("cg-rename-test-100-");
+    await fsp.writeFile(path.join(root100, "service.ts"), "export function service(): number { return 1; }\n");
+    await Promise.all(
+      Array.from({ length: 100 }, async (_, index) => {
+        const suffix = String(index).padStart(3, "0");
+        await fsp.writeFile(
+          path.join(root100, `candidate-${suffix}.test.ts`),
+          'import { service } from "./service.js";\nservice();\n',
+        );
+      }),
+    );
+    const session100 = createAgentSession({ root: root100, freshness: { policy: "check" } });
+    const symbols100 = await workspaceSymbolsWithSession(session100, { root: root100, query: "service", exportedOnly: true });
+    expect(symbols100.symbols[0]).toBeDefined();
+
+    const result100 = await previewRenameWithSession(session100, {
+      root: root100,
+      handle: symbols100.symbols[0]!.handle,
+      newName: "renamedService",
+    });
+
+    expect(result100.candidateTests).toHaveLength(100);
+    expect(result100.omittedCounts.candidateTests).toBe(0);
+
+    const root101 = await mkTmpDir("cg-rename-test-101-");
+    await fsp.writeFile(path.join(root101, "service.ts"), "export function service(): number { return 1; }\n");
+    await Promise.all(
+      Array.from({ length: 101 }, async (_, index) => {
+        const suffix = String(index).padStart(3, "0");
+        await fsp.writeFile(
+          path.join(root101, `candidate-${suffix}.test.ts`),
+          'import { service } from "./service.js";\nservice();\n',
+        );
+      }),
+    );
+    const session101 = createAgentSession({ root: root101, freshness: { policy: "check" } });
+    const symbols101 = await workspaceSymbolsWithSession(session101, { root: root101, query: "service", exportedOnly: true });
+    expect(symbols101.symbols[0]).toBeDefined();
+
+    const result101 = await previewRenameWithSession(session101, {
+      root: root101,
+      handle: symbols101.symbols[0]!.handle,
+      newName: "renamedService",
+    });
+
+    expect(result101.candidateTests).toHaveLength(100);
+    expect(result101.omittedCounts.candidateTests).toBe(1);
+    expect(result101.unsafeSites).toContainEqual(expect.objectContaining({ reason: "limit_exceeded" }));
+  });
 });
