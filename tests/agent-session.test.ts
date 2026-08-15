@@ -1,3 +1,5 @@
+import { disposeSessionQueryIndex, ensureSessionQueryIndex } from "../src/agent/query-index/sessionStore.js";
+import * as updateModule from "../src/agent/query-index/update.js";
 import fs from "node:fs/promises";
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 import { createHash } from "node:crypto";
@@ -874,4 +876,31 @@ describe("agent session", () => {
       dateSpy.mockRestore();
     }
   });
+
+describe("query index sessionStore generation retries (S12)", () => {
+  it("bounds query index generation retries under sustained invalidation and surfaces a clear error", async () => {
+    const root = await mkRepo();
+    const session = createAgentSession({ root });
+    const snapshot = await session.loadProject();
+
+    let attempts = 0;
+    const realEnsureQueryIndex = updateModule.ensureQueryIndex;
+    const ensureQueryIndexSpy = vi.spyOn(updateModule, "ensureQueryIndex").mockImplementation(async (snap) => {
+      attempts += 1;
+      const res = await realEnsureQueryIndex(snap);
+      disposeSessionQueryIndex(session);
+      return res;
+    });
+
+    try {
+      await expect(ensureSessionQueryIndex(session, snapshot)).rejects.toThrow(
+        /Query index generation changed repeatedly while loading/i,
+      );
+      expect(attempts).toBe(3);
+    } finally {
+      ensureQueryIndexSpy.mockRestore();
+    }
+  });
+});
+
 });

@@ -838,4 +838,47 @@ describe("agent search", () => {
 
     expect(response.results).toEqual([]);
   });
+  it("coalesces concurrent queries and evicts oldest entries when session search cache exceeds max entries", async () => {
+    const root = await mkRepo();
+    const session = createAgentSession({ root });
+    try {
+      await session.loadProject();
+
+      // 1. Identical concurrent queries coalesce to one in-flight promise
+      const p1 = searchCodegraphWithSession(session, { root, query: "validateUser", mode: "symbol" });
+      const p2 = searchCodegraphWithSession(session, { root, query: "validateUser", mode: "symbol" });
+      const [r1, r2] = await Promise.all([p1, p2]);
+      expect(r1).toBe(r2);
+
+      // 2. Issuing more unique queries than the 100 cap evicts the oldest entry
+      const firstResult = r1;
+      const recentResults = [];
+      for (let i = 0; i < 100; i += 1) {
+        const res = await searchCodegraphWithSession(session, {
+          root,
+          query: "needleUniqueQuery" + i,
+          mode: "symbol",
+        });
+        recentResults.push(res);
+      }
+
+      // Re-querying the oldest entry ("validateUser") produces a new result because it was evicted
+      const reQueryFirst = await searchCodegraphWithSession(session, {
+        root,
+        query: "validateUser",
+        mode: "symbol",
+      });
+      expect(reQueryFirst).not.toBe(firstResult);
+
+      // Re-querying the most recent entry ("needleUniqueQuery99") returns the cached result
+      const reQueryLatest = await searchCodegraphWithSession(session, {
+        root,
+        query: "needleUniqueQuery99",
+        mode: "symbol",
+      });
+      expect(reQueryLatest).toBe(recentResults[99]);
+    } finally {
+      session.invalidate();
+    }
+  });
 });

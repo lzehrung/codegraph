@@ -4,7 +4,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { searchCodegraphWithSession, type AgentSearchResponse } from "../src/agent/search.js";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
-import { disposeSessionQueryIndex } from "../src/agent/query-index/sessionStore.js";
+import { disposeSessionQueryIndex, ensureSessionQueryIndex } from "../src/agent/query-index/sessionStore.js";
+import * as updateModule from "../src/agent/query-index/update.js";
 import { resolveQueryIndexPaths, resolveQueryIndexSourcePath } from "../src/agent/query-index/paths.js";
 import { expectedQueryIndexVersionMetadata, probeQueryIndexSqliteSupport } from "../src/agent/query-index/schema.js";
 import { SqliteDatabase } from "../src/sqlite-driver.js";
@@ -807,5 +808,28 @@ describe("persistent query index", () => {
     const response = await search(session, root, "validate user");
     expect(response.results.some((result) => result.file === "src/auth.ts")).toBe(true);
     await expect(fs.stat(path.join(root, ".codegraph-cache"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+  it("bounds query index generation retries under sustained invalidation and surfaces a clear error", async () => {
+    const root = await createRepo();
+    const session = createSession(root);
+    const snapshot = await session.loadProject();
+
+    let attempts = 0;
+    const realEnsureQueryIndex = updateModule.ensureQueryIndex;
+    const ensureQueryIndexSpy = vi.spyOn(updateModule, "ensureQueryIndex").mockImplementation(async (snap) => {
+      attempts += 1;
+      const res = await realEnsureQueryIndex(snap);
+      disposeSessionQueryIndex(session);
+      return res;
+    });
+
+    try {
+      await expect(ensureSessionQueryIndex(session, snapshot)).rejects.toThrow(
+        /Query index generation changed repeatedly while loading/i,
+      );
+      expect(attempts).toBe(3);
+    } finally {
+      ensureQueryIndexSpy.mockRestore();
+    }
   });
 });
