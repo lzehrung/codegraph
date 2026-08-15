@@ -502,6 +502,7 @@ export async function collectDuplicateUnits(
     options.maxTokens,
     options.shingleSize,
     options.windowSize,
+    options.projectRoot,
   );
   let belowThresholdUnits = 0;
   const belowThresholdUnitsByFile = new Map<string, number>();

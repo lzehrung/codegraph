@@ -131,11 +131,14 @@ export function duplicateUnitCacheVariant(
   maxTokens: number,
   shingleSize: number,
   windowSize: number,
+  projectRoot?: string,
 ): string {
+  const normalizedProjectRoot = normalizePath(projectRoot ?? index.projectRoot ?? "");
   const nativeMode = normalizedDuplicateUnitCacheNativeMode(index.nativeMode);
   return JSON.stringify({
     version: DUPLICATE_UNIT_CACHE_VERSION,
     tokenizerRevision: DUPLICATE_TOKENIZER_REVISION,
+    projectRoot: normalizedProjectRoot,
     nativeMode,
     nativeDuplicateTokens: isNativeDuplicateTokenizationAvailable(index.nativeMode),
     nativeSyntaxLanguages: getNativeTreeSitterSupportedLanguageIds(index.nativeMode),
