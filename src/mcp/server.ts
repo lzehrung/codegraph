@@ -138,6 +138,8 @@ export type CodegraphMcpServerOptions = CodegraphMcpHandlerOptions & {
   httpSessionMaxCount?: number;
   /** How often to scan for idle HTTP sessions in ms. Defaults to 60 seconds. */
   httpSessionEvictionIntervalMs?: number;
+  /** Maximum time to receive an HTTP MCP request body in ms. Defaults to 30 seconds. */
+  httpBodyTimeoutMs?: number;
   onHttpListen?: ((info: CodegraphMcpHttpServerInfo) => void) | undefined;
   runtimeIdentity?: CodegraphRuntimeIdentity;
 };
@@ -156,6 +158,7 @@ export type CodegraphMcpHttpServer = CodegraphMcpHttpServerInfo & {
 export const DEFAULT_MCP_HTTP_SESSION_IDLE_MS = 30 * 60 * 1000;
 export const DEFAULT_MCP_HTTP_SESSION_MAX_COUNT = 32;
 export const DEFAULT_MCP_HTTP_SESSION_EVICTION_INTERVAL_MS = 60_000;
+export const DEFAULT_MCP_HTTP_BODY_TIMEOUT_MS = 30_000;
 
 type LegacyMcpSession = {
   server: Server;
@@ -1211,6 +1214,7 @@ export async function startCodegraphMcpHttpServer(
       validateOrigin,
       modernNodeHandler,
       createProtocolServer,
+      options.httpBodyTimeoutMs ?? DEFAULT_MCP_HTTP_BODY_TIMEOUT_MS,
     );
   });
 
@@ -1248,6 +1252,7 @@ async function handleMcpHttpRequest(
   validateOrigin: OriginValidator,
   modernNodeHandler: NodeMcpRequestHandler,
   createProtocolServer: () => Server,
+  bodyTimeoutMs: number,
 ): Promise<void> {
   const requestPath = getRequestPath(request);
   if (requestPath !== MCP_HTTP_PATH) {
@@ -1263,9 +1268,13 @@ async function handleMcpHttpRequest(
 
   try {
     if (request.method === "POST") {
-      const parsedBody = await readJsonRequestBody(request, MAX_MCP_HTTP_BODY_BYTES);
+      const parsedBody = await readJsonRequestBody(request, MAX_MCP_HTTP_BODY_BYTES, bodyTimeoutMs);
       if (parsedBody.status === "too_large") {
         writeJsonRpcError(response, 413, "MCP request body is too large");
+        return;
+      }
+      if (parsedBody.status === "timeout") {
+        writeJsonRpcError(response, 408, "MCP request body timed out");
         return;
       }
       if (parsedBody.status === "invalid_json") {
