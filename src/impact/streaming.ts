@@ -71,13 +71,54 @@ function validateImpactStreamingOptions(options: ImpactStreamingOptions): "full"
   return streamSummary;
 }
 
+/**
+ * Raised when a stream consumer falls behind the producer far enough that the buffered,
+ * unread chunk count would grow without bound. The producer stops (see
+ * `analyzeImpactStreaming`'s `onImpactItem` wiring) instead of silently dropping chunks,
+ * so a stalled consumer learns the stream could not keep up rather than quietly receiving
+ * a truncated-but-apparently-successful result.
+ */
+export class ImpactStreamOverflowError extends Error {
+  constructor(maxQueuedChunks: number) {
+    super(
+      `Impact stream consumer fell behind the producer: more than ${maxQueuedChunks} chunks were buffered ` +
+        "without being read. The stream was stopped instead of dropping chunks silently.",
+    );
+    this.name = "ImpactStreamOverflowError";
+  }
+}
+
+/**
+ * Thrown from the `onImpactItem` producer callback once the consumer has abandoned the
+ * stream (see the `analyzeImpactStreaming` cancellation note below). Unwinds
+ * `analyzeImpact`'s in-progress work through its normal promise-rejection path; nothing
+ * outside this module ever observes it, since by construction nobody is listening to the
+ * stream anymore once it fires.
+ */
+class ImpactStreamAbandonedError extends Error {
+  constructor() {
+    super("Impact stream consumer stopped reading; cancelling in-progress analysis.");
+    this.name = "ImpactStreamAbandonedError";
+  }
+}
+
+/**
+ * Default cap on buffered-but-unread stream chunks before `ImpactStreamOverflowError` is
+ * raised. True backpressure (pausing the producer until the consumer catches up) would
+ * require the `onImpactItem` emission callback to be genuinely awaitable, which means
+ * awaiting it at every synchronous call site in `direct.ts`/`transitive.ts` — an invasive
+ * redesign of code outside this module. A hard cap is the non-invasive alternative: it
+ * turns unbounded memory growth into an explicit, surfaced failure instead.
+ */
+export const DEFAULT_MAX_IMPACT_STREAM_QUEUED_CHUNKS = 10_000;
+
 type AsyncQueue<T> = {
   push: (value: T) => void;
   close: () => void;
   next: () => Promise<IteratorResult<T>>;
 };
 
-function createAsyncQueue<T>(): AsyncQueue<T> {
+function createAsyncQueue<T>(maxQueuedChunks: number): AsyncQueue<T> {
   const values: T[] = [];
   const waiters: Array<(result: IteratorResult<T>) => void> = [];
   let closed = false;
@@ -89,6 +130,9 @@ function createAsyncQueue<T>(): AsyncQueue<T> {
       if (waiter) {
         waiter({ value, done: false });
         return;
+      }
+      if (values.length >= maxQueuedChunks) {
+        throw new ImpactStreamOverflowError(maxQueuedChunks);
       }
       values.push(value);
     },
@@ -175,6 +219,9 @@ export function impactItemEmissionKey(item: ImpactItem, partial: boolean): strin
 
 export type ImpactStreamingContext = {
   buildReport?: BuildReport | undefined;
+  /** @internal Overrides the buffered-chunk cap (`DEFAULT_MAX_IMPACT_STREAM_QUEUED_CHUNKS`).
+   * Test seam for deterministically exercising `ImpactStreamOverflowError`. */
+  maxQueuedChunks?: number | undefined;
 };
 
 /**
@@ -187,6 +234,16 @@ export type ImpactStreamingContext = {
  * chains, graph edges, cycles, diagnostics, and schema metadata. Use
  * `streamSummary: "light"` when a caller only needs the progressive chunks and
  * a cheap terminal count/detail summary.
+ *
+ * Cancellation: if the consumer stops iterating early — a `for await` `break`, or an
+ * explicit `.return()` on the generator — the async-generator return protocol resumes
+ * this function's execution at its `finally` block, which aborts an internal
+ * `AbortController`. The background `analyzeImpact()` producer's `onImpactItem` callback
+ * checks that signal and throws once it fires, unwinding `analyzeImpact`'s in-progress
+ * work (no further batches or transitive passes run) instead of letting the whole
+ * analysis complete unread. This needs no signal parameter on the public API: `yield*`
+ * delegation (used by `session.ts`'s `analyzeImpactStream`) forwards a caller's
+ * `.return()` through automatically.
  */
 export async function* analyzeImpactStreaming(
   projectRoot: string,
@@ -194,6 +251,7 @@ export async function* analyzeImpactStreaming(
   options: ImpactStreamingOptions,
   context: ImpactStreamingContext = {},
 ): AsyncGenerator<ImpactStreamChunk> {
+  const abortController = new AbortController();
   try {
     const streamSummary = validateImpactStreamingOptions(options);
     const impactOptions = toImpactOptions(options);
@@ -253,7 +311,9 @@ export async function* analyzeImpactStreaming(
     const normalizedChanges = normalizedDiff.files;
     const fileLevelFallback = impactOptions.fileLevelFallback ?? true;
     const fileLevelFallbackPaths = listFileLevelFallbackPaths(normalizedChanges, filesWithSymbols);
-    const impactQueue = createAsyncQueue<ImpactStreamChunk>();
+    const impactQueue = createAsyncQueue<ImpactStreamChunk>(
+      context.maxQueuedChunks ?? DEFAULT_MAX_IMPACT_STREAM_QUEUED_CHUNKS,
+    );
     const emittedSignatures = new Set<string>();
     let impactedItems: ImpactItem[] = [];
     let impactError: string | null = null;
@@ -278,6 +338,9 @@ export async function* analyzeImpactStreaming(
       fileLevelFallbackPaths,
       diagnostics,
       onImpactItem: (item, phase) => {
+        if (abortController.signal.aborted) {
+          throw new ImpactStreamAbandonedError();
+        }
         queueImpactItem(item, phase === "partial");
       },
     })
@@ -355,6 +418,12 @@ export async function* analyzeImpactStreaming(
       type: "error",
       error: errorMessage(error),
     };
+  } finally {
+    // Runs on normal completion, on a caught error, and — via the async-generator return
+    // protocol — when the consumer stops iterating early. In the early-abandonment case
+    // this is what actually stops the background analysis: it flips the shared abort
+    // signal that the `onImpactItem` producer callback above checks and throws from.
+    abortController.abort();
   }
 }
 

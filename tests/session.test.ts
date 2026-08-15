@@ -3,6 +3,7 @@ import type { ICodeReviewSession } from "../src/index.js";
 import type { BuildOptions, BuildReport, LanguageExtensionMap } from "../src/indexer/types.js";
 import { CodeReviewSession, SessionManager, createCodeReviewSession } from "../src/session.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
+import * as navigation from "../src/indexer/navigation.js";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
@@ -1787,5 +1788,72 @@ describe("SessionManager", () => {
     ]);
 
     expect(manager.getSession("shared")).toBe(existing);
+  });
+});
+
+describe("CodeReviewSession impact stream cancellation", () => {
+  test("stops the background analyzer once a session.analyzeImpactStream consumer abandons the stream", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "dg-session-impact-stream-cancel-"));
+    try {
+      const symbolCount = 40;
+      const lines = Array.from({ length: symbolCount }, (_, i) => `export function fn${i}() { return ${i}; }`);
+      await fsp.writeFile(path.join(root, "feature.ts"), `${lines.join("\n")}\n`, "utf8");
+      const hunks = lines
+        .map((line, i) => {
+          const updated = line.replace(`return ${i};`, `return ${i + 1000};`);
+          return `@@ -${i + 1} +${i + 1} @@\n-${line}\n+${updated}\n`;
+        })
+        .join("");
+      const diffText = `diff --git a/feature.ts b/feature.ts
+index 1234567..abcdef0 100644
+--- a/feature.ts
++++ b/feature.ts
+${hunks}`;
+
+      const session = await createCodeReviewSession({
+        root,
+        buildOptions: { cache: "memory", useBloomFilters: true },
+      });
+      const findReferencesSpy = vi.spyOn(navigation, "findReferences");
+      try {
+        let sawImpactItem = false;
+        for await (const chunk of session.analyzeImpactStream({ provider: "raw", diffText })) {
+          if (chunk.type === "impactItem") {
+            sawImpactItem = true;
+            break;
+          }
+        }
+        expect(sawImpactItem).toBe(true);
+
+        // session.analyzeImpactStream is `yield* analyzeImpactStreaming(...)`: this proves
+        // that delegation forwards the consumer's early `break` (an async-generator
+        // `.return()` call) through to the inner generator without any extra plumbing.
+        // Poll instead of a fixed sleep: the abandoned background chain settles
+        // asynchronously and this test holds no promise handle for it.
+        const deadline = Date.now() + 5_000;
+        let lastCount = findReferencesSpy.mock.calls.length;
+        let lastChangeAt = Date.now();
+        while (Date.now() < deadline && Date.now() - lastChangeAt < 150) {
+          const { promise, resolve } = Promise.withResolvers<void>();
+          setTimeout(resolve, 20);
+          await promise;
+          const count = findReferencesSpy.mock.calls.length;
+          if (count !== lastCount) {
+            lastCount = count;
+            lastChangeAt = Date.now();
+          }
+        }
+
+        expect(lastCount).toBeGreaterThan(0);
+        // Changed symbols are analyzed in fixed batches of 8 (IMPACT_SYMBOL_BATCH_SIZE);
+        // cancelling mid-first-batch must prevent every later batch from ever starting.
+        expect(lastCount).toBeLessThan(symbolCount / 2);
+      } finally {
+        findReferencesSpy.mockRestore();
+        session.dispose();
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
@@ -8,8 +8,9 @@ import {
   type ImpactStreamChunk,
   type ImpactStreamSummaryReport,
 } from "../src/impact/index.js";
-import { impactItemEmissionKey } from "../src/impact/streaming.js";
+import { impactItemEmissionKey, ImpactStreamOverflowError } from "../src/impact/streaming.js";
 import { buildProjectIndex } from "../src/index.js";
+import * as navigation from "../src/indexer/navigation.js";
 import { runGit as git } from "./helpers/git.js";
 
 async function mkTmpDir(prefix: string): Promise<string> {
@@ -583,6 +584,203 @@ index 1234567..abcdef0 100644
       expect(firstImpactIndex).toBeGreaterThan(-1);
       expect(completeIndex).toBeGreaterThan(firstImpactIndex);
     } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+/** Builds `symbolCount` distinct top-level exported functions in one file, plus a raw
+ * unified diff with one hunk per function so `mapChangedFileSymbols` reports
+ * `symbolCount` distinct changed symbols. */
+async function writeManySymbolFixture(root: string, symbolCount: number): Promise<{ diffText: string }> {
+  const lines = Array.from({ length: symbolCount }, (_, i) => `export function fn${i}() { return ${i}; }`);
+  await fsp.writeFile(path.join(root, "feature.ts"), `${lines.join("\n")}\n`, "utf8");
+  const hunks = lines
+    .map((line, i) => {
+      const updated = line.replace(`return ${i};`, `return ${i + 1000};`);
+      return `@@ -${i + 1} +${i + 1} @@\n-${line}\n+${updated}\n`;
+    })
+    .join("");
+  const diffText = `diff --git a/feature.ts b/feature.ts
+index 1234567..abcdef0 100644
+--- a/feature.ts
++++ b/feature.ts
+${hunks}`;
+  return { diffText };
+}
+
+/** Polls a spy's call count until it stops changing, instead of awaiting a fixed real
+ * delay: the background analysis chain abandoned by the stream consumer settles
+ * asynchronously and this test holds no promise handle for it, so there is no signal to
+ * await other than the observable side effect (spy calls) itself. */
+async function waitForStableCallCount(
+  spy: { mock: { calls: unknown[] } },
+  quietMs = 150,
+  timeoutMs = 5_000,
+): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  let lastCount = spy.mock.calls.length;
+  let lastChangeAt = Date.now();
+  while (Date.now() < deadline) {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    setTimeout(resolve, 20);
+    await promise;
+    const count = spy.mock.calls.length;
+    if (count !== lastCount) {
+      lastCount = count;
+      lastChangeAt = Date.now();
+    } else if (Date.now() - lastChangeAt >= quietMs) {
+      return lastCount;
+    }
+  }
+  return lastCount;
+}
+
+describe("Impact streaming resource bounds", () => {
+  it("surfaces a bounded overflow error instead of silently truncating when a producer burst outruns the queue cap", async () => {
+    const root = await mkTmpDir("dg-stream-overflow-");
+    await fsp.writeFile(path.join(root, "feature.ts"), "export function helper() { return 1; }\n", "utf8");
+    const consumerCount = 6;
+    for (let i = 0; i < consumerCount; i += 1) {
+      await fsp.writeFile(
+        path.join(root, `consumer${i}.ts`),
+        `import { helper } from "./feature";\nexport function run${i}() { return helper(); }\n`,
+        "utf8",
+      );
+    }
+    const index = await buildProjectIndex(root);
+
+    try {
+      const diffText = `diff --git a/feature.ts b/feature.ts
+index 1234567..abcdef0 100644
+--- a/feature.ts
++++ b/feature.ts
+@@ -1 +1 @@
+-export function helper() { return 1; }
++export function helper() { return 2; }
+`;
+
+      // All 6 references to `helper` are emitted inside one synchronous loop in
+      // direct.ts (no `await` between them), so a cap of 2 overflows deterministically
+      // on every run regardless of machine speed: the consumer cannot possibly dequeue
+      // mid-burst.
+      const chunkTypes: string[] = [];
+      const errors: string[] = [];
+      const impactFiles: string[] = [];
+      for await (const chunk of analyzeImpactStreaming(
+        root,
+        index,
+        { provider: "raw", diffText },
+        { maxQueuedChunks: 2 },
+      )) {
+        chunkTypes.push(chunk.type);
+        if (chunk.type === "impactItem") impactFiles.push(chunk.item.file);
+        if (chunk.type === "error") errors.push(chunk.error);
+      }
+
+      expect(chunkTypes).toContain("error");
+      expect(chunkTypes).not.toContain("complete");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toMatch(/fell behind the producer/);
+      expect(errors[0]).toMatch(/more than 2 chunks/);
+      // The consumer learns exactly how far the stream got before it failed, not nothing.
+      expect(impactFiles.length).toBeGreaterThan(0);
+      expect(impactFiles.length).toBeLessThan(consumerCount);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not overflow the same fixture under the default buffered-chunk cap", async () => {
+    const root = await mkTmpDir("dg-stream-no-overflow-");
+    await fsp.writeFile(path.join(root, "feature.ts"), "export function helper() { return 1; }\n", "utf8");
+    const consumerCount = 6;
+    for (let i = 0; i < consumerCount; i += 1) {
+      await fsp.writeFile(
+        path.join(root, `consumer${i}.ts`),
+        `import { helper } from "./feature";\nexport function run${i}() { return helper(); }\n`,
+        "utf8",
+      );
+    }
+    const index = await buildProjectIndex(root);
+
+    try {
+      const diffText = `diff --git a/feature.ts b/feature.ts
+index 1234567..abcdef0 100644
+--- a/feature.ts
++++ b/feature.ts
+@@ -1 +1 @@
+-export function helper() { return 1; }
++export function helper() { return 2; }
+`;
+
+      const chunkTypes: string[] = [];
+      const impactFiles: string[] = [];
+      for await (const chunk of analyzeImpactStreaming(root, index, { provider: "raw", diffText })) {
+        chunkTypes.push(chunk.type);
+        if (chunk.type === "impactItem") impactFiles.push(chunk.item.file);
+      }
+
+      expect(chunkTypes).toContain("complete");
+      expect(chunkTypes).not.toContain("error");
+      const impactedFileSet = new Set(impactFiles);
+      for (let i = 0; i < consumerCount; i += 1) {
+        expect(impactedFileSet.has(`consumer${i}.ts`)).toBe(true);
+      }
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("stops the background analyzer once the consumer abandons the stream mid-analysis", async () => {
+    const root = await mkTmpDir("dg-stream-cancel-");
+    const symbolCount = 40;
+    const { diffText } = await writeManySymbolFixture(root, symbolCount);
+    const index = await buildProjectIndex(root);
+
+    try {
+      const findReferencesSpy = vi.spyOn(navigation, "findReferences");
+
+      let sawImpactItem = false;
+      for await (const chunk of analyzeImpactStreaming(root, index, { provider: "raw", diffText })) {
+        if (chunk.type === "impactItem") {
+          sawImpactItem = true;
+          break;
+        }
+      }
+      expect(sawImpactItem).toBe(true);
+
+      const settledCalls = await waitForStableCallCount(findReferencesSpy);
+      // Changed symbols are analyzed in fixed batches of 8 (IMPACT_SYMBOL_BATCH_SIZE);
+      // each batch is awaited fully before the next starts. Cancelling mid-first-batch
+      // must prevent every later batch from ever starting: comfortably fewer than half
+      // of the 40 symbols should ever reach a reference lookup.
+      expect(settledCalls).toBeGreaterThan(0);
+      expect(settledCalls).toBeLessThan(symbolCount / 2);
+    } finally {
+      vi.restoreAllMocks();
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("analyzes every changed symbol when the same stream is consumed to completion", async () => {
+    const root = await mkTmpDir("dg-stream-nocancel-");
+    const symbolCount = 40;
+    const { diffText } = await writeManySymbolFixture(root, symbolCount);
+    const index = await buildProjectIndex(root);
+
+    try {
+      const findReferencesSpy = vi.spyOn(navigation, "findReferences");
+
+      const chunkTypes: string[] = [];
+      for await (const chunk of analyzeImpactStreaming(root, index, { provider: "raw", diffText })) {
+        chunkTypes.push(chunk.type);
+      }
+
+      expect(chunkTypes).toContain("complete");
+      expect(findReferencesSpy).toHaveBeenCalledTimes(symbolCount);
+    } finally {
+      vi.restoreAllMocks();
       await fsp.rm(root, { recursive: true, force: true });
     }
   });
