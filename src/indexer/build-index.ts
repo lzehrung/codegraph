@@ -276,6 +276,16 @@ async function buildIndexedModuleForFile(args: {
     args.bloomFilterCache.set(args.file, filter);
   }
 
+  // Single builder so an option added here always reaches both the primary source and
+  // every embedded (SFC) block, instead of one path silently missing a future option.
+  const sharedImportOptions = {
+    graphOptions: args.graphOptions,
+    ...(args.opts?.native ? { native: args.opts.native } : {}),
+    ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
+    ...(args.opts?.languageExtensions ? { languageExtensions: args.opts.languageExtensions } : {}),
+    ...(args.onFallbackImportExtraction ? { onFallbackImportExtraction: args.onFallbackImportExtraction } : {}),
+  };
+
   const imports =
     sup.id === "sql"
       ? []
@@ -285,22 +295,14 @@ async function buildIndexedModuleForFile(args: {
           sup,
           ...(resolvedLang ? { lang: resolvedLang } : {}),
           ...(nativeQueries !== undefined ? { nativeQueries } : {}),
-          graphOptions: args.graphOptions,
-          ...(args.opts?.native ? { native: args.opts.native } : {}),
-          ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
-          ...(args.opts?.languageExtensions ? { languageExtensions: args.opts.languageExtensions } : {}),
-          ...(args.onFallbackImportExtraction ? { onFallbackImportExtraction: args.onFallbackImportExtraction } : {}),
+          ...sharedImportOptions,
         });
   for (const block of embeddedBlocks ?? []) {
     imports.push(
       ...(await collectImportsForFile(args.file, args.projectRoot, {
         source: block.source,
         sup: block.sup,
-        graphOptions: args.graphOptions,
-        ...(args.opts?.native ? { native: args.opts.native } : {}),
-        ...(args.opts?.logLevel ? { logLevel: args.opts.logLevel } : {}),
-        ...(args.opts?.languageExtensions ? { languageExtensions: args.opts.languageExtensions } : {}),
-        ...(args.onFallbackImportExtraction ? { onFallbackImportExtraction: args.onFallbackImportExtraction } : {}),
+        ...sharedImportOptions,
       })),
     );
   }
