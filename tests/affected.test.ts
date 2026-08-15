@@ -455,4 +455,38 @@ describe("affected CLI", () => {
     },
     affectedCliTimeoutMs,
   );
+  it(
+    "counts unique omitted test paths in omittedCounts.filteredTests when multiple changed files reach the same filtered test",
+    async () => {
+      const root = await createTypescriptProject("cg-affected-unique-omitted-", [
+        {
+          path: "src/user.ts",
+          contents: "export function getUser() { return 'user'; }\n",
+        },
+        {
+          path: "src/auth.ts",
+          contents: "export function getAuth() { return 'auth'; }\n",
+        },
+        {
+          path: "tests/unit/user.test.ts",
+          contents: "import { getUser } from '../../src/user';\nif (getUser() !== 'user') throw new Error('fail');\n",
+        },
+        {
+          path: "tests/integration/combined.test.ts",
+          contents:
+            "import { getUser } from '../../src/user';\nimport { getAuth } from '../../src/auth';\nif (getUser() !== 'user' || getAuth() !== 'auth') throw new Error('fail');\n",
+        },
+      ]);
+
+      // Both src/user.ts and src/auth.ts reach tests/integration/combined.test.ts via reverse deps.
+      // With --filter tests/unit/**, tests/integration/combined.test.ts is filtered out.
+      // Even though reached from 2 changed files, omittedCounts.filteredTests must be 1 (unique path).
+      const report = await runAffectedJson(root, ["src/user.ts", "src/auth.ts", "--filter", "tests/unit/**"]);
+
+      expect(report.changedFiles).toEqual(["src/auth.ts", "src/user.ts"]);
+      expect(report.affectedTests.map((entry) => entry.file)).toEqual(["tests/unit/user.test.ts"]);
+      expect(report.omittedCounts).toEqual({ changedFiles: 0, filteredTests: 1 });
+    },
+    affectedCliTimeoutMs,
+  );
 });
