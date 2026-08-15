@@ -194,7 +194,18 @@ function formatLabeledFields(fields: ReadonlyArray<readonly [string, unknown]>):
   return lines;
 }
 
-/** Pretty formatter for `codegraph doctor`. Stable sections; defensive for absent/unknown fields. */
+function pushNestedSection(body: string[], title: string, nestedBody: readonly string[]): void {
+  body.push(`${title}:`);
+  if (!nestedBody.length) {
+    body.push("  (none)");
+    return;
+  }
+  for (const line of nestedBody) {
+    body.push(`  ${line}`);
+  }
+}
+
+/** Pretty formatter for `codegraph doctor`. Stable Package/Native(+Origin/Update) nesting matches JSON. */
 export function formatDoctorSummary(report: DoctorReport): string {
   const lines: string[] = [];
   const pkg = asRecord(report.package);
@@ -210,19 +221,15 @@ export function formatDoctorSummary(report: DoctorReport): string {
 
   const native = asRecord(report.native);
   const supportedLanguageIds = readField(native, "supportedLanguageIds");
-  pushSection(
-    lines,
-    "Native",
-    formatLabeledFields([
-      ["Available", readField(native, "available")],
-      ["Load error", readField(native, "loadError")],
-      ["Supported language ids", Array.isArray(supportedLanguageIds) ? supportedLanguageIds : undefined],
-    ]),
-  );
+  const nativeBody = formatLabeledFields([
+    ["Available", readField(native, "available")],
+    ["Load error", readField(native, "loadError")],
+    ["Supported language ids", Array.isArray(supportedLanguageIds) ? supportedLanguageIds : undefined],
+  ]);
 
   const origin = asRecord(readField(native, "origin"));
-  pushSection(
-    lines,
+  pushNestedSection(
+    nativeBody,
     "Origin",
     origin
       ? formatLabeledFields([
@@ -238,8 +245,8 @@ export function formatDoctorSummary(report: DoctorReport): string {
 
   const update = asRecord(readField(native, "update"));
   const staleRetirementPaths = readField(update, "staleRetirementPaths");
-  pushSection(
-    lines,
+  pushNestedSection(
+    nativeBody,
     "Update",
     update
       ? formatLabeledFields([
@@ -251,6 +258,8 @@ export function formatDoctorSummary(report: DoctorReport): string {
         ])
       : [],
   );
+
+  pushSection(lines, "Native", nativeBody);
 
   if (report.indexArtifact !== undefined) {
     const artifact = asRecord(report.indexArtifact);
