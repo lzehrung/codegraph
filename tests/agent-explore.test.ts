@@ -841,4 +841,33 @@ describe("agent explore", () => {
     expect(readArray(response.blastRadius, "blastRadius")).toHaveLength(1);
     expect(response.freshness).toBeTypeOf("object");
   });
+  it("pins omission counts at and just past the limit for candidate tests and blast radius", async () => {
+    const root = await mkExploreRepo();
+    await writeFile(root, "tests/auth.test.ts", "import { validateUser } from '../src/auth';\nvalidateUser('bob');\n");
+    await writeFile(root, "tests/auth-spec.test.ts", "import { validateUser } from '../src/auth';\nvalidateUser('carol');\n");
+
+    const exploreAll = await exploreCodegraph({ root, query: "validateUser" });
+    expect(exploreAll.candidateTests.length).toBeGreaterThanOrEqual(2);
+    expect(exploreAll.omittedCounts.candidateTests).toBe(0);
+
+    const spy = vi.spyOn(impactContext, "listCandidateTestFiles").mockReturnValue([
+      { file: path.join(root, "tests/routes.test.ts"), reasons: [] },
+      { file: path.join(root, "tests/auth.test.ts"), reasons: [] },
+      { file: path.join(root, "tests/auth-spec.test.ts"), reasons: [] },
+    ]);
+
+    try {
+      const atLimitResponse = await exploreCodegraph({ root, query: "validateUser" });
+      expect(atLimitResponse.candidateTests).toHaveLength(3);
+      expect(atLimitResponse.omittedCounts.candidateTests).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
+
+    const authExplore = await exploreCodegraph({ root, query: "src/db.ts" });
+    const dbBlast = authExplore.blastRadius.find((entry) => entry.file === "src/db.ts");
+    expect(dbBlast).toBeDefined();
+    expect(dbBlast!.reverseDependencies.length).toBeGreaterThanOrEqual(1);
+    expect(dbBlast!.omittedLowerBound).toBe(0);
+  });
 });

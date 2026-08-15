@@ -1,4 +1,5 @@
 import type { SymbolEdge, SymbolGraph, SymbolNode } from "../graphs/symbol-graph.js";
+import { boundList } from "../presentation/bounds.js";
 import { resolveSymbolId } from "./symbols.js";
 import type { ProjectIndex } from "./types.js";
 
@@ -106,12 +107,13 @@ export function findTypeHierarchy(
   }
 
   relations.sort((left, right) => compareRelations(graph, left, right));
+  const boundedRelations = boundList(relations, limit);
   return {
     status: "ok",
     targetId,
     direction,
-    relations: relations.slice(0, limit),
-    omitted: Math.max(0, relations.length - limit),
+    relations: boundedRelations.items,
+    omitted: boundedRelations.omitted,
     limit,
   };
 }
@@ -137,11 +139,12 @@ export function findImplementations(
       };
     }
     const matches = collectTypeImplementations(graph, hierarchy, targetId, rootRelations);
+    const boundedMatches = boundList(matches, limit);
     return {
       status: "ok",
       targetId,
-      implementations: matches.slice(0, limit),
-      omitted: Math.max(0, matches.length - limit),
+      implementations: boundedMatches.items,
+      omitted: boundedMatches.omitted,
       ambiguous: 0,
       unresolved: [],
       limit,
@@ -229,14 +232,15 @@ export function findImplementations(
   }
   const sortedUnresolved = unresolved.sort((left, right) => left.symbolId.localeCompare(right.symbolId));
   const matches = [...memberMatches.values()].sort((left, right) => compareImplementationMatches(graph, left, right));
-  const truncated = Math.max(0, matches.length - limit);
+  const boundedMatches = boundList(matches, limit);
+  const boundedUnresolved = boundList(sortedUnresolved, limit);
   return {
     status: "ok",
     targetId,
-    implementations: matches.slice(0, limit),
-    omitted: truncated + ambiguous,
+    implementations: boundedMatches.items,
+    omitted: boundedMatches.omitted + ambiguous,
     ambiguous,
-    unresolved: sortedUnresolved.slice(0, limit),
+    unresolved: boundedUnresolved.items,
     limit,
   };
 }
