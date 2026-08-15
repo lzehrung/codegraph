@@ -58,7 +58,11 @@ import { SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY, queryGraphSqliteRaw, type
 import { isPlainRecord } from "../util/guards.js";
 import { toProjectDisplayPath } from "../util/paths.js";
 import { errorMessage } from "../util/errors.js";
-import { createAgentSession, listAgentSessionFiles } from "../agent/session.js";
+import {
+  assertNoPrebuiltSessionWithBuildOptions,
+  createAgentSession,
+  listAgentSessionFiles,
+} from "../agent/session.js";
 import { mapLimit } from "../util/concurrency.js";
 import { assertRealPathCandidateWithinRoot, resolveProjectFile } from "../util/confinedFile.js";
 import type { AgentFreshnessResult, AgentProjectSnapshot, AgentSession } from "../agent/session.js";
@@ -354,9 +358,7 @@ const MAX_MCP_FRESHNESS_CHANGED_FILES = 25;
 const SQLITE_ARTIFACT_STAT_CONCURRENCY = 64;
 
 function assertMcpSessionOptions(options: CodegraphMcpHandlerOptions): void {
-  if (options.session !== undefined && options.buildOptions !== undefined) {
-    throw new Error("MCP server options cannot combine a prebuilt session with buildOptions.");
-  }
+  assertNoPrebuiltSessionWithBuildOptions(options, "MCP server options");
 }
 
 function createCodegraphMcpSession(options: CodegraphMcpHandlerOptions, root: string): AgentSession {
@@ -384,7 +386,14 @@ function startCodegraphMcpWarmup(
   return undefined;
 }
 
-async function createWarmedCodegraphMcpHandlers(options: CodegraphMcpServerOptions): Promise<CodegraphMcpHandlers> {
+type WarmedCodegraphMcpResources = {
+  handlers: CodegraphMcpHandlers;
+  session: AgentSession;
+};
+
+async function createWarmedCodegraphMcpResources(
+  options: CodegraphMcpServerOptions,
+): Promise<WarmedCodegraphMcpResources> {
   const root = path.resolve(options.root);
   const session = createCodegraphMcpSession(options, root);
   await startCodegraphMcpWarmup(session, options.warmup);
@@ -393,7 +402,10 @@ async function createWarmedCodegraphMcpHandlers(options: CodegraphMcpServerOptio
   void host;
   void port;
   void onHttpListen;
-  return createCodegraphMcpHandlersForSession({ ...handlerOptions, root }, session);
+  return {
+    handlers: createCodegraphMcpHandlersForSession({ ...handlerOptions, root }, session),
+    session,
+  };
 }
 
 const MCP_HTTP_PATH = "/mcp";
@@ -1118,7 +1130,7 @@ export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Pro
     return;
   }
 
-  const handlers = await createWarmedCodegraphMcpHandlers(options);
+  const { handlers, session } = await createWarmedCodegraphMcpResources(options);
   const runtimeIdentity = options.runtimeIdentity ?? captureCodegraphRuntimeIdentity(getCurrentNativeBindingOrigin());
   const createProtocolServer = createCodegraphMcpProtocolFactory(handlers, runtimeIdentity);
   const handle = serveStdio(createProtocolServer, {
@@ -1134,6 +1146,7 @@ export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Pro
       console.error(`[codegraph] MCP stdio shutting down (${shutdownReason})`);
     },
   });
+  session.invalidate();
   // Ensure orphaned stdio servers do not linger after the client is gone.
   process.exitCode = 0;
 }
@@ -1142,7 +1155,7 @@ export async function startCodegraphMcpHttpServer(
   options: CodegraphMcpServerOptions & { port: number },
 ): Promise<CodegraphMcpHttpServer> {
   const host = options.host ?? "127.0.0.1";
-  const handlers = await createWarmedCodegraphMcpHandlers(options);
+  const { handlers, session } = await createWarmedCodegraphMcpResources(options);
   const runtimeIdentity = options.runtimeIdentity ?? captureCodegraphRuntimeIdentity(getCurrentNativeBindingOrigin());
   const createProtocolServer = createCodegraphMcpProtocolFactory(handlers, runtimeIdentity);
   const sessionStore = createLegacyMcpSessionStore({
@@ -1166,6 +1179,7 @@ export async function startCodegraphMcpHttpServer(
   let closeResourcesPromise: Promise<void> | undefined;
   const closeResources = (): Promise<void> => {
     closeResourcesPromise ??= (async () => {
+      session.invalidate();
       sessionStore.stop();
       await closeMcpResources(sessionStore.sessions, modernHandler.close);
     })();
@@ -1285,12 +1299,7 @@ async function handleLegacyMcpHttpPost(
       return;
     }
     sessionStore.touch(sessionId);
-    try {
-      await handleLegacyMcpSessionRequest(session, request, response, body);
-    } catch (error) {
-      await sessionStore.delete(sessionId);
-      throw error;
-    }
+    await handleLegacyMcpSessionRequest(session, request, response, body);
     return;
   }
 
@@ -1381,12 +1390,7 @@ async function handleExistingMcpSessionRequest(
     return;
   }
   sessionStore.touch(sessionId);
-  try {
-    await handleLegacyMcpSessionRequest(session, request, response);
-  } catch (error) {
-    await sessionStore.delete(sessionId);
-    throw error;
-  }
+  await handleLegacyMcpSessionRequest(session, request, response);
 }
 
 async function handleLegacyMcpSessionRequest(

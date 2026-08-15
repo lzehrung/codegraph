@@ -1188,6 +1188,25 @@ describe("SessionManager", () => {
     expect(session1).toBe(session2);
   });
 
+  test("rejects a new session when configured capacity is exhausted", async () => {
+    const limitedManager = new SessionManager({ maxSessions: 1, evictionIntervalMs: 0 });
+    try {
+      await limitedManager.getOrCreateSession("first", {
+        root: sampleRoot,
+        buildOptions: sampleBuildOptions(),
+      });
+
+      await expect(
+        limitedManager.getOrCreateSession("second", {
+          root: sampleRoot,
+          buildOptions: sampleBuildOptions(),
+        }),
+      ).rejects.toThrow("Session capacity reached (1)");
+    } finally {
+      limitedManager.disposeAll();
+    }
+  });
+
   test("should share one initialization across concurrent same-id creation", async () => {
     const buildSpy = vi.spyOn(indexerBuild, "buildProjectIndexIncremental");
 

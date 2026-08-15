@@ -202,7 +202,8 @@ const NATURAL_LANGUAGE_SYNTAX_TERMS = new Set([
   "or",
 ]);
 const SEARCH_CACHES = new WeakMap<AgentProjectSnapshot, SearchCache>();
-const SEARCH_RESULT_CACHES = new WeakMap<AgentSession, Map<string, Promise<AgentSearchResponse>>>();
+export const DEFAULT_SESSION_SEARCH_CACHE_MAX_ENTRIES = 100;
+const SEARCH_RESULT_CACHES = new WeakMap<AgentSession, SessionSearchResultCache>();
 const SEARCH_RANKING_VERSION = 2;
 
 export async function searchCodegraph(request: AgentSearchRequest): Promise<AgentSearchResponse> {
@@ -232,8 +233,9 @@ export async function searchCodegraphWithSession(
   });
   const resultCache = getSessionSearchResultCache(session);
   const cacheKey = searchResultCacheKey(snapshot, request);
-  const existing = resultCache.get(cacheKey);
+  const existing = resultCache.entries.get(cacheKey);
   if (existing) {
+    promoteSessionSearchResult(resultCache, cacheKey, existing);
     const response = await existing;
     if (response.query === request.query) return response;
     return { ...response, query: request.query };
@@ -245,9 +247,9 @@ export async function searchCodegraphWithSession(
     queryIndex = await ensureSessionQueryIndex(session, snapshot);
   }
   const search = searchSnapshot(snapshot, request, queryIndex);
-  resultCache.set(cacheKey, search);
+  promoteSessionSearchResult(resultCache, cacheKey, search);
   search.catch(() => {
-    if (resultCache.get(cacheKey) === search) resultCache.delete(cacheKey);
+    if (resultCache.entries.get(cacheKey) === search) resultCache.entries.delete(cacheKey);
   });
   return await search;
 }
@@ -343,13 +345,31 @@ function canUsePathFastPath(request: AgentSearchRequest): boolean {
   return (request.mode ?? "hybrid") === "path" && request.from === undefined;
 }
 
-function getSessionSearchResultCache(session: AgentSession): Map<string, Promise<AgentSearchResponse>> {
+type SessionSearchResultCache = {
+  entries: Map<string, Promise<AgentSearchResponse>>;
+};
+
+function getSessionSearchResultCache(session: AgentSession): SessionSearchResultCache {
   const existing = SEARCH_RESULT_CACHES.get(session);
   if (existing) return existing;
-  const created = new Map<string, Promise<AgentSearchResponse>>();
+  const created: SessionSearchResultCache = { entries: new Map() };
   SEARCH_RESULT_CACHES.set(session, created);
   registerSessionInvalidationHook(session, () => SEARCH_RESULT_CACHES.delete(session));
   return created;
+}
+
+function promoteSessionSearchResult(
+  cache: SessionSearchResultCache,
+  key: string,
+  result: Promise<AgentSearchResponse>,
+): void {
+  cache.entries.delete(key);
+  cache.entries.set(key, result);
+  while (cache.entries.size > DEFAULT_SESSION_SEARCH_CACHE_MAX_ENTRIES) {
+    const oldest = cache.entries.keys().next().value;
+    if (oldest === undefined) return;
+    cache.entries.delete(oldest);
+  }
 }
 
 function searchResultCacheKey(snapshot: AgentProjectSnapshot, request: AgentSearchRequest): string {

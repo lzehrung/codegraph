@@ -76,6 +76,15 @@ export type AgentSession = {
   invalidate: () => void;
 };
 
+export function assertNoPrebuiltSessionWithBuildOptions(
+  options: { session?: AgentSession; buildOptions?: BuildOptions },
+  consumer: string,
+): void {
+  if (options.session && options.buildOptions) {
+    throw new Error(`${consumer} cannot combine a prebuilt session with buildOptions.`);
+  }
+}
+
 const EMPTY_SYMBOL_GRAPH: SymbolGraph = {
   nodes: new Map(),
   edges: [],

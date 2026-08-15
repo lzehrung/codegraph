@@ -47,6 +47,16 @@ export type SessionOptions = {
   incremental?: boolean;
 };
 
+export type SessionManagerOptions = {
+  /** Maximum sessions, including sessions currently initializing. Defaults to 32. */
+  maxSessions?: number;
+  /** Idle-session scan interval in milliseconds. Defaults to 60 seconds. Use 0 to disable. */
+  evictionIntervalMs?: number;
+};
+
+export const DEFAULT_SESSION_MANAGER_MAX_SESSIONS = 32;
+export const DEFAULT_SESSION_MANAGER_EVICTION_INTERVAL_MS = 60_000;
+
 export type SessionStatus = "initializing" | "ready" | "expired" | "error";
 
 export type SessionStaleReason = "tracked_files_changed" | "config_changed";
@@ -778,6 +788,16 @@ export class CodeReviewSession implements ICodeReviewSession {
   }
 }
 
+function normalizeSessionManagerCapacity(value: number | undefined): number {
+  if (value === undefined) return DEFAULT_SESSION_MANAGER_MAX_SESSIONS;
+  return Math.max(1, Math.floor(value));
+}
+
+function normalizeSessionManagerEvictionInterval(value: number | undefined): number {
+  if (value === undefined) return DEFAULT_SESSION_MANAGER_EVICTION_INTERVAL_MS;
+  return Math.max(0, Math.floor(value));
+}
+
 /**
  * Session manager for multiple concurrent sessions
  * Useful for agents handling multiple repositories or PRs
@@ -793,6 +813,26 @@ export class SessionManager {
       promise: Promise<CodeReviewSession>;
     }
   >();
+  private readonly maxSessions: number;
+  private readonly evictionTimer: ReturnType<typeof setInterval> | undefined;
+
+  constructor(options: SessionManagerOptions = {}) {
+    this.maxSessions = normalizeSessionManagerCapacity(options.maxSessions);
+    const evictionIntervalMs = normalizeSessionManagerEvictionInterval(options.evictionIntervalMs);
+    if (evictionIntervalMs) {
+      this.evictionTimer = setInterval(() => this.cleanupExpired(), evictionIntervalMs);
+      this.evictionTimer.unref?.();
+    }
+  }
+
+  private assertCapacityForNewSession(): void {
+    this.cleanupExpired();
+    if (this.sessions.size + this.pendingSessions.size >= this.maxSessions) {
+      throw new Error(
+        `Session capacity reached (${this.maxSessions}). Dispose an existing session before creating another.`,
+      );
+    }
+  }
 
   private createSessionConfigurationError(
     sessionId: string,
@@ -883,6 +923,7 @@ export class SessionManager {
     let session = this.ensureSessionIdCompatible(sessionId, options);
 
     if (!session) {
+      this.assertCapacityForNewSession();
       session = new CodeReviewSession(options);
       return await this.trackSession(sessionId, options, session, false, (readySession) => {
         this.sessions.set(sessionId, readySession);
@@ -935,6 +976,7 @@ export class SessionManager {
       session.dispose();
     }
     this.sessions.clear();
+    clearInterval(this.evictionTimer);
   }
 
   /**
