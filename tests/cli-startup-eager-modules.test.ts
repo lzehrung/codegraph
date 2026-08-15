@@ -57,7 +57,6 @@ process.on("exit", () => {
   }
 }
 
-
 function modulePathEndsWith(moduleUrl: string, suffix: string): boolean {
   return moduleUrl.includes(suffix.replaceAll("\\", "/")) || moduleUrl.includes(suffix.replaceAll("/", "\\"));
 }

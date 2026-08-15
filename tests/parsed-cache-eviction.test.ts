@@ -2,14 +2,40 @@ import { describe, it, expect } from "vitest";
 import { fileIdentityKey } from "../src/util/paths.js";
 import { setParsedCacheEntry } from "../src/indexer/parsed-cache.js";
 import type { ParsedFileContext } from "../src/indexer/parse-context.js";
+import { TS_SUPPORT } from "../src/languages.js";
 
 function fakeParsed(file: string): ParsedFileContext {
   return {
-    file,
-    languageId: "ts",
     source: `// ${file}\n`,
-    tree: { rootNode: { type: "program", startIndex: 0, endIndex: 0, childCount: 0, namedChildCount: 0 } },
-  } as ParsedFileContext;
+    tree: {
+      rootNode: {
+        type: "program",
+        startIndex: 0,
+        endIndex: 0,
+        startPosition: { row: 0, column: 0 },
+        endPosition: { row: 0, column: 0 },
+        childCount: 0,
+        namedChildCount: 0,
+        children: [],
+        namedChildren: [],
+        parent: null,
+        child: () => null,
+        namedChild: () => null,
+        childForFieldName: () => null,
+        descendantsOfType: () => [],
+        walk: () => ({
+          currentNode: null,
+          gotoFirstChild: () => false,
+          gotoNextSibling: () => false,
+          gotoParent: () => false,
+        }),
+        text: "",
+        isNamed: true,
+        id: 0,
+      },
+    },
+    sup: TS_SUPPORT,
+  };
 }
 
 describe("parsed AST cache eviction", () => {

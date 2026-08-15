@@ -99,11 +99,7 @@ describe("links CLI", () => {
     const projectRoot = await createMarkdownProject({
       "README.md": "[ok](guide.md)\n",
       "guide.md": "# Guide\n",
-      "codegraph.config.json": JSON.stringify(
-        { discovery: { ignoreGlobs: ["fixtures/**"] } },
-        null,
-        2,
-      ),
+      "codegraph.config.json": JSON.stringify({ discovery: { ignoreGlobs: ["fixtures/**"] } }, null, 2),
       "fixtures/broken.md": "[missing](nowhere.md)\n",
     });
     try {
@@ -125,14 +121,7 @@ describe("links CLI", () => {
       const withoutIgnore = await captureCli(["links", "--root", projectRoot, "--pretty"]);
       expect(withoutIgnore.exitCode).toBe(1);
 
-      const withIgnore = await captureCli([
-        "links",
-        "--root",
-        projectRoot,
-        "--ignore-glob",
-        "fixtures/**",
-        "--pretty",
-      ]);
+      const withIgnore = await captureCli(["links", "--root", projectRoot, "--ignore-glob", "fixtures/**", "--pretty"]);
       expect(withIgnore.exitCode).toBeUndefined();
       expect(withIgnore.stdout).toBe("No broken Markdown links found.\n");
     } finally {

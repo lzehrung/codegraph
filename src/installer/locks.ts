@@ -48,7 +48,10 @@ function isJsonRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export async function withInstallerTransactionLocks<T>(settings: InstallerLockSettings, operation: () => Promise<T>): Promise<T> {
+export async function withInstallerTransactionLocks<T>(
+  settings: InstallerLockSettings,
+  operation: () => Promise<T>,
+): Promise<T> {
   const locks: InstallerLeaseLock[] = [];
   const scopedLocks = installerTransactionLockScopes(settings)
     .map((scope) => ({
@@ -144,7 +147,6 @@ async function acquireInstallerLeaseLock(lockPath: string, resourceName: string)
       "The lock was left untouched. If no other Codegraph installer is running, delete that lock file and retry.",
   );
 }
-
 
 async function resolveInstallerLeaseConflict(lockPath: string): Promise<InstallerLeaseConflict> {
   let observed: InstallerLeaseObservation;
@@ -267,7 +269,6 @@ async function releaseInstallerLeaseLock(lock: InstallerLeaseLock): Promise<void
     if (!isFileSystemErrorCode(error, "ENOENT")) throw error;
   }
 }
-
 
 export function waitForInstallerLockRetry(): Promise<void> {
   const { promise, resolve } = Promise.withResolvers<void>();

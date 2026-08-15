@@ -101,7 +101,9 @@ const CLI_VALUE_OPTIONS = new Set<string>([
 ]);
 
 type CliPositionalPolicy =
-  { kind: "any" } | { kind: "max"; max: number; usage: string } | { kind: "none"; usage: string };
+  | { kind: "any" }
+  | { kind: "max"; max: number; usage: string }
+  | { kind: "none"; usage: string };
 
 type CliCommandSchema = {
   flags?: readonly string[];
@@ -642,7 +644,8 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
     commandSchema(["--force", "--json", "--pretty"], ["--agent", "--target"], {
       kind: "max",
       max: 2,
-      usage: "Usage: codegraph skill <install|print-path|doctor> [--agent <name> | --target <dir>] [--force] [--json | --pretty]",
+      usage:
+        "Usage: codegraph skill <install|print-path|doctor> [--agent <name> | --target <dir>] [--force] [--json | --pretty]",
     }),
   ],
   [

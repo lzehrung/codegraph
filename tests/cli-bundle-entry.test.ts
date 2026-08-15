@@ -73,7 +73,10 @@ describe("bundled CLI entry", () => {
 
   it("keeps the entry-to-worker chunk relationship instead of one monolithic file", () => {
     const binDir = path.dirname(bundledCli);
-    const outputs = fs.readdirSync(binDir).filter((name) => name.endsWith(".js")).sort();
+    const outputs = fs
+      .readdirSync(binDir)
+      .filter((name) => name.endsWith(".js"))
+      .sort();
     // Bundle emits exactly two self-contained entrypoints (cli + queryIndexWorker).
     expect(outputs).toEqual(["cli.js", "queryIndexWorker.js"]);
     const entry = fs.readFileSync(bundledCli, "utf8");

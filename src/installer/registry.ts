@@ -6,11 +6,7 @@ import { applyEdits, modify, parse as parseJsonc, type ParseError } from "jsonc-
 import { parse as parseToml } from "smol-toml";
 import { getSkillTargetDirForAgent, type SkillInstallAgent } from "../cli/skill.js";
 import { getCodegraphPackageRoot, normalizePathForDisplay, pathExists } from "../util/packageInfo.js";
-import {
-  waitForInstallerLockRetry,
-  withInstallerLeaseLock,
-  withInstallerTransactionLocks,
-} from "./locks.js";
+import { waitForInstallerLockRetry, withInstallerLeaseLock, withInstallerTransactionLocks } from "./locks.js";
 
 export type InstallTargetId = SkillInstallAgent;
 
@@ -112,7 +108,12 @@ export type InstallTarget = {
 };
 
 type ConfigKind =
-  "toml-block" | "json-mcp-servers" | "json-mcp-servers-no-type" | "json-opencode-mcp" | "json-kilo-mcp" | "skill-only";
+  | "toml-block"
+  | "json-mcp-servers"
+  | "json-mcp-servers-no-type"
+  | "json-opencode-mcp"
+  | "json-kilo-mcp"
+  | "skill-only";
 
 type TargetDefinition = {
   id: InstallTargetId;
@@ -1200,7 +1201,6 @@ async function renameTemporaryFile(temporaryPath: string, filePath: string): Pro
     }
   }
 }
-
 
 function isFileSystemErrorCode(error: unknown, code: string): boolean {
   return error instanceof Error && "code" in error && String(error.code) === code;

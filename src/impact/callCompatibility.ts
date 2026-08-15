@@ -29,7 +29,7 @@ import {
   findBalancedParentheses,
   canStartRegexLiteral,
   findRegexLiteralEnd,
-  splitTopLevelCommaGroups
+  splitTopLevelCommaGroups,
 } from "./call-compatibility/textScanner.js";
 
 function supportsCallCompatibilityLanguage(languageId: string): boolean {

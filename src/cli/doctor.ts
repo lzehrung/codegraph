@@ -147,7 +147,6 @@ function artifactPresent(dirPath: string, fileName: string | undefined): boolean
   return pathExists(artifactPath);
 }
 
-
 function formatScalar(value: unknown): string {
   if (value === null || value === undefined) return "none";
   if (typeof value === "boolean") return value ? "yes" : "no";

@@ -14,8 +14,7 @@ describe("enableCliCompileCache failure and fallback paths", () => {
   });
 
   it("returns null when enableCompileCache is unavailable", async () => {
-    // @ts-expect-error deliberate unavailable shape
-    module.enableCompileCache = undefined;
+    Reflect.deleteProperty(module, "enableCompileCache");
     const { enableCliCompileCache } = await import("../src/cli/compileCache.js");
     const result = enableCliCompileCache({ NODE_COMPILE_CACHE: path.join(os.tmpdir(), "cc-missing") });
     expect(result).toBeNull();

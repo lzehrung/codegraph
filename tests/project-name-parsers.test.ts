@@ -2,11 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  parseGradlePropertiesName,
-  parseIniName,
-  parseSetupPyName,
-} from "../src/util/projectFiles/parsers.js";
+import { parseGradlePropertiesName, parseIniName, parseSetupPyName } from "../src/util/projectFiles/parsers.js";
 import { discoverProjectFiles } from "../src/util/projectFiles.js";
 
 const roots: string[] = [];
@@ -50,7 +46,7 @@ describe("project name parsers", () => {
   });
 
   it.each([
-    { name: "quoted value", raw: "rootProject.name = \"gradle-demo\"\n", expected: "gradle-demo" },
+    { name: "quoted value", raw: 'rootProject.name = "gradle-demo"\n', expected: "gradle-demo" },
     { name: "single quotes", raw: "rootProject.name = 'gradle-single'\n", expected: "gradle-single" },
     { name: "missing", raw: "org.gradle.jvmargs=-Xmx1g\n", expected: null },
   ])("parseGradlePropertiesName $name", ({ raw, expected }) => {

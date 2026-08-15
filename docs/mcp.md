@@ -74,19 +74,18 @@ The server exposes the same bounded primitives as the CLI and library session la
 - `refresh_index`: invalidate the in-memory session and optionally rebuild the base or symbol snapshot.
 - `artifact_build`: artifact creation, available only with write access enabled.
 
-
 ## Per-tool schema summary
 
 Compact contracts for high-traffic tools (`src/mcp/tools.ts`). Write gating: only `artifact_build` requires write access (`--allow-build`); all others are read-only.
 
-| Tool | Required | Key enums / fields | Defaults | Maxima | Write gate |
-| --- | --- | --- | --- | --- | --- |
-| `search` | `query` | `mode`: hybrid\|symbol\|path\|text\|graph\|sql; optional `from`, `depth`, `limit` | `depth` 1, `limit` 20 | `limit` 100 | no |
-| `explore` | `query` | optional `limit`, `maxPackets`, `maxPaths`, `includeSource` | `limit` 5, `maxPackets` 3, `maxPaths` 3, `includeSource` true | `limit` 50, packets/paths 10 | no |
-| `packet_get` | `target` | optional `maxSymbols`, `maxSnippets`, `maxDuplicates` | (unset uses server defaults) | symbols 200, snippets 50, duplicates 20 | no |
-| `query_sqlite` | `query` | optional `params[]`, `limit` | `limit` 100 | `limit` 500 | no |
-| `refresh_index` | (none) | optional `warmup`: off\|base\|symbols | (omit = invalidate only) | - | no |
-| `artifact_build` | (none) | optional `outDir`, `sqlite`, `graphJson`, `report`, `questions`, `force` | - | - | yes (`--allow-build`) |
+| Tool             | Required | Key enums / fields                                                                | Defaults                                                      | Maxima                                  | Write gate            |
+| ---------------- | -------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------- | --------------------------------------- | --------------------- |
+| `search`         | `query`  | `mode`: hybrid\|symbol\|path\|text\|graph\|sql; optional `from`, `depth`, `limit` | `depth` 1, `limit` 20                                         | `limit` 100                             | no                    |
+| `explore`        | `query`  | optional `limit`, `maxPackets`, `maxPaths`, `includeSource`                       | `limit` 5, `maxPackets` 3, `maxPaths` 3, `includeSource` true | `limit` 50, packets/paths 10            | no                    |
+| `packet_get`     | `target` | optional `maxSymbols`, `maxSnippets`, `maxDuplicates`                             | (unset uses server defaults)                                  | symbols 200, snippets 50, duplicates 20 | no                    |
+| `query_sqlite`   | `query`  | optional `params[]`, `limit`                                                      | `limit` 100                                                   | `limit` 500                             | no                    |
+| `refresh_index`  | (none)   | optional `warmup`: off\|base\|symbols                                             | (omit = invalidate only)                                      | -                                       | no                    |
+| `artifact_build` | (none)   | optional `outDir`, `sqlite`, `graphJson`, `report`, `questions`, `force`          | -                                                             | -                                       | yes (`--allow-build`) |
 
 `refs` / `file_deps` collection limits: default 25, maximum 500. Legacy alias tool names are accepted by `tools/call` but omitted from `tools/list`.
 

@@ -3,10 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import prepareQueryIndexWorkerTask from "../src/agent/query-index/queryIndexWorker.js";
-import {
-  MAX_QUERY_INDEX_TEXT_BYTES,
-  prepareQueryIndexFile,
-} from "../src/agent/query-index/content.js";
+import { MAX_QUERY_INDEX_TEXT_BYTES, prepareQueryIndexFile } from "../src/agent/query-index/content.js";
 
 const roots: string[] = [];
 

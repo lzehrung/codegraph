@@ -7,7 +7,6 @@ export type BalancedRange = {
 
 export type AngleMode = "always" | "type-context";
 
-
 export function findOpeningParen(source: string, startIndex: number): number {
   if (startIndex < 0 || startIndex >= source.length) {
     return -1;
@@ -503,7 +502,11 @@ export function findRegexLiteralEnd(text: string, index: number): number | null 
   return -1;
 }
 
-export function splitTopLevelCommaGroups(text: string, angleMode: AngleMode, detectRegexLiterals = true): string[] | null {
+export function splitTopLevelCommaGroups(
+  text: string,
+  angleMode: AngleMode,
+  detectRegexLiterals = true,
+): string[] | null {
   const trimmed = text.trim();
   if (!trimmed) {
     return [];
@@ -625,4 +628,3 @@ export function splitTopLevelCommaGroups(text: string, angleMode: AngleMode, det
   }
   return groups;
 }
-
