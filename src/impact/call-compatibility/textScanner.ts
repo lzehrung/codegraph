@@ -320,6 +320,68 @@ export function findBalancedParentheses(source: string, openIndex: number): Bala
   return null;
 }
 
+export function findBalancedBraces(source: string, openIndex: number): BalancedRange | null {
+  if (openIndex < 0 || source[openIndex] !== "{") {
+    return null;
+  }
+
+  let depth = 0;
+  let quote: string | null = null;
+  let escaped = false;
+
+  for (let index = openIndex; index < source.length; index += 1) {
+    const char = source[index];
+
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+
+    const commentEnd = findCommentEnd(source, index);
+    if (commentEnd !== null) {
+      if (commentEnd < 0) {
+        return null;
+      }
+      index = commentEnd - 1;
+      continue;
+    }
+
+    if (char === '"' || char === "'" || char === "`") {
+      quote = char;
+      continue;
+    }
+    if (char === "{") {
+      depth += 1;
+      continue;
+    }
+    if (char === "}") {
+      depth -= 1;
+      if (!depth) {
+        return {
+          start: openIndex,
+          end: index + 1,
+          inner: source.slice(openIndex + 1, index),
+        };
+      }
+      if (depth < 0) {
+        return null;
+      }
+    }
+  }
+
+  return null;
+}
+
 export function hasTypeContextBeforeLessThan(text: string, index: number, groupStart: number): boolean {
   const left = text.slice(groupStart, index).trimEnd();
   if (!left) {
