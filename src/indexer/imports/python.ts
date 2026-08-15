@@ -116,7 +116,9 @@ export async function collectPythonImportsFromSource(context: PythonImportExtrac
         await pushStarImport(context, mod);
         continue;
       }
-      const aliasMatch = item.match(/^([A-Za-z_][\w_]*)(?:\s+as\s+([A-Za-z_][\w_]*))?$/);
+      // PEP 3131 permits Unicode identifiers (XID_Start/XID_Continue); an ASCII-only
+      // character class here silently drops every non-ASCII imported name's binding.
+      const aliasMatch = item.match(/^([\p{L}_][\p{L}\p{N}_]*)(?:\s+as\s+([\p{L}_][\p{L}\p{N}_]*))?$/u);
       if (!aliasMatch) continue;
       const imported = aliasMatch[1]!;
       const local = aliasMatch[2] ?? imported;
@@ -124,7 +126,7 @@ export async function collectPythonImportsFromSource(context: PythonImportExtrac
     }
   }
 
-  const importPattern = /^(?:\s*)import\s+([A-Za-z_][\w.]*)\s*(?:as\s+([A-Za-z_][\w_]*))?/gm;
+  const importPattern = /^(?:\s*)import\s+([\p{L}_][\p{L}\p{N}_.]*)\s*(?:as\s+([\p{L}_][\p{L}\p{N}_]*))?/gmu;
   for (const match of pySrc.matchAll(importPattern)) {
     const dotted = match[1]!;
     const local = match[2] ?? dotted.split(".")[0]!;

@@ -1,4 +1,5 @@
 import type { NativePoint, NativeSyntaxNode, NativeSyntaxTree } from "./treeSitterNative.js";
+import { buildByteToStringIndexMap, stringIndexForByte, stringPositionForBytePoint, type ByteToStringIndexMap } from "./byteIndex.js";
 
 export type ProjectedPosition = {
   row: number;
@@ -8,15 +9,12 @@ export type ProjectedPosition = {
 export class ProjectedSyntaxTree {
   readonly source: string;
   private readonly nodesById: Map<number, ProjectedSyntaxNode>;
-  private readonly byteToStringIndex: Uint32Array;
-  private readonly lineStartBytes: number[];
+  private readonly byteMap: ByteToStringIndexMap;
   readonly rootNode: ProjectedSyntaxNode;
 
   constructor(source: string, tree: NativeSyntaxTree) {
     this.source = source;
-    const sourceByteMap = buildSourceByteMap(source);
-    this.byteToStringIndex = sourceByteMap.byteToStringIndex;
-    this.lineStartBytes = sourceByteMap.lineStartBytes;
+    this.byteMap = buildByteToStringIndexMap(source);
     this.nodesById = new Map();
     for (const node of tree.nodes) {
       this.nodesById.set(node.id, new ProjectedSyntaxNode(this, node));
@@ -33,18 +31,11 @@ export class ProjectedSyntaxTree {
   }
 
   stringIndexForByte(byteIndex: number): number {
-    const bounded = Math.max(0, Math.min(byteIndex, this.byteToStringIndex.length - 1));
-    return this.byteToStringIndex[bounded] ?? this.source.length;
+    return stringIndexForByte(this.byteMap, byteIndex);
   }
 
   positionForPoint(point: NativePoint): ProjectedPosition {
-    const lineStartByte = this.lineStartBytes[point.row] ?? 0;
-    const lineStartIndex = this.stringIndexForByte(lineStartByte);
-    const pointIndex = this.stringIndexForByte(lineStartByte + point.column);
-    return {
-      row: point.row,
-      column: Math.max(0, pointIndex - lineStartIndex),
-    };
+    return stringPositionForBytePoint(this.byteMap, point);
   }
 }
 
@@ -156,50 +147,3 @@ function comparePosition(left: ProjectedPosition, right: ProjectedPosition): num
   return left.column - right.column;
 }
 
-type SourceByteMap = {
-  byteToStringIndex: Uint32Array;
-  lineStartBytes: number[];
-};
-
-function buildSourceByteMap(source: string): SourceByteMap {
-  const byteToStringIndex = new Uint32Array(Buffer.byteLength(source, "utf8") + 1);
-  const lineStartBytes: number[] = [0];
-  let byteOffset = 0;
-  let stringIndex = 0;
-
-  while (stringIndex < source.length) {
-    const codePoint = source.codePointAt(stringIndex);
-    if (codePoint === undefined) break;
-
-    const charStringLength = codePoint > 0xffff ? 2 : 1;
-    const charByteLength = utf8ByteLengthForCodePoint(codePoint);
-
-    for (let offset = 1; offset < charByteLength; offset += 1) {
-      byteToStringIndex[byteOffset + offset] = stringIndex;
-    }
-
-    byteOffset += charByteLength;
-    stringIndex += charStringLength;
-    byteToStringIndex[byteOffset] = stringIndex;
-
-    if (codePoint === 10) {
-      lineStartBytes.push(byteOffset);
-    }
-  }
-
-  byteToStringIndex[byteOffset] = source.length;
-  return { byteToStringIndex, lineStartBytes };
-}
-
-function utf8ByteLengthForCodePoint(codePoint: number): number {
-  if (codePoint <= 0x7f) {
-    return 1;
-  }
-  if (codePoint <= 0x7ff) {
-    return 2;
-  }
-  if (codePoint <= 0xffff) {
-    return 3;
-  }
-  return 4;
-}
