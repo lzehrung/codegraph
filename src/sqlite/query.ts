@@ -29,30 +29,24 @@ export type QueryGraphSqliteRawOptions = {
 };
 
 let loggedInProcessDeadlineFallback = false;
-
 /**
  * Runs a bounded read-only raw SQL query.
  *
  * Preferred path: the query executes in a dedicated worker thread with a hard
  * `deadlineMs` budget (`rawQueryWorkerPool.ts`). On expiry the worker thread is
  * terminated outright, which stops the query even while it is blocked inside a single
- * synchronous `DatabaseSync` call — a slow non-recursive statement (large join,
- * `ORDER BY random()`, a recursive CTE, ...) cannot hold the deadline hostage.
+ * synchronous `DatabaseSync` call — a client disconnect or a slow non-recursive
+ * statement (large join, `ORDER BY random()`, ...) can no longer hold the host event
+ * loop hostage indefinitely.
  *
  * Degraded fallback: if the compiled worker asset cannot be located (a corrupted or
  * partial install — the normal build/publish/standalone pipelines all ship it), the
- * query instead runs in-process under a *per-row* elapsed-time budget. `node:sqlite`'s
- * `DatabaseSync` exposes no interrupt/cancellation API, so once execution is inside a
- * single synchronous native call there is nothing in-process that can preempt it —
- * true enforcement genuinely requires the separate worker thread this fallback exists
- * because it could not find. The per-row check is therefore strictly weaker, not just a
- * smaller budget: it is only evaluated between rows the native iterator has already
- * produced, so a statement that is slow to produce its very first row (a full scan
- * before any match, an aggregate over a large recursive CTE, ...) blocks for its full
- * cost before the deadline is ever checked. This fallback exists to keep the common
- * case usable in a degraded install, not as a substitute for the worker deadline; a
- * warning is logged once per process when it activates so a degraded install is
- * observable rather than silently under-enforcing its documented time budget.
+ * query instead runs in-process under a *per-row* elapsed-time budget. That fallback is
+ * strictly weaker: the budget is only checked between rows the native iterator has
+ * already produced, so a statement that is slow to produce its very first row (for
+ * example a full-table scan with no matching rows) is not bounded by it. It exists to
+ * keep the common case usable in a degraded install, not as a substitute for the worker
+ * deadline.
  */
 export async function queryGraphSqliteRaw(
   outputPath: string,
@@ -106,6 +100,7 @@ async function queryGraphSqliteRawInProcessBounded(
         deadlineAt,
         bounds.deadlineMs,
       );
+      // Always stream via iterate so per-cell and cumulative budgets apply before append.
       return collectBoundedRawSqlRows(columns, rows, {
         maxRows: bounds.maxRows,
         maxBytes: bounds.maxBytes,
@@ -120,12 +115,14 @@ async function queryGraphSqliteRawInProcessBounded(
   });
 }
 
-/** Throws once the wall-clock deadline has passed between two already-produced rows.
- * See the fallback caveat on `queryGraphSqliteRaw`: a statement slow to produce its
- * first row is not bounded here — only slow-*between*-rows iteration is caught. */
+/** Throws once the wall-clock deadline has passed between two already-produced rows. See
+ * the fallback caveat on `queryGraphSqliteRaw`: a slow-before-first-row query is not
+ * caught here, only slow-*between*-rows iteration is. */
 function* withPerRowDeadline<T>(rows: Iterable<T>, deadlineAt: number, deadlineMs: number): Generator<T> {
   for (const row of rows) {
-    if (Date.now() > deadlineAt) throw new SqliteQueryDeadlineExceededError(deadlineMs);
+    if (Date.now() > deadlineAt) {
+      throw new SqliteQueryDeadlineExceededError(deadlineMs);
+    }
     yield row;
   }
 }
