@@ -152,14 +152,13 @@ async function analyzeChangedSymbolReferences(
       continue;
     }
     if (keptRefs >= options.maxRefs) {
-      const remaining = refs.references.length - refIndex;
-      if (diagnostics) diagnostics.refsDroppedByMaxRefs += remaining;
-      if (workBudget) recordReferencesOmitted(workBudget, remaining);
-      break;
+      if (diagnostics) diagnostics.refsDroppedByMaxRefs += 1;
+      if (workBudget) recordReferencesOmitted(workBudget, 1);
+      continue;
     }
     if (workBudget && remainingReferenceRetainBudget(workBudget) === 0) {
-      recordReferencesOmitted(workBudget, refs.references.length - refIndex);
-      break;
+      recordReferencesOmitted(workBudget, 1);
+      continue;
     }
     keptRefs += 1;
     if (workBudget) {
@@ -228,6 +227,8 @@ async function analyzeChangedSymbolReferences(
       ...(options.refContext && existingRefs.length ? { refs: existingRefs } : {}),
       explain: {
         ...rankedExplainDetails,
+        ...(bestReason !== undefined ? { reason: bestReason } : {}),
+        ...(mergedHints ? { hints: mergedHints } : {}),
         ...(resolutionConfidence !== undefined ? { resolutionConfidence } : {}),
         refsCount: (existing?.explain?.refsCount ?? 0) + 1,
       },
