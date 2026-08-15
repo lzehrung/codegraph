@@ -432,6 +432,8 @@ function createCodegraphMcpHandlersForSession(
   let sqlitePath = configuredSqlitePath;
   let sqliteOutDir = configuredSqliteOutDir;
   let sqliteCanRefresh = configuredSqliteCanRefresh;
+  let refreshPromise: Promise<void> | undefined;
+  let refreshEpoch = 0;
 
   const relative = (file: string): string => toProjectDisplayPath(root, file);
   const boundedLimit = (limit: number | undefined, fallback: number, max: number): number => {
@@ -981,11 +983,25 @@ function createCodegraphMcpHandlersForSession(
 
     refresh_index: async (request) => {
       const warmup = request.warmup ?? "off";
-      session.invalidate();
-      sqlitePath = configuredSqlitePath;
-      sqliteOutDir = configuredSqliteOutDir;
-      sqliteCanRefresh = configuredSqliteCanRefresh;
-      await startCodegraphMcpWarmup(session, warmup);
+      if (refreshPromise) {
+        await refreshPromise;
+        return { refreshed: true, warmup };
+      }
+      const epoch = ++refreshEpoch;
+      const refresh = (async () => {
+        session.invalidate();
+        sqlitePath = configuredSqlitePath;
+        sqliteOutDir = configuredSqliteOutDir;
+        sqliteCanRefresh = configuredSqliteCanRefresh;
+        await startCodegraphMcpWarmup(session, warmup);
+        if (epoch !== refreshEpoch) throw new Error("MCP index refresh was superseded.");
+      })();
+      refreshPromise = refresh;
+      try {
+        await refresh;
+      } finally {
+        if (refreshPromise === refresh) refreshPromise = undefined;
+      }
       return { refreshed: true, warmup };
     },
 
