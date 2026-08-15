@@ -85,6 +85,7 @@ import {
   MAX_TYPE_HIERARCHY_LIMIT,
   MAX_MCP_COLLECTION_LIMIT,
   MAX_RENAME_PREVIEW_EDITS,
+  MCP_TOOL_REGISTRY,
   MCP_TOOLS,
   MAX_REFACTOR_PLAN_LIMIT,
 } from "./tools.js";
@@ -1624,6 +1625,9 @@ async function callMcpTool(
   input: unknown,
   signal?: AbortSignal,
 ): Promise<unknown> {
+  if (!MCP_TOOL_REGISTRY.some((tool) => tool.name === name)) {
+    throw new Error(`Unknown MCP tool: ${name}`);
+  }
   switch (name) {
     case "search":
       return await handlers.search(parseMcpToolInput(searchSchema, input, name), signal);

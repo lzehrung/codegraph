@@ -127,7 +127,7 @@ function navigationInputSchema(includeLimit: boolean): Tool["inputSchema"] {
   };
 }
 
-export const MCP_TOOLS: Tool[] = [
+export const MCP_TOOL_REGISTRY: Tool[] = [
   {
     name: "search",
     description: "Deterministic ranked search across files, symbols, chunks, SQL objects, and graph context.",
@@ -462,6 +462,8 @@ export const MCP_TOOLS: Tool[] = [
     ),
   },
 ];
+
+export const MCP_TOOLS = MCP_TOOL_REGISTRY;
 
 export function listCodegraphMcpTools(): Tool[] {
   return MCP_TOOLS.map((tool) => ({ ...tool }));
