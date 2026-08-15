@@ -2014,3 +2014,43 @@ describe("Find References", () => {
     });
   });
 });
+
+describe("Find References: Unicode identifiers (C11)", () => {
+  it("finds every cross-file reference to a Unicode-named function, matching an ASCII control", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "cg-references-unicode-"));
+    try {
+      // Mirrors the audit's V1 repro: a definition file whose source begins with non-ASCII
+      // text (byte offset drift), consumed twice each by six files. An ASCII control with the
+      // identical structure proves the counts are byte-offset-driven, not incidental.
+      const uDefFile = path.join(root, "u1.py").replace(/\\/g, "/");
+      await fsp.writeFile(uDefFile, 'x = "ééé"\ndef créer():\n    return 1\n', "utf8");
+      const uConsumerFiles: string[] = [];
+      for (let i = 1; i <= 6; i += 1) {
+        const file = path.join(root, `cu${i}.py`).replace(/\\/g, "/");
+        await fsp.writeFile(file, `from u1 import créer\n\ndef use${i}():\n    créer()\n    créer()\n`, "utf8");
+        uConsumerFiles.push(file);
+      }
+
+      const aDefFile = path.join(root, "a1.py").replace(/\\/g, "/");
+      await fsp.writeFile(aDefFile, 'x = "eee"\ndef creer():\n    return 1\n', "utf8");
+      const aConsumerFiles: string[] = [];
+      for (let i = 1; i <= 6; i += 1) {
+        const file = path.join(root, `ca${i}.py`).replace(/\\/g, "/");
+        await fsp.writeFile(file, `from a1 import creer\n\ndef use${i}():\n    creer()\n    creer()\n`, "utf8");
+        aConsumerFiles.push(file);
+      }
+
+      const index = await createTestIndexFromFiles(root, [uDefFile, aDefFile, ...uConsumerFiles, ...aConsumerFiles]);
+
+      const uResult = await testFindReferences(index, uDefFile, 2, "def créer".indexOf("créer") + 1, 19);
+      expect(uResult.status).toBe("ok");
+      if (uResult.status === "ok") expect(uResult.references).toHaveLength(19);
+
+      const aResult = await testFindReferences(index, aDefFile, 2, "def creer".indexOf("creer") + 1, 19);
+      expect(aResult.status).toBe("ok");
+      if (aResult.status === "ok") expect(aResult.references).toHaveLength(19);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});

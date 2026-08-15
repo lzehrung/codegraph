@@ -792,3 +792,21 @@ exports[`native semantic coverage > keeps native semantics stable for representa
   },
 }
 `;
+
+exports[`native semantic coverage > keeps native semantics stable for representative language fixtures 48`] = `
+{
+  "goto": {
+    "file": ".regressions/unicode_def.py",
+    "line": 2,
+    "status": "ok",
+  },
+  "references": {
+    "refs": [
+      ".regressions/unicode_consumer.py:1",
+      ".regressions/unicode_consumer.py:3",
+      ".regressions/unicode_def.py:2",
+    ],
+    "status": "ok",
+  },
+}
+`;
