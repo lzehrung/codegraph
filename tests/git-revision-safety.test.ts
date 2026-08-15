@@ -11,9 +11,10 @@ describe("git revision safety", () => {
   });
 
   it("places --end-of-options immediately before revision arguments in gitDiffArgs", () => {
-    expect(gitDiffArgs("main", "HEAD")).toEqual(["diff", "--end-of-options", "main..HEAD"]);
+    expect(gitDiffArgs("main", "HEAD")).toEqual(["diff", "--find-renames", "--end-of-options", "main..HEAD"]);
     expect(gitDiffArgs("main", "WORKTREE", ["--name-only"])).toEqual([
       "diff",
+      "--find-renames",
       "--name-only",
       "--end-of-options",
       "main",
@@ -21,6 +22,7 @@ describe("git revision safety", () => {
     expect(gitDiffArgs("main", "STAGED", ["--name-only"])).toEqual([
       "diff",
       "--cached",
+      "--find-renames",
       "--name-only",
       "--end-of-options",
       "main",
