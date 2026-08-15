@@ -151,3 +151,48 @@ ${hunkLines.join("\n")}
     await expect(parseUnifiedDiffStreaming(stream)).rejects.toThrow("stream error");
   });
 });
+
+describe("Quoted diff --git headers (C12)", () => {
+  it("decodes a non-ASCII path quoted and octal-escaped on both sides", () => {
+    // Real `git diff` output for a non-ASCII filename: git quotes the path and escapes each
+    // UTF-8 byte independently as \\NNN (octal). Recombining those bytes correctly requires
+    // decoding them as raw bytes and re-parsing as UTF-8, not as individual code points.
+    const diffText = `diff --git "a/caf\\303\\251.ts" "b/caf\\303\\251.ts"
+index 0000000..1111111 100644
+--- "a/caf\\303\\251.ts"
++++ "b/caf\\303\\251.ts"
+@@ -1 +1 @@
+-old
++new
+`;
+    const parsed = parseUnifiedDiff(diffText);
+    expect(parsed.files).toEqual([expect.objectContaining({ path: "café.ts", kind: "modified" })]);
+  });
+
+  it("decodes a rename where only the destination side needs quoting", () => {
+    const diffText = `diff --git a/plain.ts "b/\\346\\227\\245\\346\\234\\254/renamed.ts"
+similarity index 100%
+rename from plain.ts
+rename to "\\346\\227\\245\\346\\234\\254/renamed.ts"
+`;
+    const parsed = parseUnifiedDiff(diffText);
+    expect(parsed.files).toEqual([
+      expect.objectContaining({ path: "日本/renamed.ts", oldPath: "plain.ts", kind: "renamed" }),
+    ]);
+  });
+
+  it("decodes an escaped double-quote character inside a quoted filename", () => {
+    // A literal `"` in a path is itself one of the characters git must quote/escape; this
+    // exercises the \\" escape specifically, independent of any octal-byte decoding.
+    const diffText = `diff --git "a/quote\\"test.ts" "b/quote\\"test.ts"
+index 0000000..1111111 100644
+--- "a/quote\\"test.ts"
++++ "b/quote\\"test.ts"
+@@ -1 +1 @@
+-old
++new
+`;
+    const parsed = parseUnifiedDiff(diffText);
+    expect(parsed.files).toEqual([expect.objectContaining({ path: 'quote"test.ts', kind: "modified" })]);
+  });
+});
