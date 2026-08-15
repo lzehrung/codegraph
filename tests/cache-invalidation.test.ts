@@ -860,6 +860,39 @@ describe("Cache invalidation and strict hashing", () => {
     }
   });
 
+  it("resolves git signatures when the project root is a repository subdirectory (C1)", async () => {
+    const root = await mkTmpDir("dg-git-sig-subdir-root-");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "cache@test.local"]);
+    runGit(root, ["config", "user.name", "Cache Test"]);
+
+    // `git hash-object --stdin-paths` resolves stdin paths against the repository root, not
+    // the spawned cwd, unlike `git ls-files`. A project root that is a subdirectory of the
+    // repo previously fed cwd-relative paths straight into that call, so every path failed
+    // to open and the whole call silently discarded every git signature for the build.
+    const subdirRoot = path.join(root, "src");
+    await fsp.mkdir(subdirRoot, { recursive: true });
+    const filePath = path.join(subdirRoot, "a.ts");
+    await fsp.writeFile(filePath, "export const a = 1;\n", "utf8");
+    runGit(root, ["add", "-A"]);
+    runGit(root, ["commit", "-m", "init"]);
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const hashes = await gitModule.getGitBlobHashes(subdirRoot, [filePath]);
+
+      expect(hashes.size).toBe(1);
+      const hash = hashes.get(normalize(filePath));
+      expect(typeof hash).toBe("string");
+      expect(hash?.length).toBe(40);
+      expect(warnSpy.mock.calls.some((call) => String(call[0]).includes("Failed to read Git blob hashes"))).toBe(
+        false,
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it("surfaces a genuine git invocation failure instead of silently discarding signatures", async () => {
     const root = await mkTmpDir("dg-git-sig-invocation-failure-");
     // No `git init`: the directory is not a repository, so `git ls-files` genuinely fails
