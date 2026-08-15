@@ -206,7 +206,7 @@ describe("agent session", () => {
     };
 
     expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
-    expect(sidecar.version).toBe(2);
+    expect(sidecar.version).toBe(3);
     expect(sidecar.projectRoot).toBe(normalizePath(root));
     expect(sidecar.implementationFingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(sidecar.projectSnapshotIdentity).toBe(cold.index.projectSnapshotIdentity);
@@ -300,7 +300,7 @@ describe("agent session", () => {
 
     expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
     expect(rebuilt.symbolGraph.nodes.size).toBeGreaterThan(0);
-    expect(refreshed.version).toBe(2);
+    expect(refreshed.version).toBe(3);
   });
 
   it("does not publish an identity or sidecar when the project snapshot write fails", async () => {
@@ -325,7 +325,7 @@ describe("agent session", () => {
     }
   });
 
-  it("rejects a detailed symbol graph sidecar stored for another root", async () => {
+  it("loads a detailed symbol graph sidecar with provenance from another root", async () => {
     const root = await mkGitRepo();
     await createAgentSession({ root }).loadProject();
     const sidecarPath = detailedSymbolGraphSnapshotPath(root);
@@ -336,7 +336,7 @@ describe("agent session", () => {
 
     const rebuilt = await createAgentSession({ root }).loadProject();
 
-    expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
+    expect(symbolGraphSpy).toHaveBeenCalledTimes(0);
     expect(rebuilt.symbolGraph.nodes.size).toBeGreaterThan(0);
   });
 
@@ -455,7 +455,7 @@ describe("agent session", () => {
     const refreshed = (await readDetailedSidecar(sidecarPath)) as { version: number };
 
     expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
-    expect(refreshed.version).toBe(2);
+    expect(refreshed.version).toBe(3);
   });
 
   it("invalidates the detailed sidecar after a tracked edit", async () => {

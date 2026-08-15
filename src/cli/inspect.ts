@@ -13,6 +13,7 @@ import {
   getNativeTreeSitterSupportedLanguageIds,
   isNativeTreeSitterAvailable,
 } from "../native/treeSitterNative.js";
+import { cacheRoot } from "../indexer/build-cache/module-cache.js";
 import type { NativeRuntimeMode } from "../native/treeSitterNative.js";
 import type { Graph } from "../types.js";
 import { restrictGraphToIncludeRoots } from "../util/includeRoots.js";
@@ -118,7 +119,7 @@ export type InspectCommandContext = {
 };
 
 function defaultCacheIndexPath(projectRoot: string): string {
-  return path.join(projectRoot, ".codegraph-cache", "index-v1");
+  return cacheRoot(projectRoot, { cache: "disk" });
 }
 
 function defaultCacheManifestPath(projectRoot: string): string {

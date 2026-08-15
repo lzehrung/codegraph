@@ -63,28 +63,28 @@ describe("Incremental cache modes", () => {
     const util = `export function a(){return 1}`;
     const utilPath = path.join(root, "util.ts");
     await fsp.writeFile(utilPath, util, "utf8");
-
     const first = await buildProjectIndex(root, { threads: 2, cache: "disk" });
-    const fileId = normalize(path.resolve(utilPath));
+    const absoluteFile = normalize(path.resolve(utilPath));
+    const storedFile = "util.ts";
     const dbPath = diskCacheDbPathFor(root);
     expect(first.byFile.size).toBeGreaterThan(0);
     expect(fs.existsSync(dbPath)).toBe(true);
 
-    const row = readDiskCacheRow(root, fileId);
+    const row = readDiskCacheRow(root, storedFile);
     expect(row).not.toBeNull();
-    expect(row?.version).toBe(3);
+    expect(row?.version).toBe(4);
     expect(typeof row?.sig).toBe("string");
     const payload = JSON.parse(row?.payload ? brotliDecompressSync(row.payload).toString("utf8") : "null") as unknown;
     expect(typeof payload).toBe("object");
     expect(payload).not.toBeNull();
     if (payload && typeof payload === "object" && "file" in payload) {
-      expect(typeof payload.file).toBe("string");
+      expect(payload.file).toBe(storedFile);
     }
 
-    // Build again; should hit disk cache file
+    // Build again; should hit disk cache file and resolve its relative key.
     const second = await buildProjectIndex(root, { threads: 2, cache: "disk" });
     expect(second.byFile.size).toBe(first.byFile.size);
     expect(fs.existsSync(dbPath)).toBe(true);
-    expect(second.byFile.get(fileIdentityKey(path.resolve(utilPath)))?.file).toBe(fileId);
+    expect(second.byFile.get(fileIdentityKey(absoluteFile))?.file).toBe(absoluteFile);
   });
 });
