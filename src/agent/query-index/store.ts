@@ -322,6 +322,56 @@ export class QueryIndexStore {
     }
   }
 
+  candidateChunksForTerms(terms: readonly string[], paths: readonly string[]): StoredQueryIndexChunk[] {
+    if (!terms.length || !paths.length) return [];
+    const ftsTerms = terms.filter((term) => codePointLength(term) >= 3);
+    const directTerms = terms.filter((term) => codePointLength(term) < 3);
+    const conditions: string[] = [];
+    const directParameters: string[] = [];
+    if (ftsTerms.length) {
+      conditions.push("chunks.chunk_id IN (SELECT rowid FROM fts_matches)");
+    }
+    for (const term of directTerms) {
+      conditions.push("instr(chunks.normalized_text, ?) > 0");
+      directParameters.push(term);
+    }
+    for (const term of terms) {
+      conditions.push("instr(replace(chunks.normalized_text, ' ', ''), ?) > 0");
+      directParameters.push(term);
+    }
+    const ftsQuery = ftsTerms.map(escapeFtsTrigramTerm).join(" OR ");
+    const prefix = ftsTerms.length
+      ? "WITH fts_matches AS (SELECT rowid FROM chunk_search WHERE chunk_search MATCH ?)"
+      : "";
+    const candidates = new Map<string, StoredQueryIndexChunk>();
+    const batchSize = 500;
+    for (let offset = 0; offset < paths.length; offset += batchSize) {
+      const batch = paths.slice(offset, offset + batchSize);
+      const placeholders = batch.map(() => "?").join(", ");
+      const rows = this.db
+        .prepare(
+          `
+          ${prefix}
+          SELECT files.path AS path, chunks.ordinal, chunks.kind, chunks.name,
+                 chunks.start_line, chunks.end_line, chunks.text, chunks.normalized_text
+          FROM chunks
+          JOIN files ON files.file_id = chunks.file_id
+          WHERE files.path IN (${placeholders})
+            AND (${conditions.join(" OR ")})
+          ORDER BY files.path, chunks.ordinal
+        `,
+        )
+        .all(
+          ...(ftsTerms.length ? [ftsQuery, ...batch, ...directParameters] : [...batch, ...directParameters]),
+        ) as Array<Record<string, unknown>>;
+      for (const row of rows) {
+        const chunk = storedCandidateChunkFromRow(row);
+        if (chunk) candidates.set(`${chunk.path}\0${chunk.ordinal}`, chunk);
+      }
+    }
+    return [...candidates.values()];
+  }
+
   ftsChunkCandidates(query: string, limit = QUERY_INDEX_CANDIDATE_PREFETCH_LIMIT): StoredQueryIndexChunk[] {
     const normalizedLimit = normalizedCandidateLimit(limit);
     const rows = this.db

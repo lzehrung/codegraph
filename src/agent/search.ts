@@ -13,6 +13,7 @@ import {
   AGENT_SEARCH_RESULT_LIMIT,
 } from "../presentation/bounds.js";
 import { normalizePath } from "../util/paths.js";
+import { mapLimit } from "../util/concurrency.js";
 import { errorMessage } from "../util/errors.js";
 import { boundAgentList, defaultAgentLimit } from "./bounds.js";
 import {
@@ -44,7 +45,11 @@ import {
   QUERY_INDEX_NORMALIZER_VERSION,
   type QueryTextChunk,
 } from "./query-index/content.js";
-import { findQueryIndexChunkCandidates, QUERY_INDEX_CANDIDATE_VERSION } from "./query-index/candidates.js";
+import {
+  findQueryIndexChunkCandidates,
+  QUERY_INDEX_CANDIDATE_VERSION,
+  type QueryIndexCandidate,
+} from "./query-index/candidates.js";
 import { registerSessionInvalidationHook } from "./sessionLifecycle.js";
 import type { QueryIndexHandle } from "./query-index/update.js";
 
@@ -710,15 +715,23 @@ async function addTextResults(
         const candidateStarted = performance.now();
         const candidateChunks = findQueryIndexChunkCandidates(store, query.rankTokens);
         diagnostics.candidateMs += performance.now() - candidateStarted;
-        diagnostics.fileCandidates += new Set(candidateChunks.map((chunk) => chunk.path)).size;
         diagnostics.chunkCandidates += candidateChunks.length;
         const allowedPaths = new Set(snapshot.files.map((file) => normalizeAgentFilePath(snapshot.root, file)));
         const scoringStarted = performance.now();
-        for (const chunk of candidateChunks) {
-          if (!allowedPaths.has(chunk.path)) {
-            throw new Error(`Query index returned an out-of-snapshot path: ${chunk.path}`);
+        for (const candidate of candidateChunks) {
+          if (!allowedPaths.has(candidate.path)) {
+            throw new Error(`Query index returned an out-of-snapshot path: ${candidate.path}`);
           }
-          addTextFileResults(snapshot, candidateResultMap, query, includeSnippets, mode, chunk.path, [chunk]);
+          addTextFileResults(
+            snapshot,
+            candidateResultMap,
+            query,
+            includeSnippets,
+            mode,
+            candidate.path,
+            [candidate],
+            candidate,
+          );
         }
         diagnostics.scoringMs += performance.now() - scoringStarted;
       });
@@ -731,12 +744,20 @@ async function addTextResults(
   }
 
   const cache = getSearchCache(snapshot);
-  for (const file of snapshot.files) {
-    const normalizedText = await getCachedNormalizedText(cache, file);
-    if (!normalizedText || !textCouldMatchNormalized(normalizedText, query.rankTokens)) continue;
-    const relFile = normalizeAgentFilePath(snapshot.root, file);
-    const chunks = await getCachedTextChunks(cache, file);
-    addTextFileResults(snapshot, resultMap, query, includeSnippets, mode, relFile, chunks);
+  const fallbackResults = await mapLimit(
+    snapshot.files,
+    Math.min(16, Math.max(1, snapshot.files.length)),
+    async (file) => {
+      const normalizedText = await getCachedNormalizedText(cache, file);
+      if (!normalizedText || !textCouldMatchNormalized(normalizedText, query.rankTokens)) return null;
+      const relFile = normalizeAgentFilePath(snapshot.root, file);
+      const chunks = await getCachedTextChunks(cache, file);
+      return { relFile, chunks };
+    },
+  );
+  for (const fallback of fallbackResults) {
+    if (!fallback) continue;
+    addTextFileResults(snapshot, resultMap, query, includeSnippets, mode, fallback.relFile, fallback.chunks);
   }
 }
 
@@ -748,10 +769,11 @@ function addTextFileResults(
   mode: AgentSearchMode,
   relFile: string,
   chunks: readonly SearchTextChunk[],
+  candidate?: QueryIndexCandidate,
 ): void {
   const documentationFile = isDocumentationFile(relFile);
   for (const chunk of chunks) {
-    const match = matchTokenScoreFromNormalized(chunk.normalizedText, query);
+    const match = candidate ? candidate.score : matchTokenScoreFromNormalized(chunk.normalizedText, query);
     if (match.score <= 0) continue;
     const handle = formatAgentChunkHandle({ file: relFile, line: chunk.startLine });
 
@@ -1008,9 +1030,9 @@ function buildTextChunks(file: string, text: string): SearchTextChunk[] {
   return buildQueryTextChunks(file, text);
 }
 
-function makeSnippet(text: string, query: SearchQueryTerms): string {
+function makeSnippet(text: string, query: SearchQueryTerms, matchedLine?: number): string {
   const lines = text.split(/\r?\n/);
-  const matchIndex = lines.findIndex((line) => matchTokenScore(line, query).score > 0);
+  const matchIndex = matchedLine ?? lines.findIndex((line) => matchTokenScore(line, query).score > 0);
   const index = matchIndex >= 0 ? matchIndex : 0;
   return lines
     .slice(Math.max(0, index - 1), Math.min(lines.length, index + 2))

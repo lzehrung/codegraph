@@ -1,3 +1,4 @@
+import { normalizeQuerySearchText } from "./content.js";
 import {
   codePointLength,
   escapeFtsTrigramTerm,
@@ -6,38 +7,44 @@ import {
   type StoredQueryIndexChunk,
 } from "./store.js";
 
-export const QUERY_INDEX_CANDIDATE_VERSION = 5;
+export const QUERY_INDEX_CANDIDATE_VERSION = 6;
 
-type CandidateScore = {
+export type QueryIndexCandidateScore = {
   score: number;
+  matched: string[];
   exactPhrase: boolean;
   proximity: boolean;
   matchedTerms: number;
 };
 
-function scoreCandidateChunk(normalizedText: string, rankTerms: readonly string[]): CandidateScore {
+export type QueryIndexCandidate = StoredQueryIndexChunk & {
+  score: QueryIndexCandidateScore;
+  matchedLine: number;
+};
+
+function scoreCandidateChunk(normalizedText: string, rankTerms: readonly string[]): QueryIndexCandidateScore {
   if (!normalizedText.length || !rankTerms.length) {
-    return { score: 0, exactPhrase: false, proximity: false, matchedTerms: 0 };
+    return { score: 0, matched: [], exactPhrase: false, proximity: false, matchedTerms: 0 };
   }
   const words = new Set(normalizedText.split(/\s+/).filter(Boolean));
   const compact = normalizedText.replace(/\s+/g, "");
+  const matched: string[] = [];
   let score = 0;
-  let matchedTerms = 0;
   for (const term of rankTerms) {
     if (words.has(term)) {
       score += 10;
-      matchedTerms += 1;
+      matched.push(term);
     } else if (compact.includes(term)) {
       score += 7;
-      matchedTerms += 1;
+      matched.push(term);
     } else if (normalizedText.includes(term)) {
       score += 4;
-      matchedTerms += 1;
+      matched.push(term);
     }
   }
   let exactPhrase = false;
   let proximity = false;
-  if (matchedTerms === rankTerms.length && rankTerms.length > 1) {
+  if (matched.length === rankTerms.length && rankTerms.length > 1) {
     score += 12;
     const normalizedPhrase = rankTerms.join(" ");
     if (normalizedText.includes(normalizedPhrase)) {
@@ -57,52 +64,42 @@ function scoreCandidateChunk(normalizedText: string, rankTerms: readonly string[
       if (proximity) score += 10;
     }
   }
-  return { score, exactPhrase, proximity, matchedTerms };
+  return { score, matched, exactPhrase, proximity, matchedTerms: matched.length };
 }
 
-function compareCandidateChunks(
-  left: { chunk: StoredQueryIndexChunk; score: CandidateScore },
-  right: { chunk: StoredQueryIndexChunk; score: CandidateScore },
-): number {
+function firstMatchingLine(text: string, rankTerms: readonly string[]): number {
+  const lines = text.split(/\r?\n/);
+  const matchIndex = lines.findIndex(
+    (line) => scoreCandidateChunk(normalizeQuerySearchText(line), rankTerms).score > 0,
+  );
+  return matchIndex >= 0 ? matchIndex : 0;
+}
+
+function compareCandidateChunks(left: QueryIndexCandidate, right: QueryIndexCandidate): number {
   return (
     right.score.score - left.score.score ||
     Number(right.score.exactPhrase) - Number(left.score.exactPhrase) ||
     Number(right.score.proximity) - Number(left.score.proximity) ||
     right.score.matchedTerms - left.score.matchedTerms ||
-    left.chunk.path.localeCompare(right.chunk.path) ||
-    left.chunk.ordinal - right.chunk.ordinal
+    left.path.localeCompare(right.path) ||
+    left.ordinal - right.ordinal
   );
 }
 
 export function findQueryIndexChunkCandidates(
   store: QueryIndexStore,
   rankTerms: readonly string[],
-): StoredQueryIndexChunk[] {
-  const directCandidates = new Map<string, StoredQueryIndexChunk>();
+): QueryIndexCandidate[] {
   const terms = rankTerms.filter((term) => term.length);
   const eligiblePaths = store.eligibleFilePaths(terms);
-  const eligiblePathSet = new Set(eligiblePaths);
-  for (const term of terms) {
-    let chunks: StoredQueryIndexChunk[];
-    if (codePointLength(term) >= 3) {
-      chunks = store.ftsChunkCandidates(escapeFtsTrigramTerm(term));
-    } else {
-      chunks = store.substringChunkCandidates(term, eligiblePaths);
-    }
-    for (const chunk of chunks) {
-      if (eligiblePathSet.has(chunk.path)) directCandidates.set(`${chunk.path}\0${chunk.ordinal}`, chunk);
-    }
-  }
-
-  for (const term of terms) {
-    for (const chunk of store.compactChunkCandidates(term, eligiblePaths)) {
-      directCandidates.set(`${chunk.path}\0${chunk.ordinal}`, chunk);
-    }
-  }
-  return [...directCandidates.values()]
-    .map((chunk) => ({ chunk, score: scoreCandidateChunk(chunk.normalizedText, terms) }))
+  return store
+    .candidateChunksForTerms(terms, eligiblePaths)
+    .map((chunk) => ({
+      ...chunk,
+      score: scoreCandidateChunk(chunk.normalizedText, terms),
+      matchedLine: firstMatchingLine(chunk.text, terms),
+    }))
     .filter((candidate) => candidate.score.score > 0)
     .sort(compareCandidateChunks)
-    .slice(0, QUERY_INDEX_CANDIDATE_ROW_LIMIT)
-    .map((candidate) => candidate.chunk);
+    .slice(0, QUERY_INDEX_CANDIDATE_ROW_LIMIT);
 }
