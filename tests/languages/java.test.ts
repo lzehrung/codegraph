@@ -228,8 +228,7 @@ describe("Java Unicode symbol ranges (C11)", () => {
   it("publishes a UTF-16 string index for a method name preceded by multibyte text", async () => {
     await expectUnicodeSymbolRangeIdentity({
       fileName: "Widget.java",
-      source:
-        "// café ☕ prüfung\n/* über */ public class Widget {\n\tpublic int créer() {\n\t\treturn 1;\n\t}\n}\n",
+      source: "// café ☕ prüfung\n/* über */ public class Widget {\n\tpublic int créer() {\n\t\treturn 1;\n\t}\n}\n",
       symbolName: "créer",
     });
   });

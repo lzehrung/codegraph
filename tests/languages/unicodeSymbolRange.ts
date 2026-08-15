@@ -27,7 +27,10 @@ export async function expectUnicodeSymbolRangeIdentity(opts: {
       nativeQueries: parsed.nativeQueries,
     });
     const sym = mod.locals.find((s) => s.localName === opts.symbolName);
-    expect(sym, `expected a local symbol named "${opts.symbolName}" in locals: ${mod.locals.map((l) => l.localName).join(", ")}`).toBeDefined();
+    expect(
+      sym,
+      `expected a local symbol named "${opts.symbolName}" in locals: ${mod.locals.map((l) => l.localName).join(", ")}`,
+    ).toBeDefined();
 
     const expectedIndex = opts.source.indexOf(opts.symbolName);
     expect(expectedIndex).toBeGreaterThanOrEqual(0);

@@ -181,7 +181,9 @@ describe("git diff semantics: non-ASCII, space, and rename path handling (C12)",
       // it, so assert against the parsed result rather than the raw diff text.
       const diff = await getUnifiedDiff(root, { changedSince: "HEAD" });
       const parsedDiff = parseUnifiedDiff(diff);
-      expect(parsedDiff.files.map((file) => file.path).sort()).toEqual(["café.ts", " leading.ts", "with space.ts"].sort());
+      expect(parsedDiff.files.map((file) => file.path).sort()).toEqual(
+        ["café.ts", " leading.ts", "with space.ts"].sort(),
+      );
     } finally {
       await removeGitTempDir(root);
     }

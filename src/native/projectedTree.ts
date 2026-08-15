@@ -1,5 +1,10 @@
 import type { NativePoint, NativeSyntaxNode, NativeSyntaxTree } from "./treeSitterNative.js";
-import { buildByteToStringIndexMap, stringIndexForByte, stringPositionForBytePoint, type ByteToStringIndexMap } from "./byteIndex.js";
+import {
+  buildByteToStringIndexMap,
+  stringIndexForByte,
+  stringPositionForBytePoint,
+  type ByteToStringIndexMap,
+} from "./byteIndex.js";
 
 export type ProjectedPosition = {
   row: number;
@@ -146,4 +151,3 @@ function comparePosition(left: ProjectedPosition, right: ProjectedPosition): num
   }
   return left.column - right.column;
 }
-

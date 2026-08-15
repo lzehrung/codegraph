@@ -432,7 +432,9 @@ export function parseCsharpUsingDirective(stmtText: string): ParsedCsharpUsingDi
   const trimmed = stmtText.trim();
 
   // C# identifiers permit Unicode letter categories, not just ASCII.
-  const aliasMatch = trimmed.match(/^(?:global\s+)?using\s+([\p{L}_][\p{L}\p{N}_]*)\s*=\s*([\p{L}_][\p{L}\p{N}_.]*)\s*;?$/u);
+  const aliasMatch = trimmed.match(
+    /^(?:global\s+)?using\s+([\p{L}_][\p{L}\p{N}_]*)\s*=\s*([\p{L}_][\p{L}\p{N}_.]*)\s*;?$/u,
+  );
   if (aliasMatch?.[1] && aliasMatch[2]) {
     return {
       from: aliasMatch[2],

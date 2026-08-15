@@ -885,9 +885,7 @@ describe("Cache invalidation and strict hashing", () => {
       const hash = hashes.get(normalize(filePath));
       expect(typeof hash).toBe("string");
       expect(hash?.length).toBe(40);
-      expect(warnSpy.mock.calls.some((call) => String(call[0]).includes("Failed to read Git blob hashes"))).toBe(
-        false,
-      );
+      expect(warnSpy.mock.calls.some((call) => String(call[0]).includes("Failed to read Git blob hashes"))).toBe(false);
     } finally {
       warnSpy.mockRestore();
     }
