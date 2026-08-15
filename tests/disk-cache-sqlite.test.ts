@@ -21,15 +21,16 @@ function duplicateCacheDbPath(root: string): string {
   return path.join(cacheDir(root), "duplicate-unit-cache.sqlite");
 }
 
-function normalizePathForSql(file: string): string {
-  return path.resolve(file).replace(/\\/g, "/");
+function normalizePathForSql(file: string, root?: string): string {
+  return (root ? path.relative(root, file) : path.resolve(file)).replace(/\\/g, "/");
 }
 
 function readSqliteMetadata(dbPath: string, key: string): string | undefined {
   const db = new DatabaseSync(dbPath);
   try {
     const row = db.prepare("SELECT value FROM cache_schema_metadata WHERE key = ?").get(key) as
-      { value?: unknown } | undefined;
+      | { value?: unknown }
+      | undefined;
     return typeof row?.value === "string" ? row.value : undefined;
   } finally {
     db.close();
@@ -141,14 +142,14 @@ describe("disk cache uses sqlite backend", () => {
       readRowCount(
         moduleCacheDbPath(root),
         "SELECT COUNT(*) AS count FROM module_cache WHERE file = ?",
-        normalizePathForSql(retainedPath),
+        normalizePathForSql(retainedPath, root),
       ),
     ).toBe(1);
     expect(
       readRowCount(
         moduleCacheDbPath(root),
         "SELECT COUNT(*) AS count FROM module_cache WHERE file = ?",
-        normalizePathForSql(deletedPath),
+        normalizePathForSql(deletedPath, root),
       ),
     ).toBe(0);
   });
@@ -171,7 +172,7 @@ describe("disk cache uses sqlite backend", () => {
       readRowCount(
         moduleCacheDbPath(root),
         "SELECT COUNT(*) AS count FROM module_cache WHERE file = ?",
-        normalizePathForSql(deletedPath),
+        normalizePathForSql(deletedPath, root),
       ),
     ).toBe(1);
   });
@@ -197,7 +198,7 @@ describe("disk cache uses sqlite backend", () => {
 
     expect(Array.from(index.modules.keys()).some((file) => file.endsWith("a.ts"))).toBe(true);
     expect(columns).toContain("updated_at");
-    expect(readSqliteMetadata(moduleCacheDbPath(root), "module_cache.schema_version")).toBe("1");
+    expect(readSqliteMetadata(moduleCacheDbPath(root), "module_cache.schema_version")).toBe("2");
   });
 
   it("rebuilds the module cache table when schema metadata is corrupt", async () => {
@@ -221,7 +222,7 @@ describe("disk cache uses sqlite backend", () => {
 
     await buildProjectIndex(root, { cache: "disk", threads: 1 });
 
-    expect(readSqliteMetadata(moduleCacheDbPath(root), "module_cache.schema_version")).toBe("1");
+    expect(readSqliteMetadata(moduleCacheDbPath(root), "module_cache.schema_version")).toBe("2");
     expect(
       readRowCount(moduleCacheDbPath(root), "SELECT COUNT(*) AS count FROM module_cache WHERE file = ?", "stale.ts"),
     ).toBe(0);
@@ -252,7 +253,7 @@ describe("disk cache uses sqlite backend", () => {
 
     expect(result.groups.length).toBeGreaterThan(0);
     expect(columns).toContain("updated_at");
-    expect(readSqliteMetadata(duplicateCacheDbPath(root), "duplicate_unit_cache.schema_version")).toBe("1");
+    expect(readSqliteMetadata(duplicateCacheDbPath(root), "duplicate_unit_cache.schema_version")).toBe("2");
   });
 
   it("rebuilds the duplicate unit cache table when schema metadata is corrupt", async () => {
@@ -280,7 +281,7 @@ describe("disk cache uses sqlite backend", () => {
     const result = await findDuplicates(index, { minConfidence: "high", limit: 5 });
 
     expect(result.groups.length).toBeGreaterThan(0);
-    expect(readSqliteMetadata(duplicateCacheDbPath(root), "duplicate_unit_cache.schema_version")).toBe("1");
+    expect(readSqliteMetadata(duplicateCacheDbPath(root), "duplicate_unit_cache.schema_version")).toBe("2");
     expect(
       readRowCount(
         duplicateCacheDbPath(root),
@@ -317,7 +318,7 @@ describe("disk cache uses sqlite backend", () => {
     db.prepare(
       `INSERT INTO duplicate_unit_cache(file, variant, sig, version, payload, updated_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
-    ).run(normalizePathForSql(path.join(root, "src", "a.ts")), "expired", "old", 2, "[]", 0);
+    ).run(normalizePathForSql(path.join(root, "src", "a.ts"), root), "expired", "old", 2, "[]", 0);
     db.close();
 
     const reopenedIndex = await buildProjectIndex(root, { cache: "disk", threads: 1 });
@@ -346,7 +347,7 @@ describe("disk cache uses sqlite backend", () => {
     db.exec("BEGIN");
     for (let row = 0; row < 5_001; row++) {
       insert.run(
-        normalizePathForSql(path.join(root, "src", "a.ts")),
+        normalizePathForSql(path.join(root, "src", "a.ts"), root),
         `seed-${row}`,
         "current",
         2,
@@ -379,11 +380,13 @@ describe("disk cache uses sqlite backend", () => {
     const db = new DatabaseSync(duplicateCacheDbPath(root));
     const row = db
       .prepare("SELECT version, payload FROM duplicate_unit_cache WHERE file = ?")
-      .get(normalizePathForSql(path.join(root, "src", "a.ts"))) as { version: number; payload: Uint8Array } | undefined;
+      .get(normalizePathForSql(path.join(root, "src", "a.ts"), root)) as
+      | { version: number; payload: Uint8Array }
+      | undefined;
     db.close();
 
     expect(row).toBeDefined();
-    expect(row!.version).toBe(3);
+    expect(row!.version).toBe(4);
     const decompressed = brotliDecompressSync(row!.payload).toString("utf8");
     const units = JSON.parse(decompressed) as Array<Record<string, unknown>>;
     expect(units.length).toBeGreaterThan(0);
@@ -399,7 +402,7 @@ describe("disk cache uses sqlite backend", () => {
     await findDuplicates(index, { minConfidence: "high", limit: 5 });
     closeDuplicateUnitCacheDatabase(root);
 
-    const aFile = normalizePathForSql(path.join(root, "src", "a.ts"));
+    const aFile = normalizePathForSql(path.join(root, "src", "a.ts"), root);
     const staleDb = new DatabaseSync(duplicateCacheDbPath(root));
     staleDb
       .prepare("UPDATE duplicate_unit_cache SET version = 2, payload = ? WHERE file = ?")
@@ -412,8 +415,9 @@ describe("disk cache uses sqlite backend", () => {
 
     const after = new DatabaseSync(duplicateCacheDbPath(root));
     const row = after.prepare("SELECT version FROM duplicate_unit_cache WHERE file = ?").get(aFile) as
-      { version: number } | undefined;
+      | { version: number }
+      | undefined;
     after.close();
-    expect(row?.version).toBe(3);
+    expect(row?.version).toBe(4);
   });
 });

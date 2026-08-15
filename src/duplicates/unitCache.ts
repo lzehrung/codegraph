@@ -28,11 +28,11 @@ import type {
 } from "./types.js";
 import { lruMapGet } from "../util/lruMap.js";
 import { fileIdentityKey, normalizePath } from "../util/paths.js";
+import { cacheAbsolutePath, cacheRelativePath } from "../indexer/build-cache/module-cache.js";
 
-// v3: drop dead `text`/`normalizedTokens` fields (never read after construction) and
-// brotli-compress the payload; both cut on-disk cache size by roughly 8x.
-export const DUPLICATE_UNIT_CACHE_VERSION = 3;
-export const DUPLICATE_UNIT_CACHE_SCHEMA_VERSION = 1;
+// v4: project-relative file fields and handles.
+export const DUPLICATE_UNIT_CACHE_VERSION = 4;
+export const DUPLICATE_UNIT_CACHE_SCHEMA_VERSION = 2;
 export const DUPLICATE_UNIT_CACHE_TABLE = "duplicate_unit_cache";
 export const DUPLICATE_UNIT_CACHE_SCHEMA_VERSION_KEY = "duplicate_unit_cache.schema_version";
 export const DUPLICATE_TOKENIZER_REVISION = 2;
@@ -155,7 +155,9 @@ export function normalizedDuplicateUnitCacheNativeMode(
 }
 
 export function duplicateUnitCacheSignature(index: ProjectIndex, file: string): string | undefined {
-  const entry = index.manifestEntries?.get(file);
+  const entry =
+    index.manifestEntries?.get(file) ??
+    (index.projectRoot ? index.manifestEntries?.get(cacheRelativePath(index.projectRoot, file)) : undefined);
   return entry?.gitSig ?? entry?.sig;
 }
 
@@ -181,7 +183,7 @@ export function recreateDuplicateUnitCacheTable(db: SqliteDatabase): void {
   recreateSqliteTable(db, DUPLICATE_UNIT_CACHE_TABLE, createDuplicateUnitCacheTable);
 }
 
-export function migrateDuplicateUnitCacheTable(db: SqliteDatabase): void {
+export function migrateDuplicateUnitCacheTable(db: SqliteDatabase, projectRoot: string): void {
   const columns = sqliteTableColumns(db, DUPLICATE_UNIT_CACHE_TABLE);
   if (!columns.size) {
     createDuplicateUnitCacheTable(db);
@@ -199,19 +201,24 @@ export function migrateDuplicateUnitCacheTable(db: SqliteDatabase): void {
   if (!columns.has("updated_at")) {
     db.exec("ALTER TABLE duplicate_unit_cache ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;");
   }
+  const rows = db.prepare("SELECT file FROM duplicate_unit_cache").all() as Array<{ file: string }>;
+  const update = db.prepare("UPDATE duplicate_unit_cache SET file = ? WHERE file = ?");
+  for (const row of rows) {
+    const relative = cacheRelativePath(projectRoot, row.file);
+    if (relative !== row.file) update.run(relative, row.file);
+  }
 }
 
-export function ensureDuplicateUnitCacheSchema(db: SqliteDatabase): void {
+export function ensureDuplicateUnitCacheSchema(db: SqliteDatabase, projectRoot: string): void {
   ensureSqliteVersionedTableSchema({
     db,
     tableName: DUPLICATE_UNIT_CACHE_TABLE,
     schemaVersionKey: DUPLICATE_UNIT_CACHE_SCHEMA_VERSION_KEY,
     schemaVersion: DUPLICATE_UNIT_CACHE_SCHEMA_VERSION,
     createTable: createDuplicateUnitCacheTable,
-    migrateTable: migrateDuplicateUnitCacheTable,
+    migrateTable: (database) => migrateDuplicateUnitCacheTable(database, projectRoot),
   });
 }
-
 export function createDuplicateUnitDiskStatements(db: SqliteDatabase): DuplicateUnitDiskStatements {
   return {
     load: db.prepare("SELECT sig, version, payload FROM duplicate_unit_cache WHERE file = ? AND variant = ?"),
@@ -260,7 +267,7 @@ export function duplicateUnitDiskCache(index: ProjectIndex): DuplicateUnitDiskDa
     const db = new SqliteDatabase(dbPath);
     db.pragma("journal_mode = WAL");
     db.pragma("synchronous = NORMAL");
-    ensureDuplicateUnitCacheSchema(db);
+    ensureDuplicateUnitCacheSchema(db, index.projectRoot ?? path.dirname(index.cacheRootDir));
     entry.db = db;
     entry.statements = createDuplicateUnitDiskStatements(db);
   }
@@ -334,22 +341,23 @@ export function tryLoadDuplicateUnitsFromCache(
   const key = duplicateUnitCacheKey(file, variant);
   if (index.cacheMode === "memory") {
     const entry = readDuplicateUnitMemoryCache(key);
-    if (entry && entry.sig === sig) return entry.units;
+    return entry && entry.sig === sig ? entry.units : null;
+  }
+  if (index.cacheMode !== "disk") return null;
+  try {
+    const entry = duplicateUnitDiskCache(index);
+    const root = index.projectRoot ?? "";
+    const relativeFile = cacheRelativePath(root, file);
+    const row = entry?.statements?.load.get(relativeFile, variant) as
+      | { sig: string; version: number; payload: Uint8Array }
+      | undefined;
+    if (!row || row.sig !== sig || row.version !== DUPLICATE_UNIT_CACHE_VERSION) return null;
+    const parsed = JSON.parse(brotliDecompressSync(row.payload).toString("utf8")) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    return deserializeDuplicateUnits(transformDuplicateUnits(root, parsed, false));
+  } catch {
     return null;
   }
-  if (index.cacheMode === "disk") {
-    try {
-      const entry = duplicateUnitDiskCache(index);
-      const row = entry?.statements?.load.get(file, variant) as
-        { sig: string; version: number; payload: Uint8Array } | undefined;
-      if (!row || row.sig !== sig || row.version !== DUPLICATE_UNIT_CACHE_VERSION) return null;
-      const parsed = JSON.parse(brotliDecompressSync(row.payload).toString("utf8")) as unknown;
-      return deserializeDuplicateUnits(parsed);
-    } catch {
-      return null;
-    }
-  }
-  return null;
 }
 
 export function writeDuplicateUnitsToCache(
@@ -368,10 +376,21 @@ export function writeDuplicateUnitsToCache(
   if (index.cacheMode === "disk") {
     try {
       const entry = duplicateUnitDiskCache(index);
-      const payload = brotliCompressSync(JSON.stringify(serializeDuplicateUnits(units)), {
-        params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 },
-      });
-      entry?.statements?.write.run(file, variant, sig, DUPLICATE_UNIT_CACHE_VERSION, payload, Date.now());
+      const root = index.projectRoot ?? "";
+      const payload = brotliCompressSync(
+        JSON.stringify(transformDuplicateUnits(root, serializeDuplicateUnits(units), true)),
+        {
+          params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 },
+        },
+      );
+      entry?.statements?.write.run(
+        cacheRelativePath(root, file),
+        variant,
+        sig,
+        DUPLICATE_UNIT_CACHE_VERSION,
+        payload,
+        Date.now(),
+      );
     } catch {
       // best-effort cache
     }
@@ -392,6 +411,32 @@ export function serializeDuplicateUnits(units: DuplicateInternalUnit[]): Duplica
     ...unit,
     tokenSet: [...unit.tokenSet],
     signatures: [...unit.signatures],
+  }));
+}
+function transformDuplicatePath(root: string, value: string, toRelative: boolean): string {
+  const separator = value.indexOf("::");
+  if (separator >= 0) {
+    const file = value.slice(0, separator);
+    const resolved = toRelative ? cacheRelativePath(root, file) : cacheAbsolutePath(root, file);
+    return `${resolved}${value.slice(separator)}`;
+  }
+  return toRelative ? cacheRelativePath(root, value) : cacheAbsolutePath(root, value);
+}
+
+function transformDuplicateUnits(
+  root: string,
+  units: DuplicateSerializedUnit[],
+  toRelative: boolean,
+): DuplicateSerializedUnit[] {
+  return units.map((unit) => ({
+    ...unit,
+    file: transformDuplicatePath(root, unit.file, toRelative),
+    absoluteFile: transformDuplicatePath(root, unit.absoluteFile, toRelative),
+    handle: transformDuplicatePath(root, unit.handle, toRelative),
+    fileHandle: transformDuplicatePath(root, unit.fileHandle, toRelative),
+    ...(unit.sqlHandle ? { sqlHandle: transformDuplicatePath(root, unit.sqlHandle, toRelative) } : {}),
+    chunkHandle: transformDuplicatePath(root, unit.chunkHandle, toRelative),
+    ...(unit.symbolHandle ? { symbolHandle: transformDuplicatePath(root, unit.symbolHandle, toRelative) } : {}),
   }));
 }
 
