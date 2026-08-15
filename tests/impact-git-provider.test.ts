@@ -123,6 +123,24 @@ export function extra() {
     expect(stagedDiff.files.map((file) => file.path).sort()).toEqual(expectedFiles);
     expect(indexDiff.files.map((file) => file.path).sort()).toEqual(expectedFiles);
   });
+
+  it("resolves non-ASCII filenames and a non-ASCII rename through the review/impact diff path (C12)", async () => {
+    const root = createGitRepo();
+    writeFile(root, "café.ts", "export const a = 1;\n");
+    writeFile(root, "plain.ts", "export function run() {\n  return 1;\n}\n");
+    const base = commitAll(root, "initial");
+
+    writeFile(root, "café.ts", "export const a = 2;\n");
+    git(root, ["mv", "plain.ts", "日本-renamed.ts"]);
+    const head = commitAll(root, "unicode changes");
+
+    const diff = await getDiff({ provider: "git", cwd: root, base, head });
+
+    expect(diff.files.map((file) => file.path).sort()).toEqual(["café.ts", "日本-renamed.ts"]);
+    const renamed = diff.files.find((file) => file.path === "日本-renamed.ts");
+    expect(renamed?.kind).toBe("renamed");
+    expect(renamed?.oldPath).toBe("plain.ts");
+  });
   it("rejects when the Git process cannot be spawned", async () => {
     const root = createGitRepo();
     const missingCwd = path.join(root, "missing");
