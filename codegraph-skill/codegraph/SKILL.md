@@ -100,7 +100,7 @@ Safe shorthand: `impact` and git-backed `drift` default to `HEAD..WORKTREE`; `ar
 - full duplicate groups: `codegraph duplicates --root . ./src --json`
 - local Markdown link check: `codegraph links --json`
 
-`links` checks root-confined local Markdown links and GitHub-style heading fragments, including raw HTML `a[href]` in `.md` files. It skips external URLs and unsupported formats; exit 1 reports broken links. `review` and non-empty `impact` include the same `markdownLinks` findings; `unresolved` excludes document edges.
+`links` checks root-confined local Markdown links and GitHub-style heading fragments, including raw HTML `a[href]` in `.md` files. It skips external URLs and unsupported formats; exit 1 reports broken links. Discovery honors `codegraph.config.json` discovery globs plus CLI `--include-glob` / `--ignore-glob` / `--no-gitignore`. `review` and non-empty `impact` include the same `markdownLinks` findings; `unresolved` excludes document edges.
 
 `inspect --duplicates` adds the slower bounded duplicate summary. Treat duplicate matches, candidate tests, and call-compatibility hints as review leads, not proof.
 

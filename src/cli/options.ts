@@ -694,11 +694,16 @@ const CLI_COMMAND_SCHEMAS = new Map<string, CliCommandSchema>([
   ],
   [
     "links",
-    commandSchema(["--verbose", ...JSON_OUTPUT_FLAGS], ["--root"], {
-      kind: "max",
-      max: 1,
-      usage: "Usage: codegraph links [project-root] [--root <path>] [--json | --pretty] [--verbose]",
-    }),
+    commandSchema(
+      ["--verbose", "--no-gitignore", ...JSON_OUTPUT_FLAGS],
+      ["--root", "--include-glob", "--ignore-glob"],
+      {
+        kind: "max",
+        max: 1,
+        usage:
+          "Usage: codegraph links [project-root] [--root <path>] [--include-glob <glob>] [--ignore-glob <glob>] [--no-gitignore] [--json | --pretty] [--verbose]",
+      },
+    ),
   ],
   [
     "unresolved",

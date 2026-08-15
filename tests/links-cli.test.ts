@@ -94,4 +94,49 @@ describe("links CLI", () => {
       await fsp.rm(projectRoot, { recursive: true, force: true });
     }
   });
+
+  it("honors config discovery.ignoreGlobs so ignored fixtures do not fail links", async () => {
+    const projectRoot = await createMarkdownProject({
+      "README.md": "[ok](guide.md)\n",
+      "guide.md": "# Guide\n",
+      "codegraph.config.json": JSON.stringify(
+        { discovery: { ignoreGlobs: ["fixtures/**"] } },
+        null,
+        2,
+      ),
+      "fixtures/broken.md": "[missing](nowhere.md)\n",
+    });
+    try {
+      const result = await captureCli(["links", "--root", projectRoot, "--pretty"]);
+      expect(result.exitCode).toBeUndefined();
+      expect(result.stdout).toBe("No broken Markdown links found.\n");
+    } finally {
+      await fsp.rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("honors CLI --ignore-glob so ignored broken links do not fail", async () => {
+    const projectRoot = await createMarkdownProject({
+      "README.md": "[ok](guide.md)\n",
+      "guide.md": "# Guide\n",
+      "fixtures/broken.md": "[missing](nowhere.md)\n",
+    });
+    try {
+      const withoutIgnore = await captureCli(["links", "--root", projectRoot, "--pretty"]);
+      expect(withoutIgnore.exitCode).toBe(1);
+
+      const withIgnore = await captureCli([
+        "links",
+        "--root",
+        projectRoot,
+        "--ignore-glob",
+        "fixtures/**",
+        "--pretty",
+      ]);
+      expect(withIgnore.exitCode).toBeUndefined();
+      expect(withIgnore.stdout).toBe("No broken Markdown links found.\n");
+    } finally {
+      await fsp.rm(projectRoot, { recursive: true, force: true });
+    }
+  });
 });

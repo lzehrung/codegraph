@@ -653,6 +653,13 @@ export const LINKS_HELP_TEXT = `codegraph links - Check local Markdown links
 Usage: codegraph links [project-root] [--root <path>] [--json | --pretty] [--verbose]
 
 Checks local Markdown file, reference, fragment, and root-boundary targets. External links are skipped.
+
+Discovery options:
+  --include-glob <glob> Restrict discovered files to extra glob(s), relative to each scan root
+  --ignore-glob <glob>  Exclude extra discovered files by glob, relative to each scan root
+  --no-gitignore        Do not honor .gitignore during discovery
+
+Config discovery.ignoreGlobs / discovery.includeGlobs from codegraph.config.json also apply.
 `;
 
 export const APISURFACE_HELP_TEXT = `codegraph apisurface - Summarize exported API symbols

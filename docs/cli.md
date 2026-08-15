@@ -520,7 +520,7 @@ Dependency read commands keep the same output contracts while using the indexed 
 
 #### Markdown link validation
 
-`links` validates links authored in Markdown files under the project root. It covers inline links, reference-style links and definitions, autolinks, and raw HTML `a[href]` links, resolving local targets relative to the source file; `/path` targets resolve from the project root.
+`links` validates links authored in Markdown files under the project root. It covers inline links, reference-style links and definitions, autolinks, and raw HTML `a[href]` links, resolving local targets relative to the source file; `/path` targets resolve from the project root. Discovery uses the same `codegraph.config.json` `discovery.ignoreGlobs` / `discovery.includeGlobs` settings and CLI `--include-glob` / `--ignore-glob` / `--no-gitignore` filters as other discovery-backed commands.
 
 ```bash
 # Check Markdown links under the project root

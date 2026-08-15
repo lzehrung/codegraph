@@ -615,11 +615,12 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
     },
   },
   links: {
-    stage: "base",
+    stage: "project",
     run: async (ctx) => {
       const { handleLinksCommand } = await import("./links.js");
       await handleLinksCommand({
         projectRootFs: ctx.projectRootFs,
+        discoveryOptions: ctx.discoveryOptions,
         hasFlag: ctx.hasFlag,
         writeJSONLine,
         writeStdoutLine,
