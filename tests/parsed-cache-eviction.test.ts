@@ -1,30 +1,32 @@
 import { describe, it, expect } from "vitest";
-import path from "node:path";
-import fsp from "node:fs/promises";
+import { fileIdentityKey } from "../src/util/paths.js";
+import { setParsedCacheEntry } from "../src/indexer/parsed-cache.js";
+import type { ParsedFileContext } from "../src/indexer/parse-context.js";
 
-import { buildProjectIndex } from "../src/index.js";
-import { mkTmpDir } from "./helpers/filesystem.js";
+function fakeParsed(file: string): ParsedFileContext {
+  return {
+    file,
+    languageId: "ts",
+    source: `// ${file}\n`,
+    tree: { rootNode: { type: "program", startIndex: 0, endIndex: 0, childCount: 0, namedChildCount: 0 } },
+  } as ParsedFileContext;
+}
 
 describe("parsed AST cache eviction", () => {
-  it("limits parsed entries to configured max", async () => {
-    const root = await mkTmpDir("dg-parsed-lru-");
-    const files = ["a.ts", "b.ts", "c.ts", "d.ts"].map((name, i) => ({
-      name,
-      source: `export const v${i + 1} = ${i + 1};\n`,
-    }));
-
+  it("keeps exact LRU key identity after touch and reinsert", () => {
+    const parsedMap = new Map<string, ParsedFileContext>();
+    const files = ["a.ts", "b.ts", "c.ts", "d.ts"];
     for (const file of files) {
-      await fsp.writeFile(path.join(root, file.name), file.source, "utf8");
+      setParsedCacheEntry(parsedMap, file, fakeParsed(file), 2);
     }
 
-    const index = await buildProjectIndex(root, {
-      parsedCacheMaxEntries: 2,
-      threads: 1,
-      cache: "off",
-      keepParsed: true,
-    });
+    expect([...parsedMap.keys()]).toEqual([fileIdentityKey("c.ts"), fileIdentityKey("d.ts")]);
 
-    expect(index.parsed).toBeDefined();
-    expect((index.parsed?.size ?? 0) <= 2).toBe(true);
+    const cEntry = parsedMap.get(fileIdentityKey("c.ts"))!;
+    setParsedCacheEntry(parsedMap, "c.ts", cEntry, 2);
+    expect([...parsedMap.keys()]).toEqual([fileIdentityKey("d.ts"), fileIdentityKey("c.ts")]);
+
+    setParsedCacheEntry(parsedMap, "a.ts", fakeParsed("a.ts"), 2);
+    expect([...parsedMap.keys()]).toEqual([fileIdentityKey("c.ts"), fileIdentityKey("a.ts")]);
   });
 });

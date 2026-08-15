@@ -14,6 +14,7 @@ const nativeRequiredSuites = [
   "tests/native-worker-parity.test.ts",
   "tests/detailed-symbol-native-only.test.ts",
   "tests/native-cache-windows.test.ts",
+  "tests/call-hierarchy-language-parity.test.ts",
 ];
 
 function run(command, args) {

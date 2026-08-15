@@ -71,15 +71,14 @@ describe("bundled CLI entry", () => {
     }
   });
 
-  it("keeps dynamic import split points instead of one monolithic file", () => {
+  it("keeps the entry-to-worker chunk relationship instead of one monolithic file", () => {
     const binDir = path.dirname(bundledCli);
-    const outputs = fs.readdirSync(binDir).filter((name) => name.endsWith(".js"));
-    // Splitting is the contract: one monolithic file would regress startup. Exact chunk
-    // counts vary with the dependency graph / esbuild version, so only require >1 output.
-    expect(outputs.length).toBeGreaterThan(1);
-    expect(outputs).toContain("cli.js");
+    const outputs = fs.readdirSync(binDir).filter((name) => name.endsWith(".js")).sort();
+    // Bundle emits exactly two self-contained entrypoints (cli + queryIndexWorker).
+    expect(outputs).toEqual(["cli.js", "queryIndexWorker.js"]);
     const entry = fs.readFileSync(bundledCli, "utf8");
-    expect(entry).toMatch(/import\(/);
+    expect(entry).toContain("queryIndexWorker.js");
+    expect(fs.existsSync(path.join(binDir, "queryIndexWorker.js"))).toBe(true);
   });
 
   it("keeps a leading shebang so package managers can exec the bin directly", () => {

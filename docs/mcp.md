@@ -85,8 +85,8 @@ Compact contracts for high-traffic tools (`src/mcp/tools.ts`). Write gating: onl
 | `explore` | `query` | optional `limit`, `maxPackets`, `maxPaths`, `includeSource` | `limit` 5, `maxPackets` 3, `maxPaths` 3, `includeSource` true | `limit` 50, packets/paths 10 | no |
 | `packet_get` | `target` | optional `maxSymbols`, `maxSnippets`, `maxDuplicates` | (unset uses server defaults) | symbols 200, snippets 50, duplicates 20 | no |
 | `query_sqlite` | `query` | optional `params[]`, `limit` | `limit` 100 | `limit` 500 | no |
-| `refresh_index` | (none) | optional `warmup`: off\|base\|symbols | (omit = invalidate only) | — | no |
-| `artifact_build` | (none) | optional `outDir`, `sqlite`, `graphJson`, `report`, `questions`, `force` | — | — | yes (`--allow-build`) |
+| `refresh_index` | (none) | optional `warmup`: off\|base\|symbols | (omit = invalidate only) | - | no |
+| `artifact_build` | (none) | optional `outDir`, `sqlite`, `graphJson`, `report`, `questions`, `force` | - | - | yes (`--allow-build`) |
 
 `refs` / `file_deps` collection limits: default 25, maximum 500. Legacy alias tool names are accepted by `tools/call` but omitted from `tools/list`.
 
@@ -124,14 +124,14 @@ Positions use 1-based lines and 0-based UTF-16 columns, matching the rest of cod
 
 Position-based `goto` and `refs` requests (`file`, `line`, `column`) remain the primary navigation form. Alternatively, `goto.handle` and `refs.handle` accept an exact qualified identity, `<project-relative-file>::<local-symbol>`, without coordinates; each tool rejects mixed modes. `file_deps.file` accepts that identity or a portable `symbol:` handle, resolves its declaration, and returns file-graph dependencies; use `calls` for symbol-level callers and callees. Duplicate local names return an ambiguity error rather than selecting one.
 
-MCP tool name ↔ CLI command mapping for the common handle-driven follow-ups:
+MCP tool name <-> CLI command mapping for the common handle-driven follow-ups:
 
-- `workspace_symbols` ↔ `codegraph symbols`
-- `search` ↔ `codegraph search`
-- `packet_get` ↔ `codegraph packet get`
-- `get_symbol` ↔ `codegraph explain`
-- `calls` ↔ `codegraph callers` / `codegraph callees`
-- `type_hierarchy` ↔ `codegraph supertypes` / `codegraph subtypes`
+- `workspace_symbols` <-> `codegraph symbols`
+- `search` <-> `codegraph search`
+- `packet_get` <-> `codegraph packet get`
+- `get_symbol` <-> `codegraph explain`
+- `calls` <-> `codegraph callers` / `codegraph callees`
+- `type_hierarchy` <-> `codegraph supertypes` / `codegraph subtypes`
 
 ### Rename preview
 

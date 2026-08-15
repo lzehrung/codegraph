@@ -127,7 +127,7 @@ function formatDefinitionLocation(projectRootFs: string, definition: SymbolDef):
   return `${file}:${definition.range.start.line}:${definition.range.start.column} ${definition.kind} ${definition.localName}`;
 }
 
-function formatDumpmodOutput(projectRootFs: string, output: DumpmodOutput): string {
+export function formatDumpmodOutput(projectRootFs: string, output: DumpmodOutput): string {
   const lines = [`File: ${toProjectDisplayPath(projectRootFs, output.file)}`, "Locals:"];
   if (!output.locals.length) {
     lines.push("- (none)");
