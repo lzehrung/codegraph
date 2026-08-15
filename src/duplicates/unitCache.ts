@@ -370,6 +370,71 @@ export function tryLoadDuplicateUnitsFromCache(
 
 }
 
+export type PendingDuplicateUnitCacheWrite = {
+  file: string;
+  variant: string;
+  units: DuplicateInternalUnit[];
+};
+
+export function writeDuplicateUnitsBatchToCache(
+  index: ProjectIndex,
+  writes: readonly PendingDuplicateUnitCacheWrite[],
+): void {
+  if (!writes.length) return;
+  const root = index.projectRoot ?? "";
+  if (index.cacheMode === "memory") {
+    for (const write of writes) {
+      const sig = duplicateUnitCacheSignature(index, write.file);
+      if (!sig) continue;
+      writeDuplicateUnitMemoryCache(duplicateUnitCacheKey(write.file, write.variant), {
+        sig,
+        units: write.units,
+      });
+    }
+    return;
+  }
+  if (index.cacheMode !== "disk") return;
+  try {
+    const entry = duplicateUnitDiskCache(index);
+    const preparedWrites: Array<{
+      file: string;
+      variant: string;
+      sig: string;
+      payload: Buffer;
+    }> = [];
+    for (const write of writes) {
+      const sig = duplicateUnitCacheSignature(index, write.file);
+      if (!sig) continue;
+      const payload = brotliCompressSync(
+        JSON.stringify(transformDuplicateUnits(root, serializeDuplicateUnits(write.units), true)),
+        { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } },
+      );
+      preparedWrites.push({
+        file: cacheRelativePath(root, write.file),
+        variant: write.variant,
+        sig,
+        payload,
+      });
+    }
+    if (!preparedWrites.length || !entry?.db || !entry.statements) return;
+    const now = Date.now();
+    entry.db.transaction(() => {
+      for (const write of preparedWrites) {
+        entry.statements?.write.run(
+          write.file,
+          write.variant,
+          write.sig,
+          DUPLICATE_UNIT_CACHE_VERSION,
+          write.payload,
+          now,
+        );
+      }
+    })();
+  } catch {
+    // best-effort cache
+  }
+}
+
 export function writeDuplicateUnitsToCache(
   index: ProjectIndex,
   file: string,

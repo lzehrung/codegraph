@@ -1820,6 +1820,9 @@ describe("Cache invalidation and strict hashing", () => {
     await fsp.writeFile(gammaPath, "export const gammaValue = 3;\n", "utf8");
 
     await buildProjectIndex(root, { threads: 2, cache: "disk", useBloomFilters: true });
+    const bloomSidecarPath = path.join(root, ".codegraph-cache", "index-v1", "bloom-filters.json");
+    expect(await fsp.stat(bloomSidecarPath)).toBeTruthy();
+    await fsp.rm(bloomSidecarPath);
 
     // Modify only gamma.ts: alpha.ts and beta.ts stay genuine, provable cache hits, but the
     // snapshot as a whole can no longer be reused wholesale (`changedFiles.size` is nonzero),
