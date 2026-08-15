@@ -215,6 +215,41 @@ describe("git diff semantics: non-ASCII, space, and rename path handling (C12)",
   });
 });
 
+describe("git diff semantics: rename detection is deterministic regardless of user config (C4)", () => {
+  it("still reports a pure rename with diff.renames=false configured locally", async () => {
+    const root = await makeGitTempDir("codegraph-git-c4-renames-config-");
+    try {
+      git(root, ["init"]);
+      git(root, ["config", "user.email", "tests@example.com"]);
+      git(root, ["config", "user.name", "Tests"]);
+      // A user (or repo) can disable git's default rename detection entirely. gitDiffArgs
+      // must pass --find-renames explicitly so codegraph's own output does not silently
+      // depend on this config.
+      git(root, ["config", "diff.renames", "false"]);
+
+      const original = "export function widget() {\n  return 1;\n}\n".repeat(3);
+      await fs.writeFile(path.join(root, "widget.ts"), original, "utf8");
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "base"]);
+      const base = git(root, ["rev-parse", "HEAD"]);
+
+      git(root, ["mv", "widget.ts", "renamed-widget.ts"]);
+      git(root, ["add", "-A"]);
+      git(root, ["commit", "-m", "rename"]);
+      const head = git(root, ["rev-parse", "HEAD"]);
+
+      const diff = await getUnifiedDiff(root, { base, head });
+      const parsed = parseUnifiedDiff(diff);
+
+      expect(parsed.files).toEqual([
+        expect.objectContaining({ kind: "renamed", path: "renamed-widget.ts", oldPath: "widget.ts" }),
+      ]);
+    } finally {
+      await removeGitTempDir(root);
+    }
+  });
+});
+
 describe("listUntrackedFiles", () => {
   it("lists new files Git has not been told to track", async () => {
     const root = await makeGitTempDir("codegraph-git-untracked-");
