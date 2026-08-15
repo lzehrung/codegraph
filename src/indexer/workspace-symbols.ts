@@ -5,6 +5,7 @@ import { ensureParsedContext } from "./parse-context.js";
 import { getCachedScope } from "./navigation-references.js";
 import { resolveImported } from "./navigation-resolve.js";
 import { defNodeId } from "../graphs/symbol-graph.js";
+import { boundList } from "../presentation/bounds.js";
 import type { ImportBinding, ProjectIndex, SymbolDef, SymbolKind } from "./types.js";
 
 export const DEFAULT_WORKSPACE_SYMBOL_LIMIT = 50;
@@ -100,12 +101,13 @@ export async function workspaceSymbols(
   }
 
   ranked.sort(compareRankedCandidates);
-  const symbols = ranked.slice(0, limit).map(({ candidate }) => candidate);
+  const boundedRanked = boundList(ranked, limit);
+  const symbols = boundedRanked.items.map(({ candidate }) => candidate);
   return {
     query,
     symbols,
     totalCandidates: ranked.length,
-    omitted: Math.max(0, ranked.length - symbols.length),
+    omitted: boundedRanked.omitted,
     limit,
     omittedImports,
     importScanFailures,
