@@ -507,7 +507,7 @@ export async function collectDuplicateUnits(
   const belowThresholdUnitsByFile = new Map<string, number>();
 
   for (const file of normalizedFiles) {
-    const cachedUnits = tryLoadDuplicateUnitsFromCache(index, file, variant);
+    const cachedUnits = tryLoadDuplicateUnitsFromCache(index, file, variant, options.projectRoot);
     const fileUnits =
       cachedUnits ??
       (await buildDuplicateUnitsForFile(
@@ -521,7 +521,7 @@ export async function collectDuplicateUnits(
         astContextCache,
       ));
     if (!cachedUnits) {
-      writeDuplicateUnitsToCache(index, file, variant, fileUnits);
+      writeDuplicateUnitsToCache(index, file, variant, fileUnits, options.projectRoot);
     }
     for (const unit of fileUnits) {
       if (!shouldKeepUnit(unit, options.includeSmall, options.minTokens)) {

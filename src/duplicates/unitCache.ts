@@ -154,10 +154,14 @@ export function normalizedDuplicateUnitCacheNativeMode(
   return nativeMode;
 }
 
-export function duplicateUnitCacheSignature(index: ProjectIndex, file: string): string | undefined {
+export function duplicateUnitCacheSignature(
+  index: ProjectIndex,
+  file: string,
+  projectRoot?: string,
+): string | undefined {
+  const root = projectRoot ?? index.projectRoot;
   const entry =
-    index.manifestEntries?.get(file) ??
-    (index.projectRoot ? index.manifestEntries?.get(cacheRelativePath(index.projectRoot, file)) : undefined);
+    index.manifestEntries?.get(file) ?? (root ? index.manifestEntries?.get(cacheRelativePath(root, file)) : undefined);
   return entry?.gitSig ?? entry?.sig;
 }
 
@@ -335,8 +339,9 @@ export function tryLoadDuplicateUnitsFromCache(
   index: ProjectIndex,
   file: string,
   variant: string,
+  projectRoot?: string,
 ): DuplicateInternalUnit[] | null {
-  const sig = duplicateUnitCacheSignature(index, file);
+  const sig = duplicateUnitCacheSignature(index, file, projectRoot);
   if (!sig) return null;
   const key = duplicateUnitCacheKey(file, variant);
   if (index.cacheMode === "memory") {
@@ -346,15 +351,15 @@ export function tryLoadDuplicateUnitsFromCache(
   if (index.cacheMode !== "disk") return null;
   try {
     const entry = duplicateUnitDiskCache(index);
-    const root = index.projectRoot ?? "";
-    const relativeFile = cacheRelativePath(root, file);
+    const root = projectRoot ?? index.projectRoot ?? "";
+    const relativeFile = root ? cacheRelativePath(root, file) : file;
     const row = entry?.statements?.load.get(relativeFile, variant) as
       | { sig: string; version: number; payload: Uint8Array }
       | undefined;
     if (!row || row.sig !== sig || row.version !== DUPLICATE_UNIT_CACHE_VERSION) return null;
     const parsed = JSON.parse(brotliDecompressSync(row.payload).toString("utf8")) as unknown;
     if (!Array.isArray(parsed)) return null;
-    return deserializeDuplicateUnits(transformDuplicateUnits(root, parsed, false));
+    return deserializeDuplicateUnits(root ? transformDuplicateUnits(root, parsed, false) : parsed);
   } catch {
     return null;
   }
@@ -365,8 +370,9 @@ export function writeDuplicateUnitsToCache(
   file: string,
   variant: string,
   units: DuplicateInternalUnit[],
+  projectRoot?: string,
 ): void {
-  const sig = duplicateUnitCacheSignature(index, file);
+  const sig = duplicateUnitCacheSignature(index, file, projectRoot);
   if (!sig) return;
   const key = duplicateUnitCacheKey(file, variant);
   if (index.cacheMode === "memory") {
@@ -375,16 +381,17 @@ export function writeDuplicateUnitsToCache(
   }
   if (index.cacheMode === "disk") {
     try {
+      const root = projectRoot ?? index.projectRoot ?? "";
       const entry = duplicateUnitDiskCache(index);
-      const root = index.projectRoot ?? "";
+      const serialized = serializeDuplicateUnits(units);
       const payload = brotliCompressSync(
-        JSON.stringify(transformDuplicateUnits(root, serializeDuplicateUnits(units), true)),
+        JSON.stringify(root ? transformDuplicateUnits(root, serialized, true) : serialized),
         {
           params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 },
         },
       );
       entry?.statements?.write.run(
-        cacheRelativePath(root, file),
+        root ? cacheRelativePath(root, file) : file,
         variant,
         sig,
         DUPLICATE_UNIT_CACHE_VERSION,
@@ -430,7 +437,7 @@ function transformDuplicateUnits(
 ): DuplicateSerializedUnit[] {
   return units.map((unit) => ({
     ...unit,
-    file: transformDuplicatePath(root, unit.file, toRelative),
+    file: cacheRelativePath(root, unit.file),
     absoluteFile: transformDuplicatePath(root, unit.absoluteFile, toRelative),
     handle: transformDuplicatePath(root, unit.handle, toRelative),
     fileHandle: transformDuplicatePath(root, unit.fileHandle, toRelative),
