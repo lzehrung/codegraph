@@ -114,11 +114,17 @@ export function createFallbackImportExtractionHandler(
       event.reason === "fast" || event.reason === "reduced-mode" || supportsReducedModeRegexRecovery(event.language)
         ? "debug"
         : "warn";
-    let message = "Regex fallback import extraction";
+    let message: string;
     if (event.reason === "reduced-mode") {
       message = `Native parser unavailable for ${event.language}; using reduced import extraction.`;
     } else if (supportsReducedModeRegexRecovery(event.language)) {
       message = `Native import recovery degraded for ${event.language}; using native-owned fallback extraction.`;
+    } else if (event.reason === "fast") {
+      message = `Fast mode active for ${event.language}; using regex-based import extraction instead of the native parser.`;
+    } else if (event.reason === "query-error") {
+      message = `Native import query failed for ${event.language}; using regex-based fallback extraction.`;
+    } else {
+      message = `Native import query returned no results for ${event.language}; using regex-based fallback extraction to recover additional imports.`;
     }
     logWithLevel(opts?.logLevel, severity, message, {
       language: event.language,
