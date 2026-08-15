@@ -1226,8 +1226,14 @@ describe("CLI command modules", () => {
 
     expect(pretty).toMatchObject({ stderr: "", exitCode: undefined });
     expect(pretty.stdout).toContain("Package:\n  Name: @lzehrung/codegraph");
+    expect(pretty.stdout).toMatch(/^Package:/m);
+    expect(pretty.stdout).toMatch(/^Native:/m);
+    expect(pretty.stdout).toMatch(/^Origin:/m);
+    expect(pretty.stdout).toMatch(/^Update:/m);
     expect(pretty.stdout).not.toContain('"package"');
-    expect(readJsonRecord(JSON.parse(json.stdout)).package).toMatchObject({ name: "@lzehrung/codegraph" });
+    const report = readJsonRecord(JSON.parse(json.stdout));
+    expect(report.package).toMatchObject({ name: "@lzehrung/codegraph" });
+    expect(report.native).toBeTypeOf("object");
   });
 
   test("captures CLI usage exits in process", async () => {
