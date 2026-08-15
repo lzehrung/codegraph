@@ -278,4 +278,52 @@ describe("viewer server", () => {
 
     expect(() => createViewerServer({ graph: escapedGraph, root })).toThrow(/outside project root/i);
   });
+  test("returns 500 when statSync or fstatSync throws during GET and continues serving subsequent requests", async () => {
+    const { root, graphPath } = await createViewerFixture();
+    const server = await startViewerServer({ graph: graphPath, port: 0, root });
+    servers.push(server.server);
+
+    // 1. Test fstatSync throwing during GET /graph.json
+    let throwFstat = true;
+    const originalFstatSync = fs.fstatSync;
+    const fstatSpy = vi.spyOn(fs, "fstatSync").mockImplementation((...args) => {
+      if (throwFstat) {
+        throw new Error("Simulated filesystem fstatSync error");
+      }
+      return originalFstatSync(...args);
+    });
+
+    try {
+      const firstFstatResponse = await request(server.server, "/graph.json");
+      expect(firstFstatResponse.statusCode).toBe(500);
+
+      throwFstat = false;
+      const secondFstatResponse = await request(server.server, "/graph.json");
+      expect(secondFstatResponse.statusCode).toBe(200);
+      expect(secondFstatResponse.body).toContain('"nodes":[]');
+    } finally {
+      fstatSpy.mockRestore();
+    }
+
+    // 2. Test statSync throwing during GET /
+    let throwStat = true;
+    const originalStatSync = fs.statSync;
+    const statSpy = vi.spyOn(fs, "statSync").mockImplementation((...args) => {
+      if (throwStat) {
+        throw new Error("Simulated filesystem statSync error");
+      }
+      return originalStatSync(...args);
+    });
+
+    try {
+      const firstStatResponse = await request(server.server, "/");
+      expect(firstStatResponse.statusCode).toBe(500);
+
+      throwStat = false;
+      const secondStatResponse = await request(server.server, "/");
+      expect(secondStatResponse.statusCode).toBe(200);
+    } finally {
+      statSpy.mockRestore();
+    }
+  });
 });
