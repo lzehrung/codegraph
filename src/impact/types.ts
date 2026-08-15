@@ -95,7 +95,12 @@ export type ImpactReason =
   | "fileLevelChange"; // fallback for changed files without symbol-level mapping
 
 export type ImpactSuggestionKind =
-  "missingImport" | "missingExport" | "missingDeclaration" | "configImpact" | "breakingChange" | "untestedChange";
+  | "missingImport"
+  | "missingExport"
+  | "missingDeclaration"
+  | "configImpact"
+  | "breakingChange"
+  | "untestedChange";
 
 export type ImpactSuggestionConfidence = "high" | "medium" | "low";
 

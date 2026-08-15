@@ -119,12 +119,14 @@ export function findCallHierarchy(
 
   const allEntries = [...matches.values()].sort((left, right) => compareMatches(graph, left, right));
   const selected = allEntries.slice(0, limit);
-  const entries = selected.map((match): CallHierarchyMatch => ({
-    symbolId: match.symbolId,
-    callsites: match.callsites.sort(compareCallsites),
-    depth: match.depth,
-    omittedCallsites: Math.max(0, match.totalCallsites - match.callsites.length),
-  }));
+  const entries = selected.map(
+    (match): CallHierarchyMatch => ({
+      symbolId: match.symbolId,
+      callsites: match.callsites.sort(compareCallsites),
+      depth: match.depth,
+      omittedCallsites: Math.max(0, match.totalCallsites - match.callsites.length),
+    }),
+  );
   return {
     status: "ok",
     targetId,

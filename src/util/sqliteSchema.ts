@@ -49,7 +49,8 @@ export function recreateSqliteTable(
 
 export function readSqliteSchemaVersion(db: SqliteDatabase, key: string): SqliteSchemaVersion {
   const row = db.prepare("SELECT value FROM cache_schema_metadata WHERE key = ?").get(key) as
-    { value?: unknown } | undefined;
+    | { value?: unknown }
+    | undefined;
   if (!row) return { status: "missing" };
   if (typeof row.value !== "string") return { status: "invalid" };
   const version = Number(row.value);

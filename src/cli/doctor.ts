@@ -147,6 +147,144 @@ function artifactPresent(dirPath: string, fileName: string | undefined): boolean
   return pathExists(artifactPath);
 }
 
+function formatScalar(value: unknown): string {
+  if (value === null || value === undefined) return "none";
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  if (typeof value === "string") return value || "(empty)";
+  if (typeof value === "number" || typeof value === "bigint") return String(value);
+  return String(value);
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return isPlainRecord(value) ? value : undefined;
+}
+
+function readField(record: Record<string, unknown> | undefined, key: string): unknown {
+  return record?.[key];
+}
+
+function pushSection(lines: string[], title: string, body: readonly string[]): void {
+  lines.push(`${title}:`);
+  if (!body.length) {
+    lines.push("  (none)");
+    return;
+  }
+  for (const line of body) {
+    lines.push(`  ${line}`);
+  }
+}
+
+function formatLabeledFields(fields: ReadonlyArray<readonly [string, unknown]>): string[] {
+  const lines: string[] = [];
+  for (const [label, value] of fields) {
+    if (value === undefined) continue;
+    if (Array.isArray(value)) {
+      lines.push(`${label}:`);
+      if (!value.length) {
+        lines.push("  (none)");
+        continue;
+      }
+      for (const item of value) {
+        lines.push(`  - ${formatScalar(item)}`);
+      }
+      continue;
+    }
+    lines.push(`${label}: ${formatScalar(value)}`);
+  }
+  return lines;
+}
+
+function pushNestedSection(body: string[], title: string, nestedBody: readonly string[]): void {
+  body.push(`${title}:`);
+  if (!nestedBody.length) {
+    body.push("  (none)");
+    return;
+  }
+  for (const line of nestedBody) {
+    body.push(`  ${line}`);
+  }
+}
+
+/** Pretty formatter for `codegraph doctor`. Stable Package/Native(+Origin/Update) nesting matches JSON. */
+export function formatDoctorSummary(report: DoctorReport): string {
+  const lines: string[] = [];
+  const pkg = asRecord(report.package);
+  pushSection(
+    lines,
+    "Package",
+    formatLabeledFields([
+      ["Name", readField(pkg, "name")],
+      ["Version", readField(pkg, "version")],
+      ["Package root", readField(pkg, "packageRoot")],
+    ]),
+  );
+
+  const native = asRecord(report.native);
+  const supportedLanguageIds = readField(native, "supportedLanguageIds");
+  const nativeBody = formatLabeledFields([
+    ["Available", readField(native, "available")],
+    ["Load error", readField(native, "loadError")],
+    ["Supported language ids", Array.isArray(supportedLanguageIds) ? supportedLanguageIds : undefined],
+  ]);
+
+  const origin = asRecord(readField(native, "origin"));
+  pushNestedSection(
+    nativeBody,
+    "Origin",
+    origin
+      ? formatLabeledFields([
+          ["Mode", readField(origin, "mode")],
+          ["Package name", readField(origin, "packageName")],
+          ["Target", readField(origin, "target")],
+          ["Source path", readField(origin, "sourcePath")],
+          ["Loaded path", readField(origin, "loadedPath")],
+          ["Update safe for current process", readField(origin, "updateSafeForCurrentProcess")],
+        ])
+      : [],
+  );
+
+  const update = asRecord(readField(native, "update"));
+  const staleRetirementPaths = readField(update, "staleRetirementPaths");
+  pushNestedSection(
+    nativeBody,
+    "Update",
+    update
+      ? formatLabeledFields([
+          ["Stale retirement paths", Array.isArray(staleRetirementPaths) ? staleRetirementPaths : []],
+          ["Restart required", readField(update, "restartRequired")],
+          ["Running version", readField(update, "runningVersion")],
+          ["Installed version", readField(update, "installedVersion")],
+          ["Reason", readField(update, "reason")],
+        ])
+      : [],
+  );
+
+  pushSection(lines, "Native", nativeBody);
+
+  if (report.indexArtifact !== undefined) {
+    const artifact = asRecord(report.indexArtifact);
+    const artifactLines = formatLabeledFields([
+      ["Type", readField(artifact, "type")],
+      ["Path", readField(artifact, "path")],
+      ["Exists", readField(artifact, "exists")],
+    ]);
+    const details = asRecord(readField(artifact, "details"));
+    if (details) {
+      for (const [key, value] of Object.entries(details)) {
+        const label = key
+          .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+          .replace(/[_-]+/g, " ")
+          .toLowerCase();
+        const titled = `${label.charAt(0).toUpperCase()}${label.slice(1)}`;
+        artifactLines.push(`${titled}: ${formatScalar(value)}`);
+      }
+    }
+    pushSection(lines, "Index artifact", artifactLines);
+  }
+
+  return lines.join("\n");
+}
+
 export function findStaleNpmRetirementPaths(packageRoot: string, limit = 20): string[] {
   const resolvedPackageRoot = path.resolve(packageRoot);
   const scopeDirectory = path.dirname(resolvedPackageRoot);

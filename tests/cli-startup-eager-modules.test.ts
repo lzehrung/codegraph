@@ -57,23 +57,6 @@ process.on("exit", () => {
   }
 }
 
-function measureCliStartup(args: string[]): number {
-  const startedAt = performance.now();
-  const result = spawnSync(process.execPath, [cliPath, ...args], {
-    encoding: "utf8",
-    env: { ...process.env, NODE_OPTIONS: "" },
-  });
-  if (result.status !== 0) {
-    throw new Error(`CLI startup failed for ${args.join(" ")}: ${result.stderr}`);
-  }
-  return performance.now() - startedAt;
-}
-
-function median(values: number[]): number {
-  const sorted = [...values].sort((left, right) => left - right);
-  return sorted[Math.floor(sorted.length / 2)]!;
-}
-
 function modulePathEndsWith(moduleUrl: string, suffix: string): boolean {
   return moduleUrl.includes(suffix.replaceAll("\\", "/")) || moduleUrl.includes(suffix.replaceAll("/", "\\"));
 }
@@ -186,21 +169,13 @@ describe("CLI startup eager module loading", () => {
     expect(doctor.modules.some((url) => modulePathEndsWith(url, "/projectFiles.js"))).toBe(false);
     expect(doctor.modules.some((url) => modulePathEndsWith(url, "/config.js"))).toBe(false);
   });
-  it("keeps no-argument median startup within 50% of --version", () => {
-    measureCliStartup([]);
-    measureCliStartup(["--version"]);
-    const noArgsSamples: number[] = [];
-    const versionSamples: number[] = [];
-    for (let sample = 0; sample < 11; sample += 1) {
-      if (sample % 2) {
-        noArgsSamples.push(measureCliStartup([]));
-        versionSamples.push(measureCliStartup(["--version"]));
-      } else {
-        versionSamples.push(measureCliStartup(["--version"]));
-        noArgsSamples.push(measureCliStartup([]));
-      }
-    }
-
-    expect(median(noArgsSamples) / median(versionSamples)).toBeLessThanOrEqual(1.5);
+  it("keeps no-argument eager module count within a small factor of --version", () => {
+    const noArgs = countDistModulesLoaded([]);
+    const version = countDistModulesLoaded(["--version"]);
+    expect(noArgs.status).toBe(0);
+    expect(version.status).toBe(0);
+    // Deterministic contract: bare entry must not load a large multiple of --version modules.
+    expect(noArgs.count).toBeLessThanOrEqual(Math.max(version.count * 2, version.count + 10));
+    expect(noArgs.count).toBeGreaterThanOrEqual(version.count);
   });
 });

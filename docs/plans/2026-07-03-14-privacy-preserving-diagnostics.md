@@ -1,5 +1,7 @@
 # Privacy-preserving diagnostics
 
+Status: Planned - not implemented
+
 ## Goal
 
 Collect useful local diagnostics for maintainers and users without sending data anywhere by default.

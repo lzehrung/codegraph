@@ -186,7 +186,8 @@ export function probeQueryIndexSqliteSupport(): { enableFts5: boolean; trigram: 
     db.exec("CREATE VIRTUAL TABLE probe_trigram USING fts5(text, tokenize='trigram')");
     db.prepare("INSERT INTO probe_trigram(text) VALUES (?)").run("persistent codegraph search");
     const row = db.prepare("SELECT count(*) AS count FROM probe_trigram WHERE probe_trigram MATCH ?").get("code") as
-      { count?: unknown } | undefined;
+      | { count?: unknown }
+      | undefined;
     return { enableFts5, trigram: row?.count === 1 };
   } finally {
     db.close();

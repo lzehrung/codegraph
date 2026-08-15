@@ -45,7 +45,7 @@ export const cloneTypeRank: Record<DuplicateCloneType, number> = {
   exact: 4,
 };
 
-export function clampScore(score: number): number {
+function clampScore(score: number): number {
   return Math.max(0, Math.min(100, Math.round(score)));
 }
 
@@ -58,31 +58,31 @@ export function lineOverlap(
   return Math.max(0, endLine - startLine + 1);
 }
 
-export function rangesSubstantiallyOverlap(left: DuplicateUnitRef, right: DuplicateUnitRef): boolean {
+function rangesSubstantiallyOverlap(left: DuplicateUnitRef, right: DuplicateUnitRef): boolean {
   if (left.file !== right.file || left.languageId !== right.languageId) return false;
   const overlap = lineOverlap(left, right);
   if (!overlap) return false;
   return overlap / Math.min(lineSpan(left), lineSpan(right)) >= 0.8;
 }
 
-export function lineGap(left: DuplicateUnitRef, right: DuplicateUnitRef): number {
+function lineGap(left: DuplicateUnitRef, right: DuplicateUnitRef): number {
   if (left.endLine < right.startLine) return right.startLine - left.endLine - 1;
   if (right.endLine < left.startLine) return left.startLine - right.endLine - 1;
   return 0;
 }
 
-export function rangesAreNearbyChunkVariants(left: DuplicateUnitRef, right: DuplicateUnitRef): boolean {
+function rangesAreNearbyChunkVariants(left: DuplicateUnitRef, right: DuplicateUnitRef): boolean {
   if (left.file !== right.file || left.languageId !== right.languageId) return false;
   if (left.kind !== "chunk" || right.kind !== "chunk") return false;
   return lineGap(left, right) <= NEARBY_CHUNK_VARIANT_MAX_GAP;
 }
 
-export function ratio(left: number, right: number): number {
+function ratio(left: number, right: number): number {
   if (!left || !right) return 0;
   return Math.min(left, right) / Math.max(left, right);
 }
 
-export function normalizeSimilarityIndex(value: number): number | undefined {
+function normalizeSimilarityIndex(value: number): number | undefined {
   if (!Number.isFinite(value)) return undefined;
   const bounded = Math.max(0, Math.min(100, Math.round(value)));
   if (bounded < MIN_SIMILARITY_HINT_INDEX) return undefined;
@@ -90,7 +90,7 @@ export function normalizeSimilarityIndex(value: number): number | undefined {
 }
 
 /** Measures set similarity as intersection divided by union. */
-export function jaccard(left: Set<string>, right: Set<string>): number {
+function jaccard(left: Set<string>, right: Set<string>): number {
   if (!left.size && !right.size) return 1;
   let intersection = 0;
   for (const value of left) {
@@ -1103,11 +1103,11 @@ export function isTestFile(file: string): boolean {
   );
 }
 
-export function isProductionFile(file: string): boolean {
+function isProductionFile(file: string): boolean {
   return !isTestFile(file) && (file.startsWith("src/") || file.includes("/src/"));
 }
 
-export function isTopLevelSourceBarrel(file: string): boolean {
+function isTopLevelSourceBarrel(file: string): boolean {
   return /^src\/[^/]+\.ts$/.test(file);
 }
 

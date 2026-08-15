@@ -3,7 +3,14 @@ import type { Range } from "../types.js";
 import type { ImportBinding } from "./import-types.js";
 
 export type BindingKind =
-  "local" | "param" | "function" | "class" | "type" | "importDefault" | "importNamed" | "namespace";
+  | "local"
+  | "param"
+  | "function"
+  | "class"
+  | "type"
+  | "importDefault"
+  | "importNamed"
+  | "namespace";
 
 export type ScopeImportBinding = ImportBinding;
 

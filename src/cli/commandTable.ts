@@ -111,10 +111,11 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
   doctor: {
     stage: "base",
     run: async (ctx) => {
-      const { buildDoctorReport } = await import("./doctor.js");
+      const { buildDoctorReport, formatDoctorSummary } = await import("./doctor.js");
       writeCliOutput(
         { hasFlag: ctx.hasFlag, writeJSONLine, writeStdoutLine },
         buildDoctorReport(ctx.parsed.positionals.at(-1)),
+        formatDoctorSummary,
       );
     },
   },
@@ -615,11 +616,12 @@ export const CLI_COMMAND_TABLE: Readonly<Record<string, CliCommandEntry>> = {
     },
   },
   links: {
-    stage: "base",
+    stage: "project",
     run: async (ctx) => {
       const { handleLinksCommand } = await import("./links.js");
       await handleLinksCommand({
         projectRootFs: ctx.projectRootFs,
+        discoveryOptions: ctx.discoveryOptions,
         hasFlag: ctx.hasFlag,
         writeJSONLine,
         writeStdoutLine,

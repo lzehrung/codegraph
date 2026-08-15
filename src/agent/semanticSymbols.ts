@@ -5,6 +5,7 @@ import { formatAgentSymbolHandle, parseAgentSymbolHandle } from "./handles.js";
 import { normalizeAgentFilePath, resolveAgentSnapshotFile } from "./normalize.js";
 import type { AgentProjectSnapshot } from "./session.js";
 import type { SemanticSymbol } from "./semantic.js";
+import { normalizePath } from "../util/paths.js";
 import { buildSymbolLookup } from "./symbolLookup.js";
 
 export type ResolvedSemanticSymbol = {
@@ -19,7 +20,7 @@ export function resolveSemanticSymbol(snapshot: AgentProjectSnapshot, handle: st
   const file = resolveAgentSnapshotFile(snapshot, parsed.file);
   if (!file) return null;
   for (const [id, def] of lookup.defById) {
-    if (def.file.replace(/\\/g, "/") !== file) continue;
+    if (normalizePath(def.file) !== file) continue;
     if (def.localName !== parsed.name) continue;
     if (def.range.start.line !== parsed.line || def.range.start.column !== parsed.column) continue;
     return { id, def };

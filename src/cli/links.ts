@@ -1,8 +1,10 @@
 import { checkMarkdownLinks } from "../documentLinks/check.js";
 import type { MarkdownLinkCheckResult } from "../documentLinks/check.js";
+import type { ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 
 export type LinksCommandContext = {
   projectRootFs: string;
+  discoveryOptions?: ProjectFileDiscoveryOptions;
   hasFlag: (name: string) => boolean;
   writeJSONLine: (value: MarkdownLinkCheckResult) => void;
   writeStdoutLine: (message: string) => void;
@@ -58,7 +60,7 @@ export function formatMarkdownLinkCheckResult(result: MarkdownLinkCheckResult, v
 }
 
 export async function handleLinksCommand(context: LinksCommandContext): Promise<void> {
-  const result = await checkMarkdownLinks(context.projectRootFs);
+  const result = await checkMarkdownLinks(context.projectRootFs, context.discoveryOptions);
 
   if (context.hasFlag("--json")) {
     context.writeJSONLine(result);

@@ -3,7 +3,7 @@ import path from "node:path";
 import { extractMarkdownLinkOccurrences, type MarkdownLinkOccurrence } from "./markdown.js";
 import { supportForFile } from "../languages.js";
 import { isFilePathWithinRoot, normalizePath, toProjectDisplayPath } from "../util/paths.js";
-import { listProjectFiles } from "../util/projectFiles.js";
+import { listProjectFiles, type ProjectFileDiscoveryOptions } from "../util/projectFiles.js";
 
 type MarkdownLinkCheckPosition = {
   line: number;
@@ -47,9 +47,12 @@ type LocalLinkTarget = {
 const URI_SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
 const WINDOWS_ABSOLUTE_PATH = /^[A-Za-z]:[\\/]/;
 
-export async function checkMarkdownLinks(projectRoot: string): Promise<MarkdownLinkCheckResult> {
+export async function checkMarkdownLinks(
+  projectRoot: string,
+  discovery?: ProjectFileDiscoveryOptions,
+): Promise<MarkdownLinkCheckResult> {
   const root = path.resolve(projectRoot);
-  return await checkMarkdownLinksInFiles(root, await listProjectFiles(root));
+  return await checkMarkdownLinksInFiles(root, await listProjectFiles(root, undefined, discovery));
 }
 
 export async function checkMarkdownLinksInFiles(
