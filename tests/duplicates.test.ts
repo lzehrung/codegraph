@@ -2448,12 +2448,12 @@ export function sharedOversizedClone(rows) {
   });
 });
 
-  test("C5: scopes duplicate-unit cache by project root so relative paths and handles match each root", async () => {
-    const root = await makeTempProject();
-    const subDir = path.join(root, "packages", "core").replace(/\\/g, "/");
-    await fsp.mkdir(subDir, { recursive: true });
+test("C5: scopes duplicate-unit cache by project root so relative paths and handles match each root", async () => {
+  const root = await makeTempProject();
+  const subDir = path.join(root, "packages", "core").replace(/\\/g, "/");
+  await fsp.mkdir(subDir, { recursive: true });
 
-    const sourceA = `
+  const sourceA = `
 export function calculatePaymentTotal(amount: number, taxRate: number): number {
   const baseTax = amount * taxRate;
   const surcharge = baseTax > 100 ? 25 : 10;
@@ -2462,7 +2462,7 @@ export function calculatePaymentTotal(amount: number, taxRate: number): number {
   return amount + rounded;
 }
 `;
-    const sourceB = `
+  const sourceB = `
 export function computeBillingSummary(amount: number, taxRate: number): number {
   const baseTax = amount * taxRate;
   const surcharge = baseTax > 100 ? 25 : 10;
@@ -2471,44 +2471,44 @@ export function computeBillingSummary(amount: number, taxRate: number): number {
   return amount + rounded;
 }
 `;
-    await writeProjectFile(root, "packages/core/billingA.ts", sourceA);
-    await writeProjectFile(root, "packages/core/billingB.ts", sourceB);
+  await writeProjectFile(root, "packages/core/billingA.ts", sourceA);
+  await writeProjectFile(root, "packages/core/billingB.ts", sourceB);
 
-    // 1. Run duplicates scoped to subDir (packages/core) with memory cache active
-    const indexSub = await buildProjectIndex(subDir, { cache: "memory" });
-    const resultSub = await findDuplicates(indexSub, { minTokens: 10, includeSmall: true, minConfidence: "high" });
-    expect(resultSub.groups.length).toBeGreaterThan(0);
-    const subFiles = resultSub.groups.flatMap((g) => g.locations.map((loc) => loc.file));
-    expect(subFiles).toContain("billingA.ts");
-    expect(subFiles).toContain("billingB.ts");
-    expect(subFiles).not.toContain("packages/core/billingA.ts");
-    for (const group of resultSub.groups) {
-      for (const loc of group.locations) {
-        expect(loc.file).not.toMatch(/^packages\//);
-        expect(loc.handle).not.toContain("packages");
-      }
+  // 1. Run duplicates scoped to subDir (packages/core) with memory cache active
+  const indexSub = await buildProjectIndex(subDir, { cache: "memory" });
+  const resultSub = await findDuplicates(indexSub, { minTokens: 10, includeSmall: true, minConfidence: "high" });
+  expect(resultSub.groups.length).toBeGreaterThan(0);
+  const subFiles = resultSub.groups.flatMap((g) => g.locations.map((loc) => loc.file));
+  expect(subFiles).toContain("billingA.ts");
+  expect(subFiles).toContain("billingB.ts");
+  expect(subFiles).not.toContain("packages/core/billingA.ts");
+  for (const group of resultSub.groups) {
+    for (const loc of group.locations) {
+      expect(loc.file).not.toMatch(/^packages\//);
+      expect(loc.handle).not.toContain("packages");
     }
+  }
 
-    // 2. Run duplicates scoped to root with the same files and memory cache active
-    const indexRoot = await buildProjectIndex(root, { cache: "memory" });
-    const resultRoot = await findDuplicates(indexRoot, { minTokens: 10, includeSmall: true, minConfidence: "high" });
-    expect(resultRoot.groups.length).toBeGreaterThan(0);
-    const rootFiles = resultRoot.groups.flatMap((g) => g.locations.map((loc) => loc.file));
-    expect(rootFiles).toContain("packages/core/billingA.ts");
-    expect(rootFiles).toContain("packages/core/billingB.ts");
-    for (const group of resultRoot.groups) {
-      for (const loc of group.locations) {
-        expect(loc.file).toMatch(/^packages\/core\//);
-        expect(loc.handle).toContain("packages%2Fcore%2F");
-      }
+  // 2. Run duplicates scoped to root with the same files and memory cache active
+  const indexRoot = await buildProjectIndex(root, { cache: "memory" });
+  const resultRoot = await findDuplicates(indexRoot, { minTokens: 10, includeSmall: true, minConfidence: "high" });
+  expect(resultRoot.groups.length).toBeGreaterThan(0);
+  const rootFiles = resultRoot.groups.flatMap((g) => g.locations.map((loc) => loc.file));
+  expect(rootFiles).toContain("packages/core/billingA.ts");
+  expect(rootFiles).toContain("packages/core/billingB.ts");
+  for (const group of resultRoot.groups) {
+    for (const loc of group.locations) {
+      expect(loc.file).toMatch(/^packages\/core\//);
+      expect(loc.handle).toContain("packages%2Fcore%2F");
     }
-  });
+  }
+});
 
-  test("C5: cleanly rejects older duplicate unit cache versions on disk", async () => {
-    const root = await makeTempProject();
-    let index;
-    try {
-      const source = `
+test("C5: cleanly rejects older duplicate unit cache versions on disk", async () => {
+  const root = await makeTempProject();
+  let index;
+  try {
+    const source = `
 export function processInvoiceItems(items: Array<{ price: number; qty: number }>): number {
   let sum = 0;
   for (const item of items) {
@@ -2519,23 +2519,23 @@ export function processInvoiceItems(items: Array<{ price: number; qty: number }>
   return sum;
 }
 `;
-      const file = await writeProjectFile(root, "src/invoice.ts", source);
-      index = await buildProjectIndex(root, { cache: "disk" });
-      const variant = duplicateUnitCacheVariant(index, 10, 1000, 5, 20);
+    const file = await writeProjectFile(root, "src/invoice.ts", source);
+    index = await buildProjectIndex(root, { cache: "disk" });
+    const variant = duplicateUnitCacheVariant(index, 10, 1000, 5, 20);
 
-      // Seed disk cache with old version (DUPLICATE_UNIT_CACHE_VERSION - 1)
-      const diskDb = duplicateUnitDiskCache(index);
-      expect(diskDb?.statements).toBeDefined();
-      const sig = index.manifestEntries?.get(file)?.sig ?? "test-sig";
-      const oldVersion = DUPLICATE_UNIT_CACHE_VERSION - 1;
-      diskDb.statements.write.run(file, variant, sig, oldVersion, Buffer.from("dummy-payload"), Date.now());
+    // Seed disk cache with old version (DUPLICATE_UNIT_CACHE_VERSION - 1)
+    const diskDb = duplicateUnitDiskCache(index);
+    expect(diskDb?.statements).toBeDefined();
+    const sig = index.manifestEntries?.get(file)?.sig ?? "test-sig";
+    const oldVersion = DUPLICATE_UNIT_CACHE_VERSION - 1;
+    diskDb.statements.write.run(file, variant, sig, oldVersion, Buffer.from("dummy-payload"), Date.now());
 
-      // tryLoadDuplicateUnitsFromCache must return null because version does not match
-      const loaded = tryLoadDuplicateUnitsFromCache(index, file, variant);
-      expect(loaded).toBeNull();
-    } finally {
-      if (index) {
-        closeDuplicateUnitCacheForIndex(index);
-      }
+    // tryLoadDuplicateUnitsFromCache must return null because version does not match
+    const loaded = tryLoadDuplicateUnitsFromCache(index, file, variant);
+    expect(loaded).toBeNull();
+  } finally {
+    if (index) {
+      closeDuplicateUnitCacheForIndex(index);
     }
-  });
+  }
+});

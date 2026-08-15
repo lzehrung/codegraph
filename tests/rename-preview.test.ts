@@ -644,7 +644,11 @@ describe("rename preview", () => {
       }),
     );
     const session100 = createAgentSession({ root: root100, freshness: { policy: "check" } });
-    const symbols100 = await workspaceSymbolsWithSession(session100, { root: root100, query: "service", exportedOnly: true });
+    const symbols100 = await workspaceSymbolsWithSession(session100, {
+      root: root100,
+      query: "service",
+      exportedOnly: true,
+    });
     expect(symbols100.symbols[0]).toBeDefined();
 
     const result100 = await previewRenameWithSession(session100, {
@@ -668,7 +672,11 @@ describe("rename preview", () => {
       }),
     );
     const session101 = createAgentSession({ root: root101, freshness: { policy: "check" } });
-    const symbols101 = await workspaceSymbolsWithSession(session101, { root: root101, query: "service", exportedOnly: true });
+    const symbols101 = await workspaceSymbolsWithSession(session101, {
+      root: root101,
+      query: "service",
+      exportedOnly: true,
+    });
     expect(symbols101.symbols[0]).toBeDefined();
 
     const result101 = await previewRenameWithSession(session101, {

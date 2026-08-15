@@ -78,7 +78,6 @@ export type RenameFilenameSuggestion = {
   caseOnlyRisk: boolean;
 };
 
-
 export type RenamePreviewResponse = SemanticResponseEnvelope & {
   target: SemanticSymbol;
   newName: string;
@@ -427,12 +426,9 @@ export async function previewRenameInSnapshot(
   }
 
   const editedFiles = [...new Set(normalizedEdits.map((edit) => edit.file))];
-  const { candidateTests, omittedCandidateTests } = shapeCandidateTests(
-    snapshot.index,
-    snapshot.root,
-    editedFiles,
-    [...semanticDefinitions.keys()],
-  );
+  const { candidateTests, omittedCandidateTests } = shapeCandidateTests(snapshot.index, snapshot.root, editedFiles, [
+    ...semanticDefinitions.keys(),
+  ]);
   if (omittedCandidateTests) {
     unsafeSites.push({
       location: {
