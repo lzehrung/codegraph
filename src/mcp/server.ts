@@ -86,7 +86,6 @@ import {
   MAX_MCP_COLLECTION_LIMIT,
   MAX_RENAME_PREVIEW_EDITS,
   MCP_TOOL_REGISTRY,
-  MCP_TOOLS,
   MAX_REFACTOR_PLAN_LIMIT,
 } from "./tools.js";
 import {
@@ -1098,7 +1097,7 @@ export function createCodegraphMcpProtocolServer(
   );
   let inFlightToolCalls = 0;
 
-  server.setRequestHandler("tools/list", () => ({ tools: MCP_TOOLS }));
+  server.setRequestHandler("tools/list", () => ({ tools: listCodegraphMcpTools() }));
   server.setRequestHandler("tools/call", async (request, ctx): Promise<CallToolResult> => {
     if (inFlightToolCalls >= maxConcurrentToolCalls) {
       throw new Error("MCP tool execution is busy; retry shortly.");
@@ -1619,16 +1618,16 @@ function withAbortSignal<T>(signal: AbortSignal | undefined, run: () => Promise<
   return Promise.race([run(), cancellation.promise]).finally(() => signal.removeEventListener("abort", onAbort));
 }
 
-async function callMcpTool(
+export async function callMcpTool(
   handlers: CodegraphMcpHandlers,
   name: string,
   input: unknown,
   signal?: AbortSignal,
 ): Promise<unknown> {
-  if (!MCP_TOOL_REGISTRY.some((tool) => tool.name === name)) {
-    throw new Error(`Unknown MCP tool: ${name}`);
-  }
-  switch (name) {
+  const tool = MCP_TOOL_REGISTRY.find((entry) => entry.name === name);
+  if (!tool) throw new Error(`Unknown MCP tool: ${name}`);
+
+  switch (tool.dispatch.handler) {
     case "search":
       return await handlers.search(parseMcpToolInput(searchSchema, input, name), signal);
     case "workspace_symbols":
@@ -1638,18 +1637,21 @@ async function callMcpTool(
     case "refactor_plan":
       return await handlers.refactor_plan(parseMcpToolInput(refactorPlanSchema, input, name), signal);
     case "calls":
+      if (tool.dispatch.direction) {
+        return await handlers.calls(
+          { ...parseMcpToolInput(callHierarchySchema, input, name), direction: tool.dispatch.direction },
+          signal,
+        );
+      }
       return await handlers.calls(parseMcpToolInput(callsSchema, input, name), signal);
-    case "callers":
-    case "callees":
-      return await handlers.calls({ ...parseMcpToolInput(callHierarchySchema, input, name), direction: name }, signal);
     case "type_hierarchy":
+      if (tool.dispatch.direction) {
+        return await handlers.type_hierarchy(
+          { ...parseMcpToolInput(typeHierarchySchema, input, name), direction: tool.dispatch.direction },
+          signal,
+        );
+      }
       return await handlers.type_hierarchy(parseMcpToolInput(typeHierarchyUnifiedSchema, input, name), signal);
-    case "supertypes":
-    case "subtypes":
-      return await handlers.type_hierarchy(
-        { ...parseMcpToolInput(typeHierarchySchema, input, name), direction: name },
-        signal,
-      );
     case "implementations":
       return await handlers.implementations(parseMcpToolInput(implementationsSchema, input, name), signal);
     case "explore":
@@ -1667,10 +1669,13 @@ async function callMcpTool(
     case "refs":
       return await callRefsTool(handlers, input, signal);
     case "file_deps":
+      if (tool.dispatch.direction) {
+        return await handlers.file_deps(
+          { ...parseMcpToolInput(fileGraphSchema, input, name), direction: tool.dispatch.direction },
+          signal,
+        );
+      }
       return await handlers.file_deps(parseMcpToolInput(fileDepsUnifiedSchema, input, name), signal);
-    case "deps":
-    case "rdeps":
-      return await handlers.file_deps({ ...parseMcpToolInput(fileGraphSchema, input, name), direction: name }, signal);
     case "path":
       return await handlers.path(parseMcpToolInput(pathSchema, input, name), signal);
     case "impact":
@@ -1683,8 +1688,6 @@ async function callMcpTool(
       return await handlers.refresh_index(parseMcpToolInput(refreshIndexSchema, input, name), signal);
     case "artifact_build":
       return await handlers.artifact_build(parseMcpToolInput(artifactBuildSchema, input, name), signal);
-    default:
-      throw new Error(`Unknown MCP tool: ${name}`);
   }
 }
 

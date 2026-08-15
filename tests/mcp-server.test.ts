@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { createAgentSession, type AgentProjectSnapshot, type AgentSession } from "../src/agent/session.js";
 import {
+  callMcpTool,
   createCodegraphMcpHandlers,
   createCodegraphMcpProtocolServer,
   listCodegraphMcpTools,
@@ -14,6 +15,7 @@ import {
   type CodegraphMcpHandlers,
 } from "../src/mcp/server.js";
 import { SymbolKind, type ModuleIndex, type ProjectIndex } from "../src/indexer/types.js";
+import { MCP_TOOL_REGISTRY } from "../src/mcp/tools.js";
 import { DEFAULT_REVIEW_TRANSPORT_LIMITS } from "../src/review/types.js";
 import type { Graph } from "../src/types.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
@@ -2754,3 +2756,58 @@ describe("codegraph MCP handlers", () => {
 function normalizeSqlitePath(value: unknown): string {
   return typeof value === "string" ? value.replace(/\\/g, "/") : "";
 }
+
+describe("MCP tool registry dispatch", () => {
+  it("routes every advertised tool to a schema-valid handler", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cg-mcp-registry-"));
+    await fs.writeFile(path.join(root, "auth.ts"), "export function ok(): number { return 1; }\n", "utf8");
+    runGit(root, ["init"]);
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "base"]);
+    const handlers = createCodegraphMcpHandlers({ root });
+    const advertisedTools = listCodegraphMcpTools();
+    expect(advertisedTools.map((tool) => tool.name)).toEqual(MCP_TOOL_REGISTRY.map((tool) => tool.name));
+    expect(advertisedTools.some((tool) => "dispatch" in tool)).toBe(false);
+    const handle = "auth.ts::ok";
+    const toolInputs: Record<string, Record<string, unknown>> = {
+      search: { query: "ok" },
+      workspace_symbols: { query: "ok" },
+      rename_preview: { handle, newName: "renamed" },
+      refactor_plan: { handle },
+      calls: { handle, direction: "callers" },
+      type_hierarchy: { handle, direction: "supertypes" },
+      implementations: { handle },
+      explore: { query: "ok" },
+      orient: {},
+      packet_get: { target: "auth.ts" },
+      get_file: { file: "auth.ts" },
+      get_symbol: { handle },
+      goto: { handle },
+      refs: { handle },
+      file_deps: { file: "auth.ts", direction: "deps" },
+      path: { from: "auth.ts", to: "auth.ts" },
+      impact: { base: "HEAD", head: "HEAD" },
+      review: { base: "HEAD", head: "HEAD" },
+      query_sqlite: { query: "SELECT 1" },
+      refresh_index: {},
+      artifact_build: {},
+      callers: { handle },
+      callees: { handle },
+      supertypes: { handle },
+      subtypes: { handle },
+      deps: { file: "auth.ts" },
+      rdeps: { file: "auth.ts" },
+    };
+
+    for (const tool of advertisedTools) {
+      const input = toolInputs[tool.name];
+      expect(input, "missing valid input for " + tool.name).toBeDefined();
+      try {
+        await callMcpTool(handlers, tool.name, input);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        expect(message, tool.name).not.toMatch(/Unknown MCP tool|Invalid parameters for/i);
+      }
+    }
+  });
+});
