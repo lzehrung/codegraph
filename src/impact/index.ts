@@ -31,6 +31,24 @@ export type ImpactAnalysisContext = {
 export async function analyzeImpactFromDiff(
   projectRoot: string,
   index: ProjectIndex,
+  options: ImpactOptions & { compact: true },
+  context?: ImpactAnalysisContext,
+): Promise<CompactImpactReport>;
+export async function analyzeImpactFromDiff(
+  projectRoot: string,
+  index: ProjectIndex,
+  options: ImpactOptions & { compact?: false },
+  context?: ImpactAnalysisContext,
+): Promise<ImpactReport>;
+export async function analyzeImpactFromDiff(
+  projectRoot: string,
+  index: ProjectIndex,
+  options: ImpactOptions,
+  context?: ImpactAnalysisContext,
+): Promise<ImpactReport | CompactImpactReport>;
+export async function analyzeImpactFromDiff(
+  projectRoot: string,
+  index: ProjectIndex,
   options: ImpactOptions,
   context: ImpactAnalysisContext = {},
 ): Promise<ImpactReport | CompactImpactReport> {

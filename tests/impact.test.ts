@@ -1043,6 +1043,27 @@ index 1234567..abcdef0 100644
   });
 
   describe("Compact Report Format", () => {
+    it("types compact: true as CompactImpactReport without a cast", async () => {
+      const index = await createTestIndex("typescript");
+      const report = await analyzeImpactFromDiff(path.resolve(process.cwd(), "tests", "samples", "typescript"), index, {
+        provider: "raw",
+        diffText: `diff --git a/utils.ts b/utils.ts
+index 1234567..abcdef0 100644
+--- a/utils.ts
++++ b/utils.ts
+@@ -1,3 +1,4 @@
+ export function helper() {
+   return 42;
++  console.log("added");
+ }
+`,
+        compact: true,
+      });
+      const compact: CompactImpactReport = report;
+      expect(compact.format).toBe("compact");
+      expect(Array.isArray(compact.files)).toBe(true);
+    });
+
     it("should generate compact report when compact=true", async () => {
       const index = await createTestIndex("typescript");
 
@@ -1409,11 +1430,7 @@ index 1234567..abcdef0 100644
         const otherFile = normalizePath(path.join(root, "src", "other.ts"));
         const serviceFile = normalizePath(path.join(root, "src", "service.ts"));
 
-        await fsp.writeFile(
-          otherFile,
-          "export function otherHelper(): number { return 1; }\n",
-          "utf8",
-        );
+        await fsp.writeFile(otherFile, "export function otherHelper(): number { return 1; }\n", "utf8");
 
         await fsp.writeFile(
           serviceFile,
@@ -1461,7 +1478,9 @@ index 1234567..abcdef0 100644
           {
             path: otherFile,
             kind: "modified",
-            hunks: [{ oldStart: 1, newStart: 1, lines: ["-export function otherHelper()", "+export function otherHelper()"] }],
+            hunks: [
+              { oldStart: 1, newStart: 1, lines: ["-export function otherHelper()", "+export function otherHelper()"] },
+            ],
           },
           {
             path: serviceFile,
