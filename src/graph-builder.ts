@@ -14,7 +14,7 @@ import type { GraphCacheEntry } from "./graphs/types.js";
 import { supportForFile, type LanguageExtensionMap } from "./languages.js";
 import type { BuildReport } from "./indexer/types.js";
 import type { ParsedFileContext } from "./indexer/parse-context.js";
-import { collectEdgesForFile } from "./graph-edge-collector.js";
+import { collectEdgesForFile, hasBetterProvenance } from "./graph-edge-collector.js";
 import { buildSqlFactCache, sqlCorpusSignature } from "./sql/sourceGraph.js";
 
 type GraphFileSignature = { sig: string; gitSig?: string; cacheSig?: string };
@@ -106,17 +106,20 @@ export async function collectGraph(
   };
 
   const mergeUniqueEdges = (...edgeGroups: Edge[][]): Edge[] => {
-    const merged: Edge[] = [];
-    const seen = new Set<string>();
+    const byKey = new Map<string, Edge>();
     for (const group of edgeGroups) {
       for (const edge of group) {
-        const key = `${edge.from}::${edge.raw}::${edge.to.type === "file" ? edge.to.path : `external:${edge.to.name}`}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        merged.push(edge);
+        const target = edge.to.type === "file" ? edge.to.path : `external:${edge.to.name}`;
+        // typeOnly is part of identity: a runtime import and a type-only import to the same
+        // target are distinct edges (e.g. `import { X }` plus `import type { X }`), and
+        // collapsing them on from/raw/target alone silently drops the weaker of the two.
+        const kind = edge.typeOnly ? "type-only" : "runtime";
+        const key = `${edge.from}::${edge.raw}::${target}::${kind}`;
+        const previous = byKey.get(key);
+        if (!previous || hasBetterProvenance(edge, previous)) byKey.set(key, edge);
       }
     }
-    return merged;
+    return [...byKey.values()];
   };
 
   if (graph.edges.length) {
