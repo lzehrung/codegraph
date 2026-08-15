@@ -2,7 +2,11 @@ import type { IncomingMessage, Server as HttpServer, ServerResponse } from "node
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 
-export type ParsedJsonBody = { status: "ok"; body: unknown } | { status: "too_large" } | { status: "invalid_json" };
+export type ParsedJsonBody =
+  | { status: "ok"; body: unknown }
+  | { status: "too_large" }
+  | { status: "timeout" }
+  | { status: "invalid_json" };
 
 export type AllowedHostHeaderRules = {
   exact: Set<string>;
@@ -13,7 +17,11 @@ export function getRequestPath(request: IncomingMessage): string {
   return new URL(request.url ?? "/", "http://127.0.0.1").pathname;
 }
 
-export async function readJsonRequestBody(request: IncomingMessage, maxBytes: number): Promise<ParsedJsonBody> {
+export async function readJsonRequestBody(
+  request: IncomingMessage,
+  maxBytes: number,
+  timeoutMs: number,
+): Promise<ParsedJsonBody> {
   const contentLength = getContentLength(request);
   if (contentLength !== undefined && contentLength > maxBytes) {
     request.resume();
@@ -22,14 +30,29 @@ export async function readJsonRequestBody(request: IncomingMessage, maxBytes: nu
 
   const chunks: Buffer[] = [];
   let bytes = 0;
-  for await (const chunk of request) {
-    const buffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
-    bytes += buffer.byteLength;
-    if (bytes > maxBytes) {
-      return { status: "too_large" };
+  let timedOut = false;
+  const deadline = setTimeout(() => {
+    timedOut = true;
+    request.destroy();
+  }, timeoutMs);
+  deadline.unref?.();
+  try {
+    for await (const chunk of request) {
+      const buffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+      bytes += buffer.byteLength;
+      if (bytes > maxBytes) {
+        request.resume();
+        return { status: "too_large" };
+      }
+      chunks.push(buffer);
     }
-    chunks.push(buffer);
+  } catch {
+    if (timedOut) return { status: "timeout" };
+    return { status: "invalid_json" };
+  } finally {
+    clearTimeout(deadline);
   }
+  if (timedOut) return { status: "timeout" };
 
   const rawBody = Buffer.concat(chunks).toString("utf8");
   try {
