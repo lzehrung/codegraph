@@ -357,6 +357,110 @@ export const MCP_TOOLS: Tool[] = [
       force: booleanProperty,
     }),
   },
+  {
+    name: "callers",
+    description: "Legacy alias for calls with direction callers.",
+    inputSchema: objectSchema(
+      {
+        handle: stringProperty,
+        depth: { type: "integer", minimum: 1, maximum: MAX_CALL_HIERARCHY_DEPTH, default: 1 },
+        limit: {
+          type: "integer",
+          minimum: 0,
+          maximum: MAX_CALL_HIERARCHY_LIMIT,
+          default: DEFAULT_CALL_HIERARCHY_LIMIT,
+        },
+        includeHeuristic: booleanProperty,
+      },
+      ["handle"],
+    ),
+  },
+  {
+    name: "callees",
+    description: "Legacy alias for calls with direction callees.",
+    inputSchema: objectSchema(
+      {
+        handle: stringProperty,
+        depth: { type: "integer", minimum: 1, maximum: MAX_CALL_HIERARCHY_DEPTH, default: 1 },
+        limit: {
+          type: "integer",
+          minimum: 0,
+          maximum: MAX_CALL_HIERARCHY_LIMIT,
+          default: DEFAULT_CALL_HIERARCHY_LIMIT,
+        },
+        includeHeuristic: booleanProperty,
+      },
+      ["handle"],
+    ),
+  },
+  {
+    name: "supertypes",
+    description: "Legacy alias for type_hierarchy with direction supertypes.",
+    inputSchema: objectSchema(
+      {
+        handle: stringProperty,
+        depth: { type: "integer", minimum: 1, maximum: MAX_TYPE_HIERARCHY_DEPTH, default: 1 },
+        limit: {
+          type: "integer",
+          minimum: 0,
+          maximum: MAX_TYPE_HIERARCHY_LIMIT,
+          default: DEFAULT_TYPE_HIERARCHY_LIMIT,
+        },
+      },
+      ["handle"],
+    ),
+  },
+  {
+    name: "subtypes",
+    description: "Legacy alias for type_hierarchy with direction subtypes.",
+    inputSchema: objectSchema(
+      {
+        handle: stringProperty,
+        depth: { type: "integer", minimum: 1, maximum: MAX_TYPE_HIERARCHY_DEPTH, default: 1 },
+        limit: {
+          type: "integer",
+          minimum: 0,
+          maximum: MAX_TYPE_HIERARCHY_LIMIT,
+          default: DEFAULT_TYPE_HIERARCHY_LIMIT,
+        },
+      },
+      ["handle"],
+    ),
+  },
+  {
+    name: "deps",
+    description: "Legacy alias for file_deps with direction deps.",
+    inputSchema: objectSchema(
+      {
+        file: dependencyFileProperty,
+        depth: { type: "integer", minimum: 0, default: 1 },
+        limit: {
+          type: "integer",
+          minimum: 0,
+          maximum: MAX_MCP_COLLECTION_LIMIT,
+          default: DEFAULT_MCP_COLLECTION_LIMIT,
+        },
+      },
+      ["file"],
+    ),
+  },
+  {
+    name: "rdeps",
+    description: "Legacy alias for file_deps with direction rdeps.",
+    inputSchema: objectSchema(
+      {
+        file: dependencyFileProperty,
+        depth: { type: "integer", minimum: 0, default: 1 },
+        limit: {
+          type: "integer",
+          minimum: 0,
+          maximum: MAX_MCP_COLLECTION_LIMIT,
+          default: DEFAULT_MCP_COLLECTION_LIMIT,
+        },
+      },
+      ["file"],
+    ),
+  },
 ];
 
 export function listCodegraphMcpTools(): Tool[] {

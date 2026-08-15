@@ -55,6 +55,7 @@ import { DEFAULT_BOUNDED_IMPACT_BUDGETS } from "../impact/budgets.js";
 import { buildReviewReport, type ReviewDepth, type ReviewReport } from "../review.js";
 import { boundReviewReportForTransport, type ReviewReportForTransport } from "../review/types.js";
 import { SQLITE_ARTIFACT_FILE_SIGNATURES_METADATA_KEY, queryGraphSqliteRaw, type RawSqlResult } from "../sqlite.js";
+import { boundList, countOmitted } from "../presentation/bounds.js";
 import { isPlainRecord } from "../util/guards.js";
 import { toProjectDisplayPath } from "../util/paths.js";
 import { errorMessage } from "../util/errors.js";
@@ -138,6 +139,8 @@ export type CodegraphMcpServerOptions = CodegraphMcpHandlerOptions & {
   httpSessionMaxCount?: number;
   /** How often to scan for idle HTTP sessions in ms. Defaults to 60 seconds. */
   httpSessionEvictionIntervalMs?: number;
+  /** Maximum concurrent tool calls per MCP protocol session. Defaults to 4. */
+  mcpToolConcurrency?: number;
   /** Maximum time to receive an HTTP MCP request body in ms. Defaults to 30 seconds. */
   httpBodyTimeoutMs?: number;
   onHttpListen?: ((info: CodegraphMcpHttpServerInfo) => void) | undefined;
@@ -159,6 +162,7 @@ export const DEFAULT_MCP_HTTP_SESSION_IDLE_MS = 30 * 60 * 1000;
 export const DEFAULT_MCP_HTTP_SESSION_MAX_COUNT = 32;
 export const DEFAULT_MCP_HTTP_SESSION_EVICTION_INTERVAL_MS = 60_000;
 export const DEFAULT_MCP_HTTP_BODY_TIMEOUT_MS = 30_000;
+export const DEFAULT_MCP_TOOL_CONCURRENCY = 4;
 
 type LegacyMcpSession = {
   server: Server;
@@ -183,7 +187,13 @@ export type McpTruncationMeta = {
   omitted: number;
 };
 
-export type CodegraphMcpHandlers = {
+type McpDependenciesResponse = CodegraphMcpFreshResult<
+  McpTruncationMeta & { dependencies: Array<{ file: string; depth: number }> }
+>;
+type McpReverseDependenciesResponse = CodegraphMcpFreshResult<
+  McpTruncationMeta & { reverseDependencies: Array<{ file: string; depth: number }> }
+>;
+type CodegraphMcpHandlerDefinitions = {
   search: (request: {
     query: string;
     mode?: AgentSearchMode | undefined;
@@ -302,14 +312,12 @@ export type CodegraphMcpHandlers = {
     file: string;
     depth?: number | undefined;
     limit?: number | undefined;
-  }) => Promise<CodegraphMcpFreshResult<McpTruncationMeta & { dependencies: Array<{ file: string; depth: number }> }>>;
+  }) => Promise<McpDependenciesResponse>;
   rdeps: (request: {
     file: string;
     depth?: number | undefined;
     limit?: number | undefined;
-  }) => Promise<
-    CodegraphMcpFreshResult<McpTruncationMeta & { reverseDependencies: Array<{ file: string; depth: number }> }>
-  >;
+  }) => Promise<McpReverseDependenciesResponse>;
   path: (request: { from: string; to: string }) => Promise<CodegraphMcpFreshResult<{ path: string[] | null }>>;
   impact: (request: { base: string; head: string }) => Promise<CodegraphMcpFreshResult<CompactImpactReport>>;
   review: (request: {
@@ -317,10 +325,9 @@ export type CodegraphMcpHandlers = {
     head: string;
     reviewDepth?: ReviewDepth | undefined;
   }) => Promise<CodegraphMcpFreshResult<ReviewReportForTransport>>;
-  refresh_index: (request: { warmup?: CodegraphMcpWarmupMode | undefined }) => Promise<{
-    refreshed: true;
-    warmup: CodegraphMcpWarmupMode;
-  }>;
+  refresh_index: (request: {
+    warmup?: CodegraphMcpWarmupMode | undefined;
+  }) => Promise<{ refreshed: true; warmup: CodegraphMcpWarmupMode }>;
   query_sqlite: (request: {
     query: string;
     params?: Array<string | number | null> | undefined;
@@ -335,6 +342,14 @@ export type CodegraphMcpHandlers = {
     force?: boolean | undefined;
   }) => Promise<CodegraphMcpFreshResult<CodegraphArtifactBuildResult>>;
 };
+
+type WithAbortSignal<T> = {
+  [K in keyof T]: T[K] extends (request: infer Request) => Promise<infer Result>
+    ? (request: Request, signal?: AbortSignal) => Promise<Result>
+    : never;
+};
+
+export type CodegraphMcpHandlers = WithAbortSignal<CodegraphMcpHandlerDefinitions>;
 
 type McpDependencyRequest = {
   file: string;
@@ -450,7 +465,7 @@ function createCodegraphMcpHandlersForSession(
       state: "stale",
       changedFiles: boundedChangedFiles,
       changedFileCount: changedFiles.length,
-      omittedChangedFileCount: Math.max(0, changedFiles.length - boundedChangedFiles.length),
+      omittedChangedFileCount: countOmitted(changedFiles.length, boundedChangedFiles.length),
       reason,
     };
   };
@@ -461,9 +476,13 @@ function createCodegraphMcpHandlersForSession(
   const withFreshness = async <T extends object>(
     run: () => Promise<T>,
   ): Promise<T & { freshness: AgentFreshnessResult }> => {
-    const freshness = await checkMcpFreshness();
-    const result = await run();
-    return { ...result, freshness };
+    while (true) {
+      if (refreshPromise) await refreshPromise;
+      const epoch = refreshEpoch;
+      const freshness = await checkMcpFreshness();
+      const result = await run();
+      if (epoch === refreshEpoch && !refreshPromise) return { ...result, freshness };
+    }
   };
   const formatSqliteFreshnessError = (freshness: AgentFreshnessResult): string => {
     if (freshness.state === "fresh") return "SQLite artifact freshness check unexpectedly failed.";
@@ -642,13 +661,18 @@ function createCodegraphMcpHandlersForSession(
       targetFile = await resolveProjectFile(await realRoot, root, request.file);
     }
     const collected = collectEntries(snapshot.fileGraph, targetFile, queryOptions);
-    const totalSeen = collected.length;
-    const truncated = totalSeen > limit;
-    const entries = collected.slice(0, limit).map((dependency) => ({
+    const { items, omitted } = boundList(collected, limit);
+    const entries = items.map((dependency) => ({
       file: relative(dependency.file),
       depth: dependency.depth,
     }));
-    return { entries, limit, totalSeen, truncated, omitted: truncated ? totalSeen - limit : 0 };
+    return {
+      entries,
+      limit,
+      totalSeen: collected.length,
+      truncated: Boolean(omitted),
+      omitted,
+    };
   };
   const calls = async (request: {
     direction: "callers" | "callees";
@@ -687,12 +711,15 @@ function createCodegraphMcpHandlersForSession(
     if (result.status !== "ok") {
       return { references: [], limit, totalSeen: 0, truncated: false, omitted: 0 };
     }
-    const totalSeen = result.references.length;
-    const truncated = totalSeen > limit;
-    const references = result.references
-      .slice(0, limit)
-      .map((reference) => ({ file: relative(reference.file), range: reference.range }));
-    return { references, limit, totalSeen, truncated, omitted: truncated ? totalSeen - limit : 0 };
+    const { items, omitted } = boundList(result.references, limit);
+    const references = items.map((reference) => ({ file: relative(reference.file), range: reference.range }));
+    return {
+      references,
+      limit,
+      totalSeen: result.references.length,
+      truncated: Boolean(omitted),
+      omitted,
+    };
   };
   const fileDeps = async (request: {
     direction: "deps" | "rdeps";
@@ -1057,6 +1084,7 @@ export function createCodegraphMcpProtocolServer(
   runtimeIdentity: CodegraphRuntimeIdentity = captureCodegraphRuntimeIdentity(getCurrentNativeBindingOrigin()),
   installedVersion: InstalledVersionChecker = createInstalledVersionChecker(runtimeIdentity),
   toolCallState: { firstToolCallPending: boolean } = { firstToolCallPending: true },
+  maxConcurrentToolCalls = DEFAULT_MCP_TOOL_CONCURRENCY,
 ): Server {
   const server = new Server(
     {
@@ -1067,60 +1095,68 @@ export function createCodegraphMcpProtocolServer(
       capabilities: { tools: {}, logging: {} },
     },
   );
+  let inFlightToolCalls = 0;
 
   server.setRequestHandler("tools/list", () => ({ tools: MCP_TOOLS }));
   server.setRequestHandler("tools/call", async (request, ctx): Promise<CallToolResult> => {
-    const isFirstToolCall = toolCallState.firstToolCallPending;
-    toolCallState.firstToolCallPending = false;
-    const progressToken = isFirstToolCall ? getToolCallProgressToken(request.params) : undefined;
-    const emitFirstToolCallVisibility = async (
-      level: "info" | "error",
-      progress: number,
-      message: string,
-    ): Promise<void> => {
-      if (!isFirstToolCall) return;
-      try {
-        await ctx.mcpReq.log(level, message, "codegraph");
-        if (progressToken !== undefined) {
-          await ctx.mcpReq.notify({
-            method: "notifications/progress",
-            params: {
-              progressToken,
-              progress,
-              total: 1,
-              message,
-            },
-          });
-        }
-      } catch (error) {
-        console.error(`[codegraph] MCP cold-start visibility failed: ${errorMessage(error)}`);
-      }
-    };
-    await emitFirstToolCallVisibility(
-      "info",
-      0,
-      `Codegraph is warming the first tool call for '${request.params.name}'.`,
-    );
-    try {
-      installedVersion.check();
-    } catch (error) {
-      console.error(`[codegraph] installed-version check failed: ${errorMessage(error)}`);
+    if (inFlightToolCalls >= maxConcurrentToolCalls) {
+      throw new Error("MCP tool execution is busy; retry shortly.");
     }
+    inFlightToolCalls += 1;
     try {
-      const result = await callMcpTool(handlers, request.params.name, request.params.arguments ?? {});
+      const isFirstToolCall = toolCallState.firstToolCallPending;
+      toolCallState.firstToolCallPending = false;
+      const progressToken = isFirstToolCall ? getToolCallProgressToken(request.params) : undefined;
+      const emitFirstToolCallVisibility = async (
+        level: "info" | "error",
+        progress: number,
+        message: string,
+      ): Promise<void> => {
+        if (!isFirstToolCall) return;
+        try {
+          await ctx.mcpReq.log(level, message, "codegraph");
+          if (progressToken !== undefined) {
+            await ctx.mcpReq.notify({
+              method: "notifications/progress",
+              params: { progressToken, progress, total: 1, message },
+            });
+          }
+        } catch (error) {
+          console.error(`[codegraph] MCP cold-start visibility failed: ${errorMessage(error)}`);
+        }
+      };
       await emitFirstToolCallVisibility(
         "info",
-        1,
-        `Codegraph finished warming the first tool call for '${request.params.name}'.`,
+        0,
+        `Codegraph is warming the first tool call for '${request.params.name}'.`,
       );
-      return toToolResult(result);
-    } catch (error) {
-      await emitFirstToolCallVisibility(
-        "error",
-        1,
-        `Codegraph failed while warming the first tool call for '${request.params.name}'.`,
-      );
-      throw error;
+      try {
+        installedVersion.check();
+      } catch (error) {
+        console.error(`[codegraph] installed-version check failed: ${errorMessage(error)}`);
+      }
+      try {
+        const result = await withAbortSignal(
+          ctx.mcpReq.signal,
+          async () =>
+            await callMcpTool(handlers, request.params.name, request.params.arguments ?? {}, ctx.mcpReq.signal),
+        );
+        await emitFirstToolCallVisibility(
+          "info",
+          1,
+          `Codegraph finished warming the first tool call for '${request.params.name}'.`,
+        );
+        return toToolResult(result);
+      } catch (error) {
+        await emitFirstToolCallVisibility(
+          "error",
+          1,
+          `Codegraph failed while warming the first tool call for '${request.params.name}'.`,
+        );
+        throw error;
+      }
+    } finally {
+      inFlightToolCalls -= 1;
     }
   });
 
@@ -1130,10 +1166,18 @@ export function createCodegraphMcpProtocolServer(
 function createCodegraphMcpProtocolFactory(
   handlers: CodegraphMcpHandlers,
   runtimeIdentity: CodegraphRuntimeIdentity,
+  maxConcurrentToolCalls = DEFAULT_MCP_TOOL_CONCURRENCY,
 ): () => Server {
   const installedVersion = createInstalledVersionChecker(runtimeIdentity);
   const toolCallState = { firstToolCallPending: true };
-  return () => createCodegraphMcpProtocolServer(handlers, runtimeIdentity, installedVersion, toolCallState);
+  return () =>
+    createCodegraphMcpProtocolServer(
+      handlers,
+      runtimeIdentity,
+      installedVersion,
+      toolCallState,
+      maxConcurrentToolCalls,
+    );
 }
 
 export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Promise<void> {
@@ -1151,7 +1195,11 @@ export async function serveCodegraphMcp(options: CodegraphMcpServerOptions): Pro
 
   const { handlers, session } = await createWarmedCodegraphMcpResources(options);
   const runtimeIdentity = options.runtimeIdentity ?? captureCodegraphRuntimeIdentity(getCurrentNativeBindingOrigin());
-  const createProtocolServer = createCodegraphMcpProtocolFactory(handlers, runtimeIdentity);
+  const createProtocolServer = createCodegraphMcpProtocolFactory(
+    handlers,
+    runtimeIdentity,
+    options.mcpToolConcurrency ?? DEFAULT_MCP_TOOL_CONCURRENCY,
+  );
   const handle = serveStdio(createProtocolServer, {
     legacy: "serve",
     onerror: (error) => {
@@ -1176,7 +1224,11 @@ export async function startCodegraphMcpHttpServer(
   const host = options.host ?? "127.0.0.1";
   const { handlers, session } = await createWarmedCodegraphMcpResources(options);
   const runtimeIdentity = options.runtimeIdentity ?? captureCodegraphRuntimeIdentity(getCurrentNativeBindingOrigin());
-  const createProtocolServer = createCodegraphMcpProtocolFactory(handlers, runtimeIdentity);
+  const createProtocolServer = createCodegraphMcpProtocolFactory(
+    handlers,
+    runtimeIdentity,
+    options.mcpToolConcurrency ?? DEFAULT_MCP_TOOL_CONCURRENCY,
+  );
   const sessionStore = createLegacyMcpSessionStore({
     idleMs: options.httpSessionIdleMs ?? DEFAULT_MCP_HTTP_SESSION_IDLE_MS,
     maxCount: options.httpSessionMaxCount ?? DEFAULT_MCP_HTTP_SESSION_MAX_COUNT,
@@ -1557,102 +1609,114 @@ function isMcpNodeRequest(request: IncomingMessage): request is IncomingMessage 
   return request.method !== undefined && request.url !== undefined;
 }
 
-async function callMcpTool(handlers: CodegraphMcpHandlers, name: string, input: unknown): Promise<unknown> {
+function withAbortSignal<T>(signal: AbortSignal | undefined, run: () => Promise<T>): Promise<T> {
+  if (!signal) return run();
+  if (signal.aborted) return Promise.reject(new Error("MCP tool call was cancelled."));
+  const cancellation = Promise.withResolvers<never>();
+  const onAbort = (): void => cancellation.reject(new Error("MCP tool call was cancelled."));
+  signal.addEventListener("abort", onAbort, { once: true });
+  return Promise.race([run(), cancellation.promise]).finally(() => signal.removeEventListener("abort", onAbort));
+}
+
+async function callMcpTool(
+  handlers: CodegraphMcpHandlers,
+  name: string,
+  input: unknown,
+  signal?: AbortSignal,
+): Promise<unknown> {
   switch (name) {
     case "search":
-      return await handlers.search(parseMcpToolInput(searchSchema, input, "search"));
+      return await handlers.search(parseMcpToolInput(searchSchema, input, name), signal);
     case "workspace_symbols":
-      return await handlers.workspace_symbols(parseMcpToolInput(workspaceSymbolsSchema, input, "workspace_symbols"));
+      return await handlers.workspace_symbols(parseMcpToolInput(workspaceSymbolsSchema, input, name), signal);
     case "rename_preview":
-      return await handlers.rename_preview(parseMcpToolInput(renamePreviewSchema, input, "rename_preview"));
+      return await handlers.rename_preview(parseMcpToolInput(renamePreviewSchema, input, name), signal);
     case "refactor_plan":
-      return await handlers.refactor_plan(parseMcpToolInput(refactorPlanSchema, input, "refactor_plan"));
+      return await handlers.refactor_plan(parseMcpToolInput(refactorPlanSchema, input, name), signal);
     case "calls":
-      return await handlers.calls(parseMcpToolInput(callsSchema, input, "calls"));
+      return await handlers.calls(parseMcpToolInput(callsSchema, input, name), signal);
     case "callers":
-      return await handlers.calls({ ...parseMcpToolInput(callHierarchySchema, input, name), direction: "callers" });
     case "callees":
-      return await handlers.calls({ ...parseMcpToolInput(callHierarchySchema, input, name), direction: "callees" });
+      return await handlers.calls({ ...parseMcpToolInput(callHierarchySchema, input, name), direction: name }, signal);
     case "type_hierarchy":
-      return await handlers.type_hierarchy(parseMcpToolInput(typeHierarchyUnifiedSchema, input, "type_hierarchy"));
+      return await handlers.type_hierarchy(parseMcpToolInput(typeHierarchyUnifiedSchema, input, name), signal);
     case "supertypes":
-      return await handlers.type_hierarchy({
-        ...parseMcpToolInput(typeHierarchySchema, input, name),
-        direction: "supertypes",
-      });
     case "subtypes":
-      return await handlers.type_hierarchy({
-        ...parseMcpToolInput(typeHierarchySchema, input, name),
-        direction: "subtypes",
-      });
+      return await handlers.type_hierarchy(
+        { ...parseMcpToolInput(typeHierarchySchema, input, name), direction: name },
+        signal,
+      );
     case "implementations":
-      return await handlers.implementations(parseMcpToolInput(implementationsSchema, input, "implementations"));
+      return await handlers.implementations(parseMcpToolInput(implementationsSchema, input, name), signal);
     case "explore":
-      return await handlers.explore(parseMcpToolInput(exploreSchema, input, "explore"));
+      return await handlers.explore(parseMcpToolInput(exploreSchema, input, name), signal);
     case "orient":
-      return await handlers.orient(parseMcpToolInput(orientSchema, input, "orient"));
+      return await handlers.orient(parseMcpToolInput(orientSchema, input, name), signal);
     case "packet_get":
-      return await handlers.packet_get(parseMcpToolInput(packetGetSchema, input, "packet_get"));
+      return await handlers.packet_get(parseMcpToolInput(packetGetSchema, input, name), signal);
     case "get_file":
-      return await handlers.get_file(parseMcpToolInput(getFileSchema, input, "get_file"));
+      return await handlers.get_file(parseMcpToolInput(getFileSchema, input, name), signal);
     case "get_symbol":
-      return await handlers.get_symbol(parseMcpToolInput(handleSchema, input, "get_symbol"));
+      return await handlers.get_symbol(parseMcpToolInput(handleSchema, input, name), signal);
     case "goto":
-      return await callGotoTool(handlers, input);
+      return await callGotoTool(handlers, input, signal);
     case "refs":
-      return await callRefsTool(handlers, input);
+      return await callRefsTool(handlers, input, signal);
     case "file_deps":
-      return await handlers.file_deps(parseMcpToolInput(fileDepsUnifiedSchema, input, "file_deps"));
+      return await handlers.file_deps(parseMcpToolInput(fileDepsUnifiedSchema, input, name), signal);
     case "deps":
-      return await handlers.file_deps({ ...parseMcpToolInput(fileGraphSchema, input, name), direction: "deps" });
     case "rdeps":
-      return await handlers.file_deps({ ...parseMcpToolInput(fileGraphSchema, input, name), direction: "rdeps" });
+      return await handlers.file_deps({ ...parseMcpToolInput(fileGraphSchema, input, name), direction: name }, signal);
     case "path":
-      return await handlers.path(parseMcpToolInput(pathSchema, input, "path"));
+      return await handlers.path(parseMcpToolInput(pathSchema, input, name), signal);
     case "impact":
-      return await handlers.impact(parseMcpToolInput(gitRangeSchema, input, name));
+      return await handlers.impact(parseMcpToolInput(gitRangeSchema, input, name), signal);
     case "review":
-      return await handlers.review(parseMcpToolInput(reviewSchema, input, "review"));
+      return await handlers.review(parseMcpToolInput(reviewSchema, input, name), signal);
     case "query_sqlite":
-      return await handlers.query_sqlite(parseMcpToolInput(querySqliteSchema, input, "query_sqlite"));
+      return await handlers.query_sqlite(parseMcpToolInput(querySqliteSchema, input, name), signal);
     case "refresh_index":
-      return await handlers.refresh_index(parseMcpToolInput(refreshIndexSchema, input, "refresh_index"));
+      return await handlers.refresh_index(parseMcpToolInput(refreshIndexSchema, input, name), signal);
     case "artifact_build":
-      return await handlers.artifact_build(parseMcpToolInput(artifactBuildSchema, input, "artifact_build"));
+      return await handlers.artifact_build(parseMcpToolInput(artifactBuildSchema, input, name), signal);
     default:
       throw new Error(`Unknown MCP tool: ${name}`);
   }
 }
 
-async function callGotoTool(handlers: CodegraphMcpHandlers, input: unknown): Promise<GoToResult> {
+async function callGotoTool(handlers: CodegraphMcpHandlers, input: unknown, signal?: AbortSignal): Promise<GoToResult> {
   const request = parseMcpToolInput(navigationSchema, input, "goto");
-  if (request.handle !== undefined) return await handlers.goto({ handle: request.handle });
+  if (request.handle !== undefined) return await handlers.goto({ handle: request.handle }, signal);
   if (request.file === undefined || request.line === undefined || request.column === undefined) {
     throw new Error("goto requires either handle or file, line, and column.");
   }
-  return await handlers.goto({ file: request.file, line: request.line, column: request.column });
+  return await handlers.goto({ file: request.file, line: request.line, column: request.column }, signal);
 }
 
 async function callRefsTool(
   handlers: CodegraphMcpHandlers,
   input: unknown,
+  signal?: AbortSignal,
 ): Promise<McpTruncationMeta & { references: AgentExplanationReference[] }> {
   const request = parseMcpToolInput(refsSchema, input, "refs");
   if (request.handle !== undefined) {
-    return await handlers.refs({
-      handle: request.handle,
-      ...(request.limit !== undefined ? { limit: request.limit } : {}),
-    });
+    return await handlers.refs(
+      { handle: request.handle, ...(request.limit !== undefined ? { limit: request.limit } : {}) },
+      signal,
+    );
   }
   if (request.file === undefined || request.line === undefined || request.column === undefined) {
     throw new Error("refs requires either handle or file, line, and column.");
   }
-  return await handlers.refs({
-    file: request.file,
-    line: request.line,
-    column: request.column,
-    ...(request.limit !== undefined ? { limit: request.limit } : {}),
-  });
+  return await handlers.refs(
+    {
+      file: request.file,
+      line: request.line,
+      column: request.column,
+      ...(request.limit !== undefined ? { limit: request.limit } : {}),
+    },
+    signal,
+  );
 }
 
 function toToolResult(value: unknown): CallToolResult {
