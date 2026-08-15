@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { listChangedFiles, listUntrackedFiles, getUnifiedDiff } from "../src/util.js";
+import { parseUnifiedDiff } from "../src/impact/parse.js";
 import { runGit as git } from "./helpers/git.js";
 
 function makeGitTempDir(prefix: string): Promise<string> {
@@ -147,6 +148,67 @@ describe("git diff semantics", () => {
       await expect(getUnifiedDiff(root, { base: "definitely-not-a-ref", head: "HEAD" })).rejects.toThrow(
         /definitely-not-a-ref/,
       );
+    } finally {
+      await removeGitTempDir(root);
+    }
+  });
+});
+
+describe("git diff semantics: non-ASCII, space, and rename path handling (C12)", () => {
+  it("returns non-ASCII, space, and leading/trailing-space filenames as real UTF-8, not git's quoted/escaped form", async () => {
+    const root = await makeGitTempDir("codegraph-git-c12-names-");
+    try {
+      git(root, ["init"]);
+      git(root, ["config", "user.email", "tests@example.com"]);
+      git(root, ["config", "user.name", "Tests"]);
+
+      await fs.writeFile(path.join(root, "café.ts"), "export const a = 1;\n", "utf8");
+      await fs.writeFile(path.join(root, "with space.ts"), "export const b = 1;\n", "utf8");
+      await fs.writeFile(path.join(root, " leading.ts"), "export const c = 1;\n", "utf8");
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "base"]);
+
+      await fs.writeFile(path.join(root, "café.ts"), "export const a = 2;\n", "utf8");
+      await fs.writeFile(path.join(root, "with space.ts"), "export const b = 2;\n", "utf8");
+      await fs.writeFile(path.join(root, " leading.ts"), "export const c = 2;\n", "utf8");
+
+      const changed = await listChangedFiles(root, { changedSince: "HEAD" });
+      const names = changed.map((entry) => path.basename(entry)).sort();
+      expect(names).toEqual(["café.ts", " leading.ts", "with space.ts"].sort());
+
+      // getUnifiedDiff returns git's raw output verbatim (still quoted/octal-escaped for
+      // café.ts, since that quoting comes from git itself); parseUnifiedDiff is what decodes
+      // it, so assert against the parsed result rather than the raw diff text.
+      const diff = await getUnifiedDiff(root, { changedSince: "HEAD" });
+      const parsedDiff = parseUnifiedDiff(diff);
+      expect(parsedDiff.files.map((file) => file.path).sort()).toEqual(["café.ts", " leading.ts", "with space.ts"].sort());
+    } finally {
+      await removeGitTempDir(root);
+    }
+  });
+
+  it("propagates a rename to a non-ASCII (quoted) path through listChangedFiles and the parsed diff", async () => {
+    const root = await makeGitTempDir("codegraph-git-c12-rename-");
+    try {
+      git(root, ["init"]);
+      git(root, ["config", "user.email", "tests@example.com"]);
+      git(root, ["config", "user.name", "Tests"]);
+
+      await fs.writeFile(path.join(root, "plain.ts"), "export function run() {\n  return 1;\n}\n", "utf8");
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "base"]);
+
+      git(root, ["mv", "plain.ts", "café-renamed.ts"]);
+      git(root, ["add", "-A"]);
+
+      const changed = await listChangedFiles(root, { base: "HEAD", head: "STAGED" });
+      expect(changed.map((entry) => path.basename(entry))).toEqual(["café-renamed.ts"]);
+
+      const diff = await getUnifiedDiff(root, { base: "HEAD", head: "STAGED" });
+      const parsed = parseUnifiedDiff(diff);
+      expect(parsed.files).toEqual([
+        expect.objectContaining({ kind: "renamed", path: "café-renamed.ts", oldPath: "plain.ts" }),
+      ]);
     } finally {
       await removeGitTempDir(root);
     }
