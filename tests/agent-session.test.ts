@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildProjectIndexIncremental, type BuildReport } from "../src/index.js";
 import { AGENT_FRESHNESS_CHECK_INTERVAL_MS, createAgentSession, listAgentSessionFiles } from "../src/agent/session.js";
 import * as symbolGraphBuild from "../src/graphs/symbol-graph-detailed.js";
 import * as indexerBuild from "../src/indexer/build-index.js";
@@ -456,6 +457,38 @@ describe("agent session", () => {
 
     expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
     expect(refreshed.version).toBe(3);
+  });
+
+  it("invalidates module, project snapshot, and detailed sidecar on core epoch drift", async () => {
+    const root = await mkGitRepo();
+    const initial = await createAgentSession({ root }).loadProject();
+    const cacheDir = path.join(root, ".codegraph-cache", "index-v1");
+    const manifestPath = path.join(cacheDir, "manifest.json");
+    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as {
+      buildOptions?: { coreAlgorithmEpoch?: number; implementationFingerprint?: string };
+    };
+    manifest.buildOptions = {
+      ...(manifest.buildOptions ?? {}),
+      coreAlgorithmEpoch: 0,
+      implementationFingerprint: "0".repeat(64),
+    };
+    await fs.writeFile(manifestPath, JSON.stringify(manifest), "utf8");
+    const snapshotPath = projectSnapshotPath(root);
+    const snapshot = JSON.parse(brotliDecompressSync(await fs.readFile(snapshotPath)).toString("utf8")) as {
+      implementationFingerprint?: string;
+    };
+    snapshot.implementationFingerprint = "0".repeat(64);
+    await fs.writeFile(snapshotPath, brotliCompressSync(JSON.stringify(snapshot)));
+    const sidecarPath = detailedSymbolGraphSnapshotPath(root);
+    const sidecar = (await readDetailedSidecar(sidecarPath)) as MutableDetailedSymbolGraphSidecar;
+    sidecar.implementationFingerprint = "0".repeat(64);
+    await writeDetailedSidecar(sidecarPath, sidecar);
+    const report: BuildReport = { timings: {} };
+    await buildProjectIndexIncremental(root, { cache: "disk", threads: 1, report });
+    expect(report.files?.parsed ?? 0).toBeGreaterThan(0);
+    const symbolGraphSpy = vi.spyOn(symbolGraphBuild, "buildSymbolGraphDetailed");
+    await createAgentSession({ root }).loadProject();
+    expect(symbolGraphSpy).toHaveBeenCalledTimes(1);
   });
 
   it("invalidates the detailed sidecar after a tracked edit", async () => {

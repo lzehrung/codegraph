@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
 import fsp from "node:fs/promises";
-import { collectGraph } from "../src/index.js";
+import { buildProjectIndex, buildProjectIndexIncremental, type BuildReport } from "../src/index.js";
 import { resolveFromNodeModules } from "../src/util/resolution/node.js";
+import { collectGraph } from "../src/index.js";
 import { mkTmpDir, normalizeTestPath } from "./helpers/filesystem.js";
 
 describe("Node modules resolution (opt-in) and path normalization", () => {
@@ -69,6 +70,39 @@ describe("Node modules resolution (opt-in) and path normalization", () => {
     );
   });
 
+  it("refreshes cached node-module edges when package targets change", async () => {
+    const root = await mkTmpDir("dg-nm-incremental-");
+    const nm = path.join(root, "node_modules", "my-pkg");
+    const main = path.join(root, "main.js");
+    await fsp.mkdir(nm, { recursive: true });
+    await fsp.writeFile(main, 'import "my-pkg";\n', "utf8");
+    await fsp.writeFile(path.join(nm, "first.js"), "module.exports = 1;\n", "utf8");
+    await fsp.writeFile(path.join(nm, "second.js"), "module.exports = 2;\n", "utf8");
+    const packagePath = path.join(nm, "package.json");
+    await fsp.writeFile(packagePath, JSON.stringify({ name: "my-pkg", main: "first.js" }), "utf8");
+
+    const first = await buildProjectIndex(root, {
+      cache: "disk",
+      graph: { resolveNodeModules: true },
+      threads: 1,
+    });
+    expect(first.graph.edges.some((edge) => edge.to.type === "file" && edge.to.path.endsWith("/first.js"))).toBe(true);
+
+    await fsp.writeFile(packagePath, JSON.stringify({ name: "my-pkg", main: "second.js" }), "utf8");
+    const report: BuildReport = { timings: {} };
+    const second = await buildProjectIndexIncremental(root, {
+      cache: "disk",
+      graph: { resolveNodeModules: true },
+      threads: 1,
+      report,
+    });
+    expect(second.graph.edges.map((edge) => (edge.to.type === "file" ? edge.to.path : edge.to.name))).toEqual([
+      expect.stringContaining("second.js"),
+    ]);
+    expect(second.graph.edges.some((edge) => edge.to.type === "file" && edge.to.path.endsWith("/first.js"))).toBe(
+      false,
+    );
+  });
   it("normalizes paths to forward slashes in nodes and edges", async () => {
     const root = await mkTmpDir("dg-paths-");
     const a = path.join(root, "a.ts");
