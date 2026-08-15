@@ -211,14 +211,17 @@ export function assertSafeRevision(value: string, label: string): string {
 
 export function gitDiffArgs(base: string, head: string, extraArgs: string[] = []): string[] {
   const safeBase = assertSafeRevision(base, "base");
+  // Explicit so rename detection stops depending on the user's `diff.renames` config
+  // (git defaults it to true since 2.9, but a disabled config would silently change output).
+  const renameArgs = ["--find-renames"];
   if (isGitWorktreeSentinel(head)) {
-    return ["diff", ...extraArgs, "--end-of-options", safeBase];
+    return ["diff", ...renameArgs, ...extraArgs, "--end-of-options", safeBase];
   }
   if (isGitIndexSentinel(head)) {
-    return ["diff", "--cached", ...extraArgs, "--end-of-options", safeBase];
+    return ["diff", "--cached", ...renameArgs, ...extraArgs, "--end-of-options", safeBase];
   }
   const safeHead = assertSafeRevision(head, "head");
-  return ["diff", ...extraArgs, "--end-of-options", `${safeBase}..${safeHead}`];
+  return ["diff", ...renameArgs, ...extraArgs, "--end-of-options", `${safeBase}..${safeHead}`];
 }
 
 export async function getGitHead(projectRoot: string): Promise<string | null> {
@@ -300,8 +303,11 @@ export async function getGitBlobHashes(
       .map((line) => line.trim())
       .filter((rel) => rel && relFileSet.has(rel));
     if (!trackedRel.length) return new Map();
+    // hash-object --stdin-paths resolves stdin paths against the repository root, not the
+    // spawned cwd (unlike ls-files), so projectRoot-relative paths break whenever projectRoot
+    // is a subdirectory of the repo. Absolute paths resolve correctly regardless of root depth.
     const { stdout: hashStdout } = await runGit(projectRoot, ["hash-object", "--stdin-paths"], {
-      input: trackedRel.join("\n"),
+      input: trackedRel.map((rel) => path.resolve(projectRoot, rel)).join("\n"),
     });
     const hashes = hashStdout
       .split(/\r?\n/)
@@ -354,10 +360,10 @@ export async function listChangedFiles(
     head?: string | undefined;
   },
 ): Promise<string[]> {
-  let args = ["diff", "--name-only", "--diff-filter=ACDMRTUXB"];
+  let args = ["diff", "--find-renames", "--name-only", "-z", "--diff-filter=ACDMRTUXB"];
   if (opts.base) {
     const head = opts.head ?? "HEAD";
-    args = gitDiffArgs(opts.base, head, ["--name-only", "--diff-filter=ACDMRTUXB"]);
+    args = gitDiffArgs(opts.base, head, ["--name-only", "-z", "--diff-filter=ACDMRTUXB"]);
   } else if (opts.changedSince) {
     args.push("--end-of-options", assertSafeRevision(opts.changedSince, "changedSince"));
   } else {
@@ -366,10 +372,11 @@ export async function listChangedFiles(
   args.push("--");
   try {
     const stdout = await runGitCollectStdout(projectRoot, args);
-    const relFiles = stdout
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
+    // -z NUL-delimits entries; git also quotes/octal-escapes non-ASCII bytes in the
+    // unquoted -name-only form, corrupting them, so -z is required, not cosmetic. The
+    // trailing split segment is always empty, not a filename, and a real filename can
+    // legitimately start or end with whitespace, so filter without trimming.
+    const relFiles = stdout.split("\0").filter(Boolean);
     const out: string[] = [];
     for (const rel of relFiles) {
       const abs = normalizePath(path.resolve(projectRoot, rel));
@@ -431,7 +438,7 @@ export async function getUnifiedDiff(
     head?: string | undefined;
   },
 ): Promise<string> {
-  let args = ["diff", "--unified=0", "--no-color", "--diff-filter=ACDMRTUXB"];
+  let args = ["diff", "--find-renames", "--unified=0", "--no-color", "--diff-filter=ACDMRTUXB"];
   if (opts.base) {
     const head = opts.head ?? "HEAD";
     args = gitDiffArgs(opts.base, head, ["--unified=0", "--no-color", "--diff-filter=ACDMRTUXB"]);

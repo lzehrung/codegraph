@@ -137,19 +137,57 @@ function decodeGitPath(rawPath: string): string {
     return trimmed;
   }
 
+  // Git quotes a path when it contains non-ASCII or special bytes, escaping each raw byte
+  // independently as `\NNN` (octal). A multi-byte UTF-8 character becomes several consecutive
+  // `\NNN` escapes that must be recombined as raw bytes and decoded together as UTF-8 -
+  // decoding each escape as its own code point (the previous approach) mojibakes every
+  // non-ASCII path (e.g. "café.ts" became "cafÃ©.ts").
   const inner = trimmed.slice(1, -1);
-  const decoded = inner.replace(/\\(\\|"|n|r|t|[0-7]{1,3})/g, (match, token: string) => {
-    if (token === "\\") return "\\";
-    if (token === '"') return '"';
-    if (token === "n") return "\n";
-    if (token === "r") return "\r";
-    if (token === "t") return "\t";
-    if (/^[0-7]{1,3}$/.test(token)) {
-      return String.fromCharCode(parseInt(token, 8));
+  const bytes: number[] = [];
+  for (let index = 0; index < inner.length; ) {
+    const char = inner[index]!;
+    if (char !== "\\") {
+      const codePoint = inner.codePointAt(index)!;
+      bytes.push(...Buffer.from(String.fromCodePoint(codePoint), "utf8"));
+      index += codePoint > 0xffff ? 2 : 1;
+      continue;
     }
-    return match;
-  });
-  return decoded;
+    const octal = inner.slice(index + 1, index + 4).match(/^[0-7]{1,3}/);
+    if (octal) {
+      bytes.push(parseInt(octal[0], 8) & 0xff);
+      index += 1 + octal[0].length;
+      continue;
+    }
+    const next = inner[index + 1];
+    if (next === "\\" || next === '"') {
+      bytes.push(next.charCodeAt(0));
+      index += 2;
+      continue;
+    }
+    if (next === "n") {
+      bytes.push(0x0a);
+      index += 2;
+      continue;
+    }
+    if (next === "r") {
+      bytes.push(0x0d);
+      index += 2;
+      continue;
+    }
+    if (next === "t") {
+      bytes.push(0x09);
+      index += 2;
+      continue;
+    }
+    // Unrecognized escape: keep the backslash literally.
+    bytes.push(0x5c);
+    index += 1;
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+
+function stripDiffGitPrefix(pathValue: string, prefix: "a/" | "b/"): string {
+  return pathValue.startsWith(prefix) ? pathValue.slice(prefix.length) : pathValue;
 }
 
 function parseHeaderLine(currentFile: ParsedFileChange, line: string): void {
@@ -203,17 +241,48 @@ function parseHeaderLine(currentFile: ParsedFileChange, line: string): void {
   }
 }
 
-function initiateFile(line: string): ParsedFileChange | null {
-  const match = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
-  if (!match) return null;
+const DIFF_GIT_HEADER_PREFIX = "diff --git ";
+const QUOTED_PATH_SEGMENT = `"(?:[^"\\\\]|\\\\.)*"`;
+// Git quotes each side of the header independently, so a rename between an ASCII and a
+// non-ASCII path (or vice versa) can have only one side quoted. Quoted branches are tried
+// first since they are unambiguous (the closing quote is exact); the unquoted/unquoted
+// fallback keeps the original earliest-" b/"-split heuristic, which is the best a regex can
+// do when neither side is delimited (a literal " b/" inside an unquoted path is a
+// pre-existing, accepted limitation, unchanged by this fix).
+const DIFF_GIT_HEADER_BOTH_QUOTED = new RegExp(`^(${QUOTED_PATH_SEGMENT}) (${QUOTED_PATH_SEGMENT})$`);
+const DIFF_GIT_HEADER_A_QUOTED = new RegExp(`^(${QUOTED_PATH_SEGMENT}) b\\/(.+)$`);
+const DIFF_GIT_HEADER_B_QUOTED = new RegExp(`^a\\/(.+?) (${QUOTED_PATH_SEGMENT})$`);
+const DIFF_GIT_HEADER_PLAIN = /^a\/(.+?) b\/(.+)$/;
+
+function buildInitiatedFile(aSpec: string, bSpec: string): ParsedFileChange {
+  const aPath = stripDiffGitPrefix(decodeGitPath(aSpec), "a/");
+  const bPath = stripDiffGitPrefix(decodeGitPath(bSpec), "b/");
   return {
-    path: decodeGitPath(match[2]!),
+    path: bPath,
     kind: "modified" as const,
     oldPath: "",
     hunks: [],
-    _oldPathFromHeader: decodeGitPath(match[1]!),
-    _newPathFromHeader: decodeGitPath(match[2]!),
+    _oldPathFromHeader: aPath,
+    _newPathFromHeader: bPath,
   };
+}
+
+function initiateFile(line: string): ParsedFileChange | null {
+  if (!line.startsWith(DIFF_GIT_HEADER_PREFIX)) return null;
+  const remainder = line.slice(DIFF_GIT_HEADER_PREFIX.length);
+
+  const bothQuoted = remainder.match(DIFF_GIT_HEADER_BOTH_QUOTED);
+  if (bothQuoted) return buildInitiatedFile(bothQuoted[1]!, bothQuoted[2]!);
+
+  const aQuoted = remainder.match(DIFF_GIT_HEADER_A_QUOTED);
+  if (aQuoted) return buildInitiatedFile(aQuoted[1]!, `b/${aQuoted[2]}`);
+
+  const bQuoted = remainder.match(DIFF_GIT_HEADER_B_QUOTED);
+  if (bQuoted) return buildInitiatedFile(`a/${bQuoted[1]}`, bQuoted[2]!);
+
+  const plain = remainder.match(DIFF_GIT_HEADER_PLAIN);
+  if (!plain) return null;
+  return buildInitiatedFile(`a/${plain[1]}`, `b/${plain[2]}`);
 }
 
 function initiateHunk(line: string): Hunk | null {
