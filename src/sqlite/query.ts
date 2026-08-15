@@ -6,6 +6,7 @@ import {
   DEFAULT_SQLITE_BYTE_LIMIT,
   MAX_SQLITE_CELL_BYTES,
   MAX_SQLITE_ROW_LIMIT,
+  normalizeSqliteRowLimit,
 } from "./rowBounds.js";
 
 export { queryGraphSqlite } from "./canned-query.js";
@@ -27,11 +28,7 @@ export async function queryGraphSqliteRaw(
       const stmt = db.prepare(sql);
       assertReadOnlyQueryStatement(stmt);
       const columns = stmt.columns().map((col) => col.name);
-      const requestedRows = options?.maxRows;
-      const maxRows =
-        requestedRows === undefined
-          ? MAX_SQLITE_ROW_LIMIT
-          : Math.min(MAX_SQLITE_ROW_LIMIT, Math.max(0, Math.floor(requestedRows)));
+      const maxRows = normalizeSqliteRowLimit(options?.maxRows ?? MAX_SQLITE_ROW_LIMIT);
       const maxBytes = options?.maxBytes ?? DEFAULT_SQLITE_BYTE_LIMIT;
       const maxCellBytes = options?.maxCellBytes ?? MAX_SQLITE_CELL_BYTES;
 

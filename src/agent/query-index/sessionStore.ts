@@ -16,11 +16,11 @@ function closeHandle(handle: QueryIndexHandle): void {
 }
 
 function closeState(state: SessionQueryIndexState): void {
+  state.closing = true;
   if (state.resolved) {
     closeHandle(state.resolved);
     return;
   }
-  state.closing = true;
   void state.handle.then(closeHandle, () => undefined);
 }
 
@@ -30,7 +30,10 @@ export async function ensureSessionQueryIndex(
 ): Promise<QueryIndexHandle> {
   const identity = snapshot.index.projectSnapshotIdentity ?? "";
   const existing = QUERY_INDEX_BY_SESSION.get(session);
-  if (existing?.identity === identity) return await existing.handle;
+  if (existing?.identity === identity && !existing.closing) {
+    const resolved = await existing.handle;
+    if (!existing.closing) return resolved;
+  }
   if (existing) {
     QUERY_INDEX_BY_SESSION.delete(session);
     closeState(existing);
@@ -44,14 +47,14 @@ export async function ensureSessionQueryIndex(
     if (QUERY_INDEX_BY_SESSION.get(session) === state) QUERY_INDEX_BY_SESSION.delete(session);
   });
   const resolved = await handle;
-  if (QUERY_INDEX_BY_SESSION.get(session) === state) {
+  if (QUERY_INDEX_BY_SESSION.get(session) === state && !state.closing) {
     state.resolved = resolved;
-  } else if (!state.closing) {
-    closeHandle(resolved);
+    if (snapshot.buildReport) snapshot.buildReport.queryIndex = resolved.diagnostics;
+    if (snapshot.index.buildReport) snapshot.index.buildReport.queryIndex = resolved.diagnostics;
+    return resolved;
   }
-  if (snapshot.buildReport) snapshot.buildReport.queryIndex = resolved.diagnostics;
-  if (snapshot.index.buildReport) snapshot.index.buildReport.queryIndex = resolved.diagnostics;
-  return resolved;
+  closeHandle(resolved);
+  return await ensureSessionQueryIndex(session, snapshot);
 }
 
 export function disposeSessionQueryIndex(session: AgentSession): void {
